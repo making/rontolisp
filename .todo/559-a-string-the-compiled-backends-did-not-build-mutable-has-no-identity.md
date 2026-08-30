@@ -199,13 +199,20 @@ A literal target must keep answering what it answers today (the copy, not a writ
 the two rules do not collide, for exactly the reason the paragraph above about `subseq`
 gives: a literal's sharing is made by the READER.
 
-## Not done
+## Step 1 DONE (2026-08-31); step 2 not started
 
-Nothing of the above is implemented. The three programs still answer as the
-table at the top of this file says, and the two
-`compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite` tests still
-pin the promote-on-write behavior; they are still the tests to rewrite when
-step 2 lands.
+Step 1 of the revised plan landed: `char`/`schar`/`elt` read a character
+vector's ELEMENT (`_charRef` on the JVM, `_str_char_ref` on WASM) and the
+O(n^2) table collapsed onto the aref column -- JVM n=2048 scan 1153 ms -> 8 ms,
+WASM 2224 ms -> 9 ms, controls unmoved (`.kb/string-index-cost.md`, "The
+character vector escaped the invariant", pinned by the
+`character-vector-index-reads-the-element` ci-spec case). The producer flip
+(step 2) is now unblocked by cost.
+
+The identity programs still answer as the table at the top of this file says,
+and the two `compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite`
+tests still pin the promote-on-write behavior; they are still the tests to
+rewrite when step 2 lands.
 
 ## A shipped-library casualty, and the working pattern (2026-08-31, from the PLY/glTF readers)
 

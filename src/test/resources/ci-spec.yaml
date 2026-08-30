@@ -9754,6 +9754,49 @@ cases:
       T
       SCAN-FLAT
       LENGTH-FLAT
+  - name: character-vector-index-reads-the-element
+    source: |
+      ;; (char v i) / (schar v i) / (elt v i) on a MUTABLE CHARACTER VECTOR (a
+      ;; make-string buffer) read the ELEMENT, exactly as (aref v i) always did:
+      ;; no rendered string is built per index, so the cost invariant of the case
+      ;; above holds for this representation too (.kb/string-index-cost.md). The
+      ;; compile backends used to render the WHOLE vector into a fresh string on
+      ;; every index, which made a left-to-right scan of a make-string buffer
+      ;; O(n^2) -- 1153 ms vs 8 ms for 200 scans of 2048 characters on the JVM.
+      (defvar *cvx* (make-string 4 :initial-element #\a))
+      (setf (char *cvx* 1) #\é)
+      (setf (char *cvx* 2) (code-char 128512))
+      (print (list (char-code (char *cvx* 1)) (char-code (schar *cvx* 1))
+                   (char-code (elt *cvx* 2)) (char-code (aref *cvx* 2))))
+      ;; A displaced string view reads through the same element path.
+      (defvar *cvv* (make-array 2 :element-type 'character :displaced-to *cvx*
+                                  :displaced-index-offset 1))
+      (print (char-code (char *cvv* 1)))
+      ;; The cost half, the shape of the case above: one long buffer against the
+      ;; same characters in short chunks.
+      (defun cv-scan-sum (s)
+        (let ((total 0))
+          (dotimes (i (length s))
+            (setq total (+ total (char-code (char s i)))))
+          total))
+      (defvar *cv-short* (make-string 1024 :initial-element #\a))
+      (defvar *cv-long* (make-string 65536 :initial-element #\a))
+      (cv-scan-sum (make-string 4 :initial-element #\w))
+      (defvar *cv-t0* (get-internal-real-time))
+      (defvar *cv-whole* (cv-scan-sum *cv-long*))
+      (defvar *cv-t1* (get-internal-real-time))
+      (defvar *cv-chunked* 0)
+      (dotimes (k 64) (setq *cv-chunked* (+ *cv-chunked* (cv-scan-sum *cv-short*))))
+      (defvar *cv-t2* (get-internal-real-time))
+      (print (= *cv-whole* *cv-chunked*))
+      (print (if (<= (- *cv-t1* *cv-t0*) (+ 500 (* 6 (- *cv-t2* *cv-t1*))))
+                 'cv-scan-flat
+                 'cv-scan-quadratic))
+    expected: |
+      (233 233 128512 128512)
+      128512
+      T
+      CV-SCAN-FLAT
   - name: string-case-ops-full-unicode
     source: |
       ;; string-upcase / string-downcase / string-capitalize are defined by CLHS

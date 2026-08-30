@@ -1429,7 +1429,18 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_TYPE_ERR_NUM = FUNC_TYPE_ERR_INT + 1;
 
-	static final int FX_FUNC_LAST = FUNC_TYPE_ERR_NUM;
+	// _str_char_ref ((ref null eq) s, i32 i) -> i32: the i-th character's code point of
+	// a string in EITHER representation -- a mutable character vector reads its ELEMENT
+	// (_charvec_p, then _arr_get through the displacement walk, an O(1) read that never
+	// renders the vector into a string), anything else decodes through _str_char_at.
+	// Every (char s i) / (schar s i) site calls this instead of the old
+	// _charvec_to_str + _str_char_at pair, whose render made a scan of a make-string
+	// buffer O(n^2) (.kb/string-index-cost.md). Reuses the ((ref null eq), i32) -> i32
+	// signature (TYPE_STR_TO_MEM), so no new type entry; appended after the last fixed
+	// helper so no index above shifts.
+	static final int FUNC_STR_CHAR_REF = FUNC_TYPE_ERR_NUM + 1;
+
+	static final int FX_FUNC_LAST = FUNC_STR_CHAR_REF;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -5599,6 +5610,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// length (FUNC_FILE_LENGTH)
 				fnDef.addFunction(TYPE_PRINT_VAL); // _type_err_int (FUNC_TYPE_ERR_INT)
 				fnDef.addFunction(TYPE_PRINT_VAL); // _type_err_num (FUNC_TYPE_ERR_NUM)
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_char_ref (s, i) -> code point
+													// (FUNC_STR_CHAR_REF)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6392,6 +6405,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the prin1 renderer would pin the printer family into every module).
 				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expIntEntry));
 				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expNumEntry));
+				// either-representation character index body (FUNC_STR_CHAR_REF)
+				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

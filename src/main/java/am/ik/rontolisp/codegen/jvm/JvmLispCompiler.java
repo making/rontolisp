@@ -2706,7 +2706,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// string length reads through. Emitted unconditionally for the same reason
 		// _length is: the sites are generated internally too, and the pair is ~60 bytes.
 		final List<JvmStringIndexRuntimeBuilder.StringIndexMethod> stringIndexMethods = JvmStringIndexRuntimeBuilder
-			.build(cp, thisClass, stringClass);
+			.build(cp, thisClass, stringClass, usesArrays);
 		final List<Utf8Constant> stringIndexFieldNames = java.util.Arrays.stream(JvmStringIndexRuntimeBuilder.FIELDS)
 			.map(cp::addUtf8)
 			.toList();

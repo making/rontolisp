@@ -30,42 +30,23 @@ final class JvmCharCompiler {
 
 	/**
 	 * {@code (char string index)} / {@code (schar string index)}: the code point at
-	 * index. The quote-framed string carries its content in {@code [1, length-1)}; the
-	 * index is a Lisp CHARACTER position and is translated to a UTF-16 code-unit offset
-	 * via {@code _cpoff} ({@link JvmStringIndexRuntimeBuilder}) so a supplementary code
-	 * point counts as one indexed character.
+	 * index, via ONE {@code _charRef} call ({@link JvmStringIndexRuntimeBuilder}). A
+	 * mutable character vector reads its element there (an O(1) {@code _rmGet}, never a
+	 * rendered string); an immutable string translates the CHARACTER position to a UTF-16
+	 * code-unit offset via {@code _cpoff} so a supplementary code point counts as one
+	 * indexed character.
 	 */
 	static void compileChar(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		int sSlot = ctx.allocTemp();
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(sSlot);
-		// codeUnit = _cpoff(s, index): the offset of the index-th CHARACTER inside the
-		// framing quotes, which is 1 + index unless a surrogate pair is in the way.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(sSlot);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.emit(Opcode.L2I);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(JvmEmitHelper
-			.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.OFFSET_METHOD,
-					JvmStringIndexRuntimeBuilder.OFFSET_DESC)
+			.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.CHARREF_METHOD,
+					JvmStringIndexRuntimeBuilder.CHARREF_DESC)
 			.index());
-		// cp = s.codePointAt(codeUnit)
-		int cuSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(cuSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(sSlot);
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(cuSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.stringMethod(ctx, "codePointAt", "(I)I").index());
 		JvmEmitHelper.boxCodePoint(ctx);
 	}
 

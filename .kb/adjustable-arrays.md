@@ -66,7 +66,9 @@ the same array gate) renders the active prefix quote-framed; WASM
 `FUNC_WRITE_STR_GC` — `FUNC_VEC_BASE`/`FUNC_USER_BASE` shifted by one,
 reusing the unary `TYPE_CALLABLE_BASE + 0` signature, capture-aware scratch
 so mid-capture normalization cannot clobber `*-to-string` output). Insert
-points: the string-op compile sites (char/schar, subseq, string=/-equal,
+points: the string-op compile sites (subseq, string=/-equal -- NOT char/schar/elt,
+which read the ELEMENT through `_charRef` / `_str_char_ref` since 2026-08-31
+rather than rendering the vector per index, `.kb/string-index-cost.md` --
 case/trim/concat, write-string, string designator, read-from-string,
 make-string-input-stream, intern, make-symbol — the last four were WASM-only
 until todo-208 made a plain `make-string` result reach them on the JVM too,

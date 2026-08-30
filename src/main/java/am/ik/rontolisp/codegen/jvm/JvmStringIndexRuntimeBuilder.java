@@ -63,6 +63,22 @@ final class JvmStringIndexRuntimeBuilder {
 
 	static final String COUNT_DESC = "(Ljava/lang/String;)I";
 
+	/**
+	 * {@code _charRef(Object, int) -> int}: the code point of character {@code i} of a
+	 * string in EITHER representation. A mutable character vector (the length-4-header
+	 * array, or the length-7 string view) reads its ELEMENT through {@code _rmGet} --
+	 * never rendering the vector into a string, which made
+	 * {@code (dotimes (j (length s)) (char s j))} O(n^2) on a {@code make-string} buffer;
+	 * anything else takes the immutable path, {@code _cpoff} + {@code codePointAt}. Every
+	 * {@code (char s i)} / {@code (schar s i)} site calls this (and {@code (elt s i)}
+	 * reaches it through its {@code stringp} arm), so the site is ONE invokestatic
+	 * instead of the old {@code _strv} + cast + {@code _cpoff} + {@code codePointAt}
+	 * sequence.
+	 */
+	static final String CHARREF_METHOD = "_charRef";
+
+	static final String CHARREF_DESC = "(Ljava/lang/Object;I)I";
+
 	/** The two "this string has no surrogate pair" slots. */
 	static final String[] FIELDS = { "_cpsimple0", "_cpsimple1" };
 
@@ -71,7 +87,8 @@ final class JvmStringIndexRuntimeBuilder {
 	private JvmStringIndexRuntimeBuilder() {
 	}
 
-	static List<StringIndexMethod> build(ConstantPool cp, ClassConstant selfClass, ClassConstant stringClass) {
+	static List<StringIndexMethod> build(ConstantPool cp, ClassConstant selfClass, ClassConstant stringClass,
+			boolean usesArrays) {
 		MethodrefConstant stringLength = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
 		MethodrefConstant codePointCount = cp.addMethodref(stringClass,
@@ -82,7 +99,84 @@ final class JvmStringIndexRuntimeBuilder {
 		FieldrefConstant slot0 = cp.addFieldref(selfClass, cp.addNameAndType(cp.addUtf8(FIELDS[0]), fieldDesc));
 		FieldrefConstant slot1 = cp.addFieldref(selfClass, cp.addNameAndType(cp.addUtf8(FIELDS[1]), fieldDesc));
 		return List.of(buildOffset(cp, stringLength, codePointCount, offsetByCodePoints, slot0, slot1),
-				buildCount(cp, stringLength, codePointCount, slot0, slot1));
+				buildCount(cp, stringLength, codePointCount, slot0, slot1),
+				buildCharRef(cp, selfClass, stringClass, usesArrays));
+	}
+
+	// _charRef(o, i): the element read for a mutable character vector (only when the
+	// array runtime exists -- a character vector can only come from make-array, which
+	// raises the same gate), else _cpoff + codePointAt on the immutable string. A
+	// non-string, non-character-vector argument fails the String cast exactly as the
+	// old _strv + CHECKCAST site did.
+	private static StringIndexMethod buildCharRef(ConstantPool cp, ClassConstant selfClass, ClassConstant stringClass,
+			boolean usesArrays) {
+		// Slots: 0 = o, 1 = i, 2 = header scratch, 3 = s.
+		MethodrefConstant strCpOffset = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(OFFSET_METHOD), cp.addUtf8(OFFSET_DESC)));
+		MethodrefConstant strCodePointAt = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("codePointAt"), cp.addUtf8("(I)I")));
+		JvmAsm a = new JvmAsm();
+		if (usesArrays) {
+			ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
+			ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
+			ClassConstant intArrayClass = cp.addClass(cp.addUtf8("[I"));
+			MethodrefConstant alSize = cp.addMethodref(arrayListClass,
+					cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
+			MethodrefConstant alGet = cp.addMethodref(arrayListClass,
+					cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
+			MethodrefConstant rmGet = cp.addMethodref(selfClass, cp.addNameAndType(
+					cp.addUtf8(JvmArrayRuntimeBuilder.RM_GET), cp.addUtf8(JvmArrayRuntimeBuilder.RM_GET_DESC)));
+			int str = a.label();
+			int vec = a.label();
+			a.aload(0);
+			a.instanceOf(arrayListClass);
+			a.branch(Opcode.IFEQ, str);
+			a.aload(0);
+			a.checkcast(arrayListClass);
+			a.invokevirtual(alSize);
+			a.branch(Opcode.IFLE, str);
+			a.aload(0);
+			a.checkcast(arrayListClass);
+			a.iconst(0);
+			a.invokevirtual(alGet);
+			a.astore(2);
+			a.aload(2);
+			a.instanceOf(objectArrayClass);
+			a.branch(Opcode.IFEQ, str);
+			// header length 4 = character vector, 7 = string view; both read their
+			// element (a boxed CHARACTER int[]{cp}) through _rmGet's displacement walk.
+			a.aload(2);
+			a.checkcast(objectArrayClass);
+			a.arraylength();
+			a.iconst(4);
+			a.branch(Opcode.IF_ICMPEQ, vec);
+			a.aload(2);
+			a.checkcast(objectArrayClass);
+			a.arraylength();
+			a.iconst(7);
+			a.branch(Opcode.IF_ICMPNE, str);
+			a.bind(vec);
+			a.aload(0);
+			a.iconst(1);
+			a.iload(1);
+			a.op(Opcode.IADD);
+			a.invokestatic(rmGet);
+			a.checkcast(intArrayClass);
+			a.iconst(0);
+			a.iaload();
+			a.ireturn();
+			a.bind(str);
+		}
+		a.aload(0);
+		a.checkcast(stringClass);
+		a.astore(3);
+		a.aload(3);
+		a.aload(3);
+		a.iload(1);
+		a.invokestatic(strCpOffset);
+		a.invokevirtual(strCodePointAt);
+		a.ireturn();
+		return new StringIndexMethod(cp.addUtf8(CHARREF_METHOD), cp.addUtf8(CHARREF_DESC), 4, 4, a.finish());
 	}
 
 	// _cpoff(s, i): 1 + i when s has no surrogate pair, else the walk.

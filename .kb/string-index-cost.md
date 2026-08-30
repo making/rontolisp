@@ -1,15 +1,56 @@
 # A character index costs the same wherever it lands
 
 **Invariant: `(char s i)` / `(schar s i)` / `(aref s i)` / `(elt s i)` / `(length s)` /
-`(subseq s a b)` are O(1) or amortized O(1) in the index on ALL FOUR backends. A
-left-to-right (or right-to-left) scan of one string is LINEAR in its length, never
-quadratic.**
+`(subseq s a b)` are O(1) or amortized O(1) in the index on ALL FOUR backends, in BOTH
+string representations -- the immutable runtime string AND the mutable character vector
+a `make-string` buffer is. A left-to-right (or right-to-left) scan of one string is
+LINEAR in its length, never quadratic.**
 
 This is a cost invariant, not a semantic one -- the answers were always right. What was
 wrong is that they were paid for by walking from the first byte on every single access,
 so `(dotimes (i (length s)) (char s i))` was O(n^2) on every compile backend
 (`.todo/185`). It is not visible at small sizes, which is exactly why it survived: the
 ci-spec corpus and the doc examples all use short strings.
+
+## The character vector escaped the invariant, and its fix is not a walk (2026-08-31)
+
+Everything below this section is about translating a character index into a UTF-16 /
+UTF-8 byte offset -- the IMMUTABLE representation's problem. The mutable CHARACTER
+VECTOR (`.kb/adjustable-arrays.md`: what `make-string` and
+`make-array :element-type 'character` build on the compile backends) has no such
+problem, its elements ARE code points -- and it was paying something worse instead:
+every `(char v i)` / `(schar v i)` / `(elt v i)` site normalized through `_strv` (JVM)
+/ `_charvec_to_str` (WASM), rendering the WHOLE vector into a fresh string per index.
+A scan of a `make-string` buffer was O(n^2) with a large constant while `(aref v i)`
+on the identical object was already the O(1) element read:
+
+| n | `(char v j)` before | `(aref v j)` | `(elt v j)` before | `(char v j)` after |
+| ---: | ---: | ---: | ---: | ---: |
+| JVM, 512, 200 scans | 87 ms | 6 | 92 ms | **8** |
+| JVM, 2048, 200 scans | 1153 ms | 5 | 1094 ms | **8** |
+| WASM p1, 512 | 155 ms | 1 | 149 ms | **3** |
+| WASM p1, 2048 | 2224 ms | 4 | 2307 ms | **9** |
+
+The fix (`.todo/559` step 1) deletes the render at the index sites rather than caching
+it (`.todo/343` holds the callers that genuinely want the whole string):
+
+- **JVM**: every `(char s i)` / `(schar s i)` site is ONE call to
+  `_charRef(Object, int) -> int` (`JvmStringIndexRuntimeBuilder`): a length-4/-7
+  slot-0 header reads its element through `_rmGet` (displacement walk included, so
+  string views work), anything else takes `_cpoff` + `codePointAt`. The character-
+  vector arm is emitted only under the array gate; without arrays the body is the
+  string path alone.
+- **WASM**: the twin is `_str_char_ref(s, i) -> i32` (`FUNC_STR_CHAR_REF`,
+  `WasmStringRuntimeBuilder.buildStrCharRefBody`): `_charvec_p` (the O(1) shape test)
+  then `_arr_get` for the element, else `_str_char_at`.
+- `elt` on a string reaches the same call through `expandElt`'s `stringp` arm, so it
+  moved with `char`; `aref` never rendered and did not change. The interpreter's
+  character vector IS a mutable `LispString`, so it never had the problem.
+
+What this deliberately does NOT change: the whole-string consumers (`string=`, the
+case/trim families, `concatenate`, `subseq`, `write-string`, `intern`,
+`_equal`/`_hash`/`_print_val`) still render once per CALL -- that is `.todo/343`'s
+remaining scope, one render per operation, not per character.
 
 ## Why a character index is not a memory offset
 
@@ -165,6 +206,14 @@ walks the source once).
 
 ## Pinning tests
 
+- The character-vector half: the `character-vector-index-reads-the-element` ci-spec
+  case (all four backends -- char/schar/elt/aref agreement on a `make-string` buffer,
+  non-ASCII elements, a displaced string view, and the whole-vs-chunked scan cost
+  comparison), plus
+  `JvmLispCompilerTest.compileACharacterIndexIntoACharacterVectorReadsTheElement` /
+  `#compileACharacterVectorIndexAgreesAcrossTheFourSpellings` and
+  `WasmLispCompilerIntegrationTest.aCharacterIndexIntoACharacterVectorDoesNotRenderTheVector`
+  / `#aCharacterVectorIndexAgreesAcrossTheFourSpellings`.
 - `src/test/resources/ci-spec.yaml` -- `character-index-is-not-linear-in-the-index`, run
   on all four backends by `CiSpecE2eTest`: the forward / backward / jumping access orders
   over one mixed ASCII / two-byte / three-byte / astral string (the cursor may not change

@@ -1324,6 +1324,52 @@ final class WasmStringRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds {@code _str_char_ref} (FUNC_STR_CHAR_REF): the code point of character
+	 * {@code i} of a string in EITHER representation. A mutable character vector (the
+	 * shape {@code _charvec_p} recognizes, string views included) reads its ELEMENT
+	 * through {@code _arr_get}'s displacement walk -- an O(1) read that never renders the
+	 * vector into a fresh string, which is what made a left-to-right scan of a
+	 * {@code make-string} buffer O(n^2) ({@code .kb/string-index-cost.md}); anything else
+	 * decodes through {@code _str_char_at}. Every {@code (char s i)} /
+	 * {@code (schar s i)} site calls this instead of the old {@code _charvec_to_str} +
+	 * {@code _str_char_at} pair.
+	 * @return the function body (signature {@code ((ref null eq), i32) -> i32},
+	 * TYPE_STR_TO_MEM)
+	 */
+	static byte[] buildStrCharRefBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: v = 0, i = 1. No locals.
+		w.write(0);
+		get(w, 0);
+		WasmEmitHelper.emitCharvecPCall(w);
+		w.write(Instruction.IF, 0x40);
+		// element read: _arr_get((cast TYPE_CELL v).field0, i) is the boxed CHARACTER;
+		// unbox its code point.
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		get(w, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_GET);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // if
+		get(w, 0);
+		get(w, 1);
+		WasmEmitHelper.emitStrCharAtCall(w);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
 	// Pushes the meta offset (meta.cdr.cdr) of the meta cons held in the given local.
 	private static void emitMetaOffset(WasmWriter w, int metaLocal) {
 		emitConsField(w, metaLocal, 1);

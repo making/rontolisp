@@ -47,9 +47,13 @@ $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
     UTF-8-encoded string. Every `(length s)` on a string reads through it.
   - `FUNC_STR_CHAR_AT` `_str_char_at(str, i) -> i32` -- the i-th character's code
     point. Delegates the walk to `_str_char_byte_offset` and decodes the 1-4 byte
-    UTF-8 sequence at the returned position. Every `(char s i)` / `(schar s i)` and
-    `(aref TYPE_STRING i)` lowering routes through it (the caller boxes the returned
-    i32 as a `TYPE_CHAR` struct).
+    UTF-8 sequence at the returned position. An `(aref TYPE_STRING i)` lowering calls
+    it directly; a `(char s i)` / `(schar s i)` site calls `_str_char_ref`
+    (`FUNC_STR_CHAR_REF`), which reads a mutable character vector's ELEMENT through
+    `_charvec_p` -> `_arr_get` -- never rendering it -- and reaches `_str_char_at`
+    only for the immutable representation (`.kb/string-index-cost.md`, the
+    character-vector section). The caller boxes the returned i32 as a `TYPE_CHAR`
+    struct.
   - `FUNC_STR_CHAR_BYTE_OFFSET` `_str_char_byte_offset(str, i) -> i32` -- byte
     offset within `$str_bytes` where the i-th character's UTF-8 sequence starts (or
     `len - 1`, the closing quote's position, when i is at or past the character
