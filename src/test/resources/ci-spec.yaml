@@ -346,10 +346,36 @@ cases:
       (print (make-array '(2 2) :element-type 'double-float
                           :initial-contents '((1.0 2.0) (3.0 4.0))))
       (print (make-array '(2 2 2) :initial-contents '(((1 2) (3 4)) ((5 6) (7 8)))))
+      ;; The fill walks a LIST contents with a cons cursor instead of indexing it with
+      ;; elt (an nth walk from the head, so the whole fill was quadratic on the three
+      ;; compile paths). The contents are run-time values here so the walk is what runs,
+      ;; and every representation must still answer what it did: the cursor pins itself
+      ;; to a non-cons for a vector or a string and keeps indexing.
+      (defvar *mai-flat* (list 1 2 3 4))
+      (defvar *mai-rows* (list (list 1 2 3) (list 4 5 6)))
+      (print (make-array 4 :initial-contents *mai-flat*))
+      (print (make-array 4 :element-type '(unsigned-byte 8) :initial-contents *mai-flat*))
+      (print (make-array 4 :initial-contents (coerce *mai-flat* 'vector)))
+      (print (make-array 3 :element-type 'character :initial-contents (list #\a #\b #\c)))
+      (print (make-array 3 :initial-contents "xyz"))
+      (print (make-array '(2 3) :initial-contents *mai-rows*))
+      (print (make-array '(2 3) :initial-contents (list (coerce (list 1 2 3) 'vector) (list 4 5 6))))
+      (print (make-array '(2 3) :initial-contents (coerce *mai-rows* 'vector)))
+      (print (make-array '(2 2 2) :initial-contents
+                          (list (list (list 1 2) (list 3 4)) (list (list 5 6) (list 7 8)))))
     expected: |
       4
       4
       #d((1.0 2.0) (3.0 4.0))
+      #3A(((1 2) (3 4)) ((5 6) (7 8)))
+      #(1 2 3 4)
+      #(1 2 3 4)
+      #(1 2 3 4)
+      "abc"
+      #(#\x #\y #\z)
+      #2A((1 2 3) (4 5 6))
+      #2A((1 2 3) (4 5 6))
+      #2A((1 2 3) (4 5 6))
       #3A(((1 2) (3 4)) ((5 6) (7 8)))
   - name: fill-and-over-arity-funcall
     source: |
@@ -405,6 +431,17 @@ cases:
         (print rl-s))
       (print (replace (list 1 2) '(5 6 7 8)))
       (print (funcall #'replace (list 0 0 0) '(4 5)))
+      ;; The list destination reads a LIST SOURCE through a cursor too -- it was the one
+      ;; arm still spelling (elt source (+ start2 k)), so a list-into-list replace stayed
+      ;; quadratic on the compile paths long after the array arm stopped being. The
+      ;; interpreter reads its source with a cursor for the same reason.
+      (print (replace (list 0 0 0 0 0) (list 1 2 3 4 5) :start1 1 :start2 2))
+      (print (replace (list 0 0 0 0) (list 7 8) :start1 2))
+      (print (replace (list 0 0 0) "xy"))
+      (print (replace (list 0 0 0) (coerce (list 4 5 6) 'vector)))
+      (print (replace (make-array 5 :initial-element 0) (list 1 2 3) :start1 1))
+      (print (replace (make-array 5 :element-type '(unsigned-byte 8) :initial-element 0)
+                      (list 1 2 3) :start1 2))
     expected: |
       (1 9 9 4 5)
       (1 9 9 4 5)
@@ -412,6 +449,12 @@ cases:
       (1 9 9 4 5)
       (5 6)
       (4 5 0)
+      (0 3 4 5 0)
+      (0 0 7 8)
+      (#\x #\y 0)
+      (4 5 6)
+      #(0 1 2 3 0)
+      #(0 0 1 2 3)
   # Both sides of the replace/fill arm-narrowing gate in ONE program
   # (.kb/sequence-op-runtimes.md). sor-copy's destination is one this compile PROVES
   # is an array, so the wasm backend routes those sites past the shared runtime's
@@ -1452,11 +1495,31 @@ cases:
       (print (map 'string #'char-upcase "abc"))
       (print (map 'list #'1+ '(1 2 3)))
       (print (map 'list #'+ '(1 2 3) nil))
+      ;; Each operand is read through a cons cursor when it is a list, and by the
+      ;; stringp/listp/aref three-way otherwise. It used to be (nth i s) per element,
+      ;; which walks a list from the head -- so (map 'list ...) over a list, and
+      ;; (map 'vector ...), which routes through it, were quadratic. Mixed
+      ;; representations and mixed lengths pin the answer.
+      (defvar *map-l* (list 1 2 3 4))
+      (print (map 'list #'1+ *map-l*))
+      (print (map 'vector #'1+ *map-l*))
+      (print (map 'list #'+ *map-l* (coerce (list 10 20 30) 'vector)))
+      (print (map 'list #'list *map-l* "ab"))
+      (print (map 'string #'char-upcase (coerce (list #\a #\b) 'string)))
+      (print (map nil #'1+ *map-l*))
+      (print (map 'list #'char-code (list #\a #\b)))
     expected: |
       (11 22 33)
       "ABC"
       (2 3 4)
       NIL
+      (2 3 4 5)
+      #(2 3 4 5)
+      (11 22 33)
+      ((1 #\a) (2 #\b))
+      "AB"
+      NIL
+      (97 98)
   - name: reduce
     source: |
       (print (reduce (lambda (a b) (+ a b)) '(1 2 3 4 5) :initial-value 0))
