@@ -513,30 +513,49 @@ public final class BuiltinFunctionWrappers {
 	// sequence the function is called with no arguments for every element of the result,
 	// which is exactly what (member nil nil) answering nil makes the loop do.
 	//
+	// The RESULT is walked with a cons cursor beside the index, the shape
+	// LispMacroExpander.mapIntoDispatch has carried since it was written: (setf (elt r i)
+	// v) lowers to (rplaca (nthcdr i r) v), an O(i) head-walk, so a LIST destination made
+	// this wrapper O(n^2) where the call-position lowering beside it was linear. The
+	// cursor holds the remaining conses of a list destination and stays pinned to a
+	// non-cons for a vector one, whose (setf (elt ...)) store is O(1) and is kept exactly
+	// as it was -- so nothing but the list arm moves.
+	//
 	// (lambda (r f &rest seqs)
 	// (let ((__mi_ss (mapcar (lambda (x) (coerce x 'list)) seqs))
-	// (__mi_i 0) (__mi_n (length r)))
+	// (__mi_i 0) (__mi_n (length r)) (__mi_rc r))
 	// (do () ((if (member nil __mi_ss) t (>= __mi_i __mi_n)) r)
-	// (setf (elt r __mi_i) (apply f (mapcar (lambda (x) (car x)) __mi_ss)))
+	// (let ((__mi_v (apply f (mapcar (lambda (x) (car x)) __mi_ss))))
+	// (if (consp __mi_rc) (rplaca __mi_rc __mi_v) (setf (elt r __mi_i) __mi_v)))
 	// (setq __mi_ss (mapcar (lambda (x) (cdr x)) __mi_ss))
+	// (setq __mi_rc (if (consp __mi_rc) (cdr __mi_rc) __mi_rc))
 	// (setq __mi_i (+ __mi_i 1)))))
 	private static WrapperDef mapIntoWrapper() {
 		LispSymbol seqs = new LispSymbol("__mi_ss");
 		LispSymbol index = new LispSymbol("__mi_i");
 		LispSymbol limit = new LispSymbol("__mi_n");
+		LispSymbol rcur = new LispSymbol("__mi_rc");
+		LispSymbol value = new LispSymbol("__mi_v");
 		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(), new LispSymbol("seqs"));
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(seqs, asLists)), listToCons(List.of(index, new LispInteger(0))),
-						listToCons(List.of(limit, call(LispNames.LENGTH, "r")))));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(seqs, asLists)),
+				listToCons(List.of(index, new LispInteger(0))), listToCons(List.of(limit, call(LispNames.LENGTH, "r"))),
+				listToCons(List.of(rcur, new LispSymbol("r")))));
 		LispVal done = listToCons(List.of(new LispSymbol(LispNames.IF), callV(LispNames.MEMBER, LispNil.INSTANCE, seqs),
 				LispTrue.INSTANCE, callV(LispNames.GE, index, limit)));
 		LispVal exit = listToCons(List.of(done, new LispSymbol("r")));
 		LispVal apply = callV(LispNames.APPLY, new LispSymbol("f"),
 				callV(LispNames.MAPCAR, projection(LispNames.CAR), seqs));
-		LispVal store = callV(LispNames.SETF, callV(LispNames.ELT, new LispSymbol("r"), index), apply);
+		LispVal storeList = callV(LispNames.RPLACA, rcur, value);
+		LispVal storeVec = callV(LispNames.SETF, callV(LispNames.ELT, new LispSymbol("r"), index), value);
+		LispVal store = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(value, apply)))),
+				listToCons(List.of(new LispSymbol(LispNames.IF), callV(LispNames.CONSP, rcur), storeList, storeVec))));
 		LispVal advance = callV(LispNames.SETQ, seqs, callV(LispNames.MAPCAR, projection(LispNames.CDR), seqs));
+		LispVal stepCursor = callV(LispNames.SETQ, rcur, listToCons(
+				List.of(new LispSymbol(LispNames.IF), callV(LispNames.CONSP, rcur), callV(LispNames.CDR, rcur), rcur)));
 		LispVal bump = callV(LispNames.SETQ, index, callV(LispNames.ADD, index, new LispInteger(1)));
-		LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO), LispNil.INSTANCE, exit, store, advance, bump));
+		LispVal walk = listToCons(
+				List.of(new LispSymbol(LispNames.DO), LispNil.INSTANCE, exit, store, advance, stepCursor, bump));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, walk));
 		return new WrapperDef(LispNames.MAP_INTO, List.of("r", "f", LispNames.LAMBDA_REST, "seqs"), List.of(body));
 	}

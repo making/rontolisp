@@ -600,6 +600,191 @@ than the array (a write past its end) and a dotted source read past its tail
 (`car` of a non-cons). Both trap identically before and after; they are
 pre-existing and not this change's to move.
 
+## The last three sites, and where the family ends
+
+Measured 2026-08-31, hours after the five above. `.todo/595` carried what that
+survey found and did not fix. **They are three DIFFERENT defects wearing one
+symptom**, and only one of them took the cursor:
+
+| the site | the defect | the fix |
+| --- | --- | --- |
+| the runtime `format` renderer's argument list | `(nth i all)` per directive, `(length items)` TWICE per `~{` pass | MATERIALIZE, not a cursor |
+| the `#'map-into` WRAPPER's store | `(setf (elt r i) v)` into a list destination | the cursor, verbatim |
+| `(map 'string ...)`'s accumulator | `%string-concat` of the whole result per element -- quadratic in the OUTPUT | a pairwise JOIN |
+
+**The renderer is the one place a cursor was the wrong answer, and saying so is
+the finding.** `~*` moves the argument pointer forward, `~:*` backward, `~n@*`
+absolutely, and `~?` / `~{` recurse with their own -- the access pattern is
+genuinely RANDOM, so a monotone cons cursor needs a re-seed whose cost is the
+walk it was meant to remove. `all` is now the pair `%fmt-args` builds -- the list
+as given plus a vector of it, materialized once per rendering LEVEL and only for
+a PROPER list long enough to pay for it -- read through `%fmt-arg` / `%fmt-count`,
+with the same discipline the cursor sites follow: **the fallback is the very
+`(nth i list)` / `(length x)` the renderer used to make**, so a negative index, an
+index past the end, a dotted list and a non-sequence all answer exactly what they
+did. Full mechanics, the cost table and the re-evaluation trigger:
+`.kb/format.md`, "The argument list is a materialized VECTOR". The two iteration
+loops additionally collect their pieces and join them once, because the
+`(%fmt-cat acc piece)` per pass is quadratic in the OUTPUT even after the reads
+are O(1) -- the same defect as `map`'s `'string` accumulator, one layer up.
+
+### The ladders
+
+Apple M4 Max, one locked acquisition per table, before and after in the same run,
+each row its own `defun`, two rounds and a third at 8x the iterations. **ms per
+call.**
+
+`(format nil "~{~a~}" <n-element list>)`:
+
+| n | 250 | 500 | 1000 | 2000 | 4000 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| JVM `.class` before | 0.285 | 0.880 | 3.47 | 12.62 | **54.8** |
+| JVM `.class` **after** | 0.028 | 0.055 | 0.071 | 0.145 | **0.306** |
+| WASM p1 before | 0.340 | 1.115 | 5.53 | 49.3 | **169.3** |
+| WASM p1 **after** | 0.137 | 0.269 | 0.544 | 1.103 | **2.231** |
+| `--component` before / after | 0.343/0.136 | 1.125/0.270 | 5.61/0.545 | 49.3/1.103 | 169.8/**2.225** |
+| interpreter before | 5.76 | 12.08 | 26.6 | 64.4 | **164.9** |
+| interpreter **after** | 5.86 | 11.68 | 23.4 | 46.6 | **93.2** |
+
+**179x (JVM) and 76x (wasm-GC) at n = 4000**, and every after-row DOUBLES where
+every before-row quadrupled. `~:{` over 2,000 sublists: 14.06 -> **0.40** (JVM),
+59.6 -> **2.38** (wasm p1), 113.1 -> **91.5** (interpreter).
+
+`(funcall #'map-into <n-element list> #'1+ <n-element list>)` -- the wrapper takes
+the `mapIntoDispatch` cursor verbatim:
+
+| n | 500 | 1000 | 2000 | 4000 |
+| --- | ---: | ---: | ---: | ---: |
+| interpreter before | 0.770 | 2.020 | 5.35 | **18.13** |
+| interpreter **after** | 0.493 | 0.978 | 1.948 | **3.894** |
+| JVM before | 0.195 | 0.700 | 2.87 | **11.40** |
+| JVM **after** | 0.0037 | 0.0075 | 0.0163 | **0.0312** |
+| WASM p1 before | 0.153 | 0.560 | 2.69 | **21.85** |
+| WASM p1 **after** | 0.021 | 0.045 | 0.093 | **0.181** |
+
+**365x (JVM) and 121x (wasm-GC) at n = 4000.** The wrapper was 47-54x slower than
+the same call in CALL position; it is now within 2.5x of it.
+
+`(map 'string ...)` and the literal `(coerce x 'string)` that shares its body.
+**The source representation decides what this row measures, and `.todo/595`'s
+number was measuring the other thing** -- see below:
+
+| n = 1000 / 2000 / 4000 | interpreter | JVM | WASM p1 |
+| --- | --- | --- | --- |
+| over an ORDINARY string, before | 1.68 / 3.72 / 9.80 | 0.19 / 0.58 / 0.85 | 0.83 / 3.06 / **11.95** |
+| over an ORDINARY string, **after** | 1.54 / 3.04 / **6.01** | 0.053 / 0.045 / 0.206 | 0.114 / 0.235 / **0.475** |
+| over a LIST of characters, before | 1.40 / 3.58 / 10.15 | 0.20 / 0.46 / 0.90 | 0.81 / 3.02 / **12.00** |
+| over a LIST of characters, **after** | 1.73 / 3.42 / **6.93** | 0.054 / 0.098 / 0.094 | 0.111 / 0.223 / **0.469** |
+| `(coerce <n chars> 'string)` before | 0.01 / 0.02 / 0.05 | 0.14 / 0.34 / 0.35 | 0.82 / 3.02 / **11.95** |
+| `(coerce <n chars> 'string)` **after** | 0.01 / 0.02 / 0.05 | 0.026 / 0.050 / 0.094 | 0.103 / 0.210 / **0.431** |
+
+**25-28x on wasm-GC at n = 4000**, and the after-rows double where the before-rows
+quadrupled. The interpreter's `coerce` never ran this body (it has the native
+arm), and the JVM was never badly hurt -- `String.concat` of a 4,000-character
+string is a memcpy the JIT is good at, which is why its before-row is not a clean
+quadratic.
+
+**A `.kb`/todo premise this corrects.** `.todo/595` measured
+`(map 'string #'char-upcase <4000-char string>)` at 56.2 ms on wasm-GC and
+attributed it to the accumulator. The source there was a `make-string`, which on
+both compiled backends is a mutable character VECTOR whose `(char v i)` renders
+the whole vector per access (`.kb/adjustable-arrays.md`, `.kb/geom.md`) -- that
+row is quadratic in the READ, a separate and already-owned defect (`.todo/343`),
+and it barely moves: 55.1 -> **45.9** on wasm p1, 22.15 -> **20.63** on the JVM,
+9.75 -> **6.44** in the interpreter (whose character vector IS a `LispString`, so
+it has no render to pay). Over an ORDINARY string -- what every allocated string
+is -- the accumulator is what the row measures, and it is the table above.
+
+### What it costs
+
+Each row in its own `defun`, ms per call, before -> after. The last two rows are
+CONTROLS this change does not touch:
+
+| row | interpreter | JVM | WASM p1 |
+| --- | --- | --- | --- |
+| `(format nil "~a ~a" 1 2)`, computed control | 0.0398 -> 0.0425 (+7%) | 0.0003 -> 0.0003 | 0.0008 -> 0.0010 |
+| the same with 8 arguments (at the threshold) | 0.1435 -> 0.1545 (+8%) | 0.0005 -> 0.0006 | 0.0030 -> 0.0033 |
+| `(format nil "~{~a~}" <8-element list>)` | 0.221 -> 0.243 (+10%) | 0.0010 -> 0.0009 | 0.0050 -> 0.0052 |
+| `#'map-into` into an ARRAY, n = 4000 | 5.10 -> 6.38 (+25%) | 0.275 -> 0.028 | 0.225 -> 0.231 |
+| `(map-into ...)` in CALL position, n = 4000 | 3.95 -> 3.86 | 0.100 -> 0.100 | 0.0750 -> 0.0750 |
+| `(map 'list #'char-upcase <4000-char string>)` | 1.85 -> 1.91 | 0.100 -> 0.106 | 0.100 -> 0.094 |
+| `(mapcar #'1+ ...)`, n = 4000 -- the control | 0.050 -> 0.050 | 0.025 -> 0.025 | 0.025 -> 0.025 |
+
+7-10% for a short `format` on the interpreter (the extra walk, one cons and a
+`%fmt-arg` call per read, for a vector it never builds) and +25% for an ARRAY
+destination in the `#'map-into` wrapper (one `consp` per element for a cursor it
+never uses) -- the same band the earlier declined paths cost. The two control
+rows are identical to three digits on all three backends, which is what says the
+rest of the table is the change and not the harness.
+
+**Bytes.** wasm-GC at `--optimize=size`, and the `.class` beside it:
+
+| program | wasm | `.class` |
+| --- | ---: | ---: |
+| `(print 1)` | 496 -> 496 | 3,008 -> 3,008 |
+| one computed-control `format` | 75,535 -> 78,111 (+2,576) | 72,398 -> 75,678 |
+| the same with a `~{` | 75,586 -> 78,162 (+2,576) | 72,465 -> 75,745 |
+| one `(map 'string ...)` | 20,344 -> 20,894 (+550) | 8,977 -> 9,810 |
+| one `(coerce x 'string)` | 12,530 -> 13,080 (+550) | 13,039 -> 13,874 |
+| one `#'map-into` as a value | 23,932 -> 24,020 (+88) | 38,916 -> 39,080 |
+| `size-report hello_world` / `pi_approx` | byte-IDENTICAL | -- |
+| `size-report zlib` | 101,615 -> 102,200 (+585, +0.58%) | -- |
+
+The renderer's +2,576 B is paid only by a program that reaches the runtime
+renderer at all, which the gate already keeps to the programs that need it
+(`.kb/format.md`); a program that formats only literals carries none of it, which
+is what the two byte-identical size-report rows say.
+
+### Proving the answers did not move
+
+**11,248 comparisons, zero divergence**: one generated program run on the jar
+built from the parent commit and the jar built from this one, output diffed byte
+for byte per backend. 2,510 cases x 4 backends -- a deterministic LCG over 79
+control strings x 35 argument sets, with the full cross product of every
+iteration and repositioning directive, argument lists of 0/1/2/3/7/8/9/12/20/40
+elements (straddling the materialization threshold both ways), sublists,
+characters, floats, nils, non-sequences, plus every `#'map-into` destination x
+source representation (list, long list, empty, array, fill-pointered array,
+string, 0/1/2 sources) and every `(map 'string ...)` / `(coerce x 'string)` /
+`concatenate` / `reverse` / `remove` / `substitute` / `remove-duplicates` /
+`sort` shape over string, list, vector and empty operands -- and 604 cases x 2
+backends for the shapes that trap uncatchably on wasm before this change and
+after it (a string or a vector where a directive indexes a sequence, a dotted
+argument list, a sublist of non-lists, a type error inside `map-into`, `~/name/`
+against the stub).
+
+### Is the family closed? Yes -- here is the search
+
+`(elt <seq> <i>)` / `(nth <i> <seq>)` with a RUNTIME-sized sequence and a loop
+index, everywhere one can be written:
+
+- **the shipped Lisp** (`src/main/resources/**/*.lisp`) -- every remaining hit is
+  a constant index into a record (`http-server.lisp`, `asdf.lisp`, `geom.lisp`'s
+  glTF accessors), an axis into `array-dimensions` (`linalg.lisp`, `torch.lisp` --
+  bounded by RANK), or `usocket.lisp`'s four-octet address. The one true instance
+  is `geom.lisp:422-423`'s `(nth i facet)`, bounded by a polygon's vertex count
+  (3-4 in every mesh the repo builds) and dismissed with a measurement in
+  `.todo/594`'s survey.
+- **the Java-embedded prelude** (`LispPreludeLibrary.SOURCES`) -- the only `elt`
+  forms left are the four cursor FALLBACKS `search` / `mismatch` / `replace` were
+  given above.
+- **`LispMacroExpander`'s lowerings** -- `expandElt` and `array-dimension` are
+  single reads, not loops; `arityDispatchedCall`, `bindParams` and
+  `WasmArityBundler` are bounded by a lambda list's length; every generated loop
+  over a sequence now carries `readElementAdvancing` / `cursorRead` or the
+  `readElement` / `advanceCursor` pair.
+- **native `Environment` / `LispEvaluator` arms** -- `sequenceRef` has exactly one
+  caller inside a loop, `SequenceSourceCursor`, which is the cursor; every other
+  per-element read is `elementAt` on a packed vector (O(1)) or walks a
+  `seqAsList` materialization.
+- **`BuiltinFunctionWrappers`** -- the one `(setf (elt r i) v)` left is the
+  `#'map-into` wrapper's ARRAY arm, where the store is O(1) by construction.
+
+The one shape that is still super-linear and is NOT this family: `%fmt-run`'s own
+`(%fmt-cat out (string (char ctrl pos)))` per character, quadratic in the CONTROL
+STRING's length. Irrelevant at the length control strings have, and it is why the
+iteration loops -- whose accumulator grows with the DATA -- were the ones changed.
+
 ## Re-evaluation triggers
 
 - **A full-scan sequence operator on the interpreter is now bounded by the
@@ -649,15 +834,21 @@ pre-existing and not this change's to move.
   `elt` fallback) or `cursorRead` (any other fallback). `LispMacroExpander`'s
   `readElement`/`advanceCursor` pair is the OTHER spelling, for a loop that has a
   `do` binding to hang the step on; `map-into`'s dispatch is its only user.
-- **The family is not closed.** `.todo/595` carries what the 594 survey found and
-  did not fix, with its ladders: the runtime `format` renderer's argument list
-  (`format-render.lisp` reads `(nth i all)` per directive AND calls
-  `(length items)` twice per `~{` pass), the `#'map-into` WRAPPER's
-  `(setf (elt r i) ...)` store into a list destination
-  (`BuiltinFunctionWrappers.mapIntoWrapper` -- the one map-into site that never
-  got the cursor its lowering has), and `(map 'string ...)`, whose accumulator is
-  a `string-concat` per element and is quadratic for a different reason
-  (56 ms at n = 4000 on WASM, unmoved by this change).
+- **The family IS closed, as of 2026-08-31** -- the three sites `.todo/595`
+  carried are the section above, and the search that says nothing is left is
+  recorded with them. What can reopen it is a NEW loop, not an old one: any
+  generated `do`/`dotimes`/`while` whose body reads `(elt s i)` or `(nth i s)`
+  where `s` can be a list at run time. The fix is `readElementAdvancing` (a plain
+  `elt` fallback), `cursorRead` (any other fallback), the `readElement` /
+  `advanceCursor` pair (a loop with a `do` binding to hang a step on) -- or, when
+  the index does NOT advance monotonically, `%fmt-args`'s materialize-once shape,
+  which the renderer is the worked example of.
+- **A quadratic ACCUMULATOR is the family's twin and the cursor cannot see it.**
+  `(map 'string ...)` and the renderer's `~{` loop each rebuilt their whole result
+  once per element while their reads were being fixed beside them. Any loop whose
+  accumulator step is `%string-concat`/`concatenate` of the accumulator itself is
+  O(n^2) in the OUTPUT; collect and join (`joinStringPiecesReversed`, `%fmt-join`)
+  rather than fold. `.kb/map-family.md` has the worked example.
 
 ## Pinning tests
 
@@ -717,6 +908,24 @@ pre-existing and not this change's to move.
   `mapWalksAListWithACursor` / the list-source rows appended to
   `replaceIntoAList`. Each includes a 2,000-element operand -- the length at
   which the head-walk was already seconds of test time.
+- The last three (the section above), all four backends:
+  `ci-spec.yaml`'s `format-runtime-control-string` (extended with the four
+  repositioning directives on both sides of the materialization threshold,
+  `~#`, the four iteration shapes, a 3,000-element `~{`, and a non-list `~{`
+  argument), `map-into` (extended with the `#'map-into` WRAPPER over every
+  destination representation, including two 20,000-element lists) and `map`
+  (extended with the `'string` result over odd, even, empty, one-element and
+  multi-character-piece sequences, and a 5,000-character one);
+  `LispEvaluatorTest.theFormatRendererReadsItsArgumentListThroughAMaterializedVectorRatherThanNthPerDirective`
+  / `#theMapIntoWrapperWalksAListDestinationWithACursorRatherThanStoringByIndex`
+  / `#theStringResultOfMapCollectsItsPiecesAndJoinsThemOnceRatherThanConcatenatingPerElement`
+  -- including the signal a `~{` over a string still raises, which the
+  materialization would have erased had it not kept `nth` as its fallback -- and
+  the `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest` twins
+  `compileAndRunTheFormatRendererReadsItsArgumentListThroughAMaterializedVector` /
+  `#compileAndRunTheMapIntoWrapperWalksAListDestinationWithACursor` /
+  `#compileAndRunTheStringResultOfMapJoinsItsPiecesOnce` (the WASM ones without
+  the `compileAndRun` prefix).
 - The behavior is pinned where it already was:
   `LispEvaluatorTest.evalCopyTreeAndSearch`,
   `LispEvaluatorTest.coerceConvertsBetweenListVectorAndString` /

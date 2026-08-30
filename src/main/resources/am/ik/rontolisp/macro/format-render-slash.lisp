@@ -28,7 +28,7 @@
   (let* ((stop (%fmt-slash-end ctrl pos end))
          (fn (%fmt-function-designator (string-upcase (subseq ctrl pos stop))))
          (stream (%make-string-output-stream)))
-    (funcall fn stream (nth i all) colon at)
+    (funcall fn stream (%fmt-arg all i) colon at)
     (let ((text (%string-stream-contents stream)))
       (close stream)
       (list (%fmt-cat out text) (+ stop 1) (+ i 1) nil))))

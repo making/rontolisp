@@ -238,6 +238,117 @@ zero. The `~/name/` arm is the one exception, and it is separated at INJECTION
 time rather than by the shaker (the section above): what made that arm worth
 separating was never its size, it was the funcall-dispatch gate it held open.
 
+## The argument list is a materialized VECTOR, not a list the renderer indexes
+
+**Invariant: inside the renderer `all` is not the argument list -- it is the pair
+`(list <the list as given> <a vector of it, or nil>)` that `%fmt-args` builds once
+per rendering LEVEL, and every read of it goes through `%fmt-arg` / `%fmt-count`.
+A read the vector cannot serve falls back to the very `(nth i list)` /
+`(length list)` the renderer used to make, so no answer moves.**
+
+Measured 2026-08-31. The renderer read its arguments with `(nth i all)` per
+directive, and `%fmt-iterate-list` / `%fmt-iterate-args` called `(length items)`
+TWICE per pass -- so `(format nil "~{~a~}" <n-element list>)` was quadratic in `n`
+on every path that reaches the renderer (the interpreter always; the compilers
+whenever the control string is computed).
+
+**A cursor was the wrong shape here, and that is the finding.** The four
+directives that reposition the argument pointer -- `~*` forward, `~:*` backward,
+`~n@*` absolutely, plus `~?` / `~{` recursing with their own -- make the access
+pattern genuinely RANDOM, and a monotone cons cursor (the shape the rest of the
+`elt`-per-element family took, `.kb/seq-coerce-runtime.md`) cannot serve it
+without a re-seed whose cost is the walk it was meant to remove. One O(n) pass up
+front buys O(1) reads for the whole level instead, which is what a random pattern
+wants. Measured first: at n = 2000 the two `(length items)` calls per pass were
+57% (wasm-GC) to 78% (JVM) of the whole call, the `nth` 13-19%, and the renderer's
+own per-pass cost 3-5%.
+
+- `%fmt-args` walks the argument once. **Only a PROPER list is materialized**, and
+  only when it is long enough to pay for the vector (8 elements today, a cost
+  threshold and nothing else -- the two paths answer identically). A dotted list,
+  a non-sequence, a string, a vector and a short list all get `(list x nil)` and
+  keep the walk.
+- `%fmt-arg` consults the vector only for an index INSIDE it; a negative index and
+  one past the end fall through to `(nth i list)`, which is what reproduces NIL
+  past the end and whatever `nth` does with a negative index. `%fmt-count`
+  likewise falls back to `(length x)`, so `(format nil "~{~a~}" 5)` still renders
+  nothing because `(length 5)` is 0.
+- The pair is built again for each NESTED level -- `~{`'s one list argument,
+  `~:{`'s and `~:@{`'s per-pass sublist, a logical block's list argument, `~?`'s
+  argument list through `%fmt-render` -- so a sublist is materialized when it is
+  visited and not before.
+
+**The iteration directives also collect their pieces and join them once.**
+`%fmt-iterate-list` / `%fmt-iterate-args` grew one accumulator with
+`(%fmt-cat acc piece)` per pass, which rebuilds the whole text every pass and is
+quadratic in the OUTPUT even after the reads are O(1). `%fmt-join` halves the
+piece list until one string is left: O(n log n) characters copied, no mutable
+buffer (the renderer has none on any backend), and the same `%fmt-cat` underneath.
+
+### The ladder
+
+`(format nil "~{~a~}" <n-element list>)`, Apple M4 Max, one locked acquisition,
+before and after in the same run, each row its own `defun`. **ms per call.**
+
+| n | 250 | 500 | 1000 | 2000 | 4000 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| JVM `.class` before | 0.285 | 0.880 | 3.47 | 12.62 | **54.8** |
+| JVM `.class` **after** | 0.028 | 0.055 | 0.071 | 0.145 | **0.306** |
+| WASM p1 before | 0.340 | 1.115 | 5.53 | 49.3 | **169.3** |
+| WASM p1 **after** | 0.137 | 0.269 | 0.549 | 1.103 | **2.231** |
+| `--component` before / after | 0.343/0.136 | 1.125/0.270 | 5.61/0.549 | 49.3/1.108 | 169.8/**2.225** |
+| interpreter before | 5.76 | 12.08 | 26.6 | 64.4 | **164.9** |
+| interpreter **after** | 5.86 | 11.68 | 23.4 | 46.7 | **93.2** |
+
+**179x on the JVM and 76x on wasm-GC at n = 4000**, and every after-row DOUBLES
+per doubling of n where every before-row quadrupled -- the wasm ladder reads
+0.137 / 0.269 / 0.549 / 1.103 / 2.231, which is the class. `~:{` over 2,000
+sublists moves with it: 14.06 -> **0.40** (JVM), 59.6 -> **2.38** (wasm p1),
+113.1 -> **91.5** (interpreter). The interpreter's residue is the tree-walking
+evaluator's per-node cost over the renderer's own `defun`s -- it is LINEAR now
+(5.86 / 11.68 / 23.4 / 46.7 / 93.2 doubles cleanly) where it was not.
+
+### What it costs
+
+A short argument list pays one extra walk, one cons and a `%fmt-arg` call per
+read for a vector it never builds. Each row in its own `defun`, ms per call:
+
+| row | interpreter | JVM | WASM p1 |
+| --- | --- | --- | --- |
+| `(format nil "~a ~a" 1 2)`, computed control | 0.0398 -> 0.0425 (+7%) | 0.0003 -> 0.0003 | 0.0008 -> 0.0010 |
+| the same with 8 arguments (the threshold) | 0.1435 -> 0.1545 (+8%) | 0.0005 -> 0.0006 | 0.0030 -> 0.0034 |
+| `(format nil "~{~a~}" <8-element list>)` | 0.221 -> 0.243 (+10%) | 0.0010 -> 0.0009 | 0.0050 -> 0.0052 |
+| `(mapcar #'1+ ...)` -- untouched, the control | 0.0500 -> 0.0500 | 0.0250 -> 0.0250 | 0.0250 -> 0.0250 |
+
+7-10% on the interpreter for a short `format`, nothing measurable on the compile
+paths, and the control row is identical to three digits on all three -- which is
+what says the rest of the table is the change and not the harness.
+
+### Proving the answers did not move
+
+11,248 comparisons, zero divergence: the same generated program run on the jar
+built from the parent commit and the jar built from this one, output diffed byte
+for byte per backend. 2,510 cases x 4 backends -- a deterministic LCG over 79
+control strings x 35 argument sets, with the full cross product of every
+iteration and repositioning directive, argument lists of 0, 1, 2, 3, 7, 8, 9, 12,
+20 and 40 elements (straddling the threshold in both directions), sublists,
+strings, vectors, characters, floats, nils and non-sequences -- plus 604 cases x 2
+backends for the shapes that trap uncatchably on wasm before this change and
+after it (a string or a vector where a directive indexes a sequence, a dotted
+argument list, a sublist of non-lists, `~/name/` against the stub). The three
+`~{`-family sites, `%fmt-value`, `%fmt-recursive`, `%fmt-plural`, the `~[` arms,
+`%fmt-escape`, `~#`, `~v`, the logical block and `format-render-slash.lisp`'s
+`~/name/` arm all read through the pair.
+
+**Re-evaluation trigger:** the pair is built by `%fmt-args` and read by
+`%fmt-arg` / `%fmt-count` and by NOTHING else. A new directive arm that reads
+`all` must use those three; spelling `(nth i all)` again would read the wrapper
+cons rather than an argument, and the renderer never signals, so it would answer
+quietly wrong text. The `%fmt-cat`-per-character accumulation inside `%fmt-run`
+itself is still quadratic in the CONTROL STRING's length -- irrelevant at the
+length control strings have, and the reason the iteration loops (whose
+accumulator grows with the DATA) were the ones changed.
+
 ## Deliberate divergences, and why
 
 - **The renderer never signals.** A malformed control, an unknown directive, an

@@ -1481,6 +1481,22 @@ cases:
       (print (map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30)))
       (print (map-into (make-array 3) #'+ '(1 2 3) #(10 20 30)))
       (print (length (map-into (make-list 20000) (lambda (x) 1) (make-list 20000))))
+      ;; #'map-into taken as a VALUE runs a separate body from the call-position
+      ;; lowering, and its store into a LIST destination was (setf (elt r i) v) --
+      ;; an O(i) head-walk per element. It now walks the destination with a cons
+      ;; cursor and keeps the indexed store for every other representation, so the
+      ;; two spellings must answer the same thing for each of them.
+      (print (funcall #'map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40)))
+      (print (funcall #'map-into (make-array 3) #'* #(2 3 4) #(5 6 7)))
+      (print (funcall #'map-into (list 0 0 0) (lambda () 42)))
+      (print (funcall #'map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30)))
+      (print (funcall #'map-into nil #'1+ '(1 2 3)))
+      (print (funcall #'map-into (list 0) #'1+ '(1 2 3)))
+      (print (funcall #'map-into (copy-seq "xxxxx") #'char-upcase "abc"))
+      (print (funcall #'map-into (make-array 6 :fill-pointer 3 :initial-element 0)
+                      #'1+ '(1 2 3 4 5 6)))
+      (print (length (funcall #'map-into (make-list 20000) (lambda (x) 1) (make-list 20000))))
+      (print (car (funcall #'map-into (make-list 20000) #'1+ (make-list 20000 :initial-element 5))))
     expected: |
       (11 22 33 0)
       #(10 18 28)
@@ -1489,6 +1505,16 @@ cases:
       (11 22 33)
       #(11 22 33)
       20000
+      (11 22 33 0)
+      #(10 18 28)
+      (42 42 42)
+      (11 22 33)
+      NIL
+      (2)
+      "ABCxx"
+      #(2 3 4)
+      20000
+      6
   - name: map
     source: |
       (print (map 'list #'+ '(1 2 3) '(10 20 30)))
@@ -1508,6 +1534,23 @@ cases:
       (print (map 'string #'char-upcase (coerce (list #\a #\b) 'string)))
       (print (map nil #'1+ *map-l*))
       (print (map 'list #'char-code (list #\a #\b)))
+      ;; The 'string accumulator is a LIST of the per-element princ pieces joined
+      ;; pairwise at the end; it used to be one %string-concat of the whole result
+      ;; per element, which is quadratic in the OUTPUT. Odd and even piece counts,
+      ;; an empty and a one-element sequence, and multi-character pieces are what
+      ;; the halving has to get right -- and every literal (coerce x 'string) runs
+      ;; the same body.
+      (print (map 'string #'identity nil))
+      (print (map 'string #'identity (list #\a)))
+      (print (map 'string #'identity (list #\a #\b #\c)))
+      (print (map 'string #'identity (list #\a #\b #\c #\d)))
+      (print (map 'string #'identity (list 1 2 33)))
+      (print (map 'string #'identity "abcde"))
+      (print (coerce (list #\x #\y #\z) 'string))
+      (print (coerce (list 1 2) 'string))
+      (print (length (map 'string #'char-upcase (make-string 5000 :initial-element #\q))))
+      (print (subseq (map 'string #'char-upcase (make-string 5000 :initial-element #\q)) 0 4))
+      (print (funcall #'map 'string #'char-upcase "abcd"))
     expected: |
       (11 22 33)
       "ABC"
@@ -1520,6 +1563,17 @@ cases:
       "AB"
       NIL
       (97 98)
+      ""
+      "a"
+      "abc"
+      "abcd"
+      "1233"
+      "abcde"
+      "xyz"
+      "12"
+      5000
+      "QQQQ"
+      "ABCD"
   - name: reduce
     source: |
       (print (reduce (lambda (a b) (+ a b)) '(1 2 3 4 5) :initial-value 0))
@@ -2683,10 +2737,49 @@ cases:
       (let ((ci-fmt-c "&#x~x;"))
         (princ (format nil ci-fmt-c 233)))
       (terpri)
+      ;; The renderer reads its argument list through %fmt-arg / %fmt-count, over
+      ;; a vector it materializes once per level when the list is long enough to
+      ;; pay for it -- the reads used to be (nth i all) per directive and
+      ;; (length items) TWICE per ~{ pass. The pointer moves in four directions,
+      ;; so the repositioning directives are what says the materialization did not
+      ;; break the addressing: below and above the threshold, forwards, backwards,
+      ;; absolutely, and past the end.
+      (defun ci-fmt-jump (c) (apply #'format nil c '(a b c d e f g h i j k l)))
+      (princ (ci-fmt-jump "~a~a~:*~a~2:*~a~@*~a~5@*~a~11@*~a~12@*~a|"))
+      (terpri)
+      (princ (apply #'format nil (list "~a~*~a~*~a" 1 2 3 4 5)))
+      (terpri)
+      (defun ci-fmt-iter (c l) (format nil c l))
+      (princ (ci-fmt-iter "~{~a~^,~}" '(1 2 3 4 5 6 7 8 9 10 11 12)))
+      (terpri)
+      (princ (ci-fmt-iter "~{~a~^,~}" '(1 2 3)))
+      (terpri)
+      (princ (ci-fmt-iter "~{~a~}" nil))
+      (princ (ci-fmt-iter "~:{[~a ~a]~}" '((1 2) (3 4) (5 6) (7 8) (9 10))))
+      (terpri)
+      (princ (length (ci-fmt-iter "~{~a~}" (make-list 3000 :initial-element 7))))
+      (terpri)
+      (princ (apply #'format nil (list "~#[none~;one ~a~:;many ~a~]" 'x 'y)))
+      (princ (apply #'format nil (list "|~@{~a~^-~}" 1 2 3 4 5 6 7 8 9)))
+      (terpri)
+      ;; A ~{ argument that is not a list keeps whatever (length x) makes it do --
+      ;; the vector is built for a PROPER list only, so nothing here changed.
+      (let ((ci-fmt-d "~{~a~}[~a]"))
+        (princ (format nil ci-fmt-d 5 'tail))
+        (princ (format nil ci-fmt-d nil 'tail)))
+      (terpri)
     expected: |
       A=1 S="s" D=42 00007% 1,2 cond=c ~ end
       A | B (00007) 1,234,567
       &#xE9;
+      ABBAAFLNIL|
+      135
+      1,2,3,4,5,6,7,8,9,10,11,12
+      1,2,3
+      [1 2][3 4][5 6][7 8][9 10]
+      3000
+      many X|1-2-3-4-5-6-7-8-9
+      [TAIL][TAIL]
   # ~W writes its argument as `write` does (prin1 under the printer control
   # variables) and consumes exactly one -- rove's assertion description ends in
   # ~:[...~], which reads the wrong argument if ~W is copied out verbatim.
