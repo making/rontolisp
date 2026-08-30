@@ -21,7 +21,7 @@
 | [`metal`](functions/metal.md) | `objc` の上の `appkit` ウィンドウ上に載る Metal 描画サーフェス |
 | [`scene`](functions/scene.md) | `metal` の上に載る `geom` ソリッドの 3D ビューア |
 | [`asdf`](functions/asdf.md) | ASDF の限定的な API 互換サブセット(システム定義) |
-| [`uiop`](functions/uiop.md) | ASDF の移植性レイヤ -- サブパッケージ構成は [uiop パッケージ](uiop.md) も参照してください |
+| [`uiop`](uiop.md) | ASDF の移植性レイヤ -- 15 個のサブパッケージ、実装状況、関数の表 |
 | [`ql` / `ql-dist`](functions/ql-and-ql-dist.md) | Quicklisp の限定的な API 互換サブセット |
 | [`usocket`](functions/usocket.md) | `rontolisp:tcp-*` 組み込みの上に載った [usocket](https://github.com/usocket/usocket) 互換シム |
 

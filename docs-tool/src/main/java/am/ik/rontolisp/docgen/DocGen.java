@@ -208,16 +208,29 @@ public final class DocGen {
 	}
 
 	/**
-	 * Renders the sub-pages of one nav page. They are reachable only through their
-	 * parent, so they get its sidebar row highlighted, a back link to it, and a
-	 * previous/next chain of their own that starts at the parent -- the same shape the
+	 * Renders the sub-pages of a top-level nav page. They are reachable only through
+	 * their ancestors, so they get a back link to their immediate parent and a
+	 * previous/next chain of their own that starts there -- the same shape the
 	 * per-operator detail pages have, with the parent page standing in for the catalog
 	 * index. A subpage can ALSO be a catalog's index page (a per-package function table,
 	 * say), in which case its table names are linked to their detail pages exactly like a
 	 * top-level index page's.
 	 */
 	private void renderSubpages(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
-			Nav.Page parent, Map<String, Catalog> indexToCatalog) throws IOException {
+			Nav.Page top, Map<String, Catalog> indexToCatalog) throws IOException {
+		renderSubpages(lang, nav, languageList, langDir, top, lang + "/" + replaceExtension(top.file()),
+				indexToCatalog);
+	}
+
+	/**
+	 * @param parent the immediate parent, whose page supplies the back link and starts
+	 * the previous/next chain
+	 * @param topDocPath the top-level ancestor's doc path -- subpages nest arbitrarily
+	 * deep, but the sidebar carries one row per TOPIC, so every descendant highlights
+	 * that one row regardless of nesting depth
+	 */
+	private void renderSubpages(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
+			Nav.Page parent, String topDocPath, Map<String, Catalog> indexToCatalog) throws IOException {
 		List<Nav.Page> subpages = parent.subpages();
 		if (subpages.isEmpty()) {
 			return;
@@ -240,9 +253,9 @@ public final class DocGen {
 				body = TableLinkTransformer.transform(body, buildNameToSlug(catalog), catalog.linkPrefix(page.file()));
 			}
 			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
-					parentDocPath, body, TocBuilder.build(body), backlink, prev, next, languageList);
+					topDocPath, body, TocBuilder.build(body), backlink, prev, next, languageList);
 			writePage(docPath, HtmlTemplate.render(ctx));
-			renderSubpages(lang, nav, languageList, langDir, page, indexToCatalog);
+			renderSubpages(lang, nav, languageList, langDir, page, topDocPath, indexToCatalog);
 		}
 	}
 

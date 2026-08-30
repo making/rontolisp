@@ -203,20 +203,43 @@ class DocGenTest {
 
 	/**
 	 * A sub-page is rendered and reachable from its parent, but the sidebar keeps one row
-	 * for the whole topic -- the uiop sub-package pages are a breakdown of "The uiop
-	 * Package", not four more entries of the Language Reference section.
+	 * for the whole topic -- the per-package function pages are a breakdown of
+	 * "Functions", not fifteen more entries of the Language Reference section.
 	 */
 	@Test
 	void subpagesAreRenderedButAbsentFromTheSidebar() throws IOException {
-		String parent = Files.readString(site.resolve("en/reference/uiop.html"), StandardCharsets.UTF_8);
+		String parent = Files.readString(site.resolve("en/reference/functions.html"), StandardCharsets.UTF_8);
 		String sidebar = parent.substring(parent.indexOf("<aside class=\"sidebar\""), parent.indexOf("</aside>"));
-		assertThat(sidebar).contains("<a class=\"nav-link active\" href=\"uiop.html\">The uiop Package</a>")
-			.doesNotContain("uiop/os.html");
+		assertThat(sidebar).contains("<a class=\"nav-link active\" href=\"functions.html\">Functions</a>")
+			.doesNotContain("functions/cl.html");
 		// ...and the page it links to exists, with the parent's row highlighted and a
 		// back link to it.
-		String sub = Files.readString(site.resolve("en/reference/uiop/os.html"), StandardCharsets.UTF_8);
-		assertThat(sub).contains("<a class=\"nav-link active\" href=\"../uiop.html\">The uiop Package</a>")
-			.contains("<a class=\"backlink\" href=\"../uiop.html\">&larr; The uiop Package</a>");
+		String sub = Files.readString(site.resolve("en/reference/functions/cl.html"), StandardCharsets.UTF_8);
+		assertThat(sub).contains("<a class=\"nav-link active\" href=\"../functions.html\">Functions</a>")
+			.contains("<a class=\"backlink\" href=\"../functions.html\">&larr; Functions</a>");
+	}
+
+	/**
+	 * "The uiop Package" and its four sub-package pages moved under "Functions"
+	 * (2026-08-30) so uiop stopped being its own sidebar row -- they are now nested TWO
+	 * levels deep (Functions -> uiop.md -> uiop/os.md). Every level must still highlight
+	 * the single top-level "Functions" row, while the back link at each level keeps
+	 * pointing at its own immediate parent rather than jumping straight to the top.
+	 */
+	@Test
+	void deeplyNestedSubpagesStillHighlightTheTopLevelSidebarRow() throws IOException {
+		assertThat(Files.exists(site.resolve("en/reference/functions/uiop.html"))).isFalse();
+
+		String uiop = Files.readString(site.resolve("en/reference/uiop.html"), StandardCharsets.UTF_8);
+		String uiopSidebar = uiop.substring(uiop.indexOf("<aside class=\"sidebar\""), uiop.indexOf("</aside>"));
+		assertThat(uiopSidebar).contains("<a class=\"nav-link active\" href=\"functions.html\">Functions</a>")
+			.doesNotContain("nav-link active\" href=\"uiop.html\"");
+		assertThat(uiop).contains("<a class=\"backlink\" href=\"functions.html\">&larr; Functions</a>");
+
+		String os = Files.readString(site.resolve("en/reference/uiop/os.html"), StandardCharsets.UTF_8);
+		String osSidebar = os.substring(os.indexOf("<aside class=\"sidebar\""), os.indexOf("</aside>"));
+		assertThat(osSidebar).contains("<a class=\"nav-link active\" href=\"../functions.html\">Functions</a>");
+		assertThat(os).contains("<a class=\"backlink\" href=\"../uiop.html\">&larr; The uiop Package</a>");
 	}
 
 	/**
@@ -236,6 +259,16 @@ class DocGenTest {
 		String rontolispVersion = Files.readString(site.resolve("en/reference/functions/rontolisp-version.html"),
 				StandardCharsets.UTF_8);
 		assertThat(rontolispVersion).contains("<a class=\"backlink\" href=\"rontolisp.html\">");
+
+		// The uiop category's index_page is reference/uiop.md itself (not a
+		// reference/functions/uiop.md stub), so that page's own table gets the same
+		// auto-linking treatment, and its entries' detail pages back-link there.
+		String uiop = Files.readString(site.resolve("en/reference/uiop.html"), StandardCharsets.UTF_8);
+		assertThat(uiop).contains("<a class=\"fn-link\" href=\"functions/uiop-file-exists-p.html\">");
+
+		String uiopFileExistsP = Files.readString(site.resolve("en/reference/functions/uiop-file-exists-p.html"),
+				StandardCharsets.UTF_8);
+		assertThat(uiopFileExistsP).contains("<a class=\"backlink\" href=\"../uiop.html\">&larr; The uiop Package</a>");
 	}
 
 	@Test

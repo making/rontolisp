@@ -24,7 +24,7 @@ function's deviations from Common Lisp are noted on its own page.
 | [`metal`](functions/metal.md) | A Metal drawing surface on an `appkit` window over `objc` |
 | [`scene`](functions/scene.md) | A 3-D viewer for `geom` solids over `metal` |
 | [`asdf`](functions/asdf.md) | A limited, API-compatible subset of ASDF system definitions |
-| [`uiop`](functions/uiop.md) | ASDF's portability layer -- see also [The uiop Package](uiop.md) for the sub-package layout |
+| [`uiop`](uiop.md) | ASDF's portability layer -- 15 sub-packages, what is implemented, and the function tables |
 | [`ql` / `ql-dist`](functions/ql-and-ql-dist.md) | A limited, API-compatible subset of Quicklisp |
 | [`usocket`](functions/usocket.md) | A [usocket](https://github.com/usocket/usocket)-compatible shim over the `rontolisp:tcp-*` built-ins |
 

@@ -34,7 +34,7 @@ import org.yaml.snakeyaml.Yaml;
  * directory of detail pages): each category routes its entries' "back" link and table
  * auto-linking to its own page instead of the whole file's single default, which is how
  * one {@code reference/functions/_catalog.yaml} backs the per-package function pages
- * ({@code reference/functions/cl.md}, {@code reference/functions/uiop.md}, ...) without
+ * ({@code reference/functions/cl.md}, {@code reference/functions/torch.md}, ...) without
  * moving a single detail page.
  *
  * @param baseDir the directory holding the detail pages and {@code _catalog.yaml},

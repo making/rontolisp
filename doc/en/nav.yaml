@@ -60,25 +60,23 @@ sections:
             title: scene Package Functions
           - file: reference/functions/asdf.md
             title: asdf Package Functions
-          - file: reference/functions/uiop.md
-            title: uiop Package Functions
+          - file: reference/uiop.md
+            title: The uiop Package
+            subpages:
+              - file: reference/uiop/utility.md
+                title: uiop/utility
+              - file: reference/uiop/os.md
+                title: uiop/os
+              - file: reference/uiop/pathname.md
+                title: uiop/pathname
+              - file: reference/uiop/image.md
+                title: uiop/image
           - file: reference/functions/ql-and-ql-dist.md
             title: ql and ql-dist Package Functions
           - file: reference/functions/usocket.md
             title: usocket Package Functions
       - file: reference/packages.md
         title: Packages
-      - file: reference/uiop.md
-        title: The uiop Package
-        subpages:
-          - file: reference/uiop/utility.md
-            title: uiop/utility
-          - file: reference/uiop/os.md
-            title: uiop/os
-          - file: reference/uiop/pathname.md
-            title: uiop/pathname
-          - file: reference/uiop/image.md
-            title: uiop/image
       - file: reference/function-namespace.md
         title: Function Namespace
   - title: Guides

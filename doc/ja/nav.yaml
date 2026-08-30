@@ -60,25 +60,23 @@ sections:
             title: scene パッケージの関数
           - file: reference/functions/asdf.md
             title: asdf パッケージの関数
-          - file: reference/functions/uiop.md
-            title: uiop パッケージの関数
+          - file: reference/uiop.md
+            title: uiop パッケージ
+            subpages:
+              - file: reference/uiop/utility.md
+                title: uiop/utility
+              - file: reference/uiop/os.md
+                title: uiop/os
+              - file: reference/uiop/pathname.md
+                title: uiop/pathname
+              - file: reference/uiop/image.md
+                title: uiop/image
           - file: reference/functions/ql-and-ql-dist.md
             title: ql / ql-dist パッケージの関数
           - file: reference/functions/usocket.md
             title: usocket パッケージの関数
       - file: reference/packages.md
         title: パッケージ
-      - file: reference/uiop.md
-        title: uiop パッケージ
-        subpages:
-          - file: reference/uiop/utility.md
-            title: uiop/utility
-          - file: reference/uiop/os.md
-            title: uiop/os
-          - file: reference/uiop/pathname.md
-            title: uiop/pathname
-          - file: reference/uiop/image.md
-            title: uiop/image
       - file: reference/function-namespace.md
         title: 関数名前空間
   - title: ガイド
