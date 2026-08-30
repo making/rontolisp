@@ -6569,6 +6569,36 @@ cases:
       34
       255
       -1
+  - name: file-length-of-a-file-of-a-known-size
+    # file-length is REAL on all four backends: the interpreter and the JVM stat
+    # the path the stream was opened with, both WASM backends stat the descriptor
+    # through fd_filestat_get (component mode: the adapter's re-encode of
+    # wasi:filesystem's descriptor.stat). What still answers nil is what has no
+    # length -- a string stream, a standard stream, a closed handle -- which is
+    # Common Lisp's "cannot be determined". The trailing (min 4096 ...) is the
+    # caller shape that used to TRAP one call later on the two WASM backends
+    # rather than take a fallback.
+    source: |
+      (with-open-file (out "fl.dat" :direction :output :if-exists :supersede
+                            :element-type '(unsigned-byte 8))
+        (dotimes (i 300) (write-byte (mod i 256) out))
+        (print (file-length out)))
+      (with-open-file (in "fl.dat" :element-type '(unsigned-byte 8))
+        (print (file-length in)))
+      (with-input-from-string (s "abcdef") (print (file-length s)))
+      (print (file-length *standard-output*))
+      (print (file-length t))
+      (let ((h (open "fl.dat"))) (close h) (print (file-length h)))
+      (with-open-file (in "fl.dat" :element-type '(unsigned-byte 8))
+        (print (min 4096 (file-length in))))
+    expected: |
+      300
+      300
+      NIL
+      NIL
+      NIL
+      NIL
+      300
   - name: open-if-exists-append-keeps-the-existing-content
     # smart-buffer's disk-spill path writes every chunk past the memory limit
     # this way, so the option is real on all four backends: :direction :output

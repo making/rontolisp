@@ -17,6 +17,9 @@
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.append-via-stream" (func (param i32 i32) (result i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.open-at" (func (param i32 i32 i32 i32 i32 i32 i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.read-directory" (func (param i32 i32)))
+  ;; descriptor.stat is an async func with no params; the SYNC (blocking) lowering
+  ;; flattens to (self, retptr) and the adapter reads descriptor-stat out of the retptr.
+  (import "wasi:filesystem/types@0.3.0" "[method]descriptor.stat" (func (param i32 i32)))
   (import "wasi:filesystem/preopens@0.3.0" "get-directories" (func (param i32)))
   (import "wasi:random/random@0.3.0" "get-random-u64" (func (result i64)))
   (memory (export "memory") 6)

@@ -92,7 +92,7 @@ public final class WasmComponentBuilder {
 	/**
 	 * The preview1-to-WASI-0.3 adapter core module: it imports the shared memory, the
 	 * lowered WASI 0.3 functions and the async canonical built-ins (under {@code "w"})
-	 * and exports the eleven preview1-style functions rontolisp imports -- plus the
+	 * and exports the twelve preview1-style functions rontolisp imports -- plus the
 	 * STDIO-ONLY halves of the two fd-polymorphic ones ({@code fd_write_stdio} /
 	 * {@code fd_read_stdin}), which {@link #fixedSurface} retains under the preview1
 	 * names for a core module that imports no {@code path_open}. Source:
@@ -125,13 +125,13 @@ public final class WasmComponentBuilder {
 	private static final String IFACE_STDERR = "wasi:cli/stderr@0.3.0";
 
 	/**
-	 * The eleven {@code wasi_snapshot_preview1} functions the adapter implements, in its
+	 * The twelve {@code wasi_snapshot_preview1} functions the adapter implements, in its
 	 * own export order. A core module imports a subset of them (after {@code --optimize},
 	 * only what it reaches), and that subset drives everything below.
 	 */
 	private static final List<String> PREVIEW1_FUNCS = List.of("fd_write", "fd_read", "path_open", "fd_readdir",
 			"fd_close", "random_get", "clock_time_get", "environ_sizes_get", "environ_get", "fd_prestat_get",
-			"fd_prestat_dir_name");
+			"fd_prestat_dir_name", "fd_filestat_get");
 
 	/**
 	 * The adapter's NARROW implementations of the two fd-polymorphic entry points,
@@ -222,6 +222,7 @@ public final class WasmComponentBuilder {
 		funcs.put("get-random-u64", new BlockFunc(IFACE_RANDOM, "get-random-u64"));
 		funcs.put("stderr-write", new BlockFunc(IFACE_STDERR, "write-via-stream"));
 		funcs.put("read-dir", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.read-directory"));
+		funcs.put("desc-stat", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.stat"));
 		return funcs;
 	}
 
@@ -367,6 +368,11 @@ public final class WasmComponentBuilder {
 		// element owns its name string.
 		w.put("stream-read-de", builtinRealloc(T_DE_STREAM, (t, r) -> ComponentWriter.canonStreamReadAsync(t, 0, r)));
 		w.put("stream-drop-r-de", builtin(T_DE_STREAM, ComponentWriter::canonStreamDropReadable));
+		// descriptor.stat: an async func with no parameters, lowered SYNCHRONOUSLY, so
+		// the whole result<descriptor-stat, error-code> comes back through a memory
+		// retptr. It needs realloc for the same reason future-read-fs does: the
+		// filesystem error-code is a variant with a string-bearing case.
+		w.put("desc-stat", lowerRealloc("desc-stat", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
 		return w;
 	}
 
@@ -1329,7 +1335,7 @@ public final class WasmComponentBuilder {
 
 	/**
 	 * Assemble the {@code --no-wasi} REACTOR component: the single rontolisp core module
-	 * -- which imports <strong>nothing</strong> (its eleven
+	 * -- which imports <strong>nothing</strong> (its twelve
 	 * {@code wasi_snapshot_preview1} slots are internal stubs and it declares its own
 	 * memory) and runs its top-level forms from its core <em>start section</em> at
 	 * instantiation -- instantiated with no arguments and wrapped as
@@ -1439,7 +1445,7 @@ public final class WasmComponentBuilder {
 	 * lowered, which component types are declared, and finally which interfaces the
 	 * import block still has to declare.
 	 * <p>
-	 * Without {@link Narrowing#shake()} the core keeps all eleven imports, so every step
+	 * Without {@link Narrowing#shake()} the core keeps all twelve imports, so every step
 	 * is the identity and the component is the one this builder always emitted.
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @param blockBound the block-declared interfaces the program binds directly

@@ -1,9 +1,10 @@
 ;; preview1-to-WASI-0.3 adapter core module.
 ;;
 ;; Imports the shared memory and the lowered WASI 0.3 functions plus the async canonical
-;; built-ins (under "w"); exports the eleven wasi_snapshot_preview1 functions rontolisp
+;; built-ins (under "w"); exports the twelve wasi_snapshot_preview1 functions rontolisp
 ;; imports. In WASI 0.3 the wasi:io package is gone and all byte I/O flows through the
-;; built-in stream<u8> / future<T> types, so fd_write/fd_read/path_open/fd_close/fd_readdir/fd_prestat_*
+;; built-in stream<u8> / future<T> types, so fd_write/fd_read/path_open/fd_close/fd_readdir/
+;; fd_prestat_*/fd_filestat_get
 ;; are implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
 ;; 0.3; random_get/clock_time_get/environ_* bridge wasi:random / wasi:clocks
 ;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment. The environ_*
@@ -37,6 +38,8 @@
 ;;   0x500b0 one lowered directory-entry (24 bytes: type variant @0, name ptr@16 len@20)
 ;;   0x50100 fd table: 64 slots x 16 bytes {descriptor@0, read-stream@4, valid@12}
 ;;   0x50500 preopen table: 16 slots x 264 bytes {descriptor@0, name-len@4, name@8..}
+;;   0x51600 descriptor.stat result scratch: result<descriptor-stat, error-code>, 112
+;;           bytes -- disc byte @0, descriptor-stat @8 (type @8, link-count @24, size @32)
 ;; A preview1 file fd is 100 + slotIndex (so it never clashes with stdout=1 or a
 ;; preopen dirfd, which is 3 + preopen index).
 ;; The preopen table is a COPY, taken once at the first $ensure_preopens: the
@@ -70,6 +73,7 @@
   (import "w" "open-at" (func $open_at (param i32 i32 i32 i32 i32 i32 i32)))
   (import "w" "get-directories" (func $get_directories (param i32)))
   (import "w" "read-dir" (func $read_dir (param i32 i32)))
+  (import "w" "desc-stat" (func $desc_stat (param i32 i32)))
   (import "w" "get-random-u64" (func $rand_u64 (result i64)))
   (import "w" "drop-desc" (func $drop_desc (param i32)))
   ;; async canonical built-ins (the non-blocking variants; BLOCKED completes through
@@ -479,6 +483,44 @@
     (i32.store (local.get $used) (i32.sub (local.get $out) (local.get $buf)))
     (i32.const 0))
 
+  ;; fd_filestat_get(fd, buf) -> errno. The preview1 shape over WASI 0.3's
+  ;; descriptor.stat: the SYNC (blocking) lowering of an async func with no parameters,
+  ;; so the call is (self, retptr) and the whole result lands in memory.
+  ;;
+  ;; result<descriptor-stat, error-code> at 0x51600 is 112 bytes, align 8: the result
+  ;; discriminant byte at 0 (0 = ok), the payload at 8, and inside descriptor-stat the
+  ;; `type` variant at +0 (its case index in the first byte), `link-count` u64 at +16
+  ;; and `size` u64 at +24. So type is at 0x51608, link-count at 0x51618 and size at
+  ;; 0x51620.
+  ;;
+  ;; The written preview1 `filestat` fills dev/ino with 0 and the three timestamps with
+  ;; 0: the core reads only filetype and size (file-length), and inventing a device or a
+  ;; time that is not the time is exactly what a stub may not do. A consumer of the
+  ;; timestamps -- file-write-date, the day it stops answering nil here -- lifts them
+  ;; from the two option<instant> fields that follow `size`.
+  ;;
+  ;; Only a real file fd (100 + slot) names a descriptor; anything else -- a standard
+  ;; stream, a socket handle, an fd past the table -- is EBADF, which the core reads as
+  ;; "the length cannot be determined" and answers nil for.
+  (func $fd_filestat_get (param $fd i32) (param $buf i32) (result i32)
+    (local $sl i32)
+    (if (i32.lt_u (local.get $fd) (i32.const 100)) (then (return (i32.const 8))))
+    (if (i32.ge_u (local.get $fd) (i32.const 164)) (then (return (i32.const 8))))
+    (local.set $sl (call $slot (local.get $fd)))
+    (if (i32.eqz (i32.load offset=12 (local.get $sl))) (then (return (i32.const 8))))
+    (call $desc_stat (i32.load (local.get $sl)) (i32.const 0x51600))
+    (if (i32.load8_u (i32.const 0x51600)) (then (return (i32.const 76))))
+    (i64.store (local.get $buf) (i64.const 0))                                  ;; dev
+    (i64.store offset=8 (local.get $buf) (i64.const 0))                         ;; ino
+    (i32.store8 offset=16 (local.get $buf)
+      (call $p1_filetype (i32.load8_u (i32.const 0x51608))))                    ;; filetype
+    (i64.store offset=24 (local.get $buf) (i64.load (i32.const 0x51618)))       ;; nlink
+    (i64.store offset=32 (local.get $buf) (i64.load (i32.const 0x51620)))       ;; size
+    (i64.store offset=40 (local.get $buf) (i64.const 0))                        ;; atim
+    (i64.store offset=48 (local.get $buf) (i64.const 0))                        ;; mtim
+    (i64.store offset=56 (local.get $buf) (i64.const 0))                        ;; ctim
+    (i32.const 0))
+
   ;; wasi:filesystem descriptor-type case index -> preview1 filetype. Only "directory"
   ;; (case 2 -> 3) is load-bearing for %list-directory, but the whole table is mapped so
   ;; a caller reading d_type gets the preview1 answer it expects.
@@ -592,4 +634,5 @@
   (export "environ_sizes_get" (func $environ_sizes_get))
   (export "environ_get" (func $environ_get))
   (export "fd_prestat_get" (func $fd_prestat_get))
-  (export "fd_prestat_dir_name" (func $fd_prestat_dir_name)))
+  (export "fd_prestat_dir_name" (func $fd_prestat_dir_name))
+  (export "fd_filestat_get" (func $fd_filestat_get)))

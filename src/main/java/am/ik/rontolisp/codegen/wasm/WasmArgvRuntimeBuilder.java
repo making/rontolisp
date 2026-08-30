@@ -17,7 +17,7 @@ import am.ik.wasm.WasmWriter;
  * The two WASI functions are APPENDED USER IMPORTS
  * ({@code am.ik.wasm.WasmImportInjector}), not fixed slots: the body calls them through
  * {@code WasmImportCompiler.PLACEHOLDER_FUNC_BASE + ordinal} the way
- * {@code --host-random}'s entropy import does, so the eleven index-pinned preview1 slots
+ * {@code --host-random}'s entropy import does, so the twelve index-pinned preview1 slots
  * -- and with them every existing module's bytes and the {@code --component} adapter's
  * export list -- are untouched. A program that never reads its command line imports
  * nothing new, and {@code --optimize} shakes the pair away with the helper.

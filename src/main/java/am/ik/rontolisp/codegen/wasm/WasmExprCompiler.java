@@ -1085,14 +1085,20 @@ final class WasmExprCompiler {
 				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> WasmExprCompiler.compileExpr(
 						LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams, ctx.usesStreamValues),
 						ctx);
-				// file-length and file-write-date answer nil here rather than signalling:
-				// no WASI filestat call is imported, and "cannot be determined" is what
-				// Common Lisp prescribes for exactly that. %make-directories,
+				// file-length is REAL here: it stats the stream's descriptor through the
+				// fd_filestat_get import and answers nil only for what genuinely has no
+				// length (a string stream, a standard stream, a socket, a closed or
+				// non-handle designator) -- the same set the interpreter and the JVM
+				// answer nil for.
+				case LispNames.FILE_LENGTH -> WasmFileLengthCompiler.compile(cons, ctx);
+				// file-position and file-write-date answer nil here rather than
+				// signalling: neither has a call imported, and "cannot be determined" is
+				// what Common Lisp prescribes for exactly that. %make-directories,
 				// %delete-file and %rename-file have no such escape -- the directory/file
 				// either changed
 				// or
 				// it did not -- so they signal.
-				case LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.FILE_WRITE_DATE ->
+				case LispNames.FILE_POSITION, LispNames.FILE_WRITE_DATE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
 				case LispNames.PATHNAMEP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPathnamep(cons), ctx);
 				case LispNames.MAKE_DIRECTORIES ->

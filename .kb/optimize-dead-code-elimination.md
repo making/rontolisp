@@ -618,6 +618,17 @@ rather than declared (`WasmComponentBuilder.fixedSurface`, the base variant only
    them — closing over the projection edges (`preopens` aliases `filesystem/types`'
    `descriptor`, so it cannot outlive it) and renumbering what is left.
 
+**The projection closure is transitive, and one WIT `use` can widen a program's world.**
+Since todo-589 declared `descriptor.stat` (the `fd_filestat_get` import behind
+`file-length`), `wasi:filesystem/types` `use`s `wasi:clocks/system-clock`'s `instant` for
+`descriptor-stat`'s three timestamps — so ANY program that opens a file now keeps
+`wasi:clocks/system-clock` in its world whether or not it reads the clock, and the
+`preopens` -> `filesystem/types` -> `system-clock` chain is two links long. That is a
+declared TYPE, not a reachable capability, and it is what the interface upstream is; the
+thing not to do is read the interface's presence as evidence that the program calls it
+(`WasmLispCompilerTest#anOptimizedComponentThatOpensAFileKeepsTheFilesystemSurface` says so
+in place). Base block type count went 16 -> 17 with it.
+
 **Nothing downstream may hold a fixed index any more.** The old `INST_*` / `T_*` constants are
 gone: the block's instance indices, the first free component type, and the count the user
 imports and the `run`/export wiring shift by all come back from the prune. That is the one
@@ -693,6 +704,18 @@ Preview 1 `--optimize` 22,355 -> 1,886 -> 645 -> 622 -> **511 bytes** (the first
 909 -> 168 B; the last, todo-271's unpinned printer prologue and half-open range probe,
 that data section 168 -> 58 B);
 `--component` 29,430 -> 8,930 -> 7,690 -> 2,138 -> 1,820 -> 1,776 -> **1,665**.
+
+**Re-measured 2026-08-31** (wasmtime 47, the same `(print "Hello World!")`): Preview 1
+`--optimize` **588 B**, `--component` **1,744 B** -- the chain above has drifted up ~15% and
+~5% since 2026-08-07 as the fixed runtime grew (todo-589's twelfth preview1 import,
+`fd_filestat_get`, is the most recent contributor and costs the shaken hello nothing: it is
+dropped with `_file_length`). The OPTIMIZE-OFF end of the same measurement has moved by far
+more and is worth knowing before quoting the old figure: `--optimize=off` is **159,346 B**
+for the component and **150,102 B** for Preview 1 today, against the 7,690 recorded above --
+that number was the wrapper alone in an era when the unshaken core was small, and it is not
+comparable to anything the compiler emits now. An optimized hello imports TWO interfaces
+(`wasi:cli/{types,stdout}`), not the three named below: `wasi:cli/stderr` leaves with the
+todo-273 narrowing.
 The component is now shaken core 516 + adapter 547 (from 3,624) + the import block 197 +
 the shared-memory module 25 (from 158) + 380 B of wiring (component types, aliases,
 canonical functions, core instances, the preamble and the module framing). The

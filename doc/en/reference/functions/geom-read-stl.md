@@ -17,4 +17,4 @@ A binary file's twelve float32s a triangle are moved by one [`read-sequence`](re
 
 ## Backend support
 
-Every backend that has a filesystem: the interpreter, a compiled `.class`/`.jar`, WASM Preview 1 and the WASI 0.3 component, with the same answer on all four. The dialect test reads the file's shape rather than its length precisely so that it can: [`file-length`](file-length.md) answers `nil` on both WASM backends by design.
+Every backend that has a filesystem: the interpreter, a compiled `.class`/`.jar`, WASM Preview 1 and the WASI 0.3 component, with the same answer on all four. The dialect test reads the file's shape rather than its length: one code path, identical on all four, and it needs no size at all.

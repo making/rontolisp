@@ -58,9 +58,13 @@ PY
   echo "$OUT/$1.wit (use clause restored)"
 }
 
+# --optimize is ON by default, and the fixtures are the UNPRUNED per-variant templates
+# WasiWitDefinitions holds -- so every capture pins the level explicitly. Without
+# --optimize=off the base reference program (which only prints) prunes its own world down
+# to wasi:cli/{types,stdout} and the capture would no longer be the template at all.
 echo "== --emit-wit fixtures =="
 echo '(print "x")' > "$WORK/base.lisp"
-capture base
+capture base --optimize=off
 printf '(defun h (r) (list :status 200 :body "x"))\n(rontolisp:http-handler (quote h))\n' > "$WORK/http-server.lisp"
 capture http-server
 restore_use http-server

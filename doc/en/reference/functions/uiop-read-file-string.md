@@ -20,5 +20,6 @@ rontolisp surface at all -- every backend reads UTF-8.
 All four backends -- one definition in rontolisp source, over
 `with-open-file` and a chunked [`read-sequence`](read-sequence.md) loop, so it
 runs anywhere a file can be opened for input. It deliberately does not size a
-single buffer from [`file-length`](file-length.md), which answers `nil` on both
-WASM backends.
+single buffer from [`file-length`](file-length.md): the chunked loop stops on the
+first short read, so end of file is read at most once, which is what the WASI 0.3
+component needs.

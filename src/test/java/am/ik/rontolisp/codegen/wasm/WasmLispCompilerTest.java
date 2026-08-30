@@ -178,11 +178,15 @@ class WasmLispCompilerTest {
 	void anOptimizedComponentThatOpensAFileKeepsTheFilesystemSurface() {
 		// path_open is the only writer of the adapter's fd table, so importing it is what
 		// makes the file arms of fd_write / fd_read live -- and with them
-		// wasi:filesystem.
+		// wasi:filesystem. wasi:clocks/system-clock comes with it and is NOT evidence
+		// that the clock is reachable: wasi:filesystem/types `use`s that interface's
+		// `instant` for descriptor-stat's timestamps, and a projection cannot outlive
+		// the interface that defines its type. wasi:random is the interface that stays
+		// out.
 		assertThat(componentImportNames(compileComponentOptimized("""
 				(with-open-file (s "x.txt" :direction :output) (format s "hi~%"))
 				"""))).contains("wasi:filesystem/types@0.3.0", "wasi:filesystem/preopens@0.3.0")
-			.doesNotContain("wasi:random/random@0.3.0", "wasi:clocks/system-clock@0.3.0");
+			.doesNotContain("wasi:random/random@0.3.0", "wasi:cli/stdin@0.3.0");
 	}
 
 	@Test
