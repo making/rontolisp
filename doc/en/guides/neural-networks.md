@@ -260,4 +260,4 @@ Both masks are **raw linalg arrays** -- a mask carries no gradient -- shaped to 
 
 ## Packages
 
-`torch` does not use `cl`, so programs stay in `cl-user` and call the qualified names; `#'torch:name` works (every function is a plain defun). The differentiable operations mirror their `linalg` counterparts -- the full list is in the [function reference](../reference/functions.md#torch-package-functions), and `torch:no-grad` on the [macros page](../reference/macros/torch-no-grad.md).
+`torch` does not use `cl`, so programs stay in `cl-user` and call the qualified names; `#'torch:name` works (every function is a plain defun). The differentiable operations mirror their `linalg` counterparts -- the full list is in the [function reference](../reference/functions/torch.md), and `torch:no-grad` on the [macros page](../reference/macros/torch-no-grad.md).

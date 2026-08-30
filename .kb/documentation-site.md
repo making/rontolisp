@@ -20,15 +20,36 @@ Per-operator reference pages live in catalog directories, each with a
 renders one HTML page per entry with prev/next, and links each operator name in
 the index table to its page.
 
+A category may override the file's top-level `index_page:` with its own
+(`Catalog.Category.indexPage`, falling back to the file's default when absent).
+This is how `reference/functions/_catalog.yaml` -- ONE catalog, one directory of
+808 detail pages, no file moved -- backs 15 per-package table pages
+(`reference/functions/cl.md`, `reference/functions/rontolisp.md`, ...,
+2026-08-30) instead of one page listing every package: each category routes to
+its own package's page, so a detail page's "back" link and its name's
+auto-linked table row both go to the right package, and the previous/next chain
+still runs across every entry in the whole catalog regardless of category. A
+category whose real content lives on a page outside the catalog's own directory
+can point there too -- the `uiop Package` category's `index_page` is
+`reference/uiop.md` itself (the prose page, not a `reference/functions/uiop.md`
+stub), so `uiop:file-exists-p` and friends became auto-linked for free on a page
+that already documented them, and `DocGen.generateLanguage` validates every
+`index_page` resolves to a real `nav.yaml` page or subpage before rendering
+anything, rather than letting a typo silently fall back to a bare "Back" link.
+
 **A nav entry may own `subpages:`** -- a nested `{file, title}` list, rendered
 like the catalog detail pages (previous/next chained among themselves, a back
 link to the parent, the PARENT's sidebar row highlighted) but absent from the
 sidebar itself. Use it when a page's sub-pages are a breakdown of that one topic
 rather than sibling topics: the sidebar carries one row per topic, and
 `reference/uiop/*.md` (four sub-package pages, 2026-08-16) is reachable only
-through `reference/uiop.md`. It is NOT the catalog mechanism -- a catalog entry
-is an OPERATOR, and `SkillGen` turns every catalog entry into a row of the
-skill bundle's `operators.md`, where a sub-package page does not belong.
+through `reference/uiop.md`. A subpage is not itself a catalog entry -- a
+catalog entry is an OPERATOR, and `SkillGen` turns every catalog entry into a
+row of the skill bundle's `operators.md`, where a sub-package page does not
+belong -- but a subpage CAN be a catalog's `index_page` (the 15 function
+package pages above are subpages of `reference/functions.md`), in which case
+`DocGen` applies the same table auto-linking to it that a top-level index page
+gets.
 
 **Code-fence conventions** (parsed by `DocExamplesTest` and the docgen
 `RunnableBlockTransformer`):

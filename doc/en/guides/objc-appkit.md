@@ -277,7 +277,7 @@ compiler's own diagnostics, caret and all. `metal:buffer` copies numbers to the 
 once; `metal:shared-buffer` plus `metal:upload` is for geometry rewritten every frame;
 `metal:uniform` sets the small per-frame values Metal wants inline. A packed
 single-float array IS a buffer's bytes, so a `linalg` matrix and a `geom:mesh` reach
-the GPU with no conversion at all. The [function reference](../reference/functions.md#metal-package-functions)
+the GPU with no conversion at all. The [function reference](../reference/functions/metal.md)
 lists the whole surface.
 
 `metal` stands on its own — `examples/macos/metal-triangle.lisp`

@@ -35,6 +35,37 @@ sections:
         title: Macros
       - file: reference/functions.md
         title: Functions
+        subpages:
+          - file: reference/functions/cl.md
+            title: cl Package Functions
+          - file: reference/functions/rontolisp.md
+            title: rontolisp Package Functions
+          - file: reference/functions/linalg.md
+            title: linalg Package Functions
+          - file: reference/functions/torch.md
+            title: torch Package Functions
+          - file: reference/functions/java.md
+            title: java Package Functions
+          - file: reference/functions/ffi.md
+            title: ffi Package Functions
+          - file: reference/functions/objc.md
+            title: objc Package Functions
+          - file: reference/functions/appkit.md
+            title: appkit Package Functions
+          - file: reference/functions/geom.md
+            title: geom Package Functions
+          - file: reference/functions/metal.md
+            title: metal Package Functions
+          - file: reference/functions/scene.md
+            title: scene Package Functions
+          - file: reference/functions/asdf.md
+            title: asdf Package Functions
+          - file: reference/functions/uiop.md
+            title: uiop Package Functions
+          - file: reference/functions/ql-and-ql-dist.md
+            title: ql and ql-dist Package Functions
+          - file: reference/functions/usocket.md
+            title: usocket Package Functions
       - file: reference/packages.md
         title: Packages
       - file: reference/uiop.md

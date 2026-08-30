@@ -157,10 +157,18 @@ public final class DocGen {
 		this.searchIndex = new SearchIndex(lang);
 		Nav nav = Nav.load(langDir.resolve("nav.yaml"));
 		List<Catalog> catalogs = Catalog.discover(langDir);
-		// Each catalog's index page (the table) is linked to its detail pages.
+		// Every index page a catalog's categories name (usually one, but a catalog may
+		// route several categories to their own per-package pages) is linked to its
+		// detail pages.
 		Map<String, Catalog> indexToCatalog = new HashMap<>();
 		for (Catalog catalog : catalogs) {
-			indexToCatalog.put(catalog.indexPage(), catalog);
+			for (String indexPage : catalog.indexPages()) {
+				if (nav.findPage(indexPage).isEmpty()) {
+					throw new IOException("Catalog '" + catalog.baseDir() + "' names index_page '" + indexPage
+							+ "', which is not a page in " + lang + "/nav.yaml");
+				}
+				indexToCatalog.put(indexPage, catalog);
+			}
 		}
 
 		List<Nav.Page> pages = nav.flatPages();
@@ -169,11 +177,11 @@ public final class DocGen {
 			HtmlTemplate.Crumb prev = (i > 0) ? crumb(lang, pages.get(i - 1)) : null;
 			HtmlTemplate.Crumb next = (i < pages.size() - 1) ? crumb(lang, pages.get(i + 1)) : null;
 			renderNavPage(lang, nav, languageList, langDir, page, prev, next, indexToCatalog.get(page.file()));
-			renderSubpages(lang, nav, languageList, langDir, page);
+			renderSubpages(lang, nav, languageList, langDir, page, indexToCatalog);
 		}
 
 		for (Catalog catalog : catalogs) {
-			renderDetailPages(lang, nav, languageList, langDir, catalog, indexTitle(nav, catalog));
+			renderDetailPages(lang, nav, languageList, langDir, catalog);
 		}
 
 		this.searchIndex.write(this.out);
@@ -192,7 +200,7 @@ public final class DocGen {
 		// operator name in the table to its detail page, so that one page is both
 		// the quick reference and the index of the detail pages.
 		if (catalog != null) {
-			body = TableLinkTransformer.transform(body, buildNameToSlug(catalog), catalog.linkPrefix());
+			body = TableLinkTransformer.transform(body, buildNameToSlug(catalog), catalog.linkPrefix(page.file()));
 		}
 		HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
 				docPath, body, TocBuilder.build(body), null, prev, next, languageList);
@@ -204,10 +212,12 @@ public final class DocGen {
 	 * parent, so they get its sidebar row highlighted, a back link to it, and a
 	 * previous/next chain of their own that starts at the parent -- the same shape the
 	 * per-operator detail pages have, with the parent page standing in for the catalog
-	 * index.
+	 * index. A subpage can ALSO be a catalog's index page (a per-package function table,
+	 * say), in which case its table names are linked to their detail pages exactly like a
+	 * top-level index page's.
 	 */
 	private void renderSubpages(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
-			Nav.Page parent) throws IOException {
+			Nav.Page parent, Map<String, Catalog> indexToCatalog) throws IOException {
 		List<Nav.Page> subpages = parent.subpages();
 		if (subpages.isEmpty()) {
 			return;
@@ -225,27 +235,38 @@ public final class DocGen {
 			HtmlTemplate.Crumb next = (i < subpages.size() - 1) ? crumb(lang, subpages.get(i + 1)) : null;
 			String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), page.file(), lang, docPath,
 					page.title(), false);
+			Catalog catalog = indexToCatalog.get(page.file());
+			if (catalog != null) {
+				body = TableLinkTransformer.transform(body, buildNameToSlug(catalog), catalog.linkPrefix(page.file()));
+			}
 			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
 					parentDocPath, body, TocBuilder.build(body), backlink, prev, next, languageList);
 			writePage(docPath, HtmlTemplate.render(ctx));
-			renderSubpages(lang, nav, languageList, langDir, page);
+			renderSubpages(lang, nav, languageList, langDir, page, indexToCatalog);
 		}
 	}
 
+	/**
+	 * Renders every detail page of a catalog. Each entry's "back" link and title come
+	 * from its OWN category's index page, not a single page shared by the whole catalog
+	 * -- the previous/next chain still runs across every entry regardless of category.
+	 */
 	private void renderDetailPages(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
-			Catalog catalog, String backlinkTitle) throws IOException {
-		String indexDocPath = lang + "/" + replaceExtension(catalog.indexPage());
-		HtmlTemplate.Crumb backlink = new HtmlTemplate.Crumb(indexDocPath, backlinkTitle);
-		List<Catalog.Entry> entries = catalog.flatEntries();
-		for (int i = 0; i < entries.size(); i++) {
-			Catalog.Entry entry = entries.get(i);
+			Catalog catalog) throws IOException {
+		List<Catalog.EntryRef> refs = catalog.flatEntryRefs();
+		for (int i = 0; i < refs.size(); i++) {
+			Catalog.Entry entry = refs.get(i).entry();
+			String indexDocPath = lang + "/" + replaceExtension(refs.get(i).indexPage());
+			HtmlTemplate.Crumb backlink = new HtmlTemplate.Crumb(indexDocPath,
+					indexTitle(nav, refs.get(i).indexPage()));
 			Path mdPath = langDir.resolve(catalog.mdFile(entry));
 			if (!Files.exists(mdPath)) {
 				throw new IOException("Missing detail page: " + mdPath);
 			}
 			String docPath = lang + "/" + replaceExtension(catalog.mdFile(entry));
-			HtmlTemplate.Crumb prev = (i > 0) ? detailCrumb(lang, catalog, entries.get(i - 1)) : backlink;
-			HtmlTemplate.Crumb next = (i < entries.size() - 1) ? detailCrumb(lang, catalog, entries.get(i + 1)) : null;
+			HtmlTemplate.Crumb prev = (i > 0) ? detailCrumb(lang, catalog, refs.get(i - 1).entry()) : backlink;
+			HtmlTemplate.Crumb next = (i < refs.size() - 1) ? detailCrumb(lang, catalog, refs.get(i + 1).entry())
+					: null;
 			String detailBody = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), catalog.mdFile(entry),
 					lang, docPath, entry.name(), true);
 			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, entry.name(), docPath,
@@ -255,16 +276,16 @@ public final class DocGen {
 		}
 	}
 
-	/** The sidebar title of a catalog's index page, used for the back link. */
-	private static String indexTitle(Nav nav, Catalog catalog) {
-		for (Nav.Section section : nav.sections()) {
-			for (Nav.Page page : section.pages()) {
-				if (page.file().equals(catalog.indexPage())) {
-					return page.title();
-				}
-			}
-		}
-		return "Back";
+	/**
+	 * The sidebar title of an index page, used for a detail page's back link. Callers
+	 * validate the page exists in {@code nav.yaml} up front (see {@code indexToCatalog}
+	 * in {@link #generateLanguage}), so a lookup miss here would be an internal
+	 * inconsistency, not a content typo.
+	 */
+	private static String indexTitle(Nav nav, String indexPage) {
+		return nav.findPage(indexPage)
+			.map(Nav.Page::title)
+			.orElseThrow(() -> new IllegalStateException("index_page '" + indexPage + "' vanished after validation"));
 	}
 
 	/**

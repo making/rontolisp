@@ -156,7 +156,7 @@ returns a future) together with `rontolisp:await` (resolve) and
 [`rontolisp:json-parse`](functions/rontolisp-json-parse.md) /
 [`rontolisp:json-stringify`](functions/rontolisp-json-stringify.md)
 (JavaScript `JSON.parse`/`JSON.stringify` style). All of these have their own
-pages in the [Functions](functions.md#rontolisp-package-functions) reference,
+pages in the [Functions](functions/rontolisp.md) reference,
 including the full [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
 [`rontolisp:await`](special-forms/rontolisp-await.md) /
 [`rontolisp:futurep`](functions/rontolisp-futurep.md) documentation.
