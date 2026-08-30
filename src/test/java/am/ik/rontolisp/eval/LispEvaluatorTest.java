@@ -12839,6 +12839,26 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void nonNumberArithmeticOperandsSignalCatchableTypeErrors() {
+		// A type slip into an arithmetic operator signals a CATCHABLE type-error whose
+		// text names the operand -- the cross-backend contract of
+		// .kb/error-handling.md ("A non-number reaching arithmetic"); the JVM twin is
+		// compileAndRunNonNumberArithmeticOperandsSignalCatchableTypeErrors, the wasm
+		// one ehNonNumberArithmeticOperandsAreCaughtWithTheInterpreterText.
+		assertThat(evalMulti("""
+				(defun te-print (thunk)
+				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(list (te-print (lambda () (+ 1 nil)))
+				      (te-print (lambda () (< 1 nil)))
+				      (te-print (lambda () (* 2 "x")))
+				      (te-print (lambda () (max 1 'sym)))
+				      (te-print (lambda () (+ 1.5 nil))))
+				""").print()).isEqualTo("(\"Expected integer, got: NIL\" \"Expected integer, got: NIL\""
+				+ " \"Expected integer, got: \\\"x\\\"\" \"Expected integer, got: SYM\""
+				+ " \"Expected number, got: NIL\")");
+	}
+
+	@Test
 	void defmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() {
 		// The dispatcher SHADOWS the built-in defun; without stashing it as the
 		// generic's default method every non-instance argument dies with "No

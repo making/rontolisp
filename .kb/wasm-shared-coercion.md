@@ -5,10 +5,36 @@ unboxed `f64` out of a Lisp value emits `call FUNC_AS_F64` and nothing else.**
 
 `_as_f64 ((ref null eq)) -> f64` (`WasmEmitHelper.buildAsF64Body` /
 `emitAsF64FromLocal`, function index `FUNC_AS_F64`, type `TYPE_BIG_TO_F64`) dispatches
-on the runtime tier: an i31 fixnum converts directly, a `TYPE_BIGNUM` converts its
-`i64` field, a limb `TYPE_BIGINT` goes through `_big_to_f64`, a `TYPE_RATIO` divides
-numerator by denominator (float contagion), and anything else is cast to `TYPE_FLOAT`
-and read. The tiers themselves are `.kb/wasm-bignum.md`.
+on the runtime tier -- **`TYPE_FLOAT` FIRST** (cast and read its field), then an i31
+fixnum converts directly, a `TYPE_BIGNUM` converts its `i64` field, a limb
+`TYPE_BIGINT` goes through `_big_to_f64`, a `TYPE_RATIO` divides numerator by
+denominator (float contagion), and anything else -- a NON-number -- lands in
+`_type_err_num` (`.kb/error-handling.md`, "A non-number reaching arithmetic"): a
+catchable `Expected number, got: <prin1>` signal in EH mode, an `unreachable` trap
+outside it. The tiers themselves are `.kb/wasm-bignum.md`.
+
+## The ladder order is float-first, measured (2026-08-31, todo-592)
+
+The historical order was i31-first with a bare `ref.cast TYPE_FLOAT` as the final
+else, so every FLOAT -- the value this function exists for -- paid four failed
+`ref.test`s before its cast, and a non-number's cast failure was an UNCATCHABLE host
+trap. Making the final arm checked (test-then-cast, else `_type_err_num`) at the
+ladder's tail measured **+9.8%** on the mandelbrot benchmark (419 -> 460 ms best-of-5,
+wasmtime 47.0.3); moving the float test to the FRONT instead made the checked ladder
+FASTER than the unchecked baseline:
+
+| bench-report program | before (unchecked ladder) | after (checked, float-first) |
+| --- | ---: | ---: |
+| mandelbrot (float loop) | 415 ms | **328 ms (-21%)** |
+| bignum (limb tier) | 286 ms | 277 ms (noise) |
+| fib (i31 fast paths) | 97 ms | 97 ms |
+
+(best of 5 under the machine-quiet lock; the JVM backend's twin change is inside
+`_big`/`_dbl` and measured no change on the same three programs.) A float now pays ONE
+test + cast; an i31 coerced by a mixed int-float operation pays one extra test, which
+the integer benchmarks cannot see. Size: +33-37 B per non-EH module (the two stub
+landing functions + the checked arm), +283 B per EH-mode module (the real landing
+bodies + the two message-prefix strings).
 
 ## Why it is a function
 

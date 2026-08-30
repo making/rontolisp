@@ -12728,6 +12728,30 @@ cases:
       (:DAG :NODE 2)
       (NIL NIL)
       (1 NIL)
+  - name: non-number-arithmetic-operands-are-catchable
+    source: |
+      ;; A non-number reaching an arithmetic operator signals a CATCHABLE error
+      ;; carrying the interpreter's exact "Expected integer|number, got: <prin1>"
+      ;; text on every backend -- on the wasm pair it used to be an uncatchable
+      ;; `wasm trap: cast failure` straight past handler-case. The clause is
+      ;; `error` because the CLASS diverges deliberately: interpreter/JVM signal a
+      ;; type-error, the wasm runtime's instance-less payload synthesizes a
+      ;; simple-error (.kb/error-handling.md, "A non-number reaching arithmetic").
+      (defun ci-te-print (thunk)
+        (handler-case (funcall thunk) (error (e) (princ-to-string e))))
+      (print (ci-te-print (lambda () (+ 1 nil))))
+      (print (ci-te-print (lambda () (< 1 nil))))
+      (print (ci-te-print (lambda () (* 2 "x"))))
+      (print (ci-te-print (lambda () (max 1 'ci-te-sym))))
+      (print (ci-te-print (lambda () (+ 1.5 nil))))
+      (print (ci-te-print (lambda () (logand 1 nil))))
+    expected: |
+      "Expected integer, got: NIL"
+      "Expected integer, got: NIL"
+      "Expected integer, got: \"x\""
+      "Expected integer, got: CI-TE-SYM"
+      "Expected number, got: NIL"
+      "Expected integer, got: NIL"
 
 # Cases that cannot join the corpus above: one that ENDS the program, one whose
 # subject a backend does not have at all. Each is compiled and run on its own.

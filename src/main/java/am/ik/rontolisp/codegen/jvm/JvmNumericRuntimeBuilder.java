@@ -181,6 +181,48 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	/**
+	 * The constant-pool references the non-number landing needs: the exception class and
+	 * constructor, {@code String.concat}, the generated {@code _lispToString} (the prin1
+	 * renderer, emitted unconditionally), and the two message-prefix constants.
+	 *
+	 * @param rte {@code java/lang/RuntimeException}
+	 * @param rteInit its {@code (String)} constructor
+	 * @param strConcat {@code String.concat(String)}
+	 * @param lispToString the generated class's {@code _lispToString(Object)}
+	 * @param intPrefix
+	 * {@link am.ik.rontolisp.ClosRegistry#EXPECTED_INTEGER_MESSAGE_PREFIX}
+	 * @param numPrefix
+	 * {@link am.ik.rontolisp.ClosRegistry#EXPECTED_NUMBER_MESSAGE_PREFIX}
+	 */
+	record TypeErrRefs(ClassConstant rte, MethodrefConstant rteInit, MethodrefConstant strConcat,
+			MethodrefConstant lispToString, ConstantPool.StringConstant intPrefix,
+			ConstantPool.StringConstant numPrefix) {
+	}
+
+	/**
+	 * Emits {@code throw new RuntimeException(prefix + _lispToString(local0))}. Peak
+	 * operand stack: 4.
+	 * @param c the bytecode sink
+	 * @param refs the shared references
+	 * @param numberContext whether to use the "Expected number" prefix (the "Expected
+	 * integer" one otherwise)
+	 */
+	private static void emitTypeErrThrow(List<Integer> c, TypeErrRefs refs, boolean numberContext) {
+		c.add(Opcode.NEW);
+		JvmRuntimeBuilder.emitU2(c, refs.rte().index());
+		c.add(Opcode.DUP);
+		JvmRuntimeBuilder.emitLdc(c, (numberContext ? refs.numPrefix() : refs.intPrefix()).index());
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, refs.lispToString().index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, refs.strConcat().index());
+		c.add(Opcode.INVOKESPECIAL);
+		JvmRuntimeBuilder.emitU2(c, refs.rteInit().index());
+		c.add(Opcode.ATHROW);
+	}
+
+	/**
 	 * Builds all numeric helper methods and registers their constant-pool entries.
 	 * @param cp the constant pool to populate
 	 * @param thisClass the generated class
@@ -290,6 +332,24 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		ConstantPool.StringConstant divZeroStr = cp.addString("Division by zero");
 
+		// The non-number landing (_big / _dbl / _abs's BigInteger arm): a plain
+		// RuntimeException carrying "Expected integer|number, got: <prin1>" -- the
+		// interpreter's exact text, rendered through the unconditional _lispToString.
+		// A checkcast cannot be the check here: null PASSES a checkcast and the failure
+		// then surfaces later as a Java NPE naming BigInteger internals. The landing-pad
+		// classification of the prefix as a type-error is JvmHandlerCaseCompiler's.
+		ClassConstant rteClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
+		TypeErrRefs typeErrRefs = new TypeErrRefs(rteClass,
+				cp.addMethodref(rteClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))),
+				cp.addMethodref(stringClass,
+						cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;"))),
+				cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8("_lispToString"),
+								cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;"))),
+				cp.addString(am.ik.rontolisp.ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX),
+				cp.addString(am.ik.rontolisp.ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX));
+
 		MethodrefConstant bdInit = cp.addMethodref(bigDecClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(" + BIG + ")V")));
 		MethodrefConstant bdDivide = cp.addMethodref(bigDecClass, cp.addNameAndType(cp.addUtf8("divide"),
@@ -392,7 +452,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rFixDec = cp.addMethodref(thisClass, cp.addNameAndType(nFixDec, dFixDec));
 
 		List<NumericMethod> methods = new ArrayList<>();
-		methods.add(buildBig(nBig, dBig, longClass, bigClass, longValue, biValueOf));
+		methods.add(buildBig(nBig, dBig, longClass, bigClass, longValue, biValueOf, typeErrRefs));
 		methods.add(buildNorm(nNorm, dNorm, longValueOf, biBitLength, biLongValue));
 		methods.add(buildRatNum(nRatNum, dBig, ratArrClass, rBig));
 		methods.add(buildRatDen(nRatDen, dBig, ratArrClass, biOne));
@@ -422,7 +482,7 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildCmpBits(nCmpb, dCmp, doubleClass, rDbl, numberClass, numDoubleValue, rCmp, intSignum));
 		methods.add(buildAbs(nAbs, dUnary, longClass, bigClass, longValue, longValueOf, absLong, biValueOf, biNeg,
 				biAbs, rNorm, cMin, ratArrClass, rRatNum, rRatDen, rRat, doubleClass, rDbl, numberClass, numDoubleValue,
-				doubleValueOf, absDouble));
+				doubleValueOf, absDouble, rBig));
 		methods.add(buildSignum(nSignum, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
 				signumDouble, rRatNum, biSignum, longValueOf));
 		methods.add(buildRandom(nRandom, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
@@ -430,7 +490,7 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildSelect(nMin, dBinary, rCmp, Opcode.IFGT));
 		methods.add(buildSelect(nMax, dBinary, rCmp, Opcode.IFLT));
 		methods.add(buildDbl(nDbl, dUnary, ratArrClass, doubleClass, numberClass, bigDecClass, bdInit, bdDivide,
-				bdDoubleValue, mcDecimal64, doubleValueOf, numDoubleValue, rRatNum, rRatDen));
+				bdDoubleValue, mcDecimal64, doubleValueOf, numDoubleValue, rRatNum, rRatDen, typeErrRefs));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
 				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl));
 		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, objEquals, strvMethod));
@@ -493,7 +553,7 @@ final class JvmNumericRuntimeBuilder {
 
 	// _big(Object x): Long -> BigInteger.valueOf(x), otherwise (BigInteger) x.
 	private static NumericMethod buildBig(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			ClassConstant bigClass, MethodrefConstant longValue, MethodrefConstant biValueOf) {
+			ClassConstant bigClass, MethodrefConstant longValue, MethodrefConstant biValueOf, TypeErrRefs typeErrRefs) {
 		List<Integer> c = new ArrayList<>();
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
@@ -510,11 +570,23 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, biValueOf.index());
 		c.add(Opcode.ARETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifNotLong, c.size());
+		// Anything but a BigInteger throws the interpreter's "Expected integer" text: a
+		// bare checkcast is not a check here (null passes it and fails later as a Java
+		// NPE naming BigInteger internals, and a cast failure's own text names Java
+		// classes). One instanceof on the widening (out-of-long) arm only.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, bigClass.index());
+		int ifNotBig = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.CHECKCAST);
 		JvmRuntimeBuilder.emitU2(c, bigClass.index());
 		c.add(Opcode.ARETURN);
-		return new NumericMethod(name, desc, c, 2, 1, List.of());
+		JvmRuntimeBuilder.patchBranch(c, ifNotBig, c.size());
+		emitTypeErrThrow(c, typeErrRefs, false);
+		return new NumericMethod(name, desc, c, 4, 1, List.of());
 	}
 
 	// _norm(BigInteger b): demote to Long when it fits in a long, else keep BigInteger.
@@ -1076,7 +1148,7 @@ final class JvmNumericRuntimeBuilder {
 			MethodrefConstant rNorm, LongConstant cMin, ClassConstant ratArrClass, MethodrefConstant rRatNum,
 			MethodrefConstant rRatDen, MethodrefConstant rRat, ClassConstant doubleClass, MethodrefConstant rDbl,
 			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
-			MethodrefConstant absDouble) {
+			MethodrefConstant absDouble, MethodrefConstant rBig) {
 		List<Integer> c = new ArrayList<>();
 		// Double fast path: Math.abs((double) a) when a is a Double.
 		c.add(Opcode.ALOAD_0);
@@ -1132,9 +1204,12 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.ARETURN);
 		int big = c.size();
 		JvmRuntimeBuilder.patchBranch(c, ifBig, big);
+		// Through _big rather than a bare checkcast, so a non-number (which null-passes
+		// a checkcast and NPEs inside BigInteger.abs) throws the "Expected integer"
+		// text at the coercion like every other operator.
 		c.add(Opcode.ALOAD_0);
-		c.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(c, bigClass.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
 		c.add(Opcode.INVOKEVIRTUAL);
 		JvmRuntimeBuilder.emitU2(c, biAbs.index());
 		c.add(Opcode.INVOKESTATIC);
@@ -1261,7 +1336,7 @@ final class JvmNumericRuntimeBuilder {
 			ClassConstant doubleClass, ClassConstant numberClass, ClassConstant bigDecClass, MethodrefConstant bdInit,
 			MethodrefConstant bdDivide, MethodrefConstant bdDoubleValue, FieldrefConstant mcDecimal64,
 			MethodrefConstant doubleValueOf, MethodrefConstant numDoubleValue, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen) {
+			MethodrefConstant rRatDen, TypeErrRefs typeErrRefs) {
 		List<Integer> c = new ArrayList<>();
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
@@ -1304,6 +1379,16 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
 		c.add(Opcode.ARETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifNotRat, c.size());
+		// A Long or BigInteger widens through Number.doubleValue(); anything else throws
+		// the interpreter's "Expected number" text (the checkcast alone let null through
+		// to an NPE naming Number internals). One instanceof on the non-double slow arm
+		// only -- the Double fast arm above is byte-identical.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, numberClass.index());
+		int ifNotNumber = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.CHECKCAST);
 		JvmRuntimeBuilder.emitU2(c, numberClass.index());
@@ -1312,6 +1397,8 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
 		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotNumber, c.size());
+		emitTypeErrThrow(c, typeErrRefs, true);
 		return new NumericMethod(name, desc, c, 5, 1, List.of());
 	}
 
