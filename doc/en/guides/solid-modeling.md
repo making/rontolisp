@@ -107,11 +107,18 @@ program, so `geom` reads one:
 |---|---|
 | `(geom:read-obj "bunny.obj")` | Wavefront OBJ: `v` lines and `f` lines, any facet size, `v/vt/vn` tokens and negative indices |
 | `(geom:read-stl "part.stl")` | STL, either dialect -- which one is decided from the file's own shape |
+| `(geom:read-ply "scan.ply")` | PLY, ASCII or binary little-endian, the properties taken from the header |
+| `(geom:read-gltf "duck.glb")` | glTF 2.0, `.glb` or `.gltf` -- a SCENE, answered as a list of solids |
 | `(geom:read-model "whatever")` | the format sniffed from the file's bytes; `:format` says it outright |
 
 They answer an ordinary `geom:solid`, so everything above applies to it
 unchanged -- `geom:volume`, `geom:bounds`, the booleans, a viewer. They take
-`:color` and `:label` like every constructor beside them.
+`:color` and `:label` like every constructor beside them. The one exception in
+shape is glTF, which is a scene rather than a mesh: `geom:read-gltf` answers
+the **list** of solids its nodes pose -- `scene:add` splices a list, and each
+solid's `geom:world-transform` carries its node hierarchy, so a multi-part
+model's parts land where its nodes say. A node's scale is baked into the
+vertices at read time (the transform stays rigid), so the measurements see it.
 
 ```console
 CL-USER> (defvar *bunny* (geom:read-obj "bunny.obj" :color (geom:vec3 0.85 0.72 0.5)))

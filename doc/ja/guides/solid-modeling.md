@@ -102,11 +102,18 @@
 |---|---|
 | `(geom:read-obj "bunny.obj")` | Wavefront OBJ。`v` 行と `f` 行、面の頂点数は任意、`v/vt/vn` トークンと負のインデックスに対応 |
 | `(geom:read-stl "part.stl")` | STL の両方言。どちらかはファイル自身の形から判定 |
+| `(geom:read-ply "scan.ply")` | PLY。ASCII とバイナリ（リトルエンディアン）、プロパティはヘッダから取得 |
+| `(geom:read-gltf "duck.glb")` | glTF 2.0。`.glb` と `.gltf` — メッシュではなくシーンで、ソリッドのリストを返す |
 | `(geom:read-model "whatever")` | フォーマットをバイト列から判定。`:format` で直接指定も可 |
 
 返るのはごく普通の `geom:solid` なので、上に書いたことがそのまま当てはまります。
 `geom:volume`、`geom:bounds`、ブーリアン、ビューア。隣にある他のコンストラクタと
-同じく `:color` と `:label` を取ります。
+同じく `:color` と `:label` を取ります。形が違う唯一の例外は glTF で、これは
+メッシュではなくシーンです。`geom:read-gltf` はノードが姿勢づけたソリッドの
+**リスト**を返します。`scene:add` はリストをそのまま展開し、各ソリッドの
+`geom:world-transform` はノード階層を引き連れるので、複数パーツのモデルは
+ノードの言うとおりの場所に配置されます。ノードのスケールは読み込み時に頂点へ
+焼き込まれ（変換は剛体のまま）、測定にもそのまま現れます。
 
 ```console
 CL-USER> (defvar *bunny* (geom:read-obj "bunny.obj" :color (geom:vec3 0.85 0.72 0.5)))

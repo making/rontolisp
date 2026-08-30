@@ -5098,7 +5098,8 @@ cases:
   # readers have a scanner of their own), the packed read-sequence that moves a binary
   # triangle's twelve float32s in one transfer, the shape test that tells the two STL
   # dialects apart without file-length (which both WASM backends answer nil for by
-  # design), and the sniffer naming a format it cannot read instead of guessing at it.
+  # design), and a PLY with no vertex element refused through the :ply dispatch arm
+  # (the PLY/glTF readers proper are the geom-read-ply-gltf-cross-backend case below).
   - name: geom-read-model-cross-backend
     source: |
       (defun ci-geom-write-obj (path s)
@@ -5173,7 +5174,159 @@ cases:
       #<GEOM:SOLID "obj" 8 vertices 6 facets>
       #<GEOM:SOLID "stl" 36 vertices 12 facets>
       (:STL 50.0 ((0 1 2)))
-      "geom:read-model: ci-model.ply is PLY, which this build does not read yet"
+      "geom:read-ply: ci-model.ply has no vertex element"
+  # PLY (both dialects) and glTF/GLB, read back on all four backends. The fixtures are
+  # written FROM LISP -- a binary PLY with uchar colours interleaved between the float
+  # positions (a 15-byte vertex stride the bulk path cannot take whole), an ASCII PLY
+  # with a confidence column, and a GLB whose one node both translates and scales its
+  # cube -- so what is pinned is the whole round trip: the header-driven property walk,
+  # the packed little-endian reads, the JSON chunk through rontolisp:json-parse, the
+  # scale baked into VERTICES (volume 8000, not 1000) while the translation stays POSE
+  # (world-translation), and the big-endian refusal by name.
+  - name: geom-read-ply-gltf-cross-backend
+    source: |
+      (defun ci-geom-put-str (out s)
+        (let ((b (make-array (length s) :element-type '(unsigned-byte 8))))
+          (dotimes (i (length s)) (setf (aref b i) (char-code (char s i))))
+          (write-sequence b out)))
+      (defun ci-geom-put-line (out s)
+        (ci-geom-put-str out s)
+        (let ((lf (make-array 1 :element-type '(unsigned-byte 8) :initial-element 10)))
+          (write-sequence lf out)))
+      (defun ci-geom-write-ascii-ply (path s)
+        (with-open-file (out path :direction :output :if-exists :supersede)
+          (write-line "ply" out)
+          (write-line "format ascii 1.0" out)
+          (format out "element vertex ~a~%" (first (linalg:shape (geom:vertices-of s))))
+          (write-line "property float x" out)
+          (write-line "property float y" out)
+          (write-line "property float z" out)
+          (write-line "property float confidence" out)
+          (format out "element face ~a~%" (length (geom:facets-of s)))
+          (write-line "property list uchar int vertex_indices" out)
+          (write-line "end_header" out)
+          (let ((v (geom:vertices-of s)))
+            (dotimes (i (first (linalg:shape v)))
+              (format out "~a ~a ~a 0.5~%" (aref v i 0) (aref v i 1) (aref v i 2))))
+          (dolist (f (geom:facets-of s))
+            (format out "~a" (length f))
+            (dolist (i f) (format out " ~a" i))
+            (terpri out))))
+      (defun ci-geom-write-binary-ply (path s)
+        (let* ((v (geom:vertices-of s))
+               (nv (first (linalg:shape v)))
+               (xyz (make-array 3 :element-type 'single-float))
+               (rgb (make-array 3 :element-type '(unsigned-byte 8) :initial-element 200))
+               (cnt (make-array 1 :element-type '(unsigned-byte 8)))
+               (idx (make-array 8 :element-type '(unsigned-byte 32))))
+          (with-open-file (out path :direction :output :if-exists :supersede
+                               :element-type '(unsigned-byte 8))
+            (ci-geom-put-line out "ply")
+            (ci-geom-put-line out "format binary_little_endian 1.0")
+            (ci-geom-put-str out "element vertex ")
+            (ci-geom-put-line out (princ-to-string nv))
+            (ci-geom-put-line out "property float x")
+            (ci-geom-put-line out "property float y")
+            (ci-geom-put-line out "property float z")
+            (ci-geom-put-line out "property uchar red")
+            (ci-geom-put-line out "property uchar green")
+            (ci-geom-put-line out "property uchar blue")
+            (ci-geom-put-str out "element face ")
+            (ci-geom-put-line out (princ-to-string (length (geom:facets-of s))))
+            (ci-geom-put-line out "property list uchar int vertex_indices")
+            (ci-geom-put-line out "end_header")
+            (dotimes (i nv)
+              (dotimes (k 3) (setf (aref xyz k) (aref v i k)))
+              (write-sequence xyz out)
+              (write-sequence rgb out))
+            (dolist (f (geom:facets-of s))
+              (setf (aref cnt 0) (length f))
+              (write-sequence cnt out)
+              (let ((k 0))
+                (dolist (i f) (setf (aref idx k) i) (setq k (+ k 1)))
+                (write-sequence idx out :end (length f)))))))
+      (defun ci-geom-write-glb (path json s)
+        ;; header, JSON chunk (space-padded to 4), then a BIN chunk of the solid's 8
+        ;; corners as float32 and its 6 quads fanned into 36 uint16 indices.
+        (let* ((v (geom:vertices-of s))
+               (nv (first (linalg:shape v)))
+               (pos (make-array (* nv 3) :element-type 'single-float))
+               (idx (make-array 36 :element-type '(unsigned-byte 16)))
+               (u32 (make-array 1 :element-type '(unsigned-byte 32)))
+               (pad (make-array 4 :element-type '(unsigned-byte 8) :initial-element 32))
+               (jn (length json))
+               (jp (* (floor (+ jn 3) 4) 4))
+               (bin (+ (* nv 12) 72)))
+          (dotimes (i nv)
+            (dotimes (k 3) (setf (aref pos (+ (* i 3) k)) (aref v i k))))
+          (let ((k 0))
+            (dolist (f (geom:facets-of s))
+              (let ((a (first f)) (rest (rest f)))
+                (do ((b rest (cdr b)))
+                    ((null (cdr b)))
+                  (setf (aref idx k) a)
+                  (setf (aref idx (+ k 1)) (car b))
+                  (setf (aref idx (+ k 2)) (car (cdr b)))
+                  (setq k (+ k 3))))))
+          (with-open-file (out path :direction :output :if-exists :supersede
+                               :element-type '(unsigned-byte 8))
+            (ci-geom-put-str out "glTF")
+            (setf (aref u32 0) 2)
+            (write-sequence u32 out)
+            (setf (aref u32 0) (+ 12 8 jp 8 bin))
+            (write-sequence u32 out)
+            (setf (aref u32 0) jp)
+            (write-sequence u32 out)
+            (setf (aref u32 0) 1313821514)
+            (write-sequence u32 out)
+            (ci-geom-put-str out json)
+            (when (> jp jn) (write-sequence pad out :end (- jp jn)))
+            (setf (aref u32 0) bin)
+            (write-sequence u32 out)
+            (setf (aref u32 0) 5130562)
+            (write-sequence u32 out)
+            (write-sequence pos out)
+            (write-sequence idx out))))
+      (defun ci-geom-read-ply-gltf ()
+        (let ((b (geom:box 10)))
+          (ci-geom-write-ascii-ply "ci-model-a.ply" b)
+          (ci-geom-write-binary-ply "ci-model-b.ply" b)
+          (ci-geom-write-glb "ci-model.glb"
+                             "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0,\"translation\":[10,0,0],\"scale\":[2,2,2]}],\"meshes\":[{\"name\":\"cube\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,0,0,1]}}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":8,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5123,\"count\":36,\"type\":\"SCALAR\"}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":96},{\"buffer\":0,\"byteOffset\":96,\"byteLength\":72}],\"buffers\":[{\"byteLength\":168}]}"
+                             b))
+        (print (list (geom::%model-format "ci-model-a.ply")
+                     (geom::%model-format "ci-model-b.ply")
+                     (geom::%model-format "ci-model.glb")))
+        (let ((a (geom:read-model "ci-model-a.ply" :label "ascii")))
+          (print (list (geom:volume a) (geom:surface-area a)
+                       (length (geom:facets-of a))
+                       (first (linalg:shape (geom:vertices-of a)))))
+          (print a))
+        (let ((s (geom:read-ply "ci-model-b.ply")))
+          (print (list (geom:volume s) (geom:surface-area s)
+                       (length (geom:facets-of s))
+                       (first (linalg:shape (geom:vertices-of s))))))
+        (let* ((solids (geom:read-model "ci-model.glb")) (s (first solids)))
+          (print (list (length solids) (geom:volume s) (geom:surface-area s)
+                       (geom:label-of s) (geom:color-of s)
+                       (geom:world-translation s)))
+          (print s))
+        (with-open-file (out "ci-model-be.ply" :direction :output :if-exists :supersede)
+          (write-line "ply" out)
+          (write-line "format binary_big_endian 1.0" out)
+          (write-line "element vertex 0" out)
+          (write-line "end_header" out))
+        (print (handler-case (geom:read-ply "ci-model-be.ply")
+                 (error (e) (princ-to-string e)))))
+      (ci-geom-read-ply-gltf)
+    expected: |
+      (:PLY :PLY :GLB)
+      (1000.0 600.0 6 8)
+      #<GEOM:SOLID "ascii" 8 vertices 6 facets>
+      (1000.0 600.0 6 8)
+      (1 8000.0 2400.0 "cube" #f(1.0 0.0 0.0) #f(10.0 0.0 0.0))
+      #<GEOM:SOLID "cube" 8 vertices 12 facets>
+      "geom:read-ply: ci-model-be.ply is binary_big_endian PLY, which this build does not read -- the bulk binary path is little-endian by contract"
   # The arrow, and the three of them a coordinate frame is drawn as (.kb/geom.md, "The
   # arrow"). It is the one primitive whose volume has a closed form on the TESSELLATED
   # shape rather than a limit it approaches -- a prism plus a pyramid on the same n-gon

@@ -320,11 +320,14 @@ final class CompileFrontend {
 		// 3-D viewer) before MetalLibrary (the drawing surface it is written over)
 		// before GeomLibrary/LinalgLibrary (the model and the kernels both reach for)
 		// and before AppKitLibrary (metal:run's clock is appkit:timer).
+		// JsonLibrary runs AFTER GeomLibrary (geom:read-gltf parses its JSON chunk
+		// through rontolisp:json-parse, so the splice introduces the reference) and
+		// still after the HTTP passes above, whose handlers it also rewrites.
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
 					UrlLibrary.process(AppKitLibrary
-						.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary.process(SceneLibrary
-							.process(TorchLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))))))))),
+						.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary
+							.process(SceneLibrary.process(TorchLibrary.process(UserMacroExpander.expand(loaded))))))))),
 					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /

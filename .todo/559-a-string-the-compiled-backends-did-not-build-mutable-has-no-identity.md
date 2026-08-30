@@ -206,3 +206,19 @@ table at the top of this file says, and the two
 `compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite` tests still
 pin the promote-on-write behavior; they are still the tests to rewrite when
 step 2 lands.
+
+## A shipped-library casualty, and the working pattern (2026-08-31, from the PLY/glTF readers)
+
+`geom::%utf8-string` (geom.lisp, the glTF reader's byte->string decode) hit BOTH
+quadratic halves this file describes, live: built through `make-string` +
+`(setf (char s k))` a 138 KB embedded-base64 glTF decoded in 1.1 s interpreted
+and **30.5 s** compiled (the per-write rebuild); rebuilt over a fill-pointered
+character vector alone it would have moved the same quadratic onto every
+`(char s j)` of the JSON scanner that reads the result (the table above). The
+shape that escapes both, now in geom.lisp and recorded in `.kb/geom.md`
+("Reading a model file"): fill-pointered character array to BUILD, then ONE
+`subseq` on the way out so every scan reads an ordinary immutable string --
+82 ms compiled. When this item lands, that workaround becomes unnecessary (not
+wrong); the readers' `geom-read-ply-gltf-cross-backend` ci-spec case is an
+end-to-end canary for any producer flip, since it feeds json-parse a
+runtime-built string on all four backends.

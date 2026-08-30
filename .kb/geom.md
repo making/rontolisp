@@ -8,7 +8,7 @@ identically on every backend: rigid `geom:transform` values, a scene-graph
 mesh, nine primitive constructors plus the `triad` convenience, the measurements
 (`bounds`, `volume`, `centroid`, `surface-area`), the booleans (`union`,
 `difference`, `intersection`, `section` -- see "Boolean operations" below) and the
-three model-file readers ("Reading a model file" below). 61
+five model-file readers ("Reading a model file" below). 63
 exported functions plus `geom:*tolerance*` and four CLOS class names
 (todo-586: `move`/`turn` became `translate`/`rotate`, and `scale` split into
 the functional `scale` and the destructive `nscale` -- "Scaling" below).
@@ -19,7 +19,8 @@ the functional `scale` and the destructive `nscale` -- "Scaling" below).
 `.wasm`, and `scene` (the macOS viewer, "The renderer" below) is a CONSUMER of this
 package, not a peer of it. Nothing may be added here that breaks that.
 
-**The one exception is the three READERS** (`read-obj` / `read-stl` / `read-model`,
+**The one exception is the five READERS** (`read-obj` / `read-stl` / `read-ply` /
+`read-gltf` / `read-model`,
 "Reading a model file" below), which open a file, and it is an exception the promise
 survives rather than a hole in it: they are ANSI CL I/O on all four backends, and
 `LibraryDefunPruner` drops them from every program that does not call one, so the
@@ -33,10 +34,10 @@ browser demo's module is measurably free of them. Nothing else here may do I/O.
 | splice class | `eval/GeomLibrary` (`forms()` parsed once and cached, `process(program)`, `isGeomQualified`, `mentionsGeomClass`) |
 | package | `PackageRegistry.GEOM_FUNCTIONS` + `LispNames.GEOM_PKG` + `geomFunctionNames()` + `BUILTIN_PACKAGE_NAMES` |
 | interpreter | `LispEvaluator.ensureGeomLoaded()` on the first `geom:`-qualified FUNCTION resolution, plus `ensureGeomClassesFor(form)` at the seven `ensureAsdfClassesFor` sites |
-| compile path | `cli/CompileFrontend`, `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`) so the `linalg:` references in the spliced geom bodies pull linalg in too; the browser playground repeats the nesting |
+| compile path | `cli/CompileFrontend`, `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`) so the `linalg:` references in the spliced geom bodies pull linalg in too, and `JsonLibrary.process` OUTSIDE both since 2026-08-31 -- `geom:read-gltf` parses through `rontolisp:json-parse`, so the geom splice introduces the reference Json must then rewrite; the browser playground repeats the nesting (a non-glTF geom program is byte-identical either way -- the json defuns prune back out, measured on `(print (geom:volume (geom:box 10)))`'s `.wasm`) |
 | pruning | `LibraryDefunPruner.prunableNames()` collects `GeomLibrary.forms()` |
-| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend`, `geom-csg-cross-backend`, `geom-scale-cross-backend` and `geom-read-model-cross-backend` (all four backends) |
-| docs | `doc/{en,ja}/guides/solid-modeling.md`, 61 pages under `reference/functions/geom-*.md` |
+| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend`, `geom-csg-cross-backend`, `geom-scale-cross-backend`, `geom-read-model-cross-backend` and `geom-read-ply-gltf-cross-backend` (all four backends) |
+| docs | `doc/{en,ja}/guides/solid-modeling.md`, 63 pages under `reference/functions/geom-*.md` |
 
 **The class-mention trigger is not optional.** The interpreter's lazy load fires on
 FUNCTION resolution, but a `defmethod` specializer, a `typep`, a `typecase` clause, a
@@ -257,25 +258,31 @@ their routing decision BEFORE evaluating the argument, so the first
 `LispEvaluator.referencesGeom`, the twin of the torch pre-load beside it (torch and
 geom are the only lazily loaded libraries with `print-object` methods).
 
-## Reading a model file (2026-08-30)
+## Reading a model file (2026-08-30; PLY and glTF/GLB 2026-08-31)
 
-`geom:read-obj`, `geom:read-stl` and the dispatcher `geom:read-model` answer a
-`geom:solid` built through `geom::%build-solid` -- the other half of
-`geom:polyhedron`'s own sentence, "for a mesh that came from a file". They are the
-only members of the package that open a file, and the reason they belong HERE rather
-than in a package of their own is that everything they answer is this package's type:
-a `mesh:read-obj` would be a package whose entire vocabulary is geom's.
+`geom:read-obj`, `geom:read-stl`, `geom:read-ply`, `geom:read-gltf` and the
+dispatcher `geom:read-model` answer a `geom:solid` built through
+`geom::%build-solid` -- the other half of `geom:polyhedron`'s own sentence, "for a
+mesh that came from a file" -- except `read-gltf`, which answers the LIST of solids
+its scene poses (the seam's list-answering arm; a single-mesh file is a list of
+one, and `read-model` passes the shape through). They are the only members of the
+package that open a file, and the reason they belong HERE rather than in a package
+of their own is that everything they answer is this package's type: a
+`mesh:read-obj` would be a package whose entire vocabulary is geom's.
 
-### The seam a fourth format plugs into
+### The seam a new format plugs into
 
-Stated before the second reader was written, and the second reader is what proved it:
+Stated before the second reader was written; the fourth and fifth (PLY, glTF) are
+what proved it -- each landed as exactly the four edits below, and the only thing
+the seam did not carry was OUTSIDE it (the `JsonLibrary` splice order, in the
+wiring table above):
 
 - **A reader is `(path color label) -> a geom:solid`, or a LIST of them** for a format
   carrying several meshes. A list is what `scene:add` already splices and what
   `geom:triad` already answers, and a NODE HIERARCHY rides inside one: the solids are
   attached to a shared `geom:node`, so each one's `world-transform` carries its
   parents and the flat list still draws right. That is the mapping glTF's node tree
-  takes when it lands.
+  took ("glTF" below), unchanged from this sentence as written before it landed.
 - **The one internal representation is `geom::%build-solid`'s arguments**: a list of
   points, a list of index loops, a colour and a label. It is rich enough for OBJ, STL
   and PLY as they stand. It is NOT rich enough for glTF's per-primitive materials
@@ -289,7 +296,10 @@ Stated before the second reader was written, and the second reader is what prove
 - **Dispatch is a `case`, deliberately not a table.** A Lisp-level registry of reader
   functions would make every reader reachable from the dispatcher, so a program
   reading one format would carry them all; a `case` keeps `LibraryDefunPruner` able to
-  see which arm a program can reach. Three entries do not earn a plugin framework.
+  see which arm a program can reach. Five entries still do not earn a plugin
+  framework, and the pruning is measured: a `read-ply` program carries neither
+  `read-gltf` nor the JSON library
+  (`GeomLibraryTest.aProgramReadingOnePlyCarriesNeitherGltfNorJson`).
 - **Adding a format is four localized edits**: one reader defun, one
   `geom::%model-format` clause, one `geom:read-model` case arm, and a
   `PackageRegistry.GEOM_FUNCTIONS` entry for the public name.
@@ -313,9 +323,10 @@ to the extension only where no content test can answer:
 `:format` overrides everything. What the extension NEVER decides is the ASCII/binary
 split, and that is the split that matters: both dialects are `.stl`.
 
-`:ply` / `:gltf` / `:glb` are recognized and REFUSED BY NAME. A sniffer that knows a
-format it cannot read is worth more than one that does not: the alternative to
-"dragon.ply is PLY, which this build does not read yet" is a garbage parse.
+All five answers are read now (`:gltf` and `:glb` share `geom:read-gltf`, which
+re-sniffs the carrier itself). What survives of the refuse-by-name rule is
+per-reader: the file-level refusal is only "cannot tell what format", and each
+reader names what IT cannot carry ("PLY" and "glTF" below).
 
 ### The dialect test does not use `file-length`, and cannot
 
@@ -342,6 +353,10 @@ armadillo (49,990 v / 99,976 f, 4.6 MB OBJ and the same mesh as a 5.0 MB binary 
 | bunny-big.obj parse (105k lines, 316k numbers) | 5,315 ms | 39 ms | 2,679 ms |
 | `geom:polyhedron` of 50k points / 100k facets | 148 ms | 22 ms | -- |
 | armadillo.stl binary read (100k triangles) | 498 ms | -- | -- |
+| bun_zipper.ply ASCII read (3.0 MB, 35,947 v / 69,451 f) [2026-08-31] | 7,314 ms | 243 ms | 3,751 ms |
+| cycloidal.ply binary read (1.08 MB, 21,384 v / 43,368 f) [2026-08-31] | 1,163 ms | 59 ms | 132 ms |
+| Duck.glb read (120 KB, 2,399 v / 4,212 f) [2026-08-31] | 121 ms | 14 ms | 2 ms |
+| Duck as base64-embedded .gltf (138 KB) [2026-08-31] | 985 ms | 81 ms | 22 ms |
 | `geom:mesh` of 100k triangles (PRE-EXISTING) | ~5,200 ms | ~67 ms | -- |
 | `geom:volume` of 100k triangles | 606 ms | 28 ms | -- |
 
@@ -395,25 +410,106 @@ readers' path any more, and neither has been investigated.
   `struct.pack('<f')` answer the same 237926.39344717923 -- so the `char-code` scanner
   produces the correctly-rounded float32 for all 450,000 numbers in that file.
 
+### PLY (2026-08-31)
+
+`geom:read-ply`, both `ascii` and `binary_little_endian`; `binary_big_endian` is
+refused BY NAME, because the packed `read-sequence` path is little-endian by
+contract (`binary-sequence-io.md`) and mis-reading every float would be strictly
+worse. The header names every element, its count and every property with its
+type, so the body is walked BY THE HEADER: `x`/`y`/`z` come from wherever the
+vertex element put them, and everything else -- the bunny's `confidence` and
+`intensity`, cycloidal's per-vertex AND per-face uchar colours -- is read past by
+its declared width, never guessed. A file with no `face` element (the bunny's raw
+range scans) answers its vertices with no facets.
+
+A binary vertex block has three shapes, fastest first: all properties float32 ->
+ONE `read-sequence` of `count*k` floats, columns sliced (`bun_zipper`'s shape);
+float32 x y z FIRST with fixed-width extras -> one three-float read plus one skip
+per row (cycloidal's 15-byte stride); anything else -> property-by-property
+through `geom::%ply-scalar`, which folds a signed value's two's complement back
+out of the unsigned packed read. A face is two transfers (one count, one bulk
+index read), the STL reader's shape. Skipping is `geom::%skip-bytes` -- bounded
+reads through a scratch buffer, because `file-position` answers nil by design on
+this build, the same reason the STL dialect test cannot use `file-length`.
+
+### glTF 2.0 / GLB (2026-08-31)
+
+`geom:read-gltf`, both carriers: `.glb` (12-byte header, JSON chunk, BIN chunk)
+and `.gltf` with `.bin` files beside it or base64 `data:` uris; a remote uri is
+refused (a file reader does not fetch). The JSON goes through
+`rontolisp:json-parse` -- which is why `JsonLibrary.process` moved OUTSIDE
+`GeomLibrary.process` on both compile paths (wiring table above). Buffers are
+exactly what the packed `read-sequence` was built for: a tight accessor is one
+native transfer (POSITION, indices), a strided one (interleaved attributes; the
+Duck) is a three-float read plus a skip per vertex.
+
+The node hierarchy maps as the seam said it would: one glTF node -> one
+`geom:node` posed by its TRS or matrix, one primitive -> one `geom:solid`
+(coloured by `baseColorFactor`, labelled by mesh/node name) attached under its
+node, the answer the FLAT LIST under one shared root. **A node's scale is baked
+into vertices with `geom:nscale`** -- geometry, not pose ("Scaling" above) --
+accumulated down the tree with each child's translation multiplied by the product
+above it. That composition is EXACT for uniform scales; a non-uniform scale above
+a rotated child would shear, which no rigid transform can carry, so it is refused
+by name -- as is a node MATRIX whose columns are not orthogonal once the column
+norms are out (shear again); a mirroring matrix moves its flip into a negative z
+scale, which `nscale` carries by reversing the facets. Refused by name rather
+than half-read, per the todo's list: `mode` other than 4, sparse accessors, any
+`extensionsRequired` entry (Draco/meshopt arrive this way), skins, animations,
+glTF 1.x. Verified on the Khronos corpus: Box.glb (volume exactly 1.0), Duck in
+all three carriers (identical 1.1957991851442398, the 0.01 node scale baked so
+the extent is 1.65 not 165), SimpleMeshes' two nodes landing side by side --
+each rendered through `scene:offscreen` and looked at.
+
+**The base64 path is the one place buffer bytes are assembled by Lisp
+arithmetic** (base64 plus an IEEE-754 float32 decode -- `read-sequence` has no
+stream to fill there), and it taught the one real lesson of the round: on the
+compiled backends a large string is quadratic to BUILD through
+`make-string` + `(setf (char))` (each write rebuilds the immutable string,
+`string-write-runtime.md`) AND quadratic to SCAN as a mutable character vector
+(each `(char s j)` renders the whole vector -- the todo on string mutability
+carries the measured table). `geom::%utf8-string` first hit the build half: the
+138 KB embedded Duck decoded in 1.1 s interpreted and **30.5 s** compiled. The
+shape that escapes both halves is: build into a fill-pointered character array
+(the one string shape `(setf (char))` writes in place everywhere,
+`adjustable-arrays.md`), then ONE `subseq` on the way out so every later scan
+reads an ordinary string. Same file: **82 ms** compiled. Any future library code
+filling a large string must use that pair.
+
 ### Cost, pruning and the pin
 
-A program that calls `geom:read-stl` costs **+20,521 B** on a `.class` (137,915 ->
-158,436) and **+18,880 B** on a `.wasm` (144,437 -> 163,317). A program that reads no
-model file carries none of it -- verified by the absence of the readers' error strings
-from `examples/browser/webgl-solids/solids.wasm` and from a `(geom:volume (geom:box
-10))` module, and by `GeomLibraryTest.theReadersArePrunedFromAProgramThatReadsNo
-ModelFile`. (`solids.wasm` is not byte-identical to a pre-change build -- it is 505
-bytes SMALLER, an index/encoding shift, not inclusion.)
+Re-measured 2026-08-31, against that day's base `(print (geom:volume (geom:box
+10)))` -- `.class` 137,917, `.wasm` 144,437, BYTE-IDENTICAL before and after the
+PLY/glTF round (the moved `JsonLibrary` splices and prunes back out of a non-glTF
+program):
 
-Pinned by nine `GeomLibraryTest` cases, the `geom-read-model-cross-backend` ci-spec
-case (a box written out as an OBJ and as a binary STL and read straight back: 1000.0
-and 600.0 both ways, on all four backends) and
+| program calls | `.class` | delta | `.wasm` (P1) | delta |
+|---|---|---|---|---|
+| `read-stl` | 163,754 | +25,837 | 178,288 | +33,851 |
+| `read-ply` | 199,792 | +61,875 | 217,905 | +73,468 |
+| `read-gltf` | 246,096 | +108,179 | 266,353 | +121,916 |
+| `read-model` (reaches all five) | 341,590 | +203,673 | 391,448 | +247,011 |
+
+(The 2026-08-30 `read-stl` numbers -- 158,436 / 163,317 -- were stale by the 31st:
+the drift arrived with other landings in between, measured identical with and
+without the readers' change. `read-gltf`'s delta includes the JSON library.)
+A program that reads no model file carries none of it -- verified by the absence of
+the readers' error strings from `examples/browser/webgl-solids/solids.wasm` and
+from a `(geom:volume (geom:box 10))` module, and by
+`GeomLibraryTest.theReadersArePrunedFromAProgramThatReadsNoModelFile` /
+`aProgramReadingOnePlyCarriesNeitherGltfNorJson`.
+
+Pinned by twenty-odd `GeomLibraryTest` cases, the `geom-read-model-cross-backend`
+ci-spec case (a box written out as an OBJ and as a binary STL and read straight
+back: 1000.0 and 600.0 both ways, on all four backends), the
+`geom-read-ply-gltf-cross-backend` case (both PLY dialects and a GLB written from
+Lisp and read back -- the GLB's node both translates and scales, so 8000.0 is the
+scale baked into vertices and `#f(10.0 0.0 0.0)` the pose that stayed rigid --
+plus the big-endian refusal, verbatim) and
 `SceneOffscreenRenderTest.aMeshReadOutOfAModelFileDrawsLikeAnyOtherSolid`.
 
 ### What is deliberately not here
 
-- **PLY and glTF/GLB** -- recognized, refused by name, and the seam they plug into is
-  above.
 - **WRITING any format.** `read-`/`write-` is the pair the naming leaves room for.
 - **Vertex welding.** An STL solid carries three vertices per facet because the format
   has no index table; welding is a different operation, on a mesh from any source.

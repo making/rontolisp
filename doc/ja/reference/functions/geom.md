@@ -47,6 +47,8 @@
 | `geom:read-model` | `(geom:read-model "bunny.obj")` | モデルファイル中のメッシュ。フォーマットはバイト列から判定 |
 | `geom:read-obj` | `(geom:read-obj "bunny.obj")` | Wavefront OBJ ファイル中のメッシュ |
 | `geom:read-stl` | `(geom:read-stl "part.stl")` | STL ファイル中のメッシュ。両方の方言に対応 |
+| `geom:read-ply` | `(geom:read-ply "scan.ply")` | PLY ファイル中のメッシュ。ASCII とバイナリ（リトルエンディアン）に対応 |
+| `geom:read-gltf` | `(geom:read-gltf "duck.glb")` | glTF 2.0 / GLB ファイル中のシーン。ソリッドのリストを返す |
 | `geom:arrow` | `(geom:arrow :length 200 :radius 6)` | 軸と尖った頭を1つのソリッドにした矢印。向きは `:direction` |
 | `geom:triad` | `(geom:triad :at (geom:vec3 0 0 0))` | 3本の `geom:arrow`（+x 赤、+y 緑、+z 青）のリスト |
 | `geom:vertices-of` | `(geom:vertices-of s)` | モデル座標のランク2 `(n 3)` パック配列 |

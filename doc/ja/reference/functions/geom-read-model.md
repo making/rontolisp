@@ -2,7 +2,7 @@
 
 `(geom:read-model path &key format color label)`
 
-モデルファイル中のメッシュを [`geom:solid`](geom-polyhedron.md) として返します。フォーマットが分からないファイル、たとえばビューアが渡されたものをそのまま開く場合の唯一の入口です。フォーマットはファイル自身のバイト列から判定します。`:format`（`:obj`、`:stl`）を渡せば判定を飛ばして直接指定できます。フォーマットが分かっているなら [`geom:read-obj`](geom-read-obj.md)、[`geom:read-stl`](geom-read-stl.md) と名指しするほうが成果物は小さくなります。この関数はすべてのリーダーに到達しうるので、すべてのリーダーを抱え込みます。
+モデルファイル中のメッシュを [`geom:solid`](geom-polyhedron.md) として返します。フォーマットが分からないファイル、たとえばビューアが渡されたものをそのまま開く場合の唯一の入口です。フォーマットはファイル自身のバイト列から判定します。`:format`（`:obj`、`:stl`、`:ply`、`:gltf`、`:glb`）を渡せば判定を飛ばして直接指定できます。フォーマットが分かっているなら [`geom:read-obj`](geom-read-obj.md)、[`geom:read-stl`](geom-read-stl.md)、[`geom:read-ply`](geom-read-ply.md)、[`geom:read-gltf`](geom-read-gltf.md) と名指しするほうが成果物は小さくなります。この関数はすべてのリーダーに到達しうるので、すべてのリーダーを抱え込みます。glTF は [`geom:read-gltf`](geom-read-gltf.md) が述べるとおりソリッドの**リスト**を返します。他のフォーマットはソリッド 1 つです。
 
 `:color` と `:label` はパッケージ内の他のコンストラクタとまったく同じくソリッドのものです。[ソリッドモデリングガイド](../../guides/solid-modeling.md)を参照。
 
@@ -28,11 +28,11 @@ CL-USER> (geom:read-model "part.stl" :label "bracket")
 
 **バイナリ STL にはマジックナンバーがまったくありません** — フォーマット側の不備です — そのため 80 バイトのヘッダが `solid` で始まらないバイナリ `.stl` は拡張子で名指しされます。拡張子が決して決められないのは ASCII/バイナリの区別のほうで、どちらの方言も `.stl` であり、`geom:read-stl` がバイト列からそれを決めます。
 
-PLY と glTF は認識はしますが読みません。このビルドが扱えないファイルは、でたらめに解析されるのではなく名指しで拒否されます。
+どのテストも認識しないファイルは、でたらめに解析されるのではなくファイル名を名指しして拒否されます。リーダー自身が扱えないもの(`binary_big_endian` の PLY、圧縮やスキン付きの glTF)は、そのリーダーのページにあるとおり名指しで拒否されます。
 
 ```console
-CL-USER> (geom:read-model "dragon.ply")
-; Error: geom:read-model: dragon.ply is PLY, which this build does not read yet
+CL-USER> (geom:read-model "mystery.dat")
+; Error: geom:read-model: cannot tell what format mystery.dat is; pass :format
 ```
 
 ## バックエンド対応

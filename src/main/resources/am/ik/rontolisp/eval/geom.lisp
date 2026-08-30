@@ -1008,6 +1008,1094 @@
             (error "geom:read-stl: ~a is too short to be an STL file" path))
           (geom::%read-stl-binary path (geom::%u32-at head 80) color label)))))
 
+;; --- PLY ---------------------------------------------------------------------
+;;
+;; The Stanford polygon format: a small text header that DESCRIBES the body --
+;; every element, its count, and every property with its type, in file order --
+;; then the body in the format the header names, ascii or
+;; binary_little_endian. The header is what makes the reader general: x, y and
+;; z are taken from wherever the vertex element put them, and every other
+;; property (a confidence, a per-vertex or per-face colour -- geom:solid
+;; carries ONE colour) is read past by its declared width rather than guessed
+;; at. binary_big_endian is refused by name: the bulk read-sequence path is
+;; little-endian by contract (.kb/binary-sequence-io.md), and mis-reading every
+;; float would be strictly worse than saying so.
+
+;; One header line out of a BINARY stream: the bytes to the next linefeed as an
+;; ASCII string, the carriage return of a CRLF dropped, consed with the byte
+;; count consumed (line break included) -- the binary body reader needs the
+;; total to know where the header ends. NIL at end of file.
+(defun geom::%ply-line (in)
+  (let ((acc '()) (count 0) (b (read-byte in nil nil)))
+    (if (null b)
+        nil
+        (progn
+          (do ()
+              ((or (null b) (= b 10)))
+            (push b acc)
+            (setq count (+ count 1))
+            (setq b (read-byte in nil nil)))
+          (when b (setq count (+ count 1)))
+          (when (and acc (= (first acc) 13)) (setq acc (rest acc)))
+          (let* ((m (length acc)) (s (make-string m)))
+            (do ((k (- m 1) (- k 1)) (rest acc (cdr rest)))
+                ((< k 0))
+              (setf (char s k) (code-char (car rest))))
+            (cons s count))))))
+
+;; The whitespace-separated tokens of LINE, lower-cased.
+(defun geom::%ply-tokens (line)
+  (let ((n (length line)) (i 0) (out '()))
+    (do ()
+        ((>= i n))
+      (do ()
+          ((not
+            (and (< i n)
+                 (let ((c (char-code (char line i))))
+                   (or (= c 32) (= c 9) (= c 13))))))
+        (setq i (+ i 1)))
+      (when (< i n)
+        (let ((start i))
+          (do ()
+              ((not
+                (and (< i n)
+                     (let ((c (char-code (char line i))))
+                       (and (not (= c 32)) (not (= c 9)) (not (= c 13)))))))
+            (setq i (+ i 1)))
+          (push (string-downcase (subseq line start i)) out))))
+    (nreverse out)))
+
+;; A property type as a keyword; signed and unsigned told apart because a
+;; signed value read through the unsigned packed path needs its two's
+;; complement folded back.
+(defun geom::%ply-type (word path)
+  (cond ((or (string= word "float") (string= word "float32")) :f32)
+        ((or (string= word "double") (string= word "float64")) :f64)
+        ((or (string= word "char") (string= word "int8")) :i8)
+        ((or (string= word "uchar") (string= word "uint8")) :u8)
+        ((or (string= word "short") (string= word "int16")) :i16)
+        ((or (string= word "ushort") (string= word "uint16")) :u16)
+        ((or (string= word "int") (string= word "int32")) :i32)
+        ((or (string= word "uint") (string= word "uint32")) :u32)
+        (t (error "geom:read-ply: unknown property type ~a in ~a" word path))))
+
+(defun geom::%ply-type-bytes (ty)
+  (cond ((eq ty :f64) 8)
+        ((or (eq ty :f32) (eq ty :i32) (eq ty :u32)) 4)
+        ((or (eq ty :i16) (eq ty :u16)) 2)
+        (t 1)))
+
+;; The parsed header: (format elements header-bytes), where format is :ascii
+;; or :binary, each element is (name count properties) in file order, and a
+;; property is (type name) or (:list count-type index-type name).
+(defun geom::%ply-header (path)
+  (with-open-file (in path :element-type '(unsigned-byte 8))
+    (let ((r (geom::%ply-line in)))
+      (when (or (null r) (not (string= (car r) "ply")))
+        (error "geom:read-ply: ~a does not open with the ply magic" path))
+      (let ((consumed (cdr r))
+            (fmt nil)
+            (elements '())
+            (ename nil)
+            (ecount 0)
+            (eprops '())
+            (done nil))
+        (do ()
+            (done)
+          (let ((row (geom::%ply-line in)))
+            (when (null row)
+              (error "geom:read-ply: ~a ends inside its header" path))
+            (setq consumed (+ consumed (cdr row)))
+            (let* ((tokens (geom::%ply-tokens (car row)))
+                   (head (if tokens (first tokens) "")))
+              (cond ((string= head "end_header") (setq done t))
+                    ((string= head "format")
+                     (let ((w (second tokens)))
+                       (cond ((string= w "ascii") (setq fmt :ascii))
+                        ((string= w "binary_little_endian") (setq fmt :binary))
+                        ((string= w "binary_big_endian")
+                         (error "geom:read-ply: ~a is binary_big_endian PLY, which this build does not read -- the bulk binary path is little-endian by contract"
+                                path))
+                        (t (error "geom:read-ply: unknown PLY format ~a in ~a" w
+                                  path)))))
+                    ((string= head "element")
+                     (when ename
+                       (push (list ename ecount (nreverse eprops)) elements))
+                     (setq ename (second tokens))
+                     (setq eprops '())
+                     (let ((c (third tokens)))
+                       (setq ecount
+                        (floor (car (geom::%scan-number c 0 (length c)))))))
+                    ((string= head "property")
+                     (when (null ename)
+                       (error
+                        "geom:read-ply: a property before any element in ~a"
+                        path))
+                     (push (if (string= (second tokens) "list")
+                               (list :list (geom::%ply-type (third tokens) path)
+                                     (geom::%ply-type (fourth tokens) path)
+                                     (nth 4 tokens))
+                               (list (geom::%ply-type (second tokens) path)
+                                     (third tokens))) eprops))
+                    (t nil)))))
+        (when ename (push (list ename ecount (nreverse eprops)) elements))
+        (when (null fmt)
+          (error "geom:read-ply: ~a has no format line in its header" path))
+        (list fmt (nreverse elements) consumed)))))
+
+(defun geom::%ply-element (elements name)
+  (let ((found nil))
+    (dolist (e elements found)
+      (when (and (null found) (string= (first e) name)) (setq found e)))))
+
+;; A vertex element must carry scalar x, y and z; where they are is the
+;; header's business, not a fixed column order.
+(defun geom::%ply-check-vertex (elements path)
+  (let ((v (geom::%ply-element elements "vertex")))
+    (when (null v) (error "geom:read-ply: ~a has no vertex element" path))
+    (let ((hx nil) (hy nil) (hz nil))
+      (dolist (p (third v))
+        (when (not (eq (first p) :list))
+          (let ((nm (second p)))
+            (cond ((string= nm "x") (setq hx t))
+                  ((string= nm "y") (setq hy t))
+                  ((string= nm "z") (setq hz t))))))
+      (when (not (and hx hy hz))
+        (error
+         "geom:read-ply: the vertex element of ~a does not carry x, y and z"
+         path)))))
+
+(defun geom::%ply-face-prop-p (p)
+  (and (eq (first p) :list)
+       (let ((nm (fourth p)))
+         (or (string= nm "vertex_indices") (string= nm "vertex_index")))))
+
+;; The ASCII body: one row per line, scanned with %scan-number. A scalar
+;; property is one number, a list property one count and that many more, so
+;; the row is walked by the header's property list and nothing is guessed.
+(defun geom::%read-ply-ascii (path elements color label)
+  (with-open-file (in path)
+    (let ((in-header t))
+      (do ()
+          ((not in-header))
+        (let ((line (read-line in nil nil)))
+          (when (null line)
+            (error "geom:read-ply: ~a ends inside its header" path))
+          (let ((tokens (geom::%ply-tokens line)))
+            (when (and tokens (string= (first tokens) "end_header"))
+              (setq in-header nil))))))
+    (let ((points '()) (facets '()))
+      (dolist (e elements)
+        (let ((name (first e)) (count (second e)) (props (third e)))
+          (dotimes (row count)
+            (let ((line (read-line in nil nil)))
+              (when (null line)
+                (error "geom:read-ply: ~a ends inside its ~a element" path
+                       name))
+              (let ((n (length line))
+                    (p 0)
+                    (x 0.0)
+                    (y 0.0)
+                    (z 0.0)
+                    (loop-indices nil))
+                (dolist (prop props)
+                  (if (eq (first prop) :list)
+                      (let ((r (geom::%scan-number line p n)))
+                        (when (null r)
+                          (error
+                           "geom:read-ply: a ~a row short of numbers in ~a" name
+                           path))
+                        (setq p (cdr r))
+                        (let ((m (floor (car r)))
+                              (keep
+                               (and (string= name "face")
+                                    (geom::%ply-face-prop-p prop))))
+                          (when keep (setq loop-indices '()))
+                          (dotimes (k m)
+                            (let ((q (geom::%scan-number line p n)))
+                              (when (null q)
+                                (error "geom:read-ply: a ~a row short of numbers in ~a"
+                                       name path))
+                              (setq p (cdr q))
+                              (when keep
+                                (push (floor (car q)) loop-indices))))))
+                      (let ((r (geom::%scan-number line p n)))
+                        (when (null r)
+                          (error
+                           "geom:read-ply: a ~a row short of numbers in ~a" name
+                           path))
+                        (setq p (cdr r))
+                        (let ((nm (second prop)))
+                          (cond ((string= nm "x") (setq x (car r)))
+                                ((string= nm "y") (setq y (car r)))
+                                ((string= nm "z") (setq z (car r))))))))
+                (when (string= name "vertex") (push (list x y z) points))
+                (when (and loop-indices (>= (length loop-indices) 3))
+                  (push (nreverse loop-indices) facets)))))))
+      (geom::%build-solid (nreverse points) (nreverse facets)
+                          :color color
+                          :label label))))
+
+;; BYTES read past in bounded transfers, since file-position cannot seek here.
+(defun geom::%skip-bytes (in bytes buf)
+  (do ((left bytes))
+      ((<= left 0))
+    (let ((chunk (if (> left (length buf)) (length buf) left)))
+      (read-sequence buf in :end chunk)
+      (setq left (- left chunk)))))
+
+;; One scalar of TY out of IN through the per-width scratch buffers SCR --
+;; (f32 f64 u8 u16 u32) -- with a signed value's two's complement folded back.
+(defun geom::%ply-scalar (in ty scr)
+  (cond ((eq ty :f32)
+         (read-sequence (first scr) in)
+         (aref (first scr) 0))
+        ((eq ty :f64)
+         (read-sequence (second scr) in)
+         (aref (second scr) 0))
+        ((eq ty :u8)
+         (read-sequence (third scr) in :end 1)
+         (aref (third scr) 0))
+        ((eq ty :i8)
+         (read-sequence (third scr) in :end 1)
+         (let ((v (aref (third scr) 0))) (if (> v 127) (- v 256) v)))
+        ((eq ty :u16)
+         (read-sequence (fourth scr) in)
+         (aref (fourth scr) 0))
+        ((eq ty :i16)
+         (read-sequence (fourth scr) in)
+         (let ((v (aref (fourth scr) 0))) (if (> v 32767) (- v 65536) v)))
+        ((eq ty :u32)
+         (read-sequence (nth 4 scr) in)
+         (aref (nth 4 scr) 0))
+        (t
+         (read-sequence (nth 4 scr) in)
+         (let ((v (aref (nth 4 scr) 0)))
+           (if (> v 2147483647) (- v 4294967296) v)))))
+
+(defun geom::%ply-scratch ()
+  (list (make-array 1 :element-type 'single-float :initial-element 0.0)
+        (make-array 1 :element-type 'double-float :initial-element 0.0)
+        (make-array 8 :element-type '(unsigned-byte 8))
+        (make-array 1 :element-type '(unsigned-byte 16))
+        (make-array 1 :element-type '(unsigned-byte 32))))
+
+;; The vertex rows of a binary body. Three shapes, fastest first:
+;;   - every property a float32: ONE read-sequence of count*k floats, columns
+;;     sliced -- the whole element in a single native transfer;
+;;   - the row OPENS with float32 x y z (a colour or a confidence after them):
+;;     one three-float read and one skip per row;
+;;   - anything else: property-by-property through %ply-scalar.
+(defun geom::%ply-binary-vertices (in count props scr skipbuf points path)
+  (let ((all-f32 t) (xyz-first nil) (k (length props)))
+    (dolist (p props) (when (not (eq (first p) :f32)) (setq all-f32 nil)))
+    (when (>= k 3)
+      (let ((p0 (first props)) (p1 (second props)) (p2 (third props)))
+        (when (and (eq (first p0) :f32) (string= (second p0) "x")
+                   (eq (first p1) :f32) (string= (second p1) "y")
+                   (eq (first p2) :f32) (string= (second p2) "z"))
+          (setq xyz-first t))))
+    (cond ((and all-f32 xyz-first)
+           (let ((buf
+                  (make-array (* count k)
+                              :element-type 'single-float
+                              :initial-element 0.0)))
+             (read-sequence buf in)
+             (dotimes (i count)
+               (let ((at (* i k)))
+                 (push
+                  (list (aref buf at) (aref buf (+ at 1)) (aref buf (+ at 2)))
+                  points)))))
+          (xyz-first
+           (let ((trail 0)
+                 (row
+                  (make-array 3
+                              :element-type 'single-float
+                              :initial-element 0.0))
+                 (fixed t))
+             (dolist (p (rest (rest (rest props))))
+               (if (eq (first p) :list)
+                   (setq fixed nil)
+                   (setq trail (+ trail (geom::%ply-type-bytes (first p))))))
+             (if fixed
+                 (dotimes (i count)
+                   (read-sequence row in)
+                   (push (list (aref row 0) (aref row 1) (aref row 2)) points)
+                   (geom::%skip-bytes in trail skipbuf))
+                 (dotimes (i count)
+                   (read-sequence row in)
+                   (push (list (aref row 0) (aref row 1) (aref row 2)) points)
+                   (geom::%ply-skip-row in (rest (rest (rest props))) scr
+                                        skipbuf)))))
+          (t
+           (dotimes (i count)
+             (let ((x 0.0) (y 0.0) (z 0.0))
+               (dolist (p props)
+                 (if (eq (first p) :list)
+                     (let ((m (floor (geom::%ply-scalar in (second p) scr))))
+                       (geom::%skip-bytes in
+                        (* m (geom::%ply-type-bytes (third p))) skipbuf))
+                     (let ((nm (second p)))
+                       (cond ((string= nm "x")
+                              (setq x (geom::%ply-scalar in (first p) scr)))
+                             ((string= nm "y")
+                              (setq y (geom::%ply-scalar in (first p) scr)))
+                             ((string= nm "z")
+                              (setq z (geom::%ply-scalar in (first p) scr)))
+                             (t (geom::%skip-bytes in
+                                 (geom::%ply-type-bytes (first p)) skipbuf))))))
+               (push (list x y z) points)))))
+    points))
+
+;; The properties of one row read past: scalars coalesced into byte skips,
+;; a list read as its count then skipped by width.
+(defun geom::%ply-skip-row (in props scr skipbuf)
+  (let ((pending 0))
+    (dolist (p props)
+      (if (eq (first p) :list)
+          (progn
+            (geom::%skip-bytes in pending skipbuf)
+            (setq pending 0)
+            (let ((m (floor (geom::%ply-scalar in (second p) scr))))
+              (geom::%skip-bytes in (* m (geom::%ply-type-bytes (third p)))
+                                 skipbuf)))
+          (setq pending (+ pending (geom::%ply-type-bytes (first p))))))
+    (geom::%skip-bytes in pending skipbuf)))
+
+;; The face rows of a binary body: per row, one count, one bulk index read --
+;; the STL reader's two-transfers-a-triangle shape -- and everything else (a
+;; per-face colour) skipped by its declared width.
+(defun geom::%ply-binary-faces (in count props scr skipbuf facets path)
+  (let ((idx-cap 8)
+        (idx-buf (make-array 8 :element-type '(unsigned-byte 32)))
+        (idx16-buf (make-array 8 :element-type '(unsigned-byte 16))))
+    (dotimes (row count)
+      (let ((pending 0))
+        (dolist (p props)
+          (if (geom::%ply-face-prop-p p)
+              (progn
+                (geom::%skip-bytes in pending skipbuf)
+                (setq pending 0)
+                (let ((m (floor (geom::%ply-scalar in (second p) scr)))
+                      (ty (third p))
+                      (loop-indices '()))
+                  (when (> m idx-cap)
+                    (setq idx-cap m)
+                    (setq idx-buf
+                          (make-array m :element-type '(unsigned-byte 32)))
+                    (setq idx16-buf
+                          (make-array m :element-type '(unsigned-byte 16))))
+                  (cond
+                   ((or (eq ty :i32) (eq ty :u32))
+                    (read-sequence idx-buf in :end m)
+                    (do ((k (- m 1) (- k 1)))
+                        ((< k 0))
+                      (push (aref idx-buf k) loop-indices)))
+                   ((or (eq ty :i16) (eq ty :u16))
+                    (read-sequence idx16-buf in :end m)
+                    (do ((k (- m 1) (- k 1)))
+                        ((< k 0))
+                      (push (aref idx16-buf k) loop-indices)))
+                   ((or (eq ty :i8) (eq ty :u8))
+                    (dotimes (k m)
+                      (push (floor (geom::%ply-scalar in :u8 scr))
+                            loop-indices))
+                    (setq loop-indices (nreverse loop-indices)))
+                   (t (error "geom:read-ply: a ~a vertex index in ~a" ty path)))
+                  (when (>= m 3) (push loop-indices facets))))
+              (if (eq (first p) :list)
+                  (progn
+                    (geom::%skip-bytes in pending skipbuf)
+                    (setq pending 0)
+                    (let ((m (floor (geom::%ply-scalar in (second p) scr))))
+                      (geom::%skip-bytes in
+                                         (* m (geom::%ply-type-bytes (third p)))
+                                         skipbuf)))
+                  (setq pending
+                        (+ pending (geom::%ply-type-bytes (first p)))))))
+        (geom::%skip-bytes in pending skipbuf)))
+    facets))
+
+;; The binary body, walked element by element in file order. An element that
+;; is neither vertex nor face is skipped -- in one arithmetic-sized transfer
+;; when its rows are all scalars, row by row when a list property makes the
+;; width per-row.
+(defun geom::%read-ply-binary (path elements header-bytes color label)
+  (with-open-file (in path :element-type '(unsigned-byte 8))
+    (let ((skipbuf (make-array 4096 :element-type '(unsigned-byte 8)))
+          (scr (geom::%ply-scratch))
+          (points '())
+          (facets '()))
+      (geom::%skip-bytes in header-bytes skipbuf)
+      (dolist (e elements)
+        (let ((name (first e)) (count (second e)) (props (third e)))
+          (cond ((string= name "vertex")
+                 (setq points
+                       (geom::%ply-binary-vertices in count props scr skipbuf
+                                                   points path)))
+                ((string= name "face")
+                 (setq facets
+                       (geom::%ply-binary-faces in count props scr skipbuf
+                                                facets path)))
+                (t (let ((fixed 0) (lists nil))
+                     (dolist (p props)
+                       (if (eq (first p) :list)
+                           (setq lists t)
+                           (setq fixed
+                                 (+ fixed (geom::%ply-type-bytes (first p))))))
+                     (if lists
+                         (dotimes (row count)
+                           (geom::%ply-skip-row in props scr skipbuf))
+                         (geom::%skip-bytes in (* count fixed) skipbuf)))))))
+      (geom::%build-solid (nreverse points) (nreverse facets)
+                          :color color
+                          :label label))))
+
+;; PLY, ascii or binary_little_endian. A file with no face element -- a raw
+;; range scan -- answers its vertices with no facets rather than an error;
+;; per-vertex and per-face colours are read past (a solid has one colour).
+(defun geom:read-ply (path &key color label)
+  (let* ((header (geom::%ply-header path))
+         (fmt (first header))
+         (elements (second header)))
+    (geom::%ply-check-vertex elements path)
+    (if (eq fmt :ascii)
+        (geom::%read-ply-ascii path elements color label)
+        (geom::%read-ply-binary path elements (third header) color label))))
+
+;; --- glTF 2.0 / GLB ----------------------------------------------------------
+;;
+;; A glTF is a SCENE, not a mesh: a JSON document naming meshes, a node tree
+;; posing them, and binary buffers the vertex data lives in. The mapping onto
+;; this package is the seam's list-answering arm: one glTF primitive -> one
+;; geom:solid (coloured by its material's baseColorFactor), one glTF node ->
+;; one geom:node posed by its TRS or matrix, every solid attached under its
+;; node so world-transform carries the hierarchy -- and the answer is the FLAT
+;; LIST of solids, which scene:add splices unchanged. The JSON goes through
+;; rontolisp:json-parse; the buffers through read-sequence over packed arrays,
+;; which is exactly what a bufferView is.
+;;
+;; A glTF node carries SCALE and geom:transform is rigid by decision
+;; (.kb/geom.md, "Scaling"), so a node's scale is BAKED into its primitives'
+;; vertices with geom:nscale -- geometry, not pose, which is what that section
+;; says scaling is -- accumulated down the tree with each child's translation
+;; scaled by the product above it. That composition is exact for uniform
+;; scales; a NON-uniform scale above a rotated child would shear, which no
+;; rigid transform can carry, and is refused by name.
+;;
+;; What else is refused by name rather than half-read: a primitive mode other
+;; than triangles, sparse accessors, any required extension (Draco and
+;; meshopt compression arrive this way), skins and animations, glTF 1.x, and
+;; a remote buffer uri. A silent partial read would be worse than every one
+;; of these refusals.
+
+;; The UTF-8 text in BYTES[from,to) as a string, one character per code point.
+;; The buffer is a FILL-POINTERED character array, not a make-string: that is
+;; the one string shape (setf (char ...)) writes IN PLACE on every backend --
+;; on a compiled backend a plain string is immutable and each write rebuilds
+;; it, which turned this decode quadratic (measured 30.5 s for a 138 KB
+;; embedded glTF before the change, 30 ms after; .kb/string-write-runtime.md).
+(defun geom::%utf8-string (bytes from to)
+  (let ((n 0) (i from))
+    (do ()
+        ((>= i to))
+      (let ((b (aref bytes i)))
+        (setq i (+ i (cond ((< b 128) 1) ((< b 224) 2) ((< b 240) 3) (t 4)))))
+      (setq n (+ n 1)))
+    (let ((s (make-array n :element-type 'character :fill-pointer n))
+          (k 0)
+          (j from))
+      (do ()
+          ((>= j to))
+        (let ((b (aref bytes j)))
+          (cond ((< b 128)
+                 (setf (char s k) (code-char b))
+                 (setq j (+ j 1)))
+                ((< b 224)
+                 (setf (char s k)
+                  (code-char (+ (* (- b 192) 64) (- (aref bytes (+ j 1)) 128))))
+                 (setq j (+ j 2)))
+                ((< b 240)
+                 (setf (char s k)
+                       (code-char
+                        (+ (* (- b 224) 4096)
+                           (* (- (aref bytes (+ j 1)) 128) 64)
+                           (- (aref bytes (+ j 2)) 128))))
+                 (setq j (+ j 3)))
+                (t
+                 (setf (char s k)
+                       (code-char
+                        (+ (* (- b 240) 262144)
+                           (* (- (aref bytes (+ j 1)) 128) 4096)
+                           (* (- (aref bytes (+ j 2)) 128) 64)
+                           (- (aref bytes (+ j 3)) 128))))
+                 (setq j (+ j 4)))))
+        (setq k (+ k 1)))
+      ;; ONE conversion to an ordinary string on the way out: the compiled
+      ;; backends read a mutable character vector by rendering the whole
+      ;; vector per (char s j), so handing one to the JSON scanner would be
+      ;; the same quadratic this function's builder just escaped, one
+      ;; operator over.
+      (subseq s 0))))
+
+;; The whole of PATH as bytes, read in 64 KiB transfers -- file-length answers
+;; nil on the WASM backends, so the size is discovered by the short read.
+(defun geom::%file-bytes (path)
+  (with-open-file (in path :element-type '(unsigned-byte 8))
+    (let ((chunks '()) (total 0) (more t))
+      (do ()
+          ((not more))
+        (let* ((buf (make-array 65536 :element-type '(unsigned-byte 8)))
+               (n (read-sequence buf in)))
+          (when (> n 0)
+            (push (cons buf n) chunks)
+            (setq total (+ total n)))
+          (when (< n 65536) (setq more nil))))
+      (let ((bytes (make-array total :element-type '(unsigned-byte 8))) (at 0))
+        (dolist (c (nreverse chunks))
+          (let ((buf (car c)) (n (cdr c)))
+            (dotimes (i n) (setf (aref bytes (+ at i)) (aref buf i)))
+            (setq at (+ at n))))
+        bytes))))
+
+;; The GLB envelope: a 12-byte header, then chunks of (length type data). The
+;; answer is (json-string bin-offset), bin-offset the absolute byte offset of
+;; the BIN chunk's data in the file, nil when there is none.
+(defun geom::%read-glb-envelope (path)
+  (with-open-file (in path :element-type '(unsigned-byte 8))
+    (let ((head (make-array 12 :element-type '(unsigned-byte 8)))
+          (skipbuf (make-array 4096 :element-type '(unsigned-byte 8))))
+      (read-sequence head in)
+      (let ((version (geom::%u32-at head 4)))
+        (when (not (= version 2))
+          (error
+           "geom:read-gltf: ~a is glTF version ~a; this build reads glTF 2.0"
+           path version)))
+      (let ((pos 12) (json nil) (bin nil) (more t))
+        (do ()
+            ((not more))
+          (let* ((ch (make-array 8 :element-type '(unsigned-byte 8)))
+                 (n (read-sequence ch in)))
+            (if (< n 8)
+                (setq more nil)
+                (let ((len (geom::%u32-at ch 0)) (ty (geom::%u32-at ch 4)))
+                  (setq pos (+ pos 8))
+                  (cond ((= ty 1313821514)
+                         (let ((buf
+                                (make-array len
+                                            :element-type '(unsigned-byte 8))))
+                           (read-sequence buf in)
+                           (setq json (geom::%utf8-string buf 0 len))))
+                        ((= ty 5130562)
+                         (setq bin pos)
+                         (geom::%skip-bytes in len skipbuf))
+                        (t (geom::%skip-bytes in len skipbuf)))
+                  (setq pos (+ pos len))))))
+        (when (null json) (error "geom:read-gltf: ~a has no JSON chunk" path))
+        (list json bin)))))
+
+(defun geom::%string-prefix-p (prefix s)
+  (let ((n (length prefix)))
+    (and (>= (length s) n) (string= (subseq s 0 n) prefix))))
+
+;; The base64 payload of S from START on, decoded to bytes; = padding and
+;; whitespace tolerated. This is the data: uri path, and the only place a
+;; buffer's bytes are assembled by Lisp arithmetic instead of read-sequence --
+;; its cost is measured in .kb/geom.md.
+(defun geom::%base64-value (k)
+  (cond ((and (>= k 65) (<= k 90)) (- k 65))
+        ((and (>= k 97) (<= k 122)) (- k 71))
+        ((and (>= k 48) (<= k 57)) (+ k 4))
+        ((= k 43) 62)
+        ((= k 47) 63)
+        (t nil)))
+
+(defun geom::%base64-bytes (s start)
+  (let ((n (length s)) (m 0))
+    (do ((i start (+ i 1)))
+        ((>= i n))
+      (when (geom::%base64-value (char-code (char s i))) (setq m (+ m 1))))
+    (let ((out (make-array (floor (* m 3) 4) :element-type '(unsigned-byte 8)))
+          (acc 0)
+          (bits 0)
+          (at 0))
+      (do ((i start (+ i 1)))
+          ((>= i n))
+        (let ((v (geom::%base64-value (char-code (char s i)))))
+          (when v
+            (setq acc (+ (* acc 64) v))
+            (setq bits (+ bits 6))
+            (when (>= bits 8)
+              (setq bits (- bits 8))
+              (when (< at (length out))
+                (setf (aref out at) (logand (ash acc (- bits)) 255))
+                (setq at (+ at 1)))
+              (setq acc (logand acc (- (ash 1 bits) 1)))))))
+      out)))
+
+;; A float32 assembled from its four little-endian bytes. The data: uri path
+;; has no stream for the packed read to fill, so IEEE-754 is decoded by
+;; arithmetic here -- slow per element, and only this path pays it.
+(defun geom::%f32-of-bytes (b0 b1 b2 b3)
+  (let ((e (+ (* (logand b3 127) 2) (ash b2 -7)))
+        (m (+ (* (logand b2 127) 65536) (* b1 256) b0))
+        (sign (if (>= b3 128) -1.0 1.0)))
+    (cond ((= e 255)
+           (error "geom:read-gltf: a non-finite float32 in a data: uri buffer"))
+          ((= e 0) (* sign m (expt 2.0 -149)))
+          (t (* sign (+ m 8388608) (expt 2.0 (- e 150)))))))
+
+;; PATH's sibling NAME, in the same directory, with %XX uri escapes decoded.
+(defun geom::%sibling-path (path name)
+  (let ((n (length name)) (out '()) (i 0))
+    (do ()
+        ((>= i n))
+      (let ((c (char name i)))
+        (if (and (= (char-code c) 37) (< (+ i 2) n))
+            (progn
+              (push (code-char
+                     (+ (* 16 (digit-char-p (char name (+ i 1)) 16))
+                        (digit-char-p (char name (+ i 2)) 16))) out)
+              (setq i (+ i 3)))
+            (progn
+              (push c out)
+              (setq i (+ i 1))))))
+    (let* ((decoded (coerce (nreverse out) 'string))
+           (s (string path))
+           (sn (length s))
+           (slash -1))
+      (do ((k (- sn 1) (- k 1)))
+          ((or (< k 0) (>= slash 0)))
+        (when (= (char-code (char s k)) 47) (setq slash k)))
+      (if (< slash 0)
+          decoded
+          (concatenate 'string (subseq s 0 (+ slash 1)) decoded)))))
+
+;; A number out of a JSON object, with a default for an absent key.
+(defun geom::%jn (h k d) (let ((v (gethash k h))) (if v v d)))
+
+;; Where glTF buffer B's bytes live: (:file path skip) for a GLB's BIN chunk
+;; or a .bin beside the .gltf, (:bytes vec) for a base64 data: uri. A remote
+;; uri is refused -- these readers are ANSI file I/O and nothing else.
+(defun geom::%gltf-buffer-source (b path bin-offset)
+  (let ((uri (gethash "uri" b)))
+    (cond ((null uri)
+           (if bin-offset
+               (list :file path bin-offset)
+               (error "geom:read-gltf: a buffer with no uri and no GLB BIN chunk in ~a"
+                      path)))
+          ((geom::%string-prefix-p "data:" uri)
+           (let ((comma -1) (n (length uri)))
+             (do ((i 5 (+ i 1)))
+                 ((or (>= i n) (>= comma 0)))
+               (when (= (char-code (char uri i)) 44) (setq comma i)))
+             (when (< comma 0)
+               (error "geom:read-gltf: a data: uri with no payload in ~a" path))
+             (list :bytes (geom::%base64-bytes uri (+ comma 1)))))
+          ((or (geom::%string-prefix-p "http:" uri)
+               (geom::%string-prefix-p "https:" uri))
+           (error "geom:read-gltf: buffer uri ~a in ~a is remote, which a file reader does not fetch"
+                  uri path))
+          (t (list :file (geom::%sibling-path path uri) 0)))))
+
+;; An accessor checked against what this reader can carry, and its layout
+;; answered as (source skip stride count), skip the absolute byte offset of
+;; its first element in the source. WIDTH is the byte width of one whole
+;; element (12 for a VEC3 of float32).
+(defun geom::%gltf-accessor-layout (j acc sources width path)
+  (when (gethash "sparse" acc)
+    (error
+     "geom:read-gltf: a sparse accessor in ~a, which this build does not read"
+     path))
+  (let ((bvi (gethash "bufferView" acc)))
+    (when (null bvi)
+      (error "geom:read-gltf: an accessor with no bufferView in ~a" path))
+    (let* ((bv (aref (gethash "bufferViews" j) bvi))
+           (src (nth (gethash "buffer" bv) sources))
+           (stride (geom::%jn bv "byteStride" width))
+           (skip
+            (+ (geom::%jn bv "byteOffset" 0) (geom::%jn acc "byteOffset" 0)
+               (if (eq (first src) :file) (third src) 0))))
+      (list src skip stride (gethash "count" acc)))))
+
+;; The POSITION accessor as a list of (x y z) points. float32 VEC3 is what the
+;; core format allows there, and the two sources split exactly as the seam
+;; says: a file is one packed read-sequence per tight block (or one three-float
+;; read a vertex when interleaved), bytes decode arithmetically.
+(defun geom::%gltf-positions (j acc sources path)
+  (when (not (= (geom::%jn acc "componentType" 0) 5126))
+    (error "geom:read-gltf: POSITION componentType ~a in ~a; the core format stores float32"
+           (geom::%jn acc "componentType" 0) path))
+  (when (not (string= (gethash "type" acc) "VEC3"))
+    (error "geom:read-gltf: POSITION type ~a in ~a is not VEC3"
+           (gethash "type" acc) path))
+  (let* ((layout (geom::%gltf-accessor-layout j acc sources 12 path))
+         (src (first layout))
+         (skip (second layout))
+         (stride (third layout))
+         (count (fourth layout))
+         (points '()))
+    (if (eq (first src) :file)
+        (with-open-file (in (second src) :element-type '(unsigned-byte 8))
+          (let ((skipbuf (make-array 4096 :element-type '(unsigned-byte 8))))
+            (geom::%skip-bytes in skip skipbuf)
+            (if (= stride 12)
+                (let ((buf
+                       (make-array (* count 3)
+                                   :element-type 'single-float
+                                   :initial-element 0.0)))
+                  (read-sequence buf in)
+                  (do ((i (- count 1) (- i 1)))
+                      ((< i 0))
+                    (push (list (aref buf (* i 3)) (aref buf (+ (* i 3) 1))
+                                (aref buf (+ (* i 3) 2))) points)))
+                (let ((row
+                       (make-array 3
+                                   :element-type 'single-float
+                                   :initial-element 0.0)))
+                  (dotimes (i count)
+                    (read-sequence row in)
+                    (push (list (aref row 0) (aref row 1) (aref row 2)) points)
+                    (geom::%skip-bytes in (- stride 12) skipbuf))
+                  (setq points (nreverse points))))))
+        (let ((bytes (second src)))
+          (do ((i (- count 1) (- i 1)))
+              ((< i 0))
+            (let ((at (+ skip (* i stride))))
+              (push (list (geom::%f32-of-bytes (aref bytes at)
+                                               (aref bytes (+ at 1))
+                                               (aref bytes (+ at 2))
+                                               (aref bytes (+ at 3)))
+                          (geom::%f32-of-bytes (aref bytes (+ at 4))
+                                               (aref bytes (+ at 5))
+                                               (aref bytes (+ at 6))
+                                               (aref bytes (+ at 7)))
+                          (geom::%f32-of-bytes (aref bytes (+ at 8))
+                                               (aref bytes (+ at 9))
+                                               (aref bytes (+ at 10))
+                                               (aref bytes (+ at 11))))
+                    points)))))
+    points))
+
+;; The index accessor as triangle facets, three indices a triangle in the
+;; order the file wrote them -- glTF winds counter-clockwise seen from
+;; outside, which is geom's own convention.
+(defun geom::%gltf-index-facets (j acc sources path)
+  (let* ((ct (geom::%jn acc "componentType" 0))
+         (width
+          (cond ((= ct 5121) 1)
+           ((= ct 5123) 2)
+           ((= ct 5125) 4)
+           (t (error "geom:read-gltf: index componentType ~a in ~a" ct path))))
+         (layout (geom::%gltf-accessor-layout j acc sources width path))
+         (src (first layout))
+         (skip (second layout))
+         (stride (third layout))
+         (count (fourth layout))
+         (idx (make-array count :element-type '(unsigned-byte 32))))
+    (when (not (= stride width))
+      (error "geom:read-gltf: a strided index bufferView in ~a" path))
+    (if (eq (first src) :file)
+        (with-open-file (in (second src) :element-type '(unsigned-byte 8))
+          (let ((skipbuf (make-array 4096 :element-type '(unsigned-byte 8))))
+            (geom::%skip-bytes in skip skipbuf))
+          (cond ((= width 4) (read-sequence idx in))
+                ((= width 2)
+                 (let ((buf
+                        (make-array count :element-type '(unsigned-byte 16))))
+                   (read-sequence buf in)
+                   (dotimes (i count) (setf (aref idx i) (aref buf i)))))
+                (t (let ((buf
+                          (make-array count :element-type '(unsigned-byte 8))))
+                     (read-sequence buf in)
+                     (dotimes (i count) (setf (aref idx i) (aref buf i)))))))
+        (let ((bytes (second src)))
+          (dotimes (i count)
+            (let ((at (+ skip (* i width))))
+              (setf (aref idx i)
+                    (cond ((= width 1) (aref bytes at))
+                          ((= width 2)
+                           (+ (aref bytes at) (* 256 (aref bytes (+ at 1)))))
+                          (t (geom::%u32-at bytes at))))))))
+    (let ((facets '()))
+      (do ((i (- count 3) (- i 3)))
+          ((< i 0))
+        (push (list (aref idx i) (aref idx (+ i 1)) (aref idx (+ i 2))) facets))
+      facets)))
+
+;; A node's pose split three ways: (translation rotation scale-list). A matrix
+;; is decomposed by column norms; one that shears -- columns not orthogonal
+;; after the scale is out -- no rigid transform can carry, and is refused. A
+;; mirroring matrix moves its flip into a negative z scale, which nscale
+;; carries by reversing the facets.
+(defun geom::%gltf-node-trs (node path)
+  (let ((mat (gethash "matrix" node)))
+    (if mat
+        (let* ((sx
+                (sqrt
+                 (+ (* (aref mat 0) (aref mat 0)) (* (aref mat 1) (aref mat 1))
+                    (* (aref mat 2) (aref mat 2)))))
+               (sy
+                (sqrt
+                 (+ (* (aref mat 4) (aref mat 4)) (* (aref mat 5) (aref mat 5))
+                    (* (aref mat 6) (aref mat 6)))))
+               (sz
+                (sqrt
+                 (+ (* (aref mat 8) (aref mat 8)) (* (aref mat 9) (aref mat 9))
+                    (* (aref mat 10) (aref mat 10)))))
+               (r (linalg:zeros '(3 3) :element-type 'single-float)))
+          (when (or (< sx 1e-12) (< sy 1e-12) (< sz 1e-12))
+            (error "geom:read-gltf: a node matrix with a zero column in ~a"
+                   path))
+          ;; determinant of the scaled basis: a mirror puts the flip on z
+          (let* ((c00 (/ (aref mat 0) sx))
+                 (c01 (/ (aref mat 1) sx))
+                 (c02 (/ (aref mat 2) sx))
+                 (c10 (/ (aref mat 4) sy))
+                 (c11 (/ (aref mat 5) sy))
+                 (c12 (/ (aref mat 6) sy))
+                 (c20 (/ (aref mat 8) sz))
+                 (c21 (/ (aref mat 9) sz))
+                 (c22 (/ (aref mat 10) sz))
+                 (det
+                  (+ (* c00 (- (* c11 c22) (* c12 c21)))
+                     (* c10 (- (* c21 c02) (* c22 c01)))
+                     (* c20 (- (* c01 c12) (* c02 c11))))))
+            (when (< det 0)
+              (setq sz (- sz))
+              (setq c20 (- c20))
+              (setq c21 (- c21))
+              (setq c22 (- c22)))
+            (let ((d01 (+ (* c00 c10) (* c01 c11) (* c02 c12)))
+                  (d02 (+ (* c00 c20) (* c01 c21) (* c02 c22)))
+                  (d12 (+ (* c10 c20) (* c11 c21) (* c12 c22))))
+              (when (or (> (abs d01) 1e-4) (> (abs d02) 1e-4)
+                        (> (abs d12) 1e-4))
+                (error "geom:read-gltf: a node matrix in ~a carries shear, which a rigid transform cannot represent"
+                       path)))
+            (setf (aref r 0 0) c00)
+            (setf (aref r 1 0) c01)
+            (setf (aref r 2 0) c02)
+            (setf (aref r 0 1) c10)
+            (setf (aref r 1 1) c11)
+            (setf (aref r 2 1) c12)
+            (setf (aref r 0 2) c20)
+            (setf (aref r 1 2) c21)
+            (setf (aref r 2 2) c22)
+            (list (geom:vec3 (aref mat 12) (aref mat 13) (aref mat 14)) r
+                  (list sx sy sz))))
+        (let ((tr (gethash "translation" node))
+              (q (gethash "rotation" node))
+              (sc (gethash "scale" node)))
+          (list (if tr
+                    (geom:vec3 (aref tr 0) (aref tr 1) (aref tr 2))
+                    (geom:vec3 0 0 0))
+                (if q
+                    (geom::%quat-matrix (aref q 0) (aref q 1) (aref q 2)
+                                        (aref q 3))
+                    (geom::%identity-rotation))
+                (if sc
+                    (list (aref sc 0) (aref sc 1) (aref sc 2))
+                    (list 1.0 1.0 1.0)))))))
+
+;; A glTF quaternion (x y z w) as a rotation matrix.
+(defun geom::%quat-matrix (x y z w)
+  (let ((r (linalg:zeros '(3 3) :element-type 'single-float)))
+    (setf (aref r 0 0) (- 1.0 (* 2.0 (+ (* y y) (* z z)))))
+    (setf (aref r 0 1) (* 2.0 (- (* x y) (* z w))))
+    (setf (aref r 0 2) (* 2.0 (+ (* x z) (* y w))))
+    (setf (aref r 1 0) (* 2.0 (+ (* x y) (* z w))))
+    (setf (aref r 1 1) (- 1.0 (* 2.0 (+ (* x x) (* z z)))))
+    (setf (aref r 1 2) (* 2.0 (- (* y z) (* x w))))
+    (setf (aref r 2 0) (* 2.0 (- (* x z) (* y w))))
+    (setf (aref r 2 1) (* 2.0 (+ (* y z) (* x w))))
+    (setf (aref r 2 2) (- 1.0 (* 2.0 (+ (* x x) (* y y)))))
+    r))
+
+(defun geom::%gltf-material-color (j prim)
+  (let ((mi (gethash "material" prim)))
+    (if (null mi)
+        nil
+        (let* ((m (aref (gethash "materials" j) mi))
+               (pbr (gethash "pbrMetallicRoughness" m)))
+          (if (null pbr)
+              nil
+              (let ((f (gethash "baseColorFactor" pbr)))
+                (if f (geom:vec3 (aref f 0) (aref f 1) (aref f 2)) nil)))))))
+
+(defun geom::%identity-rotation-p (r)
+  (and (> (aref r 0 0) 0.999999) (> (aref r 1 1) 0.999999)
+       (> (aref r 2 2) 0.999999)))
+
+(defun geom::%uniform-scale-p (s)
+  (and (< (abs (- (first s) (second s))) 1e-9)
+       (< (abs (- (second s) (third s))) 1e-9)))
+
+;; One glTF node built under PARENT with PSCALE the scale accumulated above
+;; it: the local translation is scaled by what is above (that is where a
+;; parent's scale lands on a child's position), the node keeps only rotation
+;; and translation, and the subtree's solids are consed onto OUT.
+(defun geom::%gltf-walk (j idx parent pscale sources path color label out)
+  (let* ((node (aref (gethash "nodes" j) idx))
+         (trs (geom::%gltf-node-trs node path))
+         (tr (first trs))
+         (r (second trs))
+         (own (third trs))
+         (scale
+          (list (* (first pscale) (float (first own) 1.0))
+                (* (second pscale) (float (second own) 1.0))
+                (* (third pscale) (float (third own) 1.0)))))
+    (when (gethash "skin" node)
+      (error "geom:read-gltf: node ~a of ~a carries a skin, which this build does not read"
+             idx path))
+    (when (and (not (geom::%uniform-scale-p pscale))
+               (not (geom::%identity-rotation-p r)))
+      (error "geom:read-gltf: a non-uniform scale above a rotated node in ~a does not stay rigid"
+             path))
+    (let ((gnode
+           (geom:make-node :transform (geom:make-transform :translation
+                                                           (geom:vec3 (*
+                                                                       (first
+                                                                        pscale)
+                                                                       (aref tr
+                                                                             0))
+                                                                      (*
+                                                                       (second
+                                                                        pscale)
+                                                                       (aref tr
+                                                                             1))
+                                                                      (*
+                                                                       (third
+                                                                        pscale)
+                                                                       (aref tr
+                                                                        2)))
+                                                           :rotation r)
+                           :parent parent))
+          (acc out))
+      (let ((mi (gethash "mesh" node)))
+        (when mi
+          (let ((mesh (aref (gethash "meshes" j) mi)))
+            (dolist (prim (coerce (gethash "primitives" mesh) 'list))
+              (let ((mode (geom::%jn prim "mode" 4)))
+                (when (not (= mode 4))
+                  (error "geom:read-gltf: primitive mode ~a in ~a; this build reads triangles (mode 4)"
+                         mode path)))
+              (let ((attrs (gethash "attributes" prim)))
+                (when (null (gethash "POSITION" attrs))
+                  (error "geom:read-gltf: a primitive with no POSITION in ~a"
+                         path))
+                (let* ((accessors (gethash "accessors" j))
+                       (points
+                        (geom::%gltf-positions j
+                         (aref accessors (gethash "POSITION" attrs)) sources
+                         path))
+                       (ii (gethash "indices" prim))
+                       (facets
+                        (if ii
+                            (geom::%gltf-index-facets j (aref accessors ii)
+                                                      sources path)
+                            (let ((fs '()) (n (length points)))
+                              (do ((k (- n 3) (- k 3)))
+                                  ((< k 0))
+                                (push (list k (+ k 1) (+ k 2)) fs))
+                              fs)))
+                       (solid
+                        (geom::%build-solid points facets
+                                            :color
+                                            (if color
+                                                color
+                                                (geom::%gltf-material-color j
+                                                 prim))
+                                            :label
+                                            (if label
+                                                label
+                                                (let ((mn
+                                                       (gethash "name" mesh)))
+                                                  (if mn
+                                                      mn
+                                                      (gethash "name"
+                                                               node)))))))
+                  (when (or (not (= (first scale) 1.0))
+                            (not (= (second scale) 1.0))
+                            (not (= (third scale) 1.0)))
+                    (geom:nscale solid scale))
+                  (geom:attach gnode solid)
+                  (setq acc (cons solid acc))))))))
+      (let ((kids (gethash "children" node)))
+        (when kids
+          (dolist (k (coerce kids 'list))
+            (setq acc
+             (geom::%gltf-walk j k gnode scale sources path color label acc)))))
+      acc)))
+
+;; glTF 2.0, either carrier: a .glb (JSON chunk + BIN chunk) or a .gltf whose
+;; buffers are .bin files beside it or base64 data: uris. Answers the LIST of
+;; solids the scene poses, attached under one shared root node -- what
+;; scene:add splices and geom:bounds measures as one; a single-mesh file is a
+;; list of one.
+(defun geom:read-gltf (path &key color label)
+  (let* ((glb (geom::%bytes-match (geom::%head-bytes path 12) 0 "glTF"))
+         (envelope
+          (if glb
+              (geom::%read-glb-envelope path)
+              (let ((bytes (geom::%file-bytes path)))
+                (list (geom::%utf8-string bytes 0 (length bytes)) nil))))
+         (j (rontolisp:json-parse (first envelope)))
+         (bin-offset (second envelope)))
+    (let ((asset (gethash "asset" j)))
+      (when asset
+        (let ((v (gethash "version" asset)))
+          (when (and v (not (geom::%string-prefix-p "2." v)))
+            (error
+             "geom:read-gltf: ~a is glTF version ~a; this build reads glTF 2.0"
+             path v)))))
+    (let ((req (gethash "extensionsRequired" j)))
+      (when (and req (> (length req) 0))
+        (error "geom:read-gltf: ~a requires the ~a extension, which this build does not read"
+               path (aref req 0))))
+    (let ((sk (gethash "skins" j)))
+      (when (and sk (> (length sk) 0))
+        (error
+         "geom:read-gltf: ~a carries skins, which this build does not read"
+         path)))
+    (let ((an (gethash "animations" j)))
+      (when (and an (> (length an) 0))
+        (error
+         "geom:read-gltf: ~a carries animations, which this build does not read"
+         path)))
+    (let ((nodes (gethash "nodes" j)))
+      (when (or (null nodes) (= (length nodes) 0))
+        (error "geom:read-gltf: ~a carries no nodes" path))
+      (let ((sources '()) (bufs (gethash "buffers" j)))
+        (when bufs
+          (dolist (b (coerce bufs 'list))
+            (push (geom::%gltf-buffer-source b path bin-offset) sources)))
+        (setq sources (nreverse sources))
+        (let* ((scenes (gethash "scenes" j))
+               (roots
+                (if (and scenes (> (length scenes) 0))
+                    (coerce
+                     (gethash "nodes" (aref scenes (geom::%jn j "scene" 0)))
+                     'list)
+                    ;; no scene: every node no other node names as a child
+                    (let ((childp (make-hash-table)) (all '()))
+                      (dotimes (i (length nodes))
+                        (let ((kids (gethash "children" (aref nodes i))))
+                          (when kids
+                            (dotimes (k (length kids))
+                              (setf (gethash (aref kids k) childp) t)))))
+                      (do ((i (- (length nodes) 1) (- i 1)))
+                          ((< i 0))
+                        (when (not (gethash i childp)) (push i all)))
+                      all)))
+               (root (geom:make-node))
+               (out '()))
+          (dolist (idx roots)
+            (setq out
+                  (geom::%gltf-walk j idx root (list 1.0 1.0 1.0) sources path
+                                    color label out)))
+          (nreverse out))))))
+
 (defun geom::%extension-format (path)
   (let* ((s (string path)) (n (length s)) (dot -1))
     (do ((i (- n 1) (- i 1)))
@@ -1057,6 +2145,9 @@
   (let ((kind (if format format (geom::%model-format path))))
     (cond ((eq kind :obj) (geom:read-obj path :color color :label label))
           ((eq kind :stl) (geom:read-stl path :color color :label label))
+          ((eq kind :ply) (geom:read-ply path :color color :label label))
+          ((or (eq kind :gltf) (eq kind :glb))
+           (geom:read-gltf path :color color :label label))
           ((null kind)
            (error "geom:read-model: cannot tell what format ~a is; pass :format"
                   path))
