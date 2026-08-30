@@ -1334,6 +1334,15 @@ at each backend's coercion FUNNEL, never by wrapping operator sites:
 - **What still traps on wasm-GC**: anything not funneled through `_int_val`/`_as_f64`
   — `(car 5)`, division by zero, kinded/generic aref casts, the limb-tier boundaries
   above. The catchable family is exactly the two funnels' reach.
+- **The funnels' reach is wider than arithmetic**, which is the part worth knowing:
+  a STORE into a packed float array goes through the same `_dbl` / `_as_f64`, so
+  `(setf (aref #d(1.0 2.0 3.0) 0) "x")` moved with them. Before todo 592 the JVM
+  leaked a raw `ClassCastException` there; now all four answer the interpreter's own
+  `Expected number, got: "x"`, catchable. Found 2026-08-31 by `JvmFloatArrayTest`'s
+  `nonRealStoreIsATypeError` / `singleNonRealStoreIsATypeError`, which pinned the
+  raw CCE and are now the pins for the shared message — the only two tests in the
+  repo that noticed, and they are the reason to run the WHOLE suite after a change
+  to a shared runtime helper rather than the classes that name it.
 - **Class divergence, deliberate**: interpreter and JVM signal `type-error`; the wasm
   pair synthesizes `simple-error` (the payload is instance-less — the
   undefined-function stub's gate problem exactly: the fixed runtime helpers are
