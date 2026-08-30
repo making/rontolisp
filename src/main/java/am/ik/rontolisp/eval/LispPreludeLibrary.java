@@ -1539,18 +1539,39 @@ public final class LispPreludeLibrary {
 				          (while (< x 0.5) (setq x (* x 2.0)) (setq e (- e 1)))
 				          (values x e s)))))
 				""");
+		// A LIST operand is read through a cons cursor rather than indexed with elt --
+		// elt on a list is an nth walk from the head, so the obvious loop is quadratic
+		// (the same defect the replace list SOURCE arm and count-if-not already avoid).
+		// The cursor is the map-into shape with the advance folded into the read:
+		// (if (consp c) (prog1 (car c) (setq c (cdr c))) (elt seq i)). A NON-list
+		// operand pins a nil cursor and keeps indexing; a list whose cursor has run out
+		// -- past an out-of-range bound, or onto a dotted tail -- falls back to the very
+		// elt call the body used to make, answer and error alike. That fallback is what
+		// keeps an invalid bound answering exactly what it always did, which
+		// SequenceScanFast declines precisely so this body keeps owning it. Folding the
+		// advance into the read is worth the prog1: a SEPARATE (if (consp c) (cdr c) c)
+		// step costs a second consp call per element, which on the interpreter's
+		// declined path (a string, where the cursor never fires) measured +26%/+36%
+		// against +7%/+16% for this shape.
 		SOURCES.put(LispNames.MISMATCH, """
 				(defun mismatch (seq1 seq2 &key (test #'eql) key (start1 0) end1 (start2 0) end2 from-end)
 				  (let* ((e1 (or end1 (length seq1)))
 				         (e2 (or end2 (length seq2)))
 				         (i start1)
 				         (j start2)
+				         (c1 (if (and (listp seq1) (integerp start1) (>= start1 0))
+				                 (nthcdr start1 seq1)
+				                 nil))
+				         (c2 (if (and (listp seq2) (integerp start2) (>= start2 0))
+				                 (nthcdr start2 seq2)
+				                 nil))
 				         (result nil)
 				         (done nil))
 				    (while (not done)
 				      (cond ((and (>= i e1) (>= j e2)) (setq done t))
 				            ((or (>= i e1) (>= j e2)) (setq result i) (setq done t))
-				            (t (let ((a (elt seq1 i)) (b (elt seq2 j)))
+				            (t (let ((a (if (consp c1) (prog1 (car c1) (setq c1 (cdr c1))) (elt seq1 i)))
+				                     (b (if (consp c2) (prog1 (car c2) (setq c2 (cdr c2))) (elt seq2 j))))
 				                 (if (funcall test (if key (funcall key a) a)
 				                              (if key (funcall key b) b))
 				                     (progn (setq i (+ i 1)) (setq j (+ j 1)))
@@ -1590,22 +1611,41 @@ public final class LispPreludeLibrary {
 				               ok)))
 				    (cmp tree-1 tree-2)))
 				""");
+		// search: the same cons-cursor treatment as mismatch above, one level harder
+		// because the inner walk RESTARTS at every outer position. The needle window
+		// never moves, so its cursor is seeded once (h1) and copied into the inner loop;
+		// the haystack's cursor advances one cdr per OUTER step (h2) and is likewise
+		// copied for the inner walk. Two lists are therefore O(n*m) rather than
+		// O(n^2*m). Everything the cursor cannot answer -- a non-list operand, a
+		// negative or non-integer start, a bound past the end -- pins a nil cursor and
+		// reads through the original elt call.
 		SOURCES.put(LispNames.SEARCH, """
 				(defun search (seq1 seq2 &key (start1 0) end1 (start2 0) end2 (test #'eql) key from-end)
 				  (let* ((e1 (or end1 (length seq1)))
 				         (e2 (or end2 (length seq2)))
 				         (w (- e1 start1))
+				         (h1 (if (and (listp seq1) (integerp start1) (>= start1 0))
+				                 (nthcdr start1 seq1)
+				                 nil))
+				         (h2 (if (and (listp seq2) (integerp start2) (>= start2 0))
+				                 (nthcdr start2 seq2)
+				                 nil))
 				         (result nil))
 				    (do ((pos start2 (+ pos 1)))
 				        ((or (> (+ pos w) e2) (and result (not from-end))) result)
-				      (let ((ok t))
+				      (let ((ok t) (c1 h1) (c2 h2))
 				        (do ((i 0 (+ i 1)))
 				            ((or (>= i w) (not ok)))
-				          (let ((a (elt seq1 (+ start1 i)))
-				                (b (elt seq2 (+ pos i))))
+				          (let ((a (if (consp c1)
+				                       (prog1 (car c1) (setq c1 (cdr c1)))
+				                       (elt seq1 (+ start1 i))))
+				                (b (if (consp c2)
+				                       (prog1 (car c2) (setq c2 (cdr c2)))
+				                       (elt seq2 (+ pos i)))))
 				            (unless (funcall test (if key (funcall key a) a)
 				                             (if key (funcall key b) b))
 				              (setq ok nil))))
+				        (setq h2 (if (consp h2) (cdr h2) h2))
 				        (when ok (setq result pos))))))
 				""");
 		// count-if-not takes the full CL keyword set, unlike count-if (whose two-argument

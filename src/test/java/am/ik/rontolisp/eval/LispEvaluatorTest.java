@@ -4245,6 +4245,78 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void searchAndMismatchWalkAListWithACursorRatherThanIndexingItWithElt() {
+		// The prelude defuns used to index BOTH operands with (elt seq i), which on a
+		// list is an nth walk from the head -- so a two-list search was O(n^2*m) and a
+		// two-list mismatch O(n^2) on every backend that runs the defun. They now read a
+		// list through a cons cursor. (funcall #'search ...) is that defun reached
+		// directly, never the native arm, so it is what these assertions exercise; the
+		// answers are unchanged, which is the whole point.
+		String both = """
+				(defun both (label fast slow)
+				  (if (equal fast slow) fast (list :diverged label fast slow)))
+				""";
+		assertThat(evalMulti(both + """
+				(list (both :list (search '(3 4) '(1 2 3 4 5)) (funcall #'search '(3 4) '(1 2 3 4 5)))
+				      (both :start2 (search '(3 4) '(1 2 3 4 5) :start2 3)
+				            (funcall #'search '(3 4) '(1 2 3 4 5) :start2 3))
+				      (both :from-end (search '(3 4) '(1 2 3 4 3 4) :from-end t)
+				            (funcall #'search '(3 4) '(1 2 3 4 3 4) :from-end t))
+				      (both :needle-window (search '(9 3 4 9) '(1 2 3 4 5) :start1 1 :end1 3)
+				            (funcall #'search '(9 3 4 9) '(1 2 3 4 5) :start1 1 :end1 3))
+				      (both :end2 (search '(3 4) '(1 2 3 4 5) :end2 3)
+				            (funcall #'search '(3 4) '(1 2 3 4 5) :end2 3))
+				      (both :list-in-string (search '(#\\b #\\c) "abcd")
+				            (funcall #'search '(#\\b #\\c) "abcd"))
+				      (both :string-in-list (search "bc" '(#\\a #\\b #\\c #\\d))
+				            (funcall #'search "bc" '(#\\a #\\b #\\c #\\d))))
+				""").print()).isEqualTo("(2 NIL 4 2 NIL 1 1)");
+		// A bound the list does not reach, and a negative one: the cursor cannot answer
+		// either, so the read falls back to the elt call the body always made and the
+		// answer is the one it always gave. SequenceScanFast DECLINES all of these
+		// (.kb/seq-coerce-runtime.md), which is why this body still has to own them.
+		assertThat(evalMulti(both + """
+				(list (both :end2-past (search '(1 2) '(1 2 3) :end2 99)
+				            (funcall #'search '(1 2) '(1 2 3) :end2 99))
+				      (both :start2-past (search '(1 2) '(1 2 3) :start2 99)
+				            (funcall #'search '(1 2) '(1 2 3) :start2 99))
+				      (both :start1-past (search '(1 2 3) '(1 2 3) :start1 99)
+				            (funcall #'search '(1 2 3) '(1 2 3) :start1 99))
+				      (both :end1-past (search '(1 2 3) '(1 2 3) :start1 1 :end1 99)
+				            (funcall #'search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
+				      (both :start2-negative (search '(1 2 3) '(1 2 3) :start2 -1)
+				            (funcall #'search '(1 2 3) '(1 2 3) :start2 -1))
+				      (both :start1-negative (search '(1 2 3) '(1 2 3) :start1 -1)
+				            (funcall #'search '(1 2 3) '(1 2 3) :start1 -1))
+				      (both :dotted (search '(1) '(1 2 . 3)) (funcall #'search '(1) '(1 2 . 3)))
+				      (both :m-end1-past (mismatch '(1 2 3) '(1 2 3) :end1 99)
+				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end1 99))
+				      (both :m-end2-past (mismatch '(1 2 3) '(1 2 3) :end2 99)
+				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end2 99)))
+				""").print()).isEqualTo("(0 NIL 0 NIL 0 NIL 0 3 3)");
+		// The shapes the arm declines land in this body, so the cursor has to serve them.
+		assertThat(evalMulti("""
+				(list (funcall #'search '(3 4) '(1 2 3 4 5) :key #'identity)
+				      (funcall #'search '(3 4) '(1 2 3 4 5) :test #'eql)
+				      (funcall #'mismatch '(1 2 3) '(1 2 4) :from-end t)
+				      (funcall #'mismatch '(1 2 3) "abc")
+				      (funcall #'mismatch '(9 1 2 3) '(1 2 3) :start1 1))
+				""").print()).isEqualTo("(2 2 2 0 NIL)");
+		// Long enough that the old nth-per-element walk showed: the answers are the same,
+		// the walk is not.
+		assertThat(evalMulti("""
+				(let ((long (let ((out nil))
+				              (dotimes (i 400) (setq out (cons (mod i 7) out)))
+				              (nreverse out))))
+				  (list (funcall #'search '(3 5) long)
+				        (funcall #'search '(5 6) long)
+				        (funcall #'search '(5 6) long :from-end t)
+				        (funcall #'mismatch long long)
+				        (funcall #'mismatch long (append (butlast long) (list 99)))))
+				""").print()).isEqualTo("(NIL 5 397 NIL 399)");
+	}
+
+	@Test
 	void evalTreeEqual() {
 		assertThat(eval("(tree-equal (list 1 (list 2 3)) (list 1 (list 2 3)))").print()).isEqualTo("T");
 		assertThat(eval("(tree-equal (list 1 (list 2 3)) (list 1 (list 2 4)))").print()).isEqualTo("NIL");

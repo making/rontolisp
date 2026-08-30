@@ -309,17 +309,133 @@ the eql scan.
 prelude's inner loop over two lists is O(n^2*m) and `mismatch` over two lists is
 O(n^2) -- the same defect `.kb/sequence-op-runtimes.md` records fixing in
 `replace`'s list SOURCE arm. Materializing each list into a `LispVal[]` once makes
-the served path O(n*m) / O(n). The compile paths still have the quadratic walk;
-they still have it, and it bites at size: `(search '(3 5) <n-element list>)` on
-wasm-GC is 0.05 / 0.20 / 0.70 / 2.65 ms for n = 250 / 500 / 1000 / 2000 -- a clean
-4x per doubling -- against **0.06 ms** for the interpreter's arm at n=2000, so a
-compiled program is now 44x (WASM) to 740x (JVM) SLOWER than the interpreter on a
-long-list `search`. That is not this arm's to fix: the honest repair is the
-`nthcdr`/`cdr` cursor rewrite in the PRELUDE SOURCE, which moves all four backends
-at once, and it is carried as `.todo/593` with the ladder above. Nothing measured
-today passes a long list (`uiop-utility.lisp`'s `frob-substrings`,
-`cffi-rontolisp.lisp` and `examples/db/database-url.lisp` all search strings), so
-it is a latent complexity bug rather than a profile.
+the served path O(n*m) / O(n). **The three compile paths kept the quadratic
+walk until hours later the same day**, when the prelude source itself grew a cons
+cursor; that is the section below, and it is what makes the invariant at the top
+of this file hold at SIZE as well as at n = 46.
+
+## The prelude bodies walk a list with a cursor, not with `elt`
+
+Measured 2026-08-31, hours after the arm above landed.
+
+`search` and `mismatch` indexed BOTH operands with `(elt seq i)`, which for a
+list is an `nth` walk from the head. The interpreter's arm hid it for the shapes
+it serves; the JVM and both WASM backends run the `defun`, so a two-list `search`
+was O(n^2*m) and a two-list `mismatch` O(n^2) there. At n = 2000 a compiled
+program was 44x (WASM) to 740x (JVM) SLOWER than the interpreter on a long-list
+`search`, which is the wrong way round and was entirely the `nth` walk.
+
+Both bodies now seed a cons cursor and read through it. **The cursor is not a
+`(null cell)` STOP** -- the `replace` list-source arm could take one, and changed
+an invalid call's answer doing it (`.kb/sequence-op-runtimes.md`); this pair
+cannot, because `SequenceScanFast` DECLINES every out-of-range bound precisely so
+these bodies keep owning what they answer there. The read is therefore
+
+```lisp
+(if (consp c) (prog1 (car c) (setq c (cdr c))) (elt seq i))
+```
+
+-- the `map-into` cursor shape (`LispMacroExpander.readElement`) with the advance
+folded into the read. A non-list operand pins a nil cursor and keeps indexing; a
+list whose cursor has run out -- past an out-of-range bound, or onto a dotted
+tail -- falls back to the very `elt` call the body used to make, answer and error
+alike. `search` seeds the needle cursor once (its `start1`/`end1` window never
+moves) and the haystack cursor advances one `cdr` per OUTER position, both copied
+into the inner walk, which restarts at every position.
+
+**Folding the advance into the read is what makes it free for a string.** A
+separate `(if (consp c) (cdr c) c)` step form costs a SECOND `consp` call per
+element, and on the interpreter's declined path -- a string, where the cursor
+never fires -- that is the whole regression. Three shapes, interpreter, 2,000
+timed calls after 2,000 warm-up, `(search "e-001" <46-char string>)` /
+`(search "zzzz" ...)` / `(search '(3 5) <2000-element list>)`, ms for the batch:
+
+| shape | string hit | string miss | 2000-element list |
+| --- | ---: | ---: | ---: |
+| the `elt`-indexed body | 230 | 280 | 223 |
+| cursor, separate `consp` advance | 290 | 379 | 147 |
+| cursor, `prog1` advance (**taken**) | 246 | 325 | 136 |
+| `prog1` plus a hoisted list flag | 242 | 319 | 146 |
+
+The hoisted flag buys nothing the `prog1` has not already bought and duplicates
+the `elt` form, so the two-line shape wins.
+
+### The ladder
+
+Apple M4 Max, one locked run, before and after in the same acquisition. Haystack
+is `(mod i 7)` over n elements, needle `'(3 5)` -- which never occurs, so every
+outer position is attempted. 200 timed iterations after a 200-iteration warm-up,
+**ms per call**. The wasm-GC backend has no JIT, so its ladder is the proof:
+doubling n used to QUADRUPLE the time and now DOUBLES it.
+
+| n | 250 | 500 | 1000 | 2000 | 4000 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| WASM p1 `(search '(3 5) ...)` before | 0.043 | 0.158 | 0.603 | 2.29 | 8.80 |
+| WASM p1 `search` **after** | 0.008 | 0.015 | 0.028 | **0.055** | **0.103** |
+| WASM p1 `(mismatch <n> <itself>)` before | 0.068 | 0.255 | 1.00 | 3.98 | 15.4 |
+| WASM p1 `mismatch` **after** | 0.005 | 0.008 | 0.018 | **0.035** | **0.073** |
+| `--component` `search` before / after | 0.048 / 0.010 | 0.158 / 0.015 | 0.59 / 0.028 | 2.33 / 0.053 | 8.83 / 0.105 |
+| `--component` `mismatch` before / after | 0.068 / 0.003 | 0.253 / 0.010 | 1.00 / 0.018 | 3.97 / 0.035 | 15.4 / 0.068 |
+| JVM `.class` `search` before | 0.063 | 0.198 | 0.71 | 3.10 | 12.6 |
+| JVM `.class` `search` **after** | 0.015 | 0.018 | 0.050 | **0.005** | **0.013** |
+| JVM `.class` `mismatch` before | 0.095 | 0.34 | 1.16 | 4.77 | 20.7 |
+| JVM `.class` `mismatch` **after** | 0.015 | 0.015 | 0.035 | **0.010** | **0.020** |
+| interpreter, the native ARM (unchanged) | 0.018 | 0.013 | 0.033 | 0.033 | 0.055 |
+
+Every after-row doubles with n where the before-row quadrupled; the JVM's
+after-rows fall as n grows because the JIT gets more iterations to compile, which
+is what a linear loop looks like at this scale. At n = 4000 the compile paths are
+85x (WASM) to 1,000x (JVM) faster than they were, and a compiled program is once
+again FASTER than the interpreter on this path instead of 44-740x slower.
+
+The `defun` reached directly with `(funcall #'search ...)`, 20 timed iterations,
+ms per call at n = 2000: interpreter `search` 11.5 -> **8.0**, `mismatch` 10.8 ->
+**5.8** (the residue is the tree-walking interpreter's per-node cost, not the
+walk); JVM 2.95 -> **0.02**; WASM p1 2.30 -> **0.05**.
+
+### What it costs
+
+**The declined path pays 12-15%.** The interpreter's arm declines `:key`, a
+non-`eql` `:test` and every out-of-range bound into these bodies, and a string
+operand there now pays one `consp` per element per operand that it did not.
+Interpreter, us per call:
+
+| form | before | after | |
+| --- | ---: | ---: | ---: |
+| `(search "E-001" <46 chars> :key #'char-upcase)` -- declined | 120 | 138 | +15% |
+| `(funcall #'search "e-001" <46 chars>)` | 114 | 130 | +14% |
+| `(funcall #'search "zzzz" <46 chars>)` -- a full miss | 151 | 171 | +13% |
+| `(funcall #'mismatch <46 chars> <itself>)` | 112 | 126 | +12% |
+| `(funcall #'search '(3 4) '(1 2 ... 10))` -- a short list | 20.8 | 21.5 | +3% |
+| `(search "e-001" <46 chars>)` -- the ARM, untouched | 1.0 | 1.0 | -- |
+
+The same rows on the three compile paths are 1.5-2.0 us before and after: the
+cursor branch is free once compiled. That trade -- 12-15% on an interpreter path
+that already costs 100+ us, for a complexity class on three backends -- is why
+the fallback was kept rather than replaced with a `(null cell)` stop.
+
+**The bodies grew; the SITES did not.** wasm-GC, one call site:
+
+| program | wasm | `--optimize=size` | JVM `.class` |
+| --- | ---: | ---: | ---: |
+| `(print 1)` | 496 -> 496 | 496 -> 496 | 3,004 -> 3,004 |
+| one `search` | 26,145 -> 26,901 | 24,443 -> 25,077 | 40,002 -> 41,534 |
+| one `mismatch` | 25,732 -> 26,426 | 24,385 -> 24,953 | 38,821 -> 40,266 |
+| both | 32,512 -> 33,962 | 29,965 -> 31,167 | 45,526 -> 48,334 |
+
++634 B of `--optimize=size` wasm for `search`, +568 for `mismatch`, and **0 for a
+program that calls neither**. The marginal cost of a SECOND `search` site is 42 B
+at `--optimize=size` before and after -- unchanged, because the `defun` is a
+shared callee (`.kb/sequence-op-runtimes.md`'s per-site table still reads 15 B
+for the argument-free shape it measures). This is the opposite sign to
+`replace`'s list-source cursor, which SHRANK its helper: that change replaced the
+`elt` loop, this one adds a branch in front of it and keeps it.
+
+Nothing shipped passes a long list -- `uiop-utility.lisp`'s `frob-substrings`,
+`cffi-rontolisp.lisp`, `examples/db/database-url.lisp` and
+`bench-report/programs/string.lisp` all search STRINGS -- so this was a latent
+complexity bug rather than a profile, and the numbers above are what a consumer
+that does pass one would have paid.
 
 ## Re-evaluation triggers
 
@@ -341,12 +457,24 @@ it is a latent complexity bug rather than a profile.
   argument order, the `:from-end` scan direction -- the arm has to follow it or
   start declining the shape, in the same commit. The ci-spec case below is what
   catches the drift, because the interpreter runs the arm and three backends run
-  the defun.
-- **The declined shapes still cost 110-120 us.** `:key`, a user `:test` and an
-  out-of-range bound run the prelude at its old price. Serving them means calling
-  back into `apply` per element, which is a different trade (~0.4 us a pair
-  rather than 2.5, not 0.01) and a much wider agreement surface; measure a real
-  consumer before taking it.
+  the defun. The cursor rewrite is the worked example: it changed no answer at
+  all (an `elt` fallback wherever the cursor cannot reach), so the arm needed no
+  edit -- 8,042 randomised comparisons of the old body against the new, on all
+  four backends, with every representation, every bounding keyword, out-of-range
+  and negative bounds, dotted lists and a non-sequence.
+- **An out-of-range bound is the prelude's to answer, and a `(null cell)` cursor
+  stop would take that away.** `replace`'s list-source arm took one and changed
+  what an invalid call answers (`.kb/sequence-op-runtimes.md`); here the arm
+  declines those bounds specifically so this body owns them, so the cursor falls
+  back to `elt` instead of stopping. If the family ever agrees on a uniform
+  error for an out-of-range bound, the honest fix is a check at the top of both
+  bodies -- and the arm's bound declines can be lifted in the same commit.
+- **The declined shapes cost 126-171 us**, up 12-15% from the `elt`-indexed body:
+  the cursor's `consp` test per element is paid by a string operand that never
+  uses it. `:key`, a user `:test` and an out-of-range bound run the prelude at
+  that price. Serving them means calling back into `apply` per element, which is
+  a different trade (~0.4 us a pair rather than 2.5, not 0.01) and a much wider
+  agreement surface; measure a real consumer before taking it.
 - **`mismatch` ignores `:from-end` on ALL FOUR backends**, documented as a "Lite"
   deviation. If it is ever made CLHS-correct, that is a prelude-SOURCE change --
   it moves every backend at once -- and the arm's decline can then be lifted in
@@ -373,7 +501,9 @@ it is a latent complexity bug rather than a profile.
   `search-and-mismatch-across-representations`, all four backends: every
   representation and keyword the scan arm serves, and the ones it declines
   (`:key`, `#'char-equal`, an out-of-range `:end2`, `start1 > end1`, `mismatch
-  :from-end`) in one program.
+  :from-end`) in one program, plus the list-cursor rows the rewrite below added:
+  a list in either operand, a bound past the end and a negative one, a dotted
+  list, and a 400-element haystack.
 - `LispEvaluatorTest.theNativeSearchAndMismatchArmAnswerWhatThePreludeDefunAnswers`
   and `#theNativeSearchAndMismatchArmDeclineEverythingTheyCannotAnswerIdentically`
   -- every case checked BOTH against a literal expectation and against
@@ -385,6 +515,13 @@ it is a latent complexity bug rather than a profile.
   -- the same program on the backends that run the `defun`. The wasm one must use
   `compileAndRunPrelude`, not `compileAndRun`: without the prelude splice the
   module has no `search` at all and traps.
+- `LispEvaluatorTest.searchAndMismatchWalkAListWithACursorRatherThanIndexingItWithElt`,
+  `JvmLispCompilerTest.compileSearchAndMismatchWalkAListWithACursor` and
+  `WasmLispCompilerIntegrationTest.searchAndMismatchWalkAListWithACursor` -- the
+  cursor's own surface: a list in either operand and both, the needle window, a
+  bound past the end and a negative one, a dotted list, and a 400-element list
+  whose answers the quadratic body gave just as slowly. The interpreter one goes
+  through `(funcall #'search ...)`, which is the `defun` and never the arm.
 - The behavior is pinned where it already was:
   `LispEvaluatorTest.evalCopyTreeAndSearch`,
   `LispEvaluatorTest.coerceConvertsBetweenListVectorAndString` /
