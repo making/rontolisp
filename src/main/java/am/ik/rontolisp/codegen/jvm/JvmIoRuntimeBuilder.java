@@ -443,17 +443,30 @@ final class JvmIoRuntimeBuilder {
 	 */
 	@Nullable private final FieldrefConstant systemErr;
 
+	/**
+	 * {@code _strv}, minted only when the array runtime exists: a string reaching a
+	 * runtime body here can then be a MUTABLE CHARACTER VECTOR (every subseq/copy-seq
+	 * result is one, {@code .todo/559} step 2), and the body's {@code (String)} cast
+	 * needs the rendered form. Without the array runtime no character vector can exist
+	 * and the reference must not be minted -- the method it names is not emitted.
+	 */
+	@Nullable private final MethodrefConstant strvRef;
+
 	private JvmIoRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo) {
+			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo,
+			boolean arrayRuntime) {
 		this.sockets = sockets;
 		this.errorOutput = errorOutput;
 		this.listDirectory = listDirectory;
 		this.fileMeta = fileMeta;
 		this.packedSequenceIo = packedSequenceIo ? PackedSequenceIo.mint(cp) : null;
+		this.strvRef = arrayRuntime ? cp.addMethodref(thisClass, cp
+			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
+				: null;
 		this.systemErr = errorOutput ? cp.addFieldref(cp.addClass(cp.addUtf8("java/lang/System")),
 				cp.addNameAndType(cp.addUtf8("err"), cp.addUtf8("Ljava/io/PrintStream;"))) : null;
 		this.cp = cp;
@@ -652,10 +665,11 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo) {
+			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo,
+			boolean arrayRuntime) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
 				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
-				errorOutput, listDirectory, fileMeta, packedSequenceIo);
+				errorOutput, listDirectory, fileMeta, packedSequenceIo, arrayRuntime);
 	}
 
 	/**
@@ -1276,6 +1290,7 @@ final class JvmIoRuntimeBuilder {
 		List<Integer> code = new ArrayList<>();
 		// p = ((String) path).substring(1, length - 1);
 		code.add(Opcode.ALOAD_0);
+		emitStrvOnStack(code);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringClass.index());
 		code.add(Opcode.ASTORE_2);
@@ -1357,6 +1372,7 @@ final class JvmIoRuntimeBuilder {
 		List<Integer> code = new ArrayList<>();
 		// p = ((String) path).substring(1, length - 1);
 		code.add(Opcode.ALOAD_0);
+		emitStrvOnStack(code);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringClass.index());
 		code.add(Opcode.ASTORE_1);
@@ -1675,8 +1691,20 @@ final class JvmIoRuntimeBuilder {
 	 * stripping every path-taking helper starts with (a rontolisp string value carries
 	 * its quotes).
 	 */
+	// Renders a mutable character vector on the stack into the runtime string when the
+	// array runtime exists (a no-op call for any other value); without it no character
+	// vector can exist and nothing is emitted.
+	private void emitStrvOnStack(List<Integer> code) {
+		if (this.strvRef == null) {
+			return;
+		}
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.strvRef.index());
+	}
+
 	private void emitStripQuotes(List<Integer> code, int argLoad, int store, int load) {
 		code.add(argLoad);
+		emitStrvOnStack(code);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringClass.index());
 		code.add(store);
@@ -1720,6 +1748,9 @@ final class JvmIoRuntimeBuilder {
 		int joined = a.label();
 		// p = ((String) path).substring(1, length - 1);
 		a.aload(0);
+		if (this.strvRef != null) {
+			a.invokestatic(this.strvRef);
+		}
 		a.checkcast(this.stringClass);
 		a.astore(1);
 		a.aload(1);
@@ -2005,6 +2036,7 @@ final class JvmIoRuntimeBuilder {
 		List<Integer> code = new ArrayList<>();
 		// content = ((String) str).substring(1, length - 1);
 		code.add(Opcode.ALOAD_0);
+		emitStrvOnStack(code);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringClass.index());
 		code.add(Opcode.ASTORE_2);
@@ -3411,6 +3443,7 @@ final class JvmIoRuntimeBuilder {
 		}
 		// content = ((String) str).substring(1, length - 1);
 		code.add(Opcode.ALOAD_0);
+		emitStrvOnStack(code);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringClass.index());
 		code.add(Opcode.ASTORE_2);
@@ -3540,6 +3573,7 @@ final class JvmIoRuntimeBuilder {
 		List<Integer> code = new ArrayList<>();
 		// content = ((String) str).substring(1, length - 1);
 		code.add(Opcode.ALOAD_0);
+		emitStrvOnStack(code);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringClass.index());
 		code.add(Opcode.ASTORE_1);

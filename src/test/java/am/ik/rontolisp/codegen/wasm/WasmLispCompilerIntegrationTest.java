@@ -10224,6 +10224,8 @@ class WasmLispCompilerIntegrationTest {
 			(print (funcall #'nstring-upcase (copy-seq "ab")))
 			(print (let ((s (make-string 3 :initial-element #\\a)))
 			         (list (eq s (nstring-upcase s)) s)))
+			;; A copy-seq result is a mutable character vector too (.todo/559 step 2),
+			;; so the destructive case family writes it in place like the interpreter.
 			(print (let ((s (copy-seq "ab"))) (nstring-upcase s) s))
 			(print (list (lisp-implementation-type) (software-type) (software-version)))
 			(print (list (machine-type) (machine-version) (machine-instance)))
@@ -10241,7 +10243,7 @@ class WasmLispCompilerIntegrationTest {
 			"Hello World"
 			"AB"
 			(T "AAA")
-			"ab"
+			"AB"
 			("rontolisp" "Unix" NIL)
 			("WASM32" NIL NIL)
 			(NIL NIL)
@@ -15010,15 +15012,12 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite() throws Exception {
-		// A string this backend represents as an immutable TYPE_STRING (anything but a
-		// character vector -- here a copy-seq result) can be VIEWED without a copy, and
-		// reads alias it. A write cannot reach it (a string's bytes never change once
-		// built), so the view promotes its target to a character vector once and
-		// mutates that: the view is a mutable string from then on, and the original
-		// value is untouched -- which is what (setf (char s i) c) on that same string
-		// already does. The interpreter, whose strings are all mutable, writes through
-		// to the target instead (`.todo/559`).
+	void compileDisplacedStringViewOverACopySeqResultWritesThrough() throws Exception {
+		// A copy-seq/subseq result is a MUTABLE character vector (.todo/559 step 2), so
+		// a displaced view over it aliases real storage and a write through the view
+		// reaches the target -- the same answer the interpreter and SBCL give. The
+		// promote-on-write fallback this test used to pin applied only while such a
+		// string was an immutable TYPE_STRING here.
 		assertThat(compileAndRun("""
 				(defparameter *s* (copy-seq "abcdef"))
 				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
@@ -15026,7 +15025,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (list *v* (length *v*) (string= *v* "bcd")))
 				(setf (char *v* 0) #\\X)
 				(print (list *v* *s*))
-				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"abcdef\")");
+				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"aXcdef\")");
 	}
 
 	@Test

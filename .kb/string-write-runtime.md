@@ -148,21 +148,18 @@ three-way chain without it.
 The line is drawn at the SOURCE CONSTANT, not at immutability, and the two do not
 coincide:
 
-- **An allocated immutable string still diverges on an alias.** For
-  `(let* ((s (copy-seq "abc")) (b s)) (setf (char s 0) #\Z) (list s b))` the interpreter
-  answers `("Zbc" "Zbc")` and all three compile paths `("Zbc" "abc")`. That is
-  `.todo/559`'s subject -- the compiled backends give a string identity only in the
-  character-vector representation -- and it is confined to an alias the PROGRAM made. A
-  literal's sharing is made by the READER, which is why it is fixed here and this is not;
-  559 says in as many words that a literal must stay immutable whichever way it goes, so
-  the two answers do not collide.
-- **An allocated immutable string still loses a BULK write on the compile paths.** For
-  `(let ((s (copy-seq "abc"))) (replace s "Z") s)` the interpreter answers `"Zbc"` and
-  all three compile paths `"abc"`: `expandReplace`/`expandFill` take their functional
-  branch (`%arrayp` is false for an immutable string), build the right string, and drop
-  it in statement position, because `replace` is a FUNCTION call whose result the caller
-  usually ignores. Same subject as the alias row above -- `.todo/559`, which owns it in
-  as many words -- and NOT a literal question: the literal row below holds on all four.
+- ~~**An allocated immutable string still diverges on an alias.**~~ **CLOSED 2026-08-31
+  (`.todo/559` step 2): a `copy-seq`/`subseq` result IS a mutable character vector on
+  the compile paths now** (see "A copy-seq/subseq result is mutable with identity"
+  below), so `(let* ((s (copy-seq "abc")) (b s)) (setf (char s 0) #\Z) (list s b))`
+  answers `("Zbc" "Zbc")` on all four backends, and a callee's write to a string
+  argument reaches its caller. A literal's sharing is made by the READER and a literal
+  stays immutable, so the two rules still do not collide.
+- ~~**An allocated immutable string still loses a BULK write on the compile paths.**~~
+  **CLOSED the same day, by the same flip:** `%arrayp` is true for the character vector
+  a `copy-seq` now answers, so `expandReplace`/`expandFill` take their DESTRUCTIVE
+  branch and `(let ((s (copy-seq "abc"))) (replace s "Z") s)` answers `"Zbc"` on all
+  four. No functional-branch surgery was needed -- exactly as `.todo/559` predicted.
 - **A `#P"..."` / `#S(...)` literal is `eq` to itself only on the interpreter.** CLOSED
   2026-08-30 by `.todo/581`: both compile backends now memoize a bare instance literal
   into the same lazy slot a quoted datum uses, so `(eq (fp) (fp))` for
@@ -172,6 +169,66 @@ coincide:
   `(eq (aref (f) 0) (aref (f) 0))` is `T` everywhere) even though the array around it is
   fresh per evaluation, because `LiteralArrays.materialize` passes a non-array element
   through by identity. Writing through it obeys the rule above.
+
+## A copy-seq/subseq result is mutable with identity (2026-08-31, `.todo/559` step 2)
+
+**Invariant: a string the program allocates through `subseq` / `copy-seq` is a MUTABLE
+sequence with identity on ALL FOUR backends, matching SBCL: aliases see each other's
+writes, a callee's write to a string argument reaches its caller, `replace`/`fill`
+write in place, and a displaced view over such a string writes THROUGH to it. A
+LITERAL stays immutable and the rules above are unchanged.** Pinned by the
+`string-identity-cross-backend` ci-spec case,
+`JvmLispCompilerTest.compileDisplacedStringViewOverACopySeqResultWritesThrough` /
+`WasmLispCompilerIntegrationTest.compileDisplacedStringViewOverACopySeqResultWritesThrough`
+(rewritten from the promote-on-write tests `.todo/559` planted to fail when this
+landed), and the `nstring-upcase (copy-seq ...)` rows of the enquiry/namestring tests.
+
+The mechanism is the PRODUCER: the string lane of `%subseq-core` answers a fresh
+mutable CHARACTER VECTOR instead of an immutable value. `copy-seq` is
+`(subseq seq 0)` everywhere, so one lane covers both.
+
+- **JVM**: `JvmSubseqCompiler`'s string arm (under the array gate) is one call to
+  `_subseqCv(Object, int, int)` (`JvmArrayRuntimeBuilder`): a character-vector or
+  string-view input copies elements `[start, end)` through `_rmGet` -- never rendering
+  the source, so chained slicing stays linear -- and an immutable `String` slices by
+  code point and converts once through `_strToCharVec` (fill-pointer slot cleared: a
+  subseq result is a SIMPLE string). `subseq`/`copy-seq`/`replace` therefore joined
+  `programUsesAnyArrayOp`, and the class shaker keeps the growth modest: a
+  subseq-only program grew 3,908 -> 13,419 bytes, not the full ~120 KB array runtime.
+- **WASM**: the lane calls `_subseq_str` (`FUNC_SUBSEQ_STR`,
+  `WasmStringRuntimeBuilder.buildSubseqStrBody`): `_charvec_p` -> element copy through
+  `_arr_get`, else the byte-level `_subseq` whose string result converts once through
+  `_str_to_cv` (`FUNC_STR_TO_CV`); a cons-chain result passes through. +272 bytes on a
+  subseq-carrying module, byte cost zero where the shake drops the helpers.
+- **Interpreter**: unchanged -- its strings were always mutable.
+
+**The boundary chokepoints render a character vector exactly once.** A charvec now
+flows everywhere a string can, so the places that read a string's BYTES normalize at
+entry instead of trusting the representation: WASM `_str_to_mem` (every host/linear
+crossing), `_write_line` / `_write_stream_str` (returning the ORIGINAL argument, so
+identity survives the write), the component import string lowering
+(`emitStageStringParam` -- the fetch URL parts the library slices out), and the
+`%str-byte-length` / `%str-byte-ref` socket accessors; JVM `JvmIoRuntimeBuilder`
+mints `_strv` (only under the array gate) and calls it before every
+`(String)` path/content cast (`emitStripQuotes`, `_open`, `_probeFile`,
+`_listDirectory`, `_writeLine`, the socket write, `_makeStringInputStream`).
+
+**What it costs, measured 2026-08-31 (corpus-shaped rows, step 1 -> step 2, ms):**
+JVM json-parse 23 -> 28, json-stringify 22 -> 30, format-nil flat (32 -> 30),
+tokenizer (position + subseq + string=) flat (229 -> 221), string-upcase 17 -> 19,
+json-parse of a subseq-fed source 6 -> 13; WASM p1 json-parse 10 -> 12, stringify
+20 -> 24, format flat, tokenizer flat, subseq-fed parse 9 -> 17. The interpreter rows
+are the unmoved control. The whole-string consumers (`string=`, concatenate, intern,
+hash, print) render a charvec once per CALL -- `.todo/343`'s remaining scope -- which
+is where those percentages live; nothing is quadratic, because the index sites read
+elements (`string-index-cost.md`) and `subseq`-of-charvec copies the slice, not a
+render of the source.
+
+**The residue is the OTHER producers**: `concatenate` / `string-upcase` / `format nil`
+/ `princ-to-string` / `read-line` / getenv / fetch results still answer immutable
+strings, so a write through an alias of THOSE is still lost (the rebuild-and-rebind
+lite semantics above). That is deliberate, measured scope -- flipping `concatenate`
+lands on the string-building accumulator loops and needs its own cost round.
 
 ## Why it is a function
 

@@ -9797,6 +9797,44 @@ cases:
       128512
       T
       CV-SCAN-FLAT
+  - name: string-identity-cross-backend
+    source: |
+      ;; A string a program allocates through copy-seq/subseq is a MUTABLE
+      ;; sequence with IDENTITY on every backend, matching SBCL: two variables
+      ;; holding it see each other's writes, a callee's write reaches its
+      ;; caller, and the destructive bulk operators write in place. On the
+      ;; compiled backends the subseq string lane answers a mutable character
+      ;; vector to make that true (.todo/559); a LITERAL stays immutable and a
+      ;; write through a copy leaves the source constant untouched
+      ;; (.kb/string-write-runtime.md).
+      (print (let* ((s (copy-seq "abcdef")) (a s)) (setf (char s 0) #\X) (list s a)))
+      (defun %sid-f (x) (setf (char x 0) #\Z) x)
+      (print (let ((s (copy-seq "hello"))) (list (%sid-f s) s)))
+      (print (let ((s (copy-seq "abc"))) (replace s "Z") s))
+      (print (let ((s (copy-seq "abc"))) (fill s #\Q) s))
+      ;; A write through a displaced view reaches the copy-seq target.
+      (defvar *sid-s* (copy-seq "abcdef"))
+      (defvar *sid-v* (make-array 3 :element-type 'character :displaced-to *sid-s*
+                                    :displaced-index-offset 1))
+      (setf (char *sid-v* 0) #\X)
+      (print (list *sid-v* *sid-s*))
+      ;; The literal rule is untouched: the source constant never moves.
+      (defun %sid-lit () "lit")
+      (print (let ((a (copy-seq (%sid-lit)))) (setf (char a 0) #\Y) (list a (%sid-lit))))
+      ;; subseq still answers a fresh copy, and a list subseq is unchanged.
+      (print (let* ((s (copy-seq "abcdef")) (v (subseq s 1 4)))
+               (setf (char v 0) #\W)
+               (list v s)))
+      (print (subseq '(1 2 3 4) 1 3))
+    expected: |
+      ("Xbcdef" "Xbcdef")
+      ("Zello" "Zello")
+      "Zbc"
+      "QQQ"
+      ("Xcd" "aXcdef")
+      ("Yit" "lit")
+      ("Wcd" "abcdef")
+      (2 3)
   - name: string-case-ops-full-unicode
     source: |
       ;; string-upcase / string-downcase / string-capitalize are defined by CLHS

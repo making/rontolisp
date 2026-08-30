@@ -78,9 +78,10 @@ final class JvmSubseqCompiler {
 
 		// Pre-compile the argument expressions into slots (compileExpr writes to
 		// ctx.code; the dispatch assembly below is self-contained and appended after).
-		// seq = arg (a mutable character vector normalizes to a string first)
+		// seq = arg, UNNORMALIZED: a mutable character vector reads its elements
+		// directly in _subseqCv (rendering it here would both cost O(source) per slice
+		// and launder the mutable representation away, .todo/559).
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(seqSlot);
 		// start = (int) arg
@@ -120,57 +121,86 @@ final class JvmSubseqCompiler {
 		// result = null
 		asm.aconstNull();
 		asm.astore(resultSlot);
-		// if (!(seq instanceof String)) goto listLabel
-		asm.aload(seqSlot);
-		asm.instanceOf(ctx.stringClass);
-		asm.branch(Opcode.IFEQ, listLabel);
+		if (ctx.usesArrays) {
+			// ---- STRING PATH, mutable result (.todo/559 step 2) ----
+			// _subseqCv answers a fresh MUTABLE character vector for a string in either
+			// representation, so a copy-seq/subseq result has a writable identity like
+			// the interpreter's. A character vector reads its elements directly (no
+			// rendered string), an immutable String slices by code point.
+			int cvLabel = asm.label();
+			asm.aload(seqSlot);
+			asm.instanceOf(ctx.stringClass);
+			asm.branch(Opcode.IFNE, cvLabel);
+			asm.aload(seqSlot);
+			asm.instanceOf(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")));
+			asm.branch(Opcode.IFEQ, listLabel);
+			asm.bind(cvLabel);
+			asm.aload(seqSlot);
+			asm.iload(startSlot);
+			asm.iload(endSlot);
+			asm.op(Opcode.INVOKESTATIC);
+			asm.u2(JvmEmitHelper
+				.selfMethod(ctx, className, JvmArrayRuntimeBuilder.SUBSEQ_CV, JvmArrayRuntimeBuilder.SUBSEQ_CV_DESC)
+				.index());
+			asm.astore(resultSlot);
+			asm.branch(Opcode.GOTO, doneLabel);
+		}
+		else {
+			// Without the array runtime no character vector can exist and the mutable
+			// representation is unavailable, so the result stays the immutable slice.
+			// if (!(seq instanceof String)) goto listLabel
+			asm.aload(seqSlot);
+			asm.instanceOf(ctx.stringClass);
+			asm.branch(Opcode.IFEQ, listLabel);
 
-		// ---- STRING PATH ----
-		// A subseq range on a string is a CHARACTER range: translate (start, end) to
-		// code-unit offsets via s.offsetByCodePoints(1, N) so a supplementary code point
-		// in the middle counts as one indexed step (matching the (length s) contract).
-		asm.aload(seqSlot);
-		asm.checkcast(ctx.stringClass);
-		asm.astore(sSlot);
-		// a = _cpoff(s, start) -- the offset of character `start` past the leading quote.
-		asm.aload(sSlot);
-		asm.iload(startSlot);
-		asm.op(Opcode.INVOKESTATIC);
-		asm.u2(cpOffset);
-		asm.istore(aSlot);
-		// b = (end < 0) ? s.length() - 1 : _cpoff(s, end)
-		int haveEnd = asm.label();
-		int gotB = asm.label();
-		asm.iload(endSlot);
-		asm.branch(Opcode.IFGE, haveEnd);
-		asm.aload(sSlot);
-		asm.op(Opcode.INVOKEVIRTUAL);
-		asm.u2(length);
-		asm.iconst(1);
-		asm.op(Opcode.ISUB);
-		asm.istore(bSlot);
-		asm.branch(Opcode.GOTO, gotB);
-		asm.bind(haveEnd);
-		asm.aload(sSlot);
-		asm.iload(endSlot);
-		asm.op(Opcode.INVOKESTATIC);
-		asm.u2(cpOffset);
-		asm.istore(bSlot);
-		asm.bind(gotB);
-		// result = "\"" + s.substring(a, b) + "\""
-		asm.ldcString(quote);
-		asm.aload(sSlot);
-		asm.iload(aSlot);
-		asm.iload(bSlot);
-		asm.op(Opcode.INVOKEVIRTUAL);
-		asm.u2(substring);
-		asm.op(Opcode.INVOKEVIRTUAL);
-		asm.u2(concat);
-		asm.ldcString(quote);
-		asm.op(Opcode.INVOKEVIRTUAL);
-		asm.u2(concat);
-		asm.astore(resultSlot);
-		asm.branch(Opcode.GOTO, doneLabel);
+			// A subseq range on a string is a CHARACTER range: translate (start, end) to
+			// code-unit offsets via s.offsetByCodePoints(1, N) so a supplementary code
+			// point in the middle counts as one indexed step (matching the (length s)
+			// contract).
+			asm.aload(seqSlot);
+			asm.checkcast(ctx.stringClass);
+			asm.astore(sSlot);
+			// a = _cpoff(s, start) -- the offset of character `start` past the leading
+			// quote.
+			asm.aload(sSlot);
+			asm.iload(startSlot);
+			asm.op(Opcode.INVOKESTATIC);
+			asm.u2(cpOffset);
+			asm.istore(aSlot);
+			// b = (end < 0) ? s.length() - 1 : _cpoff(s, end)
+			int haveEnd = asm.label();
+			int gotB = asm.label();
+			asm.iload(endSlot);
+			asm.branch(Opcode.IFGE, haveEnd);
+			asm.aload(sSlot);
+			asm.op(Opcode.INVOKEVIRTUAL);
+			asm.u2(length);
+			asm.iconst(1);
+			asm.op(Opcode.ISUB);
+			asm.istore(bSlot);
+			asm.branch(Opcode.GOTO, gotB);
+			asm.bind(haveEnd);
+			asm.aload(sSlot);
+			asm.iload(endSlot);
+			asm.op(Opcode.INVOKESTATIC);
+			asm.u2(cpOffset);
+			asm.istore(bSlot);
+			asm.bind(gotB);
+			// result = "\"" + s.substring(a, b) + "\""
+			asm.ldcString(quote);
+			asm.aload(sSlot);
+			asm.iload(aSlot);
+			asm.iload(bSlot);
+			asm.op(Opcode.INVOKEVIRTUAL);
+			asm.u2(substring);
+			asm.op(Opcode.INVOKEVIRTUAL);
+			asm.u2(concat);
+			asm.ldcString(quote);
+			asm.op(Opcode.INVOKEVIRTUAL);
+			asm.u2(concat);
+			asm.astore(resultSlot);
+			asm.branch(Opcode.GOTO, doneLabel);
+		}
 
 		// ---- LIST PATH ----
 		asm.bind(listLabel);

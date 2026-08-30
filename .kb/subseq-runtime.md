@@ -10,6 +10,15 @@ that grew past a few hundred bytes becomes a callee. Same lesson as
 (a wasm runtime function) and `.kb/format.md`'s `%fixed-decimal` (a compiler
 primitive).
 
+> **The STRING lane's result changed 2026-08-31 (`.todo/559` step 2): it answers a
+> MUTABLE CHARACTER VECTOR**, so a `subseq`/`copy-seq` result has a writable identity
+> like the interpreter's and SBCL's. The lane is `_subseqCv` on the JVM and
+> `_subseq_str` (`FUNC_SUBSEQ_STR`) on WASM -- both charvec-aware, so slicing a
+> character vector copies the ELEMENTS `[start, end)` and never renders the source.
+> The list arm, the general-array arm and everything below about WHERE the dispatch
+> lives are unchanged. Mechanics, costs and pinning tests:
+> `.kb/string-write-runtime.md`, "A copy-seq/subseq result is mutable with identity".
+
 ## 1. `%subseq-runtime` -- a spliced defun, both compile paths
 
 `LispMacroExpander.expandSubseqCompat` lowers `(subseq seq start [end])` to a
@@ -46,7 +55,13 @@ source -- completely unimproved.
   injecting it into a string-only program would pull **~120 KB** of array runtime
   into a class with no use for it (measured: 174,682 -> 297,121 on
   `(print (subseq "hello" 1 3))`). When the gate is off, `JvmSubseqCompiler`
-  declines the rewrite anyway, so nothing calls it.
+  declines the rewrite anyway, so nothing calls it. Since 2026-08-31
+  `subseq`/`copy-seq`/`replace` themselves RAISE that gate (the string lane's
+  mutable result needs the array runtime everywhere it flows,
+  `.kb/string-write-runtime.md`), so "string-only program with a subseq" no longer
+  exists as a gate-off case; the class shaker keeps the real growth to ~9.5 KB on a
+  minimal subseq program (3,908 -> 13,419 bytes), and a program with no
+  subseq/copy-seq/replace and no array op is untouched.
 
 Both compilers route a site to the helper **only when `%subseq-runtime` really is
 among the program's functions**, and inline the dispatch otherwise. So a gate that

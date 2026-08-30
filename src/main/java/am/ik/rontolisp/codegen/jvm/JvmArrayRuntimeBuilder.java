@@ -192,6 +192,18 @@ final class JvmArrayRuntimeBuilder {
 	static final String STR_TO_CHAR_VEC_DESC = "(Ljava/lang/String;)Ljava/lang/Object;";
 
 	/**
+	 * {@code _subseqCv(Object, int, int) -> Object}: the string {@code subseq} lane
+	 * answering a MUTABLE character vector, so a {@code copy-seq}/{@code subseq} result
+	 * has a writable identity like the interpreter's ({@code .todo/559} step 2). A
+	 * character vector or string view input copies elements through {@code _rmGet}; an
+	 * immutable {@code String} slices by code point and converts once through
+	 * {@code _strToCharVec}. The int {@code end} uses {@code -1} for "to the length".
+	 */
+	static final String SUBSEQ_CV = "_subseqCv";
+
+	static final String SUBSEQ_CV_DESC = "(Ljava/lang/Object;II)Ljava/lang/Object;";
+
+	/**
 	 * Every method name {@link #build} and {@link #buildToStringMethods} emit, i.e.
 	 * exactly the group the array gate switches on and off. {@code JvmLispCompiler}
 	 * matches an unresolved own-class call against this set to tell "the gate
@@ -202,7 +214,7 @@ final class JvmArrayRuntimeBuilder {
 	static final Set<String> METHOD_NAMES = Set.of(MAKE, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS, TO_STRING,
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET, DISP_OFFSET,
-			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, WIDEN);
+			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, WIDEN);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -1468,6 +1480,181 @@ final class JvmArrayRuntimeBuilder {
 		sv.aload(0);
 		sv.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(STRV), cp.addUtf8(STRV_DESC), 7, 8, sv.finish()));
+
+		// _subseqCv(o, start, end): the string subseq lane answering a MUTABLE character
+		// vector (.todo/559 step 2 -- a copy-seq/subseq result has a writable identity,
+		// like the interpreter's and SBCL's). end == -1 means "to the length". A
+		// character vector or string view copies its elements [start, end) directly
+		// through _rmGet (never rendering the source, so chained slicing stays linear);
+		// an immutable String slices by code point and converts once through
+		// _strToCharVec, then clears the fill-pointer slot that promotion path sets so
+		// the result is a SIMPLE string like the other backends'. Locals: 0 = o,
+		// 1 = start, 2 = end, 3 = header, 4 = len, 5 = n, 6 = out, 7 = i, 8 = s,
+		// 9 = a, 10 = b.
+		MethodrefConstant scStrToCharVec = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(STR_TO_CHAR_VEC), cp.addUtf8(STR_TO_CHAR_VEC_DESC)));
+		MethodrefConstant strLength = cp.addMethodref(strClass,
+				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
+		MethodrefConstant strConcat = cp.addMethodref(strClass,
+				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		JvmAsm sc = new JvmAsm();
+		int scStr = sc.label();
+		int scCv = sc.label();
+		sc.aload(0);
+		sc.instanceOf(arrayListClass);
+		sc.branch(Opcode.IFEQ, scStr);
+		sc.aload(0);
+		sc.checkcast(arrayListClass);
+		sc.invokevirtual(alSize);
+		sc.branch(Opcode.IFLE, scStr);
+		sc.aload(0);
+		sc.checkcast(arrayListClass);
+		sc.iconst(0);
+		sc.invokevirtual(alGet);
+		sc.instanceOf(objectArrayClass);
+		sc.branch(Opcode.IFEQ, scStr);
+		sc.aload(0);
+		sc.checkcast(arrayListClass);
+		sc.iconst(0);
+		sc.invokevirtual(alGet);
+		sc.checkcast(objectArrayClass);
+		sc.astore(3);
+		sc.aload(3);
+		sc.arraylength();
+		sc.iconst(4);
+		sc.branch(Opcode.IF_ICMPEQ, scCv);
+		sc.aload(3);
+		sc.arraylength();
+		sc.iconst(7);
+		sc.branch(Opcode.IF_ICMPNE, scStr);
+		sc.bind(scCv);
+		// len = header[1] != null (the fill pointer) ? its int : dims[0]
+		int scUseDim = sc.label();
+		int scHaveLen = sc.label();
+		sc.aload(3);
+		sc.iconst(1);
+		sc.aaload();
+		sc.branch(Opcode.IFNULL, scUseDim);
+		sc.aload(3);
+		sc.iconst(1);
+		sc.aaload();
+		sc.checkcast(longClass);
+		sc.invokevirtual(longIntValue);
+		sc.istore(4);
+		sc.branch(Opcode.GOTO, scHaveLen);
+		sc.bind(scUseDim);
+		emitLoadDim0(sc, longClass, objectArrayClass, longIntValue, 3);
+		sc.istore(4);
+		sc.bind(scHaveLen);
+		// n = (end < 0 ? len : end) - start
+		int scUseEnd = sc.label();
+		int scHaveN = sc.label();
+		sc.iload(2);
+		sc.branch(Opcode.IFGE, scUseEnd);
+		sc.iload(4);
+		sc.istore(5);
+		sc.branch(Opcode.GOTO, scHaveN);
+		sc.bind(scUseEnd);
+		sc.iload(2);
+		sc.istore(5);
+		sc.bind(scHaveN);
+		sc.iload(5);
+		sc.iload(1);
+		sc.op(Opcode.ISUB);
+		sc.istore(5);
+		// out = new ArrayList holding the length-4 header {dims{n}, null, null, null}
+		sc.anew(arrayListClass);
+		sc.dup();
+		sc.invokespecial(alInit);
+		sc.astore(6);
+		sc.aload(6);
+		sc.iconst(4);
+		sc.anewarray(objectClass);
+		sc.dup();
+		sc.iconst(0);
+		sc.iconst(1);
+		sc.anewarray(objectClass);
+		sc.dup();
+		sc.iconst(0);
+		sc.iload(5);
+		sc.op(Opcode.I2L);
+		sc.invokestatic(longValueOf);
+		sc.aastore();
+		sc.aastore();
+		sc.invokevirtual(alAdd);
+		sc.pop();
+		// for i in 0..n-1: out.add(_rmGet(o, 1 + start + i))
+		sc.iconst(0);
+		sc.istore(7);
+		int scLoop = sc.label();
+		int scDone = sc.label();
+		sc.bind(scLoop);
+		sc.iload(7);
+		sc.iload(5);
+		sc.branch(Opcode.IF_ICMPGE, scDone);
+		sc.aload(6);
+		sc.aload(0);
+		sc.iconst(1);
+		sc.iload(1);
+		sc.op(Opcode.IADD);
+		sc.iload(7);
+		sc.op(Opcode.IADD);
+		sc.invokestatic(rmGet);
+		sc.invokevirtual(alAdd);
+		sc.pop();
+		sc.iinc(7, 1);
+		sc.branch(Opcode.GOTO, scLoop);
+		sc.bind(scDone);
+		sc.aload(6);
+		sc.areturn();
+		// The immutable arm: slice by CODE POINT and convert once.
+		sc.bind(scStr);
+		sc.aload(0);
+		sc.checkcast(strClass);
+		sc.astore(8);
+		sc.aload(8);
+		sc.iload(1);
+		sc.invokestatic(strCpOffset);
+		sc.istore(9);
+		int scHaveEnd = sc.label();
+		int scGotB = sc.label();
+		sc.iload(2);
+		sc.branch(Opcode.IFGE, scHaveEnd);
+		sc.aload(8);
+		sc.invokevirtual(strLength);
+		sc.iconst(1);
+		sc.op(Opcode.ISUB);
+		sc.istore(10);
+		sc.branch(Opcode.GOTO, scGotB);
+		sc.bind(scHaveEnd);
+		sc.aload(8);
+		sc.iload(2);
+		sc.invokestatic(strCpOffset);
+		sc.istore(10);
+		sc.bind(scGotB);
+		sc.ldcString(quoteStr);
+		sc.aload(8);
+		sc.iload(9);
+		sc.iload(10);
+		sc.invokevirtual(strSubstring);
+		sc.invokevirtual(strConcat);
+		sc.ldcString(quoteStr);
+		sc.invokevirtual(strConcat);
+		sc.invokestatic(scStrToCharVec);
+		sc.astore(6);
+		// A subseq result is a SIMPLE string: clear the fill-pointer slot the
+		// promotion-path _strToCharVec stamps.
+		sc.aload(6);
+		sc.checkcast(arrayListClass);
+		sc.iconst(0);
+		sc.invokevirtual(alGet);
+		sc.checkcast(objectArrayClass);
+		sc.iconst(1);
+		sc.aconstNull();
+		sc.aastore();
+		sc.aload(6);
+		sc.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(SUBSEQ_CV), cp.addUtf8(SUBSEQ_CV_DESC), 10, 11, sc.finish()));
 
 		return methods;
 	}

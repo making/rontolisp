@@ -35,8 +35,10 @@ final class WasmStrByteCompiler {
 			case LispNames.STR_BYTE_LENGTH_INTERNAL -> {
 				expectArgs(member, args, 1);
 				// content bytes = the stored framed byte length (field 1) minus the two
-				// surrounding quotes
+				// surrounding quotes. A mutable character vector (a subseq/copy-seq
+				// result, e.g. write-string's :start/:end slice) renders first.
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmEmitHelper.emitCharvecToStrCall(ctx);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
@@ -49,8 +51,10 @@ final class WasmStrByteCompiler {
 			}
 			case LispNames.STR_BYTE_REF_INTERNAL -> {
 				expectArgs(member, args, 2);
-				// array[i + 1]: content starts after the leading quote
+				// array[i + 1]: content starts after the leading quote (a character
+				// vector renders first, as in the length accessor above)
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmEmitHelper.emitCharvecToStrCall(ctx);
 				WasmEmitHelper.emitStrBytesArray(ctx);
 				WasmExprCompiler.compileExpr(args.get(2), ctx);
 				WasmEmitHelper.castI31GetS(ctx);

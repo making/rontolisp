@@ -199,20 +199,34 @@ A literal target must keep answering what it answers today (the copy, not a writ
 the two rules do not collide, for exactly the reason the paragraph above about `subseq`
 gives: a literal's sharing is made by the READER.
 
-## Step 1 DONE (2026-08-31); step 2 not started
+## DONE (2026-08-31): both steps landed
 
-Step 1 of the revised plan landed: `char`/`schar`/`elt` read a character
-vector's ELEMENT (`_charRef` on the JVM, `_str_char_ref` on WASM) and the
-O(n^2) table collapsed onto the aref column -- JVM n=2048 scan 1153 ms -> 8 ms,
-WASM 2224 ms -> 9 ms, controls unmoved (`.kb/string-index-cost.md`, "The
-character vector escaped the invariant", pinned by the
-`character-vector-index-reads-the-element` ci-spec case). The producer flip
-(step 2) is now unblocked by cost.
+Step 1: `char`/`schar`/`elt` read a character vector's ELEMENT (`_charRef` on
+the JVM, `_str_char_ref` on WASM) and the O(n^2) table collapsed onto the aref
+column -- JVM n=2048 scan 1153 ms -> 8 ms, WASM 2224 ms -> 9 ms, controls
+unmoved (`.kb/string-index-cost.md`, "The character vector escaped the
+invariant", pinned by the `character-vector-index-reads-the-element` ci-spec
+case).
 
-The identity programs still answer as the table at the top of this file says,
-and the two `compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite`
-tests still pin the promote-on-write behavior; they are still the tests to
-rewrite when step 2 lands.
+Step 2: the `%subseq-core` string lane answers a MUTABLE character vector
+(`_subseqCv` JVM / `_subseq_str` WASM, both charvec-aware so chained slicing
+copies elements and never renders the source), which is what `copy-seq` answers
+too, so all five definition-of-done programs match SBCL on all four backends
+and `replace`/`fill` take their destructive branch as this file predicted --
+no functional-branch surgery. The boundary chokepoints render once (WASM
+`_str_to_mem`/`_write_line`/`_write_stream_str`/component string
+lowering/`%str-byte-*`; JVM `JvmIoRuntimeBuilder`'s `_strv`-before-cast). A
+literal stays immutable. Mechanics, sizes (+9.5 KB on a minimal subseq class,
++272 bytes of wasm) and corpus costs (single-digit ms deltas, nothing
+quadratic): `.kb/string-write-runtime.md`, "A copy-seq/subseq result is mutable
+with identity". Pinned by the `string-identity-cross-backend` ci-spec case; the
+two promote-on-write tests were rewritten to
+`compileDisplacedStringViewOverACopySeqResultWritesThrough` (write-through, all
+four backends identical), exactly as planned.
+
+The remaining producers (`concatenate`/`string-upcase`/`format nil`/...) still
+answer immutable values; `.todo/596` carries that follow-up with the measured
+pattern to apply.
 
 ## A shipped-library casualty, and the working pattern (2026-08-31, from the PLY/glTF readers)
 

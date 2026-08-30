@@ -232,8 +232,9 @@ final class WasmArrayRuntimeBuilder {
 	// the character-vector marker i31 1, its dimension the character count, and its
 	// buckets one TYPE_CHAR per character. This is what a write through a string view
 	// over an IMMUTABLE string promotes the target to (the JVM twin is
-	// JvmArrayRuntimeBuilder's _strToCharVec).
-	private static void emitStringToCharVecCell(WasmWriter w, int strSlot, int bucketsSlot, int nSlot, int iSlot) {
+	// JvmArrayRuntimeBuilder's _strToCharVec), and what _str_to_cv
+	// (WasmStringRuntimeBuilder.buildStrToCvBody) wraps as a callable function.
+	static void emitStringToCharVecCell(WasmWriter w, int strSlot, int bucketsSlot, int nSlot, int iSlot) {
 		get(w, strSlot);
 		WasmEmitHelper.emitStrCharCountCall(w);
 		w.write(Instruction.SET_LOCAL);
@@ -271,14 +272,21 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
+		emitFreshCharVecCellFromBuckets(w, bucketsSlot, nSlot);
+	}
+
+	// Assembles a fresh character-vector CELL around a pre-filled buckets array of n
+	// TYPE_CHAR elements and leaves it on the stack: dims = [n], meta =
+	// (null . (null . i31 1)) -- no fill pointer, not adjustable, the character-vector
+	// marker in the offset word -- then (dims . (meta . buckets)) boxed in a TYPE_CELL.
+	static void emitFreshCharVecCellFromBuckets(WasmWriter w, int bucketsSlot, int nSlot) {
 		// dims = [n]
 		get(w, nSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		i32(w, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		// meta = (null . (null . i31 1)) -- no fill pointer, not adjustable, and the
-		// character-vector marker in the offset word.
+		// meta = (null . (null . i31 1))
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.REF_NULL);

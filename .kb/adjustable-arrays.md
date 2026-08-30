@@ -536,22 +536,22 @@ would make every other library's displacement silently stop aliasing.
 
 **Writing through a view reaches the target's storage where the backend has
 one.** The interpreter's strings are all mutable, so a write always writes
-through. On the compiled backends only a mutable CHARACTER VECTOR is; a string
-that is a literal or a `copy-seq`/`subseq`/`concatenate` result is an immutable
-value (a Java `String` / a `TYPE_STRING` whose bytes never change,
-`.kb/string-write-runtime.md`) that no write can reach. Such a view is still
-built without a copy and READS through it; the first write PROMOTES -- the
-view's target slot is replaced by a character vector holding the same
-characters, and the store lands there. The view is a mutable string from then
-on and `array-displacement` reports the promoted vector; the original string
-value is untouched, which is exactly what `(setf (char s i) c)` on that same
-string already does (it re-binds the variable, `LispMacroExpander
-.expandScharSetFunctional`). So the ONE cross-backend divergence a string view
-has is the pre-existing immutable-string one, held with its measurements in
-`.todo/559`; pinned deliberately by
-`compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite` on both
-compiled backends, so a fix there fails these tests rather than passing
-silently.
+through. On the compiled backends the mutable CHARACTER VECTOR is that storage,
+and since 2026-08-31 (`.todo/559` step 2) a `copy-seq`/`subseq` result IS one
+(`.kb/string-write-runtime.md`, "A copy-seq/subseq result is mutable with
+identity") -- so a view over the common allocated-string case writes THROUGH to
+its target on all four backends, pinned by
+`compileDisplacedStringViewOverACopySeqResultWritesThrough` (JVM + WASM, the
+rewritten form of the promote-on-write tests 559 planted to fail when it
+landed). What remains immutable is a LITERAL (and the other producers'
+results -- `concatenate`, `string-upcase`, `format nil` -- until their own
+flip): such a view is still built without a copy and READS through it, and the
+first write PROMOTES -- the view's target slot is replaced by a character
+vector holding the same characters, and the store lands there; the view is a
+mutable string from then on, `array-displacement` reports the promoted vector,
+and the original string value is untouched, exactly as `(setf (char s i) c)` on
+that same string re-binds rather than writes (`LispMacroExpander
+.expandScharSetFunctional`).
 
 Per backend:
 

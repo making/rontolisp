@@ -1440,7 +1440,26 @@ public final class WasmLispCompiler implements LispCompiler {
 	// helper so no index above shifts.
 	static final int FUNC_STR_CHAR_REF = FUNC_TYPE_ERR_NUM + 1;
 
-	static final int FX_FUNC_LAST = FUNC_STR_CHAR_REF;
+	// _str_to_cv ((ref null eq) str) -> (ref null eq): a fresh mutable character vector
+	// holding the characters of an immutable TYPE_STRING -- the callable form of
+	// WasmArrayRuntimeBuilder.emitStringToCharVecCell. _subseq_str finishes its
+	// immutable-input arm with it so a subseq/copy-seq result carries a writable
+	// identity (.todo/559 step 2). Reuses the ((ref null eq)) -> (ref null eq)
+	// signature (TYPE_CALLABLE_BASE + 0); appended after the last fixed helper so no
+	// index above shifts.
+	static final int FUNC_STR_TO_CV = FUNC_STR_CHAR_REF + 1;
+
+	// _subseq_str ((ref null eq) seq, start, end) -> (ref null eq): the string/list
+	// subseq lane, answering a MUTABLE character vector for a string input in either
+	// representation. A character-vector input copies elements [start, end) directly
+	// through _arr_get (never rendering the source, so chained slicing stays linear);
+	// anything else goes through _subseq, and a string result is converted once with
+	// _str_to_cv (a list result passes through). Reuses the three-eq-param callable
+	// signature (TYPE_CALLABLE_BASE + 2); appended after the last fixed helper so no
+	// index above shifts.
+	static final int FUNC_SUBSEQ_STR = FUNC_STR_TO_CV + 1;
+
+	static final int FX_FUNC_LAST = FUNC_SUBSEQ_STR;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -5612,6 +5631,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_PRINT_VAL); // _type_err_num (FUNC_TYPE_ERR_NUM)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_char_ref (s, i) -> code point
 													// (FUNC_STR_CHAR_REF)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _str_to_cv (str) -> cell
+															// (FUNC_STR_TO_CV)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _subseq_str (seq, start,
+															// end) -> value
+															// (FUNC_SUBSEQ_STR)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6407,6 +6431,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expNumEntry));
 				// either-representation character index body (FUNC_STR_CHAR_REF)
 				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody());
+				// string -> mutable character vector body (FUNC_STR_TO_CV)
+				code.addFunction(WasmStringRuntimeBuilder.buildStrToCvBody());
+				// mutable-result string/list subseq lane body (FUNC_SUBSEQ_STR)
+				code.addFunction(WasmStringRuntimeBuilder.buildSubseqStrBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

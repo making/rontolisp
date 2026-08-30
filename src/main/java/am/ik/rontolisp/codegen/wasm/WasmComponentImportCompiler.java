@@ -2069,6 +2069,12 @@ final class WasmComponentImportCompiler {
 		private void emitStageStringParam(int slot) {
 			int dst = allocI32();
 			int total = allocI32();
+			// A mutable character vector (a subseq/copy-seq result, e.g. the URL parts
+			// the fetch library slices out) renders once here; any other value passes
+			// through _charvec_to_str unchanged.
+			getLocal(slot);
+			WasmEmitHelper.emitCharvecToStrCall(this.ctx);
+			setLocal(slot);
 			// dst = HEAP_PTR; grow-guard to dst + framed byte length
 			loadCell(WasmLispCompiler.HEAP_PTR_ADDR);
 			setLocal(dst);
