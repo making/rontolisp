@@ -9895,14 +9895,18 @@ class LispEvaluatorTest {
 	@Test
 	void aWriteThroughAStringLiteralRebindsThePlaceAndLeavesTheConstant() {
 		// The compiled backends' %schar-set-runtime rebuilds the string and setq's it
-		// back into the variable; the source constant is never written.
+		// back into the variable; the source constant is never written. row-major-aref
+		// on a rank-1 string target is the same place -- expandSetf routes it through
+		// %schar-set too, so it rebinds rather than refuses (.kb/string-write-runtime.md,
+		// todo 587).
 		assertThat(evalMulti("""
 				(defun %lit-str () "abc")
 				(list (let ((a (%lit-str))) (setf (char a 0) #\\Z) a)
 				      (let ((a (%lit-str))) (setf (elt a 1) #\\Y) a)
 				      (let ((a (%lit-str))) (setf (aref a 2) #\\X) a)
+				      (let ((a (%lit-str))) (setf (row-major-aref a 0) #\\W) a)
 				      (%lit-str))
-				""").print()).isEqualTo("(\"Zbc\" \"aYc\" \"abX\" \"abc\")");
+				""").print()).isEqualTo("(\"Zbc\" \"aYc\" \"abX\" \"Wbc\" \"abc\")");
 	}
 
 	@Test
@@ -9957,11 +9961,23 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void aRowMajorWriteThroughAStringLiteralIsAnError() {
-		// %aset / %row-major-aset carry no rebind hook, so like %schar-set as a
-		// first-class value they refuse a source literal rather than rewrite the
-		// program text (.kb/string-write-runtime.md).
-		assertThatThrownBy(() -> eval("(let ((a \"abc\")) (setf (row-major-aref a 0) #\\Z))"))
+	void rowMajorArefReadsAStringLikeAref() {
+		// A string is a rank-1 array of characters in CL, so row-major-aref reads it
+		// like aref/char/schar/elt do -- the interpreter arm row-major-aref was missing
+		// (.kb/string-write-runtime.md, todo 587).
+		assertThat(eval("(row-major-aref \"abc\" 0)")).isEqualTo(new LispChar('a'));
+		assertThat(eval("(row-major-aref \"abc\" 2)")).isEqualTo(new LispChar('c'));
+	}
+
+	@Test
+	void rowMajorAsetOnAStringLiteralAsAFirstClassCallIsStillAnError() {
+		// %row-major-aset itself (not routed through the schar-set setf place) carries
+		// no rebind hook, so like %aset and %schar-set as first-class values it refuses
+		// a source literal rather than rewrite the program text
+		// (.kb/string-write-runtime.md). expandSetf's (setf (row-major-aref a 0) ...)
+		// spelling never reaches this -- it rebinds instead, see
+		// #aWriteThroughAStringLiteralRebindsThePlaceAndLeavesTheConstant.
+		assertThatThrownBy(() -> eval("(let ((a \"abc\")) (%row-major-aset a 0 #\\Z))"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("requires a variable string place");
 	}

@@ -3249,6 +3249,26 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunRowMajorArefReadsAndWritesAString() throws Exception {
+		// A string is a rank-1 array of characters in CL, so row-major-aref reads it
+		// like aref does -- the JVM already had the string arm (it shares aref's rank-1
+		// helper); this pins it and the write spelling
+		// (setf (row-major-aref v i) c), which is the same %schar-set place aref/char/elt
+		// use: in place for a mutable buffer, a rebind that leaves the source constant
+		// for
+		// a literal (.kb/string-write-runtime.md, todo 587).
+		assertThat(compileAndRun("""
+				(defun %rmar-lit () "abc")
+				(print (row-major-aref (%rmar-lit) 1))
+				(let ((a (%rmar-lit))) (setf (row-major-aref a 0) #\\Z) (print a))
+				(print (%rmar-lit))
+				(let ((b (make-string 3 :initial-element #\\a)))
+				  (setf (row-major-aref b 1) #\\Z)
+				  (print b))
+				""")).isEqualTo("#\\b\n\"Zbc\"\n\"abc\"\n\"aZa\"");
+	}
+
+	@Test
 	void compileAndRunClosureReadsLetVarShadowingGlobal() throws Exception {
 		// A lambda capturing a let variable must read the captured binding, not a
 		// same-named top-level global.

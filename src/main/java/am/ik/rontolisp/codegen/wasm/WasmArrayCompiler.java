@@ -1199,7 +1199,10 @@ final class WasmArrayCompiler {
 
 	static void compileRowMajorAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// (row-major-aref array index): the data array is flat, so this is exactly the
-		// rank-1 accessor (data[index]), independent of the array's rank.
+		// rank-1 accessor (data[index]) shape aref uses, independent of the array's
+		// rank -- including the STRING arm (a string is a rank-1 character array in
+		// CL), so this shares aref's rank-1 slot dispatch rather than repeating the
+		// farray/int-vector/general chain without it.
 		List<LispVal> args = cons.toList();
 		if (args.size() != 3) {
 			throw new UnsupportedOperationException(
@@ -1207,34 +1210,9 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
-		testFarray(ctx, arrSlot);
-		emitIfEq(ctx);
-		// packed: box(data[index]), reading the f64/f32 store per width.
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		WasmEmitHelper.castI31GetS(ctx);
-		boxI31(ctx);
-		int pIdxSlot = setTemp(ctx);
-		emitPackedReadF64(ctx, arrSlot, pIdxSlot);
-		boxFloat(ctx);
-		ctx.writer.write(Instruction.ELSE);
-		// packed integer vector: the data array is flat and rank-1, so this is exactly
-		// the aref shape.
-		testIntVector(ctx, arrSlot);
-		emitIfEq(ctx);
-		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		int iIdxSlot = setTemp(ctx);
-		emitPackedIntRead(ctx, arrSlot, iIdxSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
-		ctx.writer.write(Instruction.ELSE);
-		// general: resolve the displacement chain, then data[index].
-		getLocal(ctx, arrSlot);
-		castCellGet0(ctx);
-		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		WasmEmitHelper.castI31GetS(ctx);
-		callArrGet(ctx);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
+		int idxSlot = setTemp(ctx);
+		emitAref1FromSlots(ctx, arrSlot, idxSlot);
 	}
 
 	static void compileRowMajorAset(LispCons cons, WasmLispCompiler.Ctx ctx) {

@@ -1093,6 +1093,11 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispIntVector iv) {
 				return new LispInteger(intVectorRead(LispNames.ROW_MAJOR_AREF, iv, (int) asLong(args.get(1))));
 			}
+			// A string is a rank-1 array of characters in CL, so (row-major-aref s i)
+			// reads like (char s i) -- the same arm AREF has above.
+			if (args.get(0) instanceof LispString) {
+				return charRef(LispNames.ROW_MAJOR_AREF, args);
+			}
 			LispArray array = requireArray(LispNames.ROW_MAJOR_AREF, args.get(0));
 			return array.readFlat(rowMajorIndex(LispNames.ROW_MAJOR_AREF, array.totalSize(), args.get(1)));
 		}));

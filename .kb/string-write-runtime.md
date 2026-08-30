@@ -8,9 +8,9 @@ site emits the string rebuild inline. Every one of them calls
 
 `LispMacroExpander.expandSetf` gives a rank-1 indexed place a runtime string arm
 (`.kb/adjustable-arrays.md` for why: a rank-1 array place may hold a string, and CL
-says `(setf (aref s i) c)` on one is legal). Three place heads reach it -- `aref` /
-`svref`, `elt`, and `char` / `schar` -- and all three funnel into `%schar-set`, which
-the compile paths expand with `expandScharSetFunctional`:
+says `(setf (aref s i) c)` on one is legal). Four place heads reach it -- `aref` /
+`svref`, `elt`, `char` / `schar`, and `row-major-aref` -- and all four funnel into
+`%schar-set`, which the compile paths expand with `expandScharSetFunctional`:
 
 ```lisp
 (let ((__schar_i i))
@@ -35,7 +35,8 @@ is the difference between a **7,187**-byte helper and a **665**-byte one.
 exits (the same two `withFormatRenderer` uses, `.kb/format.md`). It has to be a scan of
 the pre-expansion program -- expression expansion happens per form much later and
 cannot add a top-level defun -- so it names the PLACE HEADS (`aref`/`svref`/`elt`/
-`char`/`schar`/`%schar-set`, anywhere in the form, in any position) rather than trying
+`char`/`schar`/`row-major-aref`/`%schar-set`, anywhere in the form, in any position)
+rather than trying
 to predict which of them will keep the string arm. **Deliberately generous**:
 over-injecting costs one unreachable defun, which `--optimize` drops and which is
 byte-identical without it in every program measured; under-injecting would be a call to
@@ -119,17 +120,28 @@ operators and `map-into` were already functional on the interpreter, which is wh
 2026-08-29 table in `.todo/581` -- taken before `.todo/580` landed -- listed
 `nstring-upcase` as diverging and this one does not.
 
-`%aset` / `%row-major-aset` on a literal REFUSES rather than copies
-(`(setf (row-major-aref a 0) #\Z)`, `LispEvaluatorTest.aRowMajorWriteThroughAStringLiteralIsAnError`):
+`%aset` / `%row-major-aset` called DIRECTLY (not through a `setf` place -- no rebind
+hook reaches them that way) REFUSE a literal rather than copy
+(`LispEvaluatorTest.rowMajorAsetOnAStringLiteralAsAFirstClassCallIsStillAnError`):
 they are indexed writes with no rebind hook, exactly `%schar-set`'s first-class-value
-case. The `(setf (aref s i) c)` spelling never arrives there -- `expandSetf` routes it
-through `%schar-set`, which rebinds. **The compile paths answer that spelling only for a
-mutable character vector**: `(setf (row-major-aref <make-string buffer> i) c)` writes in
-place on all four, while the same form on any IMMUTABLE string -- a literal or a
-`copy-seq` result alike -- traps there (a `String`-to-`ArrayList` cast on the JVM,
-`cast failure` on both wasm backends). That is a hole in the `row-major-aref` place, not
-in this rule: it is the one place head `expandSetf` does not route through `%schar-set`
--- `.todo/587`.
+case. **CLOSED 2026-08-30 (`.todo/587`): `row-major-aref` is now on the routed list
+too**, so `(setf (row-major-aref s i) c)` never reaches `%row-major-aset` for a
+VARIABLE place -- it is the same string arm `aref`/`svref`/`elt` have, and gives the
+same three answers: in place for a mutable character vector, a rebind that leaves a
+literal untouched, an error for a place `expandSetf` cannot rebind (a non-variable
+place still falls through to `%row-major-aset`, which still cannot take a string --
+the `(setf (aref s i) c)` spelling has the identical restriction).
+
+`row-major-aref`'s READ arm was also missing on two backends, independent of the write
+question: the interpreter's `ROW-MAJOR-AREF` had no `LispString` case
+(`Environment`, throwing `ROW-MAJOR-AREF expects an array`) and both wasm-GC backends'
+`compileRowMajorAref` dispatched only the farray/packed-int-vector/general
+representations and trapped (`cast failure`) rather than test for a string; the JVM's
+`compileRowMajorAref` already shared `aref`'s rank-1 helper and needed no change. Fixed
+by giving the interpreter the same `charRef` call `AREF` makes, and by having
+`compileRowMajorAref` call the same `emitAref1FromSlots` slot dispatch `compileAref`'s
+rank-1 fallback uses (which already had the string arm) instead of repeating the
+three-way chain without it.
 
 ### What this does NOT cover, measured the same day
 
@@ -241,5 +253,12 @@ from one definition.
   backends -- `replace`, `fill`, `(setf (subseq ...))`, `nstring-upcase`, and a
   `make-string` buffer as the guard), plus
   `LispEvaluatorTest.aBulkWriteThroughAStringLiteralLandsOnACopyAndLeavesTheConstant` /
-  `#aBulkWriteThroughAnAllocatedStringBufferIsStillInPlace` /
-  `#aRowMajorWriteThroughAStringLiteralIsAnError`.
+  `#aBulkWriteThroughAnAllocatedStringBufferIsStillInPlace`.
+- The `row-major-aref` place: the `row-major-aref-string-cross-backend` ci-spec case
+  (all four backends -- the read, a literal write's rebind, a `make-string` buffer's
+  in-place write), plus `LispEvaluatorTest.rowMajorArefReadsAStringLikeAref` /
+  `#aWriteThroughAStringLiteralRebindsThePlaceAndLeavesTheConstant` (the
+  `row-major-aref` row) / `#rowMajorAsetOnAStringLiteralAsAFirstClassCallIsStillAnError`,
+  `LispMacroExpanderTest.theStringWriteRuntimeIsInjectedForAnArrayPlaceAndOmittedWithoutOne`
+  (the `row-major-aref` row), `JvmLispCompilerTest.compileAndRunRowMajorArefReadsAndWritesAString`,
+  `WasmLispCompilerIntegrationTest.compileRowMajorArefReadsAndWritesAString`.

@@ -267,6 +267,7 @@ class LispMacroExpanderTest {
 		assertThat(injectsStringWriteRuntime("(defun f (v i) (setf (aref v i) #\\x))")).isTrue();
 		assertThat(injectsStringWriteRuntime("(defun f (s i) (setf (char s i) #\\x))")).isTrue();
 		assertThat(injectsStringWriteRuntime("(defun f (s i) (setf (elt s i) #\\x))")).isTrue();
+		assertThat(injectsStringWriteRuntime("(defun f (s i) (setf (row-major-aref s i) #\\x))")).isTrue();
 		assertThat(injectsStringWriteRuntime("(defun f (v) (car v))")).isFalse();
 	}
 

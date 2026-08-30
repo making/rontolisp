@@ -3523,11 +3523,22 @@ public final class LispMacroExpander {
 					yield makeLet(indVar.name(), placeParts.get(2), makeLet(valVar.name(), value,
 							makeLet(cellVar.name(), walk, makeIf(cellVar, update, store))));
 				}
-				case LispNames.ROW_MAJOR_AREF ->
+				case LispNames.ROW_MAJOR_AREF -> {
 					// (setf (row-major-aref array k) val) -> (%row-major-aset array k
-					// val).
-					listToCons(List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET), placeParts.get(1), placeParts.get(2),
-							value));
+					// val); a STRING is a rank-1 character array, so this is the same
+					// string arm aref/svref have above -- %row-major-aset for an array,
+					// the schar-set rebuild for a string. Only a variable place can take
+					// the string branch (see expandScharSetFunctional's lite semantics).
+					LispVal rowMajorAset = listToCons(List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET),
+							placeParts.get(1), placeParts.get(2), value));
+					if (stringsExist && placeParts.get(1) instanceof LispSymbol arrayVar) {
+						yield makeIf(
+								callOf(LispNames.STRINGP, arrayVar), listToCons(List
+									.of(new LispSymbol(LispNames.SCHAR_SET), arrayVar, placeParts.get(2), value)),
+								rowMajorAset);
+					}
+					yield rowMajorAset;
+				}
 				case LispNames.VEC_QUALIFIED_AREF ->
 					// (setf (vec:aref v i) val) -> (vec:aset v i val). vec:aset
 					// returns
@@ -19018,10 +19029,10 @@ public final class LispMacroExpander {
 	 *
 	 * <p>
 	 * The reaching sites are made by {@link #expandSetf} -- the
-	 * {@code aref}/{@code svref} /{@code elt} places' string arm and the
-	 * {@code schar}/{@code char} places -- and by a {@code %schar-set} call already in
-	 * the source. Expression expansion runs per form much later and cannot add a
-	 * top-level defun, so this has to be a scan of the pre-expansion program, and it
+	 * {@code aref}/{@code svref}/{@code elt}/{@code row-major-aref} places' string arm
+	 * and the {@code schar}/{@code char} places -- and by a {@code %schar-set} call
+	 * already in the source. Expression expansion runs per form much later and cannot add
+	 * a top-level defun, so this has to be a scan of the pre-expansion program, and it
 	 * names the PLACE HEADS rather than trying to predict which of them will keep the
 	 * string arm: the arm's condition (a variable place, one subscript) is cheap to
 	 * re-check but a macro that expands into one of these places is not, so the scan is
@@ -19051,7 +19062,7 @@ public final class LispMacroExpander {
 				// (map-into "..." ...) whose result is a string used to reach a helper
 				// the scan never injected.
 				case LispNames.AREF, LispNames.SVREF, LispNames.ELT, LispNames.CHAR, LispNames.SCHAR,
-						LispNames.SCHAR_SET, LispNames.MAP_INTO ->
+						LispNames.SCHAR_SET, LispNames.MAP_INTO, LispNames.ROW_MAJOR_AREF ->
 					true;
 				default -> false;
 			};

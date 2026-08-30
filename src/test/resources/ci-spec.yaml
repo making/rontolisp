@@ -4022,6 +4022,32 @@ cases:
       "abc"
       "abc"
       "ZQQ"
+  # row-major-aref on a STRING: the read arm the interpreter and both wasm backends were
+  # missing (only the JVM answered it, .kb/string-write-runtime.md, todo 587), and the
+  # write spelling (setf (row-major-aref v i) c) -- the same %schar-set place
+  # aref/char/elt use, so a literal write REBINDS the place and leaves the source
+  # constant untouched, and a make-string buffer is still written in place.
+  - name: row-major-aref-string-cross-backend
+    source: |
+      (defun ci-rmar () "abc")
+      (defun ci-rmar-bang (s) (setf (row-major-aref s 0) #\Z) s)
+      (defun ci-row-major-aref-string ()
+        (print (row-major-aref (ci-rmar) 1))
+        (let ((a (ci-rmar))) (setf (row-major-aref a 0) #\Z) (print a))
+        (print (ci-rmar))
+        (print (ci-rmar-bang (ci-rmar)))
+        (print (ci-rmar))
+        (let ((b (make-string 3 :initial-element #\a)))
+          (setf (row-major-aref b 1) #\Z)
+          (print b)))
+      (ci-row-major-aref-string)
+    expected: |
+      #\b
+      "Zbc"
+      "abc"
+      "Zbc"
+      "abc"
+      "aZa"
   # A BARE #P"..." / #S(...) instance literal is a CONSTANT, not a constructor: the
   # interpreter's self-evaluating LispInstance arm hands the reader's own instance back at
   # every evaluation, and cannot be moved (the same arm carries every live instance the
