@@ -1122,14 +1122,23 @@ final class WasmIoRuntimeBuilder {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STR=0 (ref), FD_VAL=1 (ref) ; i32 locals: OFF=2, LEN=3, FD=4, REC=5
-		// (the last only for the string-stream branch)
-		w.write(1);
+		// (the last only for the string-stream branch); ref local NSTR=6 (the rendered
+		// form the write reads -- STR itself is returned, so a character vector
+		// argument keeps its identity)
+		w.write(2);
 		w.write(4);
 		w.write(Type.I32);
-		final int STR = 0, FD_VAL = 1, OFF = 2, LEN = 3, FD = 4, REC = 5;
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int STR = 0, FD_VAL = 1, OFF = 2, LEN = 3, FD = 4, REC = 5, NSTR = 6;
 		final int IOV = WasmLispCompiler.IOV_OFFSET;
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 
+		// A mutable character vector (a subseq/copy-seq result being written) renders
+		// once here; any other value passes through _charvec_to_str unchanged.
+		getLocal(w, STR);
+		WasmEmitHelper.emitCharvecToStrCall(w);
+		setLocal(w, NSTR);
 		// fd = stream is an i31 handle ? i31.get_s(stream) : 1 (stdout) -- nil and the
 		// designator t (a redirected *standard-output*'s default) both mean stdout. The
 		// dispatch comes FIRST: the string-output-stream branch copies GC array to GC
@@ -1164,14 +1173,14 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, FD);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, REC);
-		getLocal(w, STR);
+		getLocal(w, NSTR);
 		WasmEmitHelper.emitStrBytesArray(w);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, LEN);
 		WasmStringStreamRuntimeBuilder.emitAppend(w, REC, LEN, () -> {
-			getLocal(w, STR);
+			getLocal(w, NSTR);
 			WasmEmitHelper.emitStrBytesArray(w);
 		}, () -> i32(w, 1));
 		WasmStringStreamRuntimeBuilder.emitAppendByte(w, REC, 10);
@@ -1184,7 +1193,7 @@ final class WasmIoRuntimeBuilder {
 		// immediately.
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		setLocal(w, OFF);
-		getLocal(w, STR);
+		getLocal(w, NSTR);
 		getLocal(w, OFF);
 		WasmEmitHelper.emitStrToMemCall(w);
 		setLocal(w, LEN);

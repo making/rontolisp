@@ -477,6 +477,18 @@ shape that escapes both halves is: build into a fill-pointered character array
 reads an ordinary string. Same file: **82 ms** compiled. Any future library code
 filling a large string must use that pair.
 
+**Both quadratic halves are CLOSED (2026-08-31, the string-identity todo):**
+a `(char v j)` into a character vector reads the ELEMENT (no render,
+`string-index-cost.md`), and `subseq` now ANSWERS a mutable character vector on
+the compile paths (`string-write-runtime.md`, "A copy-seq/subseq result is
+mutable with identity"). The pair above still works and stays -- the build half
+was always fine, and the trailing `subseq` now hands the JSON scanner a
+character vector whose per-character reads are O(1) -- but it is a plain
+idiom now, not a required workaround. The
+`geom-read-ply-gltf-cross-backend` ci-spec case is the end-to-end canary that
+re-verified the flip (json-parse fed a runtime-built string on all four
+backends).
+
 ### Cost, pruning and the pin
 
 Re-measured 2026-08-31, against that day's base `(print (geom:volume (geom:box

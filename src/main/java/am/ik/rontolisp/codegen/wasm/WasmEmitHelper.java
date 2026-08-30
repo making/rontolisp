@@ -1102,6 +1102,20 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Emits {@code call FUNC_STR_CHAR_REF}: consumes a {@code (s, i)} pair (a string in
+	 * EITHER representation and an i32 character index) and pushes the i32 code point of
+	 * the {@code i}-th character. A mutable character vector reads its element (an O(1)
+	 * {@code _arr_get}, never a rendered string); anything else decodes through
+	 * {@code _str_char_at}. Every {@code (char s i)}/{@code (schar s i)} lowering routes
+	 * through it.
+	 * @param ctx the compilation context (its writer receives the instructions)
+	 */
+	static void emitStrCharRefCall(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_REF);
+	}
+
+	/**
 	 * Given a value on the stack that is a {@code TYPE_STRING}, replaces it with its
 	 * {@code $str_bytes} data array (field 2), cast to the concrete array type so callers
 	 * can {@code array.get_u} / {@code array.len} it. The array holds the same

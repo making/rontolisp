@@ -66,7 +66,9 @@ the same array gate) renders the active prefix quote-framed; WASM
 `FUNC_WRITE_STR_GC` — `FUNC_VEC_BASE`/`FUNC_USER_BASE` shifted by one,
 reusing the unary `TYPE_CALLABLE_BASE + 0` signature, capture-aware scratch
 so mid-capture normalization cannot clobber `*-to-string` output). Insert
-points: the string-op compile sites (char/schar, subseq, string=/-equal,
+points: the string-op compile sites (subseq, string=/-equal -- NOT char/schar/elt,
+which read the ELEMENT through `_charRef` / `_str_char_ref` since 2026-08-31
+rather than rendering the vector per index, `.kb/string-index-cost.md` --
 case/trim/concat, write-string, string designator, read-from-string,
 make-string-input-stream, intern, make-symbol — the last four were WASM-only
 until todo-208 made a plain `make-string` result reach them on the JVM too,
@@ -534,22 +536,22 @@ would make every other library's displacement silently stop aliasing.
 
 **Writing through a view reaches the target's storage where the backend has
 one.** The interpreter's strings are all mutable, so a write always writes
-through. On the compiled backends only a mutable CHARACTER VECTOR is; a string
-that is a literal or a `copy-seq`/`subseq`/`concatenate` result is an immutable
-value (a Java `String` / a `TYPE_STRING` whose bytes never change,
-`.kb/string-write-runtime.md`) that no write can reach. Such a view is still
-built without a copy and READS through it; the first write PROMOTES -- the
-view's target slot is replaced by a character vector holding the same
-characters, and the store lands there. The view is a mutable string from then
-on and `array-displacement` reports the promoted vector; the original string
-value is untouched, which is exactly what `(setf (char s i) c)` on that same
-string already does (it re-binds the variable, `LispMacroExpander
-.expandScharSetFunctional`). So the ONE cross-backend divergence a string view
-has is the pre-existing immutable-string one, held with its measurements in
-`.todo/559`; pinned deliberately by
-`compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite` on both
-compiled backends, so a fix there fails these tests rather than passing
-silently.
+through. On the compiled backends the mutable CHARACTER VECTOR is that storage,
+and since 2026-08-31 (`.todo/559` step 2) a `copy-seq`/`subseq` result IS one
+(`.kb/string-write-runtime.md`, "A copy-seq/subseq result is mutable with
+identity") -- so a view over the common allocated-string case writes THROUGH to
+its target on all four backends, pinned by
+`compileDisplacedStringViewOverACopySeqResultWritesThrough` (JVM + WASM, the
+rewritten form of the promote-on-write tests 559 planted to fail when it
+landed). What remains immutable is a LITERAL (and the other producers'
+results -- `concatenate`, `string-upcase`, `format nil` -- until their own
+flip): such a view is still built without a copy and READS through it, and the
+first write PROMOTES -- the view's target slot is replaced by a character
+vector holding the same characters, and the store lands there; the view is a
+mutable string from then on, `array-displacement` reports the promoted vector,
+and the original string value is untouched, exactly as `(setf (char s i) c)` on
+that same string re-binds rather than writes (`LispMacroExpander
+.expandScharSetFunctional`).
 
 Per backend:
 

@@ -2589,7 +2589,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
-					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo)
+					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo, usesArrays)
 			.methods();
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
@@ -2706,7 +2706,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// string length reads through. Emitted unconditionally for the same reason
 		// _length is: the sites are generated internally too, and the pair is ~60 bytes.
 		final List<JvmStringIndexRuntimeBuilder.StringIndexMethod> stringIndexMethods = JvmStringIndexRuntimeBuilder
-			.build(cp, thisClass, stringClass);
+			.build(cp, thisClass, stringClass, usesArrays);
 		final List<Utf8Constant> stringIndexFieldNames = java.util.Arrays.stream(JvmStringIndexRuntimeBuilder.FIELDS)
 			.map(cp::addUtf8)
 			.toList();
@@ -4307,8 +4307,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// carries the helper is exactly a program this returns true for, and a subseq
 		// site
 		// never routes to a helper that was not injected.
+		//
+		// subseq/copy-seq/replace join the gate because subseq's string lane ANSWERS a
+		// mutable character vector now (.todo/559 step 2, _subseqCv): the result needs
+		// the array runtime everywhere it flows, and replace's destructive arm is what
+		// writes through it. Without any of them (and none of the list's own producers)
+		// no character vector can exist and the immutable slice path still compiles.
 		return LispMacroExpander.programUsesGeneralArrayOp(program) || programBuildsConcatenateSequence(program)
-				|| programTakesSequenceBuilderValue(program);
+				|| programTakesSequenceBuilderValue(program) || programUsesSymbol(program, LispNames.SUBSEQ)
+				|| programUsesSymbol(program, LispNames.COPY_SEQ) || programUsesSymbol(program, LispNames.REPLACE);
 	}
 
 	// True when the program takes #'map or #'map-into as a value. Both wrappers do

@@ -63,14 +63,22 @@ final class WasmStringStreamRuntimeBuilder {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STR=0 (ref), STREAM=1 (ref) ; i32 locals: OFF=2, LEN=3, H=4, REC=5,
-		// ISFD=6
-		w.write(1);
+		// ISFD=6 ; ref local NSTR=7 (the rendered form the write reads -- STR itself is
+		// returned, so a character vector argument keeps its identity)
+		w.write(2);
 		w.write(5);
 		w.write(Type.I32);
-		final int STR = 0, STREAM = 1, OFF = 2, LEN = 3, H = 4, REC = 5, ISFD = 6;
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int STR = 0, STREAM = 1, OFF = 2, LEN = 3, H = 4, REC = 5, ISFD = 6, NSTR = 7;
 		final int IOV = WasmLispCompiler.IOV_OFFSET;
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 
+		// A mutable character vector (a subseq/copy-seq result being written) renders
+		// once here; any other value passes through _charvec_to_str unchanged.
+		getLocal(w, STR);
+		WasmEmitHelper.emitCharvecToStrCall(w);
+		setLocal(w, NSTR);
 		// The DESTINATION is decided before the string is staged anywhere: a string
 		// output stream copies GC array to GC array and must not touch linear memory at
 		// all, while the two fd sinks below share one staging copy at HEAP_PTR (which is
@@ -96,9 +104,9 @@ final class WasmStringStreamRuntimeBuilder {
 		getLocal(w, H);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, REC);
-		emitContentLength(w, STR, LEN);
+		emitContentLength(w, NSTR, LEN);
 		emitAppend(w, REC, LEN, () -> {
-			getLocal(w, STR);
+			getLocal(w, NSTR);
 			WasmEmitHelper.emitStrBytesArray(w);
 		}, () -> i32(w, 1));
 		getLocal(w, STR);
@@ -114,7 +122,7 @@ final class WasmStringStreamRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		setLocal(w, OFF);
-		getLocal(w, STR);
+		getLocal(w, NSTR);
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		WasmEmitHelper.emitStrToMemCall(w);
 		i32(w, 2);

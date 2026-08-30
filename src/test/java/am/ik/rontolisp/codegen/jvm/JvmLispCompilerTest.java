@@ -3830,10 +3830,8 @@ class JvmLispCompilerTest {
 	void namestringHalvesNstringCaseAndEnvironmentEnquiry() throws Exception {
 		// The three prelude-Lisp families: the string-valued halves of
 		// a namestring, the destructive case family, and the environment-enquiry
-		// constants. Same expectations as the interpreter suite except the two noted
-		// below, which are the machine-type target name and the compile-path-only
-		// immutable-string deviation every indexed write has
-		// (.kb/string-write-runtime.md).
+		// constants. Same expectations as the interpreter suite except the one noted
+		// below, the machine-type target name.
 		assertThat(compileAndRun("""
 				(print (list (file-namestring #P"/a/b/c.txt") (directory-namestring #P"/a/b/c.txt")
 				             (host-namestring #P"/a/b/c.txt")))
@@ -3847,9 +3845,9 @@ class JvmLispCompilerTest {
 				;; A mutable character vector IS written in place, on every backend.
 				(print (let ((s (make-string 3 :initial-element #\\a)))
 				         (list (eq s (nstring-upcase s)) s)))
-				;; An IMMUTABLE string is not: the write rebuilds and setqs back, so the
-				;; caller's own reference is unchanged here where the interpreter's is
-				;; upcased. The compile-path deviation the whole mutation family has.
+				;; A copy-seq result is a mutable character vector too (.todo/559 step
+				;; 2), so the destructive case family writes it in place like the
+				;; interpreter.
 				(print (let ((s (copy-seq "ab"))) (nstring-upcase s) s))
 				(print (list (lisp-implementation-type) (software-type) (software-version)))
 				(print (list (machine-type) (machine-version) (machine-instance)))
@@ -3865,7 +3863,7 @@ class JvmLispCompilerTest {
 				"Hello World"
 				"AB"
 				(T "AAA")
-				"ab"
+				"AB"
 				("rontolisp" "Unix" NIL)
 				("JVM" NIL NIL)
 				(NIL NIL)
@@ -10674,6 +10672,59 @@ class JvmLispCompilerTest {
 			.isLessThanOrEqualTo(500 + 6 * chunked);
 	}
 
+	// The same cost invariant over the MUTABLE CHARACTER VECTOR representation (a
+	// make-string buffer). (char v i) used to render the WHOLE vector into a fresh
+	// string per index (_strv at the site), which made a scan O(n^2); it reads the
+	// element through _charRef -> _rmGet now, so a scan of one long buffer costs what
+	// scanning the same characters in short chunks costs (.kb/string-index-cost.md).
+	@Test
+	void compileACharacterIndexIntoACharacterVectorReadsTheElement() throws Exception {
+		String output = compileAndRun("""
+				(defun cv-scan-sum (s)
+				  (let ((total 0))
+				    (dotimes (i (length s))
+				      (setq total (+ total (char-code (char s i)))))
+				    total))
+				(defvar *cv-short* (make-string 1024 :initial-element #\\a))
+				(defvar *cv-long* (make-string 65536 :initial-element #\\a))
+				(cv-scan-sum (make-string 4 :initial-element #\\w))
+				(defvar *cv-t0* (get-internal-real-time))
+				(defvar *cv-whole* (cv-scan-sum *cv-long*))
+				(defvar *cv-t1* (get-internal-real-time))
+				(defvar *cv-chunked* 0)
+				(dotimes (k 64) (setq *cv-chunked* (+ *cv-chunked* (cv-scan-sum *cv-short*))))
+				(defvar *cv-t2* (get-internal-real-time))
+				(print (= *cv-whole* *cv-chunked*))
+				(princ (- *cv-t1* *cv-t0*)) (terpri)
+				(princ (- *cv-t2* *cv-t1*)) (terpri)
+				""");
+		String[] lines = output.split("\n");
+		assertThat(lines[0]).as("the two halves must scan the same characters").isEqualTo("T");
+		long whole = Long.parseLong(lines[1].trim());
+		long chunked = Long.parseLong(lines[2].trim());
+		assertThat(whole)
+			.as("scanning a 65,536-character make-string buffer as one vector (%d ms) against "
+					+ "the same characters in 1,024-character chunks (%d ms)", whole, chunked)
+			.isLessThanOrEqualTo(500 + 6 * chunked);
+	}
+
+	// The correctness half of the read above: char/schar/elt/aref agree on a character
+	// vector, non-ASCII elements included, and a displaced string view reads through
+	// the same element path.
+	@Test
+	void compileACharacterVectorIndexAgreesAcrossTheFourSpellings() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *cv* (make-string 4 :initial-element #\\a))
+				(setf (char *cv* 1) #\\é)
+				(setf (char *cv* 2) (code-char 128512))
+				(print (list (char-code (char *cv* 1)) (char-code (schar *cv* 1))
+				             (char-code (elt *cv* 2)) (char-code (aref *cv* 2))))
+				(defvar *cvv* (make-array 2 :element-type 'character :displaced-to *cv*
+				                            :displaced-index-offset 1))
+				(print (char-code (char *cvv* 1)))
+				""")).isEqualTo("(233 233 128512 128512)\n128512");
+	}
+
 	@Test
 	void compileParseInteger() throws Exception {
 		assertThat(compileAndRun("""
@@ -11722,14 +11773,12 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite() throws Exception {
-		// A string this backend represents as an immutable runtime string (anything but
-		// a character vector -- here a copy-seq result) can be VIEWED without a copy,
-		// and reads alias it. A write cannot reach it, so the view promotes its target
-		// to a character vector once and mutates that: the view is a mutable string
-		// from then on, and the original value is untouched -- which is what
-		// (setf (char s i) c) on that same string already does. The interpreter, whose
-		// strings are all mutable, writes through to the target instead (`.todo/559`).
+	void compileDisplacedStringViewOverACopySeqResultWritesThrough() throws Exception {
+		// A copy-seq/subseq result is a MUTABLE character vector (.todo/559 step 2), so
+		// a displaced view over it aliases real storage and a write through the view
+		// reaches the target -- the same answer the interpreter and SBCL give. The
+		// promote-on-write fallback this test used to pin applied only while such a
+		// string was an immutable value here.
 		assertThat(compileAndRun("""
 				(defparameter *s* (copy-seq "abcdef"))
 				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
@@ -11737,7 +11786,7 @@ class JvmLispCompilerTest {
 				(print (list *v* (length *v*) (string= *v* "bcd")))
 				(setf (char *v* 0) #\\X)
 				(print (list *v* *s*))
-				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"abcdef\")");
+				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"aXcdef\")");
 	}
 
 	@Test

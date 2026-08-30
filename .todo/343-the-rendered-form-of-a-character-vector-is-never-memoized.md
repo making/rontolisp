@@ -57,3 +57,12 @@ object (JVM, n=2048: 92 ms vs 4330 ms over 200 scans); `(elt v j)` shares
 want the whole string -- `string=`/`string-equal`, the case and trim families,
 `concatenate`, `write-string`, `read-from-string`, `intern`, `make-symbol`, and
 the `_equal` / `_hash` / `_print_val` / `_princ_val` entries.
+
+DONE (2026-08-31, `.todo/559` step 1): the deletion happened. `char`/`schar`/`elt`
+sites read the element through `_charRef` (JVM) / `_str_char_ref` (WASM) and no
+longer call the normalizer at all -- JVM n=2048 scan 1153 ms -> 8 ms, WASM
+2224 ms -> 9 ms (`.kb/string-index-cost.md`, "The character vector escaped the
+invariant"). The per-character rows of any earlier measurement in this file are
+therefore obsolete; only the once-per-call renders of the whole-string callers
+listed above remain as this item's scope, and any memoization now has fewer
+invalidation points to reach (the index sites never read a cache).

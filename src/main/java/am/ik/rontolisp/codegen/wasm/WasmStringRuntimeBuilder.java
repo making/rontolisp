@@ -196,6 +196,13 @@ final class WasmStringRuntimeBuilder {
 		w.write(2);
 		w.write(Type.I32);
 		int str = 0, ptr = 1, arr = 2, len = 3, i = 4;
+		// A mutable character vector crossing this boundary (a subseq/copy-seq result
+		// handed to the host, a path, the reader scratch) renders once here; any other
+		// value passes through _charvec_to_str unchanged, so a TYPE_STRING costs one
+		// call and no walk.
+		get(w, str);
+		WasmEmitHelper.emitCharvecToStrCall(w);
+		set(w, str);
 		// arr = str.data; len = array.len(arr)
 		get(w, str);
 		WasmEmitHelper.emitStrBytesArray(w);
@@ -1320,6 +1327,184 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 0x3F);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_OR);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _str_char_ref} (FUNC_STR_CHAR_REF): the code point of character
+	 * {@code i} of a string in EITHER representation. A mutable character vector (the
+	 * shape {@code _charvec_p} recognizes, string views included) reads its ELEMENT
+	 * through {@code _arr_get}'s displacement walk -- an O(1) read that never renders the
+	 * vector into a fresh string, which is what made a left-to-right scan of a
+	 * {@code make-string} buffer O(n^2) ({@code .kb/string-index-cost.md}); anything else
+	 * decodes through {@code _str_char_at}. Every {@code (char s i)} /
+	 * {@code (schar s i)} site calls this instead of the old {@code _charvec_to_str} +
+	 * {@code _str_char_at} pair.
+	 * @return the function body (signature {@code ((ref null eq), i32) -> i32},
+	 * TYPE_STR_TO_MEM)
+	 */
+	static byte[] buildStrCharRefBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: v = 0, i = 1. No locals.
+		w.write(0);
+		get(w, 0);
+		WasmEmitHelper.emitCharvecPCall(w);
+		w.write(Instruction.IF, 0x40);
+		// element read: _arr_get((cast TYPE_CELL v).field0, i) is the boxed CHARACTER;
+		// unbox its code point.
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		get(w, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_GET);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // if
+		get(w, 0);
+		get(w, 1);
+		WasmEmitHelper.emitStrCharAtCall(w);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _str_to_cv} (FUNC_STR_TO_CV): a fresh mutable character vector
+	 * holding the characters of a {@code TYPE_STRING} -- the callable form of
+	 * {@link WasmArrayRuntimeBuilder#emitStringToCharVecCell}.
+	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
+	 * TYPE_CALLABLE_BASE + 0)
+	 */
+	static byte[] buildStrToCvBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: str = 0. locals: buckets = 1 (eqref); n = 2, i = 3 (i32).
+		w.write(2);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(2);
+		w.write(Type.I32);
+		WasmArrayRuntimeBuilder.emitStringToCharVecCell(w, 0, 1, 2, 3);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _subseq_str} (FUNC_SUBSEQ_STR): the string/list {@code subseq} lane
+	 * answering a MUTABLE character vector for a string input in either representation
+	 * (`.todo/559` step 2 -- a {@code copy-seq}/{@code subseq} result has a writable
+	 * identity, like the interpreter's and SBCL's). A character-vector input copies
+	 * elements {@code [start, end)} directly through {@code _arr_get} -- never rendering
+	 * the source, so chained slicing stays linear; anything else runs the byte-level
+	 * {@code _subseq}, and a string result is converted once with {@code _str_to_cv}
+	 * while a list result passes through unchanged.
+	 * @return the function body (signature
+	 * {@code ((ref null eq), (ref null eq), (ref null eq)) -> (ref null eq)},
+	 * TYPE_CALLABLE_BASE + 2)
+	 */
+	static byte[] buildSubseqStrBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: seq = 0, start = 1, end = 2 (eqref).
+		// locals: st = 3, n = 4, i = 5 (i32); buckets = 6, scratch = 7 (eqref).
+		w.write(2);
+		w.write(3);
+		w.write(Type.I32);
+		w.write(2);
+		w.writeRefType(true, Type.EQ.code());
+		int seq = 0, start = 1, end = 2, st = 3, n = 4, i = 5, buckets = 6, scratch = 7;
+		get(w, seq);
+		WasmEmitHelper.emitCharvecPCall(w);
+		w.write(Instruction.IF, 0x40);
+		// st = i31(start); n = (end == nil ? length : i31(end)) - st
+		get(w, start);
+		WasmEmitHelper.castI31GetS(w);
+		set(w, st);
+		get(w, end);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, Type.I32);
+		get(w, seq);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SEQ_LEN);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.ELSE);
+		get(w, end);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.END);
+		get(w, st);
+		w.write(Instruction.I32_SUB);
+		set(w, n);
+		// buckets = new TYPE_HASH_BUCKETS[n]; scratch = the source header
+		get(w, n);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		set(w, buckets);
+		get(w, seq);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		set(w, scratch);
+		// for i in 0..n-1: buckets[i] = _arr_get(header, st + i)
+		i32(w, 0);
+		set(w, i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, n);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		get(w, buckets);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		get(w, i);
+		get(w, scratch);
+		get(w, st);
+		get(w, i);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_GET);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		WasmArrayRuntimeBuilder.emitFreshCharVecCellFromBuckets(w, buckets, n);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // if
+		// The immutable / list arm: byte-level _subseq, then a string result is
+		// converted once (a fresh O(slice) copy either way); a cons-chain result
+		// passes through.
+		get(w, seq);
+		get(w, start);
+		get(w, end);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SUBSEQ);
+		set(w, scratch);
+		get(w, scratch);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		get(w, scratch);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_TO_CV);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, scratch);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
 	}

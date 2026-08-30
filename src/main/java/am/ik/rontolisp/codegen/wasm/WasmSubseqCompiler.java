@@ -32,10 +32,10 @@ final class WasmSubseqCompiler {
 			return;
 		}
 		List<LispVal> args = cons.toList();
-		// A mutable character vector normalizes to a string first, so subseq of one
-		// yields a fresh immutable string of its active content.
+		// _subseq_str answers a MUTABLE character vector for a string input in either
+		// representation (a copy-seq/subseq result has a writable identity, .todo/559
+		// step 2); a cons chain passes through the byte-level _subseq unchanged.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		if (args.size() >= 4) {
 			WasmExprCompiler.compileExpr(args.get(3), ctx);
@@ -46,7 +46,7 @@ final class WasmSubseqCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_SUBSEQ);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_SUBSEQ_STR);
 	}
 
 }

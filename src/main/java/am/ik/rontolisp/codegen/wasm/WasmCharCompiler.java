@@ -23,13 +23,12 @@ final class WasmCharCompiler {
 	/** {@code (char string index)} / {@code (schar string index)}. */
 	static void compileChar(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		// A mutable character vector normalizes to a string first; the string carries
-		// its content as UTF-8 bytes and _str_char_at walks to the i-th character.
+		// _str_char_ref reads a mutable character vector's ELEMENT (O(1), no rendered
+		// string) and decodes an immutable string's UTF-8 through _str_char_at.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
-		WasmEmitHelper.emitStrCharAtCall(ctx);
+		WasmEmitHelper.emitStrCharRefCall(ctx);
 		makeChar(ctx);
 	}
 

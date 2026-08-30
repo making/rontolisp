@@ -7225,6 +7225,60 @@ class WasmLispCompilerIntegrationTest {
 			.isLessThanOrEqualTo(500 + 6 * chunked);
 	}
 
+	// The same cost invariant over the MUTABLE CHARACTER VECTOR representation (a
+	// make-string buffer). (char v i) used to render the WHOLE vector into a fresh
+	// string per index (_charvec_to_str at the site), which made a scan O(n^2); it
+	// reads the element through _str_char_ref -> _arr_get now, so a scan of one long
+	// buffer costs what scanning the same characters in short chunks costs
+	// (.kb/string-index-cost.md).
+	@Test
+	void aCharacterIndexIntoACharacterVectorDoesNotRenderTheVector() throws Exception {
+		String output = compileAndRun("""
+				(defun cv-scan-sum (s)
+				  (let ((total 0))
+				    (dotimes (i (length s))
+				      (setq total (+ total (char-code (char s i)))))
+				    total))
+				(defvar *cv-short* (make-string 1024 :initial-element #\\a))
+				(defvar *cv-long* (make-string 65536 :initial-element #\\a))
+				(cv-scan-sum (make-string 4 :initial-element #\\w))
+				(defvar *cv-t0* (get-internal-real-time))
+				(defvar *cv-whole* (cv-scan-sum *cv-long*))
+				(defvar *cv-t1* (get-internal-real-time))
+				(defvar *cv-chunked* 0)
+				(dotimes (k 64) (setq *cv-chunked* (+ *cv-chunked* (cv-scan-sum *cv-short*))))
+				(defvar *cv-t2* (get-internal-real-time))
+				(print (= *cv-whole* *cv-chunked*))
+				(princ (- *cv-t1* *cv-t0*)) (terpri)
+				(princ (- *cv-t2* *cv-t1*)) (terpri)
+				""");
+		String[] lines = output.split("\n");
+		assertThat(lines[0]).as("the two halves must scan the same characters").isEqualTo("T");
+		long whole = Long.parseLong(lines[1].trim());
+		long chunked = Long.parseLong(lines[2].trim());
+		assertThat(whole)
+			.as("scanning a 65,536-character make-string buffer as one vector (%d ms) against "
+					+ "the same characters in 1,024-character chunks (%d ms)", whole, chunked)
+			.isLessThanOrEqualTo(500 + 6 * chunked);
+	}
+
+	// The correctness half of the read above: char/schar/elt/aref agree on a character
+	// vector, non-ASCII elements included, and a displaced string view reads through
+	// the same element path.
+	@Test
+	void aCharacterVectorIndexAgreesAcrossTheFourSpellings() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *cv* (make-string 4 :initial-element #\\a))
+				(setf (char *cv* 1) #\\é)
+				(setf (char *cv* 2) (code-char 128512))
+				(print (list (char-code (char *cv* 1)) (char-code (schar *cv* 1))
+				             (char-code (elt *cv* 2)) (char-code (aref *cv* 2))))
+				(defvar *cvv* (make-array 2 :element-type 'character :displaced-to *cv*
+				                            :displaced-index-offset 1))
+				(print (char-code (char *cvv* 1)))
+				""")).isEqualTo("(233 233 128512 128512)\n128512");
+	}
+
 	// An index outside the string answers whatever it answered before (bounds are
 	// unchecked on this backend) -- what matters here is that it cannot leave
 	// the string's index cursor pointing outside its byte array, which would trap on
@@ -10170,6 +10224,8 @@ class WasmLispCompilerIntegrationTest {
 			(print (funcall #'nstring-upcase (copy-seq "ab")))
 			(print (let ((s (make-string 3 :initial-element #\\a)))
 			         (list (eq s (nstring-upcase s)) s)))
+			;; A copy-seq result is a mutable character vector too (.todo/559 step 2),
+			;; so the destructive case family writes it in place like the interpreter.
 			(print (let ((s (copy-seq "ab"))) (nstring-upcase s) s))
 			(print (list (lisp-implementation-type) (software-type) (software-version)))
 			(print (list (machine-type) (machine-version) (machine-instance)))
@@ -10187,7 +10243,7 @@ class WasmLispCompilerIntegrationTest {
 			"Hello World"
 			"AB"
 			(T "AAA")
-			"ab"
+			"AB"
 			("rontolisp" "Unix" NIL)
 			("WASM32" NIL NIL)
 			(NIL NIL)
@@ -14956,15 +15012,12 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite() throws Exception {
-		// A string this backend represents as an immutable TYPE_STRING (anything but a
-		// character vector -- here a copy-seq result) can be VIEWED without a copy, and
-		// reads alias it. A write cannot reach it (a string's bytes never change once
-		// built), so the view promotes its target to a character vector once and
-		// mutates that: the view is a mutable string from then on, and the original
-		// value is untouched -- which is what (setf (char s i) c) on that same string
-		// already does. The interpreter, whose strings are all mutable, writes through
-		// to the target instead (`.todo/559`).
+	void compileDisplacedStringViewOverACopySeqResultWritesThrough() throws Exception {
+		// A copy-seq/subseq result is a MUTABLE character vector (.todo/559 step 2), so
+		// a displaced view over it aliases real storage and a write through the view
+		// reaches the target -- the same answer the interpreter and SBCL give. The
+		// promote-on-write fallback this test used to pin applied only while such a
+		// string was an immutable TYPE_STRING here.
 		assertThat(compileAndRun("""
 				(defparameter *s* (copy-seq "abcdef"))
 				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
@@ -14972,7 +15025,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (list *v* (length *v*) (string= *v* "bcd")))
 				(setf (char *v* 0) #\\X)
 				(print (list *v* *s*))
-				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"abcdef\")");
+				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"aXcdef\")");
 	}
 
 	@Test
