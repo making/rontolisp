@@ -1414,7 +1414,22 @@ public final class WasmLispCompiler implements LispCompiler {
 	// after the last fixed helper so no index above shifts.
 	static final int FUNC_FILE_LENGTH = FUNC_EQUALP_KEY + 1;
 
-	static final int FX_FUNC_LAST = FUNC_FILE_LENGTH;
+	// _type_err_int / _type_err_num ((ref null eq) culprit) -> (): the arithmetic
+	// runtime's non-number landing (WasmEmitHelper.buildTypeErrBody). _int_val's
+	// non-integer arm calls the first, _as_f64's non-number arm the second; both arms
+	// used to be a bare ref.cast whose failure was an UNCATCHABLE host trap
+	// (.kb/error-handling.md, "A non-number reaching arithmetic"). In EH mode the body
+	// renders "Expected integer|number, got: <prin1>" and throws it on $lisp-cond, so
+	// handler-case catches it and the entry landing pad reports it; outside EH mode the
+	// body is a bare `unreachable` -- no tag exists and nothing could catch it -- which
+	// keeps the printer family unreachable there. Both reuse the ((ref null eq)) -> ()
+	// signature (TYPE_PRINT_VAL), so no new type entry; appended after the last fixed
+	// helper so no index above shifts.
+	static final int FUNC_TYPE_ERR_INT = FUNC_FILE_LENGTH + 1;
+
+	static final int FUNC_TYPE_ERR_NUM = FUNC_TYPE_ERR_INT + 1;
+
+	static final int FX_FUNC_LAST = FUNC_TYPE_ERR_NUM;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -3171,6 +3186,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
 		StringTable stringTable = new StringTable(dataBase, this.usesEqualpHashTables);
 		StringTable.StringEntry tSymEntry = stringTable.addBodyString("T");
+		// The _type_err_int/_type_err_num message prefixes, interned HERE -- before any
+		// body compiles -- because a string added during code emission would land after
+		// the data segment's content is fixed. EH mode only: outside it both bodies are
+		// a bare `unreachable` that cites no bytes.
+		StringTable.StringEntry expIntEntry = ehMode
+				? stringTable.addBodyString("\"" + am.ik.rontolisp.ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX + "\"")
+				: null;
+		StringTable.StringEntry expNumEntry = ehMode
+				? stringTable.addBodyString("\"" + am.ik.rontolisp.ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX + "\"")
+				: null;
 		// The Schubfach float-printer tables (todo-431): ONE shakeable blob whose only
 		// readers are the _schub_* helper bodies built later, so a program that never
 		// prints a float carries no table bytes. Appended here, BEFORE any user body
@@ -5572,6 +5597,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_EQUALP_KEY)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _file_length (stream) ->
 															// length (FUNC_FILE_LENGTH)
+				fnDef.addFunction(TYPE_PRINT_VAL); // _type_err_int (FUNC_TYPE_ERR_INT)
+				fnDef.addFunction(TYPE_PRINT_VAL); // _type_err_num (FUNC_TYPE_ERR_NUM)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6359,6 +6386,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						: WasmEqualpKeyRuntimeBuilder.build(equalpDepthGlobalIndex, equalpGasGlobalIndex));
 				// file-length body (FUNC_FILE_LENGTH), over the fd_filestat_get import.
 				code.addFunction(WasmIoRuntimeBuilder.buildFileLengthBody());
+				// arithmetic non-number landing bodies (FUNC_TYPE_ERR_INT,
+				// FUNC_TYPE_ERR_NUM): a catchable $lisp-cond throw in EH mode, a bare
+				// `unreachable` outside it (no tag section exists there, and referencing
+				// the prin1 renderer would pin the printer family into every module).
+				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expIntEntry));
+				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expNumEntry));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

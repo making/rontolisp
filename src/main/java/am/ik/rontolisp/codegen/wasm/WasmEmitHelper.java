@@ -334,6 +334,28 @@ final class WasmEmitHelper {
 	 * @param slot the {@code (ref null eq)} local holding the value
 	 */
 	static void emitAsF64FromLocal(WasmWriter w, int tmpSlot) {
+		// The FLOAT rung is FIRST: this function exists for float contagion, so its
+		// argument usually IS a float -- the historical i31-first order made every
+		// float pay four failed ref.tests before its cast, and adding the non-number
+		// check as a fifth measured +9.8% on the mandelbrot benchmark (2026-08-31,
+		// .kb/wasm-shared-coercion.md). Float-first, a float pays ONE test + cast
+		// (faster than the pre-check ladder); an i31 coerced by a mixed int-float
+		// operation pays one extra test, measured back to baseline.
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		// float_struct path: cast, extract f64 field
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.ELSE);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(tmpSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -395,14 +417,15 @@ final class WasmEmitHelper {
 		w.write(Instruction.F64_CONVERT_S_I32);
 		w.write(Instruction.F64_DIV);
 		w.write(Instruction.ELSE);
-		// float_struct path: cast, extract f64 field
+		// NON-number landing: _type_err_num throws a catchable $lisp-cond in EH
+		// mode ("Expected number, got: <prin1>") and is a bare `unreachable`
+		// outside it -- the arm that replaced the uncatchable cast-failure trap.
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(tmpSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		w.writeUnsignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_NUM);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
@@ -418,6 +441,61 @@ final class WasmEmitHelper {
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no extra locals: the parameter IS the slot the ladder reads
 		emitAsF64FromLocal(w, 0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _type_err_int} / {@code _type_err_num} ({@code FUNC_TYPE_ERR_INT} /
+	 * {@code FUNC_TYPE_ERR_NUM}): the landing for a non-number reaching the arithmetic
+	 * runtime ({@code _int_val}'s non-integer arm, {@code _as_f64}'s non-number arm).
+	 * Signature {@code ((ref null eq)) -> ()} ({@code TYPE_PRINT_VAL}); it never returns,
+	 * so every call site follows it with {@code unreachable}.
+	 *
+	 * <p>
+	 * In EH mode the body renders {@code "Expected integer|number, got: <prin1>"} (prefix
+	 * + {@code _prin1_to_str} joined by {@code _string_concat}, so the operand prints
+	 * exactly as the interpreter's {@code val.print()} does), builds the instance-less
+	 * {@code (nil . message)} payload and throws it on {@code $lisp-cond} -- the same
+	 * channel a plain {@code %error} uses, so {@code handler-case} catches it as a
+	 * {@code simple-error} and the entry landing pad reports it. Outside EH mode the body
+	 * is a bare {@code unreachable}: no tag section exists, nothing could catch a throw,
+	 * and referencing the prin1 renderer would pin the printer family into every module
+	 * ({@code .kb/error-handling.md}).
+	 * @param ehMode whether the module compiles in EH mode
+	 * @param prefix the interned quote-framed message prefix, non-null in EH mode
+	 * @return the function body
+	 */
+	static byte[] buildTypeErrBody(boolean ehMode,
+			WasmLispCompiler.StringTable.@org.jspecify.annotations.Nullable StringEntry prefix) {
+		java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no extra locals
+		if (!ehMode || prefix == null) {
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		// payload car: the condition instance slot, nil for a message-only throw
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		// payload cdr: _string_concat(prefix, _prin1_to_str(culprit))
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(prefix.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(prefix.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.THROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

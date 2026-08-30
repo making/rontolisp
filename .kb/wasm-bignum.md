@@ -18,8 +18,9 @@ unaffected) represents an exact integer in one of exactly three ways:
 **The normalization invariant: a value always lives in the NARROWEST tier that
 holds it.** `_int_new (i64) -> eqref` (`WasmBignumRuntimeBuilder`) remains the
 i64-tier producer/demoter and `_int_val (eqref) -> i64` widens the two narrow
-tiers (it TRAPS on a `TYPE_BIGINT` via its `ref.cast`, which is what keeps every
-boundary exact-or-trap); `_limb_new` (`WasmBigIntRuntimeBuilder`) canonicalizes a
+tiers (it still TRAPS on a `TYPE_BIGINT` — now an explicit `unreachable`, which is
+what keeps every boundary exact-or-trap — while a NON-number lands in the catchable
+`_type_err_int` signal instead, todo-592, `.kb/error-handling.md`); `_limb_new` (`WasmBigIntRuntimeBuilder`) canonicalizes a
 limb array — strips redundant sign-extension top limbs, hands anything that fits
 back to `_int_new` — so a `TYPE_BIGINT` always has >= 3 canonical limbs. Because
 of the invariant, `ref.eq` stays a valid fixnum equality fast path, and two

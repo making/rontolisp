@@ -565,13 +565,22 @@ final class JvmHandlerCaseCompiler {
 	private static List<Integer> emitRawFailureTest(int index, int excSlot, int rawSlot, JvmLispCompiler.Ctx ctx) {
 		return switch (index) {
 			case 0 -> {
-				// A cast failure or an out-of-range index: type-error. Neither is an
+				// A cast failure, an out-of-range index, or the numeric runtime's
+				// "Expected integer|number, got:" message: type-error. Neither is an
 				// ArithmeticException, so testing this arm first costs the arithmetic
-				// arms nothing.
+				// arms nothing. The message tests exist because those throw sites are
+				// plain RuntimeExceptions with no channel to carry a class (the
+				// unbound-variable precedent); the interpreter types the same texts at
+				// its own throw sites (Environment.asLong/asDouble/asBigInteger).
 				List<Integer> skips = new ArrayList<>();
-				int hit = emitInstanceOfJump(excSlot, "java/lang/ClassCastException", ctx, true);
+				List<Integer> hits = new ArrayList<>();
+				hits.add(emitInstanceOfJump(excSlot, "java/lang/ClassCastException", ctx, true));
+				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX, ctx));
+				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX, ctx));
 				skips.add(emitInstanceOfJump(excSlot, "java/lang/IndexOutOfBoundsException", ctx, false));
-				JvmEmitHelper.patchBranch(ctx, hit, ctx.code.size());
+				for (int hit : hits) {
+					JvmEmitHelper.patchBranch(ctx, hit, ctx.code.size());
+				}
 				yield skips;
 			}
 			case 1 -> {
@@ -601,6 +610,30 @@ final class JvmHandlerCaseCompiler {
 		int pos = ctx.code.size();
 		ctx.emit(jumpWhenTrue ? Opcode.IFNE : Opcode.IFEQ);
 		ctx.emitU2(0);
+		return pos;
+	}
+
+	/**
+	 * Emits a {@code startsWith} test over the RAW message and a jump taken when it HOLDS
+	 * (the OR-shaped twin of {@link #emitMessageTest}, whose jump is the does-not-hold
+	 * one) -- a null message falls through. Answers the branch position to patch to the
+	 * arm.
+	 */
+	private static int emitMessagePrefixHit(int rawSlot, String prefix, JvmLispCompiler.Ctx ctx) {
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(rawSlot);
+		int ifNullPos = ctx.code.size();
+		ctx.emit(Opcode.IFNULL);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(rawSlot);
+		JvmEmitHelper.compileStringLiteral(prefix, ctx);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(JvmEmitHelper.stringMethod(ctx, "startsWith", "(Ljava/lang/String;)Z").index());
+		int pos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
+		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
 		return pos;
 	}
 

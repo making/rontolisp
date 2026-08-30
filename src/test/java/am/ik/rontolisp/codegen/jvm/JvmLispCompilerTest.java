@@ -648,6 +648,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunNonNumberArithmeticOperandsSignalCatchableTypeErrors() throws Exception {
+		// The numeric runtime's _big/_dbl throw the interpreter's "Expected
+		// integer|number, got: <prin1>" text where a bare checkcast used to let null
+		// through to an NPE naming BigInteger internals, and the landing pad classifies
+		// the prefix as a type-error (its throw sites are plain RuntimeExceptions with
+		// no channel for a class -- the unbound-variable precedent). The evaluator twin
+		// is nonNumberArithmeticOperandsSignalCatchableTypeErrors.
+		assertThat(compileAndRun("""
+				(defun te-print (thunk)
+				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (list (te-print (lambda () (+ 1 nil)))
+				             (te-print (lambda () (< 1 nil)))
+				             (te-print (lambda () (* 2 "x")))
+				             (te-print (lambda () (max 1 'sym)))
+				             (te-print (lambda () (+ 1.5 nil)))))
+				""")).isEqualTo("(\"Expected integer, got: NIL\" \"Expected integer, got: NIL\""
+				+ " \"Expected integer, got: \\\"x\\\"\" \"Expected integer, got: SYM\""
+				+ " \"Expected number, got: NIL\")");
+	}
+
+	@Test
 	void compileAndRunHandlerCaseCatchesErrorFromCalledFunction() throws Exception {
 		assertThat(compileAndRun("""
 				(defun hc-thrower () (error "deep"))

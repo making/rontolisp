@@ -63,7 +63,15 @@ final class WasmBignumRuntimeBuilder {
 	}
 
 	// _int_val((ref null eq) x) -> i64: an i31's value sign-extended, or a TYPE_BIGNUM's
-	// field. Any other value traps on the cast (callers guarantee an exact integer).
+	// field. A limb-tier TYPE_BIGINT still TRAPS (`unreachable`) -- that is the
+	// documented exact-or-trap boundary of .kb/wasm-bignum.md (mixed limb x ratio, a
+	// limb-sized `random` limit, a declared s64/u64 export), and a catchable "Expected
+	// integer" for a value that IS an integer would be a lie. Any OTHER value -- callers
+	// guarantee an exact integer, so reaching it is a type slip -- lands in
+	// _type_err_int: a catchable "Expected integer, got: <prin1>" $lisp-cond throw in EH
+	// mode, a bare `unreachable` trap outside it. The tests in front of the TYPE_BIGNUM
+	// cast replaced the uncatchable cast-failure trap; they cost one ref.test on the
+	// boxed (out-of-i31) arm only -- the i31 fast arm is byte-identical.
 	static byte[] buildIntValBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
@@ -82,11 +90,29 @@ final class WasmBignumRuntimeBuilder {
 		w.write(Instruction.I64_EXTEND_S_I32);
 		w.write(Instruction.ELSE);
 		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		getLocal(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
 		w.writeUnsignedLeb128(0);
+		w.write(Instruction.ELSE);
+		// exact-or-trap for the limb tier, the type-error landing for non-numbers
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		getLocal(w, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_INT);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 
 		w.write(Instruction.END);

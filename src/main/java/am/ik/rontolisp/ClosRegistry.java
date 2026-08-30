@@ -152,6 +152,24 @@ public final class ClosRegistry {
 	 */
 	public static final String INDEX_OUT_OF_BOUNDS_MESSAGE = "index out of bounds";
 
+	/**
+	 * The prefix of the message a non-integer reaching an exact-arithmetic coercion
+	 * reports (the interpreter's {@code asLong}/{@code asBigInteger}, the JVM runtime's
+	 * {@code _big} widening, the wasm runtime's {@code _int_val}); the printed operand
+	 * follows. All three signal it where the failure is DETECTED, and the JVM landing pad
+	 * additionally classifies the prefix as a {@code type-error} because its throw site
+	 * is a plain {@code RuntimeException} with no channel to carry a class (the
+	 * unbound-variable precedent).
+	 */
+	public static final String EXPECTED_INTEGER_MESSAGE_PREFIX = "Expected integer, got: ";
+
+	/**
+	 * The float-context twin of {@link #EXPECTED_INTEGER_MESSAGE_PREFIX}: a non-number
+	 * reaching a to-double coercion (the interpreter's {@code asDouble}, the JVM
+	 * runtime's {@code _dbl}, the wasm runtime's {@code _as_f64}).
+	 */
+	public static final String EXPECTED_NUMBER_MESSAGE_PREFIX = "Expected number, got: ";
+
 	/** The prefix of the message a read of an unbound variable reports. */
 	public static final String UNBOUND_VARIABLE_MESSAGE_PREFIX = "The variable ";
 

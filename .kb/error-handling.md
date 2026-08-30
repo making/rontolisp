@@ -293,7 +293,10 @@ everywhere except `--no-gc`.
 - **Divergence** (documented on the doc pages): wasm-GC catches SIGNALED
   conditions only — runtime traps (`(car 5)`-style ref.cast failures, integer
   division by zero, `unreachable`) stay uncatchable and skip unwind-protect
-  cleanups. The three-point spectrum: interpreter catches `LispEvalException`
+  cleanups. A NON-NUMBER reaching an arithmetic/comparison operator used to be
+  in that trap family and no longer is: the arithmetic runtime SIGNALS it (see
+  "A non-number reaching arithmetic" below), so `(+ 1 nil)` is catchable on
+  every backend. The three-point spectrum: interpreter catches `LispEvalException`
   only, JVM catches any `RuntimeException`, wasm-GC catches `$lisp-cond`
   throws only.
 - **Walkers**: `WasmSections.scanInstr` (shared by `WasmImportInjector`)
@@ -1205,11 +1208,14 @@ below.
   `Throwable`: `ClassCastException`/`IndexOutOfBoundsException` → `type-error`,
   `ArithmeticException` → `division-by-zero` when its message contains
   `ClosRegistry.DIVISION_BY_ZERO_MESSAGE_TOKEN` else `arithmetic-error`, and —
-  the message exception — a text starting `The variable ` / `The function ` and
-  ending ` is unbound` / ` is undefined` → its cell-error class, because those
+  the message exceptions — a text starting `The variable ` / `The function ` and
+  ending ` is unbound` / ` is undefined` → its cell-error class, and a text
+  starting `Expected integer, got: ` / `Expected number, got: `
+  (`ClosRegistry.EXPECTED_INTEGER|NUMBER_MESSAGE_PREFIX`, thrown by the numeric
+  runtime's `_big`/`_dbl`, todo-592) → `type-error`, because those
   throw sites are plain
   `RuntimeException`s emitted in bytecode with no channel to carry a class
-  (`JvmSymbolApiCompiler`) — and neither can the call-time stub for an undefined
+  (`JvmSymbolApiCompiler`, `JvmNumericRuntimeBuilder`) — and neither can the call-time stub for an undefined
   function, for the reason in the WASM bullet below. The arms are compiled Lisp
   forms built by `LispMacroExpander.reportingConditionForm`, so no slot index is
   baked here.
@@ -1218,10 +1224,13 @@ below.
   `%error` string, which is a `simple-error` on every backend. Every RAW failure
   is a trap instead — a failed cast, a zero divide, an unbound `symbol-value`
   (`unreachable`, `WasmSymbolApiRuntimeBuilder`) — and a trap still ends the run,
-  the documented three-point spectrum above. **One family diverges by class
+  the documented three-point spectrum above. **Two families diverge by class
   rather than by catchability**: an undefined-function call IS catchable here
   (the stub signals through `%error`), but as a `simple-error`, where the
-  interpreter and the JVM answer `undefined-function`. The stub cannot construct
+  interpreter and the JVM answer `undefined-function`; and a non-number reaching
+  arithmetic IS catchable (todo-592, its own section below), but as a
+  `simple-error` where the other two answer `type-error` — the `_type_err_*`
+  runtime helpers face the same instance-representation gates as the stub. The stub cannot construct
   the typed instance: it is produced during BODY compilation, after
   `mayCreateInstances` fixed whether the artifact has an instance representation
   and after `usedLayoutTags` chose which layouts to bake, so building one there
@@ -1269,6 +1278,83 @@ below.
   `ConditionTagScan.hasLandingPad`): a condition-bearing program with no catching
   form cannot reach one, and marking them unconditionally cost the zlib size-report
   program 680 B in report arms and layouts nothing in it could construct.
+
+## A non-number reaching arithmetic signals a catchable type-error (todo-592)
+
+**The invariant: a non-number operand reaching an arithmetic or comparison operator
+(`+ - * / mod rem = < > <= >= min max abs gcd`, the bitwise family, `1+`/`1-`, and
+every float coercion behind `sqrt`/`exp`/...) signals a CATCHABLE error carrying the
+interpreter's exact text — `Expected integer, got: <prin1>` on the exact path,
+`Expected number, got: <prin1>` on the float path — byte-identical on all four
+backends.** Found by todo-589's `(min 4096 (file-length in))`: on both wasm backends
+the slip died as a raw `wasm trap: cast failure` straight past `handler-case`, and on
+the JVM the caught message was a Java NPE naming `BigInteger` internals. The prefixes
+live in `ClosRegistry.EXPECTED_INTEGER|NUMBER_MESSAGE_PREFIX`; the failure is detected
+at each backend's coercion FUNNEL, never by wrapping operator sites:
+
+- **Interpreter**: unchanged mechanism (`Environment.asLong`/`asDouble`/
+  `asBigInteger`, a `type-error` at the throw site), now spelled from the shared
+  prefix constants. Which prefix a case sees depends on which dispatch arm the
+  OTHER operands select — `(+ 1 nil)` is exact-path ("integer"), `(+ 1.5 nil)`
+  float-path ("number") — and the compiled backends' funnels split the same way, so
+  the texts agree case by case.
+- **JVM** (`JvmNumericRuntimeBuilder`): `_big` (the exact-path widening funnel) and
+  `_dbl` (the float funnel) test-and-throw `new RuntimeException(prefix +
+  _lispToString(x))` where a bare `checkcast` used to let null through to a later NPE
+  (`_abs`'s BigInteger arm now routes through `_big` for the same reason). The
+  landing pad (`JvmHandlerCaseCompiler.emitRawFailureTest` case 0,
+  `emitMessagePrefixHit`) classifies the two prefixes as `type-error` — the
+  unbound-variable message-exception precedent. One `instanceof` on each SLOW arm
+  only; the Long/Long and Double fast arms are byte-identical, and the three
+  bench-report programs (mandelbrot/bignum/fib) measured no change (2026-08-31,
+  best of 5). The output class grows ~1.4 KB (the prin1-concat-throw sequences plus
+  their constants).
+- **wasm-GC** (Preview 1 and `--component`): the two coercion funnels grew a checked
+  final arm — `_int_val`'s non-integer arm calls `_type_err_int`, `_as_f64`'s
+  non-number arm `_type_err_num` (`FUNC_TYPE_ERR_INT`/`FUNC_TYPE_ERR_NUM`, bodies
+  `WasmEmitHelper.buildTypeErrBody`, signature `TYPE_PRINT_VAL` so no new type
+  entry). In EH mode the body renders prefix + `_prin1_to_str` through
+  `_string_concat` and throws the instance-less `(nil . message)` payload on
+  `$lisp-cond` — caught by `handler-case` as a `simple-error`, reported by the entry
+  landing pad as `Unhandled condition: Expected integer, got: NIL` when uncaught.
+  **Outside EH mode both bodies are a bare `unreachable`**: no tag section exists,
+  nothing could catch a throw, and the todo-350 decision (no reporting outside EH
+  mode) stands — the failure stays a messageless trap there, now `unreachable`
+  instead of `cast failure`. The message prefixes are interned EARLY
+  (`WasmLispCompiler`, beside `tSymEntry` — a string added during code emission
+  lands after the data segment content is fixed and reads back as blanks) and only
+  in EH mode. `_int_val`'s limb-tier arm still TRAPS explicitly: the
+  `.kb/wasm-bignum.md` exact-or-trap boundary is about values that ARE integers, and
+  an "Expected integer" for one would be a lie. The `_as_f64` ladder was reordered
+  float-first in the same change, which turned the check's measured +9.8% float cost
+  into a -21% win — numbers and date in `.kb/wasm-shared-coercion.md`. Size: +33-37 B
+  per non-EH module, +283 B per EH-mode module.
+- **`--no-gc`**: unaffected, still traps — it has no condition objects by contract
+  (`.kb/no-gc-scalar-wasm.md`), and its scalar value model never boxes.
+- **What still traps on wasm-GC**: anything not funneled through `_int_val`/`_as_f64`
+  — `(car 5)`, division by zero, kinded/generic aref casts, the limb-tier boundaries
+  above. The catchable family is exactly the two funnels' reach.
+- **Class divergence, deliberate**: interpreter and JVM signal `type-error`; the wasm
+  pair synthesizes `simple-error` (the payload is instance-less — the
+  undefined-function stub's gate problem exactly: the fixed runtime helpers are
+  built before `mayCreateInstances`/`usedLayoutTags` fixed an instance
+  representation). **Re-evaluation trigger**: the same one as the
+  undefined-function stub — teach both gates about these throw sites and the
+  payload can carry the class; fix the two families together.
+- A pre-existing edge this did not change: a condition thrown from INSIDE a wasm
+  to-string capture (a user `print-object` that errors, and now an arithmetic slip
+  inside one) leaves the capture flag set; it was unreachable-fatal before and is
+  merely pre-existing-shaped now.
+
+Pinned by `nonNumberArithmeticOperandsSignalCatchableTypeErrors` (evaluator),
+`compileAndRunNonNumberArithmeticOperandsSignalCatchableTypeErrors` (JVM),
+`WasmLispCompilerIntegrationTest.ehNonNumberArithmeticOperandsAreCaughtWithTheInterpreterText`
+(+ the component twin `ehNonNumberArithmeticOperandsAreCaughtOnTheComponentPathToo`,
+the class-divergence pin `ehANonNumberArithmeticOperandIsCaughtAsASimpleErrorHere`,
+the uncaught-report pin
+`ehAnUncaughtNonNumberOperandReportsTheInterpreterLineBeforeTrapping` and the non-EH
+trap pin `aNonNumberArithmeticOperandOutsideEhModeStaysATrap`), and cross-backend by
+the ci-spec `non-number-arithmetic-operands-are-catchable` case.
 
 ## Pinned lists and tests
 

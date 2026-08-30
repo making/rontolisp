@@ -6456,7 +6456,8 @@ public final class Environment implements Scope {
 		if (val instanceof LispInteger i) {
 			return i.value();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, "Expected integer, got: " + val.print());
+		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+				ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX + val.print());
 	}
 
 	private static double asDouble(LispVal val) {
@@ -6472,7 +6473,8 @@ public final class Environment implements Scope {
 		if (val instanceof LispRatio r) {
 			return r.doubleValue();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, "Expected number, got: " + val.print());
+		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+				ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX + val.print());
 	}
 
 	/** Whether every argument is a {@code long}-range integer (the bitwise fast path). */
@@ -6492,7 +6494,8 @@ public final class Environment implements Scope {
 		if (val instanceof LispBigInteger b) {
 			return b.value();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, "Expected integer, got: " + val.print());
+		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+				ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX + val.print());
 	}
 
 	/**

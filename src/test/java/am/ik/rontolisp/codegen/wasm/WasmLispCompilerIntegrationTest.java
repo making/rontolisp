@@ -17303,6 +17303,63 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehNonNumberArithmeticOperandsAreCaughtWithTheInterpreterText() throws Exception {
+		// A type slip into an arithmetic operator used to die as an UNCATCHABLE
+		// `wasm trap: cast failure` straight past handler-case. The arithmetic
+		// runtime's non-number arms (_int_val, _as_f64) now land in
+		// _type_err_int/_type_err_num, which throw a $lisp-cond whose message is the
+		// interpreter's exact text (.kb/error-handling.md, "A non-number reaching
+		// arithmetic"). The evaluator/JVM twins assert the same strings.
+		assertThat(compileAndRunEh("""
+				(defun te-print (thunk)
+				  (handler-case (funcall thunk) (error (e) (princ-to-string e))))
+				(print (te-print (lambda () (+ 1 nil))))
+				(print (te-print (lambda () (< 1 nil))))
+				(print (te-print (lambda () (* 2 "x"))))
+				(print (te-print (lambda () (max 1 'sym))))
+				(print (te-print (lambda () (+ 1.5 nil))))
+				""")).isEqualTo("\"Expected integer, got: NIL\"\n\"Expected integer, got: NIL\"\n"
+				+ "\"Expected integer, got: \\\"x\\\"\"\n\"Expected integer, got: SYM\"\n"
+				+ "\"Expected number, got: NIL\"");
+	}
+
+	@Test
+	void ehNonNumberArithmeticOperandsAreCaughtOnTheComponentPathToo() throws Exception {
+		assertThat(compileComponentAndRun("""
+				(print (handler-case (+ 1 nil) (error (e) (princ-to-string e))))
+				(print (handler-case (* 2 "x") (error (e) (princ-to-string e))))
+				""")).isEqualTo("\"Expected integer, got: NIL\"\n\"Expected integer, got: \\\"x\\\"\"");
+	}
+
+	@Test
+	void ehANonNumberArithmeticOperandIsCaughtAsASimpleErrorHere() throws Exception {
+		// Divergence by CLASS, not catchability (the undefined-function precedent): the
+		// payload a fixed runtime helper can build is instance-less, so the landing
+		// synthesizes a simple-error where the interpreter and the JVM answer
+		// type-error. .kb/error-handling.md carries the re-evaluation trigger.
+		assertThat(compileAndRunEh("""
+				(print (handler-case (+ 1 nil) (type-error (e) :type-error) (error (e) :plain-error)))
+				""")).isEqualTo(":PLAIN-ERROR");
+	}
+
+	@Test
+	void ehAnUncaughtNonNumberOperandReportsTheInterpreterLineBeforeTrapping() throws Exception {
+		assertThat(compileAndRunEhExpectTrap("""
+				(print (handler-case (error "warm") (error (e) :ok)))
+				(print (+ 1 nil))
+				""")).contains("Unhandled condition: Expected integer, got: NIL");
+	}
+
+	@Test
+	void aNonNumberArithmeticOperandOutsideEhModeStaysATrap() throws Exception {
+		// No catching form => no tag section: _type_err_int is a bare `unreachable`,
+		// so the failure class is the trap it always was, with no report line -- the
+		// same deliberate non-EH silence as anUncaughtConditionOutsideEhModeStaysSilent.
+		String stderr = compileAndRunExpectTrap("(print 1) (print (+ 1 nil))");
+		assertThat(stderr).contains("unreachable").doesNotContain("Unhandled condition");
+	}
+
+	@Test
 	void anUncaughtConditionOutsideEhModeStaysSilent() throws Exception {
 		// No catching form anywhere: %error is a bare `unreachable` that evaluates
 		// nothing, the module has no tag section and there is no landing pad to read a
