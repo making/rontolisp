@@ -2,7 +2,8 @@
 
 `scene` パッケージは `metal` と `appkit` の上に載る `geom` ソリッドの 3D
 ビューアです。軌道回転・パン・ドリーのカメラ、地面グリッド、ワールドとボディの座標軸、
-ソリッド/ワイヤフレーム表示、アニメーションフックを備えます。macOS 専用である理由は
+ソリッド/ワイヤフレーム表示、クリックフック、アニメーションフックを備えます。macOS
+専用である理由は
 `metal` と同じです。**Common Lisp の一部ではありません**。名前は `scene:`
 修飾子で参照してください。`scene:viewer-state` は CLOS クラス名でもあります。
 ビューアはグローバル変数の集合ではなくインスタンスなので、1 つのイメージに 2
@@ -26,7 +27,9 @@
 | `scene:grid-color` | `(scene:grid-color v (geom:vec3 0.2 0.5 0.4))` | `nil`。グリッドの色 |
 | `scene:background` | `(scene:background v '(0 0 0 1))` | `nil`。フレーム開始時の色 |
 | `scene:shading` | `(scene:shading v :wireframe)` | `nil`。`:solid`、`:wireframe`、`:both` (既定) |
-| `scene:axes` | `(scene:axes v :both)` | `nil`。`:world` (既定)、`:bodies`、`:both`、`nil` |
+| `scene:axes` | `(scene:axes v :both)` | `nil`。`:world`、`:bodies`、`:both`、`nil` (既定 -- 何も描かない) |
+| `scene:ray` | `(scene:ray v 450.0 320.0)` | ビュー上の点を通るワールド視線を `(始点 方向)` で |
+| `scene:on-click` | `(scene:on-click v #'reach)` | `nil`。クリックが落ちたワールド点を引数に `hook` を呼ぶ。`nil` で解除 |
 | `scene:refresh` | `(scene:refresh v)` | `nil`。ちょうど 1 フレーム描画 |
 | `scene:animate` | `(scene:animate v hook)` | `nil`。60 fps で描画し、各フレーム前に `hook` を 1 回呼ぶ |
 | `scene:wait` | `(scene:wait v)` | ビューアのウィンドウが閉じられたら `nil` |

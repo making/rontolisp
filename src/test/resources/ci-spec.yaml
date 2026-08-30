@@ -4973,6 +4973,13 @@ cases:
         (print (round (geom:volume (geom:torus :radius 60 :tube 20 :sides 48 :rings 24))))
         (print (round (geom:volume (geom:cone :radius 50 :height 120 :sides 64))))
         (print (round (geom:surface-area (geom:sphere :radius 50 :sides 32 :stacks 24))))
+        ;; A torus's cross-section is CLOSED, so geom:revolution caps neither end:
+        ;; sides * rings quads and nothing else. Capping it laid two coincident
+        ;; discs across the hole, which the volume above cannot see -- they wind
+        ;; opposite ways and cancel -- while the area doubles and a renderer draws
+        ;; a filled disc (.kb/geom.md, "The winding convention").
+        (print (length (geom:facets-of (geom:torus :radius 60 :tube 20 :sides 48 :rings 24))))
+        (print (round (geom:surface-area (geom:torus :radius 60 :tube 20 :sides 48 :rings 24))))
         (let ((s (geom:box 10)))
           (setf (geom:user-data s) :mine)
           (geom:nscale s 2)
@@ -4995,6 +5002,8 @@ cases:
       467012
       313655
       31248
+      1152
+      47155
       (NIL 8000.0)
   # Scaling follows CL's functional/destructive convention (.kb/geom.md,
   # "Scaling"): geom:scale BUILDS a new root solid recording (:scale s factor)

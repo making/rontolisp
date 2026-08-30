@@ -832,6 +832,8 @@ categories:
       - { slug: scene-background, name: "scene:background" }
       - { slug: scene-shading, name: "scene:shading" }
       - { slug: scene-axes, name: "scene:axes" }
+      - { slug: scene-ray, name: "scene:ray" }
+      - { slug: scene-on-click, name: "scene:on-click" }
       - { slug: scene-refresh, name: "scene:refresh" }
       - { slug: scene-animate, name: "scene:animate" }
       - { slug: scene-wait, name: "scene:wait" }

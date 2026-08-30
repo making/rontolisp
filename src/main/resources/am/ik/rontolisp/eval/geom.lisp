@@ -522,9 +522,21 @@
                         :color color
                         :label label)))
 
+;; A profile whose two ends are the same point is a CLOSED cross-section -- a
+;; torus's, and any tube's -- and therefore has no end to cap. Relative to the
+;; profile's own scale, since geom has no unit of length.
+(defun geom::%closed-profile (profile)
+  (let ((a (first profile)) (b (car (last profile))))
+    (< (+ (abs (- (first a) (first b))) (abs (- (third a) (third b))))
+       (* 1e-6 (+ 1.0 (abs (first a)) (abs (third a)))))))
+
 ;; PROFILE is a cross-section in the x >= 0 half of the xz-plane, as (x y z)
 ;; lists whose y is ignored, revolved about z. Caps are added where an end of
-;; the profile does not reach the axis.
+;; the profile does not reach the axis -- and a CLOSED profile has no end, so it
+;; gets neither. Capping one anyway laid two coincident discs across a torus's
+;; hole: they wind opposite ways and cancel in the volume integral, which is why
+;; it went unseen there, but surface-area counted both and the renderer drew
+;; whichever one survived back-face culling, so a torus was a filled disc.
 (defun geom:revolution (profile &key (sides 24) color label)
   (let ((m (length profile)) (points '()) (facets '()))
     (dotimes (s sides)
@@ -538,12 +550,16 @@
           (push
            (list (+ (* s m) i) (+ (* s m) i 1) (+ (* s2 m) i 1) (+ (* s2 m) i))
            facets))))
-    (let ((top '()) (bottom '()))
+    (let ((top '())
+          (bottom '())
+          (closed (and (> m 1) (geom::%closed-profile profile))))
       (dotimes (s sides)
         (push (* s m) top)
         (push (+ (* s m) m -1) bottom))
-      (when (> (abs (first (first profile))) 1e-6) (push (nreverse top) facets))
-      (when (> (abs (first (car (last profile)))) 1e-6) (push bottom facets)))
+      (when (and (not closed) (> (abs (first (first profile))) 1e-6))
+        (push (nreverse top) facets))
+      (when (and (not closed) (> (abs (first (car (last profile)))) 1e-6))
+        (push bottom facets)))
     (geom::%build-solid points (nreverse facets) :color color :label label)))
 
 (defun geom:sphere (&key (radius 1.0) (sides 24) (stacks 12) color label)

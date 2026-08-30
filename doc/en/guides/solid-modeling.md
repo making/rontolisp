@@ -62,7 +62,7 @@ be positional; nothing else is.
 | `(geom:sphere :radius 50 :sides 32 :stacks 24)` | a sphere centred on its origin |
 | `(geom:torus :radius 60 :tube 20)` | a torus in the xy-plane |
 | `(geom:extrusion profile :along 10)` | a closed profile swept along a vector -- the general prism |
-| `(geom:revolution profile :sides 64)` | a profile turned about z, capped where it leaves the axis |
+| `(geom:revolution profile :sides 64)` | a profile turned about z, capped where it leaves the axis (a closed profile gets no cap) |
 | `(geom:polyhedron points facets)` | raw points and index loops -- the escape hatch |
 | `(geom:arrow :length 200 :radius 6)` | a shaft and a pointed head as one solid, along `:direction` |
 | `(geom:triad :at (geom:vec3 0 0 0))` | three of those -- +x red, +y green, +z blue -- as a list |

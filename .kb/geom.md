@@ -103,6 +103,21 @@ the shipped library):
 Those integers are the ci-spec expectations; a change that shifts one is either a
 tessellation change or a bug.
 
+**And `volume` is the winding test, not the whole mesh's test** (2026-08-30).
+`geom:revolution` used to cap BOTH ends of a profile whose two ends are the same
+point -- a torus's closed cross-section -- laying two coincident discs across the
+hole. They wind opposite ways, so the divergence integral cancelled them exactly
+and the torus's volume above was and is right; `surface-area` counted both
+(87,252 against the closed form's 47,374, +84%) and the renderer drew whichever
+one survived back-face culling, so **a torus rendered as a filled disc**. The
+rule is now `geom::%closed-profile`: a closed profile has no end and gets neither
+cap. The lesson is in the pin: both
+`GeomLibraryTest.aClosedProfileIsCappedAtNeitherEndSoATorusHasAHole` and the
+`geom-solids-cross-backend` ci-spec case assert the AREA (47,155 rounded) and the
+FACET COUNT (1,152 = `sides * rings` and nothing else), because those are the two
+numbers a cancelling pair of facets cannot hide behind. `examples/browser/
+webgl-solids/solids.wasm` draws a torus and was rebuilt with the fix.
+
 ## The cached mesh -- the load-bearing invariant
 
 `geom:mesh` answers the solid's triangles in MODEL space: 18 floats a triangle (three
@@ -509,6 +524,53 @@ that inverted mesh -- a mirroring factor flips the facets, "Scaling" above -- so
 inverted solid can only be built by hand through `geom:polyhedron`.) So the winding
 check is the renderer's, not the modeller's, and the two agree by construction rather
 than by measurement.
+
+## Clicking: `scene:ray` and `scene:on-click` (2026-08-30)
+
+A viewer that can be orbited but cannot say WHERE a click landed is half a
+viewer, and it is the half `examples/macos/scene-robot-reach.lisp` needs. The
+two names are one decision taken twice:
+
+- **`scene:ray v x y` is the primitive, and it answers a LINE.** `(origin
+  direction)`, world space, from view coordinates in points (AppKit's -- origin
+  bottom-left, `+y` up). A pixel names a line through the world and which point
+  of it was meant is the program's question; answering only a point would make
+  the viewer decide something it has no business deciding, and a program wanting
+  the ground plane could not undo it.
+- **`scene:on-click v hook` is the convenience, and it answers a POINT** -- where
+  that ray meets the plane through the ORBIT TARGET facing the camera. That is
+  the one plane a viewer can pick without being told, and picking it is what
+  makes "click where you see" true from any camera angle in one line. `nil`
+  removes the hook; it is called on the main thread, like every other callback.
+
+**A click is a press released without travelling more than 4 points**, measured
+by `scene::%moved` accumulated over the drag. The deadzone is in the RELEASE arm
+and deliberately not in the drag arm: the orbit those four points also performed
+is invisible, whereas a drag that ignored its first four points would start with
+a jump. So clicking and orbiting are one gesture and neither needs a modifier --
+and a shift-drag (the pan) never produces a click at all. The hook is followed by
+one `scene:refresh`, on the same reasoning the camera gestures redraw themselves:
+an idle viewer must not answer a click with nothing on screen.
+
+`scene:ray` is camera arithmetic and needs no window, no device and no contents,
+so `SceneLibraryTest` drives it and `scene::%click-point` over a bare
+`(make-instance 'scene:viewer-state :width ... :height ... :target ...)` -- the
+centre pixel lands on the target, a pixel right of centre lands right of it on
+the same plane, and `on-click` installs and removes. What stays uncovered is the
+NSEvent that reaches them, exactly as `scene::%view-point` does.
+
+**`scene:on-click` is where the IK divergence in the example was found, and the
+finding belongs here** because it is about `geom`'s type model, not about that
+program. A chain posed by solving for a WORLD-frame angular velocity has to carry
+it back into each joint's frame as `Rp^T Rot(w) Rp . R`, and that sandwich
+DOUBLES the parent's orthogonality error into the child every time it runs: eight
+solver iterations a frame down a five-joint chain is 2^8 a frame, and the
+measured error went 1e-16 -> 1e-2 in five frames, with links stretching by tens
+of units. Stating the Jacobian in each joint's OWN frame -- block `M . R` with
+`R` the joint's world rotation, update `R . Rot(w)` -- removes the sandwich, and
+the drift falls back to arithmetic (about 1e-8 a frame). It is also 1.5x faster.
+`geom:rotation-of` slots are float32 by the package's own rule, so this is a
+constraint on any consumer that composes rotations, not a quirk of one example.
 
 ## The browser twin
 

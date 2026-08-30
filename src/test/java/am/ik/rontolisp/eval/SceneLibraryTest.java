@@ -172,6 +172,61 @@ class SceneLibraryTest {
 			.hasMessageContaining("not a geom:solid");
 	}
 
+	// --- picking -----------------------------------------------------------------
+	//
+	// scene:ray is camera arithmetic and nothing else, so it needs no window and no
+	// Metal device either: a viewer-state with a width, a height and a target is
+	// enough. The gesture that reaches it -- a press released without travelling --
+	// is an NSEvent and stays uncovered here, exactly as %view-point does.
+
+	private static final String CAMERA = """
+			(defvar *v* (progn #'scene:ray
+			                   (make-instance 'scene:viewer-state
+			                                  :width 800.0 :height 600.0
+			                                  :target (geom:vec3 0 0 0))))
+			""";
+
+	@Test
+	void aRayThroughTheCentreOfTheViewLandsOnTheOrbitTarget() {
+		// The centre pixel looks straight down the view direction, so the plane
+		// through the target answers the target itself -- which is what makes
+		// "click where you see" true from any camera angle.
+		assertThat(eval(CAMERA + """
+				(let ((p (scene::%click-point *v* 400.0 300.0)))
+				  (list (round (aref p 0)) (round (aref p 1)) (round (aref p 2))))
+				""")).isEqualTo("(0 0 0)");
+		// The ray starts at the eye and points into the scene.
+		assertThat(eval(CAMERA + """
+				(let ((r (scene:ray *v* 400.0 300.0)))
+				  (list (eq (first r) (scene::%eye *v*))
+				        (round (* 100 (linalg:dot (second r)
+				                                  (linalg:row (scene::%basis *v*) 2))))))
+				""")).isEqualTo("(T 100)");
+	}
+
+	@Test
+	void aClickRightOfCentreLandsRightOfTheTargetOnTheSamePlane() {
+		// Right of centre is +right in the camera's own basis, and the point stays
+		// on the plane through the target -- its component along the view direction
+		// is zero however far off-centre the pixel is.
+		assertThat(eval(CAMERA + """
+				(let* ((p (scene::%click-point *v* 700.0 480.0))
+				       (b (scene::%basis *v*)))
+				  (list (> (linalg:dot p (linalg:row b 0)) 0.0)
+				        (> (linalg:dot p (linalg:row b 1)) 0.0)
+				        (< (abs (linalg:dot p (linalg:row b 2))) 1.0)))
+				""")).isEqualTo("(T T T)");
+	}
+
+	@Test
+	void onClickInstallsTheHookAndNilRemovesIt() {
+		assertThat(eval(CAMERA + """
+				(scene:on-click *v* (lambda (p) p))
+				(list (functionp (scene::%click-hook *v*))
+				      (progn (scene:on-click *v* nil) (scene::%click-hook *v*)))
+				""")).isEqualTo("(T NIL)");
+	}
+
 	private static String eval(String program) {
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		LispVal answer = LispNil.INSTANCE;

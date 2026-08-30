@@ -2,8 +2,8 @@
 
 The `scene` package is a 3-D viewer for `geom` solids, over `metal` and
 `appkit`: an orbit/pan/dolly camera, a ground grid, world and body axis triads,
-solid/wireframe shading and an animation hook. macOS only, for the same reason
-`metal` is. It is **not part of Common Lisp**; reference its names with the
+solid/wireframe shading, a click hook and an animation hook. macOS only, for the
+same reason `metal` is. It is **not part of Common Lisp**; reference its names with the
 `scene:` qualifier, and `scene:viewer-state` is also a CLOS class name. A viewer
 is an instance rather than a set of globals, so two windows can exist in one
 image and orbit independently. **No triangle is touched by Lisp during a frame**
@@ -26,7 +26,9 @@ guide](../../guides/solid-modeling.md) covers the model half.
 | `scene:grid-color` | `(scene:grid-color v (geom:vec3 0.2 0.5 0.4))` | `nil`; the grid's colour |
 | `scene:background` | `(scene:background v '(0 0 0 1))` | `nil`; the colour a frame starts from |
 | `scene:shading` | `(scene:shading v :wireframe)` | `nil`; `:solid`, `:wireframe` or `:both` (the default) |
-| `scene:axes` | `(scene:axes v :both)` | `nil`; `:world` (the default), `:bodies`, `:both` or `nil` |
+| `scene:axes` | `(scene:axes v :both)` | `nil`; `:world`, `:bodies`, `:both` or `nil` (the default -- nothing) |
+| `scene:ray` | `(scene:ray v 450.0 320.0)` | the world-space eye ray through a view point, as `(origin direction)` |
+| `scene:on-click` | `(scene:on-click v #'reach)` | `nil`; `hook` is called with the world point a click landed on, `nil` removes it |
 | `scene:refresh` | `(scene:refresh v)` | `nil`; draws exactly one frame |
 | `scene:animate` | `(scene:animate v hook)` | `nil`; draws at 60 fps, calling `hook` once before each frame |
 | `scene:wait` | `(scene:wait v)` | `nil`, once the viewer's window has been closed |

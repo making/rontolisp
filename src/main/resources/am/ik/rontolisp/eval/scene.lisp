@@ -132,6 +132,11 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
    (dragging :initform nil :accessor scene::%dragging)
    (panning :initform nil :accessor scene::%panning)
    (last-point :initform nil :accessor scene::%last-point)
+   ;; Where the press landed and how far it has travelled since: what separates
+   ;; a click from a drag on release, since one gesture is both until then.
+   (down-point :initform nil :accessor scene::%down-point)
+   (moved :initform 0.0 :accessor scene::%moved)
+   (click-hook :initform nil :accessor scene::%click-hook)
    (frame-hook :initform nil :accessor scene::%frame-hook)))
 
 ;; The one NSView subclass, defined once per process: its five selectors are
@@ -432,6 +437,57 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
                           (/ (scene::%width v) (scene::%height v)) (* 0.002 far)
                           far) view))))
 
+;; --- picking: what a click is ------------------------------------------------
+;;
+;; A viewer that can be orbited but cannot say WHERE a click landed is only half
+;; a viewer, and the honest answer to "where" is not a point: a pixel names a
+;; LINE through the world, and which point of that line was meant is the
+;; program's question. So the primitive is scene:ray and scene:on-click is the
+;; convenience over it -- the viewer knows its own orbit target, so the plane
+;; through that target facing the camera is the one plane it can pick without
+;; being told, and "click where you see" is exactly what a hook wants.
+
+;; The world-space eye ray through a point of the view: (origin direction), two
+;; 3-vectors, the direction a unit vector. X and Y are view coordinates in
+;; points -- AppKit's, so the origin is the bottom-left corner and +y is up.
+(defun scene:ray (v x y)
+  (scene::%update-camera v)
+  (let* ((th (tan (/ scene::+fov+ 2.0)))
+         (aspect (/ (scene::%width v) (scene::%height v)))
+         (cx (- (/ (* 2.0 x) (scene::%width v)) 1.0))
+         (cy (- (/ (* 2.0 y) (scene::%height v)) 1.0))
+         (basis (scene::%basis v)))
+    (list (scene::%eye v)
+          (scene::%unit
+           (linalg:add (linalg:row basis 2)
+                       (linalg:add
+                        (linalg:mul (linalg:row basis 0) (* cx th aspect))
+                        (linalg:mul (linalg:row basis 1) (* cy th))))))))
+
+;; Where that ray meets the plane through the orbit target facing the camera.
+;; The denominator cannot vanish -- the ray is inside the frustum, so it is
+;; never perpendicular to the view direction -- but a viewer whose width or
+;; height went to nothing would make it, and a division by zero is not the
+;; report anyone wants from a mouse click.
+(defun scene::%click-point (v x y)
+  (let* ((r (scene:ray v x y))
+         (o (first r))
+         (d (second r))
+         (forward (linalg:row (scene::%basis v) 2))
+         (den (linalg:dot d forward))
+         (tt
+          (/ (linalg:dot (linalg:sub (scene::%target v) o) forward)
+             (if (< (abs den) 1e-6) 1e-6 den))))
+    (linalg:add o (linalg:mul d tt))))
+
+;; HOOK is called with one argument, that world point, on the main thread; nil
+;; removes it. A click is a press that was released without travelling more than
+;; a few points -- the same classification the browser twin makes -- so orbiting
+;; and clicking are one gesture and neither needs a modifier.
+(defun scene:on-click (v hook)
+  (setf (scene::%click-hook v) hook)
+  nil)
+
 ;; --- the fixed furniture: a ground grid and the axis triad ---------------------
 
 ;; The ground plane, or none of it: :extent nil drops the grid the way
@@ -499,6 +555,8 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
       ;; 131072 is NSEventModifierFlagShift
       (setf (scene::%panning v)
             (> (logand (objc:send event "modifierFlags") 131072) 0))
+      (setf (scene::%moved v) 0.0)
+      (setf (scene::%down-point v) (scene::%view-point event))
       (setf (scene::%last-point v) (scene::%view-point event))))
   nil)
 
@@ -534,6 +592,7 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
              (dx (aref d 0))
              (dy (aref d 1)))
         (setf (scene::%last-point v) p)
+        (setf (scene::%moved v) (+ (scene::%moved v) (abs dx) (abs dy)))
         (if (scene::%panning v) (scene::%pan v dx dy) (scene::%orbit v dx dy))
         ;; A camera change has to be SHOWN. The mutators below do not redraw --
         ;; a loop adding sixty solids must not draw sixty frames, and the REPL
@@ -543,9 +602,22 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
         (scene:refresh v))))
   nil)
 
+;; The release is where a gesture is classified: a press that has travelled no
+;; more than a few points is a click, and the orbit it also performed over those
+;; few points is invisible -- which is why the deadzone is here rather than in
+;; the drag arm, where it would make a slow orbit start with a jump.
 (defun scene::%on-mouse-up (self event)
   event
-  (let ((v (scene::%viewer-for self))) (when v (setf (scene::%dragging v) nil)))
+  (let ((v (scene::%viewer-for self)))
+    (when v
+      (let ((hook (scene::%click-hook v)) (p (scene::%down-point v)))
+        (setf (scene::%dragging v) nil)
+        (when (and hook p (not (scene::%panning v)) (<= (scene::%moved v) 4.0))
+          (funcall hook (scene::%click-point v (aref p 0) (aref p 1)))
+          ;; The hook is a program's change and the click is the gesture that
+          ;; asked for it, so the frame belongs with it -- an idle viewer would
+          ;; otherwise answer a click with nothing on screen.
+          (scene:refresh v)))))
   nil)
 
 (defun scene::%on-scroll (self event)

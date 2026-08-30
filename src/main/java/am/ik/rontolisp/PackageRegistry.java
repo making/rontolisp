@@ -429,7 +429,7 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> SCENE_FUNCTIONS = Set.of("VIEWER", "OFFSCREEN", "SNAPSHOT", "VIEWER-STATE",
 			"WINDOW-OF", "CONTEXT-OF", "ADD", "DROP", "CLEAR", "CONTENTS", "FIT", "CAMERA", "GRID", "GRID-COLOR",
-			"BACKGROUND", "SHADING", "AXES", "REFRESH", "ANIMATE", "WAIT");
+			"BACKGROUND", "SHADING", "AXES", "RAY", "ON-CLICK", "REFRESH", "ANIMATE", "WAIT");
 
 	private static final List<String> SCENE_FUNCTION_NAMES = sorted(SCENE_FUNCTIONS);
 

@@ -60,7 +60,7 @@
 | `(geom:sphere :radius 50 :sides 32 :stacks 24)` | 原点を中心とする球 |
 | `(geom:torus :radius 60 :tube 20)` | xy 平面上のトーラス |
 | `(geom:extrusion profile :along 10)` | 閉じた輪郭をベクトルに沿って掃引した一般の角柱 |
-| `(geom:revolution profile :sides 64)` | 輪郭を z 軸まわりに回転させた立体。軸を離れる端に蓋が付く |
+| `(geom:revolution profile :sides 64)` | 輪郭を z 軸まわりに回転させた立体。軸を離れる端に蓋が付く (閉じた輪郭には付かない) |
 | `(geom:polyhedron points facets)` | 生の点列とインデックスループ（逃げ道） |
 | `(geom:arrow :length 200 :radius 6)` | 軸と尖った頭を1つのソリッドにした矢印。向きは `:direction` |
 | `(geom:triad :at (geom:vec3 0 0 0))` | それを3本（+x 赤、+y 緑、+z 青）束ねたリスト |

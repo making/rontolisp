@@ -132,6 +132,26 @@ class GeomLibraryTest {
 	}
 
 	@Test
+	void aClosedProfileIsCappedAtNeitherEndSoATorusHasAHole() {
+		// A torus's cross-section is a CLOSED loop, so it has no ends to cap, and
+		// geom:revolution used to cap it anyway: two coincident discs across the hole.
+		// The volume integral could not see them -- they wind opposite ways and cancel,
+		// which is why this shipped -- but surface-area counted both and the renderer
+		// drew whichever one survived back-face culling, so a torus was a filled disc.
+		double area = number("(geom:surface-area (geom:torus :radius 60 :tube 20 :sides 48 :rings 24))");
+		double exact = 4 * PI * PI * 60 * 20;
+		assertThat(area).isLessThan(exact).isGreaterThan(exact * 0.98);
+		// sides * rings quads and nothing else.
+		assertThat(number("(length (geom:facets-of (geom:torus :sides 48 :rings 24)))")).isEqualTo(48 * 24);
+		// The open profiles still cap: a sphere's ends reach the axis and get none, a
+		// cylinder profile's do not and get two.
+		assertThat(number("(length (geom:facets-of (geom:revolution '((10 0 20) (10 0 0)) :sides 12)))"))
+			.isEqualTo(12 + 2);
+		assertThat(number("(length (geom:facets-of (geom:revolution '((0 0 20) (10 0 0)) :sides 12)))"))
+			.isEqualTo(12 + 1);
+	}
+
+	@Test
 	void aConeApproachesAThirdOfItsCylinder() {
 		double measured = number("(geom:volume (geom:cone :radius 50 :height 120 :sides 64))");
 		double exact = PI * 50 * 50 * 120 / 3;
