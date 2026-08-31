@@ -249,11 +249,12 @@ heads accept the same specs as `check-type`:
   float* -> `floatp`, number/real -> `numberp`, rational/ratio ->
   `rationalp`, string, symbol, keyword, cons, list, null, atom, character,
   hash-table, function -> `functionp`; `boolean` -> `(or (null v) (eq v t))`;
-  `unsigned-byte` -> `(and (integerp v) (>= v 0))`; `vector`/`simple-vector`/
-  `array`/`simple-array` -> `(or (stringp v) (%arrayp v))` (the rank is NOT
-  checked -- a rank read would drag the gated array helpers into every
-  typecase-using program); `sequence` adds `listp`; `t`/`otherwise` -> t;
-  literal `nil` spec -> nil (the empty type). `functionp` is a real public
+  `unsigned-byte` -> `(and (integerp v) (>= v 0))`; `array` ->
+  `(or (stringp v) (%arrayp v))` (the rank is NOT checked -- that is what
+  separates it from `vector`, whose atomic arm goes through
+  `makeArrayTypeTest`); `sequence` adds `listp`; `t`/`otherwise` -> t;
+  literal `nil` spec -> nil (the empty type). The three `simple-` spellings
+  add `%simple-array-p` (below). `functionp` is a real public
   builtin (Environment + Jvm/WasmFunctionpCompiler: JVM = Object[] with an
   Integer funcId in slot 0, WASM = `ref.test TYPE_CLOSURE`); `%arrayp` is a
   CL_INTERNALS-only predicate (JVM = `instanceof java.util.ArrayList`; WASM
@@ -318,7 +319,8 @@ one. The shapes are SBCL's, checked against SBCL 2.2.9 on the pinning program:
 | `(make-array nil)` | `(SIMPLE-ARRAY T NIL)` -- the rank-0 array, `.todo/603` |
 | `(make-array 4 :element-type 'single-float)` | `(SIMPLE-ARRAY SINGLE-FLOAT (4))` |
 | `(make-array 4 :element-type '(unsigned-byte 8))` | `(SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4))` |
-| `(make-array 4 :fill-pointer 0)` / `:adjustable t` | `(VECTOR T 4)` |
+| `(make-array 4 :fill-pointer 0)` / `:adjustable t` / `:displaced-to v` | `(VECTOR T 4)` |
+| `(make-array '(2 3) :adjustable t)` | `(ARRAY T (2 3))` -- non-simple above rank 1 |
 | `"abc"` | `STRING` (SBCL: `(SIMPLE-ARRAY CHARACTER (3))`) |
 
 Where this lives and why:
@@ -329,14 +331,19 @@ Where this lives and why:
   guard is what keeps CHARACTER arrays out: a rank-1 character array is a
   string VALUE on the interpreter and a marked general array on the compile
   paths, and both DESIGNATE `STRING` -- so all four answer `STRING` rather than
-  diverging. The SIMPLICITY arm is tested FIRST since todo-611, because a
-  remembered element type and a fill pointer can now coexist:
-  `(make-array 4 :element-type 'double-float :fill-pointer 0)` is
-  `(VECTOR DOUBLE-FLOAT 4)`, not a `simple-array`. Asking a PACKED array that
-  question is safe because both predicates answer nil for one on every backend --
-  what CL says of a simple array, and what the interpreter always answered while
-  the JVM threw and wasm trapped. The order was the other way round for exactly
-  that reason until those two were fixed.
+  diverging. The SIMPLICITY arm is tested FIRST -- since todo-611 because a
+  remembered element type and a fill pointer can coexist
+  (`(make-array 4 :element-type 'double-float :fill-pointer 0)` is
+  `(VECTOR DOUBLE-FLOAT 4)`, not a `simple-array`), and since todo-610 because
+  the DISPLACEMENT belongs in the same answer: a non-simple array is
+  `(VECTOR et size)` at rank 1 and `(ARRAY et dims)` above it, whatever it
+  holds, which is SBCL's answer for a fill-pointered, an `:adjustable` and a
+  displaced array alike. It asks `%simple-array-p`, ONE total predicate, rather
+  than `array-has-fill-pointer-p`/`adjustable-array-p`: those two became safe
+  for a packed array in todo-611 (they answer nil, what CL says of a simple
+  array and what the interpreter always answered while the JVM threw and wasm
+  trapped), but neither can see a displacement at all -- which is why a
+  displaced array used to answer `(SIMPLE-VECTOR 2)` here.
 - **`array-element-type` answers the BOOLEAN `t`** for a general array asked for
   nothing narrower, on the interpreter too since todo-604 -- it used to answer a
   SYMBOL spelled `"T"` there while all three compile backends answered the
@@ -355,7 +362,9 @@ Where this lives and why:
   specifier can still describe one (element type character or unstated, rank 1
   or unstated) and sizes itself with `length`, since the array-info functions
   do not take a string on the compile paths (`.todo/464`). The array arm reads
-  `array-element-type` and the dimensions behind the `%arrayp` guard.
+  `array-element-type` and the dimensions behind the `%arrayp` guard. A
+  `simple-` spelling ANDs ONE `%simple-array-p` call in front of the whole
+  union (todo-610, below).
 - **The element type is compared UPGRADED** (`upgradedArrayElementType`),
   mirroring exactly the representation `make-array` selects: the two float
   widths and the three packed `(unsigned-byte 8|16|32)` widths keep their name,
@@ -604,19 +613,122 @@ wasm bytes at `--optimize=size` (+110) and 21,351 -> 21,577 JVM `.class` bytes
 byte-identical; no size-report, bench-report or `examples/` program calls
 `subtypep` at all.
 
-**Still open on the `typep` side, measured 2026-08-31 on all four backends.**
-`typep` does NOT check simplicity -- `makeArrayTypeTest` treats the `simple-`
-spellings as the general one (the array-lattice bullets above), so
-`(typep (make-array 4 :fill-pointer 0) 'simple-vector)` answers `T` here and
-`NIL` in SBCL, and likewise for `simple-array` and for `simple-string` over a
-fill-pointered character vector. Tracked as `.todo/610`.
-
 Pinned by `LispEvaluatorTest#evalSimpleTypeNameSubtypepLattice`,
 `JvmLispCompilerTest#compileSimpleTypeNameSubtypepLattice`,
 `WasmLispCompilerIntegrationTest#simpleTypeNameSubtypepLattice` and the
 `simple-type-name-subtypep-lattice` ci-spec case -- one program whose every
 answer is SBCL 2.2.9's on that very program except the two `base-string`
 reverse directions above.
+
+## `typep` checks SIMPLICITY, through `%simple-array-p` (todo-610)
+
+**`(typep x 'simple-vector)` and its two siblings answer `NIL` for a value that
+is not simple -- a fill pointer, `:adjustable t` or a displacement -- on all
+four backends, and the one predicate that decides it is `%simple-array-p`.**
+Until todo-610 `makeArrayTypeTest` mapped the `simple-` spellings onto their
+general counterpart, so `(typep (make-array 4 :fill-pointer 0) 'simple-vector)`
+answered `T` where SBCL 2.2.9 answers `NIL` -- the `typep` half of the lattice
+todo-609 had just fixed on the `subtypep` side.
+
+**Why a NEW internal predicate and not a composition.** The obvious spelling,
+`(and (not (array-has-fill-pointer-p x)) (not (adjustable-array-p x))
+(not (%array-disp-target x)))`, is not total, measured 2026-08-31:
+
+- `array-has-fill-pointer-p` / `adjustable-array-p` REFUSED a packed vector on
+  the compile backends (JVM: `not applicable to a packed integer vector`; wasm:
+  a cast trap) where the right answer is `t` -- a packed array is simple by
+  construction. todo-611 fixed exactly that pair the same day, so this half of
+  the argument is now history; the two below are not.
+- `%array-disp-target` casts its argument to the general array shape, so it
+  throws on a plain string and on a packed vector -- and the displacement is the
+  one condition of the three the public surface cannot be asked about at all.
+- A value can be BOTH `stringp` and `%arrayp` (a character vector on the
+  compile backends) or neither predicate's representation (an interpreter
+  `LispString` is not `%arrayp`), so no ordering of the guards covers every
+  backend.
+- Three calls answer what one does, at four call sites (`typep`, `type-of`,
+  `simple-string-p`, `coerce`) that must not drift apart.
+
+So `%simple-array-p` (`LispNames.SIMPLE_ARRAY_P_INTERNAL`, `CL_INTERNALS`) is
+TOTAL: it answers `t` for a simple array or string, `nil` for a non-simple one
+AND for every non-array value, so a call site needs no guard. Per backend, each
+reading the representation it owns:
+
+- **Interpreter** (`Environment`): `LispString` -> no fill pointer, not
+  adjustable, not displaced; `LispArray` -> the same three fields;
+  `LispFloatArray`/`LispIntVector` -> `t`; anything else -> `nil`.
+- **JVM** (`JvmSimpleArrayPCompiler`, inline like `JvmArraypCompiler`): a
+  QUOTE-FRAMED `java.lang.String` -> `t` (the frame test is `stringp`'s -- a
+  symbol shares the class without it and is no array); `long[]`/`double[]`/
+  `float[]` -> `t` behind their program gates; an `ArrayList` -> its slot-0
+  header, `nil` when slot 1 (fill pointer) or slot 2 (`:adjustable`) is
+  non-null or when the header is length-5+ WITH a non-null slot 3 (displaced --
+  the packed general array's length-6 header has a null slot 3 and stays
+  simple); anything else -> `nil`.
+- **WASM** (`WasmArrayCompiler.compileSimpleArrayP`, so it can read the private
+  header helpers): a quote-framed `TYPE_STRING`, `TYPE_FARRAY` or a packed
+  integer vector -> 1; a `TYPE_CELL` whose header car is a dims bucket array
+  (the `%arrayp` test) -> 0 when `meta.car` is an i31 (fill pointer),
+  `meta.cdr.car` is non-null (`:adjustable`) or the data slot holds a target
+  (`emitDataSlotIsTarget`, the displacement rule `%array-disp-target` reads).
+
+Where it is wired: the `simple-` arm of `makeArrayTypeTest` (ONE call in front
+of the whole string-or-array union), the atomic `simple-array` /
+`simple-string` / `simple-base-string` arms, `RUNTIME_COMPOUND_TYPEP_SOURCE`
+(both the array and the string family), `simple-string-p`, which CL requires to
+agree with `(typep x 'simple-string)` and which used to answer `stringp`, and
+`coerce`'s "already of the result type" guard: `(coerce x 'simple-string)` on a
+NON-simple string used to answer that string, so `simple-string-p` said nil for
+the value the portable idiom had just coerced. It now `copy-seq`s it (literal
+and computed designator alike) -- every string BUILDER here already answers a
+simple string on all four backends (`concatenate`, `map`, `copy-seq`, `subseq`,
+`make-string`, `format nil`, `string-upcase`, `reverse`, measured 2026-08-31),
+so the copy converges. `simple-vector` also stopped being "vector, spelled differently":
+atomic and compound both build `(simple-array t (*))`, so a string and a packed
+vector are not one -- SBCL's answer, and the compound spelling already did it.
+`base-string`/`simple-base-string` stay collapsed onto `string`/`simple-string`
+(one character type, the todo-609 argument).
+
+**One JVM representation bug this forced out.** A `make-array :element-type
+'character` with no `:fill-pointer` -- `make-string` included -- defaulted its
+header fill-pointer slot to the CAPACITY, so
+`(array-has-fill-pointer-p (make-string 3))` answered `T` on the JVM and `NIL`
+on the other three backends and in SBCL. Mutability is the character-vector
+MARKER's, not the fill pointer's (`_strv` already falls back to `dims[0]`, and
+`_subseqCv` already CLEARED that slot to make a `copy-seq` result simple), so
+the slot now stays nil. Without it the JVM could not tell a simple character
+vector from a fill-pointered one at all.
+
+**The size, measured 2026-08-31** (baseline: `origin/develop` at e3126bdc):
+
+| program | wasm `--optimize=size` | JVM `.class` |
+| --- | --- | --- |
+| `(print 1)` (array-free) | 497 -> 497, byte-identical | 3,007 -> 3,007, byte-identical |
+| size-report `hello_world` / `pi_approx` | 0 | 0 |
+| size-report `zlib` | 103,158 -> 103,158 | 160,877 -> 160,875 (-2) |
+| a literal `(typep v 'simple-vector)` over one array | 11,401 -> 12,036 (+635) | 8,973 -> 9,602 (+629) |
+| `(type-of v)` over one array | 21,485 -> 21,648 (+163) | 45,137 -> 44,995 (-142) |
+| computed-`typep` FLOOR (`(defun tp (v s) (typep v s))`) | 50,914 -> 53,833 (+2,919) | 86,243 -> 91,370 (+5,127) |
+| computed-`subtypep` floor | 22,087 -> 22,087, byte-identical | 21,576 -> 21,576, byte-identical |
+
+No tracked size-report or bench-report row moves. The computed-`typep` floor is
+where it costs: three new `RUNTIME_TYPEP_BUILTINS` rows (`SIMPLE-STRING`,
+`SIMPLE-VECTOR`, `SIMPLE-ARRAY`, without which a computed
+`(typep x 'simple-vector)` answered `NIL` for every value) plus the `simple-`
+conjuncts in the compound source. "Check only where the specifier says
+`simple-`" is what shipped, so a program with no `simple-` specifier and no
+computed `typep` pays nothing.
+
+Pinned by `LispEvaluatorTest#evalSimpleTypeNameTypepChecksSimplicity`,
+`JvmLispCompilerTest#compileSimpleTypeNameTypepChecksSimplicity`,
+`WasmLispCompilerIntegrationTest#simpleTypeNameTypepChecksSimplicity` and the
+`simple-type-name-typep-simplicity` ci-spec case -- one program whose every
+answer is SBCL 2.2.9's on that very program.
+
+**Known gap it did NOT close** (`.todo/613`): a SIZED string specifier measures
+`length`, which honours the fill pointer, where CL means the array DIMENSION --
+so `(typep (make-array 4 :element-type 'character :fill-pointer 0) '(string 0))`
+answers `T` here and `NIL` in SBCL.
 
 ## Top-level flattening (flattenTopLevel)
 

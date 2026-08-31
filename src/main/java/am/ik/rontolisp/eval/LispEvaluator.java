@@ -9249,7 +9249,11 @@ public final class LispEvaluator {
 		String member = qualified == null ? name.name() : qualified.member();
 		return switch (member) {
 			case "LIST" -> "LIST";
-			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> "STRING";
+			case "STRING", "BASE-STRING" -> "STRING";
+			// The SIMPLE- spellings are their own arm: "already of the result type"
+			// means a SIMPLE string there, so a fill-pointered character vector has to
+			// be rebuilt rather than answered (.kb/declarations-type-checks.md).
+			case "SIMPLE-STRING", "SIMPLE-BASE-STRING" -> "SIMPLE-STRING";
 			case "VECTOR", "SIMPLE-VECTOR" -> "VECTOR";
 			default -> null;
 		};
@@ -9261,7 +9265,17 @@ public final class LispEvaluator {
 	// (if (stringp x) x (map 'string #'identity <as list>)), and 'vector is
 	// (if (or (listp x) (stringp x)) <fill> x) -- the identity tail included, which is
 	// why the vector arm never declines.
-	private static @Nullable LispVal coerceSequenceFast(LispVal value, String type) {
+	private static @Nullable LispVal coerceSequenceFast(LispVal value, String requestedType) {
+		String type = requestedType;
+		if ("SIMPLE-STRING".equals(type)) {
+			if (value instanceof LispString str) {
+				// A simple string IS of the result type; any other string has to be
+				// rebuilt, which this arm declines to the shared expansion's copy-seq
+				// rather than keeping a second copy of.
+				return str.fillPointer() < 0 && !str.adjustable() && str.displacedTo() == null ? value : null;
+			}
+			type = "STRING";
+		}
 		if ("LIST".equals(type)) {
 			if (value instanceof LispCons || value instanceof LispNil) {
 				return value;

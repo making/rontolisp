@@ -3034,7 +3034,7 @@ public final class LispMacroExpander {
 	 * @return a truthy test form
 	 */
 	private static LispVal vectorTypeTest(LispVal value) {
-		return makeArrayTypeTest(value, null, listToCons(List.of(new LispSymbol("*"))), EMPTY_CLOS_REGISTRY);
+		return makeArrayTypeTest(value, null, listToCons(List.of(new LispSymbol("*"))), EMPTY_CLOS_REGISTRY, false);
 	}
 
 	/**
@@ -8799,9 +8799,14 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (simple-string-p x)} into {@code (stringp x)} (lite): every
-	 * rontolisp string is "simple", so a portable "coerce unless simple-string-p" idiom
-	 * (cl-ppcre's maybe-coerce-to-simple-string) keeps the string unchanged.
+	 * Expands {@code (simple-string-p x)} into
+	 * {@code (and (%simple-array-p x) (stringp x))} over a let-bound temporary, so the
+	 * argument is evaluated once. CL requires the predicate and the type test to agree,
+	 * so this is exactly {@code (typep x 'simple-string)}: a literal, a
+	 * {@code make-string} result and a {@code copy-seq} answer t, while a fill-pointered
+	 * or {@code :adjustable} character vector and a displaced string VIEW answer nil --
+	 * which is what makes the portable "coerce unless simple-string-p" idiom (cl-ppcre's
+	 * maybe-coerce-to-simple-string) copy exactly the strings that need it.
 	 * @param cons the simple-string-p expression
 	 * @return the expanded expression
 	 */
@@ -8810,7 +8815,9 @@ public final class LispMacroExpander {
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(LispNames.SIMPLE_STRING_P + " expects exactly one argument");
 		}
-		return listToCons(List.of(new LispSymbol(LispNames.STRINGP), parts.get(1)));
+		LispSymbol v = new LispSymbol("__sstrp");
+		return makeLet(v.name(), parts.get(1), listToCons(List.of(new LispSymbol(LispNames.AND),
+				callOf(LispNames.SIMPLE_ARRAY_P_INTERNAL, v), callOf(LispNames.STRINGP, v))));
 	}
 
 	/**
@@ -23093,13 +23100,19 @@ public final class LispMacroExpander {
 		// operators' own result conversion carries (%seq-string-result) reads as
 		// 'string in every other respect and skips exactly that wrap.
 		boolean freshString = true;
+		// A SIMPLE- string result must BUILD when the value is a NON-simple string:
+		// CLHS returns an object of the type as is, and a fill-pointered character
+		// vector is not of type simple-string. That is the whole difference between the
+		// two spellings here (cl-ppcre's maybe-coerce-to-simple-string), and without it
+		// simple-string-p answers nil for the very value that idiom just coerced.
+		boolean simpleString = false;
 		if (type != null) {
-			// Package-qualified spellings and the "simple" aliases collapse: every
-			// rontolisp string is simple, so (coerce s 'simple-string) is the plain
-			// string conversion (cl-ppcre's initialize-instance normalization).
+			// Package-qualified spellings collapse, and so do the base- ones (there is
+			// one character type here, .kb/declarations-type-checks.md).
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(type);
 			String member = qn == null ? type : qn.member();
 			freshString = !LispNames.SEQ_STRING_RESULT.equals(member);
+			simpleString = "SIMPLE-STRING".equals(member) || "SIMPLE-BASE-STRING".equals(member);
 			type = switch (member) {
 				case "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", LispNames.SEQ_STRING_RESULT -> "STRING";
 				case "SIMPLE-VECTOR" -> "VECTOR";
@@ -23140,10 +23153,11 @@ public final class LispMacroExpander {
 				// string answers that string itself (CLHS: an object of the type is
 				// returned as is), so the wrap goes on the BUILD arm only -- and the
 				// shared helper, which the sequence operators' own conversion calls
-				// too, stays un-wrapped.
+				// too, stays un-wrapped. The SIMPLE- spelling narrows "already of the
+				// type" to a simple string and copies the rest.
 				LispSymbol cx = new LispSymbol("__coerce_x");
 				return makeLet(cx.name(), parts.get(1),
-						makeIf(callOf(LispNames.STRINGP, cx), cx,
+						makeIf(callOf(LispNames.STRINGP, cx), stringIdentityOrCopy(cx, simpleString),
 								listToCons(List.of(new LispSymbol(LispNames.STR_FRESH),
 										listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), cx))))));
 			}
@@ -23162,7 +23176,7 @@ public final class LispMacroExpander {
 			body = coerceToVectorBody(x);
 		}
 		else if ("STRING".equals(type)) {
-			body = coerceToStringBody(x, arraysExist, freshString);
+			body = coerceToStringBody(x, arraysExist, freshString, simpleString);
 		}
 		else if (type != null) {
 			// A user deftype name we cannot resolve at expansion time (no deftype
@@ -23241,8 +23255,13 @@ public final class LispMacroExpander {
 				: coerceToListBody(x, arraysExist);
 		LispVal vectorArm = makeIf(memberOfTypeNames(t, "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
 				"BIT-VECTOR", "SIMPLE-BIT-VECTOR"), toVector, identity);
-		LispVal stringArm = makeIf(memberOfTypeNames(t, "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING"),
-				toString, vectorArm);
+		// The SIMPLE- string designators take the same conversion, then narrow the
+		// "already of the result type" answer to the simple strings -- a computed
+		// designator means what the literal one means (.kb/declarations-type-checks.md).
+		LispVal toSimpleString = makeIf(callOf(LispNames.STRINGP, x), stringIdentityOrCopy(x, true), toString);
+		LispVal simpleStringArm = makeIf(memberOfTypeNames(t, "SIMPLE-STRING", "SIMPLE-BASE-STRING"), toSimpleString,
+				vectorArm);
+		LispVal stringArm = makeIf(memberOfTypeNames(t, "STRING", "BASE-STRING"), toString, simpleStringArm);
 		LispVal listArm = makeIf(memberOfTypeNames(t, "LIST", "CONS"), toList, stringArm);
 		LispVal body = makeIf(memberOfTypeNames(t, FLOAT_TYPE_NAMES.toArray(new String[0])), mvCall(LispNames.FLOAT, x),
 				listArm);
@@ -23301,7 +23320,24 @@ public final class LispMacroExpander {
 	 * as in {@link #coerceToListBody}.
 	 */
 	private static LispVal coerceToStringBody(LispSymbol x, boolean arraysExist) {
-		return coerceToStringBody(x, arraysExist, false);
+		return coerceToStringBody(x, arraysExist, false, false);
+	}
+
+	/**
+	 * What a string conversion answers for a value that already IS a string: the value
+	 * itself, except that a {@code simple-string} result rebuilds a NON-simple one with
+	 * {@code copy-seq}. CLHS returns an object of the result type as is, and a
+	 * fill-pointered or adjustable character vector -- or a displaced string view -- is
+	 * not of type {@code simple-string}; every string BUILDER here answers a simple
+	 * string, {@code copy-seq} included, so the copy converges (cl-ppcre's
+	 * maybe-coerce-to-simple-string).
+	 * @param x the (temp-bound) value form, known to be a string
+	 * @param simpleString whether the result type is a {@code simple-} string spelling
+	 * @return the form to answer for a string argument
+	 */
+	private static LispVal stringIdentityOrCopy(LispSymbol x, boolean simpleString) {
+		return simpleString ? makeIf(callOf(LispNames.SIMPLE_ARRAY_P_INTERNAL, x), x, callOf(LispNames.COPY_SEQ, x))
+				: x;
 	}
 
 	/**
@@ -23312,13 +23348,14 @@ public final class LispMacroExpander {
 	 * inner {@code map} carries the internal designator either way, so the backends'
 	 * {@code (map 'string ...)} wrap does not fire on it twice.
 	 */
-	private static LispVal coerceToStringBody(LispSymbol x, boolean arraysExist, boolean freshString) {
+	private static LispVal coerceToStringBody(LispSymbol x, boolean arraysExist, boolean freshString,
+			boolean simpleString) {
 		LispVal chars = arraysExist ? makeIf(callOf(LispNames.LISTP, x), x, coerceVectorToList(x)) : x;
 		LispVal build = listToCons(List.of(new LispSymbol(LispNames.MAP),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.SEQ_STRING_RESULT))),
 				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))), chars));
 		LispVal result = freshString ? listToCons(List.of(new LispSymbol(LispNames.STR_FRESH), build)) : build;
-		return makeIf(callOf(LispNames.STRINGP, x), x, result);
+		return makeIf(callOf(LispNames.STRINGP, x), stringIdentityOrCopy(x, simpleString), result);
 	}
 
 	/**
@@ -26026,17 +26063,36 @@ public final class LispMacroExpander {
 				// therefore `null`, which is what makes (typep *readtable* 'readtable)
 				// answer t rather than lying in the other direction.
 				return callOf(LispNames.NULL, value);
-			case "VECTOR", "SIMPLE-VECTOR":
+			case "VECTOR":
 				// A vector IS a rank-1 array, and a string is a rank-1 character array,
 				// so the rank is checked here and a rank-2 (or rank-0) array fails --
 				// the same answer the compound (vector * n) spelling gives, because it
 				// is literally the same builder.
 				return vectorTypeTest(value);
+			case "SIMPLE-VECTOR":
+				// simple-vector is (simple-array t (*)) and nothing else: rank 1, the
+				// element type t, and simple. So a string is NOT one (its element type
+				// is character) and neither is a packed vector -- SBCL 2.2.9 agrees on
+				// both, and the compound (simple-vector n) spelling below already builds
+				// exactly this, so the atomic name is that builder with an unpinned
+				// size rather than a second reading of the name.
+				return makeArrayTypeTest(value, LispTrue.INSTANCE, listToCons(List.of(new LispSymbol("*"))),
+						EMPTY_CLOS_REGISTRY, true);
 			case "ARRAY", "SIMPLE-ARRAY":
 				// Strings are arrays in CL. Any rank passes: that is what separates the
-				// atomic `array` specifier from `vector` above.
-				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
+				// atomic `array` specifier from `vector` above. The SIMPLE- spelling
+				// narrows the same set to the arrays with no fill pointer, not
+				// adjustable and not displaced.
+				LispVal anyArray = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
 						callOf(LispNames.ARRAYP_INTERNAL, value)));
+				return "SIMPLE-ARRAY".equals(name) ? listToCons(List.of(new LispSymbol(LispNames.AND),
+						callOf(LispNames.SIMPLE_ARRAY_P_INTERNAL, value), anyArray)) : anyArray;
+			case "SIMPLE-STRING", "SIMPLE-BASE-STRING":
+				// A string with no fill pointer, not adjustable and not displaced. The
+				// two base- spellings stay collapsed onto their general counterparts
+				// (there is one character type here, .kb/declarations-type-checks.md).
+				return listToCons(List.of(new LispSymbol(LispNames.AND),
+						callOf(LispNames.SIMPLE_ARRAY_P_INTERNAL, value), callOf(LispNames.STRINGP, value)));
 			case "SEQUENCE":
 				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, value),
 						callOf(LispNames.STRINGP, value), callOf(LispNames.ARRAYP_INTERNAL, value)));
@@ -26134,7 +26190,7 @@ public final class LispMacroExpander {
 			case "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> LispNames.FLOATP;
 			case "NUMBER", "REAL" -> LispNames.NUMBERP;
 			case "RATIONAL", "RATIO" -> LispNames.RATIONALP;
-			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> LispNames.STRINGP;
+			case "STRING", "BASE-STRING" -> LispNames.STRINGP;
 			case "SYMBOL" -> LispNames.SYMBOLP;
 			case "KEYWORD" -> LispNames.KEYWORDP;
 			case "CONS" -> LispNames.CONSP;
@@ -26255,7 +26311,7 @@ public final class LispMacroExpander {
 	 * @return a truthy test form
 	 */
 	private static LispVal makeArrayTypeTest(LispVal value, @Nullable LispVal elementSpec,
-			@Nullable LispVal dimensionSpec, ClosRegistry closRegistry) {
+			@Nullable LispVal dimensionSpec, ClosRegistry closRegistry, boolean simple) {
 		boolean anyElement = elementSpec == null || isWildcardTypeArgument(elementSpec);
 		LispVal expectedElement = anyElement ? LispTrue.INSTANCE : upgradedArrayElementType(
 				java.util.Objects.requireNonNullElse(resolveElementTypeAlias(elementSpec, closRegistry), elementSpec));
@@ -26315,7 +26371,19 @@ public final class LispMacroExpander {
 			}
 		}
 		LispVal arrayArm = arrayTests.size() == 2 ? arrayTests.get(1) : listToCons(arrayTests);
-		return stringArm == null ? arrayArm : listToCons(List.of(new LispSymbol(LispNames.OR), stringArm, arrayArm));
+		LispVal union = stringArm == null ? arrayArm
+				: listToCons(List.of(new LispSymbol(LispNames.OR), stringArm, arrayArm));
+		if (!simple) {
+			return union;
+		}
+		// The SIMPLE- spelling is the same set NARROWED to the simple arrays: no fill
+		// pointer, not adjustable, not displaced (.kb/declarations-type-checks.md, "The
+		// simple- names are lattice EDGES"). One %simple-array-p call covers BOTH arms
+		// -- it is total, so it needs no guard and answers for a string, a packed vector
+		// and the general array alike -- and it leads, so the arms it can rule out never
+		// run.
+		return listToCons(
+				List.of(new LispSymbol(LispNames.AND), callOf(LispNames.SIMPLE_ARRAY_P_INTERNAL, value), union));
 	}
 
 	/** Builds the test for a compound (list) type specifier; see makeTypeTest. */
@@ -26376,10 +26444,15 @@ public final class LispMacroExpander {
 				// gethash. Both VECTOR spellings pin the RANK to 1 -- that is the
 				// dimension information the specifier carries, and it keeps a rank-2
 				// array out of a (simple-vector 41) test rather than reaching
-				// `length`, which refuses a non-sequence. The ATOMIC `vector`
-				// spelling still ignores the rank; that half is its own item.
+				// `length`, which refuses a non-sequence. The ATOMIC spellings go
+				// through the same builder (atomicTypePredicate's caller): `vector`
+				// with an unspecified element type, `simple-vector` with t.
+				//
+				// A SIMPLE- head narrows the result to the simple arrays -- the
+				// lattice edge todo-609 drew on the subtypep side.
 				String arrayHead = plainTypeName(head);
 				boolean simpleVector = "SIMPLE-VECTOR".equals(arrayHead);
+				boolean simpleSpelling = simpleVector || "SIMPLE-ARRAY".equals(arrayHead);
 				boolean vectorSpelling = simpleVector || "VECTOR".equals(arrayHead);
 				LispVal elementSpec = simpleVector ? LispTrue.INSTANCE : parts.size() > 1 ? parts.get(1) : null;
 				LispVal dimensionSpec;
@@ -26391,7 +26464,7 @@ public final class LispMacroExpander {
 				else {
 					dimensionSpec = parts.size() > 2 ? parts.get(2) : null;
 				}
-				return makeArrayTypeTest(value, elementSpec, dimensionSpec, closRegistry);
+				return makeArrayTypeTest(value, elementSpec, dimensionSpec, closRegistry, simpleSpelling);
 			}
 			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING": {
 				// (string SIZE): a string of EXACTLY that length; * (or an omitted size)
@@ -26401,12 +26474,21 @@ public final class LispMacroExpander {
 				// an ordered choice with (typep sub '(or character (string 1))), and an
 				// unchecked size made every string look one character long, so
 				// (or "foo" "bar") compiled to the single-character dispatch.
-				if (parts.size() > 1 && !isWildcardTypeArgument(parts.get(1))) {
-					return listToCons(List
-						.of(new LispSymbol(LispNames.AND), callOf(LispNames.STRINGP, value), listToCons(
-								List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.LENGTH, value), parts.get(1)))));
+				// A SIMPLE- spelling narrows the same set to the simple strings: an
+				// immutable runtime string is one, a fill-pointered / adjustable
+				// character vector and a displaced string view are not
+				// (.kb/adjustable-arrays.md).
+				List<LispVal> stringTests = new java.util.ArrayList<>();
+				stringTests.add(new LispSymbol(LispNames.AND));
+				if (plainTypeName(head).startsWith("SIMPLE-")) {
+					stringTests.add(callOf(LispNames.SIMPLE_ARRAY_P_INTERNAL, value));
 				}
-				return callOf(LispNames.STRINGP, value);
+				stringTests.add(callOf(LispNames.STRINGP, value));
+				if (parts.size() > 1 && !isWildcardTypeArgument(parts.get(1))) {
+					stringTests.add(listToCons(
+							List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.LENGTH, value), parts.get(1))));
+				}
+				return stringTests.size() == 2 ? stringTests.get(1) : listToCons(stringTests);
 			}
 			case "CONS": {
 				// (cons CAR-TYPE CDR-TYPE): consp plus a test on each half, with * (or an
@@ -30917,9 +30999,9 @@ public final class LispMacroExpander {
 	 */
 	private static final List<String> RUNTIME_TYPEP_BUILTINS = List.of("NULL", "BOOLEAN", "KEYWORD", "SYMBOL",
 			"INTEGER", "FIXNUM", "BIGNUM", "RATIONAL", "RATIO", "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT",
-			"LONG-FLOAT", "REAL", "NUMBER", "CHARACTER", "STRING", "CONS", "LIST", "ATOM", "VECTOR", "ARRAY",
-			"SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "UNSIGNED-BYTE", "PACKAGE",
-			"STREAM", "T");
+			"LONG-FLOAT", "REAL", "NUMBER", "CHARACTER", "STRING", "SIMPLE-STRING", "CONS", "LIST", "ATOM", "VECTOR",
+			"SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT",
+			"STRUCTURE-OBJECT", "UNSIGNED-BYTE", "PACKAGE", "STREAM", "T");
 
 	/**
 	 * The COMPOUND half of the runtime {@code typep} dispatch: an interpreter of a
@@ -30987,6 +31069,9 @@ public final class LispMacroExpander {
 			    ((or (string= %tpc-n "STRING") (string= %tpc-n "SIMPLE-STRING")
 			         (string= %tpc-n "BASE-STRING") (string= %tpc-n "SIMPLE-BASE-STRING"))
 			     (if (and (stringp %tpc-value)
+			              (if (or (string= %tpc-n "SIMPLE-STRING") (string= %tpc-n "SIMPLE-BASE-STRING"))
+			                  (%simple-array-p %tpc-value)
+			                  t)
 			              (or (null %tpc-a) %tpc-xw (eq (length %tpc-value) %tpc-x)))
 			         t
 			         nil))
@@ -31006,6 +31091,9 @@ public final class LispMacroExpander {
 			    ((or (string= %tpc-n "ARRAY") (string= %tpc-n "SIMPLE-ARRAY")
 			         (string= %tpc-n "VECTOR") (string= %tpc-n "SIMPLE-VECTOR"))
 			     (let* ((%tpc-sv (string= %tpc-n "SIMPLE-VECTOR"))
+			            (%tpc-sp (if (or %tpc-sv (string= %tpc-n "SIMPLE-ARRAY"))
+			                         (%simple-array-p %tpc-value)
+			                         t))
 			            (%tpc-et (if %tpc-sv t (if (null %tpc-a) '* %tpc-x)))
 			            (%tpc-ew (if (symbolp %tpc-et) (string= (symbol-name %tpc-et) "*") nil))
 			            (%tpc-ue (if (consp %tpc-et)
@@ -31029,37 +31117,40 @@ public final class LispMacroExpander {
 			                                   (if (null (cdr %tpc-a)) '* %tpc-y)))
 			                         (if (null (cdr %tpc-a)) '* %tpc-y)))
 			            (%tpc-dw (if (symbolp %tpc-dm) (string= (symbol-name %tpc-dm) "*") nil)))
-			       (if (or (and (stringp %tpc-value)
-			                    (or %tpc-ew
-			                        (if (symbolp %tpc-ue) (string= (symbol-name %tpc-ue) "CHARACTER") nil))
-			                    (cond (%tpc-dw t)
-			                          ((integerp %tpc-dm) (eq %tpc-dm 1))
-			                          ((and (consp %tpc-dm) (null (cdr %tpc-dm)))
-			                           (let ((%tpc-d (car %tpc-dm)))
-			                             (if (if (symbolp %tpc-d) (string= (symbol-name %tpc-d) "*") nil)
-			                                 t
-			                                 (eq (length %tpc-value) %tpc-d))))
-			                          (t nil)))
-			               (and (%arrayp %tpc-value)
-			                    (or %tpc-ew (equal (array-element-type %tpc-value) %tpc-ue))
-			                    (cond (%tpc-dw t)
-			                          ((integerp %tpc-dm) (eq (array-rank %tpc-value) %tpc-dm))
-			                          ((null %tpc-dm) (eq (array-rank %tpc-value) 0))
-			                          ((consp %tpc-dm)
-			                           (if (eq (array-rank %tpc-value) (length %tpc-dm))
-			                               (do ((%tpc-i 0 (+ %tpc-i 1))
-			                                    (%tpc-tl %tpc-dm (cdr %tpc-tl)))
-			                                   ((null %tpc-tl) t)
-			                                 (let ((%tpc-d (car %tpc-tl)))
-			                                   (if (if (symbolp %tpc-d)
-			                                           (string= (symbol-name %tpc-d) "*")
-			                                           nil)
-			                                       nil
-			                                       (if (eq (array-dimension %tpc-value %tpc-i) %tpc-d)
-			                                           nil
-			                                           (return nil)))))
-			                               nil))
-			                          (t t))))
+			       (if (and %tpc-sp
+			                (or (and (stringp %tpc-value)
+			                         (or %tpc-ew
+			                             (if (symbolp %tpc-ue)
+			                                 (string= (symbol-name %tpc-ue) "CHARACTER")
+			                                 nil))
+			                         (cond (%tpc-dw t)
+			                               ((integerp %tpc-dm) (eq %tpc-dm 1))
+			                               ((and (consp %tpc-dm) (null (cdr %tpc-dm)))
+			                                (let ((%tpc-d (car %tpc-dm)))
+			                                  (if (if (symbolp %tpc-d) (string= (symbol-name %tpc-d) "*") nil)
+			                                      t
+			                                      (eq (length %tpc-value) %tpc-d))))
+			                               (t nil)))
+			                    (and (%arrayp %tpc-value)
+			                         (or %tpc-ew (equal (array-element-type %tpc-value) %tpc-ue))
+			                         (cond (%tpc-dw t)
+			                               ((integerp %tpc-dm) (eq (array-rank %tpc-value) %tpc-dm))
+			                               ((null %tpc-dm) (eq (array-rank %tpc-value) 0))
+			                               ((consp %tpc-dm)
+			                                (if (eq (array-rank %tpc-value) (length %tpc-dm))
+			                                    (do ((%tpc-i 0 (+ %tpc-i 1))
+			                                         (%tpc-tl %tpc-dm (cdr %tpc-tl)))
+			                                        ((null %tpc-tl) t)
+			                                      (let ((%tpc-d (car %tpc-tl)))
+			                                        (if (if (symbolp %tpc-d)
+			                                                (string= (symbol-name %tpc-d) "*")
+			                                                nil)
+			                                            nil
+			                                            (if (eq (array-dimension %tpc-value %tpc-i) %tpc-d)
+			                                                nil
+			                                                (return nil)))))
+			                                    nil))
+			                               (t t)))))
 			           t
 			           nil)))
 			    (t

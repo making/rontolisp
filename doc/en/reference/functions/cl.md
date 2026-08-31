@@ -157,7 +157,7 @@ page.
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
 | `arrayp` | `(arrayp "abc")` | `T` -- a string is an array in CL, like `vectorp` |
-| `simple-string-p` | `(simple-string-p "hello")` | `t` -- every rontolisp string is "simple" (lite) |
+| `simple-string-p` | `(simple-string-p "hello")` | `t` -- no fill pointer, not adjustable, not displaced |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |

@@ -362,13 +362,16 @@ public final class LispPreludeLibrary {
 		// general array on the compile paths, and both designate STRING -- so all four
 		// backends answer STRING for it rather than (simple-array character (n)).
 		//
-		// The SIMPLICITY arm comes first: a fill-pointered or adjustable array is not
-		// simple whatever it holds, so (make-array 4 :element-type 'double-float
-		// :fill-pointer 0) is (vector double-float 4) and not a simple-array. Asking
-		// the question of a PACKED array is safe because both predicates answer nil for
-		// one on every backend (a packed representation carries neither), which is what
-		// CL says of a simple array and what a packed argument used to be refused for
-		// on the two compile backends.
+		// The SIMPLICITY arm comes first: a fill-pointered, adjustable or DISPLACED
+		// array is not simple whatever it holds, so (make-array 4 :element-type
+		// 'double-float :fill-pointer 0) is (vector double-float 4) and not a
+		// simple-array. It asks %simple-array-p, one TOTAL predicate that answers for
+		// every representation -- including the displacement, which
+		// array-has-fill-pointer-p / adjustable-array-p cannot see at all and which
+		// used to make a displaced array read as (SIMPLE-VECTOR 2). A NON-simple array
+		// is (vector ELEMENT-TYPE SIZE) at rank 1 and (array ELEMENT-TYPE DIMENSIONS)
+		// above it, SBCL 2.2.9's answer for all three shapes -- and that is what keeps
+		// (typep a (type-of a)) true now that typep checks simplicity.
 		SOURCES.put(LispNames.TYPE_OF, """
 				(defun type-of (object)
 				  (let* ((c (%class-designator object))
@@ -380,8 +383,10 @@ public final class LispPreludeLibrary {
 				          ((and (string= s "T") (%arrayp object))
 				           (let ((et (array-element-type object))
 				                 (dims (array-dimensions object)))
-				             (cond ((or (array-has-fill-pointer-p object) (adjustable-array-p object))
-				                    (list 'vector et (car dims)))
+				             (cond ((not (%simple-array-p object))
+				                    (if (= (length dims) 1)
+				                        (list 'vector et (car dims))
+				                        (list 'array et dims)))
 				                   ((and (eq et t) (= (length dims) 1)) (list 'simple-vector (car dims)))
 				                   (t (list 'simple-array et dims)))))
 				          (t c))))

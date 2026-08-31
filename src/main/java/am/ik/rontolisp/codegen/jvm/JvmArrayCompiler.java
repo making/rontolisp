@@ -119,24 +119,22 @@ final class JvmArrayCompiler {
 		if (LispMacroExpander.isCharacterElementType(elementType)) {
 			// A rank-1 :element-type 'character array is a mutable character vector,
 			// marked by _charVecMake's length-4 header and normalized on demand into the
-			// quote-framed runtime string (_strv). A missing fill-pointer defaults to the
-			// capacity so aref reads and setf-aref writes see every slot -- uax-15's
+			// quote-framed runtime string (_strv). MUTABILITY is the marker's, not the
+			// fill pointer's: aref reads and setf-aref writes reach every slot of a
+			// character vector with no fill pointer at all -- uax-15's
 			// from-unicode-string is (make-array N :element-type 'character) followed by
-			// (setf (aref ...) ch), which requires the mutable representation. That
-			// default is the runtime t, which _arrayMake already resolves to the vector
-			// size; passing the DIMS expression a second time instead would evaluate it
-			// twice. The rank is a runtime fact, so _charVecMake does the rank-1 test
-			// and falls back to the general representation above it (as _ivMake does).
+			// (setf (aref ...) ch), and it needs the representation, not a fill pointer.
+			// So a MISSING :fill-pointer leaves the slot nil, exactly as the general
+			// array's does: the header's fill-pointer slot is what says the value is NOT
+			// a simple string (_strv falls back to dims[0], and %simple-array-p reads
+			// the same slot). Defaulting it to the capacity instead made
+			// (array-has-fill-pointer-p (make-string 3)) answer t here and nil on the
+			// other three backends and in SBCL. The rank is a runtime fact, so
+			// _charVecMake does the rank-1 test and falls back to the general
+			// representation above it (as _ivMake does).
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			compileKeywordValueOrNull(initValue != null ? initValue : new LispChar(' '), ctx, className);
-			if (fillPointer != null) {
-				JvmExprCompiler.compileExpr(fillPointer, ctx, className);
-			}
-			else {
-				// The t designator, UNSPELLED: it never reaches the program (_arrayMake
-				// consumes it into the vector size), so its spelling is no designator.
-				JvmEmitHelper.compileUnspelledLiteral("T", ctx);
-			}
+			compileKeywordValueOrNull(fillPointer, ctx, className);
 			compileKeywordValueOrNull(adjustable, ctx, className);
 			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.CHAR_VEC_MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
 			return;

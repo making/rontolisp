@@ -1943,6 +1943,111 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
+	static void compileSimpleArrayP(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (%simple-array-p x): is x an array (a string included) that is SIMPLE -- no
+		// fill pointer, not adjustable, not displaced? Any other value, array or not,
+		// answers nil, so the predicate is TOTAL and needs no guard at a call site: it
+		// is asked about a value the simple- type specifiers have not narrowed yet.
+		//
+		// The representations: the immutable TYPE_STRING and both packed shapes
+		// (TYPE_FARRAY, the bare integer vectors) are simple by construction, since
+		// make-array degrades to the general one the moment :fill-pointer /
+		// :adjustable / :displaced-to appears.
+		// The general array is the TYPE_CELL box whose header car
+		// is a dims bucket array (the test that tells it from a hash table, as %arrayp
+		// does), and its meta cons answers the other three: meta.car is an i31 exactly
+		// when there IS a fill pointer, meta.cdr.car holds the raw :adjustable argument,
+		// and the data slot holds a target (a cell, or the STRING a view aliases) exactly
+		// when the array is displaced -- the same rule %array-disp-target reads.
+		requireArgs(cons, 2, "%simple-array-p expects 1 argument");
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int valueSlot = setTemp(ctx);
+		int headerSlot = ctx.allocTemp();
+		int metaSlot = ctx.allocTemp();
+		int dataSlot = ctx.allocTemp();
+
+		getLocal(ctx, valueSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		// A TYPE_STRING is a string only when QUOTE-FRAMED: a symbol's name shares the
+		// struct without the frame, and a symbol is no array at all (the frame test is
+		// stringp's).
+		getLocal(ctx, valueSlot);
+		WasmEmitHelper.emitStrBytesArray(ctx);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		i32Const(ctx, 34); // '"'
+		ctx.writer.write(Instruction.I32_EQ);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, valueSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		testIntVector(ctx, valueSlot);
+		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.ELSE);
+
+		// The general array: a cell whose header is a cons carrying a dims bucket array.
+		getLocal(ctx, valueSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		getLocal(ctx, valueSlot);
+		castCellGet0(ctx);
+		setLocal(ctx, headerSlot);
+		getLocal(ctx, headerSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		getLocal(ctx, headerSlot);
+		getMeta(ctx);
+		setLocal(ctx, metaSlot);
+		// A fill pointer (meta.car is an i31) or the :adjustable argument (meta.cdr.car
+		// is non-null) settles it: not simple.
+		getLocal(ctx, metaSlot);
+		castConsGet(ctx, 0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		getLocal(ctx, metaSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 0);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.ELSE);
+		// Displaced: the data slot holds the target rather than the array's own storage.
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		setLocal(ctx, dataSlot);
+		emitDataSlotIsTarget(ctx, dataSlot);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
 	static void compileArrayBecome(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// (%array-become old new): replace old's dims, fill pointer and data with new's
 		// in place (the in-place half of adjust-array on an adjustable array); returns

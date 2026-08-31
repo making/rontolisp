@@ -8,15 +8,16 @@
 (type-of 42) ; => INTEGER
 ```
 
-配列だけは複合型指定子を返すため、ランクと要素型を読み取れます。要素型が `t` の単純な 1 次元配列は `(simple-vector SIZE)`、フィルポインタ付きまたは `:adjustable t` の配列は `(vector ELEMENT-TYPE SIZE)`、それ以外 (次元リストが `nil` になるランク 0 配列を含む) は `(simple-array ELEMENT-TYPE DIMENSIONS)` です。要素型は [`array-element-type`](array-element-type.md) が返す昇格後の型なので、`:element-type 'fixnum` で作った配列は `t` として読み出されます。文字列はアトミックな `string` を返します。
+配列だけは複合型指定子を返すため、ランクと要素型を読み取れます。simple でない配列 — フィルポインタ付き、`:adjustable t`、displaced のいずれか — は、ランク 1 なら `(vector ELEMENT-TYPE SIZE)`、それ以上のランクなら `(array ELEMENT-TYPE DIMENSIONS)` です。simple な配列は、要素型が `t` の 1 次元配列なら `(simple-vector SIZE)`、それ以外 (次元リストが `nil` になるランク 0 配列を含む) は `(simple-array ELEMENT-TYPE DIMENSIONS)` です。要素型は [`array-element-type`](array-element-type.md) が返す昇格後の型なので、`:element-type 'fixnum` で作った配列は `t` として読み出されます。文字列はアトミックな `string` を返します。
 
 ```lisp
 (list (type-of (make-array 4))
       (type-of (make-array nil))
       (type-of (make-array '(2 2) :element-type 'double-float))
       (type-of (make-array 4 :element-type '(unsigned-byte 8)))
-      (type-of (make-array 4 :fill-pointer 0)))
-; => ((SIMPLE-VECTOR 4) (SIMPLE-ARRAY T NIL) (SIMPLE-ARRAY DOUBLE-FLOAT (2 2)) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) (VECTOR T 4))
+      (type-of (make-array 4 :fill-pointer 0))
+      (type-of (make-array 2 :displaced-to (make-array 4))))
+; => ((SIMPLE-VECTOR 4) (SIMPLE-ARRAY T NIL) (SIMPLE-ARRAY DOUBLE-FLOAT (2 2)) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) (VECTOR T 4) (VECTOR T 2))
 ```
 
 ```lisp
