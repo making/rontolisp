@@ -2047,6 +2047,34 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
+	static void compileStringDimension(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (%string-dimension s): the array DIMENSION of a string -- what a sized string
+		// type specifier compares against, which is NOT `length` (that answers the fill
+		// pointer of a character vector). Callers guard with stringp, so only the two
+		// string representations arrive: the immutable TYPE_STRING, whose dimension is
+		// its character count, and the TYPE_CELL character vector / string view, whose
+		// dimension is dims[0] of the header (an i31 already).
+		requireArgs(cons, 2, "%string-dimension expects 1 argument");
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int valueSlot = setTemp(ctx);
+		getLocal(ctx, valueSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		emitIfEq(ctx);
+		getLocal(ctx, valueSlot);
+		WasmEmitHelper.emitStrCharCountCall(ctx);
+		boxI31(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, valueSlot);
+		castCellGet0(ctx);
+		castConsGet(ctx, 0);
+		castBuckets(ctx);
+		i32Const(ctx, 0);
+		arrayGet(ctx);
+		ctx.writer.write(Instruction.END);
+	}
+
 	static void compileArrayBecome(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// (%array-become old new): replace old's dims, fill pointer and data with new's
 		// in place (the in-place half of adjust-array on an adjustable array); returns

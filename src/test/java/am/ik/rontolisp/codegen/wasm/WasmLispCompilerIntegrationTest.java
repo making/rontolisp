@@ -9379,9 +9379,17 @@ class WasmLispCompilerIntegrationTest {
 				        (simple-string-p (coerce *tps-cv* 'simple-string))
 				        (simple-string-p (coerce *tps-cv* 'string))
 				        (let ((ty 'simple-string))
-				          (simple-string-p (coerce *tps-cv* ty))))))
+				          (simple-string-p (coerce *tps-cv* ty))))
+				  (list (typep *tps-cv* '(string 4)) (typep *tps-cv* '(string 0))
+				        (typep *tps-cv* '(simple-string 4)) (typep *tps-cv* '(vector character 4))
+				        (typep *tps-cv* '(simple-array character (4)))
+				        (typep *tps-cv* '(array character (4)))
+				        (typep *tps-st* '(string 3)) (typep *tps-cs* '(simple-string 3)))
+				  (list (tps *tps-cv* '(string 4)) (tps *tps-cv* '(string 0))
+				        (tps *tps-cv* '(vector character 4)) (tps *tps-cv* '(array character (4)))
+				        (tps *tps-st* '(string 3)) (tps *tps-sv* '(string 4)))))
 				""")).isEqualTo(
-				"((T NIL NIL NIL NIL NIL) (T NIL NIL T T T) (T T NIL T NIL) (NIL NIL T T) ((VECTOR T 4) (VECTOR T 4) (VECTOR T 2) (SIMPLE-VECTOR 4)) (T T T T T) (T NIL T NIL NIL T) (T T NIL T NIL T))");
+				"((T NIL NIL NIL NIL NIL) (T NIL NIL T T T) (T T NIL T NIL) (NIL NIL T T) ((VECTOR T 4) (VECTOR T 4) (VECTOR T 2) (SIMPLE-VECTOR 4)) (T T T T T) (T NIL T NIL NIL T) (T T NIL T NIL T) (T NIL NIL T NIL T T T) (T NIL T T T NIL))");
 	}
 
 	@Test

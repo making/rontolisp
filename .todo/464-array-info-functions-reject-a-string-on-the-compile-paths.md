@@ -35,6 +35,13 @@ the header. So each arm must dispatch on the quote-frame vs. charvec shape (the 
 `stringp` uses -- `JvmStringpCompiler.emitStringpCheck` / `WasmStringpCompiler.emitStringpI32`),
 and the charvec side reads the header fields.
 
+Since `.todo/613` (2026-08-31) HALF of the dispatch already exists per backend:
+`%string-dimension` answers a string's rank-1 dimension from the immutable string, the
+character vector and the string view alike (`.kb/declarations-type-checks.md`, "A sized
+string specifier measures the DIMENSION"). The `array-dimensions` string arm should CALL
+it rather than open a second copy of the same split; only `array-has-fill-pointer-p` and
+`adjustable-array-p` still need arms of their own.
+
 Pin one case per backend (interpreter, JVM, WASM) plus a `ci-spec.yaml` line once fixed.
 `vectorp`, `length`, `aref`, `elt` already accept a string on every backend and are the
 model; `array-element-type` was fixed in the same pass (`.todo/368`).

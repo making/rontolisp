@@ -810,6 +810,17 @@ public final class Environment implements Scope {
 					};
 					return simple ? LispTrue.INSTANCE : LispNil.INSTANCE;
 				}));
+		// %string-dimension: the array DIMENSION of a string, which is what a sized
+		// string type specifier compares against -- the capacity, not the fill-pointer-
+		// bounded length `length` answers. A displaced string view reports its own span.
+		env.defineFunction(LispNames.STRING_DIMENSION_INTERNAL,
+				new LispFunction(LispNames.STRING_DIMENSION_INTERNAL, args -> {
+					requireArgCount(LispNames.STRING_DIMENSION_INTERNAL, args, 1);
+					if (args.get(0) instanceof LispString str) {
+						return new LispInteger(str.capacity());
+					}
+					throw new LispEvalException(LispNames.STRING_DIMENSION_INTERNAL + ": not a string");
+				}));
 		// arrayp: the standard spelling -- a string is an array in CL, so the public
 		// predicate is the internal one widened by stringp.
 		env.defineFunction(LispNames.ARRAYP, new LispFunction(LispNames.ARRAYP, args -> {

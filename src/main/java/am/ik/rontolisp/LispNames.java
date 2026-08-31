@@ -3024,6 +3024,25 @@ public final class LispNames {
 	public static final String SIMPLE_ARRAY_P_INTERNAL = "%SIMPLE-ARRAY-P";
 
 	/**
+	 * The internal {@code %string-dimension} accessor: the array DIMENSION of a string,
+	 * which is the only size a sized string type specifier ({@code (string n)},
+	 * {@code (simple-array character (n))} and every sibling) is allowed to compare
+	 * against. It is NOT {@code length}: {@code length} of a fill-pointered character
+	 * vector is the FILL POINTER, and CL sizes the specifier by the dimension, so
+	 * {@code (typep (make-array 4 :element-type 'character :fill-pointer 0) '(string 4))}
+	 * is true.
+	 *
+	 * <p>
+	 * It exists because {@code array-dimension} refuses a string on the compile paths
+	 * ({@code .todo/464}) and because it must answer for EVERY string representation --
+	 * the immutable runtime string, the mutable character vector and the displaced string
+	 * view -- from one place per backend. Callers guard it with {@code stringp}, which is
+	 * how the string arm of a type test is reached at all; it is not asked about a
+	 * non-string.
+	 */
+	public static final String STRING_DIMENSION_INTERNAL = "%STRING-DIMENSION";
+
+	/**
 	 * The {@code vectorp} built-in function (is the value a vector?). Strings are vectors
 	 * in CL. A vector is a rank-1 array and nothing else, so an array of any other rank
 	 * answers nil here while {@link #ARRAYP} still answers t for it -- the same rank the

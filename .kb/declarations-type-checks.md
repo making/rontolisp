@@ -360,8 +360,9 @@ Where this lives and why:
   because a string is a rank-1 character array in CL but not one of the
   representations `%arrayp` knows: the string arm survives only while the
   specifier can still describe one (element type character or unstated, rank 1
-  or unstated) and sizes itself with `length`, since the array-info functions
-  do not take a string on the compile paths (`.todo/464`). The array arm reads
+  or unstated) and sizes itself with `%string-dimension` -- the array
+  DIMENSION, which is what a sized specifier means and what `length` is NOT
+  (below, todo-613). The array arm reads
   `array-element-type` and the dimensions behind the `%arrayp` guard. A
   `simple-` spelling ANDs ONE `%simple-array-p` call in front of the whole
   union (todo-610, below).
@@ -725,10 +726,96 @@ Pinned by `LispEvaluatorTest#evalSimpleTypeNameTypepChecksSimplicity`,
 `simple-type-name-typep-simplicity` ci-spec case -- one program whose every
 answer is SBCL 2.2.9's on that very program.
 
-**Known gap it did NOT close** (`.todo/613`): a SIZED string specifier measures
-`length`, which honours the fill pointer, where CL means the array DIMENSION --
-so `(typep (make-array 4 :element-type 'character :fill-pointer 0) '(string 0))`
-answers `T` here and `NIL` in SBCL.
+That gap is closed by the section below.
+
+## A sized string specifier measures the DIMENSION (`%string-dimension`, todo-613)
+
+**`(typep x '(string n))` -- and every sibling spelling, `(simple-string n)`,
+`(base-string n)`, `(vector character n)`, `(simple-array character (n))` --
+compares `n` against the array DIMENSION of the string, never against `length`,
+on all four backends.** `length` of a fill-pointered character vector is the
+FILL POINTER, so until todo-613 a capacity-4 vector with fill pointer 0 was a
+`(string 0)` and not a `(string 4)`; SBCL 2.2.9 answers the other way round, and
+CL's sized specifier is the dimension. The ARRAY arm was already right (it goes
+through `array-dimension`), which is why `(vector t 4)` over a fill-pointered
+general array always agreed with SBCL; only the STRING arm was wrong.
+
+It was wrong because it could not use those functions: `array-dimensions` /
+`array-rank` / `array-total-size` / `adjustable-array-p` /
+`array-has-fill-pointer-p` still REFUSE a string on the compile paths
+(`.todo/464`, open). The two ways out were to fix that refusal and read the size
+through the public surface, or to give the string arm an internal accessor of
+its own. **The internal accessor won on measurement** (2026-08-31, wasm at
+`--optimize=size` / JVM `.class`, `stringp`-only floor 9,642 / 3,136):
+
+| the sized-string test, one program | wasm | `.class` |
+| --- | --- | --- |
+| before, through `length` | 10,856 | 5,632 |
+| **`%string-dimension` (shipped)** | **10,582** | **5,391** |
+| `(and (stringp v) (eq (array-dimension v 0) n))` | 10,212 | 6,499 |
+
+The `array-dimension` row is a LOWER BOUND that option cannot reach: it does not
+include the string arm `array-dimensions` would have to grow, which for an
+immutable string is the same `_str_char_count` walk `%string-dimension` inlines
+(~900 wasm bytes here) plus the character-vector dispatch beside it. Add that
+and it is the largest of the three on wasm as well as on the JVM, where it is
+already +1,108 bytes -- there because reading a dimension turns `ctx.usesArrays`
+on and drags the whole array runtime into a program that has a string test and
+no arrays. **The shipped answer is SMALLER than the `length` it replaced on both
+backends**, because `length` is the wide `_seq_len` / `_length` sequence
+dispatch and this is two representations.
+
+`%string-dimension` (`LispNames.STRING_DIMENSION_INTERNAL`, `CL_INTERNALS`) is
+NOT total the way `%simple-array-p` is, and does not need to be: every call site
+is inside a string arm that `stringp` has already gated, which is how a type
+test reaches it at all. Per backend:
+
+- **Interpreter** (`Environment`): `LispString.capacity()`, which reports a
+  displaced string view's own span.
+- **JVM** (`JvmStringDimensionCompiler`, a per-class `_strDim` shared helper so a
+  site is one `invokestatic`): a quote-framed `java.lang.String` -> `_scount`,
+  the character-visible count, so a supplementary code point counts as one
+  exactly as `length` counts it; an `ArrayList` -> `header[0][0]`, the boxed
+  `Long` dimension of the length-4 character vector or the length-7 string view.
+  The `ArrayList` arm is emitted only under `ctx.usesArrays`, like
+  `stringp`'s -- no character vector can exist without it.
+- **WASM** (`WasmArrayCompiler.compileStringDimension`, inline, for the private
+  header helpers): `TYPE_STRING` -> `_str_char_count`; otherwise the `TYPE_CELL`
+  header's car is the dims bucket array and `dims[0]` is the answer.
+
+Wired at the four sizing sites, which is every place a specifier carries a
+string size: the string arm of `makeArrayTypeTest`, the `STRING` /
+`SIMPLE-STRING` / `BASE-STRING` / `SIMPLE-BASE-STRING` arm of
+`makeCompoundTypeTest`, and BOTH string arms of
+`RUNTIME_COMPOUND_TYPEP_SOURCE` (the string family and the array family's string
+half), so a computed specifier answers what a literal one does.
+
+**`.todo/464` is not closed by this and is not blocked on it either.** That item
+is about the PUBLIC surface -- `(array-dimensions "abc")` still traps on both
+compile paths where the interpreter answers `(3)` -- and when it is done, its
+`array-dimensions` string arm is the natural CALLER of `%string-dimension`
+rather than a second copy of the same dispatch. Nothing here reads a string's
+rank, so the rest of that family is untouched.
+
+**Size elsewhere**: the array-free program and the `(typep v 'simple-vector)`
+floor are BYTE-IDENTICAL (497 / 12,036 wasm, 3,017 / 9,601 `.class`). The
+computed-`typep` floor pays for the two inlined reads in
+`%typep-compound-runtime`: 53,833 -> 53,919 wasm (+86), 91,376 -> 91,487
+`.class` (+111).
+
+One divergence this measurement found and did NOT touch, because it is a
+different mechanism: `vector-push-extend`'s DEFAULT extension. Growing a
+capacity-2 vector to five elements leaves dimension 8 in SBCL, 8 on the
+interpreter for a character vector but 5 for a general one, and 5 on the JVM for
+both -- so `array-dimension` (and therefore a sized specifier over a grown
+vector) disagrees across backends and within the interpreter. `.todo/614`.
+
+Pinned by the same four places todo-610 uses -- the two new groups at the end of
+`LispEvaluatorTest#evalSimpleTypeNameTypepChecksSimplicity`,
+`JvmLispCompilerTest#compileSimpleTypeNameTypepChecksSimplicity`,
+`WasmLispCompilerIntegrationTest#simpleTypeNameTypepChecksSimplicity` and the
+`simple-type-name-typep-simplicity` ci-spec case, whose answers are SBCL 2.2.9's
+on that very program.
 
 ## Top-level flattening (flattenTopLevel)
 
