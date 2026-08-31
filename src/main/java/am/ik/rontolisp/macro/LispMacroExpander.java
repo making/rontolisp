@@ -30948,6 +30948,30 @@ public final class LispMacroExpander {
 		return java.util.Collections.unmodifiableMap(map);
 	}
 
+	/**
+	 * The compound type-specifier heads that do NOT relate to their head symbol by
+	 * inclusion, so the head reduction of {@link #subtypep} must not fire on them:
+	 * {@code (not x)} is the complement of a type rather than a restriction of
+	 * {@code not}, and {@code member}/{@code eql}/{@code satisfies} name no type at all
+	 * by their head. Each answers the lite "unknown" (nil), which single-value
+	 * {@code subtypep} is allowed to.
+	 */
+	private static final List<String> OPAQUE_COMPOUND_TYPE_HEADS = List.of(LispNames.NOT, LispNames.MEMBER,
+			LispNames.EQL, "SATISFIES");
+
+	/**
+	 * The package-stripped head name of a compound type specifier, or null when the
+	 * specifier is not a proper list headed by a symbol (nothing this file can decide).
+	 * @param spec the compound specifier
+	 * @return the plain head name, or null
+	 */
+	@Nullable private static String compoundTypeHead(LispCons spec) {
+		if (spec.isProperList() && spec.car() instanceof LispSymbol head) {
+			return plainTypeName(head);
+		}
+		return null;
+	}
+
 	/** Collapses the type-name aliases the one runtime representation makes equal. */
 	private static String canonicalSubtypeName(String plain) {
 		return switch (plain) {
@@ -30964,12 +30988,28 @@ public final class LispMacroExpander {
 	 * Whether {@code sub} names a subtype of {@code super}: exact/alias equality, the
 	 * built-in lattice, the CLOS class registry's ancestor sets, struct {@code :include}
 	 * ancestry (with {@code structure-object} as every struct's supertype), a registered
-	 * user {@code deftype} on either side (expanded and re-tested), and an
-	 * {@code (or ...)} compound on either side (any branch as the super, every branch as
-	 * the sub -- sxql's {@code multiple-allowed-clause} is a deftype for an {@code or} of
-	 * struct names). Unknown pairs answer false (the lite single-value {@code subtypep}).
-	 * @param subV the sub type designator (a symbol, {@code t}, {@code nil} or an
-	 * {@code (or ...)} list)
+	 * user {@code deftype} on either side (expanded and re-tested), and a COMPOUND
+	 * specifier on either side. Unknown pairs answer false (the lite single-value
+	 * {@code subtypep}).
+	 *
+	 * <p>
+	 * The compound rules, which {@link #RUNTIME_COMPOUND_SUBTYPEP_SOURCE} mirrors arm for
+	 * arm over a runtime specifier VALUE (change the two together or the backends
+	 * diverge):
+	 * <ul>
+	 * <li>{@code (or ...)}: any branch as the super, EVERY branch as the sub -- sxql's
+	 * {@code multiple-allowed-clause} is a deftype for an {@code or} of struct names.
+	 * <li>{@code (and ...)}: every conjunct as the super, ANY conjunct as the sub.
+	 * <li>Any other head as the SUB reduces to that head and re-tests: a restricting
+	 * compound denotes a subset of its head, so {@code (integer 0 10) <= integer} and
+	 * {@code (simple-array t (2 2)) <= array}. The same reduction on the SUPER would be
+	 * unsound -- the compound is the SMALLER type there.
+	 * <li>{@code (not ...)}/{@code (member ...)}/{@code (eql ...)}/{@code (satisfies ...)}
+	 * stay unknown ({@link #OPAQUE_COMPOUND_TYPE_HEADS}): none of them relates to its
+	 * head by inclusion.
+	 * </ul>
+	 * @param subV the sub type designator (a symbol, {@code t}, {@code nil} or a compound
+	 * specifier list)
 	 * @param superV the super type designator
 	 * @param closRegistry the class registry for class-name type specifiers
 	 * @return whether {@code sub} is a subtype of {@code super}
@@ -30983,10 +31023,20 @@ public final class LispMacroExpander {
 		if (subV instanceof LispNil) {
 			return true;
 		}
+		if (subV instanceof LispCons && subV.equals(superV)) {
+			// A type is a subtype of ITSELF, compound included: (subtypep (type-of a)
+			// (type-of b)) over two same-shaped arrays is a normal probe, and the rules
+			// below decide nothing about a RESTRICTING compound super.
+			return true;
+		}
 		if (superV instanceof LispCons supCons) {
-			// (or A B ...) as the super: sub is a subtype when it is one of ANY branch.
-			if (supCons.car() instanceof LispSymbol head && LispNames.OR.equals(plainTypeName(head))
-					&& supCons.isProperList()) {
+			// A COMPOUND super: only the logical connectives decide anything here.
+			// (or A B ...) holds when the sub is a subtype of ANY branch, (and A B ...)
+			// when it is a subtype of EVERY conjunct. A RESTRICTING head must NOT reduce
+			// to its head on this side -- the compound denotes a SMALLER type than its
+			// head, so `(subtypep 'integer '(integer 0 10))` is genuinely nil.
+			String supHead = compoundTypeHead(supCons);
+			if (LispNames.OR.equals(supHead)) {
 				List<LispVal> parts = supCons.toList();
 				for (int i = 1; i < parts.size(); i++) {
 					if (subtypep(subV, parts.get(i), closRegistry)) {
@@ -30994,13 +31044,25 @@ public final class LispMacroExpander {
 					}
 				}
 			}
+			else if (LispNames.AND.equals(supHead)) {
+				List<LispVal> parts = supCons.toList();
+				for (int i = 1; i < parts.size(); i++) {
+					if (!subtypep(subV, parts.get(i), closRegistry)) {
+						return false;
+					}
+				}
+				return true;
+			}
 			return false;
 		}
 		if (subV instanceof LispCons subCons) {
-			// (or A B ...) as the sub: a subtype when EVERY branch is.
-			if (subCons.car() instanceof LispSymbol head && LispNames.OR.equals(plainTypeName(head))
-					&& subCons.isProperList()) {
-				List<LispVal> parts = subCons.toList();
+			String subHead = compoundTypeHead(subCons);
+			if (subHead == null) {
+				return false;
+			}
+			List<LispVal> parts = subCons.toList();
+			if (LispNames.OR.equals(subHead)) {
+				// (or A B ...) as the sub: a subtype when EVERY branch is.
 				for (int i = 1; i < parts.size(); i++) {
 					if (!subtypep(parts.get(i), superV, closRegistry)) {
 						return false;
@@ -31008,7 +31070,22 @@ public final class LispMacroExpander {
 				}
 				return parts.size() > 1;
 			}
-			return false;
+			if (LispNames.AND.equals(subHead)) {
+				// (and A B ...) as the sub: a subtype when ANY conjunct is.
+				for (int i = 1; i < parts.size(); i++) {
+					if (subtypep(parts.get(i), superV, closRegistry)) {
+						return true;
+					}
+				}
+				return false;
+			}
+			if (OPAQUE_COMPOUND_TYPE_HEADS.contains(subHead)) {
+				return false;
+			}
+			// A RESTRICTING compound denotes a subset of its own head, so it is a
+			// subtype of everything the head is a subtype of: (integer 0 10) <= integer,
+			// (simple-array t (2 2)) <= array, (string 2) <= string. Re-test the head.
+			return subtypep(subCons.car(), superV, closRegistry);
 		}
 		if (!(subV instanceof LispSymbol subSym) || !(superV instanceof LispSymbol superSym)) {
 			return false;
@@ -32807,12 +32884,96 @@ public final class LispMacroExpander {
 	 * nil sub or a {@code t} super), and otherwise tests the super against the sub's
 	 * precomputed ancestor list, scanned from the {@code %subtypep-ancestor-table%} data
 	 * table; each pair's answer comes from the same shared {@link #subtypep} the literal
-	 * fold uses, so a runtime name answers exactly like the quoted spelling. Symbols
-	 * outside the universe (and non-symbols) answer nil. The per-name data lives in the
-	 * table (a top-level defvar of pure quoted data), so the defun stays a fixed size:
-	 * the previous inline clause-per-group shape grew past the JVM's 16-bit branch
-	 * offsets at cl-postgres scale (59 KB of bytecode at 165 registered classes).
+	 * fold uses, so a runtime name answers exactly like the quoted spelling. A COMPOUND
+	 * specifier on either side is routed to {@link #RUNTIME_COMPOUND_SUBTYPEP_SOURCE}
+	 * first, which reduces it to names the table can answer. Symbols outside the universe
+	 * (and non-symbols) answer nil. The per-name data lives in the table (a top-level
+	 * defvar of pure quoted data), so the defun stays a fixed size: the previous inline
+	 * clause-per-group shape grew past the JVM's 16-bit branch offsets at cl-postgres
+	 * scale (59 KB of bytecode at 165 registered classes).
 	 */
+	/**
+	 * The COMPOUND half of the runtime {@code subtypep} dispatch: the arm-for-arm mirror
+	 * of {@link #subtypep}'s compound rules, reading the head and the branches out of a
+	 * specifier VALUE instead of the AST. The {@code %subtypep-ancestor-table%} is keyed
+	 * by type NAME, so without this a cons on either side matched no row and answered nil
+	 * -- while the interpreter, whose {@code subtypep} builtin calls the Java method
+	 * directly, answered the compound. Change this and {@link #subtypep} together.
+	 *
+	 * <p>
+	 * Three symbols are placeholders substituted by
+	 * {@link #runtimeCompoundSubtypepBody(LispVal, LispVal, String)}: {@code %stc-sub},
+	 * {@code %stc-sup} and the RECURSION operator {@code %subtypep-recur}. The head is
+	 * matched by its {@code symbol-name}, the runtime spelling of {@link #plainTypeName}:
+	 * a specifier read inside a user package carries the qualified symbol, and the member
+	 * name is what identifies the family.
+	 *
+	 * <p>
+	 * The {@code (or)} guard on the sub side is not decoration: an empty {@code or} is
+	 * the EMPTY type, a subtype of everything, but the Java side answers nil for it
+	 * ({@code parts.size() > 1}) and a bare {@code dolist} would answer its {@code t}
+	 * result form instead. The leading {@code equal} arm is the twin of the Java
+	 * self-subtype edge, which the restricting-super rule below could not otherwise
+	 * reach.
+	 */
+	private static final String RUNTIME_COMPOUND_SUBTYPEP_SOURCE = """
+			(cond
+			  ((if (consp %stc-sub) (equal %stc-sub %stc-sup) nil) t)
+			  ((consp %stc-sup)
+			   (let* ((%stc-h (car %stc-sup))
+			          (%stc-n (if (symbolp %stc-h) (symbol-name %stc-h) "")))
+			     (cond
+			       ((string= %stc-n "OR")
+			        (dolist (%stc-e (cdr %stc-sup) nil)
+			          (if (%subtypep-recur %stc-sub %stc-e) (return t) nil)))
+			       ((string= %stc-n "AND")
+			        (dolist (%stc-e (cdr %stc-sup) t)
+			          (if (%subtypep-recur %stc-sub %stc-e) nil (return nil))))
+			       (t nil))))
+			  (t
+			   (let* ((%stc-h (car %stc-sub))
+			          (%stc-n (if (symbolp %stc-h) (symbol-name %stc-h) "")))
+			     (cond
+			       ((string= %stc-n "") nil)
+			       ((string= %stc-n "OR")
+			        (if (null (cdr %stc-sub))
+			            nil
+			            (dolist (%stc-e (cdr %stc-sub) t)
+			              (if (%subtypep-recur %stc-e %stc-sup) nil (return nil)))))
+			       ((string= %stc-n "AND")
+			        (dolist (%stc-e (cdr %stc-sub) nil)
+			          (if (%subtypep-recur %stc-e %stc-sup) (return t) nil)))
+			       ((or (string= %stc-n "NOT") (string= %stc-n "MEMBER")
+			            (string= %stc-n "EQL") (string= %stc-n "SATISFIES"))
+			        nil)
+			       (t (%subtypep-recur %stc-h %stc-sup))))))
+			""";
+
+	/** The sub placeholder of {@link #RUNTIME_COMPOUND_SUBTYPEP_SOURCE}. */
+	private static final String COMPOUND_SUBTYPEP_SUB = "%STC-SUB";
+
+	/** The super placeholder of {@link #RUNTIME_COMPOUND_SUBTYPEP_SOURCE}. */
+	private static final String COMPOUND_SUBTYPEP_SUP = "%STC-SUP";
+
+	/**
+	 * The recursion-operator placeholder of {@link #RUNTIME_COMPOUND_SUBTYPEP_SOURCE}.
+	 */
+	private static final String COMPOUND_SUBTYPEP_RECUR = "%SUBTYPEP-RECUR";
+
+	/**
+	 * Instantiates {@link #RUNTIME_COMPOUND_SUBTYPEP_SOURCE} over the two specifier
+	 * variables and the operator its sub-specifier recursion calls.
+	 * @param sub the variable holding the sub specifier
+	 * @param sup the variable holding the super specifier
+	 * @param recurOperator the {@code subtypep} spelling the recursion calls
+	 * @return the compound-dispatch body
+	 */
+	private static LispVal runtimeCompoundSubtypepBody(LispVal sub, LispVal sup, String recurOperator) {
+		LispVal body = LispReader.readAllFromString(RUNTIME_COMPOUND_SUBTYPEP_SOURCE, Features.INTERPRETER).get(0);
+		return substituteSymbols(body, java.util.Map.of(COMPOUND_SUBTYPEP_SUB, sub, COMPOUND_SUBTYPEP_SUP, sup,
+				COMPOUND_SUBTYPEP_RECUR, new LispSymbol(recurOperator)));
+	}
+
 	private static LispVal expandRuntimeSubtypep(LispVal subExpr, LispVal supExpr, ClosRegistry closRegistry) {
 		String prefix = "__st" + MV_COUNTER.getAndIncrement();
 		LispSymbol a = new LispSymbol(prefix + "_a");
@@ -32828,6 +32989,14 @@ public final class LispMacroExpander {
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		clauses.add(listToCons(List.of(mvCall(LispNames.NULL, a), LispTrue.INSTANCE)));
 		clauses.add(listToCons(List.of(fmtCall(LispNames.EQ_GENERAL, b, LispTrue.INSTANCE), LispTrue.INSTANCE)));
+		// Either side may arrive as a COMPOUND specifier, which the ancestor table --
+		// keyed
+		// by type NAME -- can never match. One shared Lisp source reads the head out of
+		// the specifier value, exactly as the static subtypep reads it out of the AST.
+		clauses.add(listToCons(List.of(
+				listToCons(
+						List.of(new LispSymbol(LispNames.OR), mvCall(LispNames.CONSP, a), mvCall(LispNames.CONSP, b))),
+				runtimeCompoundSubtypepBody(a, b, LispNames.SUBTYPEP_RUNTIME))));
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, memberTest)));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
@@ -32898,6 +33067,19 @@ public final class LispMacroExpander {
 		names.addAll(List.of("SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "BASE-CHAR", "STANDARD-CHAR",
 				"EXTENDED-CHAR", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", "SIMPLE-VECTOR", "SIMPLE-ARRAY",
 				"CHARACTER", "STANDARD-OBJECT", "CONDITION", "ERROR", "SIMPLE-ERROR", "SIMPLE-CONDITION"));
+		// Every atomic name a runtime TYPEP specifier can hold is a runtime SUBTYPEP name
+		// too: a leaf of the lattice (hash-table, function, package, stream, atom) has no
+		// SUBTYPEP_PARENTS entry, so without this it had no row at all and answered nil
+		// even against ITSELF -- while the interpreter, whose builtin is the Java
+		// subtypep, answered t. The two runtime dispatches must know the same names.
+		// T is the exception: it is not a symbol at run time (the reader answers the
+		// BOOLEAN for `t`), the generated `(eq b t)` edge answers it as the super, and a
+		// row for it would only add the universal ancestor to every other row.
+		for (String builtin : RUNTIME_TYPEP_BUILTINS) {
+			if (!"T".equals(builtin)) {
+				names.add(builtin);
+			}
+		}
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
 			addDesignatorSpellings(names, info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());

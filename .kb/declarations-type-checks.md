@@ -425,16 +425,6 @@ than avoided. **Re-evaluation trigger**: if a Worker row ever needs the bytes
 back, the array arm is the half to move -- into a defun of its own, injected on
 a narrower gate than "the program has a computed typep".
 
-**Deliberately NOT closed: `subtypep`.** It takes the same computed specifiers
-and is still name-only past `(or ...)`, and the two halves already DISAGREE
-across backends -- measured 2026-08-31, `(let ((s '(or fixnum ratio)))
-(subtypep s 'number))` answers `T` on the interpreter (whose `subtypep` builtin
-calls the Java `LispMacroExpander.subtypep`, which handles an `or` on either
-side) and `NIL` on the JVM (whose `%subtypep-runtime` scans an ancestor table by
-NAME and matches no cons). Closing it means the static lattice AND the runtime
-table in one pass, which is why it is its own item (`.todo/608`), not a rider on
-this one.
-
 Pinned by `LispEvaluatorTest#evalComputedCompoundTypeSpecifiers`,
 `JvmLispCompilerTest#compileComputedCompoundTypeSpecifiers`,
 `WasmLispCompilerIntegrationTest#computedCompoundTypeSpecifiers` and the
@@ -452,6 +442,68 @@ rank-n (n>1) CHARACTER array is a general array of element type `t` on the
 interpreter, a character-marked array on wasm, and `make-array` REFUSES it on
 the JVM. Its `type-of` therefore differs by backend; a rank-1 character array
 (the shape that actually occurs) agrees everywhere.
+
+## The COMPOUND half of `subtypep` (todo-608)
+
+**A compound type specifier works on either side of `subtypep`, quoted or
+computed, and answers the same on all four backends.** Until todo-608 it was
+name-only past `(or ...)` and the two halves DISAGREED: `(let ((s '(or fixnum
+ratio))) (subtypep s 'number))` answered `T` on the interpreter (whose builtin
+calls the Java `LispMacroExpander.subtypep`, which took an `or` on either side)
+and `NIL` on the JVM (whose `%subtypep-runtime` scans an ancestor table by NAME
+and matched no cons), while the quoted `(subtypep '(integer 0 10) 'integer)`
+answered `NIL` everywhere.
+
+The rules, decided once and written twice -- `LispMacroExpander.subtypep` over
+the AST (the interpreter's builtin AND the literal fold) and
+`RUNTIME_COMPOUND_SUBTYPEP_SOURCE` over a runtime specifier VALUE (the arm the
+emitted `%subtypep-runtime` routes a cons to, before the by-name table scan).
+They are twins, not one source: the static side must stay Java because the
+emitted ancestor table is GENERATED from it. Change them together.
+
+- **A type is a subtype of itself**, compound included (`equal` on the two
+  specifiers) -- `(subtypep (type-of a) (type-of b))` over two same-shaped
+  arrays is a normal probe that no other rule below reaches.
+- **`(or ...)`**: any branch as the super, EVERY branch as the sub. **`(and
+  ...)`**: every conjunct as the super, ANY conjunct as the sub.
+- **Any other head as the SUB reduces to that head and re-tests**: a RESTRICTING
+  specifier denotes a subset of its head, so `(integer 0 10)` <= `integer`,
+  `(simple-array t (2 2))` <= `array`, `(string 2)` <= `string`. The same
+  reduction on the SUPER would be unsound -- there the compound is the SMALLER
+  type -- so `(subtypep 'integer '(integer 0 10))` stays nil, which is SBCL's
+  answer too.
+- **`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` stay unknown**
+  (`OPAQUE_COMPOUND_TYPE_HEADS`): none relates to its head by inclusion. SBCL
+  answers `T` for `(member 1 2)` <= `number` and `(eql 1)` <= `number`; the lite
+  single-value `subtypep` is allowed its nil, and both compiled and interpreted
+  answers agree on it.
+
+**Two premises this item was written on, both overturned by measurement
+(2026-08-31).** (1) It expected `SUBTYPEP_PARENTS` to need
+`SIMPLE-VECTOR`/`SIMPLE-ARRAY`/`SIMPLE-STRING` edges "or the array half of the
+reduction buys nothing" -- it does not: `canonicalSubtypeName` already collapses
+those three names onto `VECTOR`/`ARRAY`/`STRING`, and `subtypepUniverse` already
+lists them, so `(simple-vector 4)` <= `vector` answers `T` on every backend the
+moment the head reduction fires. That collapse is an ALIAS, though, so the
+reverse `(subtypep 'vector 'simple-vector)` also answers `T` where SBCL answers
+`(NIL T)` -- a real wrongness, in the opposite direction, tracked separately
+because it must move with `.todo/605`'s atomic `vector`/`simple-vector` arms.
+(2) The reduction exposed a DIFFERENT gap the item did not name: a lattice LEAF
+with no `SUBTYPEP_PARENTS` entry (`hash-table`, `function`, `package`,
+`stream`, `atom`) had no ancestor-table row at all, so a runtime
+`(subtypep 'hash-table 'hash-table)` answered nil on the compile paths and `T`
+on the interpreter -- pre-existing, and fatal to `(subtypep (type-of h)
+'hash-table)`. `subtypepUniverse` now adds every `RUNTIME_TYPEP_BUILTINS` name
+except `T` (not a symbol at run time; the generated `(eq b t)` edge answers it,
+and a row would only add the universal ancestor to every other row), so the two
+runtime dispatches know the same names.
+
+Pinned by `LispEvaluatorTest#evalComputedCompoundSubtypepSpecifiers`,
+`JvmLispCompilerTest#compileComputedCompoundSubtypepSpecifiers`,
+`WasmLispCompilerIntegrationTest#computedCompoundSubtypepSpecifiers` and the
+`computed-compound-subtypep-specifier` ci-spec case -- one program whose every
+answer is SBCL 2.2.9's on that very program, except the two lite `member`/`eql`
+nils above.
 
 ## Top-level flattening (flattenTopLevel)
 

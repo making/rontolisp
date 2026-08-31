@@ -463,6 +463,50 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileComputedCompoundSubtypepSpecifiers() throws Exception {
+		// The JVM half of the compound subtypep: %subtypep-runtime routes a CONS on
+		// either side through the head reduction before scanning the by-NAME ancestor
+		// table, so a computed compound answers exactly what the interpreter's Java
+		// subtypep answers. Same program, same answers, as
+		// LispEvaluatorTest#evalComputedCompoundSubtypepSpecifiers and
+		// WasmLispCompilerIntegrationTest#computedCompoundSubtypepSpecifiers.
+		assertThat(compileAndRun("""
+				(defstruct stc-pt x y)
+				(deftype stc-num () '(or integer float))
+				(defun stp (a b) (subtypep a b))
+				(print
+				  (list (list (stp '(or fixnum ratio) 'number)
+				              (stp '(integer 0 10) 'integer)
+				              (stp '(integer 0 10) 'number)
+				              (stp 'integer '(integer 0 10))
+				              (stp '(unsigned-byte 8) 'integer)
+				              (stp '(and integer ratio) 'number)
+				              (stp 'fixnum '(and integer real))
+				              (stp 'fixnum '(and integer string))
+				              (stp '(vector t 3) '(or array hash-table))
+				              (stp 'nil '(integer 0 10))
+				              (stp '(integer 0 10) t))
+				        (list (stp '(simple-array t (2 2)) 'array)
+				              (stp '(simple-vector 4) 'vector)
+				              (stp '(simple-vector 4) 'sequence)
+				              (stp '(string 2) 'string)
+				              (stp (type-of (make-array 4)) 'vector)
+				              (stp (type-of (make-array '(2 3))) 'array)
+				              (stp (type-of "abc") 'sequence)
+				              (stp (type-of (make-hash-table)) 'hash-table)
+				              (stp (type-of (make-stc-pt)) 'structure-object)
+				              (stp (type-of (make-array 4)) (type-of (make-array 4))))
+				        (list (stp 'stc-num 'number)
+				              (stp 'fixnum '(and))
+				              (stp '(not integer) 'number)
+				              (stp '(satisfies oddp) 'number)
+				              (stp '(and) 'number)
+				              (stp '(member 1 2) 'number)
+				              (stp '(eql 1) 'number))))
+				""")).isEqualTo("((T T T NIL T T T NIL T T T) (T T T T T T T T T T) (T T NIL NIL NIL NIL NIL))");
+	}
+
+	@Test
 	void compileCloserMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators() throws Exception {
 		// The closer-mop system is spliced by the compile-time LoadInliner pass (cli),
 		// mirroring the CLI pipeline; the shim serves BOTH generations, exactly like the
