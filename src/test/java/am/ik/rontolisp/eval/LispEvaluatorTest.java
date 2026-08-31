@@ -15395,6 +15395,19 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aRewrittenBuiltinMacroFormKeepsItsFirstExpansion() {
+		// The stated semantic change of the built-in expansion memo
+		// (.kb/interpreter-expansion-memo.md): a built-in macro FORM rewritten between
+		// two evaluations keeps its FIRST expansion, deliberately -- the compile
+		// backends expand once at compile time and can never see such a rewrite, and
+		// defmacro call sites were already memoized above. Only the form's own shape
+		// is frozen; mutating data the form's subforms evaluate to is unaffected.
+		assertThat(evalMulti("(defvar bmm-form (list 'when t 5))" + " (defvar bmm-first (eval bmm-form))"
+				+ " (rplaca (cdr bmm-form) nil)" + " (list bmm-first (eval bmm-form))")
+			.print()).isEqualTo("(5 5)");
+	}
+
+	@Test
 	void macroletEnteringAndLeavingScopeInvalidatesTheExpansionMemo() {
 		// A macrolet replaces the macro table for its dynamic extent, so the same call
 		// site means something different inside it -- and the global meaning again after.
