@@ -376,6 +376,147 @@ pi_approx byte-identical, zlib +110 bytes (+0.09%); a literal-argument producer
 program pays ~0.9 KB of wasm for the fold's per-evaluation copy
 (`.kb/pure-builtin-fold.md`, the three-way table).
 
+## The third round: the trim family, map/coerce, getenv (2026-08-31, `.todo/600`)
+
+**Invariant: a string the program allocates through `string-trim` /
+`string-left-trim` / `string-right-trim`, a PROGRAM-WRITTEN `(map 'string ...)` or
+`(coerce seq 'string)`, `uiop:getenv`, or the first-class `#'concatenate` wrapper is a
+MUTABLE sequence with identity on ALL FOUR backends, exactly like the producers above.**
+Pinned by the third block of the `string-identity-cross-backend` ci-spec case and the
+extended `LispEvaluatorTest.aFlippedStringProducerResultHasWritableIdentity` /
+`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest.compileAFlippedStringProducerResultHasWritableIdentity`.
+
+Same mechanism as round 2 -- one `_toMutStr` / `_to_mut_str` at the site, under the
+shared `MutableStringProducers` gate, which the round joined by name (`string-trim`
+family, `%host-getenv` -- the spliced defun `uiop:getenv` is Lisp over, seen by the scan
+because it runs with the libraries already spliced) and by SHAPE
+(`isMapToString` / `isCoerceToString`, a LITERAL `'string` result designator). Two
+things this round had to settle that the earlier ones did not:
+
+- **`(coerce x 'string)` over a STRING answers the ARGUMENT** (CLHS: an object already
+  of the type is returned as is; `%seq-string`, concatenate's per-argument normalizer,
+  depends on it). So the wrap sits on the BUILD arm only: the expansion is
+  `(if (stringp x) x (%str-fresh <build>))`, never a wrap around the whole call.
+- **A sequence operator's own result conversion is NOT a program-written `coerce`.**
+  `reverse` / `remove` / `remove-if` / `remove-duplicates` / `substitute` /
+  `substitute-if` / `sort` all lower through `seqResultDispatchForm`, whose string arm
+  is a literal `coerce` form, and `map 'string` is what every `coerce`-to-string builds
+  with. Those generated conversions now carry the INTERNAL designator
+  `LispNames.SEQ_STRING_RESULT` (`%seq-string-result`), which reads as `string`
+  everywhere the two expansions look at a result type and skips exactly the wrap -- so
+  the family keeps the immutable result it has always had, on every backend, whatever
+  else the program contains.
+
+`%str-fresh` -- the fold's fresh-string constant spelling -- is the Lisp-level name for
+that wrap and gained two more callers here: the `coerce` build arm above and
+`BuiltinFunctionWrappers.concatenateWrapper`'s `%string-concat` reduce, which is how
+`(funcall #'concatenate 'string a b)` came to answer what the call-position spelling
+answers. The interpreter binds it as a copy (`Environment`), for the wrapper bodies it
+can evaluate. **`#'format` needed nothing**: its wrapper renders through `%fmt-render`,
+whose `%fmt-cat` is a `concatenate 'string`, so round 2 had already flipped it --
+measured, not assumed (`.todo/600` had listed it as still immutable).
+
+**`read-line`'s eof-value comes back by IDENTITY.** `(read-line s nil eof)` lowers to
+`(or (read-line s) eof)`, and the wrap used to sit outside the whole rewrite, so a
+STRING sentinel was handed back as a mutable COPY of itself -- visible on both WASM
+backends (`eq` is object identity there; the interpreter and the JVM compare string
+CONTENT, `.todo/444`, which is why the bug could only be seen on two of the four). The
+rewrite is now compiled from the `read-line` case itself and only the inner one-argument
+call wraps.
+
+### What did NOT flip, with the number that says why
+
+- **`reverse` / `remove` / `remove-if` / `remove-if-not` / `remove-duplicates` /
+  `substitute` / `substitute-if` / `sort` over a string.** They share the lowering
+  above, so flipping them means putting their names in the producer gate -- and the gate
+  cannot see whether the sequence is a string. A program that reverses a LIST would pay
+  the JVM array runtime the wrap needs: measured 2026-08-31, `(print (reverse (list 1 2
+  3)))` 14,674 -> 21,664 bytes of class (**+6,990, +47.6%**) and `examples/console/nqueens`
+  17,927 -> 24,662 (**+6,735, +37.6%**), against +164 bytes of wasm (+0.7%) in both. The
+  flat part of that is the array gate itself (`usesArrays`, which the wrap must join --
+  a character vector has to be printable, indexable and comparable wherever it flows):
+  forcing the gate on costs hello_world +2,357, pi_approx +3,173, hanoi +3,011,
+  contact-book +3,297 bytes of class and 0 bytes of wasm. **Re-evaluation trigger:** a
+  JVM shape where a character vector can exist without the general-array runtime, or a
+  gate that can tell a string sequence from a list one.
+- **`princ-to-string` / `prin1-to-string` / `write-to-string`.** The tax the earlier
+  round predicted is real and is NOT only format's: the expander builds pieces with
+  `princ-to-string` at ~25 sites, including `map 'string`'s per-ELEMENT accumulator
+  (`(cons (princ-to-string call) acc)`), so wrapping the shared compiler case wraps one
+  character at a time. Measured 2026-08-31 with the naive wrap (min of two passes,
+  controls unmoved), WASM: string-trim +80%, coerce-string +54%, map-string +35%,
+  concatenate-of-a-list +47%, reverse-string +38%, string-upcase +50%, format-nil +40%,
+  fmt-render +17%, json-stringify +6%; JVM: format-nil +17%, fmt-render +12%,
+  string-upcase +24%, concat-list +52%. Sizes barely move (zlib +60 bytes of wasm,
+  hello_world / pi_approx identical) -- this one is paid in TIME. **The shape that would
+  work** is the internal piece alias the todo names: one print-object-dispatching alias
+  the ~25 expander sites use, with the public name wrapping; `StringValuedForms`'s
+  `ALWAYS_STRING` entries would move to the alias with them.
+- **A COMPUTED `format` destination that is nil at run time**, and a COMPUTED
+  `(coerce x ty)` whose `ty` is `'string` at run time (`expandComputedCoerce` routes to
+  the unwrapped shared `%seq-to-string`). Both are gate problems of the same shape as the
+  first bullet: gating every `(format <expr> ...)` / `(coerce x <expr>)` program buys the
+  rare nil-at-run-time case and pays the array gate's +2.4 to +3.3 KB of class in every
+  program that formats to a stream.
+- **`symbol-name` / `(string 'sym)` / `gensym` / `make-symbol` names** -- deliberate, and
+  unchanged (CLHS leaves symbol-name mutation undefined; SBCL shares the name object).
+
+### What it costs, measured 2026-08-31 (Apple M4 Max, one locked run, min of two passes)
+
+Sizes, `--optimize` wasm and the `-o X.class` JVM output, before -> after: hello_world
+595 / 2,660, pi_approx 4,995 / 8,777, zlib 128,251 / 160,464, word-frequency,
+contact-book, nqueens, count-vowels -- **all byte-identical**. The one program that moved
+is `examples/console/calc` (a `string-trim` reader): wasm 184,119 -> 184,387
+(**+268, +0.15%**), class 197,455 -> 197,543 (+88, +0.04%).
+
+Times, each row its own defun, `control-int` and `control-mapcar` untouched by the round
+(ms, 1,000-char inputs):
+
+| row | JVM before -> after | WASM p1 before -> after |
+|---|---|---|
+| control-int (2M) | 1 -> 1 | 7 -> 7 |
+| control-mapcar (200k) | 17 -> 11 | 6 -> 6 |
+| string-trim (20k) | 47 -> 189 | 110 -> 248 |
+| coerce-string (5k, 500 chars) | 165 -> 182 | 247 -> 261 |
+| map-string (2k) | 357 -> 360 | 266 -> 281 |
+| concatenate of a list (5k) | 101 -> 76 | 270 -> 267 |
+| reverse of a string (2k) | 81 -> 111 | 275 -> 272 |
+| json-parse / json-stringify | 32 -> 34 / 99 -> 102 | 87 -> 85 / 109 -> 110 |
+| format-nil / fmt-render / upcase | flat | flat |
+
+**`string-trim` is the row that moves**, and it moves for the reason every flipped
+producer moves: the result is now a boxed character vector instead of a `substring` of
+the source. Per call that is 7.1 us on the JVM and 6.9 us on WASM for a 1,012-character
+string -- *less* than the `string-upcase` of the same string that round 2 already ships
+(16 us), which is what says the cost is the representation and not the trim. The wasm
+controls did not move at all; the JVM and interpreter rows carry a +-20-35% noise floor
+this machine gives them (`control-mapcar` moved -35% on the JVM between the two jars),
+so only the wasm column is worth reading below that size.
+
+The `concatenate` rows are FLAT, which is the internal-designator decision paying off:
+`%seq-string` normalizes every non-string argument through
+`(coerce x '%seq-string-result)`, so the wrap never lands in front of `%string-concat`.
+
+### The out-of-model boundaries this round exposes, enumerated and checked
+
+The round adds character-vector DENSITY, not a new boundary kind -- round 2's set is
+still the set -- but `uiop:getenv` is the first HOST READ to answer one, so each was
+re-run rather than argued (one program, all four backends, byte-identical output):
+getenv -> `concatenate` -> pathname -> `open`; a `(coerce chars 'string)` and a
+`string-trim` result as a pathname; a `map 'string` key in an `equalp` table and a
+`coerce` key in an `equal` one; `intern` of a trimmed name; `string=` / `length` /
+`subseq` / `print` / `write-line` over each producer's result; the `#'concatenate`
+wrapper's result through the same. `ffi:` / `objc:` / `java:` need no new row: their
+`_strv` hook is keyed on the REPRESENTATION, so a getenv- or trim-built character vector
+takes the identical path a concatenate-built one already does (`JvmFfiInteropCompilerTest`
+/ `JvmObjcInteropCompilerTest` / `JvmJavaInteropCompilerTest` are green). The HTTP
+transport renders in Lisp (`%http-header-name` / `-value` / `%http-join-strings`), which
+is representation-blind for the same reason.
+
+`StringValuedForms.ALWAYS_STRING` was RE-CHECKED against the flip and needs no change:
+none of `%fixed-decimal` / `%string-concat` / the four print-to-string entries is
+flipped, and that is exactly why the print family is the expensive bullet above.
+
 **What is STILL immutable, and why**: `princ-to-string` / `prin1-to-string` /
 `write-to-string` (the static `format` lowering emits its `~a`/`~s` pieces through the
 same compiler case, so wrapping it would tax every literal-control format per piece),
@@ -383,8 +524,9 @@ a COMPUTED format destination that is nil at run time (only the literal-`nil` sp
 is a producer; the gate would otherwise drag the array runtime into every
 `(format stream ...)` program), the first-class `#'format` / `#'concatenate` wrapper
 bodies (they build through the renderer / `%string-concat`, not the wrapped cases),
-`string-trim` family, `map 'string` / `coerce 'string` / `reverse` / `remove` /
-`substitute` results, `symbol-name` and `gensym`/`make-symbol` names (CLHS leaves
+the `string-trim` family, `map 'string` / `coerce 'string` and the getenv result (all
+four CLOSED by `.todo/600`, above), `reverse` / `remove` / `substitute` / `sort` results,
+`symbol-name` and `gensym`/`make-symbol` names (CLHS leaves
 symbol-name mutation undefined; deliberate), getenv / fetch / socket-read results,
 json-parse's multi-fragment string values (single-fragment ones are subseq slices and
 mutable), and a STRING eof-value handed back by `read-line` at EOF is `equal` but not

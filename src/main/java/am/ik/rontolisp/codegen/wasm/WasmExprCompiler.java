@@ -420,9 +420,16 @@ final class WasmExprCompiler {
 							// The %io-read-line fallback a component's socket splice
 							// routes a non-socket read-line through: wrap like the
 							// public case, so a component's read-line result carries
-							// the same identity as Preview 1's.
-							WasmReadLineCompiler.compile(cons, ctx);
-							WasmEmitHelper.emitToMutStrCall(ctx);
+							// the same identity as Preview 1's. The eof-value shape
+							// takes the same detour, so only the LINE is wrapped.
+							LispVal compatRaw = LispMacroExpander.expandReadLineCompat(cons);
+							if (compatRaw != null) {
+								WasmExprCompiler.compileExpr(compatRaw, ctx);
+							}
+							else {
+								WasmReadLineCompiler.compile(cons, ctx);
+								WasmEmitHelper.emitToMutStrCall(ctx);
+							}
 						}
 						case LispNames.READ_CHAR_RAW_INTERNAL -> WasmReadCharCompiler.compile(cons, ctx);
 						case LispNames.READ_BYTE_RAW_INTERNAL -> WasmReadByteCompiler.compile(cons, ctx);
@@ -855,8 +862,16 @@ final class WasmExprCompiler {
 				}
 				case LispNames.READ_LINE -> {
 					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, false);
+					LispVal compat = typed == null ? LispMacroExpander.expandReadLineCompat(cons) : null;
 					if (typed != null) {
 						WasmExprCompiler.compileExpr(typed, ctx);
+					}
+					else if (compat != null) {
+						// (read-line s nil eof-value) -> (or (read-line s) eof-value).
+						// Compiling the rewrite here rather than below the wrap keeps
+						// the wrap on the LINE only: the eof-value is the caller's own
+						// object and must come back by identity, not as a copy of it.
+						WasmExprCompiler.compileExpr(compat, ctx);
 					}
 					else {
 						WasmReadLineCompiler.compile(cons, ctx);
@@ -928,6 +943,10 @@ final class WasmExprCompiler {
 						// The ordinary call path resolves the spliced defun.
 						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
 					}
+					// The host's answer is a fresh string on every path here, so it
+					// carries the same writable identity the other producers do; a
+					// missing variable answers nil and passes the wrap through.
+					WasmEmitHelper.emitToMutStrCall(ctx);
 				}
 				// The host command line behind the uiop/image family (the public five
 				// are Lisp over it -- uiop-image.lisp). Preview 1 scans the buffer its
@@ -1239,12 +1258,20 @@ final class WasmExprCompiler {
 							.compileEqual((LispCons) LispMacroExpander.normalizeStringComparisonDesignators(cons), ctx);
 					}
 				}
-				case LispNames.STRING_TRIM ->
+				// The trim family answers a fresh string, so its result carries the same
+				// writable identity every other flipped producer's does.
+				case LispNames.STRING_TRIM -> {
 					WasmStringTrimCompiler.compileTrim(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
-				case LispNames.STRING_LEFT_TRIM ->
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
+				case LispNames.STRING_LEFT_TRIM -> {
 					WasmStringTrimCompiler.compileLeft(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
-				case LispNames.STRING_RIGHT_TRIM ->
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
+				case LispNames.STRING_RIGHT_TRIM -> {
 					WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
 				case LispNames.LOAD -> WasmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
 				// A literal top-level require/provide (and the asdf directives) was
@@ -1538,7 +1565,16 @@ final class WasmExprCompiler {
 				}
 				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);
 				case LispNames.SYMBOL_FUNCTION -> WasmFunctionFormCompiler.compileSymbolFunction(cons, ctx);
-				case LispNames.MAP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons), ctx);
+				case LispNames.MAP -> {
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons), ctx);
+					// (map 'string ...) builds a fresh string, so its result carries a
+					// writable identity. (coerce seq 'string) reaches this through the
+					// same form, and a STRING input passes through un-built and so
+					// un-wrapped -- which is exactly what identity wants.
+					if (MutableStringProducers.isMapToString(cons)) {
+						WasmEmitHelper.emitToMutStrCall(ctx);
+					}
+				}
 				case LispNames.MAPCAR -> WasmMapcarCompiler.compile(cons, ctx);
 				case LispNames.MAPC -> WasmMapcCompiler.compile(cons, ctx);
 				case LispNames.MAPCAN -> WasmMapcanCompiler.compile(cons, ctx);

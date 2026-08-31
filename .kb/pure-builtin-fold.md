@@ -178,6 +178,13 @@ JVM never had the wasm-side blowup because its shaker keeps unreferenced methods
 per method, not per group. hello_world / pi_approx are byte-identical either way;
 zlib is +110 bytes (the producer wrap, not the fold).
 
+`%str-fresh` is no longer only the fold's spelling: `.todo/600` made it the Lisp-level
+name for the mutable-result wrap, so the first-class `#'concatenate` wrapper's
+`%string-concat` reduce and the build arm of a program-written `(coerce seq 'string)`
+carry it too (`.kb/string-write-runtime.md`, the third round). The fold's use is
+unchanged, and the interpreter now binds the name as a copy for the wrapper bodies it
+evaluates.
+
 **Re-evaluation trigger:** if a backend ever compiles `%str-fresh` as the bare
 literal (dropping the wrap), the forgery returns —
 `PureBuiltinFolderTest.aFreshStringProducerFoldsToAStrFreshConstantAndNotASharedLiteral`

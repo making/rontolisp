@@ -2662,9 +2662,13 @@ public final class LispMacroExpander {
 		// (let ((__seq_res <algo __seq_lst>))
 		// (if __seq_str (coerce __seq_res 'string)
 		// (if __seq_vec (coerce __seq_res 'vector) __seq_res)))))))
+		// The string arm carries the INTERNAL designator: a sequence operator's result
+		// conversion is not a program-written (coerce x 'string), and must not pick up
+		// the mutable-result wrap -- see LispNames.SEQ_STRING_RESULT for what flipping
+		// this family would cost.
 		LispVal result = arraysExist
-				? makeIf(isStr, coerceTo(res, "STRING"), makeIf(isVec, coerceTo(res, "VECTOR"), res))
-				: makeIf(isStr, coerceTo(res, "STRING"), res);
+				? makeIf(isStr, coerceTo(res, LispNames.SEQ_STRING_RESULT), makeIf(isVec, coerceTo(res, "VECTOR"), res))
+				: makeIf(isStr, coerceTo(res, LispNames.SEQ_STRING_RESULT), res);
 		LispVal resLet = makeLet(SEQ_RES_VAR, algo.apply(lst), result);
 		LispVal asList = arraysExist ? listToCons(List.of(new LispSymbol(LispNames.OR), isStr, isVec)) : isStr;
 		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(asList, coerceTo(in, "LIST"), in), resLet);
@@ -22914,15 +22918,22 @@ public final class LispMacroExpander {
 			throw new UnsupportedOperationException("coerce expects a value and a result type");
 		}
 		String type = quotedSymbolName(parts.get(2));
+		// A program-written 'string result BUILDS a fresh string, so the compile
+		// backends give it a writable identity; the internal designator the sequence
+		// operators' own result conversion carries (%seq-string-result) reads as
+		// 'string in every other respect and skips exactly that wrap.
+		boolean freshString = true;
 		if (type != null) {
 			// Package-qualified spellings and the "simple" aliases collapse: every
 			// rontolisp string is simple, so (coerce s 'simple-string) is the plain
 			// string conversion (cl-ppcre's initialize-instance normalization).
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(type);
-			type = switch (qn == null ? type : qn.member()) {
-				case "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> "STRING";
+			String member = qn == null ? type : qn.member();
+			freshString = !LispNames.SEQ_STRING_RESULT.equals(member);
+			type = switch (member) {
+				case "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", LispNames.SEQ_STRING_RESULT -> "STRING";
 				case "SIMPLE-VECTOR" -> "VECTOR";
-				default -> qn == null ? type : qn.member();
+				default -> member;
 			};
 		}
 		else {
@@ -22951,7 +22962,20 @@ public final class LispMacroExpander {
 				return listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_LIST), parts.get(1)));
 			}
 			if ("STRING".equals(type)) {
-				return listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), parts.get(1)));
+				LispVal shared = listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), parts.get(1)));
+				if (!freshString) {
+					return shared;
+				}
+				// A program-written (coerce x 'string) whose argument ALREADY is a
+				// string answers that string itself (CLHS: an object of the type is
+				// returned as is), so the wrap goes on the BUILD arm only -- and the
+				// shared helper, which the sequence operators' own conversion calls
+				// too, stays un-wrapped.
+				LispSymbol cx = new LispSymbol("__coerce_x");
+				return makeLet(cx.name(), parts.get(1),
+						makeIf(callOf(LispNames.STRINGP, cx), cx,
+								listToCons(List.of(new LispSymbol(LispNames.STR_FRESH),
+										listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), cx))))));
 			}
 			if (type != null) {
 				// VECTOR and the unresolved-deftype default, the same pairing as the
@@ -22968,7 +22992,7 @@ public final class LispMacroExpander {
 			body = coerceToVectorBody(x);
 		}
 		else if ("STRING".equals(type)) {
-			body = coerceToStringBody(x, arraysExist);
+			body = coerceToStringBody(x, arraysExist, freshString);
 		}
 		else if (type != null) {
 			// A user deftype name we cannot resolve at expansion time (no deftype
@@ -23107,11 +23131,24 @@ public final class LispMacroExpander {
 	 * as in {@link #coerceToListBody}.
 	 */
 	private static LispVal coerceToStringBody(LispSymbol x, boolean arraysExist) {
+		return coerceToStringBody(x, arraysExist, false);
+	}
+
+	/**
+	 * The {@code 'string} conversion body. {@code freshString} spells the built result as
+	 * a fresh mutable string ({@code %str-fresh}) -- what a PROGRAM-written
+	 * {@code (coerce x 'string)} answers; the sequence operators' own result conversion
+	 * passes {@code false} and keeps the immutable value it has always answered. The
+	 * inner {@code map} carries the internal designator either way, so the backends'
+	 * {@code (map 'string ...)} wrap does not fire on it twice.
+	 */
+	private static LispVal coerceToStringBody(LispSymbol x, boolean arraysExist, boolean freshString) {
 		LispVal chars = arraysExist ? makeIf(callOf(LispNames.LISTP, x), x, coerceVectorToList(x)) : x;
 		LispVal build = listToCons(List.of(new LispSymbol(LispNames.MAP),
-				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("STRING"))),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.SEQ_STRING_RESULT))),
 				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))), chars));
-		return makeIf(callOf(LispNames.STRINGP, x), x, build);
+		LispVal result = freshString ? listToCons(List.of(new LispSymbol(LispNames.STR_FRESH), build)) : build;
+		return makeIf(callOf(LispNames.STRINGP, x), x, result);
 	}
 
 	/**
@@ -23877,7 +23914,8 @@ public final class LispMacroExpander {
 		if (resultType != null) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(resultType);
 			resultType = qn == null ? resultType : qn.member();
-			if ("SIMPLE-STRING".equals(resultType) || "BASE-STRING".equals(resultType)) {
+			if ("SIMPLE-STRING".equals(resultType) || "BASE-STRING".equals(resultType)
+					|| LispNames.SEQ_STRING_RESULT.equals(resultType)) {
 				resultType = "STRING";
 			}
 		}

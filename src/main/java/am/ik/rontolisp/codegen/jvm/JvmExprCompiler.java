@@ -638,8 +638,16 @@ final class JvmExprCompiler {
 				}
 				case LispNames.READ_LINE -> {
 					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, false);
+					LispVal compat = typed == null ? LispMacroExpander.expandReadLineCompat(cons) : null;
 					if (typed != null) {
 						JvmExprCompiler.compileExpr(typed, ctx, className);
+					}
+					else if (compat != null) {
+						// (read-line s nil eof-value) -> (or (read-line s) eof-value).
+						// Compiling the rewrite here rather than below the wrap keeps
+						// the wrap on the LINE only: the eof-value is the caller's own
+						// object and must come back by identity, not as a copy of it.
+						JvmExprCompiler.compileExpr(compat, ctx, className);
 					}
 					else {
 						JvmReadLineCompiler.compile(cons, ctx, className);
@@ -696,7 +704,13 @@ final class JvmExprCompiler {
 				// names are Lisp (uiop-os.lisp): getenv consults the override map a
 				// (setf (uiop:getenv ...)) wrote before falling back here, and getcwd
 				// turns a nil answer into its not-implemented-error.
-				case LispNames.HOST_GETENV -> JvmGetenvCompiler.compile(cons, ctx, className);
+				case LispNames.HOST_GETENV -> {
+					JvmGetenvCompiler.compile(cons, ctx, className);
+					// The host's answer is a fresh string, so it carries the same
+					// writable identity the other producers do; a missing variable
+					// answers nil and passes the wrap through.
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 				case LispNames.HOST_GETCWD -> JvmGetcwdCompiler.compile(cons, ctx, className);
 				// The command-line primitive behind the uiop/image family (the public
 				// five are Lisp over it, uiop-image.lisp): main's own String[] behind
@@ -946,12 +960,20 @@ final class JvmExprCompiler {
 								className);
 					}
 				}
-				case LispNames.STRING_TRIM ->
+				// The trim family answers a fresh string, so its result carries the same
+				// writable identity every other flipped producer's does.
+				case LispNames.STRING_TRIM -> {
 					JvmStringTrimCompiler.compileTrim(LispMacroExpander.normalizeStringTrimArgs(cons), ctx, className);
-				case LispNames.STRING_LEFT_TRIM ->
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+				case LispNames.STRING_LEFT_TRIM -> {
 					JvmStringTrimCompiler.compileLeft(LispMacroExpander.normalizeStringTrimArgs(cons), ctx, className);
-				case LispNames.STRING_RIGHT_TRIM ->
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+				case LispNames.STRING_RIGHT_TRIM -> {
 					JvmStringTrimCompiler.compileRight(LispMacroExpander.normalizeStringTrimArgs(cons), ctx, className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 				case LispNames.QUOTE -> JvmQuoteCompiler.compile(cons, ctx, className);
 				// quote for a compiler-synthesized name: same value, but the spelling is
 				// not recorded as program-spelled (see LispNames.UNSPELLED_QUOTE).
@@ -1295,8 +1317,16 @@ final class JvmExprCompiler {
 				}
 				case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
 				case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);
-				case LispNames.MAP ->
+				case LispNames.MAP -> {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons, ctx.usesArrays), ctx, className);
+					// (map 'string ...) builds a fresh string, so its result carries a
+					// writable identity. (coerce seq 'string) reaches this through the
+					// same form, and a STRING input passes through un-built and so
+					// un-wrapped -- which is exactly what identity wants.
+					if (MutableStringProducers.isMapToString(cons)) {
+						JvmArrayCompiler.emitToMutStr(ctx, className);
+					}
+				}
 				case LispNames.MAPCAR -> JvmMapcarCompiler.compile(cons, ctx, className);
 				case LispNames.MAPC -> JvmMapcCompiler.compile(cons, ctx, className);
 				case LispNames.MAPCAN -> JvmMapcanCompiler.compile(cons, ctx, className);

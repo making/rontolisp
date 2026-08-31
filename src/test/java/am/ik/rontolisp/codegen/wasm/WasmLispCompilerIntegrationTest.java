@@ -15044,8 +15044,16 @@ class WasmLispCompilerIntegrationTest {
 				(with-input-from-string (in "hello")
 				  (let* ((s (read-line in nil)) (a s)) (setf (char s 0) #\\J) (print (list s a))))
 				(let* ((s (string-capitalize "foo bar")) (a s)) (setf (char s 3) #\\!) (print (list s a)))
+				(let* ((s (string-trim " " "  ab  ")) (a s)) (setf (char s 0) #\\x) (print (list s a)))
+				(let* ((s (map 'string #'char-upcase "abc")) (a s)) (setf (char s 0) #\\x) (print (list s a)))
+				(let* ((s (coerce (list #\\a #\\b) 'string)) (a s)) (setf (char s 0) #\\x) (print (list s a)))
+				(let ((s (funcall #'concatenate 'string "ab" "cd"))) (print (list (t596f s) s)))
+				(print (let ((s (copy-seq "abc"))) (eq s (coerce s 'string))))
+				(print (with-input-from-string (in "")
+				  (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e))))
 				""")).isEqualTo(
-				"(\"xBC\" \"xBC\")\n\"XYcd\"\n\"99\"\n(\"Zi\" \"Zi\")\n(\"Jello\" \"Jello\")\n(\"Foo!Bar\" \"Foo!Bar\")");
+				"(\"xBC\" \"xBC\")\n\"XYcd\"\n\"99\"\n(\"Zi\" \"Zi\")\n(\"Jello\" \"Jello\")\n(\"Foo!Bar\" \"Foo!Bar\")"
+						+ "\n(\"xb\" \"xb\")\n(\"xBC\" \"xBC\")\n(\"xb\" \"xb\")\n(\"Zbcd\" \"Zbcd\")\nT\nT");
 	}
 
 	@Test
