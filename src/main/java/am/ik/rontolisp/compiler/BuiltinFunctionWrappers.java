@@ -972,13 +972,23 @@ public final class BuiltinFunctionWrappers {
 		// seqs :initial-value ""): the same "any character sequence" contract the
 		// call-position lowering gets from %seq-string, spelled inline here because the
 		// wrapper must stand alone (its own injection is gated separately).
-		LispVal step = listToCons(
-				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(new LispSymbol("a"), new LispSymbol("x"))),
-						callV(LispNames.STRING_CONCAT, new LispSymbol("a"),
-								listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"),
-										new LispSymbol("x"), coerceTo("x", "STRING"))))));
-		LispVal strings = listToCons(List.of(new LispSymbol(LispNames.REDUCE), step, new LispSymbol("seqs"),
-				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), new LispString("")));
+		LispVal step = listToCons(List
+			.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(new LispSymbol("a"), new LispSymbol("x"))), callV(
+					LispNames.STRING_CONCAT, new LispSymbol("a"),
+					listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"), new LispSymbol("x"),
+							// The INTERNAL designator, for %seq-string's
+							// reason: this per-argument normalization feeds
+							// %string-concat, and only the reduce's RESULT
+							// (wrapped below) reaches the program.
+							coerceTo("x", LispNames.SEQ_STRING_RESULT))))));
+		// The reduce builds through %string-concat, which is the codegen's own append
+		// and is deliberately NOT wrapped -- so the wrapper finishes with the same
+		// mutable-result wrap the call-position lowering emits, and
+		// (funcall #'concatenate 'string a b) answers a string with the identity
+		// (concatenate 'string a b) answers one with (.kb/string-write-runtime.md).
+		LispVal strings = listToCons(
+				List.of(new LispSymbol(LispNames.STR_FRESH), listToCons(List.of(new LispSymbol(LispNames.REDUCE), step,
+						new LispSymbol("seqs"), new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), new LispString("")))));
 		// The vector arm honours an (unsigned-byte 8|16|32) element type, exactly like
 		// the
 		// call-position lowering: (apply #'concatenate '(simple-array (unsigned-byte 8)
@@ -1031,8 +1041,12 @@ public final class BuiltinFunctionWrappers {
 	// body may grow without bound (.kb/wasm-function-body-size.md). A string passes
 	// through untouched, so the fast path is one stringp test.
 	private static WrapperDef seqStringWrapper() {
+		// The INTERNAL string designator: this normalizer feeds %string-concat, not the
+		// program, so its result must not pick up the mutable-result wrap a
+		// program-written (coerce x 'string) gets -- every concatenate argument would
+		// pay a conversion for nothing.
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"),
-				new LispSymbol("x"), coerceTo("x", "STRING")));
+				new LispSymbol("x"), coerceTo("x", LispNames.SEQ_STRING_RESULT)));
 		return new WrapperDef(LispNames.SEQ_STRING, List.of("x"), List.of(body));
 	}
 

@@ -2531,14 +2531,32 @@ public final class LispNames {
 	public static final String STRING_CONCAT = "%STRING-CONCAT";
 
 	/**
-	 * The {@code %str-fresh} internal form: a fold-produced FRESH-STRING constant. The
+	 * The {@code %str-fresh} internal form: "this value, as a FRESH mutable string". The
+	 * compile backends compile the argument and finish with the mutable-result wrap every
+	 * flipped string producer emits (a non-string passes through). Two callers: the
 	 * pure-builtin fold spells the result of a fresh-string producer over literal
-	 * arguments as {@code (%str-fresh "...")}; the compile backends emit the literal plus
-	 * one mutable-copy wrap, so each evaluation answers a fresh mutable string while the
-	 * constant stays a constant ({@code .kb/pure-builtin-fold.md}). Never read from
-	 * source and never seen by the interpreter (which does not fold).
+	 * arguments as {@code (%str-fresh "...")}, so each evaluation answers a fresh mutable
+	 * string while the constant stays a constant ({@code .kb/pure-builtin-fold.md}); and
+	 * the first-class {@code #'concatenate} wrapper wraps its {@code %string-concat}
+	 * reduce in it, so the funcall spelling answers the identity call position answers
+	 * ({@code .kb/string-write-runtime.md}). Never read from source. The interpreter,
+	 * whose strings are mutable already, binds it as a copy.
 	 */
 	public static final String STR_FRESH = "%STR-FRESH";
+
+	/**
+	 * The {@code %seq-string-result} internal TYPE DESIGNATOR: "a string, built by a
+	 * sequence operator's own result conversion rather than by a program-written
+	 * {@code coerce} / {@code map}". It reads as {@code string} everywhere the two
+	 * expansions look at a result type, and differs in exactly one place -- the
+	 * mutable-result wrap the compile backends put on a {@code (map 'string ...)} site is
+	 * NOT emitted for it, so {@code reverse} / {@code remove} / {@code substitute} /
+	 * {@code sort} over a string keep the immutable result they have always had while the
+	 * program-written spellings answer a mutable one. Flipping THOSE would cost the JVM
+	 * array runtime in every program that only reverses a LIST, which is measured in
+	 * {@code .kb/string-write-runtime.md}.
+	 */
+	public static final String SEQ_STRING_RESULT = "%SEQ-STRING-RESULT";
 
 	/**
 	 * The {@code %fixed-decimal} internal helper: one number as a fixed-point decimal

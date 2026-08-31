@@ -9848,6 +9848,22 @@ cases:
       (setf (gethash (format nil "K~a" 1) *sid-eqh*) 42)
       (print (list (gethash "k1" *sid-eqh*)
                    (gethash (concatenate 'string "k" "1") *sid-eqh*)))
+      ;; The third round: the trim family, a program-written (map 'string ...) /
+      ;; (coerce seq 'string), the host environment read, and the first-class
+      ;; #'concatenate wrapper answer the same mutable identity as call position.
+      (print (let* ((s (string-trim " " "  ab  ")) (a s)) (setf (char s 0) #\x) (list s a)))
+      (print (let* ((s (string-left-trim " " "  ab")) (a s)) (setf (char s 0) #\y) (list s a)))
+      (print (let* ((s (string-right-trim " " "ab  ")) (a s)) (setf (char s 1) #\z) (list s a)))
+      (print (let* ((s (map 'string #'char-upcase "abc")) (a s)) (setf (char s 0) #\x) (list s a)))
+      (print (let* ((s (coerce (list #\a #\b #\c) 'string)) (a s)) (setf (char s 0) #\x) (list s a)))
+      (print (let ((s (funcall #'concatenate 'string "ab" "cd"))) (list (%sid-f s) s)))
+      ;; (coerce x 'string) over a string answers the ARGUMENT (CLHS), so the
+      ;; wrap sits on the build arm only and this stays one object.
+      (print (let ((s (copy-seq "abc"))) (eq s (coerce s 'string))))
+      ;; read-line's eof-value comes back BY IDENTITY: the mutable-result wrap is
+      ;; on the line, not on the caller's own sentinel.
+      (print (with-input-from-string (in "")
+               (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e))))
     expected: |
       ("Xbcdef" "Xbcdef")
       ("Zello" "Zello")
@@ -9866,6 +9882,14 @@ cases:
       ("zB" "AB")
       ("Foo!Bar" "Foo!Bar")
       (42 42)
+      ("xb" "xb")
+      ("yb" "yb")
+      ("az" "az")
+      ("xBC" "xBC")
+      ("xbc" "xbc")
+      ("Zbcd" "Zbcd")
+      T
+      T
   - name: string-case-ops-full-unicode
     source: |
       ;; string-upcase / string-downcase / string-capitalize are defined by CLHS
