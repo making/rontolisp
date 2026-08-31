@@ -6,6 +6,7 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
@@ -2289,34 +2290,38 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.castI31GetS(ctx);
 		ctx.writer.write(Instruction.I32_GE_S);
 		ctx.writer.write(Instruction.IF, 0x40);
-		// newCap = cap + max(ext, 1); the counters stay boxed as i31 (temps are
-		// (ref null eq)).
+		// The shared growth policy, spelled out in wasm (am.ik.rontolisp.ArrayGrowth,
+		// which generated code cannot call): a supplied extension is added verbatim, and
+		// otherwise the capacity doubles, off a floor for the zero-capacity vector. The
+		// counters stay boxed as i31 (temps are (ref null eq)).
 		int newCapSlot = ctx.allocTemp();
 		int newDataSlot = ctx.allocTemp();
 		int idxSlot = ctx.allocTemp();
+		int capSlot = ctx.allocTemp();
 		getLocal(ctx, headerSlot);
 		castConsGet(ctx, 0);
 		castBuckets(ctx);
 		i32Const(ctx, 0);
 		arrayGet(ctx);
-		WasmEmitHelper.castI31GetS(ctx);
+		setLocal(ctx, capSlot);
 		if (extSlot >= 0) {
-			// max(ext, 1)
 			getLocal(ctx, extSlot);
 			WasmEmitHelper.castI31GetS(ctx);
-			i32Const(ctx, 1);
-			ctx.writer.write(Instruction.I32_LT_S);
+			i32Const(ctx, ArrayGrowth.NO_EXTENSION);
+			ctx.writer.write(Instruction.I32_GT_S);
 			ctx.writer.write(Instruction.IF, 0x7F);
-			i32Const(ctx, 1);
-			ctx.writer.write(Instruction.ELSE);
+			getLocal(ctx, capSlot);
+			WasmEmitHelper.castI31GetS(ctx);
 			getLocal(ctx, extSlot);
 			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I32_ADD);
+			ctx.writer.write(Instruction.ELSE);
+			emitDefaultGrownCapacity(ctx, capSlot);
 			ctx.writer.write(Instruction.END);
 		}
 		else {
-			i32Const(ctx, 1);
+			emitDefaultGrownCapacity(ctx, capSlot);
 		}
-		ctx.writer.write(Instruction.I32_ADD);
 		boxI31(ctx);
 		setLocal(ctx, newCapSlot);
 		// newData = array.new buckets (null, newCap); grown slots read as nil
@@ -2370,6 +2375,24 @@ final class WasmArrayCompiler {
 		arraySet(ctx);
 		ctx.writer.write(Instruction.END); // grow if
 		emitStoreAtFillPointerAndAdvance(ctx, headerSlot, metaSlot, valSlot);
+	}
+
+	// Leaves on the stack, as i32, the capacity a full vector with the i31 capacity in
+	// capSlot grows to when vector-push-extend is given no extension: the capacity
+	// doubled, or the floor when it is zero (am.ik.rontolisp.ArrayGrowth).
+	private static void emitDefaultGrownCapacity(WasmLispCompiler.Ctx ctx, int capSlot) {
+		getLocal(ctx, capSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, ArrayGrowth.MIN_CAPACITY);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.IF, 0x7F);
+		i32Const(ctx, ArrayGrowth.MIN_CAPACITY);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, capSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, ArrayGrowth.GROWTH_FACTOR);
+		ctx.writer.write(Instruction.I32_MUL);
+		ctx.writer.write(Instruction.END);
 	}
 
 	// Traps unless the meta cons in metaSlot carries a fill pointer (an i31 car).

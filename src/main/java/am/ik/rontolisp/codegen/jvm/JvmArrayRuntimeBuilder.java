@@ -9,6 +9,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.RenderCycleGuard;
 
 /**
@@ -733,9 +734,10 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_POP), cp.addUtf8(VECTOR_POP_DESC), 6, 3, vpop.finish()));
 
 		// _vectorPushExtend(val, arr, ext): like _vectorPush but grows the backing store
-		// (by at least ext elements, minimum 1) when the vector is full, updating the
-		// stored dimension size. Locals: 0 = val, 1 = arr, 2 = ext, 3 = header,
-		// 4 = fp (int), 5 = cap (int), 6 = grow (int), 7 = newCap (int).
+		// when the vector is full, updating the stored dimension size. ext is the shared
+		// "not supplied" sentinel (ArrayGrowth.NO_EXTENSION) when the optional argument
+		// was omitted. Locals: 0 = val, 1 = arr, 2 = ext, 3 = header,
+		// 4 = fp (int), 5 = cap (int), 6 = ext (int), 7 = newCap (int).
 		JvmAsm vpe = new JvmAsm();
 		emitLoadHeader(vpe, arrayListClass, objectArrayClass, alGet, 1);
 		vpe.astore(3);
@@ -748,22 +750,37 @@ final class JvmArrayRuntimeBuilder {
 		vpe.iload(4);
 		vpe.iload(5);
 		vpe.branch(Opcode.IF_ICMPLT, vpeStore);
-		// grow = max(((Long) ext).intValue(), 1); newCap = cap + grow
+		// The shared growth policy, spelled out in bytecode (am.ik.rontolisp.ArrayGrowth,
+		// which generated code cannot call): a supplied extension is added verbatim, and
+		// otherwise the capacity doubles, off a floor for the zero-capacity vector.
 		vpe.aload(2);
 		vpe.checkcast(longClass);
 		vpe.invokevirtual(longIntValue);
 		vpe.istore(6);
-		int growOk = vpe.label();
+		int vpeDefaultGrowth = vpe.label();
+		int vpeDoubleCap = vpe.label();
+		int vpeCapReady = vpe.label();
 		vpe.iload(6);
-		vpe.iconst(1);
-		vpe.branch(Opcode.IF_ICMPGE, growOk);
-		vpe.iconst(1);
-		vpe.istore(6);
-		vpe.bind(growOk);
+		vpe.iconst(ArrayGrowth.NO_EXTENSION);
+		vpe.branch(Opcode.IF_ICMPLE, vpeDefaultGrowth);
 		vpe.iload(5);
 		vpe.iload(6);
 		vpe.op(Opcode.IADD);
 		vpe.istore(7);
+		vpe.branch(Opcode.GOTO, vpeCapReady);
+		vpe.bind(vpeDefaultGrowth);
+		vpe.iload(5);
+		vpe.iconst(ArrayGrowth.MIN_CAPACITY);
+		vpe.branch(Opcode.IF_ICMPGE, vpeDoubleCap);
+		vpe.iconst(ArrayGrowth.MIN_CAPACITY);
+		vpe.istore(7);
+		vpe.branch(Opcode.GOTO, vpeCapReady);
+		vpe.bind(vpeDoubleCap);
+		vpe.iload(5);
+		vpe.iconst(ArrayGrowth.GROWTH_FACTOR);
+		vpe.op(Opcode.IMUL);
+		vpe.istore(7);
+		vpe.bind(vpeCapReady);
 		// while (list.size() - 1 < newCap) list.add(null) -- grown slots read as nil
 		int growLoop = vpe.label();
 		int growDone = vpe.label();

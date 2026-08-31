@@ -39,6 +39,7 @@ import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
 import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.FloatText;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.FloatArrayAccessHook;
@@ -1270,8 +1271,8 @@ public final class Environment implements Scope {
 				if (str.fillPointer() >= str.capacity()) {
 					return LispNil.INSTANCE;
 				}
-				return new LispInteger(
-						str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH, args.get(0)).codePoint()));
+				return new LispInteger(str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH, args.get(0)).codePoint(),
+						ArrayGrowth.NO_EXTENSION));
 			}
 			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH, args.get(1));
 			int index = vectorPush(LispNames.VECTOR_PUSH, array, args.get(0));
@@ -1298,15 +1299,15 @@ public final class Environment implements Scope {
 			if (args.size() < 2 || args.size() > 3) {
 				throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + " expects 2 or 3 arguments");
 			}
+			int extension = args.size() == 3 ? (int) asLong(args.get(2)) : ArrayGrowth.NO_EXTENSION;
 			if (args.get(1) instanceof LispString str) {
 				if (str.fillPointer() < 0) {
 					throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + ": string has no fill pointer");
 				}
-				return new LispInteger(
-						str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH_EXTEND, args.get(0)).codePoint()));
+				return new LispInteger(str
+					.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH_EXTEND, args.get(0)).codePoint(), extension));
 			}
 			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH_EXTEND, args.get(1));
-			int extension = args.size() == 3 ? (int) asLong(args.get(2)) : 1;
 			try {
 				return new LispInteger(array.vectorPushExtend(args.get(0), extension));
 			}

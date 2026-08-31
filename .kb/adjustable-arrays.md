@@ -446,6 +446,69 @@ both directions. WASM has no equivalent gap: it emits the array builtins inline,
 so there is no group to under-predict -- its `programUsesAnyArrayOp` only
 excludes wrapper groups.
 
+## The growth policy of `vector-push-extend` (`.todo/614`, 2026-08-31)
+
+The capacity a full vector grows to is OBSERVABLE -- `array-dimension` reads it
+back, and since `.todo/613` a sized sequence type tests it
+(`(typep v (list 'string (array-dimension v 0)))`) -- so it is ONE policy for
+all four backends even though CLHS leaves the default extension
+implementation-dependent. It is stated once, in
+`am.ik.rontolisp.ArrayGrowth`:
+
+- a SUPPLIED `extension` is added to the capacity verbatim (`cap + ext`) -- the
+  caller asked for that much room, so it gets exactly that much;
+- with no extension the capacity DOUBLES (`GROWTH_FACTOR`), off a floor of
+  `MIN_CAPACITY` = 1 for the zero-capacity vector, which doubling cannot grow;
+- `NO_EXTENSION` = 0 is the "argument not supplied" sentinel, so ONE runtime
+  entry point serves both arities. CLHS requires a supplied extension to be a
+  positive integer, so a zero or negative one is undefined there and takes the
+  default here.
+
+Those are SBCL 2.2.9's numbers (measured 2026-08-31: capacity 2 reaches 8 after
+five pushes, 0 reaches 1 after one and 8 after five, `ext` 100 on a capacity-2
+vector reaches 102). Growing by one element per push -- what the compile paths
+did before, by passing a literal `1` for the missing argument -- makes a push
+loop quadratic in the number of pushes, and a push loop is what programs build
+strings and buffers with.
+
+The interpreter CALLS `ArrayGrowth.grownCapacity` from BOTH of its vector
+representations (`LispArray.vectorPushExtend` for a general vector,
+`LispString.vectorPushExtend` for the mutable character vector -- the latter
+used to double from a floor of 8 on its own, which is how the disagreement
+survived). Generated code cannot call the class, so the two compile paths EMIT
+the same arithmetic inline against its constants
+(`JvmArrayRuntimeBuilder`'s `_vectorPushExtend`, whose `ext` argument is the
+sentinel when `JvmArrayCompiler` had no third argument to compile;
+`WasmArrayCompiler.compileVectorPushExtend` + `emitDefaultGrownCapacity`).
+Pinned by `LispEvaluatorTest.vectorPushExtendGrowthPolicyIsDoubling`, the
+`compileVectorPushExtendGrowthPolicyIsDoubling` twins in `JvmLispCompilerTest`
+and `WasmLispCompilerIntegrationTest`, and the
+`vector-push-extend-growth-cross-backend` ci-spec case. The older
+`fill-pointer-arrays-cross-backend` case never reads a dimension after a growth
+run, which is why the divergence went unnoticed; leave the growth numbers in
+the new case rather than folding them in.
+
+Size cost of emitting the branchy formula instead of `cap + max(ext, 1)`,
+measured 2026-08-31 on a three-call-site program (`collect` / `collect-ext` /
+`collect-string`, one `vector-push-extend` each):
+
+| output | before | after | delta |
+| --- | ---: | ---: | ---: |
+| JVM `.class` | 12011 | 12026 | +15 (once per program: one runtime helper) |
+| WASM preview 1 | 14606 | 14674 | +68 (~23 per call site: emitted inline) |
+| WASM component | 15777 | 15845 | +68 (same inline sites) |
+
+The JVM cost is a constant per program; the WASM cost is per `vector-push-extend`
+call site, because that backend has no runtime helper to share. ~23 bytes a site
+buys linear-time growth, so it is not worth hoisting into a helper function.
+
+What the growth policy does NOT settle: the VALUE the opened slots read back as.
+The compile paths open them with a raw null on both backends, so
+`(aref s <above the fill pointer>)` on a grown CHARACTER vector throws
+(JVM `NullPointerException` / WASM `cast failure`) where the interpreter answers
+`#\Nul` -- pre-existing (an explicit `extension` opened such slots before too),
+reachable from the default path now that growth doubles, and left to `.todo/615`.
+
 ## adjust-array
 
 `(adjust-array array new-dims &key initial-element fill-pointer)` on every
@@ -832,6 +895,7 @@ its default unknown-operation error.
 - Interpreter: `LispEvaluatorTest` -- `fillPointerLengthAndAccessors`,
   `fillPointerVectorPrintsUpToFillPointer`, `vectorPushStoresAndReturnsIndexOrNil`,
   `vectorPushThenReadBack`, `vectorPop`, `vectorPushExtendGrowsBeyondCapacity`,
+  `vectorPushExtendGrowthPolicyIsDoubling`,
   `setfFillPointer`, `simpleVectorHasNoFillPointer`,
   `fillPointerOnNonFillPointerVectorSignals`, `clUtilitiesCopyArrayRunsOnInterpreter`,
   `adjustArray*`, `displacedArray*`, `arrayDisplacementReturnsTargetAndOffset`,
@@ -843,9 +907,11 @@ its default unknown-operation error.
   `compileArrayDisplacementValues` /
   `compileMakeArrayDisplacedKeywordComboIsACompileError` /
   `compileDisplacedStringView` /
-  `compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite`.
+  `compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite` /
+  `compileVectorPushExtendGrowthPolicyIsDoubling`.
 - WASM: the same set in `WasmLispCompilerIntegrationTest`.
 - E2E: ci-spec `fill-pointer-arrays-cross-backend` +
+  `vector-push-extend-growth-cross-backend` +
   `adjust-displaced-arrays-cross-backend` +
   `displaced-string-views-cross-backend` (all four backends), and the
   shared-substring lines of `ClPpcreE2eTest`'s exercise (the verbatim

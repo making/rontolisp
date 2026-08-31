@@ -359,15 +359,17 @@ public final class LispString implements LispVal {
 	 * {@code vector-push-extend} operation). A supplementary code point still occupies
 	 * exactly one slot.
 	 * @param codePoint the code point to append
+	 * @param extension the number of code points to grow by when full, or
+	 * {@link ArrayGrowth#NO_EXTENSION} for the default policy
 	 * @return the index the code point was stored at
 	 */
-	public int vectorPushExtend(int codePoint) {
+	public int vectorPushExtend(int codePoint, int extension) {
 		this.rejectView("vector-push-extend");
 		if (this.fillPointer < 0) {
 			throw new IllegalStateException("string has no fill pointer");
 		}
 		if (this.fillPointer >= this.chars.length) {
-			int[] grown = new int[this.chars.length == 0 ? 8 : this.chars.length * 2];
+			int[] grown = new int[ArrayGrowth.grownCapacity(this.chars.length, extension)];
 			System.arraycopy(this.chars, 0, grown, 0, this.chars.length);
 			this.chars = grown;
 		}

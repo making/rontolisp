@@ -14933,6 +14933,30 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void vectorPushExtendGrowthPolicyIsDoubling() {
+		// The ONE growth policy (am.ik.rontolisp.ArrayGrowth), pinned here and in the
+		// JVM / WASM twins and the vector-push-extend-growth-cross-backend ci-spec case:
+		// a supplied extension verbatim, otherwise doubling off a floor of 1. The
+		// numbers are SBCL 2.2.9's (measured 2026-08-31).
+		assertThat(evalMulti("""
+				(defun growth-run (cap n)
+				  (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend i v))
+				    (array-dimension v 0)))
+				(defun growth-run-string (cap n)
+				  (let ((s (make-array cap :element-type 'character :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend #\\a s))
+				    (array-dimension s 0)))
+				(defun growth-run-ext (cap n ext)
+				  (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend i v ext))
+				    (array-dimension v 0)))
+				(list (growth-run 2 5) (growth-run-string 2 5) (growth-run 0 1)
+				      (growth-run 0 5) (growth-run-ext 2 3 100) (growth-run-ext 2 5 1))
+				""").print()).isEqualTo("(8 8 1 8 102 5)");
+	}
+
+	@Test
 	void setfFillPointer() {
 		assertThat(evalMulti("""
 				(setq v (make-array 5 :fill-pointer 5 :initial-element 7))

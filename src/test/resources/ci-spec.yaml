@@ -3977,6 +3977,35 @@ cases:
       (4 4)
       (1 5 T)
       (#(99 8 5) #(5 8 5) 3 T)
+  # The capacity a full vector-push-extend GROWS to is observable (array-dimension reads it
+  # back, and a sized sequence type tests it), so it is one policy for all four backends --
+  # stated once in am.ik.rontolisp.ArrayGrowth and emitted from there: a supplied extension
+  # verbatim, otherwise doubling off a floor of 1 for the zero-capacity vector. The numbers
+  # are SBCL 2.2.9's (measured 2026-08-31). The character vector is here because it is the
+  # one the interpreter holds in a different representation (a mutable LispString) than the
+  # compile paths, and it used to grow by a different rule.
+  - name: vector-push-extend-growth-cross-backend
+    source: |
+      (defun ci-growth-run (cap n)
+        (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend i v))
+          (array-dimension v 0)))
+      (defun ci-growth-run-string (cap n)
+        (let ((s (make-array cap :element-type 'character :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend #\a s))
+          (array-dimension s 0)))
+      (defun ci-growth-run-ext (cap n ext)
+        (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend i v ext))
+          (array-dimension v 0)))
+      (defun ci-growth ()
+        (print (list (ci-growth-run 2 5) (ci-growth-run-string 2 5)
+                     (ci-growth-run 0 1) (ci-growth-run 0 5)))
+        (print (list (ci-growth-run-ext 2 3 100) (ci-growth-run-ext 2 5 1))))
+      (ci-growth)
+    expected: |
+      (8 8 1 8)
+      (102 5)
   # A string IS a vector (and a vector IS an array), so array-element-type answers the one
   # character type for it -- the same arm vectorp/length/aref/elt already take. The general
   # vector keeps the lite element type t and the packed integer vector its (unsigned-byte N)

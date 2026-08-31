@@ -11587,6 +11587,29 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileVectorPushExtendGrowthPolicyIsDoubling() throws Exception {
+		// The ONE growth policy (am.ik.rontolisp.ArrayGrowth): a supplied extension
+		// verbatim, otherwise doubling off a floor of 1 -- the same numbers the
+		// interpreter and the other compile path answer with.
+		assertThat(compileAndRun("""
+				(defun growth-run (cap n)
+				  (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend i v))
+				    (array-dimension v 0)))
+				(defun growth-run-string (cap n)
+				  (let ((s (make-array cap :element-type 'character :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend #\\a s))
+				    (array-dimension s 0)))
+				(defun growth-run-ext (cap n ext)
+				  (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend i v ext))
+				    (array-dimension v 0)))
+				(print (list (growth-run 2 5) (growth-run-string 2 5) (growth-run 0 1)
+				             (growth-run 0 5) (growth-run-ext 2 3 100) (growth-run-ext 2 5 1)))
+				""")).isEqualTo("(8 8 1 8 102 5)");
+	}
+
+	@Test
 	void compileSetfFillPointer() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 5 :fill-pointer 5 :initial-element 7))

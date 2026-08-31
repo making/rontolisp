@@ -297,17 +297,17 @@ public final class LispArray implements LispVal {
 	}
 
 	/**
-	 * Pushes {@code value} like {@link #vectorPush}, growing the backing store (by at
-	 * least {@code extension}) when the vector is full. Requires a fill pointer.
+	 * Pushes {@code value} like {@link #vectorPush}, growing the backing store when the
+	 * vector is full. Requires a fill pointer.
 	 * @param value the element to store
-	 * @param extension the minimum number of elements to grow by when full
+	 * @param extension the number of elements to grow by when full, or
+	 * {@link ArrayGrowth#NO_EXTENSION} for the default policy
 	 * @return the index used
 	 */
 	public int vectorPushExtend(LispVal value, int extension) {
 		requireVectorWithFillPointer("vector-push-extend");
 		if (this.fillPointer >= this.dimensions[0]) {
-			int grow = Math.max(extension, 1);
-			int newCap = this.dimensions[0] + grow;
+			int newCap = ArrayGrowth.grownCapacity(this.dimensions[0], extension);
 			LispVal[] grown = new LispVal[newCap];
 			System.arraycopy(this.data, 0, grown, 0, this.data.length);
 			// The slots the growth opens take the REMEMBERED element type's own zero,
