@@ -341,8 +341,13 @@ class LispMacroExpanderTest {
 		// shapes come back into the site, the cost comes back with it.
 		LispCons toList = (LispCons) LispReader.readAllFromString("(coerce x 'list)").get(0);
 		assertThat(LispMacroExpander.expandCoerce(toList, true, true).print()).isEqualTo("(%SEQ-TO-LIST X)");
+		// The string site is the shared call plus the two forms that give a
+		// PROGRAM-written (coerce x 'string) its mutable identity: the argument passes
+		// through by identity when it already is a string (CLHS), and only the BUILT
+		// result carries the wrap. The map loop must still be gone.
 		LispCons toString = (LispCons) LispReader.readAllFromString("(coerce x 'string)").get(0);
-		assertThat(LispMacroExpander.expandCoerce(toString, true, true).print()).isEqualTo("(%SEQ-TO-STRING X)");
+		String stringSite = LispMacroExpander.expandCoerce(toString, true, true).print();
+		assertThat(stringSite).contains("(%SEQ-TO-STRING ").contains("(%STR-FRESH ").doesNotContain("(MAP ");
 		LispCons toVector = (LispCons) LispReader.readAllFromString("(coerce x 'vector)").get(0);
 		assertThat(LispMacroExpander.expandCoerce(toVector, true, true).print()).isEqualTo("(%SEQ-TO-VECTOR X)");
 		// Without the trio the site keeps the pre-existing inline lowering, so a gate

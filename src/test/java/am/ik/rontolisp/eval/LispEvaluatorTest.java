@@ -10435,6 +10435,31 @@ class LispEvaluatorTest {
 				(with-input-from-string (in "hello")
 				  (let* ((s (read-line in nil)) (a s)) (setf (char s 0) #\\J) (list s a)))
 				""").print()).isEqualTo("(\"Jello\" \"Jello\")");
+		// The third round: the trim family, a program-written map/coerce to string,
+		// and the first-class #'concatenate wrapper.
+		assertThat(evalMulti("""
+				(let* ((s (string-trim " " "  ab  ")) (a s)) (setf (char s 0) #\\x) (list s a))
+				""").print()).isEqualTo("(\"xb\" \"xb\")");
+		assertThat(evalMulti("""
+				(let* ((s (map 'string #'char-upcase "abc")) (a s)) (setf (char s 0) #\\x) (list s a))
+				""").print()).isEqualTo("(\"xBC\" \"xBC\")");
+		assertThat(evalMulti("""
+				(let* ((s (coerce (list #\\a #\\b) 'string)) (a s)) (setf (char s 0) #\\x) (list s a))
+				""").print()).isEqualTo("(\"xb\" \"xb\")");
+		assertThat(evalMulti("""
+				(let* ((s (funcall #'concatenate 'string "ab" "cd")) (a s))
+				  (setf (char s 0) #\\x) (list s a))
+				""").print()).isEqualTo("(\"xbcd\" \"xbcd\")");
+		// (coerce x 'string) over a string answers the ARGUMENT itself (CLHS), so
+		// the fresh-result wrap sits on the build arm only.
+		assertThat(evalMulti("""
+				(let ((s (copy-seq "abc"))) (eq s (coerce s 'string)))
+				""").print()).isEqualTo("T");
+		// read-line's eof-value comes back BY IDENTITY, not as a copy of it.
+		assertThat(evalMulti("""
+				(with-input-from-string (in "")
+				  (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e)))
+				""").print()).isEqualTo("T");
 	}
 
 	@Test

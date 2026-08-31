@@ -4307,6 +4307,16 @@ public final class Environment implements Scope {
 			}
 			return new LispString(a.value() + b.value());
 		}));
+		// %str-fresh: "this value, as a FRESH mutable string". The compile backends
+		// emit their mutable-result wrap for it (a non-string passes through), which is
+		// how the pure-builtin fold keeps a literal-argument producer's value constant
+		// while each evaluation answers a fresh string, and how the first-class
+		// #'concatenate wrapper's string arm reaches the identity call position has.
+		// The interpreter's strings are already mutable, so all this has to do is copy.
+		env.defineFunction(LispNames.STR_FRESH, new LispFunction(LispNames.STR_FRESH, args -> {
+			requireArgCount(LispNames.STR_FRESH, args, 1);
+			return args.get(0) instanceof LispString s ? new LispString(s.value()) : args.get(0);
+		}));
 		// %fixed-decimal: internal fixed-point rendering, what format's ~F and ~$ lower
 		// to on both format paths. The algorithm is compiler/FixedDecimal, which the two
 		// compile backends emit as bytecode / a runtime function.
