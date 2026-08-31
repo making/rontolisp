@@ -284,6 +284,28 @@ public final class LispEvaluator {
 	private final java.util.IdentityHashMap<LispVal, LispVal> userMacroExpansions = new java.util.IdentityHashMap<>();
 
 	/**
+	 * Memo of the BUILT-IN macro arms' expansions ({@link #evalBuiltinMacro}), keyed by
+	 * the call site's cons identity, exactly like {@link #userMacroExpansions} above: the
+	 * interpreter used to re-expand {@code cond}/{@code do}/{@code when}/{@code incf} and
+	 * a hundred more on EVERY evaluation -- 15% of run-time samples in the todo-598
+	 * profile -- where the three compile backends expand once at compile time. Only an
+	 * arm whose expander is a pure function of the form (nothing but the cons and
+	 * compile-time-constant flags; {@code LispMacroExpander} holds no mutable static
+	 * state) may go through this memo -- the arms whose expansion reads evaluator state
+	 * ({@code error}/{@code warn}/{@code signal}/{@code cerror} and the
+	 * {@code restartRuntimeLoaded} gate, the {@code closRegistry} consumers, {@code setf}
+	 * and its user expanders, the print family's per-call {@code print-object} routing,
+	 * {@code flet}/{@code labels}/{@code symbol-macrolet} and the live user-macro table)
+	 * stay re-expanded per evaluation. The full enumeration and the stated semantic
+	 * change (a form REWRITTEN between evaluations keeps its first expansion):
+	 * {@code .kb/interpreter-expansion-memo.md}. Built-in operators cannot be shadowed or
+	 * redefined, so unlike {@link #userMacroExpansions} nothing ever invalidates this
+	 * map; the same monitor-around-lookup, expansion-outside-the-monitor discipline
+	 * applies.
+	 */
+	private final java.util.IdentityHashMap<LispVal, LispVal> builtinMacroExpansions = new java.util.IdentityHashMap<>();
+
+	/**
 	 * Memo of {@link #expandCompilerMacro}, keyed by the CALL SITE's cons identity: a
 	 * compiler macro is a compile-time hint, so applying it once per source occurrence
 	 * (rather than once per evaluation) is both the point of the optimization and what
@@ -4870,9 +4892,9 @@ public final class LispEvaluator {
 				case LispNames.SLOT_VALUE:
 					return evalSlotValue(cons, env);
 				case LispNames.WITH_SLOTS:
-					return eval(LispMacroExpander.expandWithSlots(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithSlots);
 				case LispNames.WITH_ACCESSORS:
-					return eval(LispMacroExpander.expandWithAccessors(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithAccessors);
 				case LispNames.DEFVAR:
 					return evalDefvar(cons, env, false);
 				case LispNames.DEFPARAMETER:
@@ -4891,23 +4913,23 @@ public final class LispEvaluator {
 				case LispNames.LAMBDA:
 					return evalLambdaForm(cons, env);
 				case LispNames.ASYNC_QUALIFIED:
-					return eval(LispMacroExpander.expandAsync(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandAsync);
 				case LispNames.ASYNC_DEFUN_QUALIFIED:
-					return eval(LispMacroExpander.expandAsyncDefun(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandAsyncDefun);
 				case LispNames.ASYNC_LAMBDA_QUALIFIED:
-					return eval(LispMacroExpander.expandAsyncLambda(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandAsyncLambda);
 				case LispNames.AWAIT_QUALIFIED:
 					return evalAwait(cons, env);
 				case LispNames.WHILE:
 					return evalWhile(cons, env);
 				case LispNames.COND:
-					return eval(LispMacroExpander.expandCond(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandCond);
 				case LispNames.CASE:
-					return eval(LispMacroExpander.expandCase(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandCase);
 				case LispNames.ECASE:
-					return eval(LispMacroExpander.expandEcase(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandEcase);
 				case LispNames.CCASE:
-					return eval(LispMacroExpander.expandCcase(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandCcase);
 				case LispNames.ERROR:
 					ensureWitLoadedForConditionClass(cons);
 					ensureConditionReportRuntimeLoaded();
@@ -4945,31 +4967,31 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandHandlerBind(cons, this.closRegistry), env);
 				case LispNames.RESTART_BIND:
 					ensureRestartRuntimeLoaded();
-					return eval(LispMacroExpander.expandRestartBind(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandRestartBind);
 				case LispNames.WITH_SIMPLE_RESTART:
 					ensureRestartRuntimeLoaded();
-					return eval(LispMacroExpander.expandWithSimpleRestart(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithSimpleRestart);
 				case LispNames.IGNORE_ERRORS:
 					ensureConditionReportRuntimeLoaded();
-					return eval(LispMacroExpander.expandIgnoreErrors(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandIgnoreErrors);
 				case LispNames.STABLE_SORT:
-					return eval(LispMacroExpander.expandStableSort(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandStableSort);
 				case LispNames.COPY_SEQ:
-					return eval(LispMacroExpander.expandCopySeq(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandCopySeq);
 				case LispNames.AND:
-					return eval(LispMacroExpander.expandAnd(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandAnd);
 				case LispNames.OR:
-					return eval(LispMacroExpander.expandOr(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandOr);
 				case LispNames.WHEN:
-					return eval(LispMacroExpander.expandWhen(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWhen);
 				case LispNames.DOTIMES:
-					return eval(LispMacroExpander.expandDotimes(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandDotimes);
 				case LispNames.DO:
-					return eval(LispMacroExpander.expandDo(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandDo);
 				case LispNames.DO_STAR:
-					return eval(LispMacroExpander.expandDoStar(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandDoStar);
 				case LispNames.LOOP:
-					return eval(LispMacroExpander.expandLoop(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandLoop);
 				case LispNames.BLOCK_INTERNAL:
 					return evalBlock(cons, env);
 				case LispNames.BLOCK:
@@ -4985,37 +5007,37 @@ public final class LispEvaluator {
 				case LispNames.RETURN:
 					throw blockExit(NIL_BLOCK, evalReturnValue(cons, env), env);
 				case LispNames.PROG1:
-					return eval(LispMacroExpander.expandProg1(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandProg1);
 				case LispNames.TIME:
-					return eval(LispMacroExpander.expandTime(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandTime);
 				case LispNames.UNLESS:
-					return eval(LispMacroExpander.expandUnless(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandUnless);
 				case LispNames.ONE_PLUS:
-					return eval(LispMacroExpander.expandOnePlus(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandOnePlus);
 				case LispNames.ONE_MINUS:
-					return eval(LispMacroExpander.expandOneMinus(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandOneMinus);
 				case LispNames.ZEROP:
-					return eval(LispMacroExpander.expandZerop(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandZerop);
 				case LispNames.PLUSP:
-					return eval(LispMacroExpander.expandPlusp(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandPlusp);
 				case LispNames.MINUSP:
-					return eval(LispMacroExpander.expandMinusp(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandMinusp);
 				case LispNames.EVENP:
-					return eval(LispMacroExpander.expandEvenp(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandEvenp);
 				case LispNames.ODDP:
-					return eval(LispMacroExpander.expandOddp(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandOddp);
 				case LispNames.FIRST:
-					return eval(LispMacroExpander.expandFirst(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandFirst);
 				case LispNames.REST:
-					return eval(LispMacroExpander.expandRest(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandRest);
 				case LispNames.NTH:
-					return eval(LispMacroExpander.expandNth(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandNth);
 				case LispNames.SECOND:
-					return eval(LispMacroExpander.expandSecond(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandSecond);
 				case LispNames.THIRD:
-					return eval(LispMacroExpander.expandThird(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandThird);
 				case LispNames.FOURTH:
-					return eval(LispMacroExpander.expandFourth(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandFourth);
 				case LispNames.SETF: {
 					// (setf (macro-function 'new) (macro-function 'existing)) is a write
 					// to
@@ -5039,38 +5061,38 @@ public final class LispEvaluator {
 					// which the callee cannot do for itself.
 					return evalScharSet(cons, env);
 				case LispNames.PUSH:
-					return eval(LispMacroExpander.expandPush(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandPush);
 				case LispNames.POP:
-					return eval(LispMacroExpander.expandPop(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandPop);
 				case LispNames.REMF:
-					return eval(LispMacroExpander.expandRemf(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandRemf);
 				case LispNames.LET_STAR:
-					return eval(LispMacroExpander.expandLetStar(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandLetStar);
 				case LispNames.DOLIST:
-					return eval(LispMacroExpander.expandDolist(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandDolist);
 				case LispNames.INCF:
-					return eval(LispMacroExpander.expandIncf(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandIncf);
 				case LispNames.DECF:
-					return eval(LispMacroExpander.expandDecf(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandDecf);
 				case LispNames.FORMAT:
-					return eval(LispMacroExpander.expandFormat(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandFormat);
 				case LispNames.WITH_OPEN_FILE:
-					return eval(LispMacroExpander.expandWithOpenFile(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithOpenFile);
 				case LispNames.WITH_OUTPUT_TO_STRING:
-					return eval(LispMacroExpander.expandWithOutputToString(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithOutputToString);
 				case LispNames.PPRINT_LOGICAL_BLOCK:
-					return eval(LispMacroExpander.expandPprintLogicalBlock(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandPprintLogicalBlock);
 				case LispNames.WITH_ARENA_QUALIFIED:
 					// A reclamation boundary for --no-gc; a real GC already reclaims, so
 					// the interpreter runs the body as a plain progn.
-					return eval(LispMacroExpander.expandWithArena(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithArena);
 				case LispNames.WITH_MUTEX_QUALIFIED:
 				case LispNames.WITH_LOCK_HELD_QUALIFIED:
 				case LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED:
 					// Acquire / body / release-on-every-exit; bordeaux-threads'
 					// with-lock-held is the same shape over the same primitives, and its
 					// recursive twin is the same again -- the shim's lock is reentrant.
-					return eval(LispMacroExpander.expandWithMutex(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithMutex);
 				case LispNames.WIT_EXPORT_QUALIFIED:
 					return evalWitExport(cons);
 				case LispNames.WIT_IMPORT_QUALIFIED:
@@ -5079,20 +5101,20 @@ public final class LispEvaluator {
 					// The expansion let-binds torch::*grad-enabled*, so the library's
 					// defparameter must have declared it special BEFORE the let binds.
 					ensureTorchLoaded();
-					return eval(LispMacroExpander.expandTorchNoGrad(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandTorchNoGrad);
 				case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
-					return eval(LispMacroExpander.expandUsocketWithClientSocket(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandUsocketWithClientSocket);
 				case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
 				case LispNames.USOCKET_WITH_SERVER_SOCKET_QUALIFIED:
-					return eval(LispMacroExpander.expandUsocketWithConnectedSocket(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandUsocketWithConnectedSocket);
 				case LispNames.USOCKET_WITH_SOCKET_LISTENER_QUALIFIED:
-					return eval(LispMacroExpander.expandUsocketWithSocketListener(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandUsocketWithSocketListener);
 				case LispNames.USOCKET_GUARD_QUALIFIED:
-					return eval(LispMacroExpander.expandUsocketGuard(cons, true), env);
+					return evalBuiltinMacro(cons, env, c -> LispMacroExpander.expandUsocketGuard(c, true));
 				case LispNames.WITH_INPUT_FROM_STRING:
-					return eval(LispMacroExpander.expandWithInputFromString(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithInputFromString);
 				case LispNames.PUSHNEW:
-					return eval(LispMacroExpander.expandPushnew(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandPushnew);
 				case LispNames.DEFTYPE:
 					return evalDeftype(cons);
 				case LispNames.DEFINE_CONDITION: {
@@ -5106,7 +5128,7 @@ public final class LispEvaluator {
 					return defined;
 				}
 				case LispNames.DEFINE_MODIFY_MACRO:
-					return eval(LispMacroExpander.expandDefineModifyMacro(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandDefineModifyMacro);
 				case LispNames.DEFINE_SETF_EXPANDER:
 					return registerSetfExpander(cons);
 				case LispNames.DEFSETF:
@@ -5115,20 +5137,20 @@ public final class LispEvaluator {
 					return evalDefineCompilerMacro(cons, env);
 				case LispNames.RESTART_CASE:
 					ensureRestartRuntimeLoaded();
-					return eval(LispMacroExpander.expandRestartCase(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandRestartCase);
 				case LispNames.MACROLET:
 					return evalMacrolet(cons, env);
 				case LispNames.MAKE_CONDITION:
 					ensureConditionReportRuntimeLoaded();
 					return eval(LispMacroExpander.expandMakeCondition(cons, this.closRegistry), env);
 				case LispNames.DOCUMENTATION:
-					return eval(LispMacroExpander.expandDocumentation(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandDocumentation);
 				case LispNames.COPY_READTABLE:
-					return eval(LispMacroExpander.expandCopyReadtable(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandCopyReadtable);
 				case LispNames.SET_DISPATCH_MACRO_CHARACTER:
-					return eval(LispMacroExpander.expandSetDispatchMacroCharacter(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandSetDispatchMacroCharacter);
 				case LispNames.READTABLE_CASE:
-					return eval(LispMacroExpander.expandReadtableCase(cons), env);
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandReadtableCase);
 			}
 			// The operator table is split so that neither half crosses HotSpot's
 			// 8000-bytecode HugeMethodLimit; see evalConsRareOperator.
@@ -5137,7 +5159,7 @@ public final class LispEvaluator {
 				return rare;
 			}
 			if (LispNames.isCarCdrComposition(sym.name())) {
-				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandCarCdrComposition);
 			}
 			// The uiop MACROS -- but only for a package-qualified operator. A name
 			// with no colon cannot be a uiop member, and this path is the fall-through
@@ -5256,14 +5278,14 @@ public final class LispEvaluator {
 				break;
 			}
 			case LispNames.COMPLEX:
-				return eval(LispMacroExpander.expandComplexLite(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandComplexLite);
 			case LispNames.NE:
-				return eval(LispMacroExpander.expandNumericNotEqual(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandNumericNotEqual);
 			case LispNames.PARSE_INTEGER:
 				// The shared expansion carries the full keyword set and the second
 				// return value; the Environment function remains for first-class
 				// use (#'parse-integer).
-				return eval(LispMacroExpander.expandParseInteger(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandParseInteger);
 			case LispNames.READ: {
 				// The full CL tail (eof-error-p / eof-value / recursive-p) lowers to
 				// the 0/1-argument call the Environment function implements, so the
@@ -5279,22 +5301,22 @@ public final class LispEvaluator {
 			case LispNames.WRITE_SEQUENCE:
 				return evalSequenceWithGrayDispatch(cons, env, false);
 			case LispNames.MAKE_STRING:
-				return eval(LispMacroExpander.expandMakeString(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMakeString);
 			// REPLACE is intentionally NOT expanded here: the interpreter uses the
 			// destructive built-in (Environment) so a make-string buffer filled by
 			// successive replaces (cl-who's string-list-to-string) mutates in place.
 			// The compilers still expand it to a fresh concatenate (no runtime string
 			// mutation there; cl-who resolves it at macro-expansion time).
 			case LispNames.LOWER_CASE_P:
-				return eval(LispMacroExpander.expandLowerCaseP(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandLowerCaseP);
 			case LispNames.UPPER_CASE_P:
-				return eval(LispMacroExpander.expandUpperCaseP(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandUpperCaseP);
 			case LispNames.CONSTANTP:
-				return eval(LispMacroExpander.expandConstantp(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandConstantp);
 			case LispNames.STREAMP:
 				return eval(LispMacroExpander.expandStreamp(cons, true, true, this.closRegistry), env);
 			case LispNames.SIMPLE_STRING_P:
-				return eval(LispMacroExpander.expandSimpleStringP(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandSimpleStringP);
 			// make-broadcast-stream goes through the SAME expansion the compile paths
 			// use, so the component form (a Gray output stream looping its components)
 			// exists on every backend from one definition. The component-less form
@@ -5302,13 +5324,13 @@ public final class LispEvaluator {
 			// Java built-in below it calls -- that one stays only so
 			// #'make-broadcast-stream remains a value.
 			case LispNames.MAKE_BROADCAST_STREAM:
-				return eval(LispMacroExpander.expandMakeBroadcastStream(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMakeBroadcastStream);
 			case LispNames.PROG2:
-				return eval(LispMacroExpander.expandProg2(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandProg2);
 			case LispNames.PSETQ:
-				return eval(LispMacroExpander.expandPsetq(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandPsetq);
 			case LispNames.PSETF:
-				return eval(LispMacroExpander.expandPsetf(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandPsetf);
 			case LispNames.TYPECASE:
 				ensureAsdfClassesFor(cons);
 				ensureGeomClassesFor(cons);
@@ -5322,51 +5344,51 @@ public final class LispEvaluator {
 				ensureGeomClassesFor(cons);
 				return eval(LispMacroExpander.expandCtypecase(cons, this.closRegistry), env);
 			case LispNames.CHECK_TYPE:
-				return eval(LispMacroExpander.expandCheckType(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandCheckType);
 			case LispNames.ASSERT:
-				return eval(LispMacroExpander.expandAssert(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandAssert);
 			case LispNames.DECLARE:
-				return eval(LispMacroExpander.expandDeclare(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandDeclare);
 			case LispNames.DECLAIM:
 				// (declaim (special ...)) proclaims specialness before the form
 				// collapses to nil; other declarations remain no-ops.
 				SpecialVarCollector.collectForm(cons, this.specialVars);
-				return eval(LispMacroExpander.expandDeclaim(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandDeclaim);
 			case LispNames.PROCLAIM:
 				SpecialVarCollector.collectForm(cons, this.specialVars);
-				return eval(LispMacroExpander.expandProclaim(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandProclaim);
 			case LispNames.THE:
-				return eval(LispMacroExpander.expandThe(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandThe);
 			case LispNames.EVAL_WHEN:
-				return eval(LispMacroExpander.expandEvalWhen(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandEvalWhen);
 			case LispNames.WITH_COMPILATION_UNIT:
-				return eval(LispMacroExpander.expandWithCompilationUnit(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithCompilationUnit);
 			case LispNames.WRITE_CHAR:
 				return evalWriteCharWithGrayDispatch(cons, env);
 			case LispNames.LOCALLY:
-				return eval(LispMacroExpander.expandLocally(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandLocally);
 			case LispNames.WITH_STANDARD_IO_SYNTAX:
-				return eval(LispMacroExpander.expandWithStandardIoSyntax(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithStandardIoSyntax);
 			case LispNames.FLET:
 				return eval(LispMacroExpander.expandFlet(preExpandLocalMacros(cons)), env);
 			case LispNames.LABELS:
 				return eval(LispMacroExpander.expandLabels(preExpandLocalMacros(cons)), env);
 			case LispNames.MULTIPLE_VALUE_BIND:
-				return eval(LispMacroExpander.expandMultipleValueBind(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMultipleValueBind);
 			case LispNames.MULTIPLE_VALUE_LIST:
-				return eval(LispMacroExpander.expandMultipleValueList(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMultipleValueList);
 			case LispNames.MULTIPLE_VALUE_CALL:
-				return eval(LispMacroExpander.expandMultipleValueCall(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMultipleValueCall);
 			case LispNames.NTH_VALUE:
-				return eval(LispMacroExpander.expandNthValue(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandNthValue);
 			case LispNames.MULTIPLE_VALUE_SETQ:
-				return eval(LispMacroExpander.expandMultipleValueSetq(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMultipleValueSetq);
 			case LispNames.MULTIPLE_VALUE_PROG1:
-				return eval(LispMacroExpander.expandMultipleValueProg1(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMultipleValueProg1);
 			case LispNames.ROTATEF:
-				return eval(LispMacroExpander.expandRotatef(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandRotatef);
 			case LispNames.SHIFTF:
-				return eval(LispMacroExpander.expandShiftf(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandShiftf);
 			case LispNames.LOAD_TIME_VALUE:
 				return evalLoadTimeValue(cons, env);
 			case LispNames.TYPEP:
@@ -5375,20 +5397,20 @@ public final class LispEvaluator {
 				ensureGeomClassesFor(cons);
 				return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
 			case LispNames.PRINT_UNREADABLE_OBJECT:
-				return eval(LispMacroExpander.expandPrintUnreadableObject(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandPrintUnreadableObject);
 			case LispNames.WITH_OPEN_STREAM:
-				return eval(LispMacroExpander.expandWithOpenStream(cons, true), env);
+				return evalBuiltinMacro(cons, env, c -> LispMacroExpander.expandWithOpenStream(c, true));
 			case LispNames.WITH_PACKAGE_ITERATOR:
-				return eval(LispMacroExpander.expandWithPackageIterator(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithPackageIterator);
 			case LispNames.WITH_HASH_TABLE_ITERATOR:
-				return eval(LispMacroExpander.expandWithHashTableIterator(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithHashTableIterator);
 			case LispNames.DO_EXTERNAL_SYMBOLS:
 			case LispNames.DO_SYMBOLS:
 				return evalDoSymbols(cons, env, name);
 			case LispNames.PROG:
-				return eval(LispMacroExpander.expandProg(cons, false), env);
+				return evalBuiltinMacro(cons, env, c -> LispMacroExpander.expandProg(c, false));
 			case LispNames.PROG_STAR:
-				return eval(LispMacroExpander.expandProg(cons, true), env);
+				return evalBuiltinMacro(cons, env, c -> LispMacroExpander.expandProg(c, true));
 			case LispNames.DEFINE_SYMBOL_MACRO:
 				return evalDefineSymbolMacro(cons);
 			case LispNames.SYMBOL_MACROLET:
@@ -5406,19 +5428,19 @@ public final class LispEvaluator {
 				throw new GoSignal(plainName(tagSym.name()));
 			}
 			case LispNames.BYTE:
-				return eval(LispMacroExpander.expandByte(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandByte);
 			case LispNames.BYTE_SIZE:
-				return eval(LispMacroExpander.expandByteSize(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandByteSize);
 			case LispNames.BYTE_POSITION:
-				return eval(LispMacroExpander.expandBytePosition(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandBytePosition);
 			case LispNames.LDB:
-				return eval(LispMacroExpander.expandLdb(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandLdb);
 			case LispNames.MAKE_SEQUENCE:
-				return eval(LispMacroExpander.expandMakeSequence(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMakeSequence);
 			case LispNames.DPB:
-				return eval(LispMacroExpander.expandDpb(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandDpb);
 			case LispNames.DESTRUCTURING_BIND:
-				return eval(LispMacroExpander.expandDestructuringBind(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandDestructuringBind);
 			case LispNames.FLOOR:
 			case LispNames.CEILING:
 			case LispNames.ROUND:
@@ -5432,25 +5454,25 @@ public final class LispEvaluator {
 				break;
 			}
 			case LispNames.LIST_STAR:
-				return eval(LispMacroExpander.expandListStar(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandListStar);
 			case LispNames.ACONS:
-				return eval(LispMacroExpander.expandAcons(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandAcons);
 			case LispNames.ENDP:
-				return eval(LispMacroExpander.expandEndp(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandEndp);
 			case LispNames.ELT:
-				return eval(LispMacroExpander.expandElt(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandElt);
 			case LispNames.VECTOR:
-				return eval(LispMacroExpander.expandVector(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandVector);
 			case LispNames.SVREF:
-				return eval(LispMacroExpander.expandSvref(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandSvref);
 			case LispNames.ARRAY_RANK:
-				return eval(LispMacroExpander.expandArrayRank(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandArrayRank);
 			case LispNames.ARRAY_DIMENSION:
-				return eval(LispMacroExpander.expandArrayDimension(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandArrayDimension);
 			case LispNames.ARRAY_TOTAL_SIZE:
-				return eval(LispMacroExpander.expandArrayTotalSize(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandArrayTotalSize);
 			case LispNames.ARRAY_ROW_MAJOR_INDEX:
-				return eval(LispMacroExpander.expandArrayRowMajorIndex(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandArrayRowMajorIndex);
 			case LispNames.COERCE: {
 				// A packed (unsigned-byte 8|16|32) result type is the one designator
 				// expandCoerce cannot express (it collapses a compound spec to its head);
@@ -5463,7 +5485,7 @@ public final class LispEvaluator {
 				return evalSequenceCoerce(cons, env);
 			}
 			case LispNames.MAP_INTO:
-				return eval(LispMacroExpander.expandMapInto(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMapInto);
 			case LispNames.SEARCH:
 			case LispNames.MISMATCH:
 				// The ordinary function call, with a native scan in front of it: both are
@@ -5471,72 +5493,72 @@ public final class LispEvaluator {
 				// ~2.5 us per element PAIR. The arm declines to this same call.
 				return evalSequenceScan(cons, env, name);
 			case LispNames.RASSOC:
-				return eval(LispMacroExpander.expandRassoc(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandRassoc);
 			// The sequence/alist functions taking :test/:key evaluate through the
 			// shared macro expansion (like rassoc) so keyword handling matches the
 			// compilers exactly; the Environment/LispEvaluator registrations remain
 			// for first-class use (#'find etc.).
 			case LispNames.FIND:
-				return eval(LispMacroExpander.expandFind(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandFind);
 			case LispNames.FIND_IF:
-				return eval(LispMacroExpander.expandFindIf(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandFindIf);
 			case LispNames.FIND_IF_NOT:
-				return eval(LispMacroExpander.expandFindIfNot(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandFindIfNot);
 			case LispNames.POSITION:
-				return eval(LispMacroExpander.expandPosition(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandPosition);
 			case LispNames.POSITION_IF:
-				return eval(LispMacroExpander.expandPositionIf(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandPositionIf);
 			case LispNames.POSITION_IF_NOT:
-				return eval(LispMacroExpander.expandPositionIfNot(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandPositionIfNot);
 			case LispNames.COMPLEMENT:
-				return eval(LispMacroExpander.expandComplement(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandComplement);
 			case LispNames.COUNT:
-				return eval(LispMacroExpander.expandCount(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandCount);
 			case LispNames.REMOVE:
-				return eval(LispMacroExpander.expandRemove(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandRemove);
 			case LispNames.DELETE:
-				return eval(LispMacroExpander.expandDelete(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandDelete);
 			case LispNames.REMOVE_DUPLICATES:
 			case LispNames.DELETE_DUPLICATES:
-				return eval(LispMacroExpander.expandRemoveDuplicates(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandRemoveDuplicates);
 			case LispNames.UNION:
-				return eval(LispMacroExpander.expandUnion(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandUnion);
 			case LispNames.INTERSECTION:
-				return eval(LispMacroExpander.expandIntersection(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandIntersection);
 			case LispNames.SET_DIFFERENCE:
-				return eval(LispMacroExpander.expandSetDifference(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandSetDifference);
 			case LispNames.ADJOIN:
-				return eval(LispMacroExpander.expandAdjoin(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandAdjoin);
 			case LispNames.SUBSETP:
-				return eval(LispMacroExpander.expandSubsetp(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandSubsetp);
 			case LispNames.SUBSTITUTE:
-				return eval(LispMacroExpander.expandSubstitute(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandSubstitute);
 			case LispNames.NSUBSTITUTE:
-				return eval(LispMacroExpander.expandNsubstitute(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandNsubstitute);
 			case LispNames.SUBSTITUTE_IF:
-				return eval(LispMacroExpander.expandSubstituteIf(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandSubstituteIf);
 			case LispNames.SUBSTITUTE_IF_NOT:
-				return eval(LispMacroExpander.expandSubstituteIfNot(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandSubstituteIfNot);
 			case LispNames.NSUBSTITUTE_IF:
-				return eval(LispMacroExpander.expandNsubstituteIf(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandNsubstituteIf);
 			case LispNames.NSUBSTITUTE_IF_NOT:
-				return eval(LispMacroExpander.expandNsubstituteIfNot(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandNsubstituteIfNot);
 			case LispNames.REVAPPEND:
-				return eval(LispMacroExpander.expandRevappend(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandRevappend);
 			case LispNames.NRECONC:
-				return eval(LispMacroExpander.expandNreconc(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandNreconc);
 			case LispNames.MAP:
-				return eval(LispMacroExpander.expandMap(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMap);
 			case LispNames.MAPLIST:
-				return eval(LispMacroExpander.expandMaplist(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMaplist);
 			case LispNames.MAPCON:
-				return eval(LispMacroExpander.expandMapcon(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMapcon);
 			case LispNames.MAPL:
-				return eval(LispMacroExpander.expandMapl(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMapl);
 			case LispNames.NOTANY:
-				return eval(LispMacroExpander.expandNotany(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandNotany);
 			case LispNames.NOTEVERY:
-				return eval(LispMacroExpander.expandNotevery(cons), env);
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandNotevery);
 			case LispNames.REDUCE: {
 				// :from-end/:key lower to a plain reduce; other forms fall through to
 				// the native reduce builtin resolved below.
@@ -5557,6 +5579,37 @@ public final class LispEvaluator {
 			}
 		}
 		return UNHANDLED;
+	}
+
+	/**
+	 * Evaluates a built-in macro form through {@link #builtinMacroExpansions}: the
+	 * expansion is computed once per call site and re-evaluated thereafter, like a
+	 * {@code defmacro} call ({@link #expandUserMacro}) and like the compile backends.
+	 * Callers may only pass an expander that is a pure function of the form -- see the
+	 * memo field's contract and {@code .kb/interpreter-expansion-memo.md}. The expander
+	 * runs outside the monitor (an expansion may recurse into the reader or another
+	 * expansion); two threads racing on one call site both expand and the last write
+	 * wins, a wasted expansion rather than a wrong answer.
+	 * @param cons the macro call form
+	 * @param env the environment
+	 * @param expander the pure syntactic expansion of one built-in macro
+	 * @return the value of the (memoized) expansion
+	 */
+	private LispVal evalBuiltinMacro(LispCons cons, Environment env,
+			java.util.function.Function<LispCons, LispVal> expander) {
+		synchronized (this.builtinMacroExpansions) {
+			LispVal cached = this.builtinMacroExpansions.get(cons);
+			if (cached != null) {
+				return eval(cached, env);
+			}
+		}
+		LispVal expansion = expander.apply(cons);
+		synchronized (this.builtinMacroExpansions) {
+			if (this.builtinMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
+				this.builtinMacroExpansions.put(cons, expansion);
+			}
+		}
+		return eval(expansion, env);
 	}
 
 	/**
