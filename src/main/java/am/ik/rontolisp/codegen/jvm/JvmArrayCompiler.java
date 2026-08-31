@@ -9,6 +9,7 @@ import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -291,6 +292,15 @@ final class JvmArrayCompiler {
 
 	static void compileAref(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		if (args.size() == 2) {
+			// (aref a): a rank-0 array holds its one element at row-major index 0, so
+			// the empty Horner fold is the constant 0 (the arm WasmArrayCompiler has).
+			compileAref(
+					new LispCons(args.get(0),
+							new LispCons(args.get(1), new LispCons(new LispInteger(0), LispNil.INSTANCE))),
+					ctx, className);
+			return;
+		}
 		int rank = args.size() - 2;
 		if (rank == 1) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -416,6 +426,15 @@ final class JvmArrayCompiler {
 	static void compileAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();
+		if (args.size() == 3) {
+			// (%aset a value): the rank-0 store, the twin of the (aref a) arm above.
+			compileAset(
+					new LispCons(args.get(0),
+							new LispCons(args.get(1),
+									new LispCons(new LispInteger(0), new LispCons(args.get(2), LispNil.INSTANCE)))),
+					ctx, className);
+			return;
+		}
 		int rank = args.size() - 3;
 		LispVal value = args.get(args.size() - 1);
 		if (rank == 1) {

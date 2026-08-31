@@ -308,25 +308,33 @@ public final class LispLexer {
 				this.pos += 3;
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
-				// #nA( opens a rank-n array literal (e.g., #2A((1 2) (3 4))). Anything
-				// else after #<digits> falls through to symbol reading, preserving the
+				// #nA( opens a rank-n array literal (e.g., #2A((1 2) (3 4))), and #0A
+				// opens the rank-0 one, whose single datum follows WITHOUT parens
+				// (#0A5, #0ANIL, #0A(1 2) -- an array holding the list). Anything else
+				// after #<digits> falls through to symbol reading, preserving the
 				// previous tokenization.
 				int probe = this.pos + 1;
 				while (probe < this.input.length() && isDigit(this.input.charAt(probe))) {
 					probe++;
 				}
-				if (probe + 1 < this.input.length()
-						&& (this.input.charAt(probe) == 'A' || this.input.charAt(probe) == 'a')
-						&& this.input.charAt(probe + 1) == '(') {
-					int rank;
+				int arrayRank = -1;
+				if (probe < this.input.length()
+						&& (this.input.charAt(probe) == 'A' || this.input.charAt(probe) == 'a')) {
 					try {
-						rank = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+						arrayRank = Integer.parseInt(this.input.substring(this.pos + 1, probe));
 					}
 					catch (NumberFormatException overflow) {
 						throw err("Invalid array rank: " + this.input.substring(this.pos, probe));
 					}
-					add(tokens, new Token.ArrayOpen(rank), tokenStart);
-					this.pos = probe + 2;
+					// A rank-0 literal is #0A<datum> -- no parens to consume, the reader
+					// takes the next object whole. Every other rank opens with '('.
+					if (arrayRank > 0 && !(probe + 1 < this.input.length() && this.input.charAt(probe + 1) == '(')) {
+						arrayRank = -1;
+					}
+				}
+				if (arrayRank >= 0) {
+					add(tokens, new Token.ArrayOpen(arrayRank), tokenStart);
+					this.pos = arrayRank == 0 ? probe + 1 : probe + 2;
 				}
 				else if (probe + 1 < this.input.length() && this.input.charAt(probe) == '@'
 						&& this.input.charAt(probe + 1) == '(') {

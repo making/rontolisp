@@ -17,7 +17,7 @@
 | Float range | `most-positive-double-float`, `least-positive-normalized-single-float`, `double-float-epsilon` | The standard float-range constants, read as self-evaluating doubles like `pi`. `short-float` is `single-float` and `long-float` is `double-float`; since every float is a double here, a single-float bound answers the exact double of the binary32 number it names |
 | Cons | `(1 2 3)`, `(a . 1)` | Linked list built from cons cells; `(a . b)` is dotted-pair notation for a single cell |
 | Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
-| Array | `#(1 2 3)`, `#2A((1 2) (3 4))` | Fixed-size array of any rank (rank 1 = vector); `#(...)` and `#nA(...)` are self-evaluating array literals |
+| Array | `#(1 2 3)`, `#2A((1 2) (3 4))`, `#0A5` | Fixed-size array of any rank (rank 1 = vector, rank 0 = a boxed scalar); `#(...)`, `#nA(...)` and `#0A<datum>` are self-evaluating array literals |
 | Hash table | `(make-hash-table)` | Mutable key/value table with structural (`equal`) keys |
 | Structure | `#S(POINT :X 1 :Y 2)` | An instance of a [`defstruct`](special-forms/defstruct.md) type. `#S(...)` is both how an instance prints and a self-evaluating literal that reads back into one; the `defstruct` must appear in an earlier top-level form |
 
@@ -269,9 +269,11 @@ list, e.g. by prepending with `list*`:
 ## Arrays
 
 `make-array`, `aref` and `(setf (aref ...))` work in all three backends. Arrays
-of **any rank >= 1** are supported; the dimensions argument is an integer
-(rank 1) or a non-empty list of integers, and `:initial-element` sets every
-cell (defaulting to nil). Elements are stored row-major with O(1) access
+of **any rank >= 0** are supported; the dimensions argument is an integer
+(rank 1) or a list of integers, and `:initial-element` sets every
+cell (defaulting to nil). The empty list (`nil`) is the **rank-0** array: Common
+Lisp's box for "a scalar seen as an array", holding one element that `aref` and
+`(setf (aref ...))` reach with no subscripts at all. Elements are stored row-major with O(1) access
 (flat rank-independent access via
 [`row-major-aref`](functions/row-major-aref.md) /
 [`array-row-major-index`](functions/array-row-major-index.md)), and arrays are
@@ -301,7 +303,9 @@ The `#(...)` reader syntax denotes a self-evaluating rank-1 vector literal whose
 elements are read as data (not evaluated), e.g. `#(1 2 3)` or `#(a "b")`. A
 rank-n array is written `#nA((...) ...)` with its contents as nested lists of
 depth n (`#2A` for a matrix, `#3A` for a rank-3 array, ...); every list at the
-same depth must have the same length, so ragged contents are a read error.
+same depth must have the same length, so ragged contents are a read error. A
+rank-0 array is written `#0A<datum>` with **no** parens at all, so `#0A5` holds
+the number 5 and `#0A(1 2)` holds the list `(1 2)`.
 Arrays print in the same readable syntax across all backends, with `prin1`
 quoting string elements and `princ` not:
 
@@ -311,6 +315,9 @@ quoting string elements and `princ` not:
 (print #2A((1 2) (3 4)))                  ; #2A((1 2) (3 4))
 (aref #3A(((1 2) (3 4)) ((5 6) (7 8))) 1 0 1) ; => 6
 (make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
+(print #0A5)                              ; #0A5
+(aref #0A5)                               ; => 5
+(let ((z (make-array nil))) (setf (aref z) 7) z) ; => #0A7
 ```
 
 An array literal is a **constructor, not a constant**: every evaluation of it builds a

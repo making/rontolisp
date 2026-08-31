@@ -349,9 +349,16 @@ class LispReaderTest {
 	}
 
 	@Test
-	void readRank0ArrayLiteralThrows() {
-		assertThatThrownBy(() -> LispReader.readFromString("#0A(1)")).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("rank");
+	void readRank0ArrayLiteralHoldsOneDatumWithoutParens() {
+		// #0A<datum>: the datum follows whole, so #0A(1) is a rank-0 array holding the
+		// LIST (1) -- not a rank-0 array of the element 1.
+		LispVal held = LispReader.readFromString("#0A(1)");
+		assertThat(held).isInstanceOf(LispArray.class);
+		assertThat(((LispArray) held).dimensions()).isEmpty();
+		assertThat(((LispArray) held).aref().print()).isEqualTo("(1)");
+		assertThat(held.print()).isEqualTo("#0A(1)");
+		assertThat(LispReader.readFromString("#0A5").print()).isEqualTo("#0A5");
+		assertThat(LispReader.readFromString("#0aNIL").print()).isEqualTo("#0ANIL");
 	}
 
 	@Test

@@ -1192,8 +1192,9 @@ public final class LispNames {
 	// Arrays
 
 	/**
-	 * The {@code make-array} built-in function. Supports arrays of any rank {@code >= 1}
-	 * and the {@code :initial-element} keyword.
+	 * The {@code make-array} built-in function. Supports arrays of any rank {@code >= 0}
+	 * (a nil dimension list is the rank-0 array) and the {@code :initial-element}
+	 * keyword.
 	 */
 	public static final String MAKE_ARRAY = "MAKE-ARRAY";
 
@@ -1365,7 +1366,10 @@ public final class LispNames {
 	/** The {@code array-dimension} built-in function (one dimension size). */
 	public static final String ARRAY_DIMENSION = "ARRAY-DIMENSION";
 
-	/** The {@code array-rank} built-in function (1 for vectors, 2 for matrices). */
+	/**
+	 * The {@code array-rank} built-in function (0 for a rank-0 array, 1 for vectors, 2
+	 * for matrices).
+	 */
 	public static final String ARRAY_RANK = "ARRAY-RANK";
 
 	/** The {@code array-total-size} built-in function (the element count). */

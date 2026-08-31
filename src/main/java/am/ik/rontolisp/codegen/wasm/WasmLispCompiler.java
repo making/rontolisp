@@ -9080,15 +9080,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		final StringEntry hashTableEnd;
 
 		// Vector/array literal printing: the "#(" prefix for rank-1; a rank-n array
-		// prints "#", the rank as an integer, then "A(". A packed float array
-		// (TYPE_FARRAY) prints "#d(" (double) or "#f(" (single) at every rank instead, so
-		// its printed form round-trips to a packed array of the same width -- the printer
+		// prints "#", the rank as an integer, then "A" and the opening paren. A RANK-0
+		// array stops at the "A" -- #0A<datum> has no parens at all, which is why the
+		// "A" and the "(" are separate strings. A packed float array (TYPE_FARRAY)
+		// prints "#d(" (double) or "#f(" (single) at every rank >= 1 instead, so its
+		// printed form round-trips to a packed array of the same width -- the printer
 		// picks fPrefix / sfPrefix by ref.test-ing the data array's width.
 		final StringEntry vecPrefix;
 
 		final StringEntry hashPrefix;
 
-		final StringEntry rankAOpen;
+		final StringEntry rankA;
 
 		final StringEntry fPrefix;
 
@@ -9151,7 +9153,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.hashTableEnd = addBodyString(">");
 			this.vecPrefix = addBodyString("#(");
 			this.hashPrefix = addBodyString("#");
-			this.rankAOpen = addBodyString("A(");
+			this.rankA = addBodyString("A");
 			this.fPrefix = addBodyString("#d(");
 			this.sfPrefix = addBodyString("#f(");
 			this.minus = addBodyString("-");

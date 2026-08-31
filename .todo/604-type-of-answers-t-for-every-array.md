@@ -31,9 +31,15 @@ Out of scope, and it will keep failing after this lands: `(array-element-type
 `FIXNUM`. That is conformant -- `array-element-type` returns the UPGRADED element
 type and there is no fixnum-specialized array to upgrade to.
 
-Together with `.todo/603` this is the whole remainder of array-operations' own
-clunit2 suite: 11 of the 19 assertions it fails here (200/219 against SBCL's
-219/219), 2 of which are the `fixnum` line above.
+This is now the WHOLE remainder of array-operations' own clunit2 suite: 11 of the
+11 assertions it still fails here (208/219 against SBCL's 219/219, once
+`.todo/603` landed the rank-0 array), 2 of which are the `fixnum` line above.
+
+A rank-0 array exists since `.todo/603`, so `type-of` has to answer for it too:
+`(type-of (make-array nil))` is `(SIMPLE-ARRAY T NIL)` in SBCL -- the dimension
+list is `NIL`, not a size. The related ATOMIC gap (`vectorp` and `(typep a
+'vector)` answering `T` at every rank) is `.todo/605`; this item owns the
+COMPOUND specifier and `type-of`.
 
 Behavior must be identical on all four backends: `.kb/declarations-type-checks.md`
 owns the type lattice and names the pinning tests; add a ci-spec case, then

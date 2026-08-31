@@ -30,7 +30,7 @@ import am.ik.wasm.Type;
  * {@code dims} holds the dimension sizes as i31 integers; {@code data} holds the
  * row-major elements. The header's car stays the dims bucket array, so the
  * array-vs-hash-table discriminator used by {@code %arrayp}/{@code length}/the printer is
- * unchanged. Any rank {@code >= 1} is supported: the flat index is the Horner fold over
+ * unchanged. Any rank {@code >= 0} is supported: the flat index is the Horner fold over
  * the subscripts (unrolled per call site, whose subscript count is static), so a rank-2
  * element {@code (i, j)} lives at flat index {@code i * dims[1] + j} and a rank-1 element
  * {@code (i)} at {@code i}.
@@ -1338,6 +1338,16 @@ final class WasmArrayCompiler {
 	static void compileAset(LispCons cons, WasmLispCompiler.Ctx ctx, boolean resultNeeded) {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();
+		if (args.size() == 3) {
+			// (%aset a value): the rank-0 store, the twin of compileAref's (aref a) arm
+			// -- a rank-0 array holds its one element at row-major index 0.
+			compileAset(
+					new LispCons(args.get(0),
+							new LispCons(args.get(1),
+									new LispCons(new LispInteger(0), new LispCons(args.get(2), LispNil.INSTANCE)))),
+					ctx, resultNeeded);
+			return;
+		}
 		int rank = args.size() - 3;
 		if (rank == 1) {
 			// A store whose array representation is pinned down (declaration / accessor
@@ -1576,6 +1586,13 @@ final class WasmArrayCompiler {
 	// per-dimension strides; a rank-1 access never touches it.
 	private static void emitFlatIndex(WasmLispCompiler.Ctx ctx, int headerSlot, List<LispVal> args, int firstSub,
 			int rank) {
+		if (rank == 0) {
+			// A rank-0 array: the empty fold is the constant 0. (compileAref/compileAset
+			// rewrite that shape to an explicit index 0 before reaching here, so this is
+			// the fold's definition rather than a live path.)
+			i32Const(ctx, 0);
+			return;
+		}
 		WasmExprCompiler.compileExpr(args.get(firstSub), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		for (int k = 1; k < rank; k++) {
@@ -1598,6 +1615,10 @@ final class WasmArrayCompiler {
 	// eq) rather than a general-array header. A rank-1 access never touches dimsSlot.
 	private static void emitPackedFlatIndex(WasmLispCompiler.Ctx ctx, int dimsSlot, List<LispVal> args, int firstSub,
 			int rank) {
+		if (rank == 0) {
+			i32Const(ctx, 0);
+			return;
+		}
 		WasmExprCompiler.compileExpr(args.get(firstSub), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		for (int k = 1; k < rank; k++) {

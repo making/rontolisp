@@ -3593,8 +3593,9 @@ final class WasmRuntimeBuilder {
 
 	// Emits the TYPE_CELL branch shared by _print_val and _princ_val, i.e. every value
 	// carried in the box: if param 0 is a TYPE_CELL whose header car is a
-	// TYPE_HASH_BUCKETS array (an array), prints it as #(...) (rank 1) or #nA((...) ...)
-	// (rank n) and returns; any other cell is a hash table and prints #<HASH-TABLE>.
+	// TYPE_HASH_BUCKETS array (an array), prints it as #(...) (rank 1), #nA((...) ...)
+	// (rank n) or #0A<datum> (rank 0, no parens) and returns; any other cell is a hash
+	// table and prints #<HASH-TABLE>.
 	// The branch RETURNS for every cell -- nothing may reach the cons tail of the caller,
 	// which would re-enter the printer on the same value (see the tail of this method).
 	// elementFunc is the per-element printer (FUNC_PRINT_VAL for prin1, FUNC_PRINC_VAL
@@ -3981,8 +3982,20 @@ final class WasmRuntimeBuilder {
 		innerConsGet(w, dataSlot, 1);
 		setLocal(w, dataSlot);
 
-		// prefix: a packed float array prints "#f(" (single, packedSlot==2) or "#d("
-		// (double, packedSlot==1); else "#(" for rank 1, "#" + rank + "A(" for rank n
+		// prefix: a RANK-0 array prints "#0A" and opens no paren at all (the whole
+		// rank-0 syntax is #0A<datum>, at every representation -- the packed prefixes do
+		// not apply to it); else a packed float array prints "#f(" (single,
+		// packedSlot==2) or "#d(" (double, packedSlot==1), and a general one "#(" for
+		// rank 1, "#" + rank + "A(" for rank n.
+		getLocal(w, rankSlot);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		writeStr(w, st.hashPrefix);
+		getLocal(w, rankSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
+		writeStr(w, st.rankA);
+		w.write(Instruction.ELSE);
 		getLocal(w, packedSlot);
 		w.write(Instruction.IF, 0x40);
 		getLocal(w, packedSlot);
@@ -4006,7 +4019,9 @@ final class WasmRuntimeBuilder {
 		getLocal(w, rankSlot);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
-		writeStr(w, st.rankAOpen);
+		writeStr(w, st.rankA);
+		writeStr(w, st.lparen);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 
@@ -4111,7 +4126,11 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 
+		// A rank-0 array opened no paren, so it closes none.
+		getLocal(w, rankSlot);
+		w.write(Instruction.IF, 0x40);
 		writeStr(w, st.rparen);
+		w.write(Instruction.END);
 		emitRenderGuardExit(w, renderPathGlobalIndex, renderDepthGlobalIndex);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // is-array if

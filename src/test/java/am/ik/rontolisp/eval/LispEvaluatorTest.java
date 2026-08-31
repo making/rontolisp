@@ -11261,9 +11261,35 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void makeArrayRejectsEmptyDimensionList() {
-		assertThatThrownBy(() -> eval("(make-array (list))")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("dimension");
+	void makeArrayWithNoDimensionsIsARankZeroArray() {
+		// (make-array nil) is CL's box for "a scalar seen as an array": no dimensions,
+		// one element reached with NO subscripts, a total size of 1.
+		LispVal result = eval("""
+				(let ((a (make-array nil :initial-element 5)))
+				  (list (array-rank a) (array-dimensions a) (array-total-size a)
+				        (aref a) (row-major-aref a 0) (array-row-major-index a) (arrayp a)))
+				""");
+		assertThat(result.print()).isEqualTo("(0 NIL 1 5 5 0 T)");
+		assertThat(eval("(make-array (list) :initial-element 5)").print()).isEqualTo("#0A5");
+	}
+
+	@Test
+	void rankZeroArrayIsWrittenAndPrintedWithoutSubscripts() {
+		LispVal result = eval("""
+				(let ((a (make-array nil)))
+				  (setf (aref a) 7)
+				  (let ((first (prin1-to-string a)))
+				    (setf (row-major-aref a 0) 9)
+				    (list first (prin1-to-string a) (aref a))))
+				""");
+		assertThat(result.print()).isEqualTo("(\"#0A7\" \"#0A9\" 9)");
+	}
+
+	@Test
+	void rankZeroArrayLiteralReadsItsDatumWhole() {
+		// #0A<datum> has no parens, so #0A(1 2) is a rank-0 array holding the LIST.
+		assertThat(eval("(list #0A5 (aref #0A5) #0ANIL #0A(1 2) (array-rank #0A(1 2)))").print())
+			.isEqualTo("(#0A5 5 #0ANIL #0A(1 2) 0)");
 	}
 
 	// --- defmacro (user macros) ---

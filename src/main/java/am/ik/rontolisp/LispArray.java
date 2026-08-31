@@ -6,10 +6,13 @@ import org.jspecify.annotations.Nullable;
  * An array value (Common Lisp {@code array}/{@code simple-array}).
  *
  * <p>
- * Arrays of any rank {@code >= 1} are supported, matching the compiled backends. Elements
+ * Arrays of any rank {@code >= 0} are supported, matching the compiled backends. Elements
  * are stored row-major in a flat {@link LispVal} array; the flat index is the Horner fold
  * over the subscripts (a rank-2 element {@code (i, j)} lives at {@code i * cols + j},
- * where {@code cols} is the second dimension).
+ * where {@code cols} is the second dimension). A RANK-0 array is the degenerate case of
+ * that model rather than a special one: no dimensions, an empty fold (so its one element
+ * lives at flat index 0), and a total size of 1 -- Common Lisp's box for "a scalar seen
+ * as an array".
  *
  * <p>
  * Arrays are compared by identity ({@code eq}); two distinct arrays are never
@@ -49,7 +52,7 @@ public final class LispArray implements LispVal {
 	/**
 	 * Creates a simple array with the given dimensions backed by {@code data}
 	 * (row-major), with no fill pointer and not adjustable.
-	 * @param dimensions the dimension sizes (length = rank, {@code >= 1})
+	 * @param dimensions the dimension sizes (length = rank, {@code >= 0})
 	 * @param data the flat backing store (length = product of dimensions)
 	 */
 	public LispArray(int[] dimensions, LispVal[] data) {
@@ -59,7 +62,7 @@ public final class LispArray implements LispVal {
 	/**
 	 * Creates an array with the given dimensions, backing store, fill pointer and
 	 * adjustability.
-	 * @param dimensions the dimension sizes (length = rank, {@code >= 1})
+	 * @param dimensions the dimension sizes (length = rank, {@code >= 0})
 	 * @param data the flat backing store (length = product of dimensions)
 	 * @param fillPointer the fill pointer, or {@code -1} for none (only rank-1 arrays may
 	 * have one)
@@ -78,7 +81,7 @@ public final class LispArray implements LispVal {
 	 * Creates a displaced array: a view over {@code target}'s storage starting at
 	 * {@code offset} (row-major). The view has no fill pointer, is not adjustable and
 	 * owns no data.
-	 * @param dimensions the dimension sizes of the view (length = rank, {@code >= 1})
+	 * @param dimensions the dimension sizes of the view (length = rank, {@code >= 0})
 	 * @param target the array supplying the storage
 	 * @param offset the row-major index into {@code target} where the view starts
 	 */
@@ -312,8 +315,11 @@ public final class LispArray implements LispVal {
 			throw new IllegalArgumentException(
 					"aref: expected " + this.dimensions.length + " subscripts, got " + subscripts.length);
 		}
-		int flat = subscripts[0];
-		for (int k = 1; k < subscripts.length; k++) {
+		// The Horner fold, started at 0 so a RANK-0 array (no subscripts) folds to the
+		// flat index 0 of its single element instead of reading a subscript that is not
+		// there.
+		int flat = 0;
+		for (int k = 0; k < subscripts.length; k++) {
 			flat = flat * this.dimensions[k] + subscripts[k];
 		}
 		if (flat < 0 || flat >= totalSize()) {
@@ -333,7 +339,8 @@ public final class LispArray implements LispVal {
 	}
 
 	// Renders the readable vector/array syntax: a rank-1 array as #(e1 e2 ...) and a
-	// rank-n array as #nA((...) ...). Each element is rendered with the supplied
+	// rank-n array as #nA((...) ...) (a rank-0 array as #0Ae, handled in
+	// renderArrayData). Each element is rendered with the supplied
 	// function (print for prin1, display for princ), so princ propagates to the elements
 	// the way Common Lisp's *print-escape* does. A nested group paren opens where the
 	// flat index is a multiple of that dimension's stride and closes where the next
@@ -376,7 +383,9 @@ public final class LispArray implements LispVal {
 	 * {@link LispArray} and the packed {@link LispFloatArray} so the (subtle) paren
 	 * layout lives in one place; the packed array renders its primitive backing directly,
 	 * boxing only the transient {@link LispDouble} each element's string needs.
-	 * @param dims the dimension sizes (length = rank)
+	 * @param dims the dimension sizes (length = rank; empty for a rank-0 array, which
+	 * renders as {@code #0A} followed by its single element -- no parens, the shape
+	 * {@code readArray} reads back)
 	 * @param count the number of leading elements to render (the effective length)
 	 * @param openPrefix the opening text through the outermost {@code (} (e.g.
 	 * {@code "#("}, {@code "#2A("}, {@code "#d("} or {@code "#f("})
@@ -386,6 +395,11 @@ public final class LispArray implements LispVal {
 	static String renderArrayData(int[] dims, int count, String openPrefix,
 			java.util.function.IntFunction<String> renderElementAt) {
 		int rank = dims.length;
+		if (rank == 0) {
+			// #0A<datum>: a rank-0 array has no dimensions to group, so it carries no
+			// parens at all and the caller's "#(" / "#2A(" / "#d(" prefix does not apply.
+			return "#0A" + renderElementAt.apply(0);
+		}
 		StringBuilder sb = new StringBuilder();
 		sb.append(openPrefix);
 		for (int k = 0; k < count; k++) {

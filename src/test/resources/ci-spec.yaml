@@ -3822,6 +3822,27 @@ cases:
       4
       4
       120
+  # Rank-0 arrays: (make-array nil) is CL's box for "a scalar seen as an array" --
+  # no dimensions, one element reached with NO subscripts, a total size of 1, and
+  # the #0A<datum> syntax, which carries no parens at all (so #0A(1 2) is a rank-0
+  # array holding the LIST).
+  - name: rank-zero-arrays-cross-backend
+    source: |
+      (defun ci-rank-zero ()
+        (let ((z (make-array nil :initial-element 5)))
+          (print (list (array-rank z) (array-dimensions z) (array-total-size z)
+                       (aref z) (row-major-aref z 0) (array-row-major-index z)))
+          (setf (aref z) 7)
+          (print z)
+          (setf (row-major-aref z 0) 9)
+          (print (list (aref z) z)))
+        (print (list #0A5 (aref #0A5) #0ANIL #0A(1 2) (array-rank #0A(1 2)))))
+      (ci-rank-zero)
+    expected: |
+      (0 NIL 1 5 5 0)
+      #0A7
+      (9 #0A9)
+      (#0A5 5 #0ANIL #0A(1 2) 0)
   # row-major-aref (flat access independent of rank, + its setf place) and
   # array-row-major-index (the Horner-fold expansion over array-dimensions).
   - name: row-major-aref-cross-backend

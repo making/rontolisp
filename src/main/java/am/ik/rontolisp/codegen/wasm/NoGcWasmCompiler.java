@@ -3361,8 +3361,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// The per-dimension expressions of a make-array dimension spec. Accepts an integer /
 	// runtime expression (a rank-1 length directly), a quoted literal list '(d n) (its
 	// elements are plain data), or a (list d n) form (its elements are runtime
-	// expressions). The returned size is the rank; compileMakeArray keys the layout off
-	// it (1 = packed vector, 2 = packed matrix, else a clear compile error).
+	// expressions). NIL is the rank-0 shape (no dimensions at all), which this backend
+	// has no type for. The returned size is the rank; compileMakeArray keys the layout
+	// off it (1 = packed vector, 2 = packed matrix, else a clear compile error).
 	private static List<LispVal> dimExprs(LispVal dimsArg) {
 		LispVal spec = dimsArg;
 		if (spec instanceof LispCons c && c.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
@@ -3371,7 +3372,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			if (spec instanceof LispCons list) {
 				return list.toList();
 			}
-			return List.of(spec);
+			return spec instanceof LispNil ? List.of() : List.of(spec);
+		}
+		if (spec instanceof LispNil) {
+			return List.of();
 		}
 		if (spec instanceof LispCons c && c.car() instanceof LispSymbol head && LispNames.LIST.equals(head.name())) {
 			List<LispVal> parts = c.toList();

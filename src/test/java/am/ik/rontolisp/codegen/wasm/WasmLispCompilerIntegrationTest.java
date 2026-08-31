@@ -14486,6 +14486,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileRankZeroArray() throws Exception {
+		// (make-array nil): no dimensions, one element reached with NO subscripts, total
+		// size 1, printed as #0A<datum> without parens -- identical on all four backends
+		// (JvmLispCompilerTest#compileAndRunRankZeroArray, ci-spec
+		// rank-zero-arrays-cross-backend).
+		assertThat(compileAndRun("""
+				(defparameter *z* (make-array nil :initial-element 5))
+				(print (list (array-rank *z*) (array-dimensions *z*) (array-total-size *z*)
+				             (aref *z*) (row-major-aref *z* 0) (array-row-major-index *z*)))
+				(setf (aref *z*) 7)
+				(print *z*)
+				(setf (row-major-aref *z* 0) 9)
+				(print (list (aref *z*) *z*))
+				(print (list #0A5 (aref #0A5) #0ANIL #0A(1 2) (array-rank #0A(1 2))))
+				""")).isEqualTo("(0 NIL 1 5 5 0)\n#0A7\n(9 #0A9)\n(#0A5 5 #0ANIL #0A(1 2) 0)");
+	}
+
+	@Test
 	void compileRowMajorArefReadsAndWritesFlat() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

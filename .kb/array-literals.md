@@ -134,3 +134,56 @@ array and cannot be for an instance, so the compile side meets it instead.
 - `ci-spec.yaml` `array-literal-freshness-cross-backend` -- the four-backend pin.
 - `.kb/pure-builtin-fold.md` -- the fold that depends on this invariant.
 - `doc/{en,ja}/reference/data-types.md` -- the user-facing statement.
+
+## The RANK-0 array, and why `#0A` carries no parens (2026-08-31)
+
+`(make-array nil)` is a legal array on all four backends: no dimensions, a total size of
+1 (the empty product), and one element that `aref` / `(setf (aref ...))` reach with **no
+subscripts at all**. It is not a special case bolted onto the model but the empty case of
+the model already in place -- the flat index is the Horner fold over the subscripts, and
+the fold over zero subscripts is 0. Every fold in the tree therefore starts at `flat = 0`
+and runs from `k = 0`, never at `subs[0]` with `k = 1`: `LispArray.flatIndex`,
+`LispFloatArray.flatIndex`, `JvmArrayRuntimeBuilder.emitFlatN` and the two
+`JvmFloatArrayRuntimeBuilder` N-bodies. On the compile backends the subscript count is
+STATIC at the site, so `JvmArrayCompiler`/`WasmArrayCompiler`'s `compileAref` and
+`compileAset` rewrite the rank-0 shape to an explicit index 0 before emitting; the
+runtime folds above are the definition those sites agree with, not a live path.
+
+Why it exists beyond conformance: a rank-0 array is CL's box for "a scalar seen as an
+array", and generic array libraries lean on it -- array-operations' `as-array` default
+method IS `(make-array nil :initial-element object)`, so without it `(aops:dims 1)` and
+the 0-dimensional-object arm of `stack-rows`/`stack-cols` fail (`.kb/asdf.md`).
+
+**The syntax is `#0A<datum>`, with no parens anywhere.** `#0A5` holds the number 5 and
+`#0A(1 2)` holds the LIST `(1 2)` -- the datum after `#0A` is read whole, which is why
+`LispLexer` accepts `#0A` without the `(` every other rank requires and `LispReader.readArray`
+takes one `readExpr()` for rank 0. The printers mirror it exactly: `LispArray.renderArrayData`
+returns early for rank 0, the JVM's `_arrayToString` appends `"0A"` in place of the `"("`
+and skips the closing paren, and wasm's `emitPrintArray` tests rank 0 OUTSIDE the packed
+branch (so the `#d(`/`#f(` prefixes never apply to one) and suppresses its `rparen` the same
+way. That last point is also why wasm's string table holds `"A"` and `"("` separately
+instead of one `"A("`.
+
+A rank-0 array prints `#0A<datum>` at EVERY representation, packed float included: the
+JVM's packed prefix rewrite is a `^#\d*A?\(` regex that simply does not match a
+paren-less rendering, and the interpreter's `renderArrayData` ignores the caller's
+`openPrefix` for rank 0. So `(make-array nil :element-type 'double-float)` prints
+`#0A0.0` and reads back as a general rank-0 array -- the round trip loses the packing,
+which nothing depends on and SBCL spells the same way.
+
+`--no-gc` is the one backend that refuses: it has no general array type and its packed
+kinds carry a static rank, so `NoGcWasmCompiler.dimExprs` answers an empty list for `nil`
+and `compileMakeArray` reports "a rank-0 make-array ... is not supported", the same shape
+as its existing rank >= 3 refusal.
+
+Pinned by the ci-spec case `rank-zero-arrays-cross-backend`,
+`LispEvaluatorTest.makeArrayWithNoDimensionsIsARankZeroArray` /
+`#rankZeroArrayIsWrittenAndPrintedWithoutSubscripts` /
+`#rankZeroArrayLiteralReadsItsDatumWhole`,
+`LispReaderTest.readRank0ArrayLiteralHoldsOneDatumWithoutParens`,
+`JvmLispCompilerTest.compileAndRunRankZeroArray` and
+`WasmLispCompilerIntegrationTest.compileRankZeroArray`.
+
+What is still missing, and belongs to `.todo/604` rather than here: `type-of` answers `T`
+for a rank-0 array where CL says `(SIMPLE-ARRAY T NIL)`, and `vectorp` answers `T` for
+every array regardless of rank (a pre-existing gap that rank 2 already had).

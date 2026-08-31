@@ -39,7 +39,7 @@ public sealed interface LispFloatArray extends LispVal permits LispDoubleFloatAr
 
 	/**
 	 * Returns the dimension sizes; the rank is {@code dims().length}.
-	 * @return the dimensions (length = rank, {@code >= 1})
+	 * @return the dimensions (length = rank, {@code >= 0})
 	 */
 	int[] dims();
 
@@ -87,7 +87,7 @@ public sealed interface LispFloatArray extends LispVal permits LispDoubleFloatAr
 
 	/**
 	 * Returns the rank (number of dimensions).
-	 * @return the rank ({@code >= 1})
+	 * @return the rank ({@code >= 0})
 	 */
 	default int rank() {
 		return dims().length;
@@ -145,8 +145,11 @@ public sealed interface LispFloatArray extends LispVal permits LispDoubleFloatAr
 			throw new IllegalArgumentException(
 					"aref: expected " + dims.length + " subscripts, got " + subscripts.length);
 		}
-		int flat = subscripts[0];
-		for (int k = 1; k < subscripts.length; k++) {
+		// The Horner fold, started at 0 so a RANK-0 array (no subscripts) folds to the
+		// flat index 0 of its single element instead of reading a subscript that is not
+		// there.
+		int flat = 0;
+		for (int k = 0; k < subscripts.length; k++) {
 			flat = flat * dims[k] + subscripts[k];
 		}
 		if (flat < 0 || flat >= totalSize()) {

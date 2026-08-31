@@ -502,13 +502,12 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.iconst(0);
 		loadHeaderInt(a, single);
 		a.istore(rank);
-		a.aload(subsArr);
+		// flat = 0; for k in 0..rank-1: flat = flat * dims[k] + subs[k]. Starting the
+		// fold at 0 rather than at subs[0] is what makes a RANK-0 packed array (no
+		// subscripts) answer the flat index 0 of its single element.
 		a.iconst(0);
-		a.aaload();
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
 		a.istore(flat);
-		a.iconst(1);
+		a.iconst(0);
 		a.istore(k);
 		int loop = a.label();
 		int done = a.label();
@@ -737,13 +736,12 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.iconst(0);
 		loadHeaderInt(a, single);
 		a.istore(rank);
-		a.aload(subsArr);
+		// flat = 0; for k in 0..rank-1: flat = flat * dims[k] + subs[k]. Starting the
+		// fold at 0 rather than at subs[0] is what makes a RANK-0 packed array (no
+		// subscripts) answer the flat index 0 of its single element.
 		a.iconst(0);
-		a.aaload();
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
 		a.istore(flat);
-		a.iconst(1);
+		a.iconst(0);
 		a.istore(k);
 		int loop = a.label();
 		int done = a.label();

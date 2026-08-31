@@ -1048,8 +1048,9 @@ public final class Environment implements Scope {
 			return dims;
 		}));
 		env.defineFunction(LispNames.ASET, new LispFunction(LispNames.ASET, args -> {
-			// (%aset array subscript... value)
-			if (args.size() < 3) {
+			// (%aset array subscript... value); a rank-0 array takes no subscripts, so
+			// two arguments is the shortest legal call.
+			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.ASET + " expects an array, subscripts and a value");
 			}
 			LispVal value = args.get(args.size() - 1);
@@ -1413,17 +1414,16 @@ public final class Environment implements Scope {
 		return index;
 	}
 
-	// Parses a make-array dimensions argument (an integer for rank 1, or a non-empty
-	// list of integers) into a dimension-size array. Any rank >= 1 is supported.
+	// Parses a make-array dimensions argument (an integer for rank 1, or a list of
+	// integers) into a dimension-size array. Any rank >= 0 is supported: the EMPTY list
+	// -- (make-array nil) / (make-array '()) -- is the rank-0 array, one element reached
+	// with no subscripts.
 	private static int[] parseDimensions(LispVal dimsVal) {
 		if (dimsVal instanceof LispInteger n) {
 			return new int[] { (int) n.value() };
 		}
 		if (dimsVal instanceof LispCons || dimsVal instanceof LispNil) {
 			List<LispVal> list = (dimsVal instanceof LispCons cons) ? cons.toList() : List.of();
-			if (list.isEmpty()) {
-				throw new LispEvalException(LispNames.MAKE_ARRAY + " expects at least one dimension");
-			}
 			int[] dims = new int[list.size()];
 			for (int i = 0; i < list.size(); i++) {
 				dims[i] = (int) asLong(list.get(i));

@@ -2,7 +2,7 @@
 
 `(make-array dimensions &key initial-element initial-contents element-type fill-pointer adjustable displaced-to displaced-index-offset)`
 
-新しい配列を作成して返します。`dimensions` はランク 1 のベクタの場合は整数、任意のランクの配列の場合は空でない整数のリストです。`:initial-element` はすべてのセルを指定した値に設定します。デフォルトは nil です。要素は行優先で格納され、`aref` を介して O(1) でアクセスできます。配列は同一性 (`eq`) で比較されるため、異なる 2 つの配列が `equal` になることはありません。`make-array` と `aref` は第一級の関数値ではありません。`#'make-array` は利用できないため、直接呼び出してください。
+新しい配列を作成して返します。`dimensions` はランク 1 のベクタの場合は整数、任意のランクの配列の場合は整数のリストです。**空のリスト** (`nil`) も指定でき、その場合は**ランク 0 の配列**になります。これは Common Lisp における「スカラーを配列として見た箱」であり、要素を 1 つだけ保持し、`aref` は添字なしでその要素を読み書きします。印字形式は `#0A<datum>` で、リーダはこれをそのまま読み戻せます (`#0A5`、`#0A(1 2)` はリストを保持するランク 0 の配列)。`:initial-element` はすべてのセルを指定した値に設定します。デフォルトは nil です。要素は行優先で格納され、`aref` を介して O(1) でアクセスできます。配列は同一性 (`eq`) で比較されるため、異なる 2 つの配列が `equal` になることはありません。`make-array` と `aref` は第一級の関数値ではありません。`#'make-array` は利用できないため、直接呼び出してください。
 
 `:fill-pointer` (ランク 1 のみ) はベクタに[フィルポインタ](fill-pointer.md)を与えます。整数はその位置に、`t` はベクタサイズに設定します。フィルポインタは実効長であり、`length` や印字はフィルポインタで止まります (`aref` はストレージ全体にアクセスできます)。[`vector-push`](vector-push.md)/[`vector-pop`](vector-pop.md)/[`vector-push-extend`](vector-push-extend.md) が操作するのもこのフィルポインタです。`:adjustable` は配列を可変長としてマークし、[`adjustable-array-p`](adjustable-array-p.md) がそのまま報告します。可変長配列は [`adjust-array`](adjust-array.md) でその場でリサイズされます。`:initial-contents` は (入れ子の場合もある) シーケンスから配列を充填します (row-major。すべてのバックエンドで、任意のランクに対応)。`:element-type 'double-float`/`'single-float` (フィルポインタ/可変長/displacement なし) はパックド浮動小数点表現を選択し、同じ条件の `:element-type 'character` は**文字列**を作ります (ランク 1 の文字配列は文字列そのものであり、[`make-string`](make-string.md) の結果と同じ形です)。`:fill-pointer`/`:adjustable` **付き**の `:element-type 'character` は、すべてのバックエンドでフィルポインタ付きの可変文字列を作ります: `vector-push-extend` で文字を追加でき、`replace` と `(setf (char ...))` はその場に書き込み、文字列として印字・比較 (`string=`/`equal`、`equal` ハッシュ表のキー) され、`stringp` を満たします。`:initial-contents` 付きの `:element-type 'character` は内容 (文字列、可変文字列、または文字のリスト) を新しい単純文字列にコピーします。ランク 1 の配列に対するリテラルの `:element-type '(unsigned-byte 8)`、`'(unsigned-byte 16)`、`'(unsigned-byte 32)` (同じくフィルポインタ/可変長/displacement なし) はパックド符号なし整数ベクタを選択します: 格納は値を要素幅にマスクし (2 の補数での切り詰め)、読み出しは符号なしに拡大して返し、整数以外の格納はエラーになります。[`array-element-type`](array-element-type.md) は実際の `(unsigned-byte n)` 指定子を報告します。パックドベクタの [`subseq`](subseq.md) と `copy-seq` は同じ幅のパックドベクタのままです。引数なしの [`deftype`](../macros/deftype.md) 名はこれらの判定より先に解決されるため、別名を書いても展開先を書いたときとまったく同じ表現が選ばれます。それ以外の要素型は受け付けられますが無視されます (要素型はそれ以外では追跡されません。一般配列では [`array-element-type`](array-element-type.md) は `t` を返します)。
 
@@ -23,6 +23,11 @@
                            :displaced-index-offset 1)))
   (setf (char view 0) #\X)
   (list view s)) ; => ("Xa" "aXa")
+(let ((z (make-array nil :initial-element 5)))
+  (list (array-rank z) (array-dimensions z) (array-total-size z) (aref z))) ; => (0 NIL 1 5)
+(let ((z (make-array nil)))
+  (setf (aref z) 7)
+  z) ; => #0A7
 (let ((bytes (make-array 3 :element-type '(unsigned-byte 8))))
   (setf (aref bytes 0) 300) ; stores 300 mod 256
   (aref bytes 0)) ; => 44

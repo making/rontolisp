@@ -22812,16 +22812,17 @@ public final class LispMacroExpander {
 	/**
 	 * Expands (array-row-major-index array sub...) into the Horner fold of the subscripts
 	 * over {@code array-dimensions}: {@code ((s0 * d1 + s1) * d2 + s2) ...}, so any
-	 * static subscript count works. The array's dimensions and the subscripts are bound
-	 * in a {@code let*} first (left-to-right, single evaluation).
+	 * static subscript count works -- including NONE, the rank-0 array, whose empty fold
+	 * is the constant 0 (the array is still evaluated, once). The array's dimensions and
+	 * the subscripts are bound in a {@code let*} first (left-to-right, single
+	 * evaluation).
 	 * @param cons the array-row-major-index expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandArrayRowMajorIndex(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() < 3) {
-			throw new UnsupportedOperationException(
-					LispNames.ARRAY_ROW_MAJOR_INDEX + " expects an array and at least one subscript");
+		if (parts.size() < 2) {
+			throw new UnsupportedOperationException(LispNames.ARRAY_ROW_MAJOR_INDEX + " expects an array");
 		}
 		int rank = parts.size() - 2;
 		LispSymbol dims = new LispSymbol("__rmindex_dims");
@@ -22833,7 +22834,7 @@ public final class LispMacroExpander {
 			subs.add(sub);
 			bindings.add(listToCons(List.of(sub, parts.get(2 + i))));
 		}
-		LispVal flat = subs.get(0);
+		LispVal flat = rank == 0 ? new LispInteger(0) : subs.get(0);
 		for (int k = 1; k < rank; k++) {
 			LispVal dimK = callOf(LispNames.CAR, nthCdrOf(dims, k));
 			flat = listToCons(List.of(new LispSymbol(LispNames.ADD),

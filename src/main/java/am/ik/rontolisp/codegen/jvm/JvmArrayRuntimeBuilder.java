@@ -20,7 +20,8 @@ import am.ik.rontolisp.RenderCycleGuard;
  * ({@code null} = nil) -- and slots {@code 1..} hold the row-major data. Any rank
  * {@code >= 1} is supported: the flat index is the Horner fold over the subscripts, so a
  * rank-2 element {@code (i, j)} lives at list index {@code 1 + i * cols + j} and a rank-1
- * element {@code (i)} at {@code 1 + i}.
+ * element {@code (i)} at {@code 1 + i}. A RANK-0 array is the empty case of the same
+ * model: a zero-length {@code dims}, one data slot, and an empty fold that answers 0.
  *
  * <p>
  * A PLAIN general array (no fill pointer, not adjustable, not displaced, not a character
@@ -2158,18 +2159,26 @@ final class JvmArrayRuntimeBuilder {
 		a.aload(dimsArr);
 		a.arraylength();
 		a.istore(rank);
-		// sb = new StringBuilder("#"); rank 1 appends "(", rank n appends n then "A("
+		// sb = new StringBuilder("#"); rank 1 appends "(", rank n appends n then "A(",
+		// and rank 0 appends "0A" with NO paren -- #0A<datum> is the whole rank-0
+		// syntax, so the closing paren at the tail is skipped for it too.
 		a.anew(sbClass(cp));
 		a.dup();
 		a.ldcString(cp.addString("#"));
 		a.invokespecial(sbInit);
 		a.astore(sb);
 		int rankN = a.label();
+		int rank0 = a.label();
 		int afterPrefix = a.label();
+		a.iload(rank);
+		a.branch(Opcode.IFEQ, rank0);
 		a.iload(rank);
 		a.iconst(1);
 		a.branch(Opcode.IF_ICMPNE, rankN);
 		appendStr(a, sb, sbAppend, cp.addString("("));
+		a.branch(Opcode.GOTO, afterPrefix);
+		a.bind(rank0);
+		appendStr(a, sb, sbAppend, cp.addString("0A"));
 		a.branch(Opcode.GOTO, afterPrefix);
 		a.bind(rankN);
 		a.aload(sb);
@@ -2254,8 +2263,13 @@ final class JvmArrayRuntimeBuilder {
 		a.bind(end);
 		// sb.append(")"); return sb.toString() -- under the guard's pop, the twin of
 		// JvmRuntimeBuilder.emitRenderGuardExitAndReturn: over one read, clamped so a
-		// rendering race between request threads can at worst misplace a marker.
+		// rendering race between request threads can at worst misplace a marker. A
+		// rank-0 array opened no paren, so it closes none.
+		int noRparen = a.label();
+		a.iload(rank);
+		a.branch(Opcode.IFEQ, noRparen);
 		appendStr(a, sb, sbAppend, cp.addString(")"));
+		a.bind(noRparen);
 		a.aload(sb);
 		a.invokevirtual(sbToString);
 		int popClamp = a.label();
@@ -2349,7 +2363,8 @@ final class JvmArrayRuntimeBuilder {
 
 	// Computes the Horner flat index over an Object[] of Long subscripts (in the slot
 	// subs) against the array in slot 0, leaving it in the int slot flat:
-	// flat = subs[0]; for k in 1..: flat = flat * dims[k] + subs[k].
+	// flat = 0; for k in 0..: flat = flat * dims[k] + subs[k]. The fold starts at 0 (not
+	// at subs[0]) so an EMPTY subscript array -- a rank-0 array -- answers 0.
 	private static void emitFlatN(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
 			ClassConstant objectArrayClass, MethodrefConstant get, MethodrefConstant intValue, int subs, int flat,
 			int kSlot, int nSlot, int dimsSlot) {
@@ -2370,15 +2385,12 @@ final class JvmArrayRuntimeBuilder {
 		a.aload(subs);
 		a.arraylength();
 		a.istore(nSlot);
-		// flat = ((Long) subs[0]).intValue()
-		a.aload(subs);
+		// flat = 0; for k in 0..n-1: flat = flat * dims[k] + subs[k]. Starting the fold
+		// at 0 rather than at subs[0] is what makes an EMPTY subscript array -- a rank-0
+		// array -- answer 0 instead of reading a subscript that is not there.
 		a.iconst(0);
-		a.aaload();
-		a.checkcast(longClass);
-		a.invokevirtual(intValue);
 		a.istore(flat);
-		// for k in 1..n-1: flat = flat * dims[k] + subs[k]
-		a.iconst(1);
+		a.iconst(0);
 		a.istore(kSlot);
 		int loop = a.label();
 		int done = a.label();

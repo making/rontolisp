@@ -704,9 +704,13 @@ public final class LispReader {
 	// The contents are nested lists of depth n whose leaves are the elements in
 	// row-major order; every list at the same depth must have the same length
 	// (ragged contents are a read error), matching Common Lisp.
+	//
+	// #0A is the degenerate case: the contents are ONE datum with no surrounding parens
+	// (#0A5, #0ANIL, #0A(1 2) -- a rank-0 array holding the list (1 2)), so the object
+	// is read whole rather than as a group.
 	private LispVal readArray(int rank) {
-		if (rank < 1) {
-			throw err("#" + rank + "A: array rank must be >= 1");
+		if (rank == 0) {
+			return new LispArray(new int[0], new LispVal[] { readExpr() });
 		}
 		List<LispVal> rows = readGroupedElements();
 		String label = "#" + rank + "A";
