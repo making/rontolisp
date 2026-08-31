@@ -5236,6 +5236,32 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalVectorpChecksTheRank() {
+		// A vector IS a rank-1 array and nothing else, so an array of any other rank is
+		// an arrayp but not a vectorp -- and the atomic vector/simple-vector type
+		// specifiers answer the same, since they share the builder.
+		assertThat(eval("(vectorp #2A((1 2) (3 4)))").print()).isEqualTo("NIL");
+		assertThat(eval("(vectorp (make-array nil))").print()).isEqualTo("NIL");
+		assertThat(eval("(vectorp (make-array '(2 2) :element-type 'double-float))").print()).isEqualTo("NIL");
+		assertThat(eval("(arrayp #2A((1 2) (3 4)))").print()).isEqualTo("T");
+		assertThat(eval("(vectorp (vector 1 2))").print()).isEqualTo("T");
+		assertThat(eval("(vectorp \"ab\")").print()).isEqualTo("T");
+		assertThat(eval("(vectorp (make-array 3 :element-type '(unsigned-byte 8)))").print()).isEqualTo("T");
+		assertThat(eval("(vectorp (make-array 3 :fill-pointer 0))").print()).isEqualTo("T");
+		assertThat(eval("(vectorp '(1 2))").print()).isEqualTo("NIL");
+		assertThat(eval("(funcall #'vectorp #2A((1 2)))").print()).isEqualTo("NIL");
+		assertThat(eval("(typep #2A((1 2)) 'vector)").print()).isEqualTo("NIL");
+		assertThat(eval("(typep #2A((1 2)) 'simple-vector)").print()).isEqualTo("NIL");
+		assertThat(eval("(typep #2A((1 2)) 'array)").print()).isEqualTo("T");
+		assertThat(eval("(typep (make-array nil) 'vector)").print()).isEqualTo("NIL");
+		assertThat(eval("(typep (vector 1) 'vector)").print()).isEqualTo("T");
+		assertThat(eval("(typecase #2A((1 2)) (vector 'vec) (array 'arr) (t 'other))").print()).isEqualTo("ARR");
+		// The runtime (computed specifier) dispatch answers through the same builder.
+		assertThat(eval("(let ((s 'vector)) (typep #2A((1 2)) s))").print()).isEqualTo("NIL");
+		assertThat(eval("(let ((s 'vector)) (typep (vector 1) s))").print()).isEqualTo("T");
+	}
+
+	@Test
 	void evalError() {
 		assertThatThrownBy(() -> eval("(error \"boom\")")).isInstanceOf(LispEvalException.class).hasMessage("boom");
 		assertThatThrownBy(() -> eval("(error \"bad value: ~a\" (+ 1 2))")).isInstanceOf(LispEvalException.class)

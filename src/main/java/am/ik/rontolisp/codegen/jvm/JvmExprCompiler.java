@@ -1391,7 +1391,7 @@ final class JvmExprCompiler {
 				case LispNames.COPY_SEQ ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx, className);
 				case LispNames.VECTORP ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandVectorp(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandVectorp(cons, ctx.usesArrays), ctx, className);
 				case LispNames.ARRAYP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayp(cons), ctx, className);
 				case LispNames.APPLY -> JvmApplyCompiler.compile(cons, ctx, className);

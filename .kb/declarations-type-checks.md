@@ -361,9 +361,24 @@ Where this lives and why:
   information the specifier carries, and it keeps a rank-2 array out of an
   `(simple-vector 41)` test rather than reaching `length`, which refuses a
   non-sequence.
-- **The ATOMIC spellings still ignore the rank** (the bullet above): `vectorp`
-  and a bare `vector`/`simple-vector` clause answer `T` at every rank. That
-  half is `.todo/605`.
+- **The ATOMIC `vector` spellings check the rank too** (todo-605, 2026-08-31):
+  `vectorp` and a bare `vector`/`simple-vector` clause answer `T` only for a
+  rank-1 array (a string included) -- a vector IS a rank-1 array and nothing
+  else, and SBCL 2.2.9 answers `NIL` for `(vectorp #2A((1 2) (3 4)))` and
+  `(vectorp (make-array nil))`. They are not a second copy of the test: the
+  atomic arm and `vectorp`'s expansion both call `makeArrayTypeTest` with an
+  unspecified element type and a one-dimension `(*)` shape, so predicate and
+  specifier cannot drift apart. Only the atomic `array`/`simple-array`
+  spellings stay rank-blind, which is what separates them from `vector`. The
+  earlier rank-blind answer was a size bargain; it bought bytes with a wrong
+  answer, so it went. Measured cost on the `zlib` size-report artifact at
+  `--optimize=size` (2026-08-31): 102,704 -> 103,158 wasm bytes, +0.44%. The JVM
+  backend pays nothing on an array-free program: `expandVectorp` takes the
+  `arraysExist` flag and drops the whole array arm when the gate is off, which it
+  must -- `vectorp` has an injected first-class wrapper every program carries
+  until the shaker runs, and an ungated rank read there put `_arrayDims` in
+  `(print 1)` and forced the entire array runtime back on
+  (`.kb/adjustable-arrays.md`).
 - **A COMPUTED specifier takes the same set as a literal one** (todo-606).
   `type-of` handing a program a compound specifier made
   `(typep a (type-of a))` a normal idiom that answered nil, because the runtime
@@ -436,6 +451,13 @@ Pinned by `LispEvaluatorTest#evalTypeOfAndTypepAnswerTheCompoundArraySpecifier`,
 `WasmLispCompilerIntegrationTest#typeOfAndTypepAnswerTheCompoundArraySpecifier`
 and the `array-type-of-and-compound-array-specifier` ci-spec case -- one program,
 one expected text, all four backends.
+
+The atomic `vector` half is pinned the same way by
+`LispEvaluatorTest#evalVectorpChecksTheRank`,
+`JvmLispCompilerTest#compileVectorpChecksTheRank`,
+`WasmLispCompilerIntegrationTest#compileVectorpChecksTheRank` and the
+`vectorp-and-the-vector-specifier-check-the-rank` ci-spec case, whose expected
+text is SBCL 2.2.9's verbatim.
 
 Known divergence this did NOT close, recorded so nobody reads it as new: a
 rank-n (n>1) CHARACTER array is a general array of element type `t` on the

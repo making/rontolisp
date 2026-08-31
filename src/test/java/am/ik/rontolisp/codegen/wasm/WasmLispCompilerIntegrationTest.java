@@ -19320,6 +19320,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileVectorpChecksTheRank() throws Exception {
+		// Same contract as the interpreter's evalVectorpChecksTheRank: a vector is a
+		// rank-1 array, so every other rank is an arrayp but not a vectorp, and the
+		// atomic vector/simple-vector specifiers answer alike.
+		assertThat(compileAndRun("""
+				(print (list (vectorp #2A((1 2) (3 4))) (vectorp (make-array nil)) (arrayp #2A((1 2)))
+				             (vectorp (vector 1 2)) (vectorp "ab")
+				             (vectorp (make-array 3 :element-type '(unsigned-byte 8)))
+				             (funcall #'vectorp #2A((1 2)))))
+				""")).isEqualTo("(NIL NIL T T T T NIL)");
+		assertThat(compileAndRun("""
+				(print (list (typep #2A((1 2)) 'vector) (typep #2A((1 2)) 'simple-vector)
+				             (typep #2A((1 2)) 'array) (typep (vector 1) 'vector)
+				             (typecase #2A((1 2)) (vector 'vec) (array 'arr) (t 'other))
+				             (let ((s 'vector)) (typep #2A((1 2)) s))))
+				""")).isEqualTo("(NIL NIL T T ARR NIL)");
+	}
+
+	@Test
 	void compileFillWritesEveryElementInRange() throws Exception {
 		// Same contract as the interpreter's fillWritesEveryElementInRange.
 		assertThat(compileAndRun("""
