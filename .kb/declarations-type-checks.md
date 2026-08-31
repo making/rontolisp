@@ -379,10 +379,82 @@ Where this lives and why:
   until the shaker runs, and an ungated rank read there put `_arrayDims` in
   `(print 1)` and forced the entire array runtime back on
   (`.kb/adjustable-arrays.md`).
-- **A COMPUTED specifier is still atomic-only.** `expandRuntimeTypep` dispatches
-  type NAMES, so `(typep a (type-of a))` -- now that `type-of` answers a
-  compound specifier for arrays -- answers nil rather than t. Pre-existing shape
-  of the lite runtime dispatch, widened in reach by this change.
+- **A COMPUTED specifier takes the same set as a literal one** (todo-606).
+  `type-of` handing a program a compound specifier made
+  `(typep a (type-of a))` a normal idiom that answered nil, because the runtime
+  dispatch was a `cond` keyed on the specifier SYMBOL and a cons matched no arm.
+  Both dispatch shapes now route a CONS specifier to the section below.
+
+## The COMPOUND half of the runtime typep dispatch
+
+**A computed type specifier takes exactly the set a literal one does, because
+the compound families are interpreted out of the specifier VALUE by one Lisp
+source both dispatch shapes carry** --
+`LispMacroExpander.RUNTIME_COMPOUND_TYPEP_SOURCE`, instantiated over a value
+form, a specifier form and the operator its sub-specifier recursion calls
+(`substituteSymbols` on three placeholder symbols). There is no second
+implementation to drift: the interpreter's `expandRuntimeTypep` inlines it with
+the recursion spelled `typep` (which the interpreter re-expands per call), and
+the compile paths put it in a `%typep-compound-runtime` defun whose recursion is
+`%typep-runtime`. `%typep-runtime`'s FIRST cond arm is the `consp` route into
+it -- before the instance branch, since an instance is an ordinary member of an
+`(or foo bar)` and the tag table only knows type NAMES.
+
+The defun is separate from `%typep-runtime` for the reason that defun exists at
+all: the JVM's 16-bit branch offsets, which one wider `cond` would push back
+toward.
+
+Every arm is the runtime twin of a `makeCompoundTypeTest` arm, reading the
+arguments out of the value instead of the AST: the array family (element type
+compared UPGRADED, exactly as `upgradedArrayElementType` folds it statically;
+the string arm and the array arm are the same union `makeArrayTypeTest`
+builds), `or`/`and`/`not`, `member`/`eql`/`satisfies`, `(cons car cdr)`, the
+sized `string` spellings, `(unsigned-byte n)`/`(signed-byte n)`, and a default
+arm that recurses on the head symbol ALONE and then applies the range bounds --
+which is what makes a compound spelling of a NON-numeric atomic type
+(`(hash-table ...)`) answer through its base predicate, since the bounds are
+applied only to a numeric value.
+
+The head is matched by its `symbol-name`, the runtime spelling of
+`plainTypeName`: a specifier read inside a user package carries the qualified
+symbol and the member name is what identifies the family. The three narrower
+float names joined `RUNTIME_TYPEP_BUILTINS` in the same pass -- they name the
+same type here (one float format), and a ranged `(double-float 0d0 10d0)`
+reaches the atomic dispatch through that default arm.
+
+**The size it costs, measured 2026-08-31.** The defun is emitted once per
+program and only under the computed-`typep` gate, but it reaches the generic
+array accessors and `funcall`, which a program may not otherwise pull in. On the
+`hello-clack` Worker (`--no-wasi --optimize=size`, the size-sensitive row):
+355,961 -> 374,619 raw (+18,658, +5.2%), 106,415 -> 112,717 gzipped (+6,302,
++5.9%, so 3.4% -> 3.6% of Cloudflare's 3 MB limit). Roughly half of that is the
+ARRAY arm alone (364,853 raw / 109,118 gzipped with that one arm stubbed out).
+The floor, on a program that uses nothing but a computed `typep`: 32,920 ->
+55,096 raw. A program with no computed `typep` is byte-identical (`zlib`
+measured unchanged), and the interpreter's inline expansion grows by the same
+source at every computed-`typep` site -- bounded, and small beside the one arm
+per registered class it already inlines.
+
+That price bought a normal CL idiom that answered nil, and it is recorded rather
+than avoided. **Re-evaluation trigger**: if a Worker row ever needs the bytes
+back, the array arm is the half to move -- into a defun of its own, injected on
+a narrower gate than "the program has a computed typep".
+
+**Deliberately NOT closed: `subtypep`.** It takes the same computed specifiers
+and is still name-only past `(or ...)`, and the two halves already DISAGREE
+across backends -- measured 2026-08-31, `(let ((s '(or fixnum ratio)))
+(subtypep s 'number))` answers `T` on the interpreter (whose `subtypep` builtin
+calls the Java `LispMacroExpander.subtypep`, which handles an `or` on either
+side) and `NIL` on the JVM (whose `%subtypep-runtime` scans an ancestor table by
+NAME and matches no cons). Closing it means the static lattice AND the runtime
+table in one pass, which is why it is its own item (`.todo/608`), not a rider on
+this one.
+
+Pinned by `LispEvaluatorTest#evalComputedCompoundTypeSpecifiers`,
+`JvmLispCompilerTest#compileComputedCompoundTypeSpecifiers`,
+`WasmLispCompilerIntegrationTest#computedCompoundTypeSpecifiers` and the
+`computed-compound-type-specifier` ci-spec case -- one program whose every answer
+is SBCL 2.2.9's on that very program.
 
 Pinned by `LispEvaluatorTest#evalTypeOfAndTypepAnswerTheCompoundArraySpecifier`,
 `JvmLispCompilerTest#compileTypeOfAndTypepAnswerTheCompoundArraySpecifier`,

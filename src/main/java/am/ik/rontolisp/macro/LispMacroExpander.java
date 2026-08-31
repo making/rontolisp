@@ -19162,6 +19162,7 @@ public final class LispMacroExpander {
 			// is a top-level defvar and must run before any top-level typep call, so
 			// it goes FIRST (after the dispatcher slots above were filled by index).
 			out.add(runtimeTypepDefun(closRegistry));
+			out.add(runtimeTypepCompoundDefun());
 			out.addAll(0, typepTagTableForms(closRegistry));
 		}
 		if (runtimeError) {
@@ -30644,15 +30645,218 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The built-in type names a runtime {@code typep} specifier can hold, each testable
-	 * by the shared static builder. Deliberately the atomic names only: a computed
-	 * specifier carrying a COMPOUND specifier (an {@code (integer 0 10)} list) is not
-	 * dispatched.
+	 * The built-in type names a runtime {@code typep} specifier can hold as an ATOMIC
+	 * name, each testable by the shared static builder. A specifier that arrives as a
+	 * CONS is routed to {@link #RUNTIME_COMPOUND_TYPEP_SOURCE} instead, which reads the
+	 * head and the arguments out of the specifier VALUE.
+	 *
+	 * <p>
+	 * The three narrower float names sit here beside {@code float} because they name the
+	 * SAME type in rontolisp (there is one float format, see
+	 * {@link #canonicalSubtypeName}) -- and because a ranged {@code (double-float 0d0
+	 * 10d0)} specifier reaches the atomic dispatch through the compound default arm,
+	 * which would otherwise answer nil for a value that IS a double-float.
 	 */
 	private static final List<String> RUNTIME_TYPEP_BUILTINS = List.of("NULL", "BOOLEAN", "KEYWORD", "SYMBOL",
-			"INTEGER", "FIXNUM", "RATIONAL", "RATIO", "FLOAT", "REAL", "NUMBER", "CHARACTER", "STRING", "CONS", "LIST",
-			"ATOM", "VECTOR", "ARRAY", "SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT", "STRUCTURE-OBJECT",
-			"UNSIGNED-BYTE", "PACKAGE", "STREAM", "T");
+			"INTEGER", "FIXNUM", "BIGNUM", "RATIONAL", "RATIO", "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT",
+			"LONG-FLOAT", "REAL", "NUMBER", "CHARACTER", "STRING", "CONS", "LIST", "ATOM", "VECTOR", "ARRAY",
+			"SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "UNSIGNED-BYTE", "PACKAGE",
+			"STREAM", "T");
+
+	/**
+	 * The COMPOUND half of the runtime {@code typep} dispatch: an interpreter of a
+	 * specifier VALUE that arrived as a cons, written ONCE in Lisp so the inline
+	 * interpreter path and the compile paths' {@code %typep-compound-runtime} defun
+	 * cannot drift.
+	 *
+	 * <p>
+	 * Every test it makes is the runtime twin of a {@link #makeCompoundTypeTest} arm --
+	 * the array family (whose element type is compared UPGRADED, exactly as
+	 * {@link #upgradedArrayElementType} does statically), {@code or}/{@code and}/
+	 * {@code not}, {@code member}/{@code eql}/{@code satisfies}, {@code cons}, the sized
+	 * string spellings, {@code (unsigned-byte n)}/{@code (signed-byte n)} and the ranged
+	 * numerics -- reading the arguments out of the specifier value rather than out of the
+	 * AST. That is the whole difference: the static builder folds a literal specifier
+	 * into a test at expansion time, this one carries the same decisions to run time.
+	 *
+	 * <p>
+	 * Three symbols are placeholders substituted by
+	 * {@link #runtimeCompoundTypepBody(LispVal, LispVal, String)}: {@code %tpc-value},
+	 * {@code %tpc-spec} and the RECURSION operator {@code %typep-recur} -- {@code typep}
+	 * on the inline path (the interpreter re-expands it per call) and
+	 * {@code %typep-runtime} inside the defun. The head is matched by its
+	 * {@code symbol-name}, which is the runtime spelling of {@link #plainTypeName}: a
+	 * specifier read inside a user package carries the qualified symbol, and the member
+	 * name is what identifies the family.
+	 *
+	 * <p>
+	 * The default arm recurses on the head symbol ALONE and then applies the range
+	 * bounds, which is what makes a compound spelling of a non-numeric atomic type
+	 * ({@code (hash-table ...)}) answer through its base predicate the way the static
+	 * builder's default arm does; the bounds are applied only to a numeric value, so a
+	 * non-numeric compound spelling ignores its arguments as it must.
+	 */
+	private static final String RUNTIME_COMPOUND_TYPEP_SOURCE = """
+			(let* ((%tpc-h (car %tpc-spec))
+			       (%tpc-a (cdr %tpc-spec))
+			       (%tpc-n (if (symbolp %tpc-h) (symbol-name %tpc-h) ""))
+			       (%tpc-x (car %tpc-a))
+			       (%tpc-y (car (cdr %tpc-a)))
+			       (%tpc-xw (if (symbolp %tpc-x) (string= (symbol-name %tpc-x) "*") nil))
+			       (%tpc-yw (if (symbolp %tpc-y) (string= (symbol-name %tpc-y) "*") nil)))
+			  (cond
+			    ((string= %tpc-n "") nil)
+			    ((string= %tpc-n "OR")
+			     (dolist (%tpc-e %tpc-a nil)
+			       (if (%typep-recur %tpc-value %tpc-e) (return t) nil)))
+			    ((string= %tpc-n "AND")
+			     (dolist (%tpc-e %tpc-a t)
+			       (if (%typep-recur %tpc-value %tpc-e) nil (return nil))))
+			    ((string= %tpc-n "NOT")
+			     (if (%typep-recur %tpc-value %tpc-x) nil t))
+			    ((string= %tpc-n "MEMBER")
+			     (if (member %tpc-value %tpc-a) t nil))
+			    ((string= %tpc-n "EQL")
+			     (if (eql %tpc-value %tpc-x) t nil))
+			    ((string= %tpc-n "SATISFIES")
+			     (if (funcall %tpc-x %tpc-value) t nil))
+			    ((string= %tpc-n "CONS")
+			     (if (and (consp %tpc-value)
+			              (or (null %tpc-a) %tpc-xw (%typep-recur (car %tpc-value) %tpc-x))
+			              (or (null (cdr %tpc-a)) %tpc-yw (%typep-recur (cdr %tpc-value) %tpc-y)))
+			         t
+			         nil))
+			    ((or (string= %tpc-n "STRING") (string= %tpc-n "SIMPLE-STRING")
+			         (string= %tpc-n "BASE-STRING") (string= %tpc-n "SIMPLE-BASE-STRING"))
+			     (if (and (stringp %tpc-value)
+			              (or (null %tpc-a) %tpc-xw (eq (length %tpc-value) %tpc-x)))
+			         t
+			         nil))
+			    ((string= %tpc-n "UNSIGNED-BYTE")
+			     (if (and (integerp %tpc-value)
+			              (>= %tpc-value 0)
+			              (or (null %tpc-a) %tpc-xw (<= %tpc-value (- (ash 1 %tpc-x) 1))))
+			         t
+			         nil))
+			    ((string= %tpc-n "SIGNED-BYTE")
+			     (if (and (integerp %tpc-value)
+			              (or (null %tpc-a) %tpc-xw
+			                  (and (>= %tpc-value (- 0 (ash 1 (- %tpc-x 1))))
+			                       (<= %tpc-value (- (ash 1 (- %tpc-x 1)) 1)))))
+			         t
+			         nil))
+			    ((or (string= %tpc-n "ARRAY") (string= %tpc-n "SIMPLE-ARRAY")
+			         (string= %tpc-n "VECTOR") (string= %tpc-n "SIMPLE-VECTOR"))
+			     (let* ((%tpc-sv (string= %tpc-n "SIMPLE-VECTOR"))
+			            (%tpc-et (if %tpc-sv t (if (null %tpc-a) '* %tpc-x)))
+			            (%tpc-ew (if (symbolp %tpc-et) (string= (symbol-name %tpc-et) "*") nil))
+			            (%tpc-ue (if (consp %tpc-et)
+			                         (if (and (symbolp (car %tpc-et))
+			                                  (string= (symbol-name (car %tpc-et)) "UNSIGNED-BYTE")
+			                                  (consp (cdr %tpc-et))
+			                                  (null (cdr (cdr %tpc-et)))
+			                                  (member (car (cdr %tpc-et)) '(8 16 32)))
+			                             (list 'unsigned-byte (car (cdr %tpc-et)))
+			                             t)
+			                         (let ((%tpc-en (if (symbolp %tpc-et) (symbol-name %tpc-et) "")))
+			                           (cond ((string= %tpc-en "CHARACTER") 'character)
+			                                 ((string= %tpc-en "BASE-CHAR") 'character)
+			                                 ((string= %tpc-en "STANDARD-CHAR") 'character)
+			                                 ((string= %tpc-en "SINGLE-FLOAT") 'single-float)
+			                                 ((string= %tpc-en "DOUBLE-FLOAT") 'double-float)
+			                                 (t t)))))
+			            (%tpc-dm (if (or %tpc-sv (string= %tpc-n "VECTOR"))
+			                         (list (if %tpc-sv
+			                                   (if (null %tpc-a) '* %tpc-x)
+			                                   (if (null (cdr %tpc-a)) '* %tpc-y)))
+			                         (if (null (cdr %tpc-a)) '* %tpc-y)))
+			            (%tpc-dw (if (symbolp %tpc-dm) (string= (symbol-name %tpc-dm) "*") nil)))
+			       (if (or (and (stringp %tpc-value)
+			                    (or %tpc-ew
+			                        (if (symbolp %tpc-ue) (string= (symbol-name %tpc-ue) "CHARACTER") nil))
+			                    (cond (%tpc-dw t)
+			                          ((integerp %tpc-dm) (eq %tpc-dm 1))
+			                          ((and (consp %tpc-dm) (null (cdr %tpc-dm)))
+			                           (let ((%tpc-d (car %tpc-dm)))
+			                             (if (if (symbolp %tpc-d) (string= (symbol-name %tpc-d) "*") nil)
+			                                 t
+			                                 (eq (length %tpc-value) %tpc-d))))
+			                          (t nil)))
+			               (and (%arrayp %tpc-value)
+			                    (or %tpc-ew (equal (array-element-type %tpc-value) %tpc-ue))
+			                    (cond (%tpc-dw t)
+			                          ((integerp %tpc-dm) (eq (array-rank %tpc-value) %tpc-dm))
+			                          ((null %tpc-dm) (eq (array-rank %tpc-value) 0))
+			                          ((consp %tpc-dm)
+			                           (if (eq (array-rank %tpc-value) (length %tpc-dm))
+			                               (do ((%tpc-i 0 (+ %tpc-i 1))
+			                                    (%tpc-tl %tpc-dm (cdr %tpc-tl)))
+			                                   ((null %tpc-tl) t)
+			                                 (let ((%tpc-d (car %tpc-tl)))
+			                                   (if (if (symbolp %tpc-d)
+			                                           (string= (symbol-name %tpc-d) "*")
+			                                           nil)
+			                                       nil
+			                                       (if (eq (array-dimension %tpc-value %tpc-i) %tpc-d)
+			                                           nil
+			                                           (return nil)))))
+			                               nil))
+			                          (t t))))
+			           t
+			           nil)))
+			    (t
+			     (if (and (%typep-recur %tpc-value %tpc-h)
+			              (or (not (numberp %tpc-value))
+			                  (and (or (null %tpc-a) %tpc-xw
+			                           (if (consp %tpc-x)
+			                               (> %tpc-value (car %tpc-x))
+			                               (>= %tpc-value %tpc-x)))
+			                       (or (null (cdr %tpc-a)) %tpc-yw
+			                           (if (consp %tpc-y)
+			                               (< %tpc-value (car %tpc-y))
+			                               (<= %tpc-value %tpc-y))))))
+			         t
+			         nil))))
+			""";
+
+	/** The value placeholder of {@link #RUNTIME_COMPOUND_TYPEP_SOURCE}. */
+	private static final String COMPOUND_TYPEP_VALUE = "%TPC-VALUE";
+
+	/** The specifier placeholder of {@link #RUNTIME_COMPOUND_TYPEP_SOURCE}. */
+	private static final String COMPOUND_TYPEP_SPEC = "%TPC-SPEC";
+
+	/** The recursion-operator placeholder of {@link #RUNTIME_COMPOUND_TYPEP_SOURCE}. */
+	private static final String COMPOUND_TYPEP_RECUR = "%TYPEP-RECUR";
+
+	/**
+	 * Instantiates {@link #RUNTIME_COMPOUND_TYPEP_SOURCE} over one value form, one
+	 * specifier form and the operator its sub-specifier recursion calls.
+	 * @param value the value form (a temp-bound symbol or a defun parameter)
+	 * @param spec the specifier form, already known to be a cons at run time
+	 * @param recurOperator the {@code typep} spelling the recursion calls
+	 * @return the compound-dispatch body
+	 */
+	private static LispVal runtimeCompoundTypepBody(LispVal value, LispVal spec, String recurOperator) {
+		LispVal body = LispReader.readAllFromString(RUNTIME_COMPOUND_TYPEP_SOURCE, Features.INTERPRETER).get(0);
+		return substituteSymbols(body, java.util.Map.of(COMPOUND_TYPEP_VALUE, value, COMPOUND_TYPEP_SPEC, spec,
+				COMPOUND_TYPEP_RECUR, new LispSymbol(recurOperator)));
+	}
+
+	/**
+	 * Builds the shared {@code (defun %typep-compound-runtime (v s) ...)} the compile
+	 * paths' {@code %typep-runtime} routes a CONS specifier to. It lives in its own defun
+	 * rather than inside {@code %typep-runtime} for the reason that defun exists at all:
+	 * the JVM's 16-bit branch offsets, which one wider {@code cond} would push back
+	 * toward. Injected under the same gate, and recursing back into
+	 * {@code %typep-runtime} so a sub-specifier reaches the atomic dispatch too.
+	 * @return the defun form
+	 */
+	private static LispVal runtimeTypepCompoundDefun() {
+		LispSymbol v = new LispSymbol("%tpc_rv");
+		LispSymbol s = new LispSymbol("%tpc_rs");
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.TYPEP_COMPOUND_RUNTIME),
+				listToCons(List.of(v, s)), runtimeCompoundTypepBody(v, s, LispNames.TYPEP_RUNTIME)));
+	}
 
 	/**
 	 * Expands a {@code typep} whose type specifier is computed at run time: a
@@ -30668,6 +30872,12 @@ public final class LispMacroExpander {
 		LispSymbol v = new LispSymbol(prefix + "_v");
 		LispSymbol tn = new LispSymbol(prefix + "_t");
 		List<LispVal> clauses = new java.util.ArrayList<>();
+		// A COMPOUND specifier first: it can match no type NAME, and the value it
+		// describes may well be an instance -- (typep obj '(or foo bar)) -- so the arm
+		// has to come before every name arm below. The recursion is `typep` itself,
+		// which the interpreter re-expands per call, so the two dispatch shapes run the
+		// same source (RUNTIME_COMPOUND_TYPEP_SOURCE).
+		clauses.add(listToCons(List.of(callOf(LispNames.CONSP, tn), runtimeCompoundTypepBody(v, tn, LispNames.TYPEP))));
 		java.util.Set<String> seen = new java.util.HashSet<>();
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			String typeName = layout.printName();
@@ -31588,6 +31798,11 @@ public final class LispMacroExpander {
 						fmtCall(LispNames.EQ_GENERAL, tn, LispTrue.INSTANCE))),
 				LispTrue.INSTANCE, makeLet(tag.name(), objTag(v), tableScan));
 		List<LispVal> clauses = new java.util.ArrayList<>();
+		// A COMPOUND specifier goes to its own defun, and does so BEFORE the instance
+		// branch: an instance is a perfectly ordinary member of an (or foo bar), and the
+		// tag table only knows type NAMES.
+		clauses.add(listToCons(List.of(callOf(LispNames.CONSP, tn),
+				listToCons(List.of(new LispSymbol(LispNames.TYPEP_COMPOUND_RUNTIME), v, tn)))));
 		clauses.add(listToCons(List.of(callOf(LispNames.OBJ_P, v), instanceBranch)));
 		// tn = T accepts everything -- the name spelling, and the boolean t the built-in
 		// T class carries in its name slot (the metaobject normalization above leaves it
