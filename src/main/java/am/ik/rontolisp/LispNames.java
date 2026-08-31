@@ -3004,6 +3004,24 @@ public final class LispNames {
 	public static final String ARRAYP_INTERNAL = "%ARRAYP";
 
 	/**
+	 * The internal {@code %simple-array-p} predicate: true for a value that is an array
+	 * (a string included) AND simple -- no fill pointer, not adjustable, not displaced.
+	 * Any other value, array or not, answers nil, so the predicate is TOTAL and needs no
+	 * guard at a call site. It is what separates the {@code simple-} type specifiers from
+	 * their general counterparts ({@code .kb/declarations-type-checks.md}).
+	 *
+	 * <p>
+	 * It is one predicate rather than
+	 * {@code (and (not (array-has-fill-pointer-p x)) (not (adjustable-array-p x)) (not
+	 * (%array-disp-target x)))} because that composition is not total: the fill-pointer
+	 * surface REFUSES a packed vector on the compile backends (a packed array is simple
+	 * by construction, so it must answer t, not trap) and {@code %array-disp-target}
+	 * casts its argument to the general array shape. Each backend answers the question
+	 * from the representation it owns, in one place.
+	 */
+	public static final String SIMPLE_ARRAY_P_INTERNAL = "%SIMPLE-ARRAY-P";
+
+	/**
 	 * The {@code vectorp} built-in function (is the value a vector?). Strings are vectors
 	 * in CL. A vector is a rank-1 array and nothing else, so an array of any other rank
 	 * answers nil here while {@link #ARRAYP} still answers t for it -- the same rank the

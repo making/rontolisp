@@ -4928,6 +4928,60 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSimpleTypeNameTypepChecksSimplicity() {
+		// The typep half of the simple- lattice: a fill pointer, :adjustable t and a
+		// displacement each make an array (and a string) NON-simple, so the simple-
+		// spellings answer nil for it while the general ones still answer t. The
+		// simple-vector spelling additionally pins the element type to t and the rank to
+		// 1, so neither a string nor a packed vector is one. type-of BUILDS the specifier
+		// typep takes back, hence the (typep a (type-of a)) row -- it is the contract the
+		// two share (.kb/declarations-type-checks.md). Every answer is SBCL 2.2.9's on
+		// this very program. Pinned identically by
+		// JvmLispCompilerTest#compileSimpleTypeNameTypepChecksSimplicity,
+		// WasmLispCompilerIntegrationTest#simpleTypeNameTypepChecksSimplicity and the
+		// simple-type-name-typep-simplicity ci-spec case.
+		assertThat(evalMulti("""
+				(defvar *tps-sv* (make-array 4))
+				(defvar *tps-fp* (make-array 4 :fill-pointer 0))
+				(defvar *tps-ad* (make-array 4 :adjustable t))
+				(defvar *tps-dp* (make-array 2 :displaced-to *tps-sv*))
+				(defvar *tps-pk* (make-array 4 :element-type 'single-float))
+				(defvar *tps-m2* (make-array '(2 3)))
+				(defvar *tps-st* "abc")
+				(defvar *tps-cs* (make-array 3 :element-type 'character))
+				(defvar *tps-cv* (make-array 4 :element-type 'character :fill-pointer 0))
+				(defun tps (v s) (typep v s))
+				(progn
+				 (list
+				  (list (typep *tps-sv* 'simple-vector) (typep *tps-fp* 'simple-vector)
+				        (typep *tps-ad* 'simple-vector) (typep *tps-dp* 'simple-vector)
+				        (typep *tps-pk* 'simple-vector) (typep *tps-st* 'simple-vector))
+				  (list (typep *tps-sv* 'simple-array) (typep *tps-fp* 'simple-array)
+				        (typep *tps-dp* 'simple-array) (typep *tps-pk* 'simple-array)
+				        (typep *tps-m2* 'simple-array) (typep *tps-st* 'simple-array))
+				  (list (typep *tps-st* 'simple-string) (typep *tps-cs* 'simple-string)
+				        (typep *tps-cv* 'simple-string) (typep *tps-cv* 'string)
+				        (typep *tps-sv* 'simple-string))
+				  (list (typep *tps-fp* '(simple-vector 4)) (typep *tps-fp* '(simple-array t (4)))
+				        (typep *tps-fp* '(vector t 4)) (typep *tps-fp* '(array t (4))))
+				  (list (type-of *tps-fp*) (type-of *tps-ad*) (type-of *tps-dp*) (type-of *tps-sv*))
+				  (list (typep *tps-sv* (type-of *tps-sv*)) (typep *tps-fp* (type-of *tps-fp*))
+				        (typep *tps-dp* (type-of *tps-dp*)) (typep *tps-pk* (type-of *tps-pk*))
+				        (typep *tps-m2* (type-of *tps-m2*)))
+				  (list (tps *tps-sv* 'simple-vector) (tps *tps-fp* 'simple-vector)
+				        (tps *tps-st* 'simple-string) (tps *tps-cv* 'simple-string)
+				        (tps *tps-fp* '(simple-vector 4)) (tps *tps-sv* '(simple-vector 4)))
+				  (list (simple-string-p *tps-st*) (simple-string-p *tps-cs*)
+				        (simple-string-p *tps-cv*)
+				        (simple-string-p (coerce *tps-cv* 'simple-string))
+				        (simple-string-p (coerce *tps-cv* 'string))
+				        (let ((ty 'simple-string))
+				          (simple-string-p (coerce *tps-cv* ty))))))
+				""").print()).isEqualTo(
+				"((T NIL NIL NIL NIL NIL) (T NIL NIL T T T) (T T NIL T NIL) (NIL NIL T T) ((VECTOR T 4) (VECTOR T 4) (VECTOR T 2) (SIMPLE-VECTOR 4)) (T T T T T) (T NIL T NIL NIL T) (T T NIL T NIL T))");
+	}
+
+	@Test
 	void evalTypecase() {
 		assertThat(eval("(typecase 42 (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"i\"");
 		assertThat(eval("(typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"s\"");

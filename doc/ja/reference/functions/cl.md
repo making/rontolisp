@@ -157,7 +157,7 @@
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
 | `arrayp` | `(arrayp "abc")` | `T` -- CL では文字列も配列。`vectorp` と同様 |
-| `simple-string-p` | `(simple-string-p "hello")` | `t` -- rontolisp のすべての文字列は「simple」です(lite) |
+| `simple-string-p` | `(simple-string-p "hello")` | `t` -- フィルポインタなし・adjustable でない・displaced でない |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |

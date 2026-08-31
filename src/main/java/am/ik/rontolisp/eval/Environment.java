@@ -789,6 +789,26 @@ public final class Environment implements Scope {
 			return (args.get(0) instanceof LispArray || args.get(0) instanceof LispFloatArray
 					|| args.get(0) instanceof LispIntVector) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		// %simple-array-p: is the value an array (a string included) that is SIMPLE --
+		// no fill pointer, not adjustable, not displaced? A packed representation is
+		// simple by construction (make-array degrades to the general one the moment
+		// :fill-pointer / :adjustable / :displaced-to appears), and a value that is no
+		// array at all answers nil, so the predicate is total and needs no guard at its
+		// call sites -- the simple- type specifiers are exactly this test plus their
+		// general counterpart's.
+		env.defineFunction(LispNames.SIMPLE_ARRAY_P_INTERNAL,
+				new LispFunction(LispNames.SIMPLE_ARRAY_P_INTERNAL, args -> {
+					requireArgCount(LispNames.SIMPLE_ARRAY_P_INTERNAL, args, 1);
+					boolean simple = switch (args.get(0)) {
+						case LispString str -> str.fillPointer() < 0 && !str.adjustable() && str.displacedTo() == null;
+						case LispArray array ->
+							!array.hasFillPointer() && !array.adjustable() && array.displacedTo() == null;
+						case LispFloatArray ignored -> true;
+						case LispIntVector ignored -> true;
+						default -> false;
+					};
+					return simple ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				}));
 		// arrayp: the standard spelling -- a string is an array in CL, so the public
 		// predicate is the internal one widened by stringp.
 		env.defineFunction(LispNames.ARRAYP, new LispFunction(LispNames.ARRAYP, args -> {
@@ -5821,9 +5841,10 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.SIMPLE_STRING_P, new LispFunction(LispNames.SIMPLE_STRING_P, args -> {
 			requireArgCount(LispNames.SIMPLE_STRING_P, args, 1);
-			// Every rontolisp string is "simple" (lite), so the portable
-			// "coerce unless simple" idiom keeps the string unchanged.
-			return args.get(0) instanceof LispString ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			// The same answer (typep x 'simple-string) gives, as CL requires the two to
+			// agree: a string with no fill pointer, not adjustable and not displaced.
+			return args.get(0) instanceof LispString str && str.fillPointer() < 0 && !str.adjustable()
+					&& str.displacedTo() == null ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.PATHNAMEP, new LispFunction(LispNames.PATHNAMEP, args -> {
 			requireArgCount(LispNames.PATHNAMEP, args, 1);

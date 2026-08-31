@@ -43,6 +43,18 @@ when the data slot IS a cell). The whole fill-pointer surface
 runs on it unchanged, and the marker survives `adjust-array` because become
 mutates the existing header in place.
 
+**Mutability is the MARKER's, not the fill pointer's (todo-610, 2026-08-31)**:
+a `make-array :element-type 'character` (and therefore a `make-string`) with no
+`:fill-pointer` leaves the fill-pointer slot NIL on every backend, and
+`setf char`/`setf aref` still write every slot. The JVM used to default that
+slot to the capacity, so `(array-has-fill-pointer-p (make-string 3))` answered
+`T` there and `NIL` on the other three backends and in SBCL 2.2.9 -- and the
+value could not be told apart from a `:fill-pointer`-built one, which is what
+`(typep s 'simple-string)` and `simple-string-p` now ask
+(`.kb/declarations-type-checks.md`, "`typep` checks SIMPLICITY"). `_strv`
+already read `dims[0]` for a nil slot and `_subseqCv` already CLEARED it so a
+`copy-seq` result is simple, so the invariant was half in place already.
+
 **A COMPUTED `:element-type` (`.todo/219`, 2026-07-30)**: the recognizers
 above read the designator at EXPANSION time, so a `:element-type` held in a
 variable or produced by a call (`(stream-element-type s)`) used to fall

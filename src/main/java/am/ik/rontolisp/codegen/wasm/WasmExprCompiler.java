@@ -1665,6 +1665,7 @@ final class WasmExprCompiler {
 				case LispNames.OBJ_SLOTS -> WasmInstanceCompiler.compileSlots(cons, ctx);
 				case LispNames.FUNCTIONP -> WasmFunctionpCompiler.compile(cons, ctx);
 				case LispNames.ARRAYP_INTERNAL -> WasmArraypCompiler.compile(cons, ctx);
+				case LispNames.SIMPLE_ARRAY_P_INTERNAL -> WasmArrayCompiler.compileSimpleArrayP(cons, ctx);
 				case LispNames.KEYWORDP -> WasmKeywordpCompiler.compile(cons, ctx);
 				case LispNames.FLOAT -> WasmFloatConvCompiler.compile(LispMacroExpander.normalizeFloatCall(cons), ctx);
 				case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {

@@ -362,10 +362,15 @@ public final class LispPreludeLibrary {
 		// general array on the compile paths, and both designate STRING -- so all four
 		// backends answer STRING for it rather than (simple-array character (n)).
 		//
-		// The element-type arm comes FIRST on purpose: a packed representation is
-		// always simple (make-array degrades to the general one the moment
-		// :fill-pointer or :adjustable appears), and the two predicates below refuse a
-		// packed array outright on every backend.
+		// The SIMPLICITY arm comes first: it is the one fact that overrides every
+		// other spelling, and %simple-array-p answers it for every representation
+		// (a packed vector is simple by construction, so it needs no guard here --
+		// unlike array-has-fill-pointer-p / adjustable-array-p, which refuse a packed
+		// array outright on the compile backends and cannot see a displacement at all).
+		// A NON-simple array is (vector ELEMENT-TYPE SIZE) at rank 1 and
+		// (array ELEMENT-TYPE DIMENSIONS) above it, which is SBCL 2.2.9's answer for a
+		// fill-pointered, an :adjustable and a DISPLACED array alike -- and it is what
+		// keeps (typep a (type-of a)) true now that typep checks simplicity.
 		SOURCES.put(LispNames.TYPE_OF, """
 				(defun type-of (object)
 				  (let* ((c (%class-designator object))
@@ -377,9 +382,11 @@ public final class LispPreludeLibrary {
 				          ((and (string= s "T") (%arrayp object))
 				           (let ((et (array-element-type object))
 				                 (dims (array-dimensions object)))
-				             (cond ((not (eq et t)) (list 'simple-array et dims))
-				                   ((or (array-has-fill-pointer-p object) (adjustable-array-p object))
-				                    (list 'vector et (car dims)))
+				             (cond ((not (%simple-array-p object))
+				                    (if (= (length dims) 1)
+				                        (list 'vector et (car dims))
+				                        (list 'array et dims)))
+				                   ((not (eq et t)) (list 'simple-array et dims))
 				                   ((= (length dims) 1) (list 'simple-vector (car dims)))
 				                   (t (list 'simple-array et dims)))))
 				          (t c))))

@@ -1417,6 +1417,7 @@ final class JvmExprCompiler {
 				case LispNames.OBJ_SLOTS -> JvmObjCompiler.compileSlots(cons, ctx, className);
 				case LispNames.FUNCTIONP -> JvmFunctionpCompiler.compile(cons, ctx, className);
 				case LispNames.ARRAYP_INTERNAL -> JvmArraypCompiler.compile(cons, ctx, className);
+				case LispNames.SIMPLE_ARRAY_P_INTERNAL -> JvmSimpleArrayPCompiler.compile(cons, ctx, className);
 				case LispNames.KEYWORDP -> JvmKeywordpCompiler.compile(cons, ctx, className);
 				case LispNames.FLOAT ->
 					JvmFloatConvCompiler.compile(LispMacroExpander.normalizeFloatCall(cons), ctx, className);

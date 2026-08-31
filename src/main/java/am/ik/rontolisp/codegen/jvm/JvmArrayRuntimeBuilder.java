@@ -37,16 +37,18 @@ import am.ik.rontolisp.RenderCycleGuard;
  * displacement ({@code header[3]} is null) nor as a character vector (length != 4).
  *
  * <p>
- * A MUTABLE CHARACTER VECTOR ({@code make-array :element-type 'character} with
- * {@code :fill-pointer}/{@code :adjustable}) is the same representation holding
+ * A MUTABLE CHARACTER VECTOR ({@code make-array :element-type 'character}, with or
+ * without {@code :fill-pointer}/{@code :adjustable}) is the same representation holding
  * {@code java.lang.Character} elements, marked by a LENGTH-4 header {@code Object[]{dims,
- * fillPointer, adjustable, null}} ({@code _charVecMake}). The {@code _strv} normalizer
- * renders it into the quote-framed runtime string on demand so the string consumers
- * ({@code stringp}, {@code char}, {@code string=}, {@code subseq}, printing,
- * {@code _eqv}) treat it as a string. The marker IMPLIES RANK 1, which is why no reader
- * of it checks the rank: a string is a rank-1 character array and nothing else, so
- * {@code _charVecMake} stamps it only when {@code dims} designates rank 1 and lets a
- * rank-n character request degrade to the plain general array
+ * fillPointer, adjustable, null}} ({@code _charVecMake}). Mutability is the MARKER's, not
+ * the fill pointer's: with no {@code :fill-pointer} the slot stays null and the value is
+ * a SIMPLE string that {@code setf char}/{@code setf aref} still write, exactly as in CL.
+ * The {@code _strv} normalizer renders it into the quote-framed runtime string on demand
+ * so the string consumers ({@code stringp}, {@code char}, {@code string=},
+ * {@code subseq}, printing, {@code _eqv}) treat it as a string. The marker IMPLIES RANK
+ * 1, which is why no reader of it checks the rank: a string is a rank-1 character array
+ * and nothing else, so {@code _charVecMake} stamps it only when {@code dims} designates
+ * rank 1 and lets a rank-n character request degrade to the plain general array
  * ({@code .kb/array-literals.md}).
  *
  * <p>
@@ -1301,8 +1303,8 @@ final class JvmArrayRuntimeBuilder {
 		// only when dims designates rank 1 (a Long, or a one-element cons list) -- the
 		// rank is a runtime fact. Above rank 1 a character element type selects no
 		// representation of its own: the value is the plain general array, without the
-		// marker and without the defaulted fill pointer (which rank-n _arrayMake would
-		// reject anyway). Same runtime rank test, same fallback, as _ivMake.
+		// marker and without a fill pointer (which rank-n _arrayMake would reject
+		// anyway). Same runtime rank test, same fallback, as _ivMake.
 		MethodrefConstant selfArrayMake = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC)));
 		JvmAsm cv = new JvmAsm();
