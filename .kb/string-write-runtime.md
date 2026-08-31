@@ -388,7 +388,7 @@ bodies (they build through the renderer / `%string-concat`, not the wrapped case
 symbol-name mutation undefined; deliberate), getenv / fetch / socket-read results,
 json-parse's multi-fragment string values (single-fragment ones are subseq slices and
 mutable), and a STRING eof-value handed back by `read-line` at EOF is `equal` but not
-`eq` to the argument (the wrap copies it). `.todo/597` carries the list with the
+`eq` to the argument (the wrap copies it). `.todo/600` carries the list with the
 measurements.
 
 ## Why it is a function
