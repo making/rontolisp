@@ -32,6 +32,10 @@ final class JvmLoadCompiler {
 			throw new UnsupportedOperationException("load expects 1 argument, got " + (parts.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// A path built by a flipped producer (concatenate, format nil) is a mutable
+		// character vector: render it before _load's (String) cast (a no-op without
+		// the array runtime).
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		Utf8Constant nameUtf8 = ctx.cp.addUtf8("_load");
 		Utf8Constant descUtf8 = ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;");
 		MethodrefConstant loadRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),

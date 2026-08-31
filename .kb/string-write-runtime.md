@@ -224,11 +224,116 @@ is where those percentages live; nothing is quadratic, because the index sites r
 elements (`string-index-cost.md`) and `subseq`-of-charvec copies the slice, not a
 render of the source.
 
-**The residue is the OTHER producers**: `concatenate` / `string-upcase` / `format nil`
+~~**The residue is the OTHER producers**: `concatenate` / `string-upcase` / `format nil`
 / `princ-to-string` / `read-line` / getenv / fetch results still answer immutable
-strings, so a write through an alias of THOSE is still lost (the rebuild-and-rebind
-lite semantics above). That is deliberate, measured scope -- flipping `concatenate`
-lands on the string-building accumulator loops and needs its own cost round.
+strings.~~ **CLOSED for the main producers 2026-08-31 (`.todo/596`)** -- see "The
+remaining producers are flipped" below; what is STILL immutable is named there.
+
+
+## The remaining producers are flipped (2026-08-31, `.todo/596`)
+
+**Invariant: a string the program allocates through `concatenate 'string`, the case
+family (`string-upcase` / `string-downcase` / `string-capitalize`), a literal-`nil`
+destination `format`, the string-stream capture (`with-output-to-string` /
+`get-output-stream-string`) or `read-line` is a MUTABLE sequence with identity on ALL
+FOUR backends, exactly like the copy-seq/subseq result above. A LITERAL stays immutable
+and the literal rules are unchanged.** Pinned by the extended
+`string-identity-cross-backend` ci-spec case,
+`LispEvaluatorTest.aFlippedStringProducerResultHasWritableIdentity`,
+`JvmLispCompilerTest.compileAFlippedStringProducerResultHasWritableIdentity` /
+`#compileALiteralArgumentProducerCallIsNotFoldedIntoASharedLiteral` and their
+`WasmLispCompilerIntegrationTest` twins.
+
+The mechanism is a per-SITE wrap, not a per-primitive rewrite: each flipped case in
+`Jvm`/`WasmExprCompiler` compiles the producer as before and finishes with ONE call --
+`_toMutStr(Object)` on the JVM (`JvmArrayRuntimeBuilder`), `_to_mut_str`
+(`FUNC_TO_MUT_STR`, `WasmStringRuntimeBuilder.buildToMutStrBody`) on WASM. The wrap
+converts a QUOTE-FRAMED string once through `_strToCharVec` / `_str_to_cv` (fill
+pointer cleared -- a producer result is a SIMPLE string) and passes everything else
+through. **The frame test is load-bearing**: a SYMBOL shares the string representation
+BARE on both backends (a `java.lang.String` without quotes; a `TYPE_STRING` whose
+byte 0 is not 0x22), and `read-line`'s eof-value or a symbol flowing out of a wrapped
+expression must not be laundered -- unframed, the conversion would even trip the UTF-8
+decode. `%string-concat` stays UNWRAPPED: it is the internal append the codegen's own
+expansions (format pieces, the renderer) build with, so only the value the PROGRAM
+receives pays the conversion.
+
+**Both backends wrap under ONE gate**, `compiler/MutableStringProducers.programUsesAny`
+-- a pre-expansion source scan for the producer names (plus the `(format nil ...)`
+shape and the `%read-line-raw` component alias), computed identically by
+`JvmLispCompiler` and `WasmLispCompiler` (and copied into async chunk contexts by
+`WasmAsyncEmit`), so the backends cannot disagree about which results carry identity.
+On the JVM the scan also joined `programUsesAnyArrayOp`, so a wrap site always has the
+array runtime -- same reasoning as subseq's line.
+
+**The fold had to yield**: `PureBuiltinFolder` used to reduce a literal-argument
+`string-upcase` / `string-downcase` / `(concatenate 'string ...)` / `subseq` to one
+shared literal, which forges exactly the aliasing this flip provides (and had already
+been forging it for `(subseq "lit" 0)` since the subseq flip). Those four entries left
+the table; `symbol-name` / `princ-to-string` / `prin1-to-string` stay, because their
+runtime producers still answer immutable values. Mechanics, corrected premise and the
+size cost: `.kb/pure-builtin-fold.md`, "The fresh-string producers left the table".
+
+**Byte-oriented library accumulators must NOT go through the wrapped `concatenate`.**
+sockets.lisp's and stdin.lisp's read-char/read-line/write-sequence accumulators build
+strings whose bytes ARE wire bytes -- partial UTF-8 sequences, or raw bytes that are
+not UTF-8 at all -- and the wrap's character conversion traps on an invalid lead byte
+(found live: a component `write-sequence` of `(vector 1 2 250 4)` hit
+"out of bounds array access" in the UTF-8 decode) and would re-encode raw bytes >= 0x80
+even when it does not trap. Those sites now append through `%string-concat` directly,
+with a comment saying why at each one.
+
+**Boundary seams this flip found and fixed** (each a `(String)` cast the new charvec
+density reached): the JVM `%error`/`warn` message casts
+(`JvmErrorCompiler.compileThrowRuntimeException`, `JvmWarnCompiler` -- a condition
+report lambda's `with-output-to-string` capture is a charvec), the JVM socket write
+path (`JvmSocketRuntimeBuilder.emitStripQuotes`, minting `_strv` like
+`JvmIoRuntimeBuilder`), the JVM fetch runtime's URL/method/header/body strips
+(`JvmFetchRuntimeBuilder`, threaded `strvRef` -- the relay-handler shape builds its
+upstream URL with `concatenate`), `load`'s path (`JvmLoadCompiler`), and the HTTP
+transport boundary, fixed in Lisp for all backends at once: `%http-header-name` /
+`%http-header-value` / `%http-join-strings` render through `(string ...)` before the
+triple crosses into `RontoHttpClack.toResponse`, whose `instanceof String` guards
+silently DROPPED charvec headers and bodies. json.lisp's `%json-pairs` merge switched
+to `%string-concat` (the wrapped merge re-converted every intermediate: JVM
+json-stringify 116 -> 245 ms before, 83 ms after -- faster than baseline) and
+`%json-stringify` hands its one caller-visible result through `copy-seq`.
+
+**What it costs, measured 2026-08-31 (Apple M4 Max, one locked run, min of two
+passes, each row its own defun, integer-loop control and every interpreter row
+unmoved; baseline -> flipped, ms):** JVM: json-parse 37 -> 40 (+8%),
+json-stringify 112 -> 111 (flat -- the `%json-pairs` fix; before it the wrapped
+merge measured 245), format-nil 13 -> 16, upcase of a 1,000-char source x2,000
+25 -> 44 (+76%), wots capture 8 -> 11, read-line loop 7 -> 13, concatenate
+accumulator (50 appends x 200) 1 -> 26, tokenizer 883 -> 932 (+5%), subseq-fed
+json-parse 29 -> 18 (a WIN: the source charvec slices by element copy). WASM p1:
+json-parse of a concatenate-built source 67 -> 89 (+32%), stringify 104 -> 109,
+format-nil 8 -> 10, upcase 18 -> 37 (+105%), wots 10 -> 16, read-lines 3 -> 12,
+fmt-render 4 -> 7, concat accumulator 4 -> 28, tokenizer (`position` + subseq +
+string= over a concatenate-built source) 3,008 -> 7,211 (**+139%**, the round's
+worst row). Nothing is quadratic; the two big percentages are (a) the accumulator
+idiom paying render+convert per append (~1.5 us per append absolute), and (b)
+`position`'s per-call `(coerce s 'list)` walking a charvec at ~2.5x an immutable
+string's speed on wasm -- both belong to the charvec READ lanes `.todo/343` still
+owns (its 2026-08-31 rows, including the `(string x)` escape hatch that renders a
+charvec back to an ordinary string once). Sizes: hello_world / pi_approx
+byte-identical, zlib +110 bytes (+0.09%); a minimal literal-argument producer
+program pays the fold's loss (`.kb/pure-builtin-fold.md`).
+
+**What is STILL immutable, and why**: `princ-to-string` / `prin1-to-string` /
+`write-to-string` (the static `format` lowering emits its `~a`/`~s` pieces through the
+same compiler case, so wrapping it would tax every literal-control format per piece),
+a COMPUTED format destination that is nil at run time (only the literal-`nil` spelling
+is a producer; the gate would otherwise drag the array runtime into every
+`(format stream ...)` program), the first-class `#'format` / `#'concatenate` wrapper
+bodies (they build through the renderer / `%string-concat`, not the wrapped cases),
+`string-trim` family, `map 'string` / `coerce 'string` / `reverse` / `remove` /
+`substitute` results, `symbol-name` and `gensym`/`make-symbol` names (CLHS leaves
+symbol-name mutation undefined; deliberate), getenv / fetch / socket-read results,
+json-parse's multi-fragment string values (single-fragment ones are subseq slices and
+mutable), and a STRING eof-value handed back by `read-line` at EOF is `equal` but not
+`eq` to the argument (the wrap copies it). `.todo/597` carries the list with the
+measurements.
 
 ## Why it is a function
 

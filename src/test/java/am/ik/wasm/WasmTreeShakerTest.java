@@ -372,8 +372,13 @@ class WasmTreeShakerTest {
 			.isEqualTo(compile("(princ 42)", false, OptimizeLevel.DEFAULT));
 		assertThat(compile("(princ (length \"Hello World!\"))", false, OptimizeLevel.DEFAULT))
 			.isEqualTo(compile("(princ 12)", false, OptimizeLevel.DEFAULT));
-		assertThat(compile("(princ (concatenate 'string \"Hello\" \" \" \"World!\"))", false, OptimizeLevel.DEFAULT))
-			.isEqualTo(compile("(princ \"Hello World!\")", false, OptimizeLevel.DEFAULT));
+		// concatenate 'string used to have a row here; it left the fold table when its
+		// compiled result became a mutable character vector with identity (a fold to
+		// one shared literal would forge aliasing -- .kb/pure-builtin-fold.md).
+		// symbol-name keeps a string-producing row in its place: its runtime answer is
+		// still an immutable value, so the fold forges nothing.
+		assertThat(compile("(princ (symbol-name :hello))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ \"HELLO\")", false, OptimizeLevel.DEFAULT));
 		assertThat(compile("(format t \"~a~%\" (* 6 7))", false, OptimizeLevel.DEFAULT))
 			.isEqualTo(compile("(format t \"~a~%\" 42)", false, OptimizeLevel.DEFAULT));
 	}
@@ -550,7 +555,11 @@ class WasmTreeShakerTest {
 		// runtime-made symbol keeps the whole generic printer and with it the prologue,
 		// while the dead wrapper literals (the sequence keywords, the find-package
 		// alias alist) go, rows included -- the module was over 24 KB of data before.
-		byte[] interning = compile("(print (intern (string-upcase \"foo\")))", false, OptimizeLevel.DEFAULT);
+		// subseq, not string-upcase, makes the runtime name: string-upcase used to
+		// FOLD to a literal here, and since it left the fold table (its result is a
+		// mutable character vector with identity now) it would drag the ~16 KB Unicode
+		// case-fold tables into a test that is about the intern blob's rows.
+		byte[] interning = compile("(print (intern (subseq \"FOOX\" 0 3)))", false, OptimizeLevel.DEFAULT);
 		Module.parse(interning).assertWellFormed();
 		// The generic printer keeps its own data: the printer prologue strings plus
 		// the ~755-byte Schubfach float table.
@@ -560,7 +569,7 @@ class WasmTreeShakerTest {
 			assertThat(contains(data, dead)).as("dead wrapper literal %s survived the interning program", dead)
 				.isFalse();
 		}
-		for (String live : new String[] { "\"FOO\"", "Rubout", "#<FUTURE>" }) {
+		for (String live : new String[] { "\"FOOX\"", "Rubout", "#<FUTURE>" }) {
 			assertThat(contains(data, live)).as("the interning program lost %s", live).isTrue();
 		}
 		assertThat(WasmTreeShaker.shake(interning)).isEqualTo(interning);

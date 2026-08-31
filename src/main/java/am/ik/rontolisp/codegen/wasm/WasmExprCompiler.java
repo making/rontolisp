@@ -16,6 +16,7 @@ import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
+import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -415,7 +416,14 @@ final class WasmExprCompiler {
 						return;
 					}
 					switch (qn.member()) {
-						case LispNames.READ_LINE_RAW_INTERNAL -> WasmReadLineCompiler.compile(cons, ctx);
+						case LispNames.READ_LINE_RAW_INTERNAL -> {
+							// The %io-read-line fallback a component's socket splice
+							// routes a non-socket read-line through: wrap like the
+							// public case, so a component's read-line result carries
+							// the same identity as Preview 1's.
+							WasmReadLineCompiler.compile(cons, ctx);
+							WasmEmitHelper.emitToMutStrCall(ctx);
+						}
 						case LispNames.READ_CHAR_RAW_INTERNAL -> WasmReadCharCompiler.compile(cons, ctx);
 						case LispNames.READ_BYTE_RAW_INTERNAL -> WasmReadByteCompiler.compile(cons, ctx);
 						case LispNames.WRITE_LINE_RAW_INTERNAL -> WasmWriteLineCompiler.compile(cons, ctx);
@@ -828,8 +836,16 @@ final class WasmExprCompiler {
 				// one to the quoted package keyword before the compiler ever sees it.
 				case LispNames.FIND_PACKAGE -> WasmExprCompiler.compileExpr(
 						LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1), ctx.packageTable), ctx);
-				case LispNames.CONCATENATE -> WasmExprCompiler
-					.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString, ctx.closRegistry), ctx);
+				case LispNames.CONCATENATE -> {
+					WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString, ctx.closRegistry),
+							ctx);
+					// The string family's fresh result carries a writable identity
+					// (a no-op unless the producer flip is on -- see _to_mut_str).
+					if (ConcatenateForms.literalResultFamily(cons.toList().get(1),
+							ctx.closRegistry) == ConcatenateForms.ResultFamily.STRING) {
+						WasmEmitHelper.emitToMutStrCall(ctx);
+					}
+				}
 				case LispNames.READ_LINE -> {
 					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, false);
 					if (typed != null) {
@@ -837,6 +853,7 @@ final class WasmExprCompiler {
 					}
 					else {
 						WasmReadLineCompiler.compile(cons, ctx);
+						WasmEmitHelper.emitToMutStrCall(ctx);
 					}
 				}
 				case LispNames.READ_CHAR -> {
@@ -968,7 +985,11 @@ final class WasmExprCompiler {
 				}
 				case LispNames.MAKE_STRING_INPUT_STREAM ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringInputStream(cons), ctx);
-				case LispNames.STRING_STREAM_CONTENTS_INTERNAL -> WasmWriteStringCompiler.compileContents(cons, ctx);
+				case LispNames.STRING_STREAM_CONTENTS_INTERNAL -> {
+					// The with-output-to-string / get-output-stream-string capture.
+					WasmWriteStringCompiler.compileContents(cons, ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 				// unwindProtect = ctx.ehMode: a literal with-* flips the
 				// module into EH mode via the gate, so these expansions ride
 				// unwind-protect like the interpreter/JVM (close on EVERY exit); the flag
@@ -1146,12 +1167,20 @@ final class WasmExprCompiler {
 					// template
 					// arrives here with its (already evaluated) argument.
 					WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
-				case LispNames.STRING_UPCASE -> WasmStringUpcaseCompiler
-					.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
-				case LispNames.STRING_DOWNCASE -> WasmStringUpcaseCompiler
-					.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
-				case LispNames.STRING_CAPITALIZE ->
+				case LispNames.STRING_UPCASE -> {
+					WasmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
+				case LispNames.STRING_DOWNCASE -> {
+					WasmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
+				case LispNames.STRING_CAPITALIZE -> {
 					WasmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 				case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> WasmSubseqCompiler.compile(cons, ctx);
 				case LispNames.CHAR, LispNames.SCHAR -> WasmCharCompiler.compileChar(cons, ctx);
 				case LispNames.CHAR_CODE -> WasmCharCompiler.compileCharCode(cons, ctx);
@@ -1363,7 +1392,15 @@ final class WasmExprCompiler {
 				case LispNames.RETURN -> WasmReturnCompiler.compile(cons, ctx);
 				case LispNames.INCF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx);
 				case LispNames.DECF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx);
-				case LispNames.FORMAT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFormat(cons), ctx);
+				case LispNames.FORMAT -> {
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandFormat(cons), ctx);
+					// A literal-nil destination is a string PRODUCER: its capture
+					// carries a writable identity (a computed destination stays
+					// un-flipped, see MutableStringProducers).
+					if (MutableStringProducers.isFormatToString(cons)) {
+						WasmEmitHelper.emitToMutStrCall(ctx);
+					}
+				}
 				case LispNames.LENGTH -> WasmLengthCompiler.compile(cons, ctx);
 				case LispNames.REVERSE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons), ctx);
 				case LispNames.MEMBER -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx);

@@ -59,6 +59,13 @@ $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
     `len - 1`, the closing quote's position, when i is at or past the character
     count so subseq's end walk lands on the string terminator). `_subseq`'s string
     branch reads it twice to translate a character range into a byte range.
+  - `FUNC_TO_MUT_STR` `_to_mut_str(v) -> (ref null eq)` -- the flipped string
+    PRODUCERS' mutable-result wrap (`.kb/string-write-runtime.md`, "The remaining
+    producers are flipped"): a QUOTE-FRAMED `TYPE_STRING` (byte 0 is `0x22` --
+    a symbol shares the type with bare bytes and must pass through) converts once
+    through `_str_to_cv` into a fresh mutable character vector; anything else
+    passes through. Emitted at a producer site only when
+    `Ctx.mutableStringProducers` says the program contains one.
 
   **Neither of those two walks from byte 0**: fields 3/4 are the string's own
   character-index CURSOR ("character `ci` starts at byte `cb`", seeded `(0, 1)` by

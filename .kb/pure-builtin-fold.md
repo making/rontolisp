@@ -107,8 +107,10 @@ whether or not a fold exists).
   `string-equal`, `alpha-char-p`), none of which is in this table.
 - **String and list measurement** — `length char schar string= nth car first second
   third`. A string is indexed by code point everywhere.
-- **String production** — `symbol-name princ-to-string prin1-to-string string-upcase
-  string-downcase concatenate subseq`.
+- **String production** — `symbol-name princ-to-string prin1-to-string`. The
+  FRESH-STRING producers (`string-upcase` / `string-downcase` / `concatenate 'string`
+  / `subseq`) left the table on 2026-08-31 — see "The fresh-string producers left the
+  table" below.
 - **The packed literal table** — `coerce` and `make-array`, and ONLY into an
   `(unsigned-byte 8|16|32)` vector. `(coerce '(<literals>) '(vector (unsigned-byte
   32)))` is how every CL library spells a lookup table, and building it at run time
@@ -122,6 +124,41 @@ characters, code-point string indexing), and restating it per entry would hide t
 places where an entry deviates from its group -- `/`, which folds only an exact
 quotient, and the case-conversion four, which stop at ASCII. Those two carry their own
 sentence.
+
+
+## The fresh-string producers left the table (2026-08-31, `.todo/596`)
+
+`string-upcase`, `string-downcase`, `(concatenate 'string ...)` and `subseq` no longer
+fold. Their compiled results are MUTABLE character vectors with identity
+(`.kb/string-write-runtime.md`, "The remaining producers are flipped"), so a fold to
+one shared literal would forge exactly the aliasing the flip provides —
+`(let* ((s (string-upcase "abc")) (a s)) (setf (char s 0) #\x) (list s a))` must
+answer `("xBC" "xBC")` on every backend, and a folded literal answered
+`("xBC" "ABC")`. The identity rule above always excluded values with identity; these
+four gained one, so the rule now excludes them. (The `subseq` fold had been forging it
+since the subseq flip itself: `(subseq "lit" 0)` was folded to a shared literal while
+`(copy-seq "lit")` — the same operation — answered a fresh mutable vector.)
+
+**What it costs, measured 2026-08-31.** The reachability wins in the table at the top
+are LOST exactly for a literal-argument producer call, and only there — a program
+whose producer arguments are computed never folded. Minimal programs, `--optimize`
+wasm / JVM class bytes, before -> after:
+`(princ (concatenate 'string "Hello" " " "World!"))` 574 -> 9,959 / 2,633 -> 5,636;
+`(print (string-upcase "abc"))` 579 -> 18,788 (the Unicode case-fold tables now ride
+along) / 2,983 -> 6,007; `(print (subseq "abcdef" 1 3))` 578 -> 14,755 /
+2,982 -> 13,356. The corpus barely moves — hello_world and pi_approx are
+byte-identical, zlib +110 bytes — because real programs compute their arguments.
+`WasmTreeShakerTest.aFoldedComputationCompilesToTheLiteralItReducesTo` traded its
+concatenate row for a `symbol-name` one, and
+`#anInterningProgramOffersPerEntryRangesRowsFallingWithTheirBytes` makes its runtime
+name with `subseq` instead of `string-upcase` (whose case-fold tables would otherwise
+drown the data-section bound the test is about).
+
+**Re-evaluation trigger:** if these ever need to fold again, the fold's RESULT must
+carry the mutable-fresh-per-evaluation property the packed-vector section describes —
+i.e. the folded value would have to materialize as a fresh character vector per
+evaluation at every use site, not as a shared literal. Nothing today wants that badly
+enough to pay for it.
 
 ### When the harness finds a divergence: fix, do not route around
 
@@ -166,15 +203,15 @@ The rule this pass commits to, in order:
   property of the RESULT (`isFoldableResult`), not as a per-entry rule, so
   `(cdr '(1 2 3))` and `(nth 0 '((1) (2)))` decline by construction while
   `(nth 1 '(a b c))` folds.
-  A STRING result is IN, and the reason is measured, not assumed: on both compile
-  backends a string literal materializes FRESH on each evaluation (the JVM copies the
-  constant-pool string into its mutable representation; the wasm backend allocates a
-  `$str_bytes` array), so a folded `(string-upcase "ab")` is as mutable and as
-  unshared as the call it replaced. On the INTERPRETER a STRING literal is one shared
-  object and mutating it persists — which is exactly why the interpreter does not fold.
-  (Since 2026-08-29 that is true of the string literal only: an ARRAY literal is fresh
-  per evaluation on the interpreter too, `.kb/array-literals.md`. The string half still
-  holds, so the interpreter still does not fold.)
+  A STRING result is IN only for producers whose runtime answer is itself an
+  immutable value with no writable identity (`symbol-name`, `princ-to-string`,
+  `prin1-to-string`). The premise this paragraph used to rest on — "a string literal
+  materializes FRESH on each evaluation on both compile backends" — is measured FALSE
+  today: a literal is ONE shared object on all four backends (`(eq (fs) (fs))` is `T`,
+  `.kb/string-write-runtime.md`), and the compiled results of the fresh-string
+  producers are MUTABLE character vectors with identity, so a fold of those to a
+  shared literal forges aliasing. That is why they left the table (below). The
+  interpreter still does not fold, for the original reason.
   A PACKED INTEGER VECTOR result is in for that same reason, and it is the reason
   rather than the type that decides: both compile backends allocate the array and fill
   it AT THE SITE (`JvmQuoteCompiler.compileLiteralIntVector` builds a new `long[]`;

@@ -202,20 +202,11 @@ public final class FoldDifferential {
 		add(probes, "prin1-to-string", "#\\a");
 		add(probes, "prin1-to-string", "42");
 		add(probes, "prin1-to-string", "3.14159");
-		add(probes, "string-upcase", "\"hello\"");
-		add(probes, "string-downcase", "\"HELLO\"");
-		// CL folds character by character, so no mapping changes the length -- and the
-		// mapping is the full Unicode one on every backend, supplementary planes
-		// included.
-		add(probes, "string-upcase", "\"café straße αβγ\"");
-		add(probes, "string-downcase", "\"CAFÉ ΙΣΩ АБ\"");
-		// concatenate's RESULT TYPE stays literal in the control: the compile-path
-		// lowering resolves the designator statically, so hiding it would not be the
-		// same call (.kb/concatenate-result-families.md).
-		probes.add(new Probe("concatenate", "(concatenate 'string \"ab\" \"cd\")",
-				"(concatenate 'string (%id \"ab\") (%id \"cd\"))"));
-		add(probes, "subseq", "\"hello\"", "1", "3");
-		add(probes, "subseq", "\"hello\"", "2");
+		// string-upcase / string-downcase / concatenate 'string / subseq left the
+		// table with their entries: they are FRESH-STRING producers whose compiled
+		// results carry a writable identity now, so a fold would forge aliasing
+		// (PureBuiltinFolder's identity rule; pinned end to end by the
+		// string-identity-cross-backend ci-spec case).
 		// The packed literal table. Like concatenate's, the RESULT TYPE stays literal in
 		// the control -- the compile-path lowering resolves the designator statically, so
 		// hiding it would not be the same call. Every width, and one table long enough to

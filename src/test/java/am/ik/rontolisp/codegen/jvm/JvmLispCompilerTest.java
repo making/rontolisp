@@ -11790,6 +11790,39 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAFlippedStringProducerResultHasWritableIdentity() throws Exception {
+		// The remaining producers flipped after copy-seq/subseq: concatenate 'string,
+		// the case family, format nil, the string-stream capture and read-line answer
+		// a MUTABLE character vector, so an alias sees a write, a callee's write
+		// reaches its caller, and replace/fill land in place -- matching the
+		// interpreter and SBCL (.kb/string-write-runtime.md).
+		assertThat(compileAndRun("""
+				(let* ((s (string-upcase "abc")) (a s)) (setf (char s 0) #\\x) (print (list s a)))
+				(let ((s (concatenate 'string "ab" "cd"))) (replace s "XY") (print s))
+				(let ((s (format nil "~a" 42))) (fill s #\\9) (print s))
+				(defun t596f (x) (setf (char x 0) #\\Z) x)
+				(let ((s (with-output-to-string (o) (princ "hi" o)))) (print (list (t596f s) s)))
+				(with-input-from-string (in "hello")
+				  (let* ((s (read-line in nil)) (a s)) (setf (char s 0) #\\J) (print (list s a))))
+				(let* ((s (string-capitalize "foo bar")) (a s)) (setf (char s 3) #\\!) (print (list s a)))
+				""")).isEqualTo(
+				"(\"xBC\" \"xBC\")\n\"XYcd\"\n\"99\"\n(\"Zi\" \"Zi\")\n(\"Jello\" \"Jello\")\n(\"Foo!Bar\" \"Foo!Bar\")");
+	}
+
+	@Test
+	void compileALiteralArgumentProducerCallIsNotFoldedIntoASharedLiteral() throws Exception {
+		// string-upcase/string-downcase/concatenate 'string/subseq left the
+		// PureBuiltinFolder table: a fold to one shared literal would forge the
+		// aliasing the producer flip provides, and each evaluation must be a fresh
+		// mutable string.
+		assertThat(compileAndRun("""
+				(defun t596g () (string-upcase "ab"))
+				(let ((s (t596g))) (setf (char s 0) #\\z) (print (list s (t596g))))
+				(let ((s (subseq "abcdef" 1 3))) (replace s "Q") (print s))
+				""")).isEqualTo("(\"zB\" \"AB\")\n\"Qc\"");
+	}
+
+	@Test
 	void compileMakeArrayDisplacedKeywordComboIsACompileError() {
 		assertThatThrownBy(() -> compileAndRun("(print (make-array 3 :displaced-to (make-array 5) :fill-pointer 2))"))
 			.isInstanceOf(UnsupportedOperationException.class)

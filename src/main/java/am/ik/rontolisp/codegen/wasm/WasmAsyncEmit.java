@@ -794,6 +794,10 @@ final class WasmAsyncEmit {
 			.usesEqualpHashTables(proto.usesEqualpHashTables)
 			.usesStreamValues(proto.usesStreamValues)
 			.usesSeqString(proto.usesSeqString)
+			// NOT optional: a producer site inside an async chunk must wrap exactly
+			// like the same form in a defun, or an async program's format nil /
+			// concatenate result would lose its identity depending on where it ran.
+			.mutableStringProducers(proto.mutableStringProducers)
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
 			// NOT optional: freshCtx builds the synchronous top level's CHUNKS, where an
 			// unboxed local's shadow is marked authoritative by reading this module

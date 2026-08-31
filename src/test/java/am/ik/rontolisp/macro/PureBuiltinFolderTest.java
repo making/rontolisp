@@ -75,7 +75,7 @@ class PureBuiltinFolderTest {
 
 	@Test
 	void foldsThroughNestingAndIntoEveryEvaluatedPosition() {
-		assertThat(folded("(length (concatenate 'string \"ab\" \"cd\"))")).isEqualTo(new LispInteger(4));
+		assertThat(folded("(length (symbol-name :abcd))")).isEqualTo(new LispInteger(4));
 		assertThat(folded("(defun f () (princ (* 6 7)))").print()).isEqualTo("(DEFUN F NIL (PRINC 42))");
 		assertThat(folded("(let ((x (+ 1 2))) x)").print()).isEqualTo("(LET ((X 3)) X)");
 		assertThat(folded("(if (< 1 2) (+ 1 1) (+ 2 2))").print()).isEqualTo("(IF T 2 4)");
@@ -163,7 +163,7 @@ class PureBuiltinFolderTest {
 		// A cold branch may hold a call that errors; the fold must leave it for the
 		// runtime rather than fail the compile.
 		for (String source : List.of("(length 5)", "(mod 1 0)", "(rem 1 0)", "(char \"ab\" 9)", "(char-code 5)",
-				"(code-char -1)", "(car 'foo)", "(subseq \"ab\" 1 9)", "(+ 1 \"x\")", "(expt 2 -1)")) {
+				"(code-char -1)", "(car 'foo)", "(+ 1 \"x\")", "(expt 2 -1)")) {
 			assertThat(folded(source).print()).as("declines: %s", source).startsWith("(");
 		}
 	}
@@ -172,9 +172,13 @@ class PureBuiltinFolderTest {
 	void whatIsOutOfTheTableStaysOutOfIt() {
 		// A ratio or float result, a value with identity, and a multiple-value producer
 		// are each excluded for their own reason (.kb/pure-builtin-fold.md).
+		// The last three rows are the FRESH-STRING producers that LEFT the table when
+		// their compiled results became mutable character vectors with identity: a fold
+		// to one shared literal would forge the aliasing the producer flip provides.
 		for (String source : List.of("(/ 7 2)", "(+ 1.5 2.5)", "(list 1 2)", "(cdr '(1 2 3))", "(floor 7 2)",
 				"(make-array 3)", "(vector 1 2)", "(nth 0 '((1) (2)))", "(char-equal #\\a #\\A)",
-				"(string-equal \"a\" \"A\")", "(alpha-char-p #\\a)")) {
+				"(string-equal \"a\" \"A\")", "(alpha-char-p #\\a)", "(string-upcase \"abc\")",
+				"(concatenate 'string \"ab\" \"cd\")", "(subseq \"abcdef\" 1 3)")) {
 			assertThat(folded(source).print()).as("not folded: %s", source).startsWith("(");
 		}
 	}

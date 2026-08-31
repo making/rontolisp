@@ -349,8 +349,10 @@
                       (setq n 0)
                       (progn
                         (setq acc
-                              (concatenate 'string acc
-                                           (rontolisp::%str-from-byte bn)))
+                         ;; byte-level append: acc holds a PARTIAL UTF-8
+                         ;; sequence, which the wrapped concatenate's
+                         ;; character conversion would trap on
+                         (%string-concat acc (rontolisp::%str-from-byte bn)))
                         (setq n (- n 1))))))
               (char acc 0))))))
 
@@ -371,15 +373,18 @@
                   (setq done t)
                   (progn
                     (if cr
+                        ;; byte-level appends: acc's bytes ARE the wire bytes
+                        ;; (possibly mid-UTF-8-sequence, possibly not UTF-8 at
+                        ;; all), so the wrapped concatenate's character
+                        ;; conversion must not touch them
                         (setq acc
-                              (concatenate 'string acc
-                                           (rontolisp::%str-from-byte 13))))
+                         (%string-concat acc (rontolisp::%str-from-byte 13))))
                     (if (= b 13)
                         (setq cr t)
                         (progn
                           (setq cr nil)
                           (setq acc
-                                (concatenate 'string acc
+                                (%string-concat acc
                                  (rontolisp::%str-from-byte b)))))))))))
     (if got acc nil)))
 
@@ -477,8 +482,10 @@
       (subseq seq start end)
       (let ((acc "") (i start))
         (while (< i end)
+          ;; byte-level append: each element is one raw wire byte, which the
+          ;; wrapped concatenate's character conversion would corrupt or trap on
           (setq acc
-           (concatenate 'string acc (rontolisp::%str-from-byte (aref seq i))))
+                (%string-concat acc (rontolisp::%str-from-byte (aref seq i))))
           (setq i (+ i 1)))
         acc)))
 
@@ -580,8 +587,11 @@
   (let ((e (rontolisp::%sock-entry stream)))
     (if e
         (progn
+          ;; %string-concat: s can hold raw wire bytes (a binary line read back
+          ;; off a socket), which the wrapped concatenate's character conversion
+          ;; would trap on or re-encode
           (rontolisp::%sock-write-string e
-           (concatenate 'string s (princ-to-string #\Newline)))
+           (%string-concat s (princ-to-string #\Newline)))
           s)
         (rontolisp::%write-line-raw s stream))))
 

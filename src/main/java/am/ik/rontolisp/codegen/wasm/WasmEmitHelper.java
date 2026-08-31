@@ -1042,6 +1042,22 @@ final class WasmEmitHelper {
 	 * normalization renders every element. {@code stringp} is the caller that matters.
 	 * @param ctx the compilation context (its writer receives the instructions)
 	 */
+	/**
+	 * Emits {@code call FUNC_TO_MUT_STR}: converts a fresh runtime string on the stack
+	 * into a MUTABLE character vector, so the producer's result has a writable identity
+	 * like the interpreter's (a non-string passes through unchanged). A no-op unless the
+	 * program contains a flipped producer ({@code MutableStringProducers.programUsesAny}
+	 * -- the same scan the JVM backend wraps under).
+	 * @param ctx the compilation context (its writer receives the instructions)
+	 */
+	static void emitToMutStrCall(WasmLispCompiler.Ctx ctx) {
+		if (!ctx.mutableStringProducers) {
+			return;
+		}
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_TO_MUT_STR);
+	}
+
 	static void emitCharvecPCall(WasmLispCompiler.Ctx ctx) {
 		emitCharvecPCall(ctx.writer);
 	}

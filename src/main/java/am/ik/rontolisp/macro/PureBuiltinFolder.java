@@ -86,8 +86,16 @@ import org.jspecify.annotations.Nullable;
  * <b>Identity.</b> A folded value is only ever a number, a character, a string, a symbol
  * or {@code t}/{@code nil} ({@link #foldedLiteral}) -- never an array, a cons or an
  * instance, whose identity a fold duplicated at two sites would forge. A STRING result is
- * safe because a string literal materializes FRESH on each evaluation on both compile
- * backends (the interpreter, where a literal is one shared object, is not folded).
+ * allowed only for producers whose runtime answer is itself an immutable value with no
+ * writable identity ({@code symbol-name}, {@code princ-to-string},
+ * {@code prin1-to-string}): the FRESH-STRING producers ({@code string-upcase} /
+ * {@code string-downcase} / {@code concatenate 'string} / {@code subseq}) left the table
+ * when their compiled results became mutable character vectors with identity
+ * ({@code MutableStringProducers}) -- a fold to one shared literal would forge exactly
+ * the aliasing the flip provides. (The premise this section used to state, "a string
+ * literal materializes FRESH on each evaluation", had already stopped being true: a
+ * literal is ONE shared object on all four backends,
+ * {@code .kb/string-write-runtime.md}.)
  *
  * <p>
  * <b>Source positions.</b> An unchanged form is handed back as it was
@@ -929,46 +937,19 @@ public final class PureBuiltinFolder {
 		t.put(LispNames.SYMBOL_NAME, args -> args.size() == 1 ? symbolName(args.get(0)) : null);
 		t.put(LispNames.PRINC_TO_STRING, args -> args.size() == 1 ? renderedLiteral(args.get(0), false) : null);
 		t.put(LispNames.PRIN1_TO_STRING, args -> args.size() == 1 ? renderedLiteral(args.get(0), true) : null);
-		t.put(LispNames.STRING_UPCASE, args -> caseFoldString(args, true));
-		t.put(LispNames.STRING_DOWNCASE, args -> caseFoldString(args, false));
-		t.put(LispNames.CONCATENATE, args -> {
-			// Only the STRING result family: a list or vector result is an object with
-			// identity (.kb/concatenate-result-families.md).
-			if (args.size() < 2 || !(args.get(0) instanceof LispSymbol type)
-					|| !LispNames.STRING.equals(LispSymbol.memberName(type.name()))) {
-				return null;
-			}
-			StringBuilder sb = new StringBuilder();
-			for (int i = 1; i < args.size(); i++) {
-				if (!(args.get(i) instanceof LispString s)) {
-					return null;
-				}
-				sb.append(s.value());
-			}
-			return sb.codePointCount(0, sb.length()) > MAX_FOLDED_CHARS ? null : new LispString(sb.toString());
-		});
+		// string-upcase / string-downcase / (concatenate 'string ...) / subseq used to
+		// fold here too. They are FRESH-STRING producers, and the identity rule above
+		// now excludes them the way it always excluded an array: their compiled results
+		// are MUTABLE character vectors with identity (MutableStringProducers), so a
+		// fold to one shared literal would forge exactly the aliasing the flip exists
+		// to provide -- (let* ((s (string-upcase "abc")) (a s)) (setf (char s 0) #\x)
+		// ...) must answer ("xBC" "xBC") on every backend, and a folded literal cannot.
+		// symbol-name / princ-to-string / prin1-to-string stay: their runtime producers
+		// still answer immutable values, so the fold forges nothing they provide.
 		// -- packed integer tables ----------------------------------------------
 		t.put(LispNames.COERCE,
 				args -> args.size() == 2 ? packedIntVector(args.get(0), packedWidth(args.get(1))) : null);
 		t.put(LispNames.MAKE_ARRAY, PureBuiltinFolder::foldMakeArray);
-		t.put(LispNames.SUBSEQ, args -> {
-			if (args.size() < 2 || args.size() > 3 || !(args.get(0) instanceof LispString s)) {
-				return null;
-			}
-			List<BigInteger> bounds = integers(args.subList(1, args.size()));
-			if (bounds == null) {
-				return null;
-			}
-			int count = s.codePointCount();
-			int start = boundedIndex(bounds.get(0), count);
-			int end = bounds.size() == 2 ? boundedIndex(bounds.get(1), count) : count;
-			if (start < 0 || end < 0 || start > end) {
-				return null;
-			}
-			String value = s.value();
-			int from = value.offsetByCodePoints(0, start);
-			return new LispString(value.substring(from, value.offsetByCodePoints(from, end - start)));
-		});
 		return java.util.Collections.unmodifiableMap(t);
 	}
 
@@ -1265,26 +1246,6 @@ public final class PureBuiltinFolder {
 		return new LispChar(upcase ? Character.toUpperCase(c.codePoint()) : Character.toLowerCase(c.codePoint()));
 	}
 
-	/**
-	 * {@code string-upcase}/{@code string-downcase}: CL folds CHARACTER by character, so
-	 * no mapping changes the string's length and the per-character agreement above
-	 * carries over (checked the same way, by a per-code-point checksum on all four
-	 * backends).
-	 */
-	private static @Nullable LispVal caseFoldString(List<LispVal> args, boolean upcase) {
-		if (args.size() != 1 || !(args.get(0) instanceof LispString s)) {
-			return null;
-		}
-		String value = s.value();
-		if (value.codePointCount(0, value.length()) > MAX_FOLDED_CHARS) {
-			return null;
-		}
-		StringBuilder sb = new StringBuilder(value.length());
-		value.codePoints()
-			.forEach(cp -> sb.appendCodePoint(upcase ? Character.toUpperCase(cp) : Character.toLowerCase(cp)));
-		return new LispString(sb.toString());
-	}
-
 	/** {@code (char s i)} / {@code (schar s i)}: an out-of-range index declines. */
 	private static @Nullable LispVal stringRef(List<LispVal> args) {
 		if (args.size() != 2 || !(args.get(0) instanceof LispString s)) {
@@ -1296,15 +1257,6 @@ public final class PureBuiltinFolder {
 		}
 		int i = index.get(0).intValue();
 		return i < s.codePointCount() ? new LispChar(s.codePointAt(i)) : null;
-	}
-
-	/** An index that is in {@code [0, count]}, or -1. */
-	private static int boundedIndex(BigInteger index, int count) {
-		if (index.signum() < 0 || index.bitLength() > 31) {
-			return -1;
-		}
-		int value = index.intValue();
-		return value <= count ? value : -1;
 	}
 
 	/** The nth element of a literal list, or {@code null} on anything else. */

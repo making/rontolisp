@@ -63,6 +63,10 @@ final class JvmWarnCompiler {
 		ctx.emitU2(systemErr.index());
 		// message: arg.substring(1, arg.length() - 1)
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		// A warning message can be a mutable character vector (a flipped producer's
+		// result): render it before the (String) cast (a no-op without the array
+		// runtime).
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		ctx.emit(Opcode.DUP);

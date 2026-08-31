@@ -10412,6 +10412,32 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aFlippedStringProducerResultHasWritableIdentity() {
+		// The producers the compile backends flipped after copy-seq/subseq
+		// (concatenate 'string, the case family, format nil, the string-stream
+		// capture, read-line) were always mutable here; this pins the reference
+		// behavior the other three backends now match
+		// (.kb/string-write-runtime.md).
+		assertThat(evalMulti("""
+				(let* ((s (string-upcase "abc")) (a s)) (setf (char s 0) #\\x) (list s a))
+				""").print()).isEqualTo("(\"xBC\" \"xBC\")");
+		assertThat(evalMulti("""
+				(let ((s (concatenate 'string "ab" "cd"))) (replace s "XY") s)
+				""").print()).isEqualTo("\"XYcd\"");
+		assertThat(evalMulti("""
+				(let ((s (format nil "~a" 42))) (fill s #\\9) s)
+				""").print()).isEqualTo("\"99\"");
+		assertThat(evalMulti("""
+				(defun t596f (x) (setf (char x 0) #\\Z) x)
+				(let ((s (with-output-to-string (o) (princ "hi" o)))) (list (t596f s) s))
+				""").print()).isEqualTo("(\"Zi\" \"Zi\")");
+		assertThat(evalMulti("""
+				(with-input-from-string (in "hello")
+				  (let* ((s (read-line in nil)) (a s)) (setf (char s 0) #\\J) (list s a)))
+				""").print()).isEqualTo("(\"Jello\" \"Jello\")");
+	}
+
+	@Test
 	void rowMajorArefReadsAStringLikeAref() {
 		// A string is a rank-1 array of characters in CL, so row-major-aref reads it
 		// like aref/char/schar/elt do -- the interpreter arm row-major-aref was missing
