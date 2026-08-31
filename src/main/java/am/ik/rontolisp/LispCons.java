@@ -120,6 +120,23 @@ public final class LispCons implements LispVal {
 	}
 
 	/**
+	 * The element count of this chain when it is a proper list, {@code -1} when it ends
+	 * in a dotted tail. One walk answering both what {@link #isProperList()} answers and
+	 * the size a caller about to collect the elements should allocate -- the evaluator's
+	 * per-form check plus its argument collection used to walk twice.
+	 * @return the element count, or {@code -1} for an improper list
+	 */
+	public int properLength() {
+		int length = 0;
+		LispVal current = this;
+		while (current instanceof LispCons cons) {
+			length++;
+			current = cons.cdr();
+		}
+		return current instanceof LispNil ? length : -1;
+	}
+
+	/**
 	 * Converts this cons cell chain into a Java list. Assumes proper list (terminated by
 	 * nil).
 	 * @return the elements as a list

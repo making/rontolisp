@@ -4826,8 +4826,11 @@ public final class LispEvaluator {
 	private LispVal evalCons(LispCons cons, Environment env) {
 		LispVal head = cons.car();
 		// A dotted tail is only meaningful as data (inside quote); in call position it
-		// would otherwise be silently dropped by the toList() walks below.
-		if (!(head instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name())) && !cons.isProperList()) {
+		// would otherwise be silently dropped by the toList() walks below. The walk
+		// also answers the argument count, so the fall-through function call below
+		// allocates its argument list exactly sized instead of walking again.
+		int properLength = head instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name()) ? 1 : cons.properLength();
+		if (properLength < 0) {
 			throw new LispEvalException("Improper list in call position: " + cons.print());
 		}
 		if (head instanceof LispSymbol sym) {
@@ -5136,23 +5139,30 @@ public final class LispEvaluator {
 			if (LispNames.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);
 			}
-			// The uiop MACROS. First the ones with a real expansion -- the one
-			// dispatcher both compilers and FreeVarAnalyzer also call, which is what
-			// makes the four backends agree by construction rather than by four
-			// parallel switch statements kept in step.
-			LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
-			if (uiopMacro != null) {
-				return eval(uiopMacro, env);
-			}
-			// Then a uiop macro nothing implements yet: it lowers to
-			// not-implemented-error with its argument forms dropped -- the same
-			// expansion both compilers apply, so an unimplemented
-			// (uiop:with-input-file ...) signals here too rather than running its body
-			// first. The function-kind members are ordinary calls and fall through to
-			// the lazy load below.
-			LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
-			if (uiopStub != null) {
-				return eval(uiopStub, env);
+			// The uiop MACROS -- but only for a package-qualified operator. A name
+			// with no colon cannot be a uiop member, and this path is the fall-through
+			// every ordinary call takes, so one indexOf here spares BOTH probes'
+			// splitQualified for (char s j) and (+ j 1) alike (4% of run-time samples
+			// in the todo-598 profile).
+			if (sym.name().indexOf(':') > 0) {
+				// First the ones with a real expansion -- the one dispatcher both
+				// compilers and FreeVarAnalyzer also call, which is what makes the
+				// four backends agree by construction rather than by four parallel
+				// switch statements kept in step.
+				LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
+				if (uiopMacro != null) {
+					return eval(uiopMacro, env);
+				}
+				// Then a uiop macro nothing implements yet: it lowers to
+				// not-implemented-error with its argument forms dropped -- the same
+				// expansion both compilers apply, so an unimplemented
+				// (uiop:with-input-file ...) signals here too rather than running its
+				// body first. The function-kind members are ordinary calls and fall
+				// through to the lazy load below.
+				LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
+				if (uiopStub != null) {
+					return eval(uiopStub, env);
+				}
 			}
 			// User macros defined with defmacro: expand (evaluating the macro body with
 			// the unevaluated argument forms bound) and evaluate the expansion. Checked
@@ -5172,12 +5182,12 @@ public final class LispEvaluator {
 			// Lisp-2: a symbol in call position is resolved in the function namespace
 			// only; variable bindings of the same name do not shadow it.
 			LispVal function = resolveFunction(sym.name());
-			List<LispVal> args = evalArgs(cons, env);
+			List<LispVal> args = evalArgs(cons, env, properLength - 1);
 			return apply(function, args, env);
 		}
 		// Non-symbol head: a lambda form such as ((lambda (x) x) 5)
 		LispVal function = eval(head, env);
-		List<LispVal> args = evalArgs(cons, env);
+		List<LispVal> args = evalArgs(cons, env, properLength - 1);
 		return apply(function, args, env);
 	}
 
@@ -9556,7 +9566,14 @@ public final class LispEvaluator {
 	}
 
 	private List<LispVal> evalArgs(LispCons cons, Environment env) {
-		List<LispVal> args = new ArrayList<>();
+		return evalArgs(cons, env, 10);
+	}
+
+	// The count is a capacity hint (evalCons already walked the form to check
+	// properness, so it knows the exact size); the loop still stops at the chain's
+	// actual end, so a form rewritten mid-evaluation merely re-grows the list.
+	private List<LispVal> evalArgs(LispCons cons, Environment env, int count) {
+		List<LispVal> args = new ArrayList<>(Math.max(count, 0));
 		LispVal rest = cons.cdr();
 		while (rest instanceof LispCons argCons) {
 			args.add(eval(argCons.car(), env));
