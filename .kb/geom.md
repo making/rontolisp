@@ -25,6 +25,9 @@ package, not a peer of it. Nothing may be added here that breaks that.
 survives rather than a hole in it: they are ANSI CL I/O on all four backends, and
 `LibraryDefunPruner` drops them from every program that does not call one, so the
 browser demo's module is measurably free of them. Nothing else here may do I/O.
+(The INTERPRETER runs a Java native for `read-obj` since 2026-08-31 --
+"The interpreter's native kernels" below -- but the defun is still the definition, and
+it is still what the other three backends run.)
 
 ## Wiring (the `linalg` pair, exactly)
 
@@ -36,6 +39,7 @@ browser demo's module is measurably free of them. Nothing else here may do I/O.
 | interpreter | `LispEvaluator.ensureGeomLoaded()` on the first `geom:`-qualified FUNCTION resolution, plus `ensureGeomClassesFor(form)` at the seven `ensureAsdfClassesFor` sites |
 | compile path | `cli/CompileFrontend`, `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`) so the `linalg:` references in the spliced geom bodies pull linalg in too, and `JsonLibrary.process` OUTSIDE both since 2026-08-31 -- `geom:read-gltf` parses through `rontolisp:json-parse`, so the geom splice introduces the reference Json must then rewrite; the browser playground repeats the nesting (a non-glTF geom program is byte-identical either way -- the json defuns prune back out, measured on `(print (geom:volume (geom:box 10)))`'s `.wasm`) |
 | pruning | `LibraryDefunPruner.prunableNames()` collects `GeomLibrary.forms()` |
+| interpreter natives | `eval/GeomKernels.install`, from `LispEvaluator.ensureGeomLoaded` right after the forms are evaluated ("The interpreter's native kernels" below) |
 | tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend`, `geom-csg-cross-backend`, `geom-scale-cross-backend`, `geom-read-model-cross-backend` and `geom-read-ply-gltf-cross-backend` (all four backends) |
 | docs | `doc/{en,ja}/guides/solid-modeling.md`, 63 pages under `reference/functions/geom-*.md` |
 
@@ -380,14 +384,105 @@ UNUSABLE: it answers the SYMBOL `|1.30E-2|` for exponent notation on the WASM
 backends, chokes on `#` and `|`, and reads `739/1` as a ratio -- and `json.lisp`
 already declines it for the second reason, that it drags the runtime reader into
 compiled output. `parse-integer` is no help either (5.2 us a call). So the scanner is
-`char-code`, like `json.lisp`'s, and the JVM backend is where a big model gets loaded
-fast.
+`char-code`, like `json.lisp`'s -- and since 2026-08-31 the interpreter does not run
+that scan at all for OBJ ("The interpreter's native kernels" below).
 
 **Two interpreter primitives are pathologically slow and were measured on the way
 past**: `position` on a string is **27.6 us a call** (a 46-character string!) against
 `subseq`'s 0.5 us and `char`'s 0.3 us, and `parse-integer` is 5.2 us. Both look like
 generic-sequence dispatch in Lisp rather than a Java builtin. Neither is on the
 readers' path any more, and neither has been investigated.
+
+### The interpreter's native kernels (2026-08-31)
+
+A user pointed a 155 MB scanned hand (1,062,622 v / 2,123,160 f) at the viewer: the
+compiled `.class` had it on screen in seconds and the interpreter had not finished
+after several minutes. Measured afterwards, the interpreter's load was **9 minutes**,
+and the scan was only 62% of it -- `mesh`, `wireframe`, `bounds` and the model-space
+extent the renderer sizes an axis triad by are four more loops that scale with the
+FILE, and none of the five had a faster spelling available IN LISP (see "Text parsing
+has no faster spelling available" above, which measured that). So `eval/GeomKernels`
+puts a Java native over them when `geom.lisp` loads.
+
+The mechanism is `LinalgSimd`'s interception seam verbatim (`.kb/linalg-simd.md`):
+`Environment.defineFunction` over the defun just evaluated, each native a PARTIAL
+function answering Java `null` for an input it declines, the wrapper then applying the
+defun it captured. What is accelerated:
+
+| member | what the native does |
+|---|---|
+| `geom:read-obj` | the whole line walk and number scan, packing straight into the `(n 3)` `single-float` array |
+| `geom:mesh` | the fan triangulation and Newell's normal per facet |
+| `geom:wireframe` | the edge walk, over an open-addressing `long` set instead of an `equal` hash table of conses |
+| `geom::%vertex-extremes` | the posed min/max, without materializing the transformed array |
+
+**It is ALWAYS ON, and `--simd` is not the precedent for that.** `--blas` and `--simd`
+are opt-in because a vendor gemm and a lane reduction REASSOCIATE, so which library is
+installed becomes part of the answer. Nothing here reassociates: every arithmetic step
+is the defun's step transcribed -- `%scan-number`'s mantissa accumulated in `double`
+and scaled once by `Math.pow` (which is what the interpreter's `expt` is for a float
+base), Newell's normal accumulated in `double` over widened `f32` reads, `%unit`'s
+normalization through the same narrow-then-widen chain `emap` / `sum` / `mul` puts it
+through, and the extremes walk narrowing exactly where `%la-matmul` and `%la-bcast`
+narrow. So there is no input on which installing them changes an answer, and a flag
+would only be a way to get the slow one.
+
+That claim is the whole licence for the design, so it is pinned twice: `GeomKernelsTest`
+runs every fixture down both paths -- natives installed, and `setGeomKernels(false)` --
+and compares the PRINTED values, which render a packed array element for element; and
+the `geom-read-model-cross-backend` ci-spec case still pins this interpreter against the
+JVM and both WASM backends, none of which has a native at all. **A native that rounds
+differently is a bug, not a tolerance.**
+
+Three `geom.lisp` splits made the seam possible, and each is a split rather than a
+rewrite -- a seam has to be a whole function to be replaceable:
+
+- **`geom::%solid-of-vertices`** -- the half of `%build-solid` past the packing, taking
+  a vertex ARRAY. A reader whose numbers came out of text one at a time never needed to
+  build a million three-element lists for `linalg:from-list` to walk back. That split
+  alone took `read-obj` on the hand from 4.2 s to 0.7 s.
+- **`geom::%vertex-extremes`** -- `%solid-bounds`'s `let*`, which posed every vertex
+  through `linalg:matmul` into a 12 MB array read once and thrown away.
+- **`geom::%model-extent`** -- the diagonal of the box a solid's own vertices span, with
+  no transform. `scene.lisp`'s `%gpu-buffers` calls it instead of the
+  `linalg:amax`/`amin` pair it used to fold the columns with (4.2 s on the hand, for a
+  number that sizes an axis triad). It is the ONE `geom::` internal `scene.lisp`
+  reaches for, and it is there because the public bounds API is world-space only.
+
+Measured on the hand, interpreter, Apple M4 Max (2026-08-31):
+
+| stage | defuns alone | with the natives | `-o Bench.class` |
+|---|---|---|---|
+| `geom:read-obj` (4.3M lines, 1.06M v, 2.12M f) | 333,707 ms | **724 ms** | 3,542 ms |
+| `geom:mesh` (2.12M facets) | 121,036 ms | **137 ms** | 902 ms |
+| `geom:wireframe` | 28,900 ms | **213 ms** | 1,157 ms |
+| `geom:bounds` | 26,242 ms | **16 ms** | 665 ms |
+| `geom::%model-extent` | 29,692 ms | **5 ms** | 539 ms |
+| **total** | **539,577 ms** | **1,193 ms** | **6,805 ms** |
+
+All three columns print the same bounds to the last digit
+(`#f(-82.854 -42.515068 -14.710137)` / `#f(56.905193 33.82035 228.78455)`), which is
+the bit-identity claim measured on a real file rather than a fixture.
+
+**The last column is the finding, and it inverts this file's own premise.** "The JVM
+backend is where a big model gets loaded fast" was true when both backends ran the same
+Lisp; it is not true now. The interpreter is **5.7x faster than the compiled class** on
+this load, because it stopped running the Lisp for those loops while the JVM
+backend still compiles `%scan-number`'s character loop and `%facet-normal`'s Newell sum
+into bytecode and runs them a few hundred million times. Closing that is todo-599 --
+the `JvmLinalgKernelCompiler` call-site pattern, applied to `geom:`.
+
+End to end, which is the thing that was actually asked for: the hand in a `scene:offscreen`
+viewer -- read, mesh, wireframe, bounds, extent, the GPU uploads and the first frame --
+is **1,920 ms** from a cold `java -jar`, and every frame after it is 26 ms. It renders
+(a hand on its plinth, over the grid); "no triangle is touched by Lisp during a frame"
+holds at 2.1M triangles exactly as it does at 69k.
+
+What is NOT accelerated: `read-stl`, `read-ply`, `read-gltf` (todo-597 -- the ASCII PLY
+is 7.3 s for a 3 MB file and is the next one worth doing), and every modelling verb.
+Those stay pure `geom.lisp` on all four backends. The natives cover the FILE-scaled
+loops and nothing else, which is why this is four `define` calls and not a Java geom
+library.
 
 ### What a real file taught, none of it a bug in the reader
 
@@ -590,11 +685,11 @@ keys it by name and the fixpoint reaches only what the program calls; the four
 `defclass` forms -- and, since todo-584, the two `defmethod print-object` forms -- are
 unkeyed and stay roots, which is the type model plus the printed representation and
 nothing more.
-Measured: `(print (geom:volume (geom:box 10)))` compiled to a `.class` carries 15 geom
+Measured: `(print (geom:volume (geom:box 10)))` compiled to a `.class` carries 16 geom
 methods (vec3, %unit, %identity-rotation, axis-vector, axis-angle-matrix, rpy-matrix,
-make-transform, %build-solid, mesh, %facet-normal, box, volume and the generated
-accessors) and none of cylinder / cone / sphere / torus / revolution / extrusion /
-wireframe / surface-area / centroid / bounds.
+make-transform, %build-solid, %solid-of-vertices, mesh, %facet-normal, box, volume and
+the generated accessors) and none of cylinder / cone / sphere / torus / revolution /
+extrusion / wireframe / surface-area / centroid / bounds.
 
 ## Cross-backend parity
 

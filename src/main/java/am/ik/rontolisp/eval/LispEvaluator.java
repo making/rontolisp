@@ -104,6 +104,13 @@ public final class LispEvaluator {
 
 	private boolean geomLibraryLoaded = false;
 
+	/**
+	 * Whether {@link GeomKernels} is installed over the geom.lisp defuns when the library
+	 * loads. On for every program; the one caller that turns it OFF is the test that
+	 * compares the two paths element for element, which needs the defuns as the oracle.
+	 */
+	private boolean geomKernels = true;
+
 	private boolean metalLibraryLoaded = false;
 
 	private boolean sceneLibraryLoaded = false;
@@ -724,6 +731,18 @@ public final class LispEvaluator {
 	 */
 	public void setSimd(boolean simd) {
 		this.simd = simd;
+	}
+
+	/**
+	 * Suppresses {@link GeomKernels}, so {@code geom:read-obj}, {@code geom:mesh} and
+	 * {@code geom:wireframe} run as the {@code geom.lisp} defuns alone. There is no flag
+	 * behind this and no reason for a program to ask for it: the natives answer what the
+	 * defuns answer, bit for bit. It exists so the test that PROVES that has an oracle to
+	 * compare against.
+	 * @param enabled whether to install the geom natives on the next geom load
+	 */
+	void setGeomKernels(boolean enabled) {
+		this.geomKernels = enabled;
 	}
 
 	/**
@@ -3560,7 +3579,14 @@ public final class LispEvaluator {
 
 	/**
 	 * Evaluates the {@code geom} library (geom.lisp -- solid modeling over linalg,
-	 * {@code GeomLibrary}) into the global environment once.
+	 * {@code GeomLibrary}) into the global environment once, then installs
+	 * {@link GeomKernels} over the three members a model FILE spends its load time in.
+	 *
+	 * <p>
+	 * The natives are not opt-in the way {@code --simd} is: each one is the defun's own
+	 * arithmetic transcribed and declines to the defun for anything it does not cover, so
+	 * there is no input on which enabling them changes an answer -- only inputs on which
+	 * they answer it two orders of magnitude sooner.
 	 */
 	private void ensureGeomLoaded() {
 		synchronized (this.libraryLoadLock) {
@@ -3570,6 +3596,9 @@ public final class LispEvaluator {
 			this.geomLibraryLoaded = true;
 			for (LispVal form : GeomLibrary.forms()) {
 				eval(form, this.globalEnv);
+			}
+			if (this.geomKernels) {
+				GeomKernels.install(this.globalEnv, this);
 			}
 		}
 	}
