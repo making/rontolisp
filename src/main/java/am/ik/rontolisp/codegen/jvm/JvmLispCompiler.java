@@ -88,6 +88,13 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final boolean simdAccel;
 
+	/**
+	 * Whether the {@code geom:} kernel bridge may be emitted ({@link #setGeomKernels}).
+	 * True in every build; the seam exists so the test that proves the bridge answers
+	 * what the defuns answer has an oracle to compile against.
+	 */
+	private boolean geomKernels = true;
+
 	private final boolean blasAccel;
 
 	private final boolean gpuAccel;
@@ -297,6 +304,19 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * ({@link JvmSimdVectorTemplate}) instead of the scalar {@code vec.lisp} reference.
 	 * Running such a class requires {@code java --add-modules jdk.incubator.vector}.
 	 */
+	/**
+	 * Suppresses {@link JvmGeomKernelCompiler}, so {@code geom:read-obj},
+	 * {@code geom:mesh}, {@code geom:wireframe} and {@code geom::%vertex-extremes} are
+	 * emitted as calls to the {@code geom.lisp} defuns alone and no bridge travels. There
+	 * is no flag behind this and no reason for a program to ask for it: the bridge
+	 * answers what the defuns answer, bit for bit. It exists so the test that PROVES that
+	 * has an oracle to compile against -- the interpreter's {@code setGeomKernels} twin.
+	 * @param enabled whether the geom kernel bridge may be emitted
+	 */
+	void setGeomKernels(boolean enabled) {
+		this.geomKernels = enabled;
+	}
+
 	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel) {
 		this(className, dynamic, optimize, simdAccel, false);
 	}
@@ -1642,6 +1662,25 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmGpuRuntimeBuilder.@Nullable GpuRuntime gpuRuntime = usesGpu
 				? JvmGpuRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
 
+		// The geom: kernels: no flag in front of them (the interpreter's natives have
+		// none either -- nothing here reassociates, .kb/geom.md), so the gate is the
+		// CALL SITE. The scan runs over the program the library splice and
+		// LibraryDefunPruner have already produced, so a program that never calls
+		// read-obj / mesh / wireframe / %vertex-extremes carries no bridge and is
+		// emitted byte for byte as before.
+		boolean usesGeom = false;
+		// --dynamic is excluded twice over: it skips LibraryDefunPruner (so the scan
+		// would see the whole spliced library and the gate would be a splice gate), and
+		// its whole point is that a call site honours a definition replaced at run time,
+		// which a kernel emitted over the defun would not.
+		if (this.geomKernels && !this.dynamic) {
+			for (String member : JvmGeomKernelCompiler.gateMembers()) {
+				usesGeom = usesGeom || programUsesSymbol(program, member);
+			}
+		}
+		final JvmGeomRuntimeBuilder.@Nullable GeomRuntime geomRuntime = usesGeom
+				? JvmGeomRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+
 		// Integer expression-tree fusion (.kb/jvm-int-fusion.md): the shared registry
 		// of outlined fused-site methods, plus the fusion-inlinable defuns -- uniquely
 		// defined one-liner integer wrappers (mod32+/rol32) whose bodies substitute
@@ -1781,6 +1820,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.blasOps(blasRuntime != null ? blasRuntime.ops() : null)
 			.gpuOps(gpuRuntime != null ? gpuRuntime.ops() : null)
+			.geomOps(geomRuntime != null ? geomRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.warnedClRedefinitions(new HashSet<>())
@@ -3054,6 +3094,16 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(gpuRuntime.initedFieldDesc())
 						.writeU2(0));
 				}
+				if (geomRuntime != null) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(geomRuntime.initedFieldName())
+						.writeU2(geomRuntime.initedFieldDesc())
+						.writeU2(0));
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(geomRuntime.availableFieldName())
+						.writeU2(geomRuntime.availableFieldDesc())
+						.writeU2(0));
+				}
 				if (usesEval) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(genvName)
@@ -3590,6 +3640,30 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(3)
 									.writeU2(3)
 									.writeCode((Object[]) gpuRuntime.unswapCode().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (geomRuntime != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+							geomRuntime.initName(), geomRuntime.initDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(geomRuntime.maxStack())
+									.writeU2(geomRuntime.maxLocals())
+									.writeCode((Object[]) geomRuntime.initCode().toArray(new Integer[0]))
+									.writeExceptionTable(geomRuntime.initExceptionTable())
+									.writeU2(0);
+							})));
+					// _geomReady(): whether the bridge define succeeded. False on a JRE
+					// older than the template's class version, so every accelerated call
+					// site declines to the spliced geom.lisp defun instead of resolving a
+					// method reference into a class that was never defined.
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, geomRuntime.readyName(),
+							geomRuntime.readyDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(1)
+									.writeU2(0)
+									.writeCode((Object[]) geomRuntime.readyCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -5427,6 +5501,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final @Nullable Map<String, MethodrefConstant> gpuOps;
 
+		/**
+		 * The {@code geom:} kernel bridge's references, or null when the program calls
+		 * none of the four accelerated members ({@link JvmGeomKernelCompiler}).
+		 */
+		final @Nullable Map<String, MethodrefConstant> geomOps;
+
 		Map<String, MethodrefConstant> numOps = Map.of();
 
 		Map<String, MethodrefConstant> mathOps = Map.of();
@@ -6102,6 +6182,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.simdOps = builder.simdOps;
 			this.blasOps = builder.blasOps;
 			this.gpuOps = builder.gpuOps;
+			this.geomOps = builder.geomOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -6274,6 +6355,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable Map<String, MethodrefConstant> blasOps;
 
 			private @Nullable Map<String, MethodrefConstant> gpuOps;
+
+			private @Nullable Map<String, MethodrefConstant> geomOps;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -6690,6 +6773,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder gpuOps(@Nullable Map<String, MethodrefConstant> gpuOps) {
 				this.gpuOps = gpuOps;
+				return this;
+			}
+
+			Builder geomOps(@Nullable Map<String, MethodrefConstant> geomOps) {
+				this.geomOps = geomOps;
 				return this;
 			}
 
