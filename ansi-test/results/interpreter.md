@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**8,610 / 17,983 tests pass (47.9%)** -- 2,958 fail, 6,415 signal an error.
+**8,610 / 17,982 tests pass (47.9%)** -- 2,958 fail, 6,414 signal an error.
 
-7 top-level forms could not be read, 1,934 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 1,935 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -26,14 +26,14 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | printer | 504 | 99 | 74 | 331 | 19.6% | 92 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 18 |
 | reader | 567 | 53 | 286 | 228 | 9.3% | 32 |
-| sequences | 2,454 | 1,707 | 217 | 530 | 69.6% | 849 |
+| sequences | 2,453 | 1,707 | 217 | 529 | 69.6% | 850 |
 | streams | 723 | 185 | 85 | 453 | 25.6% | 97 |
 | strings | 495 | 241 | 100 | 154 | 48.7% | 31 |
 | structures | 960 | 373 | 179 | 408 | 38.9% | 45 |
 | symbols | 1,135 | 757 | 303 | 75 | 66.7% | 26 |
 | system-construction | 58 | 20 | 4 | 34 | 34.5% | 35 |
 | types-and-classes | 613 | 262 | 237 | 114 | 42.7% | 30 |
-| **total** | **17,983** | **8,610** | **2,958** | **6,415** | **47.9%** | **1,944** |
+| **total** | **17,982** | **8,610** | **2,958** | **6,414** | **47.9%** | **1,945** |
 
 ## Most frequent failure reasons
 
@@ -42,7 +42,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 370 | `IllegalArgumentException: X expects keyword arguments :X, got: :X` |
 | 299 | `IllegalArgumentException: X expects keyword arguments :test/:test-not/:key, got: :X` |
 | 233 | `The variable *MINI-UNIVERSE* is unbound` |
-| 227 | `Function expects 1 argument, got 2` |
+| 228 | `Function expects 1 argument, got 2` |
 | 217 | `The function MAKE-PACKAGE is undefined` |
 | 200 | `The variable *UNIVERSE* is unbound` |
 | 153 | `X expects 1 arguments, got 2` |
@@ -59,7 +59,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 75 | `complex numbers are not supported (imaginary part X)` |
 | 68 | `The function FLOAT-RADIX is undefined` |
 | 65 | `The variable *FLOATS* is unbound` |
-| 64 | `X expects 1 arguments, got 5` |
+| 65 | `X expects 1 arguments, got 5` |
 | 63 | `Index 1 out of bounds for length 1` |
 | 63 | `The function CLASS-PRECEDENCE-LIST-FOO is undefined` |
 | 62 | `X is a macro or special operator, not a function` |
