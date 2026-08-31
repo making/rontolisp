@@ -8904,6 +8904,11 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(name)));
 	}
 
+	/** Builds a {@code (quote value)} form around an already-built datum. */
+	private static LispVal quotedValue(LispVal value) {
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), value));
+	}
+
 	/**
 	 * Like {@link #quoteOf}, but through {@link LispNames#UNSPELLED_QUOTE}: the symbol a
 	 * lowering SYNTHESIZES as a result value (a {@code type-of}/{@code class-of} type
@@ -18854,6 +18859,12 @@ public final class LispMacroExpander {
 		boolean changeClassRuntime = needsChangeClassRuntime(program);
 		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
 		boolean runtimeTypep = needsRuntimeTypep(program);
+		// A make-array whose :element-type is a runtime designator: the arms that
+		// dispatch it compare against the seven built-in spellings, so a deftype alias
+		// held in a VARIABLE needs the shared %make-array-et-alias resolver injected
+		// below. The surface fact is read HERE, on the source program, because the
+		// lowering that consumes it runs inside the expression compilers.
+		boolean runtimeElementTypeAlias = callsMakeArrayWithAnyRuntimeElementType(program);
 		boolean runtimeError = needsRuntimeErrorDispatch(program);
 		boolean restartMode = usesRestartSystem(program);
 		// The signal-point clause match (CLHS 9.1.4.1): on when the program both
@@ -19172,6 +19183,13 @@ public final class LispMacroExpander {
 			out.add(runtimeTypepDefun(closRegistry));
 			out.add(runtimeTypepCompoundDefun());
 			out.addAll(0, typepTagTableForms(closRegistry));
+		}
+		if (runtimeElementTypeAlias && !elementTypeAliasExpansions(closRegistry).isEmpty()) {
+			// The element-type alias resolver, injected once the walk above has
+			// registered every deftype. Position-independent like the dispatch defuns,
+			// and gated on BOTH halves -- a program with no runtime designator, or one
+			// whose aliases all upgrade to t, must compile to the bytes it did before.
+			out.add(elementTypeAliasDefun(closRegistry));
 		}
 		if (runtimeError) {
 			out.addAll(runtimeErrorDefuns(closRegistry, restartMode));
@@ -28803,8 +28821,11 @@ public final class LispMacroExpander {
 	 * <p>
 	 * The interpreter needs no lowering: its {@code make-array} already reads the
 	 * designator at run time, and resolves a user {@code deftype} alias through the
-	 * registry while doing so -- which neither the helper nor the arms below can, so an
-	 * alias held in a variable still reaches the general arm here.
+	 * registry while doing so. Neither the helper nor the arms below can do that -- they
+	 * compare against the seven built-in spellings -- so the designator is first routed
+	 * through {@link LispNames#MAKE_ARRAY_ET_ALIAS_INTERNAL}, the resolver
+	 * {@code expandTopLevelDefinitions} injects for a program that registers an alias
+	 * naming a specialized element type.
 	 * @param cons the make-array expression
 	 * @param helperAvailable whether the {@code %make-array-et} prelude defun is present
 	 * in the program being compiled (the selection can miss a call site injected after it
@@ -28830,6 +28851,14 @@ public final class LispMacroExpander {
 		}
 		if (elementType == null || !isRuntimeElementType(elementType)) {
 			return null;
+		}
+		if (definedFunction.test(LispNames.MAKE_ARRAY_ET_ALIAS_INTERNAL)) {
+			// A designator that names a user deftype is resolved through the shared
+			// resolver BEFORE the dispatch, so the arms below see the spelling the
+			// literal designator would have carried. One call, whatever the alias count
+			// -- and the wrap is gated on the defun existing, so a program with no such
+			// alias emits exactly what it did before.
+			elementType = mvCall(LispNames.MAKE_ARRAY_ET_ALIAS_INTERNAL, elementType);
 		}
 		boolean fillPointerShape = helperShapeIsFillPointer(others);
 		String helper = fillPointerShape ? LispNames.MAKE_ARRAY_ET_FP_INTERNAL : LispNames.MAKE_ARRAY_ET_INTERNAL;
@@ -28959,6 +28988,40 @@ public final class LispMacroExpander {
 		}
 		return callsMakeArrayWithRuntimeElementType(cons.car(), fillPointerShape)
 				|| callsMakeArrayWithRuntimeElementType(cons.cdr(), fillPointerShape);
+	}
+
+	/**
+	 * Whether the program has ANY {@code make-array} whose {@code :element-type} is a
+	 * runtime designator -- the helper-servable shapes and the ones that keep the inline
+	 * expansion alike. This is the {@code %make-array-et-alias} gate: the alias
+	 * resolution wraps the designator BEFORE the dispatch, so it serves both lowerings.
+	 * @param program the top-level forms
+	 * @return whether any call site takes a runtime designator
+	 */
+	private static boolean callsMakeArrayWithAnyRuntimeElementType(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (callsMakeArrayWithAnyRuntimeElementType(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean callsMakeArrayWithAnyRuntimeElementType(LispVal val) {
+		if (!(val instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(memberName(head.name()))) {
+			List<LispVal> parts = cons.toList();
+			for (int i = 2; i + 1 < parts.size(); i += 2) {
+				if (parts.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())
+						&& isRuntimeElementType(parts.get(i + 1))) {
+					return true;
+				}
+			}
+		}
+		return callsMakeArrayWithAnyRuntimeElementType(cons.car())
+				|| callsMakeArrayWithAnyRuntimeElementType(cons.cdr());
 	}
 
 	/** The member half of a possibly package-qualified symbol name. */
@@ -31610,6 +31673,76 @@ public final class LispMacroExpander {
 		}
 		return makeIf(objIs(var, List.copyOf(metaobjectTags)),
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), var, objRef(var, 0))), LispNil.INSTANCE);
+	}
+
+	/**
+	 * The registered {@code deftype} aliases a {@code make-array :element-type} arm can
+	 * tell apart from {@code t}: alias name to the CANONICAL spelling of the code its
+	 * expansion upgrades to, with alias chains already followed so the emitted form needs
+	 * one hop.
+	 *
+	 * <p>
+	 * This is the value-carrying half of {@link #resolveElementTypeAlias}: a designator
+	 * spelled literally at a call site is resolved by the recognizer that reads it, but
+	 * one held in a VARIABLE reaches no recognizer, so the table has to exist in the
+	 * emitted program too.
+	 *
+	 * <p>
+	 * The narrowing to element-type aliases is the measurement (2026-08-31,
+	 * {@code .kb/array-literals.md}). The full alias table is not a cheap thing to carry:
+	 * alexandria alone registers 43 aliases -- its whole {@code positive-fixnum} /
+	 * {@code non-negative-double-float} zoo -- and one arm each is ~220 bytes of wasm, so
+	 * a general resolver cost array-operations 9.5 KB (+10%) to answer a question the
+	 * seven arms cannot even distinguish: every one of those 43 upgrades to {@code t},
+	 * which is exactly where an unresolved designator already lands. Only an alias naming
+	 * one of the six SPECIALIZED codes changes an answer, and real sources register those
+	 * one or two at a time ({@code octet}, {@code simple-octet-vector}).
+	 * @param registry the registry holding the {@code deftype} expansions, or null
+	 * @return alias name to canonical element-type spelling, in registration order
+	 */
+	private static java.util.Map<String, LispVal> elementTypeAliasExpansions(@Nullable ClosRegistry registry) {
+		if (registry == null) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, LispVal> table = new java.util.LinkedHashMap<>();
+		for (String name : registry.deftypeNames()) {
+			LispVal expansion = resolveElementTypeAlias(new LispSymbol(name), registry);
+			if (expansion == null || (expansion instanceof LispSymbol sym && sym.name().equals(name))) {
+				continue;
+			}
+			int code = ArrayElementTypes.codeOf(expansion);
+			if (code != ArrayElementTypes.T) {
+				table.put(name, ArrayElementTypes.valueOf(code));
+			}
+		}
+		return table;
+	}
+
+	/**
+	 * Builds the shared {@code (defun %make-array-et-alias (x) ...)} the compile paths
+	 * route a RUNTIME {@code :element-type} designator through before the dispatch: one
+	 * arm per alias of {@link #elementTypeAliasExpansions}, answering the canonical
+	 * spelling of the type it names, and the designator itself otherwise.
+	 *
+	 * <p>
+	 * It is a defun rather than an expansion at each call site for
+	 * {@code %make-array-et}'s reason: the alias set is program-wide, so spelling it per
+	 * site multiplies it by the site count (and wasm emits every arm inline). Gated so a
+	 * program with no runtime designator -- or none of these aliases -- compiles to
+	 * exactly the bytes it did before.
+	 * @param closRegistry the registry holding the {@code deftype} expansions
+	 * @return the defun form
+	 */
+	private static LispVal elementTypeAliasDefun(ClosRegistry closRegistry) {
+		LispSymbol x = new LispSymbol("%mea_x");
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		for (java.util.Map.Entry<String, LispVal> alias : elementTypeAliasExpansions(closRegistry).entrySet()) {
+			condParts.add(listToCons(List.of(nameMatchTest(x, alias.getKey()), quotedValue(alias.getValue()))));
+		}
+		condParts.add(listToCons(List.of(LispTrue.INSTANCE, x)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispNames.MAKE_ARRAY_ET_ALIAS_INTERNAL), listToCons(List.of(x)), listToCons(condParts)));
 	}
 
 	/**

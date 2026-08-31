@@ -14382,6 +14382,37 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileRuntimeElementTypeResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's
+		// evalRuntimeElementTypeResolvesADeftypeAlias, and the same program: a deftype
+		// alias held in a VARIABLE picks the representation its expansion designates.
+		// The designator goes through the injected %make-array-et-alias resolver before
+		// the %make-array-et dispatch, so a chain and the :fill-pointer shape are
+		// covered too.
+		assertThat(compileAndRun("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype char-buf () 'character)
+				(defun mk (et n) (make-array n :element-type et))
+				(defun mkfp (et) (make-array 4 :element-type et :fill-pointer 2))
+				(print (list (array-element-type (mk 'octet 4))
+				             (aref (mk 'octet 4) 0)
+				             (type-of (mk 'byte-buffer 4))
+				             (stringp (mk 'char-buf 3))
+				             (array-element-type (mkfp 'octet))
+				             (array-element-type (mk 'double-float 2))))
+				"""))
+			.isEqualTo("((UNSIGNED-BYTE 8) 0 (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) T (UNSIGNED-BYTE 8) DOUBLE-FLOAT)");
+		// A designator naming no alias is left alone, and a self-referential deftype
+		// terminates on the hop bound instead of spinning.
+		assertThat(compileAndRun("""
+				(deftype loopy () 'loopy)
+				(defun mk (et) (make-array 2 :element-type et))
+				(print (list (array-element-type (mk 'not-a-type)) (array-element-type (mk 'loopy))))
+				""")).isEqualTo("(T T)");
+	}
+
+	@Test
 	void compileMakeArrayEvaluatesItsDimensionsExactlyOnce() throws Exception {
 		// Same contract as the interpreter's
 		// evalMakeArrayEvaluatesItsDimensionsExactlyOnce: the character branch's
