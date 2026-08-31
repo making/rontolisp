@@ -67,6 +67,19 @@ final class JavaBridgeTemplate {
 	 */
 	private static @Nullable Method applyMethod;
 
+	/**
+	 * The generated program's {@code _strv(Object)} character-vector renderer, or null
+	 * when the program carries no array runtime (then no mutable character vector can
+	 * exist). Bound reflectively beside {@code _apply}: a string a program builds with
+	 * {@code concatenate} / {@code format nil} / the case family is a MUTABLE character
+	 * vector on this backend ({@code .kb/string-write-runtime.md}), and every string this
+	 * bridge accepts funnels through {@link #lispString(Object)}, which renders it once
+	 * here -- the same one-chokepoint rule the IO/socket/fetch runtimes follow, without
+	 * adding a class to the travelling blob or duplicating the representation walk
+	 * {@code _strv} owns.
+	 */
+	private static @Nullable Method strvMethod;
+
 	private JavaBridgeTemplate() {
 	}
 
@@ -83,6 +96,15 @@ final class JavaBridgeTemplate {
 		}
 		catch (NoSuchMethodException ex) {
 			throw new RuntimeException("java interop: no _apply method in " + mainClass.getName());
+		}
+		try {
+			Method strv = mainClass.getDeclaredMethod("_strv", Object.class);
+			strv.setAccessible(true);
+			strvMethod = strv;
+		}
+		catch (NoSuchMethodException ex) {
+			// No array runtime in this program: no character vector can exist.
+			strvMethod = null;
 		}
 	}
 
@@ -389,6 +411,10 @@ final class JavaBridgeTemplate {
 	// overload selection and actual marshalling, mirroring eval/JavaInterop over the
 	// compiled value representation.
 	private static int marshal(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index) {
+		// A mutable character vector marshals as the string it spells: rendered once
+		// here, the single source of truth for every argument position (fixed arity,
+		// varargs and constructors alike).
+		value = rendered(value);
 		if (value == null) { // nil
 			if (target == boolean.class || target == Boolean.class) {
 				out[index] = Boolean.FALSE;
@@ -655,9 +681,30 @@ final class JavaBridgeTemplate {
 		return v instanceof String s && !s.isEmpty() && s.charAt(0) == '"';
 	}
 
-	/** The unquoted value when {@code v} is a Lisp string, otherwise null. */
+	/**
+	 * The unquoted value when {@code v} is a Lisp string -- a mutable character vector
+	 * rendered first -- otherwise null.
+	 */
 	private static @Nullable String lispString(@Nullable Object v) {
-		return v instanceof String s && isLispString(s) ? stringValue(s) : null;
+		return rendered(v) instanceof String s && isLispString(s) ? stringValue(s) : null;
+	}
+
+	/**
+	 * The value with a mutable character vector rendered to its quote-framed string;
+	 * anything else (including an {@code ArrayList} that is not a character vector, which
+	 * {@code _strv} passes through) is returned as it is.
+	 */
+	private static @Nullable Object rendered(@Nullable Object v) {
+		Method strv = strvMethod;
+		if (strv != null && v instanceof ArrayList) {
+			try {
+				return strv.invoke(null, v);
+			}
+			catch (ReflectiveOperationException ex) {
+				return v;
+			}
+		}
+		return v;
 	}
 
 	private static String stringValue(String s) {

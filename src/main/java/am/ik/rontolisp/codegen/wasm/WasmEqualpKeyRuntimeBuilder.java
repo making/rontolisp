@@ -123,6 +123,14 @@ final class WasmEqualpKeyRuntimeBuilder {
 		adjustDepth(w, gasGlobalIndex, Instruction.I32_SUB);
 		adjustDepth(w, depthGlobalIndex, Instruction.I32_ADD);
 
+		// A mutable character vector renders to its quote-framed string FIRST, so a
+		// producer-built key (concatenate, format nil) takes the framed-string fold
+		// below and two equal-content keys collide -- _hash already folds them alike,
+		// and without this the vector fell to the "its own key" arm and never matched.
+		getLocal(w, 0);
+		WasmEmitHelper.emitCharvecToStrCall(w);
+		setLocal(w, 0);
+
 		// A framed string -> _string_upcase
 		refTest(w, WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF);

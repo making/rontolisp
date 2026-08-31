@@ -32,6 +32,10 @@ final class JvmGetenvCompiler {
 		final int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
 
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className); // [s]
+		// A variable name built by a string producer (concatenate, format nil) is a
+		// mutable character vector: render it before the (String) cast (a no-op
+		// without the array runtime).
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		// name = s.substring(1, s.length() - 1)

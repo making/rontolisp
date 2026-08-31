@@ -303,6 +303,54 @@ to `%string-concat` (the wrapped merge re-converted every intermediate: JVM
 json-stringify 116 -> 245 ms before, 83 ms after -- faster than baseline) and
 `%json-stringify` hands its one caller-visible result through `copy-seq`.
 
+**The OUT-OF-MODEL boundary set, enumerated (third round, after the consolidated
+pass caught the FFM and Objective-C bridges).** Every place a compiled program hands
+a string to something outside the Lisp value model, with its normalization status:
+
+- `ffi:` (FFM) -- `JvmFfiTemplate.lispString` renders through a REFLECTIVELY BOUND
+  `_strv` (`strvMethod`, looked up beside `_apply` in `bind`; absent exactly when the
+  program has no array runtime, which is exactly when no character vector can exist).
+  Every string the bridge accepts -- `ffi:open`/`ffi:symbol` names, `:string` call
+  arguments, `bufferBytes` -- funnels through it. The reflective hook, not an
+  in-template renderer, because `_strv` is the single authority on the representation
+  (headers, fill pointers, displaced views) and the template travels: duplicating the
+  walk in an embedded class is drift waiting to happen, and adding a helper class to
+  the blob would mean travel-list and verifier-order changes for nothing.
+- `objc:` -- `JvmObjcTemplate.lispString`, the identical hook (class names,
+  selectors, `objc:string` content, `objc:data` buffers). The appkit/metal/scene
+  libraries are Lisp over these verbs and are covered by the same funnel.
+- `java:` interop -- `JavaBridgeTemplate.lispString` (class/method/field names) AND
+  `marshal` (the single source of truth for every ARGUMENT position, fixed arity,
+  varargs and constructors), both rendering through the same hook.
+- `uiop:getenv` -- the JVM `%host-getenv` lowering mints `_strv` before its
+  `(String)` cast (`JvmGetenvCompiler`); the WASM one renders before `_getenv`'s
+  `TYPE_STRING` read (`WasmGetenvCompiler`).
+- The `equalp` hash-key fold -- the key renders BEFORE the fold on both compiled
+  backends (`JvmHashRuntimeBuilder`'s `_hashKey` before the travelling
+  `RontoHashTable.equalpKey`, which knows the value model but deliberately not the
+  array representation; `WasmEqualpKeyRuntimeBuilder` at the fold's entry), so a
+  producer-built key collides with the literal spelling. `equal` tables were already
+  covered by `_hash`/`_equal`'s entry normalization.
+- jvm-export (and the Maven plugin / servlet entry points over it) -- `_exStr`
+  renders before its frame check; the request/response transport boundary renders in
+  Lisp (`%http-header-name`/`-value`/`%http-join-strings`).
+- File system and streams -- `JvmIoRuntimeBuilder`'s strip-quote sites, `load`,
+  sockets, fetch: all mint `_strv` (the earlier rounds).
+- WIT / component -- `emitStageStringParam` and `_str_to_mem` normalize every host
+  crossing; `%str-byte-*` the socket bytes.
+- GPU (`am.ik.gpu` / the linalg kernels) -- CANNOT receive a Lisp string: the device
+  seam is numeric end to end, and `--gpu` device selection is CLI-level.
+- `Runtime.exec`-shaped calls -- none exist in the emitted runtimes.
+- `symbol-name`/`intern`/`make-symbol` -- normalize at their compile sites
+  (`JvmSymbolApiCompiler`, the WASM intern funnel).
+
+Pinned by `JvmFfiInteropCompilerTest.aProducerBuiltStringCrossesTheFfiBoundary`,
+`JvmObjcInteropCompilerTest.aProducerBuiltStringCrossesTheObjcBoundary`, the
+producer rows in `JvmJavaInteropCompilerTest.staticCall`, the
+`compileAProducerBuiltStringFoldsAsAnEqualpHashKey` twins, and the equalp row of the
+`string-identity-cross-backend` ci-spec case; `examples/jvm/cffi-sqlite.lisp` and
+`examples/macos/system-frameworks.lisp` are the end-to-end canaries.
+
 **What it costs, measured 2026-08-31 (Apple M4 Max, one locked run, min of two
 passes, each row its own defun, the integer control unmoved; baseline -> flipped,
 ms):** JVM: json-parse 47 -> 41, json-stringify 135 -> 90 (the `%json-pairs` fix --

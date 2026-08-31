@@ -453,6 +453,11 @@ alphabetical order died in `defineClass` with `NoClassDefFoundError`). **The blo
 UPCALLS into the program**: a `define-class` method and an `on-main` body are applied
 through `_apply`, handed over by `bind(Class)` from `_objcInit` (the `java:proxy`
 precedent), which is why `usesObjc` forces `usesEval` and roots `_apply` for the shaker.
+`bind` hands over `_strv` the same way (nullable -- absent exactly when the program has
+no array runtime): every string the template accepts funnels through its `lispString`,
+which renders a mutable character vector once there, so a `concatenate`/`format nil`
+result names a class, a selector or an NSString like a literal does
+(`.kb/string-write-runtime.md`, the boundary-set paragraph).
 **The gate is the nine verbs**, qualified, and `appkit.lisp` reaches them: `AppKitLibrary
 .process` splices the widget layer on the compile path (`CompileFrontend`, beside
 `LinalgLibrary`; pruned to what the program calls like every library), so an `appkit:`

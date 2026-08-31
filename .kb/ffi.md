@@ -122,7 +122,12 @@ the pointer value (`JvmFfiHandle`, `LispForeignPointer`'s twin: prints
 defined lazily by the emitted `_ffiInit`; the gate is any `ffi:` verb surviving load
 inlining (`programUsesAnyFfiOp`), which a `cffi:` program passes through the spliced
 backend. An `ffi:callback` applies its Lisp function through `_apply` (so `usesFfi`
-forces the eval runtime and roots `_apply` in the shaker), and the compiled printer
+forces the eval runtime and roots `_apply` in the shaker) -- and `bind` hands over
+`_strv` beside it (nullable, absent without the array runtime), through which the
+template's `lispString` renders a mutable character vector once, so a
+`concatenate`/`format nil` result names a library, a symbol or a `:string` argument
+like a literal does (`.kb/string-write-runtime.md`, the boundary-set paragraph) --
+and the compiled printer
 gains an `_ffiInited`-guarded print hook beside the objc one. In a native image the
 verbs interpret against the registered shape grid above. The browser build cuts the
 whole binding by substituting `FfiInterop`'s three bridge-touching methods

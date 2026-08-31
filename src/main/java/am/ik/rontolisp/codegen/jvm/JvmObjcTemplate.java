@@ -71,6 +71,19 @@ final class JvmObjcTemplate {
 	 */
 	private static @Nullable Method applyMethod;
 
+	/**
+	 * The generated program's {@code _strv(Object)} character-vector renderer, or null
+	 * when the program carries no array runtime (then no mutable character vector can
+	 * exist). Bound reflectively beside {@code _apply}: a string a program builds with
+	 * {@code concatenate} / {@code format nil} / the case family is a MUTABLE character
+	 * vector on this backend ({@code .kb/string-write-runtime.md}), and every string this
+	 * bridge accepts funnels through {@link #lispString(Object)}, which renders it once
+	 * here -- the same one-chokepoint rule the IO/socket/fetch runtimes follow, without
+	 * adding a class to the travelling blob or duplicating the representation walk
+	 * {@code _strv} owns.
+	 */
+	private static @Nullable Method strvMethod;
+
 	private JvmObjcTemplate() {
 	}
 
@@ -87,6 +100,15 @@ final class JvmObjcTemplate {
 		}
 		catch (NoSuchMethodException ex) {
 			throw new RuntimeException("objc: no _apply method in " + mainClass.getName());
+		}
+		try {
+			Method strv = mainClass.getDeclaredMethod("_strv", Object.class);
+			strv.setAccessible(true);
+			strvMethod = strv;
+		}
+		catch (NoSuchMethodException ex) {
+			// No array runtime in this program: no character vector can exist.
+			strvMethod = null;
 		}
 		ObjcClasses.onError(ex -> System.err.println("objc: error in a callback: " + message(ex)));
 	}
@@ -557,9 +579,30 @@ final class JvmObjcTemplate {
 		return v instanceof String s && !s.isEmpty() && s.charAt(0) == '"';
 	}
 
-	/** The unquoted value when {@code v} is a Lisp string, otherwise null. */
+	/**
+	 * The unquoted value when {@code v} is a Lisp string -- a mutable character vector
+	 * rendered first -- otherwise null.
+	 */
 	private static @Nullable String lispString(@Nullable Object v) {
-		return v instanceof String s && isLispString(s) ? s.substring(1, s.length() - 1) : null;
+		return rendered(v) instanceof String s && isLispString(s) ? s.substring(1, s.length() - 1) : null;
+	}
+
+	/**
+	 * The value with a mutable character vector rendered to its quote-framed string;
+	 * anything else (including an {@code ArrayList} that is not a character vector, which
+	 * {@code _strv} passes through) is returned as it is.
+	 */
+	private static @Nullable Object rendered(@Nullable Object v) {
+		Method strv = strvMethod;
+		if (strv != null && v instanceof ArrayList) {
+			try {
+				return strv.invoke(null, v);
+			}
+			catch (ReflectiveOperationException ex) {
+				return v;
+			}
+		}
+		return v;
 	}
 
 	private static String quote(String s) {
