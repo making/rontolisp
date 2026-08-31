@@ -15,10 +15,13 @@ SHA-256 working buffers stay unboxed on the wasm-GC backend.
 The rank-n fallback is the general rule for every specialized element type
 EXCEPT the packed floats, which pack at any rank: since todo-607 the CHARACTER
 element type degrades the same way (`.kb/array-literals.md`, "A SPECIALIZED
-element type above rank 1 is the general array"). What the two degrades do NOT
-yet agree on is the fill for an unsupplied element -- a rank-n character array
-gets `#\Space`, a rank-n `(unsigned-byte 8)` array gets `nil` where SBCL gives
-`0` (`.todo/611`).
+element type above rank 1 is the general array"). What degrades is the
+REPRESENTATION only -- since todo-611 the general array REMEMBERS the element
+type it was asked for, so a rank-n `(unsigned-byte 8)` array answers
+`(UNSIGNED-BYTE 8)` from `array-element-type` and fills its unsupplied elements
+with `0`, exactly as the rank-n character array answers `CHARACTER` and fills
+with `#\Space` (`.kb/array-literals.md`, "The degraded array REMEMBERS its
+element type").
 
 ## "Literal" includes a `deftype` alias of one
 

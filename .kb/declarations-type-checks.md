@@ -331,19 +331,29 @@ Where this lives and why:
   guard is what keeps CHARACTER arrays out: a rank-1 character array is a
   string VALUE on the interpreter and a marked general array on the compile
   paths, and both DESIGNATE `STRING` -- so all four answer `STRING` rather than
-  diverging. The SIMPLICITY arm is tested FIRST (todo-610): a non-simple array
-  is `(VECTOR et size)` at rank 1 and `(ARRAY et dims)` above it, whatever its
-  element type, which is SBCL's answer for a fill-pointered, an `:adjustable`
-  and a DISPLACED array alike. It asks `%simple-array-p`, one total predicate,
-  rather than `array-has-fill-pointer-p`/`adjustable-array-p` -- those REFUSE a
-  packed array on the compile backends and cannot see a displacement at all,
-  which is why a displaced array used to answer `(SIMPLE-VECTOR 2)` here.
-- **`array-element-type` answers the BOOLEAN `t`** for a general array, on the
-  interpreter too since todo-604 -- it used to answer a SYMBOL spelled `"T"`
-  there while all three compile backends answered the boolean, so
-  `(eq (array-element-type a) t)` disagreed across backends. `type-of` reads
-  exactly that answer to choose between `(simple-vector n)` and
-  `(simple-array et dims)`.
+  diverging. The SIMPLICITY arm is tested FIRST -- since todo-611 because a
+  remembered element type and a fill pointer can coexist
+  (`(make-array 4 :element-type 'double-float :fill-pointer 0)` is
+  `(VECTOR DOUBLE-FLOAT 4)`, not a `simple-array`), and since todo-610 because
+  the DISPLACEMENT belongs in the same answer: a non-simple array is
+  `(VECTOR et size)` at rank 1 and `(ARRAY et dims)` above it, whatever it
+  holds, which is SBCL's answer for a fill-pointered, an `:adjustable` and a
+  displaced array alike. It asks `%simple-array-p`, ONE total predicate, rather
+  than `array-has-fill-pointer-p`/`adjustable-array-p`: those two became safe
+  for a packed array in todo-611 (they answer nil, what CL says of a simple
+  array and what the interpreter always answered while the JVM threw and wasm
+  trapped), but neither can see a displacement at all -- which is why a
+  displaced array used to answer `(SIMPLE-VECTOR 2)` here.
+- **`array-element-type` answers the BOOLEAN `t`** for a general array asked for
+  nothing narrower, on the interpreter too since todo-604 -- it used to answer a
+  SYMBOL spelled `"T"` there while all three compile backends answered the
+  boolean, so `(eq (array-element-type a) t)` disagreed across backends.
+  `type-of` reads exactly that answer to choose between `(simple-vector n)` and
+  `(simple-array et dims)`. Since todo-611 a general array that WAS asked for a
+  narrower type -- `character` or `(unsigned-byte n)` above rank 1, any of them
+  with `:fill-pointer`/`:adjustable` -- answers that type instead, so the
+  `simple-array` arm carries a real element type where it used to carry `t`
+  (`.kb/array-literals.md`, "The degraded array REMEMBERS its element type").
 - **`makeArrayTypeTest`** (`LispMacroExpander`) builds the test for
   `(array ET DIMS)` / `(simple-array ET DIMS)` / `(vector ET SIZE)` /
   `(simple-vector SIZE)`. It is the union of a STRING arm and an ARRAY arm,
@@ -473,9 +483,10 @@ The rank-n (n>1) CHARACTER array this did NOT close -- a general array on the
 interpreter, a character-marked array on wasm, a `make-array` REFUSAL on the
 JVM -- was closed by todo-607 the same day: above rank 1 a character element
 type selects no representation of its own on ANY backend, so the value is the
-plain general array and `type-of` answers `(SIMPLE-ARRAY T dims)` everywhere.
-The model and its cost are `.kb/array-literals.md`, "A SPECIALIZED element type
-above rank 1 is the general array".
+plain general array -- which since todo-611 still REMEMBERS the element type, so
+`type-of` answers `(SIMPLE-ARRAY CHARACTER dims)` everywhere. The model and its
+cost are `.kb/array-literals.md`, "A SPECIALIZED element type above rank 1 is the
+general array" and "The degraded array REMEMBERS its element type".
 
 ## The COMPOUND half of `subtypep` (todo-608)
 
@@ -623,16 +634,20 @@ todo-609 had just fixed on the `subtypep` side.
 `(and (not (array-has-fill-pointer-p x)) (not (adjustable-array-p x))
 (not (%array-disp-target x)))`, is not total, measured 2026-08-31:
 
-- `array-has-fill-pointer-p` / `adjustable-array-p` REFUSE a packed vector on
-  the compile backends (JVM: `not applicable to a packed integer vector`;
-  wasm: a cast trap) -- and a packed array is simple by construction, so the
-  right answer is `t`, not an error.
+- `array-has-fill-pointer-p` / `adjustable-array-p` REFUSED a packed vector on
+  the compile backends (JVM: `not applicable to a packed integer vector`; wasm:
+  a cast trap) where the right answer is `t` -- a packed array is simple by
+  construction. todo-611 fixed exactly that pair the same day, so this half of
+  the argument is now history; the two below are not.
 - `%array-disp-target` casts its argument to the general array shape, so it
-  throws on a plain string and on a packed vector.
+  throws on a plain string and on a packed vector -- and the displacement is the
+  one condition of the three the public surface cannot be asked about at all.
 - A value can be BOTH `stringp` and `%arrayp` (a character vector on the
   compile backends) or neither predicate's representation (an interpreter
   `LispString` is not `%arrayp`), so no ordering of the guards covers every
   backend.
+- Three calls answer what one does, at four call sites (`typep`, `type-of`,
+  `simple-string-p`, `coerce`) that must not drift apart.
 
 So `%simple-array-p` (`LispNames.SIMPLE_ARRAY_P_INTERNAL`, `CL_INTERNALS`) is
 TOTAL: it answers `t` for a simple array or string, `nil` for a non-simple one

@@ -1230,7 +1230,7 @@ final class JvmExprCompiler {
 				case LispNames.ARRAY_HAS_FILL_POINTER_P -> JvmArrayCompiler.compileHasFillPointer(cons, ctx, className);
 				case LispNames.ADJUSTABLE_ARRAY_P -> JvmArrayCompiler.compileAdjustableArrayP(cons, ctx, className);
 				case LispNames.ARRAY_ELEMENT_TYPE -> {
-					if (ctx.usesFloatArray || ctx.usesIntArray) {
+					if (ctx.usesFloatArray || ctx.usesIntArray || ctx.usesTypedArray) {
 						JvmArrayCompiler.compileElementType(cons, ctx, className);
 					}
 					else {

@@ -666,7 +666,13 @@ An array is still a `java.util.ArrayList`, but slot 0 now holds a header
 `Object[]{dims, fillPointer, adjustable}` -- `dims` the `Object[]` of Long
 dimension sizes (length = rank), `fillPointer` a `Long` or null, `adjustable`
 the RAW `:adjustable` argument (null = nil; kept verbatim so
-`_adjustableArrayP` is a null test). Data stays at slots `1..` (the `1 + flat`
+`_adjustableArrayP` is a null test). Since todo-611 a header may carry a fourth
+fact in SLOT 4, the REMEMBERED element type (`_arrayMakeTyped`, read by
+`_arrayElementType`); slot 4 is free on every non-displaced array because slot 3
+-- the displacement target -- is what says whether it holds an offset instead, so
+the ordinary header grows to length 5 for it and no length TAG below moved
+(`.kb/array-literals.md`, "The degraded array REMEMBERS its element type"). Data
+stays at slots `1..` (the `1 + flat`
 offset in `_aref*`/`_aset*` is untouched); every dims reader gained one extra
 `aaload 0` (`emitFlat2`, `emitFlatN`, `_arrayDims`, `buildToString`,
 `JvmLengthRuntimeBuilder`). BOTH header producers build the wrapper:
@@ -691,7 +697,9 @@ SBCL's is (~3 -> ~12 ns), taking `.todo/517`'s top-level `aref` row from 1.22 s
 to 0.51 s against SBCL's 0.26-0.29. The mechanics:
 
 - The tag is the header LENGTH: 3 = ordinary boxed, 4 = character vector,
-  5 = displaced, **6 = packed**, 7 = displaced STRING VIEW. `emitResolveDisplacement`'s loop already ends
+  5 = displaced OR ordinary boxed WITH a remembered element type (told apart by
+  slot 3, exactly as they always were), **6 = packed** (slot 4 free for the
+  remembered element type, so packing survives it), 7 = displaced STRING VIEW. `emitResolveDisplacement`'s loop already ends
   on the null `header[3]`, so a packed header never reads as a displacement,
   and `_strv`/`stringp`'s `length == 4` test never sees it as a character
   vector. `_arrayDispOffset` gained a `header[3] != null` test (length > 4
@@ -702,8 +710,10 @@ to 0.51 s against SBCL's 0.26-0.29. The mechanics:
   `arraylength` compare): packed reads `data[idx-1]` (sentinel -> nil), packed
   stores write an in-range `Long` unboxed.
 - The first store that cannot pack (a non-integer, or the sentinel integer)
-  calls **`_arrayWiden`**: the header is replaced by the ordinary length-3
-  shape and every `long[]` element is appended boxed (sentinel as null). The
+  calls **`_arrayWiden`**: the header is replaced by a length-5
+  `{dims, null, null, null, et}` -- slot 4 carried over, so a widened array still
+  answers the element type it was asked for -- and every `long[]` element is
+  appended boxed (sentinel as null). The
   ArrayList object IS the array's identity, so every alias sees the widened
   array -- widening is invisible, one O(n) copy, once. `_arrayBecome` widens
   both operands up front (its element copy is `size()`-based) and

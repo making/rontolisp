@@ -318,7 +318,7 @@ cases:
       #(44 2 3)
       (#(1 2 44) (UNSIGNED-BYTE 32))
       (231 #(1 231 3))
-      T
+      (UNSIGNED-BYTE 8)
       #(1732584193 4023233417 2225363975 255870178 1578413049 1761846468 178639645 2993401642)
   - name: make-array-element-type-deftype-alias
     source: |
@@ -13426,13 +13426,49 @@ standalone:
           (let ((cer-k (make-array (cer-bump) :element-type 'character :initial-element #\k)))
             (print (list cer-k cer-n)))))
     stdout: |
-      (NIL T (2 2) (SIMPLE-ARRAY T (2 2)) NIL)
+      (NIL CHARACTER (2 2) (SIMPLE-ARRAY CHARACTER (2 2)) NIL)
       #2A((#\a #\a) (#\a #\z))
       #\Space
-      (NIL #\c (SIMPLE-ARRAY T (2 2)))
+      (NIL #\c (SIMPLE-ARRAY CHARACTER (2 2)))
       (T CHARACTER STRING "zzz")
       (0.0 0.0)
       ("kkk" 1)
+  - name: general-array-remembers-its-element-type
+    source: |
+      (defun ret-probe (a) (list (array-element-type a) (type-of a)))
+      (print (ret-probe (make-array '(2 2) :element-type '(unsigned-byte 8))))
+      (print (ret-probe (make-array '(2 3) :element-type 'character :initial-element #\a)))
+      (print (ret-probe (make-array 4 :element-type 'double-float :fill-pointer 0)))
+      (print (ret-probe (make-array 4 :element-type '(unsigned-byte 16) :adjustable t)))
+      (print (ret-probe (make-array 3 :element-type '(unsigned-byte 32))))
+      (print (ret-probe (make-array 3)))
+      (print (list (aref (make-array '(2 2) :element-type '(unsigned-byte 8)) 0 0)
+                   (aref (make-array 3 :element-type '(unsigned-byte 16) :adjustable t) 2)
+                   (aref (make-array 3 :element-type 'double-float :adjustable t) 0)))
+      (print (list (typep (make-array '(2 2) :element-type '(unsigned-byte 8))
+                          '(simple-array (unsigned-byte 8) (2 2)))
+                   (typep (make-array 4 :element-type 'double-float :fill-pointer 0)
+                          '(vector double-float 4))
+                   (let ((ret-a (make-array '(2 2) :element-type 'character :initial-element #\a)))
+                     (typep ret-a (type-of ret-a)))))
+      (let ((ret-v (make-array 2 :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
+        (vector-push-extend 7 ret-v)
+        (vector-push-extend 8 ret-v)
+        (vector-push-extend 9 ret-v)
+        (print (list ret-v (array-element-type ret-v) (fill-pointer ret-v))))
+      (print (list (array-has-fill-pointer-p (make-array 4 :element-type 'double-float))
+                   (adjustable-array-p (make-array 4 :element-type '(unsigned-byte 8)))))
+    stdout: |
+      ((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (2 2)))
+      (CHARACTER (SIMPLE-ARRAY CHARACTER (2 3)))
+      (DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
+      ((UNSIGNED-BYTE 16) (VECTOR (UNSIGNED-BYTE 16) 4))
+      ((UNSIGNED-BYTE 32) (SIMPLE-ARRAY (UNSIGNED-BYTE 32) (3)))
+      (T (SIMPLE-VECTOR 3))
+      (0 0 0.0)
+      (T T T)
+      (#(7 8 9) (UNSIGNED-BYTE 8) 3)
+      (NIL NIL)
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

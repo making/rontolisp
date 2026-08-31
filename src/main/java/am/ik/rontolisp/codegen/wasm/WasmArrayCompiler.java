@@ -5,9 +5,8 @@ import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
-import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -122,6 +121,7 @@ final class WasmArrayCompiler {
 		// is conditional on the runtime rank being 1 (below), since nothing above rank 1
 		// is a string.
 		boolean charVector = am.ik.rontolisp.macro.LispMacroExpander.isCharacterElementType(elementType);
+		int elementTypeCode = ArrayElementTypes.codeOf(elementType);
 		if ((doubleFloat || singleFloat) && fpArg == null && adjArg == null) {
 			// A plain :element-type 'double-float / 'single-float array (no fill pointer
 			// /
@@ -143,18 +143,12 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dimsSlot = setTemp(ctx);
 		LispVal init = findInitialElement(args);
-		if (init == null && charVector) {
-			// Elements default to spaces so unfilled slots read back as characters.
-			init = new LispChar(' ');
-		}
-		if (init == null && (doubleFloat || singleFloat)) {
-			// An :element-type 'double-float / 'single-float array with a fill pointer /
-			// adjustable falls back to a general (boxed) array; default its elements to
-			// 0.0, not nil. (A packed array never has a fill pointer / adjustable, so the
-			// packed width is intentionally not preserved on this fallback -- matching
-			// the
-			// double path and the JVM.)
-			init = new LispDouble(0.0);
+		if (init == null) {
+			// A declared element type that reaches the GENERAL representation still
+			// fills with an element OF THAT TYPE: #\Space for a character request, 0 for
+			// a packed integer width, 0.0 for a float one. The type itself is remembered
+			// in the meta marker below, so array-element-type answers it too.
+			init = ArrayElementTypes.defaultElement(elementTypeCode);
 		}
 		if (init != null) {
 			WasmExprCompiler.compileExpr(init, ctx);
@@ -255,18 +249,22 @@ final class WasmArrayCompiler {
 			refNull(ctx);
 		}
 		if (charVector) {
-			// The marker MEANS "a rank-1 character array", i.e. a string, so it is set
+			// The marker 1 MEANS "a rank-1 character array", i.e. a string, so it is set
 			// only when the runtime rank is 1. Above rank 1 a character element type
 			// selects no representation of its own: the value is the plain general
-			// array, which is what stringp / array-element-type / type-of then answer
-			// for -- the same degrade an (unsigned-byte 8) request takes above rank 1.
+			// array, which is what stringp / type-of then answer for -- the same degrade
+			// an (unsigned-byte 8) request takes above rank 1 -- and the marker instead
+			// REMEMBERS the character element type (elementTypeMarker below), which is
+			// the one trace it leaves. Rank 1 gives 2 - 1 = 1, rank n gives 2 - 0 = 2.
+			i32Const(ctx, elementTypeMarker(ArrayElementTypes.CHARACTER));
 			getBuckets(ctx, dimsArrSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 			i32Const(ctx, 1);
 			ctx.writer.write(Instruction.I32_EQ);
+			ctx.writer.write(Instruction.I32_SUB);
 		}
 		else {
-			i32Const(ctx, 0);
+			i32Const(ctx, elementTypeMarker(elementTypeCode));
 		}
 		boxI31(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
@@ -428,12 +426,12 @@ final class WasmArrayCompiler {
 		int dimsArrSlot = ctx.allocTemp();
 		int totalSlot = ctx.allocTemp();
 		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot);
-		LispVal init = findInitialElement(args);
-		int initSlot = -1;
-		if (init != null) {
-			WasmExprCompiler.compileExpr(init, ctx);
-			initSlot = setTemp(ctx);
-		}
+		// An unsupplied element is 0, not nil: the packed branch is zero-filled by
+		// array.new_default anyway, and the rank-n GENERAL fallback below must fill with
+		// an integer too -- an array asked to hold bytes holds bytes at every rank.
+		LispVal init = java.util.Objects.requireNonNullElseGet(findInitialElement(args), () -> new LispInteger(0));
+		WasmExprCompiler.compileExpr(init, ctx);
+		int initSlot = setTemp(ctx);
 		int type = intArrType(width);
 		// rank == 1?
 		getBuckets(ctx, dimsArrSlot);
@@ -447,7 +445,7 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.castI31GetS(ctx);
 		intArrNewDefault(ctx, type);
 		int arrSlot = setTemp(ctx);
-		if (init != null && !(init instanceof LispInteger zero && zero.value() == 0)) {
+		if (!(init instanceof LispInteger zero && zero.value() == 0)) {
 			int iSlot = ctx.allocTemp();
 			i32Const(ctx, 0);
 			boxI31(ctx);
@@ -473,13 +471,10 @@ final class WasmArrayCompiler {
 		}
 		getLocal(ctx, arrSlot);
 		ctx.writer.write(Instruction.ELSE);
-		// general: data = array.new buckets(init-or-nil, total); header; cell.
-		if (initSlot >= 0) {
-			getLocal(ctx, initSlot);
-		}
-		else {
-			refNull(ctx);
-		}
+		// general: data = array.new buckets(init, total); header; cell. The header
+		// REMEMBERS the (unsigned-byte width) that selected no representation at this
+		// rank -- the one trace it leaves besides the 0 fill.
+		getLocal(ctx, initSlot);
 		getLocal(ctx, totalSlot);
 		WasmEmitHelper.castI31GetS(ctx);
 		arrayNew(ctx);
@@ -487,7 +482,7 @@ final class WasmArrayCompiler {
 		getLocal(ctx, dimsArrSlot);
 		refNull(ctx);
 		refNull(ctx);
-		i32Const(ctx, 0);
+		i32Const(ctx, elementTypeMarker(elementTypeCodeForWidth(width)));
 		boxI31(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
@@ -1714,10 +1709,110 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.ELSE);
+		emitRememberedElementType(ctx, arrSlot);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * The GENERAL array's element type: what the array REMEMBERS being asked for, in the
+	 * meta marker word, or {@code t}. Emitted only for the codes the program's
+	 * {@code make-array} calls can actually produce
+	 * ({@link WasmLispCompiler.Ctx#typedArrayCodes}), so a program that never asks for a
+	 * specialized element type gets exactly the constant {@code t} it always got.
+	 *
+	 * <p>
+	 * The shape guard is {@code %arrayp}'s (a {@code TYPE_CELL} whose header car is the
+	 * dims array, which is what tells an array from a hash table); the displacement guard
+	 * is {@code %array-disp-offset}'s, because the marker word holds a real offset on a
+	 * displaced view, where the element type is the TARGET's question and is not
+	 * remembered.
+	 */
+	private static void emitRememberedElementType(WasmLispCompiler.Ctx ctx, int arrSlot) {
+		if (ctx.typedArrayCodes == 0) {
+			WasmEmitHelper.emitTrue(ctx);
+			return;
+		}
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		emitIfEq(ctx);
+		getLocal(ctx, arrSlot);
+		castCellGet0(ctx);
+		int headerSlot = setTemp(ctx);
+		getLocal(ctx, headerSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		emitIfEq(ctx);
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		emitIfEq(ctx);
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		int dataSlot = setTemp(ctx);
+		emitDataSlotIsTarget(ctx, dataSlot);
+		emitIfEq(ctx);
+		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, headerSlot);
+		getMeta(ctx);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		int markerSlot = setTemp(ctx);
+		int arms = 0;
+		for (int code = ArrayElementTypes.CHARACTER; code <= ArrayElementTypes.DOUBLE_FLOAT; code++) {
+			if ((ctx.typedArrayCodes & (1 << code)) == 0) {
+				continue;
+			}
+			arms++;
+			getLocal(ctx, markerSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			i32Const(ctx, elementTypeMarker(code));
+			ctx.writer.write(Instruction.I32_EQ);
+			emitIfEq(ctx);
+			emitElementTypeValue(ctx, code);
+			ctx.writer.write(Instruction.ELSE);
+		}
+		WasmEmitHelper.emitTrue(ctx);
+		for (int i = 0; i < arms; i++) {
+			ctx.writer.write(Instruction.END);
+		}
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
 		WasmEmitHelper.emitTrue(ctx);
 		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		WasmEmitHelper.emitTrue(ctx);
 		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		WasmEmitHelper.emitTrue(ctx);
 		ctx.writer.write(Instruction.END);
+	}
+
+	// The value array-element-type answers for one remembered code: a name symbol, or
+	// the list (unsigned-byte n) built as two conses, exactly as the packed
+	// integer-vector arm above builds it.
+	private static void emitElementTypeValue(WasmLispCompiler.Ctx ctx, int code) {
+		switch (code) {
+			case ArrayElementTypes.CHARACTER -> WasmEmitHelper.compileUnspelledLiteral(LispNames.CHARACTER_TYPE, ctx);
+			case ArrayElementTypes.SINGLE_FLOAT -> WasmEmitHelper.compileStringLiteral(LispNames.SINGLE_FLOAT, ctx);
+			case ArrayElementTypes.DOUBLE_FLOAT -> WasmEmitHelper.compileStringLiteral(LispNames.DOUBLE_FLOAT, ctx);
+			default -> {
+				WasmEmitHelper.compileStringLiteral(LispNames.UNSIGNED_BYTE, ctx);
+				i32Const(ctx, code == ArrayElementTypes.UNSIGNED_BYTE_8 ? 8
+						: code == ArrayElementTypes.UNSIGNED_BYTE_16 ? 16 : 32);
+				boxI31(ctx);
+				refNull(ctx);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			}
+		}
 	}
 
 	static void compileFillPointer(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -1776,15 +1871,38 @@ final class WasmArrayCompiler {
 	}
 
 	static void compileHasFillPointer(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		// (array-has-fill-pointer-p array): meta.car is an i31?
+		// (array-has-fill-pointer-p array): meta.car is an i31? A value that is not the
+		// general-array shape -- a packed farray or integer vector, a plain string -- is
+		// nil rather than a cast trap, which is both what CL says (a simple array has no
+		// fill pointer) and what the interpreter answers; the shape is guarded by
+		// ref.test first, exactly as adjustable-array-p guards it.
 		requireArgs(cons, 2, "array-has-fill-pointer-p expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int valueSlot = setTemp(ctx);
+		getLocal(ctx, valueSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
+		getLocal(ctx, valueSlot);
+		castCellGet0(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
+		getLocal(ctx, valueSlot);
 		castCellGet0(ctx);
 		getMeta(ctx);
 		castConsGet(ctx, 0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
@@ -2956,6 +3074,29 @@ final class WasmArrayCompiler {
 			case 8 -> WasmLispCompiler.TYPE_I8ARR;
 			case 16 -> WasmLispCompiler.TYPE_I16ARR;
 			default -> WasmLispCompiler.TYPE_I32ARR;
+		};
+	}
+
+	/**
+	 * The meta MARKER word for a remembered element type: 0 for {@code t} (nothing
+	 * remembered), and {@code code + 1} for anything else, which leaves 1 -- the mutable
+	 * character vector, {@code _charvec_p}'s marker -- to the one shape that is a string
+	 * rather than a general array carrying a type. The word is only a marker on a
+	 * NON-DISPLACED array; a displaced view holds its offset there and a target cell in
+	 * its data slot, which is how the two are told apart.
+	 * @param code an {@code ArrayElementTypes} code
+	 * @return the marker word
+	 */
+	static int elementTypeMarker(int code) {
+		return code == ArrayElementTypes.T ? 0 : code + 1;
+	}
+
+	// The ArrayElementTypes code for a packed integer width (8/16/32 by construction).
+	private static int elementTypeCodeForWidth(int width) {
+		return switch (width) {
+			case 8 -> ArrayElementTypes.UNSIGNED_BYTE_8;
+			case 16 -> ArrayElementTypes.UNSIGNED_BYTE_16;
+			default -> ArrayElementTypes.UNSIGNED_BYTE_32;
 		};
 	}
 

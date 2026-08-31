@@ -793,6 +793,11 @@ final class WasmAsyncEmit {
 			// of two.
 			.usesEqualpHashTables(proto.usesEqualpHashTables)
 			.usesStreamValues(proto.usesStreamValues)
+			// NOT optional: freshCtx builds the synchronous top level, and
+			// array-element-type's general arm is emitted only for the element type
+			// codes this names -- dropping it makes a top-level (array-element-type a)
+			// answer t while the same form inside a defun answers the remembered type.
+			.typedArrayCodes(proto.typedArrayCodes)
 			.usesSeqString(proto.usesSeqString)
 			// NOT optional: a producer site inside an async chunk must wrap exactly
 			// like the same form in a defun, or an async program's format nil /

@@ -329,7 +329,7 @@
 | `fill-pointer` | `(fill-pointer v)` | `:fill-pointer` ベクタのフィルポインタ(実効長)。`setf` 可能な場所でもある |
 | `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | 配列がフィルポインタを持てば `t`、そうでなければ `nil` |
 | `adjustable-array-p` | `(adjustable-array-p a)` | 配列が `:adjustable` で作成されていれば `t`、そうでなければ `nil` |
-| `array-element-type` | `(array-element-type a)` | 常に `t`(要素型は追跡されない) |
+| `array-element-type` | `(array-element-type a)` | アップグレード後の要素型。アップグレード先がなければ `t` |
 | `vector-push` | `(vector-push x v)` | フィルポインタの位置に `x` を格納しインデックスを返す。満杯なら `nil` |
 | `vector-pop` | `(vector-pop v)` | フィルポインタをデクリメントし、通過した要素を返す |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | `vector-push` と同様だが満杯時にベクタを拡張する |

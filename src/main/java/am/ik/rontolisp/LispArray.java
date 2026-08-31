@@ -47,6 +47,16 @@ public final class LispArray implements LispVal {
 
 	private final int displacedOffset;
 
+	// The UPGRADED element type this array was asked to hold, as an
+	// ArrayElementTypes code. It is ArrayElementTypes.T for almost every array --
+	// a general array is the representation every request that selects no
+	// specialized one lands in -- and something else exactly where make-array was
+	// told a narrower type it could not represent: a character or packed-integer
+	// element type above rank 1, or any of them combined with a fill pointer or
+	// adjustability. array-element-type answers it and the unsupplied element takes
+	// its zero; nothing else in the representation depends on it.
+	private final int elementTypeCode;
+
 	private static final LispVal[] NO_DATA = new LispVal[0];
 
 	/**
@@ -69,12 +79,28 @@ public final class LispArray implements LispVal {
 	 * @param adjustable whether the array is adjustable
 	 */
 	public LispArray(int[] dimensions, LispVal[] data, int fillPointer, boolean adjustable) {
+		this(dimensions, data, fillPointer, adjustable, ArrayElementTypes.T);
+	}
+
+	/**
+	 * Creates an array that REMEMBERS the element type it was asked to hold, beyond the
+	 * shape of {@link #LispArray(int[], LispVal[], int, boolean)}.
+	 * @param dimensions the dimension sizes (length = rank, {@code >= 0})
+	 * @param data the flat backing store (length = product of dimensions)
+	 * @param fillPointer the fill pointer, or {@code -1} for none (only rank-1 arrays may
+	 * have one)
+	 * @param adjustable whether the array is adjustable
+	 * @param elementTypeCode the upgraded element type as an {@link ArrayElementTypes}
+	 * code
+	 */
+	public LispArray(int[] dimensions, LispVal[] data, int fillPointer, boolean adjustable, int elementTypeCode) {
 		this.dimensions = dimensions;
 		this.data = data;
 		this.fillPointer = fillPointer;
 		this.adjustable = adjustable;
 		this.displacedTo = null;
 		this.displacedOffset = 0;
+		this.elementTypeCode = elementTypeCode;
 	}
 
 	/**
@@ -92,6 +118,7 @@ public final class LispArray implements LispVal {
 		this.adjustable = false;
 		this.displacedTo = target;
 		this.displacedOffset = offset;
+		this.elementTypeCode = ArrayElementTypes.T;
 	}
 
 	/**
@@ -109,6 +136,16 @@ public final class LispArray implements LispVal {
 	 */
 	public LispVal[] data() {
 		return this.data;
+	}
+
+	/**
+	 * Returns the upgraded element type this array remembers, as an
+	 * {@link ArrayElementTypes} code. {@link ArrayElementTypes#T} for an array that was
+	 * asked for nothing narrower than {@code t}.
+	 * @return the element type code
+	 */
+	public int elementTypeCode() {
+		return this.elementTypeCode;
 	}
 
 	/**
@@ -273,8 +310,12 @@ public final class LispArray implements LispVal {
 			int newCap = this.dimensions[0] + grow;
 			LispVal[] grown = new LispVal[newCap];
 			System.arraycopy(this.data, 0, grown, 0, this.data.length);
+			// The slots the growth opens take the REMEMBERED element type's own zero,
+			// the same fill make-array gives an unsupplied element, so a vector asked
+			// to hold floats never reads back nil above its old capacity.
+			LispVal spare = ArrayElementTypes.defaultElement(this.elementTypeCode);
 			for (int i = this.data.length; i < newCap; i++) {
-				grown[i] = LispNil.INSTANCE;
+				grown[i] = spare == null ? LispNil.INSTANCE : spare;
 			}
 			this.data = grown;
 			this.dimensions = new int[] { newCap };

@@ -5,6 +5,7 @@ import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFloatArray;
@@ -28591,6 +28592,50 @@ public final class LispMacroExpander {
 	 * resolve nothing
 	 * @return the resolved type specifier, or the argument itself when it names no alias
 	 */
+	/**
+	 * The set of UPGRADED element types the program's {@code make-array} calls can leave
+	 * on a general array, as a bit mask over {@link ArrayElementTypes} codes (bit
+	 * {@code 1 << code}); 0 when no call asks for anything narrower than {@code t}.
+	 *
+	 * <p>
+	 * A backend gates the {@code array-element-type} general arm on this: a program that
+	 * never asks for a specialized element type cannot hold an array that remembers one,
+	 * so its lowering stays exactly what it was, and a program that asks for one width
+	 * pays for that width alone. The scan is deliberately COARSE -- a rank-1 request that
+	 * never degrades is counted too, because the rank is a run-time fact at most call
+	 * sites.
+	 * @param program the top-level forms
+	 * @param registry the registry whose deftype expansions resolve alias designators, or
+	 * null
+	 * @return the bit mask of codes
+	 */
+	public static int makeArrayElementTypeCodes(List<LispVal> program, @Nullable ClosRegistry registry) {
+		int mask = 0;
+		for (LispVal expr : program) {
+			mask |= makeArrayElementTypeCodes(expr, registry);
+		}
+		return mask;
+	}
+
+	private static int makeArrayElementTypeCodes(LispVal val, @Nullable ClosRegistry registry) {
+		if (!(val instanceof LispCons cons)) {
+			return 0;
+		}
+		int mask = 0;
+		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())) {
+			List<LispVal> args = cons.toList();
+			for (int i = 2; i + 1 < args.size(); i++) {
+				if (args.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+					int code = ArrayElementTypes.codeOf(resolveElementTypeAlias(args.get(i + 1), registry));
+					if (code != ArrayElementTypes.T) {
+						mask |= 1 << code;
+					}
+				}
+			}
+		}
+		return mask | makeArrayElementTypeCodes(cons.car(), registry) | makeArrayElementTypeCodes(cons.cdr(), registry);
+	}
+
 	@Nullable public static LispVal resolveElementTypeAlias(@Nullable LispVal elementType, @Nullable ClosRegistry registry) {
 		if (elementType == null || registry == null) {
 			return elementType;
