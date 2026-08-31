@@ -43,7 +43,11 @@ import am.ik.rontolisp.RenderCycleGuard;
  * fillPointer, adjustable, null}} ({@code _charVecMake}). The {@code _strv} normalizer
  * renders it into the quote-framed runtime string on demand so the string consumers
  * ({@code stringp}, {@code char}, {@code string=}, {@code subseq}, printing,
- * {@code _eqv}) treat it as a string.
+ * {@code _eqv}) treat it as a string. The marker IMPLIES RANK 1, which is why no reader
+ * of it checks the rank: a string is a rank-1 character array and nothing else, so
+ * {@code _charVecMake} stamps it only when {@code dims} designates rank 1 and lets a
+ * rank-n character request degrade to the plain general array
+ * ({@code .kb/array-literals.md}).
  *
  * <p>
  * A displaced array ({@code make-array :displaced-to}) instead carries a 5-element header
@@ -1292,9 +1296,33 @@ final class JvmArrayRuntimeBuilder {
 		// header replaced by a length-4 copy {dims, fp, adj, null} -- the mutable
 		// character vector marker. Locals: 0..3 = params, 4 = list, 5 = header,
 		// 6 = newHeader.
+		//
+		// The marker MEANS "a rank-1 character array", i.e. a string, so it is stamped
+		// only when dims designates rank 1 (a Long, or a one-element cons list) -- the
+		// rank is a runtime fact. Above rank 1 a character element type selects no
+		// representation of its own: the value is the plain general array, without the
+		// marker and without the defaulted fill pointer (which rank-n _arrayMake would
+		// reject anyway). Same runtime rank test, same fallback, as _ivMake.
 		MethodrefConstant selfArrayMake = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC)));
 		JvmAsm cv = new JvmAsm();
+		int cvRank1 = cv.label();
+		int cvTryList = cv.label();
+		int cvGeneral = cv.label();
+		cv.aload(0);
+		cv.instanceOf(longClass);
+		cv.branch(Opcode.IFEQ, cvTryList);
+		cv.branch(Opcode.GOTO, cvRank1);
+		cv.bind(cvTryList);
+		cv.aload(0);
+		cv.instanceOf(objectArrayClass);
+		cv.branch(Opcode.IFEQ, cvGeneral);
+		cv.aload(0);
+		cv.checkcast(objectArrayClass);
+		cv.iconst(1);
+		cv.aaload();
+		cv.branch(Opcode.IFNONNULL, cvGeneral);
+		cv.bind(cvRank1);
 		cv.aload(0);
 		cv.aload(1);
 		cv.aload(2);
@@ -1325,6 +1353,15 @@ final class JvmArrayRuntimeBuilder {
 		cv.invokevirtual(alSet);
 		cv.pop();
 		cv.aload(4);
+		cv.areturn();
+		// rank n: the general boxed representation, with no fill pointer (the defaulted
+		// one is the rank-1 marker's, not the program's).
+		cv.bind(cvGeneral);
+		cv.aload(0);
+		cv.aload(1);
+		cv.aconstNull();
+		cv.aload(3);
+		cv.invokestatic(selfArrayMake);
 		cv.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(CHAR_VEC_MAKE), cp.addUtf8(MAKE_DESC), 4, 7, cv.finish()));
 

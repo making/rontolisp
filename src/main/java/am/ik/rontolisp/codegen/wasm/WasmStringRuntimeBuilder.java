@@ -419,6 +419,13 @@ final class WasmStringRuntimeBuilder {
 	 * holds a {@code TYPE_CELL} target in its data slot, not a buckets array.
 	 *
 	 * <p>
+	 * The marker also IMPLIES RANK 1, which is why no reader of it checks the rank: a
+	 * string is a rank-1 character array and nothing else, so
+	 * {@link WasmArrayCompiler#compileMake} sets the marker only when the runtime rank is
+	 * 1 and lets a rank-n character request degrade to the plain general array
+	 * ({@code .kb/array-literals.md}).
+	 *
+	 * <p>
 	 * Eight {@code ref.test}s down to the marker compare, and no element walk, which is
 	 * the point: a PREDICATE over a character vector ({@code stringp}) used to answer by
 	 * calling {@code _charvec_to_str} and testing whether a string came back, so it

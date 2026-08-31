@@ -990,6 +990,20 @@ public final class Environment implements Scope {
 				}
 				return new LispString(sb.toString(), fp, adjustable);
 			}
+			if (!initGiven && initialContents == null) {
+				// A specialized element type that reaches the GENERAL representation --
+				// a character one above rank 1, a packed float one with a fill pointer
+				// or adjustability -- still fills with an element OF THAT TYPE rather
+				// than leaving nil in an array the program asked to hold characters or
+				// floats. The compile backends already defaulted the float fallback to
+				// 0.0; this is the interpreter's half of that.
+				if (isCharacterElementType(elementTypeArg)) {
+					init = new LispChar(' ');
+				}
+				else if (packedType != null) {
+					init = new LispDouble(0.0);
+				}
+			}
 			LispVal[] data = new LispVal[total];
 			for (int i = 0; i < total; i++) {
 				data[i] = init;

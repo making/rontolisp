@@ -119,8 +119,9 @@ of the same element type), `FLOAT` (packed float array, either width),
 `GENERAL` (boxed general array: `simple-vector`, `fixnum`/`t`/other unpacked
 element types at any rank) and `STRING`. A character element type maps to
 NOTHING (a character vector is a marked general array OR a string after
-normalization -- two representations); a bare `vector`/`array` proves nothing
-(a string is a vector too). Specifier symbols resolve through the
+normalization -- two representations, and above rank 1 it is neither but the
+plain general array, `.kb/array-literals.md`); a bare `vector`/`array` proves
+nothing (a string is a vector too). Specifier symbols resolve through the
 `ClosRegistry` deftype table, including the NEW defaulted registration: an
 all-`&optional` deftype (`simple-octet-vector`) now registers its bare-name
 DEFAULT expansion, folded by a closed pure evaluator over the
@@ -462,11 +463,13 @@ The atomic `vector` half is pinned the same way by
 `vectorp-and-the-vector-specifier-check-the-rank` ci-spec case, whose expected
 text is SBCL 2.2.9's verbatim.
 
-Known divergence this did NOT close, recorded so nobody reads it as new: a
-rank-n (n>1) CHARACTER array is a general array of element type `t` on the
-interpreter, a character-marked array on wasm, and `make-array` REFUSES it on
-the JVM. Its `type-of` therefore differs by backend; a rank-1 character array
-(the shape that actually occurs) agrees everywhere.
+The rank-n (n>1) CHARACTER array this did NOT close -- a general array on the
+interpreter, a character-marked array on wasm, a `make-array` REFUSAL on the
+JVM -- was closed by todo-607 the same day: above rank 1 a character element
+type selects no representation of its own on ANY backend, so the value is the
+plain general array and `type-of` answers `(SIMPLE-ARRAY T dims)` everywhere.
+The model and its cost are `.kb/array-literals.md`, "A SPECIALIZED element type
+above rank 1 is the general array".
 
 ## The COMPOUND half of `subtypep` (todo-608)
 

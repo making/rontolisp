@@ -19370,6 +19370,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileCharacterElementTypeAboveRankOneIsAGeneralArray() throws Exception {
+		// Same contract as the interpreter's
+		// evalCharacterElementTypeAboveRankOneIsAGeneralArray: the character marker means
+		// "a rank-1 character array", so nothing above rank 1 carries it and the value is
+		// the plain general array. This backend used to mark a rank-2 request and answer
+		// T to stringp, handing every string operation a value it cannot index. type-of
+		// is a prelude defun, so the program needs the CLI pipeline's splice.
+		assertThat(compileAndRunPrelude("""
+				(let ((b (make-array '(2 2) :element-type 'character :initial-element #\\a)))
+				  (print (list (stringp b) (array-element-type b) (array-dimensions b) (type-of b) (vectorp b)))
+				  (setf (aref b 1 1) #\\z)
+				  (print b))
+				(print (aref (make-array '(2 2) :element-type 'character) 0 1))
+				(let ((c (make-array '(2 2) :element-type 'character
+				                     :initial-contents '((#\\a #\\b) (#\\c #\\d)))))
+				  (print (list (stringp c) (aref c 1 0) (type-of c))))
+				(let ((s (make-array 3 :element-type 'character :initial-element #\\z)))
+				  (print (list (stringp s) (array-element-type s) (type-of s) s)))
+				(print (list (aref (make-array 3 :element-type 'double-float :adjustable t) 0)
+				             (aref (make-array 3 :element-type 'single-float :fill-pointer 3) 2)))
+				""")).isEqualTo("""
+				(NIL T (2 2) (SIMPLE-ARRAY T (2 2)) NIL)
+				#2A((#\\a #\\a) (#\\a #\\z))
+				#\\Space
+				(NIL #\\c (SIMPLE-ARRAY T (2 2)))
+				(T CHARACTER STRING "zzz")
+				(0.0 0.0)""");
+	}
+
+	@Test
+	void compileMakeArrayEvaluatesItsDimensionsExactlyOnce() throws Exception {
+		// Same contract as the interpreter's
+		// evalMakeArrayEvaluatesItsDimensionsExactlyOnce.
+		assertThat(compileAndRun("""
+				(let ((n 0))
+				  (flet ((bump () (setq n (+ n 1)) 3))
+				    (let ((s (make-array (bump) :element-type 'character :initial-element #\\k)))
+				      (print (list s n)))))
+				""")).isEqualTo("(\"kkk\" 1)");
+	}
+
+	@Test
 	void compileFillWritesEveryElementInRange() throws Exception {
 		// Same contract as the interpreter's fillWritesEveryElementInRange.
 		assertThat(compileAndRun("""
