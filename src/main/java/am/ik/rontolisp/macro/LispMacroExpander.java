@@ -2868,14 +2868,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (vectorp x)} to {@code (let ((__vecp x)) (or (stringp __vecp)
-	 * (%arrayp __vecp)))}: strings are vectors in CL. Like the {@code vector} type
-	 * specifier in {@code makeTypeTest}, the rank is NOT checked (a rank-n array passes
-	 * too) so the gated array helpers stay out of programs that only ask the question.
-	 * @param cons the vectorp expression
-	 * @return the expanded expression
-	 */
-	/**
 	 * Expands {@code (arrayp x)} to {@code (or (stringp x) (%arrayp x))}: a string is an
 	 * array in Common Lisp, and the internal predicate answers only for the array
 	 * representation.
@@ -2992,21 +2984,56 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (vectorp x)} the same way {@link #expandArrayp(LispCons)} expands
-	 * {@code arrayp}: strings count, and the argument is let-bound so the two-part test
-	 * evaluates it once.
+	 * Expands {@code (vectorp x)} the way {@link #expandArrayp(LispCons)} expands
+	 * {@code arrayp}, NARROWED to rank 1: strings count, and the argument is let-bound so
+	 * the multi-part test evaluates it once. A vector is a rank-1 array and nothing else,
+	 * so a rank-2 (or rank-0) array is an {@code arrayp} but not a {@code vectorp}. The
+	 * test is {@link #vectorTypeTest(LispVal)}'s, shared verbatim with the {@code vector}
+	 * type specifier so the predicate and the specifier cannot drift apart.
 	 * @param cons the vectorp expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandVectorp(LispCons cons) {
+		return expandVectorp(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandVectorp(LispCons)}, but lets a backend drop the ARRAY arm when
+	 * no array can exist in this program, leaving the string test alone. The JVM backend
+	 * needs it: `vectorp` has an injected first-class wrapper that EVERY program carries
+	 * until the shaker runs, and the array gate is a SOURCE scan that never sees it -- so
+	 * an ungated rank read inside that wrapper made an array-free `(print 1)` reference
+	 * `_arrayDims`, forcing the whole array runtime back on
+	 * ({@code .kb/adjustable-arrays.md}, the same bargain
+	 * {@link #expandReverse(LispCons, boolean)} makes).
+	 * @param cons the vectorp expression
+	 * @param arraysExist whether an array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandVectorp(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(LispNames.VECTORP + " expects 1 argument: " + cons.print());
 		}
+		if (!arraysExist) {
+			return callOf(LispNames.STRINGP, parts.get(1));
+		}
 		LispSymbol v = new LispSymbol("__vecp");
-		LispVal test = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, v),
-				callOf(LispNames.ARRAYP_INTERNAL, v)));
-		return makeLet(v.name(), parts.get(1), test);
+		return makeLet(v.name(), parts.get(1), vectorTypeTest(v));
+	}
+
+	/**
+	 * The test behind {@code vectorp} and the atomic {@code vector} /
+	 * {@code simple-vector} type specifiers: a string, or one of the array
+	 * representations whose rank is 1. Built through
+	 * {@link #makeArrayTypeTest(LispVal, LispVal, LispVal, ClosRegistry)} with an
+	 * unspecified element type and a one-dimension {@code (*)} shape, so the rank read
+	 * and the string arm are the compound specifier's, not a second copy of them.
+	 * @param value the (temp-bound) value form -- it is read more than once
+	 * @return a truthy test form
+	 */
+	private static LispVal vectorTypeTest(LispVal value) {
+		return makeArrayTypeTest(value, null, listToCons(List.of(new LispSymbol("*"))), EMPTY_CLOS_REGISTRY);
 	}
 
 	/**
@@ -25997,10 +26024,15 @@ public final class LispMacroExpander {
 				// therefore `null`, which is what makes (typep *readtable* 'readtable)
 				// answer t rather than lying in the other direction.
 				return callOf(LispNames.NULL, value);
-			case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY":
-				// Strings are vectors (so arrays) in CL. The rank is NOT checked (a
-				// rank-n array passes a `vector` test too): the rank read would drag
-				// the gated array helpers into every typecase-using program.
+			case "VECTOR", "SIMPLE-VECTOR":
+				// A vector IS a rank-1 array, and a string is a rank-1 character array,
+				// so the rank is checked here and a rank-2 (or rank-0) array fails --
+				// the same answer the compound (vector * n) spelling gives, because it
+				// is literally the same builder.
+				return vectorTypeTest(value);
+			case "ARRAY", "SIMPLE-ARRAY":
+				// Strings are arrays in CL. Any rank passes: that is what separates the
+				// atomic `array` specifier from `vector` above.
 				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
 						callOf(LispNames.ARRAYP_INTERNAL, value)));
 			case "SEQUENCE":

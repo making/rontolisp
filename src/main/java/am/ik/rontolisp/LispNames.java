@@ -3005,8 +3005,9 @@ public final class LispNames {
 
 	/**
 	 * The {@code vectorp} built-in function (is the value a vector?). Strings are vectors
-	 * in CL. Lite: like the {@code vector} type specifier, the rank is not checked (a
-	 * rank-n array passes too).
+	 * in CL. A vector is a rank-1 array and nothing else, so an array of any other rank
+	 * answers nil here while {@link #ARRAYP} still answers t for it -- the same rank the
+	 * {@code vector} type specifier checks.
 	 */
 	public static final String VECTORP = "VECTORP";
 

@@ -297,6 +297,7 @@ noted:
 | `seqResultDispatchForm` (private; `wrapSortForStringSeq`, `expandReverse`, `expandRemoveDuplicates`, `expandRemove`, `expandRemoveIf`, `expandRemoveIfNot`, `expandSubstitute` forward the flag) | the `__seq_vec` binding and the `(coerce __seq_res 'vector)` rebuild |
 | `expandSubseqCompat` | the whole rewrite -- it exists only to reach the array arm, so it returns `null` and the compiler emits its plain `%subseq-core` |
 | `expandReplace` | the destructive `%row-major-aset` loop, leaving the functional string rebuild |
+| `expandVectorp` (todo-605) | the whole ARRAY arm, leaving `stringp` alone -- once `vectorp` checks the RANK its array arm reads `array-dimensions`, and `vectorp` has an injected first-class wrapper EVERY program carries until the shaker runs, so an ungated read there put `_arrayDims` in `(print 1)` |
 
 Reading and BUILDING are gated differently, and the distinction is the reason
 this is sound. Dropping a READ of an array element is a local fact: no array

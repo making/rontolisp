@@ -797,15 +797,20 @@ public final class Environment implements Scope {
 					|| args.get(0) instanceof LispDoubleFloatArray || args.get(0) instanceof LispSingleFloatArray
 					|| args.get(0) instanceof LispIntVector) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		// vectorp: strings are vectors in CL. Like the vector type specifier, the rank
-		// is NOT checked (a rank-n array passes too) -- see makeTypeTest. A packed
-		// double-float array or integer vector is a vector on the same terms as a
-		// general array.
+		// vectorp: strings are vectors in CL. A vector is a rank-1 array and nothing
+		// else, so the rank IS checked -- a rank-2 or rank-0 array is an array but not
+		// a vector (see makeTypeTest, which builds the same answer for the `vector`
+		// type specifier on the compile paths). A string and a packed integer vector
+		// are rank-1 by construction; a packed float array carries its own rank.
 		env.defineFunction(LispNames.VECTORP, new LispFunction(LispNames.VECTORP, args -> {
 			requireArgCount(LispNames.VECTORP, args, 1);
-			return (args.get(0) instanceof LispString || args.get(0) instanceof LispArray
-					|| args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector)
-							? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return switch (args.get(0)) {
+				case LispString ignored -> LispTrue.INSTANCE;
+				case LispIntVector ignored -> LispTrue.INSTANCE;
+				case LispArray array -> array.dimensions().length == 1 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				case LispFloatArray array -> array.rank() == 1 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				default -> LispNil.INSTANCE;
+			};
 		}));
 	}
 
