@@ -98,56 +98,6 @@ Unlike the tessellated primitives, its volume is *exact* against the closed form
 of the shape actually built -- a prism plus a pyramid on the same n-gon -- which
 is what pins its winding on every backend.
 
-## Reading a model file
-
-A mesh someone else authored is the ordinary way a solid this big enters a
-program, so `geom` reads one:
-
-| Reader | What it reads |
-|---|---|
-| `(geom:read-obj "bunny.obj")` | Wavefront OBJ: `v` lines and `f` lines, any facet size, `v/vt/vn` tokens and negative indices |
-| `(geom:read-stl "part.stl")` | STL, either dialect -- which one is decided from the file's own shape |
-| `(geom:read-ply "scan.ply")` | PLY, ASCII or binary little-endian, the properties taken from the header |
-| `(geom:read-gltf "duck.glb")` | glTF 2.0, `.glb` or `.gltf` -- a SCENE, answered as a list of solids |
-| `(geom:read-model "whatever")` | the format sniffed from the file's bytes; `:format` says it outright |
-
-They answer an ordinary `geom:solid`, so everything above applies to it
-unchanged -- `geom:volume`, `geom:bounds`, the booleans, a viewer. They take
-`:color` and `:label` like every constructor beside them. The one exception in
-shape is glTF, which is a scene rather than a mesh: `geom:read-gltf` answers
-the **list** of solids its nodes pose -- `scene:add` splices a list, and each
-solid's `geom:world-transform` carries its node hierarchy, so a multi-part
-model's parts land where its nodes say. A node's scale is baked into the
-vertices at read time (the transform stays rigid), so the measurements see it.
-
-```console
-CL-USER> (defvar *bunny* (geom:read-obj "bunny.obj" :color (geom:vec3 0.85 0.72 0.5)))
-CL-USER> (geom:mesh-triangle-count *bunny*)
-69451
-CL-USER> (defvar *v* (scene:viewer))
-CL-USER> (scene:grid *v* :extent nil)
-CL-USER> (scene:shading *v* :solid)
-CL-USER> (scene:add *v* *bunny*)
-CL-USER> (scene:fit *v*)
-```
-
-Three things a real file teaches, none of them a bug:
-
-- **A file carries its own units.** That bunny is 0.2 across, in metres; a
-  printable part is 200, in millimetres. `scene:fit` frames either, and
-  `(scene:grid v :extent nil)` is usually what you want beside a small one --
-  the grid's own default extent is 600 in `geom`'s unitless world.
-- **`:solid` is the shading a dense mesh wants.** The default `:both` draws the
-  wireframe over the triangles, which on 69,451 of them is a dark stipple.
-- **Winding is the file's, and `geom:volume` is the test.** A negative volume
-  means the mesh is wound clockwise seen from outside, which is the one thing
-  the readers cannot fix for you.
-
-What no reader keeps: materials beyond one colour, texture coordinates,
-per-vertex normals and per-vertex colours. A `geom:solid` has one colour and its
-facet normals are Newell's, computed from the geometry, so those records are
-read past rather than half-kept.
-
 ## A scene graph
 
 `geom:attach` hangs one node off another; `geom:detach` takes it back out. The
@@ -361,6 +311,57 @@ draw call a solid, and `geom:mesh` and `geom:world-transform` consumed
 unchanged. The only real difference is the projection: OpenGL's clip space puts
 z in [-1, 1] where Metal's puts it in [0, 1]. There is deliberately no second
 modelling layer in it -- that is what would make `geom` grow a browser dialect.
+
+## Reading a model file
+
+A mesh someone else authored is the ordinary way a solid this big enters a
+program, so `geom` reads one:
+
+| Reader | What it reads |
+|---|---|
+| `(geom:read-obj "bunny.obj")` | Wavefront OBJ: `v` lines and `f` lines, any facet size, `v/vt/vn` tokens and negative indices |
+| `(geom:read-stl "part.stl")` | STL, either dialect -- which one is decided from the file's own shape |
+| `(geom:read-ply "scan.ply")` | PLY, ASCII or binary little-endian, the properties taken from the header |
+| `(geom:read-gltf "duck.glb")` | glTF 2.0, `.glb` or `.gltf` -- a SCENE, answered as a list of solids |
+| `(geom:read-model "whatever")` | the format sniffed from the file's bytes; `:format` says it outright |
+
+They answer an ordinary `geom:solid`, so everything above applies to it
+unchanged -- `geom:volume`, `geom:bounds`, the booleans, a viewer. They take
+`:color` and `:label` like every constructor beside them. The one exception in
+shape is glTF, which is a scene rather than a mesh: `geom:read-gltf` answers
+the **list** of solids its nodes pose -- `scene:add` splices a list, and each
+solid's `geom:world-transform` carries its node hierarchy, so a multi-part
+model's parts land where its nodes say. A node's scale is baked into the
+vertices at read time (the transform stays rigid), so the measurements see it.
+
+```console
+CL-USER> (defvar *bunny* (geom:read-obj "bunny.obj" :color (geom:vec3 0.85 0.72 0.5)))
+CL-USER> (geom:mesh-triangle-count *bunny*)
+69451
+CL-USER> (defvar *v* (scene:viewer))
+CL-USER> (scene:grid *v* :extent nil)
+CL-USER> (scene:shading *v* :solid)
+CL-USER> (scene:add *v* *bunny*)
+CL-USER> (scene:fit *v*)
+```
+
+Three things a real file teaches, none of them a bug:
+
+- **A file carries its own units.** That bunny is 0.2 across, in metres; a
+  printable part is 200, in millimetres. `scene:fit` frames either, and
+  `(scene:grid v :extent nil)` is usually what you want beside a small one --
+  the grid's own default extent is 600 in `geom`'s unitless world.
+- **`:solid` is the shading a dense mesh wants.** The default `:both` draws the
+  wireframe over the triangles, which on 69,451 of them is a dark stipple.
+- **Winding is the file's, and `geom:volume` is the test.** A negative volume
+  means the mesh is wound clockwise seen from outside, which is the one thing
+  the readers cannot fix for you.
+
+What no reader keeps: materials beyond one colour, texture coordinates,
+per-vertex normals and per-vertex colours. A `geom:solid` has one colour and its
+facet normals are Newell's, computed from the geometry, so those records are
+read past rather than half-kept.
+
 
 ## What is not here
 
