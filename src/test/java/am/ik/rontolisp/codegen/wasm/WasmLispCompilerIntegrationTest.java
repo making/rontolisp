@@ -15049,6 +15049,21 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAProducerBuiltStringFoldsAsAnEqualpHashKey() throws Exception {
+		// An equalp table's key fold runs AFTER the character-vector render: without
+		// it two same-content producer-built keys fold to two distinct vectors and
+		// never collide, while the literal spelling of the same key hits
+		// (.kb/hash-tables.md; found by the .todo/596 boundary sweep).
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash (format nil "K~a" 1) h) 42)
+				  (print (gethash "k1" h))
+				  (print (gethash (concatenate 'string "k" "1") h))
+				  (print (gethash (string-upcase "k1") h)))
+				""")).isEqualTo("42\n42\n42");
+	}
+
+	@Test
 	void compileALiteralArgumentProducerCallAnswersAFreshMutableStringPerEvaluation() throws Exception {
 		// string-upcase/string-downcase/concatenate 'string/subseq of literal
 		// arguments fold to a (%str-fresh ...) constant -- the value is computed at

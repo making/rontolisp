@@ -27,6 +27,9 @@ final class WasmGetenvCompiler {
 					LispNames.HOST_GETENV + " expects 1 argument, got " + (args.size() - 1));
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		// A variable name built by a string producer (concatenate, format nil) is a
+		// mutable character vector: render it before _getenv's TYPE_STRING read.
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_GETENV);
 	}

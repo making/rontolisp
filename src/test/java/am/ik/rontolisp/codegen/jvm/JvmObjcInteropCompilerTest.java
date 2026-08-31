@@ -106,6 +106,22 @@ class JvmObjcInteropCompilerTest {
 	}
 
 	@Test
+	void aProducerBuiltStringCrossesTheObjcBoundary() throws Exception {
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		// A class name, a selector and an NSString's content built by concatenate /
+		// format nil are MUTABLE character vectors on this backend
+		// (.kb/string-write-runtime.md): the template's lispString renders one through
+		// the reflectively bound _strv, so the Objective-C boundary accepts it exactly
+		// as the interpreter's ObjcBridge accepts a LispString. This is the unit pin
+		// for the examples/macos/system-frameworks.lisp canary.
+		assertThat(compileAndRun("""
+				(print (objc:send (objc:string (concatenate 'string "ronto" "lisp"))
+				                  (format nil "len~a" "gth")))
+				(print (objc:objectp (objc:class (concatenate 'string "NS" "Object"))))
+				""")).isEqualTo("9\nT");
+	}
+
+	@Test
 	void theVerbsThatNeedNoRuntimeAnswerEverywhere() throws Exception {
 		assertThat(compileAndRun("(print (objc:objectp 42))")).isEqualTo("NIL");
 		assertThat(compileAndRun("(print (objc:send nil \"length\"))")).isEqualTo("NIL");

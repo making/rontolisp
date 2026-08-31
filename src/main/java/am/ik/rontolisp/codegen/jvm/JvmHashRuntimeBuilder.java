@@ -293,7 +293,7 @@ final class JvmHashRuntimeBuilder {
 				listRemoveAt, listRemoveObj, integerValueOf, hashRef, ordRef, equalMethod, trueStr, keyRef));
 
 		if (equalpFold) {
-			methods.addAll(buildEqualpFold(cp, thisClass, mapClass, mapGet, mapPut, trueStr));
+			methods.addAll(buildEqualpFold(cp, thisClass, mapClass, mapGet, mapPut, trueStr, strvMethod));
 		}
 
 		// _hashClr(table): the order list is emptied and re-hung, so every bucket goes
@@ -801,7 +801,8 @@ final class JvmHashRuntimeBuilder {
 	// when the table carries the marker. Placement stays ONE structural table: equalp on
 	// two values is equal on their folds, so _hash and _equal are untouched.
 	private static List<HashMethod> buildEqualpFold(ConstantPool cp, ClassConstant thisClass, ClassConstant mapClass,
-			MethodrefConstant mapGet, MethodrefConstant mapPut, StringConstant trueStr) {
+			MethodrefConstant mapGet, MethodrefConstant mapPut, StringConstant trueStr,
+			@Nullable MethodrefConstant strvMethod) {
 		StringConstant equalpKey = cp.addString(RontoHashTable.EQUALP_KEY);
 		MethodrefConstant makeRef = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC)));
@@ -847,6 +848,14 @@ final class JvmHashRuntimeBuilder {
 		int unfolded = key.label();
 		key.branch(Opcode.IFNULL, unfolded);
 		key.aload(0);
+		// A mutable character vector renders to its quote-framed string BEFORE the
+		// travelling fold: RontoHashTable.equalpKey knows the compiled value model but
+		// not the array representation, so without this two same-content producer-built
+		// keys fold to two distinct ArrayLists and never collide. Null without the
+		// array runtime, where no character vector can exist.
+		if (strvMethod != null) {
+			key.invokestatic(strvMethod);
+		}
 		key.iconst(RontoHashTable.FOLD_DEPTH_CAP);
 		key.invokestatic(foldRef);
 		key.areturn();

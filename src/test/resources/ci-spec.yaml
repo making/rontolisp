@@ -9842,6 +9842,12 @@ cases:
       (defun %sid-up () (string-upcase "ab"))
       (print (let ((s (%sid-up))) (setf (char s 0) #\z) (list s (%sid-up))))
       (print (let* ((s (string-capitalize "foo bar")) (a s)) (setf (char s 3) #\!) (list s a)))
+      ;; An equalp table's key fold runs AFTER the character-vector render, so a
+      ;; producer-built key collides with the literal spelling of the same key.
+      (defvar *sid-eqh* (make-hash-table :test 'equalp))
+      (setf (gethash (format nil "K~a" 1) *sid-eqh*) 42)
+      (print (list (gethash "k1" *sid-eqh*)
+                   (gethash (concatenate 'string "k" "1") *sid-eqh*)))
     expected: |
       ("Xbcdef" "Xbcdef")
       ("Zello" "Zello")
@@ -9859,6 +9865,7 @@ cases:
       ("qbc" "qbc")
       ("zB" "AB")
       ("Foo!Bar" "Foo!Bar")
+      (42 42)
   - name: string-case-ops-full-unicode
     source: |
       ;; string-upcase / string-downcase / string-capitalize are defined by CLHS

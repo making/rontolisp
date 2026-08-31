@@ -75,6 +75,14 @@ class JvmJavaInteropCompilerTest {
 	@Test
 	void staticCall() throws Exception {
 		assertThat(compileAndRun("(print (java:static \"java.lang.Integer\" \"parseInt\" \"100\"))")).isEqualTo("100");
+		// A class name, a method name and a String argument built by a string producer
+		// are mutable character vectors; the bridge's lispString renders them through
+		// the reflectively bound _strv (.kb/string-write-runtime.md).
+		assertThat(compileAndRun("""
+				(print (java:static (concatenate 'string "java.lang." "Integer")
+				                    (format nil "parse~a" "Int")
+				                    (concatenate 'string "1" "01")))
+				""")).isEqualTo("101");
 	}
 
 	@Test

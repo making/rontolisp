@@ -141,6 +141,27 @@ class JvmFfiInteropCompilerTest {
 	}
 
 	@Test
+	void aProducerBuiltStringCrossesTheFfiBoundary() throws Exception {
+		assumeTrue(FfiInterop.available(), FfiInterop.description());
+		// A library name, a symbol name and a :string argument built by concatenate /
+		// format nil are MUTABLE character vectors on this backend
+		// (.kb/string-write-runtime.md): the template's lispString renders one through
+		// the reflectively bound _strv, so the FFM boundary accepts it exactly as the
+		// interpreter's FfiBridge accepts a LispString. This is the unit pin for the
+		// examples/jvm/cffi-sqlite.lisp canary, whose sqlite3-lib name is a
+		// concatenate result.
+		String m = libm();
+		assertThat(compileAndRun("""
+				(let* ((lib (ffi:open (concatenate 'string "%s" "%s")))
+				       (cosfn (ffi:symbol lib (format nil "co~a" "s"))))
+				  (print (ffi:pointerp cosfn))
+				  (print (ffi:call cosfn :double '(:double) 0.0)))
+				(let ((strlen (ffi:symbol (ffi:open) "strlen")))
+				  (print (ffi:call strlen :long '(:string) (concatenate 'string "abc" "def"))))
+				""".formatted(m.substring(0, 1), m.substring(1)))).isEqualTo("T\n1.0\n6");
+	}
+
+	@Test
 	void aForeignPointerPrintsAndComparesLikeTheInterpreters() throws Exception {
 		assumeTrue(FfiInterop.available(), FfiInterop.description());
 		assertThat(compileAndRun("(print (ffi:address 291))")).isEqualTo("#<pointer #x123>");
