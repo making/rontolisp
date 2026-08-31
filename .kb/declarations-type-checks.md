@@ -522,6 +522,16 @@ except `T` (not a symbol at run time; the generated `(eq b t)` edge answers it,
 and a row would only add the universal ancestor to every other row), so the two
 runtime dispatches know the same names.
 
+**The size it costs, measured 2026-08-31.** On the FLOOR program -- a
+`(defun st (a b) (subtypep a b))` and one call, i.e. nothing but the gated
+dispatch -- 15,937 -> 21,977 wasm bytes at `--optimize=size` (+6,040) and
+14,182 -> 21,356 JVM `.class` bytes (+7,174). The compound arm reaches
+`symbol-name`/`string=`/`equal` and the widened universe adds table rows; the
+gate is unchanged, so a program without a COMPUTED `subtypep` is byte-identical.
+No size-report, bench-report or `examples/` program calls `subtypep` at all, so
+no tracked row moves. Cheap beside the computed-`typep` floor above (+22 KB) for
+the same reason: there is no array arm here, only a head reduction.
+
 Pinned by `LispEvaluatorTest#evalComputedCompoundSubtypepSpecifiers`,
 `JvmLispCompilerTest#compileComputedCompoundSubtypepSpecifiers`,
 `WasmLispCompilerIntegrationTest#computedCompoundSubtypepSpecifiers` and the
