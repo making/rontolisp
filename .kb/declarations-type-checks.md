@@ -262,7 +262,7 @@ heads accept the same specs as `check-type`:
   -> `(member v '(items))` (eql, truthy tail); `(eql obj)` -> `(eql v 'obj)`;
   `(satisfies fn)` -> `(fn v)`; `(integer|float|rational|real|number [low
   [high]])` -> base predicate + bound checks, `*` = unbounded, `(n)` =
-  exclusive bound.
+  exclusive bound; the ARRAY family is its own section below.
 - Type-specifier symbols match by their package-STRIPPED name
   (`plainTypeName`): standard type names are not all registered CL symbols,
   so inside a user package the resolver qualifies e.g. `unsigned-byte` to
@@ -297,6 +297,89 @@ heads accept the same specs as `check-type`:
   where the type only appears in no-op declaim/declare declarations.
 - The value form may be evaluated several times, so callers bind a temp
   first (`__check-type` / typecase's `__typecase`).
+
+## The array type lattice: type-of BUILDS the compound specifier
+
+**`type-of` answers an array's COMPOUND specifier, and `makeTypeTest` takes the
+same one back -- the two are one contract and must move together.** Before
+todo-604 every array answered `T` (legal by the letter of CLHS, useless in
+practice: nothing could tell a vector from a matrix) and
+`(typep a '(simple-array single-float (2 2)))` answered nil on an array that IS
+one. The shapes are SBCL's, checked against SBCL 2.2.9 on the pinning program:
+
+| value | `type-of` |
+| --- | --- |
+| `(make-array 4)` | `(SIMPLE-VECTOR 4)` |
+| `(make-array '(2 3))` | `(SIMPLE-ARRAY T (2 3))` |
+| `(make-array nil)` | `(SIMPLE-ARRAY T NIL)` -- the rank-0 array, `.todo/603` |
+| `(make-array 4 :element-type 'single-float)` | `(SIMPLE-ARRAY SINGLE-FLOAT (4))` |
+| `(make-array 4 :element-type '(unsigned-byte 8))` | `(SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4))` |
+| `(make-array 4 :fill-pointer 0)` / `:adjustable t` | `(VECTOR T 4)` |
+| `"abc"` | `STRING` (SBCL: `(SIMPLE-ARRAY CHARACTER (3))`) |
+
+Where this lives and why:
+
+- **`type-of` is the PRELUDE defun** (`LispPreludeLibrary`), so one source
+  serves all four backends. Its array arm fires only where
+  `%class-designator` answers the uninformative `T` AND `%arrayp` is true. That
+  guard is what keeps CHARACTER arrays out: a rank-1 character array is a
+  string VALUE on the interpreter and a marked general array on the compile
+  paths, and both DESIGNATE `STRING` -- so all four answer `STRING` rather than
+  diverging. The element-type arm is tested BEFORE the fill-pointer arm because
+  a packed representation is always simple (make-array degrades to the general
+  one the moment `:fill-pointer`/`:adjustable` appears) and
+  `array-has-fill-pointer-p`/`adjustable-array-p` REFUSE a packed array on
+  every backend.
+- **`array-element-type` answers the BOOLEAN `t`** for a general array, on the
+  interpreter too since todo-604 -- it used to answer a SYMBOL spelled `"T"`
+  there while all three compile backends answered the boolean, so
+  `(eq (array-element-type a) t)` disagreed across backends. `type-of` reads
+  exactly that answer to choose between `(simple-vector n)` and
+  `(simple-array et dims)`.
+- **`makeArrayTypeTest`** (`LispMacroExpander`) builds the test for
+  `(array ET DIMS)` / `(simple-array ET DIMS)` / `(vector ET SIZE)` /
+  `(simple-vector SIZE)`. It is the union of a STRING arm and an ARRAY arm,
+  because a string is a rank-1 character array in CL but not one of the
+  representations `%arrayp` knows: the string arm survives only while the
+  specifier can still describe one (element type character or unstated, rank 1
+  or unstated) and sizes itself with `length`, since the array-info functions
+  do not take a string on the compile paths (`.todo/464`). The array arm reads
+  `array-element-type` and the dimensions behind the `%arrayp` guard.
+- **The element type is compared UPGRADED** (`upgradedArrayElementType`),
+  mirroring exactly the representation `make-array` selects: the two float
+  widths and the three packed `(unsigned-byte 8|16|32)` widths keep their name,
+  the character family answers `character`, and everything else -- `fixnum`,
+  `integer`, `bit`, a class -- lands in the general boxed array whose element
+  type is `t`. So `(typep a '(simple-array fixnum (4)))` is a `t`-array test:
+  conformant, since there is no fixnum-specialized array to upgrade to, and it
+  is the one shape array-operations' suite still fails on (below). A deftype
+  ALIAS resolves first (`resolveElementTypeAlias`), like make-array's own.
+- **The dimensions are compared** as a whole when every one is literal (one
+  `array-dimensions` read against the quoted list, `nil` for the rank-0 array),
+  otherwise as a rank check plus one `array-dimension` read per pinned
+  dimension. Both VECTOR spellings pin the rank to 1 -- that is the dimension
+  information the specifier carries, and it keeps a rank-2 array out of an
+  `(simple-vector 41)` test rather than reaching `length`, which refuses a
+  non-sequence.
+- **The ATOMIC spellings still ignore the rank** (the bullet above): `vectorp`
+  and a bare `vector`/`simple-vector` clause answer `T` at every rank. That
+  half is `.todo/605`.
+- **A COMPUTED specifier is still atomic-only.** `expandRuntimeTypep` dispatches
+  type NAMES, so `(typep a (type-of a))` -- now that `type-of` answers a
+  compound specifier for arrays -- answers nil rather than t. Pre-existing shape
+  of the lite runtime dispatch, widened in reach by this change.
+
+Pinned by `LispEvaluatorTest#evalTypeOfAndTypepAnswerTheCompoundArraySpecifier`,
+`JvmLispCompilerTest#compileTypeOfAndTypepAnswerTheCompoundArraySpecifier`,
+`WasmLispCompilerIntegrationTest#typeOfAndTypepAnswerTheCompoundArraySpecifier`
+and the `array-type-of-and-compound-array-specifier` ci-spec case -- one program,
+one expected text, all four backends.
+
+Known divergence this did NOT close, recorded so nobody reads it as new: a
+rank-n (n>1) CHARACTER array is a general array of element type `t` on the
+interpreter, a character-marked array on wasm, and `make-array` REFUSES it on
+the JVM. Its `type-of` therefore differs by backend; a rank-1 character array
+(the shape that actually occurs) agrees everywhere.
 
 ## Top-level flattening (flattenTopLevel)
 

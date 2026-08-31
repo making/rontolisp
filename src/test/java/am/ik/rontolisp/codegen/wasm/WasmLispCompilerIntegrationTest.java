@@ -9185,6 +9185,39 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void typeOfAndTypepAnswerTheCompoundArraySpecifier() throws Exception {
+		// The WASM twin of
+		// JvmLispCompilerTest#compileTypeOfAndTypepAnswerTheCompoundArraySpecifier:
+		// type-of is a prelude defun, so the program needs the CLI pipeline's splice.
+		assertThat(compileAndRunPrelude("""
+				(print (list (type-of (make-array 4))
+				             (type-of (make-array '(2 3)))
+				             (type-of (make-array nil))
+				             (type-of (make-array 4 :element-type 'single-float))
+				             (type-of (make-array '(2 2) :element-type 'double-float))
+				             (type-of (make-array 4 :element-type '(unsigned-byte 8)))
+				             (type-of (make-array 4 :fill-pointer 0))
+				             (type-of (make-array 4 :adjustable t))
+				             (type-of "abc")))
+				(print (list (typep (make-array '(2 2) :element-type 'single-float) '(simple-array single-float (2 2)))
+				             (typep (make-array '(2 2) :element-type 'single-float) '(simple-array single-float (2 3)))
+				             (typep (make-array 4) '(simple-vector 4))
+				             (typep (make-array 4) '(simple-vector 3))
+				             (typep (make-array nil) '(simple-array t nil))
+				             (typep (make-array '(2 2)) '(simple-vector 4))
+				             (typep (make-array 4) '(simple-array t 1))
+				             (typep "abc" '(array * (3)))
+				             (typep "abc" '(simple-array t (3)))
+				             (typep (make-array 4 :element-type '(unsigned-byte 8)) '(vector (unsigned-byte 8) 4))
+				             (typep (make-array 4) '(vector (unsigned-byte 8)))))
+				(print (eq (array-element-type (make-array 4)) t))
+				""")).isEqualTo("((SIMPLE-VECTOR 4) (SIMPLE-ARRAY T (2 3)) (SIMPLE-ARRAY T NIL)"
+				+ " (SIMPLE-ARRAY SINGLE-FLOAT (4)) (SIMPLE-ARRAY DOUBLE-FLOAT (2 2))"
+				+ " (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) (VECTOR T 4) (VECTOR T 4) STRING)"
+				+ "\n(T NIL T NIL T NIL T T NIL T NIL)\nT");
+	}
+
+	@Test
 	void defclassMetaclassRunsTheClassDefinitionProtocol() throws Exception {
 		// The postmodern dao-class shape on the WASM path, mirroring
 		// JvmLispCompilerTest#compileDefclassMetaclassRunsTheClassDefinitionProtocol.

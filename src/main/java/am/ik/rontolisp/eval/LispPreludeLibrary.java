@@ -346,6 +346,26 @@ public final class LispPreludeLibrary {
 		// spelling is read with prin1-to-string, since symbol-name would drop the
 		// package qualifier a canonical type name carries. Everything else answers the
 		// designator itself (a built-in type name, or T).
+		//
+		// An ARRAY has no designator of its own (every representation answers T), so
+		// its type is BUILT here, as the COMPOUND specifier CL requires -- T carries no
+		// information at all, and nothing could tell a vector from a matrix. The shapes
+		// are SBCL's: a simple general rank-1 array is (simple-vector N), a
+		// fill-pointered or adjustable one (vector ELEMENT-TYPE SIZE), everything else
+		// (simple-array ELEMENT-TYPE DIMENSIONS) -- the rank-0 array included, whose
+		// dimension list is nil. The element type is array-element-type's UPGRADED
+		// answer, so a (make-array n :element-type 'fixnum) reads back as t; the same
+		// specifier makeTypeTest builds a test for, which is what keeps
+		// (typep a (type-of a)) true. The arm fires only where the designator is the
+		// uninformative T, which is also what keeps a CHARACTER array out of it: a
+		// rank-1 character array is a string value on the interpreter and a marked
+		// general array on the compile paths, and both designate STRING -- so all four
+		// backends answer STRING for it rather than (simple-array character (n)).
+		//
+		// The element-type arm comes FIRST on purpose: a packed representation is
+		// always simple (make-array degrades to the general one the moment
+		// :fill-pointer or :adjustable appears), and the two predicates below refuse a
+		// packed array outright on every backend.
 		SOURCES.put(LispNames.TYPE_OF, """
 				(defun type-of (object)
 				  (let* ((c (%class-designator object))
@@ -354,6 +374,14 @@ public final class LispPreludeLibrary {
 				    (cond ((and (> n 8) (string= (subseq s 0 8) "%struct-")) (intern (subseq s 8)))
 				          ((and (> n 7) (string= (subseq s 0 7) "%class-")) (intern (subseq s 7)))
 				          ((string= s "%PATHNAME") 'pathname)
+				          ((and (string= s "T") (%arrayp object))
+				           (let ((et (array-element-type object))
+				                 (dims (array-dimensions object)))
+				             (cond ((not (eq et t)) (list 'simple-array et dims))
+				                   ((or (array-has-fill-pointer-p object) (adjustable-array-p object))
+				                    (list 'vector et (car dims)))
+				                   ((= (length dims) 1) (list 'simple-vector (car dims)))
+				                   (t (list 'simple-array et dims)))))
 				          (t c))))
 				""");
 		// class-name reads the metaobject's name slot -- index 0 of the seeded

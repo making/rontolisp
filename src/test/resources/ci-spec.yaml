@@ -13204,6 +13204,33 @@ standalone:
       (:K 42)
       (T NIL)
       (T T T T T T T T)
+  - name: array-type-of-and-compound-array-specifier
+    source: |
+      (print (list (type-of (make-array 4))
+                   (type-of (make-array '(2 3)))
+                   (type-of (make-array nil))
+                   (type-of (make-array 4 :element-type 'single-float))
+                   (type-of (make-array '(2 2) :element-type 'double-float))
+                   (type-of (make-array 4 :element-type '(unsigned-byte 8)))
+                   (type-of (make-array 4 :fill-pointer 0))
+                   (type-of (make-array 4 :adjustable t))
+                   (type-of "abc")))
+      (print (list (typep (make-array '(2 2) :element-type 'single-float) '(simple-array single-float (2 2)))
+                   (typep (make-array '(2 2) :element-type 'single-float) '(simple-array single-float (2 3)))
+                   (typep (make-array 4) '(simple-vector 4))
+                   (typep (make-array 4) '(simple-vector 3))
+                   (typep (make-array nil) '(simple-array t nil))
+                   (typep (make-array '(2 2)) '(simple-vector 4))
+                   (typep (make-array 4) '(simple-array t 1))
+                   (typep "abc" '(array * (3)))
+                   (typep "abc" '(simple-array t (3)))
+                   (typep (make-array 4 :element-type '(unsigned-byte 8)) '(vector (unsigned-byte 8) 4))
+                   (typep (make-array 4) '(vector (unsigned-byte 8)))))
+      (print (eq (array-element-type (make-array 4)) t))
+    stdout: |
+      ((SIMPLE-VECTOR 4) (SIMPLE-ARRAY T (2 3)) (SIMPLE-ARRAY T NIL) (SIMPLE-ARRAY SINGLE-FLOAT (4)) (SIMPLE-ARRAY DOUBLE-FLOAT (2 2)) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) (VECTOR T 4) (VECTOR T 4) STRING)
+      (T NIL T NIL T NIL T T NIL T NIL)
+      T
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

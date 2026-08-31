@@ -26137,6 +26137,153 @@ public final class LispMacroExpander {
 		};
 	}
 
+	/**
+	 * The element type an array built with this declared element type actually reports
+	 * from {@code array-element-type} -- the "upgraded" type, mirroring exactly the
+	 * representation {@code make-array} selects: the two float widths and the three
+	 * packed unsigned-integer widths keep their own name, the character family answers
+	 * {@code character}, and EVERYTHING else (fixnum, integer, bit, a user class) lands
+	 * in the general boxed array whose element type is {@code t}. So
+	 * {@code (typep a '(simple-array fixnum (4)))} is a {@code t}-array test here, which
+	 * is conformant: there is no fixnum-specialized array to upgrade to.
+	 * @param spec the declared element type (already alias-resolved)
+	 * @return the element type value an array of that kind answers
+	 */
+	private static LispVal upgradedArrayElementType(LispVal spec) {
+		if (spec instanceof LispSymbol sym) {
+			return switch (canonicalElementTypeName(sym)) {
+				case "CHARACTER" -> new LispSymbol(LispNames.CHARACTER_TYPE);
+				case LispNames.SINGLE_FLOAT -> new LispSymbol(LispNames.SINGLE_FLOAT);
+				case LispNames.DOUBLE_FLOAT -> new LispSymbol(LispNames.DOUBLE_FLOAT);
+				default -> LispTrue.INSTANCE;
+			};
+		}
+		int width = LispNames.unsignedByteWidth(spec);
+		if (width != 0) {
+			return listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(width)));
+		}
+		return LispTrue.INSTANCE;
+	}
+
+	/**
+	 * The dimensions a compound array specifier pins down: the rank ({@code -1} when the
+	 * specifier does not say) and one entry per dimension, {@code null} where the
+	 * specifier wrote {@code *}. A specifier may give the rank alone
+	 * ({@code (simple-array t 1)}), a full list ({@code (simple-array double-float (2
+	 * 2))}), {@code nil} (the RANK-0 array) or {@code *}.
+	 */
+	private record ArrayDimensionSpec(int rank, List<@Nullable Integer> dimensions) {
+
+		static final ArrayDimensionSpec ANY = new ArrayDimensionSpec(-1, List.of());
+
+		boolean allLiteral() {
+			return this.rank == this.dimensions.size() && this.dimensions.stream().allMatch(java.util.Objects::nonNull);
+		}
+
+	}
+
+	/** Reads the DIMENSIONS half of a compound array specifier; see makeArrayTypeTest. */
+	private static ArrayDimensionSpec arrayDimensionSpec(@Nullable LispVal spec) {
+		if (spec == null || isWildcardTypeArgument(spec)) {
+			return ArrayDimensionSpec.ANY;
+		}
+		if (spec instanceof LispInteger rank) {
+			return new ArrayDimensionSpec((int) rank.value(), List.of());
+		}
+		if (spec instanceof LispNil) {
+			// The rank-0 array: its dimension list IS nil, not a missing argument.
+			return new ArrayDimensionSpec(0, List.of());
+		}
+		if (spec instanceof LispCons dims && dims.isProperList()) {
+			List<@Nullable Integer> sizes = new java.util.ArrayList<>();
+			for (LispVal dim : dims.toList()) {
+				sizes.add(dim instanceof LispInteger n ? (int) n.value() : null);
+			}
+			return new ArrayDimensionSpec(sizes.size(), sizes);
+		}
+		return ArrayDimensionSpec.ANY;
+	}
+
+	/**
+	 * Builds the test of a compound array type specifier from its two halves. The answer
+	 * is the union of a STRING arm and an ARRAY arm, because a string is a rank-1
+	 * character array in CL but not one of the array representations {@code %arrayp}
+	 * knows: the string arm survives only while the specifier can still describe one (a
+	 * character or unspecified element type, a rank that is 1 or unstated), and it
+	 * measures its size with {@code length}, since the array-info functions do not take a
+	 * string on the compile paths. The array arm reads {@code array-element-type} and the
+	 * dimensions, all behind the {@code %arrayp} guard so neither is called on a value
+	 * that has none.
+	 * @param value the (temp-bound) value form
+	 * @param elementSpec the declared element type, or null when the specifier omits it
+	 * @param dimensionSpec the declared dimensions, or null when the specifier omits them
+	 * @param closRegistry the registry whose deftype table resolves an element type alias
+	 * @return a truthy test form
+	 */
+	private static LispVal makeArrayTypeTest(LispVal value, @Nullable LispVal elementSpec,
+			@Nullable LispVal dimensionSpec, ClosRegistry closRegistry) {
+		boolean anyElement = elementSpec == null || isWildcardTypeArgument(elementSpec);
+		LispVal expectedElement = anyElement ? LispTrue.INSTANCE : upgradedArrayElementType(
+				java.util.Objects.requireNonNullElse(resolveElementTypeAlias(elementSpec, closRegistry), elementSpec));
+		boolean characterElement = !anyElement && expectedElement instanceof LispSymbol sym
+				&& LispNames.CHARACTER_TYPE.equals(sym.name());
+		ArrayDimensionSpec dims = arrayDimensionSpec(dimensionSpec);
+
+		LispVal stringArm = null;
+		if (anyElement || characterElement) {
+			if (dims.rank() < 0) {
+				stringArm = callOf(LispNames.STRINGP, value);
+			}
+			else if (dims.rank() == 1) {
+				Integer size = dims.dimensions().isEmpty() ? null : dims.dimensions().get(0);
+				stringArm = size == null ? callOf(LispNames.STRINGP, value)
+						: listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.STRINGP, value),
+								listToCons(List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.LENGTH, value),
+										new LispInteger(size)))));
+			}
+		}
+
+		List<LispVal> arrayTests = new java.util.ArrayList<>();
+		arrayTests.add(new LispSymbol(LispNames.AND));
+		arrayTests.add(callOf(LispNames.ARRAYP_INTERNAL, value));
+		if (!anyElement) {
+			// The general element type is the BOOLEAN t on every backend, so it is an
+			// eq test; a packed element type is a symbol or an (unsigned-byte N) list.
+			arrayTests.add(expectedElement instanceof LispTrue
+					? listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL),
+							callOf(LispNames.ARRAY_ELEMENT_TYPE, value), LispTrue.INSTANCE))
+					: listToCons(List.of(new LispSymbol(LispNames.EQUAL), callOf(LispNames.ARRAY_ELEMENT_TYPE, value),
+							listToCons(List.of(new LispSymbol(LispNames.QUOTE), expectedElement)))));
+		}
+		if (dims.allLiteral()) {
+			// Every dimension known: one array-dimensions read against the literal list
+			// (nil for the rank-0 array), rather than a rank read plus one read a
+			// dimension.
+			List<LispVal> literal = new java.util.ArrayList<>();
+			for (Integer size : dims.dimensions()) {
+				literal.add(new LispInteger(java.util.Objects.requireNonNull(size)));
+			}
+			LispVal literalDims = literal.isEmpty() ? LispNil.INSTANCE : listToCons(literal);
+			arrayTests
+				.add(listToCons(List.of(new LispSymbol(LispNames.EQUAL), callOf(LispNames.ARRAY_DIMENSIONS, value),
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), literalDims)))));
+		}
+		else if (dims.rank() >= 0) {
+			arrayTests.add(listToCons(List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.ARRAY_RANK, value),
+					new LispInteger(dims.rank()))));
+			for (int i = 0; i < dims.dimensions().size(); i++) {
+				Integer size = dims.dimensions().get(i);
+				if (size != null) {
+					arrayTests.add(listToCons(List.of(new LispSymbol(LispNames.EQ),
+							listToCons(List.of(new LispSymbol(LispNames.ARRAY_DIMENSION), value, new LispInteger(i))),
+							new LispInteger(size))));
+				}
+			}
+		}
+		LispVal arrayArm = arrayTests.size() == 2 ? arrayTests.get(1) : listToCons(arrayTests);
+		return stringArm == null ? arrayArm : listToCons(List.of(new LispSymbol(LispNames.OR), stringArm, arrayArm));
+	}
+
 	/** Builds the test for a compound (list) type specifier; see makeTypeTest. */
 	private static LispVal makeCompoundTypeTest(LispVal value, LispCons spec, ClosRegistry closRegistry) {
 		List<LispVal> parts = spec.toList();
@@ -26179,65 +26326,38 @@ public final class LispMacroExpander {
 				return listToCons(List.of(parts.get(1), value));
 			}
 			case "ARRAY", "SIMPLE-ARRAY", "VECTOR", "SIMPLE-VECTOR": {
-				// (simple-array ELEMENT-TYPE DIMS): the dimensions are not checked (the
-				// rank read would drag the gated array helpers in, like the atomic
-				// case). A character element type keeps strings in the test; any other
-				// declared element type names a SPECIALIZED array and matches only an
-				// array whose element type upgraded to the same one -- a packed
-				// (unsigned-byte 8|16|32) spec its packed vectors, anything else the
-				// general (element-type t) array. A general #(...) is never a
-				// (vector (unsigned-byte 8)) (s-sql's sql-escape dispatches on this).
+				// (array ELEMENT-TYPE DIMENSIONS) / (vector ELEMENT-TYPE SIZE) /
+				// (simple-vector SIZE): BOTH halves are checked -- the element type
+				// against array-element-type's upgraded answer, the dimensions
+				// against the value's own. This is the very specifier type-of BUILDS
+				// for an array, so the two are one contract
+				// (.kb/declarations-type-checks.md, "The array type lattice").
 				//
 				// The argument SHAPES differ, and getting that wrong is not a lite
-				// approximation but a wrong answer: (simple-vector SIZE) carries only a
-				// size (its element type is always t), while (vector ELEMENT-TYPE SIZE)
-				// and (array ELEMENT-TYPE DIMS) lead with the element type. Reading
-				// esrap's (typep cell '(simple-vector 41)) size as an element type made
-				// the packrat cache miss its own vector and hand it to gethash.
-				boolean simpleVector = "SIMPLE-VECTOR".equals(plainTypeName(head));
-				LispVal sizeArg = null;
-				if (simpleVector) {
-					sizeArg = parts.size() > 1 ? parts.get(1) : null;
-				}
-				else if ("VECTOR".equals(plainTypeName(head))) {
-					sizeArg = parts.size() > 2 ? parts.get(2) : null;
-				}
-				LispVal sizeTest = null;
-				if (sizeArg instanceof LispInteger size) {
-					sizeTest = listToCons(List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.LENGTH, value), size));
-				}
-				boolean characterElements = true;
-				LispVal packedElement = null;
-				if (!simpleVector && parts.size() > 1
-						&& !(parts.get(1) instanceof LispSymbol star && "*".equals(plainTypeName(star)))) {
-					LispVal elementType = parts.get(1);
-					// t reads as LispTrue, not a symbol, so the general element type has
-					// to be recognized on both spellings.
-					String elementName = elementType instanceof LispTrue ? "T"
-							: elementType instanceof LispSymbol s ? canonicalElementTypeName(s) : "";
-					characterElements = "CHARACTER".equals(elementName) || "T".equals(elementName);
-					if (!characterElements && elementType instanceof LispCons ub
-							&& ub.car() instanceof LispSymbol ubHead && "UNSIGNED-BYTE".equals(plainTypeName(ubHead))
-							&& ub.cdr() instanceof LispCons widthCons && widthCons.car() instanceof LispInteger width
-							&& widthCons.cdr() instanceof LispNil
-							&& (width.value() == 8 || width.value() == 16 || width.value() == 32)) {
-						packedElement = listToCons(
-								List.of(new LispSymbol("UNSIGNED-BYTE"), new LispInteger(width.value())));
-					}
-				}
-				LispVal base;
-				if (characterElements) {
-					base = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
-							callOf(LispNames.ARRAYP_INTERNAL, value)));
+				// approximation but a wrong answer: (simple-vector SIZE) carries only
+				// a size (its element type is always t), while (vector ELEMENT-TYPE
+				// SIZE) and (array ELEMENT-TYPE DIMS) lead with the element type.
+				// Reading esrap's (typep cell '(simple-vector 41)) size as an element
+				// type made the packrat cache miss its own vector and hand it to
+				// gethash. Both VECTOR spellings pin the RANK to 1 -- that is the
+				// dimension information the specifier carries, and it keeps a rank-2
+				// array out of a (simple-vector 41) test rather than reaching
+				// `length`, which refuses a non-sequence. The ATOMIC `vector`
+				// spelling still ignores the rank; that half is its own item.
+				String arrayHead = plainTypeName(head);
+				boolean simpleVector = "SIMPLE-VECTOR".equals(arrayHead);
+				boolean vectorSpelling = simpleVector || "VECTOR".equals(arrayHead);
+				LispVal elementSpec = simpleVector ? LispTrue.INSTANCE : parts.size() > 1 ? parts.get(1) : null;
+				LispVal dimensionSpec;
+				if (vectorSpelling) {
+					int sizeIndex = simpleVector ? 1 : 2;
+					LispVal size = parts.size() > sizeIndex ? parts.get(sizeIndex) : new LispSymbol("*");
+					dimensionSpec = listToCons(List.of(size));
 				}
 				else {
-					LispVal expectedElementType = packedElement != null ? packedElement : LispTrue.INSTANCE;
-					base = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.ARRAYP_INTERNAL, value),
-							listToCons(List.of(new LispSymbol(LispNames.EQUAL),
-									callOf(LispNames.ARRAY_ELEMENT_TYPE, value),
-									listToCons(List.of(new LispSymbol(LispNames.QUOTE), expectedElementType))))));
+					dimensionSpec = parts.size() > 2 ? parts.get(2) : null;
 				}
-				return sizeTest == null ? base : listToCons(List.of(new LispSymbol(LispNames.AND), base, sizeTest));
+				return makeArrayTypeTest(value, elementSpec, dimensionSpec, closRegistry);
 			}
 			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING": {
 				// (string SIZE): a string of EXACTLY that length; * (or an omitted size)

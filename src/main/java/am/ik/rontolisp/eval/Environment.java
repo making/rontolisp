@@ -1193,7 +1193,11 @@ public final class Environment implements Scope {
 				return new LispSymbol(LispNames.CHARACTER_TYPE);
 			}
 			requireArray(LispNames.ARRAY_ELEMENT_TYPE, args.get(0));
-			return new LispSymbol("T");
+			// The BOOLEAN t, not a symbol spelled "T": in CL the two are one object,
+			// the compile backends answer the boolean, and a caller writes
+			// (eq (array-element-type a) t). type-of reads this answer to decide
+			// between (simple-vector n) and (simple-array et dims).
+			return LispTrue.INSTANCE;
 		}));
 		env.defineFunction(LispNames.ADJUSTABLE_ARRAY_P, new LispFunction(LispNames.ADJUSTABLE_ARRAY_P, args -> {
 			requireArgCount(LispNames.ADJUSTABLE_ARRAY_P, args, 1);

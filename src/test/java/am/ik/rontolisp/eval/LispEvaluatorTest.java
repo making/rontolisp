@@ -4737,6 +4737,52 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalTypeOfAndTypepAnswerTheCompoundArraySpecifier() {
+		// type-of BUILDS an array's type rather than answering the uninformative T
+		// (nothing could tell a vector from a matrix), and the compound specifier is
+		// testable: the shapes are SBCL's, verified against SBCL 2.2.9 on this very
+		// program. A rank-0 array's dimension list is nil, a fill-pointered or
+		// adjustable vector is (vector ELEMENT-TYPE SIZE) rather than simple, and a
+		// STRING keeps its atomic STRING answer (SBCL says (simple-array character
+		// (3)) there -- a string is its own value type here, and a rank-1 character
+		// array designates STRING on every backend). Pinned identically by
+		// JvmLispCompilerTest#compileTypeOfAndTypepAnswerTheCompoundArraySpecifier and
+		// WasmLispCompilerIntegrationTest#typeOfAndTypepAnswerTheCompoundArraySpecifier.
+		LispVal types = evalMulti("""
+				(list (type-of (make-array 4))
+				      (type-of (make-array '(2 3)))
+				      (type-of (make-array nil))
+				      (type-of (make-array 4 :element-type 'single-float))
+				      (type-of (make-array '(2 2) :element-type 'double-float))
+				      (type-of (make-array 4 :element-type '(unsigned-byte 8)))
+				      (type-of (make-array 4 :fill-pointer 0))
+				      (type-of (make-array 4 :adjustable t))
+				      (type-of "abc"))
+				""");
+		assertThat(types.print()).isEqualTo("((SIMPLE-VECTOR 4) (SIMPLE-ARRAY T (2 3)) (SIMPLE-ARRAY T NIL)"
+				+ " (SIMPLE-ARRAY SINGLE-FLOAT (4)) (SIMPLE-ARRAY DOUBLE-FLOAT (2 2))"
+				+ " (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) (VECTOR T 4) (VECTOR T 4) STRING)");
+		LispVal tests = evalMulti("""
+				(list (typep (make-array '(2 2) :element-type 'single-float) '(simple-array single-float (2 2)))
+				      (typep (make-array '(2 2) :element-type 'single-float) '(simple-array single-float (2 3)))
+				      (typep (make-array 4) '(simple-vector 4))
+				      (typep (make-array 4) '(simple-vector 3))
+				      (typep (make-array nil) '(simple-array t nil))
+				      (typep (make-array '(2 2)) '(simple-vector 4))
+				      (typep (make-array 4) '(simple-array t 1))
+				      (typep "abc" '(array * (3)))
+				      (typep "abc" '(simple-array t (3)))
+				      (typep (make-array 4 :element-type '(unsigned-byte 8)) '(vector (unsigned-byte 8) 4))
+				      (typep (make-array 4) '(vector (unsigned-byte 8))))
+				""");
+		assertThat(tests.print()).isEqualTo("(T NIL T NIL T NIL T T NIL T NIL)");
+		// array-element-type answers the BOOLEAN t for a general array, the answer the
+		// compile paths already gave and the one type-of reads to pick between
+		// (simple-vector n) and (simple-array et dims).
+		assertThat(eval("(eq (array-element-type (make-array 4)) t)").print()).isEqualTo("T");
+	}
+
+	@Test
 	void evalTypecase() {
 		assertThat(eval("(typecase 42 (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"i\"");
 		assertThat(eval("(typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"s\"");

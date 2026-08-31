@@ -8,6 +8,17 @@ The type name of a value as a symbol: a `defstruct`/CLOS instance answers its st
 (type-of 42) ; => INTEGER
 ```
 
+An ARRAY answers a COMPOUND specifier instead, so the rank and the element type are readable: a simple rank-1 array of `t` is `(simple-vector SIZE)`, one with a fill pointer or `:adjustable t` is `(vector t SIZE)`, and everything else — the rank-0 array included, whose dimension list is `nil` — is `(simple-array ELEMENT-TYPE DIMENSIONS)`. The element type is [`array-element-type`](array-element-type.md)'s upgraded answer, so an array asked for `:element-type 'fixnum` reads back as `t`. A string answers the atomic `string`.
+
+```lisp
+(list (type-of (make-array 4))
+      (type-of (make-array nil))
+      (type-of (make-array '(2 2) :element-type 'double-float))
+      (type-of (make-array 4 :element-type '(unsigned-byte 8)))
+      (type-of (make-array 4 :fill-pointer 0)))
+; => ((SIMPLE-VECTOR 4) (SIMPLE-ARRAY T NIL) (SIMPLE-ARRAY DOUBLE-FLOAT (2 2)) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) (VECTOR T 4))
+```
+
 ```lisp
 (defpackage :gfx (:use :cl) (:export :sprite))
 (in-package :gfx)
