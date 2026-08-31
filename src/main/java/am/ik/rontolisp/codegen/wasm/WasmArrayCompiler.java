@@ -118,7 +118,9 @@ final class WasmArrayCompiler {
 		// the string boundary intact. Every make-array with :element-type 'character
 		// now takes this route (matching the JVM), so setf-aref writes always land in
 		// place -- the previous immutable TYPE_STRING branch dropped high bytes on
-		// downstream read even for programs that never called mutation.
+		// downstream read even for programs that never called mutation. The MARK itself
+		// is conditional on the runtime rank being 1 (below), since nothing above rank 1
+		// is a string.
 		boolean charVector = am.ik.rontolisp.macro.LispMacroExpander.isCharacterElementType(elementType);
 		if ((doubleFloat || singleFloat) && fpArg == null && adjArg == null) {
 			// A plain :element-type 'double-float / 'single-float array (no fill pointer
@@ -252,7 +254,20 @@ final class WasmArrayCompiler {
 		else {
 			refNull(ctx);
 		}
-		i32Const(ctx, charVector ? 1 : 0);
+		if (charVector) {
+			// The marker MEANS "a rank-1 character array", i.e. a string, so it is set
+			// only when the runtime rank is 1. Above rank 1 a character element type
+			// selects no representation of its own: the value is the plain general
+			// array, which is what stringp / array-element-type / type-of then answer
+			// for -- the same degrade an (unsigned-byte 8) request takes above rank 1.
+			getBuckets(ctx, dimsArrSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			i32Const(ctx, 1);
+			ctx.writer.write(Instruction.I32_EQ);
+		}
+		else {
+			i32Const(ctx, 0);
+		}
 		boxI31(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);

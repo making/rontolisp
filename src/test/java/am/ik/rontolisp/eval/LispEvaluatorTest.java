@@ -5214,6 +5214,59 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalCharacterElementTypeAboveRankOneIsAGeneralArray() {
+		// The character marker MEANS "a rank-1 character array", i.e. a string, so
+		// nothing above rank 1 carries it: the value is the plain general array, on
+		// every backend. stringp and vectorp answer NIL (SBCL 2.2.9 agrees), and the
+		// element type degrades to t exactly as a rank-n '(unsigned-byte 8) request's
+		// does.
+		assertThat(eval("""
+				(let ((b (make-array '(2 2) :element-type 'character :initial-element #\\a)))
+				  (list (stringp b) (array-element-type b) (array-dimensions b) (type-of b) (vectorp b)))
+				""").print()).isEqualTo("(NIL T (2 2) (SIMPLE-ARRAY T (2 2)) NIL)");
+		// The elements are still CHARACTERS: unsupplied slots take the same space fill
+		// the rank-1 string does, and a write lands like any general array write.
+		assertThat(eval("(aref (make-array '(2 2) :element-type 'character) 0 1)").print()).isEqualTo("#\\Space");
+		assertThat(eval("""
+				(let ((b (make-array '(2 2) :element-type 'character :initial-element #\\a)))
+				  (setf (aref b 1 1) #\\z)
+				  b)
+				""").print()).isEqualTo("#2A((#\\a #\\a) (#\\a #\\z))");
+		// :initial-contents fills a rank-2 request row-major rather than answering a
+		// string copy of the contents.
+		assertThat(eval("""
+				(let ((c (make-array '(2 2) :element-type 'character
+				                     :initial-contents '((#\\a #\\b) (#\\c #\\d)))))
+				  (list (stringp c) (aref c 1 0) (type-of c)))
+				""").print()).isEqualTo("(NIL #\\c (SIMPLE-ARRAY T (2 2)))");
+		// Rank 1 -- the shape that actually occurs -- is untouched: still a string.
+		assertThat(eval("""
+				(let ((s (make-array 3 :element-type 'character :initial-element #\\z)))
+				  (list (stringp s) (array-element-type s) (type-of s) s))
+				""").print()).isEqualTo("(T CHARACTER STRING \"zzz\")");
+		assertThat(eval("(stringp (make-array '(3) :element-type 'character))").print()).isEqualTo("T");
+		// The same fill rule for the OTHER degrade: a packed float type that falls back
+		// for a fill pointer / adjustability keeps its 0.0 (this answered NIL here while
+		// the three compile backends answered 0.0).
+		assertThat(eval("(aref (make-array 3 :element-type 'double-float :adjustable t) 0)").print()).isEqualTo("0.0");
+		assertThat(eval("(aref (make-array 3 :element-type 'single-float :fill-pointer 3) 2)").print())
+			.isEqualTo("0.0");
+	}
+
+	@Test
+	void evalMakeArrayEvaluatesItsDimensionsExactlyOnce() {
+		// The character branch used to default its fill pointer by re-compiling the
+		// DIMENSIONS expression, so the JVM evaluated it twice; the default is the t
+		// designator now, which make-array resolves to the vector size on its own.
+		assertThat(eval("""
+				(let ((n 0))
+				  (flet ((bump () (setq n (+ n 1)) 3))
+				    (let ((s (make-array (bump) :element-type 'character :initial-element #\\k)))
+				      (list s n))))
+				""").print()).isEqualTo("(\"kkk\" 1)");
+	}
+
+	@Test
 	void evalError() {
 		assertThatThrownBy(() -> eval("(error \"boom\")")).isInstanceOf(LispEvalException.class).hasMessage("boom");
 		assertThatThrownBy(() -> eval("(error \"bad value: ~a\" (+ 1 2))")).isInstanceOf(LispEvalException.class)

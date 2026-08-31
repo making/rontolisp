@@ -120,11 +120,21 @@ final class JvmArrayCompiler {
 			// quote-framed runtime string (_strv). A missing fill-pointer defaults to the
 			// capacity so aref reads and setf-aref writes see every slot -- uax-15's
 			// from-unicode-string is (make-array N :element-type 'character) followed by
-			// (setf (aref ...) ch), which requires the mutable representation.
+			// (setf (aref ...) ch), which requires the mutable representation. That
+			// default is the runtime t, which _arrayMake already resolves to the vector
+			// size; passing the DIMS expression a second time instead would evaluate it
+			// twice. The rank is a runtime fact, so _charVecMake does the rank-1 test
+			// and falls back to the general representation above it (as _ivMake does).
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			compileKeywordValueOrNull(initValue != null ? initValue : new LispChar(' '), ctx, className);
-			LispVal effectiveFillPointer = fillPointer != null ? fillPointer : args.get(1);
-			compileKeywordValueOrNull(effectiveFillPointer, ctx, className);
+			if (fillPointer != null) {
+				JvmExprCompiler.compileExpr(fillPointer, ctx, className);
+			}
+			else {
+				// The t designator, UNSPELLED: it never reaches the program (_arrayMake
+				// consumes it into the vector size), so its spelling is no designator.
+				JvmEmitHelper.compileUnspelledLiteral("T", ctx);
+			}
 			compileKeywordValueOrNull(adjustable, ctx, className);
 			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.CHAR_VEC_MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
 			return;

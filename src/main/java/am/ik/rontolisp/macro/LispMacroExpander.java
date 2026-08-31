@@ -28532,6 +28532,20 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether a {@code make-array} dimensions argument is a LITERAL quoted list of two or
+	 * more sizes -- i.e. a rank the compile paths can read as {@code >= 2} without
+	 * running the program. Every other spelling (an integer, a variable, a computed list)
+	 * leaves the rank a runtime fact.
+	 * @param dimsExpr the dimensions argument expression
+	 * @return true when the expression names a literal rank >= 2 shape
+	 */
+	private static boolean isLiteralMultiDimensionSpec(LispVal dimsExpr) {
+		return dimsExpr instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispCons dims && dims.cdr() instanceof LispCons;
+	}
+
+	/**
 	 * Whether a literal {@code make-array :element-type} value designates a character
 	 * type ({@code character}/{@code base-char}/{@code standard-char}, quoted or bare,
 	 * package-qualified or plain).
@@ -28660,6 +28674,13 @@ public final class LispMacroExpander {
 	 * sequence goes through {@code (coerce c 'string)}. Returns null when the call has
 	 * other keywords (fill pointer / adjustable / displacement fall to the general paths)
 	 * or a non-character element type.
+	 *
+	 * <p>
+	 * It also declines a LITERAL rank >= 2 dimensions list: nothing above rank 1 is a
+	 * string, so that call is the general allocation-plus-fill of
+	 * {@link #lowerInitialContentsMakeArray} over a general array. A dims expression
+	 * whose rank is only known at run time keeps the rank-1 reading, which is the rank
+	 * the general lowering assumes there too.
 	 * @param cons the make-array expression
 	 * @return the lowered expression, or null when not applicable
 	 */
@@ -28682,7 +28703,7 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		if (contents == null || !isCharacterElementType(elementType)) {
+		if (contents == null || !isCharacterElementType(elementType) || isLiteralMultiDimensionSpec(parts.get(1))) {
 			return null;
 		}
 		// (let* ((__mca_n n) (__mca_c c))

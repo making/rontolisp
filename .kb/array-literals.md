@@ -184,6 +184,95 @@ Pinned by the ci-spec case `rank-zero-arrays-cross-backend`,
 `JvmLispCompilerTest.compileAndRunRankZeroArray` and
 `WasmLispCompilerIntegrationTest.compileRankZeroArray`.
 
-What is still missing, and belongs to `.todo/604` rather than here: `type-of` answers `T`
-for a rank-0 array where CL says `(SIMPLE-ARRAY T NIL)`, and `vectorp` answers `T` for
-every array regardless of rank (a pre-existing gap that rank 2 already had).
+The two gaps this left were closed the same day, in `.kb/declarations-type-checks.md`:
+`type-of` builds the compound array specifier (todo-604, so a rank-0 array answers
+`(SIMPLE-ARRAY T NIL)`), and the atomic `vector` spellings check the rank (todo-605, so
+`vectorp` of a rank-0 or rank-2 array is `NIL`).
+
+## A SPECIALIZED element type above rank 1 is the general array (2026-08-31)
+
+**Invariant: `:element-type` selects a specialized representation only at RANK 1, except
+the packed FLOAT families, which are packed at every rank. Above rank 1 a `character` or
+`(unsigned-byte 8|16|32)` request answers the PLAIN GENERAL array on all four backends --
+`stringp` and `vectorp` are `NIL`, `array-element-type` is `T`, `type-of` is
+`(SIMPLE-ARRAY T dims)` -- and the only trace the element type leaves is the fill for
+unsupplied elements.**
+
+Half of that rule was already the tree's (`.kb/packed-integer-vectors.md`: "rank-n ...
+keeps the general boxed representation", `_ivMake`'s runtime rank check). The CHARACTER
+half was rank-BLIND until todo-607, and each backend read the same program differently:
+
+```lisp
+(let ((b (make-array '(2 2) :element-type 'character :initial-element #\a)))
+  (list (stringp b) (array-element-type b) (array-dimensions b) (type-of b)))
+; interpreter   (NIL       T         (2 2) (SIMPLE-ARRAY T (2 2)))
+; wasm (both)   (T         CHARACTER (2 2) STRING)
+; JVM           error: make-array: :fill-pointer requires a rank-1 array
+; SBCL 2.2.9    (NIL       CHARACTER (2 2) (SIMPLE-ARRAY CHARACTER (2 2)))
+```
+
+**Why degrade rather than mark.** The character MARKER does not mean "the elements are
+characters" -- it means "this general array IS a string", and a string is a rank-1
+character array and nothing else. Extending it above rank 1 would be a second, different
+fact ("the declared element type is character"), and the general array carries no
+element-type field on ANY of the three representations: the JVM's marker IS the header
+length (4), wasm's is one i31 meta slot (0 or 1), and `LispArray` has no such field at
+all. Worse, every consumer of the marker is a string operation that indexes linearly --
+`_strv` / `_charvec_to_str` / `_charvec_p` and the ~30 call sites that normalize through
+them -- so marking a rank-2 array means teaching all of them a rank they have no reason
+to read. Degrading instead makes the marker's implication explicit and enforced at the
+ONE constructor: **the marker implies rank 1**, so no reader checks the rank.
+
+The answer that costs is `array-element-type`, which says `T` where SBCL says
+`CHARACTER`. That is not a character special case: it is exactly what a rank-2
+`(unsigned-byte 8)` array already answers (SBCL: `(UNSIGNED-BYTE 8)`). Giving the general
+array a remembered element type is one change covering both, and it is `.todo/609`, not
+this item.
+
+**What each backend does.** The rank is a RUNTIME fact at every site (the dimensions are
+an expression), so all three compile-time recognizers stayed and the rank test moved into
+the allocation:
+
+- **Interpreter** (`Environment.makeArrayBuiltin`): the character arm already required
+  `dims.length == 1`; only the general path's default element moved (below).
+- **JVM** (`JvmArrayRuntimeBuilder`, `_charVecMake`): opens with `_ivMake`'s exact rank-1
+  test -- `dims` is a `Long`, or an `Object[]` cons whose cdr is not one -- and rank n
+  returns `_arrayMake(dims, init, null, adj)` without the length-4 header. The old
+  failure was upstream of that: `JvmArrayCompiler.compileMake` defaulted the fill pointer
+  by re-compiling the DIMENSIONS expression, which `_arrayMake` then rejected for rank 2
+  with a message about a keyword the program never passed. The default is now the
+  unspelled `t` designator, which `_arrayMake` already resolves to the vector size -- so
+  the dims expression is also **evaluated exactly once** now (it was evaluated twice on
+  this backend, and once on the other three).
+- **wasm** (`WasmArrayCompiler.compileMake`): the meta-offset marker is
+  `array.len(dims) == 1` instead of a compile-time `1`, emitted only under the
+  compile-time character branch (a program with no character `make-array` is
+  byte-identical).
+- **The `:initial-contents` character lowering**
+  (`LispMacroExpander.lowerCharacterInitialContentsMakeArray`, the compile paths' "answer
+  a fresh string copy of the contents" shortcut) declines a LITERAL rank >= 2 dims list,
+  so that call falls to `lowerInitialContentsMakeArray`'s nested row-major fill over a
+  general array. A dims expression whose rank is only known at run time keeps the rank-1
+  reading, which is the rank the general lowering assumes there too.
+
+**The one trace the element type leaves is the fill.** An unsupplied element of a
+degraded array is one OF THE DECLARED TYPE, not `nil`: `#\Space` for a rank-n character
+array (the same fill the rank-1 string gets) and `0.0` for a packed float type that fell
+back for a fill pointer or adjustability. CL leaves the value of an uninitialized element
+undefined, and an array the program asked to hold characters or floats should hold them
+even where its type tag cannot say so. Both defaults now live in ONE place per backend --
+`Environment.makeArrayBuiltin`'s general path on the interpreter, which is what todo-607
+added: the float half had been defaulted on the three COMPILE backends only, so
+`(aref (make-array 3 :element-type 'double-float :adjustable t) 0)` answered `NIL` here
+and `0.0` there.
+
+The packed integer widths do NOT keep their `0` under the same degrade (a rank-2
+`(unsigned-byte 8)` array reads `NIL`), because unlike the other two they have no
+fallback default anywhere yet; that is the other half of `.todo/609`.
+
+Pinned by `LispEvaluatorTest.evalCharacterElementTypeAboveRankOneIsAGeneralArray` /
+`#evalMakeArrayEvaluatesItsDimensionsExactlyOnce`,
+`JvmLispCompilerTest.compileCharacterElementTypeAboveRankOneIsAGeneralArray` /
+`#compileMakeArrayEvaluatesItsDimensionsExactlyOnce`, their
+`WasmLispCompilerIntegrationTest` twins, and the `character-element-type-above-rank-one`
+ci-spec case -- one program, one expected text, all four backends.
