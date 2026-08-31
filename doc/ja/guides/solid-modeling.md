@@ -150,6 +150,11 @@ CL-USER> (scene:fit *v*)
 `:parent`（接続先の軸）です。`:frame :parent` と書かれた呼び出しはマニュアルなしで
 読めます。
 
+`:local` はオフセットや軸を、ノードが「現在」向いている姿勢で読みます。すでに `z`
+まわりに90度回っているノードでは、`(geom:translate n (geom:vec3 10 0 0))` はワールド
+の `+x` ではなく `+y` へ運びます。これは前進の一歩を書きたいときに欲しい挙動であり、
+ワールド座標で置きたいときは `:frame :parent` です。
+
 ```lisp
 (let* ((base (geom:make-node))
        (joint (geom:make-node :translation (geom:vec3 0 0 100) :parent base))

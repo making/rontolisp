@@ -10,3 +10,14 @@
   (mapcar (lambda (x) (round (* 1000 x))) (coerce (geom:world-translation n) 'list)))
 ; => (10000 0 0)
 ```
+
+既定の `:local` では、同じオフセットがノードの向いた軸で読まれます。つまり加算
+される前にノードの現在の姿勢で回転します。上のノードはすでに `z` まわりに90度
+回っているので、`(10 0 0)` はワールドの `+y` へ運びます。
+
+```lisp
+(let ((n (geom:make-node :axis :z :angle (/ 3.141592653589793 2))))
+  (geom:translate n (geom:vec3 10 0 0))
+  (mapcar (lambda (x) (round (* 1000 x))) (coerce (geom:world-translation n) 'list)))
+; => (0 10000 0)
+```

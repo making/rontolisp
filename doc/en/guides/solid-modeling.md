@@ -156,6 +156,12 @@ each takes a named `:frame` rather than a positional flag -- `:local` (the
 node's own axes, the default) or `:parent` (the axes it is attached to). A call
 site reading `:frame :parent` needs no manual.
 
+`:local` reads the offset or the axis in the orientation the node is CURRENTLY
+in: on a node already turned a quarter turn about `z`,
+`(geom:translate n (geom:vec3 10 0 0))` carries it along world `+y`, not `+x`.
+That is what a walk-forward step wants; placing a node in world coordinates is
+`:frame :parent`.
+
 ```lisp
 (let* ((base (geom:make-node))
        (joint (geom:make-node :translation (geom:vec3 0 0 100) :parent base))
