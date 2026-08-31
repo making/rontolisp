@@ -1148,11 +1148,18 @@ class WasmLispCompilerTest {
 		assertThat(marginalBytesPerSite("(coerce *v* 'list)")).isLessThan(150);
 		// The generic sequence lowerings funnel their string/vector dispatch into the
 		// same trio, so what stays at a site is its own scan loop. Measured 489
-		// (reverse), 852 (remove), 591 (position); pre-trio these inlined the whole
-		// dispatch at 6,699-7,656 bytes per site.
+		// (reverse), 852 (remove); pre-trio these inlined the whole dispatch at
+		// 6,699-7,656 bytes per site.
 		assertThat(marginalBytesPerSite("(reverse *v*)")).isLessThan(1200);
 		assertThat(marginalBytesPerSite("(remove i *v*)")).isLessThan(1600);
-		assertThat(marginalBytesPerSite("(position i *v*)")).isLessThan(1200);
+		// position/find no longer COERCE the sequence to a list per call -- the site
+		// carries a dual scan instead (the cons-cursor walk plus an indexed
+		// string/vector arm), trading ~0.9 KB of site bytes for a scan that allocates
+		// nothing: the position+subseq+string= tokenizer went 3,221 -> 52 ms on this
+		// backend (.kb/seq-coerce-runtime.md). Measured 1,449 (was 591 with the
+		// per-call coerce); the bound catches the whole shared dispatch coming back
+		// inline, which starts at ~6,700.
+		assertThat(marginalBytesPerSite("(position i *v*)")).isLessThan(2000);
 	}
 
 	@Test

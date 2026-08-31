@@ -48,7 +48,11 @@ class PureBuiltinFolderTest {
 		if (!(form instanceof LispCons cons)) {
 			return true;
 		}
-		return cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name());
+		// (%str-fresh "...") is a folded CONSTANT too: the fresh-string producers fold
+		// to it so each evaluation answers a fresh mutable string rather than one
+		// shared literal (.kb/pure-builtin-fold.md).
+		return cons.car() instanceof LispSymbol op
+				&& (LispNames.QUOTE.equals(op.name()) || LispNames.STR_FRESH.equals(op.name()));
 	}
 
 	// ------------------------------------------------------------- the table's rows
@@ -76,6 +80,9 @@ class PureBuiltinFolderTest {
 	@Test
 	void foldsThroughNestingAndIntoEveryEvaluatedPosition() {
 		assertThat(folded("(length (symbol-name :abcd))")).isEqualTo(new LispInteger(4));
+		// A fold-fresh constant COMPOSES: the outer fold reads the value through the
+		// (%str-fresh ...) spelling, so the nested reduction still happens in one pass.
+		assertThat(folded("(length (concatenate 'string \"ab\" \"cd\"))")).isEqualTo(new LispInteger(4));
 		assertThat(folded("(defun f () (princ (* 6 7)))").print()).isEqualTo("(DEFUN F NIL (PRINC 42))");
 		assertThat(folded("(let ((x (+ 1 2))) x)").print()).isEqualTo("(LET ((X 3)) X)");
 		assertThat(folded("(if (< 1 2) (+ 1 1) (+ 2 2))").print()).isEqualTo("(IF T 2 4)");
@@ -109,6 +116,24 @@ class PureBuiltinFolderTest {
 				.as("unchanged: %s", source)
 				.isSameAs(program);
 		}
+	}
+
+	@Test
+	void aFreshStringProducerFoldsToAStrFreshConstantAndNotASharedLiteral() {
+		// The fresh-string producers still fold -- the constant is computed at compile
+		// time -- but the substituted form is (%str-fresh "..."), which the backends
+		// compile as the literal plus one mutable-copy wrap: each evaluation answers a
+		// FRESH MUTABLE string, so the fold cannot forge aliasing
+		// (.kb/pure-builtin-fold.md, "The fresh-string producers fold to a
+		// per-evaluation copy"). A plain-literal substitution here is that forgery
+		// coming back.
+		assertThat(folded("(string-upcase \"abc\")").print()).isEqualTo("(%STR-FRESH \"ABC\")");
+		assertThat(folded("(string-downcase \"ABC\")").print()).isEqualTo("(%STR-FRESH \"abc\")");
+		assertThat(folded("(concatenate 'string \"ab\" \"cd\")").print()).isEqualTo("(%STR-FRESH \"abcd\")");
+		assertThat(folded("(subseq \"abcdef\" 1 3)").print()).isEqualTo("(%STR-FRESH \"bc\")");
+		// The non-fresh string producers keep the plain literal: their runtime answers
+		// are immutable values, so a shared constant forges nothing.
+		assertThat(folded("(symbol-name :bar)")).isEqualTo(new LispString("BAR"));
 	}
 
 	@Test
@@ -163,7 +188,7 @@ class PureBuiltinFolderTest {
 		// A cold branch may hold a call that errors; the fold must leave it for the
 		// runtime rather than fail the compile.
 		for (String source : List.of("(length 5)", "(mod 1 0)", "(rem 1 0)", "(char \"ab\" 9)", "(char-code 5)",
-				"(code-char -1)", "(car 'foo)", "(+ 1 \"x\")", "(expt 2 -1)")) {
+				"(code-char -1)", "(car 'foo)", "(subseq \"ab\" 1 9)", "(+ 1 \"x\")", "(expt 2 -1)")) {
 			assertThat(folded(source).print()).as("declines: %s", source).startsWith("(");
 		}
 	}
@@ -172,13 +197,9 @@ class PureBuiltinFolderTest {
 	void whatIsOutOfTheTableStaysOutOfIt() {
 		// A ratio or float result, a value with identity, and a multiple-value producer
 		// are each excluded for their own reason (.kb/pure-builtin-fold.md).
-		// The last three rows are the FRESH-STRING producers that LEFT the table when
-		// their compiled results became mutable character vectors with identity: a fold
-		// to one shared literal would forge the aliasing the producer flip provides.
 		for (String source : List.of("(/ 7 2)", "(+ 1.5 2.5)", "(list 1 2)", "(cdr '(1 2 3))", "(floor 7 2)",
 				"(make-array 3)", "(vector 1 2)", "(nth 0 '((1) (2)))", "(char-equal #\\a #\\A)",
-				"(string-equal \"a\" \"A\")", "(alpha-char-p #\\a)", "(string-upcase \"abc\")",
-				"(concatenate 'string \"ab\" \"cd\")", "(subseq \"abcdef\" 1 3)")) {
+				"(string-equal \"a\" \"A\")", "(alpha-char-p #\\a)")) {
 			assertThat(folded(source).print()).as("not folded: %s", source).startsWith("(");
 		}
 	}

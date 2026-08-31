@@ -58,7 +58,12 @@ public final class MutableStringProducers {
 			// The %io-read-line fallback alias a component's socket splice routes a
 			// non-socket read-line through -- the public name may be rewritten away
 			// before this scan runs, so the alias keeps the gate on.
-			LispNames.READ_LINE_RAW_INTERNAL);
+			LispNames.READ_LINE_RAW_INTERNAL,
+			// The fold-produced fresh-string constant: the pure-builtin fold may have
+			// folded every producer NAME away, leaving only (%str-fresh ...) forms,
+			// and those need the wrap (and, on the JVM, the array runtime) exactly
+			// like the calls they replaced.
+			LispNames.STR_FRESH);
 
 	private MutableStringProducers() {
 	}

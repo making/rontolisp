@@ -61,5 +61,7 @@ all four backends, `string-identity-cross-backend` extended, and the corpus
 rows re-measured (each row its own defun, untouched control,
 `.kb/string-write-runtime.md`'s table format). Landing a subset with numbers
 is fine -- 559 and 596 both did. The performance residue of the ALREADY
-flipped producers (the accumulator idiom, the charvec read lanes in
-`position`'s per-call `coerce 'list`) belongs to `.todo/343`, not here.
+flipped producers (the accumulator idiom, the case family's render-in/
+convert-out, the remaining `seqAsListForm` coerce-per-call callers -- `position`
+and `find` were already fixed in 596 round 2) belongs to `.todo/343`, not
+here.

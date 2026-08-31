@@ -69,6 +69,19 @@ invalidation points to reach (the index sites never read a cache).
 
 ## Re-measured 2026-08-31, after `.todo/596` (charvec DENSITY went up)
 
+UPDATE, same day (596 round 2): the `position`/`find` half of the section below is
+FIXED, not pending -- `buildPositionScan` no longer coerces to a list at all (a list
+walks its cons cursor, a string/vector scans by index; `.kb/seq-coerce-runtime.md`).
+The tokenizer row went baseline 1,018 -> 29 ms on the JVM and 3,221 -> 52 on wasm p1
+-- ~35x UNDER the old floor -- and the interpreter's 1,501 -> 1,078. What this item
+still owns: (a) the whole-string RENDERS (the case/trim families' input, string=,
+intern, hash, print -- one render per call), (b) the wrap-out costs of the producer
+flip (upcase +70/110%, the wots capture and read-line loop at ~0.3-1.5 us per call
+absolute, the concatenate accumulator idiom), and (c) the OTHER `seqAsListForm`
+callers that still coerce per call -- `count`, `reduce`, the `:key` mapcar,
+`every`/`some`, `remove`/`substitute` -- the same defect `buildPositionScan` just
+shed, which can take the same shape.
+
 596 flipped the remaining big producers (concatenate 'string, the case family,
 format nil, the string-stream capture, read-line) to answer character vectors,
 so the whole-string callers above now see charvecs from ordinary code, not just

@@ -587,6 +587,13 @@ final class JvmExprCompiler {
 				case LispNames.PRINC_TO_STRING_RAW -> JvmPrincToStringCompiler.compile(cons, ctx, className);
 				case LispNames.PRIN1_TO_STRING_RAW -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
 				case LispNames.STRING_CONCAT -> JvmStringConcatCompiler.compile(cons, ctx, className);
+				// A fold-produced fresh-string constant: the literal, plus one
+				// mutable-copy wrap so each evaluation answers a fresh mutable string
+				// (PureBuiltinFolder's %str-fresh spelling).
+				case LispNames.STR_FRESH -> {
+					JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 				case LispNames.FIXED_DECIMAL -> JvmFixedDecimalCompiler.compile(cons, ctx, className);
 				case LispNames.GENSYM -> JvmGensymCompiler.compile(cons, ctx, className);
 				case LispNames.STRING -> JvmSymbolApiCompiler.compileString(cons, ctx, className);
@@ -1067,19 +1074,20 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons, ctx.usesArrays), ctx, className);
 				case LispNames.MEMBER ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx, className);
-				case LispNames.FIND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons), ctx, className);
+				case LispNames.FIND ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons, ctx.usesArrays), ctx, className);
 				case LispNames.FIND_IF ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIf(cons), ctx, className);
-				case LispNames.FIND_IF_NOT ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIfNot(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIf(cons, ctx.usesArrays), ctx, className);
+				case LispNames.FIND_IF_NOT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandFindIfNot(cons, ctx.usesArrays), ctx, className);
 				case LispNames.MEMBER_IF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMemberIf(cons), ctx, className);
 				case LispNames.POSITION ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons), ctx, className);
-				case LispNames.POSITION_IF ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandPositionIf(cons), ctx, className);
-				case LispNames.POSITION_IF_NOT ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandPositionIfNot(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons, ctx.usesArrays), ctx, className);
+				case LispNames.POSITION_IF -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandPositionIf(cons, ctx.usesArrays), ctx, className);
+				case LispNames.POSITION_IF_NOT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandPositionIfNot(cons, ctx.usesArrays), ctx, className);
 				case LispNames.COMPLEMENT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandComplement(cons), ctx, className);
 				case LispNames.COUNT ->

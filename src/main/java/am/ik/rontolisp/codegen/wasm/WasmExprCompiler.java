@@ -805,6 +805,13 @@ final class WasmExprCompiler {
 					compilePrintOperator(cons, ctx, () -> WasmPrin1ToStringCompiler.compile(cons, ctx));
 				// The print-object-free aliases the generated renderer's fallback calls.
 				case LispNames.PRINC_TO_STRING_RAW -> WasmPrincToStringCompiler.compile(cons, ctx);
+				// A fold-produced fresh-string constant: the literal, plus one
+				// mutable-copy wrap so each evaluation answers a fresh mutable string
+				// (PureBuiltinFolder's %str-fresh spelling).
+				case LispNames.STR_FRESH -> {
+					WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 				case LispNames.PRIN1_TO_STRING_RAW -> WasmPrin1ToStringCompiler.compile(cons, ctx);
 				case LispNames.STRING_CONCAT -> WasmStringConcatCompiler.compile(cons, ctx);
 				case LispNames.FIXED_DECIMAL -> WasmFixedDecimalCompiler.compile(cons, ctx);

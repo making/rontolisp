@@ -4,6 +4,9 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
@@ -48,6 +51,16 @@ final class WasmLiteralPrint {
 	 * rendering is a compile-time constant
 	 */
 	static @Nullable String rendered(LispVal obj, boolean readably) {
+		// A fold-produced fresh-string constant renders as the string it wraps: the
+		// TEXT is a compile-time constant even though the VALUE must materialize as a
+		// fresh mutable string per evaluation -- the caller compiles the (%str-fresh
+		// ...) form itself for the returned object, so only the print side goes
+		// static and the whole generic printer stays shakeable.
+		if (obj instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.STR_FRESH.equals(head.name()) && cons.cdr() instanceof LispCons arg
+				&& arg.car() instanceof LispString inner) {
+			return readably ? inner.print() : inner.value();
+		}
 		return switch (obj) {
 			case LispString s -> readably ? s.print() : s.value();
 			case LispInteger i -> i.print();

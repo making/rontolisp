@@ -2531,6 +2531,16 @@ public final class LispNames {
 	public static final String STRING_CONCAT = "%STRING-CONCAT";
 
 	/**
+	 * The {@code %str-fresh} internal form: a fold-produced FRESH-STRING constant. The
+	 * pure-builtin fold spells the result of a fresh-string producer over literal
+	 * arguments as {@code (%str-fresh "...")}; the compile backends emit the literal plus
+	 * one mutable-copy wrap, so each evaluation answers a fresh mutable string while the
+	 * constant stays a constant ({@code .kb/pure-builtin-fold.md}). Never read from
+	 * source and never seen by the interpreter (which does not fold).
+	 */
+	public static final String STR_FRESH = "%STR-FRESH";
+
+	/**
 	 * The {@code %fixed-decimal} internal helper: one number as a fixed-point decimal
 	 * string, {@code (%fixed-decimal value places int-digits plus-p)}. It is what
 	 * {@code format}'s {@code ~F} and {@code ~$} lower to on both format paths, so the

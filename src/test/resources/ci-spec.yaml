@@ -12175,10 +12175,16 @@ cases:
       (fold-check "char-upcase/latin1" (char-upcase (code-char 233)) (char-upcase (code-char (fold-hide 233))))
       (fold-check "char-downcase/cyrillic" (char-downcase (code-char 1040)) (char-downcase (code-char (fold-hide 1040))))
       (fold-check "char-upcase/astral" (char-upcase (code-char 66600)) (char-upcase (code-char (fold-hide 66600))))
-      ;; string-upcase / concatenate 'string / subseq no longer fold: they are
-      ;; FRESH-STRING producers whose results carry a writable identity, so a
-      ;; fold to one shared literal would forge aliasing. Their identity rows
-      ;; live in the string-identity-cross-backend case.
+      ;; The FRESH-STRING producers fold to a (%str-fresh ...) constant that
+      ;; materializes a fresh MUTABLE string per evaluation -- the value is
+      ;; still computed by the compiler, and these rows compare it against the
+      ;; runtime producer's answer; the identity half lives in the
+      ;; string-identity-cross-backend case.
+      (fold-check "string-upcase" (string-upcase "hello") (string-upcase (fold-hide "hello")))
+      (fold-check "string-upcase/unicode" (string-upcase "café αβγ") (string-upcase (fold-hide "café αβγ")))
+      (fold-check "concatenate" (concatenate 'string "ab" "cd")
+                                (concatenate 'string (fold-hide "ab") (fold-hide "cd")))
+      (fold-check "subseq" (subseq "hello" 1 3) (subseq (fold-hide "hello") (fold-hide 1) (fold-hide 3)))
       ;; A literal lookup table folds to the packed vector it builds, at every
       ;; width and in both spellings. The long one crosses the point where the
       ;; wasm backend bakes the elements as static data, so that emission is

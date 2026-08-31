@@ -15049,16 +15049,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void compileALiteralArgumentProducerCallIsNotFoldedIntoASharedLiteral() throws Exception {
-		// string-upcase/string-downcase/concatenate 'string/subseq left the
-		// PureBuiltinFolder table: a fold to one shared literal would forge the
-		// aliasing the producer flip provides, and each evaluation must be a fresh
-		// mutable string.
+	void compileALiteralArgumentProducerCallAnswersAFreshMutableStringPerEvaluation() throws Exception {
+		// string-upcase/string-downcase/concatenate 'string/subseq of literal
+		// arguments fold to a (%str-fresh ...) constant -- the value is computed at
+		// compile time, but each evaluation materializes a FRESH MUTABLE string, so
+		// the fold cannot forge aliasing (.kb/pure-builtin-fold.md).
 		assertThat(compileAndRun("""
 				(defun t596g () (string-upcase "ab"))
 				(let ((s (t596g))) (setf (char s 0) #\\z) (print (list s (t596g))))
 				(let ((s (subseq "abcdef" 1 3))) (replace s "Q") (print s))
-				""")).isEqualTo("(\"zB\" \"AB\")\n\"Qc\"");
+				(let* ((s (concatenate 'string "ab" "cd")) (a s)) (fill s #\\y) (print (list s a)))
+				""")).isEqualTo("(\"zB\" \"AB\")\n\"Qc\"\n(\"yyyy\" \"yyyy\")");
 	}
 
 	@Test

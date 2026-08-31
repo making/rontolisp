@@ -266,13 +266,17 @@ shape and the `%read-line-raw` component alias), computed identically by
 On the JVM the scan also joined `programUsesAnyArrayOp`, so a wrap site always has the
 array runtime -- same reasoning as subseq's line.
 
-**The fold had to yield**: `PureBuiltinFolder` used to reduce a literal-argument
-`string-upcase` / `string-downcase` / `(concatenate 'string ...)` / `subseq` to one
-shared literal, which forges exactly the aliasing this flip provides (and had already
-been forging it for `(subseq "lit" 0)` since the subseq flip). Those four entries left
-the table; `symbol-name` / `princ-to-string` / `prin1-to-string` stay, because their
-runtime producers still answer immutable values. Mechanics, corrected premise and the
-size cost: `.kb/pure-builtin-fold.md`, "The fresh-string producers left the table".
+**The fold folds to a per-evaluation copy**: `PureBuiltinFolder` used to reduce a
+literal-argument `string-upcase` / `string-downcase` / `(concatenate 'string ...)` /
+`subseq` to one SHARED literal, which forges exactly the aliasing this flip provides
+(and had already been forging it for `(subseq "lit" 0)` since the subseq flip). Those
+four entries now fold to a `(%str-fresh "...")` constant the backends compile as the
+literal plus one mutable-copy wrap — the value is still computed at compile time, the
+static-print payoff survives, and each evaluation answers a fresh mutable string.
+`symbol-name` / `princ-to-string` / `prin1-to-string` keep the plain literal, because
+their runtime producers still answer immutable values. Mechanics, corrected premise
+and the three-way size table: `.kb/pure-builtin-fold.md`, "The fresh-string producers
+fold to a per-evaluation copy".
 
 **Byte-oriented library accumulators must NOT go through the wrapped `concatenate`.**
 sockets.lisp's and stdin.lisp's read-char/read-line/write-sequence accumulators build
@@ -300,25 +304,29 @@ json-stringify 116 -> 245 ms before, 83 ms after -- faster than baseline) and
 `%json-stringify` hands its one caller-visible result through `copy-seq`.
 
 **What it costs, measured 2026-08-31 (Apple M4 Max, one locked run, min of two
-passes, each row its own defun, integer-loop control and every interpreter row
-unmoved; baseline -> flipped, ms):** JVM: json-parse 37 -> 40 (+8%),
-json-stringify 112 -> 111 (flat -- the `%json-pairs` fix; before it the wrapped
-merge measured 245), format-nil 13 -> 16, upcase of a 1,000-char source x2,000
-25 -> 44 (+76%), wots capture 8 -> 11, read-line loop 7 -> 13, concatenate
-accumulator (50 appends x 200) 1 -> 26, tokenizer 883 -> 932 (+5%), subseq-fed
-json-parse 29 -> 18 (a WIN: the source charvec slices by element copy). WASM p1:
-json-parse of a concatenate-built source 67 -> 89 (+32%), stringify 104 -> 109,
-format-nil 8 -> 10, upcase 18 -> 37 (+105%), wots 10 -> 16, read-lines 3 -> 12,
-fmt-render 4 -> 7, concat accumulator 4 -> 28, tokenizer (`position` + subseq +
-string= over a concatenate-built source) 3,008 -> 7,211 (**+139%**, the round's
-worst row). Nothing is quadratic; the two big percentages are (a) the accumulator
-idiom paying render+convert per append (~1.5 us per append absolute), and (b)
-`position`'s per-call `(coerce s 'list)` walking a charvec at ~2.5x an immutable
-string's speed on wasm -- both belong to the charvec READ lanes `.todo/343` still
-owns (its 2026-08-31 rows, including the `(string x)` escape hatch that renders a
-charvec back to an ordinary string once). Sizes: hello_world / pi_approx
-byte-identical, zlib +110 bytes (+0.09%); a minimal literal-argument producer
-program pays the fold's loss (`.kb/pure-builtin-fold.md`).
+passes, each row its own defun, the integer control unmoved; baseline -> flipped,
+ms):** JVM: json-parse 47 -> 41, json-stringify 135 -> 90 (the `%json-pairs` fix --
+the wrapped merge alone had measured 245), tokenizer (`position` + subseq + string=
+over a concatenate-built ~4,600-char source) **1,018 -> 29**, subseq-fed json-parse
+42 -> 28, format-nil 14 -> 16, upcase of a 1,000-char source x2,000 27 -> 46 (+70%),
+wots capture 10 -> 19, read-line loop 9 -> 16, concatenate accumulator (50 appends
+x 200) 2 -> 27 (~1.5 us per append). WASM p1: tokenizer **3,221 -> 52**, json-parse
+of a concatenate-built source 75 -> 97 (+29%), stringify 109 -> 121, format-nil
+9 -> 10, upcase 19 -> 40 (+110%), wots 10 -> 18, read-lines 4 -> 13, fmt-render
+5 -> 7, concat accumulator 4 -> 29. The interpreter's tokenizer moved too
+(1,501 -> 1,078): the tokenizer rows are the `buildPositionScan` rework landing WITH
+this flip -- `position`/`find` used to COERCE the whole sequence to a list per call
+(O(n) conses before the first element was read, `.kb/seq-coerce-runtime.md`), which
+both set that row's old floor and made the charvec walk look catastrophic on top of
+it; the scan now walks a list through its cons cursor and a string/vector by index,
+so the row beats the old baseline by ~35x instead of regressing 139%. What remains
+above baseline is the wrap-density family -- one render-in and/or one convert-out
+per producer call (upcase, the capture, read-line, the accumulator idiom) -- bounded
+constant factors in the microsecond range per call, owned by `.todo/343`'s read
+lanes (which also records the `(string x)` escape hatch). Sizes: hello_world /
+pi_approx byte-identical, zlib +110 bytes (+0.09%); a literal-argument producer
+program pays ~0.9 KB of wasm for the fold's per-evaluation copy
+(`.kb/pure-builtin-fold.md`, the three-way table).
 
 **What is STILL immutable, and why**: `princ-to-string` / `prin1-to-string` /
 `write-to-string` (the static `format` lowering emits its `~a`/`~s` pieces through the

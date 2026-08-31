@@ -555,11 +555,12 @@ class WasmTreeShakerTest {
 		// runtime-made symbol keeps the whole generic printer and with it the prologue,
 		// while the dead wrapper literals (the sequence keywords, the find-package
 		// alias alist) go, rows included -- the module was over 24 KB of data before.
-		// subseq, not string-upcase, makes the runtime name: string-upcase used to
-		// FOLD to a literal here, and since it left the fold table (its result is a
-		// mutable character vector with identity now) it would drag the ~16 KB Unicode
-		// case-fold tables into a test that is about the intern blob's rows.
-		byte[] interning = compile("(print (intern (subseq \"FOOX\" 0 3)))", false, OptimizeLevel.DEFAULT);
+		// The name is computed behind a defun so nothing folds: a folded
+		// string-upcase would drag the ~16 KB Unicode case-fold tables into a test
+		// that is about the intern blob's rows, and a folded subseq would replace the
+		// runtime-made name with a (%str-fresh ...) constant.
+		byte[] interning = compile("(defun sh (x) x) (print (intern (subseq (sh \"FOOX\") 0 3)))", false,
+				OptimizeLevel.DEFAULT);
 		Module.parse(interning).assertWellFormed();
 		// The generic printer keeps its own data: the printer prologue strings plus
 		// the ~755-byte Schubfach float table.

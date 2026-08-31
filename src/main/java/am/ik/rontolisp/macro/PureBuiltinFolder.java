@@ -214,6 +214,13 @@ public final class PureBuiltinFolder {
 						&& cons.cdr() instanceof LispCons datum && datum.cdr() instanceof LispNil) {
 					return datum.car();
 				}
+				// An already-substituted fold-fresh constant: its VALUE is the marked
+				// string it wraps, so a nested fold composes through it --
+				// (length (concatenate 'string "ab" "cd")) still reduces in one pass.
+				LispVal fresh = strFreshValue(cons);
+				if (fresh != null) {
+					return fresh;
+				}
 				return foldCall(cons, blocked);
 			}
 			default -> {
@@ -277,7 +284,23 @@ public final class PureBuiltinFolder {
 		if (value instanceof LispSymbol sym && !sym.isKeyword()) {
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(sym, LispNil.INSTANCE));
 		}
+		if (value instanceof LispString str && str.foldFresh()) {
+			// A fresh-string producer's value: the constant is baked, but each
+			// evaluation must answer a FRESH MUTABLE string, so the backends compile
+			// this form as the literal plus one mutable-copy wrap.
+			return new LispCons(new LispSymbol(LispNames.STR_FRESH), new LispCons(str, LispNil.INSTANCE));
+		}
 		return value;
+	}
+
+	/**
+	 * The marked string inside a {@code (%str-fresh "...")} form, or {@code null} when
+	 * the form is anything else.
+	 */
+	private static @Nullable LispVal strFreshValue(LispCons cons) {
+		return (cons.car() instanceof LispSymbol op && LispNames.STR_FRESH.equals(op.name())
+				&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispString str
+				&& arg.cdr() instanceof LispNil) ? str : null;
 	}
 
 	// ------------------------------------------------------- the shadowing question
@@ -937,19 +960,54 @@ public final class PureBuiltinFolder {
 		t.put(LispNames.SYMBOL_NAME, args -> args.size() == 1 ? symbolName(args.get(0)) : null);
 		t.put(LispNames.PRINC_TO_STRING, args -> args.size() == 1 ? renderedLiteral(args.get(0), false) : null);
 		t.put(LispNames.PRIN1_TO_STRING, args -> args.size() == 1 ? renderedLiteral(args.get(0), true) : null);
-		// string-upcase / string-downcase / (concatenate 'string ...) / subseq used to
-		// fold here too. They are FRESH-STRING producers, and the identity rule above
-		// now excludes them the way it always excluded an array: their compiled results
-		// are MUTABLE character vectors with identity (MutableStringProducers), so a
-		// fold to one shared literal would forge exactly the aliasing the flip exists
-		// to provide -- (let* ((s (string-upcase "abc")) (a s)) (setf (char s 0) #\x)
-		// ...) must answer ("xBC" "xBC") on every backend, and a folded literal cannot.
-		// symbol-name / princ-to-string / prin1-to-string stay: their runtime producers
-		// still answer immutable values, so the fold forges nothing they provide.
+		// The FRESH-STRING producers fold to a FOLD-FRESH value, not to a plain
+		// literal: their compiled results are MUTABLE character vectors with identity
+		// (MutableStringProducers), so a fold to one shared literal would forge the
+		// aliasing the producer flip provides. foldedLiteral spells a marked value as
+		// (%str-fresh "..."), which the backends compile as the literal plus one
+		// mutable-copy wrap -- the constant stays a constant, each evaluation answers
+		// a fresh mutable string. symbol-name / princ-to-string / prin1-to-string fold
+		// to plain literals: their runtime producers still answer immutable values.
+		t.put(LispNames.STRING_UPCASE, args -> caseFoldString(args, true));
+		t.put(LispNames.STRING_DOWNCASE, args -> caseFoldString(args, false));
+		t.put(LispNames.CONCATENATE, args -> {
+			// Only the STRING result family: a list or vector result is an object with
+			// identity (.kb/concatenate-result-families.md).
+			if (args.size() < 2 || !(args.get(0) instanceof LispSymbol type)
+					|| !LispNames.STRING.equals(LispSymbol.memberName(type.name()))) {
+				return null;
+			}
+			StringBuilder sb = new StringBuilder();
+			for (int i = 1; i < args.size(); i++) {
+				if (!(args.get(i) instanceof LispString str)) {
+					return null;
+				}
+				sb.append(str.value());
+			}
+			return sb.codePointCount(0, sb.length()) > MAX_FOLDED_CHARS ? null : LispString.foldFresh(sb.toString());
+		});
 		// -- packed integer tables ----------------------------------------------
 		t.put(LispNames.COERCE,
 				args -> args.size() == 2 ? packedIntVector(args.get(0), packedWidth(args.get(1))) : null);
 		t.put(LispNames.MAKE_ARRAY, PureBuiltinFolder::foldMakeArray);
+		t.put(LispNames.SUBSEQ, args -> {
+			if (args.size() < 2 || args.size() > 3 || !(args.get(0) instanceof LispString str)) {
+				return null;
+			}
+			List<BigInteger> bounds = integers(args.subList(1, args.size()));
+			if (bounds == null) {
+				return null;
+			}
+			int count = str.codePointCount();
+			int start = boundedIndex(bounds.get(0), count);
+			int end = bounds.size() == 2 ? boundedIndex(bounds.get(1), count) : count;
+			if (start < 0 || end < 0 || start > end) {
+				return null;
+			}
+			String value = str.value();
+			int from = value.offsetByCodePoints(0, start);
+			return LispString.foldFresh(value.substring(from, value.offsetByCodePoints(from, end - start)));
+		});
 		return java.util.Collections.unmodifiableMap(t);
 	}
 
@@ -1246,6 +1304,27 @@ public final class PureBuiltinFolder {
 		return new LispChar(upcase ? Character.toUpperCase(c.codePoint()) : Character.toLowerCase(c.codePoint()));
 	}
 
+	/**
+	 * {@code string-upcase}/{@code string-downcase}: CL folds CHARACTER by character, so
+	 * no mapping changes the string's length and the per-character agreement above
+	 * carries over (checked the same way, by a per-code-point checksum on all four
+	 * backends). The result is a FOLD-FRESH value: each evaluation must answer a fresh
+	 * mutable string, so {@link #foldedLiteral} spells it as {@code (%str-fresh ...)}.
+	 */
+	private static @Nullable LispVal caseFoldString(List<LispVal> args, boolean upcase) {
+		if (args.size() != 1 || !(args.get(0) instanceof LispString s)) {
+			return null;
+		}
+		String value = s.value();
+		if (value.codePointCount(0, value.length()) > MAX_FOLDED_CHARS) {
+			return null;
+		}
+		StringBuilder sb = new StringBuilder(value.length());
+		value.codePoints()
+			.forEach(cp -> sb.appendCodePoint(upcase ? Character.toUpperCase(cp) : Character.toLowerCase(cp)));
+		return LispString.foldFresh(sb.toString());
+	}
+
 	/** {@code (char s i)} / {@code (schar s i)}: an out-of-range index declines. */
 	private static @Nullable LispVal stringRef(List<LispVal> args) {
 		if (args.size() != 2 || !(args.get(0) instanceof LispString s)) {
@@ -1257,6 +1336,15 @@ public final class PureBuiltinFolder {
 		}
 		int i = index.get(0).intValue();
 		return i < s.codePointCount() ? new LispChar(s.codePointAt(i)) : null;
+	}
+
+	/** An index that is in {@code [0, count]}, or -1. */
+	private static int boundedIndex(BigInteger index, int count) {
+		if (index.signum() < 0 || index.bitLength() > 31) {
+			return -1;
+		}
+		int value = index.intValue();
+		return value <= count ? value : -1;
 	}
 
 	/** The nth element of a literal list, or {@code null} on anything else. */

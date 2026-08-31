@@ -129,6 +129,36 @@ public final class LispString implements LispVal {
 		return this.sourceLiteral;
 	}
 
+	// Whether this string is the value of a FRESH-STRING producer the pure-builtin fold
+	// evaluated at compile time (string-upcase/concatenate 'string/subseq of literals).
+	// Such a value must materialize as a fresh MUTABLE string per evaluation -- the
+	// folder spells it as (%str-fresh "...") so the compile backends emit the literal
+	// plus one mutable-copy wrap, instead of sharing one literal across evaluations
+	// (.kb/pure-builtin-fold.md).
+	private boolean foldFresh;
+
+	/**
+	 * Creates a fold-produced FRESH-STRING value: the compile-time result of a
+	 * fresh-string producer over literal arguments, which each evaluation must answer as
+	 * a fresh mutable string. Only {@code PureBuiltinFolder} builds one.
+	 * @param value the string content
+	 * @return the marked string
+	 */
+	public static LispString foldFresh(String value) {
+		LispString string = new LispString(value);
+		string.foldFresh = true;
+		return string;
+	}
+
+	/**
+	 * Whether this is a fold-produced fresh-string value (see
+	 * {@link #foldFresh(String)}).
+	 * @return true for a fold-fresh value
+	 */
+	public boolean foldFresh() {
+		return this.foldFresh;
+	}
+
 	/**
 	 * Answers a FRESH string equal to this one with the code point at {@code index}
 	 * replaced -- the rebuild the compiled backends' {@code %schar-set-runtime} performs
