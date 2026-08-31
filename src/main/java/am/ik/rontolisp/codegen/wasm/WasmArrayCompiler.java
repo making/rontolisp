@@ -77,11 +77,12 @@ final class WasmArrayCompiler {
 			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
 		}
 		LispVal runtimeElementTypeLowering = am.ik.rontolisp.macro.LispMacroExpander
-			.lowerRuntimeElementTypeMakeArray(cons);
+			.lowerRuntimeElementTypeMakeArray(cons, ctx.functions::containsKey);
 		if (runtimeElementTypeLowering != null) {
-			// A :element-type held in a VARIABLE picks the representation at run time
-			// (character vector vs. general array), since no expansion-time recognizer
-			// can see it.
+			// A :element-type held in a VARIABLE picks the representation at run time,
+			// since no expansion-time recognizer can see it: a call to the
+			// %make-array-et prelude helper where that defun is present, the whole
+			// seven-arm dispatch inline where it is not.
 			WasmExprCompiler.compileExpr(runtimeElementTypeLowering, ctx);
 			return;
 		}

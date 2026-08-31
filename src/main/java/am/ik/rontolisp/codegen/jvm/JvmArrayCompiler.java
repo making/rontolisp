@@ -92,11 +92,13 @@ final class JvmArrayCompiler {
 		// picks the same representation as the literal '(unsigned-byte 8) spelling.
 		LispVal elementType = LispMacroExpander
 			.resolveElementTypeAlias(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD), ctx.closRegistry);
-		LispVal runtimeElementTypeLowering = LispMacroExpander.lowerRuntimeElementTypeMakeArray(cons);
+		LispVal runtimeElementTypeLowering = LispMacroExpander.lowerRuntimeElementTypeMakeArray(cons,
+				ctx.functions::containsKey);
 		if (runtimeElementTypeLowering != null) {
-			// A :element-type held in a VARIABLE picks the representation at run time
-			// (character vector vs. general array), since no expansion-time recognizer
-			// can see it.
+			// A :element-type held in a VARIABLE picks the representation at run time,
+			// since no expansion-time recognizer can see it: a call to the
+			// %make-array-et prelude helper where that defun is present, the whole
+			// seven-arm dispatch inline where it is not.
 			JvmExprCompiler.compileExpr(runtimeElementTypeLowering, ctx, className);
 			return;
 		}

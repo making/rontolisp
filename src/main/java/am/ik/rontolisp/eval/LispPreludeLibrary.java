@@ -845,6 +845,75 @@ public final class LispPreludeLibrary {
 		// %make-string-output-stream sink and pulls NONE of this in, which is what keeps
 		// every existing sink program's bytes (and keeps the entry from dragging the Gray
 		// protocol into pipelines that never run GrayStreamsLibrary.process).
+		// %make-array-et: make-array whose :element-type is only known at RUN time.
+		// Every backend but the interpreter decides an array's representation from the
+		// literal designator at the call site, so a designator held in a variable has to
+		// be turned back into a literal one -- which means spelling out the whole upgrade
+		// space, all seven ArrayElementTypes codes. Doing that AT each call site costs
+		// ~1.3 KB of wasm per site (measured; .kb/array-literals.md), and
+		// array-operations alone has 21 of them, so the arms live here instead and every
+		// site becomes one call. Each arm's literal spelling is what the backends'
+		// recognizers read: it selects the packed representation where one exists and
+		// carries the remembered element type and its zero fill where it degrades. The
+		// unsupplied element is the arm's OWN zero, which is why %mae-given is a
+		// parameter rather than a nil test at the call site.
+		SOURCES.put(LispNames.MAKE_ARRAY_ET_INTERNAL, """
+				(defun %make-array-et (%mae-dims %mae-et %mae-init %mae-given)
+				  (cond ((member %mae-et '(character base-char standard-char))
+				         (make-array %mae-dims :element-type 'character
+				                     :initial-element (if %mae-given %mae-init #\\Space)))
+				        ((eq %mae-et 'single-float)
+				         (make-array %mae-dims :element-type 'single-float
+				                     :initial-element (if %mae-given %mae-init 0.0)))
+				        ((eq %mae-et 'double-float)
+				         (make-array %mae-dims :element-type 'double-float
+				                     :initial-element (if %mae-given %mae-init 0.0)))
+				        ((equal %mae-et '(unsigned-byte 8))
+				         (make-array %mae-dims :element-type '(unsigned-byte 8)
+				                     :initial-element (if %mae-given %mae-init 0)))
+				        ((equal %mae-et '(unsigned-byte 16))
+				         (make-array %mae-dims :element-type '(unsigned-byte 16)
+				                     :initial-element (if %mae-given %mae-init 0)))
+				        ((equal %mae-et '(unsigned-byte 32))
+				         (make-array %mae-dims :element-type '(unsigned-byte 32)
+				                     :initial-element (if %mae-given %mae-init 0)))
+				        (t (make-array %mae-dims :initial-element (if %mae-given %mae-init nil)))))
+				""");
+		// %make-array-et-fp: the same dispatch for a site that also spells :fill-pointer
+		// or :adjustable. Those two are what force EVERY arm to the general
+		// representation, so keeping them out of the helper above is what lets it pick a
+		// packed one; here they ride along and the arms differ only in the element type
+		// each general array remembers. Two sites in array-operations' similar-array,
+		// one in the whole quicklisp cache besides.
+		SOURCES.put(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, """
+				(defun %make-array-et-fp (%maef-dims %maef-et %maef-init %maef-given %maef-fp %maef-adj)
+				  (cond ((member %maef-et '(character base-char standard-char))
+				         (make-array %maef-dims :element-type 'character
+				                     :initial-element (if %maef-given %maef-init #\\Space)
+				                     :fill-pointer %maef-fp :adjustable %maef-adj))
+				        ((eq %maef-et 'single-float)
+				         (make-array %maef-dims :element-type 'single-float
+				                     :initial-element (if %maef-given %maef-init 0.0)
+				                     :fill-pointer %maef-fp :adjustable %maef-adj))
+				        ((eq %maef-et 'double-float)
+				         (make-array %maef-dims :element-type 'double-float
+				                     :initial-element (if %maef-given %maef-init 0.0)
+				                     :fill-pointer %maef-fp :adjustable %maef-adj))
+				        ((equal %maef-et '(unsigned-byte 8))
+				         (make-array %maef-dims :element-type '(unsigned-byte 8)
+				                     :initial-element (if %maef-given %maef-init 0)
+				                     :fill-pointer %maef-fp :adjustable %maef-adj))
+				        ((equal %maef-et '(unsigned-byte 16))
+				         (make-array %maef-dims :element-type '(unsigned-byte 16)
+				                     :initial-element (if %maef-given %maef-init 0)
+				                     :fill-pointer %maef-fp :adjustable %maef-adj))
+				        ((equal %maef-et '(unsigned-byte 32))
+				         (make-array %maef-dims :element-type '(unsigned-byte 32)
+				                     :initial-element (if %maef-given %maef-init 0)
+				                     :fill-pointer %maef-fp :adjustable %maef-adj))
+				        (t (make-array %maef-dims :initial-element (if %maef-given %maef-init nil)
+				                       :fill-pointer %maef-fp :adjustable %maef-adj))))
+				""");
 		SOURCES.put(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, """
 				(defclass %broadcast-stream (rontolisp:fundamental-character-output-stream)
 				  ((components :initarg :components :reader %broadcast-stream-components)))
@@ -2305,6 +2374,19 @@ public final class LispPreludeLibrary {
 	static boolean referencedBySurfaceForm(String entry, List<LispVal> program, boolean canonical) {
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical);
+		}
+		// %make-array-et: the call is produced by
+		// LispMacroExpander.lowerRuntimeElementTypeMakeArray inside the expression
+		// compilers, after this pass, so selection keys on the SURFACE fact -- a
+		// make-array whose :element-type is a runtime designator. A site the helper
+		// cannot serve (a fill pointer, adjustability, :initial-contents) is not counted:
+		// that one keeps the inline expansion, and a program with only such sites must
+		// splice nothing.
+		if (LispNames.MAKE_ARRAY_ET_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, false);
+		}
+		if (LispNames.MAKE_ARRAY_ET_FP_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, true);
 		}
 		// The entry uiop:with-temporary-file's EXPANSION calls. Same timing problem as
 		// %make-broadcast-stream: the expansion runs inside the expression compilers,

@@ -267,9 +267,11 @@ public final class LibraryDefunPruner {
 		// probe-file is reached from uiop:file-exists-p's lowering and from the
 		// :if-does-not-exist guard LispMacroExpander.lowerLoadOptions builds -- both
 		// inside the expression compilers, after this walk.
+		// %make-array-et is reached from make-array's runtime-:element-type lowering,
+		// which also runs inside the expression compilers.
 		for (String synthesized : List.of(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.TEMP_FILE_NAME,
 				LispNames.DELETE_FILE_IF_EXISTS, LispNames.STREAM_TARGET, LispNames.PRINT_CASED_INTERNAL,
-				LispNames.PROBE_FILE)) {
+				LispNames.PROBE_FILE, LispNames.MAKE_ARRAY_ET_INTERNAL, LispNames.MAKE_ARRAY_ET_FP_INTERNAL)) {
 			if (LispPreludeLibrary.referencedBySurfaceForm(synthesized, resolved, true)) {
 				roots.add(LispPreludeLibrary.definedName(synthesized));
 			}

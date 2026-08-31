@@ -5397,6 +5397,41 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRuntimeElementTypePicksTheSameArrayAsALiteralOne() {
+		// A :element-type held in a VARIABLE builds the same array a literal spelling
+		// would, on all four backends. The interpreter has had the designator in hand
+		// all along; the compile paths reach the same answers through the
+		// %make-array-et prelude helper. Every answer here is SBCL 2.2.9's on this very
+		// program (JvmLispCompilerTest / WasmLispCompilerIntegrationTest and the
+		// runtime-element-type-make-array ci-spec case run the same one).
+		assertThat(evalMulti("""
+				(defun mk (et) (make-array 4 :element-type et))
+				(defun mk2 (et) (make-array '(2 2) :element-type et))
+				(defun mkfp (et) (make-array 4 :element-type et :fill-pointer 2))
+				(list (array-element-type (mk '(unsigned-byte 8)))
+				      (type-of (mk '(unsigned-byte 8)))
+				      (aref (mk '(unsigned-byte 8)) 0)
+				      (zerop (aref (mk 'double-float) 3))
+				      (array-element-type (mk2 'character))
+				      (stringp (mk 'character))
+				      (array-element-type (mkfp 'double-float))
+				      (type-of (mkfp 'double-float)))
+				""").print()).isEqualTo("((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T"
+				+ " DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))");
+		// A designator that upgrades to t is remembered as nothing at all, and an
+		// unsupplied element of one is nil -- the runtime designator changes neither.
+		assertThat(evalMulti("""
+				(defun mkt (et) (make-array 3 :element-type et))
+				(list (array-element-type (mkt 'fixnum)) (type-of (mkt 'bit)) (aref (mkt 'fixnum) 0))
+				""").print()).isEqualTo("(T (SIMPLE-VECTOR 3) NIL)");
+		// :initial-element wins over the type's own zero, on every arm.
+		assertThat(evalMulti("""
+				(defun mki (et x) (make-array 3 :element-type et :initial-element x))
+				(list (aref (mki '(unsigned-byte 8) 7) 0) (aref (mki 'character #\\z) 0) (aref (mki t 'a) 0))
+				""").print()).isEqualTo("(7 #\\z A)");
+	}
+
+	@Test
 	void evalMakeArrayEvaluatesItsDimensionsExactlyOnce() {
 		// The character branch used to default its fill pointer by re-compiling the
 		// DIMENSIONS expression, so the JVM evaluated it twice; the default is the t

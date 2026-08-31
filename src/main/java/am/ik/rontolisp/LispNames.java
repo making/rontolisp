@@ -1198,6 +1198,37 @@ public final class LispNames {
 	 */
 	public static final String MAKE_ARRAY = "MAKE-ARRAY";
 
+	/**
+	 * The {@code %make-array-et} prelude helper: {@code make-array} with the
+	 * {@code :element-type} taken as a RUNTIME VALUE, dispatching over the whole upgrade
+	 * space onto one literal {@code make-array} per
+	 * {@code am.ik.rontolisp.ArrayElementTypes} code.
+	 *
+	 * <p>
+	 * The compile backends have no runtime element type: every representation decision is
+	 * made from the literal at the call site. A designator held in a variable is
+	 * therefore lowered onto a call to this helper, which spells all seven cases out ONCE
+	 * per program instead of once per call site --
+	 * {@code LispMacroExpander.lowerRuntimeElementTypeMakeArray}, and
+	 * {@code .kb/array-literals.md} for the measurement that chose the helper over the
+	 * inline expansion. The interpreter never uses it: its {@code make-array} reads the
+	 * designator directly.
+	 */
+	public static final String MAKE_ARRAY_ET_INTERNAL = "%MAKE-ARRAY-ET";
+
+	/**
+	 * The {@code %make-array-et-fp} prelude helper: {@link #MAKE_ARRAY_ET_INTERNAL} for a
+	 * call site that also spells {@code :fill-pointer} / {@code :adjustable}.
+	 *
+	 * <p>
+	 * It is a SECOND helper rather than two more parameters on the first because those
+	 * keywords are exactly what makes every arm degrade to the general representation:
+	 * spelling them in the common helper would cost it the packed arrays it exists to
+	 * pick. Each helper is spliced on its own surface fact, so a program pays for the
+	 * shape it writes and no other.
+	 */
+	public static final String MAKE_ARRAY_ET_FP_INTERNAL = "%MAKE-ARRAY-ET-FP";
+
 	/** The {@code aref} built-in function (array element access). */
 	public static final String AREF = "AREF";
 

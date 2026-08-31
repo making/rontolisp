@@ -13429,6 +13429,28 @@ standalone:
       (T T T)
       (#(7 8 9) (UNSIGNED-BYTE 8) 3)
       (NIL NIL)
+  - name: runtime-element-type-make-array
+    source: |
+      (defun rtet-mk (et) (make-array 4 :element-type et))
+      (defun rtet-mk2 (et) (make-array '(2 2) :element-type et))
+      (defun rtet-mkfp (et) (make-array 4 :element-type et :fill-pointer 2))
+      (defun rtet-mki (et x) (make-array 3 :element-type et :initial-element x))
+      (print (list (array-element-type (rtet-mk '(unsigned-byte 8)))
+                   (type-of (rtet-mk '(unsigned-byte 8)))
+                   (aref (rtet-mk '(unsigned-byte 8)) 0)
+                   (zerop (aref (rtet-mk 'double-float) 3))
+                   (array-element-type (rtet-mk2 'character))
+                   (stringp (rtet-mk 'character))
+                   (array-element-type (rtet-mkfp 'double-float))
+                   (type-of (rtet-mkfp 'double-float))))
+      (print (list (array-element-type (rtet-mk 'fixnum)) (type-of (rtet-mk 'bit))
+                   (aref (rtet-mk 'fixnum) 0)))
+      (print (list (aref (rtet-mki '(unsigned-byte 8) 7) 0) (aref (rtet-mki 'character #\z) 0)
+                   (aref (rtet-mki t 'a) 0)))
+    stdout: |
+      ((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
+      (T (SIMPLE-VECTOR 4) NIL)
+      (7 #\z A)
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

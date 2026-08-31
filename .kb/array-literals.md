@@ -364,16 +364,80 @@ Pinned by `LispEvaluatorTest.evalGeneralArrayRemembersItsDeclaredElementType`,
 the `general-array-remembers-its-element-type` ci-spec case -- one program, one expected
 text, all four backends, every answer SBCL 2.2.9's.
 
-**What still answers `t`, and where the four backends still disagree.** A DISPLACED view
-answers `t` on all four, on purpose: its meta slot carries the offset, not a type, and
-SBCL answers `t` for a view whose own `:element-type` was unstated too.
+**What still answers `t`.** A DISPLACED view answers `t` on all four, on purpose: its meta
+slot carries the offset, not a type, and SBCL answers `t` for a view whose own
+`:element-type` was unstated too.
 
-An `:element-type` held in a VARIABLE is the one place they diverge, and it is NOT a
-consequence of this change: `lowerRuntimeElementTypeMakeArray` picks between the character
-vector and the general array at run time and has no branch for the other widths, so the
-compile paths have always built a boxed general array where the interpreter -- which has
-the designator in hand -- built a packed one. `(aref (make-array 4 :element-type et) 0)`
-with `et` bound to `'(unsigned-byte 8)` is `0` here and `NIL` there, and has been. What
-todo-611 added to that list is one cell: the interpreter now remembers a runtime
-`character` designator above rank 1 while the lowering's general branch stamps nothing.
-The whole divergence is `.todo/612`.
+## A RUNTIME `:element-type` reaches the same array a literal one does (2026-08-31)
+
+**Invariant: `(make-array n :element-type et)` with `et` a VALUE builds what the literal
+spelling of that value would build, on all four backends -- the representation, the
+remembered element type and the zero fill.** The interpreter has had the designator in
+hand all along; the compile backends decide every representation from the LITERAL at the
+call site, so the designator has to be turned back into one. Before todo-612 the lowering
+branched on `character` alone and dropped the keyword otherwise, so
+`(aref (make-array 4 :element-type et) 0)` with `et` bound to `'(unsigned-byte 8)` was `0`
+on the interpreter and `NIL` on all three compile backends -- a computed byte buffer was a
+boxed vector of `nil`, and `(incf (aref buf i))` worked on one backend and signalled on
+the others.
+
+**The dispatch is a PRELUDE HELPER, not an inline expansion, and that was the
+measurement.** The upgrade space is closed at seven codes (`ArrayElementTypes`), so seven
+literal `make-array` arms cover it exactly. Spelling them AT the call site is the obvious
+lowering and it does not pay: wasm emits `make-array` entirely inline, so each arm is
+400-1100 bytes of module and a site costs ~1.3 KB more than the two-arm form it replaces.
+Measured on `--optimize=size`, raw wasm, 2026-08-31:
+
+| program | sites | base | 7 arms inline | helper |
+|---|---|---|---|---|
+| `array-operations` (`aops:zeros*`) | 3 | 88,688 | 117,646 (+32.6%) | 89,130 (+0.50%) |
+| `alexandria` io | 2 | 49,798 | 51,777 (+4.0%) | 52,110 (+4.6%) |
+| `hello-tiny-routes` (full tiny-routes) | 1 | 874,513 | 875,067 | 875,178 (+0.08%) |
+| `httpbin-tiny-routes` (full) | 2 | 906,395 | 910,685 (+0.47%) | 908,348 (+0.22%) |
+| 20 synthetic sites | 20 | 34,649 | 75,442 (+118%) | 18,152 (**-48%**) |
+| `zlib`, `hello-clack`-class programs with no such site | 0 | -- | +0 | +0 |
+
+So the arms live in `LispPreludeLibrary` and every call site is one call. A program with
+ONE site pays the helper's fixed ~2.9 KB and saves nothing; a program with many pays it
+once and comes out ahead of even the pre-fix build. A program with no runtime designator
+compiles to the same bytes as before, because the whole thing is keyed on the call shape.
+
+**There are TWO helpers, and the split is `:fill-pointer` / `:adjustable`.**
+`%make-array-et (dims et init given)` is the common shape; `%make-array-et-fp` takes `fp`
+and `adj` as well. They are not one helper with two more parameters because those two
+keywords are exactly what makes every arm degrade to the general representation --
+spelling them in the common helper would cost it the packed arrays it exists to pick. Each
+is spliced on its own surface fact, so a program pays for the shape it writes. The
+fill-pointer shape is rare (two sites in array-operations' `similar-array`, one in the
+whole quicklisp cache besides) but expensive inline: those two sites alone were 15 KB of
+the 32.6% row above.
+
+**How the selection works.** The call is produced by
+`LispMacroExpander.lowerRuntimeElementTypeMakeArray` inside the expression compilers, long
+after the prelude pass has run, so `LispPreludeLibrary.referencedBySurfaceForm` keys on the
+SURFACE fact -- a `make-array` whose `:element-type` is a runtime designator and whose other
+keywords the helper's signature can carry -- and `LibraryDefunPruner` roots the same entry
+by the same predicate. This is `%make-array-et`'s exact shape as `%make-broadcast-stream`
+and `%stream-target`, and it fails the same way: a call site injected after the pass ran
+would find no defun, so the lowering asks `ctx.functions` and falls back to the inline
+seven arms when the defun is absent. A site the helpers cannot serve (`:initial-contents`,
+`:displaced-to`) expands inline too.
+
+**What each arm's literal spelling buys.** It is read by the backends' own recognizers, so
+the arm packs where a packed representation exists and degrades-and-remembers where it does
+not -- the rank-1 rule of the section above included, since the rank is still a run-time
+fact inside the helper. The `t` arm is the plain general array, and the unsupplied element
+is the arm's OWN zero, which is why `given` is a parameter rather than a nil test at the
+call site.
+
+**The one thing the helpers cannot do is resolve a `deftype` ALIAS.** The interpreter's
+`make-array` runs `resolveElementTypeAlias` against the registry at run time, so `et` bound
+to `'octet` packs there; the arms compare against the seven built-in spellings only, so it
+reaches the `t` arm here. A literal `:element-type 'octet` is unaffected -- every
+compile-time recognizer resolves the alias.
+
+Pinned by `LispEvaluatorTest.evalRuntimeElementTypePicksTheSameArrayAsALiteralOne`,
+`JvmLispCompilerTest.compileRuntimeElementTypePicksTheSameArrayAsALiteralOne`,
+`WasmLispCompilerIntegrationTest.compileRuntimeElementTypePicksTheSameArrayAsALiteralOne`
+and the `runtime-element-type-make-array` ci-spec case -- one program, one expected text,
+all four backends, every answer SBCL 2.2.9's.

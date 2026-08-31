@@ -19440,6 +19440,38 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileRuntimeElementTypePicksTheSameArrayAsALiteralOne() throws Exception {
+		// Same contract as the interpreter's
+		// evalRuntimeElementTypePicksTheSameArrayAsALiteralOne, and the same program: a
+		// :element-type held in a VARIABLE reaches the representation, the remembered
+		// type and the zero fill a literal spelling would. This backend gets there
+		// through the %make-array-et prelude helper, so the program needs the CLI
+		// pipeline's splice; both helper shapes are exercised -- the plain one and the
+		// :fill-pointer one.
+		assertThat(compileAndRunPrelude("""
+				(defun mk (et) (make-array 4 :element-type et))
+				(defun mk2 (et) (make-array '(2 2) :element-type et))
+				(defun mkfp (et) (make-array 4 :element-type et :fill-pointer 2))
+				(defun mki (et x) (make-array 3 :element-type et :initial-element x))
+				(print (list (array-element-type (mk '(unsigned-byte 8)))
+				             (type-of (mk '(unsigned-byte 8)))
+				             (aref (mk '(unsigned-byte 8)) 0)
+				             (zerop (aref (mk 'double-float) 3))
+				             (array-element-type (mk2 'character))
+				             (stringp (mk 'character))
+				             (array-element-type (mkfp 'double-float))
+				             (type-of (mkfp 'double-float))))
+				(print (list (array-element-type (mk 'fixnum)) (type-of (mk 'bit)) (aref (mk 'fixnum) 0)))
+				(print (list (aref (mki '(unsigned-byte 8) 7) 0) (aref (mki 'character #\\z) 0)
+				             (aref (mki t 'a) 0)))
+				""")).isEqualTo(
+				"""
+						((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
+						(T (SIMPLE-VECTOR 4) NIL)
+						(7 #\\z A)""");
+	}
+
+	@Test
 	void compileMakeArrayEvaluatesItsDimensionsExactlyOnce() throws Exception {
 		// Same contract as the interpreter's
 		// evalMakeArrayEvaluatesItsDimensionsExactlyOnce.

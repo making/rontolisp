@@ -28522,11 +28522,22 @@ public final class LispMacroExpander {
 	 * pays for that width alone. The scan is deliberately COARSE -- a rank-1 request that
 	 * never degrades is counted too, because the rank is a run-time fact at most call
 	 * sites.
+	 *
+	 * <p>
+	 * A designator held in a VARIABLE counts as EVERY specialized code: no scan can see
+	 * which one arrives, and {@link #lowerRuntimeElementTypeMakeArray} spells all six out
+	 * at the call site, so all six can reach the general representation.
 	 * @param program the top-level forms
 	 * @param registry the registry whose deftype expansions resolve alias designators, or
 	 * null
 	 * @return the bit mask of codes
 	 */
+	/** Every code but {@link ArrayElementTypes#T}, as a bit mask. */
+	private static final int ALL_SPECIALIZED_ELEMENT_TYPE_CODES = (1 << ArrayElementTypes.CHARACTER)
+			| (1 << ArrayElementTypes.UNSIGNED_BYTE_8) | (1 << ArrayElementTypes.UNSIGNED_BYTE_16)
+			| (1 << ArrayElementTypes.UNSIGNED_BYTE_32) | (1 << ArrayElementTypes.SINGLE_FLOAT)
+			| (1 << ArrayElementTypes.DOUBLE_FLOAT);
+
 	public static int makeArrayElementTypeCodes(List<LispVal> program, @Nullable ClosRegistry registry) {
 		int mask = 0;
 		for (LispVal expr : program) {
@@ -28544,6 +28555,10 @@ public final class LispMacroExpander {
 			List<LispVal> args = cons.toList();
 			for (int i = 2; i + 1 < args.size(); i++) {
 				if (args.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+					if (isRuntimeElementType(args.get(i + 1))) {
+						mask |= ALL_SPECIALIZED_ELEMENT_TYPE_CODES;
+						continue;
+					}
 					int code = ArrayElementTypes.codeOf(resolveElementTypeAlias(args.get(i + 1), registry));
 					if (code != ArrayElementTypes.T) {
 						mask |= 1 << code;
@@ -28650,16 +28665,23 @@ public final class LispMacroExpander {
 
 	/**
 	 * Lowers {@code (make-array n :element-type et ...)} whose {@code :element-type} is a
-	 * VARIABLE into a runtime dispatch between the character-vector allocation and the
-	 * general one. Returns null when the designator is literal (every backend's existing
-	 * expansion-time recognizers handle those) or absent.
+	 * VARIABLE into a runtime dispatch over the WHOLE upgrade space -- one arm per
+	 * {@link am.ik.rontolisp.ArrayElementTypes} code, each of them a literal
+	 * {@code make-array} the backends' own expansion-time recognizers read exactly as
+	 * they read a call the program spelled that way. Returns null when the designator is
+	 * literal (those recognizers already see it) or absent.
 	 *
 	 * <pre>
 	 * (make-array n :element-type et) ->
 	 * (let* ((__mae_n n) (__mae_et et))
 	 *   (if (member __mae_et '(character base-char standard-char))
 	 *       (make-array __mae_n :element-type 'character)
-	 *       (make-array __mae_n)))
+	 *       (if (eq __mae_et 'single-float) (make-array __mae_n :element-type 'single-float)
+	 *         (if (eq __mae_et 'double-float) (make-array __mae_n :element-type 'double-float)
+	 *           (if (equal __mae_et '(unsigned-byte 8))  (make-array __mae_n :element-type '(unsigned-byte 8))
+	 *             (if (equal __mae_et '(unsigned-byte 16)) ...
+	 *               (if (equal __mae_et '(unsigned-byte 32)) ...
+	 *                 (make-array __mae_n))))))))
 	 * </pre>
 	 *
 	 * The character arm matters because a character vector is the ONE rank-1 array that
@@ -28668,17 +28690,43 @@ public final class LispMacroExpander {
 	 * {@code alexandria:read-stream-content-into-string} allocates its buffer as
 	 * {@code (make-array size :element-type (stream-element-type stream))}, so without
 	 * this the buffer was a general vector on the compile backends and the read fell to
-	 * {@code read-byte} against a character stream. The interpreter needs no lowering:
-	 * its {@code make-array} already reads the designator at run time.
+	 * {@code read-byte} against a character stream.
 	 *
 	 * <p>
-	 * A non-character runtime designator drops the keyword entirely rather than guessing
-	 * a packed representation: the packed float / {@code (unsigned-byte N)} arrays are
-	 * OPTIMIZATIONS of the general one, so the general array is always a correct answer.
+	 * The other five arms matter for the same reason one step down: without them a
+	 * computed {@code (unsigned-byte 8)} or float designator reached the PLAIN general
+	 * array, which remembered no element type and filled with {@code nil}, so
+	 * {@code (aref buf 0)} answered {@code 0} on the interpreter (which has the
+	 * designator in hand) and {@code NIL} on all three compile backends. The upgrade
+	 * space is closed at seven codes, so seven arms cover it exactly; each arm's literal
+	 * spelling is what carries the remembered element type and its zero fill, whether the
+	 * backend packs the representation or degrades it.
+	 *
+	 * <p>
+	 * <b>The arms live in the {@code %make-array-et} PRELUDE HELPER, not at the call
+	 * site</b>, whenever the site can reach it -- which is every site whose only other
+	 * keyword is {@code :initial-element}. Spelling seven allocations out inline costs
+	 * ~1.3 KB of wasm per site (measured 2026-08-31; {@code .kb/array-literals.md}), and
+	 * array-operations has 21 such sites, so the inline form cost that library +32.6% of
+	 * its module. The helper is spliced by
+	 * {@code LispPreludeLibrary.referencedBySurfaceForm} keyed on this very shape, and
+	 * the call it replaces is {@code (%make-array-et dims et init given)}. A site the
+	 * helper cannot serve -- a fill pointer, adjustability, {@code :initial-contents} --
+	 * still expands inline; there is one such site in the whole quicklisp cache.
+	 *
+	 * <p>
+	 * The interpreter needs no lowering: its {@code make-array} already reads the
+	 * designator at run time, and resolves a user {@code deftype} alias through the
+	 * registry while doing so -- which neither the helper nor the arms below can, so an
+	 * alias held in a variable still reaches the general arm here.
 	 * @param cons the make-array expression
+	 * @param helperAvailable whether the {@code %make-array-et} prelude defun is present
+	 * in the program being compiled (the selection can miss a call site injected after it
+	 * ran, exactly as it can for {@code %stream-target})
 	 * @return the lowered expression, or null when the element type is literal or absent
 	 */
-	public static @Nullable LispVal lowerRuntimeElementTypeMakeArray(LispCons cons) {
+	public static @Nullable LispVal lowerRuntimeElementTypeMakeArray(LispCons cons,
+			java.util.function.Predicate<String> definedFunction) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			return null;
@@ -28697,19 +28745,163 @@ public final class LispMacroExpander {
 		if (elementType == null || !isRuntimeElementType(elementType)) {
 			return null;
 		}
+		boolean fillPointerShape = helperShapeIsFillPointer(others);
+		String helper = fillPointerShape ? LispNames.MAKE_ARRAY_ET_FP_INTERNAL : LispNames.MAKE_ARRAY_ET_INTERNAL;
+		if (helperServesRuntimeElementType(others) && definedFunction.test(helper)) {
+			LispVal init = keywordValueOrNil(others, LispNames.INITIAL_ELEMENT_KEYWORD);
+			LispVal given = findKeywordPair(others, LispNames.INITIAL_ELEMENT_KEYWORD) ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
+			if (!fillPointerShape) {
+				return mvCall(helper, parts.get(1), elementType, init, given);
+			}
+			return mvCall(helper, parts.get(1), elementType, init, given,
+					keywordValueOrNil(others, LispNames.FILL_POINTER_KEYWORD),
+					keywordValueOrNil(others, LispNames.ADJUSTABLE_KEYWORD));
+		}
 		LispSymbol size = new LispSymbol("__mae_n");
 		LispSymbol et = new LispSymbol("__mae_et");
-		List<LispVal> charCall = new java.util.ArrayList<>(
-				List.of(new LispSymbol(LispNames.MAKE_ARRAY), size, new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD),
-						listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("CHARACTER")))));
-		charCall.addAll(others);
-		List<LispVal> generalCall = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), size));
-		generalCall.addAll(others);
-		LispVal body = makeIf(memberOfTypeNames(et, "CHARACTER", "BASE-CHAR", "STANDARD-CHAR"), listToCons(charCall),
-				listToCons(generalCall));
+		// Built from the fallthrough up, so the arms read in the order above.
+		LispVal body = runtimeElementTypeArm(size, others, null);
+		for (int width : new int[] { 32, 16, 8 }) {
+			LispVal spec = unsignedByteSpec(width);
+			body = makeIf(mvCall(LispNames.EQUAL, et, listToCons(List.of(new LispSymbol(LispNames.QUOTE), spec))),
+					runtimeElementTypeArm(size, others, spec), body);
+		}
+		for (String floatName : new String[] { LispNames.DOUBLE_FLOAT, LispNames.SINGLE_FLOAT }) {
+			body = makeIf(mvCall(LispNames.EQ_GENERAL, et, quoteOf(floatName)),
+					runtimeElementTypeArm(size, others, new LispSymbol(floatName)), body);
+		}
+		body = makeIf(memberOfTypeNames(et, "CHARACTER", "BASE-CHAR", "STANDARD-CHAR"),
+				runtimeElementTypeArm(size, others, new LispSymbol(LispNames.CHARACTER_TYPE)), body);
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(size, parts.get(1))), listToCons(List.of(et, elementType))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+	}
+
+	/**
+	 * Whether the {@code %make-array-et} helper can serve a call site: its signature
+	 * carries the dimensions, the designator and the initial element, so any OTHER
+	 * keyword ({@code :fill-pointer}, {@code :adjustable}, {@code :initial-contents})
+	 * keeps the inline expansion.
+	 * @param others the call's keyword arguments other than {@code :element-type}, as
+	 * keyword/value pairs
+	 * @return whether the helper covers this shape
+	 */
+	private static boolean helperServesRuntimeElementType(List<LispVal> others) {
+		for (int i = 0; i < others.size(); i += 2) {
+			if (!(others.get(i) instanceof LispSymbol kw) || !HELPER_KEYWORDS.contains(kw.name())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** The keywords the two {@code %make-array-et*} helpers carry between them. */
+	private static final java.util.Set<String> HELPER_KEYWORDS = java.util.Set.of(LispNames.INITIAL_ELEMENT_KEYWORD,
+			LispNames.FILL_POINTER_KEYWORD, LispNames.ADJUSTABLE_KEYWORD);
+
+	/**
+	 * Whether a helper-servable call site needs the {@code %make-array-et-fp} shape --
+	 * the one that spells {@code :fill-pointer} / {@code :adjustable} and therefore
+	 * degrades every arm to the general representation.
+	 */
+	private static boolean helperShapeIsFillPointer(List<LispVal> others) {
+		return findKeywordPair(others, LispNames.FILL_POINTER_KEYWORD)
+				|| findKeywordPair(others, LispNames.ADJUSTABLE_KEYWORD);
+	}
+
+	private static boolean findKeywordPair(List<LispVal> pairs, String keyword) {
+		for (int i = 0; i < pairs.size(); i += 2) {
+			if (pairs.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static LispVal keywordValueOrNil(List<LispVal> pairs, String keyword) {
+		for (int i = 0; i + 1 < pairs.size(); i += 2) {
+			if (pairs.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
+				return pairs.get(i + 1);
+			}
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Whether the program has a {@code make-array} call
+	 * {@link #lowerRuntimeElementTypeMakeArray} will lower onto the
+	 * {@code %make-array-et} helper -- a runtime {@code :element-type} with no keyword
+	 * the helper's signature cannot carry. The prelude's selection runs long before the
+	 * lowering does, so this SURFACE fact is what decides whether the defun is spliced.
+	 * @param program the top-level forms
+	 * @return whether any call site needs the helper
+	 */
+	public static boolean callsMakeArrayWithRuntimeElementType(List<LispVal> program, boolean fillPointerShape) {
+		for (LispVal expr : program) {
+			if (callsMakeArrayWithRuntimeElementType(expr, fillPointerShape)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean callsMakeArrayWithRuntimeElementType(LispVal val, boolean fillPointerShape) {
+		if (!(val instanceof LispCons cons)) {
+			return false;
+		}
+		// The prelude resolves the program before asking, so make-array can arrive
+		// package-QUALIFIED here (cl:make-array) while the keyword, being a keyword,
+		// never does.
+		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(memberName(head.name()))) {
+			List<LispVal> parts = cons.toList();
+			LispVal elementType = null;
+			List<LispVal> others = new java.util.ArrayList<>();
+			for (int i = 2; i + 1 < parts.size(); i += 2) {
+				if (parts.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+					elementType = parts.get(i + 1);
+				}
+				else {
+					others.add(parts.get(i));
+					others.add(parts.get(i + 1));
+				}
+			}
+			if (elementType != null && isRuntimeElementType(elementType) && helperServesRuntimeElementType(others)
+					&& helperShapeIsFillPointer(others) == fillPointerShape) {
+				return true;
+			}
+		}
+		return callsMakeArrayWithRuntimeElementType(cons.car(), fillPointerShape)
+				|| callsMakeArrayWithRuntimeElementType(cons.cdr(), fillPointerShape);
+	}
+
+	/** The member half of a possibly package-qualified symbol name. */
+	private static String memberName(String name) {
+		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	/** The {@code (unsigned-byte n)} type specifier as a datum. */
+	private static LispVal unsignedByteSpec(int width) {
+		return listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(width)));
+	}
+
+	/**
+	 * One arm of {@link #lowerRuntimeElementTypeMakeArray}: the same {@code make-array}
+	 * call with the size bound to a temporary and the {@code :element-type} spelled as a
+	 * literal (or dropped entirely for the general {@code t} arm).
+	 */
+	private static LispVal runtimeElementTypeArm(LispSymbol size, List<LispVal> others,
+			@Nullable LispVal elementTypeSpec) {
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(LispNames.MAKE_ARRAY));
+		call.add(size);
+		if (elementTypeSpec != null) {
+			call.add(new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD));
+			call.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), elementTypeSpec)));
+		}
+		call.addAll(others);
+		return listToCons(call);
 	}
 
 	/**
