@@ -378,10 +378,7 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
   (when (null (geom:user-data s))
     (let* ((m (geom:mesh s))
            (w (geom:wireframe s))
-           (vs (geom:vertices-of s))
-           (extent
-            (linalg:norm
-             (linalg:sub (linalg:amax vs :axis 0) (linalg:amin vs :axis 0)))))
+           (extent (geom::%model-extent s)))
       (setf (geom:user-data s)
             (list (metal:buffer (scene:context-of v) m) (floor (length m) 6)
                   (metal:buffer (scene:context-of v) w) (floor (length w) 3)

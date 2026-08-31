@@ -261,9 +261,20 @@
    (history :initform nil :accessor geom::%history)))
 
 (defun geom::%build-solid (points facets &key color label)
+  (geom::%solid-of-vertices
+   (linalg:from-list points :element-type 'single-float) facets
+   :color color
+   :label label))
+
+;; The half of %build-solid past the packing: a solid over a vertex ARRAY that
+;; is already (n 3) single-float. Split out so a caller that has the packed
+;; floats -- a file reader, whose numbers came out of text one at a time and
+;; never needed to be a list of lists at all -- can hand them straight over.
+;; Everything a solid gets beyond its two arrays is still decided here.
+(defun geom::%solid-of-vertices (vertices facets &key color label)
   (make-instance 'geom:solid
                  :local (geom:make-transform)
-                 :vertices (linalg:from-list points :element-type 'single-float)
+                 :vertices vertices
                  :facets facets
                  :color (if color color (geom:vec3 0.72 0.76 0.84))
                  :label label))
@@ -2161,21 +2172,43 @@
   ((lower :initarg :lower :reader geom:lower-of)
    (upper :initarg :upper :reader geom:upper-of)))
 
-(defun geom::%solid-bounds (s)
-  (let* ((tf (geom:world-transform s))
-         (v
-          (linalg:add (linalg:matmul (geom::%vertices s)
-                                     (linalg:transpose (geom:rotation-of tf)))
-                      (linalg:reshape (geom:translation-of tf) '(1 3))))
-         (n (first (linalg:shape v)))
+;; The lowest and the highest corner of a vertex array posed by ROT and TR, as
+;; (lo . hi). Its own defun rather than %solid-bounds's let*: this is the walk
+;; that costs one pass over EVERY vertex, so it is the one an interpreter puts a
+;; native over, and a seam has to be a whole function to be replaceable. The
+;; arithmetic is unchanged -- rotate by the transpose, add the translation row,
+;; then min and max down each column.
+(defun geom::%vertex-extremes (v rot tr)
+  (let* ((w
+          (linalg:add (linalg:matmul v (linalg:transpose rot))
+                      (linalg:reshape tr '(1 3))))
+         (n (first (linalg:shape w)))
          (lo (geom:vec3 1e30 1e30 1e30))
          (hi (geom:vec3 -1e30 -1e30 -1e30)))
     (dotimes (i n)
       (dotimes (k 3)
-        (let ((x (aref v i k)))
+        (let ((x (aref w i k)))
           (when (< x (aref lo k)) (setf (aref lo k) x))
           (when (> x (aref hi k)) (setf (aref hi k) x)))))
-    (make-instance 'geom:bounds :lower lo :upper hi)))
+    (cons lo hi)))
+
+(defun geom::%solid-bounds (s)
+  (let* ((tf (geom:world-transform s))
+         (ex
+          (geom::%vertex-extremes (geom::%vertices s) (geom:rotation-of tf)
+                                  (geom:translation-of tf))))
+    (make-instance 'geom:bounds :lower (car ex) :upper (cdr ex))))
+
+;; The diagonal of the box a solid's own vertices span, in MODEL space -- no
+;; transform, so it does not change as the solid moves. A renderer sizes a
+;; body's axis triad by it (scene.lisp). The identity pose through
+;; %vertex-extremes is the same column-wise min and max linalg:amin and
+;; linalg:amax answer, and it is one pass rather than two.
+(defun geom::%model-extent (s)
+  (let ((ex
+         (geom::%vertex-extremes (geom::%vertices s) (geom::%identity-rotation)
+                                 (geom:vec3 0 0 0))))
+    (linalg:norm (linalg:sub (cdr ex) (car ex)))))
 
 ;; The axis-aligned box of a solid, or of a list of them, in WORLD coordinates.
 (defun geom:bounds (thing)
