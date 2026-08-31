@@ -362,10 +362,13 @@ public final class LispPreludeLibrary {
 		// general array on the compile paths, and both designate STRING -- so all four
 		// backends answer STRING for it rather than (simple-array character (n)).
 		//
-		// The element-type arm comes FIRST on purpose: a packed representation is
-		// always simple (make-array degrades to the general one the moment
-		// :fill-pointer or :adjustable appears), and the two predicates below refuse a
-		// packed array outright on every backend.
+		// The SIMPLICITY arm comes first: a fill-pointered or adjustable array is not
+		// simple whatever it holds, so (make-array 4 :element-type 'double-float
+		// :fill-pointer 0) is (vector double-float 4) and not a simple-array. Asking
+		// the question of a PACKED array is safe because both predicates answer nil for
+		// one on every backend (a packed representation carries neither), which is what
+		// CL says of a simple array and what a packed argument used to be refused for
+		// on the two compile backends.
 		SOURCES.put(LispNames.TYPE_OF, """
 				(defun type-of (object)
 				  (let* ((c (%class-designator object))
@@ -377,10 +380,9 @@ public final class LispPreludeLibrary {
 				          ((and (string= s "T") (%arrayp object))
 				           (let ((et (array-element-type object))
 				                 (dims (array-dimensions object)))
-				             (cond ((not (eq et t)) (list 'simple-array et dims))
-				                   ((or (array-has-fill-pointer-p object) (adjustable-array-p object))
+				             (cond ((or (array-has-fill-pointer-p object) (adjustable-array-p object))
 				                    (list 'vector et (car dims)))
-				                   ((= (length dims) 1) (list 'simple-vector (car dims)))
+				                   ((and (eq et t) (= (length dims) 1)) (list 'simple-vector (car dims)))
 				                   (t (list 'simple-array et dims)))))
 				          (t c))))
 				""");

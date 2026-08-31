@@ -19340,9 +19340,10 @@ class WasmLispCompilerIntegrationTest {
 				               (typep a '(simple-array (unsigned-byte 8) (*))))))
 				""")).isEqualTo("((UNSIGNED-BYTE 8) T T (3) T)");
 		// A rank-n shape (runtime-detected) and a fill-pointer combination keep the
-		// general boxed representation.
+		// general boxed representation, but REMEMBER the element type they were asked
+		// for (todo-611).
 		assertThat(compileAndRun("(print (array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8))))"))
-			.isEqualTo("T");
+			.isEqualTo("(UNSIGNED-BYTE 8)");
 		assertThat(compileAndRun("""
 				(let ((a (make-array '(2 2) :element-type '(unsigned-byte 8) :initial-element 3)))
 				  (setf (aref a 1 1) 9)
@@ -19391,12 +19392,51 @@ class WasmLispCompilerIntegrationTest {
 				(print (list (aref (make-array 3 :element-type 'double-float :adjustable t) 0)
 				             (aref (make-array 3 :element-type 'single-float :fill-pointer 3) 2)))
 				""")).isEqualTo("""
-				(NIL T (2 2) (SIMPLE-ARRAY T (2 2)) NIL)
+				(NIL CHARACTER (2 2) (SIMPLE-ARRAY CHARACTER (2 2)) NIL)
 				#2A((#\\a #\\a) (#\\a #\\z))
 				#\\Space
-				(NIL #\\c (SIMPLE-ARRAY T (2 2)))
+				(NIL #\\c (SIMPLE-ARRAY CHARACTER (2 2)))
 				(T CHARACTER STRING "zzz")
 				(0.0 0.0)""");
+	}
+
+	@Test
+	void compileGeneralArrayRemembersItsDeclaredElementType() throws Exception {
+		// Same contract as the interpreter's
+		// evalGeneralArrayRemembersItsDeclaredElementType: a specialized element type
+		// that selects no representation of its own is still REMEMBERED on the general
+		// array it lands in -- array-element-type answers it, type-of builds the
+		// compound specifier from it, and an unsupplied element takes its own zero.
+		// type-of is a prelude defun, so the program needs the CLI pipeline's splice.
+		assertThat(compileAndRunPrelude("""
+				(defun ret-probe (a) (list (array-element-type a) (type-of a)))
+				(print (ret-probe (make-array '(2 2) :element-type '(unsigned-byte 8))))
+				(print (ret-probe (make-array '(2 3) :element-type 'character :initial-element #\\a)))
+				(print (ret-probe (make-array 4 :element-type 'double-float :fill-pointer 0)))
+				(print (ret-probe (make-array 4 :element-type '(unsigned-byte 16) :adjustable t)))
+				(print (ret-probe (make-array 3)))
+				(print (list (aref (make-array '(2 2) :element-type '(unsigned-byte 8)) 0 0)
+				             (aref (make-array 3 :element-type '(unsigned-byte 16) :adjustable t) 2)
+				             (aref (make-array 3 :element-type 'double-float :adjustable t) 0)))
+				(let ((a (make-array '(2 2) :element-type '(unsigned-byte 8))))
+				  (print (list (typep a '(simple-array (unsigned-byte 8) (2 2))) (typep a (type-of a)))))
+				(let ((v (make-array 2 :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
+				  (vector-push-extend 7 v)
+				  (vector-push-extend 8 v)
+				  (vector-push-extend 9 v)
+				  (print (list v (array-element-type v) (fill-pointer v))))
+				(print (list (array-has-fill-pointer-p (make-array 4 :element-type 'double-float))
+				             (adjustable-array-p (make-array 4 :element-type '(unsigned-byte 8)))))
+				""")).isEqualTo("""
+				((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (2 2)))
+				(CHARACTER (SIMPLE-ARRAY CHARACTER (2 3)))
+				(DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
+				((UNSIGNED-BYTE 16) (VECTOR (UNSIGNED-BYTE 16) 4))
+				(T (SIMPLE-VECTOR 3))
+				(0 0 0.0)
+				(T T)
+				(#(7 8 9) (UNSIGNED-BYTE 8) 3)
+				(NIL NIL)""");
 	}
 
 	@Test

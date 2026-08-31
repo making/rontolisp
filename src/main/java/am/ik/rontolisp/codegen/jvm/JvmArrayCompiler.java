@@ -6,9 +6,9 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -173,16 +173,23 @@ final class JvmArrayCompiler {
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		if (initValue == null && (isDoubleFloatElementType(elementType) || isSingleFloatElementType(elementType))) {
-			// An :element-type 'double-float / 'single-float array with a fill pointer /
-			// adjustable falls back to a general array; default its elements to 0.0, not
-			// nil.
-			initValue = new LispDouble(0.0);
+		// A declared element type that reaches the GENERAL representation -- a packed
+		// one combined with :fill-pointer / :adjustable, an (unsigned-byte n) request in
+		// a program with no packed-integer gate -- is REMEMBERED on the array, and its
+		// own zero is what an unsupplied element takes rather than nil.
+		int elementTypeCode = ArrayElementTypes.codeOf(elementType);
+		if (initValue == null) {
+			initValue = ArrayElementTypes.defaultElement(elementTypeCode);
 		}
 		compileKeywordValueOrNull(initValue, ctx, className);
 		compileKeywordValueOrNull(findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD), ctx, className);
 		compileKeywordValueOrNull(findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD), ctx, className);
-		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
+		if (elementTypeCode == ArrayElementTypes.T) {
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
+			return;
+		}
+		JvmEmitHelper.emitIntConst(ctx, elementTypeCode);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE_TYPED, JvmArrayRuntimeBuilder.MAKE_TYPED_DESC);
 	}
 
 	static void compileArrayBecome(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -229,12 +236,17 @@ final class JvmArrayCompiler {
 	}
 
 	static void compileHasFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compileUnary(cons, ctx, className, LispNames.ARRAY_HAS_FILL_POINTER_P, JvmArrayRuntimeBuilder.HAS_FILL_POINTER,
-				JvmArrayRuntimeBuilder.HAS_FILL_POINTER_DESC);
+		// NOT guarded by _ivRequireGeneral: a packed representation simply HAS no fill
+		// pointer, which is nil rather than an error (what CL says of a simple array,
+		// and what the interpreter has always answered). _arrayHasFillPointer already
+		// answers nil for anything that is not the general ArrayList shape.
+		compilePredicate(cons, ctx, className, LispNames.ARRAY_HAS_FILL_POINTER_P,
+				JvmArrayRuntimeBuilder.HAS_FILL_POINTER, JvmArrayRuntimeBuilder.HAS_FILL_POINTER_DESC);
 	}
 
 	static void compileAdjustableArrayP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compileUnary(cons, ctx, className, LispNames.ADJUSTABLE_ARRAY_P, JvmArrayRuntimeBuilder.ADJUSTABLE_ARRAY_P,
+		// Unguarded for the same reason as array-has-fill-pointer-p above.
+		compilePredicate(cons, ctx, className, LispNames.ADJUSTABLE_ARRAY_P, JvmArrayRuntimeBuilder.ADJUSTABLE_ARRAY_P,
 				JvmArrayRuntimeBuilder.ADJUSTABLE_ARRAY_P_DESC);
 	}
 
@@ -274,6 +286,18 @@ final class JvmArrayCompiler {
 		}
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_PUSH_EXTEND,
 				JvmArrayRuntimeBuilder.VECTOR_PUSH_EXTEND_DESC);
+	}
+
+	// A unary array PREDICATE: the same shape as compileUnary without the packed guard,
+	// for the two questions a packed array answers nil to instead of refusing.
+	private static void compilePredicate(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String lispName,
+			String helper, String desc) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException(lispName + " expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		invokeHelper(ctx, className, helper, desc);
 	}
 
 	private static void compileUnary(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String lispName,
@@ -363,16 +387,18 @@ final class JvmArrayCompiler {
 
 	static void compileElementType(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (array-element-type array): a string answers character (a string is a vector of
-		// characters, the one character type); otherwise the list (unsigned-byte n) for a
-		// packed integer vector, double-float/single-float for a packed float array, else
-		// t.
-		// Only used when the program uses a packed representation; otherwise
-		// array-element-type
-		// expands to the lite (if (stringp array) 'character t). The string check runs
-		// before
-		// the helper so a string never reaches the packed dispatch; _ivElementType
-		// delegates
-		// the non-long[] case to _fvElementType when both gates are on.
+		// characters, the one character type); a general array answers what it REMEMBERS
+		// being asked for (t unless make-array was told something narrower it could not
+		// represent); otherwise the list (unsigned-byte n) for a packed integer vector
+		// and double-float/single-float for a packed float array.
+		//
+		// Only used when the program uses a packed representation or can build a typed
+		// general array; otherwise array-element-type expands to the lite
+		// (if (stringp array) 'character t). The string check runs first so a string
+		// never reaches the dispatch, the ArrayList test separates the general array
+		// from the packed ones (a packed general array is an ArrayList too, and its
+		// header is where the remembered type lives), and _ivElementType delegates the
+		// non-long[] case to _fvElementType when both packed gates are on.
 		List<LispVal> args = cons.toList();
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("array-element-type expects 1 argument, got " + (args.size() - 1));
@@ -387,25 +413,49 @@ final class JvmArrayCompiler {
 		int branchPos = ctx.code.size();
 		ctx.emit(Opcode.IFNONNULL);
 		ctx.emitU2(0);
-		// not a string: the packed/general dispatch
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		if (ctx.usesIntArray) {
-			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.ELEMENT_TYPE,
-					JvmIntArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+		List<Integer> gotoEnds = new java.util.ArrayList<>();
+		if (ctx.usesTypedArray) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(tempSlot);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).index());
+			int notListPos = ctx.code.size();
+			ctx.emit(Opcode.IFEQ);
+			ctx.emitU2(0);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(tempSlot);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ELEMENT_TYPE, JvmArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+			gotoEnds.add(ctx.code.size());
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, notListPos, ctx.code.size());
+		}
+		if (ctx.usesIntArray || ctx.usesFloatArray) {
+			// not a string, not a general array: the packed dispatch
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(tempSlot);
+			if (ctx.usesIntArray) {
+				invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.ELEMENT_TYPE,
+						JvmIntArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+			}
+			else {
+				invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE,
+						JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+			}
 		}
 		else {
-			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE,
-					JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+			JvmEmitHelper.compileTrue(ctx);
 		}
-		int gotoPos = ctx.code.size();
+		gotoEnds.add(ctx.code.size());
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
 		int characterPos = ctx.code.size();
 		JvmEmitHelper.compileUnspelledLiteral(LispNames.CHARACTER_TYPE, ctx);
 		int endPos = ctx.code.size();
 		JvmEmitHelper.patchBranch(ctx, branchPos, characterPos);
-		JvmEmitHelper.patchBranch(ctx, gotoPos, endPos);
+		for (int gotoEnd : gotoEnds) {
+			JvmEmitHelper.patchBranch(ctx, gotoEnd, endPos);
+		}
 	}
 
 	static void compileArrayAlike(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {

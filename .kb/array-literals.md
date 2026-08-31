@@ -194,9 +194,9 @@ The two gaps this left were closed the same day, in `.kb/declarations-type-check
 **Invariant: `:element-type` selects a specialized representation only at RANK 1, except
 the packed FLOAT families, which are packed at every rank. Above rank 1 a `character` or
 `(unsigned-byte 8|16|32)` request answers the PLAIN GENERAL array on all four backends --
-`stringp` and `vectorp` are `NIL`, `array-element-type` is `T`, `type-of` is
-`(SIMPLE-ARRAY T dims)` -- and the only trace the element type leaves is the fill for
-unsupplied elements.**
+`stringp` and `vectorp` are `NIL` -- and the only traces the element type leaves are the
+fill for unsupplied elements and the type the array REMEMBERS (the section below; when
+this was written it left the fill alone and `array-element-type` answered `T`).**
 
 Half of that rule was already the tree's (`.kb/packed-integer-vectors.md`: "rank-n ...
 keeps the general boxed representation", `_ivMake`'s runtime rank check). The CHARACTER
@@ -223,11 +223,10 @@ them -- so marking a rank-2 array means teaching all of them a rank they have no
 to read. Degrading instead makes the marker's implication explicit and enforced at the
 ONE constructor: **the marker implies rank 1**, so no reader checks the rank.
 
-The answer that costs is `array-element-type`, which says `T` where SBCL says
-`CHARACTER`. That is not a character special case: it is exactly what a rank-2
-`(unsigned-byte 8)` array already answers (SBCL: `(UNSIGNED-BYTE 8)`). Giving the general
-array a remembered element type is one change covering both, and it is `.todo/611`, not
-this item.
+The answer that cost was `array-element-type`, which said `T` where SBCL says
+`CHARACTER`. That was not a character special case: it was exactly what a rank-2
+`(unsigned-byte 8)` array answered too. Giving the general array a remembered element
+type was one change covering both, and it is the section below.
 
 **What each backend does.** The rank is a RUNTIME fact at every site (the dimensions are
 an expression), so all three compile-time recognizers stayed and the rank test moved into
@@ -255,20 +254,18 @@ the allocation:
   general array. A dims expression whose rank is only known at run time keeps the rank-1
   reading, which is the rank the general lowering assumes there too.
 
-**The one trace the element type leaves is the fill.** An unsupplied element of a
+**The first trace the element type leaves is the fill.** An unsupplied element of a
 degraded array is one OF THE DECLARED TYPE, not `nil`: `#\Space` for a rank-n character
-array (the same fill the rank-1 string gets) and `0.0` for a packed float type that fell
-back for a fill pointer or adjustability. CL leaves the value of an uninitialized element
-undefined, and an array the program asked to hold characters or floats should hold them
-even where its type tag cannot say so. Both defaults now live in ONE place per backend --
-`Environment.makeArrayBuiltin`'s general path on the interpreter, which is what todo-607
-added: the float half had been defaulted on the three COMPILE backends only, so
+array (the same fill the rank-1 string gets), `0` for a packed integer width and `0.0`
+for a packed float type that fell back for a fill pointer or adjustability. CL leaves the
+value of an uninitialized element undefined, and an array the program asked to hold
+characters, bytes or floats should hold them even where its representation cannot say so.
+All three defaults live in ONE place per backend, keyed by the element type CODE
+(`ArrayElementTypes.defaultElement`) rather than by three ad-hoc tests -- what todo-607
+started for the character and float halves (the float half had been defaulted on the
+three COMPILE backends only, so
 `(aref (make-array 3 :element-type 'double-float :adjustable t) 0)` answered `NIL` here
-and `0.0` there.
-
-The packed integer widths do NOT keep their `0` under the same degrade (a rank-2
-`(unsigned-byte 8)` array reads `NIL`), because unlike the other two they have no
-fallback default anywhere yet; that is the other half of `.todo/611`.
+and `0.0` there) and todo-611 finished for the integer widths.
 
 Pinned by `LispEvaluatorTest.evalCharacterElementTypeAboveRankOneIsAGeneralArray` /
 `#evalMakeArrayEvaluatesItsDimensionsExactlyOnce`,
@@ -276,3 +273,107 @@ Pinned by `LispEvaluatorTest.evalCharacterElementTypeAboveRankOneIsAGeneralArray
 `#compileMakeArrayEvaluatesItsDimensionsExactlyOnce`, their
 `WasmLispCompilerIntegrationTest` twins, and the `character-element-type-above-rank-one`
 ci-spec case -- one program, one expected text, all four backends.
+
+## The degraded array REMEMBERS its element type (2026-08-31)
+
+**Invariant: a general array carries the UPGRADED element type it was asked for, on all
+four backends. `array-element-type` answers it, `type-of` builds `(SIMPLE-ARRAY et dims)`
+/ `(VECTOR et size)` from it, `typep` takes the same specifier back, and an unsupplied
+element takes that type's own zero. The representation degrades; the declared type does
+not.** So the program at the head of the section above now answers SBCL 2.2.9's text
+verbatim, and so does the rank-2 `(unsigned-byte 8)` array that motivated it:
+
+```lisp
+(let ((a (make-array '(2 2) :element-type '(unsigned-byte 8))))
+  (list (array-element-type a) (type-of a) (aref a 0 0)))
+; all four, and SBCL 2.2.9   ((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (2 2)) 0)
+```
+
+**The type space is CLOSED, so it is a code, not a value.** `make-array` upgrades an
+element type to exactly seven answers -- `t`, `character`, `(unsigned-byte 8|16|32)`,
+`single-float`, `double-float` -- because those are the representations that exist;
+everything else (`fixnum`, `integer`, `bit`, a class, an unsupported `(unsigned-byte 4)`)
+upgrades to `t` and is remembered as nothing at all. `am.ik.rontolisp.ArrayElementTypes`
+is that space: `codeOf` (the one recognizer, quote-unwrapping and
+package-qualifier-stripping like the per-backend ones it replaced), `valueOf` (the value
+`array-element-type` answers) and `defaultElement` (the fill). It lives in the ROOT
+package so `LispArray`, `Environment`, `LispMacroExpander` and both codegen packages can
+share it.
+
+**Each backend spends a slot it already had, so no array grew.** This is what made the
+change affordable, and it is why the three representations do not agree on the encoding:
+
+- **Interpreter**: one `int` field on `LispArray`. `become` (adjust-array's in-place half)
+  does not touch it, so the type survives adjustment, and `vectorPushExtend` fills the
+  slots it opens with `defaultElement` rather than nil.
+- **JVM**: header slot **4**, which is free on every non-displaced array -- slot 3 (the
+  displacement target) is what says whether slot 4 holds an offset instead. The ordinary
+  length-3 header grows to 5 (`{dims, fp, adj, null, et}`), and the length-6 PACKED header
+  ALREADY HAS the slot (`{dims, null, null, null, et, long[] data}`), so a remembered
+  element type never costs `.todo/527`'s packing -- a rank-2 `(unsigned-byte 8)` matrix is
+  still one flat `long[]`. No existing header-length test moved: 4 is still the character
+  vector, 6 still packed, 7 still the string view, and `header[3] != null` still means
+  displaced. `_arrayMakeTyped(dims, init, fp, adj, code)` builds the value once at
+  allocation and stamps it; `_arrayElementType` reads it back; `_arrayWiden` carries slot
+  4 into the widened header; `_ivMake` and `_charVecMake` stamp it on their rank-n
+  fallbacks, which is where the rank -- a RUNTIME fact -- is finally known.
+- **wasm**: the meta MARKER word, `meta.cdr.cdr`, which held only 0 (plain) or 1 (mutable
+  character vector) and is read as an offset only on a displaced array (whose data slot
+  holds a target cell). The remembered type is `code + 1`, i.e. 2..7, leaving 1 to the one
+  shape that is a string rather than a general array carrying a type -- so `_charvec_p`,
+  the owner of that invariant, is untouched, and `%array-disp-offset`'s existing
+  "non-displaced arrays report 0" guard already covers the new values.
+
+**The general arm of `array-element-type` is GATED, and gated per WIDTH.**
+`LispMacroExpander.makeArrayElementTypeCodes(program, registry)` scans the program's
+`make-array` calls for element types that upgrade to something other than `t` and answers
+a bit MASK. A program with no such call compiles byte-identically; a program that asks for
+one width emits the arm for that width alone. The scan is deliberately coarse -- a rank-1
+request that never degrades counts too, because the rank is a run-time fact at most call
+sites. On wasm the mask rides in `Ctx.typedArrayCodes` and **must be copied in
+`WasmAsyncEmit.freshCtx`**, which builds the synchronous top level's chunks: without it a
+top-level `(array-element-type a)` answers `t` while the same form inside a defun answers
+the remembered type, which is exactly how this was found.
+
+**`type-of` had to ask the simplicity question FIRST**, because a typed array can have a
+fill pointer: `(make-array 4 :element-type 'double-float :fill-pointer 0)` is
+`(VECTOR DOUBLE-FLOAT 4)`, not a `simple-array`. The prelude arm order is now
+fill-pointer/adjustable, then the `t`-and-rank-1 `simple-vector` case, then
+`(simple-array et dims)`. That reorder needed `array-has-fill-pointer-p` and
+`adjustable-array-p` to answer **NIL** for a packed array instead of refusing it -- which
+is what CL says of a simple array and what the interpreter had always answered, while the
+JVM threw "not applicable to a packed integer vector" and wasm trapped on a `ref.cast`.
+One divergence closed on the way past.
+
+**The size cost, measured 2026-08-31** (`--optimize=size`, gzip -9):
+
+| artifact | raw before | raw after | gzip before | gzip after |
+|---|---|---|---|---|
+| `hello-clack` Worker (`--no-wasi`) | 377,352 | 378,137 (+785, +0.21%) | 114,047 | 114,482 (+435, +0.38%) |
+| `zlib` (`size-report/programs`) | 103,158 | 103,592 (+434, +0.42%) | -- | -- |
+
+Both programs are IN the gate -- babel/uax and chipz ask for `(unsigned-byte 8)` -- so
+these are the paying rows, not the free ones. The bill is the width arm at each
+`array-element-type` site plus the marker word at each typed `make-array`, and it is the
+same order as the `vectorp` rank check's +0.44% (`.kb/declarations-type-checks.md`). A
+program outside the gate pays nothing.
+
+Pinned by `LispEvaluatorTest.evalGeneralArrayRemembersItsDeclaredElementType`,
+`JvmLispCompilerTest.compileGeneralArrayRemembersItsDeclaredElementType`,
+`WasmLispCompilerIntegrationTest.compileGeneralArrayRemembersItsDeclaredElementType` and
+the `general-array-remembers-its-element-type` ci-spec case -- one program, one expected
+text, all four backends, every answer SBCL 2.2.9's.
+
+**What still answers `t`, and where the four backends still disagree.** A DISPLACED view
+answers `t` on all four, on purpose: its meta slot carries the offset, not a type, and
+SBCL answers `t` for a view whose own `:element-type` was unstated too.
+
+An `:element-type` held in a VARIABLE is the one place they diverge, and it is NOT a
+consequence of this change: `lowerRuntimeElementTypeMakeArray` picks between the character
+vector and the general array at run time and has no branch for the other widths, so the
+compile paths have always built a boxed general array where the interpreter -- which has
+the designator in hand -- built a packed one. `(aref (make-array 4 :element-type et) 0)`
+with `et` bound to `'(unsigned-byte 8)` is `0` here and `NIL` there, and has been. What
+todo-611 added to that list is one cell: the interpreter now remembers a runtime
+`character` designator above rank 1 while the lowering's general branch stamps nothing.
+The whole divergence is `.todo/612`.

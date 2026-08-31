@@ -329,7 +329,7 @@ page.
 | `fill-pointer` | `(fill-pointer v)` | The fill pointer of a `:fill-pointer` vector (its effective length); also a `setf` place |
 | `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | `t` if the array has a fill pointer, else `nil` |
 | `adjustable-array-p` | `(adjustable-array-p a)` | `t` if the array was created `:adjustable`, else `nil` |
-| `array-element-type` | `(array-element-type a)` | Always `t` (element types are not tracked) |
+| `array-element-type` | `(array-element-type a)` | The upgraded element type; `t` when there is nothing to upgrade to |
 | `vector-push` | `(vector-push x v)` | Store `x` at the fill pointer and return the index, or `nil` when full |
 | `vector-pop` | `(vector-pop v)` | Decrement the fill pointer and return the element it passed |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | Like `vector-push` but grows the vector when full |

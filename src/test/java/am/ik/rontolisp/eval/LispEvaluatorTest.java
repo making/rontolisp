@@ -5307,13 +5307,13 @@ class LispEvaluatorTest {
 	void evalCharacterElementTypeAboveRankOneIsAGeneralArray() {
 		// The character marker MEANS "a rank-1 character array", i.e. a string, so
 		// nothing above rank 1 carries it: the value is the plain general array, on
-		// every backend. stringp and vectorp answer NIL (SBCL 2.2.9 agrees), and the
-		// element type degrades to t exactly as a rank-n '(unsigned-byte 8) request's
-		// does.
+		// every backend. stringp and vectorp answer NIL (SBCL 2.2.9 agrees). The
+		// element type is still REMEMBERED (todo-611), exactly as a rank-n
+		// '(unsigned-byte 8) request's is.
 		assertThat(eval("""
 				(let ((b (make-array '(2 2) :element-type 'character :initial-element #\\a)))
 				  (list (stringp b) (array-element-type b) (array-dimensions b) (type-of b) (vectorp b)))
-				""").print()).isEqualTo("(NIL T (2 2) (SIMPLE-ARRAY T (2 2)) NIL)");
+				""").print()).isEqualTo("(NIL CHARACTER (2 2) (SIMPLE-ARRAY CHARACTER (2 2)) NIL)");
 		// The elements are still CHARACTERS: unsupplied slots take the same space fill
 		// the rank-1 string does, and a write lands like any general array write.
 		assertThat(eval("(aref (make-array '(2 2) :element-type 'character) 0 1)").print()).isEqualTo("#\\Space");
@@ -5328,7 +5328,7 @@ class LispEvaluatorTest {
 				(let ((c (make-array '(2 2) :element-type 'character
 				                     :initial-contents '((#\\a #\\b) (#\\c #\\d)))))
 				  (list (stringp c) (aref c 1 0) (type-of c)))
-				""").print()).isEqualTo("(NIL #\\c (SIMPLE-ARRAY T (2 2)))");
+				""").print()).isEqualTo("(NIL #\\c (SIMPLE-ARRAY CHARACTER (2 2)))");
 		// Rank 1 -- the shape that actually occurs -- is untouched: still a string.
 		assertThat(eval("""
 				(let ((s (make-array 3 :element-type 'character :initial-element #\\z)))
@@ -5341,6 +5341,59 @@ class LispEvaluatorTest {
 		assertThat(eval("(aref (make-array 3 :element-type 'double-float :adjustable t) 0)").print()).isEqualTo("0.0");
 		assertThat(eval("(aref (make-array 3 :element-type 'single-float :fill-pointer 3) 2)").print())
 			.isEqualTo("0.0");
+	}
+
+	@Test
+	void evalGeneralArrayRemembersItsDeclaredElementType() {
+		// A specialized element type that selects no representation of its own -- above
+		// rank 1, or combined with a fill pointer / adjustability -- is still REMEMBERED
+		// on the general array it lands in: array-element-type answers it, type-of
+		// builds the compound specifier from it, and an unsupplied element takes its own
+		// zero rather than nil. Every answer here is SBCL 2.2.9's on the same program.
+		assertThat(eval("""
+				(list (array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8)))
+				      (type-of (make-array '(2 2) :element-type '(unsigned-byte 8)))
+				      (array-element-type (make-array 4 :element-type 'double-float :fill-pointer 0))
+				      (type-of (make-array 4 :element-type 'double-float :fill-pointer 0))
+				      (type-of (make-array 4 :element-type '(unsigned-byte 16) :adjustable t)))
+				""").print()).isEqualTo("((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (2 2)) DOUBLE-FLOAT"
+				+ " (VECTOR DOUBLE-FLOAT 4) (VECTOR (UNSIGNED-BYTE 16) 4))");
+		// An element type that upgrades to t is remembered as nothing at all, so the
+		// answers do not move.
+		assertThat(eval("(list (array-element-type (make-array 3)) (type-of (make-array 3)))").print())
+			.isEqualTo("(T (SIMPLE-VECTOR 3))");
+		assertThat(eval("(type-of (make-array 3 :element-type 'fixnum))").print()).isEqualTo("(SIMPLE-VECTOR 3)");
+		// The unsupplied element is the element type's own zero -- the half the packed
+		// integer widths had no default for anywhere.
+		assertThat(eval("(aref (make-array '(2 2) :element-type '(unsigned-byte 8)) 0 0)").print()).isEqualTo("0");
+		assertThat(eval("(aref (make-array 3 :element-type '(unsigned-byte 16) :adjustable t) 2)").print())
+			.isEqualTo("0");
+		// typep takes the same specifier back, so (typep a (type-of a)) holds.
+		assertThat(eval("""
+				(let ((a (make-array '(2 2) :element-type '(unsigned-byte 8))))
+				  (list (typep a '(simple-array (unsigned-byte 8) (2 2))) (typep a (type-of a))))
+				""").print()).isEqualTo("(T T)");
+		// The type survives adjustment and growth.
+		assertThat(eval("""
+				(let ((v (make-array 2 :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
+				  (vector-push-extend 7 v)
+				  (vector-push-extend 8 v)
+				  (vector-push-extend 9 v)
+				  (list v (array-element-type v) (fill-pointer v)))
+				""").print()).isEqualTo("(#(7 8 9) (UNSIGNED-BYTE 8) 3)");
+		// A DISPLACED view answers t: its meta slot carries the offset, not a type, and
+		// SBCL answers t for a view whose own :element-type was unstated too.
+		assertThat(eval("""
+				(let ((b (make-array '(2 2) :element-type '(unsigned-byte 8) :initial-element 5)))
+				  (array-element-type (make-array 2 :displaced-to b)))
+				""").print()).isEqualTo("T");
+		// A packed representation has no fill pointer and is not adjustable, which is
+		// NIL rather than an error -- what CL says of a simple array, and what type-of
+		// asks of every array now.
+		assertThat(eval("""
+				(list (array-has-fill-pointer-p (make-array 4 :element-type 'double-float))
+				      (adjustable-array-p (make-array 4 :element-type '(unsigned-byte 8))))
+				""").print()).isEqualTo("(NIL NIL)");
 	}
 
 	@Test
@@ -16448,11 +16501,12 @@ class LispEvaluatorTest {
 				        (typep a '(simple-array (unsigned-byte 8) (*)))))
 				""").print()).isEqualTo("((UNSIGNED-BYTE 8) T T (3) T)");
 		// A rank-n / fill-pointer / adjustable combination keeps the general boxed
-		// representation (element type reads back t).
+		// representation, but REMEMBERS the element type it was asked for (todo-611):
+		// the representation degrades, the declared type does not.
 		assertThat(eval("(array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8)))").print())
-			.isEqualTo("T");
+			.isEqualTo("(UNSIGNED-BYTE 8)");
 		assertThat(eval("(array-element-type (make-array 4 :element-type '(unsigned-byte 8) :fill-pointer 2))").print())
-			.isEqualTo("T");
+			.isEqualTo("(UNSIGNED-BYTE 8)");
 	}
 
 	@Test

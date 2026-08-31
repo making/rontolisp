@@ -38,6 +38,7 @@ import java.util.function.DoubleUnaryOperator;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
+import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.FloatText;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.FloatArrayAccessHook;
@@ -990,18 +991,17 @@ public final class Environment implements Scope {
 				}
 				return new LispString(sb.toString(), fp, adjustable);
 			}
+			// A specialized element type that reaches the GENERAL representation -- a
+			// character or packed-integer one above rank 1, any of them combined with a
+			// fill pointer or adjustability -- is REMEMBERED on the array: it is what
+			// array-element-type answers, and its own zero is what an unsupplied element
+			// takes rather than nil, in an array the program asked to hold characters,
+			// bytes or floats.
+			int elementTypeCode = ArrayElementTypes.codeOf(elementTypeArg);
 			if (!initGiven && initialContents == null) {
-				// A specialized element type that reaches the GENERAL representation --
-				// a character one above rank 1, a packed float one with a fill pointer
-				// or adjustability -- still fills with an element OF THAT TYPE rather
-				// than leaving nil in an array the program asked to hold characters or
-				// floats. The compile backends already defaulted the float fallback to
-				// 0.0; this is the interpreter's half of that.
-				if (isCharacterElementType(elementTypeArg)) {
-					init = new LispChar(' ');
-				}
-				else if (packedType != null) {
-					init = new LispDouble(0.0);
+				LispVal typeDefault = ArrayElementTypes.defaultElement(elementTypeCode);
+				if (typeDefault != null) {
+					init = typeDefault;
 				}
 			}
 			LispVal[] data = new LispVal[total];
@@ -1021,7 +1021,7 @@ public final class Environment implements Scope {
 					throw new LispEvalException(LispNames.MAKE_ARRAY + ": :fill-pointer out of range");
 				}
 			}
-			return new LispArray(dims, data, fillPointer, adjustable);
+			return new LispArray(dims, data, fillPointer, adjustable, elementTypeCode);
 		});
 	}
 
@@ -1211,12 +1211,13 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispString) {
 				return new LispSymbol(LispNames.CHARACTER_TYPE);
 			}
-			requireArray(LispNames.ARRAY_ELEMENT_TYPE, args.get(0));
-			// The BOOLEAN t, not a symbol spelled "T": in CL the two are one object,
-			// the compile backends answer the boolean, and a caller writes
+			LispArray general = requireArray(LispNames.ARRAY_ELEMENT_TYPE, args.get(0));
+			// The type the array REMEMBERS being asked for, which is the BOOLEAN t for
+			// almost every general array -- not a symbol spelled "T": in CL the two are
+			// one object, the compile backends answer the boolean, and a caller writes
 			// (eq (array-element-type a) t). type-of reads this answer to decide
 			// between (simple-vector n) and (simple-array et dims).
-			return LispTrue.INSTANCE;
+			return ArrayElementTypes.valueOf(general.elementTypeCode());
 		}));
 		env.defineFunction(LispNames.ADJUSTABLE_ARRAY_P, new LispFunction(LispNames.ADJUSTABLE_ARRAY_P, args -> {
 			requireArgCount(LispNames.ADJUSTABLE_ARRAY_P, args, 1);

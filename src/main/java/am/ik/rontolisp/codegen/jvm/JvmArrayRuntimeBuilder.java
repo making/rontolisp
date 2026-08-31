@@ -170,6 +170,28 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String CHAR_VEC_MAKE = "_charVecMake";
 
+	/**
+	 * {@code _arrayMakeTyped(dims, init, fp, adj, code) -> Object}: {@link #MAKE} for an
+	 * array that REMEMBERS the element type it was asked to hold. The code is an
+	 * {@code am.ik.rontolisp.ArrayElementTypes} constant; the value it names is built
+	 * once here and stored in header slot 4, which is free on every non-displaced array
+	 * (slot 3, the displacement target, is what says whether slot 4 is an offset
+	 * instead). A length-3 header grows to 5 for it; the length-6 PACKED header already
+	 * has the slot, so a remembered element type never costs the packing.
+	 */
+	static final String MAKE_TYPED = "_arrayMakeTyped";
+
+	static final String MAKE_TYPED_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;I)Ljava/lang/Object;";
+
+	/**
+	 * {@code _arrayElementType(Object) -> Object}: the remembered element type of a
+	 * general array -- header slot 4 of a non-displaced header long enough to have one --
+	 * or the boolean {@code t} for everything else.
+	 */
+	static final String ELEMENT_TYPE = "_arrayElementType";
+
+	static final String ELEMENT_TYPE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String WIDEN = "_arrayWiden";
 
 	static final String WIDEN_DESC = "(Ljava/lang/Object;)V";
@@ -233,7 +255,7 @@ final class JvmArrayRuntimeBuilder {
 	static final Set<String> METHOD_NAMES = Set.of(MAKE, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS, TO_STRING,
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET, DISP_OFFSET,
-			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN);
+			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -979,8 +1001,8 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.addUtf8(STR_TO_CHAR_VEC), cp.addUtf8(STR_TO_CHAR_VEC_DESC), 10, 4, tv.finish()));
 
 		// _arrayWiden(list): converts a PACKED array (length-6 header, long[] data) to
-		// the boxed shape IN PLACE -- header replaced by the ordinary length-3
-		// {dims, null, null}, each long[] element appended boxed (the sentinel as
+		// the boxed shape IN PLACE -- header replaced by {dims, null, null, null, et},
+		// each long[] element appended boxed (the sentinel as
 		// null/nil). A non-packed array passes through untouched; the ArrayList object
 		// is the array's identity, so every alias sees the widened shape.
 		// Locals: 0 = list, 1 = header, 2 = data, 3 = i, 4/5 = v (long).
@@ -1000,16 +1022,24 @@ final class JvmArrayRuntimeBuilder {
 		wd.aaload();
 		wd.checkcast(longArrayClass);
 		wd.astore(2);
-		// list.set(0, new Object[]{header[0], null, null})
+		// list.set(0, new Object[]{header[0], null, null, null, header[4]}) -- the
+		// REMEMBERED element type (slot 4) survives the widening, so an array that was
+		// asked for (unsigned-byte 8) still answers it after a store widened it.
 		wd.aload(0);
 		wd.checkcast(arrayListClass);
 		wd.iconst(0);
-		wd.iconst(3);
+		wd.iconst(5);
 		wd.anewarray(objectClass);
 		wd.dup();
 		wd.iconst(0);
 		wd.aload(1);
 		wd.iconst(0);
+		wd.aaload();
+		wd.aastore();
+		wd.dup();
+		wd.iconst(4);
+		wd.aload(1);
+		wd.iconst(4);
 		wd.aaload();
 		wd.aastore();
 		wd.invokevirtual(alSet);
@@ -1305,6 +1335,8 @@ final class JvmArrayRuntimeBuilder {
 		// reject anyway). Same runtime rank test, same fallback, as _ivMake.
 		MethodrefConstant selfArrayMake = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC)));
+		MethodrefConstant selfMakeTyped = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(MAKE_TYPED), cp.addUtf8(MAKE_TYPED_DESC)));
 		JvmAsm cv = new JvmAsm();
 		int cvRank1 = cv.label();
 		int cvTryList = cv.label();
@@ -1355,15 +1387,104 @@ final class JvmArrayRuntimeBuilder {
 		cv.aload(4);
 		cv.areturn();
 		// rank n: the general boxed representation, with no fill pointer (the defaulted
-		// one is the rank-1 marker's, not the program's).
+		// one is the rank-1 marker's, not the program's) -- but REMEMBERING that the
+		// element type asked for was character, which is the only trace it leaves above
+		// rank 1.
 		cv.bind(cvGeneral);
 		cv.aload(0);
 		cv.aload(1);
 		cv.aconstNull();
 		cv.aload(3);
-		cv.invokestatic(selfArrayMake);
+		cv.iconst(am.ik.rontolisp.ArrayElementTypes.CHARACTER);
+		cv.invokestatic(selfMakeTyped);
 		cv.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(CHAR_VEC_MAKE), cp.addUtf8(MAKE_DESC), 4, 7, cv.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(CHAR_VEC_MAKE), cp.addUtf8(MAKE_DESC), 5, 7, cv.finish()));
+
+		// _arrayMakeTyped(dims, init, fp, adj, code): _arrayMake plus the REMEMBERED
+		// element type in header slot 4. That slot is free on every non-displaced array
+		// -- slot 3 (the displacement target) is what says whether slot 4 holds an
+		// offset instead -- so the packed length-6 header takes the type without giving
+		// up its long[], and only the ordinary length-3 header has to grow to 5.
+		// Locals: 0..3 = the _arrayMake arguments, 4 = code (int), 5 = list, 6 = header,
+		// 7 = et.
+		JvmAsm mt = new JvmAsm();
+		int mtHaveEt = mt.label();
+		int mtGrow = mt.label();
+		mt.aload(0);
+		mt.aload(1);
+		mt.aload(2);
+		mt.aload(3);
+		mt.invokestatic(selfArrayMake);
+		mt.astore(5);
+		emitElementTypeForCode(mt, cp, objectClass, longValueOf, 4, 7, mtHaveEt);
+		mt.bind(mtHaveEt);
+		emitLoadHeader(mt, arrayListClass, objectArrayClass, alGet, 5);
+		mt.astore(6);
+		mt.aload(6);
+		mt.arraylength();
+		mt.iconst(5);
+		mt.branch(Opcode.IF_ICMPLT, mtGrow);
+		mt.aload(6);
+		mt.iconst(4);
+		mt.aload(7);
+		mt.aastore();
+		mt.aload(5);
+		mt.areturn();
+		// list.set(0, new Object[]{header[0], header[1], header[2], null, et})
+		mt.bind(mtGrow);
+		mt.aload(5);
+		mt.checkcast(arrayListClass);
+		mt.iconst(0);
+		mt.iconst(5);
+		mt.anewarray(objectClass);
+		for (int slot = 0; slot < 3; slot++) {
+			mt.dup();
+			mt.iconst(slot);
+			mt.aload(6);
+			mt.iconst(slot);
+			mt.aaload();
+			mt.aastore();
+		}
+		mt.dup();
+		mt.iconst(4);
+		mt.aload(7);
+		mt.aastore();
+		mt.invokevirtual(alSet);
+		mt.pop();
+		mt.aload(5);
+		mt.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(MAKE_TYPED), cp.addUtf8(MAKE_TYPED_DESC), 9, 8, mt.finish()));
+
+		// _arrayElementType(o): the remembered element type, or the boolean t. A
+		// DISPLACED array answers t: slot 4 is its offset there, not a type.
+		// Locals: 0 = o, 1 = header, 2 = et.
+		JvmAsm aet = new JvmAsm();
+		int aetT = aet.label();
+		aet.aload(0);
+		aet.instanceOf(arrayListClass);
+		aet.branch(Opcode.IFEQ, aetT);
+		emitLoadHeader(aet, arrayListClass, objectArrayClass, alGet, 0);
+		aet.astore(1);
+		aet.aload(1);
+		aet.arraylength();
+		aet.iconst(4);
+		aet.branch(Opcode.IF_ICMPLE, aetT);
+		aet.aload(1);
+		aet.iconst(3);
+		aet.aaload();
+		aet.branch(Opcode.IFNONNULL, aetT);
+		aet.aload(1);
+		aet.iconst(4);
+		aet.aaload();
+		aet.astore(2);
+		aet.aload(2);
+		aet.branch(Opcode.IFNULL, aetT);
+		aet.aload(2);
+		aet.areturn();
+		aet.bind(aetT);
+		aet.ldcString(cp.addString("T"));
+		aet.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 3, 3, aet.finish()));
 
 		// _strv(o): normalizes a mutable character vector (a length-4-header array whose
 		// elements are runtime CHARACTERs -- length-1 int[]{codePoint}) into the
@@ -2452,6 +2573,65 @@ final class JvmArrayRuntimeBuilder {
 		a.iinc(kSlot, 1);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(done);
+	}
+
+	// Emits the ArrayElementTypes code -> element type VALUE switch: reads the int in
+	// codeSlot and leaves the value in etSlot, then branches to done. The value is the
+	// runtime shape array-element-type answers -- a name string for the symbol types,
+	// the cons {"UNSIGNED-BYTE", {Long, null}} for the packed integer widths -- built
+	// once at allocation rather than at every read.
+	private static void emitElementTypeForCode(JvmAsm a, ConstantPool cp, ClassConstant objectClass,
+			MethodrefConstant longValueOf, int codeSlot, int etSlot, int done) {
+		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.CHARACTER,
+				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.CHARACTER_TYPE)));
+		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_8,
+				() -> emitUnsignedByte(a, cp, objectClass, longValueOf, 8));
+		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_16,
+				() -> emitUnsignedByte(a, cp, objectClass, longValueOf, 16));
+		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_32,
+				() -> emitUnsignedByte(a, cp, objectClass, longValueOf, 32));
+		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.SINGLE_FLOAT,
+				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.SINGLE_FLOAT)));
+		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.DOUBLE_FLOAT,
+				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.DOUBLE_FLOAT)));
+		// ArrayElementTypes.T, which never reaches here: nothing is remembered for it.
+		a.aconstNull();
+		a.astore(etSlot);
+		a.branch(Opcode.GOTO, done);
+	}
+
+	private static void emitElementTypeCase(JvmAsm a, int codeSlot, int etSlot, int done, int code, Runnable value) {
+		int next = a.label();
+		a.iload(codeSlot);
+		a.iconst(code);
+		a.branch(Opcode.IF_ICMPNE, next);
+		value.run();
+		a.astore(etSlot);
+		a.branch(Opcode.GOTO, done);
+		a.bind(next);
+	}
+
+	// new Object[]{"UNSIGNED-BYTE", new Object[]{Long.valueOf(width), null}} -- the cons
+	// (unsigned-byte width), in the two-slot Object[] a cons cell is on this backend.
+	private static void emitUnsignedByte(JvmAsm a, ConstantPool cp, ClassConstant objectClass,
+			MethodrefConstant longValueOf, int width) {
+		a.iconst(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.iconst(0);
+		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.UNSIGNED_BYTE));
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.iconst(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.iconst(0);
+		a.iconst(width);
+		a.op(Opcode.I2L);
+		a.invokestatic(longValueOf);
+		a.aastore();
+		a.aastore();
 	}
 
 }

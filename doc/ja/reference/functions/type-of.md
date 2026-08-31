@@ -8,7 +8,7 @@
 (type-of 42) ; => INTEGER
 ```
 
-配列だけは複合型指定子を返すため、ランクと要素型を読み取れます。要素型が `t` の単純な 1 次元配列は `(simple-vector SIZE)`、フィルポインタ付きまたは `:adjustable t` の配列は `(vector t SIZE)`、それ以外 (次元リストが `nil` になるランク 0 配列を含む) は `(simple-array ELEMENT-TYPE DIMENSIONS)` です。要素型は [`array-element-type`](array-element-type.md) が返す昇格後の型なので、`:element-type 'fixnum` で作った配列は `t` として読み出されます。文字列はアトミックな `string` を返します。
+配列だけは複合型指定子を返すため、ランクと要素型を読み取れます。要素型が `t` の単純な 1 次元配列は `(simple-vector SIZE)`、フィルポインタ付きまたは `:adjustable t` の配列は `(vector ELEMENT-TYPE SIZE)`、それ以外 (次元リストが `nil` になるランク 0 配列を含む) は `(simple-array ELEMENT-TYPE DIMENSIONS)` です。要素型は [`array-element-type`](array-element-type.md) が返す昇格後の型なので、`:element-type 'fixnum` で作った配列は `t` として読み出されます。文字列はアトミックな `string` を返します。
 
 ```lisp
 (list (type-of (make-array 4))

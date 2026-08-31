@@ -3437,6 +3437,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
 			.usesEqualpHashTables(this.usesEqualpHashTables)
 			.usesStreamValues(usesStreamValues)
+			.typedArrayCodes(LispMacroExpander.makeArrayElementTypeCodes(program, closRegistry))
 			.layoutAddresses(layoutAddresses)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
@@ -7866,6 +7867,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesStreamValues = false;
 
 		/**
+		 * The UPGRADED element types this program's {@code make-array} calls can leave on
+		 * a general array, as a bit mask over {@code ArrayElementTypes} codes
+		 * ({@link LispMacroExpander#makeArrayElementTypeCodes}); 0 when none does.
+		 * {@code array-element-type}'s general arm reads the meta marker word and builds
+		 * the answer, and it emits ONLY the arms this mask names -- so a program that
+		 * never asks for a specialized element type compiles byte-identically and one
+		 * that asks for a single width pays for that width alone.
+		 */
+		int typedArrayCodes = 0;
+
+		/**
 		 * True when the {@code %seq-string} helper is injected for this program, i.e. the
 		 * program itself writes a {@code (concatenate 'string ...)} with an argument that
 		 * is not a literal string. Only then does the string-family lowering normalize
@@ -8281,6 +8293,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.usesSynonymStreams = builder.usesSynonymStreams;
 			this.usesEqualpHashTables = builder.usesEqualpHashTables;
 			this.usesStreamValues = builder.usesStreamValues;
+			this.typedArrayCodes = builder.typedArrayCodes;
 			this.usesSeqString = builder.usesSeqString;
 			this.mutableStringProducers = builder.mutableStringProducers;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
@@ -8398,6 +8411,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean usesEqualpHashTables = false;
 
 			private boolean usesStreamValues = false;
+
+			private int typedArrayCodes = 0;
 
 			private boolean usesSeqString = false;
 
@@ -8640,6 +8655,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder printCase(boolean printCase) {
 				this.printCase = printCase;
+				return this;
+			}
+
+			Builder typedArrayCodes(int typedArrayCodes) {
+				this.typedArrayCodes = typedArrayCodes;
 				return this;
 			}
 

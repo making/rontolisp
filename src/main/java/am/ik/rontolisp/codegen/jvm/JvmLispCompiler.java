@@ -1615,6 +1615,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// under-predicted this gate (see compile(List)); it never turns the gate OFF.
 		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray || usesIntArray
 				|| forcedGroups.contains(GROUP_ARRAYS);
+		// Whether any make-array in the program asks for an element type narrower than t
+		// -- the only way a general array can carry a remembered one, and so the gate on
+		// array-element-type's general arm.
+		final boolean usesTypedArray = usesArrays
+				&& LispMacroExpander.makeArrayElementTypeCodes(program, closRegistry) != 0;
 		MethodrefConstant strvMethod = usesArrays ? cp.addMethodref(thisClass, cp
 			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
 				: null;
@@ -1807,6 +1812,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesFloatArray(usesFloatArray)
 			.typedLoops(!this.optimize.prefersSizeOverSpeed())
 			.usesIntArray(usesIntArray)
+			.usesTypedArray(usesTypedArray)
 			.usesPackedSequenceIo(usesPackedSequenceIo)
 			.usesArrays(usesArrays)
 			.usesHashTables(usesHashTables)
@@ -5749,6 +5755,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesIntArray = false;
 
 		/**
+		 * True when the program can build a general array that REMEMBERS its declared
+		 * element type -- any {@code make-array} whose {@code :element-type} upgrades to
+		 * something other than {@code t}. Only {@code array-element-type} reads the
+		 * remembered slot, so this gate is what keeps its lowering byte-identical for a
+		 * program that never asks for a specialized element type. Shared across every
+		 * context.
+		 */
+		boolean usesTypedArray = false;
+
+		/**
 		 * True when the {@code _readSeqPacked} / {@code _writeSeqPacked} helpers are
 		 * emitted ({@code .kb/binary-sequence-io.md}); when they are not, the
 		 * {@code %read-sequence-packed} / {@code %write-sequence-packed} primitives
@@ -6092,6 +6108,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.inlinableDefuns = builder.inlinableDefuns;
 			this.fusedState = builder.fusedState;
 			this.usesIntArray = builder.usesIntArray;
+			this.usesTypedArray = builder.usesTypedArray;
 			this.usesPackedSequenceIo = builder.usesPackedSequenceIo;
 			this.usesArrays = builder.usesArrays;
 			this.usesHashTables = builder.usesHashTables;
@@ -6399,6 +6416,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private JvmIntFusionCompiler.@Nullable State fusedState;
 
 			private boolean usesIntArray = false;
+
+			private boolean usesTypedArray = false;
 
 			private boolean usesPackedSequenceIo = false;
 
@@ -6868,6 +6887,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesIntArray(boolean usesIntArray) {
 				this.usesIntArray = usesIntArray;
+				return this;
+			}
+
+			Builder usesTypedArray(boolean usesTypedArray) {
+				this.usesTypedArray = usesTypedArray;
 				return this;
 			}
 

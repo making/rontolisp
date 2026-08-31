@@ -329,17 +329,24 @@ Where this lives and why:
   guard is what keeps CHARACTER arrays out: a rank-1 character array is a
   string VALUE on the interpreter and a marked general array on the compile
   paths, and both DESIGNATE `STRING` -- so all four answer `STRING` rather than
-  diverging. The element-type arm is tested BEFORE the fill-pointer arm because
-  a packed representation is always simple (make-array degrades to the general
-  one the moment `:fill-pointer`/`:adjustable` appears) and
-  `array-has-fill-pointer-p`/`adjustable-array-p` REFUSE a packed array on
-  every backend.
-- **`array-element-type` answers the BOOLEAN `t`** for a general array, on the
-  interpreter too since todo-604 -- it used to answer a SYMBOL spelled `"T"`
-  there while all three compile backends answered the boolean, so
-  `(eq (array-element-type a) t)` disagreed across backends. `type-of` reads
-  exactly that answer to choose between `(simple-vector n)` and
-  `(simple-array et dims)`.
+  diverging. The SIMPLICITY arm is tested FIRST since todo-611, because a
+  remembered element type and a fill pointer can now coexist:
+  `(make-array 4 :element-type 'double-float :fill-pointer 0)` is
+  `(VECTOR DOUBLE-FLOAT 4)`, not a `simple-array`. Asking a PACKED array that
+  question is safe because both predicates answer nil for one on every backend --
+  what CL says of a simple array, and what the interpreter always answered while
+  the JVM threw and wasm trapped. The order was the other way round for exactly
+  that reason until those two were fixed.
+- **`array-element-type` answers the BOOLEAN `t`** for a general array asked for
+  nothing narrower, on the interpreter too since todo-604 -- it used to answer a
+  SYMBOL spelled `"T"` there while all three compile backends answered the
+  boolean, so `(eq (array-element-type a) t)` disagreed across backends.
+  `type-of` reads exactly that answer to choose between `(simple-vector n)` and
+  `(simple-array et dims)`. Since todo-611 a general array that WAS asked for a
+  narrower type -- `character` or `(unsigned-byte n)` above rank 1, any of them
+  with `:fill-pointer`/`:adjustable` -- answers that type instead, so the
+  `simple-array` arm carries a real element type where it used to carry `t`
+  (`.kb/array-literals.md`, "The degraded array REMEMBERS its element type").
 - **`makeArrayTypeTest`** (`LispMacroExpander`) builds the test for
   `(array ET DIMS)` / `(simple-array ET DIMS)` / `(vector ET SIZE)` /
   `(simple-vector SIZE)`. It is the union of a STRING arm and an ARRAY arm,
@@ -467,9 +474,10 @@ The rank-n (n>1) CHARACTER array this did NOT close -- a general array on the
 interpreter, a character-marked array on wasm, a `make-array` REFUSAL on the
 JVM -- was closed by todo-607 the same day: above rank 1 a character element
 type selects no representation of its own on ANY backend, so the value is the
-plain general array and `type-of` answers `(SIMPLE-ARRAY T dims)` everywhere.
-The model and its cost are `.kb/array-literals.md`, "A SPECIALIZED element type
-above rank 1 is the general array".
+plain general array -- which since todo-611 still REMEMBERS the element type, so
+`type-of` answers `(SIMPLE-ARRAY CHARACTER dims)` everywhere. The model and its
+cost are `.kb/array-literals.md`, "A SPECIALIZED element type above rank 1 is the
+general array" and "The degraded array REMEMBERS its element type".
 
 ## The COMPOUND half of `subtypep` (todo-608)
 

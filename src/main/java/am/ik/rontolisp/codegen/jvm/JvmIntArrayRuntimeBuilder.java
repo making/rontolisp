@@ -120,6 +120,8 @@ final class JvmIntArrayRuntimeBuilder {
 				JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE, JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE_DESC) : null;
 		MethodrefConstant arrayMake = self(cp, selfClass, JvmArrayRuntimeBuilder.MAKE,
 				JvmArrayRuntimeBuilder.MAKE_DESC);
+		MethodrefConstant arrayMakeTyped = self(cp, selfClass, JvmArrayRuntimeBuilder.MAKE_TYPED,
+				JvmArrayRuntimeBuilder.MAKE_TYPED_DESC);
 
 		List<ArrayMethod> methods = new ArrayList<>();
 		methods.add(buildAref1(cp, longArrayClass, longClass, longIntValue, longValueOf, rtExClass, rtExInit,
@@ -131,7 +133,7 @@ final class JvmIntArrayRuntimeBuilder {
 		methods.add(buildToGeneral(cp, longArrayClass, arrayListClass, objectClass, alInit, alAdd, longValueOf));
 		methods.add(buildElementType(cp, longArrayClass, objectClass, longValueOf, elementTypeDelegate));
 		methods.add(buildMake(cp, longArrayClass, objectArrayClass, longClass, bigIntegerClass, numberClass,
-				longIntValue, numberLongValue, rtExClass, rtExInit, arrayMake));
+				longIntValue, longValueOf, numberLongValue, rtExClass, rtExInit, arrayMakeTyped));
 		methods.add(buildAlike(cp, longArrayClass, longClass, longIntValue, arrayMake));
 		methods.add(buildRequireGeneral(cp, longArrayClass, rtExClass, rtExInit));
 		return methods;
@@ -463,8 +465,8 @@ final class JvmIntArrayRuntimeBuilder {
 	// 1=init, 2=width, 3=n, 4=arr, 5=i, 6..7=fill.
 	private static ArrayMethod buildMake(ConstantPool cp, ClassConstant longArrayClass, ClassConstant objectArrayClass,
 			ClassConstant longClass, ClassConstant bigIntegerClass, ClassConstant numberClass,
-			MethodrefConstant longIntValue, MethodrefConstant numberLongValue, ClassConstant rtExClass,
-			MethodrefConstant rtExInit, MethodrefConstant arrayMake) {
+			MethodrefConstant longIntValue, MethodrefConstant longValueOf, MethodrefConstant numberLongValue,
+			ClassConstant rtExClass, MethodrefConstant rtExInit, MethodrefConstant arrayMakeTyped) {
 		int dims = 0, init = 1, width = 2, n = 3, arr = 4, i = 5, fill = 6;
 		JvmAsm a = new JvmAsm();
 		int tryList = a.label();
@@ -497,14 +499,27 @@ final class JvmIntArrayRuntimeBuilder {
 		a.invokevirtual(longIntValue);
 		a.istore(n);
 		a.branch(Opcode.GOTO, haveN);
-		// rank n: the general boxed representation (no fill pointer / adjustability at
-		// this call site by construction)
+		// rank n: the general representation (no fill pointer / adjustability at this
+		// call site by construction), REMEMBERING the (unsigned-byte width) it was asked
+		// for and defaulting an unsupplied element to 0 rather than nil. The 0 also
+		// keeps the allocation on _arrayMake's packed long[] path, so the type is
+		// remembered without giving up the packing.
 		a.bind(general);
+		int initGiven = a.label();
+		int initDone = a.label();
 		a.aload(dims);
 		a.aload(init);
+		a.branch(Opcode.IFNONNULL, initGiven);
+		a.op(Opcode.LCONST_0);
+		a.invokestatic(longValueOf);
+		a.branch(Opcode.GOTO, initDone);
+		a.bind(initGiven);
+		a.aload(init);
+		a.bind(initDone);
 		a.aconstNull();
 		a.aconstNull();
-		a.invokestatic(arrayMake);
+		emitWidthToElementTypeCode(a, width);
+		a.invokestatic(arrayMakeTyped);
 		a.areturn();
 		a.bind(haveN);
 		a.iload(n);
@@ -601,6 +616,28 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(0);
 		a.areturn();
 		return new ArrayMethod(cp.addUtf8(REQUIRE_GENERAL), cp.addUtf8(REQUIRE_GENERAL_DESC), 3, 1, a.finish());
+	}
+
+	// The ArrayElementTypes code for the packed width held in widthSlot: the widths are
+	// 8/16/32 by construction, so two compares decide it.
+	private static void emitWidthToElementTypeCode(JvmAsm a, int widthSlot) {
+		int is8 = a.label();
+		int is16 = a.label();
+		int done = a.label();
+		a.iload(widthSlot);
+		a.iconst(8);
+		a.branch(Opcode.IF_ICMPEQ, is8);
+		a.iload(widthSlot);
+		a.iconst(16);
+		a.branch(Opcode.IF_ICMPEQ, is16);
+		a.iconst(am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_32);
+		a.branch(Opcode.GOTO, done);
+		a.bind(is8);
+		a.iconst(am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_8);
+		a.branch(Opcode.GOTO, done);
+		a.bind(is16);
+		a.iconst(am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_16);
+		a.bind(done);
 	}
 
 }

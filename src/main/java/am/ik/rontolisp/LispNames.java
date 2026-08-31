@@ -1315,8 +1315,10 @@ public final class LispNames {
 	public static final String ARRAY_HAS_FILL_POINTER_P = "ARRAY-HAS-FILL-POINTER-P";
 
 	/**
-	 * The {@code array-element-type} built-in function. Element types are not tracked, so
-	 * it always returns {@code t}.
+	 * The {@code array-element-type} built-in function. It answers the UPGRADED element
+	 * type -- see {@link ArrayElementTypes} for the closed space of answers, which a
+	 * general array remembers even where no specialized representation exists for the
+	 * type it was asked for.
 	 */
 	public static final String ARRAY_ELEMENT_TYPE = "ARRAY-ELEMENT-TYPE";
 
