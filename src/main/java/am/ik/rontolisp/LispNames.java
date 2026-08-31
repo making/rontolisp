@@ -1321,6 +1321,17 @@ public final class LispNames {
 	public static final String ARRAY_BECOME = "%ARRAY-BECOME";
 
 	/**
+	 * The {@code %array-default-element} internal built-in function: the element an
+	 * UNSUPPLIED slot of this array takes -- its remembered element type's own zero
+	 * ({@link ArrayElementTypes#defaultElement}), or {@code nil} when it remembers
+	 * nothing. The one answer to "what does a slot nobody wrote hold", asked wherever a
+	 * slot is OPENED after allocation: {@code adjust-array}'s expansion passes it as the
+	 * {@code :initial-element} it was not given, and the compile backends' own
+	 * {@code vector-push-extend} growth fills with it.
+	 */
+	public static final String ARRAY_DEFAULT_ELEMENT = "%ARRAY-DEFAULT-ELEMENT";
+
+	/**
 	 * {@code (%array-alike seq n)} allocates a fresh zero-filled rank-1 array of length
 	 * {@code n} with the SAME representation as {@code seq}: a packed integer vector
 	 * yields a packed vector of the same width, anything else a general (boxed) vector.

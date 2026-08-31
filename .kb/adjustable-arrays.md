@@ -502,12 +502,93 @@ The JVM cost is a constant per program; the WASM cost is per `vector-push-extend
 call site, because that backend has no runtime helper to share. ~23 bytes a site
 buys linear-time growth, so it is not worth hoisting into a helper function.
 
-What the growth policy does NOT settle: the VALUE the opened slots read back as.
-The compile paths open them with a raw null on both backends, so
-`(aref s <above the fill pointer>)` on a grown CHARACTER vector throws
-(JVM `NullPointerException` / WASM `cast failure`) where the interpreter answers
-`#\Nul` -- pre-existing (an explicit `extension` opened such slots before too),
-reachable from the default path now that growth doubles, and left to `.todo/615`.
+## A slot the growth OPENS holds the element type's zero (`.todo/615`, 2026-08-31)
+
+**Invariant: an array slot nobody wrote holds its array's remembered element
+type's own zero, on all four backends, no matter WHICH operation opened it --
+`make-array`'s allocation, `vector-push-extend`'s growth, or `adjust-array`'s.**
+The growth policy above settles how far a vector grows; this settles what the
+slots between the pushed element and the new capacity read back as. They are
+below the DIMENSION, so `aref` may read them even though they are above the fill
+pointer.
+
+Before this the two compile paths opened them with a RAW NULL
+(`JvmArrayRuntimeBuilder._vectorPushExtend`'s `list.add(null)`,
+`WasmArrayCompiler.compileVectorPushExtend`'s `array.new` with a null init), so
+a grown CHARACTER vector CRASHED there -- JVM `NullPointerException`, wasm
+`cast failure` -- where the interpreter answered a character; and
+`adjust-array`, whose expansion allocated a plain general array, filled with
+`nil` on every backend including the interpreter, so a `double-float` vector
+adjusted without `:initial-element` read back `NIL`. Not a `.todo/614`
+regression: an explicit `extension` opened such slots before too; doubling only
+made the default path reach them.
+
+The fill is ONE question with ONE answer per element type
+(`ArrayElementTypes.defaultElement`), asked of the ARRAY rather than of a
+literal designator, which is what the new internal primitive
+`%array-default-element` is:
+
+- **Interpreter**: `Environment.arrayDefaultElement` switches on the
+  representation (`LispString` -> the character zero, `LispIntVector` -> 0,
+  `LispFloatArray` -> 0.0, `LispArray` -> `defaultElement(elementTypeCode())`).
+  `LispArray.vectorPushExtend` already filled that way; `LispString` did not
+  (its `int[]` buffer zero-filled to `#\Nul`) and now fills its grown and
+  `adjust-array`ed slots with `ArrayElementTypes.DEFAULT_CHARACTER`. The
+  `adjust-array` built-in defaults its `init` to the ARGUMENT's own zero and
+  carries `elementTypeCode()` into the resized copy, so a non-adjustable
+  adjustment keeps the declared type as well as the fill.
+- **JVM**: `_arrayDefaultElement(o)` reads the SAME header facts
+  `_arrayElementType` reads, in the same order -- a `String` argument is a
+  character array; a length-4 header is the character-vector marker; a displaced
+  or string-view header (slot 3 non-null) and a plain length-3 one remember
+  nothing; otherwise header slot 4 holds the element type VALUE, an `Object[]`
+  cons for `(unsigned-byte n)` and the name string otherwise.
+  `_vectorPushExtend` calls it ONCE per growth and adds that instead of null.
+- **wasm**: `compileArrayDefaultElement` mirrors `compileArrayElementType`'s
+  four-representation dispatch, and `emitDefaultElementForHeader` reads the meta
+  MARKER word. Marker 1 (the mutable character vector) is checked ALWAYS --
+  no `make-array :element-type` scan can predict it, because any mutable string
+  carries it -- and markers 2..7 are gated per width on `Ctx.typedArrayCodes`
+  exactly as `emitRememberedElementType`'s arms are. `compileVectorPushExtend`
+  emits the same helper as the `array.new` init.
+
+`adjust-array` reaches it through its EXPANSION: `expandAdjustArray` now always
+spells `:initial-element`, using `(%array-default-element a)` when the call gave
+none. That keeps one implementation of the rule for the compile paths and the
+interpreter's own built-in both.
+
+**The character fill is `#\Space`, not SBCL's `#\Nul`** -- the one decision
+this item had to make, and it is written where the fill rule lives
+(`.kb/array-literals.md`, "The character fill is `#\Space`"). The general (`t`)
+vector keeps `NIL` where SBCL answers `0`, unchanged and deliberate.
+
+**Size cost, measured 2026-08-31** (`--optimize=size`, raw wasm; JVM `.class`):
+
+| program | wasm before | wasm after | class before | class after |
+| --- | ---: | ---: | ---: | ---: |
+| one `vector-push-extend` site, general vector | 11,986 | 12,037 (+51) | 10,444 | 10,668 (+224) |
+| one `adjust-array` site | 25,496 | 25,736 (+240) | 25,629 | 25,843 (+214) |
+| `zlib` (`size-report/programs`) | 103,592 | 103,592 (+0) | -- | -- |
+| `hello-clack` Worker (`--no-wasi`) | 382,481 | 382,481 (+0) | -- | -- |
+
+The JVM bill is a constant per program (one runtime helper method); the wasm
+bill is per SITE, because that backend has no runtime helper to share -- ~51
+bytes for a push-extend site (the marker-1 arm plus the dispatch) and ~240 for
+an `adjust-array` site (the full four-representation dispatch). A program that
+uses neither operator compiles to the same bytes, which is why the two real
+programs are exactly +0.
+
+Pinned by `LispEvaluatorTest.aSlotOpenedByGrowthTakesTheElementTypeZero`, the
+`compileASlotOpenedByGrowthTakesTheElementTypeZero` twins in
+`JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest`, and the
+`opened-slot-fill-cross-backend` ci-spec case.
+
+**Still open**: on the COMPILE paths a NON-adjustable `adjust-array` returns a
+fresh array that no longer remembers the declared element type (the expansion's
+`make-array` carries `:initial-element` but not `:element-type`), so a
+non-adjustable character vector adjusted there stops answering `stringp`. The
+interpreter now keeps it. Pre-existing, out of this item's scope, and costed:
+`.todo/619`.
 
 ## adjust-array
 
@@ -518,7 +599,9 @@ backend: elements are preserved at the subscripts valid in BOTH shapes
 fresh array is returned; without an explicit `:fill-pointer` the old fill
 pointer carries over (make-array range-checks it against the new size, so
 shrinking below it errors like CL); rank mismatch and displaced inputs signal
-clear errors; `:displaced-to` in adjust-array is rejected.
+clear errors; `:displaced-to` in adjust-array is rejected. Without an explicit
+`:initial-element` the opened cells take the array's own element type zero, not
+`nil` (the section above).
 
 Implementation split, chosen to keep the n-dimensional copy logic OUT of
 per-backend codegen:
@@ -531,7 +614,8 @@ per-backend codegen:
   `:fill-pointer`/`:adjustable`, `array-dimensions`, `array-total-size`,
   two-arg `floor` for the subscript decomposition, `row-major-aref` /
   `%row-major-aset` for the copy) plus ONE new internal primitive
-  `%array-become` per backend (JVM `_arrayBecome`: header dims/fp copy +
+  `%array-become` per backend, plus `%array-default-element` for the fill (JVM
+  `_arrayBecome`: header dims/fp copy +
   ArrayList resize/copy; WASM: three inline `struct.set`s swapping the header's
   dims car, meta fp and data slot). Both compilers dispatch
   `ADJUST_ARRAY -> compileExpr(expandAdjustArray(cons))`.
@@ -880,11 +964,12 @@ compile error ("--no-gc: unsupported operation 'vector-push' in function 'f'
 ## Wiring points (adjust-array / displacement)
 
 `LispNames`: `ADJUST_ARRAY`, `ARRAY_DISPLACEMENT`, `ARRAY_BECOME`
-(`%array-become`), `ARRAY_DISP_TARGET`/`ARRAY_DISP_OFFSET`
+(`%array-become`), `ARRAY_DEFAULT_ELEMENT` (`%array-default-element`),
+`ARRAY_DISP_TARGET`/`ARRAY_DISP_OFFSET`
 (`%array-disp-target`/`-offset`), `DISPLACED_TO_KEYWORD`,
 `DISPLACED_INDEX_OFFSET_KEYWORD`. `PackageRegistry`: the two public names in
-`CL_FUNCTIONS`, the three `%`-names in
-`CL_INTERNALS`. Both compilers' `programUsesAnyArrayOp` gates list all five
+`CL_FUNCTIONS`, the four `%`-names in
+`CL_INTERNALS`. Both compilers' `programUsesAnyArrayOp` gates list all six
 names. `BuiltinFunctionWrappers`: `binary(ADJUST_ARRAY)` (2-arg form) +
 `unary(ARRAY_DISPLACEMENT)` (primary value only) in the
 `ARRAY_FILL_POINTER_FUNCTIONS` group. `--no-gc` rejects the new names through
@@ -896,6 +981,7 @@ its default unknown-operation error.
   `fillPointerVectorPrintsUpToFillPointer`, `vectorPushStoresAndReturnsIndexOrNil`,
   `vectorPushThenReadBack`, `vectorPop`, `vectorPushExtendGrowsBeyondCapacity`,
   `vectorPushExtendGrowthPolicyIsDoubling`,
+  `aSlotOpenedByGrowthTakesTheElementTypeZero`,
   `setfFillPointer`, `simpleVectorHasNoFillPointer`,
   `fillPointerOnNonFillPointerVectorSignals`, `clUtilitiesCopyArrayRunsOnInterpreter`,
   `adjustArray*`, `displacedArray*`, `arrayDisplacementReturnsTargetAndOffset`,
@@ -908,10 +994,12 @@ its default unknown-operation error.
   `compileMakeArrayDisplacedKeywordComboIsACompileError` /
   `compileDisplacedStringView` /
   `compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite` /
-  `compileVectorPushExtendGrowthPolicyIsDoubling`.
+  `compileVectorPushExtendGrowthPolicyIsDoubling` /
+  `compileASlotOpenedByGrowthTakesTheElementTypeZero`.
 - WASM: the same set in `WasmLispCompilerIntegrationTest`.
 - E2E: ci-spec `fill-pointer-arrays-cross-backend` +
   `vector-push-extend-growth-cross-backend` +
+  `opened-slot-fill-cross-backend` +
   `adjust-displaced-arrays-cross-backend` +
   `displaced-string-views-cross-backend` (all four backends), and the
   shared-substring lines of `ClPpcreE2eTest`'s exercise (the verbatim

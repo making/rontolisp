@@ -207,6 +207,15 @@ final class JvmArrayCompiler {
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ARRAY_BECOME, JvmArrayRuntimeBuilder.ARRAY_BECOME_DESC);
 	}
 
+	static void compileArrayDefaultElement(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-default-element array): the element an unsupplied slot of the array
+		// takes, i.e. its remembered element type's own zero (nil when it remembers
+		// nothing). adjust-array's expansion passes it as the :initial-element it was
+		// not given.
+		compileUnary(cons, ctx, className, LispNames.ARRAY_DEFAULT_ELEMENT, JvmArrayRuntimeBuilder.DEFAULT_ELEMENT,
+				JvmArrayRuntimeBuilder.DEFAULT_ELEMENT_DESC);
+	}
+
 	static void compileDispTarget(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		compileUnary(cons, ctx, className, LispNames.ARRAY_DISP_TARGET, JvmArrayRuntimeBuilder.DISP_TARGET,
 				JvmArrayRuntimeBuilder.DISP_TARGET_DESC);

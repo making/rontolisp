@@ -1319,19 +1319,10 @@ public final class Environment implements Scope {
 			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.ADJUST_ARRAY + " expects an array and new dimensions");
 			}
-			if (args.get(0) instanceof LispString str) {
-				int[] strDims = parseDimensions(args.get(1));
-				if (strDims.length != 1) {
-					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": a string is rank 1");
-				}
-				if (str.displacedTo() != null) {
-					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": displaced arrays are not supported");
-				}
-				str.adjustCapacity(strDims[0]);
-				return str;
-			}
-			LispArray array = requireGeneralArray(LispNames.ADJUST_ARRAY, args.get(0));
-			LispVal init = LispNil.INSTANCE;
+			// The slots the adjustment OPENS take the value's own element type zero, the
+			// same fill make-array gives an unsupplied element, unless an explicit
+			// :initial-element says otherwise.
+			LispVal init = arrayDefaultElement(args.get(0));
 			LispVal fillPointerArg = null;
 			for (int i = 2; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw) {
@@ -1345,6 +1336,18 @@ public final class Environment implements Scope {
 					}
 				}
 			}
+			if (args.get(0) instanceof LispString str) {
+				int[] strDims = parseDimensions(args.get(1));
+				if (strDims.length != 1) {
+					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": a string is rank 1");
+				}
+				if (str.displacedTo() != null) {
+					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": displaced arrays are not supported");
+				}
+				str.adjustCapacity(strDims[0], requireChar(LispNames.ADJUST_ARRAY, init).codePoint());
+				return str;
+			}
+			LispArray array = requireGeneralArray(LispNames.ADJUST_ARRAY, args.get(0));
 			return adjustArray(array, parseDimensions(args.get(1)), init, fillPointerArg);
 		}));
 		env.defineFunction(LispNames.ARRAY_ALIKE, new LispFunction(LispNames.ARRAY_ALIKE, args -> {
@@ -1356,6 +1359,10 @@ public final class Environment implements Scope {
 			LispVal[] data = new LispVal[n];
 			java.util.Arrays.fill(data, LispNil.INSTANCE);
 			return new LispArray(new int[] { n }, data);
+		}));
+		env.defineFunction(LispNames.ARRAY_DEFAULT_ELEMENT, new LispFunction(LispNames.ARRAY_DEFAULT_ELEMENT, args -> {
+			requireArgCount(LispNames.ARRAY_DEFAULT_ELEMENT, args, 1);
+			return arrayDefaultElement(args.get(0));
 		}));
 		env.defineFunction(LispNames.ARRAY_BECOME, new LispFunction(LispNames.ARRAY_BECOME, args -> {
 			requireArgCount(LispNames.ARRAY_BECOME, args, 2);
@@ -1388,6 +1395,21 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(requireArray(LispNames.ARRAY_DISP_OFFSET, args.get(0)).displacedOffset());
 		}));
+	}
+
+	// The element an UNSUPPLIED slot of this value takes: its element type's own zero.
+	// One answer for every representation, so a slot opened AFTER allocation -- by
+	// adjust-array's growth or by vector-push-extend's -- reads back as the same thing
+	// make-array's unsupplied element does (%array-default-element; ArrayElementTypes).
+	private static LispVal arrayDefaultElement(LispVal value) {
+		LispVal zero = switch (value) {
+			case LispString ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.CHARACTER);
+			case LispIntVector ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.UNSIGNED_BYTE_8);
+			case LispFloatArray ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.DOUBLE_FLOAT);
+			case LispArray array -> ArrayElementTypes.defaultElement(array.elementTypeCode());
+			default -> null;
+		};
+		return zero == null ? LispNil.INSTANCE : zero;
 	}
 
 	// The shared adjust-array core: build the resized copy (preserving the elements at
@@ -1423,7 +1445,7 @@ public final class Environment implements Scope {
 		for (int i = 0; i < total; i++) {
 			data[i] = init;
 		}
-		LispArray resized = new LispArray(newDims, data, fillPointer, array.adjustable());
+		LispArray resized = new LispArray(newDims, data, fillPointer, array.adjustable(), array.elementTypeCode());
 		// Copy the elements at the subscripts valid in BOTH shapes (per-subscript, not
 		// flat: resizing a matrix keeps (i, j) at (i, j)).
 		int[] subs = new int[newDims.length];

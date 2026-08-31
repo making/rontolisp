@@ -15116,6 +15116,43 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileASlotOpenedByGrowthTakesTheElementTypeZero() throws Exception {
+		// A slot the GROWTH opens is below the new DIMENSION but above the fill
+		// pointer, so aref may read it, and it answers the array's remembered element
+		// type's own zero -- the same fill make-array gives an unsupplied element
+		// (am.ik.rontolisp.ArrayElementTypes). #\Space is this project's ONE character
+		// fill; the general vector keeps NIL. adjust-array opens the same kind of slot
+		// and takes the same fill. Pinned here, in the other three backends' twins and
+		// in the opened-slot-fill-cross-backend ci-spec case.
+		assertThat(compileAndRun("""
+				(defun opened-push (cap n)
+				  (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend i v))
+				    (aref v (1- (array-dimension v 0)))))
+				(defun opened-push-string (cap n)
+				  (let ((s (make-array cap :element-type 'character :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend #\\a s))
+				    (char-code (aref s (1- (array-dimension s 0))))))
+				(defun opened-push-typed (cap n)
+				  (let ((f (make-array cap :element-type 'double-float :fill-pointer 0 :adjustable t))
+				        (b (make-array cap :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend 1.5d0 f))
+				    (dotimes (i n) (vector-push-extend 7 b))
+				    (list (aref f (1- (array-dimension f 0))) (aref b (1- (array-dimension b 0))))))
+				(defun opened-adjust ()
+				  (let ((s (make-array 2 :element-type 'character :fill-pointer 1 :adjustable t))
+				        (f (make-array 2 :element-type 'double-float :fill-pointer 1 :adjustable t))
+				        (v (make-array 2 :fill-pointer 1 :adjustable t)))
+				    (adjust-array s 5)
+				    (adjust-array f 5)
+				    (adjust-array v 5)
+				    (list (char-code (aref s 4)) (aref f 4) (aref v 4))))
+				(print (list (opened-push 2 3) (opened-push-string 2 3) (opened-push-typed 2 3)
+				      (opened-adjust)))
+				""")).isEqualTo("(NIL 32 (0.0 0) (32 0.0 NIL))");
+	}
+
+	@Test
 	void compileSetfFillPointer() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 5 :fill-pointer 5 :initial-element 7))

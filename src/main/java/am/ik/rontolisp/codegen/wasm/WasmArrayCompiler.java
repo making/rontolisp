@@ -2325,8 +2325,11 @@ final class WasmArrayCompiler {
 		}
 		boxI31(ctx);
 		setLocal(ctx, newCapSlot);
-		// newData = array.new buckets (null, newCap); grown slots read as nil
-		refNull(ctx);
+		// newData = array.new buckets (fill, newCap): the slots the growth OPENS take
+		// the REMEMBERED element type's own zero, the same fill make-array gives an
+		// unsupplied element -- nil for the general vector, which is what this array.new
+		// always used.
+		emitDefaultElementForHeader(ctx, headerSlot);
 		getLocal(ctx, newCapSlot);
 		WasmEmitHelper.castI31GetS(ctx);
 		arrayNew(ctx);
@@ -3127,6 +3130,146 @@ final class WasmArrayCompiler {
 			case 16 -> WasmLispCompiler.TYPE_I16ARR;
 			default -> WasmLispCompiler.TYPE_I32ARR;
 		};
+	}
+
+	/**
+	 * The marker word of the mutable CHARACTER VECTOR -- a string rather than a general
+	 * array remembering a type, so it is outside the remembered-type space and outside
+	 * {@link WasmLispCompiler.Ctx#typedArrayCodes}. It answers the character zero for the
+	 * same reason marker 2 does.
+	 */
+	private static final int CHARACTER_VECTOR_MARKER = 1;
+
+	/**
+	 * Compiles {@code (%array-default-element array)}: the element an UNSUPPLIED slot of
+	 * the array takes -- its element type's own zero, or nil when it remembers nothing.
+	 * {@code adjust-array}'s expansion passes it as the {@code :initial-element} it was
+	 * not given, so the slots an adjustment OPENS read back as what {@code make-array}
+	 * fills an unsupplied element with. Mirrors
+	 * {@code am.ik.rontolisp.ArrayElementTypes#defaultElement} and shapes its dispatch
+	 * exactly like {@link #compileArrayElementType}'s, because it is the same question
+	 * asked of the same four representations.
+	 */
+	static void compileArrayDefaultElement(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException(
+					"%array-default-element expects 1 argument, got " + (args.size() - 1));
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int arrSlot = setTemp(ctx);
+		WasmStringpCompiler.emitStringpI32(ctx, arrSlot);
+		emitIfEq(ctx);
+		WasmExprCompiler.compileExpr(
+				java.util.Objects.requireNonNull(ArrayElementTypes.defaultElement(ArrayElementTypes.CHARACTER)), ctx);
+		ctx.writer.write(Instruction.ELSE);
+		testFarray(ctx, arrSlot);
+		emitIfEq(ctx);
+		WasmExprCompiler.compileExpr(
+				java.util.Objects.requireNonNull(ArrayElementTypes.defaultElement(ArrayElementTypes.DOUBLE_FLOAT)),
+				ctx);
+		ctx.writer.write(Instruction.ELSE);
+		testIntVector(ctx, arrSlot);
+		emitIfEq(ctx);
+		WasmExprCompiler.compileExpr(
+				java.util.Objects.requireNonNull(ArrayElementTypes.defaultElement(ArrayElementTypes.UNSIGNED_BYTE_8)),
+				ctx);
+		ctx.writer.write(Instruction.ELSE);
+		// The general array: the remembered type's zero, read off the meta marker under
+		// %arrayp's shape guard and %array-disp-offset's displacement guard -- a
+		// displaced view holds an offset in that word and remembers no type.
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		emitIfEq(ctx);
+		getLocal(ctx, arrSlot);
+		castCellGet0(ctx);
+		int headerSlot = setTemp(ctx);
+		getLocal(ctx, headerSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		emitIfEq(ctx);
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		emitIfEq(ctx);
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		int dataSlot = setTemp(ctx);
+		emitDataSlotIsTarget(ctx, dataSlot);
+		emitIfEq(ctx);
+		refNull(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		emitDefaultElementForHeader(ctx, headerSlot);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * Leaves on the stack the element an UNSUPPLIED slot of the general array whose
+	 * header cons is in {@code headerSlot} takes: its remembered element type's own zero,
+	 * or nil. The arms for the remembered types are gated per width on
+	 * {@link WasmLispCompiler.Ctx#typedArrayCodes}, exactly as
+	 * {@link #emitRememberedElementType}'s are, so a program that never asks for a
+	 * specialized element type emits only the character-vector arm -- the one marker no
+	 * {@code make-array :element-type} scan can predict, because any mutable string
+	 * carries it.
+	 */
+	private static void emitDefaultElementForHeader(WasmLispCompiler.Ctx ctx, int headerSlot) {
+		getLocal(ctx, headerSlot);
+		getMeta(ctx);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		int markerSlot = setTemp(ctx);
+		int arms = 0;
+		for (int code = ArrayElementTypes.CHARACTER; code <= ArrayElementTypes.DOUBLE_FLOAT; code++) {
+			boolean character = code == ArrayElementTypes.CHARACTER;
+			if (!character && (ctx.typedArrayCodes & (1 << code)) == 0) {
+				continue;
+			}
+			arms++;
+			if (character) {
+				// Marker 1 (the string) always, marker 2 (a rank-n character array) only
+				// where a make-array asked for one.
+				getLocal(ctx, markerSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+				i32Const(ctx, CHARACTER_VECTOR_MARKER);
+				ctx.writer.write(Instruction.I32_EQ);
+				if ((ctx.typedArrayCodes & (1 << code)) != 0) {
+					getLocal(ctx, markerSlot);
+					WasmEmitHelper.castI31GetS(ctx);
+					i32Const(ctx, elementTypeMarker(code));
+					ctx.writer.write(Instruction.I32_EQ);
+					ctx.writer.write(Instruction.I32_OR);
+				}
+			}
+			else {
+				getLocal(ctx, markerSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+				i32Const(ctx, elementTypeMarker(code));
+				ctx.writer.write(Instruction.I32_EQ);
+			}
+			emitIfEq(ctx);
+			WasmExprCompiler.compileExpr(java.util.Objects.requireNonNull(ArrayElementTypes.defaultElement(code)), ctx);
+			ctx.writer.write(Instruction.ELSE);
+		}
+		refNull(ctx);
+		for (int i = 0; i < arms; i++) {
+			ctx.writer.write(Instruction.END);
+		}
 	}
 
 	/**

@@ -19480,7 +19480,8 @@ public final class LispMacroExpander {
 						LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE, LispNames.VECTOR_PUSH,
 						LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
 						LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
-						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.COERCE,
+						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DEFAULT_ELEMENT,
+						LispNames.COERCE,
 						// fill/read-sequence/write-sequence join the list for the same
 						// reason as make-string: each has an array-typed arm the JVM
 						// backend's array runtime gate must see coming, or the injected
@@ -22927,13 +22928,14 @@ public final class LispMacroExpander {
 		LispSymbol fp = new LispSymbol("__adj_fp");
 		LispSymbol newArr = new LispSymbol("__adj_new");
 		LispSymbol total = new LispSymbol("__adj_total");
-		// (make-array ndl [:initial-element E] :fill-pointer fp
-		// :adjustable (adjustable-array-p a))
+		// (make-array ndl :initial-element E :fill-pointer fp
+		// :adjustable (adjustable-array-p a)). Without an explicit :initial-element the
+		// slots the adjustment OPENS take the ADJUSTED array's own element type zero,
+		// which the fresh general array cannot know -- hence %array-default-element,
+		// asked of the array being adjusted rather than of the copy.
 		List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
-		if (initExpr != null) {
-			makeParts.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
-			makeParts.add(initExpr);
-		}
+		makeParts.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
+		makeParts.add(initExpr != null ? initExpr : callOf(LispNames.ARRAY_DEFAULT_ELEMENT, a));
 		makeParts.add(new LispSymbol(LispNames.FILL_POINTER_KEYWORD));
 		makeParts.add(fp);
 		makeParts.add(new LispSymbol(LispNames.ADJUSTABLE_KEYWORD));

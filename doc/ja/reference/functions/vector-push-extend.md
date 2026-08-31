@@ -6,10 +6,16 @@
 
 `extension` は拡張する要素数で、容量にそのまま加算されます。省略した場合は容量が 2 倍になります (容量 0 のベクタは 1 に拡張されます)。そのため、プッシュのループはプッシュ回数に対して線形のままです。新しい容量はすべてのバックエンドで同一であり、[`array-dimension`](array-dimension.md) で観測できます。
 
+拡張はプッシュされた要素と新しい容量の間のスロットを開けます。これらは配列の次元より下にあるため `aref` で読み取ることができ、そのベクタの要素型自身のゼロ値を保持します。これは [`make-array`](make-array.md) が値を指定されなかった要素に与える値と同じです。文字ベクタなら `#\Space`、宣言された整数幅や浮動小数点型なら `0` または `0.0`、要素型 `t` なら `nil` です。
+
 ```lisp
 (defparameter *v* (make-array 1 :fill-pointer 0 :adjustable t))
 (vector-push-extend 10 *v*) ; => 0
 (vector-push-extend 20 *v* 4) ; => 1
 *v* ; => #(10 20)
 (array-dimension *v* 0) ; => 5
+(aref *v* 4) ; => NIL
+(defparameter *s* (make-array 1 :element-type 'character :fill-pointer 1 :adjustable t))
+(vector-push-extend #\a *s* 4) ; => 1
+(aref *s* 4) ; => #\Space
 ```

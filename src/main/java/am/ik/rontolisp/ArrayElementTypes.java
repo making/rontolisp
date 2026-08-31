@@ -43,6 +43,18 @@ public final class ArrayElementTypes {
 	/** {@code double-float}. */
 	public static final int DOUBLE_FLOAT = 6;
 
+	/**
+	 * The code point an unsupplied {@code character} element takes: SPACE, not NUL. CLHS
+	 * leaves an uninitialized element's value undefined, so the choice is the project's
+	 * to make, and it is made ONCE here for the whole surface -- {@code make-string},
+	 * {@code (make-array n :element-type 'character)}, a rank-n character array, the
+	 * slots {@code vector-push-extend} and {@code adjust-array} open. SBCL answers
+	 * {@code #\Nul} for the grown slots and {@code #\Space} for {@code make-string}; one
+	 * rule for the whole surface beats matching it on a value the standard does not pin
+	 * ({@code .kb/array-literals.md}).
+	 */
+	public static final int DEFAULT_CHARACTER = ' ';
+
 	private ArrayElementTypes() {
 	}
 
@@ -99,7 +111,7 @@ public final class ArrayElementTypes {
 	 */
 	public static @Nullable LispVal defaultElement(int code) {
 		return switch (code) {
-			case CHARACTER -> new LispChar(' ');
+			case CHARACTER -> new LispChar(DEFAULT_CHARACTER);
 			case UNSIGNED_BYTE_8, UNSIGNED_BYTE_16, UNSIGNED_BYTE_32 -> new LispInteger(0);
 			case SINGLE_FLOAT, DOUBLE_FLOAT -> new LispDouble(0.0);
 			default -> null;

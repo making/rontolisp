@@ -1243,6 +1243,8 @@ final class JvmExprCompiler {
 				case LispNames.ADJUST_ARRAY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx, className);
 				case LispNames.ARRAY_BECOME -> JvmArrayCompiler.compileArrayBecome(cons, ctx, className);
+				case LispNames.ARRAY_DEFAULT_ELEMENT ->
+					JvmArrayCompiler.compileArrayDefaultElement(cons, ctx, className);
 				case LispNames.ARRAY_ALIKE -> {
 					// The type-preserving allocator (_ivAlike) when the program can
 					// build a packed integer vector; otherwise every array is general

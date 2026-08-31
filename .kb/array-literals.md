@@ -267,6 +267,18 @@ three COMPILE backends only, so
 `(aref (make-array 3 :element-type 'double-float :adjustable t) 0)` answered `NIL` here
 and `0.0` there) and todo-611 finished for the integer widths.
 
+**The character fill is `#\Space`, everywhere a slot is opened, and that is a DECISION
+(2026-08-31).** CLHS leaves an uninitialized element's value undefined, so the value is
+the project's to pick, and it is picked ONCE -- `ArrayElementTypes.DEFAULT_CHARACTER`,
+which `defaultElement` reads and which every backend's opened-slot fill spells. SBCL
+2.2.9 answers `#\Space` for `make-string` and `#\Nul` for the slots
+`vector-push-extend` / `adjust-array` open, i.e. it makes the value depend on WHICH
+operation opened the slot. One rule for the whole surface is worth more than matching
+SBCL on a value the standard does not pin, so a grown character vector reads back
+`#\Space` here and `#\Nul` there. The general (`t`) vector keeps `NIL` where SBCL
+answers `0`, for the same reason in the other direction: `NIL` is this project's answer
+for element type `t` and it is already what every backend gives.
+
 Pinned by `LispEvaluatorTest.evalCharacterElementTypeAboveRankOneIsAGeneralArray` /
 `#evalMakeArrayEvaluatesItsDimensionsExactlyOnce`,
 `JvmLispCompilerTest.compileCharacterElementTypeAboveRankOneIsAGeneralArray` /

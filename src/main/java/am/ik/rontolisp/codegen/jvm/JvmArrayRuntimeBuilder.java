@@ -193,7 +193,18 @@ final class JvmArrayRuntimeBuilder {
 	 */
 	static final String ELEMENT_TYPE = "_arrayElementType";
 
+	/**
+	 * {@code _arrayDefaultElement(o)}: the element an UNSUPPLIED slot of {@code o} takes
+	 * -- its remembered element type's own zero, or null (nil) when it remembers nothing.
+	 * The JVM half of {@code %array-default-element}
+	 * ({@code am.ik.rontolisp.ArrayElementTypes#defaultElement}), and what
+	 * {@code _vectorPushExtend} fills the slots its growth opens with.
+	 */
+	static final String DEFAULT_ELEMENT = "_arrayDefaultElement";
+
 	static final String ELEMENT_TYPE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String DEFAULT_ELEMENT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	static final String WIDEN = "_arrayWiden";
 
@@ -258,7 +269,8 @@ final class JvmArrayRuntimeBuilder {
 	static final Set<String> METHOD_NAMES = Set.of(MAKE, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS, TO_STRING,
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET, DISP_OFFSET,
-			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE);
+			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
+			DEFAULT_ELEMENT);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -296,6 +308,8 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC)));
 		MethodrefConstant widen = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC)));
+		MethodrefConstant defaultElement = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(DEFAULT_ELEMENT), cp.addUtf8(DEFAULT_ELEMENT_DESC)));
 		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
 		MethodrefConstant longLongValue = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
@@ -737,7 +751,7 @@ final class JvmArrayRuntimeBuilder {
 		// when the vector is full, updating the stored dimension size. ext is the shared
 		// "not supplied" sentinel (ArrayGrowth.NO_EXTENSION) when the optional argument
 		// was omitted. Locals: 0 = val, 1 = arr, 2 = ext, 3 = header,
-		// 4 = fp (int), 5 = cap (int), 6 = ext (int), 7 = newCap (int).
+		// 4 = fp (int), 5 = cap (int), 6 = ext (int), 7 = newCap (int), 8 = the fill.
 		JvmAsm vpe = new JvmAsm();
 		emitLoadHeader(vpe, arrayListClass, objectArrayClass, alGet, 1);
 		vpe.astore(3);
@@ -781,7 +795,15 @@ final class JvmArrayRuntimeBuilder {
 		vpe.op(Opcode.IMUL);
 		vpe.istore(7);
 		vpe.bind(vpeCapReady);
-		// while (list.size() - 1 < newCap) list.add(null) -- grown slots read as nil
+		// while (list.size() - 1 < newCap) list.add(_arrayDefaultElement(arr)) -- the
+		// slots the growth OPENS take the REMEMBERED element type's own zero, the same
+		// fill make-array gives an unsupplied element, so a vector asked to hold
+		// characters, bytes or floats never reads back nil above its old capacity (it is
+		// null, i.e. nil, for the general vector, which is what this always added).
+		// Local 8 holds it: one call, not one per opened slot.
+		vpe.aload(1);
+		vpe.invokestatic(defaultElement);
+		vpe.astore(8);
 		int growLoop = vpe.label();
 		int growDone = vpe.label();
 		vpe.bind(growLoop);
@@ -794,7 +816,7 @@ final class JvmArrayRuntimeBuilder {
 		vpe.branch(Opcode.IF_ICMPGE, growDone);
 		vpe.aload(1);
 		vpe.checkcast(arrayListClass);
-		vpe.aconstNull();
+		vpe.aload(8);
 		vpe.invokevirtual(alAdd);
 		vpe.pop();
 		vpe.branch(Opcode.GOTO, growLoop);
@@ -811,7 +833,7 @@ final class JvmArrayRuntimeBuilder {
 		vpe.aastore();
 		vpe.bind(vpeStore);
 		emitStoreAtFillPointerAndAdvance(vpe, arrayListClass, longClass, alSet, longValueOf, 0, 1, 3, 4);
-		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH_EXTEND), cp.addUtf8(VECTOR_PUSH_EXTEND_DESC), 6, 8,
+		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH_EXTEND), cp.addUtf8(VECTOR_PUSH_EXTEND_DESC), 6, 9,
 				vpe.finish()));
 
 		// _rmGet(list, idx): the single data-read primitive (idx is the 1-based list
@@ -1504,6 +1526,82 @@ final class JvmArrayRuntimeBuilder {
 		aet.ldcString(cp.addString("T"));
 		aet.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 3, 3, aet.finish()));
+
+		// _arrayDefaultElement(o): the element an UNSUPPLIED slot of o takes -- the
+		// remembered element type's own zero -- or null (nil) when nothing is remembered.
+		// Keyed off the SAME header facts _arrayElementType reads, in the same order: a
+		// length-4 header is the character vector marker (the one specialized type that
+		// spends no slot 4), a displaced or string-view header (slot 3 non-null) and a
+		// plain length-3 one remember nothing, and otherwise slot 4 holds the element
+		// type VALUE -- an Object[] cons for (unsigned-byte n), the name string
+		// otherwise. Mirrors am.ik.rontolisp.ArrayElementTypes.defaultElement.
+		// Locals: 0 = o, 1 = header, 2 = et.
+		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
+		MethodrefConstant stringEquals = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
+		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
+		MethodrefConstant doubleValueOf = cp.addMethodref(doubleClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
+		JvmAsm de = new JvmAsm();
+		int deNil = de.label();
+		int deChar = de.label();
+		int deInt = de.label();
+		// A runtime string IS a rank-1 character array, so it answers the character zero
+		// even though it carries no header at all.
+		de.aload(0);
+		de.instanceOf(stringClass);
+		de.branch(Opcode.IFNE, deChar);
+		de.aload(0);
+		de.instanceOf(arrayListClass);
+		de.branch(Opcode.IFEQ, deNil);
+		emitLoadHeader(de, arrayListClass, objectArrayClass, alGet, 0);
+		de.astore(1);
+		de.aload(1);
+		de.arraylength();
+		de.iconst(4);
+		de.branch(Opcode.IF_ICMPEQ, deChar);
+		de.aload(1);
+		de.arraylength();
+		de.iconst(5);
+		de.branch(Opcode.IF_ICMPLT, deNil);
+		de.aload(1);
+		de.iconst(3);
+		de.aaload();
+		de.branch(Opcode.IFNONNULL, deNil);
+		de.aload(1);
+		de.iconst(4);
+		de.aaload();
+		de.astore(2);
+		de.aload(2);
+		de.branch(Opcode.IFNULL, deNil);
+		de.aload(2);
+		de.instanceOf(objectArrayClass);
+		de.branch(Opcode.IFNE, deInt);
+		de.ldcString(cp.addString(am.ik.rontolisp.LispNames.CHARACTER_TYPE));
+		de.aload(2);
+		de.invokevirtual(stringEquals);
+		de.branch(Opcode.IFNE, deChar);
+		// The only remaining remembered names are the two float widths.
+		de.op(Opcode.DCONST_0);
+		de.invokestatic(doubleValueOf);
+		de.areturn();
+		// A runtime character is a length-1 int[] holding the code point.
+		de.bind(deChar);
+		de.iconst(1);
+		de.newarrayInt();
+		de.dup();
+		de.iconst(0);
+		de.iconst(am.ik.rontolisp.ArrayElementTypes.DEFAULT_CHARACTER);
+		de.iastore();
+		de.areturn();
+		de.bind(deInt);
+		de.op(Opcode.LCONST_0);
+		de.invokestatic(longValueOf);
+		de.areturn();
+		de.bind(deNil);
+		de.aconstNull();
+		de.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(DEFAULT_ELEMENT), cp.addUtf8(DEFAULT_ELEMENT_DESC), 4, 3, de.finish()));
 
 		// _strv(o): normalizes a mutable character vector (a length-4-header array whose
 		// elements are runtime CHARACTERs -- length-1 int[]{codePoint}) into the

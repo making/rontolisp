@@ -4006,6 +4006,58 @@ cases:
     expected: |
       (8 8 1 8)
       (102 5)
+  # A slot the GROWTH opens is below the new DIMENSION but above the fill pointer, so aref
+  # may read it, and it answers the array's remembered element type's own zero -- the same
+  # fill make-array gives an unsupplied element (am.ik.rontolisp.ArrayElementTypes). The
+  # character vector answers #\Space, this project's ONE character fill (SBCL 2.2.9 answers
+  # #\Nul for a grown slot and #\Space for make-string; CLHS leaves it undefined, so one
+  # rule for the whole surface wins -- .kb/array-literals.md). The general vector keeps NIL,
+  # which is this project's answer for element type t and where SBCL answers 0. adjust-array
+  # opens the same kind of slot and takes the same fill, through the same
+  # %array-default-element the compile backends' growth uses.
+  - name: opened-slot-fill-cross-backend
+    source: |
+      (defun ci-opened-push (cap n)
+        (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend i v))
+          (aref v (1- (array-dimension v 0)))))
+      (defun ci-opened-push-string (cap n)
+        (let ((s (make-array cap :element-type 'character :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend #\a s))
+          (char-code (aref s (1- (array-dimension s 0))))))
+      (defun ci-opened-push-typed (cap n)
+        (let ((f (make-array cap :element-type 'double-float :fill-pointer 0 :adjustable t))
+              (b (make-array cap :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
+          (dotimes (i n) (vector-push-extend 1.5d0 f))
+          (dotimes (i n) (vector-push-extend 7 b))
+          (list (aref f (1- (array-dimension f 0))) (aref b (1- (array-dimension b 0))))))
+      (defun ci-opened-adjust ()
+        (let ((s (make-array 2 :element-type 'character :fill-pointer 1 :adjustable t))
+              (f (make-array 2 :element-type 'double-float :fill-pointer 1 :adjustable t))
+              (v (make-array 2 :fill-pointer 1 :adjustable t)))
+          (adjust-array s 5)
+          (adjust-array f 5)
+          (adjust-array v 5)
+          (list (char-code (aref s 4)) (aref f 4) (aref v 4))))
+      (defun ci-opened ()
+        (print (list (ci-opened-push 2 3) (ci-opened-push-string 2 3)))
+        (print (ci-opened-push-typed 2 3))
+        (print (ci-opened-adjust))
+        (print (list (char-code (aref (adjust-array
+                                        (make-array 2 :element-type 'character
+                                                    :fill-pointer 1 :adjustable t)
+                                        4 :initial-element #\z)
+                                      3))
+                     (array-element-type (adjust-array
+                                           (make-array 2 :element-type 'double-float
+                                                       :fill-pointer 1 :adjustable t)
+                                           5)))))
+      (ci-opened)
+    expected: |
+      (NIL 32)
+      (0.0 0)
+      (32 0.0 NIL)
+      (122 DOUBLE-FLOAT)
   # A string IS a vector (and a vector IS an array), so array-element-type answers the one
   # character type for it -- the same arm vectorp/length/aref/elt already take. The general
   # vector keeps the lite element type t and the packed integer vector its (unsigned-byte N)

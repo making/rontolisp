@@ -370,6 +370,10 @@ public final class LispString implements LispVal {
 		}
 		if (this.fillPointer >= this.chars.length) {
 			int[] grown = new int[ArrayGrowth.grownCapacity(this.chars.length, extension)];
+			// The slots the growth OPENS read back through aref/char, so they take the
+			// character type's own zero rather than the int[]'s -- the same fill
+			// make-array gives an unsupplied element (ArrayElementTypes).
+			java.util.Arrays.fill(grown, ArrayElementTypes.DEFAULT_CHARACTER);
 			System.arraycopy(this.chars, 0, grown, 0, this.chars.length);
 			this.chars = grown;
 		}
@@ -383,10 +387,14 @@ public final class LispString implements LispVal {
 	 * Resizes the backing buffer (the {@code adjust-array} operation), preserving the
 	 * existing content and the fill pointer (clamped to the new capacity).
 	 * @param newCapacity the new capacity (in code points)
+	 * @param fill the code point the slots the resize OPENS take -- the
+	 * {@code :initial-element}, or the character type's own zero
+	 * ({@link ArrayElementTypes#DEFAULT_CHARACTER}) when it was not supplied
 	 */
-	public void adjustCapacity(int newCapacity) {
+	public void adjustCapacity(int newCapacity, int fill) {
 		this.rejectView("adjust-array");
 		int[] resized = new int[newCapacity];
+		java.util.Arrays.fill(resized, fill);
 		System.arraycopy(this.chars, 0, resized, 0, Math.min(this.chars.length, newCapacity));
 		this.chars = resized;
 		if (this.fillPointer > newCapacity) {
