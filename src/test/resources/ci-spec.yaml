@@ -13580,6 +13580,28 @@ standalone:
       ((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
       (T (SIMPLE-VECTOR 4) NIL)
       (7 #\z A)
+  # A deftype alias that arrives as a VALUE, not as the literal at the call site:
+  # the compile paths route the designator through the injected
+  # %make-array-et-alias resolver before the dispatch, so it picks the same
+  # representation the literal spelling would. Every answer is SBCL 2.2.9's.
+  - name: runtime-element-type-deftype-alias
+    source: |
+      (deftype rtea-octet () '(unsigned-byte 8))
+      (deftype rtea-buffer () 'rtea-octet)
+      (deftype rtea-char () 'character)
+      (defun rtea-mk (et n) (make-array n :element-type et))
+      (defun rtea-mkfp (et) (make-array 4 :element-type et :fill-pointer 2))
+      (print (list (array-element-type (rtea-mk 'rtea-octet 4))
+                   (aref (rtea-mk 'rtea-octet 4) 0)
+                   (type-of (rtea-mk 'rtea-buffer 4))
+                   (stringp (rtea-mk 'rtea-char 3))
+                   (array-element-type (rtea-mkfp 'rtea-octet))
+                   (array-element-type (rtea-mk 'double-float 2))))
+      (print (list (array-element-type (rtea-mk 'rtea-unregistered 2))
+                   (array-element-type (rtea-mk 'fixnum 2))))
+    stdout: |
+      ((UNSIGNED-BYTE 8) 0 (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) T (UNSIGNED-BYTE 8) DOUBLE-FLOAT)
+      (T T)
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

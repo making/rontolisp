@@ -5498,6 +5498,39 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRuntimeElementTypeResolvesADeftypeAlias() {
+		// A deftype ALIAS that arrives as a VALUE resolves the way the literal spelling
+		// does, on all four backends: the interpreter reads the live registry, the
+		// compile paths route the designator through the injected %make-array-et-alias
+		// resolver before the dispatch. Chains resolve too (byte-buffer -> octet), and
+		// the :fill-pointer shape -- which degrades every arm to the general array --
+		// still REMEMBERS the type the alias named. Every answer here is SBCL 2.2.9's on
+		// this very program (JvmLispCompilerTest / WasmLispCompilerIntegrationTest and
+		// the runtime-element-type-deftype-alias ci-spec case run the same one).
+		assertThat(evalMulti("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype char-buf () 'character)
+				(defun mk (et n) (make-array n :element-type et))
+				(defun mkfp (et) (make-array 4 :element-type et :fill-pointer 2))
+				(list (array-element-type (mk 'octet 4))
+				      (aref (mk 'octet 4) 0)
+				      (type-of (mk 'byte-buffer 4))
+				      (stringp (mk 'char-buf 3))
+				      (array-element-type (mkfp 'octet))
+				      (array-element-type (mk 'double-float 2)))
+				""").print())
+			.isEqualTo("((UNSIGNED-BYTE 8) 0 (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) T (UNSIGNED-BYTE 8) DOUBLE-FLOAT)");
+		// A designator naming no alias is left alone, and a self-referential deftype
+		// terminates on the hop bound instead of spinning: both keep the general array.
+		assertThat(evalMulti("""
+				(deftype loopy () 'loopy)
+				(defun mk (et) (make-array 2 :element-type et))
+				(list (array-element-type (mk 'not-a-type)) (array-element-type (mk 'loopy)))
+				""").print()).isEqualTo("(T T)");
+	}
+
+	@Test
 	void evalMakeArrayEvaluatesItsDimensionsExactlyOnce() {
 		// The character branch used to default its fill pointer by re-compiling the
 		// DIMENSIONS expression, so the JVM evaluated it twice; the default is the t

@@ -442,11 +442,39 @@ fact inside the helper. The `t` arm is the plain general array, and the unsuppli
 is the arm's OWN zero, which is why `given` is a parameter rather than a nil test at the
 call site.
 
-**The one thing the helpers cannot do is resolve a `deftype` ALIAS.** The interpreter's
-`make-array` runs `resolveElementTypeAlias` against the registry at run time, so `et` bound
-to `'octet` packs there; the arms compare against the seven built-in spellings only, so it
-reaches the `t` arm here. A literal `:element-type 'octet` is unaffected -- every
-compile-time recognizer resolves the alias. The value-carrying spelling is `.todo/616`.
+**A `deftype` ALIAS held in a VARIABLE resolves before the dispatch, through a SECOND
+generated defun (2026-08-31).** The arms compare against the seven built-in spellings only,
+so `et` bound to `'octet` reached the `t` arm while the interpreter -- which runs
+`resolveElementTypeAlias` against the live registry -- packed. The compile paths now inject
+`%make-array-et-alias`, one arm per registered alias answering the canonical spelling of
+the type it names, and `lowerRuntimeElementTypeMakeArray` wraps the designator in a call to
+it. A literal `:element-type 'octet` was never affected: every compile-time recognizer
+resolves the alias itself.
+
+**The table carries ONLY the aliases that name one of the six specialized codes, and that
+narrowing is the whole cost story.** A general resolver -- every registered `deftype`,
+which is what the item proposed -- cost array-operations **9.5 KB (+10.1%)** of raw wasm
+(94,336 -> 103,895, `--optimize=size`), because alexandria registers **43** aliases (its
+whole `positive-fixnum` / `non-negative-double-float` zoo) at ~220 bytes of arm each, and
+every one of them upgrades to `t`, which is exactly where an unresolved designator already
+lands. Narrowed, the same program is **byte-identical** to the pre-fix build, and a program
+that really holds an element-type alias in a variable pays ~55 bytes per alias (a 2-alias
+program: 62,853 -> 62,963). Real sources register these one or two at a time (`octet`,
+`simple-octet-vector`); nothing in the quicklisp cache writes the value-carrying spelling
+at all.
+
+**`typep` has the same hole and it does NOT come free with this one** -- which overturns
+the assumption `.todo/616` was filed on. `(let ((ty 'octet)) (typep 3 ty))` answers `NIL`
+on all four backends where SBCL 2.2.9 answers `T`: `expandRuntimeTypep` and
+`runtimeTypepDefun` dispatch over the registry's LAYOUTS plus the built-in names, and an
+alias is neither. `coerce` with a computed result type falls through to a computed `typep`,
+so it is the same hole once more. The fix is one normalization at the top of both dispatch
+shapes -- and it needs the FULL alias table, since any of them can name a type `typep`
+decides differently, so the narrowing above does not apply: measured at **+10,075 bytes
+(+10.7%)** on array-operations, against a +0 for the make-array half. That is a
+todo-612-scale bill (the inline arms it rejected were +32.6%) for a gap no backend disagrees
+about, so it is filed separately as `.todo/618` with these numbers and the data-table shape
+to try.
 
 **The per-site cost that pushed the arms into a helper is wasm's, and it is not specific to
 this dispatch:** `WasmArrayCompiler.compileMake` emits the whole allocation inline at every
@@ -459,4 +487,6 @@ Pinned by `LispEvaluatorTest.evalRuntimeElementTypePicksTheSameArrayAsALiteralOn
 `JvmLispCompilerTest.compileRuntimeElementTypePicksTheSameArrayAsALiteralOne`,
 `WasmLispCompilerIntegrationTest.compileRuntimeElementTypePicksTheSameArrayAsALiteralOne`
 and the `runtime-element-type-make-array` ci-spec case -- one program, one expected text,
-all four backends, every answer SBCL 2.2.9's.
+all four backends, every answer SBCL 2.2.9's. The alias half is pinned the same way by the
+`*RuntimeElementTypeResolvesADeftypeAlias` trio and the
+`runtime-element-type-deftype-alias` ci-spec case.

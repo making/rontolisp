@@ -1229,6 +1229,29 @@ public final class LispNames {
 	 */
 	public static final String MAKE_ARRAY_ET_FP_INTERNAL = "%MAKE-ARRAY-ET-FP";
 
+	/**
+	 * The {@code %make-array-et-alias} resolver the compilers inject once per program
+	 * whose {@code make-array} takes a RUNTIME {@code :element-type}: a function from the
+	 * designator to the canonical spelling of the type it names, resolving the registered
+	 * {@code deftype} aliases and leaving every other designator alone.
+	 *
+	 * <p>
+	 * The compile backends resolve an alias at EXPANSION time, from the literal at the
+	 * call site, so a designator that arrives as a VALUE -- {@code et} bound to
+	 * {@code 'octet} -- was invisible to every recognizer and fell to the general arm.
+	 * The interpreter has always resolved it against the live registry; this defun is the
+	 * compile-path equivalent, and it is a defun (not an expansion at each call site) for
+	 * the reason {@link #MAKE_ARRAY_ET_INTERNAL} is: the alias set is program-wide, so
+	 * spelling it per site multiplies it by the site count.
+	 *
+	 * <p>
+	 * It carries ONLY the aliases naming one of the six specialized
+	 * {@code am.ik.rontolisp.ArrayElementTypes} codes -- the ones an arm can tell apart
+	 * from {@code t}. Carrying the rest is measurable and buys nothing
+	 * ({@code .kb/array-literals.md}).
+	 */
+	public static final String MAKE_ARRAY_ET_ALIAS_INTERNAL = "%MAKE-ARRAY-ET-ALIAS";
+
 	/** The {@code aref} built-in function (array element access). */
 	public static final String AREF = "AREF";
 
