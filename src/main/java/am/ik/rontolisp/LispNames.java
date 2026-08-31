@@ -6737,6 +6737,15 @@ public final class LispNames {
 	public static final String TYPEP_RUNTIME = "%TYPEP-RUNTIME";
 
 	/**
+	 * The COMPOUND half of {@link #TYPEP_RUNTIME}: the defun a computed specifier that
+	 * arrived as a CONS -- {@code (integer 0 10)}, and everything {@code type-of} answers
+	 * for an array -- is routed to. Injected under the same gate, in its own defun for
+	 * the reason {@link #TYPEP_RUNTIME} is a defun at all (the JVM's 16-bit branch
+	 * offsets), and recursing back into it for a sub-specifier.
+	 */
+	public static final String TYPEP_COMPOUND_RUNTIME = "%TYPEP-COMPOUND-RUNTIME";
+
+	/**
 	 * The shared runtime-{@code error} dispatch defun the compilers inject once per
 	 * program when an {@code error} call carries a computed condition-type symbol with
 	 * initargs (cl-postgres' {@code (error (get-error-type code) :code ...)}). It

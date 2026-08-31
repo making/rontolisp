@@ -4783,6 +4783,61 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalComputedCompoundTypeSpecifiers() {
+		// A COMPUTED specifier that arrives as a CONS is interpreted out of the
+		// specifier VALUE, so (typep a (type-of a)) round-trips for every array shape
+		// and a runtime (integer 0 10) is a range test rather than nothing. Every
+		// answer here is SBCL 2.2.9's on this very program. Pinned identically by
+		// JvmLispCompilerTest#compileComputedCompoundTypeSpecifiers,
+		// WasmLispCompilerIntegrationTest#computedCompoundTypeSpecifiers and the
+		// computed-compound-type-specifier ci-spec case.
+		assertThat(evalMulti("""
+				(defstruct tpc-pt x y)
+				(defun tpc (v s) (typep v s))
+				(list
+				  (list (let ((a (make-array 4))) (tpc a (type-of a)))
+				        (let ((a (make-array '(2 3)))) (tpc a (type-of a)))
+				        (let ((a (make-array nil))) (tpc a (type-of a)))
+				        (let ((a (make-array 4 :element-type 'double-float))) (tpc a (type-of a)))
+				        (let ((a (make-array 4 :element-type '(unsigned-byte 8)))) (tpc a (type-of a)))
+				        (let ((a (make-array 4 :fill-pointer 0))) (tpc a (type-of a)))
+				        (tpc "abc" (type-of "abc"))
+				        (tpc 42 (type-of 42))
+				        (tpc 5 '(integer 0 10))
+				        (tpc 50 '(integer 0 10))
+				        (tpc 6 '(integer (5) 10))
+				        (tpc 5 '(integer (5) 10))
+				        (tpc 3.0d0 '(double-float 0.0d0 10.0d0))
+				        (tpc 200 '(unsigned-byte 8))
+				        (tpc 300 '(unsigned-byte 8))
+				        (tpc -5 '(signed-byte 8))
+				        (tpc -500 '(signed-byte 8)))
+				  (list (tpc "x" '(or (integer 0 10) string))
+				        (tpc 'sym '(or (integer 0 10) string))
+				        (tpc 3 '(and integer (satisfies oddp)))
+				        (tpc 4 '(and integer (satisfies oddp)))
+				        (tpc 4 '(not (integer 0 3)))
+				        (tpc 2 '(member 1 2 3))
+				        (tpc 9 '(member 1 2 3))
+				        (tpc 3 '(eql 3))
+				        (tpc '(1 2) '(cons integer))
+				        (tpc "ab" '(string 2))
+				        (tpc "ab" '(string 3))
+				        (tpc (make-tpc-pt) '(or string tpc-pt))
+				        (tpc (make-tpc-pt) '(or string integer)))
+				  (list (tpc (make-array 4) '(simple-vector 4))
+				        (tpc (make-array 4) '(simple-vector 5))
+				        (tpc (make-array '(2 2)) '(simple-vector 4))
+				        (tpc (make-array '(2 2)) '(simple-array t (2 2)))
+				        (tpc (make-array '(2 2)) '(simple-array t 2))
+				        (tpc (make-array '(2 2)) '(array))
+				        (tpc "abc" '(vector character))
+				        (tpc (make-array 4) '(vector (unsigned-byte 8)))))
+				""").print()).isEqualTo("((T T T T T T T T T NIL T NIL T T NIL T NIL)"
+				+ " (T NIL T NIL T T NIL T T T NIL T NIL) (T NIL NIL T T T T NIL))");
+	}
+
+	@Test
 	void evalTypecase() {
 		assertThat(eval("(typecase 42 (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"i\"");
 		assertThat(eval("(typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"s\"");

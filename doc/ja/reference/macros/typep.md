@@ -6,7 +6,7 @@
 
 配列系とは `(array ELEMENT-TYPE DIMENSIONS)`、`(simple-array ELEMENT-TYPE DIMENSIONS)`、`(vector ELEMENT-TYPE SIZE)`、`(simple-vector SIZE)` — [`type-of`](../functions/type-of.md) が組み立てる指定子そのものです。両方の要素が検査されます: 要素型は配列の昇格後の [`array-element-type`](../functions/array-element-type.md) と、次元は配列自身の次元と比較されます。`DIMENSIONS` にはリスト (どの位置の `*` も「任意のサイズ」を意味します)、ランクを表す整数、ランク 0 配列を表す `nil`、または `*` を書けます。`vector` 系の 2 つの綴りはランクを 1 に固定します。
 
-実行時に計算された指定子も、アトミックな型名 (登録済みのクラス / 構造体 / コンディション、または組み込みの型名) かクラスメタオブジェクトであればサポートされます — [`find-class`](../functions/find-class.md) や [`class-of`](../functions/class-of.md) が返すものは自分自身のクラスを指し示します。上記の複合指定子は引き続きリテラルである必要があります。`class` はすべてのクラスメタオブジェクトが属するクラスなので、`(typep x 'class)` が「これはクラスか?」の判定になります。
+実行時に計算された指定子もサポートされ、受け付ける集合は同じです: アトミックな型名 (登録済みのクラス / 構造体 / コンディション、または組み込みの型名)、クラスメタオブジェクト ([`find-class`](../functions/find-class.md) や [`class-of`](../functions/class-of.md) が返すものは自分自身のクラスを指し示します)、そして上記の複合指定子です。複合指定子の場合、先頭要素と引数はコンパイル時に畳み込むのではなく指定子の値そのものから読み取られます。したがって `(typep a (type-of a))` はどの配列の形でも `T` を返します。`class` はすべてのクラスメタオブジェクトが属するクラスなので、`(typep x 'class)` が「これはクラスか?」の判定になります。
 
 ```lisp
 (typep 5 '(unsigned-byte 8)) ; => T
@@ -14,6 +14,11 @@
 
 ```lisp
 (typep 500 '(unsigned-byte 8)) ; => NIL
+```
+
+```lisp
+(let ((a (make-array 4)))
+  (list (type-of a) (typep a (type-of a)))) ; => ((SIMPLE-VECTOR 4) T)
 ```
 
 ```lisp

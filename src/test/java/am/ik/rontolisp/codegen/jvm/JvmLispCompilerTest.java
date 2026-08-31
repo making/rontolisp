@@ -410,6 +410,59 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileComputedCompoundTypeSpecifiers() throws Exception {
+		// The JVM half of the computed-COMPOUND type specifier: %typep-runtime routes a
+		// CONS specifier to %typep-compound-runtime, which reads the head and the
+		// arguments out of the specifier VALUE. Same program, same answers (SBCL
+		// 2.2.9's), as LispEvaluatorTest#evalComputedCompoundTypeSpecifiers and
+		// WasmLispCompilerIntegrationTest#computedCompoundTypeSpecifiers.
+		assertThat(compileAndRun("""
+				(defstruct tpc-pt x y)
+				(defun tpc (v s) (typep v s))
+				(print
+				  (list (list (let ((a (make-array 4))) (tpc a (type-of a)))
+				              (let ((a (make-array '(2 3)))) (tpc a (type-of a)))
+				              (let ((a (make-array nil))) (tpc a (type-of a)))
+				              (let ((a (make-array 4 :element-type 'double-float))) (tpc a (type-of a)))
+				              (let ((a (make-array 4 :element-type '(unsigned-byte 8)))) (tpc a (type-of a)))
+				              (let ((a (make-array 4 :fill-pointer 0))) (tpc a (type-of a)))
+				              (tpc "abc" (type-of "abc"))
+				              (tpc 42 (type-of 42))
+				              (tpc 5 '(integer 0 10))
+				              (tpc 50 '(integer 0 10))
+				              (tpc 6 '(integer (5) 10))
+				              (tpc 5 '(integer (5) 10))
+				              (tpc 3.0d0 '(double-float 0.0d0 10.0d0))
+				              (tpc 200 '(unsigned-byte 8))
+				              (tpc 300 '(unsigned-byte 8))
+				              (tpc -5 '(signed-byte 8))
+				              (tpc -500 '(signed-byte 8)))
+				        (list (tpc "x" '(or (integer 0 10) string))
+				              (tpc 'sym '(or (integer 0 10) string))
+				              (tpc 3 '(and integer (satisfies oddp)))
+				              (tpc 4 '(and integer (satisfies oddp)))
+				              (tpc 4 '(not (integer 0 3)))
+				              (tpc 2 '(member 1 2 3))
+				              (tpc 9 '(member 1 2 3))
+				              (tpc 3 '(eql 3))
+				              (tpc '(1 2) '(cons integer))
+				              (tpc "ab" '(string 2))
+				              (tpc "ab" '(string 3))
+				              (tpc (make-tpc-pt) '(or string tpc-pt))
+				              (tpc (make-tpc-pt) '(or string integer)))
+				        (list (tpc (make-array 4) '(simple-vector 4))
+				              (tpc (make-array 4) '(simple-vector 5))
+				              (tpc (make-array '(2 2)) '(simple-vector 4))
+				              (tpc (make-array '(2 2)) '(simple-array t (2 2)))
+				              (tpc (make-array '(2 2)) '(simple-array t 2))
+				              (tpc (make-array '(2 2)) '(array))
+				              (tpc "abc" '(vector character))
+				              (tpc (make-array 4) '(vector (unsigned-byte 8))))))
+				""")).isEqualTo("((T T T T T T T T T NIL T NIL T T NIL T NIL)"
+				+ " (T NIL T NIL T T NIL T T T NIL T NIL) (T NIL NIL T T T T NIL))");
+	}
+
+	@Test
 	void compileCloserMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators() throws Exception {
 		// The closer-mop system is spliced by the compile-time LoadInliner pass (cli),
 		// mirroring the CLI pipeline; the shim serves BOTH generations, exactly like the
