@@ -434,7 +434,14 @@ call site.
 `make-array` runs `resolveElementTypeAlias` against the registry at run time, so `et` bound
 to `'octet` packs there; the arms compare against the seven built-in spellings only, so it
 reaches the `t` arm here. A literal `:element-type 'octet` is unaffected -- every
-compile-time recognizer resolves the alias.
+compile-time recognizer resolves the alias. The value-carrying spelling is `.todo/616`.
+
+**The per-site cost that pushed the arms into a helper is wasm's, and it is not specific to
+this dispatch:** `WasmArrayCompiler.compileMake` emits the whole allocation inline at every
+call site, so a general `make-array` is ~400-600 bytes of module and one with
+`:fill-pointer`/`:adjustable` is ~1,100, where the JVM's is an `invokestatic` on a body
+emitted once. Every array-heavy program pays it; `.todo/617` holds the measurement to make
+before turning it into a runtime function.
 
 Pinned by `LispEvaluatorTest.evalRuntimeElementTypePicksTheSameArrayAsALiteralOne`,
 `JvmLispCompilerTest.compileRuntimeElementTypePicksTheSameArrayAsALiteralOne`,
