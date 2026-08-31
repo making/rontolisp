@@ -226,7 +226,7 @@ ONE constructor: **the marker implies rank 1**, so no reader checks the rank.
 The answer that costs is `array-element-type`, which says `T` where SBCL says
 `CHARACTER`. That is not a character special case: it is exactly what a rank-2
 `(unsigned-byte 8)` array already answers (SBCL: `(UNSIGNED-BYTE 8)`). Giving the general
-array a remembered element type is one change covering both, and it is `.todo/609`, not
+array a remembered element type is one change covering both, and it is `.todo/611`, not
 this item.
 
 **What each backend does.** The rank is a RUNTIME fact at every site (the dimensions are
@@ -268,7 +268,7 @@ and `0.0` there.
 
 The packed integer widths do NOT keep their `0` under the same degrade (a rank-2
 `(unsigned-byte 8)` array reads `NIL`), because unlike the other two they have no
-fallback default anywhere yet; that is the other half of `.todo/609`.
+fallback default anywhere yet; that is the other half of `.todo/611`.
 
 Pinned by `LispEvaluatorTest.evalCharacterElementTypeAboveRankOneIsAGeneralArray` /
 `#evalMakeArrayEvaluatesItsDimensionsExactlyOnce`,

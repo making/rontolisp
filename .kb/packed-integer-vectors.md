@@ -18,7 +18,7 @@ element type degrades the same way (`.kb/array-literals.md`, "A SPECIALIZED
 element type above rank 1 is the general array"). What the two degrades do NOT
 yet agree on is the fill for an unsupplied element -- a rank-n character array
 gets `#\Space`, a rank-n `(unsigned-byte 8)` array gets `nil` where SBCL gives
-`0` (`.todo/609`).
+`0` (`.todo/611`).
 
 ## "Literal" includes a `deftype` alias of one
 
