@@ -51,6 +51,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGeomRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmGeomTemplate\\.class"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.gpu.CudaGemm"
         },
         "pattern": "am/ik/gpu/gemm\\.ptx"
