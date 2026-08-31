@@ -508,8 +508,10 @@ those three names onto `VECTOR`/`ARRAY`/`STRING`, and `subtypepUniverse` already
 lists them, so `(simple-vector 4)` <= `vector` answers `T` on every backend the
 moment the head reduction fires. That collapse is an ALIAS, though, so the
 reverse `(subtypep 'vector 'simple-vector)` also answers `T` where SBCL answers
-`(NIL T)` -- a real wrongness, in the opposite direction, tracked separately
-because it must move with `.todo/605`'s atomic `vector`/`simple-vector` arms.
+`(NIL T)` -- a real wrongness, in the opposite direction, and one the atomic
+`vector` bullet above (todo-605, which made `type-of` and `vectorp` tell simple
+from non-simple) contradicts. Tracked as `.todo/609`, not fixed here: it changes
+the ancestor table's ROWS and needs its own cross-backend pins.
 (2) The reduction exposed a DIFFERENT gap the item did not name: a lattice LEAF
 with no `SUBTYPEP_PARENTS` entry (`hash-table`, `function`, `package`,
 `stream`, `atom`) had no ancestor-table row at all, so a runtime
