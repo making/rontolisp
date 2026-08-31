@@ -13312,6 +13312,38 @@ standalone:
                     (stp '(eql 1) 'number))))
     stdout: |
       ((T T T NIL T T T NIL T T T) (T T T T T T T T T T) (T T NIL NIL NIL NIL NIL))
+  # simple-vector/simple-array/simple-string are lattice EDGES, not aliases: the
+  # reverse direction answers nil, as SBCL 2.2.9's does on this very program --
+  # except group 3's 2nd and 4th, where base-string stays an alias because there
+  # is one character type here.
+  - name: simple-type-name-subtypep-lattice
+    source: |
+      (defun sts (a b) (subtypep a b))
+      (print
+        (list (list (subtypep 'simple-vector 'vector)
+                    (subtypep 'vector 'simple-vector)
+                    (subtypep 'simple-array 'array)
+                    (subtypep 'array 'simple-array)
+                    (subtypep 'simple-string 'string)
+                    (subtypep 'string 'simple-string))
+              (list (subtypep 'simple-vector 'simple-array)
+                    (subtypep 'simple-string 'simple-array)
+                    (subtypep 'simple-vector 'sequence)
+                    (subtypep 'simple-array 'sequence)
+                    (subtypep 'string 'simple-vector)
+                    (subtypep 'simple-string 'simple-vector))
+              (list (subtypep 'simple-base-string 'simple-string)
+                    (subtypep 'simple-string 'simple-base-string)
+                    (subtypep 'base-string 'string)
+                    (subtypep 'string 'base-string))
+              (list (sts 'simple-vector 'vector)
+                    (sts 'vector 'simple-vector)
+                    (sts 'simple-string 'string)
+                    (sts 'string 'simple-string)
+                    (sts '(simple-vector 4) 'vector)
+                    (sts 'vector '(simple-vector 4)))))
+    stdout: |
+      ((T NIL T NIL T NIL) (T T T NIL NIL NIL) (T T T T) (T NIL T NIL T NIL))
   - name: vectorp-and-the-vector-specifier-check-the-rank
     source: |
       (print (list (vectorp #2A((1 2) (3 4)))

@@ -4886,6 +4886,48 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSimpleTypeNameSubtypepLattice() {
+		// simple-vector/simple-array/simple-string are lattice EDGES, not aliases of
+		// vector/array/string: rontolisp has non-simple arrays and strings (a fill
+		// pointer, :adjustable t, a displacement), so the reverse direction is nil.
+		// Every answer is SBCL 2.2.9's on this very program EXCEPT the two marked
+		// below, where base-string/simple-base-string stay aliases because there is one
+		// character type here (the base-char collapse, same argument as the float
+		// family). Pinned identically by
+		// JvmLispCompilerTest#compileSimpleTypeNameSubtypepLattice,
+		// WasmLispCompilerIntegrationTest#simpleTypeNameSubtypepLattice and the
+		// simple-type-name-subtypep-lattice ci-spec case.
+		assertThat(evalMulti("""
+				(defun sts (a b) (subtypep a b))
+				(list
+				  (list (subtypep 'simple-vector 'vector)
+				        (subtypep 'vector 'simple-vector)
+				        (subtypep 'simple-array 'array)
+				        (subtypep 'array 'simple-array)
+				        (subtypep 'simple-string 'string)
+				        (subtypep 'string 'simple-string))
+				  (list (subtypep 'simple-vector 'simple-array)
+				        (subtypep 'simple-string 'simple-array)
+				        (subtypep 'simple-vector 'sequence)
+				        (subtypep 'simple-array 'sequence)
+				        (subtypep 'string 'simple-vector)
+				        (subtypep 'simple-string 'simple-vector))
+				  (list (subtypep 'simple-base-string 'simple-string)
+				        (subtypep 'simple-string 'simple-base-string)
+				        (subtypep 'base-string 'string)
+				        (subtypep 'string 'base-string))
+				  (list (sts 'simple-vector 'vector)
+				        (sts 'vector 'simple-vector)
+				        (sts 'simple-string 'string)
+				        (sts 'string 'simple-string)
+				        (sts '(simple-vector 4) 'vector)
+				        (sts 'vector '(simple-vector 4))))
+				""").print())
+			// group 3's 2nd and 4th are the base-string alias; SBCL answers NIL for both
+			.isEqualTo("((T NIL T NIL T NIL) (T T T NIL NIL NIL) (T T T T) (T NIL T NIL T NIL))");
+	}
+
+	@Test
 	void evalTypecase() {
 		assertThat(eval("(typecase 42 (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"i\"");
 		assertThat(eval("(typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"s\"");

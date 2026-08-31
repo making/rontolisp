@@ -9308,6 +9308,37 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void simpleTypeNameSubtypepLattice() throws Exception {
+		// The WASM twin of JvmLispCompilerTest#compileSimpleTypeNameSubtypepLattice.
+		assertThat(compileAndRun("""
+				(defun sts (a b) (subtypep a b))
+				(print
+				  (list (list (subtypep 'simple-vector 'vector)
+				              (subtypep 'vector 'simple-vector)
+				              (subtypep 'simple-array 'array)
+				              (subtypep 'array 'simple-array)
+				              (subtypep 'simple-string 'string)
+				              (subtypep 'string 'simple-string))
+				        (list (subtypep 'simple-vector 'simple-array)
+				              (subtypep 'simple-string 'simple-array)
+				              (subtypep 'simple-vector 'sequence)
+				              (subtypep 'simple-array 'sequence)
+				              (subtypep 'string 'simple-vector)
+				              (subtypep 'simple-string 'simple-vector))
+				        (list (subtypep 'simple-base-string 'simple-string)
+				              (subtypep 'simple-string 'simple-base-string)
+				              (subtypep 'base-string 'string)
+				              (subtypep 'string 'base-string))
+				        (list (sts 'simple-vector 'vector)
+				              (sts 'vector 'simple-vector)
+				              (sts 'simple-string 'string)
+				              (sts 'string 'simple-string)
+				              (sts '(simple-vector 4) 'vector)
+				              (sts 'vector '(simple-vector 4)))))
+				""")).isEqualTo("((T NIL T NIL T NIL) (T T T NIL NIL NIL) (T T T T) (T NIL T NIL T NIL))");
+	}
+
+	@Test
 	void defclassMetaclassRunsTheClassDefinitionProtocol() throws Exception {
 		// The postmodern dao-class shape on the WASM path, mirroring
 		// JvmLispCompilerTest#compileDefclassMetaclassRunsTheClassDefinitionProtocol.

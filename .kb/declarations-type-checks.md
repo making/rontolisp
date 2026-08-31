@@ -292,6 +292,9 @@ heads accept the same specs as `check-type`:
   by the `postmodern-language-incidentals` ci-spec case, which asserts the pair
   `(T T)`. Separately, `subtypep` returns ONE value here (CL returns a second
   "certain?" value); every known consumer uses only the primary.
+- **A collapse in `canonicalSubtypeName` is a claim that two names denote the
+  SAME SET, so it answers `T` in both directions** -- that is the whole test for
+  membership there, and the `simple-` names failed it (below).
 - `deftype` is a parsed no-op returning nil (the name is NOT registered;
   using it in a later type test errors) -- enough for the library shape
   where the type only appears in no-op declaim/declare declarations.
@@ -503,15 +506,13 @@ emitted ancestor table is GENERATED from it. Change them together.
 **Two premises this item was written on, both overturned by measurement
 (2026-08-31).** (1) It expected `SUBTYPEP_PARENTS` to need
 `SIMPLE-VECTOR`/`SIMPLE-ARRAY`/`SIMPLE-STRING` edges "or the array half of the
-reduction buys nothing" -- it does not: `canonicalSubtypeName` already collapses
-those three names onto `VECTOR`/`ARRAY`/`STRING`, and `subtypepUniverse` already
-lists them, so `(simple-vector 4)` <= `vector` answers `T` on every backend the
-moment the head reduction fires. That collapse is an ALIAS, though, so the
-reverse `(subtypep 'vector 'simple-vector)` also answers `T` where SBCL answers
-`(NIL T)` -- a real wrongness, in the opposite direction, and one the atomic
-`vector` bullet above (todo-605, which made `type-of` and `vectorp` tell simple
-from non-simple) contradicts. Tracked as `.todo/609`, not fixed here: it changes
-the ancestor table's ROWS and needs its own cross-backend pins.
+reduction buys nothing" -- it did not need them then: `canonicalSubtypeName`
+collapsed those three names onto `VECTOR`/`ARRAY`/`STRING`, and
+`subtypepUniverse` already listed them, so `(simple-vector 4)` <= `vector`
+answered `T` on every backend the moment the head reduction fired. That collapse
+was an ALIAS, though, so the reverse `(subtypep 'vector 'simple-vector)`
+answered `T` too, where SBCL answers `(NIL T)`. Fixed by todo-609 -- the section
+below.
 (2) The reduction exposed a DIFFERENT gap the item did not name: a lattice LEAF
 with no `SUBTYPEP_PARENTS` entry (`hash-table`, `function`, `package`,
 `stream`, `atom`) had no ancestor-table row at all, so a runtime
@@ -538,6 +539,73 @@ Pinned by `LispEvaluatorTest#evalComputedCompoundSubtypepSpecifiers`,
 `computed-compound-subtypep-specifier` ci-spec case -- one program whose every
 answer is SBCL 2.2.9's on that very program, except the two lite `member`/`eql`
 nils above.
+
+## The `simple-` names are lattice EDGES, not aliases (todo-609)
+
+**`simple-vector`, `simple-array` and `simple-string` name strictly smaller
+types than `vector`/`array`/`string`, so `subtypep` answers `T` one way and
+`NIL` the other, on all four backends.** Until todo-609 `canonicalSubtypeName`
+collapsed the three onto their general counterpart. A collapse is symmetric --
+it claims two names denote the same SET -- so `(subtypep 'vector
+'simple-vector)` answered `T` where SBCL 2.2.9 answers `(NIL T)`, and that
+contradicted the very specifier `type-of` builds: since todo-604 it spells
+`(SIMPLE-VECTOR 4)` for `(make-array 4)` and `(VECTOR T 4)` for
+`(make-array 4 :fill-pointer 0)`.
+
+The edges (`LispMacroExpander.SUBTYPEP_PARENTS`), and what they answer:
+
+- `simple-string` -> `simple-array`, `string`; `simple-vector` ->
+  `simple-array`, `vector`; `simple-array` -> `array`.
+- So `simple-vector` <= `sequence` (through `vector`) while `simple-array` is
+  NOT a sequence -- the atomic `array`/`simple-array` spellings stay rank-blind,
+  and SBCL agrees on both.
+- `simple-string` is NOT a `simple-vector`: a `simple-vector` is
+  `(simple-array t (*))`, and neither is a `string` a `simple-vector`. Both were
+  `T` under the collapse.
+
+**Why `string` was a decision and not a fix.** The item offered the "every
+string here is immutable, so `simple-string` and `string` are one type" reading
+(the float argument). That is true of a LITERAL only, and has not been true of
+the string surface as a whole for some time: a fill-pointered character vector,
+an `:adjustable t` string and a displaced string VIEW are all `stringp` and none
+of them is simple (`.kb/adjustable-arrays.md`). So `simple-string` is a proper
+subtype exactly as in CL, and `(subtypep 'string 'simple-string)` is `NIL`.
+
+**`base-string`/`simple-base-string` stay collapsed** (onto `string` /
+`simple-string`), because "a string of `base-char`" is the whole content of
+those names and rontolisp has ONE character type -- `(subtypep 'character
+'base-char)` and its reverse both answer `T`. Same argument as the float family,
+and the same **re-evaluation trigger**: if a narrow character type ever lands,
+these two must become edges in the same pass. It is the only place the pinning
+program deviates from SBCL, which answers `NIL` for `(subtypep 'simple-string
+'simple-base-string)` and `(subtypep 'string 'base-string)`.
+
+**The reverse direction was not load-bearing.** The only `(subtypep ...
+'simple-*)` in the loadable corpus is quri's `parse-uri` compiler macro, gated
+`#+(or sbcl openmcl cmu allegro)` and so dead here; its runtime dispatch is an
+`etypecase`, i.e. `typep`, which this did not touch.
+
+**The size, measured 2026-08-31** on the 608 floor program (`(defun st (a b)
+(subtypep a b))` and one call): the three names left their alias group and took
+rows of their own in the emitted `%subtypep-ancestor-table%`, 21,977 -> 22,087
+wasm bytes at `--optimize=size` (+110) and 21,351 -> 21,577 JVM `.class` bytes
+(+226). A program with no COMPUTED `subtypep` emits no table and is
+byte-identical; no size-report, bench-report or `examples/` program calls
+`subtypep` at all.
+
+**Still open on the `typep` side, measured 2026-08-31 on all four backends.**
+`typep` does NOT check simplicity -- `makeArrayTypeTest` treats the `simple-`
+spellings as the general one (the array-lattice bullets above), so
+`(typep (make-array 4 :fill-pointer 0) 'simple-vector)` answers `T` here and
+`NIL` in SBCL, and likewise for `simple-array` and for `simple-string` over a
+fill-pointered character vector. Tracked as `.todo/610`.
+
+Pinned by `LispEvaluatorTest#evalSimpleTypeNameSubtypepLattice`,
+`JvmLispCompilerTest#compileSimpleTypeNameSubtypepLattice`,
+`WasmLispCompilerIntegrationTest#simpleTypeNameSubtypepLattice` and the
+`simple-type-name-subtypep-lattice` ci-spec case -- one program whose every
+answer is SBCL 2.2.9's on that very program except the two `base-string`
+reverse directions above.
 
 ## Top-level flattening (flattenTopLevel)
 

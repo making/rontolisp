@@ -2,7 +2,7 @@
 
 `(subtypep type1 type2)`
 
-Whether `type1` names a subtype of `type2`, answering over the built-in type lattice (e.g. `integer` ⊂ `rational` ⊂ `real` ⊂ `number`, `string` ⊂ `vector` ⊂ `array`/`sequence`) plus the class registry's ancestor sets (`defclass`/`define-condition` hierarchies). Lite: a single primary value — an unknown pair answers nil. The float and character type names collapse to the one runtime representation, so `(subtypep 'short-float 'single-float)` is `t`.
+Whether `type1` names a subtype of `type2`, answering over the built-in type lattice (e.g. `integer` ⊂ `rational` ⊂ `real` ⊂ `number`, `string` ⊂ `vector` ⊂ `array`/`sequence`) plus the class registry's ancestor sets (`defclass`/`define-condition` hierarchies). Lite: a single primary value — an unknown pair answers nil. The float and character type names collapse to the one runtime representation, so `(subtypep 'short-float 'single-float)` is `t`; `base-string`/`simple-base-string` collapse for the same reason (one character type). The `simple-` names do NOT: a fill pointer, `:adjustable t` or a displacement makes a non-simple array or string here, so `simple-vector`/`simple-array`/`simple-string` are proper subtypes of `vector`/`array`/`string` and the reverse direction is nil.
 
 Either argument may be a class metaobject instead of a type name: what [`find-class`](find-class.md) and [`class-of`](class-of.md) answer designates its own class, so a metaobject compares exactly like the name spelling. Both arguments may also be computed at run time. On the JVM and WASM compilers a literal (quoted) pair is folded into a constant at compile time; anything else is answered at run time over the same lattice, with identical answers on all four backends.
 
@@ -26,4 +26,9 @@ A COMPOUND specifier works on either side, quoted or computed. `(or ...)` holds 
 ```lisp
 (list (subtypep '(integer 0 10) 'integer)
       (subtypep 'integer '(integer 0 10))) ; => (T NIL)
+```
+
+```lisp
+(list (subtypep 'simple-vector 'vector)
+      (subtypep 'vector 'simple-vector)) ; => (T NIL)
 ```

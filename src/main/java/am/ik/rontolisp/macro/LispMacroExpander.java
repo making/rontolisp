@@ -30947,7 +30947,20 @@ public final class LispMacroExpander {
 				fmtCall(LispNames.EQ_GENERAL, runtimeName, LispTrue.INSTANCE)));
 	}
 
-	/** The immediate supertypes of each built-in type name ({@code subtypep} lattice). */
+	/**
+	 * The immediate supertypes of each built-in type name ({@code subtypep} lattice).
+	 *
+	 * <p>
+	 * The three {@code simple-} names are EDGES here, not aliases of their general
+	 * counterpart ({@code .todo/609}): rontolisp does have non-simple arrays and strings
+	 * -- a fill pointer, an adjustable flag or a displacement makes one, and since
+	 * {@code .todo/604} {@code type-of} spells the difference ({@code (SIMPLE-VECTOR 4)}
+	 * vs {@code (VECTOR T 4)}) -- so {@code simple-vector} is strictly below
+	 * {@code vector} and the reverse direction must answer nil, as SBCL's does. Only
+	 * {@code base-string}/{@code simple-base-string} stay aliases (of {@code string} /
+	 * {@code simple-string}), for the one-character-type reason
+	 * {@link #canonicalSubtypeName} states.
+	 */
 	private static final java.util.Map<String, List<String>> SUBTYPEP_PARENTS = orderedMap(
 			java.util.Map.entry("FIXNUM", List.of("INTEGER")), java.util.Map.entry("BIGNUM", List.of("INTEGER")),
 			java.util.Map.entry("bit", List.of("INTEGER")), java.util.Map.entry("UNSIGNED-BYTE", List.of("INTEGER")),
@@ -30957,7 +30970,10 @@ public final class LispMacroExpander {
 			java.util.Map.entry("KEYWORD", List.of("SYMBOL")), java.util.Map.entry("BOOLEAN", List.of("SYMBOL")),
 			java.util.Map.entry("NULL", List.of("SYMBOL", "LIST")), java.util.Map.entry("CONS", List.of("LIST")),
 			java.util.Map.entry("LIST", List.of("SEQUENCE")), java.util.Map.entry("STRING", List.of("VECTOR")),
-			java.util.Map.entry("VECTOR", List.of("ARRAY", "SEQUENCE")));
+			java.util.Map.entry("VECTOR", List.of("ARRAY", "SEQUENCE")),
+			java.util.Map.entry("SIMPLE-STRING", List.of("SIMPLE-ARRAY", "STRING")),
+			java.util.Map.entry("SIMPLE-VECTOR", List.of("SIMPLE-ARRAY", "VECTOR")),
+			java.util.Map.entry("SIMPLE-ARRAY", List.of("ARRAY")));
 
 	/**
 	 * An immutable map that iterates in DECLARATION order. {@code Map.of}/
@@ -31004,14 +31020,29 @@ public final class LispMacroExpander {
 		return null;
 	}
 
-	/** Collapses the type-name aliases the one runtime representation makes equal. */
+	/**
+	 * Collapses the type-name aliases the one runtime representation makes equal -- and
+	 * ONLY those. A collapse is symmetric, so a name belongs here only when it denotes
+	 * exactly the same set of values as its target: the four float names (one float
+	 * format), the character names (one character type), and the two {@code base-string}
+	 * spellings, which are "a string of {@code base-char}" and so name the same type as
+	 * {@code string}/{@code simple-string} while every character IS a base-char.
+	 *
+	 * <p>
+	 * {@code simple-string}/{@code simple-vector}/{@code simple-array} were here until
+	 * {@code .todo/609} and did NOT qualify: simplicity is a real distinction in
+	 * rontolisp (a fill pointer, {@code :adjustable t} or a displacement makes a
+	 * non-simple array, and a string view/character vector is a non-simple STRING), so
+	 * the collapse made {@code (subtypep 'vector 'simple-vector)} answer t against both
+	 * SBCL and the specifier {@code type-of} builds. They are lattice EDGES now
+	 * ({@link #SUBTYPEP_PARENTS}).
+	 */
 	private static String canonicalSubtypeName(String plain) {
 		return switch (plain) {
 			case "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> "FLOAT";
 			case "BASE-CHAR", "STANDARD-CHAR", "EXTENDED-CHAR" -> "CHARACTER";
-			case "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> "STRING";
-			case "SIMPLE-VECTOR" -> "VECTOR";
-			case "SIMPLE-ARRAY" -> "ARRAY";
+			case "BASE-STRING" -> "STRING";
+			case "SIMPLE-BASE-STRING" -> "SIMPLE-STRING";
 			default -> plain;
 		};
 	}
@@ -33096,9 +33127,12 @@ public final class LispMacroExpander {
 			names.add(entry.getKey());
 			names.addAll(entry.getValue());
 		}
+		// The alias spellings (canonicalSubtypeName) have no lattice edge of their
+		// own and reach the universe only here; the three simple- names come in
+		// through SUBTYPEP_PARENTS, which is where they became edges (.todo/609).
 		names.addAll(List.of("SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "BASE-CHAR", "STANDARD-CHAR",
-				"EXTENDED-CHAR", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", "SIMPLE-VECTOR", "SIMPLE-ARRAY",
-				"CHARACTER", "STANDARD-OBJECT", "CONDITION", "ERROR", "SIMPLE-ERROR", "SIMPLE-CONDITION"));
+				"EXTENDED-CHAR", "BASE-STRING", "SIMPLE-BASE-STRING", "CHARACTER", "STANDARD-OBJECT", "CONDITION",
+				"ERROR", "SIMPLE-ERROR", "SIMPLE-CONDITION"));
 		// Every atomic name a runtime TYPEP specifier can hold is a runtime SUBTYPEP name
 		// too: a leaf of the lattice (hash-table, function, package, stream, atom) has no
 		// SUBTYPEP_PARENTS entry, so without this it had no row at all and answered nil
