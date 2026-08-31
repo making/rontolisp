@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -15405,6 +15406,37 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(defvar bmm-form (list 'when t 5))" + " (defvar bmm-first (eval bmm-form))"
 				+ " (rplaca (cdr bmm-form) nil)" + " (list bmm-first (eval bmm-form))")
 			.print()).isEqualTo("(5 5)");
+	}
+
+	@Test
+	void aMemoizedBuiltinMacroDoesNotHoldTheMemoWhileItsExpansionRuns() throws Exception {
+		// The expansion memo is a CACHE, not a lock over evaluation. Evaluating a
+		// memoized form under the memo's monitor puts a whole program inside it -- and a
+		// program can hand over to another thread (the macOS main thread, a socket
+		// read), which then cannot take the monitor to evaluate a memoized form of its
+		// own. Both halves park. The memo must be read under the monitor and the
+		// expansion evaluated outside it.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		for (LispVal form : LispReader.readAllFromString("(when t 1)")) {
+			evaluator.eval(form); // memoize the call site
+		}
+		LispVal slow = LispReader.readFromString("(when t (%sleep-ms 3000))");
+		evaluator.eval(slow); // memoize the slow call site too, so the next run hits
+		CountDownLatch running = new CountDownLatch(1);
+		Thread holder = new Thread(() -> {
+			running.countDown();
+			evaluator.eval(slow);
+		});
+		holder.setDaemon(true);
+		holder.start();
+		running.await();
+		Thread.sleep(300); // let the holder get inside the memoized evaluation
+		LispVal quick = LispReader.readFromString("(when t 1)");
+		long start = System.nanoTime();
+		evaluator.eval(quick);
+		long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+		holder.interrupt();
+		assertThat(elapsedMs).as("a memo hit on another thread must not block this evaluation").isLessThan(1000);
 	}
 
 	@Test

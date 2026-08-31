@@ -5589,7 +5589,11 @@ public final class LispEvaluator {
 	 * memo field's contract and {@code .kb/interpreter-expansion-memo.md}. The expander
 	 * runs outside the monitor (an expansion may recurse into the reader or another
 	 * expansion); two threads racing on one call site both expand and the last write
-	 * wins, a wasted expansion rather than a wrong answer.
+	 * wins, a wasted expansion rather than a wrong answer. The EVALUATION is outside it
+	 * too, on the hit path as much as the miss path: the expansion is a whole program,
+	 * and a program can hand over to another thread (the macOS main thread, a socket
+	 * read) that then needs the monitor for a memo of its own -- holding it across the
+	 * eval parks both halves.
 	 * @param cons the macro call form
 	 * @param env the environment
 	 * @param expander the pure syntactic expansion of one built-in macro
@@ -5597,11 +5601,12 @@ public final class LispEvaluator {
 	 */
 	private LispVal evalBuiltinMacro(LispCons cons, Environment env,
 			java.util.function.Function<LispCons, LispVal> expander) {
+		LispVal cached;
 		synchronized (this.builtinMacroExpansions) {
-			LispVal cached = this.builtinMacroExpansions.get(cons);
-			if (cached != null) {
-				return eval(cached, env);
-			}
+			cached = this.builtinMacroExpansions.get(cons);
+		}
+		if (cached != null) {
+			return eval(cached, env);
 		}
 		LispVal expansion = expander.apply(cons);
 		synchronized (this.builtinMacroExpansions) {

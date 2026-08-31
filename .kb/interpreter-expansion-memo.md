@@ -62,6 +62,23 @@ expand and the last write wins -- a wasted expansion, not a wrong answer. The ma
 bounded by `EXPANSION_MEMO_LIMIT` like the other three identity memos; past the
 bound the arm simply recomputes, which is the pre-memo behavior.
 
+**The monitor covers the map read, never the evaluation -- on the hit path as much
+as the miss path.** This is the one place `evalBuiltinMacro` differs in shape from
+`expandUserMacro` and the difference is load-bearing: `expandUserMacro` RETURNS the
+cached expansion and its caller evaluates it, so the monitor is naturally out of the
+way, while `evalBuiltinMacro` evaluates for its caller and has to release the monitor
+itself. An expansion is a whole program, and a program can hand over to another
+thread -- `objc:`/`appkit:`/`metal:`/`scene:` go through `am.ik.objc.MainThread.sync`
+to the macOS main thread, a socket read blocks -- which then cannot take the monitor
+for a memo of its own. Both halves park, and the symptom is a test class that hangs
+with every thread in `park`, indistinguishable from the GPU hang in `.todo/514`. The
+first cut held the monitor across the hit-path `eval` and deadlocked
+`SceneOffscreenRenderTest` (JUnit's ForkJoinPool worker held the memo inside
+`MainThread.sync`; the main thread parked waiting for the worker). Pinned by
+`LispEvaluatorTest.aMemoizedBuiltinMacroDoesNotHoldTheMemoWhileItsExpansionRuns`,
+which times a memo hit on one thread while another sits inside a memoized
+`(%sleep-ms 3000)`.
+
 ## Measurement
 
 Interpreted loops (2026-08-31, Apple M4 Max, exec jar, medians of repeated
