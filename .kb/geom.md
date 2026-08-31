@@ -40,7 +40,8 @@ it is still what the other three backends run.)
 | compile path | `cli/CompileFrontend`, `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`) so the `linalg:` references in the spliced geom bodies pull linalg in too, and `JsonLibrary.process` OUTSIDE both since 2026-08-31 -- `geom:read-gltf` parses through `rontolisp:json-parse`, so the geom splice introduces the reference Json must then rewrite; the browser playground repeats the nesting (a non-glTF geom program is byte-identical either way -- the json defuns prune back out, measured on `(print (geom:volume (geom:box 10)))`'s `.wasm`) |
 | pruning | `LibraryDefunPruner.prunableNames()` collects `GeomLibrary.forms()` |
 | interpreter natives | `eval/GeomKernels.install`, from `LispEvaluator.ensureGeomLoaded` right after the forms are evaluated ("The interpreter's native kernels" below) |
-| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend`, `geom-csg-cross-backend`, `geom-scale-cross-backend`, `geom-read-model-cross-backend` and `geom-read-ply-gltf-cross-backend` (all four backends) |
+| JVM kernels | `codegen/jvm/JvmGeomKernelCompiler` (the call site) + `JvmGeomTemplate` (the embedded bridge) + `JvmGeomRuntimeBuilder` (the injection), gated in `JvmLispCompiler` on `gateMembers()` and dispatched from one `JvmExprCompiler.compileCons` case ("The JVM backend's kernels" below) |
+| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend`, `geom-csg-cross-backend`, `geom-scale-cross-backend`, `geom-read-model-cross-backend` and `geom-read-ply-gltf-cross-backend` (all four backends), `codegen/jvm/JvmGeomKernelCompilerTest` (the JVM kernels against the defuns) |
 | docs | `doc/{en,ja}/guides/solid-modeling.md`, 63 pages under `reference/functions/geom-*.md` |
 
 **The class-mention trigger is not optional.** The interpreter's lazy load fires on
@@ -464,13 +465,13 @@ All three columns print the same bounds to the last digit
 (`#f(-82.854 -42.515068 -14.710137)` / `#f(56.905193 33.82035 228.78455)`), which is
 the bit-identity claim measured on a real file rather than a fixture.
 
-**The last column is the finding, and it inverts this file's own premise.** "The JVM
-backend is where a big model gets loaded fast" was true when both backends ran the same
-Lisp; it is not true now. The interpreter is **5.7x faster than the compiled class** on
-this load, because it stopped running the Lisp for those loops while the JVM
-backend still compiles `%scan-number`'s character loop and `%facet-normal`'s Newell sum
-into bytecode and runs them a few hundred million times. Closing that is todo-599 --
-the `JvmLinalgKernelCompiler` call-site pattern, applied to `geom:`.
+**The last column WAS the finding, and it inverted this file's own premise for a day.**
+"The JVM backend is where a big model gets loaded fast" was true when both backends ran
+the same Lisp; it stopped being true the moment the interpreter got these natives (5.7x
+faster than the compiled class), because the JVM backend still compiled `%scan-number`'s
+character loop and `%facet-normal`'s Newell sum into bytecode and ran them a few hundred
+million times. **That is closed** -- the same four kernels now have a JVM call-site
+compiler, "The JVM backend's kernels" below.
 
 End to end, which is the thing that was actually asked for: the hand in a `scene:offscreen`
 viewer -- read, mesh, wireframe, bounds, extent, the GPU uploads and the first frame --
@@ -483,6 +484,86 @@ is 7.3 s for a 3 MB file and is the next one worth doing), and every modelling v
 Those stay pure `geom.lisp` on all four backends. The natives cover the FILE-scaled
 loops and nothing else, which is why this is four `define` calls and not a Java geom
 library.
+
+### The JVM backend's kernels (2026-08-31)
+
+The same four members, the same transcription, one backend over. `codegen/jvm/
+JvmGeomKernelCompiler` is the `geom:` sibling of `JvmLinalgKernelCompiler`
+(`.kb/linalg-blas.md`): a CALL-SITE compiler that evaluates the argument forms once into
+temps, calls into an embedded bridge (`JvmGeomTemplate`, injected the way
+`JvmBlasTemplate` is -- `.kb/template-class-embedding.md`) and falls through an
+`IFNONNULL` to the spliced `geom.lisp` defun over the same temps. Measured on the same
+155 MB hand, same machine, one `defun` per row with an untouched `mapcar` control row
+before and after:
+
+| stage | interpreter (natives) | `-o Bench.class` BEFORE | `-o Bench.class` AFTER |
+|---|---|---|---|
+| `geom:read-obj` | 695 ms | 4,074 ms | **737 ms** |
+| `geom:mesh` | 281 ms | 921 ms | **282 ms** |
+| `geom:wireframe` | 224 ms | 1,307 ms | **232 ms** |
+| `geom:bounds` | 20 ms | 459 ms | **16 ms** |
+| `geom::%model-extent` | 12 ms | 238 ms | **10 ms** |
+| **total** | **1,232 ms** | **6,999 ms** | **1,277 ms** |
+| control (`mapcar` over 300k) | 334 / 203 ms | 18 / 9 ms | 21 / 9 ms |
+
+**5.5x, and the two backends now land on the same number** -- which is the honest end
+state: both run the same Java loops over the same bytes, so the gap that is left is the
+gap between an interpreted `defvar` and a static field. The control row is what says the
+measurement is the kernels' and not the run's.
+
+Three things had to be decided, and they are the item's whole content:
+
+- **The gate is the CALL SITE, not the splice.** There is no flag here (same licence as
+  the interpreter's natives: nothing reassociates), so the only thing keeping the bridge
+  out of a program that does not need it is `JvmLispCompiler`'s scan of the ALREADY-PRUNED
+  program for `JvmGeomKernelCompiler.gateMembers()`. Measured against `(print (geom:volume
+  (geom:box 10)))`: `.class` 141,450 -> 158,245 (**+16,795 B, +11.9%**), because that
+  program does call `geom:mesh`. A program that calls none of the three is **byte-identical**
+  -- verified on `(print (+ 1 2))`, on `(defstruct pt x y)`-plus-print, and on
+  `(print (geom:bounds-extent (geom:bounds (geom:box 10))))`, a geom program that splices
+  the whole library and pays nothing. `--dynamic` is excluded outright: it
+  skips the pruner (so the scan would see the whole spliced library) and its point is that
+  a call site honours a definition replaced at run time, which a kernel over the defun
+  would not -- a `--dynamic` geom program is byte-identical too.
+- **`geom::%vertex-extremes` is accelerated but does NOT arm the bridge, and the reason is
+  a pruning measurement.** `LibraryDefunPruner` keys a definition by NAME and `geom:bounds`
+  is both a `defclass` (an unkeyed root) and a `defun`, so the class keeps the function,
+  which keeps `geom::%solid-bounds`, which keeps `geom::%vertex-extremes` -- **in every
+  program that splices geom**, `(print (geom:vec3 1 2 3))` included. A gate naming it would
+  be a gate on the splice. The other three have no class twin. (This also dates the
+  "Pruning" section below: a `(print (geom:volume (geom:box 10)))` class carries `bounds`,
+  `%solid-bounds`, `%vertex-extremes` and `bounds-union` as well as the sixteen listed
+  there. The collision is todo-601.)
+- **Bit-identity is pinned against the DEFUN, in the same artifact.** `JvmLispCompiler`
+  gained a package-private `setGeomKernels(false)` -- the interpreter's `LispEvaluator`
+  twin, and for the same reason: it is the oracle
+  `codegen/jvm/JvmGeomKernelCompilerTest` compiles every fixture against, running both
+  classes and comparing the PRINTED values. `ci-spec.yaml`'s
+  `geom-read-model-cross-backend` needed **no new expectation**, and the teapot, both
+  bunnies and spot read on the interpreter, the JVM before and the JVM after print
+  identical volume, area, centroid, mesh head, wireframe head, bounds and model extent.
+
+Two mechanics worth knowing before touching it:
+
+- **`geom:read-obj` is the one member whose accelerated answer is not the member's answer.**
+  The bridge scans the file into the packed `(n 3)` array and the index loops and hands
+  those to the LISP `geom::%solid-of-vertices` -- the colour default, the identity
+  transform and the `make-instance` stay in Lisp, exactly as `eval/GeomKernels` leaves
+  them. The `:color` / `:label` tail is built into a rest list ONCE and read by whichever
+  of the two variadic defuns runs, which works because the reader and the builder declare
+  the same two keywords; a tail that is not those literal keywords declines at COMPILE
+  time so the defun's own lambda list still signals about it.
+- **The bridge can decline to exist.** A template carries the project's class version, so
+  a JRE older than the toolchain would answer `UnsupportedClassVersionError` from
+  `Lookup.defineClass` -- which for a flagless acceleration would be a program that used to
+  run and now does not. `_geomInit` catches `LinkageError`, leaves `_geomAvailable` false
+  and says nothing (`--simd`'s degrade minus the warning: there is no flag for the user to
+  act on), and every call site tests `_geomReady()` before resolving a reference into the
+  bridge. So the compiled output's JRE floor is unchanged.
+
+WASM is still the same argument again and still further off (no `float[]` to pack into
+without the GC array types, and Preview 1 reads through its own stream layer); the JVM
+shape does not carry over as it stands.
 
 ### What a real file taught, none of it a bug in the reader
 
@@ -689,7 +770,15 @@ Measured: `(print (geom:volume (geom:box 10)))` compiled to a `.class` carries 1
 methods (vec3, %unit, %identity-rotation, axis-vector, axis-angle-matrix, rpy-matrix,
 make-transform, %build-solid, %solid-of-vertices, mesh, %facet-normal, box, volume and
 the generated accessors) and none of cylinder / cone / sphere / torus / revolution /
-extrusion / wireframe / surface-area / centroid / bounds.
+extrusion / wireframe / surface-area / centroid.
+
+**Re-measured 2026-08-31, and `bounds` is NOT among the dropped ones any more**: that
+same program also carries `bounds`, `geom::%solid-bounds`, `geom::%vertex-extremes` and
+`bounds-union`, and so does `(print (geom:vec3 1 2 3))`, which touches no solid at all.
+`geom:bounds` is the package's one name that is both a `defclass` and a `defun`, and the
+class form is a root that spells it. That is todo-601; it is what stopped
+`geom::%vertex-extremes` from being usable as an emit gate ("The JVM backend's kernels"
+above).
 
 ## Cross-backend parity
 

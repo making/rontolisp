@@ -49,6 +49,16 @@ and with `setGeomKernels(false)` -- and compares the printed arrays element for
 element. `ci-spec.yaml`'s `geom-read-model-cross-backend` and
 `geom-read-ply-gltf-cross-backend` are the cross-backend half.
 
+## And the JVM half, which now exists (2026-08-31)
+
+The compiled backend got the same four members on the same day
+(`codegen/jvm/JvmGeomKernelCompiler` -> `JvmGeomTemplate`, `.kb/geom.md`, "The JVM
+backend's kernels"), so a reader done here has a SECOND transcription to write --
+the same kernel against the compiled value representation, added to that class's
+`KERNELS` map and to `gateMembers()`. Do them in the same round: the two are
+compared against each other by `ci-spec.yaml`, and a reader accelerated on one
+backend only is the asymmetry this item was spun off from, one layer along.
+
 Each reader also has a `%build-solid` shape to hand its result to. `read-obj`
 uses `geom::%solid-of-vertices` (the packed-array half of `%build-solid`, split
 out for it); a reader that already has its floats one at a time should do the

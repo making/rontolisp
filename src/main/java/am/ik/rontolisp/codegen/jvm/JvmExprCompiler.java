@@ -526,6 +526,14 @@ final class JvmExprCompiler {
 				JvmLinalgKernelCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
+			// The geom: kernels behind a model file's load: the same guarded chain, one
+			// attempt deep and with no flag in front of it -- the bridge is emitted only
+			// when the program calls one of the four (JvmGeomKernelCompiler).
+			if (qn != null && LispNames.GEOM_PKG.equals(qn.pkg())
+					&& JvmGeomKernelCompiler.claims(JvmGeomKernelCompiler.qualifiedName(qn.member()), ctx)) {
+				JvmGeomKernelCompiler.compile(JvmGeomKernelCompiler.qualifiedName(qn.member()), cons, ctx, className);
+				return;
+			}
 			// A program that defines its own function on a cl name loses every call site
 			// the operator dispatch below claims -- silently, until this. Armed here and
 			// disarmed in the default arm (the ordinary call path, which DOES resolve

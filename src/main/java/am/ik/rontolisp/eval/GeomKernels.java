@@ -37,9 +37,14 @@ import org.jspecify.annotations.Nullable;
  * extent {@code scene} sizes an axis triad by 30 s. Nine minutes, and nothing else in the
  * load reached a second. These four are what scales with the FILE rather than with the
  * scene, and each is one loop over a million things the interpreter charges ~16 us a
- * float for ({@code .kb/geom.md}, "Measured"). With them the same load is 1.2 s -- and
- * 5.7x faster than the same program compiled to a {@code .class}, which still runs the
- * Lisp (todo-599).
+ * float for ({@code .kb/geom.md}, "Measured"). With them the same load is 1.2 s.
+ *
+ * <p>
+ * The JVM backend has the same four over its own CALL SITES since 2026-08-31
+ * ({@code codegen/jvm/JvmGeomKernelCompiler} -> {@code JvmGeomTemplate}, a transcription
+ * of the kernels below into the compiled value representation). The two are the same
+ * transcription of the same defuns and {@code ci-spec.yaml} compares their output, so
+ * they change together.
  *
  * <h2>Bit-identity, not approximation</h2>
  *
@@ -55,7 +60,8 @@ import org.jspecify.annotations.Nullable;
  * tolerance: {@code GeomKernelsTest} runs every fixture down both paths and compares the
  * printed arrays, which render every element; and {@code ci-spec.yaml}'s
  * {@code geom-read-model-cross-backend} still pins this interpreter against the JVM and
- * both WASM backends, none of which has a native at all.
+ * both WASM backends -- the JVM through its own transcription of these kernels since
+ * 2026-08-31, the two WASM backends through the defuns alone.
  *
  * <p>
  * Whatever the transcription does not cover DECLINES rather than approximating: a
