@@ -66,6 +66,39 @@ overflow) is still open.
 - `JvmLispCompilerTest#compileArgumentFormsEvaluateLeftToRight`,
   `WasmLispCompilerIntegrationTest#argumentFormsEvaluateLeftToRight`.
 
+## The read-modify-write macros evaluate a place's subforms ONCE
+
+Sibling invariant, same shape of defect, closed 2026-08-31 while enabling
+array-operations: **`incf`/`decf`, `push`/`pushnew`/`pop` and `rotatef`/`shiftf`
+evaluate each subform of their place exactly once**, on every backend. They all mention
+the place at least twice -- the read and the `setf` write -- and used to write it out
+literally both times, which is invisible while every subform is a variable or a literal
+and a wrong ANSWER as soon as one is a call. alexandria's `shuffle` is the sighting:
+`(rotatef (car tail) (car (nthcdr (random n) tail)))` drew a fresh index for the read and
+for the write, so it returned a list with repeats instead of a permutation -- and
+array-operations' `permute` test, which shuffles a permutation, failed with
+`permutation-repeated-index` rather than anything about `rotatef`.
+
+`LispMacroExpander.PlaceTemps` is the one rewriting all six share: each CALL argument of
+the place is bound to a temp in a `let*` in front of the expansion, and the place is
+rewritten to read the temps. Two deliberate narrowings:
+
+- **A subform that is a symbol, a literal, a `(quote ...)` or a `#'...` stays written
+  out.** Re-reading a variable answers the same value unless one of the macro's own other
+  subforms assigns it in between, which no real place does, and leaving them alone keeps
+  a place the compile backends can still recognize structurally.
+- **`the`/`values`/`apply`/`ldb`/`mask-field` places hoist nothing**: their non-atomic
+  argument is a type specifier, a byte specifier or an argument list that the `setf`
+  expanders read STRUCTURALLY, so replacing it with a variable reference would hide what
+  they match on.
+
+The temp's name is chosen the same way `with-slots`' instance temp is (`freshObjVar`,
+`.kb/clos.md`): scanned out of the form, so nesting cannot capture and the same program
+still emits the same bytes.
+
+Coverage: `LispEvaluatorTest#aPlaceSubformEvaluatesOncePerReadModifyWriteMacro` and the
+ci-spec case `array-operations-enablement-language-group` (all four backends).
+
 `.todo/014` also noted that the older evaluation-order-INDEPENDENT tests
 (`compileArrayCapturedInClosure` on both compilers, `arrayCapturedInClosure` in
 `LispEvaluatorTest`, the `arrays-cross-backend` ci-spec case) were written to sequence

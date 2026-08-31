@@ -38,8 +38,11 @@ import org.jspecify.annotations.Nullable;
  * counter.</li>
  * <li>{@code equalp} -- like {@code equal} but strings/characters compare case
  * insensitively, numbers by value, and arrays element-wise (same dimensions, elements
- * compared with {@code equalp}); lite (hash-tables/structures fall back to
- * {@code eql}).</li>
+ * compared with {@code equalp}); lite (hash-tables/structures fall back to {@code eql}).
+ * The array walk and the cons-chain walk are ITERATIVE: the recursion they replaced cost
+ * one interpreter frame per element, so comparing two 720-element rank-5 arrays
+ * (array-operations' own permute test) overflowed the stack. Only the depth of a NESTED
+ * structure recurses now, which is what the shape actually calls for.</li>
  * <li>{@code string<} / {@code string>} / {@code string<=} / {@code string>=} /
  * {@code string/=} and their case-insensitive counterparts {@code string-lessp} /
  * {@code string-greaterp} / {@code string-not-greaterp} / {@code string-not-lessp} /
@@ -130,19 +133,21 @@ public final class LispPreludeLibrary {
 				        ((and (characterp a) (characterp b))
 				         (char= (char-downcase a) (char-downcase b)))
 				        ((and (consp a) (consp b))
-				         (and (equalp (car a) (car b)) (equalp (cdr a) (cdr b))))
+				         (do ((%eqp-a a (cdr %eqp-a))
+				              (%eqp-b b (cdr %eqp-b)))
+				             ((not (and (consp %eqp-a) (consp %eqp-b)))
+				              (equalp %eqp-a %eqp-b))
+				           (unless (equalp (car %eqp-a) (car %eqp-b)) (return nil))))
 				        ((and (%obj-p a) (%obj-p b))
 				         (and (equal (%obj-tag a) (%obj-tag b))
 				              (equalp (%obj-slots a) (%obj-slots b))))
 				        ((and (%arrayp a) (%arrayp b))
 				         (and (equal (array-dimensions a) (array-dimensions b))
-				              (let ((n (array-total-size a)))
-				                (labels ((cmp (i)
-				                           (cond ((>= i n) t)
-				                                 ((equalp (row-major-aref a i) (row-major-aref b i))
-				                                  (cmp (+ i 1)))
-				                                 (t nil))))
-				                  (cmp 0)))))
+				              (do ((%eqp-i 0 (+ %eqp-i 1))
+				                   (%eqp-n (array-total-size a)))
+				                  ((>= %eqp-i %eqp-n) t)
+				                (unless (equalp (row-major-aref a %eqp-i) (row-major-aref b %eqp-i))
+				                  (return nil)))))
 				        (t (eql a b))))
 				""");
 		// ldiff / sublis / gentemp -- the three list-and-symbol functions iterate's own

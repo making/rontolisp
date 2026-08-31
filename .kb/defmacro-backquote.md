@@ -156,3 +156,27 @@ code called nonexistent accessors (an NPE three layers later). Two rules retire 
 
 Both are pinned end-to-end by `TriviaE2eTest` (the JVM/WASM legs die at expansion or at
 run time without them).
+
+**A `defmacro` a macro EXPANDS to is consumed wherever it lands**
+(`UserMacroExpander.stripDefmacroDefinitions`, 2026-08-31, the array-operations
+enablement). The direct `(defmacro ...)` expansion was already consumed into the
+macro-time evaluator and dropped from the program; the two shapes around it were not, and
+both are ordinary rather than exotic:
+
+- **inside the `progn` the macro wrapped around it** — a `progn` at top level processes
+  its members as top-level forms (CLHS 3.2.3.1). let-plus's `define-let+-expansion`
+  expands to `(progn (defmacro NAME ...) (defmethod let+-expansion-for-list ...))`, which
+  is what every `let+` in array-operations resolves through. The strip recurses through
+  `progn`/`eval-when` and drops the wrapper when nothing else is left, mirroring
+  `stripSymbolMacroDefinitions`.
+- **inside a top-level `let` that CLOSES OVER it** — anaphora's
+  `(with-unique-names (s-indicator current-s-indicator) (defmacro symbolic ...))`. The
+  whole `let` is replayed into the macro-time evaluator so the definition keeps its
+  closure and the binding inits (gensym calls) run once, at macro time; gated on the body
+  being macro definitions only, so an unrelated top-level side effect is never swallowed.
+
+Macros do not exist in a compiled program, so a definition left in place used to compile
+to a call of the undefined function `DEFMACRO` (fatal at run time) AND leave every call
+site of the macro it should have defined compiling to its own call-time error. Pinned by
+the ci-spec case `array-operations-enablement-language-group` (both shapes, all four
+backends).

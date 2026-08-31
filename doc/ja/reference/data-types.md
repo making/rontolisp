@@ -14,6 +14,7 @@
 | Pi | `pi` | 定数 π。double値 `3.141592653589793` として読み込まれます |
 | Fixnum 範囲 | `most-positive-fixnum`、`most-negative-fixnum` | `pi` と同様に自己評価する整数として読み込まれます。値はバックエンド依存です (WASM の fixnum はアンボックスの 31 ビット参照、インタープリターと JVM バックエンドは 64 ビット long) |
 | その他の限界値 | `char-code-limit`、`array-total-size-limit`、`array-dimension-limit` | Fixnum 範囲と同様に自己評価する整数として読み込まれます。`char-code-limit` はすべてのバックエンドで `1114112` (Unicode コードポイント全域)、配列の限界値はバックエンド依存です |
+| 浮動小数点の範囲 | `most-positive-double-float`、`least-positive-normalized-single-float`、`double-float-epsilon` | 標準の浮動小数点範囲定数。`pi` と同様に自己評価する double として読み込まれます。`short-float` は `single-float`、`long-float` は `double-float` と同一で、本処理系の浮動小数点はすべて double のため、single-float の境界値はその binary32 値をそのまま double にした値になります |
 | Cons | `(1 2 3)`, `(a . 1)` | consセルで構築された連結リスト。`(a . b)` は単一セルを表すドット対記法 |
 | Function | `#'car`, `(lambda (x) x)` | `#'`/`function`/`lambda` で得られる関数オブジェクト |
 | Array | `#(1 2 3)`, `#2A((1 2) (3 4))` | 任意の階数の固定サイズ配列(階数1はベクタ)。`#(...)` と `#nA(...)` は自己評価される配列リテラルです |

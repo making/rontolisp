@@ -236,9 +236,10 @@ public final class UserMacroExpander {
 				continue;
 			}
 			expanded = harvested;
-			if (isOperator(expanded, LispNames.DEFMACRO)) {
-				// A macro expanded into a macro definition: consume it as well.
-				macroEval.evalResolved(expanded);
+			// A macro expanded into a macro definition -- bare, or nested inside the
+			// progn/eval-when it built around it: consume it as well.
+			expanded = stripDefmacroDefinitions(expanded, macroEval);
+			if (expanded == null) {
 				continue;
 			}
 			if (isOperator(expanded, LispNames.EVAL_WHEN)) {
@@ -1091,6 +1092,76 @@ public final class UserMacroExpander {
 					LispNames.DEFINE_SYMBOL_MACRO + " must be a top-level form: " + form.print());
 		}
 		return stripped;
+	}
+
+	/**
+	 * Consumes every {@code defmacro} a macro EXPANSION produced -- bare, or nested in
+	 * the {@code progn}/{@code eval-when} the macro wrapped around it -- into the
+	 * macro-time evaluator, and removes it from the form; null when nothing is left to
+	 * emit.
+	 *
+	 * <p>
+	 * A {@code progn} at top level processes its members as top-level forms (CLHS
+	 * 3.2.3.1), so a macro that defines a macro alongside something else is an ordinary
+	 * shape, not an edge case: let-plus's {@code define-let+-expansion} expands to
+	 * {@code (progn (defmacro NAME ...) (defmethod let+-expansion-for-list ...))}, which
+	 * is what every {@code let+} form in array-operations resolves through. Macros do not
+	 * exist in a compiled program, so a definition left in place compiles to a call of
+	 * the undefined function {@code DEFMACRO} -- and the macro it should have defined is
+	 * missing from expansion time as well, so its call sites compile to their own
+	 * call-time errors.
+	 * @param form the expanded top-level form
+	 * @param macroEval the macro-time evaluator the definitions are replayed into
+	 * @return the form without its macro definitions, or null when it was only those
+	 */
+	@Nullable private static LispVal stripDefmacroDefinitions(LispVal form, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return form;
+		}
+		String name = memberName(head.name());
+		if (LispNames.DEFMACRO.equals(name)) {
+			macroEval.evalResolved(cons);
+			return null;
+		}
+		// A top-level (let/let* (...) (defmacro ...)) defines a macro CLOSED OVER the
+		// bindings -- anaphora's (with-unique-names (s-indicator current-s-indicator)
+		// (defmacro symbolic ...)), the shape every let-plus and array-operations form
+		// resolves through. Replaying the whole let gives the macro-time definition the
+		// same closure, and the binding inits (gensym calls here) run once, at macro
+		// time. Gated on the body being macro definitions only, so an unrelated
+		// top-level side effect is never swallowed.
+		if (LispNames.LET.equals(name) || LispNames.LET_STAR.equals(name)) {
+			List<LispVal> letParts = cons.toList();
+			if (letParts.size() < 3) {
+				return form;
+			}
+			for (int i = 2; i < letParts.size(); i++) {
+				if (!isOperator(letParts.get(i), LispNames.DEFMACRO)) {
+					return form;
+				}
+			}
+			macroEval.evalResolved(cons);
+			return null;
+		}
+		if (!LispNames.PROGN.equals(name) && !LispNames.EVAL_WHEN.equals(name)) {
+			return form;
+		}
+		// eval-when keeps its situation list in place; progn has no header member.
+		int firstMember = LispNames.EVAL_WHEN.equals(name) ? 2 : 1;
+		List<LispVal> parts = cons.toList();
+		List<LispVal> kept = new ArrayList<>(parts.subList(0, Math.min(firstMember, parts.size())));
+		boolean changed = false;
+		for (int i = firstMember; i < parts.size(); i++) {
+			LispVal member = stripDefmacroDefinitions(parts.get(i), macroEval);
+			changed = changed || member != parts.get(i);
+			if (member != null) {
+				kept.add(member);
+			}
+		}
+		if (!changed) {
+			return form;
+		}
+		return kept.size() > firstMember ? properList(kept) : null;
 	}
 
 	/**

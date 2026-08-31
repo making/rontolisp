@@ -156,6 +156,16 @@ class AsdfSystemsTest {
 	}
 
 	@Test
+	void longNameIsToleratedMetadata() {
+		// array-operations.asd carries :long-name beside :homepage and :bug-tracker.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :long-name "A library with a long name"
+				  :depends-on ("alexandria"))""");
+		assertThat(system.dependsOn()).containsExactly("alexandria");
+	}
+
+	@Test
 	void unsupportedOptionIsAHardError() {
 		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :around-compile \"pax:compile-pax\")"))
 			.isInstanceOf(IllegalStateException.class)

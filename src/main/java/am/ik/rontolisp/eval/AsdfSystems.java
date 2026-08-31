@@ -850,9 +850,9 @@ public final class AsdfSystems {
 	 * at parse time to fill a field a User-Agent string prints -- the {@code #.} rule is
 	 * that the consumer decides, and this consumer decides not to.
 	 */
-	private static final Set<String> IGNORED_OPTIONS = Set.of(":NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":VERSION",
-			":AUTHOR", ":MAINTAINER", ":LICENSE", ":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO",
-			":IN-ORDER-TO", ":PERFORM");
+	private static final Set<String> IGNORED_OPTIONS = Set.of(":NAME", ":LONG-NAME", ":DESCRIPTION",
+			":LONG-DESCRIPTION", ":VERSION", ":AUTHOR", ":MAINTAINER", ":LICENSE", ":LICENCE", ":HOMEPAGE",
+			":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO", ":IN-ORDER-TO", ":PERFORM");
 
 	/**
 	 * Parses a {@code defsystem} form with the doc-file component-class names the
@@ -929,8 +929,8 @@ public final class AsdfSystems {
 					LispNames.ASDF_DEFSYSTEM + " " + name + " " + lower(key.name()), items.get(i + 1));
 			switch (key.name()) {
 				// Metadata: accepted for .asd compatibility, not recorded anywhere.
-				case ":NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":AUTHOR", ":MAINTAINER", ":LICENSE", ":LICENCE",
-						":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO" ->
+				case ":NAME", ":LONG-NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":AUTHOR", ":MAINTAINER", ":LICENSE",
+						":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO" ->
 					{
 					}
 				// The one metadata option something reads back: asdf:component-version.
@@ -992,10 +992,11 @@ public final class AsdfSystems {
 				// Already consumed by declaredFeatures above.
 				case ":RONTOLISP-FEATURES" -> {
 				}
-				default -> throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
-						+ ": unsupported option " + key.name() + " (supported: :name :description :long-description"
-						+ " :version :author :maintainer :license :depends-on :defsystem-depends-on :serial"
-						+ " :components :pathname :class :rontolisp-features)");
+				default ->
+					throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name + ": unsupported option "
+							+ key.name() + " (supported: :name :long-name :description :long-description"
+							+ " :version :author :maintainer :license :depends-on :defsystem-depends-on :serial"
+							+ " :components :pathname :class :rontolisp-features)");
 			}
 		}
 		String prefix = pathname == null || pathname.isEmpty() ? "" : pathname + "/";

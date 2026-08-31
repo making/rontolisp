@@ -1,7 +1,9 @@
 package am.ik.rontolisp.reader;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 
@@ -481,6 +483,14 @@ public final class LispReader {
 			// WASM i31 fixnum range), so one value serves all of them.
 			return new LispInteger(0x110000);
 		}
+		Double floatConstant = CL_FLOAT_CONSTANTS.get(name);
+		if (floatConstant != null) {
+			// The float-range constants, read as self-evaluating doubles like pi. Every
+			// backend's float IS a double, so the single/short spellings answer the
+			// widened IEEE-754 binary32 bound rather than a value of their own type --
+			// the number is the standard one, only its printed digits are the double's.
+			return new LispDouble(floatConstant);
+		}
 		if (LispNames.INTERNAL_TIME_UNITS_PER_SECOND.equals(name)) {
 			// The internal-time-units-per-second constant, read like char-code-limit:
 			// every backend's get-internal-real-time counts milliseconds.
@@ -515,12 +525,61 @@ public final class LispReader {
 	}
 
 	/**
+	 * The standard float-range constants {@link #readSymbol} substitutes, by name.
+	 *
+	 * <p>
+	 * {@code short-float} is {@code single-float} and {@code long-float} is
+	 * {@code double-float} here, the same two-format reading SBCL takes, so the four
+	 * spellings collapse onto two sets of values. The single-float bounds are the exact
+	 * doubles of the binary32 numbers CL names, which is what a runtime with one float
+	 * type can answer: {@code most-positive-single-float} prints as
+	 * {@code 3.4028234663852886e38} where a single-float implementation prints
+	 * {@code 3.4028235e38} -- the same number, spelled with the digits a double
+	 * round-trips through.
+	 */
+	private static final Map<String, Double> CL_FLOAT_CONSTANTS = clFloatConstants();
+
+	private static Map<String, Double> clFloatConstants() {
+		Map<String, Double> table = new LinkedHashMap<>();
+		for (String single : List.of("SHORT", "SINGLE")) {
+			table.put("MOST-POSITIVE-" + single + "-FLOAT", (double) Float.MAX_VALUE);
+			table.put("MOST-NEGATIVE-" + single + "-FLOAT", (double) -Float.MAX_VALUE);
+			table.put("LEAST-POSITIVE-" + single + "-FLOAT", (double) Float.MIN_VALUE);
+			table.put("LEAST-NEGATIVE-" + single + "-FLOAT", (double) -Float.MIN_VALUE);
+			table.put("LEAST-POSITIVE-NORMALIZED-" + single + "-FLOAT", (double) Float.MIN_NORMAL);
+			table.put("LEAST-NEGATIVE-NORMALIZED-" + single + "-FLOAT", (double) -Float.MIN_NORMAL);
+			// The SMALLEST e with (/= (+ 1 e) 1) -- one ulp above b^(1-p)/2, which itself
+			// rounds away (p = 24 for binary32) -- and its (- 1 e) twin.
+			table.put(single + "-FLOAT-EPSILON", (double) Math.nextUp(Math.scalb(1.0f, -24)));
+			table.put(single + "-FLOAT-NEGATIVE-EPSILON", (double) Math.nextUp(Math.scalb(1.0f, -25)));
+		}
+		for (String doubl : List.of("DOUBLE", "LONG")) {
+			table.put("MOST-POSITIVE-" + doubl + "-FLOAT", Double.MAX_VALUE);
+			table.put("MOST-NEGATIVE-" + doubl + "-FLOAT", -Double.MAX_VALUE);
+			table.put("LEAST-POSITIVE-" + doubl + "-FLOAT", Double.MIN_VALUE);
+			table.put("LEAST-NEGATIVE-" + doubl + "-FLOAT", -Double.MIN_VALUE);
+			table.put("LEAST-POSITIVE-NORMALIZED-" + doubl + "-FLOAT", Double.MIN_NORMAL);
+			table.put("LEAST-NEGATIVE-NORMALIZED-" + doubl + "-FLOAT", -Double.MIN_NORMAL);
+			// The same rule for binary64 (p = 53).
+			table.put(doubl + "-FLOAT-EPSILON", Math.nextUp(Math.scalb(1.0, -53)));
+			table.put(doubl + "-FLOAT-NEGATIVE-EPSILON", Math.nextUp(Math.scalb(1.0, -54)));
+		}
+		return Map.copyOf(table);
+	}
+
+	/**
 	 * The standard constants {@link #readSymbol} substitutes at READ time, before any
 	 * package resolution runs.
 	 */
-	private static final Set<String> CL_READ_TIME_CONSTANTS = Set.of("NIL", "T", "PI", LispNames.MOST_POSITIVE_FIXNUM,
-			LispNames.MOST_NEGATIVE_FIXNUM, LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT,
-			LispNames.CHAR_CODE_LIMIT, LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.LAMBDA_LIST_KEYWORDS);
+	private static final Set<String> CL_READ_TIME_CONSTANTS = clReadTimeConstants();
+
+	private static Set<String> clReadTimeConstants() {
+		Set<String> names = new java.util.LinkedHashSet<>(CL_FLOAT_CONSTANTS.keySet());
+		names.addAll(Set.of("NIL", "T", "PI", LispNames.MOST_POSITIVE_FIXNUM, LispNames.MOST_NEGATIVE_FIXNUM,
+				LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT, LispNames.CHAR_CODE_LIMIT,
+				LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.LAMBDA_LIST_KEYWORDS));
+		return Set.copyOf(names);
+	}
 
 	/**
 	 * The member name of a {@code cl:}-qualified standard constant, or the name unchanged

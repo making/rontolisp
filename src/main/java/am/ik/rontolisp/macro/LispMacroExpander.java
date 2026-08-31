@@ -3923,12 +3923,13 @@ public final class LispMacroExpander {
 	public static LispVal expandPush(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispVal item = parts.get(1);
-		LispVal place = parts.get(2);
+		PlaceTemps temps = new PlaceTemps(cons);
+		LispVal place = temps.once(parts.get(2));
 		// (cons __push_item place)
 		LispVal consExpr = listToCons(List.of(new LispSymbol(LispNames.CONS), new LispSymbol(PUSH_VAR), place));
 		// (setf place (cons __push_item place))
 		LispVal setfExpr = listToCons(List.of(new LispSymbol(LispNames.SETF), place, consExpr));
-		return makeLet(PUSH_VAR, item, setfExpr);
+		return makeLet(PUSH_VAR, item, temps.wrap(setfExpr));
 	}
 
 	private static final String PUSH_VAR = "__push_item";
@@ -3957,11 +3958,12 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException("pushnew expects an item and a place: " + cons.print());
 		}
 		LispVal item = parts.get(1);
-		LispVal place = parts.get(2);
-		if (place instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol quoteOp
+		if (parts.get(2) instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol quoteOp
 				&& LispNames.QUOTE.equals(quoteOp.name())) {
-			return makeProgn(List.of(item, place));
+			return makeProgn(List.of(item, parts.get(2)));
 		}
+		PlaceTemps temps = new PlaceTemps(cons);
+		LispVal place = temps.once(parts.get(2));
 		List<LispVal> memberParts = new java.util.ArrayList<>();
 		memberParts.add(new LispSymbol(LispNames.MEMBER));
 		memberParts.add(new LispSymbol(PUSH_VAR));
@@ -3969,7 +3971,7 @@ public final class LispMacroExpander {
 		memberParts.addAll(parts.subList(3, parts.size()));
 		LispVal consExpr = listToCons(List.of(new LispSymbol(LispNames.CONS), new LispSymbol(PUSH_VAR), place));
 		LispVal setfExpr = listToCons(List.of(new LispSymbol(LispNames.SETF), place, consExpr));
-		return makeLet(PUSH_VAR, item, makeIf(listToCons(memberParts), place, setfExpr));
+		return makeLet(PUSH_VAR, item, temps.wrap(makeIf(listToCons(memberParts), place, setfExpr)));
 	}
 
 	/**
@@ -3984,7 +3986,8 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandPop(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispVal place = parts.get(1);
+		PlaceTemps temps = new PlaceTemps(cons);
+		LispVal place = temps.once(parts.get(1));
 		// (car place)
 		LispVal carExpr = listToCons(List.of(new LispSymbol(LispNames.CAR), place));
 		// (cdr place)
@@ -3993,7 +3996,7 @@ public final class LispMacroExpander {
 		LispVal setfExpr = listToCons(List.of(new LispSymbol(LispNames.SETF), place, cdrExpr));
 		// (prog1 (car place) (setf place (cdr place)))
 		LispCons prog1Expr = (LispCons) listToCons(List.of(new LispSymbol(LispNames.PROG1), carExpr, setfExpr));
-		return expandProg1(prog1Expr);
+		return temps.wrap(expandProg1(prog1Expr));
 	}
 
 	/**
@@ -4369,12 +4372,104 @@ public final class LispMacroExpander {
 		return out;
 	}
 
+	private static final String PLACE_SUBFORM_VAR = "__place_arg";
+
+	/**
+	 * The place operators whose arguments {@link PlaceTemps} never hoists: their
+	 * non-atomic argument is a type specifier, a byte specifier or an argument list that
+	 * the {@code setf} expanders below read STRUCTURALLY, so replacing it with a variable
+	 * reference would hide what they match on.
+	 */
+	private static final java.util.Set<String> PLACE_OPS_WITHOUT_HOISTABLE_ARGS = java.util.Set.of(LispNames.THE,
+			LispNames.VALUES, LispNames.APPLY, LispNames.LDB, LispNames.MASK_FIELD);
+
+	/**
+	 * The once-only rewriting the read-modify-write macros ({@code incf}/{@code decf},
+	 * {@code push}/{@code pushnew}/{@code pop}, {@code rotatef}/{@code shiftf}) share.
+	 *
+	 * <p>
+	 * Each of them mentions its place more than once -- the read and the {@code setf}
+	 * write at least -- and CL requires the place's SUBFORMS to be evaluated exactly
+	 * once. Writing them out twice is invisible while every subform is a variable or a
+	 * literal, and a silently wrong answer as soon as one is a call: alexandria's
+	 * {@code (rotatef (car tail) (car (nthcdr (random n) tail)))} drew a fresh index for
+	 * the read and the write, so {@code shuffle} produced a list with repeats rather than
+	 * a permutation. Hoisting the call subforms into a {@code let*} in front of the
+	 * expansion is CL's own {@code get-setf-expansion} shape, narrowed to the arguments
+	 * that can actually differ between two evaluations.
+	 *
+	 * <p>
+	 * Lite in one stated way: a subform that is a SYMBOL is still written out twice.
+	 * Re-reading a variable answers the same value unless one of the macro's own other
+	 * subforms assigns it in between, which no real place does, and leaving them alone
+	 * keeps a place a compile backend can still recognize structurally.
+	 */
+	private static final class PlaceTemps {
+
+		private final String base;
+
+		private final List<LispVal> bindings = new ArrayList<>();
+
+		private int next;
+
+		/**
+		 * @param form the whole macro form, scanned so the temps cannot capture a name it
+		 * already mentions (the {@link #freshObjVar} rule)
+		 */
+		PlaceTemps(LispCons form) {
+			this.base = freshObjVar(PLACE_SUBFORM_VAR, form);
+		}
+
+		/** The place rewritten to read its hoisted subforms from temps. */
+		LispVal once(LispVal place) {
+			if (!(place instanceof LispCons cons) || !cons.isProperList()) {
+				return place;
+			}
+			List<LispVal> parts = cons.toList();
+			if (parts.size() < 2 || !(parts.get(0) instanceof LispSymbol op)
+					|| PLACE_OPS_WITHOUT_HOISTABLE_ARGS.contains(op.name())) {
+				return place;
+			}
+			List<LispVal> rewritten = new ArrayList<>(parts.size());
+			rewritten.add(parts.get(0));
+			boolean hoisted = false;
+			for (LispVal arg : parts.subList(1, parts.size())) {
+				if (!hoistable(arg)) {
+					rewritten.add(arg);
+					continue;
+				}
+				LispSymbol temp = new LispSymbol(this.base + this.next++);
+				this.bindings.add(listToCons(List.of(temp, arg)));
+				rewritten.add(temp);
+				hoisted = true;
+			}
+			return hoisted ? listToCons(rewritten) : place;
+		}
+
+		/** Wraps an expansion in the {@code let*} holding whatever was hoisted. */
+		LispVal wrap(LispVal body) {
+			return this.bindings.isEmpty() ? body : listToCons(
+					List.of(new LispSymbol(LispNames.LET_STAR), listToCons(new ArrayList<>(this.bindings)), body));
+		}
+
+		/** Whether a place subform can answer differently on a second evaluation. */
+		private static boolean hoistable(LispVal arg) {
+			if (!(arg instanceof LispCons cons)) {
+				return false;
+			}
+			return !(cons.car() instanceof LispSymbol head
+					&& (LispNames.QUOTE.equals(head.name()) || LispNames.FUNCTION.equals(head.name())));
+		}
+
+	}
+
 	private static LispVal expandIncfDecf(LispCons cons, String op) {
 		List<LispVal> parts = cons.toList();
-		LispVal place = parts.get(1);
+		PlaceTemps temps = new PlaceTemps(cons);
+		LispVal place = temps.once(parts.get(1));
 		LispVal delta = (parts.size() > 2) ? parts.get(2) : new LispInteger(1);
 		LispVal newValue = listToCons(List.of(new LispSymbol(op), place, delta));
-		return listToCons(List.of(new LispSymbol(LispNames.SETF), place, newValue));
+		return temps.wrap(listToCons(List.of(new LispSymbol(LispNames.SETF), place, newValue)));
 	}
 
 	/**
@@ -15396,7 +15491,9 @@ public final class LispMacroExpander {
 	 * Lite: the substitution is textual over the body tree (quoted data is skipped); an
 	 * inner binding shadowing a slot variable is still substituted. The entry-time
 	 * fallback binding each variable also gets is boundness-guarded -- see
-	 * {@link #boundOrNil}.
+	 * {@link #boundOrNil}. The instance temp's NAME is chosen by
+	 * {@link #freshObjVar(String, LispCons)} so a nested {@code with-slots} cannot
+	 * capture the enclosing one's.
 	 * @param cons the with-slots expression
 	 * @return the expanded expression
 	 */
@@ -15406,7 +15503,8 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					LispNames.WITH_SLOTS + " expects (with-slots (slots...) instance body...): " + cons.print());
 		}
-		LispSymbol obj = new LispSymbol(WITH_SLOTS_OBJ_VAR);
+		String objVar = freshObjVar(WITH_SLOTS_OBJ_VAR, cons);
+		LispSymbol obj = new LispSymbol(objVar);
 		java.util.Map<String, LispVal> substitutions = new java.util.LinkedHashMap<>();
 		List<LispVal> letBindings = new java.util.ArrayList<>();
 		if (parts.get(1) instanceof LispCons slotList) {
@@ -15448,7 +15546,48 @@ public final class LispMacroExpander {
 		// local copy; textual writes went through the substitution).
 		LispVal inner = letBindings.isEmpty() ? prognOrNil(body)
 				: listToCons(concatForms(List.of(new LispSymbol(LispNames.LET), listToCons(letBindings)), body));
-		return makeLet(WITH_SLOTS_OBJ_VAR, parts.get(2), inner);
+		return makeLet(objVar, parts.get(2), inner);
+	}
+
+	/**
+	 * The name of the instance temp {@link #expandWithSlots} /
+	 * {@link #expandWithAccessors} binds: {@code base} when the form does not already
+	 * mention it, else {@code base} with the first free numeric suffix.
+	 *
+	 * <p>
+	 * This is what keeps NESTED uses apart. The substitution is textual, so an enclosing
+	 * {@code with-slots} plants its own temp name into the inner form's body before the
+	 * inner one is ever expanded -- clunit2's
+	 * {@code (with-slots (passed ...) *clunit-report* (with-slots (passed-p ...) *clunit-test-report* (incf passed)))}
+	 * arrives at the inner expansion as
+	 * {@code (incf (slot-value __with_slots_obj 'passed))}. A fixed name would rebind
+	 * that temp to the INNER instance, so the outer's slot read would silently resolve
+	 * against the wrong object. Scanning the form for the name and stepping past it makes
+	 * the choice a pure function of the form (no counter, so the same program still
+	 * expands to the same bytes on every run, {@code .kb/emitted-output-determinism.md})
+	 * and covers an inner {@code with-slots} that only a later user-macro expansion
+	 * produces, since the planted references travel with it.
+	 * @param base the un-suffixed temp name
+	 * @param form the whole {@code with-slots} / {@code with-accessors} form
+	 * @return a temp name the form does not already mention
+	 */
+	private static String freshObjVar(String base, LispCons form) {
+		String name = base;
+		for (int i = 2; mentionsSymbol(form, name); i++) {
+			name = base + i;
+		}
+		return name;
+	}
+
+	/** Whether {@code form} mentions the named symbol anywhere, quoted data included. */
+	private static boolean mentionsSymbol(LispVal form, String name) {
+		if (form instanceof LispSymbol sym) {
+			return name.equals(sym.name());
+		}
+		if (form instanceof LispCons cons) {
+			return mentionsSymbol(cons.car(), name) || mentionsSymbol(cons.cdr(), name);
+		}
+		return false;
 	}
 
 	/**
@@ -15494,7 +15633,8 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(LispNames.WITH_ACCESSORS
 					+ " expects (with-accessors ((var accessor)...) instance body...): " + cons.print());
 		}
-		LispSymbol obj = new LispSymbol(WITH_ACCESSORS_OBJ_VAR);
+		String objVar = freshObjVar(WITH_ACCESSORS_OBJ_VAR, cons);
+		LispSymbol obj = new LispSymbol(objVar);
 		java.util.Map<String, LispVal> substitutions = new java.util.LinkedHashMap<>();
 		List<LispVal> letBindings = new java.util.ArrayList<>();
 		if (parts.get(1) instanceof LispCons entryList) {
@@ -15522,7 +15662,7 @@ public final class LispMacroExpander {
 		// still resolves the variables, as entry-time reads.
 		LispVal inner = letBindings.isEmpty() ? prognOrNil(body)
 				: listToCons(concatForms(List.of(new LispSymbol(LispNames.LET), listToCons(letBindings)), body));
-		return makeLet(WITH_ACCESSORS_OBJ_VAR, parts.get(2), inner);
+		return makeLet(objVar, parts.get(2), inner);
 	}
 
 	/** Concatenates a form-list head with body forms into one list. */
@@ -30107,6 +30247,8 @@ public final class LispMacroExpander {
 			return LispNil.INSTANCE;
 		}
 		int id = ROTATEF_COUNTER.getAndIncrement();
+		PlaceTemps placeTemps = new PlaceTemps(cons);
+		places = places.stream().map(placeTemps::once).toList();
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> temps = new java.util.ArrayList<>();
 		for (int i = 0; i < places.size(); i++) {
@@ -30125,7 +30267,7 @@ public final class LispMacroExpander {
 		letParts.add(listToCons(bindings));
 		letParts.add(listToCons(setfParts));
 		letParts.add(LispNil.INSTANCE);
-		return listToCons(letParts);
+		return placeTemps.wrap(listToCons(letParts));
 	}
 
 	/**
@@ -30141,7 +30283,8 @@ public final class LispMacroExpander {
 		if (parts.size() < 3) {
 			throw new IllegalArgumentException(LispNames.SHIFTF + " expects at least a place and a value");
 		}
-		List<LispVal> places = parts.subList(1, parts.size() - 1);
+		PlaceTemps placeTemps = new PlaceTemps(cons);
+		List<LispVal> places = parts.subList(1, parts.size() - 1).stream().map(placeTemps::once).toList();
 		LispVal newValue = parts.get(parts.size() - 1);
 		int id = ROTATEF_COUNTER.getAndIncrement();
 		List<LispVal> bindings = new java.util.ArrayList<>();
@@ -30164,7 +30307,7 @@ public final class LispMacroExpander {
 		letParts.add(listToCons(bindings));
 		letParts.add(listToCons(setfParts));
 		letParts.add(temps.get(0));
-		return listToCons(letParts);
+		return placeTemps.wrap(listToCons(letParts));
 	}
 
 	/**

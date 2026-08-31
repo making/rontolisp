@@ -13123,6 +13123,66 @@ standalone:
       8
     refusedOn: [wasm, wasm_component]
     refusal: "Cannot compile: FFI:SYMBOL"
+  - name: array-operations-enablement-language-group
+    source: |
+      (defclass aoe-report () ((suite-name :initform nil) (passed :initform 0)))
+      (defclass aoe-test () ((test-name :initform nil) (passed-p :initform t)
+                             (skipped-p :initform nil) (suite-list :initform '(a b))))
+      (let ((report (make-instance 'aoe-report)) (test (make-instance 'aoe-test)))
+        (with-slots (passed) report
+          (with-slots (passed-p suite-list) test
+            (incf passed)
+            (print (list passed passed-p suite-list)))))
+      (defclass aoe-outer () ((n :initform 0 :accessor aoe-n)))
+      (defclass aoe-inner () ((m :initform 7 :accessor aoe-m)))
+      (let ((outer (make-instance 'aoe-outer)) (inner (make-instance 'aoe-inner)))
+        (with-accessors ((n aoe-n)) outer
+          (with-accessors ((m aoe-m)) inner
+            (incf n m)
+            (print (list n m)))))
+      (defvar *aoe-evals* 0)
+      (defun aoe-idx () (setq *aoe-evals* (+ *aoe-evals* 1)) 1)
+      (defun aoe-run (thunk)
+        (setq *aoe-evals* 0)
+        (let ((value (funcall thunk)))
+          (print (list value *aoe-evals*))))
+      (aoe-run (lambda () (let ((l (list 0 1 2 3 4))) (rotatef (car l) (car (nthcdr (aoe-idx) l))) l)))
+      (aoe-run (lambda () (let ((l (list 0 1 2 3 4))) (incf (car (nthcdr (aoe-idx) l))) l)))
+      (aoe-run (lambda () (let ((l (list 0 1 2 3 4))) (push 9 (car (nthcdr (aoe-idx) l))) l)))
+      (aoe-run (lambda () (let ((l (list 0 1 2 3 4))) (list (pop (cdr (nthcdr (aoe-idx) l))) l))))
+      (aoe-run (lambda () (let ((l (list 0 1 2 3 4))) (list (shiftf (car l) (car (nthcdr (aoe-idx) l)) 7) l))))
+      (defmacro aoe-define-pair (name)
+        `(progn (defmacro ,name (x) `(list :pair ,x)) nil))
+      (aoe-define-pair aoe-pair)
+      (print (aoe-pair 3))
+      (defmacro aoe-with-const (var value &body body)
+        `(let ((,var ,value)) ,@body))
+      (aoe-with-const aoe-k 42 (defmacro aoe-k-form () `(list :k ,aoe-k)))
+      (print (aoe-k-form))
+      (print (list (equalp (make-array '(2 3 4 5 6) :initial-element 1)
+                           (make-array '(2 3 4 5 6) :initial-element 1))
+                   (equalp (make-array 800 :initial-element 1)
+                           (make-array 800 :initial-element 2))))
+      (print (list (> least-positive-double-float 0)
+                   (< least-positive-double-float least-positive-normalized-double-float)
+                   (= most-negative-double-float (- most-positive-double-float))
+                   (= (+ 1.0d0 (/ 1.0d0 9007199254740992)) 1.0d0)
+                   (/= (+ 1.0d0 double-float-epsilon) 1.0d0)
+                   (= most-positive-long-float most-positive-double-float)
+                   (= most-positive-short-float most-positive-single-float)
+                   (= cl:least-positive-single-float least-positive-single-float)))
+    stdout: |
+      (1 T (A B))
+      (7 7)
+      ((1 0 2 3 4) 1)
+      ((0 2 2 3 4) 1)
+      ((0 (9 . 1) 2 3 4) 1)
+      ((2 (0 1 3 4)) 1)
+      ((0 (1 7 2 3 4)) 1)
+      (:PAIR 3)
+      (:K 42)
+      (T NIL)
+      (T T T T T T T T)
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

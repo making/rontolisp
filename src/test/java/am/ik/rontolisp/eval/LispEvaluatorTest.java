@@ -15322,6 +15322,86 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aNestedWithSlotsDoesNotCaptureTheEnclosingInstance() {
+		// clunit2's handle-assertion: (incf passed) sits inside a SECOND with-slots over
+		// a different object. A shared instance-temp name rebound the outer read to the
+		// inner object, so `passed' answered the inner class's slot at the same index.
+		assertThat(evalMulti("""
+				(defclass nws-report () ((suite-name :initform nil) (passed :initform 0)))
+				(defclass nws-test () ((test-name :initform nil) (passed-p :initform t)
+				                       (skipped-p :initform nil) (suite-list :initform '(a b))))
+				(let ((report (make-instance 'nws-report)) (test (make-instance 'nws-test)))
+				  (with-slots (passed) report
+				    (with-slots (passed-p suite-list) test
+				      (incf passed)
+				      (list passed passed-p suite-list))))
+				""").print()).isEqualTo("(1 T (A B))");
+	}
+
+	@Test
+	void aNestedWithAccessorsDoesNotCaptureTheEnclosingInstance() {
+		assertThat(evalMulti("""
+				(defclass nwa-outer () ((n :initform 0 :accessor nwa-n)))
+				(defclass nwa-inner () ((m :initform 7 :accessor nwa-m)))
+				(let ((outer (make-instance 'nwa-outer)) (inner (make-instance 'nwa-inner)))
+				  (with-accessors ((n nwa-n)) outer
+				    (with-accessors ((m nwa-m)) inner
+				      (incf n m)
+				      (list n m))))
+				""").print()).isEqualTo("(7 7)");
+	}
+
+	@Test
+	void aPlaceSubformEvaluatesOncePerReadModifyWriteMacro() {
+		// alexandria's shuffle is (rotatef (car tail) (car (nthcdr (random n) tail))):
+		// writing the place out twice drew a fresh index for the read and the write, so
+		// the result had repeats instead of being a permutation.
+		assertThat(evalMulti("""
+				(defvar *pse-evals* 0)
+				(defun pse-idx () (setq *pse-evals* (+ *pse-evals* 1)) 1)
+				(defun pse-run (thunk)
+				  (setq *pse-evals* 0)
+				  (let ((value (funcall thunk)))
+				    (list value *pse-evals*)))
+				(list (pse-run (lambda () (let ((l (list 0 1 2 3 4)))
+				                            (rotatef (car l) (car (nthcdr (pse-idx) l))) l)))
+				      (pse-run (lambda () (let ((l (list 0 1 2 3 4)))
+				                                        (incf (car (nthcdr (pse-idx) l))) l)))
+				      (pse-run (lambda () (let ((l (list 0 1 2 3 4)))
+				                            (push 9 (car (nthcdr (pse-idx) l))) l)))
+				      (pse-run (lambda () (let ((l (list 0 1 2 3 4)))
+				                            (list (pop (cdr (nthcdr (pse-idx) l))) l))))
+				      (pse-run (lambda () (let ((l (list 0 1 2 3 4)))
+				                            (list (shiftf (car l) (car (nthcdr (pse-idx) l)) 7) l)))))
+				""").print())
+			.isEqualTo("(((1 0 2 3 4) 1) ((0 2 2 3 4) 1) ((0 (9 . 1) 2 3 4) 1) ((2 (0 1 3 4)) 1) ((0 (1 7 2 3 4)) 1))");
+	}
+
+	@Test
+	void equalpWalksALargeArrayWithoutRecursingPerElement() {
+		assertThat(evalMulti("""
+				(list (equalp (make-array '(2 3 4 5 6) :initial-element 1)
+				              (make-array '(2 3 4 5 6) :initial-element 1))
+				      (equalp (make-array 800 :initial-element 1)
+				              (make-array 800 :initial-element 2)))
+				""").print()).isEqualTo("(T NIL)");
+	}
+
+	@Test
+	void theStandardFloatRangeConstantsReadAsTheirValues() {
+		assertThat(evalMulti("""
+				(list (> least-positive-double-float 0)
+				      (< least-positive-double-float least-positive-normalized-double-float)
+				      (= most-negative-double-float (- most-positive-double-float))
+				      (= (+ 1.0d0 (/ 1.0d0 9007199254740992)) 1.0d0)
+				      (= most-positive-long-float most-positive-double-float)
+				      (= most-positive-short-float most-positive-single-float)
+				      (/= (+ 1.0d0 double-float-epsilon) 1.0d0)
+				      (= cl:least-positive-single-float least-positive-single-float))
+				""").print()).isEqualTo("(T T T T T T T T)");
+	}
+
+	@Test
 	void withSlotsStillSignalsWhenTheBodyReadsAnUnboundSlot() {
 		// The entry-time fallback is boundness-guarded; the body's own reads are not --
 		// they are the slot itself, and an unbound one signals like any slot-value.

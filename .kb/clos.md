@@ -989,6 +989,24 @@ an unbound slot rather than writing `null`.
   `JvmLispCompilerTest#compileAndRunWithSlotsWriteOnlyUnboundSlot`,
   `WasmLispCompilerIntegrationTest#multiParameterDispatchVariadicGenericsAndDefaultInitargs`
   and the ci-spec case `with-slots-write-only-unbound-slot-and-missing-slot`.
+- **The instance temp a `with-slots`/`with-accessors` binds is named PER FORM, so a
+  NESTED one cannot capture the enclosing one's** (`LispMacroExpander.freshObjVar`). Both
+  expansions substitute their variables with `(slot-value TEMP 'slot)` /
+  `(accessor TEMP)` over a temp the expansion `let`-binds, and the name used to be the
+  fixed `__with_slots_obj`. An inner `with-slots` then rebound it, so every outer read
+  inside the inner body resolved against the INNER instance -- silently, at whatever slot
+  the outer's name sits at in the inner class's layout. clunit2's `handle-assertion` is
+  the shape: `(with-slots (passed ...) *clunit-report* (with-slots (passed-p ...)
+  *clunit-test-report* (incf passed) ...))` incremented the test report's `suite-list`
+  and died on "Expected integer". The name is chosen by scanning the whole form for it
+  and stepping past (`__with_slots_obj`, then `__with_slots_obj2`, ...), which is a pure
+  function of the form -- no counter, so the same program still emits the same bytes
+  (`.kb/emitted-output-determinism.md`). It also covers an inner `with-slots` that only a
+  later user-macro expansion produces: the outer substitution PLANTS its temp name in the
+  body it wraps, so the inner expansion sees the name in use and steps past it. Pinned by
+  `LispEvaluatorTest#aNestedWithSlotsDoesNotCaptureTheEnclosingInstance` +
+  `#aNestedWithAccessorsDoesNotCaptureTheEnclosingInstance` and the ci-spec case
+  `array-operations-enablement-language-group`.
 - **A `slot-value` naming a slot NO registered class declares is a RUN-time error**
   (todo-236, `LispMacroExpander.missingSlotStub`): the subforms evaluate for effect, then
   `(error "The slot X is missing")` -- read side and `setf` place alike. It used to throw
