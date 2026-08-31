@@ -9379,9 +9379,17 @@ class WasmLispCompilerIntegrationTest {
 				        (simple-string-p (coerce *tps-cv* 'simple-string))
 				        (simple-string-p (coerce *tps-cv* 'string))
 				        (let ((ty 'simple-string))
-				          (simple-string-p (coerce *tps-cv* ty))))))
+				          (simple-string-p (coerce *tps-cv* ty))))
+				  (list (typep *tps-cv* '(string 4)) (typep *tps-cv* '(string 0))
+				        (typep *tps-cv* '(simple-string 4)) (typep *tps-cv* '(vector character 4))
+				        (typep *tps-cv* '(simple-array character (4)))
+				        (typep *tps-cv* '(array character (4)))
+				        (typep *tps-st* '(string 3)) (typep *tps-cs* '(simple-string 3)))
+				  (list (tps *tps-cv* '(string 4)) (tps *tps-cv* '(string 0))
+				        (tps *tps-cv* '(vector character 4)) (tps *tps-cv* '(array character (4)))
+				        (tps *tps-st* '(string 3)) (tps *tps-sv* '(string 4)))))
 				""")).isEqualTo(
-				"((T NIL NIL NIL NIL NIL) (T NIL NIL T T T) (T T NIL T NIL) (NIL NIL T T) ((VECTOR T 4) (VECTOR T 4) (VECTOR T 2) (SIMPLE-VECTOR 4)) (T T T T T) (T NIL T NIL NIL T) (T T NIL T NIL T))");
+				"((T NIL NIL NIL NIL NIL) (T NIL NIL T T T) (T T NIL T NIL) (NIL NIL T T) ((VECTOR T 4) (VECTOR T 4) (VECTOR T 2) (SIMPLE-VECTOR 4)) (T T T T T) (T NIL T NIL NIL T) (T T NIL T NIL T) (T NIL NIL T NIL T T T) (T NIL T T T NIL))");
 	}
 
 	@Test
@@ -15082,6 +15090,29 @@ class WasmLispCompilerIntegrationTest {
 				(vector-push-extend 3 *v*)
 				(print (list (length *v*) (adjustable-array-p *v*) (aref *v* 2)))
 				""")).isEqualTo("(3 T 3)");
+	}
+
+	@Test
+	void compileVectorPushExtendGrowthPolicyIsDoubling() throws Exception {
+		// The ONE growth policy (am.ik.rontolisp.ArrayGrowth): a supplied extension
+		// verbatim, otherwise doubling off a floor of 1 -- the same numbers the
+		// interpreter and the other compile path answer with.
+		assertThat(compileAndRun("""
+				(defun growth-run (cap n)
+				  (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend i v))
+				    (array-dimension v 0)))
+				(defun growth-run-string (cap n)
+				  (let ((s (make-array cap :element-type 'character :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend #\\a s))
+				    (array-dimension s 0)))
+				(defun growth-run-ext (cap n ext)
+				  (let ((v (make-array cap :fill-pointer 0 :adjustable t)))
+				    (dotimes (i n) (vector-push-extend i v ext))
+				    (array-dimension v 0)))
+				(print (list (growth-run 2 5) (growth-run-string 2 5) (growth-run 0 1)
+				             (growth-run 0 5) (growth-run-ext 2 3 100) (growth-run-ext 2 5 1)))
+				""")).isEqualTo("(8 8 1 8 102 5)");
 	}
 
 	@Test

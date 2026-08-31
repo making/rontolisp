@@ -26300,8 +26300,9 @@ public final class LispMacroExpander {
 	 * character array in CL but not one of the array representations {@code %arrayp}
 	 * knows: the string arm survives only while the specifier can still describe one (a
 	 * character or unspecified element type, a rank that is 1 or unstated), and it
-	 * measures its size with {@code length}, since the array-info functions do not take a
-	 * string on the compile paths. The array arm reads {@code array-element-type} and the
+	 * measures its size with {@code %string-dimension} -- the array DIMENSION, since that
+	 * is what a sized specifier means and {@code length} answers a character vector's
+	 * FILL POINTER instead. The array arm reads {@code array-element-type} and the
 	 * dimensions, all behind the {@code %arrayp} guard so neither is called on a value
 	 * that has none.
 	 * @param value the (temp-bound) value form
@@ -26328,8 +26329,8 @@ public final class LispMacroExpander {
 				Integer size = dims.dimensions().isEmpty() ? null : dims.dimensions().get(0);
 				stringArm = size == null ? callOf(LispNames.STRINGP, value)
 						: listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.STRINGP, value),
-								listToCons(List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.LENGTH, value),
-										new LispInteger(size)))));
+								listToCons(List.of(new LispSymbol(LispNames.EQ),
+										callOf(LispNames.STRING_DIMENSION_INTERNAL, value), new LispInteger(size)))));
 			}
 		}
 
@@ -26485,8 +26486,11 @@ public final class LispMacroExpander {
 				}
 				stringTests.add(callOf(LispNames.STRINGP, value));
 				if (parts.size() > 1 && !isWildcardTypeArgument(parts.get(1))) {
-					stringTests.add(listToCons(
-							List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.LENGTH, value), parts.get(1))));
+					// The DIMENSION, not `length`: a fill-pointered character vector's
+					// length is its fill pointer, and CL sizes the specifier by the
+					// array dimension (.kb/declarations-type-checks.md).
+					stringTests.add(listToCons(List.of(new LispSymbol(LispNames.EQ),
+							callOf(LispNames.STRING_DIMENSION_INTERNAL, value), parts.get(1))));
 				}
 				return stringTests.size() == 2 ? stringTests.get(1) : listToCons(stringTests);
 			}
@@ -31072,7 +31076,7 @@ public final class LispMacroExpander {
 			              (if (or (string= %tpc-n "SIMPLE-STRING") (string= %tpc-n "SIMPLE-BASE-STRING"))
 			                  (%simple-array-p %tpc-value)
 			                  t)
-			              (or (null %tpc-a) %tpc-xw (eq (length %tpc-value) %tpc-x)))
+			              (or (null %tpc-a) %tpc-xw (eq (%string-dimension %tpc-value) %tpc-x)))
 			         t
 			         nil))
 			    ((string= %tpc-n "UNSIGNED-BYTE")
@@ -31129,7 +31133,7 @@ public final class LispMacroExpander {
 			                                (let ((%tpc-d (car %tpc-dm)))
 			                                  (if (if (symbolp %tpc-d) (string= (symbol-name %tpc-d) "*") nil)
 			                                      t
-			                                      (eq (length %tpc-value) %tpc-d))))
+			                                      (eq (%string-dimension %tpc-value) %tpc-d))))
 			                               (t nil)))
 			                    (and (%arrayp %tpc-value)
 			                         (or %tpc-ew (equal (array-element-type %tpc-value) %tpc-ue))

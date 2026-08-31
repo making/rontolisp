@@ -39,6 +39,7 @@ import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
 import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.FloatText;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.FloatArrayAccessHook;
@@ -810,6 +811,17 @@ public final class Environment implements Scope {
 					};
 					return simple ? LispTrue.INSTANCE : LispNil.INSTANCE;
 				}));
+		// %string-dimension: the array DIMENSION of a string, which is what a sized
+		// string type specifier compares against -- the capacity, not the fill-pointer-
+		// bounded length `length` answers. A displaced string view reports its own span.
+		env.defineFunction(LispNames.STRING_DIMENSION_INTERNAL,
+				new LispFunction(LispNames.STRING_DIMENSION_INTERNAL, args -> {
+					requireArgCount(LispNames.STRING_DIMENSION_INTERNAL, args, 1);
+					if (args.get(0) instanceof LispString str) {
+						return new LispInteger(str.capacity());
+					}
+					throw new LispEvalException(LispNames.STRING_DIMENSION_INTERNAL + ": not a string");
+				}));
 		// arrayp: the standard spelling -- a string is an array in CL, so the public
 		// predicate is the internal one widened by stringp.
 		env.defineFunction(LispNames.ARRAYP, new LispFunction(LispNames.ARRAYP, args -> {
@@ -1259,8 +1271,8 @@ public final class Environment implements Scope {
 				if (str.fillPointer() >= str.capacity()) {
 					return LispNil.INSTANCE;
 				}
-				return new LispInteger(
-						str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH, args.get(0)).codePoint()));
+				return new LispInteger(str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH, args.get(0)).codePoint(),
+						ArrayGrowth.NO_EXTENSION));
 			}
 			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH, args.get(1));
 			int index = vectorPush(LispNames.VECTOR_PUSH, array, args.get(0));
@@ -1287,15 +1299,15 @@ public final class Environment implements Scope {
 			if (args.size() < 2 || args.size() > 3) {
 				throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + " expects 2 or 3 arguments");
 			}
+			int extension = args.size() == 3 ? (int) asLong(args.get(2)) : ArrayGrowth.NO_EXTENSION;
 			if (args.get(1) instanceof LispString str) {
 				if (str.fillPointer() < 0) {
 					throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + ": string has no fill pointer");
 				}
-				return new LispInteger(
-						str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH_EXTEND, args.get(0)).codePoint()));
+				return new LispInteger(str
+					.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH_EXTEND, args.get(0)).codePoint(), extension));
 			}
 			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH_EXTEND, args.get(1));
-			int extension = args.size() == 3 ? (int) asLong(args.get(2)) : 1;
 			try {
 				return new LispInteger(array.vectorPushExtend(args.get(0), extension));
 			}

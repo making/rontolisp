@@ -7,6 +7,7 @@ import org.jspecify.annotations.Nullable;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -282,7 +283,9 @@ final class JvmArrayCompiler {
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 		}
 		else {
-			JvmEmitHelper.compileLong(1, ctx);
+			// The missing optional argument, as the "not supplied" sentinel the helper
+			// turns into the shared default growth policy (am.ik.rontolisp.ArrayGrowth).
+			JvmEmitHelper.compileLong(ArrayGrowth.NO_EXTENSION, ctx);
 		}
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_PUSH_EXTEND,
 				JvmArrayRuntimeBuilder.VECTOR_PUSH_EXTEND_DESC);
