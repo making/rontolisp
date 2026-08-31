@@ -460,9 +460,18 @@
 ;;; --- the response ------------------------------------------------------------
 
 (defun rontolisp::%http-header-name (k)
-  (if (stringp k) (string-downcase k) (string-downcase (symbol-name k))))
+  ;; (string ...): string-downcase answers a MUTABLE character vector on the
+  ;; compile paths, and a header name crosses into the transport glue (the JVM
+  ;; RontoHttpClack.toResponse, the reactor envelope), which reads the RENDERED
+  ;; string representation -- so render exactly once here, at the boundary.
+  (string
+   (if (stringp k) (string-downcase k) (string-downcase (symbol-name k)))))
 
-(defun rontolisp::%http-header-value (v) (if (stringp v) v (princ-to-string v)))
+(defun rontolisp::%http-header-value (v)
+  ;; (string ...): a value the handler built with a string producer (format
+  ;; nil, concatenate) is a mutable character vector; render it once at the
+  ;; transport boundary, same as the name above.
+  (if (stringp v) (string v) (princ-to-string v)))
 
 (defun rontolisp::%http-drop-header-p (name)
   ;; The transport computes the framing headers from the body it is about to
@@ -568,7 +577,10 @@
          ((null part) nil)
          (t (error "http-handler: a list response body must hold strings"))))
       (setq rest (cdr rest)))
-    (get-output-stream-string out)))
+    ;; (string ...): the capture is a mutable character vector on the compile
+    ;; paths, and this joined body crosses into the transport glue, which reads
+    ;; the RENDERED string representation -- render once at the boundary.
+    (string (get-output-stream-string out))))
 
 (defun rontolisp::%http-body-string (body)
   ;; A Clack response body -> what the transport writes: a STRING, an

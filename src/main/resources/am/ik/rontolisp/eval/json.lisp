@@ -49,7 +49,12 @@
             (setq todo nil))
           (progn
             (setq out
-                  (cons (concatenate 'string (car todo) (car (cdr todo))) out))
+                  ;; %string-concat, not concatenate: this merge runs once per
+                  ;; fragment PAIR per pass, and the wrapped concatenate would
+                  ;; convert every intermediate into a mutable character vector
+                  ;; and render it right back on the next pass -- only the
+                  ;; whole document's final identity matters (%json-stringify)
+                  (cons (%string-concat (car todo) (car (cdr todo))) out))
             (setq todo (cdr (cdr todo))))))))
 
 (defun rontolisp::%json-concat (parts)
@@ -426,4 +431,7 @@
         (t (error "json-stringify: unsupported value"))))
 
 (defun rontolisp::%json-stringify (v)
-  (rontolisp::%json-concat (nreverse (rontolisp::%json-out v nil))))
+  ;; copy-seq: the merge above builds through the unwrapped %string-concat, and
+  ;; the one string the CALLER gets back should carry the same writable
+  ;; identity every other string producer answers
+  (copy-seq (rontolisp::%json-concat (nreverse (rontolisp::%json-out v nil)))))

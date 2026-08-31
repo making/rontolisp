@@ -41,6 +41,22 @@ it -- `remove` and `substitute` paid it TWICE, in both directions, at 91 us and
 **So the fix is at the conversion, not at any operator.** One arm serves the
 whole family.
 
+(2026-08-31, `.todo/596` round 2: `position` / `find` and their `-if` variants no
+longer coerce at all — `buildPositionScan` walks a LIST through the cons cursor it
+always had and scans a VECTOR/STRING by index against a length bound once, so the
+scan allocates nothing and an early hit stops paying for the tail. The conversion
+arm above still serves every OTHER `seqAsListForm` caller — `count`, `reduce`, the
+`:key` mapcar, `every`/`some`, `remove`/`substitute` — and the oddity table below
+still holds for them; `position` keeps the recorded non-sequence-answers-nil oddity
+through its `vectorp` guard, with one edge moved: `position` over a RANK >= 2 array
+now answers nil like the other non-sequences instead of signalling through
+`length`. The trade is SITE BYTES for scan cost: a wasm position site carries the
+dual scan at ~1,449 bytes where the coerce-based one was 591 -- the budget row in
+`WasmLispCompilerTest.aSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedConversions`
+records it -- and in exchange the scan allocates nothing: the
+position+subseq+string= tokenizer went 1,018 -> 29 ms on the JVM and 3,221 -> 52 on
+wasm p1 against the same baseline, and 1,501 -> 1,078 interpreted.)
+
 ## The seam
 
 `LispEvaluator.evalCons`'s `COERCE` case now calls `evalSequenceCoerce`, which is

@@ -38,6 +38,7 @@ import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
+import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FetchResponseShape;
@@ -1459,7 +1460,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	// index above shifts.
 	static final int FUNC_SUBSEQ_STR = FUNC_STR_TO_CV + 1;
 
-	static final int FX_FUNC_LAST = FUNC_SUBSEQ_STR;
+	// _to_mut_str ((ref null eq) v) -> (ref null eq): the mutable-result wrap the
+	// flipped string PRODUCERS (concatenate 'string, the case family, format nil, the
+	// string-stream capture, read-line) finish with -- a TYPE_STRING converts once
+	// through _str_to_cv into a fresh mutable character vector; anything else (a
+	// character vector already, format t's nil, an eof value) passes through. Called
+	// only when Ctx.mutableStringProducers says the program contains a flipped
+	// producer (the same MutableStringProducers scan the JVM backend wraps under).
+	// Reuses the ((ref null eq)) -> (ref null eq) signature (TYPE_CALLABLE_BASE + 0);
+	// appended after the last fixed helper so no index above shifts.
+	static final int FUNC_TO_MUT_STR = FUNC_SUBSEQ_STR + 1;
+
+	static final int FX_FUNC_LAST = FUNC_TO_MUT_STR;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -2542,6 +2554,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the same slot the JVM compiler scans in -- so the registry can resolve a user
 		// deftype alias of the string family the way the CONCATENATE lowering will.
 		boolean usesSeqString = ConcatenateForms.needsSeqString(program, closRegistry);
+		// Whether the flipped string producers wrap their results into mutable
+		// character vectors -- the same scan the JVM backend wraps (and joins its array
+		// gate) under, so the backends agree on which results carry identity.
+		boolean mutableStringProducers = MutableStringProducers.programUsesAny(program);
 		// Whether the packed (unsigned-byte 8|16|32) vector builder is reachable: a
 		// concatenate whose result type spells a packed element type lowers to a call to
 		// it, and so does the #'concatenate wrapper's own vector arm (its designator is a
@@ -3362,6 +3378,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.signalClauseMatch(signalClauseMatch)
 			.printCase(LispMacroExpander.usesPrintCase(program))
 			.usesSeqString(usesSeqString)
+			.mutableStringProducers(mutableStringProducers)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
 			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
 			.functions(functions)
@@ -5636,6 +5653,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _subseq_str (seq, start,
 															// end) -> value
 															// (FUNC_SUBSEQ_STR)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _to_mut_str (v) -> value
+															// (FUNC_TO_MUT_STR)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6435,6 +6454,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringRuntimeBuilder.buildStrToCvBody());
 				// mutable-result string/list subseq lane body (FUNC_SUBSEQ_STR)
 				code.addFunction(WasmStringRuntimeBuilder.buildSubseqStrBody());
+				// flipped-producer mutable-result wrap body (FUNC_TO_MUT_STR)
+				code.addFunction(WasmStringRuntimeBuilder.buildToMutStrBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
@@ -7855,6 +7876,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesSeqString = false;
 
 		/**
+		 * True when the program contains a flipped string PRODUCER
+		 * ({@code MutableStringProducers.programUsesAny}): only then do the
+		 * {@code concatenate 'string} / case-family / {@code format nil} /
+		 * string-stream-capture / {@code read-line} sites wrap their fresh result through
+		 * {@code _to_mut_str}, giving it a writable identity. The JVM backend wraps under
+		 * the SAME scan, which is what keeps the backends agreeing on which results carry
+		 * identity.
+		 */
+		boolean mutableStringProducers = false;
+
+		/**
 		 * The wasm global index of the handler-depth counter (a {@code (mut i32)} = 0
 		 * appended after the user-variable globals), or -1 outside EH mode. The
 		 * {@code handler-case} region increments/decrements it (the JVM
@@ -8250,6 +8282,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.usesEqualpHashTables = builder.usesEqualpHashTables;
 			this.usesStreamValues = builder.usesStreamValues;
 			this.usesSeqString = builder.usesSeqString;
+			this.mutableStringProducers = builder.mutableStringProducers;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
 			this.simd = builder.simd;
@@ -8367,6 +8400,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean usesStreamValues = false;
 
 			private boolean usesSeqString = false;
+
+			private boolean mutableStringProducers = false;
 
 			private int ehDepthGlobalIndex = -1;
 
@@ -8585,6 +8620,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder usesSeqString(boolean usesSeqString) {
 				this.usesSeqString = usesSeqString;
+				return this;
+			}
+
+			Builder mutableStringProducers(boolean mutableStringProducers) {
+				this.mutableStringProducers = mutableStringProducers;
 				return this;
 			}
 

@@ -21,6 +21,7 @@ import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
+import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.StreamDesignators;
 
 import am.ik.jvm.Opcode;
@@ -586,6 +587,13 @@ final class JvmExprCompiler {
 				case LispNames.PRINC_TO_STRING_RAW -> JvmPrincToStringCompiler.compile(cons, ctx, className);
 				case LispNames.PRIN1_TO_STRING_RAW -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
 				case LispNames.STRING_CONCAT -> JvmStringConcatCompiler.compile(cons, ctx, className);
+				// A fold-produced fresh-string constant: the literal, plus one
+				// mutable-copy wrap so each evaluation answers a fresh mutable string
+				// (PureBuiltinFolder's %str-fresh spelling).
+				case LispNames.STR_FRESH -> {
+					JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 				case LispNames.FIXED_DECIMAL -> JvmFixedDecimalCompiler.compile(cons, ctx, className);
 				case LispNames.GENSYM -> JvmGensymCompiler.compile(cons, ctx, className);
 				case LispNames.STRING -> JvmSymbolApiCompiler.compileString(cons, ctx, className);
@@ -618,8 +626,16 @@ final class JvmExprCompiler {
 				case LispNames.FIND_PACKAGE -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1), ctx.packageTable), ctx,
 						className);
-				case LispNames.CONCATENATE -> JvmExprCompiler
-					.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString, ctx.closRegistry), ctx, className);
+				case LispNames.CONCATENATE -> {
+					JvmExprCompiler.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString, ctx.closRegistry), ctx,
+							className);
+					// The string family's fresh result carries a writable identity
+					// (a no-op unless the producer flip is on -- see _toMutStr).
+					if (ConcatenateForms.literalResultFamily(cons.toList().get(1),
+							ctx.closRegistry) == ConcatenateForms.ResultFamily.STRING) {
+						JvmArrayCompiler.emitToMutStr(ctx, className);
+					}
+				}
 				case LispNames.READ_LINE -> {
 					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, false);
 					if (typed != null) {
@@ -627,6 +643,7 @@ final class JvmExprCompiler {
 					}
 					else {
 						JvmReadLineCompiler.compile(cons, ctx, className);
+						JvmArrayCompiler.emitToMutStr(ctx, className);
 					}
 				}
 				case LispNames.READ_CHAR -> {
@@ -721,8 +738,11 @@ final class JvmExprCompiler {
 					JvmStringStreamCompiler.compileMakeInputStream(cons, ctx, className);
 				case LispNames.MAKE_STRING_INPUT_STREAM ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringInputStream(cons), ctx, className);
-				case LispNames.STRING_STREAM_CONTENTS_INTERNAL ->
+				case LispNames.STRING_STREAM_CONTENTS_INTERNAL -> {
+					// The with-output-to-string / get-output-stream-string capture.
 					JvmStringStreamCompiler.compileContents(cons, ctx, className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 				case LispNames.WITH_OUTPUT_TO_STRING ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons), ctx, className);
 				case LispNames.PPRINT_LOGICAL_BLOCK ->
@@ -852,12 +872,21 @@ final class JvmExprCompiler {
 					// template
 					// arrives here with its (already evaluated) argument.
 					JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
-				case LispNames.STRING_UPCASE -> JvmStringUpcaseCompiler
-					.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx, className);
-				case LispNames.STRING_DOWNCASE -> JvmStringUpcaseCompiler
-					.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx, className);
-				case LispNames.STRING_CAPITALIZE -> JvmStringCapitalizeCompiler
-					.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx, className);
+				case LispNames.STRING_UPCASE -> {
+					JvmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
+							className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+				case LispNames.STRING_DOWNCASE -> {
+					JvmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx, className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+				case LispNames.STRING_CAPITALIZE -> {
+					JvmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
+							className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 				case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> JvmSubseqCompiler.compile(cons, ctx, className);
 				case LispNames.CHAR, LispNames.SCHAR -> JvmCharCompiler.compileChar(cons, ctx, className);
 				case LispNames.CHAR_CODE -> JvmCharCompiler.compileCharCode(cons, ctx, className);
@@ -1031,26 +1060,34 @@ final class JvmExprCompiler {
 				case LispNames.RETURN -> JvmReturnCompiler.compile(cons, ctx, className);
 				case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);
 				case LispNames.DECF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx, className);
-				case LispNames.FORMAT ->
+				case LispNames.FORMAT -> {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFormat(cons), ctx, className);
+					// A literal-nil destination is a string PRODUCER: its capture
+					// carries a writable identity (a computed destination stays
+					// un-flipped, see MutableStringProducers).
+					if (MutableStringProducers.isFormatToString(cons)) {
+						JvmArrayCompiler.emitToMutStr(ctx, className);
+					}
+				}
 				case LispNames.LENGTH -> JvmLengthCompiler.compile(cons, ctx, className);
 				case LispNames.REVERSE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons, ctx.usesArrays), ctx, className);
 				case LispNames.MEMBER ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx, className);
-				case LispNames.FIND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons), ctx, className);
+				case LispNames.FIND ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons, ctx.usesArrays), ctx, className);
 				case LispNames.FIND_IF ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIf(cons), ctx, className);
-				case LispNames.FIND_IF_NOT ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIfNot(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIf(cons, ctx.usesArrays), ctx, className);
+				case LispNames.FIND_IF_NOT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandFindIfNot(cons, ctx.usesArrays), ctx, className);
 				case LispNames.MEMBER_IF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMemberIf(cons), ctx, className);
 				case LispNames.POSITION ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons), ctx, className);
-				case LispNames.POSITION_IF ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandPositionIf(cons), ctx, className);
-				case LispNames.POSITION_IF_NOT ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandPositionIfNot(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons, ctx.usesArrays), ctx, className);
+				case LispNames.POSITION_IF -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandPositionIf(cons, ctx.usesArrays), ctx, className);
+				case LispNames.POSITION_IF_NOT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandPositionIfNot(cons, ctx.usesArrays), ctx, className);
 				case LispNames.COMPLEMENT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandComplement(cons), ctx, className);
 				case LispNames.COUNT ->

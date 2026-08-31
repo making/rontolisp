@@ -536,6 +536,24 @@ final class JvmArrayCompiler {
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.STRV, JvmArrayRuntimeBuilder.STRV_DESC);
 	}
 
+	/**
+	 * Emits an {@code invokestatic _toMutStr} call converting a fresh runtime string on
+	 * the operand stack into a MUTABLE character vector, so the producer's result has a
+	 * writable identity like the interpreter's (a non-string passes through unchanged). A
+	 * no-op unless the program contains a flipped producer
+	 * ({@code MutableStringProducers.programUsesAny}, the same scan the WASM backend
+	 * wraps under, and a subset of the array gate -- so the helper is always emitted
+	 * where this call is).
+	 * @param ctx the compilation context
+	 * @param className the generated class name
+	 */
+	static void emitToMutStr(JvmLispCompiler.Ctx ctx, String className) {
+		if (!ctx.mutableStringProducers) {
+			return;
+		}
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.TO_MUT_STR, JvmArrayRuntimeBuilder.TO_MUT_STR_DESC);
+	}
+
 	private static void invokeHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));

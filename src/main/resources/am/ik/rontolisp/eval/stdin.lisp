@@ -96,8 +96,10 @@
                       (setq n 0)
                       (progn
                         (setq acc
-                              (concatenate 'string acc
-                                           (rontolisp::%str-from-byte bn)))
+                         ;; byte-level append: acc holds a PARTIAL UTF-8
+                         ;; sequence, which the wrapped concatenate's
+                         ;; character conversion would trap on
+                         (%string-concat acc (rontolisp::%str-from-byte bn)))
                         (setq n (- n 1))))))
               (char acc 0))))))
 

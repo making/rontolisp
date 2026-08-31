@@ -9,6 +9,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds the JVM bytecode for the TCP/TLS socket runtime used by the
@@ -265,10 +266,23 @@ final class JvmSocketRuntimeBuilder {
 
 	private final ConstantPool.StringConstant newlineStr;
 
+	/**
+	 * {@code _strv}, minted only when the array runtime exists: a string reaching a
+	 * socket write here can be a MUTABLE CHARACTER VECTOR (a subseq/copy-seq or
+	 * flipped-producer result), and {@link #emitStripQuotes}'s {@code (String)} cast
+	 * needs the rendered form. Without the array runtime no character vector can exist
+	 * and the reference must not be minted -- the method it names is not emitted.
+	 */
+	private final ConstantPool.@Nullable MethodrefConstant strvRef;
+
 	private JvmSocketRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant stringClass,
 			ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
-			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat) {
+			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat,
+			boolean arrayRuntime) {
 		this.cp = cp;
+		this.strvRef = arrayRuntime ? cp.addMethodref(thisClass, cp
+			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
+				: null;
 		this.stringClass = stringClass;
 		this.longClass = longClass;
 		this.longValueOf = longValueOf;
@@ -422,9 +436,10 @@ final class JvmSocketRuntimeBuilder {
 
 	static SocketRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant stringClass,
 			ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
-			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat) {
+			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat,
+			boolean arrayRuntime) {
 		JvmSocketRuntimeBuilder builder = new JvmSocketRuntimeBuilder(cp, thisClass, stringClass, longClass,
-				longValueOf, longValue, stringLength, stringSubstring, stringConcat);
+				longValueOf, longValue, stringLength, stringSubstring, stringConcat, arrayRuntime);
 		List<SocketMethod> methods = new ArrayList<>();
 		methods.add(new SocketMethod(cp.addUtf8(TCP_CONNECT_METHOD), cp.addUtf8(TCP_CONNECT_DESC), 5, 3,
 				builder.buildTcpConnect()));
@@ -1417,6 +1432,13 @@ final class JvmSocketRuntimeBuilder {
 	/** Emits {@code slot<target> = ((String) slot<src>).substring(1, length() - 1)}. */
 	private void emitStripQuotes(List<Integer> code, int srcSlot, int targetSlot) {
 		emitAload(code, srcSlot);
+		// A mutable character vector renders to its quote-framed string first; any
+		// other value passes through (null without the array runtime -- no character
+		// vector can exist then).
+		if (this.strvRef != null) {
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, this.strvRef.index());
+		}
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringClass.index());
 		emitAstore(code, targetSlot);

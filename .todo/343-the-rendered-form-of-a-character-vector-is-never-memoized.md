@@ -66,3 +66,51 @@ invariant"). The per-character rows of any earlier measurement in this file are
 therefore obsolete; only the once-per-call renders of the whole-string callers
 listed above remain as this item's scope, and any memoization now has fewer
 invalidation points to reach (the index sites never read a cache).
+
+## Re-measured 2026-08-31, after `.todo/596` (charvec DENSITY went up)
+
+UPDATE, same day (596 round 2): the `position`/`find` half of the section below is
+FIXED, not pending -- `buildPositionScan` no longer coerces to a list at all (a list
+walks its cons cursor, a string/vector scans by index; `.kb/seq-coerce-runtime.md`).
+The tokenizer row went baseline 1,018 -> 29 ms on the JVM and 3,221 -> 52 on wasm p1
+-- ~35x UNDER the old floor -- and the interpreter's 1,501 -> 1,078. What this item
+still owns: (a) the whole-string RENDERS (the case/trim families' input, string=,
+intern, hash, print -- one render per call), (b) the wrap-out costs of the producer
+flip (upcase +70/110%, the wots capture and read-line loop at ~0.3-1.5 us per call
+absolute, the concatenate accumulator idiom), and (c) the OTHER `seqAsListForm`
+callers that still coerce per call -- `count`, `reduce`, the `:key` mapcar,
+`every`/`some`, `remove`/`substitute` -- the same defect `buildPositionScan` just
+shed, which can take the same shape.
+
+596 flipped the remaining big producers (concatenate 'string, the case family,
+format nil, the string-stream capture, read-line) to answer character vectors,
+so the whole-string callers above now see charvecs from ordinary code, not just
+make-string buffers. Corpus-shaped rows (Apple M4 Max, each its own defun,
+baseline -> flipped, ms):
+
+- WASM p1, `(position #\Newline s :start k)` tokenizer over a
+  concatenate-built ~4,600-char source, 200 lines x 200 reps:
+  **2,986 -> 7,180**. Two stacked costs: `buildPositionScan` COERCES the whole
+  sequence TO A LIST per call (O(n) conses per position call -- pre-existing,
+  and the row's absolute floor), and the coerce walk over a CHARVEC runs ~2.5x
+  an immutable string's on wasm (measured directly: `(coerce s 'list)` x2,000
+  over 4,600 chars: charvec 333 ms vs string 134; `(position #\Z s)` 364 vs
+  178. JVM: 68 vs 58, 190 vs 126 -- the JVM gap is small because `_charRef`'s
+  element read is cheap there; the wasm walk pays `_charvec_p` + `_arr_get`
+  calls per element).
+- The concatenate ACCUMULATOR idiom `(setq acc (concatenate 'string acc p))`
+  pays render + re-convert per append: 50 appends x 200 reps, JVM 2 -> 23 ms,
+  wasm 5 -> 28 ms (~1.5 us per append absolute; not quadratic).
+- `string-upcase` of a 1,000-char charvec x2,000: JVM 25 -> 43 ms, wasm
+  18 -> 37 (one render in + one convert out per call).
+
+So this item's scope now has two distinct fixes worth separating when it is
+picked up: (a) the whole-string RENDER per call (the original memoization
+question, invalidation rules and all), and (b) the charvec ELEMENT-WALK lanes
+-- `coerce 'list` / the position scan could read elements through
+`_str_char_ref`-style access without `_arr_get`'s displacement-walk overhead,
+or `buildPositionScan` could stop coercing a string to a list per call at all
+(the bigger absolute win, independent of representation). The escape hatch a
+program has today is `(string x)`: it renders a charvec to an ordinary
+immutable string once (it lowers through `princ-to-string`), after which every
+scan runs at the string lane's speed.

@@ -10,6 +10,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import org.jspecify.annotations.Nullable;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 
 /**
@@ -65,7 +66,7 @@ final class JvmFetchRuntimeBuilder {
 	 * @return the method body
 	 */
 	static FetchRuntime build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant stringClass,
-			MethodrefConstant stringLength, MethodrefConstant stringSubstring) {
+			MethodrefConstant stringLength, MethodrefConstant stringSubstring, @Nullable MethodrefConstant strvRef) {
 		// --- Interface / class references for the JDK HTTP client ---
 		ClassConstant uriClass = cp.addClass(cp.addUtf8("java/net/URI"));
 		MethodrefConstant uriCreate = cp.addMethodref(uriClass,
@@ -156,7 +157,7 @@ final class JvmFetchRuntimeBuilder {
 		a.branch(Opcode.GOTO, methodDone);
 		a.bind(methodGiven);
 		a.aload(10);
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring); // [methodStr]
+		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [methodStr]
 		a.astore(17);
 		for (ConstantPool.StringConstant m : methodConsts) {
 			int next = a.label();
@@ -192,14 +193,14 @@ final class JvmFetchRuntimeBuilder {
 		a.branch(Opcode.GOTO, bodyDone);
 		a.bind(bodyGiven);
 		a.aload(15);
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring); // [bodyStr]
+		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [bodyStr]
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(publisherOfString.index()); // [publisher]
 		a.astore(18);
 		a.bind(bodyDone);
 
 		// builder = HttpRequest.newBuilder(URI.create(stripQuotes(url)))
-		stripQuotes(a, 0, stringClass, stringLength, stringSubstring); // [name]
+		stripQuotes(a, 0, stringClass, stringLength, stringSubstring, strvRef); // [name]
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(uriCreate.index()); // [uri]
 		a.op(Opcode.INVOKESTATIC);
@@ -226,7 +227,7 @@ final class JvmFetchRuntimeBuilder {
 		a.checkcast(objectArrayClass);
 		a.iconst(0);
 		a.aaload(); // [name]
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring); // [name']
+		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [name']
 		a.ldc(userAgentName.index());
 		a.op(Opcode.INVOKEVIRTUAL);
 		a.u2(stringEqualsIgnoreCase.index()); // [bool]
@@ -261,12 +262,13 @@ final class JvmFetchRuntimeBuilder {
 		a.op(Opcode.DUP); // [pair, pair]
 		a.iconst(0);
 		a.aaload(); // [pair, name]
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring); // [pair, name']
+		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [pair,
+																					// name']
 		a.op(Opcode.SWAP); // [name', pair]
 		a.iconst(1);
 		a.aaload(); // [name', value]
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring); // [name',
-																			// value']
+		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [name',
+		// value']
 		a.aload(2); // [name', value', builder]
 		a.op(Opcode.DUP_X2); // [builder, name', value', builder]
 		a.op(Opcode.POP); // [builder, name', value']
@@ -388,15 +390,24 @@ final class JvmFetchRuntimeBuilder {
 
 	/** Loads local {@code slot} (a quoted runtime String) and strips the quotes. */
 	private static void stripQuotes(Asm a, int slot, ClassConstant stringClass, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring) {
+			MethodrefConstant stringSubstring, @Nullable MethodrefConstant strvRef) {
 		a.aload(slot);
-		a.checkcast(stringClass);
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring);
+		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef);
 	}
 
-	/** Strips the surrounding quotes off the String on top of the stack. */
+	/**
+	 * Strips the surrounding quotes off the String on top of the stack. A mutable
+	 * character vector renders to its quote-framed string first through {@code _strv} (a
+	 * concatenate/subseq/format-built URL, method, header or body -- the relay-handler
+	 * shape builds its upstream URL with {@code concatenate}); null without the array
+	 * runtime, where no character vector can exist.
+	 */
 	private static void stripQuotesValue(Asm a, ClassConstant stringClass, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring) {
+			MethodrefConstant stringSubstring, @Nullable MethodrefConstant strvRef) {
+		if (strvRef != null) {
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(strvRef.index());
+		}
 		a.checkcast(stringClass); // [s]
 		a.op(Opcode.DUP); // [s, s]
 		a.op(Opcode.INVOKEVIRTUAL);

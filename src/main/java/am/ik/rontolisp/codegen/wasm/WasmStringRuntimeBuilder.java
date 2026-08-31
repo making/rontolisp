@@ -1509,6 +1509,62 @@ final class WasmStringRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds {@code _to_mut_str} (FUNC_TO_MUT_STR): the mutable-result wrap the flipped
+	 * string producers finish with. A QUOTE-FRAMED {@code TYPE_STRING} -- an actual
+	 * runtime string, always FRESH at those sites, never the shared literal itself --
+	 * converts once through {@code _str_to_cv} into a fresh mutable character vector;
+	 * anything else (a character vector already, {@code format t}'s nil, an eof value)
+	 * passes through untouched. The frame test matters: a SYMBOL or keyword shares
+	 * {@code TYPE_STRING} with bare bytes ({@code .kb/wasm-gc-strings.md}), and
+	 * {@code read-line}'s eof-value or a symbol flowing out of a producer expression must
+	 * not be laundered through the string conversion.
+	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
+	 * TYPE_CALLABLE_BASE + 0)
+	 */
+	static byte[] buildToMutStrBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: v = 0. locals: bytes = 1 (ref null $str_bytes).
+		w.write(1);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		int v = 0, bytes = 1;
+		get(w, v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		// bytes = v.data; a quote-framed payload (bytes[0] == '"') is a string, a bare
+		// one is a symbol/keyword and passes through.
+		get(w, v);
+		WasmEmitHelper.emitStrBytesArray(w);
+		set(w, bytes);
+		get(w, bytes);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.IF, 0x40);
+		get(w, bytes);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		i32(w, 0x22);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_TO_CV);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // if framed
+		w.write(Instruction.END); // if non-empty
+		w.write(Instruction.END); // if string
+		get(w, v);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
 	// Pushes the meta offset (meta.cdr.cdr) of the meta cons held in the given local.
 	private static void emitMetaOffset(WasmWriter w, int metaLocal) {
 		emitConsField(w, metaLocal, 1);

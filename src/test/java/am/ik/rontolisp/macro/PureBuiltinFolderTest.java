@@ -48,7 +48,11 @@ class PureBuiltinFolderTest {
 		if (!(form instanceof LispCons cons)) {
 			return true;
 		}
-		return cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name());
+		// (%str-fresh "...") is a folded CONSTANT too: the fresh-string producers fold
+		// to it so each evaluation answers a fresh mutable string rather than one
+		// shared literal (.kb/pure-builtin-fold.md).
+		return cons.car() instanceof LispSymbol op
+				&& (LispNames.QUOTE.equals(op.name()) || LispNames.STR_FRESH.equals(op.name()));
 	}
 
 	// ------------------------------------------------------------- the table's rows
@@ -75,6 +79,9 @@ class PureBuiltinFolderTest {
 
 	@Test
 	void foldsThroughNestingAndIntoEveryEvaluatedPosition() {
+		assertThat(folded("(length (symbol-name :abcd))")).isEqualTo(new LispInteger(4));
+		// A fold-fresh constant COMPOSES: the outer fold reads the value through the
+		// (%str-fresh ...) spelling, so the nested reduction still happens in one pass.
 		assertThat(folded("(length (concatenate 'string \"ab\" \"cd\"))")).isEqualTo(new LispInteger(4));
 		assertThat(folded("(defun f () (princ (* 6 7)))").print()).isEqualTo("(DEFUN F NIL (PRINC 42))");
 		assertThat(folded("(let ((x (+ 1 2))) x)").print()).isEqualTo("(LET ((X 3)) X)");
@@ -109,6 +116,24 @@ class PureBuiltinFolderTest {
 				.as("unchanged: %s", source)
 				.isSameAs(program);
 		}
+	}
+
+	@Test
+	void aFreshStringProducerFoldsToAStrFreshConstantAndNotASharedLiteral() {
+		// The fresh-string producers still fold -- the constant is computed at compile
+		// time -- but the substituted form is (%str-fresh "..."), which the backends
+		// compile as the literal plus one mutable-copy wrap: each evaluation answers a
+		// FRESH MUTABLE string, so the fold cannot forge aliasing
+		// (.kb/pure-builtin-fold.md, "The fresh-string producers fold to a
+		// per-evaluation copy"). A plain-literal substitution here is that forgery
+		// coming back.
+		assertThat(folded("(string-upcase \"abc\")").print()).isEqualTo("(%STR-FRESH \"ABC\")");
+		assertThat(folded("(string-downcase \"ABC\")").print()).isEqualTo("(%STR-FRESH \"abc\")");
+		assertThat(folded("(concatenate 'string \"ab\" \"cd\")").print()).isEqualTo("(%STR-FRESH \"abcd\")");
+		assertThat(folded("(subseq \"abcdef\" 1 3)").print()).isEqualTo("(%STR-FRESH \"bc\")");
+		// The non-fresh string producers keep the plain literal: their runtime answers
+		// are immutable values, so a shared constant forges nothing.
+		assertThat(folded("(symbol-name :bar)")).isEqualTo(new LispString("BAR"));
 	}
 
 	@Test

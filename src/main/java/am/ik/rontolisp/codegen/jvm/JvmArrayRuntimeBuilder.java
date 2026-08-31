@@ -204,6 +204,20 @@ final class JvmArrayRuntimeBuilder {
 	static final String SUBSEQ_CV_DESC = "(Ljava/lang/Object;II)Ljava/lang/Object;";
 
 	/**
+	 * {@code _toMutStr(Object) -> Object}: the mutable-result wrap the flipped string
+	 * PRODUCERS ({@code concatenate 'string}, the case family, {@code format nil}, the
+	 * string-stream capture, {@code read-line} -- {@code .todo/559}'s follow-up) finish
+	 * with. A {@code String} input -- always a FRESH runtime string at those sites, never
+	 * the shared literal itself -- converts once through {@code _strToCharVec} (the
+	 * fill-pointer slot cleared: the result is a SIMPLE string); anything else (a
+	 * character vector already, {@code format t}'s nil, an eof value) passes through
+	 * untouched.
+	 */
+	static final String TO_MUT_STR = "_toMutStr";
+
+	static final String TO_MUT_STR_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
 	 * Every method name {@link #build} and {@link #buildToStringMethods} emit, i.e.
 	 * exactly the group the array gate switches on and off. {@code JvmLispCompiler}
 	 * matches an unresolved own-class call against this set to tell "the gate
@@ -214,7 +228,7 @@ final class JvmArrayRuntimeBuilder {
 	static final Set<String> METHOD_NAMES = Set.of(MAKE, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS, TO_STRING,
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET, DISP_OFFSET,
-			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, WIDEN);
+			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -1655,6 +1669,49 @@ final class JvmArrayRuntimeBuilder {
 		sc.aload(6);
 		sc.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(SUBSEQ_CV), cp.addUtf8(SUBSEQ_CV_DESC), 10, 11, sc.finish()));
+
+		// _toMutStr(o): the flipped producers' mutable-result wrap. A QUOTE-FRAMED
+		// String -- an actual runtime string -- converts once through _strToCharVec
+		// with the fill-pointer slot cleared (the result is a SIMPLE string, like
+		// _subseqCv's); anything else passes through. The frame test matters: a SYMBOL
+		// shares the java.lang.String representation bare (no quotes), and read-line's
+		// eof-value or a symbol flowing out of a producer expression must not be
+		// laundered through the string conversion. Locals: 0 = o, 1 = cv.
+		MethodrefConstant strCharAt = cp.addMethodref(strClass,
+				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
+		JvmAsm tm = new JvmAsm();
+		int tmPass = tm.label();
+		tm.aload(0);
+		tm.instanceOf(strClass);
+		tm.branch(Opcode.IFEQ, tmPass);
+		tm.aload(0);
+		tm.checkcast(strClass);
+		tm.invokevirtual(strLength);
+		tm.branch(Opcode.IFLE, tmPass);
+		tm.aload(0);
+		tm.checkcast(strClass);
+		tm.iconst(0);
+		tm.invokevirtual(strCharAt);
+		tm.iconst('"');
+		tm.branch(Opcode.IF_ICMPNE, tmPass);
+		tm.aload(0);
+		tm.checkcast(strClass);
+		tm.invokestatic(scStrToCharVec);
+		tm.astore(1);
+		tm.aload(1);
+		tm.checkcast(arrayListClass);
+		tm.iconst(0);
+		tm.invokevirtual(alGet);
+		tm.checkcast(objectArrayClass);
+		tm.iconst(1);
+		tm.aconstNull();
+		tm.aastore();
+		tm.aload(1);
+		tm.areturn();
+		tm.bind(tmPass);
+		tm.aload(0);
+		tm.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(TO_MUT_STR), cp.addUtf8(TO_MUT_STR_DESC), 3, 2, tm.finish()));
 
 		return methods;
 	}

@@ -4560,10 +4560,15 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandFind(LispCons cons) {
+		return expandFind(cons, true);
+	}
+
+	/** {@link #expandFind(LispCons)} with the array-gate flag (see expandPosition). */
+	public static LispVal expandFind(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireKeywords(LispNames.FIND, parts, 3, LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD,
 				LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
-		return buildPositionScan(parts, PositionMode.ITEM, PositionResult.ELEMENT);
+		return buildPositionScan(parts, PositionMode.ITEM, PositionResult.ELEMENT, arraysExist);
 	}
 
 	/**
@@ -4575,10 +4580,15 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandFindIf(LispCons cons) {
+		return expandFindIf(cons, true);
+	}
+
+	/** {@link #expandFindIf(LispCons)} with the array-gate flag (see expandPosition). */
+	public static LispVal expandFindIf(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireKeywords(LispNames.FIND_IF, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
 				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
-		return buildPositionScan(parts, PositionMode.PREDICATE, PositionResult.ELEMENT);
+		return buildPositionScan(parts, PositionMode.PREDICATE, PositionResult.ELEMENT, arraysExist);
 	}
 
 	/**
@@ -4589,10 +4599,17 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandFindIfNot(LispCons cons) {
+		return expandFindIfNot(cons, true);
+	}
+
+	/**
+	 * {@link #expandFindIfNot(LispCons)} with the array-gate flag (see expandPosition).
+	 */
+	public static LispVal expandFindIfNot(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireKeywords(LispNames.FIND_IF_NOT, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
 				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
-		return buildPositionScan(parts, PositionMode.PREDICATE_NOT, PositionResult.ELEMENT);
+		return buildPositionScan(parts, PositionMode.PREDICATE_NOT, PositionResult.ELEMENT, arraysExist);
 	}
 
 	/**
@@ -4605,10 +4622,24 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandPosition(LispCons cons) {
+		return expandPosition(cons, true);
+	}
+
+	/**
+	 * {@link #expandPosition(LispCons)}, letting a backend drop the {@code aref} arm of
+	 * the indexed scan when no array can exist in this program (the
+	 * {@link #expandElt(LispCons, boolean)} rule; the JVM backend passes its array gate,
+	 * so an injected wrapper body never references an array helper the gate did not
+	 * emit).
+	 * @param cons the position expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPosition(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireKeywords(LispNames.POSITION, parts, 3, LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD,
 				LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
-		return buildPositionScan(parts, PositionMode.ITEM, PositionResult.INDEX);
+		return buildPositionScan(parts, PositionMode.ITEM, PositionResult.INDEX, arraysExist);
 	}
 
 	/**
@@ -4621,10 +4652,17 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandPositionIf(LispCons cons) {
+		return expandPositionIf(cons, true);
+	}
+
+	/**
+	 * {@link #expandPositionIf(LispCons)} with the array-gate flag (see expandPosition).
+	 */
+	public static LispVal expandPositionIf(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireKeywords(LispNames.POSITION_IF, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
 				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
-		return buildPositionScan(parts, PositionMode.PREDICATE, PositionResult.INDEX);
+		return buildPositionScan(parts, PositionMode.PREDICATE, PositionResult.INDEX, arraysExist);
 	}
 
 	/**
@@ -4635,10 +4673,18 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandPositionIfNot(LispCons cons) {
+		return expandPositionIfNot(cons, true);
+	}
+
+	/**
+	 * {@link #expandPositionIfNot(LispCons)} with the array-gate flag (see
+	 * expandPosition).
+	 */
+	public static LispVal expandPositionIfNot(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireKeywords(LispNames.POSITION_IF_NOT, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
 				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
-		return buildPositionScan(parts, PositionMode.PREDICATE_NOT, PositionResult.INDEX);
+		return buildPositionScan(parts, PositionMode.PREDICATE_NOT, PositionResult.INDEX, arraysExist);
 	}
 
 	/**
@@ -4955,7 +5001,8 @@ public final class LispMacroExpander {
 	 *     (if __pos_hit __pos_hit __pos_found)))
 	 * </pre>
 	 */
-	private static LispVal buildPositionScan(List<LispVal> parts, PositionMode mode, PositionResult resultKind) {
+	private static LispVal buildPositionScan(List<LispVal> parts, PositionMode mode, PositionResult resultKind,
+			boolean arraysExist) {
 		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispVal startForm = keywordValue(parts, 3, LispNames.START_KEYWORD);
@@ -4970,18 +5017,47 @@ public final class LispMacroExpander {
 		LispSymbol hit = new LispSymbol("__pos_hit");
 		LispSymbol idx = new LispSymbol("__pos_idx");
 		LispSymbol cur = new LispSymbol("__pos_cur");
+		LispSymbol lenv = new LispSymbol("__pos_lenv");
 		LispVal idxStep = listToCons(List.of(new LispSymbol(LispNames.ADD), idx, new LispInteger(1)));
-		LispVal curInit = listToCons(List.of(new LispSymbol(LispNames.NTHCDR), startv, lst));
+		// A LIST walks through a cons cursor exactly as before; a STRING or VECTOR is
+		// scanned by INDEX against its length, bound once -- the scan used to coerce
+		// the whole sequence to a list per call, which was O(n) conses before the
+		// first element was even looked at (and a rendered-representation walk on top
+		// for a mutable character vector). The (elt lst idx) read is O(1) in every
+		// vector representation (.kb/string-index-cost.md). A non-list non-vector
+		// still answers nil (lenv 0, the recorded oddity of the coerce-based scan).
+		LispVal lenvInit = arraysExist
+				? makeIf(callOf(LispNames.LISTP, lst), LispNil.INSTANCE,
+						makeIf(callOf(LispNames.VECTORP, lst), callOf(LispNames.LENGTH, lst), new LispInteger(0)))
+				: makeIf(callOf(LispNames.LISTP, lst), LispNil.INSTANCE,
+						makeIf(callOf(LispNames.STRINGP, lst), callOf(LispNames.LENGTH, lst), new LispInteger(0)));
+		LispVal curInit = makeIf(lenv, LispNil.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.NTHCDR), startv, lst)));
 		LispVal bindings = listToCons(List.of(listToCons(List.of(idx, startv, idxStep)),
 				listToCons(List.of(cur, curInit, callOf(LispNames.CDR, cur)))));
-		LispVal atEnd = callOf(LispNames.ATOM, cur);
+		LispVal atEnd = makeIf(lenv, listToCons(List.of(new LispSymbol(LispNames.GE), idx, lenv)),
+				callOf(LispNames.ATOM, cur));
 		if (endForm != null) {
 			LispVal pastEnd = makeIf(endv, listToCons(List.of(new LispSymbol(LispNames.GE), idx, endv)),
 					LispNil.INSTANCE);
 			atEnd = listToCons(List.of(new LispSymbol(LispNames.OR), atEnd, pastEnd));
 		}
 		LispVal endClause = listToCons(List.of(atEnd, LispNil.INSTANCE));
-		LispVal keyedElem = keyedForm(keyForm, callOf(LispNames.CAR, cur));
+		// The indexed read is spelled as its own two-way dispatch rather than (elt ...):
+		// the lenv arm implies "not a list", so elt's nth arm (an inlined list walk)
+		// and its let scaffolding would be dead bytes at every position/find site --
+		// the site-size budget in
+		// WasmLispCompilerTest.aSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedConversions
+		// is what catches the difference.
+		// With no array in the program the vector arm cannot be taken (the
+		// expandElt rule), so the read is the string one alone -- an injected wrapper
+		// body must not reference an array helper the JVM gate did not emit.
+		LispVal indexedRead = arraysExist
+				? makeIf(callOf(LispNames.STRINGP, lst), listToCons(List.of(new LispSymbol(LispNames.CHAR), lst, idx)),
+						listToCons(List.of(new LispSymbol(LispNames.AREF), lst, idx)))
+				: listToCons(List.of(new LispSymbol(LispNames.CHAR), lst, idx));
+		LispVal elemForm = makeIf(lenv, indexedRead, callOf(LispNames.CAR, cur));
+		LispVal keyedElem = keyedForm(keyForm, elemForm);
 		LispVal match = switch (mode) {
 			// :test / :test-not are decided by the shared TestSpec, so find/position
 			// spell the pair exactly as member/remove/assoc do.
@@ -4992,7 +5068,7 @@ public final class LispMacroExpander {
 		// The find family answers with the element; the position family with the index.
 		// A nil element is indistinguishable from "no match" in the (if hit hit found)
 		// join below, but both answers are nil either way, so the join stays correct.
-		LispVal yield = resultKind == PositionResult.ELEMENT ? callOf(LispNames.CAR, cur) : idx;
+		LispVal yield = resultKind == PositionResult.ELEMENT ? elemForm : idx;
 		LispVal recordFound = listToCons(List.of(new LispSymbol(LispNames.SETQ), found, yield));
 		LispVal onHit = fromEndForm == null ? makeReturn(yield) : makeIf(fromv, recordFound, makeReturn(yield));
 		LispVal body = makeIf(match, onHit, LispNil.INSTANCE);
@@ -5004,8 +5080,9 @@ public final class LispMacroExpander {
 			result = makeLet(fromv.name(), fromEndForm, result);
 		}
 		result = makeLet(endv.name(), endForm == null ? LispNil.INSTANCE : endForm, result);
+		result = makeLet(lenv.name(), lenvInit, result);
 		result = makeLet(startv.name(), startForm == null ? new LispInteger(0) : startForm, result);
-		result = makeLet(lst.name(), seqAsListForm(parts.get(2)), result);
+		result = makeLet(lst.name(), parts.get(2), result);
 		return makeLet(item.name(), parts.get(1), result);
 	}
 

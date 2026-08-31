@@ -192,8 +192,28 @@ final class JvmExportRuntimeBuilder {
 	 */
 	static List<BuiltMethod> build(ConstantPool cp, ClassConstant thisClass, List<JvmExportDirective> decls,
 			Map<String, JvmLispCompiler.FunctionInfo> functions) {
+		return build(cp, thisClass, decls, functions, false);
+	}
+
+	/**
+	 * {@link #build(ConstantPool, ClassConstant, List, Map)} with the array-runtime flag:
+	 * when the array runtime exists, a {@code :string}-returning export can answer a
+	 * MUTABLE character vector (a concatenate/subseq/format result), and the
+	 * {@code _exStr} unframe renders it through {@code _strv} before its frame check.
+	 * @param cp the constant pool
+	 * @param thisClass the generated class
+	 * @param decls the export directives
+	 * @param functions the compiled function table
+	 * @param arrayRuntime whether the {@code _strv} normalizer is emitted
+	 * @return the export bridge methods
+	 */
+	static List<BuiltMethod> build(ConstantPool cp, ClassConstant thisClass, List<JvmExportDirective> decls,
+			Map<String, JvmLispCompiler.FunctionInfo> functions, boolean arrayRuntime) {
 		List<BuiltMethod> methods = new ArrayList<>();
 		Refs refs = new Refs(cp, thisClass, needsFloatArray(decls));
+		refs.strvRef = arrayRuntime ? cp.addMethodref(thisClass, cp
+			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
+				: null;
 		boolean needArgGuard = false;
 		boolean needResultGuard = false;
 		boolean needUnframe = false;
@@ -257,6 +277,14 @@ final class JvmExportRuntimeBuilder {
 		final MethodrefConstant argGuard;
 
 		final MethodrefConstant resultGuard;
+
+		/**
+		 * {@code _strv}, or null without the array runtime: the {@code _exStr} unframe
+		 * renders a mutable character vector before its frame check, so a
+		 * concatenate/subseq/format-built export result crosses the handle boundary as
+		 * the string it spells.
+		 */
+		@Nullable MethodrefConstant strvRef;
 
 		final MethodrefConstant unframe;
 
@@ -602,6 +630,14 @@ final class JvmExportRuntimeBuilder {
 	private static BuiltMethod buildUnframe(ConstantPool cp, Refs refs) {
 		JvmAsm asm = new JvmAsm();
 		int throwLabel = asm.label();
+		// A mutable character vector (a concatenate/subseq/format-built result) renders
+		// to its quote-framed string first; everything else passes through unchanged.
+		if (refs.strvRef != null) {
+			asm.code.add(Opcode.ALOAD_0);
+			asm.code.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(asm.code, refs.strvRef.index());
+			asm.code.add(Opcode.ASTORE_0);
+		}
 		asm.code.add(Opcode.ALOAD_0);
 		asm.code.add(Opcode.INSTANCEOF);
 		JvmRuntimeBuilder.emitU2(asm.code, refs.stringClass.index());

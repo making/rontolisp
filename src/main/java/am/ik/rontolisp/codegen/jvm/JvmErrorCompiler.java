@@ -42,6 +42,10 @@ final class JvmErrorCompiler {
 		// handler-case, and any loop, inside the message expression (the message is
 		// usually a `format` call, which is full of both).
 		JvmExprCompiler.compileExpr(messageExpr, ctx, className);
+		// A message built by a flipped producer (format nil, concatenate, a report
+		// lambda's with-output-to-string capture) can be a mutable character vector:
+		// render it before the (String) cast (a no-op without the array runtime).
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		ctx.emit(Opcode.DUP);

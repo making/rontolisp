@@ -38,6 +38,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.ConcatenateForms;
+import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.AstOutliner;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.DesignatorSpellings;
@@ -1165,6 +1166,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// resolves a user deftype alias of the string family the same way the
 		// CONCATENATE lowering itself will.
 		boolean usesSeqString = ConcatenateForms.needsSeqString(program, closRegistry);
+		// Whether the flipped string producers wrap their results into mutable character
+		// vectors -- the same scan the WASM backend wraps under, and a member of the
+		// array gate (programUsesAnyArrayOp), so the wrap sites always have _toMutStr.
+		boolean mutableStringProducers = MutableStringProducers.programUsesAny(program);
 		// Whether the packed (unsigned-byte 8|16|32) vector builder is reachable: a
 		// concatenate whose result type spells a packed element type lowers to a call to
 		// it, and so does the #'concatenate wrapper's own vector arm (its designator is a
@@ -1768,6 +1773,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesHashTables(usesHashTables)
 			.usesEqualpHashTables(usesEqualpHashTables)
 			.usesSeqString(usesSeqString)
+			.mutableStringProducers(mutableStringProducers)
 			.mayUseInstances(mayUseInstances)
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
 			.usesStreamValues(usesStreamValues)
@@ -2567,7 +2573,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				: List.of();
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
-						stringLengthForIo, stringSubstring, stringConcat)
+						stringLengthForIo, stringSubstring, stringConcat, usesArrays)
 				: null;
 		// *error-output* is the reserved stream handle 2 (the process standard error), so
 		// a program that can name it -- explicitly, or through the warn redirect -- gets
@@ -2611,7 +2617,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// fetch runtime helper body (only when the program uses rontolisp:fetch; the
 		// generic _await lives in the async runtime).
 		final JvmFetchRuntimeBuilder.@Nullable FetchRuntime fetchRuntimeBodies = usesFetch
-				? JvmFetchRuntimeBuilder.build(cp, objectArrayClass, stringClass, stringLength, stringSubstring) : null;
+				? JvmFetchRuntimeBuilder.build(cp, objectArrayClass, stringClass, stringLength, stringSubstring,
+						usesArrays
+								? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV),
+										cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
+								: null)
+				: null;
 
 		// The async/await runtime: %async-run + run() (the class implements Runnable),
 		// the generic _await, streams and predicates. It rides the condition channel
@@ -2722,7 +2733,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final MethodrefConstant topRunnerRef = topRunnerName == null ? null
 				: cp.addMethodref(thisClass, cp.addNameAndType(topRunnerName, topChunkDesc));
 		final List<JvmExportRuntimeBuilder.BuiltMethod> exportMethods = exportDecls.isEmpty() ? List.of()
-				: JvmExportRuntimeBuilder.build(cp, thisClass, exportDecls, functions);
+				: JvmExportRuntimeBuilder.build(cp, thisClass, exportDecls, functions, usesArrays);
 
 		// Effectively-final aliases for capture in the writer lambda
 		final Ctx topRunnerCtxFinal = topRunnerCtx;
@@ -4315,7 +4326,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// no character vector can exist and the immutable slice path still compiles.
 		return LispMacroExpander.programUsesGeneralArrayOp(program) || programBuildsConcatenateSequence(program)
 				|| programTakesSequenceBuilderValue(program) || programUsesSymbol(program, LispNames.SUBSEQ)
-				|| programUsesSymbol(program, LispNames.COPY_SEQ) || programUsesSymbol(program, LispNames.REPLACE);
+				|| programUsesSymbol(program, LispNames.COPY_SEQ) || programUsesSymbol(program, LispNames.REPLACE)
+				// The flipped string producers (concatenate 'string, the case family,
+				// format nil, the string-stream capture, read-line) answer a mutable
+				// character vector through _toMutStr, which needs the array runtime
+				// everywhere the result flows -- same reasoning as subseq's line above.
+				|| MutableStringProducers.programUsesAny(program);
 	}
 
 	// True when the program takes #'map or #'map-into as a value. Both wrappers do
@@ -5699,6 +5715,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesSeqString = false;
 
 		/**
+		 * True when the program contains a flipped string PRODUCER
+		 * ({@code MutableStringProducers.programUsesAny}): only then do the
+		 * {@code concatenate 'string} / case-family / {@code format nil} /
+		 * string-stream-capture / {@code read-line} sites wrap their fresh result through
+		 * {@code _toMutStr}, giving it a writable identity. A subset of
+		 * {@link #usesArrays} (the scan joins the array gate), so the wrap always has its
+		 * helper. The WASM backend wraps under the SAME scan, which is what keeps the
+		 * backends agreeing on which results carry identity. Shared across every context.
+		 */
+		boolean mutableStringProducers = false;
+
+		/**
 		 * True when an instance value can exist in this class (see
 		 * {@code LispMacroExpander.mayCreateInstances}). Gates the instance exclusion in
 		 * the cons-shaped predicates, so a program that cannot build one compiles
@@ -5989,6 +6017,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesHashTables = builder.usesHashTables;
 			this.usesEqualpHashTables = builder.usesEqualpHashTables;
 			this.usesSeqString = builder.usesSeqString;
+			this.mutableStringProducers = builder.mutableStringProducers;
 			this.mayUseInstances = builder.mayUseInstances;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
 			this.usesStreamValues = builder.usesStreamValues;
@@ -6297,6 +6326,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesEqualpHashTables = false;
 
 			private boolean usesSeqString = false;
+
+			private boolean mutableStringProducers = false;
 
 			private boolean mayUseInstances = false;
 
@@ -6774,6 +6805,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesSeqString(boolean usesSeqString) {
 				this.usesSeqString = usesSeqString;
+				return this;
+			}
+
+			Builder mutableStringProducers(boolean mutableStringProducers) {
+				this.mutableStringProducers = mutableStringProducers;
 				return this;
 			}
 
