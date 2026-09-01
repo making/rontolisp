@@ -28,6 +28,33 @@ cases:
       2
       -1
       -2
+  - name: number-literals-with-a-leading-or-trailing-dot
+    source: |
+      (print .4)
+      (print -.5)
+      (print +.25)
+      (print .5e1)
+      (print 1.)
+      (print 100.)
+      (print -100.)
+      (print 1.e5)
+      (print (integerp 1.))
+      (print (floatp .4))
+      (print (list 'a .5))
+      (print (cdr '(a . 5)))
+    expected: |
+      0.4
+      -0.5
+      0.25
+      5.0
+      1
+      100
+      -100
+      100000.0
+      T
+      T
+      (A 0.5)
+      5
   - name: nested-arithmetic
     source: |
       (print (+ (* 2 3) (- 10 4)))

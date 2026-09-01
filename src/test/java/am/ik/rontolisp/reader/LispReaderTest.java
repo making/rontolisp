@@ -397,6 +397,54 @@ class LispReaderTest {
 		assertThat(result).isEqualTo(new LispDouble(3000.5));
 	}
 
+	@Test
+	void readFloatWithNoIntegerPart() {
+		// CLHS 2.3.1: a leading decimal point with digits after it is a float.
+		assertThat(LispReader.readFromString(".4")).isEqualTo(new LispDouble(0.4));
+		assertThat(LispReader.readFromString("-.5")).isEqualTo(new LispDouble(-0.5));
+		assertThat(LispReader.readFromString("+.25")).isEqualTo(new LispDouble(0.25));
+		assertThat(LispReader.readFromString(".5e1")).isEqualTo(new LispDouble(5.0));
+	}
+
+	@Test
+	void readTrailingDecimalPointIsADecimalInteger() {
+		// CLHS 2.3.1: "1." is the INTEGER 1 -- the trailing dot is a marker, not a
+		// decimal point, while "1.e5" (an exponent right behind the dot) is a float.
+		assertThat(LispReader.readFromString("1.")).isEqualTo(new LispInteger(1));
+		assertThat(LispReader.readFromString("100.")).isEqualTo(new LispInteger(100));
+		assertThat(LispReader.readFromString("-100.")).isEqualTo(new LispInteger(-100));
+		assertThat(LispReader.readFromString("1.e5")).isEqualTo(new LispDouble(100000.0));
+	}
+
+	@Test
+	void aDotBeforeADigitIsANumberNotADottedPair() {
+		// "(a .5)" reads as (A 0.5); the dotted pair must spell the dot bare.
+		assertThat(LispReader.readFromString("(a .5)").print()).isEqualTo("(A 0.5)");
+		LispVal dotted = LispReader.readFromString("(a . 5)");
+		assertThat(dotted).isInstanceOf(LispCons.class);
+		assertThat(((LispCons) dotted).cdr()).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void aSecondDotFallsBackToASymbol() {
+		// "1..", "1.2.3" and ".4.5" are invalid numbers; the dots join the symbol
+		// text rather than silently splitting the token.
+		assertThat(LispReader.readFromString("1..")).isInstanceOf(LispSymbol.class);
+		assertThat(LispReader.readFromString("1.2.3")).isInstanceOf(LispSymbol.class);
+		assertThat(LispReader.readFromString(".4.5")).isInstanceOf(LispSymbol.class);
+	}
+
+	@Test
+	void aLoneDotStillMeansDottedPair() {
+		// The boundaries the number scan must not steal: the dotted-pair marker,
+		// "...", and bare signs stay non-numeric.
+		LispVal dotted = LispReader.readFromString("(1 . 2)");
+		assertThat(((LispCons) dotted).cdr()).isEqualTo(new LispInteger(2));
+		assertThat(LispReader.readFromString("...")).isInstanceOf(LispSymbol.class);
+		assertThat(LispReader.readFromString("+")).isInstanceOf(LispSymbol.class);
+		assertThat(LispReader.readFromString("-")).isInstanceOf(LispSymbol.class);
+	}
+
 	// --- Backquote (quasiquote): expanded at read time into list/append/quote ---
 
 	@Test

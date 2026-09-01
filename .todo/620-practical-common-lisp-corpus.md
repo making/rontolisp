@@ -24,7 +24,7 @@ byte for byte.
 | `macro-utilities` | 8 | `ppme` dies: `write` rejects `:length` / `:level` / `:gensym` / `:case` (`.todo/041`) |
 | `test-framework` | 9 | **identical** |
 | `pathnames` | 15 | blocked at READ time -- `#+(or sbcl cmu lispworks openmcl allegro clisp)`; with the branch forced, every pathname primitive it uses is **identical** |
-| `spam` | 23 | blocked at READ time on the literal `.4` (see `.todo/621`); with that patched, **identical** |
+| `spam` | 23 | **identical** (re-measured 2026-09-01 after `.todo/621` was fixed -- `.4` and friends read right) |
 | `binary-data` | 24 | **identical** |
 | `id3v2` | 25 | **identical** (an ID3v2.3 tag with ISO-8859-1 and UCS-2 frames reads back the same) |
 | `url-function` | 26 | blocked: needs `net.aserve` (see `.todo/625`) |
@@ -34,13 +34,13 @@ byte for byte.
 | `html` | 30, 31 | **identical** (`emit-html`, `html`, `with-html-output :pretty t`, `define-html-macro`, `:print`/`:format`, attribute escaping) |
 | `profiler` (ch.32) | 32 | **identical** |
 
-So nine of the twelve already agree with SBCL, three of them only after a gap
+So nine of the twelve already agree with SBCL, two of them only after a gap
 listed below is closed.
 
 ## The blockers this corpus found, in the order they bite
 
 1. `.todo/621` -- the reader cannot read `.4`. One literal, and chapter 23 does
-   not load.
+   not load. **Fixed 2026-09-01** -- chapter 23 is now byte-identical.
 2. `.todo/625` -- a `.asd` that defines its own component class. Three chapters.
 3. `.todo/623` -- `delete` / `delete-if` / `nsubstitute` are silent no-ops on a
    vector, and `sort` drops a vector's fill pointer.

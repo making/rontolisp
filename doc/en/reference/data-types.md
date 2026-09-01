@@ -38,6 +38,11 @@ rontolisp has a single floating-point type, so every marker reads as the same
 that is not followed by exponent digits is not a float: `1d` and `1d0x` read as
 symbols (like `1+`), not numbers.
 
+A decimal point does not need digits on both sides: `.4` is `0.4` (so `(a .5)` is the
+two-element list `(A 0.5)` -- a dotted pair must spell the dot bare, `(a . 5)`),
+and `1.e5` is a float. A trailing dot with no exponent is a decimal-integer
+marker: `1.` is the integer `1`.
+
 On **every backend**, integer arithmetic never silently wraps: when an
 operation (`+`, `-`, `*`, `/`, `1+`, `1-`, `abs`, ...) overflows the fixed-width
 representation, the result is automatically promoted to an arbitrary-precision
