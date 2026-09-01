@@ -34,7 +34,7 @@ byte for byte.
 | `html` | 30, 31 | **identical** (`emit-html`, `html`, `with-html-output :pretty t`, `define-html-macro`, `:print`/`:format`, attribute escaping) |
 | `profiler` (ch.32) | 32 | **identical** |
 
-So ten of the twelve already agree with SBCL, two of them only after a gap
+So nine of the twelve already agree with SBCL, two of them only after a gap
 listed below is closed.
 
 ## The blockers this corpus found, in the order they bite
