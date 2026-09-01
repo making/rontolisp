@@ -175,7 +175,7 @@ final class LinalgBlasKernels {
 				break;
 			}
 			description = bound != null ? bound + " (" + identity + ")"
-					: "no tuned CBLAS found (install one, or name it with " + LIBRARY_ENV + ")";
+					: "no tuned CBLAS found: install one, or name it with " + LIBRARY_ENV;
 		}
 		catch (Throwable ex) {
 			// A runtime with no FFM at all, or one that refuses native access.
@@ -292,7 +292,10 @@ final class LinalgBlasKernels {
 	 * dimension header in the compiled ones).
 	 */
 	static void gemm(double[] a, int oa, double[] b, int ob, double[] c, int oc, int n, int m, int p) {
-		MethodHandle handle = java.util.Objects.requireNonNull(DGEMM);
+		MethodHandle handle = DGEMM;
+		if (handle == null) {
+			return;
+		}
 		try {
 			if (2L * n * m * p <= CRITICAL_FLOP_CEILING) {
 				handle.invokeExact(ROW_MAJOR, NO_TRANS, NO_TRANS, n, p, m, 1.0, slice(a, oa), m, slice(b, ob), p, 0.0,
@@ -315,7 +318,10 @@ final class LinalgBlasKernels {
 
 	/** The single-float sibling of {@link #gemm}. */
 	static void gemmF(float[] a, int oa, float[] b, int ob, float[] c, int oc, int n, int m, int p) {
-		MethodHandle handle = java.util.Objects.requireNonNull(SGEMM);
+		MethodHandle handle = SGEMM;
+		if (handle == null) {
+			return;
+		}
 		try {
 			if (2L * n * m * p <= CRITICAL_FLOP_CEILING) {
 				handle.invokeExact(ROW_MAJOR, NO_TRANS, NO_TRANS, n, p, m, 1.0f, slice(a, oa), m, slice(b, ob), p, 0.0f,
@@ -343,13 +349,16 @@ final class LinalgBlasKernels {
 	 */
 	static void gemv(double[] a, int oa, int rows, int cols, double[] x, int ox, double[] y, int oy,
 			boolean transposed) {
+		MethodHandle handle = DGEMV;
+		if (handle == null) {
+			return;
+		}
 		// Hoisted rather than written inline: a conditional in an invokeExact argument
 		// list crashes the build's NullAway generics check.
 		int trans = transposed ? TRANS : NO_TRANS;
 		try {
-			java.util.Objects.requireNonNull(DGEMV)
-				.invokeExact(ROW_MAJOR, trans, rows, cols, 1.0, slice(a, oa), cols, slice(x, ox), 1, 0.0, slice(y, oy),
-						1);
+			handle.invokeExact(ROW_MAJOR, trans, rows, cols, 1.0, slice(a, oa), cols, slice(x, ox), 1, 0.0,
+					slice(y, oy), 1);
 		}
 		catch (Throwable ex) {
 			throw sneak(ex);
@@ -358,11 +367,14 @@ final class LinalgBlasKernels {
 
 	/** The single-float sibling of {@link #gemv}. */
 	static void gemvF(float[] a, int oa, int rows, int cols, float[] x, int ox, float[] y, int oy, boolean transposed) {
+		MethodHandle handle = SGEMV;
+		if (handle == null) {
+			return;
+		}
 		int trans = transposed ? TRANS : NO_TRANS;
 		try {
-			java.util.Objects.requireNonNull(SGEMV)
-				.invokeExact(ROW_MAJOR, trans, rows, cols, 1.0f, slice(a, oa), cols, slice(x, ox), 1, 0.0f,
-						slice(y, oy), 1);
+			handle.invokeExact(ROW_MAJOR, trans, rows, cols, 1.0f, slice(a, oa), cols, slice(x, ox), 1, 0.0f,
+					slice(y, oy), 1);
 		}
 		catch (Throwable ex) {
 			throw sneak(ex);

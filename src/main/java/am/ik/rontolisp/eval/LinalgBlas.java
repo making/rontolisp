@@ -113,6 +113,9 @@ public final class LinalgBlas {
 	 * the same width, and any product too small to pay for the call.
 	 */
 	private static @Nullable LispVal dot(List<LispVal> args) {
+		if (!LinalgBlasKernels.available()) {
+			return null;
+		}
 		LispFloatArray a = packed(args.get(0));
 		LispFloatArray b = packed(args.get(1));
 		if (a == null || b == null || a.getClass() != b.getClass()) {
