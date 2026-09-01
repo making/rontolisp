@@ -392,7 +392,13 @@ public final class LispLexer {
 				add(tokens, readRadixNumber(), tokenStart);
 			}
 			else if (c == '.') {
-				if (this.pos + 1 >= this.input.length() || !isSymbolChar(this.input.charAt(this.pos + 1))) {
+				if (this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+					// ".4" is the float 0.4 (CLHS 2.3.1), not a symbol: a decimal point
+					// followed by a digit always starts a number, so "(a .5)" reads as
+					// (A 0.5) -- a dotted pair must spell the dot bare, "(a . 5)".
+					add(tokens, readNumber(), tokenStart);
+				}
+				else if (this.pos + 1 >= this.input.length() || !isSymbolChar(this.input.charAt(this.pos + 1))) {
 					add(tokens, new Token.Dot(), tokenStart);
 					this.pos++;
 				}
@@ -406,10 +412,12 @@ public final class LispLexer {
 			else if (isDigit(c)) {
 				add(tokens, readNumber(), tokenStart);
 			}
-			else if (c == '-' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+			else if (c == '-' && this.pos + 1 < this.input.length()
+					&& (isDigit(this.input.charAt(this.pos + 1)) || startsDotNumber(this.pos + 1))) {
 				add(tokens, readNumber(), tokenStart);
 			}
-			else if (c == '+' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+			else if (c == '+' && this.pos + 1 < this.input.length()
+					&& (isDigit(this.input.charAt(this.pos + 1)) || startsDotNumber(this.pos + 1))) {
 				// An explicitly positive number literal (+347): the sign is consumed and
 				// the digits parse as usual. A '+' followed by anything else (a symbol
 				// like +limit+ or the function +) stays a symbol.
@@ -434,19 +442,30 @@ public final class LispLexer {
 		if (this.input.charAt(this.pos) == '-') {
 			this.pos++;
 		}
-		// Integer digits, allowing ',' as a grouping separator when it sits
-		// between two digits (e.g., "1,000" -> 1000). A comma not followed by a
-		// digit is not consumed, so token boundaries are otherwise unchanged.
-		consumeDigitsWithGrouping();
 		boolean isFloat = false;
-		// Fractional part: '.' followed by at least one digit (e.g., "1.5").
-		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '.' && this.pos + 1 < this.input.length()
-				&& isDigit(this.input.charAt(this.pos + 1))) {
+		if (startsDotNumber(this.pos)) {
+			// ".4": a leading decimal point with digits after it is always a float
+			// (CLHS 2.3.1). The dispatcher only routes here when a digit follows.
 			this.pos++; // consume '.'
+			isFloat = true;
 			while (this.pos < this.input.length() && isDigit(this.input.charAt(this.pos))) {
 				this.pos++;
 			}
-			isFloat = true;
+		}
+		else {
+			// Integer digits, allowing ',' as a grouping separator when it sits
+			// between two digits (e.g., "1,000" -> 1000). A comma not followed by a
+			// digit is not consumed, so token boundaries are otherwise unchanged.
+			consumeDigitsWithGrouping();
+			// Fractional part: '.' followed by at least one digit (e.g., "1.5").
+			if (this.pos < this.input.length() && this.input.charAt(this.pos) == '.'
+					&& this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+				this.pos++; // consume '.'
+				while (this.pos < this.input.length() && isDigit(this.input.charAt(this.pos))) {
+					this.pos++;
+				}
+				isFloat = true;
+			}
 		}
 		// Exponent part: a Common Lisp float marker e/s/f/d/l (case-insensitive)
 		// followed by an optional sign and at least one digit (e.g., "1d0",
@@ -454,6 +473,13 @@ public final class LispLexer {
 		// marker collapses to the same LispDouble (the single/double distinction
 		// of Common Lisp is not preserved).
 		if (consumedExponent()) {
+			isFloat = true;
+		}
+		else if (!isFloat && this.pos < this.input.length() && this.input.charAt(this.pos) == '.'
+				&& exponentEndsAt(this.pos + 1) >= 0) {
+			// "1.e5": an exponent marker may follow the decimal point directly.
+			this.pos++; // consume '.'
+			consumedExponent();
 			isFloat = true;
 		}
 		// Ratio literal: integer digits '/' integer digits (e.g., "1/3", "-1/3").
@@ -474,10 +500,21 @@ public final class LispLexer {
 			String denominator = stripGrouping(this.input.substring(slash + 1, this.pos));
 			return new Token.RatioToken(new java.math.BigInteger(numerator), new java.math.BigInteger(denominator));
 		}
-		// If a non-dot symbol character follows, treat the entire token as a
-		// symbol (e.g., "1+" -> Symbol("1+"), "1d0x" -> Symbol("1d0x")).
+		// Trailing decimal point: "1." is the DECIMAL INTEGER 1 (CLHS 2.3.1) --
+		// the dot is a marker consumed with the token, not part of the value.
+		boolean trailingDot = false;
+		if (!isFloat && this.pos < this.input.length() && this.input.charAt(this.pos) == '.') {
+			trailingDot = true;
+			this.pos++;
+		}
+		// If a symbol character follows, treat the entire token as a symbol
+		// (e.g., "1+" -> Symbol("1+"), "1d0x" -> Symbol("1d0x")). A dot joins the
+		// symbol text once one has been consumed as trailing or the number is
+		// already a float -- "1.." and "1.2.3" are invalid numbers, and the
+		// symbol fallback is this lexer's answer to those ("1+" being the
+		// canonical one), never a silently split token.
 		if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))
-				&& this.input.charAt(this.pos) != '.') {
+				&& (this.input.charAt(this.pos) != '.' || trailingDot || isFloat)) {
 			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
 				this.pos++;
 			}
@@ -487,7 +524,7 @@ public final class LispLexer {
 			return new Token.DoubleToken(
 					Double.parseDouble(normalizeExponentMarker(stripGrouping(this.input.substring(start, this.pos)))));
 		}
-		String digits = stripGrouping(this.input.substring(start, this.pos));
+		String digits = stripGrouping(this.input.substring(start, trailingDot ? this.pos - 1 : this.pos));
 		try {
 			return new Token.NumberToken(Long.parseLong(digits));
 		}
@@ -495,6 +532,13 @@ public final class LispLexer {
 			// Literal does not fit in a long: promote to an arbitrary-precision integer.
 			return new Token.BigIntegerToken(new java.math.BigInteger(digits));
 		}
+	}
+
+	// True when a '.' at `pos` starts the digit run of a number: ".4", the tail
+	// of "-.5"/"+.25" (the dispatcher checks the char after the sign).
+	private boolean startsDotNumber(int pos) {
+		return pos < this.input.length() && this.input.charAt(pos) == '.' && pos + 1 < this.input.length()
+				&& isDigit(this.input.charAt(pos + 1));
 	}
 
 	private static boolean isRadixMarker(char c) {
@@ -554,21 +598,31 @@ public final class LispLexer {
 	// On no match, the position is left untouched so the marker can fall through
 	// to symbol handling (e.g. "1d" is the symbol "1d", not a float).
 	private boolean consumedExponent() {
-		if (this.pos >= this.input.length() || !isExponentMarker(this.input.charAt(this.pos))) {
+		int end = exponentEndsAt(this.pos);
+		if (end < 0) {
 			return false;
 		}
-		int probe = this.pos + 1;
+		this.pos = end;
+		return true;
+	}
+
+	// The index just past a valid exponent suffix (marker + optional sign +
+	// digits) starting at `pos`, or -1 when none starts there.
+	private int exponentEndsAt(int pos) {
+		if (pos >= this.input.length() || !isExponentMarker(this.input.charAt(pos))) {
+			return -1;
+		}
+		int probe = pos + 1;
 		if (probe < this.input.length() && (this.input.charAt(probe) == '+' || this.input.charAt(probe) == '-')) {
 			probe++;
 		}
 		if (probe >= this.input.length() || !isDigit(this.input.charAt(probe))) {
-			return false;
+			return -1;
 		}
 		while (probe < this.input.length() && isDigit(this.input.charAt(probe))) {
 			probe++;
 		}
-		this.pos = probe;
-		return true;
+		return probe;
 	}
 
 	private static boolean isExponentMarker(char c) {
