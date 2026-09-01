@@ -109,8 +109,9 @@ class MavenBuildE2eTest {
 					}
 				}
 				""");
-		// Nothing but the one <plugin> block: no dependency, no source-directory
-		// declaration, no jar configuration.
+		// The source-set plugin needs no dependency, source-directory declaration, or
+		// jar configuration. Pin the lifecycle jar plugin to the version the root build
+		// already resolved so this fixture can run offline.
 		Files.writeString(this.project.resolve("pom.xml"), """
 				<project xmlns="http://maven.apache.org/POM/4.0.0">
 				  <modelVersion>4.0.0</modelVersion>
@@ -123,6 +124,11 @@ class MavenBuildE2eTest {
 				  </properties>
 				  <build>
 				    <plugins>
+				      <plugin>
+				        <groupId>org.apache.maven.plugins</groupId>
+				        <artifactId>maven-jar-plugin</artifactId>
+				        <version>3.4.1</version>
+				      </plugin>
 				      <!-- Pinned to what this module already resolved: the build runs offline. -->
 				      <plugin>
 				        <groupId>org.apache.maven.plugins</groupId>
