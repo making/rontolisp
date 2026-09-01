@@ -1339,11 +1339,21 @@ cases:
       (print (case 3 (1 'one) ((2 3 4) 'small) (otherwise 'big)))
       (print (case 99 (1 'one) ((2 3 4) 'small) (otherwise 'big)))
       (print (case 5 (1 'a) (2 'b)))
+      (print (case nil (nil :was-nil) (t :other)))
+      (print (case nil ((nil) :was-nil) (t :other)))
+      (print (typecase nil (nil :nil-clause) (null :null-clause) (t :other)))
+      (print (handler-case (ecase nil (nil :matched)) (error (e) :ecase-signalled)))
+      (print (handler-case (etypecase nil (nil :matched)) (error (e) :etypecase-signalled)))
     expected: |
       TWO
       SMALL
       BIG
       NIL
+      :OTHER
+      :WAS-NIL
+      :NULL-CLAUSE
+      :ECASE-SIGNALLED
+      :ETYPECASE-SIGNALLED
   - name: type-conversion-float
     source: |
       (print (float 42))

@@ -5568,6 +5568,26 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void caseAtomNilKeyDesignatesTheEmptyKeyList() {
+		// CLHS 5.3: a normal-clause's keys is a designator for a LIST, so the atom nil
+		// designates the EMPTY key list -- a (nil ...) clause can never be selected.
+		// Only the ((nil) ...) spelling matches the object NIL.
+		assertThat(evalMulti("(defun g (x) (case x (nil :was-nil) (t :other))) (list (g nil) (g 5))").print())
+			.isEqualTo("(:OTHER :OTHER)");
+		assertThat(eval("(case nil ((nil) :was-nil))").print()).isEqualTo(":WAS-NIL");
+		// ecase/ccase inherit the rule: the dead clause leaves no match, so the
+		// exhaustive error fires instead.
+		assertThatThrownBy(() -> eval("(ecase nil (nil :matched))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("ECASE");
+		assertThatThrownBy(() -> eval("(ccase nil (nil :matched))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("ECASE");
+		// typecase's clause head is a type specifier, where nil is the empty type.
+		assertThat(eval("(typecase nil (nil :nil-clause) (null :null-clause))").print()).isEqualTo(":NULL-CLAUSE");
+		assertThatThrownBy(() -> eval("(etypecase nil (nil :matched))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("ETYPECASE");
+	}
+
+	@Test
 	void evalEtypecase() {
 		assertThat(eval("(etypecase 42 (string \"s\") (integer \"i\"))").print()).isEqualTo("\"i\"");
 		assertThat(eval("(etypecase \"x\" (string \"s\") (integer \"i\"))").print()).isEqualTo("\"s\"");

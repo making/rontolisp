@@ -1502,9 +1502,11 @@ final class ConstantCaseArmPruner {
 					addKey(cell.car(), keys);
 				}
 			}
-			else {
+			else if (!(head instanceof LispNil)) {
 				addKey(head, keys);
 			}
+			// The atom nil designates the EMPTY key list, not the key NIL: the clause
+			// has no keys and is unreachable, like the expander makes it.
 			return keys;
 		}
 

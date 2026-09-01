@@ -7040,6 +7040,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunCaseAtomNilKeyIsTheEmptyKeyList() throws Exception {
+		// The atom nil is a designator for the EMPTY key list, never the key NIL;
+		// only ((nil) ...) matches NIL.
+		assertThat(compileAndRun("(print (case nil (nil :was-nil) (t :other)))")).isEqualTo(":OTHER");
+		assertThat(compileAndRun("(print (case nil ((nil) :was-nil) (t :other)))")).isEqualTo(":WAS-NIL");
+		assertThat(compileAndRun("(print (typecase nil (nil :nil-clause) (null :null-clause)))"))
+			.isEqualTo(":NULL-CLAUSE");
+	}
+
+	@Test
 	void compileAndRunDolistResultForm() throws Exception {
 		assertThat(compileAndRun("(print (dolist (e '(1 2) 99)))")).isEqualTo("99");
 	}

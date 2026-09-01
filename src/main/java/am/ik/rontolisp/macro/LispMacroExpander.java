@@ -250,9 +250,10 @@ public final class LispMacroExpander {
 	 *
 	 * The clause keys are object designators and are not evaluated. A clause key of
 	 * {@code t} or {@code otherwise} marks the default clause. A list key matches when
-	 * the keyform is {@code eql} to any element; any other atom is a single key. (Unlike
-	 * Common Lisp, a {@code nil} key is treated as a single key matching {@code nil}, not
-	 * as an empty key list.) A clause with no body returns nil.
+	 * the keyform is {@code eql} to any element; any other atom is a single key. The atom
+	 * {@code nil} designates the EMPTY key list (Common Lisp's rule), so a
+	 * {@code (nil ...)} clause can never be selected -- to match the object NIL one
+	 * writes {@code ((nil) ...)}. A clause with no body returns nil.
 	 * @param cons the case expression
 	 * @return the expanded expression
 	 */
@@ -284,6 +285,11 @@ public final class LispMacroExpander {
 					orParts.add(makeCaseEq(keyVar, k));
 				}
 				test = listToCons(orParts);
+			}
+			else if (keys instanceof LispNil) {
+				// The atom nil designates the EMPTY key list, so this clause can never
+				// be selected; only the ((nil) ...) spelling matches the object NIL.
+				test = LispNil.INSTANCE;
 			}
 			else {
 				test = makeCaseEq(keyVar, keys);
@@ -339,6 +345,11 @@ public final class LispMacroExpander {
 					orParts.add(makeCaseEq(keyVar, k));
 				}
 				test = listToCons(orParts);
+			}
+			else if (keys instanceof LispNil) {
+				// The atom nil designates the EMPTY key list, so this clause can never
+				// be selected and the exhaustive error clause can fire instead.
+				test = LispNil.INSTANCE;
 			}
 			else {
 				test = makeCaseEq(keyVar, keys);
