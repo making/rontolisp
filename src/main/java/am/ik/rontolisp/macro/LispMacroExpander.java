@@ -28829,9 +28829,9 @@ public final class LispMacroExpander {
 	 * {@code expandTopLevelDefinitions} injects for a program that registers an alias
 	 * naming a specialized element type.
 	 * @param cons the make-array expression
-	 * @param helperAvailable whether the {@code %make-array-et} prelude defun is present
-	 * in the program being compiled (the selection can miss a call site injected after it
-	 * ran, exactly as it can for {@code %stream-target})
+	 * @param definedFunction whether the needed helper prelude defun is present in the
+	 * program being compiled (the selection can miss a call site injected after it ran,
+	 * exactly as it can for {@code %stream-target})
 	 * @return the lowered expression, or null when the element type is literal or absent
 	 */
 	public static @Nullable LispVal lowerRuntimeElementTypeMakeArray(LispCons cons,
