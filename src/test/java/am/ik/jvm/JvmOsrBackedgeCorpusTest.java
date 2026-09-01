@@ -1,15 +1,12 @@
 package am.ik.jvm;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.List;
-import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
-import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,32 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class JvmOsrBackedgeCorpusTest {
 
-	private record Case(String name, String source, @Nullable String expected,
-			@Nullable Map<String, String> expectedByBackend) {
-	}
-
-	private record Spec(List<Case> cases) {
-	}
-
 	private static String corpusSource() throws IOException {
-		try (InputStream in = JvmOsrBackedgeCorpusTest.class.getResourceAsStream("/ci-spec.yaml")) {
-			assertThat(in).as("ci-spec.yaml test resource").isNotNull();
-			// Decoded to a String FIRST, deliberately: handing the byte stream to the
-			// YAML mapper lets its own reader split a multi-byte UTF-8 character across
-			// an internal buffer boundary, and the corpus carries non-ASCII source (the
-			// code-point cases). Which characters land on a boundary depends on every
-			// byte before them, so an unrelated ci-spec edit can make it throw.
-			Spec spec = new tools.jackson.dataformat.yaml.YAMLMapper()
-				.readValue(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8), Spec.class);
-			StringBuilder sb = new StringBuilder();
-			for (Case c : spec.cases()) {
-				sb.append(c.source());
-				if (!c.source().endsWith("\n")) {
-					sb.append('\n');
-				}
-			}
-			return sb.toString();
-		}
+		return am.ik.rontolisp.testsupport.YamlResources.corpusSource();
 	}
 
 	@Test

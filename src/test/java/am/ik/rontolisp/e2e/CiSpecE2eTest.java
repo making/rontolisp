@@ -485,13 +485,13 @@ class CiSpecE2eTest {
 			if (in == null) {
 				throw new IOException("missing test resource: " + SPEC_RESOURCE);
 			}
-			// Decoded to a String FIRST, deliberately: handing the byte stream to the
-			// YAML mapper lets its own reader split a multi-byte UTF-8 character across
-			// an internal buffer boundary, and the corpus carries non-ASCII source (the
-			// code-point cases). Which characters land on a boundary depends on every
-			// byte before them, so an unrelated ci-spec edit can make it throw.
-			return new YAMLMapper().readValue(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8),
-					Spec.class);
+			// Decoded to a String FIRST and read through YamlResources.safeReader: the
+			// corpus carries non-ASCII source (the code-point cases), and
+			// snakeyaml-engine
+			// 3.0.1 crashes when a high surrogate lands exactly on its internal buffer
+			// boundary -- an unrelated ci-spec edit can arm it. See YamlResources.
+			return new YAMLMapper().readValue(am.ik.rontolisp.testsupport.YamlResources
+				.safeReader(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)), Spec.class);
 		}
 	}
 

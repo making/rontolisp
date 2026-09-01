@@ -839,7 +839,11 @@ class ExamplesE2eTest {
 	 * @throws IOException if the manifest cannot be read
 	 */
 	private static Manifest loadManifest() throws IOException {
-		return MAPPER.readValue(Files.readString(MANIFEST), Manifest.class);
+		// Read through YamlResources.safeReader: snakeyaml-engine 3.0.1 crashes when a
+		// high surrogate lands exactly on its internal buffer boundary, and which
+		// character does depends on everything before it in the file. See YamlResources.
+		return MAPPER.readValue(am.ik.rontolisp.testsupport.YamlResources.safeReader(Files.readString(MANIFEST)),
+				Manifest.class);
 	}
 
 	private static List<String> concat(List<String> a, List<String> b) {
