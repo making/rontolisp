@@ -37,8 +37,18 @@ format logical block `~<...~:>` and `~/name/`), `readtable-case` (a constant
   program calls the entry function itself. The `*print-case*` pass showed the
   shape: one shared prelude renderer under the print-object route, gated on a
   surface fact so every other program stays byte-identical.
-- **`write-to-string` keywords + `write`'s `:case`** -- `write` takes the full
-  set minus `:case`, `write-to-string` still takes one argument
+- **`write-to-string` keywords + `write`'s missing keywords** -- MEASURED
+  2026-09-01 on the installed interpreter binary, correcting the "full set minus
+  `:case`" this bullet used to claim: `write` ACCEPTS `:stream` `:escape`
+  `:readably` `:pretty` `:circle` `:right-margin` `:lines` `:miser-width`
+  `:pprint-dispatch` and REJECTS `:length` `:level` `:gensym` `:case` `:base`
+  `:radix` `:array` with `Unknown keyword argument`. All seven rejected
+  keywords have a printer variable that already exists and already holds the
+  right default, so the gap is the argument list, not the renderer -- except
+  that binding those variables must then also CHANGE the output, which today it
+  does not for `*print-length*` / `*print-level*` / `*print-base*` /
+  `*print-radix*` / `*print-gensym*` / `*print-array*` (see the row below).
+  `write-to-string` still takes one argument
   (`.kb/pretty-printer.md` has both reasons: the `with-output-to-string` lowering
   flips the WASM EH gate, and adding `:case` to the prelude `write` would make
   every `write` user MENTION `*print-case*` and so pull the case renderer into
@@ -50,6 +60,27 @@ format logical block `~<...~:>` and `~/name/`), `readtable-case` (a constant
   `write-to-string` to read them owes `~W` the same read (`.kb/format.md` carries
   the trigger, including the `injectMvSpillGlobal` scan the static path needs
   before it can read a printer variable).
+- **Six printer variables are settable but inert** (measured 2026-09-01, same
+  run): `*print-length*` `*print-level*` `*print-base*` `*print-radix*`
+  `*print-gensym*` `*print-array*` all read back the value bound to them and
+  none of them changes what the printer emits.
+
+  ```lisp
+  (let ((*print-length* 3)) (print '(1 2 3 4 5 6)))    ; SBCL: (1 2 3 ...)
+  (let ((*print-level* 2))  (print '(1 (2 (3 (4))))))  ; SBCL: (1 (2 #))
+  (let ((*print-base* 16))  (print 255))               ; SBCL: FF
+  (let ((*print-base* 16) (*print-radix* t)) (print 255)) ; SBCL: #xFF
+  (let ((*print-gensym* nil)) (print (list (gensym "G"))))  ; SBCL: (G114)
+  (let ((*print-array* nil)) (print #(1 2 3)))         ; SBCL: #<(SIMPLE-VECTOR 3) ...>
+  ```
+
+  `*print-case*` / `*print-escape*` / `*print-readably*` / `*print-pretty*` do
+  change the text, as this file's header says -- so the seam exists and these
+  six are not on it. `*print-length*` and `*print-level*` are the two worth
+  doing first: they are the only defence a REPL or a debugger has against a
+  circular or enormous structure, and they cost one depth counter and one
+  element counter in the same walk. Do them with the `write` keywords above,
+  which is where a caller reaches for them.
 - **`*print-case*` inside a container whose rendering is a runtime form** -- a
   symbol nested in a structure, a CLOS instance, a hash table or an array of rank
   != 1 keeps its stored spelling (`%print-cased` walks symbols, conses and

@@ -32,7 +32,8 @@ the new information:
 - set / tree operations on conses: `nunion` `set-exclusive-or` `nset-exclusive-or`
   `nintersection` `nset-difference` `subsetp` `sublis` `nsublis` `subst-if(-not)`
   `nsubst*` `tree-equal` `assoc-if-not` `rassoc-if-not` `member-if-not` `ldiff`
-  `tailp` `nbutlast` `list-length` `get-properties` -- ~600 tests, `cons` at
+  `tailp` `nbutlast` `list-length` `get-properties`, and the ordinal accessors
+  `fifth` through `tenth` (`first`..`fourth` exist) -- ~600 tests, `cons` at
   32.8% (.todo/033)
 - bit-array operations `bit-and` `bit-ior` `bit-xor` `bit-not` `bit-nand`
   `bit-nor` `bit-eqv` `bit-andc1/2` `bit-orc1/2`, plus `bit-vector-p`
@@ -123,3 +124,32 @@ and every test they would have defined is missing from the counts -- `objects`
 (239) and `sequences` (903) are measured optimistically. Closing a gap can
 therefore LOWER a chapter's pass rate by admitting the tests behind it; that is
 progress, and the reason the report keeps the lost-form column next to the rate.
+
+## A second measurement: the _Practical Common Lisp_ corpus (2026-09-01)
+
+`.todo/620` runs Peter Seibel's own book code -- twelve ASDF systems of
+ordinary 2005 Common Lisp -- against SBCL and diffs the output. It is a
+different instrument from the ANSI suite and worth reading beside it: the suite
+ranks by TESTS LOST, which over-weights the operator families nobody calls,
+while the corpus ranks by WHETHER A PROGRAM RUNS AT ALL. The two disagree
+usefully.
+
+What the corpus put at the top that the suite does not:
+
+- the reader cannot read `.4` (`.todo/621`) -- one literal, one chapter dead
+- `nreverse` on a vector answers nil (`.todo/602`) -- one operator, one library
+  (cl-ppcre 1.2.3) dead seven files from the call
+- `delete`/`delete-if`/`nsubstitute` are no-ops on a vector, `sort` drops a
+  fill pointer (`.todo/623`)
+- a `.asd` that defines its own component class (`.todo/625`) -- three chapters
+- `read` on a stream is line-oriented (`.todo/624`)
+
+What the corpus CONFIRMS is not urgent, against the suite's ranking: the
+package-query API and `make-package` (row 2 of the table above) never come up
+-- the corpus uses `defpackage`/`in-package` and nothing else, and both work.
+Complex numbers likewise. Neither ranking is wrong; they are answering
+different questions, and an item that BOTH instruments name is the one to take
+first.
+
+Of the twelve systems, nine already match SBCL byte for byte, three of them
+only after one of the items above.
