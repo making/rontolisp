@@ -167,14 +167,22 @@ library still has to stay inside the supported subset below.
   expression holds, or `(:version NAME "1.2.3")`, resolving to the plain
   dependency (the version constraint is not checked — the `:version` option is
   ignored metadata here, so there is nothing to check against). A top-level
-  `(defmethod perform ...)` hook is tolerated and ignored (there is no
-  `operate` machinery for it to run on; any other method name is an error),
-  and a top-level `defclass` whose superclasses are documentation component
-  classes (ASDF's `doc-file`, or one declared earlier in the same file)
-  declares its name as a component type whose entries participate in ordering
-  but contribute no source, like `:static-file` — `:doc-file` and `:html-file`
-  work without a `defclass`. Any other top-level form is an error naming the
-  file.
+  `defmethod` is tolerated and ignored — there is no `operate` machinery for
+  one to run on — except
+  `(defmethod source-file-type ((c CLASS) (s module)) "ext")`, which sets that
+  class's file extension wherever in the file it sits. A top-level `defclass`
+  declares a **component class**: every superclass must be one of ASDF's
+  (`cl-source-file`, `cl-source-file.cl`, `cl-source-file.lsp`, `static-file`,
+  `doc-file`, `html-file`) or one declared earlier in the same file, and the
+  declaration decides the only two things a data-only parse can honor —
+  whether components of the class contribute a source file (inherited from the
+  superclasses) and which extension their names get (inherited too, and
+  overridable with a `(type :initform "cl")` slot or a `source-file-type`
+  method). So `(defclass txt-file (doc-file) ())` gives an ordering-only
+  `:txt-file`, and `(defclass legacy-acl-source-file (cl-source-file.cl) ())`
+  gives a `:legacy-acl-source-file` whose components load `NAME.cl`. A
+  `defclass` that is not a component class (an operation, a condition) is an
+  error, and so is any other top-level form, naming the file.
 - A `.asd` may **announce features**: a top-level
   `(eval-when (:load-toplevel :execute) (pushnew :my-feature *features*))`
   (or a bare `pushnew`/`push`) before a `defsystem` declares that feature for
@@ -198,8 +206,14 @@ library still has to stay inside the supported subset below.
   its features to this system — `("trivial-features")` puts `:unix` and
   `:little-endian` in force for its clauses and component files),
   `:serial`, `:pathname` (a literal directory prefixed to every component, so
-  a system whose sources live in `src/` can name them bare) and `:components`
-  with `:file`/`:module`/`:static-file` entries;
+  a system whose sources live in `src/` can name them bare),
+  `:default-component-class` (the class a bare `(:file "name")` entry takes —
+  writable on the system or on a module, and ASDF's `cl-source-file` when
+  nothing says otherwise, so `:default-component-class cl-source-file.cl`
+  makes every bare entry name `NAME.cl`) and `:components` with
+  `:file`/`:module`/`:static-file` entries or an entry naming any other
+  component class in scope (`(:cl-source-file.cl "main")`,
+  `(:txt-file "readme")`);
   a component may carry `:if-feature expr`, which drops the component's files
   when the feature expression does not hold (how libraries gate CLOS-only
   files behind `(:or :sbcl ...)`) while keeping its place in the dependency
