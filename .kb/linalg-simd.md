@@ -932,6 +932,15 @@ emits a native `f64.le`/`f64.ge`), they just compute the same select as the gene
   reading in 659 and 660 completes it. The one-argument rows DO match SBCL (no division
   happens, so nothing rounds). Values verified in exact rational arithmetic.
 
+  **The change is not confined to huge magnitudes**, and this is the row an ordinary
+  program can meet: the double `0.1` is a shade ABOVE a tenth, so `1.0` divided by it is
+  `9.9999999999999994...` and its floor is `9`, not the `10` that `fl(1.0/0.1)` rounds to.
+  `(floor 1.0 0.1)` is now `9` with a remainder of `0.09999999999999995` -- which is what
+  `mod` had already answered there since 659, while `floor` answered `10` and `0.0`. SBCL
+  answers `10` and `0.0` for BOTH, self-consistently through f64; rontolisp answers `9`
+  and `0.0999...95` for both, self-consistently through the exact rational. Pinned in the
+  ci-spec case and in `LispEvaluatorTest`.
+
   The second value follows from the first by definition and is no longer computed as
   `x - q*y`: with `q` an exact bignum and `y` a float that product rounds and the
   difference loses the answer entirely. `LispMacroExpander.lowerMvProducer` -- the ONE

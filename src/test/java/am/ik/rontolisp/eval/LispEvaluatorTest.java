@@ -6632,6 +6632,11 @@ class LispEvaluatorTest {
 		assertThat(eval("(multiple-value-list (round 5.0 2.0))").print()).isEqualTo("(2 1.0)");
 		assertThat(eval("(multiple-value-list (round 7.0 2.0))").print()).isEqualTo("(4 -1.0)");
 		assertThat(eval("(multiple-value-list (floor 7.5))").print()).isEqualTo("(7 0.5)");
+		// The row an ordinary program can meet: the double 0.1 is a shade ABOVE a tenth,
+		// so 1.0 over it is 9.9999999999999994..., whose floor is 9 -- not the 10 that
+		// fl(1.0/0.1) rounds to, and exactly what mod already answered beside it.
+		assertThat(eval("(multiple-value-list (floor 1.0 0.1))").print()).isEqualTo("(9 0.09999999999999995)");
+		assertThat(eval("(mod 1.0 0.1)").print()).isEqualTo("0.09999999999999995");
 	}
 
 	@Test
