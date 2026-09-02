@@ -623,13 +623,26 @@ side reproduces in the same direction but OVERSHOOTS it (-37.4% against -25.6%).
 "declined" columns land inside the filed ceiling's own range (1.71-1.81 against 1.76-1.83;
 22.04-22.37 against 22.10-22.28), so the DECLINE arm has not moved; the resolved compiled arm
 is the one that reads slower here (1.53-1.62 against the filed 1.47-1.52) while the resolved
-interpreter arm reads faster (13.79-14.07 against 16.45-16.65). The whole run is ~1.5-1.8 s
-end to end on the compiled path -- JVM start and CUDA context init are a large, machine-load-
-sensitive fraction of that, and the interpreter's ten-second-plus floor dilutes the same fixed
-cost instead. Nothing in the census or the mechanism moved (the copy counts fall exactly where
-80 avoided reshapes predict); the discrepancy is recorded here per measurement-probes.md rather
-than chased into a second machine, since the direction and the mechanism both hold and the
-census that filed this item never depended on the exact percentage.
+interpreter arm reads faster (13.79-14.07 against 16.45-16.65).
+
+**The two deviations point OPPOSITE ways, and only one of them has an explanation here.** The
+compiled path's shortfall is what a fixed startup cost does: the whole run is ~1.5-1.8 s end to
+end, JVM start and CUDA context init are a large and machine-load-sensitive fraction of it, and
+a fixed cost on both arms can only dilute a ratio. But dilution cannot make a ratio LARGER, so
+it cannot be why the interpreter reads -37.4% against a filed -25.6%; and at a twenty-second
+floor the same fixed cost is about two percent of the run, with no room to move a ratio twelve
+points either way. **The interpreter's overshoot is unexplained and was not chased.** What would
+settle it is the filed run's own conditions -- rounds, warmup, which step differences were
+taken -- which the filing did not record (`measurement-probes.md`, rule 1: a number whose
+conditions are not written down can be neither trusted nor dismissed later); the other candidate
+is that something landing between the filing and this build moved the RESOLVED arm alone, the
+decline arm having been checked against its filed range above.
+
+**The conclusion does not rest on either wall number.** The structural counts are an independent
+observation of the same change -- 34 fewer `cuMemcpyDtoH` and 44 fewer `cuMemcpyHtoD`, exactly
+where 80 avoided reshapes predict -- so the mechanism holds whatever the percentages do, and the
+census that filed this item never depended on the exact figure. That is why the discrepancy is
+recorded rather than chased onto a second machine.
 
 ### The device contract, read against the CUDA implementation
 
