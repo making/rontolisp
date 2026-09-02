@@ -18,6 +18,11 @@
 ;;;; softmax is ACCEPTED: the A/B that prices the 96 shape declines a step (todo-650, and
 ;;;; `.kb/gpu.md`, "What the fold's SHAPE decline costs on this backend").
 ;;;;
+;;;; PEF=1 rewrites the two positional-encoding buffers to SINGLE float, so the broadcast
+;;;; add in `positional-encoding-forward` is a same-width pair the device ACCEPTS: the A/B
+;;;; that prices the example's deliberate mixed-width decline (todo-655, and `.kb/gpu.md`,
+;;;; "Ceiling 2"). It comes out NEGATIVE -- accepting is 9-19% slower a step.
+;;;;
 ;;;; Not project code: a probe, like everything else in this directory.
 
 (load "../../examples/llm-from-scratch/transformer/transformer.lisp")
@@ -68,9 +73,37 @@
   (let ((out nil))
     (dotimes (i *sentences* (reverse out)) (push (synthetic-ids (+ i 1)) out))))
 
+;; PEF=1 rewrites the two positional-encoding buffers to SINGLE float after the model is
+;; built, so the broadcast add in `positional-encoding-forward` is a same-width pair the
+;; device takes. It is the CEILING of removing the mixed-width decline the example chooses
+;; deliberately (`transformer/utils.lisp`), and it is a cheat the example could not ship:
+;; `chapter02/section3.lisp` asserts a 1e-6 bound that needs the double table. The buffer
+;; is replaced through `torch:set-field` rather than by redefining the builder, because a
+;; compiled program binds a `defun` at compile time and would not see the redefinition.
+
+(defun single-copy (a)
+  (let* ((d (linalg:shape a)) (out (linalg:zeros d :element-type 'single-float))
+         (n (linalg:size a)) (flat-in (linalg:reshape a (list n)))
+         (flat-out (linalg:reshape out (list n))))
+    (dotimes (i n) (setf (aref flat-out i) (aref flat-in i)))
+    (linalg:reshape flat-out d)))
+
+(defun pef-fix (m)
+  ;; Walks the module tree and gives every :positional-encoding module a single-float :pe.
+  (when (torch:modulep m)
+    (when (eq (torch:module-kind m) :positional-encoding)
+      (torch:set-field m :pe (single-copy (torch:field m :pe))))
+    (do ((p (torch:fields m) (cddr p)))
+        ((null p))
+      (let ((v (cadr p)))
+        (cond ((torch:modulep v) (pef-fix v))
+              ((listp v) (dolist (e v) (pef-fix e))))))))
+
 (defparameter *model*
   (transformer *vocab-size* *vocab-size* *max-length* *d-model* *n-blocks* *n-heads*
                *d-k* *d-v* *d-ff*))
+
+(when (equal "1" (uiop:getenv "PEF")) (pef-fix *model*))
 
 (defparameter *optimizer* (torch:adam *model* :lr *learning-rate*))
 

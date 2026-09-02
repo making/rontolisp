@@ -162,6 +162,14 @@ closed this way without an implementation:
   the mask to the score's shape) and measured that. 0.06 s over 13 steps, 0.8%, inside the
   noise. The accept rule was left alone.
 
+- `.todo/655` (`.kb/gpu.md`, "Ceiling 2"): the chapter-2 step's copy profile attributed 2
+  of its 4 remaining downloads a step to one mixed-width `linalg:add`, which reads as money
+  on the table. The ceiling -- the operand rewritten to the matching width so the member is
+  ACCEPTED -- removed those two downloads and made the step 9-19% SLOWER, with launches and
+  device kernel time flat. **A copy count is not a cost until someone removes the copies and
+  times it**, and a ceiling can come out NEGATIVE: the profile that suggests a change is
+  exactly the evidence that would have got it built.
+
 And one that shows the cost of skipping it: `.todo/646` (`.kb/gpu.md`, "Layer-norm's
 affine on Metal") wrote the kernels first. They were correct and bit-identical on the first
 run and a quarter faster per call, and the step did not move, so they were not kept -- the
