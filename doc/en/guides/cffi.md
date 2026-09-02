@@ -137,7 +137,13 @@ without cffi-libffi loaded" and offers to load a system built around a C library
 Here the foreign function API lays the structure out itself from the member types,
 so the call is the ordinary one — and `cffi-libffi` is never needed. A structure
 whose layout CFFI and the foreign function API do not agree on (a hand-written
-`:offset`, a bitfield) is refused by name instead of being passed on a guess.
+`:offset`, a bitfield) is refused by name instead of being passed on a guess. A
+nested structure is laid out flat, which is the same memory and the same call: a
+rectangle of two points is four doubles.
+
+The `rontolisp` **native binary** carries a bounded family of by-value shapes rather
+than all of them, because it has to compile each one ahead of time; the family and
+what falls outside it are in [In the native binary](#in-the-native-binary) below.
 
 ## Callbacks and variadic calls
 
@@ -216,11 +222,19 @@ A native image compiles a stub per foreign call **shape** ahead of time, and
 registered grid. Every narrow integer travels as its 64-bit carrier and every
 pointer or string as `void*`, which collapses a C API's shapes to a few carriers per
 parameter; the grid then covers all pointer/integer argument combinations to arity
-6, with `double` to arity 4 and `float` to arity 2, at every return type, and the
+6, with `double` to arity 4 and `float` to arity 2, at every return carrier, and the
 callback shapes to arity 4. In practice a binding's fixed-arity calls just work.
 
-A call outside the grid — a narrow integer argument past the sixth, a variadic
-tail, a structure by value — signals an error naming the one
+A structure returned **by value** is the one thing that cannot be collapsed that way:
+the ABI decides how to return it from the members themselves, so the member list is
+part of the shape. The binary carries a bounded family of them instead — every
+one- and two-member structure over the C scalar widths and `:pointer`, plus the
+three- and four-member ones whose members are all the same type — with a nested
+structure counting flattened. The *arguments* of such a call still collapse, so
+`div`, `ldiv` and `imaxdiv` are one registered shape, not three.
+
+A call outside the grid — a narrow integer argument past the sixth, say, or a
+structure with more members than the family carries — signals an error naming the one
 `reachability-metadata.json` entry that would register it, so the fix is to add
 that entry and rebuild the binary, or to run the program on `java -jar`, where any
 shape binds.

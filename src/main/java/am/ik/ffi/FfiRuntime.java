@@ -61,15 +61,18 @@ import org.jspecify.annotations.Nullable;
  * small arities outright ({@code FfiNativeImageForeignConfigTest} pins that it does).
  *
  * <p>
- * Three cases keep their EXACT layouts, which are ABI-correct everywhere and simply fall
- * outside the grid: an argument past the sixth integer-class position (past the register
- * window Apple's AArch64 packs stack arguments, so widening one there would shift every
- * slot after it), a variadic call (each {@code firstVariadicArg} index is a distinct
- * stub, so no grid covers varargs anyway -- and the Apple variadic path is the one this
- * machine cannot verify), and a call that passes or returns a struct by value (the member
- * list is part of the shape). On the JVM the linker binds any shape and the
- * canonicalisation is invisible; in the binary those calls signal the actionable
- * {@link FfiException} naming the one metadata entry to add.
+ * Three cases keep their EXACT layouts, ABI-correct everywhere: an argument past the
+ * sixth integer-class position (past the register window Apple's AArch64 packs stack
+ * arguments, so widening one there would shift every slot after it), a variadic call
+ * (each {@code firstVariadicArg} index is a distinct stub, so no grid covers varargs
+ * anyway -- and the Apple variadic path is the one this machine cannot verify), and a
+ * struct passed or returned by value, whose member list IS the shape: a member's width
+ * and offset are what the ABI classifies the aggregate by. A by-value struct RETURN is
+ * the one of the three the grid can still carry, because it does not stop the ARGUMENTS
+ * canonicalising ({@link #argumentsCanonicalisable}) -- the grid ships a bounded family
+ * of struct returns over the parameter tuples it already has. On the JVM the linker binds
+ * any shape and the canonicalisation is invisible; in the binary a call outside the grid
+ * signals the actionable {@link FfiException} naming the one metadata entry to add.
  *
  * <h2>{@code errno} is captured, not fetched</h2>
  *
@@ -288,7 +291,7 @@ public final class FfiRuntime {
 					+ (argTypes.size() == 1 ? "" : "s") + " but got " + values.length);
 		}
 		MethodHandle handle = downcall(request.returnType(), argTypes, request.firstVariadic());
-		boolean canonical = canonicalisable(request.returnType(), argTypes, request.firstVariadic());
+		boolean canonical = argumentsCanonicalisable(argTypes, request.firstVariadic());
 		try (Arena arena = Arena.ofConfined()) {
 			List<Object> invocation = new ArrayList<>(values.length + 3);
 			invocation.add(MemorySegment.ofAddress(request.function()));
@@ -336,12 +339,22 @@ public final class FfiRuntime {
 	static final int REGISTER_WINDOW = 6;
 
 	/**
-	 * Whether the whole call takes the canonical carriers: fixed (a variadic tail keeps
-	 * C's own promotions and each {@code firstVariadicArg} index is its own stub anyway)
-	 * and struct-free (a by-value struct's member list is part of the shape).
+	 * Whether the ARGUMENTS take the canonical carriers: fixed (a variadic tail keeps C's
+	 * own promotions and each {@code firstVariadicArg} index is its own stub anyway) and
+	 * free of by-value struct ARGUMENTS (a struct eats an ABI-defined number of
+	 * register-class slots, so the register window cannot be counted past one).
+	 *
+	 * <p>
+	 * A by-value struct RETURN does not disqualify them. Where the ABI returns such a
+	 * struct indirectly it does so through a register of its own -- {@code x8} on
+	 * AAPCS64, and on SysV the hidden pointer in {@code rdi} pushes at most the sixth
+	 * integer argument onto the stack, whose slots Linux rounds to 8 bytes -- so widening
+	 * an argument inside the window still moves nothing. Keeping the arguments canonical
+	 * is what lets a struct-returning call reuse the parameter shapes the grid already
+	 * carries: {@code div}, {@code ldiv} and {@code imaxdiv} are one entry, not three.
 	 */
-	static boolean canonicalisable(FfiType ret, List<FfiType> args, int firstVariadic) {
-		if (firstVariadic >= 0 || ret instanceof Struct) {
+	static boolean argumentsCanonicalisable(List<FfiType> args, int firstVariadic) {
+		if (firstVariadic >= 0) {
 			return false;
 		}
 		for (FfiType arg : args) {
@@ -350,6 +363,15 @@ public final class FfiRuntime {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Whether the whole call -- the return carrier included -- takes the canonical
+	 * carriers. A by-value struct return keeps its EXACT layout: the member list is part
+	 * of the shape.
+	 */
+	static boolean canonicalisable(FfiType ret, List<FfiType> args, int firstVariadic) {
+		return !(ret instanceof Struct) && argumentsCanonicalisable(args, firstVariadic);
 	}
 
 	/** How many integer-class (integer, pointer, string) parameters precede index i. */
@@ -376,24 +398,31 @@ public final class FfiRuntime {
 	 * types' own layouts everywhere else.
 	 */
 	static FunctionDescriptor descriptorFor(FfiType ret, List<FfiType> args, int firstVariadic) {
-		boolean canonical = canonicalisable(ret, args, firstVariadic);
+		boolean canonicalArguments = argumentsCanonicalisable(args, firstVariadic);
 		MemoryLayout[] layouts = new MemoryLayout[args.size()];
 		for (int i = 0; i < args.size(); i++) {
 			FfiType arg = args.get(i);
 			if (arg == Scalar.VOID) {
 				throw new FfiException("an argument cannot be :void");
 			}
-			boolean widened = canonical && narrowInteger(arg) && intClassIndex(args, i) < REGISTER_WINDOW;
+			boolean widened = canonicalArguments && narrowInteger(arg) && intClassIndex(args, i) < REGISTER_WINDOW;
 			layouts[i] = widened ? ValueLayout.JAVA_LONG : arg.layout();
 		}
 		if (ret == Scalar.VOID) {
 			return FunctionDescriptor.ofVoid(layouts);
 		}
+		boolean canonical = canonicalisable(ret, args, firstVariadic);
 		MemoryLayout retLayout = canonical && narrowInteger(ret) ? ValueLayout.JAVA_LONG : ret.layout();
 		return FunctionDescriptor.of(retLayout, layouts);
 	}
 
-	/** One layout as the reachability-metadata schema spells it. */
+	/**
+	 * One layout as the reachability-metadata schema spells it. A struct's PADDING is
+	 * part of the spelling: the image builder rebuilds the layout with
+	 * {@code MemoryLayout.structLayout}, which refuses a member that does not sit at its
+	 * own alignment, so a padding-free {@code struct(jbyte,jint)} would abort the build
+	 * instead of registering the shape.
+	 */
 	static String metadataType(MemoryLayout layout) {
 		return switch (layout) {
 			case AddressLayout ignored -> "void*";
@@ -405,9 +434,9 @@ public final class FfiRuntime {
 			case ValueLayout.OfLong ignored -> "jlong";
 			case ValueLayout.OfFloat ignored -> "jfloat";
 			case ValueLayout.OfDouble ignored -> "jdouble";
+			case java.lang.foreign.PaddingLayout padding -> "padding(" + padding.byteSize() + ")";
 			case java.lang.foreign.GroupLayout group -> group.memberLayouts()
 				.stream()
-				.filter(member -> !(member instanceof java.lang.foreign.PaddingLayout))
 				.map(FfiRuntime::metadataType)
 				.collect(java.util.stream.Collectors.joining(",", "struct(", ")"));
 			default -> throw new FfiException("no metadata spelling for " + layout);

@@ -114,9 +114,11 @@ Both WASM backends refuse a program that reaches `ffi:` (and so one that reaches
 binary interprets it against the registered downcall/upcall shape GRID (`.kb/ffi.md` --
 the carrier canonicalisation is what makes the grid finite, and a shape outside it
 signals the one metadata entry that would register it; `%call-symbol` re-signals that
-miss with the function's name in front), and the JVM class output embeds the whole
-binding (`JvmFfiRuntimeBuilder`), so `use.lisp`-shaped programs compile to a `.class`
-and answer the interpreter byte for byte. Three compile-path facts the cffi source
+miss with the function's name in front). A `defcfun` returning a struct BY VALUE is
+inside that grid as of todo-632 (2026-09-02) -- the guide's own `div` example failed in
+the shipped binary and worked on `java -jar` until then. The JVM class output embeds the
+whole binding (`JvmFfiRuntimeBuilder`), so `use.lisp`-shaped programs compile to a
+`.class` and answer the interpreter byte for byte. Three compile-path facts the cffi source
 forced into existence, each pinned in `JvmFfiInteropCompilerTest`: `%call-address` calls
 the internal `ffi:%apply-call` (ffi:call with the arguments as ONE list) instead of
 `(apply #'ffi:call ...)`, because the compiled backends give `ffi:` no first-class
