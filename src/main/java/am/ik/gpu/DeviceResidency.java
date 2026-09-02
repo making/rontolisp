@@ -433,6 +433,41 @@ final class DeviceResidency {
 	}
 
 	/**
+	 * Whether {@code host}'s OWN entry is dirty right now -- the device holds bytes it
+	 * does not -- as opposed to {@link #dirtyCount()}, a process-wide tally that also
+	 * counts whatever garbage an earlier caller's arrays left in the cache until the
+	 * collector reaches them. A test that wants to know about ONE result asks this
+	 * instead of diffing the tally around it.
+	 * @param host the host array (a result's own storage, most often a stub)
+	 * @return {@code true} when {@code host}'s entry is dirty
+	 */
+	boolean dirty(Object host) {
+		if (!this.occupied) {
+			return false;
+		}
+		synchronized (this) {
+			Entry entry = this.entries.get(new Lookup(host));
+			return entry != null && entry.dirty;
+		}
+	}
+
+	/**
+	 * Whether {@code host} (a stub) holds a backing right now -- the per-handle answer
+	 * {@link #backingCount()}'s tally cannot give on its own, for the same reason
+	 * {@link #dirty(Object)} exists next to {@link #dirtyCount()}.
+	 * @param host the stub
+	 * @return {@code true} when a backing array has been allocated for it
+	 */
+	boolean backed(Object host) {
+		if (!this.backed) {
+			return false;
+		}
+		synchronized (this) {
+			return this.backings.get(new Lookup(host)) != null;
+		}
+	}
+
+	/**
 	 * Whether {@code host}'s span has been offered through here before and not written
 	 * since -- and if not, remembers that it has now. The accept-on-second-sight rule of
 	 * the matrix-by-vector product ({@code CudaGemm.gemv}, {@code MetalGemm.gemvF}): a

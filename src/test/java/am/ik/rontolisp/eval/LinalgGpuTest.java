@@ -1213,36 +1213,31 @@ class LinalgGpuTest {
 				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
 				(linalg:add *a* *row*)
 				""".formatted(side * side + 1, option(), side, side, side + 1, option(), side);
-		// The two counters are LIVE-SET sizes over weak keys: an entry left dirty by an
-		// earlier test in this fork disappears from the count whenever the collector
-		// reaches it, which -- inside the window measured below -- reads as the result
-		// not having been left on the device. So the set is quiesced first: collect, then
-		// expunge the cleared keys (backingCount does that), and only then snapshot.
-		System.gc();
-		am.ik.gpu.GpuThresholds.backingCount();
-		int dirty = am.ik.gpu.GpuThresholds.dirtyCount();
-		int backed = am.ik.gpu.GpuThresholds.backingCount();
 		LispVal result = eval(program, true);
 		// The value came back as a packed array whose storage the device still holds:
-		// one more dirty copy, and on the host a STUB -- no array of the result's size
-		// was allocated at all (.kb/gpu.md, "Lazy results, and the result that has no
-		// host array") ...
-		assertThat(am.ik.gpu.GpuThresholds.dirtyCount()).isEqualTo(dirty + 1);
-		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed);
+		// a dirty entry, and on the host a STUB -- no array of the result's size was
+		// allocated at all (.kb/gpu.md, "Lazy results, and the result that has no host
+		// array") ... Asked of the result's OWN handle, not the process-wide
+		// dirtyCount()/backingCount() tallies: those are live-set sizes shared by every
+		// test in the fork, and a diff around one call reads whatever an unrelated
+		// test's now-collected garbage does in the same window, not this call's own
+		// effect (`.kb/test-execution.md`).
 		Object storage = result instanceof LispSingleFloatArray f ? f.storage()
 				: ((LispDoubleFloatArray) result).storage();
+		assertThat(am.ik.gpu.GpuThresholds.isDirty(storage)).as("left dirty on the device").isTrue();
+		assertThat(am.ik.gpu.GpuThresholds.isBacked(storage)).as("no backing allocated yet").isFalse();
 		assertThat(storage instanceof float[] f ? f.length : ((double[]) storage).length).isZero();
 		assertThat(((am.ik.rontolisp.LispFloatArray) result).totalSize()).isEqualTo(side * side);
 		// ... until the first read through the accessor brings it home, once, into a
 		// backing the accessor answers; the record's storage stays the stub it keys on.
 		double[] elements = elements(result);
-		assertThat(am.ik.gpu.GpuThresholds.dirtyCount()).isEqualTo(dirty);
-		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed + 1);
+		assertThat(am.ik.gpu.GpuThresholds.isDirty(storage)).as("materialized on first read").isFalse();
+		assertThat(am.ik.gpu.GpuThresholds.isBacked(storage)).as("backing now exists").isTrue();
 		assertThat(elements[5]).isEqualTo(6 + 6);
 		assertThat(elements[side + 3]).isEqualTo(side + 4 + 4);
 		assertThat(elements(result)[5]).isEqualTo(12);
 		assertThat(storage instanceof float[] f ? f.length : ((double[]) storage).length).isZero();
-		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed + 1);
+		assertThat(am.ik.gpu.GpuThresholds.isBacked(storage)).as("still backed after a second read").isTrue();
 	}
 
 	/**
