@@ -1812,6 +1812,49 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * {@code (linalg:log-softmax a :axis ax)} over the LAST axis as one pass per row; any
+	 * other axis declines to the defun, whose members the device takes one by one.
+	 * @param a the operand
+	 * @param axis the axis argument, or {@code null} for a missing one
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuLogSoftmaxAxis(@Nullable Object a, @Nullable Object axis) {
+		int[] d = lastAxisRows(a, axis);
+		if (d == null || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(a);
+		if (a instanceof float[] x) {
+			float[] c = newLike(dims(a, rank(a)));
+			return Gpu.logSoftmax(x, off, c, off, d[0], d[1]) ? c : null;
+		}
+		double[] c = newLikeD(dims(a, rank(a)));
+		return Gpu.logSoftmax(doubles(a), off, c, off, d[0], d[1]) ? c : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-log-softmax-grad g out ax)} over the last axis as one pass per
+	 * row.
+	 * @param g the output's gradient
+	 * @param out the log-softmax output
+	 * @param axis the normalized axis
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuLogSoftmaxGrad(@Nullable Object g, @Nullable Object out, @Nullable Object axis) {
+		int[] d = lastAxisRows(g, axis);
+		if (d == null || !sameShape(g, out) || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(g);
+		if (g instanceof float[] gf) {
+			float[] c = newLike(dims(g, rank(g)));
+			return Gpu.logSoftmaxGrad(gf, off, floats(out), off, c, off, d[0], d[1]) ? c : null;
+		}
+		double[] c = newLikeD(dims(g, rank(g)));
+		return Gpu.logSoftmaxGrad(doubles(g), off, doubles(out), off, c, off, d[0], d[1]) ? c : null;
+	}
+
+	/**
 	 * {@code (linalg::%la-layer-norm x eps)}: the normalization over the last axis as one
 	 * pass per row.
 	 * @param x the operand

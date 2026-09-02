@@ -129,7 +129,7 @@ final class JvmLinalgKernelCompiler {
 			LispNames.LINALG_SIGN, LispNames.LINALG_ERF,
 			// The device-only fused pair at arity 1: softmax (its :axis form is the
 			// member; the base form routes to the defun) and the exact GELU.
-			LispNames.LINALG_SOFTMAX, LispNames.LINALG_GELU);
+			LispNames.LINALG_SOFTMAX, LispNames.LINALG_LOG_SOFTMAX, LispNames.LINALG_GELU);
 
 	/**
 	 * Returns whether the given {@code linalg:} member is one this compiler accelerates.
@@ -171,7 +171,7 @@ final class JvmLinalgKernelCompiler {
 				5;
 			case LispNames.LINALG_COL2IM -> 6;
 			case LispNames.LINALG_WHERE, LispNames.LINALG_SCATTER_ROWS, LispNames.LINALG_GELU_GRAD,
-					LispNames.LINALG_SOFTMAX_GRAD ->
+					LispNames.LINALG_SOFTMAX_GRAD, LispNames.LINALG_LOG_SOFTMAX_GRAD ->
 				3;
 			// The fused tier's four-argument members (todo-499); %la-layer-norm is two,
 			// the default.
@@ -201,7 +201,7 @@ final class JvmLinalgKernelCompiler {
 			// concatenate has no lane kernel: the name here is never emitted, the shape
 			// is. Nor has softmax, a device member in this form only (todo-499).
 			LispNames.LINALG_CONCATENATE, new Extended("laConcatenate", 2), LispNames.LINALG_SOFTMAX,
-			new Extended("laSoftmaxAxis", 2));
+			new Extended("laSoftmaxAxis", 2), LispNames.LINALG_LOG_SOFTMAX, new Extended("laLogSoftmaxAxis", 2));
 
 	/** The extended (option-form) kernel of the given member, or {@code null}. */
 	static @org.jspecify.annotations.Nullable Extended extended(String member) {

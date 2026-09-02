@@ -198,7 +198,9 @@ final class JvmGpuRuntimeBuilder {
 			"gpuReshape", "gpuConcatenate", "gpuScale", "gpuTakeRows", "gpuPick", "gpuSumSquares",
 			// The fused tier's two-argument members (todo-499): softmax over its axis,
 			// layer-norm's normalization over its epsilon.
-			"gpuSoftmaxAxis", "gpuLayerNorm");
+			"gpuSoftmaxAxis", "gpuLayerNorm",
+			// log-softmax over its axis (todo-629).
+			"gpuLogSoftmaxAxis");
 
 	/**
 	 * The strided tier's three-argument kernels: the axis folds
@@ -206,7 +208,9 @@ final class JvmGpuRuntimeBuilder {
 	 */
 	private static final List<String> FOLD_KERNELS = List.of("gpuSumAxis", "gpuAmaxAxis", "gpuAminAxis",
 			// The fused tier's three-argument adjoints (todo-499).
-			"gpuGeluGrad", "gpuSoftmaxGrad");
+			"gpuGeluGrad", "gpuSoftmaxGrad",
+			// log-softmax's adjoint (todo-629).
+			"gpuLogSoftmaxGrad");
 
 	/**
 	 * The fused tier's four-argument members: layer-norm's adjoint

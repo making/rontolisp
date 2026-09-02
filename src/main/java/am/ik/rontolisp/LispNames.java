@@ -5481,6 +5481,19 @@ public final class LispNames {
 	public static final String LINALG_SOFTMAX_GRAD = "%LA-SOFTMAX-GRAD";
 
 	/**
+	 * {@code linalg:log-softmax}: a device member since todo-629, in its {@code :axis}
+	 * form.
+	 */
+	public static final String LINALG_LOG_SOFTMAX = "LOG-SOFTMAX";
+
+	/**
+	 * {@code linalg::%la-log-softmax-grad} (INTERNAL): {@code torch:log-softmax}'s
+	 * adjoint {@code g - exp(out) * sum(g)} along an axis, the composition it always was,
+	 * spelled as one member so the device can run it as one pass (todo-629).
+	 */
+	public static final String LINALG_LOG_SOFTMAX_GRAD = "%LA-LOG-SOFTMAX-GRAD";
+
+	/**
 	 * {@code linalg::%la-gelu} (INTERNAL): the exact GELU {@code x * (1 + erf(x / sqrt
 	 * 2)) / 2} as the composition {@code torch:gelu} spelled in torch ops, now one member
 	 * with an adjoint of its own ({@link #LINALG_GELU_GRAD}) -- so a device can run each

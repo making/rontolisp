@@ -2175,6 +2175,47 @@ class GpuTest {
 		assertThat(Gpu.pick(table, 0, picked, 0, new int[] { slab }, slab)).isFalse();
 	}
 
+	@Test
+	void aDivisionByAPowerOfTwoIsTheExactReciprocalsMultiplyAtBothWidths() {
+		// The scale kernel computes in double and narrows on the store, and a double
+		// DIVIDE is the one arithmetic operation this card is slow at (measured: 28% of
+		// a scale pass at the attention score's shape, .kb/gpu.md). Dividing by a power
+		// of two is exactly multiplying by its reciprocal -- two correct roundings of the
+		// same real number -- so Gpu.scale launches the multiply instead. Bit-identity is
+		// the whole licence for that, and it is what this asserts: every divisor below,
+		// power of two or not, element by element against the CPU's own divide, over
+		// operands that include a subnormal, an infinity and a negative zero.
+		int n = 1 << 14;
+		double[] a = new double[n];
+		float[] af = new float[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = switch (i) {
+				case 0 -> Double.MIN_VALUE;
+				case 1 -> Double.POSITIVE_INFINITY;
+				case 2 -> -0.0;
+				default -> (i - n / 2) * 0.37;
+			};
+			af[i] = (float) a[i];
+		}
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, new double[n], 0, n)).isTrue();
+		assertThat(Gpu.map(Gpu.MAP_EXP, af, 0, new float[n], 0, n)).isTrue();
+		double[] out = new double[n];
+		float[] outf = new float[n];
+		for (double s : new double[] { 8.0, 0.125, 1.0, -4.0, 1024.0, 3.0, 1.4142135623730951, 0.1 }) {
+			assertThat(Gpu.scale(Gpu.BIN_DIV, a, 0, s, false, out, 0, n)).as("div %s", s).isTrue();
+			assertThat(Gpu.scale(Gpu.BIN_DIV, af, 0, s, false, outf, 0, n)).as("div %s at #f", s).isTrue();
+			for (int i = 0; i < n; i++) {
+				assertThat(out[i]).as("div %s at %d", s, i).isEqualTo(a[i] / s);
+				assertThat(outf[i]).as("div %s at %d at #f", s, i).isEqualTo((float) (af[i] / s));
+			}
+			// The SWAPPED form is s / a[i], which no reciprocal rewrites.
+			assertThat(Gpu.scale(Gpu.BIN_DIV, a, 0, s, true, out, 0, n)).as("div swapped %s", s).isTrue();
+			for (int i = 0; i < n; i++) {
+				assertThat(out[i]).as("div swapped %s at %d", s, i).isEqualTo(s / a[i]);
+			}
+		}
+	}
+
 	// --- the fused tier (.todo/499) --------------------------------------------------
 
 	/**
@@ -2312,6 +2353,24 @@ class GpuTest {
 					: Gpu.softmaxGrad((double[]) g, 0, (double[]) out, 0, (double[]) fused, 0, rows, len))
 				.isTrue();
 			assertThat(ch.doubles(fused)).as("softmax grad single=%s", single).containsExactly(ch.doubles(dx));
+			// log-softmax: amax, sub, exp, sum, log, sub -- the deviation recomputed in
+			// the kernel's third pass rather than stored, which is the same (T) value.
+			Object s = ch.bcast(Gpu.BIN_SUB, x, m, rows, len);
+			Object lg = ch.map(Gpu.MAP_LOG, ch.fold(Gpu.FOLD_SUM, ch.map(Gpu.MAP_EXP, s), rows, len));
+			Object lout = ch.bcast(Gpu.BIN_SUB, s, lg, rows, len);
+			fused = ch.fresh(n);
+			assertThat(single ? Gpu.logSoftmax((float[]) x, 0, (float[]) fused, 0, rows, len)
+					: Gpu.logSoftmax((double[]) x, 0, (double[]) fused, 0, rows, len))
+				.isTrue();
+			assertThat(ch.doubles(fused)).as("log-softmax single=%s", single).containsExactly(ch.doubles(lout));
+			// its adjoint: sum, exp, mul, sub.
+			Object ldx = ch.zip(Gpu.BIN_SUB, g,
+					ch.bcast(Gpu.BIN_MUL, ch.map(Gpu.MAP_EXP, lout), ch.fold(Gpu.FOLD_SUM, g, rows, len), rows, len));
+			fused = ch.fresh(n);
+			assertThat(single ? Gpu.logSoftmaxGrad((float[]) g, 0, (float[]) lout, 0, (float[]) fused, 0, rows, len)
+					: Gpu.logSoftmaxGrad((double[]) g, 0, (double[]) lout, 0, (double[]) fused, 0, rows, len))
+				.isTrue();
+			assertThat(ch.doubles(fused)).as("log-softmax grad single=%s", single).containsExactly(ch.doubles(ldx));
 			// gelu: mul 0.5, div sqrt 2, erf, 1 + , mul.
 			Object t1 = ch.scale(Gpu.BIN_MUL, x, 0.5, false);
 			Object t2 = ch.scale(Gpu.BIN_DIV, x, 1.4142135623730951, false);

@@ -776,6 +776,28 @@ final class LinalgGpuKernels {
 		return Gpu.softmaxGrad(g, 0, s, 0, out, 0, rows, len) ? out : null;
 	}
 
+	/** {@code linalg:log-softmax} over the last axis of {@code rows x len}, or null. */
+	static double @Nullable [] logSoftmax(double[] a, int rows, int len) {
+		double[] out = result(rows * len);
+		return Gpu.logSoftmax(a, 0, out, 0, rows, len) ? out : null;
+	}
+
+	static float @Nullable [] logSoftmax(float[] a, int rows, int len) {
+		float[] out = resultF(rows * len);
+		return Gpu.logSoftmax(a, 0, out, 0, rows, len) ? out : null;
+	}
+
+	/** {@code linalg::%la-log-softmax-grad} over the last axis, or {@code null}. */
+	static double @Nullable [] logSoftmaxGrad(double[] g, double[] o, int rows, int len) {
+		double[] out = result(rows * len);
+		return Gpu.logSoftmaxGrad(g, 0, o, 0, out, 0, rows, len) ? out : null;
+	}
+
+	static float @Nullable [] logSoftmaxGrad(float[] g, float[] o, int rows, int len) {
+		float[] out = resultF(rows * len);
+		return Gpu.logSoftmaxGrad(g, 0, o, 0, out, 0, rows, len) ? out : null;
+	}
+
 	/** {@code linalg::%la-layer-norm} over the last axis, or {@code null}. */
 	static double @Nullable [] layerNorm(double[] x, int rows, int len, double eps) {
 		double[] out = result(rows * len);

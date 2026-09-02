@@ -1111,7 +1111,9 @@ class JvmLinalgGpuAccelCompilerTest {
 		// bridge -- softmax in its :axis form among them, which is the one shape the
 		// device takes it at.
 		for (String call : new String[] { "(linalg:softmax #d((1.0 2.0) (3.0 4.0)) :axis -1)",
-				"(linalg::%la-softmax-grad #d((1.0 2.0)) #d((0.5 0.5)) 1)", "(linalg::%la-gelu #d(1.0 2.0))",
+				"(linalg::%la-softmax-grad #d((1.0 2.0)) #d((0.5 0.5)) 1)",
+				"(linalg:log-softmax #d((1.0 2.0) (3.0 4.0)) :axis -1)",
+				"(linalg::%la-log-softmax-grad #d((1.0 2.0)) #d((0.5 0.5)) 1)", "(linalg::%la-gelu #d(1.0 2.0))",
 				"(linalg::%la-gelu-grad #d(1.0) #d(2.0) nil)", "(linalg::%la-layer-norm #d((1.0 2.0)) 1.0e-5)",
 				"(linalg::%la-layer-norm-grad #d((1.0 2.0)) #d((3.0 4.0)) 1.0e-5 nil)",
 				"(linalg::%la-dropout-mask '(2) 0.5 (linalg::%la-rng-state) nil)" }) {
@@ -1144,7 +1146,16 @@ class JvmLinalgGpuAccelCompilerTest {
 				                                        (linalg:exp (linalg:negative (linalg:mul t2 t2))))))
 				         (b (linalg:div g2 1.4142135623730951)) (a (linalg:mul g1 0.5)))
 				    (linalg:add (if (null old) b (linalg:add old b)) a)))
+				(defun log-softmax-chain (a)
+				  (let ((s (linalg:sub a (linalg:amax a :axis 1 :keepdims t))))
+				    (linalg:sub s (linalg:log (linalg:sum (linalg:exp s) :axis 1 :keepdims t)))))
+				(defun log-softmax-grad-chain (g out)
+				  (linalg:sub g (linalg:mul (linalg:exp out) (linalg:sum g :axis 1 :keepdims t))))
 				(print (linalg:array-equal (linalg:softmax *x* :axis -1) (softmax-chain *x*)))
+				(print (linalg:array-equal (linalg:log-softmax *x* :axis -1) (log-softmax-chain *x*)))
+				(print (linalg:array-equal
+				        (linalg::%%la-log-softmax-grad *g* (linalg:log-softmax *x* :axis -1) 1)
+				        (log-softmax-grad-chain *g* (linalg:log-softmax *x* :axis -1))))
 				(print (linalg:array-equal (linalg::%%la-gelu *x*) (gelu-chain *x*)))
 				(print (linalg:array-equal (linalg::%%la-gelu-grad *g* *x* nil) (gelu-grad-chain *g* *x* nil)))
 				(print (linalg:array-equal (linalg::%%la-gelu-grad *g* *x* *g*) (gelu-grad-chain *g* *x* *g*)))
@@ -1157,7 +1168,7 @@ class JvmLinalgGpuAccelCompilerTest {
 				(print *st*)
 				""".formatted(n, TYPE, rows, n, TYPE, rows, rows, DOUBLES ? "nil" : "t");
 		String oracle = scalar(program);
-		assertThat(oracle).startsWith("T\nT\nT\nT\n");
+		assertThat(oracle).startsWith("T\nT\nT\nT\nT\nT\n");
 		assertThat(accel(program)).as("--gpu").isEqualTo(oracle);
 		assertThat(run(compile(program, true, false, true))).as("--gpu --simd")
 			.isEqualTo(run(compile(program, false, false, true)));
