@@ -1364,6 +1364,19 @@ public final class LispNames {
 	public static final String ARRAY_ALIKE = "%ARRAY-ALIKE";
 
 	/**
+	 * The {@code %array-adopt-element-type} internal built-in function:
+	 * {@code (%array-adopt-element-type new old)} makes the freshly built general array
+	 * {@code new} remember {@code old}'s element type and returns {@code new}. The
+	 * element type of an array is not changed by {@code adjust-array} (CLHS), and a
+	 * NON-adjustable adjustment answers a fresh array, so the expansion stamps the copy
+	 * with what the original remembered. Copying the remembered type is much cheaper than
+	 * asking the fresh {@code make-array} for a RUNTIME {@code :element-type}: the
+	 * backends store the type as one word each, so this reads and writes that word
+	 * instead of turning it back into a seven-arm allocator dispatch.
+	 */
+	public static final String ARRAY_ADOPT_ELEMENT_TYPE = "%ARRAY-ADOPT-ELEMENT-TYPE";
+
+	/**
 	 * The {@code fill-pointer} built-in function (the fill pointer of a vector). Also a
 	 * {@code setf} place (target {@link #SET_FILL_POINTER}).
 	 */

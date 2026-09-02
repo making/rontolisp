@@ -1364,6 +1364,14 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ARRAY_DEFAULT_ELEMENT, args, 1);
 			return arrayDefaultElement(args.get(0));
 		}));
+		env.defineFunction(LispNames.ARRAY_ADOPT_ELEMENT_TYPE,
+				new LispFunction(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, args -> {
+					requireArgCount(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, args, 2);
+					if (args.get(0) instanceof LispArray fresh) {
+						fresh.adoptElementType(arrayElementTypeCode(args.get(1)));
+					}
+					return args.get(0);
+				}));
 		env.defineFunction(LispNames.ARRAY_BECOME, new LispFunction(LispNames.ARRAY_BECOME, args -> {
 			requireArgCount(LispNames.ARRAY_BECOME, args, 2);
 			LispArray old = requireGeneralArray(LispNames.ARRAY_BECOME, args.get(0));
@@ -1402,14 +1410,27 @@ public final class Environment implements Scope {
 	// adjust-array's growth or by vector-push-extend's -- reads back as the same thing
 	// make-array's unsupplied element does (%array-default-element; ArrayElementTypes).
 	private static LispVal arrayDefaultElement(LispVal value) {
-		LispVal zero = switch (value) {
-			case LispString ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.CHARACTER);
-			case LispIntVector ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.UNSIGNED_BYTE_8);
-			case LispFloatArray ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.DOUBLE_FLOAT);
-			case LispArray array -> ArrayElementTypes.defaultElement(array.elementTypeCode());
-			default -> null;
-		};
+		LispVal zero = ArrayElementTypes.defaultElement(arrayElementTypeCode(value));
 		return zero == null ? LispNil.INSTANCE : zero;
+	}
+
+	// The UPGRADED element type this value remembers, as an ArrayElementTypes code: one
+	// answer per representation, and ArrayElementTypes.T for anything that is not an
+	// array at all. Both %array-default-element (the zero) and
+	// %array-adopt-element-type (the stamp a fresh adjust-array copy takes) ask it.
+	private static int arrayElementTypeCode(LispVal value) {
+		return switch (value) {
+			case LispString ignored -> ArrayElementTypes.CHARACTER;
+			case LispIntVector iv -> switch (iv.width()) {
+				case 16 -> ArrayElementTypes.UNSIGNED_BYTE_16;
+				case 32 -> ArrayElementTypes.UNSIGNED_BYTE_32;
+				default -> ArrayElementTypes.UNSIGNED_BYTE_8;
+			};
+			case LispSingleFloatArray ignored -> ArrayElementTypes.SINGLE_FLOAT;
+			case LispFloatArray ignored -> ArrayElementTypes.DOUBLE_FLOAT;
+			case LispArray array -> array.elementTypeCode();
+			default -> ArrayElementTypes.T;
+		};
 	}
 
 	// The shared adjust-array core: build the resized copy (preserving the elements at

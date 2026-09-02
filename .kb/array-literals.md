@@ -317,7 +317,10 @@ change affordable, and it is why the three representations do not agree on the e
 
 - **Interpreter**: one `int` field on `LispArray`. `become` (adjust-array's in-place half)
   does not touch it, so the type survives adjustment, and `vectorPushExtend` fills the
-  slots it opens with `defaultElement` rather than nil.
+  slots it opens with `defaultElement` rather than nil. `adoptElementType` is its ONE
+  writer after construction -- the fresh copy a non-adjustable `adjust-array` answers
+  takes the adjusted array's stamp (`%array-adopt-element-type`,
+  `.kb/adjustable-arrays.md`).
 - **JVM**: header slot **4**, which is free on every non-displaced array -- slot 3 (the
   displacement target) is what says whether slot 4 holds an offset instead. The ordinary
   length-3 header grows to 5 (`{dims, fp, adj, null, et}`), and the length-6 PACKED header
@@ -379,6 +382,11 @@ text, all four backends, every answer SBCL 2.2.9's.
 **What still answers `t`.** A DISPLACED view answers `t` on all four, on purpose: its meta
 slot carries the offset, not a type, and SBCL answers `t` for a view whose own
 `:element-type` was unstated too.
+
+**What CARRIES the remembered type across an operation** is the same one word per backend,
+and `adjust-array` copies it rather than re-deriving it -- the measurement that settled
+that, and the seven-arm alternative it beat by fourteen times, are in
+`.kb/adjustable-arrays.md`, "The adjusted COPY remembers the element type".
 
 ## A RUNTIME `:element-type` reaches the same array a literal one does (2026-08-31)
 

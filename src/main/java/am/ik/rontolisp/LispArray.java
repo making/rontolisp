@@ -55,7 +55,9 @@ public final class LispArray implements LispVal {
 	// element type above rank 1, or any of them combined with a fill pointer or
 	// adjustability. array-element-type answers it and the unsupplied element takes
 	// its zero; nothing else in the representation depends on it.
-	private final int elementTypeCode;
+	// Written once after construction by adoptElementType, the interpreter half of
+	// %array-adopt-element-type.
+	private int elementTypeCode;
 
 	private static final LispVal[] NO_DATA = new LispVal[0];
 
@@ -146,6 +148,17 @@ public final class LispArray implements LispVal {
 	 */
 	public int elementTypeCode() {
 		return this.elementTypeCode;
+	}
+
+	/**
+	 * Makes this array remember {@code code} as the element type it was asked for
+	 * ({@code %array-adopt-element-type}). The only writer of the field: a fresh copy
+	 * built by {@code adjust-array} adopts the adjusted array's type, which
+	 * {@code adjust-array} never changes.
+	 * @param code the {@link ArrayElementTypes} code to remember
+	 */
+	public void adoptElementType(int code) {
+		this.elementTypeCode = code;
 	}
 
 	/**

@@ -19510,7 +19510,7 @@ public final class LispMacroExpander {
 						LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
 						LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
 						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DEFAULT_ELEMENT,
-						LispNames.COERCE,
+						LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.COERCE,
 						// fill/read-sequence/write-sequence join the list for the same
 						// reason as make-string: each has an array-typed arm the JVM
 						// backend's array runtime gate must see coming, or the injected
@@ -22926,7 +22926,9 @@ public final class LispMacroExpander {
 	 * not flat), then an {@code :adjustable} array is adjusted in place via
 	 * {@code %array-become} (returning the array itself) while a non-adjustable one
 	 * returns the fresh copy. Without an explicit {@code :fill-pointer} the old fill
-	 * pointer is carried over ({@code make-array} range-checks it against the new size).
+	 * pointer is carried over ({@code make-array} range-checks it against the new size),
+	 * and the fresh copy adopts the adjusted array's remembered element type
+	 * ({@code %array-adopt-element-type}), which {@code adjust-array} never changes.
 	 * {@code :displaced-to} is rejected at expansion time; displaced input arrays are
 	 * rejected at runtime. Matches the interpreter's {@code adjust-array} built-in.
 	 * @param cons the adjust-array expression
@@ -22958,11 +22960,17 @@ public final class LispMacroExpander {
 		LispSymbol fp = new LispSymbol("__adj_fp");
 		LispSymbol newArr = new LispSymbol("__adj_new");
 		LispSymbol total = new LispSymbol("__adj_total");
+		// (%array-adopt-element-type
 		// (make-array ndl :initial-element E :fill-pointer fp
-		// :adjustable (adjustable-array-p a)). Without an explicit :initial-element the
-		// slots the adjustment OPENS take the ADJUSTED array's own element type zero,
-		// which the fresh general array cannot know -- hence %array-default-element,
-		// asked of the array being adjusted rather than of the copy.
+		// :adjustable (adjustable-array-p a))
+		// a). Without an explicit :initial-element the slots the adjustment OPENS take
+		// the ADJUSTED array's own element type zero, which the fresh general array
+		// cannot know -- hence %array-default-element, asked of the array being adjusted
+		// rather than of the copy. The element type the RESULT declares is the same
+		// question one step later: CLHS does not change it, so the copy a NON-adjustable
+		// adjustment answers has to remember what the original did, which is what the
+		// %array-adopt-element-type stamp carries over. (An :adjustable array keeps its
+		// own identity through %array-become and never reads the copy's stamp.)
 		List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
 		makeParts.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
 		makeParts.add(initExpr != null ? initExpr : callOf(LispNames.ARRAY_DEFAULT_ELEMENT, a));
@@ -22977,7 +22985,7 @@ public final class LispMacroExpander {
 				listToCons(List.of(ndl,
 						makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
 				listToCons(List.of(od, callOf(LispNames.ARRAY_DIMENSIONS, a))), listToCons(List.of(fp, fpInit)),
-				listToCons(List.of(newArr, listToCons(makeParts))),
+				listToCons(List.of(newArr, mvCall(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, listToCons(makeParts), a))),
 				listToCons(List.of(total, callOf(LispNames.ARRAY_TOTAL_SIZE, newArr))));
 		LispVal displacedCheck = makeIf(callOf(LispNames.ARRAY_DISP_TARGET, a),
 				mvCall(LispNames.ERROR, new LispString("adjust-array: displaced arrays are not supported")),

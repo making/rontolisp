@@ -15164,6 +15164,43 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAnAdjustedCopyKeepsTheElementType() throws Exception {
+		// adjust-array does not change an array's element type (CLHS), and a
+		// NON-adjustable adjustment answers a FRESH array, so the copy has to remember
+		// what the original did -- otherwise an adjusted character vector stops
+		// answering stringp. A literal (immutable) string is the same question over the
+		// one array shape that carries no header at all, and the string shape readers
+		// below are what its adjustment goes through. Pinned here, in the other three
+		// backends' twins and in the adjusted-copy-element-type-cross-backend ci-spec
+		// case.
+		assertThat(compileAndRun("""
+				(defun adjusted-copy-keeps-type ()
+				  (let* ((s (make-array 3 :element-type 'character :initial-element #\\x))
+				         (r (adjust-array s 5)))
+				    (list (stringp r) (array-element-type r) (char-code (aref r 4)))))
+				(defun adjusted-literal-string ()
+				  (let ((r (adjust-array "abc" 5)))
+				    (list (stringp r) (array-element-type r) (length r))))
+				(defun adjusted-rank-2-keeps-type ()
+				  (let* ((a (make-array '(2 2) :element-type 'character :initial-element #\\y))
+				         (r (adjust-array a '(3 3))))
+				    (list (array-element-type r) (stringp r) (aref r 2 2))))
+				(defun adjusted-typed-keeps-type ()
+				  (let* ((f (make-array 3 :element-type 'double-float :fill-pointer 0))
+				         (b (make-array '(2 2) :element-type '(unsigned-byte 8)))
+				         (rf (adjust-array f 5))
+				         (rb (adjust-array b '(3 3))))
+				    (list (array-element-type rf) (aref rf 4) (array-element-type rb) (aref rb 2 2))))
+				(defun string-is-a-rank-1-array ()
+				  (list (array-rank "abc") (array-dimensions "abc") (array-total-size "abc")
+				        (array-displacement "abc")))
+				(print (list (adjusted-copy-keeps-type) (adjusted-literal-string) (adjusted-rank-2-keeps-type)
+				             (adjusted-typed-keeps-type) (string-is-a-rank-1-array)))
+				""")).isEqualTo("((T CHARACTER 32) (T CHARACTER 5) (CHARACTER NIL #\\Space)"
+				+ " (DOUBLE-FLOAT 0.0 (UNSIGNED-BYTE 8) 0) (1 (3) 3 NIL))");
+	}
+
+	@Test
 	void compileSetfFillPointer() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 5 :fill-pointer 5 :initial-element 7))
