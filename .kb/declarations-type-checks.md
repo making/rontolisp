@@ -824,12 +824,16 @@ CL's sized specifier is the dimension. The ARRAY arm was already right (it goes
 through `array-dimension`), which is why `(vector t 4)` over a fill-pointered
 general array always agreed with SBCL; only the STRING arm was wrong.
 
-It was wrong because it could not use those functions: `array-dimensions` /
-`array-rank` / `array-total-size` / `adjustable-array-p` /
-`array-has-fill-pointer-p` still REFUSE a string on the compile paths
-(`.todo/464`, open). The two ways out were to fix that refusal and read the size
-through the public surface, or to give the string arm an internal accessor of
-its own. **The internal accessor won on measurement** (2026-08-31, wasm at
+It was wrong because at the time it could not use those functions:
+`array-dimensions` / `array-rank` / `array-total-size` / `adjustable-array-p` /
+`array-has-fill-pointer-p` all REFUSED a string on the compile paths. (They no
+longer do -- the arms landed with the todo-610/611 simplicity work and the
+element-type-preserving `adjust-array`, and are pinned as of 2026-09-02;
+`.kb/adjustable-arrays.md`, "Every array-info reader answers for a string".
+`%string-dimension` still stands, for the size reason below.) The two ways out
+were to fix that refusal and read the size through the public surface, or to
+give the string arm an internal accessor of its own. **The internal accessor
+won on measurement** (2026-08-31, wasm at
 `--optimize=size` / JVM `.class`, `stringp`-only floor 9,642 / 3,136):
 
 | the sized-string test, one program | wasm | `.class` |

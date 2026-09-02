@@ -55,6 +55,41 @@ value could not be told apart from a `:fill-pointer`-built one, which is what
 already read `dims[0]` for a nil slot and `_subseqCv` already CLEARED it so a
 `copy-seq` result is simple, so the invariant was half in place already.
 
+**Every array-info reader answers for a string, in all three of its
+representations (todo-464, measured 2026-09-02)**: `array-dimensions`,
+`array-rank`, `array-total-size`, `array-dimension`, `array-row-major-index`,
+`array-has-fill-pointer-p` and `adjustable-array-p` accept the immutable string
+that carries no header, the mutable character vector and the displaced string
+view, on all four backends. The three shape readers and the row-major index all
+lower through `array-dimensions` (`LispMacroExpander.expandArrayRank` and
+friends), so ONE string arm per backend carries them --
+`JvmArrayRuntimeBuilder`'s `_arrayDims` (an `instanceof String` arm over
+`_strCharCount`, ahead of the `ArrayList` header cast) and
+`WasmArrayCompiler.compileDims` (a `ref.test TYPE_STRING` arm over
+`_str_char_count`), the character vector and the view falling through to the
+general header path that already held their dims. The two predicates instead
+guard the header read with a shape test and answer NIL for anything else
+(`emitHeaderSlotToBool`; `compileHasFillPointer` / `compileAdjustableArrayP`),
+so a headerless string is nil rather than a cast trap.
+
+The dimension is the **CAPACITY**, never `length`: a capacity-5 character
+vector with fill pointer 2 answers `(5)` / rank 1 / total size 5 while `length`
+answers 2. SBCL 2.2.9 answers the pinned program identically except
+`adjustable-array-p` over a DISPLACED view -- SBCL answers `T` for any
+non-simple array (a fill-pointered general vector included), while rontolisp
+reports the `:adjustable` argument verbatim, so it answers `NIL`. Both are
+conforming; CLHS leaves "actually adjustable" implementation-defined. Pinned by
+`LispEvaluatorTest#theArrayShapeReadersAcceptEveryStringRepresentation`,
+`JvmLispCompilerTest#compileTheArrayShapeReadersAcceptEveryStringRepresentation`,
+`WasmLispCompilerIntegrationTest#arrayShapeReadersAcceptEveryStringRepresentation`
+and the `string-array-shape-readers-cross-backend` ci-spec case.
+
+NOT supported, measured the same day: `make-array :displaced-to` combined with
+`:fill-pointer` or `:adjustable`, which CLHS allows and SBCL accepts. All four
+backends reject it with "`:displaced-to` cannot be combined with
+`:fill-pointer`/`:adjustable`/`:initial-element`" -- only the
+`:initial-element` third of that message is a CLHS rule.
+
 **A COMPUTED `:element-type` (`.todo/219`, 2026-07-30)**: the recognizers
 above read the designator at EXPANSION time, so a `:element-type` held in a
 variable or produced by a call (`(stream-element-type s)`) used to fall
