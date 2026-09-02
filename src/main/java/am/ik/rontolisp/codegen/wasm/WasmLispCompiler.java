@@ -6548,8 +6548,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// shared numeric-to-f64 coercion body (FUNC_AS_F64)
 				code.addFunction(WasmEmitHelper.buildAsF64Body());
 				// shared general-array element access bodies (FUNC_ARR_GET/FUNC_ARR_SET)
-				code.addFunction(WasmArrayRuntimeBuilder.buildArrGetBody());
-				code.addFunction(WasmArrayRuntimeBuilder.buildArrSetBody());
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrGetBody(this.simd));
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrSetBody(this.simd));
 				// shared generic sequence-length dispatch body (FUNC_SEQ_LEN)
 				code.addFunction(WasmLengthCompiler.buildSeqLenBody());
 				// string output-stream buffer helper body (FUNC_OSTREAM_ROOM)
@@ -6596,7 +6596,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// shared aref/%aset rank-check body (FUNC_ARR_CHECK_RANK)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody());
 				// shared displaced-view materialization body (FUNC_ARR_UNDISPLACE)
-				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody());
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody(this.simd));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

@@ -673,6 +673,20 @@ final class WasmArrayCompiler {
 		boxI31(ctx);
 		setLocal(ctx, productSlot);
 		ctx.writer.write(Instruction.ELSE);
+		// A PACKED target carries its element count in its own representation: the
+		// array length for an integer vector, the dims product for a float array.
+		testIntVector(ctx, targetSlot);
+		ctx.writer.write(Instruction.IF, 0x40);
+		emitPackedIntLen(ctx, targetSlot);
+		boxI31(ctx);
+		setLocal(ctx, productSlot);
+		ctx.writer.write(Instruction.ELSE);
+		testFarray(ctx, targetSlot);
+		ctx.writer.write(Instruction.IF, 0x40);
+		farrayField(ctx, targetSlot, 0);
+		callFixed(ctx, WasmLispCompiler.FUNC_ARR_TOTAL);
+		setLocal(ctx, productSlot);
+		ctx.writer.write(Instruction.ELSE);
 		// The product of the target's dims -- the same fold make-array sizes its data
 		// with, so it is the same callee.
 		getLocal(ctx, targetSlot);
@@ -680,6 +694,8 @@ final class WasmArrayCompiler {
 		castConsGet(ctx, 0);
 		callFixed(ctx, WasmLispCompiler.FUNC_ARR_TOTAL);
 		setLocal(ctx, productSlot);
+		ctx.writer.write(Instruction.END); // farray-vs-general if
+		ctx.writer.write(Instruction.END); // int-vector if
 		ctx.writer.write(Instruction.END); // string-vs-array if
 	}
 
@@ -1720,14 +1736,24 @@ final class WasmArrayCompiler {
 		castConsGet(ctx, 1);
 		castConsGet(ctx, 1);
 		int dataSlot = setTemp(ctx);
-		// Only a STRING chain end can still answer here (the walk consumed every cell),
-		// and a string view never reaches this dispatch anyway: the caller's stringp arm
-		// answered character for it.
+		// Only a STRING or a PACKED chain end can still answer here (the walk consumed
+		// every cell), and a string view never reaches this dispatch anyway: the
+		// caller's stringp arm answered character for it.
 		getLocal(ctx, dataSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		emitIfEq(ctx);
 		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		// A PACKED chain end's element type IS its representation, so it is read off
+		// the target's width rather than out of the meta word (which still holds this
+		// view's OFFSET while it is a view).
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.I32_EQZ);
+		emitIfEq(ctx);
+		emitPackedElementTypeValue(ctx, dataSlot);
 		ctx.writer.write(Instruction.ELSE);
 		getLocal(ctx, headerSlot);
 		getMeta(ctx);
@@ -1752,6 +1778,7 @@ final class WasmArrayCompiler {
 		for (int i = 0; i < arms; i++) {
 			ctx.writer.write(Instruction.END);
 		}
+		ctx.writer.write(Instruction.END); // packed-vs-buckets if
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.ELSE);
 		WasmEmitHelper.emitTrue(ctx);
@@ -1761,6 +1788,53 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.ELSE);
 		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.END);
+	}
+
+	// The element type of a PACKED value in slot -- the list (unsigned-byte 8|16|32) by
+	// the integer vector's width, the symbol single-float / double-float by the float
+	// array's -- as the value array-element-type answers, left on the stack. The same
+	// dispatch compileElementType runs at the top for a DIRECT packed argument; here it
+	// answers for the view that ends on one.
+	private static void emitPackedElementTypeValue(WasmLispCompiler.Ctx ctx, int slot) {
+		testIntVector(ctx, slot);
+		emitIfEq(ctx);
+		WasmEmitHelper.compileStringLiteral(LispNames.UNSIGNED_BYTE, ctx);
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		i32Const(ctx, 8);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		i32Const(ctx, 16);
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 32);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		boxI31(ctx);
+		refNull(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.ELSE);
+		if (ctx.simd) {
+			vblockKind(ctx, slot);
+		}
+		else {
+			farrayField(ctx, slot, 1);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+		}
+		emitIfEq(ctx);
+		WasmEmitHelper.compileStringLiteral(LispNames.SINGLE_FLOAT, ctx);
+		ctx.writer.write(Instruction.ELSE);
+		WasmEmitHelper.compileStringLiteral(LispNames.DOUBLE_FLOAT, ctx);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -2211,16 +2285,13 @@ final class WasmArrayCompiler {
 	}
 
 	// Leaves 1 when the data slot in dataSlot is a displacement TARGET rather than the
-	// array's own storage: a general array's target CELL, or the STRING a string view
-	// aliases.
+	// array's own storage: anything that is not the array's own buckets -- a general
+	// array's target CELL, the STRING a string view aliases, or a PACKED vector.
 	private static void emitDataSlotIsTarget(WasmLispCompiler.Ctx ctx, int dataSlot) {
 		getLocal(ctx, dataSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
-		getLocal(ctx, dataSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.I32_EQZ);
 	}
 
 	static void compileDispOffset(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -3182,41 +3253,53 @@ final class WasmArrayCompiler {
 	// every packed width, matching the interpreter's low-bits masking), anything else
 	// (float, ratio, ...) traps -- the interpreter/JVM signal a type error there.
 	static void emitUnboxIntForStore(WasmLispCompiler.Ctx ctx, int valSlot) {
-		getLocal(ctx, valSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(Type.I31.code());
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I64);
-		getLocal(ctx, valSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		ctx.writer.write(Instruction.I64_EXTEND_S_I32);
-		ctx.writer.write(Instruction.ELSE);
-		getLocal(ctx, valSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I64);
-		getLocal(ctx, valSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.writeUnsignedLeb128(0);
-		ctx.writer.write(Instruction.ELSE);
+		emitUnboxIntForStore(ctx.writer, valSlot);
+	}
+
+	// The raw-WasmWriter counterpart, for the runtime builders that emit into a
+	// WasmWriter directly (the shared _arr_set body's packed-target arm).
+	static void emitUnboxIntForStore(am.ik.wasm.WasmWriter w, int valSlot) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(valSlot);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.ELSE);
 		// TYPE_BIGINT: low limb (32 bits) via _limb_get(limbs, 0); the ref.cast traps
 		// on a non-integer, preserving the exact-or-trap boundary.
-		getLocal(ctx, valSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGINT);
-		ctx.writer.writeUnsignedLeb128(0);
-		i32Const(ctx, 0);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_LIMB_GET);
-		ctx.writer.write(Instruction.I64_EXTEND_U_I32);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGINT);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LIMB_GET);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 	}
 
 	private static void emitIntArrSet(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int valSlot, int type) {

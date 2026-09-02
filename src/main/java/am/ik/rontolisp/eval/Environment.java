@@ -932,12 +932,21 @@ public final class Environment implements Scope {
 					}
 					return new LispString(targetString, offset, total, viewFillPointer, adjustable);
 				}
-				LispArray target = requireArray(LispNames.MAKE_ARRAY, displacedToArg);
-				if (offset < 0 || total + offset > target.totalSize()) {
+				// A PACKED vector or float array is a target on the same terms as a
+				// general array -- it is the shape CLHS's :displaced-to element-type
+				// rule is written for -- so the view is an ordinary LispArray view whose
+				// element access ends on that storage and whose element type is the
+				// target's representation.
+				int targetTotal = switch (displacedToArg) {
+					case LispIntVector iv -> iv.length();
+					case LispFloatArray fa -> fa.totalSize();
+					default -> requireArray(LispNames.MAKE_ARRAY, displacedToArg).totalSize();
+				};
+				if (offset < 0 || total + offset > targetTotal) {
 					throw new LispEvalException(
 							LispNames.MAKE_ARRAY + ": :displaced-to array is too small for the requested view");
 				}
-				return new LispArray(dims, target, offset, viewFillPointer, adjustable);
+				return new LispArray(dims, displacedToArg, offset, viewFillPointer, adjustable);
 			}
 			if (displacedOffsetArg != null && !(displacedOffsetArg instanceof LispNil)) {
 				throw new LispEvalException(LispNames.MAKE_ARRAY + ": :displaced-index-offset requires :displaced-to");

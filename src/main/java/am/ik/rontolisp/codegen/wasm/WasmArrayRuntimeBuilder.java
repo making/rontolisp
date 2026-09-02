@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
 
+import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
@@ -66,12 +67,13 @@ final class WasmArrayRuntimeBuilder {
 	 * @return the function body (signature {@code ((ref null eq), i32) -> (ref null eq)},
 	 * {@code TYPE_BIG_SHIFT})
 	 */
-	static byte[] buildArrGetBody() {
+	static byte[] buildArrGetBody(boolean simd) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
-		// One extra local: the walk cursor (the header currently being examined).
-		declareOneEqrefLocal(w);
-		int curSlot = 2;
+		// Two extra locals: the walk cursor (the header currently being examined) and
+		// the PACKED target the chain may end on.
+		declareEqrefLocals(w, 2);
+		int curSlot = 2, targetSlot = 3;
 		emitResolve(w, curSlot, 1);
 		// A STRING VIEW's data slot holds the string it aliases: read character `flat`
 		// through the shared UTF-8 accessor and box it as the runtime CHARACTER.
@@ -86,6 +88,18 @@ final class WasmArrayRuntimeBuilder {
 		WasmEmitHelper.emitStrCharAtCall(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // block
+		// A view over a PACKED target: the data slot IS that target and the elements
+		// live unboxed in it.
+		w.write(Instruction.BLOCK, 0x40);
+		emitDataSlot(w, curSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.BR_IF, 0);
+		emitDataSlot(w, curSlot);
+		set(w, targetSlot);
+		emitPackedTargetRead(w, targetSlot, 1, simd);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // block
 		emitDataSlot(w, curSlot);
@@ -105,17 +119,23 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code ((ref null eq), i32, (ref null eq)) -> (ref null eq)},
 	 * {@link WasmLispCompiler#TYPE_ARR_SET})
 	 */
-	static byte[] buildArrSetBody() {
+	static byte[] buildArrSetBody(boolean simd) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
-		// locals: 3 = cur, 4 = promoted, 5 = str, 6 = buckets (ref null eq); 7 = n,
-		// 8 = i (i32).
+		// locals: 3 = cur, 4 = promoted, 5 = str, 6 = buckets, 7 = packed target
+		// (ref null eq); 8 = n, 9 = i, 10 = the index as it arrived (i32).
 		w.write(2);
-		w.write(4);
+		w.write(5);
 		w.writeRefType(true, Type.EQ.code());
-		w.write(2);
+		w.write(3);
 		w.write(Type.I32);
-		int curSlot = 3, promotedSlot = 4, strSlot = 5, bucketsSlot = 6, nSlot = 7, iSlot = 8;
+		int curSlot = 3, promotedSlot = 4, strSlot = 5, bucketsSlot = 6, targetSlot = 7, nSlot = 8, iSlot = 9,
+				rawIdxSlot = 10;
+		// The walk folds each hop's offset into the index parameter, so the index a
+		// packed store has to READ BACK through _arr_get (which walks again) is kept
+		// here first -- three instructions instead of a second copy of the packed read.
+		get(w, 1);
+		set(w, rawIdxSlot);
 		emitResolve(w, curSlot, 1);
 		// A STRING VIEW over an IMMUTABLE string cannot be written through: promote the
 		// target ONCE into a mutable character vector, hang it in the view's data slot,
@@ -154,6 +174,22 @@ final class WasmArrayRuntimeBuilder {
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(curSlot);
+		w.write(Instruction.END); // block
+		// A view over a PACKED target stores into that target's unboxed slot and
+		// answers the value AS STORED -- read back through the same arm the read uses,
+		// so a masked or narrowed store answers what the next read will answer.
+		w.write(Instruction.BLOCK, 0x40);
+		emitDataSlot(w, curSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.BR_IF, 0);
+		emitDataSlot(w, curSlot);
+		set(w, targetSlot);
+		emitPackedTargetWrite(w, targetSlot, 1, 2, simd);
+		get(w, 0);
+		get(w, rawIdxSlot);
+		call(w, WasmLispCompiler.FUNC_ARR_GET);
+		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // block
 		emitDataSlot(w, curSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -471,7 +507,7 @@ final class WasmArrayRuntimeBuilder {
 	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
 	 * {@code TYPE_CALLABLE_BASE + 0})
 	 */
-	static byte[] buildArrUndisplaceBody() {
+	static byte[] buildArrUndisplaceBody(boolean simd) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// locals: 1 = cur, 2 = newData (ref null eq); 3 = n, 4 = i, 5 = marker (i32).
@@ -481,15 +517,12 @@ final class WasmArrayRuntimeBuilder {
 		w.write(3);
 		w.write(Type.I32);
 		int curSlot = 1, newDataSlot = 2, nSlot = 3, iSlot = 4, markerSlot = 5;
-		// An ordinary array's data slot is the buckets array: nothing to do.
+		// An ordinary array's data slot is the buckets array: nothing to do. Every
+		// OTHER data slot is a displacement -- a target cell, a string, or a packed
+		// vector.
 		emitDataSlot(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
-		emitDataSlot(w, 0);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		w.write(Instruction.I32_OR);
-		w.write(Instruction.I32_EQZ);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.IF, 0x40);
 		get(w, 0);
 		w.write(Instruction.RETURN);
@@ -536,12 +569,25 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.IF, Type.I32.code());
 		i32(w, 1);
 		w.write(Instruction.ELSE);
+		// A PACKED chain end's element type IS its representation, so the marker is
+		// read off the target's width rather than out of a meta word it does not have
+		// (the view's own word still holds its OFFSET at this point).
+		emitDataSlot(w, curSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, Type.I32.code());
+		emitDataSlot(w, curSlot);
+		set(w, newDataSlot);
+		emitPackedTargetMarker(w, newDataSlot, simd);
+		w.write(Instruction.ELSE);
 		get(w, curSlot);
 		consGet(w, 1);
 		consGet(w, 0);
 		consGet(w, 1);
 		consGet(w, 1);
 		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 		set(w, markerSlot);
 		// newData[i] = _arr_get(header, i) -- read through the chain BEFORE the data slot
@@ -671,14 +717,210 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		// A string target ends the walk WITHOUT a hop, so this view's own offset has
-		// not been folded in yet. (An ordinary array's offset word is 0, and a
-		// character vector's is the marker 1, so only this arm may add it.)
+		// A STRING or PACKED target ends the walk WITHOUT a hop, so this view's own
+		// offset has not been folded in yet. (An ordinary array's offset word is 0, and
+		// a character vector's is the marker 1, so only this arm may add it -- which is
+		// exactly "the data slot is not the buckets array".)
 		emitDataSlot(w, curSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
 		emitAddMetaOffset(w, curSlot, flatSlot);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the boxed element the PACKED displacement target in targetSlot holds at the
+	// raw i32 flat index in flatSlot: a packed integer vector's element widened UNSIGNED
+	// and boxed through _int_new, a packed float array's widened to f64 and boxed as a
+	// TYPE_FLOAT. This is the same element semantics the site-level packed arms
+	// (WasmArrayCompiler's emitPackedIntRead / emitPackedReadF64) give for a direct
+	// access -- the view just reaches the storage through one more indirection.
+	private static void emitPackedTargetRead(WasmWriter w, int targetSlot, int flatSlot, boolean simd) {
+		get(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		emitFarrayReadF64(w, targetSlot, flatSlot, simd);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.ELSE);
+		emitIntVectorRead(w, targetSlot, flatSlot);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the f64 the packed float array in targetSlot holds at flatSlot, promoting a
+	// single-float element. Under --simd the data is a TYPE_VBLOCK read through _v_get.
+	private static void emitFarrayReadF64(WasmWriter w, int targetSlot, int flatSlot, boolean simd) {
+		if (simd) {
+			farrayData(w, targetSlot);
+			get(w, flatSlot);
+			call(w, WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.V_GET);
+			return;
+		}
+		farrayData(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		farrayData(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+		get(w, flatSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+		w.write(Instruction.F64_PROMOTE_F32);
+		w.write(Instruction.ELSE);
+		farrayData(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F64ARR);
+		get(w, flatSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the meta ELEMENT-TYPE MARKER of the PACKED value in targetSlot: the marker
+	// WasmArrayCompiler.elementTypeMarker gives for the width it holds. Used where a
+	// packed chain end's element type has to be recorded in a word (the un-displace) or
+	// answered from one (array-element-type).
+	private static void emitPackedTargetMarker(WasmWriter w, int targetSlot, boolean simd) {
+		get(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.IF, Type.I32.code());
+		i32(w, WasmArrayCompiler.elementTypeMarker(ArrayElementTypes.UNSIGNED_BYTE_8));
+		w.write(Instruction.ELSE);
+		get(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.IF, Type.I32.code());
+		i32(w, WasmArrayCompiler.elementTypeMarker(ArrayElementTypes.UNSIGNED_BYTE_16));
+		w.write(Instruction.ELSE);
+		get(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I32ARR);
+		w.write(Instruction.IF, Type.I32.code());
+		i32(w, WasmArrayCompiler.elementTypeMarker(ArrayElementTypes.UNSIGNED_BYTE_32));
+		w.write(Instruction.ELSE);
+		// A packed float array: single when the data array is a TYPE_F32ARR (--simd:
+		// when the vblock's kind field is 1), else double.
+		if (simd) {
+			farrayData(w, targetSlot);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+			w.writeUnsignedLeb128(1);
+		}
+		else {
+			farrayData(w, targetSlot);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+		}
+		w.write(Instruction.IF, Type.I32.code());
+		i32(w, WasmArrayCompiler.elementTypeMarker(ArrayElementTypes.SINGLE_FLOAT));
+		w.write(Instruction.ELSE);
+		i32(w, WasmArrayCompiler.elementTypeMarker(ArrayElementTypes.DOUBLE_FLOAT));
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the data field of the TYPE_FARRAY in targetSlot.
+	private static void farrayData(WasmWriter w, int targetSlot) {
+		get(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		w.writeUnsignedLeb128(1);
+	}
+
+	// Pushes the element the packed integer vector in targetSlot holds at flatSlot as an
+	// UNSIGNED i64 (array.get_u for the sub-word widths, an unsigned extend for i32).
+	private static void emitIntVectorRead(WasmWriter w, int targetSlot, int flatSlot) {
+		get(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		emitIntArrGet(w, targetSlot, flatSlot, WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.ELSE);
+		get(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		emitIntArrGet(w, targetSlot, flatSlot, WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.ELSE);
+		emitIntArrGet(w, targetSlot, flatSlot, WasmLispCompiler.TYPE_I32ARR);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	private static void emitIntArrGet(WasmWriter w, int targetSlot, int flatSlot, int type) {
+		get(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(type);
+		get(w, flatSlot);
+		w.write(Instruction.GC_PREFIX,
+				type == WasmLispCompiler.TYPE_I32ARR ? Instruction.ARRAY_GET : Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(type);
+		w.write(Instruction.I64_EXTEND_U_I32);
+	}
+
+	// Stores the value in valSlot into the PACKED displacement target in targetSlot at
+	// the raw i32 flat index in flatSlot, leaving nothing: an integer vector truncates
+	// to its element width through the shared _iv_set, a float array narrows to its
+	// backing width. The caller reads the element back for the value AS STORED, which is
+	// what every other packed store answers.
+	private static void emitPackedTargetWrite(WasmWriter w, int targetSlot, int flatSlot, int valSlot, boolean simd) {
+		get(w, targetSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.IF, 0x40);
+		if (simd) {
+			farrayData(w, targetSlot);
+			get(w, flatSlot);
+			get(w, valSlot);
+			call(w, WasmLispCompiler.FUNC_AS_F64);
+			call(w, WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.V_SET);
+			w.write(Instruction.DROP);
+		}
+		else {
+			farrayData(w, targetSlot);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+			w.write(Instruction.IF, 0x40);
+			farrayData(w, targetSlot);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+			get(w, flatSlot);
+			get(w, valSlot);
+			call(w, WasmLispCompiler.FUNC_AS_F64);
+			w.write(Instruction.F32_DEMOTE_F64);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+			w.write(Instruction.ELSE);
+			farrayData(w, targetSlot);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_F64ARR);
+			get(w, flatSlot);
+			get(w, valSlot);
+			call(w, WasmLispCompiler.FUNC_AS_F64);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+			w.write(Instruction.END);
+		}
+		w.write(Instruction.ELSE);
+		get(w, targetSlot);
+		get(w, flatSlot);
+		WasmArrayCompiler.emitUnboxIntForStore(w, valSlot);
+		call(w, WasmLispCompiler.FUNC_IV_SET);
 		w.write(Instruction.END);
 	}
 
