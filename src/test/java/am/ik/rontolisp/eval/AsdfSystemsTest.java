@@ -489,12 +489,16 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void aTopLevelDefmethodOnAnotherNameIsAHardError() {
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(defmethod operation-done-p ((o compile-op) (c t)) nil)",
-				"lib.asd", Features.INTERPRETER))
-			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("lib.asd")
-			.hasMessageContaining("OPERATION-DONE-P");
+	void aTopLevelDefmethodOnAnotherNameIsToleratedAndIgnored() {
+		// Any top-level method is tolerated now, not just perform: there is no operate
+		// machinery for one to run on, and the only method whose EFFECT is representable
+		// here (source-file-type) has its own channel. An unrepresentable method that
+		// really did move a file surfaces as the missing file at load time, named.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defmethod operation-done-p ((o compile-op) (c t)) nil)
+				(defmethod component-pathname ((c my-file)) (call-next-method))
+				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems).singleElement().extracting(AsdfSystems.LispSystem::files).isEqualTo(List.of("main.lisp"));
 	}
 
 	@Test
@@ -519,12 +523,118 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void aDefclassWithANonDocSuperclassIsAHardError() {
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(defclass my-file (cl-source-file) ())", "lib.asd",
-				Features.INTERPRETER))
+	void aDefclassThatIsNotAComponentClassIsAHardError() {
+		// The closed world holds: a class whose superclass is not a component class
+		// (an operation, a condition) still names itself and stops the parse.
+		assertThatThrownBy(
+				() -> AsdfSystems.parseAsdSource("(defclass my-op (operation) ())", "lib.asd", Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("lib.asd")
-			.hasMessageContaining("MY-FILE");
+			.hasMessageContaining("MY-OP");
+	}
+
+	@Test
+	void toleratesAClSourceFileSubclassAndLoadsItsComponents() {
+		// portableaserve aserve.asd, the whole extension chain in one file: a
+		// cl-source-file.cl subclass, a perform :around hook on it, a
+		// :default-component-class, and components of both the declared class and the
+		// built-in one. Every file the system names is .cl, not .lisp.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defpackage #:aserve-system (:use #:cl #:asdf))
+				(in-package #:aserve-system)
+				(defclass legacy-acl-source-file (cl-source-file.cl)
+				    ()
+				  (:documentation "Common Lisp source code module with (non-style) warnings."))
+				(defmethod perform :around ((operation compile-op) (c legacy-acl-source-file))
+				  (handler-bind (((or style-warning warning) #'muffle-warning))
+				    (call-next-method)))
+				(defsystem aserve
+				    :name "AllegroServe (portable)"
+				    :default-component-class cl-source-file.cl
+				    :components ((:file "packages")
+				                 (:file "macs" :depends-on ("packages"))
+				                 (:legacy-acl-source-file "main" :depends-on ("macs"))
+				                 (:file "headers" :depends-on ("main")))
+				    :depends-on (htmlgen acl-compat))""", "sw/aserve/aserve.asd", Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		assertThat(systems.get(0).files()).containsExactly("packages.cl", "macs.cl", "main.cl", "headers.cl");
+		assertThat(systems.get(0).dependsOn()).containsExactly("htmlgen", "acl-compat");
+	}
+
+	@Test
+	void aSourceFileTypeMethodSetsTheClassExtensionWhereverItSits() {
+		// portableaserve htmlgen.asd/webactions.asd: the class itself is a plain
+		// cl-source-file subclass, and a source-file-type method is what says .cl. Real
+		// ASDF calls that generic function when it OPERATES, so the method BELOW the
+		// defsystem must mean the same as one above it -- pinned here by writing the two
+		// systems' methods on either side of their defsystems. (The CLASS still has to
+		// precede its use: real ASDF resolves a component type by find-class while it
+		// reads the defsystem.)
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defclass acl-file (cl-source-file) ())
+				(defmethod asdf:source-file-type ((c acl-file) (s module)) "cl")
+				(defclass late-file (cl-source-file) ())
+				(defsystem htmlgen
+				    :default-component-class acl-file
+				    :components ((:file "htmlgen")))
+				(defsystem webactions
+				    :default-component-class late-file
+				    :components ((:file "websession")
+				                 (:module :clpcode
+				                          :components ((:file "clp") (:file "wa"))
+				                          :depends-on ("websession"))))
+				(defmethod source-file-type ((c late-file) (s module)) "cl")""", "sw/htmlgen.asd",
+				Features.INTERPRETER);
+		assertThat(systems).hasSize(2);
+		assertThat(systems.get(0).files()).containsExactly("htmlgen.cl");
+		assertThat(systems.get(1).files()).containsExactly("websession.cl", "clpcode/clp.cl", "clpcode/wa.cl");
+	}
+
+	@Test
+	void aTypeInitformSlotSetsTheClassExtension() {
+		// The other half of how a class says "my sources are .cl": the very slot ASDF's
+		// own source-file-type reads, which is also how chipz spells its doc classes.
+		AsdfSystems.LispSystem system = AsdfSystems.parseAsdSource("""
+				(defclass acl-file (cl-source-file) ((type :initform "cl")))
+				(defsystem :lib :components ((:acl-file "main") (:file "plain")))""", "lib.asd", Features.INTERPRETER)
+			.get(0);
+		assertThat(system.files()).containsExactly("main.cl", "plain.lisp");
+	}
+
+	@Test
+	void theBuiltInSourceFileClassesAreComponentTypes() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:cl-source-file "a") (:cl-source-file.cl "b") (:cl-source-file.lsp "c")))""");
+		assertThat(system.files()).containsExactly("a.lisp", "b.cl", "c.lsp");
+	}
+
+	@Test
+	void aModuleMayRePointTheDefaultComponentClass() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :default-component-class :cl-source-file.cl
+				  :components ((:file "top")
+				               (:module "legacy" :default-component-class :cl-source-file
+				                :components ((:file "old")))))""");
+		assertThat(system.files()).containsExactly("top.cl", "legacy/old.lisp");
+	}
+
+	@Test
+	void anUnknownDefaultComponentClassIsAHardError() {
+		assertThatThrownBy(() -> parse(
+				"(asdf:defsystem :lib :default-component-class fancy-file" + " :components ((:file \"main\")))"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining(":default-component-class")
+			.hasMessageContaining("FANCY-FILE");
+	}
+
+	@Test
+	void aDefaultComponentClassIsNotAComponentOptionOnAFile() {
+		assertThatThrownBy(
+				() -> parse("(asdf:defsystem :lib :components ((:file \"main\" :default-component-class x)))"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining(":DEFAULT-COMPONENT-CLASS");
 	}
 
 	@Test

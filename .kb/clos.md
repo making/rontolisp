@@ -1160,7 +1160,7 @@ protocol). Two consequences worth knowing:
 - `printObjectTags(registry)` is ONE of the two gates and the routed tag set (class
   specializers and `defstruct` ones -- a struct name parses as a TYPE specializer
   carrying the struct name, so both descendant-tag families are collected).
-- `expandPrintObjectHook` rewrites `princ-to-string`/`prin1-to-string`/`write-to-string`
+- `expandPrintObjectHook` rewrites `princ-to-string`/`prin1-to-string`/`write-to-string` (and their internal, unwrapped piece spellings `%princ-piece` / `%prin1-piece`, `.kb/string-write-runtime.md`)
   to `(%print-object-str x escape)` and `print`/`princ`/`prin1` to a
   `write-string` of it (+ `terpri` for `print`). `format`'s `~A`/`~S` need no case of
   their own: they lower to those two conversions.

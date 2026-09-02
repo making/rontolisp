@@ -104,7 +104,7 @@ defect, because a list is all they take and a `cdr` walk is all they do.
 
 **`(map 'string ...)` was quadratic a SECOND time, in the OUTPUT, and the cursor
 could not reach it.** The `'string` accumulator was `(%string-concat acc
-(princ-to-string call))` per element -- one rebuild of the whole result per
+(%princ-piece call))` per element -- one rebuild of the whole result per
 element -- where `'list` conses and `nreverse`s. Since 2026-08-31 it collects the
 pieces into a list and joins them by repeated PAIRWISE concatenation, O(n log n)
 characters copied instead of O(n^2), with no mutable buffer (the expansion has

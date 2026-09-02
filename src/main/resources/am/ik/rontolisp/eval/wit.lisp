@@ -68,5 +68,5 @@
                  :payload (cdr envelope)
                  :message (concatenate 'string
                                        "the WIT call answered its error arm: "
-                                       (prin1-to-string (cdr envelope))))
+                                       (%prin1-piece (cdr envelope))))
           envelope)))

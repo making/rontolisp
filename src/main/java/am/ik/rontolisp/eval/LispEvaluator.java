@@ -870,8 +870,8 @@ public final class LispEvaluator {
 		// denotes exactly as a source literal is. Environment holds no registry, so the
 		// fold is layered on here, where this evaluator's registry is in scope; wrapping
 		// the function BINDING (rather than the call sites) also keeps
-		// #'read/#'read-from-string folding.
-		foldStructLiteralsOf(LispNames.READ);
+		// #'read-from-string folding. read is not wrapped: it is prelude rontolisp whose
+		// whole parse goes through read-from-string, so it inherits the fold.
 		foldStructLiteralsOf(LispNames.READ_FROM_STRING);
 		// #. read-time eval for the runtime readers: with the resolver installed,
 		// read/read-from-string read a #.-bearing datum in marker mode and this evaluator
@@ -5237,7 +5237,8 @@ public final class LispEvaluator {
 			case LispNames.HB_GUARD_INTERNAL:
 				return evalHbGuard(cons, env);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
-					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING: {
+					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
+					LispNames.PRIN1_PIECE_INTERNAL: {
 				// Routed through print-object only when the program defines a method on
 				// it, and through %print-cased only while *print-case* holds something
 				// other than :upcase; otherwise the ordinary Environment function runs,
@@ -5286,16 +5287,9 @@ public final class LispEvaluator {
 				// return value; the Environment function remains for first-class
 				// use (#'parse-integer).
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandParseInteger);
-			case LispNames.READ: {
-				// The full CL tail (eof-error-p / eof-value / recursive-p) lowers to
-				// the 0/1-argument call the Environment function implements, so the
-				// same shape loads on every backend.
-				LispVal readCompat = LispMacroExpander.expandReadCompat(cons);
-				if (readCompat != null) {
-					return eval(readCompat, env);
-				}
-				break;
-			}
+			// read has no case here and no Environment function: it is a prelude defun
+			// over read-char / unread-char / read-from-string (LispPreludeLibrary), so
+			// an ordinary function resolution loads it and #'read is that same defun.
 			case LispNames.READ_SEQUENCE:
 				return evalSequenceWithGrayDispatch(cons, env, true);
 			case LispNames.WRITE_SEQUENCE:
@@ -9219,7 +9213,9 @@ public final class LispEvaluator {
 		List<LispVal> parts = cons.toList();
 		String type = parts.size() == 3 ? coerceSequenceTypeName(parts.get(2)) : null;
 		if (type == null) {
-			return eval(LispMacroExpander.expandCoerce(cons), env);
+			// A COMPUTED result type: the registry rides along so a designator naming a
+			// user deftype resolves before the family dispatch reads its head.
+			return eval(LispMacroExpander.expandCoerce(cons, true, false, false, this.closRegistry), env);
 		}
 		LispVal value = eval(parts.get(1), env);
 		LispVal fast = coerceSequenceFast(value, type);
@@ -9231,7 +9227,7 @@ public final class LispEvaluator {
 		LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
 		LispVal rebuilt = new LispCons(new LispSymbol(LispNames.COERCE),
 				new LispCons(quoted, new LispCons(parts.get(2), LispNil.INSTANCE)));
-		return eval(LispMacroExpander.expandCoerce((LispCons) rebuilt), env);
+		return eval(LispMacroExpander.expandCoerce((LispCons) rebuilt, true, false, false, this.closRegistry), env);
 	}
 
 	// The literal sequence result type a (coerce x 'type) form names, normalized the way

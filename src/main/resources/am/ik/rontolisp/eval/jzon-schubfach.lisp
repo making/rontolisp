@@ -14,8 +14,8 @@
 
 (defun com.inuoe.jzon/schubfach:write-double (x stream)
   (check-type stream stream)
-  (write-string (princ-to-string x) stream))
+  (write-string (%princ-piece x) stream))
 
 (defun com.inuoe.jzon/schubfach:write-float (x stream)
   (check-type stream stream)
-  (write-string (princ-to-string x) stream))
+  (write-string (%princ-piece x) stream))

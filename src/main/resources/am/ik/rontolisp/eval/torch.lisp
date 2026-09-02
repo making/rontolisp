@@ -57,7 +57,7 @@
   ;; would be backend-dependent. #<TENSOR ...> is identical on all four
   ;; backends, prin1 and princ alike.
   (write-string "#<TENSOR " stream)
-  (write-string (prin1-to-string (torch::%t-data tn)) stream)
+  (write-string (%prin1-piece (torch::%t-data tn)) stream)
   (when (torch::%t-requires-grad tn) (write-string " :REQUIRES-GRAD T" stream))
   (write-string ">" stream))
 
@@ -1028,7 +1028,7 @@
   ;; hold plain functions (a torch:sequential's activations) and forward-fn is
   ;; a closure, neither of which prints portably.
   (write-string "#<MODULE " stream)
-  (write-string (prin1-to-string (torch::%m-kind m)) stream)
+  (write-string (%prin1-piece (torch::%m-kind m)) stream)
   (write-string ">" stream))
 
 (defstruct (torch::%module
@@ -1443,9 +1443,9 @@
   ;; The parameters are tensors and the fields hold state buffers, neither of
   ;; which belongs in a one-line rendering.
   (write-string "#<OPTIMIZER " stream)
-  (write-string (prin1-to-string (torch::%o-kind o)) stream)
+  (write-string (%prin1-piece (torch::%o-kind o)) stream)
   (write-string " :STEP-COUNT " stream)
-  (write-string (prin1-to-string (torch::%o-step-count o)) stream)
+  (write-string (%prin1-piece (torch::%o-step-count o)) stream)
   (write-string ">" stream))
 
 (defstruct (torch::%optimizer

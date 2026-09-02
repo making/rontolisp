@@ -159,13 +159,22 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   `(:feature EXPR DEP)` を書け (フィーチャ式が成立するときだけ依存が追加されます)、
   `(:version NAME "1.2.3")` も書けます (素の依存として解決されます。バージョン制約は
   検査されません — ここでは `:version` オプションは無視されるメタデータなので、
-  比較する相手がありません)。トップレベルの `(defmethod perform ...)` フックは許容され
-  無視されます (それを実行する `operate` 機構はありません。他のメソッド名はエラーです)。
-  スーパークラスがドキュメントコンポーネントクラス (ASDF の `doc-file`、または同じ
-  ファイル内で先に宣言されたもの) であるトップレベル `defclass` は、その名前を
-  コンポーネント型として宣言します。そのエントリは順序付けには参加しますがソースを
-  提供しません (`:static-file` と同様)。`:doc-file` と `:html-file` は `defclass`
-  なしで使えます。それ以外のトップレベルフォームはファイルを名指しするエラーです。
+  比較する相手がありません)。トップレベルの `defmethod` は許容され無視されます
+  (それを実行する `operate` 機構はありません)。ただし
+  `(defmethod source-file-type ((c CLASS) (s module)) "ext")` だけは例外で、
+  ファイル内のどこに書かれていてもそのクラスのファイル拡張子を設定します。
+  トップレベルの `defclass` は**コンポーネントクラス**を宣言します: 各スーパークラスは
+  ASDF のもの (`cl-source-file`、`cl-source-file.cl`、`cl-source-file.lsp`、
+  `static-file`、`doc-file`、`html-file`) か、同じファイル内で先に宣言されたもので
+  なければならず、宣言が決めるのはデータとしての解析が扱える 2 点だけです — その
+  クラスのコンポーネントがソースファイルを提供するか (スーパークラスから継承)、
+  そして名前に付く拡張子は何か (これも継承。`(type :initform "cl")` スロットか
+  `source-file-type` メソッドで上書きできます)。したがって
+  `(defclass txt-file (doc-file) ())` は順序付け専用の `:txt-file` を与え、
+  `(defclass legacy-acl-source-file (cl-source-file.cl) ())` は
+  `NAME.cl` をロードする `:legacy-acl-source-file` を与えます。コンポーネントクラス
+  でない `defclass` (オペレーション、コンディション) はエラーであり、それ以外の
+  トップレベルフォームもファイルを名指しするエラーです。
 - `.asd` は**フィーチャーを宣言**できます: `defsystem` の前にあるトップレベルの
   `(eval-when (:load-toplevel :execute) (pushnew :my-feature *features*))`
   (裸の `pushnew`/`push` も可) は、そのファイル内でそれ以降に定義される全システムに
@@ -188,8 +197,13 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   フィーチャーを宣言します — `("trivial-features")` はその句とコンポーネントファイルに
   対して `:unix` と `:little-endian` を有効にします)、`:serial`、`:pathname`
   (全コンポーネントに前置されるリテラルなディレクトリ。ソースが `src/` にあるシステムは
-  コンポーネント名を裸で書けます)、`:file`/`:module`/`:static-file` エントリを持つ
-  `:components` をサポートします。
+  コンポーネント名を裸で書けます)、`:default-component-class` (裸の
+  `(:file "name")` エントリが取るクラス。システムにもモジュールにも書け、何も
+  指定しなければ ASDF の `cl-source-file` です。つまり
+  `:default-component-class cl-source-file.cl` は裸のエントリすべてを `NAME.cl` に
+  します)、そして `:file`/`:module`/`:static-file` エントリ、または スコープ内の
+  他のコンポーネントクラスを名指しするエントリ (`(:cl-source-file.cl "main")`、
+  `(:txt-file "readme")`) を持つ `:components` をサポートします。
   コンポーネントには `:if-feature expr` を付けられます。フィーチャー式が成立しない
   場合、そのコンポーネントのファイルは除外されますが (ライブラリが CLOS 専用
   ファイルを `(:or :sbcl ...)` の後ろにゲートする方法)、依存順序内の位置は

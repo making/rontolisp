@@ -113,7 +113,7 @@
               (setq got t)
               (if (= (char-code c) 10)
                   (setq done t)
-                  (setq acc (concatenate 'string acc (princ-to-string c))))))))
+                  (setq acc (concatenate 'string acc (%princ-piece c))))))))
     (if got
         (let ((len (length acc)))
           (if (and (> len 0) (= (char-code (char acc (- len 1))) 13))

@@ -1364,6 +1364,19 @@ public final class LispNames {
 	public static final String ARRAY_ALIKE = "%ARRAY-ALIKE";
 
 	/**
+	 * The {@code %array-adopt-element-type} internal built-in function:
+	 * {@code (%array-adopt-element-type new old)} makes the freshly built general array
+	 * {@code new} remember {@code old}'s element type and returns {@code new}. The
+	 * element type of an array is not changed by {@code adjust-array} (CLHS), and a
+	 * NON-adjustable adjustment answers a fresh array, so the expansion stamps the copy
+	 * with what the original remembered. Copying the remembered type is much cheaper than
+	 * asking the fresh {@code make-array} for a RUNTIME {@code :element-type}: the
+	 * backends store the type as one word each, so this reads and writes that word
+	 * instead of turning it back into a seven-arm allocator dispatch.
+	 */
+	public static final String ARRAY_ADOPT_ELEMENT_TYPE = "%ARRAY-ADOPT-ELEMENT-TYPE";
+
+	/**
 	 * The {@code fill-pointer} built-in function (the fill pointer of a vector). Also a
 	 * {@code setf} place (target {@link #SET_FILL_POINTER}).
 	 */
@@ -3006,8 +3019,59 @@ public final class LispNames {
 	/** The {@code string-right-trim} built-in function. */
 	public static final String STRING_RIGHT_TRIM = "STRING-RIGHT-TRIM";
 
-	/** The {@code read} built-in function (interpreter only). */
+	/**
+	 * The {@code read} function. Not a built-in on any backend: it is prelude rontolisp
+	 * over {@code read-char} / {@code unread-char} / {@code read-from-string}
+	 * ({@code LispPreludeLibrary}), so one definition consumes exactly one datum's
+	 * characters and leaves the stream positioned after it on all four backends.
+	 */
 	public static final String READ = "READ";
+
+	/**
+	 * The {@code %rd-datum} internal helper: copies the characters of exactly ONE datum
+	 * from a stream into an output string stream. The whole {@code %rd-} family below it
+	 * is the character-level scanner {@code read} is written over.
+	 */
+	public static final String RD_DATUM = "%RD-DATUM";
+
+	/**
+	 * The {@code %rd-dispatch} internal helper: the datum scanner's dispatch on the first
+	 * character of a datum.
+	 */
+	public static final String RD_DISPATCH = "%RD-DISPATCH";
+
+	/** The {@code %rd-skip} internal helper: whitespace and {@code ;} comments. */
+	public static final String RD_SKIP = "%RD-SKIP";
+
+	/** The {@code %rd-skip-line} internal helper: the rest of a {@code ;} comment. */
+	public static final String RD_SKIP_LINE = "%RD-SKIP-LINE";
+
+	/** The {@code %rd-block-comment} internal helper: a nesting {@code #| |#}. */
+	public static final String RD_BLOCK_COMMENT = "%RD-BLOCK-COMMENT";
+
+	/** The {@code %rd-list} internal helper: a balanced {@code (...)}. */
+	public static final String RD_LIST = "%RD-LIST";
+
+	/** The {@code %rd-string} internal helper: a {@code "..."} literal. */
+	public static final String RD_STRING = "%RD-STRING";
+
+	/** The {@code %rd-bars} internal helper: a {@code |...|} multiple escape. */
+	public static final String RD_BARS = "%RD-BARS";
+
+	/** The {@code %rd-token-rest} internal helper: a token's constituents. */
+	public static final String RD_TOKEN_REST = "%RD-TOKEN-REST";
+
+	/** The {@code %rd-char-literal} internal helper: a {@code #\} literal. */
+	public static final String RD_CHAR_LITERAL = "%RD-CHAR-LITERAL";
+
+	/** The {@code %rd-sharp} internal helper: the {@code #} dispatch. */
+	public static final String RD_SHARP = "%RD-SHARP";
+
+	/** The {@code %rd-whitespace-p} internal helper: the whitespace set. */
+	public static final String RD_WHITESPACE_P = "%RD-WHITESPACE-P";
+
+	/** The {@code %rd-terminating-p} internal helper: the terminating macro chars. */
+	public static final String RD_TERMINATING_P = "%RD-TERMINATING-P";
 
 	/** The {@code read-from-string} built-in function (parse one form from a string). */
 	public static final String READ_FROM_STRING = "READ-FROM-STRING";
@@ -6870,6 +6934,28 @@ public final class LispNames {
 	 */
 	public static final String TYPEP_TAG_TABLE = "%TYPEP-TAG-TABLE";
 
+	/**
+	 * The user-{@code deftype} alias table backing {@link #DEFTYPE_ALIAS_RUNTIME}: an
+	 * alist-like constant, each entry {@code ((alias-name...) expansion)} mapping every
+	 * registered zero-parameter {@code deftype} name (qualified and plain spellings) to
+	 * the type specifier it expands to, alias chains already followed. Emitted as a
+	 * top-level {@code defvar} holding pure quoted data -- the shape the measurement
+	 * chose over one dispatch arm per alias, which cost 10% of a program that merely
+	 * loads alexandria ({@code .kb/array-literals.md}).
+	 */
+	public static final String DEFTYPE_ALIAS_TABLE = "%DEFTYPE-ALIAS-TABLE";
+
+	/**
+	 * The shared alias resolver the compile paths inject beside {@link #TYPEP_RUNTIME}: a
+	 * scan of {@link #DEFTYPE_ALIAS_TABLE} answering the expansion of a type designator
+	 * that names a user {@code deftype}, and the designator itself otherwise. It is what
+	 * makes {@code (typep x ty)} with {@code ty} a VALUE naming an alias answer what the
+	 * literal spelling answers -- the literal one is resolved at expansion time by the
+	 * recognizer that reads it, and a designator held in a variable reaches no
+	 * recognizer.
+	 */
+	public static final String DEFTYPE_ALIAS_RUNTIME = "%DEFTYPE-ALIAS";
+
 	/** The {@code char-name} built-in function. */
 	public static final String CHAR_NAME = "CHAR-NAME";
 
@@ -7246,6 +7332,30 @@ public final class LispNames {
 	 * {@link #PRINC_TO_STRING_RAW}.
 	 */
 	public static final String PRIN1_TO_STRING_RAW = "%PRIN1-TO-STRING";
+
+	/**
+	 * The internal {@code (%princ-piece x)} conversion: {@code princ-to-string} with the
+	 * {@code print-object} / {@code *print-case*} routing the public name has, but
+	 * WITHOUT the mutable-result wrap the public name finishes with on the compile
+	 * backends. It is what the codegen's own expansions build string PIECES with -- the
+	 * {@code format} directives, {@code map 'string}'s per-element accumulator, a
+	 * condition's default message, a computed {@code gensym} suffix -- where the string
+	 * is consumed by an internal append or written straight to a stream and the program
+	 * never receives it. The public {@code princ-to-string} wraps its result into a
+	 * mutable character vector so it carries identity
+	 * ({@code .kb/string-write-runtime.md}, "The fourth round"); a piece built with it
+	 * would pay that conversion once per PIECE, and {@code map 'string} once per
+	 * CHARACTER. Distinct from {@link #PRINC_TO_STRING_RAW}, which does not route through
+	 * {@code print-object} and therefore cannot serve a piece that renders a user
+	 * instance.
+	 */
+	public static final String PRINC_PIECE_INTERNAL = "%PRINC-PIECE";
+
+	/**
+	 * The {@code prin1-to-string} twin of {@link #PRINC_PIECE_INTERNAL}: routed, escaped,
+	 * unwrapped.
+	 */
+	public static final String PRIN1_PIECE_INTERNAL = "%PRIN1-PIECE";
 
 	/**
 	 * The internal {@code (%print-cased x escape)} renderer: the text the printer writes
