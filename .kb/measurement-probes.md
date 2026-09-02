@@ -263,6 +263,32 @@ stronger pin was available and went in unweakened (`.kb/gpu.md`, "The libm-free 
 against a SEQUENTIAL replay"). The rule is not "distrust `.kb`": it is that a premise ABOUT
 CODE is checkable in the code, whoever wrote it down and however recently.
 
+### The premise can come from another implementation, and that one can fail in ONE place
+
+The same failure with an external oracle instead of a `.kb` sentence: a question settled by
+"SBCL does X" inherits whatever SBCL is wrong about, and you find that out later. It
+happened on 2026-09-03. `.todo/648` settled ten signed-zero rows partly against SBCL, and
+`.todo/660` then established that SBCL is NOT an oracle for the two-argument float rounding
+operators -- it rounds `a/b` to `f64` and converts that exactly, so its answer is the
+quotient's rounding rather than the exact one.
+
+**That did not cost the ten rows anything, and the reason it did not is the whole point.**
+`.kb/linalg-simd.md` recorded, per row, WHAT the decision rested on rather than only that it
+matched: `(+ -0.0 -0.0)` on IEEE 754, `signum`/`sin`/`tan` on oddness, `eql` versus `=` on
+an explicit CLHS sentence, the `min`/`max` ties on SBCL *because CLHS leaves them
+implementation-defined* -- which is a choice among conforming answers, so a peculiarity
+there could not make the result non-conforming. Not one of those rows reaches a float
+division, which is exactly what todo-660 disqualified. The check took a reading of one file;
+without the per-row basis it would have taken re-deriving ten decisions.
+
+**So when a decision leans on another implementation, write what you trusted it FOR.**
+"Matches SBCL" is not a basis, it is an observation; "SBCL, because CLHS makes this
+implementation-defined and this is the conforming choice it makes" survives the day someone
+finds a thing SBCL gets wrong. Better still where it is available: `.todo/652` reopened one
+of those same rows and settled it on the implementation contradicting ITSELF -- `mod` and
+`rem` disagreeing with the second value of its own `truncate` -- and a conclusion that never
+used the oracle cannot be undone by the oracle.
+
 ## Rule 3: an A/B whose baseline moved is not an A/B
 
 **When several sessions push to `develop`, the arm you are not changing can be changed
