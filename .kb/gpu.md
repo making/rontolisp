@@ -1368,9 +1368,11 @@ book-shapes class 2.52 -> 2.87 MB (+14%); each new kernel is the size of its pla
 (2.1 k lines the forward, 4.4 k the adjoint), so this is the tier's own established price
 rather than a new one, and the driver's JIT of the larger text costs nothing measurable
 (the 3-step wall, which is mostly setup, went 5.37 -> 5.22 s). On the CPU the backward
-recomputes `norm`, +28% on layer-norm's backward and nothing else (`.kb/linalg.md` has that
-measurement). Metal DECLINES both members, at both widths, so the module runs the
-normalization and its two broadcasts member by member there exactly as before.
+recomputed `norm`, +28% on layer-norm's backward and nothing else -- fixed as `.todo/644`
+by a `%la-layer-norm-grad` sibling that answers `(dx norm)` from the pass it already makes,
+back to about the pre-fusion time (`.kb/linalg.md` has both measurements). Metal DECLINES
+both members, at both widths, so the module runs the normalization and its two broadcasts
+member by member there exactly as before.
 
 ## The chains left composed (todo-629, 2026-09-02)
 
