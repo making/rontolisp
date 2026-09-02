@@ -3562,6 +3562,16 @@ ONE-SIDED one in the file.
   the lazy-chain tests. A call ENTERS the pool before it declines, and entering drains the
   slabs of every host array the collector has reached since the last call. A two-sided
   bound reads that drain as a leak; the first draft of the test did, and failed.
+  **CUDA's twin assertion is one-sided too, and for a DIFFERENT mechanism** (measured
+  2026-09-03): there it is `CudaGemm.allocate`'s give-back ladder, which on a request that
+  does not fit while `residency.occupied()` collects, trims, re-asks, and then evicts every
+  resident copy the call does not hold -- +284 MB across twelve declined products in class
+  order, and in isolation +1.29 GB with a gigabyte resident against 0 bytes with nothing
+  resident, since the ladder is gated on `occupied()`. So one-sidedness here is not a
+  local accident of this backend: both backends grow free memory across a decline, by
+  unrelated routes, and the two `cuMemGetInfo` assertions in `GpuTest` that ARE two-sided
+  are the ones taking both endpoints straight after `releaseResident()`, where residency is
+  empty and neither route has anything to give back.
 - **A declined product whose operands FIT is allocated before the encode discovers it
   cannot proceed**, and the slabs go to the free lists: `freeDeviceMemory` drops by 3.2 GB
   at n = 12000, 6.4 GB at 20000 and 12.9 GB at 32768 -- three operands' worth each time.
