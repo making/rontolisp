@@ -1812,6 +1812,101 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * {@code (linalg::%la-scaled-masked-softmax x scale mask fill ax)} over the LAST axis
+	 * as one pass per row (2026-09-02): the softmax of {@code x / scale} with
+	 * {@code fill} where {@code mask} is non-zero, either of the two absent as nil.
+	 * @param a the operand
+	 * @param scale the divisor, or {@code null}
+	 * @param mask the mask, a packed array of either width, or {@code null}
+	 * @param fill the value of the masked cells
+	 * @param axis the normalized axis
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuScaledMaskedSoftmax(@Nullable Object a, @Nullable Object scale, @Nullable Object mask,
+			@Nullable Object fill, @Nullable Object axis) {
+		int[] d = lastAxisRows(a, axis);
+		Double sf = scale == null ? null : scalar(scale);
+		Double fl = scalar(fill);
+		int maskLen = softmaxMaskLength(mask, a);
+		if (d == null || (scale != null && sf == null) || fl == null || maskLen < 0 || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(a);
+		int offM = mask == null ? 0 : 1 + rank(mask);
+		int scaleOp = sf == null ? 0 : Gpu.BIN_DIV;
+		if (a instanceof float[] x) {
+			float[] c = newLike(dims(a, rank(a)));
+			return Gpu.softmax(x, off, mask, offM, maskLen, c, off, d[0], d[1], scaleOp, sf == null ? 0.0 : sf, fl) ? c
+					: null;
+		}
+		double[] c = newLikeD(dims(a, rank(a)));
+		return Gpu.softmax(doubles(a), off, mask, offM, maskLen, c, off, d[0], d[1], scaleOp, sf == null ? 0.0 : sf, fl)
+				? c : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-scaled-masked-softmax-grad g out ax scale mask)} over the last
+	 * axis as one pass per row (2026-09-02).
+	 * @param g the output's gradient
+	 * @param out the softmax output
+	 * @param axis the normalized axis
+	 * @param scale the forward's divisor, or {@code null}
+	 * @param mask the forward's mask, or {@code null}
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuScaledMaskedSoftmaxGrad(@Nullable Object g, @Nullable Object out, @Nullable Object axis,
+			@Nullable Object scale, @Nullable Object mask) {
+		int[] d = lastAxisRows(g, axis);
+		Double sf = scale == null ? null : scalar(scale);
+		int maskLen = softmaxMaskLength(mask, g);
+		if (d == null || !sameShape(g, out) || (scale != null && sf == null) || maskLen < 0 || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(g);
+		int offM = mask == null ? 0 : 1 + rank(mask);
+		int scaleOp = sf == null ? 0 : Gpu.BIN_DIV;
+		if (g instanceof float[] gf) {
+			float[] c = newLike(dims(g, rank(g)));
+			return Gpu.softmaxGrad(gf, off, floats(out), off, mask, offM, maskLen, c, off, d[0], d[1], scaleOp,
+					sf == null ? 0.0 : sf) ? c : null;
+		}
+		double[] c = newLikeD(dims(g, rank(g)));
+		return Gpu.softmaxGrad(doubles(g), off, doubles(out), off, mask, offM, maskLen, c, off, d[0], d[1], scaleOp,
+				sf == null ? 0.0 : sf) ? c : null;
+	}
+
+	/**
+	 * The element count of the scaled-masked softmax's mask when it is one the kernel
+	 * reads -- absent ({@code 0}), or a packed array of either width whose dims, leading
+	 * 1s dropped, are a suffix of the operand's -- else {@code -1}.
+	 */
+	private static int softmaxMaskLength(@Nullable Object mask, @Nullable Object a) {
+		if (mask == null) {
+			return 0;
+		}
+		if (!packed(mask) || !packed(a)) {
+			return -1;
+		}
+		int[] md = dims(mask, rank(mask)), dims = dims(a, rank(a));
+		int k = 0;
+		while (k < md.length && md[k] == 1) {
+			k++;
+		}
+		int tail = md.length - k;
+		if (tail > dims.length) {
+			return -1;
+		}
+		int n = 1;
+		for (int i = 0; i < tail; i++) {
+			if (md[k + i] != dims[dims.length - tail + i]) {
+				return -1;
+			}
+			n *= md[k + i];
+		}
+		return n;
+	}
+
+	/**
 	 * {@code (linalg:log-softmax a :axis ax)} over the LAST axis as one pass per row; any
 	 * other axis declines to the defun, whose members the device takes one by one.
 	 * @param a the operand

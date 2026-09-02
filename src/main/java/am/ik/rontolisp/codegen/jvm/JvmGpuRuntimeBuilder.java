@@ -218,6 +218,13 @@ final class JvmGpuRuntimeBuilder {
 	 */
 	private static final List<String> FUSED4_KERNELS = List.of("gpuLayerNormGrad", "gpuDropoutMask");
 
+	/**
+	 * The fused tier's five-argument members (2026-09-02): the scaled-masked softmax
+	 * ({@code x, scale, mask, fill, axis}) and its adjoint
+	 * ({@code g, out, axis, scale, mask}).
+	 */
+	private static final List<String> FUSED5_KERNELS = List.of("gpuScaledMaskedSoftmax", "gpuScaledMaskedSoftmaxGrad");
+
 	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
 	private static final int CHUNK_SIZE = 40000;
 
@@ -345,6 +352,10 @@ final class JvmGpuRuntimeBuilder {
 		for (String kernel : FUSED4_KERNELS) {
 			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel), cp.addUtf8(
 					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		}
+		for (String kernel : FUSED5_KERNELS) {
+			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel), cp.addUtf8(
+					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		}
 
 		// --- _gpuInit body ---------------------------------------------------------

@@ -167,7 +167,9 @@ final class JvmLinalgKernelCompiler {
 	static int arity(String member) {
 		return switch (member) {
 			case LispNames.LINALG_IM2COL, LispNames.LINALG_ADAM_STEP, LispNames.LINALG_RNG_FILL,
-					LispNames.LINALG_GATHER_STRIDED ->
+					LispNames.LINALG_GATHER_STRIDED,
+					// The attention head's softmax pair (2026-09-02).
+					LispNames.LINALG_SCALED_MASKED_SOFTMAX, LispNames.LINALG_SCALED_MASKED_SOFTMAX_GRAD ->
 				5;
 			case LispNames.LINALG_COL2IM -> 6;
 			case LispNames.LINALG_WHERE, LispNames.LINALG_SCATTER_ROWS, LispNames.LINALG_GELU_GRAD,

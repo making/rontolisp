@@ -715,25 +715,40 @@ state `%la-rng-fill` takes -- and `%la-rng-restore` puts back. A scalar input ke
 old composition in both `torch:gelu` and `torch:layer-norm` (a number has no shape to
 fuse over).
 
-## The transpose view (todo-630, 2026-09-02)
+## The views (todo-630 the transpose, todo-641 the scale and the mask; 2026-09-02)
 
 `(torch:matmul query (torch:transpose key '(0 2 1)))` is the attention head's own idiom,
 and `torch:transpose` was an eager node: `linalg:transpose` materialized the swapped copy,
 and its adjoint materialized a second one -- at a small GPT's shapes 72 `gather` launches a
 step after the matmul adjoints had stopped copying (`.kb/gpu.md`, "The transposed
-product"). PyTorch's transpose is a view, and so is this one now.
+product"). PyTorch's transpose is a view, and so is this one now. The two eager nodes
+between that product and the softmax -- `(torch:div score (sqrt d-k))` and
+`(torch:masked-fill score mask -inf)`, 72 `scal` and 72 `where` launches a step -- are
+views by the same mechanism (todo-641), consumed by `torch:softmax`.
 
-**The record's data slot is `store`, and `torch::%t-data` is a defun over it.** A
-`torch:transpose` that exchanges exactly the last two axes -- the rank-2 matrix transpose,
-or an axes list `(0 .. n-3 n-1 n-2)` -- returns a tensor whose store is a `torch::%view`
-naming the SOURCE tensor. `torch::%t-data` is what the generated accessor used to be plus
-one branch: a view is materialized on the first read (`linalg::%la-swap-last` of the
-source's data, itself read through `%t-data`, so a view of a view resolves) and the array
-REPLACES the view in the store, so a second read costs nothing and the source is released.
-Every operation reads its operands through `%t-data`, so none of them knows views exist;
-the two that do are `torch:matmul` and `torch:shape` (`torch::%t-dims` answers a view's
-dims from the source's without materializing). Any other permutation, and a transpose of
-a scalar or a vector, is the eager node it always was.
+**The record's data slot is `store`, and `torch::%t-data` is a defun over it.** A view is
+a `torch::%view` record naming the SOURCE tensor, a KIND and an argument:
+
+| kind | made by | data | arg |
+|---|---|---|---|
+| `:swap` | `torch:transpose` exchanging exactly the last two axes (the rank-2 matrix transpose, or an axes list `(0 .. n-3 n-1 n-2)`) | `linalg::%la-swap-last` of the source's | nil |
+| `:scale` | `torch:div` of an array by an UNTRACKED scalar (a number, or a scalar tensor that does not track) | `linalg:div` of the source's by it | the divisor |
+| `:fill` | `torch:masked-fill` of an array with a NUMBER under a mask that broadcasts INTO the array's shape | `linalg:where` of the mask, the value, the source's | `(mask . value)` |
+
+`torch::%t-data` is what the generated accessor used to be plus one branch: a view is
+materialized on the first read (`torch::%v-materialize`: the kind's member over the
+source's data, itself read through `%t-data`, so a view of a view resolves -- the very
+call the eager node made, so the bits are the eager node's) and the array REPLACES the
+view in the store, so a second read costs nothing and the source is released. Every
+operation reads its operands through `%t-data`, so none of them knows views exist; the
+three that do are `torch:matmul`, `torch:softmax` and `torch:shape` (`torch::%t-dims`
+answers a view's dims from the source's without materializing: swapped for `:swap`, the
+source's own for the other two, which is why a `:fill` is made only when the mask does
+not widen the array). Any other permutation, a transpose of a scalar or a vector, a
+division by an array or a tracked scalar, a fill with an array value or a widening mask,
+is the eager node it always was. A view's own adjoint is the eager node's (the swap of
+`g`, `g / s`, `where(mask, 0, g)`), so a consumer that materializes it gets the eager
+route, bit for bit.
 
 **`torch:matmul` reads a view's source where it lies, and routes the tape edge to the
 source.** With the right operand a view of `s` the forward is `linalg::%la-matmul-nd-tb a
@@ -749,12 +764,41 @@ gradcheck rows cover the shapes). The routing respects tracking: a view made und
 `torch:no-grad`, or of a constant, does not track, and then the VIEW stays the parent so
 that no gradient reaches the source -- exactly what the eager node did.
 
+**`torch:softmax` consumes a `:fill` and/or `:scale` chain as ONE node** (todo-641). In
+its `:axis` form over a tensor whose store is a `:fill` view, a `:scale` view, or a
+`:fill` over a `:scale` -- the book's `(torch:softmax (torch:masked-fill (torch:div
+score s) mask -inf) :axis -1)` -- `torch::%t-attention-softmax` reads the innermost
+source's data and calls `linalg::%la-scaled-masked-softmax (x scale mask fill ax)`, whose
+defun IS the three forwards in the chain's order (so every CPU path keeps the bits and
+`--gpu` runs it as one kernel, `.kb/gpu.md` "The attention scale and mask"). The parent
+recorded is the deepest tensor reachable through views THAT TRACK, and the adjoint is
+`linalg::%la-scaled-masked-softmax-grad (g out ax scale mask)` -- softmax's adjoint, then
+`where(mask, 0, ·)`, then `/ s`, the tape's own order over the two members it passed --
+so the views' adjoints never run and the bits are the eager chain's: each intermediate
+had one consumer, so the eager tape's `%t-accum` into it was a store, and the fused
+adjoint composes exactly those stores. A view that does not track (made under
+`torch:no-grad`, or of a constant) stays the parent and the adjoint folds only the views
+above it, so no gradient passes it -- what the eager node let through, which is nothing.
+The one case whose bits differ from the eager tape is a view read by a SECOND consumer
+(`(torch:add (torch:softmax v :axis -1) (torch:mul v 0.0))`): eagerly both gradients were
+summed at the view and passed the division once, fused the softmax's contribution passes
+it on its own and the tape adds the two at the score -- `(a + b) / s` against `a / s + b
+/ s`, a numerical difference of the kind every reassociation on the tape already is, and
+not the training loop's shape. A `:scale` over a `:fill` (the reverse order) materializes
+the fill and fuses the scale alone; any other chain, and the whole-array form, materialize.
+`TorchGradcheck.ATTENTION_PROGRAM` pins the fused route against the materialized chain --
+forward and gradient, bit for bit -- on the three test backends and `ci-spec.yaml`'s
+`torch-attention-views` on all four; the `attention-softmax`, `scaled-softmax`,
+`masked-softmax` and `div-scalar` gradcheck rows check the fused adjoint against finite
+differences.
+
 **What a reader of the store must know.** `torch:set-data` and the two optimizer updates
 write `%t-store` directly (a parameter is never a view). `torch:detach` and the printer go
 through `%t-data` and materialize. A view materialized LATE sees the source's data as it is
 THEN -- the SGD update writes a parameter's array in place -- which is PyTorch's aliasing
 too, and unreachable in a training loop, where every consumer of a transpose reads it in
-the forward pass. The measurement is in `.kb/gpu.md` "The attention head's transpose".
+the forward pass. The measurements are in `.kb/gpu.md` "The attention head's transpose"
+and "The attention scale and mask".
 
 ## Wiring (the LinalgLibrary pattern, plus the ordering rule)
 

@@ -6521,6 +6521,71 @@ cases:
       (T T)
       (NIL T NIL)
       ((3 2 4) 1779648.0)
+  # torch:div by an untracked scalar and torch:masked-fill under a number are
+  # VIEWS, and torch:softmax in its :axis form folds the chain into ONE node
+  # over the score (the attention head's idiom), routing the tape edge past
+  # the views. Each (T T) line pins the view path against the chain
+  # materialized step by step -- forward and gradient, bit for bit -- then the
+  # readers that must stay honest and the two cases that stay eager.
+  - name: torch-attention-views
+    source: |
+      (defparameter *at-s* (linalg:reshape (linalg:from-list '(0.5 -1.0 2.0 1.5 0.25 -0.75 1.0 -0.5 0.75 -1.25 2.5 0.125 3.0 -2.0 0.5 1.0 -1.5 2.25)) '(2 3 3)))
+      (defparameter *at-w* (linalg:reshape (linalg:from-list '(1.0 -2.0 0.5 0.25 3.0 -1.0 2.0 1.5 -0.5 0.75 -1.25 2.5 0.125 3.0 -2.0 0.5 1.0 -1.5)) '(2 3 3)))
+      (defparameter *at-m* (torch:subsequent-mask 3))
+      (defparameter *at-inf* (/ -1.0 0.0))
+      (defun at-loss (y) (torch:sum (torch:mul y *at-w*)))
+      (defun at-force (x) (torch:add x 0.0))
+      (defun at-compare (f)
+        ;; f over a score and a "force" (identity = the view chain, at-force = materialized).
+        (let* ((s1 (torch:tensor *at-s* :requires-grad t))
+               (s2 (torch:tensor *at-s* :requires-grad t))
+               (y1 (funcall f s1 #'identity))
+               (y2 (funcall f s2 #'at-force)))
+          (torch:backward (at-loss y1))
+          (torch:backward (at-loss y2))
+          (print (list (linalg:array-equal (torch:data y1) (torch:data y2))
+                       (linalg:array-equal (torch:grad s1) (torch:grad s2))))))
+      ;; scale then mask (the book's idiom), scale only, mask only, mask then scale
+      (at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:masked-fill (funcall fc (torch:div s 8.0)) *at-m* *at-inf*)) :axis -1)))
+      (at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:div s 3.0)) :axis -1)))
+      (at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:masked-fill s *at-m* -5.0)) :axis 2)))
+      (at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:div (funcall fc (torch:masked-fill s *at-m* -5.0)) 2.0)) :axis -1)))
+      ;; over a transpose view; a same-shape mask; a scalar-tensor divisor; a tracked divisor
+      (at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:masked-fill (funcall fc (torch:div (torch:transpose s '(0 2 1)) 8.0)) *at-m* *at-inf*)) :axis -1)))
+      (at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:masked-fill s (linalg:greater *at-w* 1.0) *at-inf*)) :axis -1)))
+      (at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:div s (torch:tensor 8.0))) :axis -1)))
+      (at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:div s (torch:tensor 8.0 :requires-grad t))) :axis -1)))
+      ;; the readers of a view: shape, print, a second consumer, the whole-array softmax
+      (let* ((s (torch:tensor *at-s* :requires-grad t))
+             (v (torch:masked-fill (torch:div s 8.0) *at-m* *at-inf*)))
+        (print (list (torch:shape v) (torch:shape (torch:div s 2.0))))
+        (print (torch:masked-fill (torch:div (torch:tensor '((1.0 2.0) (3.0 4.0))) 2.0) #2A((0 1) (0 0)) -1.0))
+        (torch:backward (at-loss (torch:add (torch:softmax v :axis -1) (torch:mul v 0.0))))
+        (print (list (eq (torch:data v) (torch:data v)) (array-dimensions (torch:grad s)))))
+      ;; under no-grad the view stays the parent: no gradient reaches the score
+      (let* ((s (torch:tensor *at-s* :requires-grad t))
+             (v (torch:no-grad (torch:masked-fill (torch:div s 8.0) *at-m* *at-inf*)))
+             (y (torch:softmax v :axis -1)))
+        (print (list (torch:requires-grad-p v) (torch:requires-grad-p y) (null (torch:grad s)))))
+      ;; a mask wider than the source is the eager node
+      (let* ((s (torch:tensor '(1.0 2.0 3.0) :requires-grad t))
+             (y (torch:softmax (torch:masked-fill s #2A((1 0 0) (0 0 1)) -9.0) :axis -1)))
+        (torch:backward (torch:sum (torch:mul y (torch:tensor '((1.0 2.0 3.0) (3.0 2.0 1.0))))))
+        (print (list (torch:shape y) (array-dimensions (torch:grad s)))))
+    expected: |
+      (T T)
+      (T T)
+      (T T)
+      (T T)
+      (T T)
+      (T T)
+      (T T)
+      (T T)
+      ((2 3 3) (2 3 3))
+      #<TENSOR #f((0.5 -1.0) (1.5 2.0))>
+      (T (2 3 3))
+      (NIL NIL T)
+      ((2 3) (3))
   # The torch records are defstructs carrying a (:print-object ...), so a tensor,
   # a module and an optimizer render identically on every backend -- the
   # hand-rolled tagged vectors they replaced printed their raw slots, one of which

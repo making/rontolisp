@@ -776,6 +776,36 @@ final class LinalgGpuKernels {
 		return Gpu.softmaxGrad(g, 0, s, 0, out, 0, rows, len) ? out : null;
 	}
 
+	/**
+	 * {@code linalg::%la-scaled-masked-softmax} over the last axis: the softmax of
+	 * {@code a / scale} with {@code fill} where the mask is non-zero, as one pass
+	 * (2026-09-02); {@code scaleOp} 0 for no scale, {@code mask} null for none.
+	 */
+	static double @Nullable [] scaledMaskedSoftmax(double[] a, @Nullable Object mask, int maskLen, int rows, int len,
+			int scaleOp, double scale, double fill) {
+		double[] out = new double[rows * len];
+		return Gpu.softmax(a, 0, mask, 0, maskLen, out, 0, rows, len, scaleOp, scale, fill) ? out : null;
+	}
+
+	static float @Nullable [] scaledMaskedSoftmax(float[] a, @Nullable Object mask, int maskLen, int rows, int len,
+			int scaleOp, double scale, double fill) {
+		float[] out = new float[rows * len];
+		return Gpu.softmax(a, 0, mask, 0, maskLen, out, 0, rows, len, scaleOp, scale, fill) ? out : null;
+	}
+
+	/** {@code linalg::%la-scaled-masked-softmax-grad} over the last axis, or null. */
+	static double @Nullable [] scaledMaskedSoftmaxGrad(double[] g, double[] s, @Nullable Object mask, int maskLen,
+			int rows, int len, int scaleOp, double scale) {
+		double[] out = new double[rows * len];
+		return Gpu.softmaxGrad(g, 0, s, 0, mask, 0, maskLen, out, 0, rows, len, scaleOp, scale) ? out : null;
+	}
+
+	static float @Nullable [] scaledMaskedSoftmaxGrad(float[] g, float[] s, @Nullable Object mask, int maskLen,
+			int rows, int len, int scaleOp, double scale) {
+		float[] out = new float[rows * len];
+		return Gpu.softmaxGrad(g, 0, s, 0, mask, 0, maskLen, out, 0, rows, len, scaleOp, scale) ? out : null;
+	}
+
 	/** {@code linalg:log-softmax} over the last axis of {@code rows x len}, or null. */
 	static double @Nullable [] logSoftmax(double[] a, int rows, int len) {
 		double[] out = result(rows * len);

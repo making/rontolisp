@@ -2297,6 +2297,20 @@ class GpuTest {
 	}
 
 	/**
+	 * Bit equality of two arrays, reported at the first differing index. AssertJ's
+	 * {@code containsExactly} takes seventeen seconds over 262144 elements (measured),
+	 * which is what this loop is for.
+	 */
+	private static void assertSameBits(String what, double[] actual, double[] expected) {
+		assertThat(actual.length).as(what + " length").isEqualTo(expected.length);
+		for (int i = 0; i < actual.length; i++) {
+			if (Double.doubleToRawLongBits(actual[i]) != Double.doubleToRawLongBits(expected[i])) {
+				assertThat(actual[i]).as(what + " at " + i).isEqualTo(expected[i]);
+			}
+		}
+	}
+
+	/**
 	 * The width's member boundary: a chain at {@code #f} stores every member as float.
 	 */
 	private static double nr(double v, boolean single) {
@@ -2353,6 +2367,81 @@ class GpuTest {
 					: Gpu.softmaxGrad((double[]) g, 0, (double[]) out, 0, (double[]) fused, 0, rows, len))
 				.isTrue();
 			assertThat(ch.doubles(fused)).as("softmax grad single=%s", single).containsExactly(ch.doubles(dx));
+			// The attention head's scaled and masked softmax (2026-09-02): the scale
+			// (a divide, and a divide by a power of two, which is the multiply), the
+			// mask's select on the host (a select is exact) and the softmax pair, against
+			// the fused pair with the two folded in -- with the mask at either width and
+			// a
+			// -infinity fill, which is what the causal mask fills with.
+			for (double sc : new double[] { 3.0, 8.0 }) {
+				for (int mk = 0; mk < 2; mk++) {
+					int maskLen = len * 4;
+					double[] maskD = new double[maskLen];
+					float[] maskF = new float[maskLen];
+					for (int i = 0; i < maskLen; i++) {
+						maskD[i] = (i * 7) % 5 == 0 ? 1.0 : 0.0;
+						maskF[i] = (float) maskD[i];
+					}
+					Object mask = mk == 0 ? maskD : maskF;
+					double fill = mk == 0 ? Double.NEGATIVE_INFINITY : -5.0;
+					Object sc1 = ch.scale(Gpu.BIN_DIV, x, sc, false);
+					Object masked = ch.fresh(n);
+					for (int i = 0; i < n; i++) {
+						boolean hit = maskD[i % maskLen] != 0.0;
+						if (single) {
+							((float[]) masked)[i] = hit ? (float) fill : ((float[]) sc1)[i];
+						}
+						else {
+							((double[]) masked)[i] = hit ? fill : ((double[]) sc1)[i];
+						}
+					}
+					Object mout = ch.fresh(n);
+					assertThat(single ? Gpu.softmax((float[]) masked, 0, (float[]) mout, 0, rows, len)
+							: Gpu.softmax((double[]) masked, 0, (double[]) mout, 0, rows, len))
+						.isTrue();
+					fused = ch.fresh(n);
+					assertThat(single
+							? Gpu.softmax((float[]) x, 0, mask, 0, maskLen, (float[]) fused, 0, rows, len, Gpu.BIN_DIV,
+									sc, fill)
+							: Gpu.softmax((double[]) x, 0, mask, 0, maskLen, (double[]) fused, 0, rows, len,
+									Gpu.BIN_DIV, sc, fill))
+						.isTrue();
+					assertSameBits("scaled masked softmax single=" + single + " scale=" + sc + " mask=" + mk,
+							ch.doubles(fused), ch.doubles(mout));
+					// its adjoint: the softmax adjoint, zero under the mask, the divide
+					// -- the
+					// divide taken on the device BEFORE the host zeroes (a zero divided
+					// by a
+					// positive scale is the same zero, and a host write to a resident
+					// array
+					// would have to be reported and would lose the residency the scalar
+					// tier is offered over).
+					Object mdx = ch.fresh(n);
+					assertThat(single ? Gpu.softmaxGrad((float[]) g, 0, (float[]) mout, 0, (float[]) mdx, 0, rows, len)
+							: Gpu.softmaxGrad((double[]) g, 0, (double[]) mout, 0, (double[]) mdx, 0, rows, len))
+						.isTrue();
+					Object mdx2 = ch.scale(Gpu.BIN_DIV, mdx, sc, false);
+					for (int i = 0; i < n; i++) {
+						if (maskD[i % maskLen] != 0.0) {
+							if (single) {
+								((float[]) mdx2)[i] = 0.0f;
+							}
+							else {
+								((double[]) mdx2)[i] = 0.0;
+							}
+						}
+					}
+					fused = ch.fresh(n);
+					assertThat(single
+							? Gpu.softmaxGrad((float[]) g, 0, (float[]) mout, 0, mask, 0, maskLen, (float[]) fused, 0,
+									rows, len, Gpu.BIN_DIV, sc)
+							: Gpu.softmaxGrad((double[]) g, 0, (double[]) mout, 0, mask, 0, maskLen, (double[]) fused,
+									0, rows, len, Gpu.BIN_DIV, sc))
+						.isTrue();
+					assertSameBits("scaled masked softmax grad single=" + single + " scale=" + sc + " mask=" + mk,
+							ch.doubles(fused), ch.doubles(mdx2));
+				}
+			}
 			// log-softmax: amax, sub, exp, sum, log, sub -- the deviation recomputed in
 			// the kernel's third pass rather than stored, which is the same (T) value.
 			Object s = ch.bcast(Gpu.BIN_SUB, x, m, rows, len);
@@ -2585,6 +2674,17 @@ class GpuTest {
 		assertThat(Gpu.geluGrad(a, 0, a, 0, shortArray, 0, out, 0, big)).isFalse();
 		assertThat(Gpu.softmax(a, 0, out, 0, 0, big)).isFalse();
 		assertThat(Gpu.softmax(a, 0, shortArray, 0, 256, big / 256)).isFalse();
+		// The scaled-masked forms (2026-09-02): a mask the operand is not a multiple of,
+		// one
+		// that is neither width, one short of its length, and a scale op that is neither
+		// the multiply nor the divide.
+		assertThat(Gpu.softmax(a, 0, new double[7], 0, 7, out, 0, 256, big / 256, Gpu.BIN_DIV, 8.0, 0.0)).isFalse();
+		assertThat(Gpu.softmax(a, 0, new int[256], 0, 256, out, 0, 256, big / 256, 0, 0.0, 0.0)).isFalse();
+		assertThat(Gpu.softmax(a, 0, new double[255], 0, 256, out, 0, 256, big / 256, 0, 0.0, 0.0)).isFalse();
+		assertThat(Gpu.softmax(a, 0, null, 0, 0, out, 0, 256, big / 256, Gpu.BIN_SUB, 8.0, 0.0)).isFalse();
+		assertThat(Gpu.softmaxGrad(a, 0, a, 0, new double[7], 0, 7, out, 0, 256, big / 256, Gpu.BIN_DIV, 8.0))
+			.isFalse();
+		assertThat(Gpu.softmaxGrad(a, 0, a, 0, null, 0, 0, out, 0, 256, big / 256, Gpu.BIN_SUB, 8.0)).isFalse();
 		assertThat(Gpu.layerNormGrad(a, 0, a, 0, shortArray, 0, out, 0, 256, big / 256, 1e-5)).isFalse();
 		assertThat(Gpu.dropoutMask(out, 0, big, 0.1, 0.9, 1 << 23, 1, 1)).isFalse();
 		assertThat(Gpu.dropoutMask(out, 0, 0, 0.1, 0.9, 1, 1, 1)).isFalse();

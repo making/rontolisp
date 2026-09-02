@@ -32,11 +32,16 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * @param strided the minimum OUTPUT element count a broadcast or gather is accepted
 	 * at
 	 * @param fold the minimum INPUT element count an axis fold is accepted at
+	 * @param fused the minimum element count a FUSED row member with no libm call in it
+	 * is accepted at -- a threshold of its own because it is not the axis fold's
+	 * question: a fused row kernel replaces a whole chain of memory passes, so a backend
+	 * that declines the round-trip fold on its own merits ({@link MetalGemm}) may still
+	 * take these
 	 * @param rng the minimum element count a generator fill is accepted at
 	 * @param matvec the minimum {@code rows * cols} a matrix-by-vector product is
 	 * accepted at, once its matrix is resident
 	 */
-	record Thresholds(long work, long map, long strided, long fold, long rng, long matvec) {
+	record Thresholds(long work, long map, long strided, long fold, long fused, long rng, long matvec) {
 	}
 
 	/** What was found -- model, architecture, driver -- for {@code description()}. */
@@ -246,13 +251,32 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	boolean geluGradF(float[] g, int og, float[] x, int ox, float @org.jspecify.annotations.Nullable [] old, int oOld,
 			float[] c, int oc, int n);
 
-	boolean softmax(double[] a, int oa, double[] c, int oc, int rows, int len);
+	/**
+	 * The last-axis softmax with the attention head's scale and mask folded in
+	 * (2026-09-02): each row cell is read as {@code (T)(x op sf)} ({@code sop}
+	 * {@link Gpu#BIN_MUL} / {@link Gpu#BIN_DIV}, or 0 for neither) and then as
+	 * {@code fill} wherever the mask is non-zero, before the folds -- the two eager
+	 * members' roundings reproduced. The mask is a trailing block of the operand
+	 * ({@code maskLen} divides {@code rows * len}, cell {@code i} reads
+	 * {@code mask[i % maskLen]}), of either width, or {@code null}; the plain softmax is
+	 * the call with no mask and {@code sop} 0.
+	 */
+	boolean softmax(double[] a, int oa, @org.jspecify.annotations.Nullable Object mask, int om, int maskLen, double[] c,
+			int oc, int rows, int len, int sop, double sf, double fill);
 
-	boolean softmaxF(float[] a, int oa, float[] c, int oc, int rows, int len);
+	boolean softmaxF(float[] a, int oa, @org.jspecify.annotations.Nullable Object mask, int om, int maskLen, float[] c,
+			int oc, int rows, int len, int sop, double sf, double fill);
 
-	boolean softmaxGrad(double[] g, int og, double[] s, int os, double[] c, int oc, int rows, int len);
+	/**
+	 * The softmax adjoint, then -- when the forward folded a scale and a mask -- their
+	 * adjoints in the tape's order: zero where the mask is non-zero, the scale applied to
+	 * the result, each rounded at the width.
+	 */
+	boolean softmaxGrad(double[] g, int og, double[] s, int os, @org.jspecify.annotations.Nullable Object mask, int om,
+			int maskLen, double[] c, int oc, int rows, int len, int sop, double sf);
 
-	boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len);
+	boolean softmaxGradF(float[] g, int og, float[] s, int os, @org.jspecify.annotations.Nullable Object mask, int om,
+			int maskLen, float[] c, int oc, int rows, int len, int sop, double sf);
 
 	boolean logSoftmax(double[] a, int oa, double[] c, int oc, int rows, int len);
 

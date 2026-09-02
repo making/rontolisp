@@ -1116,7 +1116,9 @@ class JvmLinalgGpuAccelCompilerTest {
 				"(linalg::%la-log-softmax-grad #d((1.0 2.0)) #d((0.5 0.5)) 1)", "(linalg::%la-gelu #d(1.0 2.0))",
 				"(linalg::%la-gelu-grad #d(1.0) #d(2.0) nil)", "(linalg::%la-layer-norm #d((1.0 2.0)) 1.0e-5)",
 				"(linalg::%la-layer-norm-grad #d((1.0 2.0)) #d((3.0 4.0)) 1.0e-5 nil)",
-				"(linalg::%la-dropout-mask '(2) 0.5 (linalg::%la-rng-state) nil)" }) {
+				"(linalg::%la-dropout-mask '(2) 0.5 (linalg::%la-rng-state) nil)",
+				"(linalg::%la-scaled-masked-softmax #d((1.0 2.0)) 8.0 #d((0.0 1.0)) -1.0 1)",
+				"(linalg::%la-scaled-masked-softmax-grad #d((1.0 2.0)) #d((0.5 0.5)) 1 8.0 nil)" }) {
 			assertThat(embedsGpuBridge(compile("(print " + call + ")", true))).as(call).isTrue();
 			assertThat(embedsGpuBridge(compile("(print " + call + ")", false))).as(call).isFalse();
 		}
@@ -1151,7 +1153,14 @@ class JvmLinalgGpuAccelCompilerTest {
 				    (linalg:sub s (linalg:log (linalg:sum (linalg:exp s) :axis 1 :keepdims t)))))
 				(defun log-softmax-grad-chain (g out)
 				  (linalg:sub g (linalg:mul (linalg:exp out) (linalg:sum g :axis 1 :keepdims t))))
+				(defparameter *m* (linalg:reshape (linalg:greater (linalg:sin (linalg:arange 384)) 0.3) '(1 384)))
+				(defun attention-chain (x) (softmax-chain (linalg:where *m* (/ -1.0 0.0) (linalg:div x 8.0))))
+				(defun attention-grad-chain (g out)
+				  (linalg:div (linalg:where *m* 0.0 (linalg:mul out (linalg:sub g (linalg:sum (linalg:mul g out) :axis 1 :keepdims t)))) 8.0))
 				(print (linalg:array-equal (linalg:softmax *x* :axis -1) (softmax-chain *x*)))
+				(print (linalg:array-equal (linalg::%%la-scaled-masked-softmax *x* 8.0 *m* (/ -1.0 0.0) 1) (attention-chain *x*)))
+				(print (linalg:array-equal (linalg::%%la-scaled-masked-softmax-grad *g* (attention-chain *x*) 1 8.0 *m*)
+				                           (attention-grad-chain *g* (attention-chain *x*))))
 				(print (linalg:array-equal (linalg:log-softmax *x* :axis -1) (log-softmax-chain *x*)))
 				(print (linalg:array-equal
 				        (linalg::%%la-log-softmax-grad *g* (linalg:log-softmax *x* :axis -1) 1)
@@ -1166,9 +1175,10 @@ class JvmLinalgGpuAccelCompilerTest {
 				(defparameter *st* (linalg::%%la-rng-state))
 				(print (linalg:sum (linalg::%%la-dropout-mask '(%d 384) 0.25 *st* %s)))
 				(print *st*)
-				""".formatted(n, TYPE, rows, n, TYPE, rows, rows, DOUBLES ? "nil" : "t");
+				"""
+			.formatted(n, TYPE, rows, n, TYPE, rows, rows, DOUBLES ? "nil" : "t");
 		String oracle = scalar(program);
-		assertThat(oracle).startsWith("T\nT\nT\nT\nT\nT\n");
+		assertThat(oracle).startsWith("T\nT\nT\nT\nT\nT\nT\nT\n");
 		assertThat(accel(program)).as("--gpu").isEqualTo(oracle);
 		assertThat(run(compile(program, true, false, true))).as("--gpu --simd")
 			.isEqualTo(run(compile(program, false, false, true)));

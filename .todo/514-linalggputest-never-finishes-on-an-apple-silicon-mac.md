@@ -67,3 +67,33 @@ Start there: read what `output` at `LinalgGpuTest.java:913` evaluates for
 `everyEnumeratedWriterInvalidatesTheResidentCopy` and find the `while` whose test never
 goes false. The `@Timeout` recommendation above stands regardless -- with it, this would
 have failed in minutes with exactly the stack above instead of hanging a full run.
+
+## Measured 2026-09-02: it is SLOWNESS, not a loop -- the class DOES finish
+
+Run alone (`-Dtest=LinalgGpuTest`) on an M4 Max / macOS 26.3.1 it completes in about
+**8 minutes**: 40 tests, 2 skipped. So the `while` the note above suspected of never going
+false does terminate; what the full-suite observation was seeing is a class that takes
+minutes while every sibling takes seconds, and under sixteen-way parallelism takes long
+enough to look stopped.
+
+One method alone -- `theResidentTierRunsOverAResidentOperandAndLandsOnTheCpuKernelsBits`,
+the one the CPU-pinned fork of a full run was inside -- is **72.7 s**, and it is 72.2 s
+with the todo-636 fused tier in and 72.7 s without, so the cost is the test's own shape
+rather than any member. The shape: each of these methods evaluates a multi-statement Lisp
+program four to eight times through the INTERPRETER at sizes derived from the device's
+thresholds, and on Metal `SIDE` is 208 where it is 64 on CUDA, so every program is an
+order of magnitude more interpreted work here than the numbers this class was written
+against.
+
+What that leaves for this item: the `@Timeout` recommendation above, still worth having,
+and the real question -- whether these methods need to run their programs at the FULL
+threshold-derived size four to eight times, or whether one legible size and one repeat
+would pin the same claims. That is a test-shape change, not a driver bug.
+
+Found on the way (fixed with todo-636 rather than left here):
+`theFusedTierReallyRanOnTheDeviceAndAnyOtherAxisDeclines` asserted a residency HIT count
+that can only be non-zero where lazy results pay, so it failed on Metal for every build,
+before todo-636 and after. It now carries the `lazyResultsOn()` guard its two sibling
+tests already carried. Nobody had seen it because this class has never run to completion
+on a Mac.
+

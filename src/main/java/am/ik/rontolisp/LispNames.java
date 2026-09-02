@@ -5499,6 +5499,21 @@ public final class LispNames {
 	public static final String LINALG_SOFTMAX_GRAD = "%LA-SOFTMAX-GRAD";
 
 	/**
+	 * {@code linalg::%la-scaled-masked-softmax} (INTERNAL): the last-axis softmax of a
+	 * score divided by a scalar and masked first -- {@code torch:div} then
+	 * {@code torch:masked-fill} then {@code torch:softmax}, the attention head's idiom --
+	 * spelled as one member so the device runs the three as one pass (2026-09-02).
+	 */
+	public static final String LINALG_SCALED_MASKED_SOFTMAX = "%LA-SCALED-MASKED-SOFTMAX";
+
+	/**
+	 * {@code linalg::%la-scaled-masked-softmax-grad} (INTERNAL): the adjoint of the
+	 * member above -- softmax's, then the mask's zeroing, then the division -- as one
+	 * member (2026-09-02).
+	 */
+	public static final String LINALG_SCALED_MASKED_SOFTMAX_GRAD = "%LA-SCALED-MASKED-SOFTMAX-GRAD";
+
+	/**
 	 * {@code linalg:log-softmax}: a device member since todo-629, in its {@code :axis}
 	 * form.
 	 */

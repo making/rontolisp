@@ -998,7 +998,7 @@ driver's own pageable copy -- so it loses past 262144 elements and wins 17% at 6
 Neither pays for a pinned pool and its budget. **Any future change to this route re-runs
 that table first.**
 
-## The fused tier (todo-499, 2026-09-02; todo-629 added two members)
+## The fused tier (todo-499, 2026-09-02; todo-629 added two members, todo-641 two more)
 
 The four compositions a transformer step spent a third of its device time on -- the exact
 GELU, softmax, layer-norm's normalization and the dropout mask, forward and backward --
@@ -1148,9 +1148,8 @@ members rather than one taking two booleans because that keeps every existing ca
 lowering: a member with flag arguments would have needed a new extended call shape on the
 JVM backend for nothing. The portable defuns are the transpose and the product they name,
 so `--simd`, `--blas`, both WASM backends and the plain interpreter are untouched, and a
-decline lands on exactly what ran before. **Metal declines them** (`MetalGemm.gemmT`
-answers `false`): `gemm.metal` has no transposed staging and there was no Apple machine to
-measure one on.
+decline lands on exactly what ran before. **Metal carries them too** since todo-631, on
+the same two flags and on MPS besides -- "The transposed product on Metal" below.
 
 **Measured, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, GB10
 with the machine to itself; the step is `(t23 - t3) / 20`, median of three interleaved
@@ -1217,9 +1216,90 @@ the BEFORE rounds span the usual 9%; a single pair would have shown anything fro
 and both profiles.** The rank-2 `copy_f32` at grid 4096 (72 a step, 2.9 ms) that remains
 at the head shape is `torch:cat`'s slice adjoint over the six heads, not a transpose.
 
-What the view mechanism is now the prerequisite of: the attention SCALE and MASK
-(`.todo/641`), the two eager nodes between this product and the fused softmax, 15.6 ms a
-step; the record needs a kind for them and `torch:softmax` a wider member.
+The view mechanism is what the attention SCALE and MASK, the two eager nodes between this
+product and the fused softmax, were then built on: the next section.
+
+## The attention scale and mask (todo-641, 2026-09-02)
+
+The two eager nodes between the transposed product above and the fused softmax:
+`(torch:div score (sqrt d-k))` and `(torch:masked-fill score mask -inf)`, 72 `scal_f32` and
+72 `where_f32` launches a step at the `(64 256 256)` score, 7.9 + 7.8 ms, each a full pass
+over a 16.8 MB slab the softmax was about to read anyway. **Both are VIEWS now**
+(`.kb/torch.md`, "The views": the tensor record's `:scale` and `:fill` kinds), and
+`torch:softmax` in its `:axis` form consumes the chain as ONE node --
+`linalg::%la-scaled-masked-softmax (x scale mask fill ax)` forward, its `-grad` adjoint,
+the tape edge routed past the views to the score -- which on this backend is the
+`softmax_*` / `softmax_grad_*` pair with the scale and the mask folded in: each cell read
+as `(T)(x / s)` (the exact-reciprocal multiply where `Gpu.scale` would use it) and then as
+`fill` under the mask, the two members' roundings reproduced, so the row the kernel folds
+is the row the chain stored and the bits are the chain's
+(`GpuTest.theFusedTierLandsOnTheComposedDeviceChainsBitsAtBothWidths` runs the scaled,
+masked chain and the fused pair at both widths and both mask widths). The adjoint applies
+`where(mask, 0, ·)` and then the scale in the store, the tape's order. The mask must be a
+TRAILING block of the operand (its dims, leading 1s dropped, a suffix of the operand's --
+the `(1 256 256)` causal mask over a `(64 256 256)` score) and may be either width; any
+other mask, any other axis, declines to the defun, whose three members the device then
+takes one by one as before.
+
+**The premise that the fusion "would cost the kernel nothing" was wrong, and the first
+build measured as a wash.** Kernel time per call at the book's score shape, f32, chain
+against fused, isolated (`probe2` in the session's scratch; the chain's softmax over a
+masked row is faster than over a plain one because `exp(-inf)` is):
+
+| | chain | fused, mask read as it is | fused, mask PACKED |
+|---|---|---|---|
+| forward, `/ 8` and the causal mask | 0.517 ms (softmax 0.248 + scal 0.163 + where 0.106) | 0.358 | **0.305** (incl. `pack_mask` 0.008) |
+| adjoint, the same | 0.671 (0.437 + 0.122 + 0.111) | 0.652 | **0.501** |
+| forward, mask alone | 0.384 | 0.359 | 0.286 |
+| adjoint, mask alone | 0.557 | 0.623 | 0.491 |
+| forward, `/ 3` alone (a real divide) | 0.435 | 0.397 | 0.413 |
+| adjoint, `/ 3` alone | 0.625 | 0.559 | 0.569 |
+
+The mask read inside the row kernel cost about what the `where` pass it replaced cost,
+and in the adjoint MORE (0.19 against 0.11): the row kernels run one thread per row --
+16384 threads at this shape, a tenth of the card -- so a load per cell is exposed latency
+there, where the element-wise `where` hid the same loads under four million threads.
+(Neither the fp64 compare, nor a 64-bit modulo per cell -- that one DID double the kernel
+on its own and is gone -- nor the loop's unrolling was the difference; each was measured.)
+What fixed it: the mask reaches the row kernel PACKED, one bit a cell, through a
+`pack_mask_*` launch the same call makes just before (8 µs), and with the mask a whole
+number of 32-aligned rows a lane loads ONE word for its row and the thirty-two lanes
+exchange bits by shuffle -- thirty-two loads a chunk become one. Two more things in the
+kernel comment: a `__shared__` tile per template instantiation cost the PLAIN softmax 30%
+(the tiles are declared once, in the dispatcher), and the forward's first pass writes the
+scaled, masked row into the result as scratch so the exp pass reads it back rather than
+paying the mask and the divide twice. The plain pair (no scale, no mask) is the pre-641
+body verbatim. A real divide (`/ 3`) is still `div.rn.f64` per cell, once; the book's
+`sqrt 64` is the multiply.
+
+**Measured, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output,
+GB10 with the machine to itself; kernel columns nsys over 13- and 3-step runs, the
+difference over 10 steps; the step `(t23 - t3) / 20`, three interleaved rounds):
+
+| | before | after |
+|---|---|---|
+| `scal_f32` at grid 16384 (the score) | 72 launches, 7.92 ms | **0** |
+| `where_f32` at grid 16384 | 72, 7.82 ms | **0** |
+| `softmax_f32` at grid 256 | 36, 9.18 ms (0.255 a call) | 36, 11.78 ms (0.327) |
+| `softmax_grad_f32` at grid 256 | 36, 15.98 ms (0.444) | 36, 16.67 ms (0.463) |
+| `pack_mask_f64` | -- | 72, 0.59 ms |
+| total kernel time a step | 475.1 ms in 2492.5 launches | **464.2 ms in 2413.8** |
+| wall a step, the three rounds | 0.606 / 0.577 / 0.616 | 0.586 / 0.627 / 0.592 |
+| wall a step, median | 0.606 s | **0.592 s** |
+
+11 ms of kernel time a step (2.3%), and 144 fewer launches with their 72 fresh 16.8 MB
+results (1.2 GB of allocation a step). On Metal the scaled-masked forms DECLINE (the plain
+pair is fused there since todo-636), so the composition runs member by member as before;
+whether the fold pays on that backend is for a measurement on a Mac. The wall's spread (±4% here, the usual) is wider
+than its 2.3% median move, so the kernel column is the number. With the mask read as it
+was, the same profile gave 477.2 ms -- the buckets moved, the total did not -- which is
+the measurement the packing was built on. **The loss series is byte-identical to the
+previous build's at every step of all six runs and both profiles.**
+
+What is left at the head after this: `copy_f32` at grid 4096 (72 a step, 2.9 ms) is
+`torch:cat`'s slice adjoint over the six heads, and the softmax pair itself is 28 ms a
+step -- at 0.33 / 0.46 ms a call, each about 1.5-2x the memory floor of its passes, the
+price of the one-thread-per-row shape the sequential double folds require.
 
 ## The chains left composed (todo-629, 2026-09-02)
 
@@ -1277,12 +1357,13 @@ byte-identical to the previous build's at every step of all six runs.**
 
 ### The three that did not pay, with the numbers
 
-- **The attention scale and mask around each softmax** is the biggest one left --
-  `scal_f32` 7.8 ms a step after the rewrite plus `where_f32` 7.8 -- and it is NOT a
-  fusion this tape can express. `torch:div` and `torch:masked-fill` are EAGER nodes: by
-  the time `torch:softmax` sees the masked score, both passes have already been paid, and
-  folding them in needs a tensor whose data is a deferred VIEW -- exactly the machinery
-  `.todo/630` needs for the attention head's transpose. Filed as `.todo/641`, behind it.
+- **The attention scale and mask around each softmax** was the biggest one left --
+  `scal_f32` 7.8 ms a step after the rewrite plus `where_f32` 7.8 -- and was NOT a
+  fusion this tape could express: `torch:div` and `torch:masked-fill` were EAGER nodes,
+  so by the time `torch:softmax` saw the masked score both passes had been paid. Built
+  behind `.todo/630`'s view machinery as `.todo/641`: "The attention scale and mask"
+  below, with the measurement -- the two buckets are gone, and what the fused kernels
+  give back is less than the two passes cost, for a reason the section states.
 - **Layer-norm's affine** (`* weight + bias`) is 15 ms a step at these shapes: 2 broadcast
   passes forward (0.213 + 0.214 ms x 13), and backward a broadcast mul (0.215), a zip mul
   (0.314) and the two axis-0 folds per parameter (0.098 each). Fusing it into
@@ -1303,9 +1384,10 @@ byte-identical to the previous build's at every step of all six runs.**
   of forward and holds 600 MB more on the device for the round trip. **Declined on the
   numbers.** `sqrt 2` has no exact reciprocal, so the divide cannot be rewritten the way
   the scale's was.
-- **The fused tier on Metal** stays declined: no Apple machine to measure the row kernels'
-  sequential double folds on, which is the same reason `.todo/631` gives for the
-  transposed product. Carved out as `.todo/636`.
+- **The fused tier on Metal** was carved out as `.todo/636` and is now built -- eight of
+  the nine members, the row kernels' sequential double folds running on the software
+  binary64 the resident tier already needed. "The fused tier on Metal" below has the
+  numbers.
 
 **One measurement to carry forward: the last-axis fold is uncoalesced.** `fold_f32` with
 `inner == 1` gives thread `i` row `i`, so thirty-two lanes read addresses a row apart --
@@ -1326,8 +1408,8 @@ threshold, and two whole tiers.
 | widths | `#d` and `#f` | **`#f` only** -- MSL rejects `double` outright |
 | rank-2 product | our tiled kernel | **MPS** above `2^27` per matrix, our tiled kernel below |
 | stacked product | our batched kernel | our batched kernel |
-| transposed stacked product | `ta` / `tb` on the same kernel | **declined** -- no transposed staging in `gemm.metal` (`.todo/631`) |
-| fused tier | nine members | **declined** -- no fused MSL kernels (`.todo/636`) |
+| transposed stacked product | `ta` / `tb` on the same kernel | the same two flags, and MPS's own `transposeLeft:` / `transposeRight:` above the MPS threshold |
+| fused tier | nine members | **eight of the nine** -- the dropout mask stays declined, on the draw's arithmetic (todo-636) |
 | element-wise tier | twelve members | the same twelve |
 | broadcast + axes transpose | yes | yes |
 | axis fold `:axis` | yes | **not as a round trip, measured**; over a resident operand only |
@@ -1399,6 +1481,44 @@ deliberately probe-free predicate answer differently depending on whether someth
 had touched the driver first, and `GpuDeclineTest` pins its answer against the constant on
 every machine. **Revisit with a measurement, not with this paragraph.**
 
+### The transposed product on Metal (todo-631, 2026-09-02)
+
+`gemm_batched_f32` took `ta` / `tb` the way `gemm<T>` did, in the same staging: an operand
+so marked has its `M x K` (or `K x N`) matrix STORED `K x M` (or `N x K`), the load walks
+it down its columns with the two thread indices swapped so a SIMD group's global reads
+stay contiguous, and the tiles gained the column of padding that makes the transposed
+store bank-conflict-free. The TILE the fold reads is the same tile, so the product is
+bit-identical to the plain product of the transposed copy and which orientation ran is not
+observable -- `MetalGpuTest.aTransposedOperandIsReadInPlaceAndFoldsOntoTheUntransposedProduct`
+asserts EQUALITY, at every shape and through BOTH routes.
+
+**MPS carries the orientation too, and that is what makes the threshold invisible.** Above
+`MPS_MIN_WORK` the tiled kernel is unreachable, so a transposed product there would have
+had to fall back to the copy the change exists to remove. `MPSMatrixMultiplication` takes
+`transposeLeft:` / `transposeRight:` and the descriptor is then the operand's STORED shape
+(`m x n` rather than `n x m`, `rowBytes` still the storage's own contiguous row) --
+measured, that route lands on the tiled kernel's bits exactly as the plain pair does, which
+is what the test asserts at the 1000x1000x1000 shape by running it both ways.
+
+**Measured, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output,
+M4 Max 40-core / 128 GB with the machine to itself; the step is `(t13 - t3) / 10`, three
+interleaved rounds, the same program the CUDA tables use):
+
+| | before | after |
+|---|---|---|
+| wall a step, the three rounds | 11.738 / 8.760 / 8.440 | **8.014 / 7.980 / 8.325** |
+| wall a step, median | 8.760 s | **8.014 s** |
+
+Every AFTER round beats every BEFORE round, which is the shape the CUDA measurement warned
+to look for rather than a single pair: the before rounds span 39% (the first is a cold
+one), the after rounds 4%. **The loss series is byte-identical to the previous build's at
+every step of all six runs**, as the bit-identity above says it must be.
+
+What did NOT transfer from the CUDA half: the register-tiled kernels, which this backend
+does not have -- above the MPS threshold MPS is the fast path and below it the 16x16
+kernel is the only one -- so there is no transposed-tile-versus-untransposed cost to weigh
+here, and no `_t4` / `_t8` regression to trade against the removed pass.
+
 ### Precision on this backend, and the three things the hardware does differently
 
 **The strided tier's bit-identity is an ARGUMENT here rather than an inheritance.**
@@ -1449,6 +1569,98 @@ The pins: `theStridedTierIsBitIdenticalToTheScalarOracle`, and
 2^18 bit patterns (subnormals, the specials, the tiny and the huge) and twenty-odd scalars
 from 1e-310 to `Double.MAX_VALUE`, the Adam update over three steps, the equal-shape ops
 -- against Java's arithmetic, bit for bit.
+
+### The fused tier on Metal (todo-636, 2026-09-02)
+
+Eight of `gemm.cu`'s nine fused members, in MSL: the exact GELU and its adjoint, the
+last-axis softmax and its adjoint, the last-axis log-softmax and its adjoint, layer-norm's
+normalization and its adjoint. The row kernels are `gemm.cu`'s -- one THREAD per row,
+thirty-two rows streamed through a transposed threadgroup tile thirty-two columns at a
+time, two SIMD groups to a threadgroup -- and what makes them possible here is the
+software binary64 the resident tier already needed: the sequential `double` fold has no
+float form that keeps its bits, and `f64_add` over a widened float is the CPU's own
+accumulation.
+
+**Every member boundary goes one of two ways, and which one is not a choice.** `gemm.cu`
+spells a boundary `(T)((double) a op (double) b)`; with `T = float` and no `double`, a
+boundary whose operands are both floats IS that rounding taken once (`bin_op_exact`, the
+flush guard included), and a boundary against a constant the float grid does not hold --
+`1/sqrt 2`, `2/sqrt pi`, the layer-norm `eps` -- takes the software route, which is
+exactly what the chain's own `scal_f32` takes for those scalars.
+`MetalGpuTest.theFusedTierLandsOnTheComposedDeviceChainsBits` runs each chain member by
+member over RESIDENT operands (on this backend a per-row intermediate is below every size
+threshold, so residency is the only way to get an all-device chain) and asserts EQUALITY
+against the fused kernel. It passed on the first run for all eight.
+
+**Per call, best of five, M4 Max at the book's own shapes** (`--gpu --simd`, `java -jar`,
+ms):
+
+| composition, shape | chain | fused | |
+|---|---|---|---|
+| `softmax :axis -1`, `(24576 256)` | 12 | **2** | 6.0x |
+| its adjoint | 7 | **5** | 1.4x |
+| `log-softmax :axis -1`, `(16384 3038)` | 83 | **21** | 4.0x |
+| its adjoint | 66 | **24** | 2.8x |
+| `%la-gelu`, `(16384 1536)` | 36 | **8** | 4.5x |
+| its adjoint | 84 | **17** | 4.9x |
+| `%la-layer-norm`, `(16384 384)` | 13 | **3** | 4.3x |
+| its adjoint | 47 | **8** | 5.9x |
+
+**The step, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, M4
+Max with the machine to itself; `(t13 - t3) / 10`, three interleaved rounds, against the
+build that already had the transposed product):
+
+| | before | after |
+|---|---|---|
+| wall a step, the three rounds | 9.940 / 8.663 / 7.567 | **5.552 / 7.440 / 5.901** |
+| wall a step, median | 8.663 s | **5.901 s** |
+
+Every after round beats every before round. A THIRD off the step, where the CUDA fused
+tier took a quarter -- larger here because this backend removes four command buffers out
+of five as well as the memory passes: a Metal call is `commit` plus `waitUntilCompleted`
+and nothing overlaps, so a chain of five members is five full waits.
+
+**A FUSED MEMBER CAN MOVE BITS THE CHAIN DID NOT, wherever the chain STRADDLED a
+threshold.** The general rule, because it will come up again the next time a fused kernel
+is added here: a chain's member that falls UNDER a size threshold runs on the CPU, in
+Java's libm; a fused kernel runs every member of that chain on the device, in the shader's.
+Where the chain was entirely on one side, fusion changes nothing; where it straddled, the
+fused member carries a device `log` (or `exp`, or `erf`) the chain took from the host. This
+is not a new property of the tier -- it is the corollary of two that are already recorded
+above: "The transcendentals have their own libm, and that break can be SEEN", and the
+threshold-dependent output the same section pins for `(linalg:erf #d(-0.0))`, which prints
+`-0.0` above the threshold and `0.0` below it. The straddle was always there; fusion makes
+it visible in one call instead of two.
+
+**Measured, this tier: it costs the log-softmax pair and nothing else.** Member by member
+at `(16384 64)`, six of the eight are byte-identical to the unfused build -- softmax, its
+adjoint, the GELU, its adjoint, layer-norm and its adjoint. `log-softmax` and its adjoint
+are not, and the straddling member is exactly one: the chain's
+`(linalg:log (linalg:sum ... :keepdims t))` is a `log` over a `rows x 1` array, 16384
+elements at the book's shapes, under this backend's map threshold of 2^17. On CUDA the
+same array CLEARS that backend's lower map threshold -- the chain there is all-device, and
+that is why todo-629 measured the loss byte-identical there and this does not. Declining
+the pair would restore byte-identity and cost 104 of the ~330 ms the table above gives
+back, which is why it is not declined; a program that needs the previous bits on Apple
+turns the flag off rather than this tier. **What would remove the straddle rather than
+pay it is a lower map threshold for the unary libm members here**, which is a measurement
+nobody has made -- the threshold was set against `sin` over a whole array, not against a
+`rows x 1` one -- and an item of its own, not this one.
+
+**The dropout mask is the ninth, and it stays declined -- on the ARITHMETIC.**
+Wichmann-Hill's uniform is three binary64 divisions and two additions an element, and a
+binary64 division here is the software restoring divide, fifty-five bit-serial steps. That
+is why `rngFillF` is not a member on this backend either, and fusing the comparison and
+the scale onto the draw does not change which half is expensive: it is the draw, not the
+two passes over it. `MetalGpuTest.theDropoutMaskStaysDeclinedHere` pins both.
+
+**The offer rule needed a threshold of its own.** `Gpu.offeredRows` took the FOLD
+threshold for the libm-free members, and this backend's fold threshold is `Long.MAX_VALUE`
+-- the measured refusal of the round-trip axis fold -- so layer-norm and its adjoint could
+never have been offered. A fused row kernel does not replace one fold; it replaces a chain
+of memory passes and command buffers, so the fold's answer is the wrong one to reuse.
+`GpuDevice.Thresholds` gained a `fused` field: CUDA passes its own fold threshold (nothing
+moves there) and Metal passes `MIN_MAP_ELEMENTS`.
 
 ### Residency and the GEMV on this backend
 
@@ -1620,7 +1832,7 @@ flag is not like `--blas`, whose availability check is nearly free.
 
 ### The intercepted set
 
-**Fifty-five `linalg:` members and one outside it.** By round trip: `linalg:dot` over two
+**Fifty-seven `linalg:` members and one outside it.** By round trip: `linalg:dot` over two
 packed rank-2 operands of the same width (hence `matmul` at rank 2 and `solve`
 transitively); `%la-matmul-nd`, the STACKED product behind `matmul` at rank >= 3, and its
 two TRANSPOSED siblings `%la-matmul-nd-ta` / `%la-matmul-nd-tb` ("The transposed product",
@@ -1631,10 +1843,12 @@ only, `sum` `amax` `amin` in their `:axis` form only, `transpose` in its axes fo
 and `%la-rng-fill`, the seeded generator's fill behind `rand` / `randn` / `uniform`, the
 only member with NO operand. Over a RESIDENT operand: the resident, index and copy tiers
 listed under residency. The FUSED tier (todo-499, todo-629): `linalg:softmax` and
-`linalg:log-softmax` in their `:axis` form over the last axis, and the seven internal
+`linalg:log-softmax` in their `:axis` form over the last axis, and the nine internal
 members `torch.lisp` spells its compositions through -- `%la-softmax-grad`,
 `%la-log-softmax-grad`, `%la-gelu`, `%la-gelu-grad`, `%la-layer-norm`,
-`%la-layer-norm-grad`, `%la-dropout-mask` -- offered by the rule of the chain each
+`%la-layer-norm-grad`, `%la-dropout-mask`, and (todo-641) `%la-scaled-masked-softmax`
+with `%la-scaled-masked-softmax-grad`, over the last axis and a mask that is a trailing
+block of the operand only -- offered by the rule of the chain each
 replaces (the map's threshold where a libm call is in it, the fold's otherwise, or a
 resident operand). Outside `linalg:`: `vec:matvec`, installed by `LinalgGpu.installVec`
 from the VEC library's own lazy-load hook, because the two libraries load independently and

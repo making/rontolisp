@@ -11991,6 +11991,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void torchAttentionViewsAreTheMaterializedChainBitForBit() {
+		// TorchGradcheck.ATTENTION_PROGRAM, shared verbatim with the JVM and WASM
+		// backends: torch:div by a scalar and torch:masked-fill are views torch:softmax
+		// folds into one node (2026-09-02), and every line prints T against the chain
+		// materialized step by step.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.testsupport.TorchGradcheck.ATTENTION_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.ATTENTION_EXPECTED);
+	}
+
+	@Test
 	void torchTransposeViewIsTheMaterializedTransposeBitForBit() {
 		// TorchGradcheck.VIEW_PROGRAM, shared verbatim with the JVM and WASM backends:
 		// a last-two-axes torch:transpose is a view torch:matmul reads in place
