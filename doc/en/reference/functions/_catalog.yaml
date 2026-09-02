@@ -39,6 +39,10 @@ categories:
       - { slug: floor, name: "floor" }
       - { slug: ceiling, name: "ceiling" }
       - { slug: round, name: "round" }
+      - { slug: ffloor, name: "ffloor" }
+      - { slug: fceiling, name: "fceiling" }
+      - { slug: ftruncate, name: "ftruncate" }
+      - { slug: fround, name: "fround" }
       - { slug: numerator, name: "numerator" }
       - { slug: denominator, name: "denominator" }
   - title: "Math Functions"

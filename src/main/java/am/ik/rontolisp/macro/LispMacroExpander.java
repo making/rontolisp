@@ -30719,11 +30719,42 @@ public final class LispMacroExpander {
 		int size = cons.toList().size();
 		return switch (op.name()) {
 			case LispNames.VALUES -> true;
-			case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE -> size == 2 || size == 3;
+			case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE, LispNames.FFLOOR,
+					LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE ->
+				size == 2 || size == 3;
 			case LispNames.GETHASH -> size == 3 || size == 4;
 			case LispNames.ARRAY_DISPLACEMENT -> size == 2;
 			case LispNames.FIND_SYMBOL, LispNames.INTERN -> size == 2 || size == 3;
 			default -> false;
+		};
+	}
+
+	/**
+	 * True when {@code op} is one of the float-quotient twins ({@code ffloor},
+	 * {@code fceiling}, {@code fround}, {@code ftruncate}).
+	 * @param op the operator name
+	 * @return {@code true} for an f-prefixed rounder
+	 */
+	private static boolean isFFamily(String op) {
+		return switch (op) {
+			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE -> true;
+			default -> false;
+		};
+	}
+
+	/**
+	 * The exact-integer operator an f-prefixed rounder floats its quotient from
+	 * ({@code ffloor} -&gt; {@code floor}, and so on). Only meaningful when
+	 * {@link #isFFamily} is {@code true} for {@code op}.
+	 * @param op an f-prefixed rounder name
+	 * @return the corresponding integer-quotient operator name
+	 */
+	private static String floorFamilyIntOp(String op) {
+		return switch (op) {
+			case LispNames.FFLOOR -> LispNames.FLOOR;
+			case LispNames.FCEILING -> LispNames.CEILING;
+			case LispNames.FROUND -> LispNames.ROUND;
+			default -> LispNames.TRUNCATE;
 		};
 	}
 
@@ -30782,7 +30813,8 @@ public final class LispMacroExpander {
 					}
 					return new MvProducer(bindings, values, null);
 				}
-				case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE: {
+				case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE, LispNames.FFLOOR,
+						LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE: {
 					// (floor x [y]) -> quotient + remainder (y defaults to 1). The
 					// two-argument form only exists inside a multiple-value consumer; it
 					// lowers to the one-argument built-in over x/y.
@@ -30795,7 +30827,17 @@ public final class LispMacroExpander {
 					// every backend, so the family reads its own remainder off them:
 					// ceiling's is mod - divisor, and round's is whichever of the two its
 					// quotient landed on. See .kb/linalg-simd.md, "mod/rem".
-					String op = ((LispSymbol) cons.car()).name();
+					//
+					// The f-prefixed twins (ffloor/fceiling/fround/ftruncate) share this
+					// lowering entirely: their quotient is the SAME exact integer, only
+					// floated for the value the caller sees, and their remainder is
+					// identical -- CLHS defines them by "the same operation, a FLOAT
+					// quotient" (todo-667). The comparison inside round's remainder
+					// (below) must still see the exact integer, so only the emitted
+					// primary value is wrapped.
+					String rawOp = ((LispSymbol) cons.car()).name();
+					boolean floatQuotient = isFFamily(rawOp);
+					String op = floatQuotient ? floorFamilyIntOp(rawOp) : rawOp;
 					LispSymbol a = new LispSymbol(prefix + "_a");
 					bindings.add(new MvBinding(a, parts.get(1)));
 					LispVal divisor = new LispInteger(1);
@@ -30807,7 +30849,7 @@ public final class LispMacroExpander {
 					LispVal quotientOf = parts.size() == 3 ? mvCall(LispNames.DIV, a, divisor) : a;
 					LispSymbol q = new LispSymbol(prefix + "_q");
 					bindings.add(new MvBinding(q, mvCall(op, quotientOf)));
-					values.add(q);
+					values.add(floatQuotient ? mvCall(LispNames.FLOAT, q) : q);
 					values.add(floorFamilyRemainder(op, prefix, a, divisor, q, quotientOf));
 					return new MvProducer(bindings, values, null);
 				}
@@ -31102,6 +31144,34 @@ public final class LispMacroExpander {
 			return null;
 		}
 		return mvCall(((LispSymbol) cons.car()).name(), mvCall(LispNames.DIV, parts.get(1), parts.get(2)));
+	}
+
+	/**
+	 * Expands an {@code ffloor}/{@code fceiling}/{@code fround}/{@code ftruncate} call
+	 * (one or two arguments) in an ordinary (single-value) context into
+	 * {@code (float (op number [divisor]))} -- CLHS defines the four as
+	 * {@code floor}/{@code ceiling}/{@code round}/{@code truncate} with the SAME
+	 * operation but a FLOAT primary value (todo-667). The inner call keeps the exact
+	 * quotient: a two-argument inner form still hits {@code evalFloorFamilyDivision} (the
+	 * interpreter) or {@link #expandFloorFamilyDivisor} (the compilers), so the exact
+	 * division todo-660 bought is untouched -- only the RESULT is floated, matching SBCL
+	 * (a huge quotient like {@code (ffloor 1d300 7.0)} is then a float that itself cannot
+	 * be exact, exactly as CLHS specifies; the remainder beside it, reached only through
+	 * a multiple-value consumer, stays exact -- see {@link #lowerMvProducer}).
+	 * @param cons the f-family expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFFamily(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		String op = floorFamilyIntOp(((LispSymbol) cons.car()).name());
+		if (parts.size() == 2) {
+			return mvCall(LispNames.FLOAT, mvCall(op, parts.get(1)));
+		}
+		if (parts.size() == 3) {
+			return mvCall(LispNames.FLOAT, mvCall(op, parts.get(1), parts.get(2)));
+		}
+		throw new IllegalArgumentException(
+				((LispSymbol) cons.car()).name() + " expects 1 or 2 arguments: " + cons.print());
 	}
 
 	/**

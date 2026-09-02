@@ -1733,6 +1733,8 @@ final class WasmExprCompiler {
 						}
 					}
 				}
+				case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandFFamily(cons), ctx);
 				case LispNames.COND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx);
 				case LispNames.CASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx);
 				case LispNames.ECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEcase(cons), ctx);

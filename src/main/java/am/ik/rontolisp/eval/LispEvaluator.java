@@ -5589,6 +5589,17 @@ public final class LispEvaluator {
 				}
 				break;
 			}
+			case LispNames.FFLOOR:
+			case LispNames.FCEILING:
+			case LispNames.FROUND:
+			case LispNames.FTRUNCATE:
+				// (ffloor a [b]) -> (float (floor a [b])): the same exact quotient
+				// floor/ceiling/round/truncate already compute (the case above), with
+				// only the primary value floated (todo-667). The remainder, reached only
+				// through a multiple-value consumer, is handled by
+				// LispMacroExpander#lowerMvProducer before this dispatch is ever
+				// reached.
+				return evalBuiltinMacro(cons, env, LispMacroExpander::expandFFamily);
 			case LispNames.LIST_STAR:
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandListStar);
 			case LispNames.ACONS:

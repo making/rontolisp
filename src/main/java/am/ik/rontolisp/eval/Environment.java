@@ -6625,6 +6625,21 @@ public final class Environment implements Scope {
 		throw new LispEvalException("append expects a list, got: " + list.print());
 	}
 
+	/**
+	 * Runs {@code intOp} ({@code floor}/{@code ceiling}/{@code round}/{@code truncate})
+	 * over {@code arg} and floats the result, by calling the already-registered
+	 * {@link LispNames#FLOAT} and {@code intOp} functions rather than re-deriving the
+	 * rounding -- the {@code ffloor}/{@code fceiling}/{@code fround}/{@code ftruncate}
+	 * one-argument function value (todo-667).
+	 */
+	private static LispVal floatOfIntQuotient(Environment env, String intOp, LispVal arg) {
+		if (!(env.lookupFunctionOrNull(intOp) instanceof LispFunction intFn)
+				|| !(env.lookupFunctionOrNull(LispNames.FLOAT) instanceof LispFunction floatFn)) {
+			throw new IllegalStateException(intOp + "/" + LispNames.FLOAT + " must be registered first");
+		}
+		return floatFn.body().apply(List.of(intFn.body().apply(List.of(arg))));
+	}
+
 	private static void registerTypeConversion(Environment env) {
 		env.defineFunction(LispNames.FLOAT, new LispFunction(LispNames.FLOAT, args -> {
 			// The optional second argument is a CL prototype selecting the float
@@ -6700,6 +6715,29 @@ public final class Environment implements Scope {
 				return normalizeBig(r.round());
 			}
 			throw new LispEvalException("round expects a number, got: " + arg.print());
+		}));
+		// ffloor/fceiling/fround/ftruncate: CLHS defines each as its integer twin with a
+		// FLOAT primary value (todo-667). The one-argument form is all a first-class
+		// function value needs (matching floor/ceiling/round/truncate's own wrapper,
+		// which is unary too -- the two-argument form is reachable only through the
+		// macro lowering in call position, LispMacroExpander#expandFFamily), so this
+		// reuses the FLOOR/CEILING/ROUND/TRUNCATE and FLOAT functions just registered
+		// above rather than re-deriving the rounding.
+		env.defineFunction(LispNames.FFLOOR, new LispFunction(LispNames.FFLOOR, args -> {
+			requireArgCount(LispNames.FFLOOR, args, 1);
+			return floatOfIntQuotient(env, LispNames.FLOOR, args.get(0));
+		}));
+		env.defineFunction(LispNames.FCEILING, new LispFunction(LispNames.FCEILING, args -> {
+			requireArgCount(LispNames.FCEILING, args, 1);
+			return floatOfIntQuotient(env, LispNames.CEILING, args.get(0));
+		}));
+		env.defineFunction(LispNames.FROUND, new LispFunction(LispNames.FROUND, args -> {
+			requireArgCount(LispNames.FROUND, args, 1);
+			return floatOfIntQuotient(env, LispNames.ROUND, args.get(0));
+		}));
+		env.defineFunction(LispNames.FTRUNCATE, new LispFunction(LispNames.FTRUNCATE, args -> {
+			requireArgCount(LispNames.FTRUNCATE, args, 1);
+			return floatOfIntQuotient(env, LispNames.TRUNCATE, args.get(0));
 		}));
 		env.defineFunction(LispNames.NUMERATOR, new LispFunction(LispNames.NUMERATOR, args -> {
 			requireArgCount(LispNames.NUMERATOR, args, 1);

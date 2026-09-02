@@ -1814,6 +1814,57 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(interpreted.toString(java.nio.charset.StandardCharsets.UTF_8).trim());
 	}
 
+	// ffloor/fceiling/fround/ftruncate (todo-667): CLHS defines each as its integer twin
+	// with a FLOAT primary value, sharing the same exact quotient and remainder --
+	// LispMacroExpander.expandFFamily/lowerMvProducer, no separate backend lowering.
+	private static final String F_FAMILY_PROGRAM = """
+			(defun q (a b) (multiple-value-list (ffloor a b)))
+			(print (q 7 2))
+			(print (multiple-value-list (fceiling 7 2)))
+			(print (multiple-value-list (ftruncate -7 2)))
+			(print (multiple-value-list (fround 7 2)))
+			(print (multiple-value-list (ffloor 1d300 7.0)))
+			(print (ffloor 1d300))
+			(print (funcall #'ffloor 7))
+			(print (mapcar #'ffloor '(7 8 9)))
+			""";
+
+	private static final String F_FAMILY_EXPECTED = """
+			(3.0 1)
+			(4.0 -1)
+			(-3.0 -1)
+			(4.0 -1)
+			(1.4285714285714286e299 1.0)
+			1.0e300
+			7.0
+			(7.0 8.0 9.0)""";
+
+	@Test
+	void theFFamilyMatchesTheFloorFamily() throws Exception {
+		assertThat(compileAndRun(F_FAMILY_PROGRAM)).isEqualTo(F_FAMILY_EXPECTED);
+	}
+
+	@Test
+	void theComponentFFamilyMatchesTheFloorFamily() throws Exception {
+		assertThat(compileComponentAndRun(F_FAMILY_PROGRAM)).isEqualTo(F_FAMILY_EXPECTED);
+	}
+
+	@Test
+	void noGcFFamilySharesTheFloorFamilysNoBignumBehavior() throws Exception {
+		// --no-gc has no bignum tier (.kb/wasm-bignum.md), so ffloor's inner floor call
+		// TRAPS the same way (floor 1d300) already does -- no separate no-gc lowering
+		// exists for the four, nor is one needed (.kb/no-gc-scalar-wasm.md).
+		String program = """
+				(defun q () (ffloor 7 2))
+				(defun trapcase () (ffloor 1d300))
+				(rontolisp:wasm-export 'q :params '() :returns :float)
+				(rontolisp:wasm-export 'trapcase :params '() :returns :float)
+				""";
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "q")).isEqualTo("3");
+		assertThatThrownBy(() -> compileNoGcAndInvoke(OptimizeLevel.NONE, program, "trapcase"))
+			.hasMessageContaining("integer overflow");
+	}
+
 	@Test
 	void noGcFloatRemainderIsExactAtEveryMagnitude() throws Exception {
 		// The same reduction, inlined at the site by NoGcWasmCompiler from the shared

@@ -1362,6 +1362,28 @@ cases:
       (3 4 2 4 -3)
       ((3 1) (4 -1.0) (2 0.0))
       ((9 0.09999999999999995) 0.09999999999999995 (2 0.09999999999999998))
+  # ffloor/fceiling/fround/ftruncate (todo-667): CLHS defines each as its integer twin
+  # with a FLOAT primary value -- (ffloor 7 2) is 3.0 and 1, not (floor 7 2)'s 3 and 1.
+  # The quotient stays the SAME exact rational the plain family answers (the row above),
+  # only floated for the primary value, and the remainder is identical -- so a huge
+  # quotient loses precision exactly where CLHS says a float must, not before.
+  - name: ffloor-fceiling-ftruncate-fround
+    source: |
+      (defun ff-fl (a b) (multiple-value-bind (q r) (ffloor a b) (list q r)))
+      (defun ff-ce (a b) (multiple-value-bind (q r) (fceiling a b) (list q r)))
+      (defun ff-tr (a b) (multiple-value-bind (q r) (ftruncate a b) (list q r)))
+      (defun ff-ro (a b) (multiple-value-bind (q r) (fround a b) (list q r)))
+      (print (list (ff-fl 7 2) (ff-ce 7 2) (ff-tr -7 2) (ff-ro 7 2)))
+      (print (ff-fl 1d300 7.0))
+      (print (ffloor 1d300))
+      (print (funcall #'ffloor 7))
+      (print (mapcar #'ffloor '(7 8 9)))
+    expected: |
+      ((3.0 1) (4.0 -1) (-3.0 -1) (4.0 -1))
+      (1.4285714285714286e299 1.0)
+      1.0e300
+      7.0
+      (7.0 8.0 9.0)
   # min/max resolve a tie and an unordered pair with ONE rule -- min is (a <= b) ? a : b
   # and max is (a >= b) ? a : b, IEEE comparisons -- so NaN is the same question as the
   # signed-zero tie and belongs beside it.

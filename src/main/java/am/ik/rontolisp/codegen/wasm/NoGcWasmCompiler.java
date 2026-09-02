@@ -5430,6 +5430,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// form) falls through to the native rounding conversion.
 			case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND ->
 				LispMacroExpander.expandFloorFamilyDivisor(cons);
+			// ffloor/fceiling/fround/ftruncate always expand -- (float (floor a [b])) --
+			// onto the FLOAT and FLOOR-family builtins already handled above/below, so
+			// this backend needs no separate lowering (todo-667). Unlike the plain
+			// family there is no one-argument native form to fall through to.
+			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE ->
+				LispMacroExpander.expandFFamily(cons);
 			default -> null;
 		};
 	}

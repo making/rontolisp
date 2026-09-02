@@ -2549,6 +2549,18 @@ public final class LispNames {
 	/** The {@code round} built-in function. */
 	public static final String ROUND = "ROUND";
 
+	/** The {@code ffloor} macro: {@link #FLOOR} with a {@link #FLOAT} quotient. */
+	public static final String FFLOOR = "FFLOOR";
+
+	/** The {@code fceiling} macro: {@link #CEILING} with a {@link #FLOAT} quotient. */
+	public static final String FCEILING = "FCEILING";
+
+	/** The {@code ftruncate} macro: {@link #TRUNCATE} with a {@link #FLOAT} quotient. */
+	public static final String FTRUNCATE = "FTRUNCATE";
+
+	/** The {@code fround} macro: {@link #ROUND} with a {@link #FLOAT} quotient. */
+	public static final String FROUND = "FROUND";
+
 	/** The {@code numerator} built-in function. */
 	public static final String NUMERATOR = "NUMERATOR";
 

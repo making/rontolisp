@@ -254,6 +254,10 @@ page.
 | `floor` | `(floor 3.7)`, `(floor 7 2)` | `3`, `3` (toward negative infinity; with a divisor, the quotient of the division -- the remainder is observable through `multiple-value-bind`) |
 | `ceiling` | `(ceiling 3.2)`, `(ceiling 7 2)` | `4`, `4` (toward positive infinity; with a divisor, the quotient of the division) |
 | `round` | `(round 3.5)`, `(round 2.5)` | `4`, `2` (banker's rounding; an optional divisor rounds the quotient of the division) |
+| `ffloor` | `(ffloor 7 2)` | `3.0` (like `floor`, but the primary value is always a float; the remainder is the same one `floor` answers) |
+| `fceiling` | `(fceiling 7 2)` | `4.0` (like `ceiling`, but the primary value is always a float) |
+| `ftruncate` | `(ftruncate -7 2)` | `-3.0` (like `truncate`, but the primary value is always a float) |
+| `fround` | `(fround 7 2)` | `4.0` (like `round`, but the primary value is always a float) |
 | `sqrt` | `(sqrt 16)`, `(sqrt 2)` | `4.0`, `1.4142135623730951` (always a float) |
 | `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |

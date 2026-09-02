@@ -14511,6 +14511,31 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void theFFamilyMatchesTheInterpreter() throws Exception {
+		// ffloor/fceiling/fround/ftruncate (todo-667): the same exact quotient the plain
+		// family answers, only floated for the primary value, and the same remainder.
+		assertThat(compileAndRun("""
+				(defun q (a b) (multiple-value-list (ffloor a b)))
+				(print (q 7 2))
+				(print (multiple-value-list (fceiling 7 2)))
+				(print (multiple-value-list (ftruncate -7 2)))
+				(print (multiple-value-list (fround 7 2)))
+				(print (multiple-value-list (ffloor 1d300 7.0)))
+				(print (ffloor 1d300))
+				(print (funcall #'ffloor 7))
+				(print (mapcar #'ffloor '(7 8 9)))
+				""")).isEqualTo("""
+				(3.0 1)
+				(4.0 -1)
+				(-3.0 -1)
+				(4.0 -1)
+				(1.4285714285714286e299 1.0)
+				1.0e300
+				7.0
+				(7.0 8.0 9.0)""");
+	}
+
+	@Test
 	void nanComparisonsAreUnorderedOnBothPaths() throws Exception {
 		// DCMPL-for-every-operator made < and <= answer t against NaN.
 		assertThat(compileAndRun("(print (< (/ 0.0 0.0) 1.0))")).isEqualTo("NIL");

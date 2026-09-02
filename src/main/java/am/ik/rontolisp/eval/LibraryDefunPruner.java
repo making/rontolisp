@@ -702,10 +702,10 @@ public final class LibraryDefunPruner {
 	private static final Set<String> PURE_INITFORM_OPERATORS = Set.of("LIST", "LIST*", "CONS", "VECTOR", "MAKE-ARRAY",
 			"MAKE-HASH-TABLE", "MAKE-STRING", "MAKE-LIST", "APPEND", "REVERSE", "COPY-LIST", "COPY-SEQ", "COPY-TREE",
 			"CONCATENATE", "SUBSEQ", "LENGTH", "IF", "AND", "OR", "NOT", "+", "-", "*", "/", "1+", "1-", "EXPT", "MOD",
-			"REM", "FLOOR", "CEILING", "ROUND", "TRUNCATE", "ABS", "MIN", "MAX", "SQRT", "ISQRT", "ASH", "LOGAND",
-			"LOGIOR", "LOGXOR", "LOGNOT", "BYTE", "=", "/=", "<", ">", "<=", ">=", "EQ", "EQL", "EQUAL", "EQUALP",
-			"CODE-CHAR", "CHAR-CODE", "CHAR", "COERCE", "STRING", "SYMBOL-NAME", "CAR", "CDR", "FIRST", "REST", "NTH",
-			"ELT", "AREF", "GETHASH", "NULL", "ZEROP", "PLUSP", "MINUSP");
+			"REM", "FLOOR", "CEILING", "ROUND", "TRUNCATE", "FFLOOR", "FCEILING", "FROUND", "FTRUNCATE", "ABS", "MIN",
+			"MAX", "SQRT", "ISQRT", "ASH", "LOGAND", "LOGIOR", "LOGXOR", "LOGNOT", "BYTE", "=", "/=", "<", ">", "<=",
+			">=", "EQ", "EQL", "EQUAL", "EQUALP", "CODE-CHAR", "CHAR-CODE", "CHAR", "COERCE", "STRING", "SYMBOL-NAME",
+			"CAR", "CDR", "FIRST", "REST", "NTH", "ELT", "AREF", "GETHASH", "NULL", "ZEROP", "PLUSP", "MINUSP");
 
 	/**
 	 * Whether the top-level form is a {@code declaim}/{@code proclaim}. Both expand to

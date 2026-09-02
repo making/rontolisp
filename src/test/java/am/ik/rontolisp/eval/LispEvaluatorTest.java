@@ -6543,6 +6543,44 @@ class LispEvaluatorTest {
 		assertThat(eval("(floor 7.5 2)")).isEqualTo(new LispInteger(3));
 	}
 
+	@Test
+	void evalFFamilySingleValueContext() {
+		// CLHS: ffloor/fceiling/fround/ftruncate are their integer twins with a FLOAT
+		// primary value (todo-667) -- the quotient is the same one, only floated.
+		assertThat(eval("(ffloor 7 2)")).isEqualTo(new LispDouble(3.0));
+		assertThat(eval("(fceiling 7 2)")).isEqualTo(new LispDouble(4.0));
+		assertThat(eval("(fround 7 2)")).isEqualTo(new LispDouble(4.0));
+		assertThat(eval("(ftruncate -7 2)")).isEqualTo(new LispDouble(-3.0));
+		assertThat(eval("(ffloor 7.5)")).isEqualTo(new LispDouble(7.0));
+		assertThat(eval("(ffloor 7)")).isEqualTo(new LispDouble(7.0));
+		// The quotient past the long range is still exact -- the same bignum
+		// floor/ceiling/round/truncate compute -- only floated for the primary value, so
+		// a huge quotient loses precision exactly as CLHS specifies, not before.
+		assertThat(eval("(ffloor 1d300)").print()).isEqualTo("1.0e300");
+	}
+
+	@Test
+	void evalFFamilyAsFirstClassFunction() {
+		assertThat(eval("(funcall #'ffloor 7)")).isEqualTo(new LispDouble(7.0));
+		assertThat(eval("(mapcar #'ffloor '(7 8 9))").print()).isEqualTo("(7.0 8.0 9.0)");
+		assertThat(eval("(funcall #'fceiling 7)")).isEqualTo(new LispDouble(7.0));
+		assertThat(eval("(funcall #'fround 5)")).isEqualTo(new LispDouble(5.0));
+		assertThat(eval("(funcall #'ftruncate -7)")).isEqualTo(new LispDouble(-7.0));
+	}
+
+	@Test
+	void evalMultipleValueBindFFamily() {
+		assertThat(eval("(multiple-value-bind (q r) (ffloor 7 2) (list q r))").print()).isEqualTo("(3.0 1)");
+		assertThat(eval("(multiple-value-bind (q r) (fceiling 7 2) (list q r))").print()).isEqualTo("(4.0 -1)");
+		assertThat(eval("(multiple-value-bind (q r) (ftruncate -7 2) (list q r))").print()).isEqualTo("(-3.0 -1)");
+		assertThat(eval("(multiple-value-bind (q r) (fround 7 2) (list q r))").print()).isEqualTo("(4.0 -1)");
+		// The remainder is the SAME exact quantity floor/ceiling/round/truncate answer,
+		// not SBCL's rounded-double one (todo-660's documented, intentional divergence
+		// carries over unchanged) -- 1.0 here, not 0.0.
+		assertThat(eval("(multiple-value-bind (q r) (ffloor 1d300 7.0) (list q r))").print())
+			.isEqualTo("(1.4285714285714286e299 1.0)");
+	}
+
 	// The exact truncating quotient of two doubles, read as the exact rationals they are
 	// (d = m * 2^e, both m and e read off the IEEE bits) -- an oracle that shares no code
 	// with the implementation. Returns {quotient, remainderNumerator, commonDenominator}

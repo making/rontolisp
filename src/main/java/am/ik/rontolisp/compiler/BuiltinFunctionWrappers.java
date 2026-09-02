@@ -1266,7 +1266,8 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.FUNCTIONP), unary(LispNames.VALUES_LIST), unary(LispNames.VECTORP),
 			// Type conversion (arity 1)
 			unary(LispNames.FLOAT), unary(LispNames.TRUNCATE), unary(LispNames.FLOOR), unary(LispNames.CEILING),
-			unary(LispNames.ROUND),
+			unary(LispNames.ROUND), unary(LispNames.FFLOOR), unary(LispNames.FCEILING), unary(LispNames.FROUND),
+			unary(LispNames.FTRUNCATE),
 			// Math/IO/list (arity 1)
 			unary(LispNames.ABS), unary(LispNames.PRINT), unary(LispNames.PRIN1), unary(LispNames.PRINC),
 			unary(LispNames.PRINC_TO_STRING), unary(LispNames.PRIN1_TO_STRING),

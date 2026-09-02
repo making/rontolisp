@@ -1496,6 +1496,8 @@ final class JvmExprCompiler {
 						}
 					}
 				}
+				case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFFamily(cons), ctx, className);
 				case LispNames.COND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx, className);
 				case LispNames.CASE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx, className);
 				case LispNames.ECASE ->
