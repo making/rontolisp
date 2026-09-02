@@ -342,6 +342,25 @@ final class JvmArrayRuntimeBuilder {
 		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
 		MethodrefConstant longLongValue = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		// The PACKED displacement targets: a packed integer vector is a long[]{width,
+		// e0, ...} and a packed float array a double[]/float[]{rank, dims..., e0, ...}.
+		// A view over one is an ordinary displaced header whose slot 3 holds that array
+		// instead of an ArrayList or a String, so the walk ends on it exactly as it ends
+		// on a string view's target.
+		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
+		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
+		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
+		MethodrefConstant numberLongValue = cp.addMethodref(numberClass,
+				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		MethodrefConstant numberDoubleValue = cp.addMethodref(numberClass,
+				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
+		ClassConstant doubleBoxClass = cp.addClass(cp.addUtf8("java/lang/Double"));
+		MethodrefConstant doubleBoxValueOf = cp.addMethodref(doubleBoxClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
+		// The shared numeric coercion the packed float accessors already use: any
+		// numeric value (Long, BigInteger, ratio, Double) as a Double.
+		MethodrefConstant dblCoerce = cp.addMethodref(selfClass, cp.addNameAndType(
+				cp.addUtf8(JvmNumericRuntimeBuilder.DBL), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
 		MethodrefConstant arraysFillLong = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Arrays")),
 				cp.addNameAndType(cp.addUtf8("fill"), cp.addUtf8("([JJ)V")));
 		am.ik.jvm.ConstantPool.LongConstant nilSentinel = cp.addLong(NIL_SENTINEL);
@@ -936,12 +955,23 @@ final class JvmArrayRuntimeBuilder {
 		rg.iload(1);
 		rg.invokevirtual(alGet);
 		rg.areturn();
+		// The NON-ARRAY target arm: header[3] is what the view aliases -- a PACKED
+		// vector (the elements live unboxed in it) or the immutable runtime string a
+		// string view aliases.
+		rg.bind(rgString);
+		int rgRealString = rg.label();
+		rg.aload(2);
+		rg.iconst(3);
+		rg.aaload();
+		rg.astore(7);
+		emitPackedTargetGet(rg, 7, 1, longArrayClass, doubleArrayClass, floatArrayClass, longValueOf, doubleBoxValueOf,
+				rgRealString);
 		// The string-view arm: header[3] is the immutable runtime string this view
 		// aliases and idx is the 1-based character index into it. Reads by CODE POINT
 		// through _cpoff (the content lives in [1, length-1), inside the framing
 		// quotes) and boxes as the runtime CHARACTER int[]{cp}, exactly like _aref1's
 		// own string branch.
-		rg.bind(rgString);
+		rg.bind(rgRealString);
 		rg.aload(2);
 		rg.iconst(3);
 		rg.aaload();
@@ -962,7 +992,7 @@ final class JvmArrayRuntimeBuilder {
 		rg.iload(6);
 		rg.iastore();
 		rg.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), 4, 7, rg.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), 6, 8, rg.finish()));
 
 		// _rmSet(list, idx, val): the single data-write primitive; returns val. A
 		// PACKED array (length-6 header) stores an in-range Long unboxed; any other
@@ -1015,12 +1045,25 @@ final class JvmArrayRuntimeBuilder {
 		rs.pop();
 		rs.aload(2);
 		rs.areturn();
+		// The NON-ARRAY target arm: a PACKED vector takes the store into its own
+		// unboxed slot (masked to the element width for an integer vector, narrowed to
+		// the backing width for a float array, and answering the value AS STORED --
+		// which is what a store straight into the target answers).
+		rs.bind(rsString);
+		int rsRealString = rs.label();
+		rs.aload(3);
+		rs.iconst(3);
+		rs.aaload();
+		rs.astore(7);
+		emitPackedTargetSet(rs, cp, 7, 1, 2, 8, 9, 10, 11, 12, 14, longArrayClass, doubleArrayClass, floatArrayClass,
+				numberClass, numberLongValue, numberDoubleValue, longValueOf, doubleBoxValueOf, dblCoerce, rtExClass,
+				rtExInit, rsRealString);
 		// The string-view arm: the view aliases an IMMUTABLE runtime string, which no
 		// write can reach. Promote it once -- header[3] becomes a mutable character
 		// vector holding the same characters -- and store into that; every later access
 		// through this view (and through array-displacement's answer) sees the promoted
 		// vector, so the view behaves as a mutable string from here on.
-		rs.bind(rsString);
+		rs.bind(rsRealString);
 		rs.aload(3);
 		rs.iconst(3);
 		rs.aaload();
@@ -1034,7 +1077,7 @@ final class JvmArrayRuntimeBuilder {
 		rs.aload(6);
 		rs.astore(0);
 		rs.branch(Opcode.GOTO, rsGeneral);
-		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), 4, 7, rs.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), 8, 16, rs.finish()));
 
 		// _strToCharVec(s): the immutable runtime string s copied into a fresh mutable
 		// character vector -- an ArrayList whose slot 0 is the length-4 header
@@ -1220,11 +1263,28 @@ final class JvmArrayRuntimeBuilder {
 		int mdStr = md.label();
 		int mdHaveTotal = md.label();
 		int mdViewTag = md.label();
+		int mdIv = md.label();
+		int mdDv = md.label();
+		int mdFv = md.label();
 		md.iconst(5);
 		md.istore(mdHeaderSize);
 		md.aload(mdTarget);
 		md.instanceOf(strClass);
 		md.branch(Opcode.IFNE, mdStr);
+		// A PACKED target's element count is its representation's own: an integer
+		// vector is long[]{width, e0, ...} (length - 1 elements) and a float array
+		// double[]/float[]{rank, dims..., e0, ...} (length - 1 - rank). The view over
+		// one is a plain length-5 array view -- only a STRING target makes a string
+		// view.
+		md.aload(mdTarget);
+		md.instanceOf(longArrayClass);
+		md.branch(Opcode.IFNE, mdIv);
+		md.aload(mdTarget);
+		md.instanceOf(doubleArrayClass);
+		md.branch(Opcode.IFNE, mdDv);
+		md.aload(mdTarget);
+		md.instanceOf(floatArrayClass);
+		md.branch(Opcode.IFNE, mdFv);
 		emitLoadHeader(md, arrayListClass, objectArrayClass, alGet, mdTarget);
 		md.astore(mdTargetHeader);
 		emitDimsProduct(md, longClass, objectArrayClass, longIntValue, mdTargetHeader, mdProduct, mdM);
@@ -1237,6 +1297,42 @@ final class JvmArrayRuntimeBuilder {
 		md.arraylength();
 		md.iconst(7);
 		md.branch(Opcode.IF_ICMPEQ, mdViewTag);
+		md.branch(Opcode.GOTO, mdHaveTotal);
+		md.bind(mdIv);
+		md.aload(mdTarget);
+		md.checkcast(longArrayClass);
+		md.arraylength();
+		md.iconst(1);
+		md.op(Opcode.ISUB);
+		md.istore(mdProduct);
+		md.branch(Opcode.GOTO, mdHaveTotal);
+		md.bind(mdDv);
+		md.aload(mdTarget);
+		md.checkcast(doubleArrayClass);
+		md.arraylength();
+		md.aload(mdTarget);
+		md.checkcast(doubleArrayClass);
+		md.iconst(0);
+		md.daload();
+		md.d2i();
+		md.iconst(1);
+		md.op(Opcode.IADD);
+		md.op(Opcode.ISUB);
+		md.istore(mdProduct);
+		md.branch(Opcode.GOTO, mdHaveTotal);
+		md.bind(mdFv);
+		md.aload(mdTarget);
+		md.checkcast(floatArrayClass);
+		md.arraylength();
+		md.aload(mdTarget);
+		md.checkcast(floatArrayClass);
+		md.iconst(0);
+		md.faload();
+		md.f2i();
+		md.iconst(1);
+		md.op(Opcode.IADD);
+		md.op(Opcode.ISUB);
+		md.istore(mdProduct);
 		md.branch(Opcode.GOTO, mdHaveTotal);
 		md.bind(mdStr);
 		md.aload(mdTarget);
@@ -1391,6 +1487,14 @@ final class JvmArrayRuntimeBuilder {
 		un.astore(9);
 		un.aload(9);
 		un.branch(Opcode.IFNULL, unWalkOwn);
+		// A PACKED chain end's element type IS its representation, so the freed offset
+		// slot records it exactly as it records a general array's remembered label: the
+		// view answered it while it was a view, and an array's element type is fixed
+		// when it is made.
+		int unNotPacked = un.label();
+		emitPackedElementTypeInto(un, cp, 9, 8, longArrayClass, doubleArrayClass, floatArrayClass, longValueOf,
+				objectClass, unNotPacked, unWalkDone);
+		un.bind(unNotPacked);
 		// A String chain end remembers nothing here: character-ness is the length-7
 		// header's own answer (7 -> 4 below), not a remembered designator.
 		un.aload(9);
@@ -1461,7 +1565,7 @@ final class JvmArrayRuntimeBuilder {
 		un.bind(unFillDone);
 		un.aload(0);
 		un.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC), 6, 10, un.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC), 9, 10, un.finish()));
 
 		// _arrayBecome(a, b): replace a's dims, fill pointer and data with b's in place
 		// (the in-place half of adjust-array on an adjustable array); returns a. The
@@ -1759,7 +1863,17 @@ final class JvmArrayRuntimeBuilder {
 		int aetT = aet.label();
 		int aetTop = aet.label();
 		int aetOwn = aet.label();
+		int aetNotPacked = aet.label();
+		int aetPackedDone = aet.label();
 		aet.bind(aetTop);
+		// The hop may land on a PACKED target, whose element type is its representation
+		// rather than a remembered label -- the same answer read a different way.
+		emitPackedElementTypeInto(aet, cp, 0, 2, longArrayClass, doubleArrayClass, floatArrayClass, longValueOf,
+				objectClass, aetNotPacked, aetPackedDone);
+		aet.bind(aetPackedDone);
+		aet.aload(2);
+		aet.areturn();
+		aet.bind(aetNotPacked);
 		aet.aload(0);
 		aet.instanceOf(arrayListClass);
 		aet.branch(Opcode.IFEQ, aetT);
@@ -1790,7 +1904,7 @@ final class JvmArrayRuntimeBuilder {
 		aet.bind(aetT);
 		aet.ldcString(cp.addString("T"));
 		aet.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 3, 3, aet.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 9, 3, aet.finish()));
 
 		// _arrayDefaultElement(o): the element an UNSUPPLIED slot of o takes -- the
 		// remembered element type's own zero -- or null (nil) when nothing is remembered.
@@ -2425,6 +2539,223 @@ final class JvmArrayRuntimeBuilder {
 		a.astore(listSlot);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(done);
+	}
+
+	// Stores into etSlot the element type of the PACKED value in targetSlot -- the cons
+	// list {@code (unsigned-byte width)} for an integer vector, the name
+	// {@code double-float} / {@code single-float} for a float array -- and branches to
+	// done; branches to notPacked when the value is not packed. The shapes are exactly
+	// what {@code _ivElementType} / {@code _fvElementType} answer and what
+	// {@code _arrayDefaultElement} reads back out of header slot 4, so a view over a
+	// packed target and the un-displaced array it becomes give the same answer.
+	private static void emitPackedElementTypeInto(JvmAsm a, ConstantPool cp, int targetSlot, int etSlot,
+			ClassConstant longArrayClass, ClassConstant doubleArrayClass, ClassConstant floatArrayClass,
+			MethodrefConstant longValueOf, ClassConstant objectClass, int notPacked, int done) {
+		int tryDouble = a.label();
+		int tryFloat = a.label();
+		a.aload(targetSlot);
+		a.instanceOf(longArrayClass);
+		a.branch(Opcode.IFEQ, tryDouble);
+		// new Object[]{"UNSIGNED-BYTE", new Object[]{Long.valueOf(l[0]), null}}
+		a.iconst(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.iconst(0);
+		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.UNSIGNED_BYTE));
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.iconst(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.iconst(0);
+		a.aload(targetSlot);
+		a.checkcast(longArrayClass);
+		a.iconst(0);
+		a.laload();
+		a.invokestatic(longValueOf);
+		a.aastore();
+		a.aastore();
+		a.astore(etSlot);
+		a.branch(Opcode.GOTO, done);
+		a.bind(tryDouble);
+		a.aload(targetSlot);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, tryFloat);
+		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.DOUBLE_FLOAT));
+		a.astore(etSlot);
+		a.branch(Opcode.GOTO, done);
+		a.bind(tryFloat);
+		a.aload(targetSlot);
+		a.instanceOf(floatArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.SINGLE_FLOAT));
+		a.astore(etSlot);
+		a.branch(Opcode.GOTO, done);
+	}
+
+	// Reads and RETURNS the element the displaced view sees at the 1-based data index
+	// idxSlot when the target in targetSlot is a PACKED vector; branches to notPacked
+	// when it is not (a string view's target). The index arithmetic is the packed
+	// representation's own: an integer vector's element `flat` lives at
+	// {@code l[1 + flat]}, which the 1-based index already IS, and a float array's at
+	// {@code d[1 + rank + flat]} == {@code d[rank + idx]}.
+	private static void emitPackedTargetGet(JvmAsm a, int targetSlot, int idxSlot, ClassConstant longArrayClass,
+			ClassConstant doubleArrayClass, ClassConstant floatArrayClass, MethodrefConstant longValueOf,
+			MethodrefConstant doubleBoxValueOf, int notPacked) {
+		int tryDouble = a.label();
+		int tryFloat = a.label();
+		a.aload(targetSlot);
+		a.instanceOf(longArrayClass);
+		a.branch(Opcode.IFEQ, tryDouble);
+		a.aload(targetSlot);
+		a.checkcast(longArrayClass);
+		a.iload(idxSlot);
+		a.laload();
+		a.invokestatic(longValueOf);
+		a.areturn();
+		a.bind(tryDouble);
+		a.aload(targetSlot);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, tryFloat);
+		a.aload(targetSlot);
+		a.checkcast(doubleArrayClass);
+		a.dup();
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.iload(idxSlot);
+		a.op(Opcode.IADD);
+		a.daload();
+		a.invokestatic(doubleBoxValueOf);
+		a.areturn();
+		a.bind(tryFloat);
+		a.aload(targetSlot);
+		a.instanceOf(floatArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(targetSlot);
+		a.checkcast(floatArrayClass);
+		a.dup();
+		a.iconst(0);
+		a.faload();
+		a.f2i();
+		a.iload(idxSlot);
+		a.op(Opcode.IADD);
+		a.faload();
+		a.f2d();
+		a.invokestatic(doubleBoxValueOf);
+		a.areturn();
+	}
+
+	// Stores through a displaced view into a PACKED target and RETURNS the value as
+	// stored; branches to notPacked when the target is not packed. The element
+	// semantics are the target representation's own -- an integer vector masks to its
+	// width (a non-integer is the same type error a direct store gives), a float array
+	// narrows to its backing width -- so a store through a view is a store into the
+	// target, spelled through one more indirection.
+	private static void emitPackedTargetSet(JvmAsm a, ConstantPool cp, int targetSlot, int idxSlot, int valSlot,
+			int ivArrSlot, int dvArrSlot, int fvArrSlot, int ixSlot, int vSlot, int dvalSlot,
+			ClassConstant longArrayClass, ClassConstant doubleArrayClass, ClassConstant floatArrayClass,
+			ClassConstant numberClass, MethodrefConstant numberLongValue, MethodrefConstant numberDoubleValue,
+			MethodrefConstant longValueOf, MethodrefConstant doubleBoxValueOf, MethodrefConstant dblCoerce,
+			ClassConstant rtExClass, MethodrefConstant rtExInit, int notPacked) {
+		int tryDouble = a.label();
+		int tryFloat = a.label();
+		int intOk = a.label();
+		a.aload(targetSlot);
+		a.instanceOf(longArrayClass);
+		a.branch(Opcode.IFEQ, tryDouble);
+		a.aload(targetSlot);
+		a.checkcast(longArrayClass);
+		a.astore(ivArrSlot);
+		a.aload(valSlot);
+		a.instanceOf(numberClass);
+		a.branch(Opcode.IFNE, intOk);
+		emitThrow(a, rtExClass, rtExInit, cp.addString("%aset: a packed integer vector stores integers"));
+		a.bind(intOk);
+		a.aload(valSlot);
+		a.checkcast(numberClass);
+		a.invokevirtual(numberLongValue);
+		a.lstore(vSlot);
+		// width = (int) l[0]; v &= (1L << width) - 1
+		a.aload(ivArrSlot);
+		a.iconst(0);
+		a.laload();
+		a.l2i();
+		a.istore(ixSlot);
+		a.lload(vSlot);
+		a.op(Opcode.LCONST_1);
+		a.iload(ixSlot);
+		a.op(Opcode.LSHL);
+		a.op(Opcode.LCONST_1);
+		a.op(Opcode.LSUB);
+		a.op(Opcode.LAND);
+		a.lstore(vSlot);
+		a.aload(ivArrSlot);
+		a.iload(idxSlot);
+		a.lload(vSlot);
+		a.lastore();
+		a.lload(vSlot);
+		a.invokestatic(longValueOf);
+		a.areturn();
+		a.bind(tryDouble);
+		a.aload(targetSlot);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, tryFloat);
+		a.aload(targetSlot);
+		a.checkcast(doubleArrayClass);
+		a.astore(dvArrSlot);
+		a.aload(dvArrSlot);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.iload(idxSlot);
+		a.op(Opcode.IADD);
+		a.istore(ixSlot);
+		a.aload(valSlot);
+		a.invokestatic(dblCoerce);
+		a.checkcast(numberClass);
+		a.invokevirtual(numberDoubleValue);
+		a.dstore(dvalSlot);
+		a.aload(dvArrSlot);
+		a.iload(ixSlot);
+		a.dload(dvalSlot);
+		a.dastore();
+		a.dload(dvalSlot);
+		a.invokestatic(doubleBoxValueOf);
+		a.areturn();
+		a.bind(tryFloat);
+		a.aload(targetSlot);
+		a.instanceOf(floatArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(targetSlot);
+		a.checkcast(floatArrayClass);
+		a.astore(fvArrSlot);
+		a.aload(fvArrSlot);
+		a.iconst(0);
+		a.faload();
+		a.f2i();
+		a.iload(idxSlot);
+		a.op(Opcode.IADD);
+		a.istore(ixSlot);
+		a.aload(valSlot);
+		a.invokestatic(dblCoerce);
+		a.checkcast(numberClass);
+		a.invokevirtual(numberDoubleValue);
+		a.dstore(dvalSlot);
+		a.aload(fvArrSlot);
+		a.iload(ixSlot);
+		a.dload(dvalSlot);
+		a.d2f();
+		a.fastore();
+		// The value AS STORED: read the f32 slot back widened, so a single-float view
+		// answers what the next read will answer.
+		a.aload(fvArrSlot);
+		a.iload(ixSlot);
+		a.faload();
+		a.f2d();
+		a.invokestatic(doubleBoxValueOf);
+		a.areturn();
 	}
 
 	// Emits the "the displacement walk ended on a STRING target" test: leaves 1 on the
