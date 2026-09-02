@@ -30,7 +30,7 @@ would already be broken on three of four backends.
 | `make-instance`, `change-class`, `make-condition`, `define-condition` | `closRegistry` (a class defined between two evaluations changes the expansion); `change-class` also resolves its designator in the live env |
 | `handler-bind` | `closRegistry` |
 | `setf` | user `defsetf`/`define-setf-expander` expanders, user macro places, `(setf (macro-function ...))` aliasing, lazy prelude setf places |
-| `print`, `princ`, `prin1`, `princ-to-string`, `prin1-to-string`, `write-to-string` | per-call `print-object` routing (`closRegistry`) and the live `*print-case*` gate |
+| `print`, `princ`, `prin1`, `princ-to-string`, `prin1-to-string`, `write-to-string`, `%princ-piece`, `%prin1-piece` | per-call `print-object` routing (`closRegistry`) and the live `*print-case*` gate |
 | `typep`, `typecase`, `etypecase`, `ctypecase`, `streamp`, `coerce` (packed lowering) | `closRegistry` |
 | `flet`, `labels` | `preExpandLocalMacros` consults the live user-macro table |
 | `symbol-macrolet` | the user-macro hook consults the live table |

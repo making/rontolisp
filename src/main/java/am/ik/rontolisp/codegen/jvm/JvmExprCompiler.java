@@ -587,9 +587,24 @@ final class JvmExprCompiler {
 					compilePrintOperator(cons, ctx, className, () -> JvmPrincCompiler.compile(cons, ctx, className));
 				case LispNames.TERPRI -> JvmTerpriCompiler.compile(cons, ctx, className);
 				case LispNames.FRESH_LINE -> JvmFreshLineCompiler.compile(cons, ctx, className);
-				case LispNames.PRINC_TO_STRING -> compilePrintOperator(cons, ctx, className,
+				// The public print-to-string names finish with the mutable-result wrap
+				// every flipped producer emits (a no-op unless the producer flip is on);
+				// the %princ-piece / %prin1-piece aliases the expander builds its own
+				// pieces with are the same routed conversion WITHOUT it
+				// (.kb/string-write-runtime.md, "The fourth round").
+				case LispNames.PRINC_TO_STRING -> {
+					compilePrintOperator(cons, ctx, className,
+							() -> JvmPrincToStringCompiler.compile(cons, ctx, className));
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+				case LispNames.PRIN1_TO_STRING -> {
+					compilePrintOperator(cons, ctx, className,
+							() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+				case LispNames.PRINC_PIECE_INTERNAL -> compilePrintOperator(cons, ctx, className,
 						() -> JvmPrincToStringCompiler.compile(cons, ctx, className));
-				case LispNames.PRIN1_TO_STRING -> compilePrintOperator(cons, ctx, className,
+				case LispNames.PRIN1_PIECE_INTERNAL -> compilePrintOperator(cons, ctx, className,
 						() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
 				// The print-object-free aliases the generated renderer's fallback calls.
 				case LispNames.PRINC_TO_STRING_RAW -> JvmPrincToStringCompiler.compile(cons, ctx, className);
@@ -748,8 +763,11 @@ final class JvmExprCompiler {
 						JvmStringStreamCompiler.compileWriteString(cons, ctx, className);
 					}
 				}
-				case LispNames.WRITE_TO_STRING -> compilePrintOperator(cons, ctx, className,
-						() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
+				case LispNames.WRITE_TO_STRING -> {
+					compilePrintOperator(cons, ctx, className,
+							() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 				case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL ->
 					JvmStringStreamCompiler.compileMakeOutputStream(cons, ctx, className);
 				case LispNames.MAKE_STRING_OUTPUT_STREAM ->

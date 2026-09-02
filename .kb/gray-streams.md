@@ -143,7 +143,7 @@ that, a program that OWNS the name -- the one case the dispatch stands down for
 answered t.
 
 **The print-family helpers RENDER and then write**: `%gray-princ-dispatch` /
-`-prin1-dispatch` / `-print-dispatch` call `princ-to-string` / `prin1-to-string`
+`-prin1-dispatch` / `-print-dispatch` call `%princ-piece` / `%prin1-piece` (the internal, unwrapped `princ-to-string` / `prin1-to-string`, `.kb/string-write-runtime.md`)
 and hand the text to `stream-write-string`, so a `print-object` method still
 decides the text (the print-object rewrite hooks exactly those two conversions,
 `LispMacroExpander.expandPrintObjectHook`, and it runs over gray.lisp's bodies

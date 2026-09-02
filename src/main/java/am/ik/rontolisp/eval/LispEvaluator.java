@@ -5237,7 +5237,8 @@ public final class LispEvaluator {
 			case LispNames.HB_GUARD_INTERNAL:
 				return evalHbGuard(cons, env);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
-					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING: {
+					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
+					LispNames.PRIN1_PIECE_INTERNAL: {
 				// Routed through print-object only when the program defines a method on
 				// it, and through %print-cased only while *print-case* holds something
 				// other than :upcase; otherwise the ordinary Environment function runs,

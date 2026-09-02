@@ -60,13 +60,22 @@ lowering from hiding its own constants, and both are shared by all four backends
   died inside the digit loop with `Expected integer` -- so the two paths disagreed
   on exactly the arguments the guard exists for. `radixIntegerExpr` and
   `decimalExpr` now close with the same `(if (integerp x) DIGITS
-  (princ-to-string x))` (`numberp` for `~:D`/`~@D`, which is the arm that has an
-  expansion at all -- plain `~D` was already `princ-to-string`). Found through
+  (%princ-piece x))` (`numberp` for `~:D`/`~@D`, which is the arm that has an
+  expansion at all -- plain `~D` was already that conversion). Found through
   cl-unicode, which spells a Hangul syllable name
   `(format nil "HANGUL SYLLABLE ~X" (compute-hangul-name cp))` over a STRING.
-- **A piece that IS a `princ-to-string` / `prin1-to-string` call prints straight to
-  the destination.** A plain `~a` / `~d` lowers to `(princ-to-string x)` and `~s` to
-  `(prin1-to-string x)`; under a `t` destination `formatOutputForms` would have
+- **Every piece renders through `%princ-piece` / `%prin1-piece`, never through the
+  public `princ-to-string` / `prin1-to-string`.** The piece names are the same
+  print-object-routing conversion WITHOUT the mutable-result wrap the public names
+  finish with on the compile paths (`.kb/string-write-runtime.md`, "The fourth
+  round"): a piece is consumed by `%string-concat` or written to the destination and
+  never reaches the program, and spelling it with the public name had measured 17-80%
+  on the whole string-building family.
+  `LispMacroExpanderTest.anExpanderBuiltStringPieceIsTheInternalConversionNotThePublicProducer`
+  pins the spelling.
+- **A piece that IS a `%princ-piece` / `%prin1-piece` call prints straight to the
+  destination.** A plain `~a` / `~d` lowers to `(%princ-piece x)` and `~s` to
+  `(%prin1-piece x)`; under a `t` destination `formatOutputForms` would have
   wrapped that in `(princ ...)`, which by the definition of those two functions
   ("the text `princ`/`prin1` would print") is exactly `(princ x)` / `(prin1 x)`.
   `printPiece` emits that instead, so no intermediate string is built at run time.

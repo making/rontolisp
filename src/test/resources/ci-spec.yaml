@@ -10003,6 +10003,18 @@ cases:
       ;; on the line, not on the caller's own sentinel.
       (print (with-input-from-string (in "")
                (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e))))
+      ;; The fourth round: the print family. The value the PROGRAM receives from
+      ;; princ-to-string / prin1-to-string / write-to-string is mutable with
+      ;; identity; the pieces the expander builds with the same conversion
+      ;; (format directives, map 'string, condition messages) are internal
+      ;; %princ-piece forms and stay unwrapped. A print-object-routed rendering
+      ;; answers the same identity: the wrap sits outside the routing hook.
+      (print (let* ((s (princ-to-string 12345)) (a s)) (setf (char s 0) #\X) (list s a)))
+      (print (let ((s (prin1-to-string 'foo))) (fill s #\z) s))
+      (print (let ((s (write-to-string 'bar))) (replace s "Q") s))
+      (defstruct %sid-pt x)
+      (defmethod print-object ((p %sid-pt) s) (format s "<pt ~a>" (%sid-pt-x p)))
+      (print (let* ((s (princ-to-string (make-%sid-pt :x 7))) (a s)) (setf (char s 0) #\[) (list s a)))
     expected: |
       ("Xbcdef" "Xbcdef")
       ("Zello" "Zello")
@@ -10029,6 +10041,10 @@ cases:
       ("Zbcd" "Zbcd")
       T
       T
+      ("X2345" "X2345")
+      "zzz"
+      "QAR"
+      ("[pt 7>" "[pt 7>")
   - name: string-case-ops-full-unicode
     source: |
       ;; string-upcase / string-downcase / string-capitalize are defined by CLHS
@@ -12340,6 +12356,10 @@ cases:
       (fold-check "symbol-name" (symbol-name :bar) (symbol-name (fold-hide :bar)))
       (fold-check "princ-to-string" (princ-to-string 42) (princ-to-string (fold-hide 42)))
       (fold-check "prin1-to-string" (prin1-to-string "hi") (prin1-to-string (fold-hide "hi")))
+      ;; The expander's internal piece conversions fold to a plain literal; the
+      ;; two public names above fold to the fresh-string constant.
+      (fold-check "%princ-piece" (%princ-piece 42) (%princ-piece (fold-hide 42)))
+      (fold-check "%prin1-piece" (%prin1-piece "hi") (%prin1-piece (fold-hide "hi")))
       ;; Case conversion folds over the FULL Unicode range, not just ASCII: every
       ;; backend routes it through the same code-point mapping.
       (fold-check "char-upcase/latin1" (char-upcase (code-char 233)) (char-upcase (code-char (fold-hide 233))))
