@@ -2347,6 +2347,15 @@ anywhere in the fold, so there is nothing for a bound to forgive. **The premise 
 nothing because the kernel was read before the machine time was spent**, which is
 `.kb/measurement-probes.md` rule 4 run forwards rather than recovered from.
 
+**One thread per row is the same fact todo-641 and todo-643 met as a COST.** There it is
+why a mask read a cell at a time exposed its latency with nothing to hide behind -- 16384
+threads is not enough of them -- and why the mask had to be packed a bit a cell and traded
+through a shuffle ("The attention scale and mask" and its Metal half). Here it is why a
+sequential replay is the right oracle at all. Neither reading is the property: a shape with
+too little parallelism to hide a load is also a shape with no reassociation to forgive, and
+which of the two you meet depends on the question. Read either section alone and the shape
+looks like a weakness or like a guarantee; it is both.
+
 **What the test is sized off, and the mutation that shows it pins something.** Every shape
 comes from the thresholds in force -- `Gpu.fusedMinElements()` in elements and
 `Gpu.foldMinCells()` in rows, 342 x 384 today -- and nothing is made resident, so the SIZE
