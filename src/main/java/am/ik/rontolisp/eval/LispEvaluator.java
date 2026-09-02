@@ -2628,7 +2628,10 @@ public final class LispEvaluator {
 			for (int i = decorated.size() - 1; i >= 0; i--) {
 				result = new LispCons(decorated.get(i)[1], result);
 			}
-			return result;
+			// A string/vector argument sorts as a list of its elements and is rebuilt
+			// back in its own representation, matching the SORT builtin above and the
+			// (stable-sort ...) call-position macro expansion.
+			return Environment.seqResult(args.get(0), result);
 		}));
 		this.globalEnv.defineFunction(LispNames.APPLY, new LispFunction(LispNames.APPLY, args -> {
 			if (args.size() < 2) {

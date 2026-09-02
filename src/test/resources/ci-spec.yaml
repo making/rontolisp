@@ -3073,6 +3073,25 @@ cases:
       T
       NIL
       T
+  - name: nreverse-and-stable-sort-answer-the-sequence-type
+    source: |
+      ;; Both used to lose the argument's TYPE and answer a bare list for a
+      ;; string/vector, identically on every backend.
+      (print (nreverse (copy-seq "abcd")))
+      (print (nreverse (vector 1 2 3)))
+      (print (nreverse (list 1 2 3)))
+      (print (stable-sort (copy-seq "dcba") #'char<))
+      (print (stable-sort (vector 3 1 2) #'<))
+      (print (funcall #'nreverse (copy-seq "wxyz")))
+      (print (funcall #'stable-sort (copy-seq "dcba") #'char<))
+    expected: |
+      "dcba"
+      #(3 2 1)
+      (3 2 1)
+      "abcd"
+      #(1 2 3)
+      "zyxw"
+      "abcd"
   - name: bitwise-integer-operations-variadic
     source: |
       (print (logand 12 10))

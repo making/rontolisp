@@ -1500,7 +1500,18 @@ final class WasmExprCompiler {
 				case LispNames.BUTLAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandButlast(cons), ctx);
 				case LispNames.IDENTITY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx);
 				case LispNames.COPY_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCopyList(cons), ctx);
-				case LispNames.NREVERSE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx);
+				case LispNames.NREVERSE -> {
+					// A string/vector sequence reverses via a coerced list and is
+					// rebuilt in its own representation; null when the call is already
+					// the inner list reversal (wrapSortForStringSeq precedent).
+					LispVal wrappedNreverse = LispMacroExpander.wrapNreverseForStringSeq(cons, true);
+					if (wrappedNreverse != null) {
+						WasmExprCompiler.compileExpr(wrappedNreverse, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx);
+					}
+				}
 				case LispNames.MAKE_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeList(cons), ctx);
 				case LispNames.UNION -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUnion(cons), ctx);
 				case LispNames.INTERSECTION ->

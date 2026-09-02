@@ -7745,6 +7745,21 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void nreverseAndStableSortAnswerTheSequenceType() throws Exception {
+		// Both used to lose the argument's TYPE and answer a bare list for a
+		// string/vector, identically on every backend.
+		assertThat(compileAndRun("""
+				(print (nreverse (copy-seq "abcd")))
+				(print (nreverse (vector 1 2 3)))
+				(print (nreverse (list 1 2 3)))
+				(print (stable-sort (copy-seq "dcba") #'char<))
+				(print (stable-sort (vector 3 1 2) #'<))
+				(print (funcall #'nreverse (copy-seq "wxyz")))
+				(print (funcall #'stable-sort (copy-seq "dcba") #'char<))"""))
+			.isEqualTo("\"dcba\"\n#(3 2 1)\n(3 2 1)\n\"abcd\"\n#(1 2 3)\n\"zyxw\"\n\"abcd\"");
+	}
+
+	@Test
 	void positionIfFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (position-if #'evenp '(1 3 5 6 7))) (print (position-if #'plusp '(-1 -2 -3))) (print (funcall #'position-if #'oddp '(2 4 5)))"))

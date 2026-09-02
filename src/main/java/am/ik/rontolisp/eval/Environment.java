@@ -3364,16 +3364,21 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.NREVERSE, new LispFunction(LispNames.NREVERSE, args -> {
 			requireArgCount(LispNames.NREVERSE, args, 1);
 			// Destructive: rewire each cdr to its predecessor and return the former last
-			// cell as the new head (Common Lisp semantics; use the return value).
+			// cell as the new head (Common Lisp semantics; use the return value). A
+			// string/vector argument is not a cons chain -- it reverses via a coerced
+			// list (seqAsList/seqResult, the sort/reduce precedent) and is rebuilt back
+			// in its own representation; CL leaves eq-to-the-argument unspecified.
+			LispVal original = args.get(0);
+			boolean isSeq = !(original instanceof LispCons) && !(original instanceof LispNil);
 			LispVal prev = LispNil.INSTANCE;
-			LispVal cur = args.get(0);
+			LispVal cur = isSeq ? seqAsList(original) : original;
 			while (cur instanceof LispCons cell) {
 				LispVal next = cell.cdr();
 				cell.setCdr(prev);
 				prev = cell;
 				cur = next;
 			}
-			return prev;
+			return isSeq ? seqResult(original, prev) : prev;
 		}));
 		env.defineFunction(LispNames.MAKE_LIST, new LispFunction(LispNames.MAKE_LIST, args -> {
 			requireMinArgCount(LispNames.MAKE_LIST, args, 1);

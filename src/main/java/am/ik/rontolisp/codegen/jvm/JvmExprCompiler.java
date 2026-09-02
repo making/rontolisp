@@ -1187,8 +1187,18 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx, className);
 				case LispNames.COPY_LIST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopyList(cons), ctx, className);
-				case LispNames.NREVERSE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx, className);
+				case LispNames.NREVERSE -> {
+					// A string/vector sequence reverses via a coerced list and is
+					// rebuilt in its own representation; null when the call is already
+					// the inner list reversal (wrapSortForStringSeq precedent).
+					LispVal wrappedNreverse = LispMacroExpander.wrapNreverseForStringSeq(cons, ctx.usesArrays);
+					if (wrappedNreverse != null) {
+						JvmExprCompiler.compileExpr(wrappedNreverse, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx, className);
+					}
+				}
 				case LispNames.MAKE_LIST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeList(cons), ctx, className);
 				case LispNames.UNION ->
@@ -1406,8 +1416,8 @@ final class JvmExprCompiler {
 						}
 					}
 				}
-				case LispNames.STABLE_SORT ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandStableSort(cons), ctx, className);
+				case LispNames.STABLE_SORT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandStableSort(cons, ctx.usesArrays), ctx, className);
 				case LispNames.COPY_SEQ ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx, className);
 				case LispNames.VECTORP ->
