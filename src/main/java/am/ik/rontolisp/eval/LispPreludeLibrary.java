@@ -350,7 +350,7 @@ public final class LispPreludeLibrary {
 		// runtime, so every bare symbol answers CL-USER here.
 		SOURCES.put(LispNames.SYMBOL_PACKAGE, """
 				(defun symbol-package (symbol)
-				  (let* ((s (%unescaped-symbol-text (prin1-to-string symbol)))
+				  (let* ((s (%unescaped-symbol-text (%prin1-to-string symbol)))
 				         (n (length s)))
 				    (cond ((= n 0) nil)
 				          ((char= (char s 0) #\\:) :keyword)
@@ -396,7 +396,7 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.TYPE_OF, """
 				(defun type-of (object)
 				  (let* ((c (%class-designator object))
-				         (s (%unescaped-symbol-text (prin1-to-string c)))
+				         (s (%unescaped-symbol-text (%prin1-to-string c)))
 				         (n (length s)))
 				    (cond ((and (> n 8) (string= (subseq s 0 8) "%struct-")) (intern (subseq s 8)))
 				          ((and (> n 7) (string= (subseq s 0 7) "%class-")) (intern (subseq s 7)))
@@ -2040,7 +2040,8 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.PRINT_CASED_INTERNAL, """
 				(defun %print-cased (%pc-x %pc-esc)
 				  (if (and (eq *print-case* :upcase) (null *print-length*) (null *print-level*)
-				           *print-gensym* (eql *print-base* 10) (null *print-radix*))
+				           *print-gensym* (eql *print-base* 10) (null *print-radix*)
+				           (or (null %pc-esc) (%print-package-raw-p)))
 				      (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x))
 				      (%pc-walk %pc-x %pc-esc nil 0 0)))
 				""");
@@ -2064,12 +2065,13 @@ public final class LispPreludeLibrary {
 				"""
 						(defun %pc-walk (%pc-x %pc-esc %pc-path %pc-depth %pc-lvl)
 						  (cond ((symbolp %pc-x)
-						         (%print-case-fold
+						         (%pc-fold
 						           (let ((%pc-s (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x))))
-						             (if (and %pc-esc (null *print-gensym*) (> (length %pc-s) 2)
-						                      (char= (char %pc-s 0) #\\#) (char= (char %pc-s 1) #\\:))
-						                 (subseq %pc-s 2)
-						                 %pc-s))))
+						             (cond ((and %pc-esc (null *print-gensym*) (> (length %pc-s) 2)
+						                         (char= (char %pc-s 0) #\\#) (char= (char %pc-s 1) #\\:))
+						                    (subseq %pc-s 2))
+						                   (%pc-esc (%pc-unqualified %pc-x %pc-s))
+						                   (t %pc-s)))))
 						        ((consp %pc-x)
 						         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256))
 						             "#"
@@ -2126,7 +2128,7 @@ public final class LispPreludeLibrary {
 						                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep "...")))
 						               (concatenate 'string %pc-acc ")"))))
 						        ((and (rationalp %pc-x) (or (not (eql *print-base* 10)) *print-radix*))
-						         (%print-radixed %pc-x))
+						         (%pc-radixed %pc-x))
 						        (%pc-esc (%prin1-to-string %pc-x))
 						        (t (%princ-to-string %pc-x))))
 						""");
@@ -2158,6 +2160,36 @@ public final class LispPreludeLibrary {
 				            (setq %pc-fast (cdr %pc-fast)))
 				          %pc-slow)
 				        nil)))
+				""");
+		// The prin1 text of a symbol with its package qualifier dropped when the symbol
+		// is accessible in the current *package* (CLHS 22.1.3.3.1: no qualifier for a
+		// symbol that is the package's own, inherited through :use as an external, or
+		// imported). The qualifier is parsed off the RAW text -- a keyword's ":", a
+		// gensym's "#:" and an escaped |...| member are left alone -- and the
+		// accessibility question goes to %symbol-print-bare-p: the live registry on the
+		// interpreter, the baked SymbolPrintTable on the compile paths
+		// (.kb/pretty-printer.md). The qualifier's colon count says whether the symbol
+		// is external, which is what the structural half of that answer reads.
+		SOURCES.put(LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL, """
+				(defun %pc-unqualified (%pu-x %pu-s)
+				  (let ((%pu-n (length %pu-s)) (%pu-i 0) (%pu-colon nil))
+				    (if (or (= %pu-n 0) (char= (char %pu-s 0) #\\:) (char= (char %pu-s 0) #\\#)
+				            (char= (char %pu-s 0) #\\|))
+				        %pu-s
+				        (progn
+				          (while (and (< %pu-i %pu-n) (null %pu-colon))
+				            (when (char= (char %pu-s %pu-i) #\\:)
+				              (setq %pu-colon %pu-i))
+				            (setq %pu-i (+ %pu-i 1)))
+				          (if (null %pu-colon)
+				              %pu-s
+				              (let ((%pu-ext (if (and (< (+ %pu-colon 1) %pu-n)
+				                                      (char= (char %pu-s (+ %pu-colon 1)) #\\:))
+				                                 nil
+				                                 t)))
+				                (if (%symbol-print-bare-p %pu-x (subseq %pu-s 0 %pu-colon) %pu-ext)
+				                    (subseq %pu-s (if %pu-ext (+ %pu-colon 1) (+ %pu-colon 2)))
+				                    %pu-s)))))))
 				""");
 		// An integer or ratio under *print-base* / *print-radix*, spelled as SBCL spells
 		// it: bare upper-case digits in the base, and with *print-radix* the #b / #o /
@@ -2650,7 +2682,7 @@ public final class LispPreludeLibrary {
 					// themselves, so the entry-to-entry edges stay member-matched:
 					// they carry no package ambiguity to resolve.
 					used = used || referencesName(formsFor(pulled), name, false)
-							|| (LispNames.PRINT_CASED_INTERNAL.equals(name)
+							|| (PRINT_CONTROL_ENTRIES.contains(name)
 									&& referencedBySurfaceForm(name, formsFor(pulled), false));
 				}
 				if (used) {
@@ -2696,6 +2728,15 @@ public final class LispPreludeLibrary {
 	 * @param canonical whether the program resolved (see {@link #matches})
 	 * @return whether the entry must be spliced
 	 */
+	/**
+	 * The printer-control entries whose selection also asks
+	 * {@link #referencedBySurfaceForm} over each PULLED entry's forms: the prelude
+	 * {@code write} binds every printer-control variable, so a {@code write} user carries
+	 * the renderer and its leaves.
+	 */
+	private static final java.util.Set<String> PRINT_CONTROL_ENTRIES = java.util.Set.of(LispNames.PRINT_CASED_INTERNAL,
+			LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL);
+
 	static boolean referencedBySurfaceForm(String entry, List<LispVal> program, boolean canonical) {
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical);
@@ -2755,7 +2796,20 @@ public final class LispPreludeLibrary {
 		// each pulled entry): `write` binds the whole variable set, and the compilers'
 		// scan runs over the spliced program, so a write user must carry the renderer.
 		if (LispNames.PRINT_CASED_INTERNAL.equals(entry)) {
-			return am.ik.rontolisp.macro.LispMacroExpander.usesPrintControls(program);
+			// The package gate (.kb/pretty-printer.md) pulls the renderer only when a
+			// prin1-style conversion is in reach from the surface: princ never spells
+			// a qualifier, so a program that only ever princs has nothing to route.
+			return am.ik.rontolisp.macro.LispMacroExpander.mentionsPrintControlVariable(program)
+					|| (am.ik.rontolisp.macro.LispMacroExpander.printsUnderAPackage(program)
+							&& am.ik.rontolisp.macro.LispMacroExpander.reachesPrin1FromTheSurface(program));
+		}
+		// The walk's two heavy leaves (the Unicode case fold; the re-basing) are
+		// reached through the %pc-fold / %pc-radixed primitives, which the compile
+		// paths lower to the leaf only when the program names a printer-control
+		// variable (LispMacroExpander.expandPrintCasedLeaf) -- a program routed for its
+		// *package* alone never binds one, and must not pay for them.
+		if (LispNames.PRINT_CASE_FOLD_INTERNAL.equals(entry) || LispNames.PRINT_RADIXED_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.mentionsPrintControlVariable(program);
 		}
 		if (LispNames.PROBE_FILE.equals(entry)) {
 			// The second producer is load's :if-does-not-exist option: the guard that

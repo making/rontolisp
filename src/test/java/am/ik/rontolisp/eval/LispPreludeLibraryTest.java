@@ -277,4 +277,27 @@ class LispPreludeLibraryTest {
 				""")).contains("RONTOLISP:ALIST-HASH-TABLE");
 	}
 
+	@Test
+	void aPackageProgramThatPrin1sSplicesTheRendererWithoutTheCaseFold() {
+		// The package gate: a program leaving cl-user with a prin1-style conversion in
+		// reach carries %print-cased (and the qualifier strip it needs), but not the
+		// case-fold and re-basing leaves only a printer-control VARIABLE can reach.
+		List<String> names = splicedNames("""
+				(defpackage :spa-app (:use :cl))
+				(in-package :spa-app)
+				(print 'x)
+				""");
+		assertThat(names).contains("%PRINT-CASED", "%PC-UNQUALIFIED")
+			.doesNotContain("%PRINT-CASE-FOLD", "%PRINT-RADIXED");
+		// princ never spells a qualifier, so a program that only princs routes nothing.
+		assertThat(splicedNames("""
+				(defpackage :spa-app (:use :cl))
+				(in-package :spa-app)
+				(princ 'x)
+				""")).doesNotContain("%PRINT-CASED");
+		// Naming a variable pulls the leaves.
+		assertThat(splicedNames("(let ((*print-case* :downcase)) (print 'x))")).contains("%PRINT-CASED",
+				"%PRINT-CASE-FOLD", "%PRINT-RADIXED");
+	}
+
 }

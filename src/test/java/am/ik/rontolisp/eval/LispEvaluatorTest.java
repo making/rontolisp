@@ -17903,4 +17903,47 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("42");
 	}
 
+	@Test
+	void evalPrintDropsTheQualifierOfAnAccessibleSymbol() {
+		// CLHS 22.1.3.3.1 on the interpreter: prin1 spells no package qualifier for a
+		// symbol accessible in the current *package* (its own, inherited as an external
+		// through :use -- directly or through a re-export -- or imported), and pkg:name
+		// / pkg::name otherwise; princ never spells one. Answered against the LIVE
+		// registry (PackageResolver.printsBare). Text verified against SBCL 2.2.9.
+		assertThat(evalMulti(
+				"""
+						(defpackage :spa-lib (:use :cl) (:export #:fn #:dup))
+						(in-package :spa-lib)
+						(defun fn (x) x)
+						(defun helper (x) x)
+						(defpackage :spa-lib2 (:use :cl) (:export #:other))
+						(defpackage :spa-mid (:use :cl :spa-lib) (:export #:fn))
+						(defpackage :spa-app (:use :cl :spa-lib :spa-lib2) (:import-from :spa-lib #:helper) (:shadow #:other))
+						(defpackage :spa-app2 (:use :cl :spa-mid))
+						(in-package :spa-app)
+						(defun own-fn (y) y)
+						(list (prin1-to-string (list 'fn 'own-fn 'helper 'spa-lib::helper 'dup 'other 'spa-lib2:other
+						                             'spa-lib::internal :kw '(quote fn) (vector 'own-fn)))
+						      (format nil "~S ~A ~A ~S" 'spa-lib::internal 'spa-lib::internal 'fn 'own-fn)
+						      (princ-to-string 'spa-lib::internal)
+						      (let ((*print-case* :downcase)) (prin1-to-string (list 'spa-lib::internal 'own-fn)))
+						      (let ((*package* (find-package :cl-user))) (prin1-to-string 'fn))
+						      (let ((*package* (find-package :spa-lib))) (prin1-to-string (list 'spa-app::own-fn 'helper)))
+						      (write-to-string (list 'fn 'own-fn) :length 1)
+						      (let ((*package* (find-package :spa-app2))) (prin1-to-string (list 'spa-lib:fn 'spa-mid:fn 'spa-app::own-fn)))
+						      (package-name (symbol-package 'own-fn))
+						      (symbol-name 'own-fn))
+						""")
+			.print())
+			.isEqualTo("(\"(FN OWN-FN HELPER HELPER DUP OTHER SPA-LIB2:OTHER SPA-LIB::INTERNAL :KW 'FN #(OWN-FN))\""
+					+ " \"SPA-LIB::INTERNAL INTERNAL FN OWN-FN\" \"INTERNAL\" \"(spa-lib::internal own-fn)\" \"SPA-LIB:FN\""
+					+ " \"(SPA-APP::OWN-FN HELPER)\" \"(FN ...)\" \"(FN FN SPA-APP::OWN-FN)\" \"SPA-APP\" \"OWN-FN\")");
+		// Back in the pristine cl-user nothing qualified is accessible, so the raw
+		// spelling stands.
+		assertThat(evalMulti("""
+				(defpackage :spb-lib (:use :cl) (:export #:fn))
+				(prin1-to-string (list 'spb-lib:fn 'spb-lib::x 'car))
+				""").print()).isEqualTo("\"(SPB-LIB:FN SPB-LIB::X CAR)\"");
+	}
+
 }

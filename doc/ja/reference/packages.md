@@ -87,9 +87,19 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 
 export が変えるのはシンボルに*到達できる*修飾子であって、どのシンボルであるかは
 変わりません。そのため `export` は公開する定義の前でも後でも構いません。Common
-Lisp との相違が1点あります: 最初に名前が現れた後で export されたシンボルは、
+Lisp との相違が1点あります: 最初に名前が現れた後で export されたシンボルは、アクセスできないパッケージから
 *表示*時にダブルコロンのままになります — ここでは修飾子は表示時に計算されるので
 はなくシンボルに保持されているためです — が、どちらの綴りも同じシンボルを指します。
+
+修飾子を印字するかどうかは Common Lisp のアクセス可能性の規則に従います:
+`prin1`/`print`（および `~S`）は、現在の `*package*` からアクセスできるシンボル —
+そのパッケージ自身のシンボル、`:use` を通じて継承した external シンボル、import
+したシンボル — には修飾子を付けず、それ以外は `pkg:name` / `pkg::name` と
+印字します。`princ`/`~A` は修飾子を印字しません。したがって下の `helper` は
+`(in-package :mypkg)` の下では `HELPER`、`cl-user` からは `MYPKG::HELPER` と
+印字されます。未対応が1点あります: `cl-user` のシンボルや標準シンボルを、
+アクセスできないパッケージから印字しても `COMMON-LISP-USER::name` /
+`COMMON-LISP:name` ではなく修飾子なしで印字されます。
 
 ## ユーザー定義パッケージ(defpackage)
 

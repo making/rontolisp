@@ -207,6 +207,25 @@ public final class SpecialVarCollector {
 				}
 				return;
 			}
+			// A write-to-string keyword BINDS the printer variable it names: the Pass-2
+			// lowering (LispMacroExpander.expandWriteToStringKeywords) turns the call
+			// into a let of the variable, which this walk must see -- the one binding
+			// form no expansion step above reveals. Without this, a program whose only
+			// binding of *print-length* is (write-to-string x :length 1) failed the
+			// JVM compile with "dynamically bound here but has no thread-local store".
+			if (LispNames.WRITE_TO_STRING.equals(h) && cons.isProperList() && cons.toList().size() > 2) {
+				LispVal lowered = null;
+				try {
+					lowered = LispMacroExpander.expandWriteToStringKeywords(cons);
+				}
+				catch (RuntimeException ignored) {
+					// A malformed call is the expression compiler's error to report.
+				}
+				if (lowered != null) {
+					collectBoundForm(lowered, specials, out);
+					return;
+				}
+			}
 			// Binding sugar (do/dolist/dotimes/loop/multiple-value-bind/with-*/...)
 			// reveals its lets one expansion step at a time; a form the expander
 			// rejects (it may validate shapes the compiler checks later) is walked

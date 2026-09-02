@@ -10364,6 +10364,124 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.IF), packageVar, lookup, signal))));
 	}
 
+	/**
+	 * The compiled backends' lowering of {@code (%symbol-print-bare-p symbol pkg ext)} --
+	 * whether the package-qualified symbol prints without its qualifier in the current
+	 * {@code *package*} (CLHS 22.1.3.3.1) -- onto the
+	 * {@link am.ik.rontolisp.SymbolPrintTable} baked in from the resolver's final
+	 * registry: the correction lists first (they carry every symbol the program spells
+	 * whose answer the structural rule gets wrong), then the rule -- bare when the
+	 * qualifier IS the current package, or when the current package uses it and the
+	 * symbol is external (the colon count the caller parsed). {@code pkg} is the
+	 * qualifier's spelling as the symbol carries it (the registry's canonical name:
+	 * lower-case for a built-in package, upper-case for a user one), and the row is keyed
+	 * by the upcased name {@code (string *package*)} answers. Without a table -- a
+	 * program that never leaves {@code cl-user} -- the answer is a constant {@code nil}:
+	 * the raw spelling is already exact there, and the call is only reached through
+	 * {@code %print-cased}'s walk.
+	 * @param cons the call
+	 * @param table the baked table, or null when the program never leaves cl-user
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandSymbolPrintBareP(LispCons cons,
+			am.ik.rontolisp.@org.jspecify.annotations.Nullable SymbolPrintTable table) {
+		List<LispVal> parts = cons.toList();
+		if (table == null || parts.size() != 4) {
+			return LispNil.INSTANCE;
+		}
+		LispSymbol symVar = new LispSymbol("%SP-X");
+		LispSymbol pkgVar = new LispSymbol("%SP-P");
+		LispSymbol extVar = new LispSymbol("%SP-E");
+		LispSymbol curVar = new LispSymbol("%SP-C");
+		LispSymbol rowVar = new LispSymbol("%SP-R");
+		LispVal stringEq = listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.STRING_EQ)));
+		// (if (member %sp-p (cdr %sp-r) :test #'string=) t nil)
+		LispVal viaUse = makeIf(
+				listToCons(List.of(new LispSymbol(LispNames.MEMBER), pkgVar,
+						listToCons(List.of(new LispSymbol(LispNames.CDR), rowVar)), new LispSymbol(":TEST"), stringEq)),
+				LispTrue.INSTANCE, LispNil.INSTANCE);
+		// (if (string= %sp-p (car %sp-r)) t (if %sp-e VIA-USE nil))
+		LispVal byRule = makeIf(
+				listToCons(List.of(new LispSymbol(LispNames.STRING_EQ), pkgVar,
+						listToCons(List.of(new LispSymbol(LispNames.CAR), rowVar)))),
+				LispTrue.INSTANCE, makeIf(extVar, viaUse, LispNil.INSTANCE));
+		// (if (null %sp-r) nil BY-RULE)
+		LispVal body = makeIf(listToCons(List.of(new LispSymbol(LispNames.NULL), rowVar)), LispNil.INSTANCE, byRule);
+		if (!table.excluded().isEmpty()) {
+			body = makeIf(symbolListLookup(symVar, curVar, table.excluded(), stringEq), LispNil.INSTANCE, body);
+		}
+		if (!table.extra().isEmpty()) {
+			body = makeIf(symbolListLookup(symVar, curVar, table.extra(), stringEq), LispTrue.INSTANCE, body);
+		}
+		List<LispVal> rows = new java.util.ArrayList<>(table.rows().size());
+		table.rows().forEach((pkg, row) -> {
+			List<LispVal> cells = new java.util.ArrayList<>(row.size() + 1);
+			cells.add(new LispString(pkg));
+			for (String name : row) {
+				cells.add(new LispString(name));
+			}
+			rows.add(listToCons(cells));
+		});
+		LispVal rowLookup = listToCons(List.of(new LispSymbol(LispNames.CDR),
+				listToCons(List.of(new LispSymbol(LispNames.ASSOC), curVar,
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(rows))), new LispSymbol(":TEST"),
+						stringEq))));
+		// The raw princ conversion of the package value (":CL-USER" -> "CL-USER"): a
+		// *print-case* in effect must not fold the name the row is keyed by.
+		LispVal current = listToCons(
+				List.of(new LispSymbol(LispNames.PRINC_TO_STRING_RAW), new LispSymbol(LispNames.PACKAGE_VAR)));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(symVar, parts.get(1))), listToCons(List.of(pkgVar, parts.get(2))),
+						listToCons(List.of(extVar, parts.get(3))), listToCons(List.of(curVar, current)),
+						listToCons(List.of(rowVar, rowLookup)))),
+				body));
+	}
+
+	/**
+	 * {@code (member SYM (cdr (assoc CUR 'TABLE :test #'string=)))} over a per-package
+	 * symbol list of the {@link am.ik.rontolisp.SymbolPrintTable}.
+	 */
+	private static LispVal symbolListLookup(LispSymbol symVar, LispSymbol curVar,
+			java.util.SequencedMap<String, List<String>> lists, LispVal stringEq) {
+		List<LispVal> rows = new java.util.ArrayList<>(lists.size());
+		lists.forEach((pkg, symbols) -> {
+			List<LispVal> cells = new java.util.ArrayList<>(symbols.size() + 1);
+			cells.add(new LispString(pkg));
+			for (String symbol : symbols) {
+				cells.add(new LispSymbol(symbol));
+			}
+			rows.add(listToCons(cells));
+		});
+		return listToCons(List.of(new LispSymbol(LispNames.MEMBER), symVar,
+				listToCons(List.of(new LispSymbol(LispNames.CDR),
+						listToCons(List.of(new LispSymbol(LispNames.ASSOC), curVar,
+								listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(rows))),
+								new LispSymbol(":TEST"), stringEq))))));
+	}
+
+	/**
+	 * The compiled backends' lowering of {@code (%print-package-raw-p)}: whether the
+	 * current {@code *package*} is a package in which no qualified symbol is accessible,
+	 * so {@code %print-cased}'s raw fast path is exact. A constant {@code t} for a
+	 * program that never leaves {@code cl-user} (no table -- the interpreter's twin is
+	 * {@code PackageResolver.currentPackageIsPristineClUser}), {@code (eq *package*
+	 * :CL-USER)} while {@code cl-user} is pristine, and a constant {@code nil} once the
+	 * program has widened {@code cl-user} itself.
+	 * @param table the baked table, or null when the program never leaves cl-user
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandPrintPackageRawP(
+			am.ik.rontolisp.@org.jspecify.annotations.Nullable SymbolPrintTable table) {
+		if (table == null) {
+			return LispTrue.INSTANCE;
+		}
+		if (!table.clUserPristine()) {
+			return LispNil.INSTANCE;
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), new LispSymbol(LispNames.PACKAGE_VAR),
+				new LispSymbol(":" + LispNames.CL_USER_PKG)));
+	}
+
 	/** A quoted list of package VALUES (the {@code find-package} keyword shape). */
 	private static LispVal quotedPackageList(java.util.Collection<String> names) {
 		LispVal list = LispNil.INSTANCE;
@@ -24255,9 +24373,14 @@ public final class LispMacroExpander {
 	 * The guard admits exactly the three CL designator types. {@code stringp} is true of
 	 * a mutable character vector on every backend, so a fill-pointer buffer still
 	 * coerces; {@code symbolp} covers {@code nil} and {@code t}, which are symbols and
-	 * therefore designate {@code "NIL"} and {@code "T"}. The accepted branch is
-	 * {@code princ-to-string}, which is the emission {@code (string x)} already had --
-	 * including dropping a keyword's package colon.
+	 * therefore designate {@code "NIL"} and {@code "T"}. The accepted branch is the RAW
+	 * {@code princ} conversion ({@code %princ-to-string}), which is the emission
+	 * {@code (string x)} already had -- including dropping a keyword's package colon --
+	 * and NOT the {@code %princ-piece} the printing operators route through
+	 * {@code %print-cased}: {@code string} answers the symbol's NAME, so a
+	 * {@code *print-case*} in effect must not fold it ({@code (string 'foo)} is
+	 * {@code "FOO"} under {@code :downcase} on SBCL; it was {@code "foo"} on both compile
+	 * paths until 2026-09-02).
 	 * @param arg the argument expression of a computed (string ...) call
 	 * @return the guarded coercion
 	 */
@@ -24265,7 +24388,7 @@ public final class LispMacroExpander {
 		LispSymbol g = new LispSymbol("__sd_x");
 		LispVal designatorp = fmtCall(LispNames.OR, callOf(LispNames.STRINGP, g), callOf(LispNames.SYMBOLP, g),
 				callOf(LispNames.CHARACTERP, g));
-		LispVal coerced = callOf(LispNames.PRINC_PIECE_INTERNAL, g);
+		LispVal coerced = callOf(LispNames.PRINC_TO_STRING_RAW, g);
 		LispVal signal = mvCall(LispNames.ERROR,
 				new LispString(LispNames.STRING + " expects a string designator, got: ~s"), g);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(g, arg)))),
@@ -28241,7 +28364,25 @@ public final class LispMacroExpander {
 	 * @return true when some form names a printer-control variable
 	 */
 	public static boolean usesPrintControls(List<LispVal> program) {
+		return mentionsPrintControlVariable(program)
+				|| (printsUnderAPackage(program) && definesName(program, LispNames.PRINT_CASED_INTERNAL));
+	}
+
+	/**
+	 * Whether some form names a printer-control variable ({@link #PRINT_CONTROL_VARS}).
+	 * The spliced renderer's own defuns ({@code %print-cased} and its {@code %pc-}
+	 * helpers) do not count: they READ the variables they honor, and the scan runs over
+	 * the spliced program, so counting them would make every program that carries the
+	 * renderer -- a program routed for its {@code *package*} alone included -- look as if
+	 * it bound one.
+	 * @param program the top-level forms
+	 * @return true when the program (not the renderer) names a variable
+	 */
+	public static boolean mentionsPrintControlVariable(List<LispVal> program) {
 		for (LispVal form : program) {
+			if (isPrintCasedRendererDefun(form)) {
+				continue;
+			}
 			for (String name : PRINT_CONTROL_VARS) {
 				if (mentionsPrinterVariable(form, name)) {
 					return true;
@@ -28249,6 +28390,129 @@ public final class LispMacroExpander {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the form is a {@code (defun %print-cased ...)} or a
+	 * {@code (defun %pc-... ...)}.
+	 */
+	private static boolean isPrintCasedRendererDefun(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
+				&& cons.cdr() instanceof LispCons nameCell && nameCell.car() instanceof LispSymbol defined
+				&& (LispNames.PRINT_CASED_INTERNAL.equals(defined.name()) || defined.name().startsWith("%PC-"));
+	}
+
+	/**
+	 * The compiled backends' lowering of the two leaf primitives of the
+	 * {@code %print-cased} walk: {@code (%pc-fold text)} is the {@code %print-case-fold}
+	 * of the text when the program names a printer-control variable and the text itself
+	 * otherwise; {@code (%pc-radixed n)} is {@code %print-radixed} or the raw conversion
+	 * likewise. A program routed through the walk for its {@code *package*} alone
+	 * ({@link #printsUnderAPackage}) never binds a variable, so the leaves it cannot
+	 * reach are not spliced ({@code LispPreludeLibrary.referencedBySurfaceForm}) and not
+	 * called. The interpreter always calls the leaf (it loads the prelude lazily).
+	 * @param cons the call
+	 * @param printControlVariables {@link #mentionsPrintControlVariable}
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandPrintCasedLeaf(LispCons cons, boolean printControlVariables) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(((LispSymbol) parts.get(0)).name() + " expects 1 argument");
+		}
+		boolean fold = LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL.equals(((LispSymbol) parts.get(0)).name());
+		if (printControlVariables) {
+			return callOf(fold ? LispNames.PRINT_CASE_FOLD_INTERNAL : LispNames.PRINT_RADIXED_INTERNAL, parts.get(1));
+		}
+		return fold ? parts.get(1) : callOf(LispNames.PRIN1_TO_STRING_RAW, parts.get(1));
+	}
+
+	/**
+	 * Whether the program can print under a {@code *package*} other than the pristine
+	 * {@code cl-user} -- the seventh printer control ({@code .kb/pretty-printer.md}):
+	 * CLHS 22.1.3.3.1 drops a symbol's package qualifier when the symbol is accessible in
+	 * the current package, so a program that switches packages (a top-level
+	 * {@code in-package}, resolved to {@code (setq *package* :P)} with P not
+	 * {@code cl-user}) or that reads or binds the variable anywhere else prints its
+	 * symbols against the current package. Such a program routes its printing operators
+	 * through {@code %print-cased} like a program naming {@code *print-case*} does --
+	 * once the prelude has spliced the renderer, which it does when
+	 * {@link #reachesPrin1FromTheSurface} says a {@code prin1}-style conversion is in
+	 * reach ({@code LispPreludeLibrary.referencedBySurfaceForm}); a program the splice
+	 * passes over keeps the raw spellings, so the two decisions cannot leave a call to a
+	 * renderer that was never spliced -- and keeps its package assignments (which
+	 * {@link #injectMvSpillGlobal} would otherwise drop as unobserved). A program that
+	 * never leaves {@code cl-user} can never print a qualified symbol bare, so it stays
+	 * byte-identical. Decided on the RESOLVED program (the assignments are what
+	 * {@code PackageResolver} leaves for {@code in-package}).
+	 * @param program the resolved top-level forms
+	 * @return true when the printer must consult the current package
+	 */
+	public static boolean printsUnderAPackage(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (isTopLevelPackageAssignment(form)) {
+				if (!assignsClUser((LispCons) form)) {
+					return true;
+				}
+			}
+			else if (usesSymbol(form, LispNames.PACKAGE_VAR) || usesSymbol(form, LispNames.WITH_STANDARD_IO_SYNTAX)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The surface operators through which a program can reach a {@code prin1}-style
+	 * conversion of a symbol -- the only conversion that spells a package qualifier
+	 * ({@code princ} never does, CLHS 22.1.3.3), and so the only one the package gate
+	 * ({@link #printsUnderAPackage}) has anything to change. The direct operators, the
+	 * {@code format} family ({@code ~S}), the signalling operators (a report is
+	 * formatted), the print-object seam and the internal {@code prin1} piece the
+	 * expansions produce.
+	 */
+	private static final List<String> PRIN1_SURFACE_OPERATORS = List.of(LispNames.PRINT, LispNames.PRIN1,
+			LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.WRITE, LispNames.PPRINT, LispNames.FORMAT,
+			LispNames.ERROR, LispNames.WARN, LispNames.SIGNAL, LispNames.CERROR, LispNames.ASSERT, LispNames.CHECK_TYPE,
+			LispNames.PRINT_OBJECT, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.PRIN1_PIECE_INTERNAL);
+
+	/**
+	 * Whether the program names an operator that can print a symbol with
+	 * {@code *print-escape*} true ({@link #PRIN1_SURFACE_OPERATORS}) -- what decides, for
+	 * a program that {@link #printsUnderAPackage} but names no printer-control variable,
+	 * whether the prelude splices {@code %print-cased}. An over-approximation costs a
+	 * program the renderer it never calls; a miss (an expansion producing a {@code prin1}
+	 * the surface did not name) leaves that program on the raw spellings.
+	 * @param program the resolved top-level forms
+	 * @return true when some form names one of the operators
+	 */
+	public static boolean reachesPrin1FromTheSurface(List<LispVal> program) {
+		for (LispVal form : program) {
+			for (String name : PRIN1_SURFACE_OPERATORS) {
+				if (usesSymbol(form, name)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** Whether some top-level form is a {@code (defun NAME ...)}. */
+	private static boolean definesName(List<LispVal> program, String name) {
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFUN.equals(op.name()) && cons.cdr() instanceof LispCons nameCell
+					&& nameCell.car() instanceof LispSymbol defined && name.equals(defined.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether the {@code (setq *package* :P)} assignment names {@code cl-user}. */
+	private static boolean assignsClUser(LispCons assignment) {
+		return assignment.toList().get(2) instanceof LispSymbol value
+				&& (":" + LispNames.CL_USER_PKG).equalsIgnoreCase(value.name());
 	}
 
 	/**
@@ -35000,10 +35264,15 @@ public final class LispMacroExpander {
 		// package keyword find-package answers, and a proclaimed special so a let of it
 		// binds dynamically -- only when the program READS it somewhere: any mention
 		// other than those top-level assignments, or a with-standard-io-syntax (which
-		// expands to a let of it in Pass 2, after this scan). A program that merely
-		// switches packages never observes the variable, so its assignments are DROPPED
-		// instead (the top-level-statement rule: nothing emitted only to be dropped),
-		// which keeps such a program byte-identical to one without in-package.
+		// expands to a let of it in Pass 2, after this scan), or an assignment to a
+		// package other than cl-user, which the printer reads (CLHS 22.1.3.3.1). A
+		// program that only ever assigns cl-user never observes the variable, so its
+		// assignments are DROPPED instead (the top-level-statement rule: nothing emitted
+		// only to be dropped), which keeps it byte-identical to one without in-package.
+		// The printer is a reader too: a program whose in-package leaves cl-user and
+		// whose printing operators route through %print-cased (usesPrintControls)
+		// prints its symbols against the current package, so the variable and its
+		// assignments are kept for it.
 		boolean readsPackage = false;
 		for (LispVal form : program) {
 			if (!isTopLevelPackageAssignment(form) && (usesSymbol(form, LispNames.PACKAGE_VAR)
@@ -35012,6 +35281,7 @@ public final class LispMacroExpander {
 				break;
 			}
 		}
+		readsPackage = readsPackage || (printsUnderAPackage(program) && usesPrintControls(program));
 		if (!readsPackage) {
 			List<LispVal> kept = new java.util.ArrayList<>(program.size());
 			for (LispVal form : program) {

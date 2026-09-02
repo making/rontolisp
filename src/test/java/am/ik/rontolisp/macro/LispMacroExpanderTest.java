@@ -753,4 +753,30 @@ class LispMacroExpanderTest {
 		assertThat(routesReports("(print (nth-value 1 (ignore-errors (+ 1 2))))")).isTrue();
 	}
 
+	@Test
+	void printsUnderAPackageIsThePackageGateOfThePrinter() {
+		// A top-level in-package resolves to (setq *package* :P): one that leaves
+		// cl-user, or any other mention of the variable, means the printer must consult
+		// the current package (CLHS 22.1.3.3.1); assigning cl-user alone does not.
+		assertThat(LispMacroExpander.printsUnderAPackage(LispReader.readAllFromString("(setq *package* :APP)")))
+			.isTrue();
+		assertThat(LispMacroExpander.printsUnderAPackage(LispReader.readAllFromString("(print *package*)"))).isTrue();
+		assertThat(LispMacroExpander.printsUnderAPackage(LispReader.readAllFromString("(setq *package* :CL-USER)")))
+			.isFalse();
+		assertThat(LispMacroExpander.printsUnderAPackage(LispReader.readAllFromString("(print 'x)"))).isFalse();
+		// The renderer's own defuns read the variables they honor; they are not the
+		// program naming one.
+		assertThat(LispMacroExpander
+			.mentionsPrintControlVariable(LispReader.readAllFromString("(defun %print-cased (x) *print-case*)")))
+			.isFalse();
+		assertThat(LispMacroExpander
+			.mentionsPrintControlVariable(LispReader.readAllFromString("(let ((*print-case* :downcase)) 1)"))).isTrue();
+		// The route flips for a package program only once the renderer is spliced.
+		assertThat(LispMacroExpander.usesPrintControls(LispReader.readAllFromString("(setq *package* :APP)")))
+			.isFalse();
+		assertThat(LispMacroExpander
+			.usesPrintControls(LispReader.readAllFromString("(defun %print-cased (x e) x) (setq *package* :APP)")))
+			.isTrue();
+	}
+
 }

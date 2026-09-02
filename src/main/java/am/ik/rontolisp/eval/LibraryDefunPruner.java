@@ -263,7 +263,9 @@ public final class LibraryDefunPruner {
 		// insert the call inside the expression compilers, and gray.lisp's dispatch
 		// helpers -- which call it -- are spliced after this walk.
 		// %print-cased is reached from the printing operators, rewritten onto it inside
-		// the expression compilers as well.
+		// the expression compilers as well; its case-fold and re-basing leaves are
+		// reached from the walk's %pc-fold / %pc-radixed primitives, lowered there too
+		// (LispMacroExpander.expandPrintCasedLeaf).
 		// probe-file is reached from uiop:file-exists-p's lowering and from the
 		// :if-does-not-exist guard LispMacroExpander.lowerLoadOptions builds -- both
 		// inside the expression compilers, after this walk.
@@ -271,7 +273,8 @@ public final class LibraryDefunPruner {
 		// which also runs inside the expression compilers.
 		for (String synthesized : List.of(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.TEMP_FILE_NAME,
 				LispNames.DELETE_FILE_IF_EXISTS, LispNames.STREAM_TARGET, LispNames.PRINT_CASED_INTERNAL,
-				LispNames.PROBE_FILE, LispNames.MAKE_ARRAY_ET_INTERNAL, LispNames.MAKE_ARRAY_ET_FP_INTERNAL)) {
+				LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL, LispNames.PROBE_FILE,
+				LispNames.MAKE_ARRAY_ET_INTERNAL, LispNames.MAKE_ARRAY_ET_FP_INTERNAL)) {
 			if (LispPreludeLibrary.referencedBySurfaceForm(synthesized, resolved, true)) {
 				roots.add(LispPreludeLibrary.definedName(synthesized));
 			}

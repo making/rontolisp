@@ -1929,4 +1929,146 @@ public final class PackageResolver {
 		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE));
 	}
 
+	/**
+	 * Whether the symbol spelled {@code symbolName} prints WITHOUT its package qualifier
+	 * in the current package -- CLHS 22.1.3.3.1: no qualifier when the symbol is
+	 * accessible in {@code *package*} (its own, inherited through {@code :use} as an
+	 * external, or imported), {@code pkg:name} / {@code pkg::name} otherwise. Decided
+	 * exactly as a reference is resolved: the symbol is accessible when an unqualified
+	 * reference to its name in the current package resolves to it. The interpreter's
+	 * printer asks this against the LIVE registry ({@code LispEvaluator},
+	 * {@code %symbol-print-bare-p}); the compile paths bake the same answers into a
+	 * {@link SymbolPrintTable}.
+	 * @param symbolName the stored (canonical) symbol name
+	 * @return {@code true} when the qualifier is dropped; also for a name that carries
+	 * none (a bare, keyword or uninterned symbol prints as it is)
+	 */
+	public boolean printsBare(String symbolName) {
+		if (symbolName.startsWith(":") || symbolName.startsWith("#:")) {
+			return true;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
+		if (qn == null) {
+			return true;
+		}
+		String home = this.registry.canonicalName(qn.pkg());
+		if (home.equals(this.currentPackage)) {
+			return true;
+		}
+		boolean savedQuoted = this.inQuotedData;
+		this.inQuotedData = true;
+		try {
+			return resolveUnqualified(qn.member()) instanceof LispSymbol sym && sym.name().equals(symbolName);
+		}
+		catch (LispPackageException ex) {
+			return false;
+		}
+		finally {
+			this.inQuotedData = savedQuoted;
+		}
+	}
+
+	/**
+	 * Whether the current package is {@code cl-user} as the registry seeded it -- using
+	 * only {@code cl}, importing nothing -- so that no qualified symbol can be accessible
+	 * in it and the printer's raw conversion is already exact. The fast path of the
+	 * printer-control renderer ({@code %print-package-raw-p}).
+	 * @return {@code true} when the raw conversion needs no accessibility check
+	 */
+	public boolean currentPackageIsPristineClUser() {
+		return LispNames.CL_USER_PKG.equals(this.currentPackage) && clUserIsPristine();
+	}
+
+	private boolean clUserIsPristine() {
+		LispPackage clUser = this.registry.get(LispNames.CL_USER_PKG);
+		return clUser != null && clUser.useList().equals(List.of(LispNames.CL_PKG)) && clUser.imports().isEmpty()
+				&& clUser.shadows().isEmpty();
+	}
+
+	/**
+	 * The {@link SymbolPrintTable} a compiled backend bakes in so its printer can drop
+	 * the qualifier of an accessible symbol without a registry. Read AFTER
+	 * {@link #resolveProgram}, over the RESOLVED program: the correction lists are
+	 * computed for every package-qualified symbol that occurs in it, against every
+	 * registered package, by asking {@link #printsBare} the same question the interpreter
+	 * asks at print time -- so the two agree on every symbol the program spells, and a
+	 * symbol interned at run time follows the structural rule alone.
+	 * @param resolvedProgram the resolved top-level forms
+	 * @return the table, in a deterministic order
+	 */
+	public SymbolPrintTable symbolPrintTable(List<LispVal> resolvedProgram) {
+		java.util.SequencedMap<String, List<String>> rows = new java.util.LinkedHashMap<>();
+		java.util.SequencedMap<String, List<String>> extra = new java.util.LinkedHashMap<>();
+		java.util.SequencedMap<String, List<String>> excluded = new java.util.LinkedHashMap<>();
+		java.util.Set<String> occurring = new java.util.LinkedHashSet<>();
+		for (LispVal form : resolvedProgram) {
+			collectQualifiedSymbols(form, occurring);
+		}
+		String savedPackage = this.currentPackage;
+		try {
+			for (String pkg : new java.util.TreeSet<>(this.registry.designatorTable().values())) {
+				LispPackage registered = this.registry.get(pkg);
+				if (registered == null) {
+					continue;
+				}
+				List<String> row = new ArrayList<>();
+				row.add(pkg);
+				for (String used : registered.useList()) {
+					if (!LispNames.CL_PKG.equals(used)) {
+						row.add(used);
+					}
+				}
+				String key = pkg.toUpperCase(java.util.Locale.ROOT);
+				rows.put(key, List.copyOf(row));
+				this.currentPackage = pkg;
+				List<String> extraHere = new ArrayList<>();
+				List<String> excludedHere = new ArrayList<>();
+				for (String symbol : occurring) {
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbol);
+					if (qn == null) {
+						continue;
+					}
+					String home = this.registry.canonicalName(qn.pkg());
+					boolean rule = home.equals(pkg) || (!qn.internal() && row.contains(home));
+					boolean truth = printsBare(symbol);
+					if (truth && !rule) {
+						extraHere.add(symbol);
+					}
+					else if (rule && !truth) {
+						excludedHere.add(symbol);
+					}
+				}
+				if (!extraHere.isEmpty()) {
+					extra.put(key, List.copyOf(extraHere));
+				}
+				if (!excludedHere.isEmpty()) {
+					excluded.put(key, List.copyOf(excludedHere));
+				}
+			}
+		}
+		finally {
+			this.currentPackage = savedPackage;
+		}
+		return new SymbolPrintTable(rows, extra, excluded, clUserIsPristine());
+	}
+
+	/**
+	 * Every package-qualified symbol spelled anywhere in the form (quoted data included).
+	 */
+	private static void collectQualifiedSymbols(LispVal form, java.util.Set<String> into) {
+		if (form instanceof LispSymbol sym) {
+			if (!sym.isKeyword() && !sym.name().startsWith("#:")
+					&& PackageRegistry.splitQualified(sym.name()) != null) {
+				into.add(sym.name());
+			}
+			return;
+		}
+		for (LispVal cur = form; cur instanceof LispCons cell; cur = cell.cdr()) {
+			collectQualifiedSymbols(cell.car(), into);
+			if (!(cell.cdr() instanceof LispCons) && !(cell.cdr() instanceof LispNil)) {
+				collectQualifiedSymbols(cell.cdr(), into);
+			}
+		}
+	}
+
 }

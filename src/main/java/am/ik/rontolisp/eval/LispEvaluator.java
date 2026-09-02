@@ -2055,6 +2055,46 @@ public final class LispEvaluator {
 			String found = this.packageResolver.findPackageName(packageDesignator(LispNames.FIND_PACKAGE, args.get(0)));
 			return found == null ? LispNil.INSTANCE : packageKeyword(found);
 		}));
+		// The printer's accessibility question (CLHS 22.1.3.3.1, .kb/pretty-printer.md):
+		// whether a package-qualified symbol prints without its qualifier in the
+		// current package, over the LIVE registry; the compile paths lower the same
+		// call onto a table baked from the final registry. The package spelling and the
+		// external flag the prelude caller parsed are what the baked lowering reads;
+		// the live answer needs only the symbol.
+		this.globalEnv.defineFunction(LispNames.SYMBOL_PRINT_BARE_P_INTERNAL,
+				new LispFunction(LispNames.SYMBOL_PRINT_BARE_P_INTERNAL, args -> {
+					if (args.size() != 3) {
+						throw new LispEvalException(
+								LispNames.SYMBOL_PRINT_BARE_P_INTERNAL + " expects 3 arguments, got " + args.size());
+					}
+					return args.get(0) instanceof LispSymbol sym && this.packageResolver.printsBare(sym.name())
+							? LispTrue.INSTANCE : LispNil.INSTANCE;
+				}));
+		// The walk's two leaf primitives: the interpreter loads the prelude lazily, so
+		// they simply call the leaf (the compile paths lower them to the leaf or to the
+		// bare text, LispMacroExpander.expandPrintCasedLeaf).
+		this.globalEnv.defineFunction(LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL,
+				new LispFunction(LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, args);
+					return eval(new LispCons(new LispSymbol(LispNames.PRINT_CASE_FOLD_INTERNAL),
+							new LispCons(quoteValue(args.get(0)), LispNil.INSTANCE)), this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL,
+				new LispFunction(LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, args);
+					return eval(new LispCons(new LispSymbol(LispNames.PRINT_RADIXED_INTERNAL),
+							new LispCons(quoteValue(args.get(0)), LispNil.INSTANCE)), this.globalEnv);
+				}));
+		// The package half of %print-cased's fast path: under the pristine cl-user no
+		// qualified symbol is accessible, so the raw conversion is exact.
+		this.globalEnv.defineFunction(LispNames.PRINT_PACKAGE_RAW_P_INTERNAL,
+				new LispFunction(LispNames.PRINT_PACKAGE_RAW_P_INTERNAL, args -> {
+					if (!args.isEmpty()) {
+						throw new LispEvalException(
+								LispNames.PRINT_PACKAGE_RAW_P_INTERNAL + " expects 0 arguments, got " + args.size());
+					}
+					return this.packageResolver.currentPackageIsPristineClUser() ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				}));
 		// list-all-packages / package-use-list / package-used-by-list: the registry
 		// queries, over the LIVE registry (so a package created after this program was
 		// read counts). A "package" is its upcased canonical name as a keyword, so the
@@ -4239,6 +4279,13 @@ public final class LispEvaluator {
 	 * @return true when the printer must apply a printer-control variable
 	 */
 	private boolean printControlsInEffect() {
+		// *package* is the seventh control (CLHS 22.1.3.3.1): outside the pristine
+		// cl-user a qualified symbol may be accessible and print bare, which only the
+		// %print-cased walk decides (LispMacroExpander.printsUnderAPackage is the
+		// compile paths' twin).
+		if (!this.packageResolver.currentPackageIsPristineClUser()) {
+			return true;
+		}
 		LispVal printControls = printerVariable(LispNames.PRINT_CASE_VAR);
 		if (printControls instanceof LispSymbol mode && !LispNames.PRINT_CASE_UPCASE.equals(mode.name())) {
 			return true;

@@ -635,6 +635,16 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(
 							LispMacroExpander.expandPackageQuery(cons, ctx.packageTable, ctx.packageUseTable), ctx,
 							className);
+				// The printer's accessibility question (CLHS 22.1.3.3.1), answered from
+				// the
+				// table baked in at compile time (.kb/pretty-printer.md).
+				case LispNames.SYMBOL_PRINT_BARE_P_INTERNAL -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx, className);
+				case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx, className);
+				case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables),
+							ctx, className);
 				case LispNames.MAKE_SYMBOL -> JvmSymbolApiCompiler.compileMakeSymbol(cons, ctx, className);
 				case LispNames.BOUNDP -> JvmSymbolApiCompiler.compileBoundp(cons, ctx, className);
 				case LispNames.FBOUNDP -> JvmSymbolApiCompiler.compileFboundp(cons, ctx, className);

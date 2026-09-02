@@ -838,7 +838,7 @@ class JvmLispCompilerTest {
 			throw new java.io.FileNotFoundException(path);
 		});
 		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
-			.isEqualTo("(T (X Y) CCL-PROBE::CCL-PT 1)");
+			.isEqualTo("(T (X Y) CCL-PT 1)");
 	}
 
 	@Test
@@ -10214,7 +10214,7 @@ class JvmLispCompilerTest {
 					:CL-USER
 					:MY-APP/TESTS
 					:CL-USER
-					(:SUITE MY-APP/TESTS::TEST-B MY-APP/TESTS::TEST-A "MY-APP/TESTS")
+					(:SUITE TEST-B TEST-A "MY-APP/TESTS")
 					T
 					:CL-USER
 					"CL-USER\"""");
@@ -15840,6 +15840,84 @@ class JvmLispCompilerTest {
 			}
 		}
 		return calls;
+	}
+
+	@Test
+	void compileAndRunPrintDropsTheQualifierOfAnAccessibleSymbol() throws Exception {
+		// CLHS 22.1.3.3.1: prin1 spells no package qualifier for a symbol accessible in
+		// the current *package* -- its own, inherited through :use as an external
+		// (directly or through a re-exporting package), or imported -- and pkg:name /
+		// pkg::name otherwise (an internal symbol of a used package, a symbol whose name
+		// the current package shadows). princ never spells one. The compile path answers
+		// from the SymbolPrintTable baked in from the resolver's final registry; the
+		// text is SBCL 2.2.9's, line for line (.kb/pretty-printer.md).
+		assertThat(compileAndRun(
+				"""
+										(defpackage :spa-lib (:use :cl) (:export #:fn #:dup))
+										(in-package :spa-lib)
+										(defun fn (x) x)
+										(defun helper (x) x)
+										(defpackage :spa-lib2 (:use :cl) (:export #:other))
+										(defpackage :spa-mid (:use :cl :spa-lib) (:export #:fn))
+										(defpackage :spa-app (:use :cl :spa-lib :spa-lib2) (:import-from :spa-lib #:helper) (:shadow #:other))
+										(defpackage :spa-app2 (:use :cl :spa-mid))
+										(in-package :spa-app)
+										(defun own-fn (y) y)
+										(print (list 'fn 'own-fn 'helper 'spa-lib::helper 'dup 'other 'spa-lib2:other 'spa-lib::internal :kw))
+										(print (list '(quote fn) (vector 'own-fn) "fn"))
+										(print (format nil "~S ~A ~A ~S" 'spa-lib::internal 'spa-lib::internal 'fn 'own-fn))
+										(princ 'spa-lib::internal)
+										(terpri)
+										(print (let ((*print-case* :downcase)) (prin1-to-string (list 'spa-lib::internal 'own-fn))))
+										(print (let ((*package* (find-package :cl-user))) (prin1-to-string 'fn)))
+										(print (let ((*package* (find-package :spa-lib))) (prin1-to-string (list 'spa-app::own-fn 'helper))))
+										(print (write-to-string (list 'fn 'own-fn) :length 1))
+										(print (package-name (symbol-package 'own-fn)))
+										(print (symbol-name 'own-fn))
+										(in-package :spa-app2)
+										(print (list 'spa-lib:fn 'spa-mid:fn 'spa-app::own-fn))
+										(in-package :cl-user)
+										(print (list 'spa-lib:fn 'spa-app::own-fn 'car))
+						"""))
+			.isEqualTo("""
+					(FN OWN-FN HELPER HELPER DUP OTHER SPA-LIB2:OTHER SPA-LIB::INTERNAL :KW)
+					('FN #(OWN-FN) "fn")
+					"SPA-LIB::INTERNAL INTERNAL FN OWN-FN"
+					INTERNAL
+					"(spa-lib::internal own-fn)"
+					"SPA-LIB:FN"
+					"(SPA-APP::OWN-FN HELPER)"
+					"(FN ...)"
+					"SPA-APP"
+					"OWN-FN"
+					(FN FN SPA-APP::OWN-FN)
+					(SPA-LIB:FN SPA-APP::OWN-FN CAR)""");
+	}
+
+	@Test
+	void compileAndRunStringOfASymbolIsNotFoldedByPrintCase() throws Exception {
+		// (string x) answers the symbol's NAME: it is not a printing operator, so a
+		// *print-case* in effect must not recase it (SBCL: "FOO" under :downcase). It
+		// did on both compile paths until the computed-designator lowering took the raw
+		// princ conversion instead of the routed %princ-piece.
+		assertThat(compileAndRun("""
+				(defun f (x)
+				  (let ((*print-case* :downcase))
+				    (list (symbol-name x) (string x) (concatenate 'string (string x) "!"))))
+				(print (f 'foo))
+				(print (f :foo))
+				""")).isEqualTo("""
+				("FOO" "FOO" "FOO!")
+				("FOO" "FOO" "FOO!")""");
+	}
+
+	@Test
+	void compileAndRunWriteToStringKeywordAloneBindsThePrinterVariable() throws Exception {
+		// A write-to-string keyword is the ONLY binding of *print-length* here: the
+		// Pass-2 lowering turns it into a let of the variable, which the dynamic-binding
+		// collector must see, or the JVM compile fails with "dynamically bound here but
+		// has no thread-local store".
+		assertThat(compileAndRun("(print (write-to-string (list 'a 'b) :length 1))")).isEqualTo("\"(A ...)\"");
 	}
 
 }

@@ -1850,7 +1850,7 @@ cases:
       :CL-USER
       :CI-APP/TESTS
       :CL-USER
-      (:SUITE CI-APP/TESTS::TEST-B CI-APP/TESTS::TEST-A "CI-APP/TESTS")
+      (:SUITE TEST-B TEST-A "CI-APP/TESTS")
       :CL-USER
   - name: package-defmethod-specializer
     source: |
@@ -13144,6 +13144,51 @@ cases:
       (255. #10r1/2)|#b-101|#o10|#36r73
       (foo "Bar" ...)|#b11111111|(1 ...)|(1 2 ...)|hi|foo|G1
       (1 ...) (3 ...)
+  - name: symbol-print-accessibility
+    source: |
+      ;; CLHS 22.1.3.3.1: prin1 spells no package qualifier for a symbol accessible
+      ;; in the current *package* -- its own, inherited through :use as an external
+      ;; (directly or through a re-export), or imported -- and pkg:name / pkg::name
+      ;; otherwise (an internal of a used package, a name the current package
+      ;; shadows). princ never spells one. Text verified against SBCL 2.2.9.
+      (defpackage :spa-lib (:use :cl) (:export #:fn #:dup))
+      (in-package :spa-lib)
+      (defun fn (x) x)
+      (defun helper (x) x)
+      (defpackage :spa-lib2 (:use :cl) (:export #:other))
+      (defpackage :spa-mid (:use :cl :spa-lib) (:export #:fn))
+      (defpackage :spa-app (:use :cl :spa-lib :spa-lib2) (:import-from :spa-lib #:helper) (:shadow #:other))
+      (defpackage :spa-app2 (:use :cl :spa-mid))
+      (in-package :spa-app)
+      (defun own-fn (y) y)
+      (print (list 'fn 'own-fn 'helper 'spa-lib::helper 'dup 'other 'spa-lib2:other 'spa-lib::internal :kw))
+      (print (list '(quote fn) (vector 'own-fn) "fn"))
+      (print (format nil "~S ~A ~A ~S" 'spa-lib::internal 'spa-lib::internal 'fn 'own-fn))
+      (princ 'spa-lib::internal)
+      (terpri)
+      (print (let ((*print-case* :downcase)) (prin1-to-string (list 'spa-lib::internal 'own-fn))))
+      (print (let ((*package* (find-package :cl-user))) (prin1-to-string 'fn)))
+      (print (let ((*package* (find-package :spa-lib))) (prin1-to-string (list 'spa-app::own-fn 'helper))))
+      (print (write-to-string (list 'fn 'own-fn) :length 1))
+      (print (package-name (symbol-package 'own-fn)))
+      (print (symbol-name 'own-fn))
+      (in-package :spa-app2)
+      (print (list 'spa-lib:fn 'spa-mid:fn 'spa-app::own-fn))
+      (in-package :cl-user)
+      (print (list 'spa-lib:fn 'spa-app::own-fn 'car))
+    expected: |
+      (FN OWN-FN HELPER HELPER DUP OTHER SPA-LIB2:OTHER SPA-LIB::INTERNAL :KW)
+      ('FN #(OWN-FN) "fn")
+      "SPA-LIB::INTERNAL INTERNAL FN OWN-FN"
+      INTERNAL
+      "(spa-lib::internal own-fn)"
+      "SPA-LIB:FN"
+      "(SPA-APP::OWN-FN HELPER)"
+      "(FN ...)"
+      "SPA-APP"
+      "OWN-FN"
+      (FN FN SPA-APP::OWN-FN)
+      (SPA-LIB:FN SPA-APP::OWN-FN CAR)
   - name: typed-vector-struct-packs-and-replace-bulk
     source: |
       ;; A (:type (vector (unsigned-byte w))) struct is a PACKED vector: stores
