@@ -7489,6 +7489,51 @@ public final class LispNames {
 	public static final String PRINT_CASED_CHAIN_STOP_INTERNAL = "%PC-CHAIN-STOP";
 
 	/**
+	 * The internal {@code (%pc-unqualified symbol text)} helper (prelude): the
+	 * {@code prin1} text of a symbol with its package qualifier dropped when the symbol
+	 * is accessible in the current {@code *package*} (CLHS 22.1.3.3.1) -- the symbol leaf
+	 * {@link #PRINT_CASED_WALK_INTERNAL} takes under {@code prin1}. It parses the
+	 * qualifier off the raw text and asks {@link #SYMBOL_PRINT_BARE_P_INTERNAL}.
+	 */
+	public static final String PRINT_CASED_UNQUALIFIED_INTERNAL = "%PC-UNQUALIFIED";
+
+	/**
+	 * The internal {@code (%symbol-print-bare-p symbol package-spelling external-p)}
+	 * primitive: whether a package-qualified symbol prints without its qualifier in the
+	 * current {@code *package*}. The interpreter answers from the live registry
+	 * ({@code PackageResolver.printsBare}); the compile paths lower the call onto the
+	 * baked {@code SymbolPrintTable} ({@code LispMacroExpander.expandSymbolPrintBareP}).
+	 */
+	public static final String SYMBOL_PRINT_BARE_P_INTERNAL = "%SYMBOL-PRINT-BARE-P";
+
+	/**
+	 * The internal {@code (%print-package-raw-p)} primitive: whether the current
+	 * {@code *package*} is the pristine {@code cl-user}, under which no qualified symbol
+	 * is accessible and the raw conversion is already exact -- the package half of
+	 * {@link #PRINT_CASED_INTERNAL}'s fast path. Lowered to a constant on the compile
+	 * paths when the program never leaves {@code cl-user}.
+	 */
+	public static final String PRINT_PACKAGE_RAW_P_INTERNAL = "%PRINT-PACKAGE-RAW-P";
+
+	/**
+	 * The internal {@code (%pc-fold text)} leaf of {@link #PRINT_CASED_WALK_INTERNAL}:
+	 * {@link #PRINT_CASE_FOLD_INTERNAL} when the program names a printer-control
+	 * variable, the text itself otherwise -- so a program routed through the walk for its
+	 * {@code *package*} alone never carries the case fold. Lowered by the compile paths
+	 * ({@code LispMacroExpander.expandPrintCasedLeaf}); the interpreter always calls the
+	 * fold.
+	 */
+	public static final String PRINT_CASED_FOLD_LEAF_INTERNAL = "%PC-FOLD";
+
+	/**
+	 * The internal {@code (%pc-radixed n)} leaf of {@link #PRINT_CASED_WALK_INTERNAL}:
+	 * {@link #PRINT_RADIXED_INTERNAL} when the program names a printer-control variable,
+	 * the raw conversion otherwise (the walk only reaches it when {@code *print-base*} /
+	 * {@code *print-radix*} are off their defaults, which such a program cannot do).
+	 */
+	public static final String PRINT_CASED_RADIXED_LEAF_INTERNAL = "%PC-RADIXED";
+
+	/**
 	 * The internal {@code (%print-radixed n)} helper: an integer or ratio spelled under
 	 * the current {@link #PRINT_BASE_VAR} and {@link #PRINT_RADIX_VAR} -- {@code FF},
 	 * {@code #xFF}, {@code 255.}, {@code #3r100110}, {@code #x1/FF} -- the leaf

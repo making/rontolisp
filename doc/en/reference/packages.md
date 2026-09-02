@@ -79,9 +79,18 @@ packages it must be referenced with the double colon.
 Exporting changes which qualifier *reaches* a symbol, never which symbol it is,
 so an `export` may come before or after the definitions it publishes. One
 deviation from Common Lisp: a symbol exported after it was first named keeps the
-double colon when *printed* — the qualifier is stored with the symbol here
-rather than recomputed at print time — though both spellings name the same
-symbol.
+double colon when *printed* from a package where it is not accessible — the
+qualifier is stored with the symbol here rather than recomputed at print time —
+though both spellings name the same symbol.
+
+Whether a qualifier is printed at all follows Common Lisp's accessibility rule:
+`prin1`/`print` (and `~S`) print no qualifier for a symbol accessible in the
+current `*package*` — the package's own symbol, one inherited through `:use` as
+an external, or an imported one — and `pkg:name` / `pkg::name` otherwise;
+`princ`/`~A` never print one. So under `(in-package :mypkg)` the `helper` below
+prints as `HELPER`, and from `cl-user` as `MYPKG::HELPER`. One gap: a `cl-user`
+symbol or a standard symbol printed from a package where it is not accessible
+prints bare rather than as `COMMON-LISP-USER::name` / `COMMON-LISP:name`.
 
 ## User-defined packages (`defpackage`)
 

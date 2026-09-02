@@ -850,6 +850,16 @@ final class WasmExprCompiler {
 				case LispNames.LIST_ALL_PACKAGES, LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST ->
 					WasmExprCompiler.compileExpr(
 							LispMacroExpander.expandPackageQuery(cons, ctx.packageTable, ctx.packageUseTable), ctx);
+				// The printer's accessibility question (CLHS 22.1.3.3.1), answered from
+				// the
+				// table baked in at compile time (.kb/pretty-printer.md).
+				case LispNames.SYMBOL_PRINT_BARE_P_INTERNAL -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx);
+				case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx);
+				case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
+					WasmExprCompiler
+						.compileExpr(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables), ctx);
 				case LispNames.MAKE_SYMBOL -> WasmSymbolApiCompiler.compileMakeSymbol(cons, ctx);
 				case LispNames.BOUNDP -> WasmSymbolApiCompiler.compileBoundp(cons, ctx);
 				case LispNames.FBOUNDP -> WasmSymbolApiCompiler.compileFboundp(cons, ctx);

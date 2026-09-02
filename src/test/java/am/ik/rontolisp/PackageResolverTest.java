@@ -1026,4 +1026,65 @@ class PackageResolverTest {
 		}
 	}
 
+	@Test
+	void printsBareFollowsAccessibilityInTheCurrentPackage() {
+		// The printer's question (CLHS 22.1.3.3.1), answered the way a reference is
+		// resolved: a qualified symbol prints bare when an unqualified reference to its
+		// name in the current package resolves to it.
+		PackageResolver resolver = new PackageResolver();
+		resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :spa-lib (:use :cl) (:export #:fn))
+				(defpackage :spa-lib2 (:use :cl) (:export #:other))
+				(defpackage :spa-mid (:use :cl :spa-lib) (:export #:fn))
+				(defpackage :spa-app (:use :cl :spa-lib :spa-lib2) (:import-from :spa-lib #:helper) (:shadow #:other))
+				(defpackage :spa-app2 (:use :cl :spa-mid))
+				"""));
+		resolver.setCurrentPackage("SPA-APP");
+		assertThat(resolver.printsBare("SPA-APP::OWN-FN")).isTrue();
+		assertThat(resolver.printsBare("SPA-LIB:FN")).isTrue();
+		assertThat(resolver.printsBare("SPA-LIB::HELPER")).isTrue();
+		assertThat(resolver.printsBare("SPA-LIB::INTERNAL")).isFalse();
+		assertThat(resolver.printsBare("SPA-LIB2:OTHER")).isFalse();
+		assertThat(resolver.printsBare(":KW")).isTrue();
+		assertThat(resolver.printsBare("#:G1")).isTrue();
+		assertThat(resolver.printsBare("CAR")).isTrue();
+		assertThat(resolver.currentPackageIsPristineClUser()).isFalse();
+		resolver.setCurrentPackage("SPA-APP2");
+		assertThat(resolver.printsBare("SPA-LIB:FN")).isTrue();
+		assertThat(resolver.printsBare("SPA-APP::OWN-FN")).isFalse();
+		resolver.setCurrentPackage("CL-USER");
+		assertThat(resolver.printsBare("SPA-LIB:FN")).isFalse();
+		assertThat(resolver.currentPackageIsPristineClUser()).isTrue();
+	}
+
+	@Test
+	void symbolPrintTableCarriesTheCorrectionsForTheSymbolsTheProgramSpells() {
+		// The compile paths bake the use lists and, per package, the symbols the
+		// structural rule (own, or used-and-external) gets wrong: an imported internal
+		// and a symbol re-exported through an intermediate package are EXTRA, a shadowed
+		// name is EXCLUDED. Computed over the symbols that occur in the resolved program.
+		PackageResolver resolver = new PackageResolver();
+		List<LispVal> resolved = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :spa-lib (:use :cl) (:export #:fn))
+				(defpackage :spa-lib2 (:use :cl) (:export #:other))
+				(defpackage :spa-mid (:use :cl :spa-lib) (:export #:fn))
+				(defpackage :spa-app (:use :cl :spa-lib :spa-lib2) (:import-from :spa-lib #:helper) (:shadow #:other))
+				(defpackage :spa-app2 (:use :cl :spa-mid))
+				(in-package :spa-app)
+				(print (list 'fn 'helper 'other 'spa-lib2:other 'spa-lib::internal))
+				(in-package :spa-app2)
+				(print 'spa-lib:fn)
+				(in-package :cl-user)
+				"""));
+		SymbolPrintTable table = resolver.symbolPrintTable(resolved);
+		assertThat(table.rows()).containsEntry("SPA-APP", List.of("SPA-APP", "SPA-LIB", "SPA-LIB2"))
+			.containsEntry("SPA-APP2", List.of("SPA-APP2", "SPA-MID"))
+			.containsEntry("CL-USER", List.of("CL-USER"));
+		assertThat(table.extra()).containsEntry("SPA-APP", List.of("SPA-LIB::HELPER"))
+			.containsEntry("SPA-APP2", List.of("SPA-LIB:FN"));
+		assertThat(table.excluded()).containsEntry("SPA-APP", List.of("SPA-LIB2:OTHER"));
+		assertThat(table.excluded()).doesNotContainKey("SPA-APP2");
+		assertThat(table.clUserPristine()).isTrue();
+	}
+
 }

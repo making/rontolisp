@@ -11787,7 +11787,7 @@ class WasmLispCompilerIntegrationTest {
 			throw new java.io.FileNotFoundException(path);
 		});
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
-			.isEqualTo("(T (X Y) CCL-PROBE::CCL-PT 1)");
+			.isEqualTo("(T (X Y) CCL-PT 1)");
 	}
 
 	@Test
@@ -12419,7 +12419,9 @@ class WasmLispCompilerIntegrationTest {
 		// The JvmLispCompilerTest.compileAndRunPackageVarIsReadWhenTheFormRuns twin: a
 		// dynamic *package* -- read at call time, assigned by in-package, let-bindable,
 		// bound to CL-USER by with-standard-io-syntax -- in the rove registry shape.
-		assertThat(compileAndRun(
+		// With the CLI's prelude splice, so the printer drops the qualifier of the
+		// suite's own test names (CLHS 22.1.3.3.1) as the JVM twin does.
+		assertThat(compileAndRunPrelude(
 				"""
 						(defvar *suites* (make-hash-table :test 'eq))
 						(defun package-suite (package) (or (gethash package *suites*) (setf (gethash package *suites*) (list :suite (string package)))))
@@ -12444,7 +12446,7 @@ class WasmLispCompilerIntegrationTest {
 					:CL-USER
 					:MY-APP/TESTS
 					:CL-USER
-					(:SUITE MY-APP/TESTS::TEST-B MY-APP/TESTS::TEST-A "MY-APP/TESTS")
+					(:SUITE TEST-B TEST-A "MY-APP/TESTS")
 					T
 					:CL-USER
 					"CL-USER\"""");
@@ -20195,6 +20197,80 @@ class WasmLispCompilerIntegrationTest {
 				(print (mc-sum (make-instance 'mc-leaf)))
 				(print (mc-sum (make-instance 'mc-base)))
 				""")).isEqualTo(":BASE\n:LEAF\n101\n1");
+	}
+
+	/**
+	 * The package-accessibility program of
+	 * {@code JvmLispCompilerTest.compileAndRunPrintDropsTheQualifierOfAnAccessibleSymbol}
+	 * (CLHS 22.1.3.3.1): a symbol accessible in the current {@code *package*} prints
+	 * without its qualifier, on the compile paths through the baked SymbolPrintTable.
+	 */
+	private static final String SYMBOL_QUALIFIER_PROGRAM = """
+						(defpackage :spa-lib (:use :cl) (:export #:fn #:dup))
+						(in-package :spa-lib)
+						(defun fn (x) x)
+						(defun helper (x) x)
+						(defpackage :spa-lib2 (:use :cl) (:export #:other))
+						(defpackage :spa-mid (:use :cl :spa-lib) (:export #:fn))
+						(defpackage :spa-app (:use :cl :spa-lib :spa-lib2) (:import-from :spa-lib #:helper) (:shadow #:other))
+						(defpackage :spa-app2 (:use :cl :spa-mid))
+						(in-package :spa-app)
+						(defun own-fn (y) y)
+						(print (list 'fn 'own-fn 'helper 'spa-lib::helper 'dup 'other 'spa-lib2:other 'spa-lib::internal :kw))
+						(print (list '(quote fn) (vector 'own-fn) "fn"))
+						(print (format nil "~S ~A ~A ~S" 'spa-lib::internal 'spa-lib::internal 'fn 'own-fn))
+						(princ 'spa-lib::internal)
+						(terpri)
+						(print (let ((*print-case* :downcase)) (prin1-to-string (list 'spa-lib::internal 'own-fn))))
+						(print (let ((*package* (find-package :cl-user))) (prin1-to-string 'fn)))
+						(print (let ((*package* (find-package :spa-lib))) (prin1-to-string (list 'spa-app::own-fn 'helper))))
+						(print (write-to-string (list 'fn 'own-fn) :length 1))
+						(print (package-name (symbol-package 'own-fn)))
+						(print (symbol-name 'own-fn))
+						(in-package :spa-app2)
+						(print (list 'spa-lib:fn 'spa-mid:fn 'spa-app::own-fn))
+						(in-package :cl-user)
+						(print (list 'spa-lib:fn 'spa-app::own-fn 'car))
+			""";
+
+	/** What SBCL 2.2.9 prints for {@link #SYMBOL_QUALIFIER_PROGRAM}. */
+	private static final String SYMBOL_QUALIFIER_EXPECTED = """
+			(FN OWN-FN HELPER HELPER DUP OTHER SPA-LIB2:OTHER SPA-LIB::INTERNAL :KW)
+			('FN #(OWN-FN) "fn")
+			"SPA-LIB::INTERNAL INTERNAL FN OWN-FN"
+			INTERNAL
+			"(spa-lib::internal own-fn)"
+			"SPA-LIB:FN"
+			"(SPA-APP::OWN-FN HELPER)"
+			"(FN ...)"
+			"SPA-APP"
+			"OWN-FN"
+			(FN FN SPA-APP::OWN-FN)
+			(SPA-LIB:FN SPA-APP::OWN-FN CAR)""";
+
+	@Test
+	void printDropsTheQualifierOfAnAccessibleSymbol() throws Exception {
+		assertThat(compileAndRunPrelude(SYMBOL_QUALIFIER_PROGRAM)).isEqualTo(SYMBOL_QUALIFIER_EXPECTED);
+	}
+
+	@Test
+	void printDropsTheQualifierOfAnAccessibleSymbolOnTheComponentPath() throws Exception {
+		assertThat(compileComponentAndRunPrelude(SYMBOL_QUALIFIER_PROGRAM)).isEqualTo(SYMBOL_QUALIFIER_EXPECTED);
+	}
+
+	@Test
+	void stringOfASymbolIsNotFoldedByPrintCase() throws Exception {
+		// (string x) answers the symbol's NAME, so a *print-case* in effect must not
+		// recase it (SBCL: "FOO" under :downcase) -- the JvmLispCompilerTest twin.
+		assertThat(compileAndRunPrelude("""
+				(defun f (x)
+				  (let ((*print-case* :downcase))
+				    (list (symbol-name x) (string x) (concatenate 'string (string x) "!"))))
+				(print (f 'foo))
+				(print (f :foo))
+				""")).isEqualTo("""
+				("FOO" "FOO" "FOO!")
+				("FOO" "FOO" "FOO!")""");
 	}
 
 }

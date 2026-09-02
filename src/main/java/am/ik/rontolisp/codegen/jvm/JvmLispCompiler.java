@@ -557,6 +557,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
+		// The printer's accessibility table (.kb/pretty-printer.md): baked from the
+		// final registry over the resolved program, only for a program that can print
+		// under a package other than cl-user -- every other program keeps its raw
+		// symbol spellings and stays byte-identical.
+		am.ik.rontolisp.SymbolPrintTable symbolPrintTable = LispMacroExpander.printsUnderAPackage(program)
+				&& LispMacroExpander.usesPrintControls(program) ? packageResolver.symbolPrintTable(program) : null;
+		// Whether the program ITSELF names a printer-control variable, decided here --
+		// before expandTopLevelDefinitions injects the renderer's defvars, which mention
+		// every one of them.
+		boolean printControlVariables = LispMacroExpander.mentionsPrintControlVariable(program);
 		// A (boundp 'name) over a literal symbol is decided here, against the globals the
 		// top-level forms before it declare (compiler/CompileTimeBoundp): the probe is
 		// what forces the eval runtime, and the guard it tests is what keeps the
@@ -1809,6 +1819,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.restartMode(restartMode)
 			.signalClauseMatch(signalClauseMatch)
 			.printControls(printControls)
+			.printControlVariables(printControlVariables)
 			.usesFloatArray(usesFloatArray)
 			.typedLoops(!this.optimize.prefersSizeOverSpeed())
 			.usesIntArray(usesIntArray)
@@ -1834,6 +1845,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesProgv(programUsesSymbol(program, LispNames.PROGV))
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
+			.symbolPrintTable(symbolPrintTable)
 			.globals(globals)
 			.nestedDefunNames(nestedDefunNames)
 			.specialVars(specialVars)
@@ -5692,6 +5704,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean printControls = false;
 
 		/**
+		 * True when the program itself names a printer-control variable
+		 * ({@code LispMacroExpander.mentionsPrintControlVariable}) -- as opposed to being
+		 * routed through {@code %print-cased} for its {@code *package*} alone -- which is
+		 * what decides whether the walk's case-fold and re-basing leaves are compiled in
+		 * ({@code LispMacroExpander.expandPrintCasedLeaf}).
+		 */
+		boolean printControlVariables = false;
+
+		/**
 		 * True when the program can produce a packed float array (a {@code #d(...)}
 		 * literal or {@code make-array :element-type 'double-float}). When set, the array
 		 * op compilers route through the {@code _fv*} dispatch helpers (which handle both
@@ -5957,6 +5978,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, java.util.List<String>> packageUseTable = Map.of();
 
 		/**
+		 * The table the printer drops an accessible symbol's package qualifier from
+		 * ({@link LispMacroExpander#expandSymbolPrintBareP}), baked from the resolver's
+		 * final registry when the program can print under a package other than
+		 * {@code cl-user} ({@link LispMacroExpander#printsUnderAPackage}); null
+		 * otherwise, which lowers the check to a constant.
+		 */
+		am.ik.rontolisp.@Nullable SymbolPrintTable symbolPrintTable;
+
+		/**
 		 * {@code defstruct} accessor names to their 1-based slot position, collected by
 		 * the pre-pass in {@link JvmLispCompiler#compile}; {@code setf} expansion treats
 		 * these as places. Shared across every context.
@@ -6127,6 +6157,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.restartMode = builder.restartMode;
 			this.signalClauseMatch = builder.signalClauseMatch;
 			this.printControls = builder.printControls;
+			this.printControlVariables = builder.printControlVariables;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.typedLoops = builder.typedLoops;
 			this.intFusion = builder.intFusion;
@@ -6151,6 +6182,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesProgv = builder.usesProgv;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
+			this.symbolPrintTable = builder.symbolPrintTable;
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
@@ -6430,6 +6462,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private boolean printControls = false;
 
+			private boolean printControlVariables = false;
+
 			private boolean usesFloatArray = false;
 
 			private boolean typedLoops = true;
@@ -6477,6 +6511,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Map<String, String> packageTable = Map.of();
 
 			private Map<String, java.util.List<String>> packageUseTable = Map.of();
+
+			private am.ik.rontolisp.@Nullable SymbolPrintTable symbolPrintTable;
 
 			private Map<String, Integer> structAccessors = Map.of();
 
@@ -6880,6 +6916,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder printControlVariables(boolean printControlVariables) {
+				this.printControlVariables = printControlVariables;
+				return this;
+			}
+
 			Builder blockExitChannel(boolean blockExitChannel) {
 				this.blockExitChannel = blockExitChannel;
 				return this;
@@ -7002,6 +7043,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder packageUseTable(Map<String, java.util.List<String>> packageUseTable) {
 				this.packageUseTable = packageUseTable;
+				return this;
+			}
+
+			Builder symbolPrintTable(am.ik.rontolisp.@Nullable SymbolPrintTable symbolPrintTable) {
+				this.symbolPrintTable = symbolPrintTable;
 				return this;
 			}
 

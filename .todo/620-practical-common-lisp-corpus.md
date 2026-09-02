@@ -20,7 +20,7 @@ byte for byte.
 
 | system | chapters | verdict |
 | --- | --- | --- |
-| `simple-database` | 3 | **identical** (only `.todo/041` line-wrapping and `.todo/391` printer noise) |
+| `simple-database` | 3 | **identical** (only `.todo/041` line-wrapping; the `.todo/391` printer noise is gone since 2026-09-02) |
 | `macro-utilities` | 8 | `ppme` dies: `write` rejects `:length` / `:level` / `:gensym` / `:case` (`.todo/041`) |
 | `test-framework` | 9 | **identical** |
 | `pathnames` | 15 | **identical** under `--feature sbcl` (2026-09-02); without it every call lands in the `#-(or ...)` `(error "list-directory not implemented")` |
@@ -64,10 +64,11 @@ measurement to re-run as they land.
 6. `.todo/624` -- `read` on a stream is line-oriented. **Fixed 2026-09-02.**
 7. `.todo/041` -- `write`'s keyword arguments, and the pretty printer's right
    margin (every wrapped list in the diffs above is this).
-8. `.todo/391` (the printer never drops the package qualifier) and
-   `.todo/626` (it never abbreviates `(quote x)` / `(function x)` as
-   `'x` / `#'x`, and never `|...|`-escapes a symbol whose name needs it).
-   Chapter 8's `ppme` and chapter 3's `macroexpand-1` demo both print this.
+8. DONE (2026-09-02): `.todo/391` (the printer never dropped the package
+   qualifier) and `.todo/626` (it never abbreviated `(quote x)` / `(function x)`
+   as `'x` / `#'x`, and never `|...|`-escaped a symbol whose name needs it) have
+   both landed. Chapter 8's `ppme` and chapter 3's `macroexpand-1` demo print as
+   on SBCL now, apart from the `.todo/041` line wrapping.
 
 ## The gap that was a DESIGN question -- decided and closed (2026-09-02)
 

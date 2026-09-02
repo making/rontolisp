@@ -2292,6 +2292,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
+		// The printer's accessibility table (.kb/pretty-printer.md), as on the JVM
+		// backend: baked only for a program that can print under a package other than
+		// cl-user.
+		am.ik.rontolisp.SymbolPrintTable symbolPrintTable = LispMacroExpander.printsUnderAPackage(program)
+				&& LispMacroExpander.usesPrintControls(program) ? packageResolver.symbolPrintTable(program) : null;
+		// Whether the program ITSELF names a printer-control variable, decided here --
+		// before expandTopLevelDefinitions injects the renderer's defvars, which mention
+		// every one of them.
+		boolean printControlVariables = LispMacroExpander.mentionsPrintControlVariable(program);
 		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
@@ -3413,6 +3422,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.restartMode(restartMode)
 			.signalClauseMatch(signalClauseMatch)
 			.printControls(LispMacroExpander.usesPrintControls(program))
+			.printControlVariables(printControlVariables)
 			.usesSeqString(usesSeqString)
 			.mutableStringProducers(mutableStringProducers)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
@@ -3457,6 +3467,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.usesEval(usesEval)
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
+			.symbolPrintTable(symbolPrintTable)
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry)
 			.globals(globals)
@@ -7899,6 +7910,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean printControls = false;
 
 		/**
+		 * True when the program itself names a printer-control variable
+		 * ({@code LispMacroExpander.mentionsPrintControlVariable}) -- as opposed to being
+		 * routed through {@code %print-cased} for its {@code *package*} alone -- which is
+		 * what decides whether the walk's case-fold and re-basing leaves are compiled in
+		 * ({@code LispMacroExpander.expandPrintCasedLeaf}).
+		 */
+		boolean printControlVariables = false;
+
+		/**
 		 * True when the program can build a SYNONYM STREAM ({@code make-synonym-stream}
 		 * is the only way to, and it has no read syntax), so every stream-designator
 		 * resolution has to run through {@code %SYNONYM-TARGET}. A program that never
@@ -8063,6 +8083,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * {@link #packageTable} exists ({@link LispMacroExpander#expandPackageQuery}).
 		 */
 		Map<String, java.util.List<String>> packageUseTable = Map.of();
+
+		/**
+		 * The table the printer drops an accessible symbol's package qualifier from
+		 * ({@link LispMacroExpander#expandSymbolPrintBareP}), baked from the resolver's
+		 * final registry when the program can print under a package other than
+		 * {@code cl-user} ({@link LispMacroExpander#printsUnderAPackage}); null
+		 * otherwise, which lowers the check to a constant.
+		 */
+		am.ik.rontolisp.@Nullable SymbolPrintTable symbolPrintTable;
 
 		/**
 		 * {@code defstruct} accessor names to their 1-based slot position, collected by
@@ -8350,6 +8379,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.restartMode = builder.restartMode;
 			this.signalClauseMatch = builder.signalClauseMatch;
 			this.printControls = builder.printControls;
+			this.printControlVariables = builder.printControlVariables;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
 			this.usesEqualpHashTables = builder.usesEqualpHashTables;
 			this.usesStreamValues = builder.usesStreamValues;
@@ -8369,6 +8399,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.usesEval = builder.usesEval;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
+			this.symbolPrintTable = builder.symbolPrintTable;
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
@@ -8466,6 +8497,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean printControls = false;
 
+			private boolean printControlVariables = false;
+
 			private boolean usesSynonymStreams = false;
 
 			private boolean usesEqualpHashTables = false;
@@ -8503,6 +8536,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Map<String, String> packageTable = Map.of();
 
 			private Map<String, java.util.List<String>> packageUseTable = Map.of();
+
+			private am.ik.rontolisp.@Nullable SymbolPrintTable symbolPrintTable;
 
 			private Map<String, Integer> structAccessors = Map.of();
 
@@ -8718,6 +8753,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder printControlVariables(boolean printControlVariables) {
+				this.printControlVariables = printControlVariables;
+				return this;
+			}
+
 			Builder typedArrayCodes(int typedArrayCodes) {
 				this.typedArrayCodes = typedArrayCodes;
 				return this;
@@ -8800,6 +8840,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder packageUseTable(Map<String, java.util.List<String>> packageUseTable) {
 				this.packageUseTable = packageUseTable;
+				return this;
+			}
+
+			Builder symbolPrintTable(am.ik.rontolisp.@Nullable SymbolPrintTable symbolPrintTable) {
+				this.symbolPrintTable = symbolPrintTable;
 				return this;
 			}
 

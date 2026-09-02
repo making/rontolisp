@@ -782,6 +782,7 @@ final class WasmAsyncEmit {
 			// clause types, and a top-level unmatched signal would abort again.
 			.signalClauseMatch(proto.signalClauseMatch)
 			.printControls(proto.printControls)
+			.printControlVariables(proto.printControlVariables)
 			// NOT optional, same reason as the instance pair below: a synonym stream
 			// built or written through at the SYNCHRONOUS top level must resolve like
 			// the same form inside a defun.
@@ -822,6 +823,7 @@ final class WasmAsyncEmit {
 			.usesFmakunbound(proto.usesFmakunbound)
 			.packageTable(proto.packageTable)
 			.packageUseTable(proto.packageUseTable)
+			.symbolPrintTable(proto.symbolPrintTable)
 			.structAccessors(proto.structAccessors)
 			.closRegistry(proto.closRegistry)
 			.globals(proto.globals)

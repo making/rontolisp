@@ -6,9 +6,9 @@ line holds -- identically on the interpreter, the JVM and both WASM GC backends.
 they do NOT do is change the LAYOUT: no rontolisp stream carries a column, so nothing
 wraps. The variables that change the TEXT when bound are `*print-escape*` /
 `*print-readably*` (which of the two conversions runs), `*print-pretty*` (the mandatory
-line break), and the six the shared `%print-cased` walk honors -- `*print-case*`,
+line break), and the seven the shared `%print-cased` walk honors -- `*print-case*`,
 `*print-length*`, `*print-level*`, `*print-gensym*`, `*print-base*`, `*print-radix*`
-(the two sections below).
+(the two sections below) and `*package*` (the qualifier section).
 
 Pinned by `LispEvaluatorTest.evalWriteAndPprintDispatch` /
 `evalPprintLogicalBlock`, the `esrap-enablement-language-group` ci-spec case (all four
@@ -275,6 +275,104 @@ differential-tested against SBCL 2.2.9.
   (`gensym`, `%class-`/`%struct-` tags, `(intern "lower")`) in its expected string
   needed updating alongside this change. None of those updates changed what the test
   verifies -- they are the same shape, spelled the new way.
+
+## The package qualifier follows `*package*` accessibility (todo 391)
+
+**Invariant, landed 2026-09-02:** `prin1` (and `print`, `prin1-to-string`,
+`write-to-string`, `~S`, `write` with escape) spells a symbol's package qualifier only
+when the symbol is NOT accessible in the current `*package*` -- CLHS 22.1.3.3.1: no
+qualifier for the package's own symbol, for one inherited through `:use` as an external
+(directly or through a re-export), or for an imported one; `pkg:name` / `pkg::name`
+otherwise (an internal symbol of a used package, a name the current package shadows, a
+symbol of an unrelated package). `princ`/`~A` never spell one (unchanged). Text identical
+on all four backends and to SBCL 2.2.9
+(`LispEvaluatorTest.evalPrintDropsTheQualifierOfAnAccessibleSymbol`,
+`PackageResolverTest#{printsBareFollowsAccessibilityInTheCurrentPackage,symbolPrintTableCarriesTheCorrectionsForTheSymbolsTheProgramSpells}`,
+`JvmLispCompilerTest.compileAndRunPrintDropsTheQualifierOfAnAccessibleSymbol`,
+`WasmLispCompilerIntegrationTest.printDropsTheQualifierOfAnAccessibleSymbol` + the
+component twin, the `symbol-print-accessibility` ci-spec case; `RoveE2eTest`'s report
+now matches SBCL line for line, the divergence its Javadoc used to carry).
+
+- **It rides the `%print-cased` walk, as the seventh control.** A symbol IS its
+  canonical spelling (`PKG:NAME`), so the qualifier is text the raw renderers copy;
+  rather than teach three raw renderers the rule, the walk's `prin1` symbol leaf goes
+  through `%pc-unqualified` (prelude), which parses the qualifier off the raw text (a
+  keyword's `:`, a gensym's `#:` and a `|...|`-escaped member are left alone) and asks
+  `%symbol-print-bare-p` whether to drop it. The primitive has two faces: the
+  interpreter answers from the LIVE registry (`PackageResolver.printsBare`: bare when
+  the home is the current package, else when an unqualified reference to the member in
+  the current package resolves to this very symbol -- exactly as a reference is
+  resolved, `resolveUnqualified` in quoted-data mode); the compile paths lower the
+  call (`LispMacroExpander.expandSymbolPrintBareP`) onto a `SymbolPrintTable` baked
+  from the resolver's FINAL registry (`PackageResolver.symbolPrintTable`, threaded
+  into both `Ctx`s beside `packageTable`).
+- **The table is structural, with corrections.** The canonical spelling already
+  carries the home package and the external-ness (`:` vs `::`), so the run-time rule
+  is "home is `(%princ-to-string *package*)`, or the current package uses the home
+  and the colon is single", over one row per registered package (upcased name -> its
+  own qualifier spelling then the qualifier spellings of the packages it uses).
+  Everything the resolver decides differently for a symbol that OCCURS in the resolved
+  program is baked per package into `extra` (accessible although the rule says no: an
+  `:import-from`, a re-export through an intermediate package, an `export` after the
+  definition) and `excluded` (a `:shadow`, an earlier used package exporting the same
+  name, an `unexport`) -- computed by asking `printsBare` itself for every occurring
+  qualified symbol x every package, so the compile paths agree with the interpreter
+  on every symbol the program spells; a symbol interned at run time follows the rule
+  alone. Chosen over baking each package's accessible-symbol list because that relation
+  is packages x externals-of-used-packages (rove's fifteen sibling packages x
+  alexandria's two hundred externals); the corrections are a handful of entries.
+- **The gate: `LispMacroExpander.printsUnderAPackage`** -- a top-level `in-package`
+  that leaves `cl-user` (resolved to `(setq *package* :P)`), or any other mention of
+  `*package*`. Such a program routes its printing operators through `%print-cased` like
+  one naming `*print-case*` (`usesPrintControls` = `mentionsPrintControlVariable`, or
+  `printsUnderAPackage` with the renderer DEFINED in the program), keeps its `*package*`
+  assignments and `defvar` (`injectMvSpillGlobal`, which used to drop them as
+  unobserved), and bakes the table. The prelude pulls the renderer for a package
+  program only when a `prin1`-style conversion is in reach from the surface
+  (`reachesPrin1FromTheSurface`: the print operators, `format`, the signalling
+  operators, the print-object seam, `%prin1-piece`) -- `princ` never spells a
+  qualifier -- and keying the route on the renderer being defined means a program the
+  splice passed over keeps the raw spellings instead of calling a renderer that is not
+  there. The interpreter gates on the current package: `printControlsInEffect` is true
+  outside the pristine `cl-user` (`PackageResolver.currentPackageIsPristineClUser`),
+  and the walk's fast path asks the same question through `%print-package-raw-p`
+  (lowered to `(eq *package* :CL-USER)` while `cl-user` is pristine, to `t` for a
+  program with no table) -- and takes the raw conversion for every `princ` regardless.
+- **The walk's two heavy leaves are gated on a VARIABLE being named.** `%pc-fold` /
+  `%pc-radixed` are primitives the compile paths lower to `%print-case-fold` /
+  `%print-radixed` only when the program itself names a printer-control variable
+  (`Ctx.printControlVariables` = `mentionsPrintControlVariable`, which skips the
+  renderer's own defuns -- they read every variable they honor, and the scan runs over
+  the spliced program -- and is decided BEFORE `expandTopLevelDefinitions` injects the
+  defvars that mention them all), and to the bare text / raw conversion otherwise; the
+  prelude and the tree-shaker pull the two entries on the same fact. Measured
+  2026-09-02 (old jar vs new, `-o` to a fixed path): a program that never leaves
+  `cl-user` is byte-identical (every `examples/console` program, `hello_world`,
+  `pi_approx`); `zlib` (chipz: packages + `error`) 164,201 -> 170,206 B `.class` /
+  130,575 -> 138,002 B `.wasm` (+6 / +7.4 KB; it was +21 / +27 KB before the leaf
+  gating); a four-line `defpackage` + `in-package` + `print` program 3,897 -> 22,978 B
+  / 10,849 -> 26,415 B (the walk and its `concatenate`/`subseq`); the same program
+  with `princ` for `print` is byte-identical; a `*print-case*`-only program +2.1 KB /
+  +1.5 KB (the strip helper and the fast-path test).
+- **Two bugs the differential found beside it, fixed in the same pass:** a computed
+  `(string x)` on both compile paths went through the routed `%princ-piece`, so
+  `(string 'foo)` under `*print-case* :downcase` answered `"foo"` where SBCL and the
+  interpreter answer `"FOO"` -- `strictStringDesignatorForm` now takes the raw
+  `%princ-to-string` (`JvmLispCompilerTest.compileAndRunStringOfASymbolIsNotFoldedByPrintCase`
+  and the WASM twin); and a `write-to-string` keyword that was the program's ONLY
+  binding of a printer variable failed the JVM compile ("dynamically bound here but has
+  no thread-local store") because `SpecialVarCollector` never saw the `let` the Pass-2
+  lowering creates -- it now walks `expandWriteToStringKeywords`'s output
+  (`compileAndRunWriteToStringKeywordAloneBindsThePrinterVariable`).
+- **Known gap, and the re-evaluation trigger:** the printer only ever DROPS a
+  qualifier; it never adds one to a bare spelling. A `cl-user` symbol or a standard
+  symbol printed from a package where it is not accessible prints bare where SBCL prints
+  `COMMON-LISP-USER::FOO` / `COMMON-LISP:CAR` -- the bare spelling does not say which of
+  the two packages owns it without the `CL_SYMBOLS` table at run time, and no consumer
+  has needed it. `symbol-package` / `type-of` parse the RAW `%prin1-to-string`
+  spelling for the same reason the escape peel does. Re-evaluate with `.todo/156`: a
+  real intern table makes the printer's question a field read and the baked table
+  unnecessary.
 
 ## A cyclic value prints finitely instead of overflowing the stack
 

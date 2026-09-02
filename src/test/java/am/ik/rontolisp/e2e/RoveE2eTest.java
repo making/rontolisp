@@ -40,13 +40,13 @@ import java.util.List;
  * {@code at file:line:column} source-location lines are absent -- rove computes them
  * under {@code #+sbcl} only; (3) failure backtraces are absent -- dissect's {@code stack}
  * is the empty no-op interface on every rontolisp backend (nil'd on SBCL for the
- * comparison); (4) an accessible symbol prints package-qualified here
- * ({@code MY-APP/MAIN:ADD} where SBCL prints {@code ADD}) -- the printer spells a
- * symbol's canonical qualified name instead of consulting the runtime {@code *package*}
- * accessibility, the one text-level divergence this pin carries (flip these lines to the
- * unqualified SBCL spellings when it lands). The exercise sets {@code *print-pretty*} to
- * nil so SBCL's line-wrapping of long {@code ~W} forms does not manufacture a fifth
- * difference.
+ * comparison). Since 2026-09-02 the printer consults the runtime {@code *package*}
+ * accessibility (CLHS 22.1.3.3.1, {@code .kb/pretty-printer.md}), so an accessible symbol
+ * prints unqualified exactly as on SBCL ({@code ADD} under the test package that uses
+ * {@code my-app/main}; rove's internal {@code ROVE/CORE/ASSERTION::OUTPUT-OF} stays
+ * qualified there) -- no text-level divergence remains. The exercise sets
+ * {@code *print-pretty*} to nil so SBCL's line-wrapping of long {@code ~W} forms does not
+ * manufacture a fourth difference.
  */
 class RoveE2eTest extends AsdfLibraryE2eSupport {
 
@@ -75,25 +75,25 @@ class RoveE2eTest extends AsdfLibraryE2eSupport {
 			before: a test starts
 			add-test
 			adding two integers
-			✓ Expect (= (MY-APP/MAIN:ADD 1 2) 3) to be true.
-			✓ Expect (= (MY-APP/MAIN:ADD 1 2) 4) to be false.
+			✓ Expect (= (ADD 1 2) 3) to be true.
+			✓ Expect (= (ADD 1 2) 4) to be false.
 			printing
 			✓ Expect (EQUAL (ROVE/CORE/ASSERTION::OUTPUT-OF (WRITE-STRING "hi") *STANDARD-OUTPUT*) "hi") to be true.
 			before: a test starts
 			parse-token-test
 			invalid tokens
 			✓ Parse error
-			✓ Expect (MY-APP/MAIN:PARSE-TOKEN 10) to signal TYPE-ERROR.
+			✓ Expect (PARSE-TOKEN 10) to signal TYPE-ERROR.
 			valid tokens
-			✓ Expect (EQUAL (MY-APP/MAIN:PARSE-TOKEN "a") "a") to be true.
+			✓ Expect (EQUAL (PARSE-TOKEN "a") "a") to be true.
 			- unicode tokens are not supported yet
 			before: a test starts
 			misc-test
 			✓ Okay. It's passed
 			× 0) Oops. It's failed
 			not implemented yet
-			× 1) Expect (= (MY-APP/MAIN:ADD 2 2) 5) to be true.
-			× 1) Expect (MY-APP/MAIN:PARSE-TOKEN "") to be true.
+			× 1) Expect (= (ADD 2 2) 5) to be true.
+			× 1) Expect (PARSE-TOKEN "") to be true.
 			teardown: my-app tests
 
 			× 1 of 1 test failed
@@ -102,9 +102,9 @@ class RoveE2eTest extends AsdfLibraryE2eSupport {
 
 			1) my-app/tests/main
 			› MISC-TEST
-			Expect (MY-APP/MAIN:PARSE-TOKEN "") to be true.
+			Expect (PARSE-TOKEN "") to be true.
 			APP-ERROR: Invalid token
-			(MY-APP/MAIN:PARSE-TOKEN "")
+			(PARSE-TOKEN "")
 
 			Summary:
 			1 test failed.
@@ -116,8 +116,8 @@ class RoveE2eTest extends AsdfLibraryE2eSupport {
 			;; testing 'my-plain/tests'
 			greet-test
 			formats the name
-			✓ Expect (EQUAL (MY-PLAIN:GREET "World") "Hello, World!") to be true.
-			✓ Expect (EQUAL (MY-PLAIN:GREET "World") "Hello!") to be false.
+			✓ Expect (EQUAL (GREET "World") "Hello, World!") to be true.
+			✓ Expect (EQUAL (GREET "World") "Hello!") to be false.
 
 			✓ 1 test completed
 
@@ -126,8 +126,8 @@ class RoveE2eTest extends AsdfLibraryE2eSupport {
 			my-plain passed: yes
 			add-test
 			adding two integers
-			✓ Expect (= (MY-APP/MAIN:ADD 1 2) 3) to be true.
-			✓ Expect (= (MY-APP/MAIN:ADD 1 2) 4) to be false.
+			✓ Expect (= (ADD 1 2) 3) to be true.
+			✓ Expect (= (ADD 1 2) 4) to be false.
 			printing
 			✓ Expect (EQUAL (ROVE/CORE/ASSERTION::OUTPUT-OF (WRITE-STRING "hi") *STANDARD-OUTPUT*) "hi") to be true.
 			single passed: yes
@@ -137,25 +137,25 @@ class RoveE2eTest extends AsdfLibraryE2eSupport {
 			before: a test starts
 			add-test
 			adding two integers
-			✓ Expect (= (MY-APP/MAIN:ADD 1 2) 3) to be true.
-			✓ Expect (= (MY-APP/MAIN:ADD 1 2) 4) to be false.
+			✓ Expect (= (ADD 1 2) 3) to be true.
+			✓ Expect (= (ADD 1 2) 4) to be false.
 			printing
 			✓ Expect (EQUAL (ROVE/CORE/ASSERTION::OUTPUT-OF (WRITE-STRING "hi") *STANDARD-OUTPUT*) "hi") to be true.
 			before: a test starts
 			parse-token-test
 			invalid tokens
 			✓ Parse error
-			✓ Expect (MY-APP/MAIN:PARSE-TOKEN 10) to signal TYPE-ERROR.
+			✓ Expect (PARSE-TOKEN 10) to signal TYPE-ERROR.
 			valid tokens
-			✓ Expect (EQUAL (MY-APP/MAIN:PARSE-TOKEN "a") "a") to be true.
+			✓ Expect (EQUAL (PARSE-TOKEN "a") "a") to be true.
 			- unicode tokens are not supported yet
 			before: a test starts
 			misc-test
 			✓ Okay. It's passed
 			× 0) Oops. It's failed
 			not implemented yet
-			× 1) Expect (= (MY-APP/MAIN:ADD 2 2) 5) to be true.
-			× 1) Expect (MY-APP/MAIN:PARSE-TOKEN "") to be true.
+			× 1) Expect (= (ADD 2 2) 5) to be true.
+			× 1) Expect (PARSE-TOKEN "") to be true.
 			teardown: my-app tests
 
 			× 1 of 3 tests failed
@@ -163,9 +163,9 @@ class RoveE2eTest extends AsdfLibraryE2eSupport {
 			0) Oops. It's failed
 
 			1) MISC-TEST
-			Expect (MY-APP/MAIN:PARSE-TOKEN "") to be true.
+			Expect (PARSE-TOKEN "") to be true.
 			APP-ERROR: Invalid token
-			(MY-APP/MAIN:PARSE-TOKEN "")
+			(PARSE-TOKEN "")
 
 			Summary:
 			1 test failed.
