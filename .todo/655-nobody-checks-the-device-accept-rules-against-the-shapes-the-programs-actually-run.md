@@ -48,3 +48,20 @@ reading the rules and guessing which shapes arrive.
 
 The table exists in `.kb/gpu.md` (or a file it names), covering every device member, and
 each refusal in it is either priced or filed.
+
+## The TESTS half is done (2026-09-03, Metal)
+
+The second population above -- "where does a test compute a shape from a constant it does
+not itself assert on?" -- was swept on an M4 Max with the device in force. Result and
+per-test detail: `.kb/gpu.md`, "The test-side sweep on Metal"; the general rule it
+produced is `.kb/test-execution.md`, "A test that never ran the mechanism it asserts on".
+
+Five findings, all fixed there: `GpuOfferDifferentialTest` was FAILING on Metal (a
+`Long.MAX_VALUE` threshold sentinel through `2 * ...`, wrapping negative); the compiled
+sibling of the fused tier still carried todo-495's bug and, once it ran, exposed a real
+log-softmax divergence; four product tests in `LinalgGpuTest` were the defun against
+itself; and the clip norm reached the device on NEITHER backend. Each was established by
+mutation. What remains of the test side is `.todo/662` -- whether a claim `GpuTest` makes
+has a Metal sibling at all, which is a prior question to this item's.
+
+**This leaves the PROGRAMS half, which is what this item is now about.**

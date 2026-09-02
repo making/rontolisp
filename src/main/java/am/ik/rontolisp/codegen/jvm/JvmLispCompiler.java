@@ -4746,6 +4746,53 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
+	/**
+	 * The arithmetic operators CLHS itself defines as float whenever ANY argument is
+	 * float, regardless of what the other arguments are: recursing into one of these is a
+	 * real PROOF of the node's result type, not a guess about a subtree that happens to
+	 * contain a double literal somewhere.
+	 */
+	private static final java.util.Set<String> CONTAGIOUS_ARITHMETIC_FORMS = java.util.Set.of(LispNames.ADD,
+			LispNames.SUB, LispNames.MUL, LispNames.MOD, LispNames.REM);
+
+	/**
+	 * True when {@code val}'s VALUE is PROVEN to be a double, unlike
+	 * {@link #containsDouble}, which only asks whether a double literal occurs ANYWHERE
+	 * in the subtree. That guess is sound for the force-coercing operators themselves
+	 * ({@code compileUnboxedOperand} widens any Number it is handed, so a wrong guess
+	 * about an unrelated nested form still lands on the right answer), but it is NOT
+	 * sound as a basis for choosing min/max's result type: their result is exactly one of
+	 * the two operands, so treating the wrong one as a double changes its TYPE, not just
+	 * its box -- {@code (min 1 2.0)} would answer the double {@code 1.0} instead of the
+	 * rational {@code 1}. Recursion here is bounded to
+	 * {@link #CONTAGIOUS_ARITHMETIC_FORMS} -- true contagion, not a guess -- and never
+	 * crosses into an arbitrary function call (whose return type this pass cannot see) or
+	 * into {@code min}/{@code max} themselves (whose own result is exactly this same
+	 * ambiguity).
+	 * @param val the expression tree
+	 * @param ctx the compiler context (declared/raw double locals)
+	 * @return true only when val is guaranteed to evaluate to a double
+	 */
+	static boolean isDefinitelyDouble(LispVal val, Ctx ctx) {
+		if (val instanceof LispDouble) {
+			return true;
+		}
+		if (val instanceof LispSymbol sym
+				&& (ctx.declaredDoubles.contains(sym.name()) || ctx.rawDoubleLocals.containsKey(sym.name()))) {
+			return true;
+		}
+		if (val instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+				&& CONTAGIOUS_ARITHMETIC_FORMS.contains(head.name())) {
+			List<LispVal> parts = cons.toList();
+			for (LispVal operand : parts.subList(1, parts.size())) {
+				if (isDefinitelyDouble(operand, ctx)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	static DefunDecl extractSetqLambda(LispVal expr) {
 		List<LispVal> parts = ((LispCons) expr).toList();
 		String funcName = ((LispSymbol) parts.get(1)).name();

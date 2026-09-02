@@ -18355,9 +18355,8 @@ class WasmLispCompilerIntegrationTest {
 
 		// Ordinary selections and integers are untouched. (min 1 2.0) answers the
 		// integer 1 here -- this backend hands back the winning operand as it stands,
-		// applying no float contagion. CLHS leaves that free and SBCL answers 1 too,
-		// but our own interpreter coerces; that divergence is older than this select
-		// and is tracked separately.
+		// applying no float contagion. CLHS leaves that free, SBCL answers 1 too, and
+		// the interpreter and the JVM backend now agree.
 		assertThat(compileAndRun("(print (list (min 1.0 2.0) (max 1.0 2.0) (min 3 1 2) (max 3 1 2)))"))
 			.isEqualTo("(1.0 2.0 1 3)");
 	}

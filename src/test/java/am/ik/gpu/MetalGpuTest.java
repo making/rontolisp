@@ -799,6 +799,10 @@ class MetalGpuTest {
 		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, m, m)).isTrue();
 		assertThat(residency.hits()).isEqualTo(hits + 1);
 		assertThat(Gpu.residentBytes()).isEqualTo((long) m * m * Float.BYTES);
+		// w is what those totals count, and nothing below reaches it: a resident copy
+		// goes when its host array is collected, so without this the assertions above are
+		// reading a number the collector may move (`.kb/test-execution.md`).
+		java.lang.ref.Reference.reachabilityFence(w);
 	}
 
 	@Test
@@ -865,6 +869,10 @@ class MetalGpuTest {
 			Thread.sleep(20);
 			assertThat(Gpu.matvec(keep, 0, x, 0, y, 0, rows, cols)).isTrue();
 			after = Gpu.residentBytes();
+			// keep is the ONE array this total is meant to still count, and the loop's
+			// own System.gc() is exactly the window in which it would otherwise go --
+			// which would make this test fail at collecting what it pins.
+			java.lang.ref.Reference.reachabilityFence(keep);
 		}
 		assertThat(after).isEqualTo(held);
 	}

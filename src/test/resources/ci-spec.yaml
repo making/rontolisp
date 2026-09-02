@@ -1306,6 +1306,21 @@ cases:
       (1.0 NaN)
       (1.0 NaN)
       (1.0 NaN)
+  # min/max apply NO float contagion -- the winning operand comes back exactly as it
+  # stands, so a mixed rational/float call keeps the rational. CLHS leaves this
+  # implementation-dependent; SBCL does not coerce, and neither do we now, on the
+  # literal path and the variable path, in both argument orders.
+  - name: min-max-apply-no-float-contagion-on-a-mixed-rational-float-call
+    source: |
+      (defun mmc-min (a b) (min a b))
+      (defun mmc-max (a b) (max a b))
+      (print (list (min 1 2.0) (min 2.0 1) (max 1 2.0) (max 2.0 1)))
+      (print (list (mmc-min 1 2.0) (mmc-min 2.0 1) (mmc-max 1 2.0) (mmc-max 2.0 1)))
+      (print (list (floatp (min 1 2.0)) (floatp (max 1 2.0))))
+    expected: |
+      (1 1 2.0 2.0)
+      (1 1 2.0 2.0)
+      (NIL T)
   - name: unless
     source: |
       (print (unless nil 42))

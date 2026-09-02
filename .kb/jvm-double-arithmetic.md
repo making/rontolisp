@@ -42,9 +42,50 @@ whatever their arguments are.
 
 The entry points that took `compileExpr` + `unboxDouble` and now take
 `compileUnboxedOperand`: `JvmArithCompiler`, `JvmComparisonCompiler`, `JvmMathFnCompiler`,
-`JvmAbsCompiler`, `JvmMinCompiler`, `JvmMaxCompiler`, `JvmExptCompiler`. Anything the
-operand rule does not recognise still compiles as an ordinary expression and unboxes, so
-ratios, bignums, `nil` and every error shape are unchanged.
+`JvmAbsCompiler`, `JvmExptCompiler`. Anything the operand rule does not recognise still
+compiles as an ordinary expression and unboxes, so ratios, bignums, `nil` and every error
+shape are unchanged.
+
+**`JvmMinCompiler`/`JvmMaxCompiler` gate their unboxed fast path on a STRICTER
+predicate than the rest of this family, `JvmLispCompiler.isDefinitelyDouble`, not
+`hasDoubleLiteral`.** `hasDoubleLiteral` only asks whether a double literal occurs
+ANYWHERE in an operand's subtree -- sound for `+`/`-`/`*`/`mod`/`rem`/`abs`/`expt`/the
+comparisons, because those force-coerce every operand through `_dbl`/`compileUnboxedOperand`
+regardless of what it actually was, so a wrong guess about an unrelated nested form still
+lands on the right answer. It is NOT sound for `min`/`max`: their result is exactly one of
+the two operands AS IT STANDS (no contagion, `.kb/linalg-simd.md`), so reboxing the wrong
+one as a fresh `Double` changes its TYPE, not just its box -- `(min 1 2.0)` answering the
+double `1.0` instead of the rational `1` was exactly this bug, and it was the JVM backend
+disagreeing WITH ITSELF (the general path already answered `1`) rather than with another
+backend.
+
+`isDefinitelyDouble` requires EACH operand independently to be PROVEN double: a `LispDouble`
+literal, a declared/raw double local (a real, checked-cast-backed guarantee --
+`.kb/declarations-type-checks.md` -- not a guess), or (recursively) a `+`/`-`/`*`/`mod`/`rem`
+tree with at least one provably-double operand -- true CLHS contagion, not a guess, since
+those five operators really do coerce to double whenever ANY argument is float, whichever
+argument that is. Recursion never crosses into an arbitrary function call (this pass cannot
+see its return type) or into `min`/`max` themselves (whose own result is exactly this same
+ambiguity, one level up). When both operands pass, the winner is a double whichever one
+wins, so unboxing both with `compileUnboxedOperand`, comparing via the restored
+`_fmin`/`_fmax` raw-double helpers, and reboxing the winner is exact -- the fast path was
+narrowed, not dropped. When either operand fails the check, `JvmMinCompiler`/`JvmMaxCompiler`
+fall back to the general boxed path (`_min`/`_max`), which answers every operand's own type
+unchanged and was already correct. See the `min`/`max` contagion entry in
+`.kb/linalg-simd.md` for the measurement (SBCL agreement, and why no benchmark exists to
+have been overturned by narrowing this path).
+
+**`isDefinitelyDouble`'s `mod`/`rem` arm depends on a fact it does not itself check: that
+`mod`/`rem` answer a double whenever EITHER argument is a double, whichever one.** That is
+a TYPE claim, not a sign claim, and is unrelated to and unmoved by `.todo/652` (the
+zero-remainder SIGN question -- `(rem -4.0 2.0)` being `-0.0` vs `0.0` -- whose own
+acceptance criteria requires "no arithmetic result moves: only printed signs," so it cannot
+touch this). But if a FUTURE change ever made `mod`/`rem`'s result type depend on which
+operand is which (not just its sign), this arm of `isDefinitelyDouble` would need to move
+with it, or the fast path could again reach a nested `(mod ...)`/`(rem ...)` node whose
+value is not actually always double, reintroducing exactly the mistyped-fast-path bug this
+predicate exists to prevent. Whoever next changes `mod`/`rem`'s TYPE behavior (not just its
+zero sign) should re-check this paragraph.
 
 ## The all-Double fast path in the fused methods
 
