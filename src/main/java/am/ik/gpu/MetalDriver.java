@@ -401,11 +401,12 @@ final class MetalDriver {
 	/**
 	 * {@code -[MPSMatrixMultiplication initWithDevice:...]} on a freshly allocated one.
 	 */
-	MemorySegment matrixMultiplication(MemorySegment device, long rows, long columns, long interior) throws Throwable {
+	MemorySegment matrixMultiplication(MemorySegment device, boolean transposeLeft, boolean transposeRight, long rows,
+			long columns, long interior) throws Throwable {
 		MemorySegment raw = message(objcClass("MPSMatrixMultiplication"), "alloc");
 		return (MemorySegment) this.idMpsInit.invokeExact(raw, selector(
 				"initWithDevice:transposeLeft:transposeRight:resultRows:resultColumns:interiorColumns:alpha:beta:"),
-				device, false, false, rows, columns, interior, 1.0, 0.0);
+				device, transposeLeft, transposeRight, rows, columns, interior, 1.0, 0.0);
 	}
 
 	/** An {@code MTLSize} in the given allocator, for {@link #dispatch}. */

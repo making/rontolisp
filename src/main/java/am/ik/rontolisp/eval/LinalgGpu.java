@@ -1594,8 +1594,9 @@ public final class LinalgGpu {
 	 * The per-batch strides are the operand's OWN either way -- a transposed slab holds
 	 * the same {@code n * m} elements -- and the fold is untouched, so the result is the
 	 * plain product of the transposed copy bit for bit. Everything declines exactly as
-	 * the plain member does, plus one more: a backend with no transposed kernel (Metal),
-	 * where the defun's own transpose-then-multiply then answers.
+	 * the plain member does; both backends carry the orientation, so a decline here is
+	 * never about the orientation and the defun's own transpose-then-multiply answers
+	 * whatever the plain member's decline would have answered.
 	 */
 	private static @Nullable LispVal matmulNd(List<LispVal> args, boolean ta, boolean tb) {
 		if (!(args.get(0) instanceof LispFloatArray a) || !(args.get(1) instanceof LispFloatArray b)

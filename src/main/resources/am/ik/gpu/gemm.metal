@@ -28,28 +28,54 @@ using namespace metal;
 // The rank-2 product does NOT come here: MetalGemm dispatches that one through
 // MPSMatrixMultiplication, which is in the OS and is 1.5-4.5x this kernel from n=512 up.
 // This kernel is what serves the batch axis MPS cannot be handed with a zero stride.
+//
+// A TRANSPOSED OPERAND IS READ IN PLACE (todo-631). `ta` / `tb` say that the operand's
+// last two axes are exchanged: its M x K (or K x N) matrix is STORED K x M (or N x K),
+// and the kernel indexes it that way rather than being handed a gather's copy of it --
+// which is what the linear backward's `g . b^T` and `a^T . g` used to pay a whole strided
+// pass for. The TILE the fold reads is the same tile either way; only the address the
+// staging load comes from changes, so every cell still folds k ascending through the same
+// products and the result is bit-identical to the plain product of the transposed copy.
+// What does change is the load PATTERN: a transposed operand is walked down its columns,
+// so the staging swaps the roles of the two thread indices to keep a SIMD group's global
+// reads contiguous, and the tiles carry one column of padding so the transposed store is
+// bank-conflict-free. gemm.cu carries the same two flags, in the same staging.
 kernel void gemm_batched_f32(device const float* A [[buffer(0)]],
                              device const float* B [[buffer(1)]],
                              device float* C [[buffer(2)]],
                              constant int* dims [[buffer(3)]],
                              uint3 tid [[thread_position_in_threadgroup]],
                              uint3 gp [[threadgroup_position_in_grid]]) {
-  threadgroup float As[TILE][TILE];
-  threadgroup float Bs[TILE][TILE];
+  threadgroup float As[TILE][TILE + 1];
+  threadgroup float Bs[TILE][TILE + 1];
   int M = dims[0], N = dims[1], K = dims[2], strideA = dims[3], strideB = dims[4];
+  int ta = dims[5], tb = dims[6];
   int z = int(gp.z);
   const device float* Ab = A + (long) z * strideA;
   const device float* Bb = B + (long) z * strideB;
   device float* Cb = C + (long) z * M * N;
   int tx = int(tid.x), ty = int(tid.y);
-  int row = int(gp.y) * TILE + ty;
-  int col = int(gp.x) * TILE + tx;
+  int row0 = int(gp.y) * TILE, col0 = int(gp.x) * TILE;
+  int row = row0 + ty;
+  int col = col0 + tx;
   float acc = 0.0f;
   int tiles = (K + TILE - 1) / TILE;
   for (int t = 0; t < tiles; ++t) {
     int ac = t * TILE + tx, br = t * TILE + ty;
-    As[ty][tx] = (row < M && ac < K) ? Ab[row * (long) K + ac] : 0.0f;
-    Bs[ty][tx] = (br < K && col < N) ? Bb[br * (long) N + col] : 0.0f;
+    if (ta) {
+      int ak = t * TILE + ty, am = row0 + tx;
+      As[tx][ty] = (am < M && ak < K) ? Ab[ak * (long) M + am] : 0.0f;
+    }
+    else {
+      As[ty][tx] = (row < M && ac < K) ? Ab[row * (long) K + ac] : 0.0f;
+    }
+    if (tb) {
+      int bk = t * TILE + tx, bn = col0 + ty;
+      Bs[tx][ty] = (bk < K && bn < N) ? Bb[bn * (long) K + bk] : 0.0f;
+    }
+    else {
+      Bs[ty][tx] = (br < K && col < N) ? Bb[br * (long) N + col] : 0.0f;
+    }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (int k = 0; k < TILE; ++k) acc += As[ty][k] * Bs[k][tx];
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -890,5 +916,434 @@ kernel void fold_f32(device const float* A [[buffer(0)]],
       if (op == 1 ? flt_gt(x, acc) : flt_lt(x, acc)) acc = x;
     }
     C[i] = acc;
+  }
+}
+
+// --- THE FUSED TIER (todo-636) -----------------------------------------------------
+// The compositions `torch.lisp` spells as a chain of `linalg:` members -- the exact GELU
+// and its adjoint, the last-axis softmax and its adjoint, the last-axis log-softmax and
+// its adjoint, layer-norm's normalization and its adjoint -- each as ONE kernel. What a
+// fused kernel buys is the memory passes it removes: a chain of five bandwidth-bound
+// passes over an activation is five times the traffic of one, and on THIS backend it also
+// removes four of five COMMAND BUFFERS, each of which is a ~77 us floor and a full wait.
+//
+// THE CONTRACT IS THE CHAIN'S, ROUNDING FOR ROUNDING, and here that is an argument rather
+// than an inheritance. gemm.cu computes every member boundary as `(T)((double) a op
+// (double) b)`; MSL has no double, so each boundary is taken one of two ways, exactly as
+// the strided and resident tiers take theirs:
+//   - both operands floats -> the float operation under the flush guard (R_ADD and its
+//     siblings below), which IS that rounding by the bcast_f32 argument;
+//   - an operand the float grid does not hold -- 1/sqrt(2), 2/sqrt(pi), the layer-norm
+//     eps, a row length past 2^24 -- or an accumulator the chain keeps in f64 -> the
+//     software binary64 route, which is the CPU's arithmetic by construction.
+// So a fused member lands on the bits the member chain would have produced, whichever
+// rung of the chain ran where. MetalGpuTest asserts EQUALITY against the chain run member
+// by member, libm members included.
+//
+// The row kernels keep ONE THREAD PER ROW, because a sequential f64 fold has no
+// lane-parallel form that keeps its bits. Thirty-two threads reading thirty-two rows read
+// addresses a row apart, so the rows go through a TRANSPOSED TILE in threadgroup memory,
+// thirty-two columns at a time: the SIMD group loads column c of its thirty-two rows with
+// one coalesced instruction per row, each lane then walks its own row across the tile
+// (stride 33, conflict-free), and a result goes back the same way. gemm.cu's row kernels
+// have the same layout and the same reason.
+#define ROW_SIMDS 2
+
+struct row_tile {
+  float v[32][33];
+};
+
+// The chain's member boundaries at this width. The op codes are bin_op's.
+#define R_ADD(a, b) bin_op_exact(0, (a), (b))
+#define R_SUB(a, b) bin_op_exact(1, (a), (b))
+#define R_MUL(a, b) bin_op_exact(2, (a), (b))
+#define R_DIV(a, b) bin_op_exact(3, (a), (b))
+
+// The same boundary against a double the float grid does not hold: the operation is the
+// software f64 one over the widened float, narrowed on the store -- `(T)((double) a op s)`
+// literally, and what scal_f32's inexact path already does for the same scalars.
+static inline float wide_op(int op, float a, f64 s) {
+  return f64_to_f(bin_op_f64(op, f64_from_f(a), s));
+}
+
+static inline float wide_op_swapped(int op, f64 s, float a) {
+  return f64_to_f(bin_op_f64(op, s, f64_from_f(a)));
+}
+
+#define F64_SQRT2 0x3ff6a09e667f3bcdul
+#define F64_TWO_OVER_SQRT_PI 0x3ff20dd750429b6dul
+
+// A row length divides an f64 accumulator in the chain (`(linalg:div (linalg:sum r) n)`);
+// every length a row kernel is offered at is far below 2^24 and therefore exactly a
+// float, but the kernel does not assume it.
+static inline float divide_by_length(float a, int len) {
+  return len < (1 << 24) ? R_DIV(a, float(len)) : wide_op(3, a, f64_from_f(float(len)));
+}
+
+// Columns [c0, c0 + 32) of rows [row0, row0 + 32) into the tile; a cell outside the
+// operand reads as zero and is never stored back. The barriers make the tile safe to
+// reuse: nobody loads before every lane has finished the previous chunk, nobody reads
+// before every column has landed. The whole SIMD group shares one tile, so the barrier is
+// the SIMD group's.
+static inline void tile_load(threadgroup row_tile& tile, device const float* A, int rows, int len, int row0, int c0,
+                             int lane) {
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+  int col = c0 + lane;
+  for (int r = 0; r < 32; ++r) {
+    int row = row0 + r;
+    tile.v[r][lane] = (row < rows && col < len) ? A[(long) row * len + col] : 0.0f;
+  }
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+}
+
+static inline void tile_store(threadgroup row_tile& tile, device float* C, int rows, int len, int row0, int c0,
+                              int lane) {
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+  int col = c0 + lane;
+  for (int r = 0; r < 32; ++r) {
+    int row = row0 + r;
+    if (row < rows && col < len) C[(long) row * len + col] = tile.v[r][lane];
+  }
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+}
+
+// x * (1 + erf(x / sqrt 2)) / 2 as `torch:gelu` composes it: mul by 0.5, div by sqrt 2,
+// erf, add to 1, mul -- five members, five roundings. The divisor is not a float, so that
+// one boundary is the software f64 route, which is the route the chain's own scal_f32
+// takes for it.
+static inline float gelu_forward(float x) {
+  float t1 = R_MUL(x, 0.5f);
+  float t2 = wide_op(3, x, F64_SQRT2);
+  float t3 = erf1(t2);
+  float t4 = R_ADD(1.0f, t3);
+  return R_MUL(t1, t4);
+}
+
+kernel void gelu_f32(device const float* X [[buffer(0)]],
+                     device float* C [[buffer(1)]],
+                     constant int* args [[buffer(2)]],
+                     uint i [[thread_position_in_grid]]) {
+  int n = args[0];
+  if (int(i) < n) C[i] = gelu_forward(X[i]);
+}
+
+// The tape's backward through those five members, in the tape's order: the outer mul
+// hands g * t4 to the 0.5-branch and g * t1 to the erf branch; erf's adjoint is
+// g * (2/sqrt(pi)) * exp(-t2^2); the div branch lands on x first (b) and the mul branch
+// second (a), each after the gradient x had already accumulated (OLD, when args[1] says
+// there is one).
+kernel void gelu_grad_f32(device const float* G [[buffer(0)]],
+                          device const float* X [[buffer(1)]],
+                          device const float* OLD [[buffer(2)]],
+                          device float* C [[buffer(3)]],
+                          constant int* args [[buffer(4)]],
+                          uint i [[thread_position_in_grid]]) {
+  int n = args[0], hasOld = args[1];
+  if (int(i) >= n) return;
+  float x = X[i], g = G[i];
+  float t1 = R_MUL(x, 0.5f);
+  float t2 = wide_op(3, x, F64_SQRT2);
+  float t3 = erf1(t2);
+  float t4 = R_ADD(1.0f, t3);
+  float g1 = R_MUL(g, t4);
+  float g4 = R_MUL(g, t1);
+  float sq = R_MUL(t2, t2);
+  float ng = as_type<float>(as_type<uint>(sq) ^ 0x80000000u);
+  float ex = exp(ng);
+  float sc = wide_op_swapped(2, F64_TWO_OVER_SQRT_PI, ex);
+  float g2 = R_MUL(g4, sc);
+  float b = wide_op(3, g2, F64_SQRT2);
+  float a = R_MUL(g1, 0.5f);
+  float acc = hasOld != 0 ? R_ADD(OLD[i], b) : b;
+  C[i] = R_ADD(acc, a);
+}
+
+// `linalg:softmax` over the last axis: amax (the strict fold, seeded with the first
+// element), the broadcast sub, exp at the width, the sum fold, the broadcast div. Three
+// passes over the row: the max, exp into the result with the sum, the division in place.
+kernel void softmax_f32(device const float* A [[buffer(0)]],
+                        device float* C [[buffer(1)]],
+                        constant int* args [[buffer(2)]],
+                        uint tid [[thread_position_in_threadgroup]],
+                        uint gid [[threadgroup_position_in_grid]]) {
+  threadgroup row_tile tiles[ROW_SIMDS];
+  int rows = args[0], len = args[1];
+  int simd = int(tid) >> 5, lane = int(tid) & 31;
+  threadgroup row_tile& tile = tiles[simd];
+  int row0 = (int(gid) * ROW_SIMDS + simd) * 32;
+  if (row0 >= rows) return;
+  float m = 0.0f;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float x = tile.v[lane][j];
+      if (c0 + j == 0 || flt_gt(x, m)) m = x;
+    }
+  }
+  f64 sum = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float s = R_SUB(tile.v[lane][j], m);
+      float e = exp(s);
+      tile.v[lane][j] = e;
+      sum = f64_add(sum, f64_from_f(e));
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+  float d = f64_to_f(sum);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, C, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) tile.v[lane][j] = R_DIV(tile.v[lane][j], d);
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+}
+
+// `torch:softmax`'s adjoint, out * (g - sum(g * out)): the zip mul, the sum fold, the
+// broadcast sub, the zip mul. No libm anywhere.
+kernel void softmax_grad_f32(device const float* G [[buffer(0)]],
+                             device const float* O [[buffer(1)]],
+                             device float* C [[buffer(2)]],
+                             constant int* args [[buffer(3)]],
+                             uint tid [[thread_position_in_threadgroup]],
+                             uint gid [[threadgroup_position_in_grid]]) {
+  threadgroup row_tile tiles[ROW_SIMDS][2];
+  int rows = args[0], len = args[1];
+  int simd = int(tid) >> 5, lane = int(tid) & 31;
+  threadgroup row_tile& gt = tiles[simd][0];
+  threadgroup row_tile& ot = tiles[simd][1];
+  int row0 = (int(gid) * ROW_SIMDS + simd) * 32;
+  if (row0 >= rows) return;
+  f64 sum = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float p = R_MUL(gt.v[lane][j], ot.v[lane][j]);
+      sum = f64_add(sum, f64_from_f(p));
+    }
+  }
+  float tot = f64_to_f(sum);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float q = R_SUB(gt.v[lane][j], tot);
+      ot.v[lane][j] = R_MUL(ot.v[lane][j], q);
+    }
+    tile_store(ot, C, rows, len, row0, c0, lane);
+  }
+}
+
+// `linalg:log-softmax` over the last axis: amax, the broadcast sub, exp at the width, the
+// sum fold, the log of that sum at the width, the broadcast sub. Three passes over the
+// row -- the deviation is RECOMPUTED in the third rather than stored, which is a pass
+// saved and the same bits, since it is the same subtraction.
+kernel void log_softmax_f32(device const float* A [[buffer(0)]],
+                            device float* C [[buffer(1)]],
+                            constant int* args [[buffer(2)]],
+                            uint tid [[thread_position_in_threadgroup]],
+                            uint gid [[threadgroup_position_in_grid]]) {
+  threadgroup row_tile tiles[ROW_SIMDS];
+  int rows = args[0], len = args[1];
+  int simd = int(tid) >> 5, lane = int(tid) & 31;
+  threadgroup row_tile& tile = tiles[simd];
+  int row0 = (int(gid) * ROW_SIMDS + simd) * 32;
+  if (row0 >= rows) return;
+  float m = 0.0f;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float x = tile.v[lane][j];
+      if (c0 + j == 0 || flt_gt(x, m)) m = x;
+    }
+  }
+  f64 sum = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float s = R_SUB(tile.v[lane][j], m);
+      sum = f64_add(sum, f64_from_f(exp(s)));
+    }
+  }
+  float lg = log(f64_to_f(sum));
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float s = R_SUB(tile.v[lane][j], m);
+      tile.v[lane][j] = R_SUB(s, lg);
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+}
+
+// `torch:log-softmax`'s adjoint, g - exp(out) * sum(g): the sum fold, exp of the forward
+// result at the width, the broadcast mul, the zip sub. Two passes over the row.
+kernel void log_softmax_grad_f32(device const float* G [[buffer(0)]],
+                                 device const float* O [[buffer(1)]],
+                                 device float* C [[buffer(2)]],
+                                 constant int* args [[buffer(3)]],
+                                 uint tid [[thread_position_in_threadgroup]],
+                                 uint gid [[threadgroup_position_in_grid]]) {
+  threadgroup row_tile tiles[ROW_SIMDS][2];
+  int rows = args[0], len = args[1];
+  int simd = int(tid) >> 5, lane = int(tid) & 31;
+  threadgroup row_tile& gt = tiles[simd][0];
+  threadgroup row_tile& ot = tiles[simd][1];
+  int row0 = (int(gid) * ROW_SIMDS + simd) * 32;
+  if (row0 >= rows) return;
+  f64 sum = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) sum = f64_add(sum, f64_from_f(gt.v[lane][j]));
+  }
+  float tot = f64_to_f(sum);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float e = exp(ot.v[lane][j]);
+      float p = R_MUL(e, tot);
+      gt.v[lane][j] = R_SUB(gt.v[lane][j], p);
+    }
+    tile_store(gt, C, rows, len, row0, c0, lane);
+  }
+}
+
+// The row's mean and standard deviation as the torch composition computes them: the sum
+// fold divided by the length, the sum fold of the squared deviations divided by the
+// length, plus eps, the square root -- every one a member boundary. eps is a double the
+// float grid generally does not hold, so that boundary is the software f64 one.
+static inline void row_stats(threadgroup row_tile& tile, device const float* X, int rows, int len, int row0, int lane,
+                             f64 eps, thread float& mu, thread float& sd) {
+  f64 acc = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) acc = f64_add(acc, f64_from_f(tile.v[lane][j]));
+  }
+  mu = divide_by_length(f64_to_f(acc), len);
+  acc = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float dev = R_SUB(tile.v[lane][j], mu);
+      acc = f64_add(acc, f64_from_f(R_MUL(dev, dev)));
+    }
+  }
+  float v = divide_by_length(f64_to_f(acc), len);
+  sd = map_op(12, wide_op(0, v, eps));
+}
+
+// `torch:layer-norm`'s normalization (x - mean) / sqrt(var + eps) over the last axis, as
+// its torch composition spells it (row_stats), then the broadcast division.
+kernel void layer_norm_f32(device const float* X [[buffer(0)]],
+                           device float* C [[buffer(1)]],
+                           constant int* args [[buffer(2)]],
+                           constant ulong* eps [[buffer(3)]],
+                           uint tid [[thread_position_in_threadgroup]],
+                           uint gid [[threadgroup_position_in_grid]]) {
+  threadgroup row_tile tiles[ROW_SIMDS];
+  int rows = args[0], len = args[1];
+  int simd = int(tid) >> 5, lane = int(tid) & 31;
+  threadgroup row_tile& tile = tiles[simd];
+  int row0 = (int(gid) * ROW_SIMDS + simd) * 32;
+  if (row0 >= rows) return;
+  float mu, sd;
+  row_stats(tile, X, rows, len, row0, lane, eps[0], mu, sd);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float dev = R_SUB(tile.v[lane][j], mu);
+      tile.v[lane][j] = R_DIV(dev, sd);
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+}
+
+// The tape's backward through that composition, with g the gradient of the normalized
+// output. x feeds four nodes -- the two means and the two subtractions (torch:var takes
+// its own mean) -- and the reverse walk reaches them as dev2 (a1, through the squared
+// deviations), the variance's mean (a2), dev (a3) and the mean (a4), adding each into x's
+// gradient in that order after whatever it already held (OLD). The reductions along the
+// way are the sum fold over the row, sequential, of the negated per-element terms; the two
+// mean adjoints stretch a scalar back over the row through a broadcast add onto zeros,
+// whose one visible effect (-0.0 + 0.0 = +0.0) is kept. gemm.cu's kernel is this one.
+kernel void layer_norm_grad_f32(device const float* G [[buffer(0)]],
+                                device const float* X [[buffer(1)]],
+                                device const float* OLD [[buffer(2)]],
+                                device float* C [[buffer(3)]],
+                                constant int* args [[buffer(4)]],
+                                constant ulong* eps [[buffer(5)]],
+                                uint tid [[thread_position_in_threadgroup]],
+                                uint gid [[threadgroup_position_in_grid]]) {
+  threadgroup row_tile tiles[ROW_SIMDS][2];
+  int rows = args[0], len = args[1], hasOld = args[2];
+  int simd = int(tid) >> 5, lane = int(tid) & 31;
+  threadgroup row_tile& xt = tiles[simd][0];
+  threadgroup row_tile& gt = tiles[simd][1];
+  int row0 = (int(gid) * ROW_SIMDS + simd) * 32;
+  if (row0 >= rows) return;
+  float mu, sd;
+  row_stats(xt, X, rows, len, row0, lane, eps[0], mu, sd);
+  // The division's adjoints: g / sd towards dev (a3), and towards sd the fold of
+  // -((g * dev) / (sd * sd)); the subtraction's adjoint towards the mean, the fold of
+  // -(g / sd).
+  float q = R_MUL(sd, sd);
+  f64 acc_sd = 0, acc_mu = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(xt, X, rows, len, row0, c0, lane);
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float dev = R_SUB(xt.v[lane][j], mu);
+      float gk = gt.v[lane][j];
+      float rr = R_DIV(R_MUL(gk, dev), q);
+      acc_sd = f64_add(acc_sd, f64_from_f(as_type<float>(as_type<uint>(rr) ^ 0x80000000u)));
+      float gdev = R_DIV(gk, sd);
+      acc_mu = f64_add(acc_mu, f64_from_f(as_type<float>(as_type<uint>(gdev) ^ 0x80000000u)));
+    }
+  }
+  float g_sd = f64_to_f(acc_sd);
+  float g_mu = f64_to_f(acc_mu);
+  // sqrt's adjoint g / (2 sd), the division by the length, the broadcast onto zeros.
+  float g_ve = R_DIV(g_sd, R_MUL(2.0f, sd));
+  float g_sq = R_ADD(0.0f, divide_by_length(g_ve, len));
+  // dev2 * dev2's adjoint reaches dev2 twice (g_sq * dev2, added to itself), which is a1;
+  // the variance's own mean gets the fold of -a1 and hands back a2.
+  f64 acc_m2 = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(xt, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float p = R_MUL(g_sq, R_SUB(xt.v[lane][j], mu));
+      float gd2 = R_ADD(p, p);
+      acc_m2 = f64_add(acc_m2, f64_from_f(as_type<float>(as_type<uint>(gd2) ^ 0x80000000u)));
+    }
+  }
+  float a2 = divide_by_length(R_ADD(0.0f, f64_to_f(acc_m2)), len);
+  float a4 = divide_by_length(R_ADD(0.0f, g_mu), len);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(xt, X, rows, len, row0, c0, lane);
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float p = R_MUL(g_sq, R_SUB(xt.v[lane][j], mu));
+      float gd2 = R_ADD(p, p);
+      float gdev = R_DIV(gt.v[lane][j], sd);
+      xt.v[lane][j] = gd2;
+      gt.v[lane][j] = gdev;
+    }
+    if (hasOld != 0) {
+      int row = row0 + lane;
+      for (int j = 0; j < 32 && c0 + j < len; ++j) {
+        if (row < rows) {
+          float o = OLD[(long) row * len + c0 + j];
+          xt.v[lane][j] = R_ADD(o, xt.v[lane][j]);
+        }
+      }
+    }
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float a = R_ADD(xt.v[lane][j], a2);
+      a = R_ADD(a, gt.v[lane][j]);
+      gt.v[lane][j] = R_ADD(a, a4);
+    }
+    tile_store(gt, C, rows, len, row0, c0, lane);
   }
 }

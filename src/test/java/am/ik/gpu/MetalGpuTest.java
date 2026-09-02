@@ -191,6 +191,75 @@ class MetalGpuTest {
 	}
 
 	@Test
+	void aTransposedOperandIsReadInPlaceAndFoldsOntoTheUntransposedProduct() {
+		// The transposed product (todo-631): the operand is STORED with its last two axes
+		// exchanged and the kernel indexes it there rather than being handed a strided
+		// copy of it. The tile the fold reads is the same tile, so the claim is EQUALITY
+		// -- not a tolerance -- against the plain product of the transposed copy. Only
+		// #f, because that is the only width this backend has; the shapes straddle the
+		// MPS threshold, so BOTH routes answer it, and the largest one answers it twice,
+		// once through each.
+		MetalGemm gemm = device();
+		int[][] shapes = { { 1, 1000, 1000, 1000 }, { 4, 256, 384, 192 }, { 3, 130, 70, 200 }, { 2, 64, 2048, 37 } };
+		Random random = new Random(20260902L);
+		for (int[] shape : shapes) {
+			int batch = shape[0], n = shape[1], m = shape[2], p = shape[3];
+			float[] a = new float[batch * n * m], b = new float[m * p];
+			for (int i = 0; i < a.length; i++) {
+				a[i] = random.nextFloat() - 0.5f;
+			}
+			for (int i = 0; i < b.length; i++) {
+				b[i] = random.nextFloat() - 0.5f;
+			}
+			// The same operands laid out the other way round, per slab: this is exactly
+			// what the copy pass used to produce, and what the kernel now reads through.
+			float[] at = new float[a.length], bt = new float[b.length];
+			for (int z = 0; z < batch; z++) {
+				for (int i = 0; i < n; i++) {
+					for (int k = 0; k < m; k++) {
+						at[z * n * m + k * n + i] = a[z * n * m + i * m + k];
+					}
+				}
+			}
+			for (int k = 0; k < m; k++) {
+				for (int j = 0; j < p; j++) {
+					bt[j * m + k] = b[k * p + j];
+				}
+			}
+			assertTransposedProductsAgree(a, at, b, bt, batch, n, m, p,
+					"%s".formatted(java.util.Arrays.toString(shape)));
+			if ((long) n * m * p >= MetalGemm.mpsMinWork()) {
+				// The one shape MPS takes, again on the tiled kernel: above the threshold
+				// the kernel is otherwise unreachable, and both routes carry the
+				// orientation.
+				boolean previous = gemm.setMps(false);
+				try {
+					assertTransposedProductsAgree(a, at, b, bt, batch, n, m, p,
+							"%s through the tiled kernel".formatted(java.util.Arrays.toString(shape)));
+				}
+				finally {
+					gemm.setMps(previous);
+				}
+			}
+		}
+	}
+
+	/**
+	 * The plain product of the transposed copies, and the same product with each operand
+	 * read transposed in place: three calls, one answer, bit for bit.
+	 */
+	private static void assertTransposedProductsAgree(float[] a, float[] at, float[] b, float[] bt, int batch, int n,
+			int m, int p, String at1) {
+		float[] plain = new float[batch * n * p], left = new float[batch * n * p], right = new float[batch * n * p];
+		assertThat(Gpu.multiply(a, 0, n * m, b, 0, 0, plain, 0, batch, n, m, p)).as("%s", at1).isTrue();
+		assertThat(Gpu.multiply(at, 0, n * m, true, b, 0, 0, false, left, 0, batch, n, m, p)).as("%s ta", at1).isTrue();
+		assertThat(Gpu.multiply(a, 0, n * m, false, bt, 0, 0, true, right, 0, batch, n, m, p)).as("%s tb", at1)
+			.isTrue();
+		assertBitIdentical(left, plain, "%s ta".formatted(at1));
+		assertBitIdentical(right, plain, "%s tb".formatted(at1));
+	}
+
+	@Test
 	void anInexactProductAgreesWithTheScalarOracleToTheWidthsOwnTolerance() {
 		// f32 is f32: a CPU accumulation of the same product at this width lands the same
 		// distance from the f64 oracle, so the tolerance is the WIDTH's and not the
@@ -487,6 +556,9 @@ class MetalGpuTest {
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_BCAST_F32);
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GATHER_F32);
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GEMV_F32);
+		for (String kernel : MetalGemm.KERNELS_FUSED) {
+			assertThat(msl).contains("kernel void " + kernel);
+		}
 		for (String kernel : MetalGemm.KERNELS_RESIDENT) {
 			assertThat(msl).contains("kernel void " + kernel);
 		}
@@ -1329,6 +1401,189 @@ class MetalGpuTest {
 	}
 
 	/** {@code laApply}: the CPU kernels' binary op table, in double. */
+	/**
+	 * One chain member, run on the DEVICE and asserted to have run there. Every member of
+	 * a fused composition is offered on this backend over a RESIDENT operand -- the folds
+	 * and the per-row members are below every size threshold here -- so the chain is
+	 * built under lazy results, which is what keeps each result on the device for the
+	 * next member to be offered over.
+	 */
+	private static final class Chain {
+
+		float[] fresh(int n) {
+			return new float[n];
+		}
+
+		float[] map(int op, float[] a) {
+			float[] c = fresh(a.length);
+			assertThat(Gpu.map(op, a, 0, c, 0, a.length)).as("map %d", op).isTrue();
+			return c;
+		}
+
+		float[] zip(int op, float[] a, float[] b) {
+			float[] c = fresh(a.length);
+			assertThat(Gpu.zip(op, a, 0, b, 0, c, 0, a.length)).as("zip %d", op).isTrue();
+			return c;
+		}
+
+		float[] scale(int op, float[] a, double s, boolean swap) {
+			float[] c = fresh(a.length);
+			assertThat(Gpu.scale(op, a, 0, s, swap, c, 0, a.length)).as("scale %d", op).isTrue();
+			return c;
+		}
+
+		/** {@code a}, {@code rows x len}, folded over its last axis. */
+		float[] fold(int op, float[] a, int rows, int len) {
+			float[] c = fresh(rows);
+			assertThat(Gpu.fold(op, a, 0, c, 0, rows, len, 1)).as("fold %d", op).isTrue();
+			return c;
+		}
+
+		/** {@code a}, {@code rows x len}, against the per-row {@code b}, broadcast. */
+		float[] bcast(int op, float[] a, float[] b, int rows, int len) {
+			float[] c = fresh(rows * len);
+			int[] dims = { rows, len }, sa = { len, 1 }, sb = { 1, 0 };
+			assertThat(Gpu.bcast(op, a, 0, sa, b, 0, sb, c, 0, dims)).as("bcast %d", op).isTrue();
+			return c;
+		}
+
+		float[] home(float[] a) {
+			Gpu.materialize(a);
+			return a;
+		}
+
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void theFusedTierLandsOnTheComposedDeviceChainsBits() {
+		// The whole claim of the tier (todo-636): a fused kernel IS the chain of device
+		// members it replaces, rounding for rounding -- so its result is that chain's bit
+		// for bit, libm members included (kernel and chain call the same exp and the same
+		// erf1 at the same width, and the same software binary64 where the chain's
+		// arithmetic is genuinely f64). Each composition runs twice, member by member and
+		// fused. Only #f: it is the only width here.
+		//
+		// The shape is 16384 rows of 64, because on THIS backend a chain member over the
+		// per-row intermediate (rows elements) has to clear MIN_RESIDENT_ELEMENTS to be
+		// offered at all -- the row count is what that bounds, not the element count.
+		Gpu.releaseResident();
+		int rows = (int) Math.max(MetalGemm.MIN_RESIDENT_ELEMENTS, 1024), len = 64, n = rows * len;
+		double eps = 1.0e-5;
+		Chain ch = new Chain();
+		Random random = new Random(11);
+		float[] x = new float[n], g = new float[n], old = new float[n], zeros = new float[n];
+		for (int i = 0; i < n; i++) {
+			x[i] = (float) (random.nextDouble() * 6 - 3);
+			g[i] = (float) (random.nextDouble() * 2 - 1);
+			old[i] = (float) random.nextDouble();
+		}
+		Gpu.lazyResults(true);
+		try {
+			makeResident(x);
+			makeResident(g);
+			makeResident(zeros);
+			// softmax: amax, sub, exp, sum, div.
+			float[] m = ch.fold(Gpu.FOLD_AMAX, x, rows, len);
+			float[] e = ch.map(Gpu.MAP_EXP, ch.bcast(Gpu.BIN_SUB, x, m, rows, len));
+			float[] out = ch.bcast(Gpu.BIN_DIV, e, ch.fold(Gpu.FOLD_SUM, e, rows, len), rows, len);
+			float[] fused = new float[n];
+			assertThat(Gpu.softmax(x, 0, fused, 0, rows, len)).isTrue();
+			assertBitIdentical(ch.home(fused), ch.home(out), "softmax");
+			// its adjoint: mul, sum, sub, mul.
+			float[] tot = ch.fold(Gpu.FOLD_SUM, ch.zip(Gpu.BIN_MUL, g, out), rows, len);
+			float[] dx = ch.zip(Gpu.BIN_MUL, out, ch.bcast(Gpu.BIN_SUB, g, tot, rows, len));
+			fused = new float[n];
+			assertThat(Gpu.softmaxGrad(g, 0, out, 0, fused, 0, rows, len)).isTrue();
+			assertBitIdentical(ch.home(fused), ch.home(dx), "softmax grad");
+			// log-softmax: amax, sub, exp, sum, log, sub -- the deviation recomputed in
+			// the kernel's third pass rather than stored, which is the same value.
+			float[] s = ch.bcast(Gpu.BIN_SUB, x, m, rows, len);
+			float[] lg = ch.map(Gpu.MAP_LOG, ch.fold(Gpu.FOLD_SUM, ch.map(Gpu.MAP_EXP, s), rows, len));
+			float[] lout = ch.bcast(Gpu.BIN_SUB, s, lg, rows, len);
+			fused = new float[n];
+			assertThat(Gpu.logSoftmax(x, 0, fused, 0, rows, len)).isTrue();
+			assertBitIdentical(ch.home(fused), ch.home(lout), "log-softmax");
+			// its adjoint: sum, exp, mul, sub.
+			float[] ldx = ch.zip(Gpu.BIN_SUB, g,
+					ch.bcast(Gpu.BIN_MUL, ch.map(Gpu.MAP_EXP, lout), ch.fold(Gpu.FOLD_SUM, g, rows, len), rows, len));
+			fused = new float[n];
+			assertThat(Gpu.logSoftmaxGrad(g, 0, lout, 0, fused, 0, rows, len)).isTrue();
+			assertBitIdentical(ch.home(fused), ch.home(ldx), "log-softmax grad");
+			// gelu: mul 0.5, div sqrt 2, erf, 1 + , mul.
+			float[] t1 = ch.scale(Gpu.BIN_MUL, x, 0.5, false);
+			float[] t2 = ch.scale(Gpu.BIN_DIV, x, 1.4142135623730951, false);
+			float[] t4 = ch.scale(Gpu.BIN_ADD, ch.map(Gpu.MAP_ERF, t2), 1.0, true);
+			float[] gelu = ch.zip(Gpu.BIN_MUL, t1, t4);
+			fused = new float[n];
+			assertThat(Gpu.gelu(x, 0, fused, 0, n)).isTrue();
+			assertBitIdentical(ch.home(fused), ch.home(gelu), "gelu");
+			// its adjoint, with and without an accumulated gradient to fold onto.
+			float[] g1 = ch.zip(Gpu.BIN_MUL, g, t4), g4 = ch.zip(Gpu.BIN_MUL, g, t1);
+			float[] ex = ch.map(Gpu.MAP_EXP, ch.map(Gpu.MAP_NEGATIVE, ch.zip(Gpu.BIN_MUL, t2, t2)));
+			float[] g2 = ch.zip(Gpu.BIN_MUL, g4, ch.scale(Gpu.BIN_MUL, ex, 1.1283791670955126, true));
+			float[] b = ch.scale(Gpu.BIN_DIV, g2, 1.4142135623730951, false);
+			float[] a = ch.scale(Gpu.BIN_MUL, g1, 0.5, false);
+			float[] dxNew = ch.zip(Gpu.BIN_ADD, b, a);
+			makeResident(old);
+			float[] dxOld = ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, old, b), a);
+			fused = new float[n];
+			float[] fusedOld = new float[n];
+			assertThat(Gpu.geluGrad(g, 0, x, 0, null, 0, fused, 0, n)).isTrue();
+			assertThat(Gpu.geluGrad(g, 0, x, 0, old, 0, fusedOld, 0, n)).isTrue();
+			assertBitIdentical(ch.home(fused), ch.home(dxNew), "gelu grad");
+			assertBitIdentical(ch.home(fusedOld), ch.home(dxOld), "gelu grad onto old");
+			// layer-norm: mean, sub, the variance's square / sum / divisor, eps, sqrt,
+			// div.
+			float[] mu = ch.scale(Gpu.BIN_DIV, ch.fold(Gpu.FOLD_SUM, x, rows, len), len, false);
+			float[] dev = ch.bcast(Gpu.BIN_SUB, x, mu, rows, len);
+			float[] v = ch.scale(Gpu.BIN_DIV, ch.fold(Gpu.FOLD_SUM, ch.zip(Gpu.BIN_MUL, dev, dev), rows, len), len,
+					false);
+			float[] sd = ch.map(Gpu.MAP_SQRT, ch.scale(Gpu.BIN_ADD, v, eps, false));
+			float[] norm = ch.bcast(Gpu.BIN_DIV, dev, sd, rows, len);
+			fused = new float[n];
+			assertThat(Gpu.layerNorm(x, 0, fused, 0, rows, len, eps)).isTrue();
+			assertBitIdentical(ch.home(fused), ch.home(norm), "layer-norm");
+			// its adjoint, the tape's own walk: the division's two adjoints, sqrt's, the
+			// divisor's, the broadcast onto zeros, the squared deviations' two, the two
+			// means' -- and the four contributions folded onto x's gradient in order.
+			float[] gDev = ch.bcast(Gpu.BIN_DIV, g, sd, rows, len);
+			float[] r = ch.bcast(Gpu.BIN_DIV, ch.zip(Gpu.BIN_MUL, g, dev), ch.zip(Gpu.BIN_MUL, sd, sd), rows, len);
+			float[] gSd = ch.fold(Gpu.FOLD_SUM, ch.map(Gpu.MAP_NEGATIVE, r), rows, len);
+			float[] gVe = ch.zip(Gpu.BIN_DIV, gSd, ch.scale(Gpu.BIN_MUL, sd, 2.0, true));
+			float[] gSq = ch.bcast(Gpu.BIN_ADD, zeros, ch.scale(Gpu.BIN_DIV, gVe, len, false), rows, len);
+			float[] gd2 = ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_MUL, gSq, dev), ch.zip(Gpu.BIN_MUL, gSq, dev));
+			float[] gM2 = ch.fold(Gpu.FOLD_SUM, ch.map(Gpu.MAP_NEGATIVE, gd2), rows, len);
+			float[] a2 = ch.scale(Gpu.BIN_DIV, ch.bcast(Gpu.BIN_ADD, zeros, gM2, rows, len), len, false);
+			float[] gMu = ch.fold(Gpu.FOLD_SUM, ch.map(Gpu.MAP_NEGATIVE, gDev), rows, len);
+			float[] a4 = ch.scale(Gpu.BIN_DIV, ch.bcast(Gpu.BIN_ADD, zeros, gMu, rows, len), len, false);
+			float[] lnNew = ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, gd2, a2), gDev), a4);
+			float[] lnOld = ch.zip(Gpu.BIN_ADD,
+					ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, old, gd2), a2), gDev), a4);
+			fused = new float[n];
+			float[] fusedOldLn = new float[n];
+			assertThat(Gpu.layerNormGrad(g, 0, x, 0, null, 0, fused, 0, rows, len, eps)).isTrue();
+			assertThat(Gpu.layerNormGrad(g, 0, x, 0, old, 0, fusedOldLn, 0, rows, len, eps)).isTrue();
+			assertBitIdentical(ch.home(fused), ch.home(lnNew), "layer-norm grad");
+			assertBitIdentical(ch.home(fusedOldLn), ch.home(lnOld), "layer-norm grad onto old");
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	void theDropoutMaskStaysDeclinedHere() {
+		// The one member of the nine that is NOT fused on this backend, and on the
+		// arithmetic rather than for want of a kernel: the Wichmann-Hill uniform is three
+		// binary64 divisions an element, which here are software restoring divides. The
+		// generator fill is already not a member for the same reason.
+		int n = (int) Gpu.mapMinElements() * 4;
+		assertThat(Gpu.dropoutMask(new float[n], 0, n, 0.1, 0.9, 11, 22, 33)).isFalse();
+		assertThat(Gpu.rngFill(new float[n], 0, n, 0, 0.0, 1.0, 11, 22, 33)).isFalse();
+	}
+
 	private static double apply(int op, double x, double y) {
 		return switch (op) {
 			case Gpu.BIN_ADD -> x + y;
