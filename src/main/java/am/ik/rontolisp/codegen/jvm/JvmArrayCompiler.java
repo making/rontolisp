@@ -251,6 +251,11 @@ final class JvmArrayCompiler {
 				JvmArrayRuntimeBuilder.DISP_OFFSET_DESC);
 	}
 
+	static void compileArrayUndisplace(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileUnary(cons, ctx, className, LispNames.ARRAY_UNDISPLACE, JvmArrayRuntimeBuilder.UNDISPLACE,
+				JvmArrayRuntimeBuilder.UNDISPLACE_DESC);
+	}
+
 	static void compileFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		compileUnary(cons, ctx, className, LispNames.FILL_POINTER, JvmArrayRuntimeBuilder.FILL_POINTER,
 				JvmArrayRuntimeBuilder.FILL_POINTER_DESC);

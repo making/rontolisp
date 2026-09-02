@@ -61,6 +61,7 @@ final class JvmArithCompiler {
 	private static void compileUnboxed(List<LispVal> args, JvmLispCompiler.Ctx ctx, String opKey, int doubleOpcode,
 			String className) {
 		boolean isMod = JvmNumericRuntimeBuilder.MOD.equals(opKey);
+		boolean isRem = JvmNumericRuntimeBuilder.REM.equals(opKey);
 		// Unary (/ x) is the reciprocal: 1.0 / x.
 		if (JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2) {
 			ctx.emit(Opcode.DCONST_1);
@@ -78,10 +79,13 @@ final class JvmArithCompiler {
 		compileUnboxedOperand(args.get(1), ctx, className);
 		for (int i = 2; i < args.size(); i++) {
 			compileUnboxedOperand(args.get(i), ctx, className);
-			if (isMod) {
-				// Common Lisp float modulo (sign of the divisor), not Java's DREM.
+			if (isMod || isRem) {
+				// Common Lisp float modulo (sign of the divisor) and remainder, neither
+				// of which is a bare DREM: _fmod corrects the sign of a nonzero result
+				// to the divisor's, and both take CLHS's sign for a ZERO result from
+				// _frem rather than IEEE fmod's sign-of-the-dividend.
 				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FMOD).index());
+				ctx.emitU2(ctx.numOp(isMod ? JvmNumericRuntimeBuilder.FMOD : JvmNumericRuntimeBuilder.FREM).index());
 			}
 			else {
 				ctx.emit(doubleOpcode);

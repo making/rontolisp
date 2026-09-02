@@ -1362,9 +1362,6 @@ public final class Environment implements Scope {
 				if (strDims.length != 1) {
 					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": a string is rank 1");
 				}
-				if (str.displacedTo() != null) {
-					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": displaced arrays are not supported");
-				}
 				str.adjustCapacity(strDims[0], requireChar(LispNames.ADJUST_ARRAY, init).codePoint());
 				return str;
 			}
@@ -1459,9 +1456,13 @@ public final class Environment implements Scope {
 	// it) or return the fresh copy. Matches LispMacroExpander.expandAdjustArray on the
 	// compile path.
 	private static LispVal adjustArray(LispArray array, int[] newDims, LispVal init, @Nullable LispVal fillPointerArg) {
-		if (array.displacedTo() != null) {
-			throw new LispEvalException(LispNames.ADJUST_ARRAY + ": displaced arrays are not supported");
-		}
+		// A displaced argument un-displaces first (SBCL 2.2.9): its current view
+		// contents become its own storage and the displacement drops, in place, before
+		// the rest of the adjustment runs -- matches the compile path's expansion,
+		// which calls %array-undisplace unconditionally too, and is what lets the
+		// :adjustable branch's become() below (which replaces dims/data/fillPointer but
+		// not displacedTo/Offset) leave the adjusted array in a consistent state.
+		array.undisplace();
 		int[] oldDims = array.dimensions();
 		if (newDims.length != oldDims.length) {
 			throw new LispEvalException(LispNames.ADJUST_ARRAY + ": rank mismatch");
@@ -2151,7 +2152,7 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				double a = asDouble(args.get(0));
 				double b = asDouble(args.get(1));
-				double r = a % b;
+				double r = integerQuotientZero(a, b, a % b);
 				if (r != 0 && ((r < 0) != (b < 0))) {
 					r += b;
 				}
@@ -2175,7 +2176,9 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.REM, new LispFunction(LispNames.REM, args -> {
 			requireArgCount(LispNames.REM, args, 2);
 			if (hasDouble(args)) {
-				return new LispDouble(asDouble(args.get(0)) % asDouble(args.get(1)));
+				double a = asDouble(args.get(0));
+				double b = asDouble(args.get(1));
+				return new LispDouble(integerQuotientZero(a, b, a % b));
 			}
 			if (hasRatio(args)) {
 				return rationalRemainder(args.get(0), args.get(1), false);
@@ -2220,6 +2223,11 @@ public final class Environment implements Scope {
 		//
 		// This is deliberately NOT Math.min/Math.max, which resolve a signed-zero tie by
 		// sign and propagate NaN from either side.
+		//
+		// No float contagion, either: the winning operand comes back exactly as it
+		// stands, so (min 1 2.0) is the rational 1, not the double 1.0. CLHS leaves this
+		// implementation-dependent too, and SBCL does not coerce -- matching it, and our
+		// own compiled backends' general path, is the reason to pick this one.
 		env.defineFunction(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
 			requireMinArgCount(LispNames.MIN, args, 1);
 			LispVal best = args.get(0);
@@ -2230,7 +2238,7 @@ public final class Environment implements Scope {
 					best = cand;
 				}
 			}
-			return hasDouble(args) ? new LispDouble(asDouble(best)) : best;
+			return best;
 		}));
 		env.defineFunction(LispNames.MAX, new LispFunction(LispNames.MAX, args -> {
 			requireMinArgCount(LispNames.MAX, args, 1);
@@ -2242,7 +2250,7 @@ public final class Environment implements Scope {
 					best = cand;
 				}
 			}
-			return hasDouble(args) ? new LispDouble(asDouble(best)) : best;
+			return best;
 		}));
 		env.defineFunction(LispNames.ONE_PLUS, new LispFunction(LispNames.ONE_PLUS, args -> {
 			requireArgCount(LispNames.ONE_PLUS, args, 1);
@@ -6850,6 +6858,25 @@ public final class Environment implements Scope {
 			return BigInteger.ONE;
 		}
 		throw new LispEvalException("Expected rational, got: " + val.print());
+	}
+
+	/**
+	 * The float arm's ZERO remainder, shared by {@code mod} and {@code rem}. CLHS defines
+	 * {@code rem} as the remainder of {@code truncate} and {@code mod} as the remainder
+	 * of {@code floor}, and both of those are {@code number -
+	 * divisor*quotient} with an exact INTEGER quotient -- NOT IEEE {@code fmod}, whose
+	 * zero takes the sign of the dividend whatever the divisor. The two readings differ
+	 * only when the remainder is zero: everywhere else Java's {@code %} is the exact
+	 * value that formula denotes (and is exact where evaluating the formula in f64 is
+	 * not), so only the zero is re-derived. A zero dividend has an exact quotient of
+	 * {@code +0}, leaving {@code divisor*quotient} with the DIVISOR's sign; a nonzero
+	 * dividend cancels against itself, and IEEE makes {@code x - x} a {@code +0.0}.
+	 */
+	private static double integerQuotientZero(double a, double b, double r) {
+		if (r != 0.0) {
+			return r; // nonzero, or NaN
+		}
+		return a == 0.0 ? a - Math.copySign(0.0, b) : 0.0;
 	}
 
 	/**

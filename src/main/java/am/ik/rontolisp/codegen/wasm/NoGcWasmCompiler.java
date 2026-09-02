@@ -2885,23 +2885,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
 		fn.writer.write(Instruction.F64_DIV);
 		fn.writer.write(mod ? Instruction.F64_FLOOR : Instruction.F64_TRUNC);
+		// CLHS's quotient is an exact INTEGER, and an integer zero is +0, where
+		// f64.floor/f64.trunc keep the sign of a zero quotient: a = -0.0 over a positive
+		// b gives q = -0.0, so b*q = -0.0 and the cancellation -0.0 - (-0.0) is +0.0
+		// where CLHS wants -0.0. Adding +0.0 to the quotient is that coercion and
+		// nothing else, so the subtraction then carries the right sign of zero itself.
+		// Kept identical to the wasm-GC _rat_rem/_rat_mod float arm.
+		fn.writer.write(Instruction.F64_CONST).writeF64(0.0);
+		fn.writer.write(Instruction.F64_ADD);
 		fn.writer.write(Instruction.F64_MUL);
 		fn.writer.write(Instruction.F64_SUB);
-		// A zero remainder takes the sign of the DIVIDEND, as IEEE fmod defines it and as
-		// every other backend computes it. The subtraction cannot produce that alone:
-		// f64.floor/f64.trunc keep the sign of a zero quotient, so a = -0.0 gives
-		// b*q = -0.0 and the cancellation -0.0 - (-0.0) is +0.0. Nonzero remainders keep
-		// the sign they already have.
-		int r = fn.allocLocal(Ty.FLOAT);
-		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(r);
-		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(r);
-		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(a);
-		fn.writer.write(Instruction.F64_COPYSIGN);
-		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(r);
-		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(r);
-		fn.writer.write(Instruction.F64_CONST).writeF64(0.0);
-		fn.writer.write(Instruction.F64_EQ);
-		fn.writer.write(Instruction.SELECT);
 		return Ty.FLOAT;
 	}
 

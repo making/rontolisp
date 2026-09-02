@@ -140,6 +140,19 @@ out, profiled both, and showed the copy and synchronisation counts identical to 
 argued. A per-call table that says nothing about which traps were considered is not
 evidence that none applied.
 
+### Telling a wake-up from a cold cache
+
+A gap between calls slows the next one for two unrelated reasons -- a pool that parked its
+workers, and a cache that lost the operand -- and the fix for one does nothing for the
+other, so a probe that sees a gap cost has not yet learned anything. **Cap the pool to one
+thread and re-take the SAME gapped measurement: what the cap removes was the wake-up, what
+survives it was the cache.** It is cheaper than reading a thread count and it works on a
+library that will not tell you one -- todo-651 had to use it, because Accelerate exports
+none of the seven thread-query symbols. It found both halves at once: OpenBLAS's 17.4 ->
+90.0 us at 288x288 collapses under the cap (a wake-up), while a small shape's 0.85 -> 1.75
+us does not move under it at all (a cache). Nothing here is about BLAS; it applies to
+anything with a pool behind it.
+
 ## Rule 2: price the CEILING of a proposal before building it
 
 **Measure the most the idea could possibly be worth. If the ceiling is not significant,
@@ -149,8 +162,8 @@ land the measurement, not the change" turned into a procedure: the point is to f
 bound BEFORE writing the thing, because once it is written the pull to land it is real and
 the comparison is no longer free.
 
-The ceiling is usually reachable by a cheat that would be unacceptable to ship. Two items
-closed this way without an implementation:
+The ceiling is usually reachable by a cheat that would be unacceptable to ship. Three
+items closed this way without an implementation:
 
 - `.todo/635` (`.kb/gpu.md`, "The last-axis fold's tiling"): the tiled last-axis fold wins
   1.33-1.96x as a KERNEL, which sounds decisive -- and then the census of the workload
@@ -161,7 +174,6 @@ closed this way without an implementation:
   measure, it FORCED every one of the 144 heads to be accepted (`WIDEN=1`, materializing
   the mask to the score's shape) and measured that. 0.06 s over 13 steps, 0.8%, inside the
   noise. The accept rule was left alone.
-
 - `.todo/655` (`.kb/gpu.md`, "Ceiling 2"): the chapter-2 step's copy profile attributed 2
   of its 4 remaining downloads a step to one mixed-width `linalg:add`, which reads as money
   on the table. The ceiling -- the operand rewritten to the matching width so the member is
@@ -178,6 +190,15 @@ been taken first, against the chain the decline already ran.
 
 Note what a ceiling does NOT excuse: it is still a measurement, so rule 1 applies to it.
 todo-650's ceiling was taken in the model with a structural count, not in a probe.
+
+**And a ceiling is only a ceiling over the layers beneath it as they stand.** The same
+proposal -- widen the fused softmax's accept rule -- was worth something before todo-650
+removed the materialize under it and worth NOTHING after, on both backends independently:
+0.8% on CUDA, and on Metal actually negative (0.709 against 0.684 s), because with the
+round trips gone the only thing left to widening is the cost of building the two broadened
+masks. A ceiling priced before a fix underneath lands is a ceiling over a workload that no
+longer exists. This is rule 3 one level up: there, the baseline moved under an A/B; here,
+the bound moved under a decision not to build.
 
 ## Rule 3: an A/B whose baseline moved is not an A/B
 

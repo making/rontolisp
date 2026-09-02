@@ -16,7 +16,9 @@ final class JvmMaxCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
+		// See JvmMinCompiler for why this is isDefinitelyDouble, not hasDoubleLiteral.
+		if (JvmLispCompiler.isDefinitelyDouble(args.get(1), ctx)
+				&& JvmLispCompiler.isDefinitelyDouble(args.get(2), ctx)) {
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			ctx.emit(Opcode.INVOKESTATIC);

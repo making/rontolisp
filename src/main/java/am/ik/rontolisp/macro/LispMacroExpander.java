@@ -19948,7 +19948,7 @@ public final class LispMacroExpander {
 						LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
 						LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
 						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DEFAULT_ELEMENT,
-						LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.COERCE,
+						LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.ARRAY_UNDISPLACE, LispNames.COERCE,
 						// fill/read-sequence/write-sequence join the list for the same
 						// reason as make-string: each has an array-typed arm the JVM
 						// backend's array runtime gate must see coming, or the injected
@@ -23367,8 +23367,11 @@ public final class LispMacroExpander {
 	 * pointer is carried over ({@code make-array} range-checks it against the new size),
 	 * and the fresh copy adopts the adjusted array's remembered element type
 	 * ({@code %array-adopt-element-type}), which {@code adjust-array} never changes.
-	 * {@code :displaced-to} is rejected at expansion time; displaced input arrays are
-	 * rejected at runtime. Matches the interpreter's {@code adjust-array} built-in.
+	 * {@code :displaced-to} is rejected at expansion time. A DISPLACED input array
+	 * un-displaces first ({@code %array-undisplace}, in place) -- its current view
+	 * contents become its own storage and the displacement drops, matching SBCL 2.2.9 --
+	 * before the rest of the expansion runs. Matches the interpreter's
+	 * {@code adjust-array} built-in.
 	 * @param cons the adjust-array expression
 	 * @return the expanded expression
 	 */
@@ -23419,22 +23422,29 @@ public final class LispMacroExpander {
 		// the carried-over fill pointer: the explicit expression, else the array's own
 		LispVal fpInit = fpExpr != null ? fpExpr : makeIf(callOf(LispNames.ARRAY_HAS_FILL_POINTER_P, a),
 				callOf(LispNames.FILL_POINTER, a), LispNil.INSTANCE);
-		List<LispVal> bindings = List.of(listToCons(List.of(a, parts.get(1))), listToCons(List.of(nd, parts.get(2))),
+		// `a` un-displaces (SBCL 2.2.9) as PART of its own binding, before any later
+		// binding reads it: its current view contents become its own storage and the
+		// displacement drops, in place. Later than this the ordering would matter --
+		// %array-adopt-element-type's stamp (the newArr binding just below) can only
+		// read a chain-resolved element type off a NON-displaced array (a displaced
+		// array's marker word doubles as its offset, so it reads as "remembers
+		// nothing" while still displaced), and %array-become (the :adjustable half of
+		// the result) would otherwise leave the adjusted array pointing at data it no
+		// longer owns.
+		List<LispVal> bindings = List.of(listToCons(List.of(a, callOf(LispNames.ARRAY_UNDISPLACE, parts.get(1)))),
+				listToCons(List.of(nd, parts.get(2))),
 				listToCons(List.of(ndl,
 						makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
 				listToCons(List.of(od, callOf(LispNames.ARRAY_DIMENSIONS, a))), listToCons(List.of(fp, fpInit)),
 				listToCons(List.of(newArr, mvCall(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, listToCons(makeParts), a))),
 				listToCons(List.of(total, callOf(LispNames.ARRAY_TOTAL_SIZE, newArr))));
-		LispVal displacedCheck = makeIf(callOf(LispNames.ARRAY_DISP_TARGET, a),
-				mvCall(LispNames.ERROR, new LispString("adjust-array: displaced arrays are not supported")),
-				LispNil.INSTANCE);
 		LispVal rankCheck = makeIf(mvCall(LispNames.EQ, callOf(LispNames.LENGTH, ndl), callOf(LispNames.LENGTH, od)),
 				LispNil.INSTANCE, mvCall(LispNames.ERROR, new LispString("adjust-array: rank mismatch")));
 		LispVal copyLoop = adjustArrayCopyLoop(a, ndl, od, newArr, total);
 		LispVal result = makeIf(callOf(LispNames.ADJUSTABLE_ARRAY_P, a), mvCall(LispNames.ARRAY_BECOME, a, newArr),
 				newArr);
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), displacedCheck, rankCheck,
-				copyLoop, result));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), rankCheck, copyLoop, result));
 	}
 
 	// The element-copy loop of expandAdjustArray: for every row-major index of the new
