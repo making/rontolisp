@@ -628,6 +628,18 @@ silently narrow was therefore read against `CudaGemm`:
 **No narrowing.** Every shape-level accept rule on this backend lives in `Gpu`, above the
 device; `CudaGemm` adds only `usable` and allocation failure.
 
+**`MetalGemm` was read against the same clauses on 2026-09-03, and narrows nothing either.**
+Its softmax family takes a mask of either width -- `.todo/643` built it that way from the
+start, because the pack kernel reads the mask as a raw word (one for `f32`, two for `f64`,
+low half first) and so needs an integer test rather than the `fp64` arithmetic this backend
+does not have; `.todo/645` later applied that same shape to `whereF`. `gemmFT` passes `ta`
+and `tb` through to the dispatch and refuses no orientation, so both backends are WIDER than
+the clause allows and the production accept rate is the same on each. The one robustness
+note below is CUDA's alone: `MetalGemm.whereF` and its `softmaxScaledMasked` write the
+non-array mask as the same explicit refusal, so there is no pair of spellings there. **The
+contract-versus-implementation sweep is therefore closed on both backends with `.todo/645`
+as its only ever finding** -- recorded so the next reader does not repeat the comparison.
+
 **And no PRODUCTION code does arithmetic on a threshold.** That question is worth asking
 separately, because Metal's fold threshold is `Long.MAX_VALUE` and `2 * Long.MAX_VALUE`
 wraps NEGATIVE -- which is how `GpuOfferDifferentialTest` came to run every one of its
