@@ -2809,6 +2809,65 @@ property the `--simd` and `--blas` bridges have, and the reason the compiled-bac
 give each program a fresh `URLClassLoader`. Each such loader also probes and JIT-loads the
 module again; a real program has one.
 
+### The offer is decided twice, and what pins the two (todo-654, 2026-09-03)
+
+The library travels, but the DECISION to offer a shape to it does not: `eval/LinalgGpu` is
+what the interpreter runs and `codegen/jvm/JvmGpuTemplate` is the copy the compiled program
+carries, and both sit ABOVE `am.ik.gpu`, so neither backend can correct a disagreement
+between them. A shape one accepts and the other declines is a program that runs
+`java -jar` and `-o out.class` down different paths, at the same inputs, with nothing
+failing.
+
+**The pin is `codegen/jvm/GpuOfferDifferentialTest`**, and it is deliberately not thirteen
+per-helper assertions. The two files share thirteen predicates -- twelve under one name each
+(`batchStride`, `bcast`, `bcastShape`, `bcastStrides`, `copyInto`, `foldAxis`, `map`,
+`resident`, `rowMajorStrides`, `sameShape`, `scale`, `zip`) and one under TWO,
+`LinalgGpu.suffixLength` against `JvmGpuTemplate.softmaxMaskLength`, which is why
+`grep -rn suffixLength` reads as if the mask rule were written once. A helper-name net never
+had that pair in it, and thirteen assertions would say nothing about a fourteenth. So the
+question is asked from OUTSIDE both paths instead: one set of operands, each path's own call
+shape, and the two must agree on accept versus decline and, where they accept, answer the
+same bits. The shapes are chosen at the accept BOUNDARY, not for coverage -- a mask that is
+a trailing suffix and one whose middle axis is extent 1 (the `(batch 1 key)` shape .todo/650
+was filed for), an exactly-equal pair, a rank mismatch, a fold on the last axis and one that
+is not, a resident operand and a fresh one, both widths -- and a census assertion fails the
+run if the table did not both accept and decline, which is what stops a machine that turned
+everything down from agreeing vacuously.
+
+**Only one of its two halves runs on a GPU-less machine, and that is a real gap.** The
+member SET differential is device-free: every name the compile path claims
+(`JvmLinalgGpu.qualifiedMembers()`) is bound to a sentinel and handed to
+`LinalgGpu.install`, which OVERRIDES what it accelerates -- a name still bound to the
+sentinel is one the interpreter does not accelerate, and a name the interpreter accelerates
+that the compile path never claimed makes `install` throw with the member in the message. The
+SHAPE half cannot be asked without a device, and the reason is structural rather than a
+choice: on both paths a shape decline and a no-device decline are the same `null`, and the
+compiled bridge fuses `!Gpu.available()` into the same `||` as the shape tests. `Probe.DEVICE`
+is a static final holder and `GpuDevice` is `sealed permits CudaGemm, MetalGemm`, so no test
+can stand a device up to separate the two. Making the shape half CI-visible therefore means a
+say-yes-to-everything `GpuDevice` inside `am.ik.gpu` -- which would have to join `GPU_CLASSES`
+and travel in every compiled program, and which silently answers zeros if it is ever switched
+on by accident. That is its own item, not this one's.
+
+**The thirteen bodies, read against each other.** Four are word-for-word once the two
+representations are allowed for -- `bcastShape`, `bcastStrides`, `rowMajorStrides` and
+`batchStride` (whose declarations sit in a different order and whose arithmetic does not),
+and so is the loop inside `suffixLength` / `softmaxMaskLength`. The rest say the same thing
+differently, always because a `LispFloatArray` carries `dims()` and `storage()` where a
+compiled array carries a `[rank, dim...]` header: `sameShape` compares `Arrays.equals` on one
+side and rank-then-length-then-each-dim on the other; `resident` is one hop of indirection
+apart; `copyInto` passes a `{0, totalSize}` span where the bridge passes
+`{1 + rank, length - 1 - rank}`, which is the same span offset by the header; and `map`,
+`bcast`, `zip`, `scale` and `foldAxis` make the same decisions in the same order with three
+guards the bridge needs and the interpreter does not -- `rank < 1`, `count < 1` and a
+`total + 1 + rank` overflow bound, because a header can describe a rank-0 or empty array. **No
+pair is a different predicate.** The three extra guards can only bite over a rank-0 or
+zero-extent operand, and every tier that reaches them wants a RESIDENT operand, which such an
+array can never become -- nothing uploads one. The same closes the one arithmetic near-miss:
+`suffixLength` answers `0` only when a mask extent is 0, the interpreter declines `< 1` and
+the bridge `< 0`, and a zero extent in the mask forces the matching zero in the operand, which
+both paths decline for having no rows before either sees the mask at all.
+
 ## Tests
 
 | what | where |
@@ -2820,6 +2879,7 @@ module again; a real program has one.
 | the interpreter's interceptor, needs a device | `eval/LinalgGpuTest` |
 | the interpreter's interceptor, every machine | `eval/LinalgGpuDeclineTest` |
 | the compiled interceptor, both halves | `codegen/jvm/JvmLinalgGpuAccelCompilerTest` |
+| the two paths' OFFER, differentially -- the member set on every machine, the shapes on a device | `codegen/jvm/GpuOfferDifferentialTest` |
 | the flag is value-less, the REPL pair, the `.wasm` refusal | `cli/CliOptionsTest`, `cli/RontoLispCliTest` |
 
 **The dead-flag guard is the load-bearing one**, as it is for `--blas`: every numeric

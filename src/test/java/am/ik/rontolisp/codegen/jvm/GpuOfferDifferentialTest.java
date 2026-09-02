@@ -24,6 +24,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.eval.Environment;
 import am.ik.rontolisp.eval.LinalgGpu;
 import am.ik.rontolisp.eval.LispEvaluator;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 
@@ -32,11 +33,11 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * The ONE differential over the {@code --gpu} device-offer predicates, which are decided
- * TWICE: {@code eval/LinalgGpu} is what the interpreter runs and
- * {@link JvmGpuTemplate} is the copy a compiled program carries, and both sit ABOVE
- * {@code am.ik.gpu}, so neither backend can correct a disagreement between them. A shape
- * one accepts and the other declines is a program that runs {@code java -jar} and
- * {@code -o out.class} down different paths, at the same inputs, with nothing failing.
+ * TWICE: {@code eval/LinalgGpu} is what the interpreter runs and {@link JvmGpuTemplate}
+ * is the copy a compiled program carries, and both sit ABOVE {@code am.ik.gpu}, so
+ * neither backend can correct a disagreement between them. A shape one accepts and the
+ * other declines is a program that runs {@code java -jar} and {@code -o out.class} down
+ * different paths, at the same inputs, with nothing failing.
  *
  * <p>
  * <strong>This is deliberately not a per-helper pin.</strong> The two files share
@@ -73,20 +74,24 @@ class GpuOfferDifferentialTest {
 	 * shape meant to probe a PREDICATE is never declined for its size instead -- which
 	 * would make the case agree vacuously.
 	 */
-	private static final long BIG = 2 * Math.max(
-			Math.max(am.ik.gpu.GpuThresholds.mapMinElements(), am.ik.gpu.GpuThresholds.stridedMinElements()),
-			Math.max(am.ik.gpu.GpuThresholds.foldMinElements(), am.ik.gpu.GpuThresholds.fusedMinElements()));
+	private static final long BIG = 2
+			* Math.max(Math.max(am.ik.gpu.GpuThresholds.mapMinElements(), am.ik.gpu.GpuThresholds.stridedMinElements()),
+					Math.max(am.ik.gpu.GpuThresholds.foldMinElements(), am.ik.gpu.GpuThresholds.fusedMinElements()));
 
 	/** The last axis of every rank-3 operand -- a softmax row, and a fold's inner run. */
 	private static final int C = 64;
 
-	/** The middle axis, which must be above 1 for the extent-1 mask case to mean anything. */
+	/**
+	 * The middle axis, which must be above 1 for the extent-1 mask case to mean anything.
+	 */
 	private static final int R = 8;
 
 	/** The leading axis, sized so that {@code B * R * C} clears {@link #BIG}. */
 	private static final int B = (int) Math.max(2, (BIG + (long) R * C - 1) / ((long) R * C));
 
-	/** The side of the smallest square product this machine accepts, with a safety factor. */
+	/**
+	 * The side of the smallest square product this machine accepts, with a safety factor.
+	 */
 	private static final int SIDE = squareSide();
 
 	private static int squareSide() {
@@ -104,23 +109,36 @@ class GpuOfferDifferentialTest {
 	 * @param resident whether the operand must be RESIDENT when the member is offered
 	 * @param single {@code null} to follow the run's width, else the operand's own
 	 */
-	private record Operand(int[] dims, boolean resident, Boolean single) {
+	private record Operand(int[] dims, boolean resident, @Nullable Boolean single) {
 		Operand(int... dims) {
 			this(dims, false, null);
 		}
 
-		Operand resident() {
+		Operand warmed() {
 			return new Operand(this.dims, true, this.single);
 		}
 
 		Operand asSingle() {
 			return new Operand(this.dims, this.resident, Boolean.TRUE);
 		}
+
+		Operand asDouble() {
+			return new Operand(this.dims, this.resident, Boolean.FALSE);
+		}
 	}
 
-	/** An axes list argument: a Lisp proper list on one path, a compiled one on the other. */
+	/**
+	 * An axes list argument: a Lisp proper list on one path, a compiled one on the other.
+	 */
 	private record Axes(long... axes) {
 	}
+
+	/**
+	 * The absent argument -- {@code nil} to the interpreter, a Java {@code null} to the
+	 * bridge. A stand-in rather than a bare {@code null} so that a case's argument list
+	 * holds no nulls of its own and the two encodings stay each other's mirror.
+	 */
+	private static final Object NIL = new Object();
 
 	/**
 	 * One boundary case. The arguments appear twice because the two paths take genuinely
@@ -178,7 +196,8 @@ class GpuOfferDifferentialTest {
 		assertThat(notAccelerated).as("claimed by the compiled bridge, not accelerated by the interpreter").isEmpty();
 	}
 
-	// --- the half that needs a device ---------------------------------------------------
+	// --- the half that needs a device
+	// ---------------------------------------------------
 
 	/**
 	 * Every case in {@link #boundary()}, at both widths the machine has: the two paths
@@ -188,12 +207,22 @@ class GpuOfferDifferentialTest {
 	@Test
 	@EnabledIf("aDeviceIsAvailable")
 	void theTwoPathsAgreeOnEveryBoundaryShapeAndOnTheBits() {
+		int accepted = 0, declined = 0;
 		for (Case boundary : boundary()) {
-			if (DOUBLES) {
-				assertAgree(boundary, false);
+			for (boolean single : DOUBLES ? new boolean[] { false, true } : new boolean[] { true }) {
+				if (assertAgree(boundary, single)) {
+					accepted++;
+				}
+				else {
+					declined++;
+				}
 			}
-			assertAgree(boundary, true);
 		}
+		// The census, which is what stops the whole table from agreeing VACUOUSLY: a
+		// machine whose device turned every shape down -- or a table whose shapes all
+		// fell below a threshold -- would pass every assertion above and pin nothing.
+		assertThat(accepted).as("shapes both paths ACCEPTED").isGreaterThan(10);
+		assertThat(declined).as("shapes both paths DECLINED").isGreaterThan(10);
 	}
 
 	/**
@@ -209,10 +238,10 @@ class GpuOfferDifferentialTest {
 	private static List<Case> boundary() {
 		List<Case> cases = new ArrayList<>();
 		Operand a = new Operand(B, R, C);
-		double scale = 8.0, fill = -1.0e9;
+		Operand warm = a.warmed();
 		// The mask rule -- the pair that carries two names. Its dims, leading extent-1
 		// axes dropped, must be a SUFFIX of the operand's.
-		cases.add(softmax("no mask at all", a, null, 2L));
+		cases.add(softmax("no mask at all", a, NIL, 2L));
 		cases.add(softmax("the mask is the last axis", a, new Operand(C), 2L));
 		cases.add(softmax("the mask is the trailing two axes", a, new Operand(R, C), 2L));
 		cases.add(softmax("the mask is the operand's own shape", a, new Operand(B, R, C), 2L));
@@ -230,23 +259,23 @@ class GpuOfferDifferentialTest {
 		// tier's and is declined at any size over an operand the device has not seen; a
 		// BROADCAST pair is the strided tier's and is taken from the size threshold.
 		cases.add(binary("equal shapes over a fresh operand", a, a));
-		cases.add(binary("equal shapes over a RESIDENT operand", a.resident(), a.resident()));
+		cases.add(binary("equal shapes over a RESIDENT operand", warm, warm));
 		cases.add(binary("a broadcast pair above the threshold", a, new Operand(1, 1, C)));
 		cases.add(binary("a broadcast pair stretched in the middle", a, new Operand(1, R, 1)));
 		cases.add(binary("a rank mismatch, above the threshold", a, new Operand(C)));
 		cases.add(binary("a rank mismatch below the threshold", new Operand(R, C), new Operand(C)));
 		cases.add(binary("an incompatible extent", a, new Operand(B, R + 1, C)));
-		cases.add(binary("a mixed-width pair", a, new Operand(B, R, C).asSingle()));
+		cases.add(binary("a mixed-width pair", a.asDouble(), new Operand(B, R, C).asSingle()));
 		cases.add(binary("a fresh array with a scalar", a, 2.0));
-		cases.add(binary("a RESIDENT array with a scalar", a.resident(), 2.0));
-		cases.add(binary("a scalar on the LEFT of a resident array", 2.0, a.resident()));
+		cases.add(binary("a RESIDENT array with a scalar", a.warmed(), 2.0));
+		cases.add(binary("a scalar on the LEFT of a RESIDENT array", 2.0, a.warmed()));
 		// The axis fold, whose output shape decides as much as its axis does.
 		cases.add(fold("a fold on the LAST axis", a, 2L, false));
 		cases.add(fold("a fold on the leading axis", a, 0L, false));
 		cases.add(fold("a fold on the middle axis, keeping it", a, 1L, true));
 		cases.add(fold("the negative axis is the last one", a, -1L, false));
 		cases.add(fold("an axis out of range", a, 3L, false));
-		cases.add(fold("the whole-array form has no axis", a, null, false));
+		cases.add(fold("the whole-array form has no axis", a, NIL, false));
 		cases.add(fold("a vector folded away leaves no output shape", new Operand(B * R * C), 0L, false));
 		cases.add(fold("a vector folded with :keepdims does", new Operand(B * R * C), 0L, true));
 		// The stacked product's per-batch stride, which is ARITHMETIC and not just an
@@ -267,26 +296,26 @@ class GpuOfferDifferentialTest {
 		return cases;
 	}
 
-	private static Case softmax(String why, Operand a, Operand mask, long axis) {
-		List<Object> args = Arrays.asList(a, 8.0, mask, -1.0e9, axis);
+	private static Case softmax(String why, Operand a, Object mask, long axis) {
+		List<Object> args = List.of(a, 8.0, mask, -1.0e9, axis);
 		return new Case(LispNames.LINALG_SCALED_MASKED_SOFTMAX, true, false, why, args, args);
 	}
 
 	private static Case binary(String why, Object left, Object right) {
-		List<Object> args = Arrays.asList(left, right);
+		List<Object> args = List.of(left, right);
 		return new Case(LispNames.LINALG_ADD, false, false, why, args, args);
 	}
 
-	private static Case fold(String why, Operand a, Long axis, boolean keepdims) {
+	private static Case fold(String why, Operand a, Object axis, boolean keepdims) {
 		List<Object> lisp = keepdims
-				? Arrays.asList(a, new LispSymbol(":AXIS"), axis, new LispSymbol(":KEEPDIMS"), Boolean.TRUE)
-				: Arrays.asList(a, new LispSymbol(":AXIS"), axis);
-		List<Object> compiled = Arrays.asList(a, axis, keepdims ? Boolean.TRUE : null);
+				? List.of(a, new LispSymbol(":AXIS"), axis, new LispSymbol(":KEEPDIMS"), Boolean.TRUE)
+				: List.of(a, new LispSymbol(":AXIS"), axis);
+		List<Object> compiled = List.of(a, axis, keepdims ? Boolean.TRUE : NIL);
 		return new Case(LispNames.LINALG_SUM, false, true, why, lisp, compiled);
 	}
 
 	private static Case product(String why, Operand left, Operand right) {
-		List<Object> args = Arrays.asList(left, right);
+		List<Object> args = List.of(left, right);
 		return new Case(LispNames.LINALG_MATMUL_ND, true, false, why, args, args);
 	}
 
@@ -296,13 +325,14 @@ class GpuOfferDifferentialTest {
 	}
 
 	private static Case transpose(String why, Operand a, Axes axes) {
-		List<Object> args = Arrays.asList(a, axes);
+		List<Object> args = List.of(a, axes);
 		return new Case(LispNames.LINALG_TRANSPOSE, false, true, why, args, args);
 	}
 
-	// --- running one case on each path ---------------------------------------------------
+	// --- running one case on each path
+	// ---------------------------------------------------
 
-	private void assertAgree(Case boundary, boolean single) {
+	private boolean assertAgree(Case boundary, boolean single) {
 		String what = boundary.member() + " -- " + boundary.why() + (single ? " (single-float)" : " (double-float)");
 		Map<Operand, Object> lispOperands = new IdentityHashMap<>();
 		List<LispVal> lispArgs = new ArrayList<>();
@@ -310,20 +340,22 @@ class GpuOfferDifferentialTest {
 			lispArgs.add(toLisp(arg, single, lispOperands));
 		}
 		Map<Operand, Object> compiledOperands = new IdentityHashMap<>();
-		Object[] compiledArgs = new Object[boundary.compiled().size()];
+		@Nullable Object[] compiledArgs = new @Nullable Object[boundary.compiled().size()];
 		for (int i = 0; i < compiledArgs.length; i++) {
 			compiledArgs[i] = toCompiled(boundary.compiled().get(i), single, compiledOperands);
 		}
-		LispVal fromInterpreter = interceptor(boundary).body().apply(lispArgs);
-		Object fromCompiled = invoke(bridge(boundary), compiledArgs);
+		LispVal fromInterpreter = interceptor(boundary.member(), boundary.internal()).body().apply(lispArgs);
+		Object fromCompiled = invoke(bridge(boundary.member(), boundary.extended(), compiledArgs.length), compiledArgs);
 		boolean interpreterAccepted = !(fromInterpreter instanceof LispNil);
 		assertThat(fromCompiled != null).as("accepted, on the compiled path: %s", what).isEqualTo(interpreterAccepted);
 		if (!interpreterAccepted) {
-			return;
+			return false;
 		}
 		LispFloatArray accepted = (LispFloatArray) fromInterpreter;
-		assertThat(shapeOf(fromCompiled)).as("the result's shape: %s", what).isEqualTo(accepted.dims());
-		assertThat(bitsOf(fromCompiled)).as("the result's bits: %s", what).isEqualTo(bitsOf(accepted));
+		Object packed = java.util.Objects.requireNonNull(fromCompiled);
+		assertThat(shapeOf(packed)).as("the result's shape: %s", what).isEqualTo(accepted.dims());
+		assertThat(bitsOf(packed)).as("the result's bits: %s", what).isEqualTo(bitsOf(accepted));
+		return true;
 	}
 
 	/**
@@ -331,27 +363,29 @@ class GpuOfferDifferentialTest {
 	 * back is the device's answer, or -- when the interceptor declined -- {@code nil},
 	 * which no accepted member ever answers.
 	 */
-	private LispFunction interceptor(Case boundary) {
-		String qualified = boundary.internal()
-				? PackageRegistry.qualifyInternal(LispNames.LINALG_PKG, boundary.member())
-				: PackageRegistry.qualify(LispNames.LINALG_PKG, boundary.member());
-		Environment env = interpreterOffers();
-		return (LispFunction) java.util.Objects.requireNonNull(env.lookupFunctionOrNull(qualified),
+	private static LispFunction interceptor(String member, boolean internal) {
+		String qualified = internal ? PackageRegistry.qualifyInternal(LispNames.LINALG_PKG, member)
+				: PackageRegistry.qualify(LispNames.LINALG_PKG, member);
+		return (LispFunction) java.util.Objects.requireNonNull(interpreterOffers().lookupFunctionOrNull(qualified),
 				() -> qualified + " is not installed");
 	}
 
-	private static Environment interpreterOffers;
+	private static @Nullable Environment interpreterOffers;
 
 	private static Environment interpreterOffers() {
-		if (interpreterOffers == null) {
+		Environment cached = interpreterOffers;
+		if (cached != null) {
+			return cached;
+		}
+		{
 			Environment env = Environment.createGlobal(new PrintStream(OutputStream.nullOutputStream()));
 			for (String name : JvmLinalgGpu.qualifiedMembers()) {
 				env.defineFunction(name, sentinel(name));
 			}
 			LinalgGpu.install(env, new LispEvaluator(new PrintStream(OutputStream.nullOutputStream())));
 			interpreterOffers = env;
+			return env;
 		}
-		return interpreterOffers;
 	}
 
 	/**
@@ -369,20 +403,24 @@ class GpuOfferDifferentialTest {
 	 * so a member re-pointed at a different kernel is followed here rather than pinned to
 	 * a name this test spelled out.
 	 */
-	private static Method bridge(Case boundary) {
-		String key = boundary.extended() ? JvmLinalgGpu.extendedKernelKey(boundary.member())
-				: JvmLinalgGpu.kernelKey(boundary.member());
-		assertThat(key).as("the compiled bridge claims %s", boundary.member()).isNotNull();
+	private static Method bridge(String member, boolean extended, int arity) {
+		String key = extended ? JvmLinalgGpu.extendedKernelKey(member) : JvmLinalgGpu.kernelKey(member);
+		assertThat(key).as("the compiled bridge claims %s", member).isNotNull();
+		// The ops key IS the bridge method's name for most members and its name without
+		// the gpu prefix for the handful named by a JvmGpuRuntimeBuilder constant
+		// (matmulNd -> gpuMatmulNd), which is the builder's own convention.
+		String prefixed = "gpu" + Character.toUpperCase(key.charAt(0)) + key.substring(1);
 		for (Method method : JvmGpuTemplate.class.getDeclaredMethods()) {
-			if (method.getName().equals(key)) {
+			if ((method.getName().equals(key) || method.getName().equals(prefixed))
+					&& method.getParameterCount() == arity) {
 				method.setAccessible(true);
 				return method;
 			}
 		}
-		throw new AssertionError("no bridge method named " + key);
+		throw new AssertionError("no bridge method named " + key + " taking " + arity + " arguments");
 	}
 
-	private static Object invoke(Method bridge, Object[] args) {
+	private static @Nullable Object invoke(Method bridge, @Nullable Object[] args) {
 		try {
 			return bridge.invoke(null, args);
 		}
@@ -391,18 +429,20 @@ class GpuOfferDifferentialTest {
 		}
 	}
 
-	// --- encoding one operand for each path ----------------------------------------------
+	// --- encoding one operand for each path
+	// ----------------------------------------------
 
 	private static LispVal toLisp(Object arg, boolean single, Map<Operand, Object> encoded) {
+		if (arg == NIL) {
+			return LispNil.INSTANCE;
+		}
 		return switch (arg) {
-			case null -> LispNil.INSTANCE;
 			case Operand operand -> (LispVal) encoded.computeIfAbsent(operand, o -> {
 				boolean f = o.single() != null ? o.single() : single;
 				LispVal value = f ? new LispSingleFloatArray(floats(o), o.dims().clone())
 						: new LispDoubleFloatArray(doubles(o), o.dims().clone());
 				if (o.resident()) {
-					assertThat(interceptor(new Case(LispNames.LINALG_EXP, false, false, "warm-up", List.of(),
-							List.of())).body().apply(List.of(value)))
+					assertThat(interceptor(LispNames.LINALG_EXP, false).body().apply(List.of(value)))
 						.as("the warm-up member must be ACCEPTED, or the operand is not resident")
 						.isNotInstanceOf(LispNil.class);
 				}
@@ -416,22 +456,23 @@ class GpuOfferDifferentialTest {
 				yield list;
 			}
 			case LispSymbol keyword -> keyword;
-			case Boolean t -> new LispSymbol(LispNames.T);
+			case Boolean ignored -> new LispSymbol("T");
 			case Double d -> new LispDouble(d);
 			case Long n -> new LispInteger(n);
 			default -> throw new AssertionError("no Lisp encoding for " + arg);
 		};
 	}
 
-	private static Object toCompiled(Object arg, boolean single, Map<Operand, Object> encoded) {
+	private static @Nullable Object toCompiled(Object arg, boolean single, Map<Operand, Object> encoded) {
+		if (arg == NIL) {
+			return null;
+		}
 		return switch (arg) {
-			case null -> null;
 			case Operand operand -> encoded.computeIfAbsent(operand, o -> {
 				boolean f = o.single() != null ? o.single() : single;
 				Object value = f ? packedF(o) : packedD(o);
 				if (o.resident()) {
-					assertThat(invoke(bridge(new Case(LispNames.LINALG_EXP, false, false, "warm-up", List.of(),
-							List.of())), new Object[] { value }))
+					assertThat(invoke(bridge(LispNames.LINALG_EXP, false, 1), new Object[] { value }))
 						.as("the warm-up member must be ACCEPTED, or the operand is not resident")
 						.isNotNull();
 				}
@@ -510,7 +551,8 @@ class GpuOfferDifferentialTest {
 		return packed;
 	}
 
-	// --- reading a result off each path ---------------------------------------------------
+	// --- reading a result off each path
+	// ---------------------------------------------------
 
 	private static int[] shapeOf(Object packed) {
 		int rank = packed instanceof float[] f ? (int) f[0] : (int) ((double[]) packed)[0];
@@ -544,7 +586,7 @@ class GpuOfferDifferentialTest {
 	}
 
 	private static List<String> bitsOf(Object packed) {
-		Object home = JvmGpuTemplate.gpuMaterialize(packed);
+		Object home = java.util.Objects.requireNonNull(JvmGpuTemplate.gpuMaterialize(packed));
 		int rank = home instanceof float[] f ? (int) f[0] : (int) ((double[]) home)[0];
 		List<String> bits = new ArrayList<>();
 		if (home instanceof float[] f) {
