@@ -3311,6 +3311,17 @@ does not move. Ceiling 2 moves but is priced against the wrong population, and e
 is mostly a one-time, cache-amortized cost that a partial split would only partially cut.
 **783 KB is not worth a module split; nothing was changed.**
 
+**The other backend's half of Ceiling 2 was already measured, and has the same shape.**
+`MetalGemm`'s class comment records `newLibraryWithSource:options:error:` -- the whole MSL
+toolchain, since there is no offline step and nothing to pin to a virtual architecture --
+at **32 ms the first time a given text is ever seen on a machine and 2-3 ms in every later
+process, because the OS caches it the way the NVIDIA driver caches PTX**. Two orders of
+magnitude below the CUDA figure, which is what 71,701 bytes of MSL against 1,885,029 of PTX
+predicts, but the STRUCTURE is identical on both: a first-sight compile that is real, then a
+per-machine cache that makes every later process free. So the answer here is not a CUDA one.
+On neither backend does the embedded text cost anything to a process that does not run it,
+and on neither does it cost a running process more than once per machine.
+
 ### The offer is decided twice, and what pins the two (todo-654, 2026-09-03)
 
 The library travels, but the DECISION to offer a shape to it does not: `eval/LinalgGpu` is
