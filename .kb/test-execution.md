@@ -122,6 +122,24 @@ test the rule is stronger than "derive it": **every threshold you read is either
 a `never`, and the expression has to answer sensibly for both** -- branch on the sentinel,
 or clamp before multiplying, and never let `Math.max` with a floor disguise the result.
 
+**A suite that is not device-gated runs WITH the device on a machine that has one, and
+whether it pins anything there is decided by its fixed shapes.** The counterpart of the
+rule above, and it cuts both ways. `am/ik/gpu/GpuDeclineTest` is written as "what every
+machine must do, with a GPU or without one" and its shapes are deliberately hard-coded (it
+may not size itself off a machine's thresholds, or a GPU-less runner would be testing a
+different thing). On a Mac it therefore executes against a live Metal device -- and three
+of its enumerations turn out to be the missing "with a device present" pin for free,
+because their fixed shapes happen to clear that backend's floors (the element-wise one at
+`mapMinElements() * 2`, the strided one at 4096 x 64 = 262144, which is EXACTLY the strided
+floor there), while two are vacuous there for the same reason in reverse: the batched
+enumeration builds 2097152 units of work against a 4194304 floor and the fused one builds
+128 elements, so with hardware present every case in them declines on SIZE and the
+condition under test is never reached (`.kb/gpu.md`, "What GpuTest claims, and where Metal
+answers it", todo-662). So: do not read "runs everywhere" as "pins everywhere", and when
+you write the device-present sibling, **assert an accepted baseline at the same shape
+first** -- that one line is what separates "this condition declines" from "this shape was
+never offered".
+
 **Proving one of these is vacuous takes a mutation, not an argument.** Restore the old
 constant with the new census in place: if the value assertions still pass and only the
 census fails, the test was pinning nothing. That is how each entry in the `.kb/gpu.md`

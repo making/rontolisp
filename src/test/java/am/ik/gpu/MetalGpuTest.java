@@ -52,6 +52,24 @@ import static org.assertj.core.api.Assertions.within;
  * -- since todo-495 -- a call under the mode commits its command buffer and returns, the
  * wait moving to the first host touch, which is what made the mode the interceptors' own
  * here too.
+ *
+ * <h2>The claims that used to live only in {@link GpuTest}</h2>
+ *
+ * That file is gated on a DOUBLE-capable device, so its tests skip in full on every Mac,
+ * and for a long time nobody had put the two lists side by side: a pin inside a device
+ * gate is covered on ONE backend, and the other backend's suite is the only thing that
+ * says whether the claim holds there. The comparison is written out per test in
+ * {@code .kb/gpu.md}, "What GpuTest claims, and where Metal answers it"; the section at
+ * the end of this file is the half of it that came back "the mechanism is here and
+ * nothing on this backend pinned it" -- the decline enumerations that a device-free
+ * suite's fixed shapes cannot reach here, the strided tier's offsets and its rank-3
+ * gather, the middle-axis fold over a resident operand, the exact-reciprocal rewrite
+ * (whose own argument is about a backend that computes in {@code float}, which is this
+ * one), the element-wise and strided pool runs, and the four result-stub claims, which
+ * are what every compiled {@code --gpu} program's results are here now that lazy results
+ * pay. It also pins the three tiers this backend does NOT have -- the index tier, the
+ * clip norm and layer-norm's affine pair -- as declines over a RESIDENT operand, which is
+ * the only state that tells "not a member here" from "not resident yet".
  */
 @EnabledIf("am.ik.gpu.MetalGpuTest#aMetalGpuIsAvailable")
 class MetalGpuTest {
@@ -1723,6 +1741,813 @@ class MetalGpuTest {
 		int n = (int) Gpu.mapMinElements() * 4;
 		assertThat(Gpu.dropoutMask(new float[n], 0, n, 0.1, 0.9, 11, 22, 33)).isFalse();
 		assertThat(Gpu.rngFill(new float[n], 0, n, 0, 0.0, 1.0, 11, 22, 33)).isFalse();
+	}
+
+	// --- the claims that lived only in GpuTest (todo-662) ------------------------------
+	// GpuTest is gated on a DOUBLE-capable device, so its 57 tests skip in full on every
+	// Mac, and until this item nobody had put the two lists side by side. What follows is
+	// the half of that comparison that came back "the mechanism is here and nothing on
+	// this backend pins it". The verdict per test, and the reason for each claim that is
+	// NOT here, is in `.kb/gpu.md`, "What GpuTest claims, and where Metal answers it".
+
+	@Test
+	void everyBatchedDeclineConditionStillDeclinesWithADevicePresent() {
+		// The stacked form's own conditions. GpuDeclineTest has the device-free half, but
+		// its shapes are fixed at 8 x 64 x 64 x 64 = 2097152 units of work, which is
+		// under
+		// THIS backend's floor of 4194304 -- so on a Mac every one of them declines for
+		// its SIZE and the enumeration pins nothing. The baseline below is the guard: a
+		// stack of this shape IS accepted here, so each decline that follows is the
+		// condition's and not the threshold's.
+		int n = square();
+		int batch = 3;
+		float[] a = new float[batch * n * n], b = new float[batch * n * n], out = new float[batch * n * n];
+		for (int i = 0; i < a.length; i++) {
+			a[i] = (i % 7) - 3;
+			b[i] = (i % 5) - 2;
+		}
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, out, 0, batch, n, n, n))
+			.as("the baseline stack is above the threshold in force")
+			.isTrue();
+		java.util.Arrays.fill(out, 0.0f);
+		// Below the threshold, however the batch is spelled.
+		assertThat(Gpu.worth(64, 8, 8, 8)).isFalse();
+		assertThat(Gpu.multiply(a, 0, 512, b, 0, 512, out, 0, 64, 8, 8, 8)).as("below the threshold").isFalse();
+		// An empty batch, and one past what a grid axis can carry.
+		assertThat(Gpu.worth(0, n, n, n)).isFalse();
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, out, 0, 0, n, n, n)).as("an empty batch").isFalse();
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, out, 0, 70_000, n, n, n)).as("70000 slabs").isFalse();
+		// A slab stride that walks off the end of an operand, and a negative one.
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, out, 0, batch + 1, n, n, n)).as("one slab too many")
+			.isFalse();
+		assertThat(Gpu.multiply(a, 0, -(n * n), b, 0, n * n, out, 0, batch, n, n, n)).as("a negative slab stride")
+			.isFalse();
+		// A result array that cannot hold the whole stack.
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, new float[n * n], 0, batch, n, n, n))
+			.as("a result that holds one slab")
+			.isFalse();
+		// And a stack above the threshold that is too big for the device costs it
+		// nothing.
+		assertThat(Gpu.multiply(a, 0, 0, b, 0, 0, out, 0, 60_000, 20_000, 20_000, 20_000)).as("too big to allocate")
+			.isFalse();
+		assertThat(out).containsOnly(0.0f);
+	}
+
+	@Test
+	void aBatchedProductReadsEveryOperandFromItsOwnOffsetAndBroadcastsEitherSide() {
+		// Two claims the unbatched offset test cannot make. (1) A stack honours a header
+		// on all three arrays, not merely a slab stride from zero. (2) The zero slab
+		// stride works on EITHER side: one weight under a stack of activations, which
+		// `aBroadcastOperandIsAZeroStrideAndReadsTheSameSlabEveryBatch` covers, and one
+		// activation against a stack of weights, which nothing here did.
+		int n = square();
+		int batch = 3, headerA = 4, headerB = 3, headerOut = 5;
+		float[] a = new float[headerA + batch * n * n], b = new float[headerB + batch * n * n];
+		float[] out = new float[headerOut + batch * n * n];
+		double[] ad = new double[a.length], bd = new double[b.length];
+		for (int i = 0; i < headerA; i++) {
+			a[i] = Float.NaN;
+		}
+		for (int i = 0; i < headerB; i++) {
+			b[i] = Float.NaN;
+		}
+		for (int i = 0; i < headerOut; i++) {
+			out[i] = i + 1;
+		}
+		for (int i = 0; i < batch * n * n; i++) {
+			ad[headerA + i] = (i % 7) - 3;
+			bd[headerB + i] = (i % 5) - 2;
+			a[headerA + i] = (float) ad[headerA + i];
+			b[headerB + i] = (float) bd[headerB + i];
+		}
+		assertThat(Gpu.multiply(a, headerA, n * n, b, headerB, n * n, out, headerOut, batch, n, n, n)).isTrue();
+		for (int z = 0; z < batch; z++) {
+			double[] expected = reference(ad, headerA + z * n * n, bd, headerB + z * n * n, n, n, n);
+			for (int i = 0; i < n * n; i++) {
+				assertThat((double) out[headerOut + z * n * n + i]).as("slab %d cell %d", z, i).isEqualTo(expected[i]);
+			}
+		}
+		for (int i = 0; i < headerOut; i++) {
+			assertThat(out[i]).as("the destination's header survives").isEqualTo(i + 1);
+		}
+		// One LEFT operand against a stack of right ones: the mirror of the broadcast the
+		// other test pins, and the only place a zero stride on the left is exercised.
+		float[] left = new float[n * n], stack = new float[batch * n * n], stacked = new float[batch * n * n];
+		double[] leftd = new double[left.length], stackd = new double[stack.length];
+		for (int i = 0; i < left.length; i++) {
+			leftd[i] = (i % 3) - 1;
+			left[i] = (float) leftd[i];
+		}
+		for (int i = 0; i < stack.length; i++) {
+			stackd[i] = (i % 4) - 2;
+			stack[i] = (float) stackd[i];
+		}
+		assertThat(Gpu.multiply(left, 0, 0, stack, 0, n * n, stacked, 0, batch, n, n, n)).isTrue();
+		for (int z = 0; z < batch; z++) {
+			double[] expected = reference(leftd, 0, stackd, z * n * n, n, n, n);
+			for (int i = 0; i < n * n; i++) {
+				assertThat((double) stacked[z * n * n + i]).as("left-broadcast slab %d cell %d", z, i)
+					.isEqualTo(expected[i]);
+			}
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void theSameProductRepeatedIsTheSameAnswerAndADeclinedOneCostsThePoolNothing() {
+		// Two claims about the PRODUCT that no value assertion elsewhere makes. (1) The
+		// answer is a function of the operands and nothing else -- which matters more
+		// here
+		// than on CUDA, because above the MPS threshold the route is Apple's library and
+		// not a kernel of ours, and a library free to pick a decomposition per call would
+		// show up here and nowhere else. (2) A product that DECLINES because it is too
+		// big
+		// gives the pool nothing to hold: the CUDA half found that a failing allocation
+		// can grow a pool as far as it can on the way to failing, and this backend owns
+		// its pool outright.
+		MetalGemm gemm = device();
+		int n = square();
+		Random random = new Random(7);
+		float[] a = new float[n * n], b = new float[n * n];
+		for (int i = 0; i < a.length; i++) {
+			a[i] = random.nextFloat();
+			b[i] = random.nextFloat();
+		}
+		float[] first = Gpu.multiply(a, 0, b, 0, n, n, n);
+		assertThat(first).isNotNull();
+		for (int i = 0; i < 20; i++) {
+			assertBitIdentical(java.util.Objects.requireNonNull(Gpu.multiply(a, 0, b, 0, n, n, n)), first,
+					"repeat " + i);
+		}
+		long before = gemm.freeDeviceMemory();
+		float[] tiny = new float[1];
+		int huge = 100_000;
+		for (int i = 0; i < 12; i++) {
+			assertThat(gemm.gemmF(tiny, 0, tiny, 0, tiny, 0, huge, huge, huge))
+				.as("a %d x %d product must decline", huge, huge)
+				.isFalse();
+			assertThat(gemm.usable()).as("running out of device memory is not a sticky error").isTrue();
+		}
+		// ONE-SIDED, unlike every other memory assertion in this file, and for a reason
+		// this backend has and CUDA does not: a call ENTERS the pool before it declines,
+		// and entering drains the slabs of every host array the collector has reached
+		// since the last call -- so free memory routinely GROWS here by hundreds of
+		// megabytes across a declined call (measured: 922 MB, in class order behind the
+		// lazy-chain tests, which hold 16-32 MB slabs). A two-sided bound reads that
+		// drain as a failure. What the assertion is for is the other direction: the CUDA
+		// half found a pooled allocation that FAILS growing the pool as far as it can on
+		// the way to failing, and this backend owns its pool outright.
+		assertThat(before - gemm.freeDeviceMemory()).as("free memory after twelve declined products")
+			.isLessThan(64L << 20);
+		// The shape matters and is not arbitrary: at 100000 an operand is 40 GB and the
+		// allocation fails outright, so nothing is taken. A shape whose operands FIT is a
+		// different measurement -- the slabs are allocated before the encode discovers it
+		// cannot proceed, and the pool transiently holds three of them (12.9 GB at
+		// n = 32768, measured 2026-09-03, returned to the free lists and reused, so it is
+		// a transient and not a leak; `.kb/gpu.md`).
+		// And the device still works afterwards.
+		assertThat(Gpu.multiply(a, 0, b, 0, new float[n * n], 0, n, n, n)).isTrue();
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aRunOfElementWiseAndStridedCallsSettlesThePoolRatherThanGrowingIt() {
+		// The product's leak run reaches neither path: an element-wise map takes two
+		// slabs
+		// where a product takes three, and the broadcast takes a fourth for its layout.
+		// Both size classes are new to the pool, so both have to reach a steady state of
+		// their own.
+		MetalGemm gemm = device();
+		int cols = 64;
+		int rows = (int) Math.max(Gpu.stridedMinElements() / cols * 2, 512);
+		int n = rows * cols;
+		int mapped = (int) Gpu.mapMinElements() * 2;
+		float[] x = new float[n], y = new float[rows], out = new float[n];
+		float[] a = new float[mapped], c = new float[mapped];
+		int[] dims = { rows, cols };
+		for (int i = 0; i < 20; i++) {
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 0, mapped)).isTrue();
+			assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols, 1 }, y, 0, new int[] { 1, 0 }, out, 0, dims))
+				.isTrue();
+			assertThat(Gpu.gather(x, 0, new int[] { 1, cols }, out, 0, new int[] { cols, rows })).isTrue();
+		}
+		long before = gemm.freeDeviceMemory();
+		for (int i = 0; i < 300; i++) {
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 0, mapped)).isTrue();
+			assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols, 1 }, y, 0, new int[] { 1, 0 }, out, 0, dims))
+				.isTrue();
+			assertThat(Gpu.gather(x, 0, new int[] { 1, cols }, out, 0, new int[] { cols, rows })).isTrue();
+		}
+		// Two-sided for the reason the product's run is: free memory that GREW would mean
+		// this is measuring the rest of the machine. 900 calls holding two to four slabs
+		// of 1-2 MB leak gigabytes if they leak at all.
+		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(64L << 20);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void everyStridedOperandIncludingTheResultIsReadFromItsOwnOffset() {
+		// The compiled backends keep a [rank, dim..., data...] header inside the same
+		// array as the data, so all three strided calls have to honour an element offset
+		// on every operand AND on the result -- and must not touch the header they are
+		// offset past. The fold is asked over a RESIDENT operand, because for its SIZE it
+		// is not a member here at any shape
+		// (theAxisFoldIsDeclinedForItsSizeAtEveryWidth).
+		Gpu.releaseResident();
+		int cols = 64;
+		int rows = (int) Math.max(Gpu.stridedMinElements() / cols * 2, 512);
+		int n = rows * cols, off = 3;
+		float[] x = new float[off + n], y = new float[off + rows], out = new float[off + n];
+		for (int i = 0; i < n; i++) {
+			x[off + i] = i % 17;
+		}
+		for (int i = 0; i < rows; i++) {
+			y[off + i] = i % 5 + 1;
+		}
+		for (int i = 0; i < off; i++) {
+			out[i] = i + 1;
+		}
+		int[] dims = { rows, cols };
+		Gpu.lazyResults(true);
+		try {
+			assertThat(
+					Gpu.bcast(Gpu.BIN_ADD, x, off, new int[] { cols, 1 }, y, off, new int[] { 1, 0 }, out, off, dims))
+				.isTrue();
+			Gpu.materialize(out);
+			assertThat(out[0]).as("the destination's header survives").isEqualTo(1.0f);
+			assertThat(out[off]).isEqualTo(x[off] + y[off]);
+			assertThat(out[off + n - 1]).isEqualTo(x[off + n - 1] + y[off + rows - 1]);
+			float[] moved = new float[off + n];
+			assertThat(Gpu.gather(x, off, new int[] { 1, cols }, moved, off, new int[] { cols, rows })).isTrue();
+			Gpu.materialize(moved);
+			assertThat(moved[0]).isZero();
+			assertThat(moved[off + 1]).isEqualTo(x[off + cols]);
+			// x is resident as the broadcast's operand by now, which is what the fold is
+			// offered over; the census says the copy was found rather than uploaded
+			// again.
+			assertThat(Gpu.resident(x)).isTrue();
+			DeviceResidency residency = device().residency();
+			long hits = residency.hits();
+			float[] folded = new float[off + rows];
+			assertThat(Gpu.fold(Gpu.FOLD_SUM, x, off, folded, off, rows, cols, 1)).isTrue();
+			assertThat(residency.hits()).as("the fold read the resident copy").isGreaterThan(hits);
+			Gpu.materialize(folded);
+			assertThat(folded[0]).isZero();
+			double first = 0;
+			for (int c = 0; c < cols; c++) {
+				first += x[off + c];
+			}
+			assertThat(folded[off]).isEqualTo((float) first);
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	void aStridedGatherIsThePermutedCopyAtRankThree() {
+		// A rank-3 axes transpose (0 2 1), which is what every attention head asks for --
+		// and a walk the rank-2 transpose in
+		// theStridedTierIsBitIdenticalToTheScalarOracle
+		// cannot reach: there the destination's odometer is two deep, here three, and a
+		// stride read into the wrong axis still produces a plausible permutation.
+		int d0 = 4, d1 = 64;
+		int d2 = (int) Math.max(Gpu.stridedMinElements() / (d0 * d1) * 2, 64);
+		int n = d0 * d1 * d2;
+		Random random = new Random(99);
+		float[] a = new float[n], out = new float[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = (float) random.nextGaussian();
+		}
+		assertThat(Gpu.gather(a, 0, new int[] { d1 * d2, 1, d2 }, out, 0, new int[] { d0, d2, d1 })).isTrue();
+		for (int i = 0; i < d0; i++) {
+			for (int j = 0; j < d2; j++) {
+				for (int k = 0; k < d1; k++) {
+					if (out[(i * d2 + j) * d1 + k] != a[i * d1 * d2 + k * d2 + j]) {
+						org.assertj.core.api.Assertions.fail("cell %d,%d,%d is %s where the oracle is %s".formatted(i,
+								j, k, out[(i * d2 + j) * d1 + k], a[i * d1 * d2 + k * d2 + j]));
+					}
+				}
+			}
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void anAxisFoldOverAResidentOperandIsTheDefunsOwnSequentialFoldAtEveryInnerStride() {
+		// The fold's MIDDLE-axis walk. theResidentTierIsOfferedOnlyOver... folds the LAST
+		// axis (inner == 1), where every lane reads a contiguous run; with inner > 1 the
+		// kernel strides, and a cell that read its neighbour's lane would still produce a
+		// plausible number. The sum accumulates in software binary64 here, so against
+		// %la-fold-axis's double-accumulated rule this is an EQUALITY; amax and amin move
+		// bits. Sized off the MAP threshold, since a libm map over the operand is what
+		// makes it resident, and the fold is not a member for its size at any shape.
+		Gpu.releaseResident();
+		int outer = 8, inner = 32;
+		int len = (int) Math.max(Gpu.mapMinElements() / (outer * inner) * 2, 16);
+		int n = outer * len * inner, cells = outer * inner;
+		Random random = new Random(7);
+		float[] a = new float[n], out = new float[cells];
+		for (int i = 0; i < n; i++) {
+			a[i] = (float) (random.nextGaussian() * 3);
+		}
+		Gpu.lazyResults(true);
+		try {
+			assertThat(Gpu.fold(Gpu.FOLD_SUM, a, 0, out, 0, outer, len, inner)).as("nothing resident").isFalse();
+			makeResident(a);
+			DeviceResidency residency = device().residency();
+			for (int op = 0; op < Gpu.FOLD_OPS; op++) {
+				long hits = residency.hits();
+				assertThat(Gpu.fold(op, a, 0, out, 0, outer, len, inner)).as("fold %d", op).isTrue();
+				assertThat(residency.hits()).as("fold %d read the resident copy", op).isGreaterThan(hits);
+				Gpu.materialize(out);
+				for (int o = 0; o < outer; o++) {
+					for (int i = 0; i < inner; i++) {
+						int base = o * len * inner + i;
+						double acc = op == Gpu.FOLD_SUM ? 0.0 : a[base];
+						for (int k = op == Gpu.FOLD_SUM ? 0 : 1; k < len; k++) {
+							double value = a[base + k * inner];
+							if (op == Gpu.FOLD_SUM) {
+								acc += value;
+							}
+							else if (op == Gpu.FOLD_AMAX ? value > acc : value < acc) {
+								acc = value;
+							}
+						}
+						assertThat(out[o * inner + i]).as("fold %d cell %d,%d", op, o, i).isEqualTo((float) acc);
+					}
+				}
+			}
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void everyResidentTierDeclineConditionStillDeclinesWithADevicePresent() {
+		// GpuDeclineTest asks the tier's members with NOTHING resident, where they
+		// decline
+		// for that alone and the bounds checks behind it are never reached. This asks
+		// them
+		// over a RESIDENT operand, which is the only state in which the tier is offered
+		// at
+		// all: an op the library does not name, elements outside the arrays they were
+		// promised in, a malformed rule. Every one must still decline.
+		Gpu.releaseResident();
+		int n = (int) Gpu.mapMinElements() * 2;
+		float[] a = new float[n], b = new float[n], out = new float[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = (float) Math.sin(i * 0.37) * 3;
+			b[i] = (float) Math.cos(i * 0.11) + 0.01f;
+		}
+		Gpu.lazyResults(true);
+		try {
+			makeResident(a);
+			// The guard on the whole enumeration: over this operand the tier IS offered,
+			// so each decline below is its condition's and not the residency rule's.
+			assertThat(Gpu.zip(Gpu.BIN_ADD, a, 0, b, 0, out, 0, n)).as("the baseline is accepted").isTrue();
+			// An op code the library does not name.
+			assertThat(Gpu.zip(Gpu.BIN_OPS, a, 0, b, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.zip(-1, a, 0, b, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.scale(Gpu.BIN_OPS, a, 0, 1.0, false, out, 0, n)).isFalse();
+			// Elements outside the arrays they were promised in.
+			assertThat(Gpu.zip(Gpu.BIN_ADD, a, 1, b, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.zip(Gpu.BIN_ADD, a, 0, b, 0, new float[8], 0, n)).isFalse();
+			assertThat(Gpu.scale(Gpu.BIN_ADD, a, 0, 1.0, false, out, 1, n)).isFalse();
+			// where: no array at all, and a span outside one.
+			assertThat(Gpu.where(null, 0, new int[] { 0 }, 1.0, null, 0, new int[] { 0 }, 1.0, null, 0, new int[] { 0 },
+					2.0, out, 0, new int[] { n }))
+				.isFalse();
+			assertThat(Gpu.where(a, 1, new int[] { 1 }, 0.0, b, 0, new int[] { 1 }, 0.0, null, 0, new int[] { 0 }, 0.0,
+					out, 0, new int[] { n }))
+				.isFalse();
+			// adam: a malformed rule, a mode it does not name, a short array.
+			double[] rule = { 0.01, 0.001, 0.1, 0.9, 0.1, 0.999, 0.001, 1e-8, 0.19, 0.001999, 0.0 };
+			assertThat(Gpu.adamStep(a, 0, b, 0, out, 0, new float[n], 0, n, new double[10])).isFalse();
+			double[] badMode = rule.clone();
+			badMode[10] = 3.0;
+			assertThat(Gpu.adamStep(a, 0, b, 0, out, 0, new float[n], 0, n, badMode)).isFalse();
+			assertThat(Gpu.adamStep(a, 0, b, 0, out, 0, new float[8], 0, n, rule)).isFalse();
+			// The fold's own conditions, which on this backend are reachable ONLY here:
+			// an unnamed op, too few output cells to be worth a launch, an empty extent.
+			assertThat(Gpu.fold(Gpu.FOLD_OPS, a, 0, out, 0, n / 256, 256, 1)).isFalse();
+			assertThat(Gpu.fold(Gpu.FOLD_SUM, a, 0, out, 0, 1, n, 1)).isFalse();
+			assertThat(Gpu.fold(Gpu.FOLD_SUM, a, 0, out, 0, n / 256, 256, 0)).isFalse();
+			assertThat(Gpu.fold(Gpu.FOLD_SUM, a, 0, out, 0, n / 256, 0, 1)).isFalse();
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void everyFusedDeclineConditionStillDeclinesWithADevicePresent() {
+		// GpuDeclineTest's fused enumeration builds 8 rows of 16 -- 128 elements, under
+		// every threshold on every backend -- so with a device present each member there
+		// declines on its SIZE and the conditions are never reached. These are asked at a
+		// shape the tier really takes here, with the operand resident, so what declines
+		// is
+		// the condition.
+		Gpu.releaseResident();
+		int rows = (int) Math.max(MetalGemm.MIN_RESIDENT_ELEMENTS, 1024), len = 64, n = rows * len;
+		float[] x = new float[n], c = new float[n], shorter = new float[n - 1];
+		Random random = new Random(41);
+		for (int i = 0; i < n; i++) {
+			x[i] = (float) (random.nextDouble() * 6 - 3);
+		}
+		float[] par = new float[len], shortPar = new float[len - 1];
+		Gpu.lazyResults(true);
+		try {
+			makeResident(x);
+			assertThat(Gpu.softmax(x, 0, c, 0, rows, len)).as("the baseline is accepted").isTrue();
+			// Too few rows for a fresh operand: the tier is a per-ROW kernel and four
+			// rows
+			// cannot fill the machine.
+			assertThat(Gpu.softmax(new float[4 * len], 0, new float[4 * len], 0, 4, len)).as("four fresh rows")
+				.isFalse();
+			// A result or an accumulated gradient too short, and an empty extent.
+			assertThat(Gpu.gelu(x, 0, shorter, 0, n)).isFalse();
+			assertThat(Gpu.gelu(x, 0, c, 0, 0)).isFalse();
+			assertThat(Gpu.geluGrad(x, 0, x, 0, shorter, 0, c, 0, n)).isFalse();
+			assertThat(Gpu.softmax(x, 0, c, 0, 0, n)).isFalse();
+			assertThat(Gpu.softmax(x, 0, shorter, 0, rows, len)).isFalse();
+			assertThat(Gpu.layerNormGrad(x, 0, x, 0, shorter, 0, c, 0, rows, len, 1e-5)).isFalse();
+			// The scaled-and-masked forms: a mask the operand is not a multiple of, one
+			// that is neither width, one short of its length, and a scale op that is
+			// neither the multiply nor the divide.
+			assertThat(Gpu.softmax(x, 0, new float[7], 0, 7, c, 0, rows, len, Gpu.BIN_DIV, 8.0, 0.0)).isFalse();
+			assertThat(Gpu.softmax(x, 0, new int[len], 0, len, c, 0, rows, len, Gpu.BIN_DIV, 8.0, 0.0)).isFalse();
+			assertThat(Gpu.softmax(x, 0, new float[len - 1], 0, len, c, 0, rows, len, Gpu.BIN_DIV, 8.0, 0.0)).isFalse();
+			assertThat(Gpu.softmax(x, 0, null, 0, 0, c, 0, rows, len, Gpu.BIN_SUB, 8.0, 0.0)).isFalse();
+			assertThat(Gpu.softmaxGrad(x, 0, x, 0, new float[7], 0, 7, c, 0, rows, len, Gpu.BIN_DIV, 8.0)).isFalse();
+			assertThat(Gpu.softmaxGrad(x, 0, x, 0, null, 0, 0, c, 0, rows, len, Gpu.BIN_SUB, 8.0)).isFalse();
+			// The affine pair's parameter checks, which stand whether or not the pair is
+			// offered here (it is not -- see the not-a-member test below).
+			assertThat(Gpu.layerNormAffine(x, 0, shortPar, 0, par, 0, c, 0, rows, len, 1e-5)).isFalse();
+			assertThat(Gpu.layerNormAffineGrad(x, 0, x, 0, shortPar, 0, null, 0, c, 0, c, 0, rows, len, 1e-5))
+				.isFalse();
+			// The dropout mask's own: a state word outside the generator's range, and an
+			// empty extent.
+			assertThat(Gpu.dropoutMask(c, 0, n, 0.1, 0.9, 1 << 23, 1, 1)).isFalse();
+			assertThat(Gpu.dropoutMask(c, 0, 0, 0.1, 0.9, 1, 1, 1)).isFalse();
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void theIndexTierTheClipNormAndTheAffinePairAreNotMembersHereAndDeclineOverAResidentOperand() {
+		// Three tiers `GpuTest` pins the BITS of and this backend does not have at all:
+		// MetalGemm answers false from take / scatter and null from sumSquares outright,
+		// and layerNormAffine is declined unmeasured (.kb/gpu.md, "What is deliberately
+		// NOT here"). The guard is that they decline over a RESIDENT operand -- the state
+		// in which the CUDA half accepts them -- because that is the only way to tell
+		// "not
+		// a member here" from "not resident yet", and because a later round that adds the
+		// kernels must come here to change the answer.
+		//
+		// This test exists because .kb/gpu.md said the opposite for a round: todo-495
+		// flipped lazyResultsPay on this backend and the note concluded the index tier
+		// and
+		// the clip norm were therefore "reachable" and merely unpinned. They are not
+		// reachable; the mode was never what stood in the way.
+		Gpu.releaseResident();
+		int rows = 512, slab = 384, m = 1024;
+		float[] table = new float[rows * slab];
+		for (int i = 0; i < table.length; i++) {
+			table[i] = (float) Math.sin(i * 0.013) * 4;
+		}
+		int[] idx = new int[m];
+		for (int i = 0; i < m; i++) {
+			idx[i] = (i * 37 + i / 7) % rows;
+		}
+		float[] out = new float[m * slab];
+		Gpu.lazyResults(true);
+		try {
+			makeResident(table);
+			assertThat(table.length).as("over the map threshold, so the operand really is resident")
+				.isGreaterThanOrEqualTo((int) Gpu.mapMinElements());
+			assertThat(Gpu.takeRows(table, 0, table.length, out, 0, idx, slab)).isFalse();
+			assertThat(Gpu.pick(table, 0, new float[rows], 0, new int[rows], slab)).isFalse();
+			assertThat(Gpu.scatterRows(new float[rows * slab], 0, out, 0, idx, rows, slab)).isFalse();
+			assertThat(Gpu.sumSquares(table, 0, table.length, 1.5)).isNull();
+			assertThat(out).containsOnly(0.0f);
+			// The affine pair, at a shape whose plain sibling the tier does take.
+			int lnRows = (int) Math.max(MetalGemm.MIN_RESIDENT_ELEMENTS, 1024), len = 64, n = lnRows * len;
+			float[] x = new float[n], c = new float[n], gn = new float[n];
+			float[] w = new float[len], bias = new float[len];
+			for (int i = 0; i < len; i++) {
+				w[i] = 0.5f + i / (float) len;
+				bias[i] = i / (float) len - 0.5f;
+			}
+			makeResident(x);
+			assertThat(Gpu.layerNorm(x, 0, c, 0, lnRows, len, 1e-5)).as("the plain member IS offered here").isTrue();
+			assertThat(Gpu.layerNormAffine(x, 0, w, 0, bias, 0, c, 0, lnRows, len, 1e-5)).isFalse();
+			assertThat(Gpu.layerNormAffineGrad(x, 0, x, 0, w, 0, null, 0, c, 0, gn, 0, lnRows, len, 1e-5)).isFalse();
+			assertThat(gn).containsOnly(0.0f);
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aDivisionByAPowerOfTwoIsTheExactReciprocalsMultiply() {
+		// Gpu.scale rewrites a divide by a power of two into the multiply by its exact
+		// reciprocal, and normalPowerOfTwo requires BOTH to be normal at f32 precisely so
+		// that the rewrite is exact on a backend that computes in float -- which is this
+		// one, and the argument was unasserted on the backend it is about. Bit-identity
+		// is
+		// the whole licence for the rewrite: every divisor below, power of two or not,
+		// element by element against Java's own divide, over operands that include a
+		// subnormal, an infinity and a negative zero.
+		Gpu.releaseResident();
+		int n = (int) Math.max(MetalGemm.MIN_RESIDENT_ELEMENTS, Gpu.mapMinElements()) * 2;
+		float[] a = new float[n], out = new float[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = switch (i) {
+				case 0 -> Float.MIN_VALUE;
+				case 1 -> Float.POSITIVE_INFINITY;
+				case 2 -> -0.0f;
+				case 3 -> Float.NaN;
+				default -> (i - n / 2) * 0.37f;
+			};
+		}
+		Gpu.lazyResults(true);
+		try {
+			makeResident(a);
+			for (double s : new double[] { 8.0, 0.125, 1.0, -4.0, 1024.0, 3.0, 1.4142135623730951, 0.1 }) {
+				// Which route this divisor takes, asserted rather than assumed: without
+				// this the test would pass just as well if the rewrite never fired.
+				boolean rewritten = Gpu.exactReciprocal(s) != 0.0;
+				assertThat(rewritten).as("%s is rewritten", s)
+					.isEqualTo(s == 8.0 || s == 0.125 || s == 1.0 || s == -4.0 || s == 1024.0);
+				assertThat(Gpu.scale(Gpu.BIN_DIV, a, 0, s, false, out, 0, n)).as("div %s", s).isTrue();
+				Gpu.materialize(out);
+				for (int i = 0; i < n; i++) {
+					float expected = (float) (a[i] / s);
+					if (Float.floatToRawIntBits(out[i]) != Float.floatToRawIntBits(expected)
+							&& !(Float.isNaN(out[i]) && Float.isNaN(expected))) {
+						org.assertj.core.api.Assertions.fail(
+								"div %s at %d (a = %s): %s where Java says %s".formatted(s, i, a[i], out[i], expected));
+					}
+				}
+				// The SWAPPED form is s / a[i], which no reciprocal rewrites.
+				assertThat(Gpu.scale(Gpu.BIN_DIV, a, 0, s, true, out, 0, n)).as("div swapped %s", s).isTrue();
+				Gpu.materialize(out);
+				for (int i = 0; i < n; i++) {
+					float expected = (float) (s / a[i]);
+					if (Float.floatToRawIntBits(out[i]) != Float.floatToRawIntBits(expected)
+							&& !(Float.isNaN(out[i]) && Float.isNaN(expected))) {
+						org.assertj.core.api.Assertions.fail("div swapped %s at %d (a = %s): %s where Java says %s"
+							.formatted(s, i, a[i], out[i], expected));
+					}
+				}
+			}
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	// --- result stubs on Metal (.todo/492's claims, todo-662) --------------------------
+	// A result STUB is the three-slot prefix a rank-2 caller keeps ahead of its elements:
+	// the library takes it, allocates nothing on the host, and keeps the elements in a
+	// slab. That machinery is DeviceResidency's and therefore both backends', and since
+	// todo-495 flipped lazyResultsPay here it is what every compiled `--gpu` program's
+	// results are on this backend too -- but its four claims were pinned only in GpuTest,
+	// which skips in full on a Mac.
+
+	/**
+	 * A result stub: the three-slot prefix a rank-2 caller keeps ahead of its elements.
+	 */
+	private static float[] stub(int rows, int cols) {
+		return new float[] { 2, rows, cols };
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aStubResultAllocatesNoHostArrayUntilTheHostFirstReadsIt() {
+		DeviceResidency residency = device().residency();
+		Gpu.releaseResident();
+		int n = (int) Gpu.mapMinElements() * 2;
+		float[] a = new float[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = (i % 97) / 100.0f;
+		}
+		Gpu.lazyResults(true);
+		try {
+			// The result array handed over is the header alone; the library takes it,
+			// allocates nothing on the host, and keeps the elements in its slab.
+			float[] c = stub(512, 512);
+			// The per-handle predicate rather than a backingCount() diff: the tally is
+			// shared with every other test in the fork (`.kb/test-execution.md`).
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 3, n)).isTrue();
+			assertThat(c).hasSize(3);
+			assertThat(residency.backed(c)).as("no backing allocated yet").isFalse();
+			assertThat(Gpu.resident(c)).isTrue();
+			// A stub is a full operand to the next member -- its extent is the span it
+			// was
+			// created with, not its Java length -- and the chain moves nothing.
+			float[] e = stub(512, 512);
+			long hits = residency.hits();
+			assertThat(Gpu.map(Gpu.MAP_LOG, c, 3, e, 3, n)).isTrue();
+			assertThat(residency.hits()).as("the chain read the device's copy").isEqualTo(hits + 1);
+			assertThat(residency.backed(c)).as("still no backing for c").isFalse();
+			assertThat(residency.backed(e)).as("no backing for e yet").isFalse();
+			// The first host read allocates the BACKING -- the full span, the stub's own
+			// prefix copied in -- and downloads into it; the stub stays what it was.
+			Object storage = Gpu.materialize(e);
+			assertThat(storage).isInstanceOf(float[].class).isNotSameAs(e);
+			float[] backing = (float[]) storage;
+			assertThat(backing).hasSize(3 + n);
+			assertThat(backing[0]).isEqualTo(2.0f);
+			assertThat(backing[1]).isEqualTo(512.0f);
+			assertThat(backing[2]).isEqualTo(512.0f);
+			for (int i = 0; i < n; i += 997) {
+				assertThat(backing[3 + i]).as("log(exp(a[%d]))", i).isCloseTo(a[i], within(1e-5f));
+			}
+			assertThat(e).hasSize(3);
+			assertThat(residency.backed(e)).as("e now has a backing").isTrue();
+			assertThat(residency.backed(c)).as("c still has none").isFalse();
+			// Every later read answers the same backing, and an ordinary array answers
+			// itself.
+			assertThat(Gpu.materialize(e)).isSameAs(backing);
+			assertThat(Gpu.materialize(a)).isSameAs(a);
+			assertThat(Gpu.materialize(new float[4])).isInstanceOf(float[].class);
+			// The stub stays resident, clean, for the next member.
+			assertThat(Gpu.resident(e)).isTrue();
+			float[] f = stub(512, 512);
+			hits = residency.hits();
+			assertThat(Gpu.map(Gpu.MAP_EXP, e, 3, f, 3, n)).isTrue();
+			assertThat(residency.hits()).isEqualTo(hits + 1);
+			assertThat(((float[]) Gpu.materialize(f))[3 + 100]).isCloseTo((float) Math.exp(a[100]), within(1e-5f));
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aWriteThroughAStubLandsInItsBackingAndTheStubIsUploadedFromIt() {
+		DeviceResidency residency = device().residency();
+		Gpu.releaseResident();
+		int n = (int) Gpu.mapMinElements() * 2;
+		float[] a = new float[n];
+		Gpu.lazyResults(true);
+		try {
+			float[] c = stub(512, 512);
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 3, n)).isTrue();
+			// The write hook answers the array the store must land in: the backing,
+			// allocated and filled now, with the device copy then forgotten.
+			float[] backing = (float[]) Gpu.written(c);
+			assertThat(backing).hasSize(3 + n);
+			assertThat(backing[3 + 100]).isEqualTo(1.0f);
+			assertThat(Gpu.resident(c)).isFalse();
+			backing[3 + 100] = 2.0f;
+			assertThat(Gpu.written(c)).isSameAs(backing);
+			// Offered again, the stub is uploaded from its backing -- the written value
+			// is
+			// what the device reads -- and the answer follows the write.
+			float[] d = stub(512, 512);
+			long misses = residency.misses();
+			assertThat(Gpu.map(Gpu.MAP_LOG, c, 3, d, 3, n)).isTrue();
+			assertThat(residency.misses()).as("the written stub is uploaded again").isEqualTo(misses + 1);
+			float[] out = (float[]) Gpu.materialize(d);
+			assertThat(out[3 + 100]).isCloseTo((float) Math.log(2.0), within(1e-6f));
+			assertThat(out[3 + 99]).isZero();
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void anEvictedReleasedOrEagerStubIsDownloadedIntoABackingNotLost() {
+		DeviceResidency residency = device().residency();
+		Gpu.releaseResident();
+		int n = (int) Gpu.mapMinElements() * 2; // 1 MB a slab
+		long budget = 4L * n * Float.BYTES;
+		Gpu.residentBudget(budget);
+		Gpu.lazyResults(true);
+		List<float[]> results = new ArrayList<>();
+		try {
+			float[] a = new float[n];
+			for (int i = 0; i < n; i++) {
+				a[i] = (i % 89) / 100.0f;
+			}
+			// Thirty-two stub results against a budget that holds four: the cap evicts by
+			// downloading, and what it evicts lands in a backing nobody asked for yet.
+			for (int i = 0; i < 32; i++) {
+				float[] c = stub(512, 512);
+				results.add(c);
+				assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 3, n)).isTrue();
+				assertThat(Gpu.residentBytes()).as("after call %d", i).isLessThanOrEqualTo(budget);
+			}
+			assertThat(residency.dirtyCount()).isGreaterThan(0);
+			int stillResident = 0;
+			for (float[] c : results) {
+				assertThat(c).hasSize(3);
+				if (Gpu.resident(c)) {
+					stillResident++;
+				}
+				assertThat(((float[]) Gpu.materialize(c))[3 + 777]).isCloseTo((float) Math.exp(a[777]), within(1e-6f));
+			}
+			assertThat(stillResident).isBetween(1, 4);
+			// Switching lazy results off flushes the rest into backings; a release keeps
+			// them readable; and a stub handed over EAGERLY is filled into a backing
+			// before
+			// the call returns.
+			Gpu.lazyResults(false);
+			assertThat(residency.dirtyCount()).isZero();
+			Gpu.releaseResident();
+			assertThat(Gpu.residentBytes()).isZero();
+			for (float[] c : results) {
+				assertThat(((float[]) Gpu.materialize(c))[3 + 777]).isCloseTo((float) Math.exp(a[777]), within(1e-6f));
+			}
+			float[] eager = stub(512, 512);
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, eager, 3, n)).isTrue();
+			assertThat(residency.backed(eager)).as("eager was filled before the call returned").isTrue();
+			assertThat(residency.dirtyCount()).isZero();
+			assertThat(((float[]) Gpu.materialize(eager))[3 + 777]).isCloseTo((float) Math.exp(a[777]), within(1e-6f));
+			// A result array that is neither full nor exactly the prefix is a caller's
+			// mistake and declines.
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, new float[10], 3, n)).isFalse();
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.residentBudget(-1);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aCollectedStubTakesItsBackingWithIt() throws InterruptedException {
+		DeviceResidency residency = device().residency();
+		Gpu.releaseResident();
+		int n = (int) Gpu.mapMinElements() * 2;
+		float[] a = new float[n];
+		Gpu.lazyResults(true);
+		try {
+			float[] keep = stub(512, 512);
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, keep, 3, n)).isTrue();
+			float[] keepBacking = (float[]) Gpu.materialize(keep);
+			// Settle what earlier tests left unreachable before counting.
+			for (int attempt = 0; attempt < 5; attempt++) {
+				System.gc();
+				Thread.sleep(20);
+			}
+			int backed = residency.backingCount();
+			for (int i = 0; i < 8; i++) {
+				float[] c = stub(512, 512);
+				assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 3, n)).isTrue();
+				Gpu.materialize(c);
+			}
+			assertThat(residency.backingCount()).isEqualTo(backed + 8);
+			// The read-side ring remembers the last few arrays it answered for
+			// (strongly);
+			// push the stubs out of it so nothing but this frame holds them.
+			for (int i = 0; i < 4; i++) {
+				Gpu.materialize(new float[8]);
+			}
+			// Eight stubs nobody can reach: once the collector has them, their backings
+			// go
+			// with them, and the one still held keeps its backing.
+			int after = -1;
+			for (int attempt = 0; attempt < 20 && after != backed; attempt++) {
+				System.gc();
+				Thread.sleep(20);
+				after = residency.backingCount();
+			}
+			assertThat(after).isEqualTo(backed);
+			assertThat(Gpu.materialize(keep)).isSameAs(keepBacking);
+			assertThat(keepBacking[3 + 5]).isEqualTo(1.0f);
+			// keep is what the tally above is counting down TO, and the loop's own
+			// System.gc() is exactly the window in which it would otherwise go
+			// (`.kb/test-execution.md`).
+			java.lang.ref.Reference.reachabilityFence(keep);
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
 	}
 
 	private static double apply(int op, double x, double y) {
