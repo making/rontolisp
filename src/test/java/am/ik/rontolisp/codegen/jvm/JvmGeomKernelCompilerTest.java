@@ -102,12 +102,11 @@ class JvmGeomKernelCompilerTest {
 		assertThat(embedsGeomBridge(
 				compile("(print (geom:transform-point (geom:make-transform) (geom:vec3 1 2 3)))", true)))
 			.isFalse();
-		// geom:bounds is deliberately NOT one of them: geom::%vertex-extremes survives
-		// pruning in every geom program (JvmGeomKernelCompiler.gateMembers names the
-		// reason), so arming on it would be arming on the splice.
-		assertThat(embedsGeomBridge(compile("(print (geom:bounds (geom:box 10)))", true))).isFalse();
-		// And the three that do arm it: mesh directly, mesh through volume, wireframe
-		// and the reader.
+		// And the four that do arm it: geom:bounds through geom::%vertex-extremes (which
+		// only a program that measures a pose reaches now that LibraryDefunPruner walks
+		// a class header by position -- (geom:vec3 ...) above is the counter-case), mesh
+		// directly, mesh through volume, wireframe and the reader.
+		assertThat(embedsGeomBridge(compile("(print (geom:bounds (geom:box 10)))", true))).isTrue();
 		assertThat(embedsGeomBridge(compile("(print (length (geom:mesh (geom:box 10))))", true))).isTrue();
 		assertThat(embedsGeomBridge(compile("(print (geom:volume (geom:box 10)))", true))).isTrue();
 		assertThat(embedsGeomBridge(compile("(print (length (geom:wireframe (geom:box 10))))", true))).isTrue();

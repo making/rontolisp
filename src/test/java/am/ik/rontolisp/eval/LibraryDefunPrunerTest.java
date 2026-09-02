@@ -26,6 +26,14 @@ class LibraryDefunPrunerTest {
 			.process(TorchLibrary.process(JsonLibrary.process(LispReader.readAllFromString(source))))))));
 	}
 
+	// The geom nesting CompileFrontend uses: GeomLibrary INSIDE LinalgLibrary (the
+	// spliced geom bodies reference linalg:) and JsonLibrary outside both.
+	private static List<String> geomSurvivingNames(String source) {
+		return definedNames(LibraryDefunPruner.prune(VecLibrary
+			.process(LispPreludeLibrary.process(UrlLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
+				.process(TorchLibrary.process(UserMacroExpander.expand(LispReader.readAllFromString(source)))))))))));
+	}
+
 	private static List<String> definedNames(List<LispVal> program) {
 		List<String> names = new ArrayList<>();
 		for (LispVal form : program) {
@@ -370,6 +378,37 @@ class LibraryDefunPrunerTest {
 
 	private static List<String> systemSurvivingHeads(String source, Map<String, String> files) {
 		return survivingHeads(LibraryDefunPruner.prune(UserMacroExpander.expand(spliceSystem(source, files))));
+	}
+
+	// --- a class header is not a call site (the Lisp-2 namespaces) ---------------------
+
+	@Test
+	void aDefclassDoesNotKeepTheDefunOfTheSameName() {
+		// geom:bounds is BOTH a defclass -- an unkeyed root, always emitted -- and a
+		// defun. Counting the class header's own name as a function reference kept the
+		// whole measurement chain in EVERY program that splices geom, one that touches
+		// no solid included.
+		List<String> names = geomSurvivingNames("(print (geom:vec3 1 2 3))");
+		assertThat(names).contains("GEOM:VEC3")
+			.doesNotContain("GEOM:BOUNDS", "GEOM:BOUNDS-UNION", "GEOM::%SOLID-BOUNDS", "GEOM::%VERTEX-EXTREMES",
+					"GEOM:WORLD-TRANSFORM", "GEOM:COMPOSE", "GEOM:MAKE-TRANSFORM");
+		// A program that actually measures still carries it whole.
+		assertThat(geomSurvivingNames("(print (geom:bounds (geom:box 10)))")).contains("GEOM:BOUNDS",
+				"GEOM:BOUNDS-UNION", "GEOM::%SOLID-BOUNDS", "GEOM::%VERTEX-EXTREMES", "GEOM:WORLD-TRANSFORM");
+	}
+
+	@Test
+	void aSlotAccessorNameIsADefinitionAndAnInitformIsStillCode() {
+		// The positional walk skips only the DEFINING names. A root defclass whose
+		// accessor is spelled like a library defun does not keep it; the same form's
+		// :initform does.
+		List<String> names = geomSurvivingNames("""
+				(defclass holder ()
+				  ((seed :initform (linalg:zeros '(2 2)))
+				   (extent :accessor geom:bounds-extent)))
+				(print (make-instance 'holder))
+				""");
+		assertThat(names).contains("LINALG:ZEROS").doesNotContain("GEOM:BOUNDS-EXTENT");
 	}
 
 	@Test

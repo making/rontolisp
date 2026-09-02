@@ -6,8 +6,13 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 
 import org.jspecify.annotations.Nullable;
 
@@ -76,15 +81,15 @@ import static am.ik.gpu.MetalDriver.L;
  * back to the pool at the two safe moments -- the start of a call, before any operand is
  * looked up, and the end of one, after the command buffer has completed -- and a dirty
  * copy the cache lets go of (the LRU, a release, a replacement) is downloaded first,
- * never dropped. The mode is built, bit-identical and pinned, and an embedder that asks
- * for it gets it -- but the INTERCEPTORS do not ask for it here ({@link #lazyResultsPay}
- * is {@code false}): measured on the training step it is a tie at the notebook's shapes
- * and a loss of a third to a half at the book's, because every call still waits for its
- * command buffer, the CPU's lane loop streams memory about as fast as the device does on
- * this machine, and a resident set of tens of gigabytes beside the host arrays it mirrors
- * puts the machine under memory pressure ({@code .kb/gpu.md}, "Lazy results and the
- * resident tier on Metal", which also says what would change the answer: asynchronous
- * command buffers, and {@code .todo/492}).
+ * never dropped. Lazily a call also does not WAIT: it commits its command buffer and
+ * returns, and the wait moves to the first host touch of the bytes ({@link #commit},
+ * {@link #settle}) -- which is what lets the device run a chain while the host encodes
+ * the next member, and what made the mode pay here (todo-495: the interceptors ask for
+ * it, {@link #lazyResultsPay}). It did not pay from todo-494 to then, when every call
+ * waited: a tie at the notebook's shapes and a loss at the book's. The other half of that
+ * loss was memory -- on unified memory the pool and the heap share the machine -- and the
+ * lazy budgets below are what keep them apart ({@code .kb/gpu.md}, "Asynchronous command
+ * buffers on Metal").
  *
  * @see Gpu
  * @see MetalDriver
@@ -276,20 +281,32 @@ final class MetalGemm implements GpuDevice {
 	private static final long RESIDENT_SHARE = 4, RESIDENT_CAP = 1L << 30;
 
 	/**
-	 * Lazily: the POOL may hold the whole recommended working set less a headroom of an
-	 * eighth (never less than {@link #LAZY_HEADROOM_FLOOR}), and the resident set the
-	 * pool's budget less an eighth of THAT, which is what the scratch slabs of one call
-	 * and the free lists live in. The CUDA half's lazy rule is the same shape over free
-	 * device memory; here the pool and the resident set compete for the same slabs, so
-	 * the headroom is taken off the pool. The quarter share of the eager pool is not
-	 * enough once results live on the device: a training step at the book's shapes holds
-	 * tens of gigabytes of activations reachable until its backward, and a budget below
-	 * that flushed them as fast as they were made -- measured, 195 GB of flushes over 13
-	 * steps and a step a third slower than the pure pool ({@code .kb/gpu.md}, "Lazy
-	 * results and the resident tier on Metal"), the trap {@code .todo/491} hit at 1 GB on
-	 * CUDA.
+	 * Lazily: the POOL may hold the recommended working set less the JVM's maximum heap
+	 * and less a headroom of an eighth (never less than {@link #LAZY_HEADROOM_FLOOR}).
+	 * The CUDA half's lazy rule is the same shape over free DEVICE memory; here the
+	 * pool's slabs and the heap are the same physical memory, and a pool sized without
+	 * the heap -- the working set less an eighth, the rule until todo-495 -- filled the
+	 * machine at the book's shapes: 96 GB of slabs beside a 24 GB heap on 128 GB, and a
+	 * step that went from 1.9 s to 4 with the system's time in page compression. The
+	 * quarter share of the eager pool is not enough either once results live on the
+	 * device: a training step at the book's shapes holds tens of gigabytes of activations
+	 * reachable until its backward, and a budget below that flushed them as fast as they
+	 * were made -- measured, 195 GB of flushes over 13 steps and a step a third slower
+	 * than the pure pool ({@code .kb/gpu.md}, "Lazy results and the resident tier on
+	 * Metal"), the trap {@code .todo/491} hit at 1 GB on CUDA.
 	 */
 	private static final long LAZY_HEADROOM_SHARE = 8, LAZY_HEADROOM_FLOOR = 512L << 20;
+
+	/**
+	 * Lazily: the resident set may hold HALF the pool's budget, in span bytes. The two
+	 * budgets count in different units -- the cache counts the spans it mirrors, the pool
+	 * the power-of-two CAPACITY of its slabs, up to twice the span -- so a resident
+	 * budget nearer the pool's is never reached before the pool's is, and the LRU that
+	 * asks for a collection before it flushes never runs; what runs instead is the pool's
+	 * own pressure path. Measured (todo-495): at seven eighths the pool filled at every
+	 * step with the LRU idle.
+	 */
+	private static final long LAZY_RESIDENT_DIVISOR = 2;
 
 	private final MetalDriver driver;
 
@@ -354,6 +371,53 @@ final class MetalGemm implements GpuDevice {
 
 	/** Whether results stay on the device until the host reads them. */
 	private volatile boolean lazy;
+
+	/**
+	 * A command buffer committed WITHOUT a wait (the lazy mode, {@link #commit}) that the
+	 * host has not yet seen complete: its sequence number, the retained object, the slabs
+	 * its dispatch read and -- filled in by {@code finish} -- the ones it wrote, which
+	 * are the slabs that hold nobody's result if it ends in any status but
+	 * {@code Completed} ({@link #retire}).
+	 */
+	private record Inflight(long seq, MemorySegment commands, Slab[] read, List<Slab> written) {
+	}
+
+	/**
+	 * The command buffers in flight, oldest first. One queue executes them in the order
+	 * they were committed, so every one numbered at or below {@link #retired} has
+	 * completed, and a slab whose {@code fence} is at or below it may be touched by the
+	 * host. Under {@code this}.
+	 */
+	private final ArrayDeque<Inflight> inflight = new ArrayDeque<>();
+
+	/** The sequence number of the last command buffer committed asynchronously. */
+	private long committed;
+
+	/**
+	 * Every command buffer numbered at or below this has completed and been released.
+	 * Volatile, like a slab's fence: {@link #settle} reads both from whichever thread is
+	 * about to touch the bytes, and a stale read must err towards waiting.
+	 */
+	private volatile long retired;
+
+	/**
+	 * For the tests: the sequence number whose status is to be read as a failure, or 0.
+	 * Metal gives a kernel no way to fail on purpose; what the pin needs is the library's
+	 * handling of a failed status, not the OS's way of producing one.
+	 */
+	private long failAt;
+
+	/**
+	 * The storage (a host array, or a stub's backing) of every result whose command
+	 * buffer failed after the call had answered {@code true} and whose entry has since
+	 * been let go of: the flush had nothing to bring home, and the first host read of it
+	 * ({@link #materialize}) throws rather than answering the zeros the storage holds.
+	 * Weak, by identity: an array the program has dropped needs no verdict.
+	 */
+	private final Set<Object> lostStorage = Collections.newSetFromMap(new WeakHashMap<>());
+
+	/** {@code true} once anything has ever been lost: the guard on the read fast path. */
+	private volatile boolean anyLost;
 
 	/** A test-imposed residency budget, or -1 for the derived one. */
 	private volatile long residentBudgetOverride = -1;
@@ -863,8 +927,8 @@ final class MetalGemm implements GpuDevice {
 			call.stage(0, a, oa, aElements, false);
 			call.stage(1, b, ob, bElements, false);
 			boolean ran = this.mps && (long) n * m * p >= MPS_MIN_WORK
-					? multiplyThroughMps(call.slabs, sa, ta, sb, tb, batch, n, m, p)
-					: dispatchGemm(call.slabs, sa, ta, sb, tb, batch, n, m, p);
+					? multiplyThroughMps(call, sa, ta, sb, tb, batch, n, m, p)
+					: dispatchGemm(call, sa, ta, sb, tb, batch, n, m, p);
 			if (!ran) {
 				return false;
 			}
@@ -881,8 +945,9 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/** One dispatch of the tiled kernel over the whole stack. */
-	private boolean dispatchGemm(Slab[] slabs, int sa, boolean ta, int sb, boolean tb, int batch, int n, int m, int p)
+	private boolean dispatchGemm(Call call, int sa, boolean ta, int sb, boolean tb, int batch, int n, int m, int p)
 			throws Throwable {
+		Slab[] slabs = call.slabs;
 		try (Arena arena = Arena.ofConfined()) {
 			MemorySegment args = arena.allocate(I, 7);
 			args.setAtIndex(I, 0, n);
@@ -901,7 +966,7 @@ final class MetalGemm implements GpuDevice {
 			this.driver.dispatch(encoder, MetalDriver.size(arena, (p + TILE - 1) / TILE, (n + TILE - 1) / TILE, batch),
 					MetalDriver.size(arena, TILE, TILE, 1));
 			this.driver.messageVoid(encoder, "endEncoding");
-			return commitAndWait(commands);
+			return commit(commands, call);
 		}
 	}
 
@@ -912,8 +977,9 @@ final class MetalGemm implements GpuDevice {
 	 * batched {@code MPSMatrixDescriptor} cannot be handed. Metal's floor is per command
 	 * buffer rather than per dispatch, so the encodes share the one wait.
 	 */
-	private boolean multiplyThroughMps(Slab[] slabs, int sa, boolean ta, int sb, boolean tb, int batch, int n, int m,
+	private boolean multiplyThroughMps(Call call, int sa, boolean ta, int sb, boolean tb, int batch, int n, int m,
 			int p) throws Throwable {
+		Slab[] slabs = call.slabs;
 		// A transposed operand's descriptor is its STORED shape -- m x n rather than
 		// n x m -- and MPS is told to read it transposed; the rowBytes stay the storage's
 		// own contiguous row.
@@ -948,7 +1014,7 @@ final class MetalGemm implements GpuDevice {
 					release(this.driver, mc);
 				}
 			}
-			return commitAndWait(commands);
+			return commit(commands, call);
 		}
 		finally {
 			release(this.driver, multiplication);
@@ -989,7 +1055,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 2);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -1047,7 +1113,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 3L * Integer.BYTES, 4);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -1099,7 +1165,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 3);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -1155,7 +1221,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 4L * Integer.BYTES, 2);
 				flatDispatch(arena, encoder, cells);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -1223,7 +1289,7 @@ final class MetalGemm implements GpuDevice {
 			}
 			call.stage(0, w, ow, wElements, true);
 			call.stage(1, x, ox, cols, false);
-			if (!dispatchGemv(call.slabs, rows, cols)) {
+			if (!dispatchGemv(call, rows, cols)) {
 				return false;
 			}
 			call.finish(2, y, oy, rows);
@@ -1242,7 +1308,8 @@ final class MetalGemm implements GpuDevice {
 	 * One dispatch of the GEMV: one SIMD-group per row, {@link #GEMV_GROUP} threads a
 	 * group.
 	 */
-	private boolean dispatchGemv(Slab[] slabs, int rows, int cols) throws Throwable {
+	private boolean dispatchGemv(Call call, int rows, int cols) throws Throwable {
+		Slab[] slabs = call.slabs;
 		try (Arena arena = Arena.ofConfined()) {
 			MemorySegment args = arena.allocate(I, 2);
 			args.setAtIndex(I, 0, rows);
@@ -1255,7 +1322,7 @@ final class MetalGemm implements GpuDevice {
 			this.driver.dispatch(encoder, MetalDriver.size(arena, (rows + rowsPerGroup - 1) / rowsPerGroup, 1, 1),
 					MetalDriver.size(arena, GEMV_GROUP, 1, 1));
 			this.driver.messageVoid(encoder, "endEncoding");
-			return commitAndWait(commands);
+			return commit(commands, call);
 		}
 	}
 
@@ -1297,7 +1364,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 3);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -1358,7 +1425,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", scalar, 2L * Long.BYTES, 3);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -1449,7 +1516,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", scalars, 2L * Float.BYTES, 6);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -1512,7 +1579,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", bits, 10L * Long.BYTES, 5);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -1578,7 +1645,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 4L * Integer.BYTES, 3);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -1637,9 +1704,173 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * Commits and waits. A command buffer that ends in any status but {@code Completed}
-	 * is an ordinary decline -- Metal has no sticky-context state for this to retire the
-	 * feature over, unlike a CUDA {@code CUresult}.
+	 * The end of every member's encoding, one of two ways. EAGERLY -- the library's
+	 * default contract, "{@code out} is filled when the call returns" -- it commits and
+	 * waits, and a command buffer that ends in any status but {@code Completed} is an
+	 * ordinary decline. LAZILY it commits and RETURNS: nothing waits until the host is
+	 * about to touch bytes the device may still be reading or writing ({@link #settle}),
+	 * so a chain of members over resident operands runs on the device while the host goes
+	 * on encoding the next. The command buffer is retained past the call's autorelease
+	 * pool and released when it retires; its number becomes the fence of every slab the
+	 * call holds. A failure is then learned only after the call has answered
+	 * {@code true}, which the lazy mode is built to carry: it surfaces at the first host
+	 * read of a result the failed buffer wrote, as the {@code IllegalStateException} that
+	 * mode already reserves for a result the host has no other copy of
+	 * ({@link Gpu#lazyResults}).
+	 */
+	private boolean commit(MemorySegment commands, Call call) throws Throwable {
+		if (!this.lazy) {
+			return commitAndWait(commands);
+		}
+		this.driver.messageVoid(commands, "commit");
+		this.driver.message(commands, "retain");
+		synchronized (this) {
+			long seq = ++this.committed;
+			call.seq = seq;
+			this.inflight.addLast(new Inflight(seq, commands, call.operands(), new ArrayList<>(2)));
+			for (Slab slab : call.slabs) {
+				if (slab != null) {
+					slab.fence = seq;
+				}
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The host is about to read or write {@code slab}'s bytes: waits for the command
+	 * buffer that last touched it, if it is still in flight -- and, one queue executing
+	 * in order, for every earlier one, each of which is retired on the way.
+	 */
+	private void settle(Slab slab) {
+		if (slab.fence > this.retired) {
+			waitFor(slab.fence);
+		}
+	}
+
+	/** {@link #settle} for everything: nothing is in flight when this returns. */
+	private void waitAll() {
+		waitFor(this.committed);
+	}
+
+	private synchronized void waitFor(long seq) {
+		try {
+			while (!this.inflight.isEmpty() && this.inflight.peekFirst().seq() <= seq) {
+				Inflight head = this.inflight.pollFirst();
+				this.driver.messageVoid(head.commands(), "waitUntilCompleted");
+				retire(head);
+			}
+		}
+		catch (Throwable ex) {
+			throw new IllegalStateException("a Metal command buffer could not be waited for", ex);
+		}
+	}
+
+	/**
+	 * Retires, without blocking, every command buffer at the head of the line that has
+	 * already completed: the start of every call, so that a retained command buffer goes
+	 * back to the queue promptly and a failure is learned as early as it can be.
+	 */
+	private synchronized void retireCompleted() {
+		try {
+			while (!this.inflight.isEmpty() && status(this.inflight.peekFirst()) >= MetalDriver.STATUS_COMPLETED) {
+				retire(this.inflight.pollFirst());
+			}
+		}
+		catch (Throwable ex) {
+			throw new IllegalStateException("a Metal command buffer's status could not be read", ex);
+		}
+	}
+
+	/**
+	 * The buffer's status -- read as a failure, once it has finished, if a test said so.
+	 */
+	private long status(Inflight buffer) throws Throwable {
+		long status = this.driver.messageLong(buffer.commands(), "status");
+		return buffer.seq() == this.failAt && status >= MetalDriver.STATUS_COMPLETED ? MetalDriver.STATUS_ERROR
+				: status;
+	}
+
+	/**
+	 * A completed command buffer leaves the line. Ended in any status but
+	 * {@code Completed}, the slabs it wrote hold nobody's result and are marked LOST, and
+	 * so is every result of a later buffer in flight that read one of them -- a chain
+	 * over a lost result is lost with it -- until a slab is taken fresh from the pool
+	 * again ({@link #take}) or written as a pure result by a buffer that did not read it.
+	 */
+	private void retire(Inflight done) throws Throwable {
+		long status = status(done);
+		this.retired = done.seq();
+		release(this.driver, done.commands());
+		if (status == MetalDriver.STATUS_COMPLETED) {
+			return;
+		}
+		markLost(done.written());
+		for (Inflight later : this.inflight) {
+			boolean readsLost = false;
+			for (Slab slab : later.read()) {
+				readsLost |= slab.lost;
+			}
+			if (readsLost) {
+				markLost(later.written());
+				continue;
+			}
+			for (Slab slab : later.written()) {
+				boolean read = false;
+				for (Slab operand : later.read()) {
+					read |= operand == slab;
+				}
+				if (!read) {
+					slab.lost = false;
+				}
+			}
+		}
+	}
+
+	private void markLost(List<Slab> slabs) {
+		for (Slab slab : slabs) {
+			slab.lost = true;
+		}
+		this.anyLost |= !slabs.isEmpty();
+	}
+
+	/** {@code finish}'s report: the slab {@code seq}'s dispatch wrote. Under this. */
+	private synchronized void noteWritten(long seq, Slab slab) {
+		Inflight last = this.inflight.peekLast();
+		if (last != null && last.seq() == seq) {
+			last.written().add(slab);
+			return;
+		}
+		for (Inflight buffer : this.inflight) {
+			if (buffer.seq() == seq) {
+				buffer.written().add(slab);
+				return;
+			}
+		}
+	}
+
+	/**
+	 * For the tests: the next command buffer committed asynchronously is to be read as
+	 * having FAILED, whatever the device says. Package-private.
+	 */
+	void failNextCommandBuffer() {
+		synchronized (this) {
+			this.failAt = this.committed + 1;
+		}
+	}
+
+	/** For the tests: how many command buffers are in flight right now. */
+	int inflightCount() {
+		synchronized (this) {
+			return this.inflight.size();
+		}
+	}
+
+	/**
+	 * Commits and waits: the eager half of {@link #commit}. A command buffer that ends in
+	 * any status but {@code Completed} is an ordinary decline -- Metal has no
+	 * sticky-context state for this to retire the feature over, unlike a CUDA
+	 * {@code CUresult}.
 	 */
 	private boolean commitAndWait(MemorySegment commands) throws Throwable {
 		this.driver.messageVoid(commands, "commit");
@@ -1663,9 +1894,37 @@ final class MetalGemm implements GpuDevice {
 
 		final boolean[] owned;
 
+		/**
+		 * Whether the slot is an OPERAND the dispatch reads -- a lookup hit, an upload,
+		 * or a share of one -- as against a result it only writes. What {@link #retire}
+		 * needs to follow a lost result through the buffers that read it.
+		 */
+		final boolean[] operand;
+
+		/**
+		 * The sequence number {@link #commit} gave this call's command buffer, lazily.
+		 */
+		long seq;
+
 		Call(int slots) {
 			this.slabs = new Slab[slots];
 			this.owned = new boolean[slots];
+			this.operand = new boolean[slots];
+		}
+
+		/** The slabs the dispatch reads. */
+		Slab[] operands() {
+			int count = 0;
+			for (int i = 0; i < this.slabs.length; i++) {
+				count += this.operand[i] && this.slabs[i] != null ? 1 : 0;
+			}
+			Slab[] read = new Slab[count];
+			for (int i = 0, k = 0; i < this.slabs.length; i++) {
+				if (this.operand[i] && this.slabs[i] != null) {
+					read[k++] = this.slabs[i];
+				}
+			}
+			return read;
 		}
 
 		/**
@@ -1690,6 +1949,7 @@ final class MetalGemm implements GpuDevice {
 				Slab slab = MetalGemm.this.held.get(address);
 				if (slab != null) {
 					this.slabs[slot] = slab;
+					this.operand[slot] = true;
 				}
 				return slab;
 			}
@@ -1698,6 +1958,7 @@ final class MetalGemm implements GpuDevice {
 		/** The slot shares another's slab -- an in-place member's destination. */
 		void share(int slot, int other) {
 			this.slabs[slot] = this.slabs[other];
+			this.operand[slot] = this.operand[other];
 		}
 
 		/** A scratch slab for the slot unless the lookup filled it. */
@@ -1737,9 +1998,14 @@ final class MetalGemm implements GpuDevice {
 				return;
 			}
 			Slab slab = this.slabs[slot];
+			this.operand[slot] = true;
 			// A stub (DeviceResidency, the class comment) is uploaded from its backing.
 			float[] source = host.length >= offset + elements ? host : (float[]) MetalGemm.this.residency.source(host,
 					(long) offset * Float.BYTES, elements * Float.BYTES);
+			// A slab from the free list may still be read by a command buffer in flight:
+			// the ordering the residency design exists to forbid, and the one wait a
+			// chain over resident operands never pays.
+			MetalGemm.this.settle(slab);
 			upload(source, offset, slab, (int) elements);
 			if (adopt || MetalGemm.this.lazy) {
 				MetalGemm.this.adopt(host, (long) offset * Float.BYTES, elements * Float.BYTES, slab, false, keep());
@@ -1758,11 +2024,13 @@ final class MetalGemm implements GpuDevice {
 				return;
 			}
 			Slab slab = this.slabs[slot];
+			this.operand[slot] = true;
 			long width = wide ? Double.BYTES : Float.BYTES;
 			long offsetBytes = offset * width, bytes = elements * width;
 			int length = wide ? ((double[]) mask).length : ((float[]) mask).length;
 			Object source = length >= offset + elements ? mask
 					: MetalGemm.this.residency.source(mask, offsetBytes, bytes);
+			MetalGemm.this.settle(slab);
 			if (wide) {
 				MemorySegment.copy((double[]) source, offset, slab.contents(), D, 0, elements);
 			}
@@ -1791,6 +2059,7 @@ final class MetalGemm implements GpuDevice {
 				download(slab, target, offset, (int) elements);
 				return;
 			}
+			MetalGemm.this.noteWritten(this.seq, slab);
 			if (this.owned[slot]) {
 				MetalGemm.this.adopt(host, (long) offset * Float.BYTES, elements * Float.BYTES, slab, true, keep());
 				this.owned[slot] = false;
@@ -1829,6 +2098,7 @@ final class MetalGemm implements GpuDevice {
 	 * call has been looked up, so no slab the coming dispatch reads can be among them.
 	 */
 	private void enter() {
+		retireCompleted();
 		drainPending();
 	}
 
@@ -1880,12 +2150,17 @@ final class MetalGemm implements GpuDevice {
 		}
 	}
 
-	/** Downloads every pending flush and queues its slab for the drain. Under this. */
+	/**
+	 * Downloads every pending flush and queues its slab for the drain. A flush whose slab
+	 * holds a LOST result has nothing to bring home: its storage is remembered, and the
+	 * first read of it throws ({@link #materialize}). Under this.
+	 */
 	private void flushNow() {
 		for (DeviceResidency.Flush flush : this.residency.flushes()) {
 			Slab slab = this.held.get(flush.pointer());
-			if (slab != null && flush.target() instanceof float[] target) {
-				download(slab, target, (int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES));
+			if (slab != null && flush.target() instanceof float[] target && !bringHome(slab, target,
+					(int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES))) {
+				this.lostStorage.add(target);
 			}
 			this.residency.release(flush.pointer());
 		}
@@ -1912,8 +2187,9 @@ final class MetalGemm implements GpuDevice {
 	// Eight of the nine compositions gemm.cu fuses, each one MSL kernel where torch.lisp
 	// launched a chain of linalg: members -- and on this backend that removes four of
 	// five
-	// COMMAND BUFFERS as well as the memory passes, because a Metal call is commit plus
-	// waitUntilCompleted and nothing overlaps. Every one reproduces the chain's rounding,
+	// COMMAND BUFFERS as well as the memory passes, which eagerly are four full waits
+	// (lazily the buffers are asynchronous, todo-495). Every one reproduces the chain's
+	// rounding,
 	// through the float route where two floats settle it and through the software
 	// binary64
 	// route where they do not (gemm.metal, "THE FUSED TIER"). The ninth, the dropout
@@ -2156,7 +2432,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, declared + 1);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -2223,7 +2499,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.dispatch(encoder, MetalDriver.size(arena, groups, 1, 1),
 						MetalDriver.size(arena, ROW_SIMDS * SIMD_WIDTH, 1, 1));
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -2351,7 +2627,7 @@ final class MetalGemm implements GpuDevice {
 				this.driver.dispatch(encoder, MetalDriver.size(arena, groups, 1, 1),
 						MetalDriver.size(arena, ROW_SIMDS * SIMD_WIDTH, 1, 1));
 				this.driver.messageVoid(encoder, "endEncoding");
-				if (!commitAndWait(commands)) {
+				if (!commit(commands, call)) {
 					return false;
 				}
 			}
@@ -2396,12 +2672,12 @@ final class MetalGemm implements GpuDevice {
 	public Object materialize(Object host) {
 		Object recent = this.residency.recentClaim(host);
 		if (recent != null) {
-			return recent;
+			return lostOrNot(recent);
 		}
 		DeviceResidency.Claim claim = this.residency.claim(host);
 		DeviceResidency.Flush flush = claim.flush();
 		if (flush == null) {
-			return claim.storage();
+			return lostOrNot(claim.storage());
 		}
 		Slab slab;
 		synchronized (this) {
@@ -2410,8 +2686,30 @@ final class MetalGemm implements GpuDevice {
 		if (slab == null || !(flush.target() instanceof float[] target)) {
 			throw new IllegalStateException("a device result could not be brought home: its buffer is gone");
 		}
-		download(slab, target, (int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES));
+		if (!bringHome(slab, target, (int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES))) {
+			synchronized (this) {
+				this.lostStorage.add(target);
+			}
+			throw lost();
+		}
 		return claim.storage();
+	}
+
+	/** {@code storage}, unless it is a lost result's, which the host must not read. */
+	private Object lostOrNot(Object storage) {
+		if (this.anyLost) {
+			synchronized (this) {
+				if (this.lostStorage.contains(storage)) {
+					throw lost();
+				}
+			}
+		}
+		return storage;
+	}
+
+	private static IllegalStateException lost() {
+		return new IllegalStateException(
+				"a device result could not be brought home: the command buffer that computed it failed");
 	}
 
 	@Override
@@ -2425,17 +2723,15 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * {@code false}: measured, lazy results do not pay on this backend -- a tie at the
-	 * notebook's shapes and a loss of a third to a half at the book's, where every call
-	 * still waits for its command buffer, the CPU's lane loop streams memory as fast as
-	 * the device does, and a resident set of tens of gigabytes beside the host arrays it
-	 * mirrors puts the machine under memory pressure ({@code .kb/gpu.md}, "Lazy results
-	 * and the resident tier on Metal"). The mode itself works and is pinned by the tests;
-	 * an embedder that asks for it gets it. The interceptors ask only where it pays.
+	 * {@code true} since todo-495: with the command buffers asynchronous the mode pays --
+	 * measured, the training step at the book's shapes goes 4.80 -> 1.81 s and the
+	 * notebook's width 0.083 -> 0.041 ({@code .kb/gpu.md}, "Asynchronous command buffers
+	 * on Metal"). It was {@code false} from todo-494 to then, when every call waited for
+	 * its command buffer and the mode was a tie at small shapes and a loss at large ones.
 	 */
 	@Override
 	public boolean lazyResultsPay() {
-		return false;
+		return true;
 	}
 
 	@Override
@@ -2460,12 +2756,15 @@ final class MetalGemm implements GpuDevice {
 			synchronized (this) {
 				for (DeviceResidency.Flush flush : this.residency.claimAllDirty()) {
 					Slab slab = this.held.get(flush.pointer());
-					if (slab != null && flush.target() instanceof float[] target) {
-						download(slab, target, (int) (flush.offset() / Float.BYTES),
-								(int) (flush.bytes() / Float.BYTES));
+					if (slab != null && flush.target() instanceof float[] target && !bringHome(slab, target,
+							(int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES))) {
+						this.lostStorage.add(target);
 					}
 				}
 			}
+			// Eagerly every call waits for its own command buffer and nothing else may
+			// be in flight; the mode starts with the line empty.
+			waitAll();
 		}
 	}
 
@@ -2488,6 +2787,7 @@ final class MetalGemm implements GpuDevice {
 	public void releaseResident() {
 		this.residency.evictAll();
 		drainPending();
+		waitAll();
 	}
 
 	@Override
@@ -2509,8 +2809,10 @@ final class MetalGemm implements GpuDevice {
 	/** The pool's budget for the mode in force: see {@link #LAZY_HEADROOM_SHARE}. */
 	private long derivedPoolBudget() {
 		if (this.lazy) {
+			long heap = Runtime.getRuntime().maxMemory();
+			long headroom = Math.max(this.workingSet / LAZY_HEADROOM_SHARE, LAZY_HEADROOM_FLOOR);
 			return Math.max(1L << 28,
-					this.workingSet - Math.max(this.workingSet / LAZY_HEADROOM_SHARE, LAZY_HEADROOM_FLOOR));
+					this.workingSet - headroom - (heap == Long.MAX_VALUE ? this.workingSet / 2 : heap));
 		}
 		return Math.max(1L << 28, this.workingSet / POOL_BUDGET_DIVISOR);
 	}
@@ -2521,7 +2823,7 @@ final class MetalGemm implements GpuDevice {
 	 */
 	private long derivedResidentBudget() {
 		if (this.lazy) {
-			return Math.max(0, this.poolBudget - Math.max(this.poolBudget / LAZY_HEADROOM_SHARE, LAZY_HEADROOM_FLOOR));
+			return Math.max(0, this.poolBudget / LAZY_RESIDENT_DIVISOR);
 		}
 		return Math.min(RESIDENT_CAP, this.poolBudget / RESIDENT_SHARE);
 	}
@@ -2532,8 +2834,44 @@ final class MetalGemm implements GpuDevice {
 	/**
 	 * One reusable device buffer and the host pointer into it. On unified memory
 	 * {@code contents} IS host memory, so an upload is a {@code memcpy} and nothing more.
+	 * {@code fence} is the number of the last command buffer that read or wrote it (0:
+	 * none) -- the one the host must see complete before it touches the bytes, and the
+	 * only one, since one queue executes in order ({@link #settle}). {@code lost} says
+	 * the last command buffer to write it failed, so its bytes are nobody's result.
 	 */
-	private record Slab(MemorySegment buffer, MemorySegment contents, long capacity, int sizeClass) {
+	private static final class Slab {
+
+		final MemorySegment buffer;
+
+		final MemorySegment contents;
+
+		final long capacity;
+
+		final int sizeClass;
+
+		volatile long fence;
+
+		boolean lost;
+
+		Slab(MemorySegment buffer, MemorySegment contents, long capacity, int sizeClass) {
+			this.buffer = buffer;
+			this.contents = contents;
+			this.capacity = capacity;
+			this.sizeClass = sizeClass;
+		}
+
+		MemorySegment buffer() {
+			return this.buffer;
+		}
+
+		MemorySegment contents() {
+			return this.contents;
+		}
+
+		int sizeClass() {
+			return this.sizeClass;
+		}
+
 	}
 
 	/**
@@ -2555,22 +2893,37 @@ final class MetalGemm implements GpuDevice {
 		synchronized (this) {
 			ArrayDeque<Slab> bucket = this.free[sizeClass];
 			if (bucket != null && !bucket.isEmpty()) {
-				return bucket.pop();
+				// Whatever it held is over: the taker writes it, or uploads into it after
+				// settling it.
+				Slab slab = bucket.pop();
+				slab.lost = false;
+				return slab;
 			}
 			long capacity = 1L << sizeClass;
 			if (this.pooledBytes + capacity > this.poolBudget && !evict(capacity)) {
-				if (!this.residency.occupied()) {
-					return null;
-				}
-				this.residency.evictAll(keep);
-				flushNow();
-				for (long address : this.residency.drain()) {
-					Slab slab = this.held.remove(address);
-					if (slab != null) {
-						push(slab);
+				// Under pool pressure the resident set gives way, least recently used
+				// first and a clean copy before a dirty one, a slab's worth at a time:
+				// the resident set must never be the reason a call declines, and -- the
+				// pool being the machine's own memory here -- neither may the whole of
+				// it be flushed into the heap at once, which is what evicting it all did
+				// (todo-495: a thousand flushes and ten gigabytes of backings in one
+				// call, and an OutOfMemoryError when the step's phase made it forty).
+				while (this.residency.occupied()) {
+					if (this.residency.evictSome(keep, capacity) == 0) {
+						break;
+					}
+					flushNow();
+					for (long address : this.residency.drain()) {
+						Slab slab = this.held.remove(address);
+						if (slab != null) {
+							push(slab);
+						}
+					}
+					if (evict(capacity)) {
+						break;
 					}
 				}
-				if (!evict(capacity)) {
+				if (this.pooledBytes + capacity > this.poolBudget) {
 					return null;
 				}
 			}
@@ -2631,6 +2984,20 @@ final class MetalGemm implements GpuDevice {
 
 	private static void upload(float[] source, int offset, Slab slab, int elements) {
 		MemorySegment.copy(source, offset, slab.contents(), F, 0, elements);
+	}
+
+	/**
+	 * Brings a result home: waits for the command buffer that wrote the slab, if it is
+	 * still in flight, then copies. {@code false} when that buffer failed, in which case
+	 * the slab holds nobody's result and nothing is copied.
+	 */
+	private boolean bringHome(Slab slab, float[] destination, int offset, int elements) {
+		settle(slab);
+		if (slab.lost) {
+			return false;
+		}
+		download(slab, destination, offset, elements);
+		return true;
 	}
 
 	private static void download(Slab slab, float[] destination, int offset, int elements) {

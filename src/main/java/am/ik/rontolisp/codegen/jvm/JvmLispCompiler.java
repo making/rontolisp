@@ -1689,7 +1689,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// its whole point is that a call site honours a definition replaced at run time,
 		// which a kernel emitted over the defun would not.
 		if (this.geomKernels && !this.dynamic) {
-			for (String member : JvmGeomKernelCompiler.gateMembers()) {
+			for (String member : JvmGeomKernelCompiler.members()) {
 				usesGeom = usesGeom || programUsesSymbol(program, member);
 			}
 		}

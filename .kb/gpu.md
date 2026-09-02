@@ -893,8 +893,34 @@ At the notebook's width, 200 steps, the same eight rows land within one and a ha
 of each other (22.0-22.3 s; the adaptive parallel row alone at 23.5), where the CUDA table
 at the same width spanned 5.4 to 22.9 s. **On a Mac: set `-Xmx` and stop.** Nothing in
 `DeviceResidency` is per-device -- a collection policy would be a `GpuDevice` question, and
-there is no policy to decide while the request is never made. It becomes live again the
-moment `.todo/495` makes lazy results pay there.
+there is no policy to decide while the request is never made.
+
+**Re-taken 2026-09-02, when todo-495 made lazy results pay here and the request started
+firing** (23 steps at the book's shapes and 200 at the notebook's width, `-Xmx24g`, two
+rounds each, the asynchronous build with the heap-aware budgets of "Asynchronous command
+buffers on Metal"):
+
+| flags | 23 steps, book's | `Pause Full` | total pause | 200 steps, notebook's |
+|---|---|---|---|---|
+| **default collector (G1)** | **44.4 / 48.5 s** | 12 / 11 | 0.16 s | 9.44 / 9.44 s |
+| ... plus `-XX:+ExplicitGCInvokesConcurrent` | 45.0 / 48.1 s | 0 | 0.10 s | 9.48 / 9.40 |
+| ... plus `-XX:+DisableExplicitGC` | 49.7 / 50.0 s | 0 | 0.25-0.28 s | 9.49 / 9.37 |
+| ... plus `-XX:+AlwaysPreTouch` (`-Xmx32g`) | 51.7 / 48.5 s | 16 / 14 | 0.42-0.57 s | 9.37 / 9.35 |
+| `-XX:+UseParallelGC -Xmn8g` | 51.4 / 48.7 s | 12 | 0.5 s | 10.05 / 10.0 |
+| ... plus `-XX:+ExplicitGCInvokesConcurrent` | 50.2 / 48.2 s | 12 | 0.5 s | 10.06 / 10.0 |
+| ... plus `-XX:+DisableExplicitGC` | 51.3 / 50.8 s | 2-3 | 1.1-1.2 s | 9.96 / 10.0 |
+| `-XX:+UseParallelGC`, young adaptive | 49.0 / 48.6 s | 6-7 | 0.75-0.82 s | 9.90 / 9.9 |
+
+The sentence stands and its reason changed: the request IS made now (the twelve full
+collections of the default row are the library's, 7 ms each -- the heap holds stubs and
+backings, not the activations), and the default collector answers it best or tied.
+`-XX:+DisableExplicitGC` costs 4-10% at the book's shapes now, where it cost nothing, for
+CUDA's reason in miniature: refused, the LRU evicts dirty entries as flushes into fresh
+backings. `-XX:+ExplicitGCInvokesConcurrent` is a tie, so nothing needs saying about it.
+The parallel rows are 0-15% slower at the book's and 6% at the notebook's, and the pages
+argument still has nothing to act on. What `-Xmx` decides on a Mac is now TWO things: the
+heap, and the pool the device's results live in, which is sized off the working set less
+the heap.
 
 ## The CUDA backend
 
@@ -1587,10 +1613,10 @@ threshold, and two whole tiers.
 | axis fold `:axis` | yes | **not as a round trip, measured**; over a resident operand only |
 | generator fill | yes | no -- it needs a `double` |
 | `vec:matvec` | from `2^17`, double accumulator | from `2^21`, **compensated float** accumulator |
-| lazy results + resident tier | on (`lazyResultsPay`) | **built, pinned, and NOT switched on -- measured** |
-| resident set | every operand and result | **the GEMV's matrix only** |
-| index tier + clip norm | yes | declined: with no lazy results there is no download to save |
-| per-call floor | 16-18 us | **77 us**, per COMMAND BUFFER |
+| lazy results + resident tier | on (`lazyResultsPay`) | **on since todo-495**, when the command buffers went asynchronous under the mode; measured off from todo-494 to then |
+| resident set | every operand and result | eagerly **the GEMV's matrix only**; lazily every operand and result, under a budget that leaves the heap its memory |
+| index tier + clip norm | yes | the copies over a resident operand; `sumSquares` still declined (unmeasured lazily) |
+| per-call floor | 16-18 us | **77 us**, per COMMAND BUFFER, eagerly; **15-26 us a member** in a lazy chain, where nothing waits (todo-495) |
 | per-call memory | the driver's pool | **our own** size-classed pool |
 | kernels | PTX generated at build time, checked in | MSL compiled at RUN time, from a string |
 
@@ -1864,7 +1890,10 @@ threshold already is. At the book's 16384 the CPU wins by 1.5-2.2x back to back 
 6-8x in the chain.
 
 **The straddle stays, and it is the price of a threshold that is right rather than the
-symptom of one that is wrong.** The finding generalizes past this member: a size threshold
+symptom of one that is wrong.** (The gap is the EAGER chain's; lazily -- the interceptors'
+mode since todo-495 -- the `sum` runs over a resident operand on the device and the
+per-row `log` is offered for its residency, so the chain would not straddle at all. It is
+unmeasured, because the fused pair replaces the chain either way.) The finding generalizes past this member: a size threshold
 measured back to back is measured in the wrong context for any member whose operand a
 REFUSED member produced, because the refusal is also the idle that costs the next call its
 clocks. Lowering the map threshold to catch the per-row shape would have moved a 62 us
@@ -1922,8 +1951,13 @@ whole point.
 
 ### Lazy results and the resident tier on Metal
 
-Built here, bit-identical, pinned -- and **the interceptors do not switch it on, because it
-does not pay.** The mode works: a member's result slab becomes the host array's DIRTY entry
+**Superseded 2026-09-02 by "Asynchronous command buffers on Metal" below: the interceptors
+DO switch it on now.** What follows is the synchronous measurement, kept because its three
+reasons are what todo-495 answered one by one -- the first by not waiting, the second by a
+budget that counts the heap, the third by finding it was never the cost.
+
+Built here, bit-identical, pinned -- and, until todo-495, **the interceptors did not switch
+it on, because it did not pay.** The mode works: a member's result slab becomes the host array's DIRTY entry
 instead of being downloaded, `materialize` is a memcpy out of the slab's `contents`, and
 the lazy pool rule is its own (the POOL may hold the working set less an eighth, never less
 than 512 MB, and the resident set the pool less an eighth of that, because here the pool
@@ -1951,11 +1985,11 @@ So the decline is kept as a POLICY, not by tearing the mode out:
 `Gpu.lazyResultsIfWorthwhile()` is what both interceptors call, and `Gpu.lazyResults(true)`
 stays the unconditional request an embedder or a test makes, honoured on both backends.
 `theInterceptorsRequestLeavesResultsEagerHereAndAnEmbeddersDoesNot` pins the distinction.
-**The first item above is the lever** -- committing without waiting and waiting only at the
-first host touch would overlap the host with the device the way CUDA does, and it changes
+**The first item above was the lever** -- committing without waiting and waiting only at
+the first host touch overlaps the host with the device the way CUDA does, and it changes
 when a slab may be recycled, the one ordering the residency design exists to forbid. That
-is `.todo/495`, and the second item is `.todo/492`'s stubs, which are built in the library
-and unmeasured here because the interceptors do not run lazily.
+was `.todo/495`, below; the second item was `.todo/492`'s stubs, built in the library and
+unmeasured here until then.
 
 **The Java boundary, measured here too, finds nothing to defeat.** The same harness
 (`examples/jvm/bench/`, `./run.sh gpu`, 200 chained GEMVs over a resident 2048x2048 f32
@@ -1985,6 +2019,131 @@ the CPU's memcpy-plus-lane-loop between 2^18 and 2^19 -- yet the step measured f
 because a declined member over a resident operand costs a materialize, the CPU loop and
 the re-upload of its result around it, and a chain that flips between the two pays both
 memcpys at every flip.
+
+### Asynchronous command buffers on Metal (todo-495, 2026-09-02)
+
+The first of the three reasons above is gone, and with it the decision: **the interceptors
+switch lazy results on here** (`MetalGemm.lazyResultsPay()` is `true`), because under the
+mode a call no longer waits. The step at the book's shapes goes **4.80 -> 1.81 s (2.65x)**,
+the notebook's width **0.083 -> 0.041**, and the loss series prints the same four
+decimals at every step of every run.
+
+**What was measured first, and what it said would happen.** The waits were counted before
+anything was built (a `System.nanoTime` around `commitAndWait`, per step, 13-step runs at
+the book's shapes): eagerly 888 command buffers a step and 1.37-1.42 s of waiting in a
+4.64 s step -- and 409-454 gaps of more than a millisecond between one buffer's completion
+and the next commit, 3.1 s of them, which is the device idle and dropping its clocks
+("Residency and the GEMV on this backend"). Lazily -- synchronous still, but with stubs,
+which todo-494's round did not have -- the step was 5.83 s (7.66 / 5.83 / 5.82), of which
+3.6-5.2 s was waiting on 1774 buffers, so the host's own share was ~2 s: overlapped
+perfectly, the mode could reach max(2, 3.8) = 3.8 s and beat the eager 4.6-4.8. It
+reached 1.81, because the second thing the waits cost was the clocks: a queue that never drains
+never idles, and the same 1774 buffers that took 3.8 s one at a time take ~1 s of waiting
+in all when the host only waits where it must.
+
+**The mechanism.** `MetalGemm.commit` is the end of every member's encoding. Eagerly it is
+`commitAndWait` as before -- the library's contract, "`out` is filled when the call
+returns", cannot be met any other way, and a failed buffer is still an ordinary decline.
+Lazily it commits, RETAINS the command buffer past the call's autorelease pool, gives it
+a sequence number, and returns. Every slab the call held carries that number as its
+`fence`; the buffers in flight sit in one deque, oldest first. One queue executes in
+order, so "every buffer numbered at or below `retired` has completed" is a scalar, and
+`settle(slab)` -- wait for the slab's fence, retiring everything up to it -- is the only
+wait there is. It is taken at exactly the host touches:
+
+- `stage`'s upload into a slab from the free list (a slab a dropped operand left, which a
+  launch in flight may still read -- the ordering the residency design exists to forbid,
+  and the one this item's ordering pin makes fail without the fence);
+- every download: `materialize`, the drain's flushes, `lazyResults(false)`;
+- and nowhere else. A slab taken as a RESULT needs no wait, because the device orders its
+  own reuse; `enter()` polls the head of the deque without blocking so a completed buffer
+  goes back to the queue promptly and a failure is learned as early as it can be.
+
+**Failure surfaces at the first host read, never as zeros.** A buffer that ends in any
+status but `Completed` is learned of only after its call answered `true`; `retire` marks
+the slabs it WROTE lost, and the results of every later buffer in flight that READ one of
+them -- a chain over a lost result is lost with it -- while a slab the failed buffer only
+read is intact, and a slab taken fresh from the pool is clean again. A lost result throws
+the `IllegalStateException` the mode already reserves for a result the host has no other
+copy of, at `materialize`; a flush of one (an eviction, the switch-off) records its
+storage and throws at the read instead, so switching the mode off never throws. Metal
+gives a kernel no way to fail on purpose, so the pin
+(`aFailedCommandBufferSurfacesAtTheFirstHostReadOfWhatItWrote`) injects the STATUS
+through a package-private seam and asserts the handling.
+
+**The second reason -- memory -- was the whole of the remaining loss, and it was the
+budget rule, not the machine.** The first asynchronous build ran the first seven steps at
+1.8-1.9 s and then slowed to 3.3-8 s a step with the system's time in page compression
+(sys 104 s of a 146 s, 40-step run): the lazy pool budget was the working set less an
+eighth, 96 GB on this 128 GB machine, beside a 24 GB heap. Three findings, each with the
+numbers, decided the rule that replaced it:
+
+1. **The pool must be sized WITHOUT the heap** -- on unified memory the slabs and the
+   heap are one physical memory, and `-Xmx48g` made the same run WORSE (sys 158 s). The
+   lazy pool budget is now the working set less `Runtime.maxMemory()` less an eighth (72
+   GB here), which is also the sentence the guide now prints: on a Mac `-Xmx` sizes the
+   pool as well as the heap.
+2. **The resident budget must be counted in the pool's units.** The cache counts the
+   SPANS it mirrors, the pool the power-of-two CAPACITY of its slabs, up to twice the
+   span; at seven eighths of the pool the LRU never fired before the pool filled (a
+   13-step run at a 72 GB pool: resident 56 GB at most, the LRU idle, `System.gc()`
+   asked ZERO times), and what ran instead was the pool's own pressure path -- which
+   evicted EVERYTHING, dirty copies as flushes: 1200-1500 downloads and 10-12 GB of fresh
+   backings in one call, a 3.5 s step where the others were 1.8, and when the step's phase
+   made it forty gigabytes, `OutOfMemoryError`. The resident budget is now HALF the pool's
+   (`LAZY_RESIDENT_DIVISOR`); at that the LRU fires, the collector is asked (7 times in
+   13 steps, 49 ms in all), the resident set peaks at the budget, and no flush happens
+   at all. Five eighths measured the same speed with three collections; half is kept for
+   the headroom.
+3. **The pool's pressure path evicts a slab's worth at a time now** (`DeviceResidency.
+   evictSome`: least recently used first, clean before dirty), not the whole cache -- the
+   CUDA rule "the resident set must never be the reason a call declines" stands, and its
+   corollary here is that neither may the whole of it be flushed into the heap at once.
+   And `drop` allocates a dirty copy's backing BEFORE the entry is let go of, putting the
+   entry back if the heap runs out: an `OutOfMemoryError` inside a member is caught as a
+   decline, and a stub whose entry was gone and whose backing was never allocated read
+   its header as its elements (`ArrayIndexOutOfBoundsException: Index 4 out of bounds for
+   length 4`, the shape of every crash the sweep produced).
+
+**The step, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, M4
+Max 40-core / 128 GB with the machine to itself, `-Xmx24g`; `(t13 - t3) / 10`, three
+interleaved rounds):
+
+| | eager (before) | lazy, asynchronous |
+|---|---|---|
+| wall a step, the three rounds | 4.77 / 4.80 / 4.91 | **1.81 / 1.81 / 1.83** |
+| wall a step, median | 4.80 s | **1.81 s** |
+| command buffers a step | 888 | 1774 |
+| the host's waiting, a step | 1.4 s | 0.43 s |
+| max RSS, 13 steps | 27.6 GB | 25.8 GB |
+
+Steady over 40 steps (1.8-2.1 s a step from the first to the fortieth, 78 s in all against the eager build's 184, max RSS 33.6 GB), which the first build was not. Every after round
+beats every before round by more than half.
+
+**The notebook's width** (`train-gpt-soseki.lisp` at block 256, `n-embd` 384, 2 heads,
+batch 4, `(t250 - t50) / 200`, three interleaved rounds), at ONE layer -- the width the
+earlier rows were taken at -- and at the notebook's six:
+
+| | eager | lazy, synchronous (todo-494's build, with stubs) | lazy, asynchronous |
+|---|---|---|---|
+| one layer, a step | 0.084 / 0.083 / 0.083 s | 0.078 s | **0.041 / 0.041 / 0.041 s** |
+| six layers, a step | 0.443 / 0.447 / 0.439 s | 0.434 s | **0.242 / 0.242 / 0.244 s** |
+
+**The floor** (`MtlResidentFloor.java`, a chain of resident `zip`s, per member): 15-26 us
+at 2^15..2^19 where the same chain waited 100-140 us a member, 69 us at 2^20 and 99 at
+2^21 -- where the device's own memory pass bounds the throughput and the queue's own
+limit of buffers in flight is what the host blocks on -- against the CPU's memcpy-and-loop
+at 335 and 674 us. `MIN_RESIDENT_ELEMENTS` stays at 2^14: at 16384 the first call of a
+chain is 59 us against the CPU's 31, and the reason it was set there -- a declined member
+in a chain costs a materialize and a re-upload around it -- is worth more under the mode,
+not less.
+
+**What did not change.** The eager path (`commitAndWait`, the per-call decline, the pool
+settling) is byte-for-byte what it was, and every eager pin holds. The kernels are
+untouched, so the resident tier's bits are: the loss series of the 13- and 40-step runs
+print the same four decimals as the eager runs at every step. `sumSquaresF` still
+declines, and the collector matrix below was re-taken because the request it gates
+fires here now.
 
 ### The strided layout cost a pooled slab here, not a copy
 

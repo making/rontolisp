@@ -88,7 +88,7 @@ final class JvmGpuRuntimeBuilder {
 			"CuResult", "CudaGemm", "CudaGemm$Probe", "CudaGemm$Tile", "DeviceResidency", "DeviceResidency$Entry",
 			"DeviceResidency$Flush", "DeviceResidency$Claim", "DeviceResidency$Recent", "DeviceResidency$Key",
 			"DeviceResidency$Lookup", "MetalDriver", "MetalGemm", "MetalGemm$Probe", "MetalGemm$Slab", "MetalGemm$Call",
-			"Gpu", "Gpu$Probe");
+			"MetalGemm$Inflight", "Gpu", "Gpu$Probe");
 
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_gpuInit";

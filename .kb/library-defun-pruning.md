@@ -198,6 +198,46 @@ the program -- `SpecialVarCollector.collectForm` reads a top-level
 `(declaim (special ...))` -- only its symbol occurrences stop counting. Worth 26
 definitions in the ironclad slice and 98 in the cl-postgres stack.
 
+### A class header is not a call site (todo-601, 2026-09-02)
+
+A `defclass`/`define-condition` is walked by POSITION, not symbol by symbol
+(`LibraryDefunPruner.collectClassDefinitionReferences`). The reason is that the pass has
+ONE string key space while the language has two namespaces (`.kb/lisp2-namespaces.md`), so
+a class header that spells a name a `defun` also carries read as a call to it. That is not
+hypothetical: `geom:bounds` is both a `defclass` and a `defun`, geom's four class forms are
+unkeyed ROOTS (they are bundled, not `%begin-system`-bracketed, so the `Candidates`
+own-keys exclusion below never applied to them), and the class therefore kept the function,
+which kept `geom::%solid-bounds`, `geom::%vertex-extremes`, `bounds-union`,
+`world-transform` and `compose` -- in EVERY program that spliced geom.
+
+What the walk skips is only the DEFINING positions: the class name, the slot names, and the
+`:reader` / `:writer` / `:accessor` / `:initarg` / `:allocation` / `:documentation` values
+(the first three are definitions, the next two keywords, and a docstring is never
+evaluated, so the substring rule must not scan it either). Everything that can hold an
+expression or a TYPE name still scans exactly as before -- the superclass list,
+`:initform`, `:type`, and every class option including `(:default-initargs ...)` and a
+condition's `(:report ...)` -- so a type reference between two forms keeps its target and
+an instantiator gate still opens. A `(:metaclass ...)` form is walked whole: its unknown
+slot options are initargs the metaclass protocol EVALUATES, so nothing in it may be assumed
+declarative. A malformed slot spec falls back to the whole-form walk and the expansion
+reports the real error later.
+
+Measured on `(print (geom:vec3 1 2 3))`, a program whose only geom call is `vec3`: 14
+surviving geom defuns -> 2, and `--optimize=off` (the pruner's own effect, with no bytecode
+shaker in front of it) `.class` 286,044 -> 217,928 B (-23.8%) and `.wasm` 322,801 ->
+228,546 (-29.2%). In the SHIPPED artifact, where the dead-code eliminator
+(`.kb/optimize-dead-code-elimination.md`) had already collected most of it, the same
+program is `.class` 72,113 -> 66,858 (-7.3%) and `.wasm` 43,978 -> 38,646 (-12.1%); a
+`(print (geom:volume (geom:box 10)))` moves -0.7% / -0.1% (the shaker reaches nearly all of
+its six dead defuns) and `--optimize=off` -4.8% / -5.9%. A torch program and
+`examples/browser/webgl-solids/solids.wasm` are byte-identical -- the first has no class
+twin, the second genuinely calls `geom:bounds`. Pinned by
+`LibraryDefunPrunerTest#aDefclassDoesNotKeepTheDefunOfTheSameName` and
+`#aSlotAccessorNameIsADefinitionAndAnInitformIsStillCode`.
+
+The knock-on is in `.kb/geom.md`: `geom::%vertex-extremes` can now ARM the JVM geom kernel
+bridge, because its presence in a pruned program finally means a call site.
+
 **Safety valves**:
 
 - analysis runs on a `PackageResolver.resolveProgram` copy (index-aligned 1:1),

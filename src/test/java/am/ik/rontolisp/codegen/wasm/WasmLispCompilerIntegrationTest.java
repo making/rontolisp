@@ -15487,6 +15487,42 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void arrayShapeReadersAcceptEveryStringRepresentation() throws Exception {
+		// A string IS a rank-1 character array, so every array-info reader answers for
+		// one: array-dimensions and the three that lower through it (array-rank /
+		// array-total-size / array-dimension, and array-row-major-index with them),
+		// plus array-has-fill-pointer-p and adjustable-array-p. All three string
+		// representations are asked -- the TYPE_STRING immutable string that carries no
+		// header, the TYPE_CELL character vector, and the displaced string view --
+		// because they are distinct shapes here. The DIMENSION is the CAPACITY, so it
+		// stays 5 for a fill-pointered character vector whose length is 2. Every answer
+		// is SBCL 2.2.9's on this very program except the displaced view's
+		// adjustable-array-p: SBCL answers T for any non-simple array, while rontolisp
+		// reports the :adjustable argument verbatim (.kb/adjustable-arrays.md). Pinned
+		// here, in the other three backends' twins and in the
+		// string-array-shape-readers-cross-backend ci-spec case.
+		assertThat(compileAndRun("""
+				(defun string-shape (x)
+				  (list (array-dimensions x) (array-rank x) (array-total-size x)
+				        (array-dimension x 0) (array-row-major-index x 1) (length x)
+				        (array-has-fill-pointer-p x) (adjustable-array-p x)))
+				(defun string-shapes ()
+				  (let ((cv (make-array 5 :element-type 'character :fill-pointer 2 :adjustable t
+				                          :initial-element #\\a))
+				        (adj (make-array 3 :element-type 'character :adjustable t :initial-element #\\b))
+				        (view (make-array 3 :element-type 'character :displaced-to "hello"
+				                            :displaced-index-offset 1)))
+				    (list (string-shape "abc")
+				          (string-shape (make-string 4 :initial-element #\\c))
+				          (string-shape cv)
+				          (string-shape adj)
+				          (string-shape view))))
+				(print (string-shapes))
+				""")).isEqualTo("(((3) 1 3 3 1 3 NIL NIL) ((4) 1 4 4 1 4 NIL NIL)"
+				+ " ((5) 1 5 5 1 2 T T) ((3) 1 3 3 1 3 NIL T) ((3) 1 3 3 1 3 NIL NIL))");
+	}
+
+	@Test
 	void compileSetfFillPointer() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 5 :fill-pointer 5 :initial-element 7))

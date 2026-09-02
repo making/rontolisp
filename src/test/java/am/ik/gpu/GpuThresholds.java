@@ -42,6 +42,16 @@ public final class GpuThresholds {
 		return Gpu.foldMinElements();
 	}
 
+	/**
+	 * The minimum element count a fused row member (the softmax, log-softmax, GELU and
+	 * layer-norm pairs) is offered at here: the fold threshold on CUDA, the map threshold
+	 * on Metal, whose fold threshold is {@link Long#MAX_VALUE}.
+	 * @return the fused threshold in force
+	 */
+	public static long fusedMinElements() {
+		return Gpu.fusedMinElements();
+	}
+
 	public static long rngMinElements() {
 		return Gpu.rngMinElements();
 	}
@@ -141,7 +151,8 @@ public final class GpuThresholds {
 	/**
 	 * Whether lazy results PAY on the device found -- what decides whether an
 	 * interceptor, in this process or in a compiled class's own copy of the library,
-	 * switches them on ({@code GpuDevice.lazyResultsPay}): CUDA yes, Metal no.
+	 * switches them on ({@code GpuDevice.lazyResultsPay}): CUDA yes, and Metal since
+	 * todo-495.
 	 * @return {@code true} when an interceptor over this device runs with lazy results
 	 */
 	public static boolean lazyResultsPay() {

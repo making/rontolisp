@@ -46,7 +46,11 @@ import org.jspecify.annotations.Nullable;
  * operator position, argument position, inside {@code quote}d data, inside
  * {@code (function ...)} -- plus any string literal that contains the name as a substring
  * (so {@code (intern "linalg:norm")} / {@code read-from-string} idioms keep their
- * target);</li>
+ * target). The one position that is NOT an occurrence is a DEFINING one: a
+ * {@code defclass}/{@code define-condition} header is walked by position, so the class
+ * name and its slots' reader/writer/accessor names do not read as calls to the
+ * {@code defun}s that happen to share them (see
+ * {@code collectClassDefinitionReferences});</li>
  * <li>a third-party definition is additionally referenced by an uninterned {@code '#:foo}
  * designator with its member name, and by a string literal whose WHOLE content is its
  * canonical or member name ({@code (find-symbol "FOO" :pkg)}, folded at codegen time --
@@ -1350,11 +1354,104 @@ public final class LibraryDefunPruner {
 					}
 				}
 			}
+			case LispCons cons when isStructuralClassForm(cons) ->
+				collectClassDefinitionReferences(cons, prunable, out, ctx);
 			case LispCons cons -> {
 				collectReferences(cons.car(), prunable, out, ctx);
 				collectReferences(cons.cdr(), prunable, out, ctx);
 			}
 			default -> {
+			}
+		}
+	}
+
+	/**
+	 * The slot options whose value is a DEFINITION or a constant, never a call: the
+	 * reader/writer/accessor names the form itself defines, the {@code :initarg} keyword,
+	 * the {@code :allocation} keyword and the docstring (parsed and dropped -- it is
+	 * never evaluated, so the string carve-out must not scan it either). Every other
+	 * option's value -- {@code :initform} above all, and {@code :type}, whose name is a
+	 * TYPE reference and stays one -- scans normally.
+	 */
+	private static final Set<String> DECLARATIVE_SLOT_OPTIONS = Set.of(":READER", ":WRITER", ":ACCESSOR", ":INITARG",
+			":ALLOCATION", ":DOCUMENTATION");
+
+	/**
+	 * Whether the form is a {@code defclass}/{@code define-condition} whose header this
+	 * pass may walk structurally instead of symbol by symbol. A {@code (:metaclass ...)}
+	 * one may not: its unknown slot options are initargs the metaclass protocol
+	 * EVALUATES, so nothing in such a form can be assumed declarative.
+	 */
+	private static boolean isStructuralClassForm(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return false;
+		}
+		String operator = member(op.name());
+		if (!LispNames.DEFCLASS.equals(operator) && !LispNames.DEFINE_CONDITION.equals(operator)) {
+			return false;
+		}
+		return cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol
+				&& !LispMacroExpander.defclassHasOption(cons, ":METACLASS");
+	}
+
+	/**
+	 * The references of a {@code defclass}/{@code define-condition}, walked by POSITION
+	 * rather than by symbol occurrence. Lisp-2 keeps the type namespace and the function
+	 * namespace apart ({@code .kb/lisp2-namespaces.md}) and this pass's single string key
+	 * space cannot, so a class header that spells a name a {@code defun} also carries
+	 * used to read as a call to it: {@code (defclass geom:bounds ...)} kept the whole
+	 * {@code geom:bounds} measurement chain in every program that spliced geom, including
+	 * one that touches no solid. The DEFINING positions -- the class name, the slot
+	 * names, the reader/writer/accessor names -- are skipped here; everything that can
+	 * hold an expression or a type name (the superclass list, {@code :initform},
+	 * {@code :type}, every class option including {@code (:report ...)} and
+	 * {@code (:default-initargs ...)}) still scans normally, so a type reference between
+	 * two forms keeps its target exactly as before.
+	 */
+	private static void collectClassDefinitionReferences(LispCons cons, Prunable prunable, Set<String> out,
+			@Nullable GateContext ctx) {
+		List<LispVal> parts = cons.toList();
+		// parts.get(0) is the operator and parts.get(1) the class NAME -- a definition in
+		// the type namespace, and the occurrence this whole walk exists to not count.
+		for (int i = 2; i < parts.size(); i++) {
+			if (i == 3) {
+				collectSlotSpecReferences(parts.get(3), prunable, out, ctx);
+			}
+			else {
+				collectReferences(parts.get(i), prunable, out, ctx);
+			}
+		}
+	}
+
+	/** The references of a defclass slot-specification list; see the caller. */
+	private static void collectSlotSpecReferences(LispVal slots, Prunable prunable, Set<String> out,
+			@Nullable GateContext ctx) {
+		if (!(slots instanceof LispCons slotList) || !slotList.isProperList()) {
+			collectReferences(slots, prunable, out, ctx);
+			return;
+		}
+		for (LispVal spec : slotList.toList()) {
+			// A bare slot name defines a slot and nothing else.
+			if (spec instanceof LispSymbol) {
+				continue;
+			}
+			if (!(spec instanceof LispCons specCons) || !(specCons.car() instanceof LispSymbol)
+					|| !specCons.isProperList()) {
+				collectReferences(spec, prunable, out, ctx);
+				continue;
+			}
+			List<LispVal> specParts = specCons.toList();
+			// (name option value ...) is odd-length; a malformed one scans whole and the
+			// expansion reports the real error later.
+			if (specParts.size() % 2 == 0) {
+				collectReferences(spec, prunable, out, ctx);
+				continue;
+			}
+			for (int i = 1; i + 1 < specParts.size(); i += 2) {
+				if (specParts.get(i) instanceof LispSymbol key && DECLARATIVE_SLOT_OPTIONS.contains(key.name())) {
+					continue;
+				}
+				collectReferences(specParts.get(i + 1), prunable, out, ctx);
 			}
 		}
 	}
