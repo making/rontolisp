@@ -19597,6 +19597,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileRuntimeTypepResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's evalRuntimeTypepResolvesADeftypeAlias, and
+		// the same program: a typep designator held in a VALUE resolves the user deftype
+		// it names, through the injected %deftype-alias resolver the runtime dispatch
+		// normalizes with. A computed coerce result type rides the same resolution.
+		assertThat(compileAndRunPrelude("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype str () 'string)
+				(defun tp (x ty) (typep x ty))
+				(print (list (tp 3 'octet) (tp 300 'octet) (tp 3 'byte-buffer) (tp "ab" 'str) (tp 3 'str)
+				             (tp 3 (list 'or 'octet 'null)) (tp "x" (list 'or 'octet 'null))
+				             (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
+				             (typep 3 'octet) (tp 3 'no-such-type)))
+				""")).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
+	}
+
+	@Test
 	void compileRuntimeElementTypeResolvesADeftypeAlias() throws Exception {
 		// Same contract as the interpreter's
 		// evalRuntimeElementTypeResolvesADeftypeAlias, and the same program: a deftype

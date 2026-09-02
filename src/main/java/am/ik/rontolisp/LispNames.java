@@ -6870,6 +6870,28 @@ public final class LispNames {
 	 */
 	public static final String TYPEP_TAG_TABLE = "%TYPEP-TAG-TABLE";
 
+	/**
+	 * The user-{@code deftype} alias table backing {@link #DEFTYPE_ALIAS_RUNTIME}: an
+	 * alist-like constant, each entry {@code ((alias-name...) expansion)} mapping every
+	 * registered zero-parameter {@code deftype} name (qualified and plain spellings) to
+	 * the type specifier it expands to, alias chains already followed. Emitted as a
+	 * top-level {@code defvar} holding pure quoted data -- the shape the measurement
+	 * chose over one dispatch arm per alias, which cost 10% of a program that merely
+	 * loads alexandria ({@code .kb/array-literals.md}).
+	 */
+	public static final String DEFTYPE_ALIAS_TABLE = "%DEFTYPE-ALIAS-TABLE";
+
+	/**
+	 * The shared alias resolver the compile paths inject beside {@link #TYPEP_RUNTIME}: a
+	 * scan of {@link #DEFTYPE_ALIAS_TABLE} answering the expansion of a type designator
+	 * that names a user {@code deftype}, and the designator itself otherwise. It is what
+	 * makes {@code (typep x ty)} with {@code ty} a VALUE naming an alias answer what the
+	 * literal spelling answers -- the literal one is resolved at expansion time by the
+	 * recognizer that reads it, and a designator held in a variable reaches no
+	 * recognizer.
+	 */
+	public static final String DEFTYPE_ALIAS_RUNTIME = "%DEFTYPE-ALIAS";
+
 	/** The {@code char-name} built-in function. */
 	public static final String CHAR_NAME = "CHAR-NAME";
 

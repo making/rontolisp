@@ -13639,6 +13639,21 @@ standalone:
     stdout: |
       ((UNSIGNED-BYTE 8) 0 (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) T (UNSIGNED-BYTE 8) DOUBLE-FLOAT)
       (T T)
+  - name: runtime-typep-deftype-alias
+    source: |
+      (deftype rtta-octet () '(unsigned-byte 8))
+      (deftype rtta-buffer () 'rtta-octet)
+      (deftype rtta-str () 'string)
+      (defun rtta-tp (x ty) (typep x ty))
+      (print (list (rtta-tp 3 'rtta-octet) (rtta-tp 300 'rtta-octet) (rtta-tp 3 'rtta-buffer)
+                   (rtta-tp "ab" 'rtta-str) (rtta-tp 3 'rtta-str)
+                   (rtta-tp 3 (list 'or 'rtta-octet 'null)) (rtta-tp "x" (list 'or 'rtta-octet 'null))
+                   (typep 3 'rtta-octet) (rtta-tp 3 'rtta-unregistered)))
+      (print (list (coerce 3 (car (list 'rtta-octet)))
+                   (coerce (list #\a #\b) (car (list 'rtta-str)))))
+    stdout: |
+      (T NIL T T NIL T NIL T NIL)
+      (3 "ab")
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

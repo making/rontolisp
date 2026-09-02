@@ -1265,8 +1265,12 @@ final class JvmExprCompiler {
 					// shared %seq-int-vector helper, exactly as concatenate's does;
 					// everything else is expandCoerce as before.
 					LispVal packed = ConcatenateForms.packedVectorCoerce(cons, ctx.closRegistry);
-					JvmExprCompiler.compileExpr(packed != null ? packed : LispMacroExpander.expandCoerce(cons,
-							ctx.usesArrays, ctx.functions.containsKey(LispNames.SEQ_TO_LIST)), ctx, className);
+					JvmExprCompiler.compileExpr(
+							packed != null ? packed
+									: LispMacroExpander.expandCoerce(cons, ctx.usesArrays,
+											ctx.functions.containsKey(LispNames.SEQ_TO_LIST),
+											ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null),
+							ctx, className);
 				}
 				case LispNames.MAP_INTO -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandMapInto(cons,

@@ -463,18 +463,21 @@ program: 62,853 -> 62,963). Real sources register these one or two at a time (`o
 `simple-octet-vector`); nothing in the quicklisp cache writes the value-carrying spelling
 at all.
 
-**`typep` has the same hole and it does NOT come free with this one** -- which overturns
-the assumption `.todo/616` was filed on. `(let ((ty 'octet)) (typep 3 ty))` answers `NIL`
-on all four backends where SBCL 2.2.9 answers `T`: `expandRuntimeTypep` and
-`runtimeTypepDefun` dispatch over the registry's LAYOUTS plus the built-in names, and an
-alias is neither. `coerce` with a computed result type falls through to a computed `typep`,
-so it is the same hole once more. The fix is one normalization at the top of both dispatch
-shapes -- and it needs the FULL alias table, since any of them can name a type `typep`
-decides differently, so the narrowing above does not apply: measured at **+10,075 bytes
-(+10.7%)** on array-operations, against a +0 for the make-array half. That is a
-todo-612-scale bill (the inline arms it rejected were +32.6%) for a gap no backend disagrees
-about, so it is filed separately as `.todo/618` with these numbers and the data-table shape
-to try.
+**`typep` had the same hole, and it was closed a day later on a DIFFERENT narrowing
+(todo-618, 2026-09-02).** `(let ((ty 'octet)) (typep 3 ty))` answered `NIL` on all four
+backends where SBCL 2.2.9 answers `T`: `expandRuntimeTypep` and `runtimeTypepDefun`
+dispatch over the registry's LAYOUTS plus the built-in names, and an alias is neither.
+`coerce` with a computed result type falls through to a computed `typep`, so it was the
+same hole once more. The narrowing above genuinely does not carry over -- any of the 43
+can name a type `typep` decides differently from `nil` -- and the measurement confirmed
+the bill it predicted: the full table costs array-operations **+10.7%**, whether it is
+spelled as one `cond` arm per alias or as the quoted data table `.todo/618` was filed to
+try, because the cost is the alias NAMES becoming runtime symbols and both shapes emit
+all 129 of them. What bought it instead is a narrowing on another axis: only the aliases
+the PROGRAM SPELLS can ever be handed to a runtime `typep`, which takes the same program
+to 2 entries and **+1.9%** and leaves `zlib` byte-identical. The full story, the numbers
+and the one lite deviation are `.kb/declarations-type-checks.md`, "A `deftype` ALIAS
+resolves at RUN TIME too".
 
 **The per-site cost that pushed the arms into a helper is wasm's, and it is not specific to
 this dispatch:** `WasmArrayCompiler.compileMake` emits the whole allocation inline at every
