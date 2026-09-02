@@ -41,8 +41,8 @@ import am.ik.jvm.Opcode;
  * <h2>What a program that reads no model pays</h2>
  *
  * Nothing, unless it CALLS one of the four: {@code JvmLispCompiler} gates the whole
- * bridge on {@link #programUsesAnyKernel}, a scan of the already-pruned program for those
- * four qualified names. A program with no {@code geom:} in it is emitted byte for byte as
+ * bridge on a scan of the already-pruned program for {@link #members()}, those four
+ * qualified names. A program with no {@code geom:} in it is emitted byte for byte as
  * before; a {@code geom} program that measures anything does reach {@code geom:mesh}
  * (through {@code volume} / {@code surface-area} / {@code centroid}) and pays the
  * bridge's bytes, which is the honest reading of "the call site is there".
@@ -88,29 +88,22 @@ final class JvmGeomKernelCompiler {
 		ARITY.put(VERTEX_EXTREMES, 3);
 	}
 
-	/** The accelerated member names (qualified), in a stable order. */
-	static List<String> members() {
-		return List.copyOf(KERNELS.keySet());
-	}
-
 	/**
-	 * The members whose presence ARMS the bridge -- three of the four.
+	 * The accelerated member names (qualified), in a stable order -- and the names the
+	 * emit gate scans for: all four arm the bridge.
 	 *
 	 * <p>
-	 * {@code geom::%vertex-extremes} is accelerated but does not arm anything, and the
-	 * reason is a measurement rather than a preference: {@code LibraryDefunPruner} keys a
-	 * definition by NAME, and {@code geom:bounds} is both a {@code defclass} (an unkeyed
-	 * root) and a {@code defun}, so the class keeps the function, the function keeps
-	 * {@code geom::%solid-bounds} and that keeps {@code geom::%vertex-extremes} -- in
-	 * EVERY program that splices geom, including {@code (print (geom:vec3 1 2 3))}. A
-	 * gate naming it would therefore be a gate on the splice, which is exactly what this
-	 * must not be. The other three have no class twin, so their presence in the pruned
-	 * program is a call site; a program that reaches {@code %vertex-extremes} at file
-	 * scale reaches one of them too (it read the model, and it meshes or draws it).
-	 * @return the qualified names the emit gate scans for
+	 * {@code geom::%vertex-extremes} used to be accelerated without arming anything,
+	 * because {@code geom:bounds} is both a {@code defclass} and a {@code defun} and
+	 * {@code LibraryDefunPruner} kept the whole measurement chain in EVERY program that
+	 * spliced geom -- a gate naming it would have been a gate on the splice. The pruner
+	 * now walks a class header by position rather than by symbol occurrence, so
+	 * {@code %vertex-extremes} survives pruning only where something calls it, and its
+	 * presence is a call site like the other three. A program that only asks for
+	 * {@code geom:bounds} therefore gets the bridge it could not get before.
 	 */
-	static List<String> gateMembers() {
-		return List.of(READ_OBJ, MESH, WIREFRAME);
+	static List<String> members() {
+		return List.copyOf(KERNELS.keySet());
 	}
 
 	/** The bridge method backing the given qualified member. */
