@@ -1649,6 +1649,170 @@ class MetalGpuTest {
 
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
+	void theLibmFreeFusedMembersAreTheSequentialReferencesBits() {
+		// A STRICTLY STRONGER claim than the tier's own test above (todo-665). That one
+		// holds a fused kernel to the CHAIN OF DEVICE MEMBERS it replaces, rounding for
+		// rounding, both sides on this device. This one holds the members with NO LIBRARY
+		// FUNCTION in them to a SEQUENTIAL JAVA REPLAY of the same chain -- the row folds
+		// accumulated in a double and every member boundary narrowed to the width -- so
+		// the device's answer is the CPU's, not merely the device chain's.
+		//
+		// WHICH MEMBERS, and why the rest are out of scope. Of the tier's eight here,
+		// five carry a libm call by construction: the softmax and the log-softmax
+		// forwards and the log-softmax adjoint take exp, the GELU pair takes erf and exp.
+		// The shader's libm is not Java's and this backend records that break rather than
+		// asserting it away, so a sequential replay could only ever be a bound for them.
+		// What is left is layer-norm, its adjoint onto a fresh and onto an accumulated
+		// gradient, and the softmax adjoint: addition, subtraction, multiplication,
+		// division, comparison, and ONE square root, which is correctly rounded on both
+		// sides (precise::sqrt here, Math.sqrt there). The three other libm-free members
+		// GpuTest covers are NOT MEMBERS on this backend and are pinned as declines
+		// elsewhere -- the dropout mask in theDropoutMaskStaysDeclinedHere, layer-norm's
+		// affine pair in the index-tier decline test -- so there is nothing to replay.
+		//
+		// WHY BIT-IDENTITY IS AVAILABLE HERE AT ALL, which was the open question when
+		// this was raised: a tree reduction and a sequential sum agree only when every
+		// partial is exact, and these kernels do not reduce in a tree. The row kernels
+		// run ONE THREAD PER ROW and fold that row SEQUENTIALLY, in the software binary64
+		// the resident tier already needed -- f64_add over the widened float, in index
+		// order, which is %la-fold-axis's own accumulation. The threadgroup tile is a
+		// TRANSPOSED LOAD for coalescing, not a reduction; there is no reassociation to
+		// forgive, and so no bound is needed in place of the equality.
+		//
+		// The shape is derived from the fused threshold IN FORCE, in rows and in
+		// elements, so the tier is really reached. Nothing is made resident: the SIZE is
+		// what carries the accept here, and the residency census at the end is what says
+		// the device ran it, since an accepted call looks every operand up in the cache
+		// before it stages and a decline returns before it gets that far.
+		Gpu.releaseResident();
+		long floor = Gpu.fusedMinElements();
+		assertThat(floor).as("the fused row members are a tier here").isNotEqualTo(Long.MAX_VALUE);
+		int len = 384;
+		int rows = (int) Math.max(Gpu.foldMinCells(), (floor + len - 1) / len);
+		int n = rows * len;
+		assertThat(GpuThresholds.acceptedForSize(floor, n)).as("the shape clears the fused floor").isTrue();
+		double eps = 1.0e-5;
+		Random random = new Random(5);
+		float[] x = new float[n], g = new float[n], o = new float[n];
+		for (int i = 0; i < n; i++) {
+			x[i] = (float) (random.nextDouble() * 6 - 3);
+			g[i] = (float) (random.nextDouble() * 2 - 1);
+			o[i] = (float) random.nextDouble();
+		}
+		// layer-norm's normalization as its torch composition spells it: the sum fold
+		// divided by the length, the sum fold of the squared deviations divided by the
+		// length, plus eps, the square root, the broadcast division.
+		float[] norm = new float[n];
+		for (int r = 0; r < rows; r++) {
+			int base = r * len;
+			double acc = 0;
+			for (int k = 0; k < len; k++) {
+				acc += x[base + k];
+			}
+			double mu = nr(nr(acc) / len);
+			acc = 0;
+			for (int k = 0; k < len; k++) {
+				double dev = nr(x[base + k] - mu);
+				acc += nr(dev * dev);
+			}
+			double sd = nr(Math.sqrt(nr(nr(nr(acc) / len) + eps)));
+			for (int k = 0; k < len; k++) {
+				norm[base + k] = (float) nr(nr(x[base + k] - mu) / sd);
+			}
+		}
+		float[] grad = layerNormGradReplay(g, x, null, rows, len, eps);
+		float[] gradOld = layerNormGradReplay(g, x, o, rows, len, eps);
+		// torch:softmax's adjoint, out * (g - sum(g * out)), with o standing in for the
+		// softmax output: the zip mul, the sum fold, the broadcast sub, the zip mul.
+		float[] sgrad = new float[n];
+		for (int r = 0; r < rows; r++) {
+			int base = r * len;
+			double acc = 0;
+			for (int k = 0; k < len; k++) {
+				acc += nr((double) g[base + k] * o[base + k]);
+			}
+			double tot = nr(acc);
+			for (int k = 0; k < len; k++) {
+				sgrad[base + k] = (float) nr(o[base + k] * nr(g[base + k] - tot));
+			}
+		}
+		long lookups = GpuThresholds.residencyHits() + GpuThresholds.residencyMisses();
+		float[] c1 = new float[n], c2 = new float[n], c3 = new float[n], c4 = new float[n];
+		assertThat(Gpu.layerNorm(x, 0, c1, 0, rows, len, eps)).isTrue();
+		assertBitIdentical(c1, norm, "layer-norm against the sequential replay");
+		assertThat(Gpu.layerNormGrad(g, 0, x, 0, null, 0, c2, 0, rows, len, eps)).isTrue();
+		assertBitIdentical(c2, grad, "layer-norm grad against the sequential replay");
+		assertThat(Gpu.layerNormGrad(g, 0, x, 0, o, 0, c3, 0, rows, len, eps)).isTrue();
+		assertBitIdentical(c3, gradOld, "layer-norm grad onto old against the sequential replay");
+		assertThat(Gpu.softmaxGrad(g, 0, o, 0, c4, 0, rows, len)).isTrue();
+		assertBitIdentical(c4, sgrad, "softmax grad against the sequential replay");
+		// Four accepted calls looking up one, two, three and two operands: eight cache
+		// lookups that a declining call could not have made.
+		assertThat(GpuThresholds.residencyHits() + GpuThresholds.residencyMisses()).as("the fused tier really ran")
+			.isGreaterThanOrEqualTo(lookups + 8);
+	}
+
+	/** A float boundary, as every member of the chain narrows to one. */
+	private static double nr(double v) {
+		return (float) v;
+	}
+
+	/**
+	 * The tape's backward through layer-norm's normalization, replayed SEQUENTIALLY in
+	 * Java at {@code #f}: the row folds accumulate in a double and every member boundary
+	 * narrows. {@code GpuTest.layerNormGradReference}'s single-width half, which is the
+	 * only width this backend has.
+	 * @param g the gradient of the normalized output
+	 * @param x the operand the forward normalized
+	 * @param old the gradient x had already accumulated, or {@code null}
+	 * @param rows the row count
+	 * @param len the row length
+	 * @param eps the variance floor
+	 * @return the replayed gradient
+	 */
+	private static float[] layerNormGradReplay(float[] g, float[] x, float @org.jspecify.annotations.Nullable [] old,
+			int rows, int len, double eps) {
+		float[] out = new float[rows * len];
+		for (int r = 0; r < rows; r++) {
+			int base = r * len;
+			double acc = 0;
+			for (int k = 0; k < len; k++) {
+				acc += x[base + k];
+			}
+			double mu = nr(nr(acc) / len);
+			acc = 0;
+			for (int k = 0; k < len; k++) {
+				double dev = nr(x[base + k] - mu);
+				acc += nr(dev * dev);
+			}
+			double sd = nr(Math.sqrt(nr(nr(nr(acc) / len) + eps)));
+			double q = nr(sd * sd), accSd = 0, accMu = 0;
+			for (int k = 0; k < len; k++) {
+				double dev = nr(x[base + k] - mu);
+				accSd += nr(-nr(nr(g[base + k] * dev) / q));
+				accMu += nr(-nr(g[base + k] / sd));
+			}
+			double gS = nr(nr(nr(accSd) / nr(2.0 * sd)) / len);
+			double gSq = nr(0.0 + gS), accM2 = 0;
+			for (int k = 0; k < len; k++) {
+				double pp = nr(gSq * nr(x[base + k] - mu));
+				accM2 += nr(-nr(pp + pp));
+			}
+			double a2 = nr(nr(0.0 + nr(accM2)) / len);
+			double a4 = nr(nr(0.0 + nr(accMu)) / len);
+			for (int k = 0; k < len; k++) {
+				double dev = nr(x[base + k] - mu);
+				double pp = nr(gSq * dev), gd2 = nr(pp + pp);
+				double gDev = nr(g[base + k] / sd);
+				double a = old == null ? gd2 : nr(old[base + k] + gd2);
+				out[base + k] = (float) nr(nr(nr(a + a2) + gDev) + a4);
+			}
+		}
+		return out;
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
 	void theScaledAndMaskedSoftmaxLandsOnTheComposedDeviceChainsBits() {
 		// The attention head's idiom (todo-643): torch:div then torch:masked-fill then
 		// torch:softmax, folded into the softmax pair. The claim is the tier's -- the
