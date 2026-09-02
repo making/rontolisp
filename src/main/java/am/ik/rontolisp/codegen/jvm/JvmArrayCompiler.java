@@ -359,32 +359,39 @@ final class JvmArrayCompiler {
 
 	static void compileAref(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		if (args.size() == 2) {
+		// The array expression is evaluated exactly once (side effects run once, not
+		// once per branch below): pushed here, then run through _*CheckRank, whose
+		// contract is "return arr unchanged on a match, throw on a rank mismatch" -- so
+		// the validated reference is what every branch below reads its subscripts
+		// against. subscriptCount is the ORIGINAL number of subscripts at this call site
+		// (0 for a bare (aref a), which reads a rank-0 array's single element), computed
+		// before any arity-specific rewriting below.
+		int subscriptCount = args.size() - 2;
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(new LispInteger(subscriptCount), ctx, className);
+		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
+				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
+				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
+		if (subscriptCount == 0) {
 			// (aref a): a rank-0 array holds its one element at row-major index 0, so
 			// the empty Horner fold is the constant 0 (the arm WasmArrayCompiler has).
-			compileAref(
-					new LispCons(args.get(0),
-							new LispCons(args.get(1), new LispCons(new LispInteger(0), LispNil.INSTANCE))),
-					ctx, className);
-			return;
+			JvmExprCompiler.compileExpr(new LispInteger(0), ctx, className);
+			invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1, JvmFloatArrayRuntimeBuilder.AREF1,
+					JvmArrayRuntimeBuilder.AREF1), JvmArrayRuntimeBuilder.AREF1_DESC);
 		}
-		int rank = args.size() - 2;
-		if (rank == 1) {
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		else if (subscriptCount == 1) {
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1, JvmFloatArrayRuntimeBuilder.AREF1,
 					JvmArrayRuntimeBuilder.AREF1), JvmArrayRuntimeBuilder.AREF1_DESC);
 		}
-		else if (rank == 2) {
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		else if (subscriptCount == 2) {
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2),
 					JvmArrayRuntimeBuilder.AREF2_DESC);
 		}
 		else {
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			emitSubscriptArray(args, 2, rank, ctx, className);
+			emitSubscriptArray(args, 2, subscriptCount, ctx, className);
 			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN),
 					JvmArrayRuntimeBuilder.AREFN_DESC);
 		}
@@ -519,26 +526,29 @@ final class JvmArrayCompiler {
 	static void compileAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();
-		if (args.size() == 3) {
-			// (%aset a value): the rank-0 store, the twin of the (aref a) arm above.
-			compileAset(
-					new LispCons(args.get(0),
-							new LispCons(args.get(1),
-									new LispCons(new LispInteger(0), new LispCons(args.get(2), LispNil.INSTANCE)))),
-					ctx, className);
-			return;
-		}
-		int rank = args.size() - 3;
+		// Same "evaluate the array once, run it through _*CheckRank, keep the validated
+		// reference" shape as compileAref above; see that method's comment.
+		int subscriptCount = args.size() - 3;
 		LispVal value = args.get(args.size() - 1);
-		if (rank == 1) {
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(new LispInteger(subscriptCount), ctx, className);
+		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
+				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
+				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
+		if (subscriptCount == 0) {
+			// (%aset a value): the rank-0 store, the twin of the (aref a) arm above.
+			JvmExprCompiler.compileExpr(new LispInteger(0), ctx, className);
+			JvmExprCompiler.compileExpr(value, ctx, className);
+			invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
+					JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
+		}
+		else if (subscriptCount == 1) {
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
 			invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
 					JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
 		}
-		else if (rank == 2) {
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		else if (subscriptCount == 2) {
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
@@ -546,8 +556,7 @@ final class JvmArrayCompiler {
 					JvmArrayRuntimeBuilder.ASET2_DESC);
 		}
 		else {
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			emitSubscriptArray(args, 2, rank, ctx, className);
+			emitSubscriptArray(args, 2, subscriptCount, ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
 			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN),
 					JvmArrayRuntimeBuilder.ASETN_DESC);

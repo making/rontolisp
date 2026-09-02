@@ -655,26 +655,30 @@ final class WasmArrayCompiler {
 
 	static void compileAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		if (args.size() == 2) {
-			// (aref a): a rank-0 array holds its one element at row-major index 0.
-			compileAref(new LispCons(args.get(0),
-					new LispCons(args.get(1), new LispCons(new LispInteger(0), LispNil.INSTANCE))), ctx);
-			return;
-		}
-		int rank = args.size() - 2;
+		// The array expression is evaluated exactly once (side effects run once, not
+		// once per branch below): pushed here, then run through emitArefCheckRank, which
+		// traps unless the array's actual rank matches subscriptCount -- the ORIGINAL
+		// number of subscripts at this call site (0 for a bare (aref a), which reads a
+		// rank-0 array's single element), computed before any arity-specific dispatch
+		// below (todo 479; the JVM backend had the same hole --
+		// JvmArrayCompiler#compileAref
+		// carries the matching comment).
+		int subscriptCount = args.size() - 2;
 		// Evaluate the array once; a packed farray reads its unboxed f64 store directly,
 		// a
 		// general array resolves the displacement chain into its buckets.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
-		if (rank == 1) {
-			// Rank 1: evaluate the index once, then dispatch from the slots (the shape
-			// WasmIntFusionCompiler reuses for its aref leaves). A site whose array
-			// representation a declaration (or an initializer this compile itself chose a
-			// representation for) pins down emits that ONE representation's read with a
-			// trapping ref.cast instead of the full dispatch chain
-			// (.kb/declarations-type-checks.md).
-			WasmExprCompiler.compileExpr(args.get(2), ctx);
+		emitArefCheckRank(ctx, arrSlot, subscriptCount);
+		if (subscriptCount <= 1) {
+			// Rank 0 or 1: evaluate the index once (the constant 0 for a bare (aref a):
+			// a rank-0 array holds its one element at row-major index 0), then dispatch
+			// from the slots (the shape WasmIntFusionCompiler reuses for its aref
+			// leaves). A site whose array representation a declaration (or an
+			// initializer this compile itself chose a representation for) pins down
+			// emits that ONE representation's read with a trapping ref.cast instead of
+			// the full dispatch chain (.kb/declarations-type-checks.md).
+			WasmExprCompiler.compileExpr(subscriptCount == 1 ? args.get(2) : new LispInteger(0), ctx);
 			int idxSlot = setTemp(ctx);
 			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
 			if (kind != null) {
@@ -691,7 +695,7 @@ final class WasmArrayCompiler {
 		int pdimsSlot = ctx.allocTemp();
 		farrayField(ctx, arrSlot, 0);
 		setLocal(ctx, pdimsSlot);
-		emitPackedFlatIndex(ctx, pdimsSlot, args, 2, rank);
+		emitPackedFlatIndex(ctx, pdimsSlot, args, 2, subscriptCount);
 		boxI31(ctx);
 		int pIdxSlot = setTemp(ctx);
 		emitPackedReadF64(ctx, arrSlot, pIdxSlot);
@@ -702,9 +706,30 @@ final class WasmArrayCompiler {
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		getLocal(ctx, headerSlot);
-		emitFlatIndex(ctx, headerSlot, args, 2, rank);
+		emitFlatIndex(ctx, headerSlot, args, 2, subscriptCount);
 		callArrGet(ctx);
 		ctx.writer.write(Instruction.END);
+	}
+
+	// Calls the shared _arr_check_rank(arr, given) -> arr (FUNC_ARR_CHECK_RANK,
+	// WasmArrayRuntimeBuilder#buildArrCheckRankBody): traps (UNREACHABLE) when the array
+	// in arrSlot's actual rank doesn't match `given`, the subscript count the aref/%aset
+	// call site baked in at compile time -- the same invariant
+	// LispArray/LispFloatArray#flatIndex enforce (with a message) in the interpreter.
+	// The WASM backend's internal array-compiler checks are bare traps with no message
+	// (see the displaced-to bounds check in compileMakeDisplaced), so this one is too.
+	// The returned reference is dropped -- arrSlot already holds it, every arm below
+	// reads it from there -- so this is a call, not a per-site copy of the four-way
+	// representation dispatch (~90 bytes; see
+	// WasmLispCompilerTest#anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime).
+	// Never called from row-major-aref/%row-major-aset, which intentionally accept any
+	// rank.
+	private static void emitArefCheckRank(WasmLispCompiler.Ctx ctx, int arrSlot, int given) {
+		getLocal(ctx, arrSlot);
+		i32Const(ctx, given);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_CHECK_RANK);
+		ctx.writer.write(Instruction.DROP);
 	}
 
 	// The rank-1 aref dispatch over pre-evaluated slots (array as eq, index boxed):
@@ -1228,25 +1253,25 @@ final class WasmArrayCompiler {
 	static void compileAset(LispCons cons, WasmLispCompiler.Ctx ctx, boolean resultNeeded) {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();
-		if (args.size() == 3) {
-			// (%aset a value): the rank-0 store, the twin of compileAref's (aref a) arm
-			// -- a rank-0 array holds its one element at row-major index 0.
-			compileAset(
-					new LispCons(args.get(0),
-							new LispCons(args.get(1),
-									new LispCons(new LispInteger(0), new LispCons(args.get(2), LispNil.INSTANCE)))),
-					ctx, resultNeeded);
-			return;
-		}
-		int rank = args.size() - 3;
-		if (rank == 1) {
+		// subscriptCount is the ORIGINAL number of subscripts at this call site (0 for a
+		// bare (%aset a value) -- a rank-0 array holds its one element at row-major
+		// index 0, the twin of compileAref's (aref a) arm), computed before any
+		// arity-specific dispatch below so emitArefCheckRank always runs, even through
+		// the rank-1 fast paths (todo 479; see compileAref's matching comment). idxExpr
+		// substitutes a literal 0 for the subscript expression that a 0-subscript call
+		// site does not have -- args.get(1) (the array) and args.get(args.size() - 1)
+		// (the value) already fall in the right place for both shapes, so no rewritten
+		// cons is needed the way compileAref's (aref a) rank-0 arm once built one.
+		int subscriptCount = args.size() - 3;
+		LispVal idxExpr = subscriptCount == 0 ? new LispInteger(0) : args.get(2);
+		if (subscriptCount <= 1) {
 			// A store whose array representation is pinned down (declaration / accessor
 			// slot :type / this compile's own initializer choice) emits that ONE arm; a
 			// string kind never stores (strings are immutable structs -- the generic
 			// general arm's cast traps there too, so the generic path answers it).
 			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
 			if (kind != null && kind != DeclaredArrayTypes.Kind.STRING) {
-				emitKindedAset1(args, kind, ctx, resultNeeded);
+				emitKindedAset1(args, idxExpr, kind, ctx, resultNeeded, subscriptCount);
 				return;
 			}
 			if (!WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
@@ -1257,12 +1282,13 @@ final class WasmArrayCompiler {
 				// The speed levels keep the legacy shape: its packed-int arm compiles
 				// the value RAW through the fusion machinery, which a pre-boxed temp
 				// would defeat.
-				emitHoistedAset1(args, ctx, resultNeeded);
+				emitHoistedAset1(args, idxExpr, ctx, resultNeeded, subscriptCount);
 				return;
 			}
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		emitArefCheckRank(ctx, arrSlot, subscriptCount);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
 		// packed: store the coerced f64 (narrowing to f32 for a single-float array) at
@@ -1272,7 +1298,7 @@ final class WasmArrayCompiler {
 		int pdimsSlot = ctx.allocTemp();
 		farrayField(ctx, arrSlot, 0);
 		setLocal(ctx, pdimsSlot);
-		emitPackedFlatIndex(ctx, pdimsSlot, args, 2, rank);
+		emitPackedFlatIndex(ctx, pdimsSlot, args, 2, subscriptCount);
 		boxI31(ctx);
 		int pIdxSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
@@ -1281,7 +1307,7 @@ final class WasmArrayCompiler {
 		int pBoxSlot = setTemp(ctx);
 		emitPackedWriteF64(ctx, arrSlot, pIdxSlot, pBoxSlot);
 		ctx.writer.write(Instruction.ELSE);
-		if (rank == 1) {
+		if (subscriptCount == 1) {
 			// packed integer vector: raw mask-store (no box on the value's fast path,
 			// see emitPackedIntStore), returning the value AS STORED when needed. A
 			// rank > 1 subscript set never targets one (rank-1 by construction).
@@ -1296,10 +1322,10 @@ final class WasmArrayCompiler {
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		getLocal(ctx, headerSlot);
-		emitFlatIndex(ctx, headerSlot, args, 2, rank);
+		emitFlatIndex(ctx, headerSlot, args, 2, subscriptCount);
 		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
 		callArrSet(ctx);
-		if (rank == 1) {
+		if (subscriptCount == 1) {
 			ctx.writer.write(Instruction.END);
 		}
 		ctx.writer.write(Instruction.END);
@@ -1312,13 +1338,15 @@ final class WasmArrayCompiler {
 	// the generic order, then the one representation's store runs with a trapping
 	// ref.cast. A packed integer store keeps the raw-value fast path (tryCompileRaw)
 	// because the single arm needs the value only once; the result -- the value AS
-	// STORED -- materializes only when the caller consumes it.
-	private static void emitKindedAset1(List<LispVal> args, DeclaredArrayTypes.Kind kind, WasmLispCompiler.Ctx ctx,
-			boolean resultNeeded) {
-		LispVal idxExpr = args.get(2);
+	// STORED -- materializes only when the caller consumes it. `given` is the caller's
+	// original subscript count (0 or 1; compileAset never dispatches here for 2+), fed
+	// straight to emitArefCheckRank.
+	private static void emitKindedAset1(List<LispVal> args, LispVal idxExpr, DeclaredArrayTypes.Kind kind,
+			WasmLispCompiler.Ctx ctx, boolean resultNeeded, int given) {
 		LispVal valueExpr = args.get(args.size() - 1);
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		emitArefCheckRank(ctx, arrSlot, given);
 		switch (kind) {
 			case U8, U16, U32 -> {
 				int type = intArrType(kind.packedIntWidth());
@@ -1373,10 +1401,12 @@ final class WasmArrayCompiler {
 	// evaluation each instead of a per-arm re-emission of the index and value
 	// expressions. Leaves the value as stored (or nothing when unconsumed), exactly like
 	// the legacy emission.
-	private static void emitHoistedAset1(List<LispVal> args, WasmLispCompiler.Ctx ctx, boolean resultNeeded) {
+	private static void emitHoistedAset1(List<LispVal> args, LispVal idxExpr, WasmLispCompiler.Ctx ctx,
+			boolean resultNeeded, int given) {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
-		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		emitArefCheckRank(ctx, arrSlot, given);
+		WasmExprCompiler.compileExpr(idxExpr, ctx);
 		int idxSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
 		int valSlot = setTemp(ctx);

@@ -3496,6 +3496,31 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunArefRejectsAWrongSubscriptCount() throws Exception {
+		// A packed float array (todo 479): the JVM's _fvAref2 used to apply 2 subscripts
+		// positionally to a rank-3 array (0 * 2 + 1 = flat index 1, silently 1.0) instead
+		// of checking the count against the array's own rank, the way the interpreter's
+		// LispFloatArray#flatIndex does.
+		assertThatThrownBy(() -> compileAndRunLinalg("(print (aref (linalg:reshape (linalg:arange 8) '(2 2 2)) 0 1))"))
+			.hasRootCauseMessage("aref: expected 3 subscripts, got 2");
+		// The same hole existed for a general (non-packed) array and for %aset -- both
+		// went through the identical arity-picks-the-helper dispatch in
+		// JvmArrayCompiler#compileAref/#compileAset.
+		assertThatThrownBy(() -> compileAndRun("(print (aref (make-array (list 2 2 2) :initial-element 0) 0 1))"))
+			.hasRootCauseMessage("aref: expected 3 subscripts, got 2");
+		assertThatThrownBy(() -> compileAndRun("(setf (aref (make-array (list 2 2 2) :initial-element 0) 0 1) 9)"))
+			.hasRootCauseMessage("aref: expected 3 subscripts, got 2");
+		assertThatThrownBy(() -> compileAndRun("(print (aref (make-array (list 2 2) :initial-element 0)))"))
+			.hasRootCauseMessage("aref: expected 2 subscripts, got 0");
+		assertThatThrownBy(() -> compileAndRun("(print (aref #(1 2 3) 0 1))"))
+			.hasRootCauseMessage("aref: expected 1 subscripts, got 2");
+		// row-major-aref/%row-major-aset intentionally accept any rank (flat indexing
+		// under the hood), so a mismatched subscript COUNT never applies to them; this is
+		// not retested here -- compileAndRunRowMajorArefReadsAndWritesFlat already pins
+		// it.
+	}
+
+	@Test
 	void compileAndRunRowMajorArefReadsAndWritesFlat() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

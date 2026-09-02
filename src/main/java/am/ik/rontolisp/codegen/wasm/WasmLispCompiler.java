@@ -1507,7 +1507,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shifts.
 	static final int FUNC_ARR_FP = FUNC_ARR_TOTAL + 1;
 
-	static final int FX_FUNC_LAST = FUNC_ARR_FP;
+	// _arr_check_rank ((ref null eq) arr, i32 given) -> (ref null eq): traps unless
+	// arr's actual rank equals given (the compile-time subscript count aref/%aset baked
+	// in at the call site) -- 1 for a string or a packed integer vector, else the dims
+	// buckets length. Reuses TYPE_BIG_SHIFT, the ((ref null eq), i32) -> (ref null eq)
+	// signature _arr_get also reuses, so no new type entry. Called from aref/%aset once
+	// the array is evaluated, right before any representation-specific arm reads it
+	// (todo 479); appended after the last fixed helper so no index above shifts.
+	static final int FUNC_ARR_CHECK_RANK = FUNC_ARR_FP + 1;
+
+	static final int FX_FUNC_LAST = FUNC_ARR_CHECK_RANK;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -5753,6 +5762,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_ARR_TOTAL)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _arr_fp (fp, buckets) ->
 															// i31 | null (FUNC_ARR_FP)
+				fnDef.addFunction(TYPE_BIG_SHIFT); // _arr_check_rank (arr, given) -> arr
+													// (FUNC_ARR_CHECK_RANK)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6569,6 +6580,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrTotalBody());
 				// shared :fill-pointer resolution body (FUNC_ARR_FP)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrFpBody());
+				// shared aref/%aset rank-check body (FUNC_ARR_CHECK_RANK)
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

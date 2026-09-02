@@ -370,6 +370,88 @@ final class WasmArrayRuntimeBuilder {
 		return out.toByteArray();
 	}
 
+	/**
+	 * Builds {@code _arr_check_rank (arr, given) -> arr}: traps (unreachable) unless
+	 * {@code arr}'s actual rank equals {@code given} -- 1 for a string (always a rank-1
+	 * character array) or a packed integer vector (rank-1 by construction), else the dims
+	 * buckets length (a packed farray's own field 0, or the general array header's car).
+	 * {@code aref}/{@code %aset} push the array once and call this before reading any
+	 * subscript, so the check runs regardless of which representation arm the value turns
+	 * out to be, and the returned reference is what every arm reads from -- the array is
+	 * evaluated exactly once at the call site (todo 479; the JVM backend's
+	 * {@code _arrayCheckRank}/{@code _fvCheckRank}/{@code _ivCheckRank} chain, in
+	 * {@code JvmArrayRuntimeBuilder}, closes the same hole with a message the interpreter
+	 * matches -- this backend's internal array-compiler checks are bare traps instead,
+	 * like {@code _arr_fp}'s fill-pointer-rank check just above). {@code given} used to
+	 * be inlined as a per-site constant compare; moved here (a call, not ~90 bytes of
+	 * REF_TEST chain per {@code aref}/{@code %aset} site) once
+	 * {@code WasmLispCompilerTest#anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime}
+	 * priced the inline form.
+	 * @return the function body (signature {@code ((ref null eq), i32) -> (ref null eq)},
+	 * {@code TYPE_BIG_SHIFT})
+	 */
+	static byte[] buildArrCheckRankBody() {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		w.write(0); // no extra locals -- every value here lives on the operand stack
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, Type.I32.code());
+		i32(w, 1);
+		w.write(Instruction.ELSE);
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.IF, Type.I32.code());
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.ELSE);
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.I32_OR);
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I32ARR);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, Type.I32.code());
+		i32(w, 1);
+		w.write(Instruction.ELSE);
+		// general: arr.field0 (the header cons) -> car (the dims buckets) -> its length.
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		consGet(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		get(w, 1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		get(w, 0);
+		w.write(Instruction.END);
+		return out.toByteArray();
+	}
+
 	// Pushes buckets[0] of local 1: the size of the rank-1 shape, as an i31.
 	private static void firstDim(WasmWriter w) {
 		buckets(w, 1);

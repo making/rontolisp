@@ -75,6 +75,12 @@ final class JvmFloatArrayRuntimeBuilder {
 
 	static final String REQUIRE_GENERAL_DESC = "(" + OBJ + ")" + OBJ;
 
+	// _fvCheckRank(arr, given): packed -> compare the header rank against `given`; else
+	// delegate to _arrayCheckRank. See JvmArrayRuntimeBuilder#CHECK_RANK.
+	static final String CHECK_RANK = "_fvCheckRank";
+
+	static final String CHECK_RANK_DESC = "(" + OBJ + OBJ + ")" + OBJ;
+
 	private JvmFloatArrayRuntimeBuilder() {
 	}
 
@@ -189,6 +195,8 @@ final class JvmFloatArrayRuntimeBuilder {
 		MethodrefConstant asetN = self(cp, selfClass, JvmArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN_DESC);
 		MethodrefConstant arrayDims = self(cp, selfClass, JvmArrayRuntimeBuilder.DIMS,
 				JvmArrayRuntimeBuilder.DIMS_DESC);
+		MethodrefConstant arrayCheckRank = self(cp, selfClass, JvmArrayRuntimeBuilder.CHECK_RANK,
+				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
 
 		MethodrefConstant floatValueOf = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Float")),
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(F)Ljava/lang/Float;")));
@@ -214,6 +222,8 @@ final class JvmFloatArrayRuntimeBuilder {
 		methods.add(buildAsetN(cp, doubleArrayClass, floatArrayClass, objectArrayClass, longClass, numberClass,
 				longIntValue, numberDoubleValue, doubleValueOf, dbl, asetN, written));
 		methods.add(buildDims(cp, doubleArrayClass, floatArrayClass, objectClass, longValueOf, arrayDims));
+		methods.add(buildCheckRank(cp, doubleArrayClass, floatArrayClass, longClass, longIntValue, rtExClass, rtExInit,
+				arrayCheckRank));
 		methods.add(buildLength(cp, doubleArrayClass, floatArrayClass, longValueOf, toGeneral, lengthHelper));
 		methods.add(buildMake(cp, false, MAKE, objectArrayClass, longClass, numberClass, longIntValue,
 				numberDoubleValue, dbl));
@@ -832,6 +842,93 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.invokestatic(arrayDims);
 		a.areturn();
 		return new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(JvmArrayRuntimeBuilder.DIMS_DESC), 6, 5, a.finish());
+	}
+
+	// _fvCheckRank(arr, given): packed -> the header rank (loaded the same way DIMS
+	// reads it) compared against `given`; else delegate to _arrayCheckRank. Locals:
+	// 0=arr, 1=given, 2=rank, 3=giv.
+	private static ArrayMethod buildCheckRank(ConstantPool cp, ClassConstant doubleArrayClass,
+			ClassConstant floatArrayClass, ClassConstant longClass, MethodrefConstant longIntValue,
+			ClassConstant rtExClass, MethodrefConstant rtExInit, MethodrefConstant checkRankDelegate) {
+		ClassConstant sbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
+		MethodrefConstant sbInit = cp.addMethodref(sbClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+		MethodrefConstant sbAppendStr = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
+		MethodrefConstant sbAppendInt = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
+		MethodrefConstant sbToString = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		int arr = 0, given = 1, rank = 2, giv = 3;
+		JvmAsm a = new JvmAsm();
+		int notDouble = a.label();
+		int notPacked = a.label();
+		a.aload(arr);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notDouble);
+		a.aload(arr);
+		a.checkcast(doubleArrayClass);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		emitRankCheckAndReturn(cp, a, longClass, longIntValue, sbClass, sbInit, sbAppendStr, sbAppendInt, sbToString,
+				rtExClass, rtExInit, arr, given, rank, giv);
+		a.bind(notDouble);
+		a.aload(arr);
+		a.instanceOf(floatArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(arr);
+		a.checkcast(floatArrayClass);
+		a.iconst(0);
+		a.faload();
+		a.f2i();
+		a.istore(rank);
+		emitRankCheckAndReturn(cp, a, longClass, longIntValue, sbClass, sbInit, sbAppendStr, sbAppendInt, sbToString,
+				rtExClass, rtExInit, arr, given, rank, giv);
+		a.bind(notPacked);
+		a.aload(arr);
+		a.aload(given);
+		a.invokestatic(checkRankDelegate);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), 6, 4, a.finish());
+	}
+
+	// Shared tail of _fvCheckRank: unbox `given` (givenSlot) to int (givSlot), compare it
+	// against the already-computed actual rank (rankSlot); a match returns arr (arrSlot)
+	// unchanged, a mismatch throws the "aref: expected N subscripts, got M" text
+	// LispFloatArray#flatIndex uses in the interpreter.
+	private static void emitRankCheckAndReturn(ConstantPool cp, JvmAsm a, ClassConstant longClass,
+			MethodrefConstant longIntValue, ClassConstant sbClass, MethodrefConstant sbInit,
+			MethodrefConstant sbAppendStr, MethodrefConstant sbAppendInt, MethodrefConstant sbToString,
+			ClassConstant rtExClass, MethodrefConstant rtExInit, int arrSlot, int givenSlot, int rankSlot,
+			int givSlot) {
+		a.aload(givenSlot);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.istore(givSlot);
+		int ok = a.label();
+		a.iload(rankSlot);
+		a.iload(givSlot);
+		a.branch(Opcode.IF_ICMPEQ, ok);
+		a.anew(rtExClass);
+		a.dup();
+		a.anew(sbClass);
+		a.dup();
+		a.invokespecial(sbInit);
+		a.ldcString(cp.addString("aref: expected "));
+		a.invokevirtual(sbAppendStr);
+		a.iload(rankSlot);
+		a.invokevirtual(sbAppendInt);
+		a.ldcString(cp.addString(" subscripts, got "));
+		a.invokevirtual(sbAppendStr);
+		a.iload(givSlot);
+		a.invokevirtual(sbAppendInt);
+		a.invokevirtual(sbToString);
+		a.invokespecial(rtExInit);
+		a.op(Opcode.ATHROW);
+		a.bind(ok);
+		a.aload(arrSlot);
+		a.areturn();
 	}
 
 	private static void emitDimsBody(JvmAsm a, boolean single, ClassConstant arrayClass, int elseLabel, int arr, int d,
