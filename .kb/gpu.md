@@ -584,27 +584,52 @@ profile that suggested the change ("2 of the 4 downloads are this") is exactly t
 that would have got it built. **A copy count is not a cost until someone removes the copies
 and times it.**
 
-### Ceiling 3: a `-1` reshape extent -- the one refusal with a price, filed
+### Ceiling 3: a `-1` reshape extent -- built (todo-663, 2026-09-03)
 
 `linalg:reshape`'s defun documents the NumPy spelling ("One extent may be -1 and is inferred
-from the element count") and both offer layers refuse it: `LinalgSimd.shape` and
-`JvmGpuTemplate.shapeOf` each answer `null` for a negative extent, the latter saying so in
-its javadoc. The two AGREE, which is why the differential test has nothing to say -- they
-agree on refusing the spelling the member advertises. And `reshape` is a resident-tier
-member, so the decline drags a resident array home for the defun to copy element by element.
+from the element count") and both offer layers used to refuse it: `LinalgSimd.shape` and
+`JvmGpuTemplate.shapeOf` each answered `null` for a negative extent. And `reshape` is a
+resident-tier member, so the decline dragged a resident array home for the defun to copy
+element by element.
 
 `examples/deep-learning-from-scratch/ch07/train-convnet.lisp` is the program that writes it:
 im2col reshapes with `(list -1 ...)`, 80 declines a run over resident `#d` arrays up to
-432000 elements. Resolving the `-1` against the operand's element count in both layers behind
-a system property, same program, three walls an arm, the accuracy line identical:
+432000 elements. **Built**: `LinalgSimd.reshapeShape` (interpreter, shared by `--simd` and
+`--gpu`) and `JvmGpuTemplate.reshapeShapeOf` (the compiled bridge) each resolve one `-1`
+extent against the operand's element count -- `linalg::%la-infer-shape`'s own rule, mirrored
+rather than shared, since neither package may import the other -- and decline exactly where
+the defun would signal (a second `-1`, or a known-extent product that does not divide the
+total evenly). Every other reader of `shape` / `shapeOf` (`gather-strided`'s `od`,
+`col2im`'s `dims`, `transpose`'s axis list, `dropout-mask`'s allocation shape) is untouched.
+`GpuOfferDifferentialTest`'s boundary table carries the `-1` spelling at both ends: a bare
+flatten and an inferred trailing extent (accepted), a repeated `-1` and a non-dividing one
+(declined) -- the two offer layers cannot drift apart on this shape either.
 
-| | declined (today) | resolved (the ceiling) |
+Re-measured on this build, same program, three walls an arm (interleaved, `--gpu --simd`,
+the accuracy line identical to the ceiling's):
+
+| | declined (pre-fix) | resolved (built) |
 |---|---|---|
-| compiled, `-o Cv.class` | 1.76 / **1.81** / 1.83 s | 1.47 / **1.50** / 1.52 s (**-17.1%**) |
-| interpreter | 22.10 / **22.25** / 22.28 s | 16.45 / **16.55** / 16.65 s (**-25.6%**) |
+| compiled, `-o Cv.class` | 1.71 / **1.76** / 1.81 s (median of 8) | 1.53 / **1.56** / 1.62 s (median of 8) (**-11.4%**) |
+| interpreter | 22.04 / **22.36** / 22.37 s | 13.79 / **13.99** / 14.07 s (**-37.4%**) |
 
-Filed as `.todo/663`. It is the only refusal in the census that is worth anything, and it was
-found in the program nobody profiles rather than in the two everybody does.
+A structural count (`nsys profile -t cuda`, whole run) agrees on the mechanism: the resolved
+arm issues 34 fewer `cuMemcpyDtoH` and 44 fewer `cuMemcpyHtoD` than the declined arm (125/150
+against 159/194), which is the 80 avoided round trips net of the ones im2col's OTHER reshapes
+(the non-`-1` ones) already paid for regardless.
+
+**This does not reproduce the filed ceiling's -17.1% on the compiled path -- the interpreter
+side reproduces in the same direction but OVERSHOOTS it (-37.4% against -25.6%).** Both
+"declined" columns land inside the filed ceiling's own range (1.71-1.81 against 1.76-1.83;
+22.04-22.37 against 22.10-22.28), so the DECLINE arm has not moved; the resolved compiled arm
+is the one that reads slower here (1.53-1.62 against the filed 1.47-1.52) while the resolved
+interpreter arm reads faster (13.79-14.07 against 16.45-16.65). The whole run is ~1.5-1.8 s
+end to end on the compiled path -- JVM start and CUDA context init are a large, machine-load-
+sensitive fraction of that, and the interpreter's ten-second-plus floor dilutes the same fixed
+cost instead. Nothing in the census or the mechanism moved (the copy counts fall exactly where
+80 avoided reshapes predict); the discrepancy is recorded here per measurement-probes.md rather
+than chased into a second machine, since the direction and the mechanism both hold and the
+census that filed this item never depended on the exact percentage.
 
 ### The device contract, read against the CUDA implementation
 
