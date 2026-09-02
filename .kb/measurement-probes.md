@@ -201,6 +201,23 @@ run and a quarter faster per call, and the step did not move, so they were not k
 per-call table that decided it against the change is exactly the ceiling that could have
 been taken first, against the chain the decline already ran.
 
+**A proposal can have more than one ceiling, one per population that pays, and the
+populations do not pay for the same thing.** Ask who bears the cost BEFORE pricing it, and
+then, for each of them, what KIND of cost it is -- listing the populations is not enough,
+because it leaves room to assume one probe answers for both. `.todo/669` proposed dropping
+the `f64` half of the fused-row PTX every compiled `--gpu` class carries. Two populations,
+two different costs (`.kb/gpu.md`, "Pricing the f64 half of the fused-row family"): the
+CARRIERS -- a Mac, a machine with no device, anyone handed the class for hardware that
+cannot run it -- pay only to LOAD the class, and the RUNNERS pay to COMPILE the kernels.
+Neither probe reaches the other's number. The JIT was measured by calling
+`cuModuleLoadData` through FFM, which says nothing about loading a class; the class load
+was measured over `java Prog`, and had to be BUILT not to include the JIT (the program
+reaches `linalg:matmul` from behind a condition only false at run time, so the text is
+embedded and the device never probed). Ceiling 1 is flat -- 783 KB out of the string moves
+class load 61.9 to 59.9 ms, which is nothing -- and ceiling 2 is real but once per machine,
+the driver's on-disk cache serving every later process in 4-7 ms whatever the size. Price
+only the runners and the item reads as a second saved; price both and it is a no.
+
 Note what a ceiling does NOT excuse: it is still a measurement, so rule 1 applies to it.
 todo-650's ceiling was taken in the model with a structural count, not in a probe.
 
