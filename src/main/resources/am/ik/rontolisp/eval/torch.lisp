@@ -23,8 +23,11 @@
 ;; torch:softmax still does not carry the whole autograd surface. The tensor
 ;; record (torch::%tensor, built by torch::%t-new):
 ;;
-;;   data          a linalg array (packed float, any rank) or a number
-;;                 (a plain number is the rank-0 scalar tensor)
+;;   store         the data: a linalg array (packed float, any rank) or a
+;;                 number (a plain number is the rank-0 scalar tensor) -- or
+;;                 a torch::%view standing for data NOT YET materialized
+;;                 (torch:transpose's last-two-axes swap, "the view" below).
+;;                 Read through torch::%t-data, never through the accessor.
 ;;   grad          nil, or a value of data's shape (accumulated by
 ;;                 torch:backward; a raw linalg value, not a tensor)
 ;;   requires-grad the LEAF flag set by (torch:tensor x :requires-grad t)
@@ -62,16 +65,82 @@
   (write-string ">" stream))
 
 (defstruct (torch::%tensor (:constructor torch::%t-new
-                            (data grad requires-grad parents backward-fn))
+                            (store grad requires-grad parents backward-fn))
                            (:conc-name torch::%t-) (:predicate torch:tensorp)
                            (:copier nil) (:print-object torch::%t-print))
   ;; The record described in the header. torch:tensorp is the generated tag
-  ;; test, and torch::%t-new the one (positional) constructor.
-  data
+  ;; test, and torch::%t-new the one (positional) constructor. The store slot
+  ;; is read by torch::%t-data below (which materializes a view) and written
+  ;; by torch:set-data and the optimizers; nothing else touches it.
+  store
   grad
   requires-grad
   parents
   backward-fn)
+
+;; --- the view ----------------------------------------------------------------
+;; A tensor whose store is a torch::%view holds data that has NOT been
+;; materialized: the record names a SOURCE tensor, and the tensor's data is
+;; the source's with its last two axes exchanged -- what (torch:transpose x
+;; '(0 2 1)) on a stack and the matrix transpose produce. It exists so that
+;; torch:matmul can consume the transpose WITHOUT a copy: it reads the marker
+;; and calls the stacked product that reads the operand where it lies
+;; (linalg::%la-matmul-nd-ta / -tb, .kb/linalg.md), the way torch.transpose
+;; is a view that torch.bmm reads through a stride, and it routes the tape
+;; edge to the source so that the adjoint is computed in the source's own
+;; orientation and the view's adjoint (a second copy) never runs. Every other
+;; reader goes through torch::%t-data, which materializes ONCE -- the array
+;; replaces the view in the store, releasing the source -- and is exactly
+;; what the generated accessor used to be, so no operation but torch:matmul
+;; and torch:shape knows that views exist. A second deferred producer would
+;; add a slot naming its kind and a branch in torch::%t-data.
+
+(defstruct (torch::%view (:constructor torch::%v-new (source))
+                         (:conc-name torch::%v-) (:predicate torch::%view-p)
+                         (:copier nil))
+  source)
+
+(defun torch::%t-data (tn)
+  ;; The tensor's data, materialized: a view is replaced in the store by the
+  ;; array it stands for on the first read, so a second read costs nothing.
+  (let ((s (torch::%t-store tn)))
+    (if (torch::%view-p s)
+        (let ((d (linalg::%la-swap-last (torch::%t-data (torch::%v-source s)))))
+          (setf (torch::%t-store tn) d)
+          d)
+        s)))
+
+(defun torch::%t-swap-view (tn)
+  ;; The view record in tn's store, or nil when its data is real.
+  (let ((s (torch::%t-store tn))) (if (torch::%view-p s) s nil)))
+
+(defun torch::%t-swap-dims (dims)
+  ;; dims with its last two entries exchanged.
+  (let ((r (reverse dims))) (reverse (cons (cadr r) (cons (car r) (cddr r))))))
+
+(defun torch::%t-dims (tn)
+  ;; The dims list of tn's data (nil for a scalar) WITHOUT materializing a
+  ;; view: a view's dims are its source's with the last two exchanged.
+  (let ((v (torch::%t-swap-view tn)))
+    (if (null v)
+        (let ((d (torch::%t-store tn)))
+          (if (numberp d) nil (array-dimensions d)))
+        (torch::%t-swap-dims (torch::%t-dims (torch::%v-source v))))))
+
+(defun torch::%t-swap-last-p (rank nx)
+  ;; Whether a transpose of a rank-rank tensor by the normalized axes nx (nil
+  ;; for the plain matrix transpose) is exactly the last-two-axes exchange
+  ;; the view stands for.
+  (cond ((< rank 2) nil)
+        ((null nx) (= rank 2))
+        ((/= (length nx) rank) nil)
+        (t (do ((p nx (cdr p)) (k 0 (+ k 1)))
+               ((null p) t)
+             (unless (= (car p)
+                        (cond ((= k (- rank 2)) (- rank 1))
+                              ((= k (- rank 1)) (- rank 2))
+                              (t k)))
+               (return nil))))))
 
 (defun torch::%t-check (x)
   ;; Signals unless x is a tensor; returns it.
@@ -118,7 +187,7 @@
   ;; using it. The tape is untouched -- call it inside torch:no-grad, like
   ;; torch.no_grad() around an optimizer step.
   (torch::%t-check tn)
-  (setf (torch::%t-data tn) value)
+  (setf (torch::%t-store tn) value)
   tn)
 
 (defun torch:grad (tn)
@@ -128,8 +197,10 @@
   (torch::%t-grad tn))
 
 (defun torch:shape (tn)
-  ;; The dims list of the tensor's data; nil for a scalar tensor (rank 0).
-  (let ((d (torch:data tn))) (if (numberp d) nil (array-dimensions d))))
+  ;; The dims list of the tensor's data; nil for a scalar tensor (rank 0). A
+  ;; transpose view answers without being materialized.
+  (torch::%t-check tn)
+  (torch::%t-dims tn))
 
 (defun torch:item (tn)
   ;; The single element of a scalar (or one-element) tensor, as a number.
@@ -541,16 +612,66 @@
          (torch::%t-unbroadcast (linalg:mul xa (linalg:expand-dims g -1)) xb))
         (t (torch::%t-unbroadcast (linalg::%la-matmul-nd-ta xa g) xb))))
 
+(defun torch::%t-mm-view-a (ta tb va)
+  ;; torch:matmul over a LEFT operand that is a transpose view of s: s^T . b
+  ;; through linalg::%la-matmul-nd-ta, which reads s where it lies. The tape
+  ;; edge goes to s ITSELF while the view tracks, and the gradient is computed
+  ;; straight in s's orientation -- (g . b^T)^T IS b . g^T, the same products
+  ;; folded in the same order -- so the view's own adjoint, a second copy,
+  ;; never runs. An untracked view (torch:no-grad, a constant source) stays
+  ;; the parent, so no gradient reaches s, exactly as before.
+  (let* ((ts (torch::%v-source va))
+         (xs (torch::%t-data ts))
+         (xb (torch::%t-data tb))
+         (pa (if (torch::%t-track-p ta) ts ta)))
+    (torch::%t-result (linalg::%la-matmul-nd-ta xs xb) (list pa tb)
+                      (lambda (g)
+                        (list (when (torch::%t-track-p pa)
+                                (torch::%t-unbroadcast
+                                 (linalg::%la-matmul-nd-tb xb g) xs))
+                              (when (torch::%t-track-p tb)
+                                (torch::%t-unbroadcast (linalg:matmul xs g)
+                                                       xb)))))))
+
+(defun torch::%t-mm-view-b (ta tb vb)
+  ;; The mirror: a RIGHT operand that is a transpose view of s, a . s^T
+  ;; through linalg::%la-matmul-nd-tb, with s's gradient (a^T . g)^T computed
+  ;; as g^T . a. The attention head's (torch:matmul q (torch:transpose k
+  ;; '(0 2 1))) is this case.
+  (let* ((ts (torch::%v-source vb))
+         (xa (torch::%t-data ta))
+         (xs (torch::%t-data ts))
+         (pb (if (torch::%t-track-p tb) ts tb)))
+    (torch::%t-result (linalg::%la-matmul-nd-tb xa xs) (list ta pb)
+                      (lambda (g)
+                        (list (when (torch::%t-track-p ta)
+                                (torch::%t-unbroadcast (linalg:matmul g xs) xa))
+                              (when (torch::%t-track-p pb)
+                                (torch::%t-unbroadcast
+                                 (linalg::%la-matmul-nd-ta g xa) xs)))))))
+
 (defun torch:matmul (a b)
   ;; Differentiable matrix product with torch.matmul's rank rules: two vectors
   ;; give the dot product (a scalar tensor), a matrix and a vector the usual
   ;; products, and rank >= 3 on either side the BATCHED product
   ;; (linalg:matmul: the last two axes are the matrix, leading axes
   ;; broadcast). Gradients flow to both operands, with the batch axes
-  ;; unbroadcast like every other adjoint.
+  ;; unbroadcast like every other adjoint. An operand that is a transpose
+  ;; VIEW against a rank >= 2 operand is read where it lies (the two helpers
+  ;; above); with both operands views the right one is materialized.
   (let* ((ta (torch::%t-wrap a))
          (tb (torch::%t-wrap b))
-         (xa (torch::%t-data ta))
+         (va (torch::%t-swap-view ta))
+         (vb (if (null va) (torch::%t-swap-view tb) nil)))
+    (cond ((and va (>= (length (torch::%t-dims tb)) 2))
+           (torch::%t-mm-view-a ta tb va))
+          ((and vb (>= (length (torch::%t-dims ta)) 2))
+           (torch::%t-mm-view-b ta tb vb))
+          (t (torch::%t-mm ta tb)))))
+
+(defun torch::%t-mm (ta tb)
+  ;; torch:matmul over two materialized operands, by the rank rules.
+  (let* ((xa (torch::%t-data ta))
          (xb (torch::%t-data tb))
          (ra (length (array-dimensions xa)))
          (rb (length (array-dimensions xb)))
@@ -585,20 +706,26 @@
   ;; passes through, like linalg:transpose); with an axes list the rank-n
   ;; permutation (out-dims[k] = dims[axes[k]], a negative axis counting from
   ;; the end). The adjoint applies the INVERSE permutation to the gradient.
+  ;; The matrix transpose and the axes form that exchanges exactly the last
+  ;; two axes are returned as a VIEW ("the view" above): nothing is copied
+  ;; until something other than torch:matmul reads the data.
   (let* ((ta (torch::%t-wrap a))
-         (xa (torch::%t-data ta))
-         (rank (length (array-dimensions xa)))
+         (rank (length (torch::%t-dims ta)))
          (nx
           (if (null axes)
               nil
               (mapcar (lambda (v) (if (< v 0) (+ v rank) v)) axes))))
-    (torch::%t-result (linalg:transpose xa nx) (list ta)
-                      (lambda (g)
-                        (list
-                         (if (null nx)
-                             (linalg:transpose g)
-                             (linalg:transpose g
-                              (torch::%t-inverse-perm nx))))))))
+    (if (torch::%t-swap-last-p rank nx)
+        (torch::%t-result (torch::%v-new ta) (list ta)
+                          (lambda (g) (list (linalg::%la-swap-last g))))
+        (let ((xa (torch::%t-data ta)))
+          (torch::%t-result (linalg:transpose xa nx) (list ta)
+                            (lambda (g)
+                              (list
+                               (if (null nx)
+                                   (linalg:transpose g)
+                                   (linalg:transpose g
+                                    (torch::%t-inverse-perm nx))))))))))
 
 (defun torch::%t-inverse-perm (axes)
   ;; The inverse of an axes permutation: inv[axes[k]] = k, as a list.
@@ -1601,7 +1728,7 @@
                   (setf (row-major-aref buf k) d))
                 (let ((nv (- xv (* lr d))))
                   (if sx
-                      (setf (torch::%t-data p) nv)
+                      (setf (torch::%t-store p) nv)
                       (setf (row-major-aref x k) nv)))))))))))
 
 (defun torch::%o-adam-step (self)
@@ -1660,7 +1787,7 @@
         ((null ps) self)
       (let* ((p (car ps)) (g (torch::%t-grad p)))
         (unless (null g)
-          (setf (torch::%t-data p)
+          (setf (torch::%t-store p)
                 (linalg::%la-adam-step (torch::%t-data p) g (aref ms i)
                                        (aref vs i) rule)))))))
 

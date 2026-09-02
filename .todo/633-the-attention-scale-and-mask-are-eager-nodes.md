@@ -38,6 +38,19 @@ tensor record, the same obligation to keep every reader of `torch::%t-data` hone
 **Build 630 first**; this item is then two more markers and one wider kernel signature,
 and the adjoint side is a fused `softmax_grad` that ends in a select and a scale.
 
+## What 630 landed, and what this item still has to add (2026-09-02)
+
+`.todo/630` is built: the record's data slot is `store`, `torch::%t-data` is a defun that
+materializes, and the marker is `torch::%view` with ONE slot (`source`) meaning "the
+source with its last two axes exchanged" -- there is no kind slot yet, because one kind
+needed none. This item adds the kind (and an `arg`: the scale, the mask and fill value),
+a branch per kind in `%t-data` (the eager composition, so a reader that is not
+`torch:softmax` still sees the chain's bits), and the routing `torch:matmul` does today:
+`torch:softmax` records the VIEW CHAIN's innermost source as its parent and folds
+`where(m, 0, g) / s` into `%la-softmax-grad`'s adjoint. Bit-identity has to be argued the
+fused tier's way: the chain rounds `(T)(x / s)` at the width before the max-subtraction,
+and the kernel must too. `.kb/torch.md` "The transpose view" is the mechanism as it stands.
+
 ## Acceptance
 
 The `scal_f32` and `where_f32` buckets at the `(64 256 256)` grid gone from the step

@@ -1166,10 +1166,10 @@ the fused-tier table above is batch 32 and the two must not be mixed:
 | total kernel time | 7187 ms (553 a step) | **6541 ms (503 a step)** |
 | wall a step | 0.686 s | **0.639 s** |
 
-The three buckets the item named are gone; the 72 launches a step that remain (2.0 ms) are
-the ATTENTION HEAD's own `(torch:transpose key '(0 2 1))` and its adjoint, which is a
-`torch:` tape node in the model rather than a matmul adjoint -- removing it needs a
-transpose the tape can carry as a VIEW, and is `.todo/630`. The transposed `_t4` costs
+The three buckets the item named are gone; the 72 launches a step that remained (2.0 ms)
+were the ATTENTION HEAD's own `(torch:transpose key '(0 2 1))` and its adjoint, a `torch:`
+tape node in the model rather than a matmul adjoint -- removed by making the transpose a
+VIEW the tape carries, "The attention head's transpose" below. The transposed `_t4` costs
 about 9% more than the untransposed one at these shapes, which is 5.9 ms a step against
 the 51.5 the gathers gave back. **The loss series is byte-identical to the previous
 build's at every step**, as the bit-identity above says it must be.
@@ -1179,6 +1179,47 @@ pair measured (t13 - t3) / 10 once each and reported 0.737 vs 0.736 -- no change
 the profile said 50 ms a step of kernel time had gone. The program varies about 15% run to
 run on this machine; three interleaved rounds over 20 steps found the 7%. Measure this
 program the long way or do not measure it.
+
+## The attention head's transpose (todo-630, 2026-09-02)
+
+What "The transposed product" could not reach: `(torch:matmul query (torch:transpose key
+'(0 2 1)))` is the MODEL's code, in PyTorch's own idiom, and `torch:transpose` was an eager
+tape node -- `linalg:transpose` wrote the swapped copy, its adjoint wrote a second one, 72
+`gather_f32` launches at the per-head `(64 256 64)` grid a step. **The fix is the one
+PyTorch has: the transpose is a VIEW the tape carries** (`.kb/torch.md`, "The transpose
+view"): `torch:transpose` of the last two axes returns a tensor whose data is a marker
+naming the source, `torch:matmul` reads the marker and calls `%la-matmul-nd-tb` /
+`-ta` over the source where it lies, and it records the SOURCE as the parent, computing
+its gradient straight in the source's orientation -- `(a^T . g)^T` is `g^T . a`, the same
+products folded in the same `k` order, so the bits are the eager node's. Nothing in
+`am.ik.gpu` changed; the device members are the ones todo-628 built.
+
+**Measured, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, GB10
+with the machine to itself; the step is `(t23 - t3) / 20`, median of three interleaved
+rounds; the kernel columns are nsys over a 13-step run). BATCH 64 numbers, like the two
+tables above and unlike the fused tier's:
+
+| | before | after |
+|---|---|---|
+| `gather_f32` at `(64 256 64)` (grid 4096) | 72 launches a step, 2.00 ms | **0** |
+| `gemm_batched_f32_t4` for the key's gradient | grid `(4 1 64)`, 36 a step, 5.00 ms | grid `(1 4 64)`, 36 a step, 4.40 ms |
+| total kernel time a step | 480.3 ms in 2589 launches | **478.9 ms in 2517** |
+| wall a step, the three rounds | 0.632 / 0.608 / 0.661 | **0.602 / 0.602 / 0.605** |
+| wall a step, median | 0.632 s | **0.602 s** |
+
+The gather bucket is gone; the key's gradient product moved from the `(d s)` orientation
+to the `(s d)` one (the same 36 launches, 0.6 ms cheaper). The kernels gave back 1.4 ms and
+the wall about 30 -- the rest is what 72 fresh 4 MB device results a step, and the 36 held
+across the forward, cost the allocator and the collector, the same shape as the six logits
+launches in the section below. Note the AFTER rounds sit within 0.5% of each other where
+the BEFORE rounds span the usual 9%; a single pair would have shown anything from 0 to 9.
+**The loss series is byte-identical to the previous build's at every step of all six runs
+and both profiles.** The rank-2 `copy_f32` at grid 4096 (72 a step, 2.9 ms) that remains
+at the head shape is `torch:cat`'s slice adjoint over the six heads, not a transpose.
+
+What the view mechanism is now the prerequisite of: the attention SCALE and MASK
+(`.todo/633`), the two eager nodes between this product and the fused softmax, 15.6 ms a
+step; the record needs a kind for them and `torch:softmax` a wider member.
 
 ## The chains left composed (todo-629, 2026-09-02)
 

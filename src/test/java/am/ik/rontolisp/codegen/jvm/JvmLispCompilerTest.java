@@ -12907,6 +12907,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTorchTransposeView() throws Exception {
+		// TorchGradcheck.VIEW_PROGRAM: the transpose view torch:matmul reads in place
+		// (todo-630) against the materialized transpose, bit for bit, on the compiled
+		// backend.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunTorchOptimizerRules() throws Exception {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM): the
 		// SGD/Adam rules against hand-computed values, the batching and mask helpers,

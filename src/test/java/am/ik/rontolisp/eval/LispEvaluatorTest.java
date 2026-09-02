@@ -11948,6 +11948,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void torchTransposeViewIsTheMaterializedTransposeBitForBit() {
+		// TorchGradcheck.VIEW_PROGRAM, shared verbatim with the JVM and WASM backends:
+		// a last-two-axes torch:transpose is a view torch:matmul reads in place
+		// (todo-630), and every line prints T against the materialized transpose.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_EXPECTED);
+	}
+
+	@Test
 	void torchOptimizerRulesAndTrainingPlumbing() {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM), shared
 		// verbatim with the JVM and WASM backends: the SGD/Adam update rules against

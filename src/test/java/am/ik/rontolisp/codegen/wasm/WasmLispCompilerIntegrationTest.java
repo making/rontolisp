@@ -14906,6 +14906,14 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileTorchTransposeView() throws Exception {
+		// TorchGradcheck.VIEW_PROGRAM on the wasm-GC backend: the transpose view
+		// torch:matmul reads in place (todo-630) against the materialized transpose.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_EXPECTED);
+	}
+
+	@Test
 	void compileTorchOptimizerRules() throws Exception {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM) on the
 		// wasm-GC backend: the element-wise in-place parameter update, the optimizer

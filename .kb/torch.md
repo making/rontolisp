@@ -70,7 +70,7 @@ predicate `torch:tensorp`, no copier):
 
 | field | contents |
 | --- | --- |
-| data | a linalg array (packed float, any rank; `:element-type` honoured) or a NUMBER -- a plain number is the rank-0 scalar tensor (`torch:shape` nil, like `linalg:ndim` 0) |
+| store | the data: a linalg array (packed float, any rank; `:element-type` honoured) or a NUMBER -- a plain number is the rank-0 scalar tensor (`torch:shape` nil, like `linalg:ndim` 0) -- or a `torch::%view`, data not yet materialized ("The transpose view" below). Read through the defun `torch::%t-data`, which materializes; the accessor `torch::%t-store` is written by `torch:set-data` and the optimizers only |
 | grad | nil, or a value of data's shape -- a RAW linalg value, not a tensor |
 | requires-grad | the LEAF flag from `(torch:tensor x :requires-grad t)` |
 | parents | the input tensors this one was computed from |
@@ -714,6 +714,47 @@ one, over an explicit state vector that the member advances IN PLACE -- the same
 state `%la-rng-fill` takes -- and `%la-rng-restore` puts back. A scalar input keeps the
 old composition in both `torch:gelu` and `torch:layer-norm` (a number has no shape to
 fuse over).
+
+## The transpose view (todo-630, 2026-09-02)
+
+`(torch:matmul query (torch:transpose key '(0 2 1)))` is the attention head's own idiom,
+and `torch:transpose` was an eager node: `linalg:transpose` materialized the swapped copy,
+and its adjoint materialized a second one -- at a small GPT's shapes 72 `gather` launches a
+step after the matmul adjoints had stopped copying (`.kb/gpu.md`, "The transposed
+product"). PyTorch's transpose is a view, and so is this one now.
+
+**The record's data slot is `store`, and `torch::%t-data` is a defun over it.** A
+`torch:transpose` that exchanges exactly the last two axes -- the rank-2 matrix transpose,
+or an axes list `(0 .. n-3 n-1 n-2)` -- returns a tensor whose store is a `torch::%view`
+naming the SOURCE tensor. `torch::%t-data` is what the generated accessor used to be plus
+one branch: a view is materialized on the first read (`linalg::%la-swap-last` of the
+source's data, itself read through `%t-data`, so a view of a view resolves) and the array
+REPLACES the view in the store, so a second read costs nothing and the source is released.
+Every operation reads its operands through `%t-data`, so none of them knows views exist;
+the two that do are `torch:matmul` and `torch:shape` (`torch::%t-dims` answers a view's
+dims from the source's without materializing). Any other permutation, and a transpose of
+a scalar or a vector, is the eager node it always was.
+
+**`torch:matmul` reads a view's source where it lies, and routes the tape edge to the
+source.** With the right operand a view of `s` the forward is `linalg::%la-matmul-nd-tb a
+s`, with the left `%la-matmul-nd-ta s b` (both views: the right one is materialized;
+a vector on the other side: the view is materialized and the rank rules run as before).
+The parent recorded is `s` ITSELF, not the view, and the gradient is computed straight in
+`s`'s orientation: `(a^T . g)^T` IS `g^T . a`, the same products folded in the same
+order, so the view's own adjoint -- the second copy -- never runs and the bits are the
+eager node's (`TorchGradcheck.VIEW_PROGRAM` pins the forward and both gradients against
+`(torch:add view 0.0)`, the materialized route, on the three test backends;
+`ci-spec.yaml`'s `torch-transpose-view` on all four; the five `matmul-transposed-*`
+gradcheck rows cover the shapes). The routing respects tracking: a view made under
+`torch:no-grad`, or of a constant, does not track, and then the VIEW stays the parent so
+that no gradient reaches the source -- exactly what the eager node did.
+
+**What a reader of the store must know.** `torch:set-data` and the two optimizer updates
+write `%t-store` directly (a parameter is never a view). `torch:detach` and the printer go
+through `%t-data` and materialize. A view materialized LATE sees the source's data as it is
+THEN -- the SGD update writes a parameter's array in place -- which is PyTorch's aliasing
+too, and unreachable in a training loop, where every consumer of a transpose reads it in
+the forward pass. The measurement is in `.kb/gpu.md` "The attention head's transpose".
 
 ## Wiring (the LinalgLibrary pattern, plus the ordering rule)
 

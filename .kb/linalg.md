@@ -152,7 +152,9 @@ internal walks so there is exactly one place where a strided read can be wrong:
   copying it into the other one, which at a transformer's shapes was a full memory pass
   per backward call (`.kb/gpu.md`, "The transposed product"). Two arity-2 members rather
   than one member with two flags, so that every seam that already carries
-  `%la-matmul-nd` carries these unchanged.
+  `%la-matmul-nd` carries these unchanged. Since todo-630 `torch:matmul`'s FORWARD reaches
+  them too, over a `torch:transpose` view of the last two axes (`.kb/torch.md`, "The
+  transpose view").
 
 Consequences worth knowing:
 

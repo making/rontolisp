@@ -27,6 +27,13 @@ saved pass pays has to be measured on the hardware rather than inherited.
 **Do not land this without a Mac to measure on.** An untested kernel change on a backend
 whose test suite cannot run here is worth less than the honest decline it would replace.
 
+## Since todo-630
+
+The attention head's FORWARD reaches `%la-matmul-nd-tb` too (`torch:transpose` of the last
+two axes is a view `torch:matmul` reads in place, `.kb/torch.md`), so on Metal the decline
+now lands on a transpose per head in the forward as well -- which is exactly the copy the
+eager node made before, so nothing got worse there; the backward lost one of its two.
+
 ## Acceptance
 
 `MetalGpuTest` gains the transposed-product equality (the CUDA suite's

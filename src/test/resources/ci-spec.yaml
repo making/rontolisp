@@ -6434,6 +6434,63 @@ cases:
       (T T)
       (T T)
       (T T T)
+  # A last-two-axes torch:transpose is a VIEW: nothing is copied, torch:matmul
+  # reads the source in place through the transposed stacked product and routes
+  # the tape edge to the source, and every other reader materializes it once.
+  # Each line pins the view path against the materialized transpose -- forward
+  # and both gradients bit for bit -- then the readers that must stay honest.
+  - name: torch-transpose-view
+    source: |
+      (defparameter *vw-q* (linalg:reshape (linalg:from-list '(0.5 -1.0 2.0 1.5 0.25 -0.75 1.0 -0.5 0.75 -1.25 2.5 0.125)) '(2 2 3)))
+      (defparameter *vw-k* (linalg:reshape (linalg:from-list '(1.0 2.0 -1.0 0.5 -0.5 1.5 -2.0 0.25 0.75 1.25 -1.5 0.5)) '(2 2 3)))
+      (defmacro vw-loss (y) `(torch:sum (torch:mul ,y ,y)))
+      (defmacro vw-compare (form)
+        ;; form over q, k and vw-t, twice: the view path against the materialized
+        ;; one. Macros rather than defuns and lambdas: the corpus's WASM spread
+        ;; dispatcher is one body over every callable and sits at its size bound.
+        `(let* ((q1 (torch:tensor *vw-q* :requires-grad t))
+                (k1 (torch:tensor *vw-k* :requires-grad t))
+                (q2 (torch:tensor *vw-q* :requires-grad t))
+                (k2 (torch:tensor *vw-k* :requires-grad t))
+                (y1 (let ((q q1) (k k1)) (macrolet ((vw-t (x) `(torch:transpose ,x '(0 2 1)))) ,form)))
+                (y2 (let ((q q2) (k k2)) (macrolet ((vw-t (x) `(torch:add (torch:transpose ,x '(0 2 1)) 0.0))) ,form))))
+           (torch:backward (vw-loss y1))
+           (torch:backward (vw-loss y2))
+           (print (list (linalg:array-equal (torch:data y1) (torch:data y2))
+                        (linalg:array-equal (torch:grad q1) (torch:grad q2))
+                        (linalg:array-equal (torch:grad k1) (torch:grad k2))))))
+      (vw-compare (torch:matmul q (vw-t k)))
+      (vw-compare (torch:matmul (vw-t q) k))
+      (vw-compare (torch:matmul (vw-t q) (vw-t (torch:matmul k (vw-t q)))))
+      (vw-compare (let ((v (vw-t k))) (torch:add (torch:matmul q v) (torch:sum (torch:mul v v)))))
+      (let* ((k (torch:tensor *vw-k* :requires-grad t))
+             (v (torch:transpose k '(0 2 1))))
+        (print (list (torch:shape v) (torch:shape (torch:transpose (torch:tensor '((1.0 2.0 3.0)))))))
+        (print (torch:transpose (torch:tensor '((1.0 2.0 3.0)))))
+        (print (torch:detach (torch:transpose (torch:tensor '((1.0 2.0 3.0))))))
+        (torch:backward (vw-loss (torch:mul v 2.0)))
+        (print (list (linalg:array-equal (torch:grad k) (linalg:mul 8.0 *vw-k*))
+                     (eq (torch:data v) (torch:data v)))))
+      (let* ((q (torch:tensor *vw-q* :requires-grad t))
+             (k (torch:tensor *vw-k* :requires-grad t))
+             (v (torch:no-grad (torch:transpose k '(0 2 1)))))
+        (torch:backward (vw-loss (torch:matmul q v)))
+        (print (list (torch:requires-grad-p v) (null (torch:grad k)) (null (torch:grad q)))))
+      (let* ((a (torch:tensor (linalg:reshape (linalg:arange 24) '(2 3 4)) :requires-grad t))
+             (v (torch:transpose a '(1 0 2))))
+        (torch:backward (vw-loss (torch:matmul v (torch:transpose v '(0 2 1)))))
+        (print (list (torch:shape v) (linalg:sum (torch:grad a)))))
+    expected: |
+      (T T T)
+      (T T T)
+      (T T T)
+      (T T T)
+      ((2 3 2) (3 1))
+      #<TENSOR #f((1.0) (2.0) (3.0))>
+      #<TENSOR #f((1.0) (2.0) (3.0))>
+      (T T)
+      (NIL T NIL)
+      ((3 2 4) 1779648.0)
   # The torch records are defstructs carrying a (:print-object ...), so a tensor,
   # a module and an optimizer render identically on every backend -- the
   # hand-rolled tagged vectors they replaced printed their raw slots, one of which

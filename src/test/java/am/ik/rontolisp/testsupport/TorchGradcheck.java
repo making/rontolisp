@@ -104,6 +104,25 @@ public final class TorchGradcheck {
 			(gc-check "matmul-batched"
 			          (lambda (a b) (sq-loss (torch:matmul a b)))
 			          (list (linalg:reshape (linalg:mul 0.125 (linalg:arange 12)) '(2 2 3)) *m32*))
+			;; A last-two-axes transpose is a VIEW torch:matmul reads in place, with the
+			;; tape edge routed to the view's source: the right operand (the attention
+			;; head's own shape), the left, the rank-2 matrix transpose, both at once,
+			;; and a view against a vector, which materializes.
+			(gc-check "matmul-transposed-b"
+			          (lambda (a b) (sq-loss (torch:matmul a (torch:transpose b '(0 2 1)))))
+			          (list (linalg:reshape (linalg:mul 0.125 (linalg:arange 12)) '(2 2 3))
+			                (linalg:reshape (linalg:sub 1.0 (linalg:mul 0.2 (linalg:arange 12))) '(2 2 3))))
+			(gc-check "matmul-transposed-a"
+			          (lambda (a b) (sq-loss (torch:matmul (torch:transpose a '(0 2 1)) b)))
+			          (list (linalg:reshape (linalg:mul 0.125 (linalg:arange 12)) '(2 3 2))
+			                (linalg:reshape (linalg:sub 1.0 (linalg:mul 0.2 (linalg:arange 12))) '(2 3 2))))
+			(gc-check "matmul-transposed-mm"
+			          (lambda (a b) (sq-loss (torch:matmul (torch:transpose a) b))) (list *m23* *a23*))
+			(gc-check "matmul-both-transposed"
+			          (lambda (a b) (sq-loss (torch:matmul (torch:transpose b) (torch:transpose a))))
+			          (list *m23* *m32*))
+			(gc-check "matmul-transposed-mv"
+			          (lambda (a v) (sq-loss (torch:matmul (torch:transpose a) v))) (list *m23* *v2*))
 			(gc-check "sum-axis" (lambda (a) (sq-loss (torch:sum a :axis 0 :keepdims t))) (list *a23*))
 			(gc-check "sum-all" (lambda (a) (sq-loss (torch:sum a))) (list *a23*))
 			(gc-check "mean-axis" (lambda (a) (sq-loss (torch:mean a :axis 1))) (list *a23*))
@@ -420,6 +439,72 @@ public final class TorchGradcheck {
 			(T T)
 			(T T T)""";
 
+	/**
+	 * The transpose VIEW (todo-630): {@code torch:transpose} of the last two axes returns
+	 * a tensor whose data is not materialized, {@code torch:matmul} reads its source in
+	 * place through {@code linalg::%la-matmul-nd-ta} / {@code -tb} and routes the tape
+	 * edge to the source, and every other reader materializes it once. Each line prints T
+	 * against the SAME product through a materialized transpose
+	 * ({@code (torch:add view 0.0)} forces the copy and the view's own adjoint) --
+	 * forward and both gradients, bit for bit -- then the readers that must stay honest:
+	 * the shape, the printer, {@code torch:detach}, {@code torch:data} read twice, a view
+	 * made under {@code torch:no-grad} (no gradient reaches its source), and a
+	 * permutation that is NOT the last-two swap (eager, as before).
+	 */
+	public static final String VIEW_PROGRAM = """
+			(defun vw-loss (y) (torch:sum (torch:mul y y)))
+			(defparameter *vw-q* (linalg:reshape (linalg:from-list '(0.5 -1.0 2.0 1.5 0.25 -0.75 1.0 -0.5 0.75 -1.25 2.5 0.125)) '(2 2 3)))
+			(defparameter *vw-k* (linalg:reshape (linalg:from-list '(1.0 2.0 -1.0 0.5 -0.5 1.5 -2.0 0.25 0.75 1.25 -1.5 0.5)) '(2 2 3)))
+			(defun vw-compare (f)
+			  ;; f over (q k) twice: the view path against the materialized one.
+			  (let* ((q1 (torch:tensor *vw-q* :requires-grad t))
+			         (k1 (torch:tensor *vw-k* :requires-grad t))
+			         (q2 (torch:tensor *vw-q* :requires-grad t))
+			         (k2 (torch:tensor *vw-k* :requires-grad t))
+			         (y1 (funcall f q1 k1 nil))
+			         (y2 (funcall f q2 k2 t)))
+			    (torch:backward (vw-loss y1))
+			    (torch:backward (vw-loss y2))
+			    (print (list (linalg:array-equal (torch:data y1) (torch:data y2))
+			                 (linalg:array-equal (torch:grad q1) (torch:grad q2))
+			                 (linalg:array-equal (torch:grad k1) (torch:grad k2))))))
+			(defun vw-t (x eager) (if eager (torch:add (torch:transpose x '(0 2 1)) 0.0) (torch:transpose x '(0 2 1))))
+			(vw-compare (lambda (q k eager) (torch:matmul q (vw-t k eager))))
+			(vw-compare (lambda (q k eager) (torch:matmul (vw-t q eager) k)))
+			(vw-compare (lambda (q k eager) (torch:matmul (vw-t q eager) (vw-t (torch:matmul k (vw-t q eager)) eager))))
+			(vw-compare (lambda (q k eager) (let ((v (vw-t k eager))) (torch:add (torch:matmul q v) (torch:sum (torch:mul v v))))))
+			(let* ((k (torch:tensor *vw-k* :requires-grad t))
+			       (v (torch:transpose k '(0 2 1))))
+			  (print (list (torch:shape v) (torch:shape (torch:transpose (torch:tensor '((1.0 2.0 3.0)))))))
+			  (print (torch:transpose (torch:tensor '((1.0 2.0 3.0)))))
+			  (print (torch:detach (torch:transpose (torch:tensor '((1.0 2.0 3.0))))))
+			  (torch:backward (vw-loss (torch:mul v 2.0)))
+			  (print (list (linalg:array-equal (torch:grad k) (linalg:mul 8.0 *vw-k*))
+			               (eq (torch:data v) (torch:data v)))))
+			(let* ((q (torch:tensor *vw-q* :requires-grad t))
+			       (k (torch:tensor *vw-k* :requires-grad t))
+			       (v (torch:no-grad (torch:transpose k '(0 2 1)))))
+			  (torch:backward (vw-loss (torch:matmul q v)))
+			  (print (list (torch:requires-grad-p v) (null (torch:grad k)) (null (torch:grad q)))))
+			(let* ((a (torch:tensor (linalg:reshape (linalg:arange 24) '(2 3 4)) :requires-grad t))
+			       (v (torch:transpose a '(1 0 2))))
+			  (torch:backward (vw-loss (torch:matmul v (torch:transpose v '(0 2 1)))))
+			  (print (list (torch:shape v) (linalg:sum (torch:grad a)))))
+			""";
+
+	/** The expected stdout of {@link #VIEW_PROGRAM}. */
+	public static final String VIEW_EXPECTED = """
+			(T T T)
+			(T T T)
+			(T T T)
+			(T T T)
+			((2 3 2) (3 1))
+			#<TENSOR #f((1.0) (2.0) (3.0))>
+			#<TENSOR #f((1.0) (2.0) (3.0))>
+			(T T)
+			(NIL T NIL)
+			((3 2 4) 1779648.0)""";
+
 	/** The expected stdout of {@link #ELEMENT_TYPE_PROGRAM}. */
 	public static final String ELEMENT_TYPE_EXPECTED = """
 			(SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT)
@@ -449,6 +534,11 @@ public final class TorchGradcheck {
 			matmul-vm: ok
 			matmul-mm: ok
 			matmul-batched: ok
+			matmul-transposed-b: ok
+			matmul-transposed-a: ok
+			matmul-transposed-mm: ok
+			matmul-both-transposed: ok
+			matmul-transposed-mv: ok
 			sum-axis: ok
 			sum-all: ok
 			mean-axis: ok
