@@ -673,11 +673,13 @@ adds to, or takes a root of a threshold is in a TEST (`LinalgGpuTest`,
 `JvmLinalgGpuAccelCompilerTest`, `GpuOfferDifferentialTest`); `Gpu`'s own use of them is
 `>=` and nothing else, so a `Long.MAX_VALUE` threshold declines rather than wrapping. **A
 threshold is safe to compare against and unsafe to compute from**, and only the tests
-compute from them. One robustness note, which is
-not a decline and which no shape in any program reaches: `CudaGemm.where` maps a non-null
-mask that is neither `float[]` nor `double[]` to `mkind` 0, which is the SCALAR-mask path, so
-such a call would compute rather than decline -- `softmaxKernel` writes the same test as an
-explicit refusal. Two spellings of one guard, one of which fails open.
+compute from them. One robustness note, not a decline any shape in any program has ever
+reached: `CudaGemm.where` used to map a non-null mask that is neither `float[]` nor
+`double[]` to `mkind` 0, the SCALAR-mask path, so such a call would have computed rather than
+declined -- `softmaxKernel` wrote the same test as an explicit refusal, which meant two
+spellings of one guard, one of which failed open. Closed (todo-663, 2026-09-03): `where` now
+takes the same explicit refusal `MetalGemm.whereF` already wrote, so both spellings are a
+decline.
 
 ## Precision
 

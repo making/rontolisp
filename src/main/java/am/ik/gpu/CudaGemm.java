@@ -2868,6 +2868,13 @@ final class CudaGemm implements GpuDevice {
 		if (!this.usable) {
 			return false;
 		}
+		// An explicit refusal, not a fall-through: a non-null mask that is neither
+		// float[] nor double[] must decline rather than compute as mkind 0, the
+		// SCALAR-mask path -- the same guard softmaxKernel writes.
+		boolean wide = mh instanceof double[];
+		if (mh != null && !wide && !(mh instanceof float[])) {
+			return false;
+		}
 		int rank = dims.length;
 		int n = count(dims);
 		int mkind = mh instanceof float[] ? 1 : mh instanceof double[] ? 2 : 0;
