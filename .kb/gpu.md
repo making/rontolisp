@@ -2310,6 +2310,61 @@ of memory passes and command buffers, so the fold's answer is the wrong one to r
 `GpuDevice.Thresholds` gained a `fused` field: CUDA passes its own fold threshold (nothing
 moves there) and Metal passes `MIN_MAP_ELEMENTS`.
 
+#### The libm-free members against a SEQUENTIAL replay, not against the chain (todo-665, 2026-09-03)
+
+The tier's own test above holds a fused kernel to the CHAIN OF DEVICE MEMBERS it replaces,
+rounding for rounding, both sides on this device. `GpuTest` makes a strictly stronger claim
+for the members with no library function in them: they equal a SEQUENTIAL JAVA REPLAY of
+that chain, so the device's answer is the CPU's rather than merely the device chain's.
+todo-662 left this as the one gap of eighteen it did not close, because it is a MEASUREMENT
+whose answer was not known.
+
+**It holds, on the first run, for every applicable member.**
+`MetalGpuTest.theLibmFreeFusedMembersAreTheSequentialReferencesBits` pins layer-norm, its
+adjoint onto a fresh gradient, its adjoint onto an accumulated one, and the softmax adjoint
+-- bit for bit against `GpuTest.layerNormGradReference`'s walk ported to `#f`, the only
+width here. No member diverged, so nothing had to be weakened to a bound.
+
+**Which members are in scope.** Of the tier's eight here, five carry a libm call by
+construction -- the softmax and log-softmax forwards and the log-softmax adjoint take
+`exp`, the GELU pair takes `erf` and `exp` -- and the shader's libm is not Java's (see
+"the transcendentals have their own libm" above), so a sequential replay could only ever be
+a BOUND for those. What is left is arithmetic, comparison and ONE square root, which is
+correctly rounded on both sides (`precise::sqrt` here, `Math.sqrt` there). The three other
+libm-free members `GpuTest` covers are NOT MEMBERS on this backend and there is nothing to
+replay: the dropout mask (`theDropoutMaskStaysDeclinedHere`) and layer-norm's affine pair
+(`theIndexTierTheClipNormAndTheAffinePairAreNotMembersHereAndDeclineOverAResidentOperand`).
+
+**Why it can hold at all -- and why the reason the item gave for doubting it was wrong.**
+The item was raised on the premise that the fused kernel does its row reduction as a
+THREADGROUP TREE, and a tree and a sequential sum agree only when every partial is exact.
+That premise is false about these kernels. `gemm.metal`'s row members run ONE THREAD PER
+ROW and fold that row SEQUENTIALLY -- `f64_add` over the widened float, in index order,
+which is `%la-fold-axis`'s own accumulation -- in the software binary64 the resident tier
+already needed. The `row_tile` is a TRANSPOSED LOAD for coalescing (thirty-two rows through
+one SIMD group, thirty-two columns at a time), not a reduction. There is no reassociation
+anywhere in the fold, so there is nothing for a bound to forgive. **The premise cost
+nothing because the kernel was read before the machine time was spent**, which is
+`.kb/measurement-probes.md` rule 4 run forwards rather than recovered from.
+
+**One thread per row is the same fact todo-641 and todo-643 met as a COST.** There it is
+why a mask read a cell at a time exposed its latency with nothing to hide behind -- 16384
+threads is not enough of them -- and why the mask had to be packed a bit a cell and traded
+through a shuffle ("The attention scale and mask" and its Metal half). Here it is why a
+sequential replay is the right oracle at all. Neither reading is the property: a shape with
+too little parallelism to hide a load is also a shape with no reassociation to forgive, and
+which of the two you meet depends on the question. Read either section alone and the shape
+looks like a weakness or like a guarantee; it is both.
+
+**What the test is sized off, and the mutation that shows it pins something.** Every shape
+comes from the thresholds in force -- `Gpu.fusedMinElements()` in elements and
+`Gpu.foldMinCells()` in rows, 342 x 384 today -- and nothing is made resident, so the SIZE
+is what carries the accept and a moved floor is caught rather than silently declined. With
+`rows` forced to 64 the members decline and the four `isTrue()` assertions fail, so the
+test is not one of the vacuous ones the sweep above found. The residency census
+(`residencyHits() + residencyMisses()`, eight lookups over the four calls) is the second
+observable, per `.kb/test-execution.md`.
+
 ### The map threshold at the straddling shape (todo-642, 2026-09-02)
 
 The 2^17 above was set against `sin` over a WHOLE array; what straddles it is a chain's
@@ -3476,12 +3531,12 @@ reading the answer, not by reading the code.
 | `theIndexTierIsOfferedOnlyOverAResidentOperandAndCopiesTheCpuKernelsBits` | **not applicable** -- see the correction below |
 | `aDivisionByAPowerOfTwoIsTheExactReciprocalsMultiplyAtBothWidths` | **was a gap**, and the sharpest one: `Gpu.normalPowerOfTwo` requires the divisor and its reciprocal to be normal at `float` precisely so the rewrite is exact "on a backend that computes in `float` (Metal)", and that argument was asserted only where it is not needed. `aDivisionByAPowerOfTwoIsTheExactReciprocalsMultiply` |
 | `theFusedTierLandsOnTheComposedDeviceChainsBitsAtBothWidths` | covered -- `theFusedTierLandsOnTheComposedDeviceChainsBits` and `theScaledAndMaskedSoftmaxLandsOnTheComposedDeviceChainsBits`; the affine pair is not a member (below) |
-| `theLibmFreeFusedMembersAreTheSequentialReferencesBits` | **still a gap**, deliberately: `.todo/665`. The Metal fused test holds the kernel to the DEVICE chain; this holds it to a sequential Java replay, which is a strictly stronger claim and an unknown one here. Establishing it is a measurement and may well come back as a divergence, which is the result either way |
+| `theLibmFreeFusedMembersAreTheSequentialReferencesBits` | **was a gap** -- same name, closed by todo-665. It HOLDS, first run, for every member that is both libm-free and a member here (layer-norm, its adjoint onto a fresh and an accumulated gradient, the softmax adjoint), so no bound was needed in place of the equality: the row fold on this backend is SEQUENTIAL in software binary64, not a threadgroup tree. "The libm-free members against a SEQUENTIAL replay" above |
 | `everyFusedDeclineConditionStillDeclinesWithADevicePresent` | **was a gap** -- same name. `GpuDeclineTest`'s fused enumeration is 8 rows of 16, under every threshold on every backend |
 | `theSumOfSquaresFoldsInBlocksAndIsReproducible...` | **not applicable** -- see the correction below |
 
-Counted: **31 covered, 8 not applicable, 18 gaps** -- of which 17 are now closed by 15 new
-tests in `MetalGpuTest` (53 tests, from 38), and one is `.todo/665`.
+Counted: **31 covered, 8 not applicable, 18 gaps** -- 17 closed by 15 new tests in
+`MetalGpuTest` (53 tests, from 38), and the eighteenth by todo-665 (54 tests).
 
 **The correction this produced.** The bullet under "What is deliberately NOT here" had said
 that todo-495, by flipping `lazyResultsPay` on this backend, made the index tier and the

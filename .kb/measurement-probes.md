@@ -37,6 +37,19 @@ events instead of timing the host: nsys's `cuMemcpyHtoD` / `cuCtxSynchronize` / 
 kernel time, a download or command-buffer counter, a launch census. It is the per-call
 WALL that lies.
 
+**And the count carries the conclusion even when the wall never becomes explicable.** A
+structural count is not merely the safer of two instruments; it is what survives a wall
+that goes wrong in a way nobody can account for. todo-663 (`.kb/gpu.md`, "Ceiling 3: a
+`-1` reshape extent", 2026-09-03) missed its projection in BOTH DIRECTIONS at once -- the
+compiled arm came in at -11.4% against a projected -17.1% and the interpreted one at
+-37.4% against -25.6% -- and the obvious explanation, a fixed start-up cost, can only
+COMPRESS a ratio, so it accounts for one deviation and not the other (over a 22 s run it
+is about 2%, with no room to move a ratio twelve points). The conclusion never wavered
+anyway, because `cuMemcpyDtoH` -34 and `cuMemcpyHtoD` -44 matched the prediction of
+eighty avoided reshapes exactly. **Taking the count looks like waste in every run where
+the wall behaves, and is the whole result in the run where it does not.** A measurement
+holding only a wall loses its conclusion the moment the wall stops making sense.
+
 **When you take a probe number, check it against the traps below and record beside the
 number that you did.** This makes the numbers reachable FROM THE RULES: a table that says
 which traps it was checked against can be re-read when a trap turns out to have a fifth
@@ -222,6 +235,16 @@ that distinguishes them is the record of what moved. And when a measurement's qu
 comes from a `.kb` sentence rather than from the code, check the code for the clause the
 sentence is about before spending the machine time -- one `grep` for the member's own
 `return false` would have ended this chain at step 2.
+
+**Run forwards it costs one file read, and it can UNLOCK a claim rather than only prevent a
+wrong one.** todo-665 was raised on a premise about the kernel rather than about a `.kb`
+sentence -- that the Metal fused row members reduce a row in a THREADGROUP TREE, which a
+sequential replay could not be expected to match -- and the item was written expecting a
+divergence and a bound in place of bit-identity. Reading `gemm.metal` before building the
+measurement showed the fold is one thread per row, sequential in software binary64, so the
+stronger pin was available and went in unweakened (`.kb/gpu.md`, "The libm-free members
+against a SEQUENTIAL replay"). The rule is not "distrust `.kb`": it is that a premise ABOUT
+CODE is checkable in the code, whoever wrote it down and however recently.
 
 ## Rule 3: an A/B whose baseline moved is not an A/B
 
