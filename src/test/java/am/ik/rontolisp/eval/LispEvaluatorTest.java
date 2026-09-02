@@ -6537,6 +6537,162 @@ class LispEvaluatorTest {
 		assertThat(eval("(floor 7.5 2)")).isEqualTo(new LispInteger(3));
 	}
 
+	// The exact truncating quotient of two doubles, read as the exact rationals they are
+	// (d = m * 2^e, both m and e read off the IEEE bits) -- an oracle that shares no code
+	// with the implementation. Returns {quotient, remainderNumerator, commonDenominator}
+	// of a/b with the denominator positive.
+	private static BigInteger[] exactRationalPair(double a, double b) {
+		BigInteger[] ra = exactRational(a);
+		BigInteger[] rb = exactRational(b);
+		BigInteger num = ra[0].multiply(rb[1]);
+		BigInteger den = ra[1].multiply(rb[0]);
+		if (den.signum() < 0) {
+			num = num.negate();
+			den = den.negate();
+		}
+		return new BigInteger[] { num, den };
+	}
+
+	/** {numerator, denominator} of the exact value of a finite double. */
+	private static BigInteger[] exactRational(double d) {
+		long bits = Double.doubleToRawLongBits(d);
+		int biased = (int) ((bits >> 52) & 0x7ff);
+		long frac = bits & 0xf_ffff_ffff_ffffL;
+		long mantissa = biased == 0 ? frac : frac | (1L << 52);
+		int exponent = biased == 0 ? -1074 : biased - 1075;
+		BigInteger m = BigInteger.valueOf(bits < 0 ? -mantissa : mantissa);
+		return exponent >= 0 ? new BigInteger[] { m.shiftLeft(exponent), BigInteger.ONE }
+				: new BigInteger[] { m, BigInteger.ONE.shiftLeft(-exponent) };
+	}
+
+	/** The exact quotient of num/den (den > 0) under one of the four rounding modes. */
+	private static BigInteger exactQuotient(BigInteger num, BigInteger den, String op) {
+		BigInteger[] qr = num.divideAndRemainder(den);
+		if (qr[1].signum() == 0) {
+			return qr[0];
+		}
+		BigInteger floor = qr[1].signum() < 0 ? qr[0].subtract(BigInteger.ONE) : qr[0];
+		switch (op) {
+			case "truncate":
+				return qr[0];
+			case "floor":
+				return floor;
+			case "ceiling":
+				return floor.add(BigInteger.ONE);
+			default:
+				BigInteger rest = num.subtract(floor.multiply(den));
+				int cmp = rest.shiftLeft(1).compareTo(den);
+				if (cmp < 0) {
+					return floor;
+				}
+				return cmp > 0 || floor.testBit(0) ? floor.add(BigInteger.ONE) : floor;
+		}
+	}
+
+	@Test
+	void theFloorFamilyOverAFloatIsExactPastTheLongRange() {
+		// The quotient of a float rounder used to be computed as a double and narrowed
+		// into a long, so anything past 2^63 clamped and the remainder derived from the
+		// clamped quotient came back equal to the dividend. Every other numeric operator
+		// promotes to a bignum instead. The quotient below is the exact one -- SBCL
+		// answers a DIFFERENT integer here (the exact value of the ROUNDED double a/b),
+		// which is what makes its own (rem 1d300 7.0) 0.0 where the exact remainder is
+		// 1.0; todo-659 settled that rontolisp answers the exact remainder, so the
+		// quotient it belongs to is the exact one. See .kb/linalg-simd.md, mod/rem.
+		String big = "1428571428571428646435371793149171783863526544440227364165505879302574939984154565409"
+				+ "1019644006398057767206340469769688242036046219434722509211316925524385469262674298951082910540"
+				+ "4319113541155722766993319281542849297302719852520125724950391825734642082751255545722406119730"
+				+ "809924599483837922771505737";
+		assertThat(eval("(multiple-value-list (truncate 1d300 7.0))").print()).isEqualTo("(" + big + " 1.0)");
+		assertThat(eval("(multiple-value-list (floor -1d300 7.0))").print())
+			.isEqualTo("(-" + big.substring(0, big.length() - 1) + "8 6.0)");
+		assertThat(eval("(multiple-value-list (truncate 1d30 3.0))").print())
+			.isEqualTo("(333333333333333339961541612885 1.0)");
+		// The one-argument form clamped identically: a finite double past 2^52 IS an
+		// exact integer, so its conversion is a pure widening.
+		assertThat(eval("(floor 1d300)").print()).isEqualTo("1" + "0".repeat(16) + "52504760255204420248704468581"
+				+ "1081591549158541155118024579889081957863713750804478640437044438328838781769425232353604305756"
+				+ "4479218478670698284838720092657580373783023379478809005936895323497079994508111903896764088007"
+				+ "4652742780142494579258788820056842838115669472196386865459400540160");
+		// The subtler half of the same defect, INSIDE the long range: both operands and
+		// the quotient fit a long, but a/b rounds first, so the quotient came out 7 too
+		// high and its remainder 1.0 too low. 10^6 = 1 (mod 7), so 10^18 = 1.
+		assertThat(eval("(multiple-value-list (truncate 1d18 7.0))").print()).isEqualTo("(142857142857142857 1.0)");
+		assertThat(eval("(multiple-value-list (ceiling 1d18 7.0))").print()).isEqualTo("(142857142857142858 -6.0)");
+		assertThat(eval("(multiple-value-list (round 1d18 7.0))").print()).isEqualTo("(142857142857142857 1.0)");
+		// A float dividend over an exact integer divisor is the same computation.
+		assertThat(eval("(multiple-value-list (truncate 1d300 7))").print()).isEqualTo("(" + big + " 1.0)");
+		// The ordinary magnitudes and round's ties-to-even are unmoved.
+		assertThat(eval("(multiple-value-list (round 5.0 2.0))").print()).isEqualTo("(2 1.0)");
+		assertThat(eval("(multiple-value-list (round 7.0 2.0))").print()).isEqualTo("(4 -1.0)");
+		assertThat(eval("(multiple-value-list (floor 7.5))").print()).isEqualTo("(7 0.5)");
+	}
+
+	@Test
+	void theFloorFamilySecondValueIsTheRemainderCLHSDefines() {
+		// CLHS: quotient*divisor + remainder = number, with a quotient that "always
+		// represents a mathematical integer" -- so the second value of truncate IS rem
+		// and the second value of floor IS mod, at every magnitude. Checked here against
+		// an exact-rational oracle rather than against another backend.
+		double[] dividends = { 1e18, 1e300, -1e300, 1e30, 12345.678, -12345.678, 3.0, -3.0, 0.5, -0.5, 1e-300, 1.0,
+				-1.0, -0.0, 0.0, 2.5, -7.5, 5.0, 7.0, 9007199254740992.0, 1.8446744073709552e19 };
+		double[] divisors = { 7.0, -7.0, 3.0, 0.1, -0.1, 2.5, 1.0, -1.0, 0.5, 2.0, -2.0 };
+		for (String op : List.of("truncate", "floor", "ceiling", "round")) {
+			for (double a : dividends) {
+				for (double b : divisors) {
+					String source = "(multiple-value-list (%s %s %s))".formatted(op, lispDouble(a), lispDouble(b));
+					LispVal values = eval(source);
+					BigInteger[] pair = exactRationalPair(a, b);
+					BigInteger expectedQuotient = exactQuotient(pair[0], pair[1], op);
+					LispVal quotient = ((LispCons) values).car();
+					LispVal remainder = ((LispCons) ((LispCons) values).cdr()).car();
+					BigInteger actualQuotient = quotient instanceof LispBigInteger bi ? bi.value()
+							: BigInteger.valueOf(((LispInteger) quotient).value());
+					assertThat(actualQuotient).describedAs(source).isEqualTo(expectedQuotient);
+					// number - quotient*divisor, correctly rounded. The quantity itself
+					// is exact and dyadic, so the only rounding allowed is the one that
+					// lands it in a double -- and for truncate (and for every pair whose
+					// remainder is representable) there is not even one.
+					BigInteger[] exactA = exactRational(a);
+					BigInteger[] exactB = exactRational(b);
+					BigInteger num = exactA[0].multiply(exactB[1])
+						.subtract(expectedQuotient.multiply(exactB[0]).multiply(exactA[1]));
+					BigInteger den = exactA[1].multiply(exactB[1]);
+					// A zero remainder keeps the sign todo-652 settled (mod and rem share
+					// it): -0.0 only when the dividend is -0.0 and the divisor positive.
+					double expectedRemainder = num.signum() == 0
+							? (Double.doubleToRawLongBits(a) == Long.MIN_VALUE && b > 0 ? -0.0 : 0.0)
+							: new java.math.BigDecimal(num).divide(new java.math.BigDecimal(den)).doubleValue();
+					assertThat(Double.doubleToRawLongBits(((LispDouble) remainder).value()))
+						.describedAs(source + " remainder, expected " + expectedRemainder)
+						.isEqualTo(Double.doubleToRawLongBits(expectedRemainder));
+				}
+			}
+		}
+	}
+
+	@Test
+	void theFloorAndTruncateRemaindersAreModAndRem() {
+		// The identity the defect broke, stated the way todo-652 stated it: the second
+		// value of truncate is rem and the second value of floor is mod, whatever the
+		// magnitude and whatever the operands.
+		String source = """
+				(defun fq (a b) (multiple-value-bind (q r) (floor a b) (declare (ignore q)) r))
+				(defun tq (a b) (multiple-value-bind (q r) (truncate a b) (declare (ignore q)) r))
+				(list (list (fq 1d18 7.0) (mod 1d18 7.0) (tq 1d18 7.0) (rem 1d18 7.0))
+				      (list (fq -1d300 7.0) (mod -1d300 7.0) (tq 1d300 7.0) (rem 1d300 7.0))
+				      (list (tq 3.0 (/ 1.0 0.0)) (rem 3.0 (/ 1.0 0.0)) (fq -3.0 (/ 1.0 0.0))
+				            (mod -3.0 (/ 1.0 0.0))))
+				""";
+		assertThat(evalMulti(source).print())
+			.isEqualTo("((1.0 1.0 1.0 1.0) (6.0 6.0 1.0 1.0) (3.0 3.0 Infinity Infinity))");
+	}
+
+	/** Renders a double the way the reader reads it back unchanged. */
+	private static String lispDouble(double d) {
+		return Double.toString(d).replace('E', 'e');
+	}
+
 	@Test
 	void evalMultipleValueBindGethash() {
 		String setup = "(progn (setq mv-h (make-hash-table)) (setf (gethash 'x mv-h) nil)"

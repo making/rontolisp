@@ -5576,11 +5576,16 @@ public final class LispEvaluator {
 			case LispNames.CEILING:
 			case LispNames.ROUND:
 			case LispNames.TRUNCATE: {
-				// (floor a b) -> (floor (/ a b)); the one-argument form falls
-				// through to the ordinary built-in function.
-				LispVal withDivisor = LispMacroExpander.expandFloorFamilyDivisor(cons);
-				if (withDivisor != null) {
-					return eval(withDivisor, env);
+				// (floor a b), and the (floor (/ a b)) its lowering leaves behind: the
+				// quotient of the two operands, NOT of the double (/ a b) rounds them
+				// to. A float divides exactly here, so the quotient is the mathematical
+				// integer CLHS asks for at any magnitude -- a bignum past the long
+				// range, like every other numeric operator -- and the remainder beside
+				// it stays rem/mod (.kb/linalg-simd.md, "mod/rem"). The one-argument
+				// form falls through to the ordinary built-in function.
+				LispVal[] operands = floorFamilyOperands(cons);
+				if (operands != null) {
+					return evalFloorFamilyDivision(name, operands[0], operands[1], env);
 				}
 				break;
 			}
@@ -5730,6 +5735,62 @@ public final class LispEvaluator {
 	 * @param expander the pure syntactic expansion of one built-in macro
 	 * @return the value of the (memoized) expansion
 	 */
+	/**
+	 * The dividend and divisor of a two-argument {@code floor}-family call, or of the
+	 * {@code (/ a b)} its single-value and multiple-value lowerings leave behind.
+	 * {@code null} for the plain one-argument form, which the built-in function answers.
+	 */
+	private static LispVal @Nullable [] floorFamilyOperands(LispCons cons) {
+		if (!cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 3) {
+			return new LispVal[] { parts.get(1), parts.get(2) };
+		}
+		if (parts.size() == 2 && parts.get(1) instanceof LispCons inner && inner.isProperList()
+				&& inner.car() instanceof LispSymbol op && LispNames.DIV.equals(plainName(op.name()))) {
+			List<LispVal> divParts = inner.toList();
+			if (divParts.size() == 3) {
+				return new LispVal[] { divParts.get(1), divParts.get(2) };
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Evaluates a {@code floor}-family call over a dividend and a divisor. A float
+	 * operand takes the exact route ({@link ExactRounding}); everything else divides
+	 * first and rounds the quotient, which is exact already for integers and ratios.
+	 */
+	private LispVal evalFloorFamilyDivision(String name, LispVal dividendForm, LispVal divisorForm, Environment env) {
+		LispVal dividend = eval(dividendForm, env);
+		LispVal divisor = eval(divisorForm, env);
+		LispVal exact = ExactRounding.quotient(dividend, divisor, floorFamilyMode(name));
+		if (exact != null) {
+			return exact;
+		}
+		return applyGlobalFunction(name, applyGlobalFunction(LispNames.DIV, dividend, divisor));
+	}
+
+	/** The {@link ExactRounding} mode a floor-family operator names. */
+	private static int floorFamilyMode(String name) {
+		return switch (name) {
+			case LispNames.FLOOR -> ExactRounding.FLOOR;
+			case LispNames.CEILING -> ExactRounding.CEILING;
+			case LispNames.ROUND -> ExactRounding.ROUND;
+			default -> ExactRounding.TRUNCATE;
+		};
+	}
+
+	/** Calls a global built-in on already-evaluated arguments. */
+	private LispVal applyGlobalFunction(String name, LispVal... args) {
+		if (this.globalEnv.lookupFunctionOrNull(name) instanceof LispFunction fn) {
+			return fn.body().apply(List.of(args));
+		}
+		throw new LispEvalException("Undefined function: " + name);
+	}
+
 	private LispVal evalBuiltinMacro(LispCons cons, Environment env,
 			java.util.function.Function<LispCons, LispVal> expander) {
 		LispVal cached;

@@ -30727,6 +30727,46 @@ public final class LispMacroExpander {
 		};
 	}
 
+	/**
+	 * The second value of a {@code floor}-family call, expressed over {@code rem} and
+	 * {@code mod} -- the two remainders CLHS defines this family by, and the two that are
+	 * exact at every magnitude on every backend.
+	 * @param op the operator name
+	 * @param prefix the temporary-name prefix of this lowering
+	 * @param dividend the temporary holding the dividend
+	 * @param divisor the temporary holding the divisor (the literal 1 with no divisor)
+	 * @param quotient the temporary holding the quotient
+	 * @param quotientOf the argument the one-argument built-in rounds
+	 * @return the remainder expression
+	 */
+	private static LispVal floorFamilyRemainder(String op, String prefix, LispVal dividend, LispVal divisor,
+			LispVal quotient, LispVal quotientOf) {
+		if (LispNames.TRUNCATE.equals(op)) {
+			return mvCall(LispNames.REM, dividend, divisor);
+		}
+		if (LispNames.FLOOR.equals(op)) {
+			return mvCall(LispNames.MOD, dividend, divisor);
+		}
+		// ceiling is floor with the dividend's sign flipped, so its remainder is the
+		// NEGATED mod of the negated dividend -- one rounding from exact operands, where
+		// mod(a,b) - b would round a second time and lose a tiny dividend entirely
+		// ((ceiling 1d-300 -7.0) is 1d-300, and mod is -7.0 there). A zero remainder
+		// takes rem's zero rather than a negated one: negating flips the sign of a zero,
+		// and the family's zero sign is settled (todo-652, .kb/linalg-simd.md).
+		LispSymbol m = new LispSymbol(prefix + "_m");
+		LispVal ceilingRemainder = makeLet(m.name(), mvCall(LispNames.MOD, mvCall(LispNames.SUB, dividend), divisor),
+				listToCons(List.of(new LispSymbol(LispNames.IF), mvCall(LispNames.ZEROP, m),
+						mvCall(LispNames.REM, dividend, divisor), mvCall(LispNames.SUB, m))));
+		if (LispNames.CEILING.equals(op)) {
+			return ceilingRemainder;
+		}
+		// round lands on floor's quotient or ceiling's; its remainder is the one that
+		// belongs to whichever it chose.
+		return listToCons(List.of(new LispSymbol(LispNames.IF),
+				mvCall(LispNames.EQ, quotient, mvCall(LispNames.FLOOR, quotientOf)),
+				mvCall(LispNames.MOD, dividend, divisor), ceilingRemainder));
+	}
+
 	private static MvProducer lowerMvProducer(LispVal producer, String prefix) {
 		List<MvBinding> bindings = new java.util.ArrayList<>();
 		List<LispVal> values = new java.util.ArrayList<>();
@@ -30743,25 +30783,32 @@ public final class LispMacroExpander {
 					return new MvProducer(bindings, values, null);
 				}
 				case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE: {
-					// (floor x [y]) -> quotient + remainder x - q*y (y defaults to 1).
-					// The two-argument form only exists inside a multiple-value
-					// consumer; it lowers to the one-argument built-in over x/y.
+					// (floor x [y]) -> quotient + remainder (y defaults to 1). The
+					// two-argument form only exists inside a multiple-value consumer; it
+					// lowers to the one-argument built-in over x/y.
+					//
+					// The remainder is NOT x - q*y evaluated here: q is an exact integer
+					// of any magnitude and y may be a float, so that product rounds and
+					// the difference then loses the answer entirely (it came back equal
+					// to the dividend past 2^63). CLHS defines rem as the remainder of
+					// truncate and mod as the remainder of floor, and both are exact on
+					// every backend, so the family reads its own remainder off them:
+					// ceiling's is mod - divisor, and round's is whichever of the two its
+					// quotient landed on. See .kb/linalg-simd.md, "mod/rem".
 					String op = ((LispSymbol) cons.car()).name();
 					LispSymbol a = new LispSymbol(prefix + "_a");
 					bindings.add(new MvBinding(a, parts.get(1)));
-					LispSymbol q = new LispSymbol(prefix + "_q");
+					LispVal divisor = new LispInteger(1);
 					if (parts.size() == 3) {
 						LispSymbol b = new LispSymbol(prefix + "_b");
 						bindings.add(new MvBinding(b, parts.get(2)));
-						bindings.add(new MvBinding(q, mvCall(op, mvCall(LispNames.DIV, a, b))));
-						values.add(q);
-						values.add(mvCall(LispNames.SUB, a, mvCall(LispNames.MUL, q, b)));
+						divisor = b;
 					}
-					else {
-						bindings.add(new MvBinding(q, mvCall(op, a)));
-						values.add(q);
-						values.add(mvCall(LispNames.SUB, a, q));
-					}
+					LispVal quotientOf = parts.size() == 3 ? mvCall(LispNames.DIV, a, divisor) : a;
+					LispSymbol q = new LispSymbol(prefix + "_q");
+					bindings.add(new MvBinding(q, mvCall(op, quotientOf)));
+					values.add(q);
+					values.add(floorFamilyRemainder(op, prefix, a, divisor, q, quotientOf));
 					return new MvProducer(bindings, values, null);
 				}
 				case LispNames.ARRAY_DISPLACEMENT: {

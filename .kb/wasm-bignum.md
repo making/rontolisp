@@ -76,9 +76,19 @@ Dispatch sites that know about the tiers:
   first; a literal `(op (/ a b))` shape — which is what the two-argument
   `(truncate a b)` family lowers to, single-value AND multiple-value — fuses
   into `_big_fdiv` when both operands are exact integers, because the ratio
-  intermediate cannot hold limb components. The float path uses the SATURATING
-  `i64.trunc_sat_f64_s` (`(truncate 1e30)` answers Long.MAX_VALUE, matching the
-  interpreter's and JVM's long clamp, instead of trapping).
+  intermediate cannot hold limb components, and into **`_f64_fdiv`**
+  (`WasmFloatFdivRuntimeBuilder`, todo-660) when a FLOAT is involved: that helper
+  reads each operand as the exact rational it is (a finite double is
+  `mantissa * 2^exponent` exactly, with the mantissa's trailing zeros stripped;
+  an exact integer is itself over one), cross-multiplies through `_big_mul` and
+  hands the pair to the same `_big_fdiv`, so the four rounding modes stay in one
+  place. It answers a NULL to decline -- a ratio operand, a non-finite float, a
+  zero divisor -- and the site falls back to `_rat_div` plus the generic
+  conversion. The generic float path still narrows with the SATURATING
+  `i64.trunc_sat_f64_s`, but only under a `|d| < 2^63` guard (exact there: every
+  double past 2^52 is already an integer); past it the one-argument form calls
+  `_f64_fdiv` with a divisor of one, so `(floor 1d300)` is that double's exact
+  301-digit value rather than Long.MAX_VALUE.
 - `WasmGcdCompiler` -> `_big_gcd`; `WasmLcmCompiler` composes
   `_big_mul`/`_big_divrem`/`_big_gcd`/`_big_neg`; `expt` promotes automatically
   (it loops `_rat_mul`).
@@ -107,10 +117,15 @@ the `exact-integers-beyond-the-i64-range` ci-spec case.
   whole floor-family divides exactly through the `_big_fdiv` fusion, so the
   reachable gap is a user-level `(/ big 3)` kept as a fraction. Revisit if a
   real library needs exact big ratios.
-- **Float -> integer conversion clamps at the long range on EVERY backend**
-  (interpreter and JVM answer `(truncate 1e30)` = `Long.MAX_VALUE`; the wasm
-  backends now saturate identically). A CL-correct exact conversion would be a
-  cross-backend change; nothing real has needed it.
+- **Float -> integer conversion is EXACT on all four backends since todo-660**
+  (2026-09-02) -- it used to clamp at the long range everywhere
+  (`(truncate 1e30)` = `Long.MAX_VALUE`), which also made the remainder beside it
+  the dividend. The cross-backend change landed: `eval/ExactRounding`, the JVM's
+  `_fdiv`/`_frat` and this backend's `_f64_fdiv`, with the second value read off
+  `rem`/`mod` in the shared `LispMacroExpander` lowering. `--no-gc` is the one
+  backend that cannot follow (no bignum tier; `(floor 1d300)` traps there). Full
+  reasoning, the SBCL disagreement and the pinning tests: `.kb/linalg-simd.md`,
+  "mod/rem".
 - **`_big_to_f64` accumulates top-down per limb**, which may differ from a
   correctly-rounded `BigInteger.doubleValue()` in the last ulp — keep
   limb-integer -> float conversions out of ci-spec expectations.
@@ -132,6 +147,11 @@ the `exact-integers-beyond-the-i64-range` ci-spec case.
   allocation; `integer-length`/`logbitp` clamp indexes into the sign word.
 
 ## Index bookkeeping
+
+`_f64_fdiv` is appended after the last fixed helper (`FUNC_F64_FDIV =
+FUNC_ARR_UNDISPLACE + 1`, and `FX_FUNC_LAST` moves onto it) and reuses
+`TYPE_BIG_TRIPLE`, `_big_fdiv`'s own signature, so no index above it and no type
+entry moves.
 
 The limb block appends after the boxed-i64 helpers exactly like the bignum block
 did: functions `FUNC_LIMB_OF .. FUNC_BIG_FDIV`, then the unboxed-fixnum fusion
