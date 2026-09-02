@@ -137,7 +137,13 @@ without cffi-libffi loaded" and offers to load a system built around a C library
 Here the foreign function API lays the structure out itself from the member types,
 so the call is the ordinary one — and `cffi-libffi` is never needed. A structure
 whose layout CFFI and the foreign function API do not agree on (a hand-written
-`:offset`, a bitfield) is refused by name instead of being passed on a guess.
+`:offset`, a bitfield) is refused by name instead of being passed on a guess. A
+nested structure is laid out flat, which is the same memory and the same call: a
+rectangle of two points is four doubles.
+
+The `rontolisp` **native binary** carries a bounded family of by-value shapes rather
+than all of them, because it has to compile each one ahead of time; the family and
+what falls outside it are in [In the native binary](#in-the-native-binary) below.
 
 ## Callbacks and variadic calls
 
@@ -198,7 +204,7 @@ has actually been tried here:
 |---|---|
 | [**cl-sqlite**](https://common-lisp.net/project/cl-sqlite/) (`sqlite`) | **works.** `(ql:quickload "sqlite")` and you have a real database: `connect`, `execute-non-query`, `execute-to-list`, `execute-single`, `with-transaction`, prepared statements stepped by hand. There is no SQL engine bundled here — the `libsqlite3` on your machine is the engine. See [`examples/jvm/cffi-sqlite.lisp`](https://github.com/making/rontolisp/blob/develop/examples/jvm/cffi-sqlite.lisp). Interpreter and native binary; see the `defcenum` row below for why not a compiled class |
 | **static-vectors** | **does not load, and cannot.** It is not a CFFI consumer but a second implementation seam: its `.asd` refuses an implementation its own list does not name, and past that it needs a per-implementation file supplying a vector whose storage is memory a pointer can be taken into. Nothing here has such an array. Allocate with `cffi:foreign-alloc` instead |
-| **cl+ssl** | **loads**, and OpenSSL answers: the whole `defcvar`/`defcallback`/`defcstruct` surface of the largest binding in Quicklisp runs here, and a real TLS handshake completes through cl+ssl's Lisp BIO — OpenSSL calling back into Lisp for every octet. Not one blocker met along the way was in CFFI. It is still not a usable HTTPS client: cl+ssl picks its BIO with `(etypecase socket (integer …) (stream …))`, and a rontolisp stream **is** an integer, so it tells OpenSSL to use the stream handle as a socket descriptor. The bundled [`cl+ssl` shim](asdf-systems.md#built-in-shim-systems) over rontolisp's own TLS therefore stays the default — it needs no OpenSSL on the machine and works on the WASM component backend, where CFFI never will |
+| **cl+ssl** | **loads, and is a usable HTTPS client**: the whole `defcvar`/`defcallback`/`defcstruct` surface of the largest binding in Quicklisp runs here, a real TLS handshake completes through cl+ssl's Lisp BIO — OpenSSL calling back into Lisp for every octet — and a `GET https://example.com/` sent over `(cl+ssl:make-ssl-client-stream ...)` reads back a real `HTTP/1.1 200 OK` response, on the interpreter and the native binary alike. Not one blocker met along the way was in CFFI: the last one was a rontolisp stream being indistinguishable from a small integer, which made cl+ssl's `(etypecase socket (integer …) (stream …))` BIO dispatch pick the wrong arm — fixed by giving an open stream its own dispatch instead of sharing an integer's representation. The bundled [`cl+ssl` shim](asdf-systems.md#built-in-shim-systems) over rontolisp's own TLS stays the default anyway: it needs no OpenSSL on the machine and works on the WASM component backend, where CFFI never will |
 
 ## What does not work
 
@@ -216,11 +222,19 @@ A native image compiles a stub per foreign call **shape** ahead of time, and
 registered grid. Every narrow integer travels as its 64-bit carrier and every
 pointer or string as `void*`, which collapses a C API's shapes to a few carriers per
 parameter; the grid then covers all pointer/integer argument combinations to arity
-6, with `double` to arity 4 and `float` to arity 2, at every return type, and the
+6, with `double` to arity 4 and `float` to arity 2, at every return carrier, and the
 callback shapes to arity 4. In practice a binding's fixed-arity calls just work.
 
-A call outside the grid — a narrow integer argument past the sixth, a variadic
-tail, a structure by value — signals an error naming the one
+A structure returned **by value** is the one thing that cannot be collapsed that way:
+the ABI decides how to return it from the members themselves, so the member list is
+part of the shape. The binary carries a bounded family of them instead — every
+one- and two-member structure over the C scalar widths and `:pointer`, plus the
+three- and four-member ones whose members are all the same type — with a nested
+structure counting flattened. The *arguments* of such a call still collapse, so
+`div`, `ldiv` and `imaxdiv` are one registered shape, not three.
+
+A call outside the grid — a narrow integer argument past the sixth, say, or a
+structure with more members than the family carries — signals an error naming the one
 `reachability-metadata.json` entry that would register it, so the fix is to add
 that entry and rebuild the binary, or to run the program on `java -jar`, where any
 shape binds.

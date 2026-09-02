@@ -2582,6 +2582,24 @@ public final class LispNames {
 	/** The {@code fourth} macro. */
 	public static final String FOURTH = "FOURTH";
 
+	/** The {@code fifth} macro. */
+	public static final String FIFTH = "FIFTH";
+
+	/** The {@code sixth} macro. */
+	public static final String SIXTH = "SIXTH";
+
+	/** The {@code seventh} macro. */
+	public static final String SEVENTH = "SEVENTH";
+
+	/** The {@code eighth} macro. */
+	public static final String EIGHTH = "EIGHTH";
+
+	/** The {@code ninth} macro. */
+	public static final String NINTH = "NINTH";
+
+	/** The {@code tenth} macro. */
+	public static final String TENTH = "TENTH";
+
 	/** The {@code nth} macro. */
 	public static final String NTH = "NTH";
 

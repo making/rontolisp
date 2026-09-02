@@ -1773,6 +1773,18 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandThird(cons), ctx, className);
 				case LispNames.FOURTH ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx, className);
+				case LispNames.FIFTH ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFifth(cons), ctx, className);
+				case LispNames.SIXTH ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSixth(cons), ctx, className);
+				case LispNames.SEVENTH ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSeventh(cons), ctx, className);
+				case LispNames.EIGHTH ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandEighth(cons), ctx, className);
+				case LispNames.NINTH ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNinth(cons), ctx, className);
+				case LispNames.TENTH ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandTenth(cons), ctx, className);
 				case LispNames.NOT -> JvmNullPredCompiler.compile(cons, ctx, className);
 				default -> {
 					// The ordinary call path resolves the program's own defun, so

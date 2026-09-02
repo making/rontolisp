@@ -173,9 +173,12 @@ public final class NativeImageDowncalls {
 			case ValueLayout.OfLong ignored -> "jlong";
 			case ValueLayout.OfFloat ignored -> "jfloat";
 			case ValueLayout.OfDouble ignored -> "jdouble";
+			// A struct's padding is part of the spelling: the image builder rebuilds the
+			// layout with MemoryLayout.structLayout, which refuses a member that does
+			// not sit at its own alignment.
+			case java.lang.foreign.PaddingLayout padding -> "padding(" + padding.byteSize() + ")";
 			case GroupLayout group -> group.memberLayouts()
 				.stream()
-				.filter(member -> !(member instanceof java.lang.foreign.PaddingLayout))
 				.map(NativeImageDowncalls::type)
 				.collect(Collectors.joining(",", "struct(", ")"));
 			default -> throw new IllegalStateException("no metadata spelling for " + layout);

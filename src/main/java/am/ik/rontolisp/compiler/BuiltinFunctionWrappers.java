@@ -1211,7 +1211,9 @@ public final class BuiltinFunctionWrappers {
 			variadicAppend(),
 			// List access (arity 1; first/rest/second/... compile via macro expansion)
 			unary(LispNames.CAR), unary(LispNames.CDR), unary(LispNames.FIRST), unary(LispNames.REST),
-			unary(LispNames.SECOND), unary(LispNames.THIRD), unary(LispNames.FOURTH), binary(LispNames.NTH),
+			unary(LispNames.SECOND), unary(LispNames.THIRD), unary(LispNames.FOURTH), unary(LispNames.FIFTH),
+			unary(LispNames.SIXTH), unary(LispNames.SEVENTH), unary(LispNames.EIGHTH), unary(LispNames.NINTH),
+			unary(LispNames.TENTH), binary(LispNames.NTH),
 			// Sequence operations (compiled via macro expansion in call position)
 			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unaryOptionalSecond(LispNames.LAST),
 			unary(LispNames.BUTLAST), binary(LispNames.MEMBER), binary(LispNames.MEMBER_IF), binary(LispNames.FIND),

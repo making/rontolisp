@@ -126,7 +126,7 @@ page.
 | `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (all three backends). Returns `t` |
 | `require` | `(require :util)`, `(require :util "lib/util.lisp")` | Load a module's file (`<name>.lisp` next to the requiring file, or the explicit path) unless already `provide`d. Returns the module name. On the compile path it must be a literal, top-level form |
 | `provide` | `(provide :util)` | Mark a module as loaded so a later `require` of it is a no-op. Returns the module name. On the compile path it must be a literal, top-level form |
-| `gensym` | `(gensym)`, `(gensym "tmp")` | `#:g1`, `#:tmp2` -- a fresh symbol for macro temporaries (the counter is program-wide) |
+| `gensym` | `(gensym)`, `(gensym "tmp")` | `#:G1`, `#:tmp2` -- a fresh symbol for macro temporaries (the counter is program-wide) |
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- a fresh uninterned symbol (the gensym `#:` convention, no counter) |
 | `gentemp` | `(gentemp "Q")` | `Q1` -- a fresh INTERNED symbol named prefix + a counter (CLHS-deprecated; iterate uses it) |
 | `copy-symbol` | `(copy-symbol 'foo)` | `#:FOO` -- an uninterned symbol of the same name; the property-list argument is ignored, and the copy inherits `make-symbol`'s identity deviation |
@@ -170,7 +170,7 @@ page.
 | `first` | `(first '(1 2 3))` | `1` (same as `car`) |
 | `rest` | `(rest '(1 2 3))` | `(2 3)` (same as `cdr`) |
 | `nth` | `(nth 1 '(1 2 3))` | `2` (0-based indexing) |
-| `second` `third` `fourth` | `(second '(1 2 3))` | `2` |
+| `second` `third` `fourth` `fifth` `sixth` `seventh` `eighth` `ninth` `tenth` | `(second '(1 2 3))` | `2` |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
 | `ldiff` | `(ldiff '(1 2 3) '(3))` | `(1 2)` (fresh copy of the elements before the given tail; the whole list if it is not a tail) |

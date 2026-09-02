@@ -132,7 +132,10 @@ public sealed interface FfiType permits FfiType.Scalar, FfiType.Struct {
 	/**
 	 * A structure passed or returned by value: its members in declaration order, laid out
 	 * with natural alignment. A member is any type but {@code :void} and {@code :string}
-	 * (a string slot is a {@code :pointer}); nesting is allowed.
+	 * (a string slot is a {@code :pointer}); nesting is allowed, and a nested member is
+	 * spliced into the layout FLAT -- the offsets are the same and both ABIs classify an
+	 * aggregate by flattening it, so the flat spelling is one shape where the nested one
+	 * would be another.
 	 *
 	 * @param members the member types, in order
 	 */
@@ -164,7 +167,18 @@ public sealed interface FfiType permits FfiType.Scalar, FfiType.Struct {
 				if (padding > 0) {
 					parts.add(MemoryLayout.paddingLayout(padding));
 				}
-				parts.add(layout);
+				if (member instanceof Struct nested) {
+					// A nested struct is SPLICED IN, not nested: same offsets, same
+					// size, same alignment -- and both ABIs classify an aggregate by
+					// flattening it anyway (SysV merges the eightbytes, AAPCS64 defines
+					// an HFA recursively), so the flat spelling is the same call. What
+					// it buys is the shape grid: a struct of two CGPoints and one of
+					// four doubles are then ONE registered shape, not two.
+					parts.addAll(((java.lang.foreign.GroupLayout) nested.layout()).memberLayouts());
+				}
+				else {
+					parts.add(layout);
+				}
 				offset += padding + layout.byteSize();
 			}
 			long tail = (alignment - offset % alignment) % alignment;
