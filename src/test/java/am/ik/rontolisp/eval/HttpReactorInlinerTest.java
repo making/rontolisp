@@ -34,10 +34,10 @@ class HttpReactorInlinerTest {
 		// The bridge and its export are APPENDED after the program, so a
 		// package-qualified dispatcher name resolves whatever package it ended in.
 		assertThat(printed).contains("(DEFUN %REACTOR-DISPATCH (%REACTOR-JSON) "
-				+ "(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON (FUNCTION %REACTOR-READ-CHUNK) "
-				+ "(FUNCTION %REACTOR-WRITE-CHUNK)))");
-		assertThat(printed).contains("(RONTOLISP:WASM-EXPORT (QUOTE %REACTOR-DISPATCH) :AS \"handle-request\" "
-				+ ":PARAMS (QUOTE (:STRING)) :RETURNS :STRING)");
+				+ "(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON #'%REACTOR-READ-CHUNK "
+				+ "#'%REACTOR-WRITE-CHUNK))");
+		assertThat(printed).contains("(RONTOLISP:WASM-EXPORT '%REACTOR-DISPATCH :AS \"handle-request\" "
+				+ ":PARAMS '(:STRING) :RETURNS :STRING)");
 	}
 
 	@Test
@@ -47,13 +47,13 @@ class HttpReactorInlinerTest {
 		// The head still crosses as the JSON string; the body crosses as octets through
 		// a caller-buffered :bytes import, declared suspending so a host that STREAMS
 		// the upload is a supported host rather than a silent re-entrancy hazard.
-		assertThat(printed).contains("(RONTOLISP:WASM-IMPORT (QUOTE %REACTOR-READ-BODY) :FROM \"env\" "
-				+ ":AS \"readRequestBody\" :PARAMS (QUOTE NIL) :RETURNS :BYTES :ASYNC T)");
+		assertThat(printed).contains("(RONTOLISP:WASM-IMPORT '%REACTOR-READ-BODY :FROM \"env\" "
+				+ ":AS \"readRequestBody\" :PARAMS 'NIL :RETURNS :BYTES :ASYNC T)");
 		// The import is CALLED, never taken as #'value: the build's suspending-import
 		// report follows calls, and an escaped import widens it to "any export".
 		assertThat(printed).contains("(%REACTOR-READ-BODY %REACTOR-BUF)")
-			.contains("(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON (FUNCTION %REACTOR-READ-CHUNK) "
-					+ "(FUNCTION %REACTOR-WRITE-CHUNK))");
+			.contains("(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON #'%REACTOR-READ-CHUNK "
+					+ "#'%REACTOR-WRITE-CHUNK)");
 	}
 
 	@Test
@@ -64,8 +64,8 @@ class HttpReactorInlinerTest {
 		// chunk crossing OUT is a :bytes PARAMETER (the module owns the octets, the host
 		// takes them), where one crossing IN is a :bytes RESULT into a module-owned
 		// buffer. One rule -- the caller owns the memory -- in both directions.
-		assertThat(printed).contains("(RONTOLISP:WASM-IMPORT (QUOTE %REACTOR-WRITE-BODY) :FROM \"env\" "
-				+ ":AS \"writeResponseBody\" :PARAMS (QUOTE (:BYTES)) :RETURNS :VOID :ASYNC T)");
+		assertThat(printed).contains("(RONTOLISP:WASM-IMPORT '%REACTOR-WRITE-BODY :FROM \"env\" "
+				+ ":AS \"writeResponseBody\" :PARAMS '(:BYTES) :RETURNS :VOID :ASYNC T)");
 		// The sink encodes through the transport's own adapter rather than inline: a
 		// TEXT chunk is UTF-8 encoded, an (unsigned-byte 8) body is already the octets
 		// it means and must not be encoded twice.
@@ -84,10 +84,10 @@ class HttpReactorInlinerTest {
 		// it over them -- and the id-less shape above stays byte-identical wherever
 		// the flag is off.
 		assertThat(printed)
-			.contains("(RONTOLISP:WASM-IMPORT (QUOTE %REACTOR-READ-BODY) :FROM \"env\" "
-					+ ":AS \"readRequestBody\" :PARAMS (QUOTE (:INT)) :RETURNS :BYTES :ASYNC T)")
-			.contains("(RONTOLISP:WASM-IMPORT (QUOTE %REACTOR-WRITE-BODY) :FROM \"env\" "
-					+ ":AS \"writeResponseBody\" :PARAMS (QUOTE (:INT :BYTES)) :RETURNS :VOID :ASYNC T)")
+			.contains("(RONTOLISP:WASM-IMPORT '%REACTOR-READ-BODY :FROM \"env\" "
+					+ ":AS \"readRequestBody\" :PARAMS '(:INT) :RETURNS :BYTES :ASYNC T)")
+			.contains("(RONTOLISP:WASM-IMPORT '%REACTOR-WRITE-BODY :FROM \"env\" "
+					+ ":AS \"writeResponseBody\" :PARAMS '(:INT :BYTES) :RETURNS :VOID :ASYNC T)")
 			.contains("(%REACTOR-READ-BODY %REACTOR-CALL %REACTOR-BUF)")
 			.contains("(DEFUN %REACTOR-WRITE-CHUNK (%REACTOR-CALL %REACTOR-CHUNK) "
 					+ "(%REACTOR-WRITE-BODY %REACTOR-CALL (RONTOLISP::%HTTP-REACTOR-OCTETS %REACTOR-CHUNK)))");
@@ -197,11 +197,11 @@ class HttpReactorInlinerTest {
 		// reactor silently buffering, and :buffered still asks for the Clack shape.
 		List<LispVal> streaming = HttpReactorInliner
 			.lowerHttpHandler(LispReader.readAllFromString("(rontolisp:http-handler 'handle 8080)"));
-		assertThat(print(streaming)).contains("(RONTOLISP::%HTTP-REACTOR-REGISTER (FUNCTION HANDLE))");
+		assertThat(print(streaming)).contains("(RONTOLISP::%HTTP-REACTOR-REGISTER #'HANDLE)");
 
 		List<LispVal> buffered = HttpReactorInliner.lowerHttpHandler(
 				LispReader.readAllFromString("(rontolisp:http-handler 'handle 8080 :raw-body :buffered)"));
-		assertThat(print(buffered)).contains("(RONTOLISP::%HTTP-REACTOR-REGISTER (FUNCTION HANDLE) :BUFFERED)");
+		assertThat(print(buffered)).contains("(RONTOLISP::%HTTP-REACTOR-REGISTER #'HANDLE :BUFFERED)");
 	}
 
 	@Test

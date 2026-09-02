@@ -65,7 +65,7 @@ class LispEvaluatorTest {
 				(defmethod make-load-form ((p pt) &optional env)
 				  (make-load-form-saving-slots p :environment env))
 				(make-load-form (make-pt :x 3 :y "four"))
-				""").print()).isEqualTo("(%OBJ-NEW (QUOTE %struct-PT) (QUOTE 3) (QUOTE \"four\"))");
+				""").print()).isEqualTo("(%OBJ-NEW '|%struct-PT| '3 '\"four\")");
 	}
 
 	@Test
@@ -6002,10 +6002,10 @@ class LispEvaluatorTest {
 		// ',@xs = (quote ,@xs) = (cons 'quote xs): the one-element splice yields 'x,
 		// the empty splice (QUOTE), the two-element splice (QUOTE A B) -- the exact
 		// list structure SBCL produces, no arity special-casing.
-		assertThat(eval("`(a ',@'(b))").print()).isEqualTo("(A (QUOTE B))");
+		assertThat(eval("`(a ',@'(b))").print()).isEqualTo("(A 'B)");
 		assertThat(eval("(let ((args nil)) `(f ',@args))").print()).isEqualTo("(F (QUOTE))");
 		assertThat(eval("(let ((args '(a b))) `(f ',@args))").print()).isEqualTo("(F (QUOTE A B))");
-		assertThat(eval("(let ((fns '(g))) `(f #',@fns))").print()).isEqualTo("(F (FUNCTION G))");
+		assertThat(eval("(let ((fns '(g))) `(f #',@fns))").print()).isEqualTo("(F #'G)");
 	}
 
 	@Test
@@ -7142,7 +7142,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalReadSharpQuote() {
 		LispVal result = evalWithStdin("(read)", "#'car\n");
-		assertThat(result.print()).isEqualTo("(FUNCTION CAR)");
+		assertThat(result.print()).isEqualTo("#'CAR");
 	}
 
 	@Test
@@ -11950,7 +11950,7 @@ class LispEvaluatorTest {
 	@Test
 	void gensymReturnsFreshSymbols() {
 		LispVal result = evalMulti("(list (gensym) (gensym))");
-		assertThat(result.print()).isEqualTo("(#:g1 #:g2)");
+		assertThat(result.print()).isEqualTo("(#:|g1| #:|g2|)");
 		assertThat(evalMulti("(eq (gensym) (gensym))")).isEqualTo(LispNil.INSTANCE);
 	}
 
@@ -11963,7 +11963,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void gensymAcceptsAPrefixString() {
-		assertThat(evalMulti("(gensym \"tmp\")").print()).isEqualTo("#:tmp1");
+		assertThat(evalMulti("(gensym \"tmp\")").print()).isEqualTo("#:|tmp1|");
 	}
 
 	@Test
@@ -12152,7 +12152,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void internReturnsTheSymbolNamedByTheString() {
-		assertThat(evalMulti("(intern \"hello\")").print()).isEqualTo("hello");
+		assertThat(evalMulti("(intern \"hello\")").print()).isEqualTo("|hello|");
 		assertThat(evalMulti("(symbolp (intern \"hello\"))")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(eq (intern \"FOO\") 'foo)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(intern (symbol-name 'round-trip))").print()).isEqualTo("ROUND-TRIP");
@@ -12205,7 +12205,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void makeSymbolReturnsAFreshUninternedSymbol() {
-		assertThat(evalMulti("(make-symbol \"temp\")").print()).isEqualTo("#:temp");
+		assertThat(evalMulti("(make-symbol \"temp\")").print()).isEqualTo("#:|temp|");
 		assertThat(evalMulti("(symbolp (make-symbol \"temp\"))")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(eq (make-symbol \"foo\") 'foo)")).isEqualTo(LispNil.INSTANCE);
 	}
@@ -12352,7 +12352,7 @@ class LispEvaluatorTest {
 	@Test
 	void symbolApiFunctionsAreFirstClassValues() {
 		assertThat(evalMulti("(funcall #'symbol-name 'foo)").print()).isEqualTo("\"FOO\"");
-		assertThat(evalMulti("(funcall #'intern \"foo\")").print()).isEqualTo("foo");
+		assertThat(evalMulti("(funcall #'intern \"foo\")").print()).isEqualTo("|foo|");
 		assertThat(evalMulti("(mapcar #'symbol-name '(a b))").print()).isEqualTo("(\"A\" \"B\")");
 		assertThat(evalMulti("(defvar *fc-var* 1) (funcall #'boundp '*fc-var*)")).isEqualTo(LispTrue.INSTANCE);
 	}
@@ -12379,7 +12379,7 @@ class LispEvaluatorTest {
 				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
 				(macroexpand-1 '(my-when2 (> 2 1) 'a 'b))
 				""");
-		assertThat(result.print()).isEqualTo("(IF (> 2 1) (PROGN (QUOTE A) (QUOTE B)) NIL)");
+		assertThat(result.print()).isEqualTo("(IF (> 2 1) (PROGN 'A 'B) NIL)");
 	}
 
 	@Test
@@ -13012,7 +13012,7 @@ class LispEvaluatorTest {
 				(list (%obj-ref i 0) (%obj-ref i 1) (%obj-is i '|%struct-POINT|)
 				      (%obj-is i '|%struct-OTHER|) (%obj-is 5 '|%struct-POINT|)
 				      (%obj-tag i) (%obj-p i) (%obj-p '(1 2)))
-				""").print()).isEqualTo("(1 99 T NIL NIL %struct-POINT T NIL)");
+				""").print()).isEqualTo("(1 99 T NIL NIL |%struct-POINT| T NIL)");
 	}
 
 	@Test
@@ -13092,8 +13092,7 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(defstruct point x y)
 				(list '#S(POINT :X 1 :Y 2) `(a #S(POINT :X 3 :Y 4)) `(b `(c #S(POINT :X 5 :Y 6))))
-				""").print())
-			.isEqualTo("(#S(POINT :X 1 :Y 2) (A #S(POINT :X 3 :Y 4)) (B (QUOTE (C #S(POINT :X 5 :Y 6)))))");
+				""").print()).isEqualTo("(#S(POINT :X 1 :Y 2) (A #S(POINT :X 3 :Y 4)) (B '(C #S(POINT :X 5 :Y 6))))");
 	}
 
 	@Test
@@ -14600,7 +14599,7 @@ class LispEvaluatorTest {
 				      (%class-designator (make-cd-node))
 				      (%class-designator 42)
 				      (%class-designator "s"))
-				""").print()).isEqualTo("(%class-CD-PT %struct-CD-NODE INTEGER STRING)");
+				""").print()).isEqualTo("(|%class-CD-PT| |%struct-CD-NODE| INTEGER STRING)");
 	}
 
 	@Test
@@ -14690,7 +14689,7 @@ class LispEvaluatorTest {
 				        (prin1-to-string (list m d u)) (prin1-to-string (list (quote (quote x))))))
 				""").print())
 			.isEqualTo("(\"(1 \\\"s\\\" #\\\\a SYM NIL T)\" \"(1 s a SYM NIL T)\" \"(1 2 . 3)\" \"#()\""
-					+ " \"(#2A((3 3) (3 3)) #d(1.5 1.5) #(7 7))\" \"((QUOTE X))\")");
+					+ " \"(#2A((3 3) (3 3)) #d(1.5 1.5) #(7 7))\" \"('X)\")");
 	}
 
 	@Test

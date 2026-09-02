@@ -244,7 +244,7 @@ class WitImportDirectiveTest {
 		// parameter names become the lambda list verbatim.
 		List<LispVal> forms = lower(KEYVALUE, Backend.OTHER, new Directive(WIT, STORE, "kv", null, FieldStyle.CAMEL));
 		assertThat(printed(forms)).isEqualTo(
-				"(DEFPACKAGE kv (:USE CL) (:EXPORT open bucket-new bucket-get bucket-set bucket-count))\n(DEFUN kv:open (identifier) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"open\" identifier))\n(DEFUN kv:bucket-new (name) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-new\" name))\n(DEFUN kv:bucket-get (self key) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-get\" self key))\n(DEFUN kv:bucket-set (self key value) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-set\" self key value))\n(DEFUN kv:bucket-count (prefix) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-count\" prefix))");
+				"(DEFPACKAGE |kv| (:USE CL) (:EXPORT |open| |bucket-new| |bucket-get| |bucket-set| |bucket-count|))\n(DEFUN kv:|open| (|identifier|) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"open\" |identifier|))\n(DEFUN kv:|bucket-new| (|name|) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-new\" |name|))\n(DEFUN kv:|bucket-get| (|self| |key|) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-get\" |self| |key|))\n(DEFUN kv:|bucket-set| (|self| |key| |value|) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-set\" |self| |key| |value|))\n(DEFUN kv:|bucket-count| (|prefix|) (RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-count\" |prefix|))");
 	}
 
 	@Test
@@ -254,8 +254,8 @@ class WitImportDirectiveTest {
 		// their case) defined `KV:open` in a package named `kv`, and every call site then
 		// failed to resolve with "No such package: KV".
 		List<LispVal> forms = lower(KEYVALUE, Backend.OTHER, new Directive(WIT, STORE, "KV", null, FieldStyle.CAMEL));
-		assertThat(printed(forms)).startsWith("(DEFPACKAGE KV (:USE CL) (:EXPORT open")
-			.contains("(DEFUN KV:open (identifier) ");
+		assertThat(printed(forms)).startsWith("(DEFPACKAGE KV (:USE CL) (:EXPORT |open|")
+			.contains("(DEFUN KV:|open| (|identifier|) ");
 	}
 
 	@Test
@@ -264,7 +264,7 @@ class WitImportDirectiveTest {
 		List<LispVal> forms = lower(KEYVALUE, Backend.OTHER, new Directive(WIT, STORE, null, null, FieldStyle.CAMEL));
 		assertThat(forms).hasSize(5);
 		assertThat(printed(forms)).doesNotContain("DEFPACKAGE")
-			.startsWith("(DEFUN open (identifier) (RONTOLISP::%WIT-CALL \"" + STORE + "\" \"open\" identifier))");
+			.startsWith("(DEFUN |open| (|identifier|) (RONTOLISP::%WIT-CALL \"" + STORE + "\" \"open\" |identifier|))");
 	}
 
 	@Test
@@ -277,7 +277,7 @@ class WitImportDirectiveTest {
 		// resource method's field is bucketGet, matching a jco-transpiled host).
 		List<LispVal> forms = lower(KEYVALUE, Backend.WASM_GC, new Directive(WIT, STORE, null, null, FieldStyle.CAMEL));
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE open) :FROM \"store\" :AS \"open\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-new) :FROM \"store\" :AS \"bucketNew\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-get) :FROM \"store\" :AS \"bucketGet\" :PARAMS (QUOTE (:INT :STRING)) :RETURNS :STRING)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-set) :FROM \"store\" :AS \"bucketSet\" :PARAMS (QUOTE (:INT :STRING :STRING)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-count) :FROM \"store\" :AS \"bucketCount\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)");
+				"(RONTOLISP:WASM-IMPORT '|open| :FROM \"store\" :AS \"open\" :PARAMS '(:STRING) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT '|bucket-new| :FROM \"store\" :AS \"bucketNew\" :PARAMS '(:STRING) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT '|bucket-get| :FROM \"store\" :AS \"bucketGet\" :PARAMS '(:INT :STRING) :RETURNS :STRING)\n(RONTOLISP:WASM-IMPORT '|bucket-set| :FROM \"store\" :AS \"bucketSet\" :PARAMS '(:INT :STRING :STRING) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT '|bucket-count| :FROM \"store\" :AS \"bucketCount\" :PARAMS '(:STRING) :RETURNS :INT)");
 	}
 
 	@Test
@@ -289,7 +289,7 @@ class WitImportDirectiveTest {
 		List<LispVal> forms = lower(GL, Backend.WASM_GC,
 				new Directive(WIT, "example:gfx/gl@0.1.0", null, null, FieldStyle.CAMEL));
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE create-shader) :FROM \"gl\" :AS \"createShader\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE set-uniform) :FROM \"gl\" :AS \"setUniform\" :PARAMS (QUOTE (:STRING :FLOAT)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE is-ready) :FROM \"gl\" :AS \"isReady\" :PARAMS (QUOTE NIL) :RETURNS :BOOL)");
+				"(RONTOLISP:WASM-IMPORT '|create-shader| :FROM \"gl\" :AS \"createShader\" :PARAMS '(:STRING) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT '|set-uniform| :FROM \"gl\" :AS \"setUniform\" :PARAMS '(:STRING :FLOAT) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT '|is-ready| :FROM \"gl\" :AS \"isReady\" :PARAMS 'NIL :RETURNS :BOOL)");
 	}
 
 	@Test
@@ -297,7 +297,7 @@ class WitImportDirectiveTest {
 		List<LispVal> forms = lower(GL, Backend.WASM_GC,
 				new Directive(WIT, "example:gfx/gl@0.1.0", null, "graphics", FieldStyle.KEBAB));
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE create-shader) :FROM \"graphics\" :AS \"create-shader\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE set-uniform) :FROM \"graphics\" :AS \"set-uniform\" :PARAMS (QUOTE (:STRING :FLOAT)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE is-ready) :FROM \"graphics\" :AS \"is-ready\" :PARAMS (QUOTE NIL) :RETURNS :BOOL)");
+				"(RONTOLISP:WASM-IMPORT '|create-shader| :FROM \"graphics\" :AS \"create-shader\" :PARAMS '(:STRING) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT '|set-uniform| :FROM \"graphics\" :AS \"set-uniform\" :PARAMS '(:STRING :FLOAT) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT '|is-ready| :FROM \"graphics\" :AS \"is-ready\" :PARAMS 'NIL :RETURNS :BOOL)");
 	}
 
 	@Test
@@ -308,7 +308,7 @@ class WitImportDirectiveTest {
 		List<LispVal> forms = lower(GL, Backend.OTHER,
 				new Directive(WIT, "example:gfx/gl@0.1.0", "gl", null, FieldStyle.CAMEL));
 		assertThat(printed(forms)).isEqualTo(
-				"(DEFPACKAGE gl (:USE CL) (:EXPORT create-shader set-uniform is-ready))\n(DEFUN gl:create-shader (source) (RONTOLISP::%WIT-CALL \"example:gfx/gl@0.1.0\" \"create-shader\" source))\n(DEFUN gl:set-uniform (name value) (RONTOLISP::%WIT-CALL \"example:gfx/gl@0.1.0\" \"set-uniform\" name value))\n(DEFUN gl:is-ready NIL (RONTOLISP::%WIT-CALL \"example:gfx/gl@0.1.0\" \"is-ready\"))");
+				"(DEFPACKAGE |gl| (:USE CL) (:EXPORT |create-shader| |set-uniform| |is-ready|))\n(DEFUN gl:|create-shader| (|source|) (RONTOLISP::%WIT-CALL \"example:gfx/gl@0.1.0\" \"create-shader\" |source|))\n(DEFUN gl:|set-uniform| (|name| |value|) (RONTOLISP::%WIT-CALL \"example:gfx/gl@0.1.0\" \"set-uniform\" |name| |value|))\n(DEFUN gl:|is-ready| NIL (RONTOLISP::%WIT-CALL \"example:gfx/gl@0.1.0\" \"is-ready\"))");
 	}
 
 	@Test
@@ -321,7 +321,7 @@ class WitImportDirectiveTest {
 		Directive full = new Directive(WIT, "example:app/admin@0.1.0", null, null, FieldStyle.CAMEL);
 		Directive unversioned = new Directive(WIT, "example:app/admin", null, null, FieldStyle.CAMEL);
 		Directive bare = new Directive(WIT, "admin", null, null, FieldStyle.CAMEL);
-		String canonical = "(DEFUN reset NIL (RONTOLISP::%WIT-CALL \"example:app/admin@0.1.0\" \"reset\"))";
+		String canonical = "(DEFUN |reset| NIL (RONTOLISP::%WIT-CALL \"example:app/admin@0.1.0\" \"reset\"))";
 		assertThat(printed(lower(TWO_INTERFACES, Backend.OTHER, full))).isEqualTo(canonical);
 		assertThat(printed(lower(TWO_INTERFACES, Backend.OTHER, unversioned))).isEqualTo(canonical);
 		assertThat(printed(lower(TWO_INTERFACES, Backend.OTHER, bare))).isEqualTo(canonical);
@@ -347,7 +347,7 @@ class WitImportDirectiveTest {
 				drop-it: func(b: own<bucket>);
 				owner: func(b: bucket) -> string;""";
 		assertThat(printed(lowerApi(body, Backend.WASM_GC))).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE bucket-get) :FROM \"api\" :AS \"bucketGet\" :PARAMS (QUOTE (:INT :STRING)) :RETURNS :STRING)\n(RONTOLISP:WASM-IMPORT (QUOTE size) :FROM \"api\" :AS \"size\" :PARAMS (QUOTE (:INT)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE drop-it) :FROM \"api\" :AS \"dropIt\" :PARAMS (QUOTE (:INT)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE owner) :FROM \"api\" :AS \"owner\" :PARAMS (QUOTE (:INT)) :RETURNS :STRING)");
+				"(RONTOLISP:WASM-IMPORT '|bucket-get| :FROM \"api\" :AS \"bucketGet\" :PARAMS '(:INT :STRING) :RETURNS :STRING)\n(RONTOLISP:WASM-IMPORT '|size| :FROM \"api\" :AS \"size\" :PARAMS '(:INT) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT '|drop-it| :FROM \"api\" :AS \"dropIt\" :PARAMS '(:INT) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT '|owner| :FROM \"api\" :AS \"owner\" :PARAMS '(:INT) :RETURNS :STRING)");
 	}
 
 	@Test
@@ -362,10 +362,10 @@ class WitImportDirectiveTest {
 		// and that one rule is what keeps every artifact that existed before drops
 		// byte-identical, since nothing in one references a `-drop` name.
 		assertThat(printed(lowerKeyvalue(Backend.OTHER, Set.of("bucket-get")))).doesNotContain("bucket-drop");
-		assertThat(printed(lowerKeyvalue(Backend.OTHER, Set.of("bucket-drop")))).contains("kv:bucket-drop");
+		assertThat(printed(lowerKeyvalue(Backend.OTHER, Set.of("bucket-drop")))).contains("kv:|bucket-drop|");
 		// No filter at all = every resource's drop: --no-prune / --dynamic, and the
 		// interpreter, which produces no artifact to keep identical.
-		assertThat(printed(lowerKeyvalue(Backend.OTHER, null))).contains("kv:bucket-drop");
+		assertThat(printed(lowerKeyvalue(Backend.OTHER, null))).contains("kv:|bucket-drop|");
 		// The 5-arg overload binds NONE, which is what leaves every existing caller --
 		// and
 		// every artifact it built -- exactly as it was.
@@ -382,10 +382,10 @@ class WitImportDirectiveTest {
 		// into its table; one with nothing to release just returns nil).
 		List<LispVal> forms = lowerKeyvalue(Backend.OTHER, Set.of("bucket-drop"));
 		assertThat(printed(forms))
-			.startsWith("(DEFPACKAGE kv (:USE CL) "
-					+ "(:EXPORT open bucket-new bucket-get bucket-set bucket-count bucket-drop))")
-			.endsWith("(DEFUN kv:bucket-drop (self) "
-					+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-drop\" self))");
+			.startsWith("(DEFPACKAGE |kv| (:USE CL) "
+					+ "(:EXPORT |open| |bucket-new| |bucket-get| |bucket-set| |bucket-count| |bucket-drop|))")
+			.endsWith("(DEFUN kv:|bucket-drop| (|self|) "
+					+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-drop\" |self|))");
 	}
 
 	@Test
@@ -398,7 +398,7 @@ class WitImportDirectiveTest {
 		// hand-written JS import objects.
 		List<LispVal> forms = lowerKeyvalue(Backend.WASM_GC, Set.of("bucket-drop"));
 		assertThat(printed(forms)).isEqualTo(
-				"(DEFPACKAGE kv (:USE CL) (:EXPORT open bucket-new bucket-get bucket-set bucket-count bucket-drop))\n(RONTOLISP:WASM-IMPORT (QUOTE kv:open) :FROM \"store\" :AS \"open\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-new) :FROM \"store\" :AS \"bucketNew\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-get) :FROM \"store\" :AS \"bucketGet\" :PARAMS (QUOTE (:INT :STRING)) :RETURNS :STRING)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-set) :FROM \"store\" :AS \"bucketSet\" :PARAMS (QUOTE (:INT :STRING :STRING)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-count) :FROM \"store\" :AS \"bucketCount\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(DEFUN kv:bucket-drop (self) self NIL)");
+				"(DEFPACKAGE |kv| (:USE CL) (:EXPORT |open| |bucket-new| |bucket-get| |bucket-set| |bucket-count| |bucket-drop|))\n(RONTOLISP:WASM-IMPORT 'kv:|open| :FROM \"store\" :AS \"open\" :PARAMS '(:STRING) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT 'kv:|bucket-new| :FROM \"store\" :AS \"bucketNew\" :PARAMS '(:STRING) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT 'kv:|bucket-get| :FROM \"store\" :AS \"bucketGet\" :PARAMS '(:INT :STRING) :RETURNS :STRING)\n(RONTOLISP:WASM-IMPORT 'kv:|bucket-set| :FROM \"store\" :AS \"bucketSet\" :PARAMS '(:INT :STRING :STRING) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT 'kv:|bucket-count| :FROM \"store\" :AS \"bucketCount\" :PARAMS '(:STRING) :RETURNS :INT)\n(DEFUN kv:|bucket-drop| (|self|) |self| NIL)");
 	}
 
 	@Test
@@ -437,7 +437,7 @@ class WitImportDirectiveTest {
 		// lowers it to `wasm-import :async t` -- the settled degenerate future, so
 		// `futurep` agrees everywhere and the declaration is not reactor-specific.
 		assertThat(printed(lowerApi("  pull: async func(url: string) -> string;", Backend.WASM_GC))).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE pull) :FROM \"api\" :AS \"pull\" :PARAMS (QUOTE (:STRING)) :RETURNS :STRING :ASYNC T)");
+				"(RONTOLISP:WASM-IMPORT '|pull| :FROM \"api\" :AS \"pull\" :PARAMS '(:STRING) :RETURNS :STRING :ASYNC T)");
 		// A plain member stays exactly as it was -- the option is absent, not nil, so
 		// every pre-:async artifact keeps its byte identity.
 		assertThat(printed(lowerApi("  pull: func(url: string) -> string;", Backend.WASM_GC))).doesNotContain(":ASYNC");
@@ -448,8 +448,8 @@ class WitImportDirectiveTest {
 		// list<u8> is a byte-per-char rontolisp string (the settled mapping), so it
 		// crosses
 		// as :STRING -- the same designator as a WIT string.
-		assertThat(printed(lowerApi("  put: func(data: list<u8>) -> list<u8>;", Backend.WASM_GC))).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE put) :FROM \"api\" :AS \"put\" :PARAMS (QUOTE (:STRING)) :RETURNS :STRING)");
+		assertThat(printed(lowerApi("  put: func(data: list<u8>) -> list<u8>;", Backend.WASM_GC)))
+			.isEqualTo("(RONTOLISP:WASM-IMPORT '|put| :FROM \"api\" :AS \"put\" :PARAMS '(:STRING) :RETURNS :STRING)");
 	}
 
 	@Test
@@ -458,7 +458,7 @@ class WitImportDirectiveTest {
 		// source
 		// escaping, and the component-model label is the bare word.
 		assertThat(printed(lowerApi("  emit: func(%type: string);", Backend.OTHER)))
-			.isEqualTo("(DEFUN emit (type) (RONTOLISP::%WIT-CALL \"" + API + "\" \"emit\" type))");
+			.isEqualTo("(DEFUN |emit| (|type|) (RONTOLISP::%WIT-CALL \"" + API + "\" \"emit\" |type|))");
 	}
 
 	@Test
@@ -479,7 +479,7 @@ class WitImportDirectiveTest {
 		Directive directive = new Directive(WIT, API, null, null, FieldStyle.CAMEL);
 		// On the interpreter every representation crosses, so the record simply binds.
 		assertThat(printed(lower(wit, Backend.OTHER, directive)))
-			.isEqualTo("(DEFUN save (p) (RONTOLISP::%WIT-CALL \"" + API + "\" \"save\" p))");
+			.isEqualTo("(DEFUN |save| (|p|) (RONTOLISP::%WIT-CALL \"" + API + "\" \"save\" |p|))");
 		// And the WASM leg proves the name was RESOLVED through the use clause rather
 		// than
 		// reported as undefined: it is refused as a record (PLIST), not as an unknown
@@ -512,7 +512,7 @@ class WitImportDirectiveTest {
 			.startsWith("(RONTOLISP::%COMPONENT-IMPORT \"wasi:http/outgoing-handler@0.2.0\" \"package wasi:http@0.2.0;")
 			.endsWith("(\"handle\" \"%handle\"))");
 		assertThat(forms.get(1).print())
-			.isEqualTo("(DEFUN handle (request) (RONTOLISP::%WIT-RESULT (%handle request)))");
+			.isEqualTo("(DEFUN |handle| (|request|) (RONTOLISP::%WIT-RESULT (|%handle| |request|)))");
 	}
 
 	@Test
@@ -568,7 +568,7 @@ class WitImportDirectiveTest {
 				save: func(p: point) -> result<_, string>;
 				now: func() -> u64;""";
 		assertThat(printed(lowerApi(body, Backend.OTHER))).isEqualTo(
-				"(DEFUN find (key) (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"find\" key))\n(DEFUN fetch (url) (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"fetch\" url))\n(DEFUN save (p) (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"save\" p))\n(DEFUN now NIL (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"now\"))");
+				"(DEFUN |find| (|key|) (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"find\" |key|))\n(DEFUN |fetch| (|url|) (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"fetch\" |url|))\n(DEFUN |save| (|p|) (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"save\" |p|))\n(DEFUN |now| NIL (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"now\"))");
 	}
 
 	@Test

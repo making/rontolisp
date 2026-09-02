@@ -6373,8 +6373,8 @@ cases:
       (print (macroexpand '(ci-outer 41)))
       (print (macroexpand-1 '(+ 1 2)))
     expected: |
-      #:g1
-      #:ci2
+      #:|g1|
+      #:|ci2|
       NIL
       T
       (9 90)
@@ -6739,7 +6739,7 @@ cases:
       (print (list (mlf-pt-x (mlf-splice-pt)) (mlf-pt-y (mlf-splice-pt))))
     expected: |
       "dumped"
-      (%OBJ-NEW (QUOTE %struct-MLF-PT) (QUOTE 3) (QUOTE "four"))
+      (%OBJ-NEW '|%struct-MLF-PT| '3 '"four")
       (3 "four")
   - name: setf-function-definitions
     source: |
@@ -8126,11 +8126,11 @@ cases:
       (let ((ci-bq-args '(a b))) (print `(f ',@ci-bq-args)))
       (let ((ci-bq-fns '(g))) (print `(f #',@ci-bq-fns)))
     expected: |
-      (A (QUOTE B))
-      (EQUAL X (QUOTE V))
+      (A 'B)
+      (EQUAL X 'V)
       (F (QUOTE))
       (F (QUOTE A B))
-      (F (FUNCTION G))
+      (F #'G)
   # Nested backquote (once-only): three levels of read-time backquote, expanded
   # entirely by the reader. Prints only integers, so gensym names never surface
   # (the expansion-time gensym runs after every counter-printing case above).
@@ -9095,7 +9095,7 @@ cases:
       CHARACTER
       (INTEGER STRING NULL BOOLEAN)
       (INTEGER STRING)
-      (LBR-PT T T %class-LBR-PT)
+      (LBR-PT T T |%class-LBR-PT|)
       (T NIL)
       NIL
       "lbr 7"
@@ -9516,7 +9516,7 @@ cases:
       (print '|noChange|)
     expected: |
       "when used"
-      noChange
+      |noChange|
   - name: clos-list-specializer-excludes-instances
     source: |
       (defgeneric spx-kind (x)

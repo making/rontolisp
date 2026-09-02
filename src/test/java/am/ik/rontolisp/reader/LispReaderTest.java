@@ -43,7 +43,7 @@ class LispReaderTest {
 		assertThat(LispReader.readFromString("#P\"data/x.dat\""))
 			.isEqualTo(new LispInstance(LispLayout.PATHNAME, new LispVal[] { new LispString("data/x.dat") }));
 		assertThat(LispReader.readFromString("#p\"/abs/path\"").print()).isEqualTo("#P\"/abs/path\"");
-		assertThat(LispReader.readFromString("'#P\"q\"").print()).isEqualTo("(QUOTE #P\"q\")");
+		assertThat(LispReader.readFromString("'#P\"q\"").print()).isEqualTo("'#P\"q\"");
 	}
 
 	@Test
@@ -449,7 +449,7 @@ class LispReaderTest {
 
 	@Test
 	void readBackquoteSymbol() {
-		assertThat(LispReader.readFromString("`x").print()).isEqualTo("(QUOTE X)");
+		assertThat(LispReader.readFromString("`x").print()).isEqualTo("'X");
 	}
 
 	@Test
@@ -465,13 +465,12 @@ class LispReaderTest {
 
 	@Test
 	void readBackquoteList() {
-		assertThat(LispReader.readFromString("`(a ,b 3)").print()).isEqualTo("(LIST (QUOTE A) B 3)");
+		assertThat(LispReader.readFromString("`(a ,b 3)").print()).isEqualTo("(LIST 'A B 3)");
 	}
 
 	@Test
 	void readBackquoteSplicing() {
-		assertThat(LispReader.readFromString("`(a ,@bs c)").print())
-			.isEqualTo("(APPEND (LIST (QUOTE A)) BS (LIST (QUOTE C)))");
+		assertThat(LispReader.readFromString("`(a ,@bs c)").print()).isEqualTo("(APPEND (LIST 'A) BS (LIST 'C))");
 	}
 
 	@Test
@@ -481,7 +480,7 @@ class LispReaderTest {
 
 	@Test
 	void readBackquoteNestedList() {
-		assertThat(LispReader.readFromString("`(a (b ,c))").print()).isEqualTo("(LIST (QUOTE A) (LIST (QUOTE B) C))");
+		assertThat(LispReader.readFromString("`(a (b ,c))").print()).isEqualTo("(LIST 'A (LIST 'B C))");
 	}
 
 	@Test
@@ -491,7 +490,7 @@ class LispReaderTest {
 
 	@Test
 	void readBackquoteQuoteInTemplate() {
-		assertThat(LispReader.readFromString("`('a ,b)").print()).isEqualTo("(LIST (LIST (QUOTE QUOTE) (QUOTE A)) B)");
+		assertThat(LispReader.readFromString("`('a ,b)").print()).isEqualTo("(LIST (LIST 'QUOTE 'A) B)");
 	}
 
 	@Test
@@ -499,18 +498,17 @@ class LispReaderTest {
 		// ',@xs is the template (quote ,@xs) = (cons 'quote xs); the single-element
 		// splice reads back as 'x (trivia level0's `(equal ,*what* ',@args)).
 		assertThat(LispReader.readFromString("`(equal ,w ',@args)").print())
-			.isEqualTo("(LIST (QUOTE EQUAL) W (CONS (QUOTE QUOTE) ARGS))");
-		assertThat(LispReader.readFromString("`(f #',@fns)").print())
-			.isEqualTo("(LIST (QUOTE F) (CONS (QUOTE FUNCTION) FNS))");
+			.isEqualTo("(LIST 'EQUAL W (CONS 'QUOTE ARGS))");
+		assertThat(LispReader.readFromString("`(f #',@fns)").print()).isEqualTo("(LIST 'F (CONS 'FUNCTION FNS))");
 		// The trivia site verbatim: a plain quote wrapping the backquote template.
 		assertThat(LispReader.readFromString("(quote `(equal ,*what* ',@args))").print())
-			.isEqualTo("(QUOTE (LIST (QUOTE EQUAL) *WHAT* (CONS (QUOTE QUOTE) ARGS)))");
+			.isEqualTo("'(LIST 'EQUAL *WHAT* (CONS 'QUOTE ARGS))");
 	}
 
 	@Test
 	void readBackquoteWithoutWhitespaceAroundUnquote() {
 		// ',' terminates a symbol, so `(a ,b) parses the same without the space.
-		assertThat(LispReader.readFromString("`(a,b)").print()).isEqualTo("(LIST (QUOTE A) B)");
+		assertThat(LispReader.readFromString("`(a,b)").print()).isEqualTo("(LIST 'A B)");
 	}
 
 	@Test
@@ -531,20 +529,20 @@ class LispReaderTest {
 	void readNestedBackquoteSymbol() {
 		// ``x -> (list 'quote 'x), folded to (quote (quote x)); evaluating once
 		// yields (quote x) = `x, matching an inner backquote whose comma survives.
-		assertThat(LispReader.readFromString("``x").print()).isEqualTo("(QUOTE (QUOTE X))");
+		assertThat(LispReader.readFromString("``x").print()).isEqualTo("''X");
 	}
 
 	@Test
 	void readNestedBackquoteDoubleUnquote() {
 		// ``(,,a): the inner comma survives, the outer one evaluates a. Expanding
 		// once builds (list 'list a) -- code that, evaluated with a, rebuilds `(,a).
-		assertThat(LispReader.readFromString("``(,,a)").print()).isEqualTo("(LIST (QUOTE LIST) A)");
+		assertThat(LispReader.readFromString("``(,,a)").print()).isEqualTo("(LIST 'LIST A)");
 	}
 
 	@Test
 	void readNestedBackquoteDoubleUnquoteSplicing() {
 		// ``(,,@lst): the ,@ splices lst at the outer level, each element re-quoted.
-		assertThat(LispReader.readFromString("``(,,@lst)").print()).isEqualTo("(CONS (QUOTE LIST) LST)");
+		assertThat(LispReader.readFromString("``(,,@lst)").print()).isEqualTo("(CONS 'LIST LST)");
 	}
 
 	@Test
@@ -556,29 +554,27 @@ class LispReaderTest {
 		// *expression-kinds* is exactly this shape -- (terminal . terminal) entries in a
 		// template whose ,@ splices build inner backquotes -- so every alist lookup
 		// answered nil and no grammar expression was recognized.
-		assertThat(LispReader.readFromString("`((p . q) `(a))").print()).isEqualTo("(QUOTE ((P . Q) (QUOTE (A))))");
+		assertThat(LispReader.readFromString("`((p . q) `(a))").print()).isEqualTo("'((P . Q) '(A))");
 		assertThat(LispReader.readFromString("`(o (p . q) ,@(mapcar (lambda (s) `(,s)) xs))").print())
-			.isEqualTo("(LIST* (QUOTE O) (QUOTE (P . Q)) (MAPCAR (LAMBDA (S) (LIST S)) XS))");
+			.isEqualTo("(LIST* 'O '(P . Q) (MAPCAR (LAMBDA (S) (LIST S)) XS))");
 		// The same template WITHOUT a nested backquote takes the optimized path and
 		// always got this right -- the two paths must agree.
 		assertThat(LispReader.readFromString("`(o (p . q) ,@(mapcar #'list xs))").print())
-			.isEqualTo("(APPEND (LIST (QUOTE O) (CONS (QUOTE P) (QUOTE Q))) (MAPCAR (FUNCTION LIST) XS))");
+			.isEqualTo("(APPEND (LIST 'O (CONS 'P 'Q)) (MAPCAR #'LIST XS))");
 	}
 
 	@Test
 	void readNestedBackquoteInDataPosition() {
 		// The inner backquote sits in a data position, so only its ,(+ 1 2) that
 		// reaches level 0 would evaluate here; ,(+ 1 2) stays at level 1 and is kept.
-		assertThat(LispReader.readFromString("`(a `(b ,(+ 1 2)))").print())
-			.isEqualTo("(QUOTE (A (LIST (QUOTE B) (+ 1 2))))");
+		assertThat(LispReader.readFromString("`(a `(b ,(+ 1 2)))").print()).isEqualTo("'(A (LIST 'B (+ 1 2)))");
 	}
 
 	@Test
 	void readTripleNestedBackquote() {
 		// A third level: only the innermost triple-comma reaches level 0. Peeling
 		// all three levels reproduces `a`, verified against SBCL.
-		assertThat(LispReader.readFromString("```(,,,a)").print())
-			.isEqualTo("(LIST (QUOTE LIST) (QUOTE (QUOTE LIST)) A)");
+		assertThat(LispReader.readFromString("```(,,,a)").print()).isEqualTo("(LIST 'LIST ''LIST A)");
 	}
 
 	// --- Dotted pairs: (a . b) reads as a cons with a non-list cdr ---
@@ -608,7 +604,7 @@ class LispReaderTest {
 	@Test
 	void readQuotedAlist() {
 		LispVal result = LispReader.readFromString("'((a . 1) (b . 2))");
-		assertThat(result.print()).isEqualTo("(QUOTE ((A . 1) (B . 2)))");
+		assertThat(result.print()).isEqualTo("'((A . 1) (B . 2))");
 	}
 
 	@Test
@@ -644,23 +640,23 @@ class LispReaderTest {
 
 	@Test
 	void readBackquoteDottedUnquoteTail() {
-		assertThat(LispReader.readFromString("`(a . ,b)").print()).isEqualTo("(CONS (QUOTE A) B)");
+		assertThat(LispReader.readFromString("`(a . ,b)").print()).isEqualTo("(CONS 'A B)");
 	}
 
 	@Test
 	void readBackquoteDottedSymbolTail() {
-		assertThat(LispReader.readFromString("`(a . b)").print()).isEqualTo("(CONS (QUOTE A) (QUOTE B))");
+		assertThat(LispReader.readFromString("`(a . b)").print()).isEqualTo("(CONS 'A 'B)");
 	}
 
 	@Test
 	void readBackquoteDottedTailAfterMultipleElements() {
-		assertThat(LispReader.readFromString("`(a ,b . ,c)").print()).isEqualTo("(CONS (QUOTE A) (CONS B C))");
+		assertThat(LispReader.readFromString("`(a ,b . ,c)").print()).isEqualTo("(CONS 'A (CONS B C))");
 	}
 
 	@Test
 	void readBackquoteDottedPairInsideList() {
 		assertThat(LispReader.readFromString("`((a . ,x) (b . 2))").print())
-			.isEqualTo("(LIST (CONS (QUOTE A) X) (CONS (QUOTE B) 2))");
+			.isEqualTo("(LIST (CONS 'A X) (CONS 'B 2))");
 	}
 
 	@Test
@@ -668,12 +664,12 @@ class LispReaderTest {
 		// `(x1 ... xn . tail) with splices is (append [x1] ... [xn] tail): the
 		// dotted tail becomes the last append argument (CLHS 2.4.6.1).
 		assertThat(LispReader.readFromString("`(,@xs . ,b)").print()).isEqualTo("(APPEND XS B)");
-		assertThat(LispReader.readFromString("`(a ,@xs . ,b)").print()).isEqualTo("(APPEND (LIST (QUOTE A)) XS B)");
+		assertThat(LispReader.readFromString("`(a ,@xs . ,b)").print()).isEqualTo("(APPEND (LIST 'A) XS B)");
 	}
 
 	@Test
 	void readBackquoteSplicingWithDottedConstantTail() {
-		assertThat(LispReader.readFromString("`(,@xs . b)").print()).isEqualTo("(APPEND XS (QUOTE B))");
+		assertThat(LispReader.readFromString("`(,@xs . b)").print()).isEqualTo("(APPEND XS 'B)");
 	}
 
 	@Test
@@ -681,7 +677,7 @@ class LispReaderTest {
 		// trivia level2 impl.lisp:224 verbatim shape:
 		// `((,head ,@(mappend #'car pairs) . ,(cdr (last args))))
 		assertThat(LispReader.readFromString("`((,head ,@(mappend #'car pairs) . ,(cdr (last args))))").print())
-			.isEqualTo("(LIST (APPEND (LIST HEAD) (MAPPEND (FUNCTION CAR) PAIRS) (CDR (LAST ARGS))))");
+			.isEqualTo("(LIST (APPEND (LIST HEAD) (MAPPEND #'CAR PAIRS) (CDR (LAST ARGS))))");
 	}
 
 	@Test
@@ -689,12 +685,10 @@ class LispReaderTest {
 		// ",." is ",@" with permission to destroy the spliced list (CLHS 2.4.6), so it
 		// reads to the same append. iterate's expand-iterate is written entirely in it:
 		// `(tagbody (progn ,.init-code) ,.(if used (list step)) ...).
-		assertThat(LispReader.readFromString("`(a ,.bs c)").print())
-			.isEqualTo("(APPEND (LIST (QUOTE A)) BS (LIST (QUOTE C)))");
-		assertThat(LispReader.readFromString("`(progn ,.body)").print())
-			.isEqualTo("(APPEND (LIST (QUOTE PROGN)) BODY)");
+		assertThat(LispReader.readFromString("`(a ,.bs c)").print()).isEqualTo("(APPEND (LIST 'A) BS (LIST 'C))");
+		assertThat(LispReader.readFromString("`(progn ,.body)").print()).isEqualTo("(APPEND (LIST 'PROGN) BODY)");
 		assertThat(LispReader.readFromString("`(x ,.(if flag (list s)))").print())
-			.isEqualTo("(APPEND (LIST (QUOTE X)) (IF FLAG (LIST S)))");
+			.isEqualTo("(APPEND (LIST 'X) (IF FLAG (LIST S)))");
 	}
 
 	@Test
@@ -703,9 +697,8 @@ class LispReaderTest {
 		// `(unwind-protect
 		// ,body .,prot) body)) -- ",." beside a dotted ".," tail in one template.
 		assertThat(LispReader.readFromString("`(unwind-protect ,body .,prot)").print())
-			.isEqualTo("(CONS (QUOTE UNWIND-PROTECT) (CONS BODY PROT))");
-		assertThat(LispReader.readFromString("`(f ,.xs .,tail)").print())
-			.isEqualTo("(APPEND (LIST (QUOTE F)) XS TAIL)");
+			.isEqualTo("(CONS 'UNWIND-PROTECT (CONS BODY PROT))");
+		assertThat(LispReader.readFromString("`(f ,.xs .,tail)").print()).isEqualTo("(APPEND (LIST 'F) XS TAIL)");
 	}
 
 	@Test
@@ -719,28 +712,25 @@ class LispReaderTest {
 		// #L is iterate's numbered-argument lambda: the arity is the highest !n the
 		// body mentions, and the body is one form unless its first element is itself a
 		// cons (iterate's list-of-forms?).
-		assertThat(LispReader.readFromString("#L(* !1 !1)").print()).isEqualTo("(FUNCTION (LAMBDA (!1) (* !1 !1)))");
-		assertThat(LispReader.readFromString("#L(list !2 !3)").print())
-			.isEqualTo("(FUNCTION (LAMBDA (!1 !2 !3) (LIST !2 !3)))");
-		assertThat(LispReader.readFromString("#L(f)").print()).isEqualTo("(FUNCTION (LAMBDA NIL (F)))");
-		assertThat(LispReader.readFromString("#L((g !1) (h !1))").print())
-			.isEqualTo("(FUNCTION (LAMBDA (!1) (G !1) (H !1)))");
+		assertThat(LispReader.readFromString("#L(* !1 !1)").print()).isEqualTo("#'(LAMBDA (!1) (* !1 !1))");
+		assertThat(LispReader.readFromString("#L(list !2 !3)").print()).isEqualTo("#'(LAMBDA (!1 !2 !3) (LIST !2 !3))");
+		assertThat(LispReader.readFromString("#L(f)").print()).isEqualTo("#'(LAMBDA NIL (F))");
+		assertThat(LispReader.readFromString("#L((g !1) (h !1))").print()).isEqualTo("#'(LAMBDA (!1) (G !1) (H !1))");
 		// A lambda call in head position is one form, not a list of forms.
 		assertThat(LispReader.readFromString("#L((lambda (x) x) !1)").print())
-			.isEqualTo("(FUNCTION (LAMBDA (!1) ((LAMBDA (X) X) !1)))");
+			.isEqualTo("#'(LAMBDA (!1) ((LAMBDA (X) X) !1))");
 	}
 
 	@Test
 	void readSharpLWithExplicitArity() {
-		assertThat(LispReader.readFromString("#3L(list !1)").print())
-			.isEqualTo("(FUNCTION (LAMBDA (!1 !2 !3) (LIST !1)))");
+		assertThat(LispReader.readFromString("#3L(list !1)").print()).isEqualTo("#'(LAMBDA (!1 !2 !3) (LIST !1))");
 		assertThatThrownBy(() -> LispReader.readFromString("#1L(list !2)")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("too few arguments");
 		assertThatThrownBy(() -> LispReader.readFromString("#5000L(list !1)")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("more than");
 		// !n past the cap is a NAME, not an argument: the lambda list stays empty.
 		assertThat(LispReader.readFromString("#L(list !999999999)").print())
-			.isEqualTo("(FUNCTION (LAMBDA NIL (LIST !999999999)))");
+			.isEqualTo("#'(LAMBDA NIL (LIST !999999999))");
 	}
 
 	@Test
@@ -749,9 +739,8 @@ class LispReaderTest {
 		// ...)).
 		// The body carries an unquote, so the lambda is assembled by construction code
 		// rather than read as a datum -- the arity still comes from the raw body.
-		assertThat(LispReader.readFromString("`(delete-if #L(member !1 xs :test ,test))").print())
-			.isEqualTo("(LIST (QUOTE DELETE-IF) " + "(LIST (QUOTE FUNCTION) (LIST (QUOTE LAMBDA) (QUOTE (!1)) "
-					+ "(LIST (QUOTE MEMBER) (QUOTE !1) (QUOTE XS) (QUOTE :TEST) TEST))))");
+		assertThat(LispReader.readFromString("`(delete-if #L(member !1 xs :test ,test))").print()).isEqualTo(
+				"(LIST 'DELETE-IF " + "(LIST 'FUNCTION (LIST 'LAMBDA '(!1) " + "(LIST 'MEMBER '!1 'XS ':TEST TEST))))");
 	}
 
 	@Test

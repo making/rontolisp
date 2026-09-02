@@ -15,7 +15,7 @@
 ```lisp
 (defmacro my-when (test &body body)
   `(if ,test (progn ,@body) nil))
-(macroexpand-1 '(my-when (> 2 1) 'a 'b)) ; => (IF (> 2 1) (PROGN (QUOTE A) (QUOTE B)) NIL)
+(macroexpand-1 '(my-when (> 2 1) 'a 'b)) ; => (IF (> 2 1) (PROGN 'A 'B) NIL)
 ```
 
 マクロでないフォームはそのまま返されます:

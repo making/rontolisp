@@ -122,7 +122,7 @@ class PackageResolverTest {
 	@Test
 	void wasmExportQualifiedIsKeptWithQuotedDatumAndKeywords() {
 		assertThat(resolve("(rontolisp:wasm-export 'fact :params '(:int) :returns :int)"))
-			.isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE FACT) :PARAMS (QUOTE (:INT)) :RETURNS :INT)");
+			.isEqualTo("(RONTOLISP:WASM-EXPORT 'FACT :PARAMS '(:INT) :RETURNS :INT)");
 	}
 
 	@Test
@@ -135,12 +135,11 @@ class PackageResolverTest {
 		resolve(resolver, "(in-package :gl)");
 		assertThat(resolve(resolver,
 				"(RONTOLISP:WASM-IMPORT 'create-shader :from \"gl\" :as \"createShader\" :params '(:int) :returns :int)"))
-			.isEqualTo("(RONTOLISP:WASM-IMPORT (QUOTE GL:CREATE-SHADER) :FROM \"gl\" :AS \"createShader\""
-					+ " :PARAMS (QUOTE (:INT)) :RETURNS :INT)");
+			.isEqualTo("(RONTOLISP:WASM-IMPORT 'GL:CREATE-SHADER :FROM \"gl\" :AS \"createShader\""
+					+ " :PARAMS '(:INT) :RETURNS :INT)");
 		// An unexported name is internal to the package.
 		assertThat(resolve(resolver, "(RONTOLISP:WASM-IMPORT 'fail :from \"ui\" :params '(:string) :returns :void)"))
-			.isEqualTo(
-					"(RONTOLISP:WASM-IMPORT (QUOTE GL::FAIL) :FROM \"ui\" :PARAMS (QUOTE (:STRING)) :RETURNS :VOID)");
+			.isEqualTo("(RONTOLISP:WASM-IMPORT 'GL::FAIL :FROM \"ui\" :PARAMS '(:STRING) :RETURNS :VOID)");
 	}
 
 	@Test
@@ -150,7 +149,7 @@ class PackageResolverTest {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :gl (:use :cl) (:export :create-shader))");
 		assertThat(resolve(resolver, "(rontolisp:wasm-import 'gl:create-shader :params '(:int) :returns :int)"))
-			.isEqualTo("(RONTOLISP:WASM-IMPORT (QUOTE GL:CREATE-SHADER) :PARAMS (QUOTE (:INT)) :RETURNS :INT)");
+			.isEqualTo("(RONTOLISP:WASM-IMPORT 'GL:CREATE-SHADER :PARAMS '(:INT) :RETURNS :INT)");
 	}
 
 	@Test
@@ -159,7 +158,7 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :gl (:use :cl) (:export :frame))");
 		resolve(resolver, "(in-package :gl)");
 		assertThat(resolve(resolver, "(rontolisp:wasm-export 'frame :as \"frame\" :params '(:float))"))
-			.isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE GL:FRAME) :AS \"frame\" :PARAMS (QUOTE (:FLOAT)))");
+			.isEqualTo("(RONTOLISP:WASM-EXPORT 'GL:FRAME :AS \"frame\" :PARAMS '(:FLOAT))");
 	}
 
 	@Test
@@ -170,17 +169,17 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :gl (:use :cl) (:export :frame))");
 		resolve(resolver, "(in-package :gl)");
 		assertThat(resolve(resolver, "(rontolisp:wasm-export 'frame :as 'tick :params '(:float))"))
-			.isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE GL:FRAME) :AS (QUOTE TICK) :PARAMS (QUOTE (:FLOAT)))");
+			.isEqualTo("(RONTOLISP:WASM-EXPORT 'GL:FRAME :AS 'TICK :PARAMS '(:FLOAT))");
 	}
 
 	@Test
 	void packageVarStaysARuntimeVariableRead() {
 		// *package* is a genuine dynamic variable read when the form RUNS -- never
 		// folded to the package this pass has current (the model before 2026-08-15
-		// resolved it to (QUOTE CL-USER)); the quoted spelling is the same symbol.
+		// resolved it to 'CL-USER); the quoted spelling is the same symbol.
 		assertThat(resolve("*package*")).isEqualTo("*PACKAGE*");
 		assertThat(resolve("(cl:car cl:*package*)")).isEqualTo("(CAR *PACKAGE*)");
-		assertThat(resolve("'*package*")).isEqualTo("(QUOTE *PACKAGE*)");
+		assertThat(resolve("'*package*")).isEqualTo("'*PACKAGE*");
 	}
 
 	@Test
@@ -195,7 +194,7 @@ class PackageResolverTest {
 	void popPackageMarkerRestoresTheRuntimeVariableToo() {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :loaded (:use :cl))");
-		assertThat(resolve(resolver, "(%push-package)")).isEqualTo("(QUOTE CL-USER)");
+		assertThat(resolve(resolver, "(%push-package)")).isEqualTo("'CL-USER");
 		assertThat(resolve(resolver, "(in-package :loaded)")).isEqualTo("(SETQ *PACKAGE* :LOADED)");
 		assertThat(resolve(resolver, "(%pop-package)")).isEqualTo("(SETQ *PACKAGE* :CL-USER)");
 		assertThat(resolve(resolver, "(f x)")).isEqualTo("(F X)");
@@ -205,7 +204,7 @@ class PackageResolverTest {
 	void quoteDatumInClUserKeepsBareNames() {
 		// Quoted data resolves like any other symbol position; in cl-user (which uses cl
 		// and whose own canonical spelling is bare) that is the identity.
-		assertThat(resolve("'(car x if)")).isEqualTo("(QUOTE (CAR X IF))");
+		assertThat(resolve("'(car x if)")).isEqualTo("'(CAR X IF)");
 	}
 
 	// Data position is more permissive than code position: the same two names are an
@@ -215,7 +214,7 @@ class PackageResolverTest {
 	void quoteDatumInRontolispInternsInRontolisp() {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(in-package :rontolisp)");
-		assertThat(resolve(resolver, "'(car x)")).isEqualTo("(QUOTE (RONTOLISP::CAR RONTOLISP::X))");
+		assertThat(resolve(resolver, "'(car x)")).isEqualTo("'(RONTOLISP::CAR RONTOLISP::X)");
 	}
 
 	@Test
@@ -344,7 +343,7 @@ class PackageResolverTest {
 	@Test
 	void defpackageRegistersPackageAndResolvesQuoted() {
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))")).isEqualTo("(QUOTE MYPKG)");
+		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))")).isEqualTo("'MYPKG");
 		// defpackage does not switch the current package.
 		assertThat(resolve(resolver, "(f)")).isEqualTo("(F)");
 		assertThat(resolve(resolver, "(in-package :mypkg)")).isEqualTo("(SETQ *PACKAGE* :MYPKG)");
@@ -357,8 +356,8 @@ class PackageResolverTest {
 		// pax:define-package -- both are defpackage in the variant's clothing and are
 		// consumed exactly like one.
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(uiop:define-package :dp1 (:use :cl) (:export :f))")).isEqualTo("(QUOTE DP1)");
-		assertThat(resolve(resolver, "(pax:define-package :dp2 (:use :cl))")).isEqualTo("(QUOTE DP2)");
+		assertThat(resolve(resolver, "(uiop:define-package :dp1 (:use :cl) (:export :f))")).isEqualTo("'DP1");
+		assertThat(resolve(resolver, "(pax:define-package :dp2 (:use :cl))")).isEqualTo("'DP2");
 		resolve(resolver, "(in-package :dp1)");
 		assertThat(resolve(resolver, "(defun f (x) x)")).isEqualTo("(DEFUN DP1:F (DP1::X) DP1::X)");
 	}
@@ -431,8 +430,8 @@ class PackageResolverTest {
 		// A name interned later (not in the :export clause) is internal.
 		assertThat(resolve(resolver, "(defun helper (x) x)")).isEqualTo("(DEFUN MYPKG::HELPER (MYPKG::X) MYPKG::X)");
 		resolve(resolver, "(in-package :cl-user)");
-		assertThat(resolve(resolver, "(mypkg:greet '(1))")).isEqualTo("(MYPKG:GREET (QUOTE (1)))");
-		assertThat(resolve(resolver, "#'mypkg:greet")).isEqualTo("(FUNCTION MYPKG:GREET)");
+		assertThat(resolve(resolver, "(mypkg:greet '(1))")).isEqualTo("(MYPKG:GREET '(1))");
+		assertThat(resolve(resolver, "#'mypkg:greet")).isEqualTo("#'MYPKG:GREET");
 		assertThatThrownBy(() -> resolve(resolver, "(mypkg:helper 1)")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("The symbol HELPER is not external in the MYPKG package")
 			.hasMessageContaining("use MYPKG::HELPER");
@@ -493,7 +492,7 @@ class PackageResolverTest {
 		// babel proper upstream, so they stay owned here (and stay external, since a
 		// defpackage :import-from resolves through the external list).
 		assertThat(resolve("babel:*string-vector-mappings*")).isEqualTo("BABEL:*STRING-VECTOR-MAPPINGS*");
-		assertThat(resolve("'babel:unicode-char")).isEqualTo("(QUOTE BABEL:UNICODE-CHAR)");
+		assertThat(resolve("'babel:unicode-char")).isEqualTo("'BABEL:UNICODE-CHAR");
 	}
 
 	@Test
@@ -515,7 +514,7 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :dao (:use :closer-common-lisp))");
 		resolve(resolver, "(in-package :dao)");
 		assertThat(resolve(resolver, "(defun probe (c) (mapcar #'slot-definition-name (class-slots c)))")).isEqualTo(
-				"(DEFUN DAO::PROBE (DAO::C) (MAPCAR (FUNCTION CLOSER-MOP:SLOT-DEFINITION-NAME) (CLOSER-MOP:CLASS-SLOTS DAO::C)))");
+				"(DEFUN DAO::PROBE (DAO::C) (MAPCAR #'CLOSER-MOP:SLOT-DEFINITION-NAME (CLOSER-MOP:CLASS-SLOTS DAO::C)))");
 		// The inherited-cl double-colon tolerance follows the implied use too.
 		assertThat(resolve(resolver, "(dao::car dao::x)")).isEqualTo("(CAR DAO::X)");
 	}
@@ -565,8 +564,7 @@ class PackageResolverTest {
 	@Test
 	void defpackageAcceptsStringAndBareSymbolDesignators() {
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(defpackage \"STRPKG\" (:use cl) (:export \"F\" g :h))"))
-			.isEqualTo("(QUOTE STRPKG)");
+		assertThat(resolve(resolver, "(defpackage \"STRPKG\" (:use cl) (:export \"F\" g :h))")).isEqualTo("'STRPKG");
 		resolve(resolver, "(in-package :strpkg)");
 		assertThat(resolve(resolver, "(defun f () 1)")).isEqualTo("(DEFUN STRPKG:F NIL 1)");
 		assertThat(resolve(resolver, "(defun g () 2)")).isEqualTo("(DEFUN STRPKG:G NIL 2)");
@@ -581,7 +579,7 @@ class PackageResolverTest {
 		// declares its package twice.
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :mypkg (:use :cl) (:export #:foo))");
-		assertThat(resolve(resolver, "(defpackage :mypkg (:export #:bar))")).isEqualTo("(QUOTE MYPKG)");
+		assertThat(resolve(resolver, "(defpackage :mypkg (:export #:bar))")).isEqualTo("'MYPKG");
 		// Both the first definition's export and the second's are external.
 		assertThat(resolve(resolver, "(mypkg:foo)")).isEqualTo("(MYPKG:FOO)");
 		assertThat(resolve(resolver, "(mypkg:bar)")).isEqualTo("(MYPKG:BAR)");
@@ -594,7 +592,7 @@ class PackageResolverTest {
 	void defpackageRepeatingItsOwnNicknameIsAccepted() {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :mypackage (:nicknames :mp) (:export :greet))");
-		assertThat(resolve(resolver, "(defpackage :mypackage (:nicknames :mp))")).isEqualTo("(QUOTE MYPACKAGE)");
+		assertThat(resolve(resolver, "(defpackage :mypackage (:nicknames :mp))")).isEqualTo("'MYPACKAGE");
 		assertThat(resolve(resolver, "(mp:greet)")).isEqualTo("(MYPACKAGE:GREET)");
 	}
 
@@ -752,7 +750,7 @@ class PackageResolverTest {
 	void defpackageDocumentationAndSizeAreIgnored() {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:documentation \"doc\") (:size 10))"))
-			.isEqualTo("(QUOTE MYPKG)");
+			.isEqualTo("'MYPKG");
 	}
 
 	@Test
@@ -853,10 +851,10 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :styles (:use :cl) (:export :run))");
 		resolve(resolver, "(in-package :styles)");
 		assertThat(resolve(resolver, "(defparameter *table* '((:rows reader all-rows)))"))
-			.isEqualTo("(DEFPARAMETER STYLES::*TABLE* (QUOTE ((:ROWS STYLES::READER STYLES::ALL-ROWS))))");
+			.isEqualTo("(DEFPARAMETER STYLES::*TABLE* '((:ROWS STYLES::READER STYLES::ALL-ROWS)))");
 		assertThat(resolve(resolver, "(defmacro all-rows (form) form)")).startsWith("(DEFMACRO STYLES::ALL-ROWS");
 		// Keywords, t/nil and cl symbols keep their canonical spelling.
-		assertThat(resolve(resolver, "'(:a nil t car)")).isEqualTo("(QUOTE (:A NIL T CAR))");
+		assertThat(resolve(resolver, "'(:a nil t car)")).isEqualTo("'(:A NIL T CAR)");
 	}
 
 	@Test
@@ -904,7 +902,7 @@ class PackageResolverTest {
 
 	@Test
 	void defpackageQuotedDatumIsLeftUntouched() {
-		assertThat(resolve("'(defpackage :mypkg)")).isEqualTo("(QUOTE (DEFPACKAGE :MYPKG))");
+		assertThat(resolve("'(defpackage :mypkg)")).isEqualTo("'(DEFPACKAGE :MYPKG)");
 	}
 
 	@Test
@@ -941,7 +939,7 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(defun use-q (quote) (my-fn (car quote)))"))
 			.isEqualTo("(DEFUN RP::USE-Q (QUOTE) (RP::MY-FN (CAR QUOTE)))");
 		// A genuine (quote DATUM) element keeps the data exemption.
-		assertThat(resolve(resolver, "(my-fn 'some-list)")).isEqualTo("(RP::MY-FN (QUOTE RP::SOME-LIST))");
+		assertThat(resolve(resolver, "(my-fn 'some-list)")).isEqualTo("(RP::MY-FN 'RP::SOME-LIST)");
 	}
 
 	@Test

@@ -24707,33 +24707,38 @@ public final class LispMacroExpander {
 	 * The cons arm of the {@code %print-object-str} walk: the element text is the
 	 * renderer's own, so an instance nested at any depth reaches the generic. It
 	 * reproduces the raw cons rendering exactly -- one space before every element but the
-	 * first, {@code " . "} before a non-nil tail -- because for a list holding no routed
-	 * value the two must agree byte for byte.
+	 * first, {@code " . "} before a non-nil tail, and the same {@code (QUOTE x)}/
+	 * {@code (FUNCTION x)} to {@code 'x}/{@code #'x} abbreviation (todo 626) -- because
+	 * for a list holding no routed value the two must agree byte for byte.
 	 */
 	private static final String PRINT_OBJECT_CONS_ARM = """
 			((consp %pos-x)
 			 (if (or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256))
 			     "#"
-			     (let ((%pos-acc "(") (%pos-cur %pos-x) (%pos-sep "")
-			           (%pos-stop (%pos-chain-stop %pos-x)) (%pos-seen nil) (%pos-done nil)
-			           (%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1)))
-			       (while (and (consp %pos-cur) (not %pos-done))
-			         (if (and %pos-seen (eq %pos-cur %pos-stop))
-			             (setq %pos-done t)
-			             (progn
-			               (when (eq %pos-cur %pos-stop)
-			                 (setq %pos-seen t))
-			               (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
-			                                           (%pos-walk (car %pos-cur) %pos-esc %pos-sub %pos-subd)))
-			               (setq %pos-sep " ")
-			               (setq %pos-cur (cdr %pos-cur)))))
-			       (if %pos-done
-			           (concatenate 'string %pos-acc " . #)")
-			           (progn
-			             (unless (null %pos-cur)
-			               (setq %pos-acc (concatenate 'string %pos-acc " . "
-			                                           (%pos-walk %pos-cur %pos-esc %pos-sub %pos-subd))))
-			             (concatenate 'string %pos-acc ")"))))))
+			     (let ((%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1)))
+			       (if (and (symbolp (car %pos-x)) (consp (cdr %pos-x)) (null (cddr %pos-x))
+			                (or (eq (car %pos-x) 'quote) (eq (car %pos-x) 'function)))
+			           (concatenate 'string (if (eq (car %pos-x) 'quote) "'" "#'")
+			                        (%pos-walk (cadr %pos-x) %pos-esc %pos-sub %pos-subd))
+			           (let ((%pos-acc "(") (%pos-cur %pos-x) (%pos-sep "")
+			                 (%pos-stop (%pos-chain-stop %pos-x)) (%pos-seen nil) (%pos-done nil))
+			             (while (and (consp %pos-cur) (not %pos-done))
+			               (if (and %pos-seen (eq %pos-cur %pos-stop))
+			                   (setq %pos-done t)
+			                   (progn
+			                     (when (eq %pos-cur %pos-stop)
+			                       (setq %pos-seen t))
+			                     (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
+			                                                 (%pos-walk (car %pos-cur) %pos-esc %pos-sub %pos-subd)))
+			                     (setq %pos-sep " ")
+			                     (setq %pos-cur (cdr %pos-cur)))))
+			             (if %pos-done
+			                 (concatenate 'string %pos-acc " . #)")
+			                 (progn
+			                   (unless (null %pos-cur)
+			                     (setq %pos-acc (concatenate 'string %pos-acc " . "
+			                                                 (%pos-walk %pos-cur %pos-esc %pos-sub %pos-subd))))
+			                   (concatenate 'string %pos-acc ")"))))))))
 			""";
 
 	/**
@@ -25632,10 +25637,20 @@ public final class LispMacroExpander {
 	 * the PACKAGE half ({@code %struct-MAP-SET:MAP-SET}), so a qualified name's member
 	 * part is already the bare type name and only the unqualified spelling reaches the
 	 * cond below.
+	 *
+	 * <p>
+	 * The escape-on spelling also needs the {@code |...|} framing todo 626 gives
+	 * {@code prin1-to-string} of a symbol whose name is not upcase-invariant peeled back
+	 * off before the prefix match runs, since the tag prefix is always lowercase (an
+	 * unqualified tag now round-trips as {@code "|%struct-PT|"}) -- inlined here, not
+	 * delegated to the prelude's {@code %unescaped-symbol-text} twin, for the same reason
+	 * the strip itself is inlined (this expansion runs inside the compilers, after the
+	 * prelude splice pre-pass already ran).
 	 */
 	private static LispVal typeNameOf(LispVal obj) {
 		String prefix = "__ptn" + MV_COUNTER.getAndIncrement();
 		LispSymbol designator = new LispSymbol(prefix + "_d");
+		LispSymbol raw = new LispSymbol(prefix + "_r");
 		LispSymbol text = new LispSymbol(prefix + "_s");
 		LispSymbol size = new LispSymbol(prefix + "_n");
 		List<LispVal> clauses = new java.util.ArrayList<>();
@@ -25652,9 +25667,18 @@ public final class LispMacroExpander {
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, text)));
 		LispVal spelled = makeIf(new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
 				fmtCall(LispNames.PRIN1_TO_STRING, designator), fmtCall(LispNames.PRINC_TO_STRING, designator));
-		LispVal bindings = listToCons(List.of(
-				listToCons(List.of(designator, fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, obj))),
-				listToCons(List.of(text, spelled)), listToCons(List.of(size, fmtCall(LispNames.LENGTH, text)))));
+		LispVal unpiped = makeIf(
+				listToCons(List.of(new LispSymbol(LispNames.AND),
+						fmtCall(LispNames.GT, fmtCall(LispNames.LENGTH, raw), new LispInteger(1)),
+						fmtCall(LispNames.CHAR_EQ, fmtCall(LispNames.CHAR, raw, new LispInteger(0)),
+								new LispChar('|')))),
+				fmtCall(LispNames.SUBSEQ, raw, new LispInteger(1),
+						fmtCall(LispNames.SUB, fmtCall(LispNames.LENGTH, raw), new LispInteger(1))),
+				raw);
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(designator, fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, obj))),
+						listToCons(List.of(raw, spelled)), listToCons(List.of(text, unpiped)),
+						listToCons(List.of(size, fmtCall(LispNames.LENGTH, text)))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, listToCons(clauses)));
 	}
 

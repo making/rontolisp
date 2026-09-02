@@ -34,7 +34,7 @@ class UserMacroExpanderTest {
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"));
-		assertThat(expanded).isEqualTo("(PRINT 42)\n(PRINT (QUOTE (A 6 C)))");
+		assertThat(expanded).isEqualTo("(PRINT 42)\n(PRINT '(A 6 C))");
 	}
 
 	@Test
@@ -87,7 +87,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro m (x) `(+ ,x 1))
 				(print '(m 1))
-				""")).isEqualTo("(PRINT (QUOTE (M 1)))");
+				""")).isEqualTo("(PRINT '(M 1))");
 	}
 
 	@Test
@@ -112,7 +112,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro m (x) `(+ ,x 1))
 				(print (case 'm ((m) (m 1)) (otherwise 0)))
-				""")).isEqualTo("(PRINT (CASE (QUOTE M) ((M) (+ 1 1)) (OTHERWISE 0)))");
+				""")).isEqualTo("(PRINT (CASE 'M ((M) (+ 1 1)) (OTHERWISE 0)))");
 	}
 
 	@Test
@@ -244,15 +244,14 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
 				(print (macroexpand-1 '(my-when2 a b)))
-				""")).isEqualTo("(PRINT (VALUES (QUOTE (IF A (PROGN B) NIL)) T))");
+				""")).isEqualTo("(PRINT (VALUES '(IF A (PROGN B) NIL) T))");
 	}
 
 	@Test
 	void macroexpandFoldsBuiltinMacrosWithoutAnyDefmacro() {
 		// The pass must activate on macroexpand alone (no defmacro in the program).
-		assertThat(expand("(print (macroexpand-1 '(unless c x)))"))
-			.isEqualTo("(PRINT (VALUES (QUOTE (IF C NIL X)) T))");
-		assertThat(expand("(print (macroexpand '(outer 1)))")).isEqualTo("(PRINT (VALUES (QUOTE (OUTER 1)) NIL))");
+		assertThat(expand("(print (macroexpand-1 '(unless c x)))")).isEqualTo("(PRINT (VALUES '(IF C NIL X) T))");
+		assertThat(expand("(print (macroexpand '(outer 1)))")).isEqualTo("(PRINT (VALUES '(OUTER 1) NIL))");
 	}
 
 	@Test
@@ -262,15 +261,15 @@ class UserMacroExpanderTest {
 				(defmacro outer (x) `(inner ,x))
 				(print (macroexpand '(outer 41)))
 				(print (macroexpand-1 '(outer 41)))
-				""")).isEqualTo("(PRINT (VALUES (QUOTE (+ 41 1)) T))\n(PRINT (VALUES (QUOTE (INNER 41)) T))");
+				""")).isEqualTo("(PRINT (VALUES '(+ 41 1) T))\n(PRINT (VALUES '(INNER 41) T))");
 	}
 
 	@Test
 	void macroexpandOfANonMacroFormFoldsToTheFormItself() {
 		// Nothing expanded, so expanded-p is nil -- the flag is decided by the expander
 		// answering the SAME reference it was handed.
-		assertThat(expand("(print (macroexpand-1 '(+ 1 2)))")).isEqualTo("(PRINT (VALUES (QUOTE (+ 1 2)) NIL))");
-		assertThat(expand("(print (macroexpand-1 'x))")).isEqualTo("(PRINT (VALUES (QUOTE X) NIL))");
+		assertThat(expand("(print (macroexpand-1 '(+ 1 2)))")).isEqualTo("(PRINT (VALUES '(+ 1 2) NIL))");
+		assertThat(expand("(print (macroexpand-1 'x))")).isEqualTo("(PRINT (VALUES 'X NIL))");
 	}
 
 	@Test
@@ -279,7 +278,7 @@ class UserMacroExpanderTest {
 		// the prelude identity defun, which answers the form unchanged with expanded-p
 		// nil (a compiled program has no macro table left).
 		assertThat(expand("(setq f '(when a b))\n(print (macroexpand-1 f))"))
-			.isEqualTo("(SETQ F (QUOTE (WHEN A B)))\n(PRINT (MACROEXPAND-1 F))");
+			.isEqualTo("(SETQ F '(WHEN A B))\n(PRINT (MACROEXPAND-1 F))");
 	}
 
 	@Test
@@ -298,7 +297,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro twice (x) `(* 2 ,x))
 				(print (twice (car '((a . 1)))))
-				""")).isEqualTo("(PRINT (* 2 (CAR (QUOTE ((A . 1))))))");
+				""")).isEqualTo("(PRINT (* 2 (CAR '((A . 1)))))");
 	}
 
 	// --- pure-config-setter replay (macro-time (setf (place) ...) auto-detect) ---
@@ -315,8 +314,8 @@ class UserMacroExpanderTest {
 				(defmacro current-mode () (list 'quote *mode*))
 				(setf (mode) :b)
 				(print (current-mode))
-				""")).isEqualTo(
-				"(DEFVAR *MODE* :A)\n(DEFUN (SETF MODE) (V) (SETF *MODE* V))\n(SETF (MODE) :B)\n(PRINT (QUOTE :B))");
+				"""))
+			.isEqualTo("(DEFVAR *MODE* :A)\n(DEFUN (SETF MODE) (V) (SETF *MODE* V))\n(SETF (MODE) :B)\n(PRINT ':B)");
 	}
 
 	@Test
@@ -347,7 +346,7 @@ class UserMacroExpanderTest {
 				(defmacro current-mode () (list 'quote *mode*))
 				(setf (mode) :b)
 				(print (current-mode))
-				""")).endsWith("(PRINT (QUOTE :A))");
+				""")).endsWith("(PRINT ':A)");
 	}
 
 	@Test
@@ -360,7 +359,7 @@ class UserMacroExpanderTest {
 				(defmacro current-mode () (list 'quote *mode*))
 				(setf (mode) (progn (print 'x) :b))
 				(print (current-mode))
-				""")).endsWith("(PRINT (QUOTE :A))");
+				""")).endsWith("(PRINT ':A)");
 	}
 
 	@Test
@@ -373,7 +372,7 @@ class UserMacroExpanderTest {
 				(defmacro current-head () (list 'quote (car *cell*)))
 				(setf (head) 9)
 				(print (current-head))
-				""")).endsWith("(PRINT (QUOTE 1))");
+				""")).endsWith("(PRINT '1)");
 	}
 
 	@Test
@@ -401,7 +400,7 @@ class UserMacroExpanderTest {
 				(defvar *table* (progn (setq *witness* :init-ran) 42))
 				(defmacro witness () (list 'quote *witness*))
 				(print (witness))
-				""")).endsWith("(PRINT (QUOTE :UNTOUCHED))");
+				""")).endsWith("(PRINT ':UNTOUCHED)");
 	}
 
 	@Test
@@ -461,7 +460,7 @@ class UserMacroExpanderTest {
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"));
-		assertThat(expanded).endsWith("(PRINT (QUOTE (SPEED 3)))");
+		assertThat(expanded).endsWith("(PRINT '(SPEED 3))");
 	}
 
 	@Test

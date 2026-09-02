@@ -25,6 +25,16 @@ final class WasmStringRuntimeBuilder {
 
 	private static final int BACKSLASH = 0x5C;
 
+	private static final int PIPE = 0x7C;
+
+	// The non-constituent bytes _sym_esc_gc escapes for (todo 626), mirroring
+	// LispSymbol.isBareConstituent's ASCII set on the interpreter (space, tab, newline,
+	// CR, form feed, then the reader's list/string/quote/comment/backquote/comma
+	// terminators, plus '|' and '\' themselves): ' ', '\t', '\n', '\r', '\f', '(', ')',
+	// '\'', '"', ';', ',', '`', '|', '\\'.
+	private static final int[] SYM_ESC_FORBIDDEN = { 0x20, 0x09, 0x0A, 0x0D, 0x0C, 0x28, 0x29, 0x27, QUOTE, 0x3B, 0x2C,
+			0x60, PIPE, BACKSLASH };
+
 	// Fold modes for the shared code-point build core.
 	private static final int UPCASE = 1;
 
@@ -386,6 +396,320 @@ final class WasmStringRuntimeBuilder {
 		get(w, n);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.END);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _sym_esc_gc} (FUNC_SYM_ESC_GC, todo 626): writes bytes
+	 * {@code [from, to)} of a BARE SYMBOL NAME (no package qualifier, no keyword/gensym
+	 * marker -- {@code _princ_val}'s arm strips those before this is ever reached, and
+	 * {@code _print_val}'s prin1 arm hands the whole name, marker included, but a marker
+	 * byte -- {@code :}, {@code #} -- is constituent and upcase-invariant so it never
+	 * triggers escaping on its own), {@code |...|}-framed with every embedded {@code |} /
+	 * {@code \} doubled, when CLHS 22.1.3.3 says the bare bytes would not read back as
+	 * themselves: the empty range, a byte the reader would not accept inside a bare
+	 * symbol token, or an ASCII lowercase byte ({@code a}-{@code z}). Falls through to a
+	 * verbatim {@code _write_str_gc(str, from, to, esc=0)} call -- this function's OWN
+	 * old body -- when none of that fires, so the common case costs one scan and no
+	 * allocation. Reuses {@code TYPE_WRITE_STR_GC}'s
+	 * {@code ((ref null eq),i32,i32,i32)->()} shape; the fourth parameter is unused.
+	 *
+	 * <p>
+	 * The lowercase check is scoped to ASCII rather than the interpreter's exact
+	 * {@code Character.toUpperCase(char)} fold ({@code LispSymbol.needsEscape}'s
+	 * Javadoc): the general Unicode fold table ({@code WasmCaseFoldRuntimeBuilder}) would
+	 * otherwise have to be reachable from every program that prints any symbol at all,
+	 * not just one that calls {@code string-upcase} -- the same size-discipline reason
+	 * the JVM backend's {@code _symEsc} gives (`JvmRuntimeBuilder.buildSymEscBody`'s
+	 * Javadoc), and the two are kept identical on purpose.
+	 * @return the function body (signature reuses TYPE_WRITE_STR_GC)
+	 */
+	static byte[] buildSymEscGcBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: str = 0, from = 1, to = 2, unused = 3. locals: arr = 4 ($str_bytes,
+		// ref), dst = 5, i = 6, n = 7, b = 8, needsPipes = 9, prefixEnd = 10, idx = 11,
+		// found = 12 (i32).
+		w.write(2);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(8);
+		w.write(Type.I32);
+		int str = 0, from = 1, to = 2, arr = 4, dst = 5, i = 6, n = 7, b = 8, needsPipes = 9, prefixEnd = 10, idx = 11,
+				found = 12;
+		// arr = str.data
+		get(w, str);
+		WasmEmitHelper.emitStrBytesArray(w);
+		set(w, arr);
+		// prefixEnd: a keyword's ':' (LispSymbol.isKeyword), else an uninterned
+		// symbol's "#:" marker, else a package qualifier's colon(s)
+		// (LispSymbol.qualifierEnd) -- all written out verbatim, never escaped,
+		// exactly like the interpreter's LispSymbol.print(). Defaults to `from`
+		// (no prefix) when none apply; each case sets `found` so the later ones are
+		// skipped rather than branched past, which keeps every block's exit a plain
+		// fall-through and needs no cross-construct BR bookkeeping.
+		i32(w, 0);
+		set(w, found);
+		get(w, to);
+		get(w, from);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.IF, 0x40);
+		arrGetLocal(w, arr, from);
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		get(w, from);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, prefixEnd);
+		i32(w, 1);
+		set(w, found);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		get(w, found);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, to);
+		get(w, from);
+		w.write(Instruction.I32_SUB);
+		i32(w, 2);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		arrGetLocal(w, arr, from);
+		i32(w, '#');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		get(w, from);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, idx);
+		arrGetLocal(w, arr, idx);
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		get(w, from);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		set(w, prefixEnd);
+		i32(w, 1);
+		set(w, found);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		get(w, found);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		// idx = from; while (idx < to && arr[idx] != ':') idx++;
+		get(w, from);
+		set(w, idx);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, idx);
+		get(w, to);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		arrGetLocal(w, arr, idx);
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.BR_IF, 1);
+		get(w, idx);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, idx);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		get(w, idx);
+		get(w, to);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		// A colon was found at idx: prefixEnd = idx + (double colon ? 2 : 1).
+		get(w, idx);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		get(w, to);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, Type.I32.code());
+		// arr[idx + 1] -- idx is a local, idx+1 is not, so this reads the array
+		// directly rather than through arrGetLocal (which only takes a local index).
+		get(w, arr);
+		get(w, idx);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.IF, 0x40);
+		get(w, idx);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		set(w, prefixEnd);
+		w.write(Instruction.ELSE);
+		get(w, idx);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, prefixEnd);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		get(w, from);
+		set(w, prefixEnd);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// if (prefixEnd > from) write bytes[from, prefixEnd) verbatim.
+		get(w, prefixEnd);
+		get(w, from);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.IF, 0x40);
+		get(w, str);
+		get(w, from);
+		get(w, prefixEnd);
+		i32(w, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR_GC);
+		w.write(Instruction.END);
+		// needsPipes = (prefixEnd == to) ? 1 : 0 -- the empty member always needs
+		// |...|; the scan below overrides this to 1 the moment it finds a trigger
+		// byte in [prefixEnd, to), and otherwise leaves it 0.
+		get(w, prefixEnd);
+		get(w, to);
+		w.write(Instruction.I32_EQ);
+		set(w, needsPipes);
+		get(w, prefixEnd);
+		set(w, i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, to);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		arrGetLocal(w, arr, i);
+		set(w, b);
+		get(w, b);
+		i32(w, 'a');
+		w.write(Instruction.I32_GE_U);
+		get(w, b);
+		i32(w, 'z');
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		set(w, needsPipes);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		for (int forbidden : SYM_ESC_FORBIDDEN) {
+			get(w, b);
+			i32(w, forbidden);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			i32(w, 1);
+			set(w, needsPipes);
+			w.write(Instruction.BR, 2);
+			w.write(Instruction.END);
+		}
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		get(w, needsPipes);
+		w.write(Instruction.IF, 0x40);
+		// Escape: n = (to - prefixEnd) * 2 + 2; dst = scratch; grow; write '|', the
+		// content (every '|'/'\' doubled), '|'.
+		get(w, to);
+		get(w, prefixEnd);
+		w.write(Instruction.I32_SUB);
+		i32(w, 2);
+		w.write(Instruction.I32_MUL);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		set(w, n);
+		i32(w, WasmLispCompiler.CAPTURE_FLAG_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.CAPTURE_CUR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, dst);
+		w.write(Instruction.ELSE);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, dst);
+		w.write(Instruction.END);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			get(w, dst);
+			get(w, n);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, 0);
+		set(w, n);
+		emitStoreByteAt(w, dst, n, PIPE);
+		emitBump(w, n);
+		get(w, prefixEnd);
+		set(w, i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, to);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		arrGetLocal(w, arr, i);
+		set(w, b);
+		get(w, b);
+		i32(w, PIPE);
+		w.write(Instruction.I32_EQ);
+		get(w, b);
+		i32(w, BACKSLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		emitStoreByteAt(w, dst, n, BACKSLASH);
+		emitBump(w, n);
+		w.write(Instruction.END);
+		get(w, dst);
+		get(w, n);
+		w.write(Instruction.I32_ADD);
+		get(w, b);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		emitBump(w, n);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		emitStoreByteAt(w, dst, n, PIPE);
+		emitBump(w, n);
+		i32(w, WasmLispCompiler.CAPTURE_FLAG_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.CAPTURE_CUR_ADDR);
+		get(w, dst);
+		get(w, n);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.ELSE);
+		get(w, dst);
+		get(w, n);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// No escaping needed: write the member verbatim.
+		get(w, str);
+		get(w, prefixEnd);
+		get(w, to);
+		i32(w, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR_GC);
 		w.write(Instruction.END);
 		w.write(Instruction.END); // function
 		return body.toByteArray();

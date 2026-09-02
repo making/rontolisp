@@ -300,7 +300,7 @@ class WasmComponentImportCompilerTest {
 		List<LispVal> forms = lower(KV_WIT, "wasi:keyvalue/store@0.2.0-draft",
 				WitExportDirective.Backend.WASM_COMPONENT);
 		// (defpackage kv ...), the %component-import form, then the result wrappers.
-		assertThat(forms.get(0).print()).startsWith("(DEFPACKAGE kv");
+		assertThat(forms.get(0).print()).startsWith("(DEFPACKAGE |kv|");
 		String componentImport = forms.get(1).print();
 		assertThat(componentImport).startsWith("(RONTOLISP::%COMPONENT-IMPORT \"wasi:keyvalue/store@0.2.0-draft\"");
 		// The WIT text travels inside the form: the WASM compiler reads no files (the
@@ -312,7 +312,7 @@ class WasmComponentImportCompilerTest {
 		// arm).
 		assertThat(componentImport).contains("(\"open\" \"kv::%open\")");
 		assertThat(forms.stream().map(LispVal::print))
-			.anyMatch(form -> form.startsWith("(DEFUN kv:open (identifier) (RONTOLISP::%WIT-RESULT (kv::%open"));
+			.anyMatch(form -> form.startsWith("(DEFUN kv:|open| (|identifier|) (RONTOLISP::%WIT-RESULT (kv::|%open|"));
 	}
 
 	@Test

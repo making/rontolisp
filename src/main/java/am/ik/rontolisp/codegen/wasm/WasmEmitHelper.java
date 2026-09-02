@@ -1010,6 +1010,18 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Emits {@code call FUNC_SYM_ESC_GC} (todo 626): {@code _print_val}'s bare-symbol arm
+	 * calls this instead of {@link #emitWriteStrGcCall} so a symbol name that is not
+	 * upcase-invariant, or that holds a non-constituent byte, prints
+	 * {@code |...|}-framed. Same {@code (str, from, to, unused)} stack shape as
+	 * {@link #emitWriteStrGcCall}.
+	 */
+	static void emitSymEscGcCall(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SYM_ESC_GC);
+	}
+
+	/**
 	 * Emits {@code call FUNC_CHARVEC_TO_STR}: replaces a mutable character vector on the
 	 * stack with the equivalent quote-framed runtime string; any other value passes
 	 * through unchanged. Inserted after the string operand of every string consumer
