@@ -10,6 +10,7 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jspecify.annotations.Nullable;
 
@@ -52,6 +53,18 @@ import org.jspecify.annotations.Nullable;
  * long enough for that to matter and cheap enough to absorb a copy (5% at n=2048), so
  * those go through a confined arena instead.
  *
+ * <h2>The thread barrier, and the one thing said about it</h2>
+ *
+ * A tuned library sizes its own thread pool and rontolisp does not touch it -- but a
+ * SHORT call cannot amortize the barrier that pool costs, so a program made of small
+ * products runs several times slower with the threads than without them, while a program
+ * made of large ones runs several times faster with them. Neither the flag nor the
+ * machine tells those two apart; only the calls do. So the binding asks the library how
+ * many threads it will use ({@link #THREAD_QUERIES}, optional symbols) and
+ * {@link #barrierNote} says one thing, once, after the program has actually issued a LOOP
+ * of products too small to pay for the barrier. A library with no such symbol, or one
+ * already capped, says nothing at all. See {@code .kb/linalg-blas.md}.
+ *
  * @see LinalgBlas
  */
 final class LinalgBlasKernels {
@@ -80,6 +93,18 @@ final class LinalgBlasKernels {
 			{ "bli_info_get_version_str", "BLIS" }, { "ATL_buildinfo", "ATLAS" },
 			{ "nvpl_blas_get_version", "NVIDIA NVPL" }, { "armpl_get_version", "Arm Performance Libraries" } };
 
+	/**
+	 * How to ask a tuned library how many threads it will use, and what to set to cap it:
+	 * {@code {symbol, library, variable}}. All three symbols are OPTIONAL -- a library
+	 * that exports none (Apple Accelerate, BLIS) leaves the thread count unknown and
+	 * {@link #barrierNote} then says nothing, which is the behaviour every library had
+	 * before this table existed.
+	 */
+	private static final String[][] THREAD_QUERIES = {
+			{ "openblas_get_num_threads", "OpenBLAS", "OPENBLAS_NUM_THREADS" },
+			{ "mkl_get_max_threads", "Intel MKL", "MKL_NUM_THREADS" },
+			{ "MKL_Get_Max_Threads", "Intel MKL", "MKL_NUM_THREADS" } };
+
 	/** Names the library to bind, overriding both the search and the marker check. */
 	static final String LIBRARY_ENV = "RONTOLISP_BLAS";
 
@@ -102,6 +127,26 @@ final class LinalgBlasKernels {
 	 */
 	private static final long CRITICAL_FLOP_CEILING = 1L << 32;
 
+	/**
+	 * A product of at most this many flops is SHORT: too small for a threaded library to
+	 * amortize the barrier it costs per call. Measured on a 64-core Xeon with OpenBLAS,
+	 * one call at a time with unrelated work in between (the shape a real loop has, and
+	 * the one a back-to-back microbenchmark hides -- a pool that never idles never pays
+	 * its wake-up): a 166 Kflop GEMV is 6.8x SLOWER threaded, a 442 Kflop GEMV 1.6x
+	 * slower, a 4.2 Mflop GEMM 1.24x faster and a 2.1 Gflop GEMM 6.2x faster. The
+	 * crossover sits between 0.4 and 4 Mflop and is the same for both kernels, so it is
+	 * the SIZE of the call and not which product it is.
+	 */
+	private static final long BARRIER_WORK = 1L << 21;
+
+	/**
+	 * Short products to see before saying anything: enough that they are a loop rather
+	 * than a handful, and below the smallest shipped program that measurably loses to
+	 * this ({@code examples/ml/simd-gemv.lisp}, 100 GEMVs, 371 ms threaded against 131 ms
+	 * capped).
+	 */
+	private static final int BARRIER_CALLS = 64;
+
 	private static final ValueLayout.OfInt I = ValueLayout.JAVA_INT;
 
 	private static final ValueLayout.OfFloat F = ValueLayout.JAVA_FLOAT;
@@ -120,6 +165,9 @@ final class LinalgBlasKernels {
 	/** {@code cblas_dgemv} and {@code cblas_sgemv}. */
 	private static final FunctionDescriptor GEMV_D = FunctionDescriptor.ofVoid(I, I, I, I, D, P, I, P, I, D, P, I),
 			GEMV_F = FunctionDescriptor.ofVoid(I, I, I, I, F, P, I, P, I, F, P, I);
+
+	/** Every {@link #THREAD_QUERIES} entry: {@code int f(void)}. */
+	private static final FunctionDescriptor THREAD_COUNT = FunctionDescriptor.of(I);
 
 	/**
 	 * Every downcall SHAPE bound below, and the same for the
@@ -141,9 +189,27 @@ final class LinalgBlasKernels {
 	/** What was bound, or why nothing was: the text the CLI reports. */
 	private static final String DESCRIPTION;
 
+	/**
+	 * How many threads the bound library said it would use, or 0 when it exports no way
+	 * to ask. Read once, at bind time, and never written: a 0 or 1 here makes
+	 * {@link #note} a constant-folded no-op for the life of the process.
+	 */
+	private static final int THREADS;
+
+	/** The library and the variable {@link #barrierNote} names, empty when unknown. */
+	private static final String THREAD_LIBRARY, THREAD_VARIABLE;
+
+	/** Short products seen so far, until the note is earned. */
+	private static final AtomicInteger SHORT_PRODUCTS = new AtomicInteger();
+
+	/** Set once the note has been printed; nothing is counted after that. */
+	private static volatile boolean barrierReported;
+
 	static {
 		MethodHandle dgemm = null, sgemm = null, dgemv = null, sgemv = null, dgemmStaged = null, sgemmStaged = null;
 		String description;
+		int threads = 0;
+		String threadLibrary = "", threadVariable = "";
 		try {
 			String forced = env(LIBRARY_ENV);
 			String[] candidates = forced != null ? new String[] { forced } : CANDIDATES;
@@ -171,6 +237,12 @@ final class LinalgBlasKernels {
 				sgemmStaged = handles.sgemmStaged();
 				dgemv = handles.dgemv();
 				sgemv = handles.sgemv();
+				ThreadQuery query = handles.threads();
+				if (query != null) {
+					threads = threadCount(query);
+					threadLibrary = query.library();
+					threadVariable = query.variable();
+				}
 				bound = candidate;
 				break;
 			}
@@ -185,6 +257,9 @@ final class LinalgBlasKernels {
 			sgemv = null;
 			dgemmStaged = null;
 			sgemmStaged = null;
+			threads = 0;
+			threadLibrary = "";
+			threadVariable = "";
 			description = "the foreign function API is unavailable: " + ex;
 		}
 		DGEMM = dgemm;
@@ -194,14 +269,35 @@ final class LinalgBlasKernels {
 		DGEMM_STAGED = dgemmStaged;
 		SGEMM_STAGED = sgemmStaged;
 		DESCRIPTION = description;
+		THREADS = threads;
+		THREAD_LIBRARY = threadLibrary;
+		THREAD_VARIABLE = threadVariable;
 		if (dgemm != null && env(VERBOSE_ENV) != null) {
-			System.err.println("rontolisp: --blas bound " + description);
+			System.err.println("rontolisp: --blas bound " + description + ", " + threads + " threads");
 		}
+	}
+
+	/**
+	 * Asks the library its thread count, or answers 0 when it will not say. Its own
+	 * try/catch on purpose: a library that exports the symbol but refuses the call must
+	 * cost the acceleration nothing, and the binding around it has already succeeded.
+	 */
+	private static int threadCount(ThreadQuery query) {
+		try {
+			return (int) query.count().invokeExact();
+		}
+		catch (Throwable ex) {
+			return 0;
+		}
+	}
+
+	/** The optional thread-count query of a library that has one. */
+	record ThreadQuery(MethodHandle count, String library, String variable) {
 	}
 
 	/** The six handles one tuned CBLAS gives, in the order the fields above take them. */
 	record Bound(MethodHandle dgemm, MethodHandle dgemmStaged, MethodHandle sgemm, MethodHandle sgemmStaged,
-			MethodHandle dgemv, MethodHandle sgemv) {
+			MethodHandle dgemv, MethodHandle sgemv, @Nullable ThreadQuery threads) {
 	}
 
 	/**
@@ -220,7 +316,24 @@ final class LinalgBlasKernels {
 		return new Bound(handle(linker, gemm, GEMM_D, critical), handle(linker, gemm, GEMM_D),
 				handle(linker, sgemm, GEMM_F, critical), handle(linker, sgemm, GEMM_F),
 				handle(linker, lookup.find("cblas_dgemv").orElseThrow(), GEMV_D, critical),
-				handle(linker, lookup.find("cblas_sgemv").orElseThrow(), GEMV_F, critical));
+				handle(linker, lookup.find("cblas_sgemv").orElseThrow(), GEMV_F, critical),
+				threadQuery(linker, lookup));
+	}
+
+	/**
+	 * Binds the first thread-count query the library exports, or answers {@code null}
+	 * when it exports none -- which is not a failure and is what Accelerate and BLIS do.
+	 * Bound here rather than in the static block so that the shape is recorded for the
+	 * native-image registration test along with the six products.
+	 */
+	private static @Nullable ThreadQuery threadQuery(Linker linker, SymbolLookup lookup) {
+		for (String[] query : THREAD_QUERIES) {
+			MemorySegment symbol = lookup.find(query[0]).orElse(null);
+			if (symbol != null) {
+				return new ThreadQuery(handle(linker, symbol, THREAD_COUNT), query[1], query[2]);
+			}
+		}
+		return null;
 	}
 
 	private static MethodHandle handle(Linker linker, MemorySegment symbol, FunctionDescriptor descriptor,
@@ -283,6 +396,52 @@ final class LinalgBlasKernels {
 		return n * m * p >= MIN_WORK;
 	}
 
+	/** How many threads the bound library reported, or 0 when it would not say. */
+	static int threads() {
+		return THREADS;
+	}
+
+	/**
+	 * Counts one intercepted product against the thread barrier and answers the one-time
+	 * note it earns, or {@code null} -- which is the answer for every product on a
+	 * library that is capped, that exports no thread query, or that has already been
+	 * reported, and for every product big enough to pay for its own barrier.
+	 *
+	 * <p>
+	 * Everything it decides on is a PARAMETER, the running count included, so the policy
+	 * is exercised on a machine with no CBLAS at all: what earns the note is the shape of
+	 * the program, and no machine the tests run on can be relied on to have that shape.
+	 * The counter and the once-only flag stay at the call site, in {@link #note}.
+	 * @param threads what the library said it would use
+	 * @param flops the work of this one product, {@code 2 * n * m * p}
+	 * @param shortProducts short products seen so far, this one included
+	 * @param library the library's name, for the message
+	 * @param variable the environment variable that caps it, for the message
+	 * @return the note to print, or {@code null}
+	 */
+	static @Nullable String barrierNote(int threads, long flops, int shortProducts, String library, String variable) {
+		if (threads <= 1 || flops > BARRIER_WORK || shortProducts != BARRIER_CALLS) {
+			return null;
+		}
+		return "rontolisp: warning: --blas: " + BARRIER_CALLS + " matrix products too small to pay for " + library
+				+ "'s per-call thread barrier, with the library set to " + threads
+				+ " threads. A loop of small products -- an LLM decode is one -- can run several times SLOWER"
+				+ " threaded than capped; set " + variable
+				+ "=1 for this program. A large product wants those threads, so the count is left to you.";
+	}
+
+	/** {@link #barrierNote} over the bound library, printed once to standard error. */
+	private static void note(long flops) {
+		if (THREADS <= 1 || flops > BARRIER_WORK || barrierReported) {
+			return;
+		}
+		String note = barrierNote(THREADS, flops, SHORT_PRODUCTS.incrementAndGet(), THREAD_LIBRARY, THREAD_VARIABLE);
+		if (note != null) {
+			barrierReported = true;
+			System.err.println(note);
+		}
+	}
+
 	// --- the products -----------------------------------------------------------------
 
 	/**
@@ -293,6 +452,7 @@ final class LinalgBlasKernels {
 	 */
 	static void gemm(double[] a, int oa, double[] b, int ob, double[] c, int oc, int n, int m, int p) {
 		MethodHandle handle = java.util.Objects.requireNonNull(DGEMM);
+		note(2L * n * m * p);
 		try {
 			if (2L * n * m * p <= CRITICAL_FLOP_CEILING) {
 				handle.invokeExact(ROW_MAJOR, NO_TRANS, NO_TRANS, n, p, m, 1.0, slice(a, oa), m, slice(b, ob), p, 0.0,
@@ -316,6 +476,7 @@ final class LinalgBlasKernels {
 	/** The single-float sibling of {@link #gemm}. */
 	static void gemmF(float[] a, int oa, float[] b, int ob, float[] c, int oc, int n, int m, int p) {
 		MethodHandle handle = java.util.Objects.requireNonNull(SGEMM);
+		note(2L * n * m * p);
 		try {
 			if (2L * n * m * p <= CRITICAL_FLOP_CEILING) {
 				handle.invokeExact(ROW_MAJOR, NO_TRANS, NO_TRANS, n, p, m, 1.0f, slice(a, oa), m, slice(b, ob), p, 0.0f,
@@ -346,6 +507,7 @@ final class LinalgBlasKernels {
 		// Hoisted rather than written inline: a conditional in an invokeExact argument
 		// list crashes the build's NullAway generics check.
 		int trans = transposed ? TRANS : NO_TRANS;
+		note(2L * rows * cols);
 		try {
 			java.util.Objects.requireNonNull(DGEMV)
 				.invokeExact(ROW_MAJOR, trans, rows, cols, 1.0, slice(a, oa), cols, slice(x, ox), 1, 0.0, slice(y, oy),
@@ -359,6 +521,7 @@ final class LinalgBlasKernels {
 	/** The single-float sibling of {@link #gemv}. */
 	static void gemvF(float[] a, int oa, int rows, int cols, float[] x, int ox, float[] y, int oy, boolean transposed) {
 		int trans = transposed ? TRANS : NO_TRANS;
+		note(2L * rows * cols);
 		try {
 			java.util.Objects.requireNonNull(SGEMV)
 				.invokeExact(ROW_MAJOR, trans, rows, cols, 1.0f, slice(a, oa), cols, slice(x, ox), 1, 0.0f,

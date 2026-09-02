@@ -60,6 +60,34 @@ class LinalgBlasDeclineTest {
 	}
 
 	@Test
+	void theThreadBarrierNoteIsEarnedByTheProgramShapeAndNotByTheFlag() {
+		// A threaded library is right for a large product (measured 6.2x on a 2.1 Gflop
+		// gemm) and wrong for a loop of small ones (6.8x the other way on a 166 Kflop
+		// gemv), so nothing about the flag or the machine decides this -- the calls do.
+		String library = "OpenBLAS", variable = "OPENBLAS_NUM_THREADS";
+		// Capped, and a library that will not say: today's silence, forever.
+		assertThat(LinalgBlasKernels.barrierNote(1, 1024, 64, library, variable)).isNull();
+		assertThat(LinalgBlasKernels.barrierNote(0, 1024, 64, library, variable)).isNull();
+		// A product big enough to pay for its own barrier is not counted and not warned
+		// about, however many of them there are.
+		assertThat(LinalgBlasKernels.barrierNote(64, 1L << 30, 64, library, variable)).isNull();
+		// A handful of short products is not a loop.
+		assertThat(LinalgBlasKernels.barrierNote(64, 1024, 63, library, variable)).isNull();
+		assertThat(LinalgBlasKernels.barrierNote(64, 1024, 64, library, variable)).contains(library, "64 threads",
+				variable + "=1");
+		// Said once: the 65th short product earns nothing, so a decode loop of thousands
+		// prints one line.
+		assertThat(LinalgBlasKernels.barrierNote(64, 1024, 65, library, variable)).isNull();
+	}
+
+	@Test
+	void theThreadCountIsAskedForOnceAndIsNeverNegative() {
+		// 0 on a machine with no library and on a tuned one that exports no query
+		// (Accelerate, BLIS), which is the case that must stay silent.
+		assertThat(LinalgBlasKernels.threads()).isNotNegative();
+	}
+
+	@Test
 	void theVecGemvRunsTheSameProgramToTheSameOutputWithOrWithoutALibrary() {
 		// Exact integers, so a machine WITH a tuned library lands on the same bits the
 		// scalar defun produces and a machine without one runs that defun.
