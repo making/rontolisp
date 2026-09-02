@@ -53,6 +53,23 @@ class FfiTypeTest {
 	}
 
 	@Test
+	void aNestedStructIsSplicedIntoTheLayoutFlat() {
+		// {{double, double}, {double, double}} is laid out as four doubles: same
+		// offsets, same size, and ONE shape in the native image's grid rather than a
+		// nesting of its own (both ABIs classify an aggregate by flattening it).
+		FfiType.Struct pair = new FfiType.Struct(List.of(FfiType.Scalar.DOUBLE, FfiType.Scalar.DOUBLE));
+		FfiType.Struct rect = new FfiType.Struct(List.of(pair, pair));
+		assertThat(rect.size()).isEqualTo(32);
+		assertThat(rect.align()).isEqualTo(8);
+		assertThat(FfiRuntime.metadataType(rect.layout())).isEqualTo("struct(jdouble,jdouble,jdouble,jdouble)");
+		// The padding a nested member needs is still exactly C's: {char, {char, int}}
+		// is char, 3 bytes of padding, char, 3 bytes of padding, int.
+		FfiType.Struct charInt = new FfiType.Struct(List.of(FfiType.Scalar.INT8, FfiType.Scalar.INT32));
+		assertThat(FfiRuntime.metadataType(new FfiType.Struct(List.of(FfiType.Scalar.INT8, charInt)).layout()))
+			.isEqualTo("struct(jbyte,padding(3),jbyte,padding(3),jint)");
+	}
+
+	@Test
 	void aStructRefusesTheMembersThatCannotLiveInOne() {
 		assertThatThrownBy(() -> new FfiType.Struct(List.of())).isInstanceOf(FfiException.class)
 			.hasMessageContaining("at least one member");

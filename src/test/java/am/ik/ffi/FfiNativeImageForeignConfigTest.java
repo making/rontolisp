@@ -4,6 +4,7 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -35,13 +36,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code jdouble}, {@code jfloat}),</li>
  * </ul>
  * plus the two capture-free shapes the runtime's own constructor binds ({@code malloc}
- * and {@code free}). Upcalls: {@code void*}/{@code jlong} arguments at arity 0-4 and
- * {@code void*}/{@code jlong}/{@code jdouble} at arity 1-2, at the return carriers
- * {@code void}/{@code jlong}/{@code void*}/{@code jdouble}. A shape outside the grid -- a
- * seventh-plus integer argument left narrow, a variadic call, a struct by value --
- * SIGNALS in the binary with the one metadata entry that would register it (see
- * {@code FfiRuntime.downcall}); the JVM registers nothing ahead of time and binds any
- * shape.
+ * and {@code free}), plus the {@linkplain #structReturnGrid() by-value struct-RETURN
+ * family} (a struct's members are part of its shape, so that family is bounded by member
+ * count rather than collapsed by carriers). Upcalls: {@code void*}/{@code jlong}
+ * arguments at arity 0-4 and {@code void*}/{@code jlong}/{@code jdouble} at arity 1-2, at
+ * the return carriers {@code void}/{@code jlong}/{@code void*}/{@code jdouble} (a
+ * callback can neither take nor answer a struct, so the family has no upcall half). A
+ * shape outside the grid -- a seventh-plus integer argument left narrow, a variadic call,
+ * a struct ARGUMENT, a struct return past the family's bounds -- SIGNALS in the binary
+ * with the one metadata entry that would register it (see {@code FfiRuntime.downcall});
+ * the JVM registers nothing ahead of time and binds any shape.
  *
  * <p>
  * The grid entries in {@code reachability-metadata.json} are generated from these same
@@ -82,6 +86,85 @@ class FfiNativeImageForeignConfigTest {
 		addCombinations(grid, THREE, 1, 4, DOWNCALL_RETURNS);
 		addCombinations(grid, FOUR, 1, 2, DOWNCALL_RETURNS);
 		return grid;
+	}
+
+	/**
+	 * The member layouts a by-value struct can be built from, in generation order. A
+	 * member is NOT canonicalised -- its width and offset are part of the layout -- so
+	 * the alphabet is every layout {@link FfiType} can put in a struct.
+	 */
+	private static final List<FfiType> MEMBERS = List.of(FfiType.Scalar.INT8, FfiType.Scalar.INT16,
+			FfiType.Scalar.INT32, FfiType.Scalar.INT64, FfiType.Scalar.FLOAT, FfiType.Scalar.DOUBLE,
+			FfiType.Scalar.POINTER);
+
+	/** The parameter carriers the struct-return family is crossed with, by arity. */
+	private static final List<FfiType> STRUCT_PARAMS_FOUR = List.of(FfiType.Scalar.POINTER, FfiType.Scalar.INT64,
+			FfiType.Scalar.DOUBLE, FfiType.Scalar.FLOAT);
+
+	private static final List<FfiType> STRUCT_PARAMS_TWO = List.of(FfiType.Scalar.POINTER, FfiType.Scalar.INT64);
+
+	/**
+	 * The by-value struct-RETURN sub-grid, in generation order: the member sequences of
+	 * length 1-2 over every member layout, plus the homogeneous ones of length 3-4 (70
+	 * return shapes), crossed with the parameter tuples of all four carriers at arity 0-2
+	 * and of {@code void*}/{@code jlong} at arity 3-4 (45 tuples).
+	 *
+	 * <p>
+	 * It is affordable because a registered shape is not a compiled stub of its own --
+	 * the granularity is the ABI-LOWERED signature, and many descriptors lower the same
+	 * way. Measured 2026-09-02 (GraalVM 25.0.4, Linux x86-64): these 3,150 entries moved
+	 * the image by 80 methods and ~30 KB of code area, and the binary size (80,808,200
+	 * bytes) and build time (1m 23s) not at all. What bounds the family is the checked-in
+	 * file -- 444 KB of JSON -- not the image. It is enumerated by MEMBERS rather than by
+	 * ABI class for the same reason the carriers are not widened here: the lowering is
+	 * the platform's, and SysV and AAPCS64 do not agree on it.
+	 */
+	static Set<FunctionDescriptor> structReturnGrid() {
+		List<FfiType> returns = new ArrayList<>();
+		for (FfiType member : MEMBERS) {
+			returns.add(new FfiType.Struct(List.of(member)));
+		}
+		for (FfiType first : MEMBERS) {
+			for (FfiType second : MEMBERS) {
+				returns.add(new FfiType.Struct(List.of(first, second)));
+			}
+		}
+		for (int length = 3; length <= 4; length++) {
+			for (FfiType member : MEMBERS) {
+				returns.add(new FfiType.Struct(Collections.nCopies(length, member)));
+			}
+		}
+		List<List<FfiType>> parameters = new ArrayList<>();
+		for (int arity = 0; arity <= 2; arity++) {
+			parameters.addAll(typeCombinations(STRUCT_PARAMS_FOUR, arity));
+		}
+		for (int arity = 3; arity <= 4; arity++) {
+			parameters.addAll(typeCombinations(STRUCT_PARAMS_TWO, arity));
+		}
+		Set<FunctionDescriptor> grid = new LinkedHashSet<>();
+		for (FfiType ret : returns) {
+			for (List<FfiType> arguments : parameters) {
+				grid.add(FfiRuntime.descriptorFor(ret, arguments, -1));
+			}
+		}
+		return grid;
+	}
+
+	private static List<List<FfiType>> typeCombinations(List<FfiType> carriers, int arity) {
+		List<List<FfiType>> all = new ArrayList<>();
+		all.add(List.of());
+		for (int i = 0; i < arity; i++) {
+			List<List<FfiType>> next = new ArrayList<>();
+			for (List<FfiType> prefix : all) {
+				for (FfiType carrier : carriers) {
+					List<FfiType> extended = new ArrayList<>(prefix);
+					extended.add(carrier);
+					next.add(extended);
+				}
+			}
+			all = next;
+		}
+		return all;
 	}
 
 	/** The upcall grid, in generation order. */
@@ -127,6 +210,30 @@ class FfiNativeImageForeignConfigTest {
 			.as("canonical downcall shapes with no captureCallState entry in the native-image metadata -- the "
 					+ "binary refuses to bind them, so a cffi: binding that works on java -jar signals there")
 			.isEmpty();
+	}
+
+	@Test
+	void everyStructReturnGridShapeIsRegisteredWithCaptureCallState() {
+		assertThat(NativeImageDowncalls.missingCaptured(structReturnGrid()))
+			.as("by-value struct RETURN shapes with no captureCallState entry in the native-image metadata -- "
+					+ "a cffi:defcfun returning one of them works on java -jar and signals in the binary")
+			.isEmpty();
+	}
+
+	@Test
+	void theGuidesOwnByValueStructExampleIsInsideTheGrid() {
+		// doc/{en,ja}/guides/cffi.md's "Structures, including by value":
+		// (cffi:defcfun ("div" c-div) (:struct div-t) (numer :int) (denom :int)).
+		FfiType.Struct divT = new FfiType.Struct(List.of(FfiType.Scalar.INT32, FfiType.Scalar.INT32));
+		FunctionDescriptor div = FfiRuntime.descriptorFor(divT, List.of(FfiType.Scalar.INT32, FfiType.Scalar.INT32),
+				-1);
+		assertThat(NativeImageDowncalls.missingCaptured(Set.of(div))).isEmpty();
+		// ... and so is a nested {CGPoint, CGSize}, which the flat layout makes the
+		// four-double shape rather than a nesting of its own.
+		FfiType.Struct pair = new FfiType.Struct(List.of(FfiType.Scalar.DOUBLE, FfiType.Scalar.DOUBLE));
+		FunctionDescriptor rect = FfiRuntime.descriptorFor(new FfiType.Struct(List.of(pair, pair)),
+				List.of(FfiType.Scalar.POINTER), -1);
+		assertThat(NativeImageDowncalls.missingCaptured(Set.of(rect))).isEmpty();
 	}
 
 	@Test
@@ -214,11 +321,38 @@ class FfiNativeImageForeignConfigTest {
 		FunctionDescriptor variadic = FfiRuntime.descriptorFor(FfiType.Scalar.INT32, snprintf, 3);
 		assertThat(variadic.argumentLayouts().get(3)).isInstanceOf(ValueLayout.OfInt.class);
 		assertThat(variadic.returnLayout().orElseThrow()).isInstanceOf(ValueLayout.OfInt.class);
-		// div: (:int) (:struct :int32 :int32) -- the member list is part of the shape.
+		// div: (:int :int) (:struct :int32 :int32) -- the RETURN keeps its exact member
+		// list, which is part of the shape, but the arguments still canonicalise (an
+		// indirect struct return travels in a register of its own), so div, ldiv and
+		// imaxdiv are one entry rather than three.
 		FfiType.Struct divT = new FfiType.Struct(List.of(FfiType.Scalar.INT32, FfiType.Scalar.INT32));
-		assertThat(FfiRuntime.canonicalisable(divT, List.of(FfiType.Scalar.INT32), -1)).isFalse();
-		FunctionDescriptor struct = FfiRuntime.descriptorFor(divT, List.of(FfiType.Scalar.INT32), -1);
-		assertThat(struct.argumentLayouts().get(0)).isInstanceOf(ValueLayout.OfInt.class);
+		List<FfiType> twoInts = List.of(FfiType.Scalar.INT32, FfiType.Scalar.INT32);
+		assertThat(FfiRuntime.canonicalisable(divT, twoInts, -1)).isFalse();
+		assertThat(FfiRuntime.argumentsCanonicalisable(twoInts, -1)).isTrue();
+		FunctionDescriptor struct = FfiRuntime.descriptorFor(divT, twoInts, -1);
+		assertThat(struct.argumentLayouts()).allMatch(layout -> layout instanceof ValueLayout.OfLong);
+		assertThat(FfiRuntime.metadataType(struct.returnLayout().orElseThrow())).isEqualTo("struct(jint,jint)");
+		// A by-value struct ARGUMENT is the case that stays outside: it eats an
+		// ABI-defined number of register-class slots, so the register window cannot be
+		// counted past one.
+		assertThat(FfiRuntime.argumentsCanonicalisable(List.of(FfiType.Scalar.INT32, divT), -1)).isFalse();
+		assertThat(FfiRuntime.descriptorFor(FfiType.Scalar.INT32, List.of(FfiType.Scalar.INT32, divT), -1)
+			.argumentLayouts()
+			.get(0)).isInstanceOf(ValueLayout.OfInt.class);
+	}
+
+	@Test
+	void aStructsMetadataSpellingCarriesItsPadding() {
+		// The image builder rebuilds the layout with MemoryLayout.structLayout, which
+		// REFUSES a member that does not sit at its own alignment: a padding-free
+		// "struct(jbyte,jint)" aborts the build ("Invalid alignment constraint for
+		// member layout: i4") instead of registering the shape. So the spelling the
+		// miss message hands the user -- and the spelling this file is generated in --
+		// has to carry the padding.
+		FfiType.Struct padded = new FfiType.Struct(List.of(FfiType.Scalar.INT8, FfiType.Scalar.INT32));
+		assertThat(FfiRuntime.metadataType(padded.layout())).isEqualTo("struct(jbyte,padding(3),jint)");
+		FfiType.Struct tailPadded = new FfiType.Struct(List.of(FfiType.Scalar.INT32, FfiType.Scalar.INT8));
+		assertThat(FfiRuntime.metadataType(tailPadded.layout())).isEqualTo("struct(jint,jbyte,padding(3))");
 	}
 
 }
