@@ -6,7 +6,7 @@ Three `#` forms are permanent exceptions, because they need an evaluator or the 
 
 A `#S(...)` datum resolves against the structure types the compiled program defines; a slot the datum omits takes its `nil` initform, a simple constant initform (numbers, strings, characters, symbols, quoted lists, nested literals) is re-read from its baked printed form, and an initform outside that set signals rather than silently substituting a wrong value.
 
-In every backend `read` parses one S-expression from a line of stdin: blank and comment-only lines are skipped (it keeps reading until a line contains a datum), EOF returns `nil`, and a form must fit on a single line.
+In every backend `read` consumes exactly the characters of one S-expression and leaves the stream positioned after them: whitespace and comments before the datum are skipped, a datum may span lines, a second datum on the same line survives, and EOF returns the `eof-value` (`nil` by default). It is written in rontolisp over `read-char` / `unread-char` / `read-from-string`, so the syntax it accepts is exactly `read-from-string`'s on that backend -- including the exceptions listed above and the backquote note below.
 
 The WASM reader has a hand-written parser and is narrower in its NUMBERS and its error MESSAGES:
 

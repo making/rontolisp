@@ -4560,7 +4560,14 @@ public final class WasmLispCompiler implements LispCompiler {
 						closRegistry, layoutAddresses);
 				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(readCtx);
 				readListBody = WasmReadRuntimeBuilder.buildReadListBody(readCtx);
-				readBody = WasmReadRuntimeBuilder.buildReadBody(readCtx);
+				// FUNC_READ is a RETIRED index: read is prelude rontolisp over read-char
+				// /
+				// unread-char now (todo-624), so nothing calls the native
+				// one-datum-per-line
+				// helper any more. The index keeps its slot with the unused stub because
+				// removing a function would shift every later index and change the
+				// component blobs.
+				readBody = WasmReadRuntimeBuilder.buildReadStub();
 				loadBody = WasmReadRuntimeBuilder.buildLoadBody(readCtx);
 				rdCharlitBody = WasmReadRuntimeBuilder.buildRdCharlitBody(readCtx);
 				rdRadixBody = WasmReadRuntimeBuilder.buildRdRadixBody(readCtx);

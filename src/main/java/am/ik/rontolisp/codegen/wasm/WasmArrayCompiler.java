@@ -1278,6 +1278,21 @@ final class WasmArrayCompiler {
 		// header's car) in a temp; the cons-list build below is shared.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		// An immutable string carries no header at all, but it IS a rank-1 character
+		// array: its dimensions are its length in code points. Every other shape reader
+		// -- array-rank, array-dimension, array-total-size, array-row-major-index --
+		// expands through array-dimensions, so this one arm is what lets all of them
+		// accept a string, as the interpreter's do.
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		emitIfEq(ctx);
+		getLocal(ctx, arrSlot);
+		WasmEmitHelper.emitStrCharCountCall(ctx);
+		boxI31(ctx);
+		i32Const(ctx, 1);
+		arrayNew(ctx);
+		ctx.writer.write(Instruction.ELSE);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
 		farrayField(ctx, arrSlot, 0);
@@ -1294,6 +1309,7 @@ final class WasmArrayCompiler {
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
 		castConsGet(ctx, 0);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		int dimsSlot = setTemp(ctx);
@@ -2120,12 +2136,113 @@ final class WasmArrayCompiler {
 		getLocal(ctx, oldCellSlot);
 	}
 
+	static void compileArrayAdoptElementType(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (%array-adopt-element-type new old): make the freshly built general array new
+		// remember what old remembers, and answer new. adjust-array does not change an
+		// array's element type, and a NON-adjustable adjustment answers a fresh array,
+		// so the copy takes the original's stamp.
+		//
+		// The stamp IS the meta marker word, so this copies that word rather than
+		// decoding it: no per-code arm, and therefore nothing for the per-width
+		// Ctx.typedArrayCodes gate to predict -- the marker being copied was written by
+		// a make-array the same program already contains. Writing a 0 marker onto a
+		// fresh array is what it already holds, so the copy is unconditional (the write
+		// is one struct.set; a guard would cost more than it saves).
+		requireArgs(cons, 3, "%array-adopt-element-type expects 2 arguments");
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int newSlot = setTemp(ctx);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		int oldSlot = setTemp(ctx);
+		getLocal(ctx, newSlot);
+		castCellGet0(ctx);
+		getMeta(ctx);
+		castConsGet(ctx, 1);
+		castCons(ctx);
+		emitRememberedMarker(ctx, oldSlot);
+		boxI31(ctx);
+		structSetCons(ctx, 1);
+		getLocal(ctx, newSlot);
+	}
+
+	/**
+	 * Pushes the meta MARKER word the array in {@code arrSlot} carries as an i32, or 0
+	 * when it remembers nothing.
+	 *
+	 * <p>
+	 * Two arms, because {@code adjust-array} -- the only caller -- accepts two shapes: a
+	 * STRING (an immutable one or the mutable character vector, both marker 1, the one
+	 * marker no {@code make-array} scan can predict) and a general array cell, whose word
+	 * is read back verbatim. The guards are {@link #emitRememberedElementType}'s: the
+	 * header cons whose car is the dims buckets is what tells an array from a hash table,
+	 * and a DISPLACED array's word is a real offset rather than a type, so it remembers
+	 * nothing. A packed vector reaches here from no caller -- {@code adjust-array}
+	 * rejects a packed integer vector outright -- and answers 0.
+	 */
+	private static void emitRememberedMarker(WasmLispCompiler.Ctx ctx, int arrSlot) {
+		WasmStringpCompiler.emitStringpI32(ctx, arrSlot);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		// The mutable character vector's marker: rank 1 of the character element type.
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		getLocal(ctx, arrSlot);
+		castCellGet0(ctx);
+		int headerSlot = setTemp(ctx);
+		getLocal(ctx, headerSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		int dataSlot = setTemp(ctx);
+		emitDataSlotIsTarget(ctx, dataSlot);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, headerSlot);
+		getMeta(ctx);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+	}
+
 	static void compileDispTarget(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// (%array-disp-target array): the displaced-to target cell (the data slot when
-		// it is a cell), or nil.
+		// it is a cell), or nil. An immutable string owns its characters and carries no
+		// header at all -- a string VIEW is a cell, not a TYPE_STRING -- so it answers
+		// nil without reaching the cell cast.
 		requireArgs(cons, 2, "%array-disp-target expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int dtSlot = setTemp(ctx);
+		getLocal(ctx, dtSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		emitIfEq(ctx);
+		refNull(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, dtSlot);
 		castCellGet0(ctx);
 		castConsGet(ctx, 1);
 		castConsGet(ctx, 1);
@@ -2136,6 +2253,7 @@ final class WasmArrayCompiler {
 		getLocal(ctx, dataSlot);
 		ctx.writer.write(Instruction.ELSE);
 		refNull(ctx);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -2160,6 +2278,15 @@ final class WasmArrayCompiler {
 		requireArgs(cons, 2, "%array-disp-offset expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int doSlot = setTemp(ctx);
+		getLocal(ctx, doSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		emitIfEq(ctx);
+		i32Const(ctx, 0);
+		boxI31(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, doSlot);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		getLocal(ctx, headerSlot);
@@ -2176,6 +2303,7 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.ELSE);
 		i32Const(ctx, 0);
 		boxI31(ctx);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 

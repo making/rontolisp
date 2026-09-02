@@ -1287,7 +1287,6 @@ final class WasmExprCompiler {
 					WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
 					WasmEmitHelper.emitToMutStrCall(ctx);
 				}
-				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
 				case LispNames.LOAD -> WasmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
 				// A literal top-level require/provide (and the asdf directives) was
 				// consumed by the compile-time LoadInliner pass; anything left is nested
@@ -1555,6 +1554,7 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx);
 				case LispNames.ARRAY_BECOME -> WasmArrayCompiler.compileArrayBecome(cons, ctx);
 				case LispNames.ARRAY_DEFAULT_ELEMENT -> WasmArrayCompiler.compileArrayDefaultElement(cons, ctx);
+				case LispNames.ARRAY_ADOPT_ELEMENT_TYPE -> WasmArrayCompiler.compileArrayAdoptElementType(cons, ctx);
 				case LispNames.ARRAY_ALIKE -> WasmArrayCompiler.compileArrayAlike(cons, ctx);
 				case LispNames.ARRAY_DISPLACEMENT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx);

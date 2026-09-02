@@ -1263,6 +1263,8 @@ final class JvmExprCompiler {
 				case LispNames.ARRAY_BECOME -> JvmArrayCompiler.compileArrayBecome(cons, ctx, className);
 				case LispNames.ARRAY_DEFAULT_ELEMENT ->
 					JvmArrayCompiler.compileArrayDefaultElement(cons, ctx, className);
+				case LispNames.ARRAY_ADOPT_ELEMENT_TYPE ->
+					JvmArrayCompiler.compileArrayAdoptElementType(cons, ctx, className);
 				case LispNames.ARRAY_ALIKE -> {
 					// The type-preserving allocator (_ivAlike) when the program can
 					// build a packed integer vector; otherwise every array is general
@@ -1296,7 +1298,6 @@ final class JvmExprCompiler {
 						ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
-				case LispNames.READ -> JvmReadCompiler.compile(cons, ctx, className);
 				case LispNames.LOAD -> JvmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
 				// A literal top-level require/provide (and the asdf directives) was
 				// consumed by the compile-time LoadInliner pass; anything left is nested
