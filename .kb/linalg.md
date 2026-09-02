@@ -104,10 +104,11 @@ these three loops were a sixth of a `--gpu --simd` training step as boxed
 `row-major-aref` walks in `torch.lisp` (`.kb/gpu.md`). Nothing in the numpy surface
 reaches them; `.kb/linalg-simd.md` has the kernels.
 
-## Eleven more internal members: the fused compositions (todo-499, todo-629, todo-641, todo-634, 2026-09-02)
+## Twelve more internal members: the fused compositions (todo-499, todo-629, todo-641, todo-634, todo-644, 2026-09-02)
 
 `%la-softmax-grad (g out ax)`, `%la-log-softmax-grad (g out ax)`, `%la-gelu (x)`,
 `%la-gelu-grad (g x old)`, `%la-layer-norm (x eps)`, `%la-layer-norm-grad (g x eps old)`,
+`%la-layer-norm-grad-norm (g x eps old)`,
 `%la-dropout-mask (shape p st single)`, `%la-scaled-masked-softmax (x scale mask fill ax)`,
 `%la-scaled-masked-softmax-grad (g out ax scale mask)`,
 `%la-layer-norm-affine (x w b eps)` and `%la-layer-norm-affine-grad (g x w eps old)`
@@ -124,26 +125,47 @@ compositions"). `%la-dropout-mask` advances its state vector `st` IN PLACE to th
 the fill ends on, and the caller restores the specials from it; the width rides as the
 `single` flag, like `%la-gather-strided`'s. Nothing in the numpy surface reaches them.
 
-**`%la-layer-norm-affine-grad` is the one member in `linalg:` that answers TWO arrays, as a
-two-element LIST** (todo-634): `(dx gn)`, the input's gradient and `g * norm`, whose
-broadcast folds are the weight's gradient. It is a list rather than a new call shape
-deliberately -- an extra RESULT is not an extra argument, so the member's arity is five and
-every seam that carries a five-argument member carries this one unchanged: the
-interpreter's `define`, the JVM backend's `LinalgKernelCallLayout` (a BASE call shape, like
-every other fused member -- only the option forms need a layout), and the compiled cons
-(`Object[]{dx, Object[]{gn, null}}`, which is what the bridge builds). The reason there are
-two is that the fused forward's output is `norm * w + b`, so `norm` is not stored anywhere
-any more -- and the adjoint's own pass recomputes the row statistics regardless, so it has
-the deviation and the standard deviation `norm` is made of already.
+**`%la-layer-norm-affine-grad` and `%la-layer-norm-grad-norm` are the two members in
+`linalg:` that answer TWO arrays, as a two-element LIST.** `%la-layer-norm-affine-grad`
+(todo-634) answers `(dx gn)`, the input's gradient and `g * norm`, whose broadcast folds
+are the weight's gradient. It is a list rather than a new call shape deliberately -- an
+extra RESULT is not an extra argument, so the member's arity is five and every seam that
+carries a five-argument member carries this one unchanged: the interpreter's `define`, the
+JVM backend's `LinalgKernelCallLayout` (a BASE call shape, like every other fused member --
+only the option forms need a layout), and the compiled cons (`Object[]{dx,
+Object[]{gn, null}}`, which is what the bridge builds). The reason there are two is that
+the fused forward's output is `norm * w + b`, so `norm` is not stored anywhere any more --
+and the adjoint's own pass recomputes the row statistics regardless, so it has the
+deviation and the standard deviation `norm` is made of already.
 
-**The CPU pays for that recompute, and the forward does not.** The defun is the chain
-member for member either way, so the forward is exactly what it was; the backward calls
-`%la-layer-norm` once more than the tape did, because the tape used to hold `norm` as a
-node. Measured `--simd` at `#f` and `(2048 384)`: forward 7.4 -> 6.8 ms (the same three
-members), backward 15.6 -> 20.0 ms, **+28% on layer-norm's backward and nothing else**
-(2026-09-02). On a device that recompute is free and the fold removes four whole passes
-over the activation, which is the trade the member exists for (`.kb/gpu.md`, "Layer-norm's
-affine").
+**The CPU no longer pays for that recompute (todo-644).** `%la-layer-norm-grad-norm (g x
+eps old)` is `%la-layer-norm-grad`'s own chain plus a second return, `norm` --
+`(linalg:div dev sd)`, the SAME expression `%la-layer-norm` ends in, read off the `dev` and
+`sd` this pass already holds rather than rebuilt by a second call. `%la-layer-norm-affine-grad`
+calls it once and takes `(car r)` for `dx`, `(car (cdr r))` for `norm` to multiply by `g` --
+same member boundary, same bits, one extra elementwise divide traded for the whole
+`%la-layer-norm` recompute (a reduction, a broadcast subtract, a square, a reduction sum
+and a broadcast divide). `%la-layer-norm-grad` itself is untouched, since
+`torch::%m-layer-norm-forward`'s non-affine branch (a scalar input, or a weight/bias of any
+other shape) still calls it alone and has no `norm` to hand back.
+
+Measured `--simd` at `#f` and `(2048 384)`: forward is unaffected by either change, 7.4 ms
+originally (before todo-634) -> 6.8 ms fused. The backward went 15.6 -> 20.0 ms (+28%) when
+todo-634 fused the affine and started recomputing `norm`; an in-process A/B of the fused
+adjoint against a `%la-layer-norm-grad-norm`-free copy of itself, on this machine
+(2026-09-02, 500 iterations after 100 warmup calls, order-reversed to rule out JIT-warmup
+bias), measured the recompute copy at 18.3-18.7 ms and the one-pass version at 15.9-16.4
+ms -- **back to about the pre-todo-634 15.6 ms**, the seven-pass recompute traded for the
+one extra divide `%la-layer-norm-grad-norm` already had the ingredients for. The SAME
+recompute copy read 20.0 ms standalone (the original todo-634 measurement, a fresh JVM per
+number) and 18.3-18.7 ms in this in-process A/B (one JVM, both versions warmed up back to
+back) -- different process construction, not a second regression, so the A/B's own
+before/after is the number to trust and 20.0 minus 15.9 is not a real 4.1 ms; the
+standalone-vs-A/B gap is JIT/GC state the two measurement setups do not share. On a device
+that recompute was always free and the fold removes four whole passes over the activation,
+which is the trade the member exists for (`.kb/gpu.md`, "Layer-norm's affine"); `--gpu`
+intercepts `%la-layer-norm-affine-grad` itself, so `%la-layer-norm-grad-norm` has no device
+kernel and is reached only on a decline.
 
 ## Rank-N (todo-459): the stacked matmul, the joins, and one odometer
 

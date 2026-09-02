@@ -532,6 +532,16 @@ public final class Gpu {
 	}
 
 	/**
+	 * The fused tier's threshold actually in force on this machine, in elements: the fold
+	 * threshold on CUDA, the map threshold on Metal ({@code GpuDevice.Thresholds},
+	 * {@code fused}).
+	 * @return the minimum element count a fused row member is offered at
+	 */
+	static long fusedMinElements() {
+		return Probe.FUSED_MIN_ELEMENTS;
+	}
+
+	/**
 	 * The minimum number of output cells a fold needs when its operand has to be copied
 	 * up. Package-private and for the tests; a RESIDENT operand's floor is one warp
 	 * ({@link #FOLD_RESIDENT_MIN_CELLS}).
@@ -650,11 +660,22 @@ public final class Gpu {
 	 * updates in place ({@link #adamStep}, {@link #rngFill}) likewise. That is what lets
 	 * a chain of members {@code matmul -> div -> where -> softmax -> matmul} move nothing
 	 * over the link, and it is the mode the interceptors run in where the device says it
-	 * pays ({@link #lazyResultsIfWorthwhile}: CUDA, not Metal), having enumerated every
-	 * host read ({@code .kb/gpu.md}, "The two seams, and what must report through them").
-	 * Off -- the default, and the contract every method's javadoc states -- a result is
-	 * in its array when the call returns. Switching off brings every lazy result home
-	 * first.
+	 * pays ({@link #lazyResultsIfWorthwhile}: both backends, Metal since todo-495),
+	 * having enumerated every host read ({@code .kb/gpu.md}, "The two seams, and what
+	 * must report through them"). Off -- the default, and the contract every method's
+	 * javadoc states -- a result is in its array when the call returns. Switching off
+	 * brings every lazy result home first.
+	 *
+	 * <p>
+	 * On Metal the mode is also what lets a call return WITHOUT waiting for its command
+	 * buffer: eagerly every call waits, because it must either fill {@code out} or answer
+	 * {@code false}; lazily it commits and returns, and the wait moves to the first host
+	 * touch of the bytes. A command buffer that fails is then learned of after its call
+	 * answered {@code true}, and the failure surfaces at the first host read of a result
+	 * it wrote -- or of any result computed from one -- as the
+	 * {@code IllegalStateException} this mode already reserves for a result the host has
+	 * no other copy of; a result the failed buffer only read is intact
+	 * ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal").
 	 *
 	 * <p>
 	 * Never runs the probe: the wish is recorded and applied to the device the moment it
@@ -680,10 +701,11 @@ public final class Gpu {
 	/**
 	 * Switches lazy results on IF THE DEVICE SAYS THEY PAY
 	 * ({@link GpuDevice#lazyResultsPay}): the interceptors' request, as against
-	 * {@link #lazyResults}, which is unconditional. The two backends measured differently
-	 * -- a fifth off the training step on CUDA, a tie at small shapes and a loss at large
-	 * ones on Metal -- and the measurement lives in the backend, not in the interceptor.
-	 * Never runs the probe; applied when it runs.
+	 * {@link #lazyResults}, which is unconditional. The measurement lives in the backend,
+	 * not in the interceptor: a fifth off the training step on CUDA; on Metal a tie at
+	 * small shapes and a loss at large ones while every call waited for its command
+	 * buffer, and a step at 40% of the eager one since the buffers went asynchronous
+	 * (todo-495). Never runs the probe; applied when it runs.
 	 */
 	public static void lazyResultsIfWorthwhile() {
 		lazyIfWorthwhile = true;

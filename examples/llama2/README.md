@@ -105,8 +105,15 @@ kernel vectorizes a short row (the 48-wide attention head used to run scalar,
 takes the big GEMVs but pays a synchronous download per call, and with the
 spinning worker threads also competing with its driver for the cores the
 combination is the slower of the two -- pick `--simd --parallel` for this
-program. `--blas` does not enter this table: `vec:matvec` is outside its
-intercepted set (`.todo/471`), so the flag does nothing for this program today.
+program. `--blas` entered the intercepted set on 2026-09-02: `vec:matvec` and
+`vec:matvec-into` are a `cblas_?gemv`, so the flag now reaches this program
+(`doc/en/guides/blas-acceleration.md`). It is NOT in the table above because it
+was not measured on this box -- on a 64-core Xeon E5-2697A v4 with OpenBLAS the
+JVM backend decodes stories15M at 102-110 tok/s under `--simd` and 121-124 under
+`--simd --blas` with `OPENBLAS_NUM_THREADS=1`, so about 1.15x, with the story
+byte-identical at 150 tokens. **Leave the thread cap off and it is a rout**: at
+the library's default thread count the same run drops to 16 tok/s, because a
+GEMV is short and memory-bound and the per-call thread barrier swamps it.
 Two caveats that keep the two tables honest: the gist's `-t 0` decode does NOT
 reproduce run.c's story (a different one comes out, so its rows are throughput
 only), while every rontolisp row is byte-identical to `./run stories15M.bin -t 0

@@ -4289,6 +4289,40 @@ cases:
       (ci-aet-string)
     expected: |
       (CHARACTER T (UNSIGNED-BYTE 8))
+  # Every array-info reader answers for a string, in all three representations it has:
+  # the immutable string that carries no header at all, the mutable character vector,
+  # and the displaced string view. array-rank / array-total-size / array-dimension /
+  # array-row-major-index all lower through array-dimensions, so its string arm is what
+  # carries them; array-has-fill-pointer-p and adjustable-array-p read the header only
+  # after a shape test, so a headerless string is NIL rather than a cast trap. The
+  # DIMENSION is the CAPACITY, not length: the fill-pointered character vector below is
+  # (5) with length 2. SBCL 2.2.9 answers this very program identically except the
+  # displaced view's adjustable-array-p -- SBCL says T for any non-simple array, this
+  # reports the :adjustable argument verbatim (.kb/adjustable-arrays.md).
+  - name: string-array-shape-readers-cross-backend
+    source: |
+      (defun ci-string-shape (x)
+        (list (array-dimensions x) (array-rank x) (array-total-size x)
+              (array-dimension x 0) (array-row-major-index x 1) (length x)
+              (array-has-fill-pointer-p x) (adjustable-array-p x)))
+      (defun ci-string-shapes ()
+        (let ((cv (make-array 5 :element-type 'character :fill-pointer 2 :adjustable t
+                                :initial-element #\a))
+              (adj (make-array 3 :element-type 'character :adjustable t :initial-element #\b))
+              (view (make-array 3 :element-type 'character :displaced-to "hello"
+                                  :displaced-index-offset 1)))
+          (print (ci-string-shape "abc"))
+          (print (ci-string-shape (make-string 4 :initial-element #\c)))
+          (print (ci-string-shape cv))
+          (print (ci-string-shape adj))
+          (print (ci-string-shape view))))
+      (ci-string-shapes)
+    expected: |
+      ((3) 1 3 3 1 3 NIL NIL)
+      ((4) 1 4 4 1 4 NIL NIL)
+      ((5) 1 5 5 1 2 T T)
+      ((3) 1 3 3 1 3 NIL T)
+      ((3) 1 3 3 1 3 NIL NIL)
   - name: adjust-displaced-arrays-cross-backend
     source: |
       (defun ci-adjust-displaced ()

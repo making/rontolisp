@@ -204,6 +204,70 @@ final class JvmBlasTemplate {
 		return null;
 	}
 
+	/**
+	 * {@code (vec:matvec w x)} over the packed representation: a rank-2 matrix by a
+	 * rank-1 vector of the same width, answered as a fresh rank-1 array. The {@code vec:}
+	 * sibling of {@link #blasDot}'s matrix-by-vector case, and PARTIAL for the same
+	 * reasons -- but over a call site whose lower rungs are TOTAL, so a decline here is
+	 * not "run the library instead", it is "run the lane kernel or the scalar defun,
+	 * which will produce the answer or the error".
+	 */
+	static @Nullable Object blasMatvec(@Nullable Object w, @Nullable Object x) {
+		if (!vecShape(w, x)) {
+			return null;
+		}
+		int rows = dim(w, 0);
+		int cols = dim(w, 1);
+		if (w instanceof float[]) {
+			float[] y = newVecF(rows);
+			gemvF(floats(w), 3, rows, cols, floats(x), 2, y, 2, false);
+			return y;
+		}
+		double[] y = newVec(rows);
+		gemv(doubles(w), 3, rows, cols, doubles(x), 2, y, 2, false);
+		return y;
+	}
+
+	/**
+	 * {@code (vec:matvec-into out w x)}: the same product written into a caller-supplied
+	 * destination, which is what {@code cblas_?gemv} does natively -- so this form drops
+	 * the result allocation as well as the loop, and answers {@code out} itself. An
+	 * {@code out} that shares storage with {@code w} or {@code x} declines: each output
+	 * element folds over all of {@code x}, and the lower rung signals that for us.
+	 */
+	static @Nullable Object blasMatvecInto(@Nullable Object out, @Nullable Object w, @Nullable Object x) {
+		if (!vecShape(w, x) || !packed(out) || (out instanceof float[]) != (w instanceof float[]) || rank(out) != 1) {
+			return null;
+		}
+		int rows = dim(w, 0);
+		int cols = dim(w, 1);
+		if (dim(out, 0) != rows || out == w || out == x) {
+			return null;
+		}
+		if (out instanceof float[] y) {
+			gemvF(floats(w), 3, rows, cols, floats(x), 2, y, 2, false);
+			return y;
+		}
+		double[] y = doubles(out);
+		gemv(doubles(w), 3, rows, cols, doubles(x), 2, y, 2, false);
+		return y;
+	}
+
+	/**
+	 * The operand shape both {@code vec:} entry points require: a packed rank-2 matrix
+	 * and a packed rank-1 vector of the same width whose extent matches, over a library
+	 * that was bound, and big enough to pay for the downcall.
+	 */
+	private static boolean vecShape(@Nullable Object w, @Nullable Object x) {
+		if (DGEMV == null || !packed(w) || !packed(x) || (w instanceof float[]) != (x instanceof float[])
+				|| rank(w) != 2 || rank(x) != 1) {
+			return false;
+		}
+		int rows = dim(w, 0);
+		int cols = dim(w, 1);
+		return dim(x, 0) == cols && (long) rows * cols >= MIN_WORK;
+	}
+
 	private static Object matvec(@Nullable Object matrix, @Nullable Object vector, int rows, int cols, int out,
 			boolean transposed, boolean single) {
 		if (single) {

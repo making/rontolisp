@@ -42,6 +42,16 @@ public final class GpuThresholds {
 		return Gpu.foldMinElements();
 	}
 
+	/**
+	 * The minimum element count a fused row member (the softmax, log-softmax, GELU and
+	 * layer-norm pairs) is offered at here: the fold threshold on CUDA, the map threshold
+	 * on Metal, whose fold threshold is {@link Long#MAX_VALUE}.
+	 * @return the fused threshold in force
+	 */
+	public static long fusedMinElements() {
+		return Gpu.fusedMinElements();
+	}
+
 	public static long rngMinElements() {
 		return Gpu.rngMinElements();
 	}
@@ -102,6 +112,32 @@ public final class GpuThresholds {
 	}
 
 	/**
+	 * Whether {@code host}'s OWN entry is dirty right now, or {@code false} with no
+	 * device. Unlike {@link #dirtyCount()}, this asks about ONE result rather than the
+	 * process-wide tally, which a test sharing a fork with others should prefer: the
+	 * tally also counts whatever an earlier test's arrays left in the cache until the
+	 * collector reaches them (`.kb/gpu.md`, "Tests").
+	 * @param host the result's own storage (see {@code LispFloatArray#storage()})
+	 * @return {@code true} when {@code host}'s device copy has bytes the host does not
+	 */
+	public static boolean isDirty(Object host) {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null && residency.dirty(host);
+	}
+
+	/**
+	 * Whether {@code host} (a stub) holds a backing right now, or {@code false} with no
+	 * device -- the per-handle counterpart of {@link #backingCount()}, for the same
+	 * reason {@link #isDirty(Object)} exists next to {@link #dirtyCount()}.
+	 * @param host the stub
+	 * @return {@code true} when a backing array has been allocated for it
+	 */
+	public static boolean isBacked(Object host) {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null && residency.backed(host);
+	}
+
+	/**
 	 * Whether lazy results are in force on the device the interceptors found -- the mode
 	 * they switch on where the backend says it pays
 	 * ({@code Gpu.lazyResultsIfWorthwhile}): CUDA yes, Metal no, measured. The tests that
@@ -115,7 +151,8 @@ public final class GpuThresholds {
 	/**
 	 * Whether lazy results PAY on the device found -- what decides whether an
 	 * interceptor, in this process or in a compiled class's own copy of the library,
-	 * switches them on ({@code GpuDevice.lazyResultsPay}): CUDA yes, Metal no.
+	 * switches them on ({@code GpuDevice.lazyResultsPay}): CUDA yes, and Metal since
+	 * todo-495.
 	 * @return {@code true} when an interceptor over this device runs with lazy results
 	 */
 	public static boolean lazyResultsPay() {
