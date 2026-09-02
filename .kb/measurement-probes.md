@@ -184,6 +184,15 @@ been taken first, against the chain the decline already ran.
 Note what a ceiling does NOT excuse: it is still a measurement, so rule 1 applies to it.
 todo-650's ceiling was taken in the model with a structural count, not in a probe.
 
+**And a ceiling is only a ceiling over the layers beneath it as they stand.** The same
+proposal -- widen the fused softmax's accept rule -- was worth something before todo-650
+removed the materialize under it and worth NOTHING after, on both backends independently:
+0.8% on CUDA, and on Metal actually negative (0.709 against 0.684 s), because with the
+round trips gone the only thing left to widening is the cost of building the two broadened
+masks. A ceiling priced before a fix underneath lands is a ceiling over a workload that no
+longer exists. This is rule 3 one level up: there, the baseline moved under an A/B; here,
+the bound moved under a decision not to build.
+
 ## Rule 3: an A/B whose baseline moved is not an A/B
 
 **When several sessions push to `develop`, the arm you are not changing can be changed
