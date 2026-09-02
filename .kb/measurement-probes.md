@@ -96,7 +96,10 @@ are usually built once and reached every repetition, so a cache that adopts on t
 sight has them from the third repetition on; a workload's intermediates are new every
 iteration and never get there. `.kb/gpu.md`, "What the fold's SHAPE decline costs on this
 backend": a probe of exactly that shape said the host round trip was gone, and the real
-model still paid 192 of them a step, the count matching the declines exactly.
+model still paid 192 of them a step, the count matching the declines exactly. (`5baaf6ec`
+has since removed those 192, re-measured on Metal 2026-09-03 in that same section -- so the
+trap is in the probe having declared them absent while they were there, not in their still
+being there today.)
 
 **4. What the probe leaves behind may be the wrong CLOCKS.** A member that runs on the
 host leaves a gap, and a device that idles through it drops its clocks, so the next
