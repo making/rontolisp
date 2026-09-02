@@ -1207,6 +1207,24 @@ cases:
       -1.0
       1.0
       -1
+  # A signed zero reaching abs / unary minus through a VARIABLE. The literal path
+  # always agreed, so a test written with literals cannot see the divergence this
+  # pins: -0.0 is = to 0.0, which hides it from arithmetic and leaves it visible
+  # only in the printed sign.
+  - name: signed-zero-through-a-variable
+    source: |
+      (defun signed-zero-pair (x) (list (abs x) (- x)))
+      (print (signed-zero-pair -0.0))
+      (print (signed-zero-pair 0.0))
+      (print (list (abs -0.0) (- 0.0) (- -0.0)))
+      (let ((a #f(-0.0 0.0))) (print (list (abs (aref a 0)) (- (aref a 1)))))
+      (print (linalg:erf #d(-0.0)))
+    expected: |
+      (0.0 0.0)
+      (0.0 -0.0)
+      (0.0 -0.0 0.0)
+      (0.0 -0.0)
+      #d(0.0)
   - name: unless
     source: |
       (print (unless nil 42))

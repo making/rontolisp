@@ -320,15 +320,19 @@ what the `#f` REDUCTION contract says elsewhere in this file, and a silent cross
 divergence. Declines anything but a same-width packed `#d`/`#f` operand (a general boxed
 array, a plain number), which the defun then answers.
 
-Two spellings are per-backend, mirroring each backend's own compiled defun rather than
-each other -- the same rule the todo-109 ufuncs follow. `(abs x)` and `(- v)` have no
-double LITERAL among their argument forms, so on wasm they take the generic path:
-`abs` is `_rat_cmp`'s float compare, `x < 0 ? 0 - x : x`, which leaves `-0.0` ALONE where
-`Math.abs` folds it to `0.0`, and unary minus is `_rat_sub(0, x)`. So
-`(linalg:erf #d(-0.0))` is `#d(-0.0)` on wasm and `#d(0.0)` on the interpreter and the
-JVM -- in the DEFUN, before any kernel existed, and each kernel matches its own. `exp` is
-the same story: `Math.exp` on two backends, `WasmExpCompiler`'s Horner approximation
-(emitted by `emitExpF64` from the same constants) on the third.
+`abs` and unary minus USED to be per-backend here: with no double literal among their
+argument forms they took wasm's generic path, `abs` as `_rat_cmp`'s float compare
+(`x < 0 ? 0 - x : x`, which leaves `-0.0` alone where `Math.abs` folds it to `0.0`) and
+`(- v)` as `_rat_sub(0, v)` (`+0.0` for a `+0.0` operand, where IEEE negation gives
+`-0.0`), so `(linalg:erf #d(-0.0))` was `#d(-0.0)` on wasm and `#d(0.0)` on the other two
+-- in the DEFUN, before any kernel existed. Both wasm emitters now take `f64.abs` /
+`f64.neg` on the branch that has established the operand is a float (2026-09-02), the
+`--no-gc` backend already did, and the kernel is spelled the same way; the four backends
+agree on a signed zero through a variable, pinned by `ci-spec.yaml`'s `signed-zero` case.
+`exp` is still per-backend, mirroring each backend's own compiled defun rather than each
+other -- the same rule the todo-109 ufuncs follow: `Math.exp` on the interpreter and the
+JVM, `WasmExpCompiler`'s Horner approximation (emitted by `emitExpF64` from the same
+constants) on wasm, so `(linalg:erf #d(-1.0))` still differs in the last two digits there.
 
 **No lane form, and the reason is not "no v128 instruction".** The per-element iteration
 count is DATA-DEPENDENT (it grows with `x^2`), so a lane loop must run every lane to the
@@ -796,16 +800,39 @@ match each other: `(linalg:amax #d(-0.0 0.0))` is `-0.0` everywhere (first-eleme
 win, since IEEE `>` is false on a `0.0`/`-0.0` tie). `-0.0` / NaN comparison cases are
 allowed in `ci-spec.yaml` now; the float-edge cases there pin the convergence.
 
-Two edges were deliberately left diverging there (CL permits either, and no kernel reads
-them), so they are the exception to the sentence above -- keep such forms out of
-`ci-spec.yaml`:
+`abs` and unary minus joined them on 2026-09-02 (above). A full signed-zero sweep run
+in that change -- every float operator that can carry a sign of zero, each value reaching
+it through a `defun` parameter so no literal path is in play -- left TEN rows still
+diverging, and they are the exception to the sentence above: keep such forms out of
+`ci-spec.yaml` until `.todo/648` settles them. Measured on all four backends built from
+one tree; wasm-GC and the component agreed on every row, so they are one column:
+
+| form (`nz` = `-0.0`, `pz` = `0.0`) | interpreter | JVM | wasm |
+| --- | --- | --- | --- |
+| `(+ nz nz)` | **`0.0`** | `-0.0` | `-0.0` |
+| `(min nz pz)` / `(min pz nz)` | `-0.0` / `-0.0` | `-0.0` / `0.0` | `0.0` / `-0.0` |
+| `(max nz pz)` / `(max pz nz)` | `0.0` / `0.0` | `-0.0` / `0.0` | `0.0` / `-0.0` |
+| `(signum nz)` | `-0.0` | `-0.0` | **`0.0`** |
+| `(sin nz)` / `(tan nz)` | `-0.0` | `-0.0` | **`0.0`** |
+| `(mod nz 2.0)` / `(rem nz 2.0)` | `-0.0` | `-0.0` | **`0.0`** |
+| `(eql nz pz)` / `(equal nz pz)` | `NIL` | `NIL` | **`T`** |
 
 - **Variable-path `min`/`max`**, off the double-literal fast path: the JVM `_min`/`_max`
   are a `buildSelect` over `_cmp` (not `Math.min`) and wasm's are a `_rat_cmp` select, so
   NaN does not propagate and a +/-0.0 tie picks by position -- unlike the literal path,
-  which is `Math.min`/`Math.max`.
-- **`eql`/`equal` on `-0.0` vs `0.0`** is unaudited across backends (CLHS makes them `=`
-  but not `eql`).
+  which is `Math.min`/`Math.max`. The measurement above makes it a THREE-way split, not
+  the two-way one this bullet used to describe: the interpreter answers by SIGN
+  (`Math.min`/`Math.max` semantics), the JVM answers the FIRST argument on a tie, wasm
+  the SECOND.
+- **`eql`/`equal` on `-0.0` vs `0.0`** is no longer unaudited: the interpreter and the JVM
+  answer `NIL` (CLHS makes them `=` but not `eql`), wasm answers `T`.
+- **`(+ nz nz)`** is the one row where the INTERPRETER is the odd one out, and it is not a
+  permitted choice -- IEEE gives `-0.0`, which both compilers produce.
+
+Everything else in the sweep agreed on all four: `abs`, unary minus, binary `+ - * /` sign
+propagation, `1/x` on either zero, `sqrt`, `float`, `floor`/`ceiling`/`truncate`/`round`,
+`asin`, `atan`, `exp`, `expt`, `< > = zerop minusp plusp`, `equalp`, `princ-to-string`,
+`format ~a`/`~s`, `coerce` to either width, and a `#f` element stored and read back.
 
 ## Per-backend mechanics
 
