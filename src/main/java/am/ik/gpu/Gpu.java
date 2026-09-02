@@ -2730,6 +2730,94 @@ public final class Gpu {
 	}
 
 	/**
+	 * {@link #layerNorm}'s normalization AND {@code torch:layer-norm}'s own affine --
+	 * {@code norm * weight + bias} over a {@code (len)} weight and bias -- as one pass
+	 * per row, where the module ran the normalization and then two BROADCAST passes over
+	 * the whole activation (todo-634). Each parameter is read where the broadcast pass
+	 * read it and the two products round where the two members rounded, so BIT-IDENTICAL
+	 * to the CPU chain. Offered like {@link #layerNorm}; the parameters are two
+	 * {@code len}-long vectors and are not what decides.
+	 * @param x the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param w the weight, {@code len} elements
+	 * @param offsetW the index of {@code w}'s first element
+	 * @param b the bias, {@code len} elements
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the normalized axis
+	 * @param eps the epsilon added to the variance
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean layerNormAffine(double[] x, int offsetX, double[] w, int offsetW, double[] b, int offsetB,
+			double[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& fitsVector(device, w, offsetW, len) && fitsVector(device, b, offsetB, len)
+				&& device.layerNormAffine(x, offsetX, w, offsetW, b, offsetB, out, offsetOut, rows, len, eps);
+	}
+
+	/** The single-float sibling of {@link #layerNormAffine}. */
+	public static boolean layerNormAffine(float[] x, int offsetX, float[] w, int offsetW, float[] b, int offsetB,
+			float[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& fitsVector(device, w, offsetW, len) && fitsVector(device, b, offsetB, len)
+				&& device.layerNormAffineF(x, offsetX, w, offsetW, b, offsetB, out, offsetOut, rows, len, eps);
+	}
+
+	/**
+	 * The tape's backward through {@link #layerNormAffine}, and the one member here that
+	 * answers TWO arrays: {@code out} is what {@link #layerNormGrad} writes with the
+	 * broadcast {@code g * weight} folded in, and {@code gn} is {@code g * norm}, whose
+	 * axis-0 folds are the weight's gradient. {@code norm} is what the fused forward no
+	 * longer stores -- and the row statistics this pass recomputes anyway are what it is
+	 * made of, so the second result costs its store and nothing else. Every rounding is
+	 * the chain's and the folds are sequential, so BIT-IDENTICAL to the CPU chain.
+	 * @param g the affine output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param x the input
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param w the weight, {@code len} elements
+	 * @param offsetW the index of {@code w}'s first element
+	 * @param old the gradient accumulated so far, or {@code null} for none
+	 * @param offsetOld the index of {@code old}'s first element
+	 * @param out the array the input's gradient is written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param gn the array {@code g * norm} is written into
+	 * @param offsetGn the index in {@code gn} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @param eps the epsilon the forward added
+	 * @return {@code true} when both results were filled
+	 */
+	public static boolean layerNormAffineGrad(double[] g, int offsetG, double[] x, int offsetX, double[] w, int offsetW,
+			double @Nullable [] old, int offsetOld, double[] out, int offsetOut, double[] gn, int offsetGn, int rows,
+			int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, false)
+				&& offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& (old == null || offeredRows(device, old, offsetOld, out, offsetOut, rows, len, false))
+				&& fitsVector(device, w, offsetW, len) && fitsResult(extent(device, gn), offsetGn, (long) rows * len)
+				&& device.layerNormAffineGrad(g, offsetG, x, offsetX, w, offsetW, old, offsetOld, out, offsetOut, gn,
+						offsetGn, rows, len, eps);
+	}
+
+	/** The single-float sibling of {@link #layerNormAffineGrad}. */
+	public static boolean layerNormAffineGrad(float[] g, int offsetG, float[] x, int offsetX, float[] w, int offsetW,
+			float @Nullable [] old, int offsetOld, float[] out, int offsetOut, float[] gn, int offsetGn, int rows,
+			int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, false)
+				&& offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& (old == null || offeredRows(device, old, offsetOld, out, offsetOut, rows, len, false))
+				&& fitsVector(device, w, offsetW, len) && fitsResult(extent(device, gn), offsetGn, (long) rows * len)
+				&& device.layerNormAffineGradF(g, offsetG, x, offsetX, w, offsetW, old, offsetOld, out, offsetOut, gn,
+						offsetGn, rows, len, eps);
+	}
+
+	/**
 	 * The inverted-dropout mask {@code (rand > p) / (1 - p)} as one pass, from the
 	 * Wichmann-Hill state {@code (s1, s2, s3)}: the composition drew the uniform array
 	 * ({@link #rngFill} mode 0), compared it, and divided the mask -- three passes, two
@@ -2792,6 +2880,14 @@ public final class Gpu {
 		return rows >= (resident ? FOLD_RESIDENT_MIN_CELLS : FOLD_MIN_CELLS)
 				&& (resident || total >= (libm ? Probe.MAP_MIN_ELEMENTS : Probe.FUSED_MIN_ELEMENTS)) && offsetA >= 0
 				&& offsetA + total <= extent(device, a) && fitsResult(extent(device, out), offsetOut, total);
+	}
+
+	/**
+	 * Whether an operand read as a {@code len}-long vector -- layer-norm's weight and
+	 * bias -- lies inside what the host array (or the stub's span) holds.
+	 */
+	private static boolean fitsVector(GpuDevice device, Object v, int offset, int len) {
+		return offset >= 0 && (long) offset + len <= extent(device, v);
 	}
 
 	private static boolean fitsResult(long lengthOut, long offsetOut, long count) {

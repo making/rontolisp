@@ -144,14 +144,21 @@ final class JvmLinalgGpu {
 	 * adjoint, layer-norm's normalization and its adjoint, and the dropout mask. Same
 	 * convention as the maps.
 	 */
-	private static final Map<String, String> FUSED_KERNELS = Map.of(LispNames.LINALG_GELU, "gpuGelu",
-			LispNames.LINALG_GELU_GRAD, "gpuGeluGrad", LispNames.LINALG_SOFTMAX_GRAD, "gpuSoftmaxGrad",
-			LispNames.LINALG_LAYER_NORM, "gpuLayerNorm", LispNames.LINALG_LAYER_NORM_GRAD, "gpuLayerNormGrad",
-			LispNames.LINALG_DROPOUT_MASK, "gpuDropoutMask", LispNames.LINALG_LOG_SOFTMAX_GRAD, "gpuLogSoftmaxGrad",
+	private static final Map<String, String> FUSED_KERNELS = Map.ofEntries(Map.entry(LispNames.LINALG_GELU, "gpuGelu"),
+			Map.entry(LispNames.LINALG_GELU_GRAD, "gpuGeluGrad"),
+			Map.entry(LispNames.LINALG_SOFTMAX_GRAD, "gpuSoftmaxGrad"),
+			Map.entry(LispNames.LINALG_LAYER_NORM, "gpuLayerNorm"),
+			Map.entry(LispNames.LINALG_LAYER_NORM_GRAD, "gpuLayerNormGrad"),
+			Map.entry(LispNames.LINALG_DROPOUT_MASK, "gpuDropoutMask"),
+			Map.entry(LispNames.LINALG_LOG_SOFTMAX_GRAD, "gpuLogSoftmaxGrad"),
 			// The attention head's scaled and masked softmax and its adjoint
 			// (2026-09-02).
-			LispNames.LINALG_SCALED_MASKED_SOFTMAX, "gpuScaledMaskedSoftmax",
-			LispNames.LINALG_SCALED_MASKED_SOFTMAX_GRAD, "gpuScaledMaskedSoftmaxGrad");
+			Map.entry(LispNames.LINALG_SCALED_MASKED_SOFTMAX, "gpuScaledMaskedSoftmax"),
+			Map.entry(LispNames.LINALG_SCALED_MASKED_SOFTMAX_GRAD, "gpuScaledMaskedSoftmaxGrad"),
+			// Layer-norm's affine folded into the pair, the adjoint answering two
+			// arrays (todo-634).
+			Map.entry(LispNames.LINALG_LAYER_NORM_AFFINE, "gpuLayerNormAffine"),
+			Map.entry(LispNames.LINALG_LAYER_NORM_AFFINE_GRAD, "gpuLayerNormAffineGrad"));
 
 	/**
 	 * Every qualified name the emit gate scans for. A program that reaches none of them

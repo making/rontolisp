@@ -168,8 +168,10 @@ final class JvmLinalgKernelCompiler {
 		return switch (member) {
 			case LispNames.LINALG_IM2COL, LispNames.LINALG_ADAM_STEP, LispNames.LINALG_RNG_FILL,
 					LispNames.LINALG_GATHER_STRIDED,
-					// The attention head's softmax pair (2026-09-02).
-					LispNames.LINALG_SCALED_MASKED_SOFTMAX, LispNames.LINALG_SCALED_MASKED_SOFTMAX_GRAD ->
+					// The attention head's softmax pair (2026-09-02), and layer-norm's
+					// affine adjoint (todo-634).
+					LispNames.LINALG_SCALED_MASKED_SOFTMAX, LispNames.LINALG_SCALED_MASKED_SOFTMAX_GRAD,
+					LispNames.LINALG_LAYER_NORM_AFFINE_GRAD ->
 				5;
 			case LispNames.LINALG_COL2IM -> 6;
 			case LispNames.LINALG_WHERE, LispNames.LINALG_SCATTER_ROWS, LispNames.LINALG_GELU_GRAD,
@@ -177,7 +179,10 @@ final class JvmLinalgKernelCompiler {
 				3;
 			// The fused tier's four-argument members (todo-499); %la-layer-norm is two,
 			// the default.
-			case LispNames.LINALG_LAYER_NORM_GRAD, LispNames.LINALG_DROPOUT_MASK -> 4;
+			case LispNames.LINALG_LAYER_NORM_GRAD, LispNames.LINALG_DROPOUT_MASK,
+					// Layer-norm's affine forward (todo-634).
+					LispNames.LINALG_LAYER_NORM_AFFINE ->
+				4;
 			// concatenate takes its list and :axis; a device member only, in that form.
 			case LispNames.LINALG_CONCATENATE -> 1;
 			default -> UNARY.contains(member) ? 1 : 2;

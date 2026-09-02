@@ -197,7 +197,7 @@ class LinalgGpuTest {
 				// The fused tier (.todo/499): the compositions torch.lisp spells as one
 				// member each.
 				"%la-softmax-grad", "%la-log-softmax-grad", "%la-gelu", "%la-gelu-grad", "%la-layer-norm",
-				"%la-layer-norm-grad", "%la-dropout-mask",
+				"%la-layer-norm-grad", "%la-layer-norm-affine", "%la-layer-norm-affine-grad", "%la-dropout-mask",
 				// The attention head's scaled and masked softmax pair (2026-09-02).
 				"%la-scaled-masked-softmax", "%la-scaled-masked-softmax-grad" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, true).print()).as(internal)
@@ -205,7 +205,8 @@ class LinalgGpuTest {
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, false).print()).as(internal)
 				.isEqualTo("#<lambda>");
 		}
-		// Fifty-three linalg: members and no others. matmul, mean, var, square, relu,
+		// Every accelerated linalg: member and no others. matmul, mean, var, square,
+		// relu,
 		// slice and flatten are accelerated THROUGH them, not instead of them, so they
 		// must still be the library's own lambdas under the flag.
 		for (String member : new String[] { "matmul", "outer", "norm", "trace", "argmax", "argmin", "mean", "var",
@@ -236,7 +237,9 @@ class LinalgGpuTest {
 				(defparameter *x* (linalg:reshape (linalg:linspace -3.0 3.0 %d%s) '(%d 384)))
 				(defparameter *g* (linalg:reshape (linalg:linspace 1.0 -2.0 %d%s) '(%d 384)))
 				(defparameter *m* (linalg:reshape (linalg:greater (linalg:sin (linalg:arange 384)) 0.3) '(1 384)))
-				""".formatted(n, option, FUSED_ROWS, n, option, FUSED_ROWS);
+				(defparameter *w* (linalg:linspace 0.5 1.5 384%s))
+				(defparameter *b* (linalg:linspace -0.3 0.3 384%s))
+				""".formatted(n, option, FUSED_ROWS, n, option, FUSED_ROWS, option, option);
 	}
 
 	@Test
@@ -251,6 +254,11 @@ class LinalgGpuTest {
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm *x* 1.0e-5)");
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 nil)");
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)");
+			// The affine pair (todo-634): the adjoint answers a two-element list, and
+			// both arrays in it are the chain's bits.
+			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-affine *x* *w* *b* 1.0e-5)");
+			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 nil)");
+			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 *g*)");
 			assertMatchesScalarOracle(operands + "(linalg::%la-softmax-grad *g* *x* 1)");
 			// The attention pair (2026-09-02): the adjoint is libm-free, the forward
 			// carries the device's exp and stands where softmax does.

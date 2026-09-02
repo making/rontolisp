@@ -143,13 +143,18 @@ final class CudaGemm implements GpuDevice {
 			"log_softmax_f32", "log_softmax_grad_f64", "log_softmax_grad_f32",
 			// The attention mask packed one bit a cell, for the softmax pair
 			// (2026-09-02).
-			"pack_mask_f64", "pack_mask_f32" };
+			"pack_mask_f64", "pack_mask_f32",
+			// Layer-norm's affine folded into the pair, the adjoint answering two
+			// results (todo-634).
+			"layer_norm_affine_f64", "layer_norm_affine_f32", "layer_norm_affine_grad_f64",
+			"layer_norm_affine_grad_f32" };
 
 	private static final int GELU_F64 = 0, GELU_F32 = 1, GELU_GRAD_F64 = 2, GELU_GRAD_F32 = 3, SOFTMAX_F64 = 4,
 			SOFTMAX_F32 = 5, SOFTMAX_GRAD_F64 = 6, SOFTMAX_GRAD_F32 = 7, LAYER_NORM_F64 = 8, LAYER_NORM_F32 = 9,
 			LAYER_NORM_GRAD_F64 = 10, LAYER_NORM_GRAD_F32 = 11, DROPOUT_F64 = 12, DROPOUT_F32 = 13,
 			LOG_SOFTMAX_F64 = 14, LOG_SOFTMAX_F32 = 15, LOG_SOFTMAX_GRAD_F64 = 16, LOG_SOFTMAX_GRAD_F32 = 17,
-			PACK_MASK_F64 = 18, PACK_MASK_F32 = 19;
+			PACK_MASK_F64 = 18, PACK_MASK_F32 = 19, LAYER_NORM_AFFINE_F64 = 20, LAYER_NORM_AFFINE_F32 = 21,
+			LAYER_NORM_AFFINE_GRAD_F64 = 22, LAYER_NORM_AFFINE_GRAD_F32 = 23;
 
 	/**
 	 * What one element of a row kernel (softmax, layer-norm and their adjoints) is
@@ -1989,6 +1994,41 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	@Override
+	public boolean layerNormAffine(double[] x, int ox, double[] w, int ow, double[] b, int ob, double[] c, int oc,
+			int rows, int len, double eps) {
+		return affineKernel(this.fused[LAYER_NORM_AFFINE_F64], MemorySegment.ofArray(x), x, ox,
+				MemorySegment.ofArray(w), w, ow, MemorySegment.ofArray(b), b, ob, MemorySegment.ofArray(c), c, oc, rows,
+				len, eps, Double.BYTES);
+	}
+
+	@Override
+	public boolean layerNormAffineF(float[] x, int ox, float[] w, int ow, float[] b, int ob, float[] c, int oc,
+			int rows, int len, double eps) {
+		return affineKernel(this.fused[LAYER_NORM_AFFINE_F32], MemorySegment.ofArray(x), x, ox,
+				MemorySegment.ofArray(w), w, ow, MemorySegment.ofArray(b), b, ob, MemorySegment.ofArray(c), c, oc, rows,
+				len, eps, Float.BYTES);
+	}
+
+	@Override
+	public boolean layerNormAffineGrad(double[] g, int og, double[] x, int ox, double[] w, int ow,
+			double @Nullable [] old, int oOld, double[] c, int oc, double[] gn, int ogn, int rows, int len,
+			double eps) {
+		return affineGradKernel(this.fused[LAYER_NORM_AFFINE_GRAD_F64], MemorySegment.ofArray(g), g, og,
+				MemorySegment.ofArray(x), x, ox, MemorySegment.ofArray(w), w, ow,
+				old == null ? null : MemorySegment.ofArray(old), old, oOld, MemorySegment.ofArray(c), c, oc,
+				MemorySegment.ofArray(gn), gn, ogn, rows, len, eps, Double.BYTES);
+	}
+
+	@Override
+	public boolean layerNormAffineGradF(float[] g, int og, float[] x, int ox, float[] w, int ow, float @Nullable [] old,
+			int oOld, float[] c, int oc, float[] gn, int ogn, int rows, int len, double eps) {
+		return affineGradKernel(this.fused[LAYER_NORM_AFFINE_GRAD_F32], MemorySegment.ofArray(g), g, og,
+				MemorySegment.ofArray(x), x, ox, MemorySegment.ofArray(w), w, ow,
+				old == null ? null : MemorySegment.ofArray(old), old, oOld, MemorySegment.ofArray(c), c, oc,
+				MemorySegment.ofArray(gn), gn, ogn, rows, len, eps, Float.BYTES);
+	}
+
+	@Override
 	public boolean dropoutMask(double[] c, int oc, int n, double p, double span, int s1, int s2, int s3) {
 		return dropoutMask(this.fused[DROPOUT_F64], MemorySegment.ofArray(c), c, (long) oc * Double.BYTES,
 				(long) n * Double.BYTES, n, p, span, s1, s2, s3);
@@ -2111,6 +2151,104 @@ final class CudaGemm implements GpuDevice {
 				return false;
 			}
 			return finish(c, offC, buffers, owned, 3, ch, bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * Layer-norm's affine forward (todo-634): {@link #rowKernel}'s shape with the WEIGHT
+	 * and the BIAS as two more operands of {@code len} elements each rather than
+	 * {@code rows * len} -- they are the module's parameters, so each is looked up,
+	 * staged and left resident like any operand and the thirteen launches of a step share
+	 * one upload.
+	 */
+	private boolean affineKernel(MemorySegment kernel, MemorySegment a, Object ah, int oa, MemorySegment w, Object wh,
+			int ow, MemorySegment b, Object bh, int ob, MemorySegment c, Object ch, int oc, int rows, int len,
+			double eps, int width) {
+		if (!this.usable) {
+			return false;
+		}
+		long n = (long) rows * len;
+		long bytes = n * width, pbytes = (long) len * width;
+		long offA = (long) oa * width, offW = (long) ow * width, offB = (long) ob * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0, 0, 0 }, owned = { 0, 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(ah, offA, bytes);
+			buffers[1] = this.residency.lookup(wh, offW, pbytes);
+			buffers[2] = this.residency.lookup(bh, offB, pbytes);
+			if (!allocate(arena, buffers, owned, bytes, pbytes, pbytes, bytes)) {
+				return false;
+			}
+			boolean sync = n * FUSED_ROW_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, ah, a, offA, bytes) || !stage(buffers, owned, 1, wh, w, offW, pbytes)
+					|| !stage(buffers, owned, 2, bh, b, offB, pbytes)) {
+				return false;
+			}
+			Object[] values = { buffers[0], buffers[1], buffers[2], buffers[3], rows, len, eps };
+			if (!launchFused(arena, kernel, rows, ROW_BLOCK, values, sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 3, ch, bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * Its adjoint, and the only launcher here with TWO results: the input's gradient and
+	 * {@code g * norm}. Both are finished -- allocated, or left resident under lazy
+	 * results -- exactly as a single result is; a device that declines mid-way has
+	 * written neither, since a launch either runs or the call has already returned false.
+	 */
+	private boolean affineGradKernel(MemorySegment kernel, MemorySegment g, Object gh, int og, MemorySegment x,
+			Object xh, int ox, MemorySegment w, Object wh, int ow, @Nullable MemorySegment old, @Nullable Object oldh,
+			int oOld, MemorySegment c, Object ch, int oc, MemorySegment gn, Object gnh, int ogn, int rows, int len,
+			double eps, int width) {
+		if (!this.usable) {
+			return false;
+		}
+		long n = (long) rows * len;
+		long bytes = n * width, pbytes = (long) len * width;
+		long offG = (long) og * width, offX = (long) ox * width, offW = (long) ow * width, offOld = (long) oOld * width,
+				offC = (long) oc * width, offGn = (long) ogn * width;
+		long[] buffers = { 0, 0, 0, 0, 0, 0 }, owned = { 0, 0, 0, 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(gh, offG, bytes);
+			buffers[1] = this.residency.lookup(xh, offX, bytes);
+			buffers[2] = this.residency.lookup(wh, offW, pbytes);
+			if (old != null) {
+				buffers[3] = this.residency.lookup(java.util.Objects.requireNonNull(oldh), offOld, bytes);
+			}
+			if (!allocate(arena, buffers, owned, bytes, bytes, pbytes, old == null ? 0 : bytes, bytes, bytes)) {
+				return false;
+			}
+			boolean sync = n * FUSED_ROW_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, gh, g, offG, bytes) || !stage(buffers, owned, 1, xh, x, offX, bytes)
+					|| !stage(buffers, owned, 2, wh, w, offW, pbytes) || (old != null
+							&& !stage(buffers, owned, 3, java.util.Objects.requireNonNull(oldh), old, offOld, bytes))) {
+				return false;
+			}
+			Object[] values = { buffers[0], buffers[1], buffers[2], buffers[3], buffers[4], buffers[5], rows, len,
+					eps };
+			if (!launchFused(arena, kernel, rows, ROW_BLOCK, values, sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 4, ch, bytes) && finish(gn, offGn, buffers, owned, 5, gnh, bytes);
 		}
 		catch (Throwable ex) {
 			return false;

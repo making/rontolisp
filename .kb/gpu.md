@@ -998,7 +998,7 @@ driver's own pageable copy -- so it loses past 262144 elements and wins 17% at 6
 Neither pays for a pinned pool and its budget. **Any future change to this route re-runs
 that table first.**
 
-## The fused tier (todo-499, 2026-09-02; todo-629 added two members, todo-641 two more)
+## The fused tier (todo-499, 2026-09-02; todo-629 added two members, todo-641 two more, todo-634 two more)
 
 The four compositions a transformer step spent a third of its device time on -- the exact
 GELU, softmax, layer-norm's normalization and the dropout mask, forward and backward --
@@ -1034,7 +1034,8 @@ is none) so the kernel adds it exactly where the tape's `%t-accum` would have.
 adjoint, softmax) is offered from the map threshold or over a resident operand, like a
 transcendental; the libm-free ones from the fold threshold or over a resident operand,
 with the fold's cell rule on the row count, like an axis fold; the mask exactly as
-`rngFill`. `linalg:softmax` and `linalg:log-softmax` are intercepted in their `:axis` form
+`rngFill`. An operand that is not the one the rule is about -- the attention mask, and
+layer-norm's `(len)` weight and bias -- is bounds-checked and staged, and does not decide. `linalg:softmax` and `linalg:log-softmax` are intercepted in their `:axis` form
 over the LAST axis only -- any other axis, the whole-array form, a scalar input decline to
 the defun, whose members the device then takes one by one as before -- and on the JVM that
 form is an EXTENDED call shape (`LinalgKernelCallLayout`) the way `sum :axis` is.
@@ -1301,6 +1302,70 @@ What is left at the head after this: `copy_f32` at grid 4096 (72 a step, 2.9 ms)
 step -- at 0.33 / 0.46 ms a call, each about 1.5-2x the memory floor of its passes, the
 price of the one-thread-per-row shape the sequential double folds require.
 
+## Layer-norm's affine (todo-634, 2026-09-02)
+
+The last of the three chains `.todo/629` measured and did not build. `torch:layer-norm`'s
+module forward ended in `(torch:add (torch:mul norm weight) bias)` -- three tape nodes over
+the fused normalization -- and at the book's shapes, batch 64, thirteen layer-norms a step,
+that affine was four whole passes over a 25.2 MB activation per call: two broadcasts
+forward, a broadcast `g * weight` and a zip `g * norm` backward. **All four are inside the
+pair now** (`%la-layer-norm-affine` / `-affine-grad`, `.kb/linalg.md`; the tape side is
+`.kb/torch.md`, "The fused compositions"), and the item's own question -- whether the fold
+pays once the WEIGHT's gradient has to be recovered without `norm` -- is answered by the
+adjoint kernel writing **two results**: `dx` and `g * norm`. The row statistics it
+recomputes anyway ARE what `norm` is made of, so the second result costs its store.
+
+**Measured first, in isolation, before any of it was wired** (a standalone `nvcc` probe
+over the checked-in `gemm.cu` plus the candidate kernels, `(64 256 384)` at `#f`, 50 calls,
+three rounds, the chain and the fused member launched back to back):
+
+| | chain | fused |
+|---|---|---|
+| forward: `layer_norm` + two `bcast` | 0.915 ms | **0.484** |
+| backward: `bcast` + `layer_norm_grad` + `zip` | 1.586 ms | **1.006** |
+| (`layer_norm_grad` alone, for scale) | 1.030 ms | -- |
+
+The adjoint pair costing what the plain adjoint alone cost is not luck: the extra
+`g * norm` store is one pass, and the three separate `j` loops of the plain adjoint's last
+chunk pass -- the terms, the `OLD` fold, the combine -- collapse into ONE, which pays for
+it. The parameters cost the row kernel nothing: their column index is UNIFORM across the
+warp, so each is a broadcast load out of a 1.5 KB vector that stays in cache for every row.
+That is the difference from todo-641's mask, which was a cell per cell and had to be packed
+-- **"fusing costs the kernel nothing" is still not a premise, it is a measurement each
+time**.
+
+**Measured in the step, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class
+output, GB10 with the machine to itself; the kernel columns are the difference between
+nsys over 13- and 3-step runs, i.e. ten steps; the step is `(t23 - t3) / 20`, median of
+three interleaved rounds). BATCH 64 numbers, like the three tables above:
+
+| | before | after |
+|---|---|---|
+| `layer_norm_f32` / `layer_norm_grad_f32` at grid 256 | 13 + 13 launches, 4.63 + 16.04 ms | **0** |
+| `layer_norm_affine_f32` / `..._grad_f32` at grid 256 | -- | 13 + 13, **4.73 + 18.37 ms** |
+| `bcast_f32` at the activation grid | 52 launches, 10.97 ms | **13, 2.93 ms** |
+| `zip_f32` at the activation grid | 153, 48.51 ms | **140, 43.83 ms** |
+| total kernel time a step | 465.9 ms in 2413.8 launches | **456.8 ms in 2359.2** |
+| wall a step, the three rounds | 0.572 / 0.567 / 0.565 | 0.558 / 0.559 / 0.569 |
+| wall a step, median | 0.567 s | **0.559 s** |
+
+9.0 ms of kernel time a step (1.9%), and 52 fewer launches with their 52 fresh 25.2 MB
+results -- about 1.3 GB of device allocation a step. The wall moved 1.4%, inside its own
+±4% spread, so **the kernel column is the number**, as it was for todo-641. The forward
+fold is nearly free (+0.11 ms over thirteen calls for two passes removed); the adjoint's
+second result costs 2.3 ms over thirteen and removes 12.7. **The loss series is
+byte-identical to the previous build's at every step of all eight runs and both profiles.**
+
+**What it costs elsewhere, both measured.** The four kernels add 13 k lines of PTX --
+1.55 -> 1.89 MB, +22% -- and the PTX travels in every `--gpu` class, which grows the
+book-shapes class 2.52 -> 2.87 MB (+14%); each new kernel is the size of its plain sibling
+(2.1 k lines the forward, 4.4 k the adjoint), so this is the tier's own established price
+rather than a new one, and the driver's JIT of the larger text costs nothing measurable
+(the 3-step wall, which is mostly setup, went 5.37 -> 5.22 s). On the CPU the backward
+recomputes `norm`, +28% on layer-norm's backward and nothing else (`.kb/linalg.md` has that
+measurement). Metal DECLINES both members, at both widths, so the module runs the
+normalization and its two broadcasts member by member there exactly as before.
+
 ## The chains left composed (todo-629, 2026-09-02)
 
 The list `.todo/499` left behind: five compositions that still ran one memory pass per
@@ -1372,7 +1437,8 @@ byte-identical to the previous build's at every step of all six runs.**
   `norm` is no longer stored, so a separate member has to recompute the row statistics
   (two more passes over `x`) and gives 3 of the 8 back. Worth it only if the adjoint
   member emits TWO arrays, `dx` and `g * norm`, which no `linalg:` member does today.
-  `.todo/634`.
+  BUILT as `.todo/634`, and the two-output adjoint is what made it pay: "Layer-norm's
+  affine" above has the numbers.
 - **`gelu_grad_f32`'s 2.62 ms a call is not the two libm calls the item blamed.** The
   memory floor at that shape (three arrays, measured as a zip mul) is 1.295 ms; the
   forward, one libm call and one divide over two arrays, is 1.168 against a 0.86 floor.
@@ -2036,7 +2102,7 @@ module again; a real program has one.
 **The dead-flag guard is the load-bearing one**, as it is for `--blas`: every numeric
 assertion would pass just as well on the scalar defun, so `#'linalg:dot` printing
 `#<function LINALG:DOT>` under the flag and `#<lambda>` without it is the assertion that
-fails when the flag is DEAD. It is now fifty-one assertions, one per member, plus the
+fails when the flag is DEAD. It is one assertion per accelerated member, plus the
 complementary list of members that must still be `#<lambda>`. On the compiled side the
 guard is the bridge NAME in the class bytes (the renamed library classes are base64 and do
 not appear as text; the kernel texts do, which is what pins that they travel).
