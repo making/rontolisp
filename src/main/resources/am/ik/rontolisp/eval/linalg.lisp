@@ -1285,11 +1285,12 @@
               (linalg:exp (linalg:sub a (linalg:amax a :axis ax :keepdims t)))))
         (linalg:div e (linalg:sum e :axis ax :keepdims t)))))
 
-;; --- the fused compositions (todo-499, todo-629) -----------------------------------
-;; Seven internal members that spell, as ONE call each, a composition torch.lisp used to
+;; --- the fused compositions (todo-499, todo-629, 2026-09-02) -------------------------
+;; Nine internal members that spell, as ONE call each, a composition torch.lisp used to
 ;; spell as a chain of the members above: torch:softmax's adjoint, torch:log-softmax's,
 ;; the exact torch:gelu and its adjoint, torch:layer-norm's normalization and its adjoint,
-;; and the dropout mask. Each defun IS the chain, member for member and in the same
+;; the dropout mask, and the attention head's scaled and masked softmax with its adjoint.
+;; Each defun IS the chain, member for member and in the same
 ;; order, so on every CPU path the bits are what the chain produced -- and on the device
 ;; each is one kernel that replays the chain rounding for rounding (.kb/gpu.md, "The
 ;; fused tier"). The two adjoints that take an OLD gradient fold their contributions onto
@@ -1305,6 +1306,23 @@
   ;; with softmax(x) recovered as the exponent of the forward result (todo-629).
   (linalg:sub g
    (linalg:mul (linalg:exp out) (linalg:sum g :axis ax :keepdims t))))
+
+(defun linalg::%la-scaled-masked-softmax (x scale mask fill ax)
+  ;; The attention head's softmax as ONE member (2026-09-02): x divided by scale (nil for
+  ;; no division), fill where mask is non-zero (nil for no mask), then the softmax along
+  ;; the normalized axis ax -- torch:div, torch:masked-fill and torch:softmax's forwards,
+  ;; member for member, so every CPU path keeps the chain's bits and a device runs the
+  ;; three as one pass over the score.
+  (let* ((scaled (if (null scale) x (linalg:div x scale)))
+         (masked (if (null mask) scaled (linalg:where mask fill scaled))))
+    (linalg:softmax masked :axis ax)))
+
+(defun linalg::%la-scaled-masked-softmax-grad (g out ax scale mask)
+  ;; Its adjoint in the tape's order: softmax's, then the fill's (zero where the mask
+  ;; is non-zero), then the division's (2026-09-02).
+  (let* ((dx (linalg::%la-softmax-grad g out ax))
+         (dm (if (null mask) dx (linalg:where mask 0.0 dx))))
+    (if (null scale) dm (linalg:div dm scale))))
 
 (defun linalg::%la-gelu (x)
   ;; x * (1 + erf(x / sqrt 2)) / 2 as torch:gelu composed it: the 0.5 branch, the

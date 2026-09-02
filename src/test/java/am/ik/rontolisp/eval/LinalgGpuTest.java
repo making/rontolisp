@@ -197,7 +197,9 @@ class LinalgGpuTest {
 				// The fused tier (.todo/499): the compositions torch.lisp spells as one
 				// member each.
 				"%la-softmax-grad", "%la-log-softmax-grad", "%la-gelu", "%la-gelu-grad", "%la-layer-norm",
-				"%la-layer-norm-grad", "%la-dropout-mask" }) {
+				"%la-layer-norm-grad", "%la-dropout-mask",
+				// The attention head's scaled and masked softmax pair (2026-09-02).
+				"%la-scaled-masked-softmax", "%la-scaled-masked-softmax-grad" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, true).print()).as(internal)
 				.isEqualTo("#<function LINALG::" + internal.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, false).print()).as(internal)
@@ -222,12 +224,18 @@ class LinalgGpuTest {
 	/** Rows enough for the fold rule and the fold threshold at a 384-wide row. */
 	private static final int FUSED_ROWS = (int) Math.max(256, (am.ik.gpu.GpuThresholds.foldMinElements() + 383) / 384);
 
-	/** The fused tier's operands: two inexact {@code FUSED_ROWS x 384} arrays. */
+	/**
+	 * The fused tier's operands: two inexact {@code FUSED_ROWS x 384} arrays, and a
+	 * {@code (1 384)} mask over them (the causal mask's shape) with about a third of its
+	 * cells set, in double whatever the operands' width, as
+	 * {@code torch:subsequent-mask}'s is.
+	 */
 	private static String fusedOperands(String option) {
 		int n = FUSED_ROWS * 384;
 		return """
 				(defparameter *x* (linalg:reshape (linalg:linspace -3.0 3.0 %d%s) '(%d 384)))
 				(defparameter *g* (linalg:reshape (linalg:linspace 1.0 -2.0 %d%s) '(%d 384)))
+				(defparameter *m* (linalg:reshape (linalg:greater (linalg:sin (linalg:arange 384)) 0.3) '(1 384)))
 				""".formatted(n, option, FUSED_ROWS, n, option, FUSED_ROWS);
 	}
 
@@ -244,6 +252,18 @@ class LinalgGpuTest {
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 nil)");
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)");
 			assertMatchesScalarOracle(operands + "(linalg::%la-softmax-grad *g* *x* 1)");
+			// The attention pair (2026-09-02): the adjoint is libm-free, the forward
+			// carries the device's exp and stands where softmax does.
+			assertMatchesScalarOracle(operands + "(linalg::%la-scaled-masked-softmax-grad *g* *x* 1 8.0 *m*)");
+			assertMatchesScalarOracle(operands + "(linalg::%la-scaled-masked-softmax-grad *g* *x* -1 3.0 nil)");
+			assertMatchesScalarOracle(operands + "(linalg::%la-scaled-masked-softmax-grad *g* *x* 1 nil *m*)");
+			for (String call : new String[] { "(linalg::%la-scaled-masked-softmax *x* 8.0 *m* (/ -1.0 0.0) 1)",
+					"(linalg::%la-scaled-masked-softmax *x* 3.0 nil 0.0 -1)",
+					"(linalg::%la-scaled-masked-softmax *x* nil *m* -5.0 1)" }) {
+				assertThat(worstRelative(elements(eval(operands + call, true)), elements(eval(operands + call, false))))
+					.as(call + option)
+					.isLessThan(option.isEmpty() ? 1e-12 : 1e-5);
+			}
 			String mask = "(linalg::%la-dropout-mask '(" + FUSED_ROWS + " 384) 0.1 *st* "
 					+ (option.isEmpty() ? "nil" : "t") + ")";
 			assertMatchesScalarOracle("(linalg:seed 5) (defparameter *st* (linalg::%la-rng-state)) " + mask);
@@ -297,6 +317,17 @@ class LinalgGpuTest {
 		assertThat(worstRelative(elements(eval(operands + "(linalg:log-softmax *x* :axis 0)", true)),
 				elements(eval(operands + "(linalg:log-softmax *x* :axis 0)", false))))
 			.isLessThan(1e-5);
+		// The attention pair over the first axis, and over a mask that is not a trailing
+		// block of the operand (a per-ROW mask, (rows 1)): both decline to the defun.
+		String rowMask = "(linalg:reshape (linalg:greater (linalg:sin (linalg:arange " + FUSED_ROWS + ")) 0.3) '("
+				+ FUSED_ROWS + " 1))";
+		for (String call : new String[] { "(linalg::%la-scaled-masked-softmax *x* 8.0 *m* -5.0 0)",
+				"(linalg::%la-scaled-masked-softmax *x* 8.0 " + rowMask + " -5.0 1)" }) {
+			assertThat(worstRelative(elements(eval(operands + call, true)), elements(eval(operands + call, false))))
+				.as(call)
+				.isLessThan(1e-5);
+		}
+		assertMatchesScalarOracle(operands + "(linalg::%la-scaled-masked-softmax-grad *g* *x* 1 8.0 " + rowMask + ")");
 	}
 
 	// --- the matrix-by-vector product (vec:matvec, 2026-08-22) -----------------------

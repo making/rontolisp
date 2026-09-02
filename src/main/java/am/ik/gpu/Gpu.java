@@ -2411,9 +2411,7 @@ public final class Gpu {
 	 * @return {@code true} when {@code out} was filled
 	 */
 	public static boolean softmax(double[] a, int offsetA, double[] out, int offsetOut, int rows, int len) {
-		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
-				&& device.softmax(a, offsetA, out, offsetOut, rows, len);
+		return softmax(a, offsetA, null, 0, 0, out, offsetOut, rows, len, 0, 0.0, 0.0);
 	}
 
 	/**
@@ -2421,9 +2419,99 @@ public final class Gpu {
 	 * {@link #softmax(double[], int, double[], int, int, int)}.
 	 */
 	public static boolean softmax(float[] a, int offsetA, float[] out, int offsetOut, int rows, int len) {
+		return softmax(a, offsetA, null, 0, 0, out, offsetOut, rows, len, 0, 0.0, 0.0);
+	}
+
+	/**
+	 * {@link #softmax(double[], int, double[], int, int, int)} over a score that was
+	 * SCALED and MASKED first -- {@code torch:div} by a scalar, then
+	 * {@code torch:masked-fill}, the attention head's idiom -- with the two members
+	 * folded into the row pass (2026-09-02): each cell is read as {@code (T)(x op scale)}
+	 * and then as {@code fill} wherever the mask is non-zero, the roundings the two
+	 * members made, so the row the kernel folds is the row the chain would have stored. A
+	 * division by a power of two is launched as the multiply, exactly as {@link #scale}
+	 * does. The mask is a TRAILING block of the operand: {@code maskLen} divides
+	 * {@code rows * len} and cell {@code i} reads {@code mask[i % maskLen]}, which is
+	 * what a {@code (1 s s)} mask over a {@code (b s s)} score broadcasts to. Offered as
+	 * the plain softmax is; a mask that is neither width, or one the operand is not a
+	 * multiple of, declines.
+	 * @param a the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param mask the mask, a {@code double[]} or {@code float[]}, or {@code null}
+	 * @param offsetM the index of the mask's first element
+	 * @param maskLen the mask's length, a divisor of {@code rows * len}
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the softmax's own axis
+	 * @param scaleOp {@link #BIN_DIV} or {@link #BIN_MUL} with {@code scale} as the right
+	 * operand, or 0 for no scale
+	 * @param scale the scalar
+	 * @param fill the value the masked cells take
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean softmax(double[] a, int offsetA, @Nullable Object mask, int offsetM, int maskLen,
+			double[] out, int offsetOut, int rows, int len, int scaleOp, double scale, double fill) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
-				&& device.softmaxF(a, offsetA, out, offsetOut, rows, len);
+		int sop = softmaxScaleOp(scaleOp, scale);
+		return device != null && sop >= 0 && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& offeredMask(device, mask, offsetM, maskLen, (long) rows * len) && device.softmax(a, offsetA, mask,
+						offsetM, maskLen, out, offsetOut, rows, len, sop, softmaxScale(scaleOp, scale), fill);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #softmax(double[], int, Object, int, int, double[], int, int, int, int, double, double)}.
+	 */
+	public static boolean softmax(float[] a, int offsetA, @Nullable Object mask, int offsetM, int maskLen, float[] out,
+			int offsetOut, int rows, int len, int scaleOp, double scale, double fill) {
+		GpuDevice device = Probe.DEVICE;
+		int sop = softmaxScaleOp(scaleOp, scale);
+		return device != null && sop >= 0 && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& offeredMask(device, mask, offsetM, maskLen, (long) rows * len) && device.softmaxF(a, offsetA, mask,
+						offsetM, maskLen, out, offsetOut, rows, len, sop, softmaxScale(scaleOp, scale), fill);
+	}
+
+	/**
+	 * The kernel's scale op for the API's: 0 for none, 1 for a multiply, 2 for a divide
+	 * -- a divide by a power of two rewritten to the multiply by its exact reciprocal,
+	 * {@link #scale}'s rule -- and {@code -1} for an op that is neither.
+	 */
+	private static int softmaxScaleOp(int scaleOp, double scale) {
+		if (scaleOp == 0) {
+			return 0;
+		}
+		if (scaleOp == BIN_MUL) {
+			return 1;
+		}
+		if (scaleOp == BIN_DIV) {
+			return exactReciprocal(scale) != 0.0 ? 1 : 2;
+		}
+		return -1;
+	}
+
+	/** The scalar the kernel multiplies or divides by, after the rewrite above. */
+	private static double softmaxScale(int scaleOp, double scale) {
+		if (scaleOp == BIN_DIV) {
+			double r = exactReciprocal(scale);
+			return r != 0.0 ? r : scale;
+		}
+		return scale;
+	}
+
+	/**
+	 * Whether the mask of a scaled-masked softmax is one the kernel reads: absent, or a
+	 * packed array of either width whose length divides the operand's and lies within its
+	 * extent.
+	 */
+	private static boolean offeredMask(GpuDevice device, @Nullable Object mask, int offsetM, int maskLen, long total) {
+		if (mask == null) {
+			return true;
+		}
+		if (!(mask instanceof double[]) && !(mask instanceof float[])) {
+			return false;
+		}
+		return maskLen >= 1 && total % maskLen == 0 && offsetM >= 0 && offsetM + maskLen <= extent(device, mask);
 	}
 
 	/**
@@ -2443,19 +2531,61 @@ public final class Gpu {
 	 */
 	public static boolean softmaxGrad(double[] g, int offsetG, double[] s, int offsetS, double[] out, int offsetOut,
 			int rows, int len) {
-		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
-				&& offeredRows(device, s, offsetS, out, offsetOut, rows, len, true)
-				&& device.softmaxGrad(g, offsetG, s, offsetS, out, offsetOut, rows, len);
+		return softmaxGrad(g, offsetG, s, offsetS, null, 0, 0, out, offsetOut, rows, len, 0, 0.0);
 	}
 
 	/** The single-float sibling of {@link #softmaxGrad}. */
 	public static boolean softmaxGrad(float[] g, int offsetG, float[] s, int offsetS, float[] out, int offsetOut,
 			int rows, int len) {
+		return softmaxGrad(g, offsetG, s, offsetS, null, 0, 0, out, offsetOut, rows, len, 0, 0.0);
+	}
+
+	/**
+	 * {@link #softmaxGrad(double[], int, double[], int, double[], int, int, int)} for a
+	 * softmax whose forward folded a scale and a mask
+	 * ({@link #softmax(double[], int, Object, int, int, double[], int, int, int, int, double, double)}):
+	 * after the adjoint, the two members' adjoints in the tape's order -- zero wherever
+	 * the mask is non-zero, then the scale applied to the result ({@code / scale} for
+	 * {@link #BIN_DIV}, the exact-reciprocal rewrite included) -- each rounded at the
+	 * width. No libm, so bit-identical to the CPU chain. Offered as the plain adjoint is,
+	 * with the mask rule of the forward.
+	 * @param g the output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param s the softmax output the forward produced
+	 * @param offsetS the index of {@code s}'s first element
+	 * @param mask the mask, a {@code double[]} or {@code float[]}, or {@code null}
+	 * @param offsetM the index of the mask's first element
+	 * @param maskLen the mask's length, a divisor of {@code rows * len}
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @param scaleOp the forward's scale op, or 0
+	 * @param scale the forward's scalar
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean softmaxGrad(double[] g, int offsetG, double[] s, int offsetS, @Nullable Object mask,
+			int offsetM, int maskLen, double[] out, int offsetOut, int rows, int len, int scaleOp, double scale) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+		int sop = softmaxScaleOp(scaleOp, scale);
+		return device != null && sop >= 0 && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
 				&& offeredRows(device, s, offsetS, out, offsetOut, rows, len, true)
-				&& device.softmaxGradF(g, offsetG, s, offsetS, out, offsetOut, rows, len);
+				&& offeredMask(device, mask, offsetM, maskLen, (long) rows * len) && device.softmaxGrad(g, offsetG, s,
+						offsetS, mask, offsetM, maskLen, out, offsetOut, rows, len, sop, softmaxScale(scaleOp, scale));
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #softmaxGrad(double[], int, double[], int, Object, int, int, double[], int, int, int, int, double)}.
+	 */
+	public static boolean softmaxGrad(float[] g, int offsetG, float[] s, int offsetS, @Nullable Object mask,
+			int offsetM, int maskLen, float[] out, int offsetOut, int rows, int len, int scaleOp, double scale) {
+		GpuDevice device = Probe.DEVICE;
+		int sop = softmaxScaleOp(scaleOp, scale);
+		return device != null && sop >= 0 && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+				&& offeredRows(device, s, offsetS, out, offsetOut, rows, len, true)
+				&& offeredMask(device, mask, offsetM, maskLen, (long) rows * len) && device.softmaxGradF(g, offsetG, s,
+						offsetS, mask, offsetM, maskLen, out, offsetOut, rows, len, sop, softmaxScale(scaleOp, scale));
 	}
 
 	/**

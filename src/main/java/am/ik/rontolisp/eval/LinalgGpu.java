@@ -236,6 +236,10 @@ public final class LinalgGpu {
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_SOFTMAX, 3, LinalgGpu::softmax);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SOFTMAX_GRAD, 3,
 				LinalgGpu::softmaxGrad);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SCALED_MASKED_SOFTMAX, 5,
+				LinalgGpu::scaledMaskedSoftmax);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SCALED_MASKED_SOFTMAX_GRAD, 5,
+				LinalgGpu::scaledMaskedSoftmaxGrad);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_LOG_SOFTMAX, 3,
 				LinalgGpu::logSoftmax);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_LOG_SOFTMAX_GRAD, 3,
@@ -518,6 +522,137 @@ public final class LinalgGpu {
 		}
 		double[] c = LinalgGpuKernels.softmaxGrad(((LispDoubleFloatArray) g).storage(),
 				((LispDoubleFloatArray) out).storage(), rows, len);
+		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/**
+	 * The mask of a scaled-masked softmax as the kernel reads it: {@code null} for nil,
+	 * else a packed array of either width whose dims, leading 1s dropped, are a SUFFIX of
+	 * the operand's -- a {@code (1 s s)} mask over a {@code (b s s)} score -- so that
+	 * cell {@code i} of the operand reads {@code mask[i % maskLen]}. Any other mask, a
+	 * boxed one, or a scalar declines (a null in the returned pair's second slot).
+	 * @return the mask's storage and length ({@code null} and 0 for no mask), or
+	 * {@code null} to decline
+	 */
+	private static @Nullable SoftmaxMask softmaxMask(LispVal mv, int[] dims) {
+		if (mv instanceof LispNil) {
+			return new SoftmaxMask(null, 0);
+		}
+		LispFloatArray m = LinalgSimd.packed(mv);
+		if (m == null) {
+			return null;
+		}
+		int maskLen = suffixLength(m.dims(), dims);
+		return maskLen < 1 ? null : new SoftmaxMask(storage(m), maskLen);
+	}
+
+	/**
+	 * The mask of a scaled-masked softmax as the kernel takes it: its storage and length.
+	 */
+	private record SoftmaxMask(@Nullable Object storage, int len) {
+	}
+
+	/**
+	 * The element count of {@code md} when, its leading extent-1 axes dropped, it is a
+	 * suffix of {@code dims}; else {@code -1}.
+	 */
+	static int suffixLength(int[] md, int[] dims) {
+		int k = 0;
+		while (k < md.length && md[k] == 1) {
+			k++;
+		}
+		int tail = md.length - k;
+		if (tail > dims.length) {
+			return -1;
+		}
+		int n = 1;
+		for (int i = 0; i < tail; i++) {
+			if (md[k + i] != dims[dims.length - tail + i]) {
+				return -1;
+			}
+			n *= md[k + i];
+		}
+		return n;
+	}
+
+	/**
+	 * {@code (linalg::%la-scaled-masked-softmax x scale mask fill ax)} over the LAST axis
+	 * of a packed operand, as one pass per row (2026-09-02): the division by
+	 * {@code scale} (nil for none), the fill where {@code mask} is non-zero (nil for
+	 * none) and the five-member softmax chain, rounding for rounding. Any other axis, a
+	 * mask that is not a trailing block of the operand, or a boxed operand decline to the
+	 * defun, whose members the device then takes one by one.
+	 */
+	private static @Nullable LispVal scaledMaskedSoftmax(List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		if (a == null) {
+			return null;
+		}
+		int[] d = a.dims();
+		Integer axis = LinalgSimd.normAxis(args.get(4), d.length);
+		if (axis == null || axis != d.length - 1) {
+			return null;
+		}
+		Double scale = args.get(1) instanceof LispNil ? null : number(args.get(1));
+		Double fill = number(args.get(3));
+		SoftmaxMask mask = softmaxMask(args.get(2), d);
+		if ((scale == null && !(args.get(1) instanceof LispNil)) || fill == null || mask == null) {
+			return null;
+		}
+		int scaleOp = scale == null ? 0 : LinalgGpuKernels.BIN_DIV;
+		double sf = scale == null ? 0.0 : scale;
+		int len = d[axis];
+		int rows = len == 0 ? 0 : a.totalSize() / len;
+		if (rows < 1) {
+			return null;
+		}
+		int maskLen = mask.len();
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.scaledMaskedSoftmax(single.storage(), mask.storage(), maskLen, rows, len,
+					scaleOp, sf, fill);
+			return c == null ? null : new LispSingleFloatArray(c, d.clone());
+		}
+		double[] c = LinalgGpuKernels.scaledMaskedSoftmax(((LispDoubleFloatArray) a).storage(), mask.storage(), maskLen,
+				rows, len, scaleOp, sf, fill);
+		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/**
+	 * {@code (linalg::%la-scaled-masked-softmax-grad g out ax scale mask)} over the last
+	 * axis, one pass per row and bit-identical to the chain (2026-09-02); declined at any
+	 * other axis or mask shape.
+	 */
+	private static @Nullable LispVal scaledMaskedSoftmaxGrad(List<LispVal> args) {
+		LispFloatArray g = LinalgSimd.packed(args.get(0));
+		LispFloatArray out = LinalgSimd.packed(args.get(1));
+		if (g == null || out == null || g.getClass() != out.getClass() || !Arrays.equals(g.dims(), out.dims())) {
+			return null;
+		}
+		int[] d = g.dims();
+		Integer axis = LinalgSimd.normAxis(args.get(2), d.length);
+		if (axis == null || axis != d.length - 1) {
+			return null;
+		}
+		Double scale = args.get(3) instanceof LispNil ? null : number(args.get(3));
+		SoftmaxMask mask = softmaxMask(args.get(4), d);
+		if ((scale == null && !(args.get(3) instanceof LispNil)) || mask == null) {
+			return null;
+		}
+		int scaleOp = scale == null ? 0 : LinalgGpuKernels.BIN_DIV;
+		double sf = scale == null ? 0.0 : scale;
+		int len = d[axis];
+		int rows = len == 0 ? 0 : g.totalSize() / len;
+		if (rows < 1) {
+			return null;
+		}
+		int maskLen = mask.len();
+		if (g instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.scaledMaskedSoftmaxGrad(single.storage(),
+					((LispSingleFloatArray) out).storage(), mask.storage(), maskLen, rows, len, scaleOp, sf);
+			return c == null ? null : new LispSingleFloatArray(c, d.clone());
+		}
+		double[] c = LinalgGpuKernels.scaledMaskedSoftmaxGrad(((LispDoubleFloatArray) g).storage(),
+				((LispDoubleFloatArray) out).storage(), mask.storage(), maskLen, rows, len, scaleOp, sf);
 		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
 	}
 

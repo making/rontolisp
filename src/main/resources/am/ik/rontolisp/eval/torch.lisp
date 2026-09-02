@@ -26,7 +26,8 @@
 ;;   store         the data: a linalg array (packed float, any rank) or a
 ;;                 number (a plain number is the rank-0 scalar tensor) -- or
 ;;                 a torch::%view standing for data NOT YET materialized
-;;                 (torch:transpose's last-two-axes swap, "the view" below).
+;;                 (torch:transpose's last-two-axes swap, torch:div by a
+;;                 scalar, torch:masked-fill; "the views" below).
 ;;                 Read through torch::%t-data, never through the accessor.
 ;;   grad          nil, or a value of data's shape (accumulated by
 ;;                 torch:backward; a raw linalg value, not a tensor)
@@ -78,41 +79,67 @@
   parents
   backward-fn)
 
-;; --- the view ----------------------------------------------------------------
+;; --- the views ---------------------------------------------------------------
 ;; A tensor whose store is a torch::%view holds data that has NOT been
-;; materialized: the record names a SOURCE tensor, and the tensor's data is
-;; the source's with its last two axes exchanged -- what (torch:transpose x
-;; '(0 2 1)) on a stack and the matrix transpose produce. It exists so that
-;; torch:matmul can consume the transpose WITHOUT a copy: it reads the marker
-;; and calls the stacked product that reads the operand where it lies
-;; (linalg::%la-matmul-nd-ta / -tb, .kb/linalg.md), the way torch.transpose
-;; is a view that torch.bmm reads through a stride, and it routes the tape
-;; edge to the source so that the adjoint is computed in the source's own
-;; orientation and the view's adjoint (a second copy) never runs. Every other
-;; reader goes through torch::%t-data, which materializes ONCE -- the array
-;; replaces the view in the store, releasing the source -- and is exactly
-;; what the generated accessor used to be, so no operation but torch:matmul
-;; and torch:shape knows that views exist. A second deferred producer would
-;; add a slot naming its kind and a branch in torch::%t-data.
+;; materialized: the record names a SOURCE tensor and a KIND, and the tensor's
+;; data is the source's under that kind's member:
+;;
+;;   :swap   the source with its last two axes exchanged -- what (torch:transpose
+;;           x '(0 2 1)) on a stack and the matrix transpose produce (arg nil)
+;;   :scale  the source divided by a scalar -- (torch:div x s) (arg = s)
+;;   :fill   the source with a value filled where a mask is non-zero --
+;;           (torch:masked-fill x mask v) (arg = (mask . v))
+;;
+;; The views exist so that ONE consumer can read the composition without the
+;; intermediate arrays: torch:matmul consumes a :swap view WITHOUT a copy --
+;; it reads the marker and calls the stacked product that reads the operand
+;; where it lies (linalg::%la-matmul-nd-ta / -tb, .kb/linalg.md), the way
+;; torch.transpose is a view that torch.bmm reads through a stride -- and
+;; torch:softmax consumes a :fill and/or :scale chain as one member
+;; (linalg::%la-scaled-masked-softmax, the attention head's idiom, one device
+;; pass where the three eager nodes were three). Each routes the tape edge
+;; past the views to the source so that the adjoint is computed there in one
+;; go and the views' own adjoints never run. Every other reader goes through
+;; torch::%t-data, which materializes ONCE -- the array replaces the view in
+;; the store, releasing the source -- and is exactly what the generated
+;; accessor used to be, so no operation but those two and torch:shape knows
+;; that views exist.
 
-(defstruct (torch::%view (:constructor torch::%v-new (source))
+(defstruct (torch::%view (:constructor torch::%v-new (kind source arg))
                          (:conc-name torch::%v-) (:predicate torch::%view-p)
                          (:copier nil))
-  source)
+  kind
+  source
+  arg)
+
+(defun torch::%v-materialize (v)
+  ;; The array a view stands for: the source's data (itself read through
+  ;; torch::%t-data, so a view of a view resolves) under the kind's member --
+  ;; the very call the eager node made, so the bits are the eager node's.
+  (let ((src (torch::%t-data (torch::%v-source v))) (kind (torch::%v-kind v)))
+    (cond ((eq kind :swap) (linalg::%la-swap-last src))
+     ((eq kind :scale) (linalg:div src (torch::%v-arg v)))
+     (t (linalg:where (car (torch::%v-arg v)) (cdr (torch::%v-arg v)) src)))))
 
 (defun torch::%t-data (tn)
   ;; The tensor's data, materialized: a view is replaced in the store by the
   ;; array it stands for on the first read, so a second read costs nothing.
   (let ((s (torch::%t-store tn)))
     (if (torch::%view-p s)
-        (let ((d (linalg::%la-swap-last (torch::%t-data (torch::%v-source s)))))
+        (let ((d (torch::%v-materialize s)))
           (setf (torch::%t-store tn) d)
           d)
         s)))
 
+(defun torch::%t-view-of (tn kind)
+  ;; The view record of the given kind in tn's store, or nil when its data is
+  ;; real or a view of another kind.
+  (let ((s (torch::%t-store tn)))
+    (if (and (torch::%view-p s) (eq (torch::%v-kind s) kind)) s nil)))
+
 (defun torch::%t-swap-view (tn)
-  ;; The view record in tn's store, or nil when its data is real.
-  (let ((s (torch::%t-store tn))) (if (torch::%view-p s) s nil)))
+  ;; The :swap view record in tn's store, or nil.
+  (torch::%t-view-of tn :swap))
 
 (defun torch::%t-swap-dims (dims)
   ;; dims with its last two entries exchanged.
@@ -120,12 +147,14 @@
 
 (defun torch::%t-dims (tn)
   ;; The dims list of tn's data (nil for a scalar) WITHOUT materializing a
-  ;; view: a view's dims are its source's with the last two exchanged.
-  (let ((v (torch::%t-swap-view tn)))
-    (if (null v)
-        (let ((d (torch::%t-store tn)))
-          (if (numberp d) nil (array-dimensions d)))
-        (torch::%t-swap-dims (torch::%t-dims (torch::%v-source v))))))
+  ;; view: a :swap view's dims are its source's with the last two exchanged,
+  ;; the other kinds' are the source's own (a :fill view is made only when its
+  ;; mask broadcasts INTO the source's shape).
+  (let ((s (torch::%t-store tn)))
+    (cond ((not (torch::%view-p s)) (if (numberp s) nil (array-dimensions s)))
+          ((eq (torch::%v-kind s) :swap)
+           (torch::%t-swap-dims (torch::%t-dims (torch::%v-source s))))
+          (t (torch::%t-dims (torch::%v-source s))))))
 
 (defun torch::%t-swap-last-p (rank nx)
   ;; Whether a transpose of a rank-rank tensor by the normalized axes nx (nil
@@ -434,11 +463,22 @@
                                                        xb)))))))
 
 (defun torch:div (a b)
-  ;; Differentiable elementwise a / b with numpy broadcasting (linalg:div).
-  (let* ((ta (torch::%t-wrap a))
-         (tb (torch::%t-wrap b))
-         (xa (torch::%t-data ta))
-         (xb (torch::%t-data tb)))
+  ;; Differentiable elementwise a / b with numpy broadcasting (linalg:div). An
+  ;; array divided by an UNTRACKED scalar -- the attention score's 1/sqrt(d_k)
+  ;; -- is returned as a :scale VIEW ("the views" above): nothing is computed
+  ;; until something reads the data, and torch:softmax folds the division into
+  ;; its own pass. The adjoint is the eager node's, g / b.
+  (let* ((ta (torch::%t-wrap a)) (tb (torch::%t-wrap b)))
+    (if (and (torch::%t-dims ta) (numberp (torch::%t-store tb))
+             (not (torch::%t-track-p tb)))
+        (let ((s (torch::%t-store tb)))
+          (torch::%t-result (torch::%v-new :scale ta s) (list ta)
+                            (lambda (g) (list (linalg:div g s)))))
+        (torch::%t-div ta tb))))
+
+(defun torch::%t-div (ta tb)
+  ;; torch:div over two materialized operands.
+  (let* ((xa (torch::%t-data ta)) (xb (torch::%t-data tb)))
     (torch::%t-result (linalg:div xa xb) (list ta tb)
                       (lambda (g)
                         (list (when (torch::%t-track-p ta)
@@ -716,7 +756,7 @@
               nil
               (mapcar (lambda (v) (if (< v 0) (+ v rank) v)) axes))))
     (if (torch::%t-swap-last-p rank nx)
-        (torch::%t-result (torch::%v-new ta) (list ta)
+        (torch::%t-result (torch::%v-new :swap ta nil) (list ta)
                           (lambda (g) (list (linalg::%la-swap-last g))))
         (let ((xa (torch::%t-data ta)))
           (torch::%t-result (linalg:transpose xa nx) (list ta)
@@ -1055,8 +1095,53 @@
   ;; integer :axis -- torch's softmax(x, dim)). The adjoint is
   ;; s * (g - sum(g * s)) over each distribution -- in the :axis form through
   ;; linalg::%la-softmax-grad, the same four members as one call, so a device
-  ;; runs them as one pass (todo-499).
-  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
+  ;; runs them as one pass (todo-499). Over a :fill or :scale view -- the
+  ;; attention head's masked, scaled score -- the :axis form is the one node
+  ;; torch::%t-attention-softmax makes (2026-09-02).
+  (let ((ta (torch::%t-wrap a)))
+    (if (and axis
+             (or (torch::%t-view-of ta :fill) (torch::%t-view-of ta :scale)))
+        (torch::%t-attention-softmax ta axis)
+        (torch::%t-softmax ta axis))))
+
+(defun torch::%t-attention-softmax (ta axis)
+  ;; torch:softmax over a score whose store is a :fill view, a :scale view or
+  ;; a :fill over a :scale -- (torch:masked-fill (torch:div score s) mask v)
+  ;; -- as ONE node. The forward is linalg::%la-scaled-masked-softmax over the
+  ;; innermost source's data: the three members in the chain's order, so the
+  ;; bits are the eager chain's and a device runs them as one pass. The tape
+  ;; edge goes past each view WHILE IT TRACKS -- to the score, normally -- and
+  ;; the views' adjoints (zero where the mask is, then the division) are
+  ;; folded into linalg::%la-scaled-masked-softmax-grad in the tape's own
+  ;; order; a view that does not track (made under torch:no-grad, or of a
+  ;; constant) stays the parent, so no gradient passes it, exactly as the
+  ;; eager node let none through.
+  (let* ((fill-v (torch::%t-view-of ta :fill))
+         (inner (if fill-v (torch::%v-source fill-v) ta))
+         (scale-v (torch::%t-view-of inner :scale))
+         (base (if scale-v (torch::%v-source scale-v) inner))
+         (mask (if fill-v (car (torch::%v-arg fill-v)) nil))
+         (fill (if fill-v (cdr (torch::%v-arg fill-v)) 0.0))
+         (scale (if scale-v (torch::%v-arg scale-v) nil))
+         (xa (torch::%t-data base))
+         (ax (linalg::%la-norm-axis (array-dimensions xa) axis))
+         (out (linalg::%la-scaled-masked-softmax xa scale mask fill ax))
+         (pass-fill (and fill-v (torch::%t-track-p ta)))
+         (pass-scale
+          (and scale-v (or (null fill-v) pass-fill) (torch::%t-track-p inner)))
+         (parent (cond (pass-scale base) (pass-fill inner) (t ta)))
+         (g-scale (if pass-scale scale nil))
+         (g-mask (if pass-fill mask nil)))
+    (torch::%t-result out (list parent)
+                      (lambda (g)
+                        (list
+                         (linalg::%la-scaled-masked-softmax-grad g out ax
+                                                                 g-scale
+                                                                 g-mask))))))
+
+(defun torch::%t-softmax (ta axis)
+  ;; torch:softmax over a materialized operand.
+  (let ((xa (torch::%t-data ta)))
     (let* ((ax (if axis (linalg::%la-norm-axis (array-dimensions xa) axis) nil))
            (out
             (if (null axis) (linalg:softmax xa) (linalg:softmax xa :axis ax))))
@@ -1095,13 +1180,36 @@
   ;; Differentiable masked fill: the scalar value where mask is NON-ZERO, a's
   ;; element where it is zero (torch.masked_fill over linalg:where, so filling
   ;; attention scores with -infinity before torch:softmax is safe). mask and
-  ;; value are constants -- no gradient flows to them.
+  ;; value are constants -- no gradient flows to them. An array filled with a
+  ;; number under a mask that broadcasts INTO its shape -- the causal mask
+  ;; over the attention score -- is returned as a :fill VIEW ("the views"
+  ;; above): nothing is computed until something reads the data, and
+  ;; torch:softmax folds the fill into its own pass. The adjoint is the eager
+  ;; node's, zero where the mask is.
   (let* ((ta (torch::%t-wrap a))
-         (xa (torch::%t-data ta))
          (m (if (torch:tensorp mask) (torch::%t-data mask) mask))
-         (v (if (torch:tensorp value) (torch::%t-data value) value)))
-    (torch::%t-result (linalg:where m v xa) (list ta)
-     (lambda (g) (list (torch::%t-unbroadcast (linalg:where m 0.0 g) xa))))))
+         (v (if (torch:tensorp value) (torch::%t-data value) value))
+         (dims (torch::%t-dims ta)))
+    (if (and dims (numberp v) (arrayp m)
+             (torch::%t-mask-into-p (array-dimensions m) dims))
+        (torch::%t-result (torch::%v-new :fill ta (cons m v)) (list ta)
+                          (lambda (g) (list (linalg:where m 0.0 g))))
+        (let ((xa (torch::%t-data ta)))
+          (torch::%t-result (linalg:where m v xa) (list ta)
+                            (lambda (g)
+                              (list
+                               (torch::%t-unbroadcast (linalg:where m 0.0 g)
+                                                      xa))))))))
+
+(defun torch::%t-mask-into-p (md dims)
+  ;; Whether a mask of dims md broadcasts INTO dims without widening it: no
+  ;; more axes than dims, and each, aligned from the right, of extent 1 or
+  ;; equal -- so the filled array has exactly the source's shape.
+  (and (<= (length md) (length dims))
+       (let ((skip (- (length dims) (length md))))
+         (do ((pm md (cdr pm)) (pd (nthcdr skip dims) (cdr pd)))
+             ((null pm) t)
+           (unless (or (= (car pm) 1) (= (car pm) (car pd))) (return nil))))))
 
 (defun torch::%t-indices (idx)
   ;; An index operand -- a tensor, an index vector or a list -- as the raw

@@ -140,12 +140,16 @@ final class CudaGemm implements GpuDevice {
 	static final String[] KERNELS_FUSED = { "gelu_f64", "gelu_f32", "gelu_grad_f64", "gelu_grad_f32", "softmax_f64",
 			"softmax_f32", "softmax_grad_f64", "softmax_grad_f32", "layer_norm_f64", "layer_norm_f32",
 			"layer_norm_grad_f64", "layer_norm_grad_f32", "dropout_mask_f64", "dropout_mask_f32", "log_softmax_f64",
-			"log_softmax_f32", "log_softmax_grad_f64", "log_softmax_grad_f32" };
+			"log_softmax_f32", "log_softmax_grad_f64", "log_softmax_grad_f32",
+			// The attention mask packed one bit a cell, for the softmax pair
+			// (2026-09-02).
+			"pack_mask_f64", "pack_mask_f32" };
 
 	private static final int GELU_F64 = 0, GELU_F32 = 1, GELU_GRAD_F64 = 2, GELU_GRAD_F32 = 3, SOFTMAX_F64 = 4,
 			SOFTMAX_F32 = 5, SOFTMAX_GRAD_F64 = 6, SOFTMAX_GRAD_F32 = 7, LAYER_NORM_F64 = 8, LAYER_NORM_F32 = 9,
 			LAYER_NORM_GRAD_F64 = 10, LAYER_NORM_GRAD_F32 = 11, DROPOUT_F64 = 12, DROPOUT_F32 = 13,
-			LOG_SOFTMAX_F64 = 14, LOG_SOFTMAX_F32 = 15, LOG_SOFTMAX_GRAD_F64 = 16, LOG_SOFTMAX_GRAD_F32 = 17;
+			LOG_SOFTMAX_F64 = 14, LOG_SOFTMAX_F32 = 15, LOG_SOFTMAX_GRAD_F64 = 16, LOG_SOFTMAX_GRAD_F32 = 17,
+			PACK_MASK_F64 = 18, PACK_MASK_F32 = 19;
 
 	/**
 	 * What one element of a row kernel (softmax, layer-norm and their adjoints) is
@@ -1900,27 +1904,31 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	@Override
-	public boolean softmax(double[] a, int oa, double[] c, int oc, int rows, int len) {
-		return rowKernel(this.fused[SOFTMAX_F64], MemorySegment.ofArray(a), a, oa, null, null, 0, null, null, 0,
-				MemorySegment.ofArray(c), c, oc, rows, len, null, false, Double.BYTES);
+	public boolean softmax(double[] a, int oa, @Nullable Object mask, int om, int maskLen, double[] c, int oc, int rows,
+			int len, int sop, double sf, double fill) {
+		return softmaxKernel(this.fused[SOFTMAX_F64], MemorySegment.ofArray(a), a, oa, null, null, 0, mask, om, maskLen,
+				MemorySegment.ofArray(c), c, oc, rows, len, sop, sf, fill, Double.BYTES);
 	}
 
 	@Override
-	public boolean softmaxF(float[] a, int oa, float[] c, int oc, int rows, int len) {
-		return rowKernel(this.fused[SOFTMAX_F32], MemorySegment.ofArray(a), a, oa, null, null, 0, null, null, 0,
-				MemorySegment.ofArray(c), c, oc, rows, len, null, false, Float.BYTES);
+	public boolean softmaxF(float[] a, int oa, @Nullable Object mask, int om, int maskLen, float[] c, int oc, int rows,
+			int len, int sop, double sf, double fill) {
+		return softmaxKernel(this.fused[SOFTMAX_F32], MemorySegment.ofArray(a), a, oa, null, null, 0, mask, om, maskLen,
+				MemorySegment.ofArray(c), c, oc, rows, len, sop, sf, fill, Float.BYTES);
 	}
 
 	@Override
-	public boolean softmaxGrad(double[] g, int og, double[] s, int os, double[] c, int oc, int rows, int len) {
-		return rowKernel(this.fused[SOFTMAX_GRAD_F64], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(s), s, os,
-				null, null, 0, MemorySegment.ofArray(c), c, oc, rows, len, null, false, Double.BYTES);
+	public boolean softmaxGrad(double[] g, int og, double[] s, int os, @Nullable Object mask, int om, int maskLen,
+			double[] c, int oc, int rows, int len, int sop, double sf) {
+		return softmaxKernel(this.fused[SOFTMAX_GRAD_F64], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(s), s,
+				os, mask, om, maskLen, MemorySegment.ofArray(c), c, oc, rows, len, sop, sf, null, Double.BYTES);
 	}
 
 	@Override
-	public boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len) {
-		return rowKernel(this.fused[SOFTMAX_GRAD_F32], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(s), s, os,
-				null, null, 0, MemorySegment.ofArray(c), c, oc, rows, len, null, false, Float.BYTES);
+	public boolean softmaxGradF(float[] g, int og, float[] s, int os, @Nullable Object mask, int om, int maskLen,
+			float[] c, int oc, int rows, int len, int sop, double sf) {
+		return softmaxKernel(this.fused[SOFTMAX_GRAD_F32], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(s), s,
+				os, mask, om, maskLen, MemorySegment.ofArray(c), c, oc, rows, len, sop, sf, null, Float.BYTES);
 	}
 
 	@Override
@@ -2093,6 +2101,85 @@ final class CudaGemm implements GpuDevice {
 			values.add(len);
 			if (eps != null) {
 				values.add(eps);
+			}
+			if (!launchFused(arena, kernel, rows, ROW_BLOCK, values.toArray(), sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 3, ch, bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * The softmax pair (2026-09-02): {@link #rowKernel}'s shape with the mask as a THIRD
+	 * operand of its own length and width, the scale's op and value, plus the forward's
+	 * fill, as the trailing parameters. The mask is staged and stays resident like any
+	 * operand, so the seventy-two launches of a step share one upload -- and it reaches
+	 * the row kernel PACKED, one bit a cell, through {@code pack_mask_*} launched just
+	 * before over a buffer this call owns ({@code gemm.cu}, "THE ATTENTION SCALE AND
+	 * MASK": read as it is, the mask cost the row kernel the pass it was meant to save).
+	 */
+	private boolean softmaxKernel(MemorySegment kernel, MemorySegment a, Object ah, int oa, @Nullable MemorySegment b,
+			@Nullable Object bh, int ob, @Nullable Object mask, int om, int maskLen, MemorySegment c, Object ch, int oc,
+			int rows, int len, int sop, double sf, @Nullable Double fill, int width) {
+		if (!this.usable) {
+			return false;
+		}
+		long n = (long) rows * len;
+		long bytes = n * width;
+		int mkind = mask instanceof float[] ? 1 : (mask instanceof double[] ? 2 : 0);
+		if (mask != null && mkind == 0) {
+			return false;
+		}
+		long maskWidth = mkind == 1 ? Float.BYTES : Double.BYTES;
+		long maskBytes = mask == null ? 0 : (long) maskLen * maskWidth;
+		int words = mask == null ? 0 : (maskLen + 31) / 32;
+		long packedBytes = (long) words * Integer.BYTES;
+		long offA = (long) oa * width, offB = (long) ob * width, offM = (long) om * maskWidth, offC = (long) oc * width;
+		long[] buffers = { 0, 0, 0, 0, 0 }, owned = { 0, 0, 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(ah, offA, bytes);
+			if (b != null) {
+				buffers[1] = this.residency.lookup(java.util.Objects.requireNonNull(bh), offB, bytes);
+			}
+			if (mask != null) {
+				buffers[2] = this.residency.lookup(mask, offM, maskBytes);
+			}
+			if (!allocate(arena, buffers, owned, bytes, b == null ? 0 : bytes, maskBytes, bytes, packedBytes)) {
+				return false;
+			}
+			boolean sync = n * FUSED_ROW_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, ah, a, offA, bytes)
+					|| (b != null && !stage(buffers, owned, 1, java.util.Objects.requireNonNull(bh), b, offB, bytes))
+					|| (mask != null && !stage(buffers, owned, 2, mask, heap(mask), offM, maskBytes))) {
+				return false;
+			}
+			if (mask != null && !launchFused(arena, this.fused[mkind == 1 ? PACK_MASK_F32 : PACK_MASK_F64], words,
+					STRIDED_BLOCK, new Object[] { buffers[2], buffers[4], maskLen }, false)) {
+				return false;
+			}
+			java.util.List<Object> values = new java.util.ArrayList<>();
+			values.add(buffers[0]);
+			if (b != null) {
+				values.add(buffers[1]);
+			}
+			values.add(buffers[4]);
+			values.add(mask == null ? 1 : maskLen);
+			values.add(buffers[3]);
+			values.add(rows);
+			values.add(len);
+			values.add(sop);
+			values.add(sf);
+			if (fill != null) {
+				values.add(fill);
 			}
 			if (!launchFused(arena, kernel, rows, ROW_BLOCK, values.toArray(), sync)) {
 				return false;

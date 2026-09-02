@@ -2,7 +2,7 @@
 
 `(torch:softmax a &key axis)`
 
-微分可能な最大値差し引き softmax (`linalg:softmax`) です。`:axis` なしではテンソル全体が 1 つの分布、整数の `:axis` を渡すとスライスごとに 1 分布 -- torch の `softmax(x, dim)`、アテンション重みの形です。backward は各分布上の `s * (g - sum(g * s))` です。[`torch:masked-fill`](torch-masked-fill.md) で `-infinity` に埋めたマスク位置はちょうど `0.0` になります。
+微分可能な最大値差し引き softmax (`linalg:softmax`) です。`:axis` なしではテンソル全体が 1 つの分布、整数の `:axis` を渡すとスライスごとに 1 分布 -- torch の `softmax(x, dim)`、アテンション重みの形です。backward は各分布上の `s * (g - sum(g * s))` です。[`torch:masked-fill`](torch-masked-fill.md) で `-infinity` に埋めたマスク位置はちょうど `0.0` になります。スカラーで割ってマスクしたスコア -- `(torch:softmax (torch:masked-fill (torch:div score s) mask -inf) :axis -1)`、アテンションヘッドのイディオム -- に対しては、`:axis` 形は 3 つを **1 つのノード** として実行します。除算と埋めはビューで、forward も backward もスコアを 1 度通るだけで、ビットは 3 つの独立したノードと同じです。
 
 ```lisp
 (torch:data (torch:softmax (torch:tensor '(1.0 1.0 1.0 1.0))))          ; => #f(0.25 0.25 0.25 0.25)

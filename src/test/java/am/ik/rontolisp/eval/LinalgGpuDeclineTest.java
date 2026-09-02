@@ -237,6 +237,7 @@ class LinalgGpuDeclineTest {
 				""";
 		for (String call : new String[] { "(linalg::%la-layer-norm *x* 1.0e-5)",
 				"(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)", "(linalg::%la-softmax-grad *g* *x* -1)",
+				"(linalg::%la-scaled-masked-softmax-grad *g* *x* -1 8.0 (linalg:greater (linalg:arange 384) 200.0))",
 				"(linalg:seed 9) (linalg::%la-dropout-mask '(384 384) 0.25 (linalg::%la-rng-state) nil)" }) {
 			assertThat(eval(operands + call, true)).as(call).isEqualTo(eval(operands + call, false));
 		}

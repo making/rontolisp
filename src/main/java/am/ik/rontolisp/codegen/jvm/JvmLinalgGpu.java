@@ -147,7 +147,11 @@ final class JvmLinalgGpu {
 	private static final Map<String, String> FUSED_KERNELS = Map.of(LispNames.LINALG_GELU, "gpuGelu",
 			LispNames.LINALG_GELU_GRAD, "gpuGeluGrad", LispNames.LINALG_SOFTMAX_GRAD, "gpuSoftmaxGrad",
 			LispNames.LINALG_LAYER_NORM, "gpuLayerNorm", LispNames.LINALG_LAYER_NORM_GRAD, "gpuLayerNormGrad",
-			LispNames.LINALG_DROPOUT_MASK, "gpuDropoutMask", LispNames.LINALG_LOG_SOFTMAX_GRAD, "gpuLogSoftmaxGrad");
+			LispNames.LINALG_DROPOUT_MASK, "gpuDropoutMask", LispNames.LINALG_LOG_SOFTMAX_GRAD, "gpuLogSoftmaxGrad",
+			// The attention head's scaled and masked softmax and its adjoint
+			// (2026-09-02).
+			LispNames.LINALG_SCALED_MASKED_SOFTMAX, "gpuScaledMaskedSoftmax",
+			LispNames.LINALG_SCALED_MASKED_SOFTMAX_GRAD, "gpuScaledMaskedSoftmaxGrad");
 
 	/**
 	 * Every qualified name the emit gate scans for. A program that reaches none of them

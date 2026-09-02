@@ -12932,6 +12932,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTorchAttentionViews() throws Exception {
+		// TorchGradcheck.ATTENTION_PROGRAM: the scale and mask views torch:softmax folds
+		// into one node (2026-09-02) against the materialized chain, bit for bit, on the
+		// compiled backend.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.ATTENTION_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.ATTENTION_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunTorchTransposeView() throws Exception {
 		// TorchGradcheck.VIEW_PROGRAM: the transpose view torch:matmul reads in place
 		// (todo-630) against the materialized transpose, bit for bit, on the compiled

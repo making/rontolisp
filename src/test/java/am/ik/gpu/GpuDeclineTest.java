@@ -450,6 +450,10 @@ class GpuDeclineTest {
 		assertThat(Gpu.softmax(xf, 0, cf, 0, rows, len)).isFalse();
 		assertThat(Gpu.softmaxGrad(x, 0, x, 0, c, 0, rows, len)).isFalse();
 		assertThat(Gpu.softmaxGrad(xf, 0, xf, 0, cf, 0, rows, len)).isFalse();
+		assertThat(Gpu.softmax(x, 0, x, 0, len, c, 0, rows, len, Gpu.BIN_DIV, 8.0, -1.0)).isFalse();
+		assertThat(Gpu.softmax(xf, 0, xf, 0, len, cf, 0, rows, len, Gpu.BIN_DIV, 8.0, -1.0)).isFalse();
+		assertThat(Gpu.softmaxGrad(x, 0, x, 0, x, 0, len, c, 0, rows, len, Gpu.BIN_DIV, 8.0)).isFalse();
+		assertThat(Gpu.softmaxGrad(xf, 0, xf, 0, xf, 0, len, cf, 0, rows, len, Gpu.BIN_DIV, 8.0)).isFalse();
 		assertThat(Gpu.logSoftmax(x, 0, c, 0, rows, len)).isFalse();
 		assertThat(Gpu.logSoftmax(xf, 0, cf, 0, rows, len)).isFalse();
 		assertThat(Gpu.logSoftmaxGrad(x, 0, x, 0, c, 0, rows, len)).isFalse();

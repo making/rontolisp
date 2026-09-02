@@ -147,6 +147,18 @@ public final class TorchGradcheck {
 			(gc-check "masked-fill"
 			          (lambda (a) (sq-loss (torch:masked-fill a #2A((1 0 0) (0 1 0)) -2.0)))
 			          (list *a23*))
+			;; The attention head's chain as ONE node (2026-09-02): a division by a scalar
+			;; and a masked fill are VIEWS torch:softmax folds into itself, with the
+			;; tape edge routed past them to the score -- the book's idiom, the scale
+			;; alone, the mask alone, and the division alone (materialized by the loss).
+			(gc-check "attention-softmax"
+			          (lambda (a) (sq-loss (torch:softmax (torch:masked-fill (torch:div a 2.0) #2A((0 1 1) (0 0 1)) -1.0e30) :axis -1)))
+			          (list *a23*))
+			(gc-check "scaled-softmax" (lambda (a) (sq-loss (torch:softmax (torch:div a 3.0) :axis 1))) (list *a23*))
+			(gc-check "masked-softmax"
+			          (lambda (a) (sq-loss (torch:softmax (torch:masked-fill a #2A((0 1 0) (1 0 0)) -4.0) :axis -1)))
+			          (list *a23*))
+			(gc-check "div-scalar" (lambda (a) (sq-loss (torch:div a 4.0))) (list *a23*))
 			(gc-check "gather" (lambda (a) (sq-loss (torch:gather a #(2 0)))) (list *a23*))
 			(gc-check "index-select-repeat"
 			          (lambda (a) (sq-loss (torch:index-select a #(1 0 1)))) (list *m32*))
@@ -492,6 +504,83 @@ public final class TorchGradcheck {
 			  (print (list (torch:shape v) (linalg:sum (torch:grad a)))))
 			""";
 
+	/**
+	 * The attention VIEWS (2026-09-02): {@code torch:div} by an untracked scalar and
+	 * {@code torch:masked-fill} under a number return tensors whose data is not
+	 * materialized, and {@code torch:softmax} in its {@code :axis} form folds the chain
+	 * into ONE node over the score -- {@code linalg::%la-scaled-masked-softmax} forward,
+	 * its adjoint backward, the tape edge routed past the views. Each {@code (T T)} line
+	 * pins the view path against the SAME chain materialized step by step
+	 * ({@code (torch:add view 0.0)} forces each view and its own adjoint) -- forward and
+	 * gradient, bit for bit: the book's idiom, the scale alone, the mask alone, the
+	 * reverse order, a chain over a transpose view, a same-shape mask, a scalar-tensor
+	 * divisor, and a TRACKED divisor (eager). Then the readers that must stay honest: the
+	 * shape, the printer, a second consumer of a view, a view made under
+	 * {@code torch:no-grad} (no gradient reaches the score), and a mask wider than its
+	 * source (the eager node).
+	 */
+	public static final String ATTENTION_PROGRAM = """
+			(defparameter *at-s* (linalg:reshape (linalg:from-list '(0.5 -1.0 2.0 1.5 0.25 -0.75 1.0 -0.5 0.75 -1.25 2.5 0.125 3.0 -2.0 0.5 1.0 -1.5 2.25)) '(2 3 3)))
+			(defparameter *at-w* (linalg:reshape (linalg:from-list '(1.0 -2.0 0.5 0.25 3.0 -1.0 2.0 1.5 -0.5 0.75 -1.25 2.5 0.125 3.0 -2.0 0.5 1.0 -1.5)) '(2 3 3)))
+			(defparameter *at-m* (torch:subsequent-mask 3))
+			(defparameter *at-inf* (/ -1.0 0.0))
+			(defun at-loss (y) (torch:sum (torch:mul y *at-w*)))
+			(defun at-force (x) (torch:add x 0.0))
+			(defun at-compare (f)
+			  ;; f over a score and a "force" (identity = the view chain, at-force = materialized).
+			  (let* ((s1 (torch:tensor *at-s* :requires-grad t))
+			         (s2 (torch:tensor *at-s* :requires-grad t))
+			         (y1 (funcall f s1 #'identity))
+			         (y2 (funcall f s2 #'at-force)))
+			    (torch:backward (at-loss y1))
+			    (torch:backward (at-loss y2))
+			    (print (list (linalg:array-equal (torch:data y1) (torch:data y2))
+			                 (linalg:array-equal (torch:grad s1) (torch:grad s2))))))
+			;; scale then mask (the book's idiom), scale only, mask only, mask then scale
+			(at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:masked-fill (funcall fc (torch:div s 8.0)) *at-m* *at-inf*)) :axis -1)))
+			(at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:div s 3.0)) :axis -1)))
+			(at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:masked-fill s *at-m* -5.0)) :axis 2)))
+			(at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:div (funcall fc (torch:masked-fill s *at-m* -5.0)) 2.0)) :axis -1)))
+			;; over a transpose view; a same-shape mask; a scalar-tensor divisor; a tracked divisor
+			(at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:masked-fill (funcall fc (torch:div (torch:transpose s '(0 2 1)) 8.0)) *at-m* *at-inf*)) :axis -1)))
+			(at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:masked-fill s (linalg:greater *at-w* 1.0) *at-inf*)) :axis -1)))
+			(at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:div s (torch:tensor 8.0))) :axis -1)))
+			(at-compare (lambda (s fc) (torch:softmax (funcall fc (torch:div s (torch:tensor 8.0 :requires-grad t))) :axis -1)))
+			;; the readers of a view: shape, print, a second consumer, the whole-array softmax
+			(let* ((s (torch:tensor *at-s* :requires-grad t))
+			       (v (torch:masked-fill (torch:div s 8.0) *at-m* *at-inf*)))
+			  (print (list (torch:shape v) (torch:shape (torch:div s 2.0))))
+			  (print (torch:masked-fill (torch:div (torch:tensor '((1.0 2.0) (3.0 4.0))) 2.0) #2A((0 1) (0 0)) -1.0))
+			  (torch:backward (at-loss (torch:add (torch:softmax v :axis -1) (torch:mul v 0.0))))
+			  (print (list (eq (torch:data v) (torch:data v)) (array-dimensions (torch:grad s)))))
+			;; under no-grad the view stays the parent: no gradient reaches the score
+			(let* ((s (torch:tensor *at-s* :requires-grad t))
+			       (v (torch:no-grad (torch:masked-fill (torch:div s 8.0) *at-m* *at-inf*)))
+			       (y (torch:softmax v :axis -1)))
+			  (print (list (torch:requires-grad-p v) (torch:requires-grad-p y) (null (torch:grad s)))))
+			;; a mask wider than the source is the eager node
+			(let* ((s (torch:tensor '(1.0 2.0 3.0) :requires-grad t))
+			       (y (torch:softmax (torch:masked-fill s #2A((1 0 0) (0 0 1)) -9.0) :axis -1)))
+			  (torch:backward (torch:sum (torch:mul y (torch:tensor '((1.0 2.0 3.0) (3.0 2.0 1.0))))))
+			  (print (list (torch:shape y) (array-dimensions (torch:grad s)))))
+			""";
+
+	/** The expected stdout of {@link #ATTENTION_PROGRAM}. */
+	public static final String ATTENTION_EXPECTED = """
+			(T T)
+			(T T)
+			(T T)
+			(T T)
+			(T T)
+			(T T)
+			(T T)
+			(T T)
+			((2 3 3) (2 3 3))
+			#<TENSOR #f((0.5 -1.0) (1.5 2.0))>
+			(T (2 3 3))
+			(NIL NIL T)
+			((2 3) (3))""";
+
 	/** The expected stdout of {@link #VIEW_PROGRAM}. */
 	public static final String VIEW_EXPECTED = """
 			(T T T)
@@ -557,6 +646,10 @@ public final class TorchGradcheck {
 			stack: ok
 			slice: ok
 			masked-fill: ok
+			attention-softmax: ok
+			scaled-softmax: ok
+			masked-softmax: ok
+			div-scalar: ok
 			gather: ok
 			index-select-repeat: ok
 			residual: ok

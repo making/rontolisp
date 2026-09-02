@@ -1814,22 +1814,26 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	@Override
-	public boolean softmax(double[] a, int oa, double[] c, int oc, int rows, int len) {
+	public boolean softmax(double[] a, int oa, @Nullable Object mask, int om, int maskLen, double[] c, int oc, int rows,
+			int len, int sop, double sf, double fill) {
 		return false;
 	}
 
 	@Override
-	public boolean softmaxF(float[] a, int oa, float[] c, int oc, int rows, int len) {
+	public boolean softmaxF(float[] a, int oa, @Nullable Object mask, int om, int maskLen, float[] c, int oc, int rows,
+			int len, int sop, double sf, double fill) {
 		return false;
 	}
 
 	@Override
-	public boolean softmaxGrad(double[] g, int og, double[] s, int os, double[] c, int oc, int rows, int len) {
+	public boolean softmaxGrad(double[] g, int og, double[] s, int os, @Nullable Object mask, int om, int maskLen,
+			double[] c, int oc, int rows, int len, int sop, double sf) {
 		return false;
 	}
 
 	@Override
-	public boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len) {
+	public boolean softmaxGradF(float[] g, int og, float[] s, int os, @Nullable Object mask, int om, int maskLen,
+			float[] c, int oc, int rows, int len, int sop, double sf) {
 		return false;
 	}
 

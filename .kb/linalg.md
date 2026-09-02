@@ -104,15 +104,18 @@ these three loops were a sixth of a `--gpu --simd` training step as boxed
 `row-major-aref` walks in `torch.lisp` (`.kb/gpu.md`). Nothing in the numpy surface
 reaches them; `.kb/linalg-simd.md` has the kernels.
 
-## Seven more internal members: the fused compositions (todo-499, todo-629, 2026-09-02)
+## Nine more internal members: the fused compositions (todo-499, todo-629, todo-641, 2026-09-02)
 
 `%la-softmax-grad (g out ax)`, `%la-log-softmax-grad (g out ax)`, `%la-gelu (x)`,
-`%la-gelu-grad (g x old)`, `%la-layer-norm (x eps)`, `%la-layer-norm-grad (g x eps old)`
-and `%la-dropout-mask (shape p st single)` exist for `torch:` the way `%la-adam-step` does,
+`%la-gelu-grad (g x old)`, `%la-layer-norm (x eps)`, `%la-layer-norm-grad (g x eps old)`,
+`%la-dropout-mask (shape p st single)`, `%la-scaled-masked-softmax (x scale mask fill ax)`
+and `%la-scaled-masked-softmax-grad (g out ax scale mask)` exist for `torch:` the way
+`%la-adam-step` does,
 with one difference: they have NO kernel of their own on the CPU seams. **Each defun is the
 chain of `linalg:` members `torch.lisp` used to spell** -- softmax's adjoint,
 log-softmax's, the exact GELU and its backward, layer-norm's normalization and its
-backward, the inverted-dropout mask -- member for member and in the tape's own order, so every CPU path (the scalar
+backward, the inverted-dropout mask, the attention head's division, fill and softmax
+and their adjoints (`scale` and `mask` nil for a member absent from the chain) -- member for member and in the tape's own order, so every CPU path (the scalar
 defuns, the `--simd` lane kernels reached through the calls inside) produces the bits it
 always produced, and only `--gpu` intercepts the member itself, as one pass
 (`.kb/gpu.md`, "The fused tier"; the tape-order argument is `.kb/torch.md`, "The fused

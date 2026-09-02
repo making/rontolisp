@@ -885,15 +885,162 @@ __device__ void tile_store(row_tile<T>& tile, T* C, int rows, int len, int row0,
   __syncwarp();
 }
 
+// THE ATTENTION SCALE AND MASK (2026-09-02). `torch:softmax` over a score that was DIVIDED
+// by a scalar and MASKED (`torch:div` then `torch:masked-fill`, the attention head's own
+// idiom) reaches the softmax pair with the two eager passes folded in: the operand is read
+// as `(T)(x / s)` (or `(T)(x * (1 / s))` when the reciprocal is exact -- `Gpu.scale`'s own
+// rewrite, decided on the host) and then as `fill` wherever the mask is non-zero, rounding
+// where the two members rounded, so the row the kernel folds is the row the chain would
+// have stored. The adjoint undoes the two in the tape's order: zero where the mask is,
+// then the scale, each rounded at the width. `sop` 0 leaves the operand alone, 1
+// multiplies by `sf`, 2 divides by it.
+//
+// The mask is a TRAILING block of the operand (its dims are a suffix of the operand's,
+// `(1 256 256)` over `(64 256 256)`), so its cell for flat index `i` is `i % mask_len`.
+// It reaches the row kernels PACKED, one bit a cell (`pack_mask_*`, launched by the same
+// call just before), because reading it as it is was measured at the cost of the pass it
+// replaced: the row kernels run one thread per row -- 16384 threads at the book's shape,
+// a tenth of the card -- so a load per cell is exposed latency there where the
+// element-wise `where` kernel hid it under four million threads, and the adjoint's mask
+// pass cost 0.19 ms a call against the `where` pass's 0.11. Packed, and with the mask a
+// whole number of rows of thirty-two-aligned length (the causal mask, and every last-axis
+// score), a lane loads ONE word for its row and the thirty-two lanes exchange bits through
+// shuffles: thirty-two loads a chunk become one. "Non-zero" is `linalg:where`'s `(/= m 0)`
+// -- a NaN counts, a negative zero does not -- which is "any bit but the sign set", so
+// the packing is an integer test that keeps the fp64 pipe (the folds' bottleneck) idle.
+//
+// Two more things measured on the way, at the book's score shape `(64 256 256)`, f32:
+// - A `__shared__` tile inside each instantiation of the row body is one tile per
+//   instantiation per block (25 KB where the plain kernel had 8), and the lost occupancy
+//   made the PLAIN path 30% slower; the tiles are declared once, in the dispatcher.
+// - The forward reads the operand twice (the max pass and the exp pass); with a scale or
+//   a mask the first pass writes the row it read -- scaled and masked -- into the result
+//   as scratch and the exp pass reads that back, so the scale's divide (slow at f64) and
+//   the mask are applied once. The plain softmax (no mask, no scale) is the pre-641 body,
+//   verbatim, since a shared body branching on runtime flags measured 10% slower.
+
+template <typename T>
+__device__ inline T scaled(T x, int sop, double sf) {
+  if (sop == 1) return (T) F_MUL(x, sf);
+  if (sop == 2) return (T) F_DIV(x, sf);
+  return x;
+}
+
+// The mask packed one bit a cell: word w holds cells [32 w, 32 w + 32), bit i for cell
+// 32 w + i, set where the cell is non-zero (any bit but the sign).
+template <typename T>
+__device__ void pack_mask(const T* M, unsigned* P, int n) {
+  int w = blockIdx.x * blockDim.x + threadIdx.x;
+  int base = w * 32;
+  if (base >= n) return;
+  unsigned bits = 0;
+  for (int i = 0; i < 32 && base + i < n; ++i) {
+    bool hit = sizeof(T) == 4 ? ((((const unsigned*) M)[base + i] & 0x7fffffffu) != 0u)
+                              : ((((const unsigned long long*) M)[base + i] & 0x7fffffffffffffffull) != 0ull);
+    if (hit) bits |= 1u << i;
+  }
+  P[w] = bits;
+}
+
+extern "C" __global__ void pack_mask_f32(const float* M, unsigned* P, int n) {
+  pack_mask<float>(M, P, n);
+}
+
+extern "C" __global__ void pack_mask_f64(const double* M, unsigned* P, int n) {
+  pack_mask<double>(M, P, n);
+}
+
+__device__ inline bool packed_hit(const unsigned* P, int cell) {
+  return (P[cell >> 5] >> (cell & 31)) & 1u;
+}
+
+// The mask's flags for rows [row0, row0 + 32) at column c0 + lane, one bit per row, from
+// the packed mask. Fast path (mask_rows > 0, len a multiple of 32): lane r loads the one
+// word of row row0 + r that covers columns [c0, c0 + 32) and the lanes exchange bits by
+// shuffle. Otherwise each lane looks its thirty-two cells up one by one.
+__device__ inline unsigned mask_bits(const unsigned* P, int mask_len, int mask_rows, int rows, int len, int row0,
+                                     int c0, int lane) {
+  unsigned bits = 0;
+  if (mask_rows > 0 && (len & 31) == 0) {
+    int row = row0 + lane;
+    unsigned word = 0;
+    if (row < rows) word = P[((row % mask_rows) * len + c0) >> 5];
+#pragma unroll
+    for (int r = 0; r < 32; ++r) {
+      unsigned w = __shfl_sync(0xffffffffu, word, r);
+      bits |= ((w >> lane) & 1u) << r;
+    }
+    return bits;
+  }
+  int col = c0 + lane;
+  if (col >= len) return bits;
+#pragma unroll 1
+  for (int r = 0; r < 32; ++r) {
+    int row = row0 + r;
+    if (row < rows && packed_hit(P, (int) (((long long) row * len + col) % mask_len))) bits |= 1u << r;
+  }
+  return bits;
+}
+
+// tile_load with the scale and the mask applied on the way in: the cell holds what the
+// chain's `masked` array would have held.
+template <typename T>
+__device__ void tile_load_sm(row_tile<T>& tile, const T* A, unsigned bits, int rows, int len, int row0, int c0,
+                             int lane, int sop, double sf, T fill) {
+  __syncwarp();
+  int col = c0 + lane;
+#pragma unroll
+  for (int r = 0; r < 32; ++r) {
+    int row = row0 + r;
+    T v = (T) 0;
+    if (row < rows && col < len) v = (bits >> r) & 1u ? fill : scaled(A[(long long) row * len + col], sop, sf);
+    tile.v[r][lane] = v;
+  }
+  __syncwarp();
+}
+
+// tile_store with the mask's zeroing and the scale applied on the way out -- the adjoint's
+// last two members, in the tape's order. The scale's op is decided once, outside the
+// unrolled loop, so that the loop is thirty-two independent stores whatever the op.
+template <typename T>
+__device__ void tile_store_sm(row_tile<T>& tile, T* C, unsigned bits, int rows, int len, int row0, int c0, int lane,
+                              int sop, double sf) {
+  __syncwarp();
+  int col = c0 + lane;
+  if (col < len) {
+    if (sop == 1) {
+#pragma unroll
+      for (int r = 0; r < 32; ++r) {
+        int row = row0 + r;
+        if (row < rows) C[(long long) row * len + col] = (T) F_MUL((bits >> r) & 1u ? (T) 0 : tile.v[r][lane], sf);
+      }
+    }
+    else if (sop == 2) {
+#pragma unroll
+      for (int r = 0; r < 32; ++r) {
+        int row = row0 + r;
+        if (row < rows) C[(long long) row * len + col] = (T) F_DIV((bits >> r) & 1u ? (T) 0 : tile.v[r][lane], sf);
+      }
+    }
+    else {
+#pragma unroll
+      for (int r = 0; r < 32; ++r) {
+        int row = row0 + r;
+        if (row < rows) C[(long long) row * len + col] = (bits >> r) & 1u ? (T) 0 : tile.v[r][lane];
+      }
+    }
+  }
+  __syncwarp();
+}
+
 // `linalg:softmax` over the last axis: amax (the strict fold, seeded with the first
 // element), the broadcast sub, exp at the width, the sum fold, the broadcast div. Three
 // passes over the row: the max, exp into the result with the sum, the division in place.
+// This is the plain kernel, neither scaled nor masked: the pre-641 body, kept verbatim.
 template <typename T>
-__device__ void softmax_rows(const T* A, T* C, int rows, int len) {
-  __shared__ row_tile<T> tiles[ROW_WARPS];
-  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
-  row_tile<T>& tile = tiles[warp];
-  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+__device__ void softmax_rows_plain(row_tile<T>& tile, const T* A, T* C, int rows, int len) {
+  int lane = threadIdx.x & 31;
+  int row0 = (blockIdx.x * ROW_WARPS + (threadIdx.x >> 5)) * 32;
   if (row0 >= rows) return;
   double m = 0.0;
   for (int c0 = 0; c0 < len; c0 += 32) {
@@ -923,23 +1070,75 @@ __device__ void softmax_rows(const T* A, T* C, int rows, int len) {
   }
 }
 
-extern "C" __global__ void softmax_f32(const float* A, float* C, int rows, int len) {
-  softmax_rows<float>(A, C, rows, len);
+// The same over a scaled and/or masked score (P null for no mask, sop 0 for no scale):
+// the first pass applies both as it reads and writes the row into the result as scratch,
+// the exp pass reads it back from there.
+template <typename T>
+__device__ void softmax_rows_sm(row_tile<T>& tile, const T* A, const unsigned* P, int mask_len, T* C, int rows,
+                                int len, int sop, double sf, double fill) {
+  int lane = threadIdx.x & 31;
+  int row0 = (blockIdx.x * ROW_WARPS + (threadIdx.x >> 5)) * 32;
+  if (row0 >= rows) return;
+  int mask_rows = mask_len % len == 0 ? mask_len / len : 0;
+  T fl = (T) fill;
+  double m = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    unsigned bits = P == 0 ? 0 : mask_bits(P, mask_len, mask_rows, rows, len, row0, c0, lane);
+    tile_load_sm(tile, A, bits, rows, len, row0, c0, lane, sop, sf, fl);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      double x = (double) tile.v[lane][j];
+      if (c0 + j == 0 || x > m) m = x;
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+  T mt = (T) m;
+  double sum = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, C, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T s = (T) F_SUB(tile.v[lane][j], mt);
+      T e = exp(s);
+      tile.v[lane][j] = e;
+      sum = F_ADD(sum, e);
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+  T d = (T) sum;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, C, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) tile.v[lane][j] = (T) F_DIV(tile.v[lane][j], d);
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
 }
 
-extern "C" __global__ void softmax_f64(const double* A, double* C, int rows, int len) {
-  softmax_rows<double>(A, C, rows, len);
+// The tile is declared here, once per kernel, and passed down (see the header above).
+template <typename T>
+__device__ void softmax_dispatch(const T* A, const unsigned* P, int mask_len, T* C, int rows, int len, int sop,
+                                 double sf, double fill) {
+  __shared__ row_tile<T> tiles[ROW_WARPS];
+  row_tile<T>& tile = tiles[threadIdx.x >> 5];
+  if (P == 0 && sop == 0) softmax_rows_plain<T>(tile, A, C, rows, len);
+  else softmax_rows_sm<T>(tile, A, P, mask_len, C, rows, len, sop, sf, fill);
+}
+
+extern "C" __global__ void softmax_f32(const float* A, const unsigned* P, int mask_len, float* C, int rows, int len,
+                                       int sop, double sf, double fill) {
+  softmax_dispatch<float>(A, P, mask_len, C, rows, len, sop, sf, fill);
+}
+
+extern "C" __global__ void softmax_f64(const double* A, const unsigned* P, int mask_len, double* C, int rows,
+                                       int len, int sop, double sf, double fill) {
+  softmax_dispatch<double>(A, P, mask_len, C, rows, len, sop, sf, fill);
 }
 
 // `torch:softmax`'s adjoint, out * (g - sum(g * out)): the zip mul, the sum fold, the
-// broadcast sub, the zip mul. No libm anywhere, so bit-identical to the CPU chain.
+// broadcast sub, the zip mul. No libm anywhere, so bit-identical to the CPU chain. The
+// plain adjoint: the pre-641 body, verbatim.
 template <typename T>
-__device__ void softmax_grad_rows(const T* G, const T* O, T* C, int rows, int len) {
-  __shared__ row_tile<T> tiles[ROW_WARPS][2];
-  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
-  row_tile<T>& gt = tiles[warp][0];
-  row_tile<T>& ot = tiles[warp][1];
-  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+__device__ void softmax_grad_rows_plain(row_tile<T>& gt, row_tile<T>& ot, const T* G, const T* O, T* C, int rows,
+                                        int len) {
+  int lane = threadIdx.x & 31;
+  int row0 = (blockIdx.x * ROW_WARPS + (threadIdx.x >> 5)) * 32;
   if (row0 >= rows) return;
   double sum = 0.0;
   for (int c0 = 0; c0 < len; c0 += 32) {
@@ -962,12 +1161,59 @@ __device__ void softmax_grad_rows(const T* G, const T* O, T* C, int rows, int le
   }
 }
 
-extern "C" __global__ void softmax_grad_f32(const float* G, const float* O, float* C, int rows, int len) {
-  softmax_grad_rows<float>(G, O, C, rows, len);
+// The same for a softmax over a scaled and masked score: the two members' adjoints in the
+// tape's order -- `where(mask, 0, dx)` and the division by the scale, each rounded at the
+// width -- applied in the store. The mask's bits are read FIRST in each chunk, so that
+// the load is in flight under the tile loads and the products rather than exposed between
+// the products and the stores.
+template <typename T>
+__device__ void softmax_grad_rows_sm(row_tile<T>& gt, row_tile<T>& ot, const T* G, const T* O, const unsigned* P,
+                                     int mask_len, T* C, int rows, int len, int sop, double sf) {
+  int lane = threadIdx.x & 31;
+  int row0 = (blockIdx.x * ROW_WARPS + (threadIdx.x >> 5)) * 32;
+  if (row0 >= rows) return;
+  int mask_rows = mask_len % len == 0 ? mask_len / len : 0;
+  double sum = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T p = (T) F_MUL(gt.v[lane][j], ot.v[lane][j]);
+      sum = F_ADD(sum, p);
+    }
+  }
+  T tot = (T) sum;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    unsigned bits = P == 0 ? 0 : mask_bits(P, mask_len, mask_rows, rows, len, row0, c0, lane);
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T q = (T) F_SUB(gt.v[lane][j], tot);
+      ot.v[lane][j] = (T) F_MUL(ot.v[lane][j], q);
+    }
+    tile_store_sm(ot, C, bits, rows, len, row0, c0, lane, sop, sf);
+  }
 }
 
-extern "C" __global__ void softmax_grad_f64(const double* G, const double* O, double* C, int rows, int len) {
-  softmax_grad_rows<double>(G, O, C, rows, len);
+template <typename T>
+__device__ void softmax_grad_dispatch(const T* G, const T* O, const unsigned* P, int mask_len, T* C, int rows,
+                                      int len, int sop, double sf) {
+  __shared__ row_tile<T> tiles[ROW_WARPS][2];
+  int warp = threadIdx.x >> 5;
+  row_tile<T>& gt = tiles[warp][0];
+  row_tile<T>& ot = tiles[warp][1];
+  if (P == 0 && sop == 0) softmax_grad_rows_plain<T>(gt, ot, G, O, C, rows, len);
+  else softmax_grad_rows_sm<T>(gt, ot, G, O, P, mask_len, C, rows, len, sop, sf);
+}
+
+extern "C" __global__ void softmax_grad_f32(const float* G, const float* O, const unsigned* P, int mask_len,
+                                            float* C, int rows, int len, int sop, double sf) {
+  softmax_grad_dispatch<float>(G, O, P, mask_len, C, rows, len, sop, sf);
+}
+
+extern "C" __global__ void softmax_grad_f64(const double* G, const double* O, const unsigned* P, int mask_len,
+                                            double* C, int rows, int len, int sop, double sf) {
+  softmax_grad_dispatch<double>(G, O, P, mask_len, C, rows, len, sop, sf);
 }
 
 // `linalg:log-softmax` over the last axis: amax (the strict fold, seeded with the first
