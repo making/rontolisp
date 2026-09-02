@@ -14279,11 +14279,34 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void minMaxDoubleLiteralPathFollowsMathMinMax() throws Exception {
-		// Passes once the -0.0 literal survives compilation: Math.min/max are
-		// sign- and NaN-aware on the double-literal path.
-		assertThat(compileAndRun("(print (min 0.0 -0.0))")).isEqualTo("-0.0");
-		assertThat(compileAndRun("(print (max -0.0 0.0))")).isEqualTo("0.0");
+	void minMaxSelectByIeeeComparisonOnBothTheLiteralAndTheVariablePath() throws Exception {
+		// min(a,b) = (a <= b) ? a : b, max(a,b) = (a >= b) ? a : b -- the _fmin/_fmax
+		// helpers, NOT Math.min/Math.max, which this double-literal path used to call.
+		// Math.min/max resolve a signed-zero tie by SIGN whichever way round the
+		// arguments come, and propagate NaN from either side; _min/_max on the variable
+		// path did neither, so one program answered two different things depending on
+		// whether an operand happened to be a literal. Both paths now agree, with the
+		// other three backends and with upstream Common Lisp.
+
+		// An equal-value tie keeps the LEFT operand.
+		assertThat(compileAndRun("(print (list (min -0.0 0.0) (min 0.0 -0.0)))")).isEqualTo("(-0.0 0.0)");
+		assertThat(compileAndRun("(print (list (max -0.0 0.0) (max 0.0 -0.0)))")).isEqualTo("(-0.0 0.0)");
+		assertThat(compileAndRun("(let ((nz -0.0) (pz 0.0)) (print (list (min nz pz) (min pz nz))))"))
+			.isEqualTo("(-0.0 0.0)");
+		assertThat(compileAndRun("(let ((nz -0.0) (pz 0.0)) (print (list (max nz pz) (max pz nz))))"))
+			.isEqualTo("(-0.0 0.0)");
+
+		// NaN is unordered, so the comparison fails and the RIGHT operand is taken.
+		assertThat(compileAndRun("(print (list (min (/ 0.0 0.0) 1.0) (min 1.0 (/ 0.0 0.0))))")).isEqualTo("(1.0 NaN)");
+		assertThat(compileAndRun("(print (list (max (/ 0.0 0.0) 1.0) (max 1.0 (/ 0.0 0.0))))")).isEqualTo("(1.0 NaN)");
+		assertThat(compileAndRun("(let ((n (/ 0.0 0.0)) (one 1.0)) (print (list (min n one) (min one n))))"))
+			.isEqualTo("(1.0 NaN)");
+		assertThat(compileAndRun("(let ((n (/ 0.0 0.0)) (one 1.0)) (print (list (max n one) (max one n))))"))
+			.isEqualTo("(1.0 NaN)");
+
+		// ordinary selections and integers are untouched
+		assertThat(compileAndRun("(print (list (min 1.0 2.0) (max 1.0 2.0) (min 3 1 2) (max 3 1 2)))"))
+			.isEqualTo("(1.0 2.0 1 3)");
 	}
 
 	// ---- Method name mangling ----

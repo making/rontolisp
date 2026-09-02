@@ -818,7 +818,7 @@ The settled answers, all four backends, literal path and variable path alike (`n
 | `(max nz pz)` / `(max pz nz)` | `-0.0` / `0.0` | tie keeps the LEFT operand |
 | `(min nan x)` / `(min x nan)` | `x` / `NaN` | unordered, so the RIGHT operand wins |
 | `(signum nz)` / `(signum nan)` | `-0.0` / `NaN` | `Math.signum` |
-| `(sin nz)` / `(tan nz)` | `-0.0` | odd functions |
+| `(sin nz)` / `(tan nz)` / `(tanh nz)` | `-0.0` | odd functions |
 | `(mod nz 2.0)` / `(rem nz 2.0)` | `-0.0` | a zero remainder takes the DIVIDEND's sign |
 | `(eql nz pz)` / `(equal nz pz)` | `NIL` | float `eql` is a BIT compare |
 
@@ -849,15 +849,19 @@ emits a native `f64.le`/`f64.ge`), they just compute the same select as the gene
   SBCL differs here on the *other* zero cases -- it computes `a - b*q` with an exact INTEGER
   `q`, giving `(rem -4.0 2.0)` = `0.0` and `(mod -0.0 -2.0)` = `0.0` where all four of our
   backends give `-0.0`. That is a `mod`/`rem` definition question, not a signed-zero one,
-  and it was left alone: see `.todo/`.
-- **`signum`/`sin`/`tan`** flattened on wasm because each computes the answer by a route
-  that erases the sign -- `(x>0)-(x<0)` is `+0.0` for `+0.0`, `-0.0` and NaN alike, and the
-  Cody-Waite reduction's `-0.0 - (-0.0)` cancels to `+0.0`. Each now guards the zero (and,
-  for `signum`, the NaN) case and answers the argument itself. The `--simd` kernels
-  (`WasmVecSimdRuntimeBuilder.emitSignumF64` / `emitSinCosF64`, shared by `vec:`, `linalg:`
-  and `--no-gc`) carry the SAME guards -- they are pinned byte-identical to the scalar
-  defun path by `wasmGcSimdUnaryUfuncsAreByteIdenticalToTheScalarPath` and its `linalg`
-  twin, which fail if only one side is changed.
+  and it was left alone: see `.todo/652`.
+- **`signum`/`sin`/`tan`/`tanh`** flattened on wasm because each computes the answer by a
+  route that erases the sign -- `(x>0)-(x<0)` is `+0.0` for `+0.0`, `-0.0` and NaN alike,
+  the Cody-Waite reduction's `-0.0 - (-0.0)` cancels to `+0.0`, and `tanh`'s
+  `(e-1)/(e+1)` is `0.0/2.0` once `exp(-0.0)` has rounded to `1.0`. Each now guards the
+  zero (and, for `signum`, the NaN) case and answers the argument itself. **`tanh` was NOT
+  in todo-648's original table** -- the sweep that produced it missed the row, and it
+  turned up only when the doc sentence describing `signum`/`sin`/`tan` as diverging had to
+  be rewritten. The `--simd` kernels (`WasmVecSimdRuntimeBuilder.emitSignumF64` /
+  `emitSinCosF64` / `emitTanhF64`, shared by `vec:`, `linalg:` and `--no-gc`) carry the
+  SAME guards -- they are pinned byte-identical to the scalar defun path by
+  `wasmGcSimdUnaryUfuncsAreByteIdenticalToTheScalarPath` and its `linalg` twin, which fail
+  if only one side is changed.
 
 **Still divergent, and deliberately out of 648's scope**: float CONTAGION in `min`/`max`.
 `(min 1 2.0)` is `1.0` on the interpreter (it coerces when any argument is a float) but the
@@ -865,7 +869,7 @@ integer `1` on both compilers' general path, which hand back the winning operand
 stands -- and `1.0` on the JVM's literal path, so that backend disagrees with itself.
 **SBCL answers `1`**, and CLHS explicitly leaves it implementation-dependent whether
 `max`/`min` apply float contagion. Converging it changes a printed TYPE rather than a
-printed sign, so it wants its own item: see `.todo/`.
+printed sign, so it wants its own item: see `.todo/653`.
 
 Everything else in the sweep agreed on all four from the start: `abs`, unary minus, binary
 `+ - * /` sign propagation, `1/x` on either zero, `sqrt`, `float`,

@@ -735,7 +735,7 @@ final class WasmVecSimdRuntimeBuilder {
 	static int scalarOpF64Locals(int scalarOp) {
 		return switch (scalarOp) {
 			case SCALAR_OP_SIN, SCALAR_OP_COS, SCALAR_OP_TAN, SCALAR_OP_ASIN, SCALAR_OP_ACOS, SCALAR_OP_ATAN -> 5;
-			case SCALAR_OP_LOG, SCALAR_OP_SINH, SCALAR_OP_COSH -> 3;
+			case SCALAR_OP_LOG, SCALAR_OP_SINH, SCALAR_OP_COSH, SCALAR_OP_TANH -> 3;
 			default -> 2;
 		};
 	}
@@ -749,7 +749,7 @@ final class WasmVecSimdRuntimeBuilder {
 			case SCALAR_OP_EXP -> emitExpF64(w, f64Base, f64Base + 1);
 			case SCALAR_OP_SIGN -> emitSignumF64(w, f64Base);
 			case SCALAR_OP_LOG -> emitLogF64(w, f64Base, f64Base + 1, f64Base + 2);
-			case SCALAR_OP_TANH -> emitTanhF64(w, f64Base, f64Base + 1);
+			case SCALAR_OP_TANH -> emitTanhF64(w, f64Base, f64Base + 1, f64Base + 2);
 			case SCALAR_OP_SIN, SCALAR_OP_COS, SCALAR_OP_TAN -> emitSinCosF64(w, scalarOp, f64Base);
 			case SCALAR_OP_ASIN, SCALAR_OP_ACOS, SCALAR_OP_ATAN -> emitAtanFamilyF64(w, scalarOp, f64Base);
 			case SCALAR_OP_SINH, SCALAR_OP_COSH -> emitSinhCoshF64(w, scalarOp, f64Base);
@@ -1000,7 +1000,18 @@ final class WasmVecSimdRuntimeBuilder {
 	 * clamped {@code (e^(2x)-1)/(e^(2x)+1)} derivation {@link WasmTanhCompiler} emits on
 	 * the boxed defun path, over the same two raw f64 locals as {@link #emitExpF64}.
 	 */
-	static void emitTanhF64(WasmWriter w, int tLocal, int accLocal) {
+	static void emitTanhF64(WasmWriter w, int tLocal, int accLocal, int xLocal) {
+		WasmVecLoops.set(w, xLocal);
+		// tanh is ODD, so tanh(+/-0.0) is the argument itself -- the derivation below
+		// cannot produce that (exp(-0.0) is 1.0, and (e-1)/(e+1) is 0.0/2.0 = +0.0).
+		// Mirrors the guard WasmTanhCompiler emits on the boxed defun path.
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF, Type.F64.code());
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.ELSE);
+		WasmVecLoops.get(w, xLocal);
 		w.write(Instruction.F64_CONST).writeF64(2.0);
 		w.write(Instruction.F64_MUL);
 		w.write(Instruction.F64_CONST).writeF64(-WasmTanhCompiler.CLAMP);
@@ -1016,6 +1027,7 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.F64_CONST).writeF64(1.0);
 		w.write(Instruction.F64_ADD);
 		w.write(Instruction.F64_DIV);
+		w.write(Instruction.END);
 	}
 
 	/**

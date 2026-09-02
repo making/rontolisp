@@ -1237,6 +1237,7 @@ cases:
       (defun sz-signum (a) (signum a))
       (defun sz-sin (a) (sin a))
       (defun sz-tan (a) (tan a))
+      (defun sz-tanh (a) (tanh a))
       (defun sz-mod (a b) (mod a b))
       (defun sz-rem (a b) (rem a b))
       (defun sz-eql (a b) (eql a b))
@@ -1246,7 +1247,7 @@ cases:
       (print (list (sz-max -0.0 0.0) (sz-max 0.0 -0.0)))
       (print (list (min -0.0 0.0) (min 0.0 -0.0) (max -0.0 0.0) (max 0.0 -0.0)))
       (print (list (sz-signum -0.0) (sz-signum 0.0)))
-      (print (list (sz-sin -0.0) (sz-tan -0.0)))
+      (print (list (sz-sin -0.0) (sz-tan -0.0) (sz-tanh -0.0)))
       (print (list (sz-mod -0.0 2.0) (sz-rem -0.0 2.0)))
       (print (list (sz-eql -0.0 0.0) (sz-equal -0.0 0.0)))
       (print (list (sz-eql -0.0 -0.0) (= -0.0 0.0)))
@@ -1256,7 +1257,7 @@ cases:
       (-0.0 0.0)
       (-0.0 0.0 -0.0 0.0)
       (-0.0 0.0)
-      (-0.0 -0.0)
+      (-0.0 -0.0 -0.0)
       (-0.0 -0.0)
       (NIL NIL)
       (T T)
@@ -9090,6 +9091,9 @@ cases:
       (print (zerop (* -1.0 0.0)))
       (print (minusp (* -1.0 0.0)))
       (print (plusp (* -1.0 0.0)))
+      ;; min/max keep the LEFT operand on an equal-value tie (they are folds of
+      ;; (a <= b) ? a : b and (a >= b) ? a : b), so these two answer their first
+      ;; argument. Not Math.min/f64.min, which would answer by SIGN both times.
       (print (min 0.0 -0.0))
       (print (max -0.0 0.0))
     expected: |
@@ -9103,8 +9107,8 @@ cases:
       T
       NIL
       NIL
-      -0.0
       0.0
+      -0.0
   - name: ieee-float-nan-comparisons
     source: |
       (print (= (/ 0.0 0.0) (/ 0.0 0.0)))
@@ -9115,6 +9119,8 @@ cases:
       (print (/= (/ 0.0 0.0) (/ 0.0 0.0)))
       (let ((n (/ 0.0 0.0)) (one 1.0))
         (print (list (< n one) (<= n one) (> n one) (>= n one) (= n n) (/= n n))))
+      ;; A NaN operand is unordered, so min/max's comparison is false and the RIGHT
+      ;; operand wins -- NaN only when it is itself on the right.
       (print (min 1.0 (/ 0.0 0.0)))
       (print (max (/ 0.0 0.0) 1.0))
     expected: |
@@ -9126,7 +9132,7 @@ cases:
       T
       (NIL NIL NIL NIL NIL T)
       NaN
-      NaN
+      1.0
   - name: ieee-float-infinity-nan-printing
     source: |
       (print (/ 1.0 0.0))

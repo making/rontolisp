@@ -22,9 +22,9 @@ import am.ik.wasm.Instruction;
  * <p>
  * Like {@code exp} itself, the result matches {@code Math.tanh} to roughly 1e-6 relative
  * error but is not bit-identical to the interpreter/JVM value (for a tiny {@code x} the
- * {@code e^(2x) - 1} subtraction additionally loses a few low-order digits, and
- * {@code (tanh -0.0)} is {@code 0.0} here where {@code Math.tanh} keeps {@code -0.0} --
- * the same class of edge as the wasm {@code signum}).
+ * {@code e^(2x) - 1} subtraction additionally loses a few low-order digits). The IEEE
+ * edges DO match: NaN survives the clamp, and a zero short-circuits to the argument so
+ * {@code (tanh -0.0)} is {@code -0.0} as on every other backend.
  */
 final class WasmTanhCompiler {
 
@@ -44,10 +44,31 @@ final class WasmTanhCompiler {
 		}
 		int tSlot = ctx.allocTemp();
 		int accSlot = ctx.allocTemp();
+		int xSlot = ctx.allocTemp();
 
-		// e = exp(clamp(2x)), boxed into accSlot by the shared exp core.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmEmitHelper.castFloatGetF64(ctx);
+		WasmExpCompiler.boxF64(ctx);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(xSlot);
+
+		// tanh is ODD, so tanh(+/-0.0) is the argument itself, sign of the zero included
+		// -- which the derivation below cannot produce: exp(-0.0) is 1.0, and the
+		// (e-1)/(e+1) that follows is (0.0)/(2.0) = +0.0, flattening the sign. Answering
+		// the argument is exact, and it is what Math.tanh gives the interpreter and the
+		// JVM backend.
+		WasmExpCompiler.unboxF64Local(ctx, xSlot);
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(0.0);
+		ctx.writer.write(Instruction.F64_EQ);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(xSlot);
+		ctx.writer.write(Instruction.ELSE);
+
+		// e = exp(clamp(2x)), boxed into accSlot by the shared exp core.
+		WasmExpCompiler.unboxF64Local(ctx, xSlot);
 		ctx.writer.write(Instruction.F64_CONST);
 		ctx.writer.writeF64(2.0);
 		ctx.writer.write(Instruction.F64_MUL);
@@ -71,6 +92,7 @@ final class WasmTanhCompiler {
 		ctx.writer.write(Instruction.F64_ADD);
 		ctx.writer.write(Instruction.F64_DIV);
 		WasmExpCompiler.boxF64(ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 }
