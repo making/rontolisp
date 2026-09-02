@@ -48,14 +48,22 @@ home.** This is a separate rule from where the number lives, and the two fail se
 `.todo/478` wrote its conditions down in full ("probe 6", "back to back", "a 20-200 us
 gap") -- which is exactly why it can be read TODAY as the first instance of trap 1 -- and
 still did not reach the next person, because it lived under `--parallel`. `.todo/471`'s
-Accelerate column has the opposite gap: it is in the right file and it NAMES the
+Accelerate column had the opposite gap: it is in the right file and it NAMES the
 thread-pool trap in the sentence after its own table ("The 64-thread column is the trap"),
-but while its dorian rows say "1 thread" and "64 threads", its M4 Max rows do not say
-anything, and Accelerate decides for itself how many threads a problem size gets. So
-nobody can now say whether that 6-9x was measured against a pool the probe kept hot or
-against no pool at all -- not that it was wrong, that it is UNDECIDABLE short of measuring
-it again. Placement without conditions and conditions without placement each lose the
-number; you need both.
+but while its dorian rows said "1 thread" and "64 threads", its M4 Max rows said nothing,
+and Accelerate decides for itself how many threads a problem size gets. So nobody could say
+whether that 6-9x was measured against a pool the probe kept hot or against no pool at all
+-- not that it was wrong, that it was UNDECIDABLE short of measuring it again. Placement
+without conditions and conditions without placement each lose the number; you need both.
+
+**It was decided by measuring it again, and it cost a day** (todo-651, 2026-09-03): the
+column was one thread and stands as measured. Note what the missing condition cost --
+re-running two probes and an end-to-end model on a machine that had to be quiet -- against
+what writing "1 thread" beside the number would have cost when it was taken. **And note
+that the answer could not be inferred**: Accelerate exports no thread query at all, so the
+count had to be established indirectly, by finding the shapes where
+`VECLIB_MAXIMUM_THREADS=1` moves the library's own time. A condition you can still recover
+is lucky, not the normal case.
 
 **A measurement that says the change is not worth its blast radius is a result.** That is
 CLAUDE.md's rule and it is the reason the traps matter: a probe that flatters a change
@@ -71,8 +79,15 @@ not the workload"): 768x288 measured 1.8x back to back and 0.5-0.9x with a 20-20
 between calls -- and the in-situ result was the one that matched the end-to-end tok/s.
 `.todo/649` hit the same shape through OpenBLAS's own pool, `.kb/linalg-blas.md`: the
 288x288 `#f` gemv is 17.4 us hot and 90.0 us with ~200 us of unrelated work between calls,
-against 13.3 us capped to one thread. Those are x86 numbers; **the Apple side of that one
-is not measured yet** (`.todo/651`). Note what the two items are between them: the FIX
+against 13.3 us capped to one thread. Those are x86 numbers, and **the Apple side is now
+measured too: the trap is not there** (todo-651, 2026-09-03, `.kb/linalg-blas.md`, "What
+Accelerate does about threads"). Accelerate runs every shape a decode loop makes on ONE
+thread -- `VECLIB_MAXIMUM_THREADS=1` moves nothing from 131 Kflop to 33.6 Mflop -- and at
+the shapes where it does thread it pays no wake-up: `dgemv 2048x2048` is 127-132 us back to
+back and 124-128 us with the same 200 us gap. End to end the flag is a 1.90x WIN there and
+capping it costs 9%, the exact inverse of dorian. **So a trap is a property of the
+implementation, not of the mechanism**: two tuned CBLAS libraries at the same shapes, and
+the remedy for one is the mistake on the other. Note what the two items are between them: the FIX
 `.todo/478` chose is workers that spin on an epoch and park only after 1 ms idle,
 "what every BLAS does" -- so the property that makes a tuned pool fast is exactly the
 property that makes a back-to-back probe of it lie. The trap and the optimization are one
@@ -96,7 +111,10 @@ are usually built once and reached every repetition, so a cache that adopts on t
 sight has them from the third repetition on; a workload's intermediates are new every
 iteration and never get there. `.kb/gpu.md`, "What the fold's SHAPE decline costs on this
 backend": a probe of exactly that shape said the host round trip was gone, and the real
-model still paid 192 of them a step, the count matching the declines exactly.
+model still paid 192 of them a step, the count matching the declines exactly. (`5baaf6ec`
+has since removed those 192, re-measured on Metal 2026-09-03 in that same section -- so the
+trap is in the probe having declared them absent while they were there, not in their still
+being there today.)
 
 **4. What the probe leaves behind may be the wrong CLOCKS.** A member that runs on the
 host leaves a gap, and a device that idles through it drops its clocks, so the next
@@ -121,6 +139,19 @@ out, profiled both, and showed the copy and synchronisation counts identical to 
 (292/302/204 against 4/14/12, unchanged) -- so the absence was measured rather than
 argued. A per-call table that says nothing about which traps were considered is not
 evidence that none applied.
+
+### Telling a wake-up from a cold cache
+
+A gap between calls slows the next one for two unrelated reasons -- a pool that parked its
+workers, and a cache that lost the operand -- and the fix for one does nothing for the
+other, so a probe that sees a gap cost has not yet learned anything. **Cap the pool to one
+thread and re-take the SAME gapped measurement: what the cap removes was the wake-up, what
+survives it was the cache.** It is cheaper than reading a thread count and it works on a
+library that will not tell you one -- todo-651 had to use it, because Accelerate exports
+none of the seven thread-query symbols. It found both halves at once: OpenBLAS's 17.4 ->
+90.0 us at 288x288 collapses under the cap (a wake-up), while a small shape's 0.85 -> 1.75
+us does not move under it at all (a cache). Nothing here is about BLAS; it applies to
+anything with a pool behind it.
 
 ## Rule 2: price the CEILING of a proposal before building it
 

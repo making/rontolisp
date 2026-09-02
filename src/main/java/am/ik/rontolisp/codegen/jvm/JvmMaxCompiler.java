@@ -20,7 +20,7 @@ final class JvmMaxCompiler {
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.mathMaxDouble.index());
+			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FMAX).index());
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {

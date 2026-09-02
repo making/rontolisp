@@ -57,6 +57,17 @@ final class JvmNumericRuntimeBuilder {
 
 	static final String CMPB = "_cmpb";
 
+	/** {@link #CMPB} bit for {@code a < b}. */
+	static final int CMPB_LT = 1;
+
+	/** {@link #CMPB} bit for {@code a = b}. */
+	static final int CMPB_EQ = 2;
+
+	/**
+	 * {@link #CMPB} bit for {@code a > b}. An unordered (NaN) pair sets no bit at all.
+	 */
+	static final int CMPB_GT = 4;
+
 	static final String ABS = "_abs";
 
 	static final String SIGNUM = "_signum";
@@ -66,6 +77,18 @@ final class JvmNumericRuntimeBuilder {
 	static final String MIN = "_min";
 
 	static final String MAX = "_max";
+
+	/**
+	 * {@link #MIN} on raw doubles, for call sites that already have both operands
+	 * unboxed.
+	 */
+	static final String FMIN = "_fmin";
+
+	/**
+	 * {@link #MAX} on raw doubles, for call sites that already have both operands
+	 * unboxed.
+	 */
+	static final String FMAX = "_fmax";
 
 	/** Coerces an {@code Object} (Long or BigInteger) to a {@code BigInteger}. */
 	static final String BIG_OP = "_big";
@@ -395,6 +418,8 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nRandom = cp.addUtf8(RANDOM);
 		Utf8Constant nMin = cp.addUtf8(MIN);
 		Utf8Constant nMax = cp.addUtf8(MAX);
+		Utf8Constant nFmin = cp.addUtf8(FMIN);
+		Utf8Constant nFmax = cp.addUtf8(FMAX);
 		Utf8Constant nDbl = cp.addUtf8(DBL);
 		Utf8Constant nPow = cp.addUtf8(POW);
 		Utf8Constant nEqv = cp.addUtf8(EQV);
@@ -433,6 +458,8 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rRandom = cp.addMethodref(thisClass, cp.addNameAndType(nRandom, dUnary));
 		MethodrefConstant rMin = cp.addMethodref(thisClass, cp.addNameAndType(nMin, dBinary));
 		MethodrefConstant rMax = cp.addMethodref(thisClass, cp.addNameAndType(nMax, dBinary));
+		MethodrefConstant rFmin = cp.addMethodref(thisClass, cp.addNameAndType(nFmin, dFmod));
+		MethodrefConstant rFmax = cp.addMethodref(thisClass, cp.addNameAndType(nFmax, dFmod));
 		MethodrefConstant rDbl = cp.addMethodref(thisClass, cp.addNameAndType(nDbl, dUnary));
 		MethodrefConstant rPow = cp.addMethodref(thisClass, cp.addNameAndType(nPow, dBinary));
 		MethodrefConstant rEqv = cp.addMethodref(thisClass, cp.addNameAndType(nEqv, dCmp));
@@ -487,8 +514,10 @@ final class JvmNumericRuntimeBuilder {
 				signumDouble, rRatNum, biSignum, longValueOf));
 		methods.add(buildRandom(nRandom, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
 				longValueOf, tlrCurrent, tlrNextDouble));
-		methods.add(buildSelect(nMin, dBinary, rCmp, Opcode.IFGT));
-		methods.add(buildSelect(nMax, dBinary, rCmp, Opcode.IFLT));
+		methods.add(buildSelect(nMin, dBinary, rCmpb, CMPB_LT | CMPB_EQ));
+		methods.add(buildSelect(nMax, dBinary, rCmpb, CMPB_GT | CMPB_EQ));
+		methods.add(buildFloatSelect(nFmin, dFmod, Opcode.DCMPG, Opcode.IFLE));
+		methods.add(buildFloatSelect(nFmax, dFmod, Opcode.DCMPL, Opcode.IFGE));
 		methods.add(buildDbl(nDbl, dUnary, ratArrClass, doubleClass, numberClass, bigDecClass, bdInit, bdDivide,
 				bdDoubleValue, mcDecimal64, doubleValueOf, numDoubleValue, rRatNum, rRatDen, typeErrRefs));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
@@ -526,6 +555,8 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(RANDOM, rRandom);
 		ops.put(MIN, rMin);
 		ops.put(MAX, rMax);
+		ops.put(FMIN, rFmin);
+		ops.put(FMAX, rFmax);
 		ops.put(BIG_OP, rBig);
 		ops.put(NORM_OP, rNorm);
 		ops.put(RAT_NUM, rRatNum);
@@ -1304,16 +1335,31 @@ final class JvmNumericRuntimeBuilder {
 		return new NumericMethod(name, desc, c, 4, 1, List.of());
 	}
 
-	// _min/_max(Object a, Object b): pick an argument by the sign of _cmp(a, b).
-	private static NumericMethod buildSelect(Utf8Constant name, Utf8Constant desc, MethodrefConstant rCmp,
-			int branchToB) {
+	// _min/_max(Object a, Object b): keep a when the IEEE comparison holds, else take b
+	// --
+	// min is (a <= b) ? a : b and max is (a >= b) ? a : b.
+	//
+	// The test runs off the _cmpb BITMASK (1 = a<b, 2 = a=b, 4 = a>b, 0 = unordered), not
+	// off _cmp's -1/0/1 signum, because only the mask can say "unordered". _cmp collapses
+	// every NaN pair to -1, which made min(NaN, x) answer NaN while min(x, NaN) answered
+	// x -- neither of them the IEEE comparison's answer.
+	//
+	// min accepts {lt, eq} = 3, max accepts {gt, eq} = 6. An equal-value tie is in both
+	// masks, so the ACCUMULATOR survives it and the leftmost argument wins; unordered is
+	// in neither, so a NaN operand always yields b. Both match upstream Common Lisp,
+	// checked against SBCL over every ordered pair of {-0.0, 0.0, +/-1.0, NaN, +/-inf}.
+	private static NumericMethod buildSelect(Utf8Constant name, Utf8Constant desc, MethodrefConstant rCmpb,
+			int acceptMask) {
 		List<Integer> c = new ArrayList<>();
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.ALOAD_1);
 		c.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(c, rCmp.index());
+		JvmRuntimeBuilder.emitU2(c, rCmpb.index());
+		c.add(Opcode.BIPUSH);
+		c.add(acceptMask);
+		c.add(Opcode.IAND);
 		int ifB = c.size();
-		c.add(branchToB);
+		c.add(Opcode.IFEQ);
 		JvmRuntimeBuilder.emitU2(c, 0);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.ARETURN);
@@ -1321,6 +1367,33 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.ALOAD_1);
 		c.add(Opcode.ARETURN);
 		return new NumericMethod(name, desc, c, 2, 2, List.of());
+	}
+
+	// _fmin/_fmax(double a, double b): the same select on raw doubles, for the call sites
+	// that already have both operands unboxed. min is (a <= b) ? a : b, max is
+	// (a >= b) ? a : b.
+	//
+	// Deliberately NOT Math.min/Math.max, which resolve a signed-zero tie by SIGN
+	// (Math.min(0.0, -0.0) is -0.0 whichever way round the arguments come) and propagate
+	// NaN from either side. Those answers disagree with _min/_max above, so a program's
+	// result used to depend on whether an operand happened to be a literal.
+	//
+	// DCMPG for min and DCMPL for max are what make NaN fall to b: each pushes the value
+	// that fails its branch when an operand is unordered.
+	private static NumericMethod buildFloatSelect(Utf8Constant name, Utf8Constant desc, int cmpOp, int keepA) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.DLOAD_0);
+		c.add(Opcode.DLOAD_2);
+		c.add(cmpOp);
+		int ifA = c.size();
+		c.add(keepA);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifA, c.size());
+		c.add(Opcode.DLOAD_0);
+		c.add(Opcode.DRETURN);
+		return new NumericMethod(name, desc, c, 4, 4, List.of());
 	}
 
 	// _dbl(Object x): boxed Double for any numeric value. A ratio divides numerator by

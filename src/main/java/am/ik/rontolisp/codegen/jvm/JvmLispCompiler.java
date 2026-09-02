@@ -779,14 +779,6 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(J)J")));
 		MethodrefConstant mathAbsDouble = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(D)D")));
-		MethodrefConstant mathMinLong = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("min"), cp.addUtf8("(JJ)J")));
-		MethodrefConstant mathMinDouble = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("min"), cp.addUtf8("(DD)D")));
-		MethodrefConstant mathMaxLong = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("max"), cp.addUtf8("(JJ)J")));
-		MethodrefConstant mathMaxDouble = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("max"), cp.addUtf8("(DD)D")));
 		MethodrefConstant mathFloor = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("floor"), cp.addUtf8("(D)D")));
 		MethodrefConstant mathCeil = cp.addMethodref(mathClass,
@@ -1784,10 +1776,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			.appendMethod(appendMethod)
 			.mathAbsLong(mathAbsLong)
 			.mathAbsDouble(mathAbsDouble)
-			.mathMinLong(mathMinLong)
-			.mathMinDouble(mathMinDouble)
-			.mathMaxLong(mathMaxLong)
-			.mathMaxDouble(mathMaxDouble)
 			.mathFloor(mathFloor)
 			.mathCeil(mathCeil)
 			.mathRint(mathRint)
@@ -5435,14 +5423,6 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant mathAbsDouble;
 
-		final MethodrefConstant mathMinLong;
-
-		final MethodrefConstant mathMinDouble;
-
-		final MethodrefConstant mathMaxLong;
-
-		final MethodrefConstant mathMaxDouble;
-
 		final MethodrefConstant mathFloor;
 
 		final MethodrefConstant mathCeil;
@@ -6224,10 +6204,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.appendMethod = Objects.requireNonNull(builder.appendMethod);
 			this.mathAbsLong = Objects.requireNonNull(builder.mathAbsLong);
 			this.mathAbsDouble = Objects.requireNonNull(builder.mathAbsDouble);
-			this.mathMinLong = Objects.requireNonNull(builder.mathMinLong);
-			this.mathMinDouble = Objects.requireNonNull(builder.mathMinDouble);
-			this.mathMaxLong = Objects.requireNonNull(builder.mathMaxLong);
-			this.mathMaxDouble = Objects.requireNonNull(builder.mathMaxDouble);
 			this.mathFloor = Objects.requireNonNull(builder.mathFloor);
 			this.mathCeil = Objects.requireNonNull(builder.mathCeil);
 			this.mathRint = Objects.requireNonNull(builder.mathRint);
@@ -6357,14 +6333,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant mathAbsLong;
 
 			private @Nullable MethodrefConstant mathAbsDouble;
-
-			private @Nullable MethodrefConstant mathMinLong;
-
-			private @Nullable MethodrefConstant mathMinDouble;
-
-			private @Nullable MethodrefConstant mathMaxLong;
-
-			private @Nullable MethodrefConstant mathMaxDouble;
 
 			private @Nullable MethodrefConstant mathFloor;
 
@@ -6661,26 +6629,6 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder mathAbsDouble(MethodrefConstant mathAbsDouble) {
 				this.mathAbsDouble = mathAbsDouble;
-				return this;
-			}
-
-			Builder mathMinLong(MethodrefConstant mathMinLong) {
-				this.mathMinLong = mathMinLong;
-				return this;
-			}
-
-			Builder mathMinDouble(MethodrefConstant mathMinDouble) {
-				this.mathMinDouble = mathMinDouble;
-				return this;
-			}
-
-			Builder mathMaxLong(MethodrefConstant mathMaxLong) {
-				this.mathMaxLong = mathMaxLong;
-				return this;
-			}
-
-			Builder mathMaxDouble(MethodrefConstant mathMaxDouble) {
-				this.mathMaxDouble = mathMaxDouble;
 				return this;
 			}
 

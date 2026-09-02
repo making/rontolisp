@@ -2026,9 +2026,14 @@ public final class Environment implements Scope {
 	private static void registerArithmetic(Environment env) {
 		env.defineFunction(LispNames.ADD, new LispFunction(LispNames.ADD, args -> {
 			if (hasDouble(args)) {
-				double result = 0;
-				for (LispVal arg : args) {
-					result += asDouble(arg);
+				// Seed from the first operand, not from an exact 0: 0.0 + -0.0 is 0.0
+				// under
+				// IEEE 754, so an exact-zero seed erases the sign of an all-negative-zero
+				// sum. Starting at args[0] makes (+ -0.0 -0.0) answer -0.0, matching both
+				// compiler backends and upstream Common Lisp.
+				double result = asDouble(args.get(0));
+				for (int i = 1; i < args.size(); i++) {
+					result += asDouble(args.get(i));
 				}
 				return new LispDouble(result);
 			}
@@ -2198,23 +2203,31 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(Math.abs(value));
 		}));
-		// min/max: variadic. Float contagion -- when any argument is a float the result
-		// is
-		// a float (Common Lisp semantics). Doubles follow Math.min/Math.max: NaN
-		// propagates, and a 0.0/-0.0 tie resolves by sign -- matching the compiled
-		// backends' Math.min / f64.min double paths.
+		// min/max: variadic, a left fold of the two-argument select
+		//
+		// min(a, b) = (a <= b) ? a : b max(a, b) = (a >= b) ? a : b
+		//
+		// where <= / >= are the IEEE comparisons, hence FALSE whenever either side is
+		// NaN. That one rule fixes both edge axes at once, and it is what upstream
+		// Common Lisp answers -- verified against SBCL bit-for-bit over every ordered
+		// pair drawn from {-0.0, 0.0, 1.0, -1.0, NaN, +inf, -inf}:
+		//
+		// - an equal-value tie keeps the ACCUMULATOR, so the leftmost argument wins and
+		// (min -0.0 0.0) is -0.0 while (min 0.0 -0.0) is 0.0. CL leaves the choice to
+		// the implementation; agreeing with upstream, and across our own four backends,
+		// is the reason to pick this one.
+		// - NaN is unordered, so the comparison fails and the RIGHT operand is taken:
+		// (min nan 1.0) is 1.0 and (min 1.0 nan) is NaN.
+		//
+		// This is deliberately NOT Math.min/Math.max, which resolve a signed-zero tie by
+		// sign and propagate NaN from either side.
 		env.defineFunction(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
 			requireMinArgCount(LispNames.MIN, args, 1);
 			LispVal best = args.get(0);
 			for (int i = 1; i < args.size(); i++) {
 				LispVal cand = args.get(i);
-				int sign = compareNumeric(cand, best);
-				if (sign == UNORDERED) {
-					if (!isNaN(best)) {
-						best = cand;
-					}
-				}
-				else if (sign < 0 || (sign == 0 && isNegativeZero(cand) && !isNegativeZero(best))) {
+				int sign = compareNumeric(best, cand);
+				if (sign == UNORDERED || sign > 0) {
 					best = cand;
 				}
 			}
@@ -2225,13 +2238,8 @@ public final class Environment implements Scope {
 			LispVal best = args.get(0);
 			for (int i = 1; i < args.size(); i++) {
 				LispVal cand = args.get(i);
-				int sign = compareNumeric(cand, best);
-				if (sign == UNORDERED) {
-					if (!isNaN(best)) {
-						best = cand;
-					}
-				}
-				else if (sign > 0 || (sign == 0 && isNegativeZero(best) && !isNegativeZero(cand))) {
+				int sign = compareNumeric(best, cand);
+				if (sign == UNORDERED || sign < 0) {
 					best = cand;
 				}
 			}
@@ -6960,14 +6968,6 @@ public final class Environment implements Scope {
 			}
 		}
 		return LispTrue.INSTANCE;
-	}
-
-	private static boolean isNaN(LispVal v) {
-		return v instanceof LispDouble d && Double.isNaN(d.value());
-	}
-
-	private static boolean isNegativeZero(LispVal v) {
-		return v instanceof LispDouble d && Double.doubleToRawLongBits(d.value()) == Long.MIN_VALUE;
 	}
 
 	private static boolean hasRatio(List<LispVal> args) {
