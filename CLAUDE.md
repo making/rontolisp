@@ -204,6 +204,34 @@ start** -- one slice per surface -- and run each slice to completion in the fore
 run detached into the background loses its result if the session ends before it finishes,
 which is indistinguishable from never having run it.
 
+### Waiting for a Long Run
+
+**Never detach a test run and end the turn to wait for it.** The turn ends, the run keeps
+going, and nothing wakes up to read the result -- a stall indistinguishable from a crash,
+and the usual reflex (poll again) reproduces it. What works is a blocking foreground wait
+on the process:
+
+```bash
+./mvnw ... test > run.log 2>&1 &          # or an already-running build
+tail -f --pid=$! /dev/null                 # blocks until it exits; raise the tool timeout
+echo "exit=$?"; grep -E 'BUILD (SUCCESS|FAILURE)' run.log
+```
+
+Three ways a run reports green when it is not:
+
+- **Two maven runs in one worktree** corrupt `target/` and void BOTH results. One run per
+  tree, always.
+- **Editing `src/` while a run is in flight** means the compile phase saw a mixed tree.
+  Freeze the sources until it finishes.
+- **A truncated run looks clean**: an orphaned build from an earlier interrupted turn can
+  kill it early, leaving zero failures and a short report set. Count
+  `target/surefire-reports/*.txt` -- a full `./mvnw test` writes ~218 -- and check the exit
+  code, not just the failure counts.
+
+When a session driving subagents hits this, the reliable division of labour is for the
+PARENT to run the suite (capturing the exit code) and hand the summary back, with the
+worker told not to invoke maven itself.
+
 ## Working Alongside Other Sessions
 
 Several sessions push to `develop` at once, so what you tested is not what you push.
