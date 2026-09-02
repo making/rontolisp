@@ -165,6 +165,12 @@ class LinalgGpuTest {
 		assertThat(eval("(linalg:zeros 1) #'linalg::%la-matmul-nd", true).print())
 			.isEqualTo("#<function LINALG::%LA-MATMUL-ND>");
 		assertThat(eval("(linalg:zeros 1) #'linalg::%la-matmul-nd", false).print()).isEqualTo("#<lambda>");
+		// And its two TRANSPOSED siblings, the shape both matmul adjoints have.
+		for (String member : new String[] { "%la-matmul-nd-ta", "%la-matmul-nd-tb" }) {
+			assertThat(eval("(linalg:zeros 1) #'linalg::" + member, true).print()).as(member)
+				.isEqualTo("#<function LINALG::" + member.toUpperCase() + ">");
+			assertThat(eval("(linalg:zeros 1) #'linalg::" + member, false).print()).as(member).isEqualTo("#<lambda>");
+		}
 		// And every element-wise member the device takes.
 		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
 				"cosh", "erf" }) {

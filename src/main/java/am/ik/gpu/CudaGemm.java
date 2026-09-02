@@ -997,9 +997,30 @@ final class CudaGemm implements GpuDevice {
 	@Override
 	public boolean gemm(double[] a, int oa, int sa, double[] b, int ob, int sb, double[] c, int oc, int batch, int n,
 			int m, int p) {
+		return gemmT(a, oa, sa, false, b, ob, sb, false, c, oc, batch, n, m, p);
+	}
+
+	/**
+	 * The stacked product with either operand read TRANSPOSED -- its {@code n x m} (or
+	 * {@code m x p}) matrix stored with the last two axes exchanged, which is what the
+	 * linear backward's {@code g . b^T} and {@code a^T . g} hand it (2026-09-02).
+	 *
+	 * <p>
+	 * The kernel indexes the operand where it already is instead of reading a gather's
+	 * copy of it, so the pass the transpose used to cost disappears. The fold is
+	 * untouched -- k ascending, one {@code fma} per term -- so the result is the
+	 * untransposed product's bit for bit and the orientation is invisible above this
+	 * seam.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean gemmT(double[] a, int oa, int sa, boolean ta, double[] b, int ob, int sb, boolean tb, double[] c,
+			int oc, int batch, int n, int m, int p) {
 		return gemm(MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(b), b, ob, sb, MemorySegment.ofArray(c),
 				c, oc, batch, n, m, p, Double.BYTES,
-				new Tile(batch == 1 ? this.gemmF64 : this.gemmBatchedF64, TILE, TILE, batch > 1));
+				new Tile(batch == 1 && !(ta || tb) ? this.gemmF64 : this.gemmBatchedF64, TILE, TILE,
+						batch > 1 || ta || tb),
+				ta, tb);
 	}
 
 	/**
@@ -1021,8 +1042,20 @@ final class CudaGemm implements GpuDevice {
 	@Override
 	public boolean gemmF(float[] a, int oa, int sa, float[] b, int ob, int sb, float[] c, int oc, int batch, int n,
 			int m, int p) {
+		return gemmFT(a, oa, sa, false, b, ob, sb, false, c, oc, batch, n, m, p);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #gemmT(double[], int, int, boolean, double[], int, int, boolean, double[], int, int, int, int, int)}
+	 * -- the width the linear backward actually runs at.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean gemmFT(float[] a, int oa, int sa, boolean ta, float[] b, int ob, int sb, boolean tb, float[] c,
+			int oc, int batch, int n, int m, int p) {
 		return gemm(MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(b), b, ob, sb, MemorySegment.ofArray(c),
-				c, oc, batch, n, m, p, Float.BYTES, tileF32(batch, n, p));
+				c, oc, batch, n, m, p, Float.BYTES, tileF32(batch, n, p, ta || tb), ta, tb);
 	}
 
 	/**
@@ -1048,7 +1081,7 @@ final class CudaGemm implements GpuDevice {
 	 * either output axis stays on the finer kernel: padding would waste the tile. The
 	 * thresholds are in SMs so that a smaller card moves them down with it.
 	 */
-	private Tile tileF32(int batch, int n, int p) {
+	private Tile tileF32(int batch, int n, int p, boolean transposed) {
 		long blocks8 = (long) ceilDiv(n, REGISTER_TILE_8) * ceilDiv(p, REGISTER_TILE_8) * batch;
 		if (n >= REGISTER_TILE_8 && p >= REGISTER_TILE_8 && blocks8 >= Math.max(1, this.multiprocessors / 2)) {
 			return new Tile(this.gemmBatchedF32T8, REGISTER_TILE_8, REGISTER_TILE_8, true);
@@ -1057,7 +1090,11 @@ final class CudaGemm implements GpuDevice {
 		if (n >= REGISTER_TILE_4 && p >= REGISTER_TILE_4 && blocks4 >= Math.max(1, this.multiprocessors)) {
 			return new Tile(this.gemmBatchedF32T4, REGISTER_TILE_4, REGISTER_TILE_4, true);
 		}
-		return new Tile(batch == 1 ? this.gemmF32 : this.gemmBatchedF32, TILE, TILE, batch > 1);
+		// The plain entry point has no orientation parameter, so a transposed product of
+		// one slab takes the batched one with a stride of 0 rather than a kernel of its
+		// own.
+		return new Tile(batch == 1 && !transposed ? this.gemmF32 : this.gemmBatchedF32, TILE, TILE,
+				batch > 1 || transposed);
 	}
 
 	private static int ceilDiv(int a, int b) {
@@ -1074,7 +1111,8 @@ final class CudaGemm implements GpuDevice {
 	 * the result on the way out.
 	 */
 	private boolean gemm(MemorySegment a, Object ah, int oa, int sa, MemorySegment b, Object bh, int ob, int sb,
-			MemorySegment c, Object ch, int oc, int batch, int n, int m, int p, int width, Tile tile) {
+			MemorySegment c, Object ch, int oc, int batch, int n, int m, int p, int width, Tile tile, boolean ta,
+			boolean tb) {
 		if (!this.usable) {
 			return false;
 		}
@@ -1093,7 +1131,7 @@ final class CudaGemm implements GpuDevice {
 			}
 			boolean sync = 2L * batch * n * m * p >= this.syncFlopCeiling;
 			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !stage(buffers, owned, 1, bh, b, offB, bBytes)
-					|| !launch(arena, tile, buffers, batch, sa, sb, n, m, p, sync)) {
+					|| !launch(arena, tile, buffers, batch, sa, sb, n, m, p, ta, tb, sync)) {
 				return false;
 			}
 			return finish(c, offC, buffers, owned, 2, ch, cBytes);
@@ -3048,7 +3086,7 @@ final class CudaGemm implements GpuDevice {
 	 * critical copy.
 	 */
 	private boolean launch(Arena arena, Tile tile, long[] buffers, int batch, long sa, long sb, int n, int m, int p,
-			boolean sync) throws Throwable {
+			boolean ta, boolean tb, boolean sync) throws Throwable {
 		MemorySegment a = arena.allocate(L), b = arena.allocate(L), c = arena.allocate(L);
 		a.set(L, 0, buffers[0]);
 		b.set(L, 0, buffers[1]);
@@ -3061,7 +3099,7 @@ final class CudaGemm implements GpuDevice {
 		// parameter block it has always had; a stack, and every register-tiled product,
 		// carries the two stride parameters.
 		boolean batched = tile.batchedParameters();
-		MemorySegment parameters = arena.allocate(P, batched ? 8 : 6);
+		MemorySegment parameters = arena.allocate(P, batched ? 10 : 6);
 		parameters.setAtIndex(P, 0, a);
 		parameters.setAtIndex(P, 1, b);
 		parameters.setAtIndex(P, 2, c);
@@ -3072,8 +3110,13 @@ final class CudaGemm implements GpuDevice {
 			MemorySegment strideA = arena.allocate(L), strideB = arena.allocate(L);
 			strideA.set(L, 0, sa);
 			strideB.set(L, 0, sb);
+			MemorySegment transposeA = arena.allocate(I), transposeB = arena.allocate(I);
+			transposeA.set(I, 0, ta ? 1 : 0);
+			transposeB.set(I, 0, tb ? 1 : 0);
 			parameters.setAtIndex(P, 6, strideA);
 			parameters.setAtIndex(P, 7, strideB);
+			parameters.setAtIndex(P, 8, transposeA);
+			parameters.setAtIndex(P, 9, transposeB);
 		}
 		int status = this.driver.launchKernel(tile.function(), ceilDiv(p, tile.columns()), ceilDiv(n, tile.rows()),
 				batch, TILE, TILE, 1, 0, MemorySegment.NULL, parameters, MemorySegment.NULL);

@@ -5,8 +5,11 @@
 // JIT-compiles this PTX itself, and libcuda.so.1 is the whole dependency.
 //
 //   nvcc -arch=compute_75 -ptx -fmad=false src/main/resources/am/ik/gpu/gemm.cu -o /tmp/gemm.ptx
-//   sed -n '1,12p' src/main/resources/am/ik/gpu/gemm.cu > src/main/resources/am/ik/gpu/gemm.ptx
+//   sed -n '/^$/q;p' src/main/resources/am/ik/gpu/gemm.cu > src/main/resources/am/ik/gpu/gemm.ptx
 //   cat /tmp/gemm.ptx >> src/main/resources/am/ik/gpu/gemm.ptx
+//
+// (the sed copies this header down to the first blank line, so the two files carry the
+// same provenance note however long it grows)
 //
 // compute_75 (Turing, 2018) is the floor because CUDA 13 refuses to target anything older,
 // not because we chose it. -fmad=false (todo-499): nvcc may otherwise contract `a * b + c`
@@ -16,18 +19,41 @@
 
 #define TILE 16
 
+// A TRANSPOSED OPERAND IS READ IN PLACE (2026-09-02). `ta` / `tb` say that the operand's
+// last two axes are exchanged: its M x K (or K x N) matrix is STORED K x M (or N x K),
+// and the kernel indexes it that way rather than taking a strided copy first -- which is
+// what the linear backward's `g . b^T` and `a^T . g` used to pay a whole gather pass for.
+// The tile the fold reads is the SAME tile either way; only the address the staging load
+// comes from changes, so every cell still folds k ascending through one fma() per term
+// and the product is bit-identical to the untransposed one's. What does change is the
+// load PATTERN: a transposed operand is walked down its columns, so the staging swaps the
+// roles of the two thread indices to keep a warp's global reads contiguous (and the
+// shared tiles carry one column of padding so the transposed STORE is conflict-free).
 template <typename T>
-__device__ void gemm(const T* A, const T* B, T* C, int M, int N, int K) {
-  __shared__ T As[TILE][TILE];
-  __shared__ T Bs[TILE][TILE];
+__device__ void gemm(const T* A, const T* B, T* C, int M, int N, int K, int ta, int tb) {
+  __shared__ T As[TILE][TILE + 1];
+  __shared__ T Bs[TILE][TILE + 1];
   int tx = threadIdx.x, ty = threadIdx.y;
   int row = blockIdx.y * TILE + ty;
   int col = blockIdx.x * TILE + tx;
+  int row0 = blockIdx.y * TILE, col0 = blockIdx.x * TILE;
   T acc = 0;
   for (int t = 0; t < (K + TILE - 1) / TILE; ++t) {
     int ac = t * TILE + tx, br = t * TILE + ty;
-    As[ty][tx] = (row < M && ac < K) ? A[row * (long) K + ac] : (T) 0;
-    Bs[ty][tx] = (br < K && col < N) ? B[br * (long) N + col] : (T) 0;
+    if (ta) {
+      int ak = t * TILE + ty, am = row0 + tx;
+      As[tx][ty] = (am < M && ak < K) ? A[ak * (long) M + am] : (T) 0;
+    }
+    else {
+      As[ty][tx] = (row < M && ac < K) ? A[row * (long) K + ac] : (T) 0;
+    }
+    if (tb) {
+      int bk = t * TILE + tx, bn = col0 + ty;
+      Bs[tx][ty] = (bk < K && bn < N) ? B[bn * (long) K + bk] : (T) 0;
+    }
+    else {
+      Bs[ty][tx] = (br < K && col < N) ? B[br * (long) N + col] : (T) 0;
+    }
     __syncthreads();
     for (int k = 0; k < TILE; ++k) acc = fma(As[ty][k], Bs[k][tx], acc);
     __syncthreads();
@@ -36,11 +62,11 @@ __device__ void gemm(const T* A, const T* B, T* C, int M, int N, int K) {
 }
 
 extern "C" __global__ void gemm_f32(const float* A, const float* B, float* C, int M, int N, int K) {
-  gemm<float>(A, B, C, M, N, K);
+  gemm<float>(A, B, C, M, N, K, 0, 0);
 }
 
 extern "C" __global__ void gemm_f64(const double* A, const double* B, double* C, int M, int N, int K) {
-  gemm<double>(A, B, C, M, N, K);
+  gemm<double>(A, B, C, M, N, K, 0, 0);
 }
 
 // The BATCHED siblings: gridDim.z is the batch axis and each block does the same tile
@@ -48,21 +74,25 @@ extern "C" __global__ void gemm_f64(const double* A, const double* B, double* C,
 // strides are in ELEMENTS and a broadcast operand simply passes 0 -- the whole batch then
 // reads the same slab, which is what linalg::%la-matmul-nd's zero batch stride means.
 // C is always contiguous (M * N per batch). The gemm<T> above is called unchanged, so a
-// batched cell folds k exactly as the unbatched kernel's does.
+// batched cell folds k exactly as the unbatched kernel's does. `ta` / `tb` ride through
+// to it: a transposed operand's BATCH stride is its own either way (the per-batch matrix
+// holds the same M * K elements whichever way round they are stored), so nothing here
+// has to know which orientation it is carrying.
 template <typename T>
-__device__ void gemm_batched(const T* A, const T* B, T* C, int M, int N, int K, long long strideA, long long strideB) {
+__device__ void gemm_batched(const T* A, const T* B, T* C, int M, int N, int K, long long strideA, long long strideB,
+                             int ta, int tb) {
   long long z = blockIdx.z;
-  gemm<T>(A + z * strideA, B + z * strideB, C + z * (long long) M * N, M, N, K);
+  gemm<T>(A + z * strideA, B + z * strideB, C + z * (long long) M * N, M, N, K, ta, tb);
 }
 
 extern "C" __global__ void gemm_batched_f32(const float* A, const float* B, float* C, int M, int N, int K,
-                                            long long strideA, long long strideB) {
-  gemm_batched<float>(A, B, C, M, N, K, strideA, strideB);
+                                            long long strideA, long long strideB, int ta, int tb) {
+  gemm_batched<float>(A, B, C, M, N, K, strideA, strideB, ta, tb);
 }
 
 extern "C" __global__ void gemm_batched_f64(const double* A, const double* B, double* C, int M, int N, int K,
-                                            long long strideA, long long strideB) {
-  gemm_batched<double>(A, B, C, M, N, K, strideA, strideB);
+                                            long long strideA, long long strideB, int ta, int tb) {
+  gemm_batched<double>(A, B, C, M, N, K, strideA, strideB, ta, tb);
 }
 
 // The REGISTER-TILED f32 siblings (2026-08-22): the same product over a 64x64 or a 128x128
@@ -83,7 +113,7 @@ extern "C" __global__ void gemm_batched_f64(const double* A, const double* B, do
 // CudaGemm may choose freely. gemm_batched_f32_t* takes the batched parameter block (the
 // strides) at every batch size, including 1.
 template <typename T, int TM, int TN>
-__device__ void gemm_tiled(const T* A, const T* B, T* C, int M, int N, int K) {
+__device__ void gemm_tiled(const T* A, const T* B, T* C, int M, int N, int K, int ta, int tb) {
   constexpr int BM = 16 * TM, BN = 16 * TN, BK = TILE;
   __shared__ T As[BK][BM];
   __shared__ T Bs[BK][BN];
@@ -95,15 +125,20 @@ __device__ void gemm_tiled(const T* A, const T* B, T* C, int M, int N, int K) {
     for (int j = 0; j < TN; ++j) acc[i][j] = 0;
   for (int t = 0; t < (K + BK - 1) / BK; ++t) {
     int k0 = t * BK;
+    // The staging walks the tile in whichever order makes the GLOBAL read contiguous:
+    // along k for a row-major operand, along m (or n) for a transposed one, which is
+    // stored with that axis innermost. The shared tile it fills is the same either way.
     for (int e = tid; e < BM * BK; e += 256) {
-      int m = e / BK, k = e % BK;
+      int m = ta ? e % BM : e / BK, k = ta ? e / BM : e % BK;
       int gr = row0 + m, gk = k0 + k;
-      As[k][m] = (gr < M && gk < K) ? A[gr * (long) K + gk] : (T) 0;
+      bool in = gr < M && gk < K;
+      As[k][m] = in ? (ta ? A[gk * (long) M + gr] : A[gr * (long) K + gk]) : (T) 0;
     }
     for (int e = tid; e < BK * BN; e += 256) {
-      int k = e / BN, n = e % BN;
+      int k = tb ? e % BK : e / BN, n = tb ? e / BK : e % BN;
       int gk = k0 + k, gc = col0 + n;
-      Bs[k][n] = (gk < K && gc < N) ? B[gk * (long) N + gc] : (T) 0;
+      bool in = gk < K && gc < N;
+      Bs[k][n] = in ? (tb ? B[gc * (long) K + gk] : B[gk * (long) N + gc]) : (T) 0;
     }
     __syncthreads();
     for (int k = 0; k < BK; ++k) {
@@ -127,19 +162,19 @@ __device__ void gemm_tiled(const T* A, const T* B, T* C, int M, int N, int K) {
 
 template <typename T, int TM, int TN>
 __device__ void gemm_tiled_batched(const T* A, const T* B, T* C, int M, int N, int K, long long strideA,
-                                   long long strideB) {
+                                   long long strideB, int ta, int tb) {
   long long z = blockIdx.z;
-  gemm_tiled<T, TM, TN>(A + z * strideA, B + z * strideB, C + z * (long long) M * N, M, N, K);
+  gemm_tiled<T, TM, TN>(A + z * strideA, B + z * strideB, C + z * (long long) M * N, M, N, K, ta, tb);
 }
 
 extern "C" __global__ void gemm_batched_f32_t4(const float* A, const float* B, float* C, int M, int N, int K,
-                                               long long strideA, long long strideB) {
-  gemm_tiled_batched<float, 4, 4>(A, B, C, M, N, K, strideA, strideB);
+                                               long long strideA, long long strideB, int ta, int tb) {
+  gemm_tiled_batched<float, 4, 4>(A, B, C, M, N, K, strideA, strideB, ta, tb);
 }
 
 extern "C" __global__ void gemm_batched_f32_t8(const float* A, const float* B, float* C, int M, int N, int K,
-                                               long long strideA, long long strideB) {
-  gemm_tiled_batched<float, 8, 8>(A, B, C, M, N, K, strideA, strideB);
+                                               long long strideA, long long strideB, int ta, int tb) {
+  gemm_tiled_batched<float, 8, 8>(A, B, C, M, N, K, strideA, strideB, ta, tb);
 }
 
 // The ELEMENT-WISE tier: one unary map per width, with the member selected by an OP CODE

@@ -52,6 +52,17 @@ final class JvmLinalgGpu {
 			LispNames.LINALG_MATMUL_ND);
 
 	/**
+	 * The two TRANSPOSED stacked members: the same product with one operand read in the
+	 * orientation it is already stored in, which is what each matmul adjoint asks for.
+	 */
+	static final String QUALIFIED_MATMUL_ND_TA = PackageRegistry.qualifyInternal(LispNames.LINALG_PKG,
+			LispNames.LINALG_MATMUL_ND_TA);
+
+	/** The right-operand sibling of {@link #QUALIFIED_MATMUL_ND_TA}. */
+	static final String QUALIFIED_MATMUL_ND_TB = PackageRegistry.qualifyInternal(LispNames.LINALG_PKG,
+			LispNames.LINALG_MATMUL_ND_TB);
+
+	/**
 	 * The seeded generator's fill ({@code linalg::%la-rng-fill}, behind {@code rand} /
 	 * {@code randn} / {@code uniform}), the one member here with no operand to copy up
 	 * and a result that is byte-identical to the CPU's.
@@ -143,8 +154,8 @@ final class JvmLinalgGpu {
 	 * @return the qualified member names this bridge accelerates
 	 */
 	static List<String> qualifiedMembers() {
-		List<String> names = new ArrayList<>(
-				List.of(QUALIFIED_DOT, QUALIFIED_MATMUL_ND, QUALIFIED_RNG_FILL, QUALIFIED_VEC_MATVEC));
+		List<String> names = new ArrayList<>(List.of(QUALIFIED_DOT, QUALIFIED_MATMUL_ND, QUALIFIED_MATMUL_ND_TA,
+				QUALIFIED_MATMUL_ND_TB, QUALIFIED_RNG_FILL, QUALIFIED_VEC_MATVEC));
 		for (String member : MAP_KERNELS.keySet()) {
 			names.add(PackageRegistry.qualify(LispNames.LINALG_PKG, member));
 		}
@@ -181,6 +192,12 @@ final class JvmLinalgGpu {
 		}
 		if (LispNames.LINALG_MATMUL_ND.equals(member)) {
 			return JvmGpuRuntimeBuilder.MATMUL_ND;
+		}
+		if (LispNames.LINALG_MATMUL_ND_TA.equals(member)) {
+			return JvmGpuRuntimeBuilder.MATMUL_ND_TA;
+		}
+		if (LispNames.LINALG_MATMUL_ND_TB.equals(member)) {
+			return JvmGpuRuntimeBuilder.MATMUL_ND_TB;
 		}
 		if (LispNames.LINALG_RNG_FILL.equals(member)) {
 			return JvmGpuRuntimeBuilder.RNG_FILL;

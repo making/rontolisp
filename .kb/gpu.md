@@ -1104,12 +1104,80 @@ kernels are bandwidth-bound, so the step scales with the batch -- 10 steps isola
 
 Doubled to the book's batch that is roughly 300 ms of elementwise work a step against
 PyTorch's 133 (its dropout, softmax, layer-norm and GELU are one kernel each too, and
-that is now true here); what remains is `.todo/628` (the linear backward's transposes,
-121 + 180 + 6 `gather` launches, 24 ms at batch 32), `.todo/629` (the chains left
-composed: the attention scale and mask, `log-softmax`, layer-norm's affine, the
-`gelu_grad` kernel's own 90 GB/s) and `.todo/500` (the reduction adjoint's zero upload).
-The loss series of the fused run is the unfused run's to the printed digits at every
-step, as the bit-identity above says it must be.
+that is now true here); what remained was the linear backward's transposes (121 + 180 + 6
+`gather` launches, 24 ms at batch 32 -- now built, "The transposed product" below),
+`.todo/629` (the chains left composed: the attention scale and mask, `log-softmax`,
+layer-norm's affine, the `gelu_grad` kernel's own 90 GB/s) and `.todo/500` (the reduction
+adjoint's zero upload). The loss series of the fused run is the unfused run's to the
+printed digits at every step, as the bit-identity above says it must be.
+
+## The transposed product (2026-09-02)
+
+`torch.lisp`'s two matmul adjoints -- `g . b^T` and `a^T . g` -- used to reach the product
+through a TRANSPOSED COPY of the operand, so that the stacked kernel could read a
+contiguous slab. At the book's shapes that copy was the largest element-wise cost left
+after the fused tier: measured at batch 64, 343 `gather_f32` launches and **53.5 ms a
+step**, over four grid shapes (the activation `(64 256 384)` 121 a step, the per-head
+`(64 256 64)` 180, the attention score `(64 256 256)` 36, the feed-forward
+`(64 256 1536)` 6), plus 127 small `copy_f32` launches a step for the rank-2 weight
+transposes.
+
+**The kernel reads the operand where it lies.** `gemm<T>` and `gemm_tiled<T, TM, TN>` take
+two flags, `ta` and `tb`: an operand so marked has its `M x K` (or `K x N`) matrix STORED
+`K x M` (or `N x K`), and the staging load indexes it that way. The TILE the fold reads is
+the same tile either way, so every cell still folds `k` ascending through one `fma()` per
+term and **the product is bit-identical to the plain product of the transposed copy** --
+`GpuTest.aTransposedOperandIsReadInPlaceAndFoldsOntoTheUntransposedProductAtBothWidths`
+asserts equality, not a tolerance, at both widths and at shapes reaching all three tiles.
+The per-batch stride is the operand's OWN either way: a transposed slab holds the same
+`n * m` elements, so nothing above the kernel has to know which orientation it carries.
+
+**What changes is the load PATTERN, and the staging swaps its thread indices to keep it
+coalesced.** A transposed operand is walked down its columns, so the 16x16 kernel loads
+`As[tx][ty]` (and `Bs[tx][ty]`) from the storage's own row-major order -- shared tiles
+padded to `TILE + 1` so the transposed store is conflict-free -- and the register-tiled
+staging loops run `m` (or `k`) innermost instead of `k` (or `n`). Padding the REGISTER
+tiles the same way was measured and LOST: `_t4` 954 -> 934 ms but `_t8` 2322 -> 2376 over
+the 13-step profile, net worse, so they stay unpadded.
+
+**The seam is two members, not a flag.** `linalg::%la-matmul-nd-ta` (`a^T . b`) and
+`-tb` (`a . b^T`), each arity 2, each intercepted exactly where `%la-matmul-nd` already is
+-- the interpreter's `LinalgGpu`, the JVM bridge's `gpuMatmulNdTa` / `gpuMatmulNdTb`. Two
+members rather than one taking two booleans because that keeps every existing call-shape
+lowering: a member with flag arguments would have needed a new extended call shape on the
+JVM backend for nothing. The portable defuns are the transpose and the product they name,
+so `--simd`, `--blas`, both WASM backends and the plain interpreter are untouched, and a
+decline lands on exactly what ran before. **Metal declines them** (`MetalGemm.gemmT`
+answers `false`): `gemm.metal` has no transposed staging and there was no Apple machine to
+measure one on.
+
+**Measured, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, GB10
+with the machine to itself; the step is `(t23 - t3) / 20`, median of three interleaved
+rounds; the kernel columns are nsys over a 13-step run). NOTE these are BATCH 64 numbers --
+the fused-tier table above is batch 32 and the two must not be mixed:
+
+| | before | after |
+|---|---|---|
+| `gather_f32` | 4459 launches, 695.0 ms | **936, 26.1 ms** |
+| `copy_f32` | 2639 launches, 101.3 ms | **988, 90.2 ms** |
+| `gemm_batched_f32_t4` | 877.3 ms | 953.9 ms |
+| `gemm_batched_f32_t8` | 2378.9 ms | 2322.1 ms |
+| total kernel time | 7187 ms (553 a step) | **6541 ms (503 a step)** |
+| wall a step | 0.686 s | **0.639 s** |
+
+The three buckets the item named are gone; the 72 launches a step that remain (2.0 ms) are
+the ATTENTION HEAD's own `(torch:transpose key '(0 2 1))` and its adjoint, which is a
+`torch:` tape node in the model rather than a matmul adjoint -- removing it needs a
+transpose the tape can carry as a VIEW, and is `.todo/630`. The transposed `_t4` costs
+about 9% more than the untransposed one at these shapes, which is 5.9 ms a step against
+the 51.5 the gathers gave back. **The loss series is byte-identical to the previous
+build's at every step**, as the bit-identity above says it must be.
+
+**One number to carry forward: a single run does not show this.** The first before/after
+pair measured (t13 - t3) / 10 once each and reported 0.737 vs 0.736 -- no change -- while
+the profile said 50 ms a step of kernel time had gone. The program varies about 15% run to
+run on this machine; three interleaved rounds over 20 steps found the 7%. Measure this
+program the long way or do not measure it.
 
 ## The Metal backend
 
@@ -1122,6 +1190,7 @@ threshold, and two whole tiers.
 | widths | `#d` and `#f` | **`#f` only** -- MSL rejects `double` outright |
 | rank-2 product | our tiled kernel | **MPS** above `2^27` per matrix, our tiled kernel below |
 | stacked product | our batched kernel | our batched kernel |
+| transposed stacked product | `ta` / `tb` on the same kernel | **declined** -- no transposed staging in `gemm.metal` (`.todo/631`) |
 | element-wise tier | twelve members | the same twelve |
 | broadcast + axes transpose | yes | yes |
 | axis fold `:axis` | yes | **not as a round trip, measured**; over a resident operand only |
@@ -1414,9 +1483,11 @@ flag is not like `--blas`, whose availability check is nearly free.
 
 ### The intercepted set
 
-**Fifty-one `linalg:` members and one outside it.** By round trip: `linalg:dot` over two
+**Fifty-three `linalg:` members and one outside it.** By round trip: `linalg:dot` over two
 packed rank-2 operands of the same width (hence `matmul` at rank 2 and `solve`
-transitively); `%la-matmul-nd`, the STACKED product behind `matmul` at rank >= 3; the
+transitively); `%la-matmul-nd`, the STACKED product behind `matmul` at rank >= 3, and its
+two TRANSPOSED siblings `%la-matmul-nd-ta` / `%la-matmul-nd-tb` ("The transposed product",
+below); the
 twelve element-wise `exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh`
 `erf`; the STRIDED tier -- `add` `sub` `mul` `div` `maximum` `minimum` at a BROADCAST shape
 only, `sum` `amax` `amin` in their `:axis` form only, `transpose` in its axes form only;

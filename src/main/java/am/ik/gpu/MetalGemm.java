@@ -788,6 +788,27 @@ final class MetalGemm implements GpuDevice {
 		}
 	}
 
+	/**
+	 * The TRANSPOSED stacked product (2026-09-02): declined here at every orientation but
+	 * the plain one. {@code gemm.metal} has no transposed staging -- {@code gemm.cu} grew
+	 * one for the linear backward, and the Apple half has neither the kernel nor a
+	 * machine on which the change could be measured -- so an adjoint that would have used
+	 * it transposes through a copy exactly as it did before, which is a decline like any
+	 * other.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean gemmT(double[] a, int oa, int sa, boolean ta, double[] b, int ob, int sb, boolean tb, double[] c,
+			int oc, int batch, int n, int m, int p) {
+		return false;
+	}
+
+	@Override
+	public boolean gemmFT(float[] a, int oa, int sa, boolean ta, float[] b, int ob, int sb, boolean tb, float[] c,
+			int oc, int batch, int n, int m, int p) {
+		return !ta && !tb && gemmF(a, oa, sa, b, ob, sb, c, oc, batch, n, m, p);
+	}
+
 	/** One dispatch of the tiled kernel over the whole stack. */
 	private boolean dispatchGemm(Slab[] slabs, int sa, int sb, int batch, int n, int m, int p) throws Throwable {
 		try (Arena arena = Arena.ofConfined()) {

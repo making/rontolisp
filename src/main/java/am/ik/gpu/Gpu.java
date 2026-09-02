@@ -929,6 +929,82 @@ public final class Gpu {
 	}
 
 	/**
+	 * The stacked product with either operand read TRANSPOSED IN PLACE: {@code a} is
+	 * still {@code n x m} and {@code b} still {@code m x p} as the product sees them, but
+	 * a transposed one is STORED with those two axes exchanged, and the kernel indexes it
+	 * where it lies instead of being handed a strided copy of it.
+	 *
+	 * <p>
+	 * That is the shape the two matmul adjoints have -- {@code g . b^T} and
+	 * {@code a^T . g} -- and the reason this overload exists: transposing first is a full
+	 * memory pass over an activation, which at a transformer's shapes was the largest
+	 * element-wise cost left in a training step after the fused tier.
+	 *
+	 * <p>
+	 * The per-batch strides are the operand's OWN, unchanged by the orientation: a
+	 * transposed slab holds the same {@code n * m} elements. Everything else is
+	 * {@link #multiply(float[], int, int, float[], int, int, float[], int, int, int, int, int)}'s,
+	 * the precision contract included -- the transposed cell folds {@code k} in the same
+	 * ascending order through the same fused multiply-adds, so the result is
+	 * BIT-IDENTICAL to the plain product of the transposed copy, and which orientation
+	 * ran is not observable.
+	 * @param a the left operands, row-major, the first starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA elements from one left operand to the next, or 0 to broadcast
+	 * @param transposeA whether each left slab is stored {@code m x n}
+	 * @param b the right operands, row-major, the first starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB elements from one right operand to the next, or 0 to broadcast
+	 * @param transposeB whether each right slab is stored {@code p x m}
+	 * @param out the array the {@code batch * n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined -- which includes every backend with no transposed kernel
+	 */
+	public static boolean multiply(float[] a, int offsetA, int strideA, boolean transposeA, float[] b, int offsetB,
+			int strideB, boolean transposeB, float[] out, int offsetOut, int batch, int n, int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offered(extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, batch, n, m, p)
+				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b) && device.gemmFT(a, offsetA,
+						strideA, transposeA, b, offsetB, strideB, transposeB, out, offsetOut, batch, n, m, p);
+	}
+
+	/**
+	 * The double-float sibling of
+	 * {@link #multiply(float[], int, int, boolean, float[], int, int, boolean, float[], int, int, int, int, int)}.
+	 * @param a the left operands, row-major, the first starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA elements from one left operand to the next, or 0 to broadcast
+	 * @param transposeA whether each left slab is stored {@code m x n}
+	 * @param b the right operands, row-major, the first starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB elements from one right operand to the next, or 0 to broadcast
+	 * @param transposeB whether each right slab is stored {@code p x m}
+	 * @param out the array the {@code batch * n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean multiply(double[] a, int offsetA, int strideA, boolean transposeA, double[] b, int offsetB,
+			int strideB, boolean transposeB, double[] out, int offsetOut, int batch, int n, int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offered(extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, batch, n, m, p)
+				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b) && device.gemmT(a, offsetA,
+						strideA, transposeA, b, offsetB, strideB, transposeB, out, offsetOut, batch, n, m, p);
+	}
+
+	/**
 	 * {@code a x b} into a fresh array -- the convenience form, for a caller that wants a
 	 * bare {@code n * p} result with no header of its own.
 	 * @param a the left operand, row-major, elements starting at {@code offsetA}

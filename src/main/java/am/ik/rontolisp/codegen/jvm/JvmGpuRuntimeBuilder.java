@@ -157,6 +157,16 @@ final class JvmGpuRuntimeBuilder {
 	/** The {@code ops} key of the STACKED (rank &gt;= 3) kernel. */
 	static final String MATMUL_ND = "matmulNd";
 
+	/**
+	 * The {@code ops} keys of the two TRANSPOSED stacked kernels -- the same product with
+	 * one operand read in the orientation it is already stored in, which is what the two
+	 * matmul adjoints ask for.
+	 */
+	static final String MATMUL_ND_TA = "matmulNdTa";
+
+	/** The right-operand sibling of {@link #MATMUL_ND_TA}. */
+	static final String MATMUL_ND_TB = "matmulNdTb";
+
 	/** The {@code ops} key of the generator fill ({@code linalg::%la-rng-fill}). */
 	static final String RNG_FILL = "rngFill";
 
@@ -307,6 +317,10 @@ final class JvmGpuRuntimeBuilder {
 		ops.put(DOT, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuDot"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(MATMUL_ND, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNd"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put(MATMUL_ND_TA, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNdTa"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put(MATMUL_ND_TB, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNdTb"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(RNG_FILL, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuRngFill"), cp.addUtf8(
 				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));

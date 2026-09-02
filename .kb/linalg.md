@@ -143,6 +143,16 @@ internal walks so there is exactly one place where a strided read can be wrong:
   two batch offsets advance through the same odometer. The rank-2 `%la-matmul` stays
   the fast path -- `linalg:matmul` only reaches `%la-matmul-nd` when a side has rank
   >= 3.
+- **`%la-matmul-nd-ta` / `%la-matmul-nd-tb`** (2026-09-02) -- the SAME product with one
+  operand's last two axes exchanged, `a^T . b` and `a . b^T`, which is the shape both
+  matmul adjoints have. Portably each is the transpose and the product it names
+  (`%la-swap-last`, itself the plain `linalg:transpose` at rank 2 and the axes form on a
+  stack), so nothing about the value depends on which one ran; they exist so that an
+  accelerator can read the operand in the orientation it is ALREADY stored in rather than
+  copying it into the other one, which at a transformer's shapes was a full memory pass
+  per backward call (`.kb/gpu.md`, "The transposed product"). Two arity-2 members rather
+  than one member with two flags, so that every seam that already carries
+  `%la-matmul-nd` carries these unchanged.
 
 Consequences worth knowing:
 

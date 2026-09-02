@@ -1156,6 +1156,74 @@ class GpuTest {
 	}
 
 	@Test
+	void aTransposedOperandIsReadInPlaceAndFoldsOntoTheUntransposedProductAtBothWidths() {
+		// The transposed product (2026-09-02): the operand is STORED with its last two
+		// axes exchanged and the kernel indexes it there rather than being handed a
+		// gather's copy of it. The tile the fold reads is the same tile, so the claim is
+		// EQUALITY -- not a tolerance -- against the plain product of the transposed
+		// copy, at every kernel the shape can reach and at both widths. The shapes are
+		// the fused-fold test's, so the 16x16, 64x64 and 128x128 tiles are all covered.
+		int[][] shapes = { { 1, 1000, 1000, 1000 }, { 4, 256, 384, 192 }, { 3, 130, 70, 200 }, { 2, 64, 2048, 37 } };
+		Random random = new Random(20260902L);
+		for (int[] shape : shapes) {
+			int batch = shape[0], n = shape[1], m = shape[2], p = shape[3];
+			float[] a = new float[batch * n * m], b = new float[m * p];
+			for (int i = 0; i < a.length; i++) {
+				a[i] = random.nextFloat() - 0.5f;
+			}
+			for (int i = 0; i < b.length; i++) {
+				b[i] = random.nextFloat() - 0.5f;
+			}
+			// The same operands laid out the other way round, per slab: this is exactly
+			// what the copy pass used to produce, and what the kernel now reads through.
+			float[] at = new float[a.length], bt = new float[b.length];
+			for (int z = 0; z < batch; z++) {
+				for (int i = 0; i < n; i++) {
+					for (int k = 0; k < m; k++) {
+						at[z * n * m + k * n + i] = a[z * n * m + i * m + k];
+					}
+				}
+			}
+			for (int k = 0; k < m; k++) {
+				for (int j = 0; j < p; j++) {
+					bt[j * m + k] = b[k * p + j];
+				}
+			}
+			float[] plain = new float[batch * n * p], left = new float[batch * n * p], right = new float[batch * n * p];
+			String at1 = Arrays.toString(shape);
+			assertThat(Gpu.multiply(a, 0, n * m, b, 0, 0, plain, 0, batch, n, m, p)).as("%s", at1).isTrue();
+			assertThat(Gpu.multiply(at, 0, n * m, true, b, 0, 0, false, left, 0, batch, n, m, p)).as("%s ta", at1)
+				.isTrue();
+			assertThat(Gpu.multiply(a, 0, n * m, false, bt, 0, 0, true, right, 0, batch, n, m, p)).as("%s tb", at1)
+				.isTrue();
+			assertThat(left).as("%s ta", at1).isEqualTo(plain);
+			assertThat(right).as("%s tb", at1).isEqualTo(plain);
+			// The double sibling, over the same numbers: the orientation is a width-free
+			// property of the kernel, so both widths have to answer it.
+			double[] ad = new double[a.length], bd = new double[b.length], adt = new double[a.length],
+					bdt = new double[b.length];
+			for (int i = 0; i < a.length; i++) {
+				ad[i] = a[i];
+				adt[i] = at[i];
+			}
+			for (int i = 0; i < b.length; i++) {
+				bd[i] = b[i];
+				bdt[i] = bt[i];
+			}
+			double[] plainD = new double[batch * n * p], leftD = new double[batch * n * p],
+					rightD = new double[batch * n * p];
+			assertThat(Gpu.multiply(ad, 0, n * m, bd, 0, 0, plainD, 0, batch, n, m, p)).as("%s #d", at1).isTrue();
+			assertThat(Gpu.multiply(adt, 0, n * m, true, bd, 0, 0, false, leftD, 0, batch, n, m, p)).as("%s #d ta", at1)
+				.isTrue();
+			assertThat(Gpu.multiply(ad, 0, n * m, false, bdt, 0, 0, true, rightD, 0, batch, n, m, p))
+				.as("%s #d tb", at1)
+				.isTrue();
+			assertThat(leftD).as("%s #d ta", at1).isEqualTo(plainD);
+			assertThat(rightD).as("%s #d tb", at1).isEqualTo(plainD);
+		}
+	}
+
+	@Test
 	void aBroadcastOperandIsAZeroStrideAndReadsTheSameSlabEveryBatch() {
 		// What linalg::%la-matmul-nd's broadcast leading axis passes -- and every
 		// torch:linear over a (B T C) activation, whose right operand is one matrix. The

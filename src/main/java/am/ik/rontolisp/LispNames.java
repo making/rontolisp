@@ -5416,6 +5416,21 @@ public final class LispNames {
 	public static final String LINALG_MATMUL_ND = "%LA-MATMUL-ND";
 
 	/**
+	 * {@code linalg::%la-matmul-nd-ta} (INTERNAL): the same stacked product with the LEFT
+	 * operand's last two axes exchanged -- {@code a^T . b}, which is the matmul adjoint
+	 * for the right operand. It exists as a member of its own so that an accelerator can
+	 * read the operand where it lies; the portable defun is the transpose and the product
+	 * it names, so nothing about the result depends on which one ran.
+	 */
+	public static final String LINALG_MATMUL_ND_TA = "%LA-MATMUL-ND-TA";
+
+	/**
+	 * {@code linalg::%la-matmul-nd-tb} (INTERNAL): the mirror -- {@code a . b^T}, the
+	 * matmul adjoint for the left operand.
+	 */
+	public static final String LINALG_MATMUL_ND_TB = "%LA-MATMUL-ND-TB";
+
+	/**
 	 * {@code linalg::%la-adam-step} (INTERNAL): Adam's FUSED element-wise update over a
 	 * parameter, its gradient and its two moment buffers, with the whole rule packed into
 	 * one double vector. It lives in {@code linalg} rather than in {@code torch} because

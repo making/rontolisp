@@ -511,42 +511,35 @@
 
 ;; --- the matrix product ------------------------------------------------------
 
-(defun torch::%t-swap-last (x)
-  ;; x with its last two axes exchanged: the plain matrix transpose at rank 2,
-  ;; the axes form of linalg:transpose on a stack.
-  (let ((rank (length (array-dimensions x))))
-    (if (< rank 3)
-        (linalg:transpose x)
-        (let ((axes nil))
-          (do ((k (- rank 3) (- k 1)))
-              ((< k 0))
-            (setq axes (cons k axes)))
-          (linalg:transpose x (append axes (list (- rank 1) (- rank 2))))))))
-
 (defun torch::%t-mm-grad-a (g xa xb ra rb)
   ;; The matmul adjoint for the LEFT operand, by the operands' ranks: both
   ;; vectors (a dot product, g scalar), a vector right side (g gains the
   ;; column axis back), a vector left side (contract g against b's rows), and
   ;; the general stacked case g . b^T -- each unbroadcast over the batch axes.
+  ;; The last one is %la-matmul-nd-tb, the product that reads b in the
+  ;; orientation it is already stored in rather than transposing it first.
   (cond ((and (= ra 1) (= rb 1)) (linalg:mul xb g))
-   ((= rb 1)
-    (torch::%t-unbroadcast (linalg:mul (linalg:expand-dims g -1) xb) xa))
-   ((= ra 1)
-    (torch::%t-unbroadcast
-     (linalg:sum (linalg:mul xb (linalg:expand-dims g -2)) :axis -1) xa))
-   (t (torch::%t-unbroadcast (linalg:matmul g (torch::%t-swap-last xb)) xa))))
+        ((= rb 1)
+         (torch::%t-unbroadcast (linalg:mul (linalg:expand-dims g -1) xb) xa))
+        ((= ra 1)
+         (torch::%t-unbroadcast
+          (linalg:sum (linalg:mul xb (linalg:expand-dims g -2)) :axis -1) xa))
+        (t (torch::%t-unbroadcast (linalg::%la-matmul-nd-tb g xb) xa))))
 
 (defun torch::%t-mm-grad-b (g xa xb ra rb)
   ;; The matmul adjoint for the RIGHT operand: the mirror of %t-mm-grad-a
   ;; (a^T . g in the general stacked case).
   (cond ((and (= ra 1) (= rb 1)) (linalg:mul xa g))
-   ((= ra 1)
-    (torch::%t-unbroadcast (linalg:mul (linalg:reshape xa
-                                        (list (car (array-dimensions xa)) 1))
-                                       (linalg:expand-dims g -2)) xb))
-   ((= rb 1)
-    (torch::%t-unbroadcast (linalg:mul xa (linalg:expand-dims g -1)) xb))
-   (t (torch::%t-unbroadcast (linalg:matmul (torch::%t-swap-last xa) g) xb))))
+        ((= ra 1)
+         (torch::%t-unbroadcast (linalg:mul (linalg:reshape xa
+                                                            (list
+                                                             (car
+                                                              (array-dimensions
+                                                               xa)) 1))
+                                            (linalg:expand-dims g -2)) xb))
+        ((= rb 1)
+         (torch::%t-unbroadcast (linalg:mul xa (linalg:expand-dims g -1)) xb))
+        (t (torch::%t-unbroadcast (linalg::%la-matmul-nd-ta xa g) xb))))
 
 (defun torch:matmul (a b)
   ;; Differentiable matrix product with torch.matmul's rank rules: two vectors

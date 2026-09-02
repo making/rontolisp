@@ -268,7 +268,7 @@ share `torch::%t-grad-reshape`.
 | `power` | `power` | `g*b*a^(b-1)`; exponent `g*out*ln a` -- computed ONLY when the exponent tracks (ln of a non-positive base would signal) |
 | `exp`/`log`/`sqrt`/`tanh` | ufuncs (number branch for scalars) | `g*out` / `g/a` / `g/(2 out)` / `g*(1-out^2)` |
 | `relu` | `relu` | `g * (a > 0)` mask (0 at 0, like PyTorch) |
-| `matmul` | `dot` (vec.vec) / `matmul` | rank-cased in `%t-mm-grad-a/-b`: general `g.b^T` / `a^T.g` with the last two axes swapped (`%t-swap-last`), vector sides via expand-dims products; batch axes unbroadcast |
+| `matmul` | `dot` (vec.vec) / `matmul` | rank-cased in `%t-mm-grad-a/-b`: general `g.b^T` / `a^T.g` through `linalg::%la-matmul-nd-tb` / `-ta`, the products that read the transposed operand where it lies (they were `linalg:matmul` over a `%t-swap-last` COPY until 2026-09-02, which was the largest element-wise cost left in a `--gpu` step); vector sides via expand-dims products; batch axes unbroadcast |
 | `sum`/`mean` | `sum`/`mean` | broadcast back (`%t-grad-bcast`); mean divides by the reduced count |
 | `var`/`std` | COMPOSED from mean/sub/mul/sum/div (+ sqrt) | from the tape -- no bespoke adjoint; keeps the `(n - ddof)` divisor differentiable |
 | `amax` | `amax` | mask `(= a out)`, gradient split EVENLY among ties (PyTorch's amax rule) |
