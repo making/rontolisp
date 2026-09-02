@@ -32,10 +32,13 @@ for attempt in $(seq 1 10); do
 
 	# Skip past any number develop already uses -- live file or history row.
 	git fetch -q origin '+refs/heads/develop:refs/remotes/origin/develop'
+	# Anchor both: a title can carry three digits of its own, and an unanchored
+	# match would read `700-the-step-at-batch-999-regresses.md` as 999 and burn
+	# every number in between.
 	used=$( {
-		git ls-tree --name-only origin/develop .todo/
-		git grep -h -oE '\.todo/[0-9]{3}' origin/develop -- .todo/history/ || true
-	} | grep -oE '[0-9]{3}' | sort -n | tail -1)
+		git ls-tree --name-only origin/develop .todo/ | sed 's|^\.todo/||' | grep -oE '^[0-9]{3}'
+		git grep -h -oE '\.todo/[0-9]{3}' origin/develop -- .todo/history/ | grep -oE '[0-9]{3}$' || true
+	} | sort -n | tail -1)
 	if [ -n "$used" ] && [ "$used" -ge "$cur" ]; then
 		cur=$((used + 1))
 	fi
