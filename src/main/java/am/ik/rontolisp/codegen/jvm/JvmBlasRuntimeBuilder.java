@@ -46,8 +46,14 @@ final class JvmBlasRuntimeBuilder {
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_blasInit";
 
-	/** The {@code ops} key of the one accelerated kernel. */
+	/** The {@code ops} key of the {@code linalg:dot} kernel. */
 	static final String DOT = "dot";
+
+	/** The {@code ops} key of the {@code vec:matvec} kernel. */
+	static final String MATVEC = "matvec";
+
+	/** The {@code ops} key of the {@code vec:matvec-into} kernel. */
+	static final String MATVEC_INTO = "matvecInto";
 
 	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
 	private static final int CHUNK_SIZE = 40000;
@@ -57,8 +63,8 @@ final class JvmBlasRuntimeBuilder {
 
 	/**
 	 * The ready-to-emit {@code _blasInit} method, its guard field, and the constant-pool
-	 * references the accelerated call site needs ({@code ops} keys: {@code init} and
-	 * {@value #DOT}).
+	 * references the accelerated call sites need ({@code ops} keys: {@code init},
+	 * {@value #DOT}, {@value #MATVEC} and {@value #MATVEC_INTO}).
 	 */
 	record BlasRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc,
@@ -110,6 +116,10 @@ final class JvmBlasRuntimeBuilder {
 		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
 		ops.put(DOT, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("blasDot"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put(MATVEC, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("blasMatvec"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put(MATVEC_INTO, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("blasMatvecInto"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 
 		// --- _blasInit body (self-contained: no bind callback) ---
 		List<Integer> code = new ArrayList<>();

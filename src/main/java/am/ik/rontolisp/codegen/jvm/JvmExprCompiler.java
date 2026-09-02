@@ -498,13 +498,18 @@ final class JvmExprCompiler {
 				compileExpr(LispMacroExpander.expandTorchNoGrad(cons), ctx, className);
 				return;
 			}
-			// --gpu: vec:matvec is the one device member outside linalg:. Its call site
-			// is a CHAIN -- the device attempt over temps, then the lane kernel when
-			// --simd emitted one, else the spliced defun -- emitted whenever the device
-			// bridge was, with or without --simd (.kb/gpu.md).
-			if (qn != null && LispNames.VEC_PKG.equals(qn.pkg()) && ctx.gpuOps != null
-					&& LispNames.VEC_MATVEC.equals(qn.member())) {
-				JvmSimdCompiler.compileGpuMatvec(cons, ctx, className);
+			// --gpu / --blas: the two vec: members that are a matrix product -- matvec
+			// and matvec-into -- have accelerators above the lane kernel, and neither
+			// flag implies --simd. Their call site is therefore a CHAIN over one set of
+			// temps: the device attempt (the allocating form only, .kb/gpu.md), then the
+			// library GEMV (.kb/linalg-blas.md), then the lane kernel when --simd emitted
+			// one, else the spliced defun. Claimed whenever either of those bridges was
+			// emitted, with or without --simd; a --simd-only build keeps the bare
+			// INVOKESTATIC of the arm below.
+			if (qn != null && LispNames.VEC_PKG.equals(qn.pkg())
+					&& (ctx.blasOps != null && JvmLinalgBlas.vecKernelKey(qn.member()) != null
+							|| ctx.gpuOps != null && LispNames.VEC_MATVEC.equals(qn.member()))) {
+				JvmSimdCompiler.compileMatvecChain(qn.member(), cons, ctx, className);
 				return;
 			}
 			// --vec: route the six vectorizable vec: kernels to the embedded Vector API

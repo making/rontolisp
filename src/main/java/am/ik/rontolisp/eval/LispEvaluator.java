@@ -7647,10 +7647,19 @@ public final class LispEvaluator {
 				if (this.simd) {
 					VecSimd.install(this.globalEnv, this.parallel);
 				}
+				// Opt-in --blas: vec:matvec / vec:matvec-into are a GEMV, so they are
+				// intercepted here on TOP of the lane kernel exactly as linalg:dot is on
+				// the hook above -- and here rather than there because the two libraries
+				// load independently (.kb/linalg-blas.md).
+				if (this.blas) {
+					LinalgBlas.installVec(this.globalEnv, this);
+				}
 				// Opt-in --gpu: vec:matvec is the one device member outside linalg:, and
 				// it is installed here, on TOP of the lane kernel, when THIS library
 				// loads -- the two libraries load independently, so it cannot ride on
-				// the linalg hook above (.kb/gpu.md).
+				// the linalg hook above (.kb/gpu.md). Installed after --blas, so the
+				// device is asked FIRST and declines to the best CPU path this
+				// invocation enabled.
 				if (this.gpu) {
 					LinalgGpu.installVec(this.globalEnv, this);
 				}

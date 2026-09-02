@@ -1,7 +1,9 @@
 package am.ik.rontolisp.eval;
 
 import java.util.List;
+import java.util.function.Function;
 
+import am.ik.rontolisp.FloatArrayAccessHook;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
@@ -11,20 +13,25 @@ import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The interpreter's opt-in {@code --blas} acceleration: {@code linalg:dot} -- and through
- * it {@code linalg:matmul} at rank {@code <= 2} -- calls the {@code gemm} / {@code gemv}
- * of a tuned CBLAS found in the operating system ({@link LinalgBlasKernels}). Everything
- * else declines, so the whole rest of {@code linalg:} is untouched.
+ * The interpreter's opt-in {@code --blas} acceleration: the matrix product, in both of
+ * the packages that have one. {@code linalg:dot} -- and through it {@code linalg:matmul}
+ * at rank {@code <= 2} -- calls the {@code gemm} / {@code gemv} of a tuned CBLAS found in
+ * the operating system ({@link LinalgBlasKernels}), and {@code vec:matvec} /
+ * {@code vec:matvec-into} call its {@code gemv} ({@link #installVec}). Everything else
+ * declines, so the whole rest of both packages is untouched.
  *
  * <h2>Why only the product</h2>
  *
  * The matrix product is the entire win. Measured on an Apple M4 Max against the
  * {@code --simd} kernel of the same build, Accelerate's {@code cblas_dgemm} is 35-121x
  * faster at {@code linalg}'s DEFAULT width, which no other acceleration rontolisp has can
- * touch -- and the memory-bound members ({@code sum}, a vector-vector {@code dot},
- * {@code axpy}) would gain nothing from a library call, so they are not intercepted at
- * all. The stacked rank-{@code >= 3} product is a separate interception that
- * {@code --simd} does not have either.
+ * touch, and its {@code cblas_sgemv} 6-9x the lane kernel on the GEMV shapes an LLM
+ * decode is made of (1.2-2.0x single-threaded and up to 18x threaded against OpenBLAS on
+ * a 64-core Xeon; {@code .kb/linalg-blas.md} has both tables). The memory-bound members
+ * ({@code sum}, a vector-vector {@code dot}, {@code axpy}, every element-wise
+ * {@code vec:} kernel) would gain nothing from a library call, so they are not
+ * intercepted at all. The stacked rank-{@code >= 3} product is a separate interception
+ * that {@code --simd} does not have either.
  *
  * <h2>The protocol is {@code --simd}'s, one layer up</h2>
  *
@@ -90,20 +97,135 @@ public final class LinalgBlas {
 	 * @param evaluator the evaluator used to apply the captured binding on decline
 	 */
 	public static void install(Environment globalEnv, LispEvaluator evaluator) {
-		String qualified = LispNames.LINALG_PKG + ":" + LispNames.LINALG_DOT;
+		override(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_DOT, 2, LinalgBlas::dot);
+	}
+
+	/**
+	 * Overrides {@code vec:matvec} and {@code vec:matvec-into} in the given (global)
+	 * environment with the library GEMV -- the {@code vec:} half of {@code --blas}, and
+	 * the seam {@code examples/ml/simd-gemv}, {@code examples/tiny-llm} and
+	 * {@code examples/llama2} spend their time in. Must be called AFTER the
+	 * {@code vec.lisp} forms have been evaluated into the environment and after
+	 * {@link VecSimd#install} (whichever binding it finds is what it declines to), and
+	 * only when {@link #available()} is {@code true}.
+	 *
+	 * <p>
+	 * It is a separate entry point from {@link #install} for the reason
+	 * {@link LinalgGpu#installVec} is: the two Lisp libraries load lazily and
+	 * independently, and a program may reach {@code vec:} before {@code linalg:} or never
+	 * reach {@code linalg:} at all.
+	 * @param globalEnv the global environment holding the loaded vec library
+	 * @param evaluator the evaluator used to apply the captured binding on decline
+	 */
+	public static void installVec(Environment globalEnv, LispEvaluator evaluator) {
+		override(globalEnv, evaluator, LispNames.VEC_PKG + ":" + LispNames.VEC_MATVEC, 2, LinalgBlas::matvec);
+		override(globalEnv, evaluator, LispNames.VEC_PKG + ":" + LispNames.VEC_MATVEC_INTO, 3, LinalgBlas::matvecInto);
+	}
+
+	/**
+	 * Installs one partial native over whatever the name is bound to now, declining to
+	 * that binding -- the lane kernel when {@code --simd} installed one, the scalar
+	 * {@code vec.lisp} defun otherwise.
+	 */
+	private static void override(Environment globalEnv, LispEvaluator evaluator, String qualified, int arity,
+			Function<List<LispVal>, @Nullable LispVal> kernel) {
 		LispVal declined = globalEnv.lookupFunctionOrNull(qualified);
 		if (declined == null) {
-			throw new IllegalStateException("linalg.lisp must be loaded before " + qualified + " can be accelerated");
+			throw new IllegalStateException(
+					"the library defining " + qualified + " must be loaded before it can be accelerated");
 		}
 		globalEnv.defineFunction(qualified, new LispFunction(qualified, args -> {
-			if (args.size() == 2) {
-				LispVal fast = dot(args);
+			if (args.size() == arity) {
+				LispVal fast = kernel.apply(args);
 				if (fast != null) {
 					return fast;
 				}
 			}
 			return evaluator.applyGlobal(declined, args);
 		}));
+	}
+
+	/**
+	 * {@code (vec:matvec w x)} on the library: a packed rank-2 matrix by a packed rank-1
+	 * vector of the same width and matching extent, above the size threshold. Everything
+	 * else declines -- to the lane kernel or the scalar defun, both of which are TOTAL
+	 * and will produce the answer or the {@code vec:} error, so nothing here has to
+	 * reproduce either.
+	 */
+	private static @Nullable LispVal matvec(List<LispVal> args) {
+		LispFloatArray w = matrix(args.get(0), args.get(1));
+		if (w == null) {
+			return null;
+		}
+		LispFloatArray x = (LispFloatArray) args.get(1);
+		int rows = w.dims()[0];
+		int cols = w.dims()[1];
+		if (w instanceof LispSingleFloatArray single) {
+			float[] y = new float[rows];
+			LinalgBlasKernels.gemvF(single.data(), 0, rows, cols, ((LispSingleFloatArray) x).data(), 0, y, 0, false);
+			return new LispSingleFloatArray(y, new int[] { rows });
+		}
+		double[] y = new double[rows];
+		LinalgBlasKernels.gemv(((LispDoubleFloatArray) w).data(), 0, rows, cols, ((LispDoubleFloatArray) x).data(), 0,
+				y, 0, false);
+		return new LispDoubleFloatArray(y, new int[] { rows });
+	}
+
+	/**
+	 * {@code (vec:matvec-into out w x)}: the same product straight into a caller-supplied
+	 * destination, which is what {@code cblas_?gemv} does natively -- so this form drops
+	 * the result allocation as well as the loop, and answers {@code out} itself
+	 * ({@code eq} to the argument, the {@code -into} contract). A destination sharing
+	 * storage with {@code w} or {@code x} declines: each output element folds over all of
+	 * {@code x}, and the rung below signals that for us.
+	 */
+	private static @Nullable LispVal matvecInto(List<LispVal> args) {
+		LispFloatArray w = matrix(args.get(1), args.get(2));
+		if (w == null || !(args.get(0) instanceof LispFloatArray out) || out.getClass() != w.getClass()
+				|| out.rank() != 1) {
+			return null;
+		}
+		LispFloatArray x = (LispFloatArray) args.get(2);
+		int rows = w.dims()[0];
+		int cols = w.dims()[1];
+		if (out.dims()[0] != rows) {
+			return null;
+		}
+		if (out instanceof LispSingleFloatArray y) {
+			float[] data = y.data();
+			if (data == ((LispSingleFloatArray) w).data() || data == ((LispSingleFloatArray) x).data()) {
+				return null;
+			}
+			LinalgBlasKernels.gemvF(((LispSingleFloatArray) w).data(), 0, rows, cols, ((LispSingleFloatArray) x).data(),
+					0, data, 0, false);
+			FloatArrayAccessHook.written(y.storage());
+			return out;
+		}
+		LispDoubleFloatArray y = (LispDoubleFloatArray) out;
+		double[] data = y.data();
+		if (data == ((LispDoubleFloatArray) w).data() || data == ((LispDoubleFloatArray) x).data()) {
+			return null;
+		}
+		LinalgBlasKernels.gemv(((LispDoubleFloatArray) w).data(), 0, rows, cols, ((LispDoubleFloatArray) x).data(), 0,
+				data, 0, false);
+		FloatArrayAccessHook.written(y.storage());
+		return out;
+	}
+
+	/**
+	 * The matrix operand both {@code vec:} entry points require, or {@code null} when
+	 * this pair is not a GEMV the library should take: a packed rank-2 matrix and a
+	 * packed rank-1 vector of the same width whose extent matches, big enough to pay for
+	 * the downcall.
+	 */
+	private static @Nullable LispFloatArray matrix(LispVal matrixArg, LispVal vectorArg) {
+		if (!(matrixArg instanceof LispFloatArray w) || !(vectorArg instanceof LispFloatArray x)
+				|| w.getClass() != x.getClass() || w.rank() != 2 || x.rank() != 1) {
+			return null;
+		}
+		int rows = w.dims()[0];
+		int cols = w.dims()[1];
+		return x.dims()[0] == cols && LinalgBlasKernels.worth(rows, cols, 1) ? w : null;
 	}
 
 	/**

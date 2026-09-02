@@ -15,10 +15,11 @@
 ;;;; vector with itself is the sum of its squares -- and it is what keeps the
 ;;;; numbers from growing without bound, so the loop can run as long as we like.
 ;;;;
-;;;; RUN IT BOTH WAYS
+;;;; RUN IT EVERY WAY
 ;;;; ----------------
 ;;;;   rontolisp examples/ml/simd-gemv.lisp                                    # scalar
 ;;;;   rontolisp examples/ml/simd-gemv.lisp --simd                             # Vector API
+;;;;   rontolisp examples/ml/simd-gemv.lisp --simd --blas                      # tuned CBLAS
 ;;;;
 ;;;;   rontolisp examples/ml/simd-gemv.lisp -o gemv.wasm        && wasmtime run gemv.wasm
 ;;;;   rontolisp examples/ml/simd-gemv.lisp -o gemv.wasm --simd && wasmtime run gemv.wasm
@@ -28,6 +29,22 @@
 ;;;;
 ;;;;   wasm-GC      467 ms  ->  3.9 ms   with --simd   (120x -- native f32x4)
 ;;;;   interpreter  4.67 s  -> 0.68 s    with --simd   (6.9x, the native binary)
+;;;;
+;;;; `--blas` routes the GEMV to a tuned CBLAS out of the operating system, and
+;;;; what that is worth depends on the machine far more than --simd does. On a
+;;;; 64-core Xeon E5-2697A v4 with OpenBLAS, `java -jar`:
+;;;;
+;;;;   interpreter  8964 ms -> 187 ms with --simd -> 131 ms with --simd --blas
+;;;;
+;;;; -- but only with OPENBLAS_NUM_THREADS=1. Uncapped, the same run takes 371
+;;;; ms: a GEMV is short and memory-bound, so a threaded library pays a barrier
+;;;; per call that the call cannot amortize. `--blas` on its own is 629 ms here,
+;;;; because vec:dot and vec:scale beside the GEMV are still scalar defuns.
+;;;;
+;;;; On the native binary of the same box it is a TIE -- 47 ms with --simd, 49 ms
+;;;; with --simd --blas -- because at 256x256 the lane kernel is already at
+;;;; library speed there. The flag earns its keep on bigger matrices, not this
+;;;; one. See doc/en/guides/blas-acceleration.md.
 ;;;;
 ;;;; The JVM backend is the one to be careful with, and this example is the worst
 ;;;; case for it. `--simd` compiles to a jdk.incubator.vector bridge, and whether
