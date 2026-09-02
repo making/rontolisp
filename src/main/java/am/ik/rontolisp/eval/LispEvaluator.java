@@ -414,6 +414,15 @@ public final class LispEvaluator {
 	private List<String> systemPath = List.of();
 
 	/**
+	 * The READ-TIME feature set every source this evaluator reads is read with:
+	 * {@link Features#INTERPRETER}, widened by whatever the user declared on the command
+	 * line ({@code --feature}, {@link #setDeclaredFeatures}). An ASDF system's own
+	 * {@code :rontolisp-features} widens it once more, for that system's component files
+	 * only. See {@code .kb/reader-features.md}.
+	 */
+	private Features features = Features.INTERPRETER;
+
+	/**
 	 * The program's own argument vector, argv0 first -- what {@code %host-argv} answers
 	 * and therefore what the {@code uiop/image} command-line family reads. Empty by
 	 * default: an EMBEDDED run (the tests, the browser playground) has no command line of
@@ -718,6 +727,37 @@ public final class LispEvaluator {
 	 */
 	public void setSystemPath(List<String> systemPath) {
 		this.systemPath = List.copyOf(systemPath);
+	}
+
+	/**
+	 * Widens the read-time feature set by the names the USER declared ({@code --feature}
+	 * on the command line), and seeds the run-time {@code *features*} list with the same
+	 * names so a {@code (member :F *features*)} and the {@code #+F} beside it cannot
+	 * disagree.
+	 * <p>
+	 * It reaches the entry program, every file it {@code load}s and every ASDF component
+	 * loaded under it -- the source the USER brought. It deliberately does NOT reach the
+	 * sources rontolisp itself ships (the prelude, the Lisp-source libraries, the
+	 * {@code BuiltinSystems} shims): those are read with the backend's own constant,
+	 * because a claim the user makes about a third-party library must not rewrite our own
+	 * conditionals underneath it.
+	 * @param names the declared feature names, without the leading colon
+	 */
+	public void setDeclaredFeatures(List<String> names) {
+		if (names.isEmpty()) {
+			return;
+		}
+		this.features = Features.INTERPRETER.with(names);
+		this.globalEnv.define(LispNames.FEATURES_VAR, Environment.featureKeywordList(this.features.names()));
+	}
+
+	/**
+	 * The read-time feature set in force, for a caller that reads a source on this
+	 * evaluator's behalf (the CLI reads the entry program itself).
+	 * @return the feature set
+	 */
+	public Features features() {
+		return this.features;
 	}
 
 	/**
@@ -2949,7 +2989,7 @@ public final class LispEvaluator {
 	 * bundled data files resolve against is the system's, already on the load-dir stack.
 	 */
 	private void loadFile(String operator, String rawPath, @Nullable String systemName) {
-		loadFile(operator, rawPath, systemName, Features.INTERPRETER);
+		loadFile(operator, rawPath, systemName, this.features);
 	}
 
 	/**
@@ -3774,8 +3814,8 @@ public final class LispEvaluator {
 			// .asd forms read upcased like all source; AsdfSystems matches clause
 			// keywords case-insensitively and coerce-names (downcases) system
 			// designators.
-			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
-					Features.INTERPRETER, this.asdfSystemPackages)) {
+			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(), this.features,
+					this.asdfSystemPackages)) {
 				this.asdfSystems.putIfAbsent(defined.name(), defined);
 			}
 			system = this.asdfSystems.get(name);
@@ -3783,7 +3823,7 @@ public final class LispEvaluator {
 				// A NAME/SUB of a :package-inferred-system: the .asd declares no
 				// components, so the name is answered from the file it points at.
 				AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
-						this.sourceLoader, Features.INTERPRETER);
+						this.sourceLoader, this.features);
 				system = this.asdfSystems.get(name);
 			}
 			if (system == null) {
@@ -3794,7 +3834,7 @@ public final class LispEvaluator {
 		// A system that declares :rontolisp-features has its own component files read
 		// with the interpreter's features widened by that declaration -- the static
 		// encoding of the eval-when *features* push a real .asd would do.
-		Features systemFeatures = Features.INTERPRETER.with(system.features());
+		Features systemFeatures = this.features.with(system.features());
 		// Component paths (and a dependency's .asd lookup) resolve against the system's
 		// base directory, not the caller's.
 		this.loadDirStack.addLast(system.baseDir());
@@ -3865,8 +3905,7 @@ public final class LispEvaluator {
 	private LispVal evalDefsystem(LispCons cons) {
 		ensureAsdfRuntimeLoaded();
 		String baseDir = this.loadDirStack.peekLast();
-		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir,
-				Features.INTERPRETER);
+		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir, this.features);
 		this.asdfSystems.put(system.name(), system);
 		return new LispSymbol(system.name());
 	}
