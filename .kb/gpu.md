@@ -1024,6 +1024,84 @@ driver's own pageable copy -- so it loses past 262144 elements and wins 17% at 6
 Neither pays for a pinned pool and its budget. **Any future change to this route re-runs
 that table first.**
 
+### The chapter-2 step re-measured, and the reduction adjoint that stopped mattering (todo-500, 2026-09-02)
+
+`.todo/500` was filed off the 2026-08-24 chapter-2 profile (in this file's git history,
+commit `13a52ba`): 104 `cuMemcpyHtoD` a batch of which **90 uploads, 183 MB, were
+`torch::%t-grad-bcast`** staging `(linalg:add (linalg:zeros-like x) gk)` -- an array of
+zeros allocated only to be broadcast over. **It is already gone, and the fused tier is
+what removed it.** Those 90 were the 30 `torch:layer-norm` modules' three reduction nodes
+each (the mean, the variance's mean and the variance's sum); todo-499 replaced the
+composition with `%la-layer-norm` and todo-634 with `%la-layer-norm-affine`, so the module
+carries no `torch:mean`/`torch:sum` node at all. Counted in the adjoint itself over three
+book-shape steps, `%t-grad-bcast` now runs **ONCE a step**, over the cross-entropy's
+flattened `(1280)` per-position loss, with a SCALAR gradient -- a 5 KB allocation, and it
+appears nowhere in a copy trace. **The item's premise is dead; there was no code change
+to make.**
+
+**The `-0.0` question it left open is moot, and was measured rather than reasoned.** The
+replacement would have been bit-identical except at `-0.0`, where `0.0 + v` answers
+`+0.0` and a strided copy would not. Instrumented (`(= v 0.0)` and `(< (/ 1.0 v) 0)`, so
+`-0.0` and no other value) over three book-shape steps, **zero `-0.0` elements reach
+`%t-grad-bcast`** -- nor the two scalar fills of the same shape, `%t-unbroadcast`'s
+number branch and `%t-grad-reshape`'s, which are never reached at all. The normalization
+`.kb/torch.md` records therefore stands untested by any program here, and stays as it is.
+Note also that `%la-layer-norm-grad` MIRRORS the old spelling on purpose ("every line is
+the adjoint torch.lisp spells for that op, the broadcast onto zeros included"), so
+changing the adjoint alone would have broken that member-for-member pin for no measured
+gain.
+
+**The step, re-profiled.** `d_model` 512, 6 blocks, 8 heads, `d_ff` 512, batch 64,
+`max_length` 20, vocabulary 6638 -- the book's shapes, over a SYNTHETIC corpus of
+10-19-token sentences rather than `small_parallel_enja` (the 2026-08-24 row is the real
+corpus, so the walls are not strictly comparable; the counts are structural). `--gpu
+--simd`, JVM class output, GB10, `java -Xmx64g -XX:+ExplicitGCInvokesConcurrent`, nsys
+over a 33-step run diffed against a 13-step one:
+
+| per step | 2026-08-24 | now |
+|---|---|---|
+| wall | 0.317 s | **0.36 s** |
+| device kernel time | 230 ms (73% busy) | **291 ms (~81% busy)** |
+| `cuLaunchKernel` | 11029 | **6794** |
+| `cuCtxSynchronize` | 102 | **204** |
+| `cuMemcpyHtoD` | 104 copies, 247 MB | **302 copies, 88.7 MB** |
+| `cuMemcpyDtoH` | 4 copies, 4.3 MB | **292 copies, 30.8 MB** |
+
+The launches fell by a third (the fused tier) and the uploaded bytes by two thirds (the
+zeros), but the COPY COUNT rose, and the downloads by 73x. A stack-walking trace on
+`upload`/`download` (the same scratch method as 2026-08-24) attributes every one:
+
+| per step | copies | MB | caller |
+|---|---|---|---|
+| **288 up + 288 down** | 288/288 | **25.9 each way** | **the attention softmax pair round-tripping a declined fused member** -- below, and `.todo/650` |
+| 1 up | 1 | 30.6 | `%la-log-softmax-grad` staging the `(1280 6638)` gradient |
+| 2 up (+2 int) | 2 | 27.2 | `%la-scatter-rows`, the embedding table's gradient |
+| 2 up | 2 | 4.85 | `%la-matmul-nd` staging the activation the DOUBLE `pe` buffer was added to |
+| 2 down | 2 | 4.85 | `torch:add` in `positional-encoding-forward` -- the mixed-width decline the example chooses |
+| 2 up | 2 | 0.009 | a `zip` broadcast |
+| 2 int up | 2 | 0.009 | `take-rows`, the embedding forward's index vector |
+| 1 up | 1 | 0.083 | `%la-scaled-masked-softmax`, the one head shape that does NOT decline |
+| 1 int up, 1 down | 2 | ~0 | `torch:gather`'s index vector and the loss scalar in `%m-ce-hard` |
+| 1 up | 1 | 0.005 | `linalg:where` inside `%la-scaled-masked-softmax-grad` |
+| 1 down | 1 | ~0 | one `aref` of the loss |
+
+So **the 14 uploads that are not the round trip are the same nine the 2026-08-24 trace
+named**, minus the zeros; and the FOUR downloads that profile counted are still exactly
+four (two positional-encoding, the loss scalar, one `aref`). Everything else is new.
+
+**Where the new traffic comes from: a `(batch 1 length)` mask.** `torch:padding-mask` puts
+a query axis of extent 1 in so it broadcasts over a `(batch query key)` score, and
+`LinalgGpu.suffixLength` requires the mask to be a trailing SUFFIX of the score's dims --
+`(batch 1 key)` against `(batch query key)` fails on the middle axis. So the encoder's 48
+self-attention heads and the decoder's 48 cross-attention heads decline
+`%la-scaled-masked-softmax`, the compiled fallback materializes the 90 KB score
+(`64 x 19 x 19` f32) to run the defun, and the defun's own `linalg:softmax` uploads it
+straight back: 96 round trips forward, 96 more backward with two operands each. The
+decoder's 48 SELF-attention heads carry `padding + subsequent`, a `(batch length length)`
+mask, which is a suffix -- they take the fused member and copy nothing. Chapter 3's GPT is
+unaffected for the same reason: its mask is `(1 T T)`, whose leading extent-1 axis is
+dropped before the suffix test. Filed as `.todo/650`.
+
 ## The fused tier (todo-499, 2026-09-02; todo-629 added two members, todo-641 two more, todo-634 two more)
 
 The four compositions a transformer step spent a third of its device time on -- the exact
@@ -1637,8 +1715,8 @@ them later.
 answers `false` without touching the device, and there is no fp64 on this hardware to fill
 the gap with later. (The rule is about an operand that ENTERS ARITHMETIC. The one operand
 in the library that does not is `where`'s mask, and it is taken at both widths -- "The
-`where` mask's width" below.) Two consequences: **the decline protocol is load-bearing in a way it
-is not on CUDA** -- `linalg`'s default width is double, so on Apple the flag is inert
+`where` mask's width" below.) Two consequences: **the decline protocol is load-bearing in
+a way it is not on CUDA** -- `linalg`'s default width is double, so on Apple the flag is inert
 until a program reaches `#f` data, which `torch:` does by default and a `linalg`-only
 program has to ask for -- and **`GpuTest` no longer describes both backends**: it is gated
 on a double-capable device and `MetalGpuTest` answers the same claims at `#f`. Two files
