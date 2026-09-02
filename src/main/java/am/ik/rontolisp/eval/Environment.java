@@ -6430,6 +6430,30 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.FOURTH, args, 1);
 			return nthValue(LispNames.FOURTH, 3, args.get(0));
 		}));
+		env.defineFunction(LispNames.FIFTH, new LispFunction(LispNames.FIFTH, args -> {
+			requireArgCount(LispNames.FIFTH, args, 1);
+			return nthValue(LispNames.FIFTH, 4, args.get(0));
+		}));
+		env.defineFunction(LispNames.SIXTH, new LispFunction(LispNames.SIXTH, args -> {
+			requireArgCount(LispNames.SIXTH, args, 1);
+			return nthValue(LispNames.SIXTH, 5, args.get(0));
+		}));
+		env.defineFunction(LispNames.SEVENTH, new LispFunction(LispNames.SEVENTH, args -> {
+			requireArgCount(LispNames.SEVENTH, args, 1);
+			return nthValue(LispNames.SEVENTH, 6, args.get(0));
+		}));
+		env.defineFunction(LispNames.EIGHTH, new LispFunction(LispNames.EIGHTH, args -> {
+			requireArgCount(LispNames.EIGHTH, args, 1);
+			return nthValue(LispNames.EIGHTH, 7, args.get(0));
+		}));
+		env.defineFunction(LispNames.NINTH, new LispFunction(LispNames.NINTH, args -> {
+			requireArgCount(LispNames.NINTH, args, 1);
+			return nthValue(LispNames.NINTH, 8, args.get(0));
+		}));
+		env.defineFunction(LispNames.TENTH, new LispFunction(LispNames.TENTH, args -> {
+			requireArgCount(LispNames.TENTH, args, 1);
+			return nthValue(LispNames.TENTH, 9, args.get(0));
+		}));
 		env.defineFunction(LispNames.LIST, new LispFunction(LispNames.LIST, args -> {
 			LispVal result = LispNil.INSTANCE;
 			for (int i = args.size() - 1; i >= 0; i--) {

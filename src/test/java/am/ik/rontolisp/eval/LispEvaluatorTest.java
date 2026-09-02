@@ -2551,6 +2551,43 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFifth() {
+		assertThat(eval("(fifth '(1 2 3 4 5))")).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void evalSixth() {
+		assertThat(eval("(sixth '(1 2 3 4 5 6))")).isEqualTo(new LispInteger(6));
+	}
+
+	@Test
+	void evalSeventh() {
+		assertThat(eval("(seventh '(1 2 3 4 5 6 7))")).isEqualTo(new LispInteger(7));
+	}
+
+	@Test
+	void evalEighth() {
+		assertThat(eval("(eighth '(1 2 3 4 5 6 7 8))")).isEqualTo(new LispInteger(8));
+	}
+
+	@Test
+	void evalNinth() {
+		assertThat(eval("(ninth '(1 2 3 4 5 6 7 8 9))")).isEqualTo(new LispInteger(9));
+	}
+
+	@Test
+	void evalTenth() {
+		assertThat(eval("(tenth '(1 2 3 4 5 6 7 8 9 10))")).isEqualTo(new LispInteger(10));
+	}
+
+	@Test
+	void evalSetfFifthThroughTenth() {
+		assertThat(evalMulti(
+				"(setq x (list 1 2 3 4 5 6 7 8 9 10)) (setf (fifth x) 50) (setf (tenth x) 100) (list (fifth x) (tenth x))")
+			.print()).isEqualTo("(50 100)");
+	}
+
+	@Test
 	void evalRplaca() {
 		assertThat(evalMulti("(setq x (cons 1 2)) (rplaca x 10) (car x)")).isEqualTo(new LispInteger(10));
 	}
@@ -8573,6 +8610,12 @@ class LispEvaluatorTest {
 		assertThat(eval("(funcall #'second '(1 2 3))")).isEqualTo(new LispInteger(2));
 		assertThat(eval("(funcall #'third '(1 2 3))")).isEqualTo(new LispInteger(3));
 		assertThat(eval("(funcall #'fourth '(1 2 3 4))")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(funcall #'fifth '(1 2 3 4 5))")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(funcall #'sixth '(1 2 3 4 5 6))")).isEqualTo(new LispInteger(6));
+		assertThat(eval("(funcall #'seventh '(1 2 3 4 5 6 7))")).isEqualTo(new LispInteger(7));
+		assertThat(eval("(funcall #'eighth '(1 2 3 4 5 6 7 8))")).isEqualTo(new LispInteger(8));
+		assertThat(eval("(funcall #'ninth '(1 2 3 4 5 6 7 8 9))")).isEqualTo(new LispInteger(9));
+		assertThat(eval("(funcall #'tenth '(1 2 3 4 5 6 7 8 9 10))")).isEqualTo(new LispInteger(10));
 		assertThat(eval("(mapcar #'first '((1 2) (3 4)))").print()).isEqualTo("(1 3)");
 	}
 

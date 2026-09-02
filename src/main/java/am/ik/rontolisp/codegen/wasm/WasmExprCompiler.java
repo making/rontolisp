@@ -1950,6 +1950,12 @@ final class WasmExprCompiler {
 				case LispNames.SECOND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx);
 				case LispNames.THIRD -> WasmExprCompiler.compileExpr(LispMacroExpander.expandThird(cons), ctx);
 				case LispNames.FOURTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx);
+				case LispNames.FIFTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFifth(cons), ctx);
+				case LispNames.SIXTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSixth(cons), ctx);
+				case LispNames.SEVENTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSeventh(cons), ctx);
+				case LispNames.EIGHTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEighth(cons), ctx);
+				case LispNames.NINTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNinth(cons), ctx);
+				case LispNames.TENTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandTenth(cons), ctx);
 				case LispNames.NOT -> WasmNullPredCompiler.compile(cons, ctx);
 				default -> {
 					// The ordinary call path resolves the program's own defun, so

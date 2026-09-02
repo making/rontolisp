@@ -6786,6 +6786,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFifthThroughTenth() throws Exception {
+		assertThat(compileAndRun("(print (fifth '(1 2 3 4 5)))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (sixth '(1 2 3 4 5 6)))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (seventh '(1 2 3 4 5 6 7)))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (eighth '(1 2 3 4 5 6 7 8)))")).isEqualTo("8");
+		assertThat(compileAndRun("(print (ninth '(1 2 3 4 5 6 7 8 9)))")).isEqualTo("9");
+		assertThat(compileAndRun("(print (tenth '(1 2 3 4 5 6 7 8 9 10)))")).isEqualTo("10");
+	}
+
+	@Test
 	void compileAndRunCarCdrComposition() throws Exception {
 		assertThat(compileAndRun("(print (cadr '(1 2 3)))")).isEqualTo("2");
 		assertThat(compileAndRun("(print (caddr '(1 2 3)))")).isEqualTo("3");
@@ -6845,6 +6855,19 @@ class JvmLispCompilerTest {
 				(setf (second x) 20)
 				(print (second x))
 				""")).isEqualTo("20");
+	}
+
+	@Test
+	void compileAndRunSetfFifthThroughTenth() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 1 2 3 4 5 6 7 8 9 10))
+				(setf (fifth x) 50)
+				(setf (tenth x) 100)
+				(print (fifth x))
+				(print (tenth x))
+				""")).isEqualTo("""
+				50
+				100""");
 	}
 
 	@Test
@@ -10024,6 +10047,8 @@ class JvmLispCompilerTest {
 	@Test
 	void evalNumberedAccessors() throws Exception {
 		assertThat(compileAndRun("(print (eval '(third (list 10 20 30 40))))")).isEqualTo("30");
+		assertThat(compileAndRun("(print (eval '(fifth (list 10 20 30 40 50))))")).isEqualTo("50");
+		assertThat(compileAndRun("(print (eval '(tenth (list 1 2 3 4 5 6 7 8 9 10))))")).isEqualTo("10");
 	}
 
 	@Test

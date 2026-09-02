@@ -1385,11 +1385,18 @@ final class JvmEvalRuntimeBuilder {
 		a.istore(FIELD);
 		a.bind(afterNth);
 
-		// first/second/third/fourth: k cdrs, set car
+		// first/second/third/fourth/fifth/sixth/seventh/eighth/ninth/tenth: k cdrs, set
+		// car
 		fixedAccessorTarget(a, OP, LispNames.FIRST, ARGS, ENV, TARGET, FIELD, 0);
 		fixedAccessorTarget(a, OP, LispNames.SECOND, ARGS, ENV, TARGET, FIELD, 1);
 		fixedAccessorTarget(a, OP, LispNames.THIRD, ARGS, ENV, TARGET, FIELD, 2);
 		fixedAccessorTarget(a, OP, LispNames.FOURTH, ARGS, ENV, TARGET, FIELD, 3);
+		fixedAccessorTarget(a, OP, LispNames.FIFTH, ARGS, ENV, TARGET, FIELD, 4);
+		fixedAccessorTarget(a, OP, LispNames.SIXTH, ARGS, ENV, TARGET, FIELD, 5);
+		fixedAccessorTarget(a, OP, LispNames.SEVENTH, ARGS, ENV, TARGET, FIELD, 6);
+		fixedAccessorTarget(a, OP, LispNames.EIGHTH, ARGS, ENV, TARGET, FIELD, 7);
+		fixedAccessorTarget(a, OP, LispNames.NINTH, ARGS, ENV, TARGET, FIELD, 8);
+		fixedAccessorTarget(a, OP, LispNames.TENTH, ARGS, ENV, TARGET, FIELD, 9);
 
 		// car/cdr and c[ad]+r compositions (only if no named accessor matched)
 		int skipCarCdr = a.label();
@@ -2447,11 +2454,17 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(n);
 
-		// ---- first/second/third/fourth ----
+		// ---- first/second/third/fourth/fifth/sixth/seventh/eighth/ninth/tenth ----
 		fixedAccessorEval(a, OP, LispNames.FIRST, REST, ENV, ACC, 0);
 		fixedAccessorEval(a, OP, LispNames.SECOND, REST, ENV, ACC, 1);
 		fixedAccessorEval(a, OP, LispNames.THIRD, REST, ENV, ACC, 2);
 		fixedAccessorEval(a, OP, LispNames.FOURTH, REST, ENV, ACC, 3);
+		fixedAccessorEval(a, OP, LispNames.FIFTH, REST, ENV, ACC, 4);
+		fixedAccessorEval(a, OP, LispNames.SIXTH, REST, ENV, ACC, 5);
+		fixedAccessorEval(a, OP, LispNames.SEVENTH, REST, ENV, ACC, 6);
+		fixedAccessorEval(a, OP, LispNames.EIGHTH, REST, ENV, ACC, 7);
+		fixedAccessorEval(a, OP, LispNames.NINTH, REST, ENV, ACC, 8);
+		fixedAccessorEval(a, OP, LispNames.TENTH, REST, ENV, ACC, 9);
 
 		// ---- rest: (rest lst) -> (cdr lst) ----
 		n = special(a, OP, LispNames.REST);
