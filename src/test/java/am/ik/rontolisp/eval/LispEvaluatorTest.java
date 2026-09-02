@@ -15728,6 +15728,41 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void unDisplacingKeepsTheViewsOwnElementType() {
+		// An array's element type is fixed when it is made: nothing in CL changes the
+		// element type of an existing array, and adjust-array in particular answers an
+		// array of the SAME element type. So un-displacing a view -- whether
+		// adjust-array or vector-push-extend's growth reaches it -- must answer what
+		// array-element-type answered while the view was still a view, NOT the
+		// displacement target's remembered type. A view rontolisp built without its own
+		// :element-type remembers nothing, so that answer is t on both sides.
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+				(setq v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+				(setq before (array-element-type v))
+				(adjust-array v 3)
+				(list before (array-element-type v))
+				""").print()).isEqualTo("(T T)");
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type 'double-float :adjustable t :initial-element 0.0d0))
+				(setq v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t :fill-pointer 2))
+				(setq before (array-element-type v))
+				(vector-push-extend 9 v)
+				(list before (array-element-type v) (multiple-value-list (array-displacement v)))
+				""").print()).isEqualTo("(T T (NIL 0))");
+		// CHARACTER-ness is the one thing the un-displace does carry: a view over a
+		// character vector holds characters, so it stays a character vector (stringp)
+		// and its element type is CHARACTER on BOTH sides -- unchanged, like the rest.
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type 'character :adjustable t :fill-pointer 4))
+				(setq v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+				(setq before (list (array-element-type v) (stringp v)))
+				(adjust-array v 3)
+				(list before (array-element-type v) (stringp v))
+				""").print()).isEqualTo("((CHARACTER T) CHARACTER T)");
+	}
+
+	@Test
 	void displacedStringViewAliasesTheTargetString() {
 		// The TARGET decides the shape: displacing onto a string answers a STRING view,
 		// not a bare array view, so it is stringp, prints as a string and writes through

@@ -1025,12 +1025,14 @@ What DID need work is the three operations that reach the data:
   gate), wasm `_arr_undisplace` (`FUNC_ARR_UNDISPLACE`, appended after
   `FUNC_ARR_CHECK_RANK` so no index above shifts, reusing
   `TYPE_CALLABLE_BASE + 0`).
-- **The shape survives the un-displacement.** The JVM's header LENGTH is the
-  tag, so 7 (a displaced STRING view) becomes 4 (the character-vector marker)
-  and 5 becomes 3; wasm's meta OFFSET word doubles as the element-type marker,
-  so the resolved target's marker is copied into it (1 when the chain ends on a
-  string) -- the same "copy the word, do not re-derive the representation" move
-  `%array-adopt-element-type` makes. A grown string view is still `stringp`.
+- **The shape survives the un-displacement, and ONLY the shape.** The JVM's
+  header LENGTH is the tag, so 7 (a displaced STRING view) becomes 4 (the
+  character-vector marker) and 5 becomes 3; wasm's meta OFFSET word doubles as
+  the element-type marker, so the freed word becomes 1 exactly when the
+  displacement chain ends on characters (a runtime string, or an array whose own
+  marker is 1) and 0 otherwise. A grown string view is still `stringp`. What the
+  chain end merely REMEMBERS is deliberately NOT adopted -- see "Un-displacing
+  keeps the view's own element type" below.
 
 `_strv` (JVM) also learned the view's fill pointer: a length-7 header used to
 render its whole dimension, and the shared `emitActiveLength` now answers "fill
@@ -1048,18 +1050,63 @@ after, and the string view's characters -- EXCEPT `adjustable-array-p` over a
 view, which is the pre-existing recorded divergence above (SBCL answers `T` for
 any non-simple array; rontolisp reports the `:adjustable` argument verbatim).
 
-**Cross-backend gap found 2026-09-02, `.todo/658`**: when the array being
-un-displaced is a GENERAL array that REMEMBERS a non-packable element type
-(`.todo/619`), wasm's `_arr_undisplace` correctly chain-resolves and carries
-that type across (its meta offset word doubles as the marker, and
-`emitRememberedMarker` walks to the chain's end), while the interpreter's
-`LispArray.undisplace()` and the JVM's `_arrayUndisplace` both silently drop
-it back to `t` -- `array-element-type` answers `(UNSIGNED-BYTE 8)` on wasm,
-`T` on the other two, for the SAME source. SBCL is not a usable oracle here
-(it rejects the underlying `:displaced-to` construction outright, since CL
-requires element-type compatibility rontolisp's lite displacement does not
-check). Unmeasured whether fixing it is worth the blast radius; `.todo/658`
-holds the plan.
+### Un-displacing keeps the VIEW's own element type (`.todo/658`, 2026-09-02)
+
+**Invariant: un-displacing never changes `array-element-type`, on all four
+backends, whichever operation reaches it.** An array's element type is fixed
+when it is made -- no CL operation changes an existing array's, and
+`adjust-array` in particular answers an array of the SAME element type, which is
+`.todo/619`'s invariant one paragraph up ("`adjust-array` never changes an
+array's element type"). So whatever `array-element-type` answered for a view
+while it was still a view is what it must answer once the view owns its storage.
+
+`.todo/658` was filed the other way round -- "wasm chain-resolves the target's
+remembered type and carries it across, the interpreter and the JVM drop it back
+to `t`; bring those two up to wasm" -- and **the measurement overturned that
+premise**: measured 2026-09-02, wasm answered `T` for the view BEFORE the
+un-displace and `(UNSIGNED-BYTE 8)` after, i.e. `adjust-array` CHANGED an
+element type, while the interpreter and the JVM answered `T` on both sides. The
+two "broken" backends were the conforming ones, and the fix landed on wasm.
+
+Adopting the target's type is wrong even though CL requires a displaced view's
+element type to be type-equivalent to its target's (`make-array`'s
+`:displaced-to` entry): rontolisp's lite displacement never RECORDS the view's
+own `:element-type` at all -- `(make-array 2 :element-type '(unsigned-byte 8)
+:displaced-to b ...)` answers `T` from `array-element-type` on all four backends
+-- so adopting cannot be a no-op the way it would be in a conforming
+implementation. It is a silent change of an existing array's declared type.
+(That the view forgets its own declared `:element-type` is the real residual
+gap, one level up, and it is where the fix belongs if this is ever tightened:
+`.todo/661`.)
+
+What DOES travel is character-ness, because it is a REPRESENTATION fact rather
+than a remembered designator: a view over characters holds characters, so it
+stays a character vector and stays `stringp`, and `array-element-type` answers
+`CHARACTER` on both sides of the un-displace. The JVM reads that off the view's
+OWN header length (7, a displaced string view, becomes the length-4 marker);
+wasm has no per-view record of it and walks the chain, so its `_arr_undisplace`
+now writes `1` when the chain ends on characters (a runtime string, or an array
+whose own marker is 1) and `0` otherwise, instead of copying the chain end's
+marker verbatim. Three bytes of wasm (`i32.const 1` + `i32.eq` on the value it
+already computed) -- measured 2026-09-02, the repro program at
+`--optimize=size` went 28,174 -> 28,177, and the cost is ONCE per program
+because `_arr_undisplace` is a shared runtime function, not an inline site; a
+program that emits no array runtime does not emit the function and is
+unaffected. The interpreter and the JVM were already correct and are unchanged.
+
+SBCL is NOT a usable oracle for this repro -- it rejects the `:displaced-to`
+construction outright ("Can't displace an array of type T into another of type
+(UNSIGNED-BYTE 8)"), because it DOES enforce the element-type compatibility
+rontolisp's lite displacement does not check. The oracle here is the recorded
+`.todo/619` invariant plus CLHS's rule that an array's element type is
+established at creation; internal cross-backend consistency follows from it
+rather than the other way round.
+
+Pinned by `LispEvaluatorTest.unDisplacingKeepsTheViewsOwnElementType`, the
+`compileUnDisplacingKeepsTheViewsOwnElementType` twins in `JvmLispCompilerTest`
+and `WasmLispCompilerIntegrationTest`, and three added legs of the
+`adjust-array-undisplaces-cross-backend` ci-spec case (all four backends,
+byte-identical).
 
 **`adjust-array` on a displaced array un-displaces it first (`.todo/657`,
 2026-09-02), matching SBCL 2.2.9.** `expandAdjustArray`'s old displaced-check
@@ -1389,7 +1436,8 @@ its default unknown-operation error.
   `adjustArray*`, `displacedArray*`, `arrayDisplacementReturnsTargetAndOffset`,
   `makeArrayDisplacedErrors`, `displacedStringView*`,
   `aDisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag`,
-  `aFullDisplacedViewUndisplacesWhenItGrows`.
+  `aFullDisplacedViewUndisplacesWhenItGrows`,
+  `unDisplacingKeepsTheViewsOwnElementType`.
 - JVM: `JvmLispCompilerTest.compileFillPointer*` / `compileVectorP*` /
   `compileSetfFillPointer` / `compileSimpleVectorHasNoFillPointer` /
   `compileFillPointerFirstClassWrappers` / `compileClUtilitiesCopyArray` /
@@ -1399,7 +1447,8 @@ its default unknown-operation error.
   `compileDisplacedStringView` /
   `compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite` /
   `compileVectorPushExtendGrowthPolicyIsDoubling` /
-  `compileASlotOpenedByGrowthTakesTheElementTypeZero`.
+  `compileASlotOpenedByGrowthTakesTheElementTypeZero` /
+  `compileUnDisplacingKeepsTheViewsOwnElementType`.
 - WASM: the same set in `WasmLispCompilerIntegrationTest`.
 - E2E: ci-spec `fill-pointer-arrays-cross-backend` +
   `vector-push-extend-growth-cross-backend` +
