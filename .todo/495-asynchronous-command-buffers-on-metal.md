@@ -26,6 +26,18 @@ route is ~100-140 us whatever its size until 2^18 elements (`MtlResidentFloor.ja
 which ~77 us is the command buffer's wait. A chain of ~190 members a step at the notebook's
 shapes is ~20 ms of waiting however little it moves.
 
+**What todo-636 priced, 2026-09-02: the waits are worth more here than the passes.** The
+fused tier landed on Metal and took a THIRD off the step at the book's shapes (8.663 ->
+5.901 s, median of three interleaved rounds, batch 64) where the same tier took a QUARTER
+on CUDA -- and the extra is this item's fact, not a better kernel: fusing a five-member
+chain removes four memory passes on both backends, and on Metal it also removes four full
+`commit` + `waitUntilCompleted` round trips. Per call the adjoints, which are the longest
+chains, moved most: layer-norm's 47 -> 8 ms (5.9x), the GELU's 84 -> 17 (4.9x). So the
+first reason above is no longer an argument from the shape of the API -- it is a measured
+share of a real step, and the members fusion CANNOT merge (every `linalg:` call a model
+makes outside the eight fused compositions) still pay it one at a time. That is what this
+item would give back.
+
 ## Do
 
 1. Stop waiting per call. Commit each member's command buffer and return; wait only

@@ -1538,19 +1538,32 @@ tier took a quarter -- larger here because this backend removes four command buf
 of five as well as the memory passes: a Metal call is `commit` plus `waitUntilCompleted`
 and nothing overlaps, so a chain of five members is five full waits.
 
-**THE LOSS SERIES MOVES HERE, and only for the log-softmax pair.** Measured member by
-member at `(16384 64)`, six of the eight are byte-identical to the unfused build --
-softmax, its adjoint, the GELU, its adjoint, layer-norm and its adjoint -- and
-`log-softmax` and its adjoint are not. The cause is a THRESHOLD, not the kernel: the
-chain's `(linalg:log (linalg:sum ... :keepdims t))` is a `log` over a `rows x 1` array,
-16384 elements at the book's shapes, which is under this backend's map threshold of 2^17
-and therefore runs on the CPU as `Math.log`; the fused kernel calls MSL's `log`. So the
-fused member carries a DEVICE `log` where the chain here carried a host one, which is the
-same kind of move an accelerated `exp` already makes. On CUDA the same array clears that
-backend's lower map threshold, which is why todo-629 measured the loss byte-identical
-there and this does not. Declining the pair would restore byte-identity and cost 104 of
-the ~330 ms the table above gives back, which is why it is not declined -- but a program
-that needs the previous bits on Apple has to turn the flag off, not just this tier.
+**A FUSED MEMBER CAN MOVE BITS THE CHAIN DID NOT, wherever the chain STRADDLED a
+threshold.** The general rule, because it will come up again the next time a fused kernel
+is added here: a chain's member that falls UNDER a size threshold runs on the CPU, in
+Java's libm; a fused kernel runs every member of that chain on the device, in the shader's.
+Where the chain was entirely on one side, fusion changes nothing; where it straddled, the
+fused member carries a device `log` (or `exp`, or `erf`) the chain took from the host. This
+is not a new property of the tier -- it is the corollary of two that are already recorded
+above: "The transcendentals have their own libm, and that break can be SEEN", and the
+threshold-dependent output the same section pins for `(linalg:erf #d(-0.0))`, which prints
+`-0.0` above the threshold and `0.0` below it. The straddle was always there; fusion makes
+it visible in one call instead of two.
+
+**Measured, this tier: it costs the log-softmax pair and nothing else.** Member by member
+at `(16384 64)`, six of the eight are byte-identical to the unfused build -- softmax, its
+adjoint, the GELU, its adjoint, layer-norm and its adjoint. `log-softmax` and its adjoint
+are not, and the straddling member is exactly one: the chain's
+`(linalg:log (linalg:sum ... :keepdims t))` is a `log` over a `rows x 1` array, 16384
+elements at the book's shapes, under this backend's map threshold of 2^17. On CUDA the
+same array CLEARS that backend's lower map threshold -- the chain there is all-device, and
+that is why todo-629 measured the loss byte-identical there and this does not. Declining
+the pair would restore byte-identity and cost 104 of the ~330 ms the table above gives
+back, which is why it is not declined; a program that needs the previous bits on Apple
+turns the flag off rather than this tier. **What would remove the straddle rather than
+pay it is a lower map threshold for the unary libm members here**, which is a measurement
+nobody has made -- the threshold was set against `sin` over a whole array, not against a
+`rows x 1` one -- and an item of its own, not this one.
 
 **The dropout mask is the ninth, and it stays declined -- on the ARITHMETIC.**
 Wichmann-Hill's uniform is three binary64 divisions and two additions an element, and a
