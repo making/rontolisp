@@ -73,10 +73,33 @@ class GpuOfferDifferentialTest {
 	 * the largest of the four thresholds a member here can be turned down by, so that a
 	 * shape meant to probe a PREDICATE is never declined for its size instead -- which
 	 * would make the case agree vacuously.
+	 *
+	 * <p>
+	 * Each threshold goes through {@link #offeredSize} first, because a backend that is
+	 * not a member of a tier at all answers {@link Long#MAX_VALUE} rather than a large
+	 * number, and the sentinel through this arithmetic does the OPPOSITE of what the
+	 * paragraph above asks for: {@code 2 * Long.MAX_VALUE} wraps to {@code -2}, the
+	 * {@code Math.max} in {@link #B} hands back its own floor of 2, and every operand
+	 * here collapses to 1024 elements -- under every threshold on that machine. Metal
+	 * answers the sentinel for the axis fold, so this file failed on it (2026-09-03)
+	 * rather than merely agreeing vacuously, since the warm-up in {@link #toLisp} asserts
+	 * that its member was accepted.
 	 */
-	private static final long BIG = 2
-			* Math.max(Math.max(am.ik.gpu.GpuThresholds.mapMinElements(), am.ik.gpu.GpuThresholds.stridedMinElements()),
-					Math.max(am.ik.gpu.GpuThresholds.foldMinElements(), am.ik.gpu.GpuThresholds.fusedMinElements()));
+	private static final long BIG = 2 * Math.max(
+			Math.max(offeredSize(am.ik.gpu.GpuThresholds.mapMinElements()),
+					offeredSize(am.ik.gpu.GpuThresholds.stridedMinElements())),
+			Math.max(offeredSize(am.ik.gpu.GpuThresholds.foldMinElements()),
+					offeredSize(am.ik.gpu.GpuThresholds.fusedMinElements())));
+
+	/**
+	 * {@code threshold}, or {@code 0} when this backend is not a member of that tier at
+	 * all -- a tier no size reaches must not be what an operand is sized for.
+	 * @param threshold one of the thresholds in force
+	 * @return a count safe to take a maximum over
+	 */
+	private static long offeredSize(long threshold) {
+		return threshold == Long.MAX_VALUE ? 0 : threshold;
+	}
 
 	/** The last axis of every rank-3 operand -- a softmax row, and a fold's inner run. */
 	private static final int C = 64;
