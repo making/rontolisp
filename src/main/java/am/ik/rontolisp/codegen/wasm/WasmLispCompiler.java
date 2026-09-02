@@ -1516,7 +1516,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	// (todo 479); appended after the last fixed helper so no index above shifts.
 	static final int FUNC_ARR_CHECK_RANK = FUNC_ARR_FP + 1;
 
-	static final int FX_FUNC_LAST = FUNC_ARR_CHECK_RANK;
+	// _arr_undisplace ((ref null eq) header) -> (ref null eq): copies a DISPLACED view's
+	// current contents into a buckets array of its own and drops the displacement,
+	// keeping the dims, the fill pointer and the adjustable flag; an ordinary array is
+	// returned untouched. vector-push-extend calls it when a full fill-pointered view has
+	// to grow, so the growth extends storage of its own rather than the target's -- what
+	// SBCL does. Reuses the ((ref null eq)) -> (ref null eq) signature
+	// (TYPE_CALLABLE_BASE + 0), so no new type entry; appended after the last fixed
+	// helper so no index above shifts.
+	static final int FUNC_ARR_UNDISPLACE = FUNC_ARR_CHECK_RANK + 1;
+
+	static final int FX_FUNC_LAST = FUNC_ARR_UNDISPLACE;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -5764,6 +5774,9 @@ public final class WasmLispCompiler implements LispCompiler {
 															// i31 | null (FUNC_ARR_FP)
 				fnDef.addFunction(TYPE_BIG_SHIFT); // _arr_check_rank (arr, given) -> arr
 													// (FUNC_ARR_CHECK_RANK)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _arr_undisplace (header) ->
+															// header
+															// (FUNC_ARR_UNDISPLACE)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6582,6 +6595,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrFpBody());
 				// shared aref/%aset rank-check body (FUNC_ARR_CHECK_RANK)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody());
+				// shared displaced-view materialization body (FUNC_ARR_UNDISPLACE)
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

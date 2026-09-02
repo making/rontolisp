@@ -452,6 +452,140 @@ final class WasmArrayRuntimeBuilder {
 		return out.toByteArray();
 	}
 
+	/**
+	 * Builds {@code _arr_undisplace (header) -> header}: copies a DISPLACED view's
+	 * current contents into a buckets array of its own and drops the displacement,
+	 * keeping the dims, the fill pointer and the adjustable flag. A header whose data
+	 * slot is already the buckets array is returned untouched.
+	 *
+	 * <p>
+	 * {@code vector-push-extend} calls it when a full fill-pointered view has to grow:
+	 * the growth then extends storage of its own instead of running off the end of the
+	 * target's, and {@code array-displacement} answers nil from there on -- which is what
+	 * SBCL 2.2.9 does. The meta OFFSET word doubles as the element-type marker, so the
+	 * resolved target's marker is copied into it (1, the character-vector marker, when
+	 * the chain ends on a string), exactly as {@code %array-adopt-element-type} copies
+	 * it: a grown string view is still a string.
+	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
+	 * {@code TYPE_CALLABLE_BASE + 0})
+	 */
+	static byte[] buildArrUndisplaceBody() {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		// locals: 1 = cur, 2 = newData (ref null eq); 3 = n, 4 = i, 5 = marker (i32).
+		w.write(2);
+		w.write(2);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(3);
+		w.write(Type.I32);
+		int curSlot = 1, newDataSlot = 2, nSlot = 3, iSlot = 4, markerSlot = 5;
+		// An ordinary array's data slot is the buckets array: nothing to do.
+		emitDataSlot(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		emitDataSlot(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, 0);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// n = the VIEW's own element count (the product of its dims).
+		get(w, 0);
+		consGet(w, 0);
+		call(w, WasmLispCompiler.FUNC_ARR_TOTAL);
+		WasmEmitHelper.castI31GetS(w);
+		set(w, nSlot);
+		// Walk to the end of the chain to read the marker the view's own offset word has
+		// to become: 1 when the chain ends on a string, else the target's own marker.
+		get(w, 0);
+		set(w, curSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		emitDataSlot(w, curSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		emitDataSlot(w, curSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		set(w, curSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		emitDataSlot(w, curSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, Type.I32.code());
+		i32(w, 1);
+		w.write(Instruction.ELSE);
+		get(w, curSlot);
+		consGet(w, 1);
+		consGet(w, 0);
+		consGet(w, 1);
+		consGet(w, 1);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.END);
+		set(w, markerSlot);
+		// newData[i] = _arr_get(header, i) -- read through the chain BEFORE the data slot
+		// is replaced, since that is what the reads resolve against.
+		get(w, nSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		set(w, newDataSlot);
+		i32(w, 0);
+		set(w, iSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, iSlot);
+		get(w, nSlot);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		buckets(w, newDataSlot);
+		get(w, iSlot);
+		get(w, 0);
+		get(w, iSlot);
+		call(w, WasmLispCompiler.FUNC_ARR_GET);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		get(w, iSlot);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, iSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// (meta . data).cdr = newData, and the offset word becomes the marker.
+		get(w, 0);
+		consGet(w, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		get(w, newDataSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		get(w, 0);
+		consGet(w, 1);
+		consGet(w, 0);
+		consGet(w, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		get(w, markerSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		get(w, 0);
+		w.write(Instruction.END);
+		return out.toByteArray();
+	}
+
 	// Pushes buckets[0] of local 1: the size of the rank-1 shape, as an i31.
 	private static void firstDim(WasmWriter w) {
 		buckets(w, 1);
@@ -629,6 +763,12 @@ final class WasmArrayRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+	}
+
+	// call <index> -- a fixed runtime helper (indices below FX_FUNC_LAST never shift).
+	private static void call(WasmWriter w, int index) {
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(index);
 	}
 
 	private static void i32(WasmWriter w, int value) {

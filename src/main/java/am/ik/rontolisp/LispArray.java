@@ -40,12 +40,14 @@ public final class LispArray implements LispVal {
 	// The displacement target (make-array :displaced-to), or null when the array has its
 	// own storage. A displaced array holds no data of its own (data is a shared empty
 	// array): element access resolves through the target chain, adding displacedOffset at
-	// each hop, so writes are visible through every view. Displacement excludes a fill
-	// pointer, adjustability and an initial element (lite semantics, enforced by
-	// make-array).
-	@Nullable private final LispArray displacedTo;
+	// each hop, so writes are visible through every view. Displacement excludes only an
+	// initial element (a CLHS rule); a view MAY carry a fill pointer and the :adjustable
+	// flag, and both fields below are cleared in place when a full fill-pointered view
+	// grows -- vector-push-extend un-displaces rather than growing someone else's
+	// storage, exactly as SBCL does.
+	@Nullable private LispArray displacedTo;
 
-	private final int displacedOffset;
+	private int displacedOffset;
 
 	// The UPGRADED element type this array was asked to hold, as an
 	// ArrayElementTypes code. It is ArrayElementTypes.T for almost every array --
@@ -114,10 +116,24 @@ public final class LispArray implements LispVal {
 	 * @param offset the row-major index into {@code target} where the view starts
 	 */
 	public LispArray(int[] dimensions, LispArray target, int offset) {
+		this(dimensions, target, offset, -1, false);
+	}
+
+	/**
+	 * Creates a displaced array carrying a fill pointer and/or the {@code :adjustable}
+	 * flag: a view over {@code target}'s storage that owns no data but whose active
+	 * length is its own. CLHS allows both keywords alongside {@code :displaced-to}.
+	 * @param dimensions the dimension sizes of the view (length = rank, {@code >= 0})
+	 * @param target the array supplying the storage
+	 * @param offset the row-major index into {@code target} where the view starts
+	 * @param fillPointer the fill pointer, or {@code -1} for none (rank-1 views only)
+	 * @param adjustable whether the view was created {@code :adjustable}
+	 */
+	public LispArray(int[] dimensions, LispArray target, int offset, int fillPointer, boolean adjustable) {
 		this.dimensions = dimensions;
 		this.data = NO_DATA;
-		this.fillPointer = -1;
-		this.adjustable = false;
+		this.fillPointer = fillPointer;
+		this.adjustable = adjustable;
 		this.displacedTo = target;
 		this.displacedOffset = offset;
 		this.elementTypeCode = ArrayElementTypes.T;
@@ -292,7 +308,7 @@ public final class LispArray implements LispVal {
 		if (this.fillPointer >= this.dimensions[0]) {
 			return -1;
 		}
-		this.data[this.fillPointer] = value;
+		writeFlat(this.fillPointer, value);
 		return this.fillPointer++;
 	}
 
@@ -306,7 +322,7 @@ public final class LispArray implements LispVal {
 		if (this.fillPointer == 0) {
 			throw new IllegalStateException("vector-pop: empty vector");
 		}
-		return this.data[--this.fillPointer];
+		return readFlat(--this.fillPointer);
 	}
 
 	/**
@@ -320,6 +336,11 @@ public final class LispArray implements LispVal {
 	public int vectorPushExtend(LispVal value, int extension) {
 		requireVectorWithFillPointer("vector-push-extend");
 		if (this.fillPointer >= this.dimensions[0]) {
+			// A full DISPLACED view stops being a view: its elements are copied into
+			// storage of its own and the displacement is dropped, so the growth never
+			// runs past the end of someone else's array. array-displacement answers
+			// nil/0 from here on, which is what SBCL 2.2.9 does.
+			undisplace();
 			int newCap = ArrayGrowth.grownCapacity(this.dimensions[0], extension);
 			LispVal[] grown = new LispVal[newCap];
 			System.arraycopy(this.data, 0, grown, 0, this.data.length);
@@ -333,8 +354,27 @@ public final class LispArray implements LispVal {
 			this.data = grown;
 			this.dimensions = new int[] { newCap };
 		}
-		this.data[this.fillPointer] = value;
+		writeFlat(this.fillPointer, value);
 		return this.fillPointer++;
+	}
+
+	/**
+	 * Copies a displaced array's current view contents into storage of its own and drops
+	 * the displacement, keeping its dimensions, fill pointer and adjustable flag. A no-op
+	 * for an array that owns its storage already.
+	 */
+	public void undisplace() {
+		if (this.displacedTo == null) {
+			return;
+		}
+		int total = totalSize();
+		LispVal[] own = new LispVal[total];
+		for (int i = 0; i < total; i++) {
+			own[i] = readFlat(i);
+		}
+		this.displacedTo = null;
+		this.displacedOffset = 0;
+		this.data = own;
 	}
 
 	private void requireVectorWithFillPointer(String fn) {

@@ -906,13 +906,16 @@ public final class Environment implements Scope {
 				total *= d;
 			}
 			if (displacedToArg != null && !(displacedToArg instanceof LispNil)) {
-				// A displaced array is a bare view: no own storage, no fill pointer, not
-				// adjustable (lite semantics; combining the keywords is an error).
-				if (initGiven || adjustable || (fillPointerArg != null && !(fillPointerArg instanceof LispNil))) {
+				// A displaced array owns no storage, but it MAY carry a fill pointer and
+				// the :adjustable flag -- CLHS forbids only :initial-element /
+				// :initial-contents alongside :displaced-to, since the view has nothing
+				// of its own to initialize.
+				if (initGiven || initialContents != null) {
 					throw new LispEvalException(LispNames.MAKE_ARRAY
-							+ ": :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
+							+ ": :displaced-to cannot be combined with :initial-element/:initial-contents");
 				}
 				int offset = displacedOffsetArg == null ? 0 : (int) asLong(displacedOffsetArg);
+				int viewFillPointer = parseFillPointer(fillPointerArg, dims, total);
 				// The TARGET decides the shape, not :element-type: displacing onto a
 				// string answers a string view (a string is its own value type here, so
 				// a LispArray view could not alias its buffer), and the portable
@@ -927,14 +930,14 @@ public final class Environment implements Scope {
 						throw new LispEvalException(
 								LispNames.MAKE_ARRAY + ": :displaced-to string is too small for the requested view");
 					}
-					return new LispString(targetString, offset, total);
+					return new LispString(targetString, offset, total, viewFillPointer, adjustable);
 				}
 				LispArray target = requireArray(LispNames.MAKE_ARRAY, displacedToArg);
 				if (offset < 0 || total + offset > target.totalSize()) {
 					throw new LispEvalException(
 							LispNames.MAKE_ARRAY + ": :displaced-to array is too small for the requested view");
 				}
-				return new LispArray(dims, target, offset);
+				return new LispArray(dims, target, offset, viewFillPointer, adjustable);
 			}
 			if (displacedOffsetArg != null && !(displacedOffsetArg instanceof LispNil)) {
 				throw new LispEvalException(LispNames.MAKE_ARRAY + ": :displaced-index-offset requires :displaced-to");
@@ -1052,18 +1055,27 @@ public final class Environment implements Scope {
 			if (initialContents != null) {
 				fillInitialContents(initialContents, dims, 0, data, 0);
 			}
-			int fillPointer = -1;
-			if (fillPointerArg != null && !(fillPointerArg instanceof LispNil)) {
-				if (dims.length != 1) {
-					throw new LispEvalException(LispNames.MAKE_ARRAY + ": :fill-pointer requires a rank-1 array");
-				}
-				fillPointer = (fillPointerArg instanceof LispInteger n) ? (int) n.value() : dims[0];
-				if (fillPointer < 0 || fillPointer > dims[0]) {
-					throw new LispEvalException(LispNames.MAKE_ARRAY + ": :fill-pointer out of range");
-				}
-			}
+			int fillPointer = parseFillPointer(fillPointerArg, dims, total);
 			return new LispArray(dims, data, fillPointer, adjustable, elementTypeCode);
 		});
+	}
+
+	// The shared make-array :fill-pointer rule: nil / absent is no fill pointer (-1),
+	// t is the vector's own size and an integer is that value, range-checked. Only
+	// rank-1 arrays may carry one. A DISPLACED view parses it the same way -- its size
+	// is the view's dimension, not the target's.
+	private static int parseFillPointer(@Nullable LispVal fillPointerArg, int[] dims, int total) {
+		if (fillPointerArg == null || fillPointerArg instanceof LispNil) {
+			return -1;
+		}
+		if (dims.length != 1) {
+			throw new LispEvalException(LispNames.MAKE_ARRAY + ": :fill-pointer requires a rank-1 array");
+		}
+		int fillPointer = (fillPointerArg instanceof LispInteger n) ? (int) n.value() : total;
+		if (fillPointer < 0 || fillPointer > total) {
+			throw new LispEvalException(LispNames.MAKE_ARRAY + ": :fill-pointer out of range");
+		}
+		return fillPointer;
 	}
 
 	private static void registerArrays(Environment env) {
