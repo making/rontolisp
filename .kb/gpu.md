@@ -1100,7 +1100,78 @@ straight back: 96 round trips forward, 96 more backward with two operands each. 
 decoder's 48 SELF-attention heads carry `padding + subsequent`, a `(batch length length)`
 mask, which is a suffix -- they take the fused member and copy nothing. Chapter 3's GPT is
 unaffected for the same reason: its mask is `(1 T T)`, whose leading extent-1 axis is
-dropped before the suffix test. Filed as `.todo/650`.
+dropped before the suffix test. Filed as `.todo/650`, and **the round trip was not the
+decline: it was the guard in front of it** -- next section.
+
+### The decline that was only a materialize (todo-650, 2026-09-03)
+
+The 288 round trips came from ONE emitted instruction pair, and removing them needed no
+change to what the device accepts. `JvmLinalgKernelCompiler` emits the `linalg:` call site
+as a chain -- device attempt, then the `--blas` rung, then the `--simd` lane rung, then the
+scalar defun -- and between the device attempt and the host rungs it emitted
+`_gpuMaterialize` over EVERY argument. That guard exists for the LANE and LIBRARY kernels:
+they read raw storage past every access hook, so they have to be handed bytes that are
+home. **The defun does not need it.** It is compiled Lisp, and reports each of its own
+reads and writes through the same guards -- `.kb/gpu.md`, "The two seams", is what makes
+that true.
+
+A device-only member has no lane kernel at ANY flag: the fused tier is `--gpu` and nothing
+else. So for `%la-scaled-masked-softmax` the chain was *device attempt -> materialize five
+arguments -> defun*, and the materialize dragged home a 90 KB score whose FIRST reader is
+`linalg:div` on the device, which staged it straight back. The guard is now emitted only
+where a host KERNEL rung follows it (`simd != null || (blas != null && !extendedCall)`);
+the write report for an in-place member is emitted whatever follows, because that one is
+about correctness. A `--gpu`-only build now carries no guard at any `linalg:` call site at
+all, for the same reason.
+
+**The INTERPRETER never had this.** Its interceptor hands the device `storage()`, which
+does not report a read, and a declined member applies the binding it captured -- the
+defun, which reads through `data()` and reports for itself. The guard is the compile
+path's alone, so this is a `-o out.class` / `-o app.jar` finding and the numbers below are
+compiled ones. It is also BACKEND-independent: the same emitted chain runs over Metal.
+
+**Measured on the shared probe**, `.todo/123-gpu-acceleration/transformer-book-shapes.lisp`
+at the book's shapes, `--gpu --simd`, JVM class output, GB10, `STEPS=13` diffed against
+`STEPS=3`, `nsys --trace=cuda`. `WIDEN=1` is the probe's A/B: it gives the source mask the
+score's own shape so every head is ACCEPTED, which is the CEILING a widened `suffixLength`
+could reach.
+
+| per step | declined + guard (before) | ACCEPTED (`WIDEN=1`, the ceiling) | declined, no guard (now) |
+|---|---|---|---|
+| `cuMemcpyDtoH` | 292 copies, 30.8 MB | 4 copies, 4.86 MB | **4 copies, 4.86 MB** |
+| `cuMemcpyHtoD` | 302 copies, 88.7 MB | 15 copies, 63.0 MB | **14 copies, 62.8 MB** |
+| `cuCtxSynchronize` | 204 | 13 | **12** |
+| `cuLaunchKernel` | 6771 | 6771 | **6963** |
+| device kernel time | 294.7 ms | 294.2 ms | **292.0 ms** |
+| 13-step wall (median of 3) | 8.29 s | 7.70 s | **7.70 s** |
+
+**The fix lands exactly on the acceptance ceiling.** The four downloads left are the four
+the 2026-08-24 profile counted, and the fourteen uploads are the fourteen this file's table
+above already named one by one; the round trip is gone entirely. What the decline still
+costs is **192 extra launches a step** -- each of the 96 declined chains runs `div`, `where`
+and `softmax` as three device passes instead of one -- and that is not measurable: kernel
+time and wall are the accepted column's, inside the noise. Widening `suffixLength` on top
+of this was measured at `WIDEN=1` against the fixed build and is worth 0.06 s over 13 steps,
+0.8%, inside a +-4% band. **So the mask rule stays as it is** -- and with it
+`JvmGpuTemplate.softmaxMaskLength`, its word-for-word twin on the compile path, and both
+backends' `mask[i % maskLen]` kernels, which a widened rule would have had to grow a stride
+for.
+
+**The wall here is a forced measurement, not an enqueue one.** Every step ends in
+`torch:item` on the loss, which is a host read of a device result: the step cannot finish
+without a download and a synchronize, so nothing hides behind the launch queue. The copy
+and synchronize counts are structural in any case. That distinction is the one Metal's
+probes had to learn the hard way (todo-643/645, this file's Metal half).
+
+**The same shape of finding as todo-641, one layer down.** There the upper layer's decision
+was identical on both backends and the LOWER layer's capability differed, so the same symptom
+cost -2.3% on CUDA and 15% on Metal ("The attention scale and mask", above). Here the
+upper layer's decision -- `suffixLength`, which is above `GpuDevice` and therefore identical
+on both backends -- was ALSO not the thing to change: the cost was a guard the JVM backend
+emitted around the decline, and Metal, measured on the same model, was paying its own version
+of it (192 host downloads a step of exactly one 90 KB score each). **Read a decline's price
+before reading its rule.** That is now three items where the rule looked wrong and the layer
+below it was where the money was.
 
 ## The fused tier (todo-499, 2026-09-02; todo-629 added two members, todo-641 two more, todo-634 two more)
 

@@ -231,6 +231,57 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(embedsSimdBridge(all)).isTrue();
 	}
 
+	/**
+	 * How many times the compiled TOPLEVEL calls the materialize guard -- the emitted
+	 * call sites' own guards, not the ones the spliced defuns and the array accessors
+	 * carry.
+	 */
+	private static int materializeCallsInTheToplevel(byte[] classBytes) {
+		int calls = 0;
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!method.methodName().stringValue().startsWith("_top$")) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : method.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().stringValue().equals(JvmGpuRuntimeBuilder.MATERIALIZE_METHOD)) {
+					calls++;
+				}
+			}
+		}
+		return calls;
+	}
+
+	@Test
+	void aDeclineMaterializesOnlyWhereAHostKERNELRungFollowsIt() {
+		// The guard brings a result the device holds the only bytes of home, because the
+		// lane and library kernels below read raw storage past every access hook. The
+		// scalar DEFUN does not need it: it is compiled Lisp, and reports each of its
+		// own reads through the same guards. So a chain whose only fallback is the defun
+		// must not carry one -- materializing there drags home a score whose first
+		// reader is another device member, which stages it straight back
+		// (.kb/gpu.md, "The chapter-2 step re-measured").
+		String add = """
+				(defparameter *a* (linalg:zeros '(2 2)))
+				(defparameter *b* (linalg:zeros '(2 2)))
+				(print (linalg:add *a* *b*))
+				""";
+		assertThat(materializeCallsInTheToplevel(compile(add, true, false, true))).as("--gpu --simd: the lane rung")
+			.isEqualTo(2);
+		assertThat(materializeCallsInTheToplevel(compile(add, true, false, false))).as("--gpu: no lane rung emitted")
+			.isZero();
+		// And a DEVICE-ONLY member -- the fused tier has no lane kernel at any flag --
+		// carries none however the build is flagged. This is the attention softmax's
+		// call site: 96 of its declines a step were a 25.9 MB round trip each way.
+		String fused = """
+				(defparameter *a* (linalg:zeros '(2 2)))
+				(print (linalg::%la-scaled-masked-softmax *a* nil nil 0.0 1))
+				""";
+		assertThat(materializeCallsInTheToplevel(compile(fused, true, false, true))).as("--gpu --simd: no lane kernel")
+			.isZero();
+		assertThat(materializeCallsInTheToplevel(compile(fused, true, true, true))).as("--gpu --blas --simd").isZero();
+	}
+
 	@Test
 	void theBlobCarriesTheWholeLibraryAndItsKernels() throws Exception {
 		// The point of the whole bridge decision: the compiled backend runs am.ik.gpu's
