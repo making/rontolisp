@@ -3256,6 +3256,61 @@ property the `--simd` and `--blas` bridges have, and the reason the compiled-bac
 give each program a fresh `URLClassLoader`. Each such loader also probes and JIT-loads the
 module again; a real program has one.
 
+### Pricing the f64 half of the fused-row family, before shrinking it (todo-669, 2026-09-03)
+
+The fused row family (`softmax`, `softmax_grad`, `log_softmax*`, `layer_norm*`, `gelu*`, 20
+of the 58 PTX entries) is 1,548,866 bytes, and its `f64` half is 783,248 of that -- the most
+a module split could possibly save (`.kb/measurement-probes.md` Rule 2: price the ceiling
+before building). Whether that is worth anything turns on what a compiled class's size
+costs anyone, which nothing here measured, so two ceilings were priced directly rather than
+assumed:
+
+**Ceiling 1: class-load, the cost every carrier pays regardless of whether it can run the
+kernels.** A program that references `linalg:matmul` from behind a runtime-only condition
+(`(when (> (length (uiop:command-line-arguments)) 100) ...)`, so the compile-time `usesGpu`
+scan still embeds the bridge but nothing calls it) embeds the whole library and both kernel
+texts without ever calling `Gpu.available()` -- confirmed by wall time staying at ~50 ms
+with the run gated off, instead of the multi-second `cuModuleLoadData` cost below. Two such
+classes, one built against the checked-in `gemm.ptx` (2,603,209 bytes) and one against a
+copy with the family's ten `_f64` entries mechanically deleted (1,819,721 bytes, -783,488),
+`java -cp classdir Prog` timed wall-clock from the shell in bash (`date +%s%N` around the
+launch, not `/usr/bin/time`'s 10 ms resolution), 40 runs each alternated: **61.9 ms mean
+against 59.9 ms, medians 58 and 61 -- no direction, both inside the same noise band.**
+Removing 783 KB of embedded string constant does not move JVM class-parse time at all; this
+agrees with `.kb/jvm-aot-cache.md` ("the class half buys nothing here... there is no
+class-loading cost to remove") generalizing to a class two orders of magnitude bigger than
+the few-KB one that file measured. **Ceiling 1 is zero.**
+
+**Ceiling 2: the CUDA driver's PTX-to-SASS JIT inside `cuModuleLoadData`, the cost a CUDA
+machine pays the first time it ever runs the whole module.** This one is real and large: a
+standalone FFM probe (`cuInit` / `cuDevicePrimaryCtxRetain` / `cuModuleLoadData`, no
+rontolisp code, GB10, driver 580.173.02) loading the checked-in PTX took 2,360-2,494 ms
+(`CUDA_CACHE_DISABLE=1`, 6 runs) against 1,397-1,455 ms for the same file with the family's
+`_f64` entries removed -- **removing 41.5% of the module's bytes removes ~41% of the JIT
+time, about 1 second, and it is real, not classload noise.** But it answers a question this
+item does not ask: `cuModuleLoadData` runs once per process, lazily, only from
+`CudaGemm.probe()`, which a machine with no NVIDIA driver never reaches at all (it fails at
+`SymbolLookup.libraryLookup` first) -- so **the population Ceiling 2's saving would help is
+CUDA machines that run `--gpu` code, which is exactly the population the todo names as NOT
+who this item is for** ("the population to weigh the saving against is the carriers... not
+everyone who runs it"). And even for that population it is a one-time cost, not a per-run
+one: `cuModuleLoadData` goes through the driver's own on-disk JIT cache (`~/.nv/ComputeCache`,
+keyed by content), so a SECOND load of the identical bytes -- on this machine, `unset
+CUDA_CACHE_DISABLE`, cache warmed once -- measured 4-7 ms regardless of which PTX file, full
+or stripped. Since every `--gpu` class ships byte-identical PTX, that cache warms once per
+machine, ever (until the driver updates), from whichever rontolisp program runs first, not
+once per program. The one population where Ceiling 2 recurs -- a CUDA machine with no
+persistent `$HOME` between runs (an ephemeral container, a serverless GPU function) -- is
+still a `--gpu`-using runner, not a carrier, and shrinking only the fused-row `f64` half
+would still leave it paying the JIT cost of the remaining 1.1 MB (measured 1.4-1.5 s above,
+not zero).
+
+**Both ceilings say no.** The carriers this item is about (Mac users, no-device machines,
+anyone handed a `--gpu` class for hardware that cannot run it) pay Ceiling 1, and Ceiling 1
+does not move. Ceiling 2 moves but is priced against the wrong population, and even there
+is mostly a one-time, cache-amortized cost that a partial split would only partially cut.
+**783 KB is not worth a module split; nothing was changed.**
+
 ### The offer is decided twice, and what pins the two (todo-654, 2026-09-03)
 
 The library travels, but the DECISION to offer a shape to it does not: `eval/LinalgGpu` is
