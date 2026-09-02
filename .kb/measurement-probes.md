@@ -140,6 +140,19 @@ out, profiled both, and showed the copy and synchronisation counts identical to 
 argued. A per-call table that says nothing about which traps were considered is not
 evidence that none applied.
 
+### Telling a wake-up from a cold cache
+
+A gap between calls slows the next one for two unrelated reasons -- a pool that parked its
+workers, and a cache that lost the operand -- and the fix for one does nothing for the
+other, so a probe that sees a gap cost has not yet learned anything. **Cap the pool to one
+thread and re-take the SAME gapped measurement: what the cap removes was the wake-up, what
+survives it was the cache.** It is cheaper than reading a thread count and it works on a
+library that will not tell you one -- todo-651 had to use it, because Accelerate exports
+none of the seven thread-query symbols. It found both halves at once: OpenBLAS's 17.4 ->
+90.0 us at 288x288 collapses under the cap (a wake-up), while a small shape's 0.85 -> 1.75
+us does not move under it at all (a cache). Nothing here is about BLAS; it applies to
+anything with a pool behind it.
+
 ## Rule 2: price the CEILING of a proposal before building it
 
 **Measure the most the idea could possibly be worth. If the ceiling is not significant,
