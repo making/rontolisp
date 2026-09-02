@@ -207,6 +207,22 @@ final class JvmArrayCompiler {
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ARRAY_BECOME, JvmArrayRuntimeBuilder.ARRAY_BECOME_DESC);
 	}
 
+	static void compileArrayAdoptElementType(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-adopt-element-type new old): make the freshly built copy remember the
+		// adjusted array's element type and answer the copy. adjust-array's expansion
+		// wraps its make-array in this, since CLHS does not change the element type and
+		// a non-adjustable adjustment returns a fresh array.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"%array-adopt-element-type expects 2 arguments, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ADOPT_ELEMENT_TYPE,
+				JvmArrayRuntimeBuilder.ADOPT_ELEMENT_TYPE_DESC);
+	}
+
 	static void compileArrayDefaultElement(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (%array-default-element array): the element an unsupplied slot of the array
 		// takes, i.e. its remembered element type's own zero (nil when it remembers

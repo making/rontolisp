@@ -489,6 +489,90 @@ plain general array -- which since todo-611 still REMEMBERS the element type, so
 cost are `.kb/array-literals.md`, "A SPECIALIZED element type above rank 1 is the
 general array" and "The degraded array REMEMBERS its element type".
 
+## A `deftype` ALIAS resolves at RUN TIME too (todo-618, 2026-09-02)
+
+**A type designator held in a VALUE resolves a user `deftype` exactly as its
+literal spelling does, on all four backends.** `(deftype octet () '(unsigned-byte
+8))` followed by `(let ((ty 'octet)) (typep 3 ty))` answers `T`, not the `NIL` it
+answered until this landed -- the literal `(typep 3 'octet)` was resolved at
+expansion time by `makeTypeTest`, and a designator in a variable reached no
+recognizer. `coerce` with a computed result type is the same hole twice over
+(its fall-through arm IS a computed `typep`, and its family dispatch reads the
+designator's head), so both halves close together: `(coerce 3 ty)` answers `3`
+and `(coerce '(#\a) ty)` with `ty` an alias of `string` builds `"a"`.
+
+The resolution is ONE normalization at the top of each dispatch shape, and the
+shapes differ only in where the table lives:
+
+- the interpreter's `expandRuntimeTypep` re-expands per call against the live
+  registry, so it spells `(setq tn (cond ((equal tn 'ALIAS) '<expansion>) ... (t
+  tn)))` inline -- `LispMacroExpander.deftypeAliasResolution`, which nothing
+  emits and nothing pays for;
+- the compile paths put the alias set in a quoted DATA table
+  (`%deftype-alias-table%`, through `chunkedTableForms`) scanned by one shared
+  `%deftype-alias` defun, and `%typep-runtime` calls it once
+  (`runtimeTypepDefun`'s `(setq tn (%deftype-alias tn))`), after the metaobject
+  normalization that turns a class object into the name this reads.
+
+`%typep-compound-runtime` recurses back into `%typep-runtime`, so an alias
+INSIDE a compound specifier -- `(typep 3 (list 'or 'octet 'null))` -- resolves
+through the same normalization. Alias CHAINS are followed when the table is
+built, so one hop suffices at run time, and a self-referential `(deftype a ()
+'a)` terminates on the same 16-hop bound `resolveElementTypeAlias` uses. A name
+the dispatch already decides -- a built-in spelling, a registered class, a
+struct -- is left OUT of the table: the literal path resolves a `deftype` only
+after those three, so normalizing first would silently reorder the reading.
+
+### The narrowing is what makes it affordable (the measurements)
+
+`.todo/618` was filed on a measurement that said this could not be bought: one
+`cond` arm per alias cost the array-operations program (`ql:quickload`, one
+`aops:zeros*`, raw wasm `--optimize=size`) **+10,075 bytes, +10.7%**, because
+alexandria registers **43** `deftype` aliases and a program that merely loads it
+carried all 43. The item's plan was to try the data-table shape instead.
+
+**Measured, the data table alone bought nothing: 93,672 -> 103,713, +10,041,
++10.7% -- the same bill.** The cost is not the dispatch arms; it is the alias
+NAMES. 43 aliases at three spellings each (`ALEXANDRIA::POSITIVE-FIXNUM`,
+`ALEXANDRIA:POSITIVE-FIXNUM`, `POSITIVE-FIXNUM`) put 129 long symbols into a
+module that had none of them, at ~56 bytes apiece: with the expansions replaced
+by `nil` the table still cost +7,231, and with one spelling per alias instead of
+three it cost +5,904. A quoted constant compiles to construction code
+proportional to its size, and a symbol's size is its name.
+
+**What bought it is a SECOND narrowing, on a different axis: the table carries
+only the aliases the program SPELLS** (`narrowedDeftypeAliases`, closed
+afterwards under the alias references its own entries make, since
+`proper-sequence` expands to `(or proper-list ...)` and the compound recursion
+has to resolve the inner name). A designator symbol a runtime `typep` can be
+handed has to come from somewhere, and short of `intern`/`read` on a computed
+string that somewhere is a spelling in the program -- the same reasoning the
+funcall-dispatch gate's name probes rest on (`LispNames.UNSPELLED_QUOTE` exists
+to stay OUT of that set). Narrowed, array-operations carries **2** entries and
+pays **+1,765 bytes, +1.9%**; the `size-report` programs `zlib` (chipz/salza2,
+which register `octet` aliases of their own), `pi_approx` and `hello_world` are
+**byte-identical**, as is any program with no computed `typep` at all.
+
+The one shape the narrowing does not cover is a designator built at run time out
+of characters -- `(typep x (intern (read-line)))` -- which answers `nil` on the
+compile paths, exactly as it did before this item; the interpreter, which has no
+program to probe and pays nothing for the full table, resolves it. That is the
+lite deviation this buys the 8.8 points with, and it is the only one.
+
+Pinned by `LispEvaluatorTest#evalRuntimeTypepResolvesADeftypeAlias`,
+`JvmLispCompilerTest#compileRuntimeTypepResolvesADeftypeAlias`,
+`WasmLispCompilerIntegrationTest#compileRuntimeTypepResolvesADeftypeAlias` and
+the `runtime-typep-deftype-alias` ci-spec case -- one program, one expected text,
+all four backends, every answer SBCL 2.2.9's on that very program except the
+trailing unregistered name, where the lite model answers `nil` and SBCL
+signals.
+
+The `make-array :element-type` half of the same gap is `.kb/array-literals.md`,
+"A `deftype` ALIAS held in a VARIABLE resolves before the dispatch" -- a
+DIFFERENT narrowing (only the aliases naming one of the six specialized codes),
+because there an unresolved designator and 42 of the 43 land on the same `t` arm
+anyway.
+
 ## The COMPOUND half of `subtypep` (todo-608)
 
 **A compound type specifier works on either side of `subtypep`, quoted or

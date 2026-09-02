@@ -202,6 +202,17 @@ final class JvmArrayRuntimeBuilder {
 	 */
 	static final String DEFAULT_ELEMENT = "_arrayDefaultElement";
 
+	/**
+	 * {@code _arrayAdoptElementType(dst, src) -> dst}: makes the freshly built general
+	 * array {@code dst} remember what {@code src} remembers. The JVM half of
+	 * {@code %array-adopt-element-type}: {@code adjust-array} does not change an array's
+	 * element type, so the fresh copy a NON-adjustable adjustment answers is stamped with
+	 * the adjusted array's.
+	 */
+	static final String ADOPT_ELEMENT_TYPE = "_arrayAdoptElementType";
+
+	static final String ADOPT_ELEMENT_TYPE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String ELEMENT_TYPE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	static final String DEFAULT_ELEMENT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
@@ -270,7 +281,7 @@ final class JvmArrayRuntimeBuilder {
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET, DISP_OFFSET,
 			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
-			DEFAULT_ELEMENT);
+			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -551,6 +562,27 @@ final class JvmArrayRuntimeBuilder {
 		// cons representation.
 		JvmAsm d = new JvmAsm();
 		int dArr = 0, dDims = 1, dResult = 2, dJ = 3;
+		// A runtime string carries no header at all, but it IS a rank-1 character array:
+		// its dimensions are the one-element list of its length in code points. Every
+		// other shape reader -- array-rank, array-dimension, array-total-size,
+		// array-row-major-index -- expands through array-dimensions, so this one arm is
+		// what lets all of them accept a string, as the interpreter's do.
+		int dNotString = d.label();
+		d.aload(dArr);
+		d.instanceOf(strClass);
+		d.branch(Opcode.IFEQ, dNotString);
+		d.iconst(2);
+		d.anewarray(objectClass);
+		d.dup();
+		d.iconst(0);
+		d.aload(dArr);
+		d.checkcast(strClass);
+		d.invokestatic(strCount);
+		d.op(Opcode.I2L);
+		d.invokestatic(longValueOf);
+		d.aastore();
+		d.areturn();
+		d.bind(dNotString);
 		d.aload(dArr);
 		d.checkcast(arrayListClass);
 		d.iconst(0);
@@ -1321,9 +1353,15 @@ final class JvmArrayRuntimeBuilder {
 		// _arrayDispTarget(arr): the displacement target, or null (nil).
 		// Locals: 0 = arr, 1 = header.
 		JvmAsm dt = new JvmAsm();
+		int dtNil = dt.label();
+		// A runtime string owns its storage and carries no header (a string VIEW is a
+		// length-7 header, not a String), so it answers nil like any other undisplaced
+		// array.
+		dt.aload(0);
+		dt.instanceOf(strClass);
+		dt.branch(Opcode.IFNE, dtNil);
 		emitLoadHeader(dt, arrayListClass, objectArrayClass, alGet, 0);
 		dt.astore(1);
-		int dtNil = dt.label();
 		dt.aload(1);
 		dt.arraylength();
 		dt.iconst(4);
@@ -1342,9 +1380,12 @@ final class JvmArrayRuntimeBuilder {
 		// has a null slot 3 and must answer 0 like any other non-displaced array.
 		// Locals: 0 = arr, 1 = header.
 		JvmAsm dofs = new JvmAsm();
+		int dofsNone = dofs.label();
+		dofs.aload(0);
+		dofs.instanceOf(strClass);
+		dofs.branch(Opcode.IFNE, dofsNone);
 		emitLoadHeader(dofs, arrayListClass, objectArrayClass, alGet, 0);
 		dofs.astore(1);
-		int dofsNone = dofs.label();
 		dofs.aload(1);
 		dofs.arraylength();
 		dofs.iconst(4);
@@ -1602,6 +1643,137 @@ final class JvmArrayRuntimeBuilder {
 		de.aconstNull();
 		de.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(DEFAULT_ELEMENT), cp.addUtf8(DEFAULT_ELEMENT_DESC), 4, 3, de.finish()));
+
+		// _arrayAdoptElementType(dst, src): make the freshly built general array dst
+		// remember what src remembers, and return dst. adjust-array does not change an
+		// array's element type, and a NON-adjustable adjustment answers a fresh array,
+		// so the copy has to be stamped with the original's type -- which is one header
+		// word here, not a re-run of make-array's representation choice.
+		//
+		// The stamp takes the SAME two shapes the allocator's do: the CHARACTER type of
+		// a RANK-1 array is the length-4 header marker (over boxed data, hence the
+		// widen), and every other remembered type is header slot 4, which a length-3
+		// header grows to hold and a packed length-6 one already has. A dst that is
+		// already a character vector, or is displaced (slot 3 non-null, where slot 4 is
+		// the offset), keeps what it has. Locals: 0 = dst, 1 = src, 2 = et, 3 = header,
+		// 4 = src's header.
+		MethodrefConstant selfElementType = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC)));
+		am.ik.jvm.ConstantPool.StringConstant characterName = cp.addString(am.ik.rontolisp.LispNames.CHARACTER_TYPE);
+		JvmAsm ad = new JvmAsm();
+		int adDone = ad.label();
+		int adChar = ad.label();
+		int adStamp = ad.label();
+		int adGrow = ad.label();
+		int adNotDisplaced = ad.label();
+		int adHaveEt = ad.label();
+		int adSrcChar = ad.label();
+		int adSrcGeneral = ad.label();
+		// et: the element type SRC remembers, read from the same header facts
+		// _arrayDefaultElement reads and in the same order. A runtime string carries no
+		// header but IS a rank-1 character array, and a length-4 header is the character
+		// vector marker -- the one specialized type that spends no header slot 4, which
+		// is why _arrayElementType alone (slot 4 or t) cannot answer for it.
+		ad.aload(1);
+		ad.instanceOf(strClass);
+		ad.branch(Opcode.IFNE, adSrcChar);
+		ad.aload(1);
+		ad.instanceOf(arrayListClass);
+		ad.branch(Opcode.IFEQ, adSrcGeneral);
+		emitLoadHeader(ad, arrayListClass, objectArrayClass, alGet, 1);
+		ad.astore(4);
+		ad.aload(4);
+		ad.arraylength();
+		ad.iconst(4);
+		ad.branch(Opcode.IF_ICMPNE, adSrcGeneral);
+		ad.bind(adSrcChar);
+		ad.ldcString(characterName);
+		ad.astore(2);
+		ad.branch(Opcode.GOTO, adHaveEt);
+		ad.bind(adSrcGeneral);
+		ad.aload(1);
+		ad.invokestatic(selfElementType);
+		ad.astore(2);
+		ad.bind(adHaveEt);
+		// t is remembered as nothing at all, so there is nothing to carry over.
+		ad.ldcString(cp.addString("T"));
+		ad.aload(2);
+		ad.invokevirtual(stringEquals);
+		ad.branch(Opcode.IFNE, adDone);
+		ad.aload(0);
+		ad.instanceOf(arrayListClass);
+		ad.branch(Opcode.IFEQ, adDone);
+		emitLoadHeader(ad, arrayListClass, objectArrayClass, alGet, 0);
+		ad.astore(3);
+		ad.aload(3);
+		ad.arraylength();
+		ad.iconst(4);
+		ad.branch(Opcode.IF_ICMPEQ, adDone);
+		ad.aload(3);
+		ad.arraylength();
+		ad.iconst(5);
+		ad.branch(Opcode.IF_ICMPLT, adNotDisplaced);
+		ad.aload(3);
+		ad.iconst(3);
+		ad.aaload();
+		ad.branch(Opcode.IFNONNULL, adDone);
+		ad.bind(adNotDisplaced);
+		ad.ldcString(characterName);
+		ad.aload(2);
+		ad.invokevirtual(stringEquals);
+		ad.branch(Opcode.IFEQ, adStamp);
+		ad.aload(3);
+		ad.iconst(0);
+		ad.aaload();
+		ad.checkcast(objectArrayClass);
+		ad.arraylength();
+		ad.iconst(1);
+		ad.branch(Opcode.IF_ICMPEQ, adChar);
+		ad.bind(adStamp);
+		ad.aload(3);
+		ad.arraylength();
+		ad.iconst(5);
+		ad.branch(Opcode.IF_ICMPLT, adGrow);
+		ad.aload(3);
+		ad.iconst(4);
+		ad.aload(2);
+		ad.aastore();
+		ad.branch(Opcode.GOTO, adDone);
+		// dst.set(0, new Object[]{dims, fp, adj, null, et})
+		ad.bind(adGrow);
+		ad.aload(0);
+		ad.checkcast(arrayListClass);
+		ad.iconst(0);
+		ad.iconst(5);
+		ad.anewarray(objectClass);
+		emitCopyHeaderSlots(ad, 3, 3);
+		ad.dup();
+		ad.iconst(4);
+		ad.aload(2);
+		ad.aastore();
+		ad.invokevirtual(alSet);
+		ad.pop();
+		ad.branch(Opcode.GOTO, adDone);
+		// dst.set(0, new Object[]{dims, fp, adj, null}) -- the character vector marker,
+		// over the BOXED data it implies.
+		ad.bind(adChar);
+		ad.aload(0);
+		ad.invokestatic(widen);
+		emitLoadHeader(ad, arrayListClass, objectArrayClass, alGet, 0);
+		ad.astore(3);
+		ad.aload(0);
+		ad.checkcast(arrayListClass);
+		ad.iconst(0);
+		ad.iconst(4);
+		ad.anewarray(objectClass);
+		emitCopyHeaderSlots(ad, 3, 3);
+		ad.invokevirtual(alSet);
+		ad.pop();
+		ad.bind(adDone);
+		ad.aload(0);
+		ad.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(ADOPT_ELEMENT_TYPE), cp.addUtf8(ADOPT_ELEMENT_TYPE_DESC), 7, 5,
+				ad.finish()));
 
 		// _strv(o): normalizes a mutable character vector (a length-4-header array whose
 		// elements are runtime CHARACTERs -- length-1 int[]{codePoint}) into the
@@ -2184,6 +2356,19 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	// Pushes the slot-0 header Object[] of the array in arrSlot.
+	// Copies the first `count` slots of the header in headerSlot into the fresh Object[]
+	// on top of the stack (which is left there), leaving the remaining slots null.
+	private static void emitCopyHeaderSlots(JvmAsm a, int headerSlot, int count) {
+		for (int i = 0; i < count; i++) {
+			a.dup();
+			a.iconst(i);
+			a.aload(headerSlot);
+			a.iconst(i);
+			a.aaload();
+			a.aastore();
+		}
+	}
+
 	private static void emitLoadHeader(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
 			MethodrefConstant alGet, int arrSlot) {
 		a.aload(arrSlot);
