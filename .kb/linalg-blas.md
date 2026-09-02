@@ -252,20 +252,23 @@ outlived the item that produced it, the way `.todo/123-gpu-acceleration/` did:
 `RONTOLISP_BLAS` (or `PROBE_BLAS`) names the library, so it runs on any machine.
 **Two machines, and they do not tell the same story:**
 
-| rows x cols | M4 Max / Accelerate | dorian / OpenBLAS, 1 thread | dorian / OpenBLAS, 64 threads |
+| rows x cols | M4 Max / Accelerate, ONE thread | dorian / OpenBLAS, 1 thread | dorian / OpenBLAS, 64 threads |
 |---|---|---|---|
 | 256x256 (`simd-gemv`) | 6.3x | 1.69x | 1.35x |
 | 288x288 (llama2 stories15M attention) | 7.0x | 1.81x | 2.01x |
 | 288x768 (its FFN up-projection) | 9.5x | 1.92x | 7.63x |
 | 768x288 (its FFN down-projection) | 8.0x | 1.83x | 8.63x |
 | 4096x288 | 8.0x | 1.73x | 9.58x |
-| 2048x2048 | 8.2x | 1.97x | 18.65x |
+| 2048x2048 (Accelerate THREADS this one) | 8.2x | 1.97x | 18.65x |
 | f64 256x256 | 6.9x | 1.34x | **0.84x** |
 | f64 512x512 | 7.8x | 1.36x | 7.32x |
-| f64 2048x2048 | 8.0x | 1.21x | 15.54x |
+| f64 2048x2048 (Accelerate THREADS this one) | 8.0x | 1.21x | 15.54x |
 
 dorian is a 64-core Intel Xeon E5-2697A v4 with OpenBLAS 0.3.x from Debian. The M4 Max
-column is todo-471's original table (Accelerate, 2026-08). **The x86-64 single-thread
+column is todo-471's original table (Accelerate, 2026-08), and its thread count was
+established afterwards, by todo-651 on 2026-09-03 -- see "What Accelerate does about
+threads" below. It is ONE at every row but the two marked, so the back-to-back trap the
+next paragraph describes does not reach those numbers and they stand as measured. **The x86-64 single-thread
 ratio is a third of the Apple one**, which is what the lane kernel's pinned
 `SPECIES_128` costs it on Apple and does not cost it here: 128-bit lanes are all NEON has,
 while an AVX2 machine gives the JIT 256-bit registers for the same source, so the kernel
@@ -408,24 +411,83 @@ wash, and all three failing makes it a loss.
    note now prints for them. If a library ever appears whose thread count CANNOT be set
    from the environment, that is when this gets built.
 
-   **macOS was not measured.** dorian has no Accelerate and no Metal, so every number in
-   this subsection is x86-64 OpenBLAS. Accelerate exports no thread query, so there the
-   note is silent by construction rather than by measurement -- if it turns out to have the
-   same trap, finding it needs an Apple machine (todo-651, which also holds BLIS's
-   `bli_thread_get_num_threads` -- a `dim_t` return, so one more downcall shape rather than
-   one more table row).
+   **What Accelerate does about threads (todo-651, M4 Max, macOS 26.3.1, 2026-09-03).**
+   Every number above this line is x86-64 OpenBLAS -- dorian has no Accelerate -- and the
+   note is silent on an Apple machine because Accelerate exports no thread query. That
+   silence is now measured rather than structural, and **the trap does not exist here**.
 
-   **What the 6-9x column is missing is a thread count, not a correction.** The dorian
-   columns say "1 thread" and "64 threads"; the M4 Max column says neither, and Accelerate
-   picks a count by problem size without being asked. Back-to-back timing flatters the
-   LIBRARY side of the ratio only when that side has a pool to keep warm, so if Accelerate
-   was single-threaded at these shapes the trap does not reach the column and 6-9x stands
-   as measured; if it was threaded, the column is an over-estimate of unknown size. Nothing
-   in the table decides which, and **the 478/649 numbers cannot decide it either** -- those
-   are a parallel-over-serial ratio and this is a library-over-lane-kernel ratio, two
-   different quantities, so the error in one puts no bound on the error in the other.
-   todo-651's first question is therefore not "is the column flattered" but "how many
-   threads was it measured with".
+   Accelerate exports NONE of the seven symbols the probe asks for -- not
+   `openblas_get_num_threads`, `openblas_set_num_threads`, `openblas_get_parallel`,
+   `mkl_get_max_threads`, `MKL_Get_Max_Threads`, `mkl_set_num_threads`, nor BLIS's
+   `bli_thread_get_num_threads`. So the thread count cannot be asked for and had to be
+   inferred from whether `VECLIB_MAXIMUM_THREADS=1` MOVES the library's own time. It does,
+   which is what makes the inference sound, and it moves at exactly two kinds of shape.
+   Per call, ~200 us of unrelated Java work between calls (`ThreadBarrierProbe`, two
+   rounds, load average 1.4-1.9):
+
+   | call | flops | as launched | `VECLIB_MAXIMUM_THREADS=1` |
+   |---|---|---|---|
+   | sgemv 288x288 (llama2 attention) | 166 K | 1.8 / 2.3 us | 1.9 / 2.1 us |
+   | sgemv 768x288 (its FFN) | 442 K | 2.8 / 2.8 us | 2.9 / 2.7 us |
+   | sgemv 4096x288 | 2.36 M | 13.6 / 14.0 us | 13.5 / 13.5 us |
+   | sgemv 32000x288 (its classifier head) | 18.4 M | **135.6 / 185.4 us** | 217.1 / 208.7 us |
+   | dgemv 256x256 | 131 K | 2.2 / 2.4 us | 2.4 / 2.6 us |
+   | dgemv 2048x2048 | 8.39 M | **128.3 / 124.2 us** | 196.9 / 190.1 us |
+   | sgemm 64x64x64 | 524 K | 1.4 / 1.5 us | 1.5 / 1.3 us |
+   | sgemm 128x128x128 | 4.19 M | 4.3 / 4.2 us | 4.2 / 4.3 us |
+   | sgemm 256x256x256 | 33.6 M | 26.3 / 26.4 us | 25.8 / 25.7 us |
+   | sgemm 512x512x512 | 268 M | **104.9 / 105.0 us** | 164.7 / 167.5 us |
+   | sgemm 1024x1024x1024 | 2.15 G | **665.8 / 669.0 us** | 1285.3 / 1306.7 us |
+
+   **So Accelerate is single-threaded at every shape a decode loop makes** -- capping it
+   changes nothing from 131 Kflop to 33.6 Mflop, gemv and gemm alike -- and threads only
+   the big ones. Note that the switch is NOT the flop count dorian's crossover is stated
+   in: a 33.6 Mflop `sgemm 256^3` stays serial while an 18.4 Mflop `sgemv 32000x288`
+   threads, which is what a rule about OPERAND BYTES rather than work would do (36.9 MB of
+   matrix against 256 KB that fits in cache). Do not carry dorian's 0.4-4 Mflop crossover
+   across; it is that library's, not the flag's.
+
+   **And where Accelerate does thread, it pays no wake-up.** `dgemv 2048x2048` is 127-132 us
+   back to back (`GemvProbe`) and **124-128 us with 200 us of unrelated work in between** --
+   the same number, where the identical comparison on OpenBLAS is 17.4 us against 90.0 us.
+   That is the whole trap, absent. The one shape where a gap costs anything the cap can
+   explain is `sgemv 2048x2048` (59.8-61.6 us hot, 82.3-86.8 us with a gap, 71.9-75.2 us
+   capped-with-a-gap), so threading it is a small win hot and a ~1.14x LOSS in situ -- a
+   rounding error beside dorian's 6.8x, at a shape no shipped program runs.
+   **The small shapes' gap cost is not the pool**: `sgemv 256x256` goes 0.85 us hot to 1.75
+   us with a gap and capping does not move it, so what the gap buys there is a cold cache,
+   not a barrier. That test -- does the cap remove the gap's cost -- is what separates the
+   two, and it is cheaper than reading a thread count.
+
+   **End to end it is a 1.9x win, and capping it LOSES 9%.** `examples/llama2/llama2.lisp`,
+   stories15M, JVM class output, 150 greedy tokens, three rounds, byte-identical story in
+   every arm:
+
+   | build | tok/s |
+   |---|---|
+   | `--simd` | 539.9 / 539.9 / 537.9 |
+   | `--simd --blas` (Accelerate as launched) | **1020.6 / 1027.6 / 1027.6** |
+   | `--simd --blas`, `VECLIB_MAXIMUM_THREADS=1` | 925.5 / 919.8 / 943.0 |
+
+   **This is the OPPOSITE of dorian's result in both directions**: there the flag is a 5.4x
+   loss uncapped and a 1.15x win capped; here it is a 1.90x win uncapped and capping it
+   costs 9%. The remedy for one machine is the mistake on the other, which is the case for
+   the note being earned by the CALLS rather than printed at flag time -- and, on this
+   machine, for its not firing at all. **`--blas` needs no change on Apple: today's silence
+   is the right answer, now for a measured reason.** If a future macOS threads the short
+   calls, the observable that would catch it is the cap moving a 288x288 gemv, and this
+   table is the baseline that says it does not today.
+
+   **BLIS is still unmeasured, and stays out.** todo-651's second half was to add
+   `bli_thread_get_num_threads` to `THREAD_QUERIES`; the probe reports the symbol absent on
+   this machine too, because there is no BLIS on it (nothing in Homebrew, nothing in
+   `/opt/homebrew/lib` or `/usr/local/lib`). Neither machine measured so far has one, and
+   an unmeasured third entry is exactly what that item existed to avoid, so `THREAD_QUERIES`
+   keeps its two symbols. It needs a machine with BLIS installed, not a decision.
+
+   Probes: `.todo/471-.../GemvProbe.java` (back to back) and
+   `.todo/649-.../ThreadBarrierProbe.java` (one call, work in between), both unchanged and
+   both runnable anywhere.
 
 ## Tests
 

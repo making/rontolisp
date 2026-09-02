@@ -15577,9 +15577,6 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti("(adjust-array (make-array '(2 2)) 5)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("rank mismatch");
-		assertThatThrownBy(() -> evalMulti("(adjust-array (make-array 2 :displaced-to (make-array 5)) 3)"))
-			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("displaced arrays are not supported");
 	}
 
 	@Test
@@ -15701,6 +15698,38 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void adjustArrayUndisplacesADisplacedArgument() {
+		// adjust-array on a displaced argument un-displaces it, matching SBCL 2.2.9: an
+		// :adjustable view is adjusted IN PLACE (eq), keeps the elements at the
+		// subscripts valid in both shapes, and comes back un-displaced
+		// (array-displacement => NIL, 0). The un-displace machinery is .todo/647's
+		// (LispArray.undisplace / LispString.undisplace).
+		assertThat(evalMulti("""
+				(setq b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				(setq v (make-array 4 :displaced-to b :displaced-index-offset 1 :adjustable t))
+				(list (eq (adjust-array v 3) v) v b (multiple-value-list (array-displacement v)))
+				""").print()).isEqualTo("(T #(20 30 40) #(10 20 30 40 50 60) (NIL 0))");
+		// A NON-adjustable displaced argument answers a fresh array, by the same rule
+		// every other non-adjustable adjust-array argument follows -- CLHS leaves
+		// further use of the OLD array unspecified, so it un-displaces too (matching
+		// what %array-undisplace does unconditionally on the compile path).
+		assertThat(evalMulti("""
+				(setq b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				(setq v (make-array 4 :displaced-to b :displaced-index-offset 1))
+				(setq r (adjust-array v 3))
+				(list (eq r v) r v (multiple-value-list (array-displacement v))
+				      (multiple-value-list (array-displacement r)))
+				""").print()).isEqualTo("(NIL #(20 30 40) #(20 30 40 50) (NIL 0) (NIL 0))");
+		// A displaced STRING view stays a string across the un-displace.
+		assertThat(evalMulti("""
+				(setq s (copy-seq "abcdef"))
+				(setq v (make-array 4 :element-type 'character :displaced-to s
+				                       :displaced-index-offset 1 :adjustable t))
+				(list (adjust-array v 3) (stringp v) (multiple-value-list (array-displacement v)))
+				""").print()).isEqualTo("(\"bcd\" T (NIL 0))");
+	}
+
+	@Test
 	void displacedStringViewAliasesTheTargetString() {
 		// The TARGET decides the shape: displacing onto a string answers a STRING view,
 		// not a bare array view, so it is stringp, prints as a string and writes through
@@ -15736,9 +15765,11 @@ class LispEvaluatorTest {
 				(setq v (make-array 3 :element-type 'character :displaced-to s))
 				(list (array-has-fill-pointer-p v) (adjustable-array-p v) (array-element-type v))
 				""").print()).isEqualTo("(NIL NIL CHARACTER)");
-		assertThatThrownBy(() -> evalMulti("""
+		// A non-adjustable displaced STRING view still un-displaces under adjust-array:
+		// see adjustArrayUndisplacesADisplacedArgument.
+		assertThat(evalMulti("""
 				(adjust-array (make-array 2 :element-type 'character :displaced-to (copy-seq "abc")) 3)
-				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("displaced arrays are not supported");
+				""").print()).isEqualTo("\"ab \"");
 	}
 
 	// --- Dynamic (special) variable binding ---

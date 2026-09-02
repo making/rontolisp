@@ -1310,6 +1310,18 @@ final class JvmArrayRuntimeBuilder {
 		// Locals: 0 = arr, 1 = header, 2 = total, 3 = elems, 4 = i, 5 = newHeader,
 		// 6 = product scratch.
 		JvmAsm un = new JvmAsm();
+		// An immutable string owns its characters and carries no header at all (a
+		// string VIEW is a length-7 header, not a String), so it is returned unchanged
+		// like any other undisplaced array -- adjust-array's expansion calls this
+		// unconditionally, on every representation it accepts. Mirrors
+		// _arrayDispTarget's same check.
+		int unNotString = un.label();
+		un.aload(0);
+		un.instanceOf(strClass);
+		un.branch(Opcode.IFEQ, unNotString);
+		un.aload(0);
+		un.areturn();
+		un.bind(unNotString);
 		emitLoadHeader(un, arrayListClass, objectArrayClass, alGet, 0);
 		un.astore(1);
 		int unDisplaced = un.label();

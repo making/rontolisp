@@ -2229,6 +2229,37 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
+	static void compileArrayUndisplace(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (%array-undisplace array): the shared _arr_undisplace helper
+		// (vector-push-extend's growth already calls it before it grows a full view) --
+		// copies a displaced view's current contents into a buckets array of its own and
+		// drops the displacement, IN PLACE (struct.set on the existing header), keeping
+		// dims/fill-pointer/adjustable; a no-op for an array that already owns its
+		// storage. Returns array unchanged (same cell identity: the header is mutated,
+		// not rebuilt). adjust-array's expansion calls it UNCONDITIONALLY, on every
+		// representation it accepts, so an immutable string -- which carries no header
+		// at all, same as %array-disp-target's own check -- is answered unchanged
+		// without reaching the cell cast (a packed float/int array has no such guard:
+		// it traps on the cast, the same parity bar adjust-array already had via the
+		// old %array-disp-target probe).
+		requireArgs(cons, 2, "%array-undisplace expects 1 argument");
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int cellSlot = setTemp(ctx);
+		getLocal(ctx, cellSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		emitIfEq(ctx);
+		getLocal(ctx, cellSlot);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, cellSlot);
+		castCellGet0(ctx);
+		callFixed(ctx, WasmLispCompiler.FUNC_ARR_UNDISPLACE);
+		ctx.writer.write(Instruction.DROP);
+		getLocal(ctx, cellSlot);
+		ctx.writer.write(Instruction.END);
+	}
+
 	static void compileVectorPush(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// (vector-push value vector): store value at the fill pointer and return the
 		// index used, or nil when the vector is full.

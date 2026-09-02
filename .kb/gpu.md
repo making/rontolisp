@@ -2541,7 +2541,8 @@ f32 copy of it is**, which the probe asserts at both mask shapes and
 pins at both widths over cells covering zero, NEGATIVE ZERO (false, `(/= m 0)`'s rule),
 an ordinary value and a NaN (true).
 
-#### What the fold's SHAPE decline costs on this backend (todo-650's Metal half, measured)
+#### What the fold's SHAPE decline costs on this backend (todo-650's Metal half, measured;
+re-measured after the fix, 2026-09-03)
 
 todo-650 was filed on the CUDA side: a padding mask is not a trailing block of the score,
 so `%la-scaled-masked-softmax` declines and the defun's members run over a MATERIALIZED
@@ -2566,29 +2567,66 @@ the 96 that fail are the encoder's self attention and the decoder's cross attent
 of which take `torch:padding-mask`'s `(batch 1 length)` -- extent 1 in the MIDDLE, which
 `suffixLength` cannot drop. **The same 96 / 192 CUDA counts.**
 
-**And the price here is one whole score home per declined call.** Against the same probe
-with the source mask materialized at the score's own shape (`WIDEN=1`, so all 144 are
-accepted), JVM class output, `(t13 - t3) / 10`, two interleaved rounds:
+**And the price WAS one whole score home per declined call -- until todo-650's fix, which
+took the whole of it.** Against the same probe with the source mask materialized at the
+score's own shape (`WIDEN=1`, so all 144 are accepted), JVM class output, `(t13 - t3) / 10`,
+three interleaved rounds, M4 Max. **Both builds were made from `6e2e0557`** -- the BEFORE
+one with `5baaf6ec`'s single code hunk reverted in place -- so the two arms and the two
+builds all come from ONE tree (`.kb/measurement-probes.md`, rule 3):
 
-| per step | declining (as shipped) | all accepted |
+| per step, with `5baaf6ec` REVERTED | declining (as shipped) | all accepted |
 |---|---|---|
 | host downloads | **879** | 687 |
-| bytes downloaded | 194 MB | 178 MB |
-| wall a step | 0.763 / 0.760 s | 0.759 / 0.734 s |
+| bytes downloaded | 194 MiB | 178 MiB |
+| wall a step, median of 3 | 0.760 s | 0.743 s |
 
 **192 extra downloads, which is exactly the 96 + 96 declines**, at 90 KB each -- one score
 (64 x 19 x 19 f32 = 92416 B) per declined call, todo-650's own description. So the round
-trip is real on this backend too, and todo-645 did NOT remove it: what todo-645 removed
-was the CPU SELECT inside the fallback, which was the expensive half. **What is left is
-worth 0 to 3% of the step, inside the wall's usual +-4%** -- and the accepted column pays
-for building the two widened masks, so the true prize of a rule change is at least that.
-(The 16.8 MB synthetic row above shows no round trip because its score is an adopted
-resident `defparameter`; that is the shape of the probe, not of a training step. Measure
-this one on a model.)
+trip was real on this backend too, and todo-645 did NOT remove it: what todo-645 removed
+was the CPU SELECT inside the fallback, which was the expensive half.
+
+**`5baaf6ec` removed the other half, and more (2026-09-03).** The fix is one guard in
+`codegen/jvm/JvmLinalgKernelCompiler` -- materialize an argument only where a host KERNEL
+rung follows -- and it was landed and measured on CUDA. Nothing in `am.ik.gpu` or in
+`gemm.metal` changed with it; the acceptance conditions (`LinalgGpu.suffixLength`,
+`JvmGpuTemplate.softmaxMaskLength`) did not move by a byte. Re-measured here on the same
+probe, same instrumentation, same tree:
+
+| per step, with `5baaf6ec` IN | declining (as shipped) | all accepted |
+|---|---|---|
+| host downloads | **627** | **627** |
+| bytes downloaded | 39.8 MiB | 39.8 MiB |
+| wall a step, median of 3 | **0.684 s** | 0.709 s |
+
+**The two arms are now identical to the BYTE** -- same count, same total, deterministic
+across every round -- so the 192 round trips the shape decline used to cost are gone, and
+the decline is free of downloads that the accept does not also pay. On the shipped arm the
+fix is worth 252 downloads and 154 MiB a step (194 -> 40 MiB, -80%) and 0.076 s of a 0.760 s
+step (-10%), which is the Metal counterpart of CUDA's 292 -> 4 / 30.8 -> 4.86 MB and 8.29 ->
+7.70 s. The all-accepted arm dropped too (687 -> 627), because the widened probe still runs
+declined members elsewhere in the step.
+
+**And the sign of the accept-rule question flipped.** Before the fix, accepting every head
+was worth 192 downloads and about 2% of wall; after it, accepting every head is worth
+NOTHING and still pays for building the two widened masks, so the WIDEN arm is now the
+slower of the two (0.709 against 0.684, a 3.5% gap that is inside the wall's usual +-4% and
+is at best a wash). **The ceiling on changing `suffixLength` / `softmaxMaskLength` is
+therefore no longer positive on this backend either**, which is the same verdict todo-650
+reached on CUDA by a different route. The rule stays.
+
+The download counts are structural and reproduce exactly: the BEFORE column re-derived
+todo-645's original 879 / 687 to the unit, on a build made a day later. What produced
+them is a counter added to `MetalGemm.download` for the run and taken out again -- there is
+no shipped download counter, and the numbers above are what one costs to reproduce.
 
 **No Metal-side todo was filed**: the counts are decided above `GpuDevice`, so there is no
 Metal work item to open -- the change is `suffixLength` and its twin, or the shape
-`torch:padding-mask` builds. This table is the Metal price for that decision.
+`torch:padding-mask` builds. This table is the Metal price for that decision, and after
+`5baaf6ec` that price is zero.
+
+(The 16.8 MB synthetic row above shows no round trip because its score is an adopted
+resident `defparameter`; that is the shape of the probe, not of a training step. Measure
+this one on a model.)
 
 **Nothing else this backend refuses on width alone is reached by the reasoning**, and the
 survey is short because the question is not "is the operand read as bytes" but "is it

@@ -1344,6 +1344,20 @@ public final class LispNames {
 	public static final String ARRAY_BECOME = "%ARRAY-BECOME";
 
 	/**
+	 * The {@code %array-undisplace} internal built-in function:
+	 * {@code (%array-undisplace array)} copies a DISPLACED array's current view contents
+	 * into storage of its own and drops the displacement, keeping its dimensions, fill
+	 * pointer and adjustable flag; returns {@code array} (a no-op, returned unchanged,
+	 * when it already owns its storage). Each backend already carries the body for
+	 * {@code vector-push-extend}'s growth ({@link am.ik.rontolisp.LispArray#undisplace()}
+	 * / {@link am.ik.rontolisp.LispString#undisplace()}, JVM {@code _arrayUndisplace},
+	 * wasm {@code _arr_undisplace}); {@code adjust-array}'s expansion calls it on a
+	 * displaced argument before rebuilding it, matching SBCL 2.2.9's un-displace-in-place
+	 * behavior.
+	 */
+	public static final String ARRAY_UNDISPLACE = "%ARRAY-UNDISPLACE";
+
+	/**
 	 * The {@code %array-default-element} internal built-in function: the element an
 	 * UNSUPPLIED slot of this array takes -- its remembered element type's own zero
 	 * ({@link ArrayElementTypes#defaultElement}), or {@code nil} when it remembers

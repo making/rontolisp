@@ -1261,6 +1261,34 @@ cases:
       (-0.0 -0.0)
       (NIL NIL)
       (T T)
+  # A ZERO remainder is the other half of that surface, and it is a definition question
+  # rather than a signed-zero one: CLHS makes rem the remainder of truncate and mod the
+  # remainder of floor, both `number - divisor*quotient` with an exact INTEGER quotient,
+  # NOT IEEE fmod, whose zero takes the dividend's sign whatever the divisor. The two
+  # readings agree everywhere except the sign of a zero. Every backend answers the
+  # second value of its own truncate/floor, which is what the definition demands, and
+  # every row below is SBCL's.
+  - name: mod-rem-zero-is-the-truncate-and-floor-remainder
+    source: |
+      (defun mr-mod (a b) (mod a b))
+      (defun mr-rem (a b) (rem a b))
+      (defun mr-trunc (a b) (multiple-value-bind (q r) (truncate a b) (declare (ignore q)) r))
+      (defun mr-floor (a b) (multiple-value-bind (q r) (floor a b) (declare (ignore q)) r))
+      (print (list (mr-rem -4.0 2.0) (mr-mod -4.0 2.0) (mr-trunc -4.0 2.0) (mr-floor -4.0 2.0)))
+      (print (list (mr-rem -0.0 -2.0) (mr-mod -0.0 -2.0) (mr-trunc -0.0 -2.0) (mr-floor -0.0 -2.0)))
+      (print (list (mr-rem 0.0 -2.0) (mr-mod 0.0 -2.0) (mr-trunc 0.0 -2.0) (mr-floor 0.0 -2.0)))
+      (print (list (mr-rem -0.0 2.0) (mr-mod -0.0 2.0) (mr-trunc -0.0 2.0) (mr-floor -0.0 2.0)))
+      (print (list (rem -4.0 2.0) (mod -4.0 2.0) (rem -0.0 -2.0) (mod -0.0 -2.0)))
+      (print (list (rem -0.0 2.0) (mod -0.0 2.0) (mr-rem -4.0 2) (mr-mod -4 2.0)))
+      (print (list (mr-rem -3.0 2.0) (mr-mod -3.0 2.0) (rem 3.0 -2.0) (mod 3.0 -2.0)))
+    expected: |
+      (0.0 0.0 0.0 0.0)
+      (0.0 0.0 0.0 0.0)
+      (0.0 0.0 0.0 0.0)
+      (-0.0 -0.0 -0.0 -0.0)
+      (0.0 0.0 0.0 0.0)
+      (-0.0 -0.0 0.0 0.0)
+      (-1.0 1.0 1.0 -1.0)
   # min/max resolve a tie and an unordered pair with ONE rule -- min is (a <= b) ? a : b
   # and max is (a >= b) ? a : b, IEEE comparisons -- so NaN is the same question as the
   # signed-zero tie and belongs beside it.
@@ -4509,6 +4537,31 @@ cases:
       ("bc" 2 2 T)
       ("bcZ" "abcZef")
       ("bcZYX" "abcZYf" T NIL 5 8)
+  - name: adjust-array-undisplaces-cross-backend
+    source: |
+      (defun ci-adjust-array-undisplaces ()
+        ;; adjust-array on a displaced argument un-displaces it first (SBCL 2.2.9): an
+        ;; :adjustable view is adjusted IN PLACE (eq), keeps the elements at the
+        ;; subscripts valid in both shapes, and comes back un-displaced.
+        (let* ((b (make-array 6 :initial-contents (list 10 20 30 40 50 60)))
+               (v (make-array 4 :displaced-to b :displaced-index-offset 1 :adjustable t)))
+          (print (list (eq (adjust-array v 3) v) v b (array-displacement v))))
+        ;; A NON-adjustable displaced argument answers a fresh array instead, by the
+        ;; same rule every other non-adjustable adjust-array argument follows.
+        (let* ((b (make-array 6 :initial-contents (list 10 20 30 40 50 60)))
+               (v (make-array 4 :displaced-to b :displaced-index-offset 1)))
+          (let ((r (adjust-array v 3)))
+            (print (list (eq r v) r v (array-displacement v) (array-displacement r)))))
+        ;; A displaced STRING view stays a string across the un-displace.
+        (let* ((s (copy-seq "abcdef"))
+               (v (make-array 4 :element-type 'character :displaced-to s
+                                :displaced-index-offset 1 :adjustable t)))
+          (print (list (adjust-array v 3) (stringp v) (array-displacement v)))))
+      (ci-adjust-array-undisplaces)
+    expected: |
+      (T #(20 30 40) #(10 20 30 40 50 60) NIL)
+      (NIL #(20 30 40) #(20 30 40 50) NIL NIL)
+      ("bcd" T NIL)
   - name: mutable-strings-cross-backend
     source: |
       (defun ci-mutable-strings ()

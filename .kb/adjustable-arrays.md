@@ -816,8 +816,10 @@ backend: elements are preserved at the subscripts valid in BOTH shapes
 `:adjustable` array is adjusted IN PLACE and returned itself (`eq`), otherwise a
 fresh array is returned; without an explicit `:fill-pointer` the old fill
 pointer carries over (make-array range-checks it against the new size, so
-shrinking below it errors like CL); rank mismatch and displaced inputs signal
-clear errors; `:displaced-to` in adjust-array is rejected. Without an explicit
+shrinking below it errors like CL); rank mismatch signals a clear error;
+`:displaced-to` AS A KEYWORD to `adjust-array` itself is rejected (CLHS
+territory rontolisp does not implement), but a DISPLACED ARGUMENT is legal --
+it un-displaces first, matching SBCL 2.2.9 (`.todo/657`, below). Without an explicit
 `:initial-element` the opened cells take the array's own element type zero, not
 `nil`, and the result carries the argument's element type unchanged (the two
 sections above). An IMMUTABLE string is a legal argument everywhere (it answers a
@@ -846,8 +848,9 @@ per-backend codegen:
 Lite semantics on every backend: a displaced array cannot be combined with
 `:initial-element`/`:initial-contents` (compile-time
 `UnsupportedOperationException` on JVM/WASM since make-array keywords are
-literal; runtime error on the interpreter), cannot itself be adjusted, and
-`:displaced-index-offset` requires `:displaced-to`. It MAY carry a fill pointer
+literal; runtime error on the interpreter), and `:displaced-index-offset`
+requires `:displaced-to`. It CAN itself be adjusted with `adjust-array` --
+it un-displaces first (`.todo/657`, below). It MAY carry a fill pointer
 and the `:adjustable` flag -- the section below. The view is bounds-checked
 at creation (`total + offset <= target total`, target dims product). Chains
 (view of view) resolve transitively, and access follows the CURRENT storage of
@@ -1045,22 +1048,109 @@ after, and the string view's characters -- EXCEPT `adjustable-array-p` over a
 view, which is the pre-existing recorded divergence above (SBCL answers `T` for
 any non-simple array; rontolisp reports the `:adjustable` argument verbatim).
 
-Still NOT supported, unchanged and deliberate: `adjust-array` on a displaced
-array signals "adjust-array: displaced arrays are not supported" on every
-backend, where SBCL un-displaces it in place. The machinery to do it now exists
-(the un-displace primitive above), so this is a decision, not a gap: nothing
-measured has needed it, and `vector-push-extend` is the idiom that reaches a
-fill-pointered view.
+**Cross-backend gap found 2026-09-02, `.todo/658`**: when the array being
+un-displaced is a GENERAL array that REMEMBERS a non-packable element type
+(`.todo/619`), wasm's `_arr_undisplace` correctly chain-resolves and carries
+that type across (its meta offset word doubles as the marker, and
+`emitRememberedMarker` walks to the chain's end), while the interpreter's
+`LispArray.undisplace()` and the JVM's `_arrayUndisplace` both silently drop
+it back to `t` -- `array-element-type` answers `(UNSIGNED-BYTE 8)` on wasm,
+`T` on the other two, for the SAME source. SBCL is not a usable oracle here
+(it rejects the underlying `:displaced-to` construction outright, since CL
+requires element-type compatibility rontolisp's lite displacement does not
+check). Unmeasured whether fixing it is worth the blast radius; `.todo/658`
+holds the plan.
 
-Pinned by `LispEvaluatorTest`'s
-`aDisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag` /
-`aFullDisplacedViewUndisplacesWhenItGrows`, the
+**`adjust-array` on a displaced array un-displaces it first (`.todo/657`,
+2026-09-02), matching SBCL 2.2.9.** `expandAdjustArray`'s old displaced-check
+arm (which signaled "adjust-array: displaced arrays are not supported") is
+replaced by an unconditional call to `%array-undisplace`, a new internal
+primitive that is a thin wire onto the un-displace machinery `.todo/647` had
+already built for `vector-push-extend`'s growth (`LispArray.undisplace` /
+`LispString.undisplace`, JVM `_arrayUndisplace`, wasm `_arr_undisplace`): the
+argument's current view contents become its own storage and the displacement
+drops, in place, BEFORE the rest of the adjustment runs -- unconditionally, not
+only when the array is `:adjustable`, so the answer is the same on every
+backend regardless of which branch (in-place `%array-become` vs. a fresh copy)
+the rest of the expansion takes. The interpreter's own `adjust-array` built-in
+(`Environment.adjustArray`) calls `array.undisplace()` at the same point for
+the same reason; the `LispString` arm's `str.adjustCapacity` already called it
+(`.todo/647`), so only its own now-redundant `displacedTo() != null` refusal
+needed to drop.
+
+Diffed against SBCL 2.2.9 on 2026-09-02: an `:adjustable` displaced argument
+is adjusted IN PLACE (`eq` to the argument), keeps the elements at the
+subscripts valid in both shapes, and comes back un-displaced
+(`array-displacement` answers `NIL, 0`) -- identical. A NON-adjustable
+displaced argument diverges from SBCL by the SAME pre-existing rule every
+other non-adjustable `adjust-array` argument already does (SBCL treats a
+displaced array as "not simple" and adjusts it in place regardless of
+`:adjustable`, per the `adjustable-array-p` divergence recorded above;
+rontolisp tracks `:adjustable` verbatim and answers a fresh array instead).
+CLHS leaves further use of the OLD array unspecified once it is not
+`:adjustable`, so the un-displace runs on it too rather than being skipped --
+its `array-displacement` answers `NIL, 0` from then on, same as the fresh
+copy's.
+
+Pinned by `LispEvaluatorTest.adjustArrayUndisplacesADisplacedArgument`, the
+`compileAdjustArrayUndisplacesADisplacedArgument` twin in
+`JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest`, and the
+`adjust-array-undisplaces-cross-backend` ci-spec case (all four backends,
+byte-identical) -- beside the pre-existing coverage:
+`LispEvaluatorTest`'s `aDisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag`
+/ `aFullDisplacedViewUndisplacesWhenItGrows`, the
 `compileADisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag` /
 `compileAFullDisplacedViewUndisplacesWhenItGrows` twins in
 `JvmLispCompilerTest`, the same two names in
 `WasmLispCompilerIntegrationTest`, and the
 `displaced-fill-pointer-cross-backend` ci-spec case (all four backends,
 byte-identical).
+
+Wiring points for `%array-undisplace`: `LispNames.ARRAY_UNDISPLACE`
+(`%ARRAY-UNDISPLACE`), the `CL_INTERNALS` entry in `PackageRegistry`, the
+`usesGeneralArrayOp` gate list in `LispMacroExpander` (the shared
+"programUsesAnyArrayOp" list both compilers read), and a case in
+`Jvm`/`WasmExprCompiler.compileCons` calling `JvmArrayCompiler
+.compileArrayUndisplace` / `WasmArrayCompiler.compileArrayUndisplace` -- both
+thin wrappers over the existing `_arrayUndisplace` / `_arr_undisplace`
+runtime helpers. No separate `Environment` registration: `adjust-array` is
+not expanded through `LispMacroExpander` on the interpreter (it has its own
+real built-in), so `%array-undisplace` is compile-path-only.
+
+`expandAdjustArray` calls `%array-undisplace` UNCONDITIONALLY (not gated by
+`%array-disp-target`) and, critically, as PART of `a`'s own `let*` binding
+(`(a (%array-undisplace <array-expr>))`), not as a later body statement:
+every OTHER binding that reads `a` -- `od` (`array-dimensions`), and above
+all `newArr`'s `%array-adopt-element-type` stamp -- must see the
+ALREADY-undisplaced state, because a still-displaced array's marker/offset
+word is genuinely ambiguous on the compile backends (the single word doubles
+as the offset while displaced and only becomes the resolved element-type
+marker once `_arr_undisplace`/`_arrayUndisplace` runs); reading it one
+binding too early silently answers "remembers nothing" instead of the
+chain-resolved type. This surfaced as a real regression during development,
+not a hypothetical: with the undisplace call placed as a separate body
+statement (running after all bindings), `compileAnAdjustedCopyKeepsTheElementType`
+crashed with `ClassCastException: String cannot be cast to ArrayList` --
+because `%array-undisplace` runs on EVERY `adjust-array` argument
+unconditionally, including a literal immutable string, which has no header at
+all. Both `_arrayUndisplace` (JVM) and `_arr_undisplace`'s wasm call site
+(`WasmArrayCompiler.compileArrayUndisplace`) now open with the same
+`instanceof`/`ref.test` TYPE_STRING check `_arrayDispTarget`/
+`compileDispTarget` already had, answering the string unchanged before
+reaching the header/cell cast. A packed integer or float array has no such
+guard and is unaffected: the JVM call site (`compileUnary`, shared with
+`compileDispTarget`/`compileDispOffset`) already runs
+`emitRequireGeneralIfPacked` first, so it gets the same clear "not applicable
+to a packed integer vector"/"...packed float array" text `adjust-array`
+already gave through the old `%array-disp-target` probe
+(`JvmLispCompilerTest.compilePackedFloatArrayRejectsAdjustArray`); wasm has
+no such guard on this primitive (as before) and traps on the cell cast, the
+existing parity bar
+(`WasmLispCompilerIntegrationTest.compileAdjustArrayTrapsOnAPackedFloatArray`).
+
+Still deliberately NOT supported: `adjust-array` on a packed integer vector or
+a packed float array, a different decision covered above ("What is still NOT
+supported").
 
 ## Representation
 
