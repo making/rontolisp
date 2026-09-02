@@ -3259,6 +3259,10 @@ Six things worth knowing before editing these:
   `dirtyCount()`/`backingCount()` diff failed in a full-suite run (2026-09-02, alongside
   `.todo/644`, which the failure was unrelated to) and now asks about its own result's
   handle instead of the shared cache.
+- **A test whose shape does not clear the threshold that gates the mechanism it asserts
+  on runs nothing, and passes.** The general rule and what to do about it are in
+  `.kb/test-execution.md`, "A test that never ran the mechanism it asserts on"; the sweep
+  that produced it is below.
 - **Exact-input operands must be exact IN THE FOLD too** -- a 64-long sum of products of
   1..4096 is not, at f32, because the defun accumulates in f64 and no f32 kernel can follow.
   That is `.kb/linalg-simd.md`'s reduction contract and not this seam.
@@ -3275,6 +3279,80 @@ and reproducibility; the strided tier's byte-identity on every machine; and, on 
 with a 256 MB heap holding forty-eight 16 MB results -- which fits only if none has a host
 array -- and runs the same program without the flag under the same heap to see it die of
 `OutOfMemoryError`, so the bound has teeth.
+
+### The test-side sweep on Metal (2026-09-03)
+
+`.todo/655` asks whether an accept rule and the shapes that actually reach it were ever
+compared. Its PRODUCTION half is that item's; this is its TEST half, swept on an M4 Max
+with the device in force. What the machine answers, for the record, since every number
+below is relative to it:
+
+```
+Apple M4 Max (Metal, unified memory, 107 GB working set)
+supportsDouble=false  lazyResultsPay=true
+work 4194304  map 131072  strided 262144  fold MAX  fused 131072  rng MAX  matvec 2097152
+```
+
+**Note the first trap in that table.** `Gpu.worth(n, m, p)` -- the probe-free predicate --
+answers `true` at 64 cubed, because it applies `POOLED_MIN_WORK` (131072) and not the
+`Probe.MIN_WORK` the offer actually applies (4194304 here). So "the shape is above the
+threshold" can be checked, believed, and wrong. `Gpu.multiply` is the only authority, and
+`GpuThresholds.minWork()` the number to size against.
+
+Five findings, each established by MUTATION (put the old constant back with the new census
+in place and watch the value assertions still pass while only the census fails) or, where
+the mechanism runs in another loader, by measuring the offer directly:
+
+1. **`codegen/jvm/GpuOfferDifferentialTest` FAILED on Metal**, at `e6d6e3ae` -- not
+   vacuously green, red, and invisible because every CI runner this project has is
+   GPU-less. Its `BIG` is `2 * max(map, strided, fold, fused)`, and `fold` is
+   `Long.MAX_VALUE` here, so `BIG` wrapped to `-2`, the `Math.max(2, ...)` under it handed
+   back a batch of 2, every "big enough to be offered" operand became 1024 elements, and
+   the `warmed()` operands' warm-up assertion fired. Fixed by taking the maximum over the
+   thresholds that are FINITE: a tier no size reaches must not be what an operand is sized
+   for.
+2. **`JvmLinalgGpuAccelCompilerTest.theFusedTierRunsOnTheCompiledBackendAndLandsOnTheChainsBits`
+   was the unfixed twin of todo-495's bug.** It still sized its rows off
+   `foldMinElements()`; the same overflow clamped it to the floor of 256, and 256 x 384 =
+   98304 is under the fused threshold of 131072. Every `array-equal` in it printed `T`
+   from the defun against itself. **Fixing it exposed a real divergence**: with the tier
+   actually running, `linalg:log-softmax` against the chain it replaces answers NIL,
+   because that chain ends in a `linalg:log` over the ROW SUMS -- an array of `rows`
+   elements, three orders of magnitude under the element-wise threshold -- which runs on
+   the host while the fused kernel takes its log on the device. Two different logs. That
+   line is now pinned as a bound rather than as bit-identity, which is what it can be.
+3. **Every hard-coded product shape in `eval/LinalgGpuTest` declined here.** Measured with
+   `Gpu.multiply` on the real device: 64-cube 262144, 60x70x50 210000, 2 x 64-cube 524288,
+   the rank-4 393216, the rectangular slab 420000 -- all under 4194304, and the
+   default-width ones declined for their width besides. Four tests
+   (`theMatrixProductMatchesTheScalarOracleOnExactInputs`,
+   `theSingleFloatProductMatchesTheScalarOracleOnExactInputs`,
+   `theStackedProductMatchesTheScalarOracleAtEveryBatchShape`,
+   `everyCombinationOfTheThreeFlagsRunsAnExactProgramToTheSameOutput`) were the defun
+   against itself. The class had defined `SIDE` off the threshold in force for exactly
+   this reason, and these four did not use it.
+4. **`theClipNormFoldsInBlocksOnTheDeviceCloseToTheSequentialSumAndReproducibly` reached
+   the device on NEITHER backend.** `Gpu.sumSquares` is offered over a resident operand
+   only -- and so is the scalar `Gpu.scale` that built its gradient, which therefore
+   declined over the fresh operand above it. Measured: byte-identical output, zero
+   residency lookups. Not a Metal finding; it was vacuous everywhere. The gradient is now
+   built through a broadcast add, which is what makes an operand resident here.
+5. **`eval/LinalgGpuDeclineTest`'s shapes are fixed and must stay fixed** -- it is the half
+   a GPU-less CI runner executes, so it may not size itself off a machine's thresholds --
+   but five of its comments claimed "on a GPU machine the device really is asked", which is
+   false on Metal for every one of them. The assertions are sound decline tests; the
+   comments now say so.
+
+The tests already carrying a residency census (the fused, resident and index tiers, and
+the GEMV) were checked and are sound. `am/ik/gpu/MetalGpuTest` was swept test by test and
+found clean: it derives every shape from a threshold accessor and asserts the accept /
+decline boolean of every member it calls, so it cannot fail vacuously -- two strict
+`residentBytes()` assertions were missing their reachability fences, which is the other
+hazard above and is now fixed.
+
+**What was NOT swept**: whether a claim `GpuTest` makes has a Metal sibling at all. That
+suite is gated on a double-capable device and its 57 tests skip in full on every Mac.
+`.todo/662`.
 
 ## Native image
 
@@ -3324,9 +3402,13 @@ is revisited.
 - **No axis fold on METAL as a round trip**, with two numbers attached. The amax/amin half
   is the one to revisit first if that backend's floor ever drops; the sum half cannot come
   back at all while `%la-fold-axis` accumulates in double.
-- **No lazy results on METAL for the interceptors**, and so no index tier or clip norm
-  there. Built, pinned, measured a tie and a loss; `.todo/495` is the lever and the
-  measurement list.
+- ~~**No lazy results on METAL for the interceptors**, and so no index tier or clip norm
+  there.~~ **No longer true, and it was left standing for a round.** todo-495 made that
+  backend's command buffers asynchronous and flipped `lazyResultsPay` to true there, so
+  the interceptors do run lazily on Metal and the index tier and the clip norm ARE
+  reachable. What is still missing is the pinning: those two tiers' library-level tests
+  live only in `GpuTest`, which skips in full on a Mac (`.todo/662`). Kept here rather
+  than deleted because the sentence had already been read as current by a later sweep.
 - **No fused layer-norm AFFINE on METAL.** It is built on CUDA ("Layer-norm's affine")
   and declined here, unmeasured, so the module runs the normalization and its two
   broadcast passes member by member as before; whether the fold pays on that backend is

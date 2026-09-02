@@ -75,6 +75,22 @@ class LinalgGpuTest {
 	}
 
 	/**
+	 * The side of a square slab such that a STACK of {@code batch} of them clears the
+	 * product floor in force, with the same safety factor {@link #SIDE} carries. Sized
+	 * per batch rather than by reusing {@link #SIDE} for every slab because the ORACLE
+	 * leg of each assertion is the interpreted defun and its cost is that same
+	 * {@code batch * n * m * p}: paying the floor once per shape instead of once per slab
+	 * is the difference between seconds and a minute (measured 2026-09-03 on an M4 Max,
+	 * 9.0M multiply-adds is 5.1 s interpreted against 0.6 s on the device).
+	 * @param batch how many slabs are stacked
+	 * @return the slab's side
+	 */
+	private static int slabSide(int batch) {
+		int n = (int) Math.ceil(Math.cbrt((double) am.ik.gpu.GpuThresholds.minWork() / batch));
+		return Math.max(16, (n + n / 8 + 3) / 4 * 4);
+	}
+
+	/**
 	 * {@code :element-type} for {@link #TYPE}, or nothing when the width is the default.
 	 */
 	private static String option() {
@@ -149,6 +165,67 @@ class LinalgGpuTest {
 
 	private static String inexactProduct(String elementType) {
 		return inexactProduct(SIDE, elementType);
+	}
+
+	/**
+	 * A product of operands that are exact at BOTH widths AT ANY SHAPE: the left operand
+	 * is the sign of a sine, so every cell is +1 or -1, and the right is
+	 * {@code 4 * sign(sin i) + sign(cos i)}, so every cell is one of -5, -3, 3, 5. Every
+	 * partial sum is then an integer under {@code 5 * m}, far inside what f32 holds
+	 * exactly, and a reordered device reduction of it does not merely come close to the
+	 * scalar defun's answer -- it equals it.
+	 *
+	 * <p>
+	 * That the bound does not GROW with the array is the point. An index ramp -- what
+	 * these tests used to build -- is exact only up to a shape, so a suite that resizes
+	 * itself off the threshold in force would have to re-derive the bound per backend;
+	 * this construction is exact at the 64-cube CUDA accepts and at the 208-cube Metal
+	 * needs, and stays exact if either floor moves. The sign is stable under a last-ulp
+	 * difference in {@code sin}, so it does not matter whether the operands themselves
+	 * were built on the device or on the host.
+	 * @param leftDims the left operand's shape, as a Lisp dimension list
+	 * @param leftCount how many elements that shape holds
+	 * @param rightDims the right operand's shape
+	 * @param rightCount how many elements that shape holds
+	 * @param option the {@code :element-type} to build at, or the empty string
+	 * @return the program, ending in the product
+	 */
+	private static String exactProduct(String leftDims, int leftCount, String rightDims, int rightCount,
+			String option) {
+		return """
+				(defparameter *r1* (linalg:arange 1 %d%s))
+				(defparameter *r2* (linalg:arange 1 %d%s))
+				(defparameter *a* (linalg:reshape (linalg:sign (linalg:sin *r1*)) '(%s)))
+				(defparameter *b* (linalg:reshape
+				                   (linalg:add (linalg:mul (linalg:sign (linalg:sin *r2*)) 4)
+				                               (linalg:sign (linalg:cos *r2*)))
+				                   '(%s)))
+				(linalg:matmul *a* *b*)
+				""".formatted(leftCount + 1, option, rightCount + 1, option, leftDims, rightDims);
+	}
+
+	/**
+	 * Asserts that the DEVICE computed the program's last form and landed on the scalar
+	 * defun's bits. The second half is the contract; the first is what stops it being
+	 * vacuous, and it needs an observable because an exact-input product is written to
+	 * land on the oracle's own bits and therefore no printed value can say it ran.
+	 *
+	 * <p>
+	 * The observable is a residency LOOKUP, hit or miss: an accepted member asks the
+	 * cache for each operand and a decline never gets that far. Measured on Metal
+	 * (2026-09-03): a 208-cube product moves the counter by two, a 64-cube one by
+	 * nothing. That difference is exactly what these tests could not see while they built
+	 * hard-coded 64-cubes -- 262144 multiply-adds against a floor of 4194304 there -- and
+	 * passed on the defun against itself.
+	 * @param input the program, ending in the product
+	 */
+	private void assertTheDeviceComputedTheScalarOraclesBits(String input) {
+		long lookups = am.ik.gpu.GpuThresholds.residencyHits() + am.ik.gpu.GpuThresholds.residencyMisses();
+		LispVal accelerated = eval(input, true);
+		assertThat(am.ik.gpu.GpuThresholds.residencyHits() + am.ik.gpu.GpuThresholds.residencyMisses())
+			.as("the device was asked, and answered: %s", input)
+			.isGreaterThan(lookups);
+		assertThat(elements(accelerated)).as(input).isEqualTo(elements(eval(input, false)));
 	}
 
 	// --- the dead-flag guard ---------------------------------------------------------
@@ -457,29 +534,25 @@ class LinalgGpuTest {
 	void theMatrixProductMatchesTheScalarOracleOnExactInputs() {
 		// Every partial sum here is an integer well under 2^24, so it is exact at BOTH
 		// widths and a reordered reduction of it is not merely close to the oracle's, it
-		// is equal.
-		assertMatchesScalarOracle("""
-				(defparameter *a* (linalg:add (linalg:ones '(64 64)) 2.0))
-				(defparameter *b* (linalg:reshape (linalg:arange 1 4097) '(64 64)))
-				(linalg:to-list (linalg:matmul *a* *b*))
-				""");
-		// A rectangular shape that is not a multiple of the kernel's 16x16 tile, so a
-		// mis-indexed edge tile would show up.
-		assertMatchesScalarOracle("""
-				(defparameter *a* (linalg:add (linalg:ones '(60 70)) 1.0))
-				(defparameter *b* (linalg:reshape (linalg:arange 1 3501) '(70 50)))
-				(linalg:to-list (linalg:matmul *a* *b*))
-				""");
+		// is equal. The shape is SIDE, off the product floor in force, and the width the
+		// one this device accepts: written at a hard-coded 64 and at the default width --
+		// which is what this was -- it declined on Metal at both (262144 multiply-adds
+		// against a floor of 4194304, and #d against a backend with no double) and the
+		// equality held between the defun and itself.
+		assertTheDeviceComputedTheScalarOraclesBits(
+				exactProduct(SIDE + " " + SIDE, SIDE * SIDE, SIDE + " " + SIDE, SIDE * SIDE, option()));
+		// A rectangular shape whose three dimensions are each NOT a multiple of the
+		// kernel's 16x16 tile, so a mis-indexed edge tile shows up.
+		int n = SIDE + 2, m = SIDE + 6, p = SIDE - 4;
+		assertTheDeviceComputedTheScalarOraclesBits(exactProduct(n + " " + m, n * m, m + " " + p, m * p, option()));
 	}
 
 	@Test
 	void theSingleFloatProductMatchesTheScalarOracleOnExactInputs() {
-		assertMatchesScalarOracle("""
-				(defparameter *a* (linalg:add (linalg:ones '(64 64) :element-type 'single-float) 2.0))
-				(defparameter *b*
-				  (linalg:reshape (linalg:arange 1 4097 :element-type 'single-float) '(64 64)))
-				(linalg:to-list (linalg:matmul *a* *b*))
-				""");
+		// The same claim at the width the hardware is for, on every backend rather than
+		// only on the one whose default width is double.
+		assertTheDeviceComputedTheScalarOraclesBits(exactProduct(SIDE + " " + SIDE, SIDE * SIDE, SIDE + " " + SIDE,
+				SIDE * SIDE, " :element-type 'single-float"));
 	}
 
 	@Test
@@ -511,36 +584,25 @@ class LinalgGpuTest {
 		// The shape this member exists for, and every shape the batch odometer can hand
 		// the device: a plain rank-3 stack, a BROADCAST right operand (the rank-2 matrix
 		// under a rank-3 activation, which is every torch:linear), a broadcast LEFT one,
-		// and rank 4 with two leading axes. Integer-valued operands whose partial sums
-		// stay under 2^24, so the fold is exact at both widths and this is an equality.
-		assertMatchesScalarOracle("""
-				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
-				(defparameter *b* (linalg:add (linalg:ones '(2 64 64)) 2.0))
-				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
-				""");
-		assertMatchesScalarOracle("""
-				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
-				(defparameter *b* (linalg:add (linalg:ones '(64 64)) 2.0))
-				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
-				""");
-		assertMatchesScalarOracle("""
-				(defparameter *a* (linalg:add (linalg:ones '(1 64 64)) 2.0))
-				(defparameter *b* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
-				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
-				""");
-		assertMatchesScalarOracle("""
-				(defparameter *a* (linalg:reshape (linalg:arange 1 12289) '(2 3 32 64)))
-				(defparameter *b* (linalg:add (linalg:ones '(2 3 64 32)) 1.0))
-				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
-				""");
-		// Single-float, and a rectangular slab that is not a multiple of the 16x16 tile.
-		assertMatchesScalarOracle("""
-				(defparameter *a*
-				  (linalg:reshape (linalg:arange 1 8401 :element-type 'single-float) '(4 60 35)))
-				(defparameter *b*
-				  (linalg:add (linalg:ones '(4 35 50) :element-type 'single-float) 2.0))
-				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
-				""");
+		// and rank 4 with two leading axes. The operands are exact at both widths at any
+		// shape, so the fold is an equality -- and every shape is sized off the floor in
+		// force, which the hard-coded 2 x 64-cubes this used to build were not: 524288
+		// multiply-adds against Metal's 4194304, so all five agreed on the defun.
+		int two = slabSide(2);
+		String stack = "2 " + two + " " + two;
+		String slab = two + " " + two;
+		assertTheDeviceComputedTheScalarOraclesBits(exactProduct(stack, 2 * two * two, stack, 2 * two * two, option()));
+		assertTheDeviceComputedTheScalarOraclesBits(exactProduct(stack, 2 * two * two, slab, two * two, option()));
+		assertTheDeviceComputedTheScalarOraclesBits(
+				exactProduct("1 " + two + " " + two, two * two, stack, 2 * two * two, option()));
+		int six = slabSide(6);
+		assertTheDeviceComputedTheScalarOraclesBits(exactProduct("2 3 " + six + " " + six, 6 * six * six,
+				"2 3 " + six + " " + six, 6 * six * six, option()));
+		// Single-float, and a rectangular slab whose dimensions are not multiples of the
+		// 16x16 tile.
+		int four = slabSide(4);
+		assertTheDeviceComputedTheScalarOraclesBits(exactProduct("4 " + four + " " + (four + 2), 4 * four * (four + 2),
+				"4 " + (four + 2) + " " + (four - 2), 4 * (four + 2) * (four - 2), " :element-type 'single-float"));
 	}
 
 	@Test
@@ -1017,17 +1079,30 @@ class LinalgGpuTest {
 	@Test
 	void everyCombinationOfTheThreeFlagsRunsAnExactProgramToTheSameOutput() {
 		// Eight invocations, one program, one answer: the composition is only worth
-		// having if it cannot change what an exact program prints.
+		// having if it cannot change what an exact program prints. The first product is
+		// sized off the floor in force and written at the width the device takes, so at
+		// least one form here really is ACCEPTED under the flag -- at a hard-coded 64 and
+		// the default width, which is what this built, every --gpu leg declined on Metal
+		// and the eight answers agreed because nothing had changed. The rest stay small:
+		// the oracle leg of each is the interpreted defun, and eight legs of an
+		// above-floor product is a minute of wall for a claim one of them makes.
+		int side = slabSide(1);
 		String program = """
-				(defparameter *a* (linalg:add (linalg:ones '(64 64)) 2.0))
-				(defparameter *b* (linalg:reshape (linalg:arange 1 4097) '(64 64)))
+				(defparameter *a* (linalg:reshape (linalg:sign (linalg:sin (linalg:arange 1 %d%s))) '(%d %d)))
+				(defparameter *b* (linalg:reshape
+				                   (linalg:add (linalg:mul (linalg:sign (linalg:sin (linalg:arange 1 %d%s))) 4)
+				                               (linalg:sign (linalg:cos (linalg:arange 1 %d%s))))
+				                   '(%d %d)))
+				(defparameter *c* (linalg:add (linalg:ones '(64 64)) 2.0))
+				(defparameter *d* (linalg:reshape (linalg:arange 1 4097) '(64 64)))
 				(defparameter *s* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
-				(list (linalg:to-list (linalg:matmul *a* *b*))
-				      (linalg:to-list (linalg:dot *a* (linalg:arange 1 65)))
-				      (linalg:sum (linalg:matmul *b* *a*))
-				      (linalg:to-list (linalg:flatten (linalg:matmul *s* *a*)))
+				(list (linalg:sum (linalg:matmul *a* *b*))
+				      (linalg:to-list (linalg:dot *c* (linalg:arange 1 65)))
+				      (linalg:sum (linalg:matmul *d* *c*))
+				      (linalg:to-list (linalg:flatten (linalg:matmul *s* *c*)))
 				      (linalg:to-list (linalg:flatten (linalg:matmul *s* (linalg:reshape *s* '(2 64 64))))))
-				""";
+				""".formatted(side * side + 1, option(), side, side, side * side + 1, option(), side * side + 1,
+				option(), side, side);
 		String oracle = eval(program, false, false, false).print();
 		for (boolean gpu : new boolean[] { false, true }) {
 			for (boolean blas : new boolean[] { false, true }) {
@@ -1375,15 +1450,28 @@ class LinalgGpuTest {
 	@Test
 	void theClipNormFoldsInBlocksOnTheDeviceCloseToTheSequentialSumAndReproducibly() {
 		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
+		// The gradient has to be RESIDENT, which is the whole of this member's offer
+		// rule: %la-sum-squares asks the cache and declines outright when the operand is
+		// not there, and so does the scalar %la-scale that produced it. Built as
+		// (linalg:mul *a* 0.001) over a FRESH *a* -- which is what this test did -- both
+		// declined, the two lines printed the sequential fold's own digits and the
+		// tolerance below held between the defun and itself, on BOTH backends. A
+		// broadcast add is what makes an operand resident here, as it does for the
+		// resident and index tiers above.
 		String program = """
 				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
-				(defparameter *g* (linalg:mul *a* 0.001))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
+				(defparameter *g* (linalg:mul (linalg:add *a* *row*) 0.001))
 				(format t "norm ~a~%%" (sqrt (linalg::%%la-sum-squares *g* 0.25)))
 				(linalg::%%la-scale *g* 0.5)
 				(format t "scaled ~a~%%" (sqrt (linalg::%%la-sum-squares *g* 0.0)))
-				""".formatted(side * side + 1, option(), side, side);
+				""".formatted(side * side + 1, option(), side, side, side + 1, option(), side);
 		double[] oracle = numbers(output(program, false, false));
+		long lookups = am.ik.gpu.GpuThresholds.residencyHits() + am.ik.gpu.GpuThresholds.residencyMisses();
 		double[] device = numbers(output(program, true, false));
+		assertThat(am.ik.gpu.GpuThresholds.residencyHits() + am.ik.gpu.GpuThresholds.residencyMisses())
+			.as("the device was asked, and answered")
+			.isGreaterThan(lookups);
 		assertThat(device).hasSameSizeAs(oracle);
 		for (int i = 0; i < oracle.length; i++) {
 			assertThat(device[i]).as("value %d", i).isCloseTo(oracle[i], within(Math.abs(oracle[i]) * 1e-9));
