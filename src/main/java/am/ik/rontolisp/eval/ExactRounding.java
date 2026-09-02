@@ -40,8 +40,14 @@ final class ExactRounding {
 	/**
 	 * The exact quotient of {@code a/b} under one of the four rounding modes, or
 	 * {@code null} when the operands are not a float paired with a float or an exact
-	 * integer (a ratio operand, a non-finite float and a zero divisor all decline, so the
-	 * caller keeps its ordinary route).
+	 * integer (a ratio operand, a non-finite dividend and a zero divisor all decline, so
+	 * the caller keeps its ordinary route).
+	 * <p>
+	 * An INFINITE divisor is settled by sign rather than by the rational route (infinity
+	 * is not a rational, so {@link #rationalOf} declines on it): with a finite nonzero
+	 * dividend, {@code a/b} is an infinitesimal whose magnitude is always under 1/2, so
+	 * truncate and round are always 0, and floor/ceiling read off whether the dividend
+	 * and the divisor agree in sign. See {@code .kb/linalg-simd.md}, "mod/rem".
 	 * @param a the dividend
 	 * @param b the divisor
 	 * @param mode {@link #TRUNCATE}, {@link #FLOOR}, {@link #CEILING} or {@link #ROUND}
@@ -50,6 +56,9 @@ final class ExactRounding {
 	static @Nullable LispVal quotient(LispVal a, LispVal b, int mode) {
 		if (!(a instanceof LispDouble) && !(b instanceof LispDouble)) {
 			return null;
+		}
+		if (b instanceof LispDouble bd && Double.isInfinite(bd.value())) {
+			return infiniteDivisorQuotient(a, bd.value() > 0, mode);
 		}
 		BigInteger[] ra = rationalOf(a);
 		BigInteger[] rb = rationalOf(b);
@@ -63,6 +72,41 @@ final class ExactRounding {
 			den = den.negate();
 		}
 		return normalize(exactQuotient(num, den, mode));
+	}
+
+	/**
+	 * The quotient for a finite dividend over an infinite divisor: {@code a/b} is then an
+	 * infinitesimal whose sign is the dividend's sign XOR the divisor's, and whose
+	 * magnitude is always under 1/2. Truncate and round are 0 either way; floor and
+	 * ceiling round the infinitesimal down or up, so they read off whether the two signs
+	 * agree. Declines (returns {@code null}) for a ratio operand, a non-finite dividend
+	 * or an EXACT zero dividend -- {@code 0/infinity} is genuinely zero, not an
+	 * infinitesimal, and the old f64 route already answers that correctly.
+	 */
+	private static @Nullable LispVal infiniteDivisorQuotient(LispVal a, boolean divisorPositive, int mode) {
+		int signA;
+		if (a instanceof LispInteger i) {
+			signA = Long.signum(i.value());
+		}
+		else if (a instanceof LispBigInteger b) {
+			signA = b.value().signum();
+		}
+		else if (a instanceof LispDouble d && Double.isFinite(d.value())) {
+			double v = d.value();
+			signA = v == 0.0 ? 0 : (v > 0 ? 1 : -1);
+		}
+		else {
+			return null;
+		}
+		if (signA == 0) {
+			return null;
+		}
+		boolean sameSign = (signA > 0) == divisorPositive;
+		return switch (mode) {
+			case FLOOR -> new LispInteger(sameSign ? 0 : -1);
+			case CEILING -> new LispInteger(sameSign ? 1 : 0);
+			default -> new LispInteger(0);
+		};
 	}
 
 	/**
