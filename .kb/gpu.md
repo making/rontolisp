@@ -2071,6 +2071,20 @@ Six things worth knowing before editing these:
   because their "before" is measured right after a release rather than a warm-up call and
   the pool can legitimately read near zero there. Every leak run is sized so a real leak
   is 2-8x whichever bound it uses.
+- **A test that asserts an exact `residentBytes()` must KEEP ITS ARRAYS REACHABLE.** A
+  resident copy goes when its host array is collected -- that is the design, and
+  `aCollectedHostArrayTakesItsResidentCopyWithIt` pins it -- so a total counted over
+  arrays the method has stopped referencing is a total the collector may change under the
+  assertion. It bit `MetalGpuTest.theStridedCopyIsTheCopyMembersOverAResidentOperandAndAScaleRunsInPlace`
+  once in three runs (2026-09-02): six arrays counted, four of them dead to the JIT, the
+  assertion reading the two still referenced, and an `a.clone()` on the line above as the
+  allocation that triggered it. The rule is `Reference.reachabilityFence` on every array
+  the total counts, placed after the last assertion -- and never pass one anonymously
+  (`Gpu.map(op, a, 0, new float[n], 0, n)`), which makes it unreachable from the moment it
+  exists. "It is used further down, so it is alive" is true today and is not a rule: it
+  depends on where the reader happens to put the next statement. The CUDA suite's three
+  strict `residentBytes()` assertions were checked against this and survive on that
+  accident alone.
 - **Exact-input operands must be exact IN THE FOLD too** -- a 64-long sum of products of
   1..4096 is not, at f32, because the defun accumulates in f64 and no f32 kernel can follow.
   That is `.kb/linalg-simd.md`'s reduction contract and not this seam.
