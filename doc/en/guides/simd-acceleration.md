@@ -141,7 +141,7 @@ On `--no-gc`, `vec:matvec-into`'s aliasing guard is a WebAssembly trap (an `unre
 
 ## Hardware acceleration (optional)
 
-The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` and the four operator aliases, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, the comparison selects `maximum` / `minimum` / `relu` / `clip`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section. Two further orthogonal flags have pages of their own: [`--blas`](blas-acceleration.md) routes `linalg`'s matrix product to a tuned BLAS out of the operating system, and [`--gpu`](gpu-acceleration.md) routes that product, the element-wise transcendentals and the broadcast / axis-fold / axes-transpose shapes to a GPU.
+The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` and the four operator aliases, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, the comparison selects `maximum` / `minimum` / `relu` / `clip`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section. Two further orthogonal flags have pages of their own: [`--blas`](blas-acceleration.md) routes the matrix product -- `linalg`'s, and `vec:matvec` / `vec:matvec-into` -- to a tuned BLAS out of the operating system, and [`--gpu`](gpu-acceleration.md) routes `linalg`'s product and `vec:matvec`, the element-wise transcendentals and the broadcast / axis-fold / axes-transpose shapes to a GPU.
 
 Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wasm`) and whether you pass `--simd` are **orthogonal** axes:
 
@@ -211,16 +211,16 @@ Every `--simd` kernel runs on the calling thread. `--parallel`, passed together 
 
 ## Beyond `--simd`
 
-Two further acceleration flags reach `linalg` on the CPU-hosted backends, each with a page of its own, and neither of them touches `vec`:
+Two further acceleration flags reach the matrix product on the CPU-hosted backends, each with a page of its own. Both reach `linalg`, and both also reach the GEMV in `vec` -- which is where an LLM decode loop spends nearly all of its time:
 
-- [**Tuned BLAS acceleration (`--blas`)**](blas-acceleration.md) -- the matrix product through a library blocked for the machine's cache hierarchy.
-- [**GPU acceleration (`--gpu`)**](gpu-acceleration.md) -- that product, the element-wise transcendentals, and the broadcast / axis-fold / axes-transpose shapes on an NVIDIA device or on Apple Silicon.
+- [**Tuned BLAS acceleration (`--blas`)**](blas-acceleration.md) -- `linalg`'s matrix product and `vec:matvec` / `vec:matvec-into`, through a library blocked for the machine's cache hierarchy.
+- [**GPU acceleration (`--gpu`)**](gpu-acceleration.md) -- that product and `vec:matvec`, the element-wise transcendentals, and the broadcast / axis-fold / axes-transpose shapes on an NVIDIA device or on Apple Silicon.
 
 The three are orthogonal: pass any combination, or none. [How the three flags compose](gpu-acceleration.md#how-the-three-flags-compose) describes the order they are asked in when more than one is on. `--parallel` is not a fourth rung of that chain but a modifier of `--simd`: where the chain reaches the lane kernel, it reaches the row-parallel one.
 
 ## Runnable examples
 
-[`examples/ml/blas-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/blas-matmul.lisp) is on the [`--blas` page](blas-acceleration.md#a-runnable-example): it is one `linalg:matmul` and nothing else, which is what makes it the one example a `linalg:` acceleration flag reaches. The `vec:` examples here are untouched by `--blas` and `--gpu` alike -- both intercept `linalg:` calls, which no `vec:` program makes.
+[`examples/ml/blas-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/blas-matmul.lisp) is on the [`--blas` page](blas-acceleration.md#a-runnable-example): it is one `linalg:matmul` at linalg's default width and nothing else. The `vec:` examples below are reached by `--blas` and `--gpu` too, through `vec:matvec` -- every one of them but `simd-dot`, whose single reduction is memory-bound and stays on the lane kernel.
 
 The smallest of them is [`examples/ml/simd-dot.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-dot.lisp): one `vec:dot` over 1024 doubles, four thousand times, and nothing else. Its vector holds `0.0 .. 1023.0`, so the answer is an exact integer that no amount of lane reordering can change -- run it with and without `--simd` and only the elapsed time moves (interpreter 2.59 s -> 2.3 ms; wasm-GC 273 ms -> 2.4 ms).
 

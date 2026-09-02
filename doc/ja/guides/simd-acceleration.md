@@ -141,7 +141,7 @@ wasm-GC にも線形メモリはありますが、パックド配列がそこに
 
 ## ハードウェアアクセラレーション(任意)
 
-スカラーの `vec.lisp` 基準はすべてのバックエンドで正しく動きます。`--simd` は、ベクトル化可能なカーネル(`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` と 4 つの演算子別名、単項 ufunc の `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`、比較セレクトの `maximum` / `minimum` / `relu` / `clip`、およびそれらすべての `-into` 版、さらに波及的に `mean` / `norm` / `square`)を実際の CPU ベクトル命令または脱ボックス化されたループに追加でロワリングする、バックエンド非依存の唯一のスイッチです。オプトインです。要素ごとのカーネルはスカラー基準とバイト単位で同一のままですが、リダクションは加算順序が異なり、単精度のリダクションはさらに単精度で累算します。したがってリダクションはスカラー基準と食い違うことがあります。後述の精度に関する 2 つの段落を参照してください。同じフラグは `linalg` の一群の関数も加速します。それらは次節に挙げます。さらに直交するフラグが 2 つあり、それぞれ独立したページになっています。[`--blas`](blas-acceleration.md) は `linalg` の行列積を OS のチューニング済み BLAS へ、[`--gpu`](gpu-acceleration.md) はその行列積、要素ごとの超越関数、そしてブロードキャスト・軸方向の畳み込み・軸リストの転置の形を GPU へ振り向けます。
+スカラーの `vec.lisp` 基準はすべてのバックエンドで正しく動きます。`--simd` は、ベクトル化可能なカーネル(`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` と 4 つの演算子別名、単項 ufunc の `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`、比較セレクトの `maximum` / `minimum` / `relu` / `clip`、およびそれらすべての `-into` 版、さらに波及的に `mean` / `norm` / `square`)を実際の CPU ベクトル命令または脱ボックス化されたループに追加でロワリングする、バックエンド非依存の唯一のスイッチです。オプトインです。要素ごとのカーネルはスカラー基準とバイト単位で同一のままですが、リダクションは加算順序が異なり、単精度のリダクションはさらに単精度で累算します。したがってリダクションはスカラー基準と食い違うことがあります。後述の精度に関する 2 つの段落を参照してください。同じフラグは `linalg` の一群の関数も加速します。それらは次節に挙げます。さらに直交するフラグが 2 つあり、それぞれ独立したページになっています。[`--blas`](blas-acceleration.md) は行列積 — `linalg` のものと `vec:matvec` / `vec:matvec-into` — を OS のチューニング済み BLAS へ、[`--gpu`](gpu-acceleration.md) は `linalg` の行列積と `vec:matvec`、要素ごとの超越関数、そしてブロードキャスト・軸方向の畳み込み・軸リストの転置の形を GPU へ振り向けます。
 
 どのメモリモデル向けにコンパイルするか(`.class`・wasm-GC `.wasm`・`--no-gc` `.wasm`)と、`--simd` を渡すかどうかは**直交する**軸です。
 
@@ -211,16 +211,16 @@ GC 配列からレーングループを読むと、線形メモリからの `v12
 
 ## `--simd` の先へ
 
-CPU をホストとするバックエンドでは、`linalg` にはさらに 2 つのアクセラレーションフラグが届きます。それぞれ独立したページがあり、どちらも `vec` には関係しません。
+CPU をホストとするバックエンドでは、行列積にさらに 2 つのアクセラレーションフラグが届きます。それぞれ独立したページがあります。どちらも `linalg` に届き、どちらも `vec` の GEMV にも届きます — LLM のデコードループがほぼすべての時間を費やすのがそこだからです。
 
-- [**チューニング済み BLAS によるアクセラレーション(`--blas`)**](blas-acceleration.md) — 行列積を、マシンのキャッシュ階層向けにブロック化されたライブラリへ。
-- [**GPU アクセラレーション(`--gpu`)**](gpu-acceleration.md) — その行列積、要素ごとの超越関数、そしてブロードキャスト・軸方向の畳み込み・軸リストの転置の形を NVIDIA のデバイスや Apple Silicon へ。
+- [**チューニング済み BLAS によるアクセラレーション(`--blas`)**](blas-acceleration.md) — `linalg` の行列積と `vec:matvec` / `vec:matvec-into` を、マシンのキャッシュ階層向けにブロック化されたライブラリへ。
+- [**GPU アクセラレーション(`--gpu`)**](gpu-acceleration.md) — その行列積と `vec:matvec`、要素ごとの超越関数、そしてブロードキャスト・軸方向の畳み込み・軸リストの転置の形を NVIDIA のデバイスや Apple Silicon へ。
 
 3 つは直交していて、どの組み合わせでも、どれも付けなくても構いません。複数を同時に付けたときにどの順で問い合わせるかは[3 つのフラグはどう合成されるのか](gpu-acceleration.md#how-the-three-flags-compose)を参照してください。`--parallel` はその連鎖の 4 段目ではなく `--simd` の修飾子です。連鎖がレーンカーネルに届くところで、行並列のカーネルに届きます。
 
 ## 実行できる例
 
-[`examples/ml/blas-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/blas-matmul.lisp) は [`--blas` のページ](blas-acceleration.md#a-runnable-example)にあります。`linalg:matmul` 1 回だけで他に何もしないという性質が、`linalg:` のアクセラレーションフラグが届く唯一の例にしています。以下の `vec:` の例は `--blas` にも `--gpu` にもまったく影響されません。どちらも横取りするのは `linalg:` の呼び出しで、`vec:` のプログラムはそれを呼ばないからです。
+[`examples/ml/blas-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/blas-matmul.lisp) は [`--blas` のページ](blas-acceleration.md#a-runnable-example)にあります。linalg のデフォルト幅での `linalg:matmul` 1 回だけで、他に何もしません。以下の `vec:` の例にも `--blas` と `--gpu` は `vec:matvec` を通して届きます。届かないのは `simd-dot` だけで、その 1 回のリダクションはメモリ律速なのでレーンカーネルのままです。
 
 この中で最小のものは [`examples/ml/simd-dot.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-dot.lisp) です。1024 個の double に対する `vec:dot` を 4000 回、それだけ。ベクトルは `0.0 .. 1023.0` を保持するので答えは厳密な整数であり、レーンをどう並べ替えても変わりません。`--simd` の有無で実行すると、動くのは経過時間だけです(インタプリタ 2.59 秒 -> 2.3 ms、wasm-GC 273 ms -> 2.4 ms)。
 

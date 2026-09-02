@@ -60,6 +60,31 @@ class LinalgBlasDeclineTest {
 	}
 
 	@Test
+	void theVecGemvRunsTheSameProgramToTheSameOutputWithOrWithoutALibrary() {
+		// Exact integers, so a machine WITH a tuned library lands on the same bits the
+		// scalar defun produces and a machine without one runs that defun.
+		String program = """
+				(defparameter *w* (make-array '(8 8) :element-type 'double-float :initial-element 0.0))
+				(dotimes (i 8) (dotimes (j 8) (setf (aref *w* i j) (float (+ (* i 8) j 1)))))
+				(defparameter *x* (vec:arange 8))
+				(list (vec:to-list (vec:matvec *w* *x*))
+				      (vec:to-list (vec:matvec-into (vec:zeros 8) *w* *x*)))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+	@Test
+	void theWholeRestOfVecIsUntouched() {
+		String program = """
+				(defparameter *v* (vec:arange 16))
+				(list (vec:sum *v*) (vec:dot *v* *v*) (vec:norm *v*)
+				      (vec:to-list (vec:add *v* *v*)) (vec:to-list (vec:scale *v* 2.0))
+				      (vec:to-list (vec:relu (vec:sub *v* (vec:scale (vec:ones 16) 8.0)))))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+	@Test
 	void theWholeRestOfLinalgIsUntouched() {
 		String program = """
 				(defparameter *a* (linalg:reshape (linalg:arange 1 17) '(4 4)))

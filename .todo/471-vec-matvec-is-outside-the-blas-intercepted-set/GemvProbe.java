@@ -20,8 +20,20 @@ public class GemvProbe {
 	static final AddressLayout P = ValueLayout.ADDRESS;
 	static final int ROW = 101, NT = 111;
 	static MethodHandle sgemv, dgemv;
+	/** The library to time, overridable so the probe runs off macOS: see README.md. */
+	static String library() {
+		for (String name : new String[] { "PROBE_BLAS", "RONTOLISP_BLAS" }) {
+			String value = System.getenv(name);
+			if (value != null && !value.isEmpty()) {
+				return value;
+			}
+		}
+		return System.getProperty("os.name", "").contains("Mac")
+				? "/System/Library/Frameworks/Accelerate.framework/Accelerate" : "libopenblas.so.0";
+	}
+
 	static {
-		var lk = SymbolLookup.libraryLookup("/System/Library/Frameworks/Accelerate.framework/Accelerate", Arena.global());
+		var lk = SymbolLookup.libraryLookup(library(), Arena.global());
 		sgemv = L.downcallHandle(lk.find("cblas_sgemv").orElseThrow(),
 				FunctionDescriptor.ofVoid(I, I, I, I, F, P, I, P, I, F, P, I), Linker.Option.critical(true));
 		dgemv = L.downcallHandle(lk.find("cblas_dgemv").orElseThrow(),
@@ -29,6 +41,7 @@ public class GemvProbe {
 	}
 
 	public static void main(String[] a) throws Throwable {
+		System.out.println("library: " + library() + "   (set PROBE_BLAS to time another one)");
 		System.out.printf("%-14s %14s %14s %10s   %s%n", "rows x cols", "lane kernel", "cblas gemv", "ratio", "max rel diff");
 		for (int[] s : new int[][] { { 256, 256 }, { 288, 288 }, { 288, 768 }, { 768, 288 }, { 4096, 288 }, { 2048, 2048 } }) {
 			bench32(s[0], s[1]);
