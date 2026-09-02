@@ -107,11 +107,12 @@ whether or not a fold exists).
   `string-equal`, `alpha-char-p`), none of which is in this table.
 - **String and list measurement** — `length char schar string= nth car first second
   third`. A string is indexed by code point everywhere.
-- **String production** — `symbol-name princ-to-string prin1-to-string` fold to plain
-  literals; the FRESH-STRING producers (`string-upcase` / `string-downcase` /
-  `concatenate 'string` / `subseq`) fold to a `(%str-fresh "...")` constant that
-  materializes a fresh MUTABLE string per evaluation — see "The fresh-string
-  producers fold to a per-evaluation copy" below.
+- **String production** — `symbol-name` and the expander's internal piece
+  conversions `%princ-piece` / `%prin1-piece` fold to plain literals; the
+  FRESH-STRING producers (`string-upcase` / `string-downcase` / `concatenate 'string`
+  / `subseq` / `princ-to-string` / `prin1-to-string`) fold to a `(%str-fresh "...")`
+  constant that materializes a fresh MUTABLE string per evaluation — see "The
+  fresh-string producers fold to a per-evaluation copy" below.
 - **The packed literal table** — `coerce` and `make-array`, and ONLY into an
   `(unsigned-byte 8|16|32)` vector. `(coerce '(<literals>) '(vector (unsigned-byte
   32)))` is how every CL library spells a lookup table, and building it at run time
@@ -237,8 +238,10 @@ The rule this pass commits to, in order:
   `(cdr '(1 2 3))` and `(nth 0 '((1) (2)))` decline by construction while
   `(nth 1 '(a b c))` folds.
   A STRING result folds as a PLAIN literal only for producers whose runtime answer is
-  itself an immutable value with no writable identity (`symbol-name`,
-  `princ-to-string`, `prin1-to-string`). The premise this paragraph used to rest on —
+  itself an immutable value with no writable identity (`symbol-name`, and the
+  internal `%princ-piece` / `%prin1-piece` the expander builds pieces with;
+  `princ-to-string` / `prin1-to-string` joined the fresh-string producers in the
+  fourth round of `.kb/string-write-runtime.md`). The premise this paragraph used to rest on —
   "a string literal materializes FRESH on each evaluation on both compile backends" —
   is measured FALSE today: a literal is ONE shared object on all four backends
   (`(eq (fs) (fs))` is `T`, `.kb/string-write-runtime.md`), and the compiled results
@@ -376,7 +379,7 @@ program defines `+`. Names are matched by both the exact spelling and the
 package-stripped member name, so a library's `(defun cl-user::length ...)` blocks
 `length` too.
 
-**A program that mentions `*print-case*` blocks `princ-to-string` / `prin1-to-string`**
+**A program that mentions `*print-case*` blocks `princ-to-string` / `prin1-to-string` (and their `%princ-piece` / `%prin1-piece` pieces)**
 (2026-08-15, `.todo/041`): `nil` and `t` render as SYMBOLS, so
 `(princ-to-string nil)` is `"nil"` under a `:downcase` binding and the two entries stop
 being constant. The block is on the OPERATORS rather than on the two literal types --

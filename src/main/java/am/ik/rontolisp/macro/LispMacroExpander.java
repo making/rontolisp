@@ -20603,13 +20603,13 @@ public final class LispMacroExpander {
 				// one call (.kb/format.md).
 				case 'w' -> {
 					flushFmtLiteral(lit, ops);
-					ops.add(new FmtString(fmtCall(LispNames.PRIN1_TO_STRING, args.next(directive))));
+					ops.add(new FmtString(fmtCall(LispNames.PRIN1_PIECE_INTERNAL, args.next(directive))));
 				}
 				case 'a', 's' -> {
 					flushFmtLiteral(lit, ops);
 					LispVal arg = args.next(directive);
-					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1_TO_STRING
-							: LispNames.PRINC_TO_STRING;
+					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1_PIECE_INTERNAL
+							: LispNames.PRINC_PIECE_INTERNAL;
 					LispVal base = fmtCall(op, arg);
 					if (colon) {
 						base = makeIf(arg, base, new LispString("()"));
@@ -20624,7 +20624,7 @@ public final class LispMacroExpander {
 					LispVal arg = args.next(directive);
 					LispVal base = (colon || at)
 							? decimalExpr(arg, colon, fmtCommaChar(params, 2), fmtInterval(params, 3), at)
-							: fmtCall(LispNames.PRINC_TO_STRING, arg);
+							: fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 1, ' '), true);
 					}
@@ -20664,16 +20664,17 @@ public final class LispMacroExpander {
 					LispVal arg = args.next(directive);
 					LispVal base;
 					if (at) {
-						base = fmtCall(LispNames.PRIN1_TO_STRING, arg);
+						base = fmtCall(LispNames.PRIN1_PIECE_INTERNAL, arg);
 					}
 					else if (colon) {
 						// prin1 of a character is "#\name"; dropping the #\ prefix
 						// yields the glyph for graphic characters and the standard
 						// name (Newline, Space, ...) for non-graphic ones.
-						base = fmtCall(LispNames.SUBSEQ, fmtCall(LispNames.PRIN1_TO_STRING, arg), new LispInteger(2));
+						base = fmtCall(LispNames.SUBSEQ, fmtCall(LispNames.PRIN1_PIECE_INTERNAL, arg),
+								new LispInteger(2));
 					}
 					else {
-						base = fmtCall(LispNames.PRINC_TO_STRING, arg);
+						base = fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
 					}
 					ops.add(new FmtString(base));
 				}
@@ -20684,7 +20685,7 @@ public final class LispMacroExpander {
 					LispVal value = (scale == 0) ? arg
 							: fmtCall(LispNames.MUL, arg, new LispDouble(Math.pow(10, scale)));
 					LispVal base = fmtHasParam(params, 1) ? decimalFloatExpr(value, fmtParam(params, 1), null, at)
-							: fmtCall(LispNames.PRINC_TO_STRING, value);
+							: fmtCall(LispNames.PRINC_PIECE_INTERNAL, value);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 4, ' '), true);
 					}
@@ -21103,7 +21104,7 @@ public final class LispMacroExpander {
 		LispSymbol nstr = new LispSymbol("__fmtn");
 		LispSymbol neg = new LispSymbol("__fmtneg");
 		LispSymbol dig = new LispSymbol("__fmtd");
-		LispVal nstrInit = fmtCall(LispNames.PRINC_TO_STRING, arg);
+		LispVal nstrInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
 		LispVal negInit = fmtCall(LispNames.LT, arg, new LispInteger(0));
 		LispVal digInit = makeIf(neg, fmtCall(LispNames.SUBSEQ, nstr, new LispInteger(1)), nstr);
 		LispVal grouped = comma ? groupExpr(dig, commaChar, interval) : dig;
@@ -21115,7 +21116,7 @@ public final class LispMacroExpander {
 		// The same CLHS 22.3.2 rule as radixIntegerExpr, and the same runtime renderer
 		// to agree with (%fmt-dec). Plain ~D is already princ-to-string; this is the
 		// ~:D / ~@D arm, which would otherwise compare a non-number against zero.
-		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.PRINC_TO_STRING, arg));
+		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg));
 	}
 
 	/** Builds the comma-grouping loop over a string of digits. */
@@ -21224,13 +21225,13 @@ public final class LispMacroExpander {
 		LispVal ovfInit = fmtCall(LispNames.GE, sc, new LispInteger(pd1));
 		LispVal sc2Init = makeIf(ovf, new LispInteger(pd), sc);
 		LispVal eefInit = makeIf(ovf, fmtCall(LispNames.ADD, ee, new LispInteger(1)), ee);
-		LispVal sInit = fmtCall(LispNames.PRINC_TO_STRING, sc2);
+		LispVal sInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, sc2);
 		LispVal ipInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(0), new LispInteger(1));
 		LispVal frInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(1));
 		// Exponent suffix: always-signed, magnitude printed as an integer.
 		LispVal eneg = fmtCall(LispNames.LT, eef, new LispInteger(0));
 		LispVal esign = makeIf(eneg, new LispString("-"), new LispString("+"));
-		LispVal eabs = fmtCall(LispNames.PRINC_TO_STRING,
+		LispVal eabs = fmtCall(LispNames.PRINC_PIECE_INTERNAL,
 				makeIf(eneg, fmtCall(LispNames.SUB, new LispInteger(0), eef), eef));
 		if (expDigits > 0) {
 			eabs = padExpr(eabs, new LispInteger(expDigits), new LispString("0"), true);
@@ -21306,7 +21307,7 @@ public final class LispMacroExpander {
 		if (idx < params.size() && !(params.get(idx) instanceof LispNil)) {
 			// A runtime (v) parameter, or a substituted literal that is not a character
 			// (a string, say): the pad is its printed text.
-			return fmtCall(LispNames.PRINC_TO_STRING, params.get(idx));
+			return fmtCall(LispNames.PRINC_PIECE_INTERNAL, params.get(idx));
 		}
 		return new LispString(String.valueOf(def));
 	}
@@ -21432,10 +21433,10 @@ public final class LispMacroExpander {
 		if (expr instanceof LispCons call && call.isProperList() && call.car() instanceof LispSymbol head) {
 			List<LispVal> parts = call.toList();
 			if (parts.size() == 2) {
-				if (LispNames.PRINC_TO_STRING.equals(head.name())) {
+				if (LispNames.PRINC_PIECE_INTERNAL.equals(head.name())) {
 					return fmtCall(LispNames.PRINC, parts.get(1));
 				}
-				if (LispNames.PRIN1_TO_STRING.equals(head.name())) {
+				if (LispNames.PRIN1_PIECE_INTERNAL.equals(head.name())) {
 					return fmtCall(LispNames.PRIN1, parts.get(1));
 				}
 			}
@@ -21581,7 +21582,7 @@ public final class LispMacroExpander {
 		LispVal negInit = fmtCall(LispNames.LT, arg, new LispInteger(0));
 		LispVal mInit = makeIf(neg, fmtCall(LispNames.SUB, new LispInteger(0), arg), arg);
 		// Digit character: 0-9 then uppercase A-Z (48 = '0', 55 = 'A' - 10).
-		LispVal digitChar = fmtCall(LispNames.PRINC_TO_STRING,
+		LispVal digitChar = fmtCall(LispNames.PRINC_PIECE_INTERNAL,
 				fmtCall(LispNames.CODE_CHAR,
 						makeIf(fmtCall(LispNames.LT, d, new LispInteger(10)),
 								fmtCall(LispNames.ADD, new LispInteger(48), d),
@@ -21605,7 +21606,7 @@ public final class LispMacroExpander {
 		// without the same guard here the two paths disagree, and the static one dies
 		// inside the digit loop -- cl-unicode spells a Hangul syllable name with
 		// (format nil "HANGUL SYLLABLE ~X" "GA").
-		return makeIf(fmtCall(LispNames.INTEGERP, arg), digits, fmtCall(LispNames.PRINC_TO_STRING, arg));
+		return makeIf(fmtCall(LispNames.INTEGERP, arg), digits, fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg));
 	}
 
 	/**
@@ -21623,7 +21624,7 @@ public final class LispMacroExpander {
 				fmtCall(LispNames.SUB, new LispDouble(0.0), v), v);
 		LispVal fixedRange = fmtCall(LispNames.OR, fmtCall(LispNames.EQ, a, new LispDouble(0.0)), fmtCall(LispNames.AND,
 				fmtCall(LispNames.GE, a, new LispDouble(0.1)), fmtCall(LispNames.LT, a, new LispDouble(1.0e16))));
-		LispVal fixed = fmtCall(LispNames.PRINC_TO_STRING, v);
+		LispVal fixed = fmtCall(LispNames.PRINC_PIECE_INTERNAL, v);
 		if (plus) {
 			fixed = fmtCall(LispNames.STRING_CONCAT,
 					makeIf(fmtCall(LispNames.LT, v, new LispDouble(0.0)), new LispString(""), new LispString("+")),
@@ -22414,15 +22415,15 @@ public final class LispMacroExpander {
 		LispVal slotMsg = objRef(condVar, 0);
 		LispVal isSimpleWithMessage = listToCons(List.of(new LispSymbol(LispNames.AND),
 				objIs(condVar, SIMPLE_CONDITION_TAGS), callOf(LispNames.STRINGP, slotMsg)));
-		LispVal typeMessage = listToCons(List.of(
-				new LispSymbol(LispNames.STRING_CONCAT), listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
-						new LispString("Condition of type "), listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
-								callOf(LispNames.PRIN1_TO_STRING, tag), new LispInteger(7))))),
+		LispVal typeMessage = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
+				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Condition of type "),
+						listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
+								callOf(LispNames.PRIN1_PIECE_INTERNAL, tag), new LispInteger(7))))),
 				new LispString(" was signalled.")));
 		// A value that is not an instance at all has no tag to name, so it signals as its
 		// own printed representation rather than off the end of a nil tag.
 		LispVal fallback = makeIf(listToCons(List.of(new LispSymbol(LispNames.OBJ_P), condVar)), typeMessage,
-				callOf(LispNames.PRINC_TO_STRING, condVar));
+				callOf(LispNames.PRINC_PIECE_INTERNAL, condVar));
 		LispVal message = makeIf(isSimpleWithMessage, slotMsg, fallback);
 		if (closRegistry.routesConditionReports()) {
 			message = conditionReportOr(condVar, message);
@@ -22448,7 +22449,7 @@ public final class LispMacroExpander {
 		// A runtime SYMBOL datum (the compiled #'error/#'signal/#'warn wrappers forward
 		// the datum only) signals its name as a plain message rather than casting the
 		// symbol as a condition instance.
-		LispVal symbolMessage = callOf(LispNames.PRINC_TO_STRING, condVar);
+		LispVal symbolMessage = callOf(LispNames.PRINC_PIECE_INTERNAL, condVar);
 		LispVal symbolCase;
 		if (warn) {
 			symbolCase = listToCons(List.of(new LispSymbol(internalName), listToCons(
@@ -22478,7 +22479,7 @@ public final class LispMacroExpander {
 				symbolCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 						callOf(LispNames.RUN_HANDLERS_INTERNAL,
 								objNew(simpleTag,
-										List.of(callOf(LispNames.PRINC_TO_STRING, condVar), LispNil.INSTANCE))),
+										List.of(callOf(LispNames.PRINC_PIECE_INTERNAL, condVar), LispNil.INSTANCE))),
 						symbolCase));
 			}
 			else {
@@ -22490,7 +22491,7 @@ public final class LispMacroExpander {
 								callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
 								listToCons(List.of(new LispSymbol(throwInternal), instVar, stringMessage)))));
 				LispSymbol symMsgVar = new LispSymbol(SIGNAL_SYMBOL_MSG_VAR);
-				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_TO_STRING, condVar),
+				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_PIECE_INTERNAL, condVar),
 						makeLet(SIGNAL_INST_VAR, objNew(simpleTag, List.of(symMsgVar, LispNil.INSTANCE)),
 								listToCons(List.of(new LispSymbol(LispNames.PROGN),
 										callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
@@ -24004,7 +24005,7 @@ public final class LispMacroExpander {
 		LispSymbol g = new LispSymbol("__sd_x");
 		LispVal designatorp = fmtCall(LispNames.OR, callOf(LispNames.STRINGP, g), callOf(LispNames.SYMBOLP, g),
 				callOf(LispNames.CHARACTERP, g));
-		LispVal coerced = callOf(LispNames.PRINC_TO_STRING, g);
+		LispVal coerced = callOf(LispNames.PRINC_PIECE_INTERNAL, g);
 		LispVal signal = mvCall(LispNames.ERROR,
 				new LispString(LispNames.STRING + " expects a string designator, got: ~s"), g);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(g, arg)))),
@@ -24274,7 +24275,7 @@ public final class LispMacroExpander {
 			// %seq-to-string conversion carries the join once for the whole program.
 			accInit = LispNil.INSTANCE;
 			accStep = listToCons(List.of(new LispSymbol(LispNames.CONS),
-					listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), call)), accVar));
+					listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL), call)), accVar));
 			resultForm = joinStringPiecesReversed(accVar);
 		}
 		else if ("LIST".equals(resultType)) {
@@ -25528,7 +25529,10 @@ public final class LispMacroExpander {
 	 *
 	 * The fallback inside {@code %print-object-str} uses the RAW conversions, so nothing
 	 * here re-enters itself. {@code format}'s {@code ~A}/{@code ~S} need no case of their
-	 * own: they lower to {@code princ-to-string}/{@code prin1-to-string}, which do.
+	 * own: they lower to the internal piece conversions {@code %princ-piece} /
+	 * {@code %prin1-piece} ({@link LispNames#PRINC_PIECE_INTERNAL}), which rewrite
+	 * exactly as the two public names do -- the pieces differ from the public names only
+	 * in the mutable-result wrap the backends add AFTER this hook, not in the routing.
 	 *
 	 * <p>
 	 * The SECOND reason to rewrite is a condition's {@code :report}
@@ -25550,9 +25554,11 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		String op = ((LispSymbol) parts.get(0)).name();
-		boolean escape = !LispNames.PRINC.equals(op) && !LispNames.PRINC_TO_STRING.equals(op);
+		boolean escape = !LispNames.PRINC.equals(op) && !LispNames.PRINC_TO_STRING.equals(op)
+				&& !LispNames.PRINC_PIECE_INTERNAL.equals(op);
 		if (LispNames.PRINC_TO_STRING.equals(op) || LispNames.PRIN1_TO_STRING.equals(op)
-				|| LispNames.WRITE_TO_STRING.equals(op)) {
+				|| LispNames.WRITE_TO_STRING.equals(op) || LispNames.PRINC_PIECE_INTERNAL.equals(op)
+				|| LispNames.PRIN1_PIECE_INTERNAL.equals(op)) {
 			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, closRegistry, printCase) : null;
 		}
 		if (parts.size() < 2 || parts.size() > 3) {
@@ -25651,7 +25657,8 @@ public final class LispMacroExpander {
 		}
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, text)));
 		LispVal spelled = makeIf(new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
-				fmtCall(LispNames.PRIN1_TO_STRING, designator), fmtCall(LispNames.PRINC_TO_STRING, designator));
+				fmtCall(LispNames.PRIN1_PIECE_INTERNAL, designator),
+				fmtCall(LispNames.PRINC_PIECE_INTERNAL, designator));
 		LispVal bindings = listToCons(List.of(
 				listToCons(List.of(designator, fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, obj))),
 				listToCons(List.of(text, spelled)), listToCons(List.of(size, fmtCall(LispNames.LENGTH, text)))));
@@ -27140,10 +27147,10 @@ public final class LispMacroExpander {
 		// "#:<prefix><n>" text the interpreter's native computed-prefix gensym prints.
 		// intern turns the assembled name back into a symbol (a name starting with "#:"
 		// IS the uninterned spelling here).
-		LispVal freshSuffix = listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING),
+		LispVal freshSuffix = listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL),
 				listToCons(List.of(new LispSymbol(LispNames.GENSYM), new LispString("")))));
 		LispVal head = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("#:"),
-				listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), prefixForm))));
+				listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL), prefixForm))));
 		return listToCons(List.of(new LispSymbol(LispNames.INTERN),
 				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), head, freshSuffix))));
 	}

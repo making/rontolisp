@@ -335,6 +335,8 @@ public final class PureBuiltinFolder {
 		if (usesPrintCase) {
 			blocked.add(LispNames.PRINC_TO_STRING);
 			blocked.add(LispNames.PRIN1_TO_STRING);
+			blocked.add(LispNames.PRINC_PIECE_INTERNAL);
+			blocked.add(LispNames.PRIN1_PIECE_INTERNAL);
 		}
 		return blocked;
 	}
@@ -958,16 +960,19 @@ public final class PureBuiltinFolder {
 		t.put(LispNames.THIRD, args -> args.size() == 1 ? listElement(args.get(0), 2) : null);
 		// -- string production --------------------------------------------------
 		t.put(LispNames.SYMBOL_NAME, args -> args.size() == 1 ? symbolName(args.get(0)) : null);
-		t.put(LispNames.PRINC_TO_STRING, args -> args.size() == 1 ? renderedLiteral(args.get(0), false) : null);
-		t.put(LispNames.PRIN1_TO_STRING, args -> args.size() == 1 ? renderedLiteral(args.get(0), true) : null);
 		// The FRESH-STRING producers fold to a FOLD-FRESH value, not to a plain
 		// literal: their compiled results are MUTABLE character vectors with identity
 		// (MutableStringProducers), so a fold to one shared literal would forge the
 		// aliasing the producer flip provides. foldedLiteral spells a marked value as
 		// (%str-fresh "..."), which the backends compile as the literal plus one
 		// mutable-copy wrap -- the constant stays a constant, each evaluation answers
-		// a fresh mutable string. symbol-name / princ-to-string / prin1-to-string fold
-		// to plain literals: their runtime producers still answer immutable values.
+		// a fresh mutable string. symbol-name and the expander's internal piece
+		// conversions (%princ-piece / %prin1-piece) fold to plain literals: their
+		// runtime producers still answer immutable values.
+		t.put(LispNames.PRINC_TO_STRING, args -> args.size() == 1 ? renderedFresh(args.get(0), false) : null);
+		t.put(LispNames.PRIN1_TO_STRING, args -> args.size() == 1 ? renderedFresh(args.get(0), true) : null);
+		t.put(LispNames.PRINC_PIECE_INTERNAL, args -> args.size() == 1 ? renderedLiteral(args.get(0), false) : null);
+		t.put(LispNames.PRIN1_PIECE_INTERNAL, args -> args.size() == 1 ? renderedLiteral(args.get(0), true) : null);
 		t.put(LispNames.STRING_UPCASE, args -> caseFoldString(args, true));
 		t.put(LispNames.STRING_DOWNCASE, args -> caseFoldString(args, false));
 		t.put(LispNames.CONCATENATE, args -> {
@@ -1392,6 +1397,17 @@ public final class PureBuiltinFolder {
 			default -> null;
 		};
 		return text == null || text.length() > MAX_FOLDED_CHARS ? null : new LispString(text);
+	}
+
+	/**
+	 * {@link #renderedLiteral} for the public {@code princ-to-string} /
+	 * {@code prin1-to-string}: the same text, marked FOLD-FRESH, because their compiled
+	 * result is a mutable character vector with identity and a shared literal would forge
+	 * the aliasing the flip provides.
+	 */
+	private static @Nullable LispVal renderedFresh(LispVal value, boolean readably) {
+		LispVal rendered = renderedLiteral(value, readably);
+		return rendered instanceof LispString s ? LispString.foldFresh(s.value()) : rendered;
 	}
 
 }

@@ -202,6 +202,16 @@ public final class FoldDifferential {
 		add(probes, "prin1-to-string", "#\\a");
 		add(probes, "prin1-to-string", "42");
 		add(probes, "prin1-to-string", "3.14159");
+		// The expander's internal piece conversions: the same rendering as the two
+		// public names, folded to a PLAIN literal (a piece never reaches the program,
+		// so it needs no fresh copy), while the public names fold to the fresh-string
+		// constant below.
+		add(probes, "%princ-piece", "42");
+		add(probes, "%princ-piece", "\"hi\"");
+		add(probes, "%princ-piece", "nil");
+		add(probes, "%princ-piece", "1.21");
+		add(probes, "%prin1-piece", "\"hi\"");
+		add(probes, "%prin1-piece", "#\\a");
 		// CL folds character by character, so no mapping changes the length -- and the
 		// mapping is the full Unicode one on every backend, supplementary planes
 		// included. These four are the FRESH-STRING producers: they fold to a

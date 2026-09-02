@@ -244,6 +244,26 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void anExpanderBuiltStringPieceIsTheInternalConversionNotThePublicProducer() {
+		// The public princ-to-string / prin1-to-string are flipped producers: on the
+		// compile paths each call finishes with a mutable-result conversion. The
+		// expander builds its own string PIECES with the same rendering -- every ~a /
+		// ~s / ~d, map 'string's per-ELEMENT accumulator, a condition's default
+		// message -- and spelling those with the public name had measured 17-80% on the
+		// whole string-building family (.kb/string-write-runtime.md, "The fourth
+		// round"). The pieces name the internal %princ-piece / %prin1-piece instead; if
+		// a public name comes back into an expansion, that cost comes back with it.
+		String pieces = expandOne("(format nil \"~a ~s ~d ~c\" a b c d)");
+		assertThat(pieces).contains("%PRINC-PIECE").contains("%PRIN1-PIECE");
+		assertThat(pieces).doesNotContain("(PRINC-TO-STRING ").doesNotContain("(PRIN1-TO-STRING ");
+		String toStream = expandOne("(format t \"~a\" a)");
+		assertThat(toStream).doesNotContain("PRINC-TO-STRING");
+		LispCons map = (LispCons) LispReader.readAllFromString("(map 'string #'char-upcase s)").get(0);
+		String accumulator = LispMacroExpander.expandMap(map).print();
+		assertThat(accumulator).contains("%PRINC-PIECE").doesNotContain("PRINC-TO-STRING");
+	}
+
+	@Test
 	void aStringWriteSiteIsOneCallAndNotAnInlinedSubseqConcatRebuild() {
 		// A rank-1 array place may hold a string at run time, so (setf (aref v i) x)
 		// carries a string arm -- and that arm used to inline the whole rebuild: two

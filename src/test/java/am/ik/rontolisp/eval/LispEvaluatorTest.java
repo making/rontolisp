@@ -10938,6 +10938,22 @@ class LispEvaluatorTest {
 				(with-input-from-string (in "")
 				  (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e)))
 				""").print()).isEqualTo("T");
+		// The fourth round: the print family, including a print-object-routed
+		// rendering (the wrap sits OUTSIDE the routing hook on the compile paths).
+		assertThat(evalMulti("""
+				(let* ((s (princ-to-string 12345)) (a s)) (setf (char s 0) #\\X) (list s a))
+				""").print()).isEqualTo("(\"X2345\" \"X2345\")");
+		assertThat(evalMulti("""
+				(let ((s (prin1-to-string 'foo))) (fill s #\\z) s)
+				""").print()).isEqualTo("\"zzz\"");
+		assertThat(evalMulti("""
+				(let ((s (write-to-string 'bar))) (replace s "Q") s)
+				""").print()).isEqualTo("\"QAR\"");
+		assertThat(evalMulti("""
+				(defstruct t600pt x)
+				(defmethod print-object ((p t600pt) s) (format s "<pt ~a>" (t600pt-x p)))
+				(let* ((s (princ-to-string (make-t600pt :x 7))) (a s)) (setf (char s 0) #\\[) (list s a))
+				""").print()).isEqualTo("(\"[pt 7>\" \"[pt 7>\")");
 	}
 
 	@Test

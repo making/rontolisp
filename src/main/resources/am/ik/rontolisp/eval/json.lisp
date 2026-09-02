@@ -36,7 +36,7 @@
 
 (defun rontolisp::%json-char-string (code)
   ;; A one-unit string holding the given char code (byte or UTF-16 unit).
-  (princ-to-string (code-char code)))
+  (%princ-piece (code-char code)))
 
 (defun rontolisp::%json-pairs (parts)
   ;; One pass of pairwise concatenation over a list of strings.
@@ -350,8 +350,8 @@
   ;; Coerce a hash-table key to a string the way jzon's coerce-key does.
   (cond ((stringp k) k)
         ((symbolp k) (rontolisp::%json-downcase-key (string k)))
-        ((integerp k) (princ-to-string k))
-        ((floatp k) (princ-to-string k))
+        ((integerp k) (%princ-piece k))
+        ((floatp k) (%princ-piece k))
         ((characterp k) (string k))
         (t (error "json-stringify: unsupported hash-table key"))))
 
@@ -417,9 +417,9 @@
   (cond ((eq v t) (cons "true" acc))
         ((eq v 'null) (cons "null" acc))
         ((null v) (cons "false" acc))
-        ((integerp v) (cons (princ-to-string v) acc))
-        ((floatp v) (cons (princ-to-string v) acc))
-        ((rationalp v) (cons (princ-to-string (float v)) acc))
+        ((integerp v) (cons (%princ-piece v) acc))
+        ((floatp v) (cons (%princ-piece v) acc))
+        ((rationalp v) (cons (%princ-piece (float v)) acc))
         ((stringp v) (rontolisp::%json-out-string v acc))
         ((hash-table-p v) (rontolisp::%json-out-hash v acc))
         ((vectorp v) (rontolisp::%json-out-vec v acc))

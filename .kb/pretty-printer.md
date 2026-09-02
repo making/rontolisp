@@ -54,7 +54,7 @@ uses any of it.
 Landed 2026-08-15 (`.todo/041`; the consumer is rove's `(let ((*print-case* :downcase))
 (princ-to-string name))`, `.todo/372` row 12). Binding the variable to `:downcase` or
 `:capitalize` converts the case of every SYMBOL the printer spells -- `princ` / `prin1` /
-`print` / `princ-to-string` / `prin1-to-string` / `write-to-string` / `write` and the
+`print` / `princ-to-string` / `prin1-to-string` / `write-to-string` / `write` (and the internal `%princ-piece` / `%prin1-piece` pieces) and the
 `~A` / `~S` directives, which lower to the two conversions -- on all four backends, with
 text identical to SBCL 2.2.9 (`LispEvaluatorTest.evalPrintCase`,
 `JvmLispCompilerTest.compileAndRunPrintCase`,
@@ -82,7 +82,7 @@ text identical to SBCL 2.2.9 (`LispEvaluatorTest.evalPrintCase`,
   both gets the method first and the case only where no method applies.
   `%print-cased`'s own leaves are the RAW (`%princ-to-string` / `%prin1-to-string`)
   conversions, which is what terminates the recursion.
-- **The pure-builtin fold stands down for `princ-to-string`/`prin1-to-string`** in such a
+- **The pure-builtin fold stands down for `princ-to-string`/`prin1-to-string` and their `%princ-piece` / `%prin1-piece` pieces** in such a
   program (`PureBuiltinFolder.shadowedOperators`): `nil` and `t` render as SYMBOLS, so
   `(princ-to-string nil)` is `"nil"` under `:downcase` and no longer a compile-time
   constant.

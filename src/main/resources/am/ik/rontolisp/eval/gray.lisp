@@ -377,7 +377,7 @@
 
 ;; The line-oriented and print-family helpers. princ/prin1/print RENDER through
 ;; the ordinary value printer and hand the text to stream-write-string, so a
-;; print-object method still decides the text (princ-to-string / prin1-to-string
+;; print-object method still decides the text (%princ-piece / %prin1-piece, the routed conversions
 ;; are what the print-object rewrite hooks) and the Gray stream sees exactly the
 ;; bytes the handle-based built-in would have written -- print's newline
 ;; included, trailing where rontolisp's print puts it.
@@ -386,7 +386,7 @@
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
-          (rontolisp:stream-write-string stream (princ-to-string value))
+          (rontolisp:stream-write-string stream (%princ-piece value))
           value)
         (princ value stream))))
 
@@ -394,7 +394,7 @@
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
-          (rontolisp:stream-write-string stream (prin1-to-string value))
+          (rontolisp:stream-write-string stream (%prin1-piece value))
           value)
         (prin1 value stream))))
 
@@ -402,7 +402,7 @@
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
-          (rontolisp:stream-write-string stream (prin1-to-string value))
+          (rontolisp:stream-write-string stream (%prin1-piece value))
           (rontolisp:stream-terpri stream)
           value)
         (print value stream))))
