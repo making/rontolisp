@@ -136,7 +136,15 @@ public final class LispArray implements LispVal {
 		this.adjustable = adjustable;
 		this.displacedTo = target;
 		this.displacedOffset = offset;
-		this.elementTypeCode = ArrayElementTypes.T;
+		// A view owns NO storage: its elements are the target's, so its element type is
+		// the target's. CL requires the two to be type-equivalent anyway (make-array,
+		// :displaced-to), so this IS the view's declared :element-type in every program
+		// a conforming implementation accepts. Inherited at BIRTH rather than resolved
+		// at every read because an array's element type never changes after it is made,
+		// and the target -- itself possibly a view -- already resolved its own, so one
+		// hop is the whole chain. undisplace() then needs no special case: what the
+		// view answered while displaced is what it answers once it owns its storage.
+		this.elementTypeCode = target.elementTypeCode;
 	}
 
 	/**

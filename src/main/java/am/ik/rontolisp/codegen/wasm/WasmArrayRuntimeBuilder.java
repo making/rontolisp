@@ -465,7 +465,9 @@ final class WasmArrayRuntimeBuilder {
 	 * SBCL 2.2.9 does. The meta OFFSET word doubles as the element-type marker, so the
 	 * resolved target's marker is copied into it (1, the character-vector marker, when
 	 * the chain ends on a string), exactly as {@code %array-adopt-element-type} copies
-	 * it: a grown string view is still a string.
+	 * it: a grown string view is still a string, and a grown view over a
+	 * {@code (unsigned-byte 8)} array still answers {@code (unsigned-byte 8)} -- the same
+	 * marker the view itself answered, since a view's element type IS its target's.
 	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
 	 * {@code TYPE_CALLABLE_BASE + 0})
 	 */
@@ -499,15 +501,16 @@ final class WasmArrayRuntimeBuilder {
 		WasmEmitHelper.castI31GetS(w);
 		set(w, nSlot);
 		// Walk to the end of the chain to decide the marker the view's own offset word
-		// has to become. Only CHARACTER-ness travels: a view over a string (or over a
-		// character vector, whose own marker is 1) HOLDS characters, so it stays a
-		// character vector and stays stringp -- the JVM decides the same thing from its
-		// own header length (7 -> 4). Anything else the chain end merely REMEMBERS is
-		// not the view's own element type and must not become it: an array's element
-		// type is fixed when it is made, and array-element-type answered t for the view
-		// before the un-displace, so it has to answer t after it too. Adopting the
-		// target's remembered type here made adjust-array CHANGE an element type, which
-		// is exactly what .todo/619's invariant forbids.
+		// has to become: the chain end's own marker, or 1 (the character-vector marker)
+		// when the chain ends on a string. That is the marker array-element-type read
+		// for the VIEW while it was still a view -- a view owns no storage, so its
+		// elements are the target's and its element type is the target's, resolved the
+		// same way through the same chain (WasmArrayCompiler's
+		// emitRememberedElementType). Copying it here is therefore not a CHANGE of an
+		// existing array's element type (which .todo/619's invariant forbids) but the
+		// only way to keep the answer: once the displacement drops there is no chain
+		// left to walk. The JVM carries the same fact in its own header (7 -> 4 for a
+		// string view, else the chain end's slot 4 into the freed offset slot).
 		get(w, 0);
 		set(w, curSlot);
 		w.write(Instruction.BLOCK, 0x40);
@@ -540,10 +543,6 @@ final class WasmArrayRuntimeBuilder {
 		consGet(w, 1);
 		WasmEmitHelper.castI31GetS(w);
 		w.write(Instruction.END);
-		// ... which is why the chain end's marker is COMPARED to 1 rather than copied:
-		// the answer is the character-vector marker or nothing at all.
-		i32(w, 1);
-		w.write(Instruction.I32_EQ);
 		set(w, markerSlot);
 		// newData[i] = _arr_get(header, i) -- read through the chain BEFORE the data slot
 		// is replaced, since that is what the reads resolve against.

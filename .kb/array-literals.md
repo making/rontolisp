@@ -322,7 +322,11 @@ change affordable, and it is why the three representations do not agree on the e
   takes the adjusted array's stamp (`%array-adopt-element-type`,
   `.kb/adjustable-arrays.md`).
 - **JVM**: header slot **4**, which is free on every non-displaced array -- slot 3 (the
-  displacement target) is what says whether slot 4 holds an offset instead. The ordinary
+  displacement target) is what says whether slot 4 holds an offset instead. A DISPLACED
+  view has no slot of its own and does not need one: `_arrayElementType` hops to its
+  target and reads the chain end's slot 4, because a view's elements ARE the target's
+  (`.kb/adjustable-arrays.md`, "A displaced view's element type is its TARGET's").
+  The ordinary
   length-3 header grows to 5 (`{dims, fp, adj, null, et}`), and the length-6 PACKED header
   ALREADY HAS the slot (`{dims, null, null, null, et, long[] data}`), so a remembered
   element type never costs `.todo/527`'s packing -- a rank-2 `(unsigned-byte 8)` matrix is
@@ -334,7 +338,8 @@ change affordable, and it is why the three representations do not agree on the e
   fallbacks, which is where the rank -- a RUNTIME fact -- is finally known.
 - **wasm**: the meta MARKER word, `meta.cdr.cdr`, which held only 0 (plain) or 1 (mutable
   character vector) and is read as an offset only on a displaced array (whose data slot
-  holds a target cell). The remembered type is `code + 1`, i.e. 2..7, leaving 1 to the one
+  holds a target cell -- `array-element-type` walks that chain to the end and reads the
+  marker there, `.kb/adjustable-arrays.md`). The remembered type is `code + 1`, i.e. 2..7, leaving 1 to the one
   shape that is a string rather than a general array carrying a type -- so `_charvec_p`,
   the owner of that invariant, is untouched, and `%array-disp-offset`'s existing
   "non-displaced arrays report 0" guard already covers the new values.
