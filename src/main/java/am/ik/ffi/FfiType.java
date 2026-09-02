@@ -27,9 +27,13 @@ import org.jspecify.annotations.Nullable;
 public sealed interface FfiType permits FfiType.Scalar, FfiType.Struct {
 
 	/**
-	 * The memory layout of a value of this type at the calling convention. A
-	 * {@link Scalar#STRING} travels as an address; {@link Scalar#VOID} has none and
-	 * throws.
+	 * The memory layout of a value of this type at the calling convention. An address --
+	 * {@link Scalar#POINTER}, and the {@link Scalar#STRING} that travels as one -- is
+	 * {@code JAVA_LONG} rather than {@code ADDRESS}: on both ABIs the linker serves a
+	 * pointer and a 64-bit integer are the SAME parameter (one integer-class register,
+	 * same width, same alignment), and spelling them as ONE carrier is what collapses the
+	 * shape grid a native image has to ship ({@link FfiRuntime}, "The carriers are
+	 * canonicalised"). {@link Scalar#VOID} has no layout and throws.
 	 * @return the layout
 	 */
 	MemoryLayout layout();
@@ -93,8 +97,8 @@ public sealed interface FfiType permits FfiType.Scalar, FfiType.Struct {
 		INT8(ValueLayout.JAVA_BYTE, false), UINT8(ValueLayout.JAVA_BYTE, true), INT16(ValueLayout.JAVA_SHORT, false),
 		UINT16(ValueLayout.JAVA_SHORT, true), INT32(ValueLayout.JAVA_INT, false), UINT32(ValueLayout.JAVA_INT, true),
 		INT64(ValueLayout.JAVA_LONG, false), UINT64(ValueLayout.JAVA_LONG, true), FLOAT(ValueLayout.JAVA_FLOAT, false),
-		DOUBLE(ValueLayout.JAVA_DOUBLE, false), POINTER(ValueLayout.ADDRESS, false), STRING(ValueLayout.ADDRESS, false),
-		VOID(null, false);
+		DOUBLE(ValueLayout.JAVA_DOUBLE, false), POINTER(ValueLayout.JAVA_LONG, false),
+		STRING(ValueLayout.JAVA_LONG, false), VOID(null, false);
 
 		private final @Nullable ValueLayout valueLayout;
 

@@ -219,19 +219,20 @@ has actually been tried here:
 
 A native image compiles a stub per foreign call **shape** ahead of time, and
 `defcfun` invents shapes at run time, in your program — so the binary ships a
-registered grid. Every narrow integer travels as its 64-bit carrier and every
-pointer or string as `void*`, which collapses a C API's shapes to a few carriers per
-parameter; the grid then covers all pointer/integer argument combinations to arity
-6, with `double` to arity 4 and `float` to arity 2, at every return carrier, and the
-callback shapes to arity 4. In practice a binding's fixed-arity calls just work.
+registered grid. Every narrow integer travels as its 64-bit carrier, and so does
+every pointer and string — to the ABI a pointer and a 64-bit integer are the same
+parameter — which collapses a C API's shapes to three carriers per parameter; the
+grid then covers every pointer/integer call to arity 10, with `double` mixed in to
+arity 4 and `float` to arity 2, at every return carrier, and the callback shapes to
+arity 6. In practice a binding's fixed-arity calls just work.
 
 A structure returned **by value** is the one thing that cannot be collapsed that way:
 the ABI decides how to return it from the members themselves, so the member list is
 part of the shape. The binary carries a bounded family of them instead — every
-one- and two-member structure over the C scalar widths and `:pointer`, plus the
-three- and four-member ones whose members are all the same type — with a nested
-structure counting flattened. The *arguments* of such a call still collapse, so
-`div`, `ldiv` and `imaxdiv` are one registered shape, not three.
+one- and two-member structure over the C scalar widths, plus the three- and
+four-member ones whose members are all the same type — with a nested structure
+counting flattened. The *arguments* of such a call still collapse, so `div`, `ldiv`
+and `imaxdiv` are one registered shape, not three.
 
 A call outside the grid — a narrow integer argument past the sixth, say, or a
 structure with more members than the family carries — signals an error naming the one

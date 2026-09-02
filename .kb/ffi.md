@@ -75,23 +75,49 @@ struct is copied into `malloc`'d memory and answered as a pointer the caller fre
   callee reads the low bits of its register -- SysV and AAPCS64 both; verified on the
   Linux stack-passed path too, whose slots both ABIs round to 8 bytes) and every integer
   return is read as `jlong` and narrowed by the DECLARED type (the callee leaves garbage
-  above the bits it set; `fromNativeReturn` masks). `jfloat`/`jdouble` stay distinct and
-  pointers/strings are already `void*`: four carriers per parameter. Three cases keep
-  their EXACT layouts, ABI-correct everywhere: a narrow integer past the SIXTH
-  integer-class position (`FfiRuntime.REGISTER_WINDOW` -- past the register window both
-  ABIs guarantee, and Apple's AArch64 packs stack arguments, so widening one there would
-  shift the frame), a variadic call (each `firstVariadicArg` index is its own stub, and
-  the Apple variadic path is the unverifiable one), and a by-value struct -- whose member
-  list IS the shape, since a member's width and offset decide how the ABI classifies the
-  whole aggregate. Upcalls follow the same rule in the other direction. The grid itself
-  lives in `reachability-metadata.json` (all `void*`/`jlong` combinations at arity 0-6,
-  plus `jdouble` at 1-4, plus `jfloat` at 1-2, x five return carriers, every entry with
-  `captureCallState`; upcalls to arity 4) -- `FfiNativeImageForeignConfigTest` generates
-  and pins it, and its class comment is the coverage log. A miss signals the ONE metadata
-  entry that would register the shape, verbatim, plus "or run it on java -jar" -- and the
-  cffi backend's `%call-symbol` re-signals that one error with the function name in front
-  (`handler-case` gated on the `no foreign-call stub` marker), so a binding failing in the
-  binary and not on the JVM never looks like a bug in the binding.
+  above the bits it set; `fromNativeReturn` masks). `jfloat`/`jdouble` stay distinct (a
+  float is not a narrowed double), and an ADDRESS is that same `jlong`: THREE carriers
+  per parameter. Three cases keep their EXACT layouts, ABI-correct everywhere: a narrow
+  integer past the SIXTH integer-class position (`FfiRuntime.REGISTER_WINDOW` -- past
+  the register window both ABIs guarantee, and Apple's AArch64 packs stack arguments, so
+  widening one there would shift the frame), a variadic call (each `firstVariadicArg`
+  index is its own stub, and the Apple variadic path is the unverifiable one), and a
+  by-value struct -- whose member list IS the shape, since a member's width and offset
+  decide how the ABI classifies the whole aggregate. Upcalls follow the same rule in the
+  other direction. The grid itself lives in `reachability-metadata.json` (`jlong`
+  arguments at arity 0-10, all `jlong`/`jdouble` combinations at 1-4, all three carriers
+  at 1-2, x four return carriers, every entry with `captureCallState`; upcalls `jlong`
+  to arity 6 and `jlong`/`jdouble` to 2) -- `FfiNativeImageForeignConfigTest` generates
+  and pins it, and its class comment is the coverage log. A miss signals the ONE
+  metadata entry that would register the shape, verbatim, plus "or run it on java -jar"
+  -- and the cffi backend's `%call-symbol` re-signals that one error with the function
+  name in front (`handler-case` gated on the `no foreign-call stub` marker), so a
+  binding failing in the binary and not on the JVM never looks like a bug in the
+  binding.
+- **A pointer is not a carrier of its own; it is the `jlong` one** (todo-638,
+  2026-09-02). FFM spells an address `ValueLayout.ADDRESS`, but on both platforms the
+  linker serves, a pointer and a 64-bit integer are the SAME parameter -- one
+  integer-class register (SysV) / one general register (AAPCS64), same width, same
+  alignment. Native Image does NOT agree (`struct(jlong,jlong)(jlong,jlong)` was refused
+  by a binary already carrying `struct(jlong,jlong)(void*,void*)`), so the two spellings
+  were two registered entries for one calling convention and the grid's parameter
+  dimension was `4^arity` where `3^arity` would do. `FfiType.Scalar.POINTER` and
+  `STRING` therefore carry `JAVA_LONG` as their `layout()`, and nothing in the `ffi:`
+  half of `reachability-metadata.json` says `void*` any more (the `void*` entries above
+  it are the objc, Metal, CUDA and CBLAS bindings, which build their own descriptors and
+  are not canonicalised). The file went from 668,532 to 157,411 bytes and the `ffi:`
+  downcalls from 4,277 to 984 (upcalls 148 -> 33) -- with WIDER coverage, since the
+  pointer/integer tier now reaches arity 10 where it reached 6: the scalar grid is 1,125
+  -> 172 entries and the struct-return family 3,150 -> 810. What it costs: a
+  `:pointer`/`:string` argument is handed to `invokeWithArguments` as a `Long`, so a
+  `:string`'s confined-arena copy travels as a bare address and FFM no longer checks
+  that the segment is alive -- the try-with-resources in `FfiRuntime.call` closes that
+  arena AFTER the handle returns, so it is the call's own structure that makes it
+  correct. `fromNativeReturn` reads a `:pointer` return as a `Long` and rebuilds the
+  segment a `:string` return is read from
+  (`MemorySegment.ofAddress(x).reinterpret(...)`, what `peek` already does), and
+  `dispatch` / `toCallbackReturn` do the same in the other direction so the two grids
+  agree.
 - **A by-value struct RETURN does not stop the ARGUMENTS canonicalising, and the grid
   carries a bounded family of such returns** (todo-632, 2026-09-02). The two halves are
   separate: `argumentsCanonicalisable` asks only about the arguments (fixed, no struct
@@ -104,10 +130,12 @@ struct is copied into `malloc`'d memory and answered as a pointer the caller fre
   the parameter tuples the grid already carries: `div`, `ldiv` and `imaxdiv` are one entry
   rather than three, and `(cffi:defcfun ("div" c-div) (:struct div-t) (numer :int) (denom
   :int))` -- the guide's own example, which failed in the shipped binary and worked on
-  `java -jar` -- lands on `struct(jint,jint)(jlong,jlong)`. The family itself is 70 return
-  shapes (every member sequence of length 1-2 over the seven member layouts, plus the
-  homogeneous ones of length 3-4) x 45 parameter tuples (all four carriers at arity 0-2,
-  `void*`/`jlong` at 3-4) = 3,150 entries. A NESTED struct is spliced into the layout FLAT
+  `java -jar` -- lands on `struct(jint,jint)(jlong,jlong)`. The family itself is 54 return
+  shapes (every member sequence of length 1-2 over the six member layouts, plus the
+  homogeneous ones of length 3-4) x 15 parameter tuples (all three carriers at arity 0-2,
+  `jlong` at 3-4) = 810 entries -- 70 x 45 = 3,150 until todo-638 merged the pointer
+  carrier away, which took a `void*` member and a `void*` parameter out of both dimensions
+  without narrowing what the family covers. A NESTED struct is spliced into the layout FLAT
   (`FfiType.Struct.layout()`): same offsets, same size, and both ABIs classify an
   aggregate by flattening it anyway, so a struct of two `CGPoint`s and one of four doubles
   are ONE registered shape.
@@ -124,7 +152,21 @@ struct is copied into `malloc`'d memory and answered as a pointer the caller fre
   classification: the lowering is the platform's (SysV merges eightbytes, AAPCS64 has its
   own HFA rule), so enumerating members lets each platform's linker collapse them its own
   way instead of hard-coding one ABI's table here. What bounds the family is the
-  checked-in file -- 3,150 entries are 444 KB of JSON -- not the image.
+  checked-in file -- those 3,150 entries were 444 KB of JSON -- not the image.
+- **An entry costs image only when it is a NEW lowering, which is what bounds the
+  ARITIES** (todo-638, 2026-09-02, GraalVM 25.0.4, Linux x86-64). The corollary of the
+  bullet above, measured on the pointer merge. Four binaries from one tree: the `void*`
+  grid (4,277 downcalls, 668,532 bytes of JSON) is 80,808,200 bytes; the merged grid at
+  the SAME coverage (968, 154,058) is 80,873,736; the merged grid with the jlong-only
+  tier deepened from arity 6 to 10 (984, 157,411) is 80,873,736 again, byte for byte --
+  those 16 entries lower onto stubs the grid already had; and pushing `jdouble` to arity
+  6 and `jfloat` to 3 as well (1,436, 229,386) is 81,332,488, +524,288 over the baseline.
+  Binary size moves in 64 KiB quanta here, so the first two differ by one quantum -- noise
+  -- while the last is seven of them, real code for ~476 register-class assignments the
+  image had never lowered. So the file is what bounds a grid that RE-SPELLS shapes, and
+  the image is what bounds one that reaches into new arities; ~450 KB for mixed
+  double/pointer calls past arity 4 is not the shape most C APIs have, which is why that
+  tier stayed where it was.
 - **A struct's PADDING is part of its metadata spelling.** The image builder rebuilds the
   layout with `MemoryLayout.structLayout`, which REFUSES a member that does not sit at its
   own alignment: a padding-free `struct(jbyte,jint)` does not register a wrong shape, it
@@ -182,4 +224,4 @@ whole binding by substituting `FfiInterop`'s three bridge-touching methods
 | the verbs end to end: libm/libsqlite3/the process, every scalar through peek/poke, a string round trip, a struct return by slot (`div`), qsort through a Lisp callback, a callback called as a plain address + the escaped-error-answers-zero rule, varargs (`snprintf`), errno from a failed `open`, the signal texts, the WASM refusal | `eval/FfiTest` |
 | `eval -> am.ik.ffi`, and the library imports nothing | `PackageCycleTest` |
 | the verbs compiled to a `.class`, case for case with the interpreter (run on any Linux/mac with native access); the blob gated on the reference; the class list pinned against the build; `ffi:%apply-call`; the fboundp-of-a-macro fold; the `(setf (apply #'aref ...))` place | `codegen/jvm/JvmFfiInteropCompilerTest` |
-| the native-image grid: every canonical shape registered (captureCallState included), malloc/free's capture-free shapes, the bundled consumers' shapes landing inside it, the by-value struct-RETURN family (the cffi guide's own `div` among them), the canonicalisation rules themselves, a struct spelling carrying its padding | `am.ik.ffi.FfiNativeImageForeignConfigTest` |
+| the native-image grid: every canonical shape registered (captureCallState included), malloc/free's capture-free shapes, the bundled consumers' shapes landing inside it, the by-value struct-RETURN family (the cffi guide's own `div` among them), the canonicalisation rules themselves (an address taking the `jlong` carrier among them, in a descriptor, in a struct member and in a variadic tail), a struct spelling carrying its padding | `am.ik.ffi.FfiNativeImageForeignConfigTest` |

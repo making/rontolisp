@@ -55,10 +55,22 @@ import org.jspecify.annotations.Nullable;
  * callee reads the low bits of its register -- what SysV and AAPCS64 do; verified on the
  * stack-passed path too, whose slots both Linux ABIs round to 8 bytes) and every integer
  * return is read as {@code jlong} and narrowed back by the DECLARED type (a callee leaves
- * garbage above the bits it set). {@code jfloat} and {@code jdouble} stay distinct (a
- * float is not a narrowed double), and a pointer or string is already {@code void*}. Four
- * carriers per parameter, so the grid in {@code reachability-metadata.json} can cover the
- * small arities outright ({@code FfiNativeImageForeignConfigTest} pins that it does).
+ * garbage above the bits it set). An ADDRESS is that same carrier: on both ABIs the
+ * linker serves, a pointer and a 64-bit integer are one parameter -- one integer-class
+ * register (SysV) / one general register (AAPCS64), same width, same alignment -- so
+ * {@code :pointer} and {@code :string} take {@code jlong} too rather than a {@code void*}
+ * of their own ({@link FfiType#layout()}), and the protocol carries an address as the
+ * {@code Long} it already was. {@code jfloat} and {@code jdouble} stay distinct (a float
+ * is not a narrowed double): THREE carriers per parameter, so the grid in
+ * {@code reachability-metadata.json} covers the small arities outright
+ * ({@code FfiNativeImageForeignConfigTest} pins that it does).
+ *
+ * <p>
+ * The one thing the merge gives up is FFM's own liveness checking on a {@code :string}
+ * argument: the confined arena the text is copied into is closed by {@link #call}'s
+ * try-with-resources AFTER the handle returns, so the address is valid for the whole
+ * call, but it is now the call's structure that says so rather than the API refusing a
+ * dead segment.
  *
  * <p>
  * Three cases keep their EXACT layouts, ABI-correct everywhere: an argument past the
@@ -153,8 +165,8 @@ public final class FfiRuntime {
 		// and open() records the reason.
 		SymbolLookup process = LINKER.defaultLookup();
 		this.malloc = LINKER.downcallHandle(find(process, "malloc"),
-				FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
-		this.free = LINKER.downcallHandle(find(process, "free"), FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
+				FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
+		this.free = LINKER.downcallHandle(find(process, "free"), FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG));
 		this.libraries.add(process);
 	}
 
@@ -425,7 +437,6 @@ public final class FfiRuntime {
 	 */
 	static String metadataType(MemoryLayout layout) {
 		return switch (layout) {
-			case AddressLayout ignored -> "void*";
 			case ValueLayout.OfByte ignored -> "jbyte";
 			case ValueLayout.OfBoolean ignored -> "jboolean";
 			case ValueLayout.OfChar ignored -> "jchar";
@@ -538,7 +549,7 @@ public final class FfiRuntime {
 			throw new FfiException("cannot allocate " + size + " bytes");
 		}
 		try {
-			long address = ((MemorySegment) this.malloc.invokeExact(size)).address();
+			long address = (long) this.malloc.invokeExact(size);
 			if (address == 0) {
 				throw new FfiException("malloc(" + size + ") answered NULL");
 			}
@@ -561,7 +572,7 @@ public final class FfiRuntime {
 			return;
 		}
 		try {
-			this.free.invokeExact(MemorySegment.ofAddress(address));
+			this.free.invokeExact(address);
 		}
 		catch (Throwable ex) {
 			throw new FfiException("free failed: " + message(ex), ex);
@@ -745,7 +756,7 @@ public final class FfiRuntime {
 			case INT64, UINT64 -> value == null ? 0L : integer(scalar, value);
 			case FLOAT -> (float) (value == null ? 0 : floating(scalar, value));
 			case DOUBLE -> value == null ? 0.0d : floating(scalar, value);
-			case POINTER -> MemorySegment.ofAddress(value == null ? 0 : integer(scalar, value));
+			case POINTER -> value == null ? 0L : integer(scalar, value);
 			default -> throw new FfiException("a callback cannot return " + scalar.spelling());
 		};
 	}
@@ -778,11 +789,14 @@ public final class FfiRuntime {
 			case INT64, UINT64 -> integer(scalar, value);
 			case FLOAT -> (float) floating(scalar, value);
 			case DOUBLE -> floating(scalar, value);
-			case POINTER -> value == null ? MemorySegment.NULL : MemorySegment.ofAddress(integer(scalar, value));
+			case POINTER -> value == null ? 0L : integer(scalar, value);
+			// The copy lives in the call's own confined arena, which call() closes AFTER
+			// the handle returns -- so the bare address is valid for the whole call, by
+			// the structure of the call rather than by FFM checking a segment for us.
 			case STRING -> switch (value) {
-				case null -> MemorySegment.NULL;
-				case String text -> arena.allocateFrom(text);
-				case Long address -> MemorySegment.ofAddress(address);
+				case null -> 0L;
+				case String text -> arena.allocateFrom(text).address();
+				case Long address -> address;
 				default -> throw new FfiException(
 						"argument " + index + " does not fit :string: " + value.getClass().getSimpleName());
 			};
@@ -840,10 +854,10 @@ public final class FfiRuntime {
 			case INT64, UINT64 -> (Long) raw;
 			case FLOAT -> (double) (Float) raw;
 			case DOUBLE -> (Double) raw;
-			case POINTER -> ((MemorySegment) raw).address();
+			case POINTER -> ((Number) raw).longValue();
 			case STRING -> {
-				MemorySegment segment = (MemorySegment) raw;
-				yield segment.address() == 0 ? null : segment.reinterpret(Long.MAX_VALUE).getString(0);
+				long address = ((Number) raw).longValue();
+				yield address == 0 ? null : MemorySegment.ofAddress(address).reinterpret(Long.MAX_VALUE).getString(0);
 			}
 			case VOID -> null;
 		};
