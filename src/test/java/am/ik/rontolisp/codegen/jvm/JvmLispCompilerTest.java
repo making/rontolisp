@@ -9493,10 +9493,20 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (1+ 1/2))")).isEqualTo("3/2");
 	}
 
-	// read-line tests
+	// read is prelude rontolisp over read-char / unread-char, so a program that calls
+	// it needs the prelude splice AND the pushback-cell rewrite, in the CLI's order.
+	private String compileAndRunRead(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
 
+	// read-line tests. The pre-passes are the CLI pipeline's: read is prelude
+	// rontolisp over read-char / unread-char, and its scanner's own call sites reach
+	// the pushback cell only through UnreadCharLibrary -- exactly the order
+	// CompileFrontend runs them in. A program naming neither is returned unchanged.
 	private String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
 		Path classFile = tempDir.resolve("Test.class");
@@ -9539,6 +9549,46 @@ class JvmLispCompilerTest {
 	}
 
 	// === read ===
+
+	@Test
+	void compileAndRunReadConsumesExactlyOneDatum() throws Exception {
+		// todo-624: one datum's characters, the stream left after them. The compile
+		// paths used to close an unterminated list at end of line SILENTLY -- "(a" on
+		// one line and "b)" on the next read as (A) then B.
+		assertThat(compileAndRunRead("""
+				(let ((s (make-string-input-stream "1 2 3")))
+				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
+			.isEqualTo("(1 2 3 :EOF)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(a) (b)")
+				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
+			.isEqualTo("((A) (B) :EOF)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(a
+				b) c")
+				  (print (list (read s nil :eof) (read s nil :eof))))""")).isEqualTo("((A B) C)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(1 2)  x") (print (list (read s) (read-line s))))"""))
+			.isEqualTo("((1 2) \" x\")");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "ab  cd") (print (list (read s) (read-line s))))"""))
+			.isEqualTo("(AB \" cd\")");
+	}
+
+	@Test
+	void compileAndRunReadEofValueAndSignal() throws Exception {
+		assertThat(compileAndRunRead("(with-input-from-string (s \"\") (print (read s nil :done)))"))
+			.isEqualTo(":DONE");
+		// A nil DATUM is no longer confused with end of input.
+		assertThat(compileAndRunRead("(with-input-from-string (s \"nil\") (print (read s nil :done)))"))
+			.isEqualTo("NIL");
+		assertThat(compileAndRunRead("""
+				(print (handler-case (with-input-from-string (s "") (read s t))
+				         (end-of-file () :caught)))""")).isEqualTo(":CAUGHT");
+		assertThat(compileAndRunRead("""
+				(print (handler-case (with-input-from-string (s "(a b") (read s))
+				         (error () :caught)))""")).isEqualTo(":CAUGHT");
+	}
 
 	@Test
 	void compileAndRunReadInteger() throws Exception {
@@ -14481,6 +14531,24 @@ class JvmLispCompilerTest {
 						((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
 						(T (SIMPLE-VECTOR 4) NIL)
 						(7 #\\z A)""");
+	}
+
+	@Test
+	void compileRuntimeTypepResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's evalRuntimeTypepResolvesADeftypeAlias, and
+		// the same program: a typep designator held in a VALUE resolves the user deftype
+		// it names, through the injected %deftype-alias resolver the runtime dispatch
+		// normalizes with. A computed coerce result type rides the same resolution.
+		assertThat(compileAndRun("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype str () 'string)
+				(defun tp (x ty) (typep x ty))
+				(print (list (tp 3 'octet) (tp 300 'octet) (tp 3 'byte-buffer) (tp "ab" 'str) (tp 3 'str)
+				             (tp 3 (list 'or 'octet 'null)) (tp "x" (list 'or 'octet 'null))
+				             (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
+				             (typep 3 'octet) (tp 3 'no-such-type)))
+				""")).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
 	}
 
 	@Test

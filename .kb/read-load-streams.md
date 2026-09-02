@@ -36,6 +36,69 @@ and the ci-spec cases `runtime-read-*` (all four backends).
 
 A runtime reader/parser is emitted into the compiled output (like `eval`). Interpreter uses `LispReader`/`Files`; JVM emits a recursive-descent reader (`JvmReadRuntimeBuilder`) with full JDK parity; WASM (`WasmReadRuntimeBuilder`) walks linear memory, interns symbols to shared string offsets; its integers are `i31` (ratio/radix tokens included) and it parses decimal floats (`emitTryFloat`, no exponent) into `TYPE_FLOAT`. All three readers parse dotted pairs `(a . b)`: `LispReader.readList` consumes a `Token.Dot`, and the runtime list parsers (`JvmReadRuntimeBuilder.buildReadList`, `WasmReadRuntimeBuilder.buildReadListBody`) treat a `.` as a dot token only when the following byte is a delimiter (whitespace, `(`, `)`, `'`, `"`, `;`) or end of input, so symbols/floats containing `.` are untouched. `with-open-file` is a plain macro (`LispMacroExpander.expandWithOpenFile`) over `open`/`close`, so no backend needed a new special form. A stream is a self-describing VALUE over a backend-local handle: an instance of the fixed `LispLayout.STREAM` layout whose slot 0 is the handle (interpreter/JVM index a stream table, WASM uses the WASI fd directly, negative for a string stream) and slot 1 the `LispLayout.Kinds` keyword. See "A stream is a VALUE, not a handle" below.
 
+**`read` IS PRELUDE RONTOLISP, NOT A PRIMITIVE ON ANY BACKEND** (todo-624, 2026-09-02).
+It consumes exactly the characters of ONE datum and leaves the stream positioned after
+them -- CL's contract -- so `(read s)` twice over `"1 2"` answers `1` then `2`, a datum
+may span lines, and `read` and `read-line` may be mixed on one stream. It used to read a
+LINE and parse one datum out of it, dropping the rest ("one datum per line"): a second
+datum on the line was lost on every backend, and a datum spanning lines was a read error
+on the interpreter and a SILENT misread on the three compile paths (`(a\nb)` answered
+`(A)`, because the emitted `_readList` closed the list at end of input).
+
+The definition is ONE `LispPreludeLibrary` entry -- `read` plus the `%rd-*` family it is
+written over -- so all four backends run the same code and no per-backend `read` exists:
+
+- **The scanner only DELIMITS the datum**; `read-from-string` parses the text it
+  collected. So the datum SYNTAX still has exactly one definition per backend (the
+  frontend's `LispReader` on the interpreter, the emitted reader on the compile paths)
+  and this family never has to agree with it about what a value MEANS. A syntax the
+  emitted reader lacks (backquote, `|...|` escapes) is therefore a `read-from-string`
+  gap, identical for `read` -- not a second divergence.
+- The walk mirrors `LispLexer`'s raw `skipDatum`: balanced `(...)` honouring strings,
+  `;` comments, `#|...|#` (nesting) and `#\(`; `"..."` with escapes; `|...|`; the
+  quote/backquote/comma prefixes; the `#` dispatch, where `#+`/`#-` take their feature
+  expression AND the guarded form as one unit, and `#S(`/`#P"`/`#2A(`/`#b1010`/`#5=`
+  take the symbol-shaped prefix plus a DIRECTLY following list or string.
+- **The one character a token's terminator gives back rides the `unread-char` cell**
+  (`unread-char.lisp` on the compile paths, the `Environment` cell on the interpreter) --
+  the pushback that already existed. That is what makes `read` + `read-line` on one
+  stream work, and it is why the scanner never needs more than one character of
+  lookahead. `read` therefore now DOES consult the cell, which it deliberately did not
+  before.
+- **After the object, ONE whitespace character is consumed** (CLHS 23.2 allows it; SBCL
+  does it) -- `(read s)` over `"(1 2)  x"` leaves `" x"` for `read-line`, and over
+  `"(1 2)\nx"` leaves `"x"`. A terminating macro character is unread instead.
+- EOF keeps the lite convention `read-line` has: `(read s)` answers nil rather than
+  signalling, `(read s nil v)` answers `v`, and a non-nil `eof-error-p` -- which used to
+  be a compile error -- now signals `end-of-file`. A nil DATUM and end of input are no
+  longer confused (the old `(read s nil v)` lowering was `(or (read s) v)`).
+- An INCOMPLETE datum signals on every backend (`Unexpected end of input, expected ')'`,
+  `Unterminated string literal`, ...) instead of being silently closed.
+
+Consequences worth knowing. A program that calls `read` needs BOTH compile-path passes --
+`LispPreludeLibrary.process` (the splice) and `UnreadCharLibrary.process` (the cell) --
+in `CompileFrontend`'s order; a pipeline that runs neither compiles `read` to a call-time
+"The function READ is undefined", which is why the `Jvm`/`Wasm` test helpers that feed
+stdin run both. `read` is no longer in `ShadowedBuiltins.LOWERED_WITHOUT_WRAPPER` (it is
+an ordinary defun now, so a user definition shadows it by defining it), `#'read` COMPILES
+for the first time (it used to be `Cannot compile: READ`), `read` on a socket or a served
+request body works on the interpreter (`read-char` reaches those; the old built-in
+demanded a `BufferedReader`), and reading is character-at-a-time -- the same I/O
+granularity `_read_line` already had on WASM, one Lisp call per character on top.
+Nothing calls the old native helpers any more: `JvmReadRuntimeBuilder`'s
+`_read`/`_readStream` are gone, and WASM's `FUNC_READ` keeps its slot with the unused
+stub -- removing a function there would shift every later index and change the component
+blobs.
+**The cost, measured 2026-09-02** (20 000 data of 27 characters each -- 540 KB -- read
+one at a time out of a string stream): JVM 0.31 s, WASM Preview 1 0.59 s, interpreter
+9.3 s. The compiled backends are where `read` loops over real data and they are fine; the
+interpreter pays 0.46 ms per datum, of which the floor is already 2.2 s of `read-char`
+calls plus 0.7 s of `read-from-string` -- the scanner itself is the remaining ~6 s. Nothing
+in the repo reads bulk data through the interpreter's `read`; if something does, the fix
+is a faster interpreter `read-char`, not a per-backend `read`.
+Pinned by `LispEvaluatorTest#read*`, `JvmLispCompilerTest#compileAndRunRead*`,
+`WasmLispCompilerIntegrationTest#read*` and the ci-spec case `read-stream-datum-by-datum`.
+
 **CRLF parity**: `read-line` strips one trailing carriage return on every backend (interpreter/JVM inherit it from `BufferedReader.readLine`; the WASM `_read_line` does an explicit `pos--` when the byte before the newline is `0x0D`, added for the tcp built-ins -- CRLF-terminated socket lines such as HTTP must read as plain lines and a blank CRLF line must compare `string=` to `""`; see `.kb/tcp-sockets.md`). A lone `\r\n` line therefore reads as `""`, not `"\r"`, on all backends.
 
 **Design decision**: `:direction` must be a literal `:input`/`:output` so both compilers resolve the mode at compile time (the shared `OpenModes.staticMode` in `am.ik.rontolisp.compiler`, used by `Jvm/WasmOpenCompiler`); consequently `open` has no `BuiltinFunctionWrappers` entry.
@@ -120,7 +183,7 @@ without the component-boundary rule would find) plus the ci-spec case
 
 **WASM runtime intern table and heap base are computed, not fixed**: `_intern` appends 8-byte `(offset,len)` records for symbols first seen at runtime to a table whose base it loads from the `RT_INTERN_BASE_ADDR` (152) cell; the heap bump pointer lives at `HEAP_PTR_ADDR` (84). Both cells are seeded by active data segments at instantiation (never in `_start` -- hosts can call exports without running it) with values computed from the final static-data size in `WasmLispCompiler.compile`: `rtInternBase = max(RT_INTERN_MIN_BASE=8192, 16-aligned end of the string segment)`, `heapBase = rtInternBase + RT_INTERN_REGION_SIZE (8192)`, and the Preview 1 memory page count grows with `heapBase` (minimum 4 pages). The bases used to be the fixed constants 8192/16384; once a large program's interned-string segment (which also holds the eval function registry, appended last) outgrew 8192, runtime interning silently overwrote static strings and registry records -- symptoms ranged from `eval` returning nil for a defined function to garbled prints, and shifted with any layout change. First hit by the concatenated `CiSpecE2eTest` program; pinned by `WasmLispCompilerIntegrationTest#runtimeInternTableSurvivesLargeStaticData`.
 
-**String streams (`with-output-to-string` / `with-input-from-string`) + print-family stream args**: the two macros are `LispMacroExpander` expansions over three `%`-internal builtins (`%make-string-output-stream`, `%make-string-input-stream`, `%string-stream-contents`; classified in `PackageRegistry.CL_INTERNALS`), following the with-open-file let/close shape (`expandWithOutputToString` fetches the contents, then closes; `expandWithInputFromString` mirrors `__wof_result` with `__wifs_result`). String streams live in the same handle space as file streams: interpreter = a `StringWriter` / `BufferedReader(StringReader)` entry in the `streams` table (so `read`/`read-line`/`write-line` work unchanged; `write-line`'s writer dispatch was widened from `BufferedWriter` to `Writer`); JVM = the same in the `_streams` table (`_makeStringOutputStream`/`_makeStringInputStream`/`_stringStreamContents` in `JvmIoRuntimeBuilder`); WASM = a **negative i31 handle** whose absolute value is a 12-byte record in linear memory (a WASI fd is never negative) -- an output record is `[kind=1][slot][len]` over a per-stream `$str_bytes` GC byte buffer reached through a module-global table (see the paragraph below), input records hold a `[cursor][end]` range over a persistent linear copy of the source string, consumed by a branch at the top of `_read_line` (which makes `_read` work for free); `_write_line` grew an append branch, `_close` skips `fd_close` for negative handles and hands an output record's table slot back (`WasmStringStreamRuntimeBuilder` + branches in `WasmIoRuntimeBuilder`/`WasmRuntimeBuilder.buildReadLineBody`). On top of this, `print`/`prin1`/`princ`/`terpri` accept an optional stream argument on all three backends (interpreter routes through a shared `emitTo`; JVM renders then calls the new `_writeStr(String, Object)` -- non-`Long` handles, i.e. nil/t, go to `System.out` and update the `_col` fresh-line tracking; WASM renders via `FUNC_PRINC_TO_STR`/`FUNC_PRIN1_TO_STR` then calls `_write_stream_str`, whose stdout path delegates to `_write_str` keeping `LINE_START_ADDR` tracking). `write-string` (function; write-line minus the newline, optional stream) and `write-to-string` (a prin1-to-string alias; both wrappers in `BuiltinFunctionWrappers`) round out the set, and `expandFormat` accepts a non-literal destination expression by building the string exactly like `format nil` and emitting one `(write-string <string> __format_stream)` (destination bound first, so it evaluates before the args). Compiled `print`-family return values keep the existing convention (nil on the compile backends, todo-063). `read` on a string stream inherits the line-oriented one-datum-per-line semantics of the stream `read` on every backend. Runtime `_eval` interpreters and `--no-gc` do not know string streams.
+**String streams (`with-output-to-string` / `with-input-from-string`) + print-family stream args**: the two macros are `LispMacroExpander` expansions over three `%`-internal builtins (`%make-string-output-stream`, `%make-string-input-stream`, `%string-stream-contents`; classified in `PackageRegistry.CL_INTERNALS`), following the with-open-file let/close shape (`expandWithOutputToString` fetches the contents, then closes; `expandWithInputFromString` mirrors `__wof_result` with `__wifs_result`). String streams live in the same handle space as file streams: interpreter = a `StringWriter` / `BufferedReader(StringReader)` entry in the `streams` table (so `read`/`read-line`/`write-line` work unchanged; `write-line`'s writer dispatch was widened from `BufferedWriter` to `Writer`); JVM = the same in the `_streams` table (`_makeStringOutputStream`/`_makeStringInputStream`/`_stringStreamContents` in `JvmIoRuntimeBuilder`); WASM = a **negative i31 handle** whose absolute value is a 12-byte record in linear memory (a WASI fd is never negative) -- an output record is `[kind=1][slot][len]` over a per-stream `$str_bytes` GC byte buffer reached through a module-global table (see the paragraph below), input records hold a `[cursor][end]` range over a persistent linear copy of the source string, consumed by a branch at the top of `_read_line` (which makes `_read` work for free); `_write_line` grew an append branch, `_close` skips `fd_close` for negative handles and hands an output record's table slot back (`WasmStringStreamRuntimeBuilder` + branches in `WasmIoRuntimeBuilder`/`WasmRuntimeBuilder.buildReadLineBody`). On top of this, `print`/`prin1`/`princ`/`terpri` accept an optional stream argument on all three backends (interpreter routes through a shared `emitTo`; JVM renders then calls the new `_writeStr(String, Object)` -- non-`Long` handles, i.e. nil/t, go to `System.out` and update the `_col` fresh-line tracking; WASM renders via `FUNC_PRINC_TO_STR`/`FUNC_PRIN1_TO_STR` then calls `_write_stream_str`, whose stdout path delegates to `_write_str` keeping `LINE_START_ADDR` tracking). `write-string` (function; write-line minus the newline, optional stream) and `write-to-string` (a prin1-to-string alias; both wrappers in `BuiltinFunctionWrappers`) round out the set, and `expandFormat` accepts a non-literal destination expression by building the string exactly like `format nil` and emitting one `(write-string <string> __format_stream)` (destination bound first, so it evaluates before the args). Compiled `print`-family return values keep the existing convention (nil on the compile backends, todo-063). `read` on a string stream consumes exactly one datum's characters and leaves the cursor after them, like every other stream (see the `read` paragraph near the top). Runtime `_eval` interpreters and `--no-gc` do not know string streams.
 
 **A string OUTPUT stream costs linear memory NOTHING per write (WASM)**: the record
 `[kind=1][slot][len]` names, through the module-global buffer table, one `$str_bytes` GC

@@ -869,6 +869,51 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void readConsumesExactlyOneDatumAndLeavesTheStreamAfterIt() {
+		// CL's read contract (todo-624): a second datum on the same line survives, a
+		// datum may SPAN lines, and read leaves the stream positioned after the object
+		// -- so read and read-line mix. Same answers as SBCL, on all four backends
+		// (ci-spec case read-stream-datum-by-datum).
+		assertThat(eval("""
+				(let ((s (make-string-input-stream "1 2 3")))
+				  (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof)))""").print())
+			.isEqualTo("(1 2 3 :EOF)");
+		assertThat(eval("""
+				(with-input-from-string (s "(a) (b)")
+				  (list (read s nil :eof) (read s nil :eof) (read s nil :eof)))""").print())
+			.isEqualTo("((A) (B) :EOF)");
+		assertThat(eval("""
+				(with-input-from-string (s "(a
+				b) c")
+				  (list (read s nil :eof) (read s nil :eof)))""").print()).isEqualTo("((A B) C)");
+		// CLHS 23.2 lets read consume ONE whitespace character after the object; a
+		// terminating macro character is left in the stream instead.
+		assertThat(eval("""
+				(with-input-from-string (s "(1 2)  x") (list (read s) (read-line s)))""").print())
+			.isEqualTo("((1 2) \" x\")");
+		assertThat(eval("""
+				(with-input-from-string (s "ab  cd") (list (read s) (read-line s)))""").print())
+			.isEqualTo("(AB \" cd\")");
+	}
+
+	@Test
+	void readAtEndOfInputAnswersTheEofValueAndSignalsWhenAsked() {
+		// The lite convention read-line keeps: nil rather than a signal, unless
+		// eof-error-p is explicitly non-nil.
+		assertThat(eval("(with-input-from-string (s \"\") (read s))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(with-input-from-string (s \"\") (read s nil :done))").print()).isEqualTo(":DONE");
+		assertThat(eval("""
+				(handler-case (with-input-from-string (s "") (read s t))
+				  (end-of-file () :caught))""").print()).isEqualTo(":CAUGHT");
+		// A nil DATUM is no longer confused with end of input.
+		assertThat(eval("(with-input-from-string (s \"nil\") (read s nil :done))")).isEqualTo(LispNil.INSTANCE);
+		// An INCOMPLETE datum signals rather than being silently closed.
+		assertThat(eval("""
+				(handler-case (with-input-from-string (s "(a b") (read s))
+				  (error () :caught))""").print()).isEqualTo(":CAUGHT");
+	}
+
+	@Test
 	void evalWithInputFromStringReadsLinesAndData() {
 		LispVal result = eval("""
 				(with-input-from-string (s "first line
@@ -5495,6 +5540,32 @@ class LispEvaluatorTest {
 				(defun mki (et x) (make-array 3 :element-type et :initial-element x))
 				(list (aref (mki '(unsigned-byte 8) 7) 0) (aref (mki 'character #\\z) 0) (aref (mki t 'a) 0))
 				""").print()).isEqualTo("(7 #\\z A)");
+	}
+
+	@Test
+	void evalRuntimeTypepResolvesADeftypeAlias() {
+		// A typep DESIGNATOR held in a value resolves a user deftype the way its literal
+		// spelling does, on all four backends: the interpreter re-expands the runtime
+		// dispatch against the live registry, the compile paths normalize the designator
+		// through the injected %deftype-alias resolver first. Chains resolve
+		// (byte-buffer -> octet), an alias inside a COMPOUND specifier resolves through
+		// the compound recursion, and coerce -- whose computed result type ends in this
+		// very dispatch -- follows: an alias of a scalar type answers CLHS's "already of
+		// that type" identity, one of a SEQUENCE type takes its family arm. Every answer
+		// is SBCL 2.2.9's on this program (JvmLispCompilerTest /
+		// WasmLispCompilerIntegrationTest and the runtime-typep-deftype-alias ci-spec
+		// case run the same one), except the trailing unknown name, where the lite model
+		// answers nil rather than signalling.
+		assertThat(evalMulti("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype str () 'string)
+				(defun tp (x ty) (typep x ty))
+				(list (tp 3 'octet) (tp 300 'octet) (tp 3 'byte-buffer) (tp "ab" 'str) (tp 3 'str)
+				      (tp 3 (list 'or 'octet 'null)) (tp "x" (list 'or 'octet 'null))
+				      (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
+				      (typep 3 'octet) (tp 3 'no-such-type))
+				""").print()).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
 	}
 
 	@Test

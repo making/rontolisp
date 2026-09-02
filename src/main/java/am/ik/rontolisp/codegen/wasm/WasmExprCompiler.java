@@ -1287,7 +1287,6 @@ final class WasmExprCompiler {
 					WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
 					WasmEmitHelper.emitToMutStrCall(ctx);
 				}
-				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
 				case LispNames.LOAD -> WasmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
 				// A literal top-level require/provide (and the asdf directives) was
 				// consumed by the compile-time LoadInliner pass; anything left is nested
@@ -1566,8 +1565,11 @@ final class WasmExprCompiler {
 					// shared %seq-int-vector helper, exactly as concatenate's does;
 					// everything else is expandCoerce as before.
 					LispVal packed = ConcatenateForms.packedVectorCoerce(cons, ctx.closRegistry);
-					WasmExprCompiler.compileExpr(packed != null ? packed : LispMacroExpander.expandCoerce(cons, true,
-							ctx.functions.containsKey(LispNames.SEQ_TO_LIST)), ctx);
+					WasmExprCompiler.compileExpr(packed != null ? packed
+							: LispMacroExpander.expandCoerce(cons, true,
+									ctx.functions.containsKey(LispNames.SEQ_TO_LIST),
+									ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null),
+							ctx);
 				}
 				case LispNames.MAP_INTO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons,
 						ctx.functions.containsKey(LispNames.mapIntoRuntime(cons.toList().size() - 3))), ctx);

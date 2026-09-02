@@ -117,6 +117,13 @@ import org.jspecify.annotations.Nullable;
  * {@code copy-pprint-dispatch} / {@code set-pprint-dispatch} / {@code pprint-dispatch})
  * -- see {@code .kb/pretty-printer.md} for what is real (the keyword bindings, the
  * dispatch tables) and what a stream with no column cannot do.</li>
+ * <li>{@code read} plus the {@code %rd-*} scanner family -- CL's {@code read}, which
+ * consumes exactly the characters of ONE datum and leaves the stream positioned after
+ * them. The scanner only DELIMITS the datum (over {@code read-char} /
+ * {@code unread-char}, riding the same one-character pushback cell {@code unread-char}
+ * uses); {@code read-from-string} parses the text it collected, so the datum syntax keeps
+ * exactly one definition per backend. There is no {@code read} built-in on any backend --
+ * {@code .kb/read-load-streams.md}.</li>
  * </ul>
  */
 public final class LispPreludeLibrary {
@@ -2210,6 +2217,225 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.PPRINT_DISPATCH_DEFAULT, """
 				(defun %pprint-dispatch-default (stream object)
 				  (write object :stream stream))
+				""");
+		// read: exactly ONE datum's characters off the stream, leaving it positioned
+		// after them -- CL's contract, and the reason a second datum on the same line
+		// is not lost. The scanner below only DELIMITS the datum (it is the lexer's
+		// raw skipDatum walk, written in rontolisp); read-from-string then parses the
+		// text it collected, so the datum syntax has exactly one definition per
+		// backend and this family never has to agree with it about what a value means.
+		//
+		// The one character a token's terminator has to give back rides the SAME
+		// pushback cell unread-char uses (unread-char.lisp on the compile paths, the
+		// Environment cell on the interpreter), which is what lets read and read-line
+		// be mixed on one stream. See .kb/read-load-streams.md.
+		SOURCES.put(LispNames.READ, """
+				(defun read (&optional stream eof-error-p eof-value recursive-p)
+				  (let ((%rd-out (make-string-output-stream)))
+				    (if (%rd-datum stream %rd-out)
+				        (let ((%rd-text (get-output-stream-string %rd-out)))
+				          (let ((%rd-c (read-char stream nil nil)))
+				            (when (and %rd-c (not (%rd-whitespace-p %rd-c)))
+				              (unread-char %rd-c stream)))
+				          (close %rd-out)
+				          (read-from-string %rd-text))
+				        (progn
+				          (close %rd-out)
+				          (if eof-error-p (error 'end-of-file) eof-value)))))
+				""");
+		SOURCES.put(LispNames.RD_DATUM, """
+				(defun %rd-datum (%rd-s %rd-out)
+				  (let ((%rd-c (%rd-skip %rd-s)))
+				    (if (null %rd-c) nil (%rd-dispatch %rd-c %rd-s %rd-out))))
+				""");
+		SOURCES.put(LispNames.RD_DISPATCH, """
+				(defun %rd-dispatch (%rd-c %rd-s %rd-out)
+				  (cond
+				    ((char= %rd-c #\\() (write-char %rd-c %rd-out) (%rd-list %rd-s %rd-out) t)
+				    ((char= %rd-c #\\") (write-char %rd-c %rd-out) (%rd-string %rd-s %rd-out) t)
+				    ((char= %rd-c #\\)) (error "Unexpected ')'"))
+				    ((char= %rd-c #\\#) (%rd-sharp %rd-s %rd-out))
+				    ((or (char= %rd-c #\\') (char= %rd-c #\\`))
+				     (write-char %rd-c %rd-out)
+				     (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input")))
+				    ((char= %rd-c #\\,)
+				     (write-char %rd-c %rd-out)
+				     (let ((%rd-d (read-char %rd-s nil nil)))
+				       (cond ((null %rd-d) (error "Unexpected end of input"))
+				             ((or (char= %rd-d #\\@) (char= %rd-d #\\.))
+				              (write-char %rd-d %rd-out))
+				             (t (unread-char %rd-d %rd-s)))
+				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input"))))
+				    (t (write-char %rd-c %rd-out)
+				       (cond ((char= %rd-c #\\|) (%rd-bars %rd-s %rd-out))
+				             ((char= %rd-c #\\\\)
+				              (let ((%rd-e (read-char %rd-s nil nil)))
+				                (when %rd-e (write-char %rd-e %rd-out))))
+				             (t nil))
+				       (%rd-token-rest %rd-s %rd-out)
+				       t)))
+				""");
+		SOURCES.put(LispNames.RD_SHARP, """
+				(defun %rd-sharp (%rd-s %rd-out)
+				  (let ((%rd-d (read-char %rd-s nil nil)))
+				    (cond
+				      ((null %rd-d) (error "Unexpected end of input after #"))
+				      ((char= %rd-d #\\|) (%rd-block-comment %rd-s) (%rd-datum %rd-s %rd-out))
+				      ((char= %rd-d #\\\\)
+				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
+				       (%rd-char-literal %rd-s %rd-out))
+				      ((char= %rd-d #\\')
+				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
+				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input")))
+				      ((char= %rd-d #\\()
+				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
+				       (%rd-list %rd-s %rd-out) t)
+				      ((or (char= %rd-d #\\+) (char= %rd-d #\\-))
+				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
+				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input"))
+				       (write-char #\\Space %rd-out)
+				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input")))
+				      ((char= %rd-d #\\.)
+				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
+				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input")))
+				      (t
+				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
+				       (%rd-token-rest %rd-s %rd-out)
+				       (let ((%rd-e (read-char %rd-s nil nil)))
+				         (cond ((null %rd-e) t)
+				               ((char= %rd-e #\\()
+				                (write-char %rd-e %rd-out) (%rd-list %rd-s %rd-out) t)
+				               ((char= %rd-e #\\")
+				                (write-char %rd-e %rd-out) (%rd-string %rd-s %rd-out) t)
+				               (t (unread-char %rd-e %rd-s) t)))))))
+				""");
+		SOURCES.put(LispNames.RD_LIST, """
+				(defun %rd-list (%rd-s %rd-out)
+				  (do ((%rd-depth 1))
+				      ((= %rd-depth 0) nil)
+				    (let ((%rd-c (read-char %rd-s nil nil)))
+				      (cond
+				        ((null %rd-c) (error "Unexpected end of input, expected ')'"))
+				        ((char= %rd-c #\\()
+				         (write-char %rd-c %rd-out) (setq %rd-depth (+ %rd-depth 1)))
+				        ((char= %rd-c #\\))
+				         (write-char %rd-c %rd-out) (setq %rd-depth (- %rd-depth 1)))
+				        ((char= %rd-c #\\")
+				         (write-char %rd-c %rd-out) (%rd-string %rd-s %rd-out))
+				        ((char= %rd-c #\\;)
+				         (%rd-skip-line %rd-s) (write-char #\\Newline %rd-out))
+				        ((char= %rd-c #\\|)
+				         (write-char %rd-c %rd-out) (%rd-bars %rd-s %rd-out))
+				        ((char= %rd-c #\\\\)
+				         (write-char %rd-c %rd-out)
+				         (let ((%rd-e (read-char %rd-s nil nil)))
+				           (when %rd-e (write-char %rd-e %rd-out))))
+				        ((char= %rd-c #\\#)
+				         (let ((%rd-d (read-char %rd-s nil nil)))
+				           (cond
+				             ((null %rd-d) (error "Unexpected end of input, expected ')'"))
+				             ((char= %rd-d #\\|) (%rd-block-comment %rd-s))
+				             ((char= %rd-d #\\\\)
+				              (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)
+				              (let ((%rd-e (read-char %rd-s nil nil)))
+				                (if (null %rd-e)
+				                    (error "Unexpected end of input after #\\\\")
+				                    (write-char %rd-e %rd-out))))
+				             ((char= %rd-d #\\()
+				              (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)
+				              (setq %rd-depth (+ %rd-depth 1)))
+				             (t (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)))))
+				        (t (write-char %rd-c %rd-out))))))
+				""");
+		SOURCES.put(LispNames.RD_STRING, """
+				(defun %rd-string (%rd-s %rd-out)
+				  (do ((%rd-c (read-char %rd-s nil nil) (read-char %rd-s nil nil)))
+				      ((or (null %rd-c) (char= %rd-c #\\"))
+				       (if (null %rd-c)
+				           (error "Unterminated string literal")
+				           (write-char %rd-c %rd-out)))
+				    (write-char %rd-c %rd-out)
+				    (when (char= %rd-c #\\\\)
+				      (let ((%rd-e (read-char %rd-s nil nil)))
+				        (if (null %rd-e)
+				            (error "Unterminated string literal")
+				            (write-char %rd-e %rd-out))))))
+				""");
+		SOURCES.put(LispNames.RD_BARS, """
+				(defun %rd-bars (%rd-s %rd-out)
+				  (do ((%rd-c (read-char %rd-s nil nil) (read-char %rd-s nil nil)))
+				      ((or (null %rd-c) (char= %rd-c #\\|))
+				       (if (null %rd-c)
+				           (error "Unterminated |...| symbol escape")
+				           (write-char %rd-c %rd-out)))
+				    (write-char %rd-c %rd-out)
+				    (when (char= %rd-c #\\\\)
+				      (let ((%rd-e (read-char %rd-s nil nil)))
+				        (when %rd-e (write-char %rd-e %rd-out))))))
+				""");
+		SOURCES.put(LispNames.RD_TOKEN_REST, """
+				(defun %rd-token-rest (%rd-s %rd-out)
+				  (do ((%rd-c (read-char %rd-s nil nil) (read-char %rd-s nil nil)))
+				      ((or (null %rd-c) (%rd-whitespace-p %rd-c) (%rd-terminating-p %rd-c))
+				       (progn (when %rd-c (unread-char %rd-c %rd-s)) %rd-c))
+				    (write-char %rd-c %rd-out)
+				    (cond ((char= %rd-c #\\\\)
+				           (let ((%rd-e (read-char %rd-s nil nil)))
+				             (when %rd-e (write-char %rd-e %rd-out))))
+				          ((char= %rd-c #\\|) (%rd-bars %rd-s %rd-out))
+				          (t nil))))
+				""");
+		SOURCES.put(LispNames.RD_CHAR_LITERAL, """
+				(defun %rd-char-literal (%rd-s %rd-out)
+				  (let ((%rd-c (read-char %rd-s nil nil)))
+				    (if (null %rd-c)
+				        (error "Unexpected end of input after #\\\\")
+				        (progn (write-char %rd-c %rd-out)
+				               (when (alpha-char-p %rd-c) (%rd-token-rest %rd-s %rd-out))
+				               t))))
+				""");
+		SOURCES.put(LispNames.RD_BLOCK_COMMENT, """
+				(defun %rd-block-comment (%rd-s)
+				  (do ((%rd-depth 1))
+				      ((= %rd-depth 0) nil)
+				    (let ((%rd-c (read-char %rd-s nil nil)))
+				      (cond
+				        ((null %rd-c) (error "Unterminated block comment"))
+				        ((char= %rd-c #\\|)
+				         (let ((%rd-d (read-char %rd-s nil nil)))
+				           (cond ((null %rd-d) (error "Unterminated block comment"))
+				                 ((char= %rd-d #\\#) (setq %rd-depth (- %rd-depth 1)))
+				                 (t (unread-char %rd-d %rd-s)))))
+				        ((char= %rd-c #\\#)
+				         (let ((%rd-d (read-char %rd-s nil nil)))
+				           (cond ((null %rd-d) (error "Unterminated block comment"))
+				                 ((char= %rd-d #\\|) (setq %rd-depth (+ %rd-depth 1)))
+				                 (t (unread-char %rd-d %rd-s)))))
+				        (t nil)))))
+				""");
+		SOURCES.put(LispNames.RD_SKIP, """
+				(defun %rd-skip (%rd-s)
+				  (do ((%rd-c (read-char %rd-s nil nil) (read-char %rd-s nil nil)))
+				      ((or (null %rd-c)
+				           (and (not (%rd-whitespace-p %rd-c)) (not (char= %rd-c #\\;))))
+				       %rd-c)
+				    (when (char= %rd-c #\\;) (%rd-skip-line %rd-s))))
+				""");
+		SOURCES.put(LispNames.RD_SKIP_LINE, """
+				(defun %rd-skip-line (%rd-s)
+				  (do ((%rd-c (read-char %rd-s nil nil) (read-char %rd-s nil nil)))
+				      ((or (null %rd-c) (char= %rd-c #\\Newline)) nil)))
+				""");
+		SOURCES.put(LispNames.RD_WHITESPACE_P, """
+				(defun %rd-whitespace-p (%rd-c)
+				  (or (char= %rd-c #\\Space) (char= %rd-c #\\Newline) (char= %rd-c #\\Tab)
+				      (char= %rd-c #\\Return) (char= %rd-c #\\Page)))
+				""");
+		SOURCES.put(LispNames.RD_TERMINATING_P, """
+				(defun %rd-terminating-p (%rd-c)
+				  (or (char= %rd-c #\\() (char= %rd-c #\\)) (char= %rd-c #\\')
+				      (char= %rd-c #\\") (char= %rd-c #\\;) (char= %rd-c #\\,)
+				      (char= %rd-c #\\`)))
 				""");
 	}
 
