@@ -145,7 +145,7 @@ is the item's own scoreboard.
 |---|---|---|
 | **cl-sqlite** (`sqlite`) | **loads and runs** (Linux x86-64 and macOS arm64) | `(ql:quickload "sqlite")` then a live database: table, inserts, an update, `execute-to-list` / `execute-single`, `with-transaction`, and a prepared statement stepped by hand (`examples/jvm/cffi-sqlite.lisp`). Two gaps outside cffi had to close first -- `(coerce 0 type)` with a COMPUTED type (iterate's `make-initial-value`, which every `iter` clause with a `:type` reaches) now follows CLHS's "already of that type" rule, and an address at or above 2^63 is accepted as the unsigned integer it is (`SQLITE_TRANSIENT` is `(mod -1 (expt 2 64))`). Compiles to a `.class` as well, through the `make-load-form` method cffi declares on its foreign types (see below) |
 | **static-vectors** | **does not load, and cannot** | not a CFFI consumer at all but a SECOND implementation seam: its `.asd` opens with `(error "static-vectors does not support this Common Lisp implementation!")` under `#-(or abcl allegro ... sbcl)`, and past that the system needs an `impl-<lisp>.lisp` supplying a vector whose storage is non-moving memory a pointer can be taken into. rontolisp has no such array type -- `with-pointer-to-vector-data` copies in and out here -- so an `impl-rontolisp.lisp` could not keep the library's one promise. Not worth a shim: what a consumer wants from it (`fast-io`'s buffers) is reachable through `cffi:foreign-alloc` directly |
-| **cl+ssl** (the real one) | **LOADS, and reaches OpenSSL** -- the TLS handshake completes; what is left is not TLS | a probe, never a migration: the `cl+ssl` shim over `rontolisp:tls-upgrade` stays the default (`.kb/tcp-sockets.md`), because it works on the WASM component backend and needs no OpenSSL. **Not one blocker was ever in cffi.** The five that stood between the library and a load, in order: (1) `defpackage :cl+ssl` signalled, because rontolisp pre-registers `CL+SSL` for its own shim -- FIXED generally: `defpackage` over an existing package now MODIFIES it, as CLHS requires (`.kb/packages.md`); (2) flexi-streams had no in-memory OUTPUT stream (`make-in-memory-output-stream` / `get-output-stream-sequence`) -- ADDED; (3) trivial-garbage had no `make-weak-hash-table` -- ADDED (weakness is not observable from CL, so it degrades to an ordinary table); (4) bordeaux-threads had no `make-recursive-lock` / `with-recursive-lock-held` -- ADDED (the shim's `make-lock` is already reentrant, so the pair is one object and one expansion); (5) `flexi-streams:flexi-stream` as a real WRAPPER CLASS with `flexi-stream-stream` -- ADDED, and it is a better shim for it (`.kb/gray-streams.md`). With those five gone, `(asdf:load-system "cl+ssl")` completes: the whole `defcvar`/`defcallback`/`defcstruct` surface of the largest binding in Quicklisp parses, expands and runs here. See the row below for what running it then measured |
+| **cl+ssl** (the real one) | **LOADS, and reaches OpenSSL** -- the TLS handshake completes, and (as of 2026-09-02) a real HTTPS request round-trips end to end | a probe, never a migration: the `cl+ssl` shim over `rontolisp:tls-upgrade` stays the default (`.kb/tcp-sockets.md`), because it works on the WASM component backend and needs no OpenSSL. **Not one blocker was ever in cffi.** The five that stood between the library and a load, in order: (1) `defpackage :cl+ssl` signalled, because rontolisp pre-registers `CL+SSL` for its own shim -- FIXED generally: `defpackage` over an existing package now MODIFIES it, as CLHS requires (`.kb/packages.md`); (2) flexi-streams had no in-memory OUTPUT stream (`make-in-memory-output-stream` / `get-output-stream-sequence`) -- ADDED; (3) trivial-garbage had no `make-weak-hash-table` -- ADDED (weakness is not observable from CL, so it degrades to an ordinary table); (4) bordeaux-threads had no `make-recursive-lock` / `with-recursive-lock-held` -- ADDED (the shim's `make-lock` is already reentrant, so the pair is one object and one expansion); (5) `flexi-streams:flexi-stream` as a real WRAPPER CLASS with `flexi-stream-stream` -- ADDED, and it is a better shim for it (`.kb/gray-streams.md`). With those five gone, `(asdf:load-system "cl+ssl")` completes: the whole `defcvar`/`defcallback`/`defcstruct` surface of the largest binding in Quicklisp parses, expands and runs here. See the row below for what running it then measured |
 
 `cffi-grovel` consumers were not probed and never will be: grovelling compiles and runs a
 C program to read the platform's headers.
@@ -181,9 +181,22 @@ What stops it short of a usable client, found by this run and not in cffi:
   applied to the `22` a certificate yields. A bare name now resolves through the
   registry's `defconstant` table (`.kb/clos.md`, the dispatcher section).
 
-The remaining one is a general language gap rather than a binding one, which is the whole
-finding: the CFFI backend reaches as far as the largest binding in the ecosystem asks it
-to, and the next wall is the stream model. `.todo/553` carries what is left of it.
+Both were general language gaps rather than binding ones, which is the whole finding: the
+CFFI backend reaches as far as the largest binding in the ecosystem asks of it, and the
+wall was the stream model, not cffi. `.todo/552` and `.todo/553` closed it.
+
+### The client, exercised (2026-09-02)
+
+With both fixed, the probe went all the way: a `GET https://example.com/` sent over
+`(cl+ssl:make-ssl-client-stream (usocket:socket-stream (usocket:socket-connect ...)) ...)`
+reads back a real `HTTP/1.1 200 OK` and its headers, on `java -jar` and on the native
+binary alike (`--system-path` over a scratch copy of the release, its `.asd`'s system
+renamed to dodge the bundled shim's own `cl+ssl` system name -- the package stays
+`cl+ssl`, so consumer code is unchanged). Upstream cl+ssl is a usable HTTPS client here;
+nothing about the stream model stands in its way any longer. The bundled `cl+ssl` shim
+(`guides/asdf-systems.md#built-in-shim-systems`) stays the default regardless -- it needs
+no OpenSSL on the machine and is the only one of the two that works on the WASM component
+backend, where CFFI never will.
 
 ## `defcenum` and `make-load-form`
 
