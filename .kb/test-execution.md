@@ -160,11 +160,16 @@ in the tree:
   array for the one row that IS size-derived (todo-662).
 
 **Which one a given suite needs is a per-backend fact, because whether an accepted call
-adopts its operands at all is.** Measured on 2026-09-03: on CUDA an accepted call left the
-operand resident, which is why that audit moved to separate arrays; on Metal an accepted
-`gemm` left `isBacked` false on both inputs, because that backend adopts on the SECOND
-sight of an unwritten operand, so the same test written the other way was safe there --
-by the adoption rule rather than by design. Neither result licenses the other: a suite
+adopts its operands at all is.** Measured on 2026-09-03 and traced to the mechanism on the
+same day: on CUDA an accepted call left the operand resident, because `CudaGemm.stage()`
+`put`s an input into the residency UNCONDITIONALLY on first sight -- it is called from
+every member path, and its own comment says it "records the copy so the next call over the
+same array finds it" -- which is why that audit moved to separate arrays. On Metal an
+accepted `gemm` left `isBacked` false on both inputs, because that backend applies the
+second-sight rule on its general path (`MetalGemm:1283`, and again at `:2582` for the
+mask), so the same test written the other way was safe there **by the adoption rule rather
+than by design**. CUDA spells that rule exactly once, in the GEMV path
+(`CudaGemm:2595`, the resident-matrix rule), and nowhere else. Neither result licenses the other: a suite
 that is correct on one backend can be pinning nothing on the other, for this reason as
 well as for the threshold reason above.
 
