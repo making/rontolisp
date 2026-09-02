@@ -38,8 +38,15 @@ class LinalgGpuDeclineTest {
 	@Test
 	void theFlagChangesNothingObservableAboutAnExactProduct() {
 		// True whether or not this machine has a device: with one the fused multiply-adds
-		// of exact integers land on the same bits, without one the defun runs. The shape
-		// is above the size threshold, so on a GPU machine the device really is asked.
+		// of exact integers land on the same bits, without one the defun runs.
+		//
+		// The shapes here are FIXED and stay fixed. This is the half a CI runner
+		// executes, so it may not size itself off a threshold that depends on the
+		// machine; the consequence is that on a backend whose floor is higher than
+		// CUDA's -- Metal's is 4194304 multiply-adds against this 262144, and it has no
+		// double besides -- the flag declines and this is the defun against itself. That
+		// is a correct decline test and NOT a device pin: the device path at the shape
+		// actually in force is LinalgGpuTest's, which sizes itself off the threshold.
 		String product = """
 				(defparameter *a* (linalg:add (linalg:ones '(64 64)) 2.0))
 				(defparameter *b* (linalg:reshape (linalg:arange 1 4097) '(64 64)))
@@ -64,7 +71,8 @@ class LinalgGpuDeclineTest {
 		// The same for linalg:matmul at rank >= 3, which routes to the intercepted
 		// linalg::%la-matmul-nd: a plain stack, a BROADCAST right operand (the shape
 		// every torch:linear over a (B T C) activation has), and rank 4. All three are
-		// above the size threshold, so on a GPU machine the device really is asked.
+		// above CUDA's floor and under Metal's, which is what the note on the exact
+		// product above says about every fixed shape in this file.
 		String stack = """
 				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
 				(defparameter *b* (linalg:add (linalg:ones '(2 64 64)) 2.0))
@@ -151,8 +159,10 @@ class LinalgGpuDeclineTest {
 		// is pinned on a machine with no device as well as on one with. The kernels widen
 		// to double, compute in double and narrow only on the store, which is
 		// %la-bcast-loop's and %la-fold-axis's rule; there is no libm in them to
-		// disagree about. The shapes are above the thresholds and the data is INEXACT, so
-		// on a GPU machine the device really is asked.
+		// disagree about. The data is INEXACT, so any device that answered would show.
+		// On Metal none does: these operands are #d, which that backend declines
+		// outright, and its axis fold is never offered for its size at all. The tier's
+		// device path is pinned at the width and shape in force in LinalgGpuTest.
 		String program = """
 				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
 				(defparameter *m* (linalg:amax *x* :axis 1 :keepdims t))
@@ -207,9 +217,11 @@ class LinalgGpuDeclineTest {
 	void anAcceleratedElementWiseCallStaysWithinARelativeToleranceOfTheOracle() {
 		// The one place this file cannot assert byte-identity, and the reason is the
 		// feature's: above the threshold a transcendental runs on the DEVICE's libm, so
-		// on a machine with a GPU the last digits differ. What must hold everywhere is
-		// the tolerance -- 1e-12 relative at #d, against a measured worst case of 1.0e-15
-		// -- and on a machine without a device the difference is exactly zero.
+		// the last digits can differ. What must hold everywhere is the tolerance --
+		// 1e-12 relative at #d, against a measured worst case of 1.0e-15 -- and where
+		// nothing is accepted the difference is exactly zero, which includes both a
+		// machine with no device and Metal, where 20000 elements is under the
+		// element-wise floor of 131072 and #d is declined besides.
 		String program = """
 				(defparameter *a* (linalg:linspace -3.0 3.0 20000))
 				(linalg:to-list (linalg:erf *a*))
@@ -230,7 +242,9 @@ class LinalgGpuDeclineTest {
 		// The fused tier (.todo/499): layer-norm's normalization and adjoint, softmax's
 		// adjoint and the dropout mask replay chains with no library function in them,
 		// so with a device they land on the defun's bits and without one the defun
-		// runs -- the same print either way. The shape is over every threshold.
+		// runs -- the same print either way. 384 x 384 is over the fused threshold on
+		// both backends, and on Metal the operands' #d width declines it anyway; the
+		// tier's device path is LinalgGpuTest's, at the width in force.
 		String operands = """
 				(defparameter *x* (linalg:reshape (linalg:linspace -3.0 3.0 147456) '(384 384)))
 				(defparameter *g* (linalg:reshape (linalg:linspace 1.0 -2.0 147456) '(384 384)))

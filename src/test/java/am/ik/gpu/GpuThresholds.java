@@ -67,6 +67,30 @@ public final class GpuThresholds {
 	}
 
 	/**
+	 * Whether a member gated by {@code threshold} is offered here for its SIZE at
+	 * {@code elements} -- {@code false} at EVERY size when the backend answers
+	 * {@link Long#MAX_VALUE}, which is its sentinel for "not a member of that tier at
+	 * all" (Metal's axis fold and generator fill).
+	 *
+	 * <p>
+	 * This is the question a test has to ask before believing that the mechanism it goes
+	 * on to assert on ran at all, and it is a question because the sentinel is a NUMBER:
+	 * arithmetic over it does not produce an impossible shape, it produces a shape BELOW
+	 * every threshold. {@code 2 * foldMinElements()} wraps to {@code -2} and
+	 * {@code (foldMinElements() + 383) / 384} to a negative, and a {@code Math.max}
+	 * against the caller's own floor then quietly hands back that floor. Both spellings
+	 * were in this suite, and each made a whole test defun-against-defun on the backend
+	 * that answers the sentinel ({@code .kb/gpu.md}, "Tests").
+	 * @param threshold one of the thresholds above
+	 * @param elements the count the test built
+	 * @return {@code true} when a member gated by {@code threshold} is offered at that
+	 * count here
+	 */
+	public static boolean acceptedForSize(long threshold, long elements) {
+		return threshold != Long.MAX_VALUE && elements >= threshold;
+	}
+
+	/**
 	 * Residency lookups answered from the cache since the process started, or {@code -1}
 	 * with no device -- the one observable that says a call over a resident operand
 	 * REALLY ran on the device, which no printed value can, since the accepted member is

@@ -75,6 +75,55 @@ class JvmLinalgGpuAccelCompilerTest {
 		return Math.max(64, (n + n / 4 + 15) / 16 * 16);
 	}
 
+	/**
+	 * A product of operands that are exact at BOTH widths AT ANY SHAPE: the left operand
+	 * is the sign of a sine, so every cell is +1 or -1, and the right is
+	 * {@code 4 * sign(sin i) + sign(cos i)}, so every cell is one of -5, -3, 3, 5. Every
+	 * partial sum is then an integer under {@code 5 * m}, far inside what f32 holds
+	 * exactly, so the device's reordered fold does not merely come close to the compiled
+	 * defun's answer -- it equals it, and the bound does not grow with the shape. An
+	 * index ramp, which these tests used to build, is exact only up to a size, which is
+	 * why they could not be resized off {@link #SIDE} as they stood.
+	 * @param leftDims the left operand's shape, as a Lisp dimension list
+	 * @param leftCount how many elements that shape holds
+	 * @param rightDims the right operand's shape
+	 * @param rightCount how many elements that shape holds
+	 * @param option the {@code :element-type} to build at, or the empty string
+	 * @return the program, printing the product's sum
+	 */
+	private static String exactProduct(String leftDims, int leftCount, String rightDims, int rightCount,
+			String option) {
+		return """
+				(defparameter *a* (linalg:reshape (linalg:sign (linalg:sin (linalg:arange 1 %d%s))) '(%s)))
+				(defparameter *b* (linalg:reshape
+				                   (linalg:add (linalg:mul (linalg:sign (linalg:sin (linalg:arange 1 %d%s))) 4)
+				                               (linalg:sign (linalg:cos (linalg:arange 1 %d%s))))
+				                   '(%s)))
+				(print (linalg:matmul *a* *b*))
+				""".formatted(leftCount + 1, option, leftDims, rightCount + 1, option, rightCount + 1, option,
+				rightDims);
+	}
+
+	/**
+	 * Asserts that a product of {@code work} multiply-adds really is one this machine's
+	 * device accepts, so that the equality after it is a claim about the KERNEL and not
+	 * about the decline protocol.
+	 *
+	 * <p>
+	 * The guard is threshold arithmetic rather than the residency census
+	 * {@code LinalgGpuTest} uses, and it has to be: a compiled class carries its OWN copy
+	 * of the library, defined into its own loader, so this process cannot watch that
+	 * copy's cache. It is the same device and therefore the same threshold -- and the
+	 * threshold is exactly what the shapes here used to get wrong, a hard-coded 64-cube
+	 * being 262144 multiply-adds against Metal's floor of 4194304.
+	 * @param work the product's {@code batch * n * m * p}
+	 */
+	private static void assertTheDeviceTakesTheProduct(long work) {
+		assertThat(am.ik.gpu.GpuThresholds.acceptedForSize(am.ik.gpu.GpuThresholds.minWork(), work))
+			.as("a product of %d multiply-adds is offered here", work)
+			.isTrue();
+	}
+
 	@TempDir
 	Path tempDir;
 
@@ -382,7 +431,10 @@ class JvmLinalgGpuAccelCompilerTest {
 	void theGeneratorFillIsByteIdenticalToTheScalarReferenceOnTheDevice() throws Exception {
 		// The seeded generator through the compiled backend: the device fill and the
 		// sequential walk print the same bytes at both widths and every rule, and the
-		// generator continues where the walk would have.
+		// generator continues where the walk would have. On a backend that is not a
+		// member of this tier at all -- Metal, whose rng threshold is the "never for its
+		// size" sentinel -- every fill declines and the two sides are the same walk, so
+		// the claim holds there without the device having been asked.
 		assertMatchesScalarReference("""
 				(linalg:seed 7)
 				(defparameter *a* (linalg:rand 100000))
@@ -414,6 +466,12 @@ class JvmLinalgGpuAccelCompilerTest {
 		// fold and an axes TRANSPOSE are bit-identical to the defun at both widths, over
 		// INEXACT data, above the thresholds. Unlike the element-wise tier there is no
 		// libm in them and nothing to diverge.
+		//
+		// The #d block below is CUDA's half and declines outright on Metal, which has no
+		// double; the #f block is what runs on both. The axis FOLDS in either block are
+		// Metal's decline too -- it is not a member of that tier for size at all -- so
+		// there the equality they assert is the defun against itself. Deliberate: this
+		// file may not drop the #d coverage to make one backend's shapes universal.
 		assertMatchesScalarReference("""
 				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
 				(defparameter *m* (linalg:amax *x* :axis 1 :keepdims t))
@@ -464,26 +522,23 @@ class JvmLinalgGpuAccelCompilerTest {
 		// Exact at the operand width, so the device's fused multiply-adds cannot show
 		// and the answer must be the defun's EXACTLY -- the tolerance case is the
 		// library's own (am/ik/gpu/GpuTest), not this seam's.
-		assertMatchesScalarReference("""
-				(defparameter *a* (linalg:reshape (linalg:arange 1 4097) '(64 64)))
-				(defparameter *b* (linalg:reshape (linalg:arange 2 4098) '(64 64)))
-				(print (linalg:matmul *a* *b*))
-				""");
-		// Single width, and the operands are chosen so the FOLD stays exact too: every
-		// cell is a 64-long sum of integers under 2^24, where f32 addition is exact.
-		// 1..4096 squared would not be -- the defun accumulates in f64 and would answer
-		// something no f32 kernel can, which is the reduction contract, not this seam.
-		assertMatchesScalarReference("""
-				(defparameter *a*
-				  (linalg:reshape (linalg:arange 1 4097 :element-type 'single-float) '(64 64)))
-				(print (linalg:matmul (linalg:ones '(64 64) :element-type 'single-float) *a*))
-				""");
-		// A rectangular shape that is not a multiple of the 16x16 tile.
-		assertMatchesScalarReference("""
-				(defparameter *a* (linalg:reshape (linalg:arange 1 5111) '(70 73)))
-				(defparameter *b* (linalg:reshape (linalg:arange 1 5330) '(73 73)))
-				(print (linalg:matmul *a* *b*))
-				""");
+		//
+		// Sized off SIDE and written at TYPE, both of which this file already defines:
+		// at the hard-coded 64-cubes and the default width these used to build, every
+		// assertion here was the compiled defun against itself on a backend whose floor
+		// is higher, or that has no double.
+		assertTheDeviceTakesTheProduct((long) SIDE * SIDE * SIDE);
+		assertMatchesScalarReference(
+				exactProduct(SIDE + " " + SIDE, SIDE * SIDE, SIDE + " " + SIDE, SIDE * SIDE, TYPE));
+		// The width the hardware is for, on every backend rather than only on the one
+		// whose default is double.
+		assertMatchesScalarReference(exactProduct(SIDE + " " + SIDE, SIDE * SIDE, SIDE + " " + SIDE, SIDE * SIDE,
+				" :element-type 'single-float"));
+		// A rectangular shape whose three dimensions are each not a multiple of the
+		// 16x16 tile.
+		int n = SIDE + 2, m = SIDE + 6, p = SIDE - 4;
+		assertTheDeviceTakesTheProduct((long) n * m * p);
+		assertMatchesScalarReference(exactProduct(n + " " + m, n * m, m + " " + p, m * p, TYPE));
 	}
 
 	@Test
@@ -531,24 +586,17 @@ class JvmLinalgGpuAccelCompilerTest {
 		// The shape the flag exists for: torch.bmm, every attention layer, every
 		// torch:linear over a (B T C) activation. Exact at the operand width, so the
 		// device's fused multiply-adds cannot show and the answer must be the defun's.
-		assertMatchesScalarReference("""
-				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
-				(defparameter *b* (linalg:add (linalg:ones '(2 64 64)) 2.0))
-				(print (linalg:sum (linalg:matmul *a* *b*)))
-				""");
+		// Sized off SIDE for the same reason the rank-2 product above is.
+		String stack = "2 " + SIDE + " " + SIDE;
+		assertTheDeviceTakesTheProduct(2L * SIDE * SIDE * SIDE);
+		assertMatchesScalarReference(exactProduct(stack, 2 * SIDE * SIDE, stack, 2 * SIDE * SIDE, TYPE));
 		// A BROADCAST right operand, which is a 0 batch stride on the device.
-		assertMatchesScalarReference("""
-				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
-				(defparameter *b* (linalg:add (linalg:ones '(64 64)) 2.0))
-				(print (linalg:sum (linalg:matmul *a* *b*)))
-				""");
+		assertMatchesScalarReference(exactProduct(stack, 2 * SIDE * SIDE, SIDE + " " + SIDE, SIDE * SIDE, TYPE));
 		// Rank 4 with two leading axes, and single width.
-		assertMatchesScalarReference("""
-				(defparameter *a*
-				  (linalg:reshape (linalg:arange 1 12289 :element-type 'single-float) '(2 3 32 64)))
-				(defparameter *b* (linalg:add (linalg:ones '(2 3 64 32) :element-type 'single-float) 1.0))
-				(print (linalg:sum (linalg:matmul *a* *b*)))
-				""");
+		int h = SIDE / 2;
+		assertTheDeviceTakesTheProduct(6L * h * SIDE * h);
+		assertMatchesScalarReference(exactProduct("2 3 " + h + " " + SIDE, 6 * h * SIDE, "2 3 " + SIDE + " " + h,
+				6 * SIDE * h, " :element-type 'single-float"));
 	}
 
 	@Test
@@ -1183,8 +1231,28 @@ class JvmLinalgGpuAccelCompilerTest {
 		// run through the same call sites: T with the flag (fused kernel against device
 		// chain, bit for bit, exp and erf included) and T without it (defun against
 		// defun). The libm-free three are also byte-identical to the unflagged run.
-		int rows = (int) Math.max(256, (am.ik.gpu.GpuThresholds.foldMinElements() + 383) / 384);
+		//
+		// log-softmax is the ONE member pinned as a bound rather than as bit-identity,
+		// and the reason is structural rather than numerical: the chain it replaces ends
+		// in a linalg:log over the ROW SUMS, an array of `rows` elements, which is three
+		// orders of magnitude under the element-wise threshold and so runs on the host on
+		// any backend whose chain is not otherwise fully accepted. The fused kernel takes
+		// its log on the device. Two different logs, so the two sides cannot be the same
+		// bits, and asking them to be says nothing about the kernel. Measured on Metal
+		// (2026-09-03): this line answered NIL the moment the tier was sized so that it
+		// ran at all -- it had been sized off the fold threshold, which is the sentinel
+		// there, and the whole test was defun against defun.
+		// Sized off the FUSED threshold in force, which is the fold threshold on CUDA and
+		// the MAP threshold on Metal, whose fold threshold is the "never for its size"
+		// sentinel. Sized off the fold threshold -- as this was -- that arithmetic
+		// overflows there, Math.max hands back the floor of 256, and 256 x 384 sits under
+		// the fused threshold: every array-equal below then printed T from defun against
+		// defun. This is todo-495's fix, applied to the compiled sibling it missed.
+		int rows = (int) Math.max(256, (am.ik.gpu.GpuThresholds.fusedMinElements() + 383) / 384);
 		int n = rows * 384;
+		assertThat(am.ik.gpu.GpuThresholds.acceptedForSize(am.ik.gpu.GpuThresholds.fusedMinElements(), n))
+			.as("the fused tier is offered at %d elements here", n)
+			.isTrue();
 		String program = """
 				(defparameter *x* (linalg:reshape (linalg:linspace -3.0 3.0 %d%s) '(%d 384)))
 				(defparameter *g* (linalg:reshape (linalg:linspace 1.0 -2.0 %d%s) '(%d 384)))
@@ -1216,7 +1284,8 @@ class JvmLinalgGpuAccelCompilerTest {
 				(print (linalg:array-equal (linalg::%%la-scaled-masked-softmax *x* 8.0 *m* (/ -1.0 0.0) 1) (attention-chain *x*)))
 				(print (linalg:array-equal (linalg::%%la-scaled-masked-softmax-grad *g* (attention-chain *x*) 1 8.0 *m*)
 				                           (attention-grad-chain *g* (attention-chain *x*))))
-				(print (linalg:array-equal (linalg:log-softmax *x* :axis -1) (log-softmax-chain *x*)))
+				(print (< (linalg:amax (linalg:abs (linalg:sub (linalg:log-softmax *x* :axis -1)
+				                                               (log-softmax-chain *x*)))) 1.0e-5))
 				(print (linalg:array-equal
 				        (linalg::%%la-log-softmax-grad *g* (linalg:log-softmax *x* :axis -1) 1)
 				        (log-softmax-grad-chain *g* (linalg:log-softmax *x* :axis -1))))
