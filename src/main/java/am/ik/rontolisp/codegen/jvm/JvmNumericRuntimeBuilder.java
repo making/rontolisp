@@ -1014,8 +1014,18 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _fmod(double a, double b): floating-point modulo whose result takes the sign of the
-	// divisor. r = _frem(a, b); if (r * b < 0) r += b (opposite signs and r != 0). The
-	// correction never fires on a zero, so mod and rem share _frem's zero unchanged.
+	// divisor. r = _frem(a, b), corrected by adding the divisor when the two have
+	// OPPOSITE signs and r is not a zero -- so mod and rem share _frem's zero unchanged.
+	//
+	// The signs are compared as the two DCMPG results, not as `r * b < 0`: that product
+	// UNDERFLOWS to a zero when both operands are tiny, and the correction then silently
+	// did not fire -- (mod -1.2345678e-296 1d-300) answered the negative remainder
+	// instead of the positive one, and (mod 4.9d-324 -0.1) answered the dividend.
+	// DCMPG(x, 0.0) is -1 below zero and 1 above (and 1 for a NaN, which lands on
+	// whichever arm leaves the NaN alone), so equal results mean equal signs.
+	//
+	// r = _frem(a, b); if (r == 0) return r;
+	// return dcmpg(r, 0) == dcmpg(b, 0) ? r : r + b;
 	private static NumericMethod buildFmod(Utf8Constant name, Utf8Constant desc, MethodrefConstant rFrem) {
 		List<Integer> c = new ArrayList<>();
 		c.add(Opcode.DLOAD_0);
@@ -1026,25 +1036,35 @@ final class JvmNumericRuntimeBuilder {
 		c.add(4);
 		c.add(Opcode.DLOAD);
 		c.add(4);
-		c.add(Opcode.DLOAD_2);
-		c.add(Opcode.DMUL);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPL); // NaN compares as -1, so a NaN remainder is not a zero
+		int ifNonZero = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.DLOAD);
+		c.add(4);
+		c.add(Opcode.DRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNonZero, c.size());
+		c.add(Opcode.DLOAD);
+		c.add(4);
 		c.add(Opcode.DCONST_0);
 		c.add(Opcode.DCMPG);
-		int ifNonNeg = c.size();
-		c.add(Opcode.IFGE);
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPG);
+		int ifSameSign = c.size();
+		c.add(Opcode.IF_ICMPEQ);
 		JvmRuntimeBuilder.emitU2(c, 0);
 		c.add(Opcode.DLOAD);
 		c.add(4);
 		c.add(Opcode.DLOAD_2);
 		c.add(Opcode.DADD);
-		c.add(Opcode.DSTORE);
-		c.add(4);
-		int done = c.size();
-		JvmRuntimeBuilder.patchBranch(c, ifNonNeg, done);
+		c.add(Opcode.DRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifSameSign, c.size());
 		c.add(Opcode.DLOAD);
 		c.add(4);
 		c.add(Opcode.DRETURN);
-		return new NumericMethod(name, desc, c, 4, 6, List.of());
+		return new NumericMethod(name, desc, c, 5, 6, List.of());
 	}
 
 	// _frem(double a, double b): the float remainder shared by rem and _fmod. DREM,

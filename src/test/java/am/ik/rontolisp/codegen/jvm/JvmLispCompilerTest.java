@@ -14337,6 +14337,59 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void modCorrectsTheSignWithoutMultiplyingTheOperands() throws Exception {
+		// _fmod used to decide "opposite signs" with `r * b < 0`. That product UNDERFLOWS
+		// to a zero when both operands are tiny, so the correction never fired and mod
+		// answered rem's negative remainder -- the interpreter, which compares the two
+		// signs directly, disagreed. Found by the wasm magnitude sweep
+		// (WasmLispCompilerIntegrationTest#theFloatRemainderMatchesTheInterpreterOverAMagnitudeSweep).
+		assertThat(compileAndRun("(defun mm (a b) (mod a b)) (print (mm -1.2345678e-296 1d-300))"))
+			.isEqualTo("3.219999999997487e-301");
+		assertThat(compileAndRun("(defun mm (a b) (mod a b)) (print (mm 4.9d-324 -0.1))")).isEqualTo("-0.1");
+		assertThat(compileAndRun("(defun mm (a b) (mod a b)) (print (mm -4.9d-324 0.1))")).isEqualTo("0.1");
+		// The ordinary magnitudes, the zero (which takes no correction at all) and the
+		// infinite divisor are unmoved.
+		assertThat(compileAndRun("""
+				(defun mm (a b) (mod a b))
+				(defun mr (a b) (rem a b))
+				(print (list (mm -7.0 3.0) (mm 7.0 -3.0) (mm -0.0 2.0) (mr -0.0 2.0)))
+				(print (list (mm 3.0 (/ 1.0 0.0)) (mm -3.0 (/ 1.0 0.0)) (mm 3.0 (/ -1.0 0.0))))
+				""")).isEqualTo("""
+				(2.0 -2.0 -0.0 -0.0)
+				(3.0 Infinity -Infinity)""");
+	}
+
+	@Test
+	void theFloatRemainderMatchesTheInterpreterOverAMagnitudeSweep() throws Exception {
+		// The JVM twin of the wasm sweep: every ordered pair of the values below --
+		// spanning 2^53 and 2^63 in both directions plus subnormals and both signed
+		// zeros -- against the interpreter, whose float remainder is Java's DREM (the
+		// exact IEEE fmod) and whose mod correction compares the two signs directly.
+		double[] dividends = { 1e18, 1e300, -1e300, 12345.678, -12345.678, 3.0, -3.0, 0.5, -0.5, 1e-300, 4.9e-324, 1.0,
+				-1.0, -0.0, 0.0, 1e30, 2.5, -7.5, 1e-10, 123456789.0 };
+		double[] divisors = { 7.0, -7.0, 3.0, 0.1, -0.1, 1e-300, 4.9e-324, 2.5, 1e300, 1.0, -1.0, 0.5 };
+		StringBuilder source = new StringBuilder("""
+				(defun mr (a b) (rem a b))
+				(defun mm (a b) (mod a b))
+				""");
+		for (double a : dividends) {
+			for (double b : divisors) {
+				String x = Double.toString(a).replace('E', 'e');
+				String y = Double.toString(b).replace('E', 'e');
+				source.append("(print (list (mr %s %s) (mm %s %s)))%n".formatted(x, y, x, y));
+			}
+		}
+		String program = source.toString();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(compileAndRun(program)).isEqualTo(interpreted.toString(StandardCharsets.UTF_8).trim());
+	}
+
+	@Test
 	void nanComparisonsAreUnorderedOnBothPaths() throws Exception {
 		// DCMPL-for-every-operator made < and <= answer t against NaN.
 		assertThat(compileAndRun("(print (< (/ 0.0 0.0) 1.0))")).isEqualTo("NIL");

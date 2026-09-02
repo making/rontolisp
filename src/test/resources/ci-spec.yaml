@@ -1289,6 +1289,32 @@ cases:
       (0.0 0.0 0.0 0.0)
       (-0.0 -0.0 0.0 0.0)
       (-1.0 1.0 1.0 -1.0)
+  # The MAGNITUDE half of the same definition. rem is a - b*q for an exact INTEGER q, and
+  # that quantity is always representable as a double, so there is one right answer at
+  # every magnitude and no rounding is allowed anywhere in reaching it. Both wasm
+  # backends used to evaluate the formula in f64 -- q = trunc(a/b) is not the
+  # mathematical quotient above 2^53, and an infinite divisor made it inf * 0.0 -- and
+  # the JVM decided mod's sign correction with r*b, whose product underflows to a zero
+  # for tiny operands. SBCL is not the oracle here: it rounds 1d18 the same way the f64
+  # formula did, and signals on every infinite operand. See .kb/linalg-simd.md, mod/rem.
+  - name: mod-rem-are-the-exact-float-remainder-at-any-magnitude
+    source: |
+      (defun mre-rem (a b) (rem a b))
+      (defun mre-mod (a b) (mod a b))
+      (defvar *mre-inf* (/ 1.0 0.0))
+      (print (list (mre-rem 1d18 7.0) (mre-rem 1d300 7.0) (mre-mod -1d300 7.0)))
+      (print (list (mre-rem 3.0 *mre-inf*) (mre-mod 3.0 *mre-inf*) (mre-mod -3.0 *mre-inf*)))
+      (print (list (mre-mod 3.0 (- *mre-inf*)) (mre-rem -0.0 *mre-inf*) (mre-rem *mre-inf* 3.0)))
+      (print (list (mre-rem 1d-300 4.9d-324) (mre-mod 1d30 3.0) (mre-rem 1d30 3.0)))
+      (print (list (mre-mod -1.2345678d-296 1d-300) (mre-mod 4.9d-324 -0.1) (mre-mod -4.9d-324 0.1)))
+      (print (list (rem 1d18 7.0) (mod -1d300 7.0) (mod 4.9d-324 -0.1)))
+    expected: |
+      (1.0 1.0 6.0)
+      (3.0 3.0 Infinity)
+      (-Infinity -0.0 NaN)
+      (0.0 1.0 1.0)
+      (3.219999999997487e-301 -0.1 0.1)
+      (1.0 6.0 -0.1)
   # min/max resolve a tie and an unordered pair with ONE rule -- min is (a <= b) ? a : b
   # and max is (a >= b) ? a : b, IEEE comparisons -- so NaN is the same question as the
   # signed-zero tie and belongs beside it.

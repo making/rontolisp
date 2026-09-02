@@ -864,30 +864,60 @@ emits a native `f64.le`/`f64.ge`), they just compute the same select as the gene
   sign, and for a nonzero dividend `b*q` is the dividend itself, whose `x - x` is IEEE's
   `+0.0`. The interpreter and the JVM keep Java's exact `%`/`DREM` and re-derive only the
   zero (`_frem`, which `_fmod` calls first -- its divisor-sign correction never fires on a
-  zero, so `mod` and `rem` share one zero); both wasm compilers still synthesize
-  `a - b*(floor|trunc)(a/b)` in f64 and get the right zero by ADDING `+0.0` to the
-  QUOTIENT, which is exactly the "an exact integer zero is `+0`" coercion and replaces the
-  `f64.copysign` re-signing todo-648 had added (`f64.trunc(-0.0)` is `-0.0`, which an
-  integer quotient never is).
+  zero, so `mod` and `rem` share one zero); both wasm compilers reach the same zero from
+  the exact reduction below, spelling out the same three steps `_frem` does.
 
-  **The magnitude is deliberately not computed from that formula**, and SBCL is not the
-  oracle for it. Evaluating `a - b*q` in f64 rounds; `DREM` does not. `(rem 1d18 7.0)` is
-  `1.0` on the interpreter and the JVM -- the true value, since `10^6 = 1 (mod 7)` -- and
-  `0.0` on SBCL, whose `7.0*q` rounds back to `1d18`. So CLHS's words decide the SIGN,
-  where they are a definition, and not the magnitude, where they only describe a
-  mathematical quantity that `DREM` computes exactly.
+  **The magnitude is NOT the f64 evaluation of that formula**, and SBCL is not the oracle
+  for it. `a - b*q` for an exact integer `q` is a quantity with ONE right value, and for
+  float operands that value is always representable as a double -- `|a - b*q| < |b|` and
+  the difference of two representable multiples at one exponent scale is exact, which is
+  why IEEE 754 defines `fmod` as an exact operation. Evaluating the formula in f64
+  instead rounds twice (`a/b` rounds, so above 2^53 `trunc(a/b)` is not the mathematical
+  quotient, and `b*q` rounds again). `(rem 1d18 7.0)` is `1.0` -- `10^6 = 1 (mod 7)`, so
+  `10^18 = 1` -- and `0.0` on SBCL, whose `7.0*q` rounds back to `1d18`. So CLHS's words
+  decide the SIGN, where they are a definition, and the mathematics decides the
+  magnitude, where the words only describe a quantity `DREM` computes exactly.
 
-  Two divergences the todo-652 sweep turned up and did NOT change, both in the wasm float
-  arm and both from evaluating the formula in f64 rather than computing an exact
-  remainder: `(rem 1d18 7.0)` is `0.0` on both wasm backends against `1.0` on the
-  interpreter and the JVM, and an INFINITE divisor is `NaN` on wasm (`inf * 0.0`) where
-  the interpreter and the JVM answer `fmod`'s `(rem 3.0 inf)` = `3.0`, `(mod -3.0 inf)` =
-  `Infinity`. SBCL signals on every infinite operand, so there is no oracle for the second
-  one. Both are filed as `.todo/659`. A zero divisor is `NaN` on all four (SBCL signals
-  `division-by-zero`), which is the same non-trapping float policy `(/ 1.0 0.0)` follows.
-  The sweep also found that `floor`/`truncate` SATURATE a large float quotient at the
-  `long` range and hand back the dividend as the remainder, identically on all four --
-  `.todo/660`, and the reason the identity above is only pinned below 2^53.
+  **todo-659 brought both wasm backends up to that on 2026-09-02**, so all five paths now
+  answer the exact remainder at every magnitude. The wasm arm is
+  `codegen/wasm/WasmFmodRuntimeBuilder`, emitted into the wasm-GC `_rat_rem`/`_rat_mod`
+  float arm and INLINED at the site by `NoGcWasmCompiler.compileModRem` (that backend
+  emits helper functions only behind linear memory, so it has nowhere to hang one) -- one
+  builder, so the two cannot drift. It is the textbook exact `fmod`: scale `|b|` up by
+  powers of two while it fits under `|a|`, then walk back down subtracting where it fits,
+  every step exact (doubling and halving a power-of-two multiple is exact; each
+  subtraction runs under `d <= x < 2d`, which is Sterbenz's lemma) and terminating in
+  `exponent(a) - exponent(b) + 1` steps -- ~945 of them for `(rem 1d-300 4.9d-324)`, the
+  worst case a program can ask for. An INFINITE divisor takes no loop at all: the
+  truncating quotient of a finite dividend is the integer zero, so the remainder is the
+  dividend (IEEE 754's `fmod(x, inf)`), and `mod`'s divisor-sign correction turns the
+  opposite-sign case into `a + b`, an infinity -- `(rem 3.0 inf)` = `3.0`,
+  `(mod -3.0 inf)` = `Infinity`. SBCL signals on every infinite operand, so that row has
+  no upstream oracle and is decided by the formula. A zero divisor is `NaN` on all five
+  (SBCL signals `division-by-zero`), the same non-trapping float policy `(/ 1.0 0.0)`
+  follows.
+
+  **`mod`'s sign correction must not multiply the operands.** Both the JVM's `_fmod` and
+  the first draft of the wasm arm tested "opposite signs" as `r * b < 0`; that product
+  UNDERFLOWS to a zero when both are tiny, so the correction silently did not fire and
+  `mod` answered `rem`'s negative remainder -- `(mod -1.2345678d-296 1d-300)` was
+  `-6.78d-301` on the JVM against the interpreter's `3.22d-301`, and `(mod 4.9d-324 -0.1)`
+  was the dividend. The interpreter always compared the two signs directly; the JVM and
+  both wasm backends now do too (todo-659 found it with the sweep below, and fixed it).
+
+  The five paths are pinned by the `ci-spec.yaml` case
+  `mod-rem-are-the-exact-float-remainder-at-any-magnitude` (which carries the
+  `--no-gc`-free four) plus, per backend, a 240-pair DIFFERENTIAL against the interpreter
+  over a value set crossing 2^53, 2^63, the subnormals and both signed zeros --
+  `theFloatRemainderMatchesTheInterpreterOverAMagnitudeSweep` in
+  `WasmLispCompilerIntegrationTest` and in `JvmLispCompilerTest`, with `--no-gc` and the
+  component on the fixed table beside them. `floor`/`truncate` still SATURATE a large
+  float quotient at the `long` range and hand back the dividend as the remainder,
+  identically on all four -- `.todo/660`, and the reason the
+  `quotient*divisor + remainder = number` identity above is only pinned below 2^53.
+  Fixing 660 does not move 659's answer: the exact `truncate` quotient of `1d18` by `7.0`
+  is `142857142857142857` (today's is 7 too large) and its remainder is `1.0`, which is
+  what `rem` already answers.
 - **`signum`/`sin`/`tan`/`tanh`** flattened on wasm because each computes the answer by a
   route that erases the sign -- `(x>0)-(x<0)` is `+0.0` for `+0.0`, `-0.0` and NaN alike,
   the Cody-Waite reduction's `-0.0 - (-0.0)` cancels to `+0.0`, and `tanh`'s

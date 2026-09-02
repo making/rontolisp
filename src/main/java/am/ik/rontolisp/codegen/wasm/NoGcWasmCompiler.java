@@ -2878,23 +2878,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(a);
 		compileCoerced(args.get(2), fn, Ty.FLOAT);
 		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(b);
-		// a - b * round(a / b)
-		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(a);
-		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
-		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(a);
-		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
-		fn.writer.write(Instruction.F64_DIV);
-		fn.writer.write(mod ? Instruction.F64_FLOOR : Instruction.F64_TRUNC);
-		// CLHS's quotient is an exact INTEGER, and an integer zero is +0, where
-		// f64.floor/f64.trunc keep the sign of a zero quotient: a = -0.0 over a positive
-		// b gives q = -0.0, so b*q = -0.0 and the cancellation -0.0 - (-0.0) is +0.0
-		// where CLHS wants -0.0. Adding +0.0 to the quotient is that coercion and
-		// nothing else, so the subtraction then carries the right sign of zero itself.
-		// Kept identical to the wasm-GC _rat_rem/_rat_mod float arm.
-		fn.writer.write(Instruction.F64_CONST).writeF64(0.0);
-		fn.writer.write(Instruction.F64_ADD);
-		fn.writer.write(Instruction.F64_MUL);
-		fn.writer.write(Instruction.F64_SUB);
+		// The EXACT float remainder, emitted from the same builder the wasm-GC
+		// _rat_rem/_rat_mod float arm uses, so the two backends cannot drift: evaluating
+		// `a - b*(floor|trunc)(a/b)` in f64 rounds above 2^53 and multiplies inf by a
+		// zero quotient for an infinite divisor. This backend has no shared-runtime
+		// section to hang a helper function off (every helper it emits is gated on
+		// linear memory), so the reduction is inlined at the site -- ~180 bytes, and
+		// only in a body that actually takes a float mod/rem.
+		WasmFmodRuntimeBuilder.emitRemainder(fn.writer, mod, a, b, fn.allocLocal(Ty.FLOAT), fn.allocLocal(Ty.FLOAT),
+				fn.allocLocal(Ty.FLOAT));
 		return Ty.FLOAT;
 	}
 

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -1630,7 +1631,8 @@ class WasmLispCompilerIntegrationTest {
 		// variable-borne float fell through to the i32-only path and trapped at runtime
 		// with "illegal cast". Now mod/rem dispatch through the rational runtime
 		// (FUNC_RAT_MOD/FUNC_RAT_REM): rem = a - b*trunc(a/b), mod = a - b*floor(a/b),
-		// computed in f64 when either operand is a float. The operands here arrive via
+		// taken EXACTLY when either operand is a float (see
+		// theFloatRemainderIsExactAtEveryMagnitude below). The operands here arrive via
 		// :float params, so they are NOT literals -- this is the path that used to trap.
 		// Results are scaled to an integer (round of a float, which the backend already
 		// supports) so the assertion does not depend on float-printing format.
@@ -1678,6 +1680,131 @@ class WasmLispCompilerIntegrationTest {
 				-1/2
 				1/2
 				0""");
+	}
+
+	// The float remainder at magnitudes where evaluating a - b*(floor|trunc)(a/b) in f64
+	// stops being that quantity, and for an infinite divisor. Every value arrives through
+	// a defun parameter except the last line, which is the literal (compile-time folded)
+	// path. The answers are the EXACT ones: a - b*q with an exact integer q is always
+	// representable as a double, so there is a single right value here and it was
+	// verified in exact rational arithmetic, not adopted from whichever backends agreed
+	// (SBCL rounds 1d18 the same way the old f64 formula did, and signals on every
+	// infinite operand). See .kb/linalg-simd.md, mod/rem.
+	private static final String EXACT_REMAINDER_PROGRAM = """
+			(defun mr (a b) (rem a b))
+			(defun mm (a b) (mod a b))
+			(defvar *inf* (/ 1.0 0.0))
+			(print (list (mr 1d18 7.0) (mr 1d300 7.0) (mm -1d300 7.0)))
+			(print (list (mr 3.0 *inf*) (mm 3.0 *inf*) (mm -3.0 *inf*)))
+			(print (list (mm 3.0 (- *inf*)) (mr -0.0 *inf*) (mr *inf* 3.0)))
+			(print (list (mr 1.0 0.0) (mr -7.5 2.5) (mm -7.5 2.5)))
+			(print (list (mr 12345.678 3.0) (mm -12345.678 3.0)))
+			(print (list (mr 1d-300 4.9d-324) (mm 1d30 3.0) (mr 1d30 3.0)))
+			(print (list (rem 1d18 7.0) (mod -1d300 7.0) (rem 12345.678 3.0)))
+			""";
+
+	private static final String EXACT_REMAINDER_EXPECTED = """
+			(1.0 1.0 6.0)
+			(3.0 3.0 Infinity)
+			(-Infinity -0.0 NaN)
+			(NaN 0.0 0.0)
+			(0.6779999999998836 2.3220000000001164)
+			(0.0 1.0 1.0)
+			(1.0 6.0 0.6779999999998836)""";
+
+	@Test
+	void theFloatRemainderIsExactAtEveryMagnitude() throws Exception {
+		// (rem 1d18 7.0) is 1.0 -- 10^6 = 1 (mod 7), so 10^18 = 1 -- and used to be 0.0
+		// here: q = trunc(a/b) is a rounded double above 2^53, so b*q is not a and the
+		// subtraction returned the leftovers. An infinite divisor used to be NaN
+		// (inf * 0.0); the truncating quotient is the integer zero, so the remainder is
+		// the dividend, and mod's divisor-sign correction turns the opposite-sign case
+		// into an infinity.
+		assertThat(compileAndRun(EXACT_REMAINDER_PROGRAM)).isEqualTo(EXACT_REMAINDER_EXPECTED);
+	}
+
+	@Test
+	void theComponentFloatRemainderIsExactAtEveryMagnitude() throws Exception {
+		assertThat(compileComponentAndRun(EXACT_REMAINDER_PROGRAM)).isEqualTo(EXACT_REMAINDER_EXPECTED);
+	}
+
+	@Test
+	void noGcFloatRemainderIsExactAtEveryMagnitude() throws Exception {
+		// The same reduction, inlined at the site by NoGcWasmCompiler from the shared
+		// WasmFmodRuntimeBuilder. Printed rather than returned so the comparison is the
+		// same text the other backends emit, infinities and signed zero included.
+		String program = """
+				(defun show (a b)
+				  (print (rem a b))
+				  (print (mod a b)))
+				(rontolisp:wasm-export 'show :params '(:float :float) :returns :void)
+				""";
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "1e18", "7.0")).isEqualTo("""
+				1.0
+				1.0""");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "-1e300", "7.0")).isEqualTo("""
+				-1.0
+				6.0""");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "3.0", "inf")).isEqualTo("""
+				3.0
+				3.0""");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "-3.0", "inf")).isEqualTo("""
+				-3.0
+				Infinity""");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "3.0", "-inf")).isEqualTo("""
+				3.0
+				-Infinity""");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "-0.0", "inf")).isEqualTo("""
+				-0.0
+				-0.0""");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "inf", "3.0")).isEqualTo("""
+				NaN
+				NaN""");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "1.0", "0.0")).isEqualTo("""
+				NaN
+				NaN""");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "-12345.678", "3.0")).isEqualTo("""
+				-0.6779999999998836
+				2.3220000000001164""");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "-7.5", "2.5")).isEqualTo("""
+				0.0
+				0.0""");
+	}
+
+	@Test
+	void theFloatRemainderMatchesTheInterpreterOverAMagnitudeSweep() throws Exception {
+		// A differential rather than a table: every ordered pair of the values below,
+		// spanning 2^53 and 2^63 in both directions plus subnormals and both signed
+		// zeros, compared against the interpreter -- whose float remainder is Java's
+		// DREM, the exact IEEE fmod. 20 x 12 pairs, both operators, through defun
+		// parameters so nothing folds at compile time.
+		double[] dividends = { 1e18, 1e300, -1e300, 12345.678, -12345.678, 3.0, -3.0, 0.5, -0.5, 1e-300, 4.9e-324, 1.0,
+				-1.0, -0.0, 0.0, 1e30, 2.5, -7.5, 1e-10, 123456789.0 };
+		double[] divisors = { 7.0, -7.0, 3.0, 0.1, -0.1, 1e-300, 4.9e-324, 2.5, 1e300, 1.0, -1.0, 0.5 };
+		StringBuilder source = new StringBuilder("""
+				(defun mr (a b) (rem a b))
+				(defun mm (a b) (mod a b))
+				""");
+		for (double a : dividends) {
+			for (double b : divisors) {
+				source.append("(print (list (mr %s %s) (mm %s %s)))%n".formatted(lisp(a), lisp(b), lisp(a), lisp(b)));
+			}
+		}
+		String program = source.toString();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new java.io.PrintStream(interpreted, true, java.nio.charset.StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(compileAndRun(program))
+			.isEqualTo(interpreted.toString(java.nio.charset.StandardCharsets.UTF_8).trim());
+	}
+
+	// A double as a Lisp literal the reader takes back bit-for-bit (its exponent marker
+	// is a double-float one in rontolisp whether it is written e or d).
+	private static String lisp(double d) {
+		return Double.toString(d).replace('E', 'e');
 	}
 
 	// Compiles in --no-wasi (reactor) mode -- the module has no wasi_snapshot_preview1

@@ -312,46 +312,30 @@ final class WasmRatioRuntimeBuilder {
 	// _rat_rem/_rat_mod((ref null eq) a, (ref null eq) b) -> (ref null eq): the Common
 	// Lisp remainder (sign of the dividend) and modulo (sign of the divisor). Both are
 	// a - b*q with q = trunc(a/b) for rem and q = floor(a/b) for mod. A float operand
-	// (either side) computes q in f64 (f64.trunc / f64.floor); two exact integers (any
-	// tier) go through _big_divrem / _big_mod, exact at any magnitude; otherwise the
-	// exact rational helpers compute a - b*(trunc|floor)(a/b). Mirrors the dispatch
-	// shape of buildRatBinaryBody so a float reaching mod/rem through a variable is
-	// handled.
+	// (either side) takes the EXACT float remainder (WasmFmodRuntimeBuilder, shared with
+	// --no-gc: evaluating the formula in f64 rounds above 2^53 and answers NaN for an
+	// infinite divisor, where the interpreter and the JVM's DREM are exact); two exact
+	// integers (any tier) go through _big_divrem / _big_mod, exact at any magnitude;
+	// otherwise the exact rational helpers compute a - b*(trunc|floor)(a/b). Mirrors the
+	// dispatch shape of buildRatBinaryBody so a float reaching mod/rem through a
+	// variable is handled.
 	static byte[] buildRatRemBody(boolean mod) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		// locals: 2=fa (f64), 3=fb (f64)
+		// locals: 2=fa (f64), 3=fb (f64), 4/5/6 = the remainder loop's scratch
 		w.write(1);
-		w.write(2);
+		w.write(5);
 		w.write(Type.F64);
 
-		// Float path: a - b * (floor|trunc)(a / b), all in f64, boxed as TYPE_FLOAT.
+		// Float path: the exact remainder, boxed as TYPE_FLOAT.
 		emitEitherFloat(w);
 		ifRefNullEq(w);
 		emitLocalToF64(w, 0);
 		setLocal(w, 2);
 		emitLocalToF64(w, 1);
 		setLocal(w, 3);
-		getLocal(w, 2); // fa
-		getLocal(w, 3); // fb
-		getLocal(w, 2);
-		getLocal(w, 3);
-		w.write(Instruction.F64_DIV);
-		w.write(mod ? Instruction.F64_FLOOR : Instruction.F64_TRUNC);
-		// CLHS's quotient is an exact INTEGER, and an integer zero is +0. f64.floor and
-		// f64.trunc keep the sign of a zero quotient instead, which is the one place
-		// where evaluating the formula in f64 parts company with it: fa = -0.0 over a
-		// positive fb gives q = -0.0, so fb*q = -0.0 and the cancellation -0.0 - (-0.0)
-		// is +0.0 where CLHS wants -0.0 - (+0.0) = -0.0. Adding +0.0 to the quotient is
-		// exactly that coercion -- it maps -0.0 to +0.0 and leaves every other value,
-		// NaN and the infinities included, alone -- after which the subtraction carries
-		// the right sign of zero on its own, with no re-signing of the result.
-		w.write(Instruction.F64_CONST);
-		w.writeF64(0.0);
-		w.write(Instruction.F64_ADD); // q
-		w.write(Instruction.F64_MUL); // fb*q
-		w.write(Instruction.F64_SUB); // fa - fb*q
+		WasmFmodRuntimeBuilder.emitRemainder(w, mod, 2, 3, 4, 5, 6);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.ELSE);
