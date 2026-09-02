@@ -38,12 +38,12 @@ final class JvmExprCompiler {
 
 	/**
 	 * Compiles a printing operator, routed through {@code print-object} when the program
-	 * defines a method on it and through {@code %print-cased} when it mentions
-	 * {@code *print-case*}; compiled as it always was otherwise -- the gate that keeps
-	 * every program using neither byte-identical.
+	 * defines a method on it and through {@code %print-cased} when it mentions a
+	 * printer-control variable; compiled as it always was otherwise -- the gate that
+	 * keeps every program using neither byte-identical.
 	 */
 	private static void compilePrintOperator(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Runnable plain) {
-		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, ctx.printCase);
+		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, ctx.printControls);
 		if (hooked == null) {
 			plain.run();
 			return;
@@ -764,9 +764,16 @@ final class JvmExprCompiler {
 					}
 				}
 				case LispNames.WRITE_TO_STRING -> {
-					compilePrintOperator(cons, ctx, className,
-							() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
-					JvmArrayCompiler.emitToMutStr(ctx, className);
+					// A keyword tail binds the printer variables around the one-argument
+					// primitive (LispMacroExpander.expandWriteToStringKeywords).
+					if (cons.isProperList() && cons.toList().size() > 2) {
+						compileExpr(LispMacroExpander.expandWriteToStringKeywords(cons), ctx, className);
+					}
+					else {
+						compilePrintOperator(cons, ctx, className,
+								() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
+						JvmArrayCompiler.emitToMutStr(ctx, className);
+					}
 				}
 				case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL ->
 					JvmStringStreamCompiler.compileMakeOutputStream(cons, ctx, className);

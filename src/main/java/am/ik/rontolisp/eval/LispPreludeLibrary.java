@@ -2019,79 +2019,114 @@ public final class LispPreludeLibrary {
 				  (let ((n (char-code character)))
 				    (if (or (and (> n 31) (< n 127)) (= n 10)) t nil)))
 				""");
-		// *print-case*: the ONE case-applying renderer every backend prints through when
-		// the program mentions the variable (LispMacroExpander rewrites the printing
-		// operators onto it). It walks the value rather than the rendered text because
-		// only SYMBOL spellings are cased -- a string element keeps its own characters,
-		// and a character prints as itself. What it does NOT walk is the containers whose
-		// rendering is a runtime form of its own (a structure, an instance, a hash table,
-		// an array of rank != 1, a packed float array): those delegate to the raw
-		// conversion, so a symbol nested in one keeps the stored (upper-case) spelling.
-		// .kb/pretty-printer.md carries the re-evaluation trigger. The vector guard is
-		// the
-		// twin of the generated %print-object-str's -- the two walks are never both live
-		// in one program (a program with a print-object route walks THERE and hands this
-		// one leaves), so they have to be read together to stay in step.
+		// The printer-control renderer: the ONE walk every backend prints through when
+		// the program mentions *print-case* / *print-length* / *print-level* /
+		// *print-gensym* / *print-base* / *print-radix* -- or calls write /
+		// write-to-string with a keyword that binds one (LispMacroExpander rewrites the
+		// printing operators onto it). It walks the VALUE rather than the rendered text
+		// because only SYMBOL spellings are cased, only lists and vectors are truncated
+		// and only a rational is re-based -- a string element keeps its own characters,
+		// and a character prints as itself. What it does NOT walk is the containers
+		// whose rendering is a runtime form of its own (a structure, an instance, a
+		// hash table, an array of rank != 1, a packed float array): those delegate to
+		// the raw conversion, so a symbol nested in one keeps the stored (upper-case)
+		// spelling and its elements are never truncated. .kb/pretty-printer.md carries
+		// the re-evaluation trigger. The vector guard is the twin of the generated
+		// %print-object-str's -- the two walks are never both live in one program (a
+		// program with a print-object route walks THERE and hands this one leaves), so
+		// they have to be read together to stay in step. Under every default the raw
+		// conversion answers directly, which is what keeps a program that merely calls
+		// write byte-identical in OUTPUT to one that never mentions a variable.
 		SOURCES.put(LispNames.PRINT_CASED_INTERNAL, """
 				(defun %print-cased (%pc-x %pc-esc)
-				  (if (eq *print-case* :upcase)
+				  (if (and (eq *print-case* :upcase) (null *print-length*) (null *print-level*)
+				           *print-gensym* (eql *print-base* 10) (null *print-radix*))
 				      (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x))
-				      (%pc-walk %pc-x %pc-esc nil 0)))
+				      (%pc-walk %pc-x %pc-esc nil 0 0)))
 				""");
 		// The recursive half of %print-cased, carrying the cycle guard the raw
 		// renderers carry (RenderCycleGuard, .kb/pretty-printer.md): the rendering path
 		// and its depth thread through as arguments, a cons or vector already on the
 		// path -- or the frame past 256 -- prints "#", and the cdr chain's cycle-start
 		// cell (Floyd, %pc-chain-stop) prints as the " . #" improper tail on its second
-		// arrival. The guard is the twin of the %print-object-str walk's (%pos-walk);
-		// the two walks are never both live in one program, and have to stay in step.
+		// arrival. The *print-level* depth (%pc-lvl) is a SEPARATE counter from the
+		// guard's: the 'x / #'x abbreviation is transparent to it (SBCL prints
+		// (a '(b)) as (A '#) under level 1 and ''(b) as '(B)) but still opens a guard
+		// frame, exactly like the raw renderer's. *print-length* counts the elements a
+		// list or vector has printed and spells the rest as "..." -- only when the rest
+		// is a cons, so (1 2 . 3) under length 2 keeps its dotted tail. A gensym loses
+		// its #: under a nil *print-gensym*, a rational takes %print-radixed when
+		// *print-base* / *print-radix* are off their defaults, and a symbol spelling
+		// goes through %print-case-fold. The guard is the twin of the
+		// %print-object-str walk's (%pos-walk); the two walks are never both live in
+		// one program, and have to stay in step.
 		SOURCES.put(LispNames.PRINT_CASED_WALK_INTERNAL,
 				"""
-						(defun %pc-walk (%pc-x %pc-esc %pc-path %pc-depth)
+						(defun %pc-walk (%pc-x %pc-esc %pc-path %pc-depth %pc-lvl)
 						  (cond ((symbolp %pc-x)
-						         (%print-case-fold (if %pc-esc
-						                               (%prin1-to-string %pc-x)
-						                               (%princ-to-string %pc-x))))
+						         (%print-case-fold
+						           (let ((%pc-s (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x))))
+						             (if (and %pc-esc (null *print-gensym*) (> (length %pc-s) 2)
+						                      (char= (char %pc-s 0) #\\#) (char= (char %pc-s 1) #\\:))
+						                 (subseq %pc-s 2)
+						                 %pc-s))))
 						        ((consp %pc-x)
 						         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256))
 						             "#"
-						             (let ((%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1)))
-						               (if (and (symbolp (car %pc-x)) (consp (cdr %pc-x)) (null (cddr %pc-x))
-						                        (or (eq (car %pc-x) 'quote) (eq (car %pc-x) 'function)))
-						                   (concatenate 'string (if (eq (car %pc-x) 'quote) "'" "#'")
-						                                (%pc-walk (cadr %pc-x) %pc-esc %pc-sub %pc-subd))
-						                   (let ((%pc-acc "(") (%pc-cur %pc-x) (%pc-sep "")
-						                         (%pc-stop (%pc-chain-stop %pc-x)) (%pc-seen nil) (%pc-done nil))
-						                     (while (and (consp %pc-cur) (not %pc-done))
-						                       (if (and %pc-seen (eq %pc-cur %pc-stop))
-						                           (setq %pc-done t)
-						                           (progn
-						                             (when (eq %pc-cur %pc-stop)
-						                               (setq %pc-seen t))
-						                             (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
-						                                                        (%pc-walk (car %pc-cur) %pc-esc %pc-sub %pc-subd)))
-						                             (setq %pc-sep " ")
-						                             (setq %pc-cur (cdr %pc-cur)))))
-						                     (if %pc-done
-						                         (concatenate 'string %pc-acc " . #)")
-						                         (progn
-						                           (unless (null %pc-cur)
-						                             (setq %pc-acc (concatenate 'string %pc-acc " . "
-						                                                        (%pc-walk %pc-cur %pc-esc %pc-sub %pc-subd))))
-						                           (concatenate 'string %pc-acc ")"))))))))
+						             (let ((%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1))
+						                   (%pc-subl (+ %pc-lvl 1)))
+						               (cond ((and (symbolp (car %pc-x)) (consp (cdr %pc-x)) (null (cddr %pc-x))
+						                           (or (eq (car %pc-x) 'quote) (eq (car %pc-x) 'function)))
+						                      (concatenate 'string (if (eq (car %pc-x) 'quote) "'" "#'")
+						                                   (%pc-walk (cadr %pc-x) %pc-esc %pc-sub %pc-subd %pc-lvl)))
+						                     ((and *print-level* (>= %pc-lvl *print-level*)) "#")
+						                     (t
+						                      (let ((%pc-acc "(") (%pc-cur %pc-x) (%pc-sep "") (%pc-n 0)
+						                            (%pc-stop (%pc-chain-stop %pc-x)) (%pc-seen nil) (%pc-done nil))
+						                        (while (and (consp %pc-cur) (not %pc-done))
+						                          (cond ((and %pc-seen (eq %pc-cur %pc-stop))
+						                                 (setq %pc-done :cycle))
+						                                ((and *print-length* (>= %pc-n *print-length*))
+						                                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep "..."))
+						                                 (setq %pc-done :length))
+						                                (t
+						                                 (when (eq %pc-cur %pc-stop)
+						                                   (setq %pc-seen t))
+						                                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
+						                                                            (%pc-walk (car %pc-cur) %pc-esc %pc-sub %pc-subd %pc-subl)))
+						                                 (setq %pc-sep " ")
+						                                 (setq %pc-n (+ %pc-n 1))
+						                                 (setq %pc-cur (cdr %pc-cur)))))
+						                        (cond ((eq %pc-done :cycle)
+						                               (concatenate 'string %pc-acc " . #)"))
+						                              ((eq %pc-done :length)
+						                               (concatenate 'string %pc-acc ")"))
+						                              (t
+						                               (unless (null %pc-cur)
+						                                 (setq %pc-acc (concatenate 'string %pc-acc " . "
+						                                                            (%pc-walk %pc-cur %pc-esc %pc-sub %pc-subd %pc-subl))))
+						                               (concatenate 'string %pc-acc ")")))))))))
 						        ((and (vectorp %pc-x) (not (stringp %pc-x)) (eql (array-rank %pc-x) 1)
 						              (not (equal (array-element-type %pc-x) 'single-float))
 						              (not (equal (array-element-type %pc-x) 'double-float)))
-						         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256))
+						         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256)
+						                 (and *print-level* (>= %pc-lvl *print-level*)))
 						             "#"
 						             (let ((%pc-acc "#(") (%pc-i 0) (%pc-n (length %pc-x)) (%pc-sep "")
-						                   (%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1)))
+						                   (%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1))
+						                   (%pc-subl (+ %pc-lvl 1)))
+						               (when (and *print-length* (< *print-length* %pc-n))
+						                 (setq %pc-n *print-length*))
 						               (while (< %pc-i %pc-n)
 						                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
-						                                            (%pc-walk (aref %pc-x %pc-i) %pc-esc %pc-sub %pc-subd)))
+						                                            (%pc-walk (aref %pc-x %pc-i) %pc-esc %pc-sub %pc-subd %pc-subl)))
 						                 (setq %pc-sep " ")
 						                 (setq %pc-i (+ %pc-i 1)))
+						               (when (< %pc-n (length %pc-x))
+						                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep "...")))
 						               (concatenate 'string %pc-acc ")"))))
+						        ((and (rationalp %pc-x) (or (not (eql *print-base* 10)) *print-radix*))
+						         (%print-radixed %pc-x))
 						        (%pc-esc (%prin1-to-string %pc-x))
 						        (t (%princ-to-string %pc-x))))
 						""");
@@ -2124,6 +2159,36 @@ public final class LispPreludeLibrary {
 				          %pc-slow)
 				        nil)))
 				""");
+		// An integer or ratio under *print-base* / *print-radix*, spelled as SBCL spells
+		// it: bare upper-case digits in the base, and with *print-radix* the #b / #o /
+		// #x prefix for bases 2 / 8 / 16, a trailing "." for a base-10 INTEGER (a
+		// base-10 ratio takes the general prefix: #10r1/2) and #<base>r otherwise.
+		SOURCES.put(LispNames.PRINT_RADIXED_INTERNAL, """
+				(defun %print-radixed (%pr-n)
+				  (let* ((%pr-base *print-base*)
+				         (%pr-int (integerp %pr-n))
+				         (%pr-digits (if %pr-int
+				                         (%print-in-base %pr-n %pr-base)
+				                         (concatenate 'string (%print-in-base (numerator %pr-n) %pr-base) "/"
+				                                      (%print-in-base (denominator %pr-n) %pr-base)))))
+				    (if *print-radix*
+				        (cond ((eql %pr-base 2) (concatenate 'string "#b" %pr-digits))
+				              ((eql %pr-base 8) (concatenate 'string "#o" %pr-digits))
+				              ((eql %pr-base 16) (concatenate 'string "#x" %pr-digits))
+				              ((and %pr-int (eql %pr-base 10)) (concatenate 'string %pr-digits "."))
+				              (t (concatenate 'string "#" (%print-in-base %pr-base 10) "r" %pr-digits)))
+				        %pr-digits)))
+				""");
+		SOURCES.put(LispNames.PRINT_IN_BASE_INTERNAL, """
+				(defun %print-in-base (%pib-n %pib-base)
+				  (cond ((< %pib-n 0)
+				         (concatenate 'string "-" (%print-in-base (- %pib-n) %pib-base)))
+				        ((< %pib-n %pib-base)
+				         (string (char "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" %pib-n)))
+				        (t (concatenate 'string (%print-in-base (floor %pib-n %pib-base) %pib-base)
+				                        (string (char "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+				                                      (mod %pib-n %pib-base)))))))
+				""");
 		// One symbol spelling under the current *print-case*. :downcase is
 		// string-downcase (char-downcase leaves a lower-case character alone, which is
 		// exactly CLHS's "only the UPPERCASE characters are converted"); :capitalize
@@ -2149,12 +2214,13 @@ public final class LispPreludeLibrary {
 				        (t %pcf-s)))
 				""");
 		// The printer entry point: CL specifies write's keywords as BINDINGS of the
-		// printer
-		// control variables around one print, so that is literally what this does -- the
-		// keywords rontolisp models take effect, the ones it does not are inert because
-		// the
-		// variable they bind is inert (.kb/pretty-printer.md). Only :escape / :readably
-		// change the text, and they pick between the two conversions every backend has.
+		// printer control variables around one print, so that is literally what this
+		// does. :escape / :readably pick between the two conversions every backend has;
+		// :case / :length / :level / :gensym / :base / :radix reach the printer through
+		// %print-cased (the printing operators are rewritten onto it for a program that
+		// mentions one of those variables, which -- this defun being spliced -- every
+		// write user does); :pretty / :circle / :array and the three layout widths are
+		// inert because the variable they bind is (.kb/pretty-printer.md).
 		SOURCES.put(LispNames.WRITE, """
 				(defun write (object &key (stream *standard-output*)
 				                          (escape *print-escape*) (readably *print-readably*)
@@ -2162,11 +2228,18 @@ public final class LispPreludeLibrary {
 				                          (right-margin *print-right-margin*)
 				                          (miser-width *print-miser-width*)
 				                          (lines *print-lines*)
-				                          (pprint-dispatch *print-pprint-dispatch*))
+				                          (pprint-dispatch *print-pprint-dispatch*)
+				                          (length *print-length*) (level *print-level*)
+				                          (base *print-base*) (radix *print-radix*)
+				                          (case *print-case*) (gensym *print-gensym*)
+				                          (array *print-array*))
 				  (let ((*print-escape* escape) (*print-readably* readably)
 				        (*print-pretty* pretty) (*print-circle* circle)
 				        (*print-right-margin* right-margin) (*print-miser-width* miser-width)
-				        (*print-lines* lines) (*print-pprint-dispatch* pprint-dispatch))
+				        (*print-lines* lines) (*print-pprint-dispatch* pprint-dispatch)
+				        (*print-length* length) (*print-level* level)
+				        (*print-base* base) (*print-radix* radix)
+				        (*print-case* case) (*print-gensym* gensym) (*print-array* array))
 				    (write-string (if (or *print-escape* *print-readably*)
 				                      (prin1-to-string object)
 				                      (princ-to-string object))
@@ -2576,7 +2649,9 @@ public final class LispPreludeLibrary {
 					// Prelude sources spell each other exactly as they define
 					// themselves, so the entry-to-entry edges stay member-matched:
 					// they carry no package ambiguity to resolve.
-					used = used || referencesName(formsFor(pulled), name, false);
+					used = used || referencesName(formsFor(pulled), name, false)
+							|| (LispNames.PRINT_CASED_INTERNAL.equals(name)
+									&& referencedBySurfaceForm(name, formsFor(pulled), false));
 				}
 				if (used) {
 					referenced.add(name);
@@ -2672,11 +2747,15 @@ public final class LispPreludeLibrary {
 		// %print-cased: the printing operators are rewritten onto it inside the
 		// expression compilers, after this pass, so the reference this selection would
 		// look for does not exist yet either. The surface fact is the program MENTIONING
-		// *print-case* -- the same scan that gives the variable its defvar
-		// (LispMacroExpander.injectMvSpillGlobal), so the renderer and the variable it
-		// reads are spliced together or not at all.
+		// a printer-control variable (or binding one through a write-to-string keyword)
+		// -- the same scan that gives the variable its defvar
+		// (LispMacroExpander.injectMvSpillGlobal) and flips the compilers' route, so the
+		// renderer and the variable it reads are spliced together or not at all. A
+		// spliced prelude entry counts as surface too (the fixpoint above asks this for
+		// each pulled entry): `write` binds the whole variable set, and the compilers'
+		// scan runs over the spliced program, so a write user must carry the renderer.
 		if (LispNames.PRINT_CASED_INTERNAL.equals(entry)) {
-			return referencesName(program, LispNames.PRINT_CASE_VAR, canonical);
+			return am.ik.rontolisp.macro.LispMacroExpander.usesPrintControls(program);
 		}
 		if (LispNames.PROBE_FILE.equals(entry)) {
 			// The second producer is load's :if-does-not-exist option: the guard that

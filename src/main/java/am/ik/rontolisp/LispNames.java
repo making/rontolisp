@@ -7428,12 +7428,17 @@ public final class LispNames {
 
 	/**
 	 * The internal {@code (%print-cased x escape)} renderer: the text the printer writes
-	 * for a value with {@link #PRINT_CASE_VAR} applied to every SYMBOL it spells. A
-	 * prelude defun (one definition for all four backends), spliced into -- and called
-	 * from the printing operators of -- a program that mentions {@code *print-case*};
-	 * nothing else changes shape. Its own leaves are the non-consulting
+	 * for a value with the printer-control variables applied -- {@link #PRINT_CASE_VAR}
+	 * to every SYMBOL it spells, {@link #PRINT_LENGTH_VAR} / {@link #PRINT_LEVEL_VAR} to
+	 * every list and vector, {@link #PRINT_GENSYM_VAR} to an uninterned symbol,
+	 * {@link #PRINT_BASE_VAR} / {@link #PRINT_RADIX_VAR} to every rational. A prelude
+	 * defun (one definition for all four backends), spliced into -- and called from the
+	 * printing operators of -- a program that mentions one of those variables (or calls
+	 * {@code write} / {@code write-to-string} with the keyword that binds one); nothing
+	 * else changes shape. Its own leaves are the non-consulting
 	 * {@link #PRINC_TO_STRING_RAW} / {@link #PRIN1_TO_STRING_RAW} conversions, which is
-	 * what makes the recursion terminate.
+	 * what makes the recursion terminate. The name predates the length/level/base half
+	 * (it started as the {@code *print-case*} renderer).
 	 */
 	public static final String PRINT_CASED_INTERNAL = "%PRINT-CASED";
 
@@ -7482,6 +7487,21 @@ public final class LispNames {
 	 * nil for a terminating chain.
 	 */
 	public static final String PRINT_CASED_CHAIN_STOP_INTERNAL = "%PC-CHAIN-STOP";
+
+	/**
+	 * The internal {@code (%print-radixed n)} helper: an integer or ratio spelled under
+	 * the current {@link #PRINT_BASE_VAR} and {@link #PRINT_RADIX_VAR} -- {@code FF},
+	 * {@code #xFF}, {@code 255.}, {@code #3r100110}, {@code #x1/FF} -- the leaf
+	 * {@link #PRINT_CASED_WALK_INTERNAL} takes for a rational when either variable is off
+	 * its default. Digits are upper-case, as CL prints them.
+	 */
+	public static final String PRINT_RADIXED_INTERNAL = "%PRINT-RADIXED";
+
+	/**
+	 * The internal {@code (%print-in-base n base)} helper: the bare digits of an integer
+	 * in a base from 2 to 36, with a leading {@code -} for a negative one.
+	 */
+	public static final String PRINT_IN_BASE_INTERNAL = "%PRINT-IN-BASE";
 
 	/**
 	 * The {@code type-error-datum} condition reader (prelude): the {@code datum} slot of

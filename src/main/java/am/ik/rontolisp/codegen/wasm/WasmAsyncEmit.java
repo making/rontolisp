@@ -781,7 +781,7 @@ final class WasmAsyncEmit {
 			// compile %signal-cond with the depth test alone while defun bodies match
 			// clause types, and a top-level unmatched signal would abort again.
 			.signalClauseMatch(proto.signalClauseMatch)
-			.printCase(proto.printCase)
+			.printControls(proto.printControls)
 			// NOT optional, same reason as the instance pair below: a synonym stream
 			// built or written through at the SYNCHRONOUS top level must resolve like
 			// the same form inside a defun.

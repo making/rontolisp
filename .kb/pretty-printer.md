@@ -6,7 +6,9 @@ line holds -- identically on the interpreter, the JVM and both WASM GC backends.
 they do NOT do is change the LAYOUT: no rontolisp stream carries a column, so nothing
 wraps. The variables that change the TEXT when bound are `*print-escape*` /
 `*print-readably*` (which of the two conversions runs), `*print-pretty*` (the mandatory
-line break) and `*print-case*` (the section below).
+line break), and the six the shared `%print-cased` walk honors -- `*print-case*`,
+`*print-length*`, `*print-level*`, `*print-gensym*`, `*print-base*`, `*print-radix*`
+(the two sections below).
 
 Pinned by `LispEvaluatorTest.evalWriteAndPprintDispatch` /
 `evalPprintLogicalBlock`, the `esrap-enablement-language-group` ci-spec case (all four
@@ -19,15 +21,28 @@ uses any of it.
 
 - **`write`** -- the printer entry point, a `LispPreludeLibrary` defun. CL defines its
   keywords as BINDINGS of the printer control variables around one print, and that is
-  literally the expansion: `(let ((*print-escape* escape) ...) (write-string (if ... )))`.
-  Only `:escape` / `:readably` change the text (they pick between `prin1-to-string` and
-  `princ-to-string`, the two conversions every backend has); the others are inert because
-  the variable they bind is inert. **`write-to-string` did NOT gain the same keywords**:
-  it is a per-backend primitive with its own compiler case, and the
-  `with-output-to-string` the obvious lowering would want is exactly what must not appear
-  in a shared source -- it flips the WASM exception-handling gate (see `.kb/format.md` on
-  `~/name/`). Spell it `(with-output-to-string (s) (write x :stream s ...))`;
-  `.todo/041` owns closing the gap.
+  literally the expansion: `(let ((*print-escape* escape) ...) (write-string (if ... )))`,
+  over the FULL CL keyword set since 2026-09-02 (`:length` `:level` `:base` `:radix`
+  `:case` `:gensym` `:array` joined the eight it had). `:escape` / `:readably` pick
+  between `prin1-to-string` and `princ-to-string`, the two conversions every backend
+  has; `:case` / `:length` / `:level` / `:gensym` / `:base` / `:radix` reach the text
+  through the `%print-cased` walk (below); `:pretty` / `:circle` / `:array` and the
+  three widths are inert because the variable they bind is.
+- **`write-to-string` takes the same keywords** (2026-09-02), by a Pass-2 lowering
+  rather than a prelude defun: `LispMacroExpander.expandWriteToStringKeywords` turns
+  `(write-to-string x :length 2)` into `(let ((#:x x)) (let ((*print-length* 2))
+  (write-to-string #:x)))` -- and, when `:escape` / `:readably` is among the keywords,
+  into the escape-picking conditional in place of the one-argument primitive (which is
+  always `prin1`). No `with-output-to-string` anywhere: that lowering is exactly what
+  must not appear in a shared source, since it flips the WASM exception-handling gate
+  (`.kb/format.md` on `~/name/`), and the two conversions need no stream. Wired into
+  `LispEvaluator.evalConsRareOperator` (and the first-class wrapper, so `apply` works on
+  the interpreter) and both `ExprCompiler`s' `write-to-string` case. **Compile-path
+  gap:** `#'write-to-string` as a VALUE is the one-argument `BuiltinFunctionWrappers`
+  defun, so `(apply #'write-to-string (list x :length 1))` ignores the keywords there
+  (the wrapper does not check its arity); a keyword-taking wrapper would have to bind
+  all fifteen variables and so pull the walk into every `(mapcar #'write-to-string ...)`
+  program, which is not worth that shape's rarity.
 - **`pprint`** -- a fresh line then `write` with `:escape t :pretty t`, returning no
   values.
 - **The pprint DISPATCH tables** -- `copy-pprint-dispatch` / `set-pprint-dispatch` /
@@ -100,10 +115,74 @@ text identical to SBCL 2.2.9 (`LispEvaluatorTest.evalPrintCase`,
   reachable from Lisp: the walk gains a branch, nothing else moves. `%print-object-str`'s
   walk (`.kb/clos.md`, todo-437) carries the SAME guard and the same gap; the two are
   never both live in one program -- a program with a print-object route walks there and
-  hands `%print-cased` leaves only -- so they have to be read together to stay in step. The same gate would carry `write`'s `:case` keyword and
-  `write-to-string`'s keyword set (below), which are deliberately still absent: adding
-  `:case` to the prelude `write` would make every `write` user MENTION `*print-case*` and
-  so pull the renderer into modules that never bind it.
+  hands `%print-cased` leaves only -- so they have to be read together to stay in step.
+
+## `*print-length*` / `*print-level*` / `*print-gensym*` / `*print-base*` / `*print-radix*`: the same walk
+
+Landed 2026-09-02 (`.todo/041`; the consumer is Practical Common Lisp's chapter-8
+`ppme`, `(write (macroexpand-1 form env) :length nil :level nil :circle nil :pretty t
+:gensym nil :right-margin 83 :case :downcase)`, which `write` used to reject --
+`.todo/620`). The five ride the `*print-case*` mechanism above unchanged in shape:
+`%print-cased` is now the printer-CONTROL renderer (the name predates the widening),
+`LispMacroExpander.usesPrintControls` the gate (`PRINT_CONTROL_VARS` is the six-name
+list; `usesPrintCase` is gone), `printControls` the flag in both compilers'
+`Ctx` and `LispEvaluator.printControlsInEffect` the interpreter's current-value twin.
+Text identical to SBCL 2.2.9 on all four backends
+(`LispEvaluatorTest.evalPrintLengthLevelGensymBaseAndRadix` /
+`evalWriteAndWriteToStringKeywords`, `JvmLispCompilerTest.compileAndRunPrintControls`,
+`WasmLispCompilerIntegrationTest.printControls` + `printControlsOnTheComponentPath`,
+the `print-length-level-gensym-base-radix` ci-spec case).
+
+- **What each does, as SBCL prints it.** `*print-length*` n: a list or vector prints
+  its first n elements, then ` ...` -- only when the unprinted rest is a CONS, so
+  `(1 2 . 3)` under 2 keeps its dotted tail and `(1 2 3 4 . 5)` under 3 is
+  `(1 2 3 ...)`; length 0 is `(...)` / `#(...)`. `*print-level*` n: a list or vector
+  AT depth n prints as `#` (the top-level object is depth 0, so level 0 makes any
+  list `#`; atoms never truncate). **The `'x` / `#'x` abbreviation is transparent to
+  the level** -- SBCL's pretty printer treats `(quote x)` as `x` at the SAME depth, so
+  `(a '(b))` under level 1 is `(A '#)` and `''(b)` is `'(B)` -- but it still opens a
+  cycle-guard frame, so the walk carries TWO counters (`%pc-depth` for the 256-frame
+  cap, `%pc-lvl` for the level). `*print-gensym*` nil strips the `#:` an uninterned
+  symbol gets under `prin1` (princ never prints it). `*print-base*` re-spells every
+  integer and ratio in upper-case digits (`FF`, `1/FF`; a float keeps its text);
+  `*print-radix*` t adds `#b` / `#o` / `#x` for 2 / 8 / 16, a trailing `.` for a
+  base-10 INTEGER, and `#<base>r` otherwise (`#36r73`, `#10r1/2`).
+- **Both walks carry the truncation.** `%pc-walk` (`LispPreludeLibrary`) and the
+  generated `%pos-walk` (`LispMacroExpander.PRINT_OBJECT_CONS_ARM` /
+  `PRINT_OBJECT_VECTOR_ARM`) implement length and level in lockstep, because a routed
+  program walks through `%pos-walk` and hands `%print-cased` only leaves; gensym and
+  base/radix are leaf facts and live in `%pc-walk` alone (`%print-radixed` /
+  `%print-in-base` beside it). `%pos-walk` reads the two variables UNCONDITIONALLY --
+  a print-object program pays two `defvar`s and two nil tests -- rather than through a
+  second template, so there is one cons arm to keep in step, not two.
+- **`%print-cased`'s fast path is "every default".** Under `:upcase` / nil / nil / t
+  / 10 / nil the entry answers the raw conversion directly, which is what keeps a
+  routed program's OUTPUT byte-identical to an unrouted one.
+- **The gate now flips for every `write` user** -- the prelude `write` binds all
+  fifteen variables, and the compilers' scan runs over the SPLICED program
+  (`CompileFrontend` splices before `JvmLispCompiler`/`WasmLispCompiler` scan) -- so
+  `LispPreludeLibrary.process`'s selection fixpoint asks `referencedBySurfaceForm`
+  for `%print-cased` over each PULLED entry's forms too (the only entry that asks
+  this), and `write` users carry the walk. That is the choice the `*print-case*`
+  section used to refuse ("would pull the renderer into modules that never bind
+  it"); measured 2026-09-02 it is the right trade: a program that is
+  `(write '(foo bar) :stream *standard-output*)` + `(print (list 1 2))` went from
+  22,782 to 55,379 B of `.wasm` (the walk plus `concatenate` / `subseq` /
+  `string-downcase` / `floor` / `mod` and friends -- the Unicode case fold alone is
+  ~9 KB of it, so no single piece is worth a variant walk) and from 99,850 to
+  86,847 B of `.class`; a program that never calls `write` and never names a control
+  variable is byte-identical (`(print (list 1 2))`: 3,795 B / 10,747 B before and
+  after). What it buys is `:case` / `:length` / ... working through EVERY call shape
+  of `write`, `apply` and `#'write` included, on all four backends. Nothing in
+  `size-report/programs` or `examples/console` calls `write`.
+- **Known gaps, and the re-evaluation trigger.** (1) The containers the walk does not
+  enter (a structure, an instance, a hash table, an array of rank != 1, a packed float
+  array) are neither cased nor truncated -- the `*print-case*` gap above, now for six
+  variables; re-evaluate when such a rendering becomes reachable from Lisp. (2)
+  `*print-array*` nil (SBCL: `#<(SIMPLE-VECTOR 3) {addr}>`) and `*print-circle*` t
+  (`#1=` labels) stay inert -- accepted, bound by `write`, no text change. (3) The
+  compile-path `#'write-to-string` value (above). (4) `~@W` binds neither variable
+  (`.kb/format.md`).
 
 ## Quote/function abbreviation and symbol `|...|` escaping (todo 626)
 
@@ -312,17 +391,20 @@ binding); the compile paths get a top-level `(defvar name value)` from
 | `*print-pretty*` | `t` | yes -- gates the MANDATORY line break |
 | `*print-circle*` | `nil` | no labels -- but every default renderer carries a cycle guard (section below): a cycle prints finitely as `#` / `" . #"` |
 | `*print-right-margin*` / `*print-miser-width*` / `*print-lines*` | `nil` | no (no column) |
-| `*print-length*` / `*print-level*` | `nil` | the value IS the behavior (no truncation) |
-| `*print-base*` | `10` | the value IS the behavior |
-| `*print-radix*` | `nil` | the value IS the behavior |
+| `*print-length*` / `*print-level*` | `nil` | yes -- `(1 2 ...)` / `#` truncation (the walk section above) |
+| `*print-base*` | `10` | yes -- integers and ratios re-spelled in the base |
+| `*print-radix*` | `nil` | yes -- `#x` / `#b` / `#o` / `#Nr` / trailing `.` |
 | `*print-case*` | `:upcase` | yes -- `:downcase`/`:capitalize` convert every symbol spelling (below) |
-| `*print-array*` / `*print-gensym*` | `t` | the value IS the behavior |
+| `*print-gensym*` | `t` | yes -- nil drops the `#:` under prin1 |
+| `*print-array*` | `t` | the value IS the behavior |
 | `*print-pprint-dispatch*` | a fresh empty table | entries and lookup, but see above |
 
 Every default is what the printer ACTUALLY does, so a program that only READS one sees
-the truth; binding one to a non-default value is what has no effect. `*print-level*` /
-`*print-length*` are not decoration -- esrap's `print-object` on a parse result binds
-both, so they have to exist on the compile paths or the module does not compile.
+the truth; binding an inert one to a non-default value is what has no effect. The
+compile paths get a `defvar` for each one the program mentions -- where "mentions"
+includes a `write-to-string` keyword that binds it
+(`LispMacroExpander.mentionsPrinterVariable`), since that lowering runs in Pass 2, after
+this scan.
 
 The four remaining standard STREAM variables (`*trace-output*`, `*debug-io*`,
 `*query-io*`, `*terminal-io*`) ride the same table with the `t` designator

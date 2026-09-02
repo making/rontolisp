@@ -18991,7 +18991,7 @@ public final class LispMacroExpander {
 		// registration in every pipeline. The fold goes FIRST: a folded
 		// (load-time-value (+ 1 2)) is an atom, which the hoist then correctly declines
 		// to give a slot.
-		program = PureBuiltinFolder.foldProgram(program, dynamic, usesPrintCase(program));
+		program = PureBuiltinFolder.foldProgram(program, dynamic, usesPrintControls(program));
 		program = hoistLoadTimeValues(program);
 		// A defclass carrying (:metaclass M) switches the metaclass protocol on: the
 		// protocol's default methods and driver (MopProtocol) are PREPENDED so the walk
@@ -19464,7 +19464,7 @@ public final class LispMacroExpander {
 		// or routes condition reports. Emitted here so the tag list is the COMPLETE
 		// method set, whatever order the defmethods came in.
 		if (!printObjectTags(closRegistry).isEmpty() || closRegistry.routesConditionReports()) {
-			out.addAll(printObjectStrDefuns(closRegistry, usesPrintCase(program), programUsesGeneralArrayOp(out)));
+			out.addAll(printObjectStrDefuns(closRegistry, usesPrintControls(program), programUsesGeneralArrayOp(out)));
 		}
 		// The runtime format renderer, once per program that can reach it. Emitted here
 		// so the scan sees the definitions injected above (the condition report renders a
@@ -24970,36 +24970,51 @@ public final class LispMacroExpander {
 	 * reproduces the raw cons rendering exactly -- one space before every element but the
 	 * first, {@code " . "} before a non-nil tail, and the same {@code (QUOTE x)}/
 	 * {@code (FUNCTION x)} to {@code 'x}/{@code #'x} abbreviation (todo 626) -- because
-	 * for a list holding no routed value the two must agree byte for byte.
+	 * for a list holding no routed value the two must agree byte for byte. It also honors
+	 * {@code *print-level*} (a separate counter from the guard's depth, which the
+	 * abbreviation is transparent to) and {@code *print-length*} ({@code ...} for the
+	 * unprinted rest when that rest is a cons), in lockstep with {@code %pc-walk}
+	 * ({@code LispPreludeLibrary}): a routed program walks HERE and hands
+	 * {@code %print-cased} only leaves, so the truncation has to live in both walks.
+	 * Under the defaults both variables are nil and the arms cost two tests.
 	 */
 	private static final String PRINT_OBJECT_CONS_ARM = """
 			((consp %pos-x)
 			 (if (or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256))
 			     "#"
-			     (let ((%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1)))
-			       (if (and (symbolp (car %pos-x)) (consp (cdr %pos-x)) (null (cddr %pos-x))
-			                (or (eq (car %pos-x) 'quote) (eq (car %pos-x) 'function)))
-			           (concatenate 'string (if (eq (car %pos-x) 'quote) "'" "#'")
-			                        (%pos-walk (cadr %pos-x) %pos-esc %pos-sub %pos-subd))
-			           (let ((%pos-acc "(") (%pos-cur %pos-x) (%pos-sep "")
-			                 (%pos-stop (%pos-chain-stop %pos-x)) (%pos-seen nil) (%pos-done nil))
-			             (while (and (consp %pos-cur) (not %pos-done))
-			               (if (and %pos-seen (eq %pos-cur %pos-stop))
-			                   (setq %pos-done t)
-			                   (progn
-			                     (when (eq %pos-cur %pos-stop)
-			                       (setq %pos-seen t))
-			                     (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
-			                                                 (%pos-walk (car %pos-cur) %pos-esc %pos-sub %pos-subd)))
-			                     (setq %pos-sep " ")
-			                     (setq %pos-cur (cdr %pos-cur)))))
-			             (if %pos-done
-			                 (concatenate 'string %pos-acc " . #)")
-			                 (progn
-			                   (unless (null %pos-cur)
-			                     (setq %pos-acc (concatenate 'string %pos-acc " . "
-			                                                 (%pos-walk %pos-cur %pos-esc %pos-sub %pos-subd))))
-			                   (concatenate 'string %pos-acc ")"))))))))
+			     (let ((%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1))
+			           (%pos-subl (+ %pos-lvl 1)))
+			       (cond ((and (symbolp (car %pos-x)) (consp (cdr %pos-x)) (null (cddr %pos-x))
+			                   (or (eq (car %pos-x) 'quote) (eq (car %pos-x) 'function)))
+			              (concatenate 'string (if (eq (car %pos-x) 'quote) "'" "#'")
+			                           (%pos-walk (cadr %pos-x) %pos-esc %pos-sub %pos-subd %pos-lvl)))
+			             ((and *print-level* (>= %pos-lvl *print-level*)) "#")
+			             (t
+			              (let ((%pos-acc "(") (%pos-cur %pos-x) (%pos-sep "") (%pos-n 0)
+			                    (%pos-stop (%pos-chain-stop %pos-x)) (%pos-seen nil) (%pos-done nil))
+			                (while (and (consp %pos-cur) (not %pos-done))
+			                  (cond ((and %pos-seen (eq %pos-cur %pos-stop))
+			                         (setq %pos-done :cycle))
+			                        ((and *print-length* (>= %pos-n *print-length*))
+			                         (setq %pos-acc (concatenate 'string %pos-acc %pos-sep "..."))
+			                         (setq %pos-done :length))
+			                        (t
+			                         (when (eq %pos-cur %pos-stop)
+			                           (setq %pos-seen t))
+			                         (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
+			                                                     (%pos-walk (car %pos-cur) %pos-esc %pos-sub %pos-subd %pos-subl)))
+			                         (setq %pos-sep " ")
+			                         (setq %pos-n (+ %pos-n 1))
+			                         (setq %pos-cur (cdr %pos-cur)))))
+			                (cond ((eq %pos-done :cycle)
+			                       (concatenate 'string %pos-acc " . #)"))
+			                      ((eq %pos-done :length)
+			                       (concatenate 'string %pos-acc ")"))
+			                      (t
+			                       (unless (null %pos-cur)
+			                         (setq %pos-acc (concatenate 'string %pos-acc " . "
+			                                                     (%pos-walk %pos-cur %pos-esc %pos-sub %pos-subd %pos-subl))))
+			                       (concatenate 'string %pos-acc ")")))))))))
 			""";
 
 	/**
@@ -25059,15 +25074,21 @@ public final class LispMacroExpander {
 			((and (vectorp %pos-x) (not (stringp %pos-x)) (eql (array-rank %pos-x) 1)
 			      (not (equal (array-element-type %pos-x) 'single-float))
 			      (not (equal (array-element-type %pos-x) 'double-float)))
-			 (if (or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256))
+			 (if (or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256)
+			         (and *print-level* (>= %pos-lvl *print-level*)))
 			     "#"
 			     (let ((%pos-acc "#(") (%pos-i 0) (%pos-n (length %pos-x)) (%pos-sep "")
-			           (%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1)))
+			           (%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1))
+			           (%pos-subl (+ %pos-lvl 1)))
+			       (when (and *print-length* (< *print-length* %pos-n))
+			         (setq %pos-n *print-length*))
 			       (while (< %pos-i %pos-n)
 			         (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
-			                                     (%pos-walk (aref %pos-x %pos-i) %pos-esc %pos-sub %pos-subd)))
+			                                     (%pos-walk (aref %pos-x %pos-i) %pos-esc %pos-sub %pos-subd %pos-subl)))
 			         (setq %pos-sep " ")
 			         (setq %pos-i (+ %pos-i 1)))
+			       (when (< %pos-n (length %pos-x))
+			         (setq %pos-acc (concatenate 'string %pos-acc %pos-sep "...")))
 			       (concatenate 'string %pos-acc ")"))))
 			""";
 
@@ -25086,23 +25107,24 @@ public final class LispMacroExpander {
 	 * The walk is fixed Lisp SOURCE rather than a hand-assembled AST because it is the
 	 * same text for every program -- only the leaf depends on the registry.
 	 * @param closRegistry the class registry
-	 * @param printCase whether the program mentions {@code *print-case*}, in which case
-	 * the fallback is the case-applying renderer instead of the raw conversion
+	 * @param printControls whether the program mentions a printer-control variable
+	 * ({@link #PRINT_CONTROL_VARS}), in which case the fallback is the
+	 * {@code %print-cased} renderer instead of the raw conversion
 	 * @param walkVectors whether to emit the vector arm; false for a program that can
 	 * hold no general array, which then pulls no array runtime in
 	 * @return the {@code %print-object-str} and {@code %print-object-leaf} defuns
 	 */
-	public static List<LispVal> printObjectStrDefuns(ClosRegistry closRegistry, boolean printCase,
+	public static List<LispVal> printObjectStrDefuns(ClosRegistry closRegistry, boolean printControls,
 			boolean walkVectors) {
-		String source = "(defun %print-object-str (%pos-x %pos-esc) (%pos-walk %pos-x %pos-esc nil 0))\n"
-				+ "(defun %pos-walk (%pos-x %pos-esc %pos-path %pos-depth) (cond " + PRINT_OBJECT_CONS_ARM
+		String source = "(defun %print-object-str (%pos-x %pos-esc) (%pos-walk %pos-x %pos-esc nil 0 0))\n"
+				+ "(defun %pos-walk (%pos-x %pos-esc %pos-path %pos-depth %pos-lvl) (cond " + PRINT_OBJECT_CONS_ARM
 				+ (walkVectors ? PRINT_OBJECT_VECTOR_ARM : "") + "(t (%print-object-leaf %pos-x %pos-esc))))\n"
 				+ PRINT_OBJECT_GUARD_HELPERS;
 		List<LispVal> walker = LispReader.readAllFromString(source, Features.INTERPRETER);
 		LispSymbol value = new LispSymbol("__pox");
 		LispSymbol escape = new LispSymbol("__poe");
-		LispVal fallback = makeIf(escape, rawRendering(value, true, printCase),
-				princRendering(value, closRegistry.routesConditionReports(), printCase));
+		LispVal fallback = makeIf(escape, rawRendering(value, true, printControls),
+				princRendering(value, closRegistry.routesConditionReports(), printControls));
 		LispVal body = printObjectRouting(value, fallback, closRegistry, escape);
 		LispVal leaf = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.PRINT_OBJECT_LEAF_INTERNAL), listToCons(List.of(value, escape)), body));
@@ -25130,8 +25152,8 @@ public final class LispMacroExpander {
 	 * "{@code princ} of a condition runs its report, {@code prin1} prints the unreadable
 	 * {@code #<...>} form" -- the escape-on arm is deliberately untouched.
 	 */
-	private static LispVal princRendering(LispVal value, boolean routesConditionReports, boolean printCase) {
-		LispVal raw = rawRendering(value, false, printCase);
+	private static LispVal princRendering(LispVal value, boolean routesConditionReports, boolean printControls) {
+		LispVal raw = rawRendering(value, false, printControls);
 		if (!routesConditionReports) {
 			return raw;
 		}
@@ -25806,14 +25828,15 @@ public final class LispMacroExpander {
 	 * other, so a {@code print-object} method on a condition class still wins.
 	 * @param cons the printing-operator form
 	 * @param closRegistry the class registry
-	 * @param printCase whether {@code *print-case*} is in play (the compile paths: the
-	 * program mentions the variable; the interpreter: its current value is not
-	 * {@code :upcase}), which routes the same operators through {@code %print-cased}
+	 * @param printControls whether a printer-control variable is in play (the compile
+	 * paths: the program mentions one, {@link #usesPrintControls}; the interpreter: one
+	 * currently holds a non-default value), which routes the same operators through
+	 * {@code %print-cased}
 	 * @return the rewritten form, or null when the program neither defines a print-object
-	 * method nor can build a condition nor mentions {@code *print-case*}
+	 * method nor can build a condition nor mentions a printer-control variable
 	 */
-	@Nullable public static LispVal expandPrintObjectHook(LispCons cons, ClosRegistry closRegistry, boolean printCase) {
-		if ((printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports() && !printCase)
+	@Nullable public static LispVal expandPrintObjectHook(LispCons cons, ClosRegistry closRegistry, boolean printControls) {
+		if ((printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports() && !printControls)
 				|| !cons.isProperList()) {
 			return null;
 		}
@@ -25824,7 +25847,7 @@ public final class LispMacroExpander {
 		if (LispNames.PRINC_TO_STRING.equals(op) || LispNames.PRIN1_TO_STRING.equals(op)
 				|| LispNames.WRITE_TO_STRING.equals(op) || LispNames.PRINC_PIECE_INTERNAL.equals(op)
 				|| LispNames.PRIN1_PIECE_INTERNAL.equals(op)) {
-			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, closRegistry, printCase) : null;
+			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, closRegistry, printControls) : null;
 		}
 		if (parts.size() < 2 || parts.size() > 3) {
 			return null;
@@ -25832,7 +25855,7 @@ public final class LispMacroExpander {
 		LispSymbol valueVar = new LispSymbol("__po" + MV_COUNTER.getAndIncrement() + "_v");
 		List<LispVal> write = new java.util.ArrayList<>();
 		write.add(new LispSymbol(LispNames.WRITE_STRING));
-		write.add(printObjectStr(valueVar, escape, closRegistry, printCase));
+		write.add(printObjectStr(valueVar, escape, closRegistry, printControls));
 		List<LispVal> terpri = new java.util.ArrayList<>();
 		terpri.add(new LispSymbol(LispNames.TERPRI));
 		if (parts.size() == 3) {
@@ -25857,12 +25880,13 @@ public final class LispMacroExpander {
 	 * ({@code LispEvaluator.ensurePrintObjectRuntimeLoaded}), the same way it already
 	 * rebuilds the condition-report runtime.
 	 */
-	private static LispVal printObjectStr(LispVal value, boolean escape, ClosRegistry closRegistry, boolean printCase) {
-		// Nothing to route: the operator is here for *print-case* alone, so the
-		// case-applying renderer IS the rewrite (and the %print-object-str defun this
-		// would otherwise call is not generated for such a program).
+	private static LispVal printObjectStr(LispVal value, boolean escape, ClosRegistry closRegistry,
+			boolean printControls) {
+		// Nothing to route: the operator is here for the printer-control variables
+		// alone, so the %print-cased renderer IS the rewrite (and the %print-object-str
+		// defun this would otherwise call is not generated for such a program).
 		if (printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports()) {
-			return rawRendering(value, escape, printCase);
+			return rawRendering(value, escape, printControls);
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL), value,
 				escape ? LispTrue.INSTANCE : LispNil.INSTANCE));
@@ -25870,17 +25894,17 @@ public final class LispMacroExpander {
 
 	/**
 	 * The leaf rendering of one value: the RAW ({@code print-object}-free) conversion, or
-	 * -- when the program mentions {@code *print-case*} -- the case-applying
-	 * {@code %print-cased} renderer, whose own leaves are those same raw conversions. It
-	 * sits UNDER the {@code print-object} route rather than beside it, so a program with
-	 * both gets the method first and the case only where no method applies.
+	 * -- when the program mentions a printer-control variable -- the {@code %print-cased}
+	 * renderer, whose own leaves are those same raw conversions. It sits UNDER the
+	 * {@code print-object} route rather than beside it, so a program with both gets the
+	 * method first and the case only where no method applies.
 	 * @param value the value form (evaluated once by the caller)
 	 * @param escape the {@code prin1} rendering rather than the {@code princ} one
-	 * @param printCase whether {@code *print-case*} is in play
+	 * @param printControls whether a printer-control variable is in play
 	 * @return the rendering form
 	 */
-	private static LispVal rawRendering(LispVal value, boolean escape, boolean printCase) {
-		if (printCase) {
+	private static LispVal rawRendering(LispVal value, boolean escape, boolean printControls) {
+		if (printControls) {
 			return listToCons(List.of(new LispSymbol(LispNames.PRINT_CASED_INTERNAL), value,
 					escape ? LispTrue.INSTANCE : LispNil.INSTANCE));
 		}
@@ -28167,22 +28191,161 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the program MENTIONS {@code *print-case*} anywhere -- the same scan that
-	 * gives the variable its {@code defvar} ({@link #injectMvSpillGlobal}) and splices
-	 * the {@code %print-cased} renderer ({@code LispPreludeLibrary}), so the three
-	 * decisions cannot disagree. A program that never names the variable can never bind
-	 * it, so its printing operators keep their own compilation and it stays
-	 * byte-identical.
-	 * @param program the top-level forms
-	 * @return true when some form names {@code *print-case*}
+	 * The printer-control variables the shared {@code %print-cased} renderer honors:
+	 * mentioning any of them (or binding one through a {@code write-to-string} keyword)
+	 * is what routes a program's printing operators through the renderer. The other
+	 * printer variables ({@code *print-escape*}, {@code *print-pretty*}, the layout
+	 * widths, ...) are honored elsewhere or inert, and never flip the route.
 	 */
-	public static boolean usesPrintCase(List<LispVal> program) {
+	public static final List<String> PRINT_CONTROL_VARS = List.of(LispNames.PRINT_CASE_VAR, LispNames.PRINT_LENGTH_VAR,
+			LispNames.PRINT_LEVEL_VAR, LispNames.PRINT_GENSYM_VAR, LispNames.PRINT_BASE_VAR, LispNames.PRINT_RADIX_VAR);
+
+	/**
+	 * The {@code write} / {@code write-to-string} keyword that binds each printer
+	 * variable (CLHS 22.3.1's table), keyword name to variable name. {@code :stream} is
+	 * not a variable and is not here.
+	 */
+	private static final java.util.Map<String, String> WRITE_KEYWORD_VARS = new java.util.LinkedHashMap<>();
+	static {
+		WRITE_KEYWORD_VARS.put(":ESCAPE", LispNames.PRINT_ESCAPE_VAR);
+		WRITE_KEYWORD_VARS.put(":READABLY", LispNames.PRINT_READABLY_VAR);
+		WRITE_KEYWORD_VARS.put(":PRETTY", LispNames.PRINT_PRETTY_VAR);
+		WRITE_KEYWORD_VARS.put(":CIRCLE", LispNames.PRINT_CIRCLE_VAR);
+		WRITE_KEYWORD_VARS.put(":RIGHT-MARGIN", LispNames.PRINT_RIGHT_MARGIN_VAR);
+		WRITE_KEYWORD_VARS.put(":MISER-WIDTH", LispNames.PRINT_MISER_WIDTH_VAR);
+		WRITE_KEYWORD_VARS.put(":LINES", LispNames.PRINT_LINES_VAR);
+		WRITE_KEYWORD_VARS.put(":PPRINT-DISPATCH", LispNames.PRINT_PPRINT_DISPATCH_VAR);
+		WRITE_KEYWORD_VARS.put(":LENGTH", LispNames.PRINT_LENGTH_VAR);
+		WRITE_KEYWORD_VARS.put(":LEVEL", LispNames.PRINT_LEVEL_VAR);
+		WRITE_KEYWORD_VARS.put(":BASE", LispNames.PRINT_BASE_VAR);
+		WRITE_KEYWORD_VARS.put(":RADIX", LispNames.PRINT_RADIX_VAR);
+		WRITE_KEYWORD_VARS.put(":CASE", LispNames.PRINT_CASE_VAR);
+		WRITE_KEYWORD_VARS.put(":GENSYM", LispNames.PRINT_GENSYM_VAR);
+		WRITE_KEYWORD_VARS.put(":ARRAY", LispNames.PRINT_ARRAY_VAR);
+	}
+
+	/**
+	 * Whether the program can observe a non-default printer-control variable
+	 * ({@link #PRINT_CONTROL_VARS}): it MENTIONS one anywhere, or calls
+	 * {@code write-to-string} with a keyword that binds one (that call becomes a
+	 * {@code let} of the variable in Pass 2, after every scan below has run). The same
+	 * scan gives the variable its {@code defvar} ({@link #injectMvSpillGlobal}) and
+	 * splices the {@code %print-cased} renderer ({@code LispPreludeLibrary}), so the
+	 * three decisions cannot disagree. A program that never names a variable can never
+	 * bind it, so its printing operators keep their own compilation and it stays
+	 * byte-identical. Note the scan runs over the SPLICED program on the CLI path: the
+	 * prelude {@code write} binds every variable, so a program that calls {@code write}
+	 * routes -- which is what lets its {@code :case} / {@code :length} / ... keywords
+	 * work through any call shape, {@code apply} included.
+	 * @param program the top-level forms
+	 * @return true when some form names a printer-control variable
+	 */
+	public static boolean usesPrintControls(List<LispVal> program) {
 		for (LispVal form : program) {
-			if (usesSymbol(form, LispNames.PRINT_CASE_VAR)) {
+			for (String name : PRINT_CONTROL_VARS) {
+				if (mentionsPrinterVariable(form, name)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the form mentions a printer variable by name, or binds it through a
+	 * {@code write-to-string} keyword ({@link #expandWriteToStringKeywords} is a Pass-2
+	 * lowering, so the un-expanded call has to count as the reference for every scan that
+	 * runs before it: the {@code defvar} injection and the renderer route).
+	 * @param form the form
+	 * @param name the printer variable
+	 * @return true when the form reads, binds or keyword-binds the variable
+	 */
+	static boolean mentionsPrinterVariable(LispVal form, String name) {
+		if (usesSymbol(form, name)) {
+			return true;
+		}
+		// :escape / :readably make the lowering READ both variables (it picks the
+		// conversion itself), so either keyword mentions both.
+		if (LispNames.PRINT_ESCAPE_VAR.equals(name) || LispNames.PRINT_READABLY_VAR.equals(name)) {
+			return callsWriteToStringWithKeyword(form, ":ESCAPE") || callsWriteToStringWithKeyword(form, ":READABLY");
+		}
+		for (java.util.Map.Entry<String, String> entry : WRITE_KEYWORD_VARS.entrySet()) {
+			if (entry.getValue().equals(name) && callsWriteToStringWithKeyword(form, entry.getKey())) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * True when some {@code (write-to-string x ... keyword ...)} call sits in the form.
+	 */
+	private static boolean callsWriteToStringWithKeyword(LispVal form, String keyword) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op && LispNames.WRITE_TO_STRING.equals(op.name()) && cons.isProperList()) {
+			List<LispVal> parts = cons.toList();
+			for (int i = 2; i < parts.size(); i += 2) {
+				if (parts.get(i) instanceof LispSymbol key && keyword.equals(key.name())) {
+					return true;
+				}
+			}
+		}
+		for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (callsWriteToStringWithKeyword(cell.car(), keyword)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Lowers a {@code write-to-string} call carrying keywords onto the one-argument
+	 * primitive every backend has: {@code (write-to-string x :length 2 :case :downcase)}
+	 * becomes {@code (let ((#:x x)) (let ((*print-length* 2) (*print-case* :downcase))
+	 * (write-to-string #:x)))} -- CL's definition (the keywords BIND the printer
+	 * variables around one print), with the object evaluated before the keyword values as
+	 * a function call would. The one-argument primitive is the {@code prin1} conversion,
+	 * so a call that binds {@code :escape} / {@code :readably} takes the conditional
+	 * {@code write} itself takes ({@code prin1-to-string} when either is true,
+	 * {@code princ-to-string} otherwise) in place of the primitive. The
+	 * {@code with-output-to-string} lowering the obvious spelling wants is exactly what
+	 * must not appear in a shared source (it flips the WASM exception-handling gate,
+	 * {@code .kb/format.md}), and the two conversions need no stream at all. Shared by
+	 * the interpreter and both compilers; the scans that run before Pass 2 see the call
+	 * through {@link #mentionsPrinterVariable}.
+	 * @param cons the {@code (write-to-string object key value ...)} form
+	 * @return the lowered form
+	 */
+	public static LispVal expandWriteToStringKeywords(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() % 2 != 0) {
+			throw new IllegalArgumentException("write-to-string: odd number of keyword arguments");
+		}
+		LispSymbol objectVar = new LispSymbol("__wts" + MV_COUNTER.getAndIncrement());
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		boolean picksConversion = false;
+		for (int i = 2; i < parts.size(); i += 2) {
+			String keyword = parts.get(i) instanceof LispSymbol key ? key.name() : null;
+			String variable = keyword == null ? null : WRITE_KEYWORD_VARS.get(keyword);
+			if (variable == null) {
+				throw new IllegalArgumentException("Unknown keyword argument: " + parts.get(i).print());
+			}
+			picksConversion = picksConversion || LispNames.PRINT_ESCAPE_VAR.equals(variable)
+					|| LispNames.PRINT_READABLY_VAR.equals(variable);
+			bindings.add(listToCons(List.of(new LispSymbol(variable), parts.get(i + 1))));
+		}
+		LispVal call = picksConversion
+				? makeIf(
+						listToCons(List.of(new LispSymbol(LispNames.OR), new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
+								new LispSymbol(LispNames.PRINT_READABLY_VAR))),
+						listToCons(List.of(new LispSymbol(LispNames.PRIN1_TO_STRING), objectVar)),
+						listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), objectVar)))
+				: listToCons(List.of(new LispSymbol(LispNames.WRITE_TO_STRING), objectVar));
+		LispVal bound = bindings.isEmpty() ? call
+				: listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), call));
+		return makeLet(objectVar.name(), parts.get(1), bound);
 	}
 
 	/** The surface operators that flip a program into restart mode. */
@@ -34793,10 +34956,13 @@ public final class LispMacroExpander {
 			// print-object counts for the same reason: its SYNTHESIZED system default
 			// (expandTopLevelDefinitions) reads the variable to tell prin1 from princ,
 			// and that defun does not exist yet when this scan runs.
+			// A write-to-string keyword is a binding the Pass-2 lowering
+			// (expandWriteToStringKeywords) has not written yet, so it counts here too.
 			boolean escapeReader = LispNames.PRINT_ESCAPE_VAR.equals(name);
 			for (LispVal form : program) {
-				if (usesSymbol(form, name) || (escapeReader && (usesSymbol(form, LispNames.PRINT_UNREADABLE_OBJECT)
-						|| usesSymbol(form, LispNames.PRINT_OBJECT)))) {
+				if (mentionsPrinterVariable(form, name)
+						|| (escapeReader && (usesSymbol(form, LispNames.PRINT_UNREADABLE_OBJECT)
+								|| usesSymbol(form, LispNames.PRINT_OBJECT)))) {
 					printerVars.add(name);
 					break;
 				}

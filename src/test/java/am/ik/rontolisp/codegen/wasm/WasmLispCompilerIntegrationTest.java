@@ -6185,6 +6185,74 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileComponentAndRun(CYCLIC_CONS_PRINT_PROGRAM)).isEqualTo(CYCLIC_CONS_PRINT_EXPECTED);
 	}
 
+	/**
+	 * The program both wasm backends run for the other printer-control variables
+	 * ({@code *print-length*} / {@code *print-level*} / {@code *print-gensym*} /
+	 * {@code *print-base*} / {@code *print-radix*}) and the {@code write} /
+	 * {@code write-to-string} keywords that bind them.
+	 */
+	private static final String PRINT_CONTROLS_PROGRAM = """
+			(let ((*print-length* 3))
+			  (princ (prin1-to-string '(1 2 3 4 5 6))) (princ "|")
+			  (princ (prin1-to-string '(1 2 3 . 4))) (princ "|")
+			  (princ (prin1-to-string '(1 2 3 4 . 5))) (princ "|")
+			  (princ (prin1-to-string (vector 1 2 3 4))) (princ "|")
+			  (princ (prin1-to-string '(a (b c d e) (f)))) (terpri))
+			(let ((*print-level* 1))
+			  (princ (prin1-to-string (list 1 '(2) (vector 3)))) (princ "|")
+			  (princ (prin1-to-string '(a 'b #'c))) (princ "|")
+			  (princ (prin1-to-string '(a '(b)))) (princ "|")
+			  (princ (prin1-to-string ''(b))) (terpri))
+			(let ((*print-level* 0) (*print-length* 0))
+			  (princ (prin1-to-string '(1))) (princ "|")
+			  (princ (prin1-to-string 'a)) (princ "|")
+			  (princ (prin1-to-string (vector 1))) (terpri))
+			(let ((*print-gensym* nil))
+			  (princ (prin1-to-string (list (make-symbol "G114")))) (princ "|")
+			  (princ (princ-to-string (make-symbol "G114"))) (terpri))
+			(let ((*print-base* 16))
+			  (princ (prin1-to-string (list 255 -255 1/255 1.5 "ff"))) (princ "|")
+			  (let ((*print-radix* t)) (princ (prin1-to-string (list 255 1/255)))) (terpri))
+			(let ((*print-radix* t))
+			  (princ (prin1-to-string (list 255 1/2))) (princ "|")
+			  (let ((*print-base* 2)) (princ (prin1-to-string -5))) (princ "|")
+			  (let ((*print-base* 8)) (princ (prin1-to-string 8))) (princ "|")
+			  (let ((*print-base* 36)) (princ (prin1-to-string 255))) (terpri))
+			(write '(foo "Bar" #\\c) :case :downcase :length 2) (princ "|")
+			(write 255 :base 2 :radix t) (princ "|")
+			(write (list 1 (list 2 (list 3))) :level 2 :length 1) (princ "|")
+			(princ (write-to-string '(1 2 3 4) :length 2)) (princ "|")
+			(princ (write-to-string "hi" :escape nil)) (princ "|")
+			(princ (write-to-string 'foo :case :downcase :escape nil)) (princ "|")
+			(princ (write-to-string (make-symbol "G1") :gensym nil)) (terpri)
+			(let ((*print-length* 1)) (princ (format nil "~s ~a" '(1 2) '(3 4)))) (terpri)
+			""";
+
+	/**
+	 * What SBCL 2.2.9 prints for {@link #PRINT_CONTROLS_PROGRAM}, minus the trailing
+	 * newline.
+	 */
+	private static final String PRINT_CONTROLS_EXPECTED = """
+			(1 2 3 ...)|(1 2 3 . 4)|(1 2 3 ...)|#(1 2 3 ...)|(A (B C D ...) (F))
+			(1 # #)|(A 'B #'C)|(A '#)|'(B)
+			#|A|#
+			(G114)|G114
+			(FF -FF 1/FF 1.5 "ff")|(#xFF #x1/FF)
+			(255. #10r1/2)|#b-101|#o10|#36r73
+			(foo "Bar" ...)|#b11111111|(1 ...)|(1 2 ...)|hi|foo|G1
+			(1 ...) (3 ...)""";
+
+	@Test
+	void printControls() throws Exception {
+		// The five variables ride the same shared %print-cased walk *print-case* does.
+		assertThat(compileAndRunPrelude(PRINT_CONTROLS_PROGRAM)).isEqualTo(PRINT_CONTROLS_EXPECTED);
+	}
+
+	@Test
+	void printControlsOnTheComponentPath() throws Exception {
+		assertThat(compileComponentAndRunPrelude(PRINT_CONTROLS_PROGRAM)).isEqualTo(PRINT_CONTROLS_EXPECTED);
+	}
+
 	@Test
 	void printCase() throws Exception {
 		// *print-case* converts the case of every SYMBOL the printer spells, through the
