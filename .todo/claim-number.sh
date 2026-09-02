@@ -12,6 +12,13 @@
 # Uses plumbing only -- no checkout, no index, no stash. Safe from any worktree,
 # with uncommitted changes, mid-task. `todo-seq` shares no history with develop
 # and must never be merged into it.
+#
+# The counter is authoritative but not omniscient: a session that has not adopted
+# this script can still file a number behind its back (that happened the hour the
+# branch was created). So each claim also reads what develop actually uses -- live
+# `.todo/NNN-*.md` files AND the numbers recorded in `.todo/history/` -- and skips
+# past anything already taken, healing the counter in the same push. That check is
+# what makes a manual cross-check afterwards unnecessary.
 set -euo pipefail
 
 reason=${1:?usage: claim-number.sh "<why>" [count]}
@@ -22,6 +29,17 @@ for attempt in $(seq 1 10); do
 	git fetch -q origin "+refs/heads/todo-seq:$ref"
 	base=$(git rev-parse "$ref")
 	cur=$(git show "$ref:NEXT" | tr -d '[:space:]')
+
+	# Skip past any number develop already uses -- live file or history row.
+	git fetch -q origin '+refs/heads/develop:refs/remotes/origin/develop'
+	used=$( {
+		git ls-tree --name-only origin/develop .todo/
+		git grep -h -oE '\.todo/[0-9]{3}' origin/develop -- .todo/history/ || true
+	} | grep -oE '[0-9]{3}' | sort -n | tail -1)
+	if [ -n "$used" ] && [ "$used" -ge "$cur" ]; then
+		cur=$((used + 1))
+	fi
+
 	next=$((cur + count))
 
 	blob=$(printf '%s\n' "$next" | git hash-object -w --stdin)
