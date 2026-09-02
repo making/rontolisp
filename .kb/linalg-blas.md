@@ -296,6 +296,18 @@ table -- and re-measured on 2026-09-02 the tok/s themselves move with what else 
 is doing: at load average 15-40 the same three builds gave 99-110, 123-128 and **9-64**.
 The threaded loss GROWS with contention, so 5.4x is a floor rather than a figure.
 
+**This trap had already been found once, and the finding did not travel.** todo-478 hit
+the identical mechanism over a `ForkJoinPool` and wrote it up as the decisive probe of
+that item -- `.kb/simd-parallel.md`, "Back-to-back calls are not the workload": a shape
+that measured 1.8x at 768x288 back to back measured **0.5-0.9x with a 20-200 us gap**,
+which is this table's error in the same direction and the same order. Its fix is the one
+every tuned BLAS already ships (workers that spin on an epoch and park only after an idle
+millisecond), which is exactly why OpenBLAS's pool flatters a hot loop here. todo-649 re-
+derived all of it from scratch, because that paragraph is indexed under `--parallel` and
+nobody binding a library reads it. The general rule -- a probe whose SHAPE differs from
+the step's shape measures something the program never runs -- is being lifted out to
+`.kb/measurement-probes.md`, and this section is one of its instances.
+
 The interpreter tells the same story from further away, because there the GEMV is a small
 share of a much slower loop. `simd-gemv` (256x256 `#f`, 100 steps), `java -jar`: 8964 ms
 scalar -> 187 ms `--simd` -> 131 ms `--simd --blas` (1 thread) -> 371 ms `--simd --blas`
