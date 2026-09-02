@@ -1443,25 +1443,34 @@ final class MetalGemm implements GpuDevice {
 
 	/**
 	 * {@code c = where(m, x, y)} over three operands broadcast to {@code dims}, any of
-	 * which may be a scalar. The mask may be a {@code float[]} or a scalar; a
-	 * {@code double[]} mask is a hard decline like every double operand here. The value
-	 * scalars are narrowed on the host exactly as the CPU kernel narrows them.
+	 * which may be a scalar. The values and the result must be single; the MASK may be
+	 * EITHER WIDTH (todo-645), and a {@code double[]} one is not the hard decline every
+	 * other double operand here is. {@code linalg:where}'s test is {@code (/= m 0)} --
+	 * "any bit but the sign set" -- so the mask is a PREDICATE, read as raw words and
+	 * never entering the arithmetic this backend has no {@code double} for, exactly as
+	 * the fused softmax's {@code pack_mask} reads it. It is staged and looked up at its
+	 * own width. The value scalars are narrowed on the host exactly as the CPU kernel
+	 * narrows them.
 	 * @return {@code true} when {@code c} was filled
 	 */
 	@Override
 	public boolean whereF(@Nullable Object m, int om, int[] sm, double ms, float @Nullable [] x, int ox, int[] sx,
 			double xs, float @Nullable [] y, int oy, int[] sy, double ys, float[] c, int oc, int[] dims) {
-		if (m instanceof double[]) {
+		boolean wide = m instanceof double[];
+		if (m != null && !wide && !(m instanceof float[])) {
 			return false;
 		}
-		float[] mask = m instanceof float[] f ? f : null;
+		long maskWidth = wide ? Double.BYTES : Float.BYTES;
 		int rank = dims.length;
 		int n = count(dims);
-		if (!acceptable(0, Long.MAX_VALUE, n, mask, x, y)) {
+		if (!acceptable(0, Long.MAX_VALUE, n, m, x, y)) {
 			return false;
 		}
-		long mElements = mask == null ? 0 : span(dims, sm) + 1, xElements = x == null ? 0 : span(dims, sx) + 1,
+		long mElements = m == null ? 0 : span(dims, sm) + 1, xElements = x == null ? 0 : span(dims, sx) + 1,
 				yElements = y == null ? 0 : span(dims, sy) + 1;
+		if (mElements > Integer.MAX_VALUE) {
+			return false;
+		}
 		MemorySegment pool = MemorySegment.NULL;
 		Call call = null;
 		try {
@@ -1470,8 +1479,8 @@ final class MetalGemm implements GpuDevice {
 			// Slots: 0 mask, 1 x, 2 y, 3 result. A scalar operand's slot stays null and
 			// the result slab is bound in its place, never read.
 			call = new Call(4);
-			if (mask != null) {
-				call.lookup(0, mask, om, mElements);
+			if (m != null) {
+				call.lookupBytes(0, m, om * maskWidth, mElements * maskWidth);
 			}
 			if (x != null) {
 				call.lookup(1, x, ox, xElements);
@@ -1479,12 +1488,12 @@ final class MetalGemm implements GpuDevice {
 			if (y != null) {
 				call.lookup(2, y, oy, yElements);
 			}
-			if ((mask != null && !call.ensure(0, mElements)) || (x != null && !call.ensure(1, xElements))
+			if ((m != null && !call.ensureBytes(0, mElements * maskWidth)) || (x != null && !call.ensure(1, xElements))
 					|| (y != null && !call.ensure(2, yElements)) || !call.ensure(3, n)) {
 				return false;
 			}
-			if (mask != null) {
-				call.stage(0, mask, om, mElements, false);
+			if (m != null) {
+				call.stageMask(0, m, om, (int) mElements, wide, false);
 			}
 			if (x != null) {
 				call.stage(1, x, ox, xElements, false);
@@ -1494,13 +1503,14 @@ final class MetalGemm implements GpuDevice {
 			}
 			try (Arena arena = Arena.ofConfined()) {
 				MemorySegment meta = layout(arena, 4, dims, sm, sx, sy);
-				MemorySegment args = arena.allocate(I, 6);
+				MemorySegment args = arena.allocate(I, 7);
 				args.setAtIndex(I, 0, n);
 				args.setAtIndex(I, 1, rank);
-				args.setAtIndex(I, 2, mask != null ? 1 : 0);
+				args.setAtIndex(I, 2, m != null ? 1 : 0);
 				args.setAtIndex(I, 3, x != null ? 1 : 0);
 				args.setAtIndex(I, 4, y != null ? 1 : 0);
 				args.setAtIndex(I, 5, ms != 0.0 ? 1 : 0);
+				args.setAtIndex(I, 6, wide ? 1 : 0);
 				MemorySegment scalars = arena.allocate(F, 2);
 				scalars.setAtIndex(F, 0, (float) xs);
 				scalars.setAtIndex(F, 1, (float) ys);
@@ -1512,7 +1522,7 @@ final class MetalGemm implements GpuDevice {
 					this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slab.buffer, 0, i);
 				}
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", meta, 4L * rank * Integer.BYTES, 4);
-				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 6L * Integer.BYTES, 5);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 7L * Integer.BYTES, 5);
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", scalars, 2L * Float.BYTES, 6);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
@@ -2525,10 +2535,11 @@ final class MetalGemm implements GpuDevice {
 	 *
 	 * <p>
 	 * The mask is either width: a {@code double[]} one is read as raw word pairs by the
-	 * packing kernel and never enters arithmetic, which is why the pair takes what
-	 * {@link #whereF} refuses. It is staged like any operand and ADOPTED on the second
-	 * sight ({@link #gemvF}'s rule), because the causal mask of a training step is one
-	 * array reached seventy-two times a step and its upload is otherwise paid every time.
+	 * packing kernel and never enters arithmetic -- {@link #whereF} reads its own mask
+	 * the same way since todo-645, for the same reason. It is staged like any operand and
+	 * ADOPTED on the second sight ({@link #gemvF}'s rule), because the causal mask of a
+	 * training step is one array reached seventy-two times a step and its upload is
+	 * otherwise paid every time.
 	 *
 	 * <p>
 	 * The slots are the {@code declared} operands, then the mask, the packed words and

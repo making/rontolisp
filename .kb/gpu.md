@@ -1325,11 +1325,12 @@ previous build's at every step of all six runs and both profiles.**
 
 **On Metal the fold is built too, and is worth 15% of the step there** -- six times what
 it took here, and for a reason this backend could not have guessed: the causal mask is a
-`double[]`, which `whereF` refuses on METAL, so the chain's `masked-fill` was running on
-the CPU over a materialized score. "The attention scale and mask on Metal" below has the
-numbers. **CUDA is not the backend with that hole**: `where` here takes the mask's width
+`double[]`, which `whereF` refused on METAL until todo-645 ("The `where` mask's width"
+below), so the chain's `masked-fill` was running on the CPU over a materialized score.
+"The attention scale and mask on Metal" below has the numbers.
+**CUDA is not the backend that had that hole**: `where` here takes the mask's width
 independently of the value's (`mkind` is 1 for a `float[]` mask and 2 for a `double[]`
-one, and the staging is sized off `mwidth`), so a double mask is a device member and
+one, and the staging is sized off `mwidth`), so a double mask is a device member here and
 always was -- which is why the `where_f32` row above has 72 launches to remove rather
 than a CPU pass. So the two backends' numbers are not the same measurement: -2.3% here is
 two device passes removed, and 15% there is two device passes plus one host pass.
@@ -1634,7 +1635,9 @@ them later.
 
 **Single float, or nothing.** MSL rejects `double` outright, so every double-taking method
 answers `false` without touching the device, and there is no fp64 on this hardware to fill
-the gap with later. Two consequences: **the decline protocol is load-bearing in a way it
+the gap with later. (The rule is about an operand that ENTERS ARITHMETIC. The one operand
+in the library that does not is `where`'s mask, and it is taken at both widths -- "The
+`where` mask's width" below.) Two consequences: **the decline protocol is load-bearing in a way it
 is not on CUDA** -- `linalg`'s default width is double, so on Apple the flag is inert
 until a program reaches `#f` data, which `torch:` does by default and a `linalg`-only
 program has to ask for -- and **`GpuTest` no longer describes both backends**: it is gated
@@ -2269,7 +2272,9 @@ mask is staged and ADOPTED on the second sight (`gemvF`'s rule -- the causal mas
 array reached seventy-two times a step, and its upload is otherwise paid every time), and
 once it is resident `whereF` is offered over it, because that member's offer rule counts any
 resident operand. So the fold makes the chain's own fill a device member for whoever else
-uses the same mask -- but only at f32, since a double one is still refused there.
+uses the same mask -- at the time of writing only at f32, since a double one was still
+refused there. **todo-645 removed that refusal**, and the f64 row of this table is 8.0 ->
+0.7 ms on the build that did ("The `where` mask's width" below).
 
 **The step, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, M4
 Max with the machine to itself; `(t13 - t3) / 10`, three interleaved rounds):
@@ -2284,6 +2289,98 @@ produced on its own; the per-call table predicts it exactly, at 36 forwards and 
 a step: 36 x 12.4 + 36 x 11.9 ms = 0.87 s. **The loss series is byte-identical to the
 previous build's at every step of all six runs** -- the fused kernel is the device chain's
 bits, and the CPU select it replaces was exact.
+
+### The `where` mask's width, and the rule that does not apply to it (todo-645, 2026-09-02)
+
+`MetalGemm.whereF` opened with `if (m instanceof double[]) return false;` -- "a double
+operand is a hard decline here like every other" -- and that is the wrong rule for THIS
+operand. **A `where` mask is a PREDICATE, not a number.** `linalg:where`'s test is
+`(/= m 0)`: any bit but the sign set, an integer test on the raw word. The width rule
+exists because there is no `double` to compute WITH, and a mask is the one operand in the
+library that is never computed with. todo-643's `pack_mask` had already been reading a
+`double[]` mask as two `uint`s a cell (the low one first) for exactly that reason;
+`where_f32` now binds its own mask as `device const uint*` and does the same test inline,
+one word at f32 and two at f64, and the host stages and looks the mask up at ITS width
+(`Call.lookupBytes` / `stageMask`, todo-643's). The values and the result are still
+single, because they do enter arithmetic.
+
+**It mattered because the mask a model builds is DOUBLE.** `torch:subsequent-mask` and
+`torch:padding-mask` are built out of `linalg:ones` and `linalg:equal`, which build at
+`linalg`'s default width whatever `torch:` is running at -- so every attention mask in
+the library arrives as a `double[]`, and the decline sent the select to the CPU over a
+MATERIALIZED score: 16.8 MB down, a scalar select, 16.8 MB back up.
+
+**What is still reached after todo-643, and it is a whole class.** The fold takes a mask
+only when it is a TRAILING BLOCK of the score. A CAUSAL mask is one (`(1 s s)` over
+`(b s s)`), so the book's GPT never reaches `whereF` and **its step does not move**. A
+PADDING mask is not: `torch:padding-mask` is `(batch 1 length)` over a
+`(batch query key)` score, so `examples/llm-from-scratch/transformer`'s encoder and cross
+attention -- and `chapter02/section5.lisp`'s `source-mask`, which is that same array --
+decline the fold on SHAPE and fall back to `%la-scaled-masked-softmax`'s three members,
+of which this `where` is one. Every masked attention that is not causal is in that class.
+
+**Per call at the book's `(64 256 256)` score, f32**
+(`.todo/123-gpu-acceleration/mtl-where-mask-width.lisp`, `--gpu --simd`, JVM class
+output, M4 Max, thirty calls a round, best of three rounds; the two builds alternated and
+the whole thing run three times, medians below -- every after round beats every before
+round on every f64 row):
+
+| per call, ms | before | after |
+|---|---|---|
+| `linalg:where`, f64 mask `(1 256 256)`, `-inf` fill | 7.83 | **1.53** |
+| `linalg:where`, f64 mask, the adjoint's `0.0` fill | 7.80 | **0.73** |
+| `linalg:where`, f64 mask `(64 1 256)`, a padding mask | 7.77 | **0.70** |
+| `%la-scaled-masked-softmax`, f64 padding mask (fold refuses the SHAPE) | 14.07 | **1.87** |
+| `linalg:where`, f32 mask `(1 256 256)` | 1.73 | 0.83 |
+| `linalg:where`, f32 mask `(64 1 256)` | 1.30 | 0.67 |
+| `%la-scaled-masked-softmax`, f32 padding mask | 3.03 | 1.80 |
+| `%la-scaled-masked-softmax`, f64 CAUSAL mask (the fold takes it) | 1.80 | 1.77 |
+
+Two things to read carefully.
+
+- **The wall of an accepted member is no longer its device time.** Since todo-495 results
+  are lazy and the command buffers asynchronous, so an accepted member is an ENQUEUE.
+  The table above forces every result home with one `aref`, which adds a 16.8 MB download
+  to every row equally; measured WITHOUT that read the same rows are 7.77 -> 0.00, 7.80 ->
+  0.07, 7.70 -> 0.10 and 12.53 -> 0.47, and the two f32 rows and the causal row do not
+  move at all. A member that ran on the CPU costs the same either way, which is why the
+  before column of the f64 rows is the same number in both.
+- **The f32 rows moved too, and that is an artifact of the probe rather than an effect.**
+  In the BEFORE build every f64 row brings the score home, so the f32 row that follows it
+  pays to put it back. In the AFTER build nothing comes home.
+
+The last row is the control: the fold's own shape never went through `whereF`, its
+kernels are untouched, and it did not move (1.80 -> 1.77, and 0.200 -> 0.200 unforced).
+**The book's step does not move either, and could not**: its mask is the causal one, which
+todo-643 folds, so `whereF` is never reached at all (`gpt-book-shapes-fast.lisp`,
+`(t13 - t3) / 10`, two interleaved rounds: 1.86 / 2.12 s before against 1.83 / 1.80 after
+-- inside the wall's usual +-4%, with no mechanism for a move).
+The select is exact, so **`where` over an f64 mask is cell-for-cell what `where` over the
+f32 copy of it is**, which the probe asserts at both mask shapes and
+`MetalGpuTest.theResidentTierIsOfferedOnlyOverAResidentOperandAndLandsOnTheCpuKernelsBits`
+pins at both widths over cells covering zero, NEGATIVE ZERO (false, `(/= m 0)`'s rule),
+an ordinary value and a NaN (true).
+
+**And it takes most of the sting out of the fold's SHAPE decline here** (todo-650, filed
+on the CUDA side, where a step's `cuMemcpy` count is dominated by it: 96 of 144 attention
+heads decline `%la-scaled-masked-softmax` because their mask is a padding mask). The rule
+is `LinalgGpu.suffixLength`, which lives in the INTERCEPTION layer above `GpuDevice`, so
+**this backend declines exactly the same masks CUDA does** -- the same 96 of 144 for the
+same model, and no `MetalGemm` change could alter that. What the decline COSTS is another
+matter, and here it is now nearly nothing: the fallback's three members are all device
+members over a resident score, so the row above measures 1.87 ms against the accepted
+shape's 1.77 forced, and 0.467 against 0.200 unforced -- two extra enqueues, and no host
+round trip at all (16.8 MB down and back would be milliseconds, not 0.27). Before todo-645
+the same decline cost 14.07 against 1.80, and the reason was never the round trip 650
+describes: it was this CPU select. **So the Metal half of 650 is closed by this**, and
+what is left of it here is two enqueues a call.
+
+**Nothing else this backend refuses on width alone is reached by the reasoning**, and the
+survey is short because the question is not "is the operand read as bytes" but "is it
+read as a NUMBER". Every other double operand -- `zip`, `scal`, `fold`, `adam`, `copy`,
+the GEMM and the GEMV, the fused rows -- is arithmetic on the value itself. `where`'s
+mask is the only predicate in the library, and the comparison members (`greater`,
+`equal`, ...) PRODUCE masks rather than consuming them, at the operand's own width.
 
 ## The interception layer
 

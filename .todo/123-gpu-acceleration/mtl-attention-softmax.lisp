@@ -3,9 +3,13 @@
 ;;;; the fused `linalg::%la-scaled-masked-softmax`, and the same for the adjoint, plus the
 ;;;; PLAIN pair, which must not move (the scaled/masked form is a second entry point).
 ;;;;
-;;;; Wall per call IS device time on this backend: every member is `commit` plus
-;;;; `waitUntilCompleted` and nothing overlaps. Best of three rounds, the rounds
-;;;; interleaved by the loop below rather than run one label at a time.
+;;;; Wall per call WAS device time on this backend when this was written: every member was
+;;;; `commit` plus `waitUntilCompleted` and nothing overlapped. Since todo-495 that is no
+;;;; longer true -- the command buffers are asynchronous and results lazy, so an ACCEPTED
+;;;; member is an enqueue and only a member that ran on the CPU costs its own wall here.
+;;;; `mtl-where-mask-width.lisp` is the same shapes with the results forced home.
+;;;; Best of three rounds, the rounds interleaved by the loop below rather than run one
+;;;; label at a time.
 ;;;;
 ;;;;   JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 ;;;;   java -jar $JAR .todo/123-gpu-acceleration/mtl-attention-softmax.lisp -o Ms.class \
