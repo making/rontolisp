@@ -1024,6 +1024,84 @@ driver's own pageable copy -- so it loses past 262144 elements and wins 17% at 6
 Neither pays for a pinned pool and its budget. **Any future change to this route re-runs
 that table first.**
 
+### The chapter-2 step re-measured, and the reduction adjoint that stopped mattering (todo-500, 2026-09-02)
+
+`.todo/500` was filed off the 2026-08-24 chapter-2 profile (in this file's git history,
+commit `13a52ba`): 104 `cuMemcpyHtoD` a batch of which **90 uploads, 183 MB, were
+`torch::%t-grad-bcast`** staging `(linalg:add (linalg:zeros-like x) gk)` -- an array of
+zeros allocated only to be broadcast over. **It is already gone, and the fused tier is
+what removed it.** Those 90 were the 30 `torch:layer-norm` modules' three reduction nodes
+each (the mean, the variance's mean and the variance's sum); todo-499 replaced the
+composition with `%la-layer-norm` and todo-634 with `%la-layer-norm-affine`, so the module
+carries no `torch:mean`/`torch:sum` node at all. Counted in the adjoint itself over three
+book-shape steps, `%t-grad-bcast` now runs **ONCE a step**, over the cross-entropy's
+flattened `(1280)` per-position loss, with a SCALAR gradient -- a 5 KB allocation, and it
+appears nowhere in a copy trace. **The item's premise is dead; there was no code change
+to make.**
+
+**The `-0.0` question it left open is moot, and was measured rather than reasoned.** The
+replacement would have been bit-identical except at `-0.0`, where `0.0 + v` answers
+`+0.0` and a strided copy would not. Instrumented (`(= v 0.0)` and `(< (/ 1.0 v) 0)`, so
+`-0.0` and no other value) over three book-shape steps, **zero `-0.0` elements reach
+`%t-grad-bcast`** -- nor the two scalar fills of the same shape, `%t-unbroadcast`'s
+number branch and `%t-grad-reshape`'s, which are never reached at all. The normalization
+`.kb/torch.md` records therefore stands untested by any program here, and stays as it is.
+Note also that `%la-layer-norm-grad` MIRRORS the old spelling on purpose ("every line is
+the adjoint torch.lisp spells for that op, the broadcast onto zeros included"), so
+changing the adjoint alone would have broken that member-for-member pin for no measured
+gain.
+
+**The step, re-profiled.** `d_model` 512, 6 blocks, 8 heads, `d_ff` 512, batch 64,
+`max_length` 20, vocabulary 6638 -- the book's shapes, over a SYNTHETIC corpus of
+10-19-token sentences rather than `small_parallel_enja` (the 2026-08-24 row is the real
+corpus, so the walls are not strictly comparable; the counts are structural). `--gpu
+--simd`, JVM class output, GB10, `java -Xmx64g -XX:+ExplicitGCInvokesConcurrent`, nsys
+over a 33-step run diffed against a 13-step one:
+
+| per step | 2026-08-24 | now |
+|---|---|---|
+| wall | 0.317 s | **0.36 s** |
+| device kernel time | 230 ms (73% busy) | **291 ms (~81% busy)** |
+| `cuLaunchKernel` | 11029 | **6794** |
+| `cuCtxSynchronize` | 102 | **204** |
+| `cuMemcpyHtoD` | 104 copies, 247 MB | **302 copies, 88.7 MB** |
+| `cuMemcpyDtoH` | 4 copies, 4.3 MB | **292 copies, 30.8 MB** |
+
+The launches fell by a third (the fused tier) and the uploaded bytes by two thirds (the
+zeros), but the COPY COUNT rose, and the downloads by 73x. A stack-walking trace on
+`upload`/`download` (the same scratch method as 2026-08-24) attributes every one:
+
+| per step | copies | MB | caller |
+|---|---|---|---|
+| **288 up + 288 down** | 288/288 | **25.9 each way** | **the attention softmax pair round-tripping a declined fused member** -- below, and `.todo/650` |
+| 1 up | 1 | 30.6 | `%la-log-softmax-grad` staging the `(1280 6638)` gradient |
+| 2 up (+2 int) | 2 | 27.2 | `%la-scatter-rows`, the embedding table's gradient |
+| 2 up | 2 | 4.85 | `%la-matmul-nd` staging the activation the DOUBLE `pe` buffer was added to |
+| 2 down | 2 | 4.85 | `torch:add` in `positional-encoding-forward` -- the mixed-width decline the example chooses |
+| 2 up | 2 | 0.009 | a `zip` broadcast |
+| 2 int up | 2 | 0.009 | `take-rows`, the embedding forward's index vector |
+| 1 up | 1 | 0.083 | `%la-scaled-masked-softmax`, the one head shape that does NOT decline |
+| 1 int up, 1 down | 2 | ~0 | `torch:gather`'s index vector and the loss scalar in `%m-ce-hard` |
+| 1 up | 1 | 0.005 | `linalg:where` inside `%la-scaled-masked-softmax-grad` |
+| 1 down | 1 | ~0 | one `aref` of the loss |
+
+So **the 14 uploads that are not the round trip are the same nine the 2026-08-24 trace
+named**, minus the zeros; and the FOUR downloads that profile counted are still exactly
+four (two positional-encoding, the loss scalar, one `aref`). Everything else is new.
+
+**Where the new traffic comes from: a `(batch 1 length)` mask.** `torch:padding-mask` puts
+a query axis of extent 1 in so it broadcasts over a `(batch query key)` score, and
+`LinalgGpu.suffixLength` requires the mask to be a trailing SUFFIX of the score's dims --
+`(batch 1 key)` against `(batch query key)` fails on the middle axis. So the encoder's 48
+self-attention heads and the decoder's 48 cross-attention heads decline
+`%la-scaled-masked-softmax`, the compiled fallback materializes the 90 KB score
+(`64 x 19 x 19` f32) to run the defun, and the defun's own `linalg:softmax` uploads it
+straight back: 96 round trips forward, 96 more backward with two operands each. The
+decoder's 48 SELF-attention heads carry `padding + subsequent`, a `(batch length length)`
+mask, which is a suffix -- they take the fused member and copy nothing. Chapter 3's GPT is
+unaffected for the same reason: its mask is `(1 T T)`, whose leading extent-1 axis is
+dropped before the suffix test. Filed as `.todo/650`.
+
 ## The fused tier (todo-499, 2026-09-02; todo-629 added two members, todo-641 two more, todo-634 two more)
 
 The four compositions a transformer step spent a third of its device time on -- the exact
@@ -1325,11 +1403,12 @@ previous build's at every step of all six runs and both profiles.**
 
 **On Metal the fold is built too, and is worth 15% of the step there** -- six times what
 it took here, and for a reason this backend could not have guessed: the causal mask is a
-`double[]`, which `whereF` refuses on METAL, so the chain's `masked-fill` was running on
-the CPU over a materialized score. "The attention scale and mask on Metal" below has the
-numbers. **CUDA is not the backend with that hole**: `where` here takes the mask's width
+`double[]`, which `whereF` refused on METAL until todo-645 ("The `where` mask's width"
+below), so the chain's `masked-fill` was running on the CPU over a materialized score.
+"The attention scale and mask on Metal" below has the numbers.
+**CUDA is not the backend that had that hole**: `where` here takes the mask's width
 independently of the value's (`mkind` is 1 for a `float[]` mask and 2 for a `double[]`
-one, and the staging is sized off `mwidth`), so a double mask is a device member and
+one, and the staging is sized off `mwidth`), so a double mask is a device member here and
 always was -- which is why the `where_f32` row above has 72 launches to remove rather
 than a CPU pass. So the two backends' numbers are not the same measurement: -2.3% here is
 two device passes removed, and 15% there is two device passes plus one host pass.
@@ -1634,8 +1713,10 @@ them later.
 
 **Single float, or nothing.** MSL rejects `double` outright, so every double-taking method
 answers `false` without touching the device, and there is no fp64 on this hardware to fill
-the gap with later. Two consequences: **the decline protocol is load-bearing in a way it
-is not on CUDA** -- `linalg`'s default width is double, so on Apple the flag is inert
+the gap with later. (The rule is about an operand that ENTERS ARITHMETIC. The one operand
+in the library that does not is `where`'s mask, and it is taken at both widths -- "The
+`where` mask's width" below.) Two consequences: **the decline protocol is load-bearing in
+a way it is not on CUDA** -- `linalg`'s default width is double, so on Apple the flag is inert
 until a program reaches `#f` data, which `torch:` does by default and a `linalg`-only
 program has to ask for -- and **`GpuTest` no longer describes both backends**: it is gated
 on a double-capable device and `MetalGpuTest` answers the same claims at `#f`. Two files
@@ -2269,7 +2350,9 @@ mask is staged and ADOPTED on the second sight (`gemvF`'s rule -- the causal mas
 array reached seventy-two times a step, and its upload is otherwise paid every time), and
 once it is resident `whereF` is offered over it, because that member's offer rule counts any
 resident operand. So the fold makes the chain's own fill a device member for whoever else
-uses the same mask -- but only at f32, since a double one is still refused there.
+uses the same mask -- at the time of writing only at f32, since a double one was still
+refused there. **todo-645 removed that refusal**, and the f64 row of this table is 8.0 ->
+0.7 ms on the build that did ("The `where` mask's width" below).
 
 **The step, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, M4
 Max with the machine to itself; `(t13 - t3) / 10`, three interleaved rounds):
@@ -2284,6 +2367,133 @@ produced on its own; the per-call table predicts it exactly, at 36 forwards and 
 a step: 36 x 12.4 + 36 x 11.9 ms = 0.87 s. **The loss series is byte-identical to the
 previous build's at every step of all six runs** -- the fused kernel is the device chain's
 bits, and the CPU select it replaces was exact.
+
+### The `where` mask's width, and the rule that does not apply to it (todo-645, 2026-09-02)
+
+`MetalGemm.whereF` opened with `if (m instanceof double[]) return false;` -- "a double
+operand is a hard decline here like every other" -- and that is the wrong rule for THIS
+operand. **A `where` mask is a PREDICATE, not a number.** `linalg:where`'s test is
+`(/= m 0)`: any bit but the sign set, an integer test on the raw word. The width rule
+exists because there is no `double` to compute WITH, and a mask is the one operand in the
+library that is never computed with. todo-643's `pack_mask` had already been reading a
+`double[]` mask as two `uint`s a cell (the low one first) for exactly that reason;
+`where_f32` now binds its own mask as `device const uint*` and does the same test inline,
+one word at f32 and two at f64, and the host stages and looks the mask up at ITS width
+(`Call.lookupBytes` / `stageMask`, todo-643's). The values and the result are still
+single, because they do enter arithmetic.
+
+**It mattered because the mask a model builds is DOUBLE.** `torch:subsequent-mask` and
+`torch:padding-mask` are built out of `linalg:ones` and `linalg:equal`, which build at
+`linalg`'s default width whatever `torch:` is running at -- so every attention mask in
+the library arrives as a `double[]`, and the decline sent the select to the CPU over a
+MATERIALIZED score: 16.8 MB down, a scalar select, 16.8 MB back up.
+
+**What is still reached after todo-643, and it is a whole class.** The fold takes a mask
+only when it is a TRAILING BLOCK of the score. A CAUSAL mask is one (`(1 s s)` over
+`(b s s)`), so the book's GPT never reaches `whereF` and **its step does not move**. A
+PADDING mask is not: `torch:padding-mask` is `(batch 1 length)` over a
+`(batch query key)` score, so `examples/llm-from-scratch/transformer`'s encoder and cross
+attention -- and `chapter02/section5.lisp`'s `source-mask`, which is that same array --
+decline the fold on SHAPE and fall back to `%la-scaled-masked-softmax`'s three members,
+of which this `where` is one. Every masked attention that is not causal is in that class.
+
+**Per call at the book's `(64 256 256)` score, f32**
+(`.todo/123-gpu-acceleration/mtl-where-mask-width.lisp`, `--gpu --simd`, JVM class
+output, M4 Max, thirty calls a round, best of three rounds; the two builds alternated and
+the whole thing run three times, medians below -- every after round beats every before
+round on every f64 row):
+
+| per call, ms | before | after |
+|---|---|---|
+| `linalg:where`, f64 mask `(1 256 256)`, `-inf` fill | 7.83 | **1.53** |
+| `linalg:where`, f64 mask, the adjoint's `0.0` fill | 7.80 | **0.73** |
+| `linalg:where`, f64 mask `(64 1 256)`, a padding mask | 7.77 | **0.70** |
+| `%la-scaled-masked-softmax`, f64 padding mask (fold refuses the SHAPE) | 14.07 | **1.87** |
+| `linalg:where`, f32 mask `(1 256 256)` | 1.73 | 0.83 |
+| `linalg:where`, f32 mask `(64 1 256)` | 1.30 | 0.67 |
+| `%la-scaled-masked-softmax`, f32 padding mask | 3.03 | 1.80 |
+| `%la-scaled-masked-softmax`, f64 CAUSAL mask (the fold takes it) | 1.80 | 1.77 |
+
+Two things to read carefully.
+
+- **The wall of an accepted member is no longer its device time.** Since todo-495 results
+  are lazy and the command buffers asynchronous, so an accepted member is an ENQUEUE.
+  The table above forces every result home with one `aref`, which adds a 16.8 MB download
+  to every row equally; measured WITHOUT that read the same rows are 7.77 -> 0.00, 7.80 ->
+  0.07, 7.70 -> 0.10 and 12.53 -> 0.47, and the two f32 rows and the causal row do not
+  move at all. A member that ran on the CPU costs the same either way, which is why the
+  before column of the f64 rows is the same number in both.
+- **The f32 rows moved too, and that is an artifact of the probe rather than an effect.**
+  In the BEFORE build every f64 row brings the score home, so the f32 row that follows it
+  pays to put it back. In the AFTER build nothing comes home.
+
+The last row is the control: the fold's own shape never went through `whereF`, its
+kernels are untouched, and it did not move (1.80 -> 1.77, and 0.200 -> 0.200 unforced).
+**The book's step does not move either, and could not**: its mask is the causal one, which
+todo-643 folds, so `whereF` is never reached at all (`gpt-book-shapes-fast.lisp`,
+`(t13 - t3) / 10`, two interleaved rounds: 1.86 / 2.12 s before against 1.83 / 1.80 after
+-- inside the wall's usual +-4%, with no mechanism for a move).
+The select is exact, so **`where` over an f64 mask is cell-for-cell what `where` over the
+f32 copy of it is**, which the probe asserts at both mask shapes and
+`MetalGpuTest.theResidentTierIsOfferedOnlyOverAResidentOperandAndLandsOnTheCpuKernelsBits`
+pins at both widths over cells covering zero, NEGATIVE ZERO (false, `(/= m 0)`'s rule),
+an ordinary value and a NaN (true).
+
+#### What the fold's SHAPE decline costs on this backend (todo-650's Metal half, measured)
+
+todo-650 was filed on the CUDA side: a padding mask is not a trailing block of the score,
+so `%la-scaled-masked-softmax` declines and the defun's members run over a MATERIALIZED
+score. The rule is `LinalgGpu.suffixLength` -- and its verbatim twin
+`JvmGpuTemplate.softmaxMaskLength`, because the compiled path carries its own copy;
+**a change to the acceptance condition has to change BOTH**. Neither is in `am.ik.gpu`, so
+no backend can decline differently from another, and the counts below are structural.
+
+Counted at the notebook's chapter-2 shapes (`d_model` 512, 6 blocks, 8 heads, `d_ff` 512,
+batch 64, `max_length` 20, a 6638-token vocabulary --
+`.todo/123-gpu-acceleration/transformer-book-shapes.lisp`, `--gpu --simd`, M4 Max), **per
+step, exactly linear in the step count**:
+
+| | accepted | declined ON SHAPE |
+|---|---|---|
+| `%la-scaled-masked-softmax` | 48 | **96** |
+| `%la-scaled-masked-softmax-grad` | 48 | **96** |
+
+which is the model's own structure: the 48 that pass are the decoder's SELF attention (6
+blocks x 8 heads), whose `padding + subsequent` mask is `(batch len len)` and so a suffix;
+the 96 that fail are the encoder's self attention and the decoder's cross attention, both
+of which take `torch:padding-mask`'s `(batch 1 length)` -- extent 1 in the MIDDLE, which
+`suffixLength` cannot drop. **The same 96 / 192 CUDA counts.**
+
+**And the price here is one whole score home per declined call.** Against the same probe
+with the source mask materialized at the score's own shape (`WIDEN=1`, so all 144 are
+accepted), JVM class output, `(t13 - t3) / 10`, two interleaved rounds:
+
+| per step | declining (as shipped) | all accepted |
+|---|---|---|
+| host downloads | **879** | 687 |
+| bytes downloaded | 194 MB | 178 MB |
+| wall a step | 0.763 / 0.760 s | 0.759 / 0.734 s |
+
+**192 extra downloads, which is exactly the 96 + 96 declines**, at 90 KB each -- one score
+(64 x 19 x 19 f32 = 92416 B) per declined call, todo-650's own description. So the round
+trip is real on this backend too, and todo-645 did NOT remove it: what todo-645 removed
+was the CPU SELECT inside the fallback, which was the expensive half. **What is left is
+worth 0 to 3% of the step, inside the wall's usual +-4%** -- and the accepted column pays
+for building the two widened masks, so the true prize of a rule change is at least that.
+(The 16.8 MB synthetic row above shows no round trip because its score is an adopted
+resident `defparameter`; that is the shape of the probe, not of a training step. Measure
+this one on a model.)
+
+**No Metal-side todo was filed**: the counts are decided above `GpuDevice`, so there is no
+Metal work item to open -- the change is `suffixLength` and its twin, or the shape
+`torch:padding-mask` builds. This table is the Metal price for that decision.
+
+**Nothing else this backend refuses on width alone is reached by the reasoning**, and the
+survey is short because the question is not "is the operand read as bytes" but "is it
+read as a NUMBER". Every other double operand -- `zip`, `scal`, `fold`, `adam`, `copy`,
+the GEMM and the GEMV, the fused rows -- is arithmetic on the value itself. `where`'s
+mask is the only predicate in the library, and the comparison members (`greater`,
+`equal`, ...) PRODUCE masks rather than consuming them, at the operand's own width.
 
 ## The interception layer
 

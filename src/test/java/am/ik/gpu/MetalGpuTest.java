@@ -1144,23 +1144,40 @@ class MetalGpuTest {
 						.isEqualTo(Float.floatToRawIntBits(expected));
 				}
 			}
-			// where over a broadcast float mask and a scalar y; a double mask is a hard
-			// decline like every double operand here.
+			// where over a broadcast mask and a scalar y, at BOTH mask widths (todo-645):
+			// a double mask is not the hard decline every other double operand here is,
+			// because the mask is a predicate read as raw words -- the same bits, the
+			// same select, whichever width carried it. The cells cover every case the
+			// integer test has to separate: zero, a negative zero (which is FALSE, like
+			// the CPU's (/= m 0)), an ordinary value, and a NaN (which is TRUE).
 			int rows = 64, cols = n / rows;
 			float[] mask = new float[cols];
+			double[] maskD = new double[cols];
 			for (int j = 0; j < cols; j++) {
-				mask[j] = j % 3 == 0 ? 0.0f : 1.0f;
+				maskD[j] = switch (j % 4) {
+					case 0 -> 0.0;
+					case 1 -> -0.0;
+					case 2 -> Double.NaN;
+					default -> 1.0;
+				};
+				mask[j] = (float) maskD[j];
 			}
-			assertThat(Gpu.where(mask, 0, new int[] { 0, 1 }, 0.0, a, 0, new int[] { cols, 1 }, 0.0, null, 0,
-					new int[] { 0, 0 }, -9.5, out, 0, new int[] { rows, cols }))
-				.isTrue();
-			Gpu.materialize(out);
-			for (int i = 0; i < n; i += 7) {
-				assertThat(out[i]).isEqualTo(mask[i % cols] == 0.0f ? -9.5f : a[i]);
+			for (Object mk : new Object[] { mask, maskD }) {
+				String what = mk == mask ? "f32 mask" : "f64 mask";
+				// A result of its own: `out` may be a lazy device copy by now, and a
+				// host write into one is the hazard the residency design forbids.
+				float[] selected = new float[n];
+				assertThat(Gpu.where(mk, 0, new int[] { 0, 1 }, 0.0, a, 0, new int[] { cols, 1 }, 0.0, null, 0,
+						new int[] { 0, 0 }, -9.5, selected, 0, new int[] { rows, cols }))
+					.as(what)
+					.isTrue();
+				Gpu.materialize(selected);
+				for (int i = 0; i < n; i += 7) {
+					float expected = maskD[i % cols] != 0.0 ? a[i] : -9.5f;
+					assertThat(Float.floatToRawIntBits(selected[i])).as("%s at %d", what, i)
+						.isEqualTo(Float.floatToRawIntBits(expected));
+				}
 			}
-			assertThat(Gpu.where(new double[cols], 0, new int[] { 0, 1 }, 0.0, a, 0, new int[] { cols, 1 }, 0.0, null,
-					0, new int[] { 0, 0 }, -9.5, out, 0, new int[] { rows, cols }))
-				.isFalse();
 			// A scalar mask and a scalar x.
 			assertThat(Gpu.where(null, 0, new int[] { 0 }, 1.0, null, 0, new int[] { 0 }, 2.5, a, 0, new int[] { 1 },
 					0.0, out, 0, new int[] { n }))
@@ -1611,9 +1628,9 @@ class MetalGpuTest {
 		// torch:softmax, folded into the softmax pair. The claim is the tier's -- the
 		// fused kernel IS the chain, rounding for rounding -- so the oracle is the chain
 		// run on the DEVICE: the scale through scal_f32, the mask's select on the host
-		// (a select is exact, and it is the only way to get a double[] mask through,
-		// which
-		// whereF declines here) and then the plain fused softmax.
+		// (a select is exact, whichever side runs it, and spelling it here keeps the
+		// oracle independent of whether whereF took the mask) and then the plain fused
+		// softmax.
 		//
 		// Three scales cover both of scal_f32's routes: 8 is a power of two and reaches
 		// the kernel already rewritten to the multiply by its exact reciprocal, 3 is an

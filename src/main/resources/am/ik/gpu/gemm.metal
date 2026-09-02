@@ -810,10 +810,18 @@ kernel void scal_f32(device const float* A [[buffer(0)]],
 // out[i] = mask != 0 ? x : y over three operands broadcast together, any of which may be a
 // scalar -- linalg:where, hence torch:masked-fill. `meta` is the output dims then one
 // stride vector per operand (a scalar's is ignored); args carry n, rank, and for each
-// operand whether it is an array (1) or a scalar (0), the mask scalar's truth, and the two
-// value scalars already narrowed on the host exactly as the CPU narrows them. A select
-// moves bits, so this is the CPU's result whatever the operands.
-kernel void where_f32(device const float* M [[buffer(0)]],
+// operand whether it is an array (1) or a scalar (0), the mask scalar's truth, the mask's
+// WIDTH, and the two value scalars already narrowed on the host exactly as the CPU
+// narrows them. A select moves bits, so this is the CPU's result whatever the operands.
+//
+// THE MASK IS BOUND AS RAW WORDS and may be EITHER WIDTH (todo-645), the values and the
+// result single as ever. `linalg:where`'s test is `(/= m 0)` -- a NaN counts, a negative
+// zero does not -- which is "any bit but the sign set": an INTEGER test, so a `double[]`
+// mask needs no arithmetic this backend has no `double` for. It reads as two words a
+// cell, the low one first, exactly as `pack_mask` reads the fused softmax's mask. The
+// rule the width decline belongs to is the one for an operand that ENTERS ARITHMETIC, and
+// a mask does not.
+kernel void where_f32(device const uint* M [[buffer(0)]],
                       device const float* X [[buffer(1)]],
                       device const float* Y [[buffer(2)]],
                       device float* C [[buffer(3)]],
@@ -821,7 +829,8 @@ kernel void where_f32(device const float* M [[buffer(0)]],
                       constant int* args [[buffer(5)]],
                       constant float* scalars [[buffer(6)]],
                       uint i [[thread_position_in_grid]]) {
-  int n = args[0], rank = args[1], mArray = args[2], xArray = args[3], yArray = args[4], mTrue = args[5];
+  int n = args[0], rank = args[1], mArray = args[2], xArray = args[3], yArray = args[4], mTrue = args[5],
+      mWide = args[6];
   if (int(i) >= n) return;
   int im = 0, ix = 0, iy = 0, rem = int(i);
   for (int k = rank - 1; k >= 0; --k) {
@@ -832,7 +841,9 @@ kernel void where_f32(device const float* M [[buffer(0)]],
     ix += c * meta[2 * rank + k];
     iy += c * meta[3 * rank + k];
   }
-  bool take = mArray != 0 ? (as_type<uint>(M[im]) & 0x7fffffffu) != 0 : mTrue != 0;
+  bool take = mArray != 0 ? (mWide != 0 ? (M[2 * im] | (M[2 * im + 1] & 0x7fffffffu)) != 0u
+                                        : (M[im] & 0x7fffffffu) != 0u)
+                          : mTrue != 0;
   C[i] = take ? (xArray != 0 ? X[ix] : scalars[0]) : (yArray != 0 ? Y[iy] : scalars[1]);
 }
 
@@ -1167,11 +1178,12 @@ kernel void softmax_grad_f32(device const float* G [[buffer(0)]],
 // causal mask, and every last-axis score), a lane loads ONE word for its row and the
 // thirty-two lanes exchange bits by `simd_shuffle`: thirty-two loads a chunk become one.
 //
-// The mask may be EITHER WIDTH, which the plain `where_f32` on this backend cannot say: a
-// `double[]` mask is a hard decline there, so at the book's shapes the chain's
-// `torch:masked-fill` runs on the CPU over a materialized score. "Non-zero" is
-// `linalg:where`'s `(/= m 0)` -- a NaN counts, a negative zero does not -- which is "any
-// bit but the sign set", an integer test that needs no arithmetic of either width.
+// The mask may be EITHER WIDTH, and so may `where_f32`'s since todo-645, for the same
+// reason: "non-zero" is `linalg:where`'s `(/= m 0)` -- a NaN counts, a negative zero does
+// not -- which is "any bit but the sign set", an integer test that needs no arithmetic of
+// either width. (Until todo-645 the plain `where_f32` declined a `double[]` mask, so at
+// the book's shapes the chain's `torch:masked-fill` ran on the CPU over a materialized
+// score whenever the fold above declined the mask's SHAPE.)
 
 // The mask packed one bit a cell: word w holds cells [32 w, 32 w + 32), bit i for cell
 // 32 w + i, set where the cell is non-zero. The operand is read as raw words -- one per
