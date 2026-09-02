@@ -3218,14 +3218,29 @@ anything can probe. Those two public methods are the entire cost this route impo
 language-independent library, and they are a legitimate embedder API rather than a
 rontolisp hook.
 
-**The size objection does not survive measurement.** `am.ik.gpu`'s class files are 118 KB,
-the bridge 13, the PTX 113 and the MSL 9.4, so a `--gpu --simd` class is ~300 KB bigger
-than a `--simd` one -- against the 62 KB `JvmSimdVectorTemplate` every `linalg` program
-under `--simd` already embeds. **If the blob ever has to shrink, `sin` / `cos` / `tan` are
-the place**: they are 38 KB of PTX for three members (a Payne-Hanek argument-reduction
-table) where `exp` is 2.9 and `erf` 4.5. They were kept because the RULE is the measurement
--- each is 9-22x on the device -- and dropping them would be a size decision overriding a
-speed one.
+**The size objection does not survive measurement -- but the numbers have moved a long way
+since it was first taken** (re-measured 2026-09-03, todo-656). What is REPLACED here is
+"~300 KB bigger than a `--simd` one, and `sin`/`cos`/`tan` are the place to shrink": both
+were true when the PTX held a handful of kernels, and neither is now. Measured on one tree,
+the same program compiled twice, `--simd` against `--simd --gpu`: **2,571,220 against
+172,427 bytes, so `--gpu` adds 2,398,793**, and it divides as
+
+| part | bytes in the class | share |
+|---|---|---|
+| `gemm.ptx`, embedded verbatim | 1,885,029 | 78.6% |
+| the 22 `GPU_CLASSES` class files, base64 (287,225 raw) | 382,968 | 16.0% |
+| `gemm.metal`, verbatim | 71,701 | 3.0% |
+| the bridge `JvmGpuTemplate`, base64 (42,399 raw) | 56,532 | 2.4% |
+
+**The blob is the PTX, and the PTX is the FUSED ROW FAMILY**: `softmax`, `softmax_grad`,
+`log_softmax`, `layer_norm*` and `gelu*` are 20 of the module's 58 entries and 1,548,866
+bytes -- **82.2% of the PTX and 64.6% of everything `--gpu` adds**, the four softmax
+entries alone 663 KB. The transcendentals this paragraph used to name are not entries at
+all; they are op codes inside `map`, and `map_f32` + `map_f64` together are 62,525 bytes,
+3.3% of the PTX. So if the blob ever has to shrink it is a fused-row question and nothing
+else is worth opening. What did NOT change is the conclusion: every one of those kernels is
+there because a measurement put it there, and the objection is still answered by the fact
+that a `--simd` class already embeds a 62 KB `JvmSimdVectorTemplate` for the same reason.
 
 Two routes were weighed and rejected, and the reasons are worth keeping: **a `--gpu`-only
 support jar** makes `-o Prog.class --gpu` non-standalone, a real departure since every
@@ -3276,10 +3291,57 @@ SHAPE half cannot be asked without a device, and the reason is structural rather
 choice: on both paths a shape decline and a no-device decline are the same `null`, and the
 compiled bridge fuses `!Gpu.available()` into the same `||` as the shape tests. `Probe.DEVICE`
 is a static final holder and `GpuDevice` is `sealed permits CudaGemm, MetalGemm`, so no test
-can stand a device up to separate the two. Making the shape half CI-visible therefore means a
-say-yes-to-everything `GpuDevice` inside `am.ik.gpu` -- which would have to join `GPU_CLASSES`
-and travel in every compiled program, and which silently answers zeros if it is ever switched
-on by accident. That is its own item, not this one's.
+can stand a device up to separate the two.
+
+#### Closing the gap was priced and DECLINED (todo-656, 2026-09-03)
+
+Two ways were on the table -- (a) a say-yes-to-everything third `GpuDevice` in `am.ik.gpu`,
+(b) hoisting each bridge member's `!Gpu.available()` out of its shape expression and
+exposing the shape decision on its own -- and the item filed both as SIZE decisions,
+because whatever either adds travels in every compiled `--gpu` program. **Size is not the
+axis.** Against the 2,398,793 bytes `--gpu` already adds (the table above), a stand-in
+implementing all 71 `GpuDevice` methods with constant bodies compiles to 5,326 bytes, 7,101
+base64, **0.30%**; and DOUBLING the bridge outright -- a ceiling far above any predicate
+surface (b) would add -- is 2.4%. Neither is a size decision. What decided it is the
+CEILING on what CI would additionally pin, and it collapses on the opportunity side twice
+over:
+
+- **A divergence cannot MANIFEST without a device.** Every entry point in `am.ik.gpu.Gpu`
+  is `device != null && ...` over `Probe.DEVICE` (read in the code, not inferred), so on a
+  GPU-less machine nothing is ever accepted and both paths run their scalar fallback
+  whatever their predicates say. A `JvmGpuTemplate` shape rule that disagreed with
+  `LinalgGpu` produces a wrong answer only on a machine where this test already runs. The
+  gate does not leave the defect unprotected; it defers detection to the first machine on
+  which the defect is observable at all.
+- **The population of commits that could carry one undetected is empty.** 23 commits have
+  touched `JvmGpuTemplate` or `LinalgGpu` and 18 touched both; of the 5 asymmetric ones two
+  are each side's first build and one is a merge, and the remaining two (`fa343e55`,
+  `198ebcd3`) are Metal work. Every one of the 23 is a `--gpu` topic commit landing
+  measurements in THIS file -- taken on a device. Over the same window 8 distinct days
+  carried a device-session commit, longest gap 6 days, which bounds the latency the gate
+  costs.
+
+**And a stand-in would pin LESS than the shape half pins today**, which is the argument
+that would hold even if the two above did not. 7 of the 43 boundary cases are over a
+RESIDENT operand -- including all four `-1` reshape cases todo-663 added, the one time this
+pin has caught anything. A device that answers `true` from every kernel without touching
+memory answers `resident(host) == false`, so all 7 decline on BOTH paths and agree
+VACUOUSLY (`.kb/test-execution.md`, "A test that never ran the mechanism it asserts on").
+Keeping them alive means modelling `DeviceResidency`, the lazy stubs and
+`written`/`materialize` in the stand-in -- a second implementation of exactly the mechanism
+the paragraph above refuses to fork. The bits half goes either way: an unwritten
+destination is zeros on both paths, so the `isEqualTo(bitsOf(accepted))` that today
+separates two accepts becomes `0 == 0`.
+
+**(b) fails on the axis the test was designed for.** A parallel shape-predicate surface
+makes the test assert PREDICATE against PREDICATE instead of OFFER against OFFER, so the
+predicate can drift from the offer it describes -- a new vacuity of the same shape the
+census assertion exists to catch -- unless all 25 members are rewritten to call their own
+predicate, which is a refactor of the file that travels, for a test.
+
+So neither was built, the shape half stays device-gated, and
+`GpuOfferDifferentialTest`'s own javadoc now says it does not run on CI and why, so a green
+CI run is not read as covering the shape rule.
 
 **The thirteen bodies, read against each other.** Four are word-for-word once the two
 representations are allowed for -- `bcastShape`, `bcastStrides`, `rowMajorStrides` and
