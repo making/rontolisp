@@ -1468,6 +1468,94 @@ Still deliberately NOT supported: `adjust-array` on a packed integer vector or
 a packed float array, a different decision covered above ("What is still NOT
 supported").
 
+### The packed-displacement arms' 382-byte tax: measured, not gated (`.todo/668`, 2026-09-02)
+
+`.todo/664`'s per-program cost (+382 wasm / +392 class, above) is paid by
+every array-using program whether or not it ever builds a packed vector or
+displaces anything. `.todo/668` was filed to price a program-level gate --
+"can this program build a packed integer vector or packed float array" AND/OR
+"does it call `make-array` with `:displaced-to`" -- that would skip emitting
+the packed arms in `_arr_get`/`_arr_set`/`_arr_undisplace` when neither can
+happen. **Measured and NOT implemented**: the theoretical win is real but
+capped at the existing per-program constant, and a gate sound enough to trust
+at runtime (a false negative does not fail to compile -- it corrupts a
+running program) costs more to build and maintain than 382 bytes justifies.
+
+**What a gate would recover, per real program.** Read (not compiled) against
+`size-report/programs/zlib/zlib.lisp` (+ the quickloaded chipz sources at
+`~/.rontolisp/quicklisp/software/chipz-*`), `examples/asdf/cl-ppcre-demo.lisp`
+(+ the vendored `src/test/resources/cl-ppcre/*.lisp`), and
+`examples/asdf/jzon-demo.lisp` (+ the vendored `src/test/resources/jzon/src/*.lisp`
+and the flexi-streams shim it pulls in, `src/main/resources/am/ik/rontolisp/eval/flexi-streams.lisp`):
+
+| program | builds a packed vector? | calls `make-array :displaced-to`? | gate fires? |
+| --- | --- | --- | --- |
+| zlib (+chipz) | yes -- `(unsigned-byte 8)` input buffer; chipz itself has no `unsigned-byte`/float packed arrays either, so this is the ONLY one | no -- zero `:displaced-to` anywhere in zlib.lisp or chipz | yes (382/392 bytes) |
+| cl-ppcre | no -- every `make-array` in the vendored source is `'fixnum`/`'character`/`'(or null fixnum)`, none of which is packed per `JvmArrayCompiler.packedIntElementWidth`/`isSingleFloatElementType`/`isDoubleFloatElementType` | yes -- `cl-ppcre/util.lisp`'s `nsubseq` (`:displaced-to sequence :element-type (array-element-type sequence)`), but only ever onto a STRING, never a packed target | yes (382/392 bytes) |
+| jzon (+flexi-streams, closer-mop, uiop, ...) | yes -- flexi-streams' octet-buffer helper (`(make-array ... :element-type '(unsigned-byte 8))`, no fill-pointer/adjustable, so it takes the packed path); jzon's own `schubfach.lisp`/`eisel-lemire.lisp` tables are `(unsigned-byte 64)`/`(signed-byte 64)`, NOT packed (width 64 and signed are outside `packedIntElementWidth`'s 8/16/32 unsigned range) | no -- zero `:displaced-to` in jzon, its vendored deps, or any shipped shim (`grep`ped the whole of `src/main/resources/am/ik/rontolisp/**/*.lisp`: none) | yes (382/392 bytes) |
+
+So on all three tracked real programs a correct gate fires and recovers the
+full per-program constant (the same 0.65% / 0.15% / 0.21% wasm deltas `.todo/664`
+measured landing the feature, now reclaimable) -- not the "cl-ppcre displaces,
+so a naive gate buys it nothing" outcome `.todo/664`'s own filer warned about;
+the naive "does it displace" gate would indeed buy cl-ppcre nothing, but the
+"can it build a packed vector" half fires on cl-ppcre precisely because it
+never can. **The ceiling is still exactly the fixed per-program constant,
+382/392 bytes, regardless of program size** -- there is no larger prize behind
+this door.
+
+**Why the gate was not built despite a real, present win on every tracked
+program.** A gate here is a program-level yes/no that changes emitted CODE
+SHAPE, not a value; a false negative ("this program cannot build a packed
+vector" when it actually can, or "this program never displaces" when it
+actually does) does not fail to compile -- the packed arm is simply absent
+from `_arr_get`/`_arr_set`, and a program that reaches it anyway hits
+whatever the general/string arm does with packed storage: a `ref.cast` trap
+on wasm, `ClassCastException` on the JVM, at RUN TIME, in a program that
+looked correct at every compile step. That bar -- provably-safe program-level
+whole-source-tree analysis, not "as far as I traced it" -- is higher than it
+looks:
+
+- **The JVM's own analogous gate (`programUsesIntArray`/`programUsesFloatArray`,
+  `JvmLispCompiler.java`) is NOT a pure AST walk.** Its own comments say why:
+  `read-sequence`/`write-sequence` over a typed sequence injects an internal
+  `%seq-int-vector` wrapper that allocates a packed vector WITHOUT it
+  appearing in the scanned `program` list, so the gate ORs in `usesSeqIntVector`
+  by hand; a fetched HTTP reply's `:body` and a served request's `:raw-body`
+  are packed octet vectors the RUNTIME builds, not any scanned `make-array`,
+  so the gate ORs in `usesFetch`/`usesHttpHandler` by hand too. A displacement
+  gate needs the same audit, independently, because none of those three
+  escape hatches say anything about `:displaced-to` -- and the wasm backend,
+  which is where this todo's 382 bytes live, does not even reuse the JVM's
+  hand list (its own existing `typedArrayCodes` gate,
+  `LispMacroExpander.makeArrayElementTypeCodes`, is a bare AST walk with NONE
+  of those three ORed in, an existing gap this todo did not create and does
+  not fix).
+- **A first-class reference to `make-array` can carry `:displaced-to` without
+  the packed/displaced-to keywords appearing in the shape either scan looks
+  for.** `BuiltinFunctionWrappers.variadicMakeArray()` (`compiler` package)
+  synthesizes a wrapper body for `(funcall #'make-array ...)` /
+  `(apply #'make-array ...)` that DOES re-embed a literal
+  `(make-array dims :displaced-to (getf kw :displaced-to) ...)` call -- so a
+  scan that walks the FULLY INJECTED program (wrapper defs included) would
+  catch it, PROVIDED the wrapper injection happens before the scan runs and
+  the wrapper actually gets emitted into what the scan reads. That mechanism
+  is JVM-only today (`grep -l BuiltinFunctionWrappers src/main/java/am/ik/rontolisp/codegen/wasm/*.java`
+  is empty) -- the wasm backend either does not support first-class
+  `#'make-array` the same way or reaches it through a different, unaudited
+  path, which would need its own investigation before any wasm-side gate
+  could be trusted.
+
+Neither gap is exotic (`.kb`'s own http-server and binary-sequence-io
+material describes both mechanisms elsewhere), and both would need to be
+closed, PLUS kept closed as the wasm backend grows new ways to build a packed
+array or a displaced view, for a capped payoff that never exceeds 382/392
+bytes no matter how large the gate's blast radius grows chasing it. That is
+the "not worth its blast radius" call CLAUDE.md asks for: the finding --
+these three real programs would fully qualify for a correct gate, and the
+prize is capped exactly where `.todo/664` estimated it -- is recorded here
+instead of the gate.
+
 ## Representation
 
 ### Interpreter (`LispArray`)
