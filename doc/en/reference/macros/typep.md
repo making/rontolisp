@@ -21,7 +21,7 @@ A SIZED string specifier — `(string n)`, `(simple-string n)`, and the `(vector
   (list (length s) (typep s '(string 4)) (typep s '(string 1)))) ; => (1 T NIL)
 ```
 
-A specifier computed at run time is supported too, and takes the same set: an ATOMIC type name (a registered class / struct / condition, or a built-in name), a class metaobject — what [`find-class`](../functions/find-class.md) and [`class-of`](../functions/class-of.md) answer designates its own class — or any of the compound specifiers above, whose head and arguments are then read out of the specifier VALUE rather than folded at compile time. So `(typep a (type-of a))` answers `T` for every array shape. `class` is the class every class metaobject belongs to, so `(typep x 'class)` is the "is this a class?" test.
+A specifier computed at run time is supported too, and takes the same set: an ATOMIC type name (a registered class / struct / condition, a zero-parameter [`deftype`](deftype.md) name, or a built-in name), a class metaobject — what [`find-class`](../functions/find-class.md) and [`class-of`](../functions/class-of.md) answer designates its own class — or any of the compound specifiers above, whose head and arguments are then read out of the specifier VALUE rather than folded at compile time. So `(typep a (type-of a))` answers `T` for every array shape. `class` is the class every class metaobject belongs to, so `(typep x 'class)` is the "is this a class?" test.
 
 ```lisp
 (typep 5 '(unsigned-byte 8)) ; => T
@@ -34,6 +34,14 @@ A specifier computed at run time is supported too, and takes the same set: an AT
 ```lisp
 (let ((a (make-array 4)))
   (list (type-of a) (typep a (type-of a)))) ; => ((SIMPLE-VECTOR 4) T)
+```
+
+A `deftype` name resolves whether it is spelled at the call site or held in a variable, inside a compound specifier as well. [`coerce`](../functions/coerce.md) with a computed result type resolves it the same way.
+
+```lisp
+(deftype octet () '(unsigned-byte 8))
+(let ((ty 'octet))
+  (list (typep 3 ty) (typep 300 ty) (typep 3 (list 'or ty 'null)))) ; => (T NIL T)
 ```
 
 ```lisp

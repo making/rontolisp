@@ -1187,8 +1187,18 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx, className);
 				case LispNames.COPY_LIST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopyList(cons), ctx, className);
-				case LispNames.NREVERSE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx, className);
+				case LispNames.NREVERSE -> {
+					// A string/vector sequence reverses via a coerced list and is
+					// rebuilt in its own representation; null when the call is already
+					// the inner list reversal (wrapSortForStringSeq precedent).
+					LispVal wrappedNreverse = LispMacroExpander.wrapNreverseForStringSeq(cons, ctx.usesArrays);
+					if (wrappedNreverse != null) {
+						JvmExprCompiler.compileExpr(wrappedNreverse, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx, className);
+					}
+				}
 				case LispNames.MAKE_LIST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeList(cons), ctx, className);
 				case LispNames.UNION ->
@@ -1263,6 +1273,8 @@ final class JvmExprCompiler {
 				case LispNames.ARRAY_BECOME -> JvmArrayCompiler.compileArrayBecome(cons, ctx, className);
 				case LispNames.ARRAY_DEFAULT_ELEMENT ->
 					JvmArrayCompiler.compileArrayDefaultElement(cons, ctx, className);
+				case LispNames.ARRAY_ADOPT_ELEMENT_TYPE ->
+					JvmArrayCompiler.compileArrayAdoptElementType(cons, ctx, className);
 				case LispNames.ARRAY_ALIKE -> {
 					// The type-preserving allocator (_ivAlike) when the program can
 					// build a packed integer vector; otherwise every array is general
@@ -1283,8 +1295,12 @@ final class JvmExprCompiler {
 					// shared %seq-int-vector helper, exactly as concatenate's does;
 					// everything else is expandCoerce as before.
 					LispVal packed = ConcatenateForms.packedVectorCoerce(cons, ctx.closRegistry);
-					JvmExprCompiler.compileExpr(packed != null ? packed : LispMacroExpander.expandCoerce(cons,
-							ctx.usesArrays, ctx.functions.containsKey(LispNames.SEQ_TO_LIST)), ctx, className);
+					JvmExprCompiler.compileExpr(
+							packed != null ? packed
+									: LispMacroExpander.expandCoerce(cons, ctx.usesArrays,
+											ctx.functions.containsKey(LispNames.SEQ_TO_LIST),
+											ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null),
+							ctx, className);
 				}
 				case LispNames.MAP_INTO -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandMapInto(cons,
@@ -1292,7 +1308,6 @@ final class JvmExprCompiler {
 						ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
-				case LispNames.READ -> JvmReadCompiler.compile(cons, ctx, className);
 				case LispNames.LOAD -> JvmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
 				// A literal top-level require/provide (and the asdf directives) was
 				// consumed by the compile-time LoadInliner pass; anything left is nested
@@ -1406,8 +1421,8 @@ final class JvmExprCompiler {
 						}
 					}
 				}
-				case LispNames.STABLE_SORT ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandStableSort(cons), ctx, className);
+				case LispNames.STABLE_SORT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandStableSort(cons, ctx.usesArrays), ctx, className);
 				case LispNames.COPY_SEQ ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx, className);
 				case LispNames.VECTORP ->

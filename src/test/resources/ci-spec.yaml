@@ -3073,6 +3073,25 @@ cases:
       T
       NIL
       T
+  - name: nreverse-and-stable-sort-answer-the-sequence-type
+    source: |
+      ;; Both used to lose the argument's TYPE and answer a bare list for a
+      ;; string/vector, identically on every backend.
+      (print (nreverse (copy-seq "abcd")))
+      (print (nreverse (vector 1 2 3)))
+      (print (nreverse (list 1 2 3)))
+      (print (stable-sort (copy-seq "dcba") #'char<))
+      (print (stable-sort (vector 3 1 2) #'<))
+      (print (funcall #'nreverse (copy-seq "wxyz")))
+      (print (funcall #'stable-sort (copy-seq "dcba") #'char<))
+    expected: |
+      "dcba"
+      #(3 2 1)
+      (3 2 1)
+      "abcd"
+      #(1 2 3)
+      "zyxw"
+      "abcd"
   - name: bitwise-integer-operations-variadic
     source: |
       (print (logand 12 10))
@@ -3673,6 +3692,31 @@ cases:
     expected: |
       #FOO
       7
+  - name: read-stream-datum-by-datum
+    source: |
+      (let ((s (make-string-input-stream "1 2 3")))
+        (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof))))
+      (with-input-from-string (s "(a) (b)")
+        (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof))))
+      (with-input-from-string (s "(a
+      b) c")
+        (print (list (read s nil :eof) (read s nil :eof))))
+      (with-input-from-string (s "(1 2)  x") (print (list (read s) (read-line s))))
+      (with-input-from-string (s "ab  cd") (print (list (read s) (read-line s))))
+      (with-input-from-string (s "nil") (print (read s nil :done)))
+      (print (handler-case (with-input-from-string (s "") (read s t))
+               (end-of-file () :caught)))
+      (print (handler-case (with-input-from-string (s "(a b") (read s))
+               (error () :caught)))
+    expected: |
+      (1 2 3 :EOF)
+      ((A) (B) :EOF)
+      ((A B) C)
+      ((1 2) " x")
+      (AB " cd")
+      NIL
+      :CAUGHT
+      :CAUGHT
   - name: runtime-read-errors-signal
     source: |
       (print (handler-case (read-from-string "#\\NoSuchName") (error (e) "caught-char")))
@@ -4095,13 +4139,54 @@ cases:
       (0.0 0)
       (32 0.0 NIL)
       (122 DOUBLE-FLOAT)
+  # adjust-array does not change an array's element type (CLHS), and a NON-adjustable
+  # adjustment answers a FRESH array, so the copy has to remember what the original did --
+  # without that an adjusted character vector stops answering stringp. The copy takes the
+  # stamp through %array-adopt-element-type, which copies the ONE word each backend keeps
+  # the type in rather than re-running make-array's representation choice. The literal
+  # string is the same question over the array shape that carries no header at all, and the
+  # shape readers it goes through (array-rank/array-dimensions/array-total-size/
+  # array-displacement, all of them array-dimensions underneath) now accept one everywhere.
+  - name: adjusted-copy-element-type-cross-backend
+    source: |
+      (defun ci-adjusted-copy-keeps-type ()
+        (let* ((s (make-array 3 :element-type 'character :initial-element #\x))
+               (r (adjust-array s 5)))
+          (list (stringp r) (array-element-type r) (char-code (aref r 4)))))
+      (defun ci-adjusted-literal-string ()
+        (let ((r (adjust-array "abc" 5)))
+          (list (stringp r) (array-element-type r) (length r))))
+      (defun ci-adjusted-rank-2-keeps-type ()
+        (let* ((a (make-array '(2 2) :element-type 'character :initial-element #\y))
+               (r (adjust-array a '(3 3))))
+          (list (array-element-type r) (stringp r) (aref r 2 2))))
+      (defun ci-adjusted-typed-keeps-type ()
+        (let* ((f (make-array 3 :element-type 'double-float :fill-pointer 0))
+               (b (make-array '(2 2) :element-type '(unsigned-byte 8)))
+               (rf (adjust-array f 5))
+               (rb (adjust-array b '(3 3))))
+          (list (array-element-type rf) (aref rf 4) (array-element-type rb) (aref rb 2 2))))
+      (defun ci-string-is-a-rank-1-array ()
+        (list (array-rank "abc") (array-dimensions "abc") (array-total-size "abc")
+              (array-displacement "abc")))
+      (defun ci-adjusted-copy ()
+        (print (ci-adjusted-copy-keeps-type))
+        (print (ci-adjusted-literal-string))
+        (print (ci-adjusted-rank-2-keeps-type))
+        (print (ci-adjusted-typed-keeps-type))
+        (print (ci-string-is-a-rank-1-array)))
+      (ci-adjusted-copy)
+    expected: |
+      (T CHARACTER 32)
+      (T CHARACTER 5)
+      (CHARACTER NIL #\Space)
+      (DOUBLE-FLOAT 0.0 (UNSIGNED-BYTE 8) 0)
+      (1 (3) 3 NIL)
   # A string IS a vector (and a vector IS an array), so array-element-type answers the one
   # character type for it -- the same arm vectorp/length/aref/elt already take. The general
   # vector keeps the lite element type t and the packed integer vector its (unsigned-byte N)
   # answer, so the #8@ literal in the same program also pins the packed (runtime-helper) path
-  # on the JVM. The related array-dimensions/array-rank/array-total-size/adjustable-array-p/
-  # array-has-fill-pointer-p still reject a string on the compile paths and are
-  # deliberately not covered here.
+  # on the JVM. The shape readers over a string are pinned by the case above.
   - name: array-element-type-on-a-string-cross-backend
     source: |
       (defun ci-aet-string ()
@@ -13732,6 +13817,21 @@ standalone:
     stdout: |
       ((UNSIGNED-BYTE 8) 0 (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) T (UNSIGNED-BYTE 8) DOUBLE-FLOAT)
       (T T)
+  - name: runtime-typep-deftype-alias
+    source: |
+      (deftype rtta-octet () '(unsigned-byte 8))
+      (deftype rtta-buffer () 'rtta-octet)
+      (deftype rtta-str () 'string)
+      (defun rtta-tp (x ty) (typep x ty))
+      (print (list (rtta-tp 3 'rtta-octet) (rtta-tp 300 'rtta-octet) (rtta-tp 3 'rtta-buffer)
+                   (rtta-tp "ab" 'rtta-str) (rtta-tp 3 'rtta-str)
+                   (rtta-tp 3 (list 'or 'rtta-octet 'null)) (rtta-tp "x" (list 'or 'rtta-octet 'null))
+                   (typep 3 'rtta-octet) (rtta-tp 3 'rtta-unregistered)))
+      (print (list (coerce 3 (car (list 'rtta-octet)))
+                   (coerce (list #\a #\b) (car (list 'rtta-str)))))
+    stdout: |
+      (T NIL T T NIL T NIL T NIL)
+      (3 "ab")
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

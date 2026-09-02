@@ -56,6 +56,8 @@ public final class JvmSourceCompiler {
 
 	private List<String> dists = List.of();
 
+	private List<String> features = List.of();
+
 	/**
 	 * @param className the class to emit, in either the {@code com.acme.Kernels} or the
 	 * {@code com/acme/Kernels} spelling
@@ -164,6 +166,16 @@ public final class JvmSourceCompiler {
 	}
 
 	/**
+	 * @param features read-time features the caller declares on top of the JVM target's
+	 * own set ({@code --feature}), for a portable library whose {@code #+} chain names no
+	 * rontolisp feature
+	 */
+	public JvmSourceCompiler features(List<String> features) {
+		this.features = List.copyOf(features);
+		return this;
+	}
+
+	/**
 	 * Compiles a source text.
 	 * <p>
 	 * A failure carries the frontend's {@code file:line:column:} prefix, exactly as the
@@ -199,8 +211,8 @@ public final class JvmSourceCompiler {
 	private Optional<Result> run(String source, @Nullable String entryFile, boolean onlyIfExported) {
 		return CompileDiagnostics.recording(() -> {
 			CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, this.baseDir, this.systemPath,
-					DistClient.createDefault(this.dists), false, this.servlet, this.dynamic, false, false, false, false,
-					null, false, this.noPrune);
+					DistClient.createDefault(this.dists), this.features, false, this.servlet, this.dynamic, false,
+					false, false, false, null, false, this.noPrune);
 			if (onlyIfExported && frontend.program().stream().noneMatch(JvmExportDirective::isExportForm)) {
 				return Optional.empty();
 			}

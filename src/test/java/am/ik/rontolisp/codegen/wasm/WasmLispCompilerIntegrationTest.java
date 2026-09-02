@@ -151,6 +151,13 @@ class WasmLispCompilerIntegrationTest {
 				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 	}
 
+	// read is prelude rontolisp over read-char / unread-char, so a program that calls
+	// it needs the prelude splice AND the pushback-cell rewrite, in the CLI's order.
+	private static String compileAndRunRead(String lispCode) throws Exception {
+		return compileAndRunProgram(am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
+
 	private static String compileAndRunGray(String lispCode) throws Exception {
 		return compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
@@ -1555,6 +1562,56 @@ class WasmLispCompilerIntegrationTest {
 				T
 				900
 				5""");
+	}
+
+	@Test
+	void makeArrayShapesGoThroughTheSharedDimensionRuntime() throws Exception {
+		// The shapes _arr_dims / _arr_total / _arr_fp decide, which used to be inline at
+		// every make-array site (.kb/array-literals.md). The i31 shorthand stays inline
+		// and every other dims spelling calls: a rank-n LITERAL list, a rank-n list
+		// built at run time, a rank-0 nil shape, an :element-type that packs and one
+		// that does not, a :fill-pointer given as t (the vector size) and as an integer,
+		// and a :displaced-to view whose bound is the same dims product.
+		String program = """
+				(let ((v (make-array 4 :initial-element 3)))
+				  (print (list (array-dimensions v) (array-total-size v) (aref v 3))))
+				(let ((m (make-array '(2 3) :initial-element 1)))
+				  (setf (aref m 1 2) 9)
+				  (print (list (array-dimensions m) (array-total-size m) (aref m 1 2) (row-major-aref m 5))))
+				(let* ((rows 2) (m (make-array (list rows (+ rows 1)) :initial-element 0)))
+				  (setf (aref m 1 2) 7)
+				  (print (list (array-rank m) (array-total-size m) (aref m 1 2))))
+				(let ((c (make-array (list 2 2 2) :element-type 'double-float :initial-element 0.5d0)))
+				  (setf (aref c 1 1 1) 2.5d0)
+				  (print (list (array-dimensions c) (array-total-size c) (aref c 1 1 1) (aref c 0 0 0))))
+				(let ((b (make-array (list 2 2) :element-type '(unsigned-byte 8))))
+				  (print (list (array-dimensions b) (aref b 0 0))))
+				(let ((z (make-array nil :initial-element 42)))
+				  (print (list (array-rank z) (array-total-size z) (aref z))))
+				(let ((f (make-array 5 :fill-pointer t)))
+				  (print (list (fill-pointer f) (length f) (array-total-size f))))
+				(let ((g (make-array 5 :fill-pointer 2 :adjustable t)))
+				  (vector-push-extend 8 g)
+				  (print (list (fill-pointer g) (aref g 2) (adjustable-array-p g))))
+				(let* ((base (make-array 6 :initial-element 0))
+				       (view (make-array (list 2 2) :displaced-to base :displaced-index-offset 1)))
+				  (setf (aref view 1 1) 8)
+				  (print (list (array-dimensions view) (aref base 4) (array-total-size view))))
+				""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		byte[] fast = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(parsed);
+		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE).compile(parsed);
+		assertThat(runModule(small, "arr-dims-size.wasm")).isEqualTo(runModule(fast, "arr-dims-fast.wasm"));
+		assertThat(runModule(fast, "arr-dims-fast.wasm")).isEqualTo("""
+				((4) 4 3)
+				((2 3) 6 9 9)
+				(2 6 7)
+				((2 2 2) 8 2.5 0.5)
+				((2 2) 0)
+				(0 1 42)
+				(5 5 5)
+				(3 8 T)
+				((2 2) 8 4)""");
 	}
 
 	// Runs an already-compiled module. Used where the point of the test is to compare
@@ -5021,7 +5078,8 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static String compileAndRunComponentWithStdin(String lispCode, String stdin) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
@@ -7745,6 +7803,21 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void nreverseAndStableSortAnswerTheSequenceType() throws Exception {
+		// Both used to lose the argument's TYPE and answer a bare list for a
+		// string/vector, identically on every backend.
+		assertThat(compileAndRun("""
+				(print (nreverse (copy-seq "abcd")))
+				(print (nreverse (vector 1 2 3)))
+				(print (nreverse (list 1 2 3)))
+				(print (stable-sort (copy-seq "dcba") #'char<))
+				(print (stable-sort (vector 3 1 2) #'<))
+				(print (funcall #'nreverse (copy-seq "wxyz")))
+				(print (funcall #'stable-sort (copy-seq "dcba") #'char<))"""))
+			.isEqualTo("\"dcba\"\n#(3 2 1)\n(3 2 1)\n\"abcd\"\n#(1 2 3)\n\"zyxw\"\n\"abcd\"");
+	}
+
+	@Test
 	void positionIfFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (position-if #'evenp '(1 3 5 6 7))) (print (position-if #'plusp '(-1 -2 -3))) (print (funcall #'position-if #'oddp '(2 4 5)))"))
@@ -10105,10 +10178,13 @@ class WasmLispCompilerIntegrationTest {
 			.hasMessageContaining("Cannot compile symbol: CAR");
 	}
 
-	// read-line tests
-
+	// read-line tests. The pre-passes are the CLI pipeline's: read is prelude
+	// rontolisp over read-char / unread-char, and its scanner's own call sites reach
+	// the pushback cell only through UnreadCharLibrary -- exactly the order
+	// CompileFrontend runs them in. A program naming neither is returned unchanged.
 	private static String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
@@ -10183,7 +10259,8 @@ class WasmLispCompilerIntegrationTest {
 	// Pipes stdin through a file in the container so the input may contain single
 	// quotes (e.g. #'car), which would break the echo '...' form above.
 	private static String compileAndRunWithStdinFile(String lispCode, String stdin) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
@@ -10881,8 +10958,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void readConsumesExactlyOneDatum() throws Exception {
+		// todo-624: one datum's characters, the stream left after them. The compile
+		// paths used to close an unterminated list at end of line SILENTLY -- "(a" on
+		// one line and "b)" on the next read as (A) then B.
+		assertThat(compileAndRunRead("""
+				(let ((s (make-string-input-stream "1 2 3")))
+				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
+			.isEqualTo("(1 2 3 :EOF)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(a) (b)")
+				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
+			.isEqualTo("((A) (B) :EOF)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(a
+				b) c")
+				  (print (list (read s nil :eof) (read s nil :eof))))""")).isEqualTo("((A B) C)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(1 2)  x") (print (list (read s) (read-line s))))"""))
+			.isEqualTo("((1 2) \" x\")");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "ab  cd") (print (list (read s) (read-line s))))"""))
+			.isEqualTo("(AB \" cd\")");
+	}
+
+	@Test
+	void readEofValueAndSignal() throws Exception {
+		assertThat(compileAndRunRead("(with-input-from-string (s \"\") (print (read s nil :done)))"))
+			.isEqualTo(":DONE");
+		// A nil DATUM is no longer confused with end of input.
+		assertThat(compileAndRunRead("(with-input-from-string (s \"nil\") (print (read s nil :done)))"))
+			.isEqualTo("NIL");
+		assertThat(compileAndRunRead("""
+				(print (handler-case (with-input-from-string (s "") (read s t))
+				         (end-of-file () :caught)))""")).isEqualTo(":CAUGHT");
+		assertThat(compileAndRunRead("""
+				(print (handler-case (with-input-from-string (s "(a b") (read s))
+				         (error () :caught)))""")).isEqualTo(":CAUGHT");
+	}
+
+	@Test
 	void withInputFromStringReadsLinesAndData() throws Exception {
-		assertThat(compileAndRun("""
+		assertThat(compileAndRunRead("""
 				(with-input-from-string (s "first line
 				(1 2 3)
 				third")
@@ -11057,7 +11174,7 @@ class WasmLispCompilerIntegrationTest {
 		// The input mirror of the *standard-output* redirect: binding *standard-input*
 		// redirects read-line / read-char / read, including inside called functions, and
 		// an explicit nil argument is the same designator.
-		assertThat(compileAndRun("""
+		assertThat(compileAndRunRead("""
 				(defun slurp (&optional stream) (princ (read-line stream)) (princ "|"))
 				(with-input-from-string (*standard-input* "one")
 				  (slurp))
@@ -15172,6 +15289,43 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAnAdjustedCopyKeepsTheElementType() throws Exception {
+		// adjust-array does not change an array's element type (CLHS), and a
+		// NON-adjustable adjustment answers a FRESH array, so the copy has to remember
+		// what the original did -- otherwise an adjusted character vector stops
+		// answering stringp. A literal (immutable) string is the same question over the
+		// one array shape that carries no header at all, and the string shape readers
+		// below are what its adjustment goes through. Pinned here, in the other three
+		// backends' twins and in the adjusted-copy-element-type-cross-backend ci-spec
+		// case.
+		assertThat(compileAndRun("""
+				(defun adjusted-copy-keeps-type ()
+				  (let* ((s (make-array 3 :element-type 'character :initial-element #\\x))
+				         (r (adjust-array s 5)))
+				    (list (stringp r) (array-element-type r) (char-code (aref r 4)))))
+				(defun adjusted-literal-string ()
+				  (let ((r (adjust-array "abc" 5)))
+				    (list (stringp r) (array-element-type r) (length r))))
+				(defun adjusted-rank-2-keeps-type ()
+				  (let* ((a (make-array '(2 2) :element-type 'character :initial-element #\\y))
+				         (r (adjust-array a '(3 3))))
+				    (list (array-element-type r) (stringp r) (aref r 2 2))))
+				(defun adjusted-typed-keeps-type ()
+				  (let* ((f (make-array 3 :element-type 'double-float :fill-pointer 0))
+				         (b (make-array '(2 2) :element-type '(unsigned-byte 8)))
+				         (rf (adjust-array f 5))
+				         (rb (adjust-array b '(3 3))))
+				    (list (array-element-type rf) (aref rf 4) (array-element-type rb) (aref rb 2 2))))
+				(defun string-is-a-rank-1-array ()
+				  (list (array-rank "abc") (array-dimensions "abc") (array-total-size "abc")
+				        (array-displacement "abc")))
+				(print (list (adjusted-copy-keeps-type) (adjusted-literal-string) (adjusted-rank-2-keeps-type)
+				             (adjusted-typed-keeps-type) (string-is-a-rank-1-array)))
+				""")).isEqualTo("((T CHARACTER 32) (T CHARACTER 5) (CHARACTER NIL #\\Space)"
+				+ " (DOUBLE-FLOAT 0.0 (UNSIGNED-BYTE 8) 0) (1 (3) 3 NIL))");
+	}
+
+	@Test
 	void compileSetfFillPointer() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 5 :fill-pointer 5 :initial-element 7))
@@ -15249,6 +15403,18 @@ class WasmLispCompilerIntegrationTest {
 				(defparameter *fv* (make-array 4 :fill-pointer 2 :initial-element 5))
 				(print (fill-pointer (adjust-array *fv* 8)))
 				""")).isEqualTo("(#(7 7 7 0 0) NIL)\n(T #(1 1 1 9 9))\n#2A((1 2 0) (3 4 0) (0 0 0))\n2");
+	}
+
+	@Test
+	void compileAdjustArrayTrapsOnAPackedFloatArray() throws Exception {
+		// A packed float array has no fill-pointer/adjustability/displacement surface --
+		// the same shape a packed integer vector already traps on -- so adjust-array's
+		// %array-disp-target probe rejects it with a cast-failure trap rather than
+		// running (the interpreter and JVM answer a clear "not applicable to a packed
+		// float array" text instead; wasm has no custom trap-message channel here, so a
+		// trap is the parity bar on this backend).
+		compileAndExpectTrap("(adjust-array (make-array 3 :element-type 'double-float) 5)");
+		compileAndExpectTrap("(adjust-array (make-array 3 :element-type 'single-float) 5)");
 	}
 
 	@Test
@@ -19620,6 +19786,24 @@ class WasmLispCompilerIntegrationTest {
 						((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
 						(T (SIMPLE-VECTOR 4) NIL)
 						(7 #\\z A)""");
+	}
+
+	@Test
+	void compileRuntimeTypepResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's evalRuntimeTypepResolvesADeftypeAlias, and
+		// the same program: a typep designator held in a VALUE resolves the user deftype
+		// it names, through the injected %deftype-alias resolver the runtime dispatch
+		// normalizes with. A computed coerce result type rides the same resolution.
+		assertThat(compileAndRunPrelude("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype str () 'string)
+				(defun tp (x ty) (typep x ty))
+				(print (list (tp 3 'octet) (tp 300 'octet) (tp 3 'byte-buffer) (tp "ab" 'str) (tp 3 'str)
+				             (tp 3 (list 'or 'octet 'null)) (tp "x" (list 'or 'octet 'null))
+				             (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
+				             (typep 3 'octet) (tp 3 'no-such-type)))
+				""")).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
 	}
 
 	@Test

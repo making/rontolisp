@@ -668,15 +668,7 @@ public final class Environment implements Scope {
 		// *features*: an ordinary special holding the interpreter's feature list. The
 		// compile paths seed the same variable with their own target set
 		// (LispMacroExpander.injectMvSpillGlobal); see .kb/reader-features.md.
-		LispVal featureList = LispNil.INSTANCE;
-		List<String> featureNames = am.ik.rontolisp.reader.Features.INTERPRETER.names();
-		for (int i = featureNames.size() - 1; i >= 0; i--) {
-			// Features are keywords, printed uppercase like every other symbol under the
-			// reader's upcase premise; the compile paths spell them the same way.
-			featureList = new LispCons(new LispSymbol(":" + featureNames.get(i).toUpperCase(java.util.Locale.ROOT)),
-					featureList);
-		}
-		env.define(LispNames.FEATURES_VAR, featureList);
+		env.define(LispNames.FEATURES_VAR, featureKeywordList(am.ik.rontolisp.reader.Features.INTERPRETER.names()));
 		// The standard streams are the t designator (the process standard stream), which
 		// the whole print / read family accepts as a stream argument. The exception is
 		// *error-output*: t already names the process standard OUTPUT, so the error
@@ -699,6 +691,23 @@ public final class Environment implements Scope {
 			return args.get(0);
 		}));
 		return env;
+	}
+
+	/**
+	 * The {@code *features*} list as the reader would have read it: the names as
+	 * keywords, in the feature set's own order. Features are keywords printed uppercase
+	 * like every other symbol under the reader's upcase premise, and the compile paths
+	 * spell them the same way ({@code LispMacroExpander.injectMvSpillGlobal}).
+	 * @param names the feature names, without the leading colon
+	 * @return the keyword list
+	 */
+	static LispVal featureKeywordList(List<String> names) {
+		LispVal featureList = LispNil.INSTANCE;
+		for (int i = names.size() - 1; i >= 0; i--) {
+			featureList = new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(java.util.Locale.ROOT)),
+					featureList);
+		}
+		return featureList;
 	}
 
 	private static void registerHashTables(Environment env) {
@@ -1364,6 +1373,14 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ARRAY_DEFAULT_ELEMENT, args, 1);
 			return arrayDefaultElement(args.get(0));
 		}));
+		env.defineFunction(LispNames.ARRAY_ADOPT_ELEMENT_TYPE,
+				new LispFunction(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, args -> {
+					requireArgCount(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, args, 2);
+					if (args.get(0) instanceof LispArray fresh) {
+						fresh.adoptElementType(arrayElementTypeCode(args.get(1)));
+					}
+					return args.get(0);
+				}));
 		env.defineFunction(LispNames.ARRAY_BECOME, new LispFunction(LispNames.ARRAY_BECOME, args -> {
 			requireArgCount(LispNames.ARRAY_BECOME, args, 2);
 			LispArray old = requireGeneralArray(LispNames.ARRAY_BECOME, args.get(0));
@@ -1402,14 +1419,27 @@ public final class Environment implements Scope {
 	// adjust-array's growth or by vector-push-extend's -- reads back as the same thing
 	// make-array's unsupplied element does (%array-default-element; ArrayElementTypes).
 	private static LispVal arrayDefaultElement(LispVal value) {
-		LispVal zero = switch (value) {
-			case LispString ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.CHARACTER);
-			case LispIntVector ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.UNSIGNED_BYTE_8);
-			case LispFloatArray ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.DOUBLE_FLOAT);
-			case LispArray array -> ArrayElementTypes.defaultElement(array.elementTypeCode());
-			default -> null;
-		};
+		LispVal zero = ArrayElementTypes.defaultElement(arrayElementTypeCode(value));
 		return zero == null ? LispNil.INSTANCE : zero;
+	}
+
+	// The UPGRADED element type this value remembers, as an ArrayElementTypes code: one
+	// answer per representation, and ArrayElementTypes.T for anything that is not an
+	// array at all. Both %array-default-element (the zero) and
+	// %array-adopt-element-type (the stamp a fresh adjust-array copy takes) ask it.
+	private static int arrayElementTypeCode(LispVal value) {
+		return switch (value) {
+			case LispString ignored -> ArrayElementTypes.CHARACTER;
+			case LispIntVector iv -> switch (iv.width()) {
+				case 16 -> ArrayElementTypes.UNSIGNED_BYTE_16;
+				case 32 -> ArrayElementTypes.UNSIGNED_BYTE_32;
+				default -> ArrayElementTypes.UNSIGNED_BYTE_8;
+			};
+			case LispSingleFloatArray ignored -> ArrayElementTypes.SINGLE_FLOAT;
+			case LispFloatArray ignored -> ArrayElementTypes.DOUBLE_FLOAT;
+			case LispArray array -> array.elementTypeCode();
+			default -> ArrayElementTypes.T;
+		};
 	}
 
 	// The shared adjust-array core: build the resized copy (preserving the elements at
@@ -3364,16 +3394,21 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.NREVERSE, new LispFunction(LispNames.NREVERSE, args -> {
 			requireArgCount(LispNames.NREVERSE, args, 1);
 			// Destructive: rewire each cdr to its predecessor and return the former last
-			// cell as the new head (Common Lisp semantics; use the return value).
+			// cell as the new head (Common Lisp semantics; use the return value). A
+			// string/vector argument is not a cons chain -- it reverses via a coerced
+			// list (seqAsList/seqResult, the sort/reduce precedent) and is rebuilt back
+			// in its own representation; CL leaves eq-to-the-argument unspecified.
+			LispVal original = args.get(0);
+			boolean isSeq = !(original instanceof LispCons) && !(original instanceof LispNil);
 			LispVal prev = LispNil.INSTANCE;
-			LispVal cur = args.get(0);
+			LispVal cur = isSeq ? seqAsList(original) : original;
 			while (cur instanceof LispCons cell) {
 				LispVal next = cell.cdr();
 				cell.setCdr(prev);
 				prev = cell;
 				cur = next;
 			}
-			return prev;
+			return isSeq ? seqResult(original, prev) : prev;
 		}));
 		env.defineFunction(LispNames.MAKE_LIST, new LispFunction(LispNames.MAKE_LIST, args -> {
 			requireMinArgCount(LispNames.MAKE_LIST, args, 1);
@@ -5516,7 +5551,7 @@ public final class Environment implements Scope {
 			SocketSupport.setTimeout(socket, (int) Math.min(millis.value(), Integer.MAX_VALUE));
 			return millis;
 		}));
-		// One datum out of a runtime-read line. With the evaluator's #. resolver
+		// One datum out of a runtime-read string. With the evaluator's #. resolver
 		// installed, a datum textually containing #. is read in marker mode and the
 		// resolver evaluates each marker in place -- CL's read under a true *read-eval*
 		// (the resolver itself signals when *read-eval* is bound nil). A bare Environment
@@ -5528,48 +5563,10 @@ public final class Environment implements Scope {
 			}
 			return LispReader.readFromString(input, am.ik.rontolisp.reader.Features.INTERPRETER);
 		};
-		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
-			try {
-				// (read) reads from stdin; (read stream) reads from an open input
-				// stream. Both skip blank and comment-only lines and return one datum
-				// per call, or nil at end of input.
-				BufferedReader reader;
-				if (args.size() > 1) {
-					requireArgCount(LispNames.READ, args, 1);
-				}
-				LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
-				if (src == null || src instanceof LispNil || src instanceof LispTrue) {
-					// Drain buffered output so any prompt is visible before we block on
-					// stdin.
-					out.flush();
-					reader = stdinReader;
-				}
-				else {
-					if (!(src instanceof LispInteger handle)
-							|| !(streams.get(handle.value()) instanceof BufferedReader streamReader)) {
-						throw new LispEvalException(LispNames.READ + " expects an input stream");
-					}
-					reader = streamReader;
-				}
-				String line;
-				while ((line = reader.readLine()) != null) {
-					line = line.trim();
-					if (line.isEmpty() || line.startsWith(";")) {
-						continue;
-					}
-					// Runtime read follows the upcase premise, exactly like the frontend
-					// read of program source: unescaped symbols upcase and the canonical
-					// fold applies, so (read "foo") is FOO and (read "car") folds to car.
-					// The compiled backends' embedded reader runtimes fold to match, so
-					// cross-backend identity holds (see .kb/reader-case-upcase.md).
-					return readRuntimeDatum.apply(line);
-				}
-				return LispNil.INSTANCE;
-			}
-			catch (IOException ex) {
-				throw new UncheckedIOException(ex);
-			}
-		}));
+		// read itself is NOT here: it is prelude rontolisp over read-char /
+		// unread-char / read-from-string (LispPreludeLibrary), so one definition
+		// consumes exactly one datum's characters on all four backends and leaves the
+		// stream positioned after them. See .kb/read-load-streams.md.
 		// read-from-string: parse the first datum from a string (the optional
 		// eof-error-p/eof-value and :start/:end keywords of Common Lisp are not
 		// supported).

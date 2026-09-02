@@ -1287,7 +1287,6 @@ final class WasmExprCompiler {
 					WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
 					WasmEmitHelper.emitToMutStrCall(ctx);
 				}
-				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
 				case LispNames.LOAD -> WasmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
 				// A literal top-level require/provide (and the asdf directives) was
 				// consumed by the compile-time LoadInliner pass; anything left is nested
@@ -1500,7 +1499,18 @@ final class WasmExprCompiler {
 				case LispNames.BUTLAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandButlast(cons), ctx);
 				case LispNames.IDENTITY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx);
 				case LispNames.COPY_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCopyList(cons), ctx);
-				case LispNames.NREVERSE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx);
+				case LispNames.NREVERSE -> {
+					// A string/vector sequence reverses via a coerced list and is
+					// rebuilt in its own representation; null when the call is already
+					// the inner list reversal (wrapSortForStringSeq precedent).
+					LispVal wrappedNreverse = LispMacroExpander.wrapNreverseForStringSeq(cons, true);
+					if (wrappedNreverse != null) {
+						WasmExprCompiler.compileExpr(wrappedNreverse, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx);
+					}
+				}
 				case LispNames.MAKE_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeList(cons), ctx);
 				case LispNames.UNION -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUnion(cons), ctx);
 				case LispNames.INTERSECTION ->
@@ -1555,6 +1565,7 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx);
 				case LispNames.ARRAY_BECOME -> WasmArrayCompiler.compileArrayBecome(cons, ctx);
 				case LispNames.ARRAY_DEFAULT_ELEMENT -> WasmArrayCompiler.compileArrayDefaultElement(cons, ctx);
+				case LispNames.ARRAY_ADOPT_ELEMENT_TYPE -> WasmArrayCompiler.compileArrayAdoptElementType(cons, ctx);
 				case LispNames.ARRAY_ALIKE -> WasmArrayCompiler.compileArrayAlike(cons, ctx);
 				case LispNames.ARRAY_DISPLACEMENT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx);
@@ -1565,8 +1576,11 @@ final class WasmExprCompiler {
 					// shared %seq-int-vector helper, exactly as concatenate's does;
 					// everything else is expandCoerce as before.
 					LispVal packed = ConcatenateForms.packedVectorCoerce(cons, ctx.closRegistry);
-					WasmExprCompiler.compileExpr(packed != null ? packed : LispMacroExpander.expandCoerce(cons, true,
-							ctx.functions.containsKey(LispNames.SEQ_TO_LIST)), ctx);
+					WasmExprCompiler.compileExpr(packed != null ? packed
+							: LispMacroExpander.expandCoerce(cons, true,
+									ctx.functions.containsKey(LispNames.SEQ_TO_LIST),
+									ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null),
+							ctx);
 				}
 				case LispNames.MAP_INTO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons,
 						ctx.functions.containsKey(LispNames.mapIntoRuntime(cons.toList().size() - 3))), ctx);
