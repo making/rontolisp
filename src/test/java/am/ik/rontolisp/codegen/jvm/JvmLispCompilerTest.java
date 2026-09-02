@@ -3692,6 +3692,23 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDeleteAndNsubstituteFamilyOnVectorsAndStrings() throws Exception {
+		// .todo/623: these five were silent no-ops on a vector/string (only their
+		// cons-splice/rplaca arm existed) -- CLHS lets a destructive form answer a fresh
+		// sequence, so they now route through remove/substitute's own vector/string
+		// handling.
+		assertThat(compileAndRun("(print (delete 1 (vector 3 1 2)))")).isEqualTo("#(3 2)");
+		assertThat(compileAndRun("(print (delete #\\a (copy-seq \"aba\")))")).isEqualTo("\"b\"");
+		assertThat(compileAndRun("(print (delete-if #'oddp (vector 1 2 3 4)))")).isEqualTo("#(2 4)");
+		assertThat(compileAndRun("(print (delete-if-not #'oddp (vector 1 2 3)))")).isEqualTo("#(1 3)");
+		assertThat(compileAndRun("(print (nsubstitute 9 1 (vector 1 2 1)))")).isEqualTo("#(9 2 9)");
+		assertThat(compileAndRun("(print (nsubstitute-if 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(0 2 0)");
+		assertThat(compileAndRun("(print (nsubstitute-if-not 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(1 0 3)");
+		assertThat(compileAndRun("(print (funcall #'delete-if #'oddp (vector 1 2 3 4)))")).isEqualTo("#(2 4)");
+		assertThat(compileAndRun("(print (funcall #'nsubstitute-if 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(0 2 0)");
+	}
+
+	@Test
 	void compileAndRunDestructiveListOps() throws Exception {
 		// The destructive ops reuse cons cells; an alias to the original list observes
 		// the
@@ -9269,6 +9286,31 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (sort '(3 1 4) #'>))")).isEqualTo("(4 3 1)");
 		assertThat(compileAndRun("(print (sort '() #'<)) (print (sort '(5) #'<))")).isEqualTo("NIL\n(5)");
 		assertThat(compileAndRun("(print (funcall #'sort '(2 3 1) #'<))")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void compileAndRunSortNreverseStableSortKeepFillPointerAdjustableAndIdentity() throws Exception {
+		// .todo/623: sort/nreverse/stable-sort permute a vector/string in place, so a
+		// fill-pointered or adjustable argument must keep its fill pointer, its
+		// adjustable flag AND its own identity -- not just the right values.
+		assertThat(compileAndRun("""
+				(let ((v (make-array 3 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2))))
+				  (let ((s (sort v #'<)))
+				    (print (list (fill-pointer s) (adjustable-array-p s) (eq v s)))))""")).isEqualTo("(3 T T)");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 5 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2 99 99))))
+				  (let ((s (sort v #'<)))
+				    (print (list s (fill-pointer s) (array-total-size s) (eq v s)))))"""))
+			.isEqualTo("(#(1 2 3) 3 5 T)");
+		assertThat(compileAndRun("(let ((v (vector 3 1 2))) (print (eq v (sort v #'<))))")).isEqualTo("T");
+		assertThat(
+				compileAndRun("(let ((v (copy-seq \"dcba\"))) (let ((s (sort v #'char<))) (print (list s (eq v s)))))"))
+			.isEqualTo("(\"abcd\" T)");
+		assertThat(compileAndRun("(let ((v (vector 3 1 2))) (print (eq v (nreverse v))))")).isEqualTo("T");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 4 :adjustable t :fill-pointer 4 :initial-contents '(1 2 3 4))))
+				  (let ((s (stable-sort v #'<)))
+				    (print (list (fill-pointer s) (adjustable-array-p s) (eq v s)))))""")).isEqualTo("(4 T T)");
 	}
 
 	@Test

@@ -3092,6 +3092,30 @@ cases:
       #(1 2 3)
       "zyxw"
       "abcd"
+  - name: sort-nreverse-stable-sort-keep-fill-pointer-adjustable-and-identity
+    source: |
+      ;; sort/nreverse/stable-sort permute a vector/string in place, so a fill-pointered
+      ;; or adjustable argument must keep its fill pointer, its adjustable flag AND its
+      ;; own identity -- the dispatch used to lose all three to a fresh rebuild.
+      (let ((v (make-array 3 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2))))
+        (let ((s (sort v #'<)))
+          (print (list (fill-pointer s) (adjustable-array-p s) (eq v s)))))
+      (let ((v (make-array 5 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2 99 99))))
+        (let ((s (sort v #'<)))
+          (print (list s (fill-pointer s) (array-total-size s) (eq v s)))))
+      (let ((v (vector 3 1 2))) (print (eq v (sort v #'<))))
+      (let ((v (copy-seq "dcba"))) (let ((s (sort v #'char<))) (print (list s (eq v s)))))
+      (let ((v (vector 3 1 2))) (print (eq v (nreverse v))))
+      (let ((v (make-array 4 :adjustable t :fill-pointer 4 :initial-contents '(1 2 3 4))))
+        (let ((s (stable-sort v #'<)))
+          (print (list (fill-pointer s) (adjustable-array-p s) (eq v s)))))
+    expected: |
+      (3 T T)
+      (#(1 2 3) 3 5 T)
+      T
+      ("abcd" T)
+      T
+      (4 T T)
   - name: bitwise-integer-operations-variadic
     source: |
       (print (logand 12 10))
@@ -3371,6 +3395,31 @@ cases:
     expected: |
       (1 0 3 0 1)
       (9 2 9 3)
+  - name: delete-and-nsubstitute-family-on-vectors-and-strings
+    source: |
+      ;; delete/delete-if/delete-if-not/nsubstitute/nsubstitute-if(-not) used to be
+      ;; silent no-ops on a vector or string (only their cons-splice/rplaca arm was
+      ;; implemented) -- CLHS lets a destructive form answer a fresh sequence, so they
+      ;; now route through remove/substitute's own vector/string handling.
+      (print (delete 1 (vector 3 1 2)))
+      (print (delete #\a (copy-seq "aba")))
+      (print (delete-if #'oddp (vector 1 2 3 4)))
+      (print (delete-if-not #'oddp (vector 1 2 3)))
+      (print (nsubstitute 9 1 (vector 1 2 1)))
+      (print (nsubstitute-if 0 #'oddp (vector 1 2 3)))
+      (print (nsubstitute-if-not 0 #'oddp (vector 1 2 3)))
+      (print (funcall #'delete-if #'oddp (vector 1 2 3 4)))
+      (print (funcall #'nsubstitute-if 0 #'oddp (vector 1 2 3)))
+    expected: |
+      #(3 2)
+      "b"
+      #(2 4)
+      #(1 3)
+      #(9 2 9)
+      #(0 2 0)
+      #(1 0 3)
+      #(2 4)
+      #(0 2 0)
   - name: destructive-list-ops-mutate-in-place
     source: |
       (setq dl1 (list 1 2 3))

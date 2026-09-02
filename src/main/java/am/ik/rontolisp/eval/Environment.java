@@ -2914,6 +2914,105 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Like {@link #seqResult}, but for a DESTRUCTIVE caller ({@code sort},
+	 * {@code stable-sort}, {@code nreverse} -- {@code .todo/623}): a string/array/packed
+	 * vector argument is written back into its OWN storage and answered as itself, so it
+	 * keeps its fill pointer, its adjustable flag and its identity, instead of losing
+	 * them to a fresh rebuild. {@code list} must have exactly as many elements as
+	 * {@code original}'s own active length (true for every caller here -- all three
+	 * permute {@code original}'s elements, never adding or removing one), so this never
+	 * grows or shrinks the backing store; a fill-pointered array with spare capacity
+	 * keeps that capacity untouched, matching every implementation that sorts these three
+	 * kinds in place. A list argument is unaffected (falls through to {@link #seqResult},
+	 * whose list branch already answers a fresh list without touching {@code original}).
+	 * @param original the original sequence argument
+	 * @param list the list result of the scan over {@link #seqAsList}
+	 * @return {@code original}, mutated in place, for a string/array/packed vector;
+	 * otherwise the same answer as {@link #seqResult}
+	 */
+	static LispVal seqResultDestructive(LispVal original, LispVal list) {
+		if (original instanceof LispString str) {
+			// A source literal is the shared constant the reader built for the program
+			// text (.kb/string-write-runtime.md): write to a fresh copy instead of
+			// corrupting it, the same latitude replace's target arm takes.
+			LispString into = str.sourceLiteral() ? str.copyForBulkWrite() : str;
+			LispVal cur = list;
+			int i = 0;
+			while (cur instanceof LispCons cell) {
+				if (!(cell.car() instanceof LispChar c)) {
+					throw new LispEvalException(
+							"cannot build a string from a non-character element: " + cell.car().print());
+				}
+				into.setCharAt(i++, c.codePoint());
+				cur = cell.cdr();
+			}
+			return into;
+		}
+		if (original instanceof LispArray arr && arr.dimensions().length == 1) {
+			LispVal cur = list;
+			int i = 0;
+			while (cur instanceof LispCons cell) {
+				arr.writeFlat(i++, cell.car());
+				cur = cell.cdr();
+			}
+			return arr;
+		}
+		if (original instanceof LispIntVector iv) {
+			LispVal cur = list;
+			int i = 0;
+			while (cur instanceof LispCons cell) {
+				iv.setElement(i++, exactIntElement(LispNames.SORT, cell.car()));
+				cur = cell.cdr();
+			}
+			return iv;
+		}
+		return seqResult(original, list);
+	}
+
+	/**
+	 * {@code remove}: a fresh sequence, in {@code original}'s own representation, with
+	 * every element {@code eq}/{@code eql} to {@code item} dropped. Shared with
+	 * {@code delete}'s vector/string arm ({@code .todo/623}): CLHS lets a destructive
+	 * form answer a fresh sequence, so a non-list argument -- which has no cons cells to
+	 * splice in place -- routes through this instead of silently no-op'ing.
+	 */
+	private static LispVal removeValues(LispVal item, LispVal original) {
+		List<LispVal> kept = new ArrayList<>();
+		LispVal cur = seqAsList(original);
+		while (cur instanceof LispCons cell) {
+			if (!isEq(item, cell.car())) {
+				kept.add(cell.car());
+			}
+			cur = cell.cdr();
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = kept.size() - 1; i >= 0; i--) {
+			result = new LispCons(kept.get(i), result);
+		}
+		return seqResult(original, result);
+	}
+
+	/**
+	 * {@code substitute}: a fresh sequence, in {@code original}'s own representation,
+	 * with every element {@code eq}/{@code eql} to {@code oldItem} replaced by
+	 * {@code newItem}. Shared with {@code nsubstitute}'s vector/string arm, the same
+	 * latitude {@link #removeValues} documents.
+	 */
+	private static LispVal substituteValues(LispVal newItem, LispVal oldItem, LispVal original) {
+		List<LispVal> out = new ArrayList<>();
+		LispVal cur = seqAsList(original);
+		while (cur instanceof LispCons cell) {
+			out.add(isEq(oldItem, cell.car()) ? newItem : cell.car());
+			cur = cell.cdr();
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = out.size() - 1; i >= 0; i--) {
+			result = new LispCons(out.get(i), result);
+		}
+		return seqResult(original, result);
+	}
+
+	/**
 	 * Appends every element of a sequence to {@code out}, in order: a list, a string (by
 	 * code point), a general rank-1 array or a rank-1 packed float array -- the same set
 	 * the compile paths reach through {@code (coerce x 'list)}.
@@ -3077,27 +3176,20 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.REMOVE, new LispFunction(LispNames.REMOVE, args -> {
 			requireArgCount(LispNames.REMOVE, args, 2);
-			LispVal item = args.get(0);
-			List<LispVal> kept = new java.util.ArrayList<>();
-			LispVal cur = seqAsList(args.get(1));
-			while (cur instanceof LispCons cell) {
-				if (!isEq(item, cell.car())) {
-					kept.add(cell.car());
-				}
-				cur = cell.cdr();
-			}
-			LispVal result = LispNil.INSTANCE;
-			for (int i = kept.size() - 1; i >= 0; i--) {
-				result = new LispCons(kept.get(i), result);
-			}
-			return seqResult(args.get(1), result);
+			return removeValues(args.get(0), args.get(1));
 		}));
 		// delete is the destructive variant of remove: splice out matching cells in place
-		// (Common Lisp semantics; use the return value since the head may change).
+		// (Common Lisp semantics; use the return value since the head may change). A
+		// vector/string argument has no cons cells to splice -- CLHS lets a destructive
+		// form answer a FRESH sequence instead, so it routes through remove's own
+		// vector/string handling rather than silently no-op'ing (.todo/623).
 		env.defineFunction(LispNames.DELETE, new LispFunction(LispNames.DELETE, args -> {
 			requireArgCount(LispNames.DELETE, args, 2);
 			LispVal item = args.get(0);
 			LispVal head = args.get(1);
+			if (!(head instanceof LispCons) && !(head instanceof LispNil)) {
+				return removeValues(item, head);
+			}
 			// Drop matching cells from the front by advancing the head.
 			while (head instanceof LispCons cell && isEq(item, cell.car())) {
 				head = cell.cdr();
@@ -3123,29 +3215,21 @@ public final class Environment implements Scope {
 		// replaced by new (non-destructive).
 		LispFunction substitute = new LispFunction(LispNames.SUBSTITUTE, args -> {
 			requireArgCount(LispNames.SUBSTITUTE, args, 3);
-			LispVal newItem = args.get(0);
-			LispVal oldItem = args.get(1);
-			List<LispVal> out = new java.util.ArrayList<>();
-			LispVal cur = seqAsList(args.get(2));
-			while (cur instanceof LispCons cell) {
-				out.add(isEq(oldItem, cell.car()) ? newItem : cell.car());
-				cur = cell.cdr();
-			}
-			LispVal result = LispNil.INSTANCE;
-			for (int i = out.size() - 1; i >= 0; i--) {
-				result = new LispCons(out.get(i), result);
-			}
-			return seqResult(args.get(2), result);
+			return substituteValues(args.get(0), args.get(1), args.get(2));
 		});
 		env.defineFunction(LispNames.SUBSTITUTE, substitute);
 		// nsubstitute is the destructive variant: rewrite matching cars in place and
-		// return
-		// the (possibly mutated) original list (Common Lisp semantics).
+		// return the (possibly mutated) original list (Common Lisp semantics). A
+		// vector/string argument routes through substitute's own vector/string handling,
+		// the same latitude delete takes above (.todo/623).
 		env.defineFunction(LispNames.NSUBSTITUTE, new LispFunction(LispNames.NSUBSTITUTE, args -> {
 			requireArgCount(LispNames.NSUBSTITUTE, args, 3);
 			LispVal newItem = args.get(0);
 			LispVal oldItem = args.get(1);
 			LispVal list = args.get(2);
+			if (!(list instanceof LispCons) && !(list instanceof LispNil)) {
+				return substituteValues(newItem, oldItem, list);
+			}
 			LispVal cur = list;
 			while (cur instanceof LispCons cell) {
 				if (isEq(oldItem, cell.car())) {
@@ -3396,8 +3480,9 @@ public final class Environment implements Scope {
 			// Destructive: rewire each cdr to its predecessor and return the former last
 			// cell as the new head (Common Lisp semantics; use the return value). A
 			// string/vector argument is not a cons chain -- it reverses via a coerced
-			// list (seqAsList/seqResult, the sort/reduce precedent) and is rebuilt back
-			// in its own representation; CL leaves eq-to-the-argument unspecified.
+			// list (seqAsList, the sort/reduce precedent) and is written back into its
+			// own storage (seqResultDestructive, .todo/623), keeping its fill pointer,
+			// adjustable flag and identity, like sort/stable-sort above.
 			LispVal original = args.get(0);
 			boolean isSeq = !(original instanceof LispCons) && !(original instanceof LispNil);
 			LispVal prev = LispNil.INSTANCE;
@@ -3408,7 +3493,7 @@ public final class Environment implements Scope {
 				prev = cell;
 				cur = next;
 			}
-			return isSeq ? seqResult(original, prev) : prev;
+			return isSeq ? seqResultDestructive(original, prev) : prev;
 		}));
 		env.defineFunction(LispNames.MAKE_LIST, new LispFunction(LispNames.MAKE_LIST, args -> {
 			requireMinArgCount(LispNames.MAKE_LIST, args, 1);

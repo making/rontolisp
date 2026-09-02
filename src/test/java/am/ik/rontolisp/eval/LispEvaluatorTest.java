@@ -3393,6 +3393,57 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSortNreverseStableSortKeepFillPointerAdjustableAndIdentity() {
+		// .todo/623: sort/nreverse/stable-sort permute a vector/string in place (SBCL's
+		// contract too), so a fill-pointered or adjustable argument must keep its fill
+		// pointer, its adjustable flag AND its own identity, not just the right values.
+		assertThat(eval("""
+				(let ((v (make-array 3 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2))))
+				  (let ((s (sort v #'<)))
+				    (list (fill-pointer s) (adjustable-array-p s) (eq v s))))
+				""").print()).isEqualTo("(3 T T)");
+		// A fill-pointered vector's SPARE capacity (beyond the fill pointer) is untouched
+		// by the permutation -- array-total-size stays 5, not shrunk to the active 3.
+		assertThat(eval("""
+				(let ((v (make-array 5 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2 99 99))))
+				  (let ((s (sort v #'<)))
+				    (list s (fill-pointer s) (array-total-size s) (eq v s))))
+				""").print()).isEqualTo("(#(1 2 3) 3 5 T)");
+		assertThat(eval("(let ((v (vector 3 1 2))) (let ((s (sort v #'<))) (eq v s)))").print()).isEqualTo("T");
+		assertThat(eval("(let ((v (copy-seq \"dcba\"))) (let ((s (sort v #'char<))) (list s (eq v s))))").print())
+			.isEqualTo("(\"abcd\" T)");
+		assertThat(eval("(let ((v (vector 3 1 2))) (let ((s (nreverse v))) (eq v s)))").print()).isEqualTo("T");
+		assertThat(eval("""
+				(let ((v (make-array 4 :adjustable t :fill-pointer 4 :initial-contents '(1 2 3 4))))
+				  (let ((s (stable-sort v #'<)))
+				    (list (fill-pointer s) (adjustable-array-p s) (eq v s))))
+				""").print()).isEqualTo("(4 T T)");
+	}
+
+	@Test
+	void evalDeleteNsubstituteFamilyOnVectorsAndStrings() {
+		// .todo/623: delete/delete-if/delete-if-not/nsubstitute/nsubstitute-if(-not) used
+		// to be silent no-ops on a vector or string (only their cons-splice/rplaca arm
+		// was implemented) -- CLHS lets a destructive form answer a fresh sequence, so
+		// they now route through remove/substitute's own vector/string handling.
+		assertThat(eval("(delete 1 (vector 3 1 2))").print()).isEqualTo("#(3 2)");
+		assertThat(eval("(delete #\\a (copy-seq \"aba\"))").print()).isEqualTo("\"b\"");
+		assertThat(eval("(delete-if #'oddp (vector 1 2 3 4))").print()).isEqualTo("#(2 4)");
+		assertThat(eval("(delete-if-not #'oddp (vector 1 2 3))").print()).isEqualTo("#(1 3)");
+		assertThat(eval("(nsubstitute 9 1 (vector 1 2 1))").print()).isEqualTo("#(9 2 9)");
+		assertThat(eval("(nsubstitute-if 0 #'oddp (vector 1 2 3))").print()).isEqualTo("#(0 2 0)");
+		assertThat(eval("(nsubstitute-if-not 0 #'oddp (vector 1 2 3))").print()).isEqualTo("#(1 0 3)");
+		// The list arm is unaffected.
+		assertThat(eval("(delete 1 (list 1 2 1))").print()).isEqualTo("(2)");
+		// The funcall/apply path (a separate Java closure on the interpreter) gets the
+		// same fix.
+		assertThat(evalMulti("(funcall #'delete-if #'oddp (vector 1 2 3 4))").print()).isEqualTo("#(2 4)");
+		assertThat(evalMulti("(funcall #'nsubstitute-if 0 #'oddp (vector 1 2 3))").print()).isEqualTo("#(0 2 0)");
+		assertThat(evalMulti("(funcall #'delete 1 (vector 3 1 2))").print()).isEqualTo("#(3 2)");
+		assertThat(evalMulti("(funcall #'nsubstitute 9 1 (vector 1 2 1))").print()).isEqualTo("#(9 2 9)");
+	}
+
+	@Test
 	void evalPositionIf() {
 		assertThat(eval("(position-if #'evenp '(1 3 5 6 7))").print()).isEqualTo("3");
 		assertThat(eval("(position-if #'oddp '(2 4 5))").print()).isEqualTo("2");

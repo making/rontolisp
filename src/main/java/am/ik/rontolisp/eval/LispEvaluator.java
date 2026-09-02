@@ -2628,9 +2628,12 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.SORT + " expects 2 arguments, got " + args.size());
 			}
-			// A string sequence sorts as a list of its characters and is rebuilt as a
-			// string (Common Lisp sequences).
-			return Environment.seqResult(args.get(0), sortValues(Environment.seqAsList(args.get(0)), args.get(1)));
+			// A string/vector argument sorts as a list of its elements and is written
+			// back into its own storage (Common Lisp sequences; .todo/623 keeps a
+			// fill-pointered/adjustable argument's fill pointer, adjustable flag and
+			// identity, matching every implementation that sorts a vector in place).
+			return Environment.seqResultDestructive(args.get(0),
+					sortValues(Environment.seqAsList(args.get(0)), args.get(1)));
 		}));
 		// stable-sort is registered here (not in Environment) so the predicate and :key
 		// designators can be applied through the evaluator, like member/assoc. A Java
@@ -2668,10 +2671,9 @@ public final class LispEvaluator {
 			for (int i = decorated.size() - 1; i >= 0; i--) {
 				result = new LispCons(decorated.get(i)[1], result);
 			}
-			// A string/vector argument sorts as a list of its elements and is rebuilt
-			// back in its own representation, matching the SORT builtin above and the
-			// (stable-sort ...) call-position macro expansion.
-			return Environment.seqResult(args.get(0), result);
+			// A string/vector argument sorts as a list of its elements and is written
+			// back into its own storage, matching the SORT builtin above (.todo/623).
+			return Environment.seqResultDestructive(args.get(0), result);
 		}));
 		this.globalEnv.defineFunction(LispNames.APPLY, new LispFunction(LispNames.APPLY, args -> {
 			if (args.size() < 2) {
@@ -9497,17 +9499,23 @@ public final class LispEvaluator {
 	}
 
 	// The destructive twins: rewrite the matching cars in place and return the (possibly
-	// mutated) original list.
+	// mutated) original list. A vector/string argument has no cons cells to rewrite --
+	// CLHS lets a destructive form answer a FRESH sequence instead, so it routes through
+	// substitute-if's own vector/string handling rather than silently no-op'ing
+	// (.todo/623).
 	private LispVal nsubstituteIfValues(String name, List<LispVal> args) {
 		if (args.size() < 3) {
 			throw new LispEvalException(name + " expects at least 3 arguments, got " + args.size());
 		}
 		requireKeyKeyword(name, args, 3);
-		LispVal keyFn = optionalKeywordArg(args, 3, LispNames.KEY_KEYWORD);
 		boolean negated = LispNames.NSUBSTITUTE_IF_NOT.equals(name);
+		LispVal list = args.get(2);
+		if (!(list instanceof LispCons) && !(list instanceof LispNil)) {
+			return substituteIfValues(negated ? LispNames.SUBSTITUTE_IF_NOT : LispNames.SUBSTITUTE_IF, args);
+		}
+		LispVal keyFn = optionalKeywordArg(args, 3, LispNames.KEY_KEYWORD);
 		LispVal newItem = args.get(0);
 		LispVal predicate = args.get(1);
-		LispVal list = args.get(2);
 		LispVal cursor = list;
 		while (cursor instanceof LispCons cell) {
 			if (matchesSubstituteIf(predicate, keyFn, cell.car()) != negated) {
@@ -9539,8 +9547,14 @@ public final class LispEvaluator {
 	// Destructively splice out every cell whose car satisfies the predicate
 	// (deleteWhenTrue) or fails it (delete-if-not). The surviving cells are reused and
 	// the
-	// new head is returned (Common Lisp semantics).
+	// new head is returned (Common Lisp semantics). A vector/string argument has no cons
+	// cells to splice -- CLHS lets a destructive form answer a FRESH sequence instead, so
+	// it routes through remove-if/remove-if-not's own vector/string handling rather than
+	// silently no-op'ing (.todo/623).
 	private LispVal deleteIfValues(LispVal predicate, LispVal list, boolean deleteWhenTrue) {
+		if (!(list instanceof LispCons) && !(list instanceof LispNil)) {
+			return Environment.seqResult(list, removeIfValues(predicate, Environment.seqAsList(list), !deleteWhenTrue));
+		}
 		LispVal head = list;
 		// Drop matching cells from the front by advancing the head.
 		while (head instanceof LispCons cell

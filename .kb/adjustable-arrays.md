@@ -675,6 +675,99 @@ expected text, all four backends, every answer SBCL 2.2.9's but the two
 deliberate deviations (`#\Space` for the character fill, `NIL` for the general
 vector's).
 
+## `sort`/`nreverse`/`stable-sort` keep a vector's fill pointer and identity (`.todo/623`, 2026-09-02)
+
+**Invariant: `sort`, `nreverse` and `stable-sort` permute a fill-pointered or
+adjustable vector/string IN PLACE -- same object, same fill pointer, same
+adjustable flag, same total size -- on all four backends, matching SBCL.**
+Before this, `seqResultDispatchForm`'s vector/string arm (shared by these three
+and by the non-destructive `remove`/`substitute`/`reduce`/`remove-duplicates`
+family) always answered a FRESH, SIMPLE rebuild: correct values, but a
+fill-pointered array lost its fill pointer entirely --
+`(let ((v (make-array 3 :adjustable t :fill-pointer 3 :initial-contents ...)))
+(fill-pointer (sort v #'<)))` signalled `array has no fill pointer`, which is
+what surfaced through `practicals-1.0.3/Chapter27/database.lisp`'s
+`sort-rows`/`delete-rows` pair (`.todo/620`).
+
+**The fix is a second flag on `seqResultDispatchForm`, `destructive`, private to
+the three permuting callers** (`wrapSortForStringSeq`, `wrapNreverseForStringSeq`,
+`expandStableSort` -- `LispMacroExpander`, all three literal `true`). `false`
+(`expandReduce`, `expandRemoveDuplicates`, `expandRemove`, `expandRemoveIf`,
+`expandRemoveIfNot`, `expandSubstituteIf`) is unchanged: those five are
+genuinely non-destructive by CLHS and by this codebase's own
+`delete`/`delete-duplicates` precedent below, so their fresh, simple rebuild is
+still correct and is NOT to be made identity-preserving.
+
+**The destructive rebuild is `(replace __seq_in <fresh-rebuild>)` -- answering
+THAT CALL's result, not `__seq_in` forced.** `replace`'s array arm always mutates
+its target in place and returns it, so for a vector this is `__seq_in` itself
+either way. For a STRING target it is not: a program-text string LITERAL cannot
+be written in place (`.kb/string-write-runtime.md`), so `replace`'s string arm
+copies it and answers the COPY. `(progn (replace __seq_in <rebuild>) __seq_in)`
+-- answering the argument unconditionally -- was tried first and is wrong: it
+silently discards that copy and answers the UNSORTED literal
+(`(sort "cab" #'char<)` came back `"cab"`, caught by
+`compileAndRunSequenceReturningFunctionsOnStrings` and
+`compileSequenceOperatorsWithoutTheArrayRuntime` on the JVM suite). The
+INTERPRETER takes a separate path, `Environment.seqResultDestructive`, since its
+native `sort`/`stable-sort`/`nreverse` never routed through the macro expander's
+dispatch: it writes `LispString`/`LispArray`/`LispIntVector` in place directly
+(bypassing the `REPLACE` builtin, which cannot take a LIST source into a STRING
+target -- `requireString` demands a literal `LispString`) and takes the same
+source-literal branch (`sourceLiteral()` -> `copyForBulkWrite()`) `replace`'s own
+target arm does.
+
+**What this does NOT do: touch the backing store beyond the active length.**
+`list`'s length is always exactly `original`'s own active length (fill pointer,
+when present) for all three callers -- a pure permutation, never growing or
+shrinking -- so a fill-pointered array's SPARE capacity (`array-total-size`
+beyond `fill-pointer`) is untouched:
+`(make-array 5 :adjustable t :fill-pointer 3 ...)` sorted keeps total-size 5,
+fill-pointer 3, same object.
+
+**`delete`/`delete-if`/`delete-if-not`/`nsubstitute`/`nsubstitute-if(-not)` are
+the OTHER side of this bug, found by the same todo**: these five had NO
+vector/string arm at all (only a cons-cell splice/`rplaca` loop), so a vector or
+string argument was a SILENT NO-OP -- `(delete 1 (vector 3 1 2))` answered
+`#(3 1 2)` unchanged. CLHS's "a destructive function may answer a fresh
+sequence" latitude, and this codebase's own `delete-duplicates`-shares-
+`remove-duplicates`'s-non-destructive-lowering precedent, make the CHEAP fix
+also the RIGHT one: each routes through a RUNTIME check
+(`LispMacroExpander.deleteOrSubstituteDispatch`, `(or (stringp seq) (vectorp
+seq))`) to its `remove`/`substitute` family's own vector/string handling instead
+-- a vector/string comes back a FRESH sequence like `remove`/`substitute` do
+(NOT identity-preserved; that is deliberately out of scope here, since neither
+CLHS nor any real caller found so far needs it, see the re-evaluation trigger
+below). On the interpreter this reaches THREE separate code paths per operator
+family, because `delete`/`nsubstitute` had raw `env.defineFunction` Java
+closures (`Environment.removeValues`/`substituteValues`, shared with
+`remove`/`substitute`), `delete-if`/`delete-if-not`/`nsubstitute-if(-not)` had
+their own (`LispEvaluator.deleteIfValues`/`nsubstituteIfValues`, routed to
+`removeIfValues`/`substituteIfValues`), and every one of them ALSO has an
+`evalCons`/`compileCons` macro-expansion path for the direct-call and
+`funcall`/`apply` (`BuiltinFunctionWrappers` wrapper-lambda) forms -- all had to
+move together or `(delete-if ...)` and `(funcall #'delete-if ...)` would answer
+differently again.
+
+**Re-evaluation trigger**: if a caller ever needs
+`delete`/`nsubstitute`-on-a-vector to be `eq` to its argument (this todo's
+fill-pointer caller does not -- `sort-rows` calls `sort`, not `delete`, on the
+vector; `delete-rows` calls `delete` on a LIST), the honest fix is in-place
+compaction (shift surviving elements down, pull the fill pointer back) rather
+than routing through `remove`, which is what SBCL does and what makes
+`(eq v (delete item v))` true there for a fill-pointered `v`.
+
+Pinned by `LispEvaluatorTest.evalSortNreverseStableSortKeepFillPointerAdjustableAndIdentity`
+/ `evalDeleteNsubstituteFamilyOnVectorsAndStrings`, the
+`compileAndRunSortNreverseStableSortKeepFillPointerAdjustableAndIdentity` /
+`compileAndRunDeleteAndNsubstituteFamilyOnVectorsAndStrings` twins in
+`JvmLispCompilerTest`, `sortNreverseStableSortKeepFillPointerAdjustableAndIdentity`
+/ `deleteAndNsubstituteFamilyOnVectorsAndStrings` in
+`WasmLispCompilerIntegrationTest`, and the
+`sort-nreverse-stable-sort-keep-fill-pointer-adjustable-and-identity` /
+`delete-and-nsubstitute-family-on-vectors-and-strings` `ci-spec.yaml` cases (all
+four backends, byte-identical).
+
 ## adjust-array
 
 `(adjust-array array new-dims &key initial-element fill-pointer)` on every

@@ -1159,23 +1159,23 @@ final class JvmExprCompiler {
 				case LispNames.REMOVE_IF_NOT -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandRemoveIfNot(cons, ctx.usesArrays), ctx, className);
 				case LispNames.DELETE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandDelete(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDelete(cons, ctx.usesArrays), ctx, className);
 				case LispNames.DELETE_IF ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIf(cons), ctx, className);
-				case LispNames.DELETE_IF_NOT ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIfNot(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIf(cons, ctx.usesArrays), ctx, className);
+				case LispNames.DELETE_IF_NOT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandDeleteIfNot(cons, ctx.usesArrays), ctx, className);
 				case LispNames.SUBSTITUTE -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSubstitute(cons, ctx.usesArrays), ctx, className);
-				case LispNames.NSUBSTITUTE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstitute(cons), ctx, className);
+				case LispNames.NSUBSTITUTE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandNsubstitute(cons, ctx.usesArrays), ctx, className);
 				case LispNames.SUBSTITUTE_IF -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSubstituteIf(cons, ctx.usesArrays, false), ctx, className);
 				case LispNames.SUBSTITUTE_IF_NOT -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSubstituteIf(cons, ctx.usesArrays, true), ctx, className);
-				case LispNames.NSUBSTITUTE_IF ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIf(cons), ctx, className);
-				case LispNames.NSUBSTITUTE_IF_NOT ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIfNot(cons), ctx, className);
+				case LispNames.NSUBSTITUTE_IF -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandNsubstituteIf(cons, ctx.usesArrays), ctx, className);
+				case LispNames.NSUBSTITUTE_IF_NOT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandNsubstituteIfNot(cons, ctx.usesArrays), ctx, className);
 				case LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons, ctx.usesArrays), ctx, className);
 				case LispNames.NCONC ->

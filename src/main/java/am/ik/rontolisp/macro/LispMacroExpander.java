@@ -2658,9 +2658,25 @@ public final class LispMacroExpander {
 	 * vector, and with no array runtime no vector can reach here, so the guard makes the
 	 * builder provably dead (see {@link #expandCoerce(LispCons, boolean)}, which gates
 	 * only the reading direction because it cannot see its guard).
+	 *
+	 * <p>
+	 * {@code destructive} true (the {@code sort}/{@code nreverse}/{@code stable-sort}
+	 * precedent, {@code .todo/623}) writes the rebuilt string/vector back into
+	 * {@code __seq_in} via {@code (replace __seq_in <rebuild>)} and answers THAT CALL'S
+	 * result, instead of answering the fresh rebuild directly -- so a fill-pointered or
+	 * adjustable argument keeps its fill pointer, its adjustable flag AND its identity,
+	 * matching every implementation these three permute in place. Answering replace's own
+	 * result (not {@code __seq_in} forced) matters for a source-literal string, which
+	 * {@code replace} cannot write in place and answers a fresh copy for instead
+	 * ({@code .kb/string-write-runtime.md}); forcing {@code __seq_in} there would
+	 * silently answer the unsorted/unreversed literal. {@code false} (every other caller:
+	 * {@code remove}, {@code remove-if(-not)}, {@code remove-duplicates},
+	 * {@code substitute}, {@code
+	 * reduce}) answers the fresh rebuild unchanged, matching CL's "a non-destructive
+	 * sequence function may return a simple vector" latitude.
 	 */
 	private static LispVal seqResultDispatchForm(LispVal seqExpr, java.util.function.UnaryOperator<LispVal> algo,
-			boolean arraysExist) {
+			boolean arraysExist, boolean destructive) {
 		LispSymbol in = new LispSymbol(SEQ_IN_VAR);
 		LispSymbol isStr = new LispSymbol(SEQ_STR_VAR);
 		LispSymbol isVec = new LispSymbol(SEQ_VEC_VAR);
@@ -2678,9 +2694,25 @@ public final class LispMacroExpander {
 		// conversion is not a program-written (coerce x 'string), and must not pick up
 		// the mutable-result wrap -- see LispNames.SEQ_STRING_RESULT for what flipping
 		// this family would cost.
-		LispVal result = arraysExist
-				? makeIf(isStr, coerceTo(res, LispNames.SEQ_STRING_RESULT), makeIf(isVec, coerceTo(res, "VECTOR"), res))
-				: makeIf(isStr, coerceTo(res, LispNames.SEQ_STRING_RESULT), res);
+		LispVal strRebuild = coerceTo(res, LispNames.SEQ_STRING_RESULT);
+		LispVal vecRebuild = coerceTo(res, "VECTOR");
+		if (destructive) {
+			// (replace __seq_in <rebuild>): the rebuild is a FRESH string/vector of the
+			// same representation as __seq_in, so replace's matching-type source arm
+			// (already exercised by every other replace call site) copies it back into
+			// __seq_in's own storage -- up to __seq_in's own active length, which is what
+			// keeps a fill pointer's count (not the backing store's total size) intact.
+			// ANSWER REPLACE'S OWN RESULT, not __seq_in verbatim: replace mutates an
+			// array
+			// destination in place and returns it, but a SOURCE-LITERAL string cannot be
+			// written in place (.kb/string-write-runtime.md) and its arm answers a FRESH
+			// copy instead -- discarding that and forcing __seq_in would silently answer
+			// the unsorted/unreversed literal.
+			strRebuild = mvCall(LispNames.REPLACE, in, strRebuild);
+			vecRebuild = mvCall(LispNames.REPLACE, in, vecRebuild);
+		}
+		LispVal result = arraysExist ? makeIf(isStr, strRebuild, makeIf(isVec, vecRebuild, res))
+				: makeIf(isStr, strRebuild, res);
 		LispVal resLet = makeLet(SEQ_RES_VAR, algo.apply(lst), result);
 		LispVal asList = arraysExist ? listToCons(List.of(new LispSymbol(LispNames.OR), isStr, isVec)) : isStr;
 		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(asList, coerceTo(in, "LIST"), in), resLet);
@@ -2724,7 +2756,7 @@ public final class LispMacroExpander {
 			List<LispVal> inner = new java.util.ArrayList<>(parts);
 			inner.set(1, lst);
 			return listToCons(inner);
-		}, arraysExist);
+		}, arraysExist, true);
 	}
 
 	/**
@@ -3160,7 +3192,7 @@ public final class LispMacroExpander {
 			LispVal scan = expandDo((LispCons) listToCons(
 					List.of(new LispSymbol(LispNames.DO), bindings, endClause, accumulate, increment)));
 			return makeProgn(List.of(scan, mapcarResult));
-		}, arraysExist);
+		}, arraysExist, true);
 		LispVal result = makeLet(idx.name(), new LispInteger(0), dispatch);
 		result = makeLet(dec.name(), LispNil.INSTANCE, result);
 		if (hasKey && keyForm != null) {
@@ -4577,7 +4609,7 @@ public final class LispMacroExpander {
 		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(acc, x)),
 				listToCons(List.of(new LispSymbol(LispNames.CONS), x, acc))));
 		return seqResultDispatchForm(parts.get(1), lst -> listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda,
-				lst, new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE)), arraysExist);
+				lst, new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE)), arraysExist, false);
 	}
 
 	/**
@@ -5662,7 +5694,7 @@ public final class LispMacroExpander {
 					listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
 			LispVal body = makeIf(dup, LispNil.INSTANCE, keep);
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		}, arraysExist);
+		}, arraysExist, false);
 	}
 
 	/**
@@ -5787,7 +5819,7 @@ public final class LispMacroExpander {
 		if (parts.size() < 2 || isSeqDispatchVar(parts.get(1))) {
 			return null;
 		}
-		return seqResultDispatchForm(parts.get(1), LispMacroExpander::nreverseListForm, arraysExist);
+		return seqResultDispatchForm(parts.get(1), LispMacroExpander::nreverseListForm, arraysExist, true);
 	}
 
 	/**
@@ -6151,8 +6183,11 @@ public final class LispMacroExpander {
 		LispSymbol item = new LispSymbol("__remove_item");
 		// The item binds outside the string dispatch to keep the argument evaluation
 		// order (item, then sequence); the filter's do rebinds it to itself.
-		return makeLet(item.name(), parts.get(1), seqResultDispatchForm(parts.get(2), lst -> expandFilter(item, item,
-				lst, "__remove", elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), false), arraysExist));
+		return makeLet(item.name(), parts.get(1),
+				seqResultDispatchForm(parts.get(2),
+						lst -> expandFilter(item, item, lst, "__remove",
+								elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), false),
+						arraysExist, false));
 	}
 
 	/**
@@ -6181,7 +6216,7 @@ public final class LispMacroExpander {
 		return makeLet(pred.name(), parts.get(1),
 				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeif",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
-						false), arraysExist));
+						false), arraysExist, false));
 	}
 
 	/**
@@ -6210,7 +6245,7 @@ public final class LispMacroExpander {
 		return makeLet(pred.name(), parts.get(1),
 				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeifnot",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
-						true), arraysExist));
+						true), arraysExist, false));
 	}
 
 	/**
@@ -6258,7 +6293,7 @@ public final class LispMacroExpander {
 			LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), chosen, acc))));
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		}, arraysExist);
+		}, arraysExist, false);
 		return makeLet(newItem.name(), parts.get(1), makeLet(oldItem.name(), parts.get(2), scan));
 	}
 
@@ -6272,6 +6307,18 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNsubstitute(LispCons cons) {
+		return expandNsubstitute(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandNsubstitute(LispCons)}, but lets a backend drop the vector arm
+	 * of the runtime dispatch below when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the nsubstitute expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNsubstitute(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.NSUBSTITUTE, parts, 4);
 		TestSpec testForm = testSpec(parts, 4);
@@ -6280,7 +6327,7 @@ public final class LispMacroExpander {
 		LispSymbol oldItem = new LispSymbol("__nsub_old");
 		LispSymbol lst = new LispSymbol("__nsub_lst");
 		LispSymbol cur = new LispSymbol("__nsub_cur");
-		// (let ((__nsub_new new) (__nsub_old old) (__nsub_lst lst) (__nsub_cur nil))
+		// (let ((__nsub_cur nil))
 		// (setq __nsub_cur __nsub_lst)
 		// (while (consp __nsub_cur)
 		// (if (eql __nsub_old (car __nsub_cur)) (rplaca __nsub_cur __nsub_new) nil)
@@ -6293,10 +6340,44 @@ public final class LispMacroExpander {
 		LispVal ifExpr = makeIf(match, replace, LispNil.INSTANCE);
 		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
 		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), whileTest, ifExpr, advance));
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(newItem, parts.get(1))), listToCons(List.of(oldItem, parts.get(2))),
-						listToCons(List.of(lst, parts.get(3))), listToCons(List.of(cur, LispNil.INSTANCE))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, initCur, whileExpr, lst));
+		LispVal listForm = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(cur, LispNil.INSTANCE)))), initCur, whileExpr, lst));
+		// A vector/string argument has no cons cells to rplaca -- CLHS lets a destructive
+		// form answer a FRESH sequence instead, so it routes through substitute's own
+		// vector/string handling: (substitute new old lst :test ... :key ...)
+		// (.todo/623).
+		List<LispVal> substParts = new ArrayList<>(parts);
+		substParts.set(0, new LispSymbol(LispNames.SUBSTITUTE));
+		substParts.set(1, newItem);
+		substParts.set(2, oldItem);
+		substParts.set(3, lst);
+		LispVal nonListForm = expandSubstitute((LispCons) listToCons(substParts), arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist);
+		return makeLet(newItem.name(), parts.get(1), makeLet(oldItem.name(), parts.get(2), dispatch));
+	}
+
+	/**
+	 * Wraps a destructive splice/rewrite form ({@code delete}/{@code delete-if}/
+	 * {@code delete-if-not}, {@code nsubstitute}/{@code nsubstitute-if}/
+	 * {@code nsubstitute-if-not}) with a RUNTIME check for a non-list sequence: a vector
+	 * or string has no cons cells to splice/{@code rplaca}, so CLHS's "a destructive
+	 * function may answer a fresh sequence" latitude routes it through
+	 * {@code nonListForm} (the corresponding {@code remove}/{@code substitute} family's
+	 * own vector/string handling) instead of silently no-op'ing ({@code .todo/623}). A
+	 * list argument keeps {@code listForm} unchanged. {@code seq} is bound to
+	 * {@code seqExpr} exactly once, and both forms must read {@code seq} rather than the
+	 * original expression, so the sequence argument is evaluated only once.
+	 * {@code arraysExist} false drops the whole check (no vector/string can reach here),
+	 * keeping only {@code listForm} -- the {@code seqResultDispatchForm} precedent.
+	 */
+	private static LispVal deleteOrSubstituteDispatch(LispSymbol seq, LispVal seqExpr, LispVal listForm,
+			LispVal nonListForm, boolean arraysExist) {
+		if (!arraysExist) {
+			return makeLet(seq.name(), seqExpr, listForm);
+		}
+		LispVal isNonList = listToCons(
+				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, seq), callOf(LispNames.VECTORP, seq)));
+		return makeLet(seq.name(), seqExpr, makeIf(isNonList, nonListForm, listForm));
 	}
 
 	/**
@@ -6355,7 +6436,7 @@ public final class LispMacroExpander {
 			LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), chosen, acc))));
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		}, arraysExist);
+		}, arraysExist, false);
 		return makeLet(newItem.name(), parts.get(1), makeLet(pred.name(), parts.get(2), scan));
 	}
 
@@ -6367,7 +6448,19 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNsubstituteIf(LispCons cons) {
-		return expandNsubstituteIf(cons, false);
+		return expandNsubstituteIf(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandNsubstituteIf(LispCons)}, but lets a backend drop the vector arm
+	 * of the runtime dispatch below when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the nsubstitute-if expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNsubstituteIf(LispCons cons, boolean arraysExist) {
+		return expandNsubstituteIf(cons, arraysExist, false);
 	}
 
 	/**
@@ -6377,10 +6470,21 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNsubstituteIfNot(LispCons cons) {
-		return expandNsubstituteIf(cons, true);
+		return expandNsubstituteIf(cons, true, true);
 	}
 
-	private static LispVal expandNsubstituteIf(LispCons cons, boolean negated) {
+	/**
+	 * Like {@link #expandNsubstituteIfNot(LispCons)}, but lets a backend drop the vector
+	 * arm of the runtime dispatch below when no array can exist in this program.
+	 * @param cons the nsubstitute-if-not expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNsubstituteIfNot(LispCons cons, boolean arraysExist) {
+		return expandNsubstituteIf(cons, arraysExist, true);
+	}
+
+	private static LispVal expandNsubstituteIf(LispCons cons, boolean arraysExist, boolean negated) {
 		String name = negated ? LispNames.NSUBSTITUTE_IF_NOT : LispNames.NSUBSTITUTE_IF;
 		List<LispVal> parts = cons.toList();
 		requireKeywords(name, parts, 4, LispNames.KEY_KEYWORD);
@@ -6397,10 +6501,18 @@ public final class LispMacroExpander {
 		LispVal ifExpr = negated ? makeIf(match, LispNil.INSTANCE, replace) : makeIf(match, replace, LispNil.INSTANCE);
 		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
 		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), whileTest, ifExpr, advance));
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(newItem, parts.get(1))), listToCons(List.of(pred, parts.get(2))),
-						listToCons(List.of(lst, parts.get(3))), listToCons(List.of(cur, LispNil.INSTANCE))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, initCur, whileExpr, lst));
+		LispVal listForm = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(cur, LispNil.INSTANCE)))), initCur, whileExpr, lst));
+		// A vector/string argument routes through substitute-if's own vector/string
+		// handling (.todo/623): (substitute-if new pred lst :key ...) / -if-not.
+		List<LispVal> substIfParts = new ArrayList<>(parts);
+		substIfParts.set(0, new LispSymbol(negated ? LispNames.SUBSTITUTE_IF_NOT : LispNames.SUBSTITUTE_IF));
+		substIfParts.set(1, newItem);
+		substIfParts.set(2, pred);
+		substIfParts.set(3, lst);
+		LispVal nonListForm = expandSubstituteIf((LispCons) listToCons(substIfParts), arraysExist, negated);
+		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist);
+		return makeLet(newItem.name(), parts.get(1), makeLet(pred.name(), parts.get(2), dispatch));
 	}
 
 	/**
@@ -6411,13 +6523,36 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandDelete(LispCons cons) {
+		return expandDelete(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandDelete(LispCons)}, but lets a backend drop the vector arm of the
+	 * runtime dispatch below when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the delete expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDelete(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.DELETE, parts, 3);
 		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__delete_item");
-		return expandDeleteFilter(item, parts.get(1), parts.get(2), "__delete",
+		LispSymbol seq = new LispSymbol("__delete_seq");
+		LispVal listForm = expandDeleteFilter(item, item, seq, "__delete",
 				elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), true);
+		// A vector/string argument has no cons cells to splice -- CLHS lets a destructive
+		// form answer a FRESH sequence instead, so it routes through remove's own
+		// vector/string handling: (remove item seq :test ... :key ...) (.todo/623).
+		List<LispVal> removeParts = new ArrayList<>(parts);
+		removeParts.set(0, new LispSymbol(LispNames.REMOVE));
+		removeParts.set(1, item);
+		removeParts.set(2, seq);
+		LispVal nonListForm = expandRemove((LispCons) listToCons(removeParts), arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist);
+		return makeLet(item.name(), parts.get(1), dispatch);
 	}
 
 	/**
@@ -6427,10 +6562,31 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandDeleteIf(LispCons cons) {
+		return expandDeleteIf(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandDeleteIf(LispCons)}, but lets a backend drop the vector arm of
+	 * the runtime dispatch below when no array can exist in this program.
+	 * @param cons the delete-if expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDeleteIf(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__deleteif_pred");
-		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteif",
+		LispSymbol seq = new LispSymbol("__deleteif_seq");
+		LispVal listForm = expandDeleteFilter(pred, pred, seq, "__deleteif",
 				elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), true);
+		// A vector/string argument routes through remove-if's own vector/string handling
+		// (.todo/623): (remove-if pred seq).
+		List<LispVal> removeIfParts = new ArrayList<>(parts);
+		removeIfParts.set(0, new LispSymbol(LispNames.REMOVE_IF));
+		removeIfParts.set(1, pred);
+		removeIfParts.set(2, seq);
+		LispVal nonListForm = expandRemoveIf((LispCons) listToCons(removeIfParts), arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist);
+		return makeLet(pred.name(), parts.get(1), dispatch);
 	}
 
 	/**
@@ -6440,10 +6596,31 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandDeleteIfNot(LispCons cons) {
+		return expandDeleteIfNot(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandDeleteIfNot(LispCons)}, but lets a backend drop the vector arm
+	 * of the runtime dispatch below when no array can exist in this program.
+	 * @param cons the delete-if-not expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDeleteIfNot(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__deleteifnot_pred");
-		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteifnot",
+		LispSymbol seq = new LispSymbol("__deleteifnot_seq");
+		LispVal listForm = expandDeleteFilter(pred, pred, seq, "__deleteifnot",
 				elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), false);
+		// A vector/string argument routes through remove-if-not's own vector/string
+		// handling (.todo/623): (remove-if-not pred seq).
+		List<LispVal> removeIfNotParts = new ArrayList<>(parts);
+		removeIfNotParts.set(0, new LispSymbol(LispNames.REMOVE_IF_NOT));
+		removeIfNotParts.set(1, pred);
+		removeIfNotParts.set(2, seq);
+		LispVal nonListForm = expandRemoveIfNot((LispCons) listToCons(removeIfNotParts), arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist);
+		return makeLet(pred.name(), parts.get(1), dispatch);
 	}
 
 	/**
