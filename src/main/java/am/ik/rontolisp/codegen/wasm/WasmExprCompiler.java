@@ -34,12 +34,12 @@ final class WasmExprCompiler {
 
 	/**
 	 * Compiles a printing operator, routed through {@code print-object} when the program
-	 * defines a method on it and through {@code %print-cased} when it mentions
-	 * {@code *print-case*}; compiled as it always was otherwise -- the gate that keeps
-	 * every module using neither byte-identical.
+	 * defines a method on it and through {@code %print-cased} when it mentions a
+	 * printer-control variable; compiled as it always was otherwise -- the gate that
+	 * keeps every module using neither byte-identical.
 	 */
 	private static void compilePrintOperator(LispCons cons, WasmLispCompiler.Ctx ctx, Runnable plain) {
-		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, ctx.printCase);
+		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, ctx.printControls);
 		if (hooked == null) {
 			plain.run();
 			return;
@@ -1009,8 +1009,15 @@ final class WasmExprCompiler {
 					}
 				}
 				case LispNames.WRITE_TO_STRING -> {
-					compilePrintOperator(cons, ctx, () -> WasmPrin1ToStringCompiler.compile(cons, ctx));
-					WasmEmitHelper.emitToMutStrCall(ctx);
+					// A keyword tail binds the printer variables around the one-argument
+					// primitive (LispMacroExpander.expandWriteToStringKeywords).
+					if (cons.isProperList() && cons.toList().size() > 2) {
+						compileExpr(LispMacroExpander.expandWriteToStringKeywords(cons), ctx);
+					}
+					else {
+						compilePrintOperator(cons, ctx, () -> WasmPrin1ToStringCompiler.compile(cons, ctx));
+						WasmEmitHelper.emitToMutStrCall(ctx);
+					}
 				}
 				case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL -> {
 					WasmWriteStringCompiler.compileMakeOutputStream(cons, ctx);

@@ -407,14 +407,17 @@ accumulator grows with the DATA) were the ones changed.
 - **`~W` renders as `prin1`, and never reads `*print-escape*`.** CL defines it as
   `write` of the argument under the CURRENT printer variables -- i.e. `princ` when
   `*print-escape*` is nil -- and both paths render `prin1-to-string` unconditionally
-  instead. Two reasons: `write-to-string` already answers the same way
-  (`.kb/pretty-printer.md`; `.todo/041` owns that gap), and the static path expands
-  in Pass 2, AFTER the scan that decides which printer-mode `defvar`s a compiled
-  program gets (`injectMvSpillGlobal`), so a `*print-escape*` read there would need
-  its own scan trigger the way `print-unreadable-object` has one. Its modifiers bind
-  variables that change no text today (`~:W` -> `*print-pretty*` t, `~@W` ->
-  `*print-level*`/`*print-length*` nil), so all three spellings are the one call, and
-  it takes no prefix parameters. It DOES honor `*print-case*` (2026-08-15,
+  instead. The reason is that the static path expands in Pass 2, AFTER the scan
+  that decides which printer-mode `defvar`s a compiled program gets
+  (`injectMvSpillGlobal`), so a `*print-escape*` read there would need its own scan
+  trigger the way `print-unreadable-object` and the `write-to-string` keywords
+  (`LispMacroExpander.mentionsPrinterVariable`, 2026-09-02) have one -- that helper
+  is the shape to extend when this is done. (`write-to-string` itself no longer
+  answers the same way: with `:escape` / `:readably` it lowers to the escape-picking
+  conditional, `.kb/pretty-printer.md`.) Its modifiers bind variables of which
+  `~@W`'s two now change text (`*print-level*`/`*print-length*` nil would UNDO an
+  enclosing truncation) but are still not bound here, so all three spellings are the
+  one call, and it takes no prefix parameters; `.todo/041` owns both reads. It DOES honor `*print-case*` (2026-08-15,
   `.todo/041`): the case seam rewrites the `prin1-to-string` it lowers to, on both
   renderings, so a `~W` under a `:downcase` binding prints lower case like every other
   printing operator -- the gap left is the escape pair. **Re-evaluation trigger**: when

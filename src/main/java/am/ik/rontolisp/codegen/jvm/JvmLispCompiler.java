@@ -610,10 +610,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// like restartMode; expandTopLevelDefinitions runs the same scan to inject the
 		// %hc-match-p defun and the cluster-stack defvar.
 		boolean signalClauseMatch = LispMacroExpander.needsSignalClauseMatch(program);
-		// Whether *print-case* is in play. Decided on the SURFACE program, like the scan
-		// that gives the variable its defvar, and threaded into the expression compiler
-		// so every printing operator routes through the case-applying renderer.
-		boolean printCase = LispMacroExpander.usesPrintCase(program);
+		// Whether a printer-control variable is in play. Decided on the SURFACE program,
+		// like the scan that gives the variable its defvar, and threaded into the
+		// expression compiler so every printing operator routes through %print-cased.
+		boolean printControls = LispMacroExpander.usesPrintControls(program);
 		// The dispatch narrower drops generic-function branches no call site can select
 		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
 		// may narrow -- under --dynamic any name resolves at run time.
@@ -1808,7 +1808,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.blockExitChannel(blockExitChannel)
 			.restartMode(restartMode)
 			.signalClauseMatch(signalClauseMatch)
-			.printCase(printCase)
+			.printControls(printControls)
 			.usesFloatArray(usesFloatArray)
 			.typedLoops(!this.optimize.prefersSizeOverSpeed())
 			.usesIntArray(usesIntArray)
@@ -5681,13 +5681,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean signalClauseMatch = false;
 
 		/**
-		 * True when the program MENTIONS {@code *print-case*}
-		 * ({@code LispMacroExpander.usesPrintCase}): every printing operator is rewritten
-		 * onto the {@code %print-cased} renderer, which applies the variable to each
-		 * symbol spelling. Off, the printing operators compile exactly as they always
-		 * did.
+		 * True when the program MENTIONS a printer-control variable
+		 * ({@code LispMacroExpander.usesPrintControls}: {@code *print-case*},
+		 * {@code *print-length*}, {@code *print-level*}, {@code *print-gensym*},
+		 * {@code *print-base*}, {@code *print-radix*} -- or a {@code write-to-string}
+		 * keyword binding one): every printing operator is rewritten onto the
+		 * {@code %print-cased} renderer, which applies the variables to each value. Off,
+		 * the printing operators compile exactly as they always did.
 		 */
-		boolean printCase = false;
+		boolean printControls = false;
 
 		/**
 		 * True when the program can produce a packed float array (a {@code #d(...)}
@@ -6124,7 +6126,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.blockExitChannel = builder.blockExitChannel;
 			this.restartMode = builder.restartMode;
 			this.signalClauseMatch = builder.signalClauseMatch;
-			this.printCase = builder.printCase;
+			this.printControls = builder.printControls;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.typedLoops = builder.typedLoops;
 			this.intFusion = builder.intFusion;
@@ -6426,7 +6428,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private boolean signalClauseMatch = false;
 
-			private boolean printCase = false;
+			private boolean printControls = false;
 
 			private boolean usesFloatArray = false;
 
@@ -6873,8 +6875,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder printCase(boolean printCase) {
-				this.printCase = printCase;
+			Builder printControls(boolean printControls) {
+				this.printControls = printControls;
 				return this;
 			}
 

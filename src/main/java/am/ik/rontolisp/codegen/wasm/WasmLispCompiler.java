@@ -3412,7 +3412,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.blockExitTag(blockExitTag)
 			.restartMode(restartMode)
 			.signalClauseMatch(signalClauseMatch)
-			.printCase(LispMacroExpander.usesPrintCase(program))
+			.printControls(LispMacroExpander.usesPrintControls(program))
 			.usesSeqString(usesSeqString)
 			.mutableStringProducers(mutableStringProducers)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
@@ -7888,13 +7888,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean signalClauseMatch = false;
 
 		/**
-		 * True when the program MENTIONS {@code *print-case*}
-		 * ({@code LispMacroExpander.usesPrintCase}): every printing operator is rewritten
-		 * onto the {@code %print-cased} renderer, which applies the variable to each
-		 * symbol spelling. Off, the printing operators compile exactly as they always
-		 * did.
+		 * True when the program MENTIONS a printer-control variable
+		 * ({@code LispMacroExpander.usesPrintControls}: {@code *print-case*},
+		 * {@code *print-length*}, {@code *print-level*}, {@code *print-gensym*},
+		 * {@code *print-base*}, {@code *print-radix*} -- or a {@code write-to-string}
+		 * keyword binding one): every printing operator is rewritten onto the
+		 * {@code %print-cased} renderer, which applies the variables to each value. Off,
+		 * the printing operators compile exactly as they always did.
 		 */
-		boolean printCase = false;
+		boolean printControls = false;
 
 		/**
 		 * True when the program can build a SYNONYM STREAM ({@code make-synonym-stream}
@@ -8347,7 +8349,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.blockExitTag = builder.blockExitTag;
 			this.restartMode = builder.restartMode;
 			this.signalClauseMatch = builder.signalClauseMatch;
-			this.printCase = builder.printCase;
+			this.printControls = builder.printControls;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
 			this.usesEqualpHashTables = builder.usesEqualpHashTables;
 			this.usesStreamValues = builder.usesStreamValues;
@@ -8462,7 +8464,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean signalClauseMatch = false;
 
-			private boolean printCase = false;
+			private boolean printControls = false;
 
 			private boolean usesSynonymStreams = false;
 
@@ -8711,8 +8713,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder printCase(boolean printCase) {
-				this.printCase = printCase;
+			Builder printControls(boolean printControls) {
+				this.printControls = printControls;
 				return this;
 			}
 

@@ -31,7 +31,7 @@ class PureBuiltinFolderTest {
 
 	private static List<LispVal> fold(String source) {
 		List<LispVal> program = read(source);
-		return PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintCase(program));
+		return PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintControls(program));
 	}
 
 	/** The last form of a folded program. */
@@ -112,7 +112,7 @@ class PureBuiltinFolderTest {
 				"(destructuring-bind (max 3) v max)", "(with-slots (max) o max)", "(pop (max 1))", "(declare (max 1))",
 				"(the (mod 8) x)", "(loop for (car cdr) in x collect car)")) {
 			List<LispVal> program = read(source);
-			assertThat(PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintCase(program)))
+			assertThat(PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintControls(program)))
 				.as("unchanged: %s", source)
 				.isSameAs(program);
 		}
@@ -146,7 +146,7 @@ class PureBuiltinFolderTest {
 				"(defun f () (flet ((length (x) 99)) (length \"ab\")))")) {
 			List<LispVal> program = read(definition + " (length \"abc\")");
 			List<LispVal> result = PureBuiltinFolder.foldProgram(program, false,
-					LispMacroExpander.usesPrintCase(program));
+					LispMacroExpander.usesPrintControls(program));
 			assertThat(result.get(result.size() - 1).print()).as("blocked by %s", definition)
 				.isEqualTo("(LENGTH \"abc\")");
 		}
@@ -161,7 +161,7 @@ class PureBuiltinFolderTest {
 		// (setf (symbol-function <computed>) ...) can install anything under any name,
 		// so no table entry can be assumed to still be the built-in.
 		List<LispVal> program = read("(setf (symbol-function name) #'f) (+ 1 2)");
-		assertThat(PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintCase(program)))
+		assertThat(PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintControls(program)))
 			.isSameAs(program);
 		// A LITERAL name blocks only that name.
 		List<LispVal> named = PureBuiltinFolder.foldProgram(read("(setf (symbol-function 'max) #'f) (max 1 2) (+ 1 2)"),
@@ -175,9 +175,9 @@ class PureBuiltinFolderTest {
 		// Under --dynamic every name resolves at run time, so the compile path may not
 		// decide what a call means -- the same bail the funcall-dispatch gate takes.
 		List<LispVal> program = read("(princ (+ 1 2))");
-		assertThat(PureBuiltinFolder.foldProgram(program, true, LispMacroExpander.usesPrintCase(program)))
+		assertThat(PureBuiltinFolder.foldProgram(program, true, LispMacroExpander.usesPrintControls(program)))
 			.isSameAs(program);
-		assertThat(PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintCase(program)))
+		assertThat(PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintControls(program)))
 			.isNotSameAs(program);
 	}
 
@@ -280,7 +280,7 @@ class PureBuiltinFolderTest {
 		// gratuitous copy drops the source position of the whole program below the top
 		// level (.kb/source-positions.md).
 		List<LispVal> program = read("(defun f (x) (g x)) (print (f 1))");
-		assertThat(PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintCase(program)))
+		assertThat(PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintControls(program)))
 			.isSameAs(program);
 	}
 
@@ -291,7 +291,8 @@ class PureBuiltinFolderTest {
 		SourceProvenance.startRecording();
 		List<LispVal> program = LispReader.readAllFromString("(defun f (x)\n  (g x (+ 1 2)))\n", Features.JVM,
 				"prog.lisp");
-		List<LispVal> result = PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintCase(program));
+		List<LispVal> result = PureBuiltinFolder.foldProgram(program, false,
+				LispMacroExpander.usesPrintControls(program));
 		assertThat(result.get(0).print()).isEqualTo("(DEFUN F (X) (G X 3))");
 		assertThat(SourceProvenance.locate(result.get(0))).isEqualTo(new SourceLocation("prog.lisp", 1, 1));
 		LispVal body = ((LispCons) ((LispCons) ((LispCons) result.get(0)).cdr()).cdr()).cdr();

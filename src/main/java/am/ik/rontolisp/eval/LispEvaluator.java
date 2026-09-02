@@ -167,7 +167,8 @@ public final class LispEvaluator {
 	private int conditionReportRuntimeStamp = -1;
 
 	// The routing shape (the print-object tag set, whether conditions report, whether
-	// *print-case* converts) the loaded %print-object-str / %print-object-leaf pair was
+	// a printer-control variable is off its default) the loaded %print-object-str /
+	// %print-object-leaf pair was
 	// generated from, or -1 before the first load. The pair is RE-generated whenever that
 	// moves, which is what lets a defmethod print-object evaluated after the first print
 	// still take effect -- the compile path emits it once because its registry is
@@ -4038,7 +4039,7 @@ public final class LispEvaluator {
 	/**
 	 * Renders a value the way {@code prin1} would: through the {@code print-object} route
 	 * when this evaluation has turned it on (a {@code defmethod print-object}, a
-	 * condition in reach, a converting {@code *print-case*}), else the raw readable
+	 * condition in reach, a non-default printer-control variable), else the raw readable
 	 * rendering. The REPL echoes results through this, so a value whose class carries a
 	 * {@code print-object} method -- a {@code geom:solid}, a torch tensor -- echoes as
 	 * the method prints it, exactly as the printing operators would. An unrouted
@@ -4050,7 +4051,7 @@ public final class LispEvaluator {
 	 */
 	public String prin1ToStringRouted(LispVal value) {
 		boolean routed = !LispMacroExpander.printObjectTags(this.closRegistry).isEmpty()
-				|| this.closRegistry.routesConditionReports() || printCaseInEffect();
+				|| this.closRegistry.routesConditionReports() || printControlsInEffect();
 		if (!routed) {
 			return value.print();
 		}
@@ -4226,17 +4227,34 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Whether {@code *print-case*} currently holds something other than {@code :upcase},
-	 * i.e. whether a printing operator has to route through the case-applying renderer.
-	 * Read dynamic-first, like any special: the value a {@code let} binding established
-	 * on this thread wins over the global default.
-	 * @return true when the printer must apply a case conversion
+	 * Whether a printer-control variable ({@code LispMacroExpander.PRINT_CONTROL_VARS})
+	 * currently holds a non-default value -- {@code *print-case*} other than
+	 * {@code :upcase}, a non-nil {@code *print-length*} / {@code *print-level*} /
+	 * {@code *print-radix*}, a nil {@code *print-gensym*}, a {@code *print-base*} other
+	 * than 10 -- i.e. whether a printing operator has to route through the
+	 * {@code %print-cased} renderer. Read dynamic-first, like any special: the value a
+	 * {@code let} binding established on this thread wins over the global default. This
+	 * is the interpreter's twin of the compile paths' "the program mentions the variable"
+	 * scan; the two agree because the renderer re-reads the variables itself.
+	 * @return true when the printer must apply a printer-control variable
 	 */
-	private boolean printCaseInEffect() {
-		LispVal value = this.dynamicBindings.isBound(LispNames.PRINT_CASE_VAR)
-				? this.dynamicBindings.get(LispNames.PRINT_CASE_VAR)
-				: this.globalEnv.lookupOrNull(LispNames.PRINT_CASE_VAR);
-		return value instanceof LispSymbol mode && !LispNames.PRINT_CASE_UPCASE.equals(mode.name());
+	private boolean printControlsInEffect() {
+		LispVal printControls = printerVariable(LispNames.PRINT_CASE_VAR);
+		if (printControls instanceof LispSymbol mode && !LispNames.PRINT_CASE_UPCASE.equals(mode.name())) {
+			return true;
+		}
+		if (!(printerVariable(LispNames.PRINT_LENGTH_VAR) instanceof LispNil)
+				|| !(printerVariable(LispNames.PRINT_LEVEL_VAR) instanceof LispNil)
+				|| !(printerVariable(LispNames.PRINT_RADIX_VAR) instanceof LispNil)
+				|| printerVariable(LispNames.PRINT_GENSYM_VAR) instanceof LispNil) {
+			return true;
+		}
+		return !(printerVariable(LispNames.PRINT_BASE_VAR) instanceof LispInteger base && base.value() == 10);
+	}
+
+	/** The current value of a printer variable, dynamic binding first. */
+	private @Nullable LispVal printerVariable(String name) {
+		return this.dynamicBindings.isBound(name) ? this.dynamicBindings.get(name) : this.globalEnv.lookupOrNull(name);
 	}
 
 	/**
@@ -4566,7 +4584,18 @@ public final class LispEvaluator {
 	private void wrapPrintCaseOperator(String name) {
 		LispVal base = this.globalEnv.lookupFunction(name);
 		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
-			if (!args.isEmpty() && args.size() <= 2 && printCaseInEffect()) {
+			if (LispNames.WRITE_TO_STRING.equals(name) && args.size() > 1) {
+				// A keyword tail: rebuild the call with its keywords in place (the
+				// lowering matches them syntactically) and its values quoted, then take
+				// the same lowering the operator form takes.
+				LispVal tail = LispNil.INSTANCE;
+				for (int i = args.size() - 1; i >= 1; i--) {
+					tail = new LispCons(i % 2 == 1 ? args.get(i) : quoteValue(args.get(i)), tail);
+				}
+				LispVal form = new LispCons(new LispSymbol(name), new LispCons(quoteValue(args.get(0)), tail));
+				return eval(LispMacroExpander.expandWriteToStringKeywords((LispCons) form), this.globalEnv);
+			}
+			if (!args.isEmpty() && args.size() <= 2 && printControlsInEffect()) {
 				LispVal form = new LispCons(new LispSymbol(name), quotedArguments(args));
 				ensurePrintObjectRuntimeLoadedIfRouted(true);
 				LispVal hooked = LispMacroExpander.expandPrintObjectHook((LispCons) form, this.closRegistry, true);
@@ -5284,15 +5313,20 @@ public final class LispEvaluator {
 					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
 					LispNames.PRIN1_PIECE_INTERNAL: {
 				// Routed through print-object only when the program defines a method on
-				// it, and through %print-cased only while *print-case* holds something
-				// other than :upcase; otherwise the ordinary Environment function runs,
-				// unchanged. The renderer is INLINED here rather than called as a
+				// it, and through %print-cased only while a printer-control variable
+				// holds a non-default value; otherwise the ordinary Environment function
+				// runs, unchanged. The renderer is INLINED here rather than called as a
 				// generated defun: the interpreter re-expands per call, so it always sees
 				// the current method set (a defmethod may follow the first print). The
-				// case gate is the CURRENT VALUE rather than the compile paths'
+				// control gate is the CURRENT VALUE rather than the compile paths'
 				// "the program mentions the variable" scan -- the interpreter has no
 				// whole-program pass to run one in -- and the two agree because
-				// %print-cased re-reads the variable itself.
+				// %print-cased re-reads the variables itself.
+				if (LispNames.WRITE_TO_STRING.equals(name) && cons.isProperList() && cons.toList().size() > 2) {
+					// A keyword tail binds the printer variables around the one-argument
+					// primitive, the same lowering both compilers take.
+					return eval(LispMacroExpander.expandWriteToStringKeywords(cons), env);
+				}
 				if (this.closRegistry.routesConditionReports()) {
 					// Already routing: only the freshness check, so a condition class
 					// defined between two prints renders through its report too.
@@ -5314,9 +5348,9 @@ public final class LispEvaluator {
 				if (!this.geomLibraryLoaded && referencesGeom(cons)) {
 					ensureGeomLoaded();
 				}
-				boolean printCase = printCaseInEffect();
-				ensurePrintObjectRuntimeLoadedIfRouted(printCase);
-				LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, this.closRegistry, printCase);
+				boolean printControls = printControlsInEffect();
+				ensurePrintObjectRuntimeLoadedIfRouted(printControls);
+				LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, this.closRegistry, printControls);
 				if (hooked != null) {
 					return eval(hooked, env);
 				}
@@ -7779,8 +7813,8 @@ public final class LispEvaluator {
 	 * Evaluates the generated print-object runtime ({@code %print-object-str} and
 	 * {@code %print-object-leaf}) into the global environment, and re-evaluates it
 	 * whenever the routing has moved -- a later {@code defmethod print-object}, a later
-	 * {@code define-condition}, or {@code *print-case*} entering or leaving its
-	 * converting modes. The compile path emits the pair once because
+	 * {@code define-condition}, or a printer-control variable entering or leaving its
+	 * non-default values. The compile path emits the pair once because
 	 * {@code expandTopLevelDefinitions} runs with a complete registry, which the
 	 * interpreter never has.
 	 *
@@ -7788,13 +7822,14 @@ public final class LispEvaluator {
 	 * A generated DEFUN rather than a body inlined at the print site (which is what this
 	 * was before nested rendering): the renderer walks a list/vector by recursing into
 	 * itself, and an inlined form cannot recurse.
-	 * @param printCase whether {@code *print-case*} currently converts
+	 * @param printControls whether a printer-control variable currently holds a
+	 * non-default value
 	 */
-	private void ensurePrintObjectRuntimeLoaded(boolean printCase) {
+	private void ensurePrintObjectRuntimeLoaded(boolean printControls) {
 		synchronized (this.libraryLoadLock) {
 			java.util.List<String> tags = LispMacroExpander.printObjectTags(this.closRegistry);
 			int stamp = tags.hashCode() * 4 + (this.closRegistry.routesConditionReports() ? 1 : 0)
-					+ (printCase ? 2 : 0);
+					+ (printControls ? 2 : 0);
 			if (stamp == this.printObjectRuntimeStamp) {
 				return;
 			}
@@ -7802,7 +7837,7 @@ public final class LispEvaluator {
 			// The interpreter always emits the vector arm: the gate the compile paths use
 			// exists to keep the array runtime out of an array-free ARTIFACT, and there
 			// is no artifact here.
-			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, printCase, true)) {
+			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, printControls, true)) {
 				eval(form, this.globalEnv);
 			}
 		}
@@ -7813,12 +7848,13 @@ public final class LispEvaluator {
 	 * the pair is generated at all: a program with no {@code print-object} method and no
 	 * condition in reach is rewritten straight onto {@code %print-cased} (or not at all),
 	 * and must not carry a renderer it never calls.
-	 * @param printCase whether {@code *print-case*} currently converts
+	 * @param printControls whether a printer-control variable currently holds a
+	 * non-default value
 	 */
-	private void ensurePrintObjectRuntimeLoadedIfRouted(boolean printCase) {
+	private void ensurePrintObjectRuntimeLoadedIfRouted(boolean printControls) {
 		if (!LispMacroExpander.printObjectTags(this.closRegistry).isEmpty()
 				|| this.closRegistry.routesConditionReports()) {
-			ensurePrintObjectRuntimeLoaded(printCase);
+			ensurePrintObjectRuntimeLoaded(printControls);
 		}
 	}
 

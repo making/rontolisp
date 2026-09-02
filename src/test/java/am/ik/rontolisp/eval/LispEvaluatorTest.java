@@ -5341,6 +5341,87 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalPrintLengthLevelGensymBaseAndRadix() {
+		// The five printer-control variables beside *print-case* are honored through the
+		// same %print-cased walk, gated on the interpreter side by their CURRENT value.
+		// Values verified against SBCL 2.2.9.
+		assertThat(evalMulti("""
+				(let ((*print-length* 3))
+				  (list (prin1-to-string '(1 2 3 4 5 6)) (prin1-to-string '(1 2 3 . 4))
+				        (prin1-to-string '(1 2 3 4 . 5)) (prin1-to-string (vector 1 2 3 4))
+				        (prin1-to-string '(a (b c d e) (f)))))
+				""").print())
+			.isEqualTo("(\"(1 2 3 ...)\" \"(1 2 3 . 4)\" \"(1 2 3 ...)\" \"#(1 2 3 ...)\" \"(A (B C D ...) (F))\")");
+		// *print-level*: a list or vector at the depth prints as #; the 'x / #'x
+		// abbreviation is transparent to the depth, as SBCL's pretty printer has it.
+		assertThat(evalMulti("""
+				(let ((*print-level* 1))
+				  (list (prin1-to-string (list 1 '(2) (vector 3))) (prin1-to-string '(a 'b #'c))
+				        (prin1-to-string '(a '(b))) (prin1-to-string ''(b))))
+				""").print()).isEqualTo("(\"(1 # #)\" \"(A 'B #'C)\" \"(A '#)\" \"'(B)\")");
+		assertThat(evalMulti("""
+				(let ((*print-level* 0) (*print-length* 0))
+				  (list (prin1-to-string '(1)) (prin1-to-string 'a) (prin1-to-string (vector 1))))
+				""").print()).isEqualTo("(\"#\" \"A\" \"#\")");
+		// *print-gensym* nil drops the #: prefix under prin1 (princ never prints it).
+		assertThat(evalMulti("""
+				(let ((*print-gensym* nil))
+				  (list (prin1-to-string (list (make-symbol "G114"))) (princ-to-string (make-symbol "G114"))))
+				""").print()).isEqualTo("(\"(G114)\" \"G114\")");
+		// *print-base* re-spells every integer and ratio (a float and a string keep
+		// their own text); *print-radix* adds #b / #o / #x, a trailing "." for a
+		// base-10 integer, and #<base>r otherwise.
+		assertThat(evalMulti("""
+				(list (let ((*print-base* 16)) (prin1-to-string (list 255 -255 1/255 1.5 "ff")))
+				      (let ((*print-base* 16) (*print-radix* t)) (prin1-to-string (list 255 1/255)))
+				      (let ((*print-radix* t)) (prin1-to-string (list 255 1/2)))
+				      (let ((*print-radix* t) (*print-base* 2)) (prin1-to-string -5))
+				      (let ((*print-radix* t) (*print-base* 8)) (prin1-to-string 8))
+				      (let ((*print-radix* t) (*print-base* 36)) (prin1-to-string 255)))
+				""").print()).isEqualTo(
+				"(\"(FF -FF 1/FF 1.5 \\\"ff\\\")\" \"(#xFF #x1/FF)\" \"(255. #10r1/2)\" \"#b-101\" \"#o10\" \"#36r73\")");
+		// ~S / ~A lower to the two conversions and so truncate too.
+		assertThat(evalMulti("""
+				(let ((*print-length* 1)) (format nil "~s ~a" '(1 2) '(3 4)))
+				""").print()).isEqualTo("\"(1 ...) (3 ...)\"");
+		// A program with a print-object method walks through %print-object-str instead,
+		// which carries the same truncation.
+		assertThat(evalMulti("""
+				(defclass tagged () ())
+				(defmethod print-object ((o tagged) s) (write-string "#<TAGGED>" s))
+				(list (let ((*print-length* 1)) (prin1-to-string (list (make-instance 'tagged) 2)))
+				      (let ((*print-level* 1)) (prin1-to-string (list (make-instance 'tagged) (list 2)))))
+				""").print()).isEqualTo("(\"(#<TAGGED> ...)\" \"(#<TAGGED> #)\")");
+	}
+
+	@Test
+	void evalWriteAndWriteToStringKeywords() {
+		// write accepts every CL keyword, each binding its printer variable around the
+		// one print; write-to-string takes the same keywords (lowered onto the
+		// one-argument primitive, or onto the escape-picking conditional when :escape /
+		// :readably is among them), through a direct call and through apply alike.
+		assertThat(evalMulti("""
+				(list (with-output-to-string (s) (write '(foo "Bar" #\\c) :stream s :case :downcase :length 2))
+				      (with-output-to-string (s) (write 255 :stream s :base 2 :radix t))
+				      (with-output-to-string (s) (write (list 1 (list 2 (list 3))) :stream s :level 2 :length 1))
+				      (with-output-to-string (s) (write (make-symbol "G7") :stream s :gensym nil))
+				      (with-output-to-string (s) (write "hi" :stream s :escape nil :pretty t :circle nil
+				                                                :right-margin 83 :array t :lines nil)))
+				""").print()).isEqualTo("(\"(foo \\\"Bar\\\" ...)\" \"#b11111111\" \"(1 ...)\" \"G7\" \"hi\")");
+		assertThat(evalMulti("""
+				(list (write-to-string '(1 2 3 4) :length 2)
+				      (write-to-string "hi" :escape nil)
+				      (write-to-string "hi" :readably t)
+				      (write-to-string 'foo :case :downcase :escape nil)
+				      (write-to-string (make-symbol "G1") :gensym nil)
+				      (write-to-string 255 :base 16 :radix t)
+				      (apply #'write-to-string (list '(1 2 3) :length 1))
+				      (funcall #'write-to-string '(1 2 3)))
+				""").print())
+			.isEqualTo("(\"(1 2 ...)\" \"hi\" \"\\\"hi\\\"\" \"foo\" \"G1\" \"#xFF\" \"(1 ...)\" \"(1 2 3)\")");
+	}
+
+	@Test
 	void evalWriteAndPprintDispatch() {
 		// write's keywords BIND the printer control variables around one print, which is
 		// CL's own definition of them; only :escape / :readably change the text.
