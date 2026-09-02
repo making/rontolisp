@@ -1124,11 +1124,11 @@ the write report for an in-place member is emitted whatever follows, because tha
 about correctness. A `--gpu`-only build now carries no guard at any `linalg:` call site at
 all, for the same reason.
 
-**The INTERPRETER never had this.** Its interceptor hands the device `storage()`, which
-does not report a read, and a declined member applies the binding it captured -- the
-defun, which reads through `data()` and reports for itself. The guard is the compile
-path's alone, so this is a `-o out.class` / `-o app.jar` finding and the numbers below are
-compiled ones. It is also BACKEND-independent: the same emitted chain runs over Metal.
+The guard is the compile path's alone -- the interpreter never had it, measured below --
+so this is a `-o out.class` / `-o app.jar` finding and the numbers here are compiled ones.
+It is BACKEND-independent: the same emitted chain runs over Metal, whose own A/B of this
+round trip (879 -> 687 downloads a step, 194 -> 178 MB, todo-645's follow-up) was taken on
+JVM class output and is therefore this same guard, not a Metal one.
 
 **Measured on the shared probe**, `.todo/123-gpu-acceleration/transformer-book-shapes.lisp`
 at the book's shapes, `--gpu --simd`, JVM class output, GB10, `STEPS=13` diffed against
@@ -1144,6 +1144,8 @@ could reach.
 | `cuLaunchKernel` | 6771 | 6771 | **6963** |
 | device kernel time | 294.7 ms | 294.2 ms | **292.0 ms** |
 | 13-step wall (median of 3) | 8.29 s | 7.70 s | **7.70 s** |
+| wall a step | 0.491 s | 0.408 s | **0.416 s** |
+| device busy | 60% | 72% | **70%** |
 
 **The fix lands exactly on the acceptance ceiling.** The four downloads left are the four
 the 2026-08-24 profile counted, and the fourteen uploads are the fourteen this file's table
@@ -1157,19 +1159,47 @@ of this was measured at `WIDEN=1` against the fixed build and is worth 0.06 s ov
 backends' `mask[i % maskLen]` kernels, which a widened rule would have had to grow a stride
 for.
 
+**The INTERPRETER was never affected, and that was measured, not reasoned.** The same
+probe on `java -jar` (`--gpu --simd`, `STEPS=3` diffed against `STEPS=1`) costs **4
+downloads and 14 uploads a step, 12 `cuCtxSynchronize`, 6963 launches** -- BEFORE this
+change as after it, byte for byte the fixed compiled column above, and nothing like the
+292/302/204 the compiled output was paying beside it. So for two weeks
+`java -jar prog.lisp --gpu` issued strictly less traffic on this program than
+`-o prog.class` did, and every `--gpu` copy profile taken on the compiled backend carried
+288 copies the interpreter did not. The interpreter is ~4.5 s a step here against the
+compiled 0.42 (the evaluator, not the device: its kernel time is the same 292 ms), so the
+asymmetry never showed up in a wall.
+
+**That asymmetry is not the duplication `.todo/654` is about.** The two paths did not
+disagree about a RULE -- `suffixLength` and `softmaxMaskLength` both declined this mask,
+identically. They differed in when a host read is answered: the interpreter installs
+`FloatArrayAccessHook` and materializes LAZILY, at the read, through the record's `data()`
+accessor, while its interceptor hands the device `storage()`, which reports nothing -- so a
+declined member applies the captured binding over an operand that is still resident. The
+compile path had no such accessor to hook for a lane kernel that takes a `double[]`
+straight, so it materialized EAGERLY, in front of every host rung, and then in front of a
+rung that was not a lane kernel at all. Two designs for the same guarantee, one of which
+had a case it did not need. It is now the same rule on both.
+
 **The wall here is a forced measurement, not an enqueue one.** Every step ends in
 `torch:item` on the loss, which is a host read of a device result: the step cannot finish
-without a download and a synchronize, so nothing hides behind the launch queue. The copy
-and synchronize counts are structural in any case. That distinction is the one Metal's
-probes had to learn the hard way (todo-643/645, this file's Metal half).
+without a download and a synchronize, so nothing hides behind the launch queue. **And a
+variant with that read removed -- the loss returned unread, `torch:item` only on the last
+step -- profiles IDENTICALLY**: 292/302/204 before and 4/14/12 after, the same counts to
+the copy, because the step's own optimizer and reductions synchronize whatever the caller
+does. Only the wall moves, and it moves inside the noise band (before: 0.491 s a step
+forced against 0.451 unforced; after: 0.416 against 0.421). **So on this program there is
+no enqueue-vs-work ambiguity to fall into** -- which is worth knowing before designing a
+probe for it. That distinction is the one Metal's probes had to learn the hard way
+(todo-643/645, this file's Metal half); on this backend, at this shape, it does not bite.
 
 **The same shape of finding as todo-641, one layer down.** There the upper layer's decision
 was identical on both backends and the LOWER layer's capability differed, so the same symptom
 cost -2.3% on CUDA and 15% on Metal ("The attention scale and mask", above). Here the
 upper layer's decision -- `suffixLength`, which is above `GpuDevice` and therefore identical
 on both backends -- was ALSO not the thing to change: the cost was a guard the JVM backend
-emitted around the decline, and Metal, measured on the same model, was paying its own version
-of it (192 host downloads a step of exactly one 90 KB score each). **Read a decline's price
+emitted around the decline, which is why Metal's 192 declined downloads a step are the SAME
+192 and go with this change rather than needing a Metal one. **Read a decline's price
 before reading its rule.** That is now three items where the rule looked wrong and the layer
 below it was where the money was.
 
