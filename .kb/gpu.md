@@ -1264,7 +1264,7 @@ byte-identical to the previous build's at every step of all six runs.**
   the scale's was.
 - **The fused tier on Metal** stays declined: no Apple machine to measure the row kernels'
   sequential double folds on, which is the same reason `.todo/631` gives for the
-  transposed product. Carved out as `.todo/632`.
+  transposed product. Carved out as `.todo/636`.
 
 **One measurement to carry forward: the last-axis fold is uncoalesced.** `fold_f32` with
 `inner == 1` gives thread `i` row `i`, so thirty-two lanes read addresses a row apart --
@@ -1286,7 +1286,7 @@ threshold, and two whole tiers.
 | rank-2 product | our tiled kernel | **MPS** above `2^27` per matrix, our tiled kernel below |
 | stacked product | our batched kernel | our batched kernel |
 | transposed stacked product | `ta` / `tb` on the same kernel | **declined** -- no transposed staging in `gemm.metal` (`.todo/631`) |
-| fused tier | nine members | **declined** -- no fused MSL kernels (`.todo/632`) |
+| fused tier | nine members | **declined** -- no fused MSL kernels (`.todo/636`) |
 | element-wise tier | twelve members | the same twelve |
 | broadcast + axes transpose | yes | yes |
 | axis fold `:axis` | yes | **not as a round trip, measured**; over a resident operand only |
