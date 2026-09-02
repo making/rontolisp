@@ -135,6 +135,30 @@ decide how the program is read. A `.asd` that needs to announce a feature to
 the files of the systems it defines uses `:rontolisp-features` instead (see the
 [Systems guide](../guides/asdf-systems.md)).
 
+And **you** may declare features on the command line: `--feature NAME`
+(comma-separated, repeatable) widens the set every source of the run is read
+with — the entry file, the files it `load`s, the ASDF systems loaded under it —
+and seeds `*features*` with the same names, so a `(member :sbcl *features*)`
+and the `#+sbcl` beside it cannot disagree.
+
+```bash
+rontolisp app.lisp --feature sbcl
+rontolisp app.lisp -o app.jar --feature sbcl,clisp
+```
+
+That is for a portable library whose `#+sbcl` / `#+clisp` / `#-(or ...)` chain
+was written before rontolisp existed: it names none of our features, so every
+call falls into the else branch — usually an `(error "not implemented")` —
+even where every primitive the `sbcl` branch uses already answers exactly as
+SBCL does. rontolisp will not announce `:sbcl` for you, because that would be
+a lie told in every program that never asked for it; the flag makes it a claim
+**you** make, about a library you have read, for the run you are starting. The
+consequence is yours too: the same claim also selects the branches that really
+do call that implementation's internals. The rontolisp features themselves are
+refused — `:rontolisp`, the backend features and the target-describing ones
+(`:rontolisp-component`, `:rontolisp-reactor`, …) say what the output is, and
+what the output is is decided by `-o` and the flags beside it.
+
 ```lisp
 #| a block comment
    #| nesting like Common Lisp |#
@@ -158,6 +182,12 @@ Notes:
   by the compile-time `load`/`require`/`asdf:load-system` include are read with
   the same target features. The run-time `*features*` list starts out holding
   that same set.
+- `--feature` reaches the source **you** brought — the entry file, everything
+  it loads, and every ASDF system loaded under it. It never reaches the sources
+  rontolisp itself ships (the prelude, the built-in libraries and system
+  shims), which are always read with the backend's own set: a claim you make
+  about a third-party library must not rewrite our own conditionals underneath
+  it.
 - A form skipped by a failing `#+`/`#-` guard is skipped at the raw character
   level without being parsed, so it may use syntax rontolisp does not support
   (that is the point of guarding it).

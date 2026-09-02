@@ -27,7 +27,9 @@ public class CliOptions {
 	// --dist is repeatable for the same reason -e is: `--dist ultralisp --dist URL` is
 	// one search order written in two arguments, and the value itself is comma-separated,
 	// so the newline join reads as one more separator.
-	private static final Set<String> repeatableKeys = Set.of("-e", "--dist");
+	// --feature is repeatable on the same terms: `--feature sbcl --feature x86-64` is one
+	// widening written in two arguments.
+	private static final Set<String> repeatableKeys = Set.of("-e", "--dist", "--feature");
 
 	// Long spellings that mean an existing key; the value is stored under the short one,
 	// so every reader looks at one name.

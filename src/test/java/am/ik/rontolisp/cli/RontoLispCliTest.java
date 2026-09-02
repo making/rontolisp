@@ -1486,6 +1486,74 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void declaredFeaturesAreParsedLikeDistsAndRefuseTheBuildsOwnNames() {
+		// Comma-separated, newline-separated where a repeated --feature accumulated,
+		// spelled with or without the keyword colon, downcased and deduplicated.
+		assertThat(RontoLispCli.declaredFeatures("sbcl")).containsExactly("sbcl");
+		assertThat(RontoLispCli.declaredFeatures(":SBCL,#:x86-64")).containsExactly("sbcl", "x86-64");
+		assertThat(RontoLispCli.declaredFeatures("sbcl\nclisp")).containsExactly("sbcl", "clisp");
+		assertThat(RontoLispCli.declaredFeatures(" sbcl , sbcl ")).containsExactly("sbcl");
+		assertThat(RontoLispCli.declaredFeatures(null)).isEmpty();
+		// The names that describe the BUILD are refused: -o and the flags beside it are
+		// what decide the backend and the boundary, and a source that read
+		// #+rontolisp-wasm because the command line said so and then compiled to a class
+		// would be broken by its own conditional.
+		assertThatThrownBy(() -> RontoLispCli.declaredFeatures("rontolisp-wasm"))
+			.hasMessageContaining("--feature cannot declare 'rontolisp-wasm'");
+		assertThatThrownBy(() -> RontoLispCli.declaredFeatures(":rontolisp"))
+			.hasMessageContaining("--feature cannot declare 'rontolisp'");
+	}
+
+	@Test
+	void aDeclaredFeatureReachesTheReadTheLoadedFileAndTheRuntimeFeaturesList() throws Exception {
+		// What the flag is FOR: a portable library whose #+ chain predates rontolisp and
+		// so names none of our features, leaving every call in its #-(or ...) else
+		// branch. The claim reaches the entry file, the files it loads -- and the
+		// run-time *features*, so a (member :sbcl *features*) and the #+sbcl beside it
+		// cannot disagree.
+		Files.writeString(this.tempDir.resolve("lib.lisp"), """
+				(defun greet ()
+				  #+sbcl "sbcl-branch"
+				  #-sbcl (error "not implemented"))
+				""");
+		Path main = this.tempDir.resolve("main.lisp");
+		Files.writeString(main, """
+				(load "lib.lisp")
+				(princ (greet))
+				(terpri)
+				(princ (if (member :sbcl *features*) "declared" "absent"))
+				(terpri)
+				""");
+		assertThat(runCli("", main.toString(), "--feature", "sbcl")).isEqualTo("sbcl-branch\ndeclared\n");
+		// Without it the library falls into its else branch, which is the whole
+		// complaint -- and *features* says so too.
+		assertThatThrownBy(() -> runCli("", main.toString())).hasMessage("not implemented");
+	}
+
+	@Test
+	void aDeclaredFeatureReachesTheCompiledBackendsToo() throws Exception {
+		// The read is the frontend's, which every backend shares, so the flag selects
+		// the same branch in a compiled artifact -- and the program's *features* is
+		// seeded from the set it was READ with, target features and declared ones alike.
+		Path program = this.tempDir.resolve("app.lisp");
+		Files.writeString(program, """
+				(princ #+sbcl "sbcl-branch" #-sbcl "portable-branch")
+				(terpri)
+				(princ (if (member :sbcl *features*) "declared" "absent"))
+				(terpri)
+				""");
+		Path jar = this.tempDir.resolve("app.jar");
+		runCli("", program.toString(), "-o", jar.toString(), "--feature", "sbcl");
+		assertThat(runJar(jar)).isEqualTo("sbcl-branch\ndeclared\n");
+		// And on the WASM backend, which no test here runs: the branch it kept is the
+		// one whose string constant travels.
+		Path wasm = this.tempDir.resolve("app.wasm");
+		runCli("", program.toString(), "-o", wasm.toString(), "--feature", "sbcl");
+		String bytes = new String(Files.readAllBytes(wasm), StandardCharsets.ISO_8859_1);
+		assertThat(bytes).contains("sbcl-branch").doesNotContain("portable-branch");
+	}
+
+	@Test
 	void distSpecsReadTheOptionThenTheEnvironment() {
 		// Comma-separated (a distinfo URL contains the path separator --system-path
 		// joins on), newline-separated where a repeated --dist accumulated, and
