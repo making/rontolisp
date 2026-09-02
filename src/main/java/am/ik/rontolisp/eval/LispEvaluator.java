@@ -5237,7 +5237,8 @@ public final class LispEvaluator {
 			case LispNames.HB_GUARD_INTERNAL:
 				return evalHbGuard(cons, env);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
-					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING: {
+					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
+					LispNames.PRIN1_PIECE_INTERNAL: {
 				// Routed through print-object only when the program defines a method on
 				// it, and through %print-cased only while *print-case* holds something
 				// other than :upcase; otherwise the ordinary Environment function runs,
@@ -9212,7 +9213,9 @@ public final class LispEvaluator {
 		List<LispVal> parts = cons.toList();
 		String type = parts.size() == 3 ? coerceSequenceTypeName(parts.get(2)) : null;
 		if (type == null) {
-			return eval(LispMacroExpander.expandCoerce(cons), env);
+			// A COMPUTED result type: the registry rides along so a designator naming a
+			// user deftype resolves before the family dispatch reads its head.
+			return eval(LispMacroExpander.expandCoerce(cons, true, false, false, this.closRegistry), env);
 		}
 		LispVal value = eval(parts.get(1), env);
 		LispVal fast = coerceSequenceFast(value, type);
@@ -9224,7 +9227,7 @@ public final class LispEvaluator {
 		LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
 		LispVal rebuilt = new LispCons(new LispSymbol(LispNames.COERCE),
 				new LispCons(quoted, new LispCons(parts.get(2), LispNil.INSTANCE)));
-		return eval(LispMacroExpander.expandCoerce((LispCons) rebuilt), env);
+		return eval(LispMacroExpander.expandCoerce((LispCons) rebuilt, true, false, false, this.closRegistry), env);
 	}
 
 	// The literal sequence result type a (coerce x 'type) form names, normalized the way

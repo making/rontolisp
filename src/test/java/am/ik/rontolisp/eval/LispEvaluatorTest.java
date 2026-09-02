@@ -5543,6 +5543,32 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRuntimeTypepResolvesADeftypeAlias() {
+		// A typep DESIGNATOR held in a value resolves a user deftype the way its literal
+		// spelling does, on all four backends: the interpreter re-expands the runtime
+		// dispatch against the live registry, the compile paths normalize the designator
+		// through the injected %deftype-alias resolver first. Chains resolve
+		// (byte-buffer -> octet), an alias inside a COMPOUND specifier resolves through
+		// the compound recursion, and coerce -- whose computed result type ends in this
+		// very dispatch -- follows: an alias of a scalar type answers CLHS's "already of
+		// that type" identity, one of a SEQUENCE type takes its family arm. Every answer
+		// is SBCL 2.2.9's on this program (JvmLispCompilerTest /
+		// WasmLispCompilerIntegrationTest and the runtime-typep-deftype-alias ci-spec
+		// case run the same one), except the trailing unknown name, where the lite model
+		// answers nil rather than signalling.
+		assertThat(evalMulti("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype str () 'string)
+				(defun tp (x ty) (typep x ty))
+				(list (tp 3 'octet) (tp 300 'octet) (tp 3 'byte-buffer) (tp "ab" 'str) (tp 3 'str)
+				      (tp 3 (list 'or 'octet 'null)) (tp "x" (list 'or 'octet 'null))
+				      (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
+				      (typep 3 'octet) (tp 3 'no-such-type))
+				""").print()).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
+	}
+
+	@Test
 	void evalRuntimeElementTypeResolvesADeftypeAlias() {
 		// A deftype ALIAS that arrives as a VALUE resolves the way the literal spelling
 		// does, on all four backends: the interpreter reads the live registry, the
@@ -10983,6 +11009,22 @@ class LispEvaluatorTest {
 				(with-input-from-string (in "")
 				  (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e)))
 				""").print()).isEqualTo("T");
+		// The fourth round: the print family, including a print-object-routed
+		// rendering (the wrap sits OUTSIDE the routing hook on the compile paths).
+		assertThat(evalMulti("""
+				(let* ((s (princ-to-string 12345)) (a s)) (setf (char s 0) #\\X) (list s a))
+				""").print()).isEqualTo("(\"X2345\" \"X2345\")");
+		assertThat(evalMulti("""
+				(let ((s (prin1-to-string 'foo))) (fill s #\\z) s)
+				""").print()).isEqualTo("\"zzz\"");
+		assertThat(evalMulti("""
+				(let ((s (write-to-string 'bar))) (replace s "Q") s)
+				""").print()).isEqualTo("\"QAR\"");
+		assertThat(evalMulti("""
+				(defstruct t600pt x)
+				(defmethod print-object ((p t600pt) s) (format s "<pt ~a>" (t600pt-x p)))
+				(let* ((s (princ-to-string (make-t600pt :x 7))) (a s)) (setf (char s 0) #\\[) (list s a))
+				""").print()).isEqualTo("(\"[pt 7>\" \"[pt 7>\")");
 	}
 
 	@Test

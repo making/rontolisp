@@ -12171,9 +12171,27 @@ class JvmLispCompilerTest {
 				(print (let ((s (copy-seq "abc"))) (eq s (coerce s 'string))))
 				(print (with-input-from-string (in "")
 				  (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e))))
+				(let* ((s (princ-to-string 12345)) (a s)) (setf (char s 0) #\\X) (print (list s a)))
+				(let ((s (prin1-to-string 'foo))) (fill s #\\z) (print s))
+				(let ((s (write-to-string 'bar))) (replace s "Q") (print s))
 				""")).isEqualTo(
 				"(\"xBC\" \"xBC\")\n\"XYcd\"\n\"99\"\n(\"Zi\" \"Zi\")\n(\"Jello\" \"Jello\")\n(\"Foo!Bar\" \"Foo!Bar\")"
-						+ "\n(\"xb\" \"xb\")\n(\"xBC\" \"xBC\")\n(\"xb\" \"xb\")\n(\"Zbcd\" \"Zbcd\")\nT\nT");
+						+ "\n(\"xb\" \"xb\")\n(\"xBC\" \"xBC\")\n(\"xb\" \"xb\")\n(\"Zbcd\" \"Zbcd\")\nT\nT"
+						+ "\n(\"X2345\" \"X2345\")\n\"zzz\"\n\"QAR\"");
+	}
+
+	@Test
+	void compileAPrintObjectRoutedPrincToStringResultHasWritableIdentity() throws Exception {
+		// The fourth round's wrap sits OUTSIDE the print-object routing hook: a
+		// princ-to-string that renders through a user method answers the same mutable
+		// identity as the unrouted one, and the ~a piece INSIDE the method (a
+		// %princ-piece form) is not the value the program receives.
+		assertThat(compileAndRun("""
+				(defstruct t600pt x)
+				(defmethod print-object ((p t600pt) s) (format s "<pt ~a>" (t600pt-x p)))
+				(let* ((s (princ-to-string (make-t600pt :x 7))) (a s)) (setf (char s 0) #\\[) (print (list s a)))
+				(let ((s (prin1-to-string (make-t600pt :x 8)))) (fill s #\\-) (print s))
+				""")).isEqualTo("(\"[pt 7>\" \"[pt 7>\")\n\"------\"");
 	}
 
 	@Test
@@ -14476,6 +14494,24 @@ class JvmLispCompilerTest {
 						((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
 						(T (SIMPLE-VECTOR 4) NIL)
 						(7 #\\z A)""");
+	}
+
+	@Test
+	void compileRuntimeTypepResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's evalRuntimeTypepResolvesADeftypeAlias, and
+		// the same program: a typep designator held in a VALUE resolves the user deftype
+		// it names, through the injected %deftype-alias resolver the runtime dispatch
+		// normalizes with. A computed coerce result type rides the same resolution.
+		assertThat(compileAndRun("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype str () 'string)
+				(defun tp (x ty) (typep x ty))
+				(print (list (tp 3 'octet) (tp 300 'octet) (tp 3 'byte-buffer) (tp "ab" 'str) (tp 3 'str)
+				             (tp 3 (list 'or 'octet 'null)) (tp "x" (list 'or 'octet 'null))
+				             (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
+				             (typep 3 'octet) (tp 3 'no-such-type)))
+				""")).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
 	}
 
 	@Test

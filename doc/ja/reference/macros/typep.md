@@ -21,7 +21,7 @@
   (list (length s) (typep s '(string 4)) (typep s '(string 1)))) ; => (1 T NIL)
 ```
 
-実行時に計算された指定子もサポートされ、受け付ける集合は同じです: アトミックな型名 (登録済みのクラス / 構造体 / コンディション、または組み込みの型名)、クラスメタオブジェクト ([`find-class`](../functions/find-class.md) や [`class-of`](../functions/class-of.md) が返すものは自分自身のクラスを指し示します)、そして上記の複合指定子です。複合指定子の場合、先頭要素と引数はコンパイル時に畳み込むのではなく指定子の値そのものから読み取られます。したがって `(typep a (type-of a))` はどの配列の形でも `T` を返します。`class` はすべてのクラスメタオブジェクトが属するクラスなので、`(typep x 'class)` が「これはクラスか?」の判定になります。
+実行時に計算された指定子もサポートされ、受け付ける集合は同じです: アトミックな型名 (登録済みのクラス / 構造体 / コンディション、引数なしの [`deftype`](deftype.md) 名、または組み込みの型名)、クラスメタオブジェクト ([`find-class`](../functions/find-class.md) や [`class-of`](../functions/class-of.md) が返すものは自分自身のクラスを指し示します)、そして上記の複合指定子です。複合指定子の場合、先頭要素と引数はコンパイル時に畳み込むのではなく指定子の値そのものから読み取られます。したがって `(typep a (type-of a))` はどの配列の形でも `T` を返します。`class` はすべてのクラスメタオブジェクトが属するクラスなので、`(typep x 'class)` が「これはクラスか?」の判定になります。
 
 ```lisp
 (typep 5 '(unsigned-byte 8)) ; => T
@@ -34,6 +34,14 @@
 ```lisp
 (let ((a (make-array 4)))
   (list (type-of a) (typep a (type-of a)))) ; => ((SIMPLE-VECTOR 4) T)
+```
+
+`deftype` の名前は、呼び出し位置に直接綴られていても変数に保持されていても、また複合指定子の内側にあっても解決されます。計算された結果型を持つ [`coerce`](../functions/coerce.md) も同じように解決します。
+
+```lisp
+(deftype octet () '(unsigned-byte 8))
+(let ((ty 'octet))
+  (list (typep 3 ty) (typep 300 ty) (typep 3 (list 'or ty 'null)))) ; => (T NIL T)
 ```
 
 ```lisp

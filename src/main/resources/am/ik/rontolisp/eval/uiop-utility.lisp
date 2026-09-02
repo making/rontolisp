@@ -28,7 +28,7 @@
    (lambda (%nie-c %nie-s)
      (write-string "Not (currently) implemented on rontolisp: " %nie-s)
      (write-string
-      (princ-to-string (uiop/utility::%not-implemented-functionality %nie-c))
+      (%princ-piece (uiop/utility::%not-implemented-functionality %nie-c))
       %nie-s)
      (let ((%nie-fc (uiop/utility::%not-implemented-format-control %nie-c)))
        (when %nie-fc

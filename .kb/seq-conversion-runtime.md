@@ -20,7 +20,7 @@ convert to list, run the scan, convert back -- `reverse`, `remove`/`-if`/`-if-no
 `position`/`find` family, `count`/`count-if`, `every`/`some`/`notany`/`notevery`,
 `reduce`'s keyword forms). Both spell the conversions as literal `coerce` FORMS, and
 `(coerce x 'list)` / `'string` each inline a whole `map` loop (the string builder
-drags `princ-to-string` and with it the value printer), `'vector` a `make-array` fill
+drags `%princ-piece` (the internal `princ-to-string`) and with it the value printer), `'vector` a `make-array` fill
 loop: **8-10 KB of wasm-GC PER SITE**, measured one-site against a 5,165-byte base at
 `--no-wasi --optimize` (list 8.8 KB, string 10.6 KB, vector 9.3 KB; one `reverse`,
 which carries all three plus a reduce, 23.9 KB).

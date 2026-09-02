@@ -6921,6 +6921,28 @@ public final class LispNames {
 	 */
 	public static final String TYPEP_TAG_TABLE = "%TYPEP-TAG-TABLE";
 
+	/**
+	 * The user-{@code deftype} alias table backing {@link #DEFTYPE_ALIAS_RUNTIME}: an
+	 * alist-like constant, each entry {@code ((alias-name...) expansion)} mapping every
+	 * registered zero-parameter {@code deftype} name (qualified and plain spellings) to
+	 * the type specifier it expands to, alias chains already followed. Emitted as a
+	 * top-level {@code defvar} holding pure quoted data -- the shape the measurement
+	 * chose over one dispatch arm per alias, which cost 10% of a program that merely
+	 * loads alexandria ({@code .kb/array-literals.md}).
+	 */
+	public static final String DEFTYPE_ALIAS_TABLE = "%DEFTYPE-ALIAS-TABLE";
+
+	/**
+	 * The shared alias resolver the compile paths inject beside {@link #TYPEP_RUNTIME}: a
+	 * scan of {@link #DEFTYPE_ALIAS_TABLE} answering the expansion of a type designator
+	 * that names a user {@code deftype}, and the designator itself otherwise. It is what
+	 * makes {@code (typep x ty)} with {@code ty} a VALUE naming an alias answer what the
+	 * literal spelling answers -- the literal one is resolved at expansion time by the
+	 * recognizer that reads it, and a designator held in a variable reaches no
+	 * recognizer.
+	 */
+	public static final String DEFTYPE_ALIAS_RUNTIME = "%DEFTYPE-ALIAS";
+
 	/** The {@code char-name} built-in function. */
 	public static final String CHAR_NAME = "CHAR-NAME";
 
@@ -7297,6 +7319,30 @@ public final class LispNames {
 	 * {@link #PRINC_TO_STRING_RAW}.
 	 */
 	public static final String PRIN1_TO_STRING_RAW = "%PRIN1-TO-STRING";
+
+	/**
+	 * The internal {@code (%princ-piece x)} conversion: {@code princ-to-string} with the
+	 * {@code print-object} / {@code *print-case*} routing the public name has, but
+	 * WITHOUT the mutable-result wrap the public name finishes with on the compile
+	 * backends. It is what the codegen's own expansions build string PIECES with -- the
+	 * {@code format} directives, {@code map 'string}'s per-element accumulator, a
+	 * condition's default message, a computed {@code gensym} suffix -- where the string
+	 * is consumed by an internal append or written straight to a stream and the program
+	 * never receives it. The public {@code princ-to-string} wraps its result into a
+	 * mutable character vector so it carries identity
+	 * ({@code .kb/string-write-runtime.md}, "The fourth round"); a piece built with it
+	 * would pay that conversion once per PIECE, and {@code map 'string} once per
+	 * CHARACTER. Distinct from {@link #PRINC_TO_STRING_RAW}, which does not route through
+	 * {@code print-object} and therefore cannot serve a piece that renders a user
+	 * instance.
+	 */
+	public static final String PRINC_PIECE_INTERNAL = "%PRINC-PIECE";
+
+	/**
+	 * The {@code prin1-to-string} twin of {@link #PRINC_PIECE_INTERNAL}: routed, escaped,
+	 * unwrapped.
+	 */
+	public static final String PRIN1_PIECE_INTERNAL = "%PRIN1-PIECE";
 
 	/**
 	 * The internal {@code (%print-cased x escape)} renderer: the text the printer writes

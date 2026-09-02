@@ -457,7 +457,7 @@ belonged (cl-postgres surfaces every server NOTICE that way).
   reached through a FUNCTION VALUE (`(mapcar #'princ conditions)`) still gets the
   raw conversion, exactly as a `print-object` method does. A `~A` with a COMPUTED
   control string does route, because the renderer's `~a` arm is an ordinary
-  `(princ-to-string ...)` form in the injected `format-render.lisp` defuns and gets
+  `(%princ-piece ...)` form (the internal, unwrapped `princ-to-string`, `.kb/string-write-runtime.md`) in the injected `format-render.lisp` defuns and gets
   rewritten with everything else.
 - **Known lite deviation**: rontolisp's string-designator signal path renders the
   message EAGERLY -- a LITERAL control at expansion time, a RUNTIME one through
@@ -583,7 +583,7 @@ the routing is ON, and the case that made that wasteful -- routing on for a cond
 nothing can print -- is exactly what the two narrowings above now turn off. What
 remains is 58 bytes of defun in a program that genuinely routes, dead-code-eliminated
 by `--optimize` when no print site reaches it; gating it on a pre-Pass-2 scan for
-printing operators is NOT sound, because `format`'s `~A` lowers to `princ-to-string`
+printing operators is NOT sound, because `format`'s `~A` lowers to `%princ-piece` (the internal `princ-to-string`)
 after that scan would have run.
 
 The interpreter still never narrows (`ensureConditionReportRuntimeLoaded` fires from

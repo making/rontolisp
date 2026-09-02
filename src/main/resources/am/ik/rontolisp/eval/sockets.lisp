@@ -249,8 +249,7 @@
           (while (> n 0)
             (setq s
                   (concatenate 'string
-                               (princ-to-string (code-char (+ 48 (mod n 10))))
-                               s))
+                               (%princ-piece (code-char (+ 48 (mod n 10)))) s))
             (setq n (floor n 10)))
           s))))
 
@@ -591,7 +590,7 @@
           ;; off a socket), which the wrapped concatenate's character conversion
           ;; would trap on or re-encode
           (rontolisp::%sock-write-string e
-           (%string-concat s (princ-to-string #\Newline)))
+           (%string-concat s (%princ-piece #\Newline)))
           s)
         (rontolisp::%write-line-raw s stream))))
 

@@ -29,7 +29,7 @@
 
 (defun rontolisp::%url-char-string (code)
   ;; A one-unit string holding the given char code (byte or UTF-16 unit).
-  (princ-to-string (code-char code)))
+  (%princ-piece (code-char code)))
 
 (defun rontolisp::%url-pairs (parts)
   ;; One pass of pairwise concatenation over a list of strings.

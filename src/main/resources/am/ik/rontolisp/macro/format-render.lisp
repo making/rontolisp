@@ -127,7 +127,7 @@
     (cond ((null p) default)
           ((characterp p) (string p))
           ((stringp p) p)
-          (t (princ-to-string p)))))
+          (t (%princ-piece p)))))
 
 (defun %fmt-param-start-p (c)
   (or (%fmt-digitp c) (char= c #\-) (char= c #\') (char= c #\v) (char= c #\V)
@@ -290,8 +290,8 @@
 ;;; as the condition-report path needs: a report must never signal).
 (defun %fmt-dec (n colon comma interval at)
   (if (not (numberp n))
-      (princ-to-string n)
-      (let* ((str (princ-to-string n))
+      (%princ-piece n)
+      (let* ((str (%princ-piece n))
              (neg (< n 0))
              (dig (if neg (subseq str 1) str))
              (grouped (if colon (%fmt-group dig comma interval) dig)))
@@ -300,7 +300,7 @@
 ;;; ~X / ~O / ~B / ~R: digits 0-9 then uppercase A-Z (48 = #\0, 55 = #\A - 10).
 (defun %fmt-radix (n base colon comma interval at)
   (if (not (integerp n))
-      (princ-to-string n)
+      (%princ-piece n)
       (let* ((neg (< n 0)) (m (if neg (- 0 n) n)) (s ""))
         (while (> m 0)
           (let ((d (mod m base)))
@@ -317,7 +317,7 @@
 ;;; 22.3.3.1); the primitive itself takes numbers only.
 (defun %fmt-fixed (x places nbefore at)
   (if (not (numberp x))
-      (princ-to-string x)
+      (%princ-piece x)
       (%fixed-decimal x places (if (null nbefore) 1 nbefore) at)))
 
 (defun %fmt-strip-zeros (s)
@@ -331,7 +331,7 @@
 ;;; digits are identical on every backend.
 (defun %fmt-exp (x places strip at expdigits marker)
   (if (not (numberp x))
-      (princ-to-string x)
+      (%princ-piece x)
       (let* ((v (* x 1.0)) (neg (< v 0.0)) (a (if neg (- 0.0 v) v)))
         (if (= a 0.0)
             (%fmt-exp-zero places strip at expdigits marker)
@@ -361,12 +361,12 @@
            (ovf (>= sc (* pd 10)))
            (sc2 (if ovf pd sc))
            (eef (if ovf (+ ee 1) ee))
-           (s (princ-to-string sc2))
+           (s (%princ-piece sc2))
            (ip (subseq s 0 1))
            (fr0 (subseq s 1))
            (fr (if strip (%fmt-strip-zeros fr0) fr0))
            (eneg (< eef 0))
-           (eabs0 (princ-to-string (if eneg (- 0 eef) eef)))
+           (eabs0 (%princ-piece (if eneg (- 0 eef) eef)))
            (eabs
             (if (> expdigits 0) (%fmt-pad eabs0 expdigits 1 0 "0" t) eabs0))
            (mant (if (= places 0) ip (%fmt-cat (%fmt-cat ip ".") fr))))
@@ -379,12 +379,12 @@
 ;;; default form outside it.
 (defun %fmt-general (x at)
   (if (not (numberp x))
-      (princ-to-string x)
+      (%princ-piece x)
       (let* ((v (* x 1.0)) (a (if (< v 0.0) (- 0.0 v) v)))
         (if (or (= a 0.0) (and (>= a 0.1) (< a 1.0e16)))
             (if at
-                (%fmt-cat (if (< v 0.0) "" "+") (princ-to-string v))
-                (princ-to-string v))
+                (%fmt-cat (if (< v 0.0) "" "+") (%princ-piece v))
+                (%princ-piece v))
             (%fmt-exp v 6 t at 0 #\e)))))
 
 ;;; ~@(: downcase, then upcase the first alphabetic character.
@@ -433,7 +433,7 @@
 (defun %fmt-render (ctrl args)
   (if (stringp ctrl)
       (nth 0 (%fmt-run ctrl 0 (length ctrl) (%fmt-args args) 0))
-      (princ-to-string ctrl)))
+      (%princ-piece ctrl)))
 
 ;;; Renders ctrl[start, end) with the argument cursor at i.
 ;;; Returns (list out i escaped).
@@ -628,7 +628,7 @@
    ;; It takes no prefix parameters, and its modifiers bind variables the printer
    ;; does not honor yet (~:W *print-pretty*, ~@W *print-level*/*print-length*),
    ;; so all three spellings are the one conversion (.kb/format.md).
-   ((char= d #\w) (prin1-to-string v))
+   ((char= d #\w) (%prin1-piece v))
    ((char= d #\c) (%fmt-char-directive v colon at))
    ((char= d #\f) (%fmt-field-fixed v params at))
    ((char= d #\e) (%fmt-field-exp v params at))
@@ -640,7 +640,7 @@
 
 ;;; ~mincol,colinc,minpad,padchar A / S -- padded on the right (left with @).
 (defun %fmt-field-aesthetic (v params colon at d)
-  (let* ((base0 (if (char= d #\s) (prin1-to-string v) (princ-to-string v)))
+  (let* ((base0 (if (char= d #\s) (%prin1-piece v) (%princ-piece v)))
          (base (if (and colon (null v)) "()" base0)))
     (%fmt-pad base (%fmt-int params 0 0) (%fmt-int params 1 1)
               (%fmt-int params 2 0) (%fmt-pad-char params 3 " ") at)))
@@ -673,7 +673,7 @@
          (d (%fmt-nth params 1))
          (base
           (if (null d)
-              (princ-to-string scaled)
+              (%princ-piece scaled)
               (%fmt-fixed scaled (%fmt-int params 1 0) nil at)))
          (padded
           (%fmt-pad base (%fmt-int params 0 0) 1 0 (%fmt-pad-char params 4 " ")
@@ -711,9 +711,9 @@
 ;;; ~C: the glyph, ~@C the #\ reader syntax, ~:C the character name for
 ;;; non-graphic characters.
 (defun %fmt-char-directive (v colon at)
-  (cond (at (prin1-to-string v))
-   (colon (let ((s (prin1-to-string v))) (if (> (length s) 2) (subseq s 2) s)))
-   (t (princ-to-string v))))
+  (cond (at (%prin1-piece v))
+   (colon (let ((s (%prin1-piece v))) (if (> (length s) 2) (subseq s 2) s)))
+   (t (%princ-piece v))))
 
 ;;; ------------------------------------------------------------- composites
 

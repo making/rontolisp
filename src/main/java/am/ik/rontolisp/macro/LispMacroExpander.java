@@ -19159,9 +19159,20 @@ public final class LispMacroExpander {
 			// The defun is position-independent like the subtypep one; its data table
 			// is a top-level defvar and must run before any top-level typep call, so
 			// it goes FIRST (after the dispatcher slots above were filled by index).
-			out.add(runtimeTypepDefun(closRegistry));
+			// The alias table is narrowed to the names the program SPELLS, and the probe
+			// runs before the defuns below join `out` (their own bodies would otherwise
+			// spell the very names they are gated on).
+			java.util.Map<String, LispVal> aliases = narrowedDeftypeAliases(closRegistry, out);
+			out.add(runtimeTypepDefun(closRegistry, !aliases.isEmpty()));
 			out.add(runtimeTypepCompoundDefun());
 			out.addAll(0, typepTagTableForms(closRegistry));
+			if (!aliases.isEmpty()) {
+				// The user-deftype alias resolver the dispatch above normalizes its
+				// designator through, gated on the program registering one: without an
+				// alias the module must compile to the bytes it did before.
+				out.add(deftypeAliasDefun());
+				out.addAll(0, deftypeAliasTableForms(aliases));
+			}
 		}
 		if (runtimeElementTypeAlias && !elementTypeAliasExpansions(closRegistry).isEmpty()) {
 			// The element-type alias resolver, injected once the walk above has
@@ -20571,13 +20582,13 @@ public final class LispMacroExpander {
 				// one call (.kb/format.md).
 				case 'w' -> {
 					flushFmtLiteral(lit, ops);
-					ops.add(new FmtString(fmtCall(LispNames.PRIN1_TO_STRING, args.next(directive))));
+					ops.add(new FmtString(fmtCall(LispNames.PRIN1_PIECE_INTERNAL, args.next(directive))));
 				}
 				case 'a', 's' -> {
 					flushFmtLiteral(lit, ops);
 					LispVal arg = args.next(directive);
-					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1_TO_STRING
-							: LispNames.PRINC_TO_STRING;
+					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1_PIECE_INTERNAL
+							: LispNames.PRINC_PIECE_INTERNAL;
 					LispVal base = fmtCall(op, arg);
 					if (colon) {
 						base = makeIf(arg, base, new LispString("()"));
@@ -20592,7 +20603,7 @@ public final class LispMacroExpander {
 					LispVal arg = args.next(directive);
 					LispVal base = (colon || at)
 							? decimalExpr(arg, colon, fmtCommaChar(params, 2), fmtInterval(params, 3), at)
-							: fmtCall(LispNames.PRINC_TO_STRING, arg);
+							: fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 1, ' '), true);
 					}
@@ -20632,16 +20643,17 @@ public final class LispMacroExpander {
 					LispVal arg = args.next(directive);
 					LispVal base;
 					if (at) {
-						base = fmtCall(LispNames.PRIN1_TO_STRING, arg);
+						base = fmtCall(LispNames.PRIN1_PIECE_INTERNAL, arg);
 					}
 					else if (colon) {
 						// prin1 of a character is "#\name"; dropping the #\ prefix
 						// yields the glyph for graphic characters and the standard
 						// name (Newline, Space, ...) for non-graphic ones.
-						base = fmtCall(LispNames.SUBSEQ, fmtCall(LispNames.PRIN1_TO_STRING, arg), new LispInteger(2));
+						base = fmtCall(LispNames.SUBSEQ, fmtCall(LispNames.PRIN1_PIECE_INTERNAL, arg),
+								new LispInteger(2));
 					}
 					else {
-						base = fmtCall(LispNames.PRINC_TO_STRING, arg);
+						base = fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
 					}
 					ops.add(new FmtString(base));
 				}
@@ -20652,7 +20664,7 @@ public final class LispMacroExpander {
 					LispVal value = (scale == 0) ? arg
 							: fmtCall(LispNames.MUL, arg, new LispDouble(Math.pow(10, scale)));
 					LispVal base = fmtHasParam(params, 1) ? decimalFloatExpr(value, fmtParam(params, 1), null, at)
-							: fmtCall(LispNames.PRINC_TO_STRING, value);
+							: fmtCall(LispNames.PRINC_PIECE_INTERNAL, value);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 4, ' '), true);
 					}
@@ -21071,7 +21083,7 @@ public final class LispMacroExpander {
 		LispSymbol nstr = new LispSymbol("__fmtn");
 		LispSymbol neg = new LispSymbol("__fmtneg");
 		LispSymbol dig = new LispSymbol("__fmtd");
-		LispVal nstrInit = fmtCall(LispNames.PRINC_TO_STRING, arg);
+		LispVal nstrInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
 		LispVal negInit = fmtCall(LispNames.LT, arg, new LispInteger(0));
 		LispVal digInit = makeIf(neg, fmtCall(LispNames.SUBSEQ, nstr, new LispInteger(1)), nstr);
 		LispVal grouped = comma ? groupExpr(dig, commaChar, interval) : dig;
@@ -21083,7 +21095,7 @@ public final class LispMacroExpander {
 		// The same CLHS 22.3.2 rule as radixIntegerExpr, and the same runtime renderer
 		// to agree with (%fmt-dec). Plain ~D is already princ-to-string; this is the
 		// ~:D / ~@D arm, which would otherwise compare a non-number against zero.
-		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.PRINC_TO_STRING, arg));
+		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg));
 	}
 
 	/** Builds the comma-grouping loop over a string of digits. */
@@ -21192,13 +21204,13 @@ public final class LispMacroExpander {
 		LispVal ovfInit = fmtCall(LispNames.GE, sc, new LispInteger(pd1));
 		LispVal sc2Init = makeIf(ovf, new LispInteger(pd), sc);
 		LispVal eefInit = makeIf(ovf, fmtCall(LispNames.ADD, ee, new LispInteger(1)), ee);
-		LispVal sInit = fmtCall(LispNames.PRINC_TO_STRING, sc2);
+		LispVal sInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, sc2);
 		LispVal ipInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(0), new LispInteger(1));
 		LispVal frInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(1));
 		// Exponent suffix: always-signed, magnitude printed as an integer.
 		LispVal eneg = fmtCall(LispNames.LT, eef, new LispInteger(0));
 		LispVal esign = makeIf(eneg, new LispString("-"), new LispString("+"));
-		LispVal eabs = fmtCall(LispNames.PRINC_TO_STRING,
+		LispVal eabs = fmtCall(LispNames.PRINC_PIECE_INTERNAL,
 				makeIf(eneg, fmtCall(LispNames.SUB, new LispInteger(0), eef), eef));
 		if (expDigits > 0) {
 			eabs = padExpr(eabs, new LispInteger(expDigits), new LispString("0"), true);
@@ -21274,7 +21286,7 @@ public final class LispMacroExpander {
 		if (idx < params.size() && !(params.get(idx) instanceof LispNil)) {
 			// A runtime (v) parameter, or a substituted literal that is not a character
 			// (a string, say): the pad is its printed text.
-			return fmtCall(LispNames.PRINC_TO_STRING, params.get(idx));
+			return fmtCall(LispNames.PRINC_PIECE_INTERNAL, params.get(idx));
 		}
 		return new LispString(String.valueOf(def));
 	}
@@ -21400,10 +21412,10 @@ public final class LispMacroExpander {
 		if (expr instanceof LispCons call && call.isProperList() && call.car() instanceof LispSymbol head) {
 			List<LispVal> parts = call.toList();
 			if (parts.size() == 2) {
-				if (LispNames.PRINC_TO_STRING.equals(head.name())) {
+				if (LispNames.PRINC_PIECE_INTERNAL.equals(head.name())) {
 					return fmtCall(LispNames.PRINC, parts.get(1));
 				}
-				if (LispNames.PRIN1_TO_STRING.equals(head.name())) {
+				if (LispNames.PRIN1_PIECE_INTERNAL.equals(head.name())) {
 					return fmtCall(LispNames.PRIN1, parts.get(1));
 				}
 			}
@@ -21549,7 +21561,7 @@ public final class LispMacroExpander {
 		LispVal negInit = fmtCall(LispNames.LT, arg, new LispInteger(0));
 		LispVal mInit = makeIf(neg, fmtCall(LispNames.SUB, new LispInteger(0), arg), arg);
 		// Digit character: 0-9 then uppercase A-Z (48 = '0', 55 = 'A' - 10).
-		LispVal digitChar = fmtCall(LispNames.PRINC_TO_STRING,
+		LispVal digitChar = fmtCall(LispNames.PRINC_PIECE_INTERNAL,
 				fmtCall(LispNames.CODE_CHAR,
 						makeIf(fmtCall(LispNames.LT, d, new LispInteger(10)),
 								fmtCall(LispNames.ADD, new LispInteger(48), d),
@@ -21573,7 +21585,7 @@ public final class LispMacroExpander {
 		// without the same guard here the two paths disagree, and the static one dies
 		// inside the digit loop -- cl-unicode spells a Hangul syllable name with
 		// (format nil "HANGUL SYLLABLE ~X" "GA").
-		return makeIf(fmtCall(LispNames.INTEGERP, arg), digits, fmtCall(LispNames.PRINC_TO_STRING, arg));
+		return makeIf(fmtCall(LispNames.INTEGERP, arg), digits, fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg));
 	}
 
 	/**
@@ -21591,7 +21603,7 @@ public final class LispMacroExpander {
 				fmtCall(LispNames.SUB, new LispDouble(0.0), v), v);
 		LispVal fixedRange = fmtCall(LispNames.OR, fmtCall(LispNames.EQ, a, new LispDouble(0.0)), fmtCall(LispNames.AND,
 				fmtCall(LispNames.GE, a, new LispDouble(0.1)), fmtCall(LispNames.LT, a, new LispDouble(1.0e16))));
-		LispVal fixed = fmtCall(LispNames.PRINC_TO_STRING, v);
+		LispVal fixed = fmtCall(LispNames.PRINC_PIECE_INTERNAL, v);
 		if (plus) {
 			fixed = fmtCall(LispNames.STRING_CONCAT,
 					makeIf(fmtCall(LispNames.LT, v, new LispDouble(0.0)), new LispString(""), new LispString("+")),
@@ -22382,15 +22394,15 @@ public final class LispMacroExpander {
 		LispVal slotMsg = objRef(condVar, 0);
 		LispVal isSimpleWithMessage = listToCons(List.of(new LispSymbol(LispNames.AND),
 				objIs(condVar, SIMPLE_CONDITION_TAGS), callOf(LispNames.STRINGP, slotMsg)));
-		LispVal typeMessage = listToCons(List.of(
-				new LispSymbol(LispNames.STRING_CONCAT), listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
-						new LispString("Condition of type "), listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
-								callOf(LispNames.PRIN1_TO_STRING, tag), new LispInteger(7))))),
+		LispVal typeMessage = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
+				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Condition of type "),
+						listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
+								callOf(LispNames.PRIN1_PIECE_INTERNAL, tag), new LispInteger(7))))),
 				new LispString(" was signalled.")));
 		// A value that is not an instance at all has no tag to name, so it signals as its
 		// own printed representation rather than off the end of a nil tag.
 		LispVal fallback = makeIf(listToCons(List.of(new LispSymbol(LispNames.OBJ_P), condVar)), typeMessage,
-				callOf(LispNames.PRINC_TO_STRING, condVar));
+				callOf(LispNames.PRINC_PIECE_INTERNAL, condVar));
 		LispVal message = makeIf(isSimpleWithMessage, slotMsg, fallback);
 		if (closRegistry.routesConditionReports()) {
 			message = conditionReportOr(condVar, message);
@@ -22416,7 +22428,7 @@ public final class LispMacroExpander {
 		// A runtime SYMBOL datum (the compiled #'error/#'signal/#'warn wrappers forward
 		// the datum only) signals its name as a plain message rather than casting the
 		// symbol as a condition instance.
-		LispVal symbolMessage = callOf(LispNames.PRINC_TO_STRING, condVar);
+		LispVal symbolMessage = callOf(LispNames.PRINC_PIECE_INTERNAL, condVar);
 		LispVal symbolCase;
 		if (warn) {
 			symbolCase = listToCons(List.of(new LispSymbol(internalName), listToCons(
@@ -22446,7 +22458,7 @@ public final class LispMacroExpander {
 				symbolCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 						callOf(LispNames.RUN_HANDLERS_INTERNAL,
 								objNew(simpleTag,
-										List.of(callOf(LispNames.PRINC_TO_STRING, condVar), LispNil.INSTANCE))),
+										List.of(callOf(LispNames.PRINC_PIECE_INTERNAL, condVar), LispNil.INSTANCE))),
 						symbolCase));
 			}
 			else {
@@ -22458,7 +22470,7 @@ public final class LispMacroExpander {
 								callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
 								listToCons(List.of(new LispSymbol(throwInternal), instVar, stringMessage)))));
 				LispSymbol symMsgVar = new LispSymbol(SIGNAL_SYMBOL_MSG_VAR);
-				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_TO_STRING, condVar),
+				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_PIECE_INTERNAL, condVar),
 						makeLet(SIGNAL_INST_VAR, objNew(simpleTag, List.of(symMsgVar, LispNil.INSTANCE)),
 								listToCons(List.of(new LispSymbol(LispNames.PROGN),
 										callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
@@ -23089,6 +23101,28 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent) {
+		return expandCoerce(cons, arraysExist, helpersPresent, false, null);
+	}
+
+	/**
+	 * Like {@link #expandCoerce(LispCons, boolean, boolean)}, but resolves a COMPUTED
+	 * result type that names a user {@code deftype} before the family dispatch reads its
+	 * head, so {@code (coerce '(#\a) ty)} with {@code ty} bound to an alias of
+	 * {@code string} builds a string rather than falling through to the "already of that
+	 * type" arm. A literal result type needs none of this -- {@code quotedSymbolName} /
+	 * {@code quotedCompoundTypeHead} read the spelling the source wrote.
+	 * @param cons the coerce expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @param helpersPresent whether the program defines the conversion trio
+	 * @param aliasResolverPresent whether the program defines
+	 * {@link LispNames#DEFTYPE_ALIAS_RUNTIME} (the compile paths' shared resolver)
+	 * @param closRegistry the live {@code deftype} registry, for the interpreter, which
+	 * has no injected defun to call and spells the resolution inline; null on the compile
+	 * paths
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent,
+			boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new UnsupportedOperationException("coerce expects a value and a result type");
@@ -23135,7 +23169,8 @@ public final class LispMacroExpander {
 			return mvCall(LispNames.FLOAT, parts.get(1));
 		}
 		if (type == null && !(parts.get(2) instanceof LispString)) {
-			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist, helpersPresent);
+			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist, helpersPresent, aliasResolverPresent,
+					closRegistry);
 		}
 		if (helpersPresent) {
 			// The trio member is a one-argument function, so the call IS the one-shot
@@ -23228,10 +23263,12 @@ public final class LispMacroExpander {
 	 * @param typeForm the result-type expression
 	 * @param arraysExist whether a general array can exist in this program
 	 * @param helpersPresent whether the program defines the conversion trio
+	 * @param aliasResolverPresent whether the shared alias resolver defun is present
+	 * @param closRegistry the live registry for the interpreter's inline resolution
 	 * @return the expanded expression
 	 */
 	private static LispVal expandComputedCoerce(LispVal valueForm, LispVal typeForm, boolean arraysExist,
-			boolean helpersPresent) {
+			boolean helpersPresent, boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry) {
 		LispSymbol x = new LispSymbol("__coerce_x");
 		LispSymbol spec = new LispSymbol("__coerce_spec");
 		LispSymbol t = new LispSymbol("__coerce_t");
@@ -23265,8 +23302,30 @@ public final class LispMacroExpander {
 		LispVal body = makeIf(memberOfTypeNames(t, FLOAT_TYPE_NAMES.toArray(new String[0])), mvCall(LispNames.FLOAT, x),
 				listArm);
 		LispVal head = makeIf(callOf(LispNames.CONSP, spec), callOf(LispNames.CAR, spec), spec);
-		LispVal bindings = listToCons(List.of(listToCons(List.of(x, valueForm)), listToCons(List.of(spec, typeForm)),
-				listToCons(List.of(t, head))));
+		// A designator naming a user deftype is resolved into spec BEFORE the head is
+		// read, so an alias of a SEQUENCE type reaches its family arm rather than the
+		// "already of that type" fall-through. Both shapes bind one extra variable only
+		// when the program has an alias to resolve, so every other program expands to
+		// exactly what it did before.
+		List<LispVal> bindingList = new java.util.ArrayList<>();
+		bindingList.add(listToCons(List.of(x, valueForm)));
+		if (aliasResolverPresent) {
+			bindingList.add(listToCons(List.of(spec, mvCall(LispNames.DEFTYPE_ALIAS_RUNTIME, typeForm))));
+		}
+		else if (closRegistry != null
+				&& deftypeAliasResolution(new LispSymbol("__coerce_spec0"), closRegistry) != null) {
+			// The interpreter: no injected defun to call, so the resolution is spelled
+			// inline over a first binding of the raw designator.
+			LispSymbol raw = new LispSymbol("__coerce_spec0");
+			bindingList.add(listToCons(List.of(raw, typeForm)));
+			bindingList.add(listToCons(
+					List.of(spec, java.util.Objects.requireNonNull(deftypeAliasResolution(raw, closRegistry)))));
+		}
+		else {
+			bindingList.add(listToCons(List.of(spec, typeForm)));
+		}
+		bindingList.add(listToCons(List.of(t, head)));
+		LispVal bindings = listToCons(bindingList);
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
 	}
 
@@ -23972,7 +24031,7 @@ public final class LispMacroExpander {
 		LispSymbol g = new LispSymbol("__sd_x");
 		LispVal designatorp = fmtCall(LispNames.OR, callOf(LispNames.STRINGP, g), callOf(LispNames.SYMBOLP, g),
 				callOf(LispNames.CHARACTERP, g));
-		LispVal coerced = callOf(LispNames.PRINC_TO_STRING, g);
+		LispVal coerced = callOf(LispNames.PRINC_PIECE_INTERNAL, g);
 		LispVal signal = mvCall(LispNames.ERROR,
 				new LispString(LispNames.STRING + " expects a string designator, got: ~s"), g);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(g, arg)))),
@@ -24242,7 +24301,7 @@ public final class LispMacroExpander {
 			// %seq-to-string conversion carries the join once for the whole program.
 			accInit = LispNil.INSTANCE;
 			accStep = listToCons(List.of(new LispSymbol(LispNames.CONS),
-					listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), call)), accVar));
+					listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL), call)), accVar));
 			resultForm = joinStringPiecesReversed(accVar);
 		}
 		else if ("LIST".equals(resultType)) {
@@ -25496,7 +25555,10 @@ public final class LispMacroExpander {
 	 *
 	 * The fallback inside {@code %print-object-str} uses the RAW conversions, so nothing
 	 * here re-enters itself. {@code format}'s {@code ~A}/{@code ~S} need no case of their
-	 * own: they lower to {@code princ-to-string}/{@code prin1-to-string}, which do.
+	 * own: they lower to the internal piece conversions {@code %princ-piece} /
+	 * {@code %prin1-piece} ({@link LispNames#PRINC_PIECE_INTERNAL}), which rewrite
+	 * exactly as the two public names do -- the pieces differ from the public names only
+	 * in the mutable-result wrap the backends add AFTER this hook, not in the routing.
 	 *
 	 * <p>
 	 * The SECOND reason to rewrite is a condition's {@code :report}
@@ -25518,9 +25580,11 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		String op = ((LispSymbol) parts.get(0)).name();
-		boolean escape = !LispNames.PRINC.equals(op) && !LispNames.PRINC_TO_STRING.equals(op);
+		boolean escape = !LispNames.PRINC.equals(op) && !LispNames.PRINC_TO_STRING.equals(op)
+				&& !LispNames.PRINC_PIECE_INTERNAL.equals(op);
 		if (LispNames.PRINC_TO_STRING.equals(op) || LispNames.PRIN1_TO_STRING.equals(op)
-				|| LispNames.WRITE_TO_STRING.equals(op)) {
+				|| LispNames.WRITE_TO_STRING.equals(op) || LispNames.PRINC_PIECE_INTERNAL.equals(op)
+				|| LispNames.PRIN1_PIECE_INTERNAL.equals(op)) {
 			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, closRegistry, printCase) : null;
 		}
 		if (parts.size() < 2 || parts.size() > 3) {
@@ -25619,7 +25683,8 @@ public final class LispMacroExpander {
 		}
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, text)));
 		LispVal spelled = makeIf(new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
-				fmtCall(LispNames.PRIN1_TO_STRING, designator), fmtCall(LispNames.PRINC_TO_STRING, designator));
+				fmtCall(LispNames.PRIN1_PIECE_INTERNAL, designator),
+				fmtCall(LispNames.PRINC_PIECE_INTERNAL, designator));
 		LispVal bindings = listToCons(List.of(
 				listToCons(List.of(designator, fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, obj))),
 				listToCons(List.of(text, spelled)), listToCons(List.of(size, fmtCall(LispNames.LENGTH, text)))));
@@ -27108,10 +27173,10 @@ public final class LispMacroExpander {
 		// "#:<prefix><n>" text the interpreter's native computed-prefix gensym prints.
 		// intern turns the assembled name back into a symbol (a name starting with "#:"
 		// IS the uninterned spelling here).
-		LispVal freshSuffix = listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING),
+		LispVal freshSuffix = listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL),
 				listToCons(List.of(new LispSymbol(LispNames.GENSYM), new LispString("")))));
 		LispVal head = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("#:"),
-				listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), prefixForm))));
+				listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL), prefixForm))));
 		return listToCons(List.of(new LispSymbol(LispNames.INTERN),
 				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), head, freshSuffix))));
 	}
@@ -31310,9 +31375,25 @@ public final class LispMacroExpander {
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
 		LispVal body = listToCons(condParts);
+		List<LispVal> prologue = new java.util.ArrayList<>();
 		LispVal normalize = metaobjectNameNormalization(tn, closRegistry, true);
 		if (normalize != null) {
-			body = listToCons(List.of(new LispSymbol(LispNames.PROGN), normalize, body));
+			prologue.add(normalize);
+		}
+		// A designator naming a user deftype is rewritten to its expansion before the
+		// dispatch, so a name held in a VARIABLE decides what its literal spelling
+		// decides. It runs AFTER the metaobject normalization, which turns a class
+		// object into the name this reads.
+		LispVal alias = deftypeAliasResolution(tn, closRegistry);
+		if (alias != null) {
+			prologue.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), tn, alias)));
+		}
+		if (!prologue.isEmpty()) {
+			List<LispVal> prognParts = new java.util.ArrayList<>();
+			prognParts.add(new LispSymbol(LispNames.PROGN));
+			prognParts.addAll(prologue);
+			prognParts.add(body);
+			body = listToCons(prognParts);
 		}
 		return makeLet(v.name(), value, makeLet(tn.name(), typeExpr, body));
 	}
@@ -31724,6 +31805,214 @@ public final class LispMacroExpander {
 		condParts.add(listToCons(List.of(LispTrue.INSTANCE, x)));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.MAKE_ARRAY_ET_ALIAS_INTERNAL), listToCons(List.of(x)), listToCons(condParts)));
+	}
+
+	/**
+	 * EVERY registered zero-parameter {@code deftype} alias, mapped to the type specifier
+	 * it names with alias chains already followed so one hop resolves it. This is the
+	 * table a runtime {@code typep} designator is normalized through: a literal spelling
+	 * is resolved at expansion time by {@link #makeTypeTest}, and one held in a VARIABLE
+	 * reaches no recognizer.
+	 *
+	 * <p>
+	 * {@link #elementTypeAliasExpansions}'s narrowing has no counterpart here: a
+	 * {@code make-array} arm can only tell the six specialized element-type codes apart,
+	 * so an alias naming anything else changes no answer there, while {@code typep}
+	 * decides every type differently from {@code nil}. The narrowing that DOES apply is a
+	 * different question -- which of these names the program can ever hold as a run-time
+	 * value -- and it is {@link #narrowedDeftypeAliases}, which every compile-path caller
+	 * goes through; this raw table is the interpreter's, which has no program to probe.
+	 *
+	 * <p>
+	 * A name the dispatch already decides -- a built-in spelling, a registered class or a
+	 * struct -- is left out: the LITERAL path resolves a {@code deftype} only AFTER those
+	 * three, so normalizing it first would silently reorder the reading.
+	 * @param registry the registry holding the {@code deftype} expansions, or null
+	 * @return alias name to its resolved type specifier, in registration order
+	 */
+	private static java.util.Map<String, LispVal> deftypeAliasExpansions(@Nullable ClosRegistry registry) {
+		return deftypeAliasExpansions(registry, null);
+	}
+
+	private static java.util.Map<String, LispVal> deftypeAliasExpansions(@Nullable ClosRegistry registry,
+			java.util.@Nullable Set<String> spelled) {
+		if (registry == null) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, LispVal> table = new java.util.LinkedHashMap<>();
+		for (String name : registry.deftypeNames()) {
+			if (RUNTIME_TYPEP_BUILTINS.contains(name) || registry.findClass(name) != null
+					|| registry.findStructTag(name) != null) {
+				continue;
+			}
+			if (spelled != null && deftypeAliasSpellings(name).stream().noneMatch(spelled::contains)) {
+				continue;
+			}
+			LispVal spec = registry.findDeftype(name);
+			for (int hop = 0; hop < ELEMENT_TYPE_ALIAS_HOPS && spec instanceof LispSymbol sym; hop++) {
+				LispVal next = registry.findDeftype(sym.name());
+				if (next == null || (next instanceof LispSymbol self
+						&& ClosRegistry.normalize(self.name()).equals(ClosRegistry.normalize(sym.name())))) {
+					break;
+				}
+				spec = next;
+			}
+			if (spec == null || (spec instanceof LispSymbol sym && ClosRegistry.normalize(sym.name()).equals(name))) {
+				continue;
+			}
+			table.put(name, spec);
+		}
+		return table;
+	}
+
+	/**
+	 * Builds the {@code %deftype-alias-table%} data-table forms backing
+	 * {@link #deftypeAliasDefun}: each entry maps the spellings of one registered
+	 * {@code deftype} name to the specifier it expands to. Pure quoted data, emitted
+	 * through {@link #chunkedTableForms}.
+	 */
+	private static List<LispVal> deftypeAliasTableForms(java.util.Map<String, LispVal> aliases) {
+		List<LispVal> entries = new java.util.ArrayList<>();
+		for (java.util.Map.Entry<String, LispVal> alias : aliases.entrySet()) {
+			List<LispVal> nameSyms = new java.util.ArrayList<>();
+			for (String name : deftypeAliasSpellings(alias.getKey())) {
+				nameSyms.add(new LispSymbol(name));
+			}
+			entries.add(listToCons(List.of(listToCons(nameSyms), alias.getValue())));
+		}
+		return chunkedTableForms(LispNames.DEFTYPE_ALIAS_TABLE, entries);
+	}
+
+	/**
+	 * The spellings a runtime designator may carry for one registered {@code deftype}
+	 * name: the canonical (double-colon) one, its single-colon twin and the plain member,
+	 * the set {@link #nameMatchTest} compares a literal designator against.
+	 */
+	private static java.util.LinkedHashSet<String> deftypeAliasSpellings(String name) {
+		java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+		addDesignatorSpellings(names, name);
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn != null) {
+			names.add(qn.member());
+		}
+		return names;
+	}
+
+	/**
+	 * The alias table a program actually needs: {@link #deftypeAliasExpansions} narrowed
+	 * to the names the program SPELLS, then closed under the alias references its own
+	 * entries make.
+	 *
+	 * <p>
+	 * The narrowing is what makes the table affordable, and it is the SECOND measurement
+	 * of this item ({@code .kb/array-literals.md}). The alias set is program-wide and
+	 * alexandria alone registers 43, whose names are long and package-qualified: emitting
+	 * all of them puts 129 symbol spellings into the module, which costs array-operations
+	 * 10.7% of its raw wasm -- the same bill as one dispatch arm per alias, because it is
+	 * the NAMES that cost, not the arms. Narrowed, the same program carries 2 entries and
+	 * pays 1.9%.
+	 *
+	 * <p>
+	 * It is sound for the same reason the funcall-dispatch gate's name probes are: a
+	 * designator symbol a runtime {@code typep} can be handed has to come from somewhere,
+	 * and that somewhere is a spelling in the program. The one shape it does not cover is
+	 * a name built at run time out of characters --
+	 * {@code (typep x (intern (read-line)))} -- which answers {@code nil} on the compile
+	 * paths exactly as it did before this item; the interpreter, which re-expands against
+	 * the live registry and has no program to probe, resolves it.
+	 * @param closRegistry the registry holding the {@code deftype} expansions
+	 * @param program the expanded top-level forms, BEFORE the table's own forms join them
+	 * @return the aliases to emit, in registration order
+	 */
+	private static java.util.Map<String, LispVal> narrowedDeftypeAliases(ClosRegistry closRegistry,
+			List<LispVal> program) {
+		java.util.Set<String> spelled = new java.util.HashSet<>(spelledSymbolNames(program));
+		java.util.Map<String, LispVal> aliases = deftypeAliasExpansions(closRegistry, spelled);
+		// One entry's EXPANSION can name another alias -- alexandria's proper-sequence
+		// is (or proper-list ...) -- and %typep-compound-runtime recurses back into the
+		// dispatch for a sub-specifier, so the table has to be closed under that
+		// reference even when the program never spelled the inner name itself.
+		while (true) {
+			List<LispVal> expansions = new java.util.ArrayList<>(aliases.values());
+			if (!spelled.addAll(spelledSymbolNames(expansions))) {
+				return aliases;
+			}
+			java.util.Map<String, LispVal> grown = deftypeAliasExpansions(closRegistry, spelled);
+			if (grown.size() == aliases.size()) {
+				return grown;
+			}
+			aliases = grown;
+		}
+	}
+
+	/**
+	 * Every symbol name the forms SPELL, anywhere -- operator position, argument, or
+	 * inside quoted data.
+	 * @param forms the forms to walk
+	 * @return every symbol name that appears in them
+	 */
+	private static java.util.Set<String> spelledSymbolNames(List<LispVal> forms) {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		java.util.ArrayDeque<LispVal> pending = new java.util.ArrayDeque<>(forms);
+		while (!pending.isEmpty()) {
+			LispVal form = pending.pop();
+			if (form instanceof LispSymbol sym) {
+				names.add(sym.name());
+			}
+			else if (form instanceof LispCons cons) {
+				pending.push(cons.car());
+				pending.push(cons.cdr());
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * Builds the shared {@code (defun %deftype-alias (x) ...)} the compile paths route a
+	 * runtime {@code typep} designator through before the dispatch: a scan of the
+	 * {@code %deftype-alias-table%} data table answering the expansion of an alias name,
+	 * and the designator itself otherwise. One scan, whatever the alias count -- the
+	 * per-alias data lives in the table, so the defun's size is fixed.
+	 * @return the defun form
+	 */
+	private static LispVal deftypeAliasDefun() {
+		LispSymbol x = new LispSymbol("%dta_x");
+		LispSymbol entry = new LispSymbol("%dta_e");
+		// (dolist (e table x) (if (member x (car e)) (return (car (cdr e))) nil))
+		LispVal scan = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+				listToCons(List.of(entry, new LispSymbol(LispNames.DEFTYPE_ALIAS_TABLE), x)),
+				makeIf(mvCall(LispNames.MEMBER, x, mvCall(LispNames.CAR, entry)), listToCons(
+						List.of(new LispSymbol(LispNames.RETURN), mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry)))),
+						LispNil.INSTANCE)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.DEFTYPE_ALIAS_RUNTIME),
+				listToCons(List.of(x)), scan));
+	}
+
+	/**
+	 * The INTERPRETER's half of the same resolution: a {@code cond} over the designator
+	 * variable answering the expansion of the alias it names, and the variable itself
+	 * otherwise -- the value {@link LispNames#DEFTYPE_ALIAS_RUNTIME} answers on the
+	 * compile paths. The interpreter re-expands the runtime dispatch per call against the
+	 * live registry and has no injected defun to reach, so the table cannot be shared
+	 * with it; the arms cost nothing there because nothing is emitted, which is also why
+	 * this side carries EVERY registered alias where the compile paths carry only the
+	 * ones the program spells ({@link #narrowedDeftypeAliases}).
+	 * @param var the designator variable to resolve
+	 * @param closRegistry the registry holding the {@code deftype} expansions
+	 * @return the resolution expression, or null when the program registers no alias
+	 */
+	private static @Nullable LispVal deftypeAliasResolution(LispSymbol var, ClosRegistry closRegistry) {
+		java.util.Map<String, LispVal> aliases = deftypeAliasExpansions(closRegistry);
+		if (aliases.isEmpty()) {
+			return null;
+		}
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		for (java.util.Map.Entry<String, LispVal> alias : aliases.entrySet()) {
+			condParts.add(listToCons(List.of(nameMatchTest(var, alias.getKey()), quotedValue(alias.getValue()))));
+		}
+		condParts.add(listToCons(List.of(LispTrue.INSTANCE, var)));
+		return listToCons(condParts);
 	}
 
 	/**
@@ -32353,7 +32642,7 @@ public final class LispMacroExpander {
 	 * of registered classes (the inline dispatch overflowed the JVM's 16-bit branch
 	 * offsets at 165 registered classes).
 	 */
-	private static LispVal runtimeTypepDefun(ClosRegistry closRegistry) {
+	private static LispVal runtimeTypepDefun(ClosRegistry closRegistry, boolean resolvesAliases) {
 		LispSymbol v = new LispSymbol("%tp_rv");
 		LispSymbol tn = new LispSymbol("%tp_rt");
 		LispSymbol tag = new LispSymbol("%tp_rtag");
@@ -32409,6 +32698,12 @@ public final class LispMacroExpander {
 		LispVal normalize = metaobjectNameNormalization(tn, closRegistry, false);
 		if (normalize != null) {
 			bodyParts.add(normalize);
+		}
+		// The alias normalization is one CALL here, not one arm per alias: the table is
+		// data (%deftype-alias-table%) and the scan is shared (.kb/array-literals.md).
+		if (resolvesAliases) {
+			bodyParts.add(listToCons(
+					List.of(new LispSymbol(LispNames.SETQ), tn, mvCall(LispNames.DEFTYPE_ALIAS_RUNTIME, tn))));
 		}
 		bodyParts.add(listToCons(condParts));
 		return listToCons(bodyParts);

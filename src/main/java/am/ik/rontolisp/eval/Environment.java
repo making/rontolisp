@@ -4369,6 +4369,19 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.PRIN1_TO_STRING_RAW, args, 1);
 			return new LispString(printString(args.get(0)));
 		}));
+		// The piece aliases the expander builds format directives, map 'string
+		// accumulators and condition messages with: on the compile backends they are the
+		// public conversions minus the mutable-result wrap; here every string is mutable
+		// already, so they ARE the public functions (LispEvaluator's operator seam routes
+		// them through print-object / *print-case* exactly like the public names).
+		env.defineFunction(LispNames.PRINC_PIECE_INTERNAL, new LispFunction(LispNames.PRINC_PIECE_INTERNAL, args -> {
+			requireArgCount(LispNames.PRINC_PIECE_INTERNAL, args, 1);
+			return new LispString(displayString(args.get(0)));
+		}));
+		env.defineFunction(LispNames.PRIN1_PIECE_INTERNAL, new LispFunction(LispNames.PRIN1_PIECE_INTERNAL, args -> {
+			requireArgCount(LispNames.PRIN1_PIECE_INTERNAL, args, 1);
+			return new LispString(printString(args.get(0)));
+		}));
 		// concatenate: the string, list and vector result families (ConcatenateForms is
 		// the shared contract the compilers lower through as well). The registry-less
 		// registration here cannot resolve user deftype aliases; LispEvaluator overrides
