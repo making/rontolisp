@@ -190,7 +190,8 @@ the rule lives in `.todo/123-gpu-acceleration/AccelerateProbe.java` and stays ru
 the rule can be re-checked on new hardware. `RONTOLISP_BLAS` overrides both the search and
 the check (the user has asserted it); `RONTOLISP_BLAS_VERBOSE=1` prints what was bound.
 
-The candidate list, the marker list, `MIN_WORK` and `CRITICAL_FLOP_CEILING` are MIRRORED in
+The candidate list, the marker list, the thread-query table, `MIN_WORK`,
+`CRITICAL_FLOP_CEILING`, `BARRIER_WORK` and `BARRIER_CALLS` are MIRRORED in
 `eval/LinalgBlasKernels` and `codegen/jvm/JvmBlasTemplate` -- the JVM template's bytes must
 stand alone once embedded, so it cannot call the eval class. Change them together. This is
 the duplication `--gpu`'s JVM half was built to avoid (`.kb/gpu.md`); the same treatment
@@ -286,6 +287,27 @@ So on this machine the flag is **1.15x** where it is capped and **5.4x SLOWER** 
 is not. The threads contract below is not advice for polite multi-tenancy; for a decode
 loop it is the difference between a win and a rout, and the docs say so.
 
+**That ratio table is a back-to-back loop, and it flatters the threaded column** (todo-649,
+2026-09-02). OpenBLAS's pthread pool keeps spinning while calls follow each other with
+nothing in between, so a microbenchmark never pays the wake-up a real program does: the
+same 288x288 `#f` gemv is 17.4 us hot and **90.0 us** when ~200 us of unrelated Java work
+sits between calls, against 13.3 us capped. Trust the end-to-end tok/s, not the ratio
+table -- and re-measured on 2026-09-02 the tok/s themselves move with what else the machine
+is doing: at load average 15-40 the same three builds gave 99-110, 123-128 and **9-64**.
+The threaded loss GROWS with contention, so 5.4x is a floor rather than a figure.
+
+**This trap had already been found once, and the finding did not travel.** todo-478 hit
+the identical mechanism over a `ForkJoinPool` and wrote it up as the decisive probe of
+that item -- `.kb/simd-parallel.md`, "Back-to-back calls are not the workload": a shape
+that measured 1.8x at 768x288 back to back measured **0.5-0.9x with a 20-200 us gap**,
+which is this table's error in the same direction and the same order. Its fix is the one
+every tuned BLAS already ships (workers that spin on an epoch and park only after an idle
+millisecond), which is exactly why OpenBLAS's pool flatters a hot loop here. todo-649 re-
+derived all of it from scratch, because that paragraph is indexed under `--parallel` and
+nobody binding a library reads it. The general rule -- a probe whose SHAPE differs from
+the step's shape measures something the program never runs -- is being lifted out to
+`.kb/measurement-probes.md`, and this section is one of its instances.
+
 The interpreter tells the same story from further away, because there the GEMV is a small
 share of a much slower loop. `simd-gemv` (256x256 `#f`, 100 steps), `java -jar`: 8964 ms
 scalar -> 187 ms `--simd` -> 131 ms `--simd --blas` (1 thread) -> 371 ms `--simd --blas`
@@ -335,12 +357,83 @@ wash, and all three failing makes it a loss.
    too, and the library still wins it by 1.3-3.8x at n = 128..1024 on the GB10 (a blocked
    SGEMM against an `ikj` lane loop), so this flag stays the answer where a library exists.
 
+   **What the binary says about it** (todo-649, 2026-09-02). Not setting the count is only
+   half an answer: it leaves the user who reads the page AFTERWARDS with an acceleration
+   flag that made their program four times slower and no diagnostic of any kind. The other
+   half is a note -- and the measurement decided WHERE it fires. One call at a time, with
+   ~200 us of unrelated Java work in between (the shape a real loop has), on dorian:
+
+   | call | flops | 64 threads | 1 thread |
+   |---|---|---|---|
+   | gemv 288x288 (llama2 attention) | 166 K | 90.0 us | **13.3 us** |
+   | gemv 768x288 (its FFN) | 442 K | 51.1 us | **32.3 us** |
+   | gemv 4096x288 | 2.36 M | **48.8 us** | 177.5 us |
+   | gemv 32000x288 (its classifier head) | 18.4 M | **579 us** | 3291 us |
+   | gemm 64x64x64 | 524 K | 20.4 us | **13.6 us** |
+   | gemm 128x128x128 | 4.19 M | **53.2 us** | 66.0 us |
+   | gemm 256x256x256 | 33.6 M | **122 us** | 484 us |
+   | gemm 1024x1024x1024 | 2.15 G | **4738 us** | 29559 us |
+
+   The crossover is between 0.4 and 4 Mflop **and is the same for gemv and gemm**: what
+   loses to a threaded library is a SHORT call, not a particular kernel. Below it the
+   threads cost up to 6.8x; above it they buy up to 6.2x. The probe is
+   `.todo/649-a-blas-build-is-silently-5x-slower-when-the-library-is-threaded/`, kept
+   runnable like `GemvProbe`; its README says why the numbers need a QUIET machine (the
+   same row read 90 us at load 11 and 692 us at load 60). **So a warning at flag time
+   would fire identically on the program it would ruin** -- `examples/ml/blas-matmul.lisp`
+   wants every one of those 64 threads -- and that is why todo-649 did not put one there,
+   against its own first proposal. The note is earned by the CALLS: intercepted products
+   of at most `BARRIER_WORK` = 2^21 flops are counted, and the `BARRIER_CALLS` = 64th one
+   writes a single line to stderr naming the library's variable. 64 is below
+   `examples/ml/simd-gemv.lisp`'s 100 GEMVs -- the smallest shipped program that measurably
+   loses to this (371 ms threaded against 131 ms capped) -- and high enough that a handful
+   of products is not a loop. The thread count comes from an OPTIONAL symbol
+   (`openblas_get_num_threads`, `mkl_get_max_threads` / `MKL_Get_Max_Threads`, an `int()`
+   downcall the metadata already registered), so a library that exports none -- Accelerate,
+   BLIS -- and a library already capped keep today's exact silence. Mirrored, like
+   everything else here, in `eval/LinalgBlasKernels.barrierNote` (pure, and given the
+   running count rather than reading it, so the policy is testable on a machine with no
+   CBLAS) and `codegen/jvm/JvmBlasTemplate.note`.
+
+   **`--blas-threads=N` was considered and declined**, and not for being unworkable:
+   `openblas_set_num_threads(1)` called in process does recover the win (llama2 stories15M,
+   150 tokens, JVM backend: **114-121 tok/s**, against the env var's 123-128 and the
+   threaded default's 30-64 on the same busy machine). It was declined because the remedy
+   already exists on every backend the flag reaches -- the library's own variable, which a
+   compiled `.class` under `java Prog` reads exactly as the interpreter does -- because the
+   flag's own mechanism measured slightly WORSE than that variable (the pool is created and
+   then abandoned), and because delivering it on the compile path would need a numeric
+   constant injected into a template whose bytes are embedded verbatim, a mechanism that
+   does not exist, for a knob whose entire value is saving the user from typing a name the
+   note now prints for them. If a library ever appears whose thread count CANNOT be set
+   from the environment, that is when this gets built.
+
+   **macOS was not measured.** dorian has no Accelerate and no Metal, so every number in
+   this subsection is x86-64 OpenBLAS. Accelerate exports no thread query, so there the
+   note is silent by construction rather than by measurement -- if it turns out to have the
+   same trap, finding it needs an Apple machine (todo-651, which also holds BLIS's
+   `bli_thread_get_num_threads` -- a `dim_t` return, so one more downcall shape rather than
+   one more table row).
+
+   **What the 6-9x column is missing is a thread count, not a correction.** The dorian
+   columns say "1 thread" and "64 threads"; the M4 Max column says neither, and Accelerate
+   picks a count by problem size without being asked. Back-to-back timing flatters the
+   LIBRARY side of the ratio only when that side has a pool to keep warm, so if Accelerate
+   was single-threaded at these shapes the trap does not reach the column and 6-9x stands
+   as measured; if it was threaded, the column is an over-estimate of unknown size. Nothing
+   in the table decides which, and **the 478/649 numbers cannot decide it either** -- those
+   are a parallel-over-serial ratio and this is a library-over-lane-kernel ratio, two
+   different quantities, so the error in one puts no bound on the error in the other.
+   todo-651's first question is therefore not "is the column flattered" but "how many
+   threads was it measured with".
+
 ## Tests
 
 | what | where |
 |---|---|
 | interpreter, needs a library on the machine (`@EnabledIf`) | `eval/LinalgBlasTest` (both packages) |
 | interpreter, must hold on EVERY machine | `eval/LinalgBlasDeclineTest` (both packages) |
+| the thread-barrier note's policy, on every machine | `eval/LinalgBlasDeclineTest.theThreadBarrierNoteIsEarnedByTheProgramShapeAndNotByTheFlag` |
 | JVM emit gate + accelerated + declined + arg-evaluated-once | `codegen/jvm/JvmLinalgBlasAccelCompilerTest` (both packages) |
 | the flag is value-less (the `--simd` dead-flag lesson) | `cli/CliOptionsTest`, `cli/RontoLispCliTest` |
 

@@ -12466,9 +12466,54 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileMakeArrayDisplacedKeywordComboIsACompileError() {
-		assertThatThrownBy(() -> compileAndRun("(print (make-array 3 :displaced-to (make-array 5) :fill-pointer 2))"))
+		// Only :initial-element / :initial-contents are refused beside :displaced-to (the
+		// view owns no storage to initialize); :fill-pointer / :adjustable are legal --
+		// compileADisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag below.
+		assertThatThrownBy(
+				() -> compileAndRun("(print (make-array 3 :displaced-to (make-array 5) :initial-element 0))"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("cannot be combined");
+	}
+
+	@Test
+	void compileADisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				       (v (make-array 4 :displaced-to b :displaced-index-offset 1 :fill-pointer 2)))
+				  (print (list (length v) (fill-pointer v) (array-has-fill-pointer-p v)
+				               (adjustable-array-p v) (array-dimensions v) (array-total-size v)
+				               (aref v 3) v (multiple-value-list (array-displacement v))))
+				  (vector-push 99 v)
+				  (print (list (length v) b v))
+				  (print (list (vector-pop v) (length v))))
+				""")).isEqualTo("""
+				(2 2 T NIL (4) 4 50 #(20 30) (#(10 20 30 40 50 60) 1))
+				(3 #(10 20 30 99 50 60) #(20 30 99))
+				(99 2)""");
+	}
+
+	@Test
+	void compileAFullDisplacedViewUndisplacesWhenItGrows() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				       (v (make-array 4 :displaced-to b :displaced-index-offset 1
+				                        :adjustable t :fill-pointer 2)))
+				  (vector-push-extend 100 v)
+				  (vector-push-extend 101 v)
+				  (vector-push-extend 102 v)
+				  (print (list (length v) (array-total-size v)
+				               (multiple-value-list (array-displacement v)) v b)))
+				(let* ((s (copy-seq "abcdef"))
+				       (sv (make-array 4 :element-type 'character :displaced-to s
+				                         :displaced-index-offset 1 :fill-pointer 2)))
+				  (vector-push #\\Z sv)
+				  (vector-push-extend #\\Y sv)
+				  (vector-push-extend #\\X sv)
+				  (print (list sv s (stringp sv) (array-displacement sv) (length sv)
+				               (array-total-size sv))))
+				""")).isEqualTo("""
+				(5 8 (NIL 0) #(20 30 100 101 102) #(10 20 30 100 101 60))
+				("bcZYX" "abcZYf" T NIL 5 8)""");
 	}
 
 	@Test

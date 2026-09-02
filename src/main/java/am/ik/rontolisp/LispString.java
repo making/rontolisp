@@ -52,13 +52,17 @@ public final class LispString implements LispVal {
 
 	// The displacement target (make-array :displaced-to), or null when the string owns
 	// its buffer. A view owns no buffer (chars is the shared empty array): every access
-	// walks the chain through storage()/base(). A view has no fill pointer and is not
-	// adjustable, so its length is its dimension (viewLength).
-	@Nullable private final LispString displacedTo;
+	// walks the chain through storage()/base(). A view MAY carry a fill pointer and the
+	// :adjustable flag (CLHS forbids only :initial-element beside :displaced-to), so its
+	// CAPACITY is its dimension (viewLength) while its LENGTH is the fill pointer when
+	// one is present. The two fields below are cleared in place when a full
+	// fill-pointered view grows: vector-push-extend un-displaces rather than running off
+	// the end of someone else's buffer, exactly as SBCL does.
+	@Nullable private LispString displacedTo;
 
-	private final int displacedOffset;
+	private int displacedOffset;
 
-	private final int viewLength;
+	private int viewLength;
 
 	/**
 	 * Creates a string with the given content. Each Unicode code point of {@code value}
@@ -100,10 +104,26 @@ public final class LispString implements LispVal {
 	 * @param length the view's length in characters
 	 */
 	public LispString(LispString target, int offset, int length) {
+		this(target, offset, length, -1, false);
+	}
+
+	/**
+	 * Creates a VIEW carrying a fill pointer and/or the {@code :adjustable} flag. The
+	 * view still owns no storage; {@code length} is its CAPACITY (its one dimension) and
+	 * {@code fillPointer} its active length.
+	 * @param target the string supplying the storage
+	 * @param offset the character index in {@code target} where the view starts
+	 * @param length the view's capacity in characters
+	 * @param fillPointer the active length (in code points), or -1 for no fill pointer
+	 * @param adjustable whether the view was created {@code :adjustable}
+	 */
+	public LispString(LispString target, int offset, int length, int fillPointer, boolean adjustable) {
 		this.chars = NO_CHARS;
 		this.displacedTo = target;
 		this.displacedOffset = offset;
 		this.viewLength = length;
+		this.fillPointer = fillPointer;
+		this.adjustable = adjustable;
 	}
 
 	/**
@@ -233,12 +253,6 @@ public final class LispString implements LispVal {
 		return offset;
 	}
 
-	private void rejectView(String operation) {
-		if (this.displacedTo != null) {
-			throw new IllegalStateException(operation + " is not available on a displaced string view");
-		}
-	}
-
 	/**
 	 * Returns the current content of the string as a Java {@code String}: the active
 	 * prefix when a fill pointer is present, the whole buffer otherwise. Reassembled from
@@ -248,7 +262,7 @@ public final class LispString implements LispVal {
 	 */
 	public String value() {
 		if (this.displacedTo != null) {
-			return new String(this.storage().chars, this.base(), this.viewLength);
+			return new String(this.storage().chars, this.base(), this.length());
 		}
 		int end = this.fillPointer >= 0 ? this.fillPointer : this.chars.length;
 		return new String(this.chars, 0, end);
@@ -291,10 +305,10 @@ public final class LispString implements LispVal {
 	 * @return the code-point length
 	 */
 	public int length() {
-		if (this.displacedTo != null) {
-			return this.viewLength;
+		if (this.fillPointer >= 0) {
+			return this.fillPointer;
 		}
-		return this.fillPointer >= 0 ? this.fillPointer : this.chars.length;
+		return this.displacedTo != null ? this.viewLength : this.chars.length;
 	}
 
 	/**
@@ -347,9 +361,9 @@ public final class LispString implements LispVal {
 	 * @param fillPointer the new active length (0..capacity, in code points)
 	 */
 	public void setFillPointer(int fillPointer) {
-		this.rejectView("setting a fill pointer");
-		if (fillPointer < 0 || fillPointer > this.chars.length) {
-			throw new IllegalArgumentException("fill pointer " + fillPointer + " out of range 0.." + this.chars.length);
+		int capacity = this.capacity();
+		if (fillPointer < 0 || fillPointer > capacity) {
+			throw new IllegalArgumentException("fill pointer " + fillPointer + " out of range 0.." + capacity);
 		}
 		this.fillPointer = fillPointer;
 	}
@@ -364,9 +378,14 @@ public final class LispString implements LispVal {
 	 * @return the index the code point was stored at
 	 */
 	public int vectorPushExtend(int codePoint, int extension) {
-		this.rejectView("vector-push-extend");
 		if (this.fillPointer < 0) {
 			throw new IllegalStateException("string has no fill pointer");
+		}
+		if (this.fillPointer >= this.capacity()) {
+			// A full DISPLACED view stops being a view: its characters are copied into a
+			// buffer of its own and the displacement is dropped, so the growth never runs
+			// past the end of someone else's buffer (SBCL 2.2.9 does the same).
+			this.undisplace();
 		}
 		if (this.fillPointer >= this.chars.length) {
 			int[] grown = new int[ArrayGrowth.grownCapacity(this.chars.length, extension)];
@@ -378,9 +397,28 @@ public final class LispString implements LispVal {
 			this.chars = grown;
 		}
 		int index = this.fillPointer;
-		this.chars[index] = codePoint;
+		// setCharAt, not this.chars: a view that still fits writes THROUGH to the
+		// target's buffer (its own chars is the shared empty array).
+		this.setCharAt(index, codePoint);
 		this.fillPointer = index + 1;
 		return index;
+	}
+
+	/**
+	 * Copies a view's current characters into a buffer of its own and drops the
+	 * displacement, keeping its capacity, fill pointer and adjustable flag. A no-op for a
+	 * string that owns its buffer already.
+	 */
+	public void undisplace() {
+		if (this.displacedTo == null) {
+			return;
+		}
+		int[] own = new int[this.viewLength];
+		System.arraycopy(this.storage().chars, this.base(), own, 0, this.viewLength);
+		this.displacedTo = null;
+		this.displacedOffset = 0;
+		this.viewLength = 0;
+		this.chars = own;
 	}
 
 	/**
@@ -392,7 +430,7 @@ public final class LispString implements LispVal {
 	 * ({@link ArrayElementTypes#DEFAULT_CHARACTER}) when it was not supplied
 	 */
 	public void adjustCapacity(int newCapacity, int fill) {
-		this.rejectView("adjust-array");
+		this.undisplace();
 		int[] resized = new int[newCapacity];
 		java.util.Arrays.fill(resized, fill);
 		System.arraycopy(this.chars, 0, resized, 0, Math.min(this.chars.length, newCapacity));

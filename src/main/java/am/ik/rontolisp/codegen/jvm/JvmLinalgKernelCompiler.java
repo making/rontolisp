@@ -330,16 +330,28 @@ final class JvmLinalgKernelCompiler {
 			emitAttempt(ctx, gpu, gpuKey, extendedCall ? layout : null, slots, arity, takenBranches);
 		}
 		// The host rungs below read the arguments on the host, and the in-place members
-		// among them write some: under --gpu every argument is materialized first (a
-		// result the device still holds the only copy of comes home), and each array
-		// the member writes is reported BEFORE the write -- here, where only a host rung
-		// can follow, so a device rung that took the member and left the array resident
-		// is not undone (.kb/gpu.md, "The two seams, and what must report through them").
-		// Each
-		// temp is REBOUND to what the guard answers -- the array, or a result stub's
-		// backing -- and the original kept beside it, so that a host rung's answer can be
-		// mapped back onto the caller's own object below (_gpuUnswap).
+		// among them write some: under --gpu an argument a host KERNEL will read is
+		// materialized first (a result the device still holds the only copy of comes
+		// home), and each array the member writes is reported BEFORE the write -- here,
+		// where only a host rung can follow, so a device rung that took the member and
+		// left the array resident is not undone (.kb/gpu.md, "The two seams, and what
+		// must report through them"). Each guarded temp is REBOUND to what the guard
+		// answers -- the array, or a result stub's backing -- and the original kept
+		// beside it, so that a host rung's answer can be mapped back onto the caller's
+		// own object below (_gpuUnswap).
+		//
+		// The MATERIALIZE half is emitted only where a host KERNEL rung follows. A lane
+		// or library kernel reads raw storage past every access hook, so it has to be
+		// handed bytes that are home; the scalar DEFUN does not -- it is compiled Lisp,
+		// and reports each of its own reads and writes through the same guards. For a
+		// member with no lane kernel at all -- the device-only fused tier -- the defun
+		// is the whole fallback, and materializing here would drag home a result whose
+		// FIRST reader is another device member, only for that member to stage it
+		// straight back (2026-09-03). The report half is emitted whatever follows: an
+		// in-place write must reach the library before it happens, whichever rung makes
+		// it.
 		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		boolean hostKernelRung = simd != null || (blas != null && !extendedCall);
 		int[] originals = new int[0];
 		if (gpuOps != null) {
 			MethodrefConstant materialize = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE));
@@ -352,6 +364,13 @@ final class JvmLinalgKernelCompiler {
 				originals[i] = ctx.allocTemp();
 				ctx.emit(Opcode.ALOAD);
 				ctx.emit(slots[i]);
+				if (!writes && !hostKernelRung) {
+					// No guard: the temp and the original are the one value, so the
+					// unswap below is the identity on it.
+					ctx.emit(Opcode.ASTORE);
+					ctx.emit(originals[i]);
+					continue;
+				}
 				ctx.emit(Opcode.DUP);
 				ctx.emit(Opcode.ASTORE);
 				ctx.emit(originals[i]);

@@ -1100,7 +1100,108 @@ straight back: 96 round trips forward, 96 more backward with two operands each. 
 decoder's 48 SELF-attention heads carry `padding + subsequent`, a `(batch length length)`
 mask, which is a suffix -- they take the fused member and copy nothing. Chapter 3's GPT is
 unaffected for the same reason: its mask is `(1 T T)`, whose leading extent-1 axis is
-dropped before the suffix test. Filed as `.todo/650`.
+dropped before the suffix test. Filed as `.todo/650`, and **the round trip was not the
+decline: it was the guard in front of it** -- next section.
+
+### The decline that was only a materialize (todo-650, 2026-09-03)
+
+The 288 round trips came from ONE emitted instruction pair, and removing them needed no
+change to what the device accepts. `JvmLinalgKernelCompiler` emits the `linalg:` call site
+as a chain -- device attempt, then the `--blas` rung, then the `--simd` lane rung, then the
+scalar defun -- and between the device attempt and the host rungs it emitted
+`_gpuMaterialize` over EVERY argument. That guard exists for the LANE and LIBRARY kernels:
+they read raw storage past every access hook, so they have to be handed bytes that are
+home. **The defun does not need it.** It is compiled Lisp, and reports each of its own
+reads and writes through the same guards -- `.kb/gpu.md`, "The two seams", is what makes
+that true.
+
+A device-only member has no lane kernel at ANY flag: the fused tier is `--gpu` and nothing
+else. So for `%la-scaled-masked-softmax` the chain was *device attempt -> materialize five
+arguments -> defun*, and the materialize dragged home a 90 KB score whose FIRST reader is
+`linalg:div` on the device, which staged it straight back. The guard is now emitted only
+where a host KERNEL rung follows it (`simd != null || (blas != null && !extendedCall)`);
+the write report for an in-place member is emitted whatever follows, because that one is
+about correctness. A `--gpu`-only build now carries no guard at any `linalg:` call site at
+all, for the same reason.
+
+The guard is the compile path's alone -- the interpreter never had it, measured below --
+so this is a `-o out.class` / `-o app.jar` finding and the numbers here are compiled ones.
+It is BACKEND-independent: the same emitted chain runs over Metal, whose own A/B of this
+round trip (879 -> 687 downloads a step, 194 -> 178 MB, todo-645's follow-up) was taken on
+JVM class output and is therefore this same guard, not a Metal one.
+
+**Measured on the shared probe**, `.todo/123-gpu-acceleration/transformer-book-shapes.lisp`
+at the book's shapes, `--gpu --simd`, JVM class output, GB10, `STEPS=13` diffed against
+`STEPS=3`, `nsys --trace=cuda`. `WIDEN=1` is the probe's A/B: it gives the source mask the
+score's own shape so every head is ACCEPTED, which is the CEILING a widened `suffixLength`
+could reach.
+
+| per step | declined + guard (before) | ACCEPTED (`WIDEN=1`, the ceiling) | declined, no guard (now) |
+|---|---|---|---|
+| `cuMemcpyDtoH` | 292 copies, 30.8 MB | 4 copies, 4.86 MB | **4 copies, 4.86 MB** |
+| `cuMemcpyHtoD` | 302 copies, 88.7 MB | 15 copies, 63.0 MB | **14 copies, 62.8 MB** |
+| `cuCtxSynchronize` | 204 | 13 | **12** |
+| `cuLaunchKernel` | 6771 | 6771 | **6963** |
+| device kernel time | 294.7 ms | 294.2 ms | **292.0 ms** |
+| 13-step wall (median of 3) | 8.29 s | 7.70 s | **7.70 s** |
+| wall a step | 0.491 s | 0.408 s | **0.416 s** |
+| device busy | 60% | 72% | **70%** |
+
+**The fix lands exactly on the acceptance ceiling.** The four downloads left are the four
+the 2026-08-24 profile counted, and the fourteen uploads are the fourteen this file's table
+above already named one by one; the round trip is gone entirely. What the decline still
+costs is **192 extra launches a step** -- each of the 96 declined chains runs `div`, `where`
+and `softmax` as three device passes instead of one -- and that is not measurable: kernel
+time and wall are the accepted column's, inside the noise. Widening `suffixLength` on top
+of this was measured at `WIDEN=1` against the fixed build and is worth 0.06 s over 13 steps,
+0.8%, inside a +-4% band. **So the mask rule stays as it is** -- and with it
+`JvmGpuTemplate.softmaxMaskLength`, its word-for-word twin on the compile path, and both
+backends' `mask[i % maskLen]` kernels, which a widened rule would have had to grow a stride
+for.
+
+**The INTERPRETER was never affected, and that was measured, not reasoned.** The same
+probe on `java -jar` (`--gpu --simd`, `STEPS=3` diffed against `STEPS=1`) costs **4
+downloads and 14 uploads a step, 12 `cuCtxSynchronize`, 6963 launches** -- BEFORE this
+change as after it, byte for byte the fixed compiled column above, and nothing like the
+292/302/204 the compiled output was paying beside it. So for two weeks
+`java -jar prog.lisp --gpu` issued strictly less traffic on this program than
+`-o prog.class` did, and every `--gpu` copy profile taken on the compiled backend carried
+288 copies the interpreter did not. The interpreter is ~4.5 s a step here against the
+compiled 0.42 (the evaluator, not the device: its kernel time is the same 292 ms), so the
+asymmetry never showed up in a wall.
+
+**That asymmetry is not the duplication `.todo/654` is about.** The two paths did not
+disagree about a RULE -- `suffixLength` and `softmaxMaskLength` both declined this mask,
+identically. They differed in when a host read is answered: the interpreter installs
+`FloatArrayAccessHook` and materializes LAZILY, at the read, through the record's `data()`
+accessor, while its interceptor hands the device `storage()`, which reports nothing -- so a
+declined member applies the captured binding over an operand that is still resident. The
+compile path had no such accessor to hook for a lane kernel that takes a `double[]`
+straight, so it materialized EAGERLY, in front of every host rung, and then in front of a
+rung that was not a lane kernel at all. Two designs for the same guarantee, one of which
+had a case it did not need. It is now the same rule on both.
+
+**The wall here is a forced measurement, not an enqueue one.** Every step ends in
+`torch:item` on the loss, which is a host read of a device result: the step cannot finish
+without a download and a synchronize, so nothing hides behind the launch queue. **And a
+variant with that read removed -- the loss returned unread, `torch:item` only on the last
+step -- profiles IDENTICALLY**: 292/302/204 before and 4/14/12 after, the same counts to
+the copy, because the step's own optimizer and reductions synchronize whatever the caller
+does. Only the wall moves, and it moves inside the noise band (before: 0.491 s a step
+forced against 0.451 unforced; after: 0.416 against 0.421). **So on this program there is
+no enqueue-vs-work ambiguity to fall into** -- which is worth knowing before designing a
+probe for it. That distinction is the one Metal's probes had to learn the hard way
+(todo-643/645, this file's Metal half); on this backend, at this shape, it does not bite.
+
+**The same shape of finding as todo-641, one layer down.** There the upper layer's decision
+was identical on both backends and the LOWER layer's capability differed, so the same symptom
+cost -2.3% on CUDA and 15% on Metal ("The attention scale and mask", above). Here the
+upper layer's decision -- `suffixLength`, which is above `GpuDevice` and therefore identical
+on both backends -- was ALSO not the thing to change: the cost was a guard the JVM backend
+emitted around the decline, which is why Metal's 192 declined downloads a step are the SAME
+192 and go with this change rather than needing a Metal one. **Read a decline's price
+before reading its rule.** That is now three items where the rule looked wrong and the layer
+below it was where the money was.
 
 ## The fused tier (todo-499, 2026-09-02; todo-629 added two members, todo-641 two more, todo-634 two more)
 
@@ -1480,9 +1581,10 @@ rather than a new one, and the driver's JIT of the larger text costs nothing mea
 (the 3-step wall, which is mostly setup, went 5.37 -> 5.22 s). On the CPU the backward
 recomputed `norm`, +28% on layer-norm's backward and nothing else -- fixed as `.todo/644`
 by a `%la-layer-norm-grad` sibling that answers `(dx norm)` from the pass it already makes,
-back to about the pre-fusion time (`.kb/linalg.md` has both measurements). Metal DECLINES
-both members, at both widths, so the module runs the normalization and its two broadcasts
-member by member there exactly as before.
+back to about the pre-fusion time (`.kb/linalg.md` has both measurements). Metal DECLINES both members, at both widths, so the
+module runs the normalization and its two broadcasts member by member there exactly as
+before -- todo-646 built the MSL pair and measured it rather than leaving it a guess, and
+declined it on the step: "Layer-norm's affine on Metal: built, measured, NOT kept" below.
 
 ## The chains left composed (todo-629, 2026-09-02)
 
@@ -2495,6 +2597,82 @@ the GEMM and the GEMV, the fused rows -- is arithmetic on the value itself. `whe
 mask is the only predicate in the library, and the comparison members (`greater`,
 `equal`, ...) PRODUCE masks rather than consuming them, at the operand's own width.
 
+### Layer-norm's affine on Metal: built, measured, NOT kept (todo-646, 2026-09-03)
+
+todo-634 folded `torch:layer-norm`'s `* weight + bias` into the normalization as a
+two-output member pair and built the kernels in `gemm.cu` only; this backend answered
+`false` at both widths, and `.todo/646` was the measurement that decides whether the fold
+pays here. **The MSL pair was written, pinned bit-identical and measured. It is worth a
+quarter of the adjoint PER CALL and nothing at all in the step, and it is not kept.**
+
+**Why the adjoint's decline was so expensive, which the item predicted wrongly.** The item
+expected the forward to be where the money was -- the affine's two extra members are
+broadcast multiplies against a `(len)` operand and the book's `(16384 384)` activation
+clears `MIN_STRIDED_ELEMENTS`, so they ARE device members and the fold removes two memory
+passes and two command buffers. That is right and it is worth half a millisecond. The
+ADJOINT was worth six times that, for a reason nobody named:
+`%la-layer-norm-affine-grad` is spelled over `%la-layer-norm-grad-norm` (todo-644's
+sibling that answers `(dx norm)` from one pass), and **that member has no interception of
+its own on either backend** -- it exists only as a Lisp defun. So the decline landed on
+the defun's own twenty-odd `linalg:` members, among them the `linalg:sum ... :axis` folds
+this backend REFUSES at every size, each of which came home. Same asymmetry todo-643
+measured, one rung further down.
+
+**Per call, at the book's own shapes** (`.todo/123-gpu-acceleration/mtl-layer-norm-affine.lisp`,
+`(16384 384)` `#f`, `--gpu --simd`, JVM class output, M4 Max, 40 reps, best of 4 rounds,
+the whole probe run twice; taken on the tree described below):
+
+| forced home, ms | declined | the fused pair |
+|---|---|---|
+| `%la-layer-norm-affine` | 3.93 / 3.48 | **3.28 / 3.25** |
+| `%la-layer-norm-affine-grad`, no `old` | 13.75 / 13.78 | **10.78 / 9.40** |
+| `%la-layer-norm-affine-grad`, onto `old` | 15.18 / 14.68 | **10.93 / 9.85** |
+| `%la-layer-norm` (untouched, the control) | 2.73 / 2.10 | 2.38 / 2.23 |
+| `%la-layer-norm-grad` (untouched, the control) | 10.33 / 8.05 | 9.08 / 8.48 |
+
+Thirteen layer-norms a step, so that is 45-50 ms of member time a step. **The step does not
+see it** (`gpt-book-shapes-fast.lisp`, `(t23 - t3) / 20` to halve the noise, four rounds
+with the two builds interleaved inside each round):
+
+| | declined | the fused pair |
+|---|---|---|
+| wall a step, the four rounds | 1.663 / 1.649 / 1.698 / 1.873 | 1.623 / 1.645 / 1.760 / 1.882 |
+| wall a step, median | **1.680 s** | **1.702 s** |
+
+A coin flip, and the median falls on the wrong side. **The measured member time is not on
+the critical path**: under asynchronous command buffers the work removed here overlaps
+host work that remains, so removing it buys the step nothing.
+
+**The trap this walked into, recorded because it nearly landed the change.** The FIRST step
+measurement of the same two builds said 1.798 -> 1.633 s, 9.2%, every round beating every
+round. It was taken before `5baaf6ec` ("stop materializing an argument no host kernel is
+going to read") was merged in. That item stops the compiled call site dragging a
+device-only fused member's arguments home before falling through to the defun, which for
+this member was three 25.2 MB downloads a call -- and it took the DECLINING build from
+1.798 to 1.680 s on its own. So the 9.2% was almost entirely the generic fix's, measured
+against a build that did not have it yet, and attributing it here would have been wrong by
+a factor of five. This is CLAUDE.md's semantic-conflict warning in its literal form: two
+changes that each remove the same host round trips, one specific and one general, and the
+general one landed first. **Re-take a step number after every merge that touches the path,
+not only after one that conflicts textually.**
+
+**What would reopen it.** The kernels are correct and the equality held on the first run,
+so this is a decision about worth and not about feasibility. It becomes worth building
+again when the step is DEVICE-bound at these shapes rather than bound by what overlaps --
+a larger batch or model, or after enough of the remaining host members move -- because
+then the 45-50 ms a step stops being slack. The way to check that without writing the
+kernels again is the upper bound (`.kb/measurement-probes.md`): the per-call table above
+already IS the bound, so re-take the step, not the members.
+
+**Checked against `.kb/measurement-probes.md`**: trap 2 by printing both a forced-home and
+an enqueue-only column and deciding on the forced one; trap 3 by taking the step at all,
+which is what caught the `5baaf6ec` attribution -- the probe's operands are
+`defparameter`s and the step's are not; trap 4 does not arise, since neither build
+back-to-backs a call behind a host gap the other does not. Conditions: results forced home
+with one `aref` in the first table and unread in the second, no gap inserted between
+calls, `--simd` on and `RONTOLISP_THREADS` at its default on a 40-core M4 Max, both builds
+compiled from the same tree and interleaved within each round.
+
 ## The interception layer
 
 The flag over the same `linalg:` seam `--simd` opened and `--blas` widened. Read
@@ -2708,6 +2886,65 @@ property the `--simd` and `--blas` bridges have, and the reason the compiled-bac
 give each program a fresh `URLClassLoader`. Each such loader also probes and JIT-loads the
 module again; a real program has one.
 
+### The offer is decided twice, and what pins the two (todo-654, 2026-09-03)
+
+The library travels, but the DECISION to offer a shape to it does not: `eval/LinalgGpu` is
+what the interpreter runs and `codegen/jvm/JvmGpuTemplate` is the copy the compiled program
+carries, and both sit ABOVE `am.ik.gpu`, so neither backend can correct a disagreement
+between them. A shape one accepts and the other declines is a program that runs
+`java -jar` and `-o out.class` down different paths, at the same inputs, with nothing
+failing.
+
+**The pin is `codegen/jvm/GpuOfferDifferentialTest`**, and it is deliberately not thirteen
+per-helper assertions. The two files share thirteen predicates -- twelve under one name each
+(`batchStride`, `bcast`, `bcastShape`, `bcastStrides`, `copyInto`, `foldAxis`, `map`,
+`resident`, `rowMajorStrides`, `sameShape`, `scale`, `zip`) and one under TWO,
+`LinalgGpu.suffixLength` against `JvmGpuTemplate.softmaxMaskLength`, which is why
+`grep -rn suffixLength` reads as if the mask rule were written once. A helper-name net never
+had that pair in it, and thirteen assertions would say nothing about a fourteenth. So the
+question is asked from OUTSIDE both paths instead: one set of operands, each path's own call
+shape, and the two must agree on accept versus decline and, where they accept, answer the
+same bits. The shapes are chosen at the accept BOUNDARY, not for coverage -- a mask that is
+a trailing suffix and one whose middle axis is extent 1 (the `(batch 1 key)` shape .todo/650
+was filed for), an exactly-equal pair, a rank mismatch, a fold on the last axis and one that
+is not, a resident operand and a fresh one, both widths -- and a census assertion fails the
+run if the table did not both accept and decline, which is what stops a machine that turned
+everything down from agreeing vacuously.
+
+**Only one of its two halves runs on a GPU-less machine, and that is a real gap.** The
+member SET differential is device-free: every name the compile path claims
+(`JvmLinalgGpu.qualifiedMembers()`) is bound to a sentinel and handed to
+`LinalgGpu.install`, which OVERRIDES what it accelerates -- a name still bound to the
+sentinel is one the interpreter does not accelerate, and a name the interpreter accelerates
+that the compile path never claimed makes `install` throw with the member in the message. The
+SHAPE half cannot be asked without a device, and the reason is structural rather than a
+choice: on both paths a shape decline and a no-device decline are the same `null`, and the
+compiled bridge fuses `!Gpu.available()` into the same `||` as the shape tests. `Probe.DEVICE`
+is a static final holder and `GpuDevice` is `sealed permits CudaGemm, MetalGemm`, so no test
+can stand a device up to separate the two. Making the shape half CI-visible therefore means a
+say-yes-to-everything `GpuDevice` inside `am.ik.gpu` -- which would have to join `GPU_CLASSES`
+and travel in every compiled program, and which silently answers zeros if it is ever switched
+on by accident. That is its own item, not this one's.
+
+**The thirteen bodies, read against each other.** Four are word-for-word once the two
+representations are allowed for -- `bcastShape`, `bcastStrides`, `rowMajorStrides` and
+`batchStride` (whose declarations sit in a different order and whose arithmetic does not),
+and so is the loop inside `suffixLength` / `softmaxMaskLength`. The rest say the same thing
+differently, always because a `LispFloatArray` carries `dims()` and `storage()` where a
+compiled array carries a `[rank, dim...]` header: `sameShape` compares `Arrays.equals` on one
+side and rank-then-length-then-each-dim on the other; `resident` is one hop of indirection
+apart; `copyInto` passes a `{0, totalSize}` span where the bridge passes
+`{1 + rank, length - 1 - rank}`, which is the same span offset by the header; and `map`,
+`bcast`, `zip`, `scale` and `foldAxis` make the same decisions in the same order with three
+guards the bridge needs and the interpreter does not -- `rank < 1`, `count < 1` and a
+`total + 1 + rank` overflow bound, because a header can describe a rank-0 or empty array. **No
+pair is a different predicate.** The three extra guards can only bite over a rank-0 or
+zero-extent operand, and every tier that reaches them wants a RESIDENT operand, which such an
+array can never become -- nothing uploads one. The same closes the one arithmetic near-miss:
+`suffixLength` answers `0` only when a mask extent is 0, the interpreter declines `< 1` and
+the bridge `< 0`, and a zero extent in the mask forces the matching zero in the operand, which
+both paths decline for having no rows before either sees the mask at all.
+
 ## Tests
 
 | what | where |
@@ -2719,6 +2956,7 @@ module again; a real program has one.
 | the interpreter's interceptor, needs a device | `eval/LinalgGpuTest` |
 | the interpreter's interceptor, every machine | `eval/LinalgGpuDeclineTest` |
 | the compiled interceptor, both halves | `codegen/jvm/JvmLinalgGpuAccelCompilerTest` |
+| the two paths' OFFER, differentially -- the member set on every machine, the shapes on a device | `codegen/jvm/GpuOfferDifferentialTest` |
 | the flag is value-less, the REPL pair, the `.wasm` refusal | `cli/CliOptionsTest`, `cli/RontoLispCliTest` |
 
 **The dead-flag guard is the load-bearing one**, as it is for `--blas`: every numeric

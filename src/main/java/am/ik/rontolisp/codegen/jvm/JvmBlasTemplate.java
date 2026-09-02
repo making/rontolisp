@@ -8,6 +8,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jspecify.annotations.Nullable;
 
@@ -23,10 +24,10 @@ import org.jspecify.annotations.Nullable;
  * {@link JavaBridgeTemplate} this class's bytecode is read from the classpath by
  * {@link JvmBlasRuntimeBuilder}, renamed into the default package, base64-embedded and
  * defined at first use, so the output stays a single self-contained {@code .class} and
- * the bytes must stand alone. The candidate list, the marker rule, the size threshold and
- * the two environment variables are therefore mirrored, and the reasoning behind each of
- * them lives once, in {@code eval/LinalgBlasKernels} and {@code .kb/linalg-blas.md};
- * change them together.
+ * the bytes must stand alone. The candidate list, the marker rule, the size thresholds,
+ * the thread-query table and the two environment variables are therefore mirrored, and
+ * the reasoning behind each of them lives once, in {@code eval/LinalgBlasKernels} and
+ * {@code .kb/linalg-blas.md}; change them together.
  *
  * <p>
  * A packed float array here is the compiled representation: a bare {@code double[]} or
@@ -63,9 +64,19 @@ final class JvmBlasTemplate {
 			{ "bli_info_get_version_str", "BLIS" }, { "ATL_buildinfo", "ATLAS" },
 			{ "nvpl_blas_get_version", "NVIDIA NVPL" }, { "armpl_get_version", "Arm Performance Libraries" } };
 
+	/** How to ask a library its thread count, and what caps it: optional symbols. */
+	private static final String[][] THREAD_QUERIES = {
+			{ "openblas_get_num_threads", "OpenBLAS", "OPENBLAS_NUM_THREADS" },
+			{ "mkl_get_max_threads", "Intel MKL", "MKL_NUM_THREADS" },
+			{ "MKL_Get_Max_Threads", "Intel MKL", "MKL_NUM_THREADS" } };
+
 	private static final long MIN_WORK = 64;
 
 	private static final long CRITICAL_FLOP_CEILING = 1L << 32;
+
+	private static final long BARRIER_WORK = 1L << 21;
+
+	private static final int BARRIER_CALLS = 64;
 
 	private static final ValueLayout.OfInt I = ValueLayout.JAVA_INT;
 
@@ -79,9 +90,20 @@ final class JvmBlasTemplate {
 
 	private static final @Nullable MethodHandle DGEMM, SGEMM, DGEMV, SGEMV, DGEMM_STAGED, SGEMM_STAGED;
 
+	/** What the library said about its thread pool; 0 threads means it would not say. */
+	private static final int THREADS;
+
+	private static final String THREAD_LIBRARY, THREAD_VARIABLE;
+
+	private static final AtomicInteger SHORT_PRODUCTS = new AtomicInteger();
+
+	private static volatile boolean barrierReported;
+
 	static {
 		MethodHandle dgemm = null, sgemm = null, dgemv = null, sgemv = null, dgemmStaged = null, sgemmStaged = null;
 		String description = "no tuned CBLAS found";
+		int threads = 0;
+		String threadLibrary = "", threadVariable = "";
 		try {
 			Linker linker = Linker.nativeLinker();
 			FunctionDescriptor gemmD = FunctionDescriptor.ofVoid(I, I, I, I, I, I, D, P, I, P, I, D, P, I);
@@ -115,6 +137,16 @@ final class JvmBlasTemplate {
 				sgemmStaged = linker.downcallHandle(sgemmSym, gemmF);
 				dgemv = linker.downcallHandle(lookup.find("cblas_dgemv").orElseThrow(), gemvD, critical);
 				sgemv = linker.downcallHandle(lookup.find("cblas_sgemv").orElseThrow(), gemvF, critical);
+				for (String[] query : THREAD_QUERIES) {
+					MemorySegment symbol = lookup.find(query[0]).orElse(null);
+					if (symbol != null) {
+						threads = threadCount(
+								linker.downcallHandle(symbol, FunctionDescriptor.of(ValueLayout.JAVA_INT)));
+						threadLibrary = query[1];
+						threadVariable = query[2];
+						break;
+					}
+				}
 				description = candidate + " (" + identity + ")";
 				break;
 			}
@@ -126,6 +158,9 @@ final class JvmBlasTemplate {
 			sgemv = null;
 			dgemmStaged = null;
 			sgemmStaged = null;
+			threads = 0;
+			threadLibrary = "";
+			threadVariable = "";
 			description = "the foreign function API is unavailable: " + ex;
 		}
 		DGEMM = dgemm;
@@ -134,10 +169,47 @@ final class JvmBlasTemplate {
 		SGEMV = sgemv;
 		DGEMM_STAGED = dgemmStaged;
 		SGEMM_STAGED = sgemmStaged;
+		THREADS = threads;
+		THREAD_LIBRARY = threadLibrary;
+		THREAD_VARIABLE = threadVariable;
 		String verbose = System.getenv("RONTOLISP_BLAS_VERBOSE");
 		if (verbose != null && !verbose.isEmpty()) {
-			System.err.println("rontolisp: --blas " + (dgemm != null ? "bound " : "declined: ") + description);
+			System.err.println("rontolisp: --blas " + (dgemm != null ? "bound " : "declined: ") + description
+					+ (dgemm != null ? ", " + threads + " threads" : ""));
 		}
+	}
+
+	/** The thread count a library will admit to, or 0 when the call itself fails. */
+	private static int threadCount(MethodHandle query) {
+		try {
+			return (int) query.invokeExact();
+		}
+		catch (Throwable ex) {
+			return 0;
+		}
+	}
+
+	/**
+	 * One product against the thread barrier: a threaded library pays a barrier per call
+	 * that a SHORT call cannot amortize, so a loop of small products runs several times
+	 * slower threaded than capped while a large one runs several times faster. The flag
+	 * cannot tell those apart and neither can the machine; the calls can. Says one thing,
+	 * once, and nothing at all on a library that is capped or exports no thread query.
+	 * Mirrors {@code eval/LinalgBlasKernels.barrierNote}; change them together.
+	 */
+	private static void note(long flops) {
+		if (THREADS <= 1 || flops > BARRIER_WORK || barrierReported) {
+			return;
+		}
+		if (SHORT_PRODUCTS.incrementAndGet() != BARRIER_CALLS) {
+			return;
+		}
+		barrierReported = true;
+		System.err.println("rontolisp: warning: --blas: " + BARRIER_CALLS + " matrix products too small to pay for "
+				+ THREAD_LIBRARY + "'s per-call thread barrier, with the library set to " + THREADS
+				+ " threads. A loop of small products -- an LLM decode is one -- can run several times SLOWER"
+				+ " threaded than capped; set " + THREAD_VARIABLE
+				+ "=1 for this program. A large product wants those threads, so the count is left to you.");
 	}
 
 	private static @Nullable String identify(String candidate, SymbolLookup lookup) {
@@ -283,6 +355,7 @@ final class JvmBlasTemplate {
 	// --- the library calls ------------------------------------------------------------
 
 	private static void gemm(double[] a, int oa, double[] b, int ob, double[] c, int oc, int n, int m, int p) {
+		note(2L * n * m * p);
 		try {
 			if (2L * n * m * p <= CRITICAL_FLOP_CEILING) {
 				java.util.Objects.requireNonNull(DGEMM)
@@ -305,6 +378,7 @@ final class JvmBlasTemplate {
 	}
 
 	private static void gemmF(float[] a, int oa, float[] b, int ob, float[] c, int oc, int n, int m, int p) {
+		note(2L * n * m * p);
 		try {
 			if (2L * n * m * p <= CRITICAL_FLOP_CEILING) {
 				java.util.Objects.requireNonNull(SGEMM)
@@ -331,6 +405,7 @@ final class JvmBlasTemplate {
 		// Hoisted rather than written inline: a conditional in an invokeExact argument
 		// list crashes the build's NullAway generics check.
 		int trans = transposed ? TRANS : NO_TRANS;
+		note(2L * rows * cols);
 		try {
 			java.util.Objects.requireNonNull(DGEMV)
 				.invokeExact(ROW_MAJOR, trans, rows, cols, 1.0, slice(a, oa), cols, slice(x, ox), 1, 0.0, slice(y, oy),
@@ -344,6 +419,7 @@ final class JvmBlasTemplate {
 	private static void gemvF(float[] a, int oa, int rows, int cols, float[] x, int ox, float[] y, int oy,
 			boolean transposed) {
 		int trans = transposed ? TRANS : NO_TRANS;
+		note(2L * rows * cols);
 		try {
 			java.util.Objects.requireNonNull(SGEMV)
 				.invokeExact(ROW_MAJOR, trans, rows, cols, 1.0f, slice(a, oa), cols, slice(x, ox), 1, 0.0f,

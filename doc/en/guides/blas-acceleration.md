@@ -52,6 +52,8 @@ A tuned BLAS is **multi-threaded**, which nothing else in rontolisp is: a single
 OPENBLAS_NUM_THREADS=1 rontolisp examples/ml/tiny-llm.lisp --simd --blas
 ```
 
+It does not leave you to find that out afterwards, either. `--blas` asks the library how many threads it will use, and once a program has issued 64 products too small to pay for a barrier it writes one line to standard error naming the variable to set. A program whose products are big enough to want the threads never sees it: on the same 64-core machine a 1024x1024 matrix product is 6x *faster* threaded than capped, so the default is wrong only for the short calls, and only the calls can tell. A library that is already capped, and one with no way to ask (Accelerate exports none), say nothing.
+
 The library blocks and reorders its reduction, so **an accelerated product is close to the portable definition rather than equal to it**, at either width. Over exact inputs (integers, powers of two) the results still match exactly; over inexact ones they differ in the last few ulps -- more at `single-float`, where a GEMV's reduction also accumulates in single precision. This flag is the one acceleration in rontolisp whose numerical answer depends on **which library and which version is installed on the machine**, which is exactly why it is its own flag: an existing `--simd` build computes what it always computed.
 
 ## Which library was bound
@@ -63,7 +65,7 @@ RONTOLISP_BLAS_VERBOSE=1 rontolisp prog.lisp --blas   # print what was bound, or
 RONTOLISP_BLAS=/path/to/libopenblas.so.0 rontolisp prog.lisp --blas   # name one outright
 ```
 
-`RONTOLISP_BLAS` skips both the search and the identification check, so it is also the way to use a tuned build this list cannot name. Both variables are read by a compiled class too, which is how you check a `.class` on the machine that runs it.
+`RONTOLISP_BLAS` skips both the search and the identification check, so it is also the way to use a tuned build this list cannot name. Both variables are read by a compiled class too, which is how you check a `.class` on the machine that runs it. The verbose line also reports the thread count the library admitted to, or `0` when it has no way to say.
 
 ## A runnable example
 
