@@ -516,24 +516,27 @@ Three things had to be decided, and they are the item's whole content:
 - **The gate is the CALL SITE, not the splice.** There is no flag here (same licence as
   the interpreter's natives: nothing reassociates), so the only thing keeping the bridge
   out of a program that does not need it is `JvmLispCompiler`'s scan of the ALREADY-PRUNED
-  program for `JvmGeomKernelCompiler.gateMembers()`. Measured against `(print (geom:volume
+  program for `JvmGeomKernelCompiler.members()`. Measured against `(print (geom:volume
   (geom:box 10)))`: `.class` 141,450 -> 158,245 (**+16,795 B, +11.9%**), because that
-  program does call `geom:mesh`. A program that calls none of the three is **byte-identical**
-  -- verified on `(print (+ 1 2))`, on `(defstruct pt x y)`-plus-print, and on
-  `(print (geom:bounds-extent (geom:bounds (geom:box 10))))`, a geom program that splices
-  the whole library and pays nothing. `--dynamic` is excluded outright: it
+  program does call `geom:mesh`. A program that calls none of them is **byte-identical**
+  -- verified on `(print (+ 1 2))` and on `(defstruct pt x y)`-plus-print. `--dynamic` is
+  excluded outright: it
   skips the pruner (so the scan would see the whole spliced library) and its point is that
   a call site honours a definition replaced at run time, which a kernel over the defun
   would not -- a `--dynamic` geom program is byte-identical too.
-- **`geom::%vertex-extremes` is accelerated but does NOT arm the bridge, and the reason is
-  a pruning measurement.** `LibraryDefunPruner` keys a definition by NAME and `geom:bounds`
-  is both a `defclass` (an unkeyed root) and a `defun`, so the class keeps the function,
-  which keeps `geom::%solid-bounds`, which keeps `geom::%vertex-extremes` -- **in every
-  program that splices geom**, `(print (geom:vec3 1 2 3))` included. A gate naming it would
-  be a gate on the splice. The other three have no class twin. (This also dates the
-  "Pruning" section below: a `(print (geom:volume (geom:box 10)))` class carries `bounds`,
-  `%solid-bounds`, `%vertex-extremes` and `bounds-union` as well as the sixteen listed
-  there. The collision is todo-601.)
+- **All four members arm the bridge since todo-601 (2026-09-02).**
+  `geom::%vertex-extremes` used to be accelerated without arming anything, because
+  `LibraryDefunPruner` counted a `defclass` header's own name as a function reference and
+  `geom:bounds` is both a `defclass` and a `defun`: the class kept the function, which kept
+  `geom::%solid-bounds`, which kept `geom::%vertex-extremes` -- in EVERY program that
+  spliced geom, `(print (geom:vec3 1 2 3))` included -- so a gate naming it would have been
+  a gate on the splice. The pruner now walks a class header by POSITION
+  (`.kb/library-defun-pruning.md`, "A class header is not a call site"), so
+  `%vertex-extremes` survives pruning only where something calls it, and it is a call site
+  like the other three. What that buys: `(print (geom:bounds (geom:box 10)))`, which used
+  to get no acceleration at all, now carries the bridge -- `.class` 155,877 -> 172,676
+  (+16,799 B), the same bridge `geom:mesh` pays for. `(print (geom:vec3 1 2 3))` still
+  carries none.
 - **Bit-identity is pinned against the DEFUN, in the same artifact.** `JvmLispCompiler`
   gained a package-private `setGeomKernels(false)` -- the interpreter's `LispEvaluator`
   twin, and for the same reason: it is the oracle
@@ -772,13 +775,18 @@ make-transform, %build-solid, %solid-of-vertices, mesh, %facet-normal, box, volu
 the generated accessors) and none of cylinder / cone / sphere / torus / revolution /
 extrusion / wireframe / surface-area / centroid.
 
-**Re-measured 2026-08-31, and `bounds` is NOT among the dropped ones any more**: that
-same program also carries `bounds`, `geom::%solid-bounds`, `geom::%vertex-extremes` and
-`bounds-union`, and so does `(print (geom:vec3 1 2 3))`, which touches no solid at all.
-`geom:bounds` is the package's one name that is both a `defclass` and a `defun`, and the
-class form is a root that spells it. That is todo-601; it is what stopped
-`geom::%vertex-extremes` from being usable as an emit gate ("The JVM backend's kernels"
-above).
+**A `defclass` and a `defun` of the same name used to keep each other alive
+(todo-601, re-measured 2026-09-02).** Between 2026-08-31 and the fix, the program above
+ALSO carried `bounds`, `geom::%solid-bounds`, `geom::%vertex-extremes`, `bounds-union`,
+`compose` and `world-transform`, and so did `(print (geom:vec3 1 2 3))`, which touches no
+solid at all -- 14 geom defuns for a program whose only geom call is `vec3`. `geom:bounds`
+is the package's one name that is both a `defclass` and a `defun`, and the class form is a
+root that spelled it. `LibraryDefunPruner` now walks a class header by POSITION, so a
+defining occurrence is not a call
+(`.kb/library-defun-pruning.md`, "A class header is not a call site"); `(print (geom:vec3
+1 2 3))` is back to `vec3` plus the `facets-of` the printer reads, and the sixteen above
+are again what a `volume` program carries. The pin is
+`eval/LibraryDefunPrunerTest#aDefclassDoesNotKeepTheDefunOfTheSameName`.
 
 ## Cross-backend parity
 
