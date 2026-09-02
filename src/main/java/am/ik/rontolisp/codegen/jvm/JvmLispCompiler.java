@@ -1651,12 +1651,20 @@ public final class JvmLispCompiler implements LispCompiler {
 				? JvmSimdRuntimeBuilder.build(cp, thisClass, stringConcat, this.parallelAccel, bridgePackagePrefix)
 				: null;
 
-		// --blas: emit the CBLAS bridge only when the program actually reaches the
-		// linalg: matrix product -- directly, or through the spliced linalg:matmul /
-		// linalg:solve bodies, which call linalg:dot themselves and are part of the
-		// program by the time this scan runs. Orthogonal to --simd: neither implies the
-		// other, and a build with both emits both bridges.
-		boolean usesBlas = this.blasAccel && programUsesSymbol(program, JvmLinalgBlas.QUALIFIED_DOT);
+		// --blas: emit the CBLAS bridge only when the program actually reaches a matrix
+		// product the library takes -- linalg:dot (directly, or through the spliced
+		// linalg:matmul / linalg:solve bodies, which call it themselves and are part of
+		// the program by the time this scan runs), or either vec: GEMV form. The gate has
+		// to name all three: the numeric examples are vec: programs and never mention
+		// linalg:dot, so a gate on the product alone would embed no bridge for exactly
+		// the programs the flag is for. Orthogonal to --simd: neither implies the other,
+		// and a build with both emits both bridges.
+		boolean usesBlas = false;
+		if (this.blasAccel) {
+			for (String member : JvmLinalgBlas.qualifiedMembers()) {
+				usesBlas = usesBlas || programUsesSymbol(program, member);
+			}
+		}
 		final JvmBlasRuntimeBuilder.@Nullable BlasRuntime blasRuntime = usesBlas
 				? JvmBlasRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
 

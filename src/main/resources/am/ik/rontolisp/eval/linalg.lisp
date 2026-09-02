@@ -1396,6 +1396,39 @@
          (acc (if (null old) a1 (linalg:add old a1))))
     (linalg:add (linalg:add (linalg:add acc a2) g-dev) a4)))
 
+(defun linalg::%la-layer-norm-grad-norm (g x eps old)
+  ;; %la-layer-norm-grad's own chain, plus a second return: norm, the (linalg:div dev
+  ;; sd) this pass already builds x's gradient from -- the same member boundary as
+  ;; %la-layer-norm's own answer, and therefore the same bits, so a caller that needs
+  ;; both an input gradient and the forward's normalization (todo-644) gets it without
+  ;; a second seven-pass walk over x. See %la-layer-norm-grad for what each binding is.
+  (let* ((d (array-dimensions x))
+         (ax (- (length d) 1))
+         (n (nth ax d))
+         (mu (linalg:mean x :axis ax :keepdims t))
+         (dev (linalg:sub x mu))
+         (sd
+          (linalg:sqrt
+           (linalg:add (linalg:div
+                        (linalg:sum (linalg:mul dev dev) :axis ax :keepdims t)
+                        n) eps)))
+         (norm (linalg:div dev sd))
+         (g-dev (linalg:div g sd))
+         (g-sd
+          (linalg:sum
+           (linalg:negative (linalg:div (linalg:mul g dev) (linalg:mul sd sd)))
+           :axis ax
+           :keepdims t))
+         (g-s (linalg:div (linalg:div g-sd (linalg:mul 2.0 sd)) n))
+         (g-sq (linalg:add (linalg:zeros-like x) g-s))
+         (a1 (linalg:add (linalg:mul g-sq dev) (linalg:mul g-sq dev)))
+         (g-m2 (linalg:sum (linalg:negative a1) :axis ax :keepdims t))
+         (a2 (linalg:div (linalg:add (linalg:zeros-like x) g-m2) n))
+         (g-mu (linalg:sum (linalg:negative g-dev) :axis ax :keepdims t))
+         (a4 (linalg:div (linalg:add (linalg:zeros-like x) g-mu) n))
+         (acc (if (null old) a1 (linalg:add old a1))))
+    (list (linalg:add (linalg:add (linalg:add acc a2) g-dev) a4) norm)))
+
 (defun linalg::%la-layer-norm-affine (x w b eps)
   ;; The normalization above AND torch:layer-norm's own affine: the broadcast multiply
   ;; by the (len) weight and the broadcast addition of the (len) bias, the two tape
@@ -1406,12 +1439,13 @@
 (defun linalg::%la-layer-norm-affine-grad (g x w eps old)
   ;; Its adjoint, and the one member here that answers TWO arrays -- a two-element list.
   ;; The affine hands the normalization g * weight (the broadcast multiply the tape made)
-  ;; and the WEIGHT the axis-0 folds of g * norm; norm is the forward's own
-  ;; %la-layer-norm of x, which the fused node no longer stores, so this recomputes it.
-  ;; A device answers both from the one pass that recomputes the row statistics anyway.
-  ;; The bias's gradient is the folds of g and needs nothing from here.
-  (list (linalg::%la-layer-norm-grad (linalg:mul g w) x eps old)
-        (linalg:mul g (linalg::%la-layer-norm x eps))))
+  ;; and the WEIGHT the axis-0 folds of g * norm; norm is %la-layer-norm-grad-norm's
+  ;; second return, the SAME (linalg:div dev sd) the forward's %la-layer-norm would
+  ;; answer, read off the one pass this already makes over x rather than recomputed by
+  ;; a second call (todo-644): seven passes down to one, same member boundary, same
+  ;; bits. The bias's gradient is the folds of g and needs nothing from here.
+  (let ((r (linalg::%la-layer-norm-grad-norm (linalg:mul g w) x eps old)))
+    (list (car r) (linalg:mul g (car (cdr r))))))
 
 (defun linalg::%la-dropout-mask (shape p st single)
   ;; The inverted-dropout mask (rand > p) / (1 - p) -- single-float when single is

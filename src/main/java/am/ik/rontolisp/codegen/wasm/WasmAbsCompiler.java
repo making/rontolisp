@@ -26,10 +26,32 @@ final class WasmAbsCompiler {
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		}
 		else {
-			// Integer/ratio path: x < 0 (via _rat_cmp against 0) ? 0 - x : x
 			int tmpSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			// Float path FIRST, even without a literal in the argument form: |x| on a
+			// float is the sign bit cleared, which is what f64.abs and Math.abs both
+			// do. The compare-and-subtract ladder below returns -0.0 unchanged (the
+			// comparison is false), so a signed zero reaching abs through a VARIABLE
+			// used to print differently here than on the interpreter and the JVM.
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.writeUnsignedLeb128(0);
+			ctx.writer.write(Instruction.F64_ABS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.write(Instruction.ELSE);
+			// Integer/ratio path: x < 0 (via _rat_cmp against 0) ? 0 - x : x
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			ctx.writer.write(Instruction.I32_CONST);
@@ -54,6 +76,7 @@ final class WasmAbsCompiler {
 			ctx.writer.write(Instruction.ELSE);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			ctx.writer.write(Instruction.END);
 			ctx.writer.write(Instruction.END);
 		}
 	}

@@ -433,6 +433,41 @@ final class DeviceResidency {
 	}
 
 	/**
+	 * Whether {@code host}'s OWN entry is dirty right now -- the device holds bytes it
+	 * does not -- as opposed to {@link #dirtyCount()}, a process-wide tally that also
+	 * counts whatever garbage an earlier caller's arrays left in the cache until the
+	 * collector reaches them. A test that wants to know about ONE result asks this
+	 * instead of diffing the tally around it.
+	 * @param host the host array (a result's own storage, most often a stub)
+	 * @return {@code true} when {@code host}'s entry is dirty
+	 */
+	boolean dirty(Object host) {
+		if (!this.occupied) {
+			return false;
+		}
+		synchronized (this) {
+			Entry entry = this.entries.get(new Lookup(host));
+			return entry != null && entry.dirty;
+		}
+	}
+
+	/**
+	 * Whether {@code host} (a stub) holds a backing right now -- the per-handle answer
+	 * {@link #backingCount()}'s tally cannot give on its own, for the same reason
+	 * {@link #dirty(Object)} exists next to {@link #dirtyCount()}.
+	 * @param host the stub
+	 * @return {@code true} when a backing array has been allocated for it
+	 */
+	boolean backed(Object host) {
+		if (!this.backed) {
+			return false;
+		}
+		synchronized (this) {
+			return this.backings.get(new Lookup(host)) != null;
+		}
+	}
+
+	/**
 	 * Whether {@code host}'s span has been offered through here before and not written
 	 * since -- and if not, remembers that it has now. The accept-on-second-sight rule of
 	 * the matrix-by-vector product ({@code CudaGemm.gemv}, {@code MetalGemm.gemvF}): a
@@ -473,14 +508,28 @@ final class DeviceResidency {
 		if (entry.pointer == 0) {
 			return;
 		}
+		if (entry.dirty && host != null) {
+			// The backing is allocated BEFORE the entry is let go of: a stub whose entry
+			// is gone and whose backing was never allocated has its bytes nowhere, and
+			// the heap running out here -- an eviction under memory pressure is exactly
+			// when it does -- must leave the copy where it was, resident and dirty, for
+			// the error to propagate over a consistent cache.
+			Object storage;
+			try {
+				storage = storageFor(host, entry.offset, entry.bytes);
+			}
+			catch (OutOfMemoryError ex) {
+				this.entries.put(new Key(host, this.collected), entry);
+				throw ex;
+			}
+			this.bytes -= entry.bytes;
+			this.dirtyCount--;
+			this.flushes.add(new Flush(storage, entry.pointer, entry.offset, entry.bytes));
+			return;
+		}
 		this.bytes -= entry.bytes;
 		if (entry.dirty) {
 			this.dirtyCount--;
-			if (host != null) {
-				this.flushes.add(new Flush(storageFor(host, entry.offset, entry.bytes), entry.pointer, entry.offset,
-						entry.bytes));
-				return;
-			}
 		}
 		this.pending.add(entry.pointer);
 	}
@@ -796,22 +845,7 @@ final class DeviceResidency {
 		boolean cleanLeft = true;
 		this.collectionWanted = false;
 		while (this.bytes > this.budget) {
-			Map.Entry<Object, Entry> victim = null;
-			for (Map.Entry<Object, Entry> slot : this.entries.entrySet()) {
-				Entry entry = slot.getValue();
-				boolean kept = false;
-				for (long pointer : keep) {
-					kept |= pointer != 0 && pointer == entry.pointer;
-				}
-				if (kept || entry.pointer == 0) {
-					continue;
-				}
-				if (cleanLeft && entry.dirty) {
-					continue;
-				}
-				victim = slot;
-				break;
-			}
+			Map.Entry<Object, Entry> victim = victim(keep, cleanLeft);
 			if (victim == null) {
 				if (cleanLeft) {
 					cleanLeft = false;
@@ -826,6 +860,57 @@ final class DeviceResidency {
 			this.entries.remove(victim.getKey());
 			drop(((Key) victim.getKey()).get(), victim.getValue());
 		}
+	}
+
+	/**
+	 * The pool-pressure half of the LRU: drops least-recently-used entries -- clean ones
+	 * before dirty, dirty ones as flushes -- until at least {@code bytes} of spans have
+	 * been let go of, or nothing but the entries in {@code keep} is left. For a device
+	 * whose pool is bounded by the same memory the resident set lives in
+	 * ({@code MetalGemm.take}): the resident set must never be the reason a call
+	 * declines, and neither may the whole of it be flushed into the heap at once.
+	 * @param keep device pointers to leave resident
+	 * @param bytes how many bytes of spans to let go of
+	 * @return the bytes let go of, {@code 0} when nothing could be
+	 */
+	synchronized long evictSome(long[] keep, long bytes) {
+		expunge();
+		long before = this.bytes;
+		long target = this.bytes - bytes;
+		boolean cleanLeft = true;
+		while (this.bytes > target) {
+			Map.Entry<Object, Entry> victim = victim(keep, cleanLeft);
+			if (victim == null) {
+				if (cleanLeft) {
+					cleanLeft = false;
+					continue;
+				}
+				break;
+			}
+			this.entries.remove(victim.getKey());
+			drop(((Key) victim.getKey()).get(), victim.getValue());
+		}
+		this.occupied = !this.entries.isEmpty();
+		return before - this.bytes;
+	}
+
+	/**
+	 * The least recently used entry that is not in {@code keep} and holds memory -- a
+	 * clean one only, when {@code cleanOnly} -- or {@code null}.
+	 */
+	private Map.@Nullable Entry<Object, Entry> victim(long[] keep, boolean cleanOnly) {
+		for (Map.Entry<Object, Entry> slot : this.entries.entrySet()) {
+			Entry entry = slot.getValue();
+			boolean kept = false;
+			for (long pointer : keep) {
+				kept |= pointer != 0 && pointer == entry.pointer;
+			}
+			if (kept || entry.pointer == 0 || (cleanOnly && entry.dirty)) {
+				continue;
+			}
+			return slot;
+		}
+		return null;
 	}
 
 	/**

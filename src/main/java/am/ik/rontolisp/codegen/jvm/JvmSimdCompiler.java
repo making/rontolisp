@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -23,6 +24,13 @@ import am.ik.jvm.Opcode;
  * {@link JvmSimdRuntimeBuilder}), then evaluates the arguments and calls the matching
  * bridge entry point. {@code mean}/{@code norm} are not intercepted directly -- they are
  * accelerated transitively because their spliced bodies call {@code sum}/{@code dot}.
+ *
+ * <p>
+ * The two GEMV members are the exception: {@code vec:matvec} and {@code vec:matvec-into}
+ * have accelerators ABOVE the lane kernel -- the device under {@code --gpu} and a tuned
+ * CBLAS under {@code --blas} -- and neither flag implies {@code --simd}, so their call
+ * site is a guarded chain built by {@link #compileMatvecChain} whenever either of those
+ * two bridges was emitted, with or without this one.
  */
 final class JvmSimdCompiler {
 
@@ -103,7 +111,7 @@ final class JvmSimdCompiler {
 		// program would call without --simd. Only reachable when it is actually there,
 		// at the arity this call site expects -- a shadowed redefinition, say, takes
 		// the ordinary direct-call path instead and forgoes acceleration altogether,
-		// same guard as compileGpuMatvec below.
+		// same guard as compileMatvecChain below.
 		String qualified = PackageRegistry.qualify(LispNames.VEC_PKG, member);
 		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
 		if (defun == null || defun.variadic() || defun.paramCount() != arity) {
@@ -195,67 +203,102 @@ final class JvmSimdCompiler {
 	}
 
 	/**
-	 * The {@code vec:matvec} call site under {@code --gpu}: the device attempt first,
-	 * over temps every branch reads, and on its {@code null} the lane kernel when
-	 * {@code --simd} emitted one (which never declines) or the spliced {@code vec.lisp}
-	 * defun otherwise -- the same chain {@link JvmLinalgKernelCompiler} emits for a
-	 * {@code linalg:} member, here for the one device member outside that package. The
-	 * library declines the FIRST sight of any matrix and every sight of one the program
-	 * writes between calls ({@code .kb/gpu.md}), so the fall-through is the common path
-	 * and has to be exact.
+	 * The {@code vec:matvec} / {@code vec:matvec-into} call site as a CHAIN: the device
+	 * attempt ({@code --gpu}, the allocating form only), then a tuned CBLAS
+	 * ({@code --blas}, {@link JvmBlasTemplate#blasMatvec}), then the lane kernel when
+	 * {@code --simd} emitted one, then the spliced {@code vec.lisp} defun -- all over one
+	 * set of temps, the same shape {@link JvmLinalgKernelCompiler} emits for a
+	 * {@code linalg:} member, here for the two members of {@code vec:} that are a matrix
+	 * product.
+	 *
+	 * <h2>Why the accelerators get their own call site rather than riding on
+	 * {@code --simd}</h2>
+	 *
+	 * The other {@code vec:} kernels are TOTAL -- they accept packed arrays of one width
+	 * and signal on anything else -- so {@link #compile} can emit a bare
+	 * {@code INVOKESTATIC}. A device kernel and a library kernel are PARTIAL, and neither
+	 * flag implies {@code --simd}, so an attempt buried inside the lane bridge would be
+	 * unreachable in a {@code --blas}-only build and would drag the incubator Vector API
+	 * into it besides (the orthogonality {@link JvmBlasRuntimeBuilder} exists for). Hence
+	 * a guarded chain: each accelerator returns {@code null} for what it declines and
+	 * control falls into the rung below, ending at a total rung that always answers. The
+	 * library declines a shape it cannot take and every machine without a tuned CBLAS,
+	 * and the device declines the FIRST sight of any matrix ({@code .kb/gpu.md}), so the
+	 * fall-through is the common path and has to be exact.
 	 */
-	static void compileGpuMatvec(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		Map<String, MethodrefConstant> gpu = Objects.requireNonNull(ctx.gpuOps, "gpu acceleration runtime");
+	static void compileMatvecChain(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		boolean into = LispNames.VEC_MATVEC_INTO.equals(member);
+		int arity = into ? 3 : 2;
 		Map<String, MethodrefConstant> simd = ctx.simdOps;
+		Map<String, MethodrefConstant> blas = ctx.blasOps;
+		// The device takes the allocating form only; the -into form's chain starts at the
+		// library.
+		Map<String, MethodrefConstant> gpu = into ? null : ctx.gpuOps;
+		String blasKey = blas != null ? JvmLinalgBlas.vecKernelKey(member) : null;
 		List<LispVal> args = cons.toList();
-		requireArity(args.size() == 3, "vec:matvec expects 2 arguments");
-		String qualified = PackageRegistry.qualify(LispNames.VEC_PKG, LispNames.VEC_MATVEC);
+		requireArity(args.size() == arity + 1, "vec:" + member + " expects " + arity + " arguments");
+		String qualified = PackageRegistry.qualify(LispNames.VEC_PKG, member);
 		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
-		if (defun == null || defun.variadic() || defun.paramCount() != 2) {
-			// No scalar defun to decline to at this call site (a shadowed vec:matvec,
-			// or a different arity) -- required unconditionally now that the --simd
-			// bridge can itself decline (module missing at runtime, see below): the
-			// ordinary call path is what the program would have run without the flags.
+		if (defun == null || defun.variadic() || defun.paramCount() != arity) {
+			// No scalar defun to decline to at this call site (a shadowed member, or a
+			// different arity) -- required unconditionally, because every rung above can
+			// decline: the ordinary call path is what the program would have run without
+			// the flags.
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
 		// The bridge classes, before their method references resolve.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(gpu.get("init")).index());
-		if (simd != null) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(simd.get("init")).index());
+		if (gpu != null) {
+			emitInit(ctx, gpu);
 		}
-		// Each argument form evaluated exactly once, into a temp.
-		int[] slots = new int[2];
-		for (int i = 0; i < 2; i++) {
+		if (blasKey != null) {
+			emitInit(ctx, Objects.requireNonNull(blas));
+		}
+		if (simd != null) {
+			emitInit(ctx, simd);
+		}
+		// Each argument form evaluated exactly once, into a temp every rung reads.
+		int[] slots = new int[arity];
+		for (int i = 0; i < arity; i++) {
 			JvmExprCompiler.compileExpr(args.get(i + 1), ctx, className);
 			slots[i] = ctx.allocTemp();
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slots[i]);
 		}
 		// r = RontoLispGpuBridge.gpuMatvec(w, x); if (r != null) goto end;
-		for (int slot : slots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slot);
+		List<Integer> deviceBranches = new ArrayList<>();
+		if (gpu != null) {
+			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.MATVEC, slots, deviceBranches);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(gpu.get(JvmGpuRuntimeBuilder.MATVEC)).index());
-		ctx.emit(Opcode.DUP);
-		int taken = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.POP);
-		// ... else the lane kernel, or the defun -- both host reads, so both operands
-		// are materialized first and the rung is handed what the guard answers. Both
-		// answer a fresh vector, never an operand, so nothing is mapped back.
-		for (int slot : slots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slot);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(gpu.get(JvmGpuRuntimeBuilder.MATERIALIZE)).index());
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slot);
+		// Every rung below reads its arguments on the host, so each is materialized first
+		// (a result the device still holds the only copy of comes home); the -into form
+		// WRITES its destination, so that one is reported instead, with the caller's own
+		// object kept beside it so a host rung's answer can be mapped back (_gpuUnswap).
+		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		int destinationOriginal = -1;
+		if (gpuOps != null) {
+			MethodrefConstant materialize = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE));
+			MethodrefConstant report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
+			for (int i = 0; i < arity; i++) {
+				boolean destination = into && i == 0;
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slots[i]);
+				if (destination) {
+					destinationOriginal = ctx.allocTemp();
+					ctx.emit(Opcode.DUP);
+					ctx.emit(Opcode.ASTORE);
+					ctx.emit(destinationOriginal);
+				}
+				ctx.emit(Opcode.INVOKESTATIC);
+				ctx.emitU2(destination ? report.index() : materialize.index());
+				ctx.emit(Opcode.ASTORE);
+				ctx.emit(slots[i]);
+			}
+		}
+		// The host rungs, each answering into the common end below the unswap.
+		List<Integer> hostBranches = new ArrayList<>();
+		if (blasKey != null) {
+			emitAttempt(ctx, Objects.requireNonNull(blas), blasKey, slots, hostBranches);
 		}
 		if (simd != null) {
 			// if (!_simdReady()) goto fallback -- a runtime without jdk.incubator.vector
@@ -266,33 +309,68 @@ final class JvmSimdCompiler {
 			int fallbackBranch = ctx.code.size();
 			ctx.emit(Opcode.IFEQ);
 			ctx.emitU2(0);
-			for (int slot : slots) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slot);
-			}
+			loadAll(ctx, slots);
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(simd.get(LispNames.VEC_MATVEC)).index());
+			ctx.emitU2(Objects.requireNonNull(simd.get(member)).index());
 			int skipFallback = ctx.code.size();
 			ctx.emit(Opcode.GOTO);
 			ctx.emitU2(0);
 			JvmEmitHelper.patchBranch(ctx, fallbackBranch, ctx.code.size());
-			for (int slot : slots) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slot);
-			}
+			loadAll(ctx, slots);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(defun.methodref().index());
 			JvmEmitHelper.patchBranch(ctx, skipFallback, ctx.code.size());
 		}
 		else {
-			for (int slot : slots) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slot);
-			}
+			loadAll(ctx, slots);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(defun.methodref().index());
 		}
-		JvmEmitHelper.patchBranch(ctx, taken, ctx.code.size());
+		for (int branchPos : hostBranches) {
+			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+		}
+		if (destinationOriginal >= 0) {
+			// A host rung answered the destination backing it was handed: answer the
+			// caller's own object instead.
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(destinationOriginal);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slots[0]);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(Objects.requireNonNull(Objects.requireNonNull(gpuOps).get(JvmGpuRuntimeBuilder.UNSWAP)).index());
+		}
+		for (int branchPos : deviceBranches) {
+			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+		}
+	}
+
+	/** Defines a bridge class before any of its method references resolve. */
+	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops) {
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
+	}
+
+	/**
+	 * One partial rung: call the kernel over the temps and jump to the chain's end when
+	 * it answered, leaving the stack as it was found when it declined.
+	 */
+	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String kernelKey,
+			int[] slots, List<Integer> takenBranches) {
+		loadAll(ctx, slots);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(ops.get(kernelKey)).index());
+		ctx.emit(Opcode.DUP);
+		takenBranches.add(ctx.code.size());
+		ctx.emit(Opcode.IFNONNULL);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.POP);
+	}
+
+	private static void loadAll(JvmLispCompiler.Ctx ctx, int[] slots) {
+		for (int slot : slots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slot);
+		}
 	}
 
 	private static void requireArity(boolean ok, String message) {

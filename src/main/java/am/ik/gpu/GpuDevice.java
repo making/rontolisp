@@ -379,9 +379,10 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	/**
 	 * Whether lazy results PAY on this backend -- the measured answer that decides
 	 * whether the interceptors switch them on ({@link Gpu#lazyResultsIfWorthwhile}).
-	 * {@code true} on CUDA (a fifth off the training step, then half); {@code false} on
-	 * Metal, where the same design measured a tie at small shapes and a loss at large
-	 * ones ({@code .kb/gpu.md}, "Lazy results and the resident tier on Metal").
+	 * {@code true} on CUDA (a fifth off the training step, then half), and {@code true}
+	 * on Metal since todo-495 made its command buffers asynchronous under the mode (the
+	 * step at the book's shapes 4.80 -> 1.81 s); it was {@code false} there while every
+	 * call waited ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal").
 	 * Independent of {@link #lazyResults}: an embedder that asks gets the mode on either
 	 * backend.
 	 * @return {@code true} when the interceptors should run with lazy results

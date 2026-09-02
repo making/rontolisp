@@ -2,7 +2,7 @@
 
 The `vec:` package is a set of portable packed-`f64` vector kernels layered on the
 dedicated **packed float-array type** (see the packed float-array constraint in
-`CLAUDE.md` and todo-094). This file covers the `vec:` package and the two
+`CLAUDE.md` and todo-094). This file covers the `vec:` package and its
 acceleration layers; the packed representation itself lives in `LispFloatArray`,
 `JvmFloatArrayRuntimeBuilder`, `WasmArrayCompiler` (the `$farray` struct) and
 `NoGcWasmCompiler` (`F64VEC`).
@@ -225,8 +225,10 @@ on wasm like `signum`'s edge). The design decisions, per backend:
 - **The oracle is each backend's OWN scalar defun** (the emap rule: read widened to f64,
   apply the backend's scalar op, narrow on store). The scalar ops' edges already diverge
   across backends -- interpreter/JVM use `Math.exp/sqrt/abs/signum` and true negation,
-  while wasm's variable-path `abs` is `x < 0 ? 0 - x : x` (keeps `-0.0`), its unary
-  minus is `0 - x` (`(- 0.0)` is `0.0`), its `signum` maps `-0.0`/NaN to `0.0`, and its
+  and since 2026-09-02 wasm's variable-path `abs` and unary minus agree with them
+  (`f64.abs` / `f64.neg` on the branch that has established the operand is a float,
+  replacing `_rat_cmp`'s `x < 0 ? 0 - x : x` and `_rat_sub(0, x)`), while its `signum`
+  still maps `-0.0`/NaN to `0.0`, and its
   `exp`/`log`/`tanh`/`sin`/`cos`/`tan` are the `WasmExpCompiler`/`WasmLogCompiler`/
   `WasmTanhCompiler`/`WasmSinCosCompiler` software approximations (todo-108
   residuals). The one edge where wasm's `exp` is EXACTLY the JVM's is underflow:
@@ -247,9 +249,11 @@ on wasm like `signum`'s edge). The design decisions, per backend:
   correctly rounded), abs (ABS), negative (NEG) and reciprocal (broadcast(1)/v); exp,
   log, tanh and sign stay de-boxed scalar loops (`VectorOperators.EXP` etc. are NOT
   bit-identical to `Math.exp`; the gate is `JvmSimdVectorTemplate.hasLaneForm`). wasm-GC
-  lane-izes sqrt (`f64x2/f32x4.sqrt`), negative (sub-from-splat-0),
-  reciprocal (div-from-splat-1) and abs (`bitselect(0 - v, v, v < 0)` -- NOT
-  `f64x2.abs`, which would map `-0.0` to `0.0` and diverge from the wasm defun); exp,
+  lane-izes sqrt (`f64x2/f32x4.sqrt`), negative (`f64x2/f32x4.neg`),
+  reciprocal (div-from-splat-1) and abs (`f64x2/f32x4.abs`) -- negative was
+  sub-from-splat-0 and abs was `bitselect(0 - v, v, v < 0)` while the wasm defun
+  spelled them that way, and both lane forms moved to the native instruction in the
+  same change that fixed the defun, so the mirror still holds; exp,
   log, tanh, sin, cos, tan and sign walk `_v_get`/`_v_set` element loops emitting the
   defun's exact f64 sequence (`WasmExpCompiler`/`WasmLogCompiler`/`WasmTanhCompiler`/
   `WasmSinCosCompiler`'s constants are package-private for that; the shared raw-f64
@@ -298,6 +302,34 @@ hardcoded constant; the scalar-builtin integration tests are
 `logSoftwareApproximation` / `tanhSoftwareApproximation` /
 `sinCosTanSoftwareApproximation`, tolerance 1e-5 = print precision, not
 approximation precision).
+
+## Acceleration layer 4 — `--blas` / `--gpu` over the GEMV pair, opt-in (todo-471)
+
+The four layers above are all `--simd`: one lane kernel per member, TOTAL (packed float
+arrays of one width, signal on anything else), so the JVM call site is a bare
+`INVOKESTATIC` and the interpreter native never declines. **`vec:matvec` and
+`vec:matvec-into` are the exception**, because they are a matrix product and two other
+accelerators want them:
+
+- `--gpu` takes `vec:matvec` (the allocating form only) — the one device member outside
+  `linalg:`, `.kb/gpu.md`.
+- `--blas` takes BOTH forms as `cblas_?gemv` (2026-09-02) — `.kb/linalg-blas.md`, which is
+  also where the design decision behind this layer is written down.
+
+Both are PARTIAL, and neither flag implies `--simd`, so these two call sites are a guarded
+CHAIN rather than a direct call: device → library → lane kernel → spliced defun, over one
+set of temps, each rung answering `null` for what it declines and the bottom rung total.
+`codegen/jvm/JvmSimdCompiler.compileMatvecChain` emits it (claimed by `JvmExprCompiler`
+whenever the `--blas` or `--gpu` bridge was emitted; a `--simd`-only build keeps the bare
+`INVOKESTATIC` of layer 1 byte for byte), and on the interpreter the same order is install
+order: `VecSimd.install` → `LinalgBlas.installVec` → `LinalgGpu.installVec`, each capturing
+whatever the name was bound to and declining back to it.
+
+Precision: a library gemv reorders the `#f` fold, so it is CLOSE to the lane kernel rather
+than equal to it — up to 5.5e-3 relative on llama2's classifier-head shape. That is enough
+to move an `argmax`, so the examples that pin derived integers (`simd-gemv`,
+`tiny-llm`, `llama2`) are run under the flag rather than assumed; as of 2026-09-02 none of
+them moves. `.kb/linalg-blas.md` holds the measurement and what to do if one ever does.
 
 ## Acceleration layer 0 — interpreter `--simd` (jdk.incubator.vector), opt-in
 

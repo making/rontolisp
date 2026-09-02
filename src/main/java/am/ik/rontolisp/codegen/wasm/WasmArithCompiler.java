@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
 
 /**
  * Compiles arithmetic operations ({@code +}, {@code -}, {@code *}, {@code /},
@@ -72,8 +73,16 @@ final class WasmArithCompiler {
 		// Common Lisp unary forms: (- x) negates, (/ x) is the reciprocal.
 		if (args.size() == 2
 				&& (ratioFunc == WasmLispCompiler.FUNC_RAT_SUB || ratioFunc == WasmLispCompiler.FUNC_RAT_DIV)) {
+			if (ratioFunc == WasmLispCompiler.FUNC_RAT_SUB) {
+				// Negation of a float is f64.neg -- a sign-bit flip -- even when no
+				// literal in the argument form says the operand is one. The
+				// _rat_sub(0, x) fold below is 0.0 - 0.0 = +0.0 for a +0.0 operand,
+				// where IEEE negation (and the interpreter, and the JVM) gives -0.0.
+				compileUnaryNegate(args.get(1), ctx);
+				return;
+			}
 			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(ratioFunc == WasmLispCompiler.FUNC_RAT_SUB ? 0 : 1);
+			ctx.writer.writeSignedLeb128(1);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			ctx.writer.write(Instruction.CALL);
@@ -86,6 +95,48 @@ final class WasmArithCompiler {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(ratioFunc);
 		}
+	}
+
+	/**
+	 * Emits unary {@code (- x)} for an argument whose form carries no float literal:
+	 * {@code f64.neg} on the branch where the operand has been established to be a
+	 * {@code TYPE_FLOAT}, and {@code _rat_sub(0, x)} on every other.
+	 * <p>
+	 * The float branch is not an optimisation. {@code _rat_sub(0, x)} computes
+	 * {@code 0.0 - x}, which is {@code +0.0} for both zeroes, while negation flips the
+	 * sign bit -- so it is the only spelling that agrees with {@code -x} on the
+	 * interpreter and the JVM for a signed zero arriving through a variable.
+	 */
+	private static void compileUnaryNegate(LispVal arg, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(arg, ctx);
+		int tmpSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.F64_NEG);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_SUB);
+		ctx.writer.write(Instruction.END);
 	}
 
 }

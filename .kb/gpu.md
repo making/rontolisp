@@ -893,8 +893,34 @@ At the notebook's width, 200 steps, the same eight rows land within one and a ha
 of each other (22.0-22.3 s; the adaptive parallel row alone at 23.5), where the CUDA table
 at the same width spanned 5.4 to 22.9 s. **On a Mac: set `-Xmx` and stop.** Nothing in
 `DeviceResidency` is per-device -- a collection policy would be a `GpuDevice` question, and
-there is no policy to decide while the request is never made. It becomes live again the
-moment `.todo/495` makes lazy results pay there.
+there is no policy to decide while the request is never made.
+
+**Re-taken 2026-09-02, when todo-495 made lazy results pay here and the request started
+firing** (23 steps at the book's shapes and 200 at the notebook's width, `-Xmx24g`, two
+rounds each, the asynchronous build with the heap-aware budgets of "Asynchronous command
+buffers on Metal"):
+
+| flags | 23 steps, book's | `Pause Full` | total pause | 200 steps, notebook's |
+|---|---|---|---|---|
+| **default collector (G1)** | **44.4 / 48.5 s** | 12 / 11 | 0.16 s | 9.44 / 9.44 s |
+| ... plus `-XX:+ExplicitGCInvokesConcurrent` | 45.0 / 48.1 s | 0 | 0.10 s | 9.48 / 9.40 |
+| ... plus `-XX:+DisableExplicitGC` | 49.7 / 50.0 s | 0 | 0.25-0.28 s | 9.49 / 9.37 |
+| ... plus `-XX:+AlwaysPreTouch` (`-Xmx32g`) | 51.7 / 48.5 s | 16 / 14 | 0.42-0.57 s | 9.37 / 9.35 |
+| `-XX:+UseParallelGC -Xmn8g` | 51.4 / 48.7 s | 12 | 0.5 s | 10.05 / 10.0 |
+| ... plus `-XX:+ExplicitGCInvokesConcurrent` | 50.2 / 48.2 s | 12 | 0.5 s | 10.06 / 10.0 |
+| ... plus `-XX:+DisableExplicitGC` | 51.3 / 50.8 s | 2-3 | 1.1-1.2 s | 9.96 / 10.0 |
+| `-XX:+UseParallelGC`, young adaptive | 49.0 / 48.6 s | 6-7 | 0.75-0.82 s | 9.90 / 9.9 |
+
+The sentence stands and its reason changed: the request IS made now (the twelve full
+collections of the default row are the library's, 7 ms each -- the heap holds stubs and
+backings, not the activations), and the default collector answers it best or tied.
+`-XX:+DisableExplicitGC` costs 4-10% at the book's shapes now, where it cost nothing, for
+CUDA's reason in miniature: refused, the LRU evicts dirty entries as flushes into fresh
+backings. `-XX:+ExplicitGCInvokesConcurrent` is a tie, so nothing needs saying about it.
+The parallel rows are 0-15% slower at the book's and 6% at the notebook's, and the pages
+argument still has nothing to act on. What `-Xmx` decides on a Mac is now TWO things: the
+heap, and the pool the device's results live in, which is sized off the working set less
+the heap.
 
 ## The CUDA backend
 
@@ -997,6 +1023,84 @@ Java `MemorySegment.copy` into them runs at 35-60 GB/s single-threaded, slower t
 driver's own pageable copy -- so it loses past 262144 elements and wins 17% at 65536.
 Neither pays for a pinned pool and its budget. **Any future change to this route re-runs
 that table first.**
+
+### The chapter-2 step re-measured, and the reduction adjoint that stopped mattering (todo-500, 2026-09-02)
+
+`.todo/500` was filed off the 2026-08-24 chapter-2 profile (in this file's git history,
+commit `13a52ba`): 104 `cuMemcpyHtoD` a batch of which **90 uploads, 183 MB, were
+`torch::%t-grad-bcast`** staging `(linalg:add (linalg:zeros-like x) gk)` -- an array of
+zeros allocated only to be broadcast over. **It is already gone, and the fused tier is
+what removed it.** Those 90 were the 30 `torch:layer-norm` modules' three reduction nodes
+each (the mean, the variance's mean and the variance's sum); todo-499 replaced the
+composition with `%la-layer-norm` and todo-634 with `%la-layer-norm-affine`, so the module
+carries no `torch:mean`/`torch:sum` node at all. Counted in the adjoint itself over three
+book-shape steps, `%t-grad-bcast` now runs **ONCE a step**, over the cross-entropy's
+flattened `(1280)` per-position loss, with a SCALAR gradient -- a 5 KB allocation, and it
+appears nowhere in a copy trace. **The item's premise is dead; there was no code change
+to make.**
+
+**The `-0.0` question it left open is moot, and was measured rather than reasoned.** The
+replacement would have been bit-identical except at `-0.0`, where `0.0 + v` answers
+`+0.0` and a strided copy would not. Instrumented (`(= v 0.0)` and `(< (/ 1.0 v) 0)`, so
+`-0.0` and no other value) over three book-shape steps, **zero `-0.0` elements reach
+`%t-grad-bcast`** -- nor the two scalar fills of the same shape, `%t-unbroadcast`'s
+number branch and `%t-grad-reshape`'s, which are never reached at all. The normalization
+`.kb/torch.md` records therefore stands untested by any program here, and stays as it is.
+Note also that `%la-layer-norm-grad` MIRRORS the old spelling on purpose ("every line is
+the adjoint torch.lisp spells for that op, the broadcast onto zeros included"), so
+changing the adjoint alone would have broken that member-for-member pin for no measured
+gain.
+
+**The step, re-profiled.** `d_model` 512, 6 blocks, 8 heads, `d_ff` 512, batch 64,
+`max_length` 20, vocabulary 6638 -- the book's shapes, over a SYNTHETIC corpus of
+10-19-token sentences rather than `small_parallel_enja` (the 2026-08-24 row is the real
+corpus, so the walls are not strictly comparable; the counts are structural). `--gpu
+--simd`, JVM class output, GB10, `java -Xmx64g -XX:+ExplicitGCInvokesConcurrent`, nsys
+over a 33-step run diffed against a 13-step one:
+
+| per step | 2026-08-24 | now |
+|---|---|---|
+| wall | 0.317 s | **0.36 s** |
+| device kernel time | 230 ms (73% busy) | **291 ms (~81% busy)** |
+| `cuLaunchKernel` | 11029 | **6794** |
+| `cuCtxSynchronize` | 102 | **204** |
+| `cuMemcpyHtoD` | 104 copies, 247 MB | **302 copies, 88.7 MB** |
+| `cuMemcpyDtoH` | 4 copies, 4.3 MB | **292 copies, 30.8 MB** |
+
+The launches fell by a third (the fused tier) and the uploaded bytes by two thirds (the
+zeros), but the COPY COUNT rose, and the downloads by 73x. A stack-walking trace on
+`upload`/`download` (the same scratch method as 2026-08-24) attributes every one:
+
+| per step | copies | MB | caller |
+|---|---|---|---|
+| **288 up + 288 down** | 288/288 | **25.9 each way** | **the attention softmax pair round-tripping a declined fused member** -- below, and `.todo/650` |
+| 1 up | 1 | 30.6 | `%la-log-softmax-grad` staging the `(1280 6638)` gradient |
+| 2 up (+2 int) | 2 | 27.2 | `%la-scatter-rows`, the embedding table's gradient |
+| 2 up | 2 | 4.85 | `%la-matmul-nd` staging the activation the DOUBLE `pe` buffer was added to |
+| 2 down | 2 | 4.85 | `torch:add` in `positional-encoding-forward` -- the mixed-width decline the example chooses |
+| 2 up | 2 | 0.009 | a `zip` broadcast |
+| 2 int up | 2 | 0.009 | `take-rows`, the embedding forward's index vector |
+| 1 up | 1 | 0.083 | `%la-scaled-masked-softmax`, the one head shape that does NOT decline |
+| 1 int up, 1 down | 2 | ~0 | `torch:gather`'s index vector and the loss scalar in `%m-ce-hard` |
+| 1 up | 1 | 0.005 | `linalg:where` inside `%la-scaled-masked-softmax-grad` |
+| 1 down | 1 | ~0 | one `aref` of the loss |
+
+So **the 14 uploads that are not the round trip are the same nine the 2026-08-24 trace
+named**, minus the zeros; and the FOUR downloads that profile counted are still exactly
+four (two positional-encoding, the loss scalar, one `aref`). Everything else is new.
+
+**Where the new traffic comes from: a `(batch 1 length)` mask.** `torch:padding-mask` puts
+a query axis of extent 1 in so it broadcasts over a `(batch query key)` score, and
+`LinalgGpu.suffixLength` requires the mask to be a trailing SUFFIX of the score's dims --
+`(batch 1 key)` against `(batch query key)` fails on the middle axis. So the encoder's 48
+self-attention heads and the decoder's 48 cross-attention heads decline
+`%la-scaled-masked-softmax`, the compiled fallback materializes the 90 KB score
+(`64 x 19 x 19` f32) to run the defun, and the defun's own `linalg:softmax` uploads it
+straight back: 96 round trips forward, 96 more backward with two operands each. The
+decoder's 48 SELF-attention heads carry `padding + subsequent`, a `(batch length length)`
+mask, which is a suffix -- they take the fused member and copy nothing. Chapter 3's GPT is
+unaffected for the same reason: its mask is `(1 T T)`, whose leading extent-1 axis is
+dropped before the suffix test. Filed as `.todo/650`.
 
 ## The fused tier (todo-499, 2026-09-02; todo-629 added two members, todo-641 two more, todo-634 two more)
 
@@ -1299,9 +1403,15 @@ previous build's at every step of all six runs and both profiles.**
 
 **On Metal the fold is built too, and is worth 15% of the step there** -- six times what
 it took here, and for a reason this backend could not have guessed: the causal mask is a
-`double[]`, which `where_f32` refuses on that backend, so the chain's `masked-fill` was
-running on the CPU over a materialized score. "The attention scale and mask on Metal"
-below has the numbers.
+`double[]`, which `whereF` refused on METAL until todo-645 ("The `where` mask's width"
+below), so the chain's `masked-fill` was running on the CPU over a materialized score.
+"The attention scale and mask on Metal" below has the numbers.
+**CUDA is not the backend that had that hole**: `where` here takes the mask's width
+independently of the value's (`mkind` is 1 for a `float[]` mask and 2 for a `double[]`
+one, and the staging is sized off `mwidth`), so a double mask is a device member here and
+always was -- which is why the `where_f32` row above has 72 launches to remove rather
+than a CPU pass. So the two backends' numbers are not the same measurement: -2.3% here is
+two device passes removed, and 15% there is two device passes plus one host pass.
 
 What is left at the head after this: `copy_f32` at grid 4096 (72 a step, 2.9 ms) is
 `torch:cat`'s slice adjoint over the six heads, and the softmax pair itself is 28 ms a
@@ -1368,9 +1478,11 @@ book-shapes class 2.52 -> 2.87 MB (+14%); each new kernel is the size of its pla
 (2.1 k lines the forward, 4.4 k the adjoint), so this is the tier's own established price
 rather than a new one, and the driver's JIT of the larger text costs nothing measurable
 (the 3-step wall, which is mostly setup, went 5.37 -> 5.22 s). On the CPU the backward
-recomputes `norm`, +28% on layer-norm's backward and nothing else (`.kb/linalg.md` has that
-measurement). Metal DECLINES both members, at both widths, so the module runs the
-normalization and its two broadcasts member by member there exactly as before.
+recomputed `norm`, +28% on layer-norm's backward and nothing else -- fixed as `.todo/644`
+by a `%la-layer-norm-grad` sibling that answers `(dx norm)` from the pass it already makes,
+back to about the pre-fusion time (`.kb/linalg.md` has both measurements). Metal DECLINES
+both members, at both widths, so the module runs the normalization and its two broadcasts
+member by member there exactly as before.
 
 ## The chains left composed (todo-629, 2026-09-02)
 
@@ -1585,10 +1697,10 @@ threshold, and two whole tiers.
 | axis fold `:axis` | yes | **not as a round trip, measured**; over a resident operand only |
 | generator fill | yes | no -- it needs a `double` |
 | `vec:matvec` | from `2^17`, double accumulator | from `2^21`, **compensated float** accumulator |
-| lazy results + resident tier | on (`lazyResultsPay`) | **built, pinned, and NOT switched on -- measured** |
-| resident set | every operand and result | **the GEMV's matrix only** |
-| index tier + clip norm | yes | declined: with no lazy results there is no download to save |
-| per-call floor | 16-18 us | **77 us**, per COMMAND BUFFER |
+| lazy results + resident tier | on (`lazyResultsPay`) | **on since todo-495**, when the command buffers went asynchronous under the mode; measured off from todo-494 to then |
+| resident set | every operand and result | eagerly **the GEMV's matrix only**; lazily every operand and result, under a budget that leaves the heap its memory |
+| index tier + clip norm | yes | the copies over a resident operand; `sumSquares` still declined (unmeasured lazily) |
+| per-call floor | 16-18 us | **77 us**, per COMMAND BUFFER, eagerly; **15-26 us a member** in a lazy chain, where nothing waits (todo-495) |
 | per-call memory | the driver's pool | **our own** size-classed pool |
 | kernels | PTX generated at build time, checked in | MSL compiled at RUN time, from a string |
 
@@ -1601,8 +1713,10 @@ them later.
 
 **Single float, or nothing.** MSL rejects `double` outright, so every double-taking method
 answers `false` without touching the device, and there is no fp64 on this hardware to fill
-the gap with later. Two consequences: **the decline protocol is load-bearing in a way it
-is not on CUDA** -- `linalg`'s default width is double, so on Apple the flag is inert
+the gap with later. (The rule is about an operand that ENTERS ARITHMETIC. The one operand
+in the library that does not is `where`'s mask, and it is taken at both widths -- "The
+`where` mask's width" below.) Two consequences: **the decline protocol is load-bearing in
+a way it is not on CUDA** -- `linalg`'s default width is double, so on Apple the flag is inert
 until a program reaches `#f` data, which `torch:` does by default and a `linalg`-only
 program has to ask for -- and **`GpuTest` no longer describes both backends**: it is gated
 on a double-capable device and `MetalGpuTest` answers the same claims at `#f`. Two files
@@ -1862,12 +1976,25 @@ threshold already is. At the book's 16384 the CPU wins by 1.5-2.2x back to back 
 6-8x in the chain.
 
 **The straddle stays, and it is the price of a threshold that is right rather than the
-symptom of one that is wrong.** The finding generalizes past this member: a size threshold
+symptom of one that is wrong.** (The gap is the EAGER chain's; lazily -- the interceptors'
+mode since todo-495 -- the `sum` runs over a resident operand on the device and the
+per-row `log` is offered for its residency, so the chain would not straddle at all. It is
+unmeasured, because the fused pair replaces the chain either way.) The finding generalizes past this member: a size threshold
 measured back to back is measured in the wrong context for any member whose operand a
 REFUSED member produced, because the refusal is also the idle that costs the next call its
 clocks. Lowering the map threshold to catch the per-row shape would have moved a 62 us
 member to 500, in exchange for last-ulp agreement with a fused tier that replaces the
 chain rather than running beside it.
+
+**This is a Metal finding, not a device finding.** todo-635 ran the same gap sweep on
+CUDA -- the host spun 0 / 0.5 / 1 / 2 / 4 / 8 / 32 ms before one launch, median of
+twenty-five, three rounds, persistence mode on -- and the column is flat to within 1%:
+a plain 16384x3038 fold is 1.869 ms at 0 ms of gap, 1.866 at 2, 1.867 at 32, against
+1.896 back to back. There is no clock ramp to pay there, so back to back IS the right
+context for a threshold on that backend, and the rule above must not be carried across.
+The generalization that survives both is narrower: **a threshold is measured in the
+wrong context whenever the backend's clocks depend on how long it has been idle** --
+which is a measurement per backend, not a property of devices.
 
 ### Residency and the GEMV on this backend
 
@@ -1920,8 +2047,13 @@ whole point.
 
 ### Lazy results and the resident tier on Metal
 
-Built here, bit-identical, pinned -- and **the interceptors do not switch it on, because it
-does not pay.** The mode works: a member's result slab becomes the host array's DIRTY entry
+**Superseded 2026-09-02 by "Asynchronous command buffers on Metal" below: the interceptors
+DO switch it on now.** What follows is the synchronous measurement, kept because its three
+reasons are what todo-495 answered one by one -- the first by not waiting, the second by a
+budget that counts the heap, the third by finding it was never the cost.
+
+Built here, bit-identical, pinned -- and, until todo-495, **the interceptors did not switch
+it on, because it did not pay.** The mode works: a member's result slab becomes the host array's DIRTY entry
 instead of being downloaded, `materialize` is a memcpy out of the slab's `contents`, and
 the lazy pool rule is its own (the POOL may hold the working set less an eighth, never less
 than 512 MB, and the resident set the pool less an eighth of that, because here the pool
@@ -1949,11 +2081,11 @@ So the decline is kept as a POLICY, not by tearing the mode out:
 `Gpu.lazyResultsIfWorthwhile()` is what both interceptors call, and `Gpu.lazyResults(true)`
 stays the unconditional request an embedder or a test makes, honoured on both backends.
 `theInterceptorsRequestLeavesResultsEagerHereAndAnEmbeddersDoesNot` pins the distinction.
-**The first item above is the lever** -- committing without waiting and waiting only at the
-first host touch would overlap the host with the device the way CUDA does, and it changes
+**The first item above was the lever** -- committing without waiting and waiting only at
+the first host touch overlaps the host with the device the way CUDA does, and it changes
 when a slab may be recycled, the one ordering the residency design exists to forbid. That
-is `.todo/495`, and the second item is `.todo/492`'s stubs, which are built in the library
-and unmeasured here because the interceptors do not run lazily.
+was `.todo/495`, below; the second item was `.todo/492`'s stubs, built in the library and
+unmeasured here until then.
 
 **The Java boundary, measured here too, finds nothing to defeat.** The same harness
 (`examples/jvm/bench/`, `./run.sh gpu`, 200 chained GEMVs over a resident 2048x2048 f32
@@ -1983,6 +2115,131 @@ the CPU's memcpy-plus-lane-loop between 2^18 and 2^19 -- yet the step measured f
 because a declined member over a resident operand costs a materialize, the CPU loop and
 the re-upload of its result around it, and a chain that flips between the two pays both
 memcpys at every flip.
+
+### Asynchronous command buffers on Metal (todo-495, 2026-09-02)
+
+The first of the three reasons above is gone, and with it the decision: **the interceptors
+switch lazy results on here** (`MetalGemm.lazyResultsPay()` is `true`), because under the
+mode a call no longer waits. The step at the book's shapes goes **4.80 -> 1.81 s (2.65x)**,
+the notebook's width **0.083 -> 0.041**, and the loss series prints the same four
+decimals at every step of every run.
+
+**What was measured first, and what it said would happen.** The waits were counted before
+anything was built (a `System.nanoTime` around `commitAndWait`, per step, 13-step runs at
+the book's shapes): eagerly 888 command buffers a step and 1.37-1.42 s of waiting in a
+4.64 s step -- and 409-454 gaps of more than a millisecond between one buffer's completion
+and the next commit, 3.1 s of them, which is the device idle and dropping its clocks
+("Residency and the GEMV on this backend"). Lazily -- synchronous still, but with stubs,
+which todo-494's round did not have -- the step was 5.83 s (7.66 / 5.83 / 5.82), of which
+3.6-5.2 s was waiting on 1774 buffers, so the host's own share was ~2 s: overlapped
+perfectly, the mode could reach max(2, 3.8) = 3.8 s and beat the eager 4.6-4.8. It
+reached 1.81, because the second thing the waits cost was the clocks: a queue that never drains
+never idles, and the same 1774 buffers that took 3.8 s one at a time take ~1 s of waiting
+in all when the host only waits where it must.
+
+**The mechanism.** `MetalGemm.commit` is the end of every member's encoding. Eagerly it is
+`commitAndWait` as before -- the library's contract, "`out` is filled when the call
+returns", cannot be met any other way, and a failed buffer is still an ordinary decline.
+Lazily it commits, RETAINS the command buffer past the call's autorelease pool, gives it
+a sequence number, and returns. Every slab the call held carries that number as its
+`fence`; the buffers in flight sit in one deque, oldest first. One queue executes in
+order, so "every buffer numbered at or below `retired` has completed" is a scalar, and
+`settle(slab)` -- wait for the slab's fence, retiring everything up to it -- is the only
+wait there is. It is taken at exactly the host touches:
+
+- `stage`'s upload into a slab from the free list (a slab a dropped operand left, which a
+  launch in flight may still read -- the ordering the residency design exists to forbid,
+  and the one this item's ordering pin makes fail without the fence);
+- every download: `materialize`, the drain's flushes, `lazyResults(false)`;
+- and nowhere else. A slab taken as a RESULT needs no wait, because the device orders its
+  own reuse; `enter()` polls the head of the deque without blocking so a completed buffer
+  goes back to the queue promptly and a failure is learned as early as it can be.
+
+**Failure surfaces at the first host read, never as zeros.** A buffer that ends in any
+status but `Completed` is learned of only after its call answered `true`; `retire` marks
+the slabs it WROTE lost, and the results of every later buffer in flight that READ one of
+them -- a chain over a lost result is lost with it -- while a slab the failed buffer only
+read is intact, and a slab taken fresh from the pool is clean again. A lost result throws
+the `IllegalStateException` the mode already reserves for a result the host has no other
+copy of, at `materialize`; a flush of one (an eviction, the switch-off) records its
+storage and throws at the read instead, so switching the mode off never throws. Metal
+gives a kernel no way to fail on purpose, so the pin
+(`aFailedCommandBufferSurfacesAtTheFirstHostReadOfWhatItWrote`) injects the STATUS
+through a package-private seam and asserts the handling.
+
+**The second reason -- memory -- was the whole of the remaining loss, and it was the
+budget rule, not the machine.** The first asynchronous build ran the first seven steps at
+1.8-1.9 s and then slowed to 3.3-8 s a step with the system's time in page compression
+(sys 104 s of a 146 s, 40-step run): the lazy pool budget was the working set less an
+eighth, 96 GB on this 128 GB machine, beside a 24 GB heap. Three findings, each with the
+numbers, decided the rule that replaced it:
+
+1. **The pool must be sized WITHOUT the heap** -- on unified memory the slabs and the
+   heap are one physical memory, and `-Xmx48g` made the same run WORSE (sys 158 s). The
+   lazy pool budget is now the working set less `Runtime.maxMemory()` less an eighth (72
+   GB here), which is also the sentence the guide now prints: on a Mac `-Xmx` sizes the
+   pool as well as the heap.
+2. **The resident budget must be counted in the pool's units.** The cache counts the
+   SPANS it mirrors, the pool the power-of-two CAPACITY of its slabs, up to twice the
+   span; at seven eighths of the pool the LRU never fired before the pool filled (a
+   13-step run at a 72 GB pool: resident 56 GB at most, the LRU idle, `System.gc()`
+   asked ZERO times), and what ran instead was the pool's own pressure path -- which
+   evicted EVERYTHING, dirty copies as flushes: 1200-1500 downloads and 10-12 GB of fresh
+   backings in one call, a 3.5 s step where the others were 1.8, and when the step's phase
+   made it forty gigabytes, `OutOfMemoryError`. The resident budget is now HALF the pool's
+   (`LAZY_RESIDENT_DIVISOR`); at that the LRU fires, the collector is asked (7 times in
+   13 steps, 49 ms in all), the resident set peaks at the budget, and no flush happens
+   at all. Five eighths measured the same speed with three collections; half is kept for
+   the headroom.
+3. **The pool's pressure path evicts a slab's worth at a time now** (`DeviceResidency.
+   evictSome`: least recently used first, clean before dirty), not the whole cache -- the
+   CUDA rule "the resident set must never be the reason a call declines" stands, and its
+   corollary here is that neither may the whole of it be flushed into the heap at once.
+   And `drop` allocates a dirty copy's backing BEFORE the entry is let go of, putting the
+   entry back if the heap runs out: an `OutOfMemoryError` inside a member is caught as a
+   decline, and a stub whose entry was gone and whose backing was never allocated read
+   its header as its elements (`ArrayIndexOutOfBoundsException: Index 4 out of bounds for
+   length 4`, the shape of every crash the sweep produced).
+
+**The step, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, M4
+Max 40-core / 128 GB with the machine to itself, `-Xmx24g`; `(t13 - t3) / 10`, three
+interleaved rounds):
+
+| | eager (before) | lazy, asynchronous |
+|---|---|---|
+| wall a step, the three rounds | 4.77 / 4.80 / 4.91 | **1.81 / 1.81 / 1.83** |
+| wall a step, median | 4.80 s | **1.81 s** |
+| command buffers a step | 888 | 1774 |
+| the host's waiting, a step | 1.4 s | 0.43 s |
+| max RSS, 13 steps | 27.6 GB | 25.8 GB |
+
+Steady over 40 steps (1.8-2.1 s a step from the first to the fortieth, 78 s in all against the eager build's 184, max RSS 33.6 GB), which the first build was not. Every after round
+beats every before round by more than half.
+
+**The notebook's width** (`train-gpt-soseki.lisp` at block 256, `n-embd` 384, 2 heads,
+batch 4, `(t250 - t50) / 200`, three interleaved rounds), at ONE layer -- the width the
+earlier rows were taken at -- and at the notebook's six:
+
+| | eager | lazy, synchronous (todo-494's build, with stubs) | lazy, asynchronous |
+|---|---|---|---|
+| one layer, a step | 0.084 / 0.083 / 0.083 s | 0.078 s | **0.041 / 0.041 / 0.041 s** |
+| six layers, a step | 0.443 / 0.447 / 0.439 s | 0.434 s | **0.242 / 0.242 / 0.244 s** |
+
+**The floor** (`MtlResidentFloor.java`, a chain of resident `zip`s, per member): 15-26 us
+at 2^15..2^19 where the same chain waited 100-140 us a member, 69 us at 2^20 and 99 at
+2^21 -- where the device's own memory pass bounds the throughput and the queue's own
+limit of buffers in flight is what the host blocks on -- against the CPU's memcpy-and-loop
+at 335 and 674 us. `MIN_RESIDENT_ELEMENTS` stays at 2^14: at 16384 the first call of a
+chain is 59 us against the CPU's 31, and the reason it was set there -- a declined member
+in a chain costs a materialize and a re-upload around it -- is worth more under the mode,
+not less.
+
+**What did not change.** The eager path (`commitAndWait`, the per-call decline, the pool
+settling) is byte-for-byte what it was, and every eager pin holds. The kernels are
+untouched, so the resident tier's bits are: the loss series of the 13- and 40-step runs
+print the same four decimals as the eager runs at every step. `sumSquaresF` still
+declines, and the collector matrix below was re-taken because the request it gates
+fires here now.
 
 ### The strided layout cost a pooled slab here, not a copy
 
@@ -2093,7 +2350,9 @@ mask is staged and ADOPTED on the second sight (`gemvF`'s rule -- the causal mas
 array reached seventy-two times a step, and its upload is otherwise paid every time), and
 once it is resident `whereF` is offered over it, because that member's offer rule counts any
 resident operand. So the fold makes the chain's own fill a device member for whoever else
-uses the same mask -- but only at f32, since a double one is still refused there.
+uses the same mask -- at the time of writing only at f32, since a double one was still
+refused there. **todo-645 removed that refusal**, and the f64 row of this table is 8.0 ->
+0.7 ms on the build that did ("The `where` mask's width" below).
 
 **The step, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, M4
 Max with the machine to itself; `(t13 - t3) / 10`, three interleaved rounds):
@@ -2108,6 +2367,98 @@ produced on its own; the per-call table predicts it exactly, at 36 forwards and 
 a step: 36 x 12.4 + 36 x 11.9 ms = 0.87 s. **The loss series is byte-identical to the
 previous build's at every step of all six runs** -- the fused kernel is the device chain's
 bits, and the CPU select it replaces was exact.
+
+### The `where` mask's width, and the rule that does not apply to it (todo-645, 2026-09-02)
+
+`MetalGemm.whereF` opened with `if (m instanceof double[]) return false;` -- "a double
+operand is a hard decline here like every other" -- and that is the wrong rule for THIS
+operand. **A `where` mask is a PREDICATE, not a number.** `linalg:where`'s test is
+`(/= m 0)`: any bit but the sign set, an integer test on the raw word. The width rule
+exists because there is no `double` to compute WITH, and a mask is the one operand in the
+library that is never computed with. todo-643's `pack_mask` had already been reading a
+`double[]` mask as two `uint`s a cell (the low one first) for exactly that reason;
+`where_f32` now binds its own mask as `device const uint*` and does the same test inline,
+one word at f32 and two at f64, and the host stages and looks the mask up at ITS width
+(`Call.lookupBytes` / `stageMask`, todo-643's). The values and the result are still
+single, because they do enter arithmetic.
+
+**It mattered because the mask a model builds is DOUBLE.** `torch:subsequent-mask` and
+`torch:padding-mask` are built out of `linalg:ones` and `linalg:equal`, which build at
+`linalg`'s default width whatever `torch:` is running at -- so every attention mask in
+the library arrives as a `double[]`, and the decline sent the select to the CPU over a
+MATERIALIZED score: 16.8 MB down, a scalar select, 16.8 MB back up.
+
+**What is still reached after todo-643, and it is a whole class.** The fold takes a mask
+only when it is a TRAILING BLOCK of the score. A CAUSAL mask is one (`(1 s s)` over
+`(b s s)`), so the book's GPT never reaches `whereF` and **its step does not move**. A
+PADDING mask is not: `torch:padding-mask` is `(batch 1 length)` over a
+`(batch query key)` score, so `examples/llm-from-scratch/transformer`'s encoder and cross
+attention -- and `chapter02/section5.lisp`'s `source-mask`, which is that same array --
+decline the fold on SHAPE and fall back to `%la-scaled-masked-softmax`'s three members,
+of which this `where` is one. Every masked attention that is not causal is in that class.
+
+**Per call at the book's `(64 256 256)` score, f32**
+(`.todo/123-gpu-acceleration/mtl-where-mask-width.lisp`, `--gpu --simd`, JVM class
+output, M4 Max, thirty calls a round, best of three rounds; the two builds alternated and
+the whole thing run three times, medians below -- every after round beats every before
+round on every f64 row):
+
+| per call, ms | before | after |
+|---|---|---|
+| `linalg:where`, f64 mask `(1 256 256)`, `-inf` fill | 7.83 | **1.53** |
+| `linalg:where`, f64 mask, the adjoint's `0.0` fill | 7.80 | **0.73** |
+| `linalg:where`, f64 mask `(64 1 256)`, a padding mask | 7.77 | **0.70** |
+| `%la-scaled-masked-softmax`, f64 padding mask (fold refuses the SHAPE) | 14.07 | **1.87** |
+| `linalg:where`, f32 mask `(1 256 256)` | 1.73 | 0.83 |
+| `linalg:where`, f32 mask `(64 1 256)` | 1.30 | 0.67 |
+| `%la-scaled-masked-softmax`, f32 padding mask | 3.03 | 1.80 |
+| `%la-scaled-masked-softmax`, f64 CAUSAL mask (the fold takes it) | 1.80 | 1.77 |
+
+Two things to read carefully.
+
+- **The wall of an accepted member is no longer its device time.** Since todo-495 results
+  are lazy and the command buffers asynchronous, so an accepted member is an ENQUEUE.
+  The table above forces every result home with one `aref`, which adds a 16.8 MB download
+  to every row equally; measured WITHOUT that read the same rows are 7.77 -> 0.00, 7.80 ->
+  0.07, 7.70 -> 0.10 and 12.53 -> 0.47, and the two f32 rows and the causal row do not
+  move at all. A member that ran on the CPU costs the same either way, which is why the
+  before column of the f64 rows is the same number in both.
+- **The f32 rows moved too, and that is an artifact of the probe rather than an effect.**
+  In the BEFORE build every f64 row brings the score home, so the f32 row that follows it
+  pays to put it back. In the AFTER build nothing comes home.
+
+The last row is the control: the fold's own shape never went through `whereF`, its
+kernels are untouched, and it did not move (1.80 -> 1.77, and 0.200 -> 0.200 unforced).
+**The book's step does not move either, and could not**: its mask is the causal one, which
+todo-643 folds, so `whereF` is never reached at all (`gpt-book-shapes-fast.lisp`,
+`(t13 - t3) / 10`, two interleaved rounds: 1.86 / 2.12 s before against 1.83 / 1.80 after
+-- inside the wall's usual +-4%, with no mechanism for a move).
+The select is exact, so **`where` over an f64 mask is cell-for-cell what `where` over the
+f32 copy of it is**, which the probe asserts at both mask shapes and
+`MetalGpuTest.theResidentTierIsOfferedOnlyOverAResidentOperandAndLandsOnTheCpuKernelsBits`
+pins at both widths over cells covering zero, NEGATIVE ZERO (false, `(/= m 0)`'s rule),
+an ordinary value and a NaN (true).
+
+**And it takes most of the sting out of the fold's SHAPE decline here** (todo-650, filed
+on the CUDA side, where a step's `cuMemcpy` count is dominated by it: 96 of 144 attention
+heads decline `%la-scaled-masked-softmax` because their mask is a padding mask). The rule
+is `LinalgGpu.suffixLength`, which lives in the INTERCEPTION layer above `GpuDevice`, so
+**this backend declines exactly the same masks CUDA does** -- the same 96 of 144 for the
+same model, and no `MetalGemm` change could alter that. What the decline COSTS is another
+matter, and here it is now nearly nothing: the fallback's three members are all device
+members over a resident score, so the row above measures 1.87 ms against the accepted
+shape's 1.77 forced, and 0.467 against 0.200 unforced -- two extra enqueues, and no host
+round trip at all (16.8 MB down and back would be milliseconds, not 0.27). Before todo-645
+the same decline cost 14.07 against 1.80, and the reason was never the round trip 650
+describes: it was this CPU select. **So the Metal half of 650 is closed by this**, and
+what is left of it here is two enqueues a call.
+
+**Nothing else this backend refuses on width alone is reached by the reasoning**, and the
+survey is short because the question is not "is the operand read as bytes" but "is it
+read as a NUMBER". Every other double operand -- `zip`, `scal`, `fold`, `adam`, `copy`,
+the GEMM and the GEMV, the fused rows -- is arithmetic on the value itself. `where`'s
+mask is the only predicate in the library, and the comparison members (`greater`,
+`equal`, ...) PRODUCE masks rather than consuming them, at the operand's own width.
 
 ## The interception layer
 
@@ -2373,20 +2724,20 @@ Six things worth knowing before editing these:
   because their "before" is measured right after a release rather than a warm-up call and
   the pool can legitimately read near zero there. Every leak run is sized so a real leak
   is 2-8x whichever bound it uses.
-- **A test that asserts an exact `residentBytes()` must KEEP ITS ARRAYS REACHABLE.** A
-  resident copy goes when its host array is collected -- that is the design, and
-  `aCollectedHostArrayTakesItsResidentCopyWithIt` pins it -- so a total counted over
-  arrays the method has stopped referencing is a total the collector may change under the
-  assertion. It bit `MetalGpuTest.theStridedCopyIsTheCopyMembersOverAResidentOperandAndAScaleRunsInPlace`
-  once in three runs (2026-09-02): six arrays counted, four of them dead to the JIT, the
-  assertion reading the two still referenced, and an `a.clone()` on the line above as the
-  allocation that triggered it. The rule is `Reference.reachabilityFence` on every array
-  the total counts, placed after the last assertion -- and never pass one anonymously
-  (`Gpu.map(op, a, 0, new float[n], 0, n)`), which makes it unreachable from the moment it
-  exists. "It is used further down, so it is alive" is true today and is not a rule: it
-  depends on where the reader happens to put the next statement. The CUDA suite's three
-  strict `residentBytes()` assertions were checked against this and survive on that
-  accident alone.
+- **A test that asserts an exact `residentBytes()` must KEEP ITS ARRAYS REACHABLE, and a
+  process-wide `dirtyCount()`/`backingCount()` diff around one call is not that call's own
+  effect** -- two invariants a test can silently depend on that are really the JVM's
+  discretion, both written up once in `.kb/test-execution.md` rather than per backend.
+  Concretely here: the reachability fence sits in
+  `MetalGpuTest.theStridedCopyIsTheCopyMembersOverAResidentOperandAndAScaleRunsInPlace`
+  (it bit that test once in three runs, 2026-09-02) and the CUDA suite's three strict
+  `residentBytes()` assertions were checked against the same rule; the per-handle
+  `DeviceResidency.dirty(Object)` / `.backed(Object)` predicates
+  (`GpuThresholds.isDirty`/`.isBacked` for tests outside the package) exist because
+  `eval.LinalgGpuTest.aDeviceResultStaysOnTheDeviceUntilTheHostFirstReadsIt`'s
+  `dirtyCount()`/`backingCount()` diff failed in a full-suite run (2026-09-02, alongside
+  `.todo/644`, which the failure was unrelated to) and now asks about its own result's
+  handle instead of the shared cache.
 - **Exact-input operands must be exact IN THE FOLD too** -- a 64-long sum of products of
   1..4096 is not, at f32, because the defun accumulates in f64 and no f32 kernel can follow.
   That is `.kb/linalg-simd.md`'s reduction contract and not this seam.

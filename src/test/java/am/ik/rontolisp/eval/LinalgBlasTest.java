@@ -14,8 +14,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The interpreter's opt-in {@code --blas} acceleration of the {@code linalg:} matrix
- * product ({@link LinalgBlas}), the sibling of {@link LinalgSimdTest}.
+ * The interpreter's opt-in {@code --blas} acceleration of the matrix product
+ * ({@link LinalgBlas}), the sibling of {@link LinalgSimdTest}: {@code linalg:dot}, and
+ * the {@code vec:} GEMV pair the numeric examples spend their time in.
  *
  * <p>
  * Whether a tuned CBLAS exists is a property of the MACHINE, not of the build, so the
@@ -186,6 +187,83 @@ class LinalgBlasTest {
 		assertThatThrownBy(
 				() -> eval("(linalg:dot (linalg:arange 1 33) (linalg:reshape (linalg:arange 1 33) '(4 8)))", true))
 			.hasMessageContaining("dot");
+	}
+
+	// --- the vec: GEMV ----------------------------------------------------------------
+
+	/**
+	 * An 8x8 matrix of exact small integers, at either width, and the vector to hit it
+	 * with.
+	 */
+	private static String gemvOperands(String elementType) {
+		return """
+				(defparameter *w* (make-array '(8 8) :element-type '%s :initial-element 0.0))
+				(dotimes (i 8) (dotimes (j 8) (setf (aref *w* i j) (float (+ (* i 8) j 1)))))
+				(defparameter *x* (vec:arange 8 :element-type '%s))
+				""".formatted(elementType, elementType);
+	}
+
+	@Test
+	void blasReplacesBothVecGemvDefunsWithNativeFunctionsAndTouchesNothingElse() {
+		// The dead-flag guard for the vec: half: a vec.lisp defun is a LispLambda, the
+		// installed kernel a native LispFunction. Every numeric assertion below would
+		// pass on the defun alone ([[simd-shadow-and-dead-flag-lesson]]).
+		assertThat(eval("(vec:zeros 1) #'vec:matvec", true).print()).isEqualTo("#<function VEC:MATVEC>");
+		assertThat(eval("(vec:zeros 1) #'vec:matvec-into", true).print()).isEqualTo("#<function VEC:MATVEC-INTO>");
+		assertThat(eval("(vec:zeros 1) #'vec:matvec", false).print()).isEqualTo("#<lambda>");
+		assertThat(eval("(vec:zeros 1) #'vec:matvec-into", false).print()).isEqualTo("#<lambda>");
+		// Two members and no others: the element-wise and reduction kernels are
+		// memory-bound, so a library call cannot beat a loop over the same bytes.
+		for (String member : new String[] { "dot", "sum", "add", "scale", "norm", "add-into" }) {
+			assertThat(eval("(vec:zeros 1) #'vec:" + member, true).print()).as(member).isEqualTo("#<lambda>");
+		}
+	}
+
+	@Test
+	void theVecGemvMatchesTheScalarOracleOnExactInputsAtBothWidths() {
+		// Integers small enough to be exact at either width, so the reordered reduction
+		// lands on the same bits rather than merely near them.
+		assertMatchesScalarOracle(gemvOperands("double-float") + "(vec:matvec *w* *x*)");
+		assertMatchesScalarOracle(gemvOperands("single-float") + "(vec:matvec *w* *x*)");
+		// The -into form, which gemv writes natively -- so the interception drops the
+		// result allocation as well as the loop.
+		assertMatchesScalarOracle(gemvOperands("double-float") + "(vec:matvec-into (vec:zeros 8) *w* *x*)");
+		assertMatchesScalarOracle(
+				gemvOperands("single-float") + "(vec:matvec-into (vec:zeros 8 :element-type 'single-float) *w* *x*)");
+		// It answers the destination ITSELF, the -into contract.
+		assertThat(eval(gemvOperands("double-float") + """
+				(defparameter *o* (vec:zeros 8))
+				(eq *o* (vec:matvec-into *o* *w* *x*))
+				""", true).print()).isEqualTo("T");
+	}
+
+	@Test
+	void aDeclinedVecGemvBehavesExactlyAsItDoesWithoutTheFlag() {
+		// Below the size threshold, where a downcall cannot pay for itself.
+		assertMatchesScalarOracle("(vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0))");
+		assertMatchesScalarOracle("(vec:matvec-into (vec:zeros 2) #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0))");
+		// A mixed-width pair: gemv has one element type, so this declines to the rung
+		// below -- which is the width-polymorphic scalar defun here, and it answers.
+		assertMatchesScalarOracle(gemvOperands("double-float") + """
+				(vec:matvec *w* (vec:arange 8 :element-type 'single-float))
+				""");
+		// The rung below is TOTAL, so every vec: error still comes from it verbatim --
+		// the library never has to reproduce one. An aliased destination is the case that
+		// matters: each output element folds over all of x, so gemv must not take it.
+		assertThatThrownBy(() -> eval(gemvOperands("double-float") + "(vec:matvec-into *w* *w* *x*)", true))
+			.hasMessageContaining("must not be the same array as w");
+		assertThatThrownBy(() -> eval(gemvOperands("double-float") + "(vec:matvec-into *x* *w* *x*)", true))
+			.hasMessageContaining("must not be the same vector as x");
+	}
+
+	@Test
+	void withSimdOnTooTheVecGemvStillMatchesTheOracleAndTheInterceptionIsOnTop() {
+		String program = gemvOperands("double-float") + "(vec:matvec *w* *x*)";
+		assertThat(eval(program, true, true).print()).isEqualTo(eval(program, false, false).print());
+		// A shape the library declines: the lane kernel answers, not the defun.
+		String declined = "(vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0))";
+		assertThat(eval(declined, true, true).print()).isEqualTo(eval(declined, false, false).print());
+		assertThat(eval("(vec:zeros 1) #'vec:matvec", true, true).print()).isEqualTo("#<function VEC:MATVEC>");
 	}
 
 	// --- composition with --simd ------------------------------------------------------

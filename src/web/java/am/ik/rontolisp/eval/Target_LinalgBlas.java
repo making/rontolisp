@@ -8,9 +8,10 @@ import com.oracle.svm.core.annotate.TargetClass;
  * {@link Target_LinalgSimd}. The browser playground compiles the interpreter to
  * WebAssembly with GraalVM Web Image, which has no foreign function API and no operating
  * system to find a CBLAS in. {@link LinalgBlas#available()},
- * {@link LinalgBlas#description()} and {@link LinalgBlas#install(Environment,
- * LispEvaluator)} are the only three ENTRY POINTS into {@code LinalgBlasKernels} (the
- * holder of every {@code java.lang.foreign} reference), so substituting all three makes
+ * {@link LinalgBlas#description()}, {@link LinalgBlas#install(Environment,
+ * LispEvaluator)} and {@link LinalgBlas#installVec(Environment, LispEvaluator)} are the
+ * only four ENTRY POINTS into {@code LinalgBlasKernels} (the holder of every
+ * {@code java.lang.foreign} reference), so substituting all four makes
  * that class unreachable and keeps the API out of the image. Adding a new public method to
  * {@code LinalgBlas} that touches the kernels would break that, and only the Pages
  * workflow's Web Image build would catch it. The playground never sets {@code --blas}
@@ -35,6 +36,11 @@ final class Target_LinalgBlas {
 
 	@Substitute
 	static void install(Environment globalEnv, LispEvaluator evaluator) {
+		throw new IllegalStateException("--blas is not available in the browser playground");
+	}
+
+	@Substitute
+	static void installVec(Environment globalEnv, LispEvaluator evaluator) {
 		throw new IllegalStateException("--blas is not available in the browser playground");
 	}
 
