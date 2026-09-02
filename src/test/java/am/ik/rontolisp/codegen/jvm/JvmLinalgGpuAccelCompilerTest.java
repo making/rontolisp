@@ -1116,6 +1116,8 @@ class JvmLinalgGpuAccelCompilerTest {
 				"(linalg::%la-log-softmax-grad #d((1.0 2.0)) #d((0.5 0.5)) 1)", "(linalg::%la-gelu #d(1.0 2.0))",
 				"(linalg::%la-gelu-grad #d(1.0) #d(2.0) nil)", "(linalg::%la-layer-norm #d((1.0 2.0)) 1.0e-5)",
 				"(linalg::%la-layer-norm-grad #d((1.0 2.0)) #d((3.0 4.0)) 1.0e-5 nil)",
+				"(linalg::%la-layer-norm-affine #d((1.0 2.0)) #d(1.0 1.0) #d(0.0 0.0) 1.0e-5)",
+				"(linalg::%la-layer-norm-affine-grad #d((1.0 2.0)) #d((3.0 4.0)) #d(1.0 1.0) 1.0e-5 nil)",
 				"(linalg::%la-dropout-mask '(2) 0.5 (linalg::%la-rng-state) nil)",
 				"(linalg::%la-scaled-masked-softmax #d((1.0 2.0)) 8.0 #d((0.0 1.0)) -1.0 1)",
 				"(linalg::%la-scaled-masked-softmax-grad #d((1.0 2.0)) #d((0.5 0.5)) 1 8.0 nil)" }) {
@@ -1154,6 +1156,8 @@ class JvmLinalgGpuAccelCompilerTest {
 				(defun log-softmax-grad-chain (g out)
 				  (linalg:sub g (linalg:mul (linalg:exp out) (linalg:sum g :axis 1 :keepdims t))))
 				(defparameter *m* (linalg:reshape (linalg:greater (linalg:sin (linalg:arange 384)) 0.3) '(1 384)))
+				(defparameter *w* (linalg:linspace 0.5 1.5 384%s))
+				(defparameter *b* (linalg:linspace -0.3 0.3 384%s))
 				(defun attention-chain (x) (softmax-chain (linalg:where *m* (/ -1.0 0.0) (linalg:div x 8.0))))
 				(defun attention-grad-chain (g out)
 				  (linalg:div (linalg:where *m* 0.0 (linalg:mul out (linalg:sub g (linalg:sum (linalg:mul g out) :axis 1 :keepdims t)))) 8.0))
@@ -1170,13 +1174,17 @@ class JvmLinalgGpuAccelCompilerTest {
 				(print (linalg:array-equal (linalg::%%la-gelu-grad *g* *x* *g*) (gelu-grad-chain *g* *x* *g*)))
 				(print (linalg:sum (linalg::%%la-layer-norm *x* 1.0e-5)))
 				(print (linalg:sum (linalg::%%la-layer-norm-grad *g* *x* 1.0e-5 *g*)))
+				(print (linalg:sum (linalg::%%la-layer-norm-affine *x* *w* *b* 1.0e-5)))
+				(let ((r (linalg::%%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 *g*)))
+				  (print (linalg:sum (car r)))
+				  (print (linalg:sum (car (cdr r)))))
 				(print (linalg:sum (linalg::%%la-softmax-grad *g* *x* 1)))
 				(linalg:seed 9)
 				(defparameter *st* (linalg::%%la-rng-state))
 				(print (linalg:sum (linalg::%%la-dropout-mask '(%d 384) 0.25 *st* %s)))
 				(print *st*)
 				"""
-			.formatted(n, TYPE, rows, n, TYPE, rows, rows, DOUBLES ? "nil" : "t");
+			.formatted(n, TYPE, rows, n, TYPE, rows, TYPE, TYPE, rows, DOUBLES ? "nil" : "t");
 		String oracle = scalar(program);
 		assertThat(oracle).startsWith("T\nT\nT\nT\nT\nT\nT\nT\n");
 		assertThat(accel(program)).as("--gpu").isEqualTo(oracle);

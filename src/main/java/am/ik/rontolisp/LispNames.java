@@ -5546,7 +5546,9 @@ public final class LispNames {
 	 * {@code linalg::%la-layer-norm} (INTERNAL): {@code (x eps)}, the normalization
 	 * {@code (x - mean) / sqrt(var + eps)} over the last axis as {@code torch:layer-norm}
 	 * composed it from torch ops -- one member so a device can run it as one pass
-	 * (todo-499); the affine {@code * weight + bias} stays two torch ops.
+	 * (todo-499). Since todo-634 the module's own forward reaches
+	 * {@link #LINALG_LAYER_NORM_AFFINE} instead; this one stays for the shapes that
+	 * decline it and for the chain the fused member is pinned against.
 	 */
 	public static final String LINALG_LAYER_NORM = "%LA-LAYER-NORM";
 
@@ -5557,6 +5559,24 @@ public final class LispNames {
 	 * input, in the reverse walk's order, onto what {@code x} had accumulated.
 	 */
 	public static final String LINALG_LAYER_NORM_GRAD = "%LA-LAYER-NORM-GRAD";
+
+	/**
+	 * {@code linalg::%la-layer-norm-affine} (INTERNAL): {@code (x w b eps)}, that
+	 * normalization AND the module's affine {@code norm * weight + bias} -- the two
+	 * BROADCAST passes over the whole activation that {@code torch:layer-norm} spelled as
+	 * two more tape nodes (todo-634).
+	 */
+	public static final String LINALG_LAYER_NORM_AFFINE = "%LA-LAYER-NORM-AFFINE";
+
+	/**
+	 * {@code linalg::%la-layer-norm-affine-grad} (INTERNAL): its adjoint,
+	 * {@code (g x w eps old)}, and the ONE member in {@code linalg:} that answers two
+	 * arrays -- a two-element LIST of the input's gradient (the {@code old} protocol of
+	 * {@link #LINALG_GELU_GRAD}, with the broadcast {@code g * weight} folded in) and
+	 * {@code g * norm}, whose axis-0 folds are the weight's gradient. {@code norm} is
+	 * what the fused forward no longer stores.
+	 */
+	public static final String LINALG_LAYER_NORM_AFFINE_GRAD = "%LA-LAYER-NORM-AFFINE-GRAD";
 
 	/**
 	 * {@code linalg::%la-dropout-mask} (INTERNAL): {@code (shape p st single)}, the

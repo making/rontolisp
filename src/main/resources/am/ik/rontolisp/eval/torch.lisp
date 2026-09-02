@@ -1522,33 +1522,68 @@
   (torch:module :sequential (list :layers layers)
                 (function torch::%m-sequential-forward)))
 
+(defun torch::%m-layer-norm-affine-p (xa wa ba)
+  ;; Whether the affine can ride inside the normalization: an array input, and a weight
+  ;; and bias that are VECTORS of its last extent -- nn.LayerNorm's own shape, and the
+  ;; only one where * weight + bias is a broadcast over the normalized axis. Anything
+  ;; else (a scalar input, a parameter of another shape a caller built by hand) keeps
+  ;; the two torch nodes, whose broadcasting rules answer for every other case.
+  (and (arrayp xa) (not (stringp xa)) (arrayp wa) (not (stringp wa)) (arrayp ba)
+       (not (stringp ba))
+       (let ((d (array-dimensions xa)))
+         (and (>= (length d) 1)
+              (equal (array-dimensions wa) (list (nth (- (length d) 1) d)))
+              (equal (array-dimensions ba) (list (nth (- (length d) 1) d)))))))
+
 (defun torch::%m-layer-norm-forward (self x)
   ;; (x - mean) / sqrt(var + eps) * weight + bias over the LAST axis, with the
-  ;; biased (ddof 0) variance -- PyTorch's unbiased=False. The normalization is
-  ;; ONE node over the internal linalg::%la-layer-norm, whose adjoint
-  ;; linalg::%la-layer-norm-grad spells the tape's own backward through the
-  ;; mean / sub / var / add / sqrt / div it replaces (the four contributions
-  ;; to x in the walk's order, onto what x already held) -- so the bits are
-  ;; the composition's, and a device runs each direction as one pass
-  ;; (todo-499). A scalar input keeps the composition.
+  ;; biased (ddof 0) variance -- PyTorch's unbiased=False. At nn.LayerNorm's own
+  ;; shape the WHOLE expression is ONE node over the internal
+  ;; linalg::%la-layer-norm-affine (todo-634): the affine was two broadcast passes
+  ;; over the activation forward and a third plus a zip backward, and its adjoint
+  ;; linalg::%la-layer-norm-affine-grad answers both arrays the tape needs -- x's
+  ;; gradient (with g * weight folded in, onto what x already held) and g * norm,
+  ;; whose broadcast folds are the weight's gradient. The bias's is the folds of g.
+  ;; Every member rounds where the four nodes rounded, so the bits are the
+  ;; composition's, and a device runs each direction as one pass. A scalar input, or
+  ;; a weight or bias of any other shape, keeps the normalization node of todo-499
+  ;; and the two torch ops around it.
   (let* ((tx (torch::%t-wrap x))
          (xa (torch::%t-data tx))
          (eps (torch:field self :eps))
-         (norm
-          (if (numberp xa)
-              (torch:div (torch:sub tx (torch:mean tx :axis -1 :keepdims t))
-                         (torch:sqrt
-                          (torch:add (torch:var tx :axis -1 :keepdims t :ddof 0)
-                                     eps)))
-              (torch::%t-result (linalg::%la-layer-norm xa eps) (list tx)
-                                (lambda (g)
-                                  (list
+         (tw (torch::%t-wrap (torch:field self :weight)))
+         (tb (torch::%t-wrap (torch:field self :bias)))
+         (wa (torch::%t-data tw))
+         (ba (torch::%t-data tb)))
+    (if (torch::%m-layer-norm-affine-p xa wa ba)
+        (torch::%t-result (linalg::%la-layer-norm-affine xa wa ba eps)
+                          (list tx tw tb)
+                          (lambda (g)
+                            (let ((r
                                    (torch::%t-fold-grad tx
                                     (lambda (old)
-                                      (linalg::%la-layer-norm-grad g xa eps
-                                                                   old)))))))))
-    (torch:add (torch:mul norm (torch:field self :weight))
-               (torch:field self :bias))))
+                                      (linalg::%la-layer-norm-affine-grad g xa
+                                       wa eps old)))))
+                              (list (car r)
+                                    (when (torch::%t-track-p tw)
+                                      (torch::%t-unbroadcast (car (cdr r)) wa))
+                                    (when (torch::%t-track-p tb)
+                                      (torch::%t-unbroadcast g ba))))))
+        (let ((norm
+               (if (numberp xa)
+                   (torch:div
+                    (torch:sub tx (torch:mean tx :axis -1 :keepdims t))
+                    (torch:sqrt
+                     (torch:add (torch:var tx :axis -1 :keepdims t :ddof 0)
+                                eps)))
+                   (torch::%t-result (linalg::%la-layer-norm xa eps) (list tx)
+                                     (lambda (g)
+                                       (list
+                                        (torch::%t-fold-grad tx
+                                         (lambda (old)
+                                           (linalg::%la-layer-norm-grad g xa eps
+                                            old)))))))))
+          (torch:add (torch:mul norm tw) tb)))))
 
 (defun torch:layer-norm (d-model &key (eps 1.0e-5))
   ;; Layer normalization over the last axis (nn.LayerNorm): fields weight (a

@@ -1999,6 +1999,74 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * {@code (linalg::%la-layer-norm-affine x w b eps)}: the normalization AND the
+	 * module's affine over a {@code (len)} weight and bias, as one pass per row.
+	 * @param x the input
+	 * @param w the weight, a vector of the input's last extent
+	 * @param b the bias, the same
+	 * @param epsv the epsilon
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuLayerNormAffine(@Nullable Object x, @Nullable Object w, @Nullable Object b,
+			@Nullable Object epsv) {
+		Double eps = scalar(epsv);
+		int[] d = packed(x) ? lastAxisRows(x, (long) rank(x) - 1) : null;
+		if (d == null || eps == null || !vectorOf(w, d[1], x) || !vectorOf(b, d[1], x) || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(x), poff = 2;
+		if (x instanceof float[] xf) {
+			float[] c = newLike(dims(x, rank(x)));
+			return Gpu.layerNormAffine(xf, off, floats(w), poff, floats(b), poff, c, off, d[0], d[1], eps) ? c : null;
+		}
+		double[] c = newLikeD(dims(x, rank(x)));
+		return Gpu.layerNormAffine(doubles(x), off, doubles(w), poff, doubles(b), poff, c, off, d[0], d[1], eps) ? c
+				: null;
+	}
+
+	/**
+	 * {@code (linalg::%la-layer-norm-affine-grad g x w eps old)}: its adjoint, and the
+	 * one bridge method that answers a two-element LIST -- the input's gradient onto
+	 * {@code old} (nil = null for none), and {@code g * norm}.
+	 * @param g the affine output's gradient
+	 * @param x the input
+	 * @param w the weight
+	 * @param epsv the epsilon
+	 * @param old the gradient accumulated so far, or {@code null}
+	 * @return the two results as a compiled list, or {@code null} on a decline
+	 */
+	static @Nullable Object gpuLayerNormAffineGrad(@Nullable Object g, @Nullable Object x, @Nullable Object w,
+			@Nullable Object epsv, @Nullable Object old) {
+		Double eps = scalar(epsv);
+		int[] d = packed(g) ? lastAxisRows(g, (long) rank(g) - 1) : null;
+		if (d == null || eps == null || !sameShape(g, x) || (old != null && !sameShape(g, old)) || !vectorOf(w, d[1], g)
+				|| !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(g), poff = 2;
+		if (g instanceof float[] gf) {
+			float[] dx = newLike(dims(g, rank(g)));
+			float[] gn = newLike(dims(g, rank(g)));
+			return Gpu.layerNormAffineGrad(gf, off, floats(x), off, floats(w), poff, old == null ? null : floats(old),
+					off, dx, off, gn, off, d[0], d[1], eps) ? new Object[] { dx, new Object[] { gn, null } } : null;
+		}
+		double[] dx = newLikeD(dims(g, rank(g)));
+		double[] gn = newLikeD(dims(g, rank(g)));
+		return Gpu.layerNormAffineGrad(doubles(g), off, doubles(x), off, doubles(w), poff,
+				old == null ? null : doubles(old), off, dx, off, gn, off, d[0], d[1], eps)
+						? new Object[] { dx, new Object[] { gn, null } } : null;
+	}
+
+	/**
+	 * Whether {@code v} is a packed VECTOR of {@code len} elements at the same width as
+	 * {@code like} -- layer-norm's weight and bias, and what the affine member declines
+	 * anything but.
+	 */
+	private static boolean vectorOf(@Nullable Object v, int len, @Nullable Object like) {
+		return packed(v) && rank(v) == 1 && dim(v, 0) == len && (v instanceof float[]) == (like instanceof float[]);
+	}
+
+	/**
 	 * {@code (linalg::%la-dropout-mask shape p st single)}: the inverted-dropout mask
 	 * drawn on the device from the state vector {@code st}, which is advanced in place to
 	 * the generator's end state -- through the write seam, as every in-place write is.

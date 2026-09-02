@@ -2287,6 +2287,17 @@ class GpuTest {
 			return c;
 		}
 
+		/** {@code a}, {@code rows x len}, against the per-COLUMN {@code b}, broadcast. */
+		Object bcastCols(int op, Object a, Object b, int rows, int len) {
+			Object c = fresh(rows * len);
+			int[] dims = { rows, len }, sa = { len, 1 }, sb = { 0, 1 };
+			assertThat(this.single ? Gpu.bcast(op, (float[]) a, 0, sa, (float[]) b, 0, sb, (float[]) c, 0, dims)
+					: Gpu.bcast(op, (double[]) a, 0, sa, (double[]) b, 0, sb, (double[]) c, 0, dims))
+				.as("bcast cols %d", op)
+				.isTrue();
+			return c;
+		}
+
 		double[] doubles(Object a) {
 			if (!this.single) {
 				return (double[]) a;
@@ -2543,6 +2554,63 @@ class GpuTest {
 			assertThat(ch.doubles(fused)).as("layer-norm grad single=%s", single).containsExactly(ch.doubles(lnNew));
 			assertThat(ch.doubles(fusedOld)).as("layer-norm grad onto old single=%s", single)
 				.containsExactly(ch.doubles(lnOld));
+			// layer-norm's AFFINE (todo-634): the normalization above, then the two
+			// broadcast passes over the (len) weight and bias -- and its adjoint, whose
+			// two results are the plain adjoint over the broadcast g * weight and the zip
+			// g * norm. The plain pair is pinned to its own chain just above, so it is
+			// the reference the affine pair's first result is held to.
+			Object w = ch.fresh(len), bias = ch.fresh(len);
+			for (int i = 0; i < len; i++) {
+				double wv = 0.5 + random.nextDouble(), bv = random.nextDouble() - 0.5;
+				if (single) {
+					((float[]) w)[i] = (float) wv;
+					((float[]) bias)[i] = (float) bv;
+				}
+				else {
+					((double[]) w)[i] = wv;
+					((double[]) bias)[i] = bv;
+				}
+			}
+			Object affine = ch.bcastCols(Gpu.BIN_ADD, ch.bcastCols(Gpu.BIN_MUL, norm, w, rows, len), bias, rows, len);
+			fused = ch.fresh(n);
+			assertThat(single
+					? Gpu.layerNormAffine((float[]) x, 0, (float[]) w, 0, (float[]) bias, 0, (float[]) fused, 0, rows,
+							len, eps)
+					: Gpu.layerNormAffine((double[]) x, 0, (double[]) w, 0, (double[]) bias, 0, (double[]) fused, 0,
+							rows, len, eps))
+				.isTrue();
+			assertSameBits("layer-norm affine single=" + single, ch.doubles(fused), ch.doubles(affine));
+			Object gw = ch.bcastCols(Gpu.BIN_MUL, g, w, rows, len);
+			Object gn = ch.zip(Gpu.BIN_MUL, g, norm);
+			Object affNew = ch.fresh(n), affOld = ch.fresh(n);
+			if (single) {
+				assertThat(Gpu.layerNormGrad((float[]) gw, 0, (float[]) x, 0, null, 0, (float[]) affNew, 0, rows, len,
+						eps))
+					.isTrue();
+				assertThat(Gpu.layerNormGrad((float[]) gw, 0, (float[]) x, 0, (float[]) old, 0, (float[]) affOld, 0,
+						rows, len, eps))
+					.isTrue();
+			}
+			else {
+				assertThat(Gpu.layerNormGrad((double[]) gw, 0, (double[]) x, 0, null, 0, (double[]) affNew, 0, rows,
+						len, eps))
+					.isTrue();
+				assertThat(Gpu.layerNormGrad((double[]) gw, 0, (double[]) x, 0, (double[]) old, 0, (double[]) affOld, 0,
+						rows, len, eps))
+					.isTrue();
+			}
+			for (Object accumulated : new Object[] { null, old }) {
+				Object dxOut = ch.fresh(n), gnOut = ch.fresh(n);
+				assertThat(single
+						? Gpu.layerNormAffineGrad((float[]) g, 0, (float[]) x, 0, (float[]) w, 0, (float[]) accumulated,
+								0, (float[]) dxOut, 0, (float[]) gnOut, 0, rows, len, eps)
+						: Gpu.layerNormAffineGrad((double[]) g, 0, (double[]) x, 0, (double[]) w, 0,
+								(double[]) accumulated, 0, (double[]) dxOut, 0, (double[]) gnOut, 0, rows, len, eps))
+					.isTrue();
+				String what = "layer-norm affine grad single=" + single + " old=" + (accumulated != null);
+				assertSameBits(what + " dx", ch.doubles(dxOut), ch.doubles(accumulated == null ? affNew : affOld));
+				assertSameBits(what + " g*norm", ch.doubles(gnOut), ch.doubles(gn));
+			}
 		}
 	}
 
@@ -2563,7 +2631,7 @@ class GpuTest {
 				g[i] = nr(random.nextDouble() * 2 - 1, single);
 				o[i] = nr(random.nextDouble(), single);
 			}
-			double[] norm = new double[n], grad = new double[n], gradOld = new double[n];
+			double[] norm = new double[n];
 			for (int r = 0; r < rows; r++) {
 				int base = r * len;
 				double acc = 0;
@@ -2577,30 +2645,32 @@ class GpuTest {
 					acc += nr(dev * dev, single);
 				}
 				double sd = nr(Math.sqrt(nr(nr(nr(acc, single) / len, single) + eps, single)), single);
-				double q = nr(sd * sd, single), accSd = 0, accMu = 0;
 				for (int k = 0; k < len; k++) {
-					double dev = nr(x[base + k] - mu, single);
-					norm[base + k] = nr(dev / sd, single);
-					accSd += nr(-nr(nr(g[base + k] * dev, single) / q, single), single);
-					accMu += nr(-nr(g[base + k] / sd, single), single);
-				}
-				double gS = nr(nr(nr(accSd, single) / nr(2.0 * sd, single), single) / len, single);
-				double gSq = nr(0.0 + gS, single), accM2 = 0;
-				for (int k = 0; k < len; k++) {
-					double pp = nr(gSq * nr(x[base + k] - mu, single), single);
-					accM2 += nr(-nr(pp + pp, single), single);
-				}
-				double a2 = nr(nr(0.0 + nr(accM2, single), single) / len, single);
-				double a4 = nr(nr(0.0 + nr(accMu, single), single) / len, single);
-				for (int k = 0; k < len; k++) {
-					double dev = nr(x[base + k] - mu, single);
-					double pp = nr(gSq * dev, single), gd2 = nr(pp + pp, single);
-					double gDev = nr(g[base + k] / sd, single);
-					grad[base + k] = nr(nr(nr(gd2 + a2, single) + gDev, single) + a4, single);
-					gradOld[base + k] = nr(nr(nr(nr(o[base + k] + gd2, single) + a2, single) + gDev, single) + a4,
-							single);
+					norm[base + k] = nr(nr(x[base + k] - mu, single) / sd, single);
 				}
 			}
+			double[] grad = layerNormGradReference(g, x, null, rows, len, eps, single);
+			double[] gradOld = layerNormGradReference(g, x, o, rows, len, eps, single);
+			// Layer-norm's AFFINE and its adjoint (todo-634) over a weight and bias of
+			// the row length: the forward's two broadcast passes, and backward the
+			// broadcast g * weight the normalization's own adjoint then walks, plus the
+			// zip g * norm the weight's gradient is folded from.
+			double[] w = new double[len], bias = new double[len];
+			for (int k = 0; k < len; k++) {
+				w[k] = nr(0.5 + random.nextDouble(), single);
+				bias[k] = nr(random.nextDouble() - 0.5, single);
+			}
+			double[] affine = new double[n], gw = new double[n], gn = new double[n];
+			for (int r = 0; r < rows; r++) {
+				for (int k = 0; k < len; k++) {
+					int i = r * len + k;
+					affine[i] = nr(nr(norm[i] * w[k], single) + bias[k], single);
+					gw[i] = nr(g[i] * w[k], single);
+					gn[i] = nr(g[i] * norm[i], single);
+				}
+			}
+			double[] affineGrad = layerNormGradReference(gw, x, null, rows, len, eps, single);
+			double[] affineGradOld = layerNormGradReference(gw, x, o, rows, len, eps, single);
 			// The softmax adjoint, with o standing in for the softmax output.
 			double[] sgrad = new double[n];
 			for (int r = 0; r < rows; r++) {
@@ -2635,6 +2705,21 @@ class GpuTest {
 				assertThat(widen(c)).as("layer-norm grad f32").containsExactly(grad);
 				assertThat(Gpu.layerNormGrad(gf, 0, xf, 0, of, 0, c, 0, rows, len, eps)).isTrue();
 				assertThat(widen(c)).as("layer-norm grad onto old f32").containsExactly(gradOld);
+				float[] wf = new float[len], bf = new float[len];
+				for (int k = 0; k < len; k++) {
+					wf[k] = (float) w[k];
+					bf[k] = (float) bias[k];
+				}
+				assertThat(Gpu.layerNormAffine(xf, 0, wf, 0, bf, 0, c, 0, rows, len, eps)).isTrue();
+				assertThat(widen(c)).as("layer-norm affine f32").containsExactly(affine);
+				float[] gnc = new float[n];
+				assertThat(Gpu.layerNormAffineGrad(gf, 0, xf, 0, wf, 0, null, 0, c, 0, gnc, 0, rows, len, eps))
+					.isTrue();
+				assertThat(widen(c)).as("layer-norm affine grad f32").containsExactly(affineGrad);
+				assertThat(widen(gnc)).as("layer-norm affine grad g*norm f32").containsExactly(gn);
+				assertThat(Gpu.layerNormAffineGrad(gf, 0, xf, 0, wf, 0, of, 0, c, 0, gnc, 0, rows, len, eps)).isTrue();
+				assertThat(widen(c)).as("layer-norm affine grad onto old f32").containsExactly(affineGradOld);
+				assertThat(widen(gnc)).as("layer-norm affine grad onto old g*norm f32").containsExactly(gn);
 				assertThat(Gpu.softmaxGrad(gf, 0, of, 0, c, 0, rows, len)).isTrue();
 				assertThat(widen(c)).as("softmax grad f32").containsExactly(sgrad);
 				assertThat(Gpu.dropoutMask(c, 0, n, p, span, s1, s2, s3)).isTrue();
@@ -2648,6 +2733,15 @@ class GpuTest {
 				assertThat(c).as("layer-norm grad f64").containsExactly(grad);
 				assertThat(Gpu.layerNormGrad(g, 0, x, 0, o, 0, c, 0, rows, len, eps)).isTrue();
 				assertThat(c).as("layer-norm grad onto old f64").containsExactly(gradOld);
+				assertThat(Gpu.layerNormAffine(x, 0, w, 0, bias, 0, c, 0, rows, len, eps)).isTrue();
+				assertThat(c).as("layer-norm affine f64").containsExactly(affine);
+				double[] gnc = new double[n];
+				assertThat(Gpu.layerNormAffineGrad(g, 0, x, 0, w, 0, null, 0, c, 0, gnc, 0, rows, len, eps)).isTrue();
+				assertThat(c).as("layer-norm affine grad f64").containsExactly(affineGrad);
+				assertThat(gnc).as("layer-norm affine grad g*norm f64").containsExactly(gn);
+				assertThat(Gpu.layerNormAffineGrad(g, 0, x, 0, w, 0, o, 0, c, 0, gnc, 0, rows, len, eps)).isTrue();
+				assertThat(c).as("layer-norm affine grad onto old f64").containsExactly(affineGradOld);
+				assertThat(gnc).as("layer-norm affine grad onto old g*norm f64").containsExactly(gn);
 				assertThat(Gpu.softmaxGrad(g, 0, o, 0, c, 0, rows, len)).isTrue();
 				assertThat(c).as("softmax grad f64").containsExactly(sgrad);
 				assertThat(Gpu.dropoutMask(c, 0, n, p, span, s1, s2, s3)).isTrue();
@@ -2655,6 +2749,52 @@ class GpuTest {
 			}
 			assertThat(Gpu.rngAdvance(s1, s2, s3, n)).isEqualTo(st);
 		}
+	}
+
+	/**
+	 * The tape's backward through layer-norm's normalization, replayed sequentially in
+	 * Java at the given width: the reference both the plain adjoint and the affine one
+	 * (whose {@code g} is the broadcast {@code g * weight}) are held to.
+	 */
+	private static double[] layerNormGradReference(double[] g, double[] x,
+			double @org.jspecify.annotations.Nullable [] old, int rows, int len, double eps, boolean single) {
+		double[] out = new double[rows * len];
+		for (int r = 0; r < rows; r++) {
+			int base = r * len;
+			double acc = 0;
+			for (int k = 0; k < len; k++) {
+				acc += x[base + k];
+			}
+			double mu = nr(nr(acc, single) / len, single);
+			acc = 0;
+			for (int k = 0; k < len; k++) {
+				double dev = nr(x[base + k] - mu, single);
+				acc += nr(dev * dev, single);
+			}
+			double sd = nr(Math.sqrt(nr(nr(nr(acc, single) / len, single) + eps, single)), single);
+			double q = nr(sd * sd, single), accSd = 0, accMu = 0;
+			for (int k = 0; k < len; k++) {
+				double dev = nr(x[base + k] - mu, single);
+				accSd += nr(-nr(nr(g[base + k] * dev, single) / q, single), single);
+				accMu += nr(-nr(g[base + k] / sd, single), single);
+			}
+			double gS = nr(nr(nr(accSd, single) / nr(2.0 * sd, single), single) / len, single);
+			double gSq = nr(0.0 + gS, single), accM2 = 0;
+			for (int k = 0; k < len; k++) {
+				double pp = nr(gSq * nr(x[base + k] - mu, single), single);
+				accM2 += nr(-nr(pp + pp, single), single);
+			}
+			double a2 = nr(nr(0.0 + nr(accM2, single), single) / len, single);
+			double a4 = nr(nr(0.0 + nr(accMu, single), single) / len, single);
+			for (int k = 0; k < len; k++) {
+				double dev = nr(x[base + k] - mu, single);
+				double pp = nr(gSq * dev, single), gd2 = nr(pp + pp, single);
+				double gDev = nr(g[base + k] / sd, single);
+				double a = old == null ? gd2 : nr(old[base + k] + gd2, single);
+				out[base + k] = nr(nr(nr(a + a2, single) + gDev, single) + a4, single);
+			}
+		}
+		return out;
 	}
 
 	@Test
@@ -2686,6 +2826,19 @@ class GpuTest {
 			.isFalse();
 		assertThat(Gpu.softmaxGrad(a, 0, a, 0, null, 0, 0, out, 0, 256, big / 256, Gpu.BIN_SUB, 8.0)).isFalse();
 		assertThat(Gpu.layerNormGrad(a, 0, a, 0, shortArray, 0, out, 0, 256, big / 256, 1e-5)).isFalse();
+		// The affine pair (todo-634): a weight or bias shorter than the row, and a second
+		// result too short for the count.
+		int affLen = big / 256;
+		double[] par = new double[affLen], shortPar = new double[affLen - 1];
+		assertThat(Gpu.layerNormAffine(a, 0, shortPar, 0, par, 0, out, 0, 256, affLen, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormAffine(a, 0, par, 0, shortPar, 0, out, 0, 256, affLen, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormAffineGrad(a, 0, a, 0, shortPar, 0, null, 0, out, 0, out, 0, 256, affLen, 1e-5))
+			.isFalse();
+		assertThat(Gpu.layerNormAffineGrad(a, 0, a, 0, par, 0, null, 0, out, 0, shortArray, 0, 256, affLen, 1e-5))
+			.isFalse();
+		assertThat(Gpu.layerNormAffine(x, 0, new double[len], 0, new double[len], 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormAffineGrad(x, 0, x, 0, new double[len], 0, null, 0, c, 0, c, 0, rows, len, 1e-5))
+			.isFalse();
 		assertThat(Gpu.dropoutMask(out, 0, big, 0.1, 0.9, 1 << 23, 1, 1)).isFalse();
 		assertThat(Gpu.dropoutMask(out, 0, 0, 0.1, 0.9, 1, 1, 1)).isFalse();
 		assertThat(Gpu.dropoutMask(shortArray, 0, big, 0.1, 0.9, 1, 1, 1)).isFalse();

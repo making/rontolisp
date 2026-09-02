@@ -296,6 +296,31 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	boolean layerNormGradF(float[] g, int og, float[] x, int ox, float @org.jspecify.annotations.Nullable [] old,
 			int oOld, float[] c, int oc, int rows, int len, double eps);
 
+	/**
+	 * Layer-norm's normalization AND the module's affine over a {@code (len)} weight and
+	 * bias, as one pass per row (todo-634).
+	 */
+	boolean layerNormAffine(double[] x, int ox, double[] w, int ow, double[] b, int ob, double[] c, int oc, int rows,
+			int len, double eps);
+
+	boolean layerNormAffineF(float[] x, int ox, float[] w, int ow, float[] b, int ob, float[] c, int oc, int rows,
+			int len, double eps);
+
+	/**
+	 * Its adjoint, the one member here with TWO results: {@code c} is the input's
+	 * gradient (with the broadcast {@code g * weight} folded in and {@code old} added
+	 * where the tape added it) and {@code gn} is {@code g * norm}, whose axis-0 folds are
+	 * the weight's gradient -- {@code norm} being what the fused forward no longer
+	 * stores.
+	 */
+	boolean layerNormAffineGrad(double[] g, int og, double[] x, int ox, double[] w, int ow,
+			double @org.jspecify.annotations.Nullable [] old, int oOld, double[] c, int oc, double[] gn, int ogn,
+			int rows, int len, double eps);
+
+	boolean layerNormAffineGradF(float[] g, int og, float[] x, int ox, float[] w, int ow,
+			float @org.jspecify.annotations.Nullable [] old, int oOld, float[] c, int oc, float[] gn, int ogn, int rows,
+			int len, double eps);
+
 	boolean dropoutMask(double[] c, int oc, int n, double p, double span, int s1, int s2, int s3);
 
 	boolean dropoutMaskF(float[] c, int oc, int n, double p, double span, int s1, int s2, int s3);

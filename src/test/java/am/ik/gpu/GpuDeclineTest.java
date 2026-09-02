@@ -462,6 +462,13 @@ class GpuDeclineTest {
 		assertThat(Gpu.layerNorm(xf, 0, cf, 0, rows, len, 1e-5)).isFalse();
 		assertThat(Gpu.layerNormGrad(x, 0, x, 0, null, 0, c, 0, rows, len, 1e-5)).isFalse();
 		assertThat(Gpu.layerNormGrad(xf, 0, xf, 0, xf, 0, cf, 0, rows, len, 1e-5)).isFalse();
+		// Layer-norm's affine pair (todo-634), whose parameters are a row long.
+		double[] par = new double[len];
+		float[] parf = new float[len];
+		assertThat(Gpu.layerNormAffine(x, 0, par, 0, par, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormAffine(xf, 0, parf, 0, parf, 0, cf, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormAffineGrad(x, 0, x, 0, par, 0, null, 0, c, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormAffineGrad(xf, 0, xf, 0, parf, 0, xf, 0, cf, 0, cf, 0, rows, len, 1e-5)).isFalse();
 		assertThat(Gpu.dropoutMask(c, 0, n, 0.1, 0.9, 1, 2, 3)).isFalse();
 		assertThat(Gpu.dropoutMask(cf, 0, n, 0.1, 0.9, 1, 2, 3)).isFalse();
 		assertThat(c).containsOnly(0.0);

@@ -1396,6 +1396,23 @@
          (acc (if (null old) a1 (linalg:add old a1))))
     (linalg:add (linalg:add (linalg:add acc a2) g-dev) a4)))
 
+(defun linalg::%la-layer-norm-affine (x w b eps)
+  ;; The normalization above AND torch:layer-norm's own affine: the broadcast multiply
+  ;; by the (len) weight and the broadcast addition of the (len) bias, the two tape
+  ;; nodes the module used to spell around it -- member for member, so every CPU path
+  ;; keeps the chain's bits and a device runs the three as one pass over the activation.
+  (linalg:add (linalg:mul (linalg::%la-layer-norm x eps) w) b))
+
+(defun linalg::%la-layer-norm-affine-grad (g x w eps old)
+  ;; Its adjoint, and the one member here that answers TWO arrays -- a two-element list.
+  ;; The affine hands the normalization g * weight (the broadcast multiply the tape made)
+  ;; and the WEIGHT the axis-0 folds of g * norm; norm is the forward's own
+  ;; %la-layer-norm of x, which the fused node no longer stores, so this recomputes it.
+  ;; A device answers both from the one pass that recomputes the row statistics anyway.
+  ;; The bias's gradient is the folds of g and needs nothing from here.
+  (list (linalg::%la-layer-norm-grad (linalg:mul g w) x eps old)
+        (linalg:mul g (linalg::%la-layer-norm x eps))))
+
 (defun linalg::%la-dropout-mask (shape p st single)
   ;; The inverted-dropout mask (rand > p) / (1 - p) -- single-float when single is
   ;; non-nil -- drawn from the generator state st, which is advanced IN PLACE to the

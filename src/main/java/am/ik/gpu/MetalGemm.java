@@ -2063,6 +2063,40 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	@Override
+	public boolean layerNormAffine(double[] x, int ox, double[] w, int ow, double[] b, int ob, double[] c, int oc,
+			int rows, int len, double eps) {
+		return false;
+	}
+
+	/**
+	 * Layer-norm's affine folded into the normalization (todo-634): DECLINED here, at
+	 * both widths, so the module runs the normalization and its two broadcast passes
+	 * member by member as it did before. The kernels are {@code gemm.cu}'s only, and
+	 * whether the fold pays on this backend is for a measurement on a Mac; declining
+	 * lands on exactly what ran before, which is the whole point of the decline protocol.
+	 * @return {@code false}, always
+	 */
+	@Override
+	public boolean layerNormAffineF(float[] x, int ox, float[] w, int ow, float[] b, int ob, float[] c, int oc,
+			int rows, int len, double eps) {
+		return false;
+	}
+
+	@Override
+	public boolean layerNormAffineGrad(double[] g, int og, double[] x, int ox, double[] w, int ow,
+			double @Nullable [] old, int oOld, double[] c, int oc, double[] gn, int ogn, int rows, int len,
+			double eps) {
+		return false;
+	}
+
+	/** Its adjoint, declined for the same reason. */
+	@Override
+	public boolean layerNormAffineGradF(float[] g, int og, float[] x, int ox, float[] w, int ow, float @Nullable [] old,
+			int oOld, float[] c, int oc, float[] gn, int ogn, int rows, int len, double eps) {
+		return false;
+	}
+
+	@Override
 	public boolean dropoutMask(double[] c, int oc, int n, double p, double span, int s1, int s2, int s3) {
 		return false;
 	}

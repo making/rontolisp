@@ -234,9 +234,15 @@ class LinalgGpuDeclineTest {
 		String operands = """
 				(defparameter *x* (linalg:reshape (linalg:linspace -3.0 3.0 147456) '(384 384)))
 				(defparameter *g* (linalg:reshape (linalg:linspace 1.0 -2.0 147456) '(384 384)))
+				(defparameter *w* (linalg:linspace 0.5 1.5 384))
+				(defparameter *b* (linalg:linspace -0.3 0.3 384))
 				""";
 		for (String call : new String[] { "(linalg::%la-layer-norm *x* 1.0e-5)",
 				"(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)", "(linalg::%la-softmax-grad *g* *x* -1)",
+				// Layer-norm's affine and its two-array adjoint (todo-634).
+				"(linalg::%la-layer-norm-affine *x* *w* *b* 1.0e-5)",
+				"(linalg::%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 nil)",
+				"(linalg::%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 *g*)",
 				"(linalg::%la-scaled-masked-softmax-grad *g* *x* -1 8.0 (linalg:greater (linalg:arange 384) 200.0))",
 				"(linalg:seed 9) (linalg::%la-dropout-mask '(384 384) 0.25 (linalg::%la-rng-state) nil)" }) {
 			assertThat(eval(operands + call, true)).as(call).isEqualTo(eval(operands + call, false));

@@ -667,7 +667,7 @@ there long before any `defstruct` is reached -- measured, the error is
 `LINALG::%LA-MAKE: lambda-list keywords ... are not supported with --no-gc` --
 so the backend's own defstruct rejection never comes into play.
 
-## The fused compositions, and the accumulated-gradient protocol (todo-499, todo-629)
+## The fused compositions, and the accumulated-gradient protocol (todo-499, todo-629, todo-634)
 
 Five things a transformer step spends a third of its device time on were compositions of
 torch ops -- one `linalg:` member per op, one memory pass per member on a GPU. Since
@@ -678,6 +678,7 @@ torch ops -- one `linalg:` member per op, one memory pass per member on a GPU. S
 |---|---|---|
 | `torch:gelu` (`:none`, over an array) | `%la-gelu (x)` | `%la-gelu-grad (g x old)` |
 | `torch:layer-norm`'s normalization | `%la-layer-norm (x eps)` | `%la-layer-norm-grad (g x eps old)` |
+| `torch:layer-norm`, the WHOLE module forward | `%la-layer-norm-affine (x w b eps)` | `%la-layer-norm-affine-grad (g x w eps old)`, TWO arrays |
 | `torch:softmax` in its `:axis` form | `linalg:softmax` (unchanged) | `%la-softmax-grad (g out ax)` |
 | `torch:log-softmax` in its `:axis` form | `linalg:log-softmax` (unchanged) | `%la-log-softmax-grad (g out ax)` |
 | `torch:dropout`'s mask | `%la-dropout-mask (shape p st single)` | -- (a constant) |
@@ -707,6 +708,23 @@ from nowhere else -- `.kb/gpu.md` walks the finish order. A single tensor listed
 times as a parent was the alternative (the tape would then add the contributions itself),
 rejected because a fused kernel would have had to write four arrays and the tape add them
 back in three passes.
+
+**Layer-norm's affine is inside the node since todo-634, and its adjoint answers a
+two-element LIST.** `torch::%m-layer-norm-forward` used to end in `(torch:add (torch:mul
+norm weight) bias)` -- three tape nodes over the fused normalization, and at the book's
+shapes four whole broadcast passes over the activation a call. At nn.LayerNorm's own shape
+(an array input, a weight and a bias that are VECTORS of its last extent -- anything else
+keeps the three nodes, and the broadcasting rules answer for it as before) the module is
+now ONE node with THREE parents, `(x weight bias)`, over `%la-layer-norm-affine`. Its
+adjoint calls `%la-layer-norm-affine-grad` once through `%t-fold-grad` -- the `old`
+protocol above is the input's, unchanged, since `x` was already the parent the
+normalization node folded onto -- and reads the pair it answers: `(car r)` is `x`'s
+gradient with the broadcast `g * weight` folded in, and `(cadr r)` is `g * norm`, which
+goes through the SAME `torch::%t-unbroadcast` the `torch:mul` adjoint used, so the weight's
+gradient is the fold it always was. The bias's is `%t-unbroadcast` of `g`, which is what
+the `torch:add` adjoint did. A parent that does not track gets `nil`, as everywhere else.
+`norm` is no longer stored -- see `.kb/linalg.md` for what the CPU pays for that and
+`.kb/gpu.md`, "Layer-norm's affine", for what the device gains.
 
 `torch:dropout` needs no protocol: its mask was always a constant operand of one
 `torch:mul`. What changed is only that the three members (`rand`, `greater`, `div`) are

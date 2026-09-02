@@ -216,14 +216,18 @@ final class JvmGpuRuntimeBuilder {
 	 * The fused tier's four-argument members: layer-norm's adjoint
 	 * ({@code g, x, eps, old}) and the dropout mask ({@code shape, p, st, single}).
 	 */
-	private static final List<String> FUSED4_KERNELS = List.of("gpuLayerNormGrad", "gpuDropoutMask");
+	private static final List<String> FUSED4_KERNELS = List.of("gpuLayerNormGrad", "gpuDropoutMask",
+			// Layer-norm's affine forward ({@code x, w, b, eps}), todo-634.
+			"gpuLayerNormAffine");
 
 	/**
 	 * The fused tier's five-argument members (2026-09-02): the scaled-masked softmax
 	 * ({@code x, scale, mask, fill, axis}) and its adjoint
 	 * ({@code g, out, axis, scale, mask}).
 	 */
-	private static final List<String> FUSED5_KERNELS = List.of("gpuScaledMaskedSoftmax", "gpuScaledMaskedSoftmaxGrad");
+	private static final List<String> FUSED5_KERNELS = List.of("gpuScaledMaskedSoftmax", "gpuScaledMaskedSoftmaxGrad",
+			// Layer-norm's affine adjoint ({@code g, x, w, eps, old}), todo-634.
+			"gpuLayerNormAffineGrad");
 
 	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
 	private static final int CHUNK_SIZE = 40000;

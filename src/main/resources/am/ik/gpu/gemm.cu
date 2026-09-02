@@ -1471,6 +1471,140 @@ extern "C" __global__ void layer_norm_grad_f64(const double* G, const double* X,
   layer_norm_grad_rows<double>(G, X, OLD, C, rows, len, eps);
 }
 
+// LAYER-NORM'S AFFINE, AND THE ONE KERNEL HERE THAT WRITES TWO RESULTS (todo-634).
+// `torch:layer-norm`'s module forward is the normalization above and then
+// `norm * weight + bias`, which was two more BROADCAST passes over the activation; its
+// backward was a third (`g * weight`, towards the normalization) and a zip (`g * norm`,
+// whose axis-0 folds are the weight's gradient). All four are folded in here. The
+// parameters are read straight from global memory: the column index is uniform across the
+// warp, so each is one broadcast load out of a (len)-long vector that stays in cache for
+// every row -- unlike the attention mask, which is a cell per cell and had to be packed.
+//
+// `norm` is no longer stored anywhere once the affine is inside the node, so the adjoint
+// hands it back: C is the input's gradient and GN is `g * norm`. The kernel recomputes the
+// row statistics anyway, so that second result is the deviation it already has over the
+// standard deviation it already has, for the price of the store -- and the three j-loops
+// of the plain adjoint's last pass collapse into one, which is why the pair costs about
+// what the plain adjoint alone did.
+template <typename T>
+__device__ void layer_norm_affine_rows(const T* X, const T* W, const T* B, T* C, int rows, int len, double eps) {
+  __shared__ row_tile<T> tiles[ROW_WARPS];
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  row_tile<T>& tile = tiles[warp];
+  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+  if (row0 >= rows) return;
+  T mu, sd;
+  row_stats(tile, X, rows, len, row0, lane, eps, mu, sd);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T dev = (T) F_SUB(tile.v[lane][j], mu);
+      T nrm = (T) F_DIV(dev, sd);
+      T p = (T) F_MUL(nrm, W[c0 + j]);
+      tile.v[lane][j] = (T) F_ADD(p, B[c0 + j]);
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+}
+
+extern "C" __global__ void layer_norm_affine_f32(const float* X, const float* W, const float* B, float* C, int rows,
+                                                 int len, double eps) {
+  layer_norm_affine_rows<float>(X, W, B, C, rows, len, eps);
+}
+
+extern "C" __global__ void layer_norm_affine_f64(const double* X, const double* W, const double* B, double* C,
+                                                 int rows, int len, double eps) {
+  layer_norm_affine_rows<double>(X, W, B, C, rows, len, eps);
+}
+
+template <typename T>
+__device__ void layer_norm_affine_grad_rows(const T* G, const T* X, const T* W, const T* OLD, T* C, T* GN, int rows,
+                                            int len, double eps) {
+  __shared__ row_tile<T> tiles[ROW_WARPS][2];
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  row_tile<T>& xt = tiles[warp][0];
+  row_tile<T>& gt = tiles[warp][1];
+  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+  if (row0 >= rows) return;
+  double n = (double) len;
+  T mu, sd;
+  row_stats(xt, X, rows, len, row0, lane, eps, mu, sd);
+  // Every g the plain adjoint reads is `g * weight` here, rounded at the width where the
+  // broadcast pass stored it.
+  T q = (T) F_MUL(sd, sd);
+  double acc_sd = 0.0, acc_mu = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(xt, X, rows, len, row0, c0, lane);
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T dev = (T) F_SUB(xt.v[lane][j], mu);
+      T gk = (T) F_MUL(gt.v[lane][j], W[c0 + j]);
+      T t = (T) F_MUL(gk, dev);
+      T rr = (T) F_DIV(t, q);
+      T nr = (T) F_NEG(rr);
+      acc_sd = F_ADD(acc_sd, nr);
+      T gdev = (T) F_DIV(gk, sd);
+      T ng = (T) F_NEG(gdev);
+      acc_mu = F_ADD(acc_mu, ng);
+    }
+  }
+  T g_sd = (T) acc_sd;
+  T g_mu = (T) acc_mu;
+  T two_sd = (T) F_MUL(2.0, sd);
+  T g_ve = (T) F_DIV(g_sd, two_sd);
+  T g_s = (T) F_DIV(g_ve, n);
+  T g_sq = (T) F_ADD(0.0, g_s);
+  double acc_m2 = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(xt, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T dev = (T) F_SUB(xt.v[lane][j], mu);
+      T p = (T) F_MUL(g_sq, dev);
+      T gd2 = (T) F_ADD(p, p);
+      T nn = (T) F_NEG(gd2);
+      acc_m2 = F_ADD(acc_m2, nn);
+    }
+  }
+  T g_m2 = (T) acc_m2;
+  T a2 = (T) F_DIV((T) F_ADD(0.0, g_m2), n);
+  T a4 = (T) F_DIV((T) F_ADD(0.0, g_mu), n);
+  int row = row0 + lane;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(xt, X, rows, len, row0, c0, lane);
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T dev = (T) F_SUB(xt.v[lane][j], mu);
+      T gv = gt.v[lane][j];
+      T nrm = (T) F_DIV(dev, sd);
+      T gn = (T) F_MUL(gv, nrm);
+      T gk = (T) F_MUL(gv, W[c0 + j]);
+      T p = (T) F_MUL(g_sq, dev);
+      T gd2 = (T) F_ADD(p, p);
+      T gdev = (T) F_DIV(gk, sd);
+      T a = gd2;
+      if (OLD != 0 && row < rows) a = (T) F_ADD(OLD[(long long) row * len + c0 + j], a);
+      a = (T) F_ADD(a, a2);
+      a = (T) F_ADD(a, gdev);
+      xt.v[lane][j] = (T) F_ADD(a, a4);
+      gt.v[lane][j] = gn;
+    }
+    tile_store(xt, C, rows, len, row0, c0, lane);
+    tile_store(gt, GN, rows, len, row0, c0, lane);
+  }
+}
+
+extern "C" __global__ void layer_norm_affine_grad_f32(const float* G, const float* X, const float* W,
+                                                      const float* OLD, float* C, float* GN, int rows, int len,
+                                                      double eps) {
+  layer_norm_affine_grad_rows<float>(G, X, W, OLD, C, GN, rows, len, eps);
+}
+
+extern "C" __global__ void layer_norm_affine_grad_f64(const double* G, const double* X, const double* W,
+                                                      const double* OLD, double* C, double* GN, int rows, int len,
+                                                      double eps) {
+  layer_norm_affine_grad_rows<double>(G, X, W, OLD, C, GN, rows, len, eps);
+}
+
 // The inverted-dropout mask (rand > p) / (1 - p) as `torch:dropout` composes it: the
 // generator's uniform draw stored at the width (`rng_fill` mode 0), the comparison mask
 // (a scalar `greater`, in double over the STORED draw), the division by the survival

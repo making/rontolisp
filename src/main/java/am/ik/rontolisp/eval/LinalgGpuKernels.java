@@ -852,6 +852,37 @@ final class LinalgGpuKernels {
 		return Gpu.layerNormGrad(g, 0, x, 0, old, 0, out, 0, rows, len, eps) ? out : null;
 	}
 
+	/** {@code linalg::%la-layer-norm-affine} over the last axis, or {@code null}. */
+	static double @Nullable [] layerNormAffine(double[] x, double[] w, double[] b, int rows, int len, double eps) {
+		double[] out = result(rows * len);
+		return Gpu.layerNormAffine(x, 0, w, 0, b, 0, out, 0, rows, len, eps) ? out : null;
+	}
+
+	static float @Nullable [] layerNormAffine(float[] x, float[] w, float[] b, int rows, int len, double eps) {
+		float[] out = resultF(rows * len);
+		return Gpu.layerNormAffine(x, 0, w, 0, b, 0, out, 0, rows, len, eps) ? out : null;
+	}
+
+	/**
+	 * {@code linalg::%la-layer-norm-affine-grad} over the last axis: the input's gradient
+	 * and {@code g * norm}, in that order, or {@code null}.
+	 */
+	static double @Nullable [][] layerNormAffineGrad(double[] g, double[] x, double[] w, double @Nullable [] old,
+			int rows, int len, double eps) {
+		double[] dx = result(rows * len);
+		double[] gn = result(rows * len);
+		return Gpu.layerNormAffineGrad(g, 0, x, 0, w, 0, old, 0, dx, 0, gn, 0, rows, len, eps)
+				? new double[][] { dx, gn } : null;
+	}
+
+	static float @Nullable [][] layerNormAffineGrad(float[] g, float[] x, float[] w, float @Nullable [] old, int rows,
+			int len, double eps) {
+		float[] dx = resultF(rows * len);
+		float[] gn = resultF(rows * len);
+		return Gpu.layerNormAffineGrad(g, 0, x, 0, w, 0, old, 0, dx, 0, gn, 0, rows, len, eps)
+				? new float[][] { dx, gn } : null;
+	}
+
 	/**
 	 * {@code linalg::%la-dropout-mask}'s fill on the device: the mask into {@code out},
 	 * answering the generator's end state as {@link #rngFill} does, or {@code null}.

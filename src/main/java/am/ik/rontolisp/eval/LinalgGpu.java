@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 import am.ik.rontolisp.FloatArrayAccessHook;
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
@@ -250,6 +251,10 @@ public final class LinalgGpu {
 				LinalgGpu::layerNorm);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_LAYER_NORM_GRAD, 4,
 				LinalgGpu::layerNormGrad);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_LAYER_NORM_AFFINE, 4,
+				LinalgGpu::layerNormAffine);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_LAYER_NORM_AFFINE_GRAD, 5,
+				LinalgGpu::layerNormAffineGrad);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_DROPOUT_MASK, 4,
 				LinalgGpu::dropoutMask);
 	}
@@ -807,6 +812,84 @@ public final class LinalgGpu {
 				((LispDoubleFloatArray) x).storage(), old == null ? null : ((LispDoubleFloatArray) old).storage(), rows,
 				len, eps);
 		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/**
+	 * {@code (linalg::%la-layer-norm-affine x w b eps)}: the normalization AND the
+	 * module's affine over a {@code (len)} weight and bias as one pass per row,
+	 * bit-identical to the chain. Declines anything whose parameters are not two packed
+	 * vectors of the operand's own width and last extent -- the shape
+	 * {@code torch:layer-norm} builds -- and the composition then runs member by member.
+	 */
+	private static @Nullable LispVal layerNormAffine(List<LispVal> args) {
+		LispFloatArray x = LinalgSimd.packed(args.get(0));
+		LispFloatArray w = LinalgSimd.packed(args.get(1));
+		LispFloatArray b = LinalgSimd.packed(args.get(2));
+		Double eps = number(args.get(3));
+		if (x == null || w == null || b == null || eps == null || x.rank() < 1) {
+			return null;
+		}
+		int[] d = x.dims();
+		int len = d[d.length - 1];
+		int rows = len == 0 ? 0 : x.totalSize() / len;
+		if (rows < 1 || !isVector(w, len) || !isVector(b, len) || w.getClass() != x.getClass()
+				|| b.getClass() != x.getClass()) {
+			return null;
+		}
+		if (x instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.layerNormAffine(single.storage(), ((LispSingleFloatArray) w).storage(),
+					((LispSingleFloatArray) b).storage(), rows, len, eps);
+			return c == null ? null : new LispSingleFloatArray(c, d.clone());
+		}
+		double[] c = LinalgGpuKernels.layerNormAffine(((LispDoubleFloatArray) x).storage(),
+				((LispDoubleFloatArray) w).storage(), ((LispDoubleFloatArray) b).storage(), rows, len, eps);
+		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/**
+	 * {@code (linalg::%la-layer-norm-affine-grad g x w eps old)}: its adjoint, and the
+	 * one member here that answers a two-element LIST -- the input's gradient folded onto
+	 * {@code old}, and {@code g * norm}, whose axis-0 folds are the weight's gradient.
+	 */
+	private static @Nullable LispVal layerNormAffineGrad(List<LispVal> args) {
+		LispFloatArray g = LinalgSimd.packed(args.get(0));
+		LispFloatArray x = LinalgSimd.packed(args.get(1));
+		LispFloatArray w = LinalgSimd.packed(args.get(2));
+		Double eps = number(args.get(3));
+		LispFloatArray old = args.get(4) instanceof LispNil ? null : LinalgSimd.packed(args.get(4));
+		if (g == null || x == null || w == null || eps == null || !sameShape(g, x)
+				|| (!(args.get(4) instanceof LispNil) && old == null) || (old != null && !sameShape(g, old))
+				|| g.rank() < 1) {
+			return null;
+		}
+		int[] d = g.dims();
+		int len = d[d.length - 1];
+		int rows = len == 0 ? 0 : g.totalSize() / len;
+		if (rows < 1 || !isVector(w, len) || w.getClass() != g.getClass()) {
+			return null;
+		}
+		if (g instanceof LispSingleFloatArray single) {
+			float @Nullable [][] c = LinalgGpuKernels.layerNormAffineGrad(single.storage(),
+					((LispSingleFloatArray) x).storage(), ((LispSingleFloatArray) w).storage(),
+					old == null ? null : ((LispSingleFloatArray) old).storage(), rows, len, eps);
+			return c == null ? null
+					: pair(new LispSingleFloatArray(c[0], d.clone()), new LispSingleFloatArray(c[1], d.clone()));
+		}
+		double @Nullable [][] c = LinalgGpuKernels.layerNormAffineGrad(((LispDoubleFloatArray) g).storage(),
+				((LispDoubleFloatArray) x).storage(), ((LispDoubleFloatArray) w).storage(),
+				old == null ? null : ((LispDoubleFloatArray) old).storage(), rows, len, eps);
+		return c == null ? null
+				: pair(new LispDoubleFloatArray(c[0], d.clone()), new LispDoubleFloatArray(c[1], d.clone()));
+	}
+
+	/** Whether a packed operand is a vector of exactly {@code len} elements. */
+	private static boolean isVector(LispFloatArray v, int len) {
+		return v.rank() == 1 && v.dims()[0] == len;
+	}
+
+	/** The two-element list a two-result member answers. */
+	private static LispVal pair(LispVal first, LispVal second) {
+		return new LispCons(first, new LispCons(second, LispNil.INSTANCE));
 	}
 
 	/**
