@@ -14522,6 +14522,59 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void theFloorFamilyQuotientIsExactPastTheLongRange() throws Exception {
+		// The quotient used to be computed as a double and narrowed into a long, so it
+		// clamped past 2^63 and the remainder derived from it came back equal to the
+		// dividend. _fdiv divides the two operands as the exact rationals they are.
+		assertThat(compileAndRun("""
+				(defun ft (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+				(defun ff (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+				(print (ft 1d18 7.0))
+				(print (ff 1d18 7.0))
+				(print (ft 1d30 3.0))
+				(print (floor 1d300))
+				""")).isEqualTo("""
+				(142857142857142857 1.0)
+				(142857142857142857 1.0)
+				(333333333333333339961541612885 1.0)
+				"""
+				+ "1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160");
+	}
+
+	@Test
+	void theFloorFamilyMatchesTheInterpreterOverAMagnitudeSweep() throws Exception {
+		// Both values of all four operators, over pairs that cross 2^53 and 2^63 in both
+		// directions, against the interpreter -- whose quotient is the exact rational
+		// rounding and whose remainder is rem/mod (LispEvaluatorTest pins both against an
+		// exact-rational oracle of their own).
+		double[] dividends = { 1e18, 1e300, -1e300, 1e30, 12345.678, -12345.678, 3.0, -3.0, 0.5, 1e-300, 1.0, -1.0,
+				-0.0, 0.0, 2.5, -7.5, 5.0, 7.0, 1.8446744073709552e19 };
+		double[] divisors = { 7.0, -7.0, 3.0, 0.1, -0.1, 2.5, 1.0, -1.0, 0.5, 2.0, -2.0 };
+		StringBuilder source = new StringBuilder("""
+				(defun ftr (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+				(defun ffl (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+				(defun fce (a b) (multiple-value-bind (q r) (ceiling a b) (list q r)))
+				(defun fro (a b) (multiple-value-bind (q r) (round a b) (list q r)))
+				""");
+		for (double a : dividends) {
+			for (double b : divisors) {
+				String x = Double.toString(a).replace('E', 'e');
+				String y = Double.toString(b).replace('E', 'e');
+				source.append("(print (list (ftr %s %s) (ffl %s %s) (fce %s %s) (fro %s %s)))%n".formatted(x, y, x, y,
+						x, y, x, y));
+			}
+		}
+		String program = source.toString();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(compileAndRun(program)).isEqualTo(interpreted.toString(StandardCharsets.UTF_8).trim());
+	}
+
+	@Test
 	void nanComparisonsAreUnorderedOnBothPaths() throws Exception {
 		// DCMPL-for-every-operator made < and <= answer t against NaN.
 		assertThat(compileAndRun("(print (< (/ 0.0 0.0) 1.0))")).isEqualTo("NIL");

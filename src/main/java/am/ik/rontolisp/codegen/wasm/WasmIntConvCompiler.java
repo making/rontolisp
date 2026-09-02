@@ -20,6 +20,9 @@ import am.ik.wasm.Instruction;
  */
 final class WasmIntConvCompiler {
 
+	/** 2^63 as a double: the first magnitude an i64 cannot hold. */
+	private static final double LONG_LIMIT = 9.223372036854776E18;
+
 	private WasmIntConvCompiler() {
 	}
 
@@ -71,6 +74,27 @@ final class WasmIntConvCompiler {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_FDIV);
 			ctx.writer.write(Instruction.ELSE);
+			// A FLOAT operand divides exactly too: _f64_fdiv reads both operands as the
+			// exact rationals they are, so the quotient is the mathematical integer at
+			// any magnitude rather than the rounded double (/ a b) narrowed into an i64,
+			// and the remainder beside it stays rem/mod (.kb/linalg-simd.md, "mod/rem").
+			// It answers a null for the pairs it does not improve on -- a ratio operand,
+			// a non-finite float, a zero divisor -- which fall through to the ordinary
+			// division below.
+			int exactSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(aSlot);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(bSlot);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(fdivMode);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_F64_FDIV);
+			ctx.writer.write(Instruction.TEE_LOCAL);
+			ctx.writer.writeUnsignedLeb128(exactSlot);
+			ctx.writer.write(Instruction.REF_IS_NULL);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(aSlot);
 			ctx.writer.write(Instruction.GET_LOCAL);
@@ -79,19 +103,24 @@ final class WasmIntConvCompiler {
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DIV);
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
-			emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc);
+			emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc, fdivMode);
+			ctx.writer.write(Instruction.ELSE);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(exactSlot);
+			ctx.writer.write(Instruction.END);
 			ctx.writer.write(Instruction.END);
 			return;
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc);
+		emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc, fdivMode);
 	}
 
 	// The generic conversion over the value stored in tmpSlot: ratio -> the rational
 	// runtime helper; exact integer -> identity; float -> f64 rounding + i64 trunc.
-	private static void emitGenericFromSlot(WasmLispCompiler.Ctx ctx, int tmpSlot, int f64RoundingOp, int ratioFunc) {
+	private static void emitGenericFromSlot(WasmLispCompiler.Ctx ctx, int tmpSlot, int f64RoundingOp, int ratioFunc,
+			int fdivMode) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -112,10 +141,51 @@ final class WasmIntConvCompiler {
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.ELSE);
 		// Float path: apply the f64 rounding, then truncate to i64 and re-normalize
-		// (so a float past the i31 range converts to a boxed integer). The
-		// SATURATING truncation clamps a float past the i64 range to
-		// Long.MAX/MIN_VALUE, matching what the interpreter and JVM answer for
-		// (truncate 1e30) instead of trapping.
+		// (so a float past the i31 range converts to a boxed integer). Inside the i64
+		// range that narrowing is exact -- every double past 2^52 is already an
+		// integer, so rounding cannot carry a value across the boundary. PAST it the
+		// answer is a bignum, and _f64_fdiv over a divisor of one is what widens it
+		// exactly instead of clamping at i64.max; a NaN fails the magnitude test
+		// (f64.lt is false for it) and an infinity is declined by _f64_fdiv, so both
+		// keep the saturating narrowing they always had.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		ctx.writer.write(Instruction.F64_ABS);
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(LONG_LIMIT);
+		ctx.writer.write(Instruction.F64_LT);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
+		emitNarrowedFromSlot(ctx, tmpSlot, f64RoundingOp);
+		ctx.writer.write(Instruction.ELSE);
+		int wideSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(fdivMode);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_F64_FDIV);
+		ctx.writer.write(Instruction.TEE_LOCAL);
+		ctx.writer.writeUnsignedLeb128(wideSlot);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
+		emitNarrowedFromSlot(ctx, tmpSlot, f64RoundingOp);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(wideSlot);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/** The f64 rounding of the float in the slot, saturating into an i64 integer. */
+	private static void emitNarrowedFromSlot(WasmLispCompiler.Ctx ctx, int tmpSlot, int f64RoundingOp) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		WasmEmitHelper.castFloatGetF64(ctx);
@@ -126,8 +196,6 @@ final class WasmIntConvCompiler {
 		ctx.writer.writeUnsignedLeb128(Instruction.I64_TRUNC_SAT_F64_S);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
 	}
 
 	// Pushes `local[slot] is (i31 | TYPE_BIGNUM | TYPE_BIGINT)` as an i32.

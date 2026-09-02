@@ -3368,8 +3368,9 @@ Six things worth knowing before editing these:
   handle instead of the shared cache.
 - **A test whose shape does not clear the threshold that gates the mechanism it asserts
   on runs nothing, and passes.** The general rule and what to do about it are in
-  `.kb/test-execution.md`, "A test that never ran the mechanism it asserts on"; the sweep
-  that produced it is below.
+  `.kb/test-execution.md`, "A test that never ran the mechanism it asserts on"; the sweeps
+  that produced it are below, one per backend -- and note that they found DIFFERENT tests
+  vacuous, because the thresholds differ, so neither answers for the other.
 - **Exact-input operands must be exact IN THE FOLD too** -- a 64-long sum of products of
   1..4096 is not, at f32, because the defun accumulates in f64 and no f32 kernel can follow.
   That is `.kb/linalg-simd.md`'s reduction contract and not this seam.
@@ -3572,6 +3573,100 @@ ONE-SIDED one in the file.
   are genuinely different: this one comes back. Above that the allocation fails outright
   (10 GB an operand at n = 50000, 40 GB at 100000) and nothing is taken, which is why the
   test uses 100000: it is the shape whose cost is stably zero.
+
+### The same two questions on CUDA (2026-09-03)
+
+The two sections above were written on an M4 Max. This is their CUDA half, swept on an
+NVIDIA GB10 (sm_121, 48 SMs, driver API 13.0, pooled allocation) with the device in force.
+The thresholds every number below is relative to:
+
+```
+work 131072  map 16384  strided 32768  fold 131072  fused 131072  rng 8192  matvec 131072
+foldMinCells 256   supportsDouble true   lazyResultsPay true
+```
+
+**`am/ik/gpu/GpuDeclineTest` is ungated, so on this machine it runs WITH the device**, and
+whether each of its enumerations is therefore a free "with a device present" pin is decided
+by its hard-coded shapes -- which are hard-coded deliberately and must stay that way, since
+a GPU-less runner may not size itself off a machine's thresholds. Measured by asking the
+same shape WELL-FORMED and reading the accept/decline answer:
+
+| enumeration | its fixed shape | here |
+|---|---|---|
+| `everyDeclineConditionDeclinesRatherThanThrows` | 64-cube, work 262144 | accepted -- a free device-present pin |
+| `theDestinationTakingFormDeclinesOnTheSameConditions` | 64-cube | accepted -- free pin |
+| `everyElementWiseDeclineConditionDeclinesRatherThanThrows` | `mapMinElements() * 2` = 32768 | accepted -- free pin |
+| `everyBatchedDeclineConditionDeclinesRatherThanThrows` | 8 x 64-cube, work 2097152 | accepted -- free pin. **This is the one that is vacuous on Metal**, whose floor is 4194304 |
+| `everyMatrixByVectorDeclineConditionDeclinesRatherThanThrows` | 512 x 256 = 131072, EXACTLY the floor | the bounds run in `Gpu.matvec`'s `offeredMatvec` BEFORE the size and residency gate, so every condition is reached; the well-formed call declines on the first sight and is accepted on the second |
+| `everyGeneratorFillDeclineConditionDeclinesRatherThanThrows` | 16384 against an 8192 floor | accepted -- free pin |
+| `everyStridedDeclineConditionDeclinesRatherThanThrows` | 4096 x 64 = 262144 | accepted for the broadcast, the gather AND the fold (262144 clears both floors) -- free pin, and the ONLY pin the fold conditions have here, see below |
+| `theFusedTierDeclinesRatherThanThrowsOnEveryMachine` | 8 x 16 = 128 | **vacuous with hardware**, exactly as on Metal: every member declines on SIZE. Its own comment says so, and `GpuTest` is where the conditions are asked |
+| `theResidentTierAndTheLazyHooksDecline...` | 65536, fresh arrays | declines because nothing is resident, which is its claim. Over a RESIDENT operand every member of the tier -- including the index tier and the clip norm, which are not members on Metal -- is accepted here |
+
+**Two vacuities were found, both in `GpuTest`, both established by MUTATION** (put the
+condition back to always-true and watch the value assertions still pass):
+
+1. **`everyStridedDeclineConditionStillDeclinesWithADevicePresent`'s three FOLD conditions
+   pinned nothing.** Its `rows` was sized off `stridedMinElements()` (1024 x 64 = 65536,
+   comfortably over the strided floor of 32768) while the fold is gated by its OWN floor of
+   131072, so the unnamed op code, the one-cell fold and the zero `inner` all declined for
+   their SIZE. With `Gpu#offeredFold` forced to `true` the test stayed GREEN. The control is
+   the reason this was not also a coverage hole: the same mutation turns
+   `GpuDeclineTest.everyStridedDeclineConditionDeclinesRatherThanThrows` RED, because its
+   fixed 4096 x 64 does clear the fold floor -- the device-free suite was carrying the
+   device-present pin. Fixed by sizing off `max(stridedMinElements(), foldMinElements())`,
+   which now makes both tests catch the mutation.
+2. **The fused tier's ROW-COUNT floor was pinned NOWHERE, on either suite.** `Gpu#offeredRows`
+   requires `rows >= foldMinCells()` (256) for a fresh operand; deleting that clause left all
+   139 tests of `GpuTest`, `GpuDeclineTest`, `LinalgGpuTest` and `LinalgGpuDeclineTest`
+   green. `GpuTest`'s four `rows = 4, len = 64` lines cannot be what says so -- 256 elements
+   is under the map floor, so they decline on size, and the comment calling them "too few
+   rows" was wrong. Pinning it takes a total ABOVE the threshold laid out in too few rows
+   (128 x 2048 against 256 x 1024), with the 256-row form asserted ACCEPTED first.
+
+**The fix's shape, and it is the general one**: a `...StillDeclinesWithADevicePresent` test
+now opens by asserting the same shape ACCEPTED, over the baseline's OWN arrays. Its own
+arrays because an accepted call leaves its operand resident and a resident operand is offered
+whatever its size -- a baseline over the enumeration's arrays would change the very gate the
+declines are meant to run into. Six tests carry one now (product, element-wise, strided,
+matvec -- where it takes two calls, since a GEMV is accepted on the second sight of an
+unwritten matrix -- batched and fused); `everyResidentTierDeclineConditionStillDeclines...`
+already had one.
+
+**Why `aDeclinedProductCostsTheDeviceNothing`'s memory assertion is ONE-SIDED here**, which
+was undocumented and is the answer to the question Metal's session asked. It is one-sided for
+a real reason, and **the reason is not Metal's**. There the mechanism is the pool: a call
+enters it before it declines and entering drains the slabs of every host array the collector
+has reached. Here it is `CudaGemm#allocate`'s give-back ladder: when the request does not fit
+and `residency.occupied()`, the pre-flight collects, trims the driver pool and re-asks, and
+if that is still not enough it EVICTS every resident copy the call is not holding, drains and
+trims again. So a run of declined products hands back whatever earlier tests left resident.
+Measured in a real class-order run: free device memory GROWS by 284 MB across the test's
+twelve declined 100000-cubes and `residentBytes()` is 0 afterwards; in an isolated probe with
+1 GB deliberately made resident it grows by 1.29 GB, and with nothing resident it does not
+move at all (0 bytes, because the ladder is gated on `occupied()`). **A two-sided bound would
+be red on both backends, for two different mechanisms.** Keep it one-sided; the direction that
+matters is the one the test was written for -- a decline that TAKES memory and does not give
+it back.
+
+**And that is why the file's OTHER two `cuMemGetInfo` assertions can be two-sided**
+(`Math.abs(before - freeDeviceMemory()) < DRIFT_BOUND`, in
+`theResidentSetIsBoundedByItsBudgetAndAReleaseGivesTheMemoryBack` and the lazy-results
+eviction test): each takes its `before` right after a `releaseResident()` and its `after`
+right after another one, so BOTH endpoints have an empty residency and the ladder has nothing
+to hand back in between. `aDeclinedProductCostsTheDeviceNothing` deliberately does not release
+first -- the failure it exists for is about a decline over a device in whatever state the
+program left it -- so its endpoints are asymmetric by construction. The rule to carry: a
+two-sided device-memory bound is available only where the residency is empty at both ends.
+
+**What was swept, so the next reader does not sweep it again**: every enumeration in
+`am/ik/gpu/GpuDeclineTest` (all 27 tests) against the thresholds in force here, and every
+`...StillDeclinesWithADevicePresent` test in `am/ik/gpu/GpuTest`, plus that suite's three
+`cuMemGetInfo` assertions for one-sidedness. **What was NOT swept**: the rest of `GpuTest`'s
+57 tests for the vacuity hazard (`MetalGpuTest` got that treatment on 2026-09-03 and was
+found clean, but the CUDA suite's non-decline tests have only been checked against the
+reachability rule, not against "did the mechanism run"), and `codegen/jvm` and `eval`, which
+the 2026-09-03 Metal sweep covered.
 
 ## Native image
 

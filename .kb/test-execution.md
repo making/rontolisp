@@ -135,10 +135,15 @@ floor there), while two are vacuous there for the same reason in reverse: the ba
 enumeration builds 2097152 units of work against a 4194304 floor and the fused one builds
 128 elements, so with hardware present every case in them declines on SIZE and the
 condition under test is never reached (`.kb/gpu.md`, "What GpuTest claims, and where Metal
-answers it", todo-662). So: do not read "runs everywhere" as "pins everywhere", and when
-you write the device-present sibling, **assert an accepted baseline at the same shape
-first** -- that one line is what separates "this condition declines" from "this shape was
-never offered".
+answers it", todo-662). On CUDA the SAME suite splits differently -- the batched enumeration
+is a free pin there and the strided one covers the fold as well, while the fused one is
+vacuous on both -- so which of its enumerations pin is a per-backend fact and neither
+backend's answer transfers (`.kb/gpu.md`, "The same two questions on CUDA"). So: do not read
+"runs everywhere" as "pins everywhere", and when you write the device-present sibling,
+**assert an accepted baseline at the same shape first, over the BASELINE'S OWN arrays** --
+that one line is what separates "this condition declines" from "this shape was never
+offered", and the separate arrays are what stop the baseline making the enumeration's
+operand resident, which would move the gate the declines are meant to run into.
 
 **Proving one of these is vacuous takes a mutation, not an argument.** Restore the old
 constant with the new census in place: if the value assertions still pass and only the

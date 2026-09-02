@@ -6661,7 +6661,7 @@ public final class Environment implements Scope {
 				return arg;
 			}
 			if (arg instanceof LispDouble d) {
-				return new LispInteger((long) d.value());
+				return ExactRounding.floatToInteger(d.value(), ExactRounding.TRUNCATE);
 			}
 			if (arg instanceof LispRatio r) {
 				return normalizeBig(r.truncate());
@@ -6675,7 +6675,7 @@ public final class Environment implements Scope {
 				return arg;
 			}
 			if (arg instanceof LispDouble d) {
-				return new LispInteger((long) Math.floor(d.value()));
+				return ExactRounding.floatToInteger(d.value(), ExactRounding.FLOOR);
 			}
 			if (arg instanceof LispRatio r) {
 				return normalizeBig(r.floor());
@@ -6689,7 +6689,7 @@ public final class Environment implements Scope {
 				return arg;
 			}
 			if (arg instanceof LispDouble d) {
-				return new LispInteger((long) Math.ceil(d.value()));
+				return ExactRounding.floatToInteger(d.value(), ExactRounding.CEILING);
 			}
 			if (arg instanceof LispRatio r) {
 				return normalizeBig(r.ceiling());
@@ -6703,7 +6703,7 @@ public final class Environment implements Scope {
 				return arg;
 			}
 			if (arg instanceof LispDouble d) {
-				return new LispInteger((long) Math.rint(d.value()));
+				return ExactRounding.floatToInteger(d.value(), ExactRounding.ROUND);
 			}
 			if (arg instanceof LispRatio r) {
 				return normalizeBig(r.round());

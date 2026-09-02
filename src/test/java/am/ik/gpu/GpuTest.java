@@ -137,6 +137,26 @@ class GpuTest {
 		return (n + 15) / 16 * 16;
 	}
 
+	// --- accepted baselines -----------------------------------------------------------
+	// Every "...StillDeclinesWithADevicePresent" test below asserts that a CONDITION
+	// declines while a device is present -- which is worth nothing unless the shape it
+	// asks at would have been ACCEPTED without that condition. A shape under the
+	// threshold in force declines for its size, the assertion passes, and the condition
+	// is never reached: the test is green and pins nothing (.kb/test-execution.md, "A
+	// test that never ran the mechanism it asserts on"). So each of them opens with one
+	// of these, which asserts the same shape accepted.
+	//
+	// Each baseline uses its OWN arrays rather than the enumeration's. An accepted call
+	// leaves its operand RESIDENT, and a resident operand is offered whatever its size --
+	// so a baseline over the enumeration's own arrays would change the very gate the
+	// declines below are meant to run into.
+
+	/** The {@code n x n x n} product accepted, over the baseline's own operands. */
+	private static void acceptedProductBaseline(int n) {
+		double[] a = new double[n * n], b = new double[n * n], out = new double[n * n];
+		assertThat(Gpu.multiply(a, 0, b, 0, out, 0, n, n, n)).as("a %d-cube product must be accepted here", n).isTrue();
+	}
+
 	@Test
 	void theCheckedInPtxLoadsAndTheKernelComputes() {
 		assertThat(Gpu.description()).contains("sm_");
@@ -331,6 +351,7 @@ class GpuTest {
 	void everyDeclineConditionStillDeclinesWithADevicePresent() {
 		int n = square();
 		double[] a = new double[n * n], b = new double[n * n], out = new double[n * n];
+		acceptedProductBaseline(n);
 		assertThat(Gpu.worth(8, 8, 8)).isFalse();
 		assertThat(Gpu.multiply(a, 0, b, 0, 8, 8, 8)).isNull();
 		assertThat(Gpu.multiply(a, 0, b, 0, 4 * n, 4 * n, 4 * n)).isNull();
@@ -503,6 +524,9 @@ class GpuTest {
 	void everyElementWiseDeclineConditionStillDeclinesWithADevicePresent() {
 		int n = (int) Gpu.mapMinElements() * 2;
 		double[] a = new double[n], out = new double[n];
+		double[] baseA = new double[n], baseOut = new double[n];
+		assertThat(Gpu.map(Gpu.MAP_EXP, baseA, 0, baseOut, 0, n)).as("a %d-element map must be accepted here", n)
+			.isTrue();
 		assertThat(Gpu.worthMap(8)).isFalse();
 		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 0, 8)).isFalse();
 		assertThat(Gpu.map(Gpu.MAP_OPS, a, 0, out, 0, n)).isFalse();
@@ -694,12 +718,42 @@ class GpuTest {
 	@Test
 	void everyStridedDeclineConditionStillDeclinesWithADevicePresent() {
 		int cols = 64;
-		int rows = (int) Math.max(Gpu.stridedMinElements() / cols * 2, 512);
+		// TWO tiers are enumerated here and they have different floors, so the shape is
+		// sized off the LARGER: the broadcast and the gather are gated by the strided
+		// threshold and the fold by its own, which is four times bigger on this backend.
+		// Sized off the strided floor alone -- as this was until 2026-09-03 -- the three
+		// fold conditions below declined for their SIZE and pinned nothing: with
+		// Gpu#offeredFold forced to answer true this test stayed green, while
+		// GpuDeclineTest's ungated enumeration of the same conditions, whose fixed
+		// 4096 x 64 does clear the fold floor, went red (.kb/gpu.md, "Tests").
+		// The guard on that arithmetic: the fold's threshold is Long.MAX_VALUE on a
+		// backend that is not a member of the tier, and multiplying or dividing THAT
+		// yields a shape below every floor rather than an impossible one. This suite is
+		// gated on a double-capable device, where the fold is a member, so the sentinel
+		// cannot appear -- and saying so out loud is what makes it fail loudly if it ever
+		// does (.kb/gpu.md, "Tests").
+		assertThat(Gpu.foldMinElements()).as("the fold is a member on the device this suite is gated on")
+			.isNotEqualTo(Long.MAX_VALUE);
+		long floor = Math.max(Gpu.stridedMinElements(), Gpu.foldMinElements());
+		int rows = (int) Math.max(floor / cols * 2, 512);
 		int n = rows * cols;
 		double[] x = new double[n], y = new double[rows], out = new double[n];
 		int[] dims = { rows, cols };
 		int[] sx = { cols, 1 };
 		int[] sy = { 1, 0 };
+		// The accepted baseline, one FRESH operand per member so that no member's
+		// acceptance makes the next one's operand resident -- which would answer for
+		// residency where the question is size.
+		double[] baseB = new double[n], baseG = new double[n], baseF = new double[n], baseOut = new double[n],
+				baseRow = new double[rows];
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, baseB, 0, sx, baseRow, 0, sy, baseOut, 0, dims))
+			.as("a %d-element broadcast must be accepted here", n)
+			.isTrue();
+		assertThat(Gpu.gather(baseG, 0, sx, baseOut, 0, dims)).as("a %d-element gather must be accepted here", n)
+			.isTrue();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, baseF, 0, baseOut, 0, rows, cols, 1))
+			.as("a %d-element fold must be accepted here", n)
+			.isTrue();
 		assertThat(Gpu.bcast(Gpu.BIN_OPS, x, 0, sx, y, 0, sy, out, 0, dims)).isFalse();
 		assertThat(Gpu.bcast(-1, x, 0, sx, y, 0, sy, out, 0, dims)).isFalse();
 		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, sx, y, 0, sy, out, 1, dims)).isFalse();
@@ -960,6 +1014,14 @@ class GpuTest {
 	void everyMatrixByVectorDeclineConditionStillDeclinesWithADevicePresent() {
 		int rows = 512, cols = 256;
 		double[] w = new double[rows * cols], x = new double[cols], y = new double[rows];
+		// The accepted baseline at the same shape, over its own matrix. A GEMV is
+		// accepted on the SECOND sight of a matrix nothing has written, so it takes two
+		// calls; the first declining is the rule, not a shortfall.
+		double[] baseW = new double[rows * cols], baseX = new double[cols], baseY = new double[rows];
+		assertThat(Gpu.matvec(baseW, 0, baseX, 0, baseY, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(baseW, 0, baseX, 0, baseY, 0, rows, cols))
+			.as("a %d x %d GEMV must be accepted here on the second sight", rows, cols)
+			.isTrue();
 		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 64, 64)).isFalse();
 		assertThat(Gpu.matvec(w, 0, new double[cols - 1], 0, y, 0, rows, cols)).isFalse();
 		assertThat(Gpu.matvec(w, 0, x, 0, new double[rows - 1], 0, rows, cols)).isFalse();
@@ -1299,6 +1361,14 @@ class GpuTest {
 		int n = square();
 		int batch = 3;
 		double[] a = new double[batch * n * n], b = new double[batch * n * n], out = new double[batch * n * n];
+		// The accepted baseline at the same shape, over its own operands: this
+		// enumeration is the one that went vacuous on the other backend, whose floor the
+		// same batch does not clear (.kb/gpu.md, "What GpuTest claims").
+		double[] baseA = new double[batch * n * n], baseB = new double[batch * n * n],
+				baseOut = new double[batch * n * n];
+		assertThat(Gpu.multiply(baseA, 0, n * n, baseB, 0, n * n, baseOut, 0, batch, n, n, n))
+			.as("a %d x %d-cube batch must be accepted here", batch, n)
+			.isTrue();
 		// Below the threshold, which for a stack is the TOTAL work: one 8x8x8 product
 		// stays below it however the batch is spelled, and 64 of them still do.
 		assertThat(Gpu.worth(64, 8, 8, 8)).isFalse();
@@ -2806,15 +2876,31 @@ class GpuTest {
 
 	@Test
 	void everyFusedDeclineConditionStillDeclinesWithADevicePresent() {
-		// Too few rows for a fresh operand, an empty row, a result or an accumulated
-		// gradient too short, a state word out of range: each declines, none throws.
+		// A row pass over an operand BELOW the size threshold, an empty row, a result or
+		// an accumulated gradient too short, a state word out of range: each declines,
+		// none throws.
 		int rows = 4, len = 64, n = rows * len;
 		double[] x = new double[n], c = new double[n];
 		assertThat(Gpu.softmax(x, 0, c, 0, rows, len)).isFalse();
 		assertThat(Gpu.softmaxGrad(x, 0, x, 0, c, 0, rows, len)).isFalse();
 		assertThat(Gpu.layerNorm(x, 0, c, 0, rows, len, 1e-5)).isFalse();
 		assertThat(Gpu.layerNormGrad(x, 0, x, 0, null, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.foldMinElements()).as("the fold is a member on the device this suite is gated on")
+			.isNotEqualTo(Long.MAX_VALUE);
 		int big = (int) Math.max(Gpu.mapMinElements() * 2, Gpu.foldMinElements() * 2);
+		// The row-count floor, which nothing pinned on either suite until 2026-09-03:
+		// a fresh operand needs enough rows to fill a grid, and the four lines above
+		// cannot be what says so -- 4 x 64 is 256 elements and declines for its SIZE, so
+		// removing the floor from Gpu#offeredRows left the whole --gpu suite green. It
+		// takes a total ABOVE the threshold laid out in too few rows, and an accepted
+		// baseline at the same total to show the total is not what declined.
+		int floorRows = (int) Gpu.foldMinCells();
+		double[] enough = new double[big], few = new double[big], wideOut = new double[big];
+		assertThat(Gpu.softmax(enough, 0, wideOut, 0, floorRows, big / floorRows))
+			.as("%d rows of %d must be accepted here", floorRows, big / floorRows)
+			.isTrue();
+		assertThat(Gpu.softmax(few, 0, wideOut, 0, floorRows / 2, big / (floorRows / 2))).isFalse();
+		assertThat(Gpu.layerNorm(few, 0, wideOut, 0, floorRows / 2, big / (floorRows / 2), 1e-5)).isFalse();
 		double[] a = new double[big], out = new double[big], shortArray = new double[big - 1];
 		assertThat(Gpu.gelu(a, 0, shortArray, 0, big)).isFalse();
 		assertThat(Gpu.gelu(a, 0, out, 0, 0)).isFalse();

@@ -1526,7 +1526,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// helper so no index above shifts.
 	static final int FUNC_ARR_UNDISPLACE = FUNC_ARR_CHECK_RANK + 1;
 
-	static final int FX_FUNC_LAST = FUNC_ARR_UNDISPLACE;
+	// _f64_fdiv ((ref null eq) a, (ref null eq) b, i32 mode) -> (ref null eq): the
+	// floor/ceiling/round/truncate quotient of a division with a FLOAT operand, computed
+	// exactly (a bignum past the i64 range, like every other numeric operator), or a null
+	// to decline -- see WasmFloatFdivRuntimeBuilder. Reuses TYPE_BIG_TRIPLE, _big_fdiv's
+	// own signature, so no new type entry; appended after the last fixed helper so no
+	// index above shifts.
+	static final int FUNC_F64_FDIV = FUNC_ARR_UNDISPLACE + 1;
+
+	static final int FX_FUNC_LAST = FUNC_F64_FDIV;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -5777,6 +5785,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _arr_undisplace (header) ->
 															// header
 															// (FUNC_ARR_UNDISPLACE)
+				fnDef.addFunction(TYPE_BIG_TRIPLE); // _f64_fdiv (a, b, mode) -> quotient
+													// | null (FUNC_F64_FDIV)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6597,6 +6607,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody());
 				// shared displaced-view materialization body (FUNC_ARR_UNDISPLACE)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody(this.simd));
+				// exact float floor-family division body (FUNC_F64_FDIV)
+				code.addFunction(WasmFloatFdivRuntimeBuilder.buildBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
