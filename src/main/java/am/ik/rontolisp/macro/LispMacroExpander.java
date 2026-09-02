@@ -3404,6 +3404,72 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (fifth x) into (nth 4 x) -> (car (nthcdr 4 x)).
+	 * @param cons the fifth expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFifth(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(4), arg));
+		return expandNth(nthCons);
+	}
+
+	/**
+	 * Expands (sixth x) into (nth 5 x) -> (car (nthcdr 5 x)).
+	 * @param cons the sixth expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSixth(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(5), arg));
+		return expandNth(nthCons);
+	}
+
+	/**
+	 * Expands (seventh x) into (nth 6 x) -> (car (nthcdr 6 x)).
+	 * @param cons the seventh expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSeventh(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(6), arg));
+		return expandNth(nthCons);
+	}
+
+	/**
+	 * Expands (eighth x) into (nth 7 x) -> (car (nthcdr 7 x)).
+	 * @param cons the eighth expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandEighth(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(7), arg));
+		return expandNth(nthCons);
+	}
+
+	/**
+	 * Expands (ninth x) into (nth 8 x) -> (car (nthcdr 8 x)).
+	 * @param cons the ninth expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNinth(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(8), arg));
+		return expandNth(nthCons);
+	}
+
+	/**
+	 * Expands (tenth x) into (nth 9 x) -> (car (nthcdr 9 x)).
+	 * @param cons the tenth expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandTenth(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(9), arg));
+		return expandNth(nthCons);
+	}
+
+	/**
 	 * Expands (setf place value) into the appropriate mutation form.
 	 *
 	 * <pre>
@@ -3805,6 +3871,54 @@ public final class LispMacroExpander {
 				{
 					LispVal nthcdrExpr = listToCons(
 							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(3), placeParts.get(1)));
+
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				case LispNames.FIFTH ->
+
+				{
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(4), placeParts.get(1)));
+
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				case LispNames.SIXTH ->
+
+				{
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(5), placeParts.get(1)));
+
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				case LispNames.SEVENTH ->
+
+				{
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(6), placeParts.get(1)));
+
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				case LispNames.EIGHTH ->
+
+				{
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(7), placeParts.get(1)));
+
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				case LispNames.NINTH ->
+
+				{
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(8), placeParts.get(1)));
+
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				case LispNames.TENTH ->
+
+				{
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(9), placeParts.get(1)));
 
 					yield expandSetfWithRplaca(nthcdrExpr, value);
 				}

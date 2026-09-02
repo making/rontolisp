@@ -637,3 +637,11 @@ the bundled 1.2.3 is `.todo/602`), `binary-data` (24), `id3v2` (25),
 `--feature sbcl`; 26/28/29 are the `net.aserve` rows decided above. The corpus
 needed no shim, no replacement `.asd` and no leaf-module substitution.
 
+**`fifth`..`tenth` landed (2026-09-02, `.todo/633`)**: `profiler` (32)'s
+`show-timing-data` (`compile-timing-data`'s `:key #'fifth`) is now
+byte-identical to SBCL 2.2.9.debian -- verified directly (a `*timing-data*`
+fixture through `show-timing-data`, not the full ASDF harness, which was not
+re-run for this item). `first`..`fourth` already existed; `fifth`..`tenth` now
+follow the same `(nth k x)` macro expansion, on all four backends and the
+compiled `eval` runtime interpreter.
+

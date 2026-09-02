@@ -170,7 +170,7 @@ page.
 | `first` | `(first '(1 2 3))` | `1` (same as `car`) |
 | `rest` | `(rest '(1 2 3))` | `(2 3)` (same as `cdr`) |
 | `nth` | `(nth 1 '(1 2 3))` | `2` (0-based indexing) |
-| `second` `third` `fourth` | `(second '(1 2 3))` | `2` |
+| `second` `third` `fourth` `fifth` `sixth` `seventh` `eighth` `ninth` `tenth` | `(second '(1 2 3))` | `2` |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
 | `ldiff` | `(ldiff '(1 2 3) '(3))` | `(1 2)` (fresh copy of the elements before the given tail; the whole list if it is not a tail) |

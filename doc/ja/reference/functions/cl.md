@@ -170,7 +170,7 @@
 | `first` | `(first '(1 2 3))` | `1`(`car` と同じ) |
 | `rest` | `(rest '(1 2 3))` | `(2 3)`(`cdr` と同じ) |
 | `nth` | `(nth 1 '(1 2 3))` | `2`(0始まりのインデックス) |
-| `second` `third` `fourth` | `(second '(1 2 3))` | `2` |
+| `second` `third` `fourth` `fifth` `sixth` `seventh` `eighth` `ninth` `tenth` | `(second '(1 2 3))` | `2` |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)`(先頭のn要素をスキップ) |
 | `ldiff` | `(ldiff '(1 2 3) '(3))` | `(1 2)`(指定した末尾より前の要素の新しいコピー。末尾でなければリスト全体) |
