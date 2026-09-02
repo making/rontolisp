@@ -16939,6 +16939,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void packedFloatArrayRejectsAdjustArray() {
+		// A packed float array has no fill-pointer/adjustability/displacement surface,
+		// same as a packed integer vector -- requireGeneralArray answers this on the
+		// interpreter already; the JVM and wasm compile paths are pinned in
+		// JvmLispCompilerTest / WasmLispCompilerIntegrationTest.
+		assertThatThrownBy(() -> eval("(adjust-array (make-array 3 :element-type 'double-float) 5)"))
+			.hasMessageContaining("packed float array");
+		assertThatThrownBy(() -> eval("(adjust-array (make-array 3 :element-type 'single-float) 5)"))
+			.hasMessageContaining("packed float array");
+	}
+
+	@Test
 	void concurrentFirstCallsOfALazyLoadedLibraryAllResolve() throws Exception {
 		// A Lisp-source library (url.lisp here, through rontolisp:query-param) is
 		// evaluated into the global environment on its FIRST resolution, and http-handler

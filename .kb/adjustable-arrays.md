@@ -645,11 +645,16 @@ answer a string's length in code points as its one dimension, and
 VIEW is a header, never a runtime `String`), so all of them accept a string as
 the interpreter's always have.
 
-**What is still NOT adjustable** is a PACKED vector, and the two halves disagree
-about how it fails: the interpreter signals `adjust-array: not applicable to a
-packed integer vector` / `... packed float array`, and the compile paths raise
-the clear error only for the integer case while a packed FLOAT array reaches a
-raw cast failure. Same family, filed as `.todo/627`.
+**What is still NOT adjustable** is a PACKED vector; the interpreter signals
+`adjust-array: not applicable to a packed integer vector` / `... packed float
+array` for both representations, and so does the JVM now (`_ivRequireGeneral` /
+`_fvRequireGeneral`, both reached through `%array-disp-target`'s
+`emitRequireGeneralIfPacked`, fixed 2026-09-02 by `.todo/627`; a program with no
+packed float array emits no `_fvRequireGeneral` at all, so the default build
+stays byte-identical). Wasm has no custom trap-message channel on this path for
+EITHER representation -- `%array-disp-target`'s `castCellGet0` traps `cast
+failure` on both a packed integer vector and a packed float array today, which
+is the parity bar that backend can meet.
 
 **Size cost, measured 2026-09-02** (`--optimize=size`, raw wasm; JVM `.class`):
 

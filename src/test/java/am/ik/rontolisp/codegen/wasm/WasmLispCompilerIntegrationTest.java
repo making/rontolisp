@@ -15333,6 +15333,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAdjustArrayTrapsOnAPackedFloatArray() throws Exception {
+		// A packed float array has no fill-pointer/adjustability/displacement surface --
+		// the same shape a packed integer vector already traps on -- so adjust-array's
+		// %array-disp-target probe rejects it with a cast-failure trap rather than
+		// running (the interpreter and JVM answer a clear "not applicable to a packed
+		// float array" text instead; wasm has no custom trap-message channel here, so a
+		// trap is the parity bar on this backend).
+		compileAndExpectTrap("(adjust-array (make-array 3 :element-type 'double-float) 5)");
+		compileAndExpectTrap("(adjust-array (make-array 3 :element-type 'single-float) 5)");
+	}
+
+	@Test
 	void compileDisplacedArrays() throws Exception {
 		// A displaced view aliases the target's storage in both directions, prints and
 		// measures with its own dims, works over a rank-2 target, and keeps following

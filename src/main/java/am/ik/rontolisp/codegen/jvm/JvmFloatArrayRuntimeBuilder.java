@@ -71,6 +71,10 @@ final class JvmFloatArrayRuntimeBuilder {
 
 	static final String ELEMENT_TYPE_DESC = "(" + OBJ + ")" + OBJ;
 
+	static final String REQUIRE_GENERAL = "_fvRequireGeneral";
+
+	static final String REQUIRE_GENERAL_DESC = "(" + OBJ + ")" + OBJ;
+
 	private JvmFloatArrayRuntimeBuilder() {
 	}
 
@@ -157,6 +161,9 @@ final class JvmFloatArrayRuntimeBuilder {
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
 		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
+		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		MethodrefConstant alInit = cp.addMethodref(arrayListClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 		MethodrefConstant alAdd = cp.addMethodref(arrayListClass,
@@ -213,6 +220,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		methods.add(buildMake(cp, true, SINGLE_MAKE, objectArrayClass, longClass, numberClass, longIntValue,
 				numberDoubleValue, dbl));
 		methods.add(buildElementType(cp, doubleArrayClass, floatArrayClass));
+		methods.add(buildRequireGeneral(cp, doubleArrayClass, floatArrayClass, rtExClass, rtExInit));
 		return methods;
 	}
 
@@ -1105,6 +1113,41 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.ldcString(cp.addString("T"));
 		a.areturn();
 		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 1, 1, a.finish());
+	}
+
+	// _fvRequireGeneral(o): the fill-pointer-surface guard for a packed float array -- a
+	// packed double[]/float[] has no fill pointer, adjustability or displacement, so
+	// those operations reject it with a clear error (mirroring the interpreter's
+	// requireGeneralArray and _ivRequireGeneral's packed-integer-vector twin); any other
+	// value passes through unchanged. Locals: 0=o.
+	private static ArrayMethod buildRequireGeneral(ConstantPool cp, ClassConstant doubleArrayClass,
+			ClassConstant floatArrayClass, ClassConstant rtExClass, MethodrefConstant rtExInit) {
+		JvmAsm a = new JvmAsm();
+		int notDouble = a.label();
+		int ok = a.label();
+		a.aload(0);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notDouble);
+		emitThrow(a, rtExClass, rtExInit, cp.addString("not applicable to a packed float array"));
+		a.bind(notDouble);
+		a.aload(0);
+		a.instanceOf(floatArrayClass);
+		a.branch(Opcode.IFEQ, ok);
+		emitThrow(a, rtExClass, rtExInit, cp.addString("not applicable to a packed float array"));
+		a.bind(ok);
+		a.aload(0);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(REQUIRE_GENERAL), cp.addUtf8(REQUIRE_GENERAL_DESC), 3, 1, a.finish());
+	}
+
+	// new RuntimeException(message); athrow.
+	private static void emitThrow(JvmAsm a, ClassConstant rtExClass, MethodrefConstant rtExInit,
+			ConstantPool.StringConstant message) {
+		a.anew(rtExClass);
+		a.dup();
+		a.ldcString(message);
+		a.invokespecial(rtExInit);
+		a.op(Opcode.ATHROW);
 	}
 
 }

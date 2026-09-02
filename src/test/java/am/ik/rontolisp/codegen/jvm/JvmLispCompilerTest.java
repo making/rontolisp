@@ -14681,6 +14681,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compilePackedFloatArrayRejectsAdjustArray() {
+		// A packed float array has no fill-pointer/adjustability/displacement surface,
+		// same as a packed integer vector; adjust-array's %array-disp-target probe used
+		// to reach a bare checkcast ArrayList on the double[]/float[] representation
+		// (ClassCastException) instead of this clear error.
+		assertThatThrownBy(() -> compileAndRun("(adjust-array (make-array 3 :element-type 'double-float) 5)"))
+			.rootCause()
+			.hasMessageContaining("packed float array");
+		assertThatThrownBy(() -> compileAndRun("(adjust-array (make-array 3 :element-type 'single-float) 5)"))
+			.rootCause()
+			.hasMessageContaining("packed float array");
+	}
+
+	@Test
 	void compileAndRunShortFormMethodCombination() throws Exception {
 		// yason's encode-slots hook: the operator over EVERY applicable qualified
 		// method, in specificity order, with :most-specific-last reversing it.
