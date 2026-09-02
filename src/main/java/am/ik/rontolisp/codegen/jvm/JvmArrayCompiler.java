@@ -73,16 +73,20 @@ final class JvmArrayCompiler {
 		}
 		LispVal displacedTo = findKeywordValue(args, LispNames.DISPLACED_TO_KEYWORD);
 		if (displacedTo != null) {
-			// A displaced view excludes the other keywords (lite semantics; detected at
-			// compile time because make-array keywords are literal at the call site).
-			if (nonNilKeyword(args, LispNames.FILL_POINTER_KEYWORD) || nonNilKeyword(args, LispNames.ADJUSTABLE_KEYWORD)
-					|| findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD) != null) {
+			// A displaced view owns no storage, so there is nothing for
+			// :initial-element / :initial-contents to fill -- the one combination CLHS
+			// forbids. :fill-pointer and :adjustable ARE allowed and travel into the
+			// view's own header slots.
+			if (findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD) != null
+					|| findKeywordValue(args, LispNames.INITIAL_CONTENTS_KEYWORD) != null) {
 				throw new UnsupportedOperationException(
-						"make-array: :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
+						"make-array: :displaced-to cannot be combined with :initial-element/:initial-contents");
 			}
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(displacedTo, ctx, className);
 			compileKeywordValueOrNull(findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD), ctx, className);
+			compileKeywordValueOrNull(findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD), ctx, className);
+			compileKeywordValueOrNull(findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD), ctx, className);
 			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE_DISPLACED,
 					JvmArrayRuntimeBuilder.MAKE_DISPLACED_DESC);
 			return;
@@ -680,14 +684,6 @@ final class JvmArrayCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ref.index());
-	}
-
-	// A make-array keyword explicitly given a NON-nil value. An explicit nil
-	// (alexandria's ":adjustable nil" beside :displaced-to) asserts exactly what a
-	// displaced view already is, so it must not read as a conflicting option.
-	private static boolean nonNilKeyword(List<LispVal> args, String keyword) {
-		LispVal value = findKeywordValue(args, keyword);
-		return value != null && !(value instanceof am.ik.rontolisp.LispNil);
 	}
 
 }

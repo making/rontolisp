@@ -15663,6 +15663,55 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aDisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag() throws Exception {
+		// CLHS allows :fill-pointer / :adjustable beside :displaced-to. The fill pointer
+		// is the VIEW's own active length while aref still reaches its whole dimension,
+		// and vector-push writes THROUGH to the target -- SBCL 2.2.9's answers, save
+		// adjustable-array-p over a view (.kb/adjustable-arrays.md).
+		assertThat(compileAndRun("""
+				(let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				       (v (make-array 4 :displaced-to b :displaced-index-offset 1 :fill-pointer 2)))
+				  (print (list (length v) (fill-pointer v) (array-has-fill-pointer-p v)
+				               (adjustable-array-p v) (array-dimensions v) (array-total-size v)
+				               (aref v 3) v (multiple-value-list (array-displacement v))))
+				  (vector-push 99 v)
+				  (print (list (length v) b v))
+				  (print (list (vector-pop v) (length v))))
+				""")).isEqualTo("""
+				(2 2 T NIL (4) 4 50 #(20 30) (#(10 20 30 40 50 60) 1))
+				(3 #(10 20 30 99 50 60) #(20 30 99))
+				(99 2)""");
+	}
+
+	@Test
+	void aFullDisplacedViewUndisplacesWhenItGrows() throws Exception {
+		// vector-push-extend past the view's span calls the shared _arr_undisplace: the
+		// contents move into a buckets array of their own and the displacement is
+		// dropped, so the growth never runs off the end of the target. A string view
+		// stays a string across it (the marker travels with the un-displacement).
+		assertThat(compileAndRun("""
+				(let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				       (v (make-array 4 :displaced-to b :displaced-index-offset 1
+				                        :adjustable t :fill-pointer 2)))
+				  (vector-push-extend 100 v)
+				  (vector-push-extend 101 v)
+				  (vector-push-extend 102 v)
+				  (print (list (length v) (array-total-size v)
+				               (multiple-value-list (array-displacement v)) v b)))
+				(let* ((s (copy-seq "abcdef"))
+				       (sv (make-array 4 :element-type 'character :displaced-to s
+				                         :displaced-index-offset 1 :fill-pointer 2)))
+				  (vector-push #\\Z sv)
+				  (vector-push-extend #\\Y sv)
+				  (vector-push-extend #\\X sv)
+				  (print (list sv s (stringp sv) (array-displacement sv) (length sv)
+				               (array-total-size sv))))
+				""")).isEqualTo("""
+				(5 8 (NIL 0) #(20 30 100 101 102) #(10 20 30 100 101 60))
+				("bcZYX" "abcZYf" T NIL 5 8)""");
+	}
+
+	@Test
 	void compileArrayDisplacementValues() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *base* (make-array 5))

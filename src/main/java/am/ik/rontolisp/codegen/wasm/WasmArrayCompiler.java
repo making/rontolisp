@@ -240,16 +240,19 @@ final class WasmArrayCompiler {
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 	}
 
-	// (make-array dims :displaced-to target [:displaced-index-offset off]): a displaced
-	// view -- the data slot holds the TARGET CELL and meta carries the offset. The other
-	// make-array keywords are rejected (lite semantics). The view is bounds-checked
-	// against the target's total size (the product of its dims), trapping when too small.
+	// (make-array dims :displaced-to target [:displaced-index-offset off]
+	// [:fill-pointer fp] [:adjustable adj]): a displaced view -- the data slot holds the
+	// TARGET CELL and meta carries the offset alongside the view's OWN fill pointer and
+	// adjustable flag. Only :initial-element / :initial-contents are rejected (the one
+	// combination CLHS forbids: the view owns no storage to initialize). The view is
+	// bounds-checked against the target's total size (the product of its dims), trapping
+	// when too small.
 	private static void compileMakeDisplaced(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		if (nonNilKeyword(args, LispNames.FILL_POINTER_KEYWORD) || nonNilKeyword(args, LispNames.ADJUSTABLE_KEYWORD)
-				|| findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD) != null) {
+		if (findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD) != null
+				|| findKeywordValue(args, LispNames.INITIAL_CONTENTS_KEYWORD) != null) {
 			throw new UnsupportedOperationException(
-					"make-array: :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
+					"make-array: :displaced-to cannot be combined with :initial-element/:initial-contents");
 		}
 		LispVal targetExpr = findKeywordValue(args, LispNames.DISPLACED_TO_KEYWORD);
 		if (targetExpr == null) {
@@ -306,10 +309,37 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.IF, 0x40);
 		ctx.writer.write(Instruction.UNREACHABLE);
 		ctx.writer.write(Instruction.END);
-		// header = cons(dimsArr, cons(cons(null, cons(null, off)), targetCell))
+		// The view's OWN :fill-pointer / :adjustable, resolved exactly as the ordinary
+		// path resolves them (the shared _arr_fp body, against the VIEW's shape) and
+		// stored in the same meta slots, so every reader answers for a view unchanged.
+		LispVal fpExpr = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
+		int fpValSlot = -1;
+		if (fpExpr != null) {
+			WasmExprCompiler.compileExpr(fpExpr, ctx);
+			getLocal(ctx, dimsArrSlot);
+			callFixed(ctx, WasmLispCompiler.FUNC_ARR_FP);
+			fpValSlot = setTemp(ctx);
+		}
+		LispVal adjExpr = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
+		int adjValSlot = -1;
+		if (adjExpr != null) {
+			WasmExprCompiler.compileExpr(adjExpr, ctx);
+			adjValSlot = setTemp(ctx);
+		}
+		// header = cons(dimsArr, cons(cons(fp, cons(adj, off)), targetCell))
 		getLocal(ctx, dimsArrSlot);
-		refNull(ctx);
-		refNull(ctx);
+		if (fpValSlot >= 0) {
+			getLocal(ctx, fpValSlot);
+		}
+		else {
+			refNull(ctx);
+		}
+		if (adjValSlot >= 0) {
+			getLocal(ctx, adjValSlot);
+		}
+		else {
+			refNull(ctx);
+		}
 		getLocal(ctx, offSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
@@ -2267,12 +2297,12 @@ final class WasmArrayCompiler {
 		castCons(ctx);
 		getLocal(ctx, fpSlot);
 		structSetCons(ctx, 0);
-		// data[fp - 1]
+		// data[fp - 1], through the shared _arr_get so a displaced view pops its
+		// TARGET's element.
 		getLocal(ctx, headerSlot);
-		getData(ctx);
 		getLocal(ctx, fpSlot);
 		WasmEmitHelper.castI31GetS(ctx);
-		arrayGet(ctx);
+		callFixed(ctx, WasmLispCompiler.FUNC_ARR_GET);
 	}
 
 	static void compileVectorPushExtend(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -2311,6 +2341,14 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.castI31GetS(ctx);
 		ctx.writer.write(Instruction.I32_GE_S);
 		ctx.writer.write(Instruction.IF, 0x40);
+		// A full DISPLACED view stops being a view first: the shared _arr_undisplace
+		// copies its contents into a buckets array of its own and drops the
+		// displacement, so the growth below extends that storage instead of running past
+		// the end of the target's (SBCL 2.2.9 does the same, and array-displacement
+		// answers nil from here on).
+		getLocal(ctx, headerSlot);
+		callFixed(ctx, WasmLispCompiler.FUNC_ARR_UNDISPLACE);
+		ctx.writer.write(Instruction.DROP);
 		// The shared growth policy, spelled out in wasm (am.ik.rontolisp.ArrayGrowth,
 		// which generated code cannot call): a supplied extension is added verbatim, and
 		// otherwise the capacity doubles, off a floor for the zero-capacity vector. The
@@ -2438,12 +2476,15 @@ final class WasmArrayCompiler {
 		getLocal(ctx, metaSlot);
 		castConsGet(ctx, 0);
 		setLocal(ctx, fpSlot);
+		// Through the shared _arr_set, not the data slot directly: a DISPLACED
+		// fill-pointered view has no data slots of its own, so its push writes THROUGH to
+		// the target's storage (SBCL does the same).
 		getLocal(ctx, headerSlot);
-		getData(ctx);
 		getLocal(ctx, fpSlot);
 		WasmEmitHelper.castI31GetS(ctx);
 		getLocal(ctx, valSlot);
-		arraySet(ctx);
+		callFixed(ctx, WasmLispCompiler.FUNC_ARR_SET);
+		ctx.writer.write(Instruction.DROP);
 		getLocal(ctx, metaSlot);
 		castCons(ctx);
 		getLocal(ctx, fpSlot);
@@ -2861,14 +2902,6 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.writeUnsignedLeb128(field);
-	}
-
-	// A make-array keyword explicitly given a NON-nil value. An explicit nil
-	// (alexandria's ":adjustable nil" beside :displaced-to) asserts exactly what a
-	// displaced view already is, so it must not read as a conflicting option.
-	private static boolean nonNilKeyword(List<LispVal> args, String keyword) {
-		LispVal value = findKeywordValue(args, keyword);
-		return value != null && !(value instanceof am.ik.rontolisp.LispNil);
 	}
 
 	// --- packed integer-vector (TYPE_I8ARR/I16ARR/I32ARR) helpers ---------------------

@@ -84,11 +84,10 @@ conforming; CLHS leaves "actually adjustable" implementation-defined. Pinned by
 `WasmLispCompilerIntegrationTest#arrayShapeReadersAcceptEveryStringRepresentation`
 and the `string-array-shape-readers-cross-backend` ci-spec case.
 
-NOT supported, measured the same day: `make-array :displaced-to` combined with
-`:fill-pointer` or `:adjustable`, which CLHS allows and SBCL accepts. All four
-backends reject it with "`:displaced-to` cannot be combined with
-`:fill-pointer`/`:adjustable`/`:initial-element`" -- only the
-`:initial-element` third of that message is a CLHS rule.
+**A DISPLACED view carries its own fill pointer and `:adjustable` flag
+(`.todo/647`, 2026-09-02)**: see "A displaced view is not a BARE view" below.
+Only `:initial-element` / `:initial-contents` are still refused alongside
+`:displaced-to`, which is the one combination CLHS forbids.
 
 **A COMPUTED `:element-type` (`.todo/219`, 2026-07-30)**: the recognizers
 above read the designator at EXPANSION time, so a `:element-type` held in a
@@ -844,11 +843,12 @@ per-backend codegen:
 
 ## Displacement (`:displaced-to`)
 
-Lite semantics on every backend: a displaced array is a BARE VIEW -- it cannot
-be combined with `:fill-pointer`/`:adjustable`/`:initial-element` (compile-time
+Lite semantics on every backend: a displaced array cannot be combined with
+`:initial-element`/`:initial-contents` (compile-time
 `UnsupportedOperationException` on JVM/WASM since make-array keywords are
 literal; runtime error on the interpreter), cannot itself be adjusted, and
-`:displaced-index-offset` requires `:displaced-to`. The view is bounds-checked
+`:displaced-index-offset` requires `:displaced-to`. It MAY carry a fill pointer
+and the `:adjustable` flag -- the section below. The view is bounds-checked
 at creation (`total + offset <= target total`, target dims product). Chains
 (view of view) resolve transitively, and access follows the CURRENT storage of
 each hop, so a view keeps aliasing an adjustable target after
@@ -975,6 +975,93 @@ Per backend:
   encode); `%array-disp-target`/`%array-disp-offset` treat a string data slot as
   a target.
 
+## A displaced view is not a BARE view (`.todo/647`, 2026-09-02)
+
+**Invariant: `make-array :displaced-to` accepts `:fill-pointer` and
+`:adjustable`, on all four backends, and the fill pointer is the VIEW's own.**
+CLHS forbids only `:initial-element` / `:initial-contents` beside
+`:displaced-to` (the view owns no storage to initialize); `:fill-pointer` and
+`:adjustable` are explicitly allowed, and "a growing view over a bigger backing
+store" is an ordinary CL idiom. All four backends used to refuse the three
+together with one message, so two thirds of it was not a CL rule.
+
+The item was filed as a REPRESENTATION problem -- "the displaced shape and the
+header shape are alternatives per backend" -- and the measurement overturned
+that premise: **both header layouts already had the slots**. A JVM displaced
+header is `{dims, fp, adj, target, offsetLong}` (7 elements for a string view)
+with slots 1/2 simply written null, and a wasm header's meta chain is
+`(fp . (adj . offset))` with the same two written null. So the make-array half
+was one argument pair threaded through `_arrayMakeDisplaced` /
+`compileMakeDisplaced` (both reusing the existing fill-pointer resolution --
+the JVM's extracted `emitResolveFillPointer`, wasm's shared `_arr_fp` -- against
+the VIEW's own element count, never the target's), plus the interpreter's
+`LispArray`/`LispString` view constructors. No header length moved, no marker
+changed, and every reader that decides "displaced?" by header LENGTH or by the
+data slot is untouched.
+
+What DID need work is the three operations that reach the data:
+
+- **`vector-push` / `vector-pop` write and read THROUGH.** Both used to touch
+  the array's own storage directly (`ArrayList.set(1 + fp)` on the JVM, the
+  header's data slot on wasm, `this.data[fp]` in `LispArray`), which a view does
+  not have. They now go through the displacement-aware element primitives that
+  every `aref`/`aset` already used -- JVM `_rmGet`/`_rmSet`, wasm's shared
+  `_arr_get`/`_arr_set` (a CALL, which is why routing them through it made the
+  wasm sites SMALLER, not larger), interpreter `readFlat`/`writeFlat`. A string
+  view's push writes into the target string exactly as `(setf (char v i) c)`
+  does, promotion on an immutable target included.
+- **A full view UN-DISPLACES when it grows.** `vector-push-extend` past the
+  view's span copies the current contents into storage of its own and drops the
+  displacement, so the growth never runs off the end of someone else's array;
+  `array-displacement` answers nil/0 from then on and further pushes no longer
+  touch the target. That is SBCL 2.2.9's behavior, measured 2026-09-02 (a
+  capacity-4 view with fill pointer 2 grows to total size 8 and reports
+  `(NIL 0)`, and the pushes that still FIT are visible in the target). One
+  implementation per backend: `LispArray.undisplace` / `LispString.undisplace`,
+  JVM `_arrayUndisplace` (in `METHOD_NAMES`, so it lives and dies with the array
+  gate), wasm `_arr_undisplace` (`FUNC_ARR_UNDISPLACE`, appended after
+  `FUNC_ARR_CHECK_RANK` so no index above shifts, reusing
+  `TYPE_CALLABLE_BASE + 0`).
+- **The shape survives the un-displacement.** The JVM's header LENGTH is the
+  tag, so 7 (a displaced STRING view) becomes 4 (the character-vector marker)
+  and 5 becomes 3; wasm's meta OFFSET word doubles as the element-type marker,
+  so the resolved target's marker is copied into it (1 when the chain ends on a
+  string) -- the same "copy the word, do not re-derive the representation" move
+  `%array-adopt-element-type` makes. A grown string view is still `stringp`.
+
+`_strv` (JVM) also learned the view's fill pointer: a length-7 header used to
+render its whole dimension, and the shared `emitActiveLength` now answers "fill
+pointer when present, else dims[0]" for the character-vector arm and the string
+view alike.
+
+`#'make-array`'s variadic wrapper carries the two keywords into its displaced
+branch too, so `(apply #'make-array (list n :displaced-to b :fill-pointer 2))`
+agrees with the call position.
+
+Diffed against SBCL 2.2.9 on 2026-09-02: every answer identical -- lengths,
+dimensions, total size, `aref` past the fill pointer, printing, the pushed
+target contents, the un-displaced capacity, `array-displacement` before and
+after, and the string view's characters -- EXCEPT `adjustable-array-p` over a
+view, which is the pre-existing recorded divergence above (SBCL answers `T` for
+any non-simple array; rontolisp reports the `:adjustable` argument verbatim).
+
+Still NOT supported, unchanged and deliberate: `adjust-array` on a displaced
+array signals "adjust-array: displaced arrays are not supported" on every
+backend, where SBCL un-displaces it in place. The machinery to do it now exists
+(the un-displace primitive above), so this is a decision, not a gap: nothing
+measured has needed it, and `vector-push-extend` is the idiom that reaches a
+fill-pointered view.
+
+Pinned by `LispEvaluatorTest`'s
+`aDisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag` /
+`aFullDisplacedViewUndisplacesWhenItGrows`, the
+`compileADisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag` /
+`compileAFullDisplacedViewUndisplacesWhenItGrows` twins in
+`JvmLispCompilerTest`, the same two names in
+`WasmLispCompilerIntegrationTest`, and the
+`displaced-fill-pointer-cross-backend` ci-spec case (all four backends,
+byte-identical).
+
 ## Representation
 
 ### Interpreter (`LispArray`)
@@ -1017,7 +1104,8 @@ and have no bounds check at all -- writing past the end silently APPENDS there).
 That is the general missing-bounds-check gap, not a fill-pointer question;
 `.todo/186` holds it with the measurements.
 
-Displacement: `displacedTo` (a `LispArray` or null) + `displacedOffset` fields;
+Displacement: `displacedTo` (a `LispArray` or null) + `displacedOffset` fields,
+both NON-final since `.todo/647` (`undisplace()` clears them in place);
 a displaced array's `data` is a shared empty array and all element access goes
 through `readFlat`/`writeFlat`, which walk the chain adding each hop's offset
 (so growth of the target's storage is followed -- the chain holds the OBJECT,
@@ -1110,8 +1198,9 @@ cost is size-INdependent dispatch, a different defect -- `.todo/517`'s residual
 note).
 
 A DISPLACED array carries a 5-element header
-`Object[]{dims, null, null, target, offsetLong}` (7 elements when the target is
-a string, see "Displacing a STRING") and holds NO data slots
+`Object[]{dims, fp, adj, target, offsetLong}` (7 elements when the target is
+a string, see "Displacing a STRING"; slots 1/2 are null unless the view was
+given `:fill-pointer`/`:adjustable`) and holds NO data slots
 (`_arrayMakeDisplaced(dims, target, offset)`, bounds-checked against the
 target's dims product). Every data access now funnels through the two
 displacement-aware primitives `_rmGet(list, idx1based)` / `_rmSet(...)`: a loop
@@ -1165,8 +1254,9 @@ from the data-buckets length to the dims product; `WasmLengthCompiler` already
 used `dims[0]` and needed nothing. `compileAdjustableArrayP` reads
 `meta.cdr.car`; `%array-become` is three inline `struct.set`s;
 `%array-disp-target`/`%array-disp-offset` read the data slot (cell or nil) and
-`meta.cdr.cdr`. The vector-push family never sees displacement (a displaced
-array has no fill pointer, so its fp guard traps first).
+`meta.cdr.cdr`. The vector-push family DOES see displacement since `.todo/647`
+(a view may carry a fill pointer): its element access is `_arr_get`/`_arr_set`
+and its growth calls `_arr_undisplace` first.
 
 The builtins are emitted INLINE in `WasmArrayCompiler`
 (compileFillPointer/SetFillPointer/HasFillPointer/AdjustableArrayP/VectorPush/
@@ -1207,7 +1297,9 @@ its default unknown-operation error.
   `setfFillPointer`, `simpleVectorHasNoFillPointer`,
   `fillPointerOnNonFillPointerVectorSignals`, `clUtilitiesCopyArrayRunsOnInterpreter`,
   `adjustArray*`, `displacedArray*`, `arrayDisplacementReturnsTargetAndOffset`,
-  `makeArrayDisplacedErrors`, `displacedStringView*`.
+  `makeArrayDisplacedErrors`, `displacedStringView*`,
+  `aDisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag`,
+  `aFullDisplacedViewUndisplacesWhenItGrows`.
 - JVM: `JvmLispCompilerTest.compileFillPointer*` / `compileVectorP*` /
   `compileSetfFillPointer` / `compileSimpleVectorHasNoFillPointer` /
   `compileFillPointerFirstClassWrappers` / `compileClUtilitiesCopyArray` /
@@ -1223,7 +1315,8 @@ its default unknown-operation error.
   `vector-push-extend-growth-cross-backend` +
   `opened-slot-fill-cross-backend` +
   `adjust-displaced-arrays-cross-backend` +
-  `displaced-string-views-cross-backend` (all four backends), and the
+  `displaced-string-views-cross-backend` +
+  `displaced-fill-pointer-cross-backend` (all four backends), and the
   shared-substring lines of `ClPpcreE2eTest`'s exercise (the verbatim
   `nsubseq`).
 - Docs: `reference/functions/{fill-pointer,array-has-fill-pointer-p,
