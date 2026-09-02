@@ -7,7 +7,7 @@
 ;;
 ;;   STEPS=3  java -jar target/...-exec.jar .todo/123-gpu-acceleration/gpt-book-shapes-fast.lisp
 ;;   STEPS=13 ...
-;;   the step is (t13 - t3) / 10
+;;   the step is (t13 - t3) / 10; BATCH=32 halves the batch where the graph does not fit
 ;;
 ;; Not project code: a probe, like everything else in this directory.
 
@@ -42,7 +42,11 @@
 
 (defparameter *dropout* 0.1)
 
-(defparameter *batch-size* 64)
+(defparameter *batch-size*
+  ;; BATCH overrides the book's 64 where the machine cannot hold the step's graph
+  ;; (todo-499 was measured at 32 beside a 93 GB LLM server; the kernels are
+  ;; bandwidth-bound, so a step scales with it).
+  (let ((batch (uiop:getenv "BATCH"))) (if batch (parse-integer batch) 64)))
 
 (defparameter *max-steps*
   (let ((steps (uiop:getenv "STEPS"))) (if steps (parse-integer steps) 13)))

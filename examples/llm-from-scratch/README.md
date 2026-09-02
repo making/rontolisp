@@ -192,9 +192,14 @@ what the device is asked to do. PyTorch's "eager fp32" products run on TF32 **te
 cores** (the container's default) for ~98 ms a step where rontolisp's bit-exact IEEE
 f32 product takes ~250 ms; and PyTorch's elementwise ops are fused single kernels
 (dropout, softmax, layer-norm, GELU each one memory pass) for ~133 ms where rontolisp
-pays one pass per `linalg:` member, ~475 ms. Launches are not the story: since
-2026-08-23 the launch pipeline runs ahead of the device (`.kb/gpu.md`) and the host is
-overlapped. The 5000-step
+paid one pass per `linalg:` member, ~475 ms. Since 2026-09-02 those four are one kernel
+each here too (`.kb/gpu.md`, "The fused tier"): measured at batch 32 (the machine's
+memory was shared that day), the step's kernel time went from 356 ms in 3774 launches to
+272 ms in 2964, the elementwise share from 234 ms to 151, the step from 0.41 s to 0.31 --
+so at the book's batch about 300 ms of elementwise work remains against PyTorch's 133,
+and the products are unchanged. The 0.81 s row above is the pre-fusion figure. Launches
+are not the story: since 2026-08-23 the launch pipeline runs ahead of the device
+(`.kb/gpu.md`) and the host is overlapped. The 5000-step
 run memorises the novel (the validation loss is over windows that overlap the training
 windows, the book's own `random_split`) and samples sentence-shaped 漱石:
 `吾輩はこのくらいの家アンドレア・デル・サルトでもこれである。美学者は笑いながら…`.

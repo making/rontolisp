@@ -12694,6 +12694,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTorchFusedCompositions() throws Exception {
+		// TorchGradcheck.FUSED_PROGRAM: the fused torch nodes (todo-499) against the
+		// compositions they replaced, bit for bit, on the compiled backend.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunTorchOptimizerRules() throws Exception {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM): the
 		// SGD/Adam rules against hand-computed values, the batching and mask helpers,

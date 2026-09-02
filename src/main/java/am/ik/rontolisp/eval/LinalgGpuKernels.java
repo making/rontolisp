@@ -681,6 +681,93 @@ final class LinalgGpuKernels {
 		return Gpu.sumSquares(a, 0, n, acc);
 	}
 
+	// --- the fused tier (.todo/499) --------------------------------------------------
+
+	/** {@code linalg::%la-gelu} on the device: one pass, or {@code null}. */
+	static double @Nullable [] gelu(double[] a, int n) {
+		double[] out = result(n);
+		return Gpu.gelu(a, 0, out, 0, n) ? out : null;
+	}
+
+	static float @Nullable [] gelu(float[] a, int n) {
+		float[] out = resultF(n);
+		return Gpu.gelu(a, 0, out, 0, n) ? out : null;
+	}
+
+	/**
+	 * {@code linalg::%la-gelu-grad} on the device: the gradient the input holds after the
+	 * node, folded onto {@code old} (or nothing), or {@code null}.
+	 */
+	static double @Nullable [] geluGrad(double[] g, double[] x, double @Nullable [] old, int n) {
+		double[] out = result(n);
+		return Gpu.geluGrad(g, 0, x, 0, old, 0, out, 0, n) ? out : null;
+	}
+
+	static float @Nullable [] geluGrad(float[] g, float[] x, float @Nullable [] old, int n) {
+		float[] out = resultF(n);
+		return Gpu.geluGrad(g, 0, x, 0, old, 0, out, 0, n) ? out : null;
+	}
+
+	/**
+	 * {@code linalg:softmax} over the last axis of {@code rows x len}, or {@code null}.
+	 */
+	static double @Nullable [] softmax(double[] a, int rows, int len) {
+		double[] out = result(rows * len);
+		return Gpu.softmax(a, 0, out, 0, rows, len) ? out : null;
+	}
+
+	static float @Nullable [] softmax(float[] a, int rows, int len) {
+		float[] out = resultF(rows * len);
+		return Gpu.softmax(a, 0, out, 0, rows, len) ? out : null;
+	}
+
+	/** {@code linalg::%la-softmax-grad} over the last axis, or {@code null}. */
+	static double @Nullable [] softmaxGrad(double[] g, double[] s, int rows, int len) {
+		double[] out = result(rows * len);
+		return Gpu.softmaxGrad(g, 0, s, 0, out, 0, rows, len) ? out : null;
+	}
+
+	static float @Nullable [] softmaxGrad(float[] g, float[] s, int rows, int len) {
+		float[] out = resultF(rows * len);
+		return Gpu.softmaxGrad(g, 0, s, 0, out, 0, rows, len) ? out : null;
+	}
+
+	/** {@code linalg::%la-layer-norm} over the last axis, or {@code null}. */
+	static double @Nullable [] layerNorm(double[] x, int rows, int len, double eps) {
+		double[] out = result(rows * len);
+		return Gpu.layerNorm(x, 0, out, 0, rows, len, eps) ? out : null;
+	}
+
+	static float @Nullable [] layerNorm(float[] x, int rows, int len, double eps) {
+		float[] out = resultF(rows * len);
+		return Gpu.layerNorm(x, 0, out, 0, rows, len, eps) ? out : null;
+	}
+
+	/** {@code linalg::%la-layer-norm-grad} over the last axis, or {@code null}. */
+	static double @Nullable [] layerNormGrad(double[] g, double[] x, double @Nullable [] old, int rows, int len,
+			double eps) {
+		double[] out = result(rows * len);
+		return Gpu.layerNormGrad(g, 0, x, 0, old, 0, out, 0, rows, len, eps) ? out : null;
+	}
+
+	static float @Nullable [] layerNormGrad(float[] g, float[] x, float @Nullable [] old, int rows, int len,
+			double eps) {
+		float[] out = resultF(rows * len);
+		return Gpu.layerNormGrad(g, 0, x, 0, old, 0, out, 0, rows, len, eps) ? out : null;
+	}
+
+	/**
+	 * {@code linalg::%la-dropout-mask}'s fill on the device: the mask into {@code out},
+	 * answering the generator's end state as {@link #rngFill} does, or {@code null}.
+	 */
+	static double @Nullable [] dropoutMask(double[] out, int n, double p, double span, int s1, int s2, int s3) {
+		return Gpu.dropoutMask(out, 0, n, p, span, s1, s2, s3) ? endState(n, 0, s1, s2, s3) : null;
+	}
+
+	static double @Nullable [] dropoutMask(float[] out, int n, double p, double span, int s1, int s2, int s3) {
+		return Gpu.dropoutMask(out, 0, n, p, span, s1, s2, s3) ? endState(n, 0, s1, s2, s3) : null;
+	}
+
 	/** The single-float sibling of {@link #sumSquares(double[], int, double)}. */
 	static @Nullable Double sumSquares(float[] a, int n, double acc) {
 		return Gpu.sumSquares(a, 0, n, acc);

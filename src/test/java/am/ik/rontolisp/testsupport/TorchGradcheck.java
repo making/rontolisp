@@ -330,6 +330,86 @@ public final class TorchGradcheck {
 			                                           :element-type 'double-float)))))
 			""";
 
+	/**
+	 * The fused compositions (todo-499) against the torch-op compositions they replaced,
+	 * BIT for bit, on every backend: the exact {@code torch:gelu} and
+	 * {@code torch:layer-norm} are one node each over an internal {@code linalg} member
+	 * whose adjoint spells the tape's own backward, {@code torch:softmax}'s adjoint is
+	 * one member, and {@code torch:dropout}'s mask is one member over an explicit
+	 * generator state. Each is checked with a SECOND consumer of the input (a residual
+	 * add), which is what exercises the accumulated-gradient protocol: the fused adjoint
+	 * folds its contributions onto what the input already held, in the tape's order.
+	 */
+	public static final String FUSED_PROGRAM = """
+			(defun fz-loss (y) (torch:sum (torch:mul y y)))
+			(defparameter *fz-x* (linalg:from-list '((-1.5 0.25 0.75 2.0) (0.1 -0.6 1.3 -2.2) (3.0 -0.05 0.5 -1.0))))
+			(defparameter *fz-g* (torch:data (torch:tensor '((0.3 -0.7 1.1 0.2) (-0.4 0.9 0.05 -1.3) (0.6 0.8 -0.2 1.7)))))
+			(defun fz-old-gelu (tx)
+			  (torch:mul (torch:mul tx 0.5)
+			             (torch:add 1.0 (torch:erf (torch:div tx 1.4142135623730951)))))
+			(let* ((a (torch:tensor *fz-x* :requires-grad t))
+			       (b (torch:tensor *fz-x* :requires-grad t))
+			       (ya (torch:add (torch:gelu a) a))
+			       (yb (torch:add (fz-old-gelu b) b)))
+			  (torch:backward (fz-loss ya))
+			  (torch:backward (fz-loss yb))
+			  (print (list (linalg:array-equal (torch:data ya) (torch:data yb))
+			               (linalg:array-equal (torch:grad a) (torch:grad b)))))
+			(defun fz-old-layer-norm (tx w b eps)
+			  (let* ((mu (torch:mean tx :axis -1 :keepdims t))
+			         (dev (torch:sub tx mu))
+			         (v (torch:var tx :axis -1 :keepdims t :ddof 0))
+			         (norm (torch:div dev (torch:sqrt (torch:add v eps)))))
+			    (torch:add (torch:mul norm w) b)))
+			(let* ((ln (torch:layer-norm 4))
+			       (w (torch:parameter '(1.5 0.5 -1.0 2.0)))
+			       (bb (torch:parameter '(0.1 -0.2 0.3 -0.4)))
+			       (a (torch:tensor *fz-x* :requires-grad t))
+			       (b (torch:tensor *fz-x* :requires-grad t)))
+			  (torch:set-data (torch:field ln :weight) (torch:data w))
+			  (torch:set-data (torch:field ln :bias) (torch:data bb))
+			  (let ((ya (torch:add (torch:forward ln a) a))
+			        (yb (torch:add (fz-old-layer-norm b w bb 1.0e-5) b)))
+			    (torch:backward (fz-loss ya))
+			    (torch:backward (fz-loss yb))
+			    (print (list (linalg:array-equal (torch:data ya) (torch:data yb))
+			                 (linalg:array-equal (torch:grad a) (torch:grad b))
+			                 (linalg:array-equal (torch:grad (torch:field ln :weight)) (torch:grad w))
+			                 (linalg:array-equal (torch:grad (torch:field ln :bias)) (torch:grad bb))))))
+			(let* ((a (torch:tensor *fz-x* :requires-grad t))
+			       (s (torch:softmax a :axis -1))
+			       (out (torch:data s)))
+			  (torch:backward (torch:sum (torch:mul s *fz-g*)))
+			  (let ((g *fz-g*))
+			    (print (list (linalg:array-equal out (linalg:softmax (torch:data a) :axis -1))
+			                 (linalg:array-equal (torch:grad a)
+			                                     (linalg:mul out (linalg:sub g (linalg:sum (linalg:mul g out)
+			                                                                             :axis 1 :keepdims t))))))))
+			(let ((drop (torch:train (torch:dropout 0.3))))
+			  (linalg:seed 11)
+			  (let* ((a (torch:tensor *fz-x* :requires-grad t))
+			         (ya (torch:forward drop a))
+			         (ra (linalg:rand '(3))))
+			    (torch:backward (fz-loss ya))
+			    (linalg:seed 11)
+			    (let* ((b (torch:tensor *fz-x* :requires-grad t))
+			           (mask (linalg:div (linalg:greater (linalg:rand '(3 4) :element-type 'single-float) 0.3)
+			                             0.7))
+			           (yb (torch:mul b mask))
+			           (rb (linalg:rand '(3))))
+			      (torch:backward (fz-loss yb))
+			      (print (list (linalg:array-equal (torch:data ya) (torch:data yb))
+			                   (linalg:array-equal (torch:grad a) (torch:grad b))
+			                   (linalg:array-equal ra rb))))))
+			""";
+
+	/** The expected stdout of {@link #FUSED_PROGRAM}. */
+	public static final String FUSED_EXPECTED = """
+			(T T)
+			(T T T T)
+			(T T)
+			(T T T)""";
+
 	/** The expected stdout of {@link #ELEMENT_TYPE_PROGRAM}. */
 	public static final String ELEMENT_TYPE_EXPECTED = """
 			(SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT)

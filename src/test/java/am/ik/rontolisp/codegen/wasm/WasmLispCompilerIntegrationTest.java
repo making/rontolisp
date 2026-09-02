@@ -14671,6 +14671,14 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileTorchFusedCompositions() throws Exception {
+		// TorchGradcheck.FUSED_PROGRAM on the wasm-GC backend: the fused torch nodes
+		// (todo-499) against the compositions they replaced, bit for bit.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
+	}
+
+	@Test
 	void compileTorchOptimizerRules() throws Exception {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM) on the
 		// wasm-GC backend: the element-wise in-place parameter update, the optimizer

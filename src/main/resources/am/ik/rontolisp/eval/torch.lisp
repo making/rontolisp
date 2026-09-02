@@ -455,10 +455,20 @@
                                                   (torch::%t-rneg
                                                    (linalg:mul xa xa))))))))))
 
+(defun torch::%t-fold-grad (tn member)
+  ;; The adjoint protocol of the two fused compositions (gelu, layer-norm): the
+  ;; composition made several contributions to its input, and the tape added
+  ;; them one by one onto whatever the input had accumulated before -- so the
+  ;; fused member takes that OLD gradient and answers the input's gradient
+  ;; AFTER the node, folded in the tape's own order; the slot is cleared so
+  ;; torch:backward stores the answer rather than adding it a second time. The
+  ;; bits are the composition's on every backend (.kb/torch.md).
+  (let ((old (torch::%t-grad tn)))
+    (setf (torch::%t-grad tn) nil)
+    (funcall member old)))
+
 (defun torch:gelu (a &key (approximate :none))
-  ;; The Gaussian error linear unit (nn.GELU / torch.nn.functional.gelu),
-  ;; composed from torch ops, so it is differentiable with no adjoint of its
-  ;; own:
+  ;; The Gaussian error linear unit (nn.GELU / torch.nn.functional.gelu):
   ;;
   ;;   :none (the default, PyTorch's approximate='none')
   ;;       x * (1 + erf(x / sqrt(2))) / 2 -- the EXACT x * P(X <= x) for a
@@ -468,9 +478,22 @@
   ;;       formulation, which agrees with the exact form to about 1e-3
   ;;
   ;; Unlike relu it is smooth everywhere and passes a small negative gradient,
-  ;; which is why a transformer feed-forward block uses it.
+  ;; which is why a transformer feed-forward block uses it. The :tanh form is
+  ;; composed from torch ops; the exact form is ONE node over the internal
+  ;; linalg::%la-gelu, whose adjoint linalg::%la-gelu-grad spells the tape's
+  ;; own backward through the five ops it replaces -- so the bits are the
+  ;; composition's, and a device runs each direction as one pass (todo-499).
   (let ((tx (torch::%t-wrap a)))
-    (cond ((eq approximate :none)
+    (cond ((and (eq approximate :none) (not (numberp (torch::%t-data tx))))
+           (let ((xa (torch::%t-data tx)))
+             (torch::%t-result (linalg::%la-gelu xa) (list tx)
+                               (lambda (g)
+                                 (list
+                                  (torch::%t-fold-grad tx
+                                                       (lambda (old)
+                                                         (linalg::%la-gelu-grad
+                                                          g xa old))))))))
+          ((eq approximate :none)
            (torch:mul (torch:mul tx 0.5)
             (torch:add 1.0 (torch:erf (torch:div tx 1.4142135623730951)))))
           ((eq approximate :tanh)
@@ -910,20 +933,20 @@
   ;; Differentiable max-subtracted softmax (linalg:softmax: the whole tensor
   ;; is one distribution with no :axis, one distribution per slice with an
   ;; integer :axis -- torch's softmax(x, dim)). The adjoint is
-  ;; s * (g - sum(g * s)) over each distribution.
+  ;; s * (g - sum(g * s)) over each distribution -- in the :axis form through
+  ;; linalg::%la-softmax-grad, the same four members as one call, so a device
+  ;; runs them as one pass (todo-499).
   (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (let* ((ax (if axis (linalg::%la-norm-axis (array-dimensions xa) axis) nil))
            (out
             (if (null axis) (linalg:softmax xa) (linalg:softmax xa :axis ax))))
       (torch::%t-result out (list ta)
                         (lambda (g)
-                          (let ((tot
-                                 (if (null ax)
-                                     (linalg:sum (linalg:mul g out))
-                                     (linalg:sum (linalg:mul g out)
-                                                 :axis ax
-                                                 :keepdims t))))
-                            (list (linalg:mul out (linalg:sub g tot)))))))))
+                          (if (null ax)
+                              (list
+                               (linalg:mul out
+                                (linalg:sub g (linalg:sum (linalg:mul g out)))))
+                              (list (linalg::%la-softmax-grad g out ax))))))))
 
 (defun torch:log-softmax (a &key axis)
   ;; Differentiable log-softmax (linalg:log-softmax, the numerically stable
@@ -1272,13 +1295,29 @@
 
 (defun torch::%m-layer-norm-forward (self x)
   ;; (x - mean) / sqrt(var + eps) * weight + bias over the LAST axis, with the
-  ;; biased (ddof 0) variance -- PyTorch's unbiased=False.
+  ;; biased (ddof 0) variance -- PyTorch's unbiased=False. The normalization is
+  ;; ONE node over the internal linalg::%la-layer-norm, whose adjoint
+  ;; linalg::%la-layer-norm-grad spells the tape's own backward through the
+  ;; mean / sub / var / add / sqrt / div it replaces (the four contributions
+  ;; to x in the walk's order, onto what x already held) -- so the bits are
+  ;; the composition's, and a device runs each direction as one pass
+  ;; (todo-499). A scalar input keeps the composition.
   (let* ((tx (torch::%t-wrap x))
-         (mu (torch:mean tx :axis -1 :keepdims t))
-         (dev (torch:sub tx mu))
-         (v (torch:var tx :axis -1 :keepdims t :ddof 0))
+         (xa (torch::%t-data tx))
+         (eps (torch:field self :eps))
          (norm
-          (torch:div dev (torch:sqrt (torch:add v (torch:field self :eps))))))
+          (if (numberp xa)
+              (torch:div (torch:sub tx (torch:mean tx :axis -1 :keepdims t))
+                         (torch:sqrt
+                          (torch:add (torch:var tx :axis -1 :keepdims t :ddof 0)
+                                     eps)))
+              (torch::%t-result (linalg::%la-layer-norm xa eps) (list tx)
+                                (lambda (g)
+                                  (list
+                                   (torch::%t-fold-grad tx
+                                    (lambda (old)
+                                      (linalg::%la-layer-norm-grad g xa eps
+                                                                   old)))))))))
     (torch:add (torch:mul norm (torch:field self :weight))
                (torch:field self :bias))))
 
@@ -1306,13 +1345,18 @@
   (let ((p (torch:field self :p)) (tx (torch::%t-wrap x)))
     (if (or (null (torch::%m-training self)) (<= p 0))
         tx
-        (let ((mask
-               (linalg:rand (torch:shape tx)
-                            :element-type torch::*default-element-type*)))
-          ;; The mask is built at torch's own width: paired with the activations
-          ;; at a DIFFERENT width the multiply below declines every --simd
-          ;; kernel (.kb/torch.md).
-          (torch:mul tx (linalg:div (linalg:greater mask p) (- 1.0 p)))))))
+        (let* ((st (linalg::%la-rng-state))
+               (mask
+                (linalg::%la-dropout-mask (torch:shape tx) p st
+                 (eq torch::*default-element-type* 'single-float))))
+          ;; The mask (rand > p) / (1 - p) is ONE member over an explicit
+          ;; generator state, so a device draws and scales it in one pass
+          ;; (todo-499); the state it advances is put back as linalg:rand
+          ;; would. It is built at torch's own width: paired with the
+          ;; activations at a DIFFERENT width the multiply below declines
+          ;; every --simd kernel (.kb/torch.md).
+          (linalg::%la-rng-restore st)
+          (torch:mul tx mask)))))
 
 (defun torch:dropout (p)
   ;; A dropout layer (nn.Dropout) with drop probability p, in the single field

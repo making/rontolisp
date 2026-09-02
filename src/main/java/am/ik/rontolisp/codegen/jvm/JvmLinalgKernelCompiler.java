@@ -126,7 +126,10 @@ final class JvmLinalgKernelCompiler {
 			LispNames.LINALG_TANH, LispNames.LINALG_SIN, LispNames.LINALG_COS, LispNames.LINALG_TAN,
 			LispNames.LINALG_ASIN, LispNames.LINALG_ACOS, LispNames.LINALG_ATAN, LispNames.LINALG_SINH,
 			LispNames.LINALG_COSH, LispNames.LINALG_SQRT, LispNames.LINALG_ABS, LispNames.LINALG_NEGATIVE,
-			LispNames.LINALG_SIGN, LispNames.LINALG_ERF);
+			LispNames.LINALG_SIGN, LispNames.LINALG_ERF,
+			// The device-only fused pair at arity 1: softmax (its :axis form is the
+			// member; the base form routes to the defun) and the exact GELU.
+			LispNames.LINALG_SOFTMAX, LispNames.LINALG_GELU);
 
 	/**
 	 * Returns whether the given {@code linalg:} member is one this compiler accelerates.
@@ -167,7 +170,12 @@ final class JvmLinalgKernelCompiler {
 					LispNames.LINALG_GATHER_STRIDED ->
 				5;
 			case LispNames.LINALG_COL2IM -> 6;
-			case LispNames.LINALG_WHERE, LispNames.LINALG_SCATTER_ROWS -> 3;
+			case LispNames.LINALG_WHERE, LispNames.LINALG_SCATTER_ROWS, LispNames.LINALG_GELU_GRAD,
+					LispNames.LINALG_SOFTMAX_GRAD ->
+				3;
+			// The fused tier's four-argument members (todo-499); %la-layer-norm is two,
+			// the default.
+			case LispNames.LINALG_LAYER_NORM_GRAD, LispNames.LINALG_DROPOUT_MASK -> 4;
 			// concatenate takes its list and :axis; a device member only, in that form.
 			case LispNames.LINALG_CONCATENATE -> 1;
 			default -> UNARY.contains(member) ? 1 : 2;
@@ -191,8 +199,9 @@ final class JvmLinalgKernelCompiler {
 			LispNames.LINALG_ARGMAX, new Extended("laArgmaxAxis", 2), LispNames.LINALG_ARGMIN,
 			new Extended("laArgminAxis", 2),
 			// concatenate has no lane kernel: the name here is never emitted, the shape
-			// is.
-			LispNames.LINALG_CONCATENATE, new Extended("laConcatenate", 2));
+			// is. Nor has softmax, a device member in this form only (todo-499).
+			LispNames.LINALG_CONCATENATE, new Extended("laConcatenate", 2), LispNames.LINALG_SOFTMAX,
+			new Extended("laSoftmaxAxis", 2));
 
 	/** The extended (option-form) kernel of the given member, or {@code null}. */
 	static @org.jspecify.annotations.Nullable Extended extended(String member) {
@@ -214,7 +223,9 @@ final class JvmLinalgKernelCompiler {
 	 */
 	private static final Map<String, int[]> WRITTEN = Map.of(LispNames.LINALG_ADAM_STEP, new int[] { 0, 2, 3 },
 			LispNames.LINALG_SCATTER_ROWS, new int[] { 0 }, LispNames.LINALG_SCALE, new int[] { 0 },
-			LispNames.LINALG_RNG_FILL, new int[] { 0 });
+			LispNames.LINALG_RNG_FILL, new int[] { 0 },
+			// The dropout mask advances its state vector in place (todo-499).
+			LispNames.LINALG_DROPOUT_MASK, new int[] { 2 });
 
 	/** The ops-map key of a member's extended bridge registration. */
 	static String extendedKey(String member) {

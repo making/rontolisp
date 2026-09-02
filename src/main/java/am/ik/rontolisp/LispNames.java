@@ -5390,6 +5390,60 @@ public final class LispNames {
 	public static final String LINALG_SCATTER_ROWS = "%LA-SCATTER-ROWS";
 
 	/**
+	 * {@code linalg:softmax}: a device member since todo-499, in its {@code :axis} form.
+	 */
+	public static final String LINALG_SOFTMAX = "SOFTMAX";
+
+	/**
+	 * {@code linalg::%la-softmax-grad} (INTERNAL): {@code torch:softmax}'s adjoint
+	 * {@code s * (g - sum(g * s))} along an axis, the composition it always was, spelled
+	 * as one member so the device can run it as one pass (todo-499).
+	 */
+	public static final String LINALG_SOFTMAX_GRAD = "%LA-SOFTMAX-GRAD";
+
+	/**
+	 * {@code linalg::%la-gelu} (INTERNAL): the exact GELU {@code x * (1 + erf(x / sqrt
+	 * 2)) / 2} as the composition {@code torch:gelu} spelled in torch ops, now one member
+	 * with an adjoint of its own ({@link #LINALG_GELU_GRAD}) -- so a device can run each
+	 * as one pass (todo-499).
+	 */
+	public static final String LINALG_GELU = "%LA-GELU";
+
+	/**
+	 * {@code linalg::%la-gelu-grad} (INTERNAL): the tape's backward through that
+	 * composition, {@code (g x old)} -- the gradient {@code x} holds after the node,
+	 * folded onto the gradient {@code old} it had accumulated before (or nil), in the
+	 * order the reverse walk would have added the composition's two contributions.
+	 */
+	public static final String LINALG_GELU_GRAD = "%LA-GELU-GRAD";
+
+	/**
+	 * {@code linalg::%la-layer-norm} (INTERNAL): {@code (x eps)}, the normalization
+	 * {@code (x - mean) / sqrt(var + eps)} over the last axis as {@code torch:layer-norm}
+	 * composed it from torch ops -- one member so a device can run it as one pass
+	 * (todo-499); the affine {@code * weight + bias} stays two torch ops.
+	 */
+	public static final String LINALG_LAYER_NORM = "%LA-LAYER-NORM";
+
+	/**
+	 * {@code linalg::%la-layer-norm-grad} (INTERNAL): the tape's backward through that
+	 * normalization, {@code (g x eps old)}, with the same {@code old} protocol as
+	 * {@link #LINALG_GELU_GRAD}: the four contributions the composition makes to its
+	 * input, in the reverse walk's order, onto what {@code x} had accumulated.
+	 */
+	public static final String LINALG_LAYER_NORM_GRAD = "%LA-LAYER-NORM-GRAD";
+
+	/**
+	 * {@code linalg::%la-dropout-mask} (INTERNAL): {@code (shape p st single)}, the
+	 * inverted-dropout mask {@code (rand > p) / (1 - p)} drawn from the state vector
+	 * {@code st}, which is advanced IN PLACE to the generator's end state -- the three
+	 * members {@code torch:dropout} composed, as one, so a device can draw and scale the
+	 * mask in one pass (todo-499). The width rides as a flag, like
+	 * {@link #LINALG_GATHER_STRIDED}'s.
+	 */
+	public static final String LINALG_DROPOUT_MASK = "%LA-DROPOUT-MASK";
+
+	/**
 	 * {@code linalg::%la-sum-squares} (INTERNAL): an accumulator plus the sum of the
 	 * squares of an array's elements, the left fold {@code torch:clip-grad-norm} takes
 	 * over every gradient -- moved onto the acceleration seam from the boxed loop it was.

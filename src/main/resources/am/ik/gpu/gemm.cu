@@ -4,12 +4,15 @@
 // installed. The toolkit is a DEVELOPER requirement only: at run time the NVIDIA driver
 // JIT-compiles this PTX itself, and libcuda.so.1 is the whole dependency.
 //
-//   nvcc -arch=compute_75 -ptx src/main/resources/am/ik/gpu/gemm.cu -o /tmp/gemm.ptx
+//   nvcc -arch=compute_75 -ptx -fmad=false src/main/resources/am/ik/gpu/gemm.cu -o /tmp/gemm.ptx
 //   sed -n '1,12p' src/main/resources/am/ik/gpu/gemm.cu > src/main/resources/am/ik/gpu/gemm.ptx
 //   cat /tmp/gemm.ptx >> src/main/resources/am/ik/gpu/gemm.ptx
 //
 // compute_75 (Turing, 2018) is the floor because CUDA 13 refuses to target anything older,
-// not because we chose it. See .kb/gpu.md.
+// not because we chose it. -fmad=false (todo-499): nvcc may otherwise contract `a * b + c`
+// into one fused multiply-add anywhere, and every kernel here that promises the CPU's
+// bits rounds the product and the sum separately; the products that DO fuse (the GEMMs,
+// the GEMV) say so with an explicit fma(), which the flag leaves alone. See .kb/gpu.md.
 
 #define TILE 16
 
@@ -26,7 +29,7 @@ __device__ void gemm(const T* A, const T* B, T* C, int M, int N, int K) {
     As[ty][tx] = (row < M && ac < K) ? A[row * (long) K + ac] : (T) 0;
     Bs[ty][tx] = (br < K && col < N) ? B[br * (long) N + col] : (T) 0;
     __syncthreads();
-    for (int k = 0; k < TILE; ++k) acc += As[ty][k] * Bs[k][tx];
+    for (int k = 0; k < TILE; ++k) acc = fma(As[ty][k], Bs[k][tx], acc);
     __syncthreads();
   }
   if (row < M && col < N) C[row * (long) N + col] = acc;
@@ -371,14 +374,31 @@ __device__ double wh_next(int* s1, int* s2, int* s3) {
   return u >= 2.0 ? __dsub_rn(u, 2.0) : (u >= 1.0 ? __dsub_rn(u, 1.0) : u);
 }
 
+// The jump is taken in two hops (todo-499): the BLOCK's part, a^(first element of the
+// block * draws), is one square-and-multiply chain computed by one thread and shared,
+// and each thread then jumps its own offset inside the block, whose exponent is at most
+// 255 * 12 and so twelve bits. Both hops are the same exact integer arithmetic (a^(p+q)
+// = a^p * a^q mod m), so the state every element starts from is unchanged bit for bit;
+// what changes is the integer work per element, which was the whole cost of the fill
+// (compute-bound, 1.4 ms for 6.3 M single floats against 0.2 for a memory pass) and is
+// now roughly half. Every thread reaches the barrier: the bounds test comes after it.
 template <typename T>
 __device__ void rng_fill(T* out, int n, int mode, double lo, double span, int s1, int s2, int s3) {
+  __shared__ int base[3];
+  int draws = mode == 1 ? 12 : 1;
+  if (threadIdx.x == 0) {
+    long long first = (long long) blockIdx.x * blockDim.x * draws;
+    base[0] = wh_pow(171, first, 30269);
+    base[1] = wh_pow(172, first, 30307);
+    base[2] = wh_pow(170, first, 30323);
+  }
+  __syncthreads();
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) return;
-  long long steps = (long long) i * (mode == 1 ? 12 : 1);
-  int t1 = (int) ((long long) s1 * wh_pow(171, steps, 30269) % 30269);
-  int t2 = (int) ((long long) s2 * wh_pow(172, steps, 30307) % 30307);
-  int t3 = (int) ((long long) s3 * wh_pow(170, steps, 30323) % 30323);
+  long long mine = (long long) threadIdx.x * draws;
+  int t1 = (int) ((long long) s1 * base[0] % 30269 * wh_pow(171, mine, 30269) % 30269);
+  int t2 = (int) ((long long) s2 * base[1] % 30307 * wh_pow(172, mine, 30307) % 30307);
+  int t3 = (int) ((long long) s3 * base[2] % 30323 * wh_pow(170, mine, 30323) % 30323);
   double v;
   if (mode == 1) {
     double acc = 0.0;
@@ -428,7 +448,7 @@ __device__ void gemv(const T* W, const T* x, T* y, int rows, int cols) {
   if (row >= rows) return;
   const T* w = W + (long long) row * cols;
   double acc = 0.0;
-  for (int j = lane; j < cols; j += 32) acc += (double) w[j] * (double) x[j];
+  for (int j = lane; j < cols; j += 32) acc = fma((double) w[j], (double) x[j], acc);
   for (int off = 16; off > 0; off >>= 1) acc += __shfl_down_sync(0xffffffffu, acc, off);
   if (lane == 0) y[row] = (T) acc;
 }
@@ -687,4 +707,433 @@ extern "C" __global__ void sumsq_f32(const float* A, double* P, int n) {
 
 extern "C" __global__ void sumsq_f64(const double* A, double* P, int n) {
   sumsq<double>(A, P, n);
+}
+
+// The FUSED tier (.todo/499): the four compositions a transformer step spent a third of
+// its device time on -- GELU, softmax, layer-norm and the dropout mask -- each as ONE
+// kernel where the `torch.lisp` composition launched five to fourteen `linalg:` members,
+// one full memory pass each. What a fused kernel buys on this card is the passes it
+// removes and nothing else: the launches were already pipelined (.kb/gpu.md, "The launch
+// pipeline"), so a chain of five bandwidth-bound passes over a 100 MB activation is five
+// times the traffic of one.
+//
+// EVERY ARITHMETIC STEP BELOW IS THE COMPOSITION'S, IN THE COMPOSITION'S ORDER, NARROWED
+// WHERE THE COMPOSITION NARROWED. A `linalg:` member computes in double and stores at the
+// operand's width, so a chain of members rounds at every member boundary; the fused
+// kernels reproduce each of those roundings (the `(T)` casts are the member boundaries),
+// keep every axis fold ascending and sequential in a double accumulator, and evaluate
+// exp / erf at the operand width exactly as `map_op` does. So a fused member lands on the
+// bits the chain of device members would have produced, and -- for the members with no
+// libm in them (softmax's adjoint, layer-norm, the mask) -- on the CPU defun's bits.
+// The layer-norm and GELU adjoints replay the TAPE's composition too: the order the
+// reverse-mode walk accumulates one input's several contributions in is part of the
+// value, and `OLD` -- the gradient the input had accumulated before this node -- is folded
+// in where the tape would have folded it (.kb/torch.md).
+//
+// The arithmetic is written through these five, each one double operation. Left to the
+// operators alone nvcc contracted `a * b + c` into a fused multiply-add wherever the
+// operands were doubles -- at f64 every `(T)` boundary is a no-op, so `acc += dev * dev`
+// rounded once where the chain rounds twice: measured, one ulp in a layer-norm row and
+// in a softmax adjoint. The first fix was the `__dmul_rn` family, which never contracts
+// -- and DOUBLED these kernels (gelu_grad 1.7 -> 3.5 ms at the book's feed-forward
+// shape), because the intrinsics also switch off everything else the compiler does with
+// a double expression. So the file is compiled with -fmad=false instead (the header), the
+// products that should fuse say fma() explicitly, and these stay plain operators.
+#define F_ADD(a, b) ((double) (a) + (double) (b))
+#define F_SUB(a, b) ((double) (a) - (double) (b))
+#define F_MUL(a, b) ((double) (a) * (double) (b))
+#define F_DIV(a, b) ((double) (a) / (double) (b))
+#define F_NEG(a) (-(double) (a))
+
+// x * (1 + erf(x / sqrt 2)) / 2 as `torch:gelu` composes it: mul by 0.5, div by sqrt 2,
+// erf, add to 1, mul -- five members, five roundings.
+template <typename T>
+__device__ T gelu_forward(T x) {
+  T t1 = (T) F_MUL(x, 0.5);
+  T t2 = (T) F_DIV(x, 1.4142135623730951);
+  T t3 = erf(t2);
+  T t4 = (T) F_ADD(1.0, t3);
+  return (T) F_MUL(t1, t4);
+}
+
+template <typename T>
+__device__ void gelu(const T* X, T* C, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) C[i] = gelu_forward<T>(X[i]);
+}
+
+extern "C" __global__ void gelu_f32(const float* X, float* C, int n) {
+  gelu<float>(X, C, n);
+}
+
+extern "C" __global__ void gelu_f64(const double* X, double* C, int n) {
+  gelu<double>(X, C, n);
+}
+
+// The tape's backward through those five members, in the tape's order: the outer mul
+// hands g * t4 to the 0.5-branch and g * t1 to the erf branch; erf's adjoint is
+// g * (2/sqrt(pi)) * exp(-t2^2); the div branch lands on x first (B) and the mul branch
+// second (A), each after the gradient x had already accumulated (OLD, or nothing).
+template <typename T>
+__device__ void gelu_grad(const T* G, const T* X, const T* OLD, T* C, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  T x = X[i], g = G[i];
+  T t1 = (T) F_MUL(x, 0.5);
+  T t2 = (T) F_DIV(x, 1.4142135623730951);
+  T t3 = erf(t2);
+  T t4 = (T) F_ADD(1.0, t3);
+  T g1 = (T) F_MUL(g, t4);
+  T g4 = (T) F_MUL(g, t1);
+  T sq = (T) F_MUL(t2, t2);
+  T ng = (T) F_NEG(sq);
+  T ex = exp(ng);
+  T sc = (T) F_MUL(1.1283791670955126, ex);
+  T g2 = (T) F_MUL(g4, sc);
+  T b = (T) F_DIV(g2, 1.4142135623730951);
+  T a = (T) F_MUL(g1, 0.5);
+  T acc = OLD != 0 ? (T) F_ADD(OLD[i], b) : b;
+  C[i] = (T) F_ADD(acc, a);
+}
+
+extern "C" __global__ void gelu_grad_f32(const float* G, const float* X, const float* OLD, float* C, int n) {
+  gelu_grad<float>(G, X, OLD, C, n);
+}
+
+extern "C" __global__ void gelu_grad_f64(const double* G, const double* X, const double* OLD, double* C, int n) {
+  gelu_grad<double>(G, X, OLD, C, n);
+}
+
+// THE ROW KERNELS' LAYOUT. A row kernel keeps one THREAD per row, the fold kernel's own
+// pattern, because a sequential double fold has no lane-parallel form that keeps its bits
+// and the fp64 pipe is used fully only when thirty-two rows advance in one warp
+// instruction. But thirty-two threads reading thirty-two rows read addresses a row apart,
+// and writing them that way is worse (a warp store touches thirty-two lines for four
+// bytes each): measured, a thread-per-row softmax over global memory was SLOWER than the
+// five-member chain it replaced. So the rows go through a TRANSPOSED TILE in shared
+// memory, thirty-two columns at a time: the warp loads column c of its thirty-two rows
+// with one coalesced instruction per row, each lane then walks its own row across the
+// tile (stride 33, conflict-free), and a result goes back the same way. Every pass over
+// the rows is then a coalesced stream, whatever the row length, and the tile is what
+// bounds the block: ROW_WARPS warps, each with up to two tiles, under the 48 KB static
+// limit at f64. CudaGemm launches these at ROW_WARPS * 32 threads, and at nothing else.
+#define ROW_WARPS 2
+
+template <typename T>
+struct row_tile {
+  T v[32][33];
+};
+
+// Columns [c0, c0 + 32) of rows [row0, row0 + 32) into the tile; a cell outside the
+// operand reads as zero and is never stored back. The barriers make the tile safe to
+// reuse: nobody loads before every lane has finished the previous chunk, nobody reads
+// before every column has landed.
+template <typename T>
+__device__ void tile_load(row_tile<T>& tile, const T* A, int rows, int len, int row0, int c0, int lane) {
+  __syncwarp();
+  int col = c0 + lane;
+  for (int r = 0; r < 32; ++r) {
+    int row = row0 + r;
+    tile.v[r][lane] = (row < rows && col < len) ? A[(long long) row * len + col] : (T) 0;
+  }
+  __syncwarp();
+}
+
+template <typename T>
+__device__ void tile_store(row_tile<T>& tile, T* C, int rows, int len, int row0, int c0, int lane) {
+  __syncwarp();
+  int col = c0 + lane;
+  for (int r = 0; r < 32; ++r) {
+    int row = row0 + r;
+    if (row < rows && col < len) C[(long long) row * len + col] = tile.v[r][lane];
+  }
+  __syncwarp();
+}
+
+// `linalg:softmax` over the last axis: amax (the strict fold, seeded with the first
+// element), the broadcast sub, exp at the width, the sum fold, the broadcast div. Three
+// passes over the row: the max, exp into the result with the sum, the division in place.
+template <typename T>
+__device__ void softmax_rows(const T* A, T* C, int rows, int len) {
+  __shared__ row_tile<T> tiles[ROW_WARPS];
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  row_tile<T>& tile = tiles[warp];
+  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+  if (row0 >= rows) return;
+  double m = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      double x = (double) tile.v[lane][j];
+      if (c0 + j == 0 || x > m) m = x;
+    }
+  }
+  T mt = (T) m;
+  double sum = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T s = (T) F_SUB(tile.v[lane][j], mt);
+      T e = exp(s);
+      tile.v[lane][j] = e;
+      sum = F_ADD(sum, e);
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+  T d = (T) sum;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, C, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) tile.v[lane][j] = (T) F_DIV(tile.v[lane][j], d);
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+}
+
+extern "C" __global__ void softmax_f32(const float* A, float* C, int rows, int len) {
+  softmax_rows<float>(A, C, rows, len);
+}
+
+extern "C" __global__ void softmax_f64(const double* A, double* C, int rows, int len) {
+  softmax_rows<double>(A, C, rows, len);
+}
+
+// `torch:softmax`'s adjoint, out * (g - sum(g * out)): the zip mul, the sum fold, the
+// broadcast sub, the zip mul. No libm anywhere, so bit-identical to the CPU chain.
+template <typename T>
+__device__ void softmax_grad_rows(const T* G, const T* O, T* C, int rows, int len) {
+  __shared__ row_tile<T> tiles[ROW_WARPS][2];
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  row_tile<T>& gt = tiles[warp][0];
+  row_tile<T>& ot = tiles[warp][1];
+  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+  if (row0 >= rows) return;
+  double sum = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T p = (T) F_MUL(gt.v[lane][j], ot.v[lane][j]);
+      sum = F_ADD(sum, p);
+    }
+  }
+  T tot = (T) sum;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T q = (T) F_SUB(gt.v[lane][j], tot);
+      ot.v[lane][j] = (T) F_MUL(ot.v[lane][j], q);
+    }
+    tile_store(ot, C, rows, len, row0, c0, lane);
+  }
+}
+
+extern "C" __global__ void softmax_grad_f32(const float* G, const float* O, float* C, int rows, int len) {
+  softmax_grad_rows<float>(G, O, C, rows, len);
+}
+
+extern "C" __global__ void softmax_grad_f64(const double* G, const double* O, double* C, int rows, int len) {
+  softmax_grad_rows<double>(G, O, C, rows, len);
+}
+
+// The map kernel's sqrt (case 12): correctly rounded in double, narrowed, the NaN made
+// canonical because Math.sqrt's is.
+template <typename T>
+__device__ T sqrt_like_map(T x) {
+  double r = sqrt((double) x);
+  return (T) (r != r ? __longlong_as_double(0x7ff8000000000000LL) : r);
+}
+
+// The row's mean and standard deviation as the torch composition computes them: the sum
+// fold divided by the length, the sum fold of the squared deviations divided by the
+// length, plus eps, the square root -- every one a member boundary.
+template <typename T>
+__device__ void row_stats(row_tile<T>& tile, const T* X, int rows, int len, int row0, int lane, double eps, T& mu,
+                          T& sd) {
+  double n = (double) len;
+  double acc = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) acc = F_ADD(acc, tile.v[lane][j]);
+  }
+  mu = (T) F_DIV((T) acc, n);
+  acc = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T dev = (T) F_SUB(tile.v[lane][j], mu);
+      T sq = (T) F_MUL(dev, dev);
+      acc = F_ADD(acc, sq);
+    }
+  }
+  T v = (T) F_DIV((T) acc, n);
+  T ve = (T) F_ADD(v, eps);
+  sd = sqrt_like_map<T>(ve);
+}
+
+// `torch:layer-norm`'s normalization (x - mean) / sqrt(var + eps) over the last axis, as
+// its torch composition spells it (row_stats), then the broadcast division.
+template <typename T>
+__device__ void layer_norm_rows(const T* X, T* C, int rows, int len, double eps) {
+  __shared__ row_tile<T> tiles[ROW_WARPS];
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  row_tile<T>& tile = tiles[warp];
+  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+  if (row0 >= rows) return;
+  T mu, sd;
+  row_stats(tile, X, rows, len, row0, lane, eps, mu, sd);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T dev = (T) F_SUB(tile.v[lane][j], mu);
+      tile.v[lane][j] = (T) F_DIV(dev, sd);
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+}
+
+extern "C" __global__ void layer_norm_f32(const float* X, float* C, int rows, int len, double eps) {
+  layer_norm_rows<float>(X, C, rows, len, eps);
+}
+
+extern "C" __global__ void layer_norm_f64(const double* X, double* C, int rows, int len, double eps) {
+  layer_norm_rows<double>(X, C, rows, len, eps);
+}
+
+// The tape's backward through that composition, with g the gradient of the normalized
+// output. x feeds four nodes -- the two means and the two subtractions (torch:var takes
+// its own mean) -- and the reverse walk reaches them as dev2 (A1, through the squared
+// deviations), the variance's mean (A2), dev (A3) and the mean (A4), adding each into
+// x's gradient in that order after whatever it already held (OLD). The reductions along
+// the way (the adjoints of the two subtractions' broadcast mean, and of the division's
+// broadcast sd) are the sum fold over the row, sequential, of the negated per-element
+// terms; the two mean adjoints stretch a scalar back over the row through a broadcast add
+// onto zeros, whose one visible effect (-0.0 + 0.0 = +0.0) is kept. Two tiles: x and g;
+// once a chunk's terms are computed, x's tile holds the first term (with OLD folded onto
+// it, read directly -- the one strided read, over an operand present only under a
+// residual) and g's the result.
+template <typename T>
+__device__ void layer_norm_grad_rows(const T* G, const T* X, const T* OLD, T* C, int rows, int len, double eps) {
+  __shared__ row_tile<T> tiles[ROW_WARPS][2];
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  row_tile<T>& xt = tiles[warp][0];
+  row_tile<T>& gt = tiles[warp][1];
+  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+  if (row0 >= rows) return;
+  double n = (double) len;
+  T mu, sd;
+  row_stats(xt, X, rows, len, row0, lane, eps, mu, sd);
+  // The division's adjoints: g / sd towards dev (A3), and towards sd the fold of
+  // -((g * dev) / (sd * sd)); the subtraction's adjoint towards the mean, the fold of
+  // -(g / sd).
+  T q = (T) F_MUL(sd, sd);
+  double acc_sd = 0.0, acc_mu = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(xt, X, rows, len, row0, c0, lane);
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T dev = (T) F_SUB(xt.v[lane][j], mu);
+      T gk = gt.v[lane][j];
+      T t = (T) F_MUL(gk, dev);
+      T rr = (T) F_DIV(t, q);
+      T nr = (T) F_NEG(rr);
+      acc_sd = F_ADD(acc_sd, nr);
+      T gdev = (T) F_DIV(gk, sd);
+      T ng = (T) F_NEG(gdev);
+      acc_mu = F_ADD(acc_mu, ng);
+    }
+  }
+  T g_sd = (T) acc_sd;
+  T g_mu = (T) acc_mu;
+  // sqrt's adjoint g / (2 sd), the division by the length, the broadcast onto zeros.
+  T two_sd = (T) F_MUL(2.0, sd);
+  T g_ve = (T) F_DIV(g_sd, two_sd);
+  T g_s = (T) F_DIV(g_ve, n);
+  T g_sq = (T) F_ADD(0.0, g_s);
+  // dev2 * dev2's adjoint reaches dev2 twice (g_sq * dev2, added to itself), which is A1;
+  // the variance's own mean gets the fold of -A1 and hands back A2.
+  double acc_m2 = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(xt, X, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T dev = (T) F_SUB(xt.v[lane][j], mu);
+      T p = (T) F_MUL(g_sq, dev);
+      T gd2 = (T) F_ADD(p, p);
+      T nn = (T) F_NEG(gd2);
+      acc_m2 = F_ADD(acc_m2, nn);
+    }
+  }
+  T g_m2 = (T) acc_m2;
+  T a2 = (T) F_DIV((T) F_ADD(0.0, g_m2), n);
+  T a4 = (T) F_DIV((T) F_ADD(0.0, g_mu), n);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(xt, X, rows, len, row0, c0, lane);
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T dev = (T) F_SUB(xt.v[lane][j], mu);
+      T p = (T) F_MUL(g_sq, dev);
+      T gd2 = (T) F_ADD(p, p);
+      T gdev = (T) F_DIV(gt.v[lane][j], sd);
+      xt.v[lane][j] = gd2;
+      gt.v[lane][j] = gdev;
+    }
+    if (OLD != 0) {
+      int row = row0 + lane;
+      for (int j = 0; j < 32 && c0 + j < len; ++j) {
+        if (row < rows) {
+          T o = OLD[(long long) row * len + c0 + j];
+          xt.v[lane][j] = (T) F_ADD(o, xt.v[lane][j]);
+        }
+      }
+    }
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T a = xt.v[lane][j];
+      a = (T) F_ADD(a, a2);
+      a = (T) F_ADD(a, gt.v[lane][j]);
+      gt.v[lane][j] = (T) F_ADD(a, a4);
+    }
+    tile_store(gt, C, rows, len, row0, c0, lane);
+  }
+}
+
+extern "C" __global__ void layer_norm_grad_f32(const float* G, const float* X, const float* OLD, float* C, int rows,
+                                               int len, double eps) {
+  layer_norm_grad_rows<float>(G, X, OLD, C, rows, len, eps);
+}
+
+extern "C" __global__ void layer_norm_grad_f64(const double* G, const double* X, const double* OLD, double* C,
+                                               int rows, int len, double eps) {
+  layer_norm_grad_rows<double>(G, X, OLD, C, rows, len, eps);
+}
+
+// The inverted-dropout mask (rand > p) / (1 - p) as `torch:dropout` composes it: the
+// generator's uniform draw stored at the width (`rng_fill` mode 0), the comparison mask
+// (a scalar `greater`, in double over the STORED draw), the division by the survival
+// span the caller computed. Two hops for the jump, as in rng_fill.
+template <typename T>
+__device__ void dropout_mask(T* out, int n, double p, double span, int s1, int s2, int s3) {
+  __shared__ int base[3];
+  if (threadIdx.x == 0) {
+    long long first = (long long) blockIdx.x * blockDim.x;
+    base[0] = wh_pow(171, first, 30269);
+    base[1] = wh_pow(172, first, 30307);
+    base[2] = wh_pow(170, first, 30323);
+  }
+  __syncthreads();
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  long long mine = threadIdx.x;
+  int t1 = (int) ((long long) s1 * base[0] % 30269 * wh_pow(171, mine, 30269) % 30269);
+  int t2 = (int) ((long long) s2 * base[1] % 30307 * wh_pow(172, mine, 30307) % 30307);
+  int t3 = (int) ((long long) s3 * base[2] % 30323 * wh_pow(170, mine, 30323) % 30323);
+  T u = (T) wh_next(&t1, &t2, &t3);
+  T m = (T) ((double) u > p ? 1.0 : 0.0);
+  out[i] = (T) F_DIV(m, span);
+}
+
+extern "C" __global__ void dropout_mask_f32(float* out, int n, double p, double span, int s1, int s2, int s3) {
+  dropout_mask<float>(out, n, p, span, s1, s2, s3);
+}
+
+extern "C" __global__ void dropout_mask_f64(double* out, int n, double p, double span, int s1, int s2, int s3) {
+  dropout_mask<double>(out, n, p, span, s1, s2, s3);
 }
