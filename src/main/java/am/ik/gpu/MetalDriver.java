@@ -80,8 +80,15 @@ final class MetalDriver {
 	/** {@code MTLMathModeSafe}. See {@code gemm.metal}'s header for why it is set. */
 	static final long MATH_MODE_SAFE = 0L;
 
-	/** {@code MTLCommandBufferStatusCompleted}. Anything else is a decline. */
+	/**
+	 * {@code MTLCommandBufferStatusCompleted}. Anything else is a decline eagerly, and a
+	 * lost result lazily ({@code MetalGemm.commit}). The statuses are ordered: below this
+	 * one the buffer has not finished, {@link #STATUS_ERROR} is the one above.
+	 */
 	static final long STATUS_COMPLETED = 4L;
+
+	/** {@code MTLCommandBufferStatusError}. */
+	static final long STATUS_ERROR = 5L;
 
 	private static final Linker LINKER = Linker.nativeLinker();
 

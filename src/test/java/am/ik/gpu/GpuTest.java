@@ -1470,7 +1470,8 @@ class GpuTest {
 		DeviceResidency residency = Gpu.residency();
 		assumeTrue(residency != null, "lazy results are the CUDA backend's");
 		// And the mode PAYS here -- measured, a fifth off the training step -- which is
-		// what makes it the interceptors' mode on this backend (not on Metal).
+		// what makes it the interceptors' mode on this backend (and, since todo-495, on
+		// Metal).
 		assertThat(java.util.Objects.requireNonNull(Gpu.device()).lazyResultsPay()).isTrue();
 		Gpu.releaseResident();
 		int n = 1 << 18;
