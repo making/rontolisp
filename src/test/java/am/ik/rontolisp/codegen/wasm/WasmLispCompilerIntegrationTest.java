@@ -1557,6 +1557,56 @@ class WasmLispCompilerIntegrationTest {
 				5""");
 	}
 
+	@Test
+	void makeArrayShapesGoThroughTheSharedDimensionRuntime() throws Exception {
+		// The shapes _arr_dims / _arr_total / _arr_fp decide, which used to be inline at
+		// every make-array site (.kb/array-literals.md). The i31 shorthand stays inline
+		// and every other dims spelling calls: a rank-n LITERAL list, a rank-n list
+		// built at run time, a rank-0 nil shape, an :element-type that packs and one
+		// that does not, a :fill-pointer given as t (the vector size) and as an integer,
+		// and a :displaced-to view whose bound is the same dims product.
+		String program = """
+				(let ((v (make-array 4 :initial-element 3)))
+				  (print (list (array-dimensions v) (array-total-size v) (aref v 3))))
+				(let ((m (make-array '(2 3) :initial-element 1)))
+				  (setf (aref m 1 2) 9)
+				  (print (list (array-dimensions m) (array-total-size m) (aref m 1 2) (row-major-aref m 5))))
+				(let* ((rows 2) (m (make-array (list rows (+ rows 1)) :initial-element 0)))
+				  (setf (aref m 1 2) 7)
+				  (print (list (array-rank m) (array-total-size m) (aref m 1 2))))
+				(let ((c (make-array (list 2 2 2) :element-type 'double-float :initial-element 0.5d0)))
+				  (setf (aref c 1 1 1) 2.5d0)
+				  (print (list (array-dimensions c) (array-total-size c) (aref c 1 1 1) (aref c 0 0 0))))
+				(let ((b (make-array (list 2 2) :element-type '(unsigned-byte 8))))
+				  (print (list (array-dimensions b) (aref b 0 0))))
+				(let ((z (make-array nil :initial-element 42)))
+				  (print (list (array-rank z) (array-total-size z) (aref z))))
+				(let ((f (make-array 5 :fill-pointer t)))
+				  (print (list (fill-pointer f) (length f) (array-total-size f))))
+				(let ((g (make-array 5 :fill-pointer 2 :adjustable t)))
+				  (vector-push-extend 8 g)
+				  (print (list (fill-pointer g) (aref g 2) (adjustable-array-p g))))
+				(let* ((base (make-array 6 :initial-element 0))
+				       (view (make-array (list 2 2) :displaced-to base :displaced-index-offset 1)))
+				  (setf (aref view 1 1) 8)
+				  (print (list (array-dimensions view) (aref base 4) (array-total-size view))))
+				""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		byte[] fast = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(parsed);
+		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE).compile(parsed);
+		assertThat(runModule(small, "arr-dims-size.wasm")).isEqualTo(runModule(fast, "arr-dims-fast.wasm"));
+		assertThat(runModule(fast, "arr-dims-fast.wasm")).isEqualTo("""
+				((4) 4 3)
+				((2 3) 6 9 9)
+				(2 6 7)
+				((2 2 2) 8 2.5 0.5)
+				((2 2) 0)
+				(0 1 42)
+				(5 5 5)
+				(3 8 T)
+				((2 2) 8 4)""");
+	}
+
 	// Runs an already-compiled module. Used where the point of the test is to compare
 	// two compilations of the SAME program, so the module name has to differ per run.
 	private static String runModule(byte[] wasmBytes, String name) throws Exception {

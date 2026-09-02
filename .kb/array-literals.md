@@ -477,11 +477,9 @@ about, so it is filed separately as `.todo/618` with these numbers and the data-
 to try.
 
 **The per-site cost that pushed the arms into a helper is wasm's, and it is not specific to
-this dispatch:** `WasmArrayCompiler.compileMake` emits the whole allocation inline at every
-call site, so a general `make-array` is ~400-600 bytes of module and one with
-`:fill-pointer`/`:adjustable` is ~1,100, where the JVM's is an `invokestatic` on a body
-emitted once. Every array-heavy program pays it; `.todo/617` holds the measurement to make
-before turning it into a runtime function.
+this dispatch:** `WasmArrayCompiler.compileMake` emits the allocation inline at every call
+site, where the JVM's is an `invokestatic` on a body emitted once. The section below has
+the measured numbers and what came of them.
 
 Pinned by `LispEvaluatorTest.evalRuntimeElementTypePicksTheSameArrayAsALiteralOne`,
 `JvmLispCompilerTest.compileRuntimeElementTypePicksTheSameArrayAsALiteralOne`,
@@ -490,3 +488,79 @@ and the `runtime-element-type-make-array` ci-spec case -- one program, one expec
 all four backends, every answer SBCL 2.2.9's. The alias half is pinned the same way by the
 `*RuntimeElementTypeResolvesADeftypeAlias` trio and the
 `runtime-element-type-deftype-alias` ci-spec case.
+
+## What a wasm `make-array` site actually costs, and what moved out of it (2026-09-02)
+
+**A `make-array` site was a quarter of the kilobyte it was thought to be, and three
+quarters of what it WAS is the DIMENSION parse -- which is now three shared callees, not
+inline code.** `_arr_dims` (the argument as a buckets array of i31 sizes), `_arr_total`
+(the product of that array) and `_arr_fp` (the `:fill-pointer` argument resolved against
+the shape) live in `WasmArrayRuntimeBuilder` at fixed indices after `FUNC_TO_MUT_STR`,
+reusing existing callable signatures so no type index moves. Every allocating shape shares
+them -- general, general with `:fill-pointer`/`:adjustable`, packed float, packed integer
+and the `:displaced-to` view's bound check, whose own dims-product loop is `_arr_total`
+too.
+
+**The i31 shorthand stays INLINE, on purpose.** `emitParseDims` still spells `(make-array
+n)` -- a `ref.test i31`, an `array.new` of one element, and the size is the argument
+itself -- and only the list arm calls. That arm is three instructions and the shape nearly
+every allocation writes, so it is where a call would be felt; the list arm was already two
+loops, so a call there is noise. Measured on wasmtime: a 3M-iteration loop allocating
+`(make-array 8 :initial-element 1)` runs 0.41-0.55 s before and after, indistinguishable;
+a 2M-iteration loop allocating `(make-array (list 2 4) ...)` -- the arm that now calls
+twice -- was 0.31-0.49 s and is 0.31-0.36 s.
+
+**The per-site numbers, and why the earlier ones were four times too big.** Measured as
+the marginal module growth from 5 to 40 sites in a synthetic program, MINUS the same
+program with the allocation body stubbed out -- the subtraction is what removes the
+surrounding defun/`aref` harness, which the pre-2026-09 figures (400-600 bytes general,
+~1,100 with a fill pointer) were counting as part of the site. Raw wasm,
+`--optimize=size`:
+
+| shape | inline, before | after |
+|---|---|---|
+| general, no keywords | 247 | 78 |
+| general, `:fill-pointer` + `:adjustable` | 340 | 84 |
+| packed `double-float` | 222 | 53 |
+| packed `(unsigned-byte 8)` | 242 | 73 |
+
+**How much of a real program is make-array at all.** Stubbing the allocation body while
+KEEPING every sub-expression (so the tree shaker's reference graph is unchanged) gives the
+ceiling on what any helper scheme could remove, and stubbing one kind at a time splits it.
+Before the change:
+
+| program | wasm | all | general | fp/adj | packed float | packed int | displaced | runtime `:element-type` |
+|---|---|---|---|---|---|---|---|---|
+| `array-operations` | 96,652 | 7,046 | 985 | 2,241 | 429 | 1,041 | 0 | 6,582 * |
+| `httpbin-clack` | 741,117 | 6,979 | 1,729 | 2,906 | 431 | 1,510 | 403 | 0 |
+| `llama2` | 305,504 | 6,329 | 1,809 | 1,087 | 2,471 | 578 | 403 | 0 |
+| `mlp` | 37,560 | 1,754 | 1,754 | 0 | 0 | 0 | 0 | 0 |
+| `nn-vec` | 68,935 | 1,320 | 247 | 0 | 1,073 | 0 | 0 | 0 |
+| deep-learning ch05 | 156,909 | 1,104 | -- | -- | -- | -- | -- | 0 |
+
+\* That column OVERLAPS the ones left of it in `array-operations` alone: those bytes ARE
+the `%make-array-et` / `%make-array-et-fp` prelude defuns of the section above, whose
+fourteen arms are themselves `make-array` sites. Everywhere else the columns sum to the
+`all` column exactly.
+
+**What the three callees actually saved:**
+
+| program | before | after | delta |
+|---|---|---|---|
+| `array-operations` | 96,652 | 93,656 | -2,996 (-3.10%) |
+| `mlp` | 37,560 | 36,570 | -990 (-2.64%) |
+| `llama2` | 305,504 | 301,334 | -4,170 (-1.37%) |
+| `nn-vec` | 68,935 | 68,126 | -809 (-1.17%) |
+| `httpbin-clack` | 741,117 | 736,556 | -4,561 (-0.62%) |
+| deep-learning ch05 | 156,909 | 156,269 | -640 (-0.41%) |
+
+**What was NOT done, and why.** `.todo/617` proposed a whole-allocation `$_array_make`
+mirroring the JVM's `_arrayMake`. What is left inline after the three callees is the
+`array.new` of the data, the five `struct.new`s of the header and the element-type marker
+-- 50-80 bytes a site, and the header build is five instructions that a five-argument call
+would replace with four. The remaining ceiling is under 1.5 KB even on `httpbin-clack`,
+against a callee that would have to branch on `:fill-pointer`/`:adjustable`/rank at RUN
+time where the site knows all three at compile time, on the allocation path. A Lisp-level
+helper -- the same shape, written in the source -- was measured as the stand-in: it saves
+246 bytes a general site and 347 a fill-pointer one above two sites, and costs 20-30% on a
+tight allocation loop. The dimension parse was the part worth moving; the rest is not.
