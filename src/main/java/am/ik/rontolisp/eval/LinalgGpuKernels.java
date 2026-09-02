@@ -488,6 +488,50 @@ final class LinalgGpuKernels {
 		return Gpu.multiply(a, 0, sa, b, 0, sb, out, 0, batch, n, m, p) ? out : null;
 	}
 
+	/**
+	 * The same stack with either operand read TRANSPOSED IN PLACE -- stored with the last
+	 * two axes exchanged, which is the orientation the two matmul adjoints have. Nothing
+	 * else changes: the strides are the operand's own, and the result is the plain
+	 * product of a transposed COPY bit for bit.
+	 * @param a the left operands, row-major
+	 * @param sa elements from one left operand to the next, or 0 to broadcast
+	 * @param ta whether each left slab is stored {@code m x n}
+	 * @param b the right operands, row-major
+	 * @param sb elements from one right operand to the next, or 0 to broadcast
+	 * @param tb whether each right slab is stored {@code p x m}
+	 * @param batch how many products are stacked
+	 * @param n rows of each {@code a} and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return a fresh {@code batch * n * p} result, or {@code null}
+	 */
+	static double @Nullable [] multiply(double[] a, int sa, boolean ta, double[] b, int sb, boolean tb, int batch,
+			int n, int m, int p) {
+		double[] out = result(batch * n * p);
+		return Gpu.multiply(a, 0, sa, ta, b, 0, sb, tb, out, 0, batch, n, m, p) ? out : null;
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #multiply(double[], int, boolean, double[], int, boolean, int, int, int, int)}.
+	 * @param a the left operands, row-major
+	 * @param sa elements from one left operand to the next, or 0 to broadcast
+	 * @param ta whether each left slab is stored {@code m x n}
+	 * @param b the right operands, row-major
+	 * @param sb elements from one right operand to the next, or 0 to broadcast
+	 * @param tb whether each right slab is stored {@code p x m}
+	 * @param batch how many products are stacked
+	 * @param n rows of each {@code a} and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return a fresh {@code batch * n * p} result, or {@code null}
+	 */
+	static float @Nullable [] multiply(float[] a, int sa, boolean ta, float[] b, int sb, boolean tb, int batch, int n,
+			int m, int p) {
+		float[] out = resultF(batch * n * p);
+		return Gpu.multiply(a, 0, sa, ta, b, 0, sb, tb, out, 0, batch, n, m, p) ? out : null;
+	}
+
 	// --- the resident tier (.todo/491) -------------------------------------------------
 
 	/**

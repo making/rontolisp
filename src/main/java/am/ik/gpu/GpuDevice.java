@@ -80,6 +80,20 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	boolean gemmF(float[] a, int oa, int sa, float[] b, int ob, int sb, float[] c, int oc, int batch, int n, int m,
 			int p);
 
+	/**
+	 * The stacked product with either operand read TRANSPOSED in place -- the last two
+	 * axes of {@code a} (or {@code b}) exchanged, which is the orientation the matmul
+	 * adjoints hand it (2026-09-02). A backend that has no such kernel answers
+	 * {@code false} for any orientation but the plain one, and the caller then transposes
+	 * through a copy exactly as it used to.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean gemmT(double[] a, int oa, int sa, boolean ta, double[] b, int ob, int sb, boolean tb, double[] c, int oc,
+			int batch, int n, int m, int p);
+
+	boolean gemmFT(float[] a, int oa, int sa, boolean ta, float[] b, int ob, int sb, boolean tb, float[] c, int oc,
+			int batch, int n, int m, int p);
+
 	boolean map(int op, double[] a, int oa, double[] c, int oc, int n);
 
 	boolean mapF(int op, float[] a, int oa, float[] c, int oc, int n);

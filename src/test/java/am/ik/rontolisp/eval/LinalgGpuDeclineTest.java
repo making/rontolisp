@@ -80,6 +80,31 @@ class LinalgGpuDeclineTest {
 	}
 
 	@Test
+	void theFlagChangesNothingObservableAboutATransposedStackedProduct() {
+		// The two members the matmul adjoints reach the product through (2026-09-02):
+		// a^T . b and a . b^T, where the transposed operand is read in the orientation it
+		// is already stored in rather than copied into the other one. The claim is that
+		// the answer is the transpose-then-multiply the defun spells, on every machine
+		// and
+		// with the flag either way -- so a broadcast operand, a rank-4 stack and a rank-2
+		// pair are all here.
+		String transposed = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
+				(defparameter *b* (linalg:add (linalg:ones '(2 64 64)) 2.0))
+				(defparameter *m* (linalg:add (linalg:ones '(64 64)) 1.0))
+				(defparameter *r4* (linalg:reshape (linalg:arange 1 12289) '(2 3 32 64)))
+				(defparameter *s4* (linalg:add (linalg:ones '(2 3 32 64)) 2.0))
+				(list (linalg:sum (linalg::%la-matmul-nd-ta *a* *b*))
+				      (linalg:sum (linalg::%la-matmul-nd-tb *a* *b*))
+				      (linalg:to-list (linalg:flatten (linalg::%la-matmul-nd-tb *a* *m*)))
+				      (linalg:shape (linalg::%la-matmul-nd-tb *r4* *s4*))
+				      (linalg:sum (linalg::%la-matmul-nd-tb *r4* *s4*))
+				      (linalg:sum (linalg::%la-matmul-nd-ta *m* *m*)))
+				""";
+		assertThat(eval(transposed, true)).isEqualTo(eval(transposed, false));
+	}
+
+	@Test
 	void aStackedProductBelowTheSizeThresholdIsUntouchedEverywhere() {
 		// The threshold for a stack is the TOTAL work, and every example in the
 		// repository is under it: 4 x 8x8x8 is 2048 multiply-adds.

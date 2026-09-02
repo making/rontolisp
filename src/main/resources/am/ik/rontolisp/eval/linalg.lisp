@@ -559,6 +559,32 @@
                 (setq oa (- oa (* (car pd) (car psa))))
                 (setq ob (- ob (* (car pd) (car psb)))))))))))
 
+(defun linalg::%la-swap-last (x)
+  ;; x with its last two axes exchanged: the plain matrix transpose at rank 2,
+  ;; the axes form of linalg:transpose on a stack. The orientation both matmul
+  ;; adjoints ask for, and the copy the two members below exist to avoid.
+  (let ((rank (length (array-dimensions x))))
+    (if (< rank 3)
+        (linalg:transpose x)
+        (let ((axes nil))
+          (do ((k (- rank 3) (- k 1)))
+              ((< k 0))
+            (setq axes (cons k axes)))
+          (linalg:transpose x (append axes (list (- rank 1) (- rank 2))))))))
+
+(defun linalg::%la-matmul-nd-ta (a b)
+  ;; a^T . b -- the stacked product with the LEFT operand's last two axes
+  ;; exchanged, which is what the matmul adjoint for the right operand
+  ;; computes. Portably it IS the transpose and the product; it is a member of
+  ;; its own so that an accelerator can read a there rather than copy it into
+  ;; the orientation the product wants, which at a transformer's shapes is a
+  ;; whole memory pass over an activation per backward call.
+  (linalg:matmul (linalg::%la-swap-last a) b))
+
+(defun linalg::%la-matmul-nd-tb (a b)
+  ;; a . b^T -- the mirror, and the matmul adjoint for the left operand.
+  (linalg:matmul a (linalg::%la-swap-last b)))
+
 (defun linalg::%la-slice-bound (v n step startp)
   ;; One end of a slice spec normalized against an axis of extent n (numpy's
   ;; rule): nil takes the natural end for the step's direction, a negative

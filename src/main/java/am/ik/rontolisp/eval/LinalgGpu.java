@@ -158,6 +158,13 @@ public final class LinalgGpu {
 		// an internal symbol, whose canonical qualified spelling carries the double colon
 		// (.kb/linalg-simd.md).
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_MATMUL_ND, 2, LinalgGpu::matmulNd);
+		// The same product with one operand read in the orientation it is already
+		// STORED in: the two matmul adjoints, which the tape would otherwise reach
+		// through a full strided copy of an activation.
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_MATMUL_ND_TA, 2,
+				args -> matmulNd(args, true, false));
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_MATMUL_ND_TB, 2,
+				args -> matmulNd(args, false, true));
 		// The ELEMENT-WISE tier: the twelve unary ufuncs whose scalar cost is a libm
 		// call. linalg:sqrt / abs / negative / sign and the binary add / sub / mul / div
 		// are NOT here -- they move one or three streams for one machine instruction, so
@@ -1373,16 +1380,36 @@ public final class LinalgGpu {
 	 * the CPU's.
 	 */
 	private static @Nullable LispVal matmulNd(List<LispVal> args) {
+		return matmulNd(args, false, false);
+	}
+
+	/**
+	 * The same product with either operand read TRANSPOSED IN PLACE
+	 * ({@code linalg::%la-matmul-nd-ta} and {@code -tb}): its last two axes are exchanged
+	 * as the product sees it, so a slab the caller holds as {@code m x n} is the
+	 * {@code n x m} left operand and the device indexes it where it lies. That is the
+	 * shape of both matmul adjoints ({@code g . b^T} and {@code a^T . g}), and the
+	 * transpose they used to reach it through was a full strided copy of an activation
+	 * per backward call.
+	 *
+	 * <p>
+	 * The per-batch strides are the operand's OWN either way -- a transposed slab holds
+	 * the same {@code n * m} elements -- and the fold is untouched, so the result is the
+	 * plain product of the transposed copy bit for bit. Everything declines exactly as
+	 * the plain member does, plus one more: a backend with no transposed kernel (Metal),
+	 * where the defun's own transpose-then-multiply then answers.
+	 */
+	private static @Nullable LispVal matmulNd(List<LispVal> args, boolean ta, boolean tb) {
 		if (!(args.get(0) instanceof LispFloatArray a) || !(args.get(1) instanceof LispFloatArray b)
 				|| a.getClass() != b.getClass() || a.rank() < 2 || b.rank() < 2) {
 			return null;
 		}
 		int[] da = a.dims();
 		int[] db = b.dims();
-		int n = da[da.length - 2];
-		int m = da[da.length - 1];
-		int p = db[db.length - 1];
-		if (m != db[db.length - 2] || n < 1 || m < 1 || p < 1) {
+		int n = da[da.length - (ta ? 1 : 2)];
+		int m = da[da.length - (ta ? 2 : 1)];
+		int p = db[db.length - (tb ? 2 : 1)];
+		if (m != db[db.length - (tb ? 1 : 2)] || n < 1 || m < 1 || p < 1) {
 			return null;
 		}
 		int[] ba = Arrays.copyOf(da, da.length - 2);
@@ -1409,13 +1436,18 @@ public final class LinalgGpu {
 		od[bd.length] = n;
 		od[bd.length + 1] = p;
 		int batch = (int) batches;
+		boolean transposed = ta || tb;
 		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.multiply(single.storage(), (int) sa, ((LispSingleFloatArray) b).storage(),
-					(int) sb, batch, n, m, p);
+			float[] sb2 = ((LispSingleFloatArray) b).storage();
+			float[] c = transposed
+					? LinalgGpuKernels.multiply(single.storage(), (int) sa, ta, sb2, (int) sb, tb, batch, n, m, p)
+					: LinalgGpuKernels.multiply(single.storage(), (int) sa, sb2, (int) sb, batch, n, m, p);
 			return c == null ? null : new LispSingleFloatArray(c, od);
 		}
-		double[] c = LinalgGpuKernels.multiply(((LispDoubleFloatArray) a).storage(), (int) sa,
-				((LispDoubleFloatArray) b).storage(), (int) sb, batch, n, m, p);
+		double[] da2 = ((LispDoubleFloatArray) a).storage();
+		double[] db2 = ((LispDoubleFloatArray) b).storage();
+		double[] c = transposed ? LinalgGpuKernels.multiply(da2, (int) sa, ta, db2, (int) sb, tb, batch, n, m, p)
+				: LinalgGpuKernels.multiply(da2, (int) sa, db2, (int) sb, batch, n, m, p);
 		return c == null ? null : new LispDoubleFloatArray(c, od);
 	}
 

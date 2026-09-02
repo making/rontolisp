@@ -195,6 +195,34 @@ final class JvmGpuTemplate {
 	 * @return the packed stacked product, or {@code null} when the device declined it
 	 */
 	static @Nullable Object gpuMatmulNd(@Nullable Object a, @Nullable Object b) {
+		return gpuMatmulNd(a, b, false, false);
+	}
+
+	/**
+	 * {@code (linalg::%la-matmul-nd-ta a b)}: the same stacked product with the LEFT
+	 * operand read TRANSPOSED IN PLACE -- its last two axes exchanged as the product sees
+	 * them, so the device indexes the slab where it lies instead of being handed a
+	 * strided copy of it. The matmul adjoint for the right operand, {@code a^T . g}.
+	 * @param a the left operand, stored with its last two axes exchanged
+	 * @param b the right operand
+	 * @return the packed stacked product, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuMatmulNdTa(@Nullable Object a, @Nullable Object b) {
+		return gpuMatmulNd(a, b, true, false);
+	}
+
+	/**
+	 * {@code (linalg::%la-matmul-nd-tb a b)}: the mirror, {@code g . b^T} -- the matmul
+	 * adjoint for the left operand.
+	 * @param a the left operand
+	 * @param b the right operand, stored with its last two axes exchanged
+	 * @return the packed stacked product, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuMatmulNdTb(@Nullable Object a, @Nullable Object b) {
+		return gpuMatmulNd(a, b, false, true);
+	}
+
+	private static @Nullable Object gpuMatmulNd(@Nullable Object a, @Nullable Object b, boolean ta, boolean tb) {
 		if (!(a instanceof double[]) && !(a instanceof float[])) {
 			return null;
 		}
@@ -209,10 +237,10 @@ final class JvmGpuTemplate {
 		}
 		int[] da = dims(a, ra);
 		int[] db = dims(b, rb);
-		int n = da[ra - 2];
-		int m = da[ra - 1];
-		int p = db[rb - 1];
-		if (m != db[rb - 2] || n < 1 || m < 1 || p < 1) {
+		int n = da[ra - (ta ? 1 : 2)];
+		int m = da[ra - (ta ? 2 : 1)];
+		int p = db[rb - (tb ? 2 : 1)];
+		if (m != db[rb - (tb ? 1 : 2)] || n < 1 || m < 1 || p < 1) {
 			return null;
 		}
 		int[] ba = java.util.Arrays.copyOf(da, ra - 2);
@@ -252,8 +280,11 @@ final class JvmGpuTemplate {
 			}
 			c[rank - 1] = n;
 			c[rank] = p;
-			return Gpu.multiply(floats(a), 1 + ra, (int) sa, floats(b), 1 + rb, (int) sb, c, off, batch, n, m, p) ? c
-					: null;
+			return (ta || tb)
+					? (Gpu.multiply(floats(a), 1 + ra, (int) sa, ta, floats(b), 1 + rb, (int) sb, tb, c, off, batch, n,
+							m, p) ? c : null)
+					: (Gpu.multiply(floats(a), 1 + ra, (int) sa, floats(b), 1 + rb, (int) sb, c, off, batch, n, m, p)
+							? c : null);
 		}
 		double[] c = result(off, total);
 		c[0] = rank;
@@ -262,8 +293,11 @@ final class JvmGpuTemplate {
 		}
 		c[rank - 1] = n;
 		c[rank] = p;
-		return Gpu.multiply(doubles(a), 1 + ra, (int) sa, doubles(b), 1 + rb, (int) sb, c, off, batch, n, m, p) ? c
-				: null;
+		return (ta || tb)
+				? (Gpu.multiply(doubles(a), 1 + ra, (int) sa, ta, doubles(b), 1 + rb, (int) sb, tb, c, off, batch, n, m,
+						p) ? c : null)
+				: (Gpu.multiply(doubles(a), 1 + ra, (int) sa, doubles(b), 1 + rb, (int) sb, c, off, batch, n, m, p) ? c
+						: null);
 	}
 
 	/**
