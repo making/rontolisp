@@ -584,27 +584,65 @@ profile that suggested the change ("2 of the 4 downloads are this") is exactly t
 that would have got it built. **A copy count is not a cost until someone removes the copies
 and times it.**
 
-### Ceiling 3: a `-1` reshape extent -- the one refusal with a price, filed
+### Ceiling 3: a `-1` reshape extent -- built (todo-663, 2026-09-03)
 
 `linalg:reshape`'s defun documents the NumPy spelling ("One extent may be -1 and is inferred
-from the element count") and both offer layers refuse it: `LinalgSimd.shape` and
-`JvmGpuTemplate.shapeOf` each answer `null` for a negative extent, the latter saying so in
-its javadoc. The two AGREE, which is why the differential test has nothing to say -- they
-agree on refusing the spelling the member advertises. And `reshape` is a resident-tier
-member, so the decline drags a resident array home for the defun to copy element by element.
+from the element count") and both offer layers used to refuse it: `LinalgSimd.shape` and
+`JvmGpuTemplate.shapeOf` each answered `null` for a negative extent. And `reshape` is a
+resident-tier member, so the decline dragged a resident array home for the defun to copy
+element by element.
 
 `examples/deep-learning-from-scratch/ch07/train-convnet.lisp` is the program that writes it:
 im2col reshapes with `(list -1 ...)`, 80 declines a run over resident `#d` arrays up to
-432000 elements. Resolving the `-1` against the operand's element count in both layers behind
-a system property, same program, three walls an arm, the accuracy line identical:
+432000 elements. **Built**: `LinalgSimd.reshapeShape` (interpreter, shared by `--simd` and
+`--gpu`) and `JvmGpuTemplate.reshapeShapeOf` (the compiled bridge) each resolve one `-1`
+extent against the operand's element count -- `linalg::%la-infer-shape`'s own rule, mirrored
+rather than shared, since neither package may import the other -- and decline exactly where
+the defun would signal (a second `-1`, or a known-extent product that does not divide the
+total evenly). Every other reader of `shape` / `shapeOf` (`gather-strided`'s `od`,
+`col2im`'s `dims`, `transpose`'s axis list, `dropout-mask`'s allocation shape) is untouched.
+`GpuOfferDifferentialTest`'s boundary table carries the `-1` spelling at both ends: a bare
+flatten and an inferred trailing extent (accepted), a repeated `-1` and a non-dividing one
+(declined) -- the two offer layers cannot drift apart on this shape either.
 
-| | declined (today) | resolved (the ceiling) |
+Re-measured on this build, same program, three walls an arm (interleaved, `--gpu --simd`,
+the accuracy line identical to the ceiling's):
+
+| | declined (pre-fix) | resolved (built) |
 |---|---|---|
-| compiled, `-o Cv.class` | 1.76 / **1.81** / 1.83 s | 1.47 / **1.50** / 1.52 s (**-17.1%**) |
-| interpreter | 22.10 / **22.25** / 22.28 s | 16.45 / **16.55** / 16.65 s (**-25.6%**) |
+| compiled, `-o Cv.class` | 1.71 / **1.76** / 1.81 s (median of 8) | 1.53 / **1.56** / 1.62 s (median of 8) (**-11.4%**) |
+| interpreter | 22.04 / **22.36** / 22.37 s | 13.79 / **13.99** / 14.07 s (**-37.4%**) |
 
-Filed as `.todo/663`. It is the only refusal in the census that is worth anything, and it was
-found in the program nobody profiles rather than in the two everybody does.
+A structural count (`nsys profile -t cuda`, whole run) agrees on the mechanism: the resolved
+arm issues 34 fewer `cuMemcpyDtoH` and 44 fewer `cuMemcpyHtoD` than the declined arm (125/150
+against 159/194), which is the 80 avoided round trips net of the ones im2col's OTHER reshapes
+(the non-`-1` ones) already paid for regardless.
+
+**This does not reproduce the filed ceiling's -17.1% on the compiled path -- the interpreter
+side reproduces in the same direction but OVERSHOOTS it (-37.4% against -25.6%).** Both
+"declined" columns land inside the filed ceiling's own range (1.71-1.81 against 1.76-1.83;
+22.04-22.37 against 22.10-22.28), so the DECLINE arm has not moved; the resolved compiled arm
+is the one that reads slower here (1.53-1.62 against the filed 1.47-1.52) while the resolved
+interpreter arm reads faster (13.79-14.07 against 16.45-16.65).
+
+**The two deviations point OPPOSITE ways, and only one of them has an explanation here.** The
+compiled path's shortfall is what a fixed startup cost does: the whole run is ~1.5-1.8 s end to
+end, JVM start and CUDA context init are a large and machine-load-sensitive fraction of it, and
+a fixed cost on both arms can only dilute a ratio. But dilution cannot make a ratio LARGER, so
+it cannot be why the interpreter reads -37.4% against a filed -25.6%; and at a twenty-second
+floor the same fixed cost is about two percent of the run, with no room to move a ratio twelve
+points either way. **The interpreter's overshoot is unexplained and was not chased.** What would
+settle it is the filed run's own conditions -- rounds, warmup, which step differences were
+taken -- which the filing did not record (`measurement-probes.md`, rule 1: a number whose
+conditions are not written down can be neither trusted nor dismissed later); the other candidate
+is that something landing between the filing and this build moved the RESOLVED arm alone, the
+decline arm having been checked against its filed range above.
+
+**The conclusion does not rest on either wall number.** The structural counts are an independent
+observation of the same change -- 34 fewer `cuMemcpyDtoH` and 44 fewer `cuMemcpyHtoD`, exactly
+where 80 avoided reshapes predict -- so the mechanism holds whatever the percentages do, and the
+census that filed this item never depended on the exact figure. That is why the discrepancy is
+recorded rather than chased onto a second machine.
 
 ### The device contract, read against the CUDA implementation
 
@@ -648,11 +686,13 @@ adds to, or takes a root of a threshold is in a TEST (`LinalgGpuTest`,
 `JvmLinalgGpuAccelCompilerTest`, `GpuOfferDifferentialTest`); `Gpu`'s own use of them is
 `>=` and nothing else, so a `Long.MAX_VALUE` threshold declines rather than wrapping. **A
 threshold is safe to compare against and unsafe to compute from**, and only the tests
-compute from them. One robustness note, which is
-not a decline and which no shape in any program reaches: `CudaGemm.where` maps a non-null
-mask that is neither `float[]` nor `double[]` to `mkind` 0, which is the SCALAR-mask path, so
-such a call would compute rather than decline -- `softmaxKernel` writes the same test as an
-explicit refusal. Two spellings of one guard, one of which fails open.
+compute from them. One robustness note, not a decline any shape in any program has ever
+reached: `CudaGemm.where` used to map a non-null mask that is neither `float[]` nor
+`double[]` to `mkind` 0, the SCALAR-mask path, so such a call would have computed rather than
+declined -- `softmaxKernel` wrote the same test as an explicit refusal, which meant two
+spellings of one guard, one of which failed open. Closed (todo-663, 2026-09-03): `where` now
+takes the same explicit refusal `MetalGemm.whereF` already wrote, so both spellings are a
+decline.
 
 ## Precision
 
@@ -2270,6 +2310,61 @@ of memory passes and command buffers, so the fold's answer is the wrong one to r
 `GpuDevice.Thresholds` gained a `fused` field: CUDA passes its own fold threshold (nothing
 moves there) and Metal passes `MIN_MAP_ELEMENTS`.
 
+#### The libm-free members against a SEQUENTIAL replay, not against the chain (todo-665, 2026-09-03)
+
+The tier's own test above holds a fused kernel to the CHAIN OF DEVICE MEMBERS it replaces,
+rounding for rounding, both sides on this device. `GpuTest` makes a strictly stronger claim
+for the members with no library function in them: they equal a SEQUENTIAL JAVA REPLAY of
+that chain, so the device's answer is the CPU's rather than merely the device chain's.
+todo-662 left this as the one gap of eighteen it did not close, because it is a MEASUREMENT
+whose answer was not known.
+
+**It holds, on the first run, for every applicable member.**
+`MetalGpuTest.theLibmFreeFusedMembersAreTheSequentialReferencesBits` pins layer-norm, its
+adjoint onto a fresh gradient, its adjoint onto an accumulated one, and the softmax adjoint
+-- bit for bit against `GpuTest.layerNormGradReference`'s walk ported to `#f`, the only
+width here. No member diverged, so nothing had to be weakened to a bound.
+
+**Which members are in scope.** Of the tier's eight here, five carry a libm call by
+construction -- the softmax and log-softmax forwards and the log-softmax adjoint take
+`exp`, the GELU pair takes `erf` and `exp` -- and the shader's libm is not Java's (see
+"the transcendentals have their own libm" above), so a sequential replay could only ever be
+a BOUND for those. What is left is arithmetic, comparison and ONE square root, which is
+correctly rounded on both sides (`precise::sqrt` here, `Math.sqrt` there). The three other
+libm-free members `GpuTest` covers are NOT MEMBERS on this backend and there is nothing to
+replay: the dropout mask (`theDropoutMaskStaysDeclinedHere`) and layer-norm's affine pair
+(`theIndexTierTheClipNormAndTheAffinePairAreNotMembersHereAndDeclineOverAResidentOperand`).
+
+**Why it can hold at all -- and why the reason the item gave for doubting it was wrong.**
+The item was raised on the premise that the fused kernel does its row reduction as a
+THREADGROUP TREE, and a tree and a sequential sum agree only when every partial is exact.
+That premise is false about these kernels. `gemm.metal`'s row members run ONE THREAD PER
+ROW and fold that row SEQUENTIALLY -- `f64_add` over the widened float, in index order,
+which is `%la-fold-axis`'s own accumulation -- in the software binary64 the resident tier
+already needed. The `row_tile` is a TRANSPOSED LOAD for coalescing (thirty-two rows through
+one SIMD group, thirty-two columns at a time), not a reduction. There is no reassociation
+anywhere in the fold, so there is nothing for a bound to forgive. **The premise cost
+nothing because the kernel was read before the machine time was spent**, which is
+`.kb/measurement-probes.md` rule 4 run forwards rather than recovered from.
+
+**One thread per row is the same fact todo-641 and todo-643 met as a COST.** There it is
+why a mask read a cell at a time exposed its latency with nothing to hide behind -- 16384
+threads is not enough of them -- and why the mask had to be packed a bit a cell and traded
+through a shuffle ("The attention scale and mask" and its Metal half). Here it is why a
+sequential replay is the right oracle at all. Neither reading is the property: a shape with
+too little parallelism to hide a load is also a shape with no reassociation to forgive, and
+which of the two you meet depends on the question. Read either section alone and the shape
+looks like a weakness or like a guarantee; it is both.
+
+**What the test is sized off, and the mutation that shows it pins something.** Every shape
+comes from the thresholds in force -- `Gpu.fusedMinElements()` in elements and
+`Gpu.foldMinCells()` in rows, 342 x 384 today -- and nothing is made resident, so the SIZE
+is what carries the accept and a moved floor is caught rather than silently declined. With
+`rows` forced to 64 the members decline and the four `isTrue()` assertions fail, so the
+test is not one of the vacuous ones the sweep above found. The residency census
+(`residencyHits() + residencyMisses()`, eight lookups over the four calls) is the second
+observable, per `.kb/test-execution.md`.
+
 ### The map threshold at the straddling shape (todo-642, 2026-09-02)
 
 The 2^17 above was set against `sin` over a WHOLE array; what straddles it is a chain's
@@ -3364,7 +3459,119 @@ hazard above and is now fixed.
 
 **What was NOT swept**: whether a claim `GpuTest` makes has a Metal sibling at all. That
 suite is gated on a double-capable device and its 57 tests skip in full on every Mac.
-`.todo/662`.
+That was `.todo/662`, and it is the section below.
+
+### What `GpuTest` claims, and where Metal answers it (todo-662, 2026-09-03)
+
+The sweep above asked "does the shape reach the mechanism". This asks the prior question:
+**is there a test on this backend at all.** `am/ik/gpu/GpuTest` is gated on a DOUBLE-capable
+device, so its 57 tests skip in full on every Mac; `am/ik/gpu/MetalGpuTest` had 38 under
+names that do not correspond, and the two lists had never been compared. A pin inside a
+device gate is not "covered on machines that have that device" -- it is covered on ONE
+backend.
+
+The comparison, per `GpuTest` test, taken on an M4 Max with the device in force. Every
+"not a member" below was established by CALLING the member over a RESIDENT operand and
+reading the answer, not by reading the code.
+
+| `GpuTest` claim | on Metal |
+|---|---|
+| `theCheckedInPtxLoadsAndTheKernelComputes` | covered -- `theCheckedInMetalKernelsCompileAndTheProductComputes`, with `theCheckedInMetalSourceIsTheArtifactTheLoaderExpects` for the artifact half |
+| `theSingleFloatKernelComputesTheSameExactValues` | covered -- the same test; `#f` is the only width here |
+| `bothAllocatorRoutesComputeTheSameProduct` | **not applicable** -- there is no allocator switch on unified memory. The two-routes claim is `bothProductRoutesComputeTheSameProduct` (MPS against the tiled kernel) |
+| `anInexactProductAgreesWithTheScalarOracleToTheWidthsOwnTolerance` | covered -- same name |
+| `everyOperandIncludingTheResultIsReadFromItsOwnOffset` | covered -- same name |
+| `aRectangularProductUsesAllThreeDimensions` | covered -- same name |
+| `anOperandTooBigForOneCriticalCopyIsSplitAndStillAgrees` | **not applicable** -- `CRITICAL_CHUNK_BYTES` is `CudaGemm`'s; this backend stages a heap segment whole and there is no bound to straddle |
+| `everyDeclineConditionStillDeclinesWithADevicePresent` | covered -- same name |
+| `everyElementWiseMemberComputesItsOwnFunction` | covered -- same name (the twelve libm members; the resident tier's four are in the tier's own test) |
+| `anElementWiseMapReadsAndWritesFromItsOwnOffset` | covered -- same name |
+| `everyElementWiseDeclineConditionStillDeclinesWithADevicePresent` | covered -- **by `GpuDeclineTest`, which is UNGATED and therefore runs here WITH the device**, and whose `n` is `mapMinElements() * 2`, above this backend's map floor. That is an accident of sizing worth knowing about: it is what makes the device-free suite a device-present suite on a Mac |
+| `aRunOfElementWiseMapsFreesEveryBufferItAllocates` | **was a gap** -- `aRunOfElementWiseAndStridedCallsSettlesThePoolRatherThanGrowingIt` |
+| `aBroadcastBinaryOpMatchesTheScalarOdometerWalk` | covered -- `theStridedTierIsBitIdenticalToTheScalarOracle` is the same claim at the same dims and strides over inexact data. (Listed as a suspected gap when this item was raised; the name diff was wrong) |
+| `aStridedGatherIsThePermutedCopy` | **was a gap at rank 3** -- the rank-2 transpose is in `theStridedTierIsBitIdenticalToTheScalarOracle`; the (0 2 1) walk every attention head asks for is `aStridedGatherIsThePermutedCopyAtRankThree` |
+| `anAxisFoldIsTheDefunsOwnSequentialFold` | **was a gap** -- the fold is not a member for its SIZE here, but it IS one over a resident operand at any `inner`, and only `inner == 1` was pinned. `anAxisFoldOverAResidentOperandIsTheDefunsOwnSequentialFoldAtEveryInnerStride` |
+| `everyStridedOperandIncludingTheResultIsReadFromItsOwnOffset` | **was a gap** -- same name |
+| `everyStridedDeclineConditionStillDeclinesWithADevicePresent` | covered -- `GpuDeclineTest`'s ungated version builds 4096 x 64 = 262144 output elements, which is EXACTLY this backend's strided floor, so it runs with the device present here. Its FOLD conditions did not: for their size they decline anyway, and they are now asked over a resident operand in `everyResidentTierDeclineConditionStillDeclinesWithADevicePresent` |
+| `aRunOfStridedCallsFreesEveryBufferItAllocates` | **was a gap** -- folded into the element-wise pool run above |
+| `theGeneratorFillIsBitIdenticalToTheSequentialWalk...` | **not applicable** -- the fill is not a member (`rngMinElements()` is `Long.MAX_VALUE`); `theDropoutMaskStaysDeclinedHere` pins the refusal |
+| `aRunOfGeneratorFillsFreesEveryBufferItAllocates` | **not applicable** -- same |
+| `aMatrixByVectorProductIsTakenOnlyOnceItsMatrixHasBeenOfferedTwiceUnwritten` | covered -- same name |
+| `aSingleFloatMatrixByVectorProductLandsOnTheDoubleAccumulatedOracle` | covered -- `...WithoutADouble`, which is the stronger claim here |
+| `aDoubleMatrixByVectorProductAgreesWithTheOracleToAFewUlps` | **not applicable** -- MSL has no `double` |
+| `everyMatrixByVectorOperandIncludingTheResultIsReadFromItsOwnOffset` | covered -- same name |
+| `everyMatrixByVectorDeclineConditionStillDeclinesWithADevicePresent` | covered -- same name |
+| `aRunOfMatrixByVectorProductsFreesEveryBufferItAllocates` | covered -- `...SettlesThePoolRatherThanGrowingIt` |
+| `aRunOfSuccessfulProductsFreesEveryBufferItAllocates` | covered -- `aRunOfCallsSettlesTheBufferPoolRatherThanGrowingIt` |
+| `aDeclinedProductCostsTheDeviceNothing` | **was a gap** -- `theSameProductRepeatedIsTheSameAnswerAndADeclinedOneCostsThePoolNothing` |
+| `theSameProductRepeatedIsTheSameAnswer` | **was a gap**, and it matters more here than on CUDA: above the MPS threshold the route is Apple's library rather than a kernel of ours, and a library free to pick a decomposition per call would show here and nowhere else. Same test |
+| `aBatchedProductIsThePerBatchProductOfEachSlab` | covered -- `aBatchIsTheSameSlabsRunOneAtATime` and `aBatchAboveTheMpsThresholdAddressesEachSlabByItsOwnOffset` |
+| `aBatchIsBitIdenticalToTheSameSlabsRunOneAtATime` | covered -- same |
+| `everySingleFloatProductKernelLandsOnTheSameFusedFold` | **not applicable** -- there is no family of per-shape kernels with an `fma` contract here: one tiled kernel and MPS, whose fold order is Apple's. That the two agree bit for bit is `bothProductRoutesComputeTheSameProduct` and the four shapes of `aTransposedOperandIsReadInPlace...` |
+| `aTransposedOperandIsReadInPlaceAndFoldsOntoTheUntransposedProductAtBothWidths` | covered -- same name at the one width |
+| `aBroadcastOperandIsAZeroStrideAndReadsTheSameSlabEveryBatch` | covered for the RIGHT operand; the left-operand broadcast (one activation against a stack of weights) **was a gap** and is in `aBatchedProductReadsEveryOperandFromItsOwnOffsetAndBroadcastsEitherSide` |
+| `aBatchedProductReadsEveryOperandFromItsOwnOffset` | **was a gap** -- same test |
+| `everyBatchedDeclineConditionStillDeclinesWithADevicePresent` | **was a gap** -- and a clean example of the sweep's own rule: `GpuDeclineTest`'s batched shapes are 8 x 64 x 64 x 64 = 2097152 units of work, under this backend's floor of 4194304, so every one of them declined for its SIZE and the enumeration pinned nothing here. The new test asserts an accepted baseline at the same shape first |
+| `anOperandUploadedOrProducedByARecentCallIsNotUploadedAgain` | covered -- EAGERLY this backend keeps only a GEMV's matrix, which `eagerlyOnlyTheMatrixOfAnAcceptedGemvIsKeptResident` pins as the deliberate opposite rule; LAZILY the chain-is-a-hit census is in `aLazyResultStaysOnTheDeviceUntilTheHostFirstReadsIt` |
+| `aWrittenHostArrayIsUploadedAgainAndTheAnswerFollowsTheWrite` | covered -- `aWriteToALazyResultBringsItHomeFirst` and the write half of the GEMV residency test |
+| `theResidentSetIsBoundedByItsBudgetAndAReleaseGivesTheMemoryBack` | covered -- `...GivesTheSlabsBack` |
+| `aCollectedHostArrayTakesItsResidentCopyWithIt` | covered -- same name |
+| `aLazyResultStaysOnTheDeviceUntilTheHostFirstReadsIt` | covered -- same name |
+| `aWriteToALazyResultBringsItHomeFirst` | covered -- same name |
+| `anEvictedOrReleasedLazyResultIsDownloadedNotDropped` | covered -- same name |
+| `aStubResultAllocatesNoHostArrayUntilTheHostFirstReadsIt` | **was a gap** -- same name. The stub machinery is `DeviceResidency`'s and works here unchanged; since todo-495 it is what every compiled `--gpu` program's results ARE on this backend |
+| `aWriteThroughAStubLandsInItsBackingAndTheStubIsUploadedFromIt` | **was a gap** -- same name |
+| `anEvictedReleasedOrEagerStubIsDownloadedIntoABackingNotLost` | **was a gap** -- same name |
+| `aCollectedStubTakesItsBackingWithIt` | **was a gap** -- same name |
+| `aDeviceMemberUpdatingAnArrayInPlaceLeavesItResidentAndAuthoritative` | covered -- its vehicle there is `rngFill`, which is not a member here; the claim is the in-place scale in `theStridedCopyIsTheCopyMembersOverAResidentOperandAndAScaleRunsInPlace` |
+| `theResidentTierIsOfferedOnlyOverAResidentOperandAndLandsOnTheCpuKernelsBits` | covered -- same name |
+| `everyResidentTierDeclineConditionStillDeclinesWithADevicePresent` | **was a gap** -- same name. `GpuDeclineTest` asks the tier with NOTHING resident, where every member declines for that alone and the bounds checks behind it are never reached |
+| `theStridedCopyIsTheCopyMembersOverAResidentOperandAndAScaleRunsInPlace` | covered -- same name |
+| `theIndexTierIsOfferedOnlyOverAResidentOperandAndCopiesTheCpuKernelsBits` | **not applicable** -- see the correction below |
+| `aDivisionByAPowerOfTwoIsTheExactReciprocalsMultiplyAtBothWidths` | **was a gap**, and the sharpest one: `Gpu.normalPowerOfTwo` requires the divisor and its reciprocal to be normal at `float` precisely so the rewrite is exact "on a backend that computes in `float` (Metal)", and that argument was asserted only where it is not needed. `aDivisionByAPowerOfTwoIsTheExactReciprocalsMultiply` |
+| `theFusedTierLandsOnTheComposedDeviceChainsBitsAtBothWidths` | covered -- `theFusedTierLandsOnTheComposedDeviceChainsBits` and `theScaledAndMaskedSoftmaxLandsOnTheComposedDeviceChainsBits`; the affine pair is not a member (below) |
+| `theLibmFreeFusedMembersAreTheSequentialReferencesBits` | **was a gap** -- same name, closed by todo-665. It HOLDS, first run, for every member that is both libm-free and a member here (layer-norm, its adjoint onto a fresh and an accumulated gradient, the softmax adjoint), so no bound was needed in place of the equality: the row fold on this backend is SEQUENTIAL in software binary64, not a threadgroup tree. "The libm-free members against a SEQUENTIAL replay" above |
+| `everyFusedDeclineConditionStillDeclinesWithADevicePresent` | **was a gap** -- same name. `GpuDeclineTest`'s fused enumeration is 8 rows of 16, under every threshold on every backend |
+| `theSumOfSquaresFoldsInBlocksAndIsReproducible...` | **not applicable** -- see the correction below |
+
+Counted: **31 covered, 8 not applicable, 18 gaps** -- 17 closed by 15 new tests in
+`MetalGpuTest` (53 tests, from 38), and the eighteenth by todo-665 (54 tests).
+
+**The correction this produced.** The bullet under "What is deliberately NOT here" had said
+that todo-495, by flipping `lazyResultsPay` on this backend, made the index tier and the
+clip norm "reachable" and left only their pinning missing. That is false and was read as
+current by two later sweeps. `MetalGemm.take`, `takeF`, `scatter`, `scatterF`, `sumSquares`
+and `sumSquaresF` return `false` / `null` unconditionally -- the kernels were never
+written -- so the mode was never what stood in the way. Measured over a RESIDENT operand
+(512 x 384 table, above the map floor, `Gpu.resident` true): `takeRows` false, `pick`
+false, `scatterRows` false, `sumSquares` null. Layer-norm's affine pair is the third
+member of this shape and is likewise declined at every size. All three are now pinned as
+declines over a resident operand in
+`theIndexTierTheClipNormAndTheAffinePairAreNotMembersHereAndDeclineOverAResidentOperand` --
+over a RESIDENT operand specifically, because that is the only state that separates "not a
+member here" from "not resident yet", and because a round that adds the kernels has to come
+to that test to change the answer.
+
+**What a DECLINED product costs the pool here** (measured 2026-09-03, writing
+`theSameProductRepeatedIsTheSameAnswerAndADeclinedOneCostsThePoolNothing`). Two numbers,
+and they point opposite ways, which is why that test's memory assertion is the only
+ONE-SIDED one in the file.
+
+- **Free memory routinely GROWS across a declined call**, by 922 MB in class order behind
+  the lazy-chain tests. A call ENTERS the pool before it declines, and entering drains the
+  slabs of every host array the collector has reached since the last call. A two-sided
+  bound reads that drain as a leak; the first draft of the test did, and failed.
+- **A declined product whose operands FIT is allocated before the encode discovers it
+  cannot proceed**, and the slabs go to the free lists: `freeDeviceMemory` drops by 3.2 GB
+  at n = 12000, 6.4 GB at 20000 and 12.9 GB at 32768 -- three operands' worth each time.
+  It is a TRANSIENT and not a leak (the pool recycles them; free memory is back at its
+  baseline after the sweep, and `usable()` never goes false), and on a 107 GB working set
+  it is harmless. It is written down because it is the shape of the CUDA failure that
+  `GpuTest.aDeclinedProductCostsTheDeviceNothing` exists for -- there a failing pooled
+  allocation took the card from 69 GB free to 1 GB and never gave it back -- and the two
+  are genuinely different: this one comes back. Above that the allocation fails outright
+  (10 GB an operand at n = 50000, 40 GB at 100000) and nothing is taken, which is why the
+  test uses 100000: it is the shape whose cost is stably zero.
 
 ## Native image
 
@@ -3414,13 +3621,22 @@ is revisited.
 - **No axis fold on METAL as a round trip**, with two numbers attached. The amax/amin half
   is the one to revisit first if that backend's floor ever drops; the sum half cannot come
   back at all while `%la-fold-axis` accumulates in double.
-- ~~**No lazy results on METAL for the interceptors**, and so no index tier or clip norm
-  there.~~ **No longer true, and it was left standing for a round.** todo-495 made that
-  backend's command buffers asynchronous and flipped `lazyResultsPay` to true there, so
-  the interceptors do run lazily on Metal and the index tier and the clip norm ARE
-  reachable. What is still missing is the pinning: those two tiers' library-level tests
-  live only in `GpuTest`, which skips in full on a Mac (`.todo/662`). Kept here rather
-  than deleted because the sentence had already been read as current by a later sweep.
+- **No index tier and no clip norm on METAL** -- and the correction this bullet has now
+  needed twice. It first said "no lazy results on Metal for the interceptors, and so no
+  index tier or clip norm there", which todo-495 made obsolete by making that backend's
+  command buffers asynchronous and flipping `lazyResultsPay` to true. The replacement
+  then OVER-corrected, concluding that the two tiers were therefore "reachable" and
+  merely unpinned; two later sweeps read that as current. **They are not reachable, and
+  the mode was never what stood in the way.** `MetalGemm.take`, `takeF`, `scatter`,
+  `scatterF`, `sumSquares` and `sumSquaresF` return `false` / `null` unconditionally --
+  the kernels were never written. Measured over a RESIDENT operand, which is the state in
+  which the CUDA half accepts them (todo-662, 2026-09-03): `takeRows` false, `pick` false,
+  `scatterRows` false, `sumSquares` null. That is now an assertion rather than a reading
+  of the source, in `MetalGpuTest`'s
+  `theIndexTierTheClipNormAndTheAffinePairAreNotMembersHereAndDeclineOverAResidentOperand`
+  -- over a resident operand precisely because that is the only state that separates "not
+  a member here" from "not resident yet", and because a round that writes the kernels has
+  to come to that test to change the answer.
 - **No fused layer-norm AFFINE on METAL.** It is built on CUDA ("Layer-norm's affine")
   and declined here, unmeasured, so the module runs the normalization and its two
   broadcast passes member by member as before; whether the fold pays on that backend is

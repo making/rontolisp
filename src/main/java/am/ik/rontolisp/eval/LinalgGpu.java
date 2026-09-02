@@ -1376,19 +1376,23 @@ public final class LinalgGpu {
 
 	/**
 	 * {@code (linalg:reshape a shape)} over a resident operand: the same elements under a
-	 * new header, one contiguous copy. A shape with {@code -1} is the defun's.
+	 * new header, one contiguous copy. A shape with {@code -1} is resolved against the
+	 * operand's element count ({@link LinalgSimd#reshapeShape}), the same as the defun.
 	 */
 	private static @Nullable LispVal reshape(List<LispVal> args) {
 		LispFloatArray a = LinalgSimd.packed(args.get(0));
-		int[] od = LinalgSimd.shape(args.get(1));
-		if (a == null || od == null || !resident(a)) {
+		if (a == null || !resident(a)) {
+			return null;
+		}
+		int n = a.totalSize();
+		int[] od = LinalgSimd.reshapeShape(args.get(1), n);
+		if (od == null) {
 			return null;
 		}
 		long total = 1;
 		for (int d : od) {
 			total *= d;
 		}
-		int n = a.totalSize();
 		if (total != n || n < 1) {
 			return null;
 		}

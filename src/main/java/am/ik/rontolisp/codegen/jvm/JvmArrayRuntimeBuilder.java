@@ -1303,12 +1303,15 @@ final class JvmArrayRuntimeBuilder {
 		// of its own and drop the displacement, keeping the dims, the fill pointer and
 		// the adjustable flag; returns arr. A non-displaced array is returned untouched.
 		// The header LENGTH carries the shape, so the new one is 4 (the character-vector
-		// marker) where the old was 7 (a displaced STRING view) and 3 otherwise -- a
-		// grown string view stays a string. Called by _vectorPushExtend when a full view
-		// has to grow: the growth then extends storage of its own instead of running off
-		// the end of someone else's array, which is what SBCL 2.2.9 does.
+		// marker) where the old was 7 (a displaced STRING view), 5 where the chain
+		// REMEMBERED an element type (carried into slot 4, the slot the offset was
+		// spending) and 3 otherwise -- a grown string view stays a string, and
+		// array-element-type answers what it answered while the view was still a view.
+		// Called by _vectorPushExtend when a full view has to grow: the growth then
+		// extends storage of its own instead of running off the end of someone else's
+		// array, which is what SBCL 2.2.9 does.
 		// Locals: 0 = arr, 1 = header, 2 = total, 3 = elems, 4 = i, 5 = newHeader,
-		// 6 = product scratch.
+		// 6 = product scratch, 7 = walk cursor, 8 = et, 9 = target scratch.
 		JvmAsm un = new JvmAsm();
 		// An immutable string owns its characters and carries no header at all (a
 		// string VIEW is a length-7 header, not a String), so it is returned unchanged
@@ -1366,12 +1369,55 @@ final class JvmArrayRuntimeBuilder {
 		un.iinc(4, 1);
 		un.branch(Opcode.GOTO, unRead);
 		un.bind(unReadDone);
+		// et: the element type the CHAIN END remembers, read exactly as
+		// _arrayElementType reads it (it hops the same way and stops on the same facts).
+		// The view answered this while it was still a view, so the freed offset slot has
+		// to keep answering it -- an array's element type is fixed when it is made.
+		int unWalk = un.label();
+		int unWalkDone = un.label();
+		int unWalkOwn = un.label();
+		un.aconstNull();
+		un.astore(8);
+		un.aload(1);
+		un.astore(7);
+		un.bind(unWalk);
+		un.aload(7);
+		un.arraylength();
+		un.iconst(4);
+		un.branch(Opcode.IF_ICMPLE, unWalkDone);
+		un.aload(7);
+		un.iconst(3);
+		un.aaload();
+		un.astore(9);
+		un.aload(9);
+		un.branch(Opcode.IFNULL, unWalkOwn);
+		// A String chain end remembers nothing here: character-ness is the length-7
+		// header's own answer (7 -> 4 below), not a remembered designator.
+		un.aload(9);
+		un.instanceOf(arrayListClass);
+		un.branch(Opcode.IFEQ, unWalkDone);
+		emitLoadHeader(un, arrayListClass, objectArrayClass, alGet, 9);
+		un.astore(7);
+		un.branch(Opcode.GOTO, unWalk);
+		un.bind(unWalkOwn);
+		un.aload(7);
+		un.iconst(4);
+		un.aaload();
+		un.astore(8);
+		un.bind(unWalkDone);
 		int unString = un.label();
+		int unThree = un.label();
 		int unLenReady = un.label();
+		int unNoEt = un.label();
 		un.aload(1);
 		un.arraylength();
 		un.iconst(7);
 		un.branch(Opcode.IF_ICMPEQ, unString);
+		un.aload(8);
+		un.branch(Opcode.IFNULL, unThree);
+		un.iconst(5);
+		un.branch(Opcode.GOTO, unLenReady);
+		un.bind(unThree);
 		un.iconst(3);
 		un.branch(Opcode.GOTO, unLenReady);
 		un.bind(unString);
@@ -1380,6 +1426,15 @@ final class JvmArrayRuntimeBuilder {
 		un.anewarray(objectClass);
 		emitCopyHeaderSlots(un, 1, 3);
 		un.astore(5);
+		un.aload(5);
+		un.arraylength();
+		un.iconst(5);
+		un.branch(Opcode.IF_ICMPNE, unNoEt);
+		un.aload(5);
+		un.iconst(4);
+		un.aload(8);
+		un.aastore();
+		un.bind(unNoEt);
 		un.aload(0);
 		un.checkcast(arrayListClass);
 		un.iconst(0);
@@ -1406,7 +1461,7 @@ final class JvmArrayRuntimeBuilder {
 		un.bind(unFillDone);
 		un.aload(0);
 		un.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC), 6, 7, un.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC), 6, 10, un.finish()));
 
 		// _arrayBecome(a, b): replace a's dims, fill pointer and data with b's in place
 		// (the in-place half of adjust-array on an adjustable array); returns a. The
@@ -1692,10 +1747,19 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.addUtf8(MAKE_TYPED), cp.addUtf8(MAKE_TYPED_DESC), 9, 8, mt.finish()));
 
 		// _arrayElementType(o): the remembered element type, or the boolean t. A
-		// DISPLACED array answers t: slot 4 is its offset there, not a type.
-		// Locals: 0 = o, 1 = header, 2 = et.
+		// DISPLACED array HOPS: slot 4 is its offset, not a type, and a view owns no
+		// storage -- its elements are the target's, so its element type is the target's,
+		// resolved through the whole chain. CL requires the two to be type-equivalent
+		// anyway (make-array, :displaced-to), so the chain end's remembered type IS the
+		// view's declared :element-type in every program a conforming implementation
+		// accepts. A chain that ends on a String never reaches here: the caller's
+		// stringp arm answers character for a string view first.
+		// Locals: 0 = o (re-assigned by the hop), 1 = header, 2 = scratch.
 		JvmAsm aet = new JvmAsm();
 		int aetT = aet.label();
+		int aetTop = aet.label();
+		int aetOwn = aet.label();
+		aet.bind(aetTop);
 		aet.aload(0);
 		aet.instanceOf(arrayListClass);
 		aet.branch(Opcode.IFEQ, aetT);
@@ -1708,7 +1772,13 @@ final class JvmArrayRuntimeBuilder {
 		aet.aload(1);
 		aet.iconst(3);
 		aet.aaload();
-		aet.branch(Opcode.IFNONNULL, aetT);
+		aet.astore(2);
+		aet.aload(2);
+		aet.branch(Opcode.IFNULL, aetOwn);
+		aet.aload(2);
+		aet.astore(0);
+		aet.branch(Opcode.GOTO, aetTop);
+		aet.bind(aetOwn);
 		aet.aload(1);
 		aet.iconst(4);
 		aet.aaload();

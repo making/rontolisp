@@ -5679,12 +5679,18 @@ class LispEvaluatorTest {
 				  (vector-push-extend 9 v)
 				  (list v (array-element-type v) (fill-pointer v)))
 				""").print()).isEqualTo("(#(7 8 9) (UNSIGNED-BYTE 8) 3)");
-		// A DISPLACED view answers t: its meta slot carries the offset, not a type, and
-		// SBCL answers t for a view whose own :element-type was unstated too.
+		// A DISPLACED view answers its TARGET's type, resolved through the chain: the
+		// view
+		// owns no storage, so its elements ARE the target's. (This assertion pinned t
+		// until 2026-09-02 on the premise that "SBCL answers t for a view whose own
+		// :element-type was unstated too" -- which was an artifact of SBCL's compiler
+		// DELETING an unused make-array. Forced to evaluate, SBCL 2.2.9 refuses the
+		// mismatch outright: "Can't displace an array of type T into another of type
+		// (UNSIGNED-BYTE 8)".)
 		assertThat(eval("""
 				(let ((b (make-array '(2 2) :element-type '(unsigned-byte 8) :initial-element 5)))
 				  (array-element-type (make-array 2 :displaced-to b)))
-				""").print()).isEqualTo("T");
+				""").print()).isEqualTo("(UNSIGNED-BYTE 8)");
 		// A packed representation has no fill pointer and is not adjustable, which is
 		// NIL rather than an error -- what CL says of a simple array, and what type-of
 		// asks of every array now.
@@ -15886,28 +15892,70 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aDisplacedViewAnswersItsTargetsElementType() {
+		// A view owns NO storage: its elements are the target's, so its element type is
+		// the target's, resolved through the whole chain. CL requires the two to be
+		// type-equivalent anyway (make-array, :displaced-to) and SBCL 2.2.9 REFUSES a
+		// mismatch ("Can't displace an array of type T into another of type
+		// (UNSIGNED-BYTE 8)"), so the target's remembered type IS the view's declared
+		// :element-type in every program a conforming implementation accepts.
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1 :adjustable t))
+				(array-element-type v)
+				""").print()).isEqualTo("(UNSIGNED-BYTE 8)");
+		// a view of a view resolves the WHOLE chain
+		assertThat(evalMulti("""
+				(setq b (make-array 6 :element-type '(unsigned-byte 16) :adjustable t :initial-element 0))
+				(setq v (make-array 4 :element-type '(unsigned-byte 16) :displaced-to b
+				                      :displaced-index-offset 1))
+				(setq w (make-array 2 :element-type '(unsigned-byte 16) :displaced-to v
+				                      :displaced-index-offset 1))
+				(list (array-element-type v) (array-element-type w))
+				""").print()).isEqualTo("((UNSIGNED-BYTE 16) (UNSIGNED-BYTE 16))");
+		// a view over a target that remembers nothing still answers t
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :adjustable t :initial-element 0))
+				(setq v (make-array 2 :displaced-to b :displaced-index-offset 1))
+				(array-element-type v)
+				""").print()).isEqualTo("T");
+	}
+
+	@Test
 	void unDisplacingKeepsTheViewsOwnElementType() {
 		// An array's element type is fixed when it is made: nothing in CL changes the
 		// element type of an existing array, and adjust-array in particular answers an
 		// array of the SAME element type. So un-displacing a view -- whether
 		// adjust-array or vector-push-extend's growth reaches it -- must answer what
-		// array-element-type answered while the view was still a view, NOT the
-		// displacement target's remembered type. A view rontolisp built without its own
-		// :element-type remembers nothing, so that answer is t on both sides.
+		// array-element-type answered while the view was still a view. Once the
+		// displacement drops there is no chain left to resolve, so the answer the view
+		// gave has to be RECORDED by the un-displace itself.
 		assertThat(evalMulti("""
 				(setq b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1 :adjustable t))
+				(setq before (array-element-type v))
+				(adjust-array v 3)
+				(list before (array-element-type v))
+				""").print()).isEqualTo("((UNSIGNED-BYTE 8) (UNSIGNED-BYTE 8))");
+		// and the slots the growth OPENS take that type's own zero, not nil
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type 'double-float :adjustable t :initial-element 0.0d0))
+				(setq v (make-array 2 :element-type 'double-float :displaced-to b
+				                      :displaced-index-offset 1 :adjustable t :fill-pointer 2))
+				(setq before (array-element-type v))
+				(vector-push-extend 9 v)
+				(list before (array-element-type v) (multiple-value-list (array-displacement v)))
+				""").print()).isEqualTo("(DOUBLE-FLOAT DOUBLE-FLOAT (NIL 0))");
+		// a view over a target that remembers nothing answers t on both sides
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :adjustable t :initial-element 0))
 				(setq v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
 				(setq before (array-element-type v))
 				(adjust-array v 3)
 				(list before (array-element-type v))
 				""").print()).isEqualTo("(T T)");
-		assertThat(evalMulti("""
-				(setq b (make-array 4 :element-type 'double-float :adjustable t :initial-element 0.0d0))
-				(setq v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t :fill-pointer 2))
-				(setq before (array-element-type v))
-				(vector-push-extend 9 v)
-				(list before (array-element-type v) (multiple-value-list (array-displacement v)))
-				""").print()).isEqualTo("(T T (NIL 0))");
 		// CHARACTER-ness is the one thing the un-displace does carry: a view over a
 		// character vector holds characters, so it stays a character vector (stringp)
 		// and its element type is CHARACTER on BOTH sides -- unchanged, like the rest.

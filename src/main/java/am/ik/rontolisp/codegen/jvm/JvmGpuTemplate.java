@@ -711,9 +711,9 @@ final class JvmGpuTemplate {
 
 	/**
 	 * {@code (linalg:reshape a shape)} over a resident operand: the same elements under a
-	 * new header, one contiguous device copy ({@code laReshape}'s rule, a {@code -1}
-	 * shape declined). Over anything else declines, and the lane kernel or the defun
-	 * copies on the host.
+	 * new header, one contiguous device copy. A {@code -1} extent is resolved against the
+	 * operand's element count ({@link #reshapeShapeOf}), the same as the defun. Over
+	 * anything else declines, and the lane kernel or the defun copies on the host.
 	 * @param a the operand
 	 * @param shape the new shape, a number or a proper list of numbers
 	 * @return the packed result, or {@code null} when the device declined it
@@ -722,12 +722,12 @@ final class JvmGpuTemplate {
 		if (!packed(a) || !resident(a)) {
 			return null;
 		}
-		int[] od = shapeOf(shape);
+		int rank = rank(a);
+		int n = length(a) - 1 - rank;
+		int[] od = reshapeShapeOf(shape, n);
 		if (od == null) {
 			return null;
 		}
-		int rank = rank(a);
-		int n = length(a) - 1 - rank;
 		long total = 1;
 		for (int d : od) {
 			total *= d;
@@ -959,6 +959,67 @@ final class JvmGpuTemplate {
 				return null;
 			}
 		}
+		return out;
+	}
+
+	/**
+	 * {@code gpuReshape}'s own shape designator: {@link #shapeOf}'s spelling plus the one
+	 * it does not take -- ONE extent may be {@code -1}, resolved against {@code total}
+	 * elements the numpy way ({@code linalg::%la-infer-shape}'s rule: a bare {@code -1}
+	 * flattens; more than one {@code -1}, or a known-extent product that does not divide
+	 * {@code total} evenly, is not this reader's to accept, and the defun signals). No
+	 * other caller of {@link #ints} or {@link #shapeOf} takes this spelling.
+	 */
+	private static int @Nullable [] reshapeShapeOf(@Nullable Object shape, long total) {
+		if (shape instanceof Long n) {
+			if (n == -1L) {
+				return total >= 0 && total <= Integer.MAX_VALUE ? new int[] { (int) total } : null;
+			}
+			return n >= 0 && n <= Integer.MAX_VALUE ? new int[] { (int) (long) n } : null;
+		}
+		int[] raw = ints(shape);
+		if (raw == null || raw.length == 0) {
+			return null;
+		}
+		for (int d : raw) {
+			if (d < -1) {
+				return null;
+			}
+		}
+		return resolveMinusOne(raw, total);
+	}
+
+	/**
+	 * Resolves at most one {@code -1} extent in {@code raw} against {@code total}
+	 * elements, or declines: a second {@code -1}, or a known-extent product that is zero
+	 * or does not divide {@code total} evenly, answers {@code null}.
+	 */
+	private static int @Nullable [] resolveMinusOne(int[] raw, long total) {
+		int minusAt = -1;
+		long known = 1;
+		for (int i = 0; i < raw.length; i++) {
+			if (raw[i] == -1) {
+				if (minusAt >= 0) {
+					return null;
+				}
+				minusAt = i;
+			}
+			else {
+				known *= raw[i];
+			}
+		}
+		if (minusAt < 0) {
+			return raw;
+		}
+		if (known <= 0 || total % known != 0) {
+			return null;
+		}
+		long inferred = total / known;
+		if (inferred < 0 || inferred > Integer.MAX_VALUE) {
+			return null;
+		}
+		int[] out = raw.clone();
+		out[minusAt] = (int) inferred;
 		return out;
 	}
 

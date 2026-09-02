@@ -652,7 +652,7 @@ public final class LinalgSimd {
 		if (a == null) {
 			return null;
 		}
-		int[] dims = shape(args.get(1));
+		int[] dims = reshapeShape(args.get(1), a.totalSize());
 		if (dims == null) {
 			return null;
 		}
@@ -1330,6 +1330,74 @@ public final class LinalgSimd {
 		for (int i = 0; i < out.length; i++) {
 			out[i] = dims.get(i);
 		}
+		return out;
+	}
+
+	/**
+	 * {@code linalg:reshape}'s own shape designator: {@link #shape(LispVal)}'s spelling
+	 * plus the one it does not take -- ONE extent may be {@code -1}, resolved against
+	 * {@code total} elements the numpy way ({@code linalg::%la-infer-shape}'s rule: a
+	 * bare {@code -1} flattens; more than one {@code -1}, or a known-extent product that
+	 * does not divide {@code total} evenly, is not this reader's to accept, and the defun
+	 * signals). No other reader of {@code shape} takes this spelling.
+	 */
+	static int @Nullable [] reshapeShape(LispVal value, long total) {
+		if (value instanceof LispInteger n) {
+			if (n.value() == -1) {
+				return total >= 0 && total <= Integer.MAX_VALUE ? new int[] { (int) total } : null;
+			}
+			return n.value() >= 0 && n.value() <= Integer.MAX_VALUE ? new int[] { (int) n.value() } : null;
+		}
+		List<Integer> dims = new ArrayList<>();
+		LispVal cursor = value;
+		while (cursor instanceof LispCons cons) {
+			if (!(cons.car() instanceof LispInteger d) || d.value() < -1 || d.value() > Integer.MAX_VALUE) {
+				return null;
+			}
+			dims.add((int) d.value());
+			cursor = cons.cdr();
+		}
+		if (!(cursor instanceof LispNil) || dims.isEmpty()) {
+			return null;
+		}
+		int[] raw = new int[dims.size()];
+		for (int i = 0; i < raw.length; i++) {
+			raw[i] = dims.get(i);
+		}
+		return resolveMinusOne(raw, total);
+	}
+
+	/**
+	 * Resolves at most one {@code -1} extent in {@code raw} against {@code total}
+	 * elements, or declines: a second {@code -1}, or a known-extent product that is zero
+	 * or does not divide {@code total} evenly, answers {@code null}.
+	 */
+	private static int @Nullable [] resolveMinusOne(int[] raw, long total) {
+		int minusAt = -1;
+		long known = 1;
+		for (int i = 0; i < raw.length; i++) {
+			if (raw[i] == -1) {
+				if (minusAt >= 0) {
+					return null;
+				}
+				minusAt = i;
+			}
+			else {
+				known *= raw[i];
+			}
+		}
+		if (minusAt < 0) {
+			return raw;
+		}
+		if (known <= 0 || total % known != 0) {
+			return null;
+		}
+		long inferred = total / known;
+		if (inferred < 0 || inferred > Integer.MAX_VALUE) {
+			return null;
+		}
+		int[] out = raw.clone();
+		out[minusAt] = (int) inferred;
 		return out;
 	}
 

@@ -15959,17 +15959,20 @@ class WasmLispCompilerIntegrationTest {
 		// element type of an existing array, and adjust-array in particular answers an
 		// array of the SAME element type. So un-displacing a view -- whether
 		// adjust-array or vector-push-extend's growth reaches it -- must answer what
-		// array-element-type answered while the view was still a view, NOT the
-		// displacement target's remembered type. CHARACTER-ness is the one thing it does
-		// carry: a view over a character vector holds characters and stays one.
+		// array-element-type answered while the view was still a view. Once the
+		// displacement drops there is no chain left to resolve, so the un-displace has to
+		// RECORD it -- in the meta OFFSET word, which is the marker word again from then
+		// on. CHARACTER-ness travels the same way it always did: a view over a character
+		// vector holds characters and stays one (the chain end's marker is 1).
 		assertThat(compileAndRun("""
 				(let* ((b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
-				       (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+				       (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                        :displaced-index-offset 1 :adjustable t))
 				       (before (array-element-type v)))
 				  (adjust-array v 3)
 				  (print (list before (array-element-type v))))
 				(let* ((b (make-array 4 :element-type 'double-float :adjustable t :initial-element 0.0d0))
-				       (v (make-array 2 :displaced-to b :displaced-index-offset 1
+				       (v (make-array 2 :element-type 'double-float :displaced-to b :displaced-index-offset 1
 				                        :adjustable t :fill-pointer 2))
 				       (before (array-element-type v)))
 				  (vector-push-extend 9 v)
@@ -15980,10 +15983,42 @@ class WasmLispCompilerIntegrationTest {
 				       (before (list (array-element-type v) (stringp v))))
 				  (adjust-array v 3)
 				  (print (list before (array-element-type v) (stringp v))))
+				(let* ((b (make-array 4 :adjustable t :initial-element 0))
+				       (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+				       (before (array-element-type v)))
+				  (adjust-array v 3)
+				  (print (list before (array-element-type v))))
 				""")).isEqualTo("""
-				(T T)
-				(T T (NIL 0))
-				((CHARACTER T) CHARACTER T)""");
+				((UNSIGNED-BYTE 8) (UNSIGNED-BYTE 8))
+				(DOUBLE-FLOAT DOUBLE-FLOAT (NIL 0))
+				((CHARACTER T) CHARACTER T)
+				(T T)""");
+	}
+
+	@Test
+	void compileADisplacedViewAnswersItsTargetsElementType() throws Exception {
+		// A view owns NO storage: its elements are the target's, so its element type is
+		// the target's, resolved through the whole chain -- which is the view's declared
+		// :element-type in every program a conforming implementation accepts, since CL
+		// requires the two to be type-equivalent and SBCL 2.2.9 refuses a mismatch.
+		assertThat(compileAndRun("""
+				(let* ((b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+				       (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                        :displaced-index-offset 1 :adjustable t)))
+				  (print (array-element-type v)))
+				(let* ((b (make-array 6 :element-type '(unsigned-byte 16) :adjustable t :initial-element 0))
+				       (v (make-array 4 :element-type '(unsigned-byte 16) :displaced-to b
+				                        :displaced-index-offset 1))
+				       (w (make-array 2 :element-type '(unsigned-byte 16) :displaced-to v
+				                        :displaced-index-offset 1)))
+				  (print (list (array-element-type v) (array-element-type w))))
+				(let* ((b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+				       (v (make-array 2 :displaced-to b :displaced-index-offset 1)))
+				  (print (array-element-type v)))
+				""")).isEqualTo("""
+				(UNSIGNED-BYTE 8)
+				((UNSIGNED-BYTE 16) (UNSIGNED-BYTE 16))
+				(UNSIGNED-BYTE 8)""");
 	}
 
 	@Test

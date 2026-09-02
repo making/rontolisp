@@ -4622,17 +4622,20 @@ cases:
                                 :displaced-index-offset 1 :adjustable t)))
           (print (list (adjust-array v 3) (stringp v) (array-displacement v))))
         ;; The un-displace never CHANGES the element type -- an array's is fixed when it
-        ;; is made, and adjust-array answers an array of the SAME one. What the
-        ;; displacement target merely REMEMBERS is not the view's own type; only
-        ;; character-ness travels, because a view over characters holds characters.
+        ;; is made, and adjust-array answers an array of the SAME one. A view owns no
+        ;; storage, so what it answers WHILE displaced is its target's type, resolved
+        ;; through the chain (which CL requires to be type-equivalent to the view's own);
+        ;; the un-displace RECORDS that answer, since there is no chain left afterwards.
         (let* ((b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
-               (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+               (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+                                :displaced-index-offset 1 :adjustable t))
                (before (array-element-type v)))
           (adjust-array v 3)
           (print (list before (array-element-type v))))
-        ;; vector-push-extend's growth reaches the same primitive.
+        ;; vector-push-extend's growth reaches the same primitive, and the slots it opens
+        ;; take the resolved type's own zero.
         (let* ((b (make-array 4 :element-type 'double-float :adjustable t :initial-element 0.0d0))
-               (v (make-array 2 :displaced-to b :displaced-index-offset 1
+               (v (make-array 2 :element-type 'double-float :displaced-to b :displaced-index-offset 1
                                 :adjustable t :fill-pointer 2))
                (before (array-element-type v)))
           (vector-push-extend 9 v)
@@ -4641,15 +4644,30 @@ cases:
                (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
                (before (list (array-element-type v) (stringp v))))
           (adjust-array v 3)
-          (print (list before (array-element-type v) (stringp v)))))
+          (print (list before (array-element-type v) (stringp v))))
+        ;; a target that remembers nothing answers t on both sides
+        (let* ((b (make-array 4 :adjustable t :initial-element 0))
+               (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+               (before (array-element-type v)))
+          (adjust-array v 3)
+          (print (list before (array-element-type v))))
+        ;; a view of a view resolves the WHOLE chain
+        (let* ((b (make-array 6 :element-type '(unsigned-byte 16) :adjustable t :initial-element 0))
+               (v (make-array 4 :element-type '(unsigned-byte 16) :displaced-to b
+                                :displaced-index-offset 1))
+               (w (make-array 2 :element-type '(unsigned-byte 16) :displaced-to v
+                                :displaced-index-offset 1)))
+          (print (list (array-element-type v) (array-element-type w)))))
       (ci-adjust-array-undisplaces)
     expected: |
       (T #(20 30 40) #(10 20 30 40 50 60) NIL)
       (NIL #(20 30 40) #(20 30 40 50) NIL NIL)
       ("bcd" T NIL)
-      (T T)
-      (T T NIL)
+      ((UNSIGNED-BYTE 8) (UNSIGNED-BYTE 8))
+      (DOUBLE-FLOAT DOUBLE-FLOAT NIL)
       ((CHARACTER T) CHARACTER T)
+      (T T)
+      ((UNSIGNED-BYTE 16) (UNSIGNED-BYTE 16))
   - name: mutable-strings-cross-backend
     source: |
       (defun ci-mutable-strings ()

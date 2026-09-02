@@ -1690,11 +1690,42 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		emitIfEq(ctx);
+		// A DISPLACED view HOPS to its target: it owns no storage, so its elements are
+		// the target's and its element type is the target's, resolved through the whole
+		// chain (the marker word is a real offset on a view, which is why there is
+		// nothing of its own to read). The walk falls straight through for an ordinary
+		// array, whose data slot is already the buckets array.
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.BR_IF, 1);
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(0);
+		setLocal(ctx, headerSlot);
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.writer.write(Instruction.END); // loop
+		ctx.writer.write(Instruction.END); // block
 		getLocal(ctx, headerSlot);
 		castConsGet(ctx, 1);
 		castConsGet(ctx, 1);
 		int dataSlot = setTemp(ctx);
-		emitDataSlotIsTarget(ctx, dataSlot);
+		// Only a STRING chain end can still answer here (the walk consumed every cell),
+		// and a string view never reaches this dispatch anyway: the caller's stringp arm
+		// answered character for it.
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		emitIfEq(ctx);
 		WasmEmitHelper.emitTrue(ctx);
 		ctx.writer.write(Instruction.ELSE);

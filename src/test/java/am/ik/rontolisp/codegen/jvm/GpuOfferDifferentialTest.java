@@ -249,14 +249,16 @@ class GpuOfferDifferentialTest {
 	}
 
 	/**
-	 * The cases, at the accept boundary of the five members that between them run every
+	 * The cases, at the accept boundary of the six members that between them run every
 	 * one of the thirteen shared predicates that decides an offer:
 	 * {@code %la-scaled-masked-softmax} (the mask suffix rule, under its two names),
 	 * {@code linalg:add} ({@code sameShape} / {@code zip} / {@code bcastShape} /
 	 * {@code bcastStrides} / {@code scale} / {@code resident}), {@code linalg:sum}'s
 	 * option form ({@code foldAxis}), {@code linalg::%la-matmul-nd}
-	 * ({@code batchStride}), {@code linalg:exp} ({@code map}) and
-	 * {@code linalg:transpose}'s axes form (the strided gather's own stride derivation).
+	 * ({@code batchStride}), {@code linalg:exp} ({@code map}), {@code linalg:transpose}'s
+	 * axes form (the strided gather's own stride derivation) and {@code linalg:reshape}'s
+	 * {@code -1} extent (the resident tier's own {@code copyInto}, resolved against the
+	 * operand's element count before the shared shape reader ever sees it).
 	 */
 	private static List<Case> boundary() {
 		List<Case> cases = new ArrayList<>();
@@ -292,6 +294,18 @@ class GpuOfferDifferentialTest {
 		cases.add(binary("a fresh array with a scalar", a, 2.0));
 		cases.add(binary("a RESIDENT array with a scalar", a.warmed(), 2.0));
 		cases.add(binary("a scalar on the LEFT of a RESIDENT array", 2.0, a.warmed()));
+		// The resident-tier reshape's own -1 spelling: one extent inferred from the
+		// element count, at most one, and only where it divides evenly -- the same
+		// resolution the defun itself does before allocating the output.
+		// A divisor one more than the warmed operand's own element count can never
+		// divide it evenly (the remainder is the count itself), regardless of what B
+		// resolves to on this machine -- so the decline holds without depending on the
+		// threshold arithmetic above.
+		long notADivisor = (long) B * R * C + 1;
+		cases.add(reshape("a bare -1 shape flattens", warm, -1L));
+		cases.add(reshape("a -1 extent is inferred from the trailing dims", warm, new Axes(-1, C)));
+		cases.add(reshape("more than one -1 declines", warm, new Axes(-1, -1)));
+		cases.add(reshape("a -1 extent that does not divide evenly declines", warm, new Axes(-1, notADivisor)));
 		// The axis fold, whose output shape decides as much as its axis does.
 		cases.add(fold("a fold on the LAST axis", a, 2L, false));
 		cases.add(fold("a fold on the leading axis", a, 0L, false));
@@ -340,6 +354,11 @@ class GpuOfferDifferentialTest {
 	private static Case product(String why, Operand left, Operand right) {
 		List<Object> args = List.of(left, right);
 		return new Case(LispNames.LINALG_MATMUL_ND, true, false, why, args, args);
+	}
+
+	private static Case reshape(String why, Object a, Object shape) {
+		List<Object> args = List.of(a, shape);
+		return new Case(LispNames.LINALG_RESHAPE, false, false, why, args, args);
 	}
 
 	private static Case unary(String why, Operand a) {
