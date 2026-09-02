@@ -12517,6 +12517,35 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAdjustArrayUndisplacesADisplacedArgument() throws Exception {
+		// adjust-array on a displaced argument un-displaces it, matching SBCL 2.2.9: an
+		// :adjustable view is adjusted IN PLACE (eq), keeps the elements at the
+		// subscripts valid in both shapes, and comes back un-displaced
+		// (array-displacement => NIL, 0). A NON-adjustable displaced argument answers a
+		// fresh array instead, by the same rule every other non-adjustable adjust-array
+		// argument follows, and a displaced STRING view stays a string.
+		assertThat(compileAndRun("""
+				(let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				       (v (make-array 4 :displaced-to b :displaced-index-offset 1 :adjustable t)))
+				  (print (list (eq (adjust-array v 3) v) v b
+				               (multiple-value-list (array-displacement v)))))
+				(let* ((b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				       (v (make-array 4 :displaced-to b :displaced-index-offset 1)))
+				  (let ((r (adjust-array v 3)))
+				    (print (list (eq r v) r v (multiple-value-list (array-displacement v))
+				                 (multiple-value-list (array-displacement r))))))
+				(let* ((s (copy-seq "abcdef"))
+				       (v (make-array 4 :element-type 'character :displaced-to s
+				                         :displaced-index-offset 1 :adjustable t)))
+				  (print (list (adjust-array v 3) (stringp v)
+				               (multiple-value-list (array-displacement v)))))
+				""")).isEqualTo("""
+				(T #(20 30 40) #(10 20 30 40 50 60) (NIL 0))
+				(NIL #(20 30 40) #(20 30 40 50) (NIL 0) (NIL 0))
+				("bcd" T (NIL 0))""");
+	}
+
+	@Test
 	void compileCoerceConversions() throws Exception {
 		assertThat(compileAndRun("""
 				(print (coerce '(1 2 3) 'vector))

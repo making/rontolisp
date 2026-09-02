@@ -1312,6 +1312,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx, className);
 				case LispNames.ARRAY_DISP_TARGET -> JvmArrayCompiler.compileDispTarget(cons, ctx, className);
 				case LispNames.ARRAY_DISP_OFFSET -> JvmArrayCompiler.compileDispOffset(cons, ctx, className);
+				case LispNames.ARRAY_UNDISPLACE -> JvmArrayCompiler.compileArrayUndisplace(cons, ctx, className);
 				case LispNames.COERCE -> {
 					// A packed (unsigned-byte 8|16|32) result type lowers through the
 					// shared %seq-int-vector helper, exactly as concatenate's does;
