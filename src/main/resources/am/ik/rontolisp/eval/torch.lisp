@@ -944,7 +944,9 @@
 (defun torch:log-softmax (a &key axis)
   ;; Differentiable log-softmax (linalg:log-softmax, the numerically stable
   ;; half of a cross-entropy loss). The adjoint is g - softmax(x) * sum(g),
-  ;; with softmax(x) recovered as exp of the forward result.
+  ;; with softmax(x) recovered as exp of the forward result -- in the :axis
+  ;; form through linalg::%la-log-softmax-grad, the same four members as one
+  ;; call, so a device runs them as one pass (todo-629).
   (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (let* ((ax (if axis (linalg::%la-norm-axis (array-dimensions xa) axis) nil))
            (out
@@ -953,13 +955,12 @@
                 (linalg:log-softmax xa :axis ax))))
       (torch::%t-result out (list ta)
                         (lambda (g)
-                          (let ((tot
-                                 (if (null ax)
-                                     (linalg:sum g)
-                                     (linalg:sum g :axis ax :keepdims t))))
-                            (list
-                             (linalg:sub g
-                              (linalg:mul (linalg:exp out) tot)))))))))
+                          (if (null ax)
+                              (list
+                               (linalg:sub g
+                                (linalg:mul (linalg:exp out) (linalg:sum g))))
+                              (list
+                               (linalg::%la-log-softmax-grad g out ax))))))))
 
 ;; --- masking and index selection ---------------------------------------------
 

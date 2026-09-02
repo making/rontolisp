@@ -133,19 +133,21 @@ final class JvmLinalgGpu {
 	private static final Map<String, String> EXT_KERNELS = Map.of(LispNames.LINALG_SUM, "gpuSumAxis",
 			LispNames.LINALG_AMAX, "gpuAmaxAxis", LispNames.LINALG_AMIN, "gpuAminAxis", LispNames.LINALG_TRANSPOSE,
 			"gpuTransposeAxes", LispNames.LINALG_CONCATENATE, "gpuConcatenate",
-			// softmax over its :axis (the fused tier, todo-499).
-			LispNames.LINALG_SOFTMAX, "gpuSoftmaxAxis");
+			// softmax over its :axis (the fused tier, todo-499), and log-softmax over
+			// its own (todo-629).
+			LispNames.LINALG_SOFTMAX, "gpuSoftmaxAxis", LispNames.LINALG_LOG_SOFTMAX, "gpuLogSoftmaxAxis");
 
 	/**
 	 * The FUSED tier's base-shape members ({@code .todo/499}): the compositions
 	 * {@code torch.lisp} spells as one internal member each so the device can run them as
-	 * one pass -- the exact GELU and its adjoint, softmax's adjoint, layer-norm's
-	 * normalization and its adjoint, and the dropout mask. Same convention as the maps.
+	 * one pass -- the exact GELU and its adjoint, softmax's adjoint, log-softmax's
+	 * adjoint, layer-norm's normalization and its adjoint, and the dropout mask. Same
+	 * convention as the maps.
 	 */
 	private static final Map<String, String> FUSED_KERNELS = Map.of(LispNames.LINALG_GELU, "gpuGelu",
 			LispNames.LINALG_GELU_GRAD, "gpuGeluGrad", LispNames.LINALG_SOFTMAX_GRAD, "gpuSoftmaxGrad",
 			LispNames.LINALG_LAYER_NORM, "gpuLayerNorm", LispNames.LINALG_LAYER_NORM_GRAD, "gpuLayerNormGrad",
-			LispNames.LINALG_DROPOUT_MASK, "gpuDropoutMask");
+			LispNames.LINALG_DROPOUT_MASK, "gpuDropoutMask", LispNames.LINALG_LOG_SOFTMAX_GRAD, "gpuLogSoftmaxGrad");
 
 	/**
 	 * Every qualified name the emit gate scans for. A program that reaches none of them

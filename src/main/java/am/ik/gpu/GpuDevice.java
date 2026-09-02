@@ -228,7 +228,8 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 
 	/**
 	 * The FUSED tier ({@code .todo/499}): the exact GELU, its adjoint, the last-axis
-	 * softmax and its adjoint, layer-norm's normalization and its adjoint, and the
+	 * softmax and its adjoint, the last-axis log-softmax and its adjoint
+	 * ({@code .todo/629}), layer-norm's normalization and its adjoint, and the
 	 * inverted-dropout mask, each as one pass where the {@code torch.lisp} composition
 	 * launched a chain of members -- every rounding of the chain reproduced ({@link Gpu}
 	 * has the per-member contract). On CUDA since todo-499; the Metal half declines them
@@ -252,6 +253,14 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	boolean softmaxGrad(double[] g, int og, double[] s, int os, double[] c, int oc, int rows, int len);
 
 	boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len);
+
+	boolean logSoftmax(double[] a, int oa, double[] c, int oc, int rows, int len);
+
+	boolean logSoftmaxF(float[] a, int oa, float[] c, int oc, int rows, int len);
+
+	boolean logSoftmaxGrad(double[] g, int og, double[] o, int oo, double[] c, int oc, int rows, int len);
+
+	boolean logSoftmaxGradF(float[] g, int og, float[] o, int oo, float[] c, int oc, int rows, int len);
 
 	boolean layerNorm(double[] x, int ox, double[] c, int oc, int rows, int len, double eps);
 

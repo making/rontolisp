@@ -273,7 +273,7 @@ share `torch::%t-grad-reshape`.
 | `var`/`std` | COMPOSED from mean/sub/mul/sum/div (+ sqrt) | from the tape -- no bespoke adjoint; keeps the `(n - ddof)` divisor differentiable |
 | `amax` | `amax` | mask `(= a out)`, gradient split EVENLY among ties (PyTorch's amax rule) |
 | `argmax` | `argmax` | none -- returns the RAW index value/array, not a tensor |
-| `softmax`/`log-softmax` | `softmax`/`log-softmax` | `s*(g - sum(g*s))` / `g - exp(out)*sum(g)`, per `:axis` distribution -- softmax's, in the `:axis` form, as the ONE member `linalg::%la-softmax-grad` (todo-499) |
+| `softmax`/`log-softmax` | `softmax`/`log-softmax` | `s*(g - sum(g*s))` / `g - exp(out)*sum(g)`, per `:axis` distribution -- in the `:axis` form each is the ONE member `linalg::%la-softmax-grad` / `%la-log-softmax-grad` (todo-499, todo-629) |
 | `gelu` (`:none`) | `%la-gelu` | `%la-gelu-grad`, the tape's backward through the five ops the composition was, onto the gradient the input already held (below, "The fused compositions") |
 | `layer-norm` (the normalization) | `%la-layer-norm` | `%la-layer-norm-grad`, the tape's backward through mean / sub / var / add / sqrt / div, onto what the input held; `* weight + bias` stays two torch ops |
 | `dropout` | `%la-dropout-mask` then `mul` | the mask is a constant: `g * mask` |
@@ -667,9 +667,9 @@ there long before any `defstruct` is reached -- measured, the error is
 `LINALG::%LA-MAKE: lambda-list keywords ... are not supported with --no-gc` --
 so the backend's own defstruct rejection never comes into play.
 
-## The fused compositions, and the accumulated-gradient protocol (todo-499)
+## The fused compositions, and the accumulated-gradient protocol (todo-499, todo-629)
 
-Four things a transformer step spends a third of its device time on were compositions of
+Five things a transformer step spends a third of its device time on were compositions of
 torch ops -- one `linalg:` member per op, one memory pass per member on a GPU. Since
 2026-09-02 each is ONE internal `linalg` member, so that `--gpu` can run it as one kernel
 (`.kb/gpu.md`, "The fused tier"), and **nothing about the bits moved on any backend**:
@@ -679,6 +679,7 @@ torch ops -- one `linalg:` member per op, one memory pass per member on a GPU. S
 | `torch:gelu` (`:none`, over an array) | `%la-gelu (x)` | `%la-gelu-grad (g x old)` |
 | `torch:layer-norm`'s normalization | `%la-layer-norm (x eps)` | `%la-layer-norm-grad (g x eps old)` |
 | `torch:softmax` in its `:axis` form | `linalg:softmax` (unchanged) | `%la-softmax-grad (g out ax)` |
+| `torch:log-softmax` in its `:axis` form | `linalg:log-softmax` (unchanged) | `%la-log-softmax-grad (g out ax)` |
 | `torch:dropout`'s mask | `%la-dropout-mask (shape p st single)` | -- (a constant) |
 
 **Each defun IS the composition it replaced, member for member and in the tape's order**

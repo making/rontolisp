@@ -1285,20 +1285,26 @@
               (linalg:exp (linalg:sub a (linalg:amax a :axis ax :keepdims t)))))
         (linalg:div e (linalg:sum e :axis ax :keepdims t)))))
 
-;; --- the fused compositions (todo-499) --------------------------------------------
-;; Six internal members that spell, as ONE call each, a composition torch.lisp used to
-;; spell as a chain of the members above: torch:softmax's adjoint, the exact torch:gelu
-;; and its adjoint, torch:layer-norm's normalization and its adjoint, and the dropout
-;; mask. Each defun IS the chain, member for member and in the same order, so on every
-;; CPU path the bits are what the chain produced -- and on the device each is one kernel
-;; that replays the chain rounding for rounding (.kb/gpu.md, "The fused tier"). The two
-;; adjoints that take an OLD gradient fold their contributions onto it in the order the
-;; tape would have (.kb/torch.md).
+;; --- the fused compositions (todo-499, todo-629) -----------------------------------
+;; Seven internal members that spell, as ONE call each, a composition torch.lisp used to
+;; spell as a chain of the members above: torch:softmax's adjoint, torch:log-softmax's,
+;; the exact torch:gelu and its adjoint, torch:layer-norm's normalization and its adjoint,
+;; and the dropout mask. Each defun IS the chain, member for member and in the same
+;; order, so on every CPU path the bits are what the chain produced -- and on the device
+;; each is one kernel that replays the chain rounding for rounding (.kb/gpu.md, "The
+;; fused tier"). The two adjoints that take an OLD gradient fold their contributions onto
+;; it in the order the tape would have (.kb/torch.md).
 
 (defun linalg::%la-softmax-grad (g out ax)
   ;; torch:softmax's adjoint out * (g - sum(g * out)) along the normalized axis ax.
   (linalg:mul out
    (linalg:sub g (linalg:sum (linalg:mul g out) :axis ax :keepdims t))))
+
+(defun linalg::%la-log-softmax-grad (g out ax)
+  ;; torch:log-softmax's adjoint g - exp(out) * sum(g) along the normalized axis ax,
+  ;; with softmax(x) recovered as the exponent of the forward result (todo-629).
+  (linalg:sub g
+   (linalg:mul (linalg:exp out) (linalg:sum g :axis ax :keepdims t))))
 
 (defun linalg::%la-gelu (x)
   ;; x * (1 + erf(x / sqrt 2)) / 2 as torch:gelu composed it: the 0.5 branch, the

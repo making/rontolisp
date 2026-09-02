@@ -187,7 +187,7 @@ class LinalgGpuTest {
 		// tier and the clip norm's sum of squares, resident-only as well.
 		for (String member : new String[] { "add", "sub", "mul", "div", "maximum", "minimum", "sum", "amax", "amin",
 				"transpose", "sqrt", "abs", "negative", "sign", "greater", "greater-equal", "less", "less-equal",
-				"equal", "where", "reshape", "concatenate", "take-rows", "gather", "softmax" }) {
+				"equal", "where", "reshape", "concatenate", "take-rows", "gather", "softmax", "log-softmax" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member)
 				.isEqualTo("#<function LINALG:" + member.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, false).print()).as(member).isEqualTo("#<lambda>");
@@ -196,18 +196,18 @@ class LinalgGpuTest {
 				"%la-sum-squares",
 				// The fused tier (.todo/499): the compositions torch.lisp spells as one
 				// member each.
-				"%la-softmax-grad", "%la-gelu", "%la-gelu-grad", "%la-layer-norm", "%la-layer-norm-grad",
-				"%la-dropout-mask" }) {
+				"%la-softmax-grad", "%la-log-softmax-grad", "%la-gelu", "%la-gelu-grad", "%la-layer-norm",
+				"%la-layer-norm-grad", "%la-dropout-mask" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, true).print()).as(internal)
 				.isEqualTo("#<function LINALG::" + internal.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, false).print()).as(internal)
 				.isEqualTo("#<lambda>");
 		}
-		// Fifty-one linalg: members and no others. matmul, mean, var, log-softmax,
-		// square, relu, slice and flatten are accelerated THROUGH them, not instead of
-		// them, so they must still be the library's own lambdas under the flag.
-		for (String member : new String[] { "matmul", "outer", "norm", "trace", "argmax", "argmin", "log-softmax",
-				"mean", "var", "slice", "flatten", "stack" }) {
+		// Fifty-three linalg: members and no others. matmul, mean, var, square, relu,
+		// slice and flatten are accelerated THROUGH them, not instead of them, so they
+		// must still be the library's own lambdas under the flag.
+		for (String member : new String[] { "matmul", "outer", "norm", "trace", "argmax", "argmin", "mean", "var",
+				"slice", "flatten", "stack" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member).isEqualTo("#<lambda>");
 		}
 		// And the one member OUTSIDE linalg: -- vec:matvec, installed when the vec
@@ -257,6 +257,21 @@ class LinalgGpuTest {
 					elements(eval(operands + "(linalg:softmax *x* :axis -1)", false))))
 				.as("softmax" + option)
 				.isLessThan(option.isEmpty() ? 1e-12 : 1e-5);
+			// log-softmax and its adjoint carry the device's exp (and the forward its
+			// log), so they stand where softmax does rather than at byte equality.
+			assertThat(divergence(elements(eval(operands + "(linalg:log-softmax *x* :axis -1)", true)),
+					elements(eval(operands + "(linalg:log-softmax *x* :axis -1)", false))))
+				.as("log-softmax" + option)
+				.isLessThan(option.isEmpty() ? 1e-12 : 1e-5);
+			// The ADJOINT cancels, like the GELU pair: over these operands the term
+			// exp(out) * sum(g) it subtracts g from is about 1.0 where the largest
+			// element of the answer is 0.0176, a 57x cancellation, so a last-ulp
+			// difference in exp or log shows as 8.2e-5 of the answer's own scale at #f
+			// (measured). It is pinned as a fraction of the largest element, loosely.
+			String grad = "(linalg::%la-log-softmax-grad *g* (linalg:log-softmax *x* :axis -1) 1)";
+			assertThat(divergence(elements(eval(operands + grad, true)), elements(eval(operands + grad, false))))
+				.as("log-softmax grad" + option)
+				.isLessThan(option.isEmpty() ? 1e-12 : 2e-4);
 			for (String call : new String[] { "(linalg::%la-gelu *x*)", "(linalg::%la-gelu-grad *g* *x* nil)",
 					"(linalg::%la-gelu-grad *g* *x* *g*)" }) {
 				assertThat(divergence(elements(eval(operands + call, true)), elements(eval(operands + call, false))))
@@ -278,6 +293,9 @@ class LinalgGpuTest {
 		assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits);
 		assertThat(worstRelative(elements(eval(operands + "(linalg:softmax *x* :axis 0)", true)),
 				elements(eval(operands + "(linalg:softmax *x* :axis 0)", false))))
+			.isLessThan(1e-5);
+		assertThat(worstRelative(elements(eval(operands + "(linalg:log-softmax *x* :axis 0)", true)),
+				elements(eval(operands + "(linalg:log-softmax *x* :axis 0)", false))))
 			.isLessThan(1e-5);
 	}
 
@@ -1148,6 +1166,13 @@ class LinalgGpuTest {
 				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
 				(linalg:add *a* *row*)
 				""".formatted(side * side + 1, option(), side, side, side + 1, option(), side);
+		// The two counters are LIVE-SET sizes over weak keys: an entry left dirty by an
+		// earlier test in this fork disappears from the count whenever the collector
+		// reaches it, which -- inside the window measured below -- reads as the result
+		// not having been left on the device. So the set is quiesced first: collect, then
+		// expunge the cleared keys (backingCount does that), and only then snapshot.
+		System.gc();
+		am.ik.gpu.GpuThresholds.backingCount();
 		int dirty = am.ik.gpu.GpuThresholds.dirtyCount();
 		int backed = am.ik.gpu.GpuThresholds.backingCount();
 		LispVal result = eval(program, true);

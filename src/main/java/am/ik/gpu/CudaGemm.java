@@ -131,18 +131,21 @@ final class CudaGemm implements GpuDevice {
 	/**
 	 * The FUSED tier's kernels ({@code .todo/499}), in the order {@link #fused} holds
 	 * them: the exact GELU and its adjoint, the last-axis softmax and its adjoint,
-	 * layer-norm's normalization and its adjoint, and the inverted-dropout mask, at each
-	 * width. Each is one pass where the {@code torch.lisp} composition ran a chain of
-	 * members, and each reproduces that chain's arithmetic rounding for rounding
-	 * ({@code gemm.cu}, "The FUSED tier").
+	 * layer-norm's normalization and its adjoint, the inverted-dropout mask, and the
+	 * last-axis log-softmax and its adjoint ({@code .todo/629}), at each width. Each is
+	 * one pass where the {@code torch.lisp} composition ran a chain of members, and each
+	 * reproduces that chain's arithmetic rounding for rounding ({@code gemm.cu}, "The
+	 * FUSED tier").
 	 */
 	static final String[] KERNELS_FUSED = { "gelu_f64", "gelu_f32", "gelu_grad_f64", "gelu_grad_f32", "softmax_f64",
 			"softmax_f32", "softmax_grad_f64", "softmax_grad_f32", "layer_norm_f64", "layer_norm_f32",
-			"layer_norm_grad_f64", "layer_norm_grad_f32", "dropout_mask_f64", "dropout_mask_f32" };
+			"layer_norm_grad_f64", "layer_norm_grad_f32", "dropout_mask_f64", "dropout_mask_f32", "log_softmax_f64",
+			"log_softmax_f32", "log_softmax_grad_f64", "log_softmax_grad_f32" };
 
 	private static final int GELU_F64 = 0, GELU_F32 = 1, GELU_GRAD_F64 = 2, GELU_GRAD_F32 = 3, SOFTMAX_F64 = 4,
 			SOFTMAX_F32 = 5, SOFTMAX_GRAD_F64 = 6, SOFTMAX_GRAD_F32 = 7, LAYER_NORM_F64 = 8, LAYER_NORM_F32 = 9,
-			LAYER_NORM_GRAD_F64 = 10, LAYER_NORM_GRAD_F32 = 11, DROPOUT_F64 = 12, DROPOUT_F32 = 13;
+			LAYER_NORM_GRAD_F64 = 10, LAYER_NORM_GRAD_F32 = 11, DROPOUT_F64 = 12, DROPOUT_F32 = 13,
+			LOG_SOFTMAX_F64 = 14, LOG_SOFTMAX_F32 = 15, LOG_SOFTMAX_GRAD_F64 = 16, LOG_SOFTMAX_GRAD_F32 = 17;
 
 	/**
 	 * What one element of a row kernel (softmax, layer-norm and their adjoints) is
@@ -1918,6 +1921,30 @@ final class CudaGemm implements GpuDevice {
 	public boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len) {
 		return rowKernel(this.fused[SOFTMAX_GRAD_F32], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(s), s, os,
 				null, null, 0, MemorySegment.ofArray(c), c, oc, rows, len, null, false, Float.BYTES);
+	}
+
+	@Override
+	public boolean logSoftmax(double[] a, int oa, double[] c, int oc, int rows, int len) {
+		return rowKernel(this.fused[LOG_SOFTMAX_F64], MemorySegment.ofArray(a), a, oa, null, null, 0, null, null, 0,
+				MemorySegment.ofArray(c), c, oc, rows, len, null, false, Double.BYTES);
+	}
+
+	@Override
+	public boolean logSoftmaxF(float[] a, int oa, float[] c, int oc, int rows, int len) {
+		return rowKernel(this.fused[LOG_SOFTMAX_F32], MemorySegment.ofArray(a), a, oa, null, null, 0, null, null, 0,
+				MemorySegment.ofArray(c), c, oc, rows, len, null, false, Float.BYTES);
+	}
+
+	@Override
+	public boolean logSoftmaxGrad(double[] g, int og, double[] o, int oo, double[] c, int oc, int rows, int len) {
+		return rowKernel(this.fused[LOG_SOFTMAX_GRAD_F64], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(o), o,
+				oo, null, null, 0, MemorySegment.ofArray(c), c, oc, rows, len, null, false, Double.BYTES);
+	}
+
+	@Override
+	public boolean logSoftmaxGradF(float[] g, int og, float[] o, int oo, float[] c, int oc, int rows, int len) {
+		return rowKernel(this.fused[LOG_SOFTMAX_GRAD_F32], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(o), o,
+				oo, null, null, 0, MemorySegment.ofArray(c), c, oc, rows, len, null, false, Float.BYTES);
 	}
 
 	@Override

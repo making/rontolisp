@@ -236,6 +236,10 @@ public final class LinalgGpu {
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_SOFTMAX, 3, LinalgGpu::softmax);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SOFTMAX_GRAD, 3,
 				LinalgGpu::softmaxGrad);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_LOG_SOFTMAX, 3,
+				LinalgGpu::logSoftmax);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_LOG_SOFTMAX_GRAD, 3,
+				LinalgGpu::logSoftmaxGrad);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_GELU, 1, LinalgGpu::gelu);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_GELU_GRAD, 3, LinalgGpu::geluGrad);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_LAYER_NORM, 2,
@@ -513,6 +517,65 @@ public final class LinalgGpu {
 			return c == null ? null : new LispSingleFloatArray(c, d.clone());
 		}
 		double[] c = LinalgGpuKernels.softmaxGrad(((LispDoubleFloatArray) g).storage(),
+				((LispDoubleFloatArray) out).storage(), rows, len);
+		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/**
+	 * {@code (linalg:log-softmax a :axis ax)} over the LAST axis of a packed operand, as
+	 * one pass per row where the chain ran six members. Any other axis, the whole-array
+	 * form, a boxed operand and a small one decline to the defun (todo-629).
+	 */
+	private static @Nullable LispVal logSoftmax(List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		LispVal[] opts = LinalgSimd.options(args, 1, "AXIS");
+		if (a == null || opts == null) {
+			return null;
+		}
+		int[] d = a.dims();
+		Integer axis = LinalgSimd.normAxis(opts[0], d.length);
+		if (axis == null || axis != d.length - 1) {
+			return null;
+		}
+		int len = d[axis];
+		int rows = len == 0 ? 0 : a.totalSize() / len;
+		if (rows < 1) {
+			return null;
+		}
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.logSoftmax(single.storage(), rows, len);
+			return c == null ? null : new LispSingleFloatArray(c, d.clone());
+		}
+		double[] c = LinalgGpuKernels.logSoftmax(((LispDoubleFloatArray) a).storage(), rows, len);
+		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/**
+	 * {@code (linalg::%la-log-softmax-grad g out ax)} over the last axis, one pass per
+	 * row and bit-identical to the four-member chain; declined at any other axis.
+	 */
+	private static @Nullable LispVal logSoftmaxGrad(List<LispVal> args) {
+		LispFloatArray g = LinalgSimd.packed(args.get(0));
+		LispFloatArray out = LinalgSimd.packed(args.get(1));
+		if (g == null || out == null || g.getClass() != out.getClass() || !Arrays.equals(g.dims(), out.dims())) {
+			return null;
+		}
+		int[] d = g.dims();
+		Integer axis = LinalgSimd.normAxis(args.get(2), d.length);
+		if (axis == null || axis != d.length - 1) {
+			return null;
+		}
+		int len = d[axis];
+		int rows = len == 0 ? 0 : g.totalSize() / len;
+		if (rows < 1) {
+			return null;
+		}
+		if (g instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.logSoftmaxGrad(single.storage(), ((LispSingleFloatArray) out).storage(), rows,
+					len);
+			return c == null ? null : new LispSingleFloatArray(c, d.clone());
+		}
+		double[] c = LinalgGpuKernels.logSoftmaxGrad(((LispDoubleFloatArray) g).storage(),
 				((LispDoubleFloatArray) out).storage(), rows, len);
 		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
 	}

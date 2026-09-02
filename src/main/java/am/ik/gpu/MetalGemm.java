@@ -1785,8 +1785,8 @@ final class MetalGemm implements GpuDevice {
 	 * @param host the host array that is being written
 	 * @return the array to write into: {@code host}, or a stub's backing
 	 */
-	// --- the fused tier: declined here (.todo/499) -----------------------------------
-	// The four compositions run on this backend member by member, as they did before;
+	// --- the fused tier: declined here (.todo/499, .todo/629) ------------------------
+	// The five compositions run on this backend member by member, as they did before;
 	// a fused MSL kernel is a measurement this backend has not made (the row kernels'
 	// sequential double folds have no float-only form -- see the software binary64 the
 	// resident tier needed).
@@ -1830,6 +1830,26 @@ final class MetalGemm implements GpuDevice {
 
 	@Override
 	public boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	@Override
+	public boolean logSoftmax(double[] a, int oa, double[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	@Override
+	public boolean logSoftmaxF(float[] a, int oa, float[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	@Override
+	public boolean logSoftmaxGrad(double[] g, int og, double[] o, int oo, double[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	@Override
+	public boolean logSoftmaxGradF(float[] g, int og, float[] o, int oo, float[] c, int oc, int rows, int len) {
 		return false;
 	}
 

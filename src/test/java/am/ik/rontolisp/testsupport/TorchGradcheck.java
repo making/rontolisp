@@ -385,6 +385,15 @@ public final class TorchGradcheck {
 			                 (linalg:array-equal (torch:grad a)
 			                                     (linalg:mul out (linalg:sub g (linalg:sum (linalg:mul g out)
 			                                                                             :axis 1 :keepdims t))))))))
+			(let* ((a (torch:tensor *fz-x* :requires-grad t))
+			       (s (torch:log-softmax a :axis -1))
+			       (out (torch:data s)))
+			  (torch:backward (torch:sum (torch:mul s *fz-g*)))
+			  (let ((g *fz-g*))
+			    (print (list (linalg:array-equal out (linalg:log-softmax (torch:data a) :axis -1))
+			                 (linalg:array-equal (torch:grad a)
+			                                     (linalg:sub g (linalg:mul (linalg:exp out)
+			                                                               (linalg:sum g :axis 1 :keepdims t))))))))
 			(let ((drop (torch:train (torch:dropout 0.3))))
 			  (linalg:seed 11)
 			  (let* ((a (torch:tensor *fz-x* :requires-grad t))
@@ -407,6 +416,7 @@ public final class TorchGradcheck {
 	public static final String FUSED_EXPECTED = """
 			(T T)
 			(T T T T)
+			(T T)
 			(T T)
 			(T T T)""";
 

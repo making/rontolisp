@@ -450,6 +450,10 @@ class GpuDeclineTest {
 		assertThat(Gpu.softmax(xf, 0, cf, 0, rows, len)).isFalse();
 		assertThat(Gpu.softmaxGrad(x, 0, x, 0, c, 0, rows, len)).isFalse();
 		assertThat(Gpu.softmaxGrad(xf, 0, xf, 0, cf, 0, rows, len)).isFalse();
+		assertThat(Gpu.logSoftmax(x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.logSoftmax(xf, 0, cf, 0, rows, len)).isFalse();
+		assertThat(Gpu.logSoftmaxGrad(x, 0, x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.logSoftmaxGrad(xf, 0, xf, 0, cf, 0, rows, len)).isFalse();
 		assertThat(Gpu.layerNorm(x, 0, c, 0, rows, len, 1e-5)).isFalse();
 		assertThat(Gpu.layerNorm(xf, 0, cf, 0, rows, len, 1e-5)).isFalse();
 		assertThat(Gpu.layerNormGrad(x, 0, x, 0, null, 0, c, 0, rows, len, 1e-5)).isFalse();
@@ -571,6 +575,21 @@ class GpuDeclineTest {
 			assertThat(Gpu.sumSquares(a, 0, n, 0.5)).isNull();
 			assertThat(Gpu.sumSquares(af, 0, n, 0.5)).isNull();
 		}).doesNotThrowAnyException();
+	}
+
+	@Test
+	void onlyAPowerOfTwoNormalAtBothWidthsHasAnExactReciprocalOnEveryMachine() {
+		// The predicate behind the scale kernel's divide rewrite: a / s is launched as
+		// a * (1 / s) exactly when the two are the same real number AND the reciprocal is
+		// normal at BOTH widths, because a backend that computes in float (Metal) would
+		// otherwise multiply by a reciprocal that underflowed to zero there.
+		for (double s : new double[] { 1.0, 2.0, 8.0, 0.125, -4.0, 1024.0, 0x1p126, 0x1p-126 }) {
+			assertThat(Gpu.exactReciprocal(s)).as("%s", s).isEqualTo(1.0 / s);
+		}
+		for (double s : new double[] { 0.0, -0.0, 3.0, 0.1, 1.4142135623730951, Double.NaN, Double.POSITIVE_INFINITY,
+				Double.MIN_VALUE, 0x1p127, 0x1p-127, 0x1p1000, 0x1p-1000 }) {
+			assertThat(Gpu.exactReciprocal(s)).as("%s", s).isEqualTo(0.0);
+		}
 	}
 
 }

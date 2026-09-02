@@ -970,6 +970,91 @@ extern "C" __global__ void softmax_grad_f64(const double* G, const double* O, do
   softmax_grad_rows<double>(G, O, C, rows, len);
 }
 
+// `linalg:log-softmax` over the last axis: amax (the strict fold, seeded with the first
+// element), the broadcast sub, exp at the width, the sum fold, the log of that sum at the
+// width, the broadcast sub. Three passes over the row: the max, the sum of the exponents,
+// and the result -- the deviation is RECOMPUTED in the third pass rather than stored,
+// which is a pass saved and the same bits, since it is the same (T) subtraction.
+template <typename T>
+__device__ void log_softmax_rows(const T* A, T* C, int rows, int len) {
+  __shared__ row_tile<T> tiles[ROW_WARPS];
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  row_tile<T>& tile = tiles[warp];
+  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+  if (row0 >= rows) return;
+  double m = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      double x = (double) tile.v[lane][j];
+      if (c0 + j == 0 || x > m) m = x;
+    }
+  }
+  T mt = (T) m;
+  double sum = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T s = (T) F_SUB(tile.v[lane][j], mt);
+      T e = exp(s);
+      sum = F_ADD(sum, e);
+    }
+  }
+  T lg = log((T) sum);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, A, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T s = (T) F_SUB(tile.v[lane][j], mt);
+      tile.v[lane][j] = (T) F_SUB(s, lg);
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+}
+
+extern "C" __global__ void log_softmax_f32(const float* A, float* C, int rows, int len) {
+  log_softmax_rows<float>(A, C, rows, len);
+}
+
+extern "C" __global__ void log_softmax_f64(const double* A, double* C, int rows, int len) {
+  log_softmax_rows<double>(A, C, rows, len);
+}
+
+// `torch:log-softmax`'s adjoint, g - exp(out) * sum(g): the sum fold, exp of the forward
+// result at the width, the broadcast mul, the zip sub. Two passes over the row.
+template <typename T>
+__device__ void log_softmax_grad_rows(const T* G, const T* O, T* C, int rows, int len) {
+  __shared__ row_tile<T> tiles[ROW_WARPS][2];
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  row_tile<T>& gt = tiles[warp][0];
+  row_tile<T>& ot = tiles[warp][1];
+  int row0 = (blockIdx.x * ROW_WARPS + warp) * 32;
+  if (row0 >= rows) return;
+  double sum = 0.0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) sum = F_ADD(sum, gt.v[lane][j]);
+  }
+  T tot = (T) sum;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      T e = exp(ot.v[lane][j]);
+      T p = (T) F_MUL(e, tot);
+      gt.v[lane][j] = (T) F_SUB(gt.v[lane][j], p);
+    }
+    tile_store(gt, C, rows, len, row0, c0, lane);
+  }
+}
+
+extern "C" __global__ void log_softmax_grad_f32(const float* G, const float* O, float* C, int rows, int len) {
+  log_softmax_grad_rows<float>(G, O, C, rows, len);
+}
+
+extern "C" __global__ void log_softmax_grad_f64(const double* G, const double* O, double* C, int rows, int len) {
+  log_softmax_grad_rows<double>(G, O, C, rows, len);
+}
+
 // The map kernel's sqrt (case 12): correctly rounded in double, narrowed, the NaN made
 // canonical because Math.sqrt's is.
 template <typename T>

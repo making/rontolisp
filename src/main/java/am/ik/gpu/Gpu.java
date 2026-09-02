@@ -1805,7 +1805,9 @@ public final class Gpu {
 	 * {@code out[i] = op(a[i], s)} -- or {@code op(s, a[i])} when {@code swap} -- over a
 	 * DOUBLE scalar whatever the array's width, which is the CPU kernel's contract
 	 * ({@code (float) (a[i] op s)} at {@code #f}). Offered only when {@code a} is
-	 * resident.
+	 * resident. A division by a power of two is launched as the multiply by its exact
+	 * reciprocal ({@link #exactReciprocal}), which is the same bits and not the same
+	 * speed.
 	 * @param op one of the {@link #BIN_ADD} constants
 	 * @param a the operand
 	 * @param offsetA the index of {@code a}'s first element
@@ -1819,9 +1821,52 @@ public final class Gpu {
 	public static boolean scale(int op, double[] a, int offsetA, double s, boolean swap, double[] out, int offsetOut,
 			int n) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredZip(op, extent(device, a), offsetA, extent(device, a), offsetA,
-				extent(device, out), offsetOut, n) && device.resident(a)
-				&& device.scale(op, a, offsetA, s, swap, out, offsetOut, n);
+		double r = op == BIN_DIV && !swap ? exactReciprocal(s) : 0.0;
+		int rop = r != 0.0 ? BIN_MUL : op;
+		double rs = r != 0.0 ? r : s;
+		return device != null
+				&& offeredZip(rop, extent(device, a), offsetA, extent(device, a), offsetA, extent(device, out),
+						offsetOut, n)
+				&& device.resident(a) && device.scale(rop, a, offsetA, rs, swap, out, offsetOut, n);
+	}
+
+	/**
+	 * The reciprocal of {@code s} when dividing by it is EXACTLY multiplying by that
+	 * reciprocal, else {@code 0.0}. A divisor that is a power of two has an exact
+	 * reciprocal, so {@code a / s} and {@code a * (1 / s)} are two correct roundings of
+	 * the SAME real number and land on the same bits -- for every {@code a}, subnormals,
+	 * infinities and NaNs included. That matters because the divide is the one arithmetic
+	 * operation this card is slow at: the members compute in double (the CPU kernel's
+	 * contract), a {@code div.rn.f64} runs at a fraction of a multiply's rate, and the
+	 * attention scale {@code (torch:div score (sqrt d-k))} is a whole memory pass over
+	 * the scores that spends a third of itself in it. Both operands are required to be
+	 * NORMAL at BOTH widths, so the rewrite is equally exact on a backend that computes
+	 * in {@code float} (Metal): a reciprocal that is normal as a double but underflows to
+	 * zero as a float would not be.
+	 * @param s the divisor
+	 * @return {@code 1 / s} when the rewrite is exact, else {@code 0.0}
+	 */
+	static double exactReciprocal(double s) {
+		if (!normalPowerOfTwo(s)) {
+			return 0.0;
+		}
+		double r = 1.0 / s;
+		return normalPowerOfTwo(r) ? r : 0.0;
+	}
+
+	/**
+	 * Whether {@code v} is a power of two that is normal as a double AND as a float --
+	 * the mantissa bits all zero, and the exponent inside both formats' normal range.
+	 * @param v the value
+	 * @return whether the rewrite above may use it
+	 */
+	private static boolean normalPowerOfTwo(double v) {
+		long bits = Double.doubleToRawLongBits(v);
+		if ((bits & 0x000fffffffffffffL) != 0L) {
+			return false;
+		}
+		long exp = (bits >>> 52) & 0x7ffL;
+		return exp >= 1023 - 126 && exp <= 1023 + 127;
 	}
 
 	/**
@@ -1840,10 +1885,13 @@ public final class Gpu {
 	public static boolean scale(int op, float[] a, int offsetA, double s, boolean swap, float[] out, int offsetOut,
 			int n) {
 		GpuDevice device = Probe.DEVICE;
+		double r = op == BIN_DIV && !swap ? exactReciprocal(s) : 0.0;
+		int rop = r != 0.0 ? BIN_MUL : op;
+		double rs = r != 0.0 ? r : s;
 		return device != null
-				&& offeredZip(op, extent(device, a), offsetA, extent(device, a), offsetA, extent(device, out),
+				&& offeredZip(rop, extent(device, a), offsetA, extent(device, a), offsetA, extent(device, out),
 						offsetOut, n)
-				&& device.resident(a) && device.scaleF(op, a, offsetA, s, swap, out, offsetOut, n);
+				&& device.resident(a) && device.scaleF(rop, a, offsetA, rs, swap, out, offsetOut, n);
 	}
 
 	/**
@@ -2408,6 +2456,70 @@ public final class Gpu {
 		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
 				&& offeredRows(device, s, offsetS, out, offsetOut, rows, len, true)
 				&& device.softmaxGradF(g, offsetG, s, offsetS, out, offsetOut, rows, len);
+	}
+
+	/**
+	 * {@code linalg:log-softmax} over the LAST axis of a {@code rows x len} operand as
+	 * one pass per row where the chain ran six members: the strict max fold, the
+	 * broadcast subtraction, {@code exp} at the width, the sum fold, {@code log} of that
+	 * sum at the width and the broadcast subtraction. The deviation is recomputed rather
+	 * than stored, which is a memory pass saved and the same {@code (T)} subtraction, so
+	 * the result is the composed device chain's and stands to the CPU as an accelerated
+	 * {@code exp} and {@code log} do. Offered like {@link #softmax}.
+	 * @param a the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the log-softmax's own axis
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean logSoftmax(double[] a, int offsetA, double[] out, int offsetOut, int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& device.logSoftmax(a, offsetA, out, offsetOut, rows, len);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #logSoftmax(double[], int, double[], int, int, int)}.
+	 */
+	public static boolean logSoftmax(float[] a, int offsetA, float[] out, int offsetOut, int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& device.logSoftmaxF(a, offsetA, out, offsetOut, rows, len);
+	}
+
+	/**
+	 * {@code torch:log-softmax}'s adjoint {@code g - exp(out) * sum(g)} per row, as one
+	 * pass where the composition ran four members: the sum fold (sequential), {@code exp}
+	 * of the forward result at the width, the broadcast multiply and the zip subtraction.
+	 * Offered like {@link #logSoftmax}, with either operand's residency counting.
+	 * @param g the output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param o the log-softmax output the forward produced
+	 * @param offsetO the index of {@code o}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean logSoftmaxGrad(double[] g, int offsetG, double[] o, int offsetO, double[] out, int offsetOut,
+			int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+				&& offeredRows(device, o, offsetO, out, offsetOut, rows, len, true)
+				&& device.logSoftmaxGrad(g, offsetG, o, offsetO, out, offsetOut, rows, len);
+	}
+
+	/** The single-float sibling of {@link #logSoftmaxGrad}. */
+	public static boolean logSoftmaxGrad(float[] g, int offsetG, float[] o, int offsetO, float[] out, int offsetOut,
+			int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+				&& offeredRows(device, o, offsetO, out, offsetOut, rows, len, true)
+				&& device.logSoftmaxGradF(g, offsetG, o, offsetO, out, offsetOut, rows, len);
 	}
 
 	/**
