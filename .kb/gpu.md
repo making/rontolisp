@@ -1218,7 +1218,7 @@ and both profiles.** The rank-2 `copy_f32` at grid 4096 (72 a step, 2.9 ms) that
 at the head shape is `torch:cat`'s slice adjoint over the six heads, not a transpose.
 
 What the view mechanism is now the prerequisite of: the attention SCALE and MASK
-(`.todo/633`), the two eager nodes between this product and the fused softmax, 15.6 ms a
+(`.todo/641`), the two eager nodes between this product and the fused softmax, 15.6 ms a
 step; the record needs a kind for them and `torch:softmax` a wider member.
 
 ## The chains left composed (todo-629, 2026-09-02)
@@ -1282,7 +1282,7 @@ byte-identical to the previous build's at every step of all six runs.**
   fusion this tape can express. `torch:div` and `torch:masked-fill` are EAGER nodes: by
   the time `torch:softmax` sees the masked score, both passes have already been paid, and
   folding them in needs a tensor whose data is a deferred VIEW -- exactly the machinery
-  `.todo/630` needs for the attention head's transpose. Filed as `.todo/633`, behind it.
+  `.todo/630` needs for the attention head's transpose. Filed as `.todo/641`, behind it.
 - **Layer-norm's affine** (`* weight + bias`) is 15 ms a step at these shapes: 2 broadcast
   passes forward (0.213 + 0.214 ms x 13), and backward a broadcast mul (0.215), a zip mul
   (0.314) and the two axis-0 folds per parameter (0.098 each). Fusing it into
