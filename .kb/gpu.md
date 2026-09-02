@@ -481,7 +481,15 @@ heads, batch 64, vocabulary 6638): about 4,100 offers a step, **212 of them decl
 bigger than 65536 elements -- six `reshape`s of a host mask, two `linalg:div` on two numbers,
 two `reshape`s of an `f(64 256)`, one `negative` and one `add` over a non-resident `(16384)`.
 Its `(1 256 256)` mask IS a suffix once the leading extent-1 axis is dropped, so nothing in
-the attention declines. **And that mask is a `double[]` over a `float` score, accepted only
+the attention declines. **It is also the one program here that calls
+`torch:clip-grad-norm`, and the clip norm reaches the device on every call**: 634 offers of
+`%la-sum-squares` and `%la-scale` a step, **634 accepted and 0 declined**, every operand
+resident because the optimizer updates the parameters there and the gradients arrive from
+device members. That answers a hypothesis raised from the test side in the same round --
+both members are resident-only, and the tests hand them FRESH operands, so the tier they
+name never runs there. The tests were wrong about the shape; the programs are not. Chapter 2
+never calls `torch:clip-grad-norm` at all and llama2 is inference, so the GPT is the whole
+production population for that path. **And that mask is a `double[]` over a `float` score, accepted only
 because the device contract takes a mask of either width** -- the exact clause `.todo/645`
 found `MetalGemm` narrowing. It is the only production shape in this repository that
 exercises it, which is worth knowing before anyone narrows that parameter again.
@@ -618,7 +626,17 @@ silently narrow was therefore read against `CudaGemm`:
 | "no method here throws and none signals" | every kernel entry is `try { ... } catch (Throwable) { return false; }` |
 
 **No narrowing.** Every shape-level accept rule on this backend lives in `Gpu`, above the
-device; `CudaGemm` adds only `usable` and allocation failure. One robustness note, which is
+device; `CudaGemm` adds only `usable` and allocation failure.
+
+**And no PRODUCTION code does arithmetic on a threshold.** That question is worth asking
+separately, because Metal's fold threshold is `Long.MAX_VALUE` and `2 * Long.MAX_VALUE`
+wraps NEGATIVE -- which is how `GpuOfferDifferentialTest` came to run every one of its
+operands at 1024 elements on that backend. Every site in the repository that multiplies,
+adds to, or takes a root of a threshold is in a TEST (`LinalgGpuTest`,
+`JvmLinalgGpuAccelCompilerTest`, `GpuOfferDifferentialTest`); `Gpu`'s own use of them is
+`>=` and nothing else, so a `Long.MAX_VALUE` threshold declines rather than wrapping. **A
+threshold is safe to compare against and unsafe to compute from**, and only the tests
+compute from them. One robustness note, which is
 not a decline and which no shape in any program reaches: `CudaGemm.where` maps a non-null
 mask that is neither `float[]` nor `double[]` to `mkind` 0, which is the SCALAR-mask path, so
 such a call would compute rather than decline -- `softmaxKernel` writes the same test as an
