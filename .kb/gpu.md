@@ -1643,9 +1643,9 @@ that is why todo-629 measured the loss byte-identical there and this does not. D
 the pair would restore byte-identity and cost 104 of the ~330 ms the table above gives
 back, which is why it is not declined; a program that needs the previous bits on Apple
 turns the flag off rather than this tier. **What would remove the straddle rather than
-pay it is a lower map threshold for the unary libm members here**, which is a measurement
-nobody has made -- the threshold was set against `sin` over a whole array, not against a
-`rows x 1` one -- and an item of its own, not this one.
+pay it is a lower map threshold for the unary libm members here -- and the measurement
+says no**, for a reason the threshold's own numbers could not have shown: "The map
+threshold at the straddling shape" below.
 
 **The dropout mask is the ninth, and it stays declined -- on the ARITHMETIC.**
 Wichmann-Hill's uniform is three binary64 divisions and two additions an element, and a
@@ -1661,6 +1661,43 @@ never have been offered. A fused row kernel does not replace one fold; it replac
 of memory passes and command buffers, so the fold's answer is the wrong one to reuse.
 `GpuDevice.Thresholds` gained a `fused` field: CUDA passes its own fold threshold (nothing
 moves there) and Metal passes `MIN_MAP_ELEMENTS`.
+
+### The map threshold at the straddling shape (todo-642, 2026-09-02)
+
+The 2^17 above was set against `sin` over a WHOLE array; what straddles it is a chain's
+per-row intermediate, a `rows x 1` array. `.todo/123-gpu-acceleration/MtlPerRowMap.java`
+takes it at that shape: `log` over a freshly written f32 operand, per call in us, the
+operand rewritten before every call and every call timed on its own, best of five rounds
+of two hundred, three runs, M4 Max.
+
+| elements | CPU `(float) Math.log` | device, back to back | device, behind the chain's gap |
+|---|---|---|---|
+| 4096 | 14-16 | 98-144 | 428-509 |
+| 8192 | 31-32 | 102-137 | 422-515 |
+| **16384** (the book's) | **62-66** | 98-137 | 419-510 |
+| 32768 | 126-142 | 111-125 | 428-522 |
+| 65536 | 248-261 | 106-140 | 270-537 |
+| 131072 | 495-564 | 139-163 | 391-574 |
+| 262144 | 992-1114 | 169-192 | 506-622 |
+
+**The third column is the one the chain gets, and it is the whole answer.** This backend
+refuses the axis fold at EVERY size (the fold threshold is `Long.MAX_VALUE`), so the `sum`
+that writes this operand is a CPU loop -- 28-30 ms of it at the book's `(16384 3038)` --
+and the GPU has been idle for all of it. The same call behind a growing gap: 111-139 us at
+0 ms, 147-154 at 1 ms, then 401-419 at 2 ms, 424-467 at 4, flat to 478-653 by 32 -- the
+~0.5 ms clock ramp "Residency and the GEMV on this backend" measures, paid by a call that
+is 100 us of work. So the two crossovers are different numbers: back to back the device
+passes the CPU near **2^15**, and behind the gap at **2^17..2^18**, which is where the
+threshold already is. At the book's 16384 the CPU wins by 1.5-2.2x back to back and by
+6-8x in the chain.
+
+**The straddle stays, and it is the price of a threshold that is right rather than the
+symptom of one that is wrong.** The finding generalizes past this member: a size threshold
+measured back to back is measured in the wrong context for any member whose operand a
+REFUSED member produced, because the refusal is also the idle that costs the next call its
+clocks. Lowering the map threshold to catch the per-row shape would have moved a 62 us
+member to 500, in exchange for last-ulp agreement with a fused tier that replaces the
+chain rather than running beside it.
 
 ### Residency and the GEMV on this backend
 
