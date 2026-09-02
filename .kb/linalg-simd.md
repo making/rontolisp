@@ -911,13 +911,75 @@ emits a native `f64.le`/`f64.ge`), they just compute the same select as the gene
   over a value set crossing 2^53, 2^63, the subnormals and both signed zeros --
   `theFloatRemainderMatchesTheInterpreterOverAMagnitudeSweep` in
   `WasmLispCompilerIntegrationTest` and in `JvmLispCompilerTest`, with `--no-gc` and the
-  component on the fixed table beside them. `floor`/`truncate` still SATURATE a large
-  float quotient at the `long` range and hand back the dividend as the remainder,
-  identically on all four -- `.todo/660`, and the reason the
-  `quotient*divisor + remainder = number` identity above is only pinned below 2^53.
-  Fixing 660 does not move 659's answer: the exact `truncate` quotient of `1d18` by `7.0`
-  is `142857142857142857` (today's is 7 too large) and its remainder is `1.0`, which is
-  what `rem` already answers.
+  component on the fixed table beside them.
+
+- **The QUOTIENT is exact at every magnitude too (todo-660, 2026-09-02).** It used to be
+  the double `a/b` narrowed into a `long`, which rounds twice and then CLAMPS:
+  `(truncate 1d300 7.0)` answered `Long.MAX_VALUE` with `1.0e300` -- the dividend -- as
+  its remainder, `(floor 1d300)` the same clamp, and `(truncate 1d18 7.0)` a quotient
+  seven too high whose remainder was `0.0` while `rem` already answered `1.0`. Every
+  other numeric operator in rontolisp promotes to a bignum rather than saturating. Now
+  all four backends divide the two operands AS THE EXACT RATIONALS THEY ARE -- a finite
+  double is `mantissa * 2^exponent` exactly, an exact integer is itself over one -- and
+  round that rational, so the answer is the mathematical integer CLHS asks for, a bignum
+  when it has to be. `(floor 1d300)` is the 301-digit exact value of that double.
+
+  **SBCL is not the oracle for the two-argument rows**, and this is the same disagreement
+  659 recorded for the remainder, seen from the other side: SBCL rounds `a/b` in f64 and
+  then converts THAT exactly, so its `(truncate 1d300 7.0)` quotient ends `...39008` where
+  the exact one ends `...05737`, and its remainder is `0.0` where the exact one is `1.0`.
+  The two are self-consistent within SBCL and within rontolisp; rontolisp chose the exact
+  reading in 659 and 660 completes it. The one-argument rows DO match SBCL (no division
+  happens, so nothing rounds). Values verified in exact rational arithmetic.
+
+  **The change is not confined to huge magnitudes**, and this is the row an ordinary
+  program can meet: the double `0.1` is a shade ABOVE a tenth, so `1.0` divided by it is
+  `9.9999999999999994...` and its floor is `9`, not the `10` that `fl(1.0/0.1)` rounds to.
+  `(floor 1.0 0.1)` is now `9` with a remainder of `0.09999999999999995` -- which is what
+  `mod` had already answered there since 659, while `floor` answered `10` and `0.0`. SBCL
+  answers `10` and `0.0` for BOTH, self-consistently through f64; rontolisp answers `9`
+  and `0.0999...95` for both, self-consistently through the exact rational. Pinned in the
+  ci-spec case and in `LispEvaluatorTest`.
+
+  The second value follows from the first by definition and is no longer computed as
+  `x - q*y`: with `q` an exact bignum and `y` a float that product rounds and the
+  difference loses the answer entirely. `LispMacroExpander.lowerMvProducer` -- the ONE
+  lowering all four backends share -- reads each operator's remainder off `rem` and `mod`
+  instead: `truncate`'s is `(rem a b)`, `floor`'s is `(mod a b)`, `ceiling`'s is
+  `(- (mod (- a) b))` (negating the DIVIDEND, not subtracting a divisor from `mod`, which
+  would round twice and lose a tiny dividend: `(ceiling 1d-300 -7.0)` is `1d-300` while
+  `mod` there is `-7.0`), with a zero taking `rem`'s zero so 652's sign rule is not
+  flipped by the negation, and `round`'s is whichever of the two its quotient landed on.
+  A divisor of `1` covers the one-argument forms, so there is one formula.
+
+  Per backend: the interpreter's `eval/ExactRounding` (reached from
+  `LispEvaluator.evalCons`, which recognizes both `(op a b)` and the `(op (/ a b))` its
+  lowerings leave behind), the JVM's hand-assembled `_fdiv`/`_frat`
+  (`JvmNumericRuntimeBuilder`; `_frat` reads a double's exact value through
+  `new BigDecimal(double)` and the pair divides through the existing `_div` + rational
+  rounders), and wasm-GC's `_f64_fdiv` (`WasmFloatFdivRuntimeBuilder`, which builds the
+  two rationals from the IEEE bits and hands them to the limb-tier `_big_fdiv` the
+  two-exact-integer arm already used). All three DECLINE -- and keep the old f64 route --
+  for a ratio operand, a non-finite float and a zero divisor, so `(truncate 1.0 0.0)` and
+  `(truncate 3.0 inf)` are unmoved. Pinned by the `ci-spec.yaml` case
+  `the-floor-family-quotient-is-exact-at-any-magnitude`, by
+  `LispEvaluatorTest.theFloorFamilySecondValueIsTheRemainderCLHSDefines` (an
+  exact-rational oracle sharing no code with the implementation, over all four operators)
+  and by a per-backend differential `theFloorFamilyMatchesTheInterpreterOverAMagnitudeSweep`.
+
+  **`--no-gc` cannot follow and is the one documented divergence.** That backend is
+  i64-native by design with no bignum tier at all (`.kb/wasm-bignum.md`), so there is no
+  value to answer with: `(floor 1d300)` TRAPS there (`i64.trunc_s_f64`, not the saturating
+  form) and `(truncate 1d18 7.0)` keeps the rounded-double quotient `142857142857142864`.
+  Both are pre-existing and unchanged by 660 -- an exact quotient needs the shifted
+  mantissa product, which overflows i64 for any exponent spread past ~10. The remainder
+  side is not affected: 659's exact `fmod` is inlined there and still exact.
+
+  Still open, filed separately: with an INFINITE divisor the quotient stays the f64 answer
+  (`0`) while the remainder is the limit value 659 settled (`(mod -3.0 inf)` is
+  `Infinity`, which corresponds to a floor quotient of `-1`), so the two do not compose in
+  that one regime; and `ffloor`/`fceiling`/`ftruncate`/`fround` do not exist in rontolisp
+  at all.
 - **`signum`/`sin`/`tan`/`tanh`** flattened on wasm because each computes the answer by a
   route that erases the sign -- `(x>0)-(x<0)` is `+0.0` for `+0.0`, `-0.0` and NaN alike,
   the Cody-Waite reduction's `-0.0 - (-0.0)` cancels to `+0.0`, and `tanh`'s

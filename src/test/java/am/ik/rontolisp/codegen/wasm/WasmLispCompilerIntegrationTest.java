@@ -1682,6 +1682,12 @@ class WasmLispCompilerIntegrationTest {
 				0""");
 	}
 
+	/** The exact integer value of the double 1d300 (it IS an integer out there). */
+	private static final String BIG_1D300 = "1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160";
+
+	/** The exact truncating quotient of 1d300 by 7.0. */
+	private static final String Q_1D300 = "142857142857142864643537179314917178386352654444022736416550587930257493998415456540910196440063980577672063404697696882420360462194347225092113169255243854692626742989510829105404319113541155722766993319281542849297302719852520125724950391825734642082751255545722406119730809924599483837922771505737";
+
 	// The float remainder at magnitudes where evaluating a - b*(floor|trunc)(a/b) in f64
 	// stops being that quantity, and for an infinite divisor. Every value arrives through
 	// a defun parameter except the last line, which is the literal (compile-time folded)
@@ -1726,6 +1732,86 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void theComponentFloatRemainderIsExactAtEveryMagnitude() throws Exception {
 		assertThat(compileComponentAndRun(EXACT_REMAINDER_PROGRAM)).isEqualTo(EXACT_REMAINDER_EXPECTED);
+	}
+
+	// The floor family's QUOTIENT at magnitudes where the double (/ a b) is no longer the
+	// mathematical quotient. Every value arrives through a defun parameter except the
+	// last two lines (the literal, compile-time-folded path). The quotients are the exact
+	// rational roundings, verified in exact rational arithmetic -- SBCL answers a
+	// different integer for the two-argument rows (the exact value of the ROUNDED double
+	// a/b), which is why its own (rem 1d300 7.0) is 0.0 where the exact remainder is 1.0.
+	// See .kb/linalg-simd.md, mod/rem.
+	private static final String EXACT_QUOTIENT_PROGRAM = """
+			(defun ftr (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+			(defun ffl (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+			(defun fce (a b) (multiple-value-bind (q r) (ceiling a b) (list q r)))
+			(defun fro (a b) (multiple-value-bind (q r) (round a b) (list q r)))
+			(defun f1 (a) (floor a))
+			(print (ftr 1d18 7.0))
+			(print (fce 1d18 7.0))
+			(print (fro 1d18 7.0))
+			(print (ftr 1d300 7.0))
+			(print (f1 1d300))
+			(print (ftr 1d30 3.0))
+			(print (list (ftr 3.0 (/ 1.0 0.0)) (ftr 1.0 0.0)))
+			(print (list (floor 3.7) (ceiling 3.2) (round 2.5) (round 3.5) (truncate -3.7)))
+			(print (floor 1d300))
+			""";
+
+	private static final String EXACT_QUOTIENT_EXPECTED = """
+			(142857142857142857 1.0)
+			(142857142857142858 -6.0)
+			(142857142857142857 1.0)
+			(%s 1.0)
+			%s
+			(333333333333333339961541612885 1.0)
+			((0 3.0) (9223372036854775807 NaN))
+			(3 4 2 4 -3)
+			%s""".formatted(Q_1D300, BIG_1D300, BIG_1D300);
+
+	@Test
+	void theFloorFamilyQuotientIsExactAtEveryMagnitude() throws Exception {
+		// The quotient used to be the double (/ a b) narrowed with i64.trunc_sat_f64_s,
+		// so it clamped at i64.max past 2^63 and was seven too high at 1d18 (a/b rounds
+		// first). _f64_fdiv reads both operands as the exact rationals they are.
+		assertThat(compileAndRun(EXACT_QUOTIENT_PROGRAM)).isEqualTo(EXACT_QUOTIENT_EXPECTED);
+	}
+
+	@Test
+	void theComponentFloorFamilyQuotientIsExactAtEveryMagnitude() throws Exception {
+		assertThat(compileComponentAndRun(EXACT_QUOTIENT_PROGRAM)).isEqualTo(EXACT_QUOTIENT_EXPECTED);
+	}
+
+	@Test
+	void theFloorFamilyMatchesTheInterpreterOverAMagnitudeSweep() throws Exception {
+		// Both values of all four operators over pairs that cross 2^53 and 2^63 in both
+		// directions, against the interpreter -- whose quotient is the exact rational
+		// rounding and whose remainder is rem/mod, both pinned against an exact-rational
+		// oracle in LispEvaluatorTest.
+		double[] dividends = { 1e18, 1e300, -1e300, 1e30, 12345.678, -12345.678, 3.0, -3.0, 0.5, 1e-300, 1.0, -1.0,
+				-0.0, 0.0, 2.5, -7.5, 5.0, 7.0, 1.8446744073709552e19 };
+		double[] divisors = { 7.0, -7.0, 3.0, 0.1, -0.1, 2.5, 1.0, -1.0, 0.5, 2.0, -2.0 };
+		StringBuilder source = new StringBuilder("""
+				(defun ftr (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+				(defun ffl (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+				(defun fce (a b) (multiple-value-bind (q r) (ceiling a b) (list q r)))
+				(defun fro (a b) (multiple-value-bind (q r) (round a b) (list q r)))
+				""");
+		for (double a : dividends) {
+			for (double b : divisors) {
+				source.append("(print (list (ftr %s %s) (ffl %s %s) (fce %s %s) (fro %s %s)))%n".formatted(lisp(a),
+						lisp(b), lisp(a), lisp(b), lisp(a), lisp(b), lisp(a), lisp(b)));
+			}
+		}
+		String program = source.toString();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new java.io.PrintStream(interpreted, true, java.nio.charset.StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(compileAndRun(program))
+			.isEqualTo(interpreted.toString(java.nio.charset.StandardCharsets.UTF_8).trim());
 	}
 
 	@Test
