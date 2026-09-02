@@ -19,8 +19,8 @@ A macro splices the LIVE object into its own expansion:
 (cffi:defcfun ("abs" c-abs) status (n :int))
 ;; expands to
 (defun c-abs (n)
-  (let ((#:g1 n))
-    (cffi:translate-from-foreign (cffi-sys:%foreign-funcall "abs" (:int #:g1 :unsigned-int) ...)
+  (let ((#:G1 n))
+    (cffi:translate-from-foreign (cffi-sys:%foreign-funcall "abs" (:int #:G1 :unsigned-int) ...)
                                  #<CFFI::FOREIGN-ENUM STATUS>)))
 ```
 

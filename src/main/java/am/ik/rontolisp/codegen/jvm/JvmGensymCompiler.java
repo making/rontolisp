@@ -47,7 +47,7 @@ final class JvmGensymCompiler {
 					className);
 			return;
 		}
-		String prefix = args.size() == 2 ? ((LispString) args.get(1)).value() : "g";
+		String prefix = args.size() == 2 ? ((LispString) args.get(1)).value() : "G";
 		// "#:prefix".concat(Integer.toString(++_gensymCtr))
 		JvmEmitHelper.compileStringLiteral("#:" + prefix, ctx);
 		ctx.emit(Opcode.GETSTATIC);

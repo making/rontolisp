@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 import am.ik.rontolisp.LispEquality;
 import am.ik.rontolisp.RenderCycleGuard;
@@ -1650,26 +1651,95 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 	}
 
-	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
-			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
-			boolean usesEval, int userFuncBase) {
-		return buildDispatchBody(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase, false, null);
+	/**
+	 * One dispatcher as it is emitted: the body of the fixed-index dispatch function,
+	 * plus the PAGE functions it calls when the ladder was too large to be one body.
+	 *
+	 * @param body the fixed-index dispatcher's own body
+	 * @param pages the page bodies, in the module index order they are emitted in -- the
+	 * first sits at the {@code pageFuncBase} handed to
+	 * {@link #buildDispatch(int, List, List, int, WasmLispCompiler.StringTable, boolean, int, boolean, Set, int)}
+	 * . Empty for a dispatcher that fits in one body, which is every dispatcher of every
+	 * program under the budget below.
+	 */
+	record DispatchFunctions(byte[] body, List<byte[]> pages) {
 	}
 
 	/**
-	 * As above, with {@code spread} selecting the SPREAD dispatcher: one function over
-	 * EVERY callable, taking the argument list as a single cons list (the arity-1
-	 * signature) rather than one parameter per argument.
+	 * The radix of the dispatch tree: a paged dispatcher reads one 8-bit DIGIT of the
+	 * funcId per level, so no node carries more than 256 {@code br_table} cases however
+	 * many callables the program has. A case is ~110 bytes, and ~410 at its widest (ten
+	 * required parameters walked out of the spread dispatcher's argument list), so a leaf
+	 * page stays under ~105 KB -- inside the 256 KiB body bound
+	 * ({@code .kb/wasm-function-body-size.md}) with a factor of two to spare.
+	 */
+	private static final int DISPATCH_PAGE_BITS = 8;
+
+	private static final int DISPATCH_PAGE_SIZE = 1 << DISPATCH_PAGE_BITS;
+
+	/**
+	 * A dispatcher whose single body passes this is paged; every dispatcher under it is
+	 * emitted exactly as it was before paging existed, so a program that is in no danger
+	 * is byte-identical AND keeps its indirect calls one call deep. Half the 256 KiB body
+	 * bound -- the paging is a safety valve, not a layout, and the widest dispatcher any
+	 * shipped example builds is the clack/ningle stack's 72 KB spread one, which stays
+	 * whole. A paged ladder lands at ~105 KB in the worst case, so crossing this gate
+	 * always brings the body back under it.
+	 */
+	private static final int DISPATCH_PAGE_BUDGET_BYTES = 128 * 1024;
+
+	/**
+	 * One callable a dispatcher can reach: which {@code br_table} slot selects it, which
+	 * module function it is, and how its parameters are filled.
+	 */
+	private record DispatchTarget(int funcId, int funcIndex, int required, boolean variadic) {
+	}
+
+	/**
+	 * As {@link #buildDispatch}, for a dispatcher that is known to fit one body (the
+	 * arity ladders of a program with no {@code apply}, and every test that builds one
+	 * dispatcher on its own). Fails rather than silently emitting a body that calls pages
+	 * nobody placed.
+	 */
+	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
+			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
+			boolean usesEval, int userFuncBase) {
+		DispatchFunctions built = buildDispatch(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase,
+				false, null, 0);
+		if (!built.pages().isEmpty()) {
+			throw new IllegalStateException("dispatcher for arity " + arity + " needs pages; use buildDispatch");
+		}
+		return built.body();
+	}
+
+	/**
+	 * Builds one dispatcher: the {@code br_table} over every callable a function VALUE of
+	 * this shape can name, with {@code spread} selecting the SPREAD dispatcher -- one
+	 * function over EVERY callable, taking the argument list as a single cons list (the
+	 * arity-1 signature) rather than one parameter per argument.
 	 *
 	 * <p>
-	 * {@code _apply} calls it. The per-arity dispatchers cannot serve {@code apply}: they
-	 * take one WASM parameter per Lisp argument, so they stop at
+	 * {@code _apply} calls the spread one. The per-arity dispatchers cannot serve
+	 * {@code apply}: they take one WASM parameter per Lisp argument, so they stop at
 	 * {@link WasmLispCompiler#MAX_CALLABLE_ARITY}, and an {@code apply} whose designator
 	 * is COMPUTED has to go through them -- quri's
 	 * {@code (apply (scheme-constructor s) :scheme s ... )} passes fourteen arguments to
 	 * a {@code &key} constructor and used to trap on the ladder's fall-through. Each
 	 * spread case walks its target's required parameters out of the list and hands a
 	 * variadic target the remaining TAIL, which is the callee's physical rest parameter.
+	 *
+	 * <p>
+	 * <b>Paging.</b> The spread dispatcher is one case per callable in the program, so
+	 * its body grows with the program's function count and with nothing a test author can
+	 * see: the {@code ci-spec.yaml} corpus reached 258 KB of it against a 256 KiB bound
+	 * that exists because a wasmtime cold compile needs memory superlinear in ONE body
+	 * ({@code .kb/wasm-function-body-size.md}). Past {@link #DISPATCH_PAGE_BUDGET_BYTES}
+	 * the ladder therefore becomes a TREE: the fixed-index dispatcher reads the top 8-bit
+	 * digit of the funcId and calls a page, which reads the next digit, until a leaf
+	 * holds the ~256 cases of one funcId page. The body of every node is bounded by the
+	 * radix, so the emitted body size no longer depends on how many functions the program
+	 * has -- one extra call per {@code apply} per level buys it, and only for a program
+	 * that was near the bound anyway.
 	 * @param arity ignored when {@code spread} is true
 	 * @param spread whether to build the spread dispatcher instead of an arity one
 	 * @param dispatchable the funcIds this program can reach as a function VALUE, or
@@ -1677,19 +1747,95 @@ final class WasmRuntimeBuilder {
 	 * directly, so giving it a case would only pin it for {@code --optimize}
 	 * ({@code WasmLispCompiler.dispatchableFuncIds}); its {@code br_table} slot points at
 	 * the default arm, which is where an unresolvable designator already went.
-	 * @return the encoded function body
+	 * @param pageFuncBase the module function index the first page would take, when this
+	 * dispatcher needs pages
+	 * @return the dispatcher body and its pages
 	 */
-	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
+	static DispatchFunctions buildDispatch(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
-			boolean usesEval, int userFuncBase, boolean spread, @Nullable Set<Integer> dispatchable) {
-		// Collect all functions with matching arity. A variadic function (physical
-		// params = required + rest list) matches every dispatch arity >= required; its
-		// case links the surplus args into a cons list before the call. The spread
-		// dispatcher takes them all: its cases read the parameters out of the list.
-		record Target(int funcId, int funcIndex, int required, boolean variadic) {
-		}
+			boolean usesEval, int userFuncBase, boolean spread, @Nullable Set<Integer> dispatchable, int pageFuncBase) {
 		int dispatchArgs = spread ? 1 : arity;
-		List<Target> targets = new ArrayList<>();
+		List<DispatchTarget> targets = dispatchTargets(arity, defuns, lambdaDecls, spread, dispatchable, userFuncBase);
+
+		// The unpaged shape first: it is what all but a handful of programs emit, and
+		// its SIZE is what decides whether this one needs pages at all.
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval);
+		emitDispatchCases(w, targets, arity, dispatchArgs, spread, 0);
+		byte[] single = body.toByteArray();
+		if (single.length <= DISPATCH_PAGE_BUDGET_BYTES) {
+			return new DispatchFunctions(single, List.of());
+		}
+
+		int maxFuncId = 0;
+		for (DispatchTarget t : targets) {
+			maxFuncId = Math.max(maxFuncId, t.funcId());
+		}
+		int levels = 1;
+		while ((maxFuncId >>> (DISPATCH_PAGE_BITS * levels)) != 0) {
+			levels++;
+		}
+		if (levels == 1) {
+			// Every callable is inside one page already: the body is large because its
+			// CASES are (a spread dispatcher over ten-parameter targets), not because
+			// there are many. Splitting the one page would need a second radix, and the
+			// worst case here is still ~105 KB, well inside the bound.
+			return new DispatchFunctions(single, List.of());
+		}
+
+		List<byte[]> pages = new ArrayList<>();
+		// prefix (funcId >>> 8*level) -> the module index of the node covering it.
+		Map<Integer, Integer> childIndex = new TreeMap<>();
+		Map<Integer, List<DispatchTarget>> leaves = new TreeMap<>();
+		for (DispatchTarget t : targets) {
+			leaves.computeIfAbsent(t.funcId() >>> DISPATCH_PAGE_BITS, k -> new ArrayList<>()).add(t);
+		}
+		for (Map.Entry<Integer, List<DispatchTarget>> leaf : leaves.entrySet()) {
+			childIndex.put(leaf.getKey(), pageFuncBase + pages.size());
+			pages.add(buildDispatchLeafPage(leaf.getValue(), leaf.getKey(), arity, dispatchArgs, spread));
+		}
+		for (int level = 1; level <= levels - 2; level++) {
+			Map<Integer, Map<Integer, Integer>> parents = new TreeMap<>();
+			for (Map.Entry<Integer, Integer> child : childIndex.entrySet()) {
+				parents.computeIfAbsent(child.getKey() >>> DISPATCH_PAGE_BITS, k -> new TreeMap<>())
+					.put(child.getKey() & (DISPATCH_PAGE_SIZE - 1), child.getValue());
+			}
+			Map<Integer, Integer> next = new TreeMap<>();
+			for (Map.Entry<Integer, Map<Integer, Integer>> parent : parents.entrySet()) {
+				next.put(parent.getKey(), pageFuncBase + pages.size());
+				pages.add(buildDispatchNodePage(parent.getValue(), dispatchArgs, level));
+			}
+			childIndex = next;
+		}
+
+		// The root keeps the fixed index every call site already wrote: the prologue as
+		// before, then the top digit selects a page instead of a case.
+		ByteArrayOutputStream rootBody = new ByteArrayOutputStream();
+		WasmWriter rw = new WasmWriter(rootBody);
+		emitDispatchPrologue(rw, arity, dispatchArgs, spread, usesEval);
+		int funcIdLocal = dispatchArgs + 1;
+		rw.write(Instruction.GET_LOCAL);
+		rw.writeUnsignedLeb128(funcIdLocal);
+		rw.write(Instruction.I32_CONST);
+		rw.writeSignedLeb128(DISPATCH_PAGE_BITS * (levels - 1));
+		rw.write(Instruction.I32_SHR_U);
+		rw.write(Instruction.SET_LOCAL);
+		rw.writeUnsignedLeb128(funcIdLocal);
+		emitPageTable(rw, childIndex, dispatchArgs, funcIdLocal);
+		rw.write(Instruction.END); // end function
+		return new DispatchFunctions(rootBody.toByteArray(), pages);
+	}
+
+	/** The callables one dispatcher carries a case for, in funcId order. */
+	private static List<DispatchTarget> dispatchTargets(int arity, List<WasmLispCompiler.DefunDecl> defuns,
+			List<WasmLispCompiler.LambdaInfo> lambdaDecls, boolean spread, @Nullable Set<Integer> dispatchable,
+			int userFuncBase) {
+		// A variadic function (physical params = required + rest list) matches every
+		// dispatch arity >= required; its case links the surplus args into a cons list
+		// before the call. The spread dispatcher takes them all: its cases read the
+		// parameters out of the list.
+		List<DispatchTarget> targets = new ArrayList<>();
 		for (int i = 0; i < defuns.size(); i++) {
 			WasmLispCompiler.DefunDecl defun = defuns.get(i);
 			int paramCount = defun.paramNames().size();
@@ -1697,7 +1843,7 @@ final class WasmRuntimeBuilder {
 				continue;
 			}
 			if (spread || (defun.variadic() ? arity >= paramCount - 1 : paramCount == arity)) {
-				targets.add(new Target(i, userFuncBase + i, defun.variadic() ? paramCount - 1 : paramCount,
+				targets.add(new DispatchTarget(i, userFuncBase + i, defun.variadic() ? paramCount - 1 : paramCount,
 						defun.variadic()));
 			}
 		}
@@ -1708,14 +1854,21 @@ final class WasmRuntimeBuilder {
 				continue;
 			}
 			if (spread || (lambda.variadic() ? arity >= paramCount - 1 : paramCount == arity)) {
-				targets.add(new Target(lambda.funcId(), lambda.funcIndex(),
+				targets.add(new DispatchTarget(lambda.funcId(), lambda.funcIndex(),
 						lambda.variadic() ? paramCount - 1 : paramCount, lambda.variadic()));
 			}
 		}
+		return targets;
+	}
 
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
-		WasmWriter w = new WasmWriter(body);
-
+	/**
+	 * The dispatcher preamble, identical for a one-body dispatcher and for the root of a
+	 * paged one: the locals, the SYMBOL designator's late resolution, and the interpreted
+	 * closure's hand-over to {@code _apply}. Leaves {@code funcId} in the local after the
+	 * parameters, and local 0 holding a CLOSURE struct whatever the caller passed.
+	 */
+	private static void emitDispatchPrologue(WasmWriter w, int arity, int dispatchArgs, boolean spread,
+			boolean usesEval) {
 		// Locals: param 0 = funcval, params 1..arity = args
 		// Extra locals: funcId (i32) and the arg list for the _apply fallback (ref)
 		w.write(2); // 2 local groups
@@ -1818,17 +1971,27 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.RETURN);
 			w.write(Instruction.END);
 		}
+	}
 
+	/**
+	 * The {@code br_table} over {@code targets} and their case bodies, ending the
+	 * function. {@code funcIdBias} is subtracted from every funcId first, so a leaf page
+	 * tables over its own 256 slots rather than over the program's whole funcId space.
+	 */
+	private static void emitDispatchCases(WasmWriter w, List<DispatchTarget> targets, int arity, int dispatchArgs,
+			boolean spread, int funcIdBias) {
+		int funcIdLocal = dispatchArgs + 1;
+		int argListLocal = dispatchArgs + 2;
 		if (targets.isEmpty()) {
 			w.write(Instruction.UNREACHABLE);
 			w.write(Instruction.END);
-			return body.toByteArray();
+			return;
 		}
 
 		int numCases = targets.size();
 		int maxFuncId = 0;
-		for (Target t : targets) {
-			maxFuncId = Math.max(maxFuncId, t.funcId);
+		for (DispatchTarget t : targets) {
+			maxFuncId = Math.max(maxFuncId, t.funcId() - funcIdBias);
 		}
 
 		// Result block (typed)
@@ -1850,7 +2013,7 @@ final class WasmRuntimeBuilder {
 		// Build funcId -> br_table depth mapping
 		Map<Integer, Integer> funcIdToCase = new HashMap<>();
 		for (int j = 0; j < targets.size(); j++) {
-			funcIdToCase.put(targets.get(j).funcId, j);
+			funcIdToCase.put(targets.get(j).funcId() - funcIdBias, j);
 		}
 
 		w.write(Instruction.BR_TABLE);
@@ -1870,7 +2033,7 @@ final class WasmRuntimeBuilder {
 		for (int k = 0; k < numCases; k++) {
 			w.write(Instruction.END); // end of $case_{numCases-1-k}
 			int targetIdx = numCases - 1 - k;
-			Target target = targets.get(targetIdx);
+			DispatchTarget target = targets.get(targetIdx);
 			if (spread) {
 				// cursor = argList; the required parameters come off the front and a
 				// variadic target takes what is left.
@@ -1879,13 +2042,13 @@ final class WasmRuntimeBuilder {
 				w.write(Instruction.SET_LOCAL);
 				w.writeUnsignedLeb128(argListLocal);
 			}
-			else if (target.variadic) {
+			else if (target.variadic()) {
 				// Link args required+1..arity into a cons list (right to left)
 				w.write(Instruction.REF_NULL);
 				w.writeHeapType(Type.EQ.code());
 				w.write(Instruction.SET_LOCAL);
 				w.writeUnsignedLeb128(argListLocal);
-				for (int a = arity; a >= target.required + 1; a--) {
+				for (int a = arity; a >= target.required() + 1; a--) {
 					w.write(Instruction.GET_LOCAL);
 					w.writeUnsignedLeb128(a);
 					w.write(Instruction.GET_LOCAL);
@@ -1907,29 +2070,29 @@ final class WasmRuntimeBuilder {
 			if (spread) {
 				// Push car(cursor) per required parameter, stepping the cursor; a short
 				// argument list yields nil rather than trapping, like car/cdr do.
-				for (int a = 0; a < target.required; a++) {
+				for (int a = 0; a < target.required(); a++) {
 					emitNullSafeCell(w, argListLocal, true);
 					emitNullSafeCell(w, argListLocal, false);
 					w.write(Instruction.SET_LOCAL);
 					w.writeUnsignedLeb128(argListLocal);
 				}
-				if (target.variadic) {
+				if (target.variadic()) {
 					w.write(Instruction.GET_LOCAL);
 					w.writeUnsignedLeb128(argListLocal);
 				}
 			}
 			else {
 				// Push args (for a variadic target, the required ones plus the rest list)
-				for (int a = 1; a <= target.required; a++) {
+				for (int a = 1; a <= target.required(); a++) {
 					w.write(Instruction.GET_LOCAL);
 					w.writeUnsignedLeb128(a);
 				}
-				if (target.variadic) {
+				if (target.variadic()) {
 					w.write(Instruction.GET_LOCAL);
 					w.writeUnsignedLeb128(argListLocal);
 				}
 				else {
-					for (int a = target.required + 1; a <= arity; a++) {
+					for (int a = target.required() + 1; a <= arity; a++) {
 						w.write(Instruction.GET_LOCAL);
 						w.writeUnsignedLeb128(a);
 					}
@@ -1937,7 +2100,7 @@ final class WasmRuntimeBuilder {
 			}
 			// Call target function
 			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(target.funcIndex);
+			w.writeUnsignedLeb128(target.funcIndex());
 			// Break to $result block
 			w.write(Instruction.BR);
 			w.writeUnsignedLeb128(numCases - k);
@@ -1951,7 +2114,118 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // $result
 
 		w.write(Instruction.END); // end function
+	}
+
+	/**
+	 * A LEAF page: the cases of one 256-funcId page, selected by the funcId's lowest
+	 * digit. Its funcval parameter is already a closure struct -- the root normalised a
+	 * symbol designator into one -- so it only has to read the funcId back out.
+	 */
+	private static byte[] buildDispatchLeafPage(List<DispatchTarget> targets, int page, int arity, int dispatchArgs,
+			boolean spread) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		emitPageLocals(w);
+		emitPageFuncIdDigit(w, dispatchArgs, 0);
+		emitDispatchCases(w, targets, arity, dispatchArgs, spread, page << DISPATCH_PAGE_BITS);
 		return body.toByteArray();
+	}
+
+	/**
+	 * An INTERNAL page: one digit further up the funcId, each case calling the page below
+	 * it with the arguments untouched.
+	 */
+	private static byte[] buildDispatchNodePage(Map<Integer, Integer> children, int dispatchArgs, int level) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		emitPageLocals(w);
+		emitPageFuncIdDigit(w, dispatchArgs, level);
+		emitPageTable(w, children, dispatchArgs, dispatchArgs + 1);
+		w.write(Instruction.END); // end function
+		return body.toByteArray();
+	}
+
+	/** The two locals every dispatcher node declares, page or root. */
+	private static void emitPageLocals(WasmWriter w) {
+		w.write(2); // 2 local groups
+		w.write(1); // 1 local of type i32
+		w.write(Type.I32);
+		w.write(1); // 1 local of type (ref null eq)
+		w.writeRefType(true, Type.EQ.code());
+	}
+
+	/**
+	 * Puts the funcId's {@code level}-th 8-bit digit in the funcId local: the page's
+	 * caller passed the closure through unchanged, so the digit is read back off it
+	 * rather than threaded through a wider signature (which would cost a type entry in
+	 * every module).
+	 */
+	private static void emitPageFuncIdDigit(WasmWriter w, int dispatchArgs, int level) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0); // funcval, already a closure
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		w.writeUnsignedLeb128(0); // field 0: funcId
+		if (level > 0) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(DISPATCH_PAGE_BITS * level);
+			w.write(Instruction.I32_SHR_U);
+		}
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(DISPATCH_PAGE_SIZE - 1);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(dispatchArgs + 1);
+	}
+
+	/**
+	 * The {@code br_table} of a node over its child pages: each case forwards the
+	 * dispatcher's own parameters and returns what the page answered, so a page is
+	 * invisible to every caller.
+	 */
+	private static void emitPageTable(WasmWriter w, Map<Integer, Integer> children, int dispatchArgs, int funcIdLocal) {
+		int numCases = children.size();
+		int maxDigit = 0;
+		for (Integer digit : children.keySet()) {
+			maxDigit = Math.max(maxDigit, digit);
+		}
+		List<Integer> pageIndices = new ArrayList<>(children.values());
+		Map<Integer, Integer> digitToCase = new HashMap<>();
+		int caseJ = 0;
+		for (Integer digit : children.keySet()) {
+			digitToCase.put(digit, caseJ++);
+		}
+
+		// Default block (void), then one void block per case: a case RETURNS what its
+		// page answered, so no result block is needed.
+		w.write(Instruction.BLOCK, 0x40);
+		for (int i = 0; i < numCases; i++) {
+			w.write(Instruction.BLOCK, 0x40);
+		}
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(funcIdLocal);
+		w.write(Instruction.BR_TABLE);
+		w.writeUnsignedLeb128(maxDigit + 1);
+		for (int digit = 0; digit <= maxDigit; digit++) {
+			Integer c = digitToCase.get(digit);
+			w.writeUnsignedLeb128(c != null ? numCases - 1 - c : numCases);
+		}
+		w.writeUnsignedLeb128(numCases); // default label
+		for (int k = 0; k < numCases; k++) {
+			w.write(Instruction.END); // end of $case_{numCases-1-k}
+			int pageIndex = pageIndices.get(numCases - 1 - k);
+			for (int a = 0; a <= dispatchArgs; a++) {
+				w.write(Instruction.GET_LOCAL);
+				w.writeUnsignedLeb128(a);
+			}
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(pageIndex);
+			w.write(Instruction.RETURN);
+		}
+		w.write(Instruction.END); // $default
+		w.write(Instruction.UNREACHABLE);
 	}
 
 	/**

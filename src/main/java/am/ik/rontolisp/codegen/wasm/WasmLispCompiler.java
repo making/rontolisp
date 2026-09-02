@@ -4339,11 +4339,27 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean registryLive = usesEval || usesRuntimeDesignator || usesApplyRuntime || designatorSymbolArrives;
 		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, spelledLiterals, registryLive,
 				nameResolvable, symbolBuilders);
+		// A dispatcher whose br_table over every callable would be too big for one
+		// function body is emitted as a TREE of pages instead, and those pages are
+		// appended after EVERY other function -- so no existing index moves and a
+		// program that needs none is byte-identical (WasmRuntimeBuilder.buildDispatch,
+		// .kb/wasm-function-body-size.md). One list of bodies with the matching type
+		// index per entry, in the order the function and code sections must emit them.
+		int dispatchPageFuncBase = abiFuncBase
+				+ (componentStringAbi ? 1 + componentPostKinds.size() + retptrShimPlans.size() : 0);
+		List<byte[]> dispatchPageBodies = new ArrayList<>();
+		List<Integer> dispatchPageTypes = new ArrayList<>();
 		List<byte[]> dispatchBodies = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
-				dispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(arity, defuns, lambdaDecls, numDefuns,
-						stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds));
+				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
+						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
+						dispatchPageFuncBase + dispatchPageBodies.size());
+				dispatchBodies.add(built.body());
+				for (byte[] page : built.pages()) {
+					dispatchPageBodies.add(page);
+					dispatchPageTypes.add(TYPE_CALLABLE_BASE + arity);
+				}
 			}
 			else {
 				// Unused arity: unreachable body
@@ -4359,8 +4375,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// built exactly when _apply is (the apply runtime, with or without the _eval
 		// interpreter); otherwise its body is unreachable like an unused arity's.
 		if (usesApplyRuntime) {
-			dispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(0, defuns, lambdaDecls, numDefuns, stringTable,
-					usesEval, userFuncBase(), true, dispatchableFuncIds));
+			WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(0, defuns, lambdaDecls,
+					numDefuns, stringTable, usesEval, userFuncBase(), true, dispatchableFuncIds,
+					dispatchPageFuncBase + dispatchPageBodies.size());
+			dispatchBodies.add(built.body());
+			for (byte[] page : built.pages()) {
+				dispatchPageBodies.add(page);
+				// The spread dispatcher reuses the arity-1 signature, so its pages do
+				// too: (funcval, argList) -> value.
+				dispatchPageTypes.add(TYPE_CALLABLE_BASE + 1);
+			}
 		}
 		else {
 			ByteArrayOutputStream db = new ByteArrayOutputStream();
@@ -4379,8 +4403,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<byte[]> extraDispatchBodies = new ArrayList<>();
 		for (int arity = MAX_CALLABLE_ARITY + 1; arity <= callArityCeiling(); arity++) {
 			if (indirectCallArities.contains(arity)) {
-				extraDispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(arity, defuns, lambdaDecls, numDefuns,
-						stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds));
+				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
+						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
+						dispatchPageFuncBase + dispatchPageBodies.size());
+				extraDispatchBodies.add(built.body());
+				for (byte[] page : built.pages()) {
+					dispatchPageBodies.add(page);
+					dispatchPageTypes.add(extraCallableTypeBase() + (arity - MAX_CALLABLE_ARITY - 1));
+				}
 			}
 			else {
 				ByteArrayOutputStream db = new ByteArrayOutputStream();
@@ -4526,6 +4556,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.SECOND)
 				.add(stringTable, LispNames.THIRD)
 				.add(stringTable, LispNames.FOURTH)
+				.add(stringTable, LispNames.FIFTH)
+				.add(stringTable, LispNames.SIXTH)
+				.add(stringTable, LispNames.SEVENTH)
+				.add(stringTable, LispNames.EIGHTH)
+				.add(stringTable, LispNames.NINTH)
+				.add(stringTable, LispNames.TENTH)
 				.add(stringTable, LispNames.NTH)
 				.add(stringTable, LispNames.SETF)
 				.add(stringTable, LispNames.PUSH)
@@ -5810,6 +5846,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						fnDef.addFunction(abiType++);
 					}
 				}
+				// Dispatcher pages, LAST: a paged dispatcher's tree of br_table nodes
+				// (WasmRuntimeBuilder.buildDispatch). Appended after every other
+				// function so no index above moves, and present only for a program
+				// whose ladder would not fit in one body.
+				for (int pageType : dispatchPageTypes) {
+					fnDef.addFunction(pageType);
+				}
 			})
 			// Memory section -- in component mode the memory is imported (above), so this
 			// section is empty; a --no-wasi reactor declares its own like Preview 1.
@@ -6621,6 +6664,10 @@ public final class WasmLispCompiler implements LispCompiler {
 								cabiReallocFuncIndex, WasmExportCompiler.paramSlotCount(p.decl())));
 					}
 				}
+				// Dispatcher page bodies, LAST, matching the function-section order.
+				for (byte[] page : dispatchPageBodies) {
+					code.addFunction(page);
+				}
 			})
 			// Data section
 			.writeDataSection(data -> {
@@ -6681,7 +6728,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		int stringDataSegIndex = upperFoldSegIndex - 1;
 		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> stringRanges = stringData.length == 0 ? List.of()
 				: stringTable.shakeableRanges(stringDataSegIndex, dataBase, internBase, internRows);
-		@Nullable Map<Integer, String> funcSizeNames = debugFuncSizes() ? funcSizeNames(functions, lambdaDecls) : null;
+		@Nullable Map<Integer, String> funcSizeNames = debugFuncSizes()
+				? funcSizeNames(functions, lambdaDecls, dispatchPageFuncBase, dispatchPageBodies.size()) : null;
 		if (this.component) {
 			if (this.optimize.eliminatesDeadCode()) {
 				coreModule = shakeCore(coreModule, caseFoldSegments, stringRanges, funcSizeNames, hostImports.size());
@@ -6793,7 +6841,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * chunk by its Lisp-derived name.
 	 */
 	private static Map<Integer, String> funcSizeNames(Map<String, WasmFunctionInfo> functions,
-			List<LambdaInfo> lambdaDecls) {
+			List<LambdaInfo> lambdaDecls, int dispatchPageFuncBase, int dispatchPageCount) {
 		Map<Integer, String> names = new HashMap<>();
 		for (java.lang.reflect.Field f : WasmLispCompiler.class.getDeclaredFields()) {
 			if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) && f.getType() == int.class
@@ -6815,6 +6863,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		for (LambdaInfo li : lambdaDecls) {
 			names.put(li.funcIndex(), li.methodName());
+		}
+		for (int i = 0; i < dispatchPageCount; i++) {
+			names.put(dispatchPageFuncBase + i, "_dispatch_page_" + i);
 		}
 		return names;
 	}

@@ -5158,6 +5158,18 @@ public final class LispEvaluator {
 					return evalBuiltinMacro(cons, env, LispMacroExpander::expandThird);
 				case LispNames.FOURTH:
 					return evalBuiltinMacro(cons, env, LispMacroExpander::expandFourth);
+				case LispNames.FIFTH:
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandFifth);
+				case LispNames.SIXTH:
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandSixth);
+				case LispNames.SEVENTH:
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandSeventh);
+				case LispNames.EIGHTH:
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandEighth);
+				case LispNames.NINTH:
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandNinth);
+				case LispNames.TENTH:
+					return evalBuiltinMacro(cons, env, LispMacroExpander::expandTenth);
 				case LispNames.SETF: {
 					// (setf (macro-function 'new) (macro-function 'existing)) is a write
 					// to

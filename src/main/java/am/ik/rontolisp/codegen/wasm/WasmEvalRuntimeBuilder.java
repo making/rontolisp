@@ -1223,7 +1223,8 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// ---- first/second/third/fourth: nth-car accessors ----
+		// ---- first/second/third/fourth/fifth/sixth/seventh/eighth/ninth/tenth: nth-car
+		// accessors ----
 		openSpecial(w, OFF, off.of(LispNames.FIRST));
 		emitFixedAccessor(w, REST, ENV, ACC, 0);
 		w.write(Instruction.END);
@@ -1235,6 +1236,24 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 		openSpecial(w, OFF, off.of(LispNames.FOURTH));
 		emitFixedAccessor(w, REST, ENV, ACC, 3);
+		w.write(Instruction.END);
+		openSpecial(w, OFF, off.of(LispNames.FIFTH));
+		emitFixedAccessor(w, REST, ENV, ACC, 4);
+		w.write(Instruction.END);
+		openSpecial(w, OFF, off.of(LispNames.SIXTH));
+		emitFixedAccessor(w, REST, ENV, ACC, 5);
+		w.write(Instruction.END);
+		openSpecial(w, OFF, off.of(LispNames.SEVENTH));
+		emitFixedAccessor(w, REST, ENV, ACC, 6);
+		w.write(Instruction.END);
+		openSpecial(w, OFF, off.of(LispNames.EIGHTH));
+		emitFixedAccessor(w, REST, ENV, ACC, 7);
+		w.write(Instruction.END);
+		openSpecial(w, OFF, off.of(LispNames.NINTH));
+		emitFixedAccessor(w, REST, ENV, ACC, 8);
+		w.write(Instruction.END);
+		openSpecial(w, OFF, off.of(LispNames.TENTH));
+		emitFixedAccessor(w, REST, ENV, ACC, 9);
 		w.write(Instruction.END);
 
 		// ---- rest: (rest lst) -> (cdr lst) ----
@@ -2049,11 +2068,18 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, FIELD);
 		w.write(Instruction.END);
 
-		// first/second/third/fourth: k cdrs, set car
+		// first/second/third/fourth/fifth/sixth/seventh/eighth/ninth/tenth: k cdrs, set
+		// car
 		emitFixedAccessorTarget(w, OFF, off.of(LispNames.FIRST), TMP, ENV, TARGET, FIELD, 0);
 		emitFixedAccessorTarget(w, OFF, off.of(LispNames.SECOND), TMP, ENV, TARGET, FIELD, 1);
 		emitFixedAccessorTarget(w, OFF, off.of(LispNames.THIRD), TMP, ENV, TARGET, FIELD, 2);
 		emitFixedAccessorTarget(w, OFF, off.of(LispNames.FOURTH), TMP, ENV, TARGET, FIELD, 3);
+		emitFixedAccessorTarget(w, OFF, off.of(LispNames.FIFTH), TMP, ENV, TARGET, FIELD, 4);
+		emitFixedAccessorTarget(w, OFF, off.of(LispNames.SIXTH), TMP, ENV, TARGET, FIELD, 5);
+		emitFixedAccessorTarget(w, OFF, off.of(LispNames.SEVENTH), TMP, ENV, TARGET, FIELD, 6);
+		emitFixedAccessorTarget(w, OFF, off.of(LispNames.EIGHTH), TMP, ENV, TARGET, FIELD, 7);
+		emitFixedAccessorTarget(w, OFF, off.of(LispNames.NINTH), TMP, ENV, TARGET, FIELD, 8);
+		emitFixedAccessorTarget(w, OFF, off.of(LispNames.TENTH), TMP, ENV, TARGET, FIELD, 9);
 
 		// car/cdr and c[ad]+r compositions (only if no named accessor matched)
 		getLocal(w, FIELD);

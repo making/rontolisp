@@ -7169,6 +7169,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void fifthThroughTenth() throws Exception {
+		assertThat(compileAndRun("(print (fifth '(1 2 3 4 5)))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (sixth '(1 2 3 4 5 6)))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (seventh '(1 2 3 4 5 6 7)))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (eighth '(1 2 3 4 5 6 7 8)))")).isEqualTo("8");
+		assertThat(compileAndRun("(print (ninth '(1 2 3 4 5 6 7 8 9)))")).isEqualTo("9");
+		assertThat(compileAndRun("(print (tenth '(1 2 3 4 5 6 7 8 9 10)))")).isEqualTo("10");
+	}
+
+	@Test
 	void carCdrComposition() throws Exception {
 		assertThat(compileAndRun("(print (cadr '(1 2 3)))")).isEqualTo("2");
 		assertThat(compileAndRun("(print (caddr '(1 2 3)))")).isEqualTo("3");
@@ -7228,6 +7238,19 @@ class WasmLispCompilerIntegrationTest {
 				(setf (second x) 20)
 				(print (second x))
 				""")).isEqualTo("20");
+	}
+
+	@Test
+	void setfFifthThroughTenth() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 1 2 3 4 5 6 7 8 9 10))
+				(setf (fifth x) 50)
+				(setf (tenth x) 100)
+				(print (fifth x))
+				(print (tenth x))
+				""")).isEqualTo("""
+				50
+				100""");
 	}
 
 	@Test
@@ -12055,6 +12078,12 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (eval '(second (list 10 20 30))))")).isEqualTo("20");
 		assertThat(compileAndRun("(print (eval '(third (list 10 20 30))))")).isEqualTo("30");
 		assertThat(compileAndRun("(print (eval '(fourth (list 10 20 30 40))))")).isEqualTo("40");
+		assertThat(compileAndRun("(print (eval '(fifth (list 10 20 30 40 50))))")).isEqualTo("50");
+		assertThat(compileAndRun("(print (eval '(sixth (list 1 2 3 4 5 6))))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (eval '(seventh (list 1 2 3 4 5 6 7))))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (eval '(eighth (list 1 2 3 4 5 6 7 8))))")).isEqualTo("8");
+		assertThat(compileAndRun("(print (eval '(ninth (list 1 2 3 4 5 6 7 8 9))))")).isEqualTo("9");
+		assertThat(compileAndRun("(print (eval '(tenth (list 1 2 3 4 5 6 7 8 9 10))))")).isEqualTo("10");
 	}
 
 	@Test
@@ -12083,6 +12112,9 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("(1 2 99)");
 		assertThat(compileAndRun("(print (eval '(let ((l (list 1 2 3))) (setf (second l) 88) l)))"))
 			.isEqualTo("(1 88 3)");
+		assertThat(compileAndRun(
+				"(print (eval '(let ((l (list 1 2 3 4 5 6 7 8 9 10))) (setf (fifth l) 50) (setf (tenth l) 100) l)))"))
+			.isEqualTo("(1 2 3 4 50 6 7 8 9 100)");
 	}
 
 	@Test
@@ -12532,7 +12564,7 @@ class WasmLispCompilerIntegrationTest {
 	void gensymReturnsFreshSymbols() throws Exception {
 		assertThat(compileAndRun("(print (gensym)) (print (gensym \"tmp\")) (print (eq (gensym) (gensym)))"
 				+ "(print (symbolp (gensym))) (print (symbolp (funcall #'gensym)))"))
-			.isEqualTo("#:|g1|\n#:|tmp2|\nNIL\nT\nT");
+			.isEqualTo("#:G1\n#:|tmp2|\nNIL\nT\nT");
 	}
 
 	@Test
@@ -12548,7 +12580,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (symbol-name 'foo)) (print (symbol-name :bar))"
 				+ "(print (symbol-name (gensym))) (print (symbol-name nil))"
 				+ "(print (funcall #'symbol-name 'xyz)) (print (mapcar #'symbol-name '(a b)))"))
-			.isEqualTo("\"FOO\"\n\"BAR\"\n\"g1\"\n\"NIL\"\n\"XYZ\"\n(\"A\" \"B\")");
+			.isEqualTo("\"FOO\"\n\"BAR\"\n\"G1\"\n\"NIL\"\n\"XYZ\"\n(\"A\" \"B\")");
 	}
 
 	@Test

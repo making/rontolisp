@@ -31,7 +31,7 @@ final class WasmGensymCompiler {
 					ctx);
 			return;
 		}
-		String prefix = args.size() == 2 ? ((LispString) args.get(1)).value() : "g";
+		String prefix = args.size() == 2 ? ((LispString) args.get(1)).value() : "G";
 		WasmLispCompiler.StringTable.StringEntry entry = ctx.stringTable.addString("#:" + prefix);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(entry.offset());

@@ -82,7 +82,7 @@ Confirmed facts that make A2 low-risk (from the 2026-07-20 seam-mapping sweep):
   Split them (current `foldRuntimeSymbolName` folded both — delete it).
 - **`gensym` prefix uppercase `G`** (CL). `symbol-name` of a standard symbol is now
   `"CAR"` (CL-correct); a user symbol stays `"FOO"`. Ours still spells `g`, which is
-  observable rather than cosmetic; split out as `.todo/634`.
+  observable rather than cosmetic; split out as `.todo/640`.
 - **`HttpPlistShape` forced-upcase STAYS** — it is a host-ABI bridge (lowercase WIT
   field → uppercase keyword), NOT fold compensation. Deleting it would emit
   lowercase keys the reader never produces. Only reword its comment. Same for the

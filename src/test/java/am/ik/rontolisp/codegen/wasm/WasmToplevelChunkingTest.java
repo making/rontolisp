@@ -79,6 +79,37 @@ class WasmToplevelChunkingTest {
 			.isLessThanOrEqualTo(MAX_FUNCTION_BODY_BYTES);
 	}
 
+	/**
+	 * A program with a few thousand callables, every one of them reachable as a function
+	 * VALUE, plus the {@code apply} that makes the spread dispatcher real.
+	 */
+	private static String manyCallables() {
+		StringBuilder sb = new StringBuilder("(defvar *fs* nil)\n");
+		for (int i = 0; i < 3000; i++) {
+			sb.append("(defun f%d (a b c) (+ a b c %d))\n".formatted(i, i));
+			sb.append("(setq *fs* (cons #'f%d *fs*))\n".formatted(i));
+		}
+		sb.append("(print (apply (car *fs*) (list 1 2 3)))\n");
+		return sb.toString();
+	}
+
+	@Test
+	void theDispatchLadderIsNotEmittedAsOneFunctionBody() {
+		// The SPREAD dispatcher (_apply's) is one br_table case per callable in the
+		// whole program -- ~110 bytes each, since a case walks its target's required
+		// parameters out of the argument list -- so it grows with the program's
+		// function count and with nothing a test author can see. Emitted as ONE body
+		// this program's is 417,675 bytes; the ci-spec corpus reached 258 KB of it
+		// against this same bound while every other body in the module was under 75 KB,
+		// which left three callables of headroom for whoever added the next case.
+		int largest = WasmModuleInspector.largestFunctionBodySize(compile(manyCallables()));
+
+		assertThat(largest)
+			.as("largest emitted function body of a program with 3000 callables; a dispatch "
+					+ "ladder emitted as one body grows with the program's function count")
+			.isLessThanOrEqualTo(MAX_FUNCTION_BODY_BYTES);
+	}
+
 	@Test
 	void aLongAsyncToplevelIsNotEmittedAsOneFunctionBody() {
 		// One top-level await puts the WHOLE top level on the async resume path, which

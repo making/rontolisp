@@ -35,9 +35,13 @@ module is byte-for-byte equivalent in behaviour (identical 1405 lines of output 
 all four backends) and costs 7x less memory and 20x less time to compile.
 
 Pinned by `WasmToplevelChunkingTest` (bound: 256 KiB) -- one case per top-level shape,
-synchronous and async -- and guarded before the fact by
+synchronous and async, plus one for the dispatch ladder -- and guarded before the fact by
 `CiSpecE2eTest.wasmCompileMemoryGuard`, which refuses to launch wasmtime on a module
 over that bound.
+
+**Two bodies grow with the program, not one.** The top level is the obvious one; the
+other is the DISPATCH LADDER, and it grows with the program's function COUNT rather than
+its length, which is why it was found the hard way (below).
 
 **The guard must measure the `--component` build too, separately.** A component is not
 the Preview 1 module plus a wrapper: an async top level compiles as an entry+resume
@@ -136,6 +140,46 @@ Why the pieces are where they are:
   what `_start` itself uses, so a chunk's body is byte-identical to the run it was cut
   from. The async path passes its run's set for the same reason (above).
 
+## How the dispatch ladder is kept bounded
+
+The other body that grows with the program is the SPREAD dispatcher
+(`WasmRuntimeBuilder.buildDispatch(..., spread = true, ...)`), the one `_apply` calls: a
+`br_table` over EVERY callable in the program with one case body each -- ~110 bytes, and
+~410 at its widest, since a spread case walks its target's required parameters out of the
+argument list. On 2026-09-02 the `ci-spec.yaml` corpus (about 3000 callables) stood at
+**261,821 bytes of it against the 262,144 bound: three callables of headroom**, while the
+next largest body in the module was a 72 KB user function. It grows with nothing a test
+author can see, so the failure it produces names a body bound nobody changed -- which is
+what `.todo/630` hit and worked around by rewriting its one new case with macros.
+
+Past `WasmRuntimeBuilder.DISPATCH_PAGE_BUDGET_BYTES` (64 KiB) the ladder is emitted as a
+TREE instead of one body: the fixed-index dispatcher reads the TOP 8-bit digit of the
+funcId and calls a page, which reads the next digit, down to a leaf holding the ~256 cases
+of one funcId page. Every node is bounded by the radix, so **the emitted body no longer
+depends on how many functions the program has** -- one extra call per level buys it, and
+only for a program that was near the bound anyway. Measured on the corpus that same day:
+the spread dispatcher went from 258,887 bytes to a 236-byte root plus twelve pages of
+15-26 KB, and the module's largest body from 258,887 to 68,677 (Preview 1) / 262,109 to
+72,868 (`--component`) -- in both builds the largest is now a top-level chunk, i.e. the
+size-bounded thing.
+
+Three properties the shape depends on:
+
+- **The pages are appended after EVERY other function**, so no existing index moves and a
+  program that needs none is byte-for-byte what it was. Their count cannot be known where
+  `userFuncBase()` is fixed -- lambdas and top-level chunks are still being registered
+  then -- which is why they go at the end rather than into a conditional block like the
+  extra arity dispatchers (`.kb/wasm-callable-arity.md`).
+- **A page's signature is the dispatcher's own**, so no module gains a type entry: the
+  page re-reads the funcId off the closure in local 0 rather than taking it as a
+  parameter. That works because the root has already normalised a SYMBOL designator into
+  a synthesized closure and handed an interpreted one (`funcId == -1`) to `_apply`.
+- **The gate is the emitted body's SIZE, not the callable count.** Every dispatcher under
+  the budget is emitted exactly as it was before paging existed, so the arity ladders --
+  which are on the `funcall`/`mapcar`/`sort` hot path, and which the corpus keeps at
+  16-43 KB by splitting its callables across eleven arities -- stay one call deep. A
+  ladder is paged only when its own body says it must be.
+
 ## Re-evaluation trigger
 
 Raise the 256 KiB bound only with fresh cold-cache measurements on the smallest CI
@@ -147,7 +191,8 @@ the async top level failed: *is the piece it cuts bounded in BYTES, or only by w
 some syntactic marker happens to fall?* An await, a `handler-case`, a `tagbody` tag are
 all syntactic markers, and none of them bound anything.
 
-Chunking bounds the TOP LEVEL, which is the body that grows with program length. One
+Chunking bounds the TOP LEVEL and paging bounds the DISPATCH LADDER, which are the two
+bodies that grow with the program. One
 enormous user `defun` is still one function and still pays the superlinear cost --
 there is no way to outline it without changing what the user wrote. If that ever
 becomes a real limit, the measurements above are what to reason from.
