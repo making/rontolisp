@@ -1588,6 +1588,7 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx);
 				case LispNames.ARRAY_DISP_TARGET -> WasmArrayCompiler.compileDispTarget(cons, ctx);
 				case LispNames.ARRAY_DISP_OFFSET -> WasmArrayCompiler.compileDispOffset(cons, ctx);
+				case LispNames.ARRAY_UNDISPLACE -> WasmArrayCompiler.compileArrayUndisplace(cons, ctx);
 				case LispNames.COERCE -> {
 					// A packed (unsigned-byte 8|16|32) result type lowers through the
 					// shared %seq-int-vector helper, exactly as concatenate's does;

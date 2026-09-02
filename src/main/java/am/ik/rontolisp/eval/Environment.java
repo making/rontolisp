@@ -1362,9 +1362,6 @@ public final class Environment implements Scope {
 				if (strDims.length != 1) {
 					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": a string is rank 1");
 				}
-				if (str.displacedTo() != null) {
-					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": displaced arrays are not supported");
-				}
 				str.adjustCapacity(strDims[0], requireChar(LispNames.ADJUST_ARRAY, init).codePoint());
 				return str;
 			}
@@ -1459,9 +1456,13 @@ public final class Environment implements Scope {
 	// it) or return the fresh copy. Matches LispMacroExpander.expandAdjustArray on the
 	// compile path.
 	private static LispVal adjustArray(LispArray array, int[] newDims, LispVal init, @Nullable LispVal fillPointerArg) {
-		if (array.displacedTo() != null) {
-			throw new LispEvalException(LispNames.ADJUST_ARRAY + ": displaced arrays are not supported");
-		}
+		// A displaced argument un-displaces first (SBCL 2.2.9): its current view
+		// contents become its own storage and the displacement drops, in place, before
+		// the rest of the adjustment runs -- matches the compile path's expansion,
+		// which calls %array-undisplace unconditionally too, and is what lets the
+		// :adjustable branch's become() below (which replaces dims/data/fillPointer but
+		// not displacedTo/Offset) leave the adjusted array in a consistent state.
+		array.undisplace();
 		int[] oldDims = array.dimensions();
 		if (newDims.length != oldDims.length) {
 			throw new LispEvalException(LispNames.ADJUST_ARRAY + ": rank mismatch");

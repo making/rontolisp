@@ -4522,6 +4522,31 @@ cases:
       ("bc" 2 2 T)
       ("bcZ" "abcZef")
       ("bcZYX" "abcZYf" T NIL 5 8)
+  - name: adjust-array-undisplaces-cross-backend
+    source: |
+      (defun ci-adjust-array-undisplaces ()
+        ;; adjust-array on a displaced argument un-displaces it first (SBCL 2.2.9): an
+        ;; :adjustable view is adjusted IN PLACE (eq), keeps the elements at the
+        ;; subscripts valid in both shapes, and comes back un-displaced.
+        (let* ((b (make-array 6 :initial-contents (list 10 20 30 40 50 60)))
+               (v (make-array 4 :displaced-to b :displaced-index-offset 1 :adjustable t)))
+          (print (list (eq (adjust-array v 3) v) v b (array-displacement v))))
+        ;; A NON-adjustable displaced argument answers a fresh array instead, by the
+        ;; same rule every other non-adjustable adjust-array argument follows.
+        (let* ((b (make-array 6 :initial-contents (list 10 20 30 40 50 60)))
+               (v (make-array 4 :displaced-to b :displaced-index-offset 1)))
+          (let ((r (adjust-array v 3)))
+            (print (list (eq r v) r v (array-displacement v) (array-displacement r)))))
+        ;; A displaced STRING view stays a string across the un-displace.
+        (let* ((s (copy-seq "abcdef"))
+               (v (make-array 4 :element-type 'character :displaced-to s
+                                :displaced-index-offset 1 :adjustable t)))
+          (print (list (adjust-array v 3) (stringp v) (array-displacement v)))))
+      (ci-adjust-array-undisplaces)
+    expected: |
+      (T #(20 30 40) #(10 20 30 40 50 60) NIL)
+      (NIL #(20 30 40) #(20 30 40 50) NIL NIL)
+      ("bcd" T NIL)
   - name: mutable-strings-cross-backend
     source: |
       (defun ci-mutable-strings ()
