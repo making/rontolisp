@@ -161,8 +161,9 @@ the rest as in the file), per training step:
 `--blas` changes nothing because every product here is the stacked rank-3 one, which
 `--blas` does not take; `--parallel` halves the CPU step because that product is what it
 splits, and adds nothing to a `--gpu` run, where the device takes it first. On an Apple M4
-Max the same program runs at 0.104 s a step under `--gpu --simd` against 0.70 under
-`--simd` ([the guide's Apple section](../../doc/en/guides/gpu-acceleration.md#on-apple-silicon)).
+Max the same program runs at 0.041 s a step under `--gpu --simd` against 0.70 under
+`--simd` -- 0.083 until 2026-09-02, when a Metal call stopped waiting for its command
+buffer ([the guide's Apple section](../../doc/en/guides/gpu-acceleration.md#on-apple-silicon)).
 The interpreter shows no change from `--gpu` at any of these shapes: its step is 30x a
 compiled one, and what dominates it is the tree walk, not the kernels -- compile before
 you measure a flag.
@@ -238,12 +239,14 @@ fills is gigabytes of pages the device has never touched, and `-Xmn4g` at the no
 width is **57% slower** than setting nothing at all. So hand-size a young generation only
 where the program fills it, and otherwise leave the collector alone -- at the notebook's
 width, where the budget is never reached and no collection is ever asked for, none of this
-applies. **Nor does any of it on an Apple GPU**, where results do not stay on the device
-at all, so the request is never made at either shape, and the buffers the device reads are
-the same unified memory the heap is written into -- there is no page the device has not
-touched. Every flag above is within 1.5% of leaving the collector alone at the notebook's
-width there, and at the book's shapes `-XX:+UseParallelGC -Xmn8g` is 13% SLOWER than
-leaving it alone. On a Mac, set `-Xmx` and stop. That is why chapter 2 above is run under different flags from chapter 3: it
+applies. **On an Apple GPU the request is made too (since 2026-09-02, when results started
+staying on the device there), and the answer is still to leave the collector alone**: the
+buffers the device reads are the same unified memory the heap is written into, so there is
+no page the device has not touched; the default collector answers the request in a few
+milliseconds and is the fastest row or tied at the book's shapes, `-XX:+DisableExplicitGC`
+costs 4-10% there, `-XX:+UseParallelGC -Xmn8g` up to 15%, and every row is within 1.5% at
+the notebook's width. On a Mac, set `-Xmx` -- no larger than the program needs, since it
+also bounds the device's results -- and stop. That is why chapter 2 above is run under different flags from chapter 3: it
 allocates less a batch and never fills an 8 GB young generation, so the concurrent answer
 wins there -- by 5% over 2 epochs and 4% over the full 20 (89.4 min against 92.9), with
 byte-identical output either way. `.kb/gpu.md` has the logs.

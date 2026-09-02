@@ -908,7 +908,7 @@ class JvmLinalgGpuAccelCompilerTest {
 	@Test
 	@EnabledIf("aDeviceIsAvailable")
 	void aLazyResultAllocatesNoHostArrayOnTheCompiledBackend() throws Exception {
-		assumeTrue(am.ik.gpu.GpuThresholds.lazyResultsPay(), "lazy results pay on this backend (CUDA, not Metal)");
+		assumeTrue(am.ik.gpu.GpuThresholds.lazyResultsPay(), "lazy results pay on this backend");
 		int side = 2048;
 		int n = side * side;
 		String program = """

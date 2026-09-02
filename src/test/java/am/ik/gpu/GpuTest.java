@@ -1470,7 +1470,8 @@ class GpuTest {
 		DeviceResidency residency = Gpu.residency();
 		assumeTrue(residency != null, "lazy results are the CUDA backend's");
 		// And the mode PAYS here -- measured, a fifth off the training step -- which is
-		// what makes it the interceptors' mode on this backend (not on Metal).
+		// what makes it the interceptors' mode on this backend (and, since todo-495, on
+		// Metal).
 		assertThat(java.util.Objects.requireNonNull(Gpu.device()).lazyResultsPay()).isTrue();
 		Gpu.releaseResident();
 		int n = 1 << 18;
@@ -1633,10 +1634,13 @@ class GpuTest {
 			// The result array handed over is the header alone; the library takes it,
 			// allocates nothing on the host, and keeps the elements on the device.
 			double[] c = stub(512, 512);
-			int backed = residency.backingCount();
+			// The per-handle predicate, not a backingCount() diff: the tally is shared
+			// with every other test in the fork and moves whenever the collector
+			// reaches an unrelated one's now-dead entry, which has nothing to do with
+			// whether THIS stub has a backing (`.kb/test-execution.md`).
 			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 3, n)).isTrue();
 			assertThat(c).hasSize(3);
-			assertThat(residency.backingCount()).isEqualTo(backed);
+			assertThat(residency.backed(c)).as("no backing allocated yet").isFalse();
 			assertThat(residency.dirtyCount()).isEqualTo(1);
 			assertThat(Gpu.resident(c)).isTrue();
 			// A stub is a full operand to the next member -- its extent is the span it
@@ -1646,7 +1650,8 @@ class GpuTest {
 			assertThat(Gpu.map(Gpu.MAP_LOG, c, 3, e, 3, n)).isTrue();
 			assertThat(residency.hits()).isEqualTo(hits + 1);
 			assertThat(residency.dirtyCount()).isEqualTo(2);
-			assertThat(residency.backingCount()).isEqualTo(backed);
+			assertThat(residency.backed(c)).as("still no backing for c").isFalse();
+			assertThat(residency.backed(e)).as("no backing for e yet").isFalse();
 			// The first host read allocates the BACKING -- the full span, the stub's
 			// own prefix copied in -- and downloads into it; the stub itself stays what
 			// it was, and is what the program keeps holding.
@@ -1662,7 +1667,8 @@ class GpuTest {
 			}
 			assertThat(e).hasSize(3);
 			assertThat(residency.dirtyCount()).isEqualTo(1);
-			assertThat(residency.backingCount()).isEqualTo(backed + 1);
+			assertThat(residency.backed(e)).as("e now has a backing").isTrue();
+			assertThat(residency.backed(c)).as("c still has none").isFalse();
 			// Every later read answers the same backing, and an ordinary array answers
 			// itself.
 			assertThat(Gpu.materialize(e)).isSameAs(backing);
@@ -1764,9 +1770,10 @@ class GpuTest {
 				assertThat(((double[]) Gpu.materialize(c))[3 + 777]).isCloseTo(Math.exp(a[777]), within(1e-12));
 			}
 			double[] eager = stub(512, 512);
-			int backed = residency.backingCount();
 			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, eager, 3, n)).isTrue();
-			assertThat(residency.backingCount()).isEqualTo(backed + 1);
+			// Per-handle, not a backingCount() diff (`.kb/test-execution.md`): eager's
+			// own entry is what an EAGER stub call must have filled before it returns.
+			assertThat(residency.backed(eager)).as("eager was filled before the call returned").isTrue();
 			assertThat(residency.dirtyCount()).isZero();
 			assertThat(((double[]) Gpu.materialize(eager))[3 + 777]).isCloseTo(Math.exp(a[777]), within(1e-12));
 			// A result array that is neither full nor exactly the prefix is a caller's

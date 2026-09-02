@@ -22,8 +22,9 @@ What the machine shows while it hangs:
 
 Where to start: which test METHOD is in flight when it stops (`kill -3` the fork and read
 the dump, or run the methods one at a time), then whether the wait is a Metal command
-buffer that never completes (`.kb/gpu.md`'s asynchronous-command-buffer work is
-`.todo/495`) or a latch in the test's own harness. Whatever the cause, the class wants a
+buffer that never completes (`.kb/gpu.md`, "Asynchronous command buffers on Metal" --
+landed 2026-09-02 as todo-495, since when a lazy fence is the wait such a buffer would
+hang) or a latch in the test's own harness. Whatever the cause, the class wants a
 `@Timeout` so a full `./mvnw test` fails in minutes with a stack instead of hanging.
 
 Not caused by the `objc:`/`appkit:` work of 2026-08-25: `am.ik.gpu`'s `MetalDriver` is its

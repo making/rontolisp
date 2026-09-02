@@ -12,6 +12,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 /**
@@ -47,9 +48,10 @@ import static org.assertj.core.api.Assertions.within;
  * the budget bounding it, a write invalidating it and a collected array freeing it. (6)
  * Lazily ({@code .todo/494}) a result stays in its slab until the host reads it, the
  * resident tier runs over it, and the members whose CPU twin computes in double land on
- * its bits through software binary64 -- the one claim no other backend has to make --
- * while the interceptors' own request leaves this backend eager, because the mode was
- * measured not to pay here.
+ * its bits through software binary64 -- the one claim no other backend has to make -- and
+ * -- since todo-495 -- a call under the mode commits its command buffer and returns, the
+ * wait moving to the first host touch, which is what made the mode the interceptors' own
+ * here too.
  */
 @EnabledIf("am.ik.gpu.MetalGpuTest#aMetalGpuIsAvailable")
 class MetalGpuTest {
@@ -60,6 +62,16 @@ class MetalGpuTest {
 
 	private static MetalGemm device() {
 		return (MetalGemm) java.util.Objects.requireNonNull(Gpu.device());
+	}
+
+	/**
+	 * Every test that does not switch lazy results on itself runs under the library's
+	 * EAGER contract; an interceptor test that ran earlier in this fork may have switched
+	 * lazy results on for the process, so each test starts from the default.
+	 */
+	@org.junit.jupiter.api.BeforeEach
+	void eagerResults() {
+		Gpu.lazyResults(false);
 	}
 
 	/**
@@ -750,7 +762,7 @@ class MetalGpuTest {
 	// measurement: with every result coming home, a slab held out of the pool costs the
 	// pool a fresh one, so keeping every operand and result resident was slower than the
 	// pure pool at every cap. Lazily the set holds every operand and result, which the
-	// lazy-results tests above pin. These pin the eager decision and the three properties
+	// lazy-results tests above pin. These pin the eager rule and the three properties
 	// of the set that is kept: the budget bounds it and a release gives the slabs back to
 	// the pool, a collected array frees its copy, and nothing but a GEMV matrix ever
 	// enters it.
@@ -858,9 +870,10 @@ class MetalGpuTest {
 	}
 
 	// --- lazy results and the resident tier, on Metal (2026-08-23, todo-494) ----------
-	// The Apple half of .todo/491, built, measured, and NOT switched on for the
-	// interceptors (.kb/gpu.md, "Lazy results and the resident tier on Metal"): asked
-	// for,
+	// The Apple half of .todo/491, built, measured, NOT switched on for the interceptors
+	// until todo-495 made the command buffers asynchronous under it (.kb/gpu.md, "Lazy
+	// results and the resident tier on Metal", then "Asynchronous command buffers on
+	// Metal"): asked for,
 	// a member's result stays in its slab as the host array's DIRTY copy until the host
 	// first reads it, every operand a call uploads is kept as a clean one, and the
 	// members
@@ -874,25 +887,24 @@ class MetalGpuTest {
 
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
-	void theInterceptorsRequestLeavesResultsEagerHereAndAnEmbeddersDoesNot() {
-		// The decision of the round, pinned: lazy results do not pay on this backend
-		// (a tie at the notebook's shapes, a loss at the book's -- .kb/gpu.md), so the
-		// request the interceptors make leaves every result coming home, while the
-		// unconditional request an embedder (or a test) makes is honoured.
+	void theInterceptorsRequestSwitchesLazyResultsOnHereAndTheDefaultStaysEager() {
+		// The decision of todo-494, reversed by todo-495 and pinned: lazy results pay on
+		// this backend now that a call under the mode does not wait for its command
+		// buffer (.kb/gpu.md, "Asynchronous command buffers on Metal"), so the request
+		// the interceptors make switches the mode on -- while the library's default,
+		// and the contract every method's javadoc states, is still eager.
 		MetalGemm gemm = device();
 		Gpu.releaseResident();
-		assertThat(gemm.lazyResultsPay()).isFalse();
-		assertThat(gemm.lazyResultsOn()).isFalse();
-		Gpu.lazyResultsIfWorthwhile();
+		assertThat(gemm.lazyResultsPay()).isTrue();
 		assertThat(gemm.lazyResultsOn()).isFalse();
 		int n = (int) Gpu.mapMinElements() * 2;
 		float[] a = new float[n], c = new float[n];
 		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
 		assertThat(c[7]).as("eager: the result is in its array when the call returns").isEqualTo(1.0f);
 		assertThat(Gpu.resident(c)).isFalse();
-		Gpu.lazyResults(true);
+		Gpu.lazyResultsIfWorthwhile();
 		try {
-			assertThat(gemm.lazyResultsOn()).isTrue();
+			assertThat(gemm.lazyResultsOn()).as("the interceptors' request is honoured here").isTrue();
 			float[] d = new float[n];
 			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, d, 0, n)).isTrue();
 			assertThat(d[7]).as("lazy: the result stays on the device").isZero();
@@ -1815,6 +1827,142 @@ class MetalGpuTest {
 			case Gpu.BIN_EQ -> x == y ? 1.0f : 0.0f;
 			default -> throw new IllegalArgumentException("op " + op);
 		};
+	}
+
+	// --- asynchronous command buffers (todo-495) ---------------------------------------
+
+	/**
+	 * A chain over resident operands, lazily: every call returns with its command buffer
+	 * still in flight, the host reads the last result and gets the device's bytes, and
+	 * that read is what retires the line.
+	 */
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aLazyChainRunsWithItsCommandBuffersInFlightAndTheFirstReadRetiresThem() {
+		MetalGemm gemm = device();
+		Gpu.releaseResident();
+		int n = 1 << 22;
+		float[] a = new float[n], b = new float[n];
+		for (int i = 0; i < n; i++) {
+			// Multiples of a quarter, so that every sum and difference below is EXACT and
+			// the chain lands back on a.
+			a[i] = (i % 97) / 4.0f;
+			b[i] = 1.0f + (i % 13) / 2.0f;
+		}
+		Gpu.lazyResults(true);
+		try {
+			makeResident(a);
+			makeResident(b);
+			float[] previous = a;
+			float[] result = a;
+			int links = 24;
+			for (int k = 0; k < links; k++) {
+				result = new float[n];
+				assertThat(Gpu.zip(k % 2 == 0 ? Gpu.BIN_ADD : Gpu.BIN_SUB, previous, 0, b, 0, result, 0, n)).isTrue();
+				previous = result;
+			}
+			// The device is at least a memory pass behind the host's encoding: some of
+			// the chain is still running when the last call returns.
+			assertThat(gemm.inflightCount()).as("command buffers in flight after the chain").isPositive();
+			Gpu.materialize(result);
+			assertThat(gemm.inflightCount()).as("the read waits for the writer, and one queue is in order").isZero();
+			for (int i = 0; i < n; i += 4099) {
+				// links even: ((a + b) - b) ... = a exactly, every step exact at these
+				// values
+				assertThat(result[i]).as("chain at %d", i).isEqualTo(a[i]);
+			}
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	/**
+	 * The ordering the residency design exists to forbid: a slab recycled under a launch
+	 * that still reads it. Lazily a launch's operand slab goes back to the pool the
+	 * moment the host writes the array ({@code written}) and the next call's upload would
+	 * take it -- so that upload waits for the launch, and the result of the launch is
+	 * computed from the bytes it was given.
+	 */
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void anOperandSlabRecycledUnderALaunchIsNotUploadedIntoUntilTheLaunchIsDone() {
+		Gpu.releaseResident();
+		int n = 1 << 23;
+		float[] a = new float[n], b = new float[n], r = new float[n], s = new float[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = (i % 101) / 100.0f;
+			b[i] = -(i % 7) / 10.0f;
+		}
+		Gpu.lazyResults(true);
+		try {
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, r, 0, n)).isTrue();
+			assertThat(Gpu.resident(a)).isTrue();
+			// The host writes a: its clean copy is dropped and its slab is the next one
+			// the pool hands out, while the launch that reads it is still in flight.
+			Gpu.written(a);
+			assertThat(Gpu.resident(a)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, b, 0, s, 0, n)).isTrue();
+			Gpu.materialize(r);
+			Gpu.materialize(s);
+			for (int i = 0; i < n; i += 4099) {
+				// The device's exp is its own libm: a last-ulp neighbour of Java's, never
+				// exp of the OTHER array's element.
+				assertThat(r[i]).as("exp(a[%d])", i).isCloseTo((float) Math.exp(a[i]), within(1e-6f));
+				assertThat(s[i]).as("exp(b[%d])", i).isCloseTo((float) Math.exp(b[i]), within(1e-6f));
+			}
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	/**
+	 * A command buffer that fails AFTER its call answered {@code true}: the result it
+	 * wrote, and every result of a later launch that read it, is lost and the first host
+	 * read of either throws; a result the failed buffer only READ is intact, and so is
+	 * everything computed after it from intact operands. Switching the mode off lets the
+	 * lost results go without throwing -- they surface at their read, if ever.
+	 */
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aFailedCommandBufferSurfacesAtTheFirstHostReadOfWhatItWrote() {
+		MetalGemm gemm = device();
+		Gpu.releaseResident();
+		int n = (int) Gpu.mapMinElements() * 2;
+		float[] a = new float[n], r1 = new float[n], r2 = new float[n], r3 = new float[n], r4 = new float[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = 1.0f + (i % 31) / 100.0f;
+		}
+		Gpu.lazyResults(true);
+		try {
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, r1, 0, n)).isTrue();
+			gemm.failNextCommandBuffer();
+			assertThat(Gpu.map(Gpu.MAP_LOG, r1, 0, r2, 0, n)).as("answered before the failure is known").isTrue();
+			assertThat(Gpu.map(Gpu.MAP_SQRT, r2, 0, r3, 0, n)).as("a chain over the lost result").isTrue();
+			assertThat(Gpu.map(Gpu.MAP_LOG, a, 0, r4, 0, n)).as("an unrelated launch after it").isTrue();
+			Gpu.materialize(r1);
+			assertThat(r1[17]).isCloseTo((float) Math.exp(a[17]), within(1e-5f));
+			assertThatThrownBy(() -> Gpu.materialize(r2)).isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("failed");
+			assertThatThrownBy(() -> Gpu.materialize(r3)).isInstanceOf(IllegalStateException.class);
+			Gpu.materialize(r4);
+			assertThat(r4[17]).isCloseTo((float) Math.log(a[17]), within(1e-6f));
+			Gpu.lazyResults(false);
+			assertThatThrownBy(() -> Gpu.materialize(r2)).as("lost for good, mode or no mode")
+				.isInstanceOf(IllegalStateException.class);
+			// The line is empty and the device is as usable as before.
+			assertThat(gemm.inflightCount()).isZero();
+			float[] r5 = new float[n];
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, r5, 0, n)).isTrue();
+			assertThat(r5[17]).isCloseTo((float) Math.exp(a[17]), within(1e-5f));
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
 	}
 
 }

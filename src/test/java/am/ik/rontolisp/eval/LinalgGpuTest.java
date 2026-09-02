@@ -223,7 +223,7 @@ class LinalgGpuTest {
 	// --- the fused tier (.todo/499) --------------------------------------------------
 
 	/** Rows enough for the fold rule and the fold threshold at a 384-wide row. */
-	private static final int FUSED_ROWS = (int) Math.max(256, (am.ik.gpu.GpuThresholds.foldMinElements() + 383) / 384);
+	private static final int FUSED_ROWS = (int) Math.max(256, (am.ik.gpu.GpuThresholds.fusedMinElements() + 383) / 384);
 
 	/**
 	 * The fused tier's operands: two inexact {@code FUSED_ROWS x 384} arrays, and a
@@ -295,11 +295,13 @@ class LinalgGpuTest {
 			// exp(out) * sum(g) it subtracts g from is about 1.0 where the largest
 			// element of the answer is 0.0176, a 57x cancellation, so a last-ulp
 			// difference in exp or log shows as 8.2e-5 of the answer's own scale at #f
-			// (measured). It is pinned as a fraction of the largest element, loosely.
+			// on CUDA and 2.2e-4 on Metal, whose exp is its own (measured, at the fused
+			// threshold's rows on each). It is pinned as a fraction of the largest
+			// element, loosely.
 			String grad = "(linalg::%la-log-softmax-grad *g* (linalg:log-softmax *x* :axis -1) 1)";
 			assertThat(divergence(elements(eval(operands + grad, true)), elements(eval(operands + grad, false))))
 				.as("log-softmax grad" + option)
-				.isLessThan(option.isEmpty() ? 1e-12 : 2e-4);
+				.isLessThan(option.isEmpty() ? 1e-12 : 5e-4);
 			for (String call : new String[] { "(linalg::%la-gelu *x*)", "(linalg::%la-gelu-grad *g* *x* nil)",
 					"(linalg::%la-gelu-grad *g* *x* *g*)" }) {
 				assertThat(divergence(elements(eval(operands + call, true)), elements(eval(operands + call, false))))
@@ -318,12 +320,14 @@ class LinalgGpuTest {
 		String operands = fusedOperands(" :element-type 'single-float");
 		long hits = am.ik.gpu.GpuThresholds.residencyHits();
 		eval(operands + "(linalg::%la-layer-norm-grad *g* (linalg::%la-layer-norm *x* 1.0e-5) 1.0e-5 nil)", true);
-		// Guarded like the resident and index tiers above, and for the same measured
-		// reason: on a backend where lazy results do not pay (Metal) a member's result
-		// comes home when the call returns, so nothing but a GEMV matrix is ever
-		// resident and the adjoint's operand is uploaded rather than found. The tier
-		// still RAN there -- the divergence assertions in the test above are what say
-		// so, and they are the ones that fail if it silently stopped running.
+		// Guarded like the resident and index tiers above: eagerly (the mode an embedder
+		// gets by default) a member's result comes home when the call returns, so nothing
+		// but a GEMV matrix is ever resident and the adjoint's operand is uploaded rather
+		// than found. Both backends run lazily here since todo-495, and the operands are
+		// sized off the FUSED threshold in force, which on Metal is the map threshold
+		// rather than the fold threshold the CUDA half shares -- sized off the latter the
+		// forward declined there and this counted nothing. The divergence assertions in
+		// the test above are what say the tier ran, whichever mode.
 		if (am.ik.gpu.GpuThresholds.lazyResultsOn()) {
 			assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits);
 		}
@@ -1205,7 +1209,8 @@ class LinalgGpuTest {
 
 	@Test
 	void aDeviceResultStaysOnTheDeviceUntilTheHostFirstReadsIt() {
-		assumeThat(am.ik.gpu.GpuThresholds.lazyResultsOn()).as("lazy results pay on this backend (CUDA, not Metal)")
+		assumeThat(am.ik.gpu.GpuThresholds.lazyResultsOn())
+			.as("lazy results pay on this backend (CUDA, and Metal since todo-495)")
 			.isTrue();
 		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
 		String program = """
@@ -1213,36 +1218,31 @@ class LinalgGpuTest {
 				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
 				(linalg:add *a* *row*)
 				""".formatted(side * side + 1, option(), side, side, side + 1, option(), side);
-		// The two counters are LIVE-SET sizes over weak keys: an entry left dirty by an
-		// earlier test in this fork disappears from the count whenever the collector
-		// reaches it, which -- inside the window measured below -- reads as the result
-		// not having been left on the device. So the set is quiesced first: collect, then
-		// expunge the cleared keys (backingCount does that), and only then snapshot.
-		System.gc();
-		am.ik.gpu.GpuThresholds.backingCount();
-		int dirty = am.ik.gpu.GpuThresholds.dirtyCount();
-		int backed = am.ik.gpu.GpuThresholds.backingCount();
 		LispVal result = eval(program, true);
 		// The value came back as a packed array whose storage the device still holds:
-		// one more dirty copy, and on the host a STUB -- no array of the result's size
-		// was allocated at all (.kb/gpu.md, "Lazy results, and the result that has no
-		// host array") ...
-		assertThat(am.ik.gpu.GpuThresholds.dirtyCount()).isEqualTo(dirty + 1);
-		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed);
+		// a dirty entry, and on the host a STUB -- no array of the result's size was
+		// allocated at all (.kb/gpu.md, "Lazy results, and the result that has no host
+		// array") ... Asked of the result's OWN handle, not the process-wide
+		// dirtyCount()/backingCount() tallies: those are live-set sizes shared by every
+		// test in the fork, and a diff around one call reads whatever an unrelated
+		// test's now-collected garbage does in the same window, not this call's own
+		// effect (`.kb/test-execution.md`).
 		Object storage = result instanceof LispSingleFloatArray f ? f.storage()
 				: ((LispDoubleFloatArray) result).storage();
+		assertThat(am.ik.gpu.GpuThresholds.isDirty(storage)).as("left dirty on the device").isTrue();
+		assertThat(am.ik.gpu.GpuThresholds.isBacked(storage)).as("no backing allocated yet").isFalse();
 		assertThat(storage instanceof float[] f ? f.length : ((double[]) storage).length).isZero();
 		assertThat(((am.ik.rontolisp.LispFloatArray) result).totalSize()).isEqualTo(side * side);
 		// ... until the first read through the accessor brings it home, once, into a
 		// backing the accessor answers; the record's storage stays the stub it keys on.
 		double[] elements = elements(result);
-		assertThat(am.ik.gpu.GpuThresholds.dirtyCount()).isEqualTo(dirty);
-		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed + 1);
+		assertThat(am.ik.gpu.GpuThresholds.isDirty(storage)).as("materialized on first read").isFalse();
+		assertThat(am.ik.gpu.GpuThresholds.isBacked(storage)).as("backing now exists").isTrue();
 		assertThat(elements[5]).isEqualTo(6 + 6);
 		assertThat(elements[side + 3]).isEqualTo(side + 4 + 4);
 		assertThat(elements(result)[5]).isEqualTo(12);
 		assertThat(storage instanceof float[] f ? f.length : ((double[]) storage).length).isZero();
-		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed + 1);
+		assertThat(am.ik.gpu.GpuThresholds.isBacked(storage)).as("still backed after a second read").isTrue();
 	}
 
 	/**
@@ -1300,10 +1300,10 @@ class LinalgGpuTest {
 		long hits = am.ik.gpu.GpuThresholds.residencyHits();
 		assertThat(output(program, true, false)).as("--gpu").isEqualTo(oracle);
 		// The dead-flag guard: every member above read a RESIDENT operand on the device,
-		// and the cache counted each as a hit. Thirty-odd members; the bound is loose. On
-		// a backend where lazy results do not pay (Metal, measured) nothing but a GEMV
-		// matrix is ever resident, the tier is never offered, and the program still
-		// prints the oracle -- which the assertion above has checked.
+		// and the cache counted each as a hit. Thirty-odd members; the bound is loose.
+		// Eagerly nothing but a GEMV matrix is ever resident, the tier is never offered,
+		// and the program still prints the oracle -- which the assertion above has
+		// checked; both backends run lazily here since todo-495.
 		if (am.ik.gpu.GpuThresholds.lazyResultsOn()) {
 			assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits + 20);
 		}
