@@ -58,10 +58,13 @@ import am.ik.wasm.Type;
  * {@code castCellGet0}, which traps on a non-cell.
  *
  * <p>
- * Everything is emitted inline (no runtime helper function); the packed types are the
- * only new heap types and they are added at the END of the type section, so the static
- * function-import indices stay identical across Preview 1 and {@code --component} modes
- * and the component blobs are unaffected.
+ * The allocation is emitted inline apart from the DIMENSION parse, which every shape
+ * shares and which is three callees in {@link WasmArrayRuntimeBuilder} --
+ * {@code _arr_dims}, {@code _arr_total} and {@code _arr_fp}; the rank-1 integer shorthand
+ * stays at the site, and only the list arm calls (`.kb/array-literals.md`). The packed
+ * types are the only new heap types and they are added at the END of the type section, so
+ * the static function-import indices stay identical across Preview 1 and
+ * {@code --component} modes and the component blobs are unaffected.
  */
 final class WasmArrayCompiler {
 
@@ -178,54 +181,9 @@ final class WasmArrayCompiler {
 		int fpValSlot = -1;
 		if (fpExpr != null) {
 			WasmExprCompiler.compileExpr(fpExpr, ctx);
-			int fpSlot = setTemp(ctx);
-			fpValSlot = ctx.allocTemp();
-			getLocal(ctx, fpSlot);
-			ctx.writer.write(Instruction.REF_IS_NULL);
-			ctx.writer.write(Instruction.IF, 0x40);
-			refNull(ctx);
-			setLocal(ctx, fpValSlot);
-			ctx.writer.write(Instruction.ELSE);
-			// a fill pointer requires a rank-1 array
-			getBuckets(ctx, dimsArrSlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-			i32Const(ctx, 1);
-			ctx.writer.write(Instruction.I32_NE);
-			ctx.writer.write(Instruction.IF, 0x40);
-			ctx.writer.write(Instruction.UNREACHABLE);
-			ctx.writer.write(Instruction.END);
-			getLocal(ctx, fpSlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-			ctx.writer.writeHeapType(Type.I31.code());
-			ctx.writer.write(Instruction.IF, 0x40);
-			// integer: 0 <= fp <= dims[0], else trap
-			getLocal(ctx, fpSlot);
-			WasmEmitHelper.castI31GetS(ctx);
-			i32Const(ctx, 0);
-			ctx.writer.write(Instruction.I32_LT_S);
-			ctx.writer.write(Instruction.IF, 0x40);
-			ctx.writer.write(Instruction.UNREACHABLE);
-			ctx.writer.write(Instruction.END);
-			getLocal(ctx, fpSlot);
-			WasmEmitHelper.castI31GetS(ctx);
-			getBuckets(ctx, dimsArrSlot);
-			i32Const(ctx, 0);
-			arrayGet(ctx);
-			WasmEmitHelper.castI31GetS(ctx);
-			ctx.writer.write(Instruction.I32_GT_S);
-			ctx.writer.write(Instruction.IF, 0x40);
-			ctx.writer.write(Instruction.UNREACHABLE);
-			ctx.writer.write(Instruction.END);
-			getLocal(ctx, fpSlot);
-			setLocal(ctx, fpValSlot);
-			ctx.writer.write(Instruction.ELSE);
-			// t: the vector size (dims[0] is already an i31)
-			getBuckets(ctx, dimsArrSlot);
-			i32Const(ctx, 0);
-			arrayGet(ctx);
-			setLocal(ctx, fpValSlot);
-			ctx.writer.write(Instruction.END);
-			ctx.writer.write(Instruction.END);
+			getLocal(ctx, dimsArrSlot);
+			callFixed(ctx, WasmLispCompiler.FUNC_ARR_FP);
+			fpValSlot = setTemp(ctx);
 		}
 		LispVal adjExpr = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
 		int adjValSlot = -1;
@@ -329,8 +287,7 @@ final class WasmArrayCompiler {
 		// targetTotal = product of the target's dims; trap unless
 		// 0 <= off and total + off <= targetTotal
 		int targetTotalSlot = ctx.allocTemp();
-		int mSlot = ctx.allocTemp();
-		emitTargetDimsProduct(ctx, targetSlot, targetTotalSlot, mSlot);
+		emitTargetDimsProduct(ctx, targetSlot, targetTotalSlot);
 		getLocal(ctx, offSlot);
 		WasmEmitHelper.castI31GetS(ctx);
 		i32Const(ctx, 0);
@@ -637,6 +594,11 @@ final class WasmArrayCompiler {
 	// Parses the make-array dimensions value in dimsSlot (an i31 for the rank-1
 	// shorthand, otherwise a cons list of sizes) into a fresh buckets array of i31 sizes
 	// (dimsArrSlot) and the boxed-i31 total element count (totalSlot).
+	//
+	// The i31 shorthand is spelled HERE because it is three instructions and the shape
+	// nearly every allocation writes; the list arm -- two walks over the list, ~200 bytes
+	// -- is the shared _arr_dims / _arr_total pair, so a rank-n site costs a pair of
+	// calls instead of the loops (.kb/array-literals.md).
 	private static void emitParseDims(WasmLispCompiler.Ctx ctx, int dimsSlot, int dimsArrSlot, int totalSlot) {
 		// if dims is an i31 (rank-1 shorthand: an integer) ...
 		getLocal(ctx, dimsSlot);
@@ -651,95 +613,25 @@ final class WasmArrayCompiler {
 		getLocal(ctx, dimsSlot);
 		setLocal(ctx, totalSlot);
 		ctx.writer.write(Instruction.ELSE);
-		// dims is a cons list of sizes (any rank): count its length, then copy the
-		// sizes into dimsArr while multiplying the total element count. cur walks the
-		// list; n, idx and total are kept boxed as i31 (temps are (ref null eq)).
-		int curSlot = ctx.allocTemp();
-		int nSlot = ctx.allocTemp();
-		int idxSlot = ctx.allocTemp();
-		// n = 0; cur = dims
-		i32Const(ctx, 0);
-		boxI31(ctx);
-		setLocal(ctx, nSlot);
+		// dims is a cons list of sizes (any rank): the shared parse, then its product.
 		getLocal(ctx, dimsSlot);
-		setLocal(ctx, curSlot);
-		ctx.writer.write(Instruction.BLOCK, 0x40);
-		ctx.writer.write(Instruction.LOOP, 0x40);
-		getLocal(ctx, curSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.I32_EQZ);
-		ctx.writer.write(Instruction.BR_IF, 1);
-		getLocal(ctx, nSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		i32Const(ctx, 1);
-		ctx.writer.write(Instruction.I32_ADD);
-		boxI31(ctx);
-		setLocal(ctx, nSlot);
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 1);
-		setLocal(ctx, curSlot);
-		ctx.writer.write(Instruction.BR, 0);
-		ctx.writer.write(Instruction.END); // loop
-		ctx.writer.write(Instruction.END); // block
-		// dimsArr = array.new buckets (null, n); total = 1; idx = 0; cur = dims
-		refNull(ctx);
-		getLocal(ctx, nSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		arrayNew(ctx);
+		callFixed(ctx, WasmLispCompiler.FUNC_ARR_DIMS);
 		setLocal(ctx, dimsArrSlot);
-		i32Const(ctx, 1);
-		boxI31(ctx);
+		getLocal(ctx, dimsArrSlot);
+		callFixed(ctx, WasmLispCompiler.FUNC_ARR_TOTAL);
 		setLocal(ctx, totalSlot);
-		i32Const(ctx, 0);
-		boxI31(ctx);
-		setLocal(ctx, idxSlot);
-		getLocal(ctx, dimsSlot);
-		setLocal(ctx, curSlot);
-		ctx.writer.write(Instruction.BLOCK, 0x40);
-		ctx.writer.write(Instruction.LOOP, 0x40);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		getLocal(ctx, nSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		ctx.writer.write(Instruction.I32_GE_S);
-		ctx.writer.write(Instruction.BR_IF, 1);
-		// dimsArr[idx] = car(cur)
-		getBuckets(ctx, dimsArrSlot);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 0);
-		arraySet(ctx);
-		// total = total * car(cur)
-		getLocal(ctx, totalSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 0);
-		WasmEmitHelper.castI31GetS(ctx);
-		ctx.writer.write(Instruction.I32_MUL);
-		boxI31(ctx);
-		setLocal(ctx, totalSlot);
-		// cur = cdr(cur); idx++
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 1);
-		setLocal(ctx, curSlot);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		i32Const(ctx, 1);
-		ctx.writer.write(Instruction.I32_ADD);
-		boxI31(ctx);
-		setLocal(ctx, idxSlot);
-		ctx.writer.write(Instruction.BR, 0);
-		ctx.writer.write(Instruction.END); // loop
-		ctx.writer.write(Instruction.END); // block
 		ctx.writer.write(Instruction.END); // end outer if
 	}
 
+	// call $_arr_dims / $_arr_total and the other fixed-index runtime helpers.
+	private static void callFixed(WasmLispCompiler.Ctx ctx, int func) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(func);
+	}
+
 	// Pushes nothing; stores the i31 product of the dims of the array cell in targetSlot
-	// into productSlot (mSlot is boxed-i31 scratch).
-	private static void emitTargetDimsProduct(WasmLispCompiler.Ctx ctx, int targetSlot, int productSlot, int mSlot) {
-		int dimsBucketsSlot = ctx.allocTemp();
+	// into productSlot.
+	private static void emitTargetDimsProduct(WasmLispCompiler.Ctx ctx, int targetSlot, int productSlot) {
 		// A STRING target has no dims header: its element count is its character count,
 		// and the view built over it is a string VIEW (the target decides the shape).
 		getLocal(ctx, targetSlot);
@@ -751,43 +643,13 @@ final class WasmArrayCompiler {
 		boxI31(ctx);
 		setLocal(ctx, productSlot);
 		ctx.writer.write(Instruction.ELSE);
+		// The product of the target's dims -- the same fold make-array sizes its data
+		// with, so it is the same callee.
 		getLocal(ctx, targetSlot);
 		castCellGet0(ctx);
 		castConsGet(ctx, 0);
-		setLocal(ctx, dimsBucketsSlot);
-		i32Const(ctx, 1);
-		boxI31(ctx);
+		callFixed(ctx, WasmLispCompiler.FUNC_ARR_TOTAL);
 		setLocal(ctx, productSlot);
-		i32Const(ctx, 0);
-		boxI31(ctx);
-		setLocal(ctx, mSlot);
-		ctx.writer.write(Instruction.BLOCK, 0x40);
-		ctx.writer.write(Instruction.LOOP, 0x40);
-		getLocal(ctx, mSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		getBuckets(ctx, dimsBucketsSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		ctx.writer.write(Instruction.I32_GE_S);
-		ctx.writer.write(Instruction.BR_IF, 1);
-		getLocal(ctx, productSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		getBuckets(ctx, dimsBucketsSlot);
-		getLocal(ctx, mSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		arrayGet(ctx);
-		WasmEmitHelper.castI31GetS(ctx);
-		ctx.writer.write(Instruction.I32_MUL);
-		boxI31(ctx);
-		setLocal(ctx, productSlot);
-		getLocal(ctx, mSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		i32Const(ctx, 1);
-		ctx.writer.write(Instruction.I32_ADD);
-		boxI31(ctx);
-		setLocal(ctx, mSlot);
-		ctx.writer.write(Instruction.BR, 0);
-		ctx.writer.write(Instruction.END); // loop
-		ctx.writer.write(Instruction.END); // block
 		ctx.writer.write(Instruction.END); // string-vs-array if
 	}
 
