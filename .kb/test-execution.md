@@ -112,6 +112,16 @@ the right census and still failed on Metal, because the operand sizing collapsed
 an earlier assertion fired. A census answers "did the table pin anything"; it does not
 answer "is my operand the size I think it is".
 
+**Deriving a shape from the threshold accessors is right, and is not by itself enough.**
+`am/ik/gpu/MetalGpuTest` derives every shape that way and asserts the accept/decline
+boolean of every member, so it cannot go vacuous -- but it is a one-backend test, written
+where `fold == Long.MAX_VALUE` is a fact in front of the author. A test that runs on BOTH
+backends reads the same accessors and gets a sentinel on one of them and a number on the
+other, and that is exactly where the arithmetic above wrapped. So for a cross-backend
+test the rule is stronger than "derive it": **every threshold you read is either a size or
+a `never`, and the expression has to answer sensibly for both** -- branch on the sentinel,
+or clamp before multiplying, and never let `Math.max` with a floor disguise the result.
+
 **Proving one of these is vacuous takes a mutation, not an argument.** Restore the old
 constant with the new census in place: if the value assertions still pass and only the
 census fails, the test was pinning nothing. That is how each entry in the `.kb/gpu.md`
