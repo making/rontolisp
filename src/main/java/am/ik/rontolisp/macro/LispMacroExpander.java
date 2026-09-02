@@ -10373,38 +10373,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * If {@code cons} is a {@code read} call carrying the full CL tail
-	 * ({@code (read stream eof-error-p eof-value recursive-p)}), returns the equivalent
-	 * one-argument call: {@code recursive-p} is dropped (there is no recursive-read
-	 * state), {@code eof-error-p} is dropped (this {@code read} returns nil at end of
-	 * input and never signals), and a non-nil {@code eof-value} becomes an {@code or}
-	 * default -- the same lowering {@link #expandReadLineCompat} does. So a nil datum and
-	 * end-of-input stay indistinguishable, exactly as they already are for the
-	 * one-argument call. Returns {@code null} for the 0/1-argument shapes so those keep
-	 * their existing (byte-identical) lowering, and for a non-nil literal
-	 * {@code eof-error-p} (signalling at EOF is not supported).
-	 * @param cons the call expression
-	 * @return the lowered expression, or {@code null} when the shape is not handled here
-	 */
-	@Nullable public static LispVal expandReadCompat(LispCons cons) {
-		if (!(cons.car() instanceof LispSymbol op) || !LispNames.READ.equals(op.name())) {
-			return null;
-		}
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 3 || parts.size() > 5) {
-			return null;
-		}
-		if (!isLiteralNil(parts.get(2))) {
-			return null;
-		}
-		LispVal readOnly = listToCons(List.of(new LispSymbol(LispNames.READ), parts.get(1)));
-		if (parts.size() == 3 || isLiteralNil(parts.get(3))) {
-			return readOnly;
-		}
-		return listToCons(List.of(new LispSymbol(LispNames.OR), readOnly, parts.get(3)));
-	}
-
-	/**
 	 * If {@code cons} is a {@code (subseq seq start [end])} call, returns a form that
 	 * dispatches on the runtime type of {@code seq}: a general array
 	 * ({@link LispNames#ARRAYP_INTERNAL}) is copied element by element into a fresh array

@@ -3673,6 +3673,31 @@ cases:
     expected: |
       #FOO
       7
+  - name: read-stream-datum-by-datum
+    source: |
+      (let ((s (make-string-input-stream "1 2 3")))
+        (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof))))
+      (with-input-from-string (s "(a) (b)")
+        (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof))))
+      (with-input-from-string (s "(a
+      b) c")
+        (print (list (read s nil :eof) (read s nil :eof))))
+      (with-input-from-string (s "(1 2)  x") (print (list (read s) (read-line s))))
+      (with-input-from-string (s "ab  cd") (print (list (read s) (read-line s))))
+      (with-input-from-string (s "nil") (print (read s nil :done)))
+      (print (handler-case (with-input-from-string (s "") (read s t))
+               (end-of-file () :caught)))
+      (print (handler-case (with-input-from-string (s "(a b") (read s))
+               (error () :caught)))
+    expected: |
+      (1 2 3 :EOF)
+      ((A) (B) :EOF)
+      ((A B) C)
+      ((1 2) " x")
+      (AB " cd")
+      NIL
+      :CAUGHT
+      :CAUGHT
   - name: runtime-read-errors-signal
     source: |
       (print (handler-case (read-from-string "#\\NoSuchName") (error (e) "caught-char")))

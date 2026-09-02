@@ -870,8 +870,8 @@ public final class LispEvaluator {
 		// denotes exactly as a source literal is. Environment holds no registry, so the
 		// fold is layered on here, where this evaluator's registry is in scope; wrapping
 		// the function BINDING (rather than the call sites) also keeps
-		// #'read/#'read-from-string folding.
-		foldStructLiteralsOf(LispNames.READ);
+		// #'read-from-string folding. read is not wrapped: it is prelude rontolisp whose
+		// whole parse goes through read-from-string, so it inherits the fold.
 		foldStructLiteralsOf(LispNames.READ_FROM_STRING);
 		// #. read-time eval for the runtime readers: with the resolver installed,
 		// read/read-from-string read a #.-bearing datum in marker mode and this evaluator
@@ -5286,16 +5286,9 @@ public final class LispEvaluator {
 				// return value; the Environment function remains for first-class
 				// use (#'parse-integer).
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandParseInteger);
-			case LispNames.READ: {
-				// The full CL tail (eof-error-p / eof-value / recursive-p) lowers to
-				// the 0/1-argument call the Environment function implements, so the
-				// same shape loads on every backend.
-				LispVal readCompat = LispMacroExpander.expandReadCompat(cons);
-				if (readCompat != null) {
-					return eval(readCompat, env);
-				}
-				break;
-			}
+			// read has no case here and no Environment function: it is a prelude defun
+			// over read-char / unread-char / read-from-string (LispPreludeLibrary), so
+			// an ordinary function resolution loads it and #'read is that same defun.
 			case LispNames.READ_SEQUENCE:
 				return evalSequenceWithGrayDispatch(cons, env, true);
 			case LispNames.WRITE_SEQUENCE:

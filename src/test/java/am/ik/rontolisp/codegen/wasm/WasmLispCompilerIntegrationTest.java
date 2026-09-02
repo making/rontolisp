@@ -151,6 +151,13 @@ class WasmLispCompilerIntegrationTest {
 				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 	}
 
+	// read is prelude rontolisp over read-char / unread-char, so a program that calls
+	// it needs the prelude splice AND the pushback-cell rewrite, in the CLI's order.
+	private static String compileAndRunRead(String lispCode) throws Exception {
+		return compileAndRunProgram(am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
+
 	private static String compileAndRunGray(String lispCode) throws Exception {
 		return compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
@@ -5021,7 +5028,8 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static String compileAndRunComponentWithStdin(String lispCode, String stdin) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
@@ -10105,10 +10113,13 @@ class WasmLispCompilerIntegrationTest {
 			.hasMessageContaining("Cannot compile symbol: CAR");
 	}
 
-	// read-line tests
-
+	// read-line tests. The pre-passes are the CLI pipeline's: read is prelude
+	// rontolisp over read-char / unread-char, and its scanner's own call sites reach
+	// the pushback cell only through UnreadCharLibrary -- exactly the order
+	// CompileFrontend runs them in. A program naming neither is returned unchanged.
 	private static String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
@@ -10183,7 +10194,8 @@ class WasmLispCompilerIntegrationTest {
 	// Pipes stdin through a file in the container so the input may contain single
 	// quotes (e.g. #'car), which would break the echo '...' form above.
 	private static String compileAndRunWithStdinFile(String lispCode, String stdin) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
@@ -10881,8 +10893,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void readConsumesExactlyOneDatum() throws Exception {
+		// todo-624: one datum's characters, the stream left after them. The compile
+		// paths used to close an unterminated list at end of line SILENTLY -- "(a" on
+		// one line and "b)" on the next read as (A) then B.
+		assertThat(compileAndRunRead("""
+				(let ((s (make-string-input-stream "1 2 3")))
+				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
+			.isEqualTo("(1 2 3 :EOF)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(a) (b)")
+				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
+			.isEqualTo("((A) (B) :EOF)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(a
+				b) c")
+				  (print (list (read s nil :eof) (read s nil :eof))))""")).isEqualTo("((A B) C)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(1 2)  x") (print (list (read s) (read-line s))))"""))
+			.isEqualTo("((1 2) \" x\")");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "ab  cd") (print (list (read s) (read-line s))))"""))
+			.isEqualTo("(AB \" cd\")");
+	}
+
+	@Test
+	void readEofValueAndSignal() throws Exception {
+		assertThat(compileAndRunRead("(with-input-from-string (s \"\") (print (read s nil :done)))"))
+			.isEqualTo(":DONE");
+		// A nil DATUM is no longer confused with end of input.
+		assertThat(compileAndRunRead("(with-input-from-string (s \"nil\") (print (read s nil :done)))"))
+			.isEqualTo("NIL");
+		assertThat(compileAndRunRead("""
+				(print (handler-case (with-input-from-string (s "") (read s t))
+				         (end-of-file () :caught)))""")).isEqualTo(":CAUGHT");
+		assertThat(compileAndRunRead("""
+				(print (handler-case (with-input-from-string (s "(a b") (read s))
+				         (error () :caught)))""")).isEqualTo(":CAUGHT");
+	}
+
+	@Test
 	void withInputFromStringReadsLinesAndData() throws Exception {
-		assertThat(compileAndRun("""
+		assertThat(compileAndRunRead("""
 				(with-input-from-string (s "first line
 				(1 2 3)
 				third")
@@ -11057,7 +11109,7 @@ class WasmLispCompilerIntegrationTest {
 		// The input mirror of the *standard-output* redirect: binding *standard-input*
 		// redirects read-line / read-char / read, including inside called functions, and
 		// an explicit nil argument is the same designator.
-		assertThat(compileAndRun("""
+		assertThat(compileAndRunRead("""
 				(defun slurp (&optional stream) (princ (read-line stream)) (princ "|"))
 				(with-input-from-string (*standard-input* "one")
 				  (slurp))

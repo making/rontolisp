@@ -1274,7 +1274,6 @@ final class JvmExprCompiler {
 						ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
-				case LispNames.READ -> JvmReadCompiler.compile(cons, ctx, className);
 				case LispNames.LOAD -> JvmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
 				// A literal top-level require/provide (and the asdf directives) was
 				// consumed by the compile-time LoadInliner pass; anything left is nested

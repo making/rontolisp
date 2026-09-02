@@ -1272,7 +1272,6 @@ final class WasmExprCompiler {
 					WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
 					WasmEmitHelper.emitToMutStrCall(ctx);
 				}
-				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
 				case LispNames.LOAD -> WasmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
 				// A literal top-level require/provide (and the asdf directives) was
 				// consumed by the compile-time LoadInliner pass; anything left is nested

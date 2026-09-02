@@ -5503,7 +5503,7 @@ public final class Environment implements Scope {
 			SocketSupport.setTimeout(socket, (int) Math.min(millis.value(), Integer.MAX_VALUE));
 			return millis;
 		}));
-		// One datum out of a runtime-read line. With the evaluator's #. resolver
+		// One datum out of a runtime-read string. With the evaluator's #. resolver
 		// installed, a datum textually containing #. is read in marker mode and the
 		// resolver evaluates each marker in place -- CL's read under a true *read-eval*
 		// (the resolver itself signals when *read-eval* is bound nil). A bare Environment
@@ -5515,48 +5515,10 @@ public final class Environment implements Scope {
 			}
 			return LispReader.readFromString(input, am.ik.rontolisp.reader.Features.INTERPRETER);
 		};
-		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
-			try {
-				// (read) reads from stdin; (read stream) reads from an open input
-				// stream. Both skip blank and comment-only lines and return one datum
-				// per call, or nil at end of input.
-				BufferedReader reader;
-				if (args.size() > 1) {
-					requireArgCount(LispNames.READ, args, 1);
-				}
-				LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
-				if (src == null || src instanceof LispNil || src instanceof LispTrue) {
-					// Drain buffered output so any prompt is visible before we block on
-					// stdin.
-					out.flush();
-					reader = stdinReader;
-				}
-				else {
-					if (!(src instanceof LispInteger handle)
-							|| !(streams.get(handle.value()) instanceof BufferedReader streamReader)) {
-						throw new LispEvalException(LispNames.READ + " expects an input stream");
-					}
-					reader = streamReader;
-				}
-				String line;
-				while ((line = reader.readLine()) != null) {
-					line = line.trim();
-					if (line.isEmpty() || line.startsWith(";")) {
-						continue;
-					}
-					// Runtime read follows the upcase premise, exactly like the frontend
-					// read of program source: unescaped symbols upcase and the canonical
-					// fold applies, so (read "foo") is FOO and (read "car") folds to car.
-					// The compiled backends' embedded reader runtimes fold to match, so
-					// cross-backend identity holds (see .kb/reader-case-upcase.md).
-					return readRuntimeDatum.apply(line);
-				}
-				return LispNil.INSTANCE;
-			}
-			catch (IOException ex) {
-				throw new UncheckedIOException(ex);
-			}
-		}));
+		// read itself is NOT here: it is prelude rontolisp over read-char /
+		// unread-char / read-from-string (LispPreludeLibrary), so one definition
+		// consumes exactly one datum's characters on all four backends and leaves the
+		// stream positioned after them. See .kb/read-load-streams.md.
 		// read-from-string: parse the first datum from a string (the optional
 		// eof-error-p/eof-value and :start/:end keywords of Common Lisp are not
 		// supported).

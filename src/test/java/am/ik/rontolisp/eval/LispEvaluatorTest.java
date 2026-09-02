@@ -869,6 +869,51 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void readConsumesExactlyOneDatumAndLeavesTheStreamAfterIt() {
+		// CL's read contract (todo-624): a second datum on the same line survives, a
+		// datum may SPAN lines, and read leaves the stream positioned after the object
+		// -- so read and read-line mix. Same answers as SBCL, on all four backends
+		// (ci-spec case read-stream-datum-by-datum).
+		assertThat(eval("""
+				(let ((s (make-string-input-stream "1 2 3")))
+				  (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof)))""").print())
+			.isEqualTo("(1 2 3 :EOF)");
+		assertThat(eval("""
+				(with-input-from-string (s "(a) (b)")
+				  (list (read s nil :eof) (read s nil :eof) (read s nil :eof)))""").print())
+			.isEqualTo("((A) (B) :EOF)");
+		assertThat(eval("""
+				(with-input-from-string (s "(a
+				b) c")
+				  (list (read s nil :eof) (read s nil :eof)))""").print()).isEqualTo("((A B) C)");
+		// CLHS 23.2 lets read consume ONE whitespace character after the object; a
+		// terminating macro character is left in the stream instead.
+		assertThat(eval("""
+				(with-input-from-string (s "(1 2)  x") (list (read s) (read-line s)))""").print())
+			.isEqualTo("((1 2) \" x\")");
+		assertThat(eval("""
+				(with-input-from-string (s "ab  cd") (list (read s) (read-line s)))""").print())
+			.isEqualTo("(AB \" cd\")");
+	}
+
+	@Test
+	void readAtEndOfInputAnswersTheEofValueAndSignalsWhenAsked() {
+		// The lite convention read-line keeps: nil rather than a signal, unless
+		// eof-error-p is explicitly non-nil.
+		assertThat(eval("(with-input-from-string (s \"\") (read s))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(with-input-from-string (s \"\") (read s nil :done))").print()).isEqualTo(":DONE");
+		assertThat(eval("""
+				(handler-case (with-input-from-string (s "") (read s t))
+				  (end-of-file () :caught))""").print()).isEqualTo(":CAUGHT");
+		// A nil DATUM is no longer confused with end of input.
+		assertThat(eval("(with-input-from-string (s \"nil\") (read s nil :done))")).isEqualTo(LispNil.INSTANCE);
+		// An INCOMPLETE datum signals rather than being silently closed.
+		assertThat(eval("""
+				(handler-case (with-input-from-string (s "(a b") (read s))
+				  (error () :caught))""").print()).isEqualTo(":CAUGHT");
+	}
+
+	@Test
 	void evalWithInputFromStringReadsLinesAndData() {
 		LispVal result = eval("""
 				(with-input-from-string (s "first line

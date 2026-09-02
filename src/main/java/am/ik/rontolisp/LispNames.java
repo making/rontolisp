@@ -3006,8 +3006,59 @@ public final class LispNames {
 	/** The {@code string-right-trim} built-in function. */
 	public static final String STRING_RIGHT_TRIM = "STRING-RIGHT-TRIM";
 
-	/** The {@code read} built-in function (interpreter only). */
+	/**
+	 * The {@code read} function. Not a built-in on any backend: it is prelude rontolisp
+	 * over {@code read-char} / {@code unread-char} / {@code read-from-string}
+	 * ({@code LispPreludeLibrary}), so one definition consumes exactly one datum's
+	 * characters and leaves the stream positioned after it on all four backends.
+	 */
 	public static final String READ = "READ";
+
+	/**
+	 * The {@code %rd-datum} internal helper: copies the characters of exactly ONE datum
+	 * from a stream into an output string stream. The whole {@code %rd-} family below it
+	 * is the character-level scanner {@code read} is written over.
+	 */
+	public static final String RD_DATUM = "%RD-DATUM";
+
+	/**
+	 * The {@code %rd-dispatch} internal helper: the datum scanner's dispatch on the first
+	 * character of a datum.
+	 */
+	public static final String RD_DISPATCH = "%RD-DISPATCH";
+
+	/** The {@code %rd-skip} internal helper: whitespace and {@code ;} comments. */
+	public static final String RD_SKIP = "%RD-SKIP";
+
+	/** The {@code %rd-skip-line} internal helper: the rest of a {@code ;} comment. */
+	public static final String RD_SKIP_LINE = "%RD-SKIP-LINE";
+
+	/** The {@code %rd-block-comment} internal helper: a nesting {@code #| |#}. */
+	public static final String RD_BLOCK_COMMENT = "%RD-BLOCK-COMMENT";
+
+	/** The {@code %rd-list} internal helper: a balanced {@code (...)}. */
+	public static final String RD_LIST = "%RD-LIST";
+
+	/** The {@code %rd-string} internal helper: a {@code "..."} literal. */
+	public static final String RD_STRING = "%RD-STRING";
+
+	/** The {@code %rd-bars} internal helper: a {@code |...|} multiple escape. */
+	public static final String RD_BARS = "%RD-BARS";
+
+	/** The {@code %rd-token-rest} internal helper: a token's constituents. */
+	public static final String RD_TOKEN_REST = "%RD-TOKEN-REST";
+
+	/** The {@code %rd-char-literal} internal helper: a {@code #\} literal. */
+	public static final String RD_CHAR_LITERAL = "%RD-CHAR-LITERAL";
+
+	/** The {@code %rd-sharp} internal helper: the {@code #} dispatch. */
+	public static final String RD_SHARP = "%RD-SHARP";
+
+	/** The {@code %rd-whitespace-p} internal helper: the whitespace set. */
+	public static final String RD_WHITESPACE_P = "%RD-WHITESPACE-P";
+
+	/** The {@code %rd-terminating-p} internal helper: the terminating macro chars. */
+	public static final String RD_TERMINATING_P = "%RD-TERMINATING-P";
 
 	/** The {@code read-from-string} built-in function (parse one form from a string). */
 	public static final String READ_FROM_STRING = "READ-FROM-STRING";
