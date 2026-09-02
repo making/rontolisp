@@ -4582,12 +4582,36 @@ cases:
         (let* ((s (copy-seq "abcdef"))
                (v (make-array 4 :element-type 'character :displaced-to s
                                 :displaced-index-offset 1 :adjustable t)))
-          (print (list (adjust-array v 3) (stringp v) (array-displacement v)))))
+          (print (list (adjust-array v 3) (stringp v) (array-displacement v))))
+        ;; The un-displace never CHANGES the element type -- an array's is fixed when it
+        ;; is made, and adjust-array answers an array of the SAME one. What the
+        ;; displacement target merely REMEMBERS is not the view's own type; only
+        ;; character-ness travels, because a view over characters holds characters.
+        (let* ((b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+               (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+               (before (array-element-type v)))
+          (adjust-array v 3)
+          (print (list before (array-element-type v))))
+        ;; vector-push-extend's growth reaches the same primitive.
+        (let* ((b (make-array 4 :element-type 'double-float :adjustable t :initial-element 0.0d0))
+               (v (make-array 2 :displaced-to b :displaced-index-offset 1
+                                :adjustable t :fill-pointer 2))
+               (before (array-element-type v)))
+          (vector-push-extend 9 v)
+          (print (list before (array-element-type v) (array-displacement v))))
+        (let* ((b (make-array 4 :element-type 'character :adjustable t :fill-pointer 4))
+               (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+               (before (list (array-element-type v) (stringp v))))
+          (adjust-array v 3)
+          (print (list before (array-element-type v) (stringp v)))))
       (ci-adjust-array-undisplaces)
     expected: |
       (T #(20 30 40) #(10 20 30 40 50 60) NIL)
       (NIL #(20 30 40) #(20 30 40 50) NIL NIL)
       ("bcd" T NIL)
+      (T T)
+      (T T NIL)
+      ((CHARACTER T) CHARACTER T)
   - name: mutable-strings-cross-backend
     source: |
       (defun ci-mutable-strings ()

@@ -162,8 +162,8 @@ land the measurement, not the change" turned into a procedure: the point is to f
 bound BEFORE writing the thing, because once it is written the pull to land it is real and
 the comparison is no longer free.
 
-The ceiling is usually reachable by a cheat that would be unacceptable to ship. Two items
-closed this way without an implementation:
+The ceiling is usually reachable by a cheat that would be unacceptable to ship. Three
+items closed this way without an implementation:
 
 - `.todo/635` (`.kb/gpu.md`, "The last-axis fold's tiling"): the tiled last-axis fold wins
   1.33-1.96x as a KERNEL, which sounds decisive -- and then the census of the workload
@@ -174,6 +174,13 @@ closed this way without an implementation:
   measure, it FORCED every one of the 144 heads to be accepted (`WIDEN=1`, materializing
   the mask to the score's shape) and measured that. 0.06 s over 13 steps, 0.8%, inside the
   noise. The accept rule was left alone.
+- `.todo/655` (`.kb/gpu.md`, "Ceiling 2"): the chapter-2 step's copy profile attributed 2
+  of its 4 remaining downloads a step to one mixed-width `linalg:add`, which reads as money
+  on the table. The ceiling -- the operand rewritten to the matching width so the member is
+  ACCEPTED -- removed those two downloads and made the step 9-19% SLOWER, with launches and
+  device kernel time flat. **A copy count is not a cost until someone removes the copies and
+  times it**, and a ceiling can come out NEGATIVE: the profile that suggests a change is
+  exactly the evidence that would have got it built.
 
 And one that shows the cost of skipping it: `.todo/646` (`.kb/gpu.md`, "Layer-norm's
 affine on Metal") wrote the kernels first. They were correct and bit-identical on the first

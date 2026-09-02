@@ -432,6 +432,228 @@ big as either operand; a transpose's output is the operand's own element count),
 the broadcast-shape derivation and the permutation check, both of which allocate an
 `int[]` the decline would throw away. The first draft did it the other way round.
 
+## The accept rules against the shapes the programs run (todo-655, 2026-09-03)
+
+Two items two days apart were the same defect -- an accept rule and the shapes actually
+flowing through it had never been put side by side. `.todo/495` was the test side (a fused
+shape chosen from the FOLD threshold, so on Metal it collapsed and the tier under test never
+ran) and `.todo/650` the production side (a `(batch 1 key)` mask against a rule that wants a
+trailing suffix, 96 of 144 heads declining). This is the sweep neither did, and it was split by
+hardware: **the PRODUCTION side is below**; the test side -- whether `GpuTest`,
+`LinalgGpuTest`, `MetalGpuTest` and `LinalgGpuDeclineTest` actually run the tier each one
+names -- needs a Metal machine to see the `.todo/495` form at all (that backend's fold
+threshold is `Long.MAX_VALUE`, so a shape chosen from it collapses), and was taken by the
+Apple-silicon session in the same round -- "The test-side sweep on Metal", below.
+
+**How it was measured.** A counting hook on `LinalgGpu.define` -- the one place every
+interpreter offer passes through -- keyed by the member's NAME and by the ARGUMENT SHAPES as
+the rule sees them (width, dims, and RESIDENCY read before the kernel runs), tallying accept
+against decline. Per-step numbers are one run diffed against a shorter one, so setup
+cancels. The hook was a temporary edit and is not in the tree, as `.todo/650`'s `StackWalker`
+was.
+
+**Why the interpreter answers for both offer layers.** `eval/LinalgGpu` and
+`codegen/jvm/JvmGpuTemplate` are two copies of one decision ("The offer is decided twice",
+below) that `GpuOfferDifferentialTest` pins to agree, and the SHAPES are the program's, not
+the backend's. The one thing that used to differ -- when a host read is answered -- is what
+`.todo/650` removed. Where a price was taken it was taken on the compiled path anyway.
+
+### What each program hands each member
+
+`--gpu --simd`, GB10, per step where the program has steps.
+
+**The chapter-2 Transformer** (`transformer-book-shapes.lisp`, `d_model` 512, 6 blocks, 8
+heads, batch 64, vocabulary 6638): about 4,100 offers a step, **212 of them declines**, and
+191 of those are one rule.
+
+| declines a step | member | the shape | the rule that refused it |
+|---|---|---|---|
+| 96 + 95 | `%la-scaled-masked-softmax` and its grad | `f(64 18 19)` / `f(64 19 19)` score with an `f(64 1 19)` mask | `suffixLength` -- `.todo/650`, priced at 0.8% and left alone |
+| 2 | `linalg:add` | RESIDENT `f(64 19 512)` + `d(1 19 512)` | same width -- the example's DOUBLE `pe` buffer, priced below |
+| 2 | `%la-gather-strided` | `d(1 20 512)` | not resident (the same buffer) |
+| 6 | `linalg:reshape` | `f(64 18)`, `f(64 19)`, `d(18 18)` | not resident -- host-built masks |
+| 3 | `linalg:equal` | array with a scalar, not resident | the resident tier |
+| 2 | `linalg:div` | two NUMBERS | not an array at all |
+| 4 | `where` / `sub` / `add` | `(1152)`, not resident | the resident tier |
+
+**The chapter-3 GPT** (`gpt-book-shapes-fast.lisp`, 13.06 M parameters, batch 64, block 256,
+6 layers): **12 declines a step**, none of them more than 6 calls and none over an operand
+bigger than 65536 elements -- six `reshape`s of a host mask, two `linalg:div` on two numbers,
+two `reshape`s of an `f(64 256)`, one `negative` and one `add` over a non-resident `(16384)`.
+Its `(1 256 256)` mask IS a suffix once the leading extent-1 axis is dropped, so nothing in
+the attention declines. **It is also the one program here that calls
+`torch:clip-grad-norm`, and the clip norm reaches the device on every call**: 634 offers of
+`%la-sum-squares` and `%la-scale` a step, **634 accepted and 0 declined**, every operand
+resident because the optimizer updates the parameters there and the gradients arrive from
+device members. That answers a hypothesis raised from the test side in the same round --
+both members are resident-only, and the tests hand them FRESH operands, so the tier they
+name never runs there. The tests were wrong about the shape; the programs are not. Chapter 2
+never calls `torch:clip-grad-norm` at all and llama2 is inference, so the GPT is the whole
+production population for that path. **And that mask is a `double[]` over a `float` score, accepted only
+because the device contract takes a mask of either width** -- the exact clause `.todo/645`
+found `MetalGemm` narrowing. It is the only production shape in this repository that
+exercises it, which is worth knowing before anyone narrows that parameter again.
+
+**llama2** (`stories15M.bin`, `dim` 288, 6 layers, 6 heads, 60 greedy tokens): every offer is
+`vec:matvec`, and the census splits three ways.
+
+| calls a 60-token run | shape | outcome |
+|---|---|---|
+| 348 x 3 + 58 + 6 | `f(768 288)`, `f(288 768)`, `f(32000 288)` | ACCEPTED, matrix resident |
+| 12 + 6 + 1 | the same three | declined on FIRST sight -- the two-sight residency rule, by design |
+| **1440** | **`f(288 288)`** -- the four attention projections, 24 a token | declined on SIZE: 82944 against `MATVEC_POOLED_MIN_ELEMENTS` 2^17 |
+| 2160 + 2160 | `f(48 256)`, `f(256 48)` | declined on size, 12288 elements -- the per-head attention math |
+
+`examples/ml/tiny-llm.lisp` is the same story one size down: 96 declines at `f(256 256)`
+(65536) and 60 more below that, against 62 accepts at `f(512 256)`.
+`examples/ml/gpu-matmul.lisp` declines nothing.
+`examples/deep-learning-from-scratch` ch05 and ch07 are `#d` toys (batch 16 and 10) whose
+declines are all sub-threshold folds and non-resident operands -- except one, which is the
+only refusal in this whole census with a price.
+
+**Everything not named in the two ceilings below is free by arithmetic**: at most a handful
+of calls a step over operands of a few hundred to a few thousand elements, against a step of
+0.42 s (chapter 2) or a token of 2 ms (llama2). A decline whose operand is smaller than one
+device round trip's floor cannot cost anything, and none of them is.
+
+### Ceiling 1: llama2's `288x288` GEMV against the 2^17 threshold -- worth nothing
+
+The constant's own javadoc puts the crossover "between 256x256 (10.0 us CPU against 9.7, a
+tie at `#f`) and 384x384 (23.0 against 10.7, 2.1x)" and sits it at the second, "where the win
+is unambiguous". llama2's shape is 288x288, INSIDE that band, and it is 1440 of the run's
+~4,900 offers. So the size rule and the workload's shape are 1.6x apart and nobody had put
+them together.
+
+The ceiling was taken by lowering `MATVEC_POOLED_MIN_ELEMENTS` to 2^16 -- both arms built
+from one tree, one constant apart -- and confirmed structurally first: the census flips from
+1440 declines to 1392 resident accepts, so the arm does what it is meant to. Compiled
+`-o Llama2.class`, 256 greedy tokens, the story byte-identical either way:
+
+| | 2^17 (today) | 2^16 (the ceiling) |
+|---|---|---|
+| tok/s, median of 5 | **460.4** (426.6-477.3) | **463.3** (426.6-466.2) |
+| tok/s under nsys | 455.7 | 425.0 |
+| `gemv_f32` launches | 4,199 | **9,503** |
+| device kernel time | 67.2 ms | **87.7 ms** |
+| `cuMemcpyDtoH` | 4,196 | **9,500** |
+| `cuMemcpyHtoD` | 2,892 | **5,568** |
+| `cuCtxSynchronize` | 2,878 | **5,542** |
+
+**5,304 extra round trips and 20 ms more device time a run, for a wall inside the noise.**
+Every accepted GEMV pays a download because a decode loop reads `y` on the host immediately;
+that is why the shape is refused and why the threshold stays where it is. The javadoc's
+"tie" is exactly right, and a tie is what the first sentence of "Every threshold" refuses.
+
+### Ceiling 2: chapter 2's DOUBLE `pe` buffer -- accepting it is a LOSS
+
+`transformer/utils.lisp` keeps the sinusoidal positional encoding at `double` on purpose
+(`chapter02/section3.lisp` asserts a 1e-6 bound that `f32` cannot hold) and its comment names
+the consequence: "adding this buffer to single-float activations is a MIXED-width pair, which
+--simd declines". What it does not say is what that costs under `--gpu`, and this file's own
+copy table attributes 2 of the step's 4 remaining downloads (4.85 MB) to it. That reads like
+money on the table.
+
+**It is not. Removing those two downloads makes the step slower.** The ceiling is `PEF=1` in
+`transformer-book-shapes.lisp`, which rewrites the two `:pe` buffers to single float through
+`torch:set-field` after the model is built -- a cheat the example could not ship, and done
+through the FIELD rather than by redefining the builder because a compiled program binds a
+`defun` at compile time. Compiled `-o Tf.class`, `--gpu --simd`, one class serving both arms,
+per step from `STEPS=23` diffed against `STEPS=3` (medians of 3):
+
+| per step | `PEF` off (today) | `PEF=1` (the ceiling) |
+|---|---|---|
+| `cuMemcpyDtoH` | 4.0 | **2.0** |
+| `cuMemcpyHtoD` | 14.0 | 14.0 |
+| `cuCtxSynchronize` | 12.0 | 12.0 |
+| `cuLaunchKernel` | 6963 | 6965 |
+| device kernel time | 292.2 ms | 296.6 ms |
+| **wall** | **0.413 s** | **0.449 s (+8.8%)** |
+
+The `STEPS=13` pair agrees in direction and reads +19%. The interpreter census confirms the
+arm changed exactly two decisions a step and nothing else. **The device does the same work
+(launches and kernel time flat to 1.5%), the last two downloads a step are gone, and the step
+loses 9-19% of its wall in HOST time** -- the accepted add leaves a 2.4 MB result on the
+device every step instead of producing a host array, and the resident tier pays for holding
+it. The mechanism was not chased further because the direction settles the question: **the
+mixed-width decline the example chooses is a saving, not a cost.** The rule stays, the
+example's `double` buffer stays, and the 2 downloads stay.
+
+Note what this is an instance of. `.kb/measurement-probes.md`'s rule 2 says price the
+CEILING before building; here the ceiling of the obvious change is NEGATIVE, and the copy
+profile that suggested the change ("2 of the 4 downloads are this") is exactly the evidence
+that would have got it built. **A copy count is not a cost until someone removes the copies
+and times it.**
+
+### Ceiling 3: a `-1` reshape extent -- the one refusal with a price, filed
+
+`linalg:reshape`'s defun documents the NumPy spelling ("One extent may be -1 and is inferred
+from the element count") and both offer layers refuse it: `LinalgSimd.shape` and
+`JvmGpuTemplate.shapeOf` each answer `null` for a negative extent, the latter saying so in
+its javadoc. The two AGREE, which is why the differential test has nothing to say -- they
+agree on refusing the spelling the member advertises. And `reshape` is a resident-tier
+member, so the decline drags a resident array home for the defun to copy element by element.
+
+`examples/deep-learning-from-scratch/ch07/train-convnet.lisp` is the program that writes it:
+im2col reshapes with `(list -1 ...)`, 80 declines a run over resident `#d` arrays up to
+432000 elements. Resolving the `-1` against the operand's element count in both layers behind
+a system property, same program, three walls an arm, the accuracy line identical:
+
+| | declined (today) | resolved (the ceiling) |
+|---|---|---|
+| compiled, `-o Cv.class` | 1.76 / **1.81** / 1.83 s | 1.47 / **1.50** / 1.52 s (**-17.1%**) |
+| interpreter | 22.10 / **22.25** / 22.28 s | 16.45 / **16.55** / 16.65 s (**-25.6%**) |
+
+Filed as `.todo/663`. It is the only refusal in the census that is worth anything, and it was
+found in the program nobody profiles rather than in the two everybody does.
+
+### The device contract, read against the CUDA implementation
+
+`.todo/645` was a third shape of the same defect: `GpuDevice.whereF`'s javadoc promised a
+mask "of either width" and `MetalGemm` took `float` only, so a shape the contract admits was
+declined by one backend. Every clause of `GpuDevice`'s javadoc that an implementation could
+silently narrow was therefore read against `CudaGemm`:
+
+| clause | `CudaGemm` |
+|---|---|
+| `where` / `whereF`: mask is a `double[]` or `float[]` of either width, or `null` | both (`mkind` 1 and 2) |
+| `where` / `whereF`: any of `m` / `x` / `y` may be a scalar | all three independently nullable |
+| `softmax` / `softmaxF` / their grads: mask of either width or `null` | both, and a non-array mask is an explicit decline |
+| `gemmT` / `gemmFT`: a backend with no transposed kernel may refuse any non-plain orientation | takes all four orientations |
+| `take`: `mode` 0 is take-rows, 1 is gather | both, the mode rides in the parameter block |
+| `gemv`: offered only once the matrix has been seen twice unwritten | `offeredBefore`, both widths |
+| `sumSquares`: `null` on a decline | yes |
+| the fused tier: present on CUDA | all eighteen |
+| "no method here throws and none signals" | every kernel entry is `try { ... } catch (Throwable) { return false; }` |
+
+**No narrowing.** Every shape-level accept rule on this backend lives in `Gpu`, above the
+device; `CudaGemm` adds only `usable` and allocation failure.
+
+**`MetalGemm` was read against the same clauses on 2026-09-03, and narrows nothing either.**
+Its softmax family takes a mask of either width -- `.todo/643` built it that way from the
+start, because the pack kernel reads the mask as a raw word (one for `f32`, two for `f64`,
+low half first) and so needs an integer test rather than the `fp64` arithmetic this backend
+does not have; `.todo/645` later applied that same shape to `whereF`. `gemmFT` passes `ta`
+and `tb` through to the dispatch and refuses no orientation, so both backends are WIDER than
+the clause allows and the production accept rate is the same on each. The one robustness
+note below is CUDA's alone: `MetalGemm.whereF` and its `softmaxScaledMasked` write the
+non-array mask as the same explicit refusal, so there is no pair of spellings there. **The
+contract-versus-implementation sweep is therefore closed on both backends with `.todo/645`
+as its only ever finding** -- recorded so the next reader does not repeat the comparison.
+
+**And no PRODUCTION code does arithmetic on a threshold.** That question is worth asking
+separately, because Metal's fold threshold is `Long.MAX_VALUE` and `2 * Long.MAX_VALUE`
+wraps NEGATIVE -- which is how `GpuOfferDifferentialTest` came to run every one of its
+operands at 1024 elements on that backend. Every site in the repository that multiplies,
+adds to, or takes a root of a threshold is in a TEST (`LinalgGpuTest`,
+`JvmLinalgGpuAccelCompilerTest`, `GpuOfferDifferentialTest`); `Gpu`'s own use of them is
+`>=` and nothing else, so a `Long.MAX_VALUE` threshold declines rather than wrapping. **A
+threshold is safe to compare against and unsafe to compute from**, and only the tests
+compute from them. One robustness note, which is
+not a decline and which no shape in any program reaches: `CudaGemm.where` maps a non-null
+mask that is neither `float[]` nor `double[]` to `mkind` 0, which is the SCALAR-mask path, so
+such a call would compute rather than decline -- `softmaxKernel` writes the same test as an
+explicit refusal. Two spellings of one guard, one of which fails open.
+
 ## Precision
 
 Three different breaks with the scalar defun, and they are not the same kind.

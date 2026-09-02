@@ -15868,6 +15868,39 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileUnDisplacingKeepsTheViewsOwnElementType() throws Exception {
+		// An array's element type is fixed when it is made: nothing in CL changes the
+		// element type of an existing array, and adjust-array in particular answers an
+		// array of the SAME element type. So un-displacing a view -- whether
+		// adjust-array or vector-push-extend's growth reaches it -- must answer what
+		// array-element-type answered while the view was still a view, NOT the
+		// displacement target's remembered type. CHARACTER-ness is the one thing it does
+		// carry: a view over a character vector holds characters and stays one.
+		assertThat(compileAndRun("""
+				(let* ((b (make-array 4 :element-type '(unsigned-byte 8) :adjustable t :initial-element 0))
+				       (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+				       (before (array-element-type v)))
+				  (adjust-array v 3)
+				  (print (list before (array-element-type v))))
+				(let* ((b (make-array 4 :element-type 'double-float :adjustable t :initial-element 0.0d0))
+				       (v (make-array 2 :displaced-to b :displaced-index-offset 1
+				                        :adjustable t :fill-pointer 2))
+				       (before (array-element-type v)))
+				  (vector-push-extend 9 v)
+				  (print (list before (array-element-type v)
+				               (multiple-value-list (array-displacement v)))))
+				(let* ((b (make-array 4 :element-type 'character :adjustable t :fill-pointer 4))
+				       (v (make-array 2 :displaced-to b :displaced-index-offset 1 :adjustable t))
+				       (before (list (array-element-type v) (stringp v))))
+				  (adjust-array v 3)
+				  (print (list before (array-element-type v) (stringp v))))
+				""")).isEqualTo("""
+				(T T)
+				(T T (NIL 0))
+				((CHARACTER T) CHARACTER T)""");
+	}
+
+	@Test
 	void compileArrayDisplacementValues() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *base* (make-array 5))

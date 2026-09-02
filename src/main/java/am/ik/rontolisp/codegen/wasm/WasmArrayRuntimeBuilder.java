@@ -498,8 +498,16 @@ final class WasmArrayRuntimeBuilder {
 		call(w, WasmLispCompiler.FUNC_ARR_TOTAL);
 		WasmEmitHelper.castI31GetS(w);
 		set(w, nSlot);
-		// Walk to the end of the chain to read the marker the view's own offset word has
-		// to become: 1 when the chain ends on a string, else the target's own marker.
+		// Walk to the end of the chain to decide the marker the view's own offset word
+		// has to become. Only CHARACTER-ness travels: a view over a string (or over a
+		// character vector, whose own marker is 1) HOLDS characters, so it stays a
+		// character vector and stays stringp -- the JVM decides the same thing from its
+		// own header length (7 -> 4). Anything else the chain end merely REMEMBERS is
+		// not the view's own element type and must not become it: an array's element
+		// type is fixed when it is made, and array-element-type answered t for the view
+		// before the un-displace, so it has to answer t after it too. Adopting the
+		// target's remembered type here made adjust-array CHANGE an element type, which
+		// is exactly what .todo/619's invariant forbids.
 		get(w, 0);
 		set(w, curSlot);
 		w.write(Instruction.BLOCK, 0x40);
@@ -532,6 +540,10 @@ final class WasmArrayRuntimeBuilder {
 		consGet(w, 1);
 		WasmEmitHelper.castI31GetS(w);
 		w.write(Instruction.END);
+		// ... which is why the chain end's marker is COMPARED to 1 rather than copied:
+		// the answer is the character-vector marker or nothing at all.
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
 		set(w, markerSlot);
 		// newData[i] = _arr_get(header, i) -- read through the chain BEFORE the data slot
 		// is replaced, since that is what the reads resolve against.
