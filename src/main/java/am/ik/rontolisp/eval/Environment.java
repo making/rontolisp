@@ -2220,6 +2220,11 @@ public final class Environment implements Scope {
 		//
 		// This is deliberately NOT Math.min/Math.max, which resolve a signed-zero tie by
 		// sign and propagate NaN from either side.
+		//
+		// No float contagion, either: the winning operand comes back exactly as it
+		// stands, so (min 1 2.0) is the rational 1, not the double 1.0. CLHS leaves this
+		// implementation-dependent too, and SBCL does not coerce -- matching it, and our
+		// own compiled backends' general path, is the reason to pick this one.
 		env.defineFunction(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
 			requireMinArgCount(LispNames.MIN, args, 1);
 			LispVal best = args.get(0);
@@ -2230,7 +2235,7 @@ public final class Environment implements Scope {
 					best = cand;
 				}
 			}
-			return hasDouble(args) ? new LispDouble(asDouble(best)) : best;
+			return best;
 		}));
 		env.defineFunction(LispNames.MAX, new LispFunction(LispNames.MAX, args -> {
 			requireMinArgCount(LispNames.MAX, args, 1);
@@ -2242,7 +2247,7 @@ public final class Environment implements Scope {
 					best = cand;
 				}
 			}
-			return hasDouble(args) ? new LispDouble(asDouble(best)) : best;
+			return best;
 		}));
 		env.defineFunction(LispNames.ONE_PLUS, new LispFunction(LispNames.ONE_PLUS, args -> {
 			requireArgCount(LispNames.ONE_PLUS, args, 1);

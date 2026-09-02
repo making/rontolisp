@@ -863,13 +863,44 @@ emits a native `f64.le`/`f64.ge`), they just compute the same select as the gene
   `wasmGcSimdUnaryUfuncsAreByteIdenticalToTheScalarPath` and its `linalg` twin, which fail
   if only one side is changed.
 
-**Still divergent, and deliberately out of 648's scope**: float CONTAGION in `min`/`max`.
-`(min 1 2.0)` is `1.0` on the interpreter (it coerces when any argument is a float) but the
-integer `1` on both compilers' general path, which hand back the winning operand as it
-stands -- and `1.0` on the JVM's literal path, so that backend disagrees with itself.
-**SBCL answers `1`**, and CLHS explicitly leaves it implementation-dependent whether
-`max`/`min` apply float contagion. Converging it changes a printed TYPE rather than a
-printed sign, so it wants its own item: see `.todo/653`.
+**Float CONTAGION in `min`/`max`** was deliberately out of 648's scope (648 converged the
+SELECT itself, not the result's TYPE) and was closed separately on 2026-09-02. Before the
+fix: `(min 1 2.0)` was `1.0` on the interpreter (`Environment.registerArithmetic` coerced
+whenever any argument was a float), the integer `1` on both compilers' general boxed path
+(which hands back the winning operand as it stands), and `1.0` on the JVM's double-literal
+fast path -- so the JVM backend disagreed WITH ITSELF depending on whether an operand
+happened to be written as a literal, independent of the 648 sign/NaN tie already fixed
+there. **SBCL answers `1`** (verified 2026-09-02: `(min 0 -0.0)` is the integer `0`,
+`(min -0.0 0)` is the float `-0.0`, `(min 1 2.0)` / `(min 2.0 1)` are both `1`), and CLHS
+leaves it implementation-dependent whether `max`/`min` apply float contagion. The fix:
+`Environment.registerArithmetic`'s `min`/`max` no longer coerce. The JVM's double-literal
+fast path was NARROWED, not dropped -- `JvmMinCompiler`/`JvmMaxCompiler` now gate it on
+`JvmLispCompiler.isDefinitelyDouble` (each operand independently PROVEN double: a literal,
+a declared/raw double local, or a nested `+`/`-`/`*`/`mod`/`rem` tree with a provably-double
+operand -- true contagion, not a guess) instead of `hasDoubleLiteral` (any operand merely
+CONTAINING a double literal anywhere in its subtree, which is what let `(min 1 2.0)` take
+the all-double path even though `1` is not a float). When both operands pass, the winner is
+a double whichever one wins, so the raw-double compare-and-rebox is exact and the fast path
+still fires -- `.kb/jvm-double-arithmetic.md` has the full predicate and why it is sound
+where `hasDoubleLiteral` was not. All four backends now answer `1` for `(min 1 2.0)` and
+`(min 2.0 1)`, matching SBCL, with no perf regression on the cases the fast path actually
+existed for: it was added by analogy with the sibling arithmetic operators
+(`c0a0dd2f`, "Compile double arithmetic without a box at every interior node", mandelbrot
+206 -> 100 ms) rather than from a `min`/`max`-specific measurement -- `bench-report/`
+carries no `min`/`max` program to have overturned -- so narrowing its GATE, while leaving
+its emission untouched, changes no measured number. Real scalar `min`/`max` call sites with
+a mix of literal and non-literal double-ish operands do exist (`examples/macos/*.lisp`'s
+per-frame clamps), which is exactly why the gate was narrowed to keep the fast path for
+them rather than dropped outright.
+
+**`--no-gc` is a genuine, permanent exception**, not a straggler: its type inference gives
+every `+ - * mod rem abs min max` call site ONE static WASM type -- `FLOAT` iff any operand
+is `FLOAT` (`NoGcWasmCompiler.typeOf`, the same rule for all seven operators) -- because
+that backend has no boxed/dynamic value representation to hand back "the operand as it
+stood" from a call site the verifier has already typed `f64`. `(min 1 2.0)` still answers
+the float `1.0` there; changing it would mean giving `--no-gc` a dynamic numeric tower,
+which is the whole reason `linalg:` cannot compile there at all (above). This is the same
+line the "What to do" note draws: nothing about `--no-gc` moved.
 
 Everything else in the sweep agreed on all four from the start: `abs`, unary minus, binary
 `+ - * /` sign propagation, `1/x` on either zero, `sqrt`, `float`,

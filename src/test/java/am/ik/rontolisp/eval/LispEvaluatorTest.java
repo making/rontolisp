@@ -326,7 +326,9 @@ class LispEvaluatorTest {
 	void evalVariadicMinMaxGcdLcm() {
 		assertThat(eval("(min 5 2 8 1 9)")).isEqualTo(new LispInteger(1));
 		assertThat(eval("(max 5 2 8 1 9)")).isEqualTo(new LispInteger(9));
-		assertThat(eval("(min 1 2.0)")).isEqualTo(new LispDouble(1.0));
+		// min/max apply no float contagion: the winning operand comes back as it
+		// stands, matching SBCL, so a mixed rational/float call keeps the rational.
+		assertThat(eval("(min 1 2.0)")).isEqualTo(new LispInteger(1));
 		assertThat(eval("(gcd 24 36 60)")).isEqualTo(new LispInteger(12));
 		assertThat(eval("(lcm 2 3 4)")).isEqualTo(new LispInteger(12));
 		assertThat(eval("(gcd)")).isEqualTo(new LispInteger(0));
@@ -15976,8 +15978,9 @@ class LispEvaluatorTest {
 		// and the fold is left-associative, so a third argument cannot revive a sign
 		assertThat(eval("(min 0.0 -0.0 0.0)")).isEqualTo(new LispDouble(0.0));
 		assertThat(eval("(max -0.0 0.0 -0.0)")).isEqualTo(new LispDouble(-0.0));
-		// an exact 0 ties with -0.0 too, and being leftmost it wins
-		assertThat(eval("(min 0 -0.0)")).isEqualTo(new LispDouble(0.0));
+		// an exact 0 ties with -0.0 too, and being leftmost it wins -- as the
+		// rational 0 itself, since min/max apply no float contagion (below).
+		assertThat(eval("(min 0 -0.0)")).isEqualTo(new LispInteger(0));
 		assertThat(eval("(min -0.0 0)")).isEqualTo(new LispDouble(-0.0));
 
 		// NaN is unordered, so the comparison fails and the RIGHT operand is taken.
@@ -15986,8 +15989,9 @@ class LispEvaluatorTest {
 		assertThat(eval("(max (/ 0.0 0.0) 1.0)")).isEqualTo(new LispDouble(1.0));
 		assertThat(eval("(max 1.0 (/ 0.0 0.0))")).isEqualTo(new LispDouble(Double.NaN));
 
-		// ordinary selections and float contagion on the result are unchanged
-		assertThat(eval("(min 1 2.0)")).isEqualTo(new LispDouble(1.0));
+		// ordinary selections apply no float contagion: the winning operand comes
+		// back as it stands, matching SBCL.
+		assertThat(eval("(min 1 2.0)")).isEqualTo(new LispInteger(1));
 		assertThat(eval("(max 1 2.0)")).isEqualTo(new LispDouble(2.0));
 		assertThat(eval("(min 3 1 2)")).isEqualTo(new LispInteger(1));
 		assertThat(eval("(max 3 1 2)")).isEqualTo(new LispInteger(3));

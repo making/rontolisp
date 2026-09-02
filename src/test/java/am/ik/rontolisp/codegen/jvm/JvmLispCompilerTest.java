@@ -14325,13 +14325,19 @@ class JvmLispCompilerTest {
 
 	@Test
 	void minMaxSelectByIeeeComparisonOnBothTheLiteralAndTheVariablePath() throws Exception {
-		// min(a,b) = (a <= b) ? a : b, max(a,b) = (a >= b) ? a : b -- the _fmin/_fmax
-		// helpers, NOT Math.min/Math.max, which this double-literal path used to call.
-		// Math.min/max resolve a signed-zero tie by SIGN whichever way round the
-		// arguments come, and propagate NaN from either side; _min/_max on the variable
-		// path did neither, so one program answered two different things depending on
-		// whether an operand happened to be a literal. Both paths now agree, with the
-		// other three backends and with upstream Common Lisp.
+		// min(a,b) = (a <= b) ? a : b, max(a,b) = (a >= b) ? a : b, NOT Math.min/
+		// Math.max, which resolve a signed-zero tie by SIGN whichever way round the
+		// arguments come and propagate NaN from either side. The unboxed fast path
+		// (JvmMinCompiler/JvmMaxCompiler's isDefinitelyDouble branch, below) and the
+		// general boxed path agree on this select, with the other three backends and
+		// upstream Common Lisp -- unlike float CONTAGION, where they used to differ:
+		// the fast path used to gate on ANY operand merely CONTAINING a double
+		// literal, unbox both, compute this select on raw doubles and rebox the
+		// winner as a double regardless, which forced contagion onto a mixed
+		// rational/float call. It is now gated on isDefinitelyDouble instead, which
+		// requires each operand's VALUE (not just some literal nested in it) to be
+		// proven double, so it agrees with the general path on type as well as
+		// select.
 
 		// An equal-value tie keeps the LEFT operand.
 		assertThat(compileAndRun("(print (list (min -0.0 0.0) (min 0.0 -0.0)))")).isEqualTo("(-0.0 0.0)");
@@ -14352,6 +14358,28 @@ class JvmLispCompilerTest {
 		// ordinary selections and integers are untouched
 		assertThat(compileAndRun("(print (list (min 1.0 2.0) (max 1.0 2.0) (min 3 1 2) (max 3 1 2)))"))
 			.isEqualTo("(1.0 2.0 1 3)");
+
+		// No float contagion: the winning operand comes back as it stands, on the
+		// literal path and the variable path alike, so a mixed rational/float call
+		// keeps the rational -- matching the interpreter and both wasm backends.
+		assertThat(compileAndRun("(print (list (min 1 2.0) (min 2.0 1) (max 1 2.0) (max 2.0 1)))"))
+			.isEqualTo("(1 1 2.0 2.0)");
+		assertThat(compileAndRun(
+				"(defun mmc-min (a b) (min a b)) (defun mmc-max (a b) (max a b)) (print (list (mmc-min 1 2.0) (mmc-min 2.0 1) (mmc-max 1 2.0) (mmc-max 2.0 1)))"))
+			.isEqualTo("(1 1 2.0 2.0)");
+		assertThat(compileAndRun("(print (floatp (min 1 2.0)))")).isEqualTo("NIL");
+
+		// The unboxed fast path still fires when it is actually SOUND to: both
+		// operands independently proven double, including through a nested
+		// contagious +/-/*/mod/rem tree (2.0 proves the whole (* 2.0 1) provably
+		// double, whatever type the OTHER factor turns out to be, since * really
+		// does coerce to double regardless -- unlike min/max's own select).
+		assertThat(compileAndRun("(print (min (* 2.0 1) (+ 1 3.0)))")).isEqualTo("2.0");
+		// The other operand, the bare integer literal 1, is not provably double
+		// (there is nothing to prove double about it), so the general path is
+		// used: the integer 1 -- not 1.0 -- comes back, since (* 2.0 1) is 2.0
+		// and 1 <= 2.0.
+		assertThat(compileAndRun("(print (min 1 (* 2.0 1)))")).isEqualTo("1");
 	}
 
 	// ---- Method name mangling ----
