@@ -32,11 +32,16 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * @param strided the minimum OUTPUT element count a broadcast or gather is accepted
 	 * at
 	 * @param fold the minimum INPUT element count an axis fold is accepted at
+	 * @param fused the minimum element count a FUSED row member with no libm call in it
+	 * is accepted at -- a threshold of its own because it is not the axis fold's
+	 * question: a fused row kernel replaces a whole chain of memory passes, so a backend
+	 * that declines the round-trip fold on its own merits ({@link MetalGemm}) may still
+	 * take these
 	 * @param rng the minimum element count a generator fill is accepted at
 	 * @param matvec the minimum {@code rows * cols} a matrix-by-vector product is
 	 * accepted at, once its matrix is resident
 	 */
-	record Thresholds(long work, long map, long strided, long fold, long rng, long matvec) {
+	record Thresholds(long work, long map, long strided, long fold, long fused, long rng, long matvec) {
 	}
 
 	/** What was found -- model, architecture, driver -- for {@code description()}. */

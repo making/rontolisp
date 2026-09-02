@@ -290,7 +290,15 @@ class LinalgGpuTest {
 		String operands = fusedOperands(" :element-type 'single-float");
 		long hits = am.ik.gpu.GpuThresholds.residencyHits();
 		eval(operands + "(linalg::%la-layer-norm-grad *g* (linalg::%la-layer-norm *x* 1.0e-5) 1.0e-5 nil)", true);
-		assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits);
+		// Guarded like the resident and index tiers above, and for the same measured
+		// reason: on a backend where lazy results do not pay (Metal) a member's result
+		// comes home when the call returns, so nothing but a GEMV matrix is ever
+		// resident and the adjoint's operand is uploaded rather than found. The tier
+		// still RAN there -- the divergence assertions in the test above are what say
+		// so, and they are the ones that fail if it silently stopped running.
+		if (am.ik.gpu.GpuThresholds.lazyResultsOn()) {
+			assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits);
+		}
 		assertThat(worstRelative(elements(eval(operands + "(linalg:softmax *x* :axis 0)", true)),
 				elements(eval(operands + "(linalg:softmax *x* :axis 0)", false))))
 			.isLessThan(1e-5);

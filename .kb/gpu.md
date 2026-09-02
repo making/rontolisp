@@ -1148,9 +1148,8 @@ members rather than one taking two booleans because that keeps every existing ca
 lowering: a member with flag arguments would have needed a new extended call shape on the
 JVM backend for nothing. The portable defuns are the transpose and the product they name,
 so `--simd`, `--blas`, both WASM backends and the plain interpreter are untouched, and a
-decline lands on exactly what ran before. **Metal declines them** (`MetalGemm.gemmT`
-answers `false`): `gemm.metal` has no transposed staging and there was no Apple machine to
-measure one on.
+decline lands on exactly what ran before. **Metal carries them too** since todo-631, on
+the same two flags and on MPS besides -- "The transposed product on Metal" below.
 
 **Measured, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, GB10
 with the machine to itself; the step is `(t23 - t3) / 20`, median of three interleaved
@@ -1303,9 +1302,10 @@ byte-identical to the previous build's at every step of all six runs.**
   of forward and holds 600 MB more on the device for the round trip. **Declined on the
   numbers.** `sqrt 2` has no exact reciprocal, so the divide cannot be rewritten the way
   the scale's was.
-- **The fused tier on Metal** stays declined: no Apple machine to measure the row kernels'
-  sequential double folds on, which is the same reason `.todo/631` gives for the
-  transposed product. Carved out as `.todo/636`.
+- **The fused tier on Metal** was carved out as `.todo/636` and is now built -- eight of
+  the nine members, the row kernels' sequential double folds running on the software
+  binary64 the resident tier already needed. "The fused tier on Metal" below has the
+  numbers.
 
 **One measurement to carry forward: the last-axis fold is uncoalesced.** `fold_f32` with
 `inner == 1` gives thread `i` row `i`, so thirty-two lanes read addresses a row apart --
@@ -1326,8 +1326,8 @@ threshold, and two whole tiers.
 | widths | `#d` and `#f` | **`#f` only** -- MSL rejects `double` outright |
 | rank-2 product | our tiled kernel | **MPS** above `2^27` per matrix, our tiled kernel below |
 | stacked product | our batched kernel | our batched kernel |
-| transposed stacked product | `ta` / `tb` on the same kernel | **declined** -- no transposed staging in `gemm.metal` (`.todo/631`) |
-| fused tier | nine members | **declined** -- no fused MSL kernels (`.todo/636`) |
+| transposed stacked product | `ta` / `tb` on the same kernel | the same two flags, and MPS's own `transposeLeft:` / `transposeRight:` above the MPS threshold |
+| fused tier | nine members | **eight of the nine** -- the dropout mask stays declined, on the draw's arithmetic (todo-636) |
 | element-wise tier | twelve members | the same twelve |
 | broadcast + axes transpose | yes | yes |
 | axis fold `:axis` | yes | **not as a round trip, measured**; over a resident operand only |
@@ -1399,6 +1399,44 @@ deliberately probe-free predicate answer differently depending on whether someth
 had touched the driver first, and `GpuDeclineTest` pins its answer against the constant on
 every machine. **Revisit with a measurement, not with this paragraph.**
 
+### The transposed product on Metal (todo-631, 2026-09-02)
+
+`gemm_batched_f32` took `ta` / `tb` the way `gemm<T>` did, in the same staging: an operand
+so marked has its `M x K` (or `K x N`) matrix STORED `K x M` (or `N x K`), the load walks
+it down its columns with the two thread indices swapped so a SIMD group's global reads
+stay contiguous, and the tiles gained the column of padding that makes the transposed
+store bank-conflict-free. The TILE the fold reads is the same tile, so the product is
+bit-identical to the plain product of the transposed copy and which orientation ran is not
+observable -- `MetalGpuTest.aTransposedOperandIsReadInPlaceAndFoldsOntoTheUntransposedProduct`
+asserts EQUALITY, at every shape and through BOTH routes.
+
+**MPS carries the orientation too, and that is what makes the threshold invisible.** Above
+`MPS_MIN_WORK` the tiled kernel is unreachable, so a transposed product there would have
+had to fall back to the copy the change exists to remove. `MPSMatrixMultiplication` takes
+`transposeLeft:` / `transposeRight:` and the descriptor is then the operand's STORED shape
+(`m x n` rather than `n x m`, `rowBytes` still the storage's own contiguous row) --
+measured, that route lands on the tiled kernel's bits exactly as the plain pair does, which
+is what the test asserts at the 1000x1000x1000 shape by running it both ways.
+
+**Measured, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output,
+M4 Max 40-core / 128 GB with the machine to itself; the step is `(t13 - t3) / 10`, three
+interleaved rounds, the same program the CUDA tables use):
+
+| | before | after |
+|---|---|---|
+| wall a step, the three rounds | 11.738 / 8.760 / 8.440 | **8.014 / 7.980 / 8.325** |
+| wall a step, median | 8.760 s | **8.014 s** |
+
+Every AFTER round beats every BEFORE round, which is the shape the CUDA measurement warned
+to look for rather than a single pair: the before rounds span 39% (the first is a cold
+one), the after rounds 4%. **The loss series is byte-identical to the previous build's at
+every step of all six runs**, as the bit-identity above says it must be.
+
+What did NOT transfer from the CUDA half: the register-tiled kernels, which this backend
+does not have -- above the MPS threshold MPS is the fast path and below it the 16x16
+kernel is the only one -- so there is no transposed-tile-versus-untransposed cost to weigh
+here, and no `_t4` / `_t8` regression to trade against the removed pass.
+
 ### Precision on this backend, and the three things the hardware does differently
 
 **The strided tier's bit-identity is an ARGUMENT here rather than an inheritance.**
@@ -1449,6 +1487,85 @@ The pins: `theStridedTierIsBitIdenticalToTheScalarOracle`, and
 2^18 bit patterns (subnormals, the specials, the tiny and the huge) and twenty-odd scalars
 from 1e-310 to `Double.MAX_VALUE`, the Adam update over three steps, the equal-shape ops
 -- against Java's arithmetic, bit for bit.
+
+### The fused tier on Metal (todo-636, 2026-09-02)
+
+Eight of `gemm.cu`'s nine fused members, in MSL: the exact GELU and its adjoint, the
+last-axis softmax and its adjoint, the last-axis log-softmax and its adjoint, layer-norm's
+normalization and its adjoint. The row kernels are `gemm.cu`'s -- one THREAD per row,
+thirty-two rows streamed through a transposed threadgroup tile thirty-two columns at a
+time, two SIMD groups to a threadgroup -- and what makes them possible here is the
+software binary64 the resident tier already needed: the sequential `double` fold has no
+float form that keeps its bits, and `f64_add` over a widened float is the CPU's own
+accumulation.
+
+**Every member boundary goes one of two ways, and which one is not a choice.** `gemm.cu`
+spells a boundary `(T)((double) a op (double) b)`; with `T = float` and no `double`, a
+boundary whose operands are both floats IS that rounding taken once (`bin_op_exact`, the
+flush guard included), and a boundary against a constant the float grid does not hold --
+`1/sqrt 2`, `2/sqrt pi`, the layer-norm `eps` -- takes the software route, which is
+exactly what the chain's own `scal_f32` takes for those scalars.
+`MetalGpuTest.theFusedTierLandsOnTheComposedDeviceChainsBits` runs each chain member by
+member over RESIDENT operands (on this backend a per-row intermediate is below every size
+threshold, so residency is the only way to get an all-device chain) and asserts EQUALITY
+against the fused kernel. It passed on the first run for all eight.
+
+**Per call, best of five, M4 Max at the book's own shapes** (`--gpu --simd`, `java -jar`,
+ms):
+
+| composition, shape | chain | fused | |
+|---|---|---|---|
+| `softmax :axis -1`, `(24576 256)` | 12 | **2** | 6.0x |
+| its adjoint | 7 | **5** | 1.4x |
+| `log-softmax :axis -1`, `(16384 3038)` | 83 | **21** | 4.0x |
+| its adjoint | 66 | **24** | 2.8x |
+| `%la-gelu`, `(16384 1536)` | 36 | **8** | 4.5x |
+| its adjoint | 84 | **17** | 4.9x |
+| `%la-layer-norm`, `(16384 384)` | 13 | **3** | 4.3x |
+| its adjoint | 47 | **8** | 5.9x |
+
+**The step, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, M4
+Max with the machine to itself; `(t13 - t3) / 10`, three interleaved rounds, against the
+build that already had the transposed product):
+
+| | before | after |
+|---|---|---|
+| wall a step, the three rounds | 9.940 / 8.663 / 7.567 | **5.552 / 7.440 / 5.901** |
+| wall a step, median | 8.663 s | **5.901 s** |
+
+Every after round beats every before round. A THIRD off the step, where the CUDA fused
+tier took a quarter -- larger here because this backend removes four command buffers out
+of five as well as the memory passes: a Metal call is `commit` plus `waitUntilCompleted`
+and nothing overlaps, so a chain of five members is five full waits.
+
+**THE LOSS SERIES MOVES HERE, and only for the log-softmax pair.** Measured member by
+member at `(16384 64)`, six of the eight are byte-identical to the unfused build --
+softmax, its adjoint, the GELU, its adjoint, layer-norm and its adjoint -- and
+`log-softmax` and its adjoint are not. The cause is a THRESHOLD, not the kernel: the
+chain's `(linalg:log (linalg:sum ... :keepdims t))` is a `log` over a `rows x 1` array,
+16384 elements at the book's shapes, which is under this backend's map threshold of 2^17
+and therefore runs on the CPU as `Math.log`; the fused kernel calls MSL's `log`. So the
+fused member carries a DEVICE `log` where the chain here carried a host one, which is the
+same kind of move an accelerated `exp` already makes. On CUDA the same array clears that
+backend's lower map threshold, which is why todo-629 measured the loss byte-identical
+there and this does not. Declining the pair would restore byte-identity and cost 104 of
+the ~330 ms the table above gives back, which is why it is not declined -- but a program
+that needs the previous bits on Apple has to turn the flag off, not just this tier.
+
+**The dropout mask is the ninth, and it stays declined -- on the ARITHMETIC.**
+Wichmann-Hill's uniform is three binary64 divisions and two additions an element, and a
+binary64 division here is the software restoring divide, fifty-five bit-serial steps. That
+is why `rngFillF` is not a member on this backend either, and fusing the comparison and
+the scale onto the draw does not change which half is expensive: it is the draw, not the
+two passes over it. `MetalGpuTest.theDropoutMaskStaysDeclinedHere` pins both.
+
+**The offer rule needed a threshold of its own.** `Gpu.offeredRows` took the FOLD
+threshold for the libm-free members, and this backend's fold threshold is `Long.MAX_VALUE`
+-- the measured refusal of the round-trip axis fold -- so layer-norm and its adjoint could
+never have been offered. A fused row kernel does not replace one fold; it replaces a chain
+of memory passes and command buffers, so the fold's answer is the wrong one to reuse.
+`GpuDevice.Thresholds` gained a `fused` field: CUDA passes its own fold threshold (nothing
+moves there) and Metal passes `MIN_MAP_ELEMENTS`.
 
 ### Residency and the GEMV on this backend
 

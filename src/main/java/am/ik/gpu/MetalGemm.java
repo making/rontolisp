@@ -106,6 +106,13 @@ final class MetalGemm implements GpuDevice {
 
 	private static final int ZIP = 0, SCAL = 1, WHERE = 2, ADAM = 3, COPY = 4, FOLD = 5;
 
+	/** The fused tier's kernels (todo-636), in the order of {@link #fused}. */
+	static final String[] KERNELS_FUSED = { "gelu_f32", "gelu_grad_f32", "softmax_f32", "softmax_grad_f32",
+			"log_softmax_f32", "log_softmax_grad_f32", "layer_norm_f32", "layer_norm_grad_f32" };
+
+	private static final int GELU = 0, GELU_GRAD = 1, SOFTMAX = 2, SOFTMAX_GRAD = 3, LOG_SOFTMAX = 4,
+			LOG_SOFTMAX_GRAD = 5, LAYER_NORM = 6, LAYER_NORM_GRAD = 7;
+
 	/**
 	 * The kernels an EMBEDDER supplied, when this library's classes travel without its
 	 * resources -- see {@link Gpu#useMetalKernels(String)}.
@@ -201,6 +208,21 @@ final class MetalGemm implements GpuDevice {
 	private static final int TILE = 16;
 
 	/**
+	 * The SIMD-group width the FUSED row kernels are written around -- one thread per
+	 * row, thirty-two rows through one transposed tile. Every Apple GPU is 32 wide and
+	 * the probe rejects a GEMV pipeline that says otherwise; these kernels index the tile
+	 * by it, so it is a constant here rather than a queried width.
+	 */
+	private static final int SIMD_WIDTH = 32;
+
+	/**
+	 * SIMD groups per threadgroup in the fused row kernels, which is what bounds their
+	 * threadgroup memory: two tiles of {@code 32 x 33} floats per group, 16.5 KB in all
+	 * for the two-tile members. {@code gemm.metal} declares the same number.
+	 */
+	private static final int ROW_SIMDS = 2;
+
+	/**
 	 * The smallest slab the pool hands out. A rank-8 layout buffer is 96 bytes and a
 	 * one-element operand is 4, so without a floor the pool would fill with classes that
 	 * exist only to be distinct.
@@ -262,6 +284,9 @@ final class MetalGemm implements GpuDevice {
 
 	/** The resident tier's pipelines, indexed by {@link #ZIP} and its siblings. */
 	private final MemorySegment[] tier;
+
+	/** The fused tier's pipelines, indexed by {@link #GELU} and its siblings. */
+	private final MemorySegment[] fused;
 
 	/** The GEMV pipeline's SIMD-group width, which is how many threads share one row. */
 	private final int gemvWidth;
@@ -327,7 +352,8 @@ final class MetalGemm implements GpuDevice {
 		this.bcast = kernels[2];
 		this.gather = kernels[3];
 		this.gemv = kernels[4];
-		this.tier = java.util.Arrays.copyOfRange(kernels, 5, kernels.length);
+		this.tier = java.util.Arrays.copyOfRange(kernels, 5, 5 + KERNELS_RESIDENT.length);
+		this.fused = java.util.Arrays.copyOfRange(kernels, 5 + KERNELS_RESIDENT.length, kernels.length);
 		this.gemvWidth = gemvWidth;
 		this.description = description;
 		this.workingSet = workingSet;
@@ -370,9 +396,14 @@ final class MetalGemm implements GpuDevice {
 		// CudaGemm.unwind follows for a retained primary context.
 		MemorySegment queue = MemorySegment.NULL;
 		MemorySegment library = MemorySegment.NULL;
-		String[] names = { KERNEL_BATCHED_F32, KERNEL_MAP_F32, KERNEL_BCAST_F32, KERNEL_GATHER_F32, KERNEL_GEMV_F32,
-				KERNELS_RESIDENT[ZIP], KERNELS_RESIDENT[SCAL], KERNELS_RESIDENT[WHERE], KERNELS_RESIDENT[ADAM],
-				KERNELS_RESIDENT[COPY], KERNELS_RESIDENT[FOLD] };
+		String[] names = new String[5 + KERNELS_RESIDENT.length + KERNELS_FUSED.length];
+		names[0] = KERNEL_BATCHED_F32;
+		names[1] = KERNEL_MAP_F32;
+		names[2] = KERNEL_BCAST_F32;
+		names[3] = KERNEL_GATHER_F32;
+		names[4] = KERNEL_GEMV_F32;
+		System.arraycopy(KERNELS_RESIDENT, 0, names, 5, KERNELS_RESIDENT.length);
+		System.arraycopy(KERNELS_FUSED, 0, names, 5 + KERNELS_RESIDENT.length, KERNELS_FUSED.length);
 		MemorySegment[] kernels = new MemorySegment[names.length];
 		boolean keep = false;
 		try {
@@ -583,12 +614,16 @@ final class MetalGemm implements GpuDevice {
 	/**
 	 * The axis fold's threshold is {@code Long.MAX_VALUE}: it is never offered for its
 	 * size on this backend (the measured refusal, {@code .kb/gpu.md}), only over a
-	 * resident operand. The generator fill is not a member at all.
+	 * resident operand. The generator fill is not a member at all. The FUSED tier's
+	 * threshold is not the fold's, and deliberately: what a fused row kernel replaces is
+	 * a chain of memory passes and command buffers, not one fold, so it carries the
+	 * element-wise map's crossover ({@link #MIN_MAP_ELEMENTS}) like the members of the
+	 * tier that have a libm call in them.
 	 */
 	@Override
 	public Thresholds thresholds() {
-		return new Thresholds(MIN_WORK, MIN_MAP_ELEMENTS, MIN_STRIDED_ELEMENTS, Long.MAX_VALUE, Long.MAX_VALUE,
-				MIN_MATVEC_ELEMENTS);
+		return new Thresholds(MIN_WORK, MIN_MAP_ELEMENTS, MIN_STRIDED_ELEMENTS, Long.MAX_VALUE, MIN_MAP_ELEMENTS,
+				Long.MAX_VALUE, MIN_MATVEC_ELEMENTS);
 	}
 
 	/**
@@ -752,6 +787,36 @@ final class MetalGemm implements GpuDevice {
 	@Override
 	public boolean gemmF(float[] a, int oa, int sa, float[] b, int ob, int sb, float[] c, int oc, int batch, int n,
 			int m, int p) {
+		return gemmFT(a, oa, sa, false, b, ob, sb, false, c, oc, batch, n, m, p);
+	}
+
+	/** The double half of the transposed product: the hard decline every double is. */
+	@Override
+	public boolean gemmT(double[] a, int oa, int sa, boolean ta, double[] b, int ob, int sb, boolean tb, double[] c,
+			int oc, int batch, int n, int m, int p) {
+		return false;
+	}
+
+	/**
+	 * The TRANSPOSED stacked product (todo-631): either operand's {@code n x m} (or
+	 * {@code m x p}) matrix STORED with its last two axes exchanged, which is what the
+	 * linear backward's {@code g . b^T} and {@code a^T . g} hand it -- and, since the
+	 * transpose view, the attention head's forward too.
+	 *
+	 * <p>
+	 * The kernel indexes the operand where it already is instead of reading a strided
+	 * copy of it, so the pass the transpose used to cost disappears. The fold is
+	 * untouched -- k ascending over the same tile -- so the result is the untransposed
+	 * product's bit for bit and the orientation is invisible above this seam. Both routes
+	 * carry it: the tiled kernel through {@code ta} / {@code tb} in its parameter block,
+	 * and MPS through {@code transposeLeft:} / {@code transposeRight:} over descriptors
+	 * of the STORED shape, which agree with the kernel exactly as the plain pair does.
+	 * @return {@code true} when {@code c} was filled, {@code false} when the product
+	 * declined or the device failed -- in which case {@code c} is untouched
+	 */
+	@Override
+	public boolean gemmFT(float[] a, int oa, int sa, boolean ta, float[] b, int ob, int sb, boolean tb, float[] c,
+			int oc, int batch, int n, int m, int p) {
 		long aElements = span(batch, sa, (long) n * m), bElements = span(batch, sb, (long) m * p),
 				cElements = (long) batch * n * p;
 		if (!acceptable((long) batch * n * m * p, MIN_WORK, cElements, a, b)) {
@@ -771,8 +836,8 @@ final class MetalGemm implements GpuDevice {
 			call.stage(0, a, oa, aElements, false);
 			call.stage(1, b, ob, bElements, false);
 			boolean ran = this.mps && (long) n * m * p >= MPS_MIN_WORK
-					? multiplyThroughMps(call.slabs, sa, sb, batch, n, m, p)
-					: dispatchGemm(call.slabs, sa, sb, batch, n, m, p);
+					? multiplyThroughMps(call.slabs, sa, ta, sb, tb, batch, n, m, p)
+					: dispatchGemm(call.slabs, sa, ta, sb, tb, batch, n, m, p);
 			if (!ran) {
 				return false;
 			}
@@ -788,42 +853,24 @@ final class MetalGemm implements GpuDevice {
 		}
 	}
 
-	/**
-	 * The TRANSPOSED stacked product (2026-09-02): declined here at every orientation but
-	 * the plain one. {@code gemm.metal} has no transposed staging -- {@code gemm.cu} grew
-	 * one for the linear backward, and the Apple half has neither the kernel nor a
-	 * machine on which the change could be measured -- so an adjoint that would have used
-	 * it transposes through a copy exactly as it did before, which is a decline like any
-	 * other.
-	 * @return {@code true} when {@code c} was filled
-	 */
-	@Override
-	public boolean gemmT(double[] a, int oa, int sa, boolean ta, double[] b, int ob, int sb, boolean tb, double[] c,
-			int oc, int batch, int n, int m, int p) {
-		return false;
-	}
-
-	@Override
-	public boolean gemmFT(float[] a, int oa, int sa, boolean ta, float[] b, int ob, int sb, boolean tb, float[] c,
-			int oc, int batch, int n, int m, int p) {
-		return !ta && !tb && gemmF(a, oa, sa, b, ob, sb, c, oc, batch, n, m, p);
-	}
-
 	/** One dispatch of the tiled kernel over the whole stack. */
-	private boolean dispatchGemm(Slab[] slabs, int sa, int sb, int batch, int n, int m, int p) throws Throwable {
+	private boolean dispatchGemm(Slab[] slabs, int sa, boolean ta, int sb, boolean tb, int batch, int n, int m, int p)
+			throws Throwable {
 		try (Arena arena = Arena.ofConfined()) {
-			MemorySegment args = arena.allocate(I, 5);
+			MemorySegment args = arena.allocate(I, 7);
 			args.setAtIndex(I, 0, n);
 			args.setAtIndex(I, 1, p);
 			args.setAtIndex(I, 2, m);
 			args.setAtIndex(I, 3, sa);
 			args.setAtIndex(I, 4, sb);
+			args.setAtIndex(I, 5, ta ? 1 : 0);
+			args.setAtIndex(I, 6, tb ? 1 : 0);
 			MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
 			MemorySegment encoder = beginEncoder(commands, this.gemmBatched);
 			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[0].buffer, 0, 0);
 			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[1].buffer, 0, 1);
 			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[2].buffer, 0, 2);
-			this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 5L * Integer.BYTES, 3);
+			this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 7L * Integer.BYTES, 3);
 			this.driver.dispatch(encoder, MetalDriver.size(arena, (p + TILE - 1) / TILE, (n + TILE - 1) / TILE, batch),
 					MetalDriver.size(arena, TILE, TILE, 1));
 			this.driver.messageVoid(encoder, "endEncoding");
@@ -838,14 +885,20 @@ final class MetalGemm implements GpuDevice {
 	 * batched {@code MPSMatrixDescriptor} cannot be handed. Metal's floor is per command
 	 * buffer rather than per dispatch, so the encodes share the one wait.
 	 */
-	private boolean multiplyThroughMps(Slab[] slabs, int sa, int sb, int batch, int n, int m, int p) throws Throwable {
-		MemorySegment left = this.driver.matrixDescriptor(n, m, (long) m * Float.BYTES);
-		MemorySegment right = this.driver.matrixDescriptor(m, p, (long) p * Float.BYTES);
+	private boolean multiplyThroughMps(Slab[] slabs, int sa, boolean ta, int sb, boolean tb, int batch, int n, int m,
+			int p) throws Throwable {
+		// A transposed operand's descriptor is its STORED shape -- m x n rather than
+		// n x m -- and MPS is told to read it transposed; the rowBytes stay the storage's
+		// own contiguous row.
+		MemorySegment left = ta ? this.driver.matrixDescriptor(m, n, (long) n * Float.BYTES)
+				: this.driver.matrixDescriptor(n, m, (long) m * Float.BYTES);
+		MemorySegment right = tb ? this.driver.matrixDescriptor(p, m, (long) m * Float.BYTES)
+				: this.driver.matrixDescriptor(m, p, (long) p * Float.BYTES);
 		MemorySegment result = this.driver.matrixDescriptor(n, p, (long) p * Float.BYTES);
 		if (left.address() == 0 || right.address() == 0 || result.address() == 0) {
 			return false;
 		}
-		MemorySegment multiplication = this.driver.matrixMultiplication(this.device, n, p, m);
+		MemorySegment multiplication = this.driver.matrixMultiplication(this.device, ta, tb, n, p, m);
 		if (multiplication.address() == 0) {
 			return false;
 		}
@@ -1785,20 +1838,43 @@ final class MetalGemm implements GpuDevice {
 	 * @param host the host array that is being written
 	 * @return the array to write into: {@code host}, or a stub's backing
 	 */
-	// --- the fused tier: declined here (.todo/499, .todo/629) ------------------------
-	// The five compositions run on this backend member by member, as they did before;
-	// a fused MSL kernel is a measurement this backend has not made (the row kernels'
-	// sequential double folds have no float-only form -- see the software binary64 the
-	// resident tier needed).
+	@Override
+	public Object written(Object host) {
+		Object storage = materialize(host);
+		this.residency.written(host);
+		return storage;
+	}
+
+	// --- the fused tier (todo-636, the Apple half of .todo/499 and .todo/629) ----------
+	// Eight of the nine compositions gemm.cu fuses, each one MSL kernel where torch.lisp
+	// launched a chain of linalg: members -- and on this backend that removes four of
+	// five
+	// COMMAND BUFFERS as well as the memory passes, because a Metal call is commit plus
+	// waitUntilCompleted and nothing overlaps. Every one reproduces the chain's rounding,
+	// through the float route where two floats settle it and through the software
+	// binary64
+	// route where they do not (gemm.metal, "THE FUSED TIER"). The ninth, the dropout
+	// mask,
+	// stays declined: see dropoutMaskF.
+	//
+	// The double halves are the hard decline every other member's is.
 
 	@Override
 	public boolean gelu(double[] a, int oa, double[] c, int oc, int n) {
 		return false;
 	}
 
+	/**
+	 * The exact GELU, {@code x * (1 + erf(x / sqrt 2)) / 2}, as one pass where the
+	 * composition ran five.
+	 * @return {@code true} when {@code c} was filled
+	 */
 	@Override
 	public boolean geluF(float[] a, int oa, float[] c, int oc, int n) {
-		return false;
+		if (!acceptable(n, MIN_MAP_ELEMENTS, n, a)) {
+			return false;
+		}
+		return flat(this.fused[GELU], 1, new float[][] { a }, new int[] { oa }, c, oc, n, false);
 	}
 
 	@Override
@@ -1807,10 +1883,21 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/**
+	 * The tape's backward through that composition, folded onto {@code old} -- the
+	 * gradient {@code x} had already accumulated -- exactly where the tape's own
+	 * accumulation would have put it.
+	 * @return {@code true} when {@code c} was filled
+	 */
 	@Override
 	public boolean geluGradF(float[] g, int og, float[] x, int ox, float @Nullable [] old, int oOld, float[] c, int oc,
 			int n) {
-		return false;
+		if (!acceptable(n, MIN_MAP_ELEMENTS, n, g, x, old)) {
+			return false;
+		}
+		float[][] operands = old != null ? new float[][] { g, x, old } : new float[][] { g, x };
+		int[] offsets = old != null ? new int[] { og, ox, oOld } : new int[] { og, ox };
+		return flat(this.fused[GELU_GRAD], 3, operands, offsets, c, oc, n, old != null);
 	}
 
 	@Override
@@ -1818,9 +1905,15 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/**
+	 * {@code linalg:softmax} over the last axis as one pass: the strict amax, the
+	 * broadcast subtraction, {@code exp} at the width, the sum fold and the broadcast
+	 * division.
+	 * @return {@code true} when {@code c} was filled
+	 */
 	@Override
 	public boolean softmaxF(float[] a, int oa, float[] c, int oc, int rows, int len) {
-		return false;
+		return rowMember(this.fused[SOFTMAX], 1, rows, len, 0, new float[][] { a }, new int[] { oa }, c, oc);
 	}
 
 	@Override
@@ -1828,9 +1921,11 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/** {@code torch:softmax}'s adjoint {@code s * (g - sum(g * s))}, one pass. */
 	@Override
 	public boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len) {
-		return false;
+		return rowMember(this.fused[SOFTMAX_GRAD], 2, rows, len, 0, new float[][] { g, s }, new int[] { og, os }, c,
+				oc);
 	}
 
 	@Override
@@ -1838,9 +1933,10 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/** {@code linalg:log-softmax} over the last axis, one pass. */
 	@Override
 	public boolean logSoftmaxF(float[] a, int oa, float[] c, int oc, int rows, int len) {
-		return false;
+		return rowMember(this.fused[LOG_SOFTMAX], 1, rows, len, 0, new float[][] { a }, new int[] { oa }, c, oc);
 	}
 
 	@Override
@@ -1848,9 +1944,11 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/** {@code torch:log-softmax}'s adjoint {@code g - exp(out) * sum(g)}, one pass. */
 	@Override
 	public boolean logSoftmaxGradF(float[] g, int og, float[] o, int oo, float[] c, int oc, int rows, int len) {
-		return false;
+		return rowMember(this.fused[LOG_SOFTMAX_GRAD], 2, rows, len, 0, new float[][] { g, o }, new int[] { og, oo }, c,
+				oc);
 	}
 
 	@Override
@@ -1858,9 +1956,16 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/**
+	 * {@code torch:layer-norm}'s normalization {@code (x - mean) / sqrt(var + eps)} over
+	 * the last axis, one pass. {@code eps} rides as raw {@code binary64} bits: it is
+	 * generally not a float, and the member boundary the composition rounds at is the
+	 * {@code double} addition.
+	 * @return {@code true} when {@code c} was filled
+	 */
 	@Override
 	public boolean layerNormF(float[] x, int ox, float[] c, int oc, int rows, int len, double eps) {
-		return false;
+		return rowMember(this.fused[LAYER_NORM], 1, rows, len, eps, new float[][] { x }, new int[] { ox }, c, oc);
 	}
 
 	@Override
@@ -1869,10 +1974,13 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/** The tape's backward through that composition, folded onto {@code old}. */
 	@Override
 	public boolean layerNormGradF(float[] g, int og, float[] x, int ox, float @Nullable [] old, int oOld, float[] c,
 			int oc, int rows, int len, double eps) {
-		return false;
+		float[][] operands = old != null ? new float[][] { g, x, old } : new float[][] { g, x };
+		int[] offsets = old != null ? new int[] { og, ox, oOld } : new int[] { og, ox };
+		return rowMember(this.fused[LAYER_NORM_GRAD], 3, rows, len, eps, operands, offsets, c, oc);
 	}
 
 	@Override
@@ -1880,16 +1988,154 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/**
+	 * The inverted dropout mask: DECLINED here, and on the arithmetic rather than for
+	 * want of a kernel. The draw is Wichmann-Hill's, whose uniform is three
+	 * {@code double} divisions and two {@code double} additions per element -- and on
+	 * this backend a {@code double} division is the software binary64 one, a restoring
+	 * divide of fifty-five bit-serial steps. The generator fill is already not a member
+	 * here for exactly that reason ({@code rngFillF}), and fusing the comparison and the
+	 * scale onto it would not change which half is expensive: it is the draw, not the two
+	 * passes over it. The chain's own draw runs on the CPU and the two passes over it run
+	 * here as they did before.
+	 * @return {@code false}, always
+	 */
 	@Override
 	public boolean dropoutMaskF(float[] c, int oc, int n, double p, double span, int s1, int s2, int s3) {
 		return false;
 	}
 
-	@Override
-	public Object written(Object host) {
-		Object storage = materialize(host);
-		this.residency.written(host);
-		return storage;
+	/**
+	 * One FLAT fused member: {@code declared} operand buffers then the result then the
+	 * parameter block ({@code n}, and whether the optional last operand is present), one
+	 * thread per element. An operand the call does not have -- {@code old}, the gradient
+	 * an adjoint folds onto -- is absent from {@code operands} and its buffer index is
+	 * bound to the result's slab instead, because Metal validates every buffer the
+	 * function declares and the kernel never reads it.
+	 */
+	private boolean flat(MemorySegment state, int declared, float[][] operands, int[] offsets, float[] c, int oc, int n,
+			boolean optional) {
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		int slots = operands.length + 1, result = operands.length;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(slots);
+			for (int k = 0; k < operands.length; k++) {
+				call.lookup(k, operands[k], offsets[k], n);
+			}
+			for (int k = 0; k < slots; k++) {
+				if (!call.ensure(k, n)) {
+					return false;
+				}
+			}
+			for (int k = 0; k < operands.length; k++) {
+				call.stage(k, operands[k], offsets[k], n, false);
+			}
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 2);
+				args.setAtIndex(I, 0, n);
+				args.setAtIndex(I, 1, optional ? 1 : 0);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, state);
+				bindFused(encoder, call.slabs, declared, result);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, declared + 1);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commitAndWait(commands)) {
+					return false;
+				}
+			}
+			call.finish(result, c, oc, n);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * One ROW fused member: {@code rows} contiguous rows of {@code len}, one thread per
+	 * row through a transposed threadgroup tile, {@link #ROW_SIMDS} SIMD groups to a
+	 * threadgroup. The buffers are {@code declared} operands, the result, the parameter
+	 * block (rows, len, whether the optional {@code old} operand is present) and
+	 * {@code eps} as raw {@code binary64} bits -- which only the two layer-norm members
+	 * declare, the others passing 0 and never reading it. Offered from
+	 * {@link #MIN_MAP_ELEMENTS} or over a resident operand, which is what this backend's
+	 * fused threshold says ({@link #thresholds()}).
+	 */
+	private boolean rowMember(MemorySegment state, int declared, int rows, int len, double eps, float[][] operands,
+			int[] offsets, float[] c, int oc) {
+		long n = (long) rows * len;
+		if (n > Integer.MAX_VALUE || !acceptable(n, MIN_MAP_ELEMENTS, n, (Object[]) operands)) {
+			return false;
+		}
+		int elements = (int) n;
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		int slots = operands.length + 1, result = operands.length;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(slots);
+			for (int k = 0; k < operands.length; k++) {
+				call.lookup(k, operands[k], offsets[k], elements);
+			}
+			for (int k = 0; k < slots; k++) {
+				if (!call.ensure(k, elements)) {
+					return false;
+				}
+			}
+			for (int k = 0; k < operands.length; k++) {
+				call.stage(k, operands[k], offsets[k], elements, false);
+			}
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 3);
+				args.setAtIndex(I, 0, rows);
+				args.setAtIndex(I, 1, len);
+				args.setAtIndex(I, 2, operands.length == declared ? 1 : 0);
+				MemorySegment epsilon = arena.allocate(L, 1);
+				epsilon.setAtIndex(L, 0, Double.doubleToRawLongBits(eps));
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, state);
+				bindFused(encoder, call.slabs, declared, result);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 3L * Integer.BYTES, declared + 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", epsilon, (long) Long.BYTES, declared + 2);
+				int groups = (rows + ROW_SIMDS * SIMD_WIDTH - 1) / (ROW_SIMDS * SIMD_WIDTH);
+				this.driver.dispatch(encoder, MetalDriver.size(arena, groups, 1, 1),
+						MetalDriver.size(arena, ROW_SIMDS * SIMD_WIDTH, 1, 1));
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commitAndWait(commands)) {
+					return false;
+				}
+			}
+			call.finish(result, c, oc, elements);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * Binds {@code declared} operand buffers then the result: the slabs the call holds,
+	 * with the result's standing in for an optional operand the call does not have.
+	 */
+	private void bindFused(MemorySegment encoder, Slab[] slabs, int declared, int result) throws Throwable {
+		for (int k = 0; k < declared; k++) {
+			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:",
+					(k < result ? slabs[k] : slabs[result]).buffer, 0, k);
+		}
+		this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[result].buffer, 0, declared);
 	}
 
 	/**

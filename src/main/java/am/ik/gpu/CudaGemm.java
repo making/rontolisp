@@ -886,12 +886,17 @@ final class CudaGemm implements GpuDevice {
 	 */
 	@Override
 	public Thresholds thresholds() {
+		// The fused tier's threshold is the fold's here, which is what the tier was
+		// measured and shipped on: the libm-free members are offered exactly as an axis
+		// fold is.
 		return this.pooled
 				? new Thresholds(Gpu.POOLED_MIN_WORK, Gpu.MAP_POOLED_MIN_ELEMENTS, Gpu.STRIDED_POOLED_MIN_ELEMENTS,
-						Gpu.FOLD_POOLED_MIN_ELEMENTS, Gpu.RNG_POOLED_MIN_ELEMENTS, Gpu.MATVEC_POOLED_MIN_ELEMENTS)
+						Gpu.FOLD_POOLED_MIN_ELEMENTS, Gpu.FOLD_POOLED_MIN_ELEMENTS, Gpu.RNG_POOLED_MIN_ELEMENTS,
+						Gpu.MATVEC_POOLED_MIN_ELEMENTS)
 				: new Thresholds(Gpu.UNPOOLED_MIN_WORK, Gpu.MAP_UNPOOLED_MIN_ELEMENTS,
 						Gpu.STRIDED_UNPOOLED_MIN_ELEMENTS, Gpu.FOLD_UNPOOLED_MIN_ELEMENTS,
-						Gpu.RNG_UNPOOLED_MIN_ELEMENTS, Gpu.MATVEC_UNPOOLED_MIN_ELEMENTS);
+						Gpu.FOLD_UNPOOLED_MIN_ELEMENTS, Gpu.RNG_UNPOOLED_MIN_ELEMENTS,
+						Gpu.MATVEC_UNPOOLED_MIN_ELEMENTS);
 	}
 
 	boolean pooled() {

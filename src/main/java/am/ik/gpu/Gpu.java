@@ -341,6 +341,9 @@ public final class Gpu {
 
 		private static final long FOLD_MIN_ELEMENTS;
 
+		/** The fused tier's own crossover; see {@link GpuDevice.Thresholds#fused()}. */
+		private static final long FUSED_MIN_ELEMENTS;
+
 		private static final long RNG_MIN_ELEMENTS;
 
 		private static final long MATVEC_MIN_ELEMENTS;
@@ -387,14 +390,15 @@ public final class Gpu {
 			if (device != null && (Gpu.lazyWanted || (Gpu.lazyIfWorthwhile && device.lazyResultsPay()))) {
 				device.lazyResults(true);
 			}
-			GpuDevice.Thresholds thresholds = device == null
-					? new GpuDevice.Thresholds(POOLED_MIN_WORK, MAP_POOLED_MIN_ELEMENTS, STRIDED_POOLED_MIN_ELEMENTS,
-							FOLD_POOLED_MIN_ELEMENTS, RNG_POOLED_MIN_ELEMENTS, MATVEC_POOLED_MIN_ELEMENTS)
+			GpuDevice.Thresholds thresholds = device == null ? new GpuDevice.Thresholds(POOLED_MIN_WORK,
+					MAP_POOLED_MIN_ELEMENTS, STRIDED_POOLED_MIN_ELEMENTS, FOLD_POOLED_MIN_ELEMENTS,
+					FOLD_POOLED_MIN_ELEMENTS, RNG_POOLED_MIN_ELEMENTS, MATVEC_POOLED_MIN_ELEMENTS)
 					: device.thresholds();
 			MIN_WORK = thresholds.work();
 			MAP_MIN_ELEMENTS = thresholds.map();
 			STRIDED_MIN_ELEMENTS = thresholds.strided();
 			FOLD_MIN_ELEMENTS = thresholds.fold();
+			FUSED_MIN_ELEMENTS = thresholds.fused();
 			RNG_MIN_ELEMENTS = thresholds.rng();
 			MATVEC_MIN_ELEMENTS = thresholds.matvec();
 		}
@@ -2656,7 +2660,7 @@ public final class Gpu {
 		boolean resident = device.resident(a);
 		long total = (long) rows * len;
 		return rows >= (resident ? FOLD_RESIDENT_MIN_CELLS : FOLD_MIN_CELLS)
-				&& (resident || total >= (libm ? Probe.MAP_MIN_ELEMENTS : Probe.FOLD_MIN_ELEMENTS)) && offsetA >= 0
+				&& (resident || total >= (libm ? Probe.MAP_MIN_ELEMENTS : Probe.FUSED_MIN_ELEMENTS)) && offsetA >= 0
 				&& offsetA + total <= extent(device, a) && fitsResult(extent(device, out), offsetOut, total);
 	}
 

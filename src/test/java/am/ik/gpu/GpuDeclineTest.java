@@ -480,6 +480,9 @@ class GpuDeclineTest {
 		for (String kernel : MetalGemm.KERNELS_RESIDENT) {
 			assertThat(msl).contains("kernel void " + kernel);
 		}
+		for (String kernel : MetalGemm.KERNELS_FUSED) {
+			assertThat(msl).contains("kernel void " + kernel);
+		}
 		// The op-code mirrors, the third copy of the table gemm.cu and Gpu.MAP_* /
 		// Gpu.BIN_* hold the other two of.
 		assertThat(msl).contains("case " + Gpu.MAP_ERF + ": return erf1(x);");
