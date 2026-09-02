@@ -4,8 +4,11 @@
 
 `array` の次元数を返します。ランク 0 の配列 (`(make-array nil)`) では 0、ベクタでは 1、2 次元配列では 2 で、より高いランクでも同様です。この値は [`array-dimensions`](array-dimensions.md) が返すリストの長さと等しくなります。
 
+文字列は文字のランク 1 配列なので、そのランクは 1 です。
+
 ```lisp
 (array-rank (vector 1)) ; => 1
 (array-rank (make-array '(2 3))) ; => 2
 (array-rank (make-array nil)) ; => 0
+(array-rank "abc") ; => 1
 ```
