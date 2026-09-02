@@ -74,8 +74,11 @@ have failed in minutes with exactly the stack above instead of hanging a full ru
 Run alone (`-Dtest=LinalgGpuTest`) on an M4 Max / macOS 26.3.1 it completes in about
 **8 minutes**: 40 tests, 2 skipped. So the `while` the note above suspected of never going
 false does terminate; what the full-suite observation was seeing is a class that takes
-minutes while every sibling takes seconds, and under sixteen-way parallelism takes long
-enough to look stopped.
+minutes while every sibling takes seconds, which is enough on its own to look stopped.
+It is NOT parallelism: the suite runs `same_thread` by default and only two classes opt
+into `@Execution(CONCURRENT)`, so this one runs sequentially like the rest -- the
+`[rontolisp] JUnit parallelism = 16` line prints the strategy's chosen value, not what
+this class gets (`.kb/test-execution.md`).
 
 One method alone -- `theResidentTierRunsOverAResidentOperandAndLandsOnTheCpuKernelsBits`,
 the one the CPU-pinned fork of a full run was inside -- is **72.7 s**, and it is 72.2 s

@@ -1325,9 +1325,14 @@ previous build's at every step of all six runs and both profiles.**
 
 **On Metal the fold is built too, and is worth 15% of the step there** -- six times what
 it took here, and for a reason this backend could not have guessed: the causal mask is a
-`double[]`, which `where_f32` refuses on that backend, so the chain's `masked-fill` was
-running on the CPU over a materialized score. "The attention scale and mask on Metal"
-below has the numbers.
+`double[]`, which `whereF` refuses on METAL, so the chain's `masked-fill` was running on
+the CPU over a materialized score. "The attention scale and mask on Metal" below has the
+numbers. **CUDA is not the backend with that hole**: `where` here takes the mask's width
+independently of the value's (`mkind` is 1 for a `float[]` mask and 2 for a `double[]`
+one, and the staging is sized off `mwidth`), so a double mask is a device member and
+always was -- which is why the `where_f32` row above has 72 launches to remove rather
+than a CPU pass. So the two backends' numbers are not the same measurement: -2.3% here is
+two device passes removed, and 15% there is two device passes plus one host pass.
 
 What is left at the head after this: `copy_f32` at grid 4096 (72 a step, 2.9 ms) is
 `torch:cat`'s slice adjoint over the six heads, and the softmax pair itself is 28 ms a
@@ -1899,6 +1904,16 @@ REFUSED member produced, because the refusal is also the idle that costs the nex
 clocks. Lowering the map threshold to catch the per-row shape would have moved a 62 us
 member to 500, in exchange for last-ulp agreement with a fused tier that replaces the
 chain rather than running beside it.
+
+**This is a Metal finding, not a device finding.** todo-635 ran the same gap sweep on
+CUDA -- the host spun 0 / 0.5 / 1 / 2 / 4 / 8 / 32 ms before one launch, median of
+twenty-five, three rounds, persistence mode on -- and the column is flat to within 1%:
+a plain 16384x3038 fold is 1.869 ms at 0 ms of gap, 1.866 at 2, 1.867 at 32, against
+1.896 back to back. There is no clock ramp to pay there, so back to back IS the right
+context for a threshold on that backend, and the rule above must not be carried across.
+The generalization that survives both is narrower: **a threshold is measured in the
+wrong context whenever the backend's clocks depend on how long it has been idle** --
+which is a measurement per backend, not a property of devices.
 
 ### Residency and the GEMV on this backend
 
