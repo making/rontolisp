@@ -2439,19 +2439,54 @@ f32 copy of it is**, which the probe asserts at both mask shapes and
 pins at both widths over cells covering zero, NEGATIVE ZERO (false, `(/= m 0)`'s rule),
 an ordinary value and a NaN (true).
 
-**And it takes most of the sting out of the fold's SHAPE decline here** (todo-650, filed
-on the CUDA side, where a step's `cuMemcpy` count is dominated by it: 96 of 144 attention
-heads decline `%la-scaled-masked-softmax` because their mask is a padding mask). The rule
-is `LinalgGpu.suffixLength`, which lives in the INTERCEPTION layer above `GpuDevice`, so
-**this backend declines exactly the same masks CUDA does** -- the same 96 of 144 for the
-same model, and no `MetalGemm` change could alter that. What the decline COSTS is another
-matter, and here it is now nearly nothing: the fallback's three members are all device
-members over a resident score, so the row above measures 1.87 ms against the accepted
-shape's 1.77 forced, and 0.467 against 0.200 unforced -- two extra enqueues, and no host
-round trip at all (16.8 MB down and back would be milliseconds, not 0.27). Before todo-645
-the same decline cost 14.07 against 1.80, and the reason was never the round trip 650
-describes: it was this CPU select. **So the Metal half of 650 is closed by this**, and
-what is left of it here is two enqueues a call.
+#### What the fold's SHAPE decline costs on this backend (todo-650's Metal half, measured)
+
+todo-650 was filed on the CUDA side: a padding mask is not a trailing block of the score,
+so `%la-scaled-masked-softmax` declines and the defun's members run over a MATERIALIZED
+score. The rule is `LinalgGpu.suffixLength` -- and its verbatim twin
+`JvmGpuTemplate.softmaxMaskLength`, because the compiled path carries its own copy;
+**a change to the acceptance condition has to change BOTH**. Neither is in `am.ik.gpu`, so
+no backend can decline differently from another, and the counts below are structural.
+
+Counted at the notebook's chapter-2 shapes (`d_model` 512, 6 blocks, 8 heads, `d_ff` 512,
+batch 64, `max_length` 20, a 6638-token vocabulary --
+`.todo/123-gpu-acceleration/transformer-book-shapes.lisp`, `--gpu --simd`, M4 Max), **per
+step, exactly linear in the step count**:
+
+| | accepted | declined ON SHAPE |
+|---|---|---|
+| `%la-scaled-masked-softmax` | 48 | **96** |
+| `%la-scaled-masked-softmax-grad` | 48 | **96** |
+
+which is the model's own structure: the 48 that pass are the decoder's SELF attention (6
+blocks x 8 heads), whose `padding + subsequent` mask is `(batch len len)` and so a suffix;
+the 96 that fail are the encoder's self attention and the decoder's cross attention, both
+of which take `torch:padding-mask`'s `(batch 1 length)` -- extent 1 in the MIDDLE, which
+`suffixLength` cannot drop. **The same 96 / 192 CUDA counts.**
+
+**And the price here is one whole score home per declined call.** Against the same probe
+with the source mask materialized at the score's own shape (`WIDEN=1`, so all 144 are
+accepted), JVM class output, `(t13 - t3) / 10`, two interleaved rounds:
+
+| per step | declining (as shipped) | all accepted |
+|---|---|---|
+| host downloads | **879** | 687 |
+| bytes downloaded | 194 MB | 178 MB |
+| wall a step | 0.763 / 0.760 s | 0.759 / 0.734 s |
+
+**192 extra downloads, which is exactly the 96 + 96 declines**, at 90 KB each -- one score
+(64 x 19 x 19 f32 = 92416 B) per declined call, todo-650's own description. So the round
+trip is real on this backend too, and todo-645 did NOT remove it: what todo-645 removed
+was the CPU SELECT inside the fallback, which was the expensive half. **What is left is
+worth 0 to 3% of the step, inside the wall's usual +-4%** -- and the accepted column pays
+for building the two widened masks, so the true prize of a rule change is at least that.
+(The 16.8 MB synthetic row above shows no round trip because its score is an adopted
+resident `defparameter`; that is the shape of the probe, not of a training step. Measure
+this one on a model.)
+
+**No Metal-side todo was filed**: the counts are decided above `GpuDevice`, so there is no
+Metal work item to open -- the change is `suffixLength` and its twin, or the shape
+`torch:padding-mask` builds. This table is the Metal price for that decision.
 
 **Nothing else this backend refuses on width alone is reached by the reasoning**, and the
 survey is short because the question is not "is the operand read as bytes" but "is it
