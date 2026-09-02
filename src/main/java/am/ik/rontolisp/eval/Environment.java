@@ -668,15 +668,7 @@ public final class Environment implements Scope {
 		// *features*: an ordinary special holding the interpreter's feature list. The
 		// compile paths seed the same variable with their own target set
 		// (LispMacroExpander.injectMvSpillGlobal); see .kb/reader-features.md.
-		LispVal featureList = LispNil.INSTANCE;
-		List<String> featureNames = am.ik.rontolisp.reader.Features.INTERPRETER.names();
-		for (int i = featureNames.size() - 1; i >= 0; i--) {
-			// Features are keywords, printed uppercase like every other symbol under the
-			// reader's upcase premise; the compile paths spell them the same way.
-			featureList = new LispCons(new LispSymbol(":" + featureNames.get(i).toUpperCase(java.util.Locale.ROOT)),
-					featureList);
-		}
-		env.define(LispNames.FEATURES_VAR, featureList);
+		env.define(LispNames.FEATURES_VAR, featureKeywordList(am.ik.rontolisp.reader.Features.INTERPRETER.names()));
 		// The standard streams are the t designator (the process standard stream), which
 		// the whole print / read family accepts as a stream argument. The exception is
 		// *error-output*: t already names the process standard OUTPUT, so the error
@@ -699,6 +691,23 @@ public final class Environment implements Scope {
 			return args.get(0);
 		}));
 		return env;
+	}
+
+	/**
+	 * The {@code *features*} list as the reader would have read it: the names as
+	 * keywords, in the feature set's own order. Features are keywords printed uppercase
+	 * like every other symbol under the reader's upcase premise, and the compile paths
+	 * spell them the same way ({@code LispMacroExpander.injectMvSpillGlobal}).
+	 * @param names the feature names, without the leading colon
+	 * @return the keyword list
+	 */
+	static LispVal featureKeywordList(List<String> names) {
+		LispVal featureList = LispNil.INSTANCE;
+		for (int i = names.size() - 1; i >= 0; i--) {
+			featureList = new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(java.util.Locale.ROOT)),
+					featureList);
+		}
+		return featureList;
 	}
 
 	private static void registerHashTables(Environment env) {
@@ -3385,16 +3394,21 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.NREVERSE, new LispFunction(LispNames.NREVERSE, args -> {
 			requireArgCount(LispNames.NREVERSE, args, 1);
 			// Destructive: rewire each cdr to its predecessor and return the former last
-			// cell as the new head (Common Lisp semantics; use the return value).
+			// cell as the new head (Common Lisp semantics; use the return value). A
+			// string/vector argument is not a cons chain -- it reverses via a coerced
+			// list (seqAsList/seqResult, the sort/reduce precedent) and is rebuilt back
+			// in its own representation; CL leaves eq-to-the-argument unspecified.
+			LispVal original = args.get(0);
+			boolean isSeq = !(original instanceof LispCons) && !(original instanceof LispNil);
 			LispVal prev = LispNil.INSTANCE;
-			LispVal cur = args.get(0);
+			LispVal cur = isSeq ? seqAsList(original) : original;
 			while (cur instanceof LispCons cell) {
 				LispVal next = cell.cdr();
 				cell.setCdr(prev);
 				prev = cell;
 				cur = next;
 			}
-			return prev;
+			return isSeq ? seqResult(original, prev) : prev;
 		}));
 		env.defineFunction(LispNames.MAKE_LIST, new LispFunction(LispNames.MAKE_LIST, args -> {
 			requireMinArgCount(LispNames.MAKE_LIST, args, 1);

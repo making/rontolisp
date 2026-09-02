@@ -336,6 +336,9 @@ final class TestCommand {
 		out.println("  --system-path DIRS Directories searched for NAME.asd (like PATH)");
 		out.println("  --dist DISTS       Dists ql:quickload may download from, beside");
 		out.println("                     quicklisp: a name (ultralisp) or a distinfo URL");
+		out.println("  --feature NAMES    Read-time features to add, so that #+NAME reads");
+		out.println("                     as true -- for a library whose #+ chain names no");
+		out.println("                     rontolisp feature (e.g. --feature sbcl)");
 		out.println("  -h, --help         Show this help message");
 	}
 

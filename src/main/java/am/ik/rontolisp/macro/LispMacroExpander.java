@@ -2259,7 +2259,7 @@ public final class LispMacroExpander {
 			if (implicitAcc == null) {
 				return Boolean.TRUE.equals(terminationT) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
-			return implicitReverse ? call(LispNames.NREVERSE, implicitAcc) : implicitAcc;
+			return implicitReverse ? nreverseListForm(implicitAcc) : implicitAcc;
 		}
 
 		/**
@@ -3094,11 +3094,27 @@ public final class LispMacroExpander {
 	 * Expands {@code (stable-sort sequence predicate [:key fn])} into a
 	 * decorate-sort-undecorate over the sequence indices, so equal elements keep their
 	 * original order (a stable sort) and an optional {@code :key} is applied once per
-	 * element.
+	 * element. The scan itself always walks a list, so the whole decorate/sort/undecorate
+	 * body is wrapped in {@link #seqResultDispatchForm} to answer a string/vector
+	 * argument back in its own representation -- matching {@code sort} (see
+	 * {@code wrapSortForStringSeq}), which this shares its {@code (sort dec comparator)}
+	 * call with.
 	 * @param cons the {@code stable-sort} expression
 	 * @return the decorate-sort-undecorate expansion
 	 */
 	public static LispVal expandStableSort(LispCons cons) {
+		return expandStableSort(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandStableSort(LispCons)}, but lets a backend drop the vector arm of
+	 * the dispatch when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the {@code stable-sort} expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the decorate-sort-undecorate expansion
+	 */
+	public static LispVal expandStableSort(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3) {
 			throw new IllegalArgumentException(LispNames.STABLE_SORT + " expects a sequence and a predicate");
@@ -3124,11 +3140,7 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.CONS), decorated, dec))));
 		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.SETQ), idx,
 				listToCons(List.of(new LispSymbol(LispNames.ADD), idx, new LispInteger(1)))));
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(cur, seqAsListForm(parts.get(1)), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal scan = expandDo((LispCons) listToCons(
-				List.of(new LispSymbol(LispNames.DO), bindings, endClause, accumulate, increment)));
 		// (lambda (a b) (if (pred (car a) (car b)) t
 		// (if (pred (car b) (car a)) nil (< (cadr a) (cadr b)))))
 		LispVal predAB = listToCons(
@@ -3142,9 +3154,14 @@ public final class LispMacroExpander {
 		LispVal sorted = listToCons(List.of(new LispSymbol(LispNames.SORT), dec, comparator));
 		LispVal undecorate = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(e)),
 				callOf(LispNames.CDR, callOf(LispNames.CDR, e))));
-		LispVal result = listToCons(List.of(new LispSymbol(LispNames.MAPCAR), undecorate, sorted));
-		LispVal body = makeProgn(List.of(scan, result));
-		result = makeLet(idx.name(), new LispInteger(0), body);
+		LispVal mapcarResult = listToCons(List.of(new LispSymbol(LispNames.MAPCAR), undecorate, sorted));
+		LispVal dispatch = seqResultDispatchForm(parts.get(1), lst -> {
+			LispVal bindings = listToCons(List.of(listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
+			LispVal scan = expandDo((LispCons) listToCons(
+					List.of(new LispSymbol(LispNames.DO), bindings, endClause, accumulate, increment)));
+			return makeProgn(List.of(scan, mapcarResult));
+		}, arraysExist);
+		LispVal result = makeLet(idx.name(), new LispInteger(0), dispatch);
 		result = makeLet(dec.name(), LispNil.INSTANCE, result);
 		if (hasKey && keyForm != null) {
 			result = makeLet(key.name(), keyForm, result);
@@ -5638,7 +5655,7 @@ public final class LispMacroExpander {
 		return seqResultDispatchForm(parts.get(1), lst -> {
 			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
 					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
-			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 			LispVal dup = memberCallForm(keyedForm(keyForm, callOf(LispNames.CAR, cur)),
 					fromEnd ? acc : callOf(LispNames.CDR, cur), testForm, keyForm);
 			LispVal keep = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
@@ -5668,7 +5685,7 @@ public final class LispMacroExpander {
 				listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur)))));
 		LispVal endTest = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.ATOM, cur),
 				callOf(LispNames.ATOM, callOf(LispNames.CDR, cur))));
-		LispVal endClause = listToCons(List.of(endTest, callOf(LispNames.NREVERSE, acc)));
+		LispVal endClause = listToCons(List.of(endTest, nreverseListForm(acc)));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
@@ -5749,7 +5766,40 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNreverse(LispCons cons) {
-		LispVal list = cons.toList().get(1);
+		return nreverseListForm(cons.toList().get(1));
+	}
+
+	/**
+	 * Wraps a {@code (nreverse seq)} call in the string/vector dispatch: a string or
+	 * general-array sequence reverses via a coerced list (rebuilt in the original
+	 * representation, matching CL's "the result may or may not be {@code eq} to the
+	 * argument" latitude), and a plain list keeps the in-place {@code cdr}-rewiring loop
+	 * {@link #expandNreverse(LispCons)} performs. Returns {@code null} when the sequence
+	 * argument is already an internal dispatch variable (the inner call emitted by a
+	 * previous wrap), so the compilers fall through to their native list compilation --
+	 * the {@code sort}/{@code stable-sort} precedent (see {@code wrapSortForStringSeq}).
+	 * @param cons the nreverse expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the wrapped expression, or {@code null} when the call needs no wrapping
+	 */
+	public static @Nullable LispVal wrapNreverseForStringSeq(LispCons cons, boolean arraysExist) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || isSeqDispatchVar(parts.get(1))) {
+			return null;
+		}
+		return seqResultDispatchForm(parts.get(1), LispMacroExpander::nreverseListForm, arraysExist);
+	}
+
+	/**
+	 * The in-place {@code cdr}-rewiring loop {@link #expandNreverse(LispCons)} and
+	 * {@link #wrapNreverseForStringSeq(LispCons, boolean)} share: {@code list} is either
+	 * the raw argument form (a plain list stays in place) or the coerced-to-list dispatch
+	 * variable (a fresh cons chain that is safe to rewire before being rebuilt back into
+	 * a string/vector).
+	 * @param list the list form to reverse
+	 * @return the expanded expression
+	 */
+	private static LispVal nreverseListForm(LispVal list) {
 		LispSymbol prev = new LispSymbol("__nrev_prev");
 		LispSymbol cur = new LispSymbol("__nrev_cur");
 		LispSymbol next = new LispSymbol("__nrev_next");
@@ -6202,7 +6252,7 @@ public final class LispMacroExpander {
 		LispVal scan = seqResultDispatchForm(parts.get(3), lst -> {
 			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
 					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
-			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 			LispVal match = testMatchForm(testForm, oldItem, keyedForm(keyForm, callOf(LispNames.CAR, cur)));
 			LispVal chosen = makeIf(match, newItem, callOf(LispNames.CAR, cur));
 			LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
@@ -6297,7 +6347,7 @@ public final class LispMacroExpander {
 		LispVal scan = seqResultDispatchForm(parts.get(3), lst -> {
 			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
 					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
-			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 			LispVal match = listToCons(
 					List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, callOf(LispNames.CAR, cur))));
 			LispVal chosen = negated ? makeIf(match, callOf(LispNames.CAR, cur), newItem)
@@ -6469,7 +6519,7 @@ public final class LispMacroExpander {
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(operand, operandInit)), listToCons(List.of(acc, LispNil.INSTANCE)),
 						listToCons(List.of(cur, list, callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 		LispVal keep = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
 		LispVal body = keepWhenMatch ? makeIf(match, keep, LispNil.INSTANCE) : makeIf(match, LispNil.INSTANCE, keep);
@@ -23715,8 +23765,7 @@ public final class LispMacroExpander {
 				listToCons(List.of(acc, LispNil.INSTANCE))));
 		LispVal endTest = listToCons(
 				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.ATOM, keys), callOf(LispNames.ATOM, data)));
-		LispVal endResult = listToCons(
-				List.of(new LispSymbol(LispNames.APPEND), callOf(LispNames.NREVERSE, acc), tail));
+		LispVal endResult = listToCons(List.of(new LispSymbol(LispNames.APPEND), nreverseListForm(acc), tail));
 		LispVal endClause = listToCons(List.of(endTest, endResult));
 		LispVal pair = listToCons(
 				List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, keys), callOf(LispNames.CAR, data)));
@@ -23746,7 +23795,7 @@ public final class LispMacroExpander {
 		// __copyalist_acc)))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur))),
 				listToCons(List.of(acc, LispNil.INSTANCE))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 		LispVal copiedPair = listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, element),
 				callOf(LispNames.CDR, element)));
 		LispVal copied = makeIf(listToCons(List.of(new LispSymbol(LispNames.CONSP), element)), copiedPair, element);
@@ -23774,7 +23823,7 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandNreconc(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispVal rev = callOf(LispNames.NREVERSE, parts.get(1));
+		LispVal rev = nreverseListForm(parts.get(1));
 		return listToCons(List.of(new LispSymbol(LispNames.NCONC), rev, parts.get(2)));
 	}
 
@@ -23880,7 +23929,7 @@ public final class LispMacroExpander {
 		}
 		LispVal call = listToCons(callArgs);
 		LispVal result = switch (accumulation) {
-			case COLLECT -> callOf(LispNames.NREVERSE, acc);
+			case COLLECT -> nreverseListForm(acc);
 			case CONCATENATE -> acc;
 			case DISCARD -> lists.get(0);
 		};
@@ -24315,7 +24364,7 @@ public final class LispMacroExpander {
 		else if ("LIST".equals(resultType)) {
 			accInit = LispNil.INSTANCE;
 			accStep = listToCons(List.of(new LispSymbol(LispNames.CONS), call, accVar));
-			resultForm = callOf(LispNames.NREVERSE, accVar);
+			resultForm = nreverseListForm(accVar);
 		}
 		else {
 			// nil: call the function for effect, return nil.
@@ -24382,12 +24431,12 @@ public final class LispMacroExpander {
 				makeIf(listToCons(List.of(new LispSymbol(LispNames.CONSP), cdrC)), takeTwo, takeOne)));
 		LispVal onePass = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(List.of(listToCons(List.of(q, LispNil.INSTANCE)), listToCons(List.of(c, ps)))), inner,
-				listToCons(List.of(new LispSymbol(LispNames.SETQ), ps, callOf(LispNames.NREVERSE, q)))));
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), ps, nreverseListForm(q)))));
 		LispVal result = makeIf(callOf(LispNames.CONSP, ps), callOf(LispNames.CAR, ps), new LispString(""));
 		LispVal outer = listToCons(List.of(new LispSymbol(LispNames.DO), LispNil.INSTANCE,
 				listToCons(List.of(callOf(LispNames.NULL, callOf(LispNames.CDR, ps)), result)), onePass));
 		return listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(ps, callOf(LispNames.NREVERSE, acc))))), outer));
+				listToCons(List.of(listToCons(List.of(ps, nreverseListForm(acc))))), outer));
 	}
 
 	/** Returns the symbol name inside a {@code (quote name)} form, or null otherwise. */
@@ -28357,7 +28406,7 @@ public final class LispMacroExpander {
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(
 						List.of(listToCons(List.of(out, LispNil.INSTANCE)), listToCons(List.of(clusters, globalVar)))),
-				outerLoop, callOf(LispNames.NREVERSE, out)));
+				outerLoop, nreverseListForm(out)));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.COMPUTE_RESTARTS),
 				listToCons(List.of(new LispSymbol(LispNames.LAMBDA_OPTIONAL), cond)), body));
 	}

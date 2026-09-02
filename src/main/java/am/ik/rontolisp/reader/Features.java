@@ -142,13 +142,17 @@ public final class Features {
 
 	/**
 	 * Returns this feature set widened by the given names, or {@code this} when they are
-	 * all present already. Two callers, both of them a feature ANNOUNCEMENT the reader
-	 * can see for itself: {@link FeaturePushes}, for a source's own literal top-level
-	 * push, and {@code AsdfSystems}, for a {@code .asd}'s {@code :rontolisp-features}
+	 * all present already. Three callers. Two are a feature ANNOUNCEMENT the reader can
+	 * see for itself: {@link FeaturePushes}, for a source's own literal top-level push,
+	 * and {@code AsdfSystems}, for a {@code .asd}'s {@code :rontolisp-features}
 	 * declaration -- the cross-FILE half, which the push cannot do (a push in a
 	 * {@code .asd} reaches that file's own {@code #+} and not the component files of the
-	 * systems it defines). Deliberately additive only -- nothing may switch OFF a backend
-	 * feature and claim to be that backend.
+	 * systems it defines). The third is the USER, through the {@code --feature} command
+	 * line option ({@code RontoLispCli.declaredFeatures}), for the names a portable
+	 * library's {@code #+sbcl}/{@code #+clisp} chain expects from the host implementation
+	 * and that no announcement of ours could honestly make. Deliberately additive only --
+	 * nothing may switch OFF a backend feature and claim to be that backend, and
+	 * {@code --feature} additionally refuses to name one at all.
 	 * @param extra the feature names to add, without the leading colon
 	 * @return the widened feature set
 	 */

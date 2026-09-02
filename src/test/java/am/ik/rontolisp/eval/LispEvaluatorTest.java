@@ -3372,8 +3372,24 @@ class LispEvaluatorTest {
 		assertThat(eval("(remove-duplicates \"banana\")").print()).isEqualTo("\"bna\"");
 		assertThat(eval("(substitute #\\o #\\a \"banana\")").print()).isEqualTo("\"bonono\"");
 		assertThat(eval("(sort \"cab\" #'char<)").print()).isEqualTo("\"abc\"");
+		// nreverse and stable-sort answer the argument's own TYPE, like sort/reverse
+		// above -- they used to lose it and answer a bare list.
+		assertThat(eval("(nreverse (copy-seq \"abcd\"))").print()).isEqualTo("\"dcba\"");
+		assertThat(eval("(stable-sort (copy-seq \"dcba\") #'char<)").print()).isEqualTo("\"abcd\"");
+		assertThat(eval("(funcall #'nreverse (copy-seq \"wxyz\"))").print()).isEqualTo("\"zyxw\"");
+		assertThat(eval("(funcall #'stable-sort (copy-seq \"dcba\") #'char<)").print()).isEqualTo("\"abcd\"");
 		assertThat(eval("(funcall #'reverse \"abc\")").print()).isEqualTo("\"cba\"");
 		assertThat(eval("(funcall #'remove #\\l \"hello\")").print()).isEqualTo("\"heo\"");
+	}
+
+	@Test
+	void evalSequenceReturningFunctionsOnVectors() {
+		// nreverse/stable-sort answer a VECTOR back when given one, matching sort.
+		assertThat(eval("(nreverse (vector 1 2 3))").print()).isEqualTo("#(3 2 1)");
+		assertThat(eval("(stable-sort (vector 3 1 2) #'<)").print()).isEqualTo("#(1 2 3)");
+		assertThat(eval("(sort (vector 3 1 2) #'<)").print()).isEqualTo("#(1 2 3)");
+		assertThat(eval("(funcall #'nreverse (vector 'a 'b 'c))").print()).isEqualTo("#(C B A)");
+		assertThat(eval("(funcall #'stable-sort (vector 3 1 2) #'<)").print()).isEqualTo("#(1 2 3)");
 	}
 
 	@Test

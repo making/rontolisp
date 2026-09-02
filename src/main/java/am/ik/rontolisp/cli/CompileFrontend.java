@@ -80,6 +80,8 @@ final class CompileFrontend {
 	 * @param baseDir the directory relative paths resolve against
 	 * @param systemPath the ASDF system search path
 	 * @param dists the Quicklisp-format distributions
+	 * @param declaredFeatures the read-time features the user declared
+	 * ({@code --feature})
 	 * @param wasm whether the target is a {@code .wasm} output
 	 * @param servlet whether the target is a {@code .war} output (JVM servlet mode)
 	 * @param dynamic {@code --dynamic}
@@ -93,8 +95,9 @@ final class CompileFrontend {
 	 * @return the expanded program and what a backend needs to know about it
 	 */
 	static Result run(String source, @Nullable String entryFile, @Nullable String baseDir, List<String> systemPath,
-			DistClient dists, boolean wasm, boolean servlet, boolean dynamic, boolean component, boolean noWasi,
-			boolean noGc, boolean hostFetch, @Nullable HostBoundary hostBoundary, boolean reentrant, boolean noPrune) {
+			DistClient dists, List<String> declaredFeatures, boolean wasm, boolean servlet, boolean dynamic,
+			boolean component, boolean noWasi, boolean noGc, boolean hostFetch, @Nullable HostBoundary hostBoundary,
+			boolean reentrant, boolean noPrune) {
 		HostBoundary boundary = hostBoundary == null ? HostBoundary.ENVELOPE : hostBoundary;
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
@@ -145,6 +148,15 @@ final class CompileFrontend {
 		if (wasm && noWasi && !component && !noGc && boundary.bodiesOutOfBand()) {
 			features = features.with(List.of(Features.BODY_IMPORTS));
 		}
+		// And LAST, whatever the user declared with --feature: names a portable library's
+		// #+ chain expects from the HOST implementation and no rontolisp target could
+		// answer for (RontoLispCli.declaredFeatures). It goes on top of the target set
+		// rather than into it, because the target features describe the build and the
+		// build -- not the command line -- decides those; the flag refuses to name one.
+		// Everything downstream reads with the result, including the (load ...) inlining
+		// and the ASDF components below, and the compiled program's run-time *features*
+		// is seeded from it (WasmLispCompiler.runtimeFeatures / JvmLispCompiler).
+		features = features.with(declaredFeatures);
 		WitExportDirective.Backend witBackend = witBackend(wasm, noGc, component);
 		// (rontolisp:wit-import "kv.wit" :interface "..."): bind a WIT interface's
 		// functions. Unlike wit-export this runs BEFORE UserMacroExpander, because the
