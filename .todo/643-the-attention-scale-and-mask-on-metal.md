@@ -49,10 +49,15 @@ Both of its traps are shaped to recur here, and the CUDA session flagged them:
 
 `wall` swings ~4% run to run on this machine, more than todo-641's whole effect on CUDA,
 so the wall column cannot decide this one -- todo-636 got away with it only because a
-third is far outside the noise. There is no nsys here. Either isolate the members the way
-`.todo/123-gpu-acceleration/fusion-segments.py` does (which is how todo-636's per-call
-table was taken, and it resolved 2 ms differences cleanly), or drive Metal System Trace.
-Decide that before building anything.
+third is far outside the noise. There is no nsys here.
+
+**Use isolated per-member timing, not Metal System Trace.** Call the member alone at the
+book's shapes N times and take the best, the way todo-636's per-call table was taken: it
+is the same tool, it resolved 2 ms differences cleanly there, and it cuts the step's noise
+out rather than averaging over it. The CUDA session, which measured todo-641 the same way
+(`.todo/123-gpu-acceleration/fusion-baseline.lisp`), recommends the same. System Trace is
+for the question `.todo/495` asks -- where the command-buffer waits go -- not for "two
+memory passes disappeared".
 
 ## Acceptance
 
