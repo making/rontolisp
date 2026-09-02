@@ -15631,7 +15631,10 @@ class LispEvaluatorTest {
 
 	@Test
 	void makeArrayDisplacedErrors() {
-		assertThatThrownBy(() -> evalMulti("(make-array 3 :displaced-to (make-array 5) :fill-pointer 2)"))
+		// :initial-element is the ONE keyword CLHS forbids beside :displaced-to (the view
+		// owns no storage to initialize); :fill-pointer and :adjustable are allowed --
+		// see aDisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag.
+		assertThatThrownBy(() -> evalMulti("(make-array 3 :displaced-to (make-array 5) :initial-element 0)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("cannot be combined");
 		assertThatThrownBy(() -> evalMulti("(make-array 4 :displaced-to (make-array 3) :displaced-index-offset 2)"))
@@ -15640,6 +15643,59 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti("(make-array 9 :displaced-to \"abc\")"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("too small");
+	}
+
+	@Test
+	void aDisplacedViewCarriesItsOwnFillPointerAndAdjustableFlag() {
+		// CLHS allows :fill-pointer / :adjustable beside :displaced-to, and SBCL 2.2.9
+		// answers everything below identically (except adjustable-array-p over a view,
+		// the recorded divergence in .kb/adjustable-arrays.md). The fill pointer is the
+		// VIEW's own active length while aref still reaches its whole dimension, and
+		// vector-push writes THROUGH to the target.
+		assertThat(evalMulti("""
+				(setq b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				(setq v (make-array 4 :displaced-to b :displaced-index-offset 1 :fill-pointer 2))
+				(list (length v) (fill-pointer v) (array-has-fill-pointer-p v) (adjustable-array-p v)
+				      (array-dimensions v) (array-total-size v) (aref v 3) v
+				      (multiple-value-list (array-displacement v)))
+				""").print()).isEqualTo("(2 2 T NIL (4) 4 50 #(20 30) (#(10 20 30 40 50 60) 1))");
+		assertThat(evalMulti("""
+				(setq b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				(setq v (make-array 4 :displaced-to b :displaced-index-offset 1 :fill-pointer 2))
+				(vector-push 99 v)
+				(list (length v) b v)
+				""").print()).isEqualTo("(3 #(10 20 30 99 50 60) #(20 30 99))");
+		assertThat(evalMulti("""
+				(setq b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				(setq v (make-array 4 :displaced-to b :displaced-index-offset 1 :fill-pointer 2))
+				(vector-push 99 v)
+				(list (vector-pop v) (length v))
+				""").print()).isEqualTo("(99 2)");
+	}
+
+	@Test
+	void aFullDisplacedViewUndisplacesWhenItGrows() {
+		// vector-push-extend past the view's span copies the contents into storage of
+		// its own and drops the displacement, so the growth never runs off the end of
+		// the target -- SBCL 2.2.9's answers exactly.
+		assertThat(evalMulti("""
+				(setq b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+				(setq v (make-array 4 :displaced-to b :displaced-index-offset 1 :adjustable t :fill-pointer 2))
+				(vector-push-extend 100 v)
+				(vector-push-extend 101 v)
+				(vector-push-extend 102 v)
+				(list (length v) (array-total-size v) (multiple-value-list (array-displacement v)) v b)
+				""").print()).isEqualTo("(5 8 (NIL 0) #(20 30 100 101 102) #(10 20 30 100 101 60))");
+		// A displaced STRING view keeps being a string across the growth.
+		assertThat(evalMulti("""
+				(setq s (copy-seq "abcdef"))
+				(setq sv (make-array 4 :element-type 'character :displaced-to s
+				                       :displaced-index-offset 1 :fill-pointer 2))
+				(vector-push #\\Z sv)
+				(vector-push-extend #\\Y sv)
+				(vector-push-extend #\\X sv)
+				(list sv s (stringp sv) (array-displacement sv) (length sv) (array-total-size sv))
+				""").print()).isEqualTo("(\"bcZYX\" \"abcZYf\" T NIL 5 8)");
 	}
 
 	@Test

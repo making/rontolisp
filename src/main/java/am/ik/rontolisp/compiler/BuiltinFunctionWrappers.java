@@ -892,7 +892,9 @@ public final class BuiltinFunctionWrappers {
 		LispVal displaced = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
 				new LispSymbol(LispNames.DISPLACED_TO_KEYWORD), getfKw(LispNames.DISPLACED_TO_KEYWORD),
 				new LispSymbol(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD),
-				getfKwOr(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD, new LispInteger(0))));
+				getfKwOr(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD)));
 		LispVal general = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
 				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
 				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD),

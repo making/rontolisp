@@ -2357,9 +2357,12 @@ final class MetalGemm implements GpuDevice {
 	/**
 	 * Layer-norm's affine folded into the normalization (todo-634): DECLINED here, at
 	 * both widths, so the module runs the normalization and its two broadcast passes
-	 * member by member as it did before. The kernels are {@code gemm.cu}'s only, and
-	 * whether the fold pays on this backend is for a measurement on a Mac; declining
-	 * lands on exactly what ran before, which is the whole point of the decline protocol.
+	 * member by member as it did before. todo-646 BUILT the MSL pair and measured it
+	 * rather than guessing: per call it is worth 13% of the forward and a quarter of the
+	 * adjoint at the book's shapes, and it does not move the step at all, because the
+	 * host round trips it removes had already been removed generically at the compiled
+	 * call site. The kernels are not kept. {@code .kb/gpu.md}, "Layer-norm's affine on
+	 * Metal", has the numbers and the condition that would reopen it.
 	 * @return {@code false}, always
 	 */
 	@Override
@@ -2375,7 +2378,7 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
-	/** Its adjoint, declined for the same reason. */
+	/** Its adjoint, declined for the same reason and on the same measurement. */
 	@Override
 	public boolean layerNormAffineGradF(float[] g, int og, float[] x, int ox, float[] w, int ow, float @Nullable [] old,
 			int oOld, float[] c, int oc, float[] gn, int ogn, int rows, int len, double eps) {

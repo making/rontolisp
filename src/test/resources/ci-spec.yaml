@@ -4395,6 +4395,52 @@ cases:
       (T 1)
       ("cQ" "XcQ" "aXcQef")
       (NIL CHARACTER T T)
+  - name: displaced-fill-pointer-cross-backend
+    source: |
+      (defun ci-displaced-fp ()
+        ;; CLHS allows :fill-pointer / :adjustable beside :displaced-to (only
+        ;; :initial-element is forbidden). The fill pointer is the VIEW's own active
+        ;; length while aref still reaches its whole dimension, and vector-push writes
+        ;; THROUGH to the target.
+        (let* ((b (make-array 6 :initial-contents (list 10 20 30 40 50 60)))
+               (v (make-array 4 :displaced-to b :displaced-index-offset 1 :fill-pointer 2)))
+          (print (list (length v) (fill-pointer v) (array-has-fill-pointer-p v)
+                       (adjustable-array-p v) (array-dimensions v) (array-total-size v)
+                       (aref v 3) v))
+          (multiple-value-bind (tgt off) (array-displacement v)
+            (print (list (eq tgt b) off)))
+          (vector-push 99 v)
+          (print (list (length v) b v))
+          (print (list (vector-pop v) (length v))))
+        ;; A full view UN-DISPLACES rather than growing the target's storage.
+        (let* ((b (make-array 6 :initial-contents (list 10 20 30 40 50 60)))
+               (v (make-array 4 :displaced-to b :displaced-index-offset 1
+                                :adjustable t :fill-pointer 2)))
+          (vector-push-extend 100 v)
+          (vector-push-extend 101 v)
+          (vector-push-extend 102 v)
+          (print (list (length v) (array-total-size v) (array-displacement v) v b)))
+        ;; The same for a displaced STRING view: it is still a string afterwards.
+        (let* ((s (copy-seq "abcdef"))
+               (sv (make-array 4 :element-type 'character :displaced-to s
+                                 :displaced-index-offset 1 :fill-pointer 2)))
+          (print (list sv (length sv) (fill-pointer sv) (stringp sv)))
+          (vector-push #\Z sv)
+          (print (list sv s))
+          (vector-push-extend #\Y sv)
+          (vector-push-extend #\X sv)
+          (print (list sv s (stringp sv) (array-displacement sv) (length sv)
+                       (array-total-size sv)))))
+      (ci-displaced-fp)
+    expected: |
+      (2 2 T NIL (4) 4 50 #(20 30))
+      (T 1)
+      (3 #(10 20 30 99 50 60) #(20 30 99))
+      (99 2)
+      (5 8 NIL #(20 30 100 101 102) #(10 20 30 100 101 60))
+      ("bc" 2 2 T)
+      ("bcZ" "abcZef")
+      ("bcZYX" "abcZYf" T NIL 5 8)
   - name: mutable-strings-cross-backend
     source: |
       (defun ci-mutable-strings ()

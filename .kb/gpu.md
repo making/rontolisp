@@ -1581,9 +1581,10 @@ rather than a new one, and the driver's JIT of the larger text costs nothing mea
 (the 3-step wall, which is mostly setup, went 5.37 -> 5.22 s). On the CPU the backward
 recomputed `norm`, +28% on layer-norm's backward and nothing else -- fixed as `.todo/644`
 by a `%la-layer-norm-grad` sibling that answers `(dx norm)` from the pass it already makes,
-back to about the pre-fusion time (`.kb/linalg.md` has both measurements). Metal DECLINES
-both members, at both widths, so the module runs the normalization and its two broadcasts
-member by member there exactly as before.
+back to about the pre-fusion time (`.kb/linalg.md` has both measurements). Metal DECLINES both members, at both widths, so the
+module runs the normalization and its two broadcasts member by member there exactly as
+before -- todo-646 built the MSL pair and measured it rather than leaving it a guess, and
+declined it on the step: "Layer-norm's affine on Metal: built, measured, NOT kept" below.
 
 ## The chains left composed (todo-629, 2026-09-02)
 
@@ -2595,6 +2596,82 @@ read as a NUMBER". Every other double operand -- `zip`, `scal`, `fold`, `adam`, 
 the GEMM and the GEMV, the fused rows -- is arithmetic on the value itself. `where`'s
 mask is the only predicate in the library, and the comparison members (`greater`,
 `equal`, ...) PRODUCE masks rather than consuming them, at the operand's own width.
+
+### Layer-norm's affine on Metal: built, measured, NOT kept (todo-646, 2026-09-03)
+
+todo-634 folded `torch:layer-norm`'s `* weight + bias` into the normalization as a
+two-output member pair and built the kernels in `gemm.cu` only; this backend answered
+`false` at both widths, and `.todo/646` was the measurement that decides whether the fold
+pays here. **The MSL pair was written, pinned bit-identical and measured. It is worth a
+quarter of the adjoint PER CALL and nothing at all in the step, and it is not kept.**
+
+**Why the adjoint's decline was so expensive, which the item predicted wrongly.** The item
+expected the forward to be where the money was -- the affine's two extra members are
+broadcast multiplies against a `(len)` operand and the book's `(16384 384)` activation
+clears `MIN_STRIDED_ELEMENTS`, so they ARE device members and the fold removes two memory
+passes and two command buffers. That is right and it is worth half a millisecond. The
+ADJOINT was worth six times that, for a reason nobody named:
+`%la-layer-norm-affine-grad` is spelled over `%la-layer-norm-grad-norm` (todo-644's
+sibling that answers `(dx norm)` from one pass), and **that member has no interception of
+its own on either backend** -- it exists only as a Lisp defun. So the decline landed on
+the defun's own twenty-odd `linalg:` members, among them the `linalg:sum ... :axis` folds
+this backend REFUSES at every size, each of which came home. Same asymmetry todo-643
+measured, one rung further down.
+
+**Per call, at the book's own shapes** (`.todo/123-gpu-acceleration/mtl-layer-norm-affine.lisp`,
+`(16384 384)` `#f`, `--gpu --simd`, JVM class output, M4 Max, 40 reps, best of 4 rounds,
+the whole probe run twice; taken on the tree described below):
+
+| forced home, ms | declined | the fused pair |
+|---|---|---|
+| `%la-layer-norm-affine` | 3.93 / 3.48 | **3.28 / 3.25** |
+| `%la-layer-norm-affine-grad`, no `old` | 13.75 / 13.78 | **10.78 / 9.40** |
+| `%la-layer-norm-affine-grad`, onto `old` | 15.18 / 14.68 | **10.93 / 9.85** |
+| `%la-layer-norm` (untouched, the control) | 2.73 / 2.10 | 2.38 / 2.23 |
+| `%la-layer-norm-grad` (untouched, the control) | 10.33 / 8.05 | 9.08 / 8.48 |
+
+Thirteen layer-norms a step, so that is 45-50 ms of member time a step. **The step does not
+see it** (`gpt-book-shapes-fast.lisp`, `(t23 - t3) / 20` to halve the noise, four rounds
+with the two builds interleaved inside each round):
+
+| | declined | the fused pair |
+|---|---|---|
+| wall a step, the four rounds | 1.663 / 1.649 / 1.698 / 1.873 | 1.623 / 1.645 / 1.760 / 1.882 |
+| wall a step, median | **1.680 s** | **1.702 s** |
+
+A coin flip, and the median falls on the wrong side. **The measured member time is not on
+the critical path**: under asynchronous command buffers the work removed here overlaps
+host work that remains, so removing it buys the step nothing.
+
+**The trap this walked into, recorded because it nearly landed the change.** The FIRST step
+measurement of the same two builds said 1.798 -> 1.633 s, 9.2%, every round beating every
+round. It was taken before `5baaf6ec` ("stop materializing an argument no host kernel is
+going to read") was merged in. That item stops the compiled call site dragging a
+device-only fused member's arguments home before falling through to the defun, which for
+this member was three 25.2 MB downloads a call -- and it took the DECLINING build from
+1.798 to 1.680 s on its own. So the 9.2% was almost entirely the generic fix's, measured
+against a build that did not have it yet, and attributing it here would have been wrong by
+a factor of five. This is CLAUDE.md's semantic-conflict warning in its literal form: two
+changes that each remove the same host round trips, one specific and one general, and the
+general one landed first. **Re-take a step number after every merge that touches the path,
+not only after one that conflicts textually.**
+
+**What would reopen it.** The kernels are correct and the equality held on the first run,
+so this is a decision about worth and not about feasibility. It becomes worth building
+again when the step is DEVICE-bound at these shapes rather than bound by what overlaps --
+a larger batch or model, or after enough of the remaining host members move -- because
+then the 45-50 ms a step stops being slack. The way to check that without writing the
+kernels again is the upper bound (`.kb/measurement-probes.md`): the per-call table above
+already IS the bound, so re-take the step, not the members.
+
+**Checked against `.kb/measurement-probes.md`**: trap 2 by printing both a forced-home and
+an enqueue-only column and deciding on the forced one; trap 3 by taking the step at all,
+which is what caught the `5baaf6ec` attribution -- the probe's operands are
+`defparameter`s and the step's are not; trap 4 does not arise, since neither build
+back-to-backs a call behind a host gap the other does not. Conditions: results forced home
+with one `aref` in the first table and unread in the second, no gap inserted between
+calls, `--simd` on and `RONTOLISP_THREADS` at its default on a 40-core M4 Max, both builds
+compiled from the same tree and interleaved within each round.
 
 ## The interception layer
 

@@ -161,7 +161,11 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String MAKE_DISPLACED = "_arrayMakeDisplaced";
 
-	static final String MAKE_DISPLACED_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+	static final String MAKE_DISPLACED_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String UNDISPLACE = "_arrayUndisplace";
+
+	static final String UNDISPLACE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	static final String RM_GET = "_rmGet";
 
@@ -291,8 +295,8 @@ final class JvmArrayRuntimeBuilder {
 	 */
 	static final Set<String> METHOD_NAMES = Set.of(MAKE, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS, TO_STRING,
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
-			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET, DISP_OFFSET,
-			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
+			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, UNDISPLACE, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET,
+			DISP_OFFSET, CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
 			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, CHECK_RANK);
 
 	/** An array helper method body ready to be emitted into the generated class. */
@@ -329,6 +333,8 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC)));
 		MethodrefConstant rmSet = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC)));
+		MethodrefConstant undisplace = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC)));
 		MethodrefConstant widen = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC)));
 		MethodrefConstant defaultElement = cp.addMethodref(selfClass,
@@ -355,49 +361,7 @@ final class JvmArrayRuntimeBuilder {
 		m.invokespecial(alInit);
 		m.astore(list);
 		emitParseDims(m, objectClass, longClass, objectArrayClass, longIntValue, dims, dimsArr, total, cur, n, idx);
-		// resolve the fill pointer (null = none; a Long = that value,
-		// range-checked; anything else, i.e. t, = the vector size), requiring rank 1.
-		m.aconstNull();
-		m.astore(fpVal);
-		int afterFp = m.label();
-		m.aload(fp);
-		m.branch(Opcode.IFNULL, afterFp);
-		int rankOk = m.label();
-		m.aload(dimsArr);
-		m.arraylength();
-		m.iconst(1);
-		m.branch(Opcode.IF_ICMPEQ, rankOk);
-		emitThrow(m, rtExClass, rtExInit, cp.addString("make-array: :fill-pointer requires a rank-1 array"));
-		m.bind(rankOk);
-		int fpIsT = m.label();
-		m.aload(fp);
-		m.instanceOf(longClass);
-		m.branch(Opcode.IFEQ, fpIsT);
-		m.aload(fp);
-		m.checkcast(longClass);
-		m.invokevirtual(longIntValue);
-		m.istore(v);
-		int fpBad = m.label();
-		int fpLongOk = m.label();
-		m.iload(v);
-		m.branch(Opcode.IFLT, fpBad);
-		m.iload(v);
-		m.iload(total);
-		m.branch(Opcode.IF_ICMPGT, fpBad);
-		m.branch(Opcode.GOTO, fpLongOk);
-		m.bind(fpBad);
-		emitThrow(m, rtExClass, rtExInit, cp.addString("make-array: :fill-pointer out of range"));
-		m.bind(fpLongOk);
-		m.aload(fp);
-		m.astore(fpVal);
-		m.branch(Opcode.GOTO, afterFp);
-		// :fill-pointer t -> the vector size (dimsArr[0] is already the boxed Long)
-		m.bind(fpIsT);
-		m.aload(dimsArr);
-		m.iconst(0);
-		m.aaload();
-		m.astore(fpVal);
-		m.bind(afterFp);
+		emitResolveFillPointer(m, longClass, longIntValue, rtExClass, rtExInit, cp, fp, dimsArr, total, fpVal, v);
 		// PACKED fast path: no fill pointer, not adjustable, and the initial element is
 		// nil or an integer (excluding the sentinel value, which must stay
 		// representable): the data is a flat long[] behind a length-6 header
@@ -800,7 +764,7 @@ final class JvmArrayRuntimeBuilder {
 		vp.aconstNull();
 		vp.areturn();
 		vp.bind(vpStore);
-		emitStoreAtFillPointerAndAdvance(vp, arrayListClass, longClass, alSet, longValueOf, 0, 1, 2, 3);
+		emitStoreAtFillPointerAndAdvance(vp, rmSet, longValueOf, 0, 1, 2, 3);
 		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH), cp.addUtf8(VECTOR_PUSH_DESC), 6, 5, vp.finish()));
 
 		// _vectorPop(arr): decrement the fill pointer and return the element it passed.
@@ -824,11 +788,11 @@ final class JvmArrayRuntimeBuilder {
 		vpop.op(Opcode.I2L);
 		vpop.invokestatic(longValueOf);
 		vpop.aastore();
-		// list.get(1 + (fp - 1)) == list.get(fp)
+		// _rmGet(arr, 1 + (fp - 1)) == _rmGet(arr, fp) -- through the displacement-aware
+		// primitive, so a displaced fill-pointered view pops its TARGET's element.
 		vpop.aload(0);
-		vpop.checkcast(arrayListClass);
 		vpop.iload(2);
-		vpop.invokevirtual(alGet);
+		vpop.invokestatic(rmGet);
 		vpop.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_POP), cp.addUtf8(VECTOR_POP_DESC), 6, 3, vpop.finish()));
 
@@ -849,6 +813,16 @@ final class JvmArrayRuntimeBuilder {
 		vpe.iload(4);
 		vpe.iload(5);
 		vpe.branch(Opcode.IF_ICMPLT, vpeStore);
+		// A full DISPLACED view stops being a view first: its elements move into storage
+		// of its own and the displacement is dropped, so the growth below extends that
+		// storage instead of running past the end of the target (SBCL 2.2.9 does the
+		// same, and array-displacement answers nil from here on). The header object is
+		// REPLACED, so reload it before the fill-pointer store reads slot 1.
+		vpe.aload(1);
+		vpe.invokestatic(undisplace);
+		vpe.pop();
+		emitLoadHeader(vpe, arrayListClass, objectArrayClass, alGet, 1);
+		vpe.astore(3);
 		// The shared growth policy, spelled out in bytecode (am.ik.rontolisp.ArrayGrowth,
 		// which generated code cannot call): a supplied extension is added verbatim, and
 		// otherwise the capacity doubles, off a floor for the zero-capacity vector.
@@ -917,7 +891,7 @@ final class JvmArrayRuntimeBuilder {
 		vpe.invokestatic(longValueOf);
 		vpe.aastore();
 		vpe.bind(vpeStore);
-		emitStoreAtFillPointerAndAdvance(vpe, arrayListClass, longClass, alSet, longValueOf, 0, 1, 3, 4);
+		emitStoreAtFillPointerAndAdvance(vpe, rmSet, longValueOf, 0, 1, 3, 4);
 		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH_EXTEND), cp.addUtf8(VECTOR_PUSH_EXTEND_DESC), 6, 9,
 				vpe.finish()));
 
@@ -1202,15 +1176,21 @@ final class JvmArrayRuntimeBuilder {
 		wd.op(Opcode.RETURN);
 		methods.add(new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), 7, 6, wd.finish()));
 
-		// _arrayMakeDisplaced(dims, target, offset): a displaced view -- a fresh
-		// ArrayList holding ONLY the 5-element header {dimsArr, null, null, target,
+		// _arrayMakeDisplaced(dims, target, offset, fp, adj): a displaced view -- a fresh
+		// ArrayList holding ONLY the 5-element header {dimsArr, fp, adj, target,
 		// offsetLong}; the view is bounds-checked against the target's total size.
-		// Locals: 0 = dims, 1 = target, 2 = offsetArg, 3 = list, 4 = total,
-		// 5 = dimsArr, 6 = idx, 7 = cur, 8 = n, 9 = off (int), 10 = targetHeader,
-		// 11 = targetTotal (product scratch), 12 = m (product scratch).
+		// Slots 1 and 2 are the SAME fill-pointer / adjustable slots an ordinary header
+		// carries, so every reader of them (_fillPointer, _arrayHasFillPointer,
+		// _adjustableArrayP, _length, the printer) answers for a view unchanged: CLHS
+		// forbids only :initial-element beside :displaced-to.
+		// Locals: 0 = dims, 1 = target, 2 = offsetArg, 3 = fpArg, 4 = adjArg, 5 = list,
+		// 6 = total, 7 = dimsArr, 8 = idx, 9 = cur, 10 = n, 11 = off (int),
+		// 12 = targetHeader, 13 = targetTotal (product scratch), 14 = m (product
+		// scratch), 15 = headerSize, 16 = fpVal, 17 = fp scratch (int).
 		JvmAsm md = new JvmAsm();
-		int mdDims = 0, mdTarget = 1, mdOffset = 2, mdList = 3, mdTotal = 4, mdDimsArr = 5, mdIdx = 6, mdCur = 7,
-				mdN = 8, mdOff = 9, mdTargetHeader = 10, mdProduct = 11, mdM = 12, mdHeaderSize = 13;
+		int mdDims = 0, mdTarget = 1, mdOffset = 2, mdFp = 3, mdAdj = 4, mdList = 5, mdTotal = 6, mdDimsArr = 7,
+				mdIdx = 8, mdCur = 9, mdN = 10, mdOff = 11, mdTargetHeader = 12, mdProduct = 13, mdM = 14,
+				mdHeaderSize = 15, mdFpVal = 16, mdFpScratch = 17;
 		md.anew(arrayListClass);
 		md.dup();
 		md.invokespecial(alInit);
@@ -1282,7 +1262,11 @@ final class JvmArrayRuntimeBuilder {
 		emitThrow(md, rtExClass, rtExInit,
 				cp.addString("make-array: :displaced-to array is too small for the requested view"));
 		md.bind(mdOk);
-		// list.add(new Object[headerSize]{dimsArr, null, null, target,
+		// The fill pointer is resolved against the VIEW's own element count, by the same
+		// rule _arrayMake uses (null / range-checked Long / t -> the size).
+		emitResolveFillPointer(md, longClass, longIntValue, rtExClass, rtExInit, cp, mdFp, mdDimsArr, mdTotal, mdFpVal,
+				mdFpScratch);
+		// list.add(new Object[headerSize]{dimsArr, fpVal, adj, target,
 		// Long.valueOf(off)})
 		md.aload(mdList);
 		md.iload(mdHeaderSize);
@@ -1290,6 +1274,14 @@ final class JvmArrayRuntimeBuilder {
 		md.dup();
 		md.iconst(0);
 		md.aload(mdDimsArr);
+		md.aastore();
+		md.dup();
+		md.iconst(1);
+		md.aload(mdFpVal);
+		md.aastore();
+		md.dup();
+		md.iconst(2);
+		md.aload(mdAdj);
 		md.aastore();
 		md.dup();
 		md.iconst(3);
@@ -1305,7 +1297,104 @@ final class JvmArrayRuntimeBuilder {
 		md.pop();
 		md.aload(mdList);
 		md.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC), 6, 14, md.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC), 6, 18, md.finish()));
+
+		// _arrayUndisplace(arr): copy a displaced view's CURRENT contents into data slots
+		// of its own and drop the displacement, keeping the dims, the fill pointer and
+		// the adjustable flag; returns arr. A non-displaced array is returned untouched.
+		// The header LENGTH carries the shape, so the new one is 4 (the character-vector
+		// marker) where the old was 7 (a displaced STRING view) and 3 otherwise -- a
+		// grown string view stays a string. Called by _vectorPushExtend when a full view
+		// has to grow: the growth then extends storage of its own instead of running off
+		// the end of someone else's array, which is what SBCL 2.2.9 does.
+		// Locals: 0 = arr, 1 = header, 2 = total, 3 = elems, 4 = i, 5 = newHeader,
+		// 6 = product scratch.
+		JvmAsm un = new JvmAsm();
+		emitLoadHeader(un, arrayListClass, objectArrayClass, alGet, 0);
+		un.astore(1);
+		int unDisplaced = un.label();
+		un.aload(1);
+		un.arraylength();
+		un.iconst(4);
+		un.branch(Opcode.IF_ICMPGE, unDisplaced);
+		un.aload(0);
+		un.areturn();
+		un.bind(unDisplaced);
+		int unGo = un.label();
+		un.aload(1);
+		un.iconst(3);
+		un.aaload();
+		un.branch(Opcode.IFNONNULL, unGo);
+		un.aload(0);
+		un.areturn();
+		un.bind(unGo);
+		emitDimsProduct(un, longClass, objectArrayClass, longIntValue, 1, 2, 6);
+		un.istore(2);
+		// elems[i] = _rmGet(arr, 1 + i) -- read through the chain BEFORE the header is
+		// replaced, since that is what the reads resolve against.
+		un.iload(2);
+		un.anewarray(objectClass);
+		un.astore(3);
+		un.iconst(0);
+		un.istore(4);
+		int unRead = un.label();
+		int unReadDone = un.label();
+		un.bind(unRead);
+		un.iload(4);
+		un.iload(2);
+		un.branch(Opcode.IF_ICMPGE, unReadDone);
+		un.aload(3);
+		un.iload(4);
+		un.aload(0);
+		un.iconst(1);
+		un.iload(4);
+		un.op(Opcode.IADD);
+		un.invokestatic(rmGet);
+		un.aastore();
+		un.iinc(4, 1);
+		un.branch(Opcode.GOTO, unRead);
+		un.bind(unReadDone);
+		int unString = un.label();
+		int unLenReady = un.label();
+		un.aload(1);
+		un.arraylength();
+		un.iconst(7);
+		un.branch(Opcode.IF_ICMPEQ, unString);
+		un.iconst(3);
+		un.branch(Opcode.GOTO, unLenReady);
+		un.bind(unString);
+		un.iconst(4);
+		un.bind(unLenReady);
+		un.anewarray(objectClass);
+		emitCopyHeaderSlots(un, 1, 3);
+		un.astore(5);
+		un.aload(0);
+		un.checkcast(arrayListClass);
+		un.iconst(0);
+		un.aload(5);
+		un.invokevirtual(alSet);
+		un.pop();
+		un.iconst(0);
+		un.istore(4);
+		int unFill = un.label();
+		int unFillDone = un.label();
+		un.bind(unFill);
+		un.iload(4);
+		un.iload(2);
+		un.branch(Opcode.IF_ICMPGE, unFillDone);
+		un.aload(0);
+		un.checkcast(arrayListClass);
+		un.aload(3);
+		un.iload(4);
+		un.aaload();
+		un.invokevirtual(alAdd);
+		un.pop();
+		un.iinc(4, 1);
+		un.branch(Opcode.GOTO, unFill);
+		un.bind(unFillDone);
+		un.aload(0);
+		un.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC), 6, 7, un.finish()));
 
 		// _arrayBecome(a, b): replace a's dims, fill pointer and data with b's in place
 		// (the in-place half of adjust-array on an adjustable array); returns a. The
@@ -1884,31 +1973,17 @@ final class JvmArrayRuntimeBuilder {
 		// n = header[1] != null ? fill pointer : dims[0]
 		sv.iconst(1);
 		sv.istore(6);
-		int svUseDim = sv.label();
-		int svHaveN = sv.label();
-		sv.aload(2);
-		sv.iconst(1);
-		sv.aaload();
-		sv.branch(Opcode.IFNULL, svUseDim);
-		sv.aload(2);
-		sv.iconst(1);
-		sv.aaload();
-		sv.checkcast(longClass);
-		sv.invokevirtual(longIntValue);
-		sv.istore(3);
-		sv.branch(Opcode.GOTO, svHaveN);
-		sv.bind(svUseDim);
-		emitLoadDim0(sv, longClass, objectArrayClass, longIntValue, 2);
-		sv.istore(3);
-		sv.bind(svHaveN);
+		emitActiveLength(sv, longClass, objectArrayClass, longIntValue, 2, 3);
 		sv.branch(Opcode.GOTO, svRender);
 		// A STRING VIEW (length-7 header) has no storage of its own: n is its
 		// dimension, and the walk hands back either the character vector it aliases
 		// (rendered element by element from the resolved base) or the immutable string
 		// it aliases (sliced by code point in one substring).
 		sv.bind(svView);
-		emitLoadDim0(sv, longClass, objectArrayClass, longIntValue, 2);
-		sv.istore(3);
+		// The view's OWN fill pointer bounds the rendering when it has one -- a
+		// :displaced-to view may carry one, and then it is the string's length. Read it
+		// before the walk below overwrites the header local.
+		emitActiveLength(sv, longClass, objectArrayClass, longIntValue, 2, 3);
 		sv.iconst(1);
 		sv.istore(6);
 		emitResolveDisplacement(sv, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 1, 6, 2);
@@ -2485,6 +2560,81 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	// new RuntimeException(message); athrow.
+	// The shared make-array :fill-pointer rule, in bytecode: null (the keyword absent or
+	// nil) leaves fpVal null, a Long is that value range-checked against the array's own
+	// element count, and anything else -- i.e. t -- is that count. Only a rank-1 array
+	// may carry one. A DISPLACED view resolves it exactly the same way: total is the
+	// VIEW's element count, never the target's.
+	private static void emitResolveFillPointer(JvmAsm m, ClassConstant longClass, MethodrefConstant longIntValue,
+			ClassConstant rtExClass, MethodrefConstant rtExInit, ConstantPool cp, int fp, int dimsArr, int total,
+			int fpVal, int v) {
+		m.aconstNull();
+		m.astore(fpVal);
+		int afterFp = m.label();
+		m.aload(fp);
+		m.branch(Opcode.IFNULL, afterFp);
+		int rankOk = m.label();
+		m.aload(dimsArr);
+		m.arraylength();
+		m.iconst(1);
+		m.branch(Opcode.IF_ICMPEQ, rankOk);
+		emitThrow(m, rtExClass, rtExInit, cp.addString("make-array: :fill-pointer requires a rank-1 array"));
+		m.bind(rankOk);
+		int fpIsT = m.label();
+		m.aload(fp);
+		m.instanceOf(longClass);
+		m.branch(Opcode.IFEQ, fpIsT);
+		m.aload(fp);
+		m.checkcast(longClass);
+		m.invokevirtual(longIntValue);
+		m.istore(v);
+		int fpBad = m.label();
+		int fpLongOk = m.label();
+		m.iload(v);
+		m.branch(Opcode.IFLT, fpBad);
+		m.iload(v);
+		m.iload(total);
+		m.branch(Opcode.IF_ICMPGT, fpBad);
+		m.branch(Opcode.GOTO, fpLongOk);
+		m.bind(fpBad);
+		emitThrow(m, rtExClass, rtExInit, cp.addString("make-array: :fill-pointer out of range"));
+		m.bind(fpLongOk);
+		m.aload(fp);
+		m.astore(fpVal);
+		m.branch(Opcode.GOTO, afterFp);
+		// :fill-pointer t -> the vector size (dimsArr[0] is already the boxed Long)
+		m.bind(fpIsT);
+		m.aload(dimsArr);
+		m.iconst(0);
+		m.aaload();
+		m.astore(fpVal);
+		m.bind(afterFp);
+	}
+
+	// Stores the array's ACTIVE length into nSlot: the header's fill pointer (slot 1)
+	// when it carries one, otherwise dimension 0. Shared by every reader that stops at
+	// the fill pointer -- and a DISPLACED view's header carries the slot too.
+	private static void emitActiveLength(JvmAsm a, ClassConstant longClass, ClassConstant objectArrayClass,
+			MethodrefConstant longIntValue, int headerSlot, int nSlot) {
+		int useDim = a.label();
+		int haveN = a.label();
+		a.aload(headerSlot);
+		a.iconst(1);
+		a.aaload();
+		a.branch(Opcode.IFNULL, useDim);
+		a.aload(headerSlot);
+		a.iconst(1);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.istore(nSlot);
+		a.branch(Opcode.GOTO, haveN);
+		a.bind(useDim);
+		emitLoadDim0(a, longClass, objectArrayClass, longIntValue, headerSlot);
+		a.istore(nSlot);
+		a.bind(haveN);
+	}
+
 	private static void emitThrow(JvmAsm a, ClassConstant rtExClass, MethodrefConstant rtExInit,
 			am.ik.jvm.ConstantPool.StringConstant message) {
 		a.anew(rtExClass);
@@ -2534,17 +2684,18 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	// Stores val at the fill pointer of the array in arrSlot (data index 1 + fp),
-	// advances the stored fill pointer and returns Long.valueOf(fp).
-	private static void emitStoreAtFillPointerAndAdvance(JvmAsm a, ClassConstant arrayListClass,
-			ClassConstant longClass, MethodrefConstant alSet, MethodrefConstant longValueOf, int valSlot, int arrSlot,
-			int headerSlot, int fpSlot) {
+	// advances the stored fill pointer and returns Long.valueOf(fp). The store goes
+	// through _rmSet, not ArrayList.set, so a DISPLACED fill-pointered view writes
+	// THROUGH to its target's storage the way SBCL's does -- the view holds no data
+	// slots of its own.
+	private static void emitStoreAtFillPointerAndAdvance(JvmAsm a, MethodrefConstant rmSet,
+			MethodrefConstant longValueOf, int valSlot, int arrSlot, int headerSlot, int fpSlot) {
 		a.aload(arrSlot);
-		a.checkcast(arrayListClass);
 		a.iconst(1);
 		a.iload(fpSlot);
 		a.op(Opcode.IADD);
 		a.aload(valSlot);
-		a.invokevirtual(alSet);
+		a.invokestatic(rmSet);
 		a.pop();
 		a.aload(headerSlot);
 		a.iconst(1);
