@@ -2357,9 +2357,11 @@ is revisited.
 - **No lazy results on METAL for the interceptors**, and so no index tier or clip norm
   there. Built, pinned, measured a tie and a loss; `.todo/495` is the lever and the
   measurement list.
-- **No fused layer-norm AFFINE.** Its `* weight + bias` stays two members whose adjoints
-  the tape already runs as folds. The other three declines this bullet used to carry are
-  gone, each to its own measurement: the fused `log-softmax` is todo-629's, the attention
+- **No fused layer-norm AFFINE on METAL.** It is built on CUDA ("Layer-norm's affine")
+  and declined here, unmeasured, so the module runs the normalization and its two
+  broadcast passes member by member as before; whether the fold pays on that backend is
+  the measurement to make. The other three declines this bullet used to carry are gone
+  outright, each to its own: the fused `log-softmax` is todo-629's, the attention
   scale-and-mask todo-641's on CUDA and todo-643's on Metal (a tape change, which is what
   the views in `.kb/torch.md` are), and the fused tier on Metal todo-636's -- built on the
   software binary64 the resident tier needed there.
