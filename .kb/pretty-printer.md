@@ -122,7 +122,8 @@ text identical to SBCL 2.2.9 (`LispEvaluatorTest.evalPrintCase`,
 Landed 2026-09-02 (`.todo/041`; the consumer is Practical Common Lisp's chapter-8
 `ppme`, `(write (macroexpand-1 form env) :length nil :level nil :circle nil :pretty t
 :gensym nil :right-margin 83 :case :downcase)`, which `write` used to reject --
-`.todo/620`). The five ride the `*print-case*` mechanism above unchanged in shape:
+`.kb/asdf.md`, "The _Practical Common Lisp_ book corpus"). The five ride the
+`*print-case*` mechanism above unchanged in shape:
 `%print-cased` is now the printer-CONTROL renderer (the name predates the widening),
 `LispMacroExpander.usesPrintControls` the gate (`PRINT_CONTROL_VARS` is the six-name
 list; `usesPrintCase` is gone), `printControls` the flag in both compilers'

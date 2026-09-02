@@ -25,7 +25,8 @@ format logical block `~<...~:>` and `~/name/`), `readtable-case` (a constant
 **(2026-09-02) `*print-length*` / `*print-level*` / `*print-gensym*` /
 `*print-base*` / `*print-radix*` on the same walk, `write`'s full keyword set and
 `write-to-string`'s keywords**, the pieces Practical Common Lisp's `ppme` needed
-(`.todo/620` chapter 8): the seven `write` keywords the measurement below listed as
+(`.kb/asdf.md`, "The _Practical Common Lisp_ book corpus", chapter 8): the seven
+`write` keywords the measurement below listed as
 rejected are accepted and all but `:array` change the text, SBCL-identical on all
 four backends. The cost that used to argue against it is measured in
 `.kb/pretty-printer.md` (a `write` user's `.wasm` grows by ~33 KB; everything else

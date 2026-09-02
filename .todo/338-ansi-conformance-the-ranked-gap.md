@@ -34,7 +34,11 @@ the new information:
   `nsubst*` `tree-equal` `assoc-if-not` `rassoc-if-not` `member-if-not` `ldiff`
   `tailp` `nbutlast` `list-length` `get-properties`, and the ordinal accessors
   `fifth` through `tenth` (`first`..`fourth` exist) -- ~600 tests, `cons` at
-  32.8% (.todo/033)
+  32.8% (.todo/033). The ordinals are not only a test count: chapter 32 of the
+  _Practical Common Lisp_ corpus stops dead on them (2026-09-02), because
+  `compile-timing-data` sorts `:key #'fifth`, so the chapter's own entry point
+  `show-timing-data` cannot run at all -- everything else in that chapter is
+  SBCL-identical.
 - bit-array operations `bit-and` `bit-ior` `bit-xor` `bit-not` `bit-nand`
   `bit-nor` `bit-eqv` `bit-andc1/2` `bit-orc1/2`, plus `bit-vector-p`
   `simple-bit-vector-p` `array-in-bounds-p` `upgraded-array-element-type` --
@@ -127,8 +131,9 @@ progress, and the reason the report keeps the lost-form column next to the rate.
 
 ## A second measurement: the _Practical Common Lisp_ corpus (2026-09-01)
 
-`.todo/620` runs Peter Seibel's own book code -- twelve ASDF systems of
-ordinary 2005 Common Lisp -- against SBCL and diffs the output. It is a
+Peter Seibel's own book code -- twelve ASDF systems of ordinary 2005 Common
+Lisp -- was run against SBCL and the output diffed (the standing per-system
+verdict lives in `.kb/asdf.md`, "The _Practical Common Lisp_ book corpus"). It is a
 different instrument from the ANSI suite and worth reading beside it: the suite
 ranks by TESTS LOST, which over-weights the operator families nobody calls,
 while the corpus ranks by WHETHER A PROGRAM RUNS AT ALL. The two disagree
@@ -151,5 +156,9 @@ Complex numbers likewise. Neither ranking is wrong; they are answering
 different questions, and an item that BOTH instruments name is the one to take
 first.
 
-Of the twelve systems, nine already match SBCL byte for byte, three of them
-only after one of the items above.
+Re-measured 2026-09-02, after `.todo/621`/`623`/`624`/`625`/`391`/`626` and
+`.todo/041`'s printer-variable half all landed: five rows are byte-identical,
+four differ only by `.todo/041`'s missing right margin (one of those also by
+this item's own ordinal accessors' neighbour, `.todo/156`'s gensym prefix), one
+is the `fifth` gap above, and three need a `net.aserve` port that is decided
+against (`.kb/asdf.md`).

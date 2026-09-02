@@ -692,7 +692,8 @@ fill-pointered array lost its fill pointer entirely --
 `(let ((v (make-array 3 :adjustable t :fill-pointer 3 :initial-contents ...)))
 (fill-pointer (sort v #'<)))` signalled `array has no fill pointer`, which is
 what surfaced through `practicals-1.0.3/Chapter27/database.lisp`'s
-`sort-rows`/`delete-rows` pair (`.todo/620`).
+`sort-rows`/`delete-rows` pair (`.kb/asdf.md`, "The _Practical Common Lisp_
+book corpus" -- that chapter is byte-identical to SBCL since 2026-09-02).
 
 **The fix is a second flag on `seqResultDispatchForm`, `destructive`, private to
 the three permuting callers** (`wrapSortForStringSeq`, `wrapNreverseForStringSeq`,

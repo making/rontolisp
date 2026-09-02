@@ -559,4 +559,81 @@ of this todo's scope.
 
 Driving library, and the verification: **portableaserve** (quicklisp `portableaserve-20190813-git`), whose four `.asd` files are the whole idiom in one release. `aserve/aserve.asd` (a `cl-source-file.cl` subclass + a `perform :around` on it + `:default-component-class cl-source-file.cl` + `(:legacy-acl-source-file "main" ...)` entries), `aserve/htmlgen/htmlgen.asd` and `aserve/webactions/webactions.asd` (a plain `cl-source-file` subclass whose extension comes from a `source-file-type` method) now parse COMPLETELY, resolving to `packages.cl macs.cl main.cl headers.cl parse.cl decode.cl publish.cl authorize.cl log.cl client.cl proxy.cl cgi.cl playback.cl` / `htmlgen.cl` / `websession.cl webact.cl clpage.cl clpcode/{clp,http,time,wa}.cl`. Pinned by `AsdfSystemsTest` (`toleratesAClSourceFileSubclassAndLoadsItsComponents`, `aSourceFileTypeMethodSetsTheClassExtensionWhereverItSits`, `aTypeInitformSlotSetsTheClassExtension`, `theBuiltInSourceFileClassesAreComponentTypes`, `aModuleMayRePointTheDefaultComponentClass`, `anUnknownDefaultComponentClassIsAHardError`, plus the two closed-world pins `aDefclassThatIsNotAComponentClassIsAHardError` and `aTopLevelDefmethodOnAnotherNameIsToleratedAndIgnored`) and, end to end through the loader, `LispEvaluatorAsdfTest.loadSystemReadsTheExtensionAComponentClassGivesItsFiles` -- the extension has to travel all the way to the read, not just into `LispSystem.files()`.
 
-**Where aserve still stops, measured 2026-09-01**: `acl-compat/acl-compat.asd`, which the other three all depend on, fails on a top-level `(defun lisp-system-shortname () ...)`, and behind that on `:properties` and on `#-(or lispworks cmu sbcl mcl openmcl clisp allegro) (error "The acl-compat library is not yet supported on this lisp implementation.")`. The last of those is not a parse gap at all -- it is upstream REFUSING an implementation it does not recognize, the same wall trivial-features' own `.asd` puts up, and it is the implementation-identity question `.todo/620` describes. So no further widening of this surface would reach aserve, and none was made: the `.asd` extension surface is worth having on its own (it is the reason a pre-ASDF-3 `.asd` stopped us dead), and PCL chapters 26/28/29 stay behind `.todo/620`.
+**Where aserve still stops, measured 2026-09-01**: `acl-compat/acl-compat.asd`, which the other three all depend on, fails on a top-level `(defun lisp-system-shortname () ...)`, and behind that on `:properties` and on `#-(or lispworks cmu sbcl mcl openmcl clisp allegro) (error "The acl-compat library is not yet supported on this lisp implementation.")`. The last of those is not a parse gap at all -- it is upstream REFUSING an implementation it does not recognize, the same wall trivial-features' own `.asd` puts up. **Settled 2026-09-02: no further widening, and the reason is not the parser** -- see the next section.
+
+## The `.asd`-as-data boundary is not what stops portableaserve (2026-09-02)
+
+`.asd` files are parsed as DATA, never evaluated, and `AsdfSystems` refuses any
+top-level form outside the recognized set with `unsupported form in .asd file`.
+The obvious question a real 2001-vintage system raises is whether that boundary
+should widen into an evaluator. **Measured against `portableaserve-20190813-git`
+(the maintained fork of the AllegroServe port _Practical Common Lisp_ chapters
+26/28/29 target): no. Widening it buys nothing.** The numbers, so the next
+visitor does not re-derive them:
+
+The refusal we hit first is `acl-compat/acl-compat.asd`'s top-level
+`(defun lisp-system-shortname () #+allegro :allegro ... #+sbcl :sbcl)`, called
+from a `(defmethod component-pathname ((c unportable-cl-source-file)) ...)` that
+routes each unportable component into a per-implementation subdirectory
+(`acl-compat/sbcl/`, `.../cmucl/`, ...). That method is not decoration -- four of
+the system's source files come from it -- so honoring it means evaluating the
+`.asd`, and a `defmethod` on `component-pathname` also means real `operate`
+machinery, which this shim deliberately does not have. But behind that door, in
+the order they bite:
+
+1. **Dependencies that do not exist here.** `:depends-on (:puri :cl-ppcre
+   :ironclad :cl-fad #+sbcl :sb-bsd-sockets #+sbcl :sb-posix)`. `puri` and
+   `cl-fad` are absent even from this machine's quicklisp cache (`quri` is not
+   `puri`); `sb-bsd-sockets` and `sb-posix` are SBCL *contrib modules* and cannot
+   exist here by construction.
+2. **Component #1 needs SBCL's packages to be real.** `acl-compat/packages.lisp`
+   is a plain `(:file "packages")` -- no custom component class, nothing the
+   `.asd` parser has any say over -- and it does `#+sbcl (:use #:sb-bsd-sockets)`,
+   `#+sbcl (:use #:sb-ext #:sb-gray)` and
+   `#+sbcl (:import-from :sb-ext #:without-package-locks #:string-to-octets)`.
+   Without `#+sbcl` announced (`.kb/reader-features.md`, `--feature`), the `.asd`
+   itself signals `#-(or lispworks cmu sbcl mcl openmcl clisp allegro) (error
+   "The acl-compat library is not yet supported on this lisp implementation.")`.
+   So the two ways through are "announce `#+sbcl` and need SBCL's internals" or
+   "announce nothing and be refused by name".
+3. **The files the method selects are a port of SBCL's internals.**
+   `acl-compat/sbcl/acl-mp.lisp` carries 62 `sb-thread:` references
+   (`make-thread`, `interrupt-thread`, `with-recursive-lock`, `make-waitqueue`,
+   `condition-wait`, ...); `acl-excl.lisp` uses `sb-posix:stat`/`lstat`/`s-isdir`;
+   `acl-sys.lisp` uses `sb-ext:*posix-argv*`; `acl-socket.lisp` uses
+   `sb-sys:wait-until-fd-usable` over the `sb-bsd-sockets` classes it inherits
+   from `packages.lisp`.
+
+**SBCL on this machine cannot load it either**: `asdf:load-system :aserve`
+answers `Component :PURI not found, required by #<SYSTEM "acl-compat">`. So there
+is not even an oracle to diff against until the rest of that 2001 stack is
+fetched.
+
+The conclusion is about WHAT `acl-compat` is, not about our parser: it is a
+per-implementation compatibility layer whose whole job is to name one host's
+internals, and its rontolisp branch does not exist because only we could write
+it. An `.asd` evaluator would move the failure four files later without moving it
+closer. The reachable path to those chapters is the substitution ladder already
+in this file -- a shim `net.aserve` / `acl-compat` surface (`publish`,
+`request-query`, `with-http-response`, `with-http-body`) over rontolisp's own
+HTTP server (`.kb/http-server.md`, `.kb/clack.md`), which is `.todo/147`'s shape.
+
+**Re-evaluate when** something OTHER than a per-implementation compatibility
+layer is refused by that gate -- a `.asd` whose top-level code is portable CL
+computing component lists or pathnames. That would be an argument about the
+parser; portableaserve is not.
+
+### The _Practical Common Lisp_ book corpus, as a standing result (2026-09-02)
+
+`practicals-1.0.3` (twelve ASDF systems over eleven chapters, loaded through this
+shim with `--system-path`) was diffed byte for byte against SBCL 2.2.9.debian on
+the interpreter. Byte-identical: `spam` (ch.23, over the quicklisp cl-ppcre --
+the bundled 1.2.3 is `.todo/602`), `binary-data` (24), `id3v2` (25),
+`mp3-database` (27) and `html` (30/31). `simple-database` (3), `test-framework`
+(9) and `pathnames` (15) differ ONLY by `.todo/041`'s missing right margin;
+`macro-utilities` (8) adds `.todo/156`'s lowercase gensym prefix (a name of
+`"g3"` must be `|...|`-escaped under `:case :downcase`, `"G3"` must not);
+`profiler` (32) dies on `fifth` (`.todo/338`). Chapters 15, 25 and 27 need
+`--feature sbcl`; 26/28/29 are the `net.aserve` rows decided above. The corpus
+needed no shim, no replacement `.asd` and no leaf-module substitution.
+

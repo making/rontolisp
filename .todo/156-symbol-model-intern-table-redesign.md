@@ -81,7 +81,12 @@ Confirmed facts that make A2 low-risk (from the 2026-07-20 seam-mapping sweep):
 - **`intern`/`make-symbol` are verbatim; runtime `read`/`read-from-string` upcase.**
   Split them (current `foldRuntimeSymbolName` folded both — delete it).
 - **`gensym` prefix uppercase `G`** (CL). `symbol-name` of a standard symbol is now
-  `"CAR"` (CL-correct); a user symbol stays `"FOO"`.
+  `"CAR"` (CL-correct); a user symbol stays `"FOO"`. The lowercase `g` is observable, not
+  cosmetic: under `*print-case*` `:downcase` a symbol named `"g3"` must be
+  `|...|`-escaped to read back and one named `"G3"` must not, so every printed
+  macroexpansion diverges from SBCL. Chapter 8 of the _Practical Common Lisp_
+  corpus is the standing example (`ppme` prints `(let ((|g3| 0) ...))` where
+  SBCL prints `(let ((g119 0) ...))`); measured 2026-09-02.
 - **`HttpPlistShape` forced-upcase STAYS** — it is a host-ABI bridge (lowercase WIT
   field → uppercase keyword), NOT fold compensation. Deleting it would emit
   lowercase keys the reader never produces. Only reword its comment. Same for the
