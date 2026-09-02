@@ -16067,6 +16067,84 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aPackedVectorCanBeADisplacementTarget() {
+		// The construction CLHS's :displaced-to element-type rule is WRITTEN for -- a
+		// view over a simple specialized vector -- and the one shape every backend used
+		// to refuse. Elements are the target's, so a read sees the packed storage, a
+		// write lands in it (masked to the element width, this surface's own rule), and
+		// array-element-type answers the target's real type rather than t.
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1))
+				(setf (aref v 1) 200)
+				(list (aref v 0) (aref v 1) (aref b 2) (array-element-type v)
+				      (length v) (array-dimensions v) (arrayp v) (vectorp v) (stringp v))
+				""").print()).isEqualTo("(7 200 200 (UNSIGNED-BYTE 8) 2 (2) T T NIL)");
+		// a store MASKS to the element width exactly as a store into the target does
+		// (SBCL 2.2.9 signals a type error instead -- the pre-existing packed-vector
+		// divergence, .kb/packed-integer-vectors.md, not a displacement question).
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1))
+				(setf (aref v 0) 300)
+				(list (aref v 0) (aref b 1))
+				""").print()).isEqualTo("(44 44)");
+		// array-displacement answers the packed target itself, and the chain resolves
+		// through a view of a view
+		assertThat(evalMulti("""
+				(setq b (make-array 8 :element-type '(unsigned-byte 16) :initial-element 3))
+				(setq v (make-array 6 :element-type '(unsigned-byte 16) :displaced-to b
+				                      :displaced-index-offset 1))
+				(setq w (make-array 2 :element-type '(unsigned-byte 16) :displaced-to v
+				                      :displaced-index-offset 2))
+				(setf (aref b 3) 9)
+				(multiple-value-bind (tgt off) (array-displacement v)
+				  (list (aref w 0) (array-element-type w) (eq tgt b) off))
+				""").print()).isEqualTo("(9 (UNSIGNED-BYTE 16) T 1)");
+		// a packed FLOAT array is a target on the same terms
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type 'double-float :initial-element 1.5d0))
+				(setq v (make-array 2 :element-type 'double-float :displaced-to b
+				                      :displaced-index-offset 1))
+				(setf (aref v 1) 2.5d0)
+				(list (aref v 0) (aref b 2) (array-element-type v))
+				""").print()).isEqualTo("(1.5 2.5 DOUBLE-FLOAT)");
+		// the view is bounds-checked against the packed target's own length
+		assertThatThrownBy(() -> evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(make-array 9 :element-type '(unsigned-byte 8) :displaced-to b)
+				""")).hasMessageContaining("too small");
+	}
+
+	@Test
+	void aViewOverAPackedTargetUndisplacesWhenItGrows() {
+		// The un-displace copies the current view contents into storage of its own and
+		// records the element type the view answered -- so the slots the growth OPENS
+		// take that type's zero, and the pushes that still FIT are visible in the packed
+		// target. SBCL 2.2.9 answers (7 5 6), (7 7 5 7) and 3 for exactly this program.
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1 :fill-pointer 1 :adjustable t))
+				(vector-push-extend 5 v)
+				(vector-push-extend 6 v)
+				(list (aref v 0) (aref v 1) (aref v 2) (array-element-type v)
+				      (multiple-value-list (array-displacement v)) (coerce b 'list) (length v))
+				""").print()).isEqualTo("(7 5 6 (UNSIGNED-BYTE 8) (NIL 0) (7 7 5 7) 3)");
+		// adjust-array un-displaces the same way, and the opened slot takes the zero
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1 :adjustable t))
+				(adjust-array v 3)
+				(list (aref v 0) (aref v 2) (array-element-type v)
+				      (multiple-value-list (array-displacement v)))
+				""").print()).isEqualTo("(7 0 (UNSIGNED-BYTE 8) (NIL 0))");
+	}
+
+	@Test
 	void displacedStringViewAliasesTheTargetString() {
 		// The TARGET decides the shape: displacing onto a string answers a STRING view,
 		// not a bare array view, so it is stringp, prints as a string and writes through

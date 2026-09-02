@@ -8,6 +8,8 @@
 
 `:displaced-to` は、ストレージを割り当てる代わりに別の配列のストレージへのビューを構築します。ビューの (行優先の) 要素 `i` はターゲットの要素 `i + offset` を読み書きします (`:displaced-index-offset` のデフォルトは 0)。変更は双方向に見えます。ビューは独自の次元を持ち (ターゲットとランクが異なってもよく、例えば行列の行に対するベクタビューが作れます)、ターゲット内に収まる必要があり、[`array-displacement`](array-displacement.md) で調べられます。`:displaced-to` と併用できないのは `:initial-element` と `:initial-contents` だけです (ビューは初期化すべきストレージを持たないため)。`:fill-pointer` と `:adjustable` は併用でき、いずれも**ビュー自身**のものです: フィルポインタはビューの実効長であり (`length` と印字はそこで止まり、`aref` はビューの次元全体に届きます)、[`vector-push`](vector-push.md)/[`vector-pop`](vector-pop.md) はターゲットへ**書き抜け**ます。ビューが満杯になって伸長が必要になると、[`vector-push-extend`](vector-push-extend.md) はビューの **displacement を解除**します: 現在の内容が自前のストレージへ移り、以降 `array-displacement` は nil を返し、伸長がターゲットに触れることはありません。displaced ビュー自体も [`adjust-array`](adjust-array.md) で adjust できます: 満杯のビューが `vector-push-extend` で伸長するときと同様、まず displacement を解除してから調整されます。
 
+**パックド**なターゲット (`(unsigned-byte 8|16|32)` ベクタ、または `double-float`/`single-float` 配列) に対する displace も同じ条件で動きます。これは `:displaced-to` の要素型規則が本来想定している形です。ビューはターゲットのアンボックスなストレージを直接読み書きするため、ビュー経由の格納はターゲットへ直接格納したときとまったく同じように要素幅へマスク/丸められ、[`array-element-type`](array-element-type.md) は `t` ではなくターゲットの実際の型を返します。ビュー自体はパックドベクタではなく通常の配列ビューです: フィルポインタを持つこともでき、displacement が解除される (満杯での `vector-push-extend`、または `adjust-array`) と内容はその要素型を記憶したままの一般ストレージへ移るので、伸長で開いたスロットにはその型のゼロが入ります。
+
 **文字列**に対して displace すると文字列ビューになります。形を決めるのは要素型ではなくターゲットなので、結果は `stringp` を満たし、オフセット以降のターゲットの文字を持ち、文字列として印字・比較され、`subseq`/`char`/`length` はその範囲を見ます。コピーは発生しません。移植性のあるライブラリが部分文字列を共有するのはこの形です。ビュー経由の書き込みはターゲットに書き込まれます (ビューのビューも同じ文字に届きます)。実行中のプログラムが割り当てた文字列 ([`make-string`](make-string.md) バッファ、`copy-seq`/[`subseq`](subseq.md) の切り出し、`concatenate 'string` / [`string-upcase`](string-upcase.md) / `format nil` / [`with-output-to-string`](../macros/with-output-to-string.md) / `read-line` の結果) はすべてのバックエンドで可変であり、そのビュー経由の書き込みはターゲットに届きます。コンパイル済みバックエンドでは、文字列**リテラル** (および `princ-to-string` のような、そこでまだ不変値を返す少数のプロデューサの結果) は書き込みの届かない不変値です。ビューはそれをコピーせずに読み、ビュー経由の最初の書き込みでビューは可変コピーに移り、元の文字列はそのまま残ります。これはその文字列に対する `(setf (char s i) c)` の挙動とまったく同じです。
 
 ```lisp
@@ -27,6 +29,11 @@
        (view (make-array 4 :displaced-to base :displaced-index-offset 1 :fill-pointer 2)))
   (vector-push 9 view)
   (list (length view) (fill-pointer view) view base)) ; => (3 3 #(0 0 9) #(0 0 0 9 0 0))
+(let* ((bytes (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+       (view (make-array 2 :element-type '(unsigned-byte 8) :displaced-to bytes
+                           :displaced-index-offset 1)))
+  (setf (aref view 1) 200)
+  (list (aref view 0) (aref bytes 2) (array-element-type view))) ; => (7 200 (UNSIGNED-BYTE 8))
 (let ((z (make-array nil :initial-element 5)))
   (list (array-rank z) (array-dimensions z) (array-total-size z) (aref z))) ; => (0 NIL 1 5)
 (let ((z (make-array nil)))

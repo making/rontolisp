@@ -4525,7 +4525,27 @@ cases:
           (let ((dv (make-array 2 :displaced-to tgt :displaced-index-offset 1)))
             (adjust-array tgt 6 :initial-element 8)
             (setf (aref tgt 1) 55)
-            (print (aref dv 0)))))
+            (print (aref dv 0))))
+        ;; a PACKED vector is a displacement target on the same terms as a general
+        ;; array -- the shape SBCL 2.2.9 treats as the canonical one
+        (let* ((pb (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+               (pv (make-array 2 :element-type '(unsigned-byte 8) :displaced-to pb
+                                 :displaced-index-offset 1)))
+          (setf (aref pv 1) 200)
+          (print (list (aref pv 0) (aref pv 1) (aref pb 2) (array-element-type pv) pv)))
+        (let* ((fb (make-array 4 :element-type 'double-float :initial-element 1.5d0))
+               (fv2 (make-array 2 :element-type 'double-float :displaced-to fb
+                                  :displaced-index-offset 1)))
+          (setf (aref fv2 1) 2.5d0)
+          (print (list (aref fv2 0) (aref fb 2) (array-element-type fv2))))
+        (let* ((gb (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+               (gv (make-array 2 :element-type '(unsigned-byte 8) :displaced-to gb
+                                 :displaced-index-offset 1 :fill-pointer 1 :adjustable t)))
+          (vector-push-extend 5 gv)
+          (vector-push-extend 6 gv)
+          (print (list (aref gv 0) (aref gv 1) (aref gv 2) (array-element-type gv)
+                       (multiple-value-list (array-displacement gv))
+                       (coerce gb 'list) (length gv)))))
       (ci-adjust-displaced)
     expected: |
       (#(7 7 7 0 0) NIL)
@@ -4537,6 +4557,9 @@ cases:
       (T 2)
       (NIL 0)
       55
+      (7 200 200 (UNSIGNED-BYTE 8) #(7 200))
+      (1.5 2.5 DOUBLE-FLOAT)
+      (7 5 6 (UNSIGNED-BYTE 8) (NIL 0) (7 7 5 7) 3)
   - name: displaced-string-views-cross-backend
     source: |
       (defun ci-string-views ()

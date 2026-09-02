@@ -135,10 +135,38 @@ floor there), while two are vacuous there for the same reason in reverse: the ba
 enumeration builds 2097152 units of work against a 4194304 floor and the fused one builds
 128 elements, so with hardware present every case in them declines on SIZE and the
 condition under test is never reached (`.kb/gpu.md`, "What GpuTest claims, and where Metal
-answers it", todo-662). So: do not read "runs everywhere" as "pins everywhere", and when
-you write the device-present sibling, **assert an accepted baseline at the same shape
-first** -- that one line is what separates "this condition declines" from "this shape was
-never offered".
+answers it", todo-662). On CUDA the SAME suite splits differently -- the batched enumeration
+is a free pin there and the strided one covers the fold as well, while the fused one is
+vacuous on both -- so which of its enumerations pin is a per-backend fact and neither
+backend's answer transfers (`.kb/gpu.md`, "The same two questions on CUDA"). So: do not read
+"runs everywhere" as "pins everywhere", and when you write the device-present sibling,
+**assert an accepted baseline at the same shape first** -- that one line is what separates
+"this condition declines" from "this shape was never offered".
+
+**Whose arrays the baseline uses is the second decision, and it goes the opposite way
+depending on what the enumeration is trying to reach.** Accepting a call can leave its
+operands resident, and a resident operand is offered whatever its size, so the baseline can
+move the very gate the declines below it are meant to run into. Two shapes of answer, both
+in the tree:
+
+- **The baseline over its OWN arrays**, leaving the enumeration's operand fresh -- what an
+  enumeration of SIZE-derived declines needs, since a resident operand would be offered past
+  the floor being tested (`GpuTest`, todo-663's audit).
+- **The enumeration's operand made resident ON PURPOSE, and the baseline taken over it** --
+  what an enumeration of STRUCTURE-derived declines needs (an op code with no name, a span
+  outside the array it promised, a result array too short, an empty extent). There residency
+  is not contamination but the point: it takes the size rule out of the answer, so each
+  decline is its own condition's. `MetalGpuTest` does this deliberately, and uses a fresh
+  array for the one row that IS size-derived (todo-662).
+
+**Which one a given suite needs is a per-backend fact, because whether an accepted call
+adopts its operands at all is.** Measured on 2026-09-03: on CUDA an accepted call left the
+operand resident, which is why that audit moved to separate arrays; on Metal an accepted
+`gemm` left `isBacked` false on both inputs, because that backend adopts on the SECOND
+sight of an unwritten operand, so the same test written the other way was safe there --
+by the adoption rule rather than by design. Neither result licenses the other: a suite
+that is correct on one backend can be pinning nothing on the other, for this reason as
+well as for the threshold reason above.
 
 **Proving one of these is vacuous takes a mutation, not an argument.** Restore the old
 constant with the new census in place: if the value assertions still pass and only the

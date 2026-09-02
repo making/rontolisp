@@ -141,6 +141,15 @@ ci-spec case.
   (`array-has-fill-pointer-p`, `adjustable-array-p`, the displacement
   accessors) answer `nil`/`0` on the interpreter but error on the JVM and trap
   on wasm -- keep them out of ci-spec until someone needs them aligned.
+- A packed vector IS a valid `:displaced-to` TARGET on every backend since
+  `.todo/664` (`.kb/adjustable-arrays.md`, "A PACKED vector is a displacement
+  target"). The VIEW is a general array view, not a packed vector -- the rule
+  above is unchanged, `:displaced-to` still keeps the general representation for
+  the array being made -- but its elements are the packed target's, so a read
+  through it widens unsigned and a store through it MASKS to the element width,
+  exactly as a direct store into the target does. SBCL signals a type error for
+  an out-of-range store where this masks, which is this file's own invariant
+  reaching one more surface rather than a displacement divergence.
 - `equal`/`eql`: identity only (like every array).
 - eq-hash: WASM hashes to the default bucket (identity semantics preserved).
 
