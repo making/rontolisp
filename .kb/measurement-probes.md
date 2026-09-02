@@ -200,6 +200,29 @@ masks. A ceiling priced before a fix underneath lands is a ceiling over a worklo
 longer exists. This is rule 3 one level up: there, the baseline moved under an A/B; here,
 the bound moved under a decision not to build.
 
+## Rule 4: the premise came from a file, and the file can be over-corrected
+
+A measurement can be clean and still be worthless because the QUESTION rested on a
+sentence in `.kb` that is no longer true. CLAUDE.md already says a premise here is a
+measurement rather than a law; this is the failure mode of the correction itself.
+
+`.kb/gpu.md` had a list of what the Metal backend deliberately does not have. todo-495
+brought that list up to date -- several of its entries had been built by then -- and while
+doing so moved the index tier and the clip-norm pair to the built side as well, which is
+wrong: `MetalGemm.take`/`scatter`/`sumSquares` and their float twins return `false` and
+`null` unconditionally, with no kernel behind them. Two later sweeps read the corrected
+list as current. The second one asked whether clip-norm was reaching the device in the
+tests, was told by the other backend's session that the programs offer it 634 times a step
+and it is accepted 634 times -- **a correct measurement, on CUDA, of a question that does
+not exist on Metal**, where there is no member to accept. Nobody measured anything wrong.
+
+**So when you correct a premise here, say what you took OUT and what you left, not just
+what is true now.** An over-correction reads exactly like a correction; the only thing
+that distinguishes them is the record of what moved. And when a measurement's question
+comes from a `.kb` sentence rather than from the code, check the code for the clause the
+sentence is about before spending the machine time -- one `grep` for the member's own
+`return false` would have ended this chain at step 2.
+
 ## Rule 3: an A/B whose baseline moved is not an A/B
 
 **When several sessions push to `develop`, the arm you are not changing can be changed
