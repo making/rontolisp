@@ -14575,6 +14575,42 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void theFloorFamilyQuotientWithAnInfiniteDivisorMatchesTheInterpreter() throws Exception {
+		// todo-666: the one regime the sweep above declines on purpose (an infinite
+		// divisor), checked the same way -- against the interpreter, whose _fdiv-free
+		// route (ExactRounding.infiniteDivisorQuotient) and this one (_fdiv's own
+		// infinite-divisor arm) were written from the same sign formula independently
+		// of each other.
+		double[] dividends = { 3.0, -3.0, 0.5, -0.5, 1e300, -1e300, 0.0, -0.0 };
+		String[] divisors = { "(/ 1.0 0.0)", "(/ -1.0 0.0)" };
+		StringBuilder source = new StringBuilder("""
+				(defun ftr (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+				(defun ffl (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+				(defun fce (a b) (multiple-value-bind (q r) (ceiling a b) (list q r)))
+				(defun fro (a b) (multiple-value-bind (q r) (round a b) (list q r)))
+				""");
+		for (double a : dividends) {
+			String x = Double.toString(a).replace('E', 'e');
+			for (String y : divisors) {
+				source.append("(print (list (ftr %s %s) (ffl %s %s) (fce %s %s) (fro %s %s)))%n".formatted(x, y, x, y,
+						x, y, x, y));
+			}
+		}
+		// An exact-integer dividend, not just a double.
+		for (String y : divisors) {
+			source.append("(print (list (ftr -3 %1$s) (ffl -3 %1$s) (fce -3 %1$s) (fro -3 %1$s)))%n".formatted(y));
+		}
+		String program = source.toString();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(compileAndRun(program)).isEqualTo(interpreted.toString(StandardCharsets.UTF_8).trim());
+	}
+
+	@Test
 	void nanComparisonsAreUnorderedOnBothPaths() throws Exception {
 		// DCMPL-for-every-operator made < and <= answer t against NaN.
 		assertThat(compileAndRun("(print (< (/ 0.0 0.0) 1.0))")).isEqualTo("NIL");

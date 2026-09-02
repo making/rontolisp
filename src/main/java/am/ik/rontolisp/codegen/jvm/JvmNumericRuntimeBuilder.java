@@ -405,6 +405,8 @@ final class JvmNumericRuntimeBuilder {
 		FieldrefConstant biTen = cp.addFieldref(bigClass, cp.addNameAndType(cp.addUtf8("TEN"), cp.addUtf8(BIG)));
 		MethodrefConstant dblIsFinite = cp.addMethodref(doubleClass,
 				cp.addNameAndType(cp.addUtf8("isFinite"), cp.addUtf8("(D)Z")));
+		MethodrefConstant dblIsInfinite = cp.addMethodref(doubleClass,
+				cp.addNameAndType(cp.addUtf8("isInfinite"), cp.addUtf8("(D)Z")));
 		MethodrefConstant doubleValueOf = cp.addMethodref(doubleClass,
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
 		MethodrefConstant numDoubleValue = cp.addMethodref(numberClass,
@@ -565,7 +567,8 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildFrat(nFrat, dUnary, doubleClass, longClass, bigClass, numberClass, numDoubleValue, dblIsFinite,
 				bigDecClass, bdInitDouble, bdUnscaled, bdScale, biTen, biPow));
 		methods.add(buildFdiv(nFdiv, dFdiv, doubleClass, numberClass, numDoubleValue, ratArrClass, rFrat, rDiv,
-				rRatTrunc, rRatFloor, rRatCeil, rRatRound));
+				rRatTrunc, rRatFloor, rRatCeil, rRatRound, dblIsInfinite, dblIsFinite, longClass, longValue, bigClass,
+				biSignum, longValueOf));
 		methods.add(buildLogOp(nLogand, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biAnd, Opcode.LAND));
 		methods.add(buildLogOp(nLogior, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biOr, Opcode.LOR));
 		methods.add(buildLogOp(nLogxor, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biXor, Opcode.LXOR));
@@ -2310,10 +2313,24 @@ final class JvmNumericRuntimeBuilder {
 	// they are and divide through _div, which is exact at any magnitude; an even
 	// division answers an integer already and everything else rounds through the
 	// rational rounder the mode names.
+	//
+	// An INFINITE divisor is a separate case handled by sign alone, before the exact
+	// rational route (which would decline: infinity is not a rational and _frat says so).
+	// With a finite nonzero dividend, a/b is an infinitesimal whose magnitude is always
+	// under 1/2 -- truncate and round are always 0, and floor/ceiling read off whether
+	// the
+	// dividend and the infinite divisor agree in sign (0 and 1 when they do, -1 and 0
+	// when
+	// they do not: floor rounds the infinitesimal down, ceiling up). An exact-zero or
+	// non-finite dividend, or a ratio operand, still declines to the old f64 route, which
+	// already answers correctly there (0/infinity is exactly zero, not an infinitesimal).
+	// See .kb/linalg-simd.md, "mod/rem".
 	private static NumericMethod buildFdiv(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
 			ClassConstant numberClass, MethodrefConstant numDoubleValue, ClassConstant ratArrClass,
 			MethodrefConstant rFrat, MethodrefConstant rDiv, MethodrefConstant rRatTrunc, MethodrefConstant rRatFloor,
-			MethodrefConstant rRatCeil, MethodrefConstant rRatRound) {
+			MethodrefConstant rRatCeil, MethodrefConstant rRatRound, MethodrefConstant dblIsInfinite,
+			MethodrefConstant dblIsFinite, ClassConstant longClass, MethodrefConstant longValue, ClassConstant bigClass,
+			MethodrefConstant biSignum, MethodrefConstant longValueOf) {
 		List<Integer> c = new ArrayList<>();
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
@@ -2340,6 +2357,18 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, numberClass.index());
 		c.add(Opcode.INVOKEVIRTUAL);
 		JvmRuntimeBuilder.emitU2(c, numDoubleValue.index());
+		// An infinite divisor: settle the quotient by sign (local 6/7 hold the two
+		// signs) rather than falling through to _frat, which declines on a non-finite
+		// operand. Every sub-path below returns, so control never merges back here.
+		c.add(Opcode.DUP2);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, dblIsInfinite.index());
+		int ifNotInfiniteDivisor = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitInfiniteDivisorQuotient(c, doubleClass, numDoubleValue, dblIsFinite, longClass, longValue, bigClass,
+				biSignum, longValueOf);
+		JvmRuntimeBuilder.patchBranch(c, ifNotInfiniteDivisor, c.size());
 		c.add(Opcode.DCONST_0);
 		c.add(Opcode.DCMPL);
 		int ifNonZeroDivisor = c.size();
@@ -2399,7 +2428,167 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rRatTrunc.index());
 		c.add(Opcode.ARETURN);
-		return new NumericMethod(name, desc, c, 4, 6, List.of());
+		// Locals 6 (dividend sign) and 7 (divisor sign) belong to the infinite-divisor
+		// arm above; nothing past it uses a local higher than 5.
+		return new NumericMethod(name, desc, c, 4, 8, List.of());
+	}
+
+	/**
+	 * Settles {@code _fdiv}'s quotient for an infinite divisor by sign, with the divisor
+	 * (a non-finite, non-zero double) still on the operand stack. Stores the divisor's
+	 * sign in local 6, works out the dividend's sign into local 7 (declining -- returning
+	 * {@code null}, which falls back to the ordinary f64 route -- for a ratio operand, a
+	 * non-finite float dividend, or an exact-zero dividend: {@code 0/infinity} is exactly
+	 * zero, not an infinitesimal, and the old route already answers that correctly), and
+	 * returns {@code Long.valueOf} of the mode's answer: 0 for {@code TRUNCATE}/
+	 * {@code ROUND} always, 0 (same sign) or -1 (different) for {@code FLOOR} (mode 1), 1
+	 * (same) or 0 (different) for {@code CEILING} (mode 2). Every path returns, so the
+	 * caller needs no goto back to its own flow.
+	 */
+	private static void emitInfiniteDivisorQuotient(List<Integer> c, ClassConstant doubleClass,
+			MethodrefConstant numDoubleValue, MethodrefConstant dblIsFinite, ClassConstant longClass,
+			MethodrefConstant longValue, ClassConstant bigClass, MethodrefConstant biSignum,
+			MethodrefConstant longValueOf) {
+		// local 6 = signum(b), from the divisor double already on the stack.
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPL);
+		c.add(Opcode.ISTORE);
+		c.add(6);
+		// local 7 = signum(a). Each arm below stores it and jumps to afterSignA; a ratio
+		// (the final catch-all) or a non-finite float dividend declines directly.
+		List<Integer> gotoAfterSignA = new ArrayList<>();
+
+		// Long.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		int ifNotLong = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, longValue.index());
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LCMP);
+		c.add(Opcode.ISTORE);
+		c.add(7);
+		gotoAfterSignA.add(c.size());
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifNotLong, c.size());
+
+		// BigInteger.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, bigClass.index());
+		int ifNotBig = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, bigClass.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		c.add(Opcode.ISTORE);
+		c.add(7);
+		gotoAfterSignA.add(c.size());
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifNotBig, c.size());
+
+		// Double: finite required, else decline.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, numDoubleValue.index());
+		c.add(Opcode.DUP2);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, dblIsFinite.index());
+		int ifFiniteA = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.POP2);
+		c.add(Opcode.ACONST_NULL);
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifFiniteA, c.size());
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPL);
+		c.add(Opcode.ISTORE);
+		c.add(7);
+		gotoAfterSignA.add(c.size());
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifNotDouble, c.size());
+
+		// Anything else (a ratio): decline.
+		c.add(Opcode.ACONST_NULL);
+		c.add(Opcode.ARETURN);
+
+		int afterSignA = c.size();
+		for (int g : gotoAfterSignA) {
+			JvmRuntimeBuilder.patchBranch(c, g, afterSignA);
+		}
+
+		// An exact-zero dividend declines too.
+		c.add(Opcode.ILOAD);
+		c.add(7);
+		int signANonZero = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ACONST_NULL);
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, signANonZero, c.size());
+
+		c.add(Opcode.ILOAD);
+		c.add(7);
+		c.add(Opcode.ILOAD);
+		c.add(6);
+		int ifSameSign = c.size();
+		c.add(Opcode.IF_ICMPEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+
+		// Different sign: floor (mode 1) is -1, everything else (truncate/round) is 0.
+		c.add(Opcode.ILOAD_2);
+		c.add(Opcode.ICONST_1);
+		int diffElse = c.size();
+		c.add(Opcode.IF_ICMPNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.LCONST_1);
+		c.add(Opcode.LNEG);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, diffElse, c.size());
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+
+		JvmRuntimeBuilder.patchBranch(c, ifSameSign, c.size());
+		// Same sign: ceiling (mode 2) is 1, everything else (truncate/round) is 0.
+		c.add(Opcode.ILOAD_2);
+		c.add(Opcode.ICONST_2);
+		int sameElse = c.size();
+		c.add(Opcode.IF_ICMPNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.LCONST_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, sameElse, c.size());
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
 	}
 
 	/** {@code if (mode == n) return rounder(local 5);} inside {@code _fdiv}. */

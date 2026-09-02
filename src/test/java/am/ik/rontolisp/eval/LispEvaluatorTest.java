@@ -6699,6 +6699,99 @@ class LispEvaluatorTest {
 			.isEqualTo("((1.0 1.0 1.0 1.0) (6.0 6.0 1.0 1.0) (3.0 3.0 Infinity Infinity))");
 	}
 
+	@Test
+	void theFloorFamilyQuotientWithAnInfiniteDivisorComposesWithItsOwnRemainder() {
+		// todo-666: 659 settled the REMAINDER for an infinite divisor by the CLHS
+		// formula (the truncating quotient of a finite dividend is the integer 0, so
+		// rem is the dividend itself, and mod's divisor-sign correction can push it to
+		// +/-Infinity); 660 made the quotient exact everywhere else but left this one
+		// regime alone -- the quotient stayed the f64 answer (0, from
+		// (floor (/ a b)) with a/b rounding to a signed zero), which does not compose
+		// with 659's remainder. There is no oracle here (SBCL signals on an infinite
+		// operand), so the quotient is settled by the formula 659 already used: with a
+		// finite nonzero dividend, a/b is an infinitesimal of magnitude under 1/2, so
+		// truncate and round are always 0, and floor/ceiling round it down or up --
+		// reading off whether the dividend and the divisor agree in sign.
+		//
+		// quotient*divisor + remainder = number holds only IN THE LIMIT (0 * Infinity
+		// is NaN in actual IEEE 754 arithmetic, not 0), so what this checks is the
+		// practical form of that identity: the quotient the formula names is the one
+		// whose remainder -- read off mod/rem exactly as every other magnitude -- is
+		// self-consistent, over both dividend signs, both divisor signs, and dividends
+		// of each numeric type the exact route accepts.
+		String posInf = "(/ 1.0 0.0)";
+		String negInf = "(/ -1.0 0.0)";
+		// {dividend, divisor, floorQ, ceilingQ, truncateQ, roundQ}
+		record Case(String a, String b, int floorQ, int ceilingQ, int truncateQ, int roundQ) {
+		}
+		List<Case> cases = List.of(
+				// same sign (positive/positive, negative/negative): floor 0, ceiling 1.
+				new Case("3.0", posInf, 0, 1, 0, 0), new Case("-3.0", negInf, 0, 1, 0, 0),
+				new Case("0.5", posInf, 0, 1, 0, 0), new Case("3", posInf, 0, 1, 0, 0),
+				new Case("100000000000000000000", posInf, 0, 1, 0, 0),
+				// different sign (negative/positive, positive/negative): floor -1,
+				// ceiling 0.
+				new Case("-3.0", posInf, -1, 0, 0, 0), new Case("3.0", negInf, -1, 0, 0, 0),
+				new Case("-0.5", posInf, -1, 0, 0, 0), new Case("-3", posInf, -1, 0, 0, 0),
+				new Case("-100000000000000000000", posInf, -1, 0, 0, 0));
+		for (Case c : cases) {
+			assertThat(eval("(floor %s %s)".formatted(c.a(), c.b()))).describedAs("(floor %s %s)", c.a(), c.b())
+				.isEqualTo(new LispInteger(c.floorQ()));
+			assertThat(eval("(ceiling %s %s)".formatted(c.a(), c.b()))).describedAs("(ceiling %s %s)", c.a(), c.b())
+				.isEqualTo(new LispInteger(c.ceilingQ()));
+			assertThat(eval("(truncate %s %s)".formatted(c.a(), c.b()))).describedAs("(truncate %s %s)", c.a(), c.b())
+				.isEqualTo(new LispInteger(c.truncateQ()));
+			assertThat(eval("(round %s %s)".formatted(c.a(), c.b()))).describedAs("(round %s %s)", c.a(), c.b())
+				.isEqualTo(new LispInteger(c.roundQ()));
+			// The remainder beside each quotient is read off mod/rem exactly as at any
+			// other magnitude (LispMacroExpander.floorFamilyRemainder); checking the
+			// multiple-value form end to end catches a quotient that no longer selects
+			// the remainder branch it should (round's selector compares its own
+			// quotient against floor's).
+			String mvSource = """
+					(list (multiple-value-list (floor %1$s %2$s))
+					      (multiple-value-list (ceiling %1$s %2$s))
+					      (multiple-value-list (truncate %1$s %2$s))
+					      (multiple-value-list (round %1$s %2$s))
+					      (mod %1$s %2$s)
+					      (rem %1$s %2$s))
+					""".formatted(c.a(), c.b());
+			LispVal result = evalMulti(mvSource);
+			List<LispVal> parts = ((LispCons) result).toList();
+			LispVal floorMv = parts.get(0);
+			LispVal ceilingMv = parts.get(1);
+			LispVal truncateMv = parts.get(2);
+			LispVal roundMv = parts.get(3);
+			LispVal mod = parts.get(4);
+			LispVal rem = parts.get(5);
+			String desc = "(a=%s b=%s)".formatted(c.a(), c.b());
+			// floor's remainder is mod, truncate's is rem -- CLHS, pinned since 652.
+			assertThat(((LispCons) floorMv).toList().get(1)).describedAs("floor remainder " + desc).isEqualTo(mod);
+			assertThat(((LispCons) truncateMv).toList().get(1)).describedAs("truncate remainder " + desc)
+				.isEqualTo(rem);
+			// round lands on whichever of floor's or ceiling's quotient it matches, and
+			// its remainder is the one that belongs to that choice.
+			LispVal roundQuotient = ((LispCons) roundMv).toList().get(0);
+			LispVal roundRemainder = ((LispCons) roundMv).toList().get(1);
+			if (roundQuotient.equals(((LispCons) floorMv).toList().get(0))) {
+				assertThat(roundRemainder).describedAs("round remainder (floor branch) " + desc).isEqualTo(mod);
+			}
+			else {
+				assertThat(roundQuotient).describedAs("round quotient " + desc)
+					.isEqualTo(((LispCons) ceilingMv).toList().get(0));
+				assertThat(roundRemainder).describedAs("round remainder (ceiling branch) " + desc)
+					.isEqualTo(((LispCons) ceilingMv).toList().get(1));
+			}
+		}
+		// An exact-zero dividend is genuinely zero, not an infinitesimal -- unaffected
+		// by this todo, and still the pre-existing f64 answer.
+		assertThat(eval("(multiple-value-list (floor 0.0 %s))".formatted(posInf)).print()).isEqualTo("(0 0.0)");
+		assertThat(eval("(multiple-value-list (floor -0.0 %s))".formatted(posInf)).print()).isEqualTo("(0 -0.0)");
+		// A ratio dividend still declines to the old route (ExactRounding's contract is
+		// unchanged there).
+		assertThat(eval("(floor 1/2 %s)".formatted(posInf))).isEqualTo(new LispInteger(0));
+	}
+
 	/** Renders a double the way the reader reads it back unchanged. */
 	private static String lispDouble(double d) {
 		return Double.toString(d).replace('E', 'e');

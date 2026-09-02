@@ -62,6 +62,54 @@ final class WasmFloatFdivRuntimeBuilder {
 		w.write(6);
 		w.writeRefType(true, Type.EQ.code());
 
+		// An INFINITE divisor is settled by sign alone, before the general exact-rational
+		// route below (which would decline: infinity is not a rational, and
+		// emitRationalOf says so). With a finite nonzero dividend, a/b is an
+		// infinitesimal whose magnitude is always under 1/2, so truncate/round are
+		// always 0 and floor/ceiling read off whether the dividend and the divisor agree
+		// in sign. See .kb/linalg-simd.md, "mod/rem".
+		get(w, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ifVoid(w);
+		get(w, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
+		set(w, D);
+		get(w, D);
+		w.write(Instruction.I64_REINTERPRET_F64);
+		set(w, BITS);
+		get(w, BITS);
+		i64Const(w, 52);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x7ff);
+		w.write(Instruction.I32_AND);
+		set(w, TMP);
+		get(w, TMP);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x7ff);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		// biased exponent all-ones: NaN or infinity -- an infinity's mantissa is zero.
+		get(w, BITS);
+		i64Const(w, 0x000f_ffff_ffff_ffffL);
+		w.write(Instruction.I64_AND);
+		w.write(Instruction.I64_EQZ);
+		ifVoid(w);
+		get(w, BITS);
+		i64Const(w, 0);
+		w.write(Instruction.I64_LT_S);
+		set(w, EXP);
+		emitInfiniteDivisorQuotient(w);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+
 		emitRationalOf(w, 0, NUM_A, DEN_A);
 		emitRationalOf(w, 1, NUM_B, DEN_B);
 		// a/b = (na*db) / (da*nb), with the sign carried on the numerator.
@@ -106,6 +154,127 @@ final class WasmFloatFdivRuntimeBuilder {
 		call(w, WasmLispCompiler.FUNC_BIG_FDIV);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Settles the quotient for a finite dividend over an infinite divisor: {@code a/b} is
+	 * then an infinitesimal whose sign is the dividend's sign XOR the divisor's, and
+	 * whose magnitude is always under 1/2. Truncate and round are 0 either way; floor and
+	 * ceiling round the infinitesimal down or up, so they read off whether the two signs
+	 * agree. Called with local {@link #EXP} already holding 1 iff the divisor (local 1)
+	 * is negative; RETURNS a null (decline) for a ratio operand, a non-finite float
+	 * dividend, or an EXACT-zero dividend ({@code 0/infinity} is genuinely zero, not an
+	 * infinitesimal, and the old f64 route already answers that correctly), and RETURNS
+	 * the boxed quotient in every other case, so the caller needs no further control flow
+	 * after this call.
+	 */
+	private static void emitInfiniteDivisorQuotient(WasmWriter w) {
+		// TMP ends up 1 iff the dividend (local 0) is negative.
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ifVoid(w);
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
+		set(w, D);
+		get(w, D);
+		w.write(Instruction.I64_REINTERPRET_F64);
+		set(w, BITS);
+		get(w, BITS);
+		i64Const(w, 52);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x7ff);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x7ff);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		// A NaN or an infinite dividend declines.
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, D);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.0);
+		w.write(Instruction.F64_EQ);
+		ifVoid(w);
+		// An exact-zero dividend declines.
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, D);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		set(w, TMP);
+		w.write(Instruction.ELSE);
+		// Not a float: an exact integer (i31/bignum/biglimb) or a ratio.
+		emitIsExactInt(w, 0);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		// A ratio declines.
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, 0);
+		i31Const(w, 0);
+		call(w, WasmLispCompiler.FUNC_BIG_CMP);
+		set(w, TMP);
+		get(w, TMP);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		// An exact-zero dividend declines.
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, TMP);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_LT_S);
+		set(w, TMP);
+		w.write(Instruction.END);
+		// Same sign iff EXP (divisor negative) equals TMP (dividend negative).
+		get(w, EXP);
+		get(w, TMP);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		// Same sign: ceiling (mode 2) is 1, everything else (truncate/floor/round) is 0.
+		get(w, 2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		i31Const(w, 1);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.ELSE);
+		i31Const(w, 0);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// Different sign: floor (mode 1) is -1, everything else (truncate/ceiling/round)
+		// is 0.
+		get(w, 2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		i31Const(w, -1);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.ELSE);
+		i31Const(w, 0);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 	}
 
 	/**

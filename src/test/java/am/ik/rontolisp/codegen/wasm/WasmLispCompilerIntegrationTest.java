@@ -1814,6 +1814,58 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(interpreted.toString(java.nio.charset.StandardCharsets.UTF_8).trim());
 	}
 
+	private static String infiniteDivisorQuotientProgram() {
+		double[] dividends = { 3.0, -3.0, 0.5, -0.5, 1e300, -1e300, 0.0, -0.0 };
+		String[] divisors = { "(/ 1.0 0.0)", "(/ -1.0 0.0)" };
+		StringBuilder source = new StringBuilder("""
+				(defun ftr (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+				(defun ffl (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+				(defun fce (a b) (multiple-value-bind (q r) (ceiling a b) (list q r)))
+				(defun fro (a b) (multiple-value-bind (q r) (round a b) (list q r)))
+				""");
+		for (double a : dividends) {
+			for (String y : divisors) {
+				source.append("(print (list (ftr %1$s %2$s) (ffl %1$s %2$s) (fce %1$s %2$s) (fro %1$s %2$s)))%n"
+					.formatted(lisp(a), y));
+			}
+		}
+		for (String y : divisors) {
+			source.append("(print (list (ftr -3 %1$s) (ffl -3 %1$s) (fce -3 %1$s) (fro -3 %1$s)))%n".formatted(y));
+		}
+		return source.toString();
+	}
+
+	@Test
+	void theFloorFamilyQuotientWithAnInfiniteDivisorMatchesTheInterpreter() throws Exception {
+		// todo-666: the one regime the sweep above declines on purpose (an infinite
+		// divisor), checked the same way -- against the interpreter, whose
+		// ExactRounding.infiniteDivisorQuotient and this backend's own
+		// _f64_fdiv-embedded arm were written from the same sign formula independently
+		// of each other.
+		String program = infiniteDivisorQuotientProgram();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new java.io.PrintStream(interpreted, true, java.nio.charset.StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		String expected = interpreted.toString(java.nio.charset.StandardCharsets.UTF_8).trim();
+		assertThat(compileAndRun(program)).isEqualTo(expected);
+	}
+
+	@Test
+	void theComponentFloorFamilyQuotientWithAnInfiniteDivisorMatchesTheInterpreter() throws Exception {
+		String program = infiniteDivisorQuotientProgram();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new java.io.PrintStream(interpreted, true, java.nio.charset.StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		String expected = interpreted.toString(java.nio.charset.StandardCharsets.UTF_8).trim();
+		assertThat(compileComponentAndRun(program)).isEqualTo(expected);
+	}
+
 	@Test
 	void noGcFloatRemainderIsExactAtEveryMagnitude() throws Exception {
 		// The same reduction, inlined at the site by NoGcWasmCompiler from the shared
