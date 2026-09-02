@@ -1135,6 +1135,229 @@ kernel void softmax_grad_f32(device const float* G [[buffer(0)]],
   }
 }
 
+// --- THE ATTENTION SCALE AND MASK (todo-643) ---------------------------------------
+// `torch:softmax` over a score that was DIVIDED by a scalar and MASKED (`torch:div` then
+// `torch:masked-fill`, the attention head's own idiom) reaches the pair below with the two
+// eager members folded in: the operand is read as `(T)(x * sf)` or `(T)(x / sf)` and then
+// as `fill` wherever the mask is non-zero, rounding where the two members rounded, so the
+// row the kernel folds is the row the chain would have stored. The adjoint undoes the two
+// in the tape's order -- zero under the mask, then the scale -- in its store.
+//
+// THE SCALE'S BOUNDARY IS `scal_f32`'S, both ways: a scalar the float grid holds takes
+// `bin_op_exact` and any other the software binary64 route, the host deciding which
+// exactly as it decides `scal_f32`'s `exact` flag. `sop` 0 leaves the operand alone, 1
+// multiplies by the scalar, 2 divides by it -- and a division by a power of two reaches
+// here already rewritten to the multiply by its exact reciprocal, `Gpu.scale`'s own rule,
+// so the book's `/ sqrt 64` is a multiply. The fill is narrowed on the host, which is what
+// `where_f32` does with a scalar value.
+//
+// THE MASK IS A SEPARATE KERNEL PAIR rather than a branch inside the plain one. On CUDA
+// the two bodies share an entry point and a dispatcher declares the tiles once, because a
+// `__shared__` tile per template instantiation cost the PLAIN softmax 30% there; here a
+// second ENTRY POINT has its own threadgroup allocation by construction, so the plain
+// kernels below are untouched -- their occupancy cannot move, and their bits are the
+// pre-643 ones because their source is.
+//
+// THE MASK REACHES THE ROW KERNELS PACKED, one bit a cell, through `pack_mask` launched
+// into the same command buffer just before (todo-641 measured the cost of reading it as it
+// is on CUDA: the row kernels run ONE THREAD PER ROW -- 16384 of them at the book's score
+// -- so a load per cell is exposed latency there where the element-wise `where` hid it
+// under four million threads, and the adjoint's mask pass cost more than the pass it
+// replaced). Packed, and with the mask a whole number of rows of 32-aligned length (the
+// causal mask, and every last-axis score), a lane loads ONE word for its row and the
+// thirty-two lanes exchange bits by `simd_shuffle`: thirty-two loads a chunk become one.
+//
+// The mask may be EITHER WIDTH, which the plain `where_f32` on this backend cannot say: a
+// `double[]` mask is a hard decline there, so at the book's shapes the chain's
+// `torch:masked-fill` runs on the CPU over a materialized score. "Non-zero" is
+// `linalg:where`'s `(/= m 0)` -- a NaN counts, a negative zero does not -- which is "any
+// bit but the sign set", an integer test that needs no arithmetic of either width.
+
+// The mask packed one bit a cell: word w holds cells [32 w, 32 w + 32), bit i for cell
+// 32 w + i, set where the cell is non-zero. The operand is read as raw words -- one per
+// cell at f32, two at f64, the low one first -- so neither width needs arithmetic.
+kernel void pack_mask(device const uint* M [[buffer(0)]],
+                      device uint* P [[buffer(1)]],
+                      constant int* args [[buffer(2)]],
+                      uint w [[thread_position_in_grid]]) {
+  int n = args[0], wide = args[1];
+  int base = int(w) * 32;
+  if (base >= n) return;
+  uint bits = 0;
+  for (int i = 0; i < 32 && base + i < n; ++i) {
+    int cell = base + i;
+    bool hit = wide != 0 ? ((M[2 * cell] | (M[2 * cell + 1] & 0x7fffffffu)) != 0u)
+                         : ((M[cell] & 0x7fffffffu) != 0u);
+    if (hit) bits |= 1u << i;
+  }
+  P[w] = bits;
+}
+
+// The scale at the chain's own boundary: `bin_op_exact` when the host says the scalar is
+// a float, the software binary64 route otherwise -- `scal_f32`'s two paths.
+static inline float row_scaled(float x, int sop, int exact, float sfe, f64 sfw) {
+  if (sop == 0) return x;
+  int op = sop == 1 ? 2 : 3;
+  return exact != 0 ? bin_op_exact(op, x, sfe) : wide_op(op, x, sfw);
+}
+
+// The mask's flags for rows [row0, row0 + 32) at column c0 + lane, one bit per row, out of
+// the packed mask. Fast path (the mask a whole number of rows, len a multiple of 32): lane
+// r loads the one word of row row0 + r that covers columns [c0, c0 + 32) and the lanes
+// exchange bits by shuffle. Otherwise each lane looks its thirty-two cells up one by one.
+static inline uint mask_bits(device const uint* P, int mask_len, int mask_rows, int rows, int len, int row0, int c0,
+                             int lane) {
+  uint bits = 0;
+  if (mask_rows > 0 && (len & 31) == 0) {
+    int row = row0 + lane;
+    uint word = 0;
+    if (row < rows) word = P[((row % mask_rows) * len + c0) >> 5];
+    for (int r = 0; r < 32; ++r) {
+      uint w = simd_shuffle(word, uint(r));
+      bits |= ((w >> lane) & 1u) << r;
+    }
+    return bits;
+  }
+  int col = c0 + lane;
+  if (col >= len) return bits;
+  for (int r = 0; r < 32; ++r) {
+    int row = row0 + r;
+    if (row < rows) {
+      int cell = int(((long) row * len + col) % mask_len);
+      if ((P[cell >> 5] >> (cell & 31)) & 1u) bits |= 1u << r;
+    }
+  }
+  return bits;
+}
+
+// tile_load with the scale and the mask applied on the way in: the cell holds what the
+// chain's masked array would have held.
+static inline void tile_load_sm(threadgroup row_tile& tile, device const float* A, uint bits, int rows, int len,
+                                int row0, int c0, int lane, int sop, int exact, float sfe, f64 sfw, float fill) {
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+  int col = c0 + lane;
+  for (int r = 0; r < 32; ++r) {
+    int row = row0 + r;
+    float v = 0.0f;
+    if (row < rows && col < len)
+      v = ((bits >> r) & 1u) != 0u ? fill : row_scaled(A[(long) row * len + col], sop, exact, sfe, sfw);
+    tile.v[r][lane] = v;
+  }
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+}
+
+// tile_store with the mask's zeroing and the scale applied on the way out -- the adjoint's
+// last two members, in the tape's order.
+static inline void tile_store_sm(threadgroup row_tile& tile, device float* C, uint bits, int rows, int len, int row0,
+                                 int c0, int lane, int sop, int exact, float sfe, f64 sfw) {
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+  int col = c0 + lane;
+  if (col < len) {
+    for (int r = 0; r < 32; ++r) {
+      int row = row0 + r;
+      if (row < rows) {
+        float v = ((bits >> r) & 1u) != 0u ? 0.0f : tile.v[r][lane];
+        C[(long) row * len + col] = row_scaled(v, sop, exact, sfe, sfw);
+      }
+    }
+  }
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+}
+
+// `linalg:softmax` over a scaled and/or masked score. The FIRST pass writes the row it
+// read -- scaled and masked -- into the result as scratch and the exp pass reads it back,
+// so the scale and the mask are applied once rather than twice; everything after that is
+// the plain kernel's three passes.
+kernel void softmax_sm_f32(device const float* A [[buffer(0)]],
+                           device const uint* P [[buffer(1)]],
+                           device float* C [[buffer(2)]],
+                           constant int* args [[buffer(3)]],
+                           constant ulong* scalars [[buffer(4)]],
+                           uint tid [[thread_position_in_threadgroup]],
+                           uint gid [[threadgroup_position_in_grid]]) {
+  threadgroup row_tile tiles[ROW_SIMDS];
+  int rows = args[0], len = args[1], sop = args[2], exact = args[3], mask_len = args[4], has_mask = args[5];
+  f64 sfw = scalars[0];
+  float sfe = as_type<float>(uint(scalars[1]));
+  float fill = as_type<float>(uint(scalars[2]));
+  int simd = int(tid) >> 5, lane = int(tid) & 31;
+  threadgroup row_tile& tile = tiles[simd];
+  int row0 = (int(gid) * ROW_SIMDS + simd) * 32;
+  if (row0 >= rows) return;
+  int mask_rows = (has_mask != 0 && mask_len % len == 0) ? mask_len / len : 0;
+  float m = 0.0f;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    uint bits = has_mask != 0 ? mask_bits(P, mask_len, mask_rows, rows, len, row0, c0, lane) : 0u;
+    tile_load_sm(tile, A, bits, rows, len, row0, c0, lane, sop, exact, sfe, sfw, fill);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float x = tile.v[lane][j];
+      if (c0 + j == 0 || flt_gt(x, m)) m = x;
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+  f64 sum = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, C, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float s = R_SUB(tile.v[lane][j], m);
+      float e = exp(s);
+      tile.v[lane][j] = e;
+      sum = f64_add(sum, f64_from_f(e));
+    }
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+  float d = f64_to_f(sum);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(tile, C, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) tile.v[lane][j] = R_DIV(tile.v[lane][j], d);
+    tile_store(tile, C, rows, len, row0, c0, lane);
+  }
+}
+
+// Its adjoint: the plain adjoint's two passes, with the mask's zeroing and the scale taken
+// in the store. The mask's bits are read FIRST in each chunk of the second pass, so the
+// load is in flight under the tile loads and the products rather than exposed between them
+// and the stores.
+kernel void softmax_grad_sm_f32(device const float* G [[buffer(0)]],
+                                device const float* O [[buffer(1)]],
+                                device const uint* P [[buffer(2)]],
+                                device float* C [[buffer(3)]],
+                                constant int* args [[buffer(4)]],
+                                constant ulong* scalars [[buffer(5)]],
+                                uint tid [[thread_position_in_threadgroup]],
+                                uint gid [[threadgroup_position_in_grid]]) {
+  threadgroup row_tile tiles[ROW_SIMDS][2];
+  int rows = args[0], len = args[1], sop = args[2], exact = args[3], mask_len = args[4], has_mask = args[5];
+  f64 sfw = scalars[0];
+  float sfe = as_type<float>(uint(scalars[1]));
+  int simd = int(tid) >> 5, lane = int(tid) & 31;
+  threadgroup row_tile& gt = tiles[simd][0];
+  threadgroup row_tile& ot = tiles[simd][1];
+  int row0 = (int(gid) * ROW_SIMDS + simd) * 32;
+  if (row0 >= rows) return;
+  int mask_rows = (has_mask != 0 && mask_len % len == 0) ? mask_len / len : 0;
+  f64 sum = 0;
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float p = R_MUL(gt.v[lane][j], ot.v[lane][j]);
+      sum = f64_add(sum, f64_from_f(p));
+    }
+  }
+  float tot = f64_to_f(sum);
+  for (int c0 = 0; c0 < len; c0 += 32) {
+    uint bits = has_mask != 0 ? mask_bits(P, mask_len, mask_rows, rows, len, row0, c0, lane) : 0u;
+    tile_load(gt, G, rows, len, row0, c0, lane);
+    tile_load(ot, O, rows, len, row0, c0, lane);
+    for (int j = 0; j < 32 && c0 + j < len; ++j) {
+      float q = R_SUB(gt.v[lane][j], tot);
+      ot.v[lane][j] = R_MUL(ot.v[lane][j], q);
+    }
+    tile_store_sm(ot, C, bits, rows, len, row0, c0, lane, sop, exact, sfe, sfw);
+  }
+}
+
 // `linalg:log-softmax` over the last axis: amax, the broadcast sub, exp at the width, the
 // sum fold, the log of that sum at the width, the broadcast sub. Three passes over the
 // row -- the deviation is RECOMPUTED in the third rather than stored, which is a pass

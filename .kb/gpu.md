@@ -1297,6 +1297,12 @@ was, the same profile gave 477.2 ms -- the buckets moved, the total did not -- w
 the measurement the packing was built on. **The loss series is byte-identical to the
 previous build's at every step of all six runs and both profiles.**
 
+**On Metal the fold is built too, and is worth 15% of the step there** -- six times what
+it took here, and for a reason this backend could not have guessed: the causal mask is a
+`double[]`, which `where_f32` refuses on that backend, so the chain's `masked-fill` was
+running on the CPU over a materialized score. "The attention scale and mask on Metal"
+below has the numbers.
+
 What is left at the head after this: `copy_f32` at grid 4096 (72 a step, 2.9 ms) is
 `torch:cat`'s slice adjoint over the six heads, and the softmax pair itself is 28 ms a
 step -- at 0.33 / 0.46 ms a call, each about 1.5-2x the memory floor of its passes, the
@@ -2008,6 +2014,101 @@ memory pass over 2^18 elements and what was removed is a deque pop, a binding an
 Every output is byte-identical between the two builds, which is the gate the change was
 accepted on.
 
+### The attention scale and mask on Metal (todo-643, 2026-09-02)
+
+todo-641 folded `torch:div` and `torch:masked-fill` into the softmax pair on CUDA and left
+this backend declining, with a prediction attached: worth MORE than the 2.3% it took there,
+because a Metal call is `commit` plus `waitUntilCompleted` and removing two members removes
+two full waits. Measured, it is worth far more than that -- **a step at the book's shapes
+goes 5.50 -> 4.66 s, 15%** -- and the prediction was right for the wrong reason. The waits
+are not where it came from.
+
+**`torch:masked-fill`'s mask was never a device member here at all.** `torch:subsequent-mask`
+is `(linalg:triu (linalg:ones ...))` and `linalg:ones` builds DOUBLE by default, so the
+causal mask a model hands `torch:masked-fill` is a `double[]` -- and `whereF` on this
+backend declines every double operand ("The resident tier", the `whereF` comment). So at
+the book's `(64 256 256)` score the chain's fill ran on the CPU over a MATERIALIZED score:
+16.8 MB down, a scalar select, 16.8 MB back up for the softmax to read. It measured **7.9
+ms a call**, where the whole fused forward is 1.6.
+
+The packing kernel is what lets the fold take a mask `where_f32` refuses: it reads the
+operand as raw WORDS -- one per cell at f32, two at f64, the low one first -- so
+`linalg:where`'s "non-zero" (`(/= m 0)`: a NaN counts, a negative zero does not) is an
+integer test and neither width needs arithmetic this backend does not have.
+
+**The shape of the build, and the two traps todo-641 flagged.**
+
+- The scaled/masked pair is TWO NEW ENTRY POINTS (`softmax_sm_f32`, `softmax_grad_sm_f32`)
+  rather than CUDA's one-kernel-with-a-dispatcher. The trap there was a `__shared__` tile
+  per template instantiation costing the PLAIN softmax 30%; a second MSL entry point has
+  its own threadgroup allocation by construction, so the plain kernels cannot lose
+  occupancy to the new ones -- and their source is byte-for-byte the pre-643 source, so
+  their bits cannot move either. Measured before and after all the same: plain softmax
+  1.47 -> 1.37 ms a call, its adjoint 2.92 -> 2.92.
+- The mask reaches the row kernels PACKED, one bit a cell, for todo-641's other reason: the
+  row kernels run one thread per row, 16384 of them at this shape, so a load per cell is
+  exposed latency there. `pack_mask` and the row kernel ride ONE command buffer as two
+  dispatches of one compute encoder, which dispatches serially -- so the packing costs a
+  launch and not a second wait, and on this backend a wait is what a call costs. With the
+  mask a whole number of rows of 32-aligned length (the causal mask, and every last-axis
+  score) a lane loads ONE word for its row and the thirty-two lanes exchange bits by
+  `simd_shuffle`; otherwise each lane looks its thirty-two cells up one by one.
+- The forward's first pass writes the scaled, masked row into the result as scratch and the
+  exp pass reads it back, so the scale and the mask are applied once -- gemm.cu's shape,
+  and the reason the fused forward is one pass more than the plain one (1.62 against 1.37,
+  which is that pass).
+
+**The scale's boundary is `scal_f32`'s, both ways**: the host decides `exact` exactly as it
+decides `scal_f32`'s, so a scalar the float grid holds takes `bin_op_exact` and any other
+the software binary64 route. The book's `/ sqrt 64` arrives already rewritten to the
+multiply by its exact reciprocal (`Gpu.scale`'s rule, decided on the host).
+`MetalGpuTest.theScaledAndMaskedSoftmaxLandsOnTheComposedDeviceChainsBits` runs three
+scales -- a power of two, an exact divide, and `sqrt 2`, which is not a float -- at both
+mask widths, both fills and both of the packed mask's reads, against the chain run on the
+device with the fill selected on the host, and asserts EQUALITY. It passed on the first
+run.
+
+**Per call at the book's `(64 256 256)` score, f32**, `/ sqrt 64` and the causal mask
+(`.todo/123-gpu-acceleration/mtl-attention-softmax.lisp`, `--gpu --simd`, JVM class output,
+M4 Max, best of three rounds of sixty, the two builds alternated; the "before" column is
+the same call form on the pre-643 jar, where `%la-scaled-masked-softmax` IS the defun's
+chain):
+
+| per call, ms | before | after |
+|---|---|---|
+| `%la-scaled-masked-softmax`, scale + f64 mask | 14.00 | **1.62** |
+| the same with an f32 mask | 13.87 | **1.60** |
+| the same, scale only (no mask) | 4.23 | **1.52** |
+| the same, mask only (no scale) | 11.55 | **1.57** |
+| `%la-scaled-masked-softmax-grad`, scale + f64 mask | 15.32 | **3.38** |
+| the same with an f32 mask | 15.12 | **3.40** |
+| the chain's `linalg:div` alone | 2.12 | 2.12 |
+| the chain's `linalg:where` alone, f64 mask (CPU) | 7.95 | 8.02 |
+| the chain's `linalg:where` alone, f32 mask | 7.88 | **1.22** |
+| the PLAIN `linalg:softmax` | 1.47 | 1.37 |
+| the PLAIN softmax adjoint | 2.92 | 2.92 |
+
+The f32 `where` row is a SIDE EFFECT rather than a fusion, and it is worth knowing about: the
+mask is staged and ADOPTED on the second sight (`gemvF`'s rule -- the causal mask is one
+array reached seventy-two times a step, and its upload is otherwise paid every time), and
+once it is resident `whereF` is offered over it, because that member's offer rule counts any
+resident operand. So the fold makes the chain's own fill a device member for whoever else
+uses the same mask -- but only at f32, since a double one is still refused there.
+
+**The step, batch 64** (`gpt-book-shapes-fast.lisp`, `--gpu --simd`, JVM class output, M4
+Max with the machine to itself; `(t13 - t3) / 10`, three interleaved rounds):
+
+| | before | after |
+|---|---|---|
+| wall a step, the three rounds | 5.502 / 5.495 / 5.637 | 4.664 / 4.615 / 4.662 |
+| wall a step, median | 5.502 s | **4.662 s** |
+
+Every after round beats every before round, which the wall's usual ±4% could not have
+produced on its own; the per-call table predicts it exactly, at 36 forwards and 36 adjoints
+a step: 36 x 12.4 + 36 x 11.9 ms = 0.87 s. **The loss series is byte-identical to the
+previous build's at every step of all six runs** -- the fused kernel is the device chain's
+bits, and the CPU select it replaces was exact.
+
 ## The interception layer
 
 The flag over the same `linalg:` seam `--simd` opened and `--blas` widened. Read
@@ -2354,14 +2455,14 @@ is revisited.
 - **No lazy results on METAL for the interceptors**, and so no index tier or clip norm
   there. Built, pinned, measured a tie and a loss; `.todo/495` is the lever and the
   measurement list.
-- **No fused `log-softmax`, no fused attention scale-and-mask, no fused layer-norm
-  AFFINE, and none of the fused tier on Metal.** The fused tier took the four compositions
-  measured at a third of the step ("The fused tier"); `torch:log-softmax`'s chain runs once
-  a step over the logits (~8 ms at the book's shapes, batch 32), the `div` by `sqrt(d_k)`
-  and the `masked-fill` around each softmax are separate tape nodes (a fused kernel would
-  be a tape change), and layer-norm's `* weight + bias` stays two members whose adjoints
-  the tape already runs as folds. A fused MSL kernel needs the software binary64 the
-  resident tier needed there, and a measurement this backend has not made.
+- **No fused layer-norm AFFINE on METAL.** It is built on CUDA ("Layer-norm's affine")
+  and declined here, unmeasured, so the module runs the normalization and its two
+  broadcast passes member by member as before; whether the fold pays on that backend is
+  the measurement to make. The other three declines this bullet used to carry are gone
+  outright, each to its own: the fused `log-softmax` is todo-629's, the attention
+  scale-and-mask todo-641's on CUDA and todo-643's on Metal (a tape change, which is what
+  the views in `.kb/torch.md` are), and the fused tier on Metal todo-636's -- built on the
+  software binary64 the resident tier needed there.
 - **Nothing of `vec:` but `vec:matvec`.** `vec:matvec-into` writes a CALLER's array, which
   the device would have to download into and the caller's next write invalidate; `vec:dot`
   is one reduction over two vectors the device would have to be handed, and loses to the

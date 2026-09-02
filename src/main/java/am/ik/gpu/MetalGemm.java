@@ -11,6 +11,7 @@ import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
+import static am.ik.gpu.MetalDriver.D;
 import static am.ik.gpu.MetalDriver.F;
 import static am.ik.gpu.MetalDriver.I;
 import static am.ik.gpu.MetalDriver.L;
@@ -106,12 +107,18 @@ final class MetalGemm implements GpuDevice {
 
 	private static final int ZIP = 0, SCAL = 1, WHERE = 2, ADAM = 3, COPY = 4, FOLD = 5;
 
-	/** The fused tier's kernels (todo-636), in the order of {@link #fused}. */
+	/**
+	 * The fused tier's kernels (todo-636), in the order of {@link #fused}. The last three
+	 * are todo-643's: the attention head's scaled and masked softmax pair, and the launch
+	 * that packs their mask a bit a cell.
+	 */
 	static final String[] KERNELS_FUSED = { "gelu_f32", "gelu_grad_f32", "softmax_f32", "softmax_grad_f32",
-			"log_softmax_f32", "log_softmax_grad_f32", "layer_norm_f32", "layer_norm_grad_f32" };
+			"log_softmax_f32", "log_softmax_grad_f32", "layer_norm_f32", "layer_norm_grad_f32", "softmax_sm_f32",
+			"softmax_grad_sm_f32", "pack_mask" };
 
 	private static final int GELU = 0, GELU_GRAD = 1, SOFTMAX = 2, SOFTMAX_GRAD = 3, LOG_SOFTMAX = 4,
-			LOG_SOFTMAX_GRAD = 5, LAYER_NORM = 6, LAYER_NORM_GRAD = 7;
+			LOG_SOFTMAX_GRAD = 5, LAYER_NORM = 6, LAYER_NORM_GRAD = 7, SOFTMAX_SM = 8, SOFTMAX_GRAD_SM = 9,
+			PACK_MASK = 10;
 
 	/**
 	 * The kernels an EMBEDDER supplied, when this library's classes travel without its
@@ -1667,7 +1674,15 @@ final class MetalGemm implements GpuDevice {
 		 * it) is a miss like any other.
 		 */
 		@Nullable Slab lookup(int slot, Object host, long offsetElements, long elements) {
-			long address = MetalGemm.this.residency.lookup(host, offsetElements * Float.BYTES, elements * Float.BYTES);
+			return lookupBytes(slot, host, offsetElements * Float.BYTES, elements * Float.BYTES);
+		}
+
+		/**
+		 * {@link #lookup} over a span given in BYTES -- the softmax pair's mask, which
+		 * may be either width whatever the operand's is.
+		 */
+		@Nullable Slab lookupBytes(int slot, Object host, long offsetBytes, long bytes) {
+			long address = MetalGemm.this.residency.lookup(host, offsetBytes, bytes);
 			if (address == 0) {
 				return null;
 			}
@@ -1728,6 +1743,34 @@ final class MetalGemm implements GpuDevice {
 			upload(source, offset, slab, (int) elements);
 			if (adopt || MetalGemm.this.lazy) {
 				MetalGemm.this.adopt(host, (long) offset * Float.BYTES, elements * Float.BYTES, slab, false, keep());
+				this.owned[slot] = false;
+			}
+		}
+
+		/**
+		 * {@link #stage} for the softmax pair's mask: its bytes at ITS width, which the
+		 * packing kernel reads as raw words. {@code adopt} is the second sight of an
+		 * array that is not resident -- the causal mask of a training step -- after which
+		 * the cache owns the copy and the seventy-two calls of a step share one upload.
+		 */
+		void stageMask(int slot, Object mask, int offset, int elements, boolean wide, boolean adopt) {
+			if (!this.owned[slot]) {
+				return;
+			}
+			Slab slab = this.slabs[slot];
+			long width = wide ? Double.BYTES : Float.BYTES;
+			long offsetBytes = offset * width, bytes = elements * width;
+			int length = wide ? ((double[]) mask).length : ((float[]) mask).length;
+			Object source = length >= offset + elements ? mask
+					: MetalGemm.this.residency.source(mask, offsetBytes, bytes);
+			if (wide) {
+				MemorySegment.copy((double[]) source, offset, slab.contents(), D, 0, elements);
+			}
+			else {
+				MemorySegment.copy((float[]) source, offset, slab.contents(), F, 0, elements);
+			}
+			if (adopt || MetalGemm.this.lazy) {
+				MetalGemm.this.adopt(mask, offsetBytes, bytes, slab, false, keep());
 				this.owned[slot] = false;
 			}
 		}
@@ -1935,12 +1978,11 @@ final class MetalGemm implements GpuDevice {
 	@Override
 	public boolean softmaxF(float[] a, int oa, @Nullable Object mask, int om, int maskLen, float[] c, int oc, int rows,
 			int len, int sop, double sf, double fill) {
-		if (mask != null || sop != 0) {
-			// The scaled, masked form (the attention head's) is CUDA's so far: declined
-			// here, so the composition runs member by member as before.
-			return false;
+		if (mask == null && sop == 0) {
+			return rowMember(this.fused[SOFTMAX], 1, rows, len, 0, new float[][] { a }, new int[] { oa }, c, oc);
 		}
-		return rowMember(this.fused[SOFTMAX], 1, rows, len, 0, new float[][] { a }, new int[] { oa }, c, oc);
+		return softmaxScaledMasked(this.fused[SOFTMAX_SM], 1, rows, len, new float[][] { a }, new int[] { oa }, mask,
+				om, maskLen, c, oc, sop, sf, fill);
 	}
 
 	@Override
@@ -1949,15 +1991,20 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
-	/** {@code torch:softmax}'s adjoint {@code s * (g - sum(g * s))}, one pass. */
+	/**
+	 * {@code torch:softmax}'s adjoint {@code s * (g - sum(g * s))}, one pass -- and, when
+	 * the forward folded a scale and a mask, their adjoints in the tape's order: zero
+	 * under the mask, then the scale, both taken in the store.
+	 */
 	@Override
 	public boolean softmaxGradF(float[] g, int og, float[] s, int os, @Nullable Object mask, int om, int maskLen,
 			float[] c, int oc, int rows, int len, int sop, double sf) {
-		if (mask != null || sop != 0) {
-			return false;
+		if (mask == null && sop == 0) {
+			return rowMember(this.fused[SOFTMAX_GRAD], 2, rows, len, 0, new float[][] { g, s }, new int[] { og, os }, c,
+					oc);
 		}
-		return rowMember(this.fused[SOFTMAX_GRAD], 2, rows, len, 0, new float[][] { g, s }, new int[] { og, os }, c,
-				oc);
+		return softmaxScaledMasked(this.fused[SOFTMAX_GRAD_SM], 2, rows, len, new float[][] { g, s },
+				new int[] { og, os }, mask, om, maskLen, c, oc, sop, sf, 0.0);
 	}
 
 	@Override
@@ -2172,6 +2219,134 @@ final class MetalGemm implements GpuDevice {
 				bindFused(encoder, call.slabs, declared, result);
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 3L * Integer.BYTES, declared + 1);
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", epsilon, (long) Long.BYTES, declared + 2);
+				int groups = (rows + ROW_SIMDS * SIMD_WIDTH - 1) / (ROW_SIMDS * SIMD_WIDTH);
+				this.driver.dispatch(encoder, MetalDriver.size(arena, groups, 1, 1),
+						MetalDriver.size(arena, ROW_SIMDS * SIMD_WIDTH, 1, 1));
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commitAndWait(commands)) {
+					return false;
+				}
+			}
+			call.finish(result, c, oc, elements);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * The attention head's softmax pair (todo-643): {@link #rowMember}'s shape with the
+	 * mask as an operand of its own length and width and the scale as the trailing
+	 * parameters. Two dispatches ride ONE command buffer -- {@code pack_mask} over the
+	 * mask, then the row kernel over the packed words -- because a compute encoder
+	 * dispatches serially, so the pack costs the launch and not a second wait, which on
+	 * this backend is what a call costs.
+	 *
+	 * <p>
+	 * The mask is either width: a {@code double[]} one is read as raw word pairs by the
+	 * packing kernel and never enters arithmetic, which is why the pair takes what
+	 * {@link #whereF} refuses. It is staged like any operand and ADOPTED on the second
+	 * sight ({@link #gemvF}'s rule), because the causal mask of a training step is one
+	 * array reached seventy-two times a step and its upload is otherwise paid every time.
+	 *
+	 * <p>
+	 * The slots are the {@code declared} operands, then the mask, the packed words and
+	 * the result. The row kernel's buffers are the operands, the packed words and the
+	 * result -- the mask itself is bound only to the packing dispatch -- and a call with
+	 * no mask binds the result's slab in the packed words' place, which the kernel never
+	 * reads.
+	 */
+	private boolean softmaxScaledMasked(MemorySegment state, int declared, int rows, int len, float[][] operands,
+			int[] offsets, @Nullable Object mask, int om, int maskLen, float[] c, int oc, int sop, double sf,
+			double fill) {
+		long n = (long) rows * len;
+		if (n > Integer.MAX_VALUE || !acceptable(n, MIN_MAP_ELEMENTS, n, (Object[]) operands)) {
+			return false;
+		}
+		boolean wide = mask instanceof double[];
+		if (mask != null && !wide && !(mask instanceof float[])) {
+			return false;
+		}
+		int elements = (int) n;
+		int maskSlot = operands.length, packedSlot = operands.length + 1, result = operands.length + 2;
+		long maskWidth = wide ? Double.BYTES : Float.BYTES;
+		int words = mask == null ? 0 : (maskLen + 31) / 32;
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(result + 1);
+			for (int k = 0; k < operands.length; k++) {
+				call.lookup(k, operands[k], offsets[k], elements);
+			}
+			boolean adopt = false;
+			if (mask != null) {
+				long maskOffset = om * maskWidth, maskBytes = maskLen * maskWidth;
+				adopt = call.lookupBytes(maskSlot, mask, maskOffset, maskBytes) == null
+						&& this.residency.offeredBefore(mask, maskOffset, maskBytes);
+				if (!call.ensureBytes(maskSlot, maskBytes)
+						|| !call.ensureBytes(packedSlot, (long) words * Integer.BYTES)) {
+					return false;
+				}
+			}
+			for (int k = 0; k < operands.length; k++) {
+				if (!call.ensure(k, elements)) {
+					return false;
+				}
+			}
+			if (!call.ensure(result, elements)) {
+				return false;
+			}
+			if (mask == null) {
+				call.share(packedSlot, result);
+			}
+			for (int k = 0; k < operands.length; k++) {
+				call.stage(k, operands[k], offsets[k], elements, false);
+			}
+			if (mask != null) {
+				call.stageMask(maskSlot, mask, om, maskLen, wide, adopt);
+			}
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 6);
+				args.setAtIndex(I, 0, rows);
+				args.setAtIndex(I, 1, len);
+				args.setAtIndex(I, 2, sop);
+				args.setAtIndex(I, 3, (double) (float) sf == sf || Double.isNaN(sf) ? 1 : 0);
+				args.setAtIndex(I, 4, mask == null ? 1 : maskLen);
+				args.setAtIndex(I, 5, mask == null ? 0 : 1);
+				MemorySegment scalars = arena.allocate(L, 3);
+				scalars.setAtIndex(L, 0, Double.doubleToRawLongBits(sf));
+				scalars.setAtIndex(L, 1, Float.floatToRawIntBits((float) sf) & 0xffffffffL);
+				scalars.setAtIndex(L, 2, Float.floatToRawIntBits((float) fill) & 0xffffffffL);
+				MemorySegment packArgs = arena.allocate(I, 2);
+				packArgs.setAtIndex(I, 0, maskLen);
+				packArgs.setAtIndex(I, 1, wide ? 1 : 0);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = this.driver.message(commands, "computeCommandEncoder");
+				if (mask != null) {
+					this.driver.messageVoid(encoder, "setComputePipelineState:", this.fused[PACK_MASK]);
+					this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[maskSlot].buffer(), 0, 0);
+					this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[packedSlot].buffer(), 0,
+							1);
+					this.driver.messageVoid(encoder, "setBytes:length:atIndex:", packArgs, 2L * Integer.BYTES, 2);
+					flatDispatch(arena, encoder, words);
+				}
+				this.driver.messageVoid(encoder, "setComputePipelineState:", state);
+				for (int k = 0; k < operands.length; k++) {
+					this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[k].buffer(), 0, k);
+				}
+				this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[packedSlot].buffer(), 0,
+						declared);
+				this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[result].buffer(), 0,
+						declared + 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 6L * Integer.BYTES, declared + 2);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", scalars, 3L * Long.BYTES, declared + 3);
 				int groups = (rows + ROW_SIMDS * SIMD_WIDTH - 1) / (ROW_SIMDS * SIMD_WIDTH);
 				this.driver.dispatch(encoder, MetalDriver.size(arena, groups, 1, 1),
 						MetalDriver.size(arena, ROW_SIMDS * SIMD_WIDTH, 1, 1));

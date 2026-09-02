@@ -1593,6 +1593,91 @@ class MetalGpuTest {
 	}
 
 	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void theScaledAndMaskedSoftmaxLandsOnTheComposedDeviceChainsBits() {
+		// The attention head's idiom (todo-643): torch:div then torch:masked-fill then
+		// torch:softmax, folded into the softmax pair. The claim is the tier's -- the
+		// fused kernel IS the chain, rounding for rounding -- so the oracle is the chain
+		// run on the DEVICE: the scale through scal_f32, the mask's select on the host
+		// (a select is exact, and it is the only way to get a double[] mask through,
+		// which
+		// whereF declines here) and then the plain fused softmax.
+		//
+		// Three scales cover both of scal_f32's routes: 8 is a power of two and reaches
+		// the kernel already rewritten to the multiply by its exact reciprocal, 3 is an
+		// exact divide, and sqrt 2 is not a float at all and takes the software binary64
+		// route both in the chain and in the kernel. Both mask widths, both fills, and
+		// both of the packed mask's reads -- the shuffled one where the mask is a whole
+		// number of 32-aligned rows, the cell-by-cell one where it is not.
+		Gpu.releaseResident();
+		int rows = (int) Math.max(MetalGemm.MIN_RESIDENT_ELEMENTS, 1024), len = 64, n = rows * len;
+		Chain ch = new Chain();
+		Random random = new Random(23);
+		float[] x = new float[n], g = new float[n];
+		for (int i = 0; i < n; i++) {
+			x[i] = (float) (random.nextDouble() * 6 - 3);
+			g[i] = (float) (random.nextDouble() * 2 - 1);
+		}
+		Gpu.lazyResults(true);
+		try {
+			makeResident(x);
+			makeResident(g);
+			for (double sc : new double[] { 8.0, 3.0, 1.4142135623730951 }) {
+				// maskLen 4 rows: a whole number of rows of a 32-aligned length, so the
+				// row kernel takes one word a row and shuffles. maskLen 32: not a whole
+				// number of rows, so every lane looks its cells up one by one.
+				for (int maskLen : new int[] { len * 4, 32 }) {
+					for (int mk = 0; mk < 2; mk++) {
+						double[] maskD = new double[maskLen];
+						float[] maskF = new float[maskLen];
+						for (int i = 0; i < maskLen; i++) {
+							maskD[i] = (i * 7) % 5 == 0 ? 1.0 : 0.0;
+							maskF[i] = (float) maskD[i];
+						}
+						Object mask = mk == 0 ? maskD : maskF;
+						double fill = mk == 0 ? Double.NEGATIVE_INFINITY : -5.0;
+						String what = "scale=%s maskLen=%d mask=%s".formatted(sc, maskLen, mk == 0 ? "f64" : "f32");
+						float[] scaled = ch.home(ch.scale(Gpu.BIN_DIV, x, sc, false));
+						float[] masked = new float[n];
+						for (int i = 0; i < n; i++) {
+							masked[i] = maskD[i % maskLen] != 0.0 ? (float) fill : scaled[i];
+						}
+						makeResident(masked);
+						float[] out = new float[n];
+						assertThat(Gpu.softmax(masked, 0, out, 0, rows, len)).isTrue();
+						float[] fused = new float[n];
+						assertThat(Gpu.softmax(x, 0, mask, 0, maskLen, fused, 0, rows, len, Gpu.BIN_DIV, sc, fill))
+							.isTrue();
+						assertBitIdentical(ch.home(fused), ch.home(out), "scaled masked softmax " + what);
+						// Its adjoint: the plain adjoint, then the scale, then the mask's
+						// zeroing -- the divide taken before the host zeroes, because a
+						// zero divided by the scale is the same zero and a host write to
+						// a resident array would lose the residency the scale is offered
+						// over.
+						float[] dx = new float[n];
+						assertThat(Gpu.softmaxGrad(g, 0, out, 0, dx, 0, rows, len)).isTrue();
+						float[] expected = ch.home(ch.scale(Gpu.BIN_DIV, dx, sc, false));
+						for (int i = 0; i < n; i++) {
+							if (maskD[i % maskLen] != 0.0) {
+								expected[i] = 0.0f;
+							}
+						}
+						float[] fusedGrad = new float[n];
+						assertThat(Gpu.softmaxGrad(g, 0, out, 0, mask, 0, maskLen, fusedGrad, 0, rows, len, Gpu.BIN_DIV,
+								sc))
+							.isTrue();
+						assertBitIdentical(ch.home(fusedGrad), expected, "scaled masked softmax grad " + what);
+					}
+				}
+			}
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
 	void theDropoutMaskStaysDeclinedHere() {
 		// The one member of the nine that is NOT fused on this backend, and on the
 		// arithmetic rather than for want of a kernel: the Wichmann-Hill uniform is three
