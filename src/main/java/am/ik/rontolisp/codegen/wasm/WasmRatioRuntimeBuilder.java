@@ -321,9 +321,9 @@ final class WasmRatioRuntimeBuilder {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		// locals: 2=fa (f64), 3=fb (f64), 4=r (f64)
+		// locals: 2=fa (f64), 3=fb (f64)
 		w.write(1);
-		w.write(3);
+		w.write(2);
 		w.write(Type.F64);
 
 		// Float path: a - b * (floor|trunc)(a / b), all in f64, boxed as TYPE_FLOAT.
@@ -338,26 +338,20 @@ final class WasmRatioRuntimeBuilder {
 		getLocal(w, 2);
 		getLocal(w, 3);
 		w.write(Instruction.F64_DIV);
-		w.write(mod ? Instruction.F64_FLOOR : Instruction.F64_TRUNC); // q
-		w.write(Instruction.F64_MUL); // fb*q
-		w.write(Instruction.F64_SUB); // fa - fb*q
-		setLocal(w, 4);
-		// A ZERO remainder takes the sign of the DIVIDEND, as IEEE fmod (and so Java's
-		// DREM, which is what the interpreter and the JVM backend both compute) defines
-		// it. The subtraction above cannot produce that on its own: f64.floor/f64.trunc
-		// preserve the sign of a zero quotient, so fa = -0.0 gives fb*q = -0.0 and the
-		// cancellation -0.0 - (-0.0) is +0.0. Re-signing only the zero result leaves
-		// every nonzero remainder -- which already carries the correct sign, the
-		// dividend's for rem and the divisor's for mod -- exactly as it was.
-		getLocal(w, 4);
-		getLocal(w, 2);
-		w.write(Instruction.F64_COPYSIGN);
-		getLocal(w, 4);
-		getLocal(w, 4);
+		w.write(mod ? Instruction.F64_FLOOR : Instruction.F64_TRUNC);
+		// CLHS's quotient is an exact INTEGER, and an integer zero is +0. f64.floor and
+		// f64.trunc keep the sign of a zero quotient instead, which is the one place
+		// where evaluating the formula in f64 parts company with it: fa = -0.0 over a
+		// positive fb gives q = -0.0, so fb*q = -0.0 and the cancellation -0.0 - (-0.0)
+		// is +0.0 where CLHS wants -0.0 - (+0.0) = -0.0. Adding +0.0 to the quotient is
+		// exactly that coercion -- it maps -0.0 to +0.0 and leaves every other value,
+		// NaN and the infinities included, alone -- after which the subtraction carries
+		// the right sign of zero on its own, with no re-signing of the result.
 		w.write(Instruction.F64_CONST);
 		w.writeF64(0.0);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.SELECT);
+		w.write(Instruction.F64_ADD); // q
+		w.write(Instruction.F64_MUL); // fb*q
+		w.write(Instruction.F64_SUB); // fa - fb*q
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.ELSE);

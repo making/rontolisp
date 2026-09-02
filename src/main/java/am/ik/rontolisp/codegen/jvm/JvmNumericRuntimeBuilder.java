@@ -53,6 +53,9 @@ final class JvmNumericRuntimeBuilder {
 	/** Floating-point modulo whose result takes the sign of the divisor. */
 	static final String FMOD = "_fmod";
 
+	/** Floating-point remainder: {@code DREM} with CLHS's sign for a zero result. */
+	static final String FREM = "_frem";
+
 	static final String CMP = "_cmp";
 
 	static final String CMPB = "_cmpb";
@@ -411,6 +414,7 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nMod = cp.addUtf8(MOD);
 		Utf8Constant nRem = cp.addUtf8(REM);
 		Utf8Constant nFmod = cp.addUtf8(FMOD);
+		Utf8Constant nFrem = cp.addUtf8(FREM);
 		Utf8Constant nCmp = cp.addUtf8(CMP);
 		Utf8Constant nCmpb = cp.addUtf8(CMPB);
 		Utf8Constant nAbs = cp.addUtf8(ABS);
@@ -451,6 +455,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rMod = cp.addMethodref(thisClass, cp.addNameAndType(nMod, dBinary));
 		MethodrefConstant rRem = cp.addMethodref(thisClass, cp.addNameAndType(nRem, dBinary));
 		MethodrefConstant rFmod = cp.addMethodref(thisClass, cp.addNameAndType(nFmod, dFmod));
+		MethodrefConstant rFrem = cp.addMethodref(thisClass, cp.addNameAndType(nFrem, dFmod));
 		MethodrefConstant rCmp = cp.addMethodref(thisClass, cp.addNameAndType(nCmp, dCmp));
 		MethodrefConstant rCmpb = cp.addMethodref(thisClass, cp.addNameAndType(nCmpb, dCmp));
 		MethodrefConstant rAbs = cp.addMethodref(thisClass, cp.addNameAndType(nAbs, dUnary));
@@ -502,8 +507,9 @@ final class JvmNumericRuntimeBuilder {
 				biSignum, biAdd, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, rFmod, ratArrClass,
 				rRatNum, rRatDen, rRat, biMul));
 		methods.add(buildRem(nRem, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, doubleClass, rDbl,
-				numberClass, numDoubleValue, doubleValueOf, ratArrClass, rRatNum, rRatDen, rRat, biMul));
-		methods.add(buildFmod(nFmod, dFmod));
+				numberClass, numDoubleValue, doubleValueOf, rFrem, ratArrClass, rRatNum, rRatDen, rRat, biMul));
+		methods.add(buildFmod(nFmod, dFmod, rFrem));
+		methods.add(buildFrem(nFrem, dFmod));
 		methods.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul,
 				doubleClass, rDbl, numberClass, numDoubleValue));
 		methods.add(buildCmpBits(nCmpb, dCmp, doubleClass, rDbl, numberClass, numDoubleValue, rCmp, intSignum));
@@ -548,6 +554,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(MOD, rMod);
 		ops.put(REM, rRem);
 		ops.put(FMOD, rFmod);
+		ops.put(FREM, rFrem);
 		ops.put(CMP, rCmp);
 		ops.put(CMPB, rCmpb);
 		ops.put(ABS, rAbs);
@@ -976,13 +983,14 @@ final class JvmNumericRuntimeBuilder {
 	private static NumericMethod buildRem(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
 			MethodrefConstant biRem, ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, ClassConstant ratArrClass,
-			MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat, MethodrefConstant biMul) {
+			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, MethodrefConstant rFrem,
+			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat,
+			MethodrefConstant biMul) {
 		List<Integer> c = new ArrayList<>();
-		// A float operand keeps the dividend's sign -- Java's DREM, which is what the
-		// double-literal emission of (rem ...) already emits (see buildMod for why the
-		// arm has to exist here too).
-		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, Opcode.DREM);
+		// A float operand keeps the dividend's sign -- _frem, which is DREM plus CLHS's
+		// sign for a ZERO remainder, and is what the double-literal emission of
+		// (rem ...) also calls (see buildMod for why the arm has to exist here too).
+		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, Opcode.DREM, rFrem);
 		int[] ratJumps = emitRatioGuard(c, ratArrClass);
 		int[] slowJumps = emitLongLongGuard(c, longClass);
 		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
@@ -1006,12 +1014,14 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _fmod(double a, double b): floating-point modulo whose result takes the sign of the
-	// divisor. r = a % b; if (r * b < 0) r += b (opposite signs and r != 0).
-	private static NumericMethod buildFmod(Utf8Constant name, Utf8Constant desc) {
+	// divisor. r = _frem(a, b); if (r * b < 0) r += b (opposite signs and r != 0). The
+	// correction never fires on a zero, so mod and rem share _frem's zero unchanged.
+	private static NumericMethod buildFmod(Utf8Constant name, Utf8Constant desc, MethodrefConstant rFrem) {
 		List<Integer> c = new ArrayList<>();
 		c.add(Opcode.DLOAD_0);
 		c.add(Opcode.DLOAD_2);
-		c.add(Opcode.DREM);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rFrem.index());
 		c.add(Opcode.DSTORE);
 		c.add(4);
 		c.add(Opcode.DLOAD);
@@ -1033,6 +1043,63 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(c, ifNonNeg, done);
 		c.add(Opcode.DLOAD);
 		c.add(4);
+		c.add(Opcode.DRETURN);
+		return new NumericMethod(name, desc, c, 4, 6, List.of());
+	}
+
+	// _frem(double a, double b): the float remainder shared by rem and _fmod. DREM,
+	// except for the sign of a ZERO result. CLHS defines rem as the remainder of
+	// truncate and mod as the remainder of floor, both `a - b*q` with an exact INTEGER
+	// quotient -- not IEEE fmod, whose zero takes the dividend's sign whatever the
+	// divisor. DREM is the exact value that formula denotes everywhere else, so only
+	// the zero is re-derived: a zero dividend has q = +0, leaving b*q with the
+	// DIVISOR's sign, and a nonzero dividend cancels against itself as IEEE's +0.0.
+	//
+	// r = a % b; if (r != 0) return r; // NaN too
+	// if (a != 0) return 0.0; // a - a
+	// return b < 0 ? a + 0.0 : a - 0.0; // a - copysign(0.0, b)
+	private static NumericMethod buildFrem(Utf8Constant name, Utf8Constant desc) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.DLOAD_0);
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DREM);
+		c.add(Opcode.DSTORE);
+		c.add(4);
+		c.add(Opcode.DLOAD);
+		c.add(4);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPL); // NaN compares as -1, so a NaN remainder falls through
+		int ifZeroResult = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.DLOAD);
+		c.add(4);
+		c.add(Opcode.DRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifZeroResult, c.size());
+		c.add(Opcode.DLOAD_0);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPL);
+		int ifZeroDividend = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifZeroDividend, c.size());
+		// b is neither NaN nor a zero here -- either would have made r a NaN.
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPG);
+		int ifPositiveDivisor = c.size();
+		c.add(Opcode.IFGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.DLOAD_0);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DADD);
+		c.add(Opcode.DRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifPositiveDivisor, c.size());
+		c.add(Opcode.DLOAD_0);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DSUB);
 		c.add(Opcode.DRETURN);
 		return new NumericMethod(name, desc, c, 4, 6, List.of());
 	}

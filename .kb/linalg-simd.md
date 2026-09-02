@@ -819,7 +819,8 @@ The settled answers, all four backends, literal path and variable path alike (`n
 | `(min nan x)` / `(min x nan)` | `x` / `NaN` | unordered, so the RIGHT operand wins |
 | `(signum nz)` / `(signum nan)` | `-0.0` / `NaN` | `Math.signum` |
 | `(sin nz)` / `(tan nz)` / `(tanh nz)` | `-0.0` | odd functions |
-| `(mod nz 2.0)` / `(rem nz 2.0)` | `-0.0` | a zero remainder takes the DIVIDEND's sign |
+| `(mod nz 2.0)` / `(rem nz 2.0)` | `-0.0` | the zero `truncate`/`floor` leaves (below) |
+| `(mod nz -2.0)` / `(rem -4.0 2.0)` | `0.0` | same rule: `-0.0 - (-0.0)` and `x - x` are `+0.0` |
 | `(eql nz pz)` / `(equal nz pz)` | `NIL` | float `eql` is a BIT compare |
 
 **`min`/`max` are one rule on both edge axes**: `min(a,b) = (a <= b) ? a : b` and
@@ -842,14 +843,51 @@ emits a native `f64.le`/`f64.ge`), they just compute the same select as the gene
   `T`; it now compares bits, OR-ed with a both-NaN arm so it stays identical to
   `Double.equals` -- which folds every NaN onto one pattern, so a NaN and that same NaN
   negated are still `eql` even though their raw bits differ in the sign bit.
-- **`mod`/`rem`**: a zero remainder takes the sign of the DIVIDEND (IEEE `fmod`, hence
-  Java's `DREM`). wasm synthesizes the remainder as `a - b*floor|trunc(a/b)`, and
-  `f64.floor`/`f64.trunc` keep the sign of a zero quotient, so `-0.0 - (-0.0)` cancelled to
-  `+0.0`; the zero result is now re-signed with `f64.copysign` from the dividend. NOTE that
-  SBCL differs here on the *other* zero cases -- it computes `a - b*q` with an exact INTEGER
-  `q`, giving `(rem -4.0 2.0)` = `0.0` and `(mod -0.0 -2.0)` = `0.0` where all four of our
-  backends give `-0.0`. That is a `mod`/`rem` definition question, not a signed-zero one,
-  and it was left alone: see `.todo/652`.
+- **`mod`/`rem`**: a zero remainder is the one CLHS's own definition produces, NOT IEEE
+  `fmod`'s. CLHS defines `rem` as "the remainder of the truncate operation" and `mod` as
+  "the remainder of the floor operation"; `floor`/`truncate` return a quotient that
+  "always represents a mathematical integer" with `quotient*divisor + remainder = number`.
+  So the remainder is `a - b*q` for an exact INTEGER `q`, and an integer zero is `+0`, not
+  `-0.0`. IEEE `fmod` instead gives a zero result the DIVIDEND's sign whatever the divisor.
+  **todo-652 settled this on the CLHS reading (2026-09-02)**, and what decided it was
+  INTERNAL rather than a preference between two defensible readings: rontolisp's own
+  `truncate` and `floor` already answered `0.0` for the second value of
+  `(truncate -4.0 2.0)` while `rem` answered `-0.0`, so the implementation contradicted an
+  identity CLHS states outright, between two functions it defines as each other. SBCL
+  agrees row for row over the 46-form sweep (variable path and literal path, `mod`/`rem`
+  and the `truncate`/`floor` remainders); the sweep is the `ci-spec.yaml` case
+  `mod-rem-zero-is-the-truncate-and-floor-remainder`.
+
+  Stated as a correction to `fmod`: **a zero remainder is `-0.0` only when the dividend is
+  `-0.0` and the divisor is positive, and `+0.0` otherwise.** It falls out of `a - b*q`
+  with an integer `q` -- `q` is `+0` for a zero dividend, so `b*q` carries the DIVISOR's
+  sign, and for a nonzero dividend `b*q` is the dividend itself, whose `x - x` is IEEE's
+  `+0.0`. The interpreter and the JVM keep Java's exact `%`/`DREM` and re-derive only the
+  zero (`_frem`, which `_fmod` calls first -- its divisor-sign correction never fires on a
+  zero, so `mod` and `rem` share one zero); both wasm compilers still synthesize
+  `a - b*(floor|trunc)(a/b)` in f64 and get the right zero by ADDING `+0.0` to the
+  QUOTIENT, which is exactly the "an exact integer zero is `+0`" coercion and replaces the
+  `f64.copysign` re-signing todo-648 had added (`f64.trunc(-0.0)` is `-0.0`, which an
+  integer quotient never is).
+
+  **The magnitude is deliberately not computed from that formula**, and SBCL is not the
+  oracle for it. Evaluating `a - b*q` in f64 rounds; `DREM` does not. `(rem 1d18 7.0)` is
+  `1.0` on the interpreter and the JVM -- the true value, since `10^6 = 1 (mod 7)` -- and
+  `0.0` on SBCL, whose `7.0*q` rounds back to `1d18`. So CLHS's words decide the SIGN,
+  where they are a definition, and not the magnitude, where they only describe a
+  mathematical quantity that `DREM` computes exactly.
+
+  Two divergences the todo-652 sweep turned up and did NOT change, both in the wasm float
+  arm and both from evaluating the formula in f64 rather than computing an exact
+  remainder: `(rem 1d18 7.0)` is `0.0` on both wasm backends against `1.0` on the
+  interpreter and the JVM, and an INFINITE divisor is `NaN` on wasm (`inf * 0.0`) where
+  the interpreter and the JVM answer `fmod`'s `(rem 3.0 inf)` = `3.0`, `(mod -3.0 inf)` =
+  `Infinity`. SBCL signals on every infinite operand, so there is no oracle for the second
+  one. Both are filed as `.todo/659`. A zero divisor is `NaN` on all four (SBCL signals
+  `division-by-zero`), which is the same non-trapping float policy `(/ 1.0 0.0)` follows.
+  The sweep also found that `floor`/`truncate` SATURATE a large float quotient at the
+  `long` range and hand back the dividend as the remainder, identically on all four --
+  `.todo/660`, and the reason the identity above is only pinned below 2^53.
 - **`signum`/`sin`/`tan`/`tanh`** flattened on wasm because each computes the answer by a
   route that erases the sign -- `(x>0)-(x<0)` is `+0.0` for `+0.0`, `-0.0` and NaN alike,
   the Cody-Waite reduction's `-0.0 - (-0.0)` cancels to `+0.0`, and `tanh`'s
