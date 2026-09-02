@@ -411,10 +411,21 @@ wash, and all three failing makes it a loss.
    **macOS was not measured.** dorian has no Accelerate and no Metal, so every number in
    this subsection is x86-64 OpenBLAS. Accelerate exports no thread query, so there the
    note is silent by construction rather than by measurement -- if it turns out to have the
-   same trap, finding it needs an Apple machine, and so does re-checking the 6-9x GEMV
-   column above, which was measured back to back and may be flattered the same way
-   (todo-651, which also holds BLIS's `bli_thread_get_num_threads` -- a `dim_t` return, so
-   one more downcall shape rather than one more table row).
+   same trap, finding it needs an Apple machine (todo-651, which also holds BLIS's
+   `bli_thread_get_num_threads` -- a `dim_t` return, so one more downcall shape rather than
+   one more table row).
+
+   **What the 6-9x column is missing is a thread count, not a correction.** The dorian
+   columns say "1 thread" and "64 threads"; the M4 Max column says neither, and Accelerate
+   picks a count by problem size without being asked. Back-to-back timing flatters the
+   LIBRARY side of the ratio only when that side has a pool to keep warm, so if Accelerate
+   was single-threaded at these shapes the trap does not reach the column and 6-9x stands
+   as measured; if it was threaded, the column is an over-estimate of unknown size. Nothing
+   in the table decides which, and **the 478/649 numbers cannot decide it either** -- those
+   are a parallel-over-serial ratio and this is a library-over-lane-kernel ratio, two
+   different quantities, so the error in one puts no bound on the error in the other.
+   todo-651's first question is therefore not "is the column flattered" but "how many
+   threads was it measured with".
 
 ## Tests
 

@@ -11,10 +11,14 @@ so the note is silent for them **by construction rather than by measurement**:
 - **Apple Accelerate**, which has no public thread-count call at all. 649 was measured on
   `dorian` (x86-64, OpenBLAS), which has no Accelerate, so nobody has checked whether an
   Apple machine has the same trap. The `--blas` GEMV table in `.kb/linalg-blas.md` says
-  Accelerate is 6-9x the lane kernel at llama2's shapes -- but that was measured back to
-  back, and 649 showed that a back-to-back loop flatters a threaded library by an order of
-  magnitude, because its pool never idles. **The Apple column may be a hot-loop artefact
-  in exactly the same way.**
+  Accelerate is 6-9x the lane kernel at llama2's shapes, and that was measured back to
+  back -- but **the first question about that column is what thread count produced it, not
+  whether it is flattered.** The dorian columns beside it say "1 thread" and "64 threads";
+  the Apple column says neither, and Accelerate picks a count by problem size on its own.
+  A back-to-back loop flatters the LIBRARY side of the ratio only when that side has a pool
+  to keep warm: single-threaded, the trap never reaches the column and 6-9x stands as
+  measured; threaded, it is an over-estimate of unknown size. Measure the thread count
+  first and the ratio second, and record BOTH in the table this time.
 - **BLIS**, which exports `bli_thread_get_num_threads` -- a `dim_t` (int64) return, so it
   is one more downcall SHAPE (`jlong()`) and one more
   `reachability-metadata.json` entry, not just another row in the table. It was left out
