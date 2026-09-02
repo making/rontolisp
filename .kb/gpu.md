@@ -1461,7 +1461,105 @@ the pattern the row kernels were built to avoid. Over 3038-wide rows that is 199
 2.06 ms (**97 GB/s**); over 384-wide rows the same kernel reads 25 MB in 0.098 ms (255
 GB/s), because at that row length the block's working set stays in cache. The fused
 log-softmax inherits the row kernels' tiling and is why that bucket fell 8.5 -> 2.3 ms;
-every other last-axis fold over a long row still pays it. `.todo/635`.
+every other last-axis fold over a long row still pays it. Followed up as `.todo/635`,
+whose answer is the next section: the premise held, the tiled kernel is 1.7-2x, and
+NOTHING IN THIS REPOSITORY FOLDS A LAST AXIS ON THE DEVICE ANY MORE, so it is not built.
+
+## The last-axis fold's tiling: measured, and declined on the census (todo-635, 2026-09-02)
+
+The paragraph above is confirmed and closed. The tiled fold was written and measured in a
+standalone `nvcc` probe -- the checked-in `gemm.cu` compiled verbatim (`-fmad=false`, the
+header's own flag) plus a `fold_rows_f32` entry point beside it, timed against the plain
+`fold_f32` back to back and asserting BIT EQUALITY of all 16384 results per shape. The
+candidate is the item's own design: one thread per row, the rows streamed thirty-two
+columns at a time through the row kernels' `row_tile` / `tile_load`, the accumulator a
+sequential `double`, so the fold ORDER never moves. It is bit-equal to the plain kernel at
+every shape probed (row counts 100 / 1000 / 2048 / 4096 / 6144 / 8192 / 10240 / 12288 /
+16384 / 65536 x sixteen widths from 32 to 4096 x all three ops), including row counts and
+widths that are not multiples of thirty-two.
+
+**It works.** At the book's 16384 rows, `sum` at `#f`, 50 back-to-back calls, median of
+three rounds -- each round preceded by 200 heavy launches, because the clocks are still
+climbing through a light kernel and a sweep that starts cold measures its first widths
+10-15% slow (the absolute rates carry that much run-to-run spread; the ratios do not):
+
+| row width | plain | tiled | |
+|---|---|---|---|
+| 256 | 0.069 ms (242 GB/s) | 0.052 (322) | 1.33x |
+| 384 | 0.112 (225) | 0.084 (300) | 1.33x |
+| 512 | 0.244 (137) | 0.146 (230) | 1.68x |
+| 768 | 0.444 (113) | 0.244 (206) | 1.82x |
+| 1024 | 0.607 (111) | 0.319 (211) | 1.90x |
+| 1536 | 0.946 (106) | 0.483 (209) | 1.96x |
+| 3038 (the logits) | 1.883 (106) | 1.127 (177) | 1.67x |
+| 4096 | 2.418 (111) | 1.275 (210) | 1.90x |
+
+The plain kernel's rate falls off a cliff between 384 and 512 wide -- 225 -> 137 GB/s, and
+~110 for every longer row -- which is the 25 -> 34 MB working set leaving the cache and is
+what 629's "384-wide rows are fast" observation was. The tiled kernel holds ~210 GB/s
+whatever the row length, as its coalesced stream should.
+
+**What decides the win is the ROW COUNT, not the byte count** -- one thread per row is all
+the parallelism either kernel has, and the tiled one pays a barrier per thirty-two-column
+chunk that only enough blocks can hide. At a fixed ~50 MB operand: 16384 rows x 768 =
+1.82x, 12288 x 1024 = 1.80x, 8192 x 1536 = 1.57x, 6144 x 2048 = 1.38x, 4096 x 3038 =
+**0.99x**, and 2048 x 4096 (34 MB) = **0.89x**. So the threshold would have been on the
+output cell count, at about six thousand rows, with the plain kernel kept below it.
+
+**The gap sweep says the 97 GB/s is the access pattern, not the measurement context.**
+The Metal backend's `.todo/642` found that a kernel launched as the first thing after a
+28-30 ms host gap runs at dropped clocks, four times slower than the same kernel measured
+back to back -- so a size threshold measured back to back can be measured in a context the
+chain never sees ("The map threshold at the straddling shape", below). **That trap has no
+CUDA twin on this card.** The same single launch, the host spinning 0 / 0.5 / 1 / 2 / 4 /
+8 / 32 ms immediately before it, median of 25, three rounds:
+
+| | gap 0 | 0.5 | 1 | 2 | 4 | 8 | 32 ms | back to back |
+|---|---|---|---|---|---|---|---|---|
+| plain, 16384 x 3038 | 1.869 ms | 1.868 | 1.866 | 1.866 | 1.866 | 1.871 | 1.867 | 1.896 |
+| tiled, the same | 1.126 | 1.125 | 1.126 | 1.127 | 1.121 | 1.128 | 1.125 | 1.135 |
+| plain, 16384 x 384 | 0.096 | 0.096 | 0.098 | 0.097 | 0.098 | 0.099 | 0.099 | 0.099 |
+
+(this probe's own warm-up is heavier again, which is why the short row reads 0.099 here
+against 0.112 in the table above -- inside the spread that table names.) Flat to within 1% out to a 32 ms idle -- the driver holds the clocks (persistence mode is
+on) -- and the 3038-wide row measures 107 GB/s against the 384-wide row's 256 in EVERY one
+of those contexts. **So a back-to-back probe is a valid context for a CUDA threshold**,
+which is not something to assume on the other backend.
+
+**It is not built, because nothing reaches it.** `CudaGemm.fold` was instrumented to print
+every shape it is asked for, and the book's step at BATCH 64 (`gpt-book-shapes-fast.lisp`,
+`--gpu --simd`, JVM class output) makes **864 fold calls over two steps and not one of
+them has `inner == 1`**:
+
+| calls (2 steps) | shape | |
+|---|---|---|
+| 216 | `outer=1 len=64 inner=24576` | |
+| 216 | `outer=1 len=64 inner=16384` | |
+| 216 | `outer=1 len=256 inner=64` | this is 629's "16384-cell bucket" |
+| 78 | `outer=1 len=64 inner=98304` | |
+| 76 | `outer=1 len=256 inner=384` | |
+| 24 + 12 + 12 + 12 + 2 | `inner` = 589824 / 393216 / 147456 / 1536 / 1166592 | |
+
+Every one is an AXIS-0 fold -- over the batch (`len=64`) or the sequence (`len=256`) --
+whose thirty-two lanes are contiguous cells of the same row and therefore already
+coalesced. `fold_f32` is 25.6 ms of the step's 456.8 (5.6%, its nine grid buckets summed),
+and the tiled kernel would take none of it. The bucket 629 named is `len=256 inner=64`,
+not a 3038-wide row: the 3038-wide last-axis folds 629 measured are exactly the ones 629
+REMOVED, by fusing `log-softmax` -- and the fused tier has since taken the last-axis
+softmax, log-softmax, layer-norm and their adjoints, which were where a long last-axis
+fold came from. Outside the step, six of the repository's `linalg`-heavy programs run
+under `--gpu --simd` (`llm-from-scratch` chapter02 sections 2-5, `transformer/shapes`,
+`gpt/shapes`) make **zero device fold calls of any kind** -- their shapes decline to the
+CPU at the fold threshold.
+
+**Build it when a workload folds a LAST axis of more than ~256 elements over more than
+~6000 rows on the device** -- a hand-written reduction outside the eight fused
+compositions, which is what a new model's own code looks like. The kernel is an hour: a
+`fold_rows_f32` / `_f64` pair beside `fold_f32` (a SEPARATE entry point, not a template
+instantiation of the plain one -- an instantiation that carries a `__shared__` tile costs
+the plain path 30%, `.todo/641`), the body above, `CudaGemm.fold` choosing on
+`inner == 1 && cells >= threshold` and launching at `ROW_BLOCK` exactly. Nothing about
+`GpuDevice` changes, so Metal is untouched either way.
 
 ## The Metal backend
 
