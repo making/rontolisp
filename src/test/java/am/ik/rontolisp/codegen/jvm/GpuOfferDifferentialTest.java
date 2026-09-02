@@ -52,12 +52,13 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * must agree on accept versus decline and, where they accept, produce the same bits.
  *
  * <p>
- * Two halves. {@link #theTwoPathsAccelerateTheSameMemberSet()} holds on EVERY machine and
- * is the one that catches a member added to one path alone; the shape table needs a
- * device, and is chosen at the ACCEPT BOUNDARY rather than for coverage -- a mask that is
- * a trailing suffix and one whose middle axis is extent 1, an exactly-equal pair, a rank
- * mismatch, a fold on the last axis and one that is not, a resident operand and a fresh
- * one, both widths.
+ * Two halves, and only the FIRST of them runs in CI.
+ * {@link #theTwoPathsAccelerateTheSameMemberSet()} holds on EVERY machine and is the one
+ * that catches a member added to one path alone; the shape table needs a device -- see
+ * that method's own comment for why the gate is not a hole -- and is chosen at the ACCEPT
+ * BOUNDARY rather than for coverage -- a mask that is a trailing suffix and one whose
+ * middle axis is extent 1, an exactly-equal pair, a rank mismatch, a fold on the last
+ * axis and one that is not, a resident operand and a fresh one, both widths.
  */
 class GpuOfferDifferentialTest {
 
@@ -226,6 +227,28 @@ class GpuOfferDifferentialTest {
 	 * Every case in {@link #boundary()}, at both widths the machine has: the two paths
 	 * agree on accept versus decline, and where they accept the result carries the same
 	 * shape and the same bits.
+	 *
+	 * <p>
+	 * <strong>This test does NOT run in CI, by design, and that is not a hole.</strong>
+	 * Every machine the project's CI has is GPU-less and the gate above turns this method
+	 * off there, so the shape rule is pinned only where a developer runs the suite on a
+	 * device. It stays that way because the DEFECT is gated by the same thing the test
+	 * is: every entry point in {@code am.ik.gpu.Gpu} is {@code device != null && ...}
+	 * over its probe holder, so on a machine with no device nothing is ever accepted and
+	 * both paths take their scalar fallback whatever their predicates say. A disagreement
+	 * between {@code LinalgGpu} and {@link JvmGpuTemplate} can therefore produce a wrong
+	 * answer only on a machine where this method already runs; the gate defers detection
+	 * to the first machine on which the defect is observable at all, and does not leave
+	 * it unprotected anywhere.
+	 *
+	 * <p>
+	 * Making it CI-visible was priced and declined -- a stand-in {@code GpuDevice}, or a
+	 * parallel shape-predicate surface on the bridge; {@code .kb/gpu.md}, "Closing the
+	 * gap was priced and DECLINED" has the numbers and the reasons, of which the sharpest
+	 * is that a device answering {@code true} without touching memory would make the
+	 * seven RESIDENT-operand cases below agree vacuously and would compare an unwritten
+	 * destination against another unwritten destination for the bits. What DOES run in CI
+	 * is {@link #theTwoPathsAccelerateTheSameMemberSet()}, one method up.
 	 */
 	@Test
 	@EnabledIf("aDeviceIsAvailable")
