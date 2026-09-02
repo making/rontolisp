@@ -1225,6 +1225,58 @@ cases:
       (0.0 -0.0 0.0)
       (0.0 -0.0)
       #d(0.0)
+  # The rest of the signed-zero surface, once every operator that can carry a sign of
+  # zero was swept. Each value reaches its operator through a defun parameter, so no
+  # literal fast path is in play -- and the same forms are repeated with literals,
+  # because min/max used to answer one thing folded and another through variables.
+  - name: signed-zero-across-every-float-operator
+    source: |
+      (defun sz-add (a b) (+ a b))
+      (defun sz-min (a b) (min a b))
+      (defun sz-max (a b) (max a b))
+      (defun sz-signum (a) (signum a))
+      (defun sz-sin (a) (sin a))
+      (defun sz-tan (a) (tan a))
+      (defun sz-mod (a b) (mod a b))
+      (defun sz-rem (a b) (rem a b))
+      (defun sz-eql (a b) (eql a b))
+      (defun sz-equal (a b) (equal a b))
+      (print (list (sz-add -0.0 -0.0) (sz-add -0.0 0.0) (sz-add 0.0 -0.0)))
+      (print (list (sz-min -0.0 0.0) (sz-min 0.0 -0.0)))
+      (print (list (sz-max -0.0 0.0) (sz-max 0.0 -0.0)))
+      (print (list (min -0.0 0.0) (min 0.0 -0.0) (max -0.0 0.0) (max 0.0 -0.0)))
+      (print (list (sz-signum -0.0) (sz-signum 0.0)))
+      (print (list (sz-sin -0.0) (sz-tan -0.0)))
+      (print (list (sz-mod -0.0 2.0) (sz-rem -0.0 2.0)))
+      (print (list (sz-eql -0.0 0.0) (sz-equal -0.0 0.0)))
+      (print (list (sz-eql -0.0 -0.0) (= -0.0 0.0)))
+    expected: |
+      (-0.0 0.0 0.0)
+      (-0.0 0.0)
+      (-0.0 0.0)
+      (-0.0 0.0 -0.0 0.0)
+      (-0.0 0.0)
+      (-0.0 -0.0)
+      (-0.0 -0.0)
+      (NIL NIL)
+      (T T)
+  # min/max resolve a tie and an unordered pair with ONE rule -- min is (a <= b) ? a : b
+  # and max is (a >= b) ? a : b, IEEE comparisons -- so NaN is the same question as the
+  # signed-zero tie and belongs beside it.
+  - name: min-max-nan-is-unordered-so-the-right-operand-wins
+    source: |
+      (defun mm-min (a b) (min a b))
+      (defun mm-max (a b) (max a b))
+      (let ((n (/ 0.0 0.0)) (one 1.0))
+        (print (list (mm-min n one) (mm-min one n)))
+        (print (list (mm-max n one) (mm-max one n))))
+      (print (list (min (/ 0.0 0.0) 1.0) (min 1.0 (/ 0.0 0.0))))
+      (print (list (max (/ 0.0 0.0) 1.0) (max 1.0 (/ 0.0 0.0))))
+    expected: |
+      (1.0 NaN)
+      (1.0 NaN)
+      (1.0 NaN)
+      (1.0 NaN)
   - name: unless
     source: |
       (print (unless nil 42))

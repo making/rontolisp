@@ -756,6 +756,38 @@ final class WasmEmitHelper {
 	// symbol/string offset compare. Leaves an i32 (0/1) on the stack. Extracted so the
 	// shared TYPE_CHAR helper can be used from both emitEqComparison and
 	// emitEqlComparison without duplicating the char-compare shape.
+	/** Pushes the f64 field of the float struct in {@code slot}. */
+	private static void emitFloatField(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(0);
+	}
+
+	/**
+	 * Two float structs compared the way {@code Double.equals} compares: equal bit
+	 * patterns, or both NaN. See the call site in {@link #emitEqlNonCharTail} for why
+	 * this is not {@code f64.eq}.
+	 */
+	private static void emitFloatFieldBitsEqual(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
+		emitFloatField(ctx, aSlot);
+		ctx.writer.write(Instruction.I64_REINTERPRET_F64);
+		emitFloatField(ctx, bSlot);
+		ctx.writer.write(Instruction.I64_REINTERPRET_F64);
+		ctx.writer.write(Instruction.I64_EQ);
+		emitFloatField(ctx, aSlot);
+		emitFloatField(ctx, aSlot);
+		ctx.writer.write(Instruction.F64_NE);
+		emitFloatField(ctx, bSlot);
+		emitFloatField(ctx, bSlot);
+		ctx.writer.write(Instruction.F64_NE);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.I32_OR);
+	}
+
 	private static void emitEqlNonCharTail(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
 		// Both boxed integers: compare i64 fields (the _int_new normalization keeps
 		// every in-range integer an i31, so a boxed value only ever equals another
@@ -806,21 +838,14 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.writeUnsignedLeb128(0);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.writeUnsignedLeb128(0);
-		ctx.writer.write(Instruction.F64_EQ);
+		// Equal BIT PATTERNS, or both NaN -- not f64.eq. f64.eq is the numeric
+		// comparison, which calls -0.0 and 0.0 equal; CLHS makes those two = but NOT
+		// eql, and the interpreter (Double.equals) and the JVM backend (_eqv) both
+		// answer NIL, as does upstream Common Lisp. The both-NaN arm is what keeps this
+		// identical to Double.equals rather than merely bitwise: doubleToLongBits folds
+		// every NaN onto one canonical pattern, so Java calls a NaN and that same NaN
+		// negated equal, where their raw bits differ in the sign bit.
+		emitFloatFieldBitsEqual(ctx, aSlot, bSlot);
 		ctx.writer.write(Instruction.ELSE);
 		// Both ratios: compare numerators and denominators
 		ctx.writer.write(Instruction.GET_LOCAL);

@@ -192,15 +192,13 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
 		w.write(Instruction.ELSE);
 
-		// both floats -> f64 fields equal
+		// both floats -> f64 fields equal AS BITS, not numerically
 		refTest(w, 0, WasmLispCompiler.TYPE_FLOAT);
 		refTest(w, 1, WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
-		floatField(w, 0);
-		floatField(w, 1);
-		w.write(Instruction.F64_EQ);
+		emitFloatBitsEqual(w);
 		w.write(Instruction.ELSE);
 
 		// both ratios -> numerators and denominators equal
@@ -1001,6 +999,38 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.writeUnsignedLeb128(0);
+	}
+
+	/**
+	 * {@code eql}/{@code equal} on two floats held in locals 0 and 1: equal BIT PATTERNS,
+	 * or both NaN.
+	 * <p>
+	 * Not {@code f64.eq}, which is the numeric comparison and so calls {@code -0.0} and
+	 * {@code 0.0} equal. CLHS makes those two {@code =} but NOT {@code eql}, and both
+	 * other backends answer {@code NIL} for them -- the interpreter through
+	 * {@code Double.equals} and the JVM backend through {@code _eqv} -- as does upstream
+	 * Common Lisp.
+	 * <p>
+	 * The both-NaN arm is what keeps this identical to {@code Double.equals} rather than
+	 * merely bitwise: {@code Double.doubleToLongBits} folds every NaN onto one canonical
+	 * pattern, so Java calls two NaNs {@code equals} however they were produced, while
+	 * raw bits would separate a NaN from that same NaN negated (the sign bit differs, and
+	 * {@code f64.neg} flips it without otherwise disturbing the payload).
+	 */
+	private static void emitFloatBitsEqual(WasmWriter w) {
+		floatField(w, 0);
+		w.write(Instruction.I64_REINTERPRET_F64);
+		floatField(w, 1);
+		w.write(Instruction.I64_REINTERPRET_F64);
+		w.write(Instruction.I64_EQ);
+		floatField(w, 0);
+		floatField(w, 0);
+		w.write(Instruction.F64_NE);
+		floatField(w, 1);
+		floatField(w, 1);
+		w.write(Instruction.F64_NE);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
 	}
 
 	private static void bignumField(WasmWriter w, int local) {

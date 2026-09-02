@@ -846,14 +846,28 @@ final class WasmVecSimdRuntimeBuilder {
 	 */
 	static void emitSignumF64(WasmWriter w, int xLocal) {
 		WasmVecLoops.set(w, xLocal);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_GT);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_LT);
+		// (x > 0) - (x < 0), but only once x is known nonzero and ordered -- both
+		// comparisons are false for +0.0, -0.0 and NaN alike, so the subtraction alone
+		// answers +0.0 for all three. Guarding on (x > 0 || x < 0) and otherwise
+		// answering x keeps -0.0 and NaN intact, mirroring WasmSignumCompiler's boxed
+		// defun path (which this must stay byte-equivalent to).
+		signCompare(w, xLocal, Instruction.F64_GT);
+		signCompare(w, xLocal, Instruction.F64_LT);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, Type.F64.code());
+		signCompare(w, xLocal, Instruction.F64_GT);
+		signCompare(w, xLocal, Instruction.F64_LT);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.ELSE);
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.END);
+	}
+
+	private static void signCompare(WasmWriter w, int xLocal, int cmp) {
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(cmp);
 	}
 
 	/**
@@ -1028,7 +1042,22 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.IF, Type.F64.code());
 		w.write(Instruction.F64_CONST).writeF64(Double.NaN);
 		w.write(Instruction.ELSE);
+		// The odd functions' zero rung, mirroring WasmSinCosCompiler: sin(+/-0.0) and
+		// tan(+/-0.0) are the argument itself, which the Cody-Waite reduction cannot
+		// produce (its -0.0 - (-0.0) cancels to +0.0). cos is even and takes no rung.
+		boolean odd = scalarOp == SCALAR_OP_SIN || scalarOp == SCALAR_OP_TAN;
+		if (odd) {
+			WasmVecLoops.get(w, x);
+			w.write(Instruction.F64_CONST).writeF64(0.0);
+			w.write(Instruction.F64_EQ);
+			w.write(Instruction.IF, Type.F64.code());
+			WasmVecLoops.get(w, x);
+			w.write(Instruction.ELSE);
+		}
 		emitSinCosMainF64(w, scalarOp, x, k, z, s, c);
+		if (odd) {
+			w.write(Instruction.END);
+		}
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 	}

@@ -2803,11 +2803,26 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		Ty target = staticType(cons, fn);
 		if (target == Ty.FLOAT) {
+			// The same select the other backends fold with -- min(a,b) = (a<=b) ? a : b,
+			// max(a,b) = (a>=b) ? a : b -- rather than f64.min/f64.max, which resolve a
+			// +/-0.0 tie by SIGN and propagate NaN from either side. Shaped like the
+			// integer fold below, on f64 locals.
+			int acc = fn.allocLocal(Ty.FLOAT);
 			compileCoerced(args.get(1), fn, Ty.FLOAT);
+			fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(acc);
 			for (int i = 2; i < args.size(); i++) {
+				int t = fn.allocLocal(Ty.FLOAT);
 				compileCoerced(args.get(i), fn, Ty.FLOAT);
-				fn.writer.write(min ? Instruction.F64_MIN : Instruction.F64_MAX);
+				fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(t);
+				fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(acc);
+				fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(t);
+				fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(acc);
+				fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(t);
+				fn.writer.write(min ? Instruction.F64_LE : Instruction.F64_GE);
+				fn.writer.write(Instruction.SELECT);
+				fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(acc);
 			}
+			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(acc);
 			return Ty.FLOAT;
 		}
 		int acc = fn.allocLocal(Ty.INT);
@@ -2872,6 +2887,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		fn.writer.write(mod ? Instruction.F64_FLOOR : Instruction.F64_TRUNC);
 		fn.writer.write(Instruction.F64_MUL);
 		fn.writer.write(Instruction.F64_SUB);
+		// A zero remainder takes the sign of the DIVIDEND, as IEEE fmod defines it and as
+		// every other backend computes it. The subtraction cannot produce that alone:
+		// f64.floor/f64.trunc keep the sign of a zero quotient, so a = -0.0 gives
+		// b*q = -0.0 and the cancellation -0.0 - (-0.0) is +0.0. Nonzero remainders keep
+		// the sign they already have.
+		int r = fn.allocLocal(Ty.FLOAT);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(r);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(r);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(a);
+		fn.writer.write(Instruction.F64_COPYSIGN);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(r);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(r);
+		fn.writer.write(Instruction.F64_CONST).writeF64(0.0);
+		fn.writer.write(Instruction.F64_EQ);
+		fn.writer.write(Instruction.SELECT);
 		return Ty.FLOAT;
 	}
 

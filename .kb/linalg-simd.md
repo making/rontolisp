@@ -800,39 +800,78 @@ match each other: `(linalg:amax #d(-0.0 0.0))` is `-0.0` everywhere (first-eleme
 win, since IEEE `>` is false on a `0.0`/`-0.0` tie). `-0.0` / NaN comparison cases are
 allowed in `ci-spec.yaml` now; the float-edge cases there pin the convergence.
 
-`abs` and unary minus joined them on 2026-09-02 (above). A full signed-zero sweep run
-in that change -- every float operator that can carry a sign of zero, each value reaching
-it through a `defun` parameter so no literal path is in play -- left TEN rows still
-diverging, and they are the exception to the sentence above: keep such forms out of
-`ci-spec.yaml` until `.todo/648` settles them. Measured on all four backends built from
-one tree; wasm-GC and the component agreed on every row, so they are one column:
+`abs` and unary minus joined them on 2026-09-02 (above). A full signed-zero sweep run in
+that change -- every float operator that can carry a sign of zero -- left TEN more rows
+diverging; **todo-648 closed all ten on 2026-09-02**, so the whole signed-zero surface now
+reads identically on the interpreter, the JVM, wasm-GC and the component, and the forms
+below are `ci-spec.yaml` cases (`signed-zero-across-every-float-operator`,
+`min-max-nan-is-unordered-so-the-right-operand-wins`) rather than something to keep out of
+it. `--no-gc` was converged in the same change.
 
-| form (`nz` = `-0.0`, `pz` = `0.0`) | interpreter | JVM | wasm |
-| --- | --- | --- | --- |
-| `(+ nz nz)` | **`0.0`** | `-0.0` | `-0.0` |
-| `(min nz pz)` / `(min pz nz)` | `-0.0` / `-0.0` | `-0.0` / `0.0` | `0.0` / `-0.0` |
-| `(max nz pz)` / `(max pz nz)` | `0.0` / `0.0` | `-0.0` / `0.0` | `0.0` / `-0.0` |
-| `(signum nz)` | `-0.0` | `-0.0` | **`0.0`** |
-| `(sin nz)` / `(tan nz)` | `-0.0` | `-0.0` | **`0.0`** |
-| `(mod nz 2.0)` / `(rem nz 2.0)` | `-0.0` | `-0.0` | **`0.0`** |
-| `(eql nz pz)` / `(equal nz pz)` | `NIL` | `NIL` | **`T`** |
+The settled answers, all four backends, literal path and variable path alike (`nz` =
+`-0.0`, `pz` = `0.0`):
 
-- **Variable-path `min`/`max`**, off the double-literal fast path: the JVM `_min`/`_max`
-  are a `buildSelect` over `_cmp` (not `Math.min`) and wasm's are a `_rat_cmp` select, so
-  NaN does not propagate and a +/-0.0 tie picks by position -- unlike the literal path,
-  which is `Math.min`/`Math.max`. The measurement above makes it a THREE-way split, not
-  the two-way one this bullet used to describe: the interpreter answers by SIGN
-  (`Math.min`/`Math.max` semantics), the JVM answers the FIRST argument on a tie, wasm
-  the SECOND.
-- **`eql`/`equal` on `-0.0` vs `0.0`** is no longer unaudited: the interpreter and the JVM
-  answer `NIL` (CLHS makes them `=` but not `eql`), wasm answers `T`.
-- **`(+ nz nz)`** is the one row where the INTERPRETER is the odd one out, and it is not a
-  permitted choice -- IEEE gives `-0.0`, which both compilers produce.
+| form | answer | why |
+| --- | --- | --- |
+| `(+ nz nz)` / `(+ nz pz)` | `-0.0` / `0.0` | IEEE 754 |
+| `(min nz pz)` / `(min pz nz)` | `-0.0` / `0.0` | tie keeps the LEFT operand |
+| `(max nz pz)` / `(max pz nz)` | `-0.0` / `0.0` | tie keeps the LEFT operand |
+| `(min nan x)` / `(min x nan)` | `x` / `NaN` | unordered, so the RIGHT operand wins |
+| `(signum nz)` / `(signum nan)` | `-0.0` / `NaN` | `Math.signum` |
+| `(sin nz)` / `(tan nz)` | `-0.0` | odd functions |
+| `(mod nz 2.0)` / `(rem nz 2.0)` | `-0.0` | a zero remainder takes the DIVIDEND's sign |
+| `(eql nz pz)` / `(equal nz pz)` | `NIL` | float `eql` is a BIT compare |
 
-Everything else in the sweep agreed on all four: `abs`, unary minus, binary `+ - * /` sign
-propagation, `1/x` on either zero, `sqrt`, `float`, `floor`/`ceiling`/`truncate`/`round`,
-`asin`, `atan`, `exp`, `expt`, `< > = zerop minusp plusp`, `equalp`, `princ-to-string`,
-`format ~a`/`~s`, `coerce` to either width, and a `#f` element stored and read back.
+**`min`/`max` are one rule on both edge axes**: `min(a,b) = (a <= b) ? a : b` and
+`max(a,b) = (a >= b) ? a : b`, with the IEEE comparisons -- so an equal-value tie keeps the
+accumulator (the leftmost argument wins) and an unordered pair fails the test (a NaN
+operand always yields `b`). CLHS leaves the tie implementation-dependent and says nothing
+about NaN, so the oracle is upstream: **verified against SBCL bit-for-bit over all 98
+ordered pairs from `{-0.0, 0.0, 1.0, -1.0, NaN, +inf, -inf}`** (2026-09-02), where the
+formula holds exactly. Deliberately NOT `Math.min`/`f64.min`, which resolve the tie by SIGN
+whichever way round the arguments come and propagate NaN from either side. Before 648 the
+tie was a THREE-way split through variables (interpreter by sign, JVM first argument, wasm
+second) AND disagreed with each backend's own double-LITERAL fast path, which was
+`Math.min`/`f64.min` on all three -- one program could answer two different things
+depending on whether an operand happened to be written as a literal. The literal fast paths
+survive (`JvmMinCompiler` calls the new `_fmin`/`_fmax` `(DD)D` helpers, `WasmMinMaxCompiler`
+emits a native `f64.le`/`f64.ge`), they just compute the same select as the general path.
+
+- **`eql`/`equal` on `-0.0` vs `0.0`** is `NIL` everywhere: CLHS makes the two `=` but not
+  `eql`, and SBCL agrees. wasm compared with `f64.eq` (the NUMERIC comparison) and answered
+  `T`; it now compares bits, OR-ed with a both-NaN arm so it stays identical to
+  `Double.equals` -- which folds every NaN onto one pattern, so a NaN and that same NaN
+  negated are still `eql` even though their raw bits differ in the sign bit.
+- **`mod`/`rem`**: a zero remainder takes the sign of the DIVIDEND (IEEE `fmod`, hence
+  Java's `DREM`). wasm synthesizes the remainder as `a - b*floor|trunc(a/b)`, and
+  `f64.floor`/`f64.trunc` keep the sign of a zero quotient, so `-0.0 - (-0.0)` cancelled to
+  `+0.0`; the zero result is now re-signed with `f64.copysign` from the dividend. NOTE that
+  SBCL differs here on the *other* zero cases -- it computes `a - b*q` with an exact INTEGER
+  `q`, giving `(rem -4.0 2.0)` = `0.0` and `(mod -0.0 -2.0)` = `0.0` where all four of our
+  backends give `-0.0`. That is a `mod`/`rem` definition question, not a signed-zero one,
+  and it was left alone: see `.todo/`.
+- **`signum`/`sin`/`tan`** flattened on wasm because each computes the answer by a route
+  that erases the sign -- `(x>0)-(x<0)` is `+0.0` for `+0.0`, `-0.0` and NaN alike, and the
+  Cody-Waite reduction's `-0.0 - (-0.0)` cancels to `+0.0`. Each now guards the zero (and,
+  for `signum`, the NaN) case and answers the argument itself. The `--simd` kernels
+  (`WasmVecSimdRuntimeBuilder.emitSignumF64` / `emitSinCosF64`, shared by `vec:`, `linalg:`
+  and `--no-gc`) carry the SAME guards -- they are pinned byte-identical to the scalar
+  defun path by `wasmGcSimdUnaryUfuncsAreByteIdenticalToTheScalarPath` and its `linalg`
+  twin, which fail if only one side is changed.
+
+**Still divergent, and deliberately out of 648's scope**: float CONTAGION in `min`/`max`.
+`(min 1 2.0)` is `1.0` on the interpreter (it coerces when any argument is a float) but the
+integer `1` on both compilers' general path, which hand back the winning operand as it
+stands -- and `1.0` on the JVM's literal path, so that backend disagrees with itself.
+**SBCL answers `1`**, and CLHS explicitly leaves it implementation-dependent whether
+`max`/`min` apply float contagion. Converging it changes a printed TYPE rather than a
+printed sign, so it wants its own item: see `.todo/`.
+
+Everything else in the sweep agreed on all four from the start: `abs`, unary minus, binary
+`+ - * /` sign propagation, `1/x` on either zero, `sqrt`, `float`,
+`floor`/`ceiling`/`truncate`/`round`, `asin`, `atan`, `exp`, `expt`,
+`< > = zerop minusp plusp`, `equalp`, `princ-to-string`, `format ~a`/`~s`, `coerce` to
+either width, and a `#f` element stored and read back.
 
 ## Per-backend mechanics
 

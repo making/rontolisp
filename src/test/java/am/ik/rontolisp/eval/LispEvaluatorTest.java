@@ -15887,18 +15887,56 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void minMaxHandleSignedZerosAndNansLikeMathMinMax() {
-		assertThat(eval("(min 0.0 -0.0)")).isEqualTo(new LispDouble(-0.0));
+	void additionFollowsIeeeOnSignedZeroOperands() {
+		// The fold seeds from the first operand, not from an exact 0 -- 0.0 + -0.0 is
+		// 0.0,
+		// so an exact-zero seed would erase the sign of an all-negative-zero sum.
+		assertThat(eval("(+ -0.0 -0.0)")).isEqualTo(new LispDouble(-0.0));
+		assertThat(eval("(+ -0.0)")).isEqualTo(new LispDouble(-0.0));
+		assertThat(eval("(+ -0.0 -0.0 -0.0)")).isEqualTo(new LispDouble(-0.0));
+		// A single positive zero anywhere in the sum makes it positive, as IEEE requires.
+		assertThat(eval("(+ -0.0 0.0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(+ 0.0 -0.0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(+ -0.0 -0.0 0.0)")).isEqualTo(new LispDouble(0.0));
+		// Through variables, so no literal fast path can be in play.
+		assertThat(eval("(let ((nz -0.0)) (+ nz nz))")).isEqualTo(new LispDouble(-0.0));
+		// Ordinary sums are untouched.
+		assertThat(eval("(+ 1.5 2.5)")).isEqualTo(new LispDouble(4.0));
+		assertThat(eval("(+ 1 2.5)")).isEqualTo(new LispDouble(3.5));
+		assertThat(eval("(+ 1/2 0.5)")).isEqualTo(new LispDouble(1.0));
+	}
+
+	@Test
+	void minMaxSelectByIeeeComparisonSoTheLeftOperandWinsATie() {
+		// min(a,b) = (a <= b) ? a : b, max(a,b) = (a >= b) ? a : b, with the IEEE
+		// comparisons. Verified against SBCL bit-for-bit over every ordered pair drawn
+		// from {-0.0, 0.0, 1.0, -1.0, NaN, +inf, -inf}. NOT Math.min/Math.max.
+
+		// An equal-value tie keeps the accumulator, so the LEFTMOST argument wins.
 		assertThat(eval("(min -0.0 0.0)")).isEqualTo(new LispDouble(-0.0));
-		assertThat(eval("(max -0.0 0.0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(min 0.0 -0.0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(max -0.0 0.0)")).isEqualTo(new LispDouble(-0.0));
 		assertThat(eval("(max 0.0 -0.0)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(min 0 -0.0)")).isEqualTo(new LispDouble(-0.0));
+		// and the fold is left-associative, so a third argument cannot revive a sign
+		assertThat(eval("(min 0.0 -0.0 0.0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(max -0.0 0.0 -0.0)")).isEqualTo(new LispDouble(-0.0));
+		// an exact 0 ties with -0.0 too, and being leftmost it wins
+		assertThat(eval("(min 0 -0.0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(min -0.0 0)")).isEqualTo(new LispDouble(-0.0));
+
+		// NaN is unordered, so the comparison fails and the RIGHT operand is taken.
+		assertThat(eval("(min (/ 0.0 0.0) 1.0)")).isEqualTo(new LispDouble(1.0));
 		assertThat(eval("(min 1.0 (/ 0.0 0.0))")).isEqualTo(new LispDouble(Double.NaN));
-		assertThat(eval("(min (/ 0.0 0.0) 1.0)")).isEqualTo(new LispDouble(Double.NaN));
+		assertThat(eval("(max (/ 0.0 0.0) 1.0)")).isEqualTo(new LispDouble(1.0));
 		assertThat(eval("(max 1.0 (/ 0.0 0.0))")).isEqualTo(new LispDouble(Double.NaN));
-		assertThat(eval("(max (/ 0.0 0.0) 1.0)")).isEqualTo(new LispDouble(Double.NaN));
-		// float contagion on the result is unchanged
+
+		// ordinary selections and float contagion on the result are unchanged
 		assertThat(eval("(min 1 2.0)")).isEqualTo(new LispDouble(1.0));
+		assertThat(eval("(max 1 2.0)")).isEqualTo(new LispDouble(2.0));
+		assertThat(eval("(min 3 1 2)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(max 3 1 2)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(min -1.0 1.0)")).isEqualTo(new LispDouble(-1.0));
+		assertThat(eval("(max -1.0 1.0)")).isEqualTo(new LispDouble(1.0));
 	}
 
 	// ---- rontolisp:wit-import: one WIT, a provider per backend ----

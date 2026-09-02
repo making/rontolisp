@@ -115,7 +115,27 @@ final class WasmSinCosCompiler {
 		ctx.writer.write(Type.F64);
 		f64Const(ctx, Double.NaN);
 		ctx.writer.write(Instruction.ELSE);
+		// sin and tan are ODD, so sin(+/-0.0) and tan(+/-0.0) are the argument itself,
+		// sign of the zero included. The Cody-Waite reduction below cannot produce that:
+		// x = -0.0 gives k = -0.0, so k*PIO2_1 is -0.0 and the reduction's
+		// -0.0 - (-0.0) cancels to +0.0, flattening the sign before the polynomial ever
+		// runs. Answering the argument directly is also exact, and it is what Math.sin /
+		// Math.tan give the interpreter and the JVM backend. cos is EVEN -- cos(+/-0.0)
+		// is 1.0 -- and the main path already answers that, so it takes no zero rung.
+		boolean odd = LispNames.SIN.equals(name) || LispNames.TAN.equals(name);
+		if (odd) {
+			unbox(ctx, xSlot);
+			f64Const(ctx, 0.0);
+			ctx.writer.write(Instruction.F64_EQ);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.write(Type.F64);
+			unbox(ctx, xSlot);
+			ctx.writer.write(Instruction.ELSE);
+		}
 		emitMain(ctx, name, xSlot, kSlot, zSlot, sSlot, cSlot);
+		if (odd) {
+			ctx.writer.write(Instruction.END);
+		}
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		WasmExpCompiler.boxF64(ctx);
