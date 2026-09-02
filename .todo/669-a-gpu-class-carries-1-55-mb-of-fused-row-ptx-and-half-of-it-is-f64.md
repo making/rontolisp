@@ -15,6 +15,18 @@ against `softmax_f32` 170,811, and so on down). Metal does not support double at
 that still travels -- and the PTX travels to a Mac by design, since the machine that
 compiles is not the machine that runs.
 
+**Who pays is not who benefits, and that is what makes this a size item rather than a CUDA
+one.** Both kernel texts travel in every `--gpu` class, so a program compiled here and run
+on a Mac carries 1,885,029 bytes of PTX it can never execute (78.6% of the flag's cost),
+while one run on a CUDA box carries 71,701 bytes of MSL (3.0%) -- **the same design
+decision, twenty-six times heavier on one side.** The decision itself is right: the
+machine that compiles is not the machine that runs, and a class that only accelerates
+where it was born is not standalone. So "drop the PTX for Macs" is not available. What
+follows is that shrinking the family pays out to **everyone who CARRIES the PTX, not
+everyone who runs it** -- Mac users, anyone handed a `--gpu` class for a machine with no
+device, every environment where `Gpu.available()` is false. The population to weigh the
+saving against is the carriers, and it is larger than the users.
+
 **Price the ceiling before touching anything** (`.kb/measurement-probes.md`, rule 2): the
 most that can be saved is the `f64` half of the family, about 775 KB of a 2.4 MB class.
 Whether that is worth anything at all depends on what a compiled class's size is worth,
