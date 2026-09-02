@@ -6737,6 +6737,99 @@ class LispEvaluatorTest {
 			.isEqualTo("((1.0 1.0 1.0 1.0) (6.0 6.0 1.0 1.0) (3.0 3.0 Infinity Infinity))");
 	}
 
+	@Test
+	void theFloorFamilyQuotientWithAnInfiniteDivisorComposesWithItsOwnRemainder() {
+		// todo-666: 659 settled the REMAINDER for an infinite divisor by the CLHS
+		// formula (the truncating quotient of a finite dividend is the integer 0, so
+		// rem is the dividend itself, and mod's divisor-sign correction can push it to
+		// +/-Infinity); 660 made the quotient exact everywhere else but left this one
+		// regime alone -- the quotient stayed the f64 answer (0, from
+		// (floor (/ a b)) with a/b rounding to a signed zero), which does not compose
+		// with 659's remainder. There is no oracle here (SBCL signals on an infinite
+		// operand), so the quotient is settled by the formula 659 already used: with a
+		// finite nonzero dividend, a/b is an infinitesimal of magnitude under 1/2, so
+		// truncate and round are always 0, and floor/ceiling round it down or up --
+		// reading off whether the dividend and the divisor agree in sign.
+		//
+		// quotient*divisor + remainder = number holds only IN THE LIMIT (0 * Infinity
+		// is NaN in actual IEEE 754 arithmetic, not 0), so what this checks is the
+		// practical form of that identity: the quotient the formula names is the one
+		// whose remainder -- read off mod/rem exactly as every other magnitude -- is
+		// self-consistent, over both dividend signs, both divisor signs, and dividends
+		// of each numeric type the exact route accepts.
+		String posInf = "(/ 1.0 0.0)";
+		String negInf = "(/ -1.0 0.0)";
+		// {dividend, divisor, floorQ, ceilingQ, truncateQ, roundQ}
+		record Case(String a, String b, int floorQ, int ceilingQ, int truncateQ, int roundQ) {
+		}
+		List<Case> cases = List.of(
+				// same sign (positive/positive, negative/negative): floor 0, ceiling 1.
+				new Case("3.0", posInf, 0, 1, 0, 0), new Case("-3.0", negInf, 0, 1, 0, 0),
+				new Case("0.5", posInf, 0, 1, 0, 0), new Case("3", posInf, 0, 1, 0, 0),
+				new Case("100000000000000000000", posInf, 0, 1, 0, 0),
+				// different sign (negative/positive, positive/negative): floor -1,
+				// ceiling 0.
+				new Case("-3.0", posInf, -1, 0, 0, 0), new Case("3.0", negInf, -1, 0, 0, 0),
+				new Case("-0.5", posInf, -1, 0, 0, 0), new Case("-3", posInf, -1, 0, 0, 0),
+				new Case("-100000000000000000000", posInf, -1, 0, 0, 0));
+		for (Case c : cases) {
+			assertThat(eval("(floor %s %s)".formatted(c.a(), c.b()))).describedAs("(floor %s %s)", c.a(), c.b())
+				.isEqualTo(new LispInteger(c.floorQ()));
+			assertThat(eval("(ceiling %s %s)".formatted(c.a(), c.b()))).describedAs("(ceiling %s %s)", c.a(), c.b())
+				.isEqualTo(new LispInteger(c.ceilingQ()));
+			assertThat(eval("(truncate %s %s)".formatted(c.a(), c.b()))).describedAs("(truncate %s %s)", c.a(), c.b())
+				.isEqualTo(new LispInteger(c.truncateQ()));
+			assertThat(eval("(round %s %s)".formatted(c.a(), c.b()))).describedAs("(round %s %s)", c.a(), c.b())
+				.isEqualTo(new LispInteger(c.roundQ()));
+			// The remainder beside each quotient is read off mod/rem exactly as at any
+			// other magnitude (LispMacroExpander.floorFamilyRemainder); checking the
+			// multiple-value form end to end catches a quotient that no longer selects
+			// the remainder branch it should (round's selector compares its own
+			// quotient against floor's).
+			String mvSource = """
+					(list (multiple-value-list (floor %1$s %2$s))
+					      (multiple-value-list (ceiling %1$s %2$s))
+					      (multiple-value-list (truncate %1$s %2$s))
+					      (multiple-value-list (round %1$s %2$s))
+					      (mod %1$s %2$s)
+					      (rem %1$s %2$s))
+					""".formatted(c.a(), c.b());
+			LispVal result = evalMulti(mvSource);
+			List<LispVal> parts = ((LispCons) result).toList();
+			LispVal floorMv = parts.get(0);
+			LispVal ceilingMv = parts.get(1);
+			LispVal truncateMv = parts.get(2);
+			LispVal roundMv = parts.get(3);
+			LispVal mod = parts.get(4);
+			LispVal rem = parts.get(5);
+			String desc = "(a=%s b=%s)".formatted(c.a(), c.b());
+			// floor's remainder is mod, truncate's is rem -- CLHS, pinned since 652.
+			assertThat(((LispCons) floorMv).toList().get(1)).describedAs("floor remainder " + desc).isEqualTo(mod);
+			assertThat(((LispCons) truncateMv).toList().get(1)).describedAs("truncate remainder " + desc)
+				.isEqualTo(rem);
+			// round lands on whichever of floor's or ceiling's quotient it matches, and
+			// its remainder is the one that belongs to that choice.
+			LispVal roundQuotient = ((LispCons) roundMv).toList().get(0);
+			LispVal roundRemainder = ((LispCons) roundMv).toList().get(1);
+			if (roundQuotient.equals(((LispCons) floorMv).toList().get(0))) {
+				assertThat(roundRemainder).describedAs("round remainder (floor branch) " + desc).isEqualTo(mod);
+			}
+			else {
+				assertThat(roundQuotient).describedAs("round quotient " + desc)
+					.isEqualTo(((LispCons) ceilingMv).toList().get(0));
+				assertThat(roundRemainder).describedAs("round remainder (ceiling branch) " + desc)
+					.isEqualTo(((LispCons) ceilingMv).toList().get(1));
+			}
+		}
+		// An exact-zero dividend is genuinely zero, not an infinitesimal -- unaffected
+		// by this todo, and still the pre-existing f64 answer.
+		assertThat(eval("(multiple-value-list (floor 0.0 %s))".formatted(posInf)).print()).isEqualTo("(0 0.0)");
+		assertThat(eval("(multiple-value-list (floor -0.0 %s))".formatted(posInf)).print()).isEqualTo("(0 -0.0)");
+		// A ratio dividend still declines to the old route (ExactRounding's contract is
+		// unchanged there).
+		assertThat(eval("(floor 1/2 %s)".formatted(posInf))).isEqualTo(new LispInteger(0));
+	}
+
 	/** Renders a double the way the reader reads it back unchanged. */
 	private static String lispDouble(double d) {
 		return Double.toString(d).replace('E', 'e');
@@ -16009,6 +16102,84 @@ class LispEvaluatorTest {
 				(adjust-array v 3)
 				(list before (array-element-type v) (stringp v))
 				""").print()).isEqualTo("((CHARACTER T) CHARACTER T)");
+	}
+
+	@Test
+	void aPackedVectorCanBeADisplacementTarget() {
+		// The construction CLHS's :displaced-to element-type rule is WRITTEN for -- a
+		// view over a simple specialized vector -- and the one shape every backend used
+		// to refuse. Elements are the target's, so a read sees the packed storage, a
+		// write lands in it (masked to the element width, this surface's own rule), and
+		// array-element-type answers the target's real type rather than t.
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1))
+				(setf (aref v 1) 200)
+				(list (aref v 0) (aref v 1) (aref b 2) (array-element-type v)
+				      (length v) (array-dimensions v) (arrayp v) (vectorp v) (stringp v))
+				""").print()).isEqualTo("(7 200 200 (UNSIGNED-BYTE 8) 2 (2) T T NIL)");
+		// a store MASKS to the element width exactly as a store into the target does
+		// (SBCL 2.2.9 signals a type error instead -- the pre-existing packed-vector
+		// divergence, .kb/packed-integer-vectors.md, not a displacement question).
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1))
+				(setf (aref v 0) 300)
+				(list (aref v 0) (aref b 1))
+				""").print()).isEqualTo("(44 44)");
+		// array-displacement answers the packed target itself, and the chain resolves
+		// through a view of a view
+		assertThat(evalMulti("""
+				(setq b (make-array 8 :element-type '(unsigned-byte 16) :initial-element 3))
+				(setq v (make-array 6 :element-type '(unsigned-byte 16) :displaced-to b
+				                      :displaced-index-offset 1))
+				(setq w (make-array 2 :element-type '(unsigned-byte 16) :displaced-to v
+				                      :displaced-index-offset 2))
+				(setf (aref b 3) 9)
+				(multiple-value-bind (tgt off) (array-displacement v)
+				  (list (aref w 0) (array-element-type w) (eq tgt b) off))
+				""").print()).isEqualTo("(9 (UNSIGNED-BYTE 16) T 1)");
+		// a packed FLOAT array is a target on the same terms
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type 'double-float :initial-element 1.5d0))
+				(setq v (make-array 2 :element-type 'double-float :displaced-to b
+				                      :displaced-index-offset 1))
+				(setf (aref v 1) 2.5d0)
+				(list (aref v 0) (aref b 2) (array-element-type v))
+				""").print()).isEqualTo("(1.5 2.5 DOUBLE-FLOAT)");
+		// the view is bounds-checked against the packed target's own length
+		assertThatThrownBy(() -> evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(make-array 9 :element-type '(unsigned-byte 8) :displaced-to b)
+				""")).hasMessageContaining("too small");
+	}
+
+	@Test
+	void aViewOverAPackedTargetUndisplacesWhenItGrows() {
+		// The un-displace copies the current view contents into storage of its own and
+		// records the element type the view answered -- so the slots the growth OPENS
+		// take that type's zero, and the pushes that still FIT are visible in the packed
+		// target. SBCL 2.2.9 answers (7 5 6), (7 7 5 7) and 3 for exactly this program.
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1 :fill-pointer 1 :adjustable t))
+				(vector-push-extend 5 v)
+				(vector-push-extend 6 v)
+				(list (aref v 0) (aref v 1) (aref v 2) (array-element-type v)
+				      (multiple-value-list (array-displacement v)) (coerce b 'list) (length v))
+				""").print()).isEqualTo("(7 5 6 (UNSIGNED-BYTE 8) (NIL 0) (7 7 5 7) 3)");
+		// adjust-array un-displaces the same way, and the opened slot takes the zero
+		assertThat(evalMulti("""
+				(setq b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				(setq v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                      :displaced-index-offset 1 :adjustable t))
+				(adjust-array v 3)
+				(list (aref v 0) (aref v 2) (array-element-type v)
+				      (multiple-value-list (array-displacement v)))
+				""").print()).isEqualTo("(7 0 (UNSIGNED-BYTE 8) (NIL 0))");
 	}
 
 	@Test

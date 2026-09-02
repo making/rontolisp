@@ -45,7 +45,14 @@ public final class LispArray implements LispVal {
 	// flag, and both fields below are cleared in place when a full fill-pointered view
 	// grows -- vector-push-extend un-displaces rather than growing someone else's
 	// storage, exactly as SBCL does.
-	@Nullable private LispArray displacedTo;
+	//
+	// The target is a LispArray, a LispIntVector or a LispFloatArray: the PACKED
+	// representations are displacement targets on the same terms as a general array
+	// (a view over a simple specialized vector is the construction CLHS's
+	// :displaced-to element-type rule is written for), and the walk below ends on one
+	// instead of hopping. (A view over a STRING is a LispString view, not a LispArray
+	// -- the target decides the shape.)
+	@Nullable private LispVal displacedTo;
 
 	private int displacedOffset;
 
@@ -115,7 +122,7 @@ public final class LispArray implements LispVal {
 	 * @param target the array supplying the storage
 	 * @param offset the row-major index into {@code target} where the view starts
 	 */
-	public LispArray(int[] dimensions, LispArray target, int offset) {
+	public LispArray(int[] dimensions, LispVal target, int offset) {
 		this(dimensions, target, offset, -1, false);
 	}
 
@@ -129,7 +136,7 @@ public final class LispArray implements LispVal {
 	 * @param fillPointer the fill pointer, or {@code -1} for none (rank-1 views only)
 	 * @param adjustable whether the view was created {@code :adjustable}
 	 */
-	public LispArray(int[] dimensions, LispArray target, int offset, int fillPointer, boolean adjustable) {
+	public LispArray(int[] dimensions, LispVal target, int offset, int fillPointer, boolean adjustable) {
 		this.dimensions = dimensions;
 		this.data = NO_DATA;
 		this.fillPointer = fillPointer;
@@ -144,7 +151,27 @@ public final class LispArray implements LispVal {
 		// and the target -- itself possibly a view -- already resolved its own, so one
 		// hop is the whole chain. undisplace() then needs no special case: what the
 		// view answered while displaced is what it answers once it owns its storage.
-		this.elementTypeCode = target.elementTypeCode;
+		// A PACKED target's type is its representation rather than a remembered label,
+		// which is the same answer read a different way.
+		this.elementTypeCode = targetElementTypeCode(target);
+	}
+
+	// The element type a view over `target` answers: the target's own. A general array
+	// remembers it (and, being possibly a view itself, already resolved its chain); a
+	// packed vector IS its element type.
+	private static int targetElementTypeCode(LispVal target) {
+		return switch (target) {
+			case LispArray array -> array.elementTypeCode;
+			case LispIntVector iv -> switch (iv.width()) {
+				case 8 -> ArrayElementTypes.UNSIGNED_BYTE_8;
+				case 16 -> ArrayElementTypes.UNSIGNED_BYTE_16;
+				default -> ArrayElementTypes.UNSIGNED_BYTE_32;
+			};
+			case LispSingleFloatArray unused -> ArrayElementTypes.SINGLE_FLOAT;
+			case LispDoubleFloatArray unused -> ArrayElementTypes.DOUBLE_FLOAT;
+			default ->
+				throw new IllegalArgumentException("make-array: :displaced-to expects an array, got " + target.print());
+		};
 	}
 
 	/**
@@ -187,9 +214,10 @@ public final class LispArray implements LispVal {
 
 	/**
 	 * Returns the displacement target, or {@code null} when the array owns its storage.
-	 * @return the {@code :displaced-to} array, or {@code null}
+	 * @return the {@code :displaced-to} array (a {@link LispArray}, a
+	 * {@link LispIntVector} or a {@link LispFloatArray}), or {@code null}
 	 */
-	@Nullable public LispArray displacedTo() {
+	@Nullable public LispVal displacedTo() {
 		return this.displacedTo;
 	}
 
@@ -221,11 +249,16 @@ public final class LispArray implements LispVal {
 	 */
 	public LispVal readFlat(int flat) {
 		LispArray a = this;
-		LispArray target = a.displacedTo;
-		while (target != null) {
+		while (a.displacedTo != null) {
 			flat += a.displacedOffset;
-			a = target;
-			target = a.displacedTo;
+			if (!(a.displacedTo instanceof LispArray next)) {
+				// The chain ends on a PACKED target: its storage is the elements, read
+				// with that representation's own widening (unsigned for an integer
+				// vector, f32 -> f64 for a single-float array).
+				return a.displacedTo instanceof LispIntVector iv ? new LispInteger(iv.elementAt(flat))
+						: ((LispFloatArray) a.displacedTo).readFlat(flat);
+			}
+			a = next;
 		}
 		return a.data[flat];
 	}
@@ -237,13 +270,49 @@ public final class LispArray implements LispVal {
 	 */
 	public void writeFlat(int flat, LispVal value) {
 		LispArray a = this;
-		LispArray target = a.displacedTo;
-		while (target != null) {
+		while (a.displacedTo != null) {
 			flat += a.displacedOffset;
-			a = target;
-			target = a.displacedTo;
+			if (!(a.displacedTo instanceof LispArray next)) {
+				// A store through a view into a PACKED target is the target's own store:
+				// masked to the element width for an integer vector, narrowed to the
+				// backing width for a float array.
+				if (a.displacedTo instanceof LispIntVector iv) {
+					iv.setElement(flat, exactPackedInt(value));
+				}
+				else {
+					((LispFloatArray) a.displacedTo).setElement(flat, packedDouble(value));
+				}
+				return;
+			}
+			a = next;
 		}
 		a.data[flat] = value;
+	}
+
+	// The long a store into a packed integer vector contributes (its low bits; the
+	// vector masks to the element width). The message is Environment's own, so a store
+	// through a view reads like a store into the target.
+	private static long exactPackedInt(LispVal value) {
+		return switch (value) {
+			case LispInteger i -> i.value();
+			case LispBigInteger b -> b.value().longValue();
+			default -> throw new IllegalArgumentException(
+					"%aset: a packed integer vector stores integers, got " + value.print());
+		};
+	}
+
+	// The double a store into a packed float array contributes (a non-real is a type
+	// error -- there is no degrade path, exactly as make-array's packed float arm has
+	// none).
+	private static double packedDouble(LispVal value) {
+		return switch (value) {
+			case LispDouble d -> d.value();
+			case LispInteger i -> (double) i.value();
+			case LispBigInteger b -> b.value().doubleValue();
+			case LispRatio r -> r.doubleValue();
+			default ->
+				throw new IllegalArgumentException("%aset: a packed float array stores reals, got " + value.print());
+		};
 	}
 
 	/**

@@ -960,8 +960,8 @@ emits a native `f64.le`/`f64.ge`), they just compute the same select as the gene
   rounders), and wasm-GC's `_f64_fdiv` (`WasmFloatFdivRuntimeBuilder`, which builds the
   two rationals from the IEEE bits and hands them to the limb-tier `_big_fdiv` the
   two-exact-integer arm already used). All three DECLINE -- and keep the old f64 route --
-  for a ratio operand, a non-finite float and a zero divisor, so `(truncate 1.0 0.0)` and
-  `(truncate 3.0 inf)` are unmoved. Pinned by the `ci-spec.yaml` case
+  for a ratio operand, a non-finite dividend and a zero divisor, so `(truncate 1.0 0.0)`
+  is unmoved. Pinned by the `ci-spec.yaml` case
   `the-floor-family-quotient-is-exact-at-any-magnitude`, by
   `LispEvaluatorTest.theFloorFamilySecondValueIsTheRemainderCLHSDefines` (an
   exact-rational oracle sharing no code with the implementation, over all four operators)
@@ -975,11 +975,37 @@ emits a native `f64.le`/`f64.ge`), they just compute the same select as the gene
   mantissa product, which overflows i64 for any exponent spread past ~10. The remainder
   side is not affected: 659's exact `fmod` is inlined there and still exact.
 
-  Still open, filed separately: with an INFINITE divisor the quotient stays the f64 answer
-  (`0`) while the remainder is the limit value 659 settled (`(mod -3.0 inf)` is
-  `Infinity`, which corresponds to a floor quotient of `-1`), so the two do not compose in
-  that one regime; and `ffloor`/`fceiling`/`ftruncate`/`fround` do not exist in rontolisp
-  at all.
+  **An INFINITE divisor is settled by sign, not declined (todo-666, 2026-09-02).** It
+  used to keep the f64 answer -- `(floor -3.0 inf)` was the quotient `0`, from
+  `Math.floor(-0.0)` -- while `mod` already answered the limit value 659 settled
+  (`(mod -3.0 inf)` is `Infinity`, the remainder that belongs to a floor quotient of
+  `-1`), so the two halves of one operator disagreed. There is no oracle for this regime
+  either (SBCL signals on an infinite operand), so it is settled by the same kind of
+  formula 659 used for the remainder: with a FINITE NONZERO dividend, `a/b` is an
+  infinitesimal whose magnitude is always under 1/2 (dividing a bounded, nonzero value by
+  an unbounded one), so `truncate` and `round` are always `0`, and `floor`/`ceiling` round
+  that infinitesimal down or up -- `0` and `1` when the dividend and the divisor agree in
+  sign, `-1` and `0` when they do not. `(floor -3.0 inf)` is now `-1` with a remainder of
+  `Infinity`, composing exactly as `mod` already required. An EXACT-ZERO dividend (`0.0`,
+  an exact integer `0`, or a value that declines for another reason -- a ratio, a
+  non-finite dividend) still takes the old route, unmoved: `0/infinity` is genuinely zero,
+  not an infinitesimal, and `(floor 0.0 inf)` was already `0` with a remainder of `0.0`.
+  Per backend: `eval/ExactRounding.infiniteDivisorQuotient`, the JVM's
+  `JvmNumericRuntimeBuilder.emitInfiniteDivisorQuotient` (a new arm inside `_fdiv`, gated
+  on `Double.isInfinite` before the operands would reach `_frat` and decline), and
+  wasm-GC's `WasmFloatFdivRuntimeBuilder.emitInfiniteDivisorQuotient` (the same gate inside
+  `_f64_fdiv`, reusing `_big_cmp` to read an exact-integer dividend's sign including its
+  zero case). `--no-gc` cannot follow for the same reason as the magnitude case above --
+  it lowers `(floor a b)` to `(floor (/ a b))` and rounds the f64 quotient directly, with
+  no exact machinery to reach at all -- so `(floor -3.0 inf)` stays `0` there, a second
+  documented divergence alongside the magnitude one. Pinned by the extra rows in the
+  `ci-spec.yaml` case above, by
+  `LispEvaluatorTest.theFloorFamilyQuotientWithAnInfiniteDivisorComposesWithItsOwnRemainder`
+  and by a per-backend differential
+  `theFloorFamilyQuotientWithAnInfiniteDivisorMatchesTheInterpreter`.
+
+  `ffloor`/`fceiling`/`ftruncate`/`fround` still do not exist in rontolisp at all (a
+  separate todo).
 - **`signum`/`sin`/`tan`/`tanh`** flattened on wasm because each computes the answer by a
   route that erases the sign -- `(x>0)-(x<0)` is `+0.0` for `+0.0`, `-0.0` and NaN alike,
   the Cody-Waite reduction's `-0.0 - (-0.0)` cancels to `+0.0`, and `tanh`'s

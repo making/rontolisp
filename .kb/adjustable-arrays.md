@@ -1217,12 +1217,17 @@ element-type compatibility SBCL does, so a mismatched view is still
 constructible here and now answers its target's type rather than its declared
 one. That is the only behavior difference between the shape that landed and the
 shape the todo proposed, and it exists only in programs no conforming
-implementation runs. Separately, a PACKED integer vector or float array cannot
-be a displacement target on ANY backend (`MAKE-ARRAY expects an array` on the
-interpreter, a `ClassCastException` / `cast failure` on the compile paths), so
-every displacement target is a general array or a string and the resolved type
-is always a remembered LABEL rather than a representation -- which is why this
-was affordable at all. Filed as `.todo/664`.
+implementation runs. Separately, a PACKED integer vector or float array could
+not be a displacement target on ANY backend when this landed (`MAKE-ARRAY
+expects an array` on the interpreter, a `ClassCastException` / `cast failure` on
+the compile paths), so every displacement target was a general array or a string
+and the resolved type was always a remembered LABEL rather than a
+representation -- which is why this was affordable at all. **`.todo/664` (below)
+changed that**: a packed target IS a displacement target now, and the resolve
+walk ends on one. The element-type answer did not change shape for it -- the
+chain end's own representation IS the answer, read a different way -- so the
+`.kb` above still describes what runs; what moved is the COST, measured in
+`.todo/664`'s own section.
 
 Pinned by `LispEvaluatorTest.aDisplacedViewAnswersItsTargetsElementType` and
 `unDisplacingKeepsTheViewsOwnElementType`, the
@@ -1230,6 +1235,146 @@ Pinned by `LispEvaluatorTest.aDisplacedViewAnswersItsTargetsElementType` and
 `compileUnDisplacingKeepsTheViewsOwnElementType` twins in `JvmLispCompilerTest`
 and `WasmLispCompilerIntegrationTest`, and the
 `adjust-array-undisplaces-cross-backend` ci-spec case (all four backends,
+byte-identical).
+
+### A PACKED vector is a displacement target (`.todo/664`, 2026-09-02)
+
+**Invariant: `make-array :displaced-to` accepts a PACKED integer vector or
+packed float array as the target, on all four backends, and the view reads and
+writes that unboxed storage with the target representation's own element
+semantics.** This is the construction CLHS's `:displaced-to` element-type rule
+is WRITTEN for -- a view over a simple specialized vector -- and it was the one
+shape every backend refused: the interpreter signalled `MAKE-ARRAY expects an
+array`, the JVM raised a raw `ClassCastException: [J cannot be cast to
+ArrayList` and both wasm backends a bare `cast failure`. Two of those are a
+HOST-level crash on ordinary user input, which is the same missing-diagnostic
+gap `.todo/627` closed for `adjust-array` on a packed argument.
+
+The todo offered two shapes -- refuse clearly, or support -- and told the worker
+to price the support arm first, because **`emitResolveDataAndIndex` was inline
+at every `aref`/`aset` site on wasm**, so a third arm there would be a per-site
+bill on the hottest array path. **That premise was stale**: `.todo/647` had
+already moved that walk into the shared `_arr_get` / `_arr_set` bodies
+(`WasmArrayRuntimeBuilder`, "a loop of about forty-five instructions ... Here it
+is two functions"), and those two functions live at FIXED indices emitted for
+every program. So the walk's third arm is a per-PROGRAM cost on wasm, not a
+per-site one, and the support arm was affordable. Measured, then landed.
+
+What the view IS: an ordinary general-array view whose data slot holds the
+packed value. No new representation, no header-length or marker change --
+
+- **Interpreter**: `LispArray.displacedTo` widened from `LispArray` to
+  `LispVal` (a `LispArray`, a `LispIntVector` or a `LispFloatArray`; a view over
+  a STRING is a `LispString` view, not a `LispArray`). `readFlat`/`writeFlat`
+  walk while the target is a `LispArray` and END on a packed one, reading with
+  that representation's widening and writing with its masking/narrowing;
+  the element type is inherited at birth from the target exactly as `.todo/661`
+  set up, with the packed widths mapping to their own `ArrayElementTypes` codes.
+  `Environment`'s displaced arm bounds-checks against `LispIntVector.length()` /
+  `LispFloatArray.totalSize()`.
+- **JVM**: the header is the same length-5 `{dims, fp, adj, target, offsetLong}`
+  with a `long[]` / `double[]` / `float[]` in slot 3, so nothing that reads a
+  header LENGTH moved. `emitResolveDisplacement` already stopped on a
+  non-`ArrayList` target (that is how a string view ends), so only the arm it
+  hands off to had to learn the three packed shapes: `_rmGet` /`_rmSet` dispatch
+  `long[]` (element `flat` at `[1 + flat]`, which the 1-based index already IS),
+  `double[]`/`float[]` (`[1 + rank + flat]`) and only then the String.
+  `_arrayMakeDisplaced` sizes a packed target from its own length,
+  `_arrayElementType` answers a packed hop's representation, and
+  `_arrayUndisplace` records that same answer in the freed offset slot through
+  one shared `emitPackedElementTypeInto` -- the shapes `_ivElementType` /
+  `_fvElementType` answer and `_arrayDefaultElement` reads back, so a grown
+  view's opened slots take the right zero. The float store goes through the
+  shared `_dbl` coercion the packed float accessors already use.
+- **wasm**: `emitResolve`'s trailing "fold in this view's own offset" test
+  became "the data slot is not the buckets array" (one byte, and it now covers
+  the packed end as well as the string end). `_arr_get` gained a packed read
+  arm, `_arr_set` a packed WRITE arm that then answers the value AS STORED by
+  calling `_arr_get` back on the ORIGINAL index (kept in a local before the
+  walk folds it) rather than carrying a second copy of the read -- 118 bytes of
+  every array program. `emitTargetDimsProduct` sizes a packed target
+  (`array.len` for an integer vector, the dims product for an farray),
+  `emitRememberedElementType` answers for a packed chain end, `_arr_undisplace`
+  records that chain end's marker, and `emitDataSlotIsTarget` became the same
+  "not buckets" test (which made it SMALLER). The array printer's element read
+  falls back to `_arr_get` when the chain ended on a packed target. `--simd`
+  travels: the farray arms take the vblock `_v_get`/`_v_set` path, so
+  `buildArrGetBody`/`buildArrSetBody`/`buildArrUndisplaceBody` take the flag the
+  way `WasmPackedIoRuntimeBuilder` already did.
+
+**Size cost, measured 2026-09-02** (`--optimize=size`, raw wasm; JVM `.class`).
+Decomposed on control programs (`q0` = an array program with neither
+`array-element-type` nor displacement; `q1`/`q2` add 1 and 3
+`array-element-type` sites; `q3`/`q4` add 1 and 3 `:displaced-to` sites):
+
+| where | wasm | class |
+| --- | ---: | ---: |
+| per array-using PROGRAM | +382 | +392 |
+| per `array-element-type` site | +0 | +0 |
+| per `make-array :displaced-to` site | +86 | +0 |
+| first `:displaced-to` in a program | (in the per-site figure) | +84 |
+
+| program | wasm before | wasm after | class before | class after |
+| --- | ---: | ---: | ---: | ---: |
+| `zlib` (`size-report/programs`) | 122,120 | 122,909 (+789, +0.65%) | 165,978 | 166,387 (+409, +0.25%) |
+| `cl-ppcre` (`examples/asdf/cl-ppcre-demo.lisp`) | 572,735 | 573,567 (+832, +0.15%) | 707,883 | 708,527 (+644, +0.09%) |
+| `jzon` (`examples/asdf/jzon-demo.lisp`) | 497,185 | 498,212 (+1,027, +0.21%) | 538,228 | 538,731 (+503, +0.09%) |
+
+**Reading those numbers.** The `array-element-type` site cost is ZERO because
+the packed arm sits inside `emitRememberedElementType`'s existing
+`typedArrayCodes != 0` guard: a program that asks for no specialized element
+type still gets the bare constant `t` it always got. The bulk is the
+per-program constant in the two shared bodies, which is why the ratio is worst
+on the SMALLEST program (zlib) and settles at ~0.1-0.2% on the real ones -- the
+same order as `.todo/661`'s +0.03..0.16%, for a conformance gap plus two
+backends' raw crash. **It is bought by every array program, including one that
+never displaces**; the obvious refinement is a program-level "this program
+displaces / can build a packed vector" gate, which the JVM half already gets
+for free (the class shaker drops `_arrayMakeDisplaced` when unused: the +84 row
+is only paid by a program that displaces at all). The wasm backend has no such
+packed-usage flag today -- it emits the packed types unconditionally by design
+("the farray types always exist on the GC backend") -- so adding one is a new
+program scan, and at 382 bytes it was not worth buying here.
+
+**`.todo/661`'s own cost did NOT move.** Its price was a chain WALK plus a
+marker read, and both are unchanged: the packed arm is an extra `ref.test` on
+the walk's exit, not a new arm inside it, and the resolved element type is still
+read from the chain end -- from its representation rather than from its marker
+word, which costs the same nothing per array. What 661 recorded as the reason
+its resolution was cheap ("every displacement target's element type is a
+remembered LABEL") is now false as stated, and the conclusion survives it: a
+packed target's type is a property of the target too, just read out of its width
+instead of a word.
+
+Diffed against SBCL 2.2.9 on 2026-09-02, byte-identical on all four backends
+and SBCL: the canonical `(unsigned-byte 8)` view (read, write-through, element
+type, length, dimensions, `arrayp`/`vectorp`/`stringp`), a view of a view over a
+packed target with `array-displacement` on the middle hop, a `double-float`
+target, a fill-pointered view that `vector-push-extend`s past its span (the
+un-displace: `(7 5 6)`, `array-displacement` `(NIL 0)`, the target `(7 7 5 7)`),
+`adjust-array` across the un-displace (the opened slot reads `0`, not `NIL`),
+the printed view, and a rank-1 view over a rank-2 `double-float` target. The
+only difference is the `d0` suffix on printed doubles, which is rontolisp's
+own float-printing convention everywhere and not a displacement question.
+(SBCL's compiler DELETES a `make-array` whose value is only asked for its
+`array-element-type`, so every oracle program READS an element -- the trap
+`.todo/661` recorded.)
+
+**Two deliberate divergences from SBCL, both pre-existing and both this
+surface's own rule rather than displacement's**: a store of an out-of-range
+integer through the view MASKS to the element width where SBCL signals a type
+error (`.kb/packed-integer-vectors.md`'s invariant, which a direct store into
+the target already follows), and rontolisp still does not enforce
+`:displaced-to`'s element-type compatibility, so a `T`-declared view over a
+packed target -- which SBCL refuses outright -- is constructible here and
+answers the target's type (`.todo/661`'s recorded gap, unchanged).
+
+Pinned by `LispEvaluatorTest.aPackedVectorCanBeADisplacementTarget` /
+`aViewOverAPackedTargetUndisplacesWhenItGrows`, the
+`compileAPackedVectorCanBeADisplacementTarget` /
+`compileAViewOverAPackedTargetUndisplacesWhenItGrows` twins in
+`JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest`, and three legs of
+the `adjust-displaced-arrays-cross-backend` ci-spec case (all four backends,
 byte-identical).
 
 **`adjust-array` on a displaced array un-displaces it first (`.todo/657`,
@@ -1322,6 +1467,94 @@ existing parity bar
 Still deliberately NOT supported: `adjust-array` on a packed integer vector or
 a packed float array, a different decision covered above ("What is still NOT
 supported").
+
+### The packed-displacement arms' 382-byte tax: measured, not gated (`.todo/668`, 2026-09-02)
+
+`.todo/664`'s per-program cost (+382 wasm / +392 class, above) is paid by
+every array-using program whether or not it ever builds a packed vector or
+displaces anything. `.todo/668` was filed to price a program-level gate --
+"can this program build a packed integer vector or packed float array" AND/OR
+"does it call `make-array` with `:displaced-to`" -- that would skip emitting
+the packed arms in `_arr_get`/`_arr_set`/`_arr_undisplace` when neither can
+happen. **Measured and NOT implemented**: the theoretical win is real but
+capped at the existing per-program constant, and a gate sound enough to trust
+at runtime (a false negative does not fail to compile -- it corrupts a
+running program) costs more to build and maintain than 382 bytes justifies.
+
+**What a gate would recover, per real program.** Read (not compiled) against
+`size-report/programs/zlib/zlib.lisp` (+ the quickloaded chipz sources at
+`~/.rontolisp/quicklisp/software/chipz-*`), `examples/asdf/cl-ppcre-demo.lisp`
+(+ the vendored `src/test/resources/cl-ppcre/*.lisp`), and
+`examples/asdf/jzon-demo.lisp` (+ the vendored `src/test/resources/jzon/src/*.lisp`
+and the flexi-streams shim it pulls in, `src/main/resources/am/ik/rontolisp/eval/flexi-streams.lisp`):
+
+| program | builds a packed vector? | calls `make-array :displaced-to`? | gate fires? |
+| --- | --- | --- | --- |
+| zlib (+chipz) | yes -- `(unsigned-byte 8)` input buffer; chipz itself has no `unsigned-byte`/float packed arrays either, so this is the ONLY one | no -- zero `:displaced-to` anywhere in zlib.lisp or chipz | yes (382/392 bytes) |
+| cl-ppcre | no -- every `make-array` in the vendored source is `'fixnum`/`'character`/`'(or null fixnum)`, none of which is packed per `JvmArrayCompiler.packedIntElementWidth`/`isSingleFloatElementType`/`isDoubleFloatElementType` | yes -- `cl-ppcre/util.lisp`'s `nsubseq` (`:displaced-to sequence :element-type (array-element-type sequence)`), but only ever onto a STRING, never a packed target | yes (382/392 bytes) |
+| jzon (+flexi-streams, closer-mop, uiop, ...) | yes -- flexi-streams' octet-buffer helper (`(make-array ... :element-type '(unsigned-byte 8))`, no fill-pointer/adjustable, so it takes the packed path); jzon's own `schubfach.lisp`/`eisel-lemire.lisp` tables are `(unsigned-byte 64)`/`(signed-byte 64)`, NOT packed (width 64 and signed are outside `packedIntElementWidth`'s 8/16/32 unsigned range) | no -- zero `:displaced-to` in jzon, its vendored deps, or any shipped shim (`grep`ped the whole of `src/main/resources/am/ik/rontolisp/**/*.lisp`: none) | yes (382/392 bytes) |
+
+So on all three tracked real programs a correct gate fires and recovers the
+full per-program constant (the same 0.65% / 0.15% / 0.21% wasm deltas `.todo/664`
+measured landing the feature, now reclaimable) -- not the "cl-ppcre displaces,
+so a naive gate buys it nothing" outcome `.todo/664`'s own filer warned about;
+the naive "does it displace" gate would indeed buy cl-ppcre nothing, but the
+"can it build a packed vector" half fires on cl-ppcre precisely because it
+never can. **The ceiling is still exactly the fixed per-program constant,
+382/392 bytes, regardless of program size** -- there is no larger prize behind
+this door.
+
+**Why the gate was not built despite a real, present win on every tracked
+program.** A gate here is a program-level yes/no that changes emitted CODE
+SHAPE, not a value; a false negative ("this program cannot build a packed
+vector" when it actually can, or "this program never displaces" when it
+actually does) does not fail to compile -- the packed arm is simply absent
+from `_arr_get`/`_arr_set`, and a program that reaches it anyway hits
+whatever the general/string arm does with packed storage: a `ref.cast` trap
+on wasm, `ClassCastException` on the JVM, at RUN TIME, in a program that
+looked correct at every compile step. That bar -- provably-safe program-level
+whole-source-tree analysis, not "as far as I traced it" -- is higher than it
+looks:
+
+- **The JVM's own analogous gate (`programUsesIntArray`/`programUsesFloatArray`,
+  `JvmLispCompiler.java`) is NOT a pure AST walk.** Its own comments say why:
+  `read-sequence`/`write-sequence` over a typed sequence injects an internal
+  `%seq-int-vector` wrapper that allocates a packed vector WITHOUT it
+  appearing in the scanned `program` list, so the gate ORs in `usesSeqIntVector`
+  by hand; a fetched HTTP reply's `:body` and a served request's `:raw-body`
+  are packed octet vectors the RUNTIME builds, not any scanned `make-array`,
+  so the gate ORs in `usesFetch`/`usesHttpHandler` by hand too. A displacement
+  gate needs the same audit, independently, because none of those three
+  escape hatches say anything about `:displaced-to` -- and the wasm backend,
+  which is where this todo's 382 bytes live, does not even reuse the JVM's
+  hand list (its own existing `typedArrayCodes` gate,
+  `LispMacroExpander.makeArrayElementTypeCodes`, is a bare AST walk with NONE
+  of those three ORed in, an existing gap this todo did not create and does
+  not fix).
+- **A first-class reference to `make-array` can carry `:displaced-to` without
+  the packed/displaced-to keywords appearing in the shape either scan looks
+  for.** `BuiltinFunctionWrappers.variadicMakeArray()` (`compiler` package)
+  synthesizes a wrapper body for `(funcall #'make-array ...)` /
+  `(apply #'make-array ...)` that DOES re-embed a literal
+  `(make-array dims :displaced-to (getf kw :displaced-to) ...)` call -- so a
+  scan that walks the FULLY INJECTED program (wrapper defs included) would
+  catch it, PROVIDED the wrapper injection happens before the scan runs and
+  the wrapper actually gets emitted into what the scan reads. That mechanism
+  is JVM-only today (`grep -l BuiltinFunctionWrappers src/main/java/am/ik/rontolisp/codegen/wasm/*.java`
+  is empty) -- the wasm backend either does not support first-class
+  `#'make-array` the same way or reaches it through a different, unaudited
+  path, which would need its own investigation before any wasm-side gate
+  could be trusted.
+
+Neither gap is exotic (`.kb`'s own http-server and binary-sequence-io
+material describes both mechanisms elsewhere), and both would need to be
+closed, PLUS kept closed as the wasm backend grows new ways to build a packed
+array or a displaced view, for a capped payoff that never exceeds 382/392
+bytes no matter how large the gate's blast radius grows chasing it. That is
+the "not worth its blast radius" call CLAUDE.md asks for: the finding --
+these three real programs would fully qualify for a correct gate, and the
+prize is capped exactly where `.todo/664` estimated it -- is recorded here
+instead of the gate.
 
 ## Representation
 

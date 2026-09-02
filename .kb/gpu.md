@@ -3218,14 +3218,29 @@ anything can probe. Those two public methods are the entire cost this route impo
 language-independent library, and they are a legitimate embedder API rather than a
 rontolisp hook.
 
-**The size objection does not survive measurement.** `am.ik.gpu`'s class files are 118 KB,
-the bridge 13, the PTX 113 and the MSL 9.4, so a `--gpu --simd` class is ~300 KB bigger
-than a `--simd` one -- against the 62 KB `JvmSimdVectorTemplate` every `linalg` program
-under `--simd` already embeds. **If the blob ever has to shrink, `sin` / `cos` / `tan` are
-the place**: they are 38 KB of PTX for three members (a Payne-Hanek argument-reduction
-table) where `exp` is 2.9 and `erf` 4.5. They were kept because the RULE is the measurement
--- each is 9-22x on the device -- and dropping them would be a size decision overriding a
-speed one.
+**The size objection does not survive measurement -- but the numbers have moved a long way
+since it was first taken** (re-measured 2026-09-03, todo-656). What is REPLACED here is
+"~300 KB bigger than a `--simd` one, and `sin`/`cos`/`tan` are the place to shrink": both
+were true when the PTX held a handful of kernels, and neither is now. Measured on one tree,
+the same program compiled twice, `--simd` against `--simd --gpu`: **2,571,220 against
+172,427 bytes, so `--gpu` adds 2,398,793**, and it divides as
+
+| part | bytes in the class | share |
+|---|---|---|
+| `gemm.ptx`, embedded verbatim | 1,885,029 | 78.6% |
+| the 22 `GPU_CLASSES` class files, base64 (287,225 raw) | 382,968 | 16.0% |
+| `gemm.metal`, verbatim | 71,701 | 3.0% |
+| the bridge `JvmGpuTemplate`, base64 (42,399 raw) | 56,532 | 2.4% |
+
+**The blob is the PTX, and the PTX is the FUSED ROW FAMILY**: `softmax`, `softmax_grad`,
+`log_softmax`, `layer_norm*` and `gelu*` are 20 of the module's 58 entries and 1,548,866
+bytes -- **82.2% of the PTX and 64.6% of everything `--gpu` adds**, the four softmax
+entries alone 663 KB. The transcendentals this paragraph used to name are not entries at
+all; they are op codes inside `map`, and `map_f32` + `map_f64` together are 62,525 bytes,
+3.3% of the PTX. So if the blob ever has to shrink it is a fused-row question and nothing
+else is worth opening. What did NOT change is the conclusion: every one of those kernels is
+there because a measurement put it there, and the objection is still answered by the fact
+that a `--simd` class already embeds a 62 KB `JvmSimdVectorTemplate` for the same reason.
 
 Two routes were weighed and rejected, and the reasons are worth keeping: **a `--gpu`-only
 support jar** makes `-o Prog.class --gpu` non-standalone, a real departure since every
@@ -3240,6 +3255,72 @@ two `--gpu` classes loaded by ONE classloader would collide on `defineClass` -- 
 property the `--simd` and `--blas` bridges have, and the reason the compiled-backend tests
 give each program a fresh `URLClassLoader`. Each such loader also probes and JIT-loads the
 module again; a real program has one.
+
+### Pricing the f64 half of the fused-row family, before shrinking it (todo-669, 2026-09-03)
+
+The fused row family (`softmax`, `softmax_grad`, `log_softmax*`, `layer_norm*`, `gelu*`, 20
+of the 58 PTX entries) is 1,548,866 bytes, and its `f64` half is 783,248 of that -- the most
+a module split could possibly save (`.kb/measurement-probes.md` Rule 2: price the ceiling
+before building). Whether that is worth anything turns on what a compiled class's size
+costs anyone, which nothing here measured, so two ceilings were priced directly rather than
+assumed:
+
+**Ceiling 1: class-load, the cost every carrier pays regardless of whether it can run the
+kernels.** A program that references `linalg:matmul` from behind a runtime-only condition
+(`(when (> (length (uiop:command-line-arguments)) 100) ...)`, so the compile-time `usesGpu`
+scan still embeds the bridge but nothing calls it) embeds the whole library and both kernel
+texts without ever calling `Gpu.available()` -- confirmed by wall time staying at ~50 ms
+with the run gated off, instead of the multi-second `cuModuleLoadData` cost below. Two such
+classes, one built against the checked-in `gemm.ptx` (2,603,209 bytes) and one against a
+copy with the family's ten `_f64` entries mechanically deleted (1,819,721 bytes, -783,488),
+`java -cp classdir Prog` timed wall-clock from the shell in bash (`date +%s%N` around the
+launch, not `/usr/bin/time`'s 10 ms resolution), 40 runs each alternated: **61.9 ms mean
+against 59.9 ms, medians 58 and 61 -- no direction, both inside the same noise band.**
+Removing 783 KB of embedded string constant does not move JVM class-parse time at all; this
+agrees with `.kb/jvm-aot-cache.md` ("the class half buys nothing here... there is no
+class-loading cost to remove") generalizing to a class two orders of magnitude bigger than
+the few-KB one that file measured. **Ceiling 1 is zero.**
+
+**Ceiling 2: the CUDA driver's PTX-to-SASS JIT inside `cuModuleLoadData`, the cost a CUDA
+machine pays the first time it ever runs the whole module.** This one is real and large: a
+standalone FFM probe (`cuInit` / `cuDevicePrimaryCtxRetain` / `cuModuleLoadData`, no
+rontolisp code, GB10, driver 580.173.02) loading the checked-in PTX took 2,360-2,494 ms
+(`CUDA_CACHE_DISABLE=1`, 6 runs) against 1,397-1,455 ms for the same file with the family's
+`_f64` entries removed -- **removing 41.5% of the module's bytes removes ~41% of the JIT
+time, about 1 second, and it is real, not classload noise.** But it answers a question this
+item does not ask: `cuModuleLoadData` runs once per process, lazily, only from
+`CudaGemm.probe()`, which a machine with no NVIDIA driver never reaches at all (it fails at
+`SymbolLookup.libraryLookup` first) -- so **the population Ceiling 2's saving would help is
+CUDA machines that run `--gpu` code, which is exactly the population the todo names as NOT
+who this item is for** ("the population to weigh the saving against is the carriers... not
+everyone who runs it"). And even for that population it is a one-time cost, not a per-run
+one: `cuModuleLoadData` goes through the driver's own on-disk JIT cache (`~/.nv/ComputeCache`,
+keyed by content), so a SECOND load of the identical bytes -- on this machine, `unset
+CUDA_CACHE_DISABLE`, cache warmed once -- measured 4-7 ms regardless of which PTX file, full
+or stripped. Since every `--gpu` class ships byte-identical PTX, that cache warms once per
+machine, ever (until the driver updates), from whichever rontolisp program runs first, not
+once per program. The one population where Ceiling 2 recurs -- a CUDA machine with no
+persistent `$HOME` between runs (an ephemeral container, a serverless GPU function) -- is
+still a `--gpu`-using runner, not a carrier, and shrinking only the fused-row `f64` half
+would still leave it paying the JIT cost of the remaining 1.1 MB (measured 1.4-1.5 s above,
+not zero).
+
+**Both ceilings say no.** The carriers this item is about (Mac users, no-device machines,
+anyone handed a `--gpu` class for hardware that cannot run it) pay Ceiling 1, and Ceiling 1
+does not move. Ceiling 2 moves but is priced against the wrong population, and even there
+is mostly a one-time, cache-amortized cost that a partial split would only partially cut.
+**783 KB is not worth a module split; nothing was changed.**
+
+**The other backend's half of Ceiling 2 was already measured, and has the same shape.**
+`MetalGemm`'s class comment records `newLibraryWithSource:options:error:` -- the whole MSL
+toolchain, since there is no offline step and nothing to pin to a virtual architecture --
+at **32 ms the first time a given text is ever seen on a machine and 2-3 ms in every later
+process, because the OS caches it the way the NVIDIA driver caches PTX**. Two orders of
+magnitude below the CUDA figure, which is what 71,701 bytes of MSL against 1,885,029 of PTX
+predicts, but the STRUCTURE is identical on both: a first-sight compile that is real, then a
+per-machine cache that makes every later process free. So the answer here is not a CUDA one.
+On neither backend does the embedded text cost anything to a process that does not run it,
+and on neither does it cost a running process more than once per machine.
 
 ### The offer is decided twice, and what pins the two (todo-654, 2026-09-03)
 
@@ -3276,10 +3357,57 @@ SHAPE half cannot be asked without a device, and the reason is structural rather
 choice: on both paths a shape decline and a no-device decline are the same `null`, and the
 compiled bridge fuses `!Gpu.available()` into the same `||` as the shape tests. `Probe.DEVICE`
 is a static final holder and `GpuDevice` is `sealed permits CudaGemm, MetalGemm`, so no test
-can stand a device up to separate the two. Making the shape half CI-visible therefore means a
-say-yes-to-everything `GpuDevice` inside `am.ik.gpu` -- which would have to join `GPU_CLASSES`
-and travel in every compiled program, and which silently answers zeros if it is ever switched
-on by accident. That is its own item, not this one's.
+can stand a device up to separate the two.
+
+#### Closing the gap was priced and DECLINED (todo-656, 2026-09-03)
+
+Two ways were on the table -- (a) a say-yes-to-everything third `GpuDevice` in `am.ik.gpu`,
+(b) hoisting each bridge member's `!Gpu.available()` out of its shape expression and
+exposing the shape decision on its own -- and the item filed both as SIZE decisions,
+because whatever either adds travels in every compiled `--gpu` program. **Size is not the
+axis.** Against the 2,398,793 bytes `--gpu` already adds (the table above), a stand-in
+implementing all 71 `GpuDevice` methods with constant bodies compiles to 5,326 bytes, 7,101
+base64, **0.30%**; and DOUBLING the bridge outright -- a ceiling far above any predicate
+surface (b) would add -- is 2.4%. Neither is a size decision. What decided it is the
+CEILING on what CI would additionally pin, and it collapses on the opportunity side twice
+over:
+
+- **A divergence cannot MANIFEST without a device.** Every entry point in `am.ik.gpu.Gpu`
+  is `device != null && ...` over `Probe.DEVICE` (read in the code, not inferred), so on a
+  GPU-less machine nothing is ever accepted and both paths run their scalar fallback
+  whatever their predicates say. A `JvmGpuTemplate` shape rule that disagreed with
+  `LinalgGpu` produces a wrong answer only on a machine where this test already runs. The
+  gate does not leave the defect unprotected; it defers detection to the first machine on
+  which the defect is observable at all.
+- **The population of commits that could carry one undetected is empty.** 23 commits have
+  touched `JvmGpuTemplate` or `LinalgGpu` and 18 touched both; of the 5 asymmetric ones two
+  are each side's first build and one is a merge, and the remaining two (`fa343e55`,
+  `198ebcd3`) are Metal work. Every one of the 23 is a `--gpu` topic commit landing
+  measurements in THIS file -- taken on a device. Over the same window 8 distinct days
+  carried a device-session commit, longest gap 6 days, which bounds the latency the gate
+  costs.
+
+**And a stand-in would pin LESS than the shape half pins today**, which is the argument
+that would hold even if the two above did not. 7 of the 43 boundary cases are over a
+RESIDENT operand -- including all four `-1` reshape cases todo-663 added, the one time this
+pin has caught anything. A device that answers `true` from every kernel without touching
+memory answers `resident(host) == false`, so all 7 decline on BOTH paths and agree
+VACUOUSLY (`.kb/test-execution.md`, "A test that never ran the mechanism it asserts on").
+Keeping them alive means modelling `DeviceResidency`, the lazy stubs and
+`written`/`materialize` in the stand-in -- a second implementation of exactly the mechanism
+the paragraph above refuses to fork. The bits half goes either way: an unwritten
+destination is zeros on both paths, so the `isEqualTo(bitsOf(accepted))` that today
+separates two accepts becomes `0 == 0`.
+
+**(b) fails on the axis the test was designed for.** A parallel shape-predicate surface
+makes the test assert PREDICATE against PREDICATE instead of OFFER against OFFER, so the
+predicate can drift from the offer it describes -- a new vacuity of the same shape the
+census assertion exists to catch -- unless all 25 members are rewritten to call their own
+predicate, which is a refactor of the file that travels, for a test.
+
+So neither was built, the shape half stays device-gated, and
+`GpuOfferDifferentialTest`'s own javadoc now says it does not run on CI and why, so a green
+CI run is not read as covering the shape rule.
 
 **The thirteen bodies, read against each other.** Four are word-for-word once the two
 representations are allowed for -- `bcastShape`, `bcastStrides`, `rowMajorStrides` and
@@ -3562,6 +3690,16 @@ ONE-SIDED one in the file.
   the lazy-chain tests. A call ENTERS the pool before it declines, and entering drains the
   slabs of every host array the collector has reached since the last call. A two-sided
   bound reads that drain as a leak; the first draft of the test did, and failed.
+  **CUDA's twin assertion is one-sided too, and for a DIFFERENT mechanism** (measured
+  2026-09-03): there it is `CudaGemm.allocate`'s give-back ladder, which on a request that
+  does not fit while `residency.occupied()` collects, trims, re-asks, and then evicts every
+  resident copy the call does not hold -- +284 MB across twelve declined products in class
+  order, and in isolation +1.29 GB with a gigabyte resident against 0 bytes with nothing
+  resident, since the ladder is gated on `occupied()`. So one-sidedness here is not a
+  local accident of this backend: both backends grow free memory across a decline, by
+  unrelated routes, and the two `cuMemGetInfo` assertions in `GpuTest` that ARE two-sided
+  are the ones taking both endpoints straight after `releaseResident()`, where residency is
+  empty and neither route has anything to give back.
 - **A declined product whose operands FIT is allocated before the encode discovers it
   cannot proceed**, and the slabs go to the free lists: `freeDeviceMemory` drops by 3.2 GB
   at n = 12000, 6.4 GB at 20000 and 12.9 GB at 32768 -- three operands' worth each time.

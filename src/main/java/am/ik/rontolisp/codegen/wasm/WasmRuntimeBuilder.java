@@ -4500,13 +4500,31 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 
-		// element: elementFunc(data[base + idx])
+		// element: elementFunc(data[base + idx]) -- unless the chain ended on a PACKED
+		// target, whose elements live unboxed in it: that read is the shared _arr_get's
+		// (it walks the chain itself, so it takes the ORIGINAL header and index).
+		getLocal(w, dataSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
 		getBucketsLocal(w, dataSlot);
 		getLocal(w, baseSlot);
 		getLocal(w, idxSlot);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.ELSE);
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		getLocal(w, idxSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_GET);
+		w.write(Instruction.END);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(elementFunc);
 

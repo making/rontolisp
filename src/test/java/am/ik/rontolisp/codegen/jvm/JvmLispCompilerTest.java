@@ -12614,6 +12614,70 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAPackedVectorCanBeADisplacementTarget() throws Exception {
+		// A view over a simple specialized vector -- the construction CLHS's
+		// :displaced-to element-type rule is written for. The elements are the
+		// target's, so the chain ends on the PACKED storage: reads widen out of it,
+		// writes land in it with that representation's own masking/narrowing, and
+		// array-element-type answers the target's real type.
+		assertThat(compileAndRun("""
+				(let* ((b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				       (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                        :displaced-index-offset 1)))
+				  (setf (aref v 1) 200)
+				  (print (list (aref v 0) (aref v 1) (aref b 2) (array-element-type v)
+				               (length v) (array-dimensions v) (arrayp v) (vectorp v) (stringp v))))
+				(let* ((b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				       (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                        :displaced-index-offset 1)))
+				  (setf (aref v 0) 300)
+				  (print (list (aref v 0) (aref b 1))))
+				(let* ((b (make-array 8 :element-type '(unsigned-byte 16) :initial-element 3))
+				       (v (make-array 6 :element-type '(unsigned-byte 16) :displaced-to b
+				                        :displaced-index-offset 1))
+				       (w (make-array 2 :element-type '(unsigned-byte 16) :displaced-to v
+				                        :displaced-index-offset 2)))
+				  (setf (aref b 3) 9)
+				  (multiple-value-bind (tgt off) (array-displacement v)
+				    (print (list (aref w 0) (array-element-type w) (eq tgt b) off))))
+				(let* ((b (make-array 4 :element-type 'double-float :initial-element 1.5d0))
+				       (v (make-array 2 :element-type 'double-float :displaced-to b
+				                        :displaced-index-offset 1)))
+				  (setf (aref v 1) 2.5d0)
+				  (print (list (aref v 0) (aref b 2) (array-element-type v))))
+				""")).isEqualTo("""
+				(7 200 200 (UNSIGNED-BYTE 8) 2 (2) T T NIL)
+				(44 44)
+				(9 (UNSIGNED-BYTE 16) T 1)
+				(1.5 2.5 DOUBLE-FLOAT)""");
+	}
+
+	@Test
+	void compileAViewOverAPackedTargetUndisplacesWhenItGrows() throws Exception {
+		// The un-displace copies the view's CURRENT contents into storage of its own and
+		// records the element type the view answered, so the slots the growth opens take
+		// that type's zero and the pushes that still fit stay visible in the packed
+		// target. SBCL 2.2.9 answers exactly these lists.
+		assertThat(compileAndRun("""
+				(let* ((b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				       (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                        :displaced-index-offset 1 :fill-pointer 1 :adjustable t)))
+				  (vector-push-extend 5 v)
+				  (vector-push-extend 6 v)
+				  (print (list (aref v 0) (aref v 1) (aref v 2) (array-element-type v)
+				               (multiple-value-list (array-displacement v)) (coerce b 'list) (length v))))
+				(let* ((b (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				       (v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to b
+				                        :displaced-index-offset 1 :adjustable t)))
+				  (adjust-array v 3)
+				  (print (list (aref v 0) (aref v 2) (array-element-type v)
+				               (multiple-value-list (array-displacement v)))))
+				""")).isEqualTo("""
+				(7 5 6 (UNSIGNED-BYTE 8) (NIL 0) (7 7 5 7) 3)
+				(7 0 (UNSIGNED-BYTE 8) (NIL 0))""");
+	}
+
+	@Test
 	void compileCoerceConversions() throws Exception {
 		assertThat(compileAndRun("""
 				(print (coerce '(1 2 3) 'vector))
@@ -14533,6 +14597,42 @@ class JvmLispCompilerTest {
 				1.0e300
 				7.0
 				(7.0 8.0 9.0)""");
+	}
+
+	@Test
+	void theFloorFamilyQuotientWithAnInfiniteDivisorMatchesTheInterpreter() throws Exception {
+		// todo-666: the one regime the sweep above declines on purpose (an infinite
+		// divisor), checked the same way -- against the interpreter, whose _fdiv-free
+		// route (ExactRounding.infiniteDivisorQuotient) and this one (_fdiv's own
+		// infinite-divisor arm) were written from the same sign formula independently
+		// of each other.
+		double[] dividends = { 3.0, -3.0, 0.5, -0.5, 1e300, -1e300, 0.0, -0.0 };
+		String[] divisors = { "(/ 1.0 0.0)", "(/ -1.0 0.0)" };
+		StringBuilder source = new StringBuilder("""
+				(defun ftr (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+				(defun ffl (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+				(defun fce (a b) (multiple-value-bind (q r) (ceiling a b) (list q r)))
+				(defun fro (a b) (multiple-value-bind (q r) (round a b) (list q r)))
+				""");
+		for (double a : dividends) {
+			String x = Double.toString(a).replace('E', 'e');
+			for (String y : divisors) {
+				source.append("(print (list (ftr %s %s) (ffl %s %s) (fce %s %s) (fro %s %s)))%n".formatted(x, y, x, y,
+						x, y, x, y));
+			}
+		}
+		// An exact-integer dividend, not just a double.
+		for (String y : divisors) {
+			source.append("(print (list (ftr -3 %1$s) (ffl -3 %1$s) (fce -3 %1$s) (fro -3 %1$s)))%n".formatted(y));
+		}
+		String program = source.toString();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(compileAndRun(program)).isEqualTo(interpreted.toString(StandardCharsets.UTF_8).trim());
 	}
 
 	@Test
