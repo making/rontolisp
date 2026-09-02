@@ -126,7 +126,7 @@
 | `load` | `(load "bar.lisp")` | ファイル内のすべてのトップレベルフォームをグローバル環境で読み込んで評価します(3つのバックエンドすべて)。`t` を返します |
 | `require` | `(require :util)`, `(require :util "lib/util.lisp")` | モジュールのファイル(require するファイルの隣の `<name>.lisp`、または明示パス)を、まだ `provide` されていなければロードします。モジュール名を返します。コンパイルパスではリテラルなトップレベルフォームである必要があります |
 | `provide` | `(provide :util)` | モジュールをロード済みとして登録し、以後の `require` を no-op にします。モジュール名を返します。コンパイルパスではリテラルなトップレベルフォームである必要があります |
-| `gensym` | `(gensym)`, `(gensym "tmp")` | `#:g1`, `#:tmp2` -- マクロの一時変数のための新しいシンボル(カウンタはプログラム全体で共有) |
+| `gensym` | `(gensym)`, `(gensym "tmp")` | `#:G1`, `#:tmp2` -- マクロの一時変数のための新しいシンボル(カウンタはプログラム全体で共有) |
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- 新しいアンインターンドシンボル(gensym の `#:` 規約、カウンタなし) |
 | `gentemp` | `(gentemp "Q")` | `Q1` -- prefix + カウンタの名前で intern される新しいシンボル(CLHS では非推奨。iterate が使用) |
 | `copy-symbol` | `(copy-symbol 'foo)` | `#:FOO` -- 同名のアンインターンドシンボル。属性リスト引数は無視され、コピーは `make-symbol` の同一性差異を引き継ぐ |

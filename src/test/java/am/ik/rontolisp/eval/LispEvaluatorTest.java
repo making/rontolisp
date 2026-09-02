@@ -12215,7 +12215,7 @@ class LispEvaluatorTest {
 	@Test
 	void gensymReturnsFreshSymbols() {
 		LispVal result = evalMulti("(list (gensym) (gensym))");
-		assertThat(result.print()).isEqualTo("(#:|g1| #:|g2|)");
+		assertThat(result.print()).isEqualTo("(#:G1 #:G2)");
 		assertThat(evalMulti("(eq (gensym) (gensym))")).isEqualTo(LispNil.INSTANCE);
 	}
 
@@ -12379,7 +12379,7 @@ class LispEvaluatorTest {
 	void symbolNameStripsThePackageMarker() {
 		assertThat(evalMulti("(symbol-name 'foo)").print()).isEqualTo("\"FOO\"");
 		assertThat(evalMulti("(symbol-name :bar)").print()).isEqualTo("\"BAR\"");
-		assertThat(evalMulti("(symbol-name (gensym))").print()).isEqualTo("\"g1\"");
+		assertThat(evalMulti("(symbol-name (gensym))").print()).isEqualTo("\"G1\"");
 		// nil and t are the symbols NIL and T; CL upcases their names like any other.
 		assertThat(evalMulti("(symbol-name t)").print()).isEqualTo("\"T\"");
 		assertThat(evalMulti("(symbol-name nil)").print()).isEqualTo("\"NIL\"");

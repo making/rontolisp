@@ -3356,7 +3356,7 @@ public final class Environment implements Scope {
 			if (args.size() > 1) {
 				throw new LispEvalException(LispNames.GENSYM + " expects at most 1 argument, got " + args.size());
 			}
-			String prefix = "g";
+			String prefix = "G";
 			if (args.size() == 1) {
 				if (!(args.get(0) instanceof LispString s)) {
 					throw new LispEvalException(

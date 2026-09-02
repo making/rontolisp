@@ -12532,7 +12532,7 @@ class WasmLispCompilerIntegrationTest {
 	void gensymReturnsFreshSymbols() throws Exception {
 		assertThat(compileAndRun("(print (gensym)) (print (gensym \"tmp\")) (print (eq (gensym) (gensym)))"
 				+ "(print (symbolp (gensym))) (print (symbolp (funcall #'gensym)))"))
-			.isEqualTo("#:|g1|\n#:|tmp2|\nNIL\nT\nT");
+			.isEqualTo("#:G1\n#:|tmp2|\nNIL\nT\nT");
 	}
 
 	@Test
@@ -12548,7 +12548,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (symbol-name 'foo)) (print (symbol-name :bar))"
 				+ "(print (symbol-name (gensym))) (print (symbol-name nil))"
 				+ "(print (funcall #'symbol-name 'xyz)) (print (mapcar #'symbol-name '(a b)))"))
-			.isEqualTo("\"FOO\"\n\"BAR\"\n\"g1\"\n\"NIL\"\n\"XYZ\"\n(\"A\" \"B\")");
+			.isEqualTo("\"FOO\"\n\"BAR\"\n\"G1\"\n\"NIL\"\n\"XYZ\"\n(\"A\" \"B\")");
 	}
 
 	@Test

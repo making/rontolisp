@@ -631,9 +631,14 @@ the interpreter. Byte-identical: `spam` (ch.23, over the quicklisp cl-ppcre --
 the bundled 1.2.3 is `.todo/602`), `binary-data` (24), `id3v2` (25),
 `mp3-database` (27) and `html` (30/31). `simple-database` (3), `test-framework`
 (9) and `pathnames` (15) differ ONLY by `.todo/041`'s missing right margin;
-`macro-utilities` (8) adds `.todo/156`'s lowercase gensym prefix (a name of
-`"g3"` must be `|...|`-escaped under `:case :downcase`, `"G3"` must not);
 `profiler` (32) dies on `fifth` (`.todo/338`). Chapters 15, 25 and 27 need
-`--feature sbcl`; 26/28/29 are the `net.aserve` rows decided above. The corpus
+`--feature sbcl`; 26/28/29 are the `net.aserve` rows decided above. **`macro-utilities`
+(8) is byte-identical too, as of 2026-09-02**: it used to diverge because `gensym`'s
+default prefix was lowercase `g`, a name like `"g3"` needing `|...|`-escaping under
+`:case :downcase` where SBCL's uppercase `"G3"` needs none -- fixed by matching CL's
+uppercase `G` default (a name-model conformance miss, not the `.todo/156` intern-table
+axis it was filed under before being split out). `(square (foo))` through chapter 8's
+`once-only` now prints `(let ((g2 (foo))) (* g2 g2))` unescaped like SBCL's `g96`, the
+counter value itself never matching across implementations regardless. The corpus
 needed no shim, no replacement `.asd` and no leaf-module substitution.
 

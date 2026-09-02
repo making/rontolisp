@@ -6647,7 +6647,7 @@ cases:
       (print (macroexpand '(ci-outer 41)))
       (print (macroexpand-1 '(+ 1 2)))
     expected: |
-      #:|g1|
+      #:G1
       #:|ci2|
       NIL
       T
