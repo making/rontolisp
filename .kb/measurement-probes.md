@@ -263,6 +263,18 @@ stronger pin was available and went in unweakened (`.kb/gpu.md`, "The libm-free 
 against a SEQUENTIAL replay"). The rule is not "distrust `.kb`": it is that a premise ABOUT
 CODE is checkable in the code, whoever wrote it down and however recently.
 
+**A `.todo` item's premise is a measurement too, dated the day it was filed, and the work
+that invalidates it is usually someone else's.** Four items in one week were closed by
+finding the premise gone rather than by doing what they asked: `.todo/635`'s uncoalesced
+last-axis fold had been removed by todo-629 folding log-softmax; `.todo/500`'s 90 uploads a
+step were a layer-norm module todo-499 and todo-634 had since fused away; `.todo/664`'s
+statement about wasm inlining per site had been overtaken by todo-647 landing; `.todo/668`
+was filed carrying a warning from another item that measurement then overturned. None of
+the four premises was careless when written. **So the first move on an item filed more than
+a few days ago is to re-take its own numbers, and finding them gone is the deliverable** --
+land the measurement and close it, which is the same instruction CLAUDE.md gives for a
+`.kb` premise, applied to the thing that asked for the work.
+
 ### The premise can come from another implementation, and that one can fail in ONE place
 
 The same failure with an external oracle instead of a `.kb` sentence: a question settled by
