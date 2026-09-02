@@ -220,6 +220,17 @@ Several sessions push to `develop` at once, so what you tested is not what you p
 - A semantic conflict passes `git merge` cleanly. When both sides touched one mechanism,
   read the other side's diff before pushing -- two changes to the same representation can
   each be correct alone and emit nonsense together.
+- **Claim a `.todo/NNN` number, never pick one**: run
+  `.todo/claim-number.sh "<why>" [count]` and use what it prints. Reading `.todo/` for
+  the highest number cannot work however fresh the fetch is -- two differently-named
+  `NNN-*.md` files MERGE cleanly, so a duplicate survives to be found days later (633
+  and 634 both happened on 2026-09-02). The counter is one file, `NEXT`, on the orphan
+  branch `todo-seq`: claiming is a push to it, so racers fight over the same file and
+  git rejects the loser, which retries. It also reads develop's live files and
+  `.todo/history/` rows on every claim and skips anything already taken, so a number
+  filed without the script heals itself -- do NOT cross-check by hand afterwards.
+  `todo-seq` shares no history with `develop` and must never be merged into it.
+  Row format and the duplicate-resolution rule: `.todo/.history.md`.
 
 ## Requirements
 

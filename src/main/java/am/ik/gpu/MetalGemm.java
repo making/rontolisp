@@ -136,6 +136,26 @@ final class MetalGemm implements GpuDevice {
 	 * taken ({@code sin}) is 45 against ~110 at 16384 and ~380 against ~180 at 131072,
 	 * {@code exp} 3x there and {@code erf} 20x. Eight times the CUDA threshold, for the
 	 * same reason the product's is 32 times it.
+	 *
+	 * <p>
+	 * <b>Re-measured at the shape a CHAIN produces, which is not the shape above, and it
+	 * holds</b> ({@code .todo/123-gpu-acceleration/MtlPerRowMap.java}, M4 Max,
+	 * 2026-09-02). The straddling operand is a per-row intermediate -- the {@code rows x
+	 * 1} array {@code log-softmax}'s {@code (linalg:log (linalg:sum ... :keepdims t))}
+	 * takes, 16384 elements at the book's shapes, an eighth of this threshold. Per call
+	 * in us, {@code log} over a freshly written f32 operand, CPU against the device back
+	 * to back: 62-66 against 98-137 at 16384, 126-142 against 111-125 at 32768, 495-564
+	 * against 139-163 at 131072 -- so back to back the device crosses near {@code 2^15}.
+	 * <b>The chain never calls it back to back.</b> This backend refuses the axis fold at
+	 * every size ({@link #thresholds}, {@code Long.MAX_VALUE}), so the {@code sum} that
+	 * writes this operand is a CPU loop -- 28-30 ms of it at the book's
+	 * {@code (16384 3038)} -- and this GPU lowers its clocks after ~1 ms idle. The same
+	 * call behind a growing gap: 111-139 us at 0 ms, 147-154 at 1 ms, 401-419 at 2 ms,
+	 * flattening to 478-653 by 32 ms. In that column the crossover is
+	 * {@code 2^17}..{@code 2^18}, which is where this threshold already is, and at the
+	 * book's 16384 the CPU wins by 6-8x. So the log-softmax straddle {@code .kb/gpu.md}
+	 * records is the price of a threshold that is right, not the symptom of one that is
+	 * wrong.
 	 */
 	private static final long MIN_MAP_ELEMENTS = 1L << 17;
 
