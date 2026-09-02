@@ -68,3 +68,51 @@ already cost a real test run:
   than the whole cache: `DeviceResidency.dirty(Object)` / `.backed(Object)`, exposed to
   tests as `GpuThresholds.isDirty(Object)` / `.isBacked(Object)`, ask whether THIS array's
   own entry is dirty or backed, which no unrelated test's garbage can move.
+
+## A test that never ran the mechanism it asserts on
+
+Not the JVM's discretion this time but the DEVICE's, or the library's -- and the same
+shape as the two above: an invariant a test depends on without writing it down. A test
+that exercises a mechanism gated by a THRESHOLD has to build a shape that clears the
+threshold **that gates the mechanism it is testing**, on the machine it is running on.
+When it does not, nothing errors: the gated path declines, the fallback computes the same
+answer, and every assertion passes. The test is green and pins nothing.
+
+Three spellings of the mistake, all found in one sweep of the `--gpu` suites
+(2026-09-03, `.kb/gpu.md`, "Tests", which has the per-test detail):
+
+- **A shape sized off threshold A while mechanism B is what is under test.** The fused
+  row members are gated by their own threshold, which is not the fold's; a test that sized
+  its rows off the fold's built 256 rows and the tier declined.
+- **A `Long.MAX_VALUE` sentinel put through arithmetic.** "Not a member of that tier at
+  all" is spelled as a number, so `2 * threshold` wraps NEGATIVE and
+  `(threshold + 383) / 384` likewise, and the `Math.max(floor, ...)` that follows hands
+  back the caller's own floor -- a shape below EVERY threshold, which is the opposite of
+  what the expression was written to produce. Two independent sites had it.
+- **A hard-coded dimension that predates a second backend.** A 64-cube product is 262144
+  multiply-adds; one backend's floor is 131072 and the other's is 4194304.
+
+**What to do about it.** Assert the mechanism ran, in the same test, from an observable
+the fallback cannot produce:
+
+- Best is a RUNTIME census -- a counter only the accepted path moves. For `--gpu` that is
+  a residency lookup, hit or miss (`GpuThresholds.residencyHits()` / `.residencyMisses()`):
+  an accepted member asks the cache for each operand and a decline never gets that far.
+- Where the mechanism runs in another loader or another process and no counter is
+  reachable -- a compiled class carries its own copy of the library -- fall back to
+  asserting the SHAPE against the threshold in force
+  (`GpuThresholds.acceptedForSize(threshold, elements)`), which at least fails loudly when
+  a floor moves under the test.
+- A census over a TABLE of cases wants both bounds, not one: `accepted > n` **and**
+  `declined > n`, so a table that drifted all-accept is caught as well as one that drifted
+  all-decline. `codegen/jvm/GpuOfferDifferentialTest` is the model.
+
+**And the census must not sit downstream of the sizing it is checking.** That suite had
+the right census and still failed on Metal, because the operand sizing collapsed first and
+an earlier assertion fired. A census answers "did the table pin anything"; it does not
+answer "is my operand the size I think it is".
+
+**Proving one of these is vacuous takes a mutation, not an argument.** Restore the old
+constant with the new census in place: if the value assertions still pass and only the
+census fails, the test was pinning nothing. That is how each entry in the `.kb/gpu.md`
+list was established, and it is cheap.
