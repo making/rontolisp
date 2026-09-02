@@ -152,3 +152,24 @@ been taken first, against the chain the decline already ran.
 
 Note what a ceiling does NOT excuse: it is still a measurement, so rule 1 applies to it.
 todo-650's ceiling was taken in the model with a structural count, not in a probe.
+
+## Rule 3: an A/B whose baseline moved is not an A/B
+
+**When several sessions push to `develop`, the arm you are not changing can be changed
+under you, and the ratio you are reading is then partly someone else's.** This is not
+rule 1 -- the probe's shape can be perfect -- and it is not the semantic conflict CLAUDE.md
+warns about either, which is two sides touching one mechanism. Here only ONE side is
+touched, by a third party, and `git merge` has nothing to say about it.
+
+`.todo/646` (`.kb/gpu.md`, "Layer-norm's affine on Metal") measured the fused pair at 9.2%
+over the decline, every round winning, and it was wrong by 5x: `5baaf6ec` (todo-650's
+materialize fix) landed mid-run and pushed the DECLINE arm from 1.798 to 1.680 s, because
+the decline is the arm that runs the host chain the fix stopped materializing for. The
+fused arm was untouched, so the gap opened on its own. Re-measured on one tree, the pair
+is a coin flip (1.680 vs 1.702 s) and the kernels were dropped.
+
+**What to do about it**: take both arms from ONE tree, and re-take the baseline after any
+merge that lands between the two halves of a comparison -- a merge is cheap to do and
+invisible in the numbers. If a run spans a merge, say which commit each arm was built at,
+so the next reader can tell whether the arms are comparable at all (rule 1's condition
+requirement, applied to time rather than to setup).
