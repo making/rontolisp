@@ -64,3 +64,17 @@ shapes that actually flow through it). Its "tests" half was swept on 2026-09-03 
 result is in `.kb/gpu.md`, "Tests": four tests were running nothing on Metal and one suite
 was failing outright there. That sweep asked "does the shape reach the mechanism"; this
 item asks the prior question, "is there a test on this backend at all".
+
+## A vacuous test is not by itself a defect in the programs
+
+The sweep that produced this item found `torch:clip-grad-norm` reaching the device in no
+test, because the tests hand it a FRESH operand and both `%la-scale` and `%la-sum-squares`
+are resident-only members. That looked like a hole in the programs too, and it is not:
+counted in chapter-3's GPT, the one program that calls it, the pair is offered 634 times a
+step and accepted 634 times, declined 0 -- the optimizer updates the parameters on the
+device, so the operands are resident by the time clipping reads them (measured on CUDA,
+2026-09-03). Chapter 2 does not clip and llama2 is inference.
+
+So a test that never reaches a member says the TEST's shape is wrong, and nothing yet
+about the programs; the programs are a separate count, and `.todo/655` is where that half
+lives.
