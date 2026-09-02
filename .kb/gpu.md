@@ -103,6 +103,11 @@ static boolean  adamStep(x, g, m, v, n, double[] rule)                  // Adam,
 static boolean  copy(a, oA, sA, spanA, out, oOut, sOut, spanOut, dims)  // reshape / transpose / slice / concatenate
 static boolean  takeRows(...) / gather(...) / scatterRows(...)          // the index tier
 static boolean  sumSquares(...)                                         // the clip norm
+// the FUSED tier (todo-499): one pass each where torch.lisp composed a chain of members
+static boolean  gelu(a, oA, out, oOut, n) / geluGrad(g, oG, x, oX, old?, oOld, out, oOut, n)
+static boolean  softmax(a, oA, out, oOut, rows, len) / softmaxGrad(g, oG, s, oS, out, oOut, rows, len)
+static boolean  layerNorm(x, oX, out, oOut, rows, len, eps) / layerNormGrad(g, oG, x, oX, old?, oOld, out, oOut, rows, len, eps)
+static boolean  dropoutMask(out, oOut, n, p, span, s1, s2, s3)          // the inverted-dropout mask, from the generator state
 ```
 
 Row-major `n x m` by `m x p`. Four things about this surface are load-bearing:
@@ -893,12 +898,14 @@ moment `.todo/495` makes lazy results pay there.
 
 ## The CUDA backend
 
-**Thirty-four entry points in `gemm.cu`** (eleven in `gemm.metal`, which has no f64
-sibling and no generator), each taking its member as an op-code PARAMETER: the products
+**Forty-eight entry points in `gemm.cu`** (eleven in `gemm.metal`, which has no f64
+sibling, no generator and no fused tier), each taking its member as an op-code PARAMETER: the products
 (`gemm_f64/f32`, the batched pair, and two register-tiled f32 siblings), the element-wise
 `map_f64/f32`, the strided `bcast_*` / `gather_*` / `fold_*`, the generator `rng_fill_*`,
-the GEMV `gemv_*`, and the resident tier's `zip_*` / `scal_*` / `where_*` / `adam_*` /
-`copy_*` / `take_*` / `scatter_*` / `sumsq_*`. A batched kernel
+the GEMV `gemv_*`, the resident tier's `zip_*` / `scal_*` / `where_*` / `adam_*` /
+`copy_*` / `take_*` / `scatter_*` / `sumsq_*`, and the fused tier's `gelu_*` /
+`gelu_grad_*` / `softmax_*` / `softmax_grad_*` / `layer_norm_*` / `layer_norm_grad_*` /
+`dropout_mask_*` ("The fused tier", below). A batched kernel
 is six lines -- it offsets the three pointers by `blockIdx.z` times the strides and calls
 the SAME `gemm<T>` device function -- which is why a batched cell folds `k`
 bit-identically to an unbatched one and the precision contract needed no second sentence.
@@ -975,11 +982,9 @@ a launch or a fusion story at all; and the rest is **PASS COUNT**, not launch ov
 its element-wise ops are FUSED single kernels where we pay one full memory pass per
 `linalg:` member (a dropout at the score shape is four passes over 100 MB where PyTorch
 pays one). The fusible set (softmax / layer-norm / dropout / GELU, forward AND backward)
-is worth roughly 100-150 ms of a 700 ms step, and backward fusion means hand-written
-adjoints in `torch.lisp` -- a tape-semantics change that moves CPU outputs too. Filed as
-`.todo/499` rather than built, because even a perfect fused softmax forward is 3% of the
-step. The end-to-end figures live in the guide and in
-`examples/llm-from-scratch/README.md`.
+was estimated at 100-150 ms of a 700 ms step and filed as `.todo/499`; measured per
+member it was closer to 260 ms, and it is built -- "The fused tier", below. The
+end-to-end figures live in the guide and in `examples/llm-from-scratch/README.md`.
 
 **The copy route was measured and KEPT as it is.** The GB10 answers
 `CU_DEVICE_ATTRIBUTE_INTEGRATED` 1 and `PAGEABLE_MEMORY_ACCESS` 1, so a kernel can read
@@ -991,6 +996,120 @@ Java `MemorySegment.copy` into them runs at 35-60 GB/s single-threaded, slower t
 driver's own pageable copy -- so it loses past 262144 elements and wins 17% at 65536.
 Neither pays for a pinned pool and its budget. **Any future change to this route re-runs
 that table first.**
+
+## The fused tier (todo-499, 2026-09-02)
+
+The four compositions a transformer step spent a third of its device time on -- the exact
+GELU, softmax, layer-norm's normalization and the dropout mask, forward and backward --
+each as ONE kernel where `torch.lisp` launched a chain of `linalg:` members, one memory
+pass per member. **What a fused kernel buys on this card is only the passes it removes**:
+the launches were already pipelined (above), so a chain of five bandwidth-bound passes
+over a 100 MB activation was five times the traffic of one.
+
+**The contract is the chain's, rounding for rounding.** A `linalg:` member computes in
+double and stores at the width, so a chain rounds at every member boundary; each fused
+kernel reproduces every one of those roundings (the `(T)` casts in `gemm.cu`), keeps
+every axis fold ascending and sequential in a double accumulator, and evaluates `exp` /
+`erf` at the width as `map_op` does. So a fused member lands on the bits the chain of
+DEVICE members would have produced -- `GpuTest.theFusedTierLandsOnTheComposedDeviceChainsBitsAtBothWidths`
+runs every chain member by member and fused and asserts equality, libm members included --
+and the three with no libm in them (softmax's adjoint, layer-norm and its adjoint, the
+mask) land on the CPU defun's bits (`theLibmFreeFusedMembersAreTheSequentialReferencesBits`,
+a sequential Java replay; `LinalgGpuDeclineTest` on every machine). The GELU and softmax
+forwards stand to the CPU exactly as an accelerated `erf` or `exp` does; the GELU adjoint,
+with both libm calls and a cancelling sum of two branches, measures 1.8e-12 relative at
+`#d` over a ramp and is pinned at 1e-9.
+
+**The members are the compositions, on every backend.** `.kb/torch.md` "The fused
+compositions" has the tape-order argument; here the consequence: the six internal
+`linalg` defuns (`.kb/linalg.md`) ARE the chains, so nothing moved on any CPU path, and
+`torch:gelu` / `torch:layer-norm` / `torch:softmax` / `torch:dropout` print the same bits
+as the compositions they replaced (`TorchGradcheck.FUSED_PROGRAM` on the three test
+backends, `ci-spec.yaml`'s `torch-fused-compositions` on all four). The two adjoints that
+fold onto an accumulated gradient take it as an operand (`OLD`, a null pointer when there
+is none) so the kernel adds it exactly where the tape's `%t-accum` would have.
+
+**The offer rule is the chain's.** A fused member with a libm call in it (GELU, its
+adjoint, softmax) is offered from the map threshold or over a resident operand, like a
+transcendental; the libm-free ones from the fold threshold or over a resident operand,
+with the fold's cell rule on the row count, like an axis fold; the mask exactly as
+`rngFill`. `linalg:softmax` is intercepted in its `:axis` form over the LAST axis only --
+any other axis, the whole-array form, a scalar input decline to the defun, whose members
+the device then takes one by one as before -- and on the JVM the `:axis` form is an
+EXTENDED call shape (`LinalgKernelCallLayout`) the way `sum :axis` is.
+
+### Three things measured on the way
+
+- **A thread-per-row kernel over global memory LOSES to the chain it replaces.** The
+  first softmax gave one thread one row and walked it three times (the fold kernel's own
+  pattern): 0.79 ms a call at `(64 256 256)` against the five-member chain's 0.68, because
+  thirty-two threads reading thirty-two rows read addresses a row apart and WRITING that
+  way touches thirty-two lines per warp store. The row kernels now stream the rows through
+  a transposed shared-memory tile, thirty-two columns at a time (`gemm.cu`, "THE ROW
+  KERNELS' LAYOUT"): the thread still owns its row -- a sequential double fold has no
+  lane-parallel form that keeps its bits, and the fp64 pipe is used fully only when
+  thirty-two rows advance in one warp instruction -- but every global access is a
+  coalesced column read or write. `ROW_WARPS` (2) is the block: two tiles of `32 x 33`
+  doubles per warp under the 48 KB static limit, and `CudaGemm.ROW_BLOCK` launches at
+  exactly `ROW_WARPS * 32` threads, since the kernel derives its rows from that. Softmax
+  0.79 -> 0.27 ms.
+- **nvcc contracts `a * b + c` into an FMA wherever the operands are doubles**, and at
+  f64 every `(T)` boundary is a no-op, so `acc += dev * dev` rounded once where the chain
+  rounds twice: one ulp in a layer-norm row and in a softmax adjoint, caught at `#d` by
+  the chain comparison (the `#f` kernels were exact, the float cast between the product
+  and the sum blocks the contraction). The `__dmul_rn` family never contracts and was the
+  first fix -- and it DOUBLED the fused kernels (`gelu_grad` 1.7 -> 3.5 ms a call at
+  `(32 256 1536)`), because the intrinsics also switch off everything else the compiler
+  does with a double expression. **The file is now compiled with `-fmad=false`** (the
+  header's regeneration command carries it), the two products that should fuse -- the
+  16x16 `gemm<T>` and the GEMV -- say `fma()` explicitly (the tiled GEMMs always did), so
+  every documented fold is unchanged, and the fused tier is plain operators again.
+- **The generator's jump is two hops.** `rng_fill` computed `a^(i * draws) mod m` per
+  element by square-and-multiply over the full exponent (~23 iterations, three moduli);
+  it now takes the block's part once per block (one thread, shared) and each thread its
+  offset inside the block (twelve bits at most). Exact integer arithmetic either way, so
+  the sequence is byte-identical (`theGeneratorFillIsBitIdenticalToTheSequentialWalk...`
+  is the pin), and a `(64 256 384)` fill is 1.42 -> 1.02 ms: the fill is compute-bound,
+  and the mask kernel inherits the same two hops.
+
+### The measurements
+
+Kernel time per call, `fusion-baseline.lisp` + `fusion-segments.py` at the book's shapes,
+before and after (the torch rows are forward + backward through the tape; the
+"input alone" baseline of ~0.3 / 0.45 / 1.9 / 0.5 ms is in both columns):
+
+| composition, shape | before (chain) | after (fused) | |
+|---|---|---|---|
+| `linalg:softmax :axis -1`, `(64 256 256)` | 0.679 ms, 5 launches | 0.271 ms, 1 | 2.5x |
+| `torch:softmax` forward + backward | 1.642 ms, 12.6 | 0.937 ms, 5.6 | |
+| `torch:layer-norm` forward (no grad), `(64 256 384)` | 2.062 ms, 14 | 0.838 ms, 3 | 2.5x |
+| `torch:layer-norm` forward + backward | 8.631 ms, 48.6 | 2.899 ms, 14.6 | 3.0x |
+| `torch:gelu` forward (no grad), `(64 256 1536)` | 5.485 ms, 5 | 1.198 ms, 1 | 4.6x |
+| `torch:gelu` forward + backward | 19.123 ms, 18.2 | 5.894 ms, 5.2 | 3.2x |
+| `torch:dropout` forward (no grad), `(64 256 384)` | 2.573 ms, 4 | 2.029 ms, 2 | the fill is compute-bound |
+| `torch:dropout` forward + backward | 3.345 ms, 8 | 2.782 ms, 6 | |
+
+**The step.** `gpt-book-shapes-fast.lisp` at BATCH 32 -- the machine's memory was shared
+with a 93 GB process that day, and the step's graph does not fit beside it at 64; the
+kernels are bandwidth-bound, so the step scales with the batch -- 10 steps isolated as
+`(t13 - t3)`, nsys kernel time bucketed by kernel and grid:
+
+| | before | after |
+|---|---|---|
+| kernel time a step | 356 ms in 3774 launches | **272 ms** in 2964 launches |
+| of which the products | 121 ms | 121 ms |
+| of which everything else | 234 ms | **151 ms** |
+| wall a step, `(t13 - t3) / 10` | 0.41 s | **0.31 s** |
+| the four compositions, forward + backward | GELU ~50, layer-norm ~31, softmax ~28, dropout ~13 | GELU 13.5, layer-norm 10.2, softmax 10.7, dropout 11.3 |
+
+Doubled to the book's batch that is roughly 300 ms of elementwise work a step against
+PyTorch's 133 (its dropout, softmax, layer-norm and GELU are one kernel each too, and
+that is now true here); what remains is `.todo/628` (the linear backward's transposes,
+121 + 180 + 6 `gather` launches, 24 ms at batch 32), `.todo/629` (the chains left
+composed: the attention scale and mask, `log-softmax`, layer-norm's affine, the
+`gelu_grad` kernel's own 90 GB/s) and `.todo/500` (the reduction adjoint's zero upload).
+The loss series of the fused run is the unfused run's to the printed digits at every
+step, as the bit-identity above says it must be.
 
 ## The Metal backend
 
@@ -1295,7 +1414,7 @@ flag is not like `--blas`, whose availability check is nearly free.
 
 ### The intercepted set
 
-**Forty-four `linalg:` members and one outside it.** By round trip: `linalg:dot` over two
+**Fifty-one `linalg:` members and one outside it.** By round trip: `linalg:dot` over two
 packed rank-2 operands of the same width (hence `matmul` at rank 2 and `solve`
 transitively); `%la-matmul-nd`, the STACKED product behind `matmul` at rank >= 3; the
 twelve element-wise `exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh`
@@ -1303,14 +1422,19 @@ twelve element-wise `exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `s
 only, `sum` `amax` `amin` in their `:axis` form only, `transpose` in its axes form only;
 and `%la-rng-fill`, the seeded generator's fill behind `rand` / `randn` / `uniform`, the
 only member with NO operand. Over a RESIDENT operand: the resident, index and copy tiers
-listed under residency. Outside `linalg:`: `vec:matvec`, installed by `LinalgGpu.installVec`
+listed under residency. The FUSED tier (todo-499): `linalg:softmax` in its `:axis` form
+over the last axis, and the six internal members `torch.lisp` spells its compositions
+through -- `%la-softmax-grad`, `%la-gelu`, `%la-gelu-grad`, `%la-layer-norm`,
+`%la-layer-norm-grad`, `%la-dropout-mask` -- offered by the rule of the chain each
+replaces (the map's threshold where a libm call is in it, the fold's otherwise, or a
+resident operand). Outside `linalg:`: `vec:matvec`, installed by `LinalgGpu.installVec`
 from the VEC library's own lazy-load hook, because the two libraries load independently and
 a program may reach either first.
 
 **Nothing else is `defineFunction`ed**, and that is an assertion rather than a remark:
-`#'linalg:outer`, `#'linalg:norm`, `#'linalg:matmul`, `#'linalg:reshape`, `#'linalg:softmax`
-and nine more still print `#<lambda>` under the flag, which is each tier's own dead-flag
-guard from the other side.
+`#'linalg:outer`, `#'linalg:norm`, `#'linalg:matmul`, `#'linalg:log-softmax` and eight
+more still print `#<lambda>` under the flag, which is each tier's own dead-flag guard
+from the other side.
 
 The set is narrower than `--blas`'s in one direction and wider in the other, and both
 differences are measurements: the gemv shapes are here only over a resident matrix where
@@ -1489,7 +1613,7 @@ module again; a real program has one.
 **The dead-flag guard is the load-bearing one**, as it is for `--blas`: every numeric
 assertion would pass just as well on the scalar defun, so `#'linalg:dot` printing
 `#<function LINALG:DOT>` under the flag and `#<lambda>` without it is the assertion that
-fails when the flag is DEAD. It is now twenty-four assertions, one per member, plus the
+fails when the flag is DEAD. It is now fifty-one assertions, one per member, plus the
 complementary list of members that must still be `#<lambda>`. On the compiled side the
 guard is the bridge NAME in the class bytes (the renamed library classes are base64 and do
 not appear as text; the kernel texts do, which is what pins that they travel).
@@ -1592,10 +1716,14 @@ is revisited.
 - **No lazy results on METAL for the interceptors**, and so no index tier or clip norm
   there. Built, pinned, measured a tie and a loss; `.todo/495` is the lever and the
   measurement list.
-- **No fused softmax / layer-norm / dropout / GELU kernels.** Measured rather than assumed:
-  the LAUNCH half of what fusion buys vanished when the pipeline opened, and the MEMORY
-  half is ~100-150 ms of a 700 ms step across the whole fusible set. Backward fusion means
-  hand-written adjoints in `torch.lisp`. `.todo/499`.
+- **No fused `log-softmax`, no fused attention scale-and-mask, no fused layer-norm
+  AFFINE, and none of the fused tier on Metal.** The fused tier took the four compositions
+  measured at a third of the step ("The fused tier"); `torch:log-softmax`'s chain runs once
+  a step over the logits (~8 ms at the book's shapes, batch 32), the `div` by `sqrt(d_k)`
+  and the `masked-fill` around each softmax are separate tape nodes (a fused kernel would
+  be a tape change), and layer-norm's `* weight + bias` stays two members whose adjoints
+  the tape already runs as folds. A fused MSL kernel needs the software binary64 the
+  resident tier needed there, and a measurement this backend has not made.
 - **Nothing of `vec:` but `vec:matvec`.** `vec:matvec-into` writes a CALLER's array, which
   the device would have to download into and the caller's next write invalidate; `vec:dot`
   is one reduction over two vectors the device would have to be handed, and loses to the

@@ -1259,6 +1259,105 @@
               (linalg:exp (linalg:sub a (linalg:amax a :axis ax :keepdims t)))))
         (linalg:div e (linalg:sum e :axis ax :keepdims t)))))
 
+;; --- the fused compositions (todo-499) --------------------------------------------
+;; Six internal members that spell, as ONE call each, a composition torch.lisp used to
+;; spell as a chain of the members above: torch:softmax's adjoint, the exact torch:gelu
+;; and its adjoint, torch:layer-norm's normalization and its adjoint, and the dropout
+;; mask. Each defun IS the chain, member for member and in the same order, so on every
+;; CPU path the bits are what the chain produced -- and on the device each is one kernel
+;; that replays the chain rounding for rounding (.kb/gpu.md, "The fused tier"). The two
+;; adjoints that take an OLD gradient fold their contributions onto it in the order the
+;; tape would have (.kb/torch.md).
+
+(defun linalg::%la-softmax-grad (g out ax)
+  ;; torch:softmax's adjoint out * (g - sum(g * out)) along the normalized axis ax.
+  (linalg:mul out
+   (linalg:sub g (linalg:sum (linalg:mul g out) :axis ax :keepdims t))))
+
+(defun linalg::%la-gelu (x)
+  ;; x * (1 + erf(x / sqrt 2)) / 2 as torch:gelu composed it: the 0.5 branch, the
+  ;; sqrt-2 branch through erf, added to 1, multiplied.
+  (linalg:mul (linalg:mul x 0.5)
+              (linalg:add 1.0 (linalg:erf (linalg:div x 1.4142135623730951)))))
+
+(defun linalg::%la-gelu-grad (g x old)
+  ;; The tape's backward through that composition: the outer multiply hands g * t4 to
+  ;; the 0.5 branch and g * t1 to the erf branch, erf's adjoint is g * (2 / sqrt pi) *
+  ;; exp(-t2^2), and the two branches reach x in the reverse walk's order -- the sqrt-2
+  ;; branch first, then the 0.5 branch -- after whatever x had accumulated (old, or nil).
+  (let* ((t1 (linalg:mul x 0.5))
+         (t2 (linalg:div x 1.4142135623730951))
+         (t4 (linalg:add 1.0 (linalg:erf t2)))
+         (g1 (linalg:mul g t4))
+         (g4 (linalg:mul g t1))
+         (g2
+          (linalg:mul g4
+                      (linalg:mul 1.1283791670955126
+                       (linalg:exp (linalg:negative (linalg:mul t2 t2))))))
+         (b (linalg:div g2 1.4142135623730951))
+         (a (linalg:mul g1 0.5)))
+    (linalg:add (if (null old) b (linalg:add old b)) a)))
+
+(defun linalg::%la-layer-norm (x eps)
+  ;; (x - mean) / sqrt(var + eps) over the LAST axis, as torch:layer-norm composed it:
+  ;; the mean, the deviation, the variance (torch:var's own mean, deviation, square,
+  ;; sum and divisor -- the same bits as the first two, so they are reused), eps, the
+  ;; square root, the division.
+  (let* ((d (array-dimensions x))
+         (ax (- (length d) 1))
+         (n (nth ax d))
+         (mu (linalg:mean x :axis ax :keepdims t))
+         (dev (linalg:sub x mu))
+         (v
+          (linalg:div (linalg:sum (linalg:mul dev dev) :axis ax :keepdims t)
+                      n)))
+    (linalg:div dev (linalg:sqrt (linalg:add v eps)))))
+
+(defun linalg::%la-layer-norm-grad (g x eps old)
+  ;; The tape's backward through that composition, g being the normalized output's
+  ;; gradient. x feeds four nodes -- the two means and the two subtractions -- and the
+  ;; reverse walk reaches them as the squared deviations (a1), the variance's mean
+  ;; (a2), the deviation (a3) and the mean (a4), adding each onto x's gradient in that
+  ;; order after whatever it held (old, or nil). Every line is the adjoint torch.lisp
+  ;; spells for that op, the broadcast onto zeros of the reduction adjoints included.
+  (let* ((d (array-dimensions x))
+         (ax (- (length d) 1))
+         (n (nth ax d))
+         (mu (linalg:mean x :axis ax :keepdims t))
+         (dev (linalg:sub x mu))
+         (sd
+          (linalg:sqrt
+           (linalg:add (linalg:div
+                        (linalg:sum (linalg:mul dev dev) :axis ax :keepdims t)
+                        n) eps)))
+         (g-dev (linalg:div g sd))
+         (g-sd
+          (linalg:sum
+           (linalg:negative (linalg:div (linalg:mul g dev) (linalg:mul sd sd)))
+           :axis ax
+           :keepdims t))
+         (g-s (linalg:div (linalg:div g-sd (linalg:mul 2.0 sd)) n))
+         (g-sq (linalg:add (linalg:zeros-like x) g-s))
+         (a1 (linalg:add (linalg:mul g-sq dev) (linalg:mul g-sq dev)))
+         (g-m2 (linalg:sum (linalg:negative a1) :axis ax :keepdims t))
+         (a2 (linalg:div (linalg:add (linalg:zeros-like x) g-m2) n))
+         (g-mu (linalg:sum (linalg:negative g-dev) :axis ax :keepdims t))
+         (a4 (linalg:div (linalg:add (linalg:zeros-like x) g-mu) n))
+         (acc (if (null old) a1 (linalg:add old a1))))
+    (linalg:add (linalg:add (linalg:add acc a2) g-dev) a4)))
+
+(defun linalg::%la-dropout-mask (shape p st single)
+  ;; The inverted-dropout mask (rand > p) / (1 - p) -- single-float when single is
+  ;; non-nil -- drawn from the generator state st, which is advanced IN PLACE to the
+  ;; state the fill ends on: the linalg:rand, linalg:greater and linalg:div that
+  ;; torch:dropout composed, as one member. The caller restores the specials from st.
+  (let* ((u (linalg::%la-make shape 0.0 (if single 'single-float nil)))
+         (end (linalg::%la-rng-fill u st 0 0.0 1.0)))
+    (setf (aref st 0) (aref end 0))
+    (setf (aref st 1) (aref end 1))
+    (setf (aref st 2) (aref end 2))
+    (linalg:div (linalg:greater u p) (- 1.0 p))))
+
 (defun linalg:log-softmax (a &key axis)
   ;; The logarithm of linalg:softmax, computed as (a - max) - log(sum(exp(a -
   ;; max))) rather than as (log (softmax a)) so an exactly-zero weight gives

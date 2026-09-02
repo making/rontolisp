@@ -213,6 +213,47 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	boolean adamStepF(float[] x, int ox, float[] g, int og, float[] m, int om, float[] v, int ov, int n, double[] rule);
 
 	/**
+	 * The FUSED tier ({@code .todo/499}): the exact GELU, its adjoint, the last-axis
+	 * softmax and its adjoint, layer-norm's normalization and its adjoint, and the
+	 * inverted-dropout mask, each as one pass where the {@code torch.lisp} composition
+	 * launched a chain of members -- every rounding of the chain reproduced ({@link Gpu}
+	 * has the per-member contract). On CUDA since todo-499; the Metal half declines them
+	 * all, and the compositions run there member by member as before.
+	 * @return {@code true} when the result was filled
+	 */
+	boolean gelu(double[] a, int oa, double[] c, int oc, int n);
+
+	boolean geluF(float[] a, int oa, float[] c, int oc, int n);
+
+	boolean geluGrad(double[] g, int og, double[] x, int ox, double @org.jspecify.annotations.Nullable [] old, int oOld,
+			double[] c, int oc, int n);
+
+	boolean geluGradF(float[] g, int og, float[] x, int ox, float @org.jspecify.annotations.Nullable [] old, int oOld,
+			float[] c, int oc, int n);
+
+	boolean softmax(double[] a, int oa, double[] c, int oc, int rows, int len);
+
+	boolean softmaxF(float[] a, int oa, float[] c, int oc, int rows, int len);
+
+	boolean softmaxGrad(double[] g, int og, double[] s, int os, double[] c, int oc, int rows, int len);
+
+	boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len);
+
+	boolean layerNorm(double[] x, int ox, double[] c, int oc, int rows, int len, double eps);
+
+	boolean layerNormF(float[] x, int ox, float[] c, int oc, int rows, int len, double eps);
+
+	boolean layerNormGrad(double[] g, int og, double[] x, int ox, double @org.jspecify.annotations.Nullable [] old,
+			int oOld, double[] c, int oc, int rows, int len, double eps);
+
+	boolean layerNormGradF(float[] g, int og, float[] x, int ox, float @org.jspecify.annotations.Nullable [] old,
+			int oOld, float[] c, int oc, int rows, int len, double eps);
+
+	boolean dropoutMask(double[] c, int oc, int n, double p, double span, int s1, int s2, int s3);
+
+	boolean dropoutMaskF(float[] c, int oc, int n, double p, double span, int s1, int s2, int s3);
+
+	/**
 	 * A host array this device may hold a resident copy of is about to be written, so
 	 * that copy is stale -- and, if it was the authoritative one ({@link #lazyResults}),
 	 * it is brought home first. Both halves keep such copies ({@link DeviceResidency}: a

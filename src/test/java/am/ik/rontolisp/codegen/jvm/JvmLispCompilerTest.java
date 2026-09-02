@@ -12838,6 +12838,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTorchFusedCompositions() throws Exception {
+		// TorchGradcheck.FUSED_PROGRAM: the fused torch nodes (todo-499) against the
+		// compositions they replaced, bit for bit, on the compiled backend.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunTorchOptimizerRules() throws Exception {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM): the
 		// SGD/Adam rules against hand-computed values, the batching and mask helpers,
@@ -14735,6 +14743,20 @@ class JvmLispCompilerTest {
 		assertThatThrownBy(() -> compileAndRun("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
 			.rootCause()
 			.hasMessageContaining("packed integer vector");
+	}
+
+	@Test
+	void compilePackedFloatArrayRejectsAdjustArray() {
+		// A packed float array has no fill-pointer/adjustability/displacement surface,
+		// same as a packed integer vector; adjust-array's %array-disp-target probe used
+		// to reach a bare checkcast ArrayList on the double[]/float[] representation
+		// (ClassCastException) instead of this clear error.
+		assertThatThrownBy(() -> compileAndRun("(adjust-array (make-array 3 :element-type 'double-float) 5)"))
+			.rootCause()
+			.hasMessageContaining("packed float array");
+		assertThatThrownBy(() -> compileAndRun("(adjust-array (make-array 3 :element-type 'single-float) 5)"))
+			.rootCause()
+			.hasMessageContaining("packed float array");
 	}
 
 	@Test

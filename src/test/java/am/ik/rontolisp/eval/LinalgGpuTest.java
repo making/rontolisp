@@ -181,24 +181,27 @@ class LinalgGpuTest {
 		// tier and the clip norm's sum of squares, resident-only as well.
 		for (String member : new String[] { "add", "sub", "mul", "div", "maximum", "minimum", "sum", "amax", "amin",
 				"transpose", "sqrt", "abs", "negative", "sign", "greater", "greater-equal", "less", "less-equal",
-				"equal", "where", "reshape", "concatenate", "take-rows", "gather" }) {
+				"equal", "where", "reshape", "concatenate", "take-rows", "gather", "softmax" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member)
 				.isEqualTo("#<function LINALG:" + member.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, false).print()).as(member).isEqualTo("#<lambda>");
 		}
 		for (String internal : new String[] { "%la-adam-step", "%la-gather-strided", "%la-scale", "%la-scatter-rows",
-				"%la-sum-squares" }) {
+				"%la-sum-squares",
+				// The fused tier (.todo/499): the compositions torch.lisp spells as one
+				// member each.
+				"%la-softmax-grad", "%la-gelu", "%la-gelu-grad", "%la-layer-norm", "%la-layer-norm-grad",
+				"%la-dropout-mask" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, true).print()).as(internal)
 				.isEqualTo("#<function LINALG::" + internal.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, false).print()).as(internal)
 				.isEqualTo("#<lambda>");
 		}
-		// Forty-four linalg: members and no others. matmul, mean, var, softmax, square,
-		// relu, slice, flatten and the exact torch:gelu are accelerated THROUGH them, not
-		// instead of them, so they must still be the library's own lambdas under the
-		// flag.
-		for (String member : new String[] { "matmul", "outer", "norm", "trace", "argmax", "argmin", "softmax", "mean",
-				"var", "slice", "flatten", "stack" }) {
+		// Fifty-one linalg: members and no others. matmul, mean, var, log-softmax,
+		// square, relu, slice and flatten are accelerated THROUGH them, not instead of
+		// them, so they must still be the library's own lambdas under the flag.
+		for (String member : new String[] { "matmul", "outer", "norm", "trace", "argmax", "argmin", "log-softmax",
+				"mean", "var", "slice", "flatten", "stack" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member).isEqualTo("#<lambda>");
 		}
 		// And the one member OUTSIDE linalg: -- vec:matvec, installed when the vec
@@ -206,6 +209,70 @@ class LinalgGpuTest {
 		assertThat(eval("(vec:zeros 1) #'vec:matvec", true).print()).isEqualTo("#<function VEC:MATVEC>");
 		assertThat(eval("(vec:zeros 1) #'vec:matvec", false).print()).isEqualTo("#<lambda>");
 		assertThat(eval("(vec:zeros 1) #'vec:dot", true).print()).isEqualTo("#<lambda>");
+	}
+
+	// --- the fused tier (.todo/499) --------------------------------------------------
+
+	/** Rows enough for the fold rule and the fold threshold at a 384-wide row. */
+	private static final int FUSED_ROWS = (int) Math.max(256, (am.ik.gpu.GpuThresholds.foldMinElements() + 383) / 384);
+
+	/** The fused tier's operands: two inexact {@code FUSED_ROWS x 384} arrays. */
+	private static String fusedOperands(String option) {
+		int n = FUSED_ROWS * 384;
+		return """
+				(defparameter *x* (linalg:reshape (linalg:linspace -3.0 3.0 %d%s) '(%d 384)))
+				(defparameter *g* (linalg:reshape (linalg:linspace 1.0 -2.0 %d%s) '(%d 384)))
+				""".formatted(n, option, FUSED_ROWS, n, option, FUSED_ROWS);
+	}
+
+	@Test
+	void theFusedTierLandsOnTheChainsBitsWhereItHasNoLibmAndWithinToleranceWhereItHas() {
+		// layer-norm and its adjoint, softmax's adjoint and the dropout mask replay
+		// chains with no library function in them and are byte-identical to the defun;
+		// softmax and the exact GELU carry the device's exp and erf and stand to the
+		// defun as those members do. The state vector the mask advances is checked too.
+		for (String option : DOUBLES ? new String[] { "", " :element-type 'single-float" }
+				: new String[] { " :element-type 'single-float" }) {
+			String operands = fusedOperands(option);
+			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm *x* 1.0e-5)");
+			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 nil)");
+			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)");
+			assertMatchesScalarOracle(operands + "(linalg::%la-softmax-grad *g* *x* 1)");
+			String mask = "(linalg::%la-dropout-mask '(" + FUSED_ROWS + " 384) 0.1 *st* "
+					+ (option.isEmpty() ? "nil" : "t") + ")";
+			assertMatchesScalarOracle("(linalg:seed 5) (defparameter *st* (linalg::%la-rng-state)) " + mask);
+			assertMatchesScalarOracle("(linalg:seed 5) (defparameter *st* (linalg::%la-rng-state)) " + mask + " *st*");
+			// softmax sits where a single libm member sits, per element. The GELU pair
+			// CANCELS: `1 + erf(x / sqrt 2)` is 0.0027 at x = -3, so erf's last-ulp
+			// difference is 2e-5 relative there at #f (measured), and the adjoint ends in
+			// a sum of two branches with the same property -- so the pair is pinned the
+			// way an inexact product is, as a fraction of the largest element.
+			assertThat(worstRelative(elements(eval(operands + "(linalg:softmax *x* :axis -1)", true)),
+					elements(eval(operands + "(linalg:softmax *x* :axis -1)", false))))
+				.as("softmax" + option)
+				.isLessThan(option.isEmpty() ? 1e-12 : 1e-5);
+			for (String call : new String[] { "(linalg::%la-gelu *x*)", "(linalg::%la-gelu-grad *g* *x* nil)",
+					"(linalg::%la-gelu-grad *g* *x* *g*)" }) {
+				assertThat(divergence(elements(eval(operands + call, true)), elements(eval(operands + call, false))))
+					.as(call + option)
+					.isLessThan(option.isEmpty() ? 1e-12 : 1e-5);
+			}
+		}
+	}
+
+	@Test
+	void theFusedTierReallyRanOnTheDeviceAndAnyOtherAxisDeclines() {
+		// Bit-identity cannot say a member ran, the residency hit count can: a fused
+		// member over an operand the device already holds is a hit. And softmax over
+		// any axis but the last declines to the defun, whose members run one by one --
+		// the same answer, from a different route.
+		String operands = fusedOperands(" :element-type 'single-float");
+		long hits = am.ik.gpu.GpuThresholds.residencyHits();
+		eval(operands + "(linalg::%la-layer-norm-grad *g* (linalg::%la-layer-norm *x* 1.0e-5) 1.0e-5 nil)", true);
+		assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits);
+		assertThat(worstRelative(elements(eval(operands + "(linalg:softmax *x* :axis 0)", true)),
+				elements(eval(operands + "(linalg:softmax *x* :axis 0)", false))))
+			.isLessThan(1e-5);
 	}
 
 	// --- the matrix-by-vector product (vec:matvec, 2026-08-22) -----------------------

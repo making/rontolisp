@@ -273,7 +273,10 @@ share `torch::%t-grad-reshape`.
 | `var`/`std` | COMPOSED from mean/sub/mul/sum/div (+ sqrt) | from the tape -- no bespoke adjoint; keeps the `(n - ddof)` divisor differentiable |
 | `amax` | `amax` | mask `(= a out)`, gradient split EVENLY among ties (PyTorch's amax rule) |
 | `argmax` | `argmax` | none -- returns the RAW index value/array, not a tensor |
-| `softmax`/`log-softmax` | `softmax`/`log-softmax` | `s*(g - sum(g*s))` / `g - exp(out)*sum(g)`, per `:axis` distribution |
+| `softmax`/`log-softmax` | `softmax`/`log-softmax` | `s*(g - sum(g*s))` / `g - exp(out)*sum(g)`, per `:axis` distribution -- softmax's, in the `:axis` form, as the ONE member `linalg::%la-softmax-grad` (todo-499) |
+| `gelu` (`:none`) | `%la-gelu` | `%la-gelu-grad`, the tape's backward through the five ops the composition was, onto the gradient the input already held (below, "The fused compositions") |
+| `layer-norm` (the normalization) | `%la-layer-norm` | `%la-layer-norm-grad`, the tape's backward through mean / sub / var / add / sqrt / div, onto what the input held; `* weight + bias` stays two torch ops |
+| `dropout` | `%la-dropout-mask` then `mul` | the mask is a constant: `g * mask` |
 | `masked-fill` | `where` | `g` where the mask is zero, 0 where filled; mask and fill value are constants. `-inf` fills are safe through softmax (the `exp` underflow clamp, `.kb/linalg.md`) |
 | `reshape`/`view`/`unsqueeze`/`squeeze` | `reshape`/`expand-dims`/`squeeze` | `%t-grad-reshape` (row-major order is shared). `view` IS `reshape` here -- linalg results are fresh copies, nothing aliases |
 | `transpose` | `transpose` (axes normalized non-negative) | transpose by the INVERSE permutation |
@@ -382,11 +385,13 @@ Two surface decisions the todo's text does not get:
   is the single spelling, and it also accepts a plain FUNCTION, which is why
   there is no `torch:relu` MODULE either -- an activation goes into a
   `torch:sequential` as `(function torch:relu)`. `torch:gelu` joined it the
-  same way with the chapter-3 port, and is a pure COMPOSITION of torch ops -- no adjoint of
-  its own -- over `torch:erf`, whose kernel is `linalg:erf`. Its
-  `:approximate` defaults to `:none`, the exact
+  same way with the chapter-3 port. Its `:approximate` defaults to `:none`, the exact
   `x * (1 + erf(x / sqrt(2))) / 2`, matching `nn.GELU`'s own default; `:tanh`
-  is the GPT/BERT form. Shipping only the `tanh` form would have been a
+  is the GPT/BERT form, a pure COMPOSITION of torch ops. The exact form was one too until
+  todo-499 made it ONE node over `linalg::%la-gelu` with the adjoint
+  `linalg::%la-gelu-grad` -- both defuns spell the composition member for member, so the
+  bits are the composition's on every backend ("The fused compositions", below).
+  Shipping only the `tanh` form would have been a
   divergence whose "why" was "we did not add erf" -- see `.kb/linalg.md`.
 - **`torch:fields` is what makes a module tree walkable from
   OUTSIDE.** `torch:field` reads one field by name, which is all a forward
@@ -408,8 +413,10 @@ Two surface decisions the todo's text does not get:
 over every leading axis; PyTorch's default
 `U(-1/sqrt(in), 1/sqrt(in))` init is kept for both, `torch:embedding` keeps
 `N(0, 1)`, and `torch:layer-norm` normalizes over the LAST axis with the biased
-(`ddof` 0) variance -- composed from torch ops, so the normalization itself is
-differentiable. `torch:dropout` is inverted dropout reading slot 4, and the
+(`ddof` 0) variance -- since todo-499 one node over `linalg::%la-layer-norm` whose
+adjoint spells the tape's backward through the composition it was (below), the affine
+`* weight + bias` still two torch ops. `torch:dropout` is inverted dropout reading slot
+4, its mask one member (`linalg::%la-dropout-mask`) over an explicit generator state, and the
 losses are plain functions: `torch:mse-loss` and a `torch:cross-entropy-loss`
 that flattens all but the last axis, picks `-log-softmax` at the target class,
 and under `:ignore-index` drops the position from BOTH the sum and the mean's
@@ -659,6 +666,53 @@ unsupported (torch needs arrays, like linalg): a torch program is rejected
 there long before any `defstruct` is reached -- measured, the error is
 `LINALG::%LA-MAKE: lambda-list keywords ... are not supported with --no-gc` --
 so the backend's own defstruct rejection never comes into play.
+
+## The fused compositions, and the accumulated-gradient protocol (todo-499)
+
+Four things a transformer step spends a third of its device time on were compositions of
+torch ops -- one `linalg:` member per op, one memory pass per member on a GPU. Since
+2026-09-02 each is ONE internal `linalg` member, so that `--gpu` can run it as one kernel
+(`.kb/gpu.md`, "The fused tier"), and **nothing about the bits moved on any backend**:
+
+| torch op | forward member | adjoint member |
+|---|---|---|
+| `torch:gelu` (`:none`, over an array) | `%la-gelu (x)` | `%la-gelu-grad (g x old)` |
+| `torch:layer-norm`'s normalization | `%la-layer-norm (x eps)` | `%la-layer-norm-grad (g x eps old)` |
+| `torch:softmax` in its `:axis` form | `linalg:softmax` (unchanged) | `%la-softmax-grad (g out ax)` |
+| `torch:dropout`'s mask | `%la-dropout-mask (shape p st single)` | -- (a constant) |
+
+**Each defun IS the composition it replaced, member for member and in the tape's order**
+(`linalg.lisp`, "the fused compositions"), which is what keeps the CPU bytes: a fused
+forward is the same `linalg:` calls the torch ops made, and a fused adjoint is the same
+`linalg:` calls the reverse walk made -- `torch:sub`'s `unbroadcast` of a negated gradient
+as a `negative` then an axis `sum`, `torch:mean`'s `%t-grad-bcast` as a broadcast `add` onto
+`zeros-like` (which is why `-0.0` gradients come out `+0.0`, as they always did), the
+squared deviations' two equal contributions as two `mul`s and an `add`.
+`TorchGradcheck.FUSED_PROGRAM` pins T against the old compositions on all three test
+backends, and `ci-spec.yaml`'s `torch-fused-compositions` on all four.
+
+**The order the tape accumulates one input's several contributions in is part of the
+value, and the adjoint members take it over.** The GELU composition reached `x` twice
+(the sqrt-2 branch first, then the 0.5 branch), the layer-norm composition four times
+(dev2, the variance's mean, dev, the mean); `%t-accum` adds each onto whatever `x` held
+-- a residual's contribution, typically, processed earlier -- so `x.grad` was
+`(((R + A1) + A2) + A3) + A4`, and a fused adjoint answering `A1 + .. + A4` for the tape
+to add would associate differently. So the members take `old`, the gradient `x` holds when
+the adjoint runs, and answer the gradient it holds AFTER the node; `torch::%t-fold-grad`
+reads the slot, CLEARS it, and hands the answer back for `%t-accum` to store. The claim that
+nothing else can land between the composition's contributions holds because a DFS
+finishes a node only after its parents, and the composition's internal nodes are reachable
+from nowhere else -- `.kb/gpu.md` walks the finish order. A single tensor listed several
+times as a parent was the alternative (the tape would then add the contributions itself),
+rejected because a fused kernel would have had to write four arrays and the tape add them
+back in three passes.
+
+`torch:dropout` needs no protocol: its mask was always a constant operand of one
+`torch:mul`. What changed is only that the three members (`rand`, `greater`, `div`) are
+one, over an explicit state vector that the member advances IN PLACE -- the same explicit
+state `%la-rng-fill` takes -- and `%la-rng-restore` puts back. A scalar input keeps the
+old composition in both `torch:gelu` and `torch:layer-norm` (a number has no shape to
+fuse over).
 
 ## Wiring (the LinalgLibrary pattern, plus the ordering rule)
 

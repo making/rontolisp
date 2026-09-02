@@ -3,7 +3,6 @@
 `(torch:gelu a &key approximate)`
 
 ガウス誤差線形ユニット (PyTorch の `nn.GELU` / `torch.nn.functional.gelu`) です。
-torch の演算だけで組み立てているため、専用の随伴なしで微分可能です。
 `:approximate` で定式化を選びます。
 
 | `:approximate` | 式 | PyTorch |
@@ -12,8 +11,11 @@ torch の演算だけで組み立てているため、専用の随伴なしで�
 | `:tanh` | `x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 x^3))) / 2` | `approximate='tanh'` |
 
 既定は標準正規分布 `X` に対する `x * P(X <= x)` の厳密形で、
-[`torch:erf`](torch-erf.md) の上に構築されています。`:tanh` 形式は GPT/BERT の
-定式化で、厳密形とは `1e-3` 程度で一致します。[`torch:relu`](torch-relu.md) と
+[`linalg:erf`](linalg-erf.md) の上に構築されています。これは専用の随伴を持つ
+1 つの演算で、その随伴は構成要素である 5 つの演算の逆伝播をそのまま綴っているため、
+合成と厳密に同じ値を計算し、[`--gpu`](../../guides/gpu-acceleration.md) では
+1 パスで実行されます。`:tanh` 形式は GPT/BERT の定式化で、torch の演算から
+組み立てられており、厳密形とは `1e-3` 程度で一致します。[`torch:relu`](torch-relu.md) と
 違ってどこでも滑らかで、負側にもわずかな勾配を通します。Transformer の
 フィードフォワードブロックがこれを使うのはそのためです。
 

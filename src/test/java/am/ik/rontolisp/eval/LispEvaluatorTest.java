@@ -11851,6 +11851,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void torchFusedCompositionsAreTheCompositionsTheyReplacedBitForBit() {
+		// TorchGradcheck.FUSED_PROGRAM, shared verbatim with the JVM and WASM backends:
+		// the exact torch:gelu, torch:layer-norm, torch:softmax's adjoint and
+		// torch:dropout's mask are one internal linalg member each since todo-499, and
+		// each prints T against the torch-op composition it replaced -- forward,
+		// gradient, and the gradient of a parameter the input also feeds directly.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
+	}
+
+	@Test
 	void torchOptimizerRulesAndTrainingPlumbing() {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM), shared
 		// verbatim with the JVM and WASM backends: the SGD/Adam update rules against
@@ -17003,6 +17019,18 @@ class LispEvaluatorTest {
 			.hasMessageContaining("out of range");
 		assertThatThrownBy(() -> eval("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
 			.hasMessageContaining("packed integer vector");
+	}
+
+	@Test
+	void packedFloatArrayRejectsAdjustArray() {
+		// A packed float array has no fill-pointer/adjustability/displacement surface,
+		// same as a packed integer vector -- requireGeneralArray answers this on the
+		// interpreter already; the JVM and wasm compile paths are pinned in
+		// JvmLispCompilerTest / WasmLispCompilerIntegrationTest.
+		assertThatThrownBy(() -> eval("(adjust-array (make-array 3 :element-type 'double-float) 5)"))
+			.hasMessageContaining("packed float array");
+		assertThatThrownBy(() -> eval("(adjust-array (make-array 3 :element-type 'single-float) 5)"))
+			.hasMessageContaining("packed float array");
 	}
 
 	@Test

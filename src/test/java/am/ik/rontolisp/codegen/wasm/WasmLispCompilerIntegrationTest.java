@@ -14830,6 +14830,14 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileTorchFusedCompositions() throws Exception {
+		// TorchGradcheck.FUSED_PROGRAM on the wasm-GC backend: the fused torch nodes
+		// (todo-499) against the compositions they replaced, bit for bit.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
+	}
+
+	@Test
 	void compileTorchOptimizerRules() throws Exception {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM) on the
 		// wasm-GC backend: the element-wise in-place parameter update, the optimizer
@@ -15437,6 +15445,18 @@ class WasmLispCompilerIntegrationTest {
 				(defparameter *fv* (make-array 4 :fill-pointer 2 :initial-element 5))
 				(print (fill-pointer (adjust-array *fv* 8)))
 				""")).isEqualTo("(#(7 7 7 0 0) NIL)\n(T #(1 1 1 9 9))\n#2A((1 2 0) (3 4 0) (0 0 0))\n2");
+	}
+
+	@Test
+	void compileAdjustArrayTrapsOnAPackedFloatArray() throws Exception {
+		// A packed float array has no fill-pointer/adjustability/displacement surface --
+		// the same shape a packed integer vector already traps on -- so adjust-array's
+		// %array-disp-target probe rejects it with a cast-failure trap rather than
+		// running (the interpreter and JVM answer a clear "not applicable to a packed
+		// float array" text instead; wasm has no custom trap-message channel here, so a
+		// trap is the parity bar on this backend).
+		compileAndExpectTrap("(adjust-array (make-array 3 :element-type 'double-float) 5)");
+		compileAndExpectTrap("(adjust-array (make-array 3 :element-type 'single-float) 5)");
 	}
 
 	@Test

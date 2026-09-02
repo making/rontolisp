@@ -1103,6 +1103,66 @@ class JvmLinalgGpuAccelCompilerTest {
 		}
 	}
 
+	// --- the fused tier (.todo/499) --------------------------------------------------
+
+	@Test
+	void theFusedTierIsInTheEmitGate() {
+		// A program whose only linalg: call is one of the fused members embeds the
+		// bridge -- softmax in its :axis form among them, which is the one shape the
+		// device takes it at.
+		for (String call : new String[] { "(linalg:softmax #d((1.0 2.0) (3.0 4.0)) :axis -1)",
+				"(linalg::%la-softmax-grad #d((1.0 2.0)) #d((0.5 0.5)) 1)", "(linalg::%la-gelu #d(1.0 2.0))",
+				"(linalg::%la-gelu-grad #d(1.0) #d(2.0) nil)", "(linalg::%la-layer-norm #d((1.0 2.0)) 1.0e-5)",
+				"(linalg::%la-layer-norm-grad #d((1.0 2.0)) #d((3.0 4.0)) 1.0e-5 nil)",
+				"(linalg::%la-dropout-mask '(2) 0.5 (linalg::%la-rng-state) nil)" }) {
+			assertThat(embedsGpuBridge(compile("(print " + call + ")", true))).as(call).isTrue();
+			assertThat(embedsGpuBridge(compile("(print " + call + ")", false))).as(call).isFalse();
+		}
+	}
+
+	@Test
+	void theFusedTierRunsOnTheCompiledBackendAndLandsOnTheChainsBits() throws Exception {
+		// Each fused member against the chain of members it replaces, written out and
+		// run through the same call sites: T with the flag (fused kernel against device
+		// chain, bit for bit, exp and erf included) and T without it (defun against
+		// defun). The libm-free three are also byte-identical to the unflagged run.
+		int rows = (int) Math.max(256, (am.ik.gpu.GpuThresholds.foldMinElements() + 383) / 384);
+		int n = rows * 384;
+		String program = """
+				(defparameter *x* (linalg:reshape (linalg:linspace -3.0 3.0 %d%s) '(%d 384)))
+				(defparameter *g* (linalg:reshape (linalg:linspace 1.0 -2.0 %d%s) '(%d 384)))
+				(defun softmax-chain (a)
+				  (let ((e (linalg:exp (linalg:sub a (linalg:amax a :axis 1 :keepdims t)))))
+				    (linalg:div e (linalg:sum e :axis 1 :keepdims t))))
+				(defun gelu-chain (x)
+				  (linalg:mul (linalg:mul x 0.5) (linalg:add 1.0 (linalg:erf (linalg:div x 1.4142135623730951)))))
+				(defun gelu-grad-chain (g x old)
+				  (let* ((t1 (linalg:mul x 0.5)) (t2 (linalg:div x 1.4142135623730951))
+				         (t4 (linalg:add 1.0 (linalg:erf t2)))
+				         (g1 (linalg:mul g t4)) (g4 (linalg:mul g t1))
+				         (g2 (linalg:mul g4 (linalg:mul 1.1283791670955126
+				                                        (linalg:exp (linalg:negative (linalg:mul t2 t2))))))
+				         (b (linalg:div g2 1.4142135623730951)) (a (linalg:mul g1 0.5)))
+				    (linalg:add (if (null old) b (linalg:add old b)) a)))
+				(print (linalg:array-equal (linalg:softmax *x* :axis -1) (softmax-chain *x*)))
+				(print (linalg:array-equal (linalg::%%la-gelu *x*) (gelu-chain *x*)))
+				(print (linalg:array-equal (linalg::%%la-gelu-grad *g* *x* nil) (gelu-grad-chain *g* *x* nil)))
+				(print (linalg:array-equal (linalg::%%la-gelu-grad *g* *x* *g*) (gelu-grad-chain *g* *x* *g*)))
+				(print (linalg:sum (linalg::%%la-layer-norm *x* 1.0e-5)))
+				(print (linalg:sum (linalg::%%la-layer-norm-grad *g* *x* 1.0e-5 *g*)))
+				(print (linalg:sum (linalg::%%la-softmax-grad *g* *x* 1)))
+				(linalg:seed 9)
+				(defparameter *st* (linalg::%%la-rng-state))
+				(print (linalg:sum (linalg::%%la-dropout-mask '(%d 384) 0.25 *st* %s)))
+				(print *st*)
+				""".formatted(n, TYPE, rows, n, TYPE, rows, rows, DOUBLES ? "nil" : "t");
+		String oracle = scalar(program);
+		assertThat(oracle).startsWith("T\nT\nT\nT\n");
+		assertThat(accel(program)).as("--gpu").isEqualTo(oracle);
+		assertThat(run(compile(program, true, false, true))).as("--gpu --simd")
+			.isEqualTo(run(compile(program, false, false, true)));
+	}
+
 	// MethodHandles.Lookup.defineClass(byte[]) requires the defined class to share the
 	// lookup class's package; every test above compiles into the default package, so this
 	// one alone proves the whole embedded library -- the bridge glue AND every renamed

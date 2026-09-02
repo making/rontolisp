@@ -47,18 +47,23 @@ final class JvmArrayCompiler {
 		return ctx.usesIntArray ? ivName : fvOr(ctx, fvName, generalName);
 	}
 
-	// Emits an invokestatic _ivRequireGeneral guard rejecting a packed integer vector
-	// with a clear "not applicable" error (the fill-pointer / adjustability /
-	// displacement surface never applies to one -- it is always a simple array,
-	// mirroring the interpreter's requireGeneralArray; the wasm backend traps on the
-	// same shapes). Any other value passes through unchanged. A no-op unless the
-	// program uses packed integer vectors, keeping the default build byte-identical.
+	// Emits an invokestatic _ivRequireGeneral / _fvRequireGeneral guard rejecting a
+	// packed integer vector or packed float array with a clear "not applicable" error
+	// (the fill-pointer / adjustability / displacement surface never applies to either --
+	// they are always a simple array, mirroring the interpreter's requireGeneralArray;
+	// the wasm backend traps on the same shapes). Any other value passes through
+	// unchanged. A no-op unless the program uses the matching packed representation,
+	// keeping the default build byte-identical; the two checks chain (each returns its
+	// argument unless it throws) when a program uses both.
 	private static void emitRequireGeneralIfPacked(JvmLispCompiler.Ctx ctx, String className) {
-		if (!ctx.usesIntArray) {
-			return;
+		if (ctx.usesIntArray) {
+			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.REQUIRE_GENERAL,
+					JvmIntArrayRuntimeBuilder.REQUIRE_GENERAL_DESC);
 		}
-		invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.REQUIRE_GENERAL,
-				JvmIntArrayRuntimeBuilder.REQUIRE_GENERAL_DESC);
+		if (ctx.usesFloatArray) {
+			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.REQUIRE_GENERAL,
+					JvmFloatArrayRuntimeBuilder.REQUIRE_GENERAL_DESC);
+		}
 	}
 
 	static void compileMake(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
