@@ -510,10 +510,11 @@ final class WasmVecLoops {
 	//
 	// The --no-gc lowering of the arithmetic unary vec: kernels (sqrt / abs / square /
 	// negative / reciprocal + their -into siblings). --no-gc has NO vec.lisp defun to
-	// mirror, so unlike gcMap1's U_NEG / U_ABS (which reproduce the wasm-GC defun's
-	// 0 - x semantics) these use the NATIVE IEEE instructions (f64.neg keeps
+	// mirror, so these have always used the NATIVE IEEE instructions (f64.neg keeps
 	// (vec:negative #d(0.0)) at -0.0, f64.abs maps -0.0 to 0.0 -- the same edges the
-	// interpreter / JVM defuns produce). U_SQUARE exists only here: on the defun-driven
+	// interpreter / JVM defuns produce); gcMap1's U_NEG / U_ABS now agree, because the
+	// wasm-GC defun they mirror emits the same two instructions. U_SQUARE exists only
+	// here: on the defun-driven
 	// backends vec:square rides the mul kernels. The v128 and scalar lowerings compute
 	// identical results (every op is exact or correctly rounded per element). exp and
 	// sign are not driven through these bodies: their --no-gc lowering is a dedicated
@@ -797,14 +798,16 @@ final class WasmVecLoops {
 	// U_SQRT f64.sqrt is what WasmSqrtCompiler emits; the lane sqrt is correctly
 	// rounded at both widths (f32: the widen-compute-narrow round trip is
 	// exact), so it is bit-identical.
-	// U_NEG the wasm variable-path unary minus is 0 - x (a known IEEE edge
-	// divergence: (- 0.0) is 0.0 here, unlike interpreter/JVM), so the lane
-	// form is sub-from-splat-zero, NOT f64x2.neg.
+	// U_NEG the wasm variable-path unary minus is f64.neg (a sign-bit flip), so
+	// the lane form is f64x2.neg. It was sub-from-splat-zero while the
+	// variable path was _rat_sub(0, x); both moved together when that IEEE
+	// edge was fixed, and (vec:negative #d(0.0)) is -0.0 on all four now.
 	// U_RECIP (/ 1.0 x): div-from-splat-one; f32 lane div is exact by the
 	// 53 >= 2*24+2 double-rounding bound.
-	// U_ABS the wasm abs variable path is `x < 0 ? 0 - x : x` (keeps -0.0), so
-	// the lane form is bitselect(0 - v, v, v < 0), NOT f64x2.abs (which
-	// would map -0.0 to 0.0 and diverge from the defun).
+	// U_ABS the wasm abs variable path is f64.abs (a sign-bit clear, exactly
+	// Math.abs), so the lane form is f64x2.abs. It was
+	// bitselect(0 - v, v, v < 0) while the variable path was the _rat_cmp
+	// compare-and-subtract, which kept -0.0; both moved together.
 	//
 	// exp and signum have no lane form at all; their wasm-GC kernels walk elements
 	// through _v_get / _v_set (see WasmVecSimdRuntimeBuilder), and the --no-gc
@@ -842,9 +845,8 @@ final class WasmVecLoops {
 				simd(w, single ? Instruction.F32X4_SQRT : Instruction.F64X2_SQRT);
 			}
 			case U_NEG -> {
-				splatConstZero(w, single);
 				groupGet(w, gv, g);
-				simd(w, single ? Instruction.F32X4_SUB : Instruction.F64X2_SUB);
+				simd(w, single ? Instruction.F32X4_NEG : Instruction.F64X2_NEG);
 			}
 			case U_RECIP -> {
 				splatConstOne(w, single);
@@ -852,15 +854,8 @@ final class WasmVecLoops {
 				simd(w, single ? Instruction.F32X4_DIV : Instruction.F64X2_DIV);
 			}
 			case U_ABS -> {
-				// bitselect picks (0 - v) where the mask (v < 0) is set, v elsewhere.
-				splatConstZero(w, single);
 				groupGet(w, gv, g);
-				simd(w, single ? Instruction.F32X4_SUB : Instruction.F64X2_SUB);
-				groupGet(w, gv, g);
-				groupGet(w, gv, g);
-				splatConstZero(w, single);
-				simd(w, single ? Instruction.F32X4_LT : Instruction.F64X2_LT);
-				simd(w, Instruction.V128_BITSELECT);
+				simd(w, single ? Instruction.F32X4_ABS : Instruction.F64X2_ABS);
 			}
 			case U_RELU -> {
 				// bitselect picks v where the mask (v > 0) is set, 0 elsewhere.

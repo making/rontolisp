@@ -1284,18 +1284,10 @@ final class WasmLinalgSimdRuntimeBuilder {
 	private static void emitErf1F64(WasmWriter w, int x, int ax, int term, int total, int xx, int expT, int expAcc,
 			int n) {
 		set(w, x);
-		// ax = (abs x), which on this backend is x < 0 ? 0 - x : x (_rat_cmp's float
-		// path). -0.0 is NOT folded to 0.0 here, unlike Math.abs.
+		// ax = (abs x): f64.abs, the sign-bit clear the compiled defun now emits on
+		// its float branch (and exactly Math.abs, so -0.0 folds to 0.0 here too).
 		get(w, x);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.IF, 0x7C); // (result f64)
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		get(w, x);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.ELSE);
-		get(w, x);
-		w.write(Instruction.END);
+		w.write(Instruction.F64_ABS);
 		set(w, ax);
 		// (if (>= ax 6.0) (if (< x 0.0) -1.0 1.0) <the series>)
 		get(w, ax);
@@ -1367,25 +1359,23 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.F64_CONST).writeF64(1.1283791670955126);
 		get(w, ax);
 		w.write(Instruction.F64_MUL);
-		// (- (* ax ax)) is the generic unary minus: 0 - (ax * ax).
-		w.write(Instruction.F64_CONST).writeF64(0.0);
+		// (- (* ax ax)) is unary minus: f64.neg.
 		get(w, ax);
 		get(w, ax);
 		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_SUB);
+		w.write(Instruction.F64_NEG);
 		WasmVecSimdRuntimeBuilder.emitExpF64(w, expT, expAcc);
 		w.write(Instruction.F64_MUL);
 		get(w, total);
 		w.write(Instruction.F64_MUL);
-		// (if (< x 0.0) (- v) v), the negation again 0 - v. term is free here.
+		// (if (< x 0.0) (- v) v), the negation again f64.neg. term is free here.
 		set(w, term);
 		get(w, x);
 		w.write(Instruction.F64_CONST).writeF64(0.0);
 		w.write(Instruction.F64_LT);
 		w.write(Instruction.IF, 0x7C);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
 		get(w, term);
-		w.write(Instruction.F64_SUB);
+		w.write(Instruction.F64_NEG);
 		w.write(Instruction.ELSE);
 		get(w, term);
 		w.write(Instruction.END);
