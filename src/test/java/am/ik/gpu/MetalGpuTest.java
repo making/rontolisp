@@ -1227,7 +1227,11 @@ class MetalGpuTest {
 			assertThat(Gpu.copy(a, 3, new int[] { 1 }, spanA, out, 3, new int[] { 1 }, new int[] { 3, n },
 					new int[] { n }))
 				.isFalse();
-			assertThat(Gpu.map(Gpu.MAP_EXP, a, 3, new float[3 + n], 3, n)).isTrue();
+			// Bound to a local rather than passed anonymously: it becomes a resident
+			// copy the byte totals below count, and an anonymous one is unreachable from
+			// the moment it is made.
+			float[] exp = new float[3 + n];
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 3, exp, 3, n)).isTrue();
 			// reshape: one contiguous walk.
 			assertThat(Gpu.copy(a, 3, new int[] { 1 }, spanA, out, 3, new int[] { 1 }, new int[] { 3, n },
 					new int[] { n }))
@@ -1292,6 +1296,21 @@ class MetalGpuTest {
 			assertThat(Gpu.residentBytes()).isEqualTo(resident);
 			Gpu.materialize(a);
 			assertThat(a).isEqualTo(expected);
+			// The resident totals above count SIX arrays, and four of them (the exp
+			// result, out, t, sl) are dead to the JIT long before the last one is read.
+			// A resident copy goes when its host array does -- that is this backend's
+			// design and `aCollectedHostArrayTakesItsResidentCopyWithIt` pins it -- so a
+			// collection between the capture of `resident` and the assertion drops them
+			// and the count falls to the two still referenced. Seen: `expected 5364080
+			// but was 2097152`, 2 MB being exactly `a` and `cat`, once every three runs,
+			// with `a.clone()` just above as the allocation that triggers it. These
+			// fences are what make the totals mean what they say.
+			java.lang.ref.Reference.reachabilityFence(exp);
+			java.lang.ref.Reference.reachabilityFence(out);
+			java.lang.ref.Reference.reachabilityFence(t);
+			java.lang.ref.Reference.reachabilityFence(sl);
+			java.lang.ref.Reference.reachabilityFence(cat);
+			java.lang.ref.Reference.reachabilityFence(a);
 		}
 		finally {
 			Gpu.lazyResults(false);
