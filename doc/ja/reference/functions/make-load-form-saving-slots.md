@@ -9,7 +9,7 @@
 ```lisp
 (defstruct mlfss-pt x y)
 (make-load-form-saving-slots (make-mlfss-pt :x 1 :y 2))
-; => (%OBJ-NEW (QUOTE %struct-MLFSS-PT) (QUOTE 1) (QUOTE 2))
+; => (%OBJ-NEW '|%struct-MLFSS-PT| '1 '2)
 ```
 
 ```lisp

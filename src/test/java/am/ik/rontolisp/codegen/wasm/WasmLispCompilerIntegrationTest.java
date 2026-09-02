@@ -9080,8 +9080,7 @@ class WasmLispCompilerIntegrationTest {
 					(terpri)
 					(princ (list (pt-x (splice-pt)) (pt-y (splice-pt))))
 					""")));
-		assertThat(compileAndRunProgram(program))
-			.isEqualTo("dumped\n(%OBJ-NEW (QUOTE %struct-PT) (QUOTE 3) (QUOTE four))\n(3 four)");
+		assertThat(compileAndRunProgram(program)).isEqualTo("dumped\n(%OBJ-NEW '%struct-PT '3 'four)\n(3 four)");
 	}
 
 	// define-setf-expander / defsetf are consumed by the compile-path pass
@@ -9158,7 +9157,7 @@ class WasmLispCompilerIntegrationTest {
 						+ " (print (list (%class-designator (make-instance 'co-pt :x 1)) (%class-designator 42)))"
 						+ " (print (%class-slot-defs (class-of (make-instance 'co-pt :x 1))))"))))
 			.isEqualTo("INTEGER\nSTRING\nSYMBOL\nKEYWORD\nFLOAT\nCONS\nNULL\nBOOLEAN\nHASH-TABLE\nFUNCTION\n"
-					+ "(T T T CO-PT)\n(%class-CO-PT INTEGER)\n((X T))");
+					+ "(T T T CO-PT)\n(|%class-CO-PT| INTEGER)\n((X T))");
 		// Real unboundness: the supplied slot is bound, an unknown one is
 		// not, and slot-makunbound puts it back to unbound.
 		assertThat(compileAndRun(
@@ -10315,7 +10314,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void readSharpQuote() throws Exception {
-		assertThat(compileAndRunWithStdinFile("(print (read))", "#'car\n")).isEqualTo("(FUNCTION CAR)");
+		assertThat(compileAndRunWithStdinFile("(print (read))", "#'car\n")).isEqualTo("#'CAR");
 	}
 
 	@Test
@@ -12463,14 +12462,15 @@ class WasmLispCompilerIntegrationTest {
 	void gensymReturnsFreshSymbols() throws Exception {
 		assertThat(compileAndRun("(print (gensym)) (print (gensym \"tmp\")) (print (eq (gensym) (gensym)))"
 				+ "(print (symbolp (gensym))) (print (symbolp (funcall #'gensym)))"))
-			.isEqualTo("#:g1\n#:tmp2\nNIL\nT\nT");
+			.isEqualTo("#:|g1|\n#:|tmp2|\nNIL\nT\nT");
 	}
 
 	@Test
 	void gensymAcceptsAComputedPrefix() throws Exception {
 		// A computed prefix lowers to string construction over the literal-prefix
 		// gensym, so the printed name matches the interpreter's ("#:<prefix><n>").
-		assertThat(compileAndRun("(setq p \"tmp\") (print (gensym p)) (print (gensym p))")).isEqualTo("#:tmp1\n#:tmp2");
+		assertThat(compileAndRun("(setq p \"tmp\") (print (gensym p)) (print (gensym p))"))
+			.isEqualTo("#:|tmp1|\n#:|tmp2|");
 	}
 
 	@Test
@@ -12496,7 +12496,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (intern \"hello\")) (print (eq (intern \"FOO\") 'foo))"
 				+ "(print (symbolp (intern \"hello\"))) (print (intern (symbol-name 'round-trip)))"
 				+ "(print (funcall #'intern \"abc\"))"))
-			.isEqualTo("hello\nT\nT\nROUND-TRIP\nabc");
+			.isEqualTo("|hello|\nT\nT\nROUND-TRIP\n|abc|");
 	}
 
 	@Test
@@ -12517,7 +12517,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (funcall (intern "EX-FN" :rt-pkg) 1))
 				(print (funcall (intern "IN-FN" :rt-pkg) 1))
 				(print (intern "foo" :cl-user))
-				""")).isEqualTo("T\n2\n3\nfoo");
+				""")).isEqualTo("T\n2\n3\n|foo|");
 	}
 
 	@Test
@@ -12608,7 +12608,7 @@ class WasmLispCompilerIntegrationTest {
 	void makeSymbolReturnsAFreshUninternedSymbol() throws Exception {
 		assertThat(compileAndRun("(print (make-symbol \"temp\")) (print (symbolp (make-symbol \"temp\")))"
 				+ "(print (eq (make-symbol \"foo\") 'foo)) (print (funcall #'make-symbol \"m\"))"))
-			.isEqualTo("#:temp\nT\nNIL\n#:m");
+			.isEqualTo("#:|temp|\nT\nNIL\n#:|m|");
 	}
 
 	@Test
@@ -16238,7 +16238,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (%obj-tag p))
 				(print (list (%obj-p p) (%obj-p (cons 1 2)) (%obj-p nil) (%obj-p 5)))
 				(print (eq (%obj-tag p) (%obj-tag (%obj-new '|%struct-POINT| 1 2))))
-				""")).isEqualTo("10\n99\n99\nT\nT\nNIL\n%struct-POINT\n(T NIL NIL NIL)\nT");
+				""")).isEqualTo("10\n99\n99\nT\nT\nNIL\n|%struct-POINT|\n(T NIL NIL NIL)\nT");
 	}
 
 	// equalp lives in the spliced prelude, which this harness does not run: the
@@ -16466,7 +16466,7 @@ class WasmLispCompilerIntegrationTest {
 				  (print (wc-extra alias)))
 				(print (format nil "~a|~s" (make-wc-node :value 1) (make-wc-node :value 2)))
 				"""))
-			.isEqualTo("(T T)\n(%class-WC-SUB \"c\" :POOLED T)\n(:POOLED :SEEN)" + "\n\"#<WC-NODE 1>|#<WC-NODE 2>\"");
+			.isEqualTo("(T T)\n(|%class-WC-SUB| \"c\" :POOLED T)\n(:POOLED :SEEN)" + "\n\"#<WC-NODE 1>|#<WC-NODE 2>\"");
 	}
 
 	@Test
@@ -16502,7 +16502,7 @@ class WasmLispCompilerIntegrationTest {
 				  (print (list (slot-boundp o 'a) (slot-value o 'a)))
 				  (slot-makunbound o 'a)
 				  (print (slot-boundp o 'a)))
-				""")).isEqualTo("(NIL T)\n(A %class-WU-BOX)\n(T 1)\nNIL");
+				""")).isEqualTo("(NIL T)\n(A |%class-WU-BOX|)\n(T 1)\nNIL");
 	}
 
 	@Test
@@ -16745,7 +16745,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("""
 				(print (symbol-name '|when used|))
 				(print '|noChange|)
-				""")).isEqualTo("\"when used\"\nnoChange");
+				""")).isEqualTo("\"when used\"\n|noChange|");
 	}
 
 	@Test

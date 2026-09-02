@@ -145,9 +145,10 @@ class WitImportInlinerTest {
 		List<LispVal> out = WitImportInliner.inline(LispReader.readAllFromString(DIRECTIVE + BODY), null,
 				WitExportDirective.Backend.WASM_GC, uploads(Map.of("gl.wit", GL_WIT)));
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-import")
-			.contains("(DEFPACKAGE GL (:USE CL) (:EXPORT create-shader shader-source compile-shader clear-color))")
-			.contains("(RONTOLISP:WASM-IMPORT (QUOTE GL:create-shader) :FROM \"gl\" :AS \"createShader\" "
-					+ ":PARAMS (QUOTE (:INT)) :RETURNS :INT)");
+			.contains(
+					"(DEFPACKAGE GL (:USE CL) (:EXPORT |create-shader| |shader-source| |compile-shader| |clear-color|))")
+			.contains("(RONTOLISP:WASM-IMPORT 'GL:|create-shader| :FROM \"gl\" :AS \"createShader\" "
+					+ ":PARAMS '(:INT) :RETURNS :INT)");
 	}
 
 	@Test
@@ -178,7 +179,7 @@ class WitImportInlinerTest {
 						"(rontolisp:wit-import \"wit/gl.wit\" :interface \"local:webgl/gl\" :package gl)\n" + BODY),
 				this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
-			.contains("(RONTOLISP:WASM-IMPORT (QUOTE GL:create-shader)");
+			.contains("(RONTOLISP:WASM-IMPORT 'GL:|create-shader|");
 	}
 
 	/**
@@ -220,13 +221,13 @@ class WitImportInlinerTest {
 		List<LispVal> out = WitImportInliner.inline(LispReader.readAllFromString(KV_DIRECTIVE), null,
 				WitExportDirective.Backend.OTHER, uploads(Map.of("kv.wit", KV_WIT)));
 		assertThat(out.stream().map(LispVal::print).toList()).containsExactly(
-				"(DEFPACKAGE KV (:USE CL) (:EXPORT bucket-get bucket-set open))",
-				"(DEFUN KV:bucket-get (self key) "
-						+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-get\" self key))",
-				"(DEFUN KV:bucket-set (self key value) "
-						+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-set\" self key value))",
-				"(DEFUN KV:open (identifier) "
-						+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"open\" identifier))");
+				"(DEFPACKAGE KV (:USE CL) (:EXPORT |bucket-get| |bucket-set| |open|))",
+				"(DEFUN KV:|bucket-get| (|self| |key|) "
+						+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-get\" |self| |key|))",
+				"(DEFUN KV:|bucket-set| (|self| |key| |value|) "
+						+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-set\" |self| |key| |value|))",
+				"(DEFUN KV:|open| (|identifier|) "
+						+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"open\" |identifier|))");
 	}
 
 	/**
@@ -259,7 +260,7 @@ class WitImportInlinerTest {
 			.stream()
 			.map(LispVal::print)
 			.toList()).containsExactly("(DEFUN MY-GL (MEMBER &REST ARGS) 0)",
-					"(RONTOLISP:WIT-PROVIDE \"local:webgl/gl\" (FUNCTION MY-GL))");
+					"(RONTOLISP:WIT-PROVIDE \"local:webgl/gl\" #'MY-GL)");
 	}
 
 	/**

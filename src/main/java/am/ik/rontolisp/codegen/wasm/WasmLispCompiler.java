@@ -1005,6 +1005,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	// in quotes and escapes the embedded " / \. See the type comment.
 	static final int FUNC_WRITE_STR_GC = FUNC_STR_TO_MEM + 1;
 
+	// _sym_esc_gc (str, from, to, _unused) -> () (todo 626): prints bytes [from, to) of
+	// a BARE SYMBOL NAME, |...|-framed with every embedded | / \ doubled when CLHS
+	// 22.1.3.3 says the bare spelling would not read back as itself (the empty name, a
+	// non-constituent byte, or an ASCII a-z byte -- see buildSymEscGcBody's Javadoc),
+	// verbatim otherwise. Reuses TYPE_WRITE_STR_GC's ((ref null eq),i32,i32,i32)->()
+	// shape (the fourth param is unused, kept only so no new type entry is needed);
+	// called from _print_val's bare-symbol arm in place of the old unconditional
+	// _write_str_gc(str, 0, len, esc=0) call. Never called from _princ_val -- princ
+	// never escapes (CLHS 22.1.3.3, *print-escape* false).
+	static final int FUNC_SYM_ESC_GC = FUNC_WRITE_STR_GC + 1;
+
 	// _charvec_to_str (v) -> (ref null eq): normalizes a mutable character vector (the
 	// general array shape holding TYPE_CHAR elements, marked by meta offset i31 == 1)
 	// into the equivalent quote-framed runtime string (built via _str_fresh); any other
@@ -1018,7 +1029,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _str_char_at. Reuses the unary TYPE_CALLABLE_BASE + 0 signature, so no new type
 	// entry. The SHAPE half is _charvec_p's (below): this function renders, and asks that
 	// one whether there is anything to render.
-	static final int FUNC_CHARVEC_TO_STR = FUNC_WRITE_STR_GC + 1;
+	static final int FUNC_CHARVEC_TO_STR = FUNC_SYM_ESC_GC + 1;
 
 	// _charvec_p (v) -> i32: 1 when v is a mutable character vector, else 0 -- the shape
 	// half of _charvec_to_str, split out so a PREDICATE need not render. Constant time:
@@ -5575,6 +5586,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_RAT_NEW); // _str_fresh (FUNC_STR_FRESH)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_to_mem (FUNC_STR_TO_MEM)
 				fnDef.addFunction(TYPE_WRITE_STR_GC); // _write_str_gc (FUNC_WRITE_STR_GC)
+				fnDef.addFunction(TYPE_WRITE_STR_GC); // _sym_esc_gc (FUNC_SYM_ESC_GC)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _charvec_to_str
 															// (FUNC_CHARVEC_TO_STR)
 				fnDef.addFunction(TYPE_RAT_GET); // _charvec_p (FUNC_CHARVEC_P)
@@ -6347,6 +6359,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _write_str_gc (FUNC_WRITE_STR_GC): print a string value from its GC
 				// array.
 				code.addFunction(WasmStringRuntimeBuilder.buildWriteStrGcBody());
+				// _sym_esc_gc (FUNC_SYM_ESC_GC, todo 626): the |...|-escaping half of
+				// *print-escape* = t for a bare symbol name.
+				code.addFunction(WasmStringRuntimeBuilder.buildSymEscGcBody());
 				// _charvec_to_str (FUNC_CHARVEC_TO_STR): normalize a mutable character
 				// vector into the equivalent runtime string.
 				code.addFunction(WasmStringRuntimeBuilder.buildCharvecToStrBody());
@@ -9129,6 +9144,13 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry futureStr;
 
+		// The quote/function abbreviation marks (todo 626): emitPrintConsList writes
+		// one of these instead of "(QUOTE " / "(FUNCTION " when the cons is a proper
+		// 2-element list headed by that symbol.
+		final StringEntry quoteMark;
+
+		final StringEntry functionMark;
+
 		// A hash table is the OTHER shape of the TYPE_CELL box the array printer walks
 		// (see WasmRuntimeBuilder.emitPrintArray): it prints as this unreadable tag with
 		// the header's entry count between the two halves, the same text
@@ -9211,6 +9233,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.newline = addBodyString("\n");
 			this.funcStr = addBodyString("#<function>");
 			this.futureStr = addBodyString("#<FUTURE>");
+			this.quoteMark = addBodyString("'");
+			this.functionMark = addBodyString("#'");
 			this.hashTableStr = addBodyString(LispHashTable.HASH_TABLE_PREFIX);
 			this.hashTableEqualpStr = equalpTables ? addBodyString(LispHashTable.HASH_TABLE_PREFIX_EQUALP) : null;
 			this.hashTableEnd = addBodyString(">");

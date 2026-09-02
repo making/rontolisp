@@ -15,7 +15,7 @@ On the compilation path only a LITERAL quoted argument expands: the CLI folds th
 ```lisp
 (defmacro my-when (test &body body)
   `(if ,test (progn ,@body) nil))
-(macroexpand-1 '(my-when (> 2 1) 'a 'b)) ; => (IF (> 2 1) (PROGN (QUOTE A) (QUOTE B)) NIL)
+(macroexpand-1 '(my-when (> 2 1) 'a 'b)) ; => (IF (> 2 1) (PROGN 'A 'B) NIL)
 ```
 
 A non-macro form is returned as-is:

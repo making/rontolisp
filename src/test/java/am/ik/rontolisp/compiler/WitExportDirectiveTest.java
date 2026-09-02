@@ -68,7 +68,7 @@ class WitExportDirectiveTest {
 		// world using one must lower to a valid :param-names entry, not to '%type'.
 		List<LispVal> forms = lower(world("  export count-vowels: func(%type: string) -> s32;"), Backend.WASM_GC);
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:STRING)) :PARAM-NAMES (QUOTE (type)) :RETURNS :S32)");
+				"(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:STRING) :PARAM-NAMES '(|type|) :RETURNS :S32)");
 	}
 
 	@Test
@@ -137,8 +137,8 @@ class WitExportDirectiveTest {
 		// the WIT's own parameter names, which is why an implemented world round-trips
 		// through --emit-wit with its parameter names intact.
 		List<LispVal> forms = lower(world("  export count-vowels: func(s: string) -> s32;"), Backend.WASM_GC);
-		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:STRING)) :PARAM-NAMES (QUOTE (s)) :RETURNS :S32)");
+		assertThat(printed(forms))
+			.isEqualTo("(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS :S32)");
 	}
 
 	@Test
@@ -152,7 +152,7 @@ class WitExportDirectiveTest {
 				}
 				""", Backend.WASM_GC, Map.of("mix", List.of("a", "b", "c", "d"), "ping", List.of()));
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE mix) :PARAMS (QUOTE (:S32 :FLOAT :BOOL :STRING)) :PARAM-NAMES (QUOTE (a b c d)) :RETURNS :BOOL)\n(RONTOLISP:WASM-EXPORT (QUOTE ping) :PARAMS (QUOTE NIL) :PARAM-NAMES (QUOTE NIL) :RETURNS :VOID)");
+				"(RONTOLISP:WASM-EXPORT '|mix| :PARAMS '(:S32 :FLOAT :BOOL :STRING) :PARAM-NAMES '(|a| |b| |c| |d|) :RETURNS :BOOL)\n(RONTOLISP:WASM-EXPORT '|ping| :PARAMS 'NIL :PARAM-NAMES 'NIL :RETURNS :VOID)");
 	}
 
 	@Test
@@ -162,7 +162,7 @@ class WitExportDirectiveTest {
 		// doing I/O traps at run time ("cannot block a synchronous task").
 		List<LispVal> forms = lower(world("  export count-vowels: async func(s: string) -> s32;"), Backend.WASM_GC);
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:STRING)) :PARAM-NAMES (QUOTE (s)) :RETURNS :S32 :ASYNC T)");
+				"(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS :S32 :ASYNC T)");
 	}
 
 	@Test
@@ -171,8 +171,8 @@ class WitExportDirectiveTest {
 		// --no-gc's value model is unboxed i64, so s64 crosses the boundary as :S64
 		// (the internal designator is upcased, matching the reader's upcase spelling
 		// of any source :s64 token; the legacy :long spells the same type).
-		assertThat(printed(lower(wit, Backend.WASM_NO_GC))).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:S64)) :PARAM-NAMES (QUOTE (s)) :RETURNS :S64)");
+		assertThat(printed(lower(wit, Backend.WASM_NO_GC)))
+			.isEqualTo("(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:S64) :PARAM-NAMES '(|s|) :RETURNS :S64)");
 		// The interpreter/JVM check the contract but export nothing, so no backend rule
 		// applies.
 		assertThat(printed(lower(wit, Backend.OTHER))).contains(":S64");
@@ -248,8 +248,8 @@ class WitExportDirectiveTest {
 				}
 				""", Backend.WASM_GC, Map.of("narrow", List.of("a", "b", "c", "d"), "wide", List.of("a", "b")));
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE narrow) :PARAMS (QUOTE (:S8 :S16 :U8 :U16)) :PARAM-NAMES (QUOTE (a b c d)) :RETURNS :U8)\n"
-						+ "(RONTOLISP:WASM-EXPORT (QUOTE wide) :PARAMS (QUOTE (:S32 :U32)) :PARAM-NAMES (QUOTE (a b)) :RETURNS :U32)");
+				"(RONTOLISP:WASM-EXPORT '|narrow| :PARAMS '(:S8 :S16 :U8 :U16) :PARAM-NAMES '(|a| |b| |c| |d|) :RETURNS :U8)\n"
+						+ "(RONTOLISP:WASM-EXPORT '|wide| :PARAMS '(:S32 :U32) :PARAM-NAMES '(|a| |b|) :RETURNS :U32)");
 	}
 
 	@Test
@@ -267,8 +267,8 @@ class WitExportDirectiveTest {
 				  export add;
 				}
 				""", Backend.WASM_COMPONENT, Map.of("add", List.of("x", "y")));
-		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:U32 :U32)) "
-				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :U32 :INTERFACE \"docs:adder/add@0.1.0\")");
+		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT '|add| :PARAMS '(:U32 :U32) "
+				+ ":PARAM-NAMES '(|x| |y|) :RETURNS :U32 :INTERFACE \"docs:adder/add@0.1.0\")");
 	}
 
 	@Test
@@ -277,8 +277,8 @@ class WitExportDirectiveTest {
 		// above 2^63 is the wrapper's run-time exact-or-trap concern, not a lowering
 		// rule.
 		String wit = world("  export count-vowels: func(s: u64) -> u64;");
-		assertThat(printed(lower(wit, Backend.WASM_NO_GC))).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:U64)) :PARAM-NAMES (QUOTE (s)) :RETURNS :U64)");
+		assertThat(printed(lower(wit, Backend.WASM_NO_GC)))
+			.isEqualTo("(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:U64) :PARAM-NAMES '(|s|) :RETURNS :U64)");
 		assertThat(printed(lower(wit, Backend.WASM_GC))).contains(":U64");
 	}
 
@@ -332,8 +332,8 @@ class WitExportDirectiveTest {
 				""";
 		List<LispVal> forms = WitExportDirective.lower(new Directive(WIT, "adder"), wit, WIT,
 				defuns(Map.of("add", List.of("x", "y"))), Backend.WASM_COMPONENT);
-		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:S32 :S32)) "
-				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :S32 :INTERFACE \"docs:adder/add@0.1.0\")");
+		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT '|add| :PARAMS '(:S32 :S32) "
+				+ ":PARAM-NAMES '(|x| |y|) :RETURNS :S32 :INTERFACE \"docs:adder/add@0.1.0\")");
 	}
 
 	@Test
@@ -345,9 +345,9 @@ class WitExportDirectiveTest {
 				  add: func(x: s32, y: s32) -> s32;
 				  negate: func(x: s32) -> s32;
 				}"""), Backend.WASM_COMPONENT, Map.of("add", List.of("x", "y"), "negate", List.of("x")));
-		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:S32 :S32)) "
-				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :S32 :INTERFACE \"calc\")\n"
-				+ "(RONTOLISP:WASM-EXPORT (QUOTE negate) :PARAMS (QUOTE (:S32)) :PARAM-NAMES (QUOTE (x)) "
+		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT '|add| :PARAMS '(:S32 :S32) "
+				+ ":PARAM-NAMES '(|x| |y|) :RETURNS :S32 :INTERFACE \"calc\")\n"
+				+ "(RONTOLISP:WASM-EXPORT '|negate| :PARAMS '(:S32) :PARAM-NAMES '(|x|) "
 				+ ":RETURNS :S32 :INTERFACE \"calc\")");
 	}
 
@@ -405,7 +405,7 @@ class WitExportDirectiveTest {
 				}
 				""", Backend.WASM_GC);
 		assertThat(forms).hasSize(1);
-		assertThat(printed(forms)).contains("(QUOTE count-vowels)");
+		assertThat(printed(forms)).contains("'|count-vowels|");
 	}
 
 	@Test
@@ -448,7 +448,7 @@ class WitExportDirectiveTest {
 				""";
 		List<LispVal> forms = WitExportDirective.lower(new Directive(WIT, "analyzer"), wit, WIT,
 				defuns(Map.of("count-vowels", List.of("s"))), Backend.WASM_GC);
-		assertThat(printed(forms)).contains("(QUOTE count-vowels)").doesNotContain("shout");
+		assertThat(printed(forms)).contains("'|count-vowels|").doesNotContain("shout");
 	}
 
 	@Test
@@ -507,7 +507,7 @@ class WitExportDirectiveTest {
 				  }
 				}
 				""", Backend.WASM_GC);
-		assertThat(printed(forms)).contains("(QUOTE count-vowels)");
+		assertThat(printed(forms)).contains("'|count-vowels|");
 	}
 
 }

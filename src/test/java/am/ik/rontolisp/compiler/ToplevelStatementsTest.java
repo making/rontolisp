@@ -48,7 +48,7 @@ class ToplevelStatementsTest {
 	void aCallIsKept() {
 		// Even one whose arguments are all constants: whether the call itself is pure is
 		// PureBuiltinFolder's question, and anything it answers arrives here folded.
-		assertThat(pruned("(car '(1 2))\n")).isEqualTo("(CAR (QUOTE (1 2)))\n");
+		assertThat(pruned("(car '(1 2))\n")).isEqualTo("(CAR '(1 2))\n");
 	}
 
 	@Test

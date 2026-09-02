@@ -105,6 +105,98 @@ text identical to SBCL 2.2.9 (`LispEvaluatorTest.evalPrintCase`,
   `:case` to the prelude `write` would make every `write` user MENTION `*print-case*` and
   so pull the renderer into modules that never bind it.
 
+## Quote/function abbreviation and symbol `|...|` escaping (todo 626)
+
+**Invariant, landed 2026-09-02:** a two-element list headed by `quote` / `function`
+prints as `'x` / `#'x` rather than `(QUOTE x)` / `(FUNCTION x)` (CLHS 22.1.3.7 permits
+this unconditionally; `(QUOTE A B)` -- three or more elements, or an improper tail --
+still prints in full, and the reader already reads the abbreviation back into exactly
+this shape). A symbol whose name is not upcase-invariant, or that holds a character the
+reader would not accept inside a bare token, prints `|...|`-framed under `prin1`
+(`*print-escape*` true), with every embedded `|` / `\` doubled; `princ` never escapes
+(CLHS 22.1.3.3), matching how the qualifier/marker strip already worked. Text identical
+across the interpreter, JVM and both WASM backends
+(`LispEvaluatorTest`/`LispReaderTest`, `JvmLispCompilerTest`,
+`WasmLispCompilerIntegrationTest`, the `backquote-quoted-splice` ci-spec case),
+differential-tested against SBCL 2.2.9.
+
+- **The abbreviation applies under BOTH `prin1` and `princ`**, measured against SBCL
+  2.2.9 and ECL: SBCL gates it on `*print-pretty*` (default `t`), ECL applies it
+  unconditionally. Neither rontolisp backend threads `*print-pretty*`'s dynamic value
+  into any of the four render call sites (it is accepted and otherwise inert -- the
+  printer-control-variable table below), so matching ECL's unconditional behavior is
+  what "the switch is `*print-escape*`" in the todo's own text turned out NOT to be
+  once measured -- the abbreviation and the escaping are gated independently, not by
+  the same flag.
+- **Four render targets, one shape check each.** The interpreter's `LispCons.render`
+  (`am.ik.rontolisp.LispCons`) checks the shape inline, inside the same
+  `RenderCycleGuard`-entered section a normal list would open, so a self-referential
+  `(setq x (list 'quote x))` still hits the guard on the recursive render of the second
+  element rather than looping forever. The JVM backend's `_consToString`
+  (`JvmRuntimeBuilder.buildConsToStringBody`, shared with `_consToDisplayString`) and
+  the WASM backend's `emitPrintConsList` (`WasmRuntimeBuilder`, shared by
+  `FUNC_PRINT_VAL` and `FUNC_PRINC_VAL`, i.e. Preview 1 and `--component`) do the same
+  check in raw bytecode, ahead of their existing Floyd/loop code, going through the
+  SAME guard-exit the function's normal tail uses. The two Lisp-level walks that stand
+  in for the raw cons renderer when a program mentions `*print-case*` or defines
+  `print-object` (`%pc-walk` in `LispPreludeLibrary.java`, `%pos-walk` via
+  `PRINT_OBJECT_CONS_ARM` in `LispMacroExpander.java`) carry the identical check by
+  hand, in lockstep with each other and with the raw renderers -- a program with
+  neither feature never reaches them, so this is a FOURTH and FIFTH copy of the same
+  three-line shape test, not something either walk could delegate to the raw renderer
+  for.
+- **The `|...|` escape lives in `LispSymbol.print()`** (interpreter): a keyword's `:`,
+  an uninterned symbol's `#:`, and a package qualifier's `pkg:`/`pkg::` prefix (todo
+  391 territory) are always spelled verbatim -- only the trailing MEMBER text is tested
+  and escaped, via `LispSymbol.needsEscape`/`escape`. `_symEsc` (JVM,
+  `JvmRuntimeBuilder.buildSymEscBody`) and `_sym_esc_gc` (WASM,
+  `WasmStringRuntimeBuilder.buildSymEscGcBody`, `FUNC_SYM_ESC_GC`) are the compiled
+  twins, called only from `_strEsc`'s / `_print_val`'s bare-symbol arm (never from the
+  princ arms, which strip the qualifier/marker instead and never escape).
+- **The lowercase check is ASCII `a`-`z` only on all three renderers, not the
+  interpreter's exact `Character.toUpperCase(char)` fold.** `LispSymbol.needsEscape`
+  documents why: the general Unicode fold needs a large range table
+  (`WasmCaseFoldRuntimeBuilder`'s compressed `Character.toUpperCase(int)` data on WASM;
+  no JVM equivalent exists at all) that would otherwise have to be reachable from
+  EVERY program that prints any symbol, not just one that calls `string-upcase` --
+  the same unconditional-emission cost the `*print-case*` gate above exists to avoid.
+  **Known, narrow gap:** a symbol whose only non-constituent characters are non-ASCII
+  lowercase letters (e.g. Latin-1 `à`) prints unescaped on all four backends and
+  mis-reads under the default readtable. Re-evaluate together with a use for the
+  general fold on a path every printed program already pays for; until then this is a
+  deliberate, matched-everywhere shortfall rather than a cross-backend divergence.
+- **The non-constituent byte set** (space, tab, newline, CR, form feed, `(`, `)`, `'`,
+  `"`, `;`, `,`, `` ` ``, `|`, `\`) mirrors `LispLexer.isSymbolChar`'s terminating
+  characters restricted to ASCII whitespace, plus `|` and `\` themselves -- reader-
+  special even though `isSymbolChar` does not exclude them, since a literal occurrence
+  would otherwise be read as escape syntax rather than as itself. Enumerated identically
+  in `LispSymbol.isBareConstituent` (interpreter), `buildSymEscBody` (JVM, a
+  chained-comparison loop) and `SYM_ESC_FORBIDDEN` (WASM,
+  `WasmStringRuntimeBuilder`) -- change one, change all three, or the backends diverge
+  on e.g. a symbol name containing a literal tab.
+- **An internal designator can collide with the new escaping.** `type-of` and
+  `symbol-package` (`LispPreludeLibrary.java`) read a `%class-`/`%struct-` instance tag
+  off `(prin1-to-string designator)` and strip the known lowercase prefix by substring
+  match; since that prefix is lowercase, an UNqualified tag now round-trips as e.g.
+  `"|%struct-PT|"`, breaking the match. Fixed by a shared prelude helper,
+  `%unescaped-symbol-text` (`LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL`), that peels
+  exactly one leading/trailing `|` back off before the prefix test runs (no interior
+  unescaping -- neither caller's input can itself contain `|` or `\`). The
+  `print-unreadable-object :type t` expansion (`LispMacroExpander.typeNameOf`) carries
+  the identical peel INLINED rather than delegated to that helper, for the same reason
+  its prefix-strip is already inlined there: the expansion runs inside the compilers,
+  after the prelude splice pre-pass that would have made the helper available has
+  already run. **Re-evaluate this trio together** if the escaping rule above changes
+  shape (e.g. if the ASCII-only gap above is ever closed) -- all three peel exactly one
+  `|` pair and nothing else.
+- **Large, if shallow, test blast radius.** `LispVal.print()` is reused across roughly a
+  hundred pre-existing tests purely as an AST-DUMP convenience (asserting a
+  macro-expansion or reader shape), not as a genuine prin1-output check; every one of
+  those with a `(QUOTE ...)`/`(FUNCTION ...)` or a lowercase-named generated symbol
+  (`gensym`, `%class-`/`%struct-` tags, `(intern "lower")`) in its expected string
+  needed updating alongside this change. None of those updates changed what the test
+  verifies -- they are the same shape, spelled the new way.
+
 ## A cyclic value prints finitely instead of overflowing the stack
 
 **Invariant (todo 584 for instances, todo 585 for conses and arrays, 2026-08-30): no

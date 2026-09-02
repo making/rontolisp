@@ -34,18 +34,18 @@ class LetBoundDesignatorsTest {
 
 	@Test
 	void aBindingUsedOnlyAsADesignatorIsPropagatedAndDropped() {
-		assertThat(propagate("(let ((f #'dbl)) (mapcar f lst))")).isEqualTo("(LET NIL (MAPCAR (FUNCTION DBL) LST))");
+		assertThat(propagate("(let ((f #'dbl)) (mapcar f lst))")).isEqualTo("(LET NIL (MAPCAR #'DBL LST))");
 		// The six positions the backends resolve, each reached through the binding.
-		assertThat(propagate("(let ((f #'dbl)) (funcall f 1))")).isEqualTo("(LET NIL (FUNCALL (FUNCTION DBL) 1))");
-		assertThat(propagate("(let ((f #'dbl)) (mapc f lst))")).isEqualTo("(LET NIL (MAPC (FUNCTION DBL) LST))");
-		assertThat(propagate("(let ((f #'dbl)) (mapcan f lst))")).isEqualTo("(LET NIL (MAPCAN (FUNCTION DBL) LST))");
-		assertThat(propagate("(let ((f #'dbl)) (reduce f lst))")).isEqualTo("(LET NIL (REDUCE (FUNCTION DBL) LST))");
-		assertThat(propagate("(let ((f #'cmp)) (sort lst f))")).isEqualTo("(LET NIL (SORT LST (FUNCTION CMP)))");
+		assertThat(propagate("(let ((f #'dbl)) (funcall f 1))")).isEqualTo("(LET NIL (FUNCALL #'DBL 1))");
+		assertThat(propagate("(let ((f #'dbl)) (mapc f lst))")).isEqualTo("(LET NIL (MAPC #'DBL LST))");
+		assertThat(propagate("(let ((f #'dbl)) (mapcan f lst))")).isEqualTo("(LET NIL (MAPCAN #'DBL LST))");
+		assertThat(propagate("(let ((f #'dbl)) (reduce f lst))")).isEqualTo("(LET NIL (REDUCE #'DBL LST))");
+		assertThat(propagate("(let ((f #'cmp)) (sort lst f))")).isEqualTo("(LET NIL (SORT LST #'CMP))");
 		// A quoted designator is the same designator (FunctionDesignators.normalize).
-		assertThat(propagate("(let ((f 'dbl)) (funcall f 1))")).isEqualTo("(LET NIL (FUNCALL (FUNCTION DBL) 1))");
+		assertThat(propagate("(let ((f 'dbl)) (funcall f 1))")).isEqualTo("(LET NIL (FUNCALL #'DBL 1))");
 		// Every use, however deep, and only the qualifying binding leaves.
 		assertThat(propagate("(let ((f #'dbl) (n 2)) (if p (funcall f n) (mapcar f lst)))"))
-			.isEqualTo("(LET ((N 2)) (IF P (FUNCALL (FUNCTION DBL) N) (MAPCAR (FUNCTION DBL) LST)))");
+			.isEqualTo("(LET ((N 2)) (IF P (FUNCALL #'DBL N) (MAPCAR #'DBL LST)))");
 	}
 
 	@Test
@@ -80,7 +80,7 @@ class LetBoundDesignatorsTest {
 		assertThat(unchanged("(let ((f #'dbl)) (case x ((funcall f) 1) (t (funcall f 2))))")).isTrue();
 		// ... while an ordinary clause body is propagated like any other position.
 		assertThat(propagate("(let ((f #'dbl)) (case x (1 (funcall f 2))))"))
-			.isEqualTo("(LET NIL (CASE X (1 (FUNCALL (FUNCTION DBL) 2))))");
+			.isEqualTo("(LET NIL (CASE X (1 (FUNCALL #'DBL 2))))");
 	}
 
 	@Test

@@ -326,9 +326,9 @@ class LispMacroExpanderTest {
 		String helper = LispMacroExpander.subseqRuntimeWrapper().print();
 		// The parameter names are spelled in lower case on purpose: the reader upcases,
 		// so a name in this shape cannot collide with anything the program can write.
-		assertThat(helper).startsWith("(SETQ %SUBSEQ-RUNTIME (LAMBDA (%ssr_seq %ssr_start %ssr_end)");
+		assertThat(helper).startsWith("(SETQ %SUBSEQ-RUNTIME (LAMBDA (|%ssr_seq| |%ssr_start| |%ssr_end|)");
 		assertThat(helper).contains("STRINGP").contains("%ARRAYP").contains("%ARRAY-ALIKE").contains("%ASET");
-		assertThat(helper).contains("(%SUBSEQ-CORE %ssr_seq %ssr_start %ssr_end)");
+		assertThat(helper).contains("(%SUBSEQ-CORE |%ssr_seq| |%ssr_start| |%ssr_end|)");
 		// It must not call subseq itself, or the lowering would re-enter it forever.
 		assertThat(helper).doesNotContain("(SUBSEQ ");
 	}
@@ -395,13 +395,13 @@ class LispMacroExpanderTest {
 		String toList = trio.get(0).print();
 		// The parameter names are spelled in lower case on purpose: the reader upcases,
 		// so a name in this shape cannot collide with anything the program can write.
-		assertThat(toList).startsWith("(SETQ %SEQ-TO-LIST (LAMBDA (%stl_x)");
+		assertThat(toList).startsWith("(SETQ %SEQ-TO-LIST (LAMBDA (|%stl_x|)");
 		assertThat(toList).contains("LISTP").contains("STRINGP").contains("(MAP ");
 		String toString = trio.get(1).print();
-		assertThat(toString).startsWith("(SETQ %SEQ-TO-STRING (LAMBDA (%sts_x)");
+		assertThat(toString).startsWith("(SETQ %SEQ-TO-STRING (LAMBDA (|%sts_x|)");
 		assertThat(toString).contains("STRINGP").contains("(MAP ");
 		String toVector = trio.get(2).print();
-		assertThat(toVector).startsWith("(SETQ %SEQ-TO-VECTOR (LAMBDA (%stv_x)");
+		assertThat(toVector).startsWith("(SETQ %SEQ-TO-VECTOR (LAMBDA (|%stv_x|)");
 		assertThat(toVector).contains("MAKE-ARRAY").contains("%ASET");
 		for (LispVal helper : trio) {
 			assertThat(helper.print()).doesNotContain("(COERCE ");
@@ -437,7 +437,7 @@ class LispMacroExpanderTest {
 		// its inner sort is what reaches here.
 		LispCons site = (LispCons) LispReader.readAllFromString("(sort l #'<)").get(0);
 		LispVal routed = java.util.Objects.requireNonNull(LispMacroExpander.sortRuntimeCall(site, true));
-		assertThat(routed.print()).isEqualTo("(%SORT-RUNTIME L (FUNCTION <))");
+		assertThat(routed.print()).isEqualTo("(%SORT-RUNTIME L #'<)");
 		assertThat(LispMacroExpander.sortRuntimeCall(site, false)).isNull();
 		// The helper: (setq %sort-runtime (lambda (list predicate) ...)), and its body
 		// is a MERGE sort -- it splits the list, calls itself on both halves and relinks
@@ -472,8 +472,7 @@ class LispMacroExpanderTest {
 		// is a funcall of exactly that many arguments, so one helper cannot serve two
 		// counts without an apply (and with it the spread dispatcher).
 		LispCons mapInto = (LispCons) LispReader.readAllFromString("(map-into r 'f x y)").get(0);
-		assertThat(LispMacroExpander.expandMapInto(mapInto, true).print())
-			.isEqualTo("(%MAP-INTO-RUNTIME-2 R (FUNCTION F) X Y)");
+		assertThat(LispMacroExpander.expandMapInto(mapInto, true).print()).isEqualTo("(%MAP-INTO-RUNTIME-2 R #'F X Y)");
 		// Without the helper each site keeps the pre-existing inline lowering, so a gate
 		// that under-predicts costs sharing and never correctness.
 		assertThat(LispMacroExpander.expandReplace(replace, true, false).print()).contains("%ROW-MAJOR-ASET")
@@ -504,25 +503,25 @@ class LispMacroExpanderTest {
 		// The parameter names are spelled in lower case on purpose: the reader upcases,
 		// so a name in this shape cannot collide with anything the program can write.
 		assertThat(replace)
-			.startsWith("(SETQ %REPLACE-RUNTIME (LAMBDA (%rpr_1 %rpr_2 %rpr_s1 %rpr_e1 %rpr_s2 %rpr_e2)");
+			.startsWith("(SETQ %REPLACE-RUNTIME (LAMBDA (|%rpr_1| |%rpr_2| |%rpr_s1| |%rpr_e1| |%rpr_s2| |%rpr_e2|)");
 		// All three destination arms live here: the list cons-cell rewrite, the
 		// immutable-string rebuild, and -- as a CALL, so the two helpers hold one copy
 		// of it between them -- the destructive element store.
 		assertThat(replace).contains("%ARRAYP")
 			.contains("LISTP")
 			.contains("RPLACA")
-			.contains("(OR %rpr_s1 0)")
+			.contains("(OR |%rpr_s1| 0)")
 			.contains("CONCATENATE")
-			.contains("(%REPLACE-RUNTIME-ARRAY __rpl_1 __rpl_2 __rpl_s1 __rpl_e1 __rpl_s2 __rpl_e2)")
+			.contains("(%REPLACE-RUNTIME-ARRAY |__rpl_1| |__rpl_2| |__rpl_s1| |__rpl_e1| |__rpl_s2| |__rpl_e2|)")
 			.doesNotContain("%ROW-MAJOR-ASET");
 		assertThat(replace).doesNotContain("(REPLACE ");
 		// The array arm on its own: the same bounds, defaulted the same way (so the wide
 		// helper may hand it either raw or already-defaulted ones), and no dispatch left.
 		String replaceArray = LispMacroExpander.replaceArrayRuntimeWrapper().print();
-		assertThat(replaceArray)
-			.startsWith("(SETQ %REPLACE-RUNTIME-ARRAY (LAMBDA (%rpa_1 %rpa_2 %rpa_s1 %rpa_e1 %rpa_s2 %rpa_e2)");
+		assertThat(replaceArray).startsWith(
+				"(SETQ %REPLACE-RUNTIME-ARRAY (LAMBDA (|%rpa_1| |%rpa_2| |%rpa_s1| |%rpa_e1| |%rpa_s2| |%rpa_e2|)");
 		assertThat(replaceArray).contains("%ROW-MAJOR-ASET")
-			.contains("(OR %rpa_s1 0)")
+			.contains("(OR |%rpa_s1| 0)")
 			.doesNotContain("%ARRAYP")
 			.doesNotContain("RPLACA")
 			.doesNotContain("CONCATENATE")
@@ -530,25 +529,25 @@ class LispMacroExpanderTest {
 		// A LIST source is walked with a cursor, as the list DESTINATION arm is: an elt
 		// per element re-walks the list head, and elt is a whole representation dispatch
 		// where car is one field read.
-		assertThat(replaceArray).contains("NTHCDR").contains("(CAR __rpl_sc)").doesNotContain("(ELT ");
+		assertThat(replaceArray).contains("NTHCDR").contains("(CAR |__rpl_sc|)").doesNotContain("(ELT ");
 		String fill = LispMacroExpander.fillRuntimeWrapper().print();
-		assertThat(fill).startsWith("(SETQ %FILL-RUNTIME (LAMBDA (%flr_s %flr_v %flr_a %flr_b)");
+		assertThat(fill).startsWith("(SETQ %FILL-RUNTIME (LAMBDA (|%flr_s| |%flr_v| |%flr_a| |%flr_b|)");
 		assertThat(fill).contains("%ARRAYP")
 			.contains("RPLACA")
-			.contains("(OR %flr_a 0)")
-			.contains("(%FILL-RUNTIME-ARRAY __fll_s __fll_v __fll_a __fll_b)")
+			.contains("(OR |%flr_a| 0)")
+			.contains("(%FILL-RUNTIME-ARRAY |__fll_s| |__fll_v| |__fll_a| |__fll_b|)")
 			.doesNotContain("%ROW-MAJOR-ASET");
 		assertThat(fill).doesNotContain("(FILL ");
 		String fillArray = LispMacroExpander.fillArrayRuntimeWrapper().print();
-		assertThat(fillArray).startsWith("(SETQ %FILL-RUNTIME-ARRAY (LAMBDA (%fla_s %fla_v %fla_a %fla_b)");
+		assertThat(fillArray).startsWith("(SETQ %FILL-RUNTIME-ARRAY (LAMBDA (|%fla_s| |%fla_v| |%fla_a| |%fla_b|)");
 		assertThat(fillArray).contains("%ROW-MAJOR-ASET")
-			.contains("(OR %fla_a 0)")
+			.contains("(OR |%fla_a| 0)")
 			.doesNotContain("%ARRAYP")
 			.doesNotContain("RPLACA")
 			.doesNotContain("CONCATENATE")
 			.doesNotContain("(FILL ");
 		String mapInto = LispMacroExpander.mapIntoRuntimeWrapper(2).print();
-		assertThat(mapInto).startsWith("(SETQ %MAP-INTO-RUNTIME-2 (LAMBDA (%mir_res %mir_fn %mir_s0 %mir_s1)");
+		assertThat(mapInto).startsWith("(SETQ %MAP-INTO-RUNTIME-2 (LAMBDA (|%mir_res| |%mir_fn| |%mir_s0| |%mir_s1|)");
 		assertThat(mapInto).contains("FUNCALL").contains("RPLACA");
 		assertThat(mapInto).doesNotContain("(MAP-INTO ");
 	}

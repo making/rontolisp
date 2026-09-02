@@ -301,7 +301,7 @@ class PureBuiltinFolderTest {
 	@Test
 	void aFoldedSymbolIsRequoted() {
 		// Bare, it would read as a variable reference.
-		assertThat(folded("(nth 1 '(a b c))").print()).isEqualTo("(QUOTE B)");
+		assertThat(folded("(nth 1 '(a b c))").print()).isEqualTo("'B");
 		// A keyword evaluates to itself and needs no quote.
 		assertThat(folded("(nth 0 '(:k))")).isEqualTo(new LispSymbol(":K"));
 		assertThat(folded("(symbol-name 'foo)")).isEqualTo(new LispString("FOO"));

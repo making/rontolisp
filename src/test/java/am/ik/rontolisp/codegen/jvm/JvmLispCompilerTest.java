@@ -2195,7 +2195,7 @@ class JvmLispCompilerTest {
 	void compileAndRunGensym() throws Exception {
 		assertThat(compileAndRun("(print (gensym)) (print (gensym \"tmp\")) (print (eq (gensym) (gensym)))"
 				+ "(print (symbolp (gensym))) (print (symbolp (funcall #'gensym)))"))
-			.isEqualTo("#:g1\n#:tmp2\nNIL\nT\nT");
+			.isEqualTo("#:|g1|\n#:|tmp2|\nNIL\nT\nT");
 	}
 
 	@Test
@@ -2203,7 +2203,8 @@ class JvmLispCompilerTest {
 		// A computed prefix lowers to string construction over the literal-prefix
 		// gensym, so the name keeps the "#:" shape and the fresh counter suffix
 		// (alexandria's format-symbol passes one).
-		assertThat(compileAndRun("(setq p \"tmp\") (print (gensym p)) (print (gensym p))")).isEqualTo("#:tmp1\n#:tmp2");
+		assertThat(compileAndRun("(setq p \"tmp\") (print (gensym p)) (print (gensym p))"))
+			.isEqualTo("#:|tmp1|\n#:|tmp2|");
 	}
 
 	@Test
@@ -2227,7 +2228,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (intern \"hello\")) (print (eq (intern \"FOO\") 'foo))"
 				+ "(print (symbolp (intern \"hello\"))) (print (intern (symbol-name 'round-trip)))"
 				+ "(print (funcall #'intern \"abc\"))"))
-			.isEqualTo("hello\nT\nT\nROUND-TRIP\nabc");
+			.isEqualTo("|hello|\nT\nT\nROUND-TRIP\n|abc|");
 	}
 
 	@Test
@@ -2248,7 +2249,7 @@ class JvmLispCompilerTest {
 				(print (funcall (intern "EX-FN" :rt-pkg) 1))
 				(print (funcall (intern "IN-FN" :rt-pkg) 1))
 				(print (intern "foo" :cl-user))
-				""")).isEqualTo("T\n2\n3\nfoo");
+				""")).isEqualTo("T\n2\n3\n|foo|");
 	}
 
 	@Test
@@ -2690,7 +2691,7 @@ class JvmLispCompilerTest {
 	void compileAndRunMakeSymbol() throws Exception {
 		assertThat(compileAndRun("(print (make-symbol \"temp\")) (print (symbolp (make-symbol \"temp\")))"
 				+ "(print (eq (make-symbol \"foo\") 'foo)) (print (funcall #'make-symbol \"m\"))"))
-			.isEqualTo("#:temp\nT\nNIL\n#:m");
+			.isEqualTo("#:|temp|\nT\nNIL\n#:|m|");
 	}
 
 	@Test
@@ -2876,8 +2877,7 @@ class JvmLispCompilerTest {
 			finally {
 				System.setOut(oldOut);
 			}
-			assertThat(baos.toString().trim())
-				.isEqualTo("(IF (> 2 1) (PROGN (QUOTE A) (QUOTE B)) NIL)\n(IF C NIL X)\n(+ 1 2)");
+			assertThat(baos.toString().trim()).isEqualTo("(IF (> 2 1) (PROGN 'A 'B) NIL)\n(IF C NIL X)\n(+ 1 2)");
 		}
 	}
 
@@ -8642,7 +8642,7 @@ class JvmLispCompilerTest {
 				             (%class-designator (make-cd-node))
 				             (%class-designator 42)
 				             (%class-designator "s")))
-				""")).isEqualTo("(%class-CD-PT %struct-CD-NODE INTEGER STRING)");
+				""")).isEqualTo("(|%class-CD-PT| |%struct-CD-NODE| INTEGER STRING)");
 	}
 
 	@Test
@@ -9690,7 +9690,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReadQuote() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (read))", "'x\n")).isEqualTo("(QUOTE X)");
+		assertThat(compileAndRunWithStdin("(print (read))", "'x\n")).isEqualTo("'X");
 	}
 
 	@Test
@@ -9733,7 +9733,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReadSharpQuote() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (read))", "#'car\n")).isEqualTo("(FUNCTION CAR)");
+		assertThat(compileAndRunWithStdin("(print (read))", "#'car\n")).isEqualTo("#'CAR");
 	}
 
 	@Test
@@ -13088,7 +13088,7 @@ class JvmLispCompilerTest {
 				(print (%obj-tag p))
 				(print (%obj-p p))
 				(print (%obj-ref (%obj-new '|%struct-POINT| 1) 1))
-				""")).isEqualTo("10\n99\n99\nT\nT\nNIL\n%struct-POINT\nT\nNIL");
+				""")).isEqualTo("10\n99\n99\nT\nT\nNIL\n|%struct-POINT|\nT\nNIL");
 	}
 
 	@Test
@@ -13147,7 +13147,7 @@ class JvmLispCompilerTest {
 				(princ (make-load-form *p*))
 				(terpri)
 				(princ (list (pt-x (splice-pt)) (pt-y (splice-pt))))
-				""")).isEqualTo("(%OBJ-NEW (QUOTE %struct-PT) (QUOTE 3) (QUOTE four))\n(3 four)");
+				""")).isEqualTo("(%OBJ-NEW '%struct-PT '3 'four)\n(3 four)");
 	}
 
 	@Test
@@ -13814,7 +13814,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("""
 				(print (symbol-name '|when used|))
 				(print '|noChange|)
-				""")).isEqualTo("\"when used\"\nnoChange");
+				""")).isEqualTo("\"when used\"\n|noChange|");
 	}
 
 	@Test

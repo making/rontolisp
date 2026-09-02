@@ -41,7 +41,7 @@ class NoWasiFilesystemStubsTest {
 	void theNameTakenAsAValueIsNotACall() {
 		// (function open) has the same tail shape, and rewriting it produced a
 		// (function (progn ...)) that names no function at all.
-		assertThat(rewrite("(mapcar #'open paths)")).doesNotContain("has no filesystem").contains("(FUNCTION OPEN)");
+		assertThat(rewrite("(mapcar #'open paths)")).doesNotContain("has no filesystem").contains("#'OPEN");
 	}
 
 	@Test

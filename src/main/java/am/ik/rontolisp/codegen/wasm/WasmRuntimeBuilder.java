@@ -876,6 +876,123 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(field);
 	}
 
+	// Pushes 1 (i32) when the (ref null eq) held in `local` is a bare symbol name --
+	// a TYPE_STRING whose bytes are NOT quote-framed, exactly what a symbol value is
+	// (WasmLispCompiler.TYPE_STRING's javadoc / .kb/wasm-gc-strings.md) -- equal to
+	// `literal` (ASCII only; QUOTE/FUNCTION are the only two callers, todo 626), 0
+	// otherwise. `literal`'s bytes are compared unrolled since both callers pass a
+	// short fixed string, which is cheaper here than building a throwaway TYPE_STRING
+	// and calling FUNC_STRING_EQ.
+	private static void emitBareSymbolNameEquals(WasmWriter w, int local, String literal) {
+		refTest(w, local, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, Type.I32.code());
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(literal.length());
+		w.write(Instruction.I32_EQ);
+		// i32.and does not short-circuit, so the per-byte checks below are only safe
+		// to unroll once the length is CONFIRMED equal (nested inside this IF) -- an
+		// eager AND against a shorter string's array would index out of bounds.
+		w.write(Instruction.IF, Type.I32.code());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		for (int idx = 0; idx < literal.length(); idx++) {
+			getLocal(w, local);
+			WasmEmitHelper.emitStrBytesArray(w);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(idx);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(literal.charAt(idx));
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.I32_AND);
+		}
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Emits the quote/function abbreviation check ahead of {@link #emitPrintConsList}'s
+	 * general loop (todo 626, CLHS 22.1.3.7): a cons cell {@code {car, cdr}} whose
+	 * {@code car} is the bare symbol name {@code "QUOTE"} / {@code "FUNCTION"} and whose
+	 * {@code cdr} is itself a cons cell {@code {x, null}} (a proper 2-element list --
+	 * {@code (QUOTE A B)} still prints in full) writes {@code '}/{@code #'} then
+	 * {@code x}'s rendering and returns through the SAME exit the function's own tail
+	 * uses ({@code emitRenderGuardExit}), before the caller's Floyd/loop code ever runs.
+	 * Runs INSIDE the guarded section {@code emitRenderGuardEnter} already opened, so a
+	 * self-referential {@code (quote x)} with {@code x} reaching back to this very cell
+	 * still hits the guard on the recursive render of {@code x} rather than looping
+	 * forever. {@code carSlot}/{@code cdrSlot} borrow {@code emitPrintConsList}'s
+	 * {@code stopSlot}/{@code fastSlot} (both {@code (ref null eq)}, unclaimed until the
+	 * Floyd setup right after this), {@code shapeOkSlot} borrows its {@code seenSlot}
+	 * (i32, likewise unclaimed). Applies identically under {@code FUNC_PRINT_VAL} and
+	 * {@code FUNC_PRINC_VAL} -- SBCL-verified, {@code princ} abbreviates too.
+	 */
+	private static void emitQuoteAbbrevCheck(WasmWriter w, WasmLispCompiler.StringTable st, int headSlot,
+			int elementFunc, int pathGlobalIndex, int depthGlobalIndex, int carSlot, int cdrSlot, int shapeOkSlot) {
+		consField(w, headSlot, 0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(carSlot);
+		consField(w, headSlot, 1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(cdrSlot);
+		// shapeOk = (cdr is a cons) && (cdr.cdr is null)
+		refTest(w, cdrSlot, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.IF, Type.I32.code());
+		consField(w, cdrSlot, 1);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(shapeOkSlot);
+		getLocal(w, shapeOkSlot);
+		w.write(Instruction.IF, 0x40);
+		emitBareSymbolNameEquals(w, carSlot, "QUOTE");
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.quoteMark.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.quoteMark.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		consField(w, cdrSlot, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(elementFunc);
+		emitRenderGuardExit(w, pathGlobalIndex, depthGlobalIndex);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.ELSE);
+		emitBareSymbolNameEquals(w, carSlot, "FUNCTION");
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.functionMark.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.functionMark.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		consField(w, cdrSlot, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(elementFunc);
+		emitRenderGuardExit(w, pathGlobalIndex, depthGlobalIndex);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
 	private static void floatField(WasmWriter w, int local) {
 		getLocal(w, local);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -1291,6 +1408,9 @@ final class WasmRuntimeBuilder {
 			int pathGlobalIndex, int depthGlobalIndex, int stopSlot, int fastSlot, int seenSlot, int scanSlot) {
 		WasmLispCompiler.StringTable.StringEntry depthMarker = st.addString("#");
 		emitRenderGuardEnter(w, depthMarker, pathGlobalIndex, depthGlobalIndex, scanSlot);
+		// The quote/function abbreviation (todo 626), checked before the general loop
+		// below claims stopSlot/fastSlot/seenSlot for their own purpose.
+		emitQuoteAbbrevCheck(w, st, 0, elementFunc, pathGlobalIndex, depthGlobalIndex, stopSlot, fastSlot, seenSlot);
 		// Floyd's cycle detection over the cdr chain: stop = the cell where the cycle
 		// begins, or null for a terminating chain. slow rides local 1 (the render
 		// loop's cursor, still unclaimed), fast rides fastSlot.
@@ -2864,6 +2984,10 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(1);
 		WasmEmitHelper.emitWriteStrGcCall(w);
 		w.write(Instruction.ELSE);
+		// A bare symbol name (todo 626): |...|-escape when CLHS 22.1.3.3 says the bare
+		// bytes would not read back as themselves, verbatim otherwise -- see
+		// buildSymEscGcBody's Javadoc. princ (buildPrincValBody, below) never escapes,
+		// so it keeps calling _write_str_gc directly.
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.I32_CONST);
@@ -2872,7 +2996,7 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(5);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
-		WasmEmitHelper.emitWriteStrGcCall(w);
+		WasmEmitHelper.emitSymEscGcCall(w);
 		w.write(Instruction.END);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);

@@ -328,6 +328,20 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.UNBOUND_SLOT_INSTANCE, """
 				(defun unbound-slot-instance (condition) (slot-value condition 'instance))
 				""");
+		// Undoes the |...|-framing todo 626 gave prin1-to-string's spelling of a symbol
+		// whose name is not upcase-invariant. type-of and symbol-package both read a
+		// KNOWN internal tag's prefix or a qualifier's colon off prin1-to-string's text
+		// (below), and the %struct-/%class- tag prefix is always lowercase, so an
+		// unqualified tag now round-trips as e.g. "|%struct-PT|" -- this peels exactly
+		// one leading/trailing '|' back off so the prefix match still sees "%struct-PT".
+		// Does not undo interior backslash-doubling: neither caller's input (a tag
+		// prefix, a qualifier, a reader-upcased name) can itself contain '|' or '\'.
+		SOURCES.put(LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL, """
+				(defun %unescaped-symbol-text (s)
+				  (if (and (> (length s) 1) (char= (char s 0) #\\|))
+				      (subseq s 1 (1- (length s)))
+				      s))
+				""");
 		// A "package" is the upcased canonical package name as a keyword (there are no
 		// package objects), so symbol-package reads the qualifier off the symbol's
 		// stored spelling: prin1-to-string keeps it, unlike symbol-name. The
@@ -336,7 +350,7 @@ public final class LispPreludeLibrary {
 		// runtime, so every bare symbol answers CL-USER here.
 		SOURCES.put(LispNames.SYMBOL_PACKAGE, """
 				(defun symbol-package (symbol)
-				  (let* ((s (prin1-to-string symbol))
+				  (let* ((s (%unescaped-symbol-text (prin1-to-string symbol)))
 				         (n (length s)))
 				    (cond ((= n 0) nil)
 				          ((char= (char s 0) #\\:) :keyword)
@@ -382,7 +396,7 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.TYPE_OF, """
 				(defun type-of (object)
 				  (let* ((c (%class-designator object))
-				         (s (prin1-to-string c))
+				         (s (%unescaped-symbol-text (prin1-to-string c)))
 				         (n (length s)))
 				    (cond ((and (> n 8) (string= (subseq s 0 8) "%struct-")) (intern (subseq s 8)))
 				          ((and (> n 7) (string= (subseq s 0 7) "%class-")) (intern (subseq s 7)))
@@ -2031,51 +2045,56 @@ public final class LispPreludeLibrary {
 		// cell (Floyd, %pc-chain-stop) prints as the " . #" improper tail on its second
 		// arrival. The guard is the twin of the %print-object-str walk's (%pos-walk);
 		// the two walks are never both live in one program, and have to stay in step.
-		SOURCES.put(LispNames.PRINT_CASED_WALK_INTERNAL, """
-				(defun %pc-walk (%pc-x %pc-esc %pc-path %pc-depth)
-				  (cond ((symbolp %pc-x)
-				         (%print-case-fold (if %pc-esc
-				                               (%prin1-to-string %pc-x)
-				                               (%princ-to-string %pc-x))))
-				        ((consp %pc-x)
-				         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256))
-				             "#"
-				             (let ((%pc-acc "(") (%pc-cur %pc-x) (%pc-sep "")
-				                   (%pc-stop (%pc-chain-stop %pc-x)) (%pc-seen nil) (%pc-done nil)
-				                   (%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1)))
-				               (while (and (consp %pc-cur) (not %pc-done))
-				                 (if (and %pc-seen (eq %pc-cur %pc-stop))
-				                     (setq %pc-done t)
-				                     (progn
-				                       (when (eq %pc-cur %pc-stop)
-				                         (setq %pc-seen t))
-				                       (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
-				                                                  (%pc-walk (car %pc-cur) %pc-esc %pc-sub %pc-subd)))
-				                       (setq %pc-sep " ")
-				                       (setq %pc-cur (cdr %pc-cur)))))
-				               (if %pc-done
-				                   (concatenate 'string %pc-acc " . #)")
-				                   (progn
-				                     (unless (null %pc-cur)
-				                       (setq %pc-acc (concatenate 'string %pc-acc " . "
-				                                                  (%pc-walk %pc-cur %pc-esc %pc-sub %pc-subd))))
-				                     (concatenate 'string %pc-acc ")"))))))
-				        ((and (vectorp %pc-x) (not (stringp %pc-x)) (eql (array-rank %pc-x) 1)
-				              (not (equal (array-element-type %pc-x) 'single-float))
-				              (not (equal (array-element-type %pc-x) 'double-float)))
-				         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256))
-				             "#"
-				             (let ((%pc-acc "#(") (%pc-i 0) (%pc-n (length %pc-x)) (%pc-sep "")
-				                   (%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1)))
-				               (while (< %pc-i %pc-n)
-				                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
-				                                            (%pc-walk (aref %pc-x %pc-i) %pc-esc %pc-sub %pc-subd)))
-				                 (setq %pc-sep " ")
-				                 (setq %pc-i (+ %pc-i 1)))
-				               (concatenate 'string %pc-acc ")"))))
-				        (%pc-esc (%prin1-to-string %pc-x))
-				        (t (%princ-to-string %pc-x))))
-				""");
+		SOURCES.put(LispNames.PRINT_CASED_WALK_INTERNAL,
+				"""
+						(defun %pc-walk (%pc-x %pc-esc %pc-path %pc-depth)
+						  (cond ((symbolp %pc-x)
+						         (%print-case-fold (if %pc-esc
+						                               (%prin1-to-string %pc-x)
+						                               (%princ-to-string %pc-x))))
+						        ((consp %pc-x)
+						         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256))
+						             "#"
+						             (let ((%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1)))
+						               (if (and (symbolp (car %pc-x)) (consp (cdr %pc-x)) (null (cddr %pc-x))
+						                        (or (eq (car %pc-x) 'quote) (eq (car %pc-x) 'function)))
+						                   (concatenate 'string (if (eq (car %pc-x) 'quote) "'" "#'")
+						                                (%pc-walk (cadr %pc-x) %pc-esc %pc-sub %pc-subd))
+						                   (let ((%pc-acc "(") (%pc-cur %pc-x) (%pc-sep "")
+						                         (%pc-stop (%pc-chain-stop %pc-x)) (%pc-seen nil) (%pc-done nil))
+						                     (while (and (consp %pc-cur) (not %pc-done))
+						                       (if (and %pc-seen (eq %pc-cur %pc-stop))
+						                           (setq %pc-done t)
+						                           (progn
+						                             (when (eq %pc-cur %pc-stop)
+						                               (setq %pc-seen t))
+						                             (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
+						                                                        (%pc-walk (car %pc-cur) %pc-esc %pc-sub %pc-subd)))
+						                             (setq %pc-sep " ")
+						                             (setq %pc-cur (cdr %pc-cur)))))
+						                     (if %pc-done
+						                         (concatenate 'string %pc-acc " . #)")
+						                         (progn
+						                           (unless (null %pc-cur)
+						                             (setq %pc-acc (concatenate 'string %pc-acc " . "
+						                                                        (%pc-walk %pc-cur %pc-esc %pc-sub %pc-subd))))
+						                           (concatenate 'string %pc-acc ")"))))))))
+						        ((and (vectorp %pc-x) (not (stringp %pc-x)) (eql (array-rank %pc-x) 1)
+						              (not (equal (array-element-type %pc-x) 'single-float))
+						              (not (equal (array-element-type %pc-x) 'double-float)))
+						         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256))
+						             "#"
+						             (let ((%pc-acc "#(") (%pc-i 0) (%pc-n (length %pc-x)) (%pc-sep "")
+						                   (%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1)))
+						               (while (< %pc-i %pc-n)
+						                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
+						                                            (%pc-walk (aref %pc-x %pc-i) %pc-esc %pc-sub %pc-subd)))
+						                 (setq %pc-sep " ")
+						                 (setq %pc-i (+ %pc-i 1)))
+						               (concatenate 'string %pc-acc ")"))))
+						        (%pc-esc (%prin1-to-string %pc-x))
+						        (t (%princ-to-string %pc-x))))
+						""");
 		SOURCES.put(LispNames.PRINT_CASED_ON_PATH_INTERNAL, """
 				(defun %pc-on-path (%pc-x %pc-path)
 				  (let ((%pc-c %pc-path) (%pc-hit nil))

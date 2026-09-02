@@ -169,11 +169,25 @@ public final class LispCons implements LispVal {
 	// re-enters this method, is pre-scanned for a cycle (Floyd), the second arrival at
 	// the cycle-start cell printing as the improper tail " . #" -- every element exactly
 	// once, then the marker.
+	//
+	// A two-element (QUOTE x) / (FUNCTION x) list is the one shape the printer
+	// abbreviates, to 'x / #'x (CLHS 22.1.3.7 permits this unconditionally; the reader
+	// already reads the abbreviation back into exactly this shape). It still opens
+	// this cell's render frame first -- the abbreviation branch below runs INSIDE the
+	// guarded section, not before it, so a self-referential (QUOTE x) with x == this
+	// still hits the guard on the recursive print of x rather than looping forever;
+	// `.kb/defmacro-backquote.md`'s backquote expansion never reaches this shape since
+	// it lowers to list/append at READ TIME, so that deviation from CLHS is untouched.
 	private String render(boolean escape) {
 		if (!RenderCycleGuard.enter(this)) {
 			return "#";
 		}
 		try {
+			String abbrevPrefix = abbreviationPrefix();
+			if (abbrevPrefix != null) {
+				LispVal quoted = ((LispCons) this.cdr).car();
+				return abbrevPrefix + (escape ? quoted.print() : quoted.display());
+			}
 			LispCons stop = cycleStart();
 			StringBuilder sb = new StringBuilder("(");
 			LispVal current = this;
@@ -202,6 +216,23 @@ public final class LispCons implements LispVal {
 		finally {
 			RenderCycleGuard.exit();
 		}
+	}
+
+	// "'" for a (QUOTE x) cell, "#'" for a (FUNCTION x) cell, null for anything else --
+	// in particular a THREE-OR-MORE element list ((QUOTE A B) prints in full) and an
+	// improper one ((QUOTE . A) likewise).
+	private @Nullable String abbreviationPrefix() {
+		if (!(this.car instanceof LispSymbol sym) || !(this.cdr instanceof LispCons rest)
+				|| !(rest.cdr() instanceof LispNil)) {
+			return null;
+		}
+		if (sym.name().equals(LispNames.QUOTE)) {
+			return "'";
+		}
+		if (sym.name().equals(LispNames.FUNCTION)) {
+			return "#'";
+		}
+		return null;
 	}
 
 	// Floyd's cycle detection over the cdr chain: answers the cell where the cycle

@@ -717,7 +717,8 @@ final class JvmRuntimeBuilder {
 	 * <p>
 	 * The JVM compile path stores a string as its content framed in {@code "} characters
 	 * and a symbol as its bare name, so the leading {@code "} is the discriminator: a
-	 * value that does not start with one is a symbol and is returned verbatim. For a real
+	 * value that does not start with one is a symbol and is routed to {@code _symEsc}
+	 * ({@link #buildSymEscBody}, todo 626) rather than returned verbatim. For a real
 	 * string every {@code "} and {@code \} of the CONTENT is preceded by a {@code \}
 	 * (CLHS 22.1.3.4 -- the two syntax types the reader would otherwise choke on; a
 	 * newline stays literal), so {@code (read-from-string (prin1-to-string s))} is
@@ -731,27 +732,29 @@ final class JvmRuntimeBuilder {
 	 */
 	static List<Integer> buildStrEscBody(ConstantPool cp, MethodrefConstant stringLength,
 			MethodrefConstant stringCharAt, MethodrefConstant stringIndexOf, MethodrefConstant stringIndexOfFrom,
-			MethodrefConstant stringSubstring, MethodrefConstant stringReplace, MethodrefConstant stringConcat) {
+			MethodrefConstant stringSubstring, MethodrefConstant stringReplace, MethodrefConstant stringConcat,
+			MethodrefConstant symEscMethod) {
 		JvmAsm a = new JvmAsm();
 		int slotS = 0, slotN = 1;
 		int framed = a.label();
+		int symbol = a.label();
 		int returnAsIs = a.label();
 		int escape = a.label();
-		// int n = s.length(); if (n < 2) return s;
+		// int n = s.length(); if (n < 2) goto symbol;
 		a.aload(slotS);
 		a.invokevirtual(stringLength);
 		a.istore(slotN);
 		a.iload(slotN);
 		a.iconst(2);
 		a.branch(Opcode.IF_ICMPGE, framed);
-		a.branch(Opcode.GOTO, returnAsIs);
-		// if (s.charAt(0) != '"') return s; -- a symbol name, printed verbatim
+		a.branch(Opcode.GOTO, symbol);
+		// if (s.charAt(0) != '"') goto symbol -- a symbol name, escaped by _symEsc
 		a.bind(framed);
 		a.aload(slotS);
 		a.iconst(0);
 		a.invokevirtual(stringCharAt);
 		a.iconst('"');
-		a.branch(Opcode.IF_ICMPNE, returnAsIs);
+		a.branch(Opcode.IF_ICMPNE, symbol);
 		// Nothing to escape when the content holds no '\' and the only '"' at or after
 		// index 1 is the closing frame: if (s.indexOf('\\') >= 0) goto escape;
 		a.aload(slotS);
@@ -790,6 +793,191 @@ final class JvmRuntimeBuilder {
 		a.invokevirtual(stringConcat);
 		a.ldcString(cp.addString("\""));
 		a.invokevirtual(stringConcat);
+		a.areturn();
+		a.bind(symbol);
+		a.aload(slotS);
+		a.invokestatic(symEscMethod);
+		a.areturn();
+		return a.finish();
+	}
+
+	/**
+	 * Builds {@code _symEsc(String s) -> String}: the {@code *print-escape*} = {@code t}
+	 * rendering of one bare symbol name (no package qualifier, no keyword/gensym marker
+	 * -- {@code _lispToDisplayString}'s princ arm strips those before this method would
+	 * ever see them, and prin1's callers hand it the whole name, marker included, but the
+	 * marker characters ({@code :}, {@code #}) are constituent and upcase-invariant so
+	 * they never trigger escaping here on their own). Wraps the name in {@code |...|},
+	 * doubling every embedded {@code |} and {@code \}, when CLHS 22.1.3.3 says the bare
+	 * spelling would not read back as itself: the empty name, a name holding a character
+	 * the reader would not accept inside a bare symbol token, or a name holding an ASCII
+	 * lowercase letter.
+	 *
+	 * <p>
+	 * The lowercase check is scoped to ASCII {@code a}-{@code z} rather than the
+	 * interpreter's exact-Unicode {@code Character.toUpperCase(char)} fold
+	 * ({@code LispSymbol.needsEscape}'s Javadoc): the general fold's range table
+	 * ({@code WasmCaseFoldRuntimeBuilder}'s JVM-side counterpart does not exist) would
+	 * otherwise have to be reachable from every program that prints any symbol at all. A
+	 * name whose only non-constituent characters are non-ASCII lowercase letters
+	 * therefore prints unescaped here -- the same known, narrow gap as the interpreter's,
+	 * kept identical on purpose.
+	 */
+	static List<Integer> buildSymEscBody(ConstantPool cp, MethodrefConstant stringLength,
+			MethodrefConstant stringCharAt, MethodrefConstant stringIndexOf, MethodrefConstant stringSubstring,
+			MethodrefConstant stringReplace, MethodrefConstant stringConcat) {
+		JvmAsm a = new JvmAsm();
+		// locals: s = 0 (param), n = 1, prefixEnd = 2, i = 3, c = 4, idx = 5 (int),
+		// tmp = 6 (String, the substring/concat scratch).
+		int slotS = 0, slotN = 1, slotPrefixEnd = 2, slotI = 3, slotC = 4, slotIdx = 5, slotTmp = 6;
+		int checkSharpColon = a.label();
+		int scanQualifier = a.label();
+		int havePrefix = a.label();
+		int loopTop = a.label();
+		int doEscape = a.label();
+		int returnAsIs = a.label();
+		int notLower = a.label();
+		// n = s.length();
+		a.aload(slotS);
+		a.invokevirtual(stringLength);
+		a.istore(slotN);
+		// prefixEnd: a keyword's ':' (LispSymbol.isKeyword), else an uninterned
+		// symbol's "#:" marker, else a package qualifier's colon(s)
+		// (LispSymbol.qualifierEnd) -- all printed verbatim, never escaped, exactly
+		// like the interpreter's LispSymbol.print(). 0 when none apply.
+		a.iload(slotN);
+		a.branch(Opcode.IFEQ, checkSharpColon);
+		a.aload(slotS);
+		a.iconst(0);
+		a.invokevirtual(stringCharAt);
+		a.iconst(':');
+		a.branch(Opcode.IF_ICMPNE, checkSharpColon);
+		a.iconst(1);
+		a.istore(slotPrefixEnd);
+		a.branch(Opcode.GOTO, havePrefix);
+		a.bind(checkSharpColon);
+		a.iload(slotN);
+		a.iconst(2);
+		a.branch(Opcode.IF_ICMPLT, scanQualifier);
+		a.aload(slotS);
+		a.iconst(0);
+		a.invokevirtual(stringCharAt);
+		a.iconst('#');
+		a.branch(Opcode.IF_ICMPNE, scanQualifier);
+		a.aload(slotS);
+		a.iconst(1);
+		a.invokevirtual(stringCharAt);
+		a.iconst(':');
+		a.branch(Opcode.IF_ICMPNE, scanQualifier);
+		a.iconst(2);
+		a.istore(slotPrefixEnd);
+		a.branch(Opcode.GOTO, havePrefix);
+		a.bind(scanQualifier);
+		// idx = s.indexOf(':'); prefixEnd = (idx <= 0) ? 0
+		// : (idx+1<n && s.charAt(idx+1)==':') ? idx+2 : idx+1
+		a.aload(slotS);
+		a.iconst(':');
+		a.invokevirtual(stringIndexOf);
+		a.istore(slotIdx);
+		a.iload(slotIdx);
+		int idxLePos = a.label();
+		a.branch(Opcode.IFLE, idxLePos);
+		a.iload(slotIdx);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.iload(slotN);
+		int notDoubleColon = a.label();
+		a.branch(Opcode.IF_ICMPGE, notDoubleColon);
+		a.aload(slotS);
+		a.iload(slotIdx);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.invokevirtual(stringCharAt);
+		a.iconst(':');
+		a.branch(Opcode.IF_ICMPNE, notDoubleColon);
+		a.iload(slotIdx);
+		a.iconst(2);
+		a.op(Opcode.IADD);
+		a.istore(slotPrefixEnd);
+		a.branch(Opcode.GOTO, havePrefix);
+		a.bind(notDoubleColon);
+		a.iload(slotIdx);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.istore(slotPrefixEnd);
+		a.branch(Opcode.GOTO, havePrefix);
+		a.bind(idxLePos);
+		a.iconst(0);
+		a.istore(slotPrefixEnd);
+		a.bind(havePrefix);
+		// needsPipes: the empty member (prefixEnd == n), or a member byte that is
+		// ASCII lowercase or non-constituent (LispSymbol.needsEscape's mirror).
+		a.iload(slotPrefixEnd);
+		a.istore(slotI);
+		a.bind(loopTop);
+		a.iload(slotI);
+		a.iload(slotN);
+		a.branch(Opcode.IF_ICMPGE, returnAsIs);
+		a.aload(slotS);
+		a.iload(slotI);
+		a.invokevirtual(stringCharAt);
+		a.istore(slotC);
+		a.iload(slotC);
+		a.iconst('a');
+		a.branch(Opcode.IF_ICMPLT, notLower);
+		a.iload(slotC);
+		a.iconst('z');
+		a.branch(Opcode.IF_ICMPLE, doEscape);
+		a.bind(notLower);
+		// Non-constituent characters (LispSymbol.isBareConstituent's mirror): ASCII
+		// whitespace, the reader's list/string/quote/comment/backquote/comma
+		// terminators, and '|' / '\' themselves (reader-special even though the
+		// lexer's own isSymbolChar does not exclude them).
+		for (char forbidden : new char[] { ' ', '\t', '\n', '\r', '\f', '(', ')', '\'', '"', ';', ',', '`', '|',
+				'\\' }) {
+			a.iload(slotC);
+			a.iconst(forbidden);
+			a.branch(Opcode.IF_ICMPEQ, doEscape);
+		}
+		a.iinc(slotI, 1);
+		a.branch(Opcode.GOTO, loopTop);
+		a.bind(returnAsIs);
+		a.aload(slotS);
+		a.areturn();
+		// return (prefixEnd == 0 ? "" : s.substring(0, prefixEnd)) + "|"
+		// + member.replace("\\", "\\\\").replace("|", "\\|") + "|", where member is
+		// s.substring(prefixEnd) -- the empty member (prefixEnd == n) needs no
+		// replace calls, String.substring(n, n) already being "".
+		a.bind(doEscape);
+		a.aload(slotS);
+		a.iload(slotPrefixEnd);
+		a.iload(slotN);
+		a.invokevirtual(stringSubstring);
+		a.ldcString(cp.addString("\\"));
+		a.ldcString(cp.addString("\\\\"));
+		a.invokevirtual(stringReplace);
+		a.ldcString(cp.addString("|"));
+		a.ldcString(cp.addString("\\|"));
+		a.invokevirtual(stringReplace);
+		a.astore(slotTmp);
+		a.ldcString(cp.addString("|"));
+		a.aload(slotTmp);
+		a.invokevirtual(stringConcat);
+		a.ldcString(cp.addString("|"));
+		a.invokevirtual(stringConcat);
+		a.astore(slotTmp);
+		a.iload(slotPrefixEnd);
+		int noPrefixPos = a.label();
+		a.branch(Opcode.IFEQ, noPrefixPos);
+		a.aload(slotS);
+		a.iconst(0);
+		a.iload(slotPrefixEnd);
+		a.invokevirtual(stringSubstring);
+		a.aload(slotTmp);
+		a.invokevirtual(stringConcat);
+		a.areturn();
+		a.bind(noPrefixPos);
+		a.aload(slotTmp);
 		a.areturn();
 		return a.finish();
 	}
@@ -870,7 +1058,8 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
 			MethodrefConstant lispToStringMethod, ConstantPool.StringConstant openParenStr,
 			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
-			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass, RenderGuardRefs guard) {
+			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass, RenderGuardRefs guard,
+			QuoteAbbrevRefs abbrev) {
 		List<Integer> code = new ArrayList<>();
 		// The cycle guard (the shared RenderGuardRefs discipline, kept in step by
 		// JvmLispCompilerTest.compileAndRunPrintOfACyclicConsIsFinite): a chain whose
@@ -879,8 +1068,22 @@ final class JvmRuntimeBuilder {
 		// returns "#", the *print-level* cutoff marker. Locals here: 0 = arg, 1 = sb,
 		// 2 = current (Floyd's slow first), 3 = first flag (guard scratch first),
 		// 4 = cell, 5 = the chain's cycle-start cell or null, 6 = its seen flag,
-		// 7 = Floyd's fast cursor.
+		// 7 = Floyd's fast cursor, 8/9 = the quote/function abbreviation check's car/cdr
+		// scratch.
 		emitRenderGuardEnter(code, guard);
+		// A 2-element (QUOTE x) / (FUNCTION x) cell abbreviates to 'x / #'x (CLHS
+		// 22.1.3.7 permits this unconditionally; the reader already reads the
+		// abbreviation back into exactly this shape) -- checked, and rendered, INSIDE
+		// the guarded section already opened above, so a self-referential (QUOTE x)
+		// with x reaching back to this very cell still hits the guard on the recursive
+		// render of x rather than looping forever. This runs before the general list
+		// loop below and shares its exit through emitRenderGuardExitAndReturn; a value
+		// of any other shape falls through to that loop unchanged.
+		List<Integer> notAbbrevPatches = emitQuoteAbbrevCheck(code, objectArrayClass, ratioArrayClass,
+				lispToStringMethod, guard, abbrev);
+		for (int patchPos : notAbbrevPatches) {
+			patchBranch(code, patchPos, code.size());
+		}
 		// The cdr chain is walked ITERATIVELY below, so the path guard alone cannot see
 		// a chain that cycles into itself: Floyd's cycle detection finds the cell where
 		// the cycle begins (into local 5; null for a terminating chain) before anything
@@ -1331,9 +1534,11 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
 			MethodrefConstant lispToDisplayStringMethod, ConstantPool.StringConstant openParenStr,
 			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
-			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass, RenderGuardRefs guard) {
+			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass, RenderGuardRefs guard,
+			QuoteAbbrevRefs abbrev) {
 		return buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
-				lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr, dotStr, ratioArrayClass, guard);
+				lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr, dotStr, ratioArrayClass, guard,
+				abbrev);
 	}
 
 	/**
@@ -1569,6 +1774,130 @@ final class JvmRuntimeBuilder {
 	 */
 	record RenderGuardRefs(FieldrefConstant pathField, FieldrefConstant depthField, ClassConstant objectClass,
 			ConstantPool.StringConstant depthMarkerStr) {
+	}
+
+	/**
+	 * Constants {@link #emitQuoteAbbrevCheck} needs to recognize and spell a
+	 * {@code (QUOTE x)} / {@code (FUNCTION x)} cell: the {@code String} class and its
+	 * {@code equals(Object)} / (reused from {@code Object.equals}) and
+	 * {@code concat(String)} methods, the two head-symbol spellings to match, and the two
+	 * abbreviation marks to emit.
+	 */
+	record QuoteAbbrevRefs(ClassConstant stringClass, MethodrefConstant stringEquals, MethodrefConstant stringConcat,
+			ConstantPool.StringConstant quoteName, ConstantPool.StringConstant functionName,
+			ConstantPool.StringConstant quoteMark, ConstantPool.StringConstant functionMark) {
+	}
+
+	/**
+	 * Emits the quote/function abbreviation check ahead of the general list-printing loop
+	 * in {@link #buildConsToStringBody}: a cons cell {@code {car, cdr}} whose {@code car}
+	 * is the String {@code "QUOTE"} / {@code "FUNCTION"} and whose {@code cdr} is itself
+	 * a cons cell {@code {x, null}} (a proper 2-element list -- {@code (QUOTE A B)} still
+	 * prints in full) leaves {@code "'"}/{@code "#'"} concatenated with {@code x}'s
+	 * rendering on the stack, ready for {@code emitRenderGuardExitAndReturn}. Anything
+	 * else falls through with an EMPTY stack to the position the caller must patch every
+	 * returned branch site to (the general loop's start) -- the same "return the
+	 * unpatched branch list" idiom {@link #emitConsCellCheck} uses. Locals 8 and 9 are
+	 * scratch (the car and cdr/rest candidates in turn).
+	 */
+	private static List<Integer> emitQuoteAbbrevCheck(List<Integer> code, ClassConstant objectArrayClass,
+			ClassConstant ratioArrayClass, MethodrefConstant lispToStringMethod, RenderGuardRefs guard,
+			QuoteAbbrevRefs abbrev) {
+		List<Integer> notAbbrev = new ArrayList<>();
+		// car = ((Object[]) arg)[0]; if (!(car instanceof String)) goto notAbbrev
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, objectArrayClass.index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ASTORE);
+		code.add(8);
+		code.add(Opcode.ALOAD);
+		code.add(8);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, abbrev.stringClass().index());
+		notAbbrev.add(code.size());
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		// cdr = ((Object[]) arg)[1]; must be a cons cell (a non-ratio Object[])
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, objectArrayClass.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ASTORE);
+		code.add(9);
+		code.add(Opcode.ALOAD);
+		code.add(9);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, objectArrayClass.index());
+		notAbbrev.add(code.size());
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD);
+		code.add(9);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, ratioArrayClass.index());
+		notAbbrev.add(code.size());
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		// rest = (Object[]) cdr; if (rest[1] != null) goto notAbbrev -- exactly one
+		// element, so (QUOTE A B) is excluded and falls through to the general loop.
+		code.add(Opcode.ALOAD);
+		code.add(9);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, objectArrayClass.index());
+		code.add(Opcode.ASTORE);
+		code.add(9);
+		code.add(Opcode.ALOAD);
+		code.add(9);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.AALOAD);
+		notAbbrev.add(code.size());
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		// carStr = (String) car; tag = carStr.equals("QUOTE") ? "'"
+		// : carStr.equals("FUNCTION") ? "#'" : goto notAbbrev
+		code.add(Opcode.ALOAD);
+		code.add(8);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, abbrev.stringClass().index());
+		code.add(Opcode.ASTORE);
+		code.add(8);
+		code.add(Opcode.ALOAD);
+		code.add(8);
+		emitLdc(code, abbrev.quoteName().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, abbrev.stringEquals().index());
+		int isQuotePos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD);
+		code.add(8);
+		emitLdc(code, abbrev.functionName().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, abbrev.stringEquals().index());
+		notAbbrev.add(code.size());
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		emitLdc(code, abbrev.functionMark().index());
+		int gotoHaveTag = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, isQuotePos, code.size());
+		emitLdc(code, abbrev.quoteMark().index());
+		patchBranch(code, gotoHaveTag, code.size());
+		// return tag.concat(lispToString(rest[0]))
+		code.add(Opcode.ALOAD);
+		code.add(9);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, lispToStringMethod.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, abbrev.stringConcat().index());
+		emitRenderGuardExitAndReturn(code, guard);
+		return notAbbrev;
 	}
 
 	/**

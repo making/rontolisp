@@ -7447,6 +7447,21 @@ public final class LispNames {
 	public static final String PRINT_CASE_FOLD_INTERNAL = "%PRINT-CASE-FOLD";
 
 	/**
+	 * The internal {@code (%unescaped-symbol-text s)} helper: undoes the {@code |...|}
+	 * framing {@code prin1-to-string} now adds (todo 626) to a symbol name that is not
+	 * upcase-invariant, so a caller that reads a KNOWN, lowercase-prefixed internal tag
+	 * spelling back out of {@code prin1-to-string}'s text -- {@code type-of} and
+	 * {@code symbol-package} peeling {@code %struct-}/{@code %class-} off a
+	 * {@code %class-designator} answer -- keeps matching against the bare prefix rather
+	 * than a piped one. Strips exactly one leading and trailing {@code |} when present;
+	 * does not undo interior backslash-doubling, since neither prelude consumer's inputs
+	 * (a tag prefix and a reader-upcased type name) can contain a literal {@code |} or
+	 * {@code \} themselves. Not a substitute for {@link #PRIN1_TO_STRING_RAW}, which
+	 * exists to dodge the {@code print-object} REWRITE rather than the escaping itself.
+	 */
+	public static final String UNESCAPED_SYMBOL_TEXT_INTERNAL = "%UNESCAPED-SYMBOL-TEXT";
+
+	/**
 	 * The internal {@code (%pc-walk x escape path depth)} helper: the recursive half of
 	 * {@link #PRINT_CASED_INTERNAL}, threading the rendering path and depth of the shared
 	 * cycle guard ({@code RenderCycleGuard}) through itself so a cyclic cons or vector

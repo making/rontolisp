@@ -2558,8 +2558,23 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addNameAndType(cp.addUtf8("indexOf"), cp.addUtf8("(II)I")));
 		MethodrefConstant stringReplace = cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("replace"),
 				cp.addUtf8("(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;")));
+		// _symEsc: the |...|-escaping half of *print-escape* = t (todo 626), for a bare
+		// symbol name -- _strEsc's own "this value is a symbol" arm routes here instead
+		// of returning the name verbatim.
+		Utf8Constant symEscName = cp.addUtf8("_symEsc");
+		MethodrefConstant symEscMethod = cp.addMethodref(thisClass, cp.addNameAndType(symEscName, strEscDescUtf));
+		List<Integer> symEscCode = JvmRuntimeBuilder.buildSymEscBody(cp, stringLength, stringCharAt, stringIndexOf,
+				stringSubstring, stringReplace, stringConcat);
 		List<Integer> strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
-				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat);
+				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat, symEscMethod);
+		// The quote/function abbreviation _consToString(Display) applies ahead of the
+		// general list loop (todo 626): a 2-element (QUOTE x)/(FUNCTION x) cell prints
+		// as 'x/#'x. objectEquals (Object.equals(Object)) is reused as the String
+		// receiver's equals -- invokevirtual dispatches virtually regardless of the
+		// methodref's declaring class.
+		JvmRuntimeBuilder.QuoteAbbrevRefs quoteAbbrev = new JvmRuntimeBuilder.QuoteAbbrevRefs(stringClass, objectEquals,
+				stringConcat, cp.addString(LispNames.QUOTE), cp.addString(LispNames.FUNCTION), cp.addString("'"),
+				cp.addString("#'"));
 
 		// Float text: every double spelling gets the lowercase exponent marker (the
 		// FloatText contract), and a packed single-float array element prints through a
@@ -2578,7 +2593,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				ffiPrint, futurePrint, packedPrint, packedIntPrint, instPrint, strEscMethod, hashPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
-				ratioArrayClass, renderGuard);
+				ratioArrayClass, renderGuard, quoteAbbrev);
 		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
 				consToDisplayStringMethod, nilStr, funcStr, stringCharAt, stringLength, stringSubstring,
@@ -2599,7 +2614,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
-				dotStr, ratioArrayClass, renderGuard);
+				dotStr, ratioArrayClass, renderGuard, quoteAbbrev);
 		List<Integer> appendCode = JvmRuntimeBuilder.buildAppendBody(objectArrayClass, objectClass, appendMethod);
 		ConstantPool.StringConstant quoteStr = cp.addString("\"");
 		List<Integer> readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
@@ -3459,6 +3474,14 @@ public final class JvmLispCompiler implements LispCompiler {
 								.writeU2(0)
 								.writeU2(0);
 						})));
+				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, symEscName, strEscDescUtf,
+						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(4)
+								.writeU2(7)
+								.writeCode((Object[]) symEscCode.toArray(new Integer[0]))
+								.writeU2(0)
+								.writeU2(0);
+						})));
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 							attr.writeU2(3)
@@ -3492,7 +3515,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName, consToStringDescUtf,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 							attr.writeU2(4)
-								.writeU2(8)
+								.writeU2(10)
 								.writeCode((Object[]) ctsCode.toArray(new Integer[0]))
 								.writeU2(0)
 								.writeU2(0);
@@ -3966,7 +3989,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToDisplayStringName,
 						consToStringDescUtf, method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 							attr.writeU2(4)
-								.writeU2(8)
+								.writeU2(10)
 								.writeCode((Object[]) ctdsCode.toArray(new Integer[0]))
 								.writeU2(0)
 								.writeU2(0);

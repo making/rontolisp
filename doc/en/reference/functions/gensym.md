@@ -7,11 +7,11 @@ Returns a fresh symbol named `#:<prefix><n>`, where `prefix` defaults to `g` and
 Deviations from Common Lisp: the prefix must be a **literal** string on the compilation path (JVM/WASM), so the symbol text is known at compile time — a computed prefix is a compile error (the interpreter accepts any string). There is no `*gensym-counter*` variable, and because the symbol is interned like any other, `read`ing the same printed name twice yields `eq` symbols.
 
 ```lisp
-(list (gensym) (gensym)) ; => (#:g1 #:g2)
+(list (gensym) (gensym)) ; => (#:|g1| #:|g2|)
 ```
 
 ```lisp
-(gensym "tmp") ; => #:tmp3
+(gensym "tmp") ; => #:|tmp3|
 ```
 
 ```lisp
