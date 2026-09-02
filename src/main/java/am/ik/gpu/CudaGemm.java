@@ -129,6 +129,38 @@ final class CudaGemm implements GpuDevice {
 			SCATTER_F32 = 13, SUMSQ_F64 = 14, SUMSQ_F32 = 15;
 
 	/**
+	 * The FUSED tier's kernels ({@code .todo/499}), in the order {@link #fused} holds
+	 * them: the exact GELU and its adjoint, the last-axis softmax and its adjoint,
+	 * layer-norm's normalization and its adjoint, and the inverted-dropout mask, at each
+	 * width. Each is one pass where the {@code torch.lisp} composition ran a chain of
+	 * members, and each reproduces that chain's arithmetic rounding for rounding
+	 * ({@code gemm.cu}, "The FUSED tier").
+	 */
+	static final String[] KERNELS_FUSED = { "gelu_f64", "gelu_f32", "gelu_grad_f64", "gelu_grad_f32", "softmax_f64",
+			"softmax_f32", "softmax_grad_f64", "softmax_grad_f32", "layer_norm_f64", "layer_norm_f32",
+			"layer_norm_grad_f64", "layer_norm_grad_f32", "dropout_mask_f64", "dropout_mask_f32" };
+
+	private static final int GELU_F64 = 0, GELU_F32 = 1, GELU_GRAD_F64 = 2, GELU_GRAD_F32 = 3, SOFTMAX_F64 = 4,
+			SOFTMAX_F32 = 5, SOFTMAX_GRAD_F64 = 6, SOFTMAX_GRAD_F32 = 7, LAYER_NORM_F64 = 8, LAYER_NORM_F32 = 9,
+			LAYER_NORM_GRAD_F64 = 10, LAYER_NORM_GRAD_F32 = 11, DROPOUT_F64 = 12, DROPOUT_F32 = 13;
+
+	/**
+	 * What one element of a row kernel (softmax, layer-norm and their adjoints) is
+	 * charged as for the safepoint threshold: a few double operations per pass over three
+	 * to five passes, with a libm call in the softmax's.
+	 */
+	private static final long FUSED_ROW_FLOPS_PER_ELEMENT = 64;
+
+	/**
+	 * Threads per block of the row kernels: {@code ROW_WARPS} warps of thirty-two rows
+	 * each, one thread per row, the rows streamed through a transposed shared-memory tile
+	 * per warp ({@code gemm.cu}, "THE ROW KERNELS' LAYOUT"). The two are one number in
+	 * two files: the kernel derives its rows from {@code ROW_WARPS}, so a launch at any
+	 * other block size would compute the wrong rows.
+	 */
+	private static final int ROW_BLOCK = 64;
+
+	/**
 	 * Threads per block of the sum-of-squares reduction, and the most blocks it is ever
 	 * launched with. The block size is {@link #STRIDED_BLOCK} so that one launch helper
 	 * serves both, and the block count is capped so the partials that come home are at
@@ -369,6 +401,9 @@ final class CudaGemm implements GpuDevice {
 	 */
 	private final MemorySegment[] resident;
 
+	/** The fused tier's kernels, indexed by {@link #GELU_F64} and its siblings. */
+	private final MemorySegment[] fused;
+
 	private final MemorySegment gemvF64;
 
 	private final MemorySegment gemvF32;
@@ -449,9 +484,9 @@ final class CudaGemm implements GpuDevice {
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
 			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32,
 			MemorySegment gemmBatchedF32T4, MemorySegment gemmBatchedF32T8, int multiprocessors, MemorySegment mapF64,
-			MemorySegment mapF32, MemorySegment[] strided, MemorySegment[] resident, MemorySegment gemvF64,
-			MemorySegment gemvF32, boolean pooled, MemorySegment memoryPool, MemorySegment bounce, long syncFlopCeiling,
-			String description) {
+			MemorySegment mapF32, MemorySegment[] strided, MemorySegment[] resident, MemorySegment[] fused,
+			MemorySegment gemvF64, MemorySegment gemvF32, boolean pooled, MemorySegment memoryPool,
+			MemorySegment bounce, long syncFlopCeiling, String description) {
 		this.driver = driver;
 		this.device = device;
 		this.context = context;
@@ -467,6 +502,7 @@ final class CudaGemm implements GpuDevice {
 		this.mapF32 = mapF32;
 		this.strided = strided;
 		this.resident = resident;
+		this.fused = fused;
 		this.gemvF64 = gemvF64;
 		this.gemvF32 = gemvF32;
 		this.pooled = pooled;
@@ -625,6 +661,15 @@ final class CudaGemm implements GpuDevice {
 				}
 				resident[i] = functionOut.get(P, 0);
 			}
+			MemorySegment[] fused = new MemorySegment[KERNELS_FUSED.length];
+			for (int i = 0; i < KERNELS_FUSED.length; i++) {
+				status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNELS_FUSED[i]));
+				if (status != CuResult.SUCCESS) {
+					return unwind(driver, device, true, module,
+							"cuModuleGetFunction " + KERNELS_FUSED[i] + ": " + driver.errorString(status));
+				}
+				fused[i] = functionOut.get(P, 0);
+			}
 			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_GEMV_F64));
 			if (status != CuResult.SUCCESS) {
 				return unwind(driver, device, true, module,
@@ -671,8 +716,8 @@ final class CudaGemm implements GpuDevice {
 			long ceiling = SYNC_FLOPS_PER_MULTIPROCESSOR * Math.max(1, multiprocessors);
 			String description = describe(driver, arena, device) + (pooled ? "" : ", unpooled allocation");
 			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32,
-					batchedF32T4, batchedF32T8, multiprocessors, mapF64, mapF32, strided, resident, gemvF64, gemvF32,
-					pooled, pool, bounce, ceiling, description), description);
+					batchedF32T4, batchedF32T8, multiprocessors, mapF64, mapF32, strided, resident, fused, gemvF64,
+					gemvF32, pooled, pool, bounce, ceiling, description), description);
 		}
 		catch (Throwable ex) {
 			// Anything at all: a descriptor defect, a JVM that forbids native access, a
@@ -1473,7 +1518,9 @@ final class CudaGemm implements GpuDevice {
 			return false;
 		}
 		for (int i = 0; i < sizes.length; i++) {
-			if (buffers[i] != 0) {
+			// A slot the lookup filled, or an operand the call does not have (a fused
+			// adjoint's absent accumulated gradient, size 0), allocates nothing.
+			if (buffers[i] != 0 || sizes[i] == 0) {
 				continue;
 			}
 			int status = this.pooled ? this.driver.memAllocAsync(out, sizes[i]) : this.driver.memAlloc(out, sizes[i]);
@@ -1781,6 +1828,291 @@ final class CudaGemm implements GpuDevice {
 	 * @param host the host array that is being written
 	 * @return the array to write into
 	 */
+	// --- the fused tier (.todo/499) --------------------------------------------------
+
+	@Override
+	public boolean gelu(double[] a, int oa, double[] c, int oc, int n) {
+		return elementwise(this.fused[GELU_F64], MemorySegment.ofArray(a), a, oa, null, null, 0, null, null, 0,
+				MemorySegment.ofArray(c), c, oc, n, Double.BYTES);
+	}
+
+	@Override
+	public boolean geluF(float[] a, int oa, float[] c, int oc, int n) {
+		return elementwise(this.fused[GELU_F32], MemorySegment.ofArray(a), a, oa, null, null, 0, null, null, 0,
+				MemorySegment.ofArray(c), c, oc, n, Float.BYTES);
+	}
+
+	@Override
+	public boolean geluGrad(double[] g, int og, double[] x, int ox, double @Nullable [] old, int oOld, double[] c,
+			int oc, int n) {
+		return elementwise(this.fused[GELU_GRAD_F64], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(x), x, ox,
+				old == null ? null : MemorySegment.ofArray(old), old, oOld, MemorySegment.ofArray(c), c, oc, n,
+				Double.BYTES);
+	}
+
+	@Override
+	public boolean geluGradF(float[] g, int og, float[] x, int ox, float @Nullable [] old, int oOld, float[] c, int oc,
+			int n) {
+		return elementwise(this.fused[GELU_GRAD_F32], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(x), x, ox,
+				old == null ? null : MemorySegment.ofArray(old), old, oOld, MemorySegment.ofArray(c), c, oc, n,
+				Float.BYTES);
+	}
+
+	@Override
+	public boolean softmax(double[] a, int oa, double[] c, int oc, int rows, int len) {
+		return rowKernel(this.fused[SOFTMAX_F64], MemorySegment.ofArray(a), a, oa, null, null, 0, null, null, 0,
+				MemorySegment.ofArray(c), c, oc, rows, len, null, false, Double.BYTES);
+	}
+
+	@Override
+	public boolean softmaxF(float[] a, int oa, float[] c, int oc, int rows, int len) {
+		return rowKernel(this.fused[SOFTMAX_F32], MemorySegment.ofArray(a), a, oa, null, null, 0, null, null, 0,
+				MemorySegment.ofArray(c), c, oc, rows, len, null, false, Float.BYTES);
+	}
+
+	@Override
+	public boolean softmaxGrad(double[] g, int og, double[] s, int os, double[] c, int oc, int rows, int len) {
+		return rowKernel(this.fused[SOFTMAX_GRAD_F64], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(s), s, os,
+				null, null, 0, MemorySegment.ofArray(c), c, oc, rows, len, null, false, Double.BYTES);
+	}
+
+	@Override
+	public boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len) {
+		return rowKernel(this.fused[SOFTMAX_GRAD_F32], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(s), s, os,
+				null, null, 0, MemorySegment.ofArray(c), c, oc, rows, len, null, false, Float.BYTES);
+	}
+
+	@Override
+	public boolean layerNorm(double[] x, int ox, double[] c, int oc, int rows, int len, double eps) {
+		return rowKernel(this.fused[LAYER_NORM_F64], MemorySegment.ofArray(x), x, ox, null, null, 0, null, null, 0,
+				MemorySegment.ofArray(c), c, oc, rows, len, eps, false, Double.BYTES);
+	}
+
+	@Override
+	public boolean layerNormF(float[] x, int ox, float[] c, int oc, int rows, int len, double eps) {
+		return rowKernel(this.fused[LAYER_NORM_F32], MemorySegment.ofArray(x), x, ox, null, null, 0, null, null, 0,
+				MemorySegment.ofArray(c), c, oc, rows, len, eps, false, Float.BYTES);
+	}
+
+	@Override
+	public boolean layerNormGrad(double[] g, int og, double[] x, int ox, double @Nullable [] old, int oOld, double[] c,
+			int oc, int rows, int len, double eps) {
+		return rowKernel(this.fused[LAYER_NORM_GRAD_F64], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(x), x,
+				ox, old == null ? null : MemorySegment.ofArray(old), old, oOld, MemorySegment.ofArray(c), c, oc, rows,
+				len, eps, true, Double.BYTES);
+	}
+
+	@Override
+	public boolean layerNormGradF(float[] g, int og, float[] x, int ox, float @Nullable [] old, int oOld, float[] c,
+			int oc, int rows, int len, double eps) {
+		return rowKernel(this.fused[LAYER_NORM_GRAD_F32], MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(x), x,
+				ox, old == null ? null : MemorySegment.ofArray(old), old, oOld, MemorySegment.ofArray(c), c, oc, rows,
+				len, eps, true, Float.BYTES);
+	}
+
+	@Override
+	public boolean dropoutMask(double[] c, int oc, int n, double p, double span, int s1, int s2, int s3) {
+		return dropoutMask(this.fused[DROPOUT_F64], MemorySegment.ofArray(c), c, (long) oc * Double.BYTES,
+				(long) n * Double.BYTES, n, p, span, s1, s2, s3);
+	}
+
+	@Override
+	public boolean dropoutMaskF(float[] c, int oc, int n, double p, double span, int s1, int s2, int s3) {
+		return dropoutMask(this.fused[DROPOUT_F32], MemorySegment.ofArray(c), c, (long) oc * Float.BYTES,
+				(long) n * Float.BYTES, n, p, span, s1, s2, s3);
+	}
+
+	/**
+	 * One fused pass over {@code n} elements with one to three operands -- the first
+	 * always present, the second and third optional (a {@code null} segment): the GELU
+	 * ({@code X}) and its adjoint ({@code G, X, OLD}). The parameter block is the
+	 * operands present (an absent one rides as a null pointer, which the kernel tests),
+	 * the result and the count. Each operand is looked up, staged and recorded like any
+	 * other member's, so the activation a forward left resident is what its backward
+	 * reads.
+	 */
+	private boolean elementwise(MemorySegment kernel, MemorySegment a, Object ah, int oa, @Nullable MemorySegment b,
+			@Nullable Object bh, int ob, @Nullable MemorySegment d, @Nullable Object dh, int od, MemorySegment c,
+			Object ch, int oc, int n, int width) {
+		if (!this.usable) {
+			return false;
+		}
+		long bytes = (long) n * width;
+		long offA = (long) oa * width, offB = (long) ob * width, offD = (long) od * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0, 0, 0 }, owned = { 0, 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(ah, offA, bytes);
+			if (b != null) {
+				buffers[1] = this.residency.lookup(java.util.Objects.requireNonNull(bh), offB, bytes);
+			}
+			if (d != null) {
+				buffers[2] = this.residency.lookup(java.util.Objects.requireNonNull(dh), offD, bytes);
+			}
+			if (!allocate(arena, buffers, owned, bytes, b == null ? 0 : bytes, d == null ? 0 : bytes, bytes)) {
+				return false;
+			}
+			boolean sync = (long) n * MAP_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, ah, a, offA, bytes)
+					|| (b != null && !stage(buffers, owned, 1, java.util.Objects.requireNonNull(bh), b, offB, bytes))
+					|| (d != null && !stage(buffers, owned, 2, java.util.Objects.requireNonNull(dh), d, offD, bytes))) {
+				return false;
+			}
+			// A kernel with a third operand takes it always, absent as a null pointer.
+			Object[] values = b == null ? new Object[] { buffers[0], buffers[3], n }
+					: new Object[] { buffers[0], buffers[1], buffers[2], buffers[3], n };
+			if (!launchFused(arena, kernel, n, STRIDED_BLOCK, values, sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 3, ch, bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * One fused pass per ROW over a {@code rows x len} operand -- one thread walks one
+	 * row, the fold kernel's own pattern -- with one to three operands as in
+	 * {@link #elementwise}: the softmax ({@code A}), its adjoint ({@code G, S}),
+	 * layer-norm ({@code X}) and its adjoint ({@code G, X, OLD}). {@code eps}, when
+	 * present, is the trailing double parameter.
+	 */
+	private boolean rowKernel(MemorySegment kernel, MemorySegment a, Object ah, int oa, @Nullable MemorySegment b,
+			@Nullable Object bh, int ob, @Nullable MemorySegment d, @Nullable Object dh, int od, MemorySegment c,
+			Object ch, int oc, int rows, int len, @Nullable Double eps, boolean oldSlot, int width) {
+		if (!this.usable) {
+			return false;
+		}
+		long n = (long) rows * len;
+		long bytes = n * width;
+		long offA = (long) oa * width, offB = (long) ob * width, offD = (long) od * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0, 0, 0 }, owned = { 0, 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(ah, offA, bytes);
+			if (b != null) {
+				buffers[1] = this.residency.lookup(java.util.Objects.requireNonNull(bh), offB, bytes);
+			}
+			if (d != null) {
+				buffers[2] = this.residency.lookup(java.util.Objects.requireNonNull(dh), offD, bytes);
+			}
+			if (!allocate(arena, buffers, owned, bytes, b == null ? 0 : bytes, d == null ? 0 : bytes, bytes)) {
+				return false;
+			}
+			boolean sync = n * FUSED_ROW_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, ah, a, offA, bytes)
+					|| (b != null && !stage(buffers, owned, 1, java.util.Objects.requireNonNull(bh), b, offB, bytes))
+					|| (d != null && !stage(buffers, owned, 2, java.util.Objects.requireNonNull(dh), d, offD, bytes))) {
+				return false;
+			}
+			java.util.List<Object> values = new java.util.ArrayList<>();
+			values.add(buffers[0]);
+			if (b != null) {
+				values.add(buffers[1]);
+			}
+			if (oldSlot) {
+				// The adjoint kernels take the accumulated gradient always, absent as a
+				// null pointer.
+				values.add(buffers[2]);
+			}
+			values.add(buffers[3]);
+			values.add(rows);
+			values.add(len);
+			if (eps != null) {
+				values.add(eps);
+			}
+			if (!launchFused(arena, kernel, rows, ROW_BLOCK, values.toArray(), sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 3, ch, bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * The dropout mask: {@link #rngFill}'s shape -- no operand, a destination that may
+	 * already be resident and is then filled in place -- with the threshold and the
+	 * survival span as the two doubles.
+	 */
+	private boolean dropoutMask(MemorySegment function, MemorySegment heap, Object host, long offset, long bytes, int n,
+			double p, double span, int s1, int s2, int s3) {
+		if (!this.usable) {
+			return false;
+		}
+		long[] buffers = { 0 }, owned = { 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(host, offset, bytes);
+			if (!allocate(arena, buffers, owned, bytes)) {
+				return false;
+			}
+			boolean sync = (long) n * RNG_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!launchFused(arena, function, n, STRIDED_BLOCK, new Object[] { buffers[0], n, p, span, s1, s2, s3 },
+					sync)) {
+				return false;
+			}
+			return finish(heap, offset, buffers, owned, 0, host, bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * A flat launch over {@code n} threads (one per element, or per row) in blocks of
+	 * {@code block}, whose parameter block is given as VALUES: a {@code Long} is a device
+	 * pointer, an {@code Integer} an {@code int}, a {@code Double} a {@code double}, each
+	 * in a slot of its own width. Since the fused kernels mix all three, the two parallel
+	 * arrays the strided launcher takes would not describe them.
+	 */
+	private boolean launchFused(Arena arena, MemorySegment function, int n, int block, Object[] values, boolean sync)
+			throws Throwable {
+		MemorySegment parameters = arena.allocate(P, values.length);
+		for (int i = 0; i < values.length; i++) {
+			MemorySegment slot;
+			switch (values[i]) {
+				case Long pointer -> {
+					slot = arena.allocate(L);
+					slot.set(L, 0, pointer);
+				}
+				case Integer count -> {
+					slot = arena.allocate(I);
+					slot.set(I, 0, count);
+				}
+				case Double d -> {
+					slot = arena.allocate(D);
+					slot.set(D, 0, d);
+				}
+				default -> throw new IllegalArgumentException("unsupported kernel parameter " + values[i]);
+			}
+			parameters.setAtIndex(P, i, slot);
+		}
+		int status = this.driver.launchKernel(function, (n + block - 1) / block, 1, 1, block, 1, 1, 0,
+				MemorySegment.NULL, parameters, MemorySegment.NULL);
+		if (status != CuResult.SUCCESS) {
+			return fail(status);
+		}
+		return awaitLaunched(sync);
+	}
+
 	@Override
 	public Object written(Object host) {
 		Object storage = materialize(host);

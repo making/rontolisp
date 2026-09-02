@@ -26,11 +26,18 @@ import am.ik.rontolisp.LispVal;
  * answer a character vector silently drops a normalization that the semantics need, so a
  * new entry is only earned by checking every backend's implementation of that operator --
  * "it usually returns a string" is not enough.
+ *
+ * <p>
+ * The public {@code princ-to-string} / {@code prin1-to-string} / {@code write-to-string}
+ * are deliberately NOT here: they are flipped producers ({@link MutableStringProducers})
+ * whose compiled result is a mutable character vector. The entries are the INTERNAL piece
+ * conversions the expander builds with ({@code %princ-piece} / {@code %prin1-piece}) and
+ * the raw, print-object-free pair, which stay immutable.
  */
 public final class StringValuedForms {
 
 	private static final Set<String> ALWAYS_STRING = Set.of(LispNames.FIXED_DECIMAL, LispNames.STRING_CONCAT,
-			LispNames.PRINC_TO_STRING, LispNames.PRIN1_TO_STRING, LispNames.PRINC_TO_STRING_RAW,
+			LispNames.PRINC_PIECE_INTERNAL, LispNames.PRIN1_PIECE_INTERNAL, LispNames.PRINC_TO_STRING_RAW,
 			LispNames.PRIN1_TO_STRING_RAW);
 
 	private StringValuedForms() {

@@ -2202,6 +2202,276 @@ public final class Gpu {
 	 * ({@link #materialize}). Anything between the two is a caller's mistake and
 	 * declines.
 	 */
+	// --- the fused tier (.todo/499) -------------------------------------------------
+
+	/**
+	 * {@code out[i] = gelu(a[i])}, the exact GELU {@code x * (1 + erf(x / sqrt 2)) / 2}
+	 * as ONE pass -- the five-member composition {@code torch:gelu} used to launch, each
+	 * a full memory pass over the feed-forward activation. Every rounding of that chain
+	 * is reproduced (each member narrowed to the operand width in the same place, the
+	 * device's own {@code erf} at the width), so the result is the composed device
+	 * chain's bit for bit and stands to the CPU as an accelerated {@code erf} does.
+	 * Offered like a libm map: from the element threshold, or over a resident operand.
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean gelu(double[] a, int offsetA, double[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMap(0, extent(device, a), offsetA, extent(device, out), offsetOut, n)
+				&& (n >= Probe.MAP_MIN_ELEMENTS || device.resident(a)) && device.gelu(a, offsetA, out, offsetOut, n);
+	}
+
+	/** The single-float sibling of {@link #gelu(double[], int, double[], int, int)}. */
+	public static boolean gelu(float[] a, int offsetA, float[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMap(0, extent(device, a), offsetA, extent(device, out), offsetOut, n)
+				&& (n >= Probe.MAP_MIN_ELEMENTS || device.resident(a)) && device.geluF(a, offsetA, out, offsetOut, n);
+	}
+
+	/**
+	 * The tape's backward through {@link #gelu}'s composition as one pass: with {@code g}
+	 * the gradient of the output and {@code x} the input, {@code out} receives the
+	 * gradient {@code x} holds AFTER this node -- the two contributions the composition's
+	 * two branches make, added in the order the reverse walk makes them, onto
+	 * {@code old}, the gradient {@code x} had accumulated before (or nothing, when
+	 * {@code old} is {@code null}). Reproduces the composed chain's arithmetic exactly,
+	 * {@code exp} and {@code erf} at the width. Offered from the element threshold or
+	 * over a resident operand.
+	 * @param g the output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param x the input
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param old the gradient accumulated so far, or {@code null} for none
+	 * @param offsetOld the index of {@code old}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean geluGrad(double[] g, int offsetG, double[] x, int offsetX, double @Nullable [] old,
+			int offsetOld, double[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredGrad(device, g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, n)
+				&& (n >= Probe.MAP_MIN_ELEMENTS || device.resident(x) || device.resident(g))
+				&& device.geluGrad(g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, n);
+	}
+
+	/** The single-float sibling of {@link #geluGrad}. */
+	public static boolean geluGrad(float[] g, int offsetG, float[] x, int offsetX, float @Nullable [] old,
+			int offsetOld, float[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredGrad(device, g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, n)
+				&& (n >= Probe.MAP_MIN_ELEMENTS || device.resident(x) || device.resident(g))
+				&& device.geluGradF(g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, n);
+	}
+
+	/**
+	 * {@code linalg:softmax} over the LAST axis of a {@code rows x len} operand as one
+	 * pass per row: the strict max fold, the broadcast subtraction, {@code exp} at the
+	 * width, the sum fold and the broadcast division, each rounded where the member chain
+	 * rounds -- so the result is the composed device chain's, and stands to the CPU as an
+	 * accelerated {@code exp} does. The folds stay sequential, one thread per row.
+	 * Offered like an axis fold: enough rows (the fold's cell rule) and either the
+	 * element threshold or a resident operand.
+	 * @param a the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the softmax's own axis
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean softmax(double[] a, int offsetA, double[] out, int offsetOut, int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& device.softmax(a, offsetA, out, offsetOut, rows, len);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #softmax(double[], int, double[], int, int, int)}.
+	 */
+	public static boolean softmax(float[] a, int offsetA, float[] out, int offsetOut, int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& device.softmaxF(a, offsetA, out, offsetOut, rows, len);
+	}
+
+	/**
+	 * {@code torch:softmax}'s adjoint {@code s * (g - sum(g * s))} per row, as one pass
+	 * where the composition ran four: the zip multiply, the sum fold (sequential), the
+	 * broadcast subtraction, the zip multiply. No libm in it, so BIT-IDENTICAL to the CPU
+	 * chain. Offered like {@link #softmax}, with either operand's residency counting.
+	 * @param g the output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param s the softmax output the forward produced
+	 * @param offsetS the index of {@code s}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean softmaxGrad(double[] g, int offsetG, double[] s, int offsetS, double[] out, int offsetOut,
+			int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+				&& offeredRows(device, s, offsetS, out, offsetOut, rows, len, true)
+				&& device.softmaxGrad(g, offsetG, s, offsetS, out, offsetOut, rows, len);
+	}
+
+	/** The single-float sibling of {@link #softmaxGrad}. */
+	public static boolean softmaxGrad(float[] g, int offsetG, float[] s, int offsetS, float[] out, int offsetOut,
+			int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+				&& offeredRows(device, s, offsetS, out, offsetOut, rows, len, true)
+				&& device.softmaxGradF(g, offsetG, s, offsetS, out, offsetOut, rows, len);
+	}
+
+	/**
+	 * {@code torch:layer-norm}'s normalization {@code (x - mean) / sqrt(var + eps)} over
+	 * the LAST axis as one pass per row where the torch composition ran eleven members:
+	 * the sum fold and the division by the length (the mean), the broadcast subtraction,
+	 * the squared deviations, their sum fold and division (the variance), the epsilon,
+	 * the square root, the broadcast division -- every one rounded where the chain
+	 * rounds, the folds sequential. No libm ({@code sqrt} is correctly rounded on both
+	 * sides), so BIT-IDENTICAL to the CPU chain. Offered like an axis fold.
+	 * @param x the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the normalized axis
+	 * @param eps the epsilon added to the variance
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean layerNorm(double[] x, int offsetX, double[] out, int offsetOut, int rows, int len,
+			double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& device.layerNorm(x, offsetX, out, offsetOut, rows, len, eps);
+	}
+
+	/** The single-float sibling of {@link #layerNorm}. */
+	public static boolean layerNorm(float[] x, int offsetX, float[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& device.layerNormF(x, offsetX, out, offsetOut, rows, len, eps);
+	}
+
+	/**
+	 * The tape's backward through {@link #layerNorm}'s composition as one pass per row:
+	 * with {@code g} the gradient of the normalized output, {@code out} receives the
+	 * gradient {@code x} holds AFTER this node -- the four contributions the composition
+	 * makes to its input (through the squared deviations, the variance's own mean, the
+	 * deviation and the mean), added in the order the reverse walk makes them onto
+	 * {@code old}, the gradient {@code x} had accumulated before (or nothing when
+	 * {@code null}). Every rounding is the chain's and the folds are sequential, so
+	 * BIT-IDENTICAL to the CPU chain. Offered like an axis fold, with either operand's
+	 * residency counting.
+	 * @param g the normalized output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param x the input
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param old the gradient accumulated so far, or {@code null} for none
+	 * @param offsetOld the index of {@code old}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @param eps the epsilon the forward added
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean layerNormGrad(double[] g, int offsetG, double[] x, int offsetX, double @Nullable [] old,
+			int offsetOld, double[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, false)
+				&& offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& (old == null || offeredRows(device, old, offsetOld, out, offsetOut, rows, len, false))
+				&& device.layerNormGrad(g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, rows, len, eps);
+	}
+
+	/** The single-float sibling of {@link #layerNormGrad}. */
+	public static boolean layerNormGrad(float[] g, int offsetG, float[] x, int offsetX, float @Nullable [] old,
+			int offsetOld, float[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, false)
+				&& offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& (old == null || offeredRows(device, old, offsetOld, out, offsetOut, rows, len, false))
+				&& device.layerNormGradF(g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, rows, len, eps);
+	}
+
+	/**
+	 * The inverted-dropout mask {@code (rand > p) / (1 - p)} as one pass, from the
+	 * Wichmann-Hill state {@code (s1, s2, s3)}: the composition drew the uniform array
+	 * ({@link #rngFill} mode 0), compared it, and divided the mask -- three passes, two
+	 * of them over the just-written draws. The draw is {@link #rngFill}'s, stored at the
+	 * width and compared as the scalar {@code greater} compares it, then divided by
+	 * {@code span}, the {@code 1 - p} the caller computed; BIT-IDENTICAL to the CPU
+	 * chain, and the generator ends where {@link #rngAdvance} says it does after
+	 * {@code n} draws. Declines exactly what {@link #rngFill} declines.
+	 * @param out the array the mask is written into
+	 * @param offsetOut the index in {@code out} the mask starts at
+	 * @param n how many elements
+	 * @param p the drop probability
+	 * @param span the survival span {@code 1 - p} the mask is divided by
+	 * @param s1 the first state word
+	 * @param s2 the second state word
+	 * @param s3 the third state word
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean dropoutMask(double[] out, int offsetOut, int n, double p, double span, int s1, int s2,
+			int s3) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRng(extent(device, out), offsetOut, n, 0, s1, s2, s3)
+				&& device.dropoutMask(out, offsetOut, n, p, span, s1, s2, s3);
+	}
+
+	/** The single-float sibling of {@link #dropoutMask}. */
+	public static boolean dropoutMask(float[] out, int offsetOut, int n, double p, double span, int s1, int s2,
+			int s3) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRng(extent(device, out), offsetOut, n, 0, s1, s2, s3)
+				&& device.dropoutMaskF(out, offsetOut, n, p, span, s1, s2, s3);
+	}
+
+	/**
+	 * Whether a one-pass adjoint over {@code n} elements is one this library will
+	 * attempt: the three operands and the result actually present, the optional
+	 * accumulated gradient included.
+	 */
+	private static boolean offeredGrad(GpuDevice device, Object g, int offsetG, Object x, int offsetX,
+			@Nullable Object old, int offsetOld, Object out, int offsetOut, int n) {
+		return n > 0 && offsetG >= 0 && (long) offsetG + n <= extent(device, g) && offsetX >= 0
+				&& (long) offsetX + n <= extent(device, x)
+				&& (old == null || (offsetOld >= 0 && (long) offsetOld + n <= extent(device, old)))
+				&& fitsResult(extent(device, out), offsetOut, n);
+	}
+
+	/**
+	 * Whether a row kernel over {@code rows x len} is one this library will attempt: the
+	 * fold's own cell rule (enough rows to fill a grid, fewer when the operand is already
+	 * here), the size threshold -- the map's for a kernel with a libm call in it, the
+	 * fold's otherwise -- or a resident operand, and the operand and result present.
+	 */
+	private static boolean offeredRows(GpuDevice device, Object a, int offsetA, Object out, int offsetOut, int rows,
+			int len, boolean libm) {
+		if (rows < 1 || len < 1 || (long) rows * len > Integer.MAX_VALUE) {
+			return false;
+		}
+		boolean resident = device.resident(a);
+		long total = (long) rows * len;
+		return rows >= (resident ? FOLD_RESIDENT_MIN_CELLS : FOLD_MIN_CELLS)
+				&& (resident || total >= (libm ? Probe.MAP_MIN_ELEMENTS : Probe.FOLD_MIN_ELEMENTS)) && offsetA >= 0
+				&& offsetA + total <= extent(device, a) && fitsResult(extent(device, out), offsetOut, total);
+	}
+
 	private static boolean fitsResult(long lengthOut, long offsetOut, long count) {
 		return offsetOut >= 0 && (lengthOut == offsetOut || offsetOut + count <= lengthOut);
 	}

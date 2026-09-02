@@ -3692,6 +3692,23 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDeleteAndNsubstituteFamilyOnVectorsAndStrings() throws Exception {
+		// .todo/623: these five were silent no-ops on a vector/string (only their
+		// cons-splice/rplaca arm existed) -- CLHS lets a destructive form answer a fresh
+		// sequence, so they now route through remove/substitute's own vector/string
+		// handling.
+		assertThat(compileAndRun("(print (delete 1 (vector 3 1 2)))")).isEqualTo("#(3 2)");
+		assertThat(compileAndRun("(print (delete #\\a (copy-seq \"aba\")))")).isEqualTo("\"b\"");
+		assertThat(compileAndRun("(print (delete-if #'oddp (vector 1 2 3 4)))")).isEqualTo("#(2 4)");
+		assertThat(compileAndRun("(print (delete-if-not #'oddp (vector 1 2 3)))")).isEqualTo("#(1 3)");
+		assertThat(compileAndRun("(print (nsubstitute 9 1 (vector 1 2 1)))")).isEqualTo("#(9 2 9)");
+		assertThat(compileAndRun("(print (nsubstitute-if 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(0 2 0)");
+		assertThat(compileAndRun("(print (nsubstitute-if-not 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(1 0 3)");
+		assertThat(compileAndRun("(print (funcall #'delete-if #'oddp (vector 1 2 3 4)))")).isEqualTo("#(2 4)");
+		assertThat(compileAndRun("(print (funcall #'nsubstitute-if 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(0 2 0)");
+	}
+
+	@Test
 	void compileAndRunDestructiveListOps() throws Exception {
 		// The destructive ops reuse cons cells; an alias to the original list observes
 		// the
@@ -7189,6 +7206,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunNreverseAndStableSortAnswerTheSequenceType() throws Exception {
+		// Both used to lose the argument's TYPE and answer a bare list for a
+		// string/vector, identically on every backend.
+		assertThat(compileAndRun("""
+				(print (nreverse (copy-seq "abcd")))
+				(print (nreverse (vector 1 2 3)))
+				(print (nreverse (list 1 2 3)))
+				(print (stable-sort (copy-seq "dcba") #'char<))
+				(print (stable-sort (vector 3 1 2) #'<))
+				(print (funcall #'nreverse (copy-seq "wxyz")))
+				(print (funcall #'stable-sort (copy-seq "dcba") #'char<))"""))
+			.isEqualTo("\"dcba\"\n#(3 2 1)\n(3 2 1)\n\"abcd\"\n#(1 2 3)\n\"zyxw\"\n\"abcd\"");
+	}
+
+	@Test
 	void compileAndRunPositionIf() throws Exception {
 		assertThat(compileAndRun(
 				"(print (position-if #'evenp '(1 3 5 6 7))) (print (position-if #'plusp '(-1 -2 -3))) (print (funcall #'position-if #'oddp '(2 4 5)))"))
@@ -9257,6 +9289,31 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSortNreverseStableSortKeepFillPointerAdjustableAndIdentity() throws Exception {
+		// .todo/623: sort/nreverse/stable-sort permute a vector/string in place, so a
+		// fill-pointered or adjustable argument must keep its fill pointer, its
+		// adjustable flag AND its own identity -- not just the right values.
+		assertThat(compileAndRun("""
+				(let ((v (make-array 3 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2))))
+				  (let ((s (sort v #'<)))
+				    (print (list (fill-pointer s) (adjustable-array-p s) (eq v s)))))""")).isEqualTo("(3 T T)");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 5 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2 99 99))))
+				  (let ((s (sort v #'<)))
+				    (print (list s (fill-pointer s) (array-total-size s) (eq v s)))))"""))
+			.isEqualTo("(#(1 2 3) 3 5 T)");
+		assertThat(compileAndRun("(let ((v (vector 3 1 2))) (print (eq v (sort v #'<))))")).isEqualTo("T");
+		assertThat(
+				compileAndRun("(let ((v (copy-seq \"dcba\"))) (let ((s (sort v #'char<))) (print (list s (eq v s)))))"))
+			.isEqualTo("(\"abcd\" T)");
+		assertThat(compileAndRun("(let ((v (vector 3 1 2))) (print (eq v (nreverse v))))")).isEqualTo("T");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 4 :adjustable t :fill-pointer 4 :initial-contents '(1 2 3 4))))
+				  (let ((s (stable-sort v #'<)))
+				    (print (list (fill-pointer s) (adjustable-array-p s) (eq v s)))))""")).isEqualTo("(4 T T)");
+	}
+
+	@Test
 	void compileAndRunSortOfALargeListIsLinearithmicAndOrdersEqualElementsLikeEveryOtherBackend() throws Exception {
 		// The site calls the shared %sort-runtime merge sort (.kb/sort.md): 50,000
 		// elements are instant where the selection sort this replaced took minutes, and
@@ -9493,10 +9550,20 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (1+ 1/2))")).isEqualTo("3/2");
 	}
 
-	// read-line tests
+	// read is prelude rontolisp over read-char / unread-char, so a program that calls
+	// it needs the prelude splice AND the pushback-cell rewrite, in the CLI's order.
+	private String compileAndRunRead(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
 
+	// read-line tests. The pre-passes are the CLI pipeline's: read is prelude
+	// rontolisp over read-char / unread-char, and its scanner's own call sites reach
+	// the pushback cell only through UnreadCharLibrary -- exactly the order
+	// CompileFrontend runs them in. A program naming neither is returned unchanged.
 	private String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
 		Path classFile = tempDir.resolve("Test.class");
@@ -9539,6 +9606,46 @@ class JvmLispCompilerTest {
 	}
 
 	// === read ===
+
+	@Test
+	void compileAndRunReadConsumesExactlyOneDatum() throws Exception {
+		// todo-624: one datum's characters, the stream left after them. The compile
+		// paths used to close an unterminated list at end of line SILENTLY -- "(a" on
+		// one line and "b)" on the next read as (A) then B.
+		assertThat(compileAndRunRead("""
+				(let ((s (make-string-input-stream "1 2 3")))
+				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
+			.isEqualTo("(1 2 3 :EOF)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(a) (b)")
+				  (print (list (read s nil :eof) (read s nil :eof) (read s nil :eof))))"""))
+			.isEqualTo("((A) (B) :EOF)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(a
+				b) c")
+				  (print (list (read s nil :eof) (read s nil :eof))))""")).isEqualTo("((A B) C)");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "(1 2)  x") (print (list (read s) (read-line s))))"""))
+			.isEqualTo("((1 2) \" x\")");
+		assertThat(compileAndRunRead("""
+				(with-input-from-string (s "ab  cd") (print (list (read s) (read-line s))))"""))
+			.isEqualTo("(AB \" cd\")");
+	}
+
+	@Test
+	void compileAndRunReadEofValueAndSignal() throws Exception {
+		assertThat(compileAndRunRead("(with-input-from-string (s \"\") (print (read s nil :done)))"))
+			.isEqualTo(":DONE");
+		// A nil DATUM is no longer confused with end of input.
+		assertThat(compileAndRunRead("(with-input-from-string (s \"nil\") (print (read s nil :done)))"))
+			.isEqualTo("NIL");
+		assertThat(compileAndRunRead("""
+				(print (handler-case (with-input-from-string (s "") (read s t))
+				         (end-of-file () :caught)))""")).isEqualTo(":CAUGHT");
+		assertThat(compileAndRunRead("""
+				(print (handler-case (with-input-from-string (s "(a b") (read s))
+				         (error () :caught)))""")).isEqualTo(":CAUGHT");
+	}
 
 	@Test
 	void compileAndRunReadInteger() throws Exception {
@@ -11657,6 +11764,43 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAnAdjustedCopyKeepsTheElementType() throws Exception {
+		// adjust-array does not change an array's element type (CLHS), and a
+		// NON-adjustable adjustment answers a FRESH array, so the copy has to remember
+		// what the original did -- otherwise an adjusted character vector stops
+		// answering stringp. A literal (immutable) string is the same question over the
+		// one array shape that carries no header at all, and the string shape readers
+		// below are what its adjustment goes through. Pinned here, in the other three
+		// backends' twins and in the adjusted-copy-element-type-cross-backend ci-spec
+		// case.
+		assertThat(compileAndRun("""
+				(defun adjusted-copy-keeps-type ()
+				  (let* ((s (make-array 3 :element-type 'character :initial-element #\\x))
+				         (r (adjust-array s 5)))
+				    (list (stringp r) (array-element-type r) (char-code (aref r 4)))))
+				(defun adjusted-literal-string ()
+				  (let ((r (adjust-array "abc" 5)))
+				    (list (stringp r) (array-element-type r) (length r))))
+				(defun adjusted-rank-2-keeps-type ()
+				  (let* ((a (make-array '(2 2) :element-type 'character :initial-element #\\y))
+				         (r (adjust-array a '(3 3))))
+				    (list (array-element-type r) (stringp r) (aref r 2 2))))
+				(defun adjusted-typed-keeps-type ()
+				  (let* ((f (make-array 3 :element-type 'double-float :fill-pointer 0))
+				         (b (make-array '(2 2) :element-type '(unsigned-byte 8)))
+				         (rf (adjust-array f 5))
+				         (rb (adjust-array b '(3 3))))
+				    (list (array-element-type rf) (aref rf 4) (array-element-type rb) (aref rb 2 2))))
+				(defun string-is-a-rank-1-array ()
+				  (list (array-rank "abc") (array-dimensions "abc") (array-total-size "abc")
+				        (array-displacement "abc")))
+				(print (list (adjusted-copy-keeps-type) (adjusted-literal-string) (adjusted-rank-2-keeps-type)
+				             (adjusted-typed-keeps-type) (string-is-a-rank-1-array)))
+				""")).isEqualTo("((T CHARACTER 32) (T CHARACTER 5) (CHARACTER NIL #\\Space)"
+				+ " (DOUBLE-FLOAT 0.0 (UNSIGNED-BYTE 8) 0) (1 (3) 3 NIL))");
+	}
+
+	@Test
 	void compileSetfFillPointer() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 5 :fill-pointer 5 :initial-element 7))
@@ -12121,9 +12265,27 @@ class JvmLispCompilerTest {
 				(print (let ((s (copy-seq "abc"))) (eq s (coerce s 'string))))
 				(print (with-input-from-string (in "")
 				  (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e))))
+				(let* ((s (princ-to-string 12345)) (a s)) (setf (char s 0) #\\X) (print (list s a)))
+				(let ((s (prin1-to-string 'foo))) (fill s #\\z) (print s))
+				(let ((s (write-to-string 'bar))) (replace s "Q") (print s))
 				""")).isEqualTo(
 				"(\"xBC\" \"xBC\")\n\"XYcd\"\n\"99\"\n(\"Zi\" \"Zi\")\n(\"Jello\" \"Jello\")\n(\"Foo!Bar\" \"Foo!Bar\")"
-						+ "\n(\"xb\" \"xb\")\n(\"xBC\" \"xBC\")\n(\"xb\" \"xb\")\n(\"Zbcd\" \"Zbcd\")\nT\nT");
+						+ "\n(\"xb\" \"xb\")\n(\"xBC\" \"xBC\")\n(\"xb\" \"xb\")\n(\"Zbcd\" \"Zbcd\")\nT\nT"
+						+ "\n(\"X2345\" \"X2345\")\n\"zzz\"\n\"QAR\"");
+	}
+
+	@Test
+	void compileAPrintObjectRoutedPrincToStringResultHasWritableIdentity() throws Exception {
+		// The fourth round's wrap sits OUTSIDE the print-object routing hook: a
+		// princ-to-string that renders through a user method answers the same mutable
+		// identity as the unrouted one, and the ~a piece INSIDE the method (a
+		// %princ-piece form) is not the value the program receives.
+		assertThat(compileAndRun("""
+				(defstruct t600pt x)
+				(defmethod print-object ((p t600pt) s) (format s "<pt ~a>" (t600pt-x p)))
+				(let* ((s (princ-to-string (make-t600pt :x 7))) (a s)) (setf (char s 0) #\\[) (print (list s a)))
+				(let ((s (prin1-to-string (make-t600pt :x 8)))) (fill s #\\-) (print s))
+				""")).isEqualTo("(\"[pt 7>\" \"[pt 7>\")\n\"------\"");
 	}
 
 	@Test
@@ -12673,6 +12835,14 @@ class JvmLispCompilerTest {
 		// missed origination site shows up as a DOUBLE-FLOAT line here.
 		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTorchFusedCompositions() throws Exception {
+		// TorchGradcheck.FUSED_PROGRAM: the fused torch nodes (todo-499) against the
+		// compositions they replaced, bit for bit, on the compiled backend.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
 	}
 
 	@Test
@@ -14429,6 +14599,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileRuntimeTypepResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's evalRuntimeTypepResolvesADeftypeAlias, and
+		// the same program: a typep designator held in a VALUE resolves the user deftype
+		// it names, through the injected %deftype-alias resolver the runtime dispatch
+		// normalizes with. A computed coerce result type rides the same resolution.
+		assertThat(compileAndRun("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype str () 'string)
+				(defun tp (x ty) (typep x ty))
+				(print (list (tp 3 'octet) (tp 300 'octet) (tp 3 'byte-buffer) (tp "ab" 'str) (tp 3 'str)
+				             (tp 3 (list 'or 'octet 'null)) (tp "x" (list 'or 'octet 'null))
+				             (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
+				             (typep 3 'octet) (tp 3 'no-such-type)))
+				""")).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
+	}
+
+	@Test
 	void compileRuntimeElementTypeResolvesADeftypeAlias() throws Exception {
 		// Same contract as the interpreter's
 		// evalRuntimeElementTypeResolvesADeftypeAlias, and the same program: a deftype
@@ -14555,6 +14743,20 @@ class JvmLispCompilerTest {
 		assertThatThrownBy(() -> compileAndRun("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
 			.rootCause()
 			.hasMessageContaining("packed integer vector");
+	}
+
+	@Test
+	void compilePackedFloatArrayRejectsAdjustArray() {
+		// A packed float array has no fill-pointer/adjustability/displacement surface,
+		// same as a packed integer vector; adjust-array's %array-disp-target probe used
+		// to reach a bare checkcast ArrayList on the double[]/float[] representation
+		// (ClassCastException) instead of this clear error.
+		assertThatThrownBy(() -> compileAndRun("(adjust-array (make-array 3 :element-type 'double-float) 5)"))
+			.rootCause()
+			.hasMessageContaining("packed float array");
+		assertThatThrownBy(() -> compileAndRun("(adjust-array (make-array 3 :element-type 'single-float) 5)"))
+			.rootCause()
+			.hasMessageContaining("packed float array");
 	}
 
 	@Test

@@ -46,7 +46,9 @@ public final class LinalgKernelCallLayout {
 			new Extended(3, List.of("AXIS", "KEEPDIMS")), LispNames.LINALG_AMIN,
 			new Extended(3, List.of("AXIS", "KEEPDIMS")), LispNames.LINALG_ARGMAX, new Extended(2, List.of("AXIS")),
 			LispNames.LINALG_ARGMIN, new Extended(2, List.of("AXIS")), LispNames.LINALG_CONCATENATE,
-			new Extended(2, List.of("AXIS")));
+			new Extended(2, List.of("AXIS")),
+			// softmax: a device member in its :axis form only (todo-499).
+			LispNames.LINALG_SOFTMAX, new Extended(2, List.of("AXIS")));
 
 	/**
 	 * Returns the extended shape of the given member, or {@code null} when the member has

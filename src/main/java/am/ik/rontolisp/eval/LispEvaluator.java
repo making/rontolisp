@@ -414,6 +414,15 @@ public final class LispEvaluator {
 	private List<String> systemPath = List.of();
 
 	/**
+	 * The READ-TIME feature set every source this evaluator reads is read with:
+	 * {@link Features#INTERPRETER}, widened by whatever the user declared on the command
+	 * line ({@code --feature}, {@link #setDeclaredFeatures}). An ASDF system's own
+	 * {@code :rontolisp-features} widens it once more, for that system's component files
+	 * only. See {@code .kb/reader-features.md}.
+	 */
+	private Features features = Features.INTERPRETER;
+
+	/**
 	 * The program's own argument vector, argv0 first -- what {@code %host-argv} answers
 	 * and therefore what the {@code uiop/image} command-line family reads. Empty by
 	 * default: an EMBEDDED run (the tests, the browser playground) has no command line of
@@ -721,6 +730,37 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Widens the read-time feature set by the names the USER declared ({@code --feature}
+	 * on the command line), and seeds the run-time {@code *features*} list with the same
+	 * names so a {@code (member :F *features*)} and the {@code #+F} beside it cannot
+	 * disagree.
+	 * <p>
+	 * It reaches the entry program, every file it {@code load}s and every ASDF component
+	 * loaded under it -- the source the USER brought. It deliberately does NOT reach the
+	 * sources rontolisp itself ships (the prelude, the Lisp-source libraries, the
+	 * {@code BuiltinSystems} shims): those are read with the backend's own constant,
+	 * because a claim the user makes about a third-party library must not rewrite our own
+	 * conditionals underneath it.
+	 * @param names the declared feature names, without the leading colon
+	 */
+	public void setDeclaredFeatures(List<String> names) {
+		if (names.isEmpty()) {
+			return;
+		}
+		this.features = Features.INTERPRETER.with(names);
+		this.globalEnv.define(LispNames.FEATURES_VAR, Environment.featureKeywordList(this.features.names()));
+	}
+
+	/**
+	 * The read-time feature set in force, for a caller that reads a source on this
+	 * evaluator's behalf (the CLI reads the entry program itself).
+	 * @return the feature set
+	 */
+	public Features features() {
+		return this.features;
+	}
+
+	/**
 	 * The current package's name, UPCASED as Common Lisp prints it -- the value of
 	 * {@code *package*} named rather than printed. The REPL prompt reads it before every
 	 * line so that an {@code (in-package ...)} typed at one prompt is visible at the
@@ -870,8 +910,8 @@ public final class LispEvaluator {
 		// denotes exactly as a source literal is. Environment holds no registry, so the
 		// fold is layered on here, where this evaluator's registry is in scope; wrapping
 		// the function BINDING (rather than the call sites) also keeps
-		// #'read/#'read-from-string folding.
-		foldStructLiteralsOf(LispNames.READ);
+		// #'read-from-string folding. read is not wrapped: it is prelude rontolisp whose
+		// whole parse goes through read-from-string, so it inherits the fold.
 		foldStructLiteralsOf(LispNames.READ_FROM_STRING);
 		// #. read-time eval for the runtime readers: with the resolver installed,
 		// read/read-from-string read a #.-bearing datum in marker mode and this evaluator
@@ -2588,9 +2628,12 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.SORT + " expects 2 arguments, got " + args.size());
 			}
-			// A string sequence sorts as a list of its characters and is rebuilt as a
-			// string (Common Lisp sequences).
-			return Environment.seqResult(args.get(0), sortValues(Environment.seqAsList(args.get(0)), args.get(1)));
+			// A string/vector argument sorts as a list of its elements and is written
+			// back into its own storage (Common Lisp sequences; .todo/623 keeps a
+			// fill-pointered/adjustable argument's fill pointer, adjustable flag and
+			// identity, matching every implementation that sorts a vector in place).
+			return Environment.seqResultDestructive(args.get(0),
+					sortValues(Environment.seqAsList(args.get(0)), args.get(1)));
 		}));
 		// stable-sort is registered here (not in Environment) so the predicate and :key
 		// designators can be applied through the evaluator, like member/assoc. A Java
@@ -2628,7 +2671,9 @@ public final class LispEvaluator {
 			for (int i = decorated.size() - 1; i >= 0; i--) {
 				result = new LispCons(decorated.get(i)[1], result);
 			}
-			return result;
+			// A string/vector argument sorts as a list of its elements and is written
+			// back into its own storage, matching the SORT builtin above (.todo/623).
+			return Environment.seqResultDestructive(args.get(0), result);
 		}));
 		this.globalEnv.defineFunction(LispNames.APPLY, new LispFunction(LispNames.APPLY, args -> {
 			if (args.size() < 2) {
@@ -2946,7 +2991,7 @@ public final class LispEvaluator {
 	 * bundled data files resolve against is the system's, already on the load-dir stack.
 	 */
 	private void loadFile(String operator, String rawPath, @Nullable String systemName) {
-		loadFile(operator, rawPath, systemName, Features.INTERPRETER);
+		loadFile(operator, rawPath, systemName, this.features);
 	}
 
 	/**
@@ -3771,8 +3816,8 @@ public final class LispEvaluator {
 			// .asd forms read upcased like all source; AsdfSystems matches clause
 			// keywords case-insensitively and coerce-names (downcases) system
 			// designators.
-			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
-					Features.INTERPRETER, this.asdfSystemPackages)) {
+			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(), this.features,
+					this.asdfSystemPackages)) {
 				this.asdfSystems.putIfAbsent(defined.name(), defined);
 			}
 			system = this.asdfSystems.get(name);
@@ -3780,7 +3825,7 @@ public final class LispEvaluator {
 				// A NAME/SUB of a :package-inferred-system: the .asd declares no
 				// components, so the name is answered from the file it points at.
 				AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
-						this.sourceLoader, Features.INTERPRETER);
+						this.sourceLoader, this.features);
 				system = this.asdfSystems.get(name);
 			}
 			if (system == null) {
@@ -3791,7 +3836,7 @@ public final class LispEvaluator {
 		// A system that declares :rontolisp-features has its own component files read
 		// with the interpreter's features widened by that declaration -- the static
 		// encoding of the eval-when *features* push a real .asd would do.
-		Features systemFeatures = Features.INTERPRETER.with(system.features());
+		Features systemFeatures = this.features.with(system.features());
 		// Component paths (and a dependency's .asd lookup) resolve against the system's
 		// base directory, not the caller's.
 		this.loadDirStack.addLast(system.baseDir());
@@ -3862,8 +3907,7 @@ public final class LispEvaluator {
 	private LispVal evalDefsystem(LispCons cons) {
 		ensureAsdfRuntimeLoaded();
 		String baseDir = this.loadDirStack.peekLast();
-		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir,
-				Features.INTERPRETER);
+		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir, this.features);
 		this.asdfSystems.put(system.name(), system);
 		return new LispSymbol(system.name());
 	}
@@ -5237,7 +5281,8 @@ public final class LispEvaluator {
 			case LispNames.HB_GUARD_INTERNAL:
 				return evalHbGuard(cons, env);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
-					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING: {
+					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
+					LispNames.PRIN1_PIECE_INTERNAL: {
 				// Routed through print-object only when the program defines a method on
 				// it, and through %print-cased only while *print-case* holds something
 				// other than :upcase; otherwise the ordinary Environment function runs,
@@ -5286,16 +5331,9 @@ public final class LispEvaluator {
 				// return value; the Environment function remains for first-class
 				// use (#'parse-integer).
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandParseInteger);
-			case LispNames.READ: {
-				// The full CL tail (eof-error-p / eof-value / recursive-p) lowers to
-				// the 0/1-argument call the Environment function implements, so the
-				// same shape loads on every backend.
-				LispVal readCompat = LispMacroExpander.expandReadCompat(cons);
-				if (readCompat != null) {
-					return eval(readCompat, env);
-				}
-				break;
-			}
+			// read has no case here and no Environment function: it is a prelude defun
+			// over read-char / unread-char / read-from-string (LispPreludeLibrary), so
+			// an ordinary function resolution loads it and #'read is that same defun.
 			case LispNames.READ_SEQUENCE:
 				return evalSequenceWithGrayDispatch(cons, env, true);
 			case LispNames.WRITE_SEQUENCE:
@@ -9219,7 +9257,9 @@ public final class LispEvaluator {
 		List<LispVal> parts = cons.toList();
 		String type = parts.size() == 3 ? coerceSequenceTypeName(parts.get(2)) : null;
 		if (type == null) {
-			return eval(LispMacroExpander.expandCoerce(cons), env);
+			// A COMPUTED result type: the registry rides along so a designator naming a
+			// user deftype resolves before the family dispatch reads its head.
+			return eval(LispMacroExpander.expandCoerce(cons, true, false, false, this.closRegistry), env);
 		}
 		LispVal value = eval(parts.get(1), env);
 		LispVal fast = coerceSequenceFast(value, type);
@@ -9231,7 +9271,7 @@ public final class LispEvaluator {
 		LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
 		LispVal rebuilt = new LispCons(new LispSymbol(LispNames.COERCE),
 				new LispCons(quoted, new LispCons(parts.get(2), LispNil.INSTANCE)));
-		return eval(LispMacroExpander.expandCoerce((LispCons) rebuilt), env);
+		return eval(LispMacroExpander.expandCoerce((LispCons) rebuilt, true, false, false, this.closRegistry), env);
 	}
 
 	// The literal sequence result type a (coerce x 'type) form names, normalized the way
@@ -9459,17 +9499,23 @@ public final class LispEvaluator {
 	}
 
 	// The destructive twins: rewrite the matching cars in place and return the (possibly
-	// mutated) original list.
+	// mutated) original list. A vector/string argument has no cons cells to rewrite --
+	// CLHS lets a destructive form answer a FRESH sequence instead, so it routes through
+	// substitute-if's own vector/string handling rather than silently no-op'ing
+	// (.todo/623).
 	private LispVal nsubstituteIfValues(String name, List<LispVal> args) {
 		if (args.size() < 3) {
 			throw new LispEvalException(name + " expects at least 3 arguments, got " + args.size());
 		}
 		requireKeyKeyword(name, args, 3);
-		LispVal keyFn = optionalKeywordArg(args, 3, LispNames.KEY_KEYWORD);
 		boolean negated = LispNames.NSUBSTITUTE_IF_NOT.equals(name);
+		LispVal list = args.get(2);
+		if (!(list instanceof LispCons) && !(list instanceof LispNil)) {
+			return substituteIfValues(negated ? LispNames.SUBSTITUTE_IF_NOT : LispNames.SUBSTITUTE_IF, args);
+		}
+		LispVal keyFn = optionalKeywordArg(args, 3, LispNames.KEY_KEYWORD);
 		LispVal newItem = args.get(0);
 		LispVal predicate = args.get(1);
-		LispVal list = args.get(2);
 		LispVal cursor = list;
 		while (cursor instanceof LispCons cell) {
 			if (matchesSubstituteIf(predicate, keyFn, cell.car()) != negated) {
@@ -9501,8 +9547,14 @@ public final class LispEvaluator {
 	// Destructively splice out every cell whose car satisfies the predicate
 	// (deleteWhenTrue) or fails it (delete-if-not). The surviving cells are reused and
 	// the
-	// new head is returned (Common Lisp semantics).
+	// new head is returned (Common Lisp semantics). A vector/string argument has no cons
+	// cells to splice -- CLHS lets a destructive form answer a FRESH sequence instead, so
+	// it routes through remove-if/remove-if-not's own vector/string handling rather than
+	// silently no-op'ing (.todo/623).
 	private LispVal deleteIfValues(LispVal predicate, LispVal list, boolean deleteWhenTrue) {
+		if (!(list instanceof LispCons) && !(list instanceof LispNil)) {
+			return Environment.seqResult(list, removeIfValues(predicate, Environment.seqAsList(list), !deleteWhenTrue));
+		}
 		LispVal head = list;
 		// Drop matching cells from the front by advancing the head.
 		while (head instanceof LispCons cell

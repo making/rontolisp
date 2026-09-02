@@ -54,7 +54,7 @@ this one call, it silently turned a caller's type error into a plausible-looking
 string in `string=`, in the whole `string<` family, and in every position widened
 here. A computed argument now compiles to
 `LispMacroExpander.strictStringDesignatorForm`: `(let ((g x)) (if (or (stringp g)
-(symbolp g) (characterp g)) (princ-to-string g) (error ...)))`. `stringp` is true
+(symbolp g) (characterp g)) (%princ-piece g) (error ...)))`. `stringp` is true
 of a mutable character vector on every backend, so a fill-pointer buffer still
 coerces, and `symbolp` covers `nil`/`t`, which designate `"NIL"`/`"T"`.
 

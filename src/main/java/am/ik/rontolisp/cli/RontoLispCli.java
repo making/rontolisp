@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -133,6 +134,11 @@ public final class RontoLispCli {
 		// or a build that must not edit the sources it compiles.
 		DistClient dists = DistClient.createDefault(distSpecs(options.get("--dist"), System.getenv("RONTOLISP_DISTS")));
 
+		// --feature NAME: read-time features the USER adds to whatever set the target
+		// already has, for a portable library whose #+ chain predates rontolisp and so
+		// names no feature of ours (see declaredFeatures).
+		List<String> features = declaredFeatures(options.get("--feature"));
+
 		// -e/--eval "FORMS": the program is the argument itself rather than a file, and
 		// nothing downstream can tell the difference -- it interprets, and with -o it
 		// compiles. Only what a file itself provides is missing: a directory for a
@@ -144,8 +150,8 @@ public final class RontoLispCli {
 					+ "': give the program either inline or in a file");
 		}
 		if (!test && inline == null && !options.containsNoKey()) {
-			repl(systemPath, dists, options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
-					options.contains("--parallel"), commandLine(null, options.arguments()));
+			repl(systemPath, dists, features, options.contains("--simd"), options.contains("--blas"),
+					options.contains("--gpu"), options.contains("--parallel"), commandLine(null, options.arguments()));
 			return;
 		}
 
@@ -189,7 +195,7 @@ public final class RontoLispCli {
 						+ "' given): it writes the JavaScript half of whatever boundary was built."
 						+ " The boundary itself is --host-boundary=" + HostBoundary.spellings());
 			}
-			compileToFile(source, baseDir, systemPath, dists, outputFile, options.contains("--dynamic"),
+			compileToFile(source, baseDir, systemPath, dists, features, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
 					options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
@@ -227,8 +233,8 @@ public final class RontoLispCli {
 							+ " describes a compiled JVM artifact, so it needs -o <file>.class" + " or -o <file>.jar");
 				}
 			}
-			interpret(source, baseDir, systemPath, dists, options.contains("--simd"), options.contains("--blas"),
-					options.contains("--gpu"), options.contains("--parallel"), inputFile,
+			interpret(source, baseDir, systemPath, dists, features, options.contains("--simd"),
+					options.contains("--blas"), options.contains("--gpu"), options.contains("--parallel"), inputFile,
 					commandLine(inputFile, options.arguments()));
 		}
 	}
@@ -259,6 +265,64 @@ public final class RontoLispCli {
 		return specs;
 	}
 
+	/**
+	 * The features named by {@code --feature}: each value is a comma-separated list of
+	 * feature names, spelled with or without the leading {@code :}, and they WIDEN the
+	 * read-time feature set the target already has -- never narrow it
+	 * ({@link Features#with}).
+	 * <p>
+	 * This is the one channel through which the USER -- rather than rontolisp -- decides
+	 * what {@code #+} sees, and it exists because a portable library's {@code #+sbcl} /
+	 * {@code #+clisp} / {@code #-(or ...)} chain was written before we existed and names
+	 * no rontolisp feature at all, so the whole chain falls into its else branch
+	 * (typically an {@code (error "not implemented")}) even where every primitive the
+	 * sbcl branch calls answers exactly as SBCL does. Announcing {@code :sbcl} ourselves
+	 * would be a lie told by us; a flag makes it a claim the user makes, about a library
+	 * the user has read, for the run the user is starting -- and the consequence is the
+	 * user's too, because the same claim also selects the branches that really do call
+	 * that implementation's internals.
+	 * <p>
+	 * The names describing the BUILD are refused. {@code :rontolisp}, the backend
+	 * features and the target-describing ones ({@code :rontolisp-component},
+	 * {@code :rontolisp-reactor}, ...) say what the output is, and what the output is is
+	 * decided by {@code -o} and the flags beside it: a source that read
+	 * {@code #+rontolisp-wasm} because the command line said so and then compiled to a
+	 * class would be broken by its own conditional rather than helped.
+	 * @param option the {@code --feature} value, or {@code null}
+	 * @return the feature names, without the leading colon, downcased, without duplicates
+	 */
+	static List<String> declaredFeatures(@Nullable String option) {
+		List<String> names = new ArrayList<>();
+		if (option == null) {
+			return names;
+		}
+		// A repeated --feature arrives newline-joined (CliOptions.repeatableKeys); a
+		// single one may still name several, comma-separated, like --dist.
+		for (String spec : option.split("[,\n]")) {
+			String trimmed = spec.trim();
+			if (trimmed.isEmpty()) {
+				continue;
+			}
+			String stripped = trimmed.startsWith("#:") ? trimmed.substring(2)
+					: trimmed.startsWith(":") ? trimmed.substring(1) : trimmed;
+			String name = stripped.toLowerCase(Locale.ROOT);
+			if (name.isEmpty()) {
+				throw new IllegalArgumentException("--feature needs a feature name, e.g. --feature sbcl");
+			}
+			if (name.equals("rontolisp") || name.startsWith("rontolisp-")) {
+				throw new IllegalArgumentException("--feature cannot declare '" + name
+						+ "': the rontolisp features describe the build itself (which backend, the component"
+						+ " boundary, reactor and servlet mode), and -o and the flags beside it are what decide"
+						+ " those. --feature is for the names a portable library's #+ chain expects from the"
+						+ " HOST implementation -- e.g. --feature sbcl");
+			}
+			if (!names.contains(name)) {
+				names.add(name);
+			}
+		}
+		return names;
+	}
+
 	static List<String> systemPath(@Nullable String option, @Nullable String env) {
 		List<String> dirs = new ArrayList<>();
 		for (String joined : new String[] { option, env }) {
@@ -284,10 +348,11 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void repl(List<String> systemPath, DistClient dists, boolean simd, boolean blas, boolean gpu,
-			boolean parallel, List<String> commandLine) {
+	private void repl(List<String> systemPath, DistClient dists, List<String> declaredFeatures, boolean simd,
+			boolean blas, boolean gpu, boolean parallel, List<String> commandLine) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setSystemPath(systemPath);
+		evaluator.setDeclaredFeatures(declaredFeatures);
 		evaluator.setCommandLineArguments(commandLine);
 		evaluator.setDistClient(dists);
 		requireSimdForParallel(simd, parallel);
@@ -412,11 +477,15 @@ public final class RontoLispCli {
 	}
 
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
-			boolean simd, boolean blas, boolean gpu, boolean parallel, @Nullable String entryFile,
-			List<String> commandLine) {
+			List<String> declaredFeatures, boolean simd, boolean blas, boolean gpu, boolean parallel,
+			@Nullable String entryFile, List<String> commandLine) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
+		// The entry file, every file it loads and every ASDF component under it read
+		// with the widened set -- and the run-time *features* holds the same names, so
+		// a (member :F *features*) and the #+F beside it cannot disagree.
+		evaluator.setDeclaredFeatures(declaredFeatures);
 		evaluator.setCommandLineArguments(commandLine);
 		evaluator.setDistClient(dists);
 		requireSimdForParallel(simd, parallel);
@@ -436,13 +505,13 @@ public final class RontoLispCli {
 		// read; each top-level form's markers resolve just before it evaluates, the
 		// same timing the runtime loadFile uses.
 		if (source.contains("#.")) {
-			for (LispVal expr : LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER, entryFile)) {
+			for (LispVal expr : LispReader.readAllWithReadEvalMarkers(source, evaluator.features(), entryFile)) {
 				evaluator.eval(evaluator.resolveReadTimeEvalInCode(expr));
 			}
 			this.out.flush();
 			return;
 		}
-		List<LispVal> exprs = LispReader.readAllFromString(source, Features.INTERPRETER, entryFile);
+		List<LispVal> exprs = LispReader.readAllFromString(source, evaluator.features(), entryFile);
 		for (LispVal expr : exprs) {
 			evaluator.eval(expr);
 		}
@@ -453,23 +522,25 @@ public final class RontoLispCli {
 	}
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
-			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit,
-			boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
-			@Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact, @Nullable String entryFile) {
+			List<String> declaredFeatures, String outputFile, boolean dynamic, boolean component, boolean noWasi,
+			OptimizeLevel optimize, boolean noGc, boolean simd, boolean blas, boolean gpu, boolean parallel,
+			boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
+			boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
+			@Nullable String entryFile) {
 		CompileDiagnostics.recording(() -> {
-			compileRecorded(source, baseDir, systemPath, dists, outputFile, dynamic, component, noWasi, optimize, noGc,
-					simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue, hostRandom, hostFetch, reentrant,
-					hostBoundary, jvmArtifact, entryFile);
+			compileRecorded(source, baseDir, systemPath, dists, declaredFeatures, outputFile, dynamic, component,
+					noWasi, optimize, noGc, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue, hostRandom,
+					hostFetch, reentrant, hostBoundary, jvmArtifact, entryFile);
 			return null;
 		});
 	}
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
-			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit,
-			boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
-			@Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact, @Nullable String entryFile) {
+			List<String> declaredFeatures, String outputFile, boolean dynamic, boolean component, boolean noWasi,
+			OptimizeLevel optimize, boolean noGc, boolean simd, boolean blas, boolean gpu, boolean parallel,
+			boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
+			boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
+			@Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -609,8 +680,8 @@ public final class RontoLispCli {
 		// and the library tree-shaker -- in the one place all four backends and the
 		// embedded JVM seam (JvmSourceCompiler) share (CompileFrontend).
 		CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, baseDir, systemPath, dists,
-				outputFile.endsWith(".wasm"), outputFile.endsWith(".war"), dynamic, component, noWasi, noGc, hostFetch,
-				hostBoundary, reentrant, noPrune);
+				declaredFeatures, outputFile.endsWith(".wasm"), outputFile.endsWith(".war"), dynamic, component, noWasi,
+				noGc, hostFetch, hostBoundary, reentrant, noPrune);
 		List<LispVal> program = frontend.program();
 		Features features = frontend.features();
 		boolean serve = frontend.serve();
@@ -1116,6 +1187,15 @@ public final class RontoLispCli {
 		this.out.println("                     Searched in the order given, quicklisp first unless named;");
 		this.out.println("                     each caches under ~/.rontolisp/<dist> (RONTOLISP_DIST_HOME).");
 		this.out.println("                     A program can install one itself: (ql-dist:install-dist NAME)");
+		this.out.println("  --feature NAMES    Read-time features to ADD, comma-separated and repeatable, so");
+		this.out.println("                     that #+NAME reads as true (and *features* holds it at run");
+		this.out.println("                     time). For a portable library whose #+sbcl / #+clisp chain was");
+		this.out.println("                     written before rontolisp and so names none of our features,");
+		this.out.println("                     leaving it in its #-(or ...) else branch: --feature sbcl says");
+		this.out.println("                     you have read that branch and want it. The claim is yours --");
+		this.out.println("                     it also selects the branches that call that implementation's");
+		this.out.println("                     internals. The rontolisp features are refused: they describe");
+		this.out.println("                     the build, which -o and the flags beside it decide.");
 	}
 
 	private static String readFile(String path) {

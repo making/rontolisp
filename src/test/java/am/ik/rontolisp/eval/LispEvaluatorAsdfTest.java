@@ -56,6 +56,27 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void loadSystemReadsTheExtensionAComponentClassGivesItsFiles() {
+		// portableaserve's shape end to end: a cl-source-file.cl subclass and a
+		// :default-component-class, so every component names NAME.cl. The extension has
+		// to travel all the way to the loader -- a .lisp read here would find nothing.
+		String output = run("(asdf:load-system \"acl-lib\") (print (acl-lib:greet))", Map.of(//
+				"acl-lib.asd", """
+						(defclass legacy-acl-source-file (cl-source-file.cl) ())
+						(defmethod perform :around ((operation compile-op) (c legacy-acl-source-file))
+						  (call-next-method))
+						(defsystem :acl-lib
+						  :default-component-class cl-source-file.cl
+						  :components ((:file "package")
+						               (:legacy-acl-source-file "main" :depends-on ("package"))))""", //
+				"package.cl", "(defpackage :acl-lib (:use :cl) (:export :greet))", //
+				"main.cl", """
+						(in-package :acl-lib)
+						(defun greet () "Hello from .cl")"""), List.of());
+		assertThat(output).contains("\"Hello from .cl\"");
+	}
+
+	@Test
 	void aDeclaredRontolispFeatureIsVisibleToTheReaderOfTheSystemsOwnComponents() {
 		// The static encoding of a .asd that pushes onto *features* from an eval-when:
 		// the push would happen at LOAD time and the COMPONENT files' conditionals are

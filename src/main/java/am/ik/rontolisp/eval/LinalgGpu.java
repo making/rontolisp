@@ -220,6 +220,23 @@ public final class LinalgGpu {
 				LinalgGpu::scatterRows);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SUM_SQUARES, 2,
 				LinalgGpu::sumSquares);
+		// The FUSED tier (.todo/499): the compositions a transformer step spent a third
+		// of its device time on, each as one pass -- linalg:softmax in its :axis form
+		// (the last axis), the exact torch:gelu and layer-norm's normalization through
+		// the internal members torch.lisp now calls, their three adjoints, and the
+		// dropout mask. Every one replays its composition's arithmetic rounding for
+		// rounding (.kb/gpu.md, "The fused tier").
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_SOFTMAX, 3, LinalgGpu::softmax);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SOFTMAX_GRAD, 3,
+				LinalgGpu::softmaxGrad);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_GELU, 1, LinalgGpu::gelu);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_GELU_GRAD, 3, LinalgGpu::geluGrad);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_LAYER_NORM, 2,
+				LinalgGpu::layerNorm);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_LAYER_NORM_GRAD, 4,
+				LinalgGpu::layerNormGrad);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_DROPOUT_MASK, 4,
+				LinalgGpu::dropoutMask);
 	}
 
 	/**
@@ -428,6 +445,222 @@ public final class LinalgGpu {
 				LinalgGpuKernels.rngFill(f.storage(), f.totalSize(), mode, lo, span, w[0], w[1], w[2]);
 		};
 		return end == null ? null : new LispDoubleFloatArray(end, new int[] { 3 });
+	}
+
+	// --- the fused tier (.todo/499) --------------------------------------------------
+
+	/**
+	 * {@code (linalg:softmax a :axis ax)} over the LAST axis of a packed operand, as one
+	 * pass per row: the five-member chain's arithmetic exactly (its {@code exp} at the
+	 * width, so the result stands to the CPU as an accelerated {@code exp} does). Any
+	 * other axis, the whole-array form, a boxed operand and a small one decline to the
+	 * defun, whose members the device then takes one by one as before.
+	 */
+	private static @Nullable LispVal softmax(List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		LispVal[] opts = LinalgSimd.options(args, 1, "AXIS");
+		if (a == null || opts == null) {
+			return null;
+		}
+		int[] d = a.dims();
+		Integer axis = LinalgSimd.normAxis(opts[0], d.length);
+		if (axis == null || axis != d.length - 1) {
+			return null;
+		}
+		int len = d[axis];
+		int rows = len == 0 ? 0 : a.totalSize() / len;
+		if (rows < 1) {
+			return null;
+		}
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.softmax(single.storage(), rows, len);
+			return c == null ? null : new LispSingleFloatArray(c, d.clone());
+		}
+		double[] c = LinalgGpuKernels.softmax(((LispDoubleFloatArray) a).storage(), rows, len);
+		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/**
+	 * {@code (linalg::%la-softmax-grad g out ax)} over the last axis, one pass per row
+	 * and bit-identical to the four-member chain; declined at any other axis.
+	 */
+	private static @Nullable LispVal softmaxGrad(List<LispVal> args) {
+		LispFloatArray g = LinalgSimd.packed(args.get(0));
+		LispFloatArray out = LinalgSimd.packed(args.get(1));
+		if (g == null || out == null || g.getClass() != out.getClass() || !Arrays.equals(g.dims(), out.dims())) {
+			return null;
+		}
+		int[] d = g.dims();
+		Integer axis = LinalgSimd.normAxis(args.get(2), d.length);
+		if (axis == null || axis != d.length - 1) {
+			return null;
+		}
+		int len = d[axis];
+		int rows = len == 0 ? 0 : g.totalSize() / len;
+		if (rows < 1) {
+			return null;
+		}
+		if (g instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.softmaxGrad(single.storage(), ((LispSingleFloatArray) out).storage(), rows,
+					len);
+			return c == null ? null : new LispSingleFloatArray(c, d.clone());
+		}
+		double[] c = LinalgGpuKernels.softmaxGrad(((LispDoubleFloatArray) g).storage(),
+				((LispDoubleFloatArray) out).storage(), rows, len);
+		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/** {@code (linalg::%la-gelu x)}: the exact GELU as one pass over a packed operand. */
+	private static @Nullable LispVal gelu(List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		if (a == null || a.totalSize() < 1) {
+			return null;
+		}
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.gelu(single.storage(), a.totalSize());
+			return c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
+		}
+		double[] c = LinalgGpuKernels.gelu(((LispDoubleFloatArray) a).storage(), a.totalSize());
+		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+	}
+
+	/**
+	 * {@code (linalg::%la-gelu-grad g x old)}: the tape's backward through the GELU
+	 * composition as one pass, folded onto {@code old} (nil for none). Declined unless
+	 * the arrays are packed at one width and one shape.
+	 */
+	private static @Nullable LispVal geluGrad(List<LispVal> args) {
+		LispFloatArray g = LinalgSimd.packed(args.get(0));
+		LispFloatArray x = LinalgSimd.packed(args.get(1));
+		LispFloatArray old = args.get(2) instanceof LispNil ? null : LinalgSimd.packed(args.get(2));
+		if (g == null || x == null || !sameShape(g, x) || (!(args.get(2) instanceof LispNil) && old == null)
+				|| (old != null && !sameShape(g, old)) || g.totalSize() < 1) {
+			return null;
+		}
+		int n = g.totalSize();
+		if (g instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.geluGrad(single.storage(), ((LispSingleFloatArray) x).storage(),
+					old == null ? null : ((LispSingleFloatArray) old).storage(), n);
+			return c == null ? null : new LispSingleFloatArray(c, g.dims().clone());
+		}
+		double[] c = LinalgGpuKernels.geluGrad(((LispDoubleFloatArray) g).storage(),
+				((LispDoubleFloatArray) x).storage(), old == null ? null : ((LispDoubleFloatArray) old).storage(), n);
+		return c == null ? null : new LispDoubleFloatArray(c, g.dims().clone());
+	}
+
+	/**
+	 * {@code (linalg::%la-layer-norm x eps)}: the normalization over the last axis as one
+	 * pass per row, bit-identical to the eleven-member chain.
+	 */
+	private static @Nullable LispVal layerNorm(List<LispVal> args) {
+		LispFloatArray x = LinalgSimd.packed(args.get(0));
+		Double eps = number(args.get(1));
+		if (x == null || eps == null || x.rank() < 1) {
+			return null;
+		}
+		int[] d = x.dims();
+		int len = d[d.length - 1];
+		int rows = len == 0 ? 0 : x.totalSize() / len;
+		if (rows < 1) {
+			return null;
+		}
+		if (x instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.layerNorm(single.storage(), rows, len, eps);
+			return c == null ? null : new LispSingleFloatArray(c, d.clone());
+		}
+		double[] c = LinalgGpuKernels.layerNorm(((LispDoubleFloatArray) x).storage(), rows, len, eps);
+		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/**
+	 * {@code (linalg::%la-layer-norm-grad g x eps old)}: the tape's backward through the
+	 * normalization as one pass per row, folded onto {@code old} (nil for none);
+	 * bit-identical to the chain.
+	 */
+	private static @Nullable LispVal layerNormGrad(List<LispVal> args) {
+		LispFloatArray g = LinalgSimd.packed(args.get(0));
+		LispFloatArray x = LinalgSimd.packed(args.get(1));
+		Double eps = number(args.get(2));
+		LispFloatArray old = args.get(3) instanceof LispNil ? null : LinalgSimd.packed(args.get(3));
+		if (g == null || x == null || eps == null || !sameShape(g, x)
+				|| (!(args.get(3) instanceof LispNil) && old == null) || (old != null && !sameShape(g, old))
+				|| g.rank() < 1) {
+			return null;
+		}
+		int[] d = g.dims();
+		int len = d[d.length - 1];
+		int rows = len == 0 ? 0 : g.totalSize() / len;
+		if (rows < 1) {
+			return null;
+		}
+		if (g instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.layerNormGrad(single.storage(), ((LispSingleFloatArray) x).storage(),
+					old == null ? null : ((LispSingleFloatArray) old).storage(), rows, len, eps);
+			return c == null ? null : new LispSingleFloatArray(c, d.clone());
+		}
+		double[] c = LinalgGpuKernels.layerNormGrad(((LispDoubleFloatArray) g).storage(),
+				((LispDoubleFloatArray) x).storage(), old == null ? null : ((LispDoubleFloatArray) old).storage(), rows,
+				len, eps);
+		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+	}
+
+	/**
+	 * {@code (linalg::%la-dropout-mask shape p st single)}: the inverted-dropout mask
+	 * drawn on the device from the state vector {@code st}, which is advanced IN PLACE to
+	 * the generator's end state as the defun advances it. Declines what {@link #rngFill}
+	 * declines -- a bad state word, a small fill -- plus a ratio probability and a shape
+	 * that is not a list of positive integers.
+	 */
+	private static @Nullable LispVal dropoutMask(List<LispVal> args) {
+		int[] shape = LinalgSimd.shape(args.get(0));
+		Double p = number(args.get(1));
+		if (shape == null || p == null || !(args.get(2) instanceof LispDoubleFloatArray st) || st.data().length != 3) {
+			return null;
+		}
+		long total = 1;
+		for (int d : shape) {
+			if (d < 0) {
+				return null;
+			}
+			total *= d;
+		}
+		if (total < 1 || total > Integer.MAX_VALUE || !LinalgGpuKernels.worthRng(total)) {
+			return null;
+		}
+		int[] w = new int[3];
+		for (int i = 0; i < 3; i++) {
+			double v = st.data()[i];
+			int u = (int) v;
+			if (u != v || u < 0 || u >= 1 << 23) {
+				return null;
+			}
+			w[i] = u;
+		}
+		int n = (int) total;
+		double span = 1.0 - p;
+		double[] end;
+		LispVal mask;
+		if (args.get(3) instanceof LispNil) {
+			double[] out = LinalgGpuKernels.result(n);
+			end = LinalgGpuKernels.dropoutMask(out, n, p, span, w[0], w[1], w[2]);
+			mask = new LispDoubleFloatArray(out, shape);
+		}
+		else {
+			float[] out = LinalgGpuKernels.resultF(n);
+			end = LinalgGpuKernels.dropoutMask(out, n, p, span, w[0], w[1], w[2]);
+			mask = new LispSingleFloatArray(out, shape);
+		}
+		if (end == null) {
+			return null;
+		}
+		for (int i = 0; i < 3; i++) {
+			st.setElement(i, end[i]);
+		}
+		return mask;
+	}
+
+	private static boolean sameShape(LispFloatArray a, LispFloatArray b) {
+		return a.getClass() == b.getClass() && Arrays.equals(a.dims(), b.dims());
 	}
 
 	/** A double or integer scalar as a double; a ratio (or anything else) declines. */

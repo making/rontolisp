@@ -295,7 +295,7 @@
 (defmethod print-object ((n geom:node) stream)
   (print-unreadable-object (n stream :type t)
     (let ((k (length (geom::%children n))))
-      (write-string (princ-to-string k) stream)
+      (write-string (%princ-piece k) stream)
       (write-string (if (= k 1) " child" " children") stream)))
   n)
 
@@ -303,12 +303,12 @@
   (print-unreadable-object (s stream :type t)
     (let ((label (geom:label-of s)))
       (when label
-        (write-string (prin1-to-string label) stream)
+        (write-string (%prin1-piece label) stream)
         (write-string " " stream)))
-    (write-string (princ-to-string (first (linalg:shape (geom::%vertices s))))
+    (write-string (%princ-piece (first (linalg:shape (geom::%vertices s))))
                   stream)
     (write-string " vertices " stream)
-    (write-string (princ-to-string (length (geom:facets-of s))) stream)
+    (write-string (%princ-piece (length (geom:facets-of s))) stream)
     (write-string " facets" stream))
   s)
 

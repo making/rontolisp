@@ -471,7 +471,7 @@
   ;; (string ...): a value the handler built with a string producer (format
   ;; nil, concatenate) is a mutable character vector; render it once at the
   ;; transport boundary, same as the name above.
-  (if (stringp v) (string v) (princ-to-string v)))
+  (if (stringp v) (string v) (%princ-piece v)))
 
 (defun rontolisp::%http-drop-header-p (name)
   ;; The transport computes the framing headers from the body it is about to

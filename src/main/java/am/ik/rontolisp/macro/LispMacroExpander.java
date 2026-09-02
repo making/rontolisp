@@ -2259,7 +2259,7 @@ public final class LispMacroExpander {
 			if (implicitAcc == null) {
 				return Boolean.TRUE.equals(terminationT) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
-			return implicitReverse ? call(LispNames.NREVERSE, implicitAcc) : implicitAcc;
+			return implicitReverse ? nreverseListForm(implicitAcc) : implicitAcc;
 		}
 
 		/**
@@ -2658,9 +2658,25 @@ public final class LispMacroExpander {
 	 * vector, and with no array runtime no vector can reach here, so the guard makes the
 	 * builder provably dead (see {@link #expandCoerce(LispCons, boolean)}, which gates
 	 * only the reading direction because it cannot see its guard).
+	 *
+	 * <p>
+	 * {@code destructive} true (the {@code sort}/{@code nreverse}/{@code stable-sort}
+	 * precedent, {@code .todo/623}) writes the rebuilt string/vector back into
+	 * {@code __seq_in} via {@code (replace __seq_in <rebuild>)} and answers THAT CALL'S
+	 * result, instead of answering the fresh rebuild directly -- so a fill-pointered or
+	 * adjustable argument keeps its fill pointer, its adjustable flag AND its identity,
+	 * matching every implementation these three permute in place. Answering replace's own
+	 * result (not {@code __seq_in} forced) matters for a source-literal string, which
+	 * {@code replace} cannot write in place and answers a fresh copy for instead
+	 * ({@code .kb/string-write-runtime.md}); forcing {@code __seq_in} there would
+	 * silently answer the unsorted/unreversed literal. {@code false} (every other caller:
+	 * {@code remove}, {@code remove-if(-not)}, {@code remove-duplicates},
+	 * {@code substitute}, {@code
+	 * reduce}) answers the fresh rebuild unchanged, matching CL's "a non-destructive
+	 * sequence function may return a simple vector" latitude.
 	 */
 	private static LispVal seqResultDispatchForm(LispVal seqExpr, java.util.function.UnaryOperator<LispVal> algo,
-			boolean arraysExist) {
+			boolean arraysExist, boolean destructive) {
 		LispSymbol in = new LispSymbol(SEQ_IN_VAR);
 		LispSymbol isStr = new LispSymbol(SEQ_STR_VAR);
 		LispSymbol isVec = new LispSymbol(SEQ_VEC_VAR);
@@ -2678,9 +2694,25 @@ public final class LispMacroExpander {
 		// conversion is not a program-written (coerce x 'string), and must not pick up
 		// the mutable-result wrap -- see LispNames.SEQ_STRING_RESULT for what flipping
 		// this family would cost.
-		LispVal result = arraysExist
-				? makeIf(isStr, coerceTo(res, LispNames.SEQ_STRING_RESULT), makeIf(isVec, coerceTo(res, "VECTOR"), res))
-				: makeIf(isStr, coerceTo(res, LispNames.SEQ_STRING_RESULT), res);
+		LispVal strRebuild = coerceTo(res, LispNames.SEQ_STRING_RESULT);
+		LispVal vecRebuild = coerceTo(res, "VECTOR");
+		if (destructive) {
+			// (replace __seq_in <rebuild>): the rebuild is a FRESH string/vector of the
+			// same representation as __seq_in, so replace's matching-type source arm
+			// (already exercised by every other replace call site) copies it back into
+			// __seq_in's own storage -- up to __seq_in's own active length, which is what
+			// keeps a fill pointer's count (not the backing store's total size) intact.
+			// ANSWER REPLACE'S OWN RESULT, not __seq_in verbatim: replace mutates an
+			// array
+			// destination in place and returns it, but a SOURCE-LITERAL string cannot be
+			// written in place (.kb/string-write-runtime.md) and its arm answers a FRESH
+			// copy instead -- discarding that and forcing __seq_in would silently answer
+			// the unsorted/unreversed literal.
+			strRebuild = mvCall(LispNames.REPLACE, in, strRebuild);
+			vecRebuild = mvCall(LispNames.REPLACE, in, vecRebuild);
+		}
+		LispVal result = arraysExist ? makeIf(isStr, strRebuild, makeIf(isVec, vecRebuild, res))
+				: makeIf(isStr, strRebuild, res);
 		LispVal resLet = makeLet(SEQ_RES_VAR, algo.apply(lst), result);
 		LispVal asList = arraysExist ? listToCons(List.of(new LispSymbol(LispNames.OR), isStr, isVec)) : isStr;
 		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(asList, coerceTo(in, "LIST"), in), resLet);
@@ -2724,7 +2756,7 @@ public final class LispMacroExpander {
 			List<LispVal> inner = new java.util.ArrayList<>(parts);
 			inner.set(1, lst);
 			return listToCons(inner);
-		}, arraysExist);
+		}, arraysExist, true);
 	}
 
 	/**
@@ -3094,11 +3126,27 @@ public final class LispMacroExpander {
 	 * Expands {@code (stable-sort sequence predicate [:key fn])} into a
 	 * decorate-sort-undecorate over the sequence indices, so equal elements keep their
 	 * original order (a stable sort) and an optional {@code :key} is applied once per
-	 * element.
+	 * element. The scan itself always walks a list, so the whole decorate/sort/undecorate
+	 * body is wrapped in {@link #seqResultDispatchForm} to answer a string/vector
+	 * argument back in its own representation -- matching {@code sort} (see
+	 * {@code wrapSortForStringSeq}), which this shares its {@code (sort dec comparator)}
+	 * call with.
 	 * @param cons the {@code stable-sort} expression
 	 * @return the decorate-sort-undecorate expansion
 	 */
 	public static LispVal expandStableSort(LispCons cons) {
+		return expandStableSort(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandStableSort(LispCons)}, but lets a backend drop the vector arm of
+	 * the dispatch when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the {@code stable-sort} expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the decorate-sort-undecorate expansion
+	 */
+	public static LispVal expandStableSort(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3) {
 			throw new IllegalArgumentException(LispNames.STABLE_SORT + " expects a sequence and a predicate");
@@ -3124,11 +3172,7 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.CONS), decorated, dec))));
 		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.SETQ), idx,
 				listToCons(List.of(new LispSymbol(LispNames.ADD), idx, new LispInteger(1)))));
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(cur, seqAsListForm(parts.get(1)), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal scan = expandDo((LispCons) listToCons(
-				List.of(new LispSymbol(LispNames.DO), bindings, endClause, accumulate, increment)));
 		// (lambda (a b) (if (pred (car a) (car b)) t
 		// (if (pred (car b) (car a)) nil (< (cadr a) (cadr b)))))
 		LispVal predAB = listToCons(
@@ -3142,9 +3186,14 @@ public final class LispMacroExpander {
 		LispVal sorted = listToCons(List.of(new LispSymbol(LispNames.SORT), dec, comparator));
 		LispVal undecorate = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(e)),
 				callOf(LispNames.CDR, callOf(LispNames.CDR, e))));
-		LispVal result = listToCons(List.of(new LispSymbol(LispNames.MAPCAR), undecorate, sorted));
-		LispVal body = makeProgn(List.of(scan, result));
-		result = makeLet(idx.name(), new LispInteger(0), body);
+		LispVal mapcarResult = listToCons(List.of(new LispSymbol(LispNames.MAPCAR), undecorate, sorted));
+		LispVal dispatch = seqResultDispatchForm(parts.get(1), lst -> {
+			LispVal bindings = listToCons(List.of(listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
+			LispVal scan = expandDo((LispCons) listToCons(
+					List.of(new LispSymbol(LispNames.DO), bindings, endClause, accumulate, increment)));
+			return makeProgn(List.of(scan, mapcarResult));
+		}, arraysExist, true);
+		LispVal result = makeLet(idx.name(), new LispInteger(0), dispatch);
 		result = makeLet(dec.name(), LispNil.INSTANCE, result);
 		if (hasKey && keyForm != null) {
 			result = makeLet(key.name(), keyForm, result);
@@ -4560,7 +4609,7 @@ public final class LispMacroExpander {
 		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(acc, x)),
 				listToCons(List.of(new LispSymbol(LispNames.CONS), x, acc))));
 		return seqResultDispatchForm(parts.get(1), lst -> listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda,
-				lst, new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE)), arraysExist);
+				lst, new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE)), arraysExist, false);
 	}
 
 	/**
@@ -5638,14 +5687,14 @@ public final class LispMacroExpander {
 		return seqResultDispatchForm(parts.get(1), lst -> {
 			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
 					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
-			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 			LispVal dup = memberCallForm(keyedForm(keyForm, callOf(LispNames.CAR, cur)),
 					fromEnd ? acc : callOf(LispNames.CDR, cur), testForm, keyForm);
 			LispVal keep = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
 			LispVal body = makeIf(dup, LispNil.INSTANCE, keep);
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		}, arraysExist);
+		}, arraysExist, false);
 	}
 
 	/**
@@ -5668,7 +5717,7 @@ public final class LispMacroExpander {
 				listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur)))));
 		LispVal endTest = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.ATOM, cur),
 				callOf(LispNames.ATOM, callOf(LispNames.CDR, cur))));
-		LispVal endClause = listToCons(List.of(endTest, callOf(LispNames.NREVERSE, acc)));
+		LispVal endClause = listToCons(List.of(endTest, nreverseListForm(acc)));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
@@ -5749,7 +5798,40 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNreverse(LispCons cons) {
-		LispVal list = cons.toList().get(1);
+		return nreverseListForm(cons.toList().get(1));
+	}
+
+	/**
+	 * Wraps a {@code (nreverse seq)} call in the string/vector dispatch: a string or
+	 * general-array sequence reverses via a coerced list (rebuilt in the original
+	 * representation, matching CL's "the result may or may not be {@code eq} to the
+	 * argument" latitude), and a plain list keeps the in-place {@code cdr}-rewiring loop
+	 * {@link #expandNreverse(LispCons)} performs. Returns {@code null} when the sequence
+	 * argument is already an internal dispatch variable (the inner call emitted by a
+	 * previous wrap), so the compilers fall through to their native list compilation --
+	 * the {@code sort}/{@code stable-sort} precedent (see {@code wrapSortForStringSeq}).
+	 * @param cons the nreverse expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the wrapped expression, or {@code null} when the call needs no wrapping
+	 */
+	public static @Nullable LispVal wrapNreverseForStringSeq(LispCons cons, boolean arraysExist) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || isSeqDispatchVar(parts.get(1))) {
+			return null;
+		}
+		return seqResultDispatchForm(parts.get(1), LispMacroExpander::nreverseListForm, arraysExist, true);
+	}
+
+	/**
+	 * The in-place {@code cdr}-rewiring loop {@link #expandNreverse(LispCons)} and
+	 * {@link #wrapNreverseForStringSeq(LispCons, boolean)} share: {@code list} is either
+	 * the raw argument form (a plain list stays in place) or the coerced-to-list dispatch
+	 * variable (a fresh cons chain that is safe to rewire before being rebuilt back into
+	 * a string/vector).
+	 * @param list the list form to reverse
+	 * @return the expanded expression
+	 */
+	private static LispVal nreverseListForm(LispVal list) {
 		LispSymbol prev = new LispSymbol("__nrev_prev");
 		LispSymbol cur = new LispSymbol("__nrev_cur");
 		LispSymbol next = new LispSymbol("__nrev_next");
@@ -6101,8 +6183,11 @@ public final class LispMacroExpander {
 		LispSymbol item = new LispSymbol("__remove_item");
 		// The item binds outside the string dispatch to keep the argument evaluation
 		// order (item, then sequence); the filter's do rebinds it to itself.
-		return makeLet(item.name(), parts.get(1), seqResultDispatchForm(parts.get(2), lst -> expandFilter(item, item,
-				lst, "__remove", elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), false), arraysExist));
+		return makeLet(item.name(), parts.get(1),
+				seqResultDispatchForm(parts.get(2),
+						lst -> expandFilter(item, item, lst, "__remove",
+								elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), false),
+						arraysExist, false));
 	}
 
 	/**
@@ -6131,7 +6216,7 @@ public final class LispMacroExpander {
 		return makeLet(pred.name(), parts.get(1),
 				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeif",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
-						false), arraysExist));
+						false), arraysExist, false));
 	}
 
 	/**
@@ -6160,7 +6245,7 @@ public final class LispMacroExpander {
 		return makeLet(pred.name(), parts.get(1),
 				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeifnot",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
-						true), arraysExist));
+						true), arraysExist, false));
 	}
 
 	/**
@@ -6202,13 +6287,13 @@ public final class LispMacroExpander {
 		LispVal scan = seqResultDispatchForm(parts.get(3), lst -> {
 			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
 					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
-			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 			LispVal match = testMatchForm(testForm, oldItem, keyedForm(keyForm, callOf(LispNames.CAR, cur)));
 			LispVal chosen = makeIf(match, newItem, callOf(LispNames.CAR, cur));
 			LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), chosen, acc))));
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		}, arraysExist);
+		}, arraysExist, false);
 		return makeLet(newItem.name(), parts.get(1), makeLet(oldItem.name(), parts.get(2), scan));
 	}
 
@@ -6222,6 +6307,18 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNsubstitute(LispCons cons) {
+		return expandNsubstitute(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandNsubstitute(LispCons)}, but lets a backend drop the vector arm
+	 * of the runtime dispatch below when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the nsubstitute expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNsubstitute(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.NSUBSTITUTE, parts, 4);
 		TestSpec testForm = testSpec(parts, 4);
@@ -6230,7 +6327,7 @@ public final class LispMacroExpander {
 		LispSymbol oldItem = new LispSymbol("__nsub_old");
 		LispSymbol lst = new LispSymbol("__nsub_lst");
 		LispSymbol cur = new LispSymbol("__nsub_cur");
-		// (let ((__nsub_new new) (__nsub_old old) (__nsub_lst lst) (__nsub_cur nil))
+		// (let ((__nsub_cur nil))
 		// (setq __nsub_cur __nsub_lst)
 		// (while (consp __nsub_cur)
 		// (if (eql __nsub_old (car __nsub_cur)) (rplaca __nsub_cur __nsub_new) nil)
@@ -6243,10 +6340,44 @@ public final class LispMacroExpander {
 		LispVal ifExpr = makeIf(match, replace, LispNil.INSTANCE);
 		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
 		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), whileTest, ifExpr, advance));
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(newItem, parts.get(1))), listToCons(List.of(oldItem, parts.get(2))),
-						listToCons(List.of(lst, parts.get(3))), listToCons(List.of(cur, LispNil.INSTANCE))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, initCur, whileExpr, lst));
+		LispVal listForm = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(cur, LispNil.INSTANCE)))), initCur, whileExpr, lst));
+		// A vector/string argument has no cons cells to rplaca -- CLHS lets a destructive
+		// form answer a FRESH sequence instead, so it routes through substitute's own
+		// vector/string handling: (substitute new old lst :test ... :key ...)
+		// (.todo/623).
+		List<LispVal> substParts = new ArrayList<>(parts);
+		substParts.set(0, new LispSymbol(LispNames.SUBSTITUTE));
+		substParts.set(1, newItem);
+		substParts.set(2, oldItem);
+		substParts.set(3, lst);
+		LispVal nonListForm = expandSubstitute((LispCons) listToCons(substParts), arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist);
+		return makeLet(newItem.name(), parts.get(1), makeLet(oldItem.name(), parts.get(2), dispatch));
+	}
+
+	/**
+	 * Wraps a destructive splice/rewrite form ({@code delete}/{@code delete-if}/
+	 * {@code delete-if-not}, {@code nsubstitute}/{@code nsubstitute-if}/
+	 * {@code nsubstitute-if-not}) with a RUNTIME check for a non-list sequence: a vector
+	 * or string has no cons cells to splice/{@code rplaca}, so CLHS's "a destructive
+	 * function may answer a fresh sequence" latitude routes it through
+	 * {@code nonListForm} (the corresponding {@code remove}/{@code substitute} family's
+	 * own vector/string handling) instead of silently no-op'ing ({@code .todo/623}). A
+	 * list argument keeps {@code listForm} unchanged. {@code seq} is bound to
+	 * {@code seqExpr} exactly once, and both forms must read {@code seq} rather than the
+	 * original expression, so the sequence argument is evaluated only once.
+	 * {@code arraysExist} false drops the whole check (no vector/string can reach here),
+	 * keeping only {@code listForm} -- the {@code seqResultDispatchForm} precedent.
+	 */
+	private static LispVal deleteOrSubstituteDispatch(LispSymbol seq, LispVal seqExpr, LispVal listForm,
+			LispVal nonListForm, boolean arraysExist) {
+		if (!arraysExist) {
+			return makeLet(seq.name(), seqExpr, listForm);
+		}
+		LispVal isNonList = listToCons(
+				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, seq), callOf(LispNames.VECTORP, seq)));
+		return makeLet(seq.name(), seqExpr, makeIf(isNonList, nonListForm, listForm));
 	}
 
 	/**
@@ -6297,7 +6428,7 @@ public final class LispMacroExpander {
 		LispVal scan = seqResultDispatchForm(parts.get(3), lst -> {
 			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
 					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
-			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 			LispVal match = listToCons(
 					List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, callOf(LispNames.CAR, cur))));
 			LispVal chosen = negated ? makeIf(match, callOf(LispNames.CAR, cur), newItem)
@@ -6305,7 +6436,7 @@ public final class LispMacroExpander {
 			LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), chosen, acc))));
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		}, arraysExist);
+		}, arraysExist, false);
 		return makeLet(newItem.name(), parts.get(1), makeLet(pred.name(), parts.get(2), scan));
 	}
 
@@ -6317,7 +6448,19 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNsubstituteIf(LispCons cons) {
-		return expandNsubstituteIf(cons, false);
+		return expandNsubstituteIf(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandNsubstituteIf(LispCons)}, but lets a backend drop the vector arm
+	 * of the runtime dispatch below when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the nsubstitute-if expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNsubstituteIf(LispCons cons, boolean arraysExist) {
+		return expandNsubstituteIf(cons, arraysExist, false);
 	}
 
 	/**
@@ -6327,10 +6470,21 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNsubstituteIfNot(LispCons cons) {
-		return expandNsubstituteIf(cons, true);
+		return expandNsubstituteIf(cons, true, true);
 	}
 
-	private static LispVal expandNsubstituteIf(LispCons cons, boolean negated) {
+	/**
+	 * Like {@link #expandNsubstituteIfNot(LispCons)}, but lets a backend drop the vector
+	 * arm of the runtime dispatch below when no array can exist in this program.
+	 * @param cons the nsubstitute-if-not expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNsubstituteIfNot(LispCons cons, boolean arraysExist) {
+		return expandNsubstituteIf(cons, arraysExist, true);
+	}
+
+	private static LispVal expandNsubstituteIf(LispCons cons, boolean arraysExist, boolean negated) {
 		String name = negated ? LispNames.NSUBSTITUTE_IF_NOT : LispNames.NSUBSTITUTE_IF;
 		List<LispVal> parts = cons.toList();
 		requireKeywords(name, parts, 4, LispNames.KEY_KEYWORD);
@@ -6347,10 +6501,18 @@ public final class LispMacroExpander {
 		LispVal ifExpr = negated ? makeIf(match, LispNil.INSTANCE, replace) : makeIf(match, replace, LispNil.INSTANCE);
 		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
 		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), whileTest, ifExpr, advance));
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(newItem, parts.get(1))), listToCons(List.of(pred, parts.get(2))),
-						listToCons(List.of(lst, parts.get(3))), listToCons(List.of(cur, LispNil.INSTANCE))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, initCur, whileExpr, lst));
+		LispVal listForm = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(cur, LispNil.INSTANCE)))), initCur, whileExpr, lst));
+		// A vector/string argument routes through substitute-if's own vector/string
+		// handling (.todo/623): (substitute-if new pred lst :key ...) / -if-not.
+		List<LispVal> substIfParts = new ArrayList<>(parts);
+		substIfParts.set(0, new LispSymbol(negated ? LispNames.SUBSTITUTE_IF_NOT : LispNames.SUBSTITUTE_IF));
+		substIfParts.set(1, newItem);
+		substIfParts.set(2, pred);
+		substIfParts.set(3, lst);
+		LispVal nonListForm = expandSubstituteIf((LispCons) listToCons(substIfParts), arraysExist, negated);
+		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist);
+		return makeLet(newItem.name(), parts.get(1), makeLet(pred.name(), parts.get(2), dispatch));
 	}
 
 	/**
@@ -6361,13 +6523,36 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandDelete(LispCons cons) {
+		return expandDelete(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandDelete(LispCons)}, but lets a backend drop the vector arm of the
+	 * runtime dispatch below when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the delete expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDelete(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.DELETE, parts, 3);
 		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__delete_item");
-		return expandDeleteFilter(item, parts.get(1), parts.get(2), "__delete",
+		LispSymbol seq = new LispSymbol("__delete_seq");
+		LispVal listForm = expandDeleteFilter(item, item, seq, "__delete",
 				elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), true);
+		// A vector/string argument has no cons cells to splice -- CLHS lets a destructive
+		// form answer a FRESH sequence instead, so it routes through remove's own
+		// vector/string handling: (remove item seq :test ... :key ...) (.todo/623).
+		List<LispVal> removeParts = new ArrayList<>(parts);
+		removeParts.set(0, new LispSymbol(LispNames.REMOVE));
+		removeParts.set(1, item);
+		removeParts.set(2, seq);
+		LispVal nonListForm = expandRemove((LispCons) listToCons(removeParts), arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist);
+		return makeLet(item.name(), parts.get(1), dispatch);
 	}
 
 	/**
@@ -6377,10 +6562,31 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandDeleteIf(LispCons cons) {
+		return expandDeleteIf(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandDeleteIf(LispCons)}, but lets a backend drop the vector arm of
+	 * the runtime dispatch below when no array can exist in this program.
+	 * @param cons the delete-if expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDeleteIf(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__deleteif_pred");
-		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteif",
+		LispSymbol seq = new LispSymbol("__deleteif_seq");
+		LispVal listForm = expandDeleteFilter(pred, pred, seq, "__deleteif",
 				elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), true);
+		// A vector/string argument routes through remove-if's own vector/string handling
+		// (.todo/623): (remove-if pred seq).
+		List<LispVal> removeIfParts = new ArrayList<>(parts);
+		removeIfParts.set(0, new LispSymbol(LispNames.REMOVE_IF));
+		removeIfParts.set(1, pred);
+		removeIfParts.set(2, seq);
+		LispVal nonListForm = expandRemoveIf((LispCons) listToCons(removeIfParts), arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist);
+		return makeLet(pred.name(), parts.get(1), dispatch);
 	}
 
 	/**
@@ -6390,10 +6596,31 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandDeleteIfNot(LispCons cons) {
+		return expandDeleteIfNot(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandDeleteIfNot(LispCons)}, but lets a backend drop the vector arm
+	 * of the runtime dispatch below when no array can exist in this program.
+	 * @param cons the delete-if-not expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDeleteIfNot(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__deleteifnot_pred");
-		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteifnot",
+		LispSymbol seq = new LispSymbol("__deleteifnot_seq");
+		LispVal listForm = expandDeleteFilter(pred, pred, seq, "__deleteifnot",
 				elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), false);
+		// A vector/string argument routes through remove-if-not's own vector/string
+		// handling (.todo/623): (remove-if-not pred seq).
+		List<LispVal> removeIfNotParts = new ArrayList<>(parts);
+		removeIfNotParts.set(0, new LispSymbol(LispNames.REMOVE_IF_NOT));
+		removeIfNotParts.set(1, pred);
+		removeIfNotParts.set(2, seq);
+		LispVal nonListForm = expandRemoveIfNot((LispCons) listToCons(removeIfNotParts), arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist);
+		return makeLet(pred.name(), parts.get(1), dispatch);
 	}
 
 	/**
@@ -6469,7 +6696,7 @@ public final class LispMacroExpander {
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(operand, operandInit)), listToCons(List.of(acc, LispNil.INSTANCE)),
 						listToCons(List.of(cur, list, callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 		LispVal keep = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
 		LispVal body = keepWhenMatch ? makeIf(match, keep, LispNil.INSTANCE) : makeIf(match, LispNil.INSTANCE, keep);
@@ -10370,38 +10597,6 @@ public final class LispMacroExpander {
 		String upper = name.toUpperCase(java.util.Locale.ROOT);
 		String canonical = PackageRegistry.canonicalBuiltinName(upper);
 		return canonical.equals(upper) ? name : canonical;
-	}
-
-	/**
-	 * If {@code cons} is a {@code read} call carrying the full CL tail
-	 * ({@code (read stream eof-error-p eof-value recursive-p)}), returns the equivalent
-	 * one-argument call: {@code recursive-p} is dropped (there is no recursive-read
-	 * state), {@code eof-error-p} is dropped (this {@code read} returns nil at end of
-	 * input and never signals), and a non-nil {@code eof-value} becomes an {@code or}
-	 * default -- the same lowering {@link #expandReadLineCompat} does. So a nil datum and
-	 * end-of-input stay indistinguishable, exactly as they already are for the
-	 * one-argument call. Returns {@code null} for the 0/1-argument shapes so those keep
-	 * their existing (byte-identical) lowering, and for a non-nil literal
-	 * {@code eof-error-p} (signalling at EOF is not supported).
-	 * @param cons the call expression
-	 * @return the lowered expression, or {@code null} when the shape is not handled here
-	 */
-	@Nullable public static LispVal expandReadCompat(LispCons cons) {
-		if (!(cons.car() instanceof LispSymbol op) || !LispNames.READ.equals(op.name())) {
-			return null;
-		}
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 3 || parts.size() > 5) {
-			return null;
-		}
-		if (!isLiteralNil(parts.get(2))) {
-			return null;
-		}
-		LispVal readOnly = listToCons(List.of(new LispSymbol(LispNames.READ), parts.get(1)));
-		if (parts.size() == 3 || isLiteralNil(parts.get(3))) {
-			return readOnly;
-		}
-		return listToCons(List.of(new LispSymbol(LispNames.OR), readOnly, parts.get(3)));
 	}
 
 	/**
@@ -19191,9 +19386,20 @@ public final class LispMacroExpander {
 			// The defun is position-independent like the subtypep one; its data table
 			// is a top-level defvar and must run before any top-level typep call, so
 			// it goes FIRST (after the dispatcher slots above were filled by index).
-			out.add(runtimeTypepDefun(closRegistry));
+			// The alias table is narrowed to the names the program SPELLS, and the probe
+			// runs before the defuns below join `out` (their own bodies would otherwise
+			// spell the very names they are gated on).
+			java.util.Map<String, LispVal> aliases = narrowedDeftypeAliases(closRegistry, out);
+			out.add(runtimeTypepDefun(closRegistry, !aliases.isEmpty()));
 			out.add(runtimeTypepCompoundDefun());
 			out.addAll(0, typepTagTableForms(closRegistry));
+			if (!aliases.isEmpty()) {
+				// The user-deftype alias resolver the dispatch above normalizes its
+				// designator through, gated on the program registering one: without an
+				// alias the module must compile to the bytes it did before.
+				out.add(deftypeAliasDefun());
+				out.addAll(0, deftypeAliasTableForms(aliases));
+			}
 		}
 		if (runtimeElementTypeAlias && !elementTypeAliasExpansions(closRegistry).isEmpty()) {
 			// The element-type alias resolver, injected once the walk above has
@@ -19510,7 +19716,7 @@ public final class LispMacroExpander {
 						LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
 						LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
 						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DEFAULT_ELEMENT,
-						LispNames.COERCE,
+						LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.COERCE,
 						// fill/read-sequence/write-sequence join the list for the same
 						// reason as make-string: each has an array-typed arm the JVM
 						// backend's array runtime gate must see coming, or the injected
@@ -20603,13 +20809,13 @@ public final class LispMacroExpander {
 				// one call (.kb/format.md).
 				case 'w' -> {
 					flushFmtLiteral(lit, ops);
-					ops.add(new FmtString(fmtCall(LispNames.PRIN1_TO_STRING, args.next(directive))));
+					ops.add(new FmtString(fmtCall(LispNames.PRIN1_PIECE_INTERNAL, args.next(directive))));
 				}
 				case 'a', 's' -> {
 					flushFmtLiteral(lit, ops);
 					LispVal arg = args.next(directive);
-					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1_TO_STRING
-							: LispNames.PRINC_TO_STRING;
+					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1_PIECE_INTERNAL
+							: LispNames.PRINC_PIECE_INTERNAL;
 					LispVal base = fmtCall(op, arg);
 					if (colon) {
 						base = makeIf(arg, base, new LispString("()"));
@@ -20624,7 +20830,7 @@ public final class LispMacroExpander {
 					LispVal arg = args.next(directive);
 					LispVal base = (colon || at)
 							? decimalExpr(arg, colon, fmtCommaChar(params, 2), fmtInterval(params, 3), at)
-							: fmtCall(LispNames.PRINC_TO_STRING, arg);
+							: fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 1, ' '), true);
 					}
@@ -20664,16 +20870,17 @@ public final class LispMacroExpander {
 					LispVal arg = args.next(directive);
 					LispVal base;
 					if (at) {
-						base = fmtCall(LispNames.PRIN1_TO_STRING, arg);
+						base = fmtCall(LispNames.PRIN1_PIECE_INTERNAL, arg);
 					}
 					else if (colon) {
 						// prin1 of a character is "#\name"; dropping the #\ prefix
 						// yields the glyph for graphic characters and the standard
 						// name (Newline, Space, ...) for non-graphic ones.
-						base = fmtCall(LispNames.SUBSEQ, fmtCall(LispNames.PRIN1_TO_STRING, arg), new LispInteger(2));
+						base = fmtCall(LispNames.SUBSEQ, fmtCall(LispNames.PRIN1_PIECE_INTERNAL, arg),
+								new LispInteger(2));
 					}
 					else {
-						base = fmtCall(LispNames.PRINC_TO_STRING, arg);
+						base = fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
 					}
 					ops.add(new FmtString(base));
 				}
@@ -20684,7 +20891,7 @@ public final class LispMacroExpander {
 					LispVal value = (scale == 0) ? arg
 							: fmtCall(LispNames.MUL, arg, new LispDouble(Math.pow(10, scale)));
 					LispVal base = fmtHasParam(params, 1) ? decimalFloatExpr(value, fmtParam(params, 1), null, at)
-							: fmtCall(LispNames.PRINC_TO_STRING, value);
+							: fmtCall(LispNames.PRINC_PIECE_INTERNAL, value);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 4, ' '), true);
 					}
@@ -21103,7 +21310,7 @@ public final class LispMacroExpander {
 		LispSymbol nstr = new LispSymbol("__fmtn");
 		LispSymbol neg = new LispSymbol("__fmtneg");
 		LispSymbol dig = new LispSymbol("__fmtd");
-		LispVal nstrInit = fmtCall(LispNames.PRINC_TO_STRING, arg);
+		LispVal nstrInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
 		LispVal negInit = fmtCall(LispNames.LT, arg, new LispInteger(0));
 		LispVal digInit = makeIf(neg, fmtCall(LispNames.SUBSEQ, nstr, new LispInteger(1)), nstr);
 		LispVal grouped = comma ? groupExpr(dig, commaChar, interval) : dig;
@@ -21115,7 +21322,7 @@ public final class LispMacroExpander {
 		// The same CLHS 22.3.2 rule as radixIntegerExpr, and the same runtime renderer
 		// to agree with (%fmt-dec). Plain ~D is already princ-to-string; this is the
 		// ~:D / ~@D arm, which would otherwise compare a non-number against zero.
-		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.PRINC_TO_STRING, arg));
+		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg));
 	}
 
 	/** Builds the comma-grouping loop over a string of digits. */
@@ -21224,13 +21431,13 @@ public final class LispMacroExpander {
 		LispVal ovfInit = fmtCall(LispNames.GE, sc, new LispInteger(pd1));
 		LispVal sc2Init = makeIf(ovf, new LispInteger(pd), sc);
 		LispVal eefInit = makeIf(ovf, fmtCall(LispNames.ADD, ee, new LispInteger(1)), ee);
-		LispVal sInit = fmtCall(LispNames.PRINC_TO_STRING, sc2);
+		LispVal sInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, sc2);
 		LispVal ipInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(0), new LispInteger(1));
 		LispVal frInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(1));
 		// Exponent suffix: always-signed, magnitude printed as an integer.
 		LispVal eneg = fmtCall(LispNames.LT, eef, new LispInteger(0));
 		LispVal esign = makeIf(eneg, new LispString("-"), new LispString("+"));
-		LispVal eabs = fmtCall(LispNames.PRINC_TO_STRING,
+		LispVal eabs = fmtCall(LispNames.PRINC_PIECE_INTERNAL,
 				makeIf(eneg, fmtCall(LispNames.SUB, new LispInteger(0), eef), eef));
 		if (expDigits > 0) {
 			eabs = padExpr(eabs, new LispInteger(expDigits), new LispString("0"), true);
@@ -21306,7 +21513,7 @@ public final class LispMacroExpander {
 		if (idx < params.size() && !(params.get(idx) instanceof LispNil)) {
 			// A runtime (v) parameter, or a substituted literal that is not a character
 			// (a string, say): the pad is its printed text.
-			return fmtCall(LispNames.PRINC_TO_STRING, params.get(idx));
+			return fmtCall(LispNames.PRINC_PIECE_INTERNAL, params.get(idx));
 		}
 		return new LispString(String.valueOf(def));
 	}
@@ -21432,10 +21639,10 @@ public final class LispMacroExpander {
 		if (expr instanceof LispCons call && call.isProperList() && call.car() instanceof LispSymbol head) {
 			List<LispVal> parts = call.toList();
 			if (parts.size() == 2) {
-				if (LispNames.PRINC_TO_STRING.equals(head.name())) {
+				if (LispNames.PRINC_PIECE_INTERNAL.equals(head.name())) {
 					return fmtCall(LispNames.PRINC, parts.get(1));
 				}
-				if (LispNames.PRIN1_TO_STRING.equals(head.name())) {
+				if (LispNames.PRIN1_PIECE_INTERNAL.equals(head.name())) {
 					return fmtCall(LispNames.PRIN1, parts.get(1));
 				}
 			}
@@ -21581,7 +21788,7 @@ public final class LispMacroExpander {
 		LispVal negInit = fmtCall(LispNames.LT, arg, new LispInteger(0));
 		LispVal mInit = makeIf(neg, fmtCall(LispNames.SUB, new LispInteger(0), arg), arg);
 		// Digit character: 0-9 then uppercase A-Z (48 = '0', 55 = 'A' - 10).
-		LispVal digitChar = fmtCall(LispNames.PRINC_TO_STRING,
+		LispVal digitChar = fmtCall(LispNames.PRINC_PIECE_INTERNAL,
 				fmtCall(LispNames.CODE_CHAR,
 						makeIf(fmtCall(LispNames.LT, d, new LispInteger(10)),
 								fmtCall(LispNames.ADD, new LispInteger(48), d),
@@ -21605,7 +21812,7 @@ public final class LispMacroExpander {
 		// without the same guard here the two paths disagree, and the static one dies
 		// inside the digit loop -- cl-unicode spells a Hangul syllable name with
 		// (format nil "HANGUL SYLLABLE ~X" "GA").
-		return makeIf(fmtCall(LispNames.INTEGERP, arg), digits, fmtCall(LispNames.PRINC_TO_STRING, arg));
+		return makeIf(fmtCall(LispNames.INTEGERP, arg), digits, fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg));
 	}
 
 	/**
@@ -21623,7 +21830,7 @@ public final class LispMacroExpander {
 				fmtCall(LispNames.SUB, new LispDouble(0.0), v), v);
 		LispVal fixedRange = fmtCall(LispNames.OR, fmtCall(LispNames.EQ, a, new LispDouble(0.0)), fmtCall(LispNames.AND,
 				fmtCall(LispNames.GE, a, new LispDouble(0.1)), fmtCall(LispNames.LT, a, new LispDouble(1.0e16))));
-		LispVal fixed = fmtCall(LispNames.PRINC_TO_STRING, v);
+		LispVal fixed = fmtCall(LispNames.PRINC_PIECE_INTERNAL, v);
 		if (plus) {
 			fixed = fmtCall(LispNames.STRING_CONCAT,
 					makeIf(fmtCall(LispNames.LT, v, new LispDouble(0.0)), new LispString(""), new LispString("+")),
@@ -22414,15 +22621,15 @@ public final class LispMacroExpander {
 		LispVal slotMsg = objRef(condVar, 0);
 		LispVal isSimpleWithMessage = listToCons(List.of(new LispSymbol(LispNames.AND),
 				objIs(condVar, SIMPLE_CONDITION_TAGS), callOf(LispNames.STRINGP, slotMsg)));
-		LispVal typeMessage = listToCons(List.of(
-				new LispSymbol(LispNames.STRING_CONCAT), listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
-						new LispString("Condition of type "), listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
-								callOf(LispNames.PRIN1_TO_STRING, tag), new LispInteger(7))))),
+		LispVal typeMessage = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
+				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Condition of type "),
+						listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
+								callOf(LispNames.PRIN1_PIECE_INTERNAL, tag), new LispInteger(7))))),
 				new LispString(" was signalled.")));
 		// A value that is not an instance at all has no tag to name, so it signals as its
 		// own printed representation rather than off the end of a nil tag.
 		LispVal fallback = makeIf(listToCons(List.of(new LispSymbol(LispNames.OBJ_P), condVar)), typeMessage,
-				callOf(LispNames.PRINC_TO_STRING, condVar));
+				callOf(LispNames.PRINC_PIECE_INTERNAL, condVar));
 		LispVal message = makeIf(isSimpleWithMessage, slotMsg, fallback);
 		if (closRegistry.routesConditionReports()) {
 			message = conditionReportOr(condVar, message);
@@ -22448,7 +22655,7 @@ public final class LispMacroExpander {
 		// A runtime SYMBOL datum (the compiled #'error/#'signal/#'warn wrappers forward
 		// the datum only) signals its name as a plain message rather than casting the
 		// symbol as a condition instance.
-		LispVal symbolMessage = callOf(LispNames.PRINC_TO_STRING, condVar);
+		LispVal symbolMessage = callOf(LispNames.PRINC_PIECE_INTERNAL, condVar);
 		LispVal symbolCase;
 		if (warn) {
 			symbolCase = listToCons(List.of(new LispSymbol(internalName), listToCons(
@@ -22478,7 +22685,7 @@ public final class LispMacroExpander {
 				symbolCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 						callOf(LispNames.RUN_HANDLERS_INTERNAL,
 								objNew(simpleTag,
-										List.of(callOf(LispNames.PRINC_TO_STRING, condVar), LispNil.INSTANCE))),
+										List.of(callOf(LispNames.PRINC_PIECE_INTERNAL, condVar), LispNil.INSTANCE))),
 						symbolCase));
 			}
 			else {
@@ -22490,7 +22697,7 @@ public final class LispMacroExpander {
 								callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
 								listToCons(List.of(new LispSymbol(throwInternal), instVar, stringMessage)))));
 				LispSymbol symMsgVar = new LispSymbol(SIGNAL_SYMBOL_MSG_VAR);
-				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_TO_STRING, condVar),
+				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_PIECE_INTERNAL, condVar),
 						makeLet(SIGNAL_INST_VAR, objNew(simpleTag, List.of(symMsgVar, LispNil.INSTANCE)),
 								listToCons(List.of(new LispSymbol(LispNames.PROGN),
 										callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
@@ -22925,7 +23132,9 @@ public final class LispMacroExpander {
 	 * not flat), then an {@code :adjustable} array is adjusted in place via
 	 * {@code %array-become} (returning the array itself) while a non-adjustable one
 	 * returns the fresh copy. Without an explicit {@code :fill-pointer} the old fill
-	 * pointer is carried over ({@code make-array} range-checks it against the new size).
+	 * pointer is carried over ({@code make-array} range-checks it against the new size),
+	 * and the fresh copy adopts the adjusted array's remembered element type
+	 * ({@code %array-adopt-element-type}), which {@code adjust-array} never changes.
 	 * {@code :displaced-to} is rejected at expansion time; displaced input arrays are
 	 * rejected at runtime. Matches the interpreter's {@code adjust-array} built-in.
 	 * @param cons the adjust-array expression
@@ -22957,11 +23166,17 @@ public final class LispMacroExpander {
 		LispSymbol fp = new LispSymbol("__adj_fp");
 		LispSymbol newArr = new LispSymbol("__adj_new");
 		LispSymbol total = new LispSymbol("__adj_total");
+		// (%array-adopt-element-type
 		// (make-array ndl :initial-element E :fill-pointer fp
-		// :adjustable (adjustable-array-p a)). Without an explicit :initial-element the
-		// slots the adjustment OPENS take the ADJUSTED array's own element type zero,
-		// which the fresh general array cannot know -- hence %array-default-element,
-		// asked of the array being adjusted rather than of the copy.
+		// :adjustable (adjustable-array-p a))
+		// a). Without an explicit :initial-element the slots the adjustment OPENS take
+		// the ADJUSTED array's own element type zero, which the fresh general array
+		// cannot know -- hence %array-default-element, asked of the array being adjusted
+		// rather than of the copy. The element type the RESULT declares is the same
+		// question one step later: CLHS does not change it, so the copy a NON-adjustable
+		// adjustment answers has to remember what the original did, which is what the
+		// %array-adopt-element-type stamp carries over. (An :adjustable array keeps its
+		// own identity through %array-become and never reads the copy's stamp.)
 		List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
 		makeParts.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
 		makeParts.add(initExpr != null ? initExpr : callOf(LispNames.ARRAY_DEFAULT_ELEMENT, a));
@@ -22976,7 +23191,7 @@ public final class LispMacroExpander {
 				listToCons(List.of(ndl,
 						makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
 				listToCons(List.of(od, callOf(LispNames.ARRAY_DIMENSIONS, a))), listToCons(List.of(fp, fpInit)),
-				listToCons(List.of(newArr, listToCons(makeParts))),
+				listToCons(List.of(newArr, mvCall(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, listToCons(makeParts), a))),
 				listToCons(List.of(total, callOf(LispNames.ARRAY_TOTAL_SIZE, newArr))));
 		LispVal displacedCheck = makeIf(callOf(LispNames.ARRAY_DISP_TARGET, a),
 				mvCall(LispNames.ERROR, new LispString("adjust-array: displaced arrays are not supported")),
@@ -23121,6 +23336,28 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent) {
+		return expandCoerce(cons, arraysExist, helpersPresent, false, null);
+	}
+
+	/**
+	 * Like {@link #expandCoerce(LispCons, boolean, boolean)}, but resolves a COMPUTED
+	 * result type that names a user {@code deftype} before the family dispatch reads its
+	 * head, so {@code (coerce '(#\a) ty)} with {@code ty} bound to an alias of
+	 * {@code string} builds a string rather than falling through to the "already of that
+	 * type" arm. A literal result type needs none of this -- {@code quotedSymbolName} /
+	 * {@code quotedCompoundTypeHead} read the spelling the source wrote.
+	 * @param cons the coerce expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @param helpersPresent whether the program defines the conversion trio
+	 * @param aliasResolverPresent whether the program defines
+	 * {@link LispNames#DEFTYPE_ALIAS_RUNTIME} (the compile paths' shared resolver)
+	 * @param closRegistry the live {@code deftype} registry, for the interpreter, which
+	 * has no injected defun to call and spells the resolution inline; null on the compile
+	 * paths
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent,
+			boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new UnsupportedOperationException("coerce expects a value and a result type");
@@ -23167,7 +23404,8 @@ public final class LispMacroExpander {
 			return mvCall(LispNames.FLOAT, parts.get(1));
 		}
 		if (type == null && !(parts.get(2) instanceof LispString)) {
-			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist, helpersPresent);
+			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist, helpersPresent, aliasResolverPresent,
+					closRegistry);
 		}
 		if (helpersPresent) {
 			// The trio member is a one-argument function, so the call IS the one-shot
@@ -23260,10 +23498,12 @@ public final class LispMacroExpander {
 	 * @param typeForm the result-type expression
 	 * @param arraysExist whether a general array can exist in this program
 	 * @param helpersPresent whether the program defines the conversion trio
+	 * @param aliasResolverPresent whether the shared alias resolver defun is present
+	 * @param closRegistry the live registry for the interpreter's inline resolution
 	 * @return the expanded expression
 	 */
 	private static LispVal expandComputedCoerce(LispVal valueForm, LispVal typeForm, boolean arraysExist,
-			boolean helpersPresent) {
+			boolean helpersPresent, boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry) {
 		LispSymbol x = new LispSymbol("__coerce_x");
 		LispSymbol spec = new LispSymbol("__coerce_spec");
 		LispSymbol t = new LispSymbol("__coerce_t");
@@ -23297,8 +23537,30 @@ public final class LispMacroExpander {
 		LispVal body = makeIf(memberOfTypeNames(t, FLOAT_TYPE_NAMES.toArray(new String[0])), mvCall(LispNames.FLOAT, x),
 				listArm);
 		LispVal head = makeIf(callOf(LispNames.CONSP, spec), callOf(LispNames.CAR, spec), spec);
-		LispVal bindings = listToCons(List.of(listToCons(List.of(x, valueForm)), listToCons(List.of(spec, typeForm)),
-				listToCons(List.of(t, head))));
+		// A designator naming a user deftype is resolved into spec BEFORE the head is
+		// read, so an alias of a SEQUENCE type reaches its family arm rather than the
+		// "already of that type" fall-through. Both shapes bind one extra variable only
+		// when the program has an alias to resolve, so every other program expands to
+		// exactly what it did before.
+		List<LispVal> bindingList = new java.util.ArrayList<>();
+		bindingList.add(listToCons(List.of(x, valueForm)));
+		if (aliasResolverPresent) {
+			bindingList.add(listToCons(List.of(spec, mvCall(LispNames.DEFTYPE_ALIAS_RUNTIME, typeForm))));
+		}
+		else if (closRegistry != null
+				&& deftypeAliasResolution(new LispSymbol("__coerce_spec0"), closRegistry) != null) {
+			// The interpreter: no injected defun to call, so the resolution is spelled
+			// inline over a first binding of the raw designator.
+			LispSymbol raw = new LispSymbol("__coerce_spec0");
+			bindingList.add(listToCons(List.of(raw, typeForm)));
+			bindingList.add(listToCons(
+					List.of(spec, java.util.Objects.requireNonNull(deftypeAliasResolution(raw, closRegistry)))));
+		}
+		else {
+			bindingList.add(listToCons(List.of(spec, typeForm)));
+		}
+		bindingList.add(listToCons(List.of(t, head)));
+		LispVal bindings = listToCons(bindingList);
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
 	}
 
@@ -23680,8 +23942,7 @@ public final class LispMacroExpander {
 				listToCons(List.of(acc, LispNil.INSTANCE))));
 		LispVal endTest = listToCons(
 				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.ATOM, keys), callOf(LispNames.ATOM, data)));
-		LispVal endResult = listToCons(
-				List.of(new LispSymbol(LispNames.APPEND), callOf(LispNames.NREVERSE, acc), tail));
+		LispVal endResult = listToCons(List.of(new LispSymbol(LispNames.APPEND), nreverseListForm(acc), tail));
 		LispVal endClause = listToCons(List.of(endTest, endResult));
 		LispVal pair = listToCons(
 				List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, keys), callOf(LispNames.CAR, data)));
@@ -23711,7 +23972,7 @@ public final class LispMacroExpander {
 		// __copyalist_acc)))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur))),
 				listToCons(List.of(acc, LispNil.INSTANCE))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), nreverseListForm(acc)));
 		LispVal copiedPair = listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, element),
 				callOf(LispNames.CDR, element)));
 		LispVal copied = makeIf(listToCons(List.of(new LispSymbol(LispNames.CONSP), element)), copiedPair, element);
@@ -23739,7 +24000,7 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandNreconc(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispVal rev = callOf(LispNames.NREVERSE, parts.get(1));
+		LispVal rev = nreverseListForm(parts.get(1));
 		return listToCons(List.of(new LispSymbol(LispNames.NCONC), rev, parts.get(2)));
 	}
 
@@ -23845,7 +24106,7 @@ public final class LispMacroExpander {
 		}
 		LispVal call = listToCons(callArgs);
 		LispVal result = switch (accumulation) {
-			case COLLECT -> callOf(LispNames.NREVERSE, acc);
+			case COLLECT -> nreverseListForm(acc);
 			case CONCATENATE -> acc;
 			case DISCARD -> lists.get(0);
 		};
@@ -24004,7 +24265,7 @@ public final class LispMacroExpander {
 		LispSymbol g = new LispSymbol("__sd_x");
 		LispVal designatorp = fmtCall(LispNames.OR, callOf(LispNames.STRINGP, g), callOf(LispNames.SYMBOLP, g),
 				callOf(LispNames.CHARACTERP, g));
-		LispVal coerced = callOf(LispNames.PRINC_TO_STRING, g);
+		LispVal coerced = callOf(LispNames.PRINC_PIECE_INTERNAL, g);
 		LispVal signal = mvCall(LispNames.ERROR,
 				new LispString(LispNames.STRING + " expects a string designator, got: ~s"), g);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(g, arg)))),
@@ -24274,13 +24535,13 @@ public final class LispMacroExpander {
 			// %seq-to-string conversion carries the join once for the whole program.
 			accInit = LispNil.INSTANCE;
 			accStep = listToCons(List.of(new LispSymbol(LispNames.CONS),
-					listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), call)), accVar));
+					listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL), call)), accVar));
 			resultForm = joinStringPiecesReversed(accVar);
 		}
 		else if ("LIST".equals(resultType)) {
 			accInit = LispNil.INSTANCE;
 			accStep = listToCons(List.of(new LispSymbol(LispNames.CONS), call, accVar));
-			resultForm = callOf(LispNames.NREVERSE, accVar);
+			resultForm = nreverseListForm(accVar);
 		}
 		else {
 			// nil: call the function for effect, return nil.
@@ -24347,12 +24608,12 @@ public final class LispMacroExpander {
 				makeIf(listToCons(List.of(new LispSymbol(LispNames.CONSP), cdrC)), takeTwo, takeOne)));
 		LispVal onePass = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(List.of(listToCons(List.of(q, LispNil.INSTANCE)), listToCons(List.of(c, ps)))), inner,
-				listToCons(List.of(new LispSymbol(LispNames.SETQ), ps, callOf(LispNames.NREVERSE, q)))));
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), ps, nreverseListForm(q)))));
 		LispVal result = makeIf(callOf(LispNames.CONSP, ps), callOf(LispNames.CAR, ps), new LispString(""));
 		LispVal outer = listToCons(List.of(new LispSymbol(LispNames.DO), LispNil.INSTANCE,
 				listToCons(List.of(callOf(LispNames.NULL, callOf(LispNames.CDR, ps)), result)), onePass));
 		return listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(ps, callOf(LispNames.NREVERSE, acc))))), outer));
+				listToCons(List.of(listToCons(List.of(ps, nreverseListForm(acc))))), outer));
 	}
 
 	/** Returns the symbol name inside a {@code (quote name)} form, or null otherwise. */
@@ -25533,7 +25794,10 @@ public final class LispMacroExpander {
 	 *
 	 * The fallback inside {@code %print-object-str} uses the RAW conversions, so nothing
 	 * here re-enters itself. {@code format}'s {@code ~A}/{@code ~S} need no case of their
-	 * own: they lower to {@code princ-to-string}/{@code prin1-to-string}, which do.
+	 * own: they lower to the internal piece conversions {@code %princ-piece} /
+	 * {@code %prin1-piece} ({@link LispNames#PRINC_PIECE_INTERNAL}), which rewrite
+	 * exactly as the two public names do -- the pieces differ from the public names only
+	 * in the mutable-result wrap the backends add AFTER this hook, not in the routing.
 	 *
 	 * <p>
 	 * The SECOND reason to rewrite is a condition's {@code :report}
@@ -25555,9 +25819,11 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		String op = ((LispSymbol) parts.get(0)).name();
-		boolean escape = !LispNames.PRINC.equals(op) && !LispNames.PRINC_TO_STRING.equals(op);
+		boolean escape = !LispNames.PRINC.equals(op) && !LispNames.PRINC_TO_STRING.equals(op)
+				&& !LispNames.PRINC_PIECE_INTERNAL.equals(op);
 		if (LispNames.PRINC_TO_STRING.equals(op) || LispNames.PRIN1_TO_STRING.equals(op)
-				|| LispNames.WRITE_TO_STRING.equals(op)) {
+				|| LispNames.WRITE_TO_STRING.equals(op) || LispNames.PRINC_PIECE_INTERNAL.equals(op)
+				|| LispNames.PRIN1_PIECE_INTERNAL.equals(op)) {
 			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, closRegistry, printCase) : null;
 		}
 		if (parts.size() < 2 || parts.size() > 3) {
@@ -25666,7 +25932,8 @@ public final class LispMacroExpander {
 		}
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, text)));
 		LispVal spelled = makeIf(new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
-				fmtCall(LispNames.PRIN1_TO_STRING, designator), fmtCall(LispNames.PRINC_TO_STRING, designator));
+				fmtCall(LispNames.PRIN1_PIECE_INTERNAL, designator),
+				fmtCall(LispNames.PRINC_PIECE_INTERNAL, designator));
 		LispVal unpiped = makeIf(
 				listToCons(List.of(new LispSymbol(LispNames.AND),
 						fmtCall(LispNames.GT, fmtCall(LispNames.LENGTH, raw), new LispInteger(1)),
@@ -27164,10 +27431,10 @@ public final class LispMacroExpander {
 		// "#:<prefix><n>" text the interpreter's native computed-prefix gensym prints.
 		// intern turns the assembled name back into a symbol (a name starting with "#:"
 		// IS the uninterned spelling here).
-		LispVal freshSuffix = listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING),
+		LispVal freshSuffix = listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL),
 				listToCons(List.of(new LispSymbol(LispNames.GENSYM), new LispString("")))));
 		LispVal head = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("#:"),
-				listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), prefixForm))));
+				listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL), prefixForm))));
 		return listToCons(List.of(new LispSymbol(LispNames.INTERN),
 				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), head, freshSuffix))));
 	}
@@ -28340,7 +28607,7 @@ public final class LispMacroExpander {
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(
 						List.of(listToCons(List.of(out, LispNil.INSTANCE)), listToCons(List.of(clusters, globalVar)))),
-				outerLoop, callOf(LispNames.NREVERSE, out)));
+				outerLoop, nreverseListForm(out)));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.COMPUTE_RESTARTS),
 				listToCons(List.of(new LispSymbol(LispNames.LAMBDA_OPTIONAL), cond)), body));
 	}
@@ -31366,9 +31633,25 @@ public final class LispMacroExpander {
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
 		LispVal body = listToCons(condParts);
+		List<LispVal> prologue = new java.util.ArrayList<>();
 		LispVal normalize = metaobjectNameNormalization(tn, closRegistry, true);
 		if (normalize != null) {
-			body = listToCons(List.of(new LispSymbol(LispNames.PROGN), normalize, body));
+			prologue.add(normalize);
+		}
+		// A designator naming a user deftype is rewritten to its expansion before the
+		// dispatch, so a name held in a VARIABLE decides what its literal spelling
+		// decides. It runs AFTER the metaobject normalization, which turns a class
+		// object into the name this reads.
+		LispVal alias = deftypeAliasResolution(tn, closRegistry);
+		if (alias != null) {
+			prologue.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), tn, alias)));
+		}
+		if (!prologue.isEmpty()) {
+			List<LispVal> prognParts = new java.util.ArrayList<>();
+			prognParts.add(new LispSymbol(LispNames.PROGN));
+			prognParts.addAll(prologue);
+			prognParts.add(body);
+			body = listToCons(prognParts);
 		}
 		return makeLet(v.name(), value, makeLet(tn.name(), typeExpr, body));
 	}
@@ -31780,6 +32063,214 @@ public final class LispMacroExpander {
 		condParts.add(listToCons(List.of(LispTrue.INSTANCE, x)));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.MAKE_ARRAY_ET_ALIAS_INTERNAL), listToCons(List.of(x)), listToCons(condParts)));
+	}
+
+	/**
+	 * EVERY registered zero-parameter {@code deftype} alias, mapped to the type specifier
+	 * it names with alias chains already followed so one hop resolves it. This is the
+	 * table a runtime {@code typep} designator is normalized through: a literal spelling
+	 * is resolved at expansion time by {@link #makeTypeTest}, and one held in a VARIABLE
+	 * reaches no recognizer.
+	 *
+	 * <p>
+	 * {@link #elementTypeAliasExpansions}'s narrowing has no counterpart here: a
+	 * {@code make-array} arm can only tell the six specialized element-type codes apart,
+	 * so an alias naming anything else changes no answer there, while {@code typep}
+	 * decides every type differently from {@code nil}. The narrowing that DOES apply is a
+	 * different question -- which of these names the program can ever hold as a run-time
+	 * value -- and it is {@link #narrowedDeftypeAliases}, which every compile-path caller
+	 * goes through; this raw table is the interpreter's, which has no program to probe.
+	 *
+	 * <p>
+	 * A name the dispatch already decides -- a built-in spelling, a registered class or a
+	 * struct -- is left out: the LITERAL path resolves a {@code deftype} only AFTER those
+	 * three, so normalizing it first would silently reorder the reading.
+	 * @param registry the registry holding the {@code deftype} expansions, or null
+	 * @return alias name to its resolved type specifier, in registration order
+	 */
+	private static java.util.Map<String, LispVal> deftypeAliasExpansions(@Nullable ClosRegistry registry) {
+		return deftypeAliasExpansions(registry, null);
+	}
+
+	private static java.util.Map<String, LispVal> deftypeAliasExpansions(@Nullable ClosRegistry registry,
+			java.util.@Nullable Set<String> spelled) {
+		if (registry == null) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, LispVal> table = new java.util.LinkedHashMap<>();
+		for (String name : registry.deftypeNames()) {
+			if (RUNTIME_TYPEP_BUILTINS.contains(name) || registry.findClass(name) != null
+					|| registry.findStructTag(name) != null) {
+				continue;
+			}
+			if (spelled != null && deftypeAliasSpellings(name).stream().noneMatch(spelled::contains)) {
+				continue;
+			}
+			LispVal spec = registry.findDeftype(name);
+			for (int hop = 0; hop < ELEMENT_TYPE_ALIAS_HOPS && spec instanceof LispSymbol sym; hop++) {
+				LispVal next = registry.findDeftype(sym.name());
+				if (next == null || (next instanceof LispSymbol self
+						&& ClosRegistry.normalize(self.name()).equals(ClosRegistry.normalize(sym.name())))) {
+					break;
+				}
+				spec = next;
+			}
+			if (spec == null || (spec instanceof LispSymbol sym && ClosRegistry.normalize(sym.name()).equals(name))) {
+				continue;
+			}
+			table.put(name, spec);
+		}
+		return table;
+	}
+
+	/**
+	 * Builds the {@code %deftype-alias-table%} data-table forms backing
+	 * {@link #deftypeAliasDefun}: each entry maps the spellings of one registered
+	 * {@code deftype} name to the specifier it expands to. Pure quoted data, emitted
+	 * through {@link #chunkedTableForms}.
+	 */
+	private static List<LispVal> deftypeAliasTableForms(java.util.Map<String, LispVal> aliases) {
+		List<LispVal> entries = new java.util.ArrayList<>();
+		for (java.util.Map.Entry<String, LispVal> alias : aliases.entrySet()) {
+			List<LispVal> nameSyms = new java.util.ArrayList<>();
+			for (String name : deftypeAliasSpellings(alias.getKey())) {
+				nameSyms.add(new LispSymbol(name));
+			}
+			entries.add(listToCons(List.of(listToCons(nameSyms), alias.getValue())));
+		}
+		return chunkedTableForms(LispNames.DEFTYPE_ALIAS_TABLE, entries);
+	}
+
+	/**
+	 * The spellings a runtime designator may carry for one registered {@code deftype}
+	 * name: the canonical (double-colon) one, its single-colon twin and the plain member,
+	 * the set {@link #nameMatchTest} compares a literal designator against.
+	 */
+	private static java.util.LinkedHashSet<String> deftypeAliasSpellings(String name) {
+		java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+		addDesignatorSpellings(names, name);
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn != null) {
+			names.add(qn.member());
+		}
+		return names;
+	}
+
+	/**
+	 * The alias table a program actually needs: {@link #deftypeAliasExpansions} narrowed
+	 * to the names the program SPELLS, then closed under the alias references its own
+	 * entries make.
+	 *
+	 * <p>
+	 * The narrowing is what makes the table affordable, and it is the SECOND measurement
+	 * of this item ({@code .kb/array-literals.md}). The alias set is program-wide and
+	 * alexandria alone registers 43, whose names are long and package-qualified: emitting
+	 * all of them puts 129 symbol spellings into the module, which costs array-operations
+	 * 10.7% of its raw wasm -- the same bill as one dispatch arm per alias, because it is
+	 * the NAMES that cost, not the arms. Narrowed, the same program carries 2 entries and
+	 * pays 1.9%.
+	 *
+	 * <p>
+	 * It is sound for the same reason the funcall-dispatch gate's name probes are: a
+	 * designator symbol a runtime {@code typep} can be handed has to come from somewhere,
+	 * and that somewhere is a spelling in the program. The one shape it does not cover is
+	 * a name built at run time out of characters --
+	 * {@code (typep x (intern (read-line)))} -- which answers {@code nil} on the compile
+	 * paths exactly as it did before this item; the interpreter, which re-expands against
+	 * the live registry and has no program to probe, resolves it.
+	 * @param closRegistry the registry holding the {@code deftype} expansions
+	 * @param program the expanded top-level forms, BEFORE the table's own forms join them
+	 * @return the aliases to emit, in registration order
+	 */
+	private static java.util.Map<String, LispVal> narrowedDeftypeAliases(ClosRegistry closRegistry,
+			List<LispVal> program) {
+		java.util.Set<String> spelled = new java.util.HashSet<>(spelledSymbolNames(program));
+		java.util.Map<String, LispVal> aliases = deftypeAliasExpansions(closRegistry, spelled);
+		// One entry's EXPANSION can name another alias -- alexandria's proper-sequence
+		// is (or proper-list ...) -- and %typep-compound-runtime recurses back into the
+		// dispatch for a sub-specifier, so the table has to be closed under that
+		// reference even when the program never spelled the inner name itself.
+		while (true) {
+			List<LispVal> expansions = new java.util.ArrayList<>(aliases.values());
+			if (!spelled.addAll(spelledSymbolNames(expansions))) {
+				return aliases;
+			}
+			java.util.Map<String, LispVal> grown = deftypeAliasExpansions(closRegistry, spelled);
+			if (grown.size() == aliases.size()) {
+				return grown;
+			}
+			aliases = grown;
+		}
+	}
+
+	/**
+	 * Every symbol name the forms SPELL, anywhere -- operator position, argument, or
+	 * inside quoted data.
+	 * @param forms the forms to walk
+	 * @return every symbol name that appears in them
+	 */
+	private static java.util.Set<String> spelledSymbolNames(List<LispVal> forms) {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		java.util.ArrayDeque<LispVal> pending = new java.util.ArrayDeque<>(forms);
+		while (!pending.isEmpty()) {
+			LispVal form = pending.pop();
+			if (form instanceof LispSymbol sym) {
+				names.add(sym.name());
+			}
+			else if (form instanceof LispCons cons) {
+				pending.push(cons.car());
+				pending.push(cons.cdr());
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * Builds the shared {@code (defun %deftype-alias (x) ...)} the compile paths route a
+	 * runtime {@code typep} designator through before the dispatch: a scan of the
+	 * {@code %deftype-alias-table%} data table answering the expansion of an alias name,
+	 * and the designator itself otherwise. One scan, whatever the alias count -- the
+	 * per-alias data lives in the table, so the defun's size is fixed.
+	 * @return the defun form
+	 */
+	private static LispVal deftypeAliasDefun() {
+		LispSymbol x = new LispSymbol("%dta_x");
+		LispSymbol entry = new LispSymbol("%dta_e");
+		// (dolist (e table x) (if (member x (car e)) (return (car (cdr e))) nil))
+		LispVal scan = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+				listToCons(List.of(entry, new LispSymbol(LispNames.DEFTYPE_ALIAS_TABLE), x)),
+				makeIf(mvCall(LispNames.MEMBER, x, mvCall(LispNames.CAR, entry)), listToCons(
+						List.of(new LispSymbol(LispNames.RETURN), mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry)))),
+						LispNil.INSTANCE)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.DEFTYPE_ALIAS_RUNTIME),
+				listToCons(List.of(x)), scan));
+	}
+
+	/**
+	 * The INTERPRETER's half of the same resolution: a {@code cond} over the designator
+	 * variable answering the expansion of the alias it names, and the variable itself
+	 * otherwise -- the value {@link LispNames#DEFTYPE_ALIAS_RUNTIME} answers on the
+	 * compile paths. The interpreter re-expands the runtime dispatch per call against the
+	 * live registry and has no injected defun to reach, so the table cannot be shared
+	 * with it; the arms cost nothing there because nothing is emitted, which is also why
+	 * this side carries EVERY registered alias where the compile paths carry only the
+	 * ones the program spells ({@link #narrowedDeftypeAliases}).
+	 * @param var the designator variable to resolve
+	 * @param closRegistry the registry holding the {@code deftype} expansions
+	 * @return the resolution expression, or null when the program registers no alias
+	 */
+	private static @Nullable LispVal deftypeAliasResolution(LispSymbol var, ClosRegistry closRegistry) {
+		java.util.Map<String, LispVal> aliases = deftypeAliasExpansions(closRegistry);
+		if (aliases.isEmpty()) {
+			return null;
+		}
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		for (java.util.Map.Entry<String, LispVal> alias : aliases.entrySet()) {
+			condParts.add(listToCons(List.of(nameMatchTest(var, alias.getKey()), quotedValue(alias.getValue()))));
+		}
+		condParts.add(listToCons(List.of(LispTrue.INSTANCE, var)));
+		return listToCons(condParts);
 	}
 
 	/**
@@ -32409,7 +32900,7 @@ public final class LispMacroExpander {
 	 * of registered classes (the inline dispatch overflowed the JVM's 16-bit branch
 	 * offsets at 165 registered classes).
 	 */
-	private static LispVal runtimeTypepDefun(ClosRegistry closRegistry) {
+	private static LispVal runtimeTypepDefun(ClosRegistry closRegistry, boolean resolvesAliases) {
 		LispSymbol v = new LispSymbol("%tp_rv");
 		LispSymbol tn = new LispSymbol("%tp_rt");
 		LispSymbol tag = new LispSymbol("%tp_rtag");
@@ -32465,6 +32956,12 @@ public final class LispMacroExpander {
 		LispVal normalize = metaobjectNameNormalization(tn, closRegistry, false);
 		if (normalize != null) {
 			bodyParts.add(normalize);
+		}
+		// The alias normalization is one CALL here, not one arm per alias: the table is
+		// data (%deftype-alias-table%) and the scan is shared (.kb/array-literals.md).
+		if (resolvesAliases) {
+			bodyParts.add(listToCons(
+					List.of(new LispSymbol(LispNames.SETQ), tn, mvCall(LispNames.DEFTYPE_ALIAS_RUNTIME, tn))));
 		}
 		bodyParts.add(listToCons(condParts));
 		return listToCons(bodyParts);

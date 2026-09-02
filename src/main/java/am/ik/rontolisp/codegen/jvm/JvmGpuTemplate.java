@@ -1679,6 +1679,252 @@ final class JvmGpuTemplate {
 		return v;
 	}
 
+	// --- the fused tier (.todo/499) --------------------------------------------------
+
+	/**
+	 * {@code (linalg::%la-gelu x)}: the exact GELU as one pass over a packed operand, the
+	 * result carrying the operand's header. Declines a boxed operand and a small one that
+	 * is not resident.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuGelu(@Nullable Object a) {
+		if (!packed(a)) {
+			return null;
+		}
+		int rank = rank(a);
+		int off = 1 + rank;
+		int n = length(a) - off;
+		if (n < 1 || !Gpu.available()) {
+			return null;
+		}
+		int[] d = dims(a, rank);
+		if (a instanceof float[] x) {
+			float[] c = newLike(d);
+			return Gpu.gelu(x, off, c, off, n) ? c : null;
+		}
+		double[] c = newLikeD(d);
+		return Gpu.gelu(doubles(a), off, c, off, n) ? c : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-gelu-grad g x old)}: the tape's backward through the GELU
+	 * composition as one pass, onto {@code old} (nil = null for none).
+	 * @param g the output's gradient
+	 * @param x the input
+	 * @param old the gradient accumulated so far, or {@code null}
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuGeluGrad(@Nullable Object g, @Nullable Object x, @Nullable Object old) {
+		if (!sameShape(g, x) || (old != null && !sameShape(g, old))) {
+			return null;
+		}
+		int rank = rank(g);
+		int off = 1 + rank;
+		int n = length(g) - off;
+		if (n < 1 || !Gpu.available()) {
+			return null;
+		}
+		int[] d = dims(g, rank);
+		if (g instanceof float[] gf) {
+			float[] c = newLike(d);
+			return Gpu.geluGrad(gf, off, floats(x), off, old == null ? null : floats(old), off, c, off, n) ? c : null;
+		}
+		double[] c = newLikeD(d);
+		return Gpu.geluGrad(doubles(g), off, doubles(x), off, old == null ? null : doubles(old), off, c, off, n) ? c
+				: null;
+	}
+
+	/**
+	 * {@code (linalg:softmax a :axis ax)} over the LAST axis as one pass per row; any
+	 * other axis declines to the defun, whose members the device takes one by one.
+	 * @param a the operand
+	 * @param axis the axis argument, or {@code null} for a missing one
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuSoftmaxAxis(@Nullable Object a, @Nullable Object axis) {
+		int[] d = lastAxisRows(a, axis);
+		if (d == null || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(a);
+		if (a instanceof float[] x) {
+			float[] c = newLike(dims(a, rank(a)));
+			return Gpu.softmax(x, off, c, off, d[0], d[1]) ? c : null;
+		}
+		double[] c = newLikeD(dims(a, rank(a)));
+		return Gpu.softmax(doubles(a), off, c, off, d[0], d[1]) ? c : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-softmax-grad g out ax)} over the last axis as one pass per row.
+	 * @param g the output's gradient
+	 * @param out the softmax output
+	 * @param axis the normalized axis
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuSoftmaxGrad(@Nullable Object g, @Nullable Object out, @Nullable Object axis) {
+		int[] d = lastAxisRows(g, axis);
+		if (d == null || !sameShape(g, out) || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(g);
+		if (g instanceof float[] gf) {
+			float[] c = newLike(dims(g, rank(g)));
+			return Gpu.softmaxGrad(gf, off, floats(out), off, c, off, d[0], d[1]) ? c : null;
+		}
+		double[] c = newLikeD(dims(g, rank(g)));
+		return Gpu.softmaxGrad(doubles(g), off, doubles(out), off, c, off, d[0], d[1]) ? c : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-layer-norm x eps)}: the normalization over the last axis as one
+	 * pass per row.
+	 * @param x the operand
+	 * @param epsv the epsilon
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuLayerNorm(@Nullable Object x, @Nullable Object epsv) {
+		Double eps = scalar(epsv);
+		int[] d = packed(x) ? lastAxisRows(x, (long) rank(x) - 1) : null;
+		if (d == null || eps == null || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(x);
+		if (x instanceof float[] xf) {
+			float[] c = newLike(dims(x, rank(x)));
+			return Gpu.layerNorm(xf, off, c, off, d[0], d[1], eps) ? c : null;
+		}
+		double[] c = newLikeD(dims(x, rank(x)));
+		return Gpu.layerNorm(doubles(x), off, c, off, d[0], d[1], eps) ? c : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-layer-norm-grad g x eps old)}: the tape's backward through the
+	 * normalization as one pass per row, onto {@code old} (nil = null for none).
+	 * @param g the normalized output's gradient
+	 * @param x the input
+	 * @param epsv the epsilon
+	 * @param old the gradient accumulated so far, or {@code null}
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuLayerNormGrad(@Nullable Object g, @Nullable Object x, @Nullable Object epsv,
+			@Nullable Object old) {
+		Double eps = scalar(epsv);
+		int[] d = packed(g) ? lastAxisRows(g, (long) rank(g) - 1) : null;
+		if (d == null || eps == null || !sameShape(g, x) || (old != null && !sameShape(g, old)) || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(g);
+		if (g instanceof float[] gf) {
+			float[] c = newLike(dims(g, rank(g)));
+			return Gpu.layerNormGrad(gf, off, floats(x), off, old == null ? null : floats(old), off, c, off, d[0], d[1],
+					eps) ? c : null;
+		}
+		double[] c = newLikeD(dims(g, rank(g)));
+		return Gpu.layerNormGrad(doubles(g), off, doubles(x), off, old == null ? null : doubles(old), off, c, off, d[0],
+				d[1], eps) ? c : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-dropout-mask shape p st single)}: the inverted-dropout mask
+	 * drawn on the device from the state vector {@code st}, which is advanced in place to
+	 * the generator's end state -- through the write seam, as every in-place write is.
+	 * Declines what {@link #gpuRngFill} declines.
+	 * @param shape the mask's shape, a compiled proper list
+	 * @param pv the drop probability
+	 * @param st the generator state, a packed double vector of three words
+	 * @param single non-{@code null} for a single-float mask
+	 * @return the packed mask, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuDropoutMask(@Nullable Object shape, @Nullable Object pv, @Nullable Object st,
+			@Nullable Object single) {
+		Double p = scalar(pv);
+		int[] od = shapeOf(shape);
+		if (p == null || od == null || !(gpuMaterialize(st) instanceof double[] s) || s.length != 5 || s[0] != 1.0
+				|| s[1] != 3.0) {
+			return null;
+		}
+		long total = count(od);
+		if (total < 1 || total > Integer.MAX_VALUE || !Gpu.worthRng(total)) {
+			return null;
+		}
+		int[] w = new int[3];
+		for (int i = 0; i < 3; i++) {
+			int u = (int) s[2 + i];
+			if (u != s[2 + i] || u < 0 || u >= 1 << 23) {
+				return null;
+			}
+			w[i] = u;
+		}
+		if (!Gpu.available()) {
+			return null;
+		}
+		int n = (int) total, off = 1 + od.length;
+		double span = 1.0 - p;
+		Object mask;
+		if (single != null) {
+			float[] c = newLike(od);
+			mask = Gpu.dropoutMask(c, off, n, p, span, w[0], w[1], w[2]) ? c : null;
+		}
+		else {
+			double[] c = newLikeD(od);
+			mask = Gpu.dropoutMask(c, off, n, p, span, w[0], w[1], w[2]) ? c : null;
+		}
+		if (mask == null) {
+			return null;
+		}
+		int[] end = Gpu.rngAdvance(w[0], w[1], w[2], n);
+		double[] target = (double[]) java.util.Objects.requireNonNull(gpuWritten(st));
+		for (int i = 0; i < 3; i++) {
+			target[2 + i] = end[i];
+		}
+		return mask;
+	}
+
+	/**
+	 * Two packed arrays of one width and one shape (headers included), as the fused
+	 * adjoints require of their operands.
+	 */
+	private static boolean sameShape(@Nullable Object a, @Nullable Object b) {
+		if (!packed(a) || !packed(b)
+				|| java.util.Objects.requireNonNull(a).getClass() != java.util.Objects.requireNonNull(b).getClass()) {
+			return false;
+		}
+		int rank = rank(a);
+		if (rank != rank(b) || length(a) != length(b)) {
+			return false;
+		}
+		for (int i = 0; i < rank; i++) {
+			if (dim(a, i) != dim(b, i)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * {@code {rows, len}} when {@code axis} names the LAST axis of the packed operand
+	 * {@code a} (a negative axis counting from the end), else {@code null}: the shape the
+	 * row kernels take.
+	 */
+	private static int @Nullable [] lastAxisRows(@Nullable Object a, @Nullable Object axis) {
+		if (!packed(a) || !(axis instanceof Long axl)) {
+			return null;
+		}
+		int rank = rank(a);
+		long ax = axl < 0 ? axl + rank : axl;
+		if (rank < 1 || ax != rank - 1) {
+			return null;
+		}
+		int len = dim(a, rank - 1);
+		int n = length(a) - 1 - rank;
+		if (len < 1 || n < len) {
+			return null;
+		}
+		return new int[] { n / len, len };
+	}
+
 	/**
 	 * A member's RESULT array: {@code off} header slots and {@code total} elements -- or,
 	 * while results stay on the device ({@code Gpu.lazyResultsOn}), the header alone.

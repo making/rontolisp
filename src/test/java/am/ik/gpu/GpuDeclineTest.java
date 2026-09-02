@@ -283,6 +283,10 @@ class GpuDeclineTest {
 			assertThat(ptx).contains(".visible .entry " + kernel);
 		}
 		assertThat(resource("gemm.cu")).contains("case " + Gpu.MAP_SQRT + ": {").contains("sqrt((double) x)");
+		// The fused tier's fourteen (.todo/499).
+		for (String kernel : CudaGemm.KERNELS_FUSED) {
+			assertThat(ptx).contains(".visible .entry " + kernel);
+		}
 		assertThat(resource("gemm.cu")).contains("case " + Gpu.BIN_EQ + ": return x == y ? 1.0 : 0.0;");
 		// The regeneration command travels with the artifact: without it the .ptx is an
 		// unreproducible blob.
@@ -428,6 +432,32 @@ class GpuDeclineTest {
 		assertThat(Gpu.bcast(Gpu.BIN_ADD, xf, 0, new int[] { cols, -1 }, yf, 0, sy, outf, 0, dims)).isFalse();
 		assertThat(Gpu.gather(xf, 0, sx, outf, 1, dims)).isFalse();
 		assertThat(Gpu.fold(Gpu.FOLD_SUM, xf, 0, outf, 0, 1, n, 1)).isFalse();
+	}
+
+	@Test
+	void theFusedTierDeclinesRatherThanThrowsOnEveryMachine() {
+		// Fresh (never resident) arrays below every threshold: on a machine with a device
+		// each member declines on size, on one without it declines on the probe; either
+		// way nothing throws and nothing is written.
+		int rows = 8, len = 16, n = rows * len;
+		double[] x = new double[n], c = new double[n];
+		float[] xf = new float[n], cf = new float[n];
+		assertThat(Gpu.gelu(x, 0, c, 0, n)).isFalse();
+		assertThat(Gpu.gelu(xf, 0, cf, 0, n)).isFalse();
+		assertThat(Gpu.geluGrad(x, 0, x, 0, null, 0, c, 0, n)).isFalse();
+		assertThat(Gpu.geluGrad(xf, 0, xf, 0, xf, 0, cf, 0, n)).isFalse();
+		assertThat(Gpu.softmax(x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.softmax(xf, 0, cf, 0, rows, len)).isFalse();
+		assertThat(Gpu.softmaxGrad(x, 0, x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.softmaxGrad(xf, 0, xf, 0, cf, 0, rows, len)).isFalse();
+		assertThat(Gpu.layerNorm(x, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNorm(xf, 0, cf, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormGrad(x, 0, x, 0, null, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormGrad(xf, 0, xf, 0, xf, 0, cf, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.dropoutMask(c, 0, n, 0.1, 0.9, 1, 2, 3)).isFalse();
+		assertThat(Gpu.dropoutMask(cf, 0, n, 0.1, 0.9, 1, 2, 3)).isFalse();
+		assertThat(c).containsOnly(0.0);
+		assertThat(cf).containsOnly(0.0f);
 	}
 
 	@Test

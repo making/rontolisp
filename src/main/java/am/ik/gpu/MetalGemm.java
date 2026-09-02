@@ -1764,6 +1764,86 @@ final class MetalGemm implements GpuDevice {
 	 * @param host the host array that is being written
 	 * @return the array to write into: {@code host}, or a stub's backing
 	 */
+	// --- the fused tier: declined here (.todo/499) -----------------------------------
+	// The four compositions run on this backend member by member, as they did before;
+	// a fused MSL kernel is a measurement this backend has not made (the row kernels'
+	// sequential double folds have no float-only form -- see the software binary64 the
+	// resident tier needed).
+
+	@Override
+	public boolean gelu(double[] a, int oa, double[] c, int oc, int n) {
+		return false;
+	}
+
+	@Override
+	public boolean geluF(float[] a, int oa, float[] c, int oc, int n) {
+		return false;
+	}
+
+	@Override
+	public boolean geluGrad(double[] g, int og, double[] x, int ox, double @Nullable [] old, int oOld, double[] c,
+			int oc, int n) {
+		return false;
+	}
+
+	@Override
+	public boolean geluGradF(float[] g, int og, float[] x, int ox, float @Nullable [] old, int oOld, float[] c, int oc,
+			int n) {
+		return false;
+	}
+
+	@Override
+	public boolean softmax(double[] a, int oa, double[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	@Override
+	public boolean softmaxF(float[] a, int oa, float[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	@Override
+	public boolean softmaxGrad(double[] g, int og, double[] s, int os, double[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	@Override
+	public boolean softmaxGradF(float[] g, int og, float[] s, int os, float[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	@Override
+	public boolean layerNorm(double[] x, int ox, double[] c, int oc, int rows, int len, double eps) {
+		return false;
+	}
+
+	@Override
+	public boolean layerNormF(float[] x, int ox, float[] c, int oc, int rows, int len, double eps) {
+		return false;
+	}
+
+	@Override
+	public boolean layerNormGrad(double[] g, int og, double[] x, int ox, double @Nullable [] old, int oOld, double[] c,
+			int oc, int rows, int len, double eps) {
+		return false;
+	}
+
+	@Override
+	public boolean layerNormGradF(float[] g, int og, float[] x, int ox, float @Nullable [] old, int oOld, float[] c,
+			int oc, int rows, int len, double eps) {
+		return false;
+	}
+
+	@Override
+	public boolean dropoutMask(double[] c, int oc, int n, double p, double span, int s1, int s2, int s3) {
+		return false;
+	}
+
+	@Override
+	public boolean dropoutMaskF(float[] c, int oc, int n, double p, double span, int s1, int s2, int s3) {
+		return false;
+	}
+
 	@Override
 	public Object written(Object host) {
 		Object storage = materialize(host);

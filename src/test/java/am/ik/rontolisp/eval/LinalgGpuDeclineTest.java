@@ -200,6 +200,23 @@ class LinalgGpuDeclineTest {
 		}
 	}
 
+	@Test
+	void theLibmFreeFusedMembersAreByteIdenticalWithTheFlagOnEveryMachine() {
+		// The fused tier (.todo/499): layer-norm's normalization and adjoint, softmax's
+		// adjoint and the dropout mask replay chains with no library function in them,
+		// so with a device they land on the defun's bits and without one the defun
+		// runs -- the same print either way. The shape is over every threshold.
+		String operands = """
+				(defparameter *x* (linalg:reshape (linalg:linspace -3.0 3.0 147456) '(384 384)))
+				(defparameter *g* (linalg:reshape (linalg:linspace 1.0 -2.0 147456) '(384 384)))
+				""";
+		for (String call : new String[] { "(linalg::%la-layer-norm *x* 1.0e-5)",
+				"(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)", "(linalg::%la-softmax-grad *g* *x* -1)",
+				"(linalg:seed 9) (linalg::%la-dropout-mask '(384 384) 0.25 (linalg::%la-rng-state) nil)" }) {
+			assertThat(eval(operands + call, true)).as(call).isEqualTo(eval(operands + call, false));
+		}
+	}
+
 	/** The elements of a printed {@code (a b c)} list of doubles. */
 	private static double[] doubles(String printed) {
 		String[] parts = printed.substring(1, printed.length() - 1).split(" ");

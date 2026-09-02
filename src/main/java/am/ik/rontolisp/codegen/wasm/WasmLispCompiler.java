@@ -1482,7 +1482,32 @@ public final class WasmLispCompiler implements LispCompiler {
 	// appended after the last fixed helper so no index above shifts.
 	static final int FUNC_TO_MUT_STR = FUNC_SUBSEQ_STR + 1;
 
-	static final int FX_FUNC_LAST = FUNC_TO_MUT_STR;
+	// _arr_dims ((ref null eq) dims) -> (ref null eq) and
+	// _arr_total ((ref null eq) buckets) -> (ref null eq): the make-array DIMENSION parse
+	// -- the argument (an integer for the rank-1 shorthand, otherwise a list of sizes of
+	// any rank) as a buckets array of i31 sizes, and the product of that array. Every
+	// allocating shape parses its dimensions identically, so the two list walks used to
+	// be spelled at each of them -- general, general with :fill-pointer/:adjustable,
+	// packed float, packed integer and the :displaced-to view, ~200 bytes a site
+	// (.kb/array-literals.md). The i31 shorthand stays INLINE at the site (a
+	// three-instruction shape and the hot one); only the list arm calls. Both reuse the
+	// ((ref null eq)) -> (ref null eq) signature (TYPE_CALLABLE_BASE + 0), so no new type
+	// entry; appended after the last fixed helper so no index above shifts.
+	static final int FUNC_ARR_DIMS = FUNC_TO_MUT_STR + 1;
+
+	static final int FUNC_ARR_TOTAL = FUNC_ARR_DIMS + 1;
+
+	// _arr_fp ((ref null eq) fp, (ref null eq) buckets) -> (ref null eq): the
+	// :fill-pointer argument resolved against the shape -- nil answers null, an integer
+	// itself (bounds-checked), anything else the vector size; a rank above 1 traps. The
+	// most expensive keyword make-array carries, and the whole ladder used to be spelled
+	// at every site that writes :fill-pointer. Reuses the binary
+	// ((ref null eq), (ref null eq)) -> (ref null eq) signature (TYPE_CALLABLE_BASE + 1),
+	// so no new type entry; appended after the last fixed helper so no index above
+	// shifts.
+	static final int FUNC_ARR_FP = FUNC_ARR_TOTAL + 1;
+
+	static final int FX_FUNC_LAST = FUNC_ARR_FP;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -4571,7 +4596,14 @@ public final class WasmLispCompiler implements LispCompiler {
 						closRegistry, layoutAddresses);
 				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(readCtx);
 				readListBody = WasmReadRuntimeBuilder.buildReadListBody(readCtx);
-				readBody = WasmReadRuntimeBuilder.buildReadBody(readCtx);
+				// FUNC_READ is a RETIRED index: read is prelude rontolisp over read-char
+				// /
+				// unread-char now (todo-624), so nothing calls the native
+				// one-datum-per-line
+				// helper any more. The index keeps its slot with the unused stub because
+				// removing a function would shift every later index and change the
+				// component blobs.
+				readBody = WasmReadRuntimeBuilder.buildReadStub();
 				loadBody = WasmReadRuntimeBuilder.buildLoadBody(readCtx);
 				rdCharlitBody = WasmReadRuntimeBuilder.buildRdCharlitBody(readCtx);
 				rdRadixBody = WasmReadRuntimeBuilder.buildRdRadixBody(readCtx);
@@ -5668,6 +5700,12 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_SUBSEQ_STR)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _to_mut_str (v) -> value
 															// (FUNC_TO_MUT_STR)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _arr_dims (dims) -> buckets
+															// (FUNC_ARR_DIMS)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _arr_total (buckets) -> i31
+															// (FUNC_ARR_TOTAL)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _arr_fp (fp, buckets) ->
+															// i31 | null (FUNC_ARR_FP)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6472,6 +6510,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringRuntimeBuilder.buildSubseqStrBody());
 				// flipped-producer mutable-result wrap body (FUNC_TO_MUT_STR)
 				code.addFunction(WasmStringRuntimeBuilder.buildToMutStrBody());
+				// shared make-array dimension parse bodies (FUNC_ARR_DIMS/FUNC_ARR_TOTAL)
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrDimsBody());
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrTotalBody());
+				// shared :fill-pointer resolution body (FUNC_ARR_FP)
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrFpBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

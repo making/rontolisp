@@ -668,15 +668,7 @@ public final class Environment implements Scope {
 		// *features*: an ordinary special holding the interpreter's feature list. The
 		// compile paths seed the same variable with their own target set
 		// (LispMacroExpander.injectMvSpillGlobal); see .kb/reader-features.md.
-		LispVal featureList = LispNil.INSTANCE;
-		List<String> featureNames = am.ik.rontolisp.reader.Features.INTERPRETER.names();
-		for (int i = featureNames.size() - 1; i >= 0; i--) {
-			// Features are keywords, printed uppercase like every other symbol under the
-			// reader's upcase premise; the compile paths spell them the same way.
-			featureList = new LispCons(new LispSymbol(":" + featureNames.get(i).toUpperCase(java.util.Locale.ROOT)),
-					featureList);
-		}
-		env.define(LispNames.FEATURES_VAR, featureList);
+		env.define(LispNames.FEATURES_VAR, featureKeywordList(am.ik.rontolisp.reader.Features.INTERPRETER.names()));
 		// The standard streams are the t designator (the process standard stream), which
 		// the whole print / read family accepts as a stream argument. The exception is
 		// *error-output*: t already names the process standard OUTPUT, so the error
@@ -699,6 +691,23 @@ public final class Environment implements Scope {
 			return args.get(0);
 		}));
 		return env;
+	}
+
+	/**
+	 * The {@code *features*} list as the reader would have read it: the names as
+	 * keywords, in the feature set's own order. Features are keywords printed uppercase
+	 * like every other symbol under the reader's upcase premise, and the compile paths
+	 * spell them the same way ({@code LispMacroExpander.injectMvSpillGlobal}).
+	 * @param names the feature names, without the leading colon
+	 * @return the keyword list
+	 */
+	static LispVal featureKeywordList(List<String> names) {
+		LispVal featureList = LispNil.INSTANCE;
+		for (int i = names.size() - 1; i >= 0; i--) {
+			featureList = new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(java.util.Locale.ROOT)),
+					featureList);
+		}
+		return featureList;
 	}
 
 	private static void registerHashTables(Environment env) {
@@ -1364,6 +1373,14 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ARRAY_DEFAULT_ELEMENT, args, 1);
 			return arrayDefaultElement(args.get(0));
 		}));
+		env.defineFunction(LispNames.ARRAY_ADOPT_ELEMENT_TYPE,
+				new LispFunction(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, args -> {
+					requireArgCount(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, args, 2);
+					if (args.get(0) instanceof LispArray fresh) {
+						fresh.adoptElementType(arrayElementTypeCode(args.get(1)));
+					}
+					return args.get(0);
+				}));
 		env.defineFunction(LispNames.ARRAY_BECOME, new LispFunction(LispNames.ARRAY_BECOME, args -> {
 			requireArgCount(LispNames.ARRAY_BECOME, args, 2);
 			LispArray old = requireGeneralArray(LispNames.ARRAY_BECOME, args.get(0));
@@ -1402,14 +1419,27 @@ public final class Environment implements Scope {
 	// adjust-array's growth or by vector-push-extend's -- reads back as the same thing
 	// make-array's unsupplied element does (%array-default-element; ArrayElementTypes).
 	private static LispVal arrayDefaultElement(LispVal value) {
-		LispVal zero = switch (value) {
-			case LispString ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.CHARACTER);
-			case LispIntVector ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.UNSIGNED_BYTE_8);
-			case LispFloatArray ignored -> ArrayElementTypes.defaultElement(ArrayElementTypes.DOUBLE_FLOAT);
-			case LispArray array -> ArrayElementTypes.defaultElement(array.elementTypeCode());
-			default -> null;
-		};
+		LispVal zero = ArrayElementTypes.defaultElement(arrayElementTypeCode(value));
 		return zero == null ? LispNil.INSTANCE : zero;
+	}
+
+	// The UPGRADED element type this value remembers, as an ArrayElementTypes code: one
+	// answer per representation, and ArrayElementTypes.T for anything that is not an
+	// array at all. Both %array-default-element (the zero) and
+	// %array-adopt-element-type (the stamp a fresh adjust-array copy takes) ask it.
+	private static int arrayElementTypeCode(LispVal value) {
+		return switch (value) {
+			case LispString ignored -> ArrayElementTypes.CHARACTER;
+			case LispIntVector iv -> switch (iv.width()) {
+				case 16 -> ArrayElementTypes.UNSIGNED_BYTE_16;
+				case 32 -> ArrayElementTypes.UNSIGNED_BYTE_32;
+				default -> ArrayElementTypes.UNSIGNED_BYTE_8;
+			};
+			case LispSingleFloatArray ignored -> ArrayElementTypes.SINGLE_FLOAT;
+			case LispFloatArray ignored -> ArrayElementTypes.DOUBLE_FLOAT;
+			case LispArray array -> array.elementTypeCode();
+			default -> ArrayElementTypes.T;
+		};
 	}
 
 	// The shared adjust-array core: build the resized copy (preserving the elements at
@@ -2884,6 +2914,105 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Like {@link #seqResult}, but for a DESTRUCTIVE caller ({@code sort},
+	 * {@code stable-sort}, {@code nreverse} -- {@code .todo/623}): a string/array/packed
+	 * vector argument is written back into its OWN storage and answered as itself, so it
+	 * keeps its fill pointer, its adjustable flag and its identity, instead of losing
+	 * them to a fresh rebuild. {@code list} must have exactly as many elements as
+	 * {@code original}'s own active length (true for every caller here -- all three
+	 * permute {@code original}'s elements, never adding or removing one), so this never
+	 * grows or shrinks the backing store; a fill-pointered array with spare capacity
+	 * keeps that capacity untouched, matching every implementation that sorts these three
+	 * kinds in place. A list argument is unaffected (falls through to {@link #seqResult},
+	 * whose list branch already answers a fresh list without touching {@code original}).
+	 * @param original the original sequence argument
+	 * @param list the list result of the scan over {@link #seqAsList}
+	 * @return {@code original}, mutated in place, for a string/array/packed vector;
+	 * otherwise the same answer as {@link #seqResult}
+	 */
+	static LispVal seqResultDestructive(LispVal original, LispVal list) {
+		if (original instanceof LispString str) {
+			// A source literal is the shared constant the reader built for the program
+			// text (.kb/string-write-runtime.md): write to a fresh copy instead of
+			// corrupting it, the same latitude replace's target arm takes.
+			LispString into = str.sourceLiteral() ? str.copyForBulkWrite() : str;
+			LispVal cur = list;
+			int i = 0;
+			while (cur instanceof LispCons cell) {
+				if (!(cell.car() instanceof LispChar c)) {
+					throw new LispEvalException(
+							"cannot build a string from a non-character element: " + cell.car().print());
+				}
+				into.setCharAt(i++, c.codePoint());
+				cur = cell.cdr();
+			}
+			return into;
+		}
+		if (original instanceof LispArray arr && arr.dimensions().length == 1) {
+			LispVal cur = list;
+			int i = 0;
+			while (cur instanceof LispCons cell) {
+				arr.writeFlat(i++, cell.car());
+				cur = cell.cdr();
+			}
+			return arr;
+		}
+		if (original instanceof LispIntVector iv) {
+			LispVal cur = list;
+			int i = 0;
+			while (cur instanceof LispCons cell) {
+				iv.setElement(i++, exactIntElement(LispNames.SORT, cell.car()));
+				cur = cell.cdr();
+			}
+			return iv;
+		}
+		return seqResult(original, list);
+	}
+
+	/**
+	 * {@code remove}: a fresh sequence, in {@code original}'s own representation, with
+	 * every element {@code eq}/{@code eql} to {@code item} dropped. Shared with
+	 * {@code delete}'s vector/string arm ({@code .todo/623}): CLHS lets a destructive
+	 * form answer a fresh sequence, so a non-list argument -- which has no cons cells to
+	 * splice in place -- routes through this instead of silently no-op'ing.
+	 */
+	private static LispVal removeValues(LispVal item, LispVal original) {
+		List<LispVal> kept = new ArrayList<>();
+		LispVal cur = seqAsList(original);
+		while (cur instanceof LispCons cell) {
+			if (!isEq(item, cell.car())) {
+				kept.add(cell.car());
+			}
+			cur = cell.cdr();
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = kept.size() - 1; i >= 0; i--) {
+			result = new LispCons(kept.get(i), result);
+		}
+		return seqResult(original, result);
+	}
+
+	/**
+	 * {@code substitute}: a fresh sequence, in {@code original}'s own representation,
+	 * with every element {@code eq}/{@code eql} to {@code oldItem} replaced by
+	 * {@code newItem}. Shared with {@code nsubstitute}'s vector/string arm, the same
+	 * latitude {@link #removeValues} documents.
+	 */
+	private static LispVal substituteValues(LispVal newItem, LispVal oldItem, LispVal original) {
+		List<LispVal> out = new ArrayList<>();
+		LispVal cur = seqAsList(original);
+		while (cur instanceof LispCons cell) {
+			out.add(isEq(oldItem, cell.car()) ? newItem : cell.car());
+			cur = cell.cdr();
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = out.size() - 1; i >= 0; i--) {
+			result = new LispCons(out.get(i), result);
+		}
+		return seqResult(original, result);
+	}
+
+	/**
 	 * Appends every element of a sequence to {@code out}, in order: a list, a string (by
 	 * code point), a general rank-1 array or a rank-1 packed float array -- the same set
 	 * the compile paths reach through {@code (coerce x 'list)}.
@@ -3047,27 +3176,20 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.REMOVE, new LispFunction(LispNames.REMOVE, args -> {
 			requireArgCount(LispNames.REMOVE, args, 2);
-			LispVal item = args.get(0);
-			List<LispVal> kept = new java.util.ArrayList<>();
-			LispVal cur = seqAsList(args.get(1));
-			while (cur instanceof LispCons cell) {
-				if (!isEq(item, cell.car())) {
-					kept.add(cell.car());
-				}
-				cur = cell.cdr();
-			}
-			LispVal result = LispNil.INSTANCE;
-			for (int i = kept.size() - 1; i >= 0; i--) {
-				result = new LispCons(kept.get(i), result);
-			}
-			return seqResult(args.get(1), result);
+			return removeValues(args.get(0), args.get(1));
 		}));
 		// delete is the destructive variant of remove: splice out matching cells in place
-		// (Common Lisp semantics; use the return value since the head may change).
+		// (Common Lisp semantics; use the return value since the head may change). A
+		// vector/string argument has no cons cells to splice -- CLHS lets a destructive
+		// form answer a FRESH sequence instead, so it routes through remove's own
+		// vector/string handling rather than silently no-op'ing (.todo/623).
 		env.defineFunction(LispNames.DELETE, new LispFunction(LispNames.DELETE, args -> {
 			requireArgCount(LispNames.DELETE, args, 2);
 			LispVal item = args.get(0);
 			LispVal head = args.get(1);
+			if (!(head instanceof LispCons) && !(head instanceof LispNil)) {
+				return removeValues(item, head);
+			}
 			// Drop matching cells from the front by advancing the head.
 			while (head instanceof LispCons cell && isEq(item, cell.car())) {
 				head = cell.cdr();
@@ -3093,29 +3215,21 @@ public final class Environment implements Scope {
 		// replaced by new (non-destructive).
 		LispFunction substitute = new LispFunction(LispNames.SUBSTITUTE, args -> {
 			requireArgCount(LispNames.SUBSTITUTE, args, 3);
-			LispVal newItem = args.get(0);
-			LispVal oldItem = args.get(1);
-			List<LispVal> out = new java.util.ArrayList<>();
-			LispVal cur = seqAsList(args.get(2));
-			while (cur instanceof LispCons cell) {
-				out.add(isEq(oldItem, cell.car()) ? newItem : cell.car());
-				cur = cell.cdr();
-			}
-			LispVal result = LispNil.INSTANCE;
-			for (int i = out.size() - 1; i >= 0; i--) {
-				result = new LispCons(out.get(i), result);
-			}
-			return seqResult(args.get(2), result);
+			return substituteValues(args.get(0), args.get(1), args.get(2));
 		});
 		env.defineFunction(LispNames.SUBSTITUTE, substitute);
 		// nsubstitute is the destructive variant: rewrite matching cars in place and
-		// return
-		// the (possibly mutated) original list (Common Lisp semantics).
+		// return the (possibly mutated) original list (Common Lisp semantics). A
+		// vector/string argument routes through substitute's own vector/string handling,
+		// the same latitude delete takes above (.todo/623).
 		env.defineFunction(LispNames.NSUBSTITUTE, new LispFunction(LispNames.NSUBSTITUTE, args -> {
 			requireArgCount(LispNames.NSUBSTITUTE, args, 3);
 			LispVal newItem = args.get(0);
 			LispVal oldItem = args.get(1);
 			LispVal list = args.get(2);
+			if (!(list instanceof LispCons) && !(list instanceof LispNil)) {
+				return substituteValues(newItem, oldItem, list);
+			}
 			LispVal cur = list;
 			while (cur instanceof LispCons cell) {
 				if (isEq(oldItem, cell.car())) {
@@ -3364,16 +3478,22 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.NREVERSE, new LispFunction(LispNames.NREVERSE, args -> {
 			requireArgCount(LispNames.NREVERSE, args, 1);
 			// Destructive: rewire each cdr to its predecessor and return the former last
-			// cell as the new head (Common Lisp semantics; use the return value).
+			// cell as the new head (Common Lisp semantics; use the return value). A
+			// string/vector argument is not a cons chain -- it reverses via a coerced
+			// list (seqAsList, the sort/reduce precedent) and is written back into its
+			// own storage (seqResultDestructive, .todo/623), keeping its fill pointer,
+			// adjustable flag and identity, like sort/stable-sort above.
+			LispVal original = args.get(0);
+			boolean isSeq = !(original instanceof LispCons) && !(original instanceof LispNil);
 			LispVal prev = LispNil.INSTANCE;
-			LispVal cur = args.get(0);
+			LispVal cur = isSeq ? seqAsList(original) : original;
 			while (cur instanceof LispCons cell) {
 				LispVal next = cell.cdr();
 				cell.setCdr(prev);
 				prev = cell;
 				cur = next;
 			}
-			return prev;
+			return isSeq ? seqResultDestructive(original, prev) : prev;
 		}));
 		env.defineFunction(LispNames.MAKE_LIST, new LispFunction(LispNames.MAKE_LIST, args -> {
 			requireMinArgCount(LispNames.MAKE_LIST, args, 1);
@@ -4367,6 +4487,19 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.PRIN1_TO_STRING_RAW, new LispFunction(LispNames.PRIN1_TO_STRING_RAW, args -> {
 			requireArgCount(LispNames.PRIN1_TO_STRING_RAW, args, 1);
+			return new LispString(printString(args.get(0)));
+		}));
+		// The piece aliases the expander builds format directives, map 'string
+		// accumulators and condition messages with: on the compile backends they are the
+		// public conversions minus the mutable-result wrap; here every string is mutable
+		// already, so they ARE the public functions (LispEvaluator's operator seam routes
+		// them through print-object / *print-case* exactly like the public names).
+		env.defineFunction(LispNames.PRINC_PIECE_INTERNAL, new LispFunction(LispNames.PRINC_PIECE_INTERNAL, args -> {
+			requireArgCount(LispNames.PRINC_PIECE_INTERNAL, args, 1);
+			return new LispString(displayString(args.get(0)));
+		}));
+		env.defineFunction(LispNames.PRIN1_PIECE_INTERNAL, new LispFunction(LispNames.PRIN1_PIECE_INTERNAL, args -> {
+			requireArgCount(LispNames.PRIN1_PIECE_INTERNAL, args, 1);
 			return new LispString(printString(args.get(0)));
 		}));
 		// concatenate: the string, list and vector result families (ConcatenateForms is
@@ -5503,7 +5636,7 @@ public final class Environment implements Scope {
 			SocketSupport.setTimeout(socket, (int) Math.min(millis.value(), Integer.MAX_VALUE));
 			return millis;
 		}));
-		// One datum out of a runtime-read line. With the evaluator's #. resolver
+		// One datum out of a runtime-read string. With the evaluator's #. resolver
 		// installed, a datum textually containing #. is read in marker mode and the
 		// resolver evaluates each marker in place -- CL's read under a true *read-eval*
 		// (the resolver itself signals when *read-eval* is bound nil). A bare Environment
@@ -5515,48 +5648,10 @@ public final class Environment implements Scope {
 			}
 			return LispReader.readFromString(input, am.ik.rontolisp.reader.Features.INTERPRETER);
 		};
-		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
-			try {
-				// (read) reads from stdin; (read stream) reads from an open input
-				// stream. Both skip blank and comment-only lines and return one datum
-				// per call, or nil at end of input.
-				BufferedReader reader;
-				if (args.size() > 1) {
-					requireArgCount(LispNames.READ, args, 1);
-				}
-				LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
-				if (src == null || src instanceof LispNil || src instanceof LispTrue) {
-					// Drain buffered output so any prompt is visible before we block on
-					// stdin.
-					out.flush();
-					reader = stdinReader;
-				}
-				else {
-					if (!(src instanceof LispInteger handle)
-							|| !(streams.get(handle.value()) instanceof BufferedReader streamReader)) {
-						throw new LispEvalException(LispNames.READ + " expects an input stream");
-					}
-					reader = streamReader;
-				}
-				String line;
-				while ((line = reader.readLine()) != null) {
-					line = line.trim();
-					if (line.isEmpty() || line.startsWith(";")) {
-						continue;
-					}
-					// Runtime read follows the upcase premise, exactly like the frontend
-					// read of program source: unescaped symbols upcase and the canonical
-					// fold applies, so (read "foo") is FOO and (read "car") folds to car.
-					// The compiled backends' embedded reader runtimes fold to match, so
-					// cross-backend identity holds (see .kb/reader-case-upcase.md).
-					return readRuntimeDatum.apply(line);
-				}
-				return LispNil.INSTANCE;
-			}
-			catch (IOException ex) {
-				throw new UncheckedIOException(ex);
-			}
-		}));
+		// read itself is NOT here: it is prelude rontolisp over read-char /
+		// unread-char / read-from-string (LispPreludeLibrary), so one definition
+		// consumes exactly one datum's characters on all four backends and leaves the
+		// stream positioned after them. See .kb/read-load-streams.md.
 		// read-from-string: parse the first datum from a string (the optional
 		// eof-error-p/eof-value and :start/:end keywords of Common Lisp are not
 		// supported).

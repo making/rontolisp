@@ -35,19 +35,25 @@ import am.ik.rontolisp.LispVal;
  * environment read behind {@code uiop:getenv}.
  *
  * <p>
+ * The fourth round added the print family: {@code princ-to-string} /
+ * {@code prin1-to-string} / {@code write-to-string}. The expander builds string PIECES
+ * with the same conversion at ~25 sites ({@code format}'s directives, {@code map
+ * 'string}'s per-element accumulator, condition messages, computed {@code gensym} names),
+ * and wrapping the shared compiler case had measured 17-80% on the whole string-building
+ * family; those sites now spell the internal, print-object-routing {@code %princ-piece} /
+ * {@code %prin1-piece} ({@link am.ik.rontolisp.LispNames#PRINC_PIECE_INTERNAL}), which
+ * the backends compile WITHOUT the wrap, so only the value the program receives pays it.
+ *
+ * <p>
  * What is deliberately NOT here, each with the number that says why in
- * {@code .kb/string-write-runtime.md}: {@code princ-to-string} / {@code prin1-to-string}
- * / {@code write-to-string} (the expander builds pieces with them at ~25 sites,
- * {@code map 'string}'s per-element accumulator included, so wrapping the shared case
- * costs 17-80% on the whole string-building family -- it needs an internal piece alias
- * first), {@code reverse} / {@code remove} / {@code substitute} / {@code sort} over a
- * string (the gate cannot tell a string sequence from a list one, so a list-only program
- * would pay the JVM array runtime: +6,735 bytes of class on
- * {@code examples/console/nqueens}), a computed (non-literal-{@code nil}) {@code format}
- * destination and a computed {@code coerce} result type that turn out to name a string at
- * run time (same gate problem), and {@code symbol-name} / {@code gensym} names (CLHS
- * leaves {@code symbol-name} mutation undefined; keeping the name immutable is
- * deliberate). The {@code #'format} wrapper needs nothing -- it renders through
+ * {@code .kb/string-write-runtime.md}: {@code reverse} / {@code remove} /
+ * {@code substitute} / {@code sort} over a string (the gate cannot tell a string sequence
+ * from a list one, so a list-only program would pay the JVM array runtime: +6,735 bytes
+ * of class on {@code examples/console/nqueens}), a computed (non-literal-{@code nil})
+ * {@code format} destination and a computed {@code coerce} result type that turn out to
+ * name a string at run time (same gate problem), and {@code symbol-name} / {@code gensym}
+ * names (CLHS leaves {@code symbol-name} mutation undefined; keeping the name immutable
+ * is deliberate). The {@code #'format} wrapper needs nothing -- it renders through
  * {@code %fmt-cat}, which is a {@code concatenate 'string} -- and {@code #'concatenate}
  * wraps its own reduce in {@code %str-fresh}.
  */
@@ -57,14 +63,17 @@ public final class MutableStringProducers {
 	 * The producers the scan looks for by NAME, anywhere in a form: the
 	 * {@code concatenate} string family (any {@code concatenate} matches -- the family
 	 * split costs more than the over-approximation), the case family, the two
-	 * string-stream captures, and {@code read-line}. {@code format} is matched by shape
-	 * instead ({@link #isFormatToString}), so a program that only ever formats to a
-	 * stream stays out of the gate.
+	 * string-stream captures, {@code read-line} and the print family. {@code format} is
+	 * matched by shape instead ({@link #isFormatToString}), so a program that only ever
+	 * formats to a stream stays out of the gate -- and its {@code ~a} pieces are
+	 * {@code %princ-piece} forms, not {@code princ-to-string} ones, so they do not put it
+	 * in either.
 	 */
 	private static final List<String> PRODUCER_NAMES = List.of(LispNames.CONCATENATE, LispNames.STRING_UPCASE,
 			LispNames.STRING_DOWNCASE, LispNames.STRING_CAPITALIZE, LispNames.WITH_OUTPUT_TO_STRING,
 			LispNames.GET_OUTPUT_STREAM_STRING, LispNames.READ_LINE, LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM,
-			LispNames.STRING_RIGHT_TRIM,
+			LispNames.STRING_RIGHT_TRIM, LispNames.PRINC_TO_STRING, LispNames.PRIN1_TO_STRING,
+			LispNames.WRITE_TO_STRING,
 			// The host environment read behind uiop:getenv. The public name is a
 			// spliced Lisp defun over it, so the scan (which runs with the libraries
 			// already spliced) sees this one on every backend.

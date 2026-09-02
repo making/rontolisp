@@ -439,8 +439,9 @@ call wraps.
   contact-book +3,297 bytes of class and 0 bytes of wasm. **Re-evaluation trigger:** a
   JVM shape where a character vector can exist without the general-array runtime, or a
   gate that can tell a string sequence from a list one.
-- **`princ-to-string` / `prin1-to-string` / `write-to-string`.** The tax the earlier
-  round predicted is real and is NOT only format's: the expander builds pieces with
+- ~~**`princ-to-string` / `prin1-to-string` / `write-to-string`.**~~ **CLOSED
+  2026-09-01 by the fourth round (below), in exactly the shape this bullet named.**
+  The tax the earlier round predicted is real and is NOT only format's: the expander builds pieces with
   `princ-to-string` at ~25 sites, including `map 'string`'s per-ELEMENT accumulator
   (`(cons (princ-to-string call) acc)`), so wrapping the shared compiler case wraps one
   character at a time. Measured 2026-08-31 with the naive wrap (min of two passes,
@@ -513,25 +514,130 @@ takes the identical path a concatenate-built one already does (`JvmFfiInteropCom
 transport renders in Lisp (`%http-header-name` / `-value` / `%http-join-strings`), which
 is representation-blind for the same reason.
 
-`StringValuedForms.ALWAYS_STRING` was RE-CHECKED against the flip and needs no change:
-none of `%fixed-decimal` / `%string-concat` / the four print-to-string entries is
-flipped, and that is exactly why the print family is the expensive bullet above.
+`StringValuedForms.ALWAYS_STRING` was RE-CHECKED against the flip and needed no change
+in this round: none of `%fixed-decimal` / `%string-concat` / the four print-to-string
+entries was flipped, and that is exactly why the print family was the expensive bullet
+above. (The fourth round then moved the two PUBLIC print entries out and put the piece
+aliases in -- see below.)
 
-**What is STILL immutable, and why**: `princ-to-string` / `prin1-to-string` /
-`write-to-string` (the static `format` lowering emits its `~a`/`~s` pieces through the
-same compiler case, so wrapping it would tax every literal-control format per piece),
-a COMPUTED format destination that is nil at run time (only the literal-`nil` spelling
-is a producer; the gate would otherwise drag the array runtime into every
-`(format stream ...)` program), the first-class `#'format` / `#'concatenate` wrapper
-bodies (they build through the renderer / `%string-concat`, not the wrapped cases),
-the `string-trim` family, `map 'string` / `coerce 'string` and the getenv result (all
-four CLOSED by `.todo/600`, above), `reverse` / `remove` / `substitute` / `sort` results,
-`symbol-name` and `gensym`/`make-symbol` names (CLHS leaves
-symbol-name mutation undefined; deliberate), getenv / fetch / socket-read results,
-json-parse's multi-fragment string values (single-fragment ones are subseq slices and
-mutable), and a STRING eof-value handed back by `read-line` at EOF is `equal` but not
-`eq` to the argument (the wrap copies it). `.todo/600` carries the list with the
-measurements.
+**What is STILL immutable after the fourth round, and why** (each a measured decision
+with its re-evaluation trigger; `.todo/600` closed with this list and none of it is
+open work):
+
+- `reverse` / `remove` / `remove-if` / `remove-if-not` / `remove-duplicates` /
+  `substitute` / `substitute-if` / `sort` over a string -- the gate cannot see the
+  sequence type (the first bullet above, with the nqueens number). **Trigger**: a JVM
+  shape where a character vector can exist without the general-array runtime, or a
+  gate that can tell a string sequence from a list one.
+- A COMPUTED `format` destination that is nil at run time, and a COMPUTED
+  `(coerce x ty)` whose `ty` names a string at run time -- only the literal spellings
+  are producers; the wrap itself would be CORRECT for both (a non-string passes
+  `_toMutStr` through), it is the gate that costs (+2.4 to +3.3 KB of class per
+  `(format stream ...)` program). `expandComputedCoerce` routes to the unwrapped
+  shared `%seq-to-string`, the one line to change if the gate question is answered.
+- `symbol-name` / `(string 'sym)` / `gensym` / `make-symbol` names -- CLHS leaves
+  symbol-name mutation undefined and SBCL shares the name object. (The INTERPRETER
+  mutates the symbol's own name through such a write, a separate undefined-behavior
+  wart nobody depends on.)
+- fetch / socket / gray-stream read results, `%io-read-line`'s socket arm included;
+  only the `%read-line-raw` fallback wraps.
+- json-parse's multi-fragment string values (`%json-concat` merges through the
+  unwrapped `%string-concat`; single-fragment values are subseq slices and already
+  mutable). If value identity ever matters, wrap in `%json-string`'s return, not in the
+  merge -- the merge re-conversion was the 112 -> 245 ms json-stringify regression
+  before 596 moved it.
+- Every string PIECE the expander builds with `%princ-piece` / `%prin1-piece` (the
+  fourth round, below): internal by construction, never the program's value.
+
+## The fourth round: the print family (2026-09-01, `.todo/600`, closed)
+
+**Invariant: a string the program allocates through `princ-to-string` /
+`prin1-to-string` / `write-to-string` is a MUTABLE sequence with identity on ALL FOUR
+backends, exactly like the producers above -- a `print-object`-routed rendering
+included. A string PIECE the codegen's own expansions build with the same conversion
+(every `format` directive, `map 'string`'s per-element accumulator, a condition's
+default message, a computed `gensym` name, the type name inside `#<...>`) is NOT a
+producer and stays an immutable internal value.** Pinned by the fourth block of the
+`string-identity-cross-backend` ci-spec case, the extended
+`LispEvaluatorTest.aFlippedStringProducerResultHasWritableIdentity` /
+`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest.compileAFlippedStringProducerResultHasWritableIdentity`,
+their `compileAPrintObjectRoutedPrincToStringResultHasWritableIdentity` twins, and
+`LispMacroExpanderTest.anExpanderBuiltStringPieceIsTheInternalConversionNotThePublicProducer`
+(the spelling guard: if a public name comes back into an expansion, the tax below comes
+back with it).
+
+**The shape is the one the third round named: an internal, print-object-DISPATCHING
+alias.** `%princ-piece` / `%prin1-piece` (`LispNames.PRINC_PIECE_INTERNAL` /
+`PRIN1_PIECE_INTERNAL`) are the public conversions minus the wrap:
+
+- `expandPrintObjectHook` rewrites them exactly as it rewrites the public names
+  (`(%print-object-str x escape)`, or `%print-cased` under `*print-case*`), so a piece
+  that renders a user instance still consults the method. The raw `%princ-to-string` /
+  `%prin1-to-string` could not serve here: they are print-object-FREE by design
+  (`.kb/clos.md`, the fallback that must not re-enter the rewrite).
+- `Jvm`/`WasmExprCompiler` compile the piece names through the same
+  `compilePrintOperator` and stop; the three public names do the same and finish with
+  `_toMutStr` / `_to_mut_str`, under the shared `MutableStringProducers` gate, which
+  they joined by name. A `format` to a stream stays out of the gate, as before: its
+  pieces are `%princ-piece` forms.
+- The interpreter binds the piece names as the same two functions (`Environment`) and
+  routes them through the operator seam (`LispEvaluator.evalConsRareOperator`), so a
+  `defmethod print-object` that follows the first print is seen by a piece too.
+- Every expander site moved: `opsToPieces`'s `~a`/`~s`/`~w`/`~d`/`~c`/`~f`,
+  `decimalExpr`, `radixIntegerExpr`, the `~e` mantissa/exponent, `generalFloatExpr`,
+  `fmtPadChar`, `printPiece`'s two-element shape test (a `(%princ-piece x)` under a
+  stream destination still prints straight through `princ`), `expandMap`'s STRING
+  accumulator, `strictStringDesignatorForm` (the computed `(string x)`), the
+  condition-message sites of the signal family, `typeNameOf`, `expandComputedGensym`.
+  The spliced Lisp libraries moved with them: `format-render.lisp` (the runtime
+  `%fmt-render`), json.lisp, url.lisp, sockets.lisp, stdin.lisp, http-server.lisp,
+  gray.lisp's print dispatch, and the `print-object` methods of torch / geom / jzon.
+  None of those strings reaches the program: each is appended by `%string-concat`,
+  written to a stream, or stored where the program reads it back through a public
+  producer.
+- `StringValuedForms.ALWAYS_STRING` swapped the two public entries for the piece
+  names -- the public names can now answer a character vector, and an entry that does
+  would silently drop a normalization a consumer needs.
+- `PureBuiltinFolder` folds the public names to `(%str-fresh "...")` (a
+  per-evaluation mutable copy, like the other fresh-string producers) and the piece
+  names to a plain literal; both are blocked under `*print-case*`, as the public
+  names already were (`.kb/pure-builtin-fold.md`).
+
+### What it costs, measured 2026-09-01 (Linux x86-64, one machine, min of two)
+
+Each row its own defun, the two jars over one program, JVM class and WASM p1, ms.
+**The rows that do NOT name the public print family compile to BYTE-IDENTICAL
+output** -- an `iso` program of the map / coerce / fmt-render / upcase / trim /
+format-to-stream rows is `cmp`-equal on both backends -- so their timing deltas on this
+machine (up to +-15% on WASM, +-35% on the JVM between runs) are its noise floor and
+not the change. The rows that do name it:
+
+| row | JVM before -> after | WASM p1 before -> after |
+|---|---|---|
+| control-int (2M) / control-mapcar (200k) | 21 -> 19 / 29 -> 28 | 7 -> 6 / 3 -> 2 |
+| princ-to-string of an integer (100k) | 46 -> 83 | 13 -> 27 |
+| princ-to-string of a 1,000-char string (20k) | 151 -> 534 | 305 -> 710 |
+| prin1-to-string of a 1,000-char string (20k) | 167 -> 516 | 307 -> 745 |
+| format nil / `%fmt-render` / format to a stream | flat | flat |
+| map 'string / coerce 'string / concatenate of a list | flat | flat |
+| string-upcase / string-trim / reverse of a string | flat | flat |
+| json-parse / json-stringify | flat | flat |
+
+Per call that is +0.4 us (JVM) / +0.14 us (WASM) for an integer and ~19-20 us for the
+1,000-character string on both -- the same representation cost the trim and case rows
+pay, one boxed character vector instead of one `String`. The 17-80% the naive wrap had
+measured on the string-building family did not come back, which is the whole point of
+the alias.
+
+Sizes (`--optimize` wasm / `.class`): hello_world, pi_approx, zlib, calc, contact-book,
+nqueens, word-frequency, hanoi, error-handling -- **all byte-identical** (none of the
+console corpus names the public print family; their `format`s are pieces). A program
+whose ONLY producer is `princ-to-string` joins the gate: `(defun f (x) (princ-to-string
+x))` 11,758 -> 12,110 bytes of wasm (+352) and 4,041 -> 7,837 of class (+3,796 -- the
+array runtime the wrap needs, the flat cost every first producer pays). A `format
+nil`-only program is byte-identical; a program that already carried a producer pays the
+one call site (+2 bytes of wasm, +3 of class); `examples/jvm/java-interop` +3 bytes of
+class.
 
 ## Why it is a function
 

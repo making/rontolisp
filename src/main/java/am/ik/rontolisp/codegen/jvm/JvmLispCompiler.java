@@ -2363,8 +2363,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			readMethods = JvmReadRuntimeBuilder
 				.create(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf, doubleValueOf,
-						stringCharAt, stringLength, stringSubstring, objectEquals, readLineHelperMethod, usesLoad,
-						readerInstances, pathnameLayoutField)
+						stringCharAt, stringLength, stringSubstring, objectEquals, usesLoad, readerInstances,
+						pathnameLayoutField)
 				.methods();
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;

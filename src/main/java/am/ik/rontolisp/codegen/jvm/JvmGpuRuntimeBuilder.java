@@ -174,7 +174,9 @@ final class JvmGpuRuntimeBuilder {
 	 */
 	private static final List<String> MAP_KERNELS = List.of("gpuExp", "gpuLog", "gpuTanh", "gpuSin", "gpuCos", "gpuTan",
 			"gpuAsin", "gpuAcos", "gpuAtan", "gpuSinh", "gpuCosh", "gpuErf", "gpuSqrt", "gpuAbs", "gpuNegative",
-			"gpuSign");
+			"gpuSign",
+			// The fused tier's one-argument member (todo-499).
+			"gpuGelu");
 
 	/**
 	 * The {@code ops} keys of the STRIDED tier's two-argument kernels: the broadcast
@@ -183,13 +185,24 @@ final class JvmGpuRuntimeBuilder {
 	 */
 	private static final List<String> BINARY_KERNELS = List.of("gpuAdd", "gpuSub", "gpuMul", "gpuDiv", "gpuMaximum",
 			"gpuMinimum", "gpuGreater", "gpuGreaterEqual", "gpuLess", "gpuLessEqual", "gpuEqual", "gpuTransposeAxes",
-			"gpuReshape", "gpuConcatenate", "gpuScale", "gpuTakeRows", "gpuPick", "gpuSumSquares");
+			"gpuReshape", "gpuConcatenate", "gpuScale", "gpuTakeRows", "gpuPick", "gpuSumSquares",
+			// The fused tier's two-argument members (todo-499): softmax over its axis,
+			// layer-norm's normalization over its epsilon.
+			"gpuSoftmaxAxis", "gpuLayerNorm");
 
 	/**
 	 * The strided tier's three-argument kernels: the axis folds
 	 * ({@code a, axis, keepdims}).
 	 */
-	private static final List<String> FOLD_KERNELS = List.of("gpuSumAxis", "gpuAmaxAxis", "gpuAminAxis");
+	private static final List<String> FOLD_KERNELS = List.of("gpuSumAxis", "gpuAmaxAxis", "gpuAminAxis",
+			// The fused tier's three-argument adjoints (todo-499).
+			"gpuGeluGrad", "gpuSoftmaxGrad");
+
+	/**
+	 * The fused tier's four-argument members: layer-norm's adjoint
+	 * ({@code g, x, eps, old}) and the dropout mask ({@code shape, p, st, single}).
+	 */
+	private static final List<String> FUSED4_KERNELS = List.of("gpuLayerNormGrad", "gpuDropoutMask");
 
 	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
 	private static final int CHUNK_SIZE = 40000;
@@ -310,6 +323,10 @@ final class JvmGpuRuntimeBuilder {
 		for (String kernel : FOLD_KERNELS) {
 			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel),
 					cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		}
+		for (String kernel : FUSED4_KERNELS) {
+			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel), cp.addUtf8(
+					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		}
 
 		// --- _gpuInit body ---------------------------------------------------------

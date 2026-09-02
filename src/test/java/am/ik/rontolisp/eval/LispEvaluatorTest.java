@@ -869,6 +869,51 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void readConsumesExactlyOneDatumAndLeavesTheStreamAfterIt() {
+		// CL's read contract (todo-624): a second datum on the same line survives, a
+		// datum may SPAN lines, and read leaves the stream positioned after the object
+		// -- so read and read-line mix. Same answers as SBCL, on all four backends
+		// (ci-spec case read-stream-datum-by-datum).
+		assertThat(eval("""
+				(let ((s (make-string-input-stream "1 2 3")))
+				  (list (read s nil :eof) (read s nil :eof) (read s nil :eof) (read s nil :eof)))""").print())
+			.isEqualTo("(1 2 3 :EOF)");
+		assertThat(eval("""
+				(with-input-from-string (s "(a) (b)")
+				  (list (read s nil :eof) (read s nil :eof) (read s nil :eof)))""").print())
+			.isEqualTo("((A) (B) :EOF)");
+		assertThat(eval("""
+				(with-input-from-string (s "(a
+				b) c")
+				  (list (read s nil :eof) (read s nil :eof)))""").print()).isEqualTo("((A B) C)");
+		// CLHS 23.2 lets read consume ONE whitespace character after the object; a
+		// terminating macro character is left in the stream instead.
+		assertThat(eval("""
+				(with-input-from-string (s "(1 2)  x") (list (read s) (read-line s)))""").print())
+			.isEqualTo("((1 2) \" x\")");
+		assertThat(eval("""
+				(with-input-from-string (s "ab  cd") (list (read s) (read-line s)))""").print())
+			.isEqualTo("(AB \" cd\")");
+	}
+
+	@Test
+	void readAtEndOfInputAnswersTheEofValueAndSignalsWhenAsked() {
+		// The lite convention read-line keeps: nil rather than a signal, unless
+		// eof-error-p is explicitly non-nil.
+		assertThat(eval("(with-input-from-string (s \"\") (read s))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(with-input-from-string (s \"\") (read s nil :done))").print()).isEqualTo(":DONE");
+		assertThat(eval("""
+				(handler-case (with-input-from-string (s "") (read s t))
+				  (end-of-file () :caught))""").print()).isEqualTo(":CAUGHT");
+		// A nil DATUM is no longer confused with end of input.
+		assertThat(eval("(with-input-from-string (s \"nil\") (read s nil :done))")).isEqualTo(LispNil.INSTANCE);
+		// An INCOMPLETE datum signals rather than being silently closed.
+		assertThat(eval("""
+				(handler-case (with-input-from-string (s "(a b") (read s))
+				  (error () :caught))""").print()).isEqualTo(":CAUGHT");
+	}
+
+	@Test
 	void evalWithInputFromStringReadsLinesAndData() {
 		LispVal result = eval("""
 				(with-input-from-string (s "first line
@@ -3327,8 +3372,75 @@ class LispEvaluatorTest {
 		assertThat(eval("(remove-duplicates \"banana\")").print()).isEqualTo("\"bna\"");
 		assertThat(eval("(substitute #\\o #\\a \"banana\")").print()).isEqualTo("\"bonono\"");
 		assertThat(eval("(sort \"cab\" #'char<)").print()).isEqualTo("\"abc\"");
+		// nreverse and stable-sort answer the argument's own TYPE, like sort/reverse
+		// above -- they used to lose it and answer a bare list.
+		assertThat(eval("(nreverse (copy-seq \"abcd\"))").print()).isEqualTo("\"dcba\"");
+		assertThat(eval("(stable-sort (copy-seq \"dcba\") #'char<)").print()).isEqualTo("\"abcd\"");
+		assertThat(eval("(funcall #'nreverse (copy-seq \"wxyz\"))").print()).isEqualTo("\"zyxw\"");
+		assertThat(eval("(funcall #'stable-sort (copy-seq \"dcba\") #'char<)").print()).isEqualTo("\"abcd\"");
 		assertThat(eval("(funcall #'reverse \"abc\")").print()).isEqualTo("\"cba\"");
 		assertThat(eval("(funcall #'remove #\\l \"hello\")").print()).isEqualTo("\"heo\"");
+	}
+
+	@Test
+	void evalSequenceReturningFunctionsOnVectors() {
+		// nreverse/stable-sort answer a VECTOR back when given one, matching sort.
+		assertThat(eval("(nreverse (vector 1 2 3))").print()).isEqualTo("#(3 2 1)");
+		assertThat(eval("(stable-sort (vector 3 1 2) #'<)").print()).isEqualTo("#(1 2 3)");
+		assertThat(eval("(sort (vector 3 1 2) #'<)").print()).isEqualTo("#(1 2 3)");
+		assertThat(eval("(funcall #'nreverse (vector 'a 'b 'c))").print()).isEqualTo("#(C B A)");
+		assertThat(eval("(funcall #'stable-sort (vector 3 1 2) #'<)").print()).isEqualTo("#(1 2 3)");
+	}
+
+	@Test
+	void evalSortNreverseStableSortKeepFillPointerAdjustableAndIdentity() {
+		// .todo/623: sort/nreverse/stable-sort permute a vector/string in place (SBCL's
+		// contract too), so a fill-pointered or adjustable argument must keep its fill
+		// pointer, its adjustable flag AND its own identity, not just the right values.
+		assertThat(eval("""
+				(let ((v (make-array 3 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2))))
+				  (let ((s (sort v #'<)))
+				    (list (fill-pointer s) (adjustable-array-p s) (eq v s))))
+				""").print()).isEqualTo("(3 T T)");
+		// A fill-pointered vector's SPARE capacity (beyond the fill pointer) is untouched
+		// by the permutation -- array-total-size stays 5, not shrunk to the active 3.
+		assertThat(eval("""
+				(let ((v (make-array 5 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2 99 99))))
+				  (let ((s (sort v #'<)))
+				    (list s (fill-pointer s) (array-total-size s) (eq v s))))
+				""").print()).isEqualTo("(#(1 2 3) 3 5 T)");
+		assertThat(eval("(let ((v (vector 3 1 2))) (let ((s (sort v #'<))) (eq v s)))").print()).isEqualTo("T");
+		assertThat(eval("(let ((v (copy-seq \"dcba\"))) (let ((s (sort v #'char<))) (list s (eq v s))))").print())
+			.isEqualTo("(\"abcd\" T)");
+		assertThat(eval("(let ((v (vector 3 1 2))) (let ((s (nreverse v))) (eq v s)))").print()).isEqualTo("T");
+		assertThat(eval("""
+				(let ((v (make-array 4 :adjustable t :fill-pointer 4 :initial-contents '(1 2 3 4))))
+				  (let ((s (stable-sort v #'<)))
+				    (list (fill-pointer s) (adjustable-array-p s) (eq v s))))
+				""").print()).isEqualTo("(4 T T)");
+	}
+
+	@Test
+	void evalDeleteNsubstituteFamilyOnVectorsAndStrings() {
+		// .todo/623: delete/delete-if/delete-if-not/nsubstitute/nsubstitute-if(-not) used
+		// to be silent no-ops on a vector or string (only their cons-splice/rplaca arm
+		// was implemented) -- CLHS lets a destructive form answer a fresh sequence, so
+		// they now route through remove/substitute's own vector/string handling.
+		assertThat(eval("(delete 1 (vector 3 1 2))").print()).isEqualTo("#(3 2)");
+		assertThat(eval("(delete #\\a (copy-seq \"aba\"))").print()).isEqualTo("\"b\"");
+		assertThat(eval("(delete-if #'oddp (vector 1 2 3 4))").print()).isEqualTo("#(2 4)");
+		assertThat(eval("(delete-if-not #'oddp (vector 1 2 3))").print()).isEqualTo("#(1 3)");
+		assertThat(eval("(nsubstitute 9 1 (vector 1 2 1))").print()).isEqualTo("#(9 2 9)");
+		assertThat(eval("(nsubstitute-if 0 #'oddp (vector 1 2 3))").print()).isEqualTo("#(0 2 0)");
+		assertThat(eval("(nsubstitute-if-not 0 #'oddp (vector 1 2 3))").print()).isEqualTo("#(1 0 3)");
+		// The list arm is unaffected.
+		assertThat(eval("(delete 1 (list 1 2 1))").print()).isEqualTo("(2)");
+		// The funcall/apply path (a separate Java closure on the interpreter) gets the
+		// same fix.
+		assertThat(evalMulti("(funcall #'delete-if #'oddp (vector 1 2 3 4))").print()).isEqualTo("#(2 4)");
+		assertThat(evalMulti("(funcall #'nsubstitute-if 0 #'oddp (vector 1 2 3))").print()).isEqualTo("#(0 2 0)");
+		assertThat(evalMulti("(funcall #'delete 1 (vector 3 1 2))").print()).isEqualTo("#(3 2)");
+		assertThat(evalMulti("(funcall #'nsubstitute 9 1 (vector 1 2 1))").print()).isEqualTo("#(9 2 9)");
 	}
 
 	@Test
@@ -5495,6 +5607,32 @@ class LispEvaluatorTest {
 				(defun mki (et x) (make-array 3 :element-type et :initial-element x))
 				(list (aref (mki '(unsigned-byte 8) 7) 0) (aref (mki 'character #\\z) 0) (aref (mki t 'a) 0))
 				""").print()).isEqualTo("(7 #\\z A)");
+	}
+
+	@Test
+	void evalRuntimeTypepResolvesADeftypeAlias() {
+		// A typep DESIGNATOR held in a value resolves a user deftype the way its literal
+		// spelling does, on all four backends: the interpreter re-expands the runtime
+		// dispatch against the live registry, the compile paths normalize the designator
+		// through the injected %deftype-alias resolver first. Chains resolve
+		// (byte-buffer -> octet), an alias inside a COMPOUND specifier resolves through
+		// the compound recursion, and coerce -- whose computed result type ends in this
+		// very dispatch -- follows: an alias of a scalar type answers CLHS's "already of
+		// that type" identity, one of a SEQUENCE type takes its family arm. Every answer
+		// is SBCL 2.2.9's on this program (JvmLispCompilerTest /
+		// WasmLispCompilerIntegrationTest and the runtime-typep-deftype-alias ci-spec
+		// case run the same one), except the trailing unknown name, where the lite model
+		// answers nil rather than signalling.
+		assertThat(evalMulti("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype str () 'string)
+				(defun tp (x ty) (typep x ty))
+				(list (tp 3 'octet) (tp 300 'octet) (tp 3 'byte-buffer) (tp "ab" 'str) (tp 3 'str)
+				      (tp 3 (list 'or 'octet 'null)) (tp "x" (list 'or 'octet 'null))
+				      (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
+				      (typep 3 'octet) (tp 3 'no-such-type))
+				""").print()).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
 	}
 
 	@Test
@@ -10938,6 +11076,22 @@ class LispEvaluatorTest {
 				(with-input-from-string (in "")
 				  (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e)))
 				""").print()).isEqualTo("T");
+		// The fourth round: the print family, including a print-object-routed
+		// rendering (the wrap sits OUTSIDE the routing hook on the compile paths).
+		assertThat(evalMulti("""
+				(let* ((s (princ-to-string 12345)) (a s)) (setf (char s 0) #\\X) (list s a))
+				""").print()).isEqualTo("(\"X2345\" \"X2345\")");
+		assertThat(evalMulti("""
+				(let ((s (prin1-to-string 'foo))) (fill s #\\z) s)
+				""").print()).isEqualTo("\"zzz\"");
+		assertThat(evalMulti("""
+				(let ((s (write-to-string 'bar))) (replace s "Q") s)
+				""").print()).isEqualTo("\"QAR\"");
+		assertThat(evalMulti("""
+				(defstruct t600pt x)
+				(defmethod print-object ((p t600pt) s) (format s "<pt ~a>" (t600pt-x p)))
+				(let* ((s (princ-to-string (make-t600pt :x 7))) (a s)) (setf (char s 0) #\\[) (list s a))
+				""").print()).isEqualTo("(\"[pt 7>\" \"[pt 7>\")");
 	}
 
 	@Test
@@ -11694,6 +11848,22 @@ class LispEvaluatorTest {
 		}
 		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
 			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_EXPECTED);
+	}
+
+	@Test
+	void torchFusedCompositionsAreTheCompositionsTheyReplacedBitForBit() {
+		// TorchGradcheck.FUSED_PROGRAM, shared verbatim with the JVM and WASM backends:
+		// the exact torch:gelu, torch:layer-norm, torch:softmax's adjoint and
+		// torch:dropout's mask are one internal linalg member each since todo-499, and
+		// each prints T against the torch-op composition it replaced -- forward,
+		// gradient, and the gradient of a parameter the input also feeds directly.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
 	}
 
 	@Test
@@ -15081,6 +15251,43 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void anAdjustedCopyKeepsTheElementType() {
+		// adjust-array does not change an array's element type (CLHS), and a
+		// NON-adjustable adjustment answers a FRESH array, so the copy has to remember
+		// what the original did -- otherwise an adjusted character vector stops
+		// answering stringp. A literal (immutable) string is the same question over the
+		// one array shape that carries no header at all, and the string shape readers
+		// below are what its adjustment goes through. Pinned here, in the other three
+		// backends' twins and in the adjusted-copy-element-type-cross-backend ci-spec
+		// case.
+		assertThat(evalMulti("""
+				(defun adjusted-copy-keeps-type ()
+				  (let* ((s (make-array 3 :element-type 'character :initial-element #\\x))
+				         (r (adjust-array s 5)))
+				    (list (stringp r) (array-element-type r) (char-code (aref r 4)))))
+				(defun adjusted-literal-string ()
+				  (let ((r (adjust-array "abc" 5)))
+				    (list (stringp r) (array-element-type r) (length r))))
+				(defun adjusted-rank-2-keeps-type ()
+				  (let* ((a (make-array '(2 2) :element-type 'character :initial-element #\\y))
+				         (r (adjust-array a '(3 3))))
+				    (list (array-element-type r) (stringp r) (aref r 2 2))))
+				(defun adjusted-typed-keeps-type ()
+				  (let* ((f (make-array 3 :element-type 'double-float :fill-pointer 0))
+				         (b (make-array '(2 2) :element-type '(unsigned-byte 8)))
+				         (rf (adjust-array f 5))
+				         (rb (adjust-array b '(3 3))))
+				    (list (array-element-type rf) (aref rf 4) (array-element-type rb) (aref rb 2 2))))
+				(defun string-is-a-rank-1-array ()
+				  (list (array-rank "abc") (array-dimensions "abc") (array-total-size "abc")
+				        (array-displacement "abc")))
+				(list (adjusted-copy-keeps-type) (adjusted-literal-string) (adjusted-rank-2-keeps-type)
+				      (adjusted-typed-keeps-type) (string-is-a-rank-1-array))
+				""").print()).isEqualTo("((T CHARACTER 32) (T CHARACTER 5) (CHARACTER NIL #\\Space)"
+				+ " (DOUBLE-FLOAT 0.0 (UNSIGNED-BYTE 8) 0) (1 (3) 3 NIL))");
+	}
+
+	@Test
 	void setfFillPointer() {
 		assertThat(evalMulti("""
 				(setq v (make-array 5 :fill-pointer 5 :initial-element 7))
@@ -16811,6 +17018,18 @@ class LispEvaluatorTest {
 			.hasMessageContaining("out of range");
 		assertThatThrownBy(() -> eval("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
 			.hasMessageContaining("packed integer vector");
+	}
+
+	@Test
+	void packedFloatArrayRejectsAdjustArray() {
+		// A packed float array has no fill-pointer/adjustability/displacement surface,
+		// same as a packed integer vector -- requireGeneralArray answers this on the
+		// interpreter already; the JVM and wasm compile paths are pinned in
+		// JvmLispCompilerTest / WasmLispCompilerIntegrationTest.
+		assertThatThrownBy(() -> eval("(adjust-array (make-array 3 :element-type 'double-float) 5)"))
+			.hasMessageContaining("packed float array");
+		assertThatThrownBy(() -> eval("(adjust-array (make-array 3 :element-type 'single-float) 5)"))
+			.hasMessageContaining("packed float array");
 	}
 
 	@Test

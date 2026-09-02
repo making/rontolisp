@@ -71,8 +71,6 @@ final class JvmReadRuntimeBuilder {
 
 	private final MethodrefConstant objectEquals;
 
-	private final MethodrefConstant readLineHelper;
-
 	private final boolean emitLoad;
 
 	// CP entries created internally
@@ -101,8 +99,6 @@ final class JvmReadRuntimeBuilder {
 	private final MethodrefConstant sbAppendChar;
 
 	private final MethodrefConstant sbToString;
-
-	private final MethodrefConstant readLineStream;
 
 	private final MethodrefConstant readSkipWs;
 
@@ -240,8 +236,8 @@ final class JvmReadRuntimeBuilder {
 	private JvmReadRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant longValueOf,
 			MethodrefConstant doubleValueOf, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, MethodrefConstant objectEquals, MethodrefConstant readLineHelper,
-			boolean emitLoad, boolean instances, @Nullable FieldrefConstant pathnameLayout) {
+			MethodrefConstant stringSubstring, MethodrefConstant objectEquals, boolean emitLoad, boolean instances,
+			@Nullable FieldrefConstant pathnameLayout) {
 		this.pathnameLayout = pathnameLayout;
 		this.cp = cp;
 		this.thisClass = thisClass;
@@ -254,7 +250,6 @@ final class JvmReadRuntimeBuilder {
 		this.stringLength = stringLength;
 		this.stringSubstring = stringSubstring;
 		this.objectEquals = objectEquals;
-		this.readLineHelper = readLineHelper;
 		this.emitLoad = emitLoad;
 
 		this.readSrc = cp.addFieldref(thisClass,
@@ -284,7 +279,6 @@ final class JvmReadRuntimeBuilder {
 		this.sbToString = cp.addMethodref(this.stringBuilderClass,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
 
-		this.readLineStream = methodref("_readLineStream", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		this.readSkipWs = methodref("_readSkipWs", "()V");
 		this.readExpr = methodref("_readExpr", "()Ljava/lang/Object;");
 		this.readList = methodref("_readList", "()Ljava/lang/Object;");
@@ -389,11 +383,11 @@ final class JvmReadRuntimeBuilder {
 	static JvmReadRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant longValueOf,
 			MethodrefConstant doubleValueOf, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, MethodrefConstant objectEquals, MethodrefConstant readLineHelper,
-			boolean emitLoad, boolean instances, @Nullable FieldrefConstant pathnameLayout) {
+			MethodrefConstant stringSubstring, MethodrefConstant objectEquals, boolean emitLoad, boolean instances,
+			@Nullable FieldrefConstant pathnameLayout) {
 		return new JvmReadRuntimeBuilder(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf,
-				doubleValueOf, stringCharAt, stringLength, stringSubstring, objectEquals, readLineHelper, emitLoad,
-				instances, pathnameLayout);
+				doubleValueOf, stringCharAt, stringLength, stringSubstring, objectEquals, emitLoad, instances,
+				pathnameLayout);
 	}
 
 	private MethodrefConstant methodref(String name, String desc) {
@@ -505,9 +499,6 @@ final class JvmReadRuntimeBuilder {
 				buildReadStr()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_classify"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/Object;"),
 				6, 10, buildClassify()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_read"), this.cp.addUtf8("()Ljava/lang/Object;"), 4, 1, buildRead()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readStream"), this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"),
-				4, 2, buildReadStream()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_readFromString"),
 				this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"), 4, 2, buildReadFromString()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_readHash"), this.cp.addUtf8("()Ljava/lang/Object;"), 8, 4,
@@ -1343,75 +1334,6 @@ final class JvmReadRuntimeBuilder {
 		a.bind(sym);
 		a.aload(0);
 		a.areturn();
-		return a.finish();
-	}
-
-	private List<Integer> buildRead() {
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int rnull = a.label();
-		// Keep reading lines until one contains a datum (blank and comment-only lines
-		// are skipped) or stdin is exhausted (EOF -> nil).
-		a.bind(loop);
-		a.invokestatic(this.readLineHelper);
-		a.dup();
-		a.branch(Opcode.IFNULL, rnull);
-		a.checkcast(this.stringClass);
-		a.astore(0);
-		// raw = s.substring(1, s.length()-1)
-		a.aload(0);
-		a.iconst(1);
-		a.aload(0);
-		a.invokevirtual(this.stringLength);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.invokevirtual(this.stringSubstring);
-		a.putstatic(this.readSrc);
-		a.iconst(0);
-		a.putstatic(this.readPos);
-		a.invokestatic(this.readSkipWs);
-		pos(a);
-		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, loop);
-		a.invokestatic(this.readExpr);
-		a.areturn();
-		a.bind(rnull);
-		a.areturn(); // null already on stack
-		return a.finish();
-	}
-
-	// _readStream(Object handle): like _read but reads lines from an open input stream
-	// via _readLineStream(handle); returns one datum per call, or null at end of stream.
-	private List<Integer> buildReadStream() {
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int rnull = a.label();
-		a.bind(loop);
-		a.aload(0); // handle
-		a.invokestatic(this.readLineStream);
-		a.dup();
-		a.branch(Opcode.IFNULL, rnull);
-		a.checkcast(this.stringClass);
-		a.astore(1);
-		// raw = s.substring(1, s.length()-1)
-		a.aload(1);
-		a.iconst(1);
-		a.aload(1);
-		a.invokevirtual(this.stringLength);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.invokevirtual(this.stringSubstring);
-		a.putstatic(this.readSrc);
-		a.iconst(0);
-		a.putstatic(this.readPos);
-		a.invokestatic(this.readSkipWs);
-		pos(a);
-		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, loop);
-		a.invokestatic(this.readExpr);
-		a.areturn();
-		a.bind(rnull);
-		a.areturn(); // null already on stack
 		return a.finish();
 	}
 

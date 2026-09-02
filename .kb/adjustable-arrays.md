@@ -583,12 +583,195 @@ Pinned by `LispEvaluatorTest.aSlotOpenedByGrowthTakesTheElementTypeZero`, the
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest`, and the
 `opened-slot-fill-cross-backend` ci-spec case.
 
-**Still open**: on the COMPILE paths a NON-adjustable `adjust-array` returns a
-fresh array that no longer remembers the declared element type (the expansion's
-`make-array` carries `:initial-element` but not `:element-type`), so a
-non-adjustable character vector adjusted there stops answering `stringp`. The
-interpreter now keeps it. Pre-existing, out of this item's scope, and costed:
-`.todo/619`.
+Closed by the section below: the fresh array a NON-adjustable adjustment answers
+now remembers the declared element type on all four backends too.
+
+## The adjusted COPY remembers the element type (`.todo/619`, 2026-09-02)
+
+**Invariant: `adjust-array` never changes an array's element type, on all four
+backends. An `:adjustable` array keeps its own identity and with it its type; a
+NON-adjustable one answers a FRESH array that is STAMPED with the adjusted
+array's type.** Before this the compile paths' expansion built that copy from a
+plain `make-array` carrying `:initial-element`/`:fill-pointer`/`:adjustable` but
+no `:element-type`, so an adjusted character vector came back a general vector:
+`stringp` NIL, `array-element-type` T, where the interpreter and SBCL 2.2.9 both
+answer T / CHARACTER.
+
+**The stamp COPIES the type word; it does not re-derive the representation.**
+That is the whole reason this is affordable. Spelling
+`:element-type (array-element-type __adj_a)` on the expansion's `make-array` is
+the obvious fix and `.todo/612`'s `lowerRuntimeElementTypeMakeArray` would even
+serve it -- measured 2026-08-31 at **+4,264 bytes (+39%)** on a one-site program,
+because a runtime designator turns one allocation into the seven-arm dispatch
+(or a ~2.9 KB prelude helper), and because `Ctx.typedArrayCodes` would then have
+to count every `adjust-array` program as every specialized width. The new
+internal primitive `%array-adopt-element-type (new old)` moves the same
+information one word at a time instead:
+
+- **Interpreter**: `LispArray.adoptElementType`, the one writer of the
+  `elementTypeCode` field. Its own `adjust-array` built-in already carried the
+  code into the resized copy (`.todo/615`), so nothing changed there; the
+  primitive exists so the expansion's spelling has an interpreter meaning too.
+  `Environment.arrayElementTypeCode` is now the single per-representation
+  answer, shared with `%array-default-element`.
+- **JVM**: `_arrayAdoptElementType(dst, src)` reads the SAME header facts
+  `_arrayDefaultElement` reads (a `String` or a length-4 header is `character`;
+  otherwise slot 4 or nothing) and writes the stamp back in the SAME two shapes
+  the allocator uses -- the length-4 character-vector marker for a RANK-1
+  character type (over widened, boxed data, which the marker implies), header
+  slot 4 otherwise, which a length-3 header grows to hold and a packed length-6
+  one already has. A `dst` that is already a character vector, or displaced
+  (slot 3 non-null, where slot 4 is the offset), keeps what it has.
+- **wasm**: `compileArrayAdoptElementType` copies the meta MARKER word verbatim
+  -- one `struct.set`, unconditional (writing a 0 marker onto a fresh array is
+  what it already holds, and a guard costs more than it saves). Because the word
+  is copied rather than decoded, there are NO per-code arms and therefore
+  nothing for the per-width `Ctx.typedArrayCodes` gate to predict: the marker
+  being copied was written by a `make-array` the same program already contains.
+  `emitRememberedMarker` reads it, with `emitRememberedElementType`'s guards --
+  the header cons whose car is the dims buckets is what tells an array from a
+  hash table, and a displaced array's word is a real offset, so it remembers
+  nothing.
+
+**An IMMUTABLE string is now a legal `adjust-array` argument on the compile
+paths.** `(adjust-array "abc" 5)` answered a 5-long string on the interpreter and
+died in the expansion's primitives on both compile paths (JVM
+`String cannot be cast to ArrayList`, wasm `cast failure`) -- and so did
+`(array-dimensions "abc")`, `(array-rank "abc")`, `(array-total-size "abc")` and
+`(array-displacement "abc")`, which is the same hole one level down: every shape
+reader expands through `array-dimensions`. `_arrayDims` / `compileDims` now
+answer a string's length in code points as its one dimension, and
+`%array-disp-target` / `%array-disp-offset` answer nil / 0 for one (a string
+VIEW is a header, never a runtime `String`), so all of them accept a string as
+the interpreter's always have.
+
+**What is still NOT adjustable** is a PACKED vector; the interpreter signals
+`adjust-array: not applicable to a packed integer vector` / `... packed float
+array` for both representations, and so does the JVM now (`_ivRequireGeneral` /
+`_fvRequireGeneral`, both reached through `%array-disp-target`'s
+`emitRequireGeneralIfPacked`, fixed 2026-09-02 by `.todo/627`; a program with no
+packed float array emits no `_fvRequireGeneral` at all, so the default build
+stays byte-identical). Wasm has no custom trap-message channel on this path for
+EITHER representation -- `%array-disp-target`'s `castCellGet0` traps `cast
+failure` on both a packed integer vector and a packed float array today, which
+is the parity bar that backend can meet.
+
+**Size cost, measured 2026-09-02** (`--optimize=size`, raw wasm; JVM `.class`):
+
+| program | wasm before | wasm after | class before | class after |
+| --- | ---: | ---: | ---: | ---: |
+| one `adjust-array` site, character vector | 25,928 | 26,231 (+303, +1.2%) | 26,760 | 27,147 (+387, +1.4%) |
+| `jzon` (`examples/asdf/jzon-demo.lisp`) | 444,002 | 445,311 (+1,309, +0.29%) | 526,686 | 527,082 (+396, +0.08%) |
+| `cl-ppcre` (`examples/asdf/cl-ppcre-demo.lisp`) | 540,399 | 541,298 (+899, +0.17%) | 703,741 | 704,134 (+393, +0.07%) |
+| `zlib` (`size-report/programs`, no `adjust-array`) | 103,592 | 103,652 (+60, +0.06%) | 161,640 | 161,671 (+31, +0.02%) |
+
+**+303 where the keyword route measured +4,264**, i.e. a fourteenth of the price
+for the same conformance. The wasm bill is per SITE (that backend has no runtime
+helper to share); the JVM's is per PROGRAM, and the unused-helper prune keeps
+`_arrayAdoptElementType` out of a program with no `adjust-array` entirely -- the
+zlib row's +31/+60 is the STRING arm in the shape readers alone, which any array
+program pays.
+
+Pinned by `LispEvaluatorTest.anAdjustedCopyKeepsTheElementType`, the
+`compileAnAdjustedCopyKeepsTheElementType` twins in `JvmLispCompilerTest` and
+`WasmLispCompilerIntegrationTest`, and the
+`adjusted-copy-element-type-cross-backend` ci-spec case -- one program, one
+expected text, all four backends, every answer SBCL 2.2.9's but the two
+deliberate deviations (`#\Space` for the character fill, `NIL` for the general
+vector's).
+
+## `sort`/`nreverse`/`stable-sort` keep a vector's fill pointer and identity (`.todo/623`, 2026-09-02)
+
+**Invariant: `sort`, `nreverse` and `stable-sort` permute a fill-pointered or
+adjustable vector/string IN PLACE -- same object, same fill pointer, same
+adjustable flag, same total size -- on all four backends, matching SBCL.**
+Before this, `seqResultDispatchForm`'s vector/string arm (shared by these three
+and by the non-destructive `remove`/`substitute`/`reduce`/`remove-duplicates`
+family) always answered a FRESH, SIMPLE rebuild: correct values, but a
+fill-pointered array lost its fill pointer entirely --
+`(let ((v (make-array 3 :adjustable t :fill-pointer 3 :initial-contents ...)))
+(fill-pointer (sort v #'<)))` signalled `array has no fill pointer`, which is
+what surfaced through `practicals-1.0.3/Chapter27/database.lisp`'s
+`sort-rows`/`delete-rows` pair (`.todo/620`).
+
+**The fix is a second flag on `seqResultDispatchForm`, `destructive`, private to
+the three permuting callers** (`wrapSortForStringSeq`, `wrapNreverseForStringSeq`,
+`expandStableSort` -- `LispMacroExpander`, all three literal `true`). `false`
+(`expandReduce`, `expandRemoveDuplicates`, `expandRemove`, `expandRemoveIf`,
+`expandRemoveIfNot`, `expandSubstituteIf`) is unchanged: those five are
+genuinely non-destructive by CLHS and by this codebase's own
+`delete`/`delete-duplicates` precedent below, so their fresh, simple rebuild is
+still correct and is NOT to be made identity-preserving.
+
+**The destructive rebuild is `(replace __seq_in <fresh-rebuild>)` -- answering
+THAT CALL's result, not `__seq_in` forced.** `replace`'s array arm always mutates
+its target in place and returns it, so for a vector this is `__seq_in` itself
+either way. For a STRING target it is not: a program-text string LITERAL cannot
+be written in place (`.kb/string-write-runtime.md`), so `replace`'s string arm
+copies it and answers the COPY. `(progn (replace __seq_in <rebuild>) __seq_in)`
+-- answering the argument unconditionally -- was tried first and is wrong: it
+silently discards that copy and answers the UNSORTED literal
+(`(sort "cab" #'char<)` came back `"cab"`, caught by
+`compileAndRunSequenceReturningFunctionsOnStrings` and
+`compileSequenceOperatorsWithoutTheArrayRuntime` on the JVM suite). The
+INTERPRETER takes a separate path, `Environment.seqResultDestructive`, since its
+native `sort`/`stable-sort`/`nreverse` never routed through the macro expander's
+dispatch: it writes `LispString`/`LispArray`/`LispIntVector` in place directly
+(bypassing the `REPLACE` builtin, which cannot take a LIST source into a STRING
+target -- `requireString` demands a literal `LispString`) and takes the same
+source-literal branch (`sourceLiteral()` -> `copyForBulkWrite()`) `replace`'s own
+target arm does.
+
+**What this does NOT do: touch the backing store beyond the active length.**
+`list`'s length is always exactly `original`'s own active length (fill pointer,
+when present) for all three callers -- a pure permutation, never growing or
+shrinking -- so a fill-pointered array's SPARE capacity (`array-total-size`
+beyond `fill-pointer`) is untouched:
+`(make-array 5 :adjustable t :fill-pointer 3 ...)` sorted keeps total-size 5,
+fill-pointer 3, same object.
+
+**`delete`/`delete-if`/`delete-if-not`/`nsubstitute`/`nsubstitute-if(-not)` are
+the OTHER side of this bug, found by the same todo**: these five had NO
+vector/string arm at all (only a cons-cell splice/`rplaca` loop), so a vector or
+string argument was a SILENT NO-OP -- `(delete 1 (vector 3 1 2))` answered
+`#(3 1 2)` unchanged. CLHS's "a destructive function may answer a fresh
+sequence" latitude, and this codebase's own `delete-duplicates`-shares-
+`remove-duplicates`'s-non-destructive-lowering precedent, make the CHEAP fix
+also the RIGHT one: each routes through a RUNTIME check
+(`LispMacroExpander.deleteOrSubstituteDispatch`, `(or (stringp seq) (vectorp
+seq))`) to its `remove`/`substitute` family's own vector/string handling instead
+-- a vector/string comes back a FRESH sequence like `remove`/`substitute` do
+(NOT identity-preserved; that is deliberately out of scope here, since neither
+CLHS nor any real caller found so far needs it, see the re-evaluation trigger
+below). On the interpreter this reaches THREE separate code paths per operator
+family, because `delete`/`nsubstitute` had raw `env.defineFunction` Java
+closures (`Environment.removeValues`/`substituteValues`, shared with
+`remove`/`substitute`), `delete-if`/`delete-if-not`/`nsubstitute-if(-not)` had
+their own (`LispEvaluator.deleteIfValues`/`nsubstituteIfValues`, routed to
+`removeIfValues`/`substituteIfValues`), and every one of them ALSO has an
+`evalCons`/`compileCons` macro-expansion path for the direct-call and
+`funcall`/`apply` (`BuiltinFunctionWrappers` wrapper-lambda) forms -- all had to
+move together or `(delete-if ...)` and `(funcall #'delete-if ...)` would answer
+differently again.
+
+**Re-evaluation trigger**: if a caller ever needs
+`delete`/`nsubstitute`-on-a-vector to be `eq` to its argument (this todo's
+fill-pointer caller does not -- `sort-rows` calls `sort`, not `delete`, on the
+vector; `delete-rows` calls `delete` on a LIST), the honest fix is in-place
+compaction (shift surviving elements down, pull the fill pointer back) rather
+than routing through `remove`, which is what SBCL does and what makes
+`(eq v (delete item v))` true there for a fill-pointered `v`.
+
+Pinned by `LispEvaluatorTest.evalSortNreverseStableSortKeepFillPointerAdjustableAndIdentity`
+/ `evalDeleteNsubstituteFamilyOnVectorsAndStrings`, the
+`compileAndRunSortNreverseStableSortKeepFillPointerAdjustableAndIdentity` /
+`compileAndRunDeleteAndNsubstituteFamilyOnVectorsAndStrings` twins in
+`JvmLispCompilerTest`, `sortNreverseStableSortKeepFillPointerAdjustableAndIdentity`
+/ `deleteAndNsubstituteFamilyOnVectorsAndStrings` in
+`WasmLispCompilerIntegrationTest`, and the
+`sort-nreverse-stable-sort-keep-fill-pointer-adjustable-and-identity` /
+`delete-and-nsubstitute-family-on-vectors-and-strings` `ci-spec.yaml` cases (all
+four backends, byte-identical).
 
 ## adjust-array
 
@@ -601,7 +784,9 @@ pointer carries over (make-array range-checks it against the new size, so
 shrinking below it errors like CL); rank mismatch and displaced inputs signal
 clear errors; `:displaced-to` in adjust-array is rejected. Without an explicit
 `:initial-element` the opened cells take the array's own element type zero, not
-`nil` (the section above).
+`nil`, and the result carries the argument's element type unchanged (the two
+sections above). An IMMUTABLE string is a legal argument everywhere (it answers a
+fresh 5-long string); a PACKED vector is not.
 
 Implementation split, chosen to keep the n-dimensional copy logic OUT of
 per-backend codegen:
@@ -614,7 +799,8 @@ per-backend codegen:
   `:fill-pointer`/`:adjustable`, `array-dimensions`, `array-total-size`,
   two-arg `floor` for the subscript decomposition, `row-major-aref` /
   `%row-major-aset` for the copy) plus ONE new internal primitive
-  `%array-become` per backend, plus `%array-default-element` for the fill (JVM
+  `%array-become` per backend, plus `%array-default-element` for the fill and
+  `%array-adopt-element-type` for the copy's declared type (JVM
   `_arrayBecome`: header dims/fp copy +
   ArrayList resize/copy; WASM: three inline `struct.set`s swapping the header's
   dims car, meta fp and data slot). Both compilers dispatch

@@ -2107,6 +2107,363 @@ class GpuTest {
 		assertThat(Gpu.pick(table, 0, picked, 0, new int[] { slab }, slab)).isFalse();
 	}
 
+	// --- the fused tier (.todo/499) --------------------------------------------------
+
+	/**
+	 * The chain of device members a fused kernel replaces, run member by member at one
+	 * width, over arrays the earlier members left resident (the resident tier's zip and
+	 * scale need that). Every step asserts it was taken.
+	 */
+	private static final class Chain {
+
+		final boolean single;
+
+		Chain(boolean single) {
+			this.single = single;
+		}
+
+		Object fresh(int n) {
+			return this.single ? new float[n] : new double[n];
+		}
+
+		int n(Object a) {
+			return this.single ? ((float[]) a).length : ((double[]) a).length;
+		}
+
+		Object map(int op, Object a) {
+			Object c = fresh(n(a));
+			assertThat(this.single ? Gpu.map(op, (float[]) a, 0, (float[]) c, 0, n(a))
+					: Gpu.map(op, (double[]) a, 0, (double[]) c, 0, n(a)))
+				.as("map %d", op)
+				.isTrue();
+			return c;
+		}
+
+		Object zip(int op, Object a, Object b) {
+			Object c = fresh(n(a));
+			assertThat(this.single ? Gpu.zip(op, (float[]) a, 0, (float[]) b, 0, (float[]) c, 0, n(a))
+					: Gpu.zip(op, (double[]) a, 0, (double[]) b, 0, (double[]) c, 0, n(a)))
+				.as("zip %d", op)
+				.isTrue();
+			return c;
+		}
+
+		Object scale(int op, Object a, double s, boolean swap) {
+			Object c = fresh(n(a));
+			assertThat(this.single ? Gpu.scale(op, (float[]) a, 0, s, swap, (float[]) c, 0, n(a))
+					: Gpu.scale(op, (double[]) a, 0, s, swap, (double[]) c, 0, n(a)))
+				.as("scale %d", op)
+				.isTrue();
+			return c;
+		}
+
+		/** {@code a}, {@code rows x len}, folded over its last axis. */
+		Object fold(int op, Object a, int rows, int len) {
+			Object c = fresh(rows);
+			assertThat(this.single ? Gpu.fold(op, (float[]) a, 0, (float[]) c, 0, rows, len, 1)
+					: Gpu.fold(op, (double[]) a, 0, (double[]) c, 0, rows, len, 1))
+				.as("fold %d", op)
+				.isTrue();
+			return c;
+		}
+
+		/** {@code a}, {@code rows x len}, against the per-row {@code b}, broadcast. */
+		Object bcast(int op, Object a, Object b, int rows, int len) {
+			Object c = fresh(rows * len);
+			int[] dims = { rows, len }, sa = { len, 1 }, sb = { 1, 0 };
+			assertThat(this.single ? Gpu.bcast(op, (float[]) a, 0, sa, (float[]) b, 0, sb, (float[]) c, 0, dims)
+					: Gpu.bcast(op, (double[]) a, 0, sa, (double[]) b, 0, sb, (double[]) c, 0, dims))
+				.as("bcast %d", op)
+				.isTrue();
+			return c;
+		}
+
+		double[] doubles(Object a) {
+			if (!this.single) {
+				return (double[]) a;
+			}
+			return widen((float[]) a);
+		}
+
+	}
+
+	/**
+	 * The width's member boundary: a chain at {@code #f} stores every member as float.
+	 */
+	private static double nr(double v, boolean single) {
+		return single ? (float) v : v;
+	}
+
+	private static double[] widen(float[] f) {
+		double[] d = new double[f.length];
+		for (int i = 0; i < f.length; i++) {
+			d[i] = f[i];
+		}
+		return d;
+	}
+
+	@Test
+	void theFusedTierLandsOnTheComposedDeviceChainsBitsAtBothWidths() {
+		// The whole claim of the tier: a fused kernel IS the chain of device members it
+		// replaces, rounding for rounding -- so its result is that chain's bit for bit,
+		// libm members included (kernel and chain call the same erf and exp at the same
+		// width). Each composition runs twice, member by member and fused.
+		int rows = 1024, len = 256, n = rows * len;
+		double eps = 1.0e-5;
+		for (boolean single : new boolean[] { false, true }) {
+			Chain ch = new Chain(single);
+			Random random = new Random(11);
+			Object x = ch.fresh(n), g = ch.fresh(n), old = ch.fresh(n), zeros = ch.fresh(n);
+			for (int i = 0; i < n; i++) {
+				double xv = random.nextDouble() * 6 - 3, gv = random.nextDouble() * 2 - 1, ov = random.nextDouble();
+				if (single) {
+					((float[]) x)[i] = (float) xv;
+					((float[]) g)[i] = (float) gv;
+					((float[]) old)[i] = (float) ov;
+				}
+				else {
+					((double[]) x)[i] = xv;
+					((double[]) g)[i] = gv;
+					((double[]) old)[i] = ov;
+				}
+			}
+			// softmax: amax, sub, exp, sum, div.
+			Object m = ch.fold(Gpu.FOLD_AMAX, x, rows, len);
+			Object e = ch.map(Gpu.MAP_EXP, ch.bcast(Gpu.BIN_SUB, x, m, rows, len));
+			Object out = ch.bcast(Gpu.BIN_DIV, e, ch.fold(Gpu.FOLD_SUM, e, rows, len), rows, len);
+			Object fused = ch.fresh(n);
+			assertThat(single ? Gpu.softmax((float[]) x, 0, (float[]) fused, 0, rows, len)
+					: Gpu.softmax((double[]) x, 0, (double[]) fused, 0, rows, len))
+				.isTrue();
+			assertThat(ch.doubles(fused)).as("softmax single=%s", single).containsExactly(ch.doubles(out));
+			// its adjoint: mul, sum, sub, mul.
+			Object tot = ch.fold(Gpu.FOLD_SUM, ch.zip(Gpu.BIN_MUL, g, out), rows, len);
+			Object dx = ch.zip(Gpu.BIN_MUL, out, ch.bcast(Gpu.BIN_SUB, g, tot, rows, len));
+			fused = ch.fresh(n);
+			assertThat(single ? Gpu.softmaxGrad((float[]) g, 0, (float[]) out, 0, (float[]) fused, 0, rows, len)
+					: Gpu.softmaxGrad((double[]) g, 0, (double[]) out, 0, (double[]) fused, 0, rows, len))
+				.isTrue();
+			assertThat(ch.doubles(fused)).as("softmax grad single=%s", single).containsExactly(ch.doubles(dx));
+			// gelu: mul 0.5, div sqrt 2, erf, 1 + , mul.
+			Object t1 = ch.scale(Gpu.BIN_MUL, x, 0.5, false);
+			Object t2 = ch.scale(Gpu.BIN_DIV, x, 1.4142135623730951, false);
+			Object t4 = ch.scale(Gpu.BIN_ADD, ch.map(Gpu.MAP_ERF, t2), 1.0, true);
+			Object gelu = ch.zip(Gpu.BIN_MUL, t1, t4);
+			fused = ch.fresh(n);
+			assertThat(single ? Gpu.gelu((float[]) x, 0, (float[]) fused, 0, n)
+					: Gpu.gelu((double[]) x, 0, (double[]) fused, 0, n))
+				.isTrue();
+			assertThat(ch.doubles(fused)).as("gelu single=%s", single).containsExactly(ch.doubles(gelu));
+			// its adjoint, with and without an accumulated gradient to fold onto.
+			Object g1 = ch.zip(Gpu.BIN_MUL, g, t4), g4 = ch.zip(Gpu.BIN_MUL, g, t1);
+			Object ex = ch.map(Gpu.MAP_EXP, ch.map(Gpu.MAP_NEGATIVE, ch.zip(Gpu.BIN_MUL, t2, t2)));
+			Object g2 = ch.zip(Gpu.BIN_MUL, g4, ch.scale(Gpu.BIN_MUL, ex, 1.1283791670955126, true));
+			Object b = ch.scale(Gpu.BIN_DIV, g2, 1.4142135623730951, false);
+			Object a = ch.scale(Gpu.BIN_MUL, g1, 0.5, false);
+			Object dxNew = ch.zip(Gpu.BIN_ADD, b, a);
+			Object dxOld = ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, old, b), a);
+			fused = ch.fresh(n);
+			Object fusedOld = ch.fresh(n);
+			if (single) {
+				assertThat(Gpu.geluGrad((float[]) g, 0, (float[]) x, 0, null, 0, (float[]) fused, 0, n)).isTrue();
+				assertThat(Gpu.geluGrad((float[]) g, 0, (float[]) x, 0, (float[]) old, 0, (float[]) fusedOld, 0, n))
+					.isTrue();
+			}
+			else {
+				assertThat(Gpu.geluGrad((double[]) g, 0, (double[]) x, 0, null, 0, (double[]) fused, 0, n)).isTrue();
+				assertThat(Gpu.geluGrad((double[]) g, 0, (double[]) x, 0, (double[]) old, 0, (double[]) fusedOld, 0, n))
+					.isTrue();
+			}
+			assertThat(ch.doubles(fused)).as("gelu grad single=%s", single).containsExactly(ch.doubles(dxNew));
+			assertThat(ch.doubles(fusedOld)).as("gelu grad onto old single=%s", single)
+				.containsExactly(ch.doubles(dxOld));
+			// layer-norm: mean, sub, the variance's square / sum / divisor, eps, sqrt,
+			// div.
+			Object mu = ch.scale(Gpu.BIN_DIV, ch.fold(Gpu.FOLD_SUM, x, rows, len), len, false);
+			Object dev = ch.bcast(Gpu.BIN_SUB, x, mu, rows, len);
+			Object v = ch.scale(Gpu.BIN_DIV, ch.fold(Gpu.FOLD_SUM, ch.zip(Gpu.BIN_MUL, dev, dev), rows, len), len,
+					false);
+			Object sd = ch.map(Gpu.MAP_SQRT, ch.scale(Gpu.BIN_ADD, v, eps, false));
+			Object norm = ch.bcast(Gpu.BIN_DIV, dev, sd, rows, len);
+			fused = ch.fresh(n);
+			assertThat(single ? Gpu.layerNorm((float[]) x, 0, (float[]) fused, 0, rows, len, eps)
+					: Gpu.layerNorm((double[]) x, 0, (double[]) fused, 0, rows, len, eps))
+				.isTrue();
+			assertThat(ch.doubles(fused)).as("layer-norm single=%s", single).containsExactly(ch.doubles(norm));
+			// its adjoint, the tape's own walk: the division's two adjoints, sqrt's, the
+			// divisor's, the broadcast onto zeros, the squared deviations' two, the two
+			// means' -- and the four contributions folded onto x's gradient in order.
+			Object gDev = ch.bcast(Gpu.BIN_DIV, g, sd, rows, len);
+			Object r = ch.bcast(Gpu.BIN_DIV, ch.zip(Gpu.BIN_MUL, g, dev), ch.zip(Gpu.BIN_MUL, sd, sd), rows, len);
+			Object gSd = ch.fold(Gpu.FOLD_SUM, ch.map(Gpu.MAP_NEGATIVE, r), rows, len);
+			Object gVe = ch.zip(Gpu.BIN_DIV, gSd, ch.scale(Gpu.BIN_MUL, sd, 2.0, true));
+			Object gSq = ch.bcast(Gpu.BIN_ADD, zeros, ch.scale(Gpu.BIN_DIV, gVe, len, false), rows, len);
+			Object gd2 = ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_MUL, gSq, dev), ch.zip(Gpu.BIN_MUL, gSq, dev));
+			Object gM2 = ch.fold(Gpu.FOLD_SUM, ch.map(Gpu.MAP_NEGATIVE, gd2), rows, len);
+			Object a2 = ch.scale(Gpu.BIN_DIV, ch.bcast(Gpu.BIN_ADD, zeros, gM2, rows, len), len, false);
+			Object gMu = ch.fold(Gpu.FOLD_SUM, ch.map(Gpu.MAP_NEGATIVE, gDev), rows, len);
+			Object a4 = ch.scale(Gpu.BIN_DIV, ch.bcast(Gpu.BIN_ADD, zeros, gMu, rows, len), len, false);
+			Object lnNew = ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, gd2, a2), gDev), a4);
+			Object lnOld = ch.zip(Gpu.BIN_ADD,
+					ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, ch.zip(Gpu.BIN_ADD, old, gd2), a2), gDev), a4);
+			fused = ch.fresh(n);
+			fusedOld = ch.fresh(n);
+			if (single) {
+				assertThat(
+						Gpu.layerNormGrad((float[]) g, 0, (float[]) x, 0, null, 0, (float[]) fused, 0, rows, len, eps))
+					.isTrue();
+				assertThat(Gpu.layerNormGrad((float[]) g, 0, (float[]) x, 0, (float[]) old, 0, (float[]) fusedOld, 0,
+						rows, len, eps))
+					.isTrue();
+			}
+			else {
+				assertThat(Gpu.layerNormGrad((double[]) g, 0, (double[]) x, 0, null, 0, (double[]) fused, 0, rows, len,
+						eps))
+					.isTrue();
+				assertThat(Gpu.layerNormGrad((double[]) g, 0, (double[]) x, 0, (double[]) old, 0, (double[]) fusedOld,
+						0, rows, len, eps))
+					.isTrue();
+			}
+			assertThat(ch.doubles(fused)).as("layer-norm grad single=%s", single).containsExactly(ch.doubles(lnNew));
+			assertThat(ch.doubles(fusedOld)).as("layer-norm grad onto old single=%s", single)
+				.containsExactly(ch.doubles(lnOld));
+		}
+	}
+
+	@Test
+	void theLibmFreeFusedMembersAreTheSequentialReferencesBits() {
+		// The three fused members with no library function in them are BIT-IDENTICAL to
+		// the CPU chain, not merely to the device's: the row folds are sequential in a
+		// double and every member boundary narrows to the width. Checked against a
+		// sequential Java replay of the chain, and the dropout mask against the
+		// generator's own walk.
+		int rows = 512, len = 384, n = rows * len;
+		double eps = 1.0e-5, p = 0.1, span = 1.0 - p;
+		for (boolean single : new boolean[] { false, true }) {
+			Random random = new Random(5);
+			double[] x = new double[n], g = new double[n], o = new double[n];
+			for (int i = 0; i < n; i++) {
+				x[i] = nr(random.nextDouble() * 6 - 3, single);
+				g[i] = nr(random.nextDouble() * 2 - 1, single);
+				o[i] = nr(random.nextDouble(), single);
+			}
+			double[] norm = new double[n], grad = new double[n], gradOld = new double[n];
+			for (int r = 0; r < rows; r++) {
+				int base = r * len;
+				double acc = 0;
+				for (int k = 0; k < len; k++) {
+					acc += x[base + k];
+				}
+				double mu = nr(nr(acc, single) / len, single);
+				acc = 0;
+				for (int k = 0; k < len; k++) {
+					double dev = nr(x[base + k] - mu, single);
+					acc += nr(dev * dev, single);
+				}
+				double sd = nr(Math.sqrt(nr(nr(nr(acc, single) / len, single) + eps, single)), single);
+				double q = nr(sd * sd, single), accSd = 0, accMu = 0;
+				for (int k = 0; k < len; k++) {
+					double dev = nr(x[base + k] - mu, single);
+					norm[base + k] = nr(dev / sd, single);
+					accSd += nr(-nr(nr(g[base + k] * dev, single) / q, single), single);
+					accMu += nr(-nr(g[base + k] / sd, single), single);
+				}
+				double gS = nr(nr(nr(accSd, single) / nr(2.0 * sd, single), single) / len, single);
+				double gSq = nr(0.0 + gS, single), accM2 = 0;
+				for (int k = 0; k < len; k++) {
+					double pp = nr(gSq * nr(x[base + k] - mu, single), single);
+					accM2 += nr(-nr(pp + pp, single), single);
+				}
+				double a2 = nr(nr(0.0 + nr(accM2, single), single) / len, single);
+				double a4 = nr(nr(0.0 + nr(accMu, single), single) / len, single);
+				for (int k = 0; k < len; k++) {
+					double dev = nr(x[base + k] - mu, single);
+					double pp = nr(gSq * dev, single), gd2 = nr(pp + pp, single);
+					double gDev = nr(g[base + k] / sd, single);
+					grad[base + k] = nr(nr(nr(gd2 + a2, single) + gDev, single) + a4, single);
+					gradOld[base + k] = nr(nr(nr(nr(o[base + k] + gd2, single) + a2, single) + gDev, single) + a4,
+							single);
+				}
+			}
+			// The softmax adjoint, with o standing in for the softmax output.
+			double[] sgrad = new double[n];
+			for (int r = 0; r < rows; r++) {
+				int base = r * len;
+				double acc = 0;
+				for (int k = 0; k < len; k++) {
+					acc += nr(g[base + k] * o[base + k], single);
+				}
+				double tot = nr(acc, single);
+				for (int k = 0; k < len; k++) {
+					sgrad[base + k] = nr(o[base + k] * nr(g[base + k] - tot, single), single);
+				}
+			}
+			int s1 = 4321, s2 = 8765, s3 = 2468;
+			int[] st = { s1, s2, s3 };
+			double[] mask = new double[n];
+			for (int k = 0; k < n; k++) {
+				double u = nr(next(st), single);
+				mask[k] = nr((u > p ? 1.0 : 0.0) / span, single);
+			}
+			if (single) {
+				float[] xf = new float[n], gf = new float[n], of = new float[n];
+				for (int i = 0; i < n; i++) {
+					xf[i] = (float) x[i];
+					gf[i] = (float) g[i];
+					of[i] = (float) o[i];
+				}
+				float[] c = new float[n];
+				assertThat(Gpu.layerNorm(xf, 0, c, 0, rows, len, eps)).isTrue();
+				assertThat(widen(c)).as("layer-norm f32").containsExactly(norm);
+				assertThat(Gpu.layerNormGrad(gf, 0, xf, 0, null, 0, c, 0, rows, len, eps)).isTrue();
+				assertThat(widen(c)).as("layer-norm grad f32").containsExactly(grad);
+				assertThat(Gpu.layerNormGrad(gf, 0, xf, 0, of, 0, c, 0, rows, len, eps)).isTrue();
+				assertThat(widen(c)).as("layer-norm grad onto old f32").containsExactly(gradOld);
+				assertThat(Gpu.softmaxGrad(gf, 0, of, 0, c, 0, rows, len)).isTrue();
+				assertThat(widen(c)).as("softmax grad f32").containsExactly(sgrad);
+				assertThat(Gpu.dropoutMask(c, 0, n, p, span, s1, s2, s3)).isTrue();
+				assertThat(widen(c)).as("dropout mask f32").containsExactly(mask);
+			}
+			else {
+				double[] c = new double[n];
+				assertThat(Gpu.layerNorm(x, 0, c, 0, rows, len, eps)).isTrue();
+				assertThat(c).as("layer-norm f64").containsExactly(norm);
+				assertThat(Gpu.layerNormGrad(g, 0, x, 0, null, 0, c, 0, rows, len, eps)).isTrue();
+				assertThat(c).as("layer-norm grad f64").containsExactly(grad);
+				assertThat(Gpu.layerNormGrad(g, 0, x, 0, o, 0, c, 0, rows, len, eps)).isTrue();
+				assertThat(c).as("layer-norm grad onto old f64").containsExactly(gradOld);
+				assertThat(Gpu.softmaxGrad(g, 0, o, 0, c, 0, rows, len)).isTrue();
+				assertThat(c).as("softmax grad f64").containsExactly(sgrad);
+				assertThat(Gpu.dropoutMask(c, 0, n, p, span, s1, s2, s3)).isTrue();
+				assertThat(c).as("dropout mask f64").containsExactly(mask);
+			}
+			assertThat(Gpu.rngAdvance(s1, s2, s3, n)).isEqualTo(st);
+		}
+	}
+
+	@Test
+	void everyFusedDeclineConditionStillDeclinesWithADevicePresent() {
+		// Too few rows for a fresh operand, an empty row, a result or an accumulated
+		// gradient too short, a state word out of range: each declines, none throws.
+		int rows = 4, len = 64, n = rows * len;
+		double[] x = new double[n], c = new double[n];
+		assertThat(Gpu.softmax(x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.softmaxGrad(x, 0, x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.layerNorm(x, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormGrad(x, 0, x, 0, null, 0, c, 0, rows, len, 1e-5)).isFalse();
+		int big = (int) Math.max(Gpu.mapMinElements() * 2, Gpu.foldMinElements() * 2);
+		double[] a = new double[big], out = new double[big], shortArray = new double[big - 1];
+		assertThat(Gpu.gelu(a, 0, shortArray, 0, big)).isFalse();
+		assertThat(Gpu.gelu(a, 0, out, 0, 0)).isFalse();
+		assertThat(Gpu.geluGrad(a, 0, a, 0, shortArray, 0, out, 0, big)).isFalse();
+		assertThat(Gpu.softmax(a, 0, out, 0, 0, big)).isFalse();
+		assertThat(Gpu.softmax(a, 0, shortArray, 0, 256, big / 256)).isFalse();
+		assertThat(Gpu.layerNormGrad(a, 0, a, 0, shortArray, 0, out, 0, 256, big / 256, 1e-5)).isFalse();
+		assertThat(Gpu.dropoutMask(out, 0, big, 0.1, 0.9, 1 << 23, 1, 1)).isFalse();
+		assertThat(Gpu.dropoutMask(out, 0, 0, 0.1, 0.9, 1, 1, 1)).isFalse();
+		assertThat(Gpu.dropoutMask(shortArray, 0, big, 0.1, 0.9, 1, 1, 1)).isFalse();
+	}
+
 	/**
 	 * The clip norm's sum of squares: the ONE member of this library whose result is not
 	 * the caller's own fold. It is offered over a resident operand only, it is
