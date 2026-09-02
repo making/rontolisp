@@ -42,9 +42,12 @@ import java.util.List;
  * is the empty no-op interface on every rontolisp backend (nil'd on SBCL for the
  * comparison). Since 2026-09-02 the printer consults the runtime {@code *package*}
  * accessibility (CLHS 22.1.3.3.1, {@code .kb/pretty-printer.md}), so an accessible symbol
- * prints unqualified exactly as on SBCL ({@code ADD} under the test package that uses
- * {@code my-app/main}; rove's internal {@code ROVE/CORE/ASSERTION::OUTPUT-OF} stays
- * qualified there) -- no text-level divergence remains. The exercise sets
+ * prints unqualified exactly as on SBCL: {@code ADD} while {@code run} has
+ * {@code *package*} bound to the test package that uses {@code my-app/main}, and
+ * {@code MY-APP/MAIN:ADD} where {@code *package*} is still {@code cl-user} -- the
+ * {@code run-test} call, and the failed form the summary re-prints after {@code run} has
+ * returned; rove's internal {@code ROVE/CORE/ASSERTION::OUTPUT-OF} stays qualified
+ * everywhere -- so no text-level divergence remains. The exercise sets
  * {@code *print-pretty*} to nil so SBCL's line-wrapping of long {@code ~W} forms does not
  * manufacture a fourth difference.
  */
@@ -104,7 +107,7 @@ class RoveE2eTest extends AsdfLibraryE2eSupport {
 			› MISC-TEST
 			Expect (PARSE-TOKEN "") to be true.
 			APP-ERROR: Invalid token
-			(PARSE-TOKEN "")
+			(MY-APP/MAIN:PARSE-TOKEN "")
 
 			Summary:
 			1 test failed.
@@ -126,8 +129,8 @@ class RoveE2eTest extends AsdfLibraryE2eSupport {
 			my-plain passed: yes
 			add-test
 			adding two integers
-			✓ Expect (= (ADD 1 2) 3) to be true.
-			✓ Expect (= (ADD 1 2) 4) to be false.
+			✓ Expect (= (MY-APP/MAIN:ADD 1 2) 3) to be true.
+			✓ Expect (= (MY-APP/MAIN:ADD 1 2) 4) to be false.
 			printing
 			✓ Expect (EQUAL (ROVE/CORE/ASSERTION::OUTPUT-OF (WRITE-STRING "hi") *STANDARD-OUTPUT*) "hi") to be true.
 			single passed: yes

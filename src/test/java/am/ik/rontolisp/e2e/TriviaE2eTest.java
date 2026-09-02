@@ -78,9 +78,8 @@ class TriviaE2eTest extends AsdfLibraryE2eSupport {
 			""";
 
 	private static final List<String> EXPECTED = List.of(":CONST-OK", "33", "(:CONS 1 2)", "(:LIST* 1 2 (3 4))",
-			"(:VEC 1 2 3)", "(:GUARD 15)", ":OR-OK", "(:AND 1 2)", "(:EMATCH-ERROR T)",
-			"(:DEFPATTERN TRIVIA-E2E::X TRIVIA-E2E::Y)", "(:STRUCT 1 2)", "(:STRUCT2 3 4)", "(:CLASS 9)", "(:CLASS2 7)",
-			":SXQL-KW", "(:MITO := :NAME \"Bob\")");
+			"(:VEC 1 2 3)", "(:GUARD 15)", ":OR-OK", "(:AND 1 2)", "(:EMATCH-ERROR T)", "(:DEFPATTERN X Y)",
+			"(:STRUCT 1 2)", "(:STRUCT2 3 4)", "(:CLASS 9)", "(:CLASS2 7)", ":SXQL-KW", "(:MITO := :NAME \"Bob\")");
 
 	@Override
 	protected String systemDir() {
