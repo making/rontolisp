@@ -443,7 +443,7 @@ hardware: **the PRODUCTION side is below**; the test side -- whether `GpuTest`,
 `LinalgGpuTest`, `MetalGpuTest` and `LinalgGpuDeclineTest` actually run the tier each one
 names -- needs a Metal machine to see the `.todo/495` form at all (that backend's fold
 threshold is `Long.MAX_VALUE`, so a shape chosen from it collapses), and was taken by the
-Apple-silicon session in the same round.
+Apple-silicon session in the same round -- "The test-side sweep on Metal", below.
 
 **How it was measured.** A counting hook on `LinalgGpu.define` -- the one place every
 interpreter offer passes through -- keyed by the member's NAME and by the ARGUMENT SHAPES as
