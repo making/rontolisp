@@ -648,7 +648,11 @@ public final class PackageRegistry {
 				LispNames.GRAY_STREAM_LINE_COLUMN, LispNames.GRAY_STREAM_START_LINE_P, LispNames.GRAY_STREAM_TERPRI,
 				LispNames.GRAY_STREAM_FRESH_LINE, LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN,
 				LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT,
-				LispNames.GRAY_STREAM_CLEAR_OUTPUT, LispNames.GRAY_STREAM_FILE_POSITION));
+				LispNames.GRAY_STREAM_CLEAR_OUTPUT, LispNames.GRAY_STREAM_FILE_POSITION,
+				// The IEEE binary16 scalar pair and the bulk widen/narrow over packed
+				// float arrays (eval.FloatBitsWidening), .todo/671.
+				LispNames.FLOAT16_BITS, LispNames.BITS_FLOAT16, LispNames.WIDEN_FLOAT_BITS,
+				LispNames.NARROW_FLOAT_BITS));
 		Set<String> rontolispSymbols = new HashSet<>(rontolispExternals);
 		// Internal: the stoppable HTTP server seam behind the clack-handler-rontolisp
 		// shim, spelled rontolisp::%http-server-* by its call sites. Owned by the

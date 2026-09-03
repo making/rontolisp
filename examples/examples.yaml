@@ -296,6 +296,36 @@ examples:
     expect:
       equals: |
         Once upon a time, there was a little girl named Lily. She loved to play outside in the park. One day, she saw a big, r
+  # The Gated DeltaNet layer (Qwen3.5's :deltanet kind, llama2/deltanet.lisp)
+  # against a float64 transcription of the PyTorch reference (deltanet-ref.py):
+  # the recurrence alone, then a whole decode step over five tokens, at 3
+  # decimals with a 2e-5 margin from every rounding boundary, so the text is
+  # the same with single-float arithmetic and the WASM exp approximation.
+  - path: llama2/deltanet-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: deltanet.lisp's arithmetic pinned against deltanet-ref.py -- torch_recurrent_gated_delta_rule at heads 2 / dim 4 over three tokens plus the final states, then Qwen3_5GatedDeltaNet.forward (conv, SiLU, l2norm, the gates, the recurrence, the gated RMSNorm, out_proj) over five tokens of a dim-8 two-head kernel-4 layer. The scalar vec.lisp kernels on every backend
+    expect:
+      file: .expected/deltanet-check.txt
+  - path: llama2/deltanet-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    simd: true
+    note: the same check under --simd on every leg -- the lane kernels' single-precision reductions land on the same text
+    expect:
+      file: .expected/deltanet-check.txt
+  # LFM2's gated short-conv layer (the :shortconv kind, llama2/shortconv.lisp)
+  # against a float64 transcription of Lfm2ShortConv (shortconv-ref.py), four
+  # tokens of a dim-8 kernel-3 layer, the same 3-decimal / 2e-5-margin rule.
+  - path: llama2/shortconv-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: shortconv.lisp's arithmetic pinned against shortconv-ref.py -- in_proj, the B | C | x split, the gated causal conv of kernel 3 (causal-conv.lisp, shared with deltanet.lisp) with no activation, out_proj -- over four tokens, so the two-row window fills and wraps. The scalar vec.lisp kernels on every backend
+    expect:
+      file: .expected/shortconv-check.txt
+  - path: llama2/shortconv-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    simd: true
+    note: the same check under --simd on every leg
+    expect:
+      file: .expected/shortconv-check.txt
   - path: llama2/llama2.lisp
     backends: [interpreter, jvm, wasm]
     workDir: llama2

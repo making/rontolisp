@@ -9,6 +9,23 @@
 ;;;; the arithmetic core of this file with the I/O taken away; this is the whole
 ;;;; engine.
 ;;;;
+;;;; THE LAYER TABLE
+;;;; ---------------
+;;;; What is not run.c: the forward pass is a TABLE OF LAYER KINDS rather than
+;;;; Llama 2 spelled out. A model is a list of layers, every one of them the same
+;;;; residual sandwich -- normalise, mix, add back -- differing only in its kind
+;;;; (:attention, :swiglu, :deltanet -- the Gated DeltaNet recurrence of
+;;;; Qwen3.5, deltanet.lisp beside this file -- or :shortconv, LFM2's gated
+;;;; short convolution, shortconv.lisp) and in the options beside it:
+;;;; QK-norm, the RoPE layout (adjacent pairs, halves, or none at all), a
+;;;; partial rotary dim, an output gate, the attention scale, and the
+;;;; model-level embedding / residual / logit multipliers. The families
+;;;; published since Llama 2 are that same list with different options, so a
+;;;; reader of a published checkpoint builds the list from the file's
+;;;; architecture name and the forward pass needs no case for it. llama2.c's
+;;;; .bin is the row where every option is at its default -- which is why the
+;;;; stories are still byte-identical.
+;;;;
 ;;;; SETUP
 ;;;; -----
 ;;;; stories260K.bin + tok512.bin (the smallest TinyStories model, 1 MB) are
@@ -160,10 +177,222 @@
   (read-f32-vector s n)
   nil)
 
+;;; --- the model: a table of layer kinds ----------------------------------------
+;;; The models published since Llama 2 are Llama 2's skeleton with per-layer and
+;;; per-model deltas, so the layer here is a KIND WITH OPTIONS and the model is a
+;;; list of them. Every layer is the same residual sandwich
+;;;
+;;;     x <- x + residual-multiplier * f(rmsnorm(x, the layer's norm), the layer)
+;;;
+;;; and differs only in what f is -- :attention, :swiglu, :deltanet (the gated
+;;; linear recurrence Qwen3.5 puts in three of every four blocks, deltanet.lisp)
+;;; or :shortconv (the gated convolution LFM2 puts in ten of sixteen,
+;;; shortconv.lisp) -- and in the options beside it. Llama 2 is :attention then :swiglu per block with every option at
+;;; its default, which is what the .bin loader below builds; the table stays a
+;;; table by never special-casing that.
+
+(defparameter *eps* 0.00001)
+
+(defun opt (options key default)
+  ;; A plist lookup that tells a MISSING key from one whose value is nil --
+  ;; (:rope nil) is NoPE, not "unset". The first occurrence wins, so a reader
+  ;; overrides an architecture row by consing its own keys in front of it.
+  (do ((rest options (cdr (cdr rest))))
+      ((null rest) default)
+    (if (eq (car rest) key) (return (car (cdr rest))))))
+
+;;; --- the architecture table -----------------------------------------------
+;;; general.architecture (GGUF) / model_type (config.json) -> what that family
+;;; does differently. Sizes, weights and the file's RoPE layout are NOT here:
+;;; they come from the checkpoint, and a reader prepends them to the row.
+;;;
+;;;   :qk-norm            the checkpoint carries per-layer q_norm / k_norm, and
+;;;                       each head's q and k are RMSNormed with them
+;;;   :rope-theta         the RoPE base (Llama 2: 10000)
+;;;   :rotary-dim         how many of each head's dims rotate (default: all)
+;;;   :no-rope-interval   every Nth block (1-based) has no RoPE at all
+;;;   :mixer              a hybrid's other token mixer, :deltanet or :shortconv
+;;;   :full-attention-interval
+;;;                       every Nth block (1-based) is :attention, the others
+;;;                       the :mixer (Qwen3.5: 4)
+;;;   :layer-types        the explicit list instead, one of :attention /
+;;;                       :deltanet / :shortconv per block -- what a reader
+;;;                       builds from config.json's layer_types
+;;;                       ("full_attention" / "linear_attention" / "conv") or,
+;;;                       in a GGUF without an interval, from the per-layer
+;;;                       head-count array (LFM2: 0 heads = :shortconv). It is
+;;;                       per checkpoint, so a reader passes it, and it wins
+;;;                       over the interval
+;;;   :eps                the RMSNorm epsilon (default: llama2.c's 1e-5; the
+;;;                       checkpoint's rms_norm_eps / layer_norm_rms_epsilon
+;;;                       is the value, so a reader passes it)
+;;;   :tied               no lm_head: the classifier IS the embedding table
+;;;   :scale              the attention scale, when it is not 1/sqrt(head-size)
+;;;   :embedding-multiplier / :residual-multiplier / :logit-multiplier
+;;;                       Granite's scalars; their VALUES are per-checkpoint
+;;;                       (config.json), so a reader passes them, not this table
+;;;                       -- and `logits_scaling` is a divisor, so it arrives as
+;;;                       :logit-multiplier (/ 1.0 logits_scaling)
+;;;
+;;; What a READER of each family has to know that is not an option here:
+;;;
+;;;   - RoPE layout. llama.cpp's converter permutes Q and K only for the
+;;;     families whose rope type is "normal" (llama, smollm3, granite -- a GGUF
+;;;     of those is :pairs); a qwen3 / qwen35 GGUF keeps HF's layout and is
+;;;     :halves, like every safetensors.
+;;;   - qwen35's RMSNorm weights are stored as an OFFSET FROM ONE
+;;;     (Qwen3_5RMSNorm computes x * (1 + w)): input_layernorm,
+;;;     post_attention_layernorm, q_norm, k_norm and the final norm. A GGUF
+;;;     already carries 1 + w (the converter adds it); a safetensors reader
+;;;     adds the 1. The Gated DeltaNet's own norm.weight is NOT offset in
+;;;     either file (deltanet.lisp).
+;;;   - qwen35's q_proj is [heads x (query | gate), dim]: each head's
+;;;     head-size query rows are followed by its head-size gate rows, in the
+;;;     GGUF (attn_q) exactly as in HF. Both readers split it into :wq and
+;;;     :attn-gate.
+;;;   - qwen35's rotary dim is head_dim * partial_rotary_factor (256 * 0.25
+;;;     = 64 for every published member); its MRoPE sections [11 11 10]
+;;;     are the vision model's -- for text every position triple is one
+;;;     number and it reduces to 1-D RoPE over the 32 frequencies.
+(defparameter *architectures*
+  (list (list "llama") ; Llama 2, TinyLlama, and karpathy's stories*.bin
+        (list "qwen3" :qk-norm t :rope-theta 1000000.0 :eps 0.000001 :tied t)
+        ;; Qwen3.5 / 3.6 / 3.8 dense: 3 of 4 blocks Gated DeltaNet, the 4th
+        ;; gated attention (head_dim 256, GQA) with QK-norm and partial RoPE
+        (list "qwen35"
+              :mixer :deltanet
+              :full-attention-interval 4
+              :qk-norm t
+              :rotary-dim 64
+              :rope-theta 10000000.0
+              :eps 0.000001
+              :tied t)
+        (list "smollm3" :no-rope-interval 4 :rope-theta 5000000.0 :tied t)
+        (list "granite" :rope-theta 10000000.0)
+        ;; LFM2 / LFM2.5: ten of sixteen blocks a gated short convolution, the
+        ;; rest attention with QK-norm (GQA 32/8, head_dim 64); the readers
+        ;; always pass :layer-types, the pattern has no interval
+        (list "lfm2"
+              :mixer :shortconv
+              :qk-norm t
+              :rope-theta 1000000.0
+              :eps 0.00001
+              :tied t)))
+
+(defun architecture (name)
+  ;; The row for NAME, or an error naming the architectures there are.
+  (do ((rows *architectures* (cdr rows)))
+      ((null rows) (error "unsupported architecture: ~a" name))
+    (if (string= (car (car rows)) name) (return (cdr (car rows))))))
+
+;;; --- building the layer list ------------------------------------------------
+
+;; the hybrid kinds: <kind>-layer, <kind>-state, <kind>-forward
+(load "deltanet.lisp")
+(load "shortconv.lisp")
+
+(defun layer-weight (weights key l)
+  ;; The layer-L entry of an OPTIONAL per-layer weight vector (q_norm and the
+  ;; attention gate are absent in most checkpoints).
+  (let ((v (getf weights key))) (if v (aref v l) nil)))
+
+(defun attention-layer (weights options head-size l cache)
+  ;; One attention mixer. Everything a family varies is decided here, once, so
+  ;; the forward pass reads a value rather than asking what kind of model it is.
+  (let ((interval (opt options :no-rope-interval nil)))
+    (list :kind :attention
+          ;; which KV-cache slot is this layer's (a hybrid's mixers do not all
+          ;; have one, so it is not the layer's index)
+          :cache cache
+          :norm (aref (getf weights :rms-att) l)
+          :wq (aref (getf weights :wq) l)
+          :wk (aref (getf weights :wk) l)
+          :wv (aref (getf weights :wv) l)
+          :wo (aref (getf weights :wo) l)
+          ;; QK-norm: RMSNorm over each head's own dims, one weight vector of
+          ;; head-size shared by every head (Qwen3's q_norm / k_norm)
+          :q-norm (layer-weight weights :q-norm l)
+          :k-norm (layer-weight weights :k-norm l)
+          ;; an output gate over the head outputs, before wo (gated attention)
+          :gate (layer-weight weights :attn-gate l)
+          ;; :pairs rotates each head's (2i, 2i+1) -- llama2.c's layout, and a
+          ;; GGUF converted by llama.cpp, which permutes Q and K to get it.
+          ;; :halves rotates (i, i + rotary-dim/2) -- HF's rotate_half, what a
+          ;; safetensors file holds. nil is NoPE.
+          :rope (if (and interval (= 0 (mod (+ l 1) interval)))
+                    nil
+                    (opt options :rope :pairs))
+          :rotary-dim (opt options :rotary-dim head-size)
+          ;; Granite replaces 1/sqrt(head-size) with a constant of its own
+          :scale (opt options :scale (/ 1.0 (sqrt head-size))))))
+
+(defun swiglu-layer (weights l)
+  ;; The feed-forward half of a block: w2 (silu(w1 x) * w3 x).
+  (list :kind :swiglu
+        :norm (aref (getf weights :rms-ffn) l)
+        :w1 (aref (getf weights :w1) l)
+        :w2 (aref (getf weights :w2) l)
+        :w3 (aref (getf weights :w3) l)))
+
+(defun mixer-kind (options l)
+  ;; Which token mixer block L has: the reader's :layer-types entry, else the
+  ;; :full-attention-interval rule with the row's :mixer, else :attention.
+  (let ((types (opt options :layer-types nil))
+        (interval (opt options :full-attention-interval nil)))
+    (cond (types (nth l types))
+          ((and interval (/= 0 (mod (+ l 1) interval)))
+           (opt options :mixer :attention))
+          (t :attention))))
+
+(defun transformer-layers (n-layers head-size weights options)
+  ;; The layer list of a Llama-2-shaped model: per block a token mixer and a
+  ;; feed-forward. WEIGHTS is the plist of per-layer simple vectors every loader
+  ;; builds -- :rms-att :wq :wk :wv :wo (:q-norm :k-norm :attn-gate optional)
+  ;; :rms-ffn :w1 :w2 :w3, plus the :ssm-* vectors deltanet.lisp lists and the
+  ;; :conv-* vectors shortconv.lisp lists for the blocks a hybrid gives those
+  ;; kinds (the entries of the other kinds' vectors are nil there) -- and
+  ;; OPTIONS an architecture row with the reader's own keys in front of it.
+  ;; The non-attention mixers take the recurrent-state slots in order.
+  (let ((layers '()) (cache 0) (slot 0))
+    (dotimes (l n-layers)
+      (let ((kind (mixer-kind options l)))
+        (cond ((eq kind :attention)
+               (push (attention-layer weights options head-size l cache) layers)
+               (setq cache (+ cache 1)))
+              ((eq kind :deltanet)
+               (push (deltanet-layer weights l slot) layers)
+               (setq slot (+ slot 1)))
+              ((eq kind :shortconv)
+               (push (shortconv-layer weights l slot) layers)
+               (setq slot (+ slot 1)))
+              (t (error "unknown layer type: ~a" kind))))
+      (push (swiglu-layer weights l) layers))
+    (coerce (nreverse layers) 'vector)))
+
+(defun model-options (head-size options)
+  ;; The model-level half of the table: what the forward pass reads once per
+  ;; token rather than once per layer. RoPE's frequency table depends on the
+  ;; rotary dim, so that one is model-wide -- no published model varies it per
+  ;; layer, and one that did would need a table per layer.
+  (list :eps (opt options :eps *eps*)
+        :rope-theta (opt options :rope-theta 10000.0)
+        :rotary-dim (opt options :rotary-dim head-size)
+        :emb-mult (opt options :embedding-multiplier 1.0)
+        :residual-mult (opt options :residual-multiplier 1.0)
+        :logit-mult (opt options :logit-multiplier 1.0)))
+
 ;;; --- the checkpoint: config + weights ---------------------------------------
-;;; A model is a plist. Per-layer weights are simple vectors indexed by layer.
+;;; A model is a plist: the sizes, the model-level options, the embedding table,
+;;; the final norm, the classifier, and :layers -- the layer list above. The
+;;; weights arrive as simple vectors indexed by layer, which is the shape every
+;;; reader of a published checkpoint produces too.
 
 (defun load-checkpoint (path)
+  ;; llama2.c's .bin: seven int32 header fields, then the weights in one fixed
+  ;; order. It is Llama 2 exactly, so the architecture row is `llama` and every
+  ;; option keeps its default -- the table degenerates to :attention + :swiglu
+  ;; per block. The one thing the FILE decides rather than the family is the RoPE
+  ;; layout: run.c rotates adjacent pairs, so :pairs goes in front of the row.
   (with-open-file (s path :element-type '(unsigned-byte 8))
     (let* ((dim (read-i32 s))
            (hidden (read-i32 s))
@@ -178,6 +407,10 @@
            (vocab (abs vocab-signed))
            (head-size (floor dim n-heads))
            (kv-dim (* head-size n-kv-heads))
+           ;; q-dim is n-heads * head-size, which is dim here and need not be
+           ;; (Qwen3-0.6B: dim 1024, 16 heads of 128)
+           (q-dim (* head-size n-heads))
+           (options (cons :rope (cons :pairs (architecture "llama"))))
            (per-layer
             (lambda (f)
               (let ((v (make-array n-layers)))
@@ -195,28 +428,33 @@
              (rms-final (read-f32-vector s dim)))
         ;; skip what used to be freq_cis_real / freq_cis_imag (RoPE is computed)
         (skip-f32 s (* seq-len head-size))
-        (let ((wcls (if shared emb (read-f32-matrix s vocab dim))))
-          (list :dim dim
-                :hidden hidden
-                :n-layers n-layers
-                :n-heads n-heads
-                :n-kv-heads n-kv-heads
-                :vocab vocab
-                :seq-len seq-len
-                :head-size head-size
-                :kv-dim kv-dim
-                :emb emb
-                :rms-att rms-att
-                :wq wq
-                :wk wk
-                :wv wv
-                :wo wo
-                :rms-ffn rms-ffn
-                :w1 w1
-                :w2 w2
-                :w3 w3
-                :rms-final rms-final
-                :wcls wcls))))))
+        (let ((wcls (if shared emb (read-f32-matrix s vocab dim)))
+              (weights
+               (list :rms-att rms-att
+                     :wq wq
+                     :wk wk
+                     :wv wv
+                     :wo wo
+                     :rms-ffn rms-ffn
+                     :w1 w1
+                     :w2 w2
+                     :w3 w3)))
+          (append (model-options head-size options)
+                  (list :dim dim
+                        :hidden hidden
+                        :n-layers n-layers
+                        :n-heads n-heads
+                        :n-kv-heads n-kv-heads
+                        :vocab vocab
+                        :seq-len seq-len
+                        :head-size head-size
+                        :kv-dim kv-dim
+                        :q-dim q-dim
+                        :emb emb
+                        :rms-final rms-final
+                        :wcls wcls
+                        :layers (transformer-layers n-layers head-size weights
+                                                    options))))))))
 
 ;;; --- the tokenizer ------------------------------------------------------------
 ;;; tokenizer.bin: int32 max-token-length, then per token float32 score,
@@ -341,20 +579,45 @@
     (when eos (vector-push 2 tokens))
     (coerce tokens 'list)))
 
-;;; --- the forward pass ---------------------------------------------------------
+;;; --- the state: KV cache and RoPE tables --------------------------------------
 
-(defparameter *eps* 0.00001)
+(defun layer-kind-count (layers kind)
+  ;; How many layers of KIND the list has: the KV-cache slots (:attention) or
+  ;; the recurrent states (:deltanet) it needs.
+  (let ((n 0))
+    (dotimes (i (length layers) n)
+      (if (eq (getf (aref layers i) :kind) kind) (setq n (+ n 1))))))
+
+(defun recurrent-states (layers)
+  ;; What the non-attention mixers carry from token to token, one entry per
+  ;; :deltanet / :shortconv layer, indexed by the layer's :slot.
+  (let ((states
+         (make-array
+          (+ (layer-kind-count layers :deltanet)
+             (layer-kind-count layers :shortconv)))))
+    (dotimes (i (length layers) states)
+      (let* ((layer (aref layers i)) (kind (getf layer :kind)))
+        (cond ((eq kind :deltanet)
+               (setf (aref states (getf layer :slot)) (deltanet-state layer)))
+              ((eq kind :shortconv)
+               (setf (aref states (getf layer :slot))
+                     (shortconv-state layer))))))))
 
 (defun make-state (model)
-  ;; The KV cache: per layer, per kv-head, keys (seq-len x hs) row-major and
-  ;; values (hs x seq-len) transposed -- see the header. Plus the RoPE tables.
-  (let* ((n-layers (getf model :n-layers))
+  ;; The KV cache: per attention layer, per kv-head, keys (seq-len x hs)
+  ;; row-major and values (hs x seq-len) transposed -- see the header. Plus the
+  ;; RoPE tables, which every layer that rotates at all shares, and the
+  ;; recurrent state of every :deltanet / :shortconv layer.
+  (let* ((layers (getf model :layers))
+         (n-cache (layer-kind-count layers :attention))
          (n-kv (getf model :n-kv-heads))
          (seq-len (getf model :seq-len))
          (hs (getf model :head-size))
-         (kc (make-array (list n-layers n-kv)))
-         (vt (make-array (list n-layers n-kv)))
-         (half (floor hs 2))
+         (rot (getf model :rotary-dim))
+         (theta (getf model :rope-theta))
+         (kc (make-array (list n-cache n-kv)))
+         (vt (make-array (list n-cache n-kv)))
+         (half (floor rot 2))
          (rope-cos
           (make-array (list seq-len half)
                       :element-type 'single-float
@@ -363,32 +626,45 @@
           (make-array (list seq-len half)
                       :element-type 'single-float
                       :initial-element 0.0)))
-    (dotimes (l n-layers)
+    (dotimes (l n-cache)
       (dotimes (h n-kv)
         (setf (aref kc l h)
               (linalg:zeros (list seq-len hs) :element-type 'single-float))
         (setf (aref vt l h)
               (linalg:zeros (list hs seq-len) :element-type 'single-float))))
-    ;; RoPE: freq_i = 1 / 10000^(2i/hs), angle = pos * freq_i
+    ;; RoPE: freq_i = 1 / theta^(2i/rotary-dim), angle = pos * freq_i
     (dotimes (pos seq-len)
       (dotimes (i half)
-        (let ((angle (* pos (/ 1.0 (expt 10000.0 (/ (* 2.0 i) hs))))))
+        (let ((angle (* pos (/ 1.0 (expt theta (/ (* 2.0 i) rot))))))
           (setf (aref rope-cos pos i) (cos angle))
           (setf (aref rope-sin pos i) (sin angle)))))
     (list :kc kc
           :vt vt
           :rope-cos rope-cos
           :rope-sin rope-sin
-          :att (vec:zeros seq-len :element-type 'single-float))))
+          :att (vec:zeros seq-len :element-type 'single-float)
+          :recurrent (recurrent-states layers))))
 
-(defun rmsnorm (x g)
+;;; --- the pieces a layer is made of --------------------------------------------
+
+(defun rmsnorm (x g eps)
   ;; x / rms(x) * g, the sum of squares being one vec:dot
-  (vec:mul (vec:scale x (/ 1.0 (sqrt (+ (/ (vec:dot x x) (length x)) *eps*))))
-           g))
+  (vec:mul (vec:scale x (/ 1.0 (sqrt (+ (/ (vec:dot x x) (length x)) eps)))) g))
 
-(defun rope (v n-heads hs pos rope-cos rope-sin)
-  ;; Rotate every head's (even, odd) pairs in place.
-  (let ((half (floor hs 2)))
+(defun head-rmsnorm (v n-heads hs g eps)
+  ;; QK-norm: RMSNorm each head's own hs dims of V in place, with the one weight
+  ;; vector G every head shares.
+  (dotimes (h n-heads)
+    (let ((base (* h hs)) (ss 0.0))
+      (dotimes (i hs) (let ((x (aref v (+ base i)))) (setq ss (+ ss (* x x)))))
+      (let ((scale (/ 1.0 (sqrt (+ (/ ss hs) eps)))))
+        (dotimes (i hs)
+          (setf (aref v (+ base i))
+                (* (aref v (+ base i)) scale (aref g i))))))))
+
+(defun rope-pairs (v n-heads hs rot pos rope-cos rope-sin)
+  ;; Rotate every head's (2i, 2i+1) pairs in place, over its first ROT dims.
+  (let ((half (floor rot 2)))
     (dotimes (h n-heads)
       (dotimes (i half)
         (let* ((j (+ (* h hs) (* 2 i)))
@@ -399,20 +675,40 @@
           (setf (aref v j) (- (* v0 fcr) (* v1 fci)))
           (setf (aref v (+ j 1)) (+ (* v0 fci) (* v1 fcr))))))))
 
-(defun attention (model state l q k v pos)
+(defun rope-halves (v n-heads hs rot pos rope-cos rope-sin)
+  ;; HF's rotate_half: dim i pairs with dim i + rot/2 inside the head.
+  (let ((half (floor rot 2)))
+    (dotimes (h n-heads)
+      (dotimes (i half)
+        (let* ((base (* h hs))
+               (j (+ base i))
+               (j2 (+ base i half))
+               (fcr (aref rope-cos pos i))
+               (fci (aref rope-sin pos i))
+               (v0 (aref v j))
+               (v1 (aref v j2)))
+          (setf (aref v j) (- (* v0 fcr) (* v1 fci)))
+          (setf (aref v j2) (+ (* v0 fci) (* v1 fcr))))))))
+
+(defun apply-rope (style v n-heads hs rot pos rope-cos rope-sin)
+  (cond ((eq style :pairs) (rope-pairs v n-heads hs rot pos rope-cos rope-sin))
+   ((eq style :halves) (rope-halves v n-heads hs rot pos rope-cos rope-sin))
+   (t (error "unknown rope style: ~a" style))))
+
+(defun attention (model state layer q k v pos)
   ;; Multi-head causal attention over the KV cache; returns the concatenated
-  ;; head outputs (dim), before the wo projection.
+  ;; head outputs (n-heads x head-size), before the wo projection.
   (let* ((n-heads (getf model :n-heads))
          (n-kv (getf model :n-kv-heads))
          (kv-mul (floor n-heads n-kv))
          (hs (getf model :head-size))
-         (dim (getf model :dim))
+         (l (getf layer :cache))
          (kc (getf state :kc))
          (vt (getf state :vt))
          (att (getf state :att))
-         (out (vec:zeros dim :element-type 'single-float))
+         (out (vec:zeros (getf model :q-dim) :element-type 'single-float))
          (qh (vec:zeros hs :element-type 'single-float))
-         (inv-sqrt-hs (/ 1.0 (sqrt hs))))
+         (inv-sqrt-hs (getf layer :scale)))
     ;; append this position's keys and values to the cache
     (dotimes (h n-kv)
       (let ((kch (aref kc l h)) (vth (aref vt l h)) (base (* h hs)))
@@ -441,42 +737,84 @@
             (dotimes (i hs) (setf (aref out (+ base i)) (aref oh i)))))))
     out))
 
-(defun silu (h)
-  ;; x * sigmoid(x) over the whole vector: four vec ufuncs instead of one boxed
-  ;; funcall per element
-  (vec:mul h
-           (vec:reciprocal
-            (vec:add (vec:ones (length h) :element-type 'single-float)
-                     (vec:exp (vec:negative h))))))
+(defun sigmoid (h)
+  ;; 1 / (1 + exp(-x)) over the whole vector: three vec ufuncs instead of one
+  ;; boxed funcall per element
+  (vec:reciprocal
+   (vec:add (vec:ones (length h) :element-type 'single-float)
+            (vec:exp (vec:negative h)))))
 
-(defun forward (model state token pos)
-  ;; -> the logits over the vocabulary
+(defun silu (h)
+  ;; x * sigmoid(x)
+  (vec:mul h (sigmoid h)))
+
+;;; --- the layer kinds ----------------------------------------------------------
+;;; Each takes the NORMED input and returns what the residual adds back.
+
+(defun attention-forward (model state layer xb pos)
+  ;; The whole attention mixer: the projections, the options on q and k, causal
+  ;; attention over the KV cache, the optional output gate, and wo.
   (let* ((n-heads (getf model :n-heads))
          (n-kv (getf model :n-kv-heads))
          (hs (getf model :head-size))
-         (rope-cos (getf state :rope-cos))
-         (rope-sin (getf state :rope-sin))
-         (x (linalg:row (getf model :emb) token)))
-    (dotimes (l (getf model :n-layers))
-      ;; attention block
-      (let* ((xb (rmsnorm x (aref (getf model :rms-att) l)))
-             (q (vec:matvec (aref (getf model :wq) l) xb))
-             (k (vec:matvec (aref (getf model :wk) l) xb))
-             (v (vec:matvec (aref (getf model :wv) l) xb)))
-        (rope q n-heads hs pos rope-cos rope-sin)
-        (rope k n-kv hs pos rope-cos rope-sin)
-        (setq x
-              (vec:add x
-                       (vec:matvec (aref (getf model :wo) l)
-                                   (attention model state l q k v pos)))))
-      ;; feed-forward block: w2 (silu(w1 x) * w3 x)
-      (let* ((xb (rmsnorm x (aref (getf model :rms-ffn) l)))
-             (h1 (vec:matvec (aref (getf model :w1) l) xb))
-             (h3 (vec:matvec (aref (getf model :w3) l) xb)))
-        (setq x
-              (vec:add x
-               (vec:matvec (aref (getf model :w2) l) (vec:mul (silu h1) h3))))))
-    (vec:matvec (getf model :wcls) (rmsnorm x (getf model :rms-final)))))
+         (eps (getf model :eps))
+         (rot (getf layer :rotary-dim))
+         (style (getf layer :rope))
+         (q-norm (getf layer :q-norm))
+         (k-norm (getf layer :k-norm))
+         (gate (getf layer :gate))
+         (q (vec:matvec (getf layer :wq) xb))
+         (k (vec:matvec (getf layer :wk) xb))
+         (v (vec:matvec (getf layer :wv) xb)))
+    (when q-norm (head-rmsnorm q n-heads hs q-norm eps))
+    (when k-norm (head-rmsnorm k n-kv hs k-norm eps))
+    (when style
+      (let ((rope-cos (getf state :rope-cos)) (rope-sin (getf state :rope-sin)))
+        (apply-rope style q n-heads hs rot pos rope-cos rope-sin)
+        (apply-rope style k n-kv hs rot pos rope-cos rope-sin)))
+    (let ((out (attention model state layer q k v pos)))
+      (when gate (setq out (vec:mul out (sigmoid (vec:matvec gate xb)))))
+      (vec:matvec (getf layer :wo) out))))
+
+(defun swiglu-forward (layer xb)
+  ;; w2 (silu(w1 x) * w3 x)
+  (let ((h1 (vec:matvec (getf layer :w1) xb))
+        (h3 (vec:matvec (getf layer :w3) xb)))
+    (vec:matvec (getf layer :w2) (vec:mul (silu h1) h3))))
+
+(defun layer-forward (model state layer x pos)
+  ;; One layer, whatever kind it is: normalise, mix, add back.
+  (let* ((kind (getf layer :kind))
+         (xb (rmsnorm x (getf layer :norm) (getf model :eps)))
+         (out
+          (cond
+           ((eq kind :attention) (attention-forward model state layer xb pos))
+           ((eq kind :swiglu) (swiglu-forward layer xb))
+           ((eq kind :deltanet)
+            (deltanet-forward layer
+                              (aref (getf state :recurrent) (getf layer :slot))
+                              xb (getf model :eps)))
+           ((eq kind :shortconv)
+            (shortconv-forward layer
+                               (aref (getf state :recurrent) (getf layer :slot))
+                               xb))
+           (t (error "unknown layer kind: ~a" kind))))
+         (mult (getf model :residual-mult)))
+    (vec:add x (if (= mult 1.0) out (vec:scale out mult)))))
+
+(defun forward (model state token pos)
+  ;; -> the logits over the vocabulary
+  (let ((x (linalg:row (getf model :emb) token))
+        (layers (getf model :layers))
+        (emb-mult (getf model :emb-mult))
+        (logit-mult (getf model :logit-mult)))
+    (unless (= emb-mult 1.0) (setq x (vec:scale x emb-mult)))
+    (dotimes (i (length layers))
+      (setq x (layer-forward model state (aref layers i) x pos)))
+    (let ((logits
+           (vec:matvec (getf model :wcls)
+                       (rmsnorm x (getf model :rms-final) (getf model :eps)))))
+      (if (= logit-mult 1.0) logits (vec:scale logits logit-mult)))))
 
 ;;; --- the sampler ---------------------------------------------------------------
 ;;; run.c's xorshift64* generator, bit for bit (64-bit integers are exact on

@@ -227,6 +227,11 @@ behind a flag, and every kernel number taken under both JITs.**
 | f16, plain scalar loop, 4 accumulators | 6.595 | 0.28x | 7.289 | 0.28x |
 | f16, widen the row into an L1 scratch, then f32 lanes | 9.777 | 0.19x | 1.971 | 1.04x |
 
+**Every row of this table is a 4-accumulator + FMA kernel, and that turns out to be load
+bearing -- see section 7 (2026-09-03).** The ratios below hold against a 4-accumulator f32
+baseline; against the single-accumulator f32 kernel the project actually ships they are
+~1.0x on one thread.
+
 The fused Vector API decode is the shape, on both JITs. The scalar loops lose on both
 (a float reduction is never auto-vectorized), and the "scratch" shape -- the one that
 would have reused the f32 kernel unchanged -- costs a store and a reload per element and
@@ -249,6 +254,33 @@ single-threaded. **So an IEEE f16 file needs no f16 array: it is read as `(unsig
 16)` and widened in bulk into `#f` or `#bf16`** (`.todo/671`). Both vector converters were
 checked against the scalar ones (all 65536 f16 patterns; 64 Mi bf16 narrowings): 0
 mismatches.
+
+### Re-evaluation, 2026-09-03 (`.todo/671`): variant D's fixup mask, and two encode dead ends
+
+`Dec.java`'s variant D (Section 1 above, the "magic-mul + inf fixup" row) is written with
+a BARE compare, `u.compare(EQ, se)` -- "u equals se exactly", true infinity only. Verified
+exhaustively over all 65536 patterns while implementing `.todo/671`'s WASM decoder: this
+bare form mismatches on 2046/65536 patterns, EVERY f16 NaN (a nonzero mantissa keeps
+`u > se`, so the fixup never fires and a NaN decodes to a large FINITE float instead of a
+NaN). `Load.java`'s `f16ToF32Vector` -- quoted above as "0 mismatches" and that claim
+stands -- has the same fixup with an extra mask, `u.and(se).compare(EQ, se)` ("the
+exponent field is all-ones", covering NaN and infinity alike). `Dec.java` is now fixed to
+match; the 0-mismatch throughput numbers above were never wrong (they came from
+`Load.java`), only `Dec.java`'s own copy of the trick was.
+
+Also tried and abandoned for the ENCODE direction (f32 -> f16 bits, round-to-nearest-even,
+needed for `671`'s `float16-bits` on every backend including WASM): two branchless
+magic-multiply variants (a plain `f * 2^-112` rescale, and the same with a 12-bit
+pre-mask -- the classic "fast half-float" tricks) both get exact round-to-nearest-even in
+the NORMAL-target range but round ties WRONG in the DENORMAL-target range (f16 subnormal
+results): 31744/2^32 mismatches for the pre-masked form when swept over every float32 bit
+pattern, all at exact tie points near the f16 zero/subnormal boundary. What actually
+verifies exact (0/2^32 mismatches, including NaN payload, against `java.lang.Float`'s own
+`floatToFloat16`) is a literal branchy port of `java.lang.Float.floatToFloat16` itself
+(JDK 20+, `java.base/java/lang/Float.java`) rewritten with integer bit ops only (no
+`Math.getExponent`/`Math.abs`) -- more instructions than the branchless tricks, but the
+only one of the three that is actually correct at every tie. `671` uses that port for the
+WASM `float16-bits` encoder; see `WasmFloat16RuntimeBuilder`.
 
 ## 5. The integer widths (`Quant.java`)
 
@@ -312,3 +344,109 @@ the same models as BF16 / F16 / Q8_0 / Q4_K_M, with the tokenizer and the hyperp
 in the same file; the GGUF already in this box's Hugging Face cache is a Q4_K_XL model
 with a BF16 `mmproj` beside it (BF16 weights, F32 biases). That is the input side of
 `.todo/670`.
+
+## 7. The one-thread ratios are conditional on the accumulator count (2026-09-03)
+
+Written when `.todo/488` implemented the kernels against the shipped f32 GEMV and the
+numbers did not reproduce. Nothing above is withdrawn -- it was measured as stated -- but
+it needs a condition attached, because a reader was taking "bf16 is 1.5-2.1x on one thread"
+as a property of the width and it is not.
+
+**Every kernel measured in rounds 1 and 2 -- both arms -- uses four accumulators and FMA**
+(`Acc.java`, `Worth.java`, `Jit.java`; round 1's file table says so of the f16 work, and
+`Jit.java`'s `rowF32` is the f32 baseline of section 3). **The kernels rontolisp ships use
+ONE accumulator and a two-rounding mul-then-add**, because a single `f32x4` chain is the
+cross-backend bit-identity contract of the f32 reductions (`.kb/vec.md`, "The lane-count
+pin") and `.todo/480` -- the item that would change it -- had not landed.
+
+Measured against the shipped kernels, at 4096x4096, one thread (provisional: a smoke run
+beside two busy lanes; `.todo/488-the-fused-bfloat16-gemv-kernels/README.md` has the full
+tables and will carry the quiet-window numbers):
+
+| 4096x4096, 1 thread, bf16 vs f32 | Graal | C2 |
+| --- | --- | --- |
+| section 3's shape, 4 accumulators + FMA, re-derived | 1.59x | 1.97x |
+| the same decode against the SHIPPED single-accumulator f32 kernel | 0.80x | **1.02x** |
+
+The re-derivation lands on section 3's 1.48x / 2.06x, so the decode is not in question;
+the accumulator count is the whole difference. The reason is that one accumulator is one
+dependency chain, which bounds the row at 5.5-7.6 Gelem/s -- short of the memory wall. bf16
+saves bandwidth, and a latency-bound kernel has no bandwidth to save.
+
+So, restated with its condition:
+
+- **One thread: bf16 is 1.5-2.0x of f32 in a 4-accumulator kernel, and ~1.0x in a
+  single-accumulator one.** The single-thread win is `.todo/480`'s to unlock; until it
+  lands, bf16 buys memory, not speed, on one thread.
+- **20 threads: bf16 wins on the shipped kernels as this file said** -- 1.07-1.56x
+  measured across runs of the same code, against section 5's 1.63x / 1.70x. Spreading the
+  rows across cores is what lifts the accumulator chain off the critical path, so the
+  parallel arm reaches the bandwidth regime the serial one does not.
+- **Nothing changes about the format choice.** f16's decode cost, the widen-into-scratch
+  route and the quantized widths were all measured with the same accumulator count on both
+  sides, so those comparisons are unaffected; and the exactness, error and load-path
+  results are arithmetic, not throughput.
+
+`.todo/480` is therefore a prerequisite of `.todo/488`, not an independent optimization,
+and both items now say so.
+
+## 8. The x64 answer (2026-09-03, host `dorian`)
+
+The "one command on any x64 box" above was run. **It confirms the shape and moves no
+decision** -- which is what "what should survive is the SHAPE" predicted.
+
+Host: `dorian`, Intel Xeon E5-2697A v4 (Broadwell, x86-64), 2.60 GHz, 64 threads,
+251 GB, Oracle GraalVM 25.0.4+7.1. CPU flags: `avx avx2 f16c fma sse4_1 sse4_2`.
+**No `avx512` of any kind** -- so this run does NOT answer the AVX512-FP16 question
+raised at line 90; it answers the *other* x64 question, the F16C one. Load average
+3.9-6.1 during the runs (three worker lanes active on other cores); the shapes here are
+single-threaded, so the ratios are sound, but treat the absolute Gelem/s as +/- a few
+percent rather than as a quiet-machine figure.
+
+### `Acc.java` -- 4 accumulators + FMA, f16 weights against f32
+
+| shape | GB10 f32 | dorian f32 Graal | dorian f32 C2 | GB10 f16 vs f32 | dorian Graal | dorian C2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 288x288 | 16.08 | 5.57 | 5.67 | 0.31x | 0.36x | **0.10x** |
+| 1024x1024 | 16.09 | 5.98 | 6.37 | 0.33x | 0.36x | 0.24x |
+| 4096x4096 | 8.70 | 3.09 | 3.17 | 0.59x | 0.72x | 0.45x |
+| 8192x8192 | 7.66 | 2.77 | 2.70 | 0.67x | 0.73x | 0.55x |
+
+(Gelem/s. GB10 column from the table at line 63.)
+
+Two findings, one of them not about f16 at all:
+
+1. **The f16 verdict holds on x64, on both JITs.** f16 never reaches 1.0x at any shape;
+   the ratio still improves with size for the same reason (f32 leaves cache, f16 stays
+   decode-ALU-bound). F16C does not rescue it. **`.todo/671`'s "f16 is a load-time
+   conversion, not a width" is now measured on two ISAs.**
+2. **This x64 host is 2.6-2.9x slower than the GB10 at f32 GEMV** (5.6-6.4 vs 16.1
+   Gelem/s in cache; 2.7-3.2 vs 7.7-8.7 out of it). The GB10 is a 2025 Cortex-X925; this
+   is a 2016 Broadwell. **So every absolute tok/s in `.todo/489` must name its host** --
+   the projection "~7 / 12 / 14 tok/s on one thread at f32 / bf16 / Q8_0" is a GB10
+   projection and is roughly a third of that here.
+
+### `F16.java` -- JEP 508's `Float16` value class
+
+| shape | GB10 mixed | dorian mixed Graal | dorian mixed C2 | GB10 f16acc | dorian f16acc Graal | dorian f16acc C2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 288x288 | 2.98 | 1.28 | 1.54 | 0.21 | 0.06 | 0.05 |
+| 1024x1024 | -- | 1.40 | 1.72 | -- | 0.11 | 0.08 |
+| 4096x4096 | -- | 1.41 | 1.77 | -- | 0.11 | 0.08 |
+
+**The `Float16`-accumulator kernel is 2-4x WORSE here than on aarch64** (0.05-0.11 vs
+0.21 Gelem/s), and the mixed kernel about half. Line 90 said the JEP auto-vectorizes
+`Float16` arithmetic "on x64 with AVX512-FP16"; without AVX512-FP16 the value class is
+slower on x64 than on the aarch64 host, not faster. **The AVX512-FP16 question remains
+open and needs a Sapphire Rapids-class box** -- but line 148 already answers why it
+cannot matter: an f16 accumulator changes the accumulator's *precision*, which
+`.kb/vec.md`'s `FSPECIES_REDUCE` pin forbids at any speed on any host.
+
+### What this changes
+
+Nothing in the plan. Every conclusion the spike drew -- bf16 is the width, f16 is a
+load-time conversion, Q8_0 is a read-only matrix type, Q4 is a device item -- holds on
+x64. What it adds is the **host** axis: after this and the C2/Graal reversals of round 2,
+a kernel number is JIT- **and machine-** dependent, and a record that names neither is
+not a measurement. See also `.kb/binary-sequence-io.md` and
+`.kb/packed-integer-vectors.md`, where the same discipline is now applied.
