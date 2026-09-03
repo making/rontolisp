@@ -800,9 +800,14 @@ class JvmLinalgGpuAccelCompilerTest {
 	@EnabledIf("takesMatvec")
 	void theDeviceIsAskedOnTheSecondSightAndTheLaneKernelOnTheFirst() throws Exception {
 		// .kb/vec.md's f32 reduction probe as a matrix row: the defun (double
-		// accumulation, narrowed) prints 16778240 and the lane kernel 16777984. The
+		// accumulation, narrowed) prints 16778240 and the lane kernel 16778176. The
 		// device accumulates in double and answers the DEFUN's figure, and only from the
 		// second sight of the matrix on -- so the chain is legible: (lane device).
+		// .todo/480 gave the lane rung four independent accumulators above 32 columns,
+		// so at 1024 columns it groups as sixteen lanes and answers 16778176 where it
+		// answered 16777984 before. The DEVICE rung is unmoved: it accumulates in
+		// double, like the defun, so it still prints 16778240 -- which is the whole
+		// point of the probe, and the reason the two rungs stay legible apart.
 		int rows = (int) Math.max(128, (am.ik.gpu.GpuThresholds.matvecMinElements() + 1023) / 1024);
 		String program = """
 				(defparameter *w* (linalg:zeros '(%d 1024) :element-type 'single-float))
@@ -813,8 +818,8 @@ class JvmLinalgGpuAccelCompilerTest {
 				(defun probe () (round (aref (vec:matvec *w* *x*) 0)))
 				(print (list (probe) (probe)))
 				""".formatted(rows);
-		assertThat(run(compileWithVec(program, true, true))).as("--gpu --simd").isEqualTo("(16777984 16778240)");
-		assertThat(run(compileWithVec(program, false, true))).as("--simd").isEqualTo("(16777984 16777984)");
+		assertThat(run(compileWithVec(program, true, true))).as("--gpu --simd").isEqualTo("(16778176 16778240)");
+		assertThat(run(compileWithVec(program, false, true))).as("--simd").isEqualTo("(16778176 16778176)");
 		assertThat(run(compileWithVec(program, true, false))).as("--gpu").isEqualTo("(16778240 16778240)");
 		assertThat(run(compileWithVec(program, false, false))).as("scalar").isEqualTo("(16778240 16778240)");
 	}
