@@ -17738,6 +17738,69 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunVec(PACKED_ACCESSORS, true)).isEqualTo(compileAndRunVec(PACKED_ACCESSORS, false));
 	}
 
+	/**
+	 * The multi-accumulator gate ({@code .todo/480}), pinned on both sides. From
+	 * {@code MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32} columns up a
+	 * GEMV row folds four independent four-lane accumulators as
+	 * {@code (a0 + a1) + (a2 + a3)}; below it, the one chain it always had.
+	 *
+	 * <p>
+	 * The 2^24 probe makes the grouping legible: the lane holding {@code 2^24} swallows
+	 * every {@code 1.0} added to it, so the answer counts the ones that landed elsewhere.
+	 * 16 columns, one chain over 4 lane groups: {@code 2^24 + 3*4 = 16777228}. 32
+	 * columns, four chains over two groups each:
+	 * {@code (2^24 + 2 + 4) + 8 + 8 + 8 = 16777246}.
+	 *
+	 * <p>
+	 * <b>The same two integers are asserted on all four {@code --simd}
+	 * implementations</b> ({@code eval/VecSimdTest}, here, and both wasm backends): 16
+	 * and 32 are multiples of the lane count, so nobody is folding a partial group and
+	 * the four must agree exactly. That agreement is the point -- a gate firing at a
+	 * different column count, or in a different direction, on one backend shows up here
+	 * and nowhere else.
+	 *
+	 * <p>
+	 * Both wasm lowerings are checked in one place because they are the two that had no
+	 * probe of their own: {@code --no-gc}'s GEMV row is a hand-written multi-accumulator
+	 * loop in {@code WasmVecLoops.simdMatvecRowDotF32} whose every existing test ran at 5
+	 * or 6 columns, far below the gate, so before this the new code was emitted and never
+	 * executed. The {@code --no-gc} scalar lowering answers {@code 16777216} at both
+	 * widths: it has no lanes at all, so its single f32 accumulator swallows every one.
+	 */
+	@Test
+	void theMultiAccumulatorGateFiresAtTheSameColumnCountOnBothWasmBackends() throws Exception {
+		assertThat(compileAndRunVec(gateProbe(16), true)).as("wasm-GC, 16 columns: one chain").isEqualTo("16777228");
+		assertThat(compileAndRunVec(gateProbe(32), true)).as("wasm-GC, 32 columns: four chains").isEqualTo("16777246");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, noGcGateProbe(16), "gate", ""))
+			.as("--no-gc --simd, 16 columns: one chain")
+			.isEqualTo("16777228");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, noGcGateProbe(32), "gate", ""))
+			.as("--no-gc --simd, 32 columns: four chains")
+			.isEqualTo("16777246");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, noGcGateProbe(32), "gate", ""))
+			.as("--no-gc without --simd has no lanes to group")
+			.isEqualTo("16777216");
+	}
+
+	private static String gateProbe(int columns) {
+		return "(let ((m (make-array '(1 %d) :element-type 'single-float :initial-element 1.0))".formatted(columns)
+				+ " (v (vec:ones %d :element-type 'single-float)))".formatted(columns)
+				+ " (setf (aref m 0 0) 4096.0) (setf (vec:aref v 0) 4096.0)"
+				+ " (print (round (vec:aref (vec:matvec m v) 0))))";
+	}
+
+	private static String noGcGateProbe(int columns) {
+		return """
+				(defun gate ()
+				  (let ((w (make-array '(1 %d) :element-type 'single-float :initial-element 1.0))
+				        (v (vec:ones %d :element-type 'single-float)))
+				    (setf (aref w 0 0) 4096.0)
+				    (setf (vec:aref v 0) 4096.0)
+				    (truncate (vec:aref (vec:matvec w v) 0))))
+				(rontolisp:wasm-export 'gate :params '() :returns :int)
+				""".formatted(columns, columns);
+	}
+
 	@Test
 	void wasmGcSimdSingleFloatReductionsAccumulateInSinglePrecision() throws Exception {
 		// The wasm leg of the --simd precision contract: an #f reduction folds in f32
@@ -17765,7 +17828,12 @@ class WasmLispCompilerIntegrationTest {
 				+ " (v (vec:ones 1024 :element-type 'single-float)))"
 				+ " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (vec:matvec m v) 0))))";
-		assertThat(compileAndRunVec(gemv, true)).isEqualTo("16777984");
+		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
+		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
+		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
+		// fold 64 each, giving 2^24 + 960 = 16778176. The scalar path is unchanged.
+		assertThat(compileAndRunVec(gemv, true)).isEqualTo("16778176");
 		assertThat(compileAndRunVec(gemv, false)).isEqualTo("16778240");
 
 		// The #d control: double-float reductions are exact on both paths.
@@ -18394,14 +18462,21 @@ class WasmLispCompilerIntegrationTest {
 				+ " (print (round (linalg:sum v))))";
 		assertThat(compileAndRunVec(sum, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(sum, false)).isEqualTo("16778239");
-		// mean rides on sum, matrix . vector on the vec: GEMV kernel (a dot per row).
+		// mean rides on sum. linalg's matrix . vector is not a kernel of its own --
+		// LinalgSimdKernels/this builder both route it through the vec: GEMV kernel --
+		// so it moved with it in todo-480, four accumulators and all.
 		String mean = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 16777216.0)"
 				+ " (print (round (* 1024 (linalg:mean v)))))";
 		assertThat(compileAndRunVec(mean, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(mean, false)).isEqualTo("16778239");
 		String gemv = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (linalg:dot (linalg:reshape v '(1 1024)) v) 0))))";
-		assertThat(compileAndRunVec(gemv, true)).isEqualTo("16777984");
+		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
+		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
+		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
+		// fold 64 each, giving 2^24 + 960 = 16778176. The scalar path is unchanged.
+		assertThat(compileAndRunVec(gemv, true)).isEqualTo("16778176");
 		assertThat(compileAndRunVec(gemv, false)).isEqualTo("16778240");
 		// The MATRIX PRODUCT follows the contract too: its scratch row is now the
 		// operand width, so an #f cell folds k in the oracle's own ascending order but
