@@ -1,5 +1,11 @@
 # `file-position` is nil on every file stream, so nothing can seek
 
+Consumers designed around the gap (2026-09-03): the `.todo/670` checkpoint readers
+(`.todo/675` safetensors, `.todo/673` GGUF) walk their files front to back and pass over
+an excluded tensor with `checkpoint:skip-bytes` (bounded reads through a scratch
+buffer) instead of seeking to its offset. When this lands, that skip can become a seek
+-- one motivation more, and the place to simplify.
+
 Difficulty: Medium
 
 `file-position` answers **nil for every stream but one** -- the buffered

@@ -8,6 +8,7 @@ import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.BFloat16;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispSymbol;
@@ -97,12 +98,15 @@ final class FloatBitsWidening {
 
 	/**
 	 * {@code (rontolisp:narrow-float-bits src format dst &key (start 0))}: the inverse of
-	 * {@link #widen}. {@code :bfloat16} narrowing goes through
-	 * {@link BFloat16#bits(double)} -- {@code .todo/487}'s single authority for the
-	 * conversion, shared with {@code bfloat16-bits} -- called with the SOURCE'S OWN width
-	 * (a {@code double[]} element passed as a {@code double}, not pre-narrowed to
-	 * {@code float} first): a double source narrowing through an intermediate float would
-	 * round twice.
+	 * {@link #widen}. {@code :bfloat16} narrowing IS {@code bfloat16-bits}
+	 * ({@link am.ik.rontolisp.BFloat16}, {@code .todo/487}'s single authority for the
+	 * conversion, {@code .kb/bfloat16.md}) -- called rather than copied, because a second
+	 * copy of the rounding is a second thing to keep right and the two disagreeing would
+	 * put a checkpoint's bulk load a bit away from what the program computes element by
+	 * element. Called with the SOURCE'S OWN width, never through an intermediate: a
+	 * {@code double[]} element narrowing through a {@code float} first would round twice,
+	 * and a {@code float[]} element widened to a {@code double} first would come back
+	 * with a signalling NaN's payload quieted.
 	 * @param fnName the operator name, for error messages
 	 * @param args the argument list
 	 * @return {@code dst}

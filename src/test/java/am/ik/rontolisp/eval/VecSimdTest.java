@@ -106,8 +106,13 @@ class VecSimdTest {
 		//
 		// The value therefore depends on the lane count, which is why the reduction
 		// kernels pin FloatVector.SPECIES_128: 8 lanes would print 16778112 and 16 lanes
-		// 16778176. All four --simd backends print 16777984; the scalar reference stays
-		// the exact oracle. Same story for sum with 2^24 in element 0.
+		// 16778176. All four --simd backends print 16777984 for dot and sum, which keep
+		// ONE chain of four lanes; the scalar reference stays the exact oracle. Same
+		// story for sum with 2^24 in element 0.
+		//
+		// (The GEMV below prints that same 16778176, and not by coincidence: four
+		// independent four-lane accumulators distribute the ones exactly as sixteen
+		// lanes would. It is still four lanes wide -- there are four of them.)
 		assertThat(eval(probe32("4096.0", "(vec:dot v v)"), true).print()).isEqualTo("16777984");
 		assertThat(eval(probe32("4096.0", "(vec:dot v v)"), false).print()).isEqualTo("16778239");
 		assertThat(eval(probe32("16777216.0", "(vec:sum v)"), true).print()).isEqualTo("16777984");

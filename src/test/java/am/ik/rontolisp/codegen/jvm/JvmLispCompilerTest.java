@@ -9209,6 +9209,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunBfloat16BulkAgreesWithTheScalarPair() throws Exception {
+		// .todo/671's bulk pair and .todo/487's scalar pair are ONE rounding on this
+		// backend too (the emitted narrow is BFloat16#bits(float) instruction for
+		// instruction), so widening every pattern into an f32 array and narrowing it
+		// straight back is the identity -- except for the 126 signalling NaNs, which
+		// both backends quiet on the way IN because both widen through a double.
+		assertThat(compileAndRun("""
+				(let* ((n 65536)
+				       (patterns (make-array n :element-type '(unsigned-byte 16)))
+				       (values (make-array n :element-type 'single-float))
+				       (back (make-array n :element-type '(unsigned-byte 16)))
+				       (bad 0))
+				  (dotimes (i n) (setf (aref patterns i) i))
+				  (rontolisp:widen-float-bits patterns :bfloat16 values)
+				  (rontolisp:narrow-float-bits values :bfloat16 back)
+				  (dotimes (i n)
+				    (let ((want (if (and (= (logand i #x7f80) #x7f80) (/= (logand i #x7f) 0))
+				                    (logior i #x40)
+				                    i)))
+				      (unless (= want (aref back i)) (incf bad))))
+				  (print bad)
+				  (print (list (aref back 16256) (rontolisp:bfloat16-bits (aref values 16256)))))
+				""")).isEqualTo("0\n(16256 16256)");
+	}
+
+	@Test
 	void compileAndRunDestructuringBind() throws Exception {
 		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))")).isEqualTo("10");
 		assertThat(compileAndRun("(destructuring-bind (a &optional (b 10) c) '(1) (print (list a b c)))"))

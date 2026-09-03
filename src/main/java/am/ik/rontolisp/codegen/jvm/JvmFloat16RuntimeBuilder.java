@@ -301,8 +301,9 @@ final class JvmFloat16RuntimeBuilder {
 	// The bf16 round-to-nearest-even narrow, over the raw bits of a float already in
 	// local slot fTmp: NaN is special-cased (a plain bits + 0x7fff + lsb bias-add can
 	// carry a heavy-payload NaN's low bits into the sign -- .todo/482's Enc.java note)
-	// rather than relying on the payload surviving the add. The exact match of
-	// eval.FloatBitsWidening#bfloat16BitsOf -- keep the two in sync.
+	// rather than relying on the payload surviving the add. Emitted instruction for
+	// instruction from am.ik.rontolisp.BFloat16#bits(float), which eval.FloatBitsWidening
+	// calls -- the interpreter and this backend answer one rounding (.kb/bfloat16.md).
 	private static void emitBf16Narrow(JvmAsm a, MethodrefConstant floatToRawIntBits, MethodrefConstant floatIsNaN,
 			int fTmp, int bitsInt, int resultInt) {
 		a.fload(fTmp);
@@ -330,13 +331,24 @@ final class JvmFloat16RuntimeBuilder {
 		a.istore(resultInt);
 		a.branch(Opcode.GOTO, done);
 		a.bind(nanCase);
-		// result = ((bitsInt >>> 16) | 0x0040) & 0xFFFF
+		// result = u | (((u & 0x7f) - 1) >>> 31), where u = (bitsInt >>> 16) & 0xFFFF.
+		// The top sixteen bits of an f32 NaN ALREADY are the sign, an all-ones exponent
+		// and the payload's top seven bits, so the pattern is u unchanged -- carried
+		// across rather than force-quieted, so a signalling NaN survives the round trip
+		// here exactly as it does on the interpreter. The one correction is a payload
+		// whose top seven bits are all zero, which u alone would spell as an infinity.
 		a.iload(bitsInt);
 		a.iconst(16);
 		a.op(Opcode.IUSHR);
-		a.iconst(0x40);
-		a.op(Opcode.IOR);
 		emitMaskU16(a);
+		a.dup();
+		a.iconst(0x7f);
+		a.op(Opcode.IAND);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.iconst(31);
+		a.op(Opcode.IUSHR);
+		a.op(Opcode.IOR);
 		a.istore(resultInt);
 		a.bind(done);
 	}
