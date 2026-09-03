@@ -60,6 +60,31 @@ enum JvmPackedFloatWidth {
 		return this.descriptor;
 	}
 
+	/**
+	 * The backend's width for the language's designator
+	 * ({@code am.ik.rontolisp.FloatWidth}, what {@code LispFloatArray.width()} answers):
+	 * the two enums are the same three members seen from two sides, and this is the one
+	 * mapping between them.
+	 * @param width the designator
+	 * @return this backend's width
+	 */
+	static JvmPackedFloatWidth of(am.ik.rontolisp.FloatWidth width) {
+		return switch (width) {
+			case SINGLE -> SINGLE;
+			case DOUBLE -> DOUBLE;
+			case BFLOAT16 -> BFLOAT16;
+		};
+	}
+
+	/** The inverse of {@link #of}. */
+	am.ik.rontolisp.FloatWidth floatWidth() {
+		return switch (this) {
+			case SINGLE -> am.ik.rontolisp.FloatWidth.SINGLE;
+			case DOUBLE -> am.ik.rontolisp.FloatWidth.DOUBLE;
+			case BFLOAT16 -> am.ik.rontolisp.FloatWidth.BFLOAT16;
+		};
+	}
+
 	/** The header slots ahead of the data for an array of the given rank. */
 	int dataOffset(int rank) {
 		return this == BFLOAT16 ? 1 + 2 * rank : 1 + rank;

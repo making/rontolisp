@@ -357,6 +357,20 @@ class JvmBFloat16ArrayTest {
 		}
 	}
 
+	@Test
+	void theBackendWidthMirrorsTheLanguageDesignatorOneToOne() {
+		// JvmPackedFloatWidth is the layout half of am.ik.rontolisp.FloatWidth; a member
+		// added to one without the other is a compile error in the mapping, and this
+		// pins that the mapping is a bijection rather than merely total.
+		for (am.ik.rontolisp.FloatWidth width : am.ik.rontolisp.FloatWidth.values()) {
+			assertThat(JvmPackedFloatWidth.of(width).floatWidth()).isSameAs(width);
+		}
+		assertThat(JvmPackedFloatWidth.values()).hasSize(am.ik.rontolisp.FloatWidth.values().length);
+		assertThat(JvmPackedFloatWidth.of(am.ik.rontolisp.FloatWidth.BFLOAT16).descriptor()).isEqualTo("[S");
+		assertThat(JvmPackedFloatWidth.of(am.ik.rontolisp.FloatWidth.BFLOAT16).dataOffset(3)).isEqualTo(7);
+		assertThat(JvmPackedFloatWidth.of(am.ik.rontolisp.FloatWidth.SINGLE).dataOffset(3)).isEqualTo(4);
+	}
+
 	// --- the surfaces around the accessors ---------------------------------------
 
 	@Test
