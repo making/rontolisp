@@ -28,6 +28,7 @@ import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.StdinLibrary;
 import am.ik.rontolisp.eval.TlsLibrary;
+import am.ik.rontolisp.eval.TokenizersLibrary;
 import am.ik.rontolisp.eval.TorchLibrary;
 import am.ik.rontolisp.eval.UnreadCharLibrary;
 import am.ik.rontolisp.eval.UrlLibrary;
@@ -335,12 +336,14 @@ final class CompileFrontend {
 		// JsonLibrary runs AFTER GeomLibrary (geom:read-gltf parses its JSON chunk
 		// through rontolisp:json-parse, so the splice introduces the reference) and
 		// still after the HTTP passes above, whose handlers it also rewrites.
-		List<LispVal> program = UnreadCharLibrary
-			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
-					UrlLibrary.process(AppKitLibrary
-						.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary
-							.process(SceneLibrary.process(TorchLibrary.process(UserMacroExpander.expand(loaded))))))))),
-					features)))));
+		// TokenizersLibrary is innermost and has no place in that order at all: it
+		// reaches for nothing but cl, and nothing any other pass splices reaches for it.
+		List<LispVal> program = UnreadCharLibrary.process(
+				WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
+						UrlLibrary.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary
+							.process(GeomLibrary.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary
+								.process(TokenizersLibrary.process(UserMacroExpander.expand(loaded)))))))))),
+						features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
 		// sockets variants and as an appended user import under serve, whose service

@@ -6515,6 +6515,18 @@ public final class LispNames {
 	public static final String GEOM_PKG = "GEOM";
 
 	/**
+	 * The {@code tokenizer} package name: the byte-level (GPT-2 / SmolLM2 / Qwen / Llama
+	 * 3) and SentencePiece (Llama 2) BPE tokenizers a published language model ships
+	 * with, written in rontolisp itself ({@code tokenizers.lisp}, see
+	 * {@code eval.TokenizersLibrary}) and loaded lazily on the first {@code tokenizer:}
+	 * resolution, the {@code linalg} pattern. It reaches for nothing but {@code cl} --
+	 * not even the filesystem, since the vocabulary is an argument -- so it runs on all
+	 * four backends and in the browser playground. Does not use {@code cl}; every
+	 * exported name is external.
+	 */
+	public static final String TOKENIZER_PKG = "TOKENIZER";
+
+	/**
 	 * The {@code metal} package name: a Metal drawing surface on an {@code appkit} window
 	 * -- the layer, the device, the command queue, the render pass and the buffer helpers
 	 * every Metal program writes identically -- written in rontolisp itself over the
@@ -8131,6 +8143,14 @@ public final class LispNames {
 
 	/** {@code float-features:bits-single-float}. */
 	public static final String BITS_SINGLE_FLOAT = "BITS-SINGLE-FLOAT";
+
+	// The single/double-float bits pairs above are canonical under float-features: (an
+	// external symbol there, internal here) because float-features is a real upstream
+	// CL library and that is its own API's spelling. float-features has no f16 pair --
+	// float16-bits/bits-float16 and the bulk widen/narrow below are a rontolisp
+	// extension (.todo/671), so THEIR external home is the rontolisp: package itself
+	// (see PackageRegistry's rontolispExternals), not float-features. Same reasoning
+	// puts bfloat16-bits/bits-bfloat16 (.todo/487) under rontolisp: too.
 
 	/**
 	 * {@code rontolisp:float16-bits} -- a real narrowed to its IEEE binary16 bit pattern

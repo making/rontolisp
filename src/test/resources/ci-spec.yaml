@@ -14525,6 +14525,91 @@ standalone:
     stdout: |
       (T NIL T T NIL T NIL T NIL)
       (3 "ab")
+  # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
+  # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's
+  # ignore-merges and the SentencePiece half, on all four backends. The vocabulary is
+  # 25 tokens written out here rather than a model's: the shapes are what can differ
+  # per backend (the \p{L} / \p{N} / \p{M} range tables, the string indexing, the
+  # hash keys), and a real vocabulary would only make the same loop longer. The
+  # fidelity of the ids against the models' own tokenizers is TokenizersLibraryTest,
+  # which runs the checked-in SmolLM2 / Qwen / Llama 3 fixtures against the ids the
+  # Python `tokenizers` library produced.
+  - name: tokenizer-cross-backend
+    source: |
+      (defparameter *ci-tok-tokens*
+        #("<|endoftext|>" "a" "b" "c" "d" "e" "h" "i" "l" "o" "r" "t" "w" "Ġ" "1" "2"
+          "he" "hel" "hell" "hello" "Ġw" "Ġwo" "Ġwor" "Ġworl" "Ġworld" "ab"))
+
+      (defparameter *ci-tok-merges*
+        '("h e" "he l" "hel l" "hell o" "Ġ w" "Ġw o" "Ġwo r" "Ġwor l" "Ġworl d"))
+
+      (defparameter *ci-tok-pieces*
+        #("<unk>" "<s>" "</s>" " " "a" "b" "ab" " a"))
+
+      (defparameter *ci-tok-scores* #(0.0 0.0 0.0 -1.0 -2.0 -3.0 -0.5 -0.4))
+
+      (defun ci-tokenizer ()
+        ;; The five pre-tokenizer shapes on the same text: the alternation order and the
+        ;; \p{L} / \p{N} / \p{M} tables, which need no vocabulary at all.
+        (dolist (kind '(:gpt2 :smollm :llama3 :qwen2 :qwen35))
+          (print (tokenizer:pre-tokenize kind "Hi there, 2025! café 日本 x")))
+        (print (tokenizer:pre-tokenize :gpt2 "a
+        b"))
+        (print (tokenizer:pre-tokenize :qwen2 "a
+        b"))
+        ;; A byte-level BPE over a 25-token vocabulary: the merge loop, the specials and
+        ;; Llama 3's ignore-merges.
+        (let ((tk (tokenizer:make-bpe *ci-tok-tokens* *ci-tok-merges*
+                                      :specials '("<|endoftext|>") :bos 0)))
+          (print (tokenizer:encode tk "hello world"))
+          (print (tokenizer:encode tk "hello world" :bos t))
+          (print (tokenizer:encode tk "<|endoftext|>hello"))
+          (print (tokenizer:encode tk "ab"))
+          (print (tokenizer:decode tk (tokenizer:encode tk "hello world")))
+          (print (tokenizer:decode tk '(0 19)))
+          (print (list (tokenizer:vocabulary-size tk) (tokenizer:token-id tk "hello")
+                       (tokenizer:token-string tk 24) (tokenizer:bos-id tk)
+                       (tokenizer:eos-id tk))))
+        (let ((tk (tokenizer:make-bpe *ci-tok-tokens* *ci-tok-merges* :ignore-merges t)))
+          (print (tokenizer:encode tk "ab")))
+        ;; A byte outside the vocabulary is still encodable: every byte-level character
+        ;; is in the 256-entry base alphabet of a real vocabulary, so the error names the
+        ;; token this toy one is missing.
+        (let ((tk (tokenizer:make-bpe *ci-tok-tokens* *ci-tok-merges*)))
+          (print (handler-case (tokenizer:encode tk "z")
+                   (error (e) (format nil "~a" e)))))
+        ;; The SentencePiece half: the dummy prefix space, the greedy merge by SCORE
+        ;; (highest wins, so " a" at -0.4 beats "ab" at -0.5) and the space taken back off
+        ;; by the decode.
+        (let ((tk (tokenizer:make-sentencepiece *ci-tok-pieces* *ci-tok-scores*
+                                                :bos 1 :eos 2)))
+          (print (tokenizer:encode tk "ab"))
+          (print (tokenizer:encode tk "ab" :bos t :eos t))
+          (print (tokenizer:decode tk (tokenizer:encode tk "ab")))))
+
+      (ci-tokenizer)
+    expected: |
+      ("Hi" " there" "," " 2025" "!" " café" " 日本" " x")
+      ("Hi" " there" "," " " "2" "0" "2" "5" "!" " café" " 日本" " x")
+      ("Hi" " there" "," " " "202" "5" "!" " café" " 日本" " x")
+      ("Hi" " there" "," " " "2" "0" "2" "5" "!" " café" " 日本" " x")
+      ("Hi" " there" "," " " "2" "0" "2" "5" "!" " café" " 日本" " x")
+      ("a" "
+       " " b")
+      ("a" "
+      " " " " b")
+      (19 24)
+      (0 19 24)
+      (0 19)
+      (1 2)
+      "hello world"
+      "<|endoftext|>hello"
+      (26 19 "Ġworld" 0 NIL)
+      (25)
+      "tokenizer: the vocabulary has no id for the byte-level token \"z\""
+      (7 5)
+      (1 7 5 2)
+      "ab"
   - name: bfloat16-bits
     source: |
       (print (list (rontolisp:bfloat16-bits 1.0) (rontolisp:bfloat16-bits -2.5)

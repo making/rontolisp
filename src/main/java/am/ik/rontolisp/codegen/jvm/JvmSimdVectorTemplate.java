@@ -118,6 +118,53 @@ final class JvmSimdVectorTemplate {
 	 */
 	private static final int MATVEC_ROW_THRESHOLD = 16;
 
+	/**
+	 * How many independent accumulators a long GEMV row folds into. Four beat two at
+	 * every shape measured and eight lost to four at all of them, on both JITs. It is
+	 * part of the CROSS-BACKEND bit-identity contract, not a tuning knob: the fold order
+	 * is the value, so all four {@code --simd} implementations use this count and this
+	 * tree.
+	 */
+	private static final int MATVEC_ACCUMULATORS = 4;
+
+	/**
+	 * Columns at or above which a GEMV row runs {@link #MATVEC_ACCUMULATORS} independent
+	 * accumulators instead of one. One accumulator is one dependency chain -- four lanes
+	 * per add of four-cycle latency, so ~1 multiply-add per cycle however wide the core
+	 * issues -- which bounds a row well short of memory; independent chains lift it, at
+	 * the cost of four zeroed vectors and a three-add fold per row.
+	 *
+	 * <p>
+	 * It must be a pure function of the COLUMN COUNT and nothing else. An attention
+	 * {@code V^T . att} is a GEMV whose columns are the sequence length, so one call site
+	 * crosses this gate as generation proceeds -- and it may cross it only because the
+	 * column count changed, never because of a row count, a call count or any other
+	 * state, or the four {@code --simd} implementations stop agreeing bit for bit. Row
+	 * counts are therefore not consulted even where they would predict better.
+	 *
+	 * <p>
+	 * The gate is NOT a head-dimension question, which is how it was first framed:
+	 * measured cleanly (2026-09-03, GB10) four accumulators win at every head dimension a
+	 * real model uses -- 48 (stories15M) 1.21x under Graal / 1.15x under C2, 64
+	 * (SmolLM2-135M, TinyLlama-1.1B, LFM2.5-1.2B) 1.23x / 1.26x, 128 (Qwen3-0.6B, and the
+	 * Gated DeltaNet product) 1.27x / 1.52x, 256 (Qwen3.5-0.8B) 1.29x / 1.57x. An earlier
+	 * probe reported a 0.48x regression at 48 columns; it dispatched the row kernel
+	 * through a five-implementation interface ONCE PER ROW, so the call went megamorphic,
+	 * the Vector API stopped being inlined, and the cost scaled with the number of live
+	 * vectors -- it measured boxing, not the fold. The shipped kernel has its row loop
+	 * inside one method and pays none of that.
+	 *
+	 * <p>
+	 * What a gate is genuinely needed for is a row too short to fill the wide loop twice.
+	 * At 24 columns -- one wide iteration plus two leftover lane groups -- the setup is
+	 * most of the row and C2 measures 0.70x. So the gate is exactly two full wide
+	 * iterations, {@code 2 * MATVEC_ACCUMULATORS * lanes} = 32, derived from the kernel's
+	 * own shape rather than picked, and below every real head dimension so no model is
+	 * left on the slow path. It sits above {@link #MATVEC_ROW_THRESHOLD}, so a row
+	 * between the two gates runs the single chain it ran before.
+	 */
+	private static final int MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * FSPECIES_REDUCE.length();
+
 	private JvmSimdVectorTemplate() {
 	}
 
@@ -557,21 +604,51 @@ final class JvmSimdVectorTemplate {
 	}
 
 	/**
-	 * {@link #matvecRows} at single width: the {@link #dotF} chain, four lanes, f32
-	 * accumulator.
+	 * Rows {@code [from, to)} of the f32 GEMV: four pinned lanes, an f32 accumulator, the
+	 * two-rounding mul-then-add (deliberately not {@code fma} -- wasm SIMD has no
+	 * deterministic fused multiply-add, so a kernel that needed one could not be mirrored
+	 * there).
+	 *
+	 * <p>
+	 * A row of {@link #MATVEC_ACC_THRESHOLD} columns or more folds into
+	 * {@link #MATVEC_ACCUMULATORS} independent accumulators, summed pairwise
+	 * ({@code (a0 + a1) + (a2 + a3)}) into the single accumulator that then takes the
+	 * leftover lane groups and the scalar tail; a shorter row keeps the one chain. That
+	 * order is the value, so it is repeated exactly in the other three {@code --simd}
+	 * implementations -- see {@code .kb/vec.md}. Within a row the whole chain still
+	 * depends on nothing but that row, which is what lets {@code --parallel} split them.
 	 */
 	private static void matvecRowsF(float[] r, int or, float[] w, float[] x, int from, int to) {
 		int ow = 1 + (int) w[0];
 		int n = (int) w[2];
 		int ox = 1 + (int) x[0];
+		int lanes = FSPECIES_REDUCE.length();
+		int wide = n >= MATVEC_ACC_THRESHOLD ? n / (MATVEC_ACCUMULATORS * lanes) * (MATVEC_ACCUMULATORS * lanes) : 0;
+		int bound = FSPECIES_REDUCE.loopBound(n);
 		for (int row = from; row < to; row++) {
 			int base = ow + row * n;
 			int i = 0;
 			float acc = 0.0f;
 			if (n >= MATVEC_ROW_THRESHOLD) {
 				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
-				int bound = FSPECIES_REDUCE.loopBound(n);
-				for (; i < bound; i += FSPECIES_REDUCE.length()) {
+				if (wide > 0) {
+					FloatVector a0 = FloatVector.zero(FSPECIES_REDUCE);
+					FloatVector a1 = a0;
+					FloatVector a2 = a0;
+					FloatVector a3 = a0;
+					for (; i < wide; i += MATVEC_ACCUMULATORS * lanes) {
+						a0 = a0.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)));
+						a1 = a1.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i + lanes)
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i + lanes)));
+						a2 = a2.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i + 2 * lanes)
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i + 2 * lanes)));
+						a3 = a3.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i + 3 * lanes)
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i + 3 * lanes)));
+					}
+					vacc = a0.add(a1).add(a2.add(a3));
+				}
+				for (; i < bound; i += lanes) {
 					vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
 						.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)));
 				}
@@ -4245,14 +4322,33 @@ final class JvmSimdVectorTemplate {
 	 * them exactly as it splits the f32 rows.
 	 */
 	private static void matvecRowsBf16(float[] r, short[] w, int cols, float[] x, int from, int to) {
+		int lanes = FSPECIES_REDUCE.length();
+		int wide = cols >= MATVEC_ACC_THRESHOLD ? cols / (MATVEC_ACCUMULATORS * lanes) * (MATVEC_ACCUMULATORS * lanes)
+				: 0;
+		int bound = FSPECIES_REDUCE.loopBound(cols);
 		for (int row = from; row < to; row++) {
 			int base = row * cols;
 			int i = 0;
 			float acc = 0.0f;
 			if (cols >= MATVEC_ROW_THRESHOLD) {
 				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
-				int bound = FSPECIES_REDUCE.loopBound(cols);
-				for (; i < bound; i += FSPECIES_REDUCE.length()) {
+				if (wide > 0) {
+					FloatVector a0 = FloatVector.zero(FSPECIES_REDUCE);
+					FloatVector a1 = a0;
+					FloatVector a2 = a0;
+					FloatVector a3 = a0;
+					for (; i < wide; i += MATVEC_ACCUMULATORS * lanes) {
+						a0 = a0.add(widenBf16(w, base + i).mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i)));
+						a1 = a1.add(widenBf16(w, base + i + lanes)
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i + lanes)));
+						a2 = a2.add(widenBf16(w, base + i + 2 * lanes)
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i + 2 * lanes)));
+						a3 = a3.add(widenBf16(w, base + i + 3 * lanes)
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i + 3 * lanes)));
+					}
+					vacc = a0.add(a1).add(a2.add(a3));
+				}
+				for (; i < bound; i += lanes) {
 					vacc = vacc.add(widenBf16(w, base + i).mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i)));
 				}
 				acc = sumLanesF(vacc);
