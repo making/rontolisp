@@ -97,13 +97,20 @@ public final class VecSimd {
 		defineFn(globalEnv, LispNames.VEC_DOT, 2, (name, args) -> {
 			LispFloatArray a = array(name, args.get(0));
 			LispFloatArray b = array(name, args.get(1));
-			if (a instanceof LispDoubleFloatArray x && b instanceof LispDoubleFloatArray y) {
-				return new LispDouble(VecSimdKernels.dot(x.data(), y.data()));
-			}
-			if (a instanceof LispSingleFloatArray x && b instanceof LispSingleFloatArray y) {
-				return new LispDouble(VecSimdKernels.dotF(x.data(), y.data()));
-			}
-			throw mixedWidth(name);
+			return new LispDouble(switch (a) {
+				case LispDoubleFloatArray x -> {
+					if (!(b instanceof LispDoubleFloatArray y)) {
+						throw mixedWidth(name);
+					}
+					yield VecSimdKernels.dot(x.data(), y.data());
+				}
+				case LispSingleFloatArray x -> {
+					if (!(b instanceof LispSingleFloatArray y)) {
+						throw mixedWidth(name);
+					}
+					yield VecSimdKernels.dotF(x.data(), y.data());
+				}
+			});
 		});
 		defineFn(globalEnv, LispNames.VEC_MATVEC, 2, (name, args) -> {
 			LispFloatArray w = array(name, args.get(0));
@@ -113,13 +120,20 @@ public final class VecSimd {
 			}
 			int rows = w.dims()[0];
 			int cols = w.dims()[1];
-			if (w instanceof LispDoubleFloatArray mw && x instanceof LispDoubleFloatArray vx) {
-				return vector(VecSimdKernels.matvec(mw.data(), rows, cols, vx.data(), parallel));
-			}
-			if (w instanceof LispSingleFloatArray mw && x instanceof LispSingleFloatArray vx) {
-				return vector(VecSimdKernels.matvecF(mw.data(), rows, cols, vx.data(), parallel));
-			}
-			throw mixedWidth(name);
+			return switch (w) {
+				case LispDoubleFloatArray mw -> {
+					if (!(x instanceof LispDoubleFloatArray vx)) {
+						throw mixedWidth(name);
+					}
+					yield vector(VecSimdKernels.matvec(mw.data(), rows, cols, vx.data(), parallel));
+				}
+				case LispSingleFloatArray mw -> {
+					if (!(x instanceof LispSingleFloatArray vx)) {
+						throw mixedWidth(name);
+					}
+					yield vector(VecSimdKernels.matvecF(mw.data(), rows, cols, vx.data(), parallel));
+				}
+			};
 		});
 		installUnary(globalEnv);
 		installCompare(globalEnv);
@@ -162,16 +176,21 @@ public final class VecSimd {
 			LispFloatArray v = array(name, args.get(1));
 			double lo = scalar(name, args.get(2));
 			double hi = scalar(name, args.get(3));
-			if (out instanceof LispDoubleFloatArray r && v instanceof LispDoubleFloatArray x) {
-				VecSimdKernels.clipInto(r.data(), x.data(), lo, hi);
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else if (out instanceof LispSingleFloatArray r && v instanceof LispSingleFloatArray x) {
-				VecSimdKernels.clipIntoF(r.data(), x.data(), lo, hi);
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else {
-				throw mixedWidth(name);
+			switch (out) {
+				case LispDoubleFloatArray r -> {
+					if (!(v instanceof LispDoubleFloatArray x)) {
+						throw mixedWidth(name);
+					}
+					VecSimdKernels.clipInto(r.data(), x.data(), lo, hi);
+					FloatArrayAccessHook.written(r.storage());
+				}
+				case LispSingleFloatArray r -> {
+					if (!(v instanceof LispSingleFloatArray x)) {
+						throw mixedWidth(name);
+					}
+					VecSimdKernels.clipIntoF(r.data(), x.data(), lo, hi);
+					FloatArrayAccessHook.written(r.storage());
+				}
 			}
 			return args.get(0);
 		});
@@ -246,16 +265,21 @@ public final class VecSimd {
 			LispFloatArray out = array(name, args.get(0));
 			LispFloatArray v = array(name, args.get(1));
 			double s = scalar(name, args.get(2));
-			if (out instanceof LispDoubleFloatArray r && v instanceof LispDoubleFloatArray x) {
-				VecSimdKernels.scaleInto(r.data(), x.data(), s);
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else if (out instanceof LispSingleFloatArray r && v instanceof LispSingleFloatArray x) {
-				VecSimdKernels.scaleIntoF(r.data(), x.data(), s);
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else {
-				throw mixedWidth(name);
+			switch (out) {
+				case LispDoubleFloatArray r -> {
+					if (!(v instanceof LispDoubleFloatArray x)) {
+						throw mixedWidth(name);
+					}
+					VecSimdKernels.scaleInto(r.data(), x.data(), s);
+					FloatArrayAccessHook.written(r.storage());
+				}
+				case LispSingleFloatArray r -> {
+					if (!(v instanceof LispSingleFloatArray x)) {
+						throw mixedWidth(name);
+					}
+					VecSimdKernels.scaleIntoF(r.data(), x.data(), s);
+					FloatArrayAccessHook.written(r.storage());
+				}
 			}
 			return args.get(0);
 		});
@@ -268,20 +292,23 @@ public final class VecSimd {
 			}
 			int rows = w.dims()[0];
 			int cols = w.dims()[1];
-			if (out instanceof LispDoubleFloatArray r && w instanceof LispDoubleFloatArray mw
-					&& x instanceof LispDoubleFloatArray vx) {
-				requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
-				VecSimdKernels.matvecInto(r.data(), mw.data(), rows, cols, vx.data(), parallel);
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else if (out instanceof LispSingleFloatArray r && w instanceof LispSingleFloatArray mw
-					&& x instanceof LispSingleFloatArray vx) {
-				requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
-				VecSimdKernels.matvecIntoF(r.data(), mw.data(), rows, cols, vx.data(), parallel);
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else {
-				throw mixedWidth(name);
+			switch (out) {
+				case LispDoubleFloatArray r -> {
+					if (!(w instanceof LispDoubleFloatArray mw) || !(x instanceof LispDoubleFloatArray vx)) {
+						throw mixedWidth(name);
+					}
+					requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
+					VecSimdKernels.matvecInto(r.data(), mw.data(), rows, cols, vx.data(), parallel);
+					FloatArrayAccessHook.written(r.storage());
+				}
+				case LispSingleFloatArray r -> {
+					if (!(w instanceof LispSingleFloatArray mw) || !(x instanceof LispSingleFloatArray vx)) {
+						throw mixedWidth(name);
+					}
+					requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
+					VecSimdKernels.matvecIntoF(r.data(), mw.data(), rows, cols, vx.data(), parallel);
+					FloatArrayAccessHook.written(r.storage());
+				}
 			}
 			return args.get(0);
 		});
@@ -316,16 +343,21 @@ public final class VecSimd {
 		defineFn(globalEnv, name, 2, (fnName, args) -> {
 			LispFloatArray out = array(fnName, args.get(0));
 			LispFloatArray v = array(fnName, args.get(1));
-			if (out instanceof LispDoubleFloatArray r && v instanceof LispDoubleFloatArray x) {
-				f64.apply(r.data(), x.data());
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else if (out instanceof LispSingleFloatArray r && v instanceof LispSingleFloatArray x) {
-				f32.apply(r.data(), x.data());
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else {
-				throw mixedWidth(fnName);
+			switch (out) {
+				case LispDoubleFloatArray r -> {
+					if (!(v instanceof LispDoubleFloatArray x)) {
+						throw mixedWidth(fnName);
+					}
+					f64.apply(r.data(), x.data());
+					FloatArrayAccessHook.written(r.storage());
+				}
+				case LispSingleFloatArray r -> {
+					if (!(v instanceof LispSingleFloatArray x)) {
+						throw mixedWidth(fnName);
+					}
+					f32.apply(r.data(), x.data());
+					FloatArrayAccessHook.written(r.storage());
+				}
 			}
 			return args.get(0);
 		});
@@ -339,18 +371,21 @@ public final class VecSimd {
 			LispFloatArray out = array(fnName, args.get(0));
 			LispFloatArray a = array(fnName, args.get(1));
 			LispFloatArray b = array(fnName, args.get(2));
-			if (out instanceof LispDoubleFloatArray r && a instanceof LispDoubleFloatArray x
-					&& b instanceof LispDoubleFloatArray y) {
-				f64.apply(r.data(), x.data(), y.data());
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else if (out instanceof LispSingleFloatArray r && a instanceof LispSingleFloatArray x
-					&& b instanceof LispSingleFloatArray y) {
-				f32.apply(r.data(), x.data(), y.data());
-				FloatArrayAccessHook.written(r.storage());
-			}
-			else {
-				throw mixedWidth(fnName);
+			switch (out) {
+				case LispDoubleFloatArray r -> {
+					if (!(a instanceof LispDoubleFloatArray x) || !(b instanceof LispDoubleFloatArray y)) {
+						throw mixedWidth(fnName);
+					}
+					f64.apply(r.data(), x.data(), y.data());
+					FloatArrayAccessHook.written(r.storage());
+				}
+				case LispSingleFloatArray r -> {
+					if (!(a instanceof LispSingleFloatArray x) || !(b instanceof LispSingleFloatArray y)) {
+						throw mixedWidth(fnName);
+					}
+					f32.apply(r.data(), x.data(), y.data());
+					FloatArrayAccessHook.written(r.storage());
+				}
 			}
 			return args.get(0);
 		});
@@ -361,13 +396,20 @@ public final class VecSimd {
 		defineFn(globalEnv, name, 2, (fnName, args) -> {
 			LispFloatArray a = array(fnName, args.get(0));
 			LispFloatArray b = array(fnName, args.get(1));
-			if (a instanceof LispDoubleFloatArray x && b instanceof LispDoubleFloatArray y) {
-				return vector(f64.apply(x.data(), y.data()));
-			}
-			if (a instanceof LispSingleFloatArray x && b instanceof LispSingleFloatArray y) {
-				return vector(f32.apply(x.data(), y.data()));
-			}
-			throw mixedWidth(fnName);
+			return switch (a) {
+				case LispDoubleFloatArray x -> {
+					if (!(b instanceof LispDoubleFloatArray y)) {
+						throw mixedWidth(fnName);
+					}
+					yield vector(f64.apply(x.data(), y.data()));
+				}
+				case LispSingleFloatArray x -> {
+					if (!(b instanceof LispSingleFloatArray y)) {
+						throw mixedWidth(fnName);
+					}
+					yield vector(f32.apply(x.data(), y.data()));
+				}
+			};
 		});
 	}
 

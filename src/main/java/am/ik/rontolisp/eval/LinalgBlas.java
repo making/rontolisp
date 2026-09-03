@@ -160,15 +160,18 @@ public final class LinalgBlas {
 		LispFloatArray x = (LispFloatArray) args.get(1);
 		int rows = w.dims()[0];
 		int cols = w.dims()[1];
-		if (w instanceof LispSingleFloatArray single) {
-			float[] y = new float[rows];
-			LinalgBlasKernels.gemvF(single.data(), 0, rows, cols, ((LispSingleFloatArray) x).data(), 0, y, 0, false);
-			return new LispSingleFloatArray(y, new int[] { rows });
-		}
-		double[] y = new double[rows];
-		LinalgBlasKernels.gemv(((LispDoubleFloatArray) w).data(), 0, rows, cols, ((LispDoubleFloatArray) x).data(), 0,
-				y, 0, false);
-		return new LispDoubleFloatArray(y, new int[] { rows });
+		return switch (w) {
+			case LispSingleFloatArray m -> {
+				float[] y = new float[rows];
+				LinalgBlasKernels.gemvF(m.data(), 0, rows, cols, floats(x), 0, y, 0, false);
+				yield new LispSingleFloatArray(y, new int[] { rows });
+			}
+			case LispDoubleFloatArray m -> {
+				double[] y = new double[rows];
+				LinalgBlasKernels.gemv(m.data(), 0, rows, cols, doubles(x), 0, y, 0, false);
+				yield new LispDoubleFloatArray(y, new int[] { rows });
+			}
+		};
 	}
 
 	/**
@@ -191,25 +194,26 @@ public final class LinalgBlas {
 		if (out.dims()[0] != rows) {
 			return null;
 		}
-		if (out instanceof LispSingleFloatArray y) {
-			float[] data = y.data();
-			if (data == ((LispSingleFloatArray) w).data() || data == ((LispSingleFloatArray) x).data()) {
-				return null;
+		return switch (out) {
+			case LispSingleFloatArray y -> {
+				float[] data = y.data();
+				if (data == floats(w) || data == floats(x)) {
+					yield null;
+				}
+				LinalgBlasKernels.gemvF(floats(w), 0, rows, cols, floats(x), 0, data, 0, false);
+				FloatArrayAccessHook.written(y.storage());
+				yield out;
 			}
-			LinalgBlasKernels.gemvF(((LispSingleFloatArray) w).data(), 0, rows, cols, ((LispSingleFloatArray) x).data(),
-					0, data, 0, false);
-			FloatArrayAccessHook.written(y.storage());
-			return out;
-		}
-		LispDoubleFloatArray y = (LispDoubleFloatArray) out;
-		double[] data = y.data();
-		if (data == ((LispDoubleFloatArray) w).data() || data == ((LispDoubleFloatArray) x).data()) {
-			return null;
-		}
-		LinalgBlasKernels.gemv(((LispDoubleFloatArray) w).data(), 0, rows, cols, ((LispDoubleFloatArray) x).data(), 0,
-				data, 0, false);
-		FloatArrayAccessHook.written(y.storage());
-		return out;
+			case LispDoubleFloatArray y -> {
+				double[] data = y.data();
+				if (data == doubles(w) || data == doubles(x)) {
+					yield null;
+				}
+				LinalgBlasKernels.gemv(doubles(w), 0, rows, cols, doubles(x), 0, data, 0, false);
+				FloatArrayAccessHook.written(y.storage());
+				yield out;
+			}
+		};
 	}
 
 	/**
@@ -240,7 +244,6 @@ public final class LinalgBlas {
 		if (a == null || b == null || a.getClass() != b.getClass()) {
 			return null;
 		}
-		boolean single = a instanceof LispSingleFloatArray;
 		if (a.rank() == 2 && b.rank() == 2) {
 			int n = a.dims()[0];
 			int m = a.dims()[1];
@@ -248,15 +251,7 @@ public final class LinalgBlas {
 			if (m != b.dims()[0] || !LinalgBlasKernels.worth(n, m, p)) {
 				return null;
 			}
-			int[] dims = { n, p };
-			if (single) {
-				float[] c = new float[n * p];
-				LinalgBlasKernels.gemmF(floats(a), 0, floats(b), 0, c, 0, n, m, p);
-				return new LispSingleFloatArray(c, dims);
-			}
-			double[] c = new double[n * p];
-			LinalgBlasKernels.gemm(doubles(a), 0, doubles(b), 0, c, 0, n, m, p);
-			return new LispDoubleFloatArray(c, dims);
+			return gemm(a, b, n, m, p);
 		}
 		if (a.rank() == 2 && b.rank() == 1) {
 			int rows = a.dims()[0];
@@ -264,7 +259,7 @@ public final class LinalgBlas {
 			if (cols != b.dims()[0] || !LinalgBlasKernels.worth(rows, cols, 1)) {
 				return null;
 			}
-			return gemv(a, b, rows, cols, rows, false, single);
+			return gemv(a, b, rows, cols, rows, false);
 		}
 		if (a.rank() == 1 && b.rank() == 2) {
 			// A row vector times a matrix contracts b's FIRST axis, which is b^T x.
@@ -273,33 +268,60 @@ public final class LinalgBlas {
 			if (a.dims()[0] != rows || !LinalgBlasKernels.worth(rows, cols, 1)) {
 				return null;
 			}
-			return gemv(b, a, rows, cols, cols, true, single);
+			return gemv(b, a, rows, cols, cols, true);
 		}
 		return null;
 	}
 
+	/** {@code c = a b}, both rank 2 and of the same width, the result fresh. */
+	private static LispVal gemm(LispFloatArray a, LispFloatArray b, int n, int m, int p) {
+		int[] dims = { n, p };
+		return switch (a) {
+			case LispSingleFloatArray x -> {
+				float[] c = new float[n * p];
+				LinalgBlasKernels.gemmF(x.data(), 0, floats(b), 0, c, 0, n, m, p);
+				yield new LispSingleFloatArray(c, dims);
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = new double[n * p];
+				LinalgBlasKernels.gemm(x.data(), 0, doubles(b), 0, c, 0, n, m, p);
+				yield new LispDoubleFloatArray(c, dims);
+			}
+		};
+	}
+
 	/** {@code y = matrix x} (or {@code matrix^T x}), the result a fresh rank-1 array. */
 	private static LispVal gemv(LispFloatArray matrix, LispFloatArray vector, int rows, int cols, int out,
-			boolean transposed, boolean single) {
+			boolean transposed) {
 		int[] dims = { out };
-		if (single) {
-			float[] y = new float[out];
-			LinalgBlasKernels.gemvF(floats(matrix), 0, rows, cols, floats(vector), 0, y, 0, transposed);
-			return new LispSingleFloatArray(y, dims);
-		}
-		double[] y = new double[out];
-		LinalgBlasKernels.gemv(doubles(matrix), 0, rows, cols, doubles(vector), 0, y, 0, transposed);
-		return new LispDoubleFloatArray(y, dims);
+		return switch (matrix) {
+			case LispSingleFloatArray m -> {
+				float[] y = new float[out];
+				LinalgBlasKernels.gemvF(m.data(), 0, rows, cols, floats(vector), 0, y, 0, transposed);
+				yield new LispSingleFloatArray(y, dims);
+			}
+			case LispDoubleFloatArray m -> {
+				double[] y = new double[out];
+				LinalgBlasKernels.gemv(m.data(), 0, rows, cols, doubles(vector), 0, y, 0, transposed);
+				yield new LispDoubleFloatArray(y, dims);
+			}
+		};
 	}
 
 	private static @Nullable LispFloatArray packed(LispVal value) {
 		return value instanceof LispFloatArray array ? array : null;
 	}
 
+	/**
+	 * The backing of an operand ALREADY PROVEN to be a double-float array -- every caller
+	 * is inside the arm of an exhaustive {@code switch} over a sibling operand whose
+	 * class it was checked against, so the narrowing cannot fail whatever widths exist.
+	 */
 	private static double[] doubles(LispFloatArray array) {
 		return ((LispDoubleFloatArray) array).data();
 	}
 
+	/** The single-float counterpart of {@link #doubles}, under the same proof. */
 	private static float[] floats(LispFloatArray array) {
 		return ((LispSingleFloatArray) array).data();
 	}

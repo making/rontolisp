@@ -9196,6 +9196,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunBfloat16Bits() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:bfloat16-bits 1.0)) (print (rontolisp:bfloat16-bits -2.5))"
+				+ " (print (rontolisp:bits-bfloat16 16256))"
+				+ " (print (rontolisp:bits-bfloat16 (rontolisp:bfloat16-bits 0.1)))"
+				+ " (print (rontolisp:bfloat16-bits 1.00390625)) (print (rontolisp:bfloat16-bits 1.01171875))"
+				+ " (print (let ((bad 0)) (dotimes (i 65536 bad)"
+				+ " (unless (= i (rontolisp:bfloat16-bits (rontolisp:bits-bfloat16 i))) (incf bad)))))"
+				+ " (print (mapcar #'rontolisp:bfloat16-bits (list 1.0 2.0)))"
+				+ " (print (mapcar #'rontolisp:bits-bfloat16 (list 16256 16384)))"))
+			.isEqualTo("16256\n49184\n1.0\n0.10009765625\n16256\n16258\n0\n(16256 16384)\n(1.0 2.0)");
+	}
+
+	@Test
 	void compileAndRunDestructuringBind() throws Exception {
 		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))")).isEqualTo("10");
 		assertThat(compileAndRun("(destructuring-bind (a &optional (b 10) c) '(1) (print (list a b c)))"))

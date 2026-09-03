@@ -43,6 +43,33 @@ Byte-level BPE, 65536 tokens, pre-tokenizer = Llama 3's pattern (`\p{N}{1,3}`, f
 `tokenizer.json`), `<|startoftext|>` prepended by the template; chat template
 `<|im_start|>user ... <|im_end|>` like Qwen.
 
+## Done (2026-09-03, the reader-independent half)
+
+`examples/llama2/shortconv.lisp` is the `:shortconv` kind (`shortconv-layer` /
+`shortconv-state` / `shortconv-forward`), over the causal convolution it shares with
+the Gated DeltaNet layer (`causal-conv.lisp`, `require`/`provide`, so one conv step
+serves both and a fix reaches both). `llama2.lisp` gained the `lfm2` row (`:mixer
+:shortconv`, QK-norm, theta 1e6, eps 1e-5, tied), `:layer-types` (the explicit list a
+reader builds from config.json or from the GGUF head-count array, winning over
+`:full-attention-interval`) and the per-slot recurrent-state vector both hybrid kinds
+share. `shortconv-check.lisp` pins the step against `shortconv-ref.py` (a float64
+transcription of `Lfm2ShortConv.forward`; the "hand-computed 3-tap fixture" below,
+generated rather than hand-computed) on all four backends with and without `--simd`
+(`examples.yaml`). The stories are unchanged. The reader contract (no Q/K permute in an
+`lfm2` GGUF, the head-count array, the tensor names, the 8192 FFN width, the
+`embedding_norm` / `token_embd_norm` final norm) is in `.todo/673` item 7 and
+`.todo/675` item 5.
+
+## Remaining (needs `.todo/673` / `.todo/675` and `.todo/674`)
+
+Verify items 2-4 below: the real checkpoint from GGUF and from safetensors, the
+llama.cpp comparison (byte-identical through Q8_0 once `.todo/672` lands), the tok/s
+rows. The attention layers' 64-wide head is a reader-independent thing to check when
+the model runs: whether the 64-column `vec:matvec` rows of the attention take the
+lane kernel (`.todo/480`'s column gate sits above it). `generate`'s stop token
+(`<|im_end|>` 7) and the `<|startoftext|>` prefix are `llama2.lisp`'s side of the
+tokenizer item.
+
 ## Verify
 
 - The conv step against a hand-computed 3-tap fixture.

@@ -48,6 +48,16 @@ never disagree, and that a missing wiring fails loudly:
    that `array-element-type` answers the same name. A permit added without wiring
    `make-array` turns this test red -- which is the loud failure the compiler cannot give.
 
+**There is a third of these, and it is in Lisp.** Found 2026-09-03 while working
+`.todo/484`: `vec.lisp`'s `vec::%make` / `vec::%make-like` choose the packed
+representation with `(eq element-type 'single-float)` and treat everything else as
+double. No compiler helps there at all -- not even the one that would have caught the
+Java sites -- so `vec:zeros` / `ones` / `arange` and the width-preserving element-wise
+kernels silently miss a new width until someone notices the type they got back. The
+reflective test in step 3 should cover the `vec:` constructors too, not only
+`make-array`: it is the same assertion (every permit is reachable, and answers its own
+element type) through a different door.
+
 Do the same audit for `packedIntegerElementType` next to it (`(unsigned-byte 8|16|32)`):
 it has the same shape and the same silent `null`, and `LispIntVector` may or may not be
 sealed. Report what is there rather than assuming.
