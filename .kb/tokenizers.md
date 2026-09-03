@@ -170,7 +170,10 @@ expectations are run.c's `encode()` -- cross-checked at authoring time against
 ## Consumers
 
 `examples/llama2/llama2.lisp` still carries its own SentencePiece encoder as of
-2026-09-03; folding it onto `tokenizer:make-sentencepiece` is
-`.todo/676`'s file, not this one's. The byte-level half is what `.todo/489`'s
+2026-09-03: this package reproduces it rather than replacing it, because that file
+is the model side's (`.todo/682`'s directory), not this one's, and folding the two
+belongs with whoever wires a real checkpoint's tokenizer in. The
+`sentencepiece` fixture exists so the fold is a deletion rather than a rewrite --
+the ids are already pinned on both sides. The byte-level half is what `.todo/489`'s
 SmolLM2 / Qwen / LFM2.5 rungs need, fed by `.todo/673` (GGUF) and `.todo/675`
 (safetensors).
