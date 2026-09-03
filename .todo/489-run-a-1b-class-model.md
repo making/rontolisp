@@ -2,8 +2,10 @@
 
 Difficulty: High
 
-The goal `.todo/482` exists for. Depends on `.todo/484`, `.todo/485`, `.todo/487`,
-`.todo/488`.
+The goal `.todo/482` exists for. `.todo/484` and `.todo/485` closed 2026-09-03 and
+`.todo/487` landed its step 1; the f32 rungs below are measured and no longer projections.
+What the bf16 rungs still wait on is `.todo/488`'s wiring, not its kernels -- see the
+precondition under the prediction.
 
 `examples/llama2` runs `stories15M` today: 15M parameters, 60.8 MB of f32 weights, 339
 tok/s single-thread on GB10 (`.todo/457`). The point of adding a narrow width is to move
@@ -74,6 +76,17 @@ this a diagnosis rather than a pair of numbers: the parallel leg is bound by DRA
 thread count -- 64 threads buy about 4x over one, because the weights have to cross the
 bus once per token either way. The single-thread leg is at 8.4 and 5.0 GB/s, nowhere near
 that ceiling, so it is bound by something else.
+
+**The precondition, which `.todo/485` does not satisfy on its own.** 485 adds the
+ARRAY TYPE; it does not wire it into the accelerated path. `eval/VecSimd` declines a
+`LispBFloat16Array` at every dispatch point (`case LispBFloat16Array ignored -> null;`,
+seven of them on develop today) and falls through to the scalar Lisp defun. The fused
+kernels themselves already exist (`eval/VecSimdKernels`, wave 1 of `.todo/488`); what is
+missing is the interception that reaches them, which is `.todo/488`'s remaining wave.
+**Measured before that wiring lands, bf16 will be SLOWER than f32, and that number is
+neither a confirmation nor a refutation of anything below** -- it is the scalar path.
+The decline is deliberate: without it `--simd` would fail outright on a bf16 array, which
+would turn a speed flag into a semantic one.
 
 **The prediction, written before `.todo/485` lands so that measuring it is a test:**
 
