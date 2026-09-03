@@ -8118,6 +8118,45 @@ public final class LispNames {
 	/** {@code float-features:bits-single-float}. */
 	public static final String BITS_SINGLE_FLOAT = "BITS-SINGLE-FLOAT";
 
+	/**
+	 * {@code rontolisp:float16-bits} -- a real narrowed to its IEEE binary16 bit pattern
+	 * (round-to-nearest-even), as an unsigned integer in {@code [0, 65535]}.
+	 */
+	public static final String FLOAT16_BITS = "FLOAT16-BITS";
+
+	/**
+	 * {@code rontolisp:bits-float16} -- the exact real an IEEE binary16 bit pattern
+	 * encodes.
+	 */
+	public static final String BITS_FLOAT16 = "BITS-FLOAT16";
+
+	/**
+	 * {@code rontolisp:widen-float-bits} -- bulk-widens a packed {@code (unsigned-byte
+	 * 16)} vector of {@code :float16} or {@code :bfloat16} bit patterns into an existing
+	 * packed float array, row-major from a {@code :start} offset. See {@code .todo/671}.
+	 */
+	public static final String WIDEN_FLOAT_BITS = "WIDEN-FLOAT-BITS";
+
+	/**
+	 * {@code rontolisp:narrow-float-bits} -- the inverse of {@link #WIDEN_FLOAT_BITS}:
+	 * bulk-narrows a packed float array into a packed {@code (unsigned-byte 16)} vector
+	 * of {@code :float16} or {@code :bfloat16} bit patterns, row-major from a
+	 * {@code :start} offset in the destination.
+	 */
+	public static final String NARROW_FLOAT_BITS = "NARROW-FLOAT-BITS";
+
+	/**
+	 * The {@code :float16} format keyword
+	 * {@link #WIDEN_FLOAT_BITS}/{@link #NARROW_FLOAT_BITS} take.
+	 */
+	public static final String FLOAT16_KEYWORD = ":FLOAT16";
+
+	/**
+	 * The {@code :bfloat16} format keyword
+	 * {@link #WIDEN_FLOAT_BITS}/{@link #NARROW_FLOAT_BITS} take.
+	 */
+	public static final String BFLOAT16_KEYWORD = ":BFLOAT16";
+
 	/** The {@code trivial-gray-streams} shim package (and built-in ASDF system) name. */
 	public static final String TRIVIAL_GRAY_STREAMS_PKG = "TRIVIAL-GRAY-STREAMS";
 

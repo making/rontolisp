@@ -282,15 +282,14 @@ public final class LinalgSimd {
 				// defun signals its own shape-mismatch error.
 				return bcast(op.bop(), a, b);
 			}
-			if (a instanceof LispDoubleFloatArray x && b instanceof LispDoubleFloatArray y) {
-				return like(a, op.dd().apply(x.data(), y.data()));
-			}
-			if (a instanceof LispSingleFloatArray x && b instanceof LispSingleFloatArray y) {
-				return like(a, op.ff().apply(x.data(), y.data()));
-			}
 			// Mixed widths: the oracle widens both operands to double and keeps a's
-			// width. Rare enough to leave to it.
-			return null;
+			// width. Rare enough to leave to it, which is what the null is.
+			return switch (a) {
+				case LispDoubleFloatArray x ->
+					b instanceof LispDoubleFloatArray y ? like(a, op.dd().apply(x.data(), y.data())) : null;
+				case LispSingleFloatArray x ->
+					b instanceof LispSingleFloatArray y ? like(a, op.ff().apply(x.data(), y.data())) : null;
+			};
 		}
 		if (a != null) {
 			Double s = scalar(bv);
@@ -332,15 +331,13 @@ public final class LinalgSimd {
 		if (od == null) {
 			return null;
 		}
-		if (a instanceof LispDoubleFloatArray x && b instanceof LispDoubleFloatArray y) {
-			return new LispDoubleFloatArray(LinalgSimdKernels.bcast(bop, x.data(), a.dims(), y.data(), b.dims(), od),
-					od);
-		}
-		if (a instanceof LispSingleFloatArray x && b instanceof LispSingleFloatArray y) {
-			return new LispSingleFloatArray(LinalgSimdKernels.bcastF(bop, x.data(), a.dims(), y.data(), b.dims(), od),
-					od);
-		}
-		return null;
+		// A mixed-width pair declines (the null arms), like every other kernel here.
+		return switch (a) {
+			case LispDoubleFloatArray x -> b instanceof LispDoubleFloatArray y ? new LispDoubleFloatArray(
+					LinalgSimdKernels.bcast(bop, x.data(), a.dims(), y.data(), b.dims(), od), od) : null;
+			case LispSingleFloatArray x -> b instanceof LispSingleFloatArray y ? new LispSingleFloatArray(
+					LinalgSimdKernels.bcastF(bop, x.data(), a.dims(), y.data(), b.dims(), od), od) : null;
+		};
 	}
 
 	/**
@@ -469,16 +466,18 @@ public final class LinalgSimd {
 		if (od.length == 0) {
 			return new LispDouble(acc[0]);
 		}
-		if (a instanceof LispSingleFloatArray) {
-			// The result keeps the input's width (%la-etype): narrow each accumulator
-			// once, the defun's own store into a single-float out.
-			float[] out = new float[acc.length];
-			for (int i = 0; i < out.length; i++) {
-				out[i] = (float) acc[i];
+		return switch (a) {
+			case LispSingleFloatArray ignored -> {
+				// The result keeps the input's width (%la-etype): narrow each accumulator
+				// once, the defun's own store into a single-float out.
+				float[] out = new float[acc.length];
+				for (int i = 0; i < out.length; i++) {
+					out[i] = (float) acc[i];
+				}
+				yield new LispSingleFloatArray(out, od);
 			}
-			return new LispSingleFloatArray(out, od);
-		}
-		return new LispDoubleFloatArray(acc, od);
+			case LispDoubleFloatArray ignored -> new LispDoubleFloatArray(acc, od);
+		};
 	}
 
 	/** {@code argmax}/{@code argmin} are vector-only in linalg.lisp (they use length). */
@@ -683,13 +682,14 @@ public final class LinalgSimd {
 		if (a == null || b == null || a.getClass() != b.getClass() || a.rank() > 2 || b.rank() > 2) {
 			return null;
 		}
-		boolean single = a instanceof LispSingleFloatArray;
 		if (a.rank() == 1 && b.rank() == 1) {
 			if (a.dims()[0] != b.dims()[0]) {
 				return null;
 			}
-			return new LispDouble(single ? LinalgSimdKernels.dotF(floats(a), floats(b))
-					: LinalgSimdKernels.dot(doubles(a), doubles(b)));
+			return new LispDouble(switch (a) {
+				case LispSingleFloatArray x -> LinalgSimdKernels.dotF(x.data(), floats(b));
+				case LispDoubleFloatArray x -> LinalgSimdKernels.dot(x.data(), doubles(b));
+			});
 		}
 		if (a.rank() == 2 && b.rank() == 1) {
 			int rows = a.dims()[0];
@@ -698,11 +698,12 @@ public final class LinalgSimd {
 				return null;
 			}
 			int[] dims = { rows };
-			return single
-					? new LispSingleFloatArray(LinalgSimdKernels.matvecF(floats(a), rows, cols, floats(b), parallel),
-							dims)
-					: new LispDoubleFloatArray(LinalgSimdKernels.matvec(doubles(a), rows, cols, doubles(b), parallel),
-							dims);
+			return switch (a) {
+				case LispSingleFloatArray x -> new LispSingleFloatArray(
+						LinalgSimdKernels.matvecF(x.data(), rows, cols, floats(b), parallel), dims);
+				case LispDoubleFloatArray x -> new LispDoubleFloatArray(
+						LinalgSimdKernels.matvec(x.data(), rows, cols, doubles(b), parallel), dims);
+			};
 		}
 		if (a.rank() == 1 && b.rank() == 2) {
 			int n = b.dims()[0];
@@ -712,9 +713,12 @@ public final class LinalgSimd {
 			}
 			// A row vector times a matrix is the n = 1 case of the matrix product.
 			int[] dims = { p };
-			return single
-					? new LispSingleFloatArray(LinalgSimdKernels.matmulF(floats(a), floats(b), 1, n, p, false), dims)
-					: new LispDoubleFloatArray(LinalgSimdKernels.matmul(doubles(a), doubles(b), 1, n, p, false), dims);
+			return switch (a) {
+				case LispSingleFloatArray x ->
+					new LispSingleFloatArray(LinalgSimdKernels.matmulF(x.data(), floats(b), 1, n, p, false), dims);
+				case LispDoubleFloatArray x ->
+					new LispDoubleFloatArray(LinalgSimdKernels.matmul(x.data(), doubles(b), 1, n, p, false), dims);
+			};
 		}
 		int n = a.dims()[0];
 		int m = a.dims()[1];
@@ -723,9 +727,12 @@ public final class LinalgSimd {
 			return null;
 		}
 		int[] dims = { n, p };
-		return single
-				? new LispSingleFloatArray(LinalgSimdKernels.matmulF(floats(a), floats(b), n, m, p, parallel), dims)
-				: new LispDoubleFloatArray(LinalgSimdKernels.matmul(doubles(a), doubles(b), n, m, p, parallel), dims);
+		return switch (a) {
+			case LispSingleFloatArray x ->
+				new LispSingleFloatArray(LinalgSimdKernels.matmulF(x.data(), floats(b), n, m, p, parallel), dims);
+			case LispDoubleFloatArray x ->
+				new LispDoubleFloatArray(LinalgSimdKernels.matmul(x.data(), doubles(b), n, m, p, parallel), dims);
+		};
 	}
 
 	/**
@@ -739,9 +746,12 @@ public final class LinalgSimd {
 			return null;
 		}
 		int[] dims = { u.totalSize(), v.totalSize() };
-		return u instanceof LispSingleFloatArray
-				? new LispSingleFloatArray(LinalgSimdKernels.outerF(floats(u), floats(v)), dims)
-				: new LispDoubleFloatArray(LinalgSimdKernels.outer(doubles(u), doubles(v)), dims);
+		return switch (u) {
+			case LispSingleFloatArray x ->
+				new LispSingleFloatArray(LinalgSimdKernels.outerF(x.data(), floats(v)), dims);
+			case LispDoubleFloatArray x ->
+				new LispDoubleFloatArray(LinalgSimdKernels.outer(x.data(), doubles(v)), dims);
+		};
 	}
 
 	/**
@@ -791,10 +801,10 @@ public final class LinalgSimd {
 		od[bd.length] = n;
 		od[bd.length + 1] = p;
 		return switch (a) {
-			case LispDoubleFloatArray x -> new LispDoubleFloatArray(LinalgSimdKernels.matmulNd(x.data(),
-					((LispDoubleFloatArray) b).data(), bd, sa, sb, n, m, p, (int) batches, parallel), od);
-			case LispSingleFloatArray x -> new LispSingleFloatArray(LinalgSimdKernels.matmulNdF(x.data(),
-					((LispSingleFloatArray) b).data(), bd, sa, sb, n, m, p, (int) batches, parallel), od);
+			case LispDoubleFloatArray x -> new LispDoubleFloatArray(
+					LinalgSimdKernels.matmulNd(x.data(), doubles(b), bd, sa, sb, n, m, p, (int) batches, parallel), od);
+			case LispSingleFloatArray x -> new LispSingleFloatArray(
+					LinalgSimdKernels.matmulNdF(x.data(), floats(b), bd, sa, sb, n, m, p, (int) batches, parallel), od);
 		};
 	}
 
@@ -911,20 +921,26 @@ public final class LinalgSimd {
 		if (g.totalSize() != n || m.totalSize() != n || v.totalSize() != n) {
 			return null;
 		}
-		if (x instanceof LispDoubleFloatArray a && g instanceof LispDoubleFloatArray b
-				&& m instanceof LispDoubleFloatArray c && v instanceof LispDoubleFloatArray d) {
-			LinalgSimdKernels.adamStep(a.data(), b.data(), c.data(), d.data(), ps);
-			written(a.storage(), c.storage(), d.storage());
-			return x;
+		// Mixed widths (the null arms): the defun reads every element widened anyway.
+		switch (x) {
+			case LispDoubleFloatArray a -> {
+				if (!(g instanceof LispDoubleFloatArray b) || !(m instanceof LispDoubleFloatArray c)
+						|| !(v instanceof LispDoubleFloatArray d)) {
+					return null;
+				}
+				LinalgSimdKernels.adamStep(a.data(), b.data(), c.data(), d.data(), ps);
+				written(a.storage(), c.storage(), d.storage());
+			}
+			case LispSingleFloatArray a -> {
+				if (!(g instanceof LispSingleFloatArray b) || !(m instanceof LispSingleFloatArray c)
+						|| !(v instanceof LispSingleFloatArray d)) {
+					return null;
+				}
+				LinalgSimdKernels.adamStepF(a.data(), b.data(), c.data(), d.data(), ps);
+				written(a.storage(), c.storage(), d.storage());
+			}
 		}
-		if (x instanceof LispSingleFloatArray a && g instanceof LispSingleFloatArray b
-				&& m instanceof LispSingleFloatArray c && v instanceof LispSingleFloatArray d) {
-			LinalgSimdKernels.adamStepF(a.data(), b.data(), c.data(), d.data(), ps);
-			written(a.storage(), c.storage(), d.storage());
-			return x;
-		}
-		// Mixed widths: the defun reads every element widened anyway.
-		return null;
+		return x;
 	}
 
 	/**
@@ -965,7 +981,10 @@ public final class LinalgSimd {
 			case LispDoubleFloatArray a -> LinalgSimdKernels.rngFill(a.data(), mode, lo, span, w[0], w[1], w[2]);
 			case LispSingleFloatArray a -> LinalgSimdKernels.rngFillF(a.data(), mode, lo, span, w[0], w[1], w[2]);
 		};
-		written(out instanceof LispDoubleFloatArray d ? d.storage() : ((LispSingleFloatArray) out).storage());
+		written(switch (out) {
+			case LispDoubleFloatArray d -> d.storage();
+			case LispSingleFloatArray f -> f.storage();
+		});
 		return new LispDoubleFloatArray(end, new int[] { 3 });
 	}
 
@@ -1003,8 +1022,12 @@ public final class LinalgSimd {
 		if (od == null) {
 			return null;
 		}
-		boolean single = x != null ? x instanceof LispSingleFloatArray
-				: (y != null && y instanceof LispSingleFloatArray);
+		// The result keeps x's width when x is an array, else y's, else double.
+		LispFloatArray width = x != null ? x : y;
+		boolean single = width != null && switch (width) {
+			case LispSingleFloatArray ignored -> true;
+			case LispDoubleFloatArray ignored -> false;
+		};
 		Object out = LinalgSimdKernels.where(data(m), ms == null ? 0.0 : ms,
 				m == null ? null : LinalgSimdKernels.bcastStrides(m.dims(), od), data(x), xs == null ? 0.0 : xs,
 				x == null ? null : LinalgSimdKernels.bcastStrides(x.dims(), od), data(y), ys == null ? 0.0 : ys,
@@ -1113,7 +1136,10 @@ public final class LinalgSimd {
 		int m = idx.totalSize();
 		int[] out = new int[m];
 		for (int i = 0; i < m; i++) {
-			double v = idx instanceof LispDoubleFloatArray d ? d.data()[i] : ((LispSingleFloatArray) idx).data()[i];
+			double v = switch (idx) {
+				case LispDoubleFloatArray d -> d.data()[i];
+				case LispSingleFloatArray f -> f.data()[i];
+			};
 			if (!(v > -1.0 && v < rows)) {
 				return null;
 			}
@@ -1169,17 +1195,23 @@ public final class LinalgSimd {
 		if ((long) rows.length * slab != g.totalSize()) {
 			return null;
 		}
-		if (z instanceof LispDoubleFloatArray zd && g instanceof LispDoubleFloatArray gd) {
-			LinalgSimdKernels.scatterRows(zd.data(), gd.data(), slab, rows);
-			written(zd.storage());
-			return z;
+		switch (z) {
+			case LispDoubleFloatArray zd -> {
+				if (!(g instanceof LispDoubleFloatArray gd)) {
+					return null;
+				}
+				LinalgSimdKernels.scatterRows(zd.data(), gd.data(), slab, rows);
+				written(zd.storage());
+			}
+			case LispSingleFloatArray zf -> {
+				if (!(g instanceof LispSingleFloatArray gf)) {
+					return null;
+				}
+				LinalgSimdKernels.scatterRowsF(zf.data(), gf.data(), slab, rows);
+				written(zf.storage());
+			}
 		}
-		if (z instanceof LispSingleFloatArray zf && g instanceof LispSingleFloatArray gf) {
-			LinalgSimdKernels.scatterRowsF(zf.data(), gf.data(), slab, rows);
-			written(zf.storage());
-			return z;
-		}
-		return null;
+		return z;
 	}
 
 	/**
@@ -1401,10 +1433,16 @@ public final class LinalgSimd {
 		return out;
 	}
 
+	/**
+	 * The backing of an operand ALREADY PROVEN to be a double-float array -- every caller
+	 * is inside the arm of an exhaustive {@code switch} over a sibling operand whose
+	 * class it was checked against, so the narrowing cannot fail whatever widths exist.
+	 */
 	private static double[] doubles(LispFloatArray a) {
 		return ((LispDoubleFloatArray) a).data();
 	}
 
+	/** The single-float counterpart of {@link #doubles}, under the same proof. */
 	private static float[] floats(LispFloatArray a) {
 		return ((LispSingleFloatArray) a).data();
 	}
