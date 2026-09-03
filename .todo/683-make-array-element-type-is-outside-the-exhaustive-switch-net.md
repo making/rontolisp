@@ -82,5 +82,6 @@ sealed. Report what is there rather than assuming.
 
 ## Order
 
-After `.todo/484` (which supplies the third permit this is worth testing against) and
-after `.todo/485`. Not a prerequisite for anything in `.todo/482` or `.todo/670`.
+`.todo/484` (which supplied the third permit this is worth testing against) and
+`.todo/485` both closed 2026-09-03, so this is ready to start and is waiting on nobody.
+Not a prerequisite for anything in `.todo/482` or `.todo/670`.

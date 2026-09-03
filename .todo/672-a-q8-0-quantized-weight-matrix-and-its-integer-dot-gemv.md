@@ -2,8 +2,14 @@
 
 Difficulty: High
 
-Part of `.todo/670`. Depends on `.todo/484` / `.todo/485` (its oracle and its
-`dequantize` target are `#bf16`) and on `.todo/671` (its scales are f16 in a GGUF).
+Part of `.todo/670`. `.todo/484` and `.todo/485` (the `#bf16` array this dequantizes
+into and checks against) and `.todo/671` (the f16 scales a GGUF carries) all closed
+2026-09-03, so nothing here is waiting. `.todo/673` landed the GGUF reader, which
+declines a Q8_0 tensor by name when its body is asked for -- metadata, the tensor
+directory and the F16 / BF16 / F32 tensors all read, so this item begins from a model
+whose shape and vocabulary are already loadable, and replaces a decline with an
+implementation. Read `.todo/691` (three hand-written UTF-8 decoders; the GGUF metadata
+strings go through one of them and they disagree on malformed input) before starting.
 
 Measured 2026-09-03 (`.todo/482-bfloat16-a-narrow-width-that-pays/Quant.java`, record in
 the README's round 2, section 5): a GEMV over Q8_0 weights with the activation quantized

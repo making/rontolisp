@@ -2,8 +2,10 @@
 
 Difficulty: Medium
 
-Part of `.todo/670`. Depends on `.todo/671` (F16 / BF16 tensors into `#f`); the Q8_0
-tensors need `.todo/672` and decline with a clear error until it lands.
+Part of `.todo/670`. `.todo/671` (F16 / BF16 tensors into `#f`) closed 2026-09-03.
+The reader half of this item landed the same day -- see Done below -- and the Q8_0
+tensors decline by name until `.todo/672`. What is left is the model half, in
+`examples/llama2/llama2.lisp`.
 
 GGUF is the format a downloaded small model most often IS: one file with the
 hyperparameters, the tokenizer and the tensors, in the width the publisher chose. The
