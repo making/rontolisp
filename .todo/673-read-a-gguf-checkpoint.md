@@ -110,6 +110,61 @@ of 34 bytes: an f16 scale + 32 int8), 30 BF16, and the K-quants (12 Q4_K, 14 Q6_
    1e-5 -> `:eps`, `feed_forward_length` already auto-adjusted to 8192. Plain
    `x * w` norms, no offset.
 
+## Done (2026-09-03): items 1-3, the READER
+
+Shipped as the `gguf` package -- `gguf.lisp` + `eval.GgufLibrary` in the `geom` shape,
+`.kb/gguf.md` -- with eight exports: `read` (`:only` / `:metadata-only` /
+`:element-type`), `version`, `metadata`, `metadata-value`, `tensor-names`,
+`tensor-info`, `tensor`, `tokenizer-fields`. Docs for all eight in both trees plus the
+package page, the catalog and the nav.
+
+Three findings the plan did not have:
+
+- **`file-position` seeks nothing** (`.todo/390`), measured on three backends before the
+  design was fixed: the data is walked SEQUENTIALLY in ascending offset order and the
+  reader counts its own byte position. The plan above was rewritten around it, and the
+  consequences are in `.kb/gguf.md` -- the tokenizer and the hyperparameters are FREE
+  (the key/value block is at the front), `:only` saves memory and conversion but not
+  I/O, and a file whose offsets descend is refused by name.
+- **The staging is the `checkpoint` package's**, adopted the moment `.todo/675` landed
+  it: `make-tensor` / `stage-float32` / `stage-float-bits` / `skip-bytes`. It also
+  corrected a number this reader had recorded -- a packed `(unsigned-byte 16)` vector is
+  a `long[]`, EIGHT bytes an element, so the first cut's whole-tensor staging cost four
+  times the tensor's size on disk rather than twice.
+- **A quantized tensor is refused when its BODY is asked for and never earlier**, so a
+  Q4_K_M or Q8_0 checkpoint still opens, still lists its whole directory and still hands
+  over its vocabulary. That is what `.todo/672` starts from.
+
+Verified: the synthetic fixture written by llama.cpp's OWN `gguf` Python writer
+(`src/test/resources/gguf/synthetic.gguf`, all thirteen value types, alignment 64, rank
+1/2/3, one tensor per loadable width, a Q8_0 and a Q4_K to refuse) agreeing with the
+official reader field for field in `GgufLibraryTest`; `ci-spec.yaml`'s
+`gguf-cross-backend` on all four backends; and by hand against two real checkpoints --
+`tinyllamas/stories15M-q4_0.gguf` (57 tensors, F32 norms to the last digit, the Q4_0 /
+Q8_0 refusals, a 32000-piece SentencePiece vocabulary through
+`tokenizer:make-sentencepiece`) and `SmolLM2-135M-Instruct-f16.gguf` (272 tensors,
+F16 bodies, 49152 tokens + 48900 merges through `tokenizer:make-bpe` giving ids
+IDENTICAL to the Python `tokenizers` library's).
+
+## Remaining: items 4-7, the MODEL side
+
+Items 4, 5, 6 and 7 all name `examples/llama2/llama2.lisp` -- the per-architecture
+tensor-name mapping, the Q/K permutation rule, and the `qwen35` / `lfm2` specifics --
+which is the model lane's file, not the reader's. `.todo/675` did the same split
+(its "Do 2-4 live in `examples/llama2/llama2.lisp`'s `load-hf-checkpoint`"), so a
+`load-gguf-checkpoint` beside it is the shape: everything it needs is already
+readable through `gguf:tensor-info` / `gguf:tensor` / `gguf:tokenizer-fields`.
+
+Also left:
+
+- **Q8_0 bodies** (`.todo/672`). The refusal names the type and points at
+  `:metadata-only` / `:only`; replacing it is a change to `gguf::%read-tensor`'s one
+  `(= type 8)` branch and to the one `handler-case` in the ci-spec case.
+- **A `#bf16` destination** once `.todo/484` / `.todo/485` are through: `:element-type`
+  already threads to `checkpoint:make-tensor`, so it is a keyword and a test.
+- The `stories15M`-as-GGUF story check and the TinyLlama BF16 run below, which are
+  `.todo/489`'s rungs and need the model side first.
+
 ## Verify
 
 - A checked-in synthetic fixture of a few KB, written by a throwaway script kept beside
