@@ -54,12 +54,14 @@ emitting it instruction for instruction), and all four of its built-ins were reg
 interpreter -- `LispEvaluatorTest` and `JvmLispCompilerTest` now call them over all 65536
 patterns.
 
-The third is LEFT FOR 671's LANE and written up in `.kb/bfloat16.md`: a bulk WIDEN into a
-packed single-float array goes through a `double` on both backends, so it quiets a
-signalling NaN and the widen-then-narrow round trip is the identity on 65,410 patterns
-rather than all 65536. Both backends agree exactly, so it is a ceiling and not a
-divergence; closing it wants an f32 path that never touches a `double`, which means
-splitting the JVM emitter's shared `storeElemShared`. The scalar pair has no such ceiling.
+The third was a CEILING on the bulk pair, and it is closed: a bulk widen into a packed
+single-float array went through a `double` and so quieted a signalling NaN. It writes
+`Float.intBitsToFloat(bits << 16)` straight into the `float[]` now, and widen-then-narrow
+is the identity on all 65536 patterns. Two tests here briefly asserted the ceiling instead
+of the identity; that expectation is stale and is being corrected by the lane that closed
+it. The measurement to keep: BOTH float/double conversions quiet a signalling NaN, `f2d`
+as much as `d2f`, while `Float.intBitsToFloat` is bit-preserving for every pattern -- so
+at this width a NaN must never cross a `double` in either direction.
 
 Two findings worth carrying into steps 2-5, both in `.kb/bfloat16.md`: `(float)(double)`
 QUIETS a signalling NaN (126 of the 65536 patterns broke the round trip until the payload
