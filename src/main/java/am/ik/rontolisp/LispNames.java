@@ -7833,6 +7833,20 @@ public final class LispNames {
 	/** {@code %ieee754-single-from-bits} -- the float of unsigned 32-bit IEEE bits. */
 	public static final String IEEE754_SINGLE_FROM_BITS = "%IEEE754-SINGLE-FROM-BITS";
 
+	/**
+	 * {@code rontolisp:bfloat16-bits} -- the bfloat16 bit pattern of a real, as an
+	 * integer 0..65535, rounded to nearest even. Unlike the {@code %ieee754-*} quartet
+	 * this pair is portable to every backend: sixteen bits fit a fixnum everywhere.
+	 */
+	public static final String BFLOAT16_BITS = "BFLOAT16-BITS";
+
+	/**
+	 * {@code rontolisp:bits-bfloat16} -- the double a bfloat16 bit pattern encodes.
+	 * Widening is exact and total, so this is the inverse of {@link #BFLOAT16_BITS} over
+	 * all 65536 patterns.
+	 */
+	public static final String BITS_BFLOAT16 = "BITS-BFLOAT16";
+
 	/** The {@code closer-mop} shim package (and built-in ASDF system) name. */
 	public static final String CLOSER_MOP_PKG = "CLOSER-MOP";
 

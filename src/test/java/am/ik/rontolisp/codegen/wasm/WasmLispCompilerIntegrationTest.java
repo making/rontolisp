@@ -16903,6 +16903,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAndRunBfloat16Bits() throws Exception {
+		// The %ieee754-* quartet signals here (no 64-bit unsigned model); sixteen bits
+		// fit an i31, so this pair is real on the WASM backends too.
+		assertThat(compileAndRun("""
+				(print (rontolisp:bfloat16-bits 1.0))
+				(print (rontolisp:bfloat16-bits -2.5))
+				(print (rontolisp:bits-bfloat16 16256))
+				(print (rontolisp:bits-bfloat16 (rontolisp:bfloat16-bits 0.1)))
+				(print (rontolisp:bfloat16-bits 1.00390625))
+				(print (rontolisp:bfloat16-bits 1.01171875))
+				(print (let ((bad 0))
+				         (dotimes (i 65536 bad)
+				           (unless (= i (rontolisp:bfloat16-bits (rontolisp:bits-bfloat16 i)))
+				             (incf bad)))))
+				(print (mapcar #'rontolisp:bfloat16-bits (list 1.0 2.0)))
+				(print (mapcar #'rontolisp:bits-bfloat16 (list 16256 16384)))
+				""")).isEqualTo("16256\n49184\n1.0\n0.10009765625\n16256\n16258\n0\n(16256 16384)\n(1.0 2.0)");
+	}
+
+	@Test
 	void compileAndRunDefunKeywordArguments() throws Exception {
 		assertThat(compileAndRun("""
 				(defun f (a &key (k 1 kp) m) (list a k kp m))
