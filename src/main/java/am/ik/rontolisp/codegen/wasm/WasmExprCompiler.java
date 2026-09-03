@@ -774,6 +774,13 @@ final class WasmExprCompiler {
 							+ " under --component is the spliced wait.lisp binding, but the program was compiled without it (eval/WaitForLibrary.process must run on the compile path)");
 				}
 			}
+			// A rontolisp:-qualified name never reaches this switch -- sym.name() for one
+			// is the QUALIFIED spelling ("RONTOLISP:FOO"), which matches none of the case
+			// labels below (those are cl:/bare names). Add a rontolisp: primitive's case
+			// to the qn.pkg()-keyed if-chain ABOVE instead (see rontolisp:version,
+			// rontolisp:tcp-connect, rontolisp:bfloat16-bits for the shape); a case added
+			// here compiles clean and then silently falls through to "undefined function"
+			// at the call site.
 			switch (sym.name()) {
 				case LispNames.ADD -> {
 					if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {

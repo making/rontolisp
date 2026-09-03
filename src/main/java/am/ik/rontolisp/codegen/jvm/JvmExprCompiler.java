@@ -571,6 +571,13 @@ final class JvmExprCompiler {
 			// standard function. See compiler/ClRedefinitionWarnings for why the answer
 			// is a diagnostic rather than honouring the definition.
 			boolean redefinedClFunction = ClRedefinitionWarnings.redefinesClFunction(sym.name(), ctx.userDefunNames);
+			// A rontolisp:-qualified name never reaches this switch -- sym.name() for one
+			// is the QUALIFIED spelling ("RONTOLISP:FOO"), which matches none of the case
+			// labels below (those are cl:/bare names). Add a rontolisp: primitive's case
+			// to the qn.pkg()-keyed if-chain ABOVE instead (see rontolisp:version,
+			// rontolisp:tcp-connect, rontolisp:bfloat16-bits for the shape); a case added
+			// here compiles clean and then silently falls through to "undefined function"
+			// at the call site.
 			switch (sym.name()) {
 				// The integer expression-tree fusion tries first on the arithmetic and
 				// bitwise heads (.kb/jvm-int-fusion.md); when it declines (a single op

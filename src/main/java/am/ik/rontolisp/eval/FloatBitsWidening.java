@@ -2,6 +2,7 @@ package am.ik.rontolisp.eval;
 
 import java.util.List;
 
+import am.ik.rontolisp.BFloat16;
 import am.ik.rontolisp.FloatArrayAccessHook;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
@@ -73,7 +74,7 @@ final class FloatBitsWidening {
 				}
 				else {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.intBitsToFloat((int) bitsData[i] << 16);
+						out[start + i] = (float) BFloat16.value((int) bitsData[i]);
 					}
 				}
 			}
@@ -86,7 +87,7 @@ final class FloatBitsWidening {
 				}
 				else {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.intBitsToFloat((int) bitsData[i] << 16);
+						out[start + i] = BFloat16.value((int) bitsData[i]);
 					}
 				}
 			}
@@ -96,10 +97,12 @@ final class FloatBitsWidening {
 
 	/**
 	 * {@code (rontolisp:narrow-float-bits src format dst &key (start 0))}: the inverse of
-	 * {@link #widen}. {@code :bfloat16} narrowing rounds to nearest even, matching
-	 * {@code .todo/487}'s {@code bfloat16-bits} (a separate copy of the same six-line
-	 * trick -- see {@link #bfloat16BitsOf}, kept so this primitive needs no dependency on
-	 * that item's landing order).
+	 * {@link #widen}. {@code :bfloat16} narrowing goes through
+	 * {@link BFloat16#bits(double)} -- {@code .todo/487}'s single authority for the
+	 * conversion, shared with {@code bfloat16-bits} -- called with the SOURCE'S OWN width
+	 * (a {@code double[]} element passed as a {@code double}, not pre-narrowed to
+	 * {@code float} first): a double source narrowing through an intermediate float would
+	 * round twice.
 	 * @param fnName the operator name, for error messages
 	 * @param args the argument list
 	 * @return {@code dst}
@@ -129,7 +132,7 @@ final class FloatBitsWidening {
 				}
 				else {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = bfloat16BitsOf(in[i]);
+						out[start + i] = BFloat16.bits(in[i]);
 					}
 				}
 			}
@@ -142,29 +145,12 @@ final class FloatBitsWidening {
 				}
 				else {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = bfloat16BitsOf((float) in[i]);
+						out[start + i] = BFloat16.bits(in[i]);
 					}
 				}
 			}
 		}
 		return dst;
-	}
-
-	/**
-	 * The bf16 round-to-nearest-even narrow of a float, as an unsigned 16-bit pattern.
-	 * NaN is special-cased (a plain {@code bits + 0x7fff + lsb} bias-add can carry a
-	 * heavy-payload NaN's low bits into the sign, per {@code .todo/482}'s
-	 * {@code Enc.java} note) rather than relying on the payload surviving the add.
-	 * @param f the value to narrow
-	 * @return the bf16 bit pattern, unsigned in {@code [0, 65535]}
-	 */
-	private static long bfloat16BitsOf(float f) {
-		int bits = Float.floatToRawIntBits(f);
-		if (Float.isNaN(f)) {
-			return ((bits >>> 16) | 0x0040) & 0xFFFFL;
-		}
-		int rounded = bits + 0x7fff + ((bits >>> 16) & 1);
-		return (rounded >>> 16) & 0xFFFFL;
 	}
 
 	private static boolean isFloat16Format(String fnName, LispVal formatArg) {
