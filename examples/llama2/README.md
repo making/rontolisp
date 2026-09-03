@@ -6,7 +6,9 @@ tokenizer with its BPE encoder, the Llama 2 forward pass (RMSNorm, RoPE,
 multi-head causal attention over a KV cache, SwiGLU, the classifier head), the
 temperature / top-p sampler with run.c's own xorshift generator, and the
 generate loop. Given a checkpoint the C program reads, it tells the same
-stories -- token for token, at temperature 0 and at any seed.
+stories -- token for token, at temperature 0 and at any seed. The forward pass
+is written as a [table of layer kinds](#the-layer-table), so a family that
+differs from Llama 2 is a row of options rather than a fork of the file.
 
 The 1 MB `stories260K.bin` + `tok512.bin` pair is checked in (from
 [karpathy/tinyllamas](https://huggingface.co/karpathy/tinyllamas), MIT). The
@@ -60,6 +62,38 @@ Lily wanted to play with the ball...
 which is what `./run stories15M.bin -t 0 -i "Once upon a time"` prints -- the
 whole 256-token story is byte-identical, and so is the command line. The small
 model runs the same way with `stories260K.bin -z tok512.bin`.
+
+## The layer table
+
+The one thing here that is not `run.c`: the forward pass is a **table of layer
+kinds**, not Llama 2 spelled out. A model is a list of layers, every one of them
+the same residual sandwich
+
+```
+x <- x + residual-multiplier * f(rmsnorm(x, the layer's norm), the layer)
+```
+
+differing only in what `f` is -- the layer's `:kind` -- and in the options
+recorded beside it when the model was loaded:
+
+| option | what varies | who has it |
+| --- | --- | --- |
+| `:q-norm` / `:k-norm` | RMSNorm over each head's own dims of q and k | Qwen3 |
+| `:rope` | `:pairs` (adjacent pairs, what llama2.c's `.bin` and a llama.cpp-converted GGUF hold), `:halves` (Hugging Face's `rotate_half`, what a safetensors file holds), or `nil` -- no rotation at all | SmolLM3 leaves every 4th block unrotated |
+| `:rotary-dim` | how many of each head's dims rotate | partial-RoPE models |
+| `:scale` | the attention scale, when it is not `1/sqrt(head-size)` | Granite |
+| `:gate` | an output gate over the head outputs, before `wo` | gated attention |
+| model-wide | `:rope-theta`, `:eps`, and the embedding / residual / logit multipliers | Granite, and everything since Llama 2 moved `rope_theta` |
+
+`*architectures*` is the other half: one row per `general.architecture` (GGUF) /
+`model_type` (`config.json`), holding what that family does differently. A
+reader of a published checkpoint looks its file's name up, prepends what the
+FILE decides (the RoPE layout, and any per-checkpoint scalar), and hands the
+result to `transformer-layers`, which builds the list the forward pass walks.
+
+llama2.c's `.bin` is the row where every option is at its default -- `llama`,
+`:rope :pairs` -- so the table degenerates to `:attention` then `:swiglu` per
+block, which is Llama 2, and the stories stay byte-identical.
 
 ## Why `--simd` (and `--parallel`, and `--gpu`)
 
