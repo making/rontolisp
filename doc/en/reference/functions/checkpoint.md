@@ -5,7 +5,7 @@ arrays: the half of reading a checkpoint that every file format shares. The
 [`safetensors`](safetensors.md) reader is written over it, and so is the GGUF
 reader. It is written in rontolisp itself and loaded on first use like `geom`;
 it reaches for nothing but the byte-stream primitives and
-[`rontolisp:widen-float-bits`](widen-float-bits.md), so it runs on every backend
+`rontolisp:widen-float-bits`, so it runs on every backend
 that has a filesystem. It is **not part of Common Lisp**; reference its names with
 the `checkpoint:` qualifier.
 

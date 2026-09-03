@@ -5,7 +5,7 @@
 分です。[`safetensors`](safetensors.md) リーダーはこの上に書かれており、GGUF リーダー
 も同じです。rontolisp 自身で書かれ、`geom` と同じように最初の使用時に読み込まれま
 す。依存するのはバイトストリームのプリミティブと
-[`rontolisp:widen-float-bits`](widen-float-bits.md) だけなので、ファイルシステムのある
+`rontolisp:widen-float-bits` だけなので、ファイルシステムのある
 すべてのバックエンドで動きます。**Common Lisp の一部ではありません**。名前は
 `checkpoint:` 修飾子で参照します。
 

@@ -4,7 +4,7 @@
 `model.safetensors`、またはシャード分割された `model.safetensors.index.json` -- を、
 Python も変換ステップもなしに、パックされた浮動小数点配列に読み込みます。
 [`checkpoint`](checkpoint.md) ステージングパッケージ、
-[`rontolisp:json-parse`](json-parse.md)、バイトストリームのプリミティブの上に rontolisp
+[`rontolisp:json-parse`](rontolisp-json-parse.md)、バイトストリームのプリミティブの上に rontolisp
 自身で書かれ、`geom` と同じように最初の使用時に読み込まれ、ファイルシステムのあるすべ
 てのバックエンドで動きます。**Common Lisp の一部ではありません**。名前は
 `safetensors:` 修飾子で参照します -- `safetensors:read` はこのパッケージ自身のシンボ
