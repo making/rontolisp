@@ -231,6 +231,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.TokenizersLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/tokenizers\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/url\\.lisp"

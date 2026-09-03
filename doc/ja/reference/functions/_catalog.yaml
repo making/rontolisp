@@ -448,6 +448,8 @@ categories:
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }
       - { slug: rontolisp-random-bytes, name: "rontolisp:random-bytes" }
+      - { slug: rontolisp-bfloat16-bits, name: "rontolisp:bfloat16-bits" }
+      - { slug: rontolisp-bits-bfloat16, name: "rontolisp:bits-bfloat16" }
       - { slug: rontolisp-make-mutex, name: "rontolisp:make-mutex" }
       - { slug: rontolisp-mutex-acquire, name: "rontolisp:mutex-acquire" }
       - { slug: rontolisp-mutex-release, name: "rontolisp:mutex-release" }
@@ -802,6 +804,20 @@ categories:
       - { slug: geom-intersection, name: "geom:intersection" }
       - { slug: geom-section, name: "geom:section" }
       - { slug: geom-history, name: "geom:history" }
+  - title: "tokenizer パッケージ (モデルのトークナイザ)"
+    index_page: reference/functions/tokenizer.md
+    functions:
+      - { slug: tokenizer-make-bpe, name: "tokenizer:make-bpe" }
+      - { slug: tokenizer-make-sentencepiece, name: "tokenizer:make-sentencepiece" }
+      - { slug: tokenizer-encode, name: "tokenizer:encode" }
+      - { slug: tokenizer-decode, name: "tokenizer:decode" }
+      - { slug: tokenizer-decode-bytes, name: "tokenizer:decode-bytes" }
+      - { slug: tokenizer-pre-tokenize, name: "tokenizer:pre-tokenize" }
+      - { slug: tokenizer-token-string, name: "tokenizer:token-string" }
+      - { slug: tokenizer-token-id, name: "tokenizer:token-id" }
+      - { slug: tokenizer-vocabulary-size, name: "tokenizer:vocabulary-size" }
+      - { slug: tokenizer-bos-id, name: "tokenizer:bos-id" }
+      - { slug: tokenizer-eos-id, name: "tokenizer:eos-id" }
   - title: "metal パッケージ (GPU 描画)"
     index_page: reference/functions/metal.md
     functions:

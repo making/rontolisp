@@ -26,6 +26,7 @@ import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.GeomLibrary;
 import am.ik.rontolisp.eval.LinalgLibrary;
+import am.ik.rontolisp.eval.TokenizersLibrary;
 import am.ik.rontolisp.eval.TorchLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
@@ -203,7 +204,8 @@ public final class RontoPlayground {
 			.process(WitLibrary.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
 				.process(VecLibrary.process(LispPreludeLibrary.process(
 						UrlLibrary.process(JsonLibrary
-							.process(LinalgLibrary.process(GeomLibrary.process(TorchLibrary.process(read))))),
+							.process(LinalgLibrary.process(GeomLibrary.process(TorchLibrary
+								.process(TokenizersLibrary.process(read)))))),
 						features))))));
 		// uiop:quit on the WASM button is exit.lisp's wasi_snapshot_preview1 proc_exit
 		// binding (eval/ExitLibrary), like the CLI's Preview 1 output; a no-op for the

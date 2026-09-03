@@ -121,6 +121,8 @@ public final class LispEvaluator {
 
 	private boolean torchLibraryLoaded = false;
 
+	private boolean tokenizersLibraryLoaded = false;
+
 	private boolean vecLibraryLoaded = false;
 
 	private boolean ironcladNativeInstalled = false;
@@ -7749,6 +7751,20 @@ public final class LispEvaluator {
 			// their first call).
 			if (!this.torchLibraryLoaded && TorchLibrary.isTorchQualified(name)) {
 				ensureTorchLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The tokenizer package is a Lisp-source library (tokenizers.lisp): the BPE
+			// tokenizers a published language model ships with, over nothing but cl.
+			// Loaded the same way on the first resolution of a tokenizer:-qualified
+			// function.
+			if (!this.tokenizersLibraryLoaded && TokenizersLibrary.isTokenizerQualified(name)) {
+				this.tokenizersLibraryLoaded = true;
+				for (LispVal form : TokenizersLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;

@@ -604,6 +604,15 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithMutex(cons, ctx.ehMode), ctx);
 					return;
 				}
+				if (LispNames.BFLOAT16_BITS.equals(qn.member())) {
+					// Real here, unlike the %ieee754-* quartet: sixteen bits fit an i31.
+					WasmBFloat16Compiler.compileBits(cons, ctx);
+					return;
+				}
+				if (LispNames.BITS_BFLOAT16.equals(qn.member())) {
+					WasmBFloat16Compiler.compileFromBits(cons, ctx);
+					return;
+				}
 				if (LispNames.MAKE_MUTEX.equals(qn.member()) || LispNames.MUTEX_ACQUIRE.equals(qn.member())
 						|| LispNames.MUTEX_RELEASE.equals(qn.member())) {
 					// No-ops: both WASM backends are single-threaded by construction.
