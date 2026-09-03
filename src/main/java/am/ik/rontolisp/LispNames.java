@@ -6515,6 +6515,19 @@ public final class LispNames {
 	public static final String GEOM_PKG = "GEOM";
 
 	/**
+	 * The {@code checkpoint} package: staging a published model's tensors into packed
+	 * float arrays ({@code checkpoint.lisp}, see {@code eval.CheckpointLibrary}), shared
+	 * by every checkpoint reader.
+	 */
+	public static final String CHECKPOINT_PKG = "CHECKPOINT";
+
+	/**
+	 * The {@code safetensors} package: the Hugging Face checkpoint reader
+	 * ({@code safetensors.lisp}, see {@code eval.SafetensorsLibrary}).
+	 */
+	public static final String SAFETENSORS_PKG = "SAFETENSORS";
+
+	/**
 	 * The {@code tokenizer} package name: the byte-level (GPT-2 / SmolLM2 / Qwen / Llama
 	 * 3) and SentencePiece (Llama 2) BPE tokenizers a published language model ships
 	 * with, written in rontolisp itself ({@code tokenizers.lisp}, see

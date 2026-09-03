@@ -17099,6 +17099,47 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair() {
+		// .todo/671's bulk pair and .todo/487's scalar pair are ONE rounding
+		// (am.ik.rontolisp.BFloat16), not two copies of it: a checkpoint's bulk load
+		// must not sit a bit away from what the program computes element by element.
+		// Widening every pattern into an f32 array and narrowing it straight back is
+		// what says so -- including the 126 signalling NaNs, whose payload a truncating
+		// or force-quiet narrowing loses.
+		assertThat(eval("""
+				(let* ((n 65536)
+				       (patterns (make-array n :element-type '(unsigned-byte 16)))
+				       (values (make-array n :element-type 'single-float))
+				       (back (make-array n :element-type '(unsigned-byte 16)))
+				       (bad 0))
+				  (dotimes (i n) (setf (aref patterns i) i))
+				  (rontolisp:widen-float-bits patterns :bfloat16 values)
+				  (rontolisp:narrow-float-bits values :bfloat16 back)
+				  (dotimes (i n bad)
+				    ;; The identity, except that storing a signalling NaN into an f32
+				    ;; array quiets it -- the same on every backend, because they all
+				    ;; widen through a double. Those 126 patterns are the ceiling
+				    ;; .todo/671's bulk pair still has; the scalar pair has none.
+				    (let ((want (if (and (= (logand i #x7f80) #x7f80) (/= (logand i #x7f) 0))
+				                    (logior i #x40)
+				                    i)))
+				      (unless (= want (aref back i)) (incf bad)))))
+				""").print()).isEqualTo("0");
+		// And element for element against the scalar, over the values an f32 array can
+		// actually hold after a store (which quiets a signalling NaN on the way in).
+		assertThat(eval("""
+				(let* ((n 65536)
+				       (values (make-array n :element-type 'single-float))
+				       (back (make-array n :element-type '(unsigned-byte 16)))
+				       (bad 0))
+				  (dotimes (i n) (setf (aref values i) (rontolisp:bits-bfloat16 i)))
+				  (rontolisp:narrow-float-bits values :bfloat16 back)
+				  (dotimes (i n bad)
+				    (unless (= (aref back i) (rontolisp:bfloat16-bits (aref values i))) (incf bad))))
+				""").print()).isEqualTo("0");
+	}
+
+	@Test
 	void ecaseMatchesAPackageQualifiedClauseKeyAgainstQuotedData() {
 		assertThat(evalMulti("""
 				(defpackage #:casepkg (:use #:cl))

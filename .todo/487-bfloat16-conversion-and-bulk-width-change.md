@@ -45,6 +45,22 @@ Verification, 2026-09-03:
   top-level names are `bf16-`-prefixed so the concatenated program cannot collide with
   671's cases.
 
+Three things found in `.todo/671`'s freshly landed code while merging. Two are fixed
+here: its bulk `:bfloat16` narrowing carried a PRIVATE COPY of the same rounding on each
+backend (both now go through `BFloat16.bits`, the interpreter by calling it and the JVM by
+emitting it instruction for instruction), and all four of its built-ins were registered in
+`Environment` under their UNQUALIFIED names while `PackageRegistry` exports them from
+`rontolisp`, so `rontolisp:widen-float-bits` and its three siblings were undefined on the
+interpreter -- `LispEvaluatorTest` and `JvmLispCompilerTest` now call them over all 65536
+patterns.
+
+The third is LEFT FOR 671's LANE and written up in `.kb/bfloat16.md`: a bulk WIDEN into a
+packed single-float array goes through a `double` on both backends, so it quiets a
+signalling NaN and the widen-then-narrow round trip is the identity on 65,410 patterns
+rather than all 65536. Both backends agree exactly, so it is a ceiling and not a
+divergence; closing it wants an f32 path that never touches a `double`, which means
+splitting the JVM emitter's shared `storeElemShared`. The scalar pair has no such ceiling.
+
 Two findings worth carrying into steps 2-5, both in `.kb/bfloat16.md`: `(float)(double)`
 QUIETS a signalling NaN (126 of the 65536 patterns broke the round trip until the payload
 was carried across by hand), and WASM's `f32.demote_f64` is free by specification to

@@ -63,6 +63,38 @@ which is what `./run stories15M.bin -t 0 -i "Once upon a time"` prints -- the
 whole 256-token story is byte-identical, and so is the command line. The small
 model runs the same way with `stories260K.bin -z tok512.bin`.
 
+## A Hugging Face checkpoint
+
+The positional checkpoint may also be the DIRECTORY a Hugging Face model page
+downloads to -- `config.json` beside `model.safetensors` (or the sharded
+`model.safetensors.index.json`) -- read by the shipped
+[`safetensors:`](../../doc/en/reference/functions/safetensors.md) package into the
+same model the `.bin` loader builds. No Python, no conversion: the BF16 (or F16
+/ F32) tensors are widened into packed single-float arrays as they are read,
+staged a million elements at a time, so a 2.2 GB file needs its 4.4 GB of
+weights and a few MB besides. `load-hf-checkpoint` does what is per FAMILY --
+the tensor names, Qwen3.5's `1 + w` norms and `-exp(A_log)` and query | gate
+interleave, LFM2's `operator_norm` and `layer_types` -- and hands the table the
+shapes it expects; `model_type` picks the `*architectures*` row, and every HF
+layout is `:rope :halves`. `max_position_embeddings` is capped at 4096 for the
+KV cache (`*seq-len-cap*`), and generation stops on the config's `eos_token_id`
+as well as on llama2.c's BOS.
+
+TinyLlama-1.1B-Chat uses the Llama 2 tokenizer -- the same 32000-entry
+`tokenizer.bin` the stories do -- so it runs today, before the byte-level BPE
+tokenizer item lands:
+
+```bash
+# download config.json + model.safetensors (2.2 GB) into a directory, then
+rontolisp llama2.lisp --simd -- TinyLlama-1.1B-Chat-v1.0 -z tokenizer.bin -t 0 -n 40 -i "Once upon a time"
+```
+
+prints, from the BF16 file, `Once upon a time, there was a young woman named
+Lily. She lived in a small town, where everyone knew each other's names. Lily
+was a kind and gentle soul, always` -- identical on the interpreter and the JVM
+class output. The tok/s rows for this rung are still to be measured on a quiet
+box (`.todo/489`).
+
 ## The layer table
 
 The one thing here that is not `run.c`: the forward pass is a **table of layer

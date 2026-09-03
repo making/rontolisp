@@ -738,6 +738,19 @@ categories:
       - { slug: appkit-close, name: "appkit:close" }
       - { slug: appkit-visible-p, name: "appkit:visible-p" }
       - { slug: appkit-wait, name: "appkit:wait" }
+  - title: "checkpoint パッケージ（テンソルのステージング）"
+    index_page: reference/functions/checkpoint.md
+    functions:
+      - { slug: checkpoint-make-tensor, name: "checkpoint:make-tensor" }
+      - { slug: checkpoint-stage-float-bits, name: "checkpoint:stage-float-bits" }
+      - { slug: checkpoint-stage-float32, name: "checkpoint:stage-float32" }
+      - { slug: checkpoint-skip-bytes, name: "checkpoint:skip-bytes" }
+  - title: "safetensors パッケージ（Hugging Face チェックポイント）"
+    index_page: reference/functions/safetensors.md
+    functions:
+      - { slug: safetensors-read, name: "safetensors:read" }
+      - { slug: safetensors-header, name: "safetensors:header" }
+      - { slug: safetensors-entries, name: "safetensors:entries" }
   - title: "geom パッケージ (ソリッドモデリング)"
     index_page: reference/functions/geom.md
     functions:

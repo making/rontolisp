@@ -16,5 +16,5 @@
 
 ```lisp
 (let ((n 0))
-  (do-symbols (s :rontolisp n) (setq n (1+ n)))) ; => 102
+  (do-symbols (s :rontolisp n) (setq n (1+ n)))) ; => 106
 ```
