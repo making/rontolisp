@@ -53,6 +53,47 @@ the readers and the model are debugged at f32 (4.4 GB, fits) with the kernels ou
 picture, and the width then halves a run that already works. 672 comes after the width
 because its scalar oracle and its `dequantize` target are `#bf16`.
 
+## Lanes for two orchestrators, three workers each (2026-09-03)
+
+The user's constraints: the primary goal is Qwen3.5-0.8B, bf16 is wanted anyway for
+weaker machines, at most three workers per box, and the work split so that one
+orchestrator needs no GPU. The split falls out of the dependency graph: **A is the model
+side and is pure Lisp plus one small Java item; B is the width side and is the only half
+that touches `LinalgGpu` / the device.** A can run on any machine with a JDK and network
+(the checkpoints are downloads); B runs on the GB10 box, where the parent runs Maven
+ONE lane at a time (two Maven runs in one tree void both, and the box cannot absorb
+concurrent builds) with each lane in its own worktree.
+
+**Orchestrator A -- no GPU** (Lisp; Java only in 671):
+
+| wave | lane A1 | lane A2 | lane A3 |
+| --- | --- | --- | --- |
+| 1 | `671` (bits -> `#f`, all backends) | `674` tokenizer as a NEW `tokenizers.lisp` -- does not edit `llama2.lisp` | `676` the layer-kind refactor of `llama2.lisp` against the `.bin` path (stories15M identical) |
+| 2 | `675` then `673` (the readers share one staging loop; same worker) | `678` LFM2 (needs A1's reader + own tokenizer) | `677` Gated DeltaNet (needs A1's reader, A2's tokenizer, own table) |
+| 3 | `489` rungs 0-1 at f32: TinyLlama, Qwen3-0.6B | `489` rung 2: LFM2.5-1.2B, numbers | `489` rung 3: Qwen3.5-0.8B, numbers |
+
+Ownership that avoids merge conflicts inside A: A1 owns the readers and `671`'s Java;
+A2 owns `tokenizers.lisp`; A3 owns `llama2.lisp` / `llm.lisp`. Wiring a tokenizer or a
+reader into the model file is A3's job in wave 2, never A2's or A1's.
+
+**Orchestrator B -- the GB10 box** (the width chain, and everything that can be split
+off it before the array type exists):
+
+| wave | lane B1 | lane B2 | lane B3 |
+| --- | --- | --- | --- |
+| 1 | `483` the exhaustive-switch refactor (touches `LinalgGpu`: needs the GPU suite green) | `487` step 1 only: `bfloat16-bits` / `bits-bfloat16` on all four backends, and `FloatText.bfloat16Text` (`484` step 4) -- pure functions, no array type | `488`'s kernels as standalone methods over a bare `short[]` in both kernel files, the fused == widen-then-f32 test, and the both-JIT bench harness (`Jit.java`'s shape); not yet intercepted |
+| 2 | `484` then `485` | `486` (after 484; the `--gpu` / `--blas` decline arms need the device suite) then the rest of `487` (after 485) | `490` step 1-2: `gemv_bf16` PTX and the `GpuDevice` width, tested standalone against B3's CPU kernel as oracle |
+| 3 | `488` wiring into the `--simd` / `--parallel` interception, both-JIT numbers | `672` Q8_0 (after 485; its f16 scales need A's `671`) | `490` integration: residency map, threshold, the cap |
+| 4 | `489` at bf16: rungs 1-3 re-measured (needs A's wave 2) | README numbers, `.kb/vec.md` / `.kb/gpu.md` records | -- |
+
+Hand-offs across the two: A pushes `671` first (B's `672` and any bf16-target loading
+read through it); B pushes `485` (A's readers gain the `#bf16` target, one keyword);
+A pushes `677` (B's wave 4 measures it). Nothing else crosses. `671` and `483` both
+touch `Environment` at a few sites -- whichever lands second merges.
+
+Per-lane sizing: A1 Low+Medium, A2 Medium, A3 Medium then High (677 wants a Fable-class
+model); B1 Medium then High (485 is the crux), B2 Low then Medium, B3 Medium then High.
+
 ## What is deliberately not in the plan
 
 - **Not an inference framework.** The forward pass stays one Lisp file; what changes
