@@ -6,7 +6,9 @@ tokenizer with its BPE encoder, the Llama 2 forward pass (RMSNorm, RoPE,
 multi-head causal attention over a KV cache, SwiGLU, the classifier head), the
 temperature / top-p sampler with run.c's own xorshift generator, and the
 generate loop. Given a checkpoint the C program reads, it tells the same
-stories -- token for token, at temperature 0 and at any seed.
+stories -- token for token, at temperature 0 and at any seed. The forward pass
+is written as a [table of layer kinds](#the-layer-table), so a family that
+differs from Llama 2 is a row of options rather than a fork of the file.
 
 The 1 MB `stories260K.bin` + `tok512.bin` pair is checked in (from
 [karpathy/tinyllamas](https://huggingface.co/karpathy/tinyllamas), MIT). The
@@ -60,6 +62,83 @@ Lily wanted to play with the ball...
 which is what `./run stories15M.bin -t 0 -i "Once upon a time"` prints -- the
 whole 256-token story is byte-identical, and so is the command line. The small
 model runs the same way with `stories260K.bin -z tok512.bin`.
+
+## The layer table
+
+The one thing here that is not `run.c`: the forward pass is a **table of layer
+kinds**, not Llama 2 spelled out. A model is a list of layers, every one of them
+the same residual sandwich
+
+```
+x <- x + residual-multiplier * f(rmsnorm(x, the layer's norm), the layer)
+```
+
+differing only in what `f` is -- the layer's `:kind` -- and in the options
+recorded beside it when the model was loaded:
+
+| option | what varies | who has it |
+| --- | --- | --- |
+| `:q-norm` / `:k-norm` | RMSNorm over each head's own dims of q and k | Qwen3 |
+| `:rope` | `:pairs` (adjacent pairs, what llama2.c's `.bin` and a llama.cpp-converted GGUF of a Llama-family model hold -- the converter permutes Q and K only for those), `:halves` (Hugging Face's `rotate_half`, what a safetensors file and a Qwen GGUF hold), or `nil` -- no rotation at all | SmolLM3 leaves every 4th block unrotated |
+| `:rotary-dim` | how many of each head's dims rotate | partial-RoPE models (Qwen3.5: 64 of 256) |
+| `:scale` | the attention scale, when it is not `1/sqrt(head-size)` | Granite |
+| `:gate` | an output gate over the head outputs, before `wo` | gated attention (Qwen3.5) |
+| `:full-attention-interval` | a hybrid: every Nth block is `:attention`, the rest `:deltanet` | Qwen3.5 (4) |
+| model-wide | `:rope-theta`, `:eps`, and the embedding / residual / logit multipliers | Granite, and everything since Llama 2 moved `rope_theta` |
+
+`*architectures*` is the other half: one row per `general.architecture` (GGUF) /
+`model_type` (`config.json`), holding what that family does differently. A
+reader of a published checkpoint looks its file's name up, prepends what the
+FILE decides (the RoPE layout, and any per-checkpoint scalar), and hands the
+result to `transformer-layers`, which builds the list the forward pass walks.
+
+llama2.c's `.bin` is the row where every option is at its default -- `llama`,
+`:rope :pairs` -- so the table degenerates to `:attention` then `:swiglu` per
+block, which is Llama 2, and the stories stay byte-identical.
+
+### The Gated DeltaNet layer (Qwen3.5)
+
+Qwen3.5 (and 3.6 / 3.8, the same `qwen35` architecture) puts a gated linear
+recurrence in three of every four blocks: per head a 128 x 128 state matrix
+`S` that decays a little each token, is corrected toward the current value
+along the current key (the delta rule) and is read out along the query --
+no KV cache, the state is the whole memory. It is the third `:kind`,
+`:deltanet`, and lives in [`deltanet.lisp`](deltanet.lisp): the single-token
+path of `transformers`' `modeling_qwen3_5.py` (`causal_conv1d_update`,
+`torch_recurrent_gated_delta_rule`, `Qwen3_5RMSNormGated`), with the weights
+plist a checkpoint reader hands it documented in the file's header. `S` is
+kept transposed so both reads (`k^T S`, `q^T S`) are a `vec:matvec`; the decay
+and the rank-1 update are one typed `dotimes` over the state, which the JVM
+backend compiles to a primitive loop.
+
+[`deltanet-check.lisp`](deltanet-check.lisp) pins the arithmetic:
+[`deltanet-ref.py`](deltanet-ref.py) is the PyTorch reference transcribed
+into plain float64 Python over pseudo-random inputs, and the check prints the
+same numbers -- the recurrence alone at heads 2 / dim 4 over three tokens
+with the final states, then the whole decode step over five tokens of a
+dim-8, two-head, kernel-4 layer -- at 3 decimals, none within 2e-5 of a
+rounding boundary, identically on the interpreter, the JVM, wasm-GC and the
+component, with and without `--simd`.
+
+Where a Qwen3.5-0.8B token's time would go, measured at the real shape with
+random weights (18 layers of dim 1024, 16 heads of 128, kernel 4; JVM class
+output under `--simd`, ONE thread, f32 weights; commit `594ddac9`, Graal JIT
+-- `UseJVMCICompiler` on -- on JDK 25.0.4, a Xeon E5-2697A v4; the numbers
+move with `.todo/480`, whose column gate sits exactly at this 128 x 128 GEMV
+shape):
+
+| per token | ms |
+| --- | --- |
+| the 18 Gated DeltaNet mixers, whole | 103 |
+| of which the recurrence, 18 x 16 heads (two 128 x 128 `vec:matvec` + the fused decay / rank-1 update over the 128 x 128 state) | 21 |
+| of which the causal convolution (6144 channels x 4 taps) | 1.9 |
+| of which the projections (f32 GEMVs, 756 MB per token) | 62 |
+| for scale: one block's SwiGLU GEMVs x 24, cache-warm | 82 |
+| for scale: the tied 248320 x 1024 classifier, f32 | 110 |
+
+So the rank-1 update as a typed loop is about 4 ns per state element and
+under a tenth of a token; a `vec:ger-into` kernel is not worth its surface
+until the GEMVs shrink under it (bf16 weights halve the GEMV rows above).
 
 ## Why `--simd` (and `--parallel`, and `--gpu`)
 
