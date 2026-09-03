@@ -42,3 +42,27 @@ M.v kernels (`LinalgSimdKernels`) are a separate decision.
   the three `--simd` implementations, `vec:dot` either unchanged or changed in all three.
 - llama2 `--simd` (one thread) re-measured beside the gist's single-thread row; the
   README table re-measured on one day.
+
+## `.todo/488` needs this as a PREREQUISITE (2026-09-03)
+
+The fused `bfloat16` GEMV kernels landed that day and measure **at parity with f32 on one
+thread** (0.80x Graal / 1.02x C2 at 4096x4096), against the 1.60x `.todo/482`'s spike
+promised. The cause is exactly the chain this item is about, seen from the other side: the
+row is latency-bound at 5.5-7.6 Gelem/s, well short of the memory wall, so halving the
+weight bytes has no bandwidth to save. Give BOTH arms four accumulators + FMA and the
+spike reproduces almost exactly -- 1.59x Graal / 1.97x C2, against its 1.48x / 2.06x
+(`.todo/488-the-fused-bfloat16-gemv-kernels/README.md`).
+
+And `.todo/488` cannot route around it: its safety contract is *fused ==
+widen-then-f32-kernel, bit for bit*, so the bf16 arm must carry whatever accumulator count
+the f32 arm carries. bf16 gains accumulators when and only when this item lands.
+
+Two things that follow:
+
+- **This item is worth 1.1-1.5x to the f32 GEMV on its own**, measured on the same run:
+  4096x4096 one thread, 3.045 -> 2.030 ms under Graal and 2.234 -> 1.976 ms under C2, in a
+  four-accumulator probe of the same shape. That is independent of bf16 and consistent
+  with the 1.3-1.5x estimated above.
+- Whatever accumulator count lands here must land in the bf16 kernels of both files in the
+  same commit, or `VecSimdBf16KernelsTest` / `JvmSimdVectorTemplateBf16Test` go red -- by
+  design: they are the alarm that the two arms have drifted apart.
