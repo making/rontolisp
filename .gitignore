@@ -71,6 +71,11 @@ examples/browser/hiragana/data/
 ### Compiled-program scratch: the docs' `rontolisp prog.lisp -o Prog.class` writes to the CWD ###
 /*.class
 
+### The same run copies the runtime classes it needs beside the output, in package
+### directories -- `/*.class` does not reach those (10 of them reached develop on
+### 2026-09-03). The package root is `am/`, and no SOURCE lives outside `src/`.
+/am/
+
 ### Spin manifest example: `spin build` compiles app.wasm, `spin up` writes .spin/logs ###
 app.wasm
 .spin/

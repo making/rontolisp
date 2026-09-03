@@ -14610,6 +14610,23 @@ standalone:
       (7 5)
       (1 7 5 2)
       "ab"
+  - name: bfloat16-bits
+    source: |
+      (print (list (rontolisp:bfloat16-bits 1.0) (rontolisp:bfloat16-bits -2.5)
+                   (rontolisp:bits-bfloat16 16256)))
+      (print (rontolisp:bits-bfloat16 (rontolisp:bfloat16-bits 0.1)))
+      (print (list (rontolisp:bfloat16-bits 1.00390625) (rontolisp:bfloat16-bits 1.01171875)))
+      (defun bf16-bad-round-trips ()
+        (let ((bf16-bad 0))
+          (dotimes (bf16-i 65536 bf16-bad)
+            (unless (= bf16-i (rontolisp:bfloat16-bits (rontolisp:bits-bfloat16 bf16-i)))
+              (incf bf16-bad)))))
+      (print (bf16-bad-round-trips))
+    stdout: |
+      (16256 49184 1.0)
+      0.10009765625
+      (16256 16258)
+      0
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

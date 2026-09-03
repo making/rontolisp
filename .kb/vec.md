@@ -32,6 +32,49 @@ object; acceleration layer 3 below; the struct type is unchanged, since the fiel
 8-byte stride) or `[count:i32][count f32]` (`Ty.F32VEC`, 4-byte stride) linear-memory
 block, keyed off the `#d`/`#f` literal or the `:element-type` (todo-95 Phase 5).
 
+## Asking a packed array its width
+
+`LispFloatArray` is sealed, so **every test of which width a packed array is must be an
+exhaustive `switch` over it with NO `default` arm** -- never `instanceof
+LispSingleFloatArray` with the negative answer read as "therefore double", and never a
+cast straight to one of the records. The point is the compiler: a width added to the
+`permits` clause has to be a compile error at every site that decides something, rather
+than a silent fall into the double arm -- which is a `ClassCastException` at best, and a
+misread buffer where the cast lands on a `data()` result rather than on the value.
+
+Converted 2026-09-03 across `eval/Environment`, `eval/LinalgBlas`, `eval/VecSimd`,
+`eval/LinalgSimd` and `eval/LinalgGpu`. **The site count is measured, not counted by
+hand**: the probe is to add a third permit -- a throwaway `LispBFloat16Array` record
+beside the two real ones, plus its name in the `permits` clause -- and run
+`./mvnw compile`. On 2026-09-03 that reported **86 sites**, in those five files and
+nowhere else in `src/main`. (The item that asked for the work had counted 70 by reading;
+86 is what the compiler finds.) Re-run the probe rather than trusting that number once
+the accelerators have moved -- it costs one compile.
+
+Three shapes deliberately stay `instanceof`, and the probe does NOT report them, because
+none of them decides anything a new width would change:
+
+- **A same-width guard inside an arm** -- `case LispDoubleFloatArray x -> b instanceof
+  LispDoubleFloatArray y ? ... : null`. The arm already fixed the width; the guard only
+  asks whether the other operand matches, and a mismatch declines to the lane kernel or
+  the scalar defun, which is the right answer at any number of widths.
+- **An explicit must-be-double requirement** -- the eleven-element Adam rule vector and
+  the three-word generator state (`%la-adam-step`, `%la-rng-fill`, `%la-dropout-mask`)
+  are `double-float` by contract, so a packed argument of any other width declines.
+- **Four documented narrowing helpers** (`floats` / `doubles` in `LinalgBlas`,
+  `LinalgSimd` and `LinalgGpu`) that read a SECOND operand already proven to share the
+  first's class. Each is called only from inside an exhaustive arm, so the cast cannot
+  fail however many widths exist.
+
+`eval/PackedBuffer.of` and `eval/GeomKernels` also name the two records and also stay:
+both are positive tests whose fallthrough is a decline (`geom:` is f32-only), not a
+"therefore double".
+
+**The one width test that cannot be made a compile error** is `make-array`'s, in
+`Environment`: it dispatches on the `:element-type` STRING (`single-float`, else the
+double default), and a string comparison has no exhaustiveness to lean on. A new width
+has to be added there by hand, and nothing in the type system will point at it.
+
 ## vec.lisp = the scalar reference / cross-backend oracle
 
 `src/main/resources/am/ik/rontolisp/eval/vec.lisp` defines every `vec:` function as a

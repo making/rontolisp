@@ -140,6 +140,36 @@ So the rank-1 update as a typed loop is about 4 ns per state element and
 under a tenth of a token; a `vec:ger-into` kernel is not worth its surface
 until the GEMVs shrink under it (bf16 weights halve the GEMV rows above).
 
+### The short-conv layer (LFM2)
+
+LFM2 / LFM2.5 (`lfm2`) put the simplest hybrid layer in the field in ten of
+sixteen blocks: `in_proj` splits the normed input into `B | C | x`, `B * x`
+goes through a causal depthwise convolution of kernel 3 -- no activation, no
+matrix state, the previous two inputs are the whole state -- and `C` gates the
+result before `out_proj`. It is the fourth `:kind`, `:shortconv`, in
+[`shortconv.lisp`](shortconv.lisp), over the same one-token convolution step
+the Gated DeltaNet layer runs ([`causal-conv.lisp`](causal-conv.lisp), loaded
+once through `require`). LFM2's pattern of conv and attention blocks is
+irregular, so its readers pass the explicit `:layer-types` list rather than an
+interval. [`shortconv-check.lisp`](shortconv-check.lisp) pins the step against
+[`shortconv-ref.py`](shortconv-ref.py) the way the DeltaNet check does, four
+tokens of a dim-8 kernel-3 layer so the window fills and wraps.
+
+At the 1.2B shape (ten layers of dim 2048, kernel 3; JVM class output under
+`--simd`, one thread, f32 weights, random; commit `b757d1a8`, Graal JIT on JDK
+25.0.4, a Xeon E5-2697A v4):
+
+| per token | ms |
+| --- | --- |
+| the 10 short-conv mixers, whole | 69 |
+| of which the convolution (2048 channels x 3 taps) | 0.2 |
+| of which the two projections (6144 x 2048 and 2048 x 2048, f32, 671 MB per token) | 68 |
+| for scale: one block's 8192-wide SwiGLU GEMVs x 16, cache-warm | 333 |
+
+The conv is noise; the layer is its two GEMVs, and the model is its SwiGLU
+(3.2 GB of f32 per token here, which is why this rung is where the bf16 and
+Q8_0 weight widths matter).
+
 ## Why `--simd` (and `--parallel`, and `--gpu`)
 
 Decoding is one token at a time, so every matrix in the model multiplies a

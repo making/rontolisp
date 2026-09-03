@@ -22,7 +22,8 @@
 ;;;;   1. qkv = Wqkv x (q | k | v, heads x kd each side, heads x vd for v),
 ;;;;      z = Wz x (heads x vd), b = Wb x, a = Wa x (one per head).
 ;;;;   2. A causal depthwise convolution over the last KERNEL qkv vectors
-;;;;      (the previous kernel-1 are the layer's window state), then SiLU.
+;;;;      (causal-conv.lisp; the previous kernel-1 are the layer's window
+;;;;      state), then SiLU.
 ;;;;   3. Per head: L2-normalise q and k (eps 1e-6), q /= sqrt(kd);
 ;;;;      beta = sigmoid(b), g = -exp(A_log) * softplus(a + dt_bias),
 ;;;;      decay = exp(g).
@@ -63,6 +64,8 @@
 ;;;; models have as many key heads as value heads; the repeat_interleave of a
 ;;;; model with fewer key heads (Qwen3-Next) is not implemented.
 
+(require :causal-conv "causal-conv.lisp")
+
 ;;; --- the layer and its state -------------------------------------------------
 
 (defun deltanet-layer (weights l slot)
@@ -100,12 +103,10 @@
          (kd (getf layer :kd))
          (vd (getf layer :vd))
          (conv-dim (getf layer :conv-dim))
-         (kernel (array-dimension (getf layer :conv) 1))
          (s (make-array heads)))
     (dotimes (h heads)
       (setf (aref s h) (linalg:zeros (list vd kd) :element-type 'single-float)))
-    (list :window (linalg:zeros (list (- kernel 1) conv-dim)
-                                :element-type 'single-float)
+    (list :window (conv-window (getf layer :conv))
           :s s
           :xc (vec:zeros conv-dim :element-type 'single-float)
           :q (vec:zeros kd :element-type 'single-float)
@@ -122,21 +123,10 @@
   ;; log(1 + exp(x)), with torch's threshold: the identity above 20.
   (if (> x 20.0) x (log (+ 1.0 (exp x)))))
 
-(defun causal-conv (window w x out)
-  ;; The causal depthwise convolution, one token: out[c] = sum over the kernel
-  ;; taps of w[c][tap] * that tap's input, the last tap being the current X and
-  ;; the earlier ones the WINDOW rows (oldest first); then SiLU, in place. The
-  ;; window shifts by one row and takes X as its newest.
-  (let ((n (length x)) (m (array-dimension window 0)))
-    (dotimes (c n)
-      (let ((acc (* (aref w c m) (aref x c))))
-        (dotimes (r m) (setq acc (+ acc (* (aref w c r) (aref window r c)))))
-        (setf (aref out c) acc)))
-    (dotimes (r (- m 1))
-      (dotimes (c n) (setf (aref window r c) (aref window (+ r 1) c))))
-    (dotimes (c n) (setf (aref window (- m 1) c) (aref x c)))
-    (dotimes (c n)
-      (let ((u (aref out c))) (setf (aref out c) (/ u (+ 1.0 (exp (- u)))))))))
+(defun silu-in-place (v)
+  ;; x * sigmoid(x) over every element, in place.
+  (dotimes (c (length v))
+    (let ((u (aref v c))) (setf (aref v c) (/ u (+ 1.0 (exp (- u))))))))
 
 (defun l2-normalize (v)
   ;; v / sqrt(sum v^2 + eps), in place -- FLA's l2norm, eps 1e-6.
@@ -193,6 +183,7 @@
          (o (getf st :o))
          (out (getf st :out)))
     (causal-conv (getf st :window) (getf layer :conv) qkv xc)
+    (silu-in-place xc)
     (dotimes (h heads)
       (let ((qb (* h kd))
             (kb (+ key-dim (* h kd)))

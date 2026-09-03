@@ -389,3 +389,64 @@ So, restated with its condition:
 
 `.todo/480` is therefore a prerequisite of `.todo/488`, not an independent optimization,
 and both items now say so.
+
+## 8. The x64 answer (2026-09-03, host `dorian`)
+
+The "one command on any x64 box" above was run. **It confirms the shape and moves no
+decision** -- which is what "what should survive is the SHAPE" predicted.
+
+Host: `dorian`, Intel Xeon E5-2697A v4 (Broadwell, x86-64), 2.60 GHz, 64 threads,
+251 GB, Oracle GraalVM 25.0.4+7.1. CPU flags: `avx avx2 f16c fma sse4_1 sse4_2`.
+**No `avx512` of any kind** -- so this run does NOT answer the AVX512-FP16 question
+raised at line 90; it answers the *other* x64 question, the F16C one. Load average
+3.9-6.1 during the runs (three worker lanes active on other cores); the shapes here are
+single-threaded, so the ratios are sound, but treat the absolute Gelem/s as +/- a few
+percent rather than as a quiet-machine figure.
+
+### `Acc.java` -- 4 accumulators + FMA, f16 weights against f32
+
+| shape | GB10 f32 | dorian f32 Graal | dorian f32 C2 | GB10 f16 vs f32 | dorian Graal | dorian C2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 288x288 | 16.08 | 5.57 | 5.67 | 0.31x | 0.36x | **0.10x** |
+| 1024x1024 | 16.09 | 5.98 | 6.37 | 0.33x | 0.36x | 0.24x |
+| 4096x4096 | 8.70 | 3.09 | 3.17 | 0.59x | 0.72x | 0.45x |
+| 8192x8192 | 7.66 | 2.77 | 2.70 | 0.67x | 0.73x | 0.55x |
+
+(Gelem/s. GB10 column from the table at line 63.)
+
+Two findings, one of them not about f16 at all:
+
+1. **The f16 verdict holds on x64, on both JITs.** f16 never reaches 1.0x at any shape;
+   the ratio still improves with size for the same reason (f32 leaves cache, f16 stays
+   decode-ALU-bound). F16C does not rescue it. **`.todo/671`'s "f16 is a load-time
+   conversion, not a width" is now measured on two ISAs.**
+2. **This x64 host is 2.6-2.9x slower than the GB10 at f32 GEMV** (5.6-6.4 vs 16.1
+   Gelem/s in cache; 2.7-3.2 vs 7.7-8.7 out of it). The GB10 is a 2025 Cortex-X925; this
+   is a 2016 Broadwell. **So every absolute tok/s in `.todo/489` must name its host** --
+   the projection "~7 / 12 / 14 tok/s on one thread at f32 / bf16 / Q8_0" is a GB10
+   projection and is roughly a third of that here.
+
+### `F16.java` -- JEP 508's `Float16` value class
+
+| shape | GB10 mixed | dorian mixed Graal | dorian mixed C2 | GB10 f16acc | dorian f16acc Graal | dorian f16acc C2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 288x288 | 2.98 | 1.28 | 1.54 | 0.21 | 0.06 | 0.05 |
+| 1024x1024 | -- | 1.40 | 1.72 | -- | 0.11 | 0.08 |
+| 4096x4096 | -- | 1.41 | 1.77 | -- | 0.11 | 0.08 |
+
+**The `Float16`-accumulator kernel is 2-4x WORSE here than on aarch64** (0.05-0.11 vs
+0.21 Gelem/s), and the mixed kernel about half. Line 90 said the JEP auto-vectorizes
+`Float16` arithmetic "on x64 with AVX512-FP16"; without AVX512-FP16 the value class is
+slower on x64 than on the aarch64 host, not faster. **The AVX512-FP16 question remains
+open and needs a Sapphire Rapids-class box** -- but line 148 already answers why it
+cannot matter: an f16 accumulator changes the accumulator's *precision*, which
+`.kb/vec.md`'s `FSPECIES_REDUCE` pin forbids at any speed on any host.
+
+### What this changes
+
+Nothing in the plan. Every conclusion the spike drew -- bf16 is the width, f16 is a
+load-time conversion, Q8_0 is a read-only matrix type, Q4 is a device item -- holds on
+x64. What it adds is the **host** axis: after this and the C2/Graal reversals of round 2,
+a kernel number is JIT- **and machine-** dependent, and a record that names neither is
+not a measurement. See also `.kb/binary-sequence-io.md` and
+`.kb/packed-integer-vectors.md`, where the same discipline is now applied.

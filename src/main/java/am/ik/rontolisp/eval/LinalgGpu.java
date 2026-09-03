@@ -316,13 +316,16 @@ public final class LinalgGpu {
 			return null;
 		}
 		int[] dims = { rows };
-		if (w instanceof LispSingleFloatArray single) {
-			float[] y = LinalgGpuKernels.matvec(single.storage(), ((LispSingleFloatArray) x).storage(), rows, cols);
-			return y == null ? null : new LispSingleFloatArray(y, dims);
-		}
-		double[] y = LinalgGpuKernels.matvec(((LispDoubleFloatArray) w).storage(), ((LispDoubleFloatArray) x).storage(),
-				rows, cols);
-		return y == null ? null : new LispDoubleFloatArray(y, dims);
+		return switch (w) {
+			case LispSingleFloatArray single -> {
+				float[] y = LinalgGpuKernels.matvec(single.storage(), floats(x), rows, cols);
+				yield y == null ? null : new LispSingleFloatArray(y, dims);
+			}
+			case LispDoubleFloatArray m -> {
+				double[] y = LinalgGpuKernels.matvec(m.storage(), doubles(x), rows, cols);
+				yield y == null ? null : new LispDoubleFloatArray(y, dims);
+			}
+		};
 	}
 
 	/**
@@ -344,12 +347,16 @@ public final class LinalgGpu {
 		int slab = a.totalSize() / a.dims()[0];
 		int[] od = a.dims().clone();
 		od[0] = rows.length;
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.takeRows(single.storage(), a.totalSize(), rows, slab);
-			return c == null ? null : new LispSingleFloatArray(c, od);
-		}
-		double[] c = LinalgGpuKernels.takeRows(((LispDoubleFloatArray) a).storage(), a.totalSize(), rows, slab);
-		return c == null ? null : new LispDoubleFloatArray(c, od);
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.takeRows(single.storage(), a.totalSize(), rows, slab);
+				yield c == null ? null : new LispSingleFloatArray(c, od);
+			}
+			case LispDoubleFloatArray d -> {
+				double[] c = LinalgGpuKernels.takeRows(d.storage(), a.totalSize(), rows, slab);
+				yield c == null ? null : new LispDoubleFloatArray(c, od);
+			}
+		};
 	}
 
 	/**
@@ -369,12 +376,16 @@ public final class LinalgGpu {
 			return null;
 		}
 		int[] od = { columns.length };
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.pick(single.storage(), columns, cols);
-			return c == null ? null : new LispSingleFloatArray(c, od);
-		}
-		double[] c = LinalgGpuKernels.pick(((LispDoubleFloatArray) a).storage(), columns, cols);
-		return c == null ? null : new LispDoubleFloatArray(c, od);
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.pick(single.storage(), columns, cols);
+				yield c == null ? null : new LispSingleFloatArray(c, od);
+			}
+			case LispDoubleFloatArray d -> {
+				double[] c = LinalgGpuKernels.pick(d.storage(), columns, cols);
+				yield c == null ? null : new LispDoubleFloatArray(c, od);
+			}
+		};
 	}
 
 	/**
@@ -397,11 +408,12 @@ public final class LinalgGpu {
 		if (rows == null || slab < 1 || (long) rows.length * slab != g.totalSize()) {
 			return null;
 		}
-		boolean ran = z instanceof LispSingleFloatArray single
-				? LinalgGpuKernels.scatterRows(single.storage(), z.dims()[0], ((LispSingleFloatArray) g).storage(),
-						rows, slab)
-				: LinalgGpuKernels.scatterRows(((LispDoubleFloatArray) z).storage(), z.dims()[0],
-						((LispDoubleFloatArray) g).storage(), rows, slab);
+		boolean ran = switch (z) {
+			case LispSingleFloatArray single ->
+				LinalgGpuKernels.scatterRows(single.storage(), z.dims()[0], floats(g), rows, slab);
+			case LispDoubleFloatArray d ->
+				LinalgGpuKernels.scatterRows(d.storage(), z.dims()[0], doubles(g), rows, slab);
+		};
 		return ran ? z : null;
 	}
 
@@ -492,12 +504,16 @@ public final class LinalgGpu {
 		if (rows < 1) {
 			return null;
 		}
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.softmax(single.storage(), rows, len);
-			return c == null ? null : new LispSingleFloatArray(c, d.clone());
-		}
-		double[] c = LinalgGpuKernels.softmax(((LispDoubleFloatArray) a).storage(), rows, len);
-		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.softmax(single.storage(), rows, len);
+				yield c == null ? null : new LispSingleFloatArray(c, d.clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.softmax(x.storage(), rows, len);
+				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
+			}
+		};
 	}
 
 	/**
@@ -520,14 +536,16 @@ public final class LinalgGpu {
 		if (rows < 1) {
 			return null;
 		}
-		if (g instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.softmaxGrad(single.storage(), ((LispSingleFloatArray) out).storage(), rows,
-					len);
-			return c == null ? null : new LispSingleFloatArray(c, d.clone());
-		}
-		double[] c = LinalgGpuKernels.softmaxGrad(((LispDoubleFloatArray) g).storage(),
-				((LispDoubleFloatArray) out).storage(), rows, len);
-		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+		return switch (g) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.softmaxGrad(single.storage(), floats(out), rows, len);
+				yield c == null ? null : new LispSingleFloatArray(c, d.clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.softmaxGrad(x.storage(), doubles(out), rows, len);
+				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
+			}
+		};
 	}
 
 	/**
@@ -612,14 +630,18 @@ public final class LinalgGpu {
 			return null;
 		}
 		int maskLen = mask.len();
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.scaledMaskedSoftmax(single.storage(), mask.storage(), maskLen, rows, len,
-					scaleOp, sf, fill);
-			return c == null ? null : new LispSingleFloatArray(c, d.clone());
-		}
-		double[] c = LinalgGpuKernels.scaledMaskedSoftmax(((LispDoubleFloatArray) a).storage(), mask.storage(), maskLen,
-				rows, len, scaleOp, sf, fill);
-		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.scaledMaskedSoftmax(single.storage(), mask.storage(), maskLen, rows, len,
+						scaleOp, sf, fill);
+				yield c == null ? null : new LispSingleFloatArray(c, d.clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.scaledMaskedSoftmax(x.storage(), mask.storage(), maskLen, rows, len,
+						scaleOp, sf, fill);
+				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
+			}
+		};
 	}
 
 	/**
@@ -651,14 +673,18 @@ public final class LinalgGpu {
 			return null;
 		}
 		int maskLen = mask.len();
-		if (g instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.scaledMaskedSoftmaxGrad(single.storage(),
-					((LispSingleFloatArray) out).storage(), mask.storage(), maskLen, rows, len, scaleOp, sf);
-			return c == null ? null : new LispSingleFloatArray(c, d.clone());
-		}
-		double[] c = LinalgGpuKernels.scaledMaskedSoftmaxGrad(((LispDoubleFloatArray) g).storage(),
-				((LispDoubleFloatArray) out).storage(), mask.storage(), maskLen, rows, len, scaleOp, sf);
-		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+		return switch (g) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.scaledMaskedSoftmaxGrad(single.storage(), floats(out), mask.storage(),
+						maskLen, rows, len, scaleOp, sf);
+				yield c == null ? null : new LispSingleFloatArray(c, d.clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.scaledMaskedSoftmaxGrad(x.storage(), doubles(out), mask.storage(),
+						maskLen, rows, len, scaleOp, sf);
+				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
+			}
+		};
 	}
 
 	/**
@@ -682,12 +708,16 @@ public final class LinalgGpu {
 		if (rows < 1) {
 			return null;
 		}
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.logSoftmax(single.storage(), rows, len);
-			return c == null ? null : new LispSingleFloatArray(c, d.clone());
-		}
-		double[] c = LinalgGpuKernels.logSoftmax(((LispDoubleFloatArray) a).storage(), rows, len);
-		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.logSoftmax(single.storage(), rows, len);
+				yield c == null ? null : new LispSingleFloatArray(c, d.clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.logSoftmax(x.storage(), rows, len);
+				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
+			}
+		};
 	}
 
 	/**
@@ -710,14 +740,16 @@ public final class LinalgGpu {
 		if (rows < 1) {
 			return null;
 		}
-		if (g instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.logSoftmaxGrad(single.storage(), ((LispSingleFloatArray) out).storage(), rows,
-					len);
-			return c == null ? null : new LispSingleFloatArray(c, d.clone());
-		}
-		double[] c = LinalgGpuKernels.logSoftmaxGrad(((LispDoubleFloatArray) g).storage(),
-				((LispDoubleFloatArray) out).storage(), rows, len);
-		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+		return switch (g) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.logSoftmaxGrad(single.storage(), floats(out), rows, len);
+				yield c == null ? null : new LispSingleFloatArray(c, d.clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.logSoftmaxGrad(x.storage(), doubles(out), rows, len);
+				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
+			}
+		};
 	}
 
 	/** {@code (linalg::%la-gelu x)}: the exact GELU as one pass over a packed operand. */
@@ -726,12 +758,16 @@ public final class LinalgGpu {
 		if (a == null || a.totalSize() < 1) {
 			return null;
 		}
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.gelu(single.storage(), a.totalSize());
-			return c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
-		}
-		double[] c = LinalgGpuKernels.gelu(((LispDoubleFloatArray) a).storage(), a.totalSize());
-		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.gelu(single.storage(), a.totalSize());
+				yield c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.gelu(x.storage(), a.totalSize());
+				yield c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+			}
+		};
 	}
 
 	/**
@@ -748,14 +784,16 @@ public final class LinalgGpu {
 			return null;
 		}
 		int n = g.totalSize();
-		if (g instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.geluGrad(single.storage(), ((LispSingleFloatArray) x).storage(),
-					old == null ? null : ((LispSingleFloatArray) old).storage(), n);
-			return c == null ? null : new LispSingleFloatArray(c, g.dims().clone());
-		}
-		double[] c = LinalgGpuKernels.geluGrad(((LispDoubleFloatArray) g).storage(),
-				((LispDoubleFloatArray) x).storage(), old == null ? null : ((LispDoubleFloatArray) old).storage(), n);
-		return c == null ? null : new LispDoubleFloatArray(c, g.dims().clone());
+		return switch (g) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.geluGrad(single.storage(), floats(x), old == null ? null : floats(old), n);
+				yield c == null ? null : new LispSingleFloatArray(c, g.dims().clone());
+			}
+			case LispDoubleFloatArray gd -> {
+				double[] c = LinalgGpuKernels.geluGrad(gd.storage(), doubles(x), old == null ? null : doubles(old), n);
+				yield c == null ? null : new LispDoubleFloatArray(c, g.dims().clone());
+			}
+		};
 	}
 
 	/**
@@ -774,12 +812,16 @@ public final class LinalgGpu {
 		if (rows < 1) {
 			return null;
 		}
-		if (x instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.layerNorm(single.storage(), rows, len, eps);
-			return c == null ? null : new LispSingleFloatArray(c, d.clone());
-		}
-		double[] c = LinalgGpuKernels.layerNorm(((LispDoubleFloatArray) x).storage(), rows, len, eps);
-		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+		return switch (x) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.layerNorm(single.storage(), rows, len, eps);
+				yield c == null ? null : new LispSingleFloatArray(c, d.clone());
+			}
+			case LispDoubleFloatArray xd -> {
+				double[] c = LinalgGpuKernels.layerNorm(xd.storage(), rows, len, eps);
+				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
+			}
+		};
 	}
 
 	/**
@@ -803,15 +845,18 @@ public final class LinalgGpu {
 		if (rows < 1) {
 			return null;
 		}
-		if (g instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.layerNormGrad(single.storage(), ((LispSingleFloatArray) x).storage(),
-					old == null ? null : ((LispSingleFloatArray) old).storage(), rows, len, eps);
-			return c == null ? null : new LispSingleFloatArray(c, d.clone());
-		}
-		double[] c = LinalgGpuKernels.layerNormGrad(((LispDoubleFloatArray) g).storage(),
-				((LispDoubleFloatArray) x).storage(), old == null ? null : ((LispDoubleFloatArray) old).storage(), rows,
-				len, eps);
-		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+		return switch (g) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.layerNormGrad(single.storage(), floats(x),
+						old == null ? null : floats(old), rows, len, eps);
+				yield c == null ? null : new LispSingleFloatArray(c, d.clone());
+			}
+			case LispDoubleFloatArray gd -> {
+				double[] c = LinalgGpuKernels.layerNormGrad(gd.storage(), doubles(x), old == null ? null : doubles(old),
+						rows, len, eps);
+				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
+			}
+		};
 	}
 
 	/**
@@ -836,14 +881,16 @@ public final class LinalgGpu {
 				|| b.getClass() != x.getClass()) {
 			return null;
 		}
-		if (x instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.layerNormAffine(single.storage(), ((LispSingleFloatArray) w).storage(),
-					((LispSingleFloatArray) b).storage(), rows, len, eps);
-			return c == null ? null : new LispSingleFloatArray(c, d.clone());
-		}
-		double[] c = LinalgGpuKernels.layerNormAffine(((LispDoubleFloatArray) x).storage(),
-				((LispDoubleFloatArray) w).storage(), ((LispDoubleFloatArray) b).storage(), rows, len, eps);
-		return c == null ? null : new LispDoubleFloatArray(c, d.clone());
+		return switch (x) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.layerNormAffine(single.storage(), floats(w), floats(b), rows, len, eps);
+				yield c == null ? null : new LispSingleFloatArray(c, d.clone());
+			}
+			case LispDoubleFloatArray xd -> {
+				double[] c = LinalgGpuKernels.layerNormAffine(xd.storage(), doubles(w), doubles(b), rows, len, eps);
+				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
+			}
+		};
 	}
 
 	/**
@@ -868,18 +915,20 @@ public final class LinalgGpu {
 		if (rows < 1 || !isVector(w, len) || w.getClass() != g.getClass()) {
 			return null;
 		}
-		if (g instanceof LispSingleFloatArray single) {
-			float @Nullable [][] c = LinalgGpuKernels.layerNormAffineGrad(single.storage(),
-					((LispSingleFloatArray) x).storage(), ((LispSingleFloatArray) w).storage(),
-					old == null ? null : ((LispSingleFloatArray) old).storage(), rows, len, eps);
-			return c == null ? null
-					: pair(new LispSingleFloatArray(c[0], d.clone()), new LispSingleFloatArray(c[1], d.clone()));
-		}
-		double @Nullable [][] c = LinalgGpuKernels.layerNormAffineGrad(((LispDoubleFloatArray) g).storage(),
-				((LispDoubleFloatArray) x).storage(), ((LispDoubleFloatArray) w).storage(),
-				old == null ? null : ((LispDoubleFloatArray) old).storage(), rows, len, eps);
-		return c == null ? null
-				: pair(new LispDoubleFloatArray(c[0], d.clone()), new LispDoubleFloatArray(c[1], d.clone()));
+		return switch (g) {
+			case LispSingleFloatArray single -> {
+				float @Nullable [][] c = LinalgGpuKernels.layerNormAffineGrad(single.storage(), floats(x), floats(w),
+						old == null ? null : floats(old), rows, len, eps);
+				yield c == null ? null
+						: pair(new LispSingleFloatArray(c[0], d.clone()), new LispSingleFloatArray(c[1], d.clone()));
+			}
+			case LispDoubleFloatArray gd -> {
+				double @Nullable [][] c = LinalgGpuKernels.layerNormAffineGrad(gd.storage(), doubles(x), doubles(w),
+						old == null ? null : doubles(old), rows, len, eps);
+				yield c == null ? null
+						: pair(new LispDoubleFloatArray(c[0], d.clone()), new LispDoubleFloatArray(c[1], d.clone()));
+			}
+		};
 	}
 
 	/** Whether a packed operand is a vector of exactly {@code len} elements. */
@@ -1061,17 +1110,38 @@ public final class LinalgGpu {
 				|| LinalgGpuKernels.resident(data))) {
 			return null;
 		}
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.map(op, single.storage(), n);
-			return c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
-		}
-		double[] c = LinalgGpuKernels.map(op, ((LispDoubleFloatArray) a).storage(), n);
-		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.map(op, single.storage(), n);
+				yield c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.map(op, x.storage(), n);
+				yield c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+			}
+		};
 	}
 
 	/** The raw storage of a packed array, for the device and the residency question. */
 	private static Object storage(LispFloatArray a) {
-		return a instanceof LispSingleFloatArray f ? f.storage() : ((LispDoubleFloatArray) a).storage();
+		return switch (a) {
+			case LispSingleFloatArray f -> f.storage();
+			case LispDoubleFloatArray d -> d.storage();
+		};
+	}
+
+	/**
+	 * The storage of an operand ALREADY PROVEN to be a single-float array -- every caller
+	 * is inside the arm of an exhaustive {@code switch} over a sibling operand whose
+	 * class it was checked against, so the narrowing cannot fail whatever widths exist.
+	 */
+	private static float[] floats(LispFloatArray a) {
+		return ((LispSingleFloatArray) a).storage();
+	}
+
+	/** The double-float counterpart of {@link #floats}, under the same proof. */
+	private static double[] doubles(LispFloatArray a) {
+		return ((LispDoubleFloatArray) a).storage();
 	}
 
 	/** Whether the device holds a copy of the array. */
@@ -1134,14 +1204,16 @@ public final class LinalgGpu {
 			}
 			int[] sa = bcastStrides(da, od);
 			int[] sb = bcastStrides(db, od);
-			if (a instanceof LispSingleFloatArray single) {
-				float[] c = LinalgGpuKernels.bcast(op, single.storage(), sa, ((LispSingleFloatArray) b).storage(), sb,
-						od);
-				return c == null ? null : new LispSingleFloatArray(c, od);
-			}
-			double[] c = LinalgGpuKernels.bcast(op, ((LispDoubleFloatArray) a).storage(), sa,
-					((LispDoubleFloatArray) b).storage(), sb, od);
-			return c == null ? null : new LispDoubleFloatArray(c, od);
+			return switch (a) {
+				case LispSingleFloatArray single -> {
+					float[] c = LinalgGpuKernels.bcast(op, single.storage(), sa, floats(b), sb, od);
+					yield c == null ? null : new LispSingleFloatArray(c, od);
+				}
+				case LispDoubleFloatArray x -> {
+					double[] c = LinalgGpuKernels.bcast(op, x.storage(), sa, doubles(b), sb, od);
+					yield c == null ? null : new LispDoubleFloatArray(c, od);
+				}
+			};
 		}
 		// An array with a scalar, either way round: the resident tier's scalar form, over
 		// a resident array only. A commutative op with the scalar on the left is the same
@@ -1169,24 +1241,31 @@ public final class LinalgGpu {
 			return null;
 		}
 		int n = a.totalSize();
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.zip(op, single.storage(), ((LispSingleFloatArray) b).storage(), n);
-			return c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
-		}
-		double[] c = LinalgGpuKernels.zip(op, ((LispDoubleFloatArray) a).storage(),
-				((LispDoubleFloatArray) b).storage(), n);
-		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.zip(op, single.storage(), floats(b), n);
+				yield c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.zip(op, x.storage(), doubles(b), n);
+				yield c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+			}
+		};
 	}
 
 	/** The resident tier's array-with-scalar form; see {@link #zip}. */
 	private static @Nullable LispVal scale(int op, LispFloatArray a, double s, boolean swap) {
 		int n = a.totalSize();
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.scale(op, single.storage(), s, swap, n);
-			return c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
-		}
-		double[] c = LinalgGpuKernels.scale(op, ((LispDoubleFloatArray) a).storage(), s, swap, n);
-		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.scale(op, single.storage(), s, swap, n);
+				yield c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.scale(op, x.storage(), s, swap, n);
+				yield c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+			}
+		};
 	}
 
 	/**
@@ -1212,8 +1291,8 @@ public final class LinalgGpu {
 		if ((m == null && ms == null) || (x == null && xs == null) || (y == null && ys == null)) {
 			return null;
 		}
-		boolean single = x != null ? x instanceof LispSingleFloatArray
-				: (y != null && y instanceof LispSingleFloatArray);
+		// The result's width is x's when x is an array, else y's, else double.
+		LispFloatArray width = x != null ? x : y;
 		if ((x != null && y != null && x.getClass() != y.getClass())) {
 			return null;
 		}
@@ -1233,15 +1312,24 @@ public final class LinalgGpu {
 		int[] sm = m == null ? null : bcastStrides(m.dims(), od), sx = x == null ? null : bcastStrides(x.dims(), od),
 				sy = y == null ? null : bcastStrides(y.dims(), od);
 		double mScalar = ms == null ? 0.0 : ms, xScalar = xs == null ? 0.0 : xs, yScalar = ys == null ? 0.0 : ys;
-		if (single) {
-			float[] c = LinalgGpuKernels.where(mData, sm, mScalar,
-					x == null ? null : ((LispSingleFloatArray) x).storage(), sx, xScalar,
-					y == null ? null : ((LispSingleFloatArray) y).storage(), sy, yScalar, od);
-			return c == null ? null : new LispSingleFloatArray(c, od);
+		if (width == null) {
+			// Only the mask is an array: the double kernel, with no value operand.
+			double[] c = LinalgGpuKernels.where(mData, sm, mScalar, (double[]) null, sx, xScalar, (double[]) null, sy,
+					yScalar, od);
+			return c == null ? null : new LispDoubleFloatArray(c, od);
 		}
-		double[] c = LinalgGpuKernels.where(mData, sm, mScalar, x == null ? null : ((LispDoubleFloatArray) x).storage(),
-				sx, xScalar, y == null ? null : ((LispDoubleFloatArray) y).storage(), sy, yScalar, od);
-		return c == null ? null : new LispDoubleFloatArray(c, od);
+		return switch (width) {
+			case LispSingleFloatArray ignored -> {
+				float[] c = LinalgGpuKernels.where(mData, sm, mScalar, x == null ? null : floats(x), sx, xScalar,
+						y == null ? null : floats(y), sy, yScalar, od);
+				yield c == null ? null : new LispSingleFloatArray(c, od);
+			}
+			case LispDoubleFloatArray ignored -> {
+				double[] c = LinalgGpuKernels.where(mData, sm, mScalar, x == null ? null : doubles(x), sx, xScalar,
+						y == null ? null : doubles(y), sy, yScalar, od);
+				yield c == null ? null : new LispDoubleFloatArray(c, od);
+			}
+		};
 	}
 
 	/**
@@ -1272,11 +1360,12 @@ public final class LinalgGpu {
 		if (!(resident(x) || resident(g) || resident(m) || resident(v))) {
 			return null;
 		}
-		boolean ran = x instanceof LispSingleFloatArray xs
-				? LinalgGpuKernels.adamStep(xs.storage(), ((LispSingleFloatArray) g).storage(),
-						((LispSingleFloatArray) m).storage(), ((LispSingleFloatArray) v).storage(), n, rule)
-				: LinalgGpuKernels.adamStep(((LispDoubleFloatArray) x).storage(), ((LispDoubleFloatArray) g).storage(),
-						((LispDoubleFloatArray) m).storage(), ((LispDoubleFloatArray) v).storage(), n, rule);
+		boolean ran = switch (x) {
+			case LispSingleFloatArray xs ->
+				LinalgGpuKernels.adamStep(xs.storage(), floats(g), floats(m), floats(v), n, rule);
+			case LispDoubleFloatArray xd ->
+				LinalgGpuKernels.adamStep(xd.storage(), doubles(g), doubles(m), doubles(v), n, rule);
+		};
 		return ran ? x : null;
 	}
 
@@ -1325,12 +1414,16 @@ public final class LinalgGpu {
 		if (od.length == 0) {
 			return null;
 		}
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.fold(op, single.storage(), outer, len, inner);
-			return c == null ? null : new LispSingleFloatArray(c, od);
-		}
-		double[] c = LinalgGpuKernels.fold(op, ((LispDoubleFloatArray) a).storage(), outer, len, inner);
-		return c == null ? null : new LispDoubleFloatArray(c, od);
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.fold(op, single.storage(), outer, len, inner);
+				yield c == null ? null : new LispSingleFloatArray(c, od);
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.fold(op, x.storage(), outer, len, inner);
+				yield c == null ? null : new LispDoubleFloatArray(c, od);
+			}
+		};
 	}
 
 	/**
@@ -1364,14 +1457,18 @@ public final class LinalgGpu {
 			n *= d;
 		}
 		int na = a.totalSize();
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.resultF(n);
-			return LinalgGpuKernels.copy(single.storage(), base, sa, na, c, 0, so, n, dims)
-					? new LispSingleFloatArray(c, od) : null;
-		}
-		double[] c = LinalgGpuKernels.result(n);
-		return LinalgGpuKernels.copy(((LispDoubleFloatArray) a).storage(), base, sa, na, c, 0, so, n, dims)
-				? new LispDoubleFloatArray(c, od) : null;
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.resultF(n);
+				yield LinalgGpuKernels.copy(single.storage(), base, sa, na, c, 0, so, n, dims)
+						? new LispSingleFloatArray(c, od) : null;
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.result(n);
+				yield LinalgGpuKernels.copy(x.storage(), base, sa, na, c, 0, so, n, dims)
+						? new LispDoubleFloatArray(c, od) : null;
+			}
+		};
 	}
 
 	/**
@@ -1416,7 +1513,11 @@ public final class LinalgGpu {
 			return null;
 		}
 		boolean single = !(args.get(4) instanceof LispNil);
-		if (single != (a instanceof LispSingleFloatArray)) {
+		boolean operandSingle = switch (a) {
+			case LispSingleFloatArray ignored -> true;
+			case LispDoubleFloatArray ignored -> false;
+		};
+		if (single != operandSingle) {
 			return null;
 		}
 		int rank = od.length;
@@ -1502,26 +1603,36 @@ public final class LinalgGpu {
 			offsets[i] = cum * so[ax];
 			cum += inputs.get(i).dims()[ax];
 		}
-		boolean single = first instanceof LispSingleFloatArray;
-		float[] cf = single ? LinalgGpuKernels.resultF((int) n) : null;
-		double[] cd = single ? null : LinalgGpuKernels.result((int) n);
+		float[] cf = null;
+		double[] cd = null;
+		switch (first) {
+			case LispSingleFloatArray ignored -> cf = LinalgGpuKernels.resultF((int) n);
+			case LispDoubleFloatArray ignored -> cd = LinalgGpuKernels.result((int) n);
+		}
 		for (int step = 0; step < inputs.size(); step++) {
 			int i = step == 0 ? lead : (step <= lead ? step - 1 : step);
 			LispFloatArray a = inputs.get(i);
 			int[] dims = a.dims();
-			boolean ok = single
-					? LinalgGpuKernels.copy(((LispSingleFloatArray) a).storage(), 0, rowMajorStrides(dims),
-							a.totalSize(), java.util.Objects.requireNonNull(cf), offsets[i], so, (int) n, dims)
-					: LinalgGpuKernels.copy(((LispDoubleFloatArray) a).storage(), 0, rowMajorStrides(dims),
-							a.totalSize(), java.util.Objects.requireNonNull(cd), offsets[i], so, (int) n, dims);
+			// Every input shares first's class (checked above), so the destination the
+			// arm names is the one that was allocated.
+			float[] outF = cf;
+			double[] outD = cd;
+			boolean ok = switch (a) {
+				case LispSingleFloatArray s -> LinalgGpuKernels.copy(s.storage(), 0, rowMajorStrides(dims),
+						a.totalSize(), java.util.Objects.requireNonNull(outF), offsets[i], so, (int) n, dims);
+				case LispDoubleFloatArray x -> LinalgGpuKernels.copy(x.storage(), 0, rowMajorStrides(dims),
+						a.totalSize(), java.util.Objects.requireNonNull(outD), offsets[i], so, (int) n, dims);
+			};
 			if (!ok) {
 				// A later slab declining after the first was written: the output is a
 				// resident half-filled array nobody holds; the defun runs from scratch.
 				return null;
 			}
 		}
-		return single ? new LispSingleFloatArray(java.util.Objects.requireNonNull(cf), od)
-				: new LispDoubleFloatArray(java.util.Objects.requireNonNull(cd), od);
+		return switch (first) {
+			case LispSingleFloatArray ignored -> new LispSingleFloatArray(java.util.Objects.requireNonNull(cf), od);
+			case LispDoubleFloatArray ignored -> new LispDoubleFloatArray(java.util.Objects.requireNonNull(cd), od);
+		};
 	}
 
 	/** The row-major strides of a shape, in elements. */
@@ -1547,8 +1658,10 @@ public final class LinalgGpu {
 		if (g == null || s == null || !resident(g)) {
 			return null;
 		}
-		boolean ran = g instanceof LispSingleFloatArray f ? LinalgGpuKernels.scaleInPlace(f.storage(), f.totalSize(), s)
-				: LinalgGpuKernels.scaleInPlace(((LispDoubleFloatArray) g).storage(), g.totalSize(), s);
+		boolean ran = switch (g) {
+			case LispSingleFloatArray f -> LinalgGpuKernels.scaleInPlace(f.storage(), f.totalSize(), s);
+			case LispDoubleFloatArray d -> LinalgGpuKernels.scaleInPlace(d.storage(), g.totalSize(), s);
+		};
 		return ran ? g : null;
 	}
 
@@ -1595,12 +1708,16 @@ public final class LinalgGpu {
 		if (!resident && !LinalgGpuKernels.worthStrided(total)) {
 			return null;
 		}
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.gather(single.storage(), sa, od);
-			return c == null ? null : new LispSingleFloatArray(c, od);
-		}
-		double[] c = LinalgGpuKernels.gather(((LispDoubleFloatArray) a).storage(), sa, od);
-		return c == null ? null : new LispDoubleFloatArray(c, od);
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.gather(single.storage(), sa, od);
+				yield c == null ? null : new LispSingleFloatArray(c, od);
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.gather(x.storage(), sa, od);
+				yield c == null ? null : new LispDoubleFloatArray(c, od);
+			}
+		};
 	}
 
 	/**
@@ -1637,13 +1754,16 @@ public final class LinalgGpu {
 			return null;
 		}
 		int[] dims = { n, p };
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.multiply(single.storage(), ((LispSingleFloatArray) b).storage(), n, m, p);
-			return c == null ? null : new LispSingleFloatArray(c, dims);
-		}
-		double[] c = LinalgGpuKernels.multiply(((LispDoubleFloatArray) a).storage(),
-				((LispDoubleFloatArray) b).storage(), n, m, p);
-		return c == null ? null : new LispDoubleFloatArray(c, dims);
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] c = LinalgGpuKernels.multiply(single.storage(), floats(b), n, m, p);
+				yield c == null ? null : new LispSingleFloatArray(c, dims);
+			}
+			case LispDoubleFloatArray x -> {
+				double[] c = LinalgGpuKernels.multiply(x.storage(), doubles(b), n, m, p);
+				yield c == null ? null : new LispDoubleFloatArray(c, dims);
+			}
+		};
 	}
 
 	/**
@@ -1723,18 +1843,23 @@ public final class LinalgGpu {
 		od[bd.length + 1] = p;
 		int batch = (int) batches;
 		boolean transposed = ta || tb;
-		if (a instanceof LispSingleFloatArray single) {
-			float[] sb2 = ((LispSingleFloatArray) b).storage();
-			float[] c = transposed
-					? LinalgGpuKernels.multiply(single.storage(), (int) sa, ta, sb2, (int) sb, tb, batch, n, m, p)
-					: LinalgGpuKernels.multiply(single.storage(), (int) sa, sb2, (int) sb, batch, n, m, p);
-			return c == null ? null : new LispSingleFloatArray(c, od);
-		}
-		double[] da2 = ((LispDoubleFloatArray) a).storage();
-		double[] db2 = ((LispDoubleFloatArray) b).storage();
-		double[] c = transposed ? LinalgGpuKernels.multiply(da2, (int) sa, ta, db2, (int) sb, tb, batch, n, m, p)
-				: LinalgGpuKernels.multiply(da2, (int) sa, db2, (int) sb, batch, n, m, p);
-		return c == null ? null : new LispDoubleFloatArray(c, od);
+		return switch (a) {
+			case LispSingleFloatArray single -> {
+				float[] sb2 = floats(b);
+				float[] c = transposed
+						? LinalgGpuKernels.multiply(single.storage(), (int) sa, ta, sb2, (int) sb, tb, batch, n, m, p)
+						: LinalgGpuKernels.multiply(single.storage(), (int) sa, sb2, (int) sb, batch, n, m, p);
+				yield c == null ? null : new LispSingleFloatArray(c, od);
+			}
+			case LispDoubleFloatArray x -> {
+				double[] da2 = x.storage();
+				double[] db2 = doubles(b);
+				double[] c = transposed
+						? LinalgGpuKernels.multiply(da2, (int) sa, ta, db2, (int) sb, tb, batch, n, m, p)
+						: LinalgGpuKernels.multiply(da2, (int) sa, db2, (int) sb, batch, n, m, p);
+				yield c == null ? null : new LispDoubleFloatArray(c, od);
+			}
+		};
 	}
 
 	/**
