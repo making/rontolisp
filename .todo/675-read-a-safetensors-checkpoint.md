@@ -102,12 +102,15 @@ ceiling, `examples/llama2/README.md`).
 
 ## Remaining
 
-- The fixture's `--simd` legs on the two WASM outputs: `.todo/671`'s WASM arm landed
-  and the plain `wasm` / `wasm-component` legs pass the whole fixture (added to
-  `examples.yaml` 2026-09-03), but under `--simd` both trap in `widen-float-bits` with
-  a `cast failure` -- a packed array's data is a v128 lane block there and the widen
-  casts it to the scalar array (`.todo/692`, with the three-line reproducer). The
-  `simd: true` entry lists `interpreter` and `jvm` until that lands.
+- ~~The fixture's `--simd` legs on the two WASM outputs~~ -- **done 2026-09-03**
+  (`.todo/692`): the widen/narrow pair now goes through the vblock accessors under
+  `--simd`, and the `simd: true` entry in `examples.yaml` is back to all four backends.
+  What that did NOT settle, and is now `.todo/693`: the `wasm-component` token is a
+  COMPILE-only leg in `ExamplesE2eTest`, and when the component output is actually RUN
+  it traps at the `-- sharded` section -- with and without `--simd`, and on the commit
+  before 692's fix, so it is a separate pre-existing bug in the component I/O path. The
+  line above claiming both WASM legs "pass the whole fixture" was only ever true of the
+  Preview 1 one.
 - A `#bf16` destination (`:element-type` passed through `checkpoint:make-tensor`) once
   `.todo/484` / `.todo/485` exist.
 
