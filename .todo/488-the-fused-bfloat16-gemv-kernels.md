@@ -33,6 +33,32 @@ width (`.kb/vec.md`, "The lane-count pin").
 That equivalence is the item's main test: **fused == widen-then-f32-kernel, bit-for-bit**,
 which also gives the scalar `vec.lisp` defun a cheap oracle.
 
+## The second JIT, and the rule it imposes (2026-09-03)
+
+Every number above was taken under Graal. Re-run under C2 (`-XX:-UseJVMCICompiler`,
+what a stock OpenJDK runs a compiled `.class` under), the spike's own `Worth.java` kernel
+-- both decoders in one method behind a boolean -- fell to **0.20x** of f32 at 4096x4096:
+the method overran C2's inlining budget for the Vector API chain and every vector was
+boxed. The identical bf16 decode in a method of its own runs at **2.06x** under C2 and
+1.48x under Graal (`Jit.java`, round 2 of the spike record). So:
+
+- **One small kernel method per width.** No decoder shared behind a flag, no width
+  switch inside the lane loop; the bf16 arm of `matvecRowsF` is its own method with its
+  own loop, mirrored in both kernel files as usual.
+- **Every kernel number is taken under both JITs**, Graal (CI, the native image, this
+  box's default) and C2, and recorded with the JIT named. A shape that is fast under one
+  and boxed under the other is not done.
+- The decode shape: `ShortVector.fromArray(S_64) -> convertShape(S2I, S_128, 0) -> LSHL 16
+  -> reinterpretAsFloats` (2.06x C2 / 1.48x Graal), or an `S_128` short load split with
+  parts 0 and 1 (1.60x / 1.56x). `convert()` is not the widening op -- it preserves the
+  vector SHAPE and yields a 2-lane int vector -- `convertShape` is. Plain scalar loops
+  (0.34-0.44x) and a widen-into-L1-scratch-then-f32-kernel (0.58-0.75x) both lose on
+  both JITs; they were measured so nobody proposes them as the simpler route.
+
+Under 20 threads (`Quant.java par`, 8192x8192, DRAM-resident) bf16 is 1.63x under Graal
+and 1.70x under C2, at 74-80 GB/s against f32's 91-95: the parallel arm inherits the
+serial kernel unchanged and stays bandwidth-bound.
+
 ## Do
 
 1. `eval/VecSimdKernels` + `codegen/jvm/JvmSimdVectorTemplate` -- the two must mirror each
@@ -70,6 +96,9 @@ which also gives the scalar `vec.lisp` defun a cheap oracle.
 - Measure on x64 as well as aarch64 (the spike was aarch64 only). A left shift is a left
   shift, so the shape of the result should hold, but the crossover size will move with the
   cache hierarchy.
+- Measure under both JITs (above) -- Graal and `-XX:-UseJVMCICompiler` -- and a `.class`
+  run under a stock OpenJDK if one is at hand. The 0.20x cliff is silent: no warning, no
+  exception, the same bits, five times slower.
 - The cache-resident case (0.88x) is a real regression against f32 for small matrices.
   Decide whether a size threshold is wanted -- `.kb/vec.md` already has a `THRESHOLD = 128`
   precedent -- or whether the memory saving justifies it unconditionally, and record which.

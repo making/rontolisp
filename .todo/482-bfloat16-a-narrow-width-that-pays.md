@@ -6,10 +6,26 @@ Spiked 2026-08-22. Probes and their full numbers:
 `.todo/482-bfloat16-a-narrow-width-that-pays/` (`README.md` there is the measurement
 record).
 
+**Re-verified 2026-09-03** (`README.md` there, "Round 2"): the width stands, three
+premises moved, and the wider plan is now `.todo/670`. What moved: (1) the f16 decode
+verdict below was a **Graal** verdict -- C2 auto-vectorizes the scalar `float16ToFloat`
+loop to 14.9 Gelem/s -- but a fused f16 GEMV still loses on both JITs (0.30-0.58x), so
+f16 stays out as a width and enters as a load-time conversion (`.todo/671`); (2) the
+spike's own fused kernel falls to **0.20x under C2** from an inlining cliff, which is now
+a design rule in `.todo/488`; (3) the memory premise in the next paragraph is wrong for
+this box and for any 8 GB machine -- the width is about bandwidth, not fitting, until a
+model is several times larger than the goal. Q8_0 measured 2.0x and is filed as a
+weight-matrix type, not a float width (`.todo/672`); Q4_0 measured 1.1x on the CPU and
+is not filed for it.
+
 **The goal this item exists for: run a 1B-class model on rontolisp** (item 489).
 `examples/llama2` today runs `stories15M` -- 60.8 MB of weights. A 1.1B-parameter model is
-2.2 GB at 2 bytes a weight and 4.4 GB at 4, and the difference between those two numbers is
-the difference between running and not. Everything below is in service of that.
+2.2 GB at 2 bytes a weight and 4.4 GB at 4. Both fit this box (121 GB) and a laptop; what
+the halving buys at this size is **tokens per second** -- decode streams every weight
+once per token, so the width is the bandwidth (1.6-2.0x measured, one thread and twenty)
+-- and, on the device, whether the model fits under the residency cap (`.todo/490`).
+Fitting in memory only becomes the constraint several times above 1B. Everything below is
+in service of the tok/s.
 
 `LispFloatArray` is already a sealed umbrella over two widths (`LispDoubleFloatArray` /
 `double[]`, `LispSingleFloatArray` / `float[]`). This item adds a third, backed by a
@@ -36,7 +52,10 @@ then show up as the bandwidth win they were supposed to be. IEEE f16 needs a ~6-
 bit-trick per lane (JDK 25's Vector API has no half-precision element type), and that ALU
 work costs more than the bandwidth it saves at every size and thread count tried. f16 is
 pinned at a flat ~5.1 Gelem/s no matter how large the matrix gets; it never reaches the
-memory wall it was added to relieve.
+memory wall it was added to relieve. (Under C2 the *scalar* f16 decode loop does
+vectorize -- see the round-2 record -- but a GEMV is a float reduction, which no JIT
+reorders, so the fused f16 kernel is 0.30x there and 0.58x under Graal. Same conclusion,
+one more reason.)
 
 Three more reasons the choice is not close:
 
@@ -91,6 +110,11 @@ carry this item.
 Order: 483 first (a pure refactor that makes every later site a compile error rather than a
 silent misroute), then 484, then 485 and 486 in either order, then 487, then 488, then 489.
 `490` is a follow-on, not a fork: see below.
+
+Related, filed 2026-09-03 under `.todo/670` and landable ahead of this chain: `671`
+(f16 and bf16 *bits* widened in bulk into `#f`, on every backend -- what lets a bf16
+checkpoint load before this width exists), `673` / `675` (GGUF and safetensors readers),
+`674` (the byte-level BPE tokenizer), `672` (the Q8_0 weight matrix).
 
 ## Why this is not a CUDA item, even though the goal is an LLM
 

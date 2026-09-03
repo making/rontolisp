@@ -164,3 +164,151 @@ so CI would answer the F16C question but probably not the `Float16` one.
 Accuracy is not the problem. A f16 GEMV over N(0, 0.02) weights lands within 0.02% of the
 f64 reference at every size tried, and the f16 round-trip error is bounded by 2^-11 as
 expected.
+
+# Round 2, 2026-09-03: the second JIT, the quantized widths, and the load path
+
+Same machine, same GraalVM 25.0.4. Three new probes, each run twice: under the JIT the
+box runs by default (**Graal**, which is also what CI and the native image use) and
+under **C2** (`java -XX:-UseJVMCICompiler ...`), which is what a user's stock OpenJDK runs
+a compiled `.class` under. The first round measured Graal only, and one of its conclusions
+does not survive the second JIT.
+
+| file | question it answers |
+| --- | --- |
+| `Jit.java` | the same bf16 / f16 GEMV in eight JIT-facing shapes -- which shape is fast under BOTH JITs? |
+| `Load.java` | what a checkpoint costs to CONVERT at load: f16 -> f32 / bf16, f32 -> bf16, Q8_0 -> bf16, for 1.1B elements |
+| `Quant.java` | are the GGUF integer widths (Q8_0, Q4_0) faster than bf16 on the Vector API, at 1 thread and at 20? (`java ... Quant.java par` for 20) |
+
+## 1. The f16 decode verdict was a Graal verdict
+
+Round 1 said the scalar `Float.float16ToFloat` loop "is not auto-vectorized into `FCVTL`
+by this JDK". It is not by **Graal**; C2 does it (`Dec.java`, variant A, 4 Mi elements):
+
+| decode variant | Graal Gelem/s | C2 Gelem/s |
+| --- | --- | --- |
+| A scalar `Float.float16ToFloat` loop | 1.96 | **14.93** |
+| B exact bit-trick vector | 3.58 | 4.73 |
+| D magic-mul + inf fixup | 5.96 | 6.29 |
+| E bf16 shift | 12.86 | 16.25 |
+| F f32 -> f32 copy (ceiling) | 10.63 | 10.97 |
+
+So on C2 an f16 array decodes as fast as a bf16 one. It still does not make f16 a compute
+width, for the reason in section 3: the fast decode is a *scalar loop* the JIT vectorizes,
+and a scalar GEMV loop is a float reduction, which neither JIT reorders. What it does
+change is the load path (section 4).
+
+## 2. The spike's own fused kernel collapses under C2 -- the inlining cliff
+
+`Worth.java`'s `rowNarrow` carries the f16 and the bf16 decoder in one method behind a
+boolean. Under Graal it measured the round-1 table. Under C2, the same code:
+
+| 4096x4096, reuse 1 | Graal | C2 |
+| --- | --- | --- |
+| f32 | 1.88 ms | 2.15 ms |
+| f16 fused | 3.20 ms (0.59x) | 11.86 ms (**0.18x**) |
+| bf16 fused | 1.25 ms (1.51x) | 10.72 ms (**0.20x**) |
+
+Nothing about the arithmetic changed; the method exceeded C2's inlining budget for the
+Vector API call chain, the vectors were boxed, and the "1.6x" became a 5x loss. `Jit.java`
+has the same bf16 decode in a method of its own and C2 runs it at **2.06x** (below). The
+rule this leaves for `.todo/488`: **one small kernel method per width, no shared decoder
+behind a flag, and every kernel number taken under both JITs.**
+
+## 3. The kernel shape (`Jit.java`, 4096x4096, 1 thread)
+
+| variant | Graal ms | Graal vs f32 | C2 ms | C2 vs f32 |
+| --- | --- | --- | --- | --- |
+| f32 lanes (baseline) | 1.851 | 1.00x | 2.045 | 1.00x |
+| bf16, `S_64` short -> `convertShape(S2I)` (the spike's shape) | 1.253 | **1.48x** | 0.994 | **2.06x** |
+| bf16, `S_128` short -> `convertShape` parts 0/1 | 1.190 | 1.56x | 1.281 | 1.60x |
+| bf16, plain scalar loop, 4 accumulators | 5.426 | 0.34x | 4.619 | 0.44x |
+| bf16, widen the row into an L1 scratch, then f32 lanes | 2.457 | 0.75x | 3.552 | 0.58x |
+| f16, vector magic-multiply decode | 3.177 | 0.58x | 6.717 | 0.30x |
+| f16, plain scalar loop, 4 accumulators | 6.595 | 0.28x | 7.289 | 0.28x |
+| f16, widen the row into an L1 scratch, then f32 lanes | 9.777 | 0.19x | 1.971 | 1.04x |
+
+The fused Vector API decode is the shape, on both JITs. The scalar loops lose on both
+(a float reduction is never auto-vectorized), and the "scratch" shape -- the one that
+would have reused the f32 kernel unchanged -- costs a store and a reload per element and
+loses on both too, except f16-under-C2 where the vectorized `FCVTL` loop brings it to
+parity with f32. Note `convert()` is NOT the widening op: it preserves the vector SHAPE
+(a 64-bit short vector converts to a 64-bit int vector of 2 lanes); `convertShape` is.
+
+## 4. Conversion at load is cheap on either JIT (`Load.java`, 64 Mi elements)
+
+| conversion | Graal Gelem/s | C2 Gelem/s | 1.1B elements, worst JIT |
+| --- | --- | --- | --- |
+| f16 -> f32, scalar `Float.float16ToFloat` loop | 1.94 | 10.45 | 0.57 s |
+| f16 -> f32, exact vector (magic-mul + fixup) | 5.38 | 5.78 | 0.20 s |
+| f16 -> bf16, scalar via f32, round-to-nearest-even | 1.36 | 1.52 | 0.81 s |
+| f32 -> bf16, vector round-to-nearest-even | 7.34 | 7.26 | 0.15 s |
+| Q8_0 -> bf16, scalar | 1.42 | 1.66 | 0.78 s |
+
+Every conversion of a 1.1B-parameter checkpoint is under a second, on the slower JIT,
+single-threaded. **So an IEEE f16 file needs no f16 array: it is read as `(unsigned-byte
+16)` and widened in bulk into `#f` or `#bf16`** (`.todo/671`). Both vector converters were
+checked against the scalar ones (all 65536 f16 patterns; 64 Mi bf16 narrowings): 0
+mismatches.
+
+## 5. The integer widths (`Quant.java`)
+
+GEMV, f32 activations, ggml's block size of 32, one f32 scale per block. Q8_0 in two
+shapes -- dequantize each lane to f32 and FMA ("q8deq"), and runq.c / ggml's shape where
+the activation is quantized to int8 per block too and the dot is integer ("q8int") -- and
+Q4_0 (nibbles, value = (n - 8) * scale, the -8 folded out through the block sums of x).
+Relative error of the GEMV result against an f64 reference, N(0, 0.02) weights, N(0, 1)
+activations: f32 3e-7, **bf16 1.7e-3, q8deq 5.4e-3, q8int 7.6e-3, q4 8.5e-2**.
+
+**1 thread, Graal** (the JIT every number in this repository is taken under):
+
+| shape | f32 MB | f32 ms | bf16 | q8int | q8deq | q4 | bf16/f32 | q8int/f32 | q8deq/f32 | q4/f32 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1024x1024 | 4 | 0.070 | 0.075 | 0.071 | 0.101 | 0.127 | 0.93x | 0.99x | 0.70x | 0.55x |
+| 4096x4096 | 67 | 2.147 | 1.256 | 1.092 | 1.570 | 1.949 | 1.71x | **1.97x** | 1.37x | 1.10x |
+| 5632x2048 (TinyLlama w1) | 46 | 1.354 | 0.884 | 0.733 | 1.077 | 1.321 | 1.53x | 1.85x | 1.26x | 1.03x |
+| 8192x8192 | 268 | 8.524 | 5.003 | 4.266 | 6.217 | 7.317 | 1.70x | **2.00x** | 1.37x | 1.17x |
+
+Effective weight bandwidth at 8192x8192: f32 31.5 GB/s, bf16 26.8, q8 12.1, **q4 5.7**.
+bf16 is near the single-core memory wall; Q8 is ALU-bound at ~15 Gelem/s and Q4 at ~9
+(the nibble unpack), which is why Q4_0 -- a quarter of the bytes -- is barely faster than
+f32 on one thread.
+
+**20 threads, Graal** (`par`; the 46-67 MB rows sit partly in the 20 cores' aggregate L2
+and are NOT the decode regime -- read the 268 MB row, which is):
+
+| shape | f32 ms | bf16 | q8int | q8deq | q4 | bf16/f32 | q8int/f32 | q8deq/f32 | q4/f32 | f32 GB/s | bf16 GB/s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 4096x4096 | 0.969 | 0.718 | 0.556 | 0.844 | 0.877 | 1.35x | 1.74x | 1.15x | 1.10x | 69 | 47 |
+| 8192x8192 | 2.954 | 1.809 | 1.547 | 2.022 | 2.193 | **1.63x** | **1.91x** | 1.46x | 1.35x | 91 | 74 |
+
+**The same under C2**, for the second-JIT check: 1 thread 4096x4096 -- bf16 1.98x, q8int
+1.25x, **q8deq 0.12x**, q4 1.05x; 20 threads 8192x8192 -- bf16 1.70x, q8int 1.77x, **q8deq
+0.32x**, q4 1.42x. The dequantize-and-FMA shape falls off the same cliff as section 2
+(`convertShape(B2I, ..., part)` in an 8-call method); the integer-dot shape survives both
+JITs, and it is also the shape whose accumulation is exact integer arithmetic.
+
+What this decides:
+
+- **bf16 stays the width** (`.todo/482`): 1.5-2.1x on one thread on either JIT, 1.6x at 20
+  threads, 1.7e-3 error, exact widening, and every current checkpoint is published in it.
+- **Q8_0 is worth a type, as a read-only weight matrix, not as a float-array width**
+  (`.todo/672`): 2.0x / 1.9x, a quarter of f32's bytes, 7.6e-3 error -- and it is what
+  half of the GGUFs on Hugging Face are. Its integer-dot kernel is the C2-safe one.
+- **Q4_0 is not a CPU item** on this Vector API: 1.1-1.35x for 8.5% error; the unpack is
+  ALU-bound at 5.7 GB/s. The K-quants unpack more, not less. Q4 belongs on the device,
+  where a nibble decode is free next to the memory traffic (`.todo/490`'s successor).
+
+Projected per-token cost for TinyLlama-1.1B from the 268 MB rows (GEMV only, an upper
+bound on tok/s): 1 thread f32 140 ms / bf16 82 / q8 70 (7 / 12 / 14 tok/s); 20 threads
+48 / 30 / 25 ms (21 / 34 / 39 tok/s). `.todo/489`'s estimates stand.
+
+## 6. What the checkpoints actually are (checked 2026-09-03)
+
+`model.safetensors` headers read over HTTP: `HuggingFaceTB/SmolLM2-135M` 272 tensors, all
+BF16; `TinyLlama/TinyLlama-1.1B-Chat-v1.0` 201 tensors, all BF16 (`lm_head.weight`
+[32000, 2048], `down_proj` [2048, 5632]); `Qwen/Qwen2.5-0.5B` 290 tensors, all BF16
+(`embed_tokens` [151936, 896]). No f16 anywhere in a current small model. GGUF carries
+the same models as BF16 / F16 / Q8_0 / Q4_K_M, with the tokenizer and the hyperparameters
+in the same file; the GGUF already in this box's Hugging Face cache is a Q4_K_XL model
+with a BF16 `mmproj` beside it (BF16 weights, F32 biases). That is the input side of
+`.todo/670`.
