@@ -13,6 +13,43 @@ bulk widening of `(unsigned-byte 16)` bits into an existing width, which needs n
 array and lands on every backend. Step 3 below and 671 share the staging shape (a u16
 chunk, widened into the destination at an offset); build it once.
 
+## Progress
+
+**Step 1 is DONE**, landed 2026-09-03 by the commit carrying this note (a commit cannot
+name its own hash; everything else below is untouched). What landed: `bfloat16-bits` /
+`bits-bfloat16` on ALL FOUR backends (`am.ik.rontolisp.BFloat16` is the single Java
+authority, the two compile backends emit the same arithmetic inline because it does not
+travel), and `FloatText.bfloat16Text` -- step 4 of `.todo/484`'s printer half, landed with
+the pair so the two are pinned together. The full mechanics and the decision record are
+`.kb/bfloat16.md`.
+
+Symbol ownership, agreed with the `.todo/671` lane on 2026-09-03: this pair and
+`bfloat16Text` are OURS; 671 adds `float16-bits` / `bits-float16` and the bulk primitives
+`widen-float-bits` / `narrow-float-bits`. The sentence in 671 offering to take this pair
+if it landed first is void.
+
+Verification, 2026-09-03:
+
+- **The f32 -> bfloat16 narrowing is right on all 2^32 float32 inputs**: 4,278,190,082
+  non-NaN inputs swept against an independently written textbook round-to-nearest-even
+  oracle (compare the dropped sixteen bits against half an ulp, break the tie towards the
+  even survivor), **0 mismatches**, plus 0 NaN-contract violations over the 16,777,214 NaN
+  patterns (a NaN stays a NaN of the same sign, never an infinity). Harness:
+  `.todo/487-bfloat16-conversion-and-bulk-width-change/Sweep.java`, ~4 s single-threaded.
+  It is NOT in the suite -- `BFloat16Test` keeps the representative cases instead (both
+  tie directions and the values either side, subnormals, signed zeros, both infinities,
+  the overflow-to-infinity boundary, and every NaN payload).
+- Widening is exact over all 65536 patterns and the pair is an involution on them,
+  signalling NaNs included; the printed text re-reads to the same pattern for all 65536.
+- The `bfloat16-bits` case in `ci-spec.yaml` runs the pair on all four backends. Its
+  top-level names are `bf16-`-prefixed so the concatenated program cannot collide with
+  671's cases.
+
+Two findings worth carrying into steps 2-5, both in `.kb/bfloat16.md`: `(float)(double)`
+QUIETS a signalling NaN (126 of the 65536 patterns broke the round trip until the payload
+was carried across by hand), and WASM's `f32.demote_f64` is free by specification to
+invent any NaN payload at all -- so neither direction may route a NaN through the f32.
+
 ## Do
 
 1. **The bits pair.** `LispNames` already carries `SINGLE_FLOAT_BITS` /

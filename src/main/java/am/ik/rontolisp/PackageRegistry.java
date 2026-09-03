@@ -632,6 +632,8 @@ public final class PackageRegistry {
 				LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12, LispNames.TLS_UPGRADE,
 				LispNames.RANDOM_BYTES, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
 				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.CURRENT_THREAD,
+				// bfloat16 bit reinterpretation: a rontolisp extension, not a CL name.
+				LispNames.BFLOAT16_BITS, LispNames.BITS_BFLOAT16,
 				// Read-time source literals (reader.LispReader), not functions.
 				LispNames.CURRENT_FILE, LispNames.CURRENT_LINE,
 				// rontolisp's own Gray-stream extension

@@ -39,6 +39,7 @@ import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
 import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.BFloat16;
 import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.FloatText;
 import am.ik.rontolisp.LispArray;
@@ -2345,6 +2346,20 @@ public final class Environment implements Scope {
 					requireArgCount(LispNames.IEEE754_SINGLE_FROM_BITS, args, 1);
 					return new LispDouble(Float.intBitsToFloat((int) asBigInteger(args.get(0)).longValue()));
 				}));
+		// bfloat16 <-> double: the top sixteen bits of an f32, round-to-nearest-even
+		// on the way down and exact on the way back. Sixteen bits fit a fixnum, so
+		// unlike the quartet above this pair is on all four backends (BFloat16,
+		// .kb/bfloat16.md).
+		String bfloat16Bits = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BFLOAT16_BITS);
+		env.defineFunction(bfloat16Bits, new LispFunction(bfloat16Bits, args -> {
+			requireArgCount(LispNames.BFLOAT16_BITS, args, 1);
+			return new LispInteger(BFloat16.bits(asDouble(args.get(0))));
+		}));
+		String bitsBfloat16 = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_BFLOAT16);
+		env.defineFunction(bitsBfloat16, new LispFunction(bitsBfloat16, args -> {
+			requireArgCount(LispNames.BITS_BFLOAT16, args, 1);
+			return new LispDouble(BFloat16.value((int) asLong(args.get(0))));
+		}));
 		// IEEE binary16 (f16) bit conversion: a real width unlike single/double-float,
 		// which needs no bignum model (16 bits always fits a plain fixnum), so it is a
 		// rontolisp: primitive rather than a float-features one -- see .todo/671.

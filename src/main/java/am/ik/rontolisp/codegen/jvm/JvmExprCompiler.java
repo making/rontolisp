@@ -397,6 +397,14 @@ final class JvmExprCompiler {
 					compileExpr(LispMacroExpander.expandWithMutex(cons), ctx, className);
 					return;
 				}
+				if (LispNames.BFLOAT16_BITS.equals(qn.member())) {
+					JvmBFloat16Compiler.compileBits(cons, ctx, className);
+					return;
+				}
+				if (LispNames.BITS_BFLOAT16.equals(qn.member())) {
+					JvmBFloat16Compiler.compileFromBits(cons, ctx, className);
+					return;
+				}
 				if (LispNames.MAKE_MUTEX.equals(qn.member()) || LispNames.MUTEX_ACQUIRE.equals(qn.member())
 						|| LispNames.MUTEX_RELEASE.equals(qn.member())) {
 					// A real ReentrantLock, handed out as the handle itself

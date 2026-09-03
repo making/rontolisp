@@ -7,6 +7,7 @@ import java.util.Set;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -1288,6 +1289,13 @@ public final class BuiltinFunctionWrappers {
 			// Byte-field operations (macro-lowered to list/car/ash/logand/logior/lognot)
 			binary(LispNames.BYTE), unary(LispNames.BYTE_SIZE), unary(LispNames.BYTE_POSITION), binary(LispNames.LDB),
 			ternary(LispNames.DPB), binary(LispNames.MASK_FIELD), binary(LispNames.SCALE_FLOAT),
+			// bfloat16 bit reinterpretation, a real function on all four backends --
+			// unlike the %ieee754-* quartet, which WASM cannot carry. The only
+			// PACKAGE-QUALIFIED entries here: the pair belongs to rontolisp, not to cl,
+			// so the wrapper has to spell the name the resolver leaves behind or a
+			// #'reference would bind a lambda nothing calls.
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BFLOAT16_BITS)),
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_BFLOAT16)),
 			// open as a first-class value: (apply #'open path options) is the portable
 			// way to build an option list at run time (alexandria's
 			// with-input-from-file).
