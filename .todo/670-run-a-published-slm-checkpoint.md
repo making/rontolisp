@@ -94,11 +94,16 @@ graph has. **The one hand-off that gates the week: B lands `485` and then `488`'
 interception; A's bf16 rungs cannot be measured until both are in.** Until then A works
 the items that need neither.
 
+**One ordering constraint across the two sides**: `.todo/692` (`widen-float-bits` traps
+into a `--simd` wasm destination) and `.todo/488`'s interception both touch the `--simd`
+path, and **692 goes first** -- 488's wiring is what puts bf16 through `--simd`, and it
+should not be laid over a known trap on that path.
+
 **Orchestrator A -- the model side, no GPU:**
 
 | wave | lane A1 | lane A2 |
 | --- | --- | --- |
-| 1 | `678` LFM2.5-1.2B: the gated short-conv layer end to end, both formats, the way `677` went (Medium) | `489` f32 rungs, finishing the set: **Qwen3-0.6B has not been run at all**, then SmolLM2 (High) |
+| 1 | **`692` first** (it gates B's `488` wiring, see above), then `678` LFM2.5-1.2B: the gated short-conv layer end to end, both formats, the way `677` went (Medium) | `489` f32 rungs, finishing the set: **Qwen3-0.6B has not been run at all**, then SmolLM2 (High) |
 | 2 | `682` rename `examples/llama2` -> `examples/llm` -- **its trigger fired twice on 2026-09-03** and nobody noticed (Medium) | `489` at bf16, against the prediction already written there, the moment B's `488` wiring lands; then close `675` and `677` (High) |
 | 3 | `688` the corpus tests' duplicated splice chain, and the "a test that prints a compiler warning must assert on it" rule (Medium) | `490`'s A-side numbers if B gets that far (High) |
 
