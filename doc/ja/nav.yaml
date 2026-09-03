@@ -52,6 +52,10 @@ sections:
             title: objc パッケージの関数
           - file: reference/functions/appkit.md
             title: appkit パッケージの関数
+          - file: reference/functions/checkpoint.md
+            title: checkpoint パッケージの関数
+          - file: reference/functions/safetensors.md
+            title: safetensors パッケージの関数
           - file: reference/functions/geom.md
             title: geom パッケージの関数
           - file: reference/functions/tokenizer.md

@@ -18,4 +18,4 @@ SINGLE-FLOAT
 
 ## バックエンドのサポート
 
-ファイルシステムのあるすべてのバックエンド。現在はインタプリタとコンパイルされた `.class`/`.jar`。WASM バックエンドは [`rontolisp:widen-float-bits`](widen-float-bits.md) が揃い次第です（F32 テンソルは拡張が不要なのでどこでも読めます）。
+ファイルシステムのあるすべてのバックエンド。現在はインタプリタとコンパイルされた `.class`/`.jar`。WASM バックエンドは `rontolisp:widen-float-bits` が揃い次第です（F32 テンソルは拡張が不要なのでどこでも読めます）。
