@@ -125,32 +125,53 @@ that number once actually implemented against `LispIntVector`:
   `ShortVector.fromArray`/`convertShape(S2I)` path at all -- the Vector-API route would
   have to `LongVector`-load, narrow to int, then decode, which is a different (and
   unmeasured) kernel shape, not "the same trick, just typed differently".
-- Measured instead (2026-09-03, 1 Mi-element chunks, scalar loop, this box -- aarch64
-  Cortex-X925, GB10, both the default GraalVM JIT and C2 via
-  `-XX:-UseJVMCICompiler`):
+- Measured instead (2026-09-03, 1 Mi-element chunks, scalar loop) on **host `dorian`**
+  (Intel Xeon E5-2697A v4, Broadwell, x86-64, 64 threads, AVX2 256-bit / f32x8 preferred
+  species), both the default GraalVM JIT and C2 via `-XX:-UseJVMCICompiler`. `.todo/482`'s
+  own Round 1/2 numbers, including the 16 Gelem/s this deviates from, were measured on
+  a DIFFERENT machine (the GB10 box orchestrator B works on: aarch64 Cortex-X925, NEON
+  128-bit / f32x4 preferred species) -- so the table below separates machine, JIT and
+  representation on purpose; do not compare its numbers to `.todo/482`'s directly across
+  that machine boundary without saying so:
 
-  | conversion | source | Graal Gelem/s | C2 Gelem/s |
+  | conversion | source | Graal Gelem/s (dorian) | C2 Gelem/s (dorian) |
   | --- | --- | --- | --- |
   | f16 -> f32 (`Float.float16ToFloat`) | `long[]` (real) | 1.68 | 1.59 |
   | f16 -> f32 (`Float.float16ToFloat`) | `short[]` (reference) | 1.77 | 4.02 |
   | bf16 -> f32 (`<< 16` shift) | `long[]` (real) | 2.59 | 2.08 |
   | bf16 -> f32 (`<< 16` shift) | `short[]` (reference) | 4.33 | 2.82 |
 
+  **This measurement does NOT separate "16 Gelem/s vs ~4 Gelem/s" into a machine
+  difference and a representation (`long[]` vs `short[]`) difference** -- that needs
+  `Load.java` itself re-run on `dorian` (it is a standalone
+  `.todo/482-bfloat16-a-narrow-width-that-pays/Load.java` source-launcher file; a few
+  minutes), which was not done here. What IS isolated, because both rows came off the
+  same host: the `long[]`-vs-`short[]` gap above (1.3-1.7x for bf16, negligible for f16)
+  is real and not a machine artifact. A rough split IS available from a different probe
+  (`.todo/482-.../README.md` section 8, `Acc.java`'s f32 GEMV measured on both machines):
+  `dorian` runs 2.6-2.9x slower than the GB10 box on cache-resident f32 GEMV, which
+  puts the 16 Gelem/s figure at roughly 16/2.6..2.9 = 5.5-6.2 Gelem/s of "if it were run
+  on dorian" headroom -- leaving the remaining 6ish -> 4.33 gap to the Vector-API-vs-
+  scalar-loop difference this section is actually about. **This is an inference from a
+  different kernel's cross-machine ratio, not a direct measurement of `Load.java` on
+  `dorian`** -- treat it as a plausibility check, not a substitute for re-running it.
+
   At the worst measured rate, 1.1B elements: **0.66 s (f16, `long[]`, Graal) / 0.53 s
-  (bf16, `long[]`, C2)** -- both still comfortably under a second, so `.todo/670`'s
-  "every conversion of a 1.1B-parameter checkpoint is under a second, single-threaded"
-  conclusion HOLDS despite the `long[]`-vs-`short[]` gap (a 1.3-1.7x slowdown for bf16,
-  negligible for f16 since that decode is ALU- not bandwidth-bound). Given that, a
-  `jdk.incubator.vector` implementation was not written: it would need its own
-  from-scratch verification (a different kernel shape than anything already measured)
-  to buy a headroom this primitive does not need. Re-open this if a future caller
-  measures itself bandwidth-bound at this primitive specifically.
+  (bf16, `long[]`, C2)**, on `dorian` -- both still comfortably under a second, so
+  `.todo/670`'s "every conversion of a 1.1B-parameter checkpoint is under a second,
+  single-threaded" conclusion HOLDS regardless of which machine it is read against.
+  Given that, a `jdk.incubator.vector` implementation was not written: it would need its
+  own from-scratch verification (a different kernel shape than anything already
+  measured) to buy a headroom this primitive does not need. Re-open this if a future
+  caller measures itself bandwidth-bound at this primitive specifically.
 - Oddity worth a line on its own: **f16's C2-vs-Graal gap, which is large on `short[]`
-  (C2 4.02 vs Graal 1.77 Gelem/s -- C2 auto-vectorizes the scalar
-  `Float.float16ToFloat` loop into `FCVTL`, matching round-2's Section 1 finding),
-  disappears on `long[]`** (1.59 vs 1.68) -- the extra narrow-then-decode step defeats
-  whatever pattern C2's superword optimizer was matching on the plain `short[]` loop.
-  Another instance of `.todo/670`'s "every kernel number is JIT-dependent", and a
+  (C2 4.02 vs Graal 1.77 Gelem/s on `dorian` -- C2 auto-vectorizes the scalar
+  `Float.float16ToFloat` loop into an x86 vector conversion, matching round-2's Section 1
+  finding on ARM's `FCVTL`), disappears on `long[]`** (1.59 vs 1.68) -- the extra
+  narrow-then-decode step defeats whatever pattern C2's superword optimizer was matching
+  on the plain `short[]` loop. Whether the same reversal happens on ARM (where round-2's
+  numbers live) is unknown -- this is `dorian`-only. `.todo/670`'s "every kernel number
+  is JIT-dependent" should read **"JIT- AND MACHINE-dependent"** from here on; a
   reminder that a JIT's auto-vectorization of one loop shape says nothing about a
   differently-typed loop that computes the same function.
 

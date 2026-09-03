@@ -413,6 +413,22 @@ final class JvmExprCompiler {
 					compileThread(qn.member(), cons, ctx, className);
 					return;
 				}
+				if (LispNames.FLOAT16_BITS.equals(qn.member())) {
+					JvmFloat16Compiler.compileFloat16Bits(cons, ctx, className);
+					return;
+				}
+				if (LispNames.BITS_FLOAT16.equals(qn.member())) {
+					JvmFloat16Compiler.compileBitsFloat16(cons, ctx, className);
+					return;
+				}
+				if (LispNames.WIDEN_FLOAT_BITS.equals(qn.member())) {
+					JvmFloat16Compiler.compileWiden(cons, ctx, className);
+					return;
+				}
+				if (LispNames.NARROW_FLOAT_BITS.equals(qn.member())) {
+					JvmFloat16Compiler.compileNarrow(cons, ctx, className);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			if (qn != null && LispNames.JAVA_PKG.equals(qn.pkg()) && JvmJavaInteropCompiler.handles(qn.member())) {
