@@ -2345,6 +2345,29 @@ public final class Environment implements Scope {
 					requireArgCount(LispNames.IEEE754_SINGLE_FROM_BITS, args, 1);
 					return new LispDouble(Float.intBitsToFloat((int) asBigInteger(args.get(0)).longValue()));
 				}));
+		// IEEE binary16 (f16) bit conversion: a real width unlike single/double-float,
+		// which needs no bignum model (16 bits always fits a plain fixnum), so it is a
+		// rontolisp: primitive rather than a float-features one -- see .todo/671.
+		// Float.floatToFloat16/float16ToFloat are JDK 20+ intrinsics.
+		env.defineFunction(LispNames.FLOAT16_BITS, new LispFunction(LispNames.FLOAT16_BITS, args -> {
+			requireArgCount(LispNames.FLOAT16_BITS, args, 1);
+			return new LispInteger(Float.floatToFloat16((float) asDouble(args.get(0))) & 0xFFFF);
+		}));
+		env.defineFunction(LispNames.BITS_FLOAT16, new LispFunction(LispNames.BITS_FLOAT16, args -> {
+			requireArgCount(LispNames.BITS_FLOAT16, args, 1);
+			return new LispDouble(Float.float16ToFloat((short) asLong(args.get(0))));
+		}));
+		// The bulk f16/bf16 widen and narrow: .todo/671's actual point, since a
+		// checkpoint's tensors arrive as (unsigned-byte 16) bit patterns, never as
+		// single elements. Dispatches on the DESTINATION's/SOURCE's concrete packed
+		// float width through an exhaustive switch (not an instanceof-vs-else guess at
+		// "the other width") so a third LispFloatArray permit (.todo/484's #bf16) fails
+		// to compile here instead of silently widening into the wrong width; see
+		// FloatBitsWidening.
+		env.defineFunction(LispNames.WIDEN_FLOAT_BITS, new LispFunction(LispNames.WIDEN_FLOAT_BITS,
+				args -> FloatBitsWidening.widen(LispNames.WIDEN_FLOAT_BITS, args)));
+		env.defineFunction(LispNames.NARROW_FLOAT_BITS, new LispFunction(LispNames.NARROW_FLOAT_BITS,
+				args -> FloatBitsWidening.narrow(LispNames.NARROW_FLOAT_BITS, args)));
 		// random: a non-negative random number below the (positive) limit, of the same
 		// type as the limit (integer -> integer, float -> float). The interpreter and the
 		// JVM backend draw from ThreadLocalRandom (a per-thread generator seeded from the

@@ -417,6 +417,19 @@ is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--si
   kernels keep `SPECIES_PREFERRED` — they are bit-exact at any width. (The f64 reductions still use
   `SPECIES_PREFERRED`; their lane count also reorders the summation, but that was true before and
   `#d` partial sums are exact on the inputs the tests use.)
+- **What the pin costs, measured (2026-09-03).** One pinned `f32x4` accumulator per row is one
+  dependency chain, and a chain is what bounds the row long before memory does: the GEMV runs at
+  **5.5-7.6 Gelem/s single-threaded** on the GB10 (4096x4096, 3.0 ms under Graal / 2.2 ms under C2),
+  against ~15.6 GB/s of weights, well under what one X925 pulls from DRAM. A four-accumulator + FMA
+  probe of the same shape runs the same GEMV in 2.03 / 1.98 ms -- so the pin is worth **1.1-1.5x of
+  the f32 GEMV** on one thread, and `--parallel` only reaches the bandwidth regime because
+  spreading the rows across cores lifts the chain off the critical path. This is `.todo/480`'s item;
+  it is recorded here because the pin is why it is not a local change, and because the price is not
+  only f32's: the fused `bfloat16` GEMV kernels (`.todo/488`, in both kernel files, not yet wired to
+  the interception) are pinned bit-for-bit equal to *widen-then-f32-kernel*, so they must carry the
+  f32 arm's accumulator count and measure at 0.80-1.02x of f32 on one thread instead of the 1.6x
+  their bandwidth saving would otherwise buy. Numbers, both JITs:
+  `.todo/488-the-fused-bfloat16-gemv-kernels/README.md` (provisional until a quiet window).
 - `eval.VecSimd` — `available()` (links the kernels class; a `NoClassDefFoundError` on a JVM
   without the incubator module becomes `false`) and `install(Environment)` (defines native
   `LispFunction`s for `vec:add`..`vec:matvec`, overriding the just-evaluated defuns).

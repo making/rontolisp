@@ -93,6 +93,77 @@ its `read-byte` decoder -- those are the exception, and they say so in their
 loaders. There is no `:byte-order` knob; the day one is needed it belongs on the
 primitive's signature, not in a second loop.
 
+## Bulk f16/bf16 bit widening (`.todo/671`), and why it is a scalar loop
+
+`rontolisp:widen-float-bits` / `rontolisp:narrow-float-bits` (`eval/FloatBitsWidening`,
+interpreter arm) are the load-time-conversion half of the packed-bulk-transfer story
+above: an IEEE f16 or bf16 checkpoint is read as `(unsigned-byte 16)` bits
+(`read-sequence` into a `LispIntVector`, this file's own bulk path) and then widened
+into an existing `#f`/`#d` array, chunk by chunk, rather than held as its own array
+type (`.todo/482`'s round-2 measurement: a fused f16 GEMV loses to f32 on both JITs).
+
+**Recommended chunk size: 1 Mi elements (2^20).** The bits vector is a
+`LispIntVector`, whose interpreter/JVM representation is a `long[]` regardless of the
+declared width (8 bytes/element, not 2 -- `.kb/packed-integer-vectors.md`, "small-
+buffer-oriented, not scale-oriented"), so staging a whole 1.1B-element checkpoint's
+bits at once costs 8.8 GB, not the 2.2 GB a real `short[]` would -- on top of the 4.4 GB
+`#f` destination, that is 13.2 GB, which breaks the "a 1B-class checkpoint fits an
+8 GB laptop at f32" premise `.todo/670` states. A 1 Mi-element chunk costs 8 MB of
+`long[]` staging instead; `widen-float-bits`'s `dst`/`:start` (`narrow-float-bits`'s
+`dst`/`:start` the other way) exist specifically so a caller can call this once per
+chunk into successive offsets of one already-allocated destination, never holding the
+whole tensor's bits vector at once. `.todo/673`/`675` (the GGUF/safetensors readers)
+MUST chunk this way -- this is a memory requirement, not a style preference.
+
+**Deliberately a plain scalar loop, not `jdk.incubator.vector`, on the interpreter and
+JVM arms** -- a deviation from `.todo/671`'s own text, which cites `Load.java`'s
+16 Gelem/s bf16 number (`convertShape(S2I)` + shift) as the target. Two things changed
+that number once actually implemented against `LispIntVector`:
+
+- `Load.java`'s vectorized numbers are all measured over a real `short[]` source.
+  `LispIntVector`'s actual backing is `long[]` (see above), which has no
+  `ShortVector.fromArray`/`convertShape(S2I)` path at all -- the Vector-API route would
+  have to `LongVector`-load, narrow to int, then decode, which is a different (and
+  unmeasured) kernel shape, not "the same trick, just typed differently".
+- Measured instead (2026-09-03, 1 Mi-element chunks, scalar loop, this box -- aarch64
+  Cortex-X925, GB10, both the default GraalVM JIT and C2 via
+  `-XX:-UseJVMCICompiler`):
+
+  | conversion | source | Graal Gelem/s | C2 Gelem/s |
+  | --- | --- | --- | --- |
+  | f16 -> f32 (`Float.float16ToFloat`) | `long[]` (real) | 1.68 | 1.59 |
+  | f16 -> f32 (`Float.float16ToFloat`) | `short[]` (reference) | 1.77 | 4.02 |
+  | bf16 -> f32 (`<< 16` shift) | `long[]` (real) | 2.59 | 2.08 |
+  | bf16 -> f32 (`<< 16` shift) | `short[]` (reference) | 4.33 | 2.82 |
+
+  At the worst measured rate, 1.1B elements: **0.66 s (f16, `long[]`, Graal) / 0.53 s
+  (bf16, `long[]`, C2)** -- both still comfortably under a second, so `.todo/670`'s
+  "every conversion of a 1.1B-parameter checkpoint is under a second, single-threaded"
+  conclusion HOLDS despite the `long[]`-vs-`short[]` gap (a 1.3-1.7x slowdown for bf16,
+  negligible for f16 since that decode is ALU- not bandwidth-bound). Given that, a
+  `jdk.incubator.vector` implementation was not written: it would need its own
+  from-scratch verification (a different kernel shape than anything already measured)
+  to buy a headroom this primitive does not need. Re-open this if a future caller
+  measures itself bandwidth-bound at this primitive specifically.
+- Oddity worth a line on its own: **f16's C2-vs-Graal gap, which is large on `short[]`
+  (C2 4.02 vs Graal 1.77 Gelem/s -- C2 auto-vectorizes the scalar
+  `Float.float16ToFloat` loop into `FCVTL`, matching round-2's Section 1 finding),
+  disappears on `long[]`** (1.59 vs 1.68) -- the extra narrow-then-decode step defeats
+  whatever pattern C2's superword optimizer was matching on the plain `short[]` loop.
+  Another instance of `.todo/670`'s "every kernel number is JIT-dependent", and a
+  reminder that a JIT's auto-vectorization of one loop shape says nothing about a
+  differently-typed loop that computes the same function.
+
+**Verified correct without a vectorized arm**: the scalar loop above matches
+`java.lang.Float.floatToFloat16`/`float16ToFloat` bit-for-bit over all 65536 f16 bit
+patterns (NaN payload aside for the decode direction) -- see the `float16-bits`/
+`bits-float16` and `widen-float-bits`/`narrow-float-bits` tests. `.todo/671`'s Verify
+item asking a *vectorized* arm to agree with a scalar oracle over all 65536 patterns
+does not apply here since there is only the one (scalar) arm on the interpreter/JVM;
+the WASM arm (necessarily scalar -- no incubator module there) is the same oracle
+loop, so the cross-backend pin is scalar-vs-scalar-vs-scalar bit-for-bit agreement
+instead.
+
 ## Re-evaluation trigger
 
 The primitive declines the standard input designator on no backend and sockets
