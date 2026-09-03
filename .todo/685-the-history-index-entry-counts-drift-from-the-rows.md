@@ -53,3 +53,29 @@ Whichever is chosen, the row format and the two-commit closing rule
   close an item concurrently (simulate: append two rows from two clones, merge, check).
 - `.todo/claim-number.sh` still claims numbers correctly, and a failure in whatever
   maintains the count cannot make it fail.
+
+## Measured 2026-09-03, and the cause is not what the item assumed
+
+Counted after a day in which eight items closed across two orchestrators:
+
+| month | index says | rows in the file |
+| --- | --- | --- |
+| 2026-07 | 78 | 78 |
+| 2026-08 | 344 | 344 |
+| **2026-09** | **70** | **72** |
+
+Two closed months agree exactly; only the live month drifts, and it drifts DOWN, as this
+item predicted. But the mechanism is the opposite of "nobody updates it".
+`.todo/.history.md` says in so many words that **the column is not maintained per
+deletion -- appending the row is the whole job**. Two workers updated it by hand anyway
+on 2026-09-03, one to 69 and one to 70, each incrementing what they found.
+
+**A number that is documented as approximate and then maintained by some closers is worse
+than either policy.** Left alone it would read as obviously stale and nobody would trust
+it. Updated on most closes, it looks maintained, and the two it missed are invisible.
+The fix has to remove the choice -- derive the number or delete the column -- because as
+long as a human CAN update it, some will, and the ones who do make the ones who did not
+undetectable.
+
+Not corrected to 72 here on purpose: the drift is this item's evidence, and setting it
+right without changing the mechanism only restarts the clock.
