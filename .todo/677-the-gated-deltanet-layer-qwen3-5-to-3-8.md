@@ -69,6 +69,30 @@ does anyway and what makes the bit-comparison against HF's own recurrent path po
   Llama-shaped models.
 - Nothing needs a new backend feature; it is Lisp over `vec:` and typed loops.
 
+## Done (2026-09-03, commit pending the readers)
+
+The reader-independent half is in `examples/llama2/deltanet.lisp` (the `:deltanet`
+kind: `deltanet-layer` / `deltanet-state` / `deltanet-forward`, the recurrence
+`gated-delta-rule`), wired into `llama2.lisp`'s table (`qwen35` row,
+`:full-attention-interval`, the `:ssm` states) and pinned by `deltanet-check.lisp`
+against `deltanet-ref.py` (Verify item 1, all four backends with and without `--simd`,
+in `examples.yaml`). `vec:ger-into` was NOT added: the decay and the rank-1 update are
+one typed `dotimes` over the transposed state, measured at 21 ms of a ~300 ms f32 token
+at the 0.8B shape (the README's table, commit `594ddac9`, Graal JIT) -- under a tenth,
+so a kernel is not worth its surface until the GEMVs shrink under it. The contract the
+readers must honour (the `1 + w` norms, `-exp(A_log)`, the `q_proj` interleave, the
+un-permuted Qwen RoPE) is written into `.todo/673` / `.todo/675` and the two files'
+headers.
+
+## Remaining (needs `.todo/673` / `.todo/675` and `.todo/674`)
+
+Verify items 2 and 3 below: the real checkpoint end to end, from GGUF and from
+safetensors, the same text from both, compared by eye against llama.cpp; then the
+tok/s rows. Also to do once a checkpoint runs: `llama2.lisp`'s `generate` stops on
+token 1 (llama2.c's BOS) and its `encode`/`decode-piece` are SentencePiece-shaped --
+Qwen's `<|im_end|>` / `<|endoftext|>` (248044 / 248046) and the chat template are the
+tokenizer item's business, but the stop condition is this file's.
+
 ## Verify
 
 - The recurrence against a transcription of `torch_recurrent_gated_delta_rule` with

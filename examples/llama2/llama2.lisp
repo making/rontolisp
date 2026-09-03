@@ -14,14 +14,16 @@
 ;;;; What is not run.c: the forward pass is a TABLE OF LAYER KINDS rather than
 ;;;; Llama 2 spelled out. A model is a list of layers, every one of them the same
 ;;;; residual sandwich -- normalise, mix, add back -- differing only in its kind
-;;;; (:attention or :swiglu today) and in the options beside it: QK-norm, the
-;;;; RoPE layout (adjacent pairs, halves, or none at all), a partial rotary dim,
-;;;; an output gate, the attention scale, and the model-level embedding /
-;;;; residual / logit multipliers. The families published since Llama 2 are that
-;;;; same list with different options, so a reader of a published checkpoint
-;;;; builds the list from the file's architecture name and the forward pass
-;;;; needs no case for it. llama2.c's .bin is the row where every option is at
-;;;; its default -- which is why the stories are still byte-identical.
+;;;; (:attention, :swiglu, or :deltanet -- the Gated DeltaNet recurrence of
+;;;; Qwen3.5, in deltanet.lisp beside this file) and in the options beside it:
+;;;; QK-norm, the RoPE layout (adjacent pairs, halves, or none at all), a
+;;;; partial rotary dim, an output gate, the attention scale, and the
+;;;; model-level embedding / residual / logit multipliers. The families
+;;;; published since Llama 2 are that same list with different options, so a
+;;;; reader of a published checkpoint builds the list from the file's
+;;;; architecture name and the forward pass needs no case for it. llama2.c's
+;;;; .bin is the row where every option is at its default -- which is why the
+;;;; stories are still byte-identical.
 ;;;;
 ;;;; SETUP
 ;;;; -----
@@ -181,8 +183,9 @@
 ;;;
 ;;;     x <- x + residual-multiplier * f(rmsnorm(x, the layer's norm), the layer)
 ;;;
-;;; and differs only in what f is -- :attention or :swiglu today, a gated linear
-;;; mixer or a short convolution when the hybrids arrive -- and in the options
+;;; and differs only in what f is -- :attention, :swiglu, or :deltanet (the
+;;; gated linear recurrence Qwen3.5 puts in three of every four blocks,
+;;; deltanet.lisp); a short convolution when LFM2 arrives -- and in the options
 ;;; beside it. Llama 2 is :attention then :swiglu per block with every option at
 ;;; its default, which is what the .bin loader below builds; the table stays a
 ;;; table by never special-casing that.
@@ -207,6 +210,12 @@
 ;;;   :rope-theta         the RoPE base (Llama 2: 10000)
 ;;;   :rotary-dim         how many of each head's dims rotate (default: all)
 ;;;   :no-rope-interval   every Nth block (1-based) has no RoPE at all
+;;;   :full-attention-interval
+;;;                       a hybrid: every Nth block (1-based) is :attention,
+;;;                       the others :deltanet (Qwen3.5: 4)
+;;;   :eps                the RMSNorm epsilon (default: llama2.c's 1e-5; the
+;;;                       checkpoint's rms_norm_eps / layer_norm_rms_epsilon
+;;;                       is the value, so a reader passes it)
 ;;;   :tied               no lm_head: the classifier IS the embedding table
 ;;;   :scale              the attention scale, when it is not 1/sqrt(head-size)
 ;;;   :embedding-multiplier / :residual-multiplier / :logit-multiplier
@@ -214,9 +223,39 @@
 ;;;                       (config.json), so a reader passes them, not this table
 ;;;                       -- and `logits_scaling` is a divisor, so it arrives as
 ;;;                       :logit-multiplier (/ 1.0 logits_scaling)
+;;;
+;;; What a READER of each family has to know that is not an option here:
+;;;
+;;;   - RoPE layout. llama.cpp's converter permutes Q and K only for the
+;;;     families whose rope type is "normal" (llama, smollm3, granite -- a GGUF
+;;;     of those is :pairs); a qwen3 / qwen35 GGUF keeps HF's layout and is
+;;;     :halves, like every safetensors.
+;;;   - qwen35's RMSNorm weights are stored as an OFFSET FROM ONE
+;;;     (Qwen3_5RMSNorm computes x * (1 + w)): input_layernorm,
+;;;     post_attention_layernorm, q_norm, k_norm and the final norm. A GGUF
+;;;     already carries 1 + w (the converter adds it); a safetensors reader
+;;;     adds the 1. The Gated DeltaNet's own norm.weight is NOT offset in
+;;;     either file (deltanet.lisp).
+;;;   - qwen35's q_proj is [heads x (query | gate), dim]: each head's
+;;;     head-size query rows are followed by its head-size gate rows, in the
+;;;     GGUF (attn_q) exactly as in HF. Both readers split it into :wq and
+;;;     :attn-gate.
+;;;   - qwen35's rotary dim is head_dim * partial_rotary_factor (256 * 0.25
+;;;     = 64 for every published member); its MRoPE sections [11 11 10]
+;;;     are the vision model's -- for text every position triple is one
+;;;     number and it reduces to 1-D RoPE over the 32 frequencies.
 (defparameter *architectures*
   (list (list "llama") ; Llama 2, TinyLlama, and karpathy's stories*.bin
-        (list "qwen3" :qk-norm t :rope-theta 1000000.0 :tied t)
+        (list "qwen3" :qk-norm t :rope-theta 1000000.0 :eps 0.000001 :tied t)
+        ;; Qwen3.5 / 3.6 / 3.8 dense: 3 of 4 blocks Gated DeltaNet, the 4th
+        ;; gated attention (head_dim 256, GQA) with QK-norm and partial RoPE
+        (list "qwen35"
+              :full-attention-interval 4
+              :qk-norm t
+              :rotary-dim 64
+              :rope-theta 10000000.0
+              :eps 0.000001
+              :tied t)
         (list "smollm3" :no-rope-interval 4 :rope-theta 5000000.0 :tied t)
         (list "granite" :rope-theta 10000000.0)))
 
@@ -227,6 +266,9 @@
     (if (string= (car (car rows)) name) (return (cdr (car rows))))))
 
 ;;; --- building the layer list ------------------------------------------------
+
+;; the :deltanet kind: deltanet-layer, deltanet-state, deltanet-forward
+(load "deltanet.lisp")
 
 (defun layer-weight (weights key l)
   ;; The layer-L entry of an OPTIONAL per-layer weight vector (q_norm and the
@@ -275,12 +317,22 @@
   ;; The layer list of a Llama-2-shaped model: per block a token mixer and a
   ;; feed-forward. WEIGHTS is the plist of per-layer simple vectors every loader
   ;; builds -- :rms-att :wq :wk :wv :wo (:q-norm :k-norm :attn-gate optional)
-  ;; :rms-ffn :w1 :w2 :w3 -- and OPTIONS an architecture row with the reader's
-  ;; own keys in front of it.
-  (let ((layers '()) (cache 0))
+  ;; :rms-ffn :w1 :w2 :w3, plus the :ssm-* vectors deltanet.lisp lists for the
+  ;; blocks a hybrid's :full-attention-interval makes :deltanet (the entries
+  ;; of the other kind's vectors are nil there) -- and OPTIONS an architecture
+  ;; row with the reader's own keys in front of it.
+  (let ((layers '())
+        (cache 0)
+        (slot 0)
+        (interval (opt options :full-attention-interval nil)))
     (dotimes (l n-layers)
-      (push (attention-layer weights options head-size l cache) layers)
-      (setq cache (+ cache 1))
+      (if (or (null interval) (= 0 (mod (+ l 1) interval)))
+          (progn
+            (push (attention-layer weights options head-size l cache) layers)
+            (setq cache (+ cache 1)))
+          (progn
+            (push (deltanet-layer weights l slot) layers)
+            (setq slot (+ slot 1))))
       (push (swiglu-layer weights l) layers))
     (coerce (nreverse layers) 'vector)))
 
@@ -496,18 +548,28 @@
 
 ;;; --- the state: KV cache and RoPE tables --------------------------------------
 
-(defun attention-layer-count (layers)
-  ;; How many KV-cache slots the layer list needs.
+(defun layer-kind-count (layers kind)
+  ;; How many layers of KIND the list has: the KV-cache slots (:attention) or
+  ;; the recurrent states (:deltanet) it needs.
   (let ((n 0))
     (dotimes (i (length layers) n)
-      (if (eq (getf (aref layers i) :kind) :attention) (setq n (+ n 1))))))
+      (if (eq (getf (aref layers i) :kind) kind) (setq n (+ n 1))))))
+
+(defun deltanet-states (layers)
+  ;; One deltanet-state per :deltanet layer, indexed by the layer's :slot.
+  (let ((states (make-array (layer-kind-count layers :deltanet))))
+    (dotimes (i (length layers) states)
+      (let ((layer (aref layers i)))
+        (when (eq (getf layer :kind) :deltanet)
+          (setf (aref states (getf layer :slot)) (deltanet-state layer)))))))
 
 (defun make-state (model)
   ;; The KV cache: per attention layer, per kv-head, keys (seq-len x hs)
   ;; row-major and values (hs x seq-len) transposed -- see the header. Plus the
-  ;; RoPE tables, which every layer that rotates at all shares.
+  ;; RoPE tables, which every layer that rotates at all shares, and the
+  ;; recurrent state of every :deltanet layer.
   (let* ((layers (getf model :layers))
-         (n-cache (attention-layer-count layers))
+         (n-cache (layer-kind-count layers :attention))
          (n-kv (getf model :n-kv-heads))
          (seq-len (getf model :seq-len))
          (hs (getf model :head-size))
@@ -540,7 +602,8 @@
           :vt vt
           :rope-cos rope-cos
           :rope-sin rope-sin
-          :att (vec:zeros seq-len :element-type 'single-float))))
+          :att (vec:zeros seq-len :element-type 'single-float)
+          :ssm (deltanet-states layers))))
 
 ;;; --- the pieces a layer is made of --------------------------------------------
 
@@ -687,6 +750,9 @@
           (cond
            ((eq kind :attention) (attention-forward model state layer xb pos))
            ((eq kind :swiglu) (swiglu-forward layer xb))
+           ((eq kind :deltanet)
+            (deltanet-forward layer (aref (getf state :ssm) (getf layer :slot))
+                              xb (getf model :eps)))
            (t (error "unknown layer kind: ~a" kind))))
          (mult (getf model :residual-mult)))
     (vec:add x (if (= mult 1.0) out (vec:scale out mult)))))
