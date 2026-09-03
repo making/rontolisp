@@ -37,7 +37,16 @@ public class Dec {
 		for (; i < h.length; i++) o[i] = Float.float16ToFloat(h[i]);
 	}
 
-	// D: magic-multiply + exact inf/nan fixup (one extra masked add)
+	// D: magic-multiply + exact inf/nan fixup (one extra masked add). FIXED 2026-09-03
+	// (.todo/671): the fixup mask below is `u.and(se).compare(EQ, se)` -- "exponent field
+	// is all-ones" -- not a bare `u.compare(EQ, se)` ("u equals se exactly", true
+	// infinity only). The bare compare is what this method originally had; it is exact
+	// for infinity but WRONG for every NaN pattern (a nonzero f16 mantissa keeps u > se,
+	// so the fixup never fires and a NaN decodes to a large FINITE float instead).
+	// Verified exhaustively over all 65536 patterns: the original bare-compare form
+	// mismatches 2046/65536 (every NaN); the masked form below is exact (NaN payload
+	// aside), matching Load.java's f16ToF32Vector, which had the mask all along -- see
+	// README section 4's re-evaluation note.
 	static void d(short[] h, float[] o) {
 		final int se = 0x7c00 << 13;
 		int i = 0, bd = IS.loopBound(h.length);
@@ -47,7 +56,7 @@ public class Dec {
 			IntVector u = hv.and(0x7fff).lanewise(VectorOperators.LSHL, 13);
 			FloatVector f = u.reinterpretAsFloats().mul(scale);
 			IntVector r = f.reinterpretAsInts();
-			r = r.add(IntVector.broadcast(IS, 0x7f800000 - 0x47800000), u.compare(VectorOperators.EQ, se));
+			r = r.add(IntVector.broadcast(IS, 0x7f800000 - 0x47800000), u.and(se).compare(VectorOperators.EQ, se));
 			r.or(hv.and(0x8000).lanewise(VectorOperators.LSHL, 16)).reinterpretAsFloats().intoArray(o, i);
 		}
 		for (; i < h.length; i++) o[i] = Float.float16ToFloat(h[i]);

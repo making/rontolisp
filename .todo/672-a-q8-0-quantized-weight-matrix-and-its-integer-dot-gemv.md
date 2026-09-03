@@ -31,6 +31,16 @@ kernel and every `setf aref` an arm they can only refuse. So:
   scales as f32 bytes, then the quants) -- a `byte[]` is disjoint from every shape the
   `instanceof` dispatch already tells apart (`.todo/485`, `.kb/packed-integer-vectors.md`
   for the `long[]`-with-header precedent), so the accessors stay allocation-free.
+  **The `byte[]` is load-bearing, not a preference: the existing packed integer vector
+  must NOT be reused here.** Read 2026-09-03: `LispIntVector` and its JVM counterpart
+  store 8/16/32-bit elements in a `long[]`, because `instanceof long[]` is the free
+  representation discriminator on a backend with no type tags and a per-width `byte[]` /
+  `short[]` / `int[]` would collide with the `int[]` charboxes. That trade was made for
+  ironclad's SHA-256 working buffers (todo 194 stage 2) -- small ones -- and it costs
+  EIGHT bytes an element. Routing Q8_0's quants through it would store a one-byte value
+  in eight and make this type twice the size of the f32 matrix it exists to shrink,
+  deleting its whole reason to exist. The scales are one per 32 elements, so they do not
+  care; the quants are the whole point.
 - `aref` reads the dequantized value as a `double`; `(setf aref)` signals; `array-rank`,
   `array-dimensions`, `array-total-size`, `array-element-type` (answers the format
   symbol) work; `typep`: not an `array` of any float type, its own type.

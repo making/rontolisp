@@ -97,6 +97,19 @@ ci-spec case.
 - **`--no-gc`**: arrays are unsupported on the scalar backend as before (the
   eligibility scan's clear compile error).
 
+**This representation is small-buffer-oriented, not scale-oriented.** The
+interpreter's and JVM's `long[]` backing spends 8 bytes per element regardless
+of the declared width (`int width` / the width header is a DISCRIMINATOR, not
+a packing scheme -- see above); todo 194 stage 2's motivating use was
+ironclad's SHA-256 working buffer, a handful of words. Only wasm-GC's bare
+`TYPE_I8ARR`/`TYPE_I16ARR`/`TYPE_I32ARR` actually packs at the declared width.
+Measured 2026-09-03 (`.todo/671`, the f16/bf16 checkpoint-bits widener): a
+1 Mi-element `(unsigned-byte 16)` staging chunk decodes at 1.6-4.3 Gelem/s on
+this box's interpreter/JVM depending on JIT and target width (`.kb/binary-
+sequence-io.md` has the full table) -- fine at that scale (8 MB of `long[]`
+overhead per Mi-element chunk) but do not reach for this type to hold a
+checkpoint-sized (10^8-10^9 element) buffer whole; stage it in chunks instead.
+
 ## Semantics shared by all backends (pinned by tests)
 
 - `aref`/`(setf aref)` (rank-1), `row-major-aref`/`%row-major-aset`: masked
