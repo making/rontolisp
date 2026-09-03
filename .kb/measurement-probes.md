@@ -322,12 +322,12 @@ of those same rows and settled it on the implementation contradicting ITSELF -- 
 `rem` disagreeing with the second value of its own `truncate` -- and a conclusion that never
 used the oracle cannot be undone by the oracle.
 
-## Rule 5: when a number is wrong, the instrument is the first suspect -- and there are five ways it can be wrong
+## Rule 5: when a number is wrong, the instrument is the first suspect -- and there are six ways it can be wrong
 
 Rules 1-4 are about a number that answers a different question than the one you asked.
-This one is about telling apart FIVE failures that look identical from the outside -- an
-unexpected ratio -- and are not. All five happened on one day (2026-09-03, `.todo/480` and
-`.todo/488`), and only the first two are the familiar ones.
+This one is about telling apart SIX failures that look identical from the outside -- an
+unexpected ratio -- and are not. All six happened on one day (2026-09-03, `.todo/480`,
+`.todo/488` and a develop suite run), and only the first two are the familiar ones.
 
 **A. The instrument is broken.** The number is an artifact of the harness and there is no
 real effect underneath it. `.todo/480`'s first probe (`Acc.java`) dispatched the row
@@ -402,6 +402,43 @@ than the faster one, so the ratio comes out bigger than it is.
 going to publish in a quiet window, and take the absolute values as well as the ratio** --
 a ratio alone cannot tell you it was measured under load, and two absolute figures beside
 a known-idle box can.
+
+**F. The instrument was never validly started -- and the SIZE of the damage cannot tell
+you so.** A full `./mvnw spring-javaformat:apply test` on `develop` reported **9927 tests,
+37 failures, 1496 errors**, nearly all of them error-message assertions in the JVM backend.
+The run had been started without `clean` after `git checkout` moved the worktree across
+commits, so `target/classes` was stale -- a real procedural error, and the obvious
+explanation for a number that size. **It was not the explanation.** Re-run from `clean`,
+the same commit produced the same 9927 / 37 / 1496: `-o Prog.class` was refusing every
+program that did not call `widen-float-bits` (a first-class wrapper emitted
+unconditionally against a helper emitted only on demand), so every test that compiles a
+program and asserts on the error it raises got a compile error instead.
+
+*What the size is worth:* **a failure count that large means the failures are not
+independent -- look for one shared cause instead of reading the traces.** That inference
+is sound and it was right here. What it cannot do is name the layer: **a stale
+`target/classes` and a regression in the shared compile path have the SAME shape** -- one
+cause, upstream of everything. The number narrows the search; it does not decide. Reading
+it as a decision is the mistake this entry records, and two people made it independently
+on the same run.
+
+*What to do:* **re-run from `clean` before reporting a suite result.** One command,
+decisive either way, and it is the only thing that separates the two.
+
+*The SHAPE is a different instrument, and it survives.* A split that correlates perfectly
+with a structural boundary names that boundary. The same regression also produced **17
+`CiSpecE2eTest` errors, 100% of them `runStandalone` and 0 outside it** -- the corpus cases
+call `widen-float-bits` (through the bf16 and gguf cases) and the standalone cases do not,
+so the break is conditional on calling it, and the skew says so before any trace is read.
+The corollary is worth more than the diagnosis: **a suite can hold a defect invisibly for
+as long as every case sits on one side of its condition, and the half that looks more
+exhaustive is the half that hides it.** The corpus was the thorough-looking half, and the
+passing one.
+
+The counting rule that checks the PROCEDURE is about truncation, not size: a run whose
+`target/surefire-reports/*.txt` count is short of ~220 was cut off, whatever its failure
+count says. **The report count checks the procedure. The failure count describes the
+subject.**
 
 ### What to do about C, D and E -- commands, not principles
 
