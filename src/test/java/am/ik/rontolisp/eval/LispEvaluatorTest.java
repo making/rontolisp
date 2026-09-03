@@ -17124,7 +17124,7 @@ class LispEvaluatorTest {
 				    (unless (= i (aref back i)) (incf bad))))
 				""").print()).isEqualTo("0");
 		// And element for element against the scalar, over the values an f32 array can
-		// actually hold after a store (which quiets a signalling NaN on the way in).
+		// actually hold (every pattern -- storing one is exact, per the section above).
 		assertThat(eval("""
 				(let* ((n 65536)
 				       (values (make-array n :element-type 'single-float))
@@ -17135,6 +17135,75 @@ class LispEvaluatorTest {
 				  (dotimes (i n bad)
 				    (unless (= (aref back i) (rontolisp:bfloat16-bits (aref values i))) (incf bad))))
 				""").print()).isEqualTo("0");
+	}
+
+	@Test
+	void float16BitsAndBackRoundTripEveryFinitePattern() {
+		assertThat(eval("(list (rontolisp:float16-bits 1.0) (rontolisp:float16-bits -2.5)"
+				+ " (rontolisp:bits-float16 15360) (rontolisp:bits-float16 (rontolisp:float16-bits 1.5)))")
+			.print()).isEqualTo("(15360 49408 1.0 1.5)");
+		// Widening then narrowing is the identity for every pattern EXCEPT the JDK's own
+		// float16ToFloat/floatToFloat16 pair does not itself round-trip a signalling NaN
+		// to the same pattern (it quiets on the way to float) -- so the check below
+		// skips NaN, matching .todo/671's ci-spec.yaml case and its "NaN payload aside"
+		// convention for this pair specifically (unlike bfloat16-bits above, which IS
+		// exact and total, including NaN, per BFloat16's own contract).
+		assertThat(eval("""
+				(let ((bad 0))
+				  (dotimes (i 65536 bad)
+				    (let ((v (rontolisp:bits-float16 i)))
+				      (when (= v v)
+				        (unless (= i (rontolisp:float16-bits v)) (incf bad))))))
+				""").print()).isEqualTo("0");
+		// An integer argument coerces like any other real, and a first-class reference
+		// reaches the same answer through the wrapper.
+		assertThat(eval("(list (rontolisp:float16-bits 2) (mapcar #'rontolisp:float16-bits (list 1.0 2.0)))").print())
+			.isEqualTo("(16384 (15360 16384))");
+	}
+
+	@Test
+	void widenAndNarrowFloatBitsShareTheScalarPairsRounding() {
+		// float16, into and out of a single-float array, with a nonzero :start (the
+		// packed array's header-offset arithmetic on the compiled backends).
+		assertThat(eval("""
+				(let* ((bits (make-array 3 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:float16-bits 1.0)
+				                                                  (rontolisp:float16-bits -2.5)
+				                                                  (rontolisp:float16-bits 100.0))))
+				       (dst (make-array 5 :element-type 'single-float :initial-element 0.0))
+				       (back (make-array 5 :element-type '(unsigned-byte 16))))
+				  (rontolisp:widen-float-bits bits :float16 dst :start 2)
+				  (rontolisp:narrow-float-bits dst :float16 back)
+				  (list (aref dst 0) (aref dst 1) (aref dst 2) (aref dst 3) (aref dst 4)
+				        (aref back 0) (aref back 1) (aref back 2) (aref back 3) (aref back 4)))
+				""").print()).isEqualTo("(0.0 0.0 1.0 -2.5 100.0 0 0 15360 49408 22080)");
+		// A length-1 tensor: the shape that caught the JVM arm's one real bug (the
+		// packed-float header offset), so it stays pinned on its own.
+		assertThat(eval("""
+				(let* ((bits (make-array 1 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:float16-bits -2.5))))
+				       (dst (make-array 1 :element-type 'single-float)))
+				  (rontolisp:widen-float-bits bits :float16 dst)
+				  (aref dst 0))
+				""").print()).isEqualTo("-2.5");
+		// A double-float destination/source works the same way.
+		assertThat(eval("""
+				(let* ((bits (make-array 2 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:float16-bits 3.5)
+				                                                  (rontolisp:float16-bits -7.25))))
+				       (dst (make-array 2 :element-type 'double-float))
+				       (back (make-array 2 :element-type '(unsigned-byte 16))))
+				  (rontolisp:widen-float-bits bits :float16 dst)
+				  (rontolisp:narrow-float-bits dst :float16 back)
+				  (list (aref dst 0) (aref dst 1) (aref back 0) (aref back 1)))
+				""").print()).isEqualTo("(3.5 -7.25 17152 51008)");
+		// First-class references reach the same primitive the special form does.
+		assertThat(eval("""
+				(let ((bits (make-array 1 :element-type '(unsigned-byte 16) :initial-element 15360))
+				      (dst (make-array 1 :element-type 'single-float)))
+				  (funcall #'rontolisp:widen-float-bits bits :float16 dst)
+				  (aref dst 0))
+				""").print()).isEqualTo("1.0");
 	}
 
 	@Test

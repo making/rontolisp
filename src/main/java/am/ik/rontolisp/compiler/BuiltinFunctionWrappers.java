@@ -179,6 +179,15 @@ public final class BuiltinFunctionWrappers {
 		// on the reference puts both sides on one scan (cl-json's aggregate-scope
 		// (mapcar #'symbol-value scope-variables) is the consumer).
 		gated.add(LispNames.SYMBOL_VALUE);
+		// #'widen-float-bits / #'narrow-float-bits (.todo/671): the wrapper bodies call
+		// the JVM's _widenFloatBits/_narrowFloatBits helpers, emitted only for a
+		// program whose OWN source names widen-float-bits/narrow-float-bits
+		// (JvmLispCompiler's usesFloat16Bits scan) -- a program that only calls
+		// float16-bits/bits-float16 (the scalar pair, which needs no helper) would
+		// otherwise carry an ungated wrapper calling a method the class does not
+		// declare, exactly FILE_LENGTH/FILE_WRITE_DATE's reason above.
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS));
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS));
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 
