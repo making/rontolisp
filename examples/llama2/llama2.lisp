@@ -809,19 +809,254 @@
                         :layers (transformer-layers n-layers head-size weights
                                                     options))))))))
 
+;;; --- a GGUF checkpoint ---------------------------------------------------------------
+;;; The one file a downloaded model most often is: the hyperparameters and the
+;;; tokenizer in its key/value block, the weights behind them, read by the
+;;; shipped gguf: package. The names are llama.cpp's; what its converter
+;;; already did to the weights -- Qwen3.5's norms stored as 1 + w, A_log as
+;;; -exp(A_log), the conv squeezed -- is left as it is, and what it did NOT do
+;;; (split the query | gate interleave) is done here. The converter permutes Q
+;;; and K only for the families whose rope type is "normal" (llama, smollm3,
+;;; granite), so those are :pairs and the Qwen / LFM2 families :halves.
+
+(defun gguf-architecture (name)
+  ;; general.architecture -> the *architectures* row name (they agree, except
+  ;; that a row may be missing).
+  (if (assoc name *architectures* :test #'string=)
+      name
+      (error "unsupported architecture: ~a" name)))
+
+(defun gguf-rope-layout (name)
+  (if (or (string= name "llama") (string= name "smollm3")
+          (string= name "granite"))
+      :pairs :halves))
+
+(defun gguf-layer-types (m arch n-layers)
+  ;; The explicit block kinds a GGUF encodes: LFM2 marks a conv block with 0 KV
+  ;; heads in its per-layer head_count_kv array; a hybrid with an interval
+  ;; (Qwen3.5) needs no list. nil when the file says nothing.
+  (let ((kv
+         (gguf:metadata-value m
+          (concatenate 'string arch ".attention.head_count_kv") nil)))
+    (if (and kv (not (integerp kv)))
+        (let ((types '()))
+          (dotimes (l n-layers (nreverse types))
+            (push (if (= (aref kv l) 0) :shortconv :attention) types)))
+        nil)))
+
+(defun load-gguf-checkpoint (path)
+  (let* ((meta (gguf:read path :metadata-only t))
+         (arch
+          (gguf-architecture (gguf:metadata-value meta "general.architecture")))
+         (key
+          (lambda (suffix &optional default)
+            (gguf:metadata-value meta (concatenate 'string arch "." suffix)
+                                 default)))
+         (qwen35 (string= arch "qwen35"))
+         (lfm2 (string= arch "lfm2"))
+         (dim (funcall key "embedding_length"))
+         ;; Qwen3.5's block_count counts its speculative (MTP) block too, which
+         ;; is not part of the language model and is skipped
+         (n-layers
+          (- (funcall key "block_count")
+             (funcall key "nextn_predict_layers" 0)))
+         (heads-value (funcall key "attention.head_count"))
+         (n-heads
+          (if (integerp heads-value)
+              heads-value
+              (reduce #'max (coerce heads-value 'list))))
+         (kv-value (funcall key "attention.head_count_kv" n-heads))
+         (n-kv-heads
+          (if (integerp kv-value)
+              kv-value
+              (reduce #'max (coerce kv-value 'list))))
+         (head-size (funcall key "attention.key_length" (floor dim n-heads)))
+         (eps (funcall key "attention.layer_norm_rms_epsilon" *eps*))
+         (rope-theta (funcall key "rope.freq_base" 10000.0))
+         (rotary (funcall key "rope.dimension_count" nil))
+         (interval (funcall key "full_attention_interval" nil))
+         (seq-len
+          (min *seq-len-cap* (funcall key "context_length" *seq-len-cap*)))
+         (types (gguf-layer-types meta arch n-layers))
+         (row (architecture arch))
+         (options
+          (append
+           (list :rope (gguf-rope-layout arch) :eps eps :rope-theta rope-theta)
+           (if rotary (list :rotary-dim rotary) nil)
+           (if interval (list :full-attention-interval interval) nil)
+           (if types (list :layer-types types) nil) row))
+         ;; every tensor of the language model, so the walk stages nothing else
+         ;; (the MTP block, past n-layers, is passed over)
+         (wanted
+          (let ((names '()))
+            (dolist (name (gguf:tensor-names meta) (nreverse names))
+              (let ((blk
+                     (and (starts-with name "blk.")
+                          (parse-integer name :start 4 :junk-allowed t))))
+                (when (or (null blk) (< blk n-layers)) (push name names))))))
+         (file (gguf:read path :only wanted))
+         (per-layer
+          (lambda (f)
+            (let ((v (make-array n-layers)))
+              (dotimes (l n-layers v) (setf (aref v l) (funcall f l)))))))
+    (labels ((tensor (name) (gguf:tensor file name))
+             (layer-tensor (l suffix)
+               (tensor (format nil "blk.~a.~a" l suffix)))
+             (required (l suffix)
+               ;; a tensor every block must have: a missing one is a naming
+               ;; error, reported by name rather than as a nil downstream
+               (or (layer-tensor l suffix)
+                   (error "gguf: blk.~a.~a is missing from ~a" l suffix path))))
+      (let* ((emb (tensor "token_embd.weight"))
+             (wcls (or (tensor "output.weight") emb))
+             (rms-final
+              (or (tensor "output_norm.weight")
+                  (tensor "token_embd_norm.weight")))
+             (wq (make-array n-layers))
+             (gate (make-array n-layers)))
+        ;; the attention projections; Qwen3.5's attn_q keeps HF's query | gate
+        ;; interleave, told by its row count
+        (dotimes (l n-layers)
+          (let ((w (layer-tensor l "attn_q.weight")))
+            (cond ((null w))
+                  ((= (array-dimension w 0) (* 2 n-heads head-size))
+                   (multiple-value-bind (q g)
+                       (split-gated-q w n-heads head-size)
+                     (setf (aref wq l) q)
+                     (setf (aref gate l) g)))
+                  (t (setf (aref wq l) w)))))
+        (let* ((weights
+                (list :rms-att (funcall per-layer
+                                (lambda (l) (required l "attn_norm.weight")))
+                      ;; the feed-forward norm is ffn_norm in most families and
+                      ;; post_attention_norm in Qwen3.5's
+                      :rms-ffn (funcall per-layer
+                                        (lambda (l)
+                                          (or (layer-tensor l "ffn_norm.weight")
+                                              (required l
+                                               "post_attention_norm.weight"))))
+                      :wq wq
+                      :attn-gate gate
+                      :wk (funcall per-layer
+                           (lambda (l) (layer-tensor l "attn_k.weight")))
+                      :wv (funcall per-layer
+                           (lambda (l) (layer-tensor l "attn_v.weight")))
+                      :wo (funcall per-layer
+                           (lambda (l) (layer-tensor l "attn_output.weight")))
+                      :q-norm (funcall per-layer
+                                       (lambda (l)
+                                         (layer-tensor l "attn_q_norm.weight")))
+                      :k-norm (funcall per-layer
+                                       (lambda (l)
+                                         (layer-tensor l "attn_k_norm.weight")))
+                      :w1 (funcall per-layer
+                                   (lambda (l) (required l "ffn_gate.weight")))
+                      :w3 (funcall per-layer
+                                   (lambda (l) (required l "ffn_up.weight")))
+                      :w2 (funcall per-layer
+                                   (lambda (l) (required l "ffn_down.weight")))
+                      ;; the Gated DeltaNet blocks (Qwen3.5): ssm_a is -exp(A_log)
+                      ;; already, ssm_conv1d already conv_dim x kernel
+                      :ssm-qkv (funcall per-layer
+                                (lambda (l) (layer-tensor l "attn_qkv.weight")))
+                      :ssm-z (funcall per-layer
+                              (lambda (l) (layer-tensor l "attn_gate.weight")))
+                      :ssm-beta (funcall per-layer
+                                         (lambda (l)
+                                           (layer-tensor l "ssm_beta.weight")))
+                      :ssm-alpha (funcall per-layer
+                                          (lambda (l)
+                                            (layer-tensor l
+                                                          "ssm_alpha.weight")))
+                      :ssm-conv (funcall per-layer
+                                         (lambda (l)
+                                           (layer-tensor l
+                                                         "ssm_conv1d.weight")))
+                      :ssm-a (funcall per-layer
+                                      (lambda (l) (layer-tensor l "ssm_a")))
+                      :ssm-dt-bias (funcall per-layer
+                                    (lambda (l) (layer-tensor l "ssm_dt.bias")))
+                      :ssm-norm (funcall per-layer
+                                         (lambda (l)
+                                           (layer-tensor l "ssm_norm.weight")))
+                      :ssm-out (funcall per-layer
+                                (lambda (l) (layer-tensor l "ssm_out.weight")))
+                      ;; the short-conv blocks (LFM2)
+                      :conv-in (funcall per-layer
+                                        (lambda (l)
+                                          (layer-tensor l
+                                           "shortconv.in_proj.weight")))
+                      :conv-w (funcall per-layer
+                                       (lambda (l)
+                                         (layer-tensor l
+                                          "shortconv.conv.weight")))
+                      :conv-out (funcall per-layer
+                                         (lambda (l)
+                                           (layer-tensor l
+                                            "shortconv.out_proj.weight")))))
+               (hidden (array-dimension (aref (getf weights :w1) 0) 0))
+               (fields (gguf:tokenizer-fields meta)))
+          (append (model-options head-size options)
+                  (list :dim dim
+                        :hidden hidden
+                        :n-layers n-layers
+                        :n-heads n-heads
+                        :n-kv-heads n-kv-heads
+                        :vocab (array-dimension emb 0)
+                        :seq-len seq-len
+                        :head-size head-size
+                        :kv-dim (* head-size n-kv-heads)
+                        :q-dim (* head-size n-heads)
+                        :eos (getf fields :eos)
+                        :emb emb
+                        :rms-final rms-final
+                        :wcls wcls
+                        :gguf-tokenizer fields
+                        :add-bos (gguf:metadata-value meta
+                                  "tokenizer.ggml.add_bos_token" t)
+                        :layers (transformer-layers n-layers head-size weights
+                                                    options))))))))
+
+(defun load-gguf-tokenizer (model)
+  ;; The tokenizer the GGUF carries: byte-level BPE (model "gpt2") or
+  ;; SentencePiece ("llama"), each in the shape the tokenizer package takes.
+  ;; A BOS the file says not to add (Qwen) is left out of the tokenizer.
+  (let* ((f (getf model :gguf-tokenizer))
+         (bos (and (getf model :add-bos) (getf f :bos))))
+    (if (string= (getf f :model) "llama")
+        (tokenizer:make-sentencepiece (getf f :tokens) (getf f :scores)
+                                      :bos bos
+                                      :eos (getf f :eos))
+        (let ((specials '())
+              (tokens (getf f :tokens))
+              (types (getf f :token-type)))
+          ;; token type 3 = control: the special tokens matched whole
+          (when types
+            (dotimes (i (length types))
+              (when (= (aref types i) 3) (push (aref tokens i) specials))))
+          (tokenizer:make-bpe tokens (getf f :merges)
+                              :kind (getf f :pre)
+                              :specials specials
+                              :bos bos
+                              :eos (getf f :eos))))))
+
 (defun checkpoint-directory (path)
   ;; The directory of a Hugging Face checkpoint, with its trailing slash; nil
   ;; for llama2.c's .bin.
-  (cond ((and (> (length path) 4)
-              (string= path ".bin" :start1 (- (length path) 4)))
-         nil)
+  (cond ((ends-with-p path ".bin") nil)
+        ((ends-with-p path ".gguf") nil)
         ((char= (char path (- (length path) 1)) #\/) path)
         (t (concatenate 'string path "/"))))
 
+(defun ends-with-p (string suffix)
+  (and (>= (length string) (length suffix))
+       (string= string suffix :start1 (- (length string) (length suffix)))))
+
 (defun load-model (path)
-  ;; llama2.c's .bin, or a Hugging Face checkpoint directory.
-  (let ((dir (checkpoint-directory path)))
-    (if dir (load-hf-checkpoint dir) (load-checkpoint path))))
+  ;; llama2.c's .bin, a GGUF, or a Hugging Face checkpoint directory.
+  (cond ((ends-with-p path ".bin") (load-checkpoint path))
+        ((ends-with-p path ".gguf") (load-gguf-checkpoint path))
+        (t (load-hf-checkpoint (checkpoint-directory path)))))
 
 ;;; --- the tokenizer ------------------------------------------------------------
 ;;; Both tokenizers are the shipped tokenizer: package; this file only reads
@@ -1518,10 +1753,12 @@
     (setq *steps* (getf model :seq-len)))
   (let* ((dir (checkpoint-directory *checkpoint*))
          (tk
-          (if (and dir (null (flag-value "-z")) (getf model :tokenizer)
-                   (probe-file (concatenate 'string dir "tokenizer.json")))
-              (load-hf-tokenizer dir (getf model :tokenizer))
-              (load-tokenizer *tokenizer* (getf model :vocab))))
+          (cond ((and (getf model :gguf-tokenizer) (null (flag-value "-z")))
+                 (load-gguf-tokenizer model))
+                ((and dir (null (flag-value "-z")) (getf model :tokenizer)
+                      (probe-file (concatenate 'string dir "tokenizer.json")))
+                 (load-hf-tokenizer dir (getf model :tokenizer)))
+                (t (load-tokenizer *tokenizer* (getf model :vocab)))))
          (prompt
           (if (and (string= *mode* "chat") (getf model :chat))
               (format nil (getf model :chat) *prompt*)

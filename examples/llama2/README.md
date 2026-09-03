@@ -111,6 +111,15 @@ bus is the ceiling; the single thread, at 8.4 GB/s, is not bandwidth-bound.
 Halving the bytes (bf16 weights, `.todo/484` / `.todo/487`) is the lever, not
 more threads.
 
+The same model as a GGUF -- one file, its tokenizer inside, read by the shipped
+[`gguf:`](../../doc/en/reference/functions/gguf.md) package -- prints the same 40
+tokens (`Llama TinyLlama-1.1B-Chat-v1.0-f16.gguf -t 0 -i "Once upon a time"`):
+a `convert_hf_to_gguf.py` conversion permutes Q and K into llama.cpp's adjacent-
+pair RoPE layout, which is `:pairs`, the layout the `.bin` loader has always
+used. And `stories15M.bin` converted with `llama.cpp`'s
+`llama-convert-llama2c-to-ggml` tells the 60-token story above token for token
+-- `run.c`'s own text, out of a GGUF.
+
 ### Qwen3.5-0.8B
 
 The first hybrid: 18 Gated DeltaNet blocks and 6 gated-attention blocks
@@ -135,9 +144,20 @@ java --add-modules jdk.incubator.vector -Xmx16g Llama Qwen3.5-0.8B -m chat -t 0 
 Barnaby was a small, fluffy cat with a tail that was always a perfect ...
 ```
 
+The same model as ggml-org's `Qwen3.5-0.8B-BF16.gguf` -- one file, the tokenizer
+inside it, read by the shipped
+[`gguf:`](../../doc/en/reference/functions/gguf.md) package -- answers the same
+prompt with the same text, token for token, and needs no `tokenizer.json`
+(`Llama Qwen3.5-0.8B-BF16.gguf -m chat ...`). A `Q8_0` file is refused by
+name until the quantized weight matrix exists. `llama.cpp` on the same GGUF,
+same prompt, thinking off, tells the same cat's story in other words -- the
+same "Barnaby", a different sentence -- which is what two implementations at
+temperature 0 give each other; byte identity is the Q8_0 check's job.
+
 Measured on the same box as the TinyLlama rows, JVM class output, f32 weights
 (the load line: 7.1-7.6 s for 1.75 GB of bf16 into 3 GB, of which
-`tokenizer.json` + the KV cache 2.4-2.7 s):
+`tokenizer.json` + the KV cache 2.4-2.7 s; from the GGUF 7.2 s, its tokenizer
+0.75 s):
 
 | | tok/s | loadavg |
 | --- | --- | --- |

@@ -2,13 +2,23 @@
 
 Difficulty: High
 
-Part of `.todo/670`. Depended on `.todo/484` / `.todo/485` (its oracle and its
-`dequantize` target are `#bf16`) and on `.todo/671` (its scales are f16 in a GGUF); **all
-three closed 2026-09-03** -- `#bf16` exists on the interpreter and the JVM, and
-`rontolisp:widen-float-bits` / `narrow-float-bits` read f16 bits in bulk. Nothing this
-item needs is waiting on another item now; note only that `widen-float-bits` still
-declines a `#bf16` DESTINATION ("does not yet", `.todo/487` steps 3-5), so a dequantize
-into `#bf16` goes through `(setf aref)` or its own kernel until 487 lands.
+Part of `.todo/670`. `.todo/484` and `.todo/485` (the `#bf16` array this dequantizes
+into and checks against) and `.todo/671` (the f16 scales a GGUF carries) all closed
+2026-09-03, so nothing here is waiting. `.todo/673` (closed 2026-09-03 with the GGUF
+loader in `examples/llama2/llama2.lisp`) landed the GGUF reader, which declines a Q8_0
+tensor by name when its body is asked for -- metadata, the tensor directory and the
+F16 / BF16 / F32 tensors all read, so this item begins from a model whose shape and
+vocabulary are already loadable, and replaces a decline with an implementation. The
+replacement surface is two places: `gguf::%read-tensor`'s `(= type 8)` branch and one
+`handler-case` in `ci-spec.yaml`.
+
+Two things to know that are NOT waits. `rontolisp:widen-float-bits` still declines a
+`#bf16` DESTINATION ("does not yet", `.todo/487` steps 3-5), so a dequantize into
+`#bf16` goes through `(setf aref)` or its own kernel until 487 lands. And `.todo/691`
+(three hand-written UTF-8 decoders, which disagree on malformed input) is worth reading
+first, but it does NOT gate this item: 673 reads Qwen3.5's GGUF metadata and vocabulary
+today, so the decoder is already adequate for this path. 691 bites `tokenizer.json`
+(`.todo/674`'s side), not the GGUF.
 
 Measured 2026-09-03 (`.todo/482-bfloat16-a-narrow-width-that-pays/Quant.java`, record in
 the README's round 2, section 5): a GEMV over Q8_0 weights with the activation quantized

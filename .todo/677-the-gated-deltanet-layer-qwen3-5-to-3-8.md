@@ -2,8 +2,11 @@
 
 Difficulty: High
 
-Part of `.todo/670`. Depends on `.todo/676` (the layer-kind table, QK-norm, partial
-RoPE), `.todo/673` / `.todo/675`, `.todo/674` (the Qwen3.5 pre-tokenizer).
+Part of `.todo/670`. `.todo/676` (the layer-kind table, QK-norm, partial RoPE) and
+`.todo/674` (the Qwen3.5 pre-tokenizer) closed 2026-09-03; `.todo/675` landed the
+safetensors reader and `.todo/673` the GGUF one. Nothing here waits on a reader any
+more. What remains waiting is the bf16 `tok/s` row, which needs `.todo/485` and
+`.todo/488`'s wiring -- see `.todo/489`.
 
 **Why this model**: the user wants the newest small models, and as of 2026-09-03 the
 newest Qwen with a small member is Qwen3.5 (2026-06: 0.8B / 2B / 4B / 9B dense; 3.6 and
@@ -126,17 +129,37 @@ What the real config taught, against this item's text and the `qwen35` row:
   reader of its own until that lands.
 - `max_position_embeddings` 262144 is capped to 4096 for the KV cache (`*seq-len-cap*`).
 
+**From the GGUF too** (later the same day): ggml-org's `Qwen3.5-0.8B-BF16.gguf` through
+`load-gguf-checkpoint` (`.todo/673` items 4-7) answers the SAME text as the safetensors,
+token for token, in both modes -- the chat answer above, and `-i "Once upon a time"`
+continuing "You know, in our normal world, atoms are made up" from both files -- at
+2.58 / 2.92 tok/s (loadavg 1.4 / 4.8), load 7.2 s (the tokenizer comes with the file:
+0.75 s). The `Q8_0` file is refused by name at `token_embd.weight` (`.todo/672`). The one
+naming trap: Qwen3.5's feed-forward norm is `blk.N.post_attention_norm.weight`, not
+`ffn_norm`.
+
+**Against `llama.cpp`** (built from master in the scratchpad, `llama-cli -m
+Qwen3.5-0.8B-BF16.gguf -p "Tell me a short story about a cat." --temp 0 -n 64 -st
+--chat-template-kwargs '{"enable_thinking":false}'`): "In the quiet, dusty corner of
+the old bakery, lived **Barnaby**, a cat with a coat of soft, burnt-orange fur and a
+tail that twitched when he felt the wind. Barnaby was not a cat of the big, sleek
+breeds; he was a cat of the cozy, scruffy kind" -- the same character, the same voice,
+a different sentence: coherent by eye on both, not token-identical (bf16 ggml kernels
+against f32 GEMVs, and its jinja rendering of the template against this file's literal
+one). Byte identity is `.todo/672`'s Q8_0 check, not this one's.
+
 Checkpoint on dorian (not in the repository):
 `/tmp/claude-1000/-home-administrator-rontolisp/2657f381-d6c4-4d97-93ab-c64450bd10ac/scratchpad/qwen35/`
 (`config.json`, `model.safetensors.index.json`, `model.safetensors-00001-of-00001.safetensors`
-1.75 GB, `tokenizer.json`, `tokenizer_config.json`; TinyLlama-1.1B-Chat beside it in
-`../tinyllama/`, LFM2.5-1.2B-Instruct in `../lfm25/`).
+1.75 GB, `tokenizer.json`, `tokenizer_config.json`; the GGUFs in `../qwen35-gguf/`
+(`Qwen3.5-0.8B-BF16.gguf` 1.56 GB, `Qwen3.5-0.8B-Q8_0.gguf` 0.83 GB); TinyLlama-1.1B-Chat
+in `../tinyllama/`, LFM2.5-1.2B-Instruct in `../lfm25/`; `llama-cli` built in
+`../llama.cpp/build/bin/`).
 
 ## Remaining
 
-- The same text from the GGUF (`.todo/673`, landed by A2; `llama2.lisp` has no GGUF
-  `load-*` yet) and the comparison by eye with `llama.cpp` on the same prompt; the
-  `tok/s` rows at f32 and bf16 on a quiet box, into the README and `.todo/489`.
+- The `tok/s` rows at bf16 (`.todo/485`), and at f32 on a quiet box, into the README
+  and `.todo/489`.
 - `.todo/678`'s LFM2.5 run through the same path (next week; its files are downloaded).
 
 ## Verify

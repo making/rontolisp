@@ -33,17 +33,17 @@ so `.todo/488` now takes its numbers under both JITs.
 
 ## Children, and the order
 
-| item | what | difficulty |
-| --- | --- | --- |
-| `671` | f16 and bf16 **bits** widened in bulk into an existing width, on every backend | Low |
-| `673` | read a GGUF: metadata, tensor table, F32 / F16 / BF16 / Q8_0 tensors, tokenizer fields | Medium |
-| `675` | read a safetensors file (+ `config.json`) | Low |
-| `674` | the byte-level BPE tokenizer (SmolLM2, Qwen, Llama 3) from the GGUF fields or `tokenizer.json` | Medium |
-| `672` | the Q8_0 quantized weight matrix and its integer-dot `vec:matvec` | High |
-| `676` | the forward pass as a table of layer kinds: QK-norm, NoPE, gates, partial RoPE, multipliers (Qwen3, SmolLM3, Granite) | Medium |
-| `677` | the Gated DeltaNet layer: Qwen3.5-0.8B, and with it every Qwen 3.5-3.8 dense model | High |
-| `678` | the LFM2 gated short-conv layer: LFM2.5-1.2B-Instruct, the newest ~1B model | Medium |
-| `489` | the model rungs: TinyLlama / SmolLM2 (loader shakeout), Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High |
+| item | what | difficulty | state |
+| --- | --- | --- | --- |
+| `671` | f16 and bf16 **bits** widened in bulk into an existing width, on every backend | Low | **closed 2026-09-03** |
+| `673` | read a GGUF: metadata, tensor table, F32 / F16 / BF16 / Q8_0 tensors, tokenizer fields | Medium | **closed 2026-09-03** |
+| `675` | read a safetensors file (+ `config.json`) | Low | reader done; `#bf16` target waits on `485` |
+| `674` | the byte-level BPE tokenizer (SmolLM2, Qwen, Llama 3) from the GGUF fields or `tokenizer.json` | Medium | **closed 2026-09-03** |
+| `672` | the Q8_0 quantized weight matrix and its integer-dot `vec:matvec` | High | not started; `673` leaves it one branch to replace |
+| `676` | the forward pass as a table of layer kinds: QK-norm, NoPE, gates, partial RoPE, multipliers (Qwen3, SmolLM3, Granite) | Medium | **closed 2026-09-03** |
+| `677` | the Gated DeltaNet layer: Qwen3.5-0.8B, and with it every Qwen 3.5-3.8 dense model | High | Qwen3.5-0.8B runs from both formats; bf16 `tok/s` waits on `485` |
+| `678` | the LFM2 gated short-conv layer: LFM2.5-1.2B-Instruct, the newest ~1B model | Medium | not started; the LFM2.5 files are downloaded |
+| `489` | the model rungs: TinyLlama / SmolLM2 (loader shakeout), Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High | f32 rungs measured for two models; bf16 rungs wait on `485` + `488` |
 
 **Order: 671 -> 673 / 675 -> 674 -> 489 rung 0 at f32 -> 676 -> 678 -> 677 ->
 `.todo/482`'s 483-488 -> 489 at bf16 -> 672 -> 490.** (676-678 are pure Lisp over the
@@ -53,46 +53,95 @@ the readers and the model are debugged at f32 (4.4 GB, fits) with the kernels ou
 picture, and the width then halves a run that already works. 672 comes after the width
 because its scalar oracle and its `dequantize` target are `#bf16`.
 
-## Lanes for two orchestrators, three workers each (2026-09-03)
+## What landed on 2026-09-03, and what it proved
 
-The user's constraints: the primary goal is Qwen3.5-0.8B, bf16 is wanted anyway for
-weaker machines, at most three workers per box, and the work split so that one
-orchestrator needs no GPU. The split falls out of the dependency graph: **A is the model
-side and is pure Lisp plus one small Java item; B is the width side and is the only half
-that touches `LinalgGpu` / the device.** A can run on any machine with a JDK and network
-(the checkpoints are downloads); B runs on the GB10 box, where the parent runs Maven
-ONE lane at a time (two Maven runs in one tree void both, and the box cannot absorb
-concurrent builds) with each lane in its own worktree.
+**A published checkpoint runs, in three formats, with no Python and no conversion step**:
 
-**Orchestrator A -- no GPU** (Lisp; Java only in 671):
+- **Qwen3.5-0.8B** from its BF16 safetensors AND from ggml-org's BF16 GGUF -- **token for
+  token identical between the two**, chat and generate. `llama.cpp` on the same file and
+  prompt tells the same story in different words (its bf16 ggml kernels against an f32
+  GEMV, and a jinja template against a hand-written one); byte equality is `.todo/672`'s
+  check, not this one's.
+- **TinyLlama-1.1B-Chat** from safetensors and from an F16 GGUF, same forty tokens.
+- **stories15M converted to GGUF** answers with `run.c`'s own text, token for token --
+  the one external oracle among these, and the one that caught a live bug (the
+  architecture row was being matched by which options it carried, so the all-defaults
+  `llama` row was rejected as unsupported).
 
-| wave | lane A1 | lane A2 | lane A3 |
-| --- | --- | --- | --- |
-| 1 | `671` (bits -> `#f`, all backends) | `674` tokenizer as a NEW `tokenizers.lisp` -- does not edit `llama2.lisp` | `676` the layer-kind refactor of `llama2.lisp` against the `.bin` path (stories15M identical) |
-| 2 | `675` then `673` (the readers share one staging loop; same worker) | `678` LFM2 (needs A1's reader + own tokenizer) | `677` Gated DeltaNet (needs A1's reader, A2's tokenizer, own table) |
-| 3 | `489` rungs 0-1 at f32: TinyLlama, Qwen3-0.6B | `489` rung 2: LFM2.5-1.2B, numbers | `489` rung 3: Qwen3.5-0.8B, numbers |
+Closed: `671`, `673`, `674`, `676`, and on the width side `480`, `484`, `486` and
+`487` step 1.
 
-Ownership that avoids merge conflicts inside A: A1 owns the readers and `671`'s Java;
-A2 owns `tokenizers.lisp`; A3 owns `llama2.lisp` / `llm.lisp`. Wiring a tokenizer or a
-reader into the model file is A3's job in wave 2, never A2's or A1's.
+**The f32 rungs are measured, and they say what bf16 has to beat** (host dorian, Xeon
+E5-2697A v4, 64 threads, JVM class output, `--simd`):
 
-**Orchestrator B -- the GB10 box** (the width chain, and everything that can be split
-off it before the array type exists):
+| | 1 thread | `--parallel` | bytes/token | parallel bandwidth |
+| --- | --- | --- | --- | --- |
+| Qwen3.5-0.8B | 2.00-2.92 tok/s | 8.56 tok/s | 3.2 GB | **27.0 GB/s** |
+| TinyLlama-1.1B | 1.58-1.91 tok/s | 6.97 tok/s | 4.4 GB | **30.7 GB/s** |
 
-| wave | lane B1 | lane B2 | lane B3 |
-| --- | --- | --- | --- |
-| 1 | `483` the exhaustive-switch refactor (touches `LinalgGpu`: needs the GPU suite green) | `487` step 1 only: `bfloat16-bits` / `bits-bfloat16` on all four backends, and `FloatText.bfloat16Text` (`484` step 4) -- pure functions, no array type | `488`'s kernels as standalone methods over a bare `short[]` in both kernel files, the fused == widen-then-f32 test, and the both-JIT bench harness (`Jit.java`'s shape); not yet intercepted |
-| 2 | `484` then `485` | `486` (after 484; the `--gpu` / `--blas` decline arms need the device suite) then the rest of `487` (after 485) | `490` step 1-2: `gemv_bf16` PTX and the `GpuDevice` width, tested standalone against B3's CPU kernel as oracle |
-| 3 | `488` wiring into the `--simd` / `--parallel` interception, both-JIT numbers | `672` Q8_0 (after 485; its f16 scales need A's `671`) | `490` integration: residency map, threshold, the cap |
-| 4 | `489` at bf16: rungs 1-3 re-measured (needs A's wave 2) | README numbers, `.kb/vec.md` / `.kb/gpu.md` records | -- |
+**Two independent models on one ceiling**: the parallel leg is DRAM-bound, not
+thread-bound, which is why 64 threads buy about 4x over one. The single-thread leg is at
+8.4 and 5.0 GB/s and is bound by something else. `.todo/489` carries the prediction this
+makes -- and the precondition that `.todo/485` alone does not satisfy it, because
+`eval/VecSimd` declines a bf16 array at every dispatch point until `.todo/488`'s wiring
+lands.
 
-Hand-offs across the two: A pushes `671` first (B's `672` and any bf16-target loading
-read through it); B pushes `485` (A's readers gain the `#bf16` target, one keyword);
-A pushes `677` (B's wave 4 measures it). Nothing else crosses. `671` and `483` both
-touch `Environment` at a few sites -- whichever lands second merges.
+## Lanes for the week of 2026-09-08: two orchestrators, TWO workers each
 
-Per-lane sizing: A1 Low+Medium, A2 Medium, A3 Medium then High (677 wants a Fable-class
-model); B1 Medium then High (485 is the crux), B2 Low then Medium, B3 Medium then High.
+Everything that is left is either A's model work or B's width work, and the two cross at
+exactly one point in each direction, so three lanes a side is more parallelism than the
+graph has. **The one hand-off that gates the week: B lands `485` and then `488`'s
+interception; A's bf16 rungs cannot be measured until both are in.** Until then A works
+the items that need neither.
+
+**Orchestrator A -- the model side, no GPU:**
+
+| wave | lane A1 | lane A2 |
+| --- | --- | --- |
+| 1 | `678` LFM2.5-1.2B: the gated short-conv layer end to end, both formats, the way `677` went (Medium) | `489` f32 rungs, finishing the set: **Qwen3-0.6B has not been run at all**, then SmolLM2 (High) |
+| 2 | `682` rename `examples/llama2` -> `examples/llm` -- **its trigger fired twice on 2026-09-03** and nobody noticed (Medium) | `489` at bf16, against the prediction already written there, the moment B's `488` wiring lands; then close `675` and `677` (High) |
+| 3 | `688` the corpus tests' duplicated splice chain, and the "a test that prints a compiler warning must assert on it" rule (Medium) | `490`'s A-side numbers if B gets that far (High) |
+
+A1 owns `examples/llm/*` in wave 2 (the rename), so A2 must not edit those files that
+wave; A2 owns the measurements and the `.todo/489` record throughout.
+
+**Orchestrator B -- the GB10 box, the width chain and the device** (B's own call; this is
+what A's half needs from it, in the order A needs it):
+
+| wave | lane B1 | lane B2 |
+| --- | --- | --- |
+| 1 | `488`'s interception into `--simd` / `--parallel` -- **the kernels already exist in `VecSimdKernels`; only the wiring is missing**, and A's bf16 rungs are blocked on it (High) | `691` then `690`: one `octets-to-string` builtin, the three hand-written UTF-8 decoders folded onto it, and the character-index walk that makes a 13 MB `tokenizer.json` unparseable (Low, then Medium) |
+| 2 | `672` Q8_0: `.todo/673` leaves exactly one branch and one ci-spec `handler-case` to replace, over a reader whose metadata and directory already work. **It does NOT wait on `691`** -- that was said before `673` landed, and the GGUF metadata and vocabulary now demonstrably read; `691` matters to `tokenizer.json`, which is `674`'s side (High) | `487`'s remainder, including the census of every site that hand-writes the bf16 arithmetic -- **seven copies of it on develop today, and three of them lost the same 126 NaN patterns for three different reasons on one day** (Medium) |
+| 3 | `490` bf16 on the device (High) | `687` first, then `683`: both say they wait on items that closed, but `486` defining `FloatWidth` made `687` nearly mechanical while `683` still needs a reflection-test design (Medium) |
+
+Sizing: A1 Medium, A2 High (a Fable-class model); B1 High, B2 Low-to-Medium then Medium.
+
+**Standing rules this run earned, in the order they cost the most:**
+
+1. **Only the closer can write back a dependency.** Six items closed on 2026-09-03 and
+   twelve open todos still read as blocked by them the same afternoon. The `grep` for
+   items naming the number now sits beside the history row in the close procedure.
+2. **Sort every "Remaining" into blocked / not-done / deferred.** Only the first is a
+   real remainder; the second is unstarted work wearing a blocker's clothes, and the
+   third evaporates without an owner and a date. Of A's nine Remaining lines, two were
+   genuinely blocked.
+3. **One session runs the full suite on `develop`; the other runs the GPU legs.** Three
+   reds on 2026-09-03 were invisible from every lane's own worktree: one because a new
+   shipped library changed an existing test's input, two because two lanes' changes were
+   each correct alone.
+4. **Separately from who owns what: never two device-touching runs at once.** `./mvnw
+   test` includes `GpuTest`, so a full suite IS a device-touching run -- the GPU legs and
+   any lane's full suite are serial on that box. Stated as one rule with the line above it
+   produced a self-contradictory instruction on 2026-09-03 ("do not run the GPU tests" and
+   "run the full suite", to the same lane). Ownership says who takes which result;
+   exclusion says what may run at the same time. They are not the same rule.
+5. **A suite can hold a defect invisibly while every case sits on one side of its
+   condition** -- and the half that looks more exhaustive is the half that hides it.
+   Three instances in one day: the 1496-error compile regression (the corpus called the
+   function, the standalone cases did not); `PRINT_OBJECT_VECTOR_ARM` excluding a packed
+   width by name, which shows only in a program containing `read-from-string`; and
+   `.todo/692`, filed against a `.todo/671` that closed claiming all four backends --
+   its tests counted backends and never counted `--simd` on each.
 
 ## What is deliberately not in the plan
 
