@@ -94,6 +94,39 @@ binding is simply never found -- 671's four built-ins were all unreachable this 
 2026-09-03. `ShadowedBuiltinsTest` catches the wrapper half; nothing catches the
 `Environment` half but a test that calls the operator.
 
+## Refusing a width: which kind, and how you can tell
+
+Three behaviours, and the last two are worth telling apart deliberately because prose
+cannot do it.
+
+**A silent DECLINE returns `null` (or `false`) and the rung below answers.** `VecSimd`,
+`LinalgSimd`, `LinalgGpu`, `LinalgBlas`: no lane, device or CBLAS kernel reads this width,
+so the scalar defun runs and the ANSWER is identical, only slower. Nothing is signalled
+because nothing is wrong.
+
+**A TEMPORARY refusal is a `LispEvalException`, raised at RUN time** by the primitive that
+has not been extended yet, and its message says "does not yet". `FloatBitsWidening`'s two
+arms and `linalg.lisp`'s `%la-make` / `%la-etype` guards are these.
+
+**A PERMANENT refusal is a `LispCompileException`, raised on the COMPILE path**, carrying
+a source position and naming both the width and the backend -- "bfloat16 arrays are
+supported on the interpreter and the JVM only". The backends that will never carry the
+width refuse this way (`.todo/486`).
+
+**The phase and the exception type carry the distinction; the prose only decorates it.**
+Told apart by the word "yet" alone, the difference is invisible to every test and is the
+first thing an edit loses. It cannot be delegated to a `.todo/NNN` reference in the
+message either -- a source comment or message may not carry the working item's number --
+so the type has to be what says it. Two tests hold the line: one per backend on the exact
+refusal text, and one -- the load-bearing one -- asserting that every message containing
+"does not yet" comes out as a `LispEvalException` rather than a compile error, so a
+temporary refusal written in the permanent form goes red.
+
+The refusals READ a width, which is why `.todo/486` also introduces the width designator
+`.todo/687` needs: a refusal written against a boolean is one a fourth width falls
+silently past. An integer code with a `default:` arm is the trap -- it admits a third
+value while re-importing exactly the silence being removed.
+
 ## Printing
 
 `FloatText.bfloat16Text` is the shortest decimal that reads back as the same bfloat16.
