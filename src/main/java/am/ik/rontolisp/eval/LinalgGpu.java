@@ -6,12 +6,13 @@ import java.util.Map;
 import java.util.function.Function;
 
 import am.ik.rontolisp.FloatArrayAccessHook;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
-import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSingleFloatArray;
@@ -325,6 +326,8 @@ public final class LinalgGpu {
 				double[] y = LinalgGpuKernels.matvec(m.storage(), doubles(x), rows, cols);
 				yield y == null ? null : new LispDoubleFloatArray(y, dims);
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -356,6 +359,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.takeRows(d.storage(), a.totalSize(), rows, slab);
 				yield c == null ? null : new LispDoubleFloatArray(c, od);
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -385,6 +390,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.pick(d.storage(), columns, cols);
 				yield c == null ? null : new LispDoubleFloatArray(c, od);
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -413,6 +420,8 @@ public final class LinalgGpu {
 				LinalgGpuKernels.scatterRows(single.storage(), z.dims()[0], floats(g), rows, slab);
 			case LispDoubleFloatArray d ->
 				LinalgGpuKernels.scatterRows(d.storage(), z.dims()[0], doubles(g), rows, slab);
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> false;
 		};
 		return ran ? z : null;
 	}
@@ -436,6 +445,8 @@ public final class LinalgGpu {
 		Double total = switch (g) {
 			case LispSingleFloatArray f -> LinalgGpuKernels.sumSquares(f.storage(), f.totalSize(), acc);
 			case LispDoubleFloatArray d -> LinalgGpuKernels.sumSquares(d.storage(), d.totalSize(), acc);
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 		return total == null ? null : new LispDouble(total);
 	}
@@ -475,6 +486,8 @@ public final class LinalgGpu {
 				LinalgGpuKernels.rngFill(d.storage(), d.totalSize(), mode, lo, span, w[0], w[1], w[2]);
 			case LispSingleFloatArray f ->
 				LinalgGpuKernels.rngFill(f.storage(), f.totalSize(), mode, lo, span, w[0], w[1], w[2]);
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 		return end == null ? null : new LispDoubleFloatArray(end, new int[] { 3 });
 	}
@@ -513,6 +526,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.softmax(x.storage(), rows, len);
 				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -545,6 +560,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.softmaxGrad(x.storage(), doubles(out), rows, len);
 				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -641,6 +658,8 @@ public final class LinalgGpu {
 						scaleOp, sf, fill);
 				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -684,6 +703,8 @@ public final class LinalgGpu {
 						maskLen, rows, len, scaleOp, sf);
 				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -717,6 +738,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.logSoftmax(x.storage(), rows, len);
 				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -749,6 +772,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.logSoftmaxGrad(x.storage(), doubles(out), rows, len);
 				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -767,6 +792,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.gelu(x.storage(), a.totalSize());
 				yield c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -793,6 +820,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.geluGrad(gd.storage(), doubles(x), old == null ? null : doubles(old), n);
 				yield c == null ? null : new LispDoubleFloatArray(c, g.dims().clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -821,6 +850,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.layerNorm(xd.storage(), rows, len, eps);
 				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -856,6 +887,8 @@ public final class LinalgGpu {
 						rows, len, eps);
 				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -890,6 +923,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.layerNormAffine(xd.storage(), doubles(w), doubles(b), rows, len, eps);
 				yield c == null ? null : new LispDoubleFloatArray(c, d.clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -928,6 +963,8 @@ public final class LinalgGpu {
 				yield c == null ? null
 						: pair(new LispDoubleFloatArray(c[0], d.clone()), new LispDoubleFloatArray(c[1], d.clone()));
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1119,6 +1156,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.map(op, x.storage(), n);
 				yield c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1127,6 +1166,7 @@ public final class LinalgGpu {
 		return switch (a) {
 			case LispSingleFloatArray f -> f.storage();
 			case LispDoubleFloatArray d -> d.storage();
+			case LispBFloat16Array b -> b.storage();
 		};
 	}
 
@@ -1213,6 +1253,8 @@ public final class LinalgGpu {
 					double[] c = LinalgGpuKernels.bcast(op, x.storage(), sa, doubles(b), sb, od);
 					yield c == null ? null : new LispDoubleFloatArray(c, od);
 				}
+				// The device carries no bfloat16 kernel; the rung below answers.
+				case LispBFloat16Array ignored -> null;
 			};
 		}
 		// An array with a scalar, either way round: the resident tier's scalar form, over
@@ -1250,6 +1292,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.zip(op, x.storage(), doubles(b), n);
 				yield c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1265,6 +1309,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.scale(op, x.storage(), s, swap, n);
 				yield c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1329,6 +1375,8 @@ public final class LinalgGpu {
 						y == null ? null : doubles(y), sy, yScalar, od);
 				yield c == null ? null : new LispDoubleFloatArray(c, od);
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1365,6 +1413,8 @@ public final class LinalgGpu {
 				LinalgGpuKernels.adamStep(xs.storage(), floats(g), floats(m), floats(v), n, rule);
 			case LispDoubleFloatArray xd ->
 				LinalgGpuKernels.adamStep(xd.storage(), doubles(g), doubles(m), doubles(v), n, rule);
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> false;
 		};
 		return ran ? x : null;
 	}
@@ -1423,6 +1473,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.fold(op, x.storage(), outer, len, inner);
 				yield c == null ? null : new LispDoubleFloatArray(c, od);
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1468,6 +1520,8 @@ public final class LinalgGpu {
 				yield LinalgGpuKernels.copy(x.storage(), base, sa, na, c, 0, so, n, dims)
 						? new LispDoubleFloatArray(c, od) : null;
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1513,11 +1567,14 @@ public final class LinalgGpu {
 			return null;
 		}
 		boolean single = !(args.get(4) instanceof LispNil);
-		boolean operandSingle = switch (a) {
-			case LispSingleFloatArray ignored -> true;
-			case LispDoubleFloatArray ignored -> false;
+		Boolean operandSingle = switch (a) {
+			case LispSingleFloatArray ignored -> Boolean.TRUE;
+			case LispDoubleFloatArray ignored -> Boolean.FALSE;
+			// The width flag the defun passes names one of the two IEEE widths, so a
+			// bfloat16 operand is neither: the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
-		if (single != operandSingle) {
+		if (operandSingle == null || single != operandSingle) {
 			return null;
 		}
 		int rank = od.length;
@@ -1608,6 +1665,10 @@ public final class LinalgGpu {
 		switch (first) {
 			case LispSingleFloatArray ignored -> cf = LinalgGpuKernels.resultF((int) n);
 			case LispDoubleFloatArray ignored -> cd = LinalgGpuKernels.result((int) n);
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> {
+				return null;
+			}
 		}
 		for (int step = 0; step < inputs.size(); step++) {
 			int i = step == 0 ? lead : (step <= lead ? step - 1 : step);
@@ -1622,6 +1683,8 @@ public final class LinalgGpu {
 						a.totalSize(), java.util.Objects.requireNonNull(outF), offsets[i], so, (int) n, dims);
 				case LispDoubleFloatArray x -> LinalgGpuKernels.copy(x.storage(), 0, rowMajorStrides(dims),
 						a.totalSize(), java.util.Objects.requireNonNull(outD), offsets[i], so, (int) n, dims);
+				// The device carries no bfloat16 kernel; the rung below answers.
+				case LispBFloat16Array ignored -> false;
 			};
 			if (!ok) {
 				// A later slab declining after the first was written: the output is a
@@ -1632,6 +1695,8 @@ public final class LinalgGpu {
 		return switch (first) {
 			case LispSingleFloatArray ignored -> new LispSingleFloatArray(java.util.Objects.requireNonNull(cf), od);
 			case LispDoubleFloatArray ignored -> new LispDoubleFloatArray(java.util.Objects.requireNonNull(cd), od);
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1661,6 +1726,8 @@ public final class LinalgGpu {
 		boolean ran = switch (g) {
 			case LispSingleFloatArray f -> LinalgGpuKernels.scaleInPlace(f.storage(), f.totalSize(), s);
 			case LispDoubleFloatArray d -> LinalgGpuKernels.scaleInPlace(d.storage(), g.totalSize(), s);
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> false;
 		};
 		return ran ? g : null;
 	}
@@ -1717,6 +1784,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.gather(x.storage(), sa, od);
 				yield c == null ? null : new LispDoubleFloatArray(c, od);
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1763,6 +1832,8 @@ public final class LinalgGpu {
 				double[] c = LinalgGpuKernels.multiply(x.storage(), doubles(b), n, m, p);
 				yield c == null ? null : new LispDoubleFloatArray(c, dims);
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1859,6 +1930,8 @@ public final class LinalgGpu {
 						: LinalgGpuKernels.multiply(da2, (int) sa, db2, (int) sb, batch, n, m, p);
 				yield c == null ? null : new LispDoubleFloatArray(c, od);
 			}
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 

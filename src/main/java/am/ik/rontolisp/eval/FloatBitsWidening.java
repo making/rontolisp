@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.BFloat16;
 import am.ik.rontolisp.FloatArrayAccessHook;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispIntVector;
@@ -97,6 +98,12 @@ final class FloatBitsWidening {
 					}
 				}
 			}
+			// A bfloat16 destination is a TEMPORARY decline, not an impossibility: from
+			// :bfloat16 patterns it is a straight copy and from :float16 one conversion,
+			// which is a capability to be added deliberately rather than a side effect
+			// of the width existing.
+			case LispBFloat16Array ignored ->
+				throw new LispEvalException(fnName + ": does not yet write a bfloat16 destination");
 		}
 		return dst;
 	}
@@ -170,6 +177,10 @@ final class FloatBitsWidening {
 					}
 				}
 			}
+			// A bfloat16 SOURCE is the same temporary decline as the destination above:
+			// to :bfloat16 patterns it is a straight copy, to :float16 one conversion.
+			case LispBFloat16Array ignored ->
+				throw new LispEvalException(fnName + ": does not yet read a bfloat16 source");
 		}
 		return dst;
 	}

@@ -14,6 +14,8 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.BFloat16;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
@@ -408,7 +410,7 @@ public final class LispReader {
 			case Token.ArrayOpen array -> readArray(array.rank());
 			case Token.StructOpen ignored -> readStruct();
 			case Token.PathnameOpen ignored -> readPathname();
-			case Token.FloatArrayOpen open -> readFloatArray(open.single());
+			case Token.FloatArrayOpen open -> readFloatArray(open.width());
 			case Token.IntVectorOpen open -> readIntVector(open.width());
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
@@ -729,25 +731,40 @@ public final class LispReader {
 	// must be real numbers and every level must be uniformly shaped (ragged or mixed
 	// number/list contents are a read error), reusing the #nA validation. #f = "float"
 	// (single), #d = "double"; free in CL, not Scheme's #f=false.
-	private LispVal readFloatArray(boolean single) {
-		String label = single ? "#f" : "#d";
+	private LispVal readFloatArray(Token.FloatWidth width) {
+		String label = switch (width) {
+			case SINGLE -> "#f";
+			case DOUBLE -> "#d";
+			case BFLOAT16 -> "#bf16";
+		};
 		List<LispVal> rows = readGroupedElements();
 		int rank = inferFloatArrayRank(rows);
 		int[] dims = arrayDimensions(rows, rank, label);
 		List<LispVal> flat = new ArrayList<>();
 		flattenArrayContents(rows, 0, dims, label, flat);
-		if (single) {
-			float[] data = new float[flat.size()];
-			for (int i = 0; i < data.length; i++) {
-				data[i] = (float) coerceFloatLeaf(flat.get(i));
+		return switch (width) {
+			case SINGLE -> {
+				float[] data = new float[flat.size()];
+				for (int i = 0; i < data.length; i++) {
+					data[i] = (float) coerceFloatLeaf(flat.get(i));
+				}
+				yield new LispSingleFloatArray(data, dims);
 			}
-			return new LispSingleFloatArray(data, dims);
-		}
-		double[] data = new double[flat.size()];
-		for (int i = 0; i < data.length; i++) {
-			data[i] = coerceFloatLeaf(flat.get(i));
-		}
-		return new LispDoubleFloatArray(data, dims);
+			case DOUBLE -> {
+				double[] data = new double[flat.size()];
+				for (int i = 0; i < data.length; i++) {
+					data[i] = coerceFloatLeaf(flat.get(i));
+				}
+				yield new LispDoubleFloatArray(data, dims);
+			}
+			case BFLOAT16 -> {
+				short[] data = new short[flat.size()];
+				for (int i = 0; i < data.length; i++) {
+					data[i] = (short) BFloat16.bits(coerceFloatLeaf(flat.get(i)));
+				}
+				yield new LispBFloat16Array(data, dims);
+			}
+		};
 	}
 
 	// Reads a #N@(...) packed integer-vector literal (ironclad's array-reader syntax)

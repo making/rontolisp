@@ -7,7 +7,7 @@ import com.oracle.svm.core.annotate.TargetClass;
  * Web Image substitution for {@link VecSimd}. The browser playground compiles the
  * interpreter to WebAssembly with GraalVM Web Image, which cannot compile
  * {@code jdk.incubator.vector}. {@link VecSimd#available()} and
- * {@link VecSimd#install(Environment, boolean)} are the only two ENTRY POINTS into
+ * {@link VecSimd#install(Environment, LispEvaluator, boolean)} are the only two ENTRY POINTS into
  * {@code VecSimdKernels} (the sole holder of the Vector API) -- every other reference to it
  * lives in private helpers reachable only from {@code install} -- so substituting both
  * makes that class unreachable and keeps the incubator module out of the image. Adding a
@@ -29,7 +29,7 @@ final class Target_VecSimd {
 	}
 
 	@Substitute
-	static void install(Environment globalEnv, boolean parallel) {
+	static void install(Environment globalEnv, LispEvaluator evaluator, boolean parallel) {
 		throw new IllegalStateException("--simd is not available in the browser playground");
 	}
 

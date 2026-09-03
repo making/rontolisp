@@ -5,6 +5,8 @@ import java.util.Arrays;
 import java.util.List;
 
 import am.ik.rontolisp.FloatArrayAccessHook;
+import am.ik.rontolisp.BFloat16;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
@@ -289,6 +291,8 @@ public final class LinalgSimd {
 					b instanceof LispDoubleFloatArray y ? like(a, op.dd().apply(x.data(), y.data())) : null;
 				case LispSingleFloatArray x ->
 					b instanceof LispSingleFloatArray y ? like(a, op.ff().apply(x.data(), y.data())) : null;
+				// No lane kernel reads this width; the scalar defun answers.
+				case LispBFloat16Array ignored -> null;
 			};
 		}
 		if (a != null) {
@@ -296,6 +300,8 @@ public final class LinalgSimd {
 			return s == null ? null : switch (a) {
 				case LispDoubleFloatArray x -> like(a, op.ds().apply(x.data(), s));
 				case LispSingleFloatArray x -> like(a, op.fs().apply(x.data(), s));
+				// No lane kernel reads this width; the scalar defun answers.
+				case LispBFloat16Array ignored -> null;
 			};
 		}
 		if (b != null) {
@@ -303,6 +309,8 @@ public final class LinalgSimd {
 			return s == null ? null : switch (b) {
 				case LispDoubleFloatArray x -> like(b, op.sd().apply(s, x.data()));
 				case LispSingleFloatArray x -> like(b, op.sf().apply(s, x.data()));
+				// No lane kernel reads this width; the scalar defun answers.
+				case LispBFloat16Array ignored -> null;
 			};
 		}
 		return null;
@@ -317,6 +325,8 @@ public final class LinalgSimd {
 		return a == null ? null : switch (a) {
 			case LispDoubleFloatArray x -> like(a, f64.apply(x.data()));
 			case LispSingleFloatArray x -> like(a, f32.apply(x.data()));
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -337,6 +347,8 @@ public final class LinalgSimd {
 					LinalgSimdKernels.bcast(bop, x.data(), a.dims(), y.data(), b.dims(), od), od) : null;
 			case LispSingleFloatArray x -> b instanceof LispSingleFloatArray y ? new LispSingleFloatArray(
 					LinalgSimdKernels.bcastF(bop, x.data(), a.dims(), y.data(), b.dims(), od), od) : null;
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -401,18 +413,28 @@ public final class LinalgSimd {
 			return foldAxis(LinalgSimdKernels.BOP_ADD, args);
 		}
 		LispFloatArray a = nonEmpty(args.get(0));
-		return a == null ? null : new LispDouble(switch (a) {
-			case LispDoubleFloatArray x -> LinalgSimdKernels.sum(x.data());
-			case LispSingleFloatArray x -> LinalgSimdKernels.sumF(x.data());
-		});
+		if (a == null) {
+			return null;
+		}
+		return switch (a) {
+			case LispDoubleFloatArray x -> new LispDouble(LinalgSimdKernels.sum(x.data()));
+			case LispSingleFloatArray x -> new LispDouble(LinalgSimdKernels.sumF(x.data()));
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
+		};
 	}
 
 	private static @Nullable LispVal norm(List<LispVal> args) {
 		LispFloatArray a = nonEmpty(args.get(0));
-		return a == null ? null : new LispDouble(switch (a) {
-			case LispDoubleFloatArray x -> LinalgSimdKernels.norm(x.data());
-			case LispSingleFloatArray x -> LinalgSimdKernels.normF(x.data());
-		});
+		if (a == null) {
+			return null;
+		}
+		return switch (a) {
+			case LispDoubleFloatArray x -> new LispDouble(LinalgSimdKernels.norm(x.data()));
+			case LispSingleFloatArray x -> new LispDouble(LinalgSimdKernels.normF(x.data()));
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
+		};
 	}
 
 	private static @Nullable LispVal extremum(List<LispVal> args, boolean max) {
@@ -420,10 +442,17 @@ public final class LinalgSimd {
 			return foldAxis(max ? LinalgSimdKernels.BOP_MAX : LinalgSimdKernels.BOP_MIN, args);
 		}
 		LispFloatArray a = nonEmpty(args.get(0));
-		return a == null ? null : new LispDouble(switch (a) {
-			case LispDoubleFloatArray x -> max ? LinalgSimdKernels.amax(x.data()) : LinalgSimdKernels.amin(x.data());
-			case LispSingleFloatArray x -> max ? LinalgSimdKernels.amaxF(x.data()) : LinalgSimdKernels.aminF(x.data());
-		});
+		if (a == null) {
+			return null;
+		}
+		return switch (a) {
+			case LispDoubleFloatArray x ->
+				new LispDouble(max ? LinalgSimdKernels.amax(x.data()) : LinalgSimdKernels.amin(x.data()));
+			case LispSingleFloatArray x ->
+				new LispDouble(max ? LinalgSimdKernels.amaxF(x.data()) : LinalgSimdKernels.aminF(x.data()));
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
+		};
 	}
 
 	/**
@@ -458,10 +487,15 @@ public final class LinalgSimd {
 		for (int i = axis + 1; i < d.length; i++) {
 			inner *= d[i];
 		}
-		double[] acc = switch (a) {
-			case LispDoubleFloatArray x -> LinalgSimdKernels.foldAxis(op, x.data(), axlen, outer, inner);
-			case LispSingleFloatArray x -> LinalgSimdKernels.foldAxisF(op, x.data(), axlen, outer, inner);
-		};
+		double[] acc;
+		switch (a) {
+			case LispDoubleFloatArray x -> acc = LinalgSimdKernels.foldAxis(op, x.data(), axlen, outer, inner);
+			case LispSingleFloatArray x -> acc = LinalgSimdKernels.foldAxisF(op, x.data(), axlen, outer, inner);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> {
+				return null;
+			}
+		}
 		int[] od = axisShape(d, axis, keep);
 		if (od.length == 0) {
 			return new LispDouble(acc[0]);
@@ -477,6 +511,9 @@ public final class LinalgSimd {
 				yield new LispSingleFloatArray(out, od);
 			}
 			case LispDoubleFloatArray ignored -> new LispDoubleFloatArray(acc, od);
+			// Declined at the fold above; this is the same answer where the compiler
+			// asks for it.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -489,12 +526,14 @@ public final class LinalgSimd {
 		if (a == null || a.rank() != 1) {
 			return null;
 		}
-		return new LispInteger(switch (a) {
+		return switch (a) {
 			case LispDoubleFloatArray x ->
-				max ? LinalgSimdKernels.argmax(x.data()) : LinalgSimdKernels.argmin(x.data());
+				new LispInteger(max ? LinalgSimdKernels.argmax(x.data()) : LinalgSimdKernels.argmin(x.data()));
 			case LispSingleFloatArray x ->
-				max ? LinalgSimdKernels.argmaxF(x.data()) : LinalgSimdKernels.argminF(x.data());
-		});
+				new LispInteger(max ? LinalgSimdKernels.argmaxF(x.data()) : LinalgSimdKernels.argminF(x.data()));
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
+		};
 	}
 
 	/**
@@ -525,10 +564,15 @@ public final class LinalgSimd {
 		for (int i = axis + 1; i < d.length; i++) {
 			inner *= d[i];
 		}
-		double[] idx = switch (a) {
-			case LispDoubleFloatArray x -> LinalgSimdKernels.argFoldAxis(max, x.data(), axlen, outer, inner);
-			case LispSingleFloatArray x -> LinalgSimdKernels.argFoldAxisF(max, x.data(), axlen, outer, inner);
-		};
+		double[] idx;
+		switch (a) {
+			case LispDoubleFloatArray x -> idx = LinalgSimdKernels.argFoldAxis(max, x.data(), axlen, outer, inner);
+			case LispSingleFloatArray x -> idx = LinalgSimdKernels.argFoldAxisF(max, x.data(), axlen, outer, inner);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> {
+				return null;
+			}
+		}
 		int[] od = axisShape(d, axis, false);
 		if (od.length == 0) {
 			return new LispInteger((long) idx[0]);
@@ -570,10 +614,12 @@ public final class LinalgSimd {
 			return null;
 		}
 		int n = a.dims()[0];
-		return new LispDouble(switch (a) {
-			case LispDoubleFloatArray x -> LinalgSimdKernels.trace(x.data(), n);
-			case LispSingleFloatArray x -> LinalgSimdKernels.traceF(x.data(), n);
-		});
+		return switch (a) {
+			case LispDoubleFloatArray x -> new LispDouble(LinalgSimdKernels.trace(x.data(), n));
+			case LispSingleFloatArray x -> new LispDouble(LinalgSimdKernels.traceF(x.data(), n));
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
+		};
 	}
 
 	// --- shape ------------------------------------------------------------------------
@@ -596,6 +642,8 @@ public final class LinalgSimd {
 		return switch (a) {
 			case LispDoubleFloatArray x -> new LispDoubleFloatArray(LinalgSimdKernels.transpose(x.data(), r, c), dims);
 			case LispSingleFloatArray x -> new LispSingleFloatArray(LinalgSimdKernels.transposeF(x.data(), r, c), dims);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -625,6 +673,8 @@ public final class LinalgSimd {
 				new LispDoubleFloatArray(LinalgSimdKernels.transposeAxes(x.data(), a.dims(), axes), od);
 			case LispSingleFloatArray x ->
 				new LispSingleFloatArray(LinalgSimdKernels.transposeAxesF(x.data(), a.dims(), axes), od);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -665,6 +715,8 @@ public final class LinalgSimd {
 		return switch (a) {
 			case LispDoubleFloatArray x -> new LispDoubleFloatArray(LinalgSimdKernels.copy(x.data()), dims);
 			case LispSingleFloatArray x -> new LispSingleFloatArray(LinalgSimdKernels.copyF(x.data()), dims);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -686,10 +738,12 @@ public final class LinalgSimd {
 			if (a.dims()[0] != b.dims()[0]) {
 				return null;
 			}
-			return new LispDouble(switch (a) {
-				case LispSingleFloatArray x -> LinalgSimdKernels.dotF(x.data(), floats(b));
-				case LispDoubleFloatArray x -> LinalgSimdKernels.dot(x.data(), doubles(b));
-			});
+			return switch (a) {
+				case LispSingleFloatArray x -> new LispDouble(LinalgSimdKernels.dotF(x.data(), floats(b)));
+				case LispDoubleFloatArray x -> new LispDouble(LinalgSimdKernels.dot(x.data(), doubles(b)));
+				// No lane kernel reads this width; the scalar defun answers.
+				case LispBFloat16Array ignored -> null;
+			};
 		}
 		if (a.rank() == 2 && b.rank() == 1) {
 			int rows = a.dims()[0];
@@ -703,6 +757,8 @@ public final class LinalgSimd {
 						LinalgSimdKernels.matvecF(x.data(), rows, cols, floats(b), parallel), dims);
 				case LispDoubleFloatArray x -> new LispDoubleFloatArray(
 						LinalgSimdKernels.matvec(x.data(), rows, cols, doubles(b), parallel), dims);
+				// No lane kernel reads this width; the scalar defun answers.
+				case LispBFloat16Array ignored -> null;
 			};
 		}
 		if (a.rank() == 1 && b.rank() == 2) {
@@ -718,6 +774,8 @@ public final class LinalgSimd {
 					new LispSingleFloatArray(LinalgSimdKernels.matmulF(x.data(), floats(b), 1, n, p, false), dims);
 				case LispDoubleFloatArray x ->
 					new LispDoubleFloatArray(LinalgSimdKernels.matmul(x.data(), doubles(b), 1, n, p, false), dims);
+				// No lane kernel reads this width; the scalar defun answers.
+				case LispBFloat16Array ignored -> null;
 			};
 		}
 		int n = a.dims()[0];
@@ -732,6 +790,8 @@ public final class LinalgSimd {
 				new LispSingleFloatArray(LinalgSimdKernels.matmulF(x.data(), floats(b), n, m, p, parallel), dims);
 			case LispDoubleFloatArray x ->
 				new LispDoubleFloatArray(LinalgSimdKernels.matmul(x.data(), doubles(b), n, m, p, parallel), dims);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -751,6 +811,8 @@ public final class LinalgSimd {
 				new LispSingleFloatArray(LinalgSimdKernels.outerF(x.data(), floats(v)), dims);
 			case LispDoubleFloatArray x ->
 				new LispDoubleFloatArray(LinalgSimdKernels.outer(x.data(), doubles(v)), dims);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -805,6 +867,8 @@ public final class LinalgSimd {
 					LinalgSimdKernels.matmulNd(x.data(), doubles(b), bd, sa, sb, n, m, p, (int) batches, parallel), od);
 			case LispSingleFloatArray x -> new LispSingleFloatArray(
 					LinalgSimdKernels.matmulNdF(x.data(), floats(b), bd, sa, sb, n, m, p, (int) batches, parallel), od);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -858,6 +922,8 @@ public final class LinalgSimd {
 					LinalgSimdKernels.im2col(a.data(), n, c, d[2], d[3], fh, fw, stride, pad), dims);
 			case LispSingleFloatArray a -> new LispSingleFloatArray(
 					LinalgSimdKernels.im2colF(a.data(), n, c, d[2], d[3], fh, fw, stride, pad), dims);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -896,6 +962,8 @@ public final class LinalgSimd {
 					LinalgSimdKernels.col2im(a.data(), n, c, h, w, fh, fw, stride, pad), dims.clone());
 			case LispSingleFloatArray a -> new LispSingleFloatArray(
 					LinalgSimdKernels.col2imF(a.data(), n, c, h, w, fh, fw, stride, pad), dims.clone());
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -939,6 +1007,10 @@ public final class LinalgSimd {
 				LinalgSimdKernels.adamStepF(a.data(), b.data(), c.data(), d.data(), ps);
 				written(a.storage(), c.storage(), d.storage());
 			}
+			// No lane kernel updates this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> {
+				return null;
+			}
 		}
 		return x;
 	}
@@ -977,13 +1049,19 @@ public final class LinalgSimd {
 		if (w == null) {
 			return null;
 		}
-		double[] end = switch (out) {
-			case LispDoubleFloatArray a -> LinalgSimdKernels.rngFill(a.data(), mode, lo, span, w[0], w[1], w[2]);
-			case LispSingleFloatArray a -> LinalgSimdKernels.rngFillF(a.data(), mode, lo, span, w[0], w[1], w[2]);
-		};
+		double[] end;
+		switch (out) {
+			case LispDoubleFloatArray a -> end = LinalgSimdKernels.rngFill(a.data(), mode, lo, span, w[0], w[1], w[2]);
+			case LispSingleFloatArray a -> end = LinalgSimdKernels.rngFillF(a.data(), mode, lo, span, w[0], w[1], w[2]);
+			// No lane kernel fills this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> {
+				return null;
+			}
+		}
 		written(switch (out) {
 			case LispDoubleFloatArray d -> d.storage();
 			case LispSingleFloatArray f -> f.storage();
+			case LispBFloat16Array b -> b.storage();
 		});
 		return new LispDoubleFloatArray(end, new int[] { 3 });
 	}
@@ -1023,10 +1101,17 @@ public final class LinalgSimd {
 			return null;
 		}
 		// The result keeps x's width when x is an array, else y's, else double.
+		for (LispFloatArray operand : new LispFloatArray[] { m, x, y }) {
+			if (operand != null && !laneReadable(operand)) {
+				return null;
+			}
+		}
 		LispFloatArray width = x != null ? x : y;
 		boolean single = width != null && switch (width) {
 			case LispSingleFloatArray ignored -> true;
 			case LispDoubleFloatArray ignored -> false;
+			// Declined by laneReadable above; this is where the compiler asks.
+			case LispBFloat16Array ignored -> false;
 		};
 		Object out = LinalgSimdKernels.where(data(m), ms == null ? 0.0 : ms,
 				m == null ? null : LinalgSimdKernels.bcastStrides(m.dims(), od), data(x), xs == null ? 0.0 : xs,
@@ -1042,6 +1127,22 @@ public final class LinalgSimd {
 			case null -> null;
 			case LispDoubleFloatArray d -> d.data();
 			case LispSingleFloatArray f -> f.data();
+			case LispBFloat16Array b -> b.data();
+		};
+	}
+
+	/**
+	 * Whether a lane kernel reads this width at all. Exhaustive, so a width added to the
+	 * umbrella has to answer here rather than being assumed readable -- the kernels are
+	 * written against the two IEEE widths and would misread anything else's store.
+	 * @param a the packed operand
+	 * @return whether a lane kernel can read it
+	 */
+	private static boolean laneReadable(LispFloatArray a) {
+		return switch (a) {
+			case LispSingleFloatArray ignored -> true;
+			case LispDoubleFloatArray ignored -> true;
+			case LispBFloat16Array ignored -> false;
 		};
 	}
 
@@ -1139,6 +1240,7 @@ public final class LinalgSimd {
 			double v = switch (idx) {
 				case LispDoubleFloatArray d -> d.data()[i];
 				case LispSingleFloatArray f -> f.data()[i];
+				case LispBFloat16Array b -> BFloat16.value(b.data()[i]);
 			};
 			if (!(v > -1.0 && v < rows)) {
 				return null;
@@ -1172,6 +1274,8 @@ public final class LinalgSimd {
 				new LispDoubleFloatArray(LinalgSimdKernels.takeRows(d.data(), slab, rows), od);
 			case LispSingleFloatArray f ->
 				new LispSingleFloatArray(LinalgSimdKernels.takeRowsF(f.data(), slab, rows), od);
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -1210,6 +1314,10 @@ public final class LinalgSimd {
 				LinalgSimdKernels.scatterRowsF(zf.data(), gf.data(), slab, rows);
 				written(zf.storage());
 			}
+			// No lane kernel scatters at this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> {
+				return null;
+			}
 		}
 		return z;
 	}
@@ -1225,10 +1333,12 @@ public final class LinalgSimd {
 		if (g == null || acc == null) {
 			return null;
 		}
-		return new LispDouble(switch (g) {
-			case LispDoubleFloatArray d -> LinalgSimdKernels.sumSquares(d.data(), acc);
-			case LispSingleFloatArray f -> LinalgSimdKernels.sumSquares(f.data(), acc);
-		});
+		return switch (g) {
+			case LispDoubleFloatArray d -> new LispDouble(LinalgSimdKernels.sumSquares(d.data(), acc));
+			case LispSingleFloatArray f -> new LispDouble(LinalgSimdKernels.sumSquares(f.data(), acc));
+			// No lane kernel reads this width; the scalar defun answers.
+			case LispBFloat16Array ignored -> null;
+		};
 	}
 
 	/**
@@ -1249,6 +1359,10 @@ public final class LinalgSimd {
 			case LispSingleFloatArray f -> {
 				LinalgSimdKernels.scale(f.data(), s);
 				written(f.storage());
+			}
+			// No lane kernel scales this width in place; the scalar defun answers.
+			case LispBFloat16Array ignored -> {
+				return null;
 			}
 		}
 		return g;

@@ -15,7 +15,7 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The space is closed because the upgrade is: {@code character} (and its base/standard
- * spellings) upgrades to {@code character}, {@code (unsigned-byte 8|16|32)} and the two
+ * spellings) upgrades to {@code character}, {@code (unsigned-byte 8|16|32)} and the three
  * float widths keep their own name, and EVERYTHING else -- {@code fixnum},
  * {@code integer}, {@code bit}, a class, an unsupported {@code (unsigned-byte 4)} --
  * upgrades to {@code t}, which is {@link #T} and is remembered as nothing at all.
@@ -42,6 +42,13 @@ public final class ArrayElementTypes {
 
 	/** {@code double-float}. */
 	public static final int DOUBLE_FLOAT = 6;
+
+	/**
+	 * {@code bfloat16} -- a rontolisp extension rather than a CL type, remembered here
+	 * because {@code array-element-type} has to answer it like any other specialized
+	 * width.
+	 */
+	public static final int BFLOAT16 = 7;
 
 	/**
 	 * The code point an unsupplied {@code character} element takes: SPACE, not NUL. CLHS
@@ -73,6 +80,7 @@ public final class ArrayElementTypes {
 				case "CHARACTER", "BASE-CHAR", "STANDARD-CHAR" -> CHARACTER;
 				case LispNames.SINGLE_FLOAT -> SINGLE_FLOAT;
 				case LispNames.DOUBLE_FLOAT -> DOUBLE_FLOAT;
+				case LispNames.BFLOAT16 -> BFLOAT16;
 				default -> T;
 			};
 		}
@@ -98,6 +106,7 @@ public final class ArrayElementTypes {
 			case UNSIGNED_BYTE_32 -> unsignedByte(32);
 			case SINGLE_FLOAT -> new LispSymbol(LispNames.SINGLE_FLOAT);
 			case DOUBLE_FLOAT -> new LispSymbol(LispNames.DOUBLE_FLOAT);
+			case BFLOAT16 -> new LispSymbol(LispNames.BFLOAT16);
 			default -> LispTrue.INSTANCE;
 		};
 	}
@@ -113,7 +122,7 @@ public final class ArrayElementTypes {
 		return switch (code) {
 			case CHARACTER -> new LispChar(DEFAULT_CHARACTER);
 			case UNSIGNED_BYTE_8, UNSIGNED_BYTE_16, UNSIGNED_BYTE_32 -> new LispInteger(0);
-			case SINGLE_FLOAT, DOUBLE_FLOAT -> new LispDouble(0.0);
+			case SINGLE_FLOAT, DOUBLE_FLOAT, BFLOAT16 -> new LispDouble(0.0);
 			default -> null;
 		};
 	}
