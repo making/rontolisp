@@ -73,8 +73,14 @@ final class FloatBitsWidening {
 					}
 				}
 				else {
+					// NOT (float) BFloat16.value(bits): BFloat16.value answers a double,
+					// and narrowing that back to float QUIETS a signalling NaN 126/65536
+					// times (measured against the shift oracle below, exhaustively) --
+					// a real bug, not a redundant round-trip, since a bf16 pattern IS
+					// already an f32's top half with zero-filled low bits, so the widen
+					// is exactly this one shift and needs no double detour at all.
 					for (int i = 0; i < n; i++) {
-						out[start + i] = (float) BFloat16.value((int) bitsData[i]);
+						out[start + i] = Float.intBitsToFloat((int) bitsData[i] << 16);
 					}
 				}
 			}
