@@ -822,7 +822,9 @@
 (defun gguf-architecture (name)
   ;; general.architecture -> the *architectures* row name (they agree, except
   ;; that a row may be missing).
-  (if (architecture name) name (error "unsupported architecture: ~a" name)))
+  (if (assoc name *architectures* :test #'string=)
+      name
+      (error "unsupported architecture: ~a" name)))
 
 (defun gguf-rope-layout (name)
   (if (or (string= name "llama") (string= name "smollm3")

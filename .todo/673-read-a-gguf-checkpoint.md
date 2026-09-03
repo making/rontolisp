@@ -187,14 +187,28 @@ text as the safetensors, token for token, at temperature 0 (`.todo/677`), and th
 - The `stories15M`-as-GGUF story check and the TinyLlama BF16 GGUF run, `.todo/489`'s
   rungs: the loader is there, the files are not on the box.
 
-## Verify
+## Verify -- all three done (2026-09-03)
 
-- A checked-in synthetic fixture of a few KB, written by a throwaway script kept beside
-  the test: every KV type, one tensor per supported width, a Q4_K tensor to refuse, an
-  alignment other than 32. Read on all four backends (`ci-spec.yaml`), compare the arrays
-  element for element.
-- `stories15M` converted to GGUF (llama.cpp's `convert_llama_ggml_to_gguf.py` or the
-  `.bin` -> GGUF path; not checked in, a download or a script) tells the same story as
-  the `.bin`, token for token, at temperature 0 -- the same check the example already
-  makes against `run.c`.
-- TinyLlama-1.1B as a BF16 GGUF, into `#f`: coherent text (`.todo/489`).
+- The synthetic fixture on all four backends (`ci-spec.yaml`, the reader's own item).
+- **`stories15M` as a GGUF tells the same story as the `.bin`, token for token, at
+  temperature 0**: converted with `llama.cpp`'s `llama-convert-llama2c-to-ggml`
+  (`--copy-vocab-from-model tokenizer.bin --llama2c-model stories15M.bin`, built from
+  master in dorian's scratchpad), read by `load-gguf-checkpoint` -- `general.architecture`
+  `llama`, so `:rope :pairs`; the tokenizer is the file's `tokenizer.ggml.model = llama`
+  pieces and scores through `tokenizer:make-sentencepiece` -- and the 60 tokens of `-t 0
+  -i "Once upon a time"` are exactly `examples.yaml`'s expectation, which is `run.c`'s
+  own text. This is the one Verify item with an answer from outside this repository.
+- **TinyLlama-1.1B-Chat from a F16 GGUF** (`andrijdavid/TinyLlama-1.1B-Chat-v1.0-GGUF`,
+  2.2 GB, a `convert_hf_to_gguf.py` conversion so its Q and K are permuted): coherent, and
+  the SAME 40 tokens the safetensors gave (`.todo/675`): "Once upon a time, there was a
+  young woman named Lily. She lived in a small town, where everyone knew each other's
+  names. Lily was a kind and gentle soul, always". Load 8.8 s (2.2 GB f16 into 4.4 GB
+  f32, the tokenizer from the file in 0.28 s), 1.65 tok/s at loadavg 0.9 -- the f32
+  single-thread figure, not the item's.
+
+The files are in dorian's scratchpad beside `.todo/677`'s (`../stories15M.gguf`,
+`../tinyllama/TinyLlama-1.1B-Chat-v1.0-f16.gguf`), not in the repository.
+
+What this item leaves, and to whom: the Q8_0 tensor bodies are `.todo/672`'s (the
+refusal is by name, at the first quantized tensor asked for); the `#bf16` destination is
+`.todo/485`'s (`:element-type` already threads to `checkpoint:make-tensor`).

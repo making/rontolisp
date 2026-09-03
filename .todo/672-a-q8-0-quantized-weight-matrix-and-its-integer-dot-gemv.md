@@ -4,7 +4,9 @@ Difficulty: High
 
 Part of `.todo/670`. `.todo/484` and `.todo/485` (the `#bf16` array this dequantizes
 into and checks against) and `.todo/671` (the f16 scales a GGUF carries) all closed
-2026-09-03, so nothing here is waiting. `.todo/673` landed the GGUF reader, which
+2026-09-03, so nothing here is waiting. `.todo/673` (closed 2026-09-03 with the GGUF
+loader in `examples/llama2/llama2.lisp`; the Q8_0 bodies are the one thing it left, and
+they are this item's) landed the GGUF reader, which
 declines a Q8_0 tensor by name when its body is asked for -- metadata, the tensor
 directory and the F16 / BF16 / F32 tensors all read, so this item begins from a model
 whose shape and vocabulary are already loadable, and replaces a decline with an

@@ -62,7 +62,19 @@ generated rather than hand-computed) on all four backends with and without `--si
 `embedding_norm` / `token_embd_norm` final norm) is in `.todo/673` item 7 and
 `.todo/675` item 5.
 
-## Remaining (needs `.todo/673` / `.todo/675` and `.todo/674`)
+## Remaining
+
+The readers it waited on are in: `.todo/674` (the tokenizer) and `.todo/673` (the GGUF
+reader, plus `llama2.lisp`'s `load-gguf-checkpoint`, whose `lfm2` mapping -- the
+per-layer `head_count_kv` zeros as `:shortconv`, `shortconv.*`, `token_embd_norm` -- is
+written but has not run a file yet) closed 2026-09-03; `.todo/675` (the safetensors
+reader, with `load-hf-checkpoint`'s `lfm2` mapping) is open only for its WASM fixture
+leg. What remains is this item's own run: LFM2.5-1.2B-Instruct from its safetensors
+(downloaded to dorian's scratchpad, `../lfm25/` beside the Qwen files named in
+`.todo/677`) and from Liquid's BF16 GGUF, the same text from both, the llama.cpp
+comparison, the tok/s rows -- the path `.todo/677` walked for Qwen3.5, with the stop
+token trap it found (`tokenizer_config.json`'s `<|im_end|>`, and never a stop token that
+is part of the prompt) already handled in `generate`.
 
 Verify items 2-4 below: the real checkpoint from GGUF and from safetensors, the
 llama.cpp comparison (byte-identical through Q8_0 once `.todo/672` lands), the tok/s
