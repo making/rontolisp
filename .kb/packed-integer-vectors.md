@@ -103,12 +103,16 @@ of the declared width (`int width` / the width header is a DISCRIMINATOR, not
 a packing scheme -- see above); todo 194 stage 2's motivating use was
 ironclad's SHA-256 working buffer, a handful of words. Only wasm-GC's bare
 `TYPE_I8ARR`/`TYPE_I16ARR`/`TYPE_I32ARR` actually packs at the declared width.
-Measured 2026-09-03 (`.todo/671`, the f16/bf16 checkpoint-bits widener): a
+Measured 2026-09-03 (`.todo/671`, the f16/bf16 checkpoint-bits widener) on host
+`dorian` (Intel Xeon E5-2697A v4, Broadwell, x86-64, 64 threads, AVX2): a
 1 Mi-element `(unsigned-byte 16)` staging chunk decodes at 1.6-4.3 Gelem/s on
-this box's interpreter/JVM depending on JIT and target width (`.kb/binary-
-sequence-io.md` has the full table) -- fine at that scale (8 MB of `long[]`
-overhead per Mi-element chunk) but do not reach for this type to hold a
-checkpoint-sized (10^8-10^9 element) buffer whole; stage it in chunks instead.
+the interpreter/JVM depending on JIT and target width, 1.3-1.7x slower than the
+same loop over a real `short[]` on the SAME machine (`.kb/binary-sequence-io.md`
+has the full table -- that file also flags that a 4x-vs-machine-difference is
+NOT separated out, since `.todo/482`'s own numbers come from a different
+machine entirely) -- fine at that scale (8 MB of `long[]` overhead per
+Mi-element chunk) but do not reach for this type to hold a checkpoint-sized
+(10^8-10^9 element) buffer whole; stage it in chunks instead.
 
 ## Semantics shared by all backends (pinned by tests)
 

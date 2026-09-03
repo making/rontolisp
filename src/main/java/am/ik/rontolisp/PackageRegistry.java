@@ -415,6 +415,26 @@ public final class PackageRegistry {
 	private static final List<String> GEOM_FUNCTION_NAMES = sorted(GEOM_FUNCTIONS);
 
 	/**
+	 * The names exported by the {@code checkpoint} package (tensor staging shared by the
+	 * checkpoint readers), implemented in {@code checkpoint.lisp} (see
+	 * {@code CheckpointLibrary}). Plain strings, like {@code linalg}.
+	 */
+	private static final Set<String> CHECKPOINT_FUNCTIONS = Set.of("MAKE-TENSOR", "STAGE-FLOAT-BITS", "STAGE-FLOAT32",
+			"SKIP-BYTES");
+
+	private static final List<String> CHECKPOINT_FUNCTION_NAMES = sorted(CHECKPOINT_FUNCTIONS);
+
+	/**
+	 * The names exported by the {@code safetensors} package (the Hugging Face checkpoint
+	 * reader), implemented in {@code safetensors.lisp} (see {@code SafetensorsLibrary}).
+	 * {@code READ} is the package's own external symbol, not {@code cl:read}: the package
+	 * uses nothing.
+	 */
+	private static final Set<String> SAFETENSORS_FUNCTIONS = Set.of("READ", "HEADER", "ENTRIES");
+
+	private static final List<String> SAFETENSORS_FUNCTION_NAMES = sorted(SAFETENSORS_FUNCTIONS);
+
+	/**
 	 * The names exported by the {@code tokenizer} package (the byte-level and
 	 * SentencePiece BPE tokenizers published language models ship with), implemented in
 	 * {@code tokenizers.lisp} (see {@code TokenizersLibrary}). Plain strings, like
@@ -609,17 +629,16 @@ public final class PackageRegistry {
 	 * used by {@link #isBuiltinPackageName} for the upcase reader mode's canonical fold,
 	 * which must not depend on a registry instance.
 	 */
-	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(
-			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
-					LispNames.TORCH_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
-					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG, LispNames.TOKENIZER_PKG,
-					LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
-					LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
-					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
-					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
-					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
-					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, "KEYWORD"),
-			Set.copyOf(UiopExports.subPackages()));
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
+			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.TORCH_PKG, LispNames.VEC_PKG,
+			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG,
+			LispNames.TOKENIZER_PKG, LispNames.CHECKPOINT_PKG, LispNames.SAFETENSORS_PKG, LispNames.METAL_PKG,
+			LispNames.SCENE_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG,
+			LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG,
+			LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG,
+			LispNames.BT2_PKG, LispNames.BABEL_PKG, LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG,
+			LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG,
+			"KEYWORD"), Set.copyOf(UiopExports.subPackages()));
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -721,6 +740,12 @@ public final class PackageRegistry {
 		// nothing but linalg -- so unlike appkit it runs everywhere. Does not use cl;
 		// every registered name is external.
 		define(new LispPackage(LispNames.GEOM_PKG, List.of(), new HashSet<>(GEOM_FUNCTIONS)));
+		// Tensor staging shared by the checkpoint readers (checkpoint.lisp,
+		// CheckpointLibrary) and the safetensors reader over it (safetensors.lisp,
+		// SafetensorsLibrary): Lisp-source libraries spliced/loaded on demand, like
+		// geom. Neither uses cl; every registered name is external.
+		define(new LispPackage(LispNames.CHECKPOINT_PKG, List.of(), new HashSet<>(CHECKPOINT_FUNCTIONS)));
+		define(new LispPackage(LispNames.SAFETENSORS_PKG, List.of(), new HashSet<>(SAFETENSORS_FUNCTIONS)));
 		// The BPE tokenizers a published language model ships with, implemented once in
 		// tokenizers.lisp and spliced/loaded on demand (TokenizersLibrary). Reaches for
 		// nothing but cl -- the vocabulary is an argument, not a file it opens -- so it
@@ -1114,6 +1139,22 @@ public final class PackageRegistry {
 	 */
 	public static List<String> geomFunctionNames() {
 		return GEOM_FUNCTION_NAMES;
+	}
+
+	/**
+	 * The sorted exported names of the {@code checkpoint} package.
+	 * @return the names, upper-case
+	 */
+	public static List<String> checkpointFunctionNames() {
+		return CHECKPOINT_FUNCTION_NAMES;
+	}
+
+	/**
+	 * The sorted exported names of the {@code safetensors} package.
+	 * @return the names, upper-case
+	 */
+	public static List<String> safetensorsFunctionNames() {
+		return SAFETENSORS_FUNCTION_NAMES;
 	}
 
 	/**

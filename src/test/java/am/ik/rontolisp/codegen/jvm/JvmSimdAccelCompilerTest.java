@@ -266,6 +266,48 @@ class JvmSimdAccelCompilerTest {
 		assertThat(accel(build + "(print (vec:dot a a)))")).isEqualTo("2646700.0");
 	}
 
+	/**
+	 * The multi-accumulator gate ({@code .todo/480}), pinned on both sides. From
+	 * {@code MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32} columns up a
+	 * GEMV row folds four independent four-lane accumulators as
+	 * {@code (a0 + a1) + (a2 + a3)}; below it, the one chain it always had.
+	 *
+	 * <p>
+	 * The 2^24 probe makes the grouping legible: the lane holding {@code 2^24} swallows
+	 * every {@code 1.0} added to it, so the answer counts the ones that landed elsewhere.
+	 * 16 columns, one chain over 4 lane groups: {@code 2^24 + 3*4 = 16777228}. 32
+	 * columns, four chains over two groups each:
+	 * {@code (2^24 + 2 + 4) + 8 + 8 + 8 = 16777246}.
+	 *
+	 * <p>
+	 * <b>The same two integers are asserted on all four {@code --simd}
+	 * implementations</b> ({@code eval/VecSimdTest}, here, and both wasm backends): 16
+	 * and 32 are multiples of the lane count, so nobody is folding a partial group and
+	 * the four must agree exactly. That agreement is the point -- a gate firing at a
+	 * different column count, or in a different direction, on one backend shows up here
+	 * and nowhere else.
+	 *
+	 * <p>
+	 * 31 columns is here too, and only on the JVM and the interpreter, which share a
+	 * scalar tail: it pins the gate's DIRECTION as {@code >=} rather than {@code >} (7
+	 * lane groups plus a 3-element tail, still the single chain, {@code 2^24 + 24}). The
+	 * wasm backends fold a row's leftover elements as a zero-padded lane group instead,
+	 * so they answer differently there for reasons that predate this gate.
+	 */
+	@Test
+	void theMultiAccumulatorGateFiresAtTheSameColumnCountAsEveryOtherSimdBackend() throws Exception {
+		assertThat(accel(gateProbe(16))).as("16 columns: one chain").isEqualTo("16777228");
+		assertThat(accel(gateProbe(31))).as("31 columns: still one chain").isEqualTo("16777240");
+		assertThat(accel(gateProbe(32))).as("32 columns: four chains").isEqualTo("16777246");
+	}
+
+	private static String gateProbe(int columns) {
+		return "(let ((m (make-array '(1 %d) :element-type 'single-float :initial-element 1.0))".formatted(columns)
+				+ " (v (vec:ones %d :element-type 'single-float)))".formatted(columns)
+				+ " (setf (aref m 0 0) 4096.0) (setf (vec:aref v 0) 4096.0)"
+				+ " (print (round (vec:aref (vec:matvec m v) 0))))";
+	}
+
 	@Test
 	void singleFloatReductionsAccumulateInSinglePrecisionUnderSimd() throws Exception {
 		// The compiled-path half of the contract that an #f reduction accumulates in
@@ -286,14 +328,18 @@ class JvmSimdAccelCompilerTest {
 		assertThat(accel(s + "(print (round (vec:sum v))))")).isEqualTo("16777984");
 		assertThat(scalar(s + "(print (round (vec:sum v))))")).isEqualTo("16778239");
 
-		// matvec is a dot per row. The scalar path accumulates 16778239 in f64 then
-		// narrows on store; that is an odd multiple of the f32 spacing at 2^24, so it
-		// ties to even -> 16778240.
+		// The scalar path accumulates 16778239 in f64 then narrows on store; that is an
+		// odd multiple of the f32 spacing at 2^24, so it ties to even -> 16778240.
+		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
+		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
+		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
+		// fold 64 each, giving 2^24 + 960 = 16778176. The scalar path is unchanged.
 		String gemv = "(let ((m (make-array '(1 1024) :element-type 'single-float :initial-element 1.0))"
 				+ " (v (vec:ones 1024 :element-type 'single-float)))"
 				+ " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (vec:matvec m v) 0))))";
-		assertThat(accel(gemv)).isEqualTo("16777984");
+		assertThat(accel(gemv)).isEqualTo("16778176");
 		assertThat(scalar(gemv)).isEqualTo("16778240");
 
 		// The #d control: double-float reductions are untouched and exact on both paths.

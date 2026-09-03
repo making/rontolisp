@@ -6532,6 +6532,19 @@ public final class LispNames {
 	public static final String GEOM_PKG = "GEOM";
 
 	/**
+	 * The {@code checkpoint} package: staging a published model's tensors into packed
+	 * float arrays ({@code checkpoint.lisp}, see {@code eval.CheckpointLibrary}), shared
+	 * by every checkpoint reader.
+	 */
+	public static final String CHECKPOINT_PKG = "CHECKPOINT";
+
+	/**
+	 * The {@code safetensors} package: the Hugging Face checkpoint reader
+	 * ({@code safetensors.lisp}, see {@code eval.SafetensorsLibrary}).
+	 */
+	public static final String SAFETENSORS_PKG = "SAFETENSORS";
+
+	/**
 	 * The {@code tokenizer} package name: the byte-level (GPT-2 / SmolLM2 / Qwen / Llama
 	 * 3) and SentencePiece (Llama 2) BPE tokenizers a published language model ships
 	 * with, written in rontolisp itself ({@code tokenizers.lisp}, see
@@ -8160,6 +8173,14 @@ public final class LispNames {
 
 	/** {@code float-features:bits-single-float}. */
 	public static final String BITS_SINGLE_FLOAT = "BITS-SINGLE-FLOAT";
+
+	// The single/double-float bits pairs above are canonical under float-features: (an
+	// external symbol there, internal here) because float-features is a real upstream
+	// CL library and that is its own API's spelling. float-features has no f16 pair --
+	// float16-bits/bits-float16 and the bulk widen/narrow below are a rontolisp
+	// extension (.todo/671), so THEIR external home is the rontolisp: package itself
+	// (see PackageRegistry's rontolispExternals), not float-features. Same reasoning
+	// puts bfloat16-bits/bits-bfloat16 (.todo/487) under rontolisp: too.
 
 	/**
 	 * {@code rontolisp:float16-bits} -- a real narrowed to its IEEE binary16 bit pattern

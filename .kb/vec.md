@@ -126,7 +126,8 @@ elements and only over a matrix it has been offered before and that has not been
 since (a GEMV is one pass over its matrix, so it pays only when the matrix is already
 there); its kernel accumulates in DOUBLE like this defun, not in lanes like `--simd`, so
 at `#f` it lands on the defun's bits in practice -- the f32 probe below tells the three
-apart: defun 16778240, lanes 16777984, device 16778240. `.kb/gpu.md` ("The GEMV, and the
+apart: defun 16778240, lanes 16778176 (16777984 before `.todo/480` gave the GEMV row four
+accumulators), device 16778240. `.kb/gpu.md` ("The GEMV, and the
 matrix that stays") is the record; `vec:matvec-into` is not intercepted.
 **`matvec` / `matvec-into` are also the two `vec:` members `--parallel` splits across threads**
 (2026-08-22, todo-478, `.kb/simd-parallel.md`): the same row chains over a row range per
@@ -417,19 +418,41 @@ is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--si
   kernels keep `SPECIES_PREFERRED` — they are bit-exact at any width. (The f64 reductions still use
   `SPECIES_PREFERRED`; their lane count also reorders the summation, but that was true before and
   `#d` partial sums are exact on the inputs the tests use.)
-- **What the pin costs, measured (2026-09-03).** One pinned `f32x4` accumulator per row is one
-  dependency chain, and a chain is what bounds the row long before memory does: the GEMV runs at
-  **5.5-7.6 Gelem/s single-threaded** on the GB10 (4096x4096, 3.0 ms under Graal / 2.2 ms under C2),
-  against ~15.6 GB/s of weights, well under what one X925 pulls from DRAM. A four-accumulator + FMA
-  probe of the same shape runs the same GEMV in 2.03 / 1.98 ms -- so the pin is worth **1.1-1.5x of
-  the f32 GEMV** on one thread, and `--parallel` only reaches the bandwidth regime because
-  spreading the rows across cores lifts the chain off the critical path. This is `.todo/480`'s item;
-  it is recorded here because the pin is why it is not a local change, and because the price is not
-  only f32's: the fused `bfloat16` GEMV kernels (`.todo/488`, in both kernel files, not yet wired to
-  the interception) are pinned bit-for-bit equal to *widen-then-f32-kernel*, so they must carry the
-  f32 arm's accumulator count and measure at 0.80-1.02x of f32 on one thread instead of the 1.6x
-  their bandwidth saving would otherwise buy. Numbers, both JITs:
-  `.todo/488-the-fused-bfloat16-gemv-kernels/README.md` (provisional until a quiet window).
+- **What the pin bought, and what `.todo/480` then changed (2026-09-03).** One pinned `f32x4`
+  accumulator per row is one dependency chain, and a chain is what bounds a row long before memory
+  does: the GEMV ran at **5.5-7.6 Gelem/s single-threaded** on the GB10 (4096x4096, 3.0 ms under
+  Graal / 2.2 ms under C2) against ~15.6 GB/s of weights, well under what one X925 pulls from DRAM.
+  `.todo/480` therefore gave the row **four independent accumulators** above a column gate, in all
+  four `--simd` implementations at once. The numbers, one thread, 4-acc against the old 1-acc row
+  (GB10, NVIDIA Grace Blackwell, aarch64 Cortex-X925, 20 cores, Oracle GraalVM 25.0.4, a quiet box,
+  Graal / C2): 288x288 **1.64x / 1.39x**, 1024x1024 **2.40x / 1.89x**, 4096x4096 **1.51x / 1.12x**,
+  and at the head dimensions real models use -- 48 (stories15M) 1.21x / 1.15x, 64 (SmolLM2-135M,
+  TinyLlama-1.1B, LFM2.5-1.2B) 1.23x / 1.26x, 128 (Qwen3-0.6B, and the Gated DeltaNet product)
+  1.27x / 1.52x, 256 (Qwen3.5-0.8B) 1.29x / 1.57x. Four beat two everywhere but the DRAM-bound
+  4096x4096 under C2 (where every count converges), and eight lost to four at every shape.
+  - **No fused multiply-add.** It measured level with plain mul-then-add (1024x1024: 2.45x against
+    2.40x), and wasm SIMD has no deterministic one -- `relaxed_madd` is explicitly allowed to differ
+    between engines, so it can never carry a bit-identity contract. That the win did not need it is
+    why `.todo/480` was possible at all.
+  - **The gate is `2 * MATVEC_ACCUMULATORS * lanes = 32` COLUMNS**, derived from the kernel's shape
+    rather than picked: below two full wide iterations the four zeroed vectors and the three-add
+    fold are most of the row (24 columns measured 0.70x under C2). It sits under every real head
+    dimension, so no model is left on the slow path, and above `MATVEC_ROW_THRESHOLD = 16`, so a row
+    between the two gates runs the single chain it always ran.
+  - **The gate must be a pure function of the column count.** An attention `V^T . att` is a GEMV
+    whose COLUMNS are the sequence length, so one call site crosses the gate as generation proceeds
+    -- and it may cross it only because the column count changed. Row counts are deliberately NOT
+    consulted even though they would predict better (four accumulators lose only at one or two rows,
+    the first token of a generation): consulting them would make the answer depend on something the
+    four implementations cannot agree on call for call, and bit-identity is worth more than that
+    token. Do not "improve" this by looking at the row count.
+  - The threshold is a PERFORMANCE number and machine-dependent; the lane-count pin above is a
+    CORRECTNESS one and is not. A wider host still reduces in four lanes with four accumulators, so
+    the bits are the same on AVX-512 as on NEON. 32 was measured on aarch64; x64 is untested for it,
+    though being derived from the lane count and the accumulator count rather than from a crossover
+    it should carry (`.todo/482`'s x64 host runs the same kernels 2.6-2.9x slower in absolute terms).
+  - Everything above is the f32 row only. The f64 `matvecRows` still has one chain and is
+    **unmeasured** -- `.todo/684`.
 - `eval.VecSimd` — `available()` (links the kernels class; a `NoClassDefFoundError` on a JVM
   without the incubator module becomes `false`) and `install(Environment)` (defines native
   `LispFunction`s for `vec:add`..`vec:matvec`, overriding the just-evaluated defuns).
@@ -781,8 +804,18 @@ to it (`2^24 + 1` ties to even) while the other three lanes fold 256 ones each �
 |---|---|---|
 | `(round (vec:dot v v))`, `v[0] = 4096.0` | 16778239 | **16777984** |
 | `(round (vec:sum v))`, `v[0] = 2^24` | 16778239 | **16777984** |
-| `(round (aref (vec:matvec m v) 0))`, 1×1024 | 16778240 | **16777984** |
+| `(round (aref (vec:matvec m v) 0))`, 1×1024 | 16778240 | **16778176** |
 | any of the above at `#d` width | 16778239 | 16778239 |
+
+**The GEMV row is no longer that chain (2026-09-03, `.todo/480`).** From
+`MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32` columns up, a `vec:matvec` row
+folds **four** independent four-lane accumulators as `(a0 + a1) + (a2 + a3)` into the single
+accumulator that then takes the leftover lane groups and the scalar tail. So the 1024-column
+GEMV probe groups as sixteen lanes rather than four -- the lane holding `2^24` swallows only
+its own 63 ones and the other fifteen fold 64 each -- and prints `2^24 + 960 = 16778176`.
+`vec:dot` and `vec:sum` are UNCHANGED (one chain, four lanes): a GEMV row and a `vec:dot`
+over the same two vectors are the same value mathematically and NOT the same bits. Nothing
+may assume they agree.
 
 The scalar `matvec` prints 16778240, not 16778239: it accumulates in f64 and narrows on store, and
 `2^24 + 1023` is an odd multiple of the f32 spacing there, so it ties to even. Pinned three times —
