@@ -1296,6 +1296,15 @@ public final class BuiltinFunctionWrappers {
 			// #'reference would bind a lambda nothing calls.
 			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BFLOAT16_BITS)),
 			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_BFLOAT16)),
+			// The IEEE binary16 scalar pair, same reasoning as bfloat16-bits above
+			// (.todo/671). widen-float-bits/narrow-float-bits wrap only their three
+			// REQUIRED positional args (bits/src, format, dst) -- #'widen-float-bits
+			// used this way narrows from :start 0, matching DPB/MASK-FIELD's own
+			// required-arity-only wrapper above for a &key-bearing built-in.
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FLOAT16_BITS)),
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_FLOAT16)),
+			ternary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS)),
+			ternary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS)),
 			// open as a first-class value: (apply #'open path options) is the portable
 			// way to build an option list at run time (alexandria's
 			// with-input-from-file).

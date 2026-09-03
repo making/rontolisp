@@ -237,6 +237,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.GgufLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/gguf\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/url\\.lisp"

@@ -65,6 +65,7 @@ examples/browser/hiragana/data/
 /ci-model-b.ply
 /ci-model-be.ply
 /ci-model.glb
+/ci-model.gguf
 /scene-model-file-vase.obj
 /scene-model-file-bracket.stl
 

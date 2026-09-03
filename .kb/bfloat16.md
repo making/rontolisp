@@ -66,23 +66,47 @@ conversion touches it, which was measured on this JDK before the design was fixe
 
 `.todo/671`'s bulk pair (`rontolisp:widen-float-bits` / `narrow-float-bits`, a
 `(unsigned-byte 16)` vector of patterns against an existing packed float array) shares
-this rounding rather than carrying its own: `eval/FloatBitsWidening` calls
-`BFloat16.bits`, and `codegen/jvm/JvmFloat16RuntimeBuilder` emits `bits(float)`
-instruction for instruction. It landed with a private copy of the same trick on each side,
-which is two more things to keep right and would have put a checkpoint's bulk load a bit
-away from what the program computes element by element. `bits(float)` is the arm that
-dedup wanted: no `double` in the way, so a NaN's payload is carried rather than
-force-quieted. Pinned on both backends by
-`LispEvaluatorTest#bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair` and
-`JvmLispCompilerTest#compileAndRunBfloat16BulkAgreesWithTheScalarPair`.
+this rounding rather than carrying its own, but -- unlike the scalar pair -- it reaches it
+DIFFERENTLY depending on the packed array's width, because `BFloat16`'s API only takes a
+`double`.
 
-**There was a ceiling here, and it is closed (2026-09-03).** The bulk WIDEN into a packed
-single-float array used to build the value as a `double` and cast it down, which quieted a
-signalling NaN on the way in and left widen-then-narrow the identity on 65,410 patterns
-rather than all 65536. It now writes `Float.intBitsToFloat(bits << 16)` straight into the
-`float[]`, and the round trip is the identity on every pattern. Do not re-derive the old
-shape from a `BFloat16.value` call: the pattern IS the f32's top half, so the widen has no
-reason to visit a `double` at all.
+- **A `double-float` array** calls `BFloat16.value`/`BFloat16.bits` directly: a genuine
+  double, so the class's own double-domain NaN handling is exact.
+- **A `single-float` array never calls `BFloat16` at all.** `eval/FloatBitsWidening` and
+  each compile backend's emitter carry their OWN copy of the identical bit trick,
+  operating on the float's raw bits with no `double` ever created --
+  `eval/FloatBitsWidening#bfloat16BitsOfFloat` (narrow) and a plain
+  `Float.intBitsToFloat(bits << 16)` (widen, both directions, all three backends).
+
+That is a deliberate THIRD copy of the rounding (scalar `BFloat16`, this file's
+double-array arm, this file's float-array arm), not a violation of "one rounding" --
+calling `BFloat16.bits(double)` from a `float` source would auto-widen the argument
+first, and an f32-&gt;f64 widen (`f2d`) quiets a signalling NaN exactly as often as a
+widen-then-narrow roundtrip does (126 of 65536, measured exhaustively, BOTH directions,
+2026-09-03): there is no safe direction through `double` for a value that might carry
+NaN, so the float-array arm has to avoid the type entirely rather than pick a "safer"
+conversion. All three copies of the NaN branch (`.todo/487`'s `BFloat16.bits`, this
+file's, the compile backends') use the SAME shape --
+`payload | ((payload - 1) >>> 31)`, keeping a nonzero payload untouched and forcing only
+a zero one nonzero (so it cannot read back as infinity) -- adapted to each format's
+mantissa width. A plain `bits | <quiet bit>` (an earlier version of this file's own
+narrow, and this file's WASM emitter, briefly) forces the quiet bit unconditionally,
+which quiets a signalling NaN exactly as often as the double detour does: a different
+way to lose the same 126 patterns, not a fix.
+
+**wasm-GC's inline emitter never had either bug**, and is worth naming as why: its
+bf16 widen was always a bare `i32.shl` + `f32.reinterpret_i32`, no float/double
+conversion of any kind, because that is simply the most direct way to write "shift the
+bits" in a stack machine with no implicit widening. The naive-but-direct implementation
+was the correct one; the JVM and interpreter arms went through more machinery (a shared
+`double` intermediate, a borrowed-looking one-line formula) and both engineering
+shortcuts happened to be exactly where the 126 patterns lived.
+
+**The bulk pair is therefore exact on all 65536 patterns, on all three backends**,
+pinned by `LispEvaluatorTest#bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair` and
+`JvmLispCompilerTest#compileAndRunBfloat16BulkAgreesWithTheScalarPair` (both assert the
+plain identity, not a "126 quieted" shape -- an earlier version of both tests asserted
+the ceiling as correct behavior; fixed 2026-09-03 once the ceiling itself was closed).
 
 The measurement that settles which step loses a payload, since it is easy to guess wrong
 (2026-09-03, and guessed wrong twice before it was taken): **BOTH float/double conversions
