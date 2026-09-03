@@ -42,8 +42,9 @@
   ;; ELEMENT-TYPE ('single-float or 'double-float), verified to be packed.
   (let ((a (make-array shape :element-type element-type :initial-element 0.0)))
     (unless (eq (array-element-type a) element-type)
-      (error "checkpoint:make-tensor: ~a is not a packed float element type (got ~a)"
-             element-type (array-element-type a)))
+      (error
+       "checkpoint:make-tensor: ~a is not a packed float element type (got ~a)"
+       element-type (array-element-type a)))
     a))
 
 (defun checkpoint:stage-float-bits (stream count format dst &key (start 0))
@@ -55,15 +56,18 @@
   ;; the whole vector it is given.
   (let ((buf (checkpoint::%staging-buffer)) (done 0))
     (loop while (< done count)
-          do (let ((n (min checkpoint::%chunk (- count done))))
-               (if (= n checkpoint::%chunk)
-                   (progn
-                     (read-sequence buf stream)
-                     (rontolisp:widen-float-bits buf format dst :start (+ start done)))
-                   (let ((tail (make-array n :element-type '(unsigned-byte 16))))
-                     (read-sequence tail stream)
-                     (rontolisp:widen-float-bits tail format dst :start (+ start done))))
-               (setq done (+ done n))))
+          do
+            (let ((n (min checkpoint::%chunk (- count done))))
+              (if (= n checkpoint::%chunk)
+                  (progn
+                    (read-sequence buf stream)
+                    (rontolisp:widen-float-bits buf format dst
+                                                :start (+ start done)))
+                  (let ((tail (make-array n :element-type '(unsigned-byte 16))))
+                    (read-sequence tail stream)
+                    (rontolisp:widen-float-bits tail format dst
+                                                :start (+ start done))))
+              (setq done (+ done n))))
     dst))
 
 (defun checkpoint:stage-float32 (stream dst)
@@ -75,12 +79,14 @@
 (defun checkpoint:skip-bytes (stream n)
   ;; Pass over N bytes of STREAM, in bounded reads through a scratch buffer.
   ;; Returns N.
-  (let ((buf (or checkpoint::%skip-buffer
-                 (setq checkpoint::%skip-buffer
-                       (make-array 65536 :element-type '(unsigned-byte 8)))))
+  (let ((buf
+         (or checkpoint::%skip-buffer
+             (setq checkpoint::%skip-buffer
+                   (make-array 65536 :element-type '(unsigned-byte 8)))))
         (left n))
     (loop while (> left 0)
-          do (let ((k (min 65536 left)))
-               (read-sequence buf stream :end k)
-               (setq left (- left k))))
+          do
+            (let ((k (min 65536 left)))
+              (read-sequence buf stream :end k)
+              (setq left (- left k))))
     n))

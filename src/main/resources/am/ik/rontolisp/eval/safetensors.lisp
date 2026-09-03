@@ -51,8 +51,7 @@
                  (let ((offsets (gethash "data_offsets" info)))
                    (push (list name (gethash "dtype" info)
                                (coerce (gethash "shape" info) 'list)
-                               (aref offsets 0) (aref offsets 1))
-                         entries))))
+                               (aref offsets 0) (aref offsets 1)) entries))))
              header)
     (sort entries (lambda (a b) (< (fourth a) (fourth b))))))
 
@@ -61,7 +60,8 @@
   (cond ((string= dtype "F32") :f32)
         ((string= dtype "F16") :float16)
         ((string= dtype "BF16") :bfloat16)
-        (t (error "safetensors: ~a is ~a; supported dtypes: F32, F16, BF16" name dtype))))
+        (t (error "safetensors: ~a is ~a; supported dtypes: F32, F16, BF16" name
+                  dtype))))
 
 (defun safetensors::%read-tensor (s dtype shape name element-type)
   ;; The next tensor of S, whose bytes begin at the stream's position.
@@ -69,14 +69,15 @@
          (dims (if (= (length shape) 1) (first shape) shape))
          (count (reduce #'* shape :initial-value 1))
          (dst (checkpoint:make-tensor dims element-type)))
-    (cond ((not (eq format :f32)) (checkpoint:stage-float-bits s count format dst))
-          ((eq element-type 'single-float) (checkpoint:stage-float32 s dst))
-          (t
-           ;; an F32 tensor into a double array: through a single-float one
-           (let ((f32 (checkpoint:make-tensor dims 'single-float)))
-             (checkpoint:stage-float32 s f32)
-             (dotimes (i count dst)
-               (setf (row-major-aref dst i) (row-major-aref f32 i))))))))
+    (cond
+     ((not (eq format :f32)) (checkpoint:stage-float-bits s count format dst))
+     ((eq element-type 'single-float) (checkpoint:stage-float32 s dst))
+     (t
+      ;; an F32 tensor into a double array: through a single-float one
+      (let ((f32 (checkpoint:make-tensor dims 'single-float)))
+        (checkpoint:stage-float32 s f32)
+        (dotimes (i count dst)
+          (setf (row-major-aref dst i) (row-major-aref f32 i))))))))
 
 (defun safetensors::%read-shard (path only element-type into)
   ;; Every tensor of one .safetensors file that ONLY admits, into the hash
@@ -91,8 +92,8 @@
             (when (< pos begin) (checkpoint:skip-bytes s (- begin pos)))
             (if (or (null only) (funcall only name))
                 (setf (gethash name into)
-                      (safetensors::%read-tensor s (second entry) (third entry) name
-                                                 element-type))
+                      (safetensors::%read-tensor s (second entry) (third entry)
+                                                 name element-type))
                 (checkpoint:skip-bytes s (- end begin)))
             (setq pos end)))))))
 
@@ -102,8 +103,7 @@
 
 (defun safetensors::%directory-of (path)
   ;; The directory part of a file path, with its trailing slash.
-  (let ((i (position #\/ path :from-end t)))
-    (if i (subseq path 0 (+ i 1)) "")))
+  (let ((i (position #\/ path :from-end t))) (if i (subseq path 0 (+ i 1)) "")))
 
 (defun safetensors::%read-text (path)
   ;; The whole text of a file, line by line (file-length is nil on WASM).
@@ -124,10 +124,10 @@
     (maphash (lambda (name file)
                (when (and (or (null only) (funcall only name))
                           (not (member file shards :test #'string=)))
-                 (push file shards)))
-             weight-map)
+                 (push file shards))) weight-map)
     (dolist (file (nreverse shards) into)
-      (safetensors::%read-shard (concatenate 'string dir file) only element-type into))))
+      (safetensors::%read-shard (concatenate 'string dir file) only element-type
+                                into))))
 
 (defun safetensors:read (path &key only (element-type 'single-float))
   (let ((into (make-hash-table :test 'equal)))
@@ -135,14 +135,17 @@
            (safetensors::%read-index path only element-type into))
           ((safetensors::%ends-with path ".safetensors")
            (safetensors::%read-shard path only element-type into))
-          (t
-           (let* ((dir (if (safetensors::%ends-with path "/")
-                           path
-                           (concatenate 'string path "/")))
-                  (index (concatenate 'string dir "model.safetensors.index.json"))
-                  (single (concatenate 'string dir "model.safetensors")))
-             (cond ((probe-file index)
-                    (safetensors::%read-index index only element-type into))
-                   ((probe-file single)
-                    (safetensors::%read-shard single only element-type into))
-                   (t (error "safetensors: no model.safetensors[.index.json] in ~a" dir))))))))
+          (t (let* ((dir
+                     (if (safetensors::%ends-with path "/")
+                         path
+                         (concatenate 'string path "/")))
+                    (index
+                     (concatenate 'string dir "model.safetensors.index.json"))
+                    (single (concatenate 'string dir "model.safetensors")))
+               (cond ((probe-file index)
+                      (safetensors::%read-index index only element-type into))
+                     ((probe-file single)
+                      (safetensors::%read-shard single only element-type into))
+                     (t (error
+                         "safetensors: no model.safetensors[.index.json] in ~a"
+                         dir))))))))

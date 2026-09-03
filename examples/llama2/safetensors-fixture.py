@@ -51,20 +51,27 @@ def main():
     f32 = [1.5, -2.25, 0.125, 1e-3, 3.0, -0.5]                       # rank-2 2x3
     f16 = [1.0, -0.5, 0.75, 2048.0, -0.001953125, 65504.0, 0.0, -1.5]  # rank-1 8 (65504 = f16 max)
     bf16 = [1.0, -1.5, 0.25, 128.0, -3.0, 0.0078125]                  # rank-2 3x2
+    cube = [0.5, -0.25, 4.0, -8.0, 0.0625, 1.0, -1.0, 16.0]                # rank-3 2x2x2
     tensors = [
         ("norm.weight", "F32", [2, 3], b"".join(struct.pack("<f", v) for v in f32)),
         ("half.weight", "F16", [8], b"".join(struct.pack("<H", f16_bits(v)) for v in f16)),
         ("brain.weight", "BF16", [3, 2], b"".join(struct.pack("<H", bf16_bits(v)) for v in bf16)),
+        # one element: the destination's flat index 0 is its first element, not a header
+        ("scale", "BF16", [1], struct.pack("<H", bf16_bits(-2.5))),
+        # rank 3: the header a packed array carries grows with its rank
+        ("cube.weight", "F16", [2, 2, 2], b"".join(struct.pack("<H", f16_bits(v)) for v in cube)),
         ("ids", "I64", [2], struct.pack("<qq", 7, -1)),
     ]
     write_file("safetensors-check.safetensors", tensors, {"format": "pt", "note": "rontolisp fixture"})
-    # the sharded pair: the same three float tensors split over two files
+    # the sharded pair: the same float tensors split over two files
     write_file("safetensors-check-00001-of-00002.safetensors", tensors[:1])
-    write_file("safetensors-check-00002-of-00002.safetensors", tensors[1:3])
+    write_file("safetensors-check-00002-of-00002.safetensors", tensors[1:5])
     index = {"metadata": {"total_size": 0},
              "weight_map": {"norm.weight": "safetensors-check-00001-of-00002.safetensors",
                             "half.weight": "safetensors-check-00002-of-00002.safetensors",
-                            "brain.weight": "safetensors-check-00002-of-00002.safetensors"}}
+                            "brain.weight": "safetensors-check-00002-of-00002.safetensors",
+                            "scale": "safetensors-check-00002-of-00002.safetensors",
+                            "cube.weight": "safetensors-check-00002-of-00002.safetensors"}}
     with open("safetensors-check.index.json", "w") as f:
         json.dump(index, f, indent=1)
 

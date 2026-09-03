@@ -479,18 +479,22 @@
   ;; config.json, with a multimodal checkpoint's text_config unwrapped (its
   ;; model_type is the text model's) -- and the tie_word_embeddings /
   ;; tie_embedding spellings folded into one.
-  (let* ((outer (rontolisp:json-parse (read-text-file (concatenate 'string dir "config.json"))))
+  (let* ((outer
+          (rontolisp:json-parse
+           (read-text-file (concatenate 'string dir "config.json"))))
          (config (or (gethash "text_config" outer) outer)))
     (unless (gethash "tie_word_embeddings" config)
       (setf (gethash "tie_word_embeddings" config)
-            (or (gethash "tie_embedding" outer) (gethash "tie_word_embeddings" outer))))
+            (or (gethash "tie_embedding" outer)
+                (gethash "tie_word_embeddings" outer))))
     config))
 
 (defun hf-architecture (model-type)
   ;; config.json's model_type -> the *architectures* row name.
   (cond ((string= model-type "llama") "llama")
         ((string= model-type "qwen3") "qwen3")
-        ((or (string= model-type "qwen3_5") (string= model-type "qwen3_5_text")) "qwen35")
+        ((or (string= model-type "qwen3_5") (string= model-type "qwen3_5_text"))
+         "qwen35")
         ((string= model-type "smollm3") "smollm3")
         ((string= model-type "granite") "granite")
         ((string= model-type "lfm2") "lfm2")
@@ -509,9 +513,11 @@
   (let* ((dims (array-dimensions a))
          (c (first dims))
          (k (third dims))
-         (m (make-array (list c k) :element-type 'single-float :initial-element 0.0)))
-    (dotimes (i c m)
-      (dotimes (j k) (setf (aref m i j) (aref a i 0 j))))))
+         (m
+          (make-array (list c k)
+                      :element-type 'single-float
+                      :initial-element 0.0)))
+    (dotimes (i c m) (dotimes (j k) (setf (aref m i j) (aref a i 0 j))))))
 
 (defun split-gated-q (w n-heads hs)
   ;; A [heads x (query | gate), dim] q_proj -> (values wq gate), each
@@ -519,8 +525,14 @@
   ;; its gate row i.
   (let* ((dim (array-dimension w 1))
          (rows (* n-heads hs))
-         (wq (make-array (list rows dim) :element-type 'single-float :initial-element 0.0))
-         (gate (make-array (list rows dim) :element-type 'single-float :initial-element 0.0)))
+         (wq
+          (make-array (list rows dim)
+                      :element-type 'single-float
+                      :initial-element 0.0))
+         (gate
+          (make-array (list rows dim)
+                      :element-type 'single-float
+                      :initial-element 0.0)))
     (dotimes (h n-heads)
       (dotimes (i hs)
         (let ((src (+ (* h 2 hs) i)) (dst (+ (* h hs) i)))
@@ -538,12 +550,14 @@
                (cond ((string= name "full_attention") :attention)
                      ((string= name "linear_attention") :deltanet)
                      ((string= name "conv") :shortconv)
-                     (t (error "unknown layer type: ~a" name))))
-             types)
+                     (t (error "unknown layer type: ~a" name)))) types)
         nil)))
 
 (defun load-hf-checkpoint (dir)
-  (let* ((dir (if (char= (char dir (- (length dir) 1)) #\/) dir (concatenate 'string dir "/")))
+  (let* ((dir
+          (if (char= (char dir (- (length dir) 1)) #\/)
+              dir
+              (concatenate 'string dir "/")))
          (config (hf-config dir))
          (family (hf-architecture (gethash "model_type" config)))
          (qwen35 (string= family "qwen35"))
@@ -556,12 +570,17 @@
          (vocab (gethash "vocab_size" config))
          (tied (gethash "tie_word_embeddings" config))
          (rope-params (gethash "rope_parameters" config))
-         (rope-theta (or (gethash "rope_theta" config)
-                         (and rope-params (gethash "rope_theta" rope-params))
-                         10000.0))
-         (partial (and rope-params (gethash "partial_rotary_factor" rope-params)))
-         (eps (or (gethash "rms_norm_eps" config) (gethash "norm_eps" config) *eps*))
-         (seq-len (min *seq-len-cap* (or (gethash "max_position_embeddings" config) *seq-len-cap*)))
+         (rope-theta
+          (or (gethash "rope_theta" config)
+              (and rope-params (gethash "rope_theta" rope-params)) 10000.0))
+         (partial
+          (and rope-params (gethash "partial_rotary_factor" rope-params)))
+         (eps
+          (or (gethash "rms_norm_eps" config) (gethash "norm_eps" config)
+              *eps*))
+         (seq-len
+          (min *seq-len-cap*
+               (or (gethash "max_position_embeddings" config) *seq-len-cap*)))
          (types (layer-types config))
          ;; the language model's prefix: a multimodal checkpoint keeps it under
          ;; model.language_model. beside model.visual. and the mtp.* head
@@ -571,7 +590,8 @@
                             :only (lambda (name)
                                     (or (starts-with name prefix)
                                         (string= name "lm_head.weight")
-                                        (and (not qwen35) (starts-with name "model."))))))
+                                        (and (not qwen35)
+                                             (starts-with name "model."))))))
          (n-att (if lfm2 "operator_norm" "input_layernorm"))
          (n-ffn (if lfm2 "ffn_norm" "post_attention_layernorm"))
          (per-layer
@@ -582,14 +602,17 @@
              (layer-tensor (l suffix)
                (tensor (format nil "~alayers.~a.~a" prefix l suffix)))
              (norm-tensor (l suffix)
-               (let ((v (layer-tensor l suffix))) (if (and v qwen35) (plus-one v) v)))
-             (attention-p (l)
-               (if types (eq (nth l types) :attention) t))
+               (let ((v (layer-tensor l suffix)))
+                 (if (and v qwen35) (plus-one v) v)))
+             (attention-p (l) (if types (eq (nth l types) :attention) t))
              (att (l suffix) (and (attention-p l) (layer-tensor l suffix))))
       (let* ((emb (tensor (concatenate 'string prefix "embed_tokens.weight")))
              (wcls (if tied emb (tensor "lm_head.weight")))
              (rms-final
-              (let ((v (tensor (concatenate 'string prefix (if lfm2 "embedding_norm.weight" "norm.weight")))))
+              (let ((v
+                     (tensor
+                      (concatenate 'string prefix
+                       (if lfm2 "embedding_norm.weight" "norm.weight")))))
                 (if qwen35 (plus-one v) v)))
              (wq (make-array n-layers))
              (gate (make-array n-layers)))
@@ -598,60 +621,131 @@
           (let ((w (att l "self_attn.q_proj.weight")))
             (cond ((null w))
                   ((gethash "attn_output_gate" config)
-                   (multiple-value-bind (q g) (split-gated-q w n-heads head-size)
+                   (multiple-value-bind (q g)
+                       (split-gated-q w n-heads head-size)
                      (setf (aref wq l) q)
                      (setf (aref gate l) g)))
                   (t (setf (aref wq l) w)))))
-        (let ((weights
-               (list :rms-att (funcall per-layer (lambda (l) (norm-tensor l (concatenate 'string n-att ".weight"))))
-                     :rms-ffn (funcall per-layer (lambda (l) (norm-tensor l (concatenate 'string n-ffn ".weight"))))
-                     :wq wq
-                     :attn-gate gate
-                     :wk (funcall per-layer (lambda (l) (att l "self_attn.k_proj.weight")))
-                     :wv (funcall per-layer (lambda (l) (att l "self_attn.v_proj.weight")))
-                     :wo (funcall per-layer
-                                  (lambda (l)
-                                    (att l (if lfm2 "self_attn.out_proj.weight" "self_attn.o_proj.weight"))))
-                     :q-norm (funcall per-layer
-                                      (lambda (l)
-                                        (let ((v (att l (if lfm2 "self_attn.q_layernorm.weight" "self_attn.q_norm.weight"))))
-                                          (if (and v qwen35) (plus-one v) v))))
-                     :k-norm (funcall per-layer
-                                      (lambda (l)
-                                        (let ((v (att l (if lfm2 "self_attn.k_layernorm.weight" "self_attn.k_norm.weight"))))
-                                          (if (and v qwen35) (plus-one v) v))))
-                     :w1 (funcall per-layer (lambda (l) (layer-tensor l (if lfm2 "feed_forward.w1.weight" "mlp.gate_proj.weight"))))
-                     :w3 (funcall per-layer (lambda (l) (layer-tensor l (if lfm2 "feed_forward.w3.weight" "mlp.up_proj.weight"))))
-                     :w2 (funcall per-layer (lambda (l) (layer-tensor l (if lfm2 "feed_forward.w2.weight" "mlp.down_proj.weight"))))
-                     ;; the Gated DeltaNet blocks (Qwen3.5)
-                     :ssm-qkv (funcall per-layer (lambda (l) (layer-tensor l "linear_attn.in_proj_qkv.weight")))
-                     :ssm-z (funcall per-layer (lambda (l) (layer-tensor l "linear_attn.in_proj_z.weight")))
-                     :ssm-beta (funcall per-layer (lambda (l) (layer-tensor l "linear_attn.in_proj_b.weight")))
-                     :ssm-alpha (funcall per-layer (lambda (l) (layer-tensor l "linear_attn.in_proj_a.weight")))
-                     :ssm-conv (funcall per-layer
+        (let* ((weights
+                (list :rms-att (funcall per-layer
                                         (lambda (l)
-                                          (let ((w (layer-tensor l "linear_attn.conv1d.weight")))
-                                            (and w (squeeze-middle w)))))
-                     :ssm-a (funcall per-layer
-                                     (lambda (l)
-                                       (let ((a (layer-tensor l "linear_attn.A_log")))
-                                         (and a (vec:negative (vec:exp a))))))
-                     :ssm-dt-bias (funcall per-layer (lambda (l) (layer-tensor l "linear_attn.dt_bias")))
-                     :ssm-norm (funcall per-layer (lambda (l) (layer-tensor l "linear_attn.norm.weight")))
-                     :ssm-out (funcall per-layer (lambda (l) (layer-tensor l "linear_attn.out_proj.weight")))
-                     ;; the short-conv blocks (LFM2)
-                     :conv-in (funcall per-layer (lambda (l) (layer-tensor l "conv.in_proj.weight")))
-                     :conv-w (funcall per-layer
+                                          (norm-tensor l
+                                                       (concatenate 'string
+                                                        n-att ".weight"))))
+                      :rms-ffn (funcall per-layer
+                                        (lambda (l)
+                                          (norm-tensor l
+                                                       (concatenate 'string
+                                                        n-ffn ".weight"))))
+                      :wq wq
+                      :attn-gate gate
+                      :wk (funcall per-layer
+                           (lambda (l) (att l "self_attn.k_proj.weight")))
+                      :wv (funcall per-layer
+                           (lambda (l) (att l "self_attn.v_proj.weight")))
+                      :wo (funcall per-layer
+                                   (lambda (l)
+                                     (att l
+                                          (if lfm2
+                                              "self_attn.out_proj.weight"
+                                              "self_attn.o_proj.weight"))))
+                      :q-norm (funcall per-layer
+                                       (lambda (l)
+                                         (let ((v
+                                                (att l
+                                                 (if lfm2
+                                                     "self_attn.q_layernorm.weight"
+                                                     "self_attn.q_norm.weight"))))
+                                           (if (and v qwen35) (plus-one v) v))))
+                      :k-norm (funcall per-layer
+                                       (lambda (l)
+                                         (let ((v
+                                                (att l
+                                                 (if lfm2
+                                                     "self_attn.k_layernorm.weight"
+                                                     "self_attn.k_norm.weight"))))
+                                           (if (and v qwen35) (plus-one v) v))))
+                      :w1 (funcall per-layer
+                                   (lambda (l)
+                                     (layer-tensor l
+                                                   (if lfm2
+                                                       "feed_forward.w1.weight"
+                                                       "mlp.gate_proj.weight"))))
+                      :w3 (funcall per-layer
+                                   (lambda (l)
+                                     (layer-tensor l
+                                                   (if lfm2
+                                                       "feed_forward.w3.weight"
+                                                       "mlp.up_proj.weight"))))
+                      :w2 (funcall per-layer
+                                   (lambda (l)
+                                     (layer-tensor l
+                                                   (if lfm2
+                                                       "feed_forward.w2.weight"
+                                                       "mlp.down_proj.weight"))))
+                      ;; the Gated DeltaNet blocks (Qwen3.5)
+                      :ssm-qkv (funcall per-layer
+                                        (lambda (l)
+                                          (layer-tensor l
+                                           "linear_attn.in_proj_qkv.weight")))
+                      :ssm-z (funcall per-layer
                                       (lambda (l)
-                                        (let ((w (layer-tensor l "conv.conv.weight")))
-                                          (and w (squeeze-middle w)))))
-                     :conv-out (funcall per-layer (lambda (l) (layer-tensor l "conv.out_proj.weight")))))
-              (options
-               (append (list :rope :halves :eps eps :rope-theta rope-theta)
-                       (if partial (list :rotary-dim (floor (* head-size partial))) nil)
-                       (if types (list :layer-types types) nil)
-                       (architecture family)))
-              (hidden (array-dimension (aref (getf weights :w1) 0) 0)))
+                                        (layer-tensor l
+                                         "linear_attn.in_proj_z.weight")))
+                      :ssm-beta (funcall per-layer
+                                         (lambda (l)
+                                           (layer-tensor l
+                                            "linear_attn.in_proj_b.weight")))
+                      :ssm-alpha (funcall per-layer
+                                          (lambda (l)
+                                            (layer-tensor l
+                                             "linear_attn.in_proj_a.weight")))
+                      :ssm-conv (funcall per-layer
+                                         (lambda (l)
+                                           (let ((w
+                                                  (layer-tensor l
+                                                                "linear_attn.conv1d.weight")))
+                                             (and w (squeeze-middle w)))))
+                      :ssm-a (funcall per-layer
+                                      (lambda (l)
+                                        (let ((a
+                                               (layer-tensor l
+                                                "linear_attn.A_log")))
+                                          (and a (vec:negative (vec:exp a))))))
+                      :ssm-dt-bias (funcall per-layer
+                                            (lambda (l)
+                                              (layer-tensor l
+                                               "linear_attn.dt_bias")))
+                      :ssm-norm (funcall per-layer
+                                         (lambda (l)
+                                           (layer-tensor l
+                                            "linear_attn.norm.weight")))
+                      :ssm-out (funcall per-layer
+                                        (lambda (l)
+                                          (layer-tensor l
+                                           "linear_attn.out_proj.weight")))
+                      ;; the short-conv blocks (LFM2)
+                      :conv-in (funcall per-layer
+                                        (lambda (l)
+                                          (layer-tensor l
+                                                        "conv.in_proj.weight")))
+                      :conv-w (funcall per-layer
+                                       (lambda (l)
+                                         (let ((w
+                                                (layer-tensor l
+                                                 "conv.conv.weight")))
+                                           (and w (squeeze-middle w)))))
+                      :conv-out (funcall per-layer
+                                         (lambda (l)
+                                           (layer-tensor l
+                                            "conv.out_proj.weight")))))
+               (options
+                (append (list :rope :halves :eps eps :rope-theta rope-theta)
+                        (if partial
+                            (list :rotary-dim (floor (* head-size partial)))
+                            nil) (if types (list :layer-types types) nil)
+                        (architecture family)))
+               (hidden (array-dimension (aref (getf weights :w1) 0) 0)))
           (append (model-options head-size options)
                   (list :dim dim
                         :hidden hidden
@@ -667,11 +761,13 @@
                         :emb emb
                         :rms-final rms-final
                         :wcls wcls
-                        :layers (transformer-layers n-layers head-size weights options))))))))
+                        :layers (transformer-layers n-layers head-size weights
+                                                    options))))))))
 
 (defun load-model (path)
   ;; llama2.c's .bin, or a Hugging Face checkpoint directory.
-  (if (and (> (length path) 4) (string= path ".bin" :start1 (- (length path) 4)))
+  (if (and (> (length path) 4)
+           (string= path ".bin" :start1 (- (length path) 4)))
       (load-checkpoint path)
       (load-hf-checkpoint path)))
 
