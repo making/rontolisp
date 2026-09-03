@@ -58,6 +58,14 @@ reflective test in step 3 should cover the `vec:` constructors too, not only
 `make-array`: it is the same assertion (every permit is reachable, and answers its own
 element type) through a different door.
 
+**And a fourth, which nothing points at.** `upgradedArrayElementType` branches on the
+symbol NAME (`canonicalElementTypeName(sym)`), so a new permit does not reach it either.
+Found 2026-09-03 while working `.todo/484`: `(typep #bf16(1.0) '(array bfloat16))`
+answered `NIL` until it was extended by hand. It showed up in neither the 88 compile
+errors the new permit produced nor any existing test -- only in evaluating the form. This
+is the audit's worst case: silent, unreachable from the type system, and invisible to the
+tests that exist.
+
 Do the same audit for `packedIntegerElementType` next to it (`(unsigned-byte 8|16|32)`):
 it has the same shape and the same silent `null`, and `LispIntVector` may or may not be
 sealed. Report what is there rather than assuming.

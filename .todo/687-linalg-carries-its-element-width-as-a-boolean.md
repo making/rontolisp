@@ -25,6 +25,22 @@ rather than silently answer `#d`, and corrected its own step 6, which had promis
 "the `linalg:` constructors accept `:element-type 'bfloat16`" without knowing about the
 flag. `vec:` carries the width; `linalg:` says it cannot.
 
+## The same shape appears three times
+
+A boolean is a two-valued type, so any width that rides as one admits exactly two widths.
+Found while working `.todo/484` (2026-09-03), in three places, none of which the exhaustive
+switches of `.todo/483` can reach -- a `boolean` has no permits to enumerate:
+
+| where | form | status |
+| --- | --- | --- |
+| `reader/Token` | `FloatArrayOpen(boolean single)` | **fixed** by `.todo/484`: a three-valued `Token.FloatWidth` enum, so `readFloatArray` is an exhaustive switch and a fourth width is a compile error there |
+| `linalg.lisp` -> the backends | `%la-gather-strided (a od rs base single)` | **this item** |
+| `GpuOfferDifferentialTest` (~line 508) | `f ? new LispSingleFloatArray(...) : new LispDoubleFloatArray(...)` | test code; `.todo/486` touches it when it gives the device a width to refuse |
+
+The reader's fix is the model: the boolean was replaced by a type whose values can be
+enumerated, and the compiler then found every site. Do the same here -- the constraint
+that makes it harder is only that this boolean crosses a backend boundary.
+
 ## Do
 
 Widen the protocol from a boolean to a width designator, in one change across every
