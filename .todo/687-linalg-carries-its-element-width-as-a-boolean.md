@@ -25,6 +25,22 @@ rather than silently answer `#d`, and corrected its own step 6, which had promis
 "the `linalg:` constructors accept `:element-type 'bfloat16`" without knowing about the
 flag. `vec:` carries the width; `linalg:` says it cannot.
 
+## The same shape appears three times
+
+A boolean is a two-valued type, so any width that rides as one admits exactly two widths.
+Found while working `.todo/484` (2026-09-03), in three places, none of which the exhaustive
+switches of `.todo/483` can reach -- a `boolean` has no permits to enumerate:
+
+| where | form | status |
+| --- | --- | --- |
+| `reader/Token` | `FloatArrayOpen(boolean single)` | **fixed** by `.todo/484`: a three-valued `Token.FloatWidth` enum, so `readFloatArray` is an exhaustive switch and a fourth width is a compile error there |
+| `linalg.lisp` -> the backends | `%la-gather-strided (a od rs base single)` | **this item** |
+| `GpuOfferDifferentialTest` (~line 508) | `f ? new LispSingleFloatArray(...) : new LispDoubleFloatArray(...)` | test code; `.todo/486` touches it when it gives the device a width to refuse |
+
+The reader's fix is the model: the boolean was replaced by a type whose values can be
+enumerated, and the compiler then found every site. Do the same here -- the constraint
+that makes it harder is only that this boolean crosses a backend boundary.
+
 ## Do
 
 Widen the protocol from a boolean to a width designator, in one change across every
@@ -34,6 +50,14 @@ backend that reads it:
 2. `LinalgSimd.gatherStrided` / `LinalgGpu.gatherStrided` (`args.get(4)`), and any
    compiled-backend counterpart -- grep the arity, not the name.
 3. Whatever the wasm and JVM lowerings do with the flag.
+
+**A small integer code with a `default:` arm is the trap.** It admits a third value while
+re-importing exactly the silence `.todo/483` and this item exist to remove: a fourth width
+would fall past every refusal and every kernel arm in silence. The shape that keeps both
+properties is an integer on the WIRE and an enumerable type in Java -- convert once at
+each entry point (`FloatWidth.ofCode`) and switch exhaustively after that, so a fourth
+width is a compile error at every site. `.todo/486` introduces
+`am.ik.rontolisp.FloatWidth` for its refusals; this item reads the same one.
 
 **The representation is the whole decision.** The javadoc's requirement -- a kernel reads
 the width without comparing symbols -- is a real one and should survive: a small integer

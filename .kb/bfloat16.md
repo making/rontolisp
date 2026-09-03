@@ -5,9 +5,10 @@ exponent bits an f32 has, and seven mantissa bits. It covers the whole f32 range
 trades precision for width, which is what makes it the storage format published
 machine-learning checkpoints use (`.todo/482`).
 
-This file currently covers the SCALAR conversion pair only. The packed `#bf16` array
-width (`.todo/484`/`485`/`486`), the bulk converters and the file-reading path
-(`.todo/487` steps 2-5) are not built yet; when they land they belong here.
+This file covers the SCALAR conversion pair and the rounding `.todo/671`'s bulk pair
+shares with it. The packed `#bf16` array
+width (`.todo/484`/`485`/`486`) and the file-reading path
+(`.todo/487` steps 3-5) are not built yet; when they land they belong here.
 
 ## The pair
 
@@ -60,6 +61,71 @@ program could answer differently on two engines. Doing the bits explicitly on bo
 `Double.longBitsToDouble`) is what makes the exactness claim true rather than hardware-
 dependent. A `double` holds an sNaN unharmed as long as no arithmetic touches it, which
 was measured on this JDK before the design was fixed.
+
+## One rounding, not two
+
+`.todo/671`'s bulk pair (`rontolisp:widen-float-bits` / `narrow-float-bits`, a
+`(unsigned-byte 16)` vector of patterns against an existing packed float array) shares
+this rounding rather than carrying its own: `eval/FloatBitsWidening` calls
+`BFloat16.bits`, and `codegen/jvm/JvmFloat16RuntimeBuilder` emits `bits(float)`
+instruction for instruction. It landed with a private copy of the same trick on each side,
+which is two more things to keep right and would have put a checkpoint's bulk load a bit
+away from what the program computes element by element. `bits(float)` is the arm that
+dedup wanted: no `double` in the way, so a NaN's payload is carried rather than
+force-quieted. Pinned on both backends by
+`LispEvaluatorTest#bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair` and
+`JvmLispCompilerTest#compileAndRunBfloat16BulkAgreesWithTheScalarPair`.
+
+**The bulk pair's one ceiling, measured 2026-09-03.** A bulk WIDEN into a packed
+single-float array goes through a `double` on both backends -- the interpreter builds the
+value with `BFloat16.value` and casts, the JVM emitter decodes with `f2d` and stores with
+`d2f` -- so a signalling NaN is quieted on the way in, and a widen-then-narrow round trip
+is the identity on 65,410 patterns and maps the other 126 to their quiet counterparts.
+Both backends agree exactly, which is why the tests assert that shape rather than the
+plain identity. Closing it means giving the widen an f32 path that never touches a
+`double` (`Float.intBitsToFloat(bits << 16)` straight into the `float[]`, and the JVM
+emitter's shared `storeElemShared` split in two); that belongs to `.todo/671`'s lane, not
+to 487 step 1. The SCALAR pair has no such ceiling -- it is exact on all 65536.
+
+A `rontolisp:` built-in must be registered in `Environment` under its QUALIFIED name
+(`PackageRegistry.qualify`), and a `BuiltinFunctionWrappers` entry for one must spell the
+qualified name too. The resolver hands the evaluator `RONTOLISP:...`, so an unqualified
+binding is simply never found -- 671's four built-ins were all unreachable this way until
+2026-09-03. `ShadowedBuiltinsTest` catches the wrapper half; nothing catches the
+`Environment` half but a test that calls the operator.
+
+## Refusing a width: which kind, and how you can tell
+
+Three behaviours, and the last two are worth telling apart deliberately because prose
+cannot do it.
+
+**A silent DECLINE returns `null` (or `false`) and the rung below answers.** `VecSimd`,
+`LinalgSimd`, `LinalgGpu`, `LinalgBlas`: no lane, device or CBLAS kernel reads this width,
+so the scalar defun runs and the ANSWER is identical, only slower. Nothing is signalled
+because nothing is wrong.
+
+**A TEMPORARY refusal is a `LispEvalException`, raised at RUN time** by the primitive that
+has not been extended yet, and its message says "does not yet". `FloatBitsWidening`'s two
+arms and `linalg.lisp`'s `%la-make` / `%la-etype` guards are these.
+
+**A PERMANENT refusal is a `LispCompileException`, raised on the COMPILE path**, carrying
+a source position and naming both the width and the backend -- "bfloat16 arrays are
+supported on the interpreter and the JVM only". The backends that will never carry the
+width refuse this way (`.todo/486`).
+
+**The phase and the exception type carry the distinction; the prose only decorates it.**
+Told apart by the word "yet" alone, the difference is invisible to every test and is the
+first thing an edit loses. It cannot be delegated to a `.todo/NNN` reference in the
+message either -- a source comment or message may not carry the working item's number --
+so the type has to be what says it. Two tests hold the line: one per backend on the exact
+refusal text, and one -- the load-bearing one -- asserting that every message containing
+"does not yet" comes out as a `LispEvalException` rather than a compile error, so a
+temporary refusal written in the permanent form goes red.
+
+The refusals READ a width, which is why `.todo/486` also introduces the width designator
+`.todo/687` needs: a refusal written against a boolean is one a fourth width falls
+silently past. An integer code with a `default:` arm is the trap -- it admits a third
+value while re-importing exactly the silence being removed.
 
 ## Printing
 
