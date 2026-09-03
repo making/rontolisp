@@ -46,7 +46,7 @@ class JvmClassShakerCorpusTest {
 	// against the project dir, not the @TempDir). Keep in sync with the file names
 	// used by the ci-spec.yaml binary/stream cases.
 	private static final List<String> CORPUS_SCRATCH_FILES = List.of("bin.dat", "seq.dat", "crlf.dat", "pk.dat",
-			"ci-stream-value.txt");
+			"ci-stream-value.txt", "ci-model.gguf");
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndBehavesIdentically() throws Exception {
