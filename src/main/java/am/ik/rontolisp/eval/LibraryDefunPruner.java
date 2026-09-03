@@ -1156,6 +1156,7 @@ public final class LibraryDefunPruner {
 					collectDefinitionNames(SceneLibrary.forms(), names);
 					collectDefinitionNames(TorchLibrary.forms(), names);
 					collectDefinitionNames(TokenizersLibrary.forms(), names);
+					collectDefinitionNames(GgufLibrary.forms(), names);
 					collectDefinitionNames(VecLibrary.forms(), names);
 					collectDefinitionNames(JsonLibrary.forms(), names);
 					collectDefinitionNames(JsonLibrary.wrapperForms(), names);

@@ -52,10 +52,16 @@ sections:
             title: objc Package Functions
           - file: reference/functions/appkit.md
             title: appkit Package Functions
+          - file: reference/functions/checkpoint.md
+            title: checkpoint Package Functions
+          - file: reference/functions/safetensors.md
+            title: safetensors Package Functions
           - file: reference/functions/geom.md
             title: geom Package Functions
           - file: reference/functions/tokenizer.md
             title: tokenizer Package Functions
+          - file: reference/functions/gguf.md
+            title: gguf Package Functions
           - file: reference/functions/metal.md
             title: metal Package Functions
           - file: reference/functions/scene.md
