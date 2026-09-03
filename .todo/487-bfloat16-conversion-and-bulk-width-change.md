@@ -45,6 +45,14 @@ Verification, 2026-09-03:
   top-level names are `bf16-`-prefixed so the concatenated program cannot collide with
   671's cases.
 
+Two things found in `.todo/671`'s freshly landed code while merging, both fixed here:
+its bulk `:bfloat16` narrowing carried a PRIVATE COPY of the same rounding (now
+`BFloat16.bits`, which is also what made the bulk widen-then-narrow round trip exact for
+the 126 signalling NaNs its force-quiet copy lost), and all four of its built-ins were
+registered in `Environment` under their UNQUALIFIED names while `PackageRegistry` exports
+them from `rontolisp` -- so `rontolisp:widen-float-bits` and its three siblings were
+undefined on the interpreter. `LispEvaluatorTest` now calls them.
+
 Two findings worth carrying into steps 2-5, both in `.kb/bfloat16.md`: `(float)(double)`
 QUIETS a signalling NaN (126 of the 65536 patterns broke the round trip until the payload
 was carried across by hand), and WASM's `f32.demote_f64` is free by specification to

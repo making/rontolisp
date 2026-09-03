@@ -5,9 +5,10 @@ exponent bits an f32 has, and seven mantissa bits. It covers the whole f32 range
 trades precision for width, which is what makes it the storage format published
 machine-learning checkpoints use (`.todo/482`).
 
-This file currently covers the SCALAR conversion pair only. The packed `#bf16` array
-width (`.todo/484`/`485`/`486`), the bulk converters and the file-reading path
-(`.todo/487` steps 2-5) are not built yet; when they land they belong here.
+This file covers the SCALAR conversion pair and the rounding `.todo/671`'s bulk pair
+shares with it. The packed `#bf16` array
+width (`.todo/484`/`485`/`486`) and the file-reading path
+(`.todo/487` steps 3-5) are not built yet; when they land they belong here.
 
 ## The pair
 
@@ -60,6 +61,26 @@ program could answer differently on two engines. Doing the bits explicitly on bo
 `Double.longBitsToDouble`) is what makes the exactness claim true rather than hardware-
 dependent. A `double` holds an sNaN unharmed as long as no arithmetic touches it, which
 was measured on this JDK before the design was fixed.
+
+## One rounding, not two
+
+`.todo/671`'s bulk pair (`rontolisp:widen-float-bits` / `narrow-float-bits`, a
+`(unsigned-byte 16)` vector of patterns against an existing packed float array) shares
+this rounding rather than carrying its own: `eval/FloatBitsWidening` calls
+`BFloat16.bits`. It landed with a private copy of the same six-line trick, which is a
+second thing to keep right and would have put a checkpoint's bulk load a bit away from
+what the program computes element by element. `bits(float)` is the arm that dedup wanted
+-- no `double` in the way, so an f32 signalling NaN keeps its payload instead of leaning
+on what the hardware's widening does to one, and the bulk widen-then-narrow round trip is
+exact for all 65536 patterns. Pinned by
+`LispEvaluatorTest#bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair`.
+
+A `rontolisp:` built-in must be registered in `Environment` under its QUALIFIED name
+(`PackageRegistry.qualify`), and a `BuiltinFunctionWrappers` entry for one must spell the
+qualified name too. The resolver hands the evaluator `RONTOLISP:...`, so an unqualified
+binding is simply never found -- 671's four built-ins were all unreachable this way until
+2026-09-03. `ShadowedBuiltinsTest` catches the wrapper half; nothing catches the
+`Environment` half but a test that calls the operator.
 
 ## Printing
 

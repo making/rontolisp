@@ -59,7 +59,25 @@ public final class BFloat16 {
 			// backends emit this arithmetic instruction for instruction.
 			return ((int) (b >>> 63) << 15) | 0x7f80 | (payload | ((payload - 1) >>> 31));
 		}
-		int f = Float.floatToRawIntBits((float) value);
+		return bits((float) value);
+	}
+
+	/**
+	 * The bfloat16 bit pattern of a single-precision value, rounded to nearest even. The
+	 * arm a packed single-float array's bulk narrowing wants: no {@code double} in the
+	 * way, so a signalling NaN keeps its payload without depending on what the hardware's
+	 * own widening does to one.
+	 * @param value the value
+	 * @return the pattern, an integer 0..65535
+	 */
+	public static int bits(float value) {
+		int f = Float.floatToRawIntBits(value);
+		if ((f & 0x7f800000) == 0x7f800000 && (f & 0x007fffff) != 0) {
+			// NaN, handled before the bias-add below: a heavy payload's low bits would
+			// carry all the way into the sign there and answer a signed zero's pattern.
+			int payload = (f >>> 16) & 0x7f;
+			return (f >>> 16) & 0x8000 | 0x7f80 | (payload | ((payload - 1) >>> 31));
+		}
 		// Round to nearest even: add half an ulp, plus one more when the surviving low
 		// bit is odd, then drop the sixteen bits below. An infinity survives it (the
 		// carry cannot leave the exponent field) and an overflowing finite becomes one.
