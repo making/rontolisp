@@ -54,6 +54,8 @@ sections:
             title: appkit パッケージの関数
           - file: reference/functions/geom.md
             title: geom パッケージの関数
+          - file: reference/functions/tokenizer.md
+            title: tokenizer パッケージの関数
           - file: reference/functions/metal.md
             title: metal パッケージの関数
           - file: reference/functions/scene.md

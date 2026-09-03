@@ -17079,6 +17079,26 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void bfloat16BitsAndBackRoundTripEveryPattern() {
+		assertThat(eval("(list (rontolisp:bfloat16-bits 1.0) (rontolisp:bfloat16-bits -2.5)"
+				+ " (rontolisp:bits-bfloat16 16256) (rontolisp:bits-bfloat16 (rontolisp:bfloat16-bits 0.1)))")
+			.print()).isEqualTo("(16256 49184 1.0 0.10009765625)");
+		// Round to nearest EVEN, both directions: 1.00390625 and 1.01171875 are the two
+		// exact midpoints either side of 1.005859375, and a truncating narrowing would
+		// answer 16256 and 16257 instead.
+		assertThat(eval("(list (rontolisp:bfloat16-bits 1.00390625) (rontolisp:bfloat16-bits 1.01171875))").print())
+			.isEqualTo("(16256 16258)");
+		// Widening is exact and total, so the pair is an involution on every pattern.
+		assertThat(eval("(let ((bad 0)) (dotimes (i 65536 bad)"
+				+ " (unless (= i (rontolisp:bfloat16-bits (rontolisp:bits-bfloat16 i))) (incf bad))))")
+			.print()).isEqualTo("0");
+		// An integer argument coerces like any other real, and a first-class reference
+		// reaches the same answer through the wrapper.
+		assertThat(eval("(list (rontolisp:bfloat16-bits 2) (mapcar #'rontolisp:bfloat16-bits (list 1.0 2.0)))").print())
+			.isEqualTo("(16384 (16256 16384))");
+	}
+
+	@Test
 	void ecaseMatchesAPackageQualifiedClauseKeyAgainstQuotedData() {
 		assertThat(evalMulti("""
 				(defpackage #:casepkg (:use #:cl))

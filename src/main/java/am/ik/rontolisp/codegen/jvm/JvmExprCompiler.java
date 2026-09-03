@@ -397,6 +397,14 @@ final class JvmExprCompiler {
 					compileExpr(LispMacroExpander.expandWithMutex(cons), ctx, className);
 					return;
 				}
+				if (LispNames.BFLOAT16_BITS.equals(qn.member())) {
+					JvmBFloat16Compiler.compileBits(cons, ctx, className);
+					return;
+				}
+				if (LispNames.BITS_BFLOAT16.equals(qn.member())) {
+					JvmBFloat16Compiler.compileFromBits(cons, ctx, className);
+					return;
+				}
 				if (LispNames.MAKE_MUTEX.equals(qn.member()) || LispNames.MUTEX_ACQUIRE.equals(qn.member())
 						|| LispNames.MUTEX_RELEASE.equals(qn.member())) {
 					// A real ReentrantLock, handed out as the handle itself
@@ -411,6 +419,22 @@ final class JvmExprCompiler {
 					// A real virtual thread behind a marker-headed opaque handle
 					// (JvmThreadRuntimeBuilder, emitted because the reference gated it).
 					compileThread(qn.member(), cons, ctx, className);
+					return;
+				}
+				if (LispNames.FLOAT16_BITS.equals(qn.member())) {
+					JvmFloat16Compiler.compileFloat16Bits(cons, ctx, className);
+					return;
+				}
+				if (LispNames.BITS_FLOAT16.equals(qn.member())) {
+					JvmFloat16Compiler.compileBitsFloat16(cons, ctx, className);
+					return;
+				}
+				if (LispNames.WIDEN_FLOAT_BITS.equals(qn.member())) {
+					JvmFloat16Compiler.compileWiden(cons, ctx, className);
+					return;
+				}
+				if (LispNames.NARROW_FLOAT_BITS.equals(qn.member())) {
+					JvmFloat16Compiler.compileNarrow(cons, ctx, className);
 					return;
 				}
 				// Other rontolisp: members (user defuns in that package) fall through.

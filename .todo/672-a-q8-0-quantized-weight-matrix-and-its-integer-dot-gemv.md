@@ -47,6 +47,12 @@ kernel and every `setf aref` an arm they can only refuse. So:
 - `(rontolisp:quantize a 'q8-0)` from a packed float array (ggml's absmax-over-32 rule,
   `round` to nearest), `(rontolisp:dequantize m element-type)` to a fresh `#f` / `#bf16`
   / `#d`, and the readers (`.todo/673`) build one straight from the file's bytes.
+  **Sequentially, from the front.** `file-position` answers `nil` on every backend
+  (`.todo/390`), so nothing here may seek: a Q8_0 tensor's blocks -- 32 int8 quants then
+  one f16 scale, repeated -- are walked in file order, and a scale is picked out of the
+  bytes already read rather than sought to. This costs nothing (a checkpoint is read
+  whole anyway) but it rules out the shape a `file-position` API would invite, so do not
+  write one and then discover the constraint.
 - Printing: `#<quantized-matrix q8-0 (rows cols)>` -- there is no literal syntax and
   there should not be one; a quantized matrix comes from a file or from `quantize`.
 
