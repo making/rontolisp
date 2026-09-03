@@ -86,6 +86,30 @@ makes -- and the precondition that `.todo/485` alone does not satisfy it, becaus
 `eval/VecSimd` declines a bf16 array at every dispatch point until `.todo/488`'s wiring
 lands.
 
+## The week is certified: develop `080b3d75`, 2026-09-03
+
+Both orchestrators stopped here, every worktree clean.
+
+| run | box | result |
+| --- | --- | --- |
+| full suite | dorian | 9977 / 0 / 0, 276 skipped, 227 reports (at `656c170d`) |
+| full suite | GB10 | 9976 / 0 / 0, 189 skipped, 227 reports (at `281fda90`) |
+| native `CiSpecE2eTest` | dorian | 1972 / 0 / 0, including the bf16 `refusedOn` wasm legs |
+| llama2 e2e slices | dorian | 35 / 35 |
+| GPU leg, 6 classes | GB10 | 205 / 0 / 0, with `486` in |
+
+**Neither pair of numbers matches, and every difference is accounted for**: 9977 against
+9976 is the one regression test `.todo/692` added, and the 87-skip gap is the device
+(`GpuTest` 57 + `MetalGpuTest` 54 skip on a box with neither). **Two suites agreeing
+exactly across boxes with different hardware would be the result to distrust.**
+
+Two runs certify a head they did not run against, and both used the same rule: **decide by
+the FILE SET, never by elapsed time.** The GPU leg started at `281fda90` and head moved
+under it; A's suite ran at `656c170d` and head moved to `080b3d75`. In both cases
+`git diff --stat <ran-at> <head> -- src/` was empty, so the run still certifies the code
+and a re-run would only re-measure `.todo/` edits. The check is one command and it is the
+whole argument -- "it was only a few minutes" is not.
+
 ## Lanes for the week of 2026-09-08: two orchestrators, TWO workers each
 
 Everything that is left is either A's model work or B's width work, and the two cross at
@@ -154,6 +178,19 @@ Sizing: A1 Medium, A2 High (a Fable-class model); B1 High, B2 Low-to-Medium then
    width by name, which shows only in a program containing `read-from-string`; and
    `.todo/692`, filed against a `.todo/671` that closed claiming all four backends --
    its tests counted backends and never counted `--simd` on each.
+
+7. **A rule one lane derives from one measurement is a hypothesis until the other lane
+   has tried to break it.** Three corrections on 2026-09-03, each of which would have
+   entered `.kb` as a law if a single lane had been working: (a) B wrote "1496 errors
+   cannot be explained by a defect in the object" and A adopted it -- the clean re-run
+   reproduced 1496 from ONE cause and refuted both, leaving the weaker rule that survives
+   (a failure count's SIZE narrows the SEARCH, never the VERDICT); (b) A blamed a stale
+   `target/classes`, re-ran from `clean`, got the identical number and retracted their own
+   retraction; (c) a lane reported "the interpreter does not narrow on `aset`" and
+   requiring identification before the fix produced a retraction instead -- the oracle was
+   hand-written, so the "parity test" was two assertions and its failure named neither
+   (`.kb/measurement-probes.md`). **State the claim to the other lane BEFORE writing it
+   into `.kb`**; the cost is one message and it caught three.
 
 ## What is deliberately not in the plan
 

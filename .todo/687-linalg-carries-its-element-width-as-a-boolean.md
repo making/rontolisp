@@ -72,6 +72,42 @@ Deciding the representation twice -- once for the refusal and once for the widen
 would produce two shapes for one question. Whichever lands first should define the
 designator and the other should use it.
 
+## What `.todo/486` already landed here, and the one hole it left
+
+**Steps 1-3 of "Do" are done.** `.todo/486`'s work converted `%la-gather-strided`'s fifth
+argument from a boolean to a width CODE and gave `LinalgSimd.gatherStrided` the shape this
+item asked for -- `FloatWidth.ofCode` at the entry point, then a switch EXPRESSION (not a
+statement switch: only the expression form is checked for exhaustiveness over an enum) with
+an explicit `BFLOAT16 -> null` decline. `linalg.lisp` routes every internal width question
+through `%la-etype`. **What is left of this item is the larger half**: `linalg:zeros` /
+`ones` / the constructors and the element-wise operators carrying a third width at all,
+which `%la-make` still declines.
+
+**The conversion broke three readers on the way, and the shape is worth keeping.** The
+change grepped readers by NAME and found two of FIVE. The three it missed --
+`JvmSimdVectorTemplate.laGatherStrided` (`single = singlev != null`),
+`JvmGpuTemplate.gpuGatherStrided`, and `WasmLinalgSimdRuntimeBuilder.buildGatherStrided`
+(`ref.is_null` / `i32.eqz`) -- all tested the argument for NULLNESS. A boxed `Long 0` is
+not null and an i31 `0` is not a null ref, so all three read EVERY width as single-float,
+and the JVM `--simd` one returned a `float[]` for a double gather: **data corruption, not a
+decline.** All three are fixed. Grep the ARITY, as "Do" step 2 already says, never the name.
+
+**Two failure modes meet at this one door and they need different instruments:**
+
+- a missed CALLER meeting a DECLINING reader is silently correct-but-scalar. Nothing
+  differs at run time, so it is pinned AT THE SOURCE -- `LinalgWidthWireTest` reads
+  `linalg.lisp` through the project's own `LispReader` (AST, not regex) and asserts every
+  `%la-gather-strided` call passes `(linalg::%la-width-code ...)`.
+- a missed READER that GUESSES is silently wrong. The answer differs at run time, so no
+  source pin can see it; only a differential test against the defun can.
+
+**The open hole.** The three travelling templates cannot import `FloatWidth` (they travel
+into compiled output), so they hardcode its codes as literal `0`/`1`. The test written with
+the fix asserts the codes are DISTINCT and ROUND-TRIP, which does **not** pin the values:
+reorder the enum and the test stays green while all three templates read the wrong width.
+Pin the literals, with a javadoc on `FloatWidth.code()` naming the three templates that
+transcribe them.
+
 ## Verify
 
 - `linalg:zeros` / `ones` / the constructors accept every width `vec:` accepts, and the

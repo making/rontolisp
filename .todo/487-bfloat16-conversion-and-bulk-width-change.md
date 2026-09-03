@@ -99,6 +99,22 @@ invent any NaN payload at all -- so neither direction may route a NaN through th
    reuse of ~16 on a 67 MB matrix, so this is the minority path; keep it simple and do not
    allocate the scratch per call.
 
+## The census covers WIDTH DECISIONS, not only NaN handling
+
+The three travelling templates (`.todo/687`) and `NoGcWasmCompiler.compileFloatArrayLiteral`
+are transcriptions of a width DECISION with no differential test, which is why an edit to
+the width wire could break them silently -- the same class of duplicate as the seven copies
+of the bf16 arithmetic, found by a different symptom. Count both.
+
+One open-reachability site, recorded as unchecked rather than asserted as a bug:
+`compileFloatArrayLiteral` crosses a `double` TWICE per element -- `elementAt` is an
+implicit f32 -> f64 widening (`LispSingleFloatArray:56` returns `data()[flat]`), then a
+`(float)` cast, then the emitted `f64.const` + `f32.demote_f64` at run time. Its comment
+claims the round trip is lossless, which is true of every value except a signalling NaN
+(`.kb/bfloat16.md`: a NaN must never cross a `double` in either direction). **Whether a
+signalling NaN can reach an `#f(...)` literal through the reader is UNCHECKED** -- settle
+that before deciding whether the comment is wrong or merely unreachable.
+
 ## Verify
 
 - `(bits-bfloat16 (bfloat16-bits x))` is the bf16-rounded `x` for a sweep including
