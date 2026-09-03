@@ -470,3 +470,28 @@ subject.**
    resolving it silently is the failure this rule exists to stop. `.todo/480`'s README
    carried 1.21x and 1.29x for the same shape in two adjacent tables for a day before
    anyone noticed they were the same shape.
+
+## Rule 5: a parity test with a hand-written oracle is two asserts, not one
+
+**A test that claims PARITY asserts the two backends against EACH OTHER. If it also
+wants a hand-written expected value, that is a different claim, and it goes in its own
+assert, on its own line, under its own name.** Fold the two into one assertion and a
+failure no longer says which of the three parties -- backend A, backend B, the string
+you typed -- is the one that is wrong.
+
+`.todo/485` (2026-09-03) had `assertThat(both(program)).isEqualTo("(249750.0 499.0
+0.5)")`, where `both` ran a program on the interpreter and the JVM, asserted them equal,
+and answered the text. The parity assert PASSED; the literal was wrong (499.5 is not
+representable at bfloat16, the ulp on [256, 512) is 2, and both backends correctly answered
+500.0). Read off the AssertJ expected/actual, the failure was reported as "the interpreter
+does not narrow on this path" -- a bug in the party the author was watching, attributed
+from a failure in the party the author had stopped seeing. The arithmetic that disproved
+it ("499.0 cannot come out of a correct narrowing") was correct from the start; it pointed
+at the literal, not at the interpreter, and the retraction cost a probe under the test
+JVM to establish what the test's own shape could have said in its message.
+
+**What to do about it**: keep `both()`-style helpers to the parity claim, and name the
+oracle claim separately (`...AgreeWithEachOther` and `...AnswerTheRoundedSum`), so the
+red line names the party. And before attributing a failure to a backend, re-read the
+assertion and count the parties in it -- a hand-written value is a party.
+

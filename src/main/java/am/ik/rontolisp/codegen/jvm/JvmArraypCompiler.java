@@ -35,6 +35,7 @@ final class JvmArraypCompiler {
 		if (ctx.usesFloatArray) {
 			packedClasses.add("[D");
 			packedClasses.add("[F");
+			packedClasses.add("[S");
 		}
 		List<Integer> gotoEnds = new ArrayList<>();
 		for (String cls : packedClasses) {

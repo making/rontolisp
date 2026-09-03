@@ -202,6 +202,18 @@ final class JvmAsm {
 		JvmRuntimeBuilder.emitU2(this.code, c.index());
 	}
 
+	/** Pushes an int constant from the pool via {@code ldc} / {@code ldc_w}. */
+	void ldcInt(am.ik.jvm.ConstantPool.IntegerConstant ic) {
+		if (ic.index() <= 255) {
+			this.code.add(Opcode.LDC);
+			this.code.add(ic.index());
+		}
+		else {
+			this.code.add(Opcode.LDC_W);
+			JvmRuntimeBuilder.emitU2(this.code, ic.index());
+		}
+	}
+
 	void ldcString(StringConstant sc) {
 		if (sc.index() <= 255) {
 			this.code.add(Opcode.LDC);
@@ -355,6 +367,26 @@ final class JvmAsm {
 
 	void l2d() {
 		this.code.add(Opcode.L2D);
+	}
+
+	// --- short[] support (used by the packed bfloat16 array runtime) ---
+
+	/** The {@code newarray short} instruction (atype 9 = {@code T_SHORT}). */
+	void newarrayShort() {
+		this.code.add(Opcode.NEWARRAY);
+		this.code.add(9);
+	}
+
+	void saload() {
+		this.code.add(Opcode.SALOAD);
+	}
+
+	void sastore() {
+		this.code.add(Opcode.SASTORE);
+	}
+
+	void swap() {
+		this.code.add(Opcode.SWAP);
 	}
 
 	void dadd() {

@@ -72,6 +72,15 @@ final class JvmSimdCompiler {
 			Map.entry(LispNames.VEC_MINUS, 2), Map.entry(LispNames.VEC_STAR, 2), Map.entry(LispNames.VEC_SLASH, 2));
 
 	/**
+	 * The members whose LAST arguments are scalars rather than packed arrays, mapped to
+	 * how many: every other member's arguments are all arrays. The lane-kernel guard
+	 * below asks each ARRAY argument, positively, whether it is a width the lane kernels
+	 * carry; a scalar position is never asked.
+	 */
+	private static final Map<String, Integer> SCALAR_TAIL = Map.of(LispNames.VEC_SCALE, 1, LispNames.VEC_SCALE_INTO, 1,
+			LispNames.VEC_CLIP, 2, LispNames.VEC_CLIP_INTO, 2);
+
+	/**
 	 * Returns whether the given {@code simd} package member is one of the vectorizable
 	 * kernels this compiler accelerates.
 	 */
@@ -167,14 +176,17 @@ final class JvmSimdCompiler {
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slots[i - 1]);
 		}
-		// if (!_simdReady()) goto fallback; Bridge(slots...); goto end; fallback:
-		// defun(slots...); end: -- the fallback lands exactly where a declined linalg:
-		// attempt would, so the gpu unswap below applies uniformly to either answer.
+		// if (!_simdReady()) goto fallback; if (!laneWidth(array args)) goto fallback;
+		// Bridge(slots...); goto end; fallback: defun(slots...); end: -- the fallback
+		// lands exactly where a declined linalg: attempt would, so the gpu unswap below
+		// applies uniformly to either answer.
+		List<Integer> fallbackBranches = new ArrayList<>();
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get(JvmSimdRuntimeBuilder.AVAILABLE)).index());
-		int fallbackBranch = ctx.code.size();
+		fallbackBranches.add(ctx.code.size());
 		ctx.emit(Opcode.IFEQ);
 		ctx.emitU2(0);
+		emitLaneWidthGuard(ctx, member, slots, fallbackBranches);
 		for (int slot : slots) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(slot);
@@ -184,7 +196,9 @@ final class JvmSimdCompiler {
 		int skipFallback = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, fallbackBranch, ctx.code.size());
+		for (int fallbackBranch : fallbackBranches) {
+			JvmEmitHelper.patchBranch(ctx, fallbackBranch, ctx.code.size());
+		}
 		for (int slot : slots) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(slot);
@@ -303,19 +317,24 @@ final class JvmSimdCompiler {
 		if (simd != null) {
 			// if (!_simdReady()) goto fallback -- a runtime without jdk.incubator.vector
 			// (JvmSimdRuntimeBuilder) takes the scalar defun instead, the same decline
-			// every other accelerated vec:/linalg: call site gives.
+			// every other accelerated vec:/linalg: call site gives -- and so does an
+			// operand of a width the lane kernels do not carry (emitLaneWidthGuard).
+			List<Integer> fallbackBranches = new ArrayList<>();
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)).index());
-			int fallbackBranch = ctx.code.size();
+			fallbackBranches.add(ctx.code.size());
 			ctx.emit(Opcode.IFEQ);
 			ctx.emitU2(0);
+			emitLaneWidthGuard(ctx, member, slots, fallbackBranches);
 			loadAll(ctx, slots);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(Objects.requireNonNull(simd.get(member)).index());
 			int skipFallback = ctx.code.size();
 			ctx.emit(Opcode.GOTO);
 			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, fallbackBranch, ctx.code.size());
+			for (int fallbackBranch : fallbackBranches) {
+				JvmEmitHelper.patchBranch(ctx, fallbackBranch, ctx.code.size());
+			}
 			loadAll(ctx, slots);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(defun.methodref().index());
@@ -341,6 +360,45 @@ final class JvmSimdCompiler {
 		}
 		for (int branchPos : deviceBranches) {
 			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+		}
+	}
+
+	/**
+	 * The lane kernels are TOTAL over the widths they carry -- a packed {@code double[]}
+	 * or {@code float[]} -- and cast anything else ({@link JvmSimdVectorTemplate}), so
+	 * every ARRAY argument is asked, POSITIVELY, whether it is one of those two before
+	 * the kernel is called; any other representation (a {@code bfloat16} {@code short[]}
+	 * today, whatever {@code .todo/672} brings tomorrow) takes the spliced
+	 * {@code vec.lisp} defun over the packed representation instead, the same decline the
+	 * interpreter's {@code VecSimd} chain gives. Asking "is it the unsupported one?"
+	 * would let the next unsupported width fall through to the cast. A scalar position
+	 * ({@link #SCALAR_TAIL}) is not an array and is not asked. Each failing test branches
+	 * to the caller's fallback; the positions are appended to {@code fallbackBranches}
+	 * for the caller to patch.
+	 */
+	private static void emitLaneWidthGuard(JvmLispCompiler.Ctx ctx, String member, int[] slots,
+			List<Integer> fallbackBranches) {
+		int arrays = slots.length - SCALAR_TAIL.getOrDefault(member, 0);
+		int doubleArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[D")).index();
+		int floatArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[F")).index();
+		for (int i = 0; i < arrays; i++) {
+			// if (!(slot instanceof double[]) && !(slot instanceof float[])) goto
+			// fallback
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slots[i]);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(doubleArrayClass);
+			int isDouble = ctx.code.size();
+			ctx.emit(Opcode.IFNE);
+			ctx.emitU2(0);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slots[i]);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(floatArrayClass);
+			fallbackBranches.add(ctx.code.size());
+			ctx.emit(Opcode.IFEQ);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, isDouble, ctx.code.size());
 		}
 	}
 

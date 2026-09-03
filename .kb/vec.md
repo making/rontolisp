@@ -19,10 +19,18 @@ is **width-polymorphic** and rides on both — the element-wise kernels preserve
 width on every backend (`vec::%make-like`), and the reductions fold to an f64 scalar.
 
 Per-backend repr: interpreter `record LispDoubleFloatArray(double[] data, int[] dims)`
-(one width of the sealed `LispFloatArray` umbrella, `LispSingleFloatArray(float[])` being
-the other); JVM a bare `double[]` with an embedded `[rank, dim..., data...]` header (data
-offset `1 + rank`, so a rank-1 vector is `[1.0, n, e0..]`; single-float is a bare
-`float[]` with the same header); wasm-GC a distinct `TYPE_FARRAY` struct whose data field
+(one width of the sealed `LispFloatArray` umbrella, `LispSingleFloatArray(float[])` and
+`LispBFloat16Array(short[])` being the others, `.kb/bfloat16.md`); JVM a bare primitive
+array with an embedded dimension header whose LAYOUT IS WIDTH-DEPENDENT and owned by
+`codegen/jvm/JvmPackedFloatWidth`: a `double[]` / `float[]` carries `[rank, dim...,
+data...]` with data offset `1 + rank` (a rank-1 vector is `[1.0, n, e0..]`), while the
+`bfloat16` `short[]` carries `[rank, hi_0, lo_0, ..., data...]` -- two slots per
+dimension, since a `short` cannot hold a dimension above 32767 -- with data offset
+`1 + 2 * rank`. **No emitter spells the offset itself**: every header read and write goes
+through that enum's emit methods, because a site that hard-codes `1 + rank` reads a
+length-1 bfloat16 array's rank word as its element, silently, and only a comparison
+against the interpreter (which has no header) shows it (`JvmBFloat16ArrayTest`, which
+runs every case on both backends for that reason); wasm-GC a distinct `TYPE_FARRAY` struct whose data field
 holds a `TYPE_F64ARR = (array (mut f64))` (double) or, for `#f` single-float, a
 `TYPE_F32ARR = (array (mut f32))` — the same struct, width told apart by
 `ref.test $f32arr` (todo-95 Phase 4) -- **except under `--simd`**, where the data field

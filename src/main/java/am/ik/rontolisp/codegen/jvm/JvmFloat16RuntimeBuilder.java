@@ -60,6 +60,7 @@ final class JvmFloat16RuntimeBuilder {
 	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant selfClass) {
 		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
 		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
+		ClassConstant shortArrayClass = cp.addClass(cp.addUtf8("[S"));
 		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		ClassConstant floatClass = cp.addClass(cp.addUtf8("java/lang/Float"));
@@ -85,10 +86,11 @@ final class JvmFloat16RuntimeBuilder {
 				cp.addUtf8(JvmFloatArrayRuntimeBuilder.LENGTH), cp.addUtf8(JvmFloatArrayRuntimeBuilder.LENGTH_DESC)));
 
 		List<ArrayMethod> methods = new ArrayList<>();
-		methods.add(buildWiden(cp, doubleArrayClass, floatArrayClass, longArrayClass, rtExClass, rtExInit,
-				stringEqualsObj, float16ToFloat, intBitsToFloat));
-		methods.add(buildNarrow(cp, doubleArrayClass, floatArrayClass, longArrayClass, longClass, rtExClass, rtExInit,
-				longIntValue, stringEqualsObj, floatToFloat16, floatToRawIntBits, floatIsNaN, fvLength));
+		methods.add(buildWiden(cp, doubleArrayClass, floatArrayClass, shortArrayClass, longArrayClass, rtExClass,
+				rtExInit, stringEqualsObj, float16ToFloat, intBitsToFloat));
+		methods.add(buildNarrow(cp, doubleArrayClass, floatArrayClass, shortArrayClass, longArrayClass, longClass,
+				rtExClass, rtExInit, longIntValue, stringEqualsObj, floatToFloat16, floatToRawIntBits, floatIsNaN,
+				fvLength));
 		return methods;
 	}
 
@@ -100,9 +102,9 @@ final class JvmFloat16RuntimeBuilder {
 	// 1=format, 2=dst, 3=start, 4=bitsArr, 5=n, 6=float16, 7=dArr, 8=rank, 9=off, 10=i,
 	// 11=bTmp, 12=vf (the decoded float -- NEVER widened to double: see emitWidenArm).
 	private static ArrayMethod buildWiden(ConstantPool cp, ClassConstant doubleArrayClass,
-			ClassConstant floatArrayClass, ClassConstant longArrayClass, ClassConstant rtExClass,
-			MethodrefConstant rtExInit, MethodrefConstant stringEqualsObj, MethodrefConstant float16ToFloat,
-			MethodrefConstant intBitsToFloat) {
+			ClassConstant floatArrayClass, ClassConstant shortArrayClass, ClassConstant longArrayClass,
+			ClassConstant rtExClass, MethodrefConstant rtExInit, MethodrefConstant stringEqualsObj,
+			MethodrefConstant float16ToFloat, MethodrefConstant intBitsToFloat) {
 		int bitsP = 0, formatP = 1, dstP = 2, startP = 3, bitsArr = 4, n = 5, float16 = 6, dArr = 7, rank = 8, off = 9,
 				i = 10, bTmp = 11, vf = 12;
 		JvmAsm a = new JvmAsm();
@@ -118,6 +120,7 @@ final class JvmFloat16RuntimeBuilder {
 		emitFormatCheck(a, cp, float16, rtExClass, rtExInit, stringEqualsObj, formatP, "WIDEN-FLOAT-BITS");
 
 		int tryFloat = a.label();
+		int tryShort = a.label();
 		int notArray = a.label();
 		a.aload(dstP);
 		a.instanceOf(doubleArrayClass);
@@ -127,9 +130,16 @@ final class JvmFloat16RuntimeBuilder {
 		a.bind(tryFloat);
 		a.aload(dstP);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, notArray);
+		a.branch(Opcode.IFEQ, tryShort);
 		emitWidenArm(a, true, floatArrayClass, float16ToFloat, intBitsToFloat, dstP, bitsArr, n, float16, startP, dArr,
 				rank, off, i, bTmp, vf);
+		// A bfloat16 destination is the interpreter's TEMPORARY decline
+		// (eval/FloatBitsWidening), word for word: .todo/487 adds the copy.
+		a.bind(tryShort);
+		a.aload(dstP);
+		a.instanceOf(shortArrayClass);
+		a.branch(Opcode.IFEQ, notArray);
+		emitThrow(a, cp, rtExClass, rtExInit, "WIDEN-FLOAT-BITS: does not yet write a bfloat16 destination");
 		a.bind(notArray);
 		emitThrow(a, cp, rtExClass, rtExInit, "WIDEN-FLOAT-BITS: dst must be a packed float array");
 		return new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), 6, 13, a.finish());
@@ -216,10 +226,10 @@ final class JvmFloat16RuntimeBuilder {
 	// Locals: 0=src, 1=format, 2=dst, 3=start, 4=n, 5=float16, 6=sArr, 7=bitsArr, 8=i,
 	// 9=fTmp, 10=bitsInt, 11=resultInt, 12=rank, 13=off.
 	private static ArrayMethod buildNarrow(ConstantPool cp, ClassConstant doubleArrayClass,
-			ClassConstant floatArrayClass, ClassConstant longArrayClass, ClassConstant longClass,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, MethodrefConstant longIntValue,
-			MethodrefConstant stringEqualsObj, MethodrefConstant floatToFloat16, MethodrefConstant floatToRawIntBits,
-			MethodrefConstant floatIsNaN, MethodrefConstant fvLength) {
+			ClassConstant floatArrayClass, ClassConstant shortArrayClass, ClassConstant longArrayClass,
+			ClassConstant longClass, ClassConstant rtExClass, MethodrefConstant rtExInit,
+			MethodrefConstant longIntValue, MethodrefConstant stringEqualsObj, MethodrefConstant floatToFloat16,
+			MethodrefConstant floatToRawIntBits, MethodrefConstant floatIsNaN, MethodrefConstant fvLength) {
 		int srcP = 0, formatP = 1, dstP = 2, startP = 3, n = 4, float16 = 5, sArr = 6, bitsArr = 7, i = 8, fTmp = 9,
 				bitsInt = 10, resultInt = 11, rank = 12, off = 13;
 		JvmAsm a = new JvmAsm();
@@ -235,6 +245,7 @@ final class JvmFloat16RuntimeBuilder {
 		a.astore(bitsArr);
 
 		int tryFloat = a.label();
+		int tryShort = a.label();
 		int notArray = a.label();
 		a.aload(srcP);
 		a.instanceOf(doubleArrayClass);
@@ -244,9 +255,15 @@ final class JvmFloat16RuntimeBuilder {
 		a.bind(tryFloat);
 		a.aload(srcP);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, notArray);
+		a.branch(Opcode.IFEQ, tryShort);
 		emitNarrowArm(a, true, floatArrayClass, floatToFloat16, floatToRawIntBits, floatIsNaN, srcP, bitsArr, n,
 				float16, startP, sArr, i, fTmp, bitsInt, resultInt, rank, off);
+		// A bfloat16 source is the interpreter's TEMPORARY decline, word for word.
+		a.bind(tryShort);
+		a.aload(srcP);
+		a.instanceOf(shortArrayClass);
+		a.branch(Opcode.IFEQ, notArray);
+		emitThrow(a, cp, rtExClass, rtExInit, "NARROW-FLOAT-BITS: does not yet read a bfloat16 source");
 		a.bind(notArray);
 		emitThrow(a, cp, rtExClass, rtExInit, "NARROW-FLOAT-BITS: src must be a packed float array");
 		return new ArrayMethod(cp.addUtf8(NARROW), cp.addUtf8(NARROW_DESC), 6, 14, a.finish());

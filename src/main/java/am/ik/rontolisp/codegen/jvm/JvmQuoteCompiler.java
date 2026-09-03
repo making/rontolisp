@@ -90,7 +90,8 @@ final class JvmQuoteCompiler {
 	private static boolean isSharedAggregate(LispVal val) {
 		return val instanceof LispCons || val instanceof LispArray || val instanceof am.ik.rontolisp.LispInstance
 				|| val instanceof am.ik.rontolisp.LispDoubleFloatArray
-				|| val instanceof am.ik.rontolisp.LispSingleFloatArray || val instanceof am.ik.rontolisp.LispIntVector;
+				|| val instanceof am.ik.rontolisp.LispSingleFloatArray
+				|| val instanceof am.ik.rontolisp.LispBFloat16Array || val instanceof am.ik.rontolisp.LispIntVector;
 	}
 
 	/**
@@ -239,6 +240,41 @@ final class JvmQuoteCompiler {
 		ctx.emit(Opcode.FASTORE);
 	}
 
+	/**
+	 * Emits a packed bfloat16 array literal ({@code #bf16(...)}) as a bare
+	 * {@code short[]} with the two-slots-per-dimension header
+	 * {@link JvmPackedFloatWidth#BFLOAT16} lays out ({@code [rank, hi_0, lo_0, ...,
+	 * e_0, ...]}, data offset {@code 1 + 2 * rank}). Each word -- header and element
+	 * alike -- is a {@code sipush} of its low sixteen bits followed by {@code sastore},
+	 * so a bfloat16 literal costs about half the bytes of the {@code #f} one, which is
+	 * what keeps it furthest from {@code .todo/017}'s baked-constant ceiling.
+	 * @param fa the packed literal
+	 * @param ctx the compilation context
+	 */
+	static void compileBFloat16PackedLiteral(am.ik.rontolisp.LispBFloat16Array fa, JvmLispCompiler.Ctx ctx) {
+		short[] data = fa.data();
+		int[] header = JvmPackedFloatWidth.BFLOAT16.headerWords(fa.dims());
+		int off = header.length;
+		JvmEmitHelper.emitIntConst(ctx, off + data.length);
+		ctx.emit(Opcode.NEWARRAY);
+		ctx.emit(9); // T_SHORT
+		for (int h = 0; h < off; h++) {
+			emitRawShortStore(ctx, h, (short) header[h]);
+		}
+		for (int f = 0; f < data.length; f++) {
+			emitRawShortStore(ctx, off + f, data[f]);
+		}
+	}
+
+	// Stores a short at index into the short[] on top of the stack (DUP; index; value;
+	// SASTORE), leaving the array on the stack.
+	private static void emitRawShortStore(JvmLispCompiler.Ctx ctx, int index, short value) {
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.emitIntConst(ctx, index);
+		JvmEmitHelper.emitIntConst(ctx, value);
+		ctx.emit(Opcode.SASTORE);
+	}
+
 	// Pushes an unboxed double constant (no Double.valueOf), the raw value to store into
 	// a double[].
 	private static void emitRawDouble(JvmLispCompiler.Ctx ctx, double value) {
@@ -281,6 +317,9 @@ final class JvmQuoteCompiler {
 			// the
 			// general array and from the double[] packed representation.
 			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
+			// A packed #bf16(...) bfloat16 literal compiles to a native short[] with the
+			// two-slot dimension header, disjoint from every other shape.
+			case am.ik.rontolisp.LispBFloat16Array fa -> compileBFloat16PackedLiteral(fa, ctx);
 			// A packed integer-vector literal (ironclad's #N@(...)) compiles to a
 			// native long[] with a width header -- the packed representation, disjoint
 			// from the general array and the packed float shapes.

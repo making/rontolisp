@@ -3,7 +3,11 @@
 Difficulty: High
 
 Part of `.todo/482`. Depends on `.todo/484`, `.todo/485`, `.todo/487`, and on `.todo/488`
-existing first as the oracle. Supersedes the "`--gpu` declines a bf16 operand" clause in
+existing first as the oracle. **Status 2026-09-03:** 484 and 485 are closed (the `#bf16`
+array exists on the interpreter and the JVM); 487 has landed step 1 only (the scalar
+pair) -- its bulk load into a `#bf16` destination is still declined; 488 has the fused
+kernels in both kernel files but NOT the interception wiring, so the oracle exists as
+Java methods and not yet as a `vec:` call over a `#bf16` array. Supersedes the "`--gpu` declines a bf16 operand" clause in
 `.todo/486`, which is the right behaviour only until this lands.
 
 A decode-step GEMV is memory-bound on the device exactly as it is on the CPU, so halving

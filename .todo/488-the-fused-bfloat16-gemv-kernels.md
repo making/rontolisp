@@ -2,7 +2,14 @@
 
 Difficulty: Medium
 
-Part of `.todo/482`. Depends on `.todo/484` and `.todo/485`.
+Part of `.todo/482`. Depended on `.todo/484` and `.todo/485`; **both closed 2026-09-03**
+(the interpreter and the JVM carry the `#bf16` packed array -- `LispBFloat16Array`, and a
+`short[]` with the two-slot header `codegen/jvm/JvmPackedFloatWidth` owns). The kernels
+already exist in `eval/VecSimdKernels` and `codegen/jvm/JvmSimdVectorTemplate` over bare
+`short[]`; what remains here is the INTERCEPTION WIRING -- `VecSimd`'s decline chain and
+`JvmSimdCompiler.emitLaneWidthGuard` both send a bf16 operand to the scalar defun today,
+and the header-aware bridge entries in front of the kernels are this item's ("Still
+open" below).
 
 This is the item that makes `bfloat16` a *performance* width and not merely a smaller one.
 Measured (`.todo/482-bfloat16-a-narrow-width-that-pays/Worth.java`), a GEMV over bf16

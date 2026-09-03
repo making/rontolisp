@@ -162,6 +162,17 @@ final class JvmArrayCompiler {
 			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.MAKE, JvmIntArrayRuntimeBuilder.MAKE_DESC);
 			return;
 		}
+		if (ctx.usesFloatArray && isBFloat16ElementType(elementType) && fillPointer == null && adjustable == null) {
+			// A plain :element-type 'bfloat16 array (no fill pointer / adjustable /
+			// displacement) is a packed short[]: _bfvMake(dims, init) allocates it and
+			// fills with the coerced (narrowed to bfloat16) init (default 0.0 inside the
+			// helper).
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			compileKeywordValueOrNull(initValue, ctx, className);
+			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.BFLOAT16_MAKE,
+					JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+			return;
+		}
 		if (ctx.usesFloatArray && isSingleFloatElementType(elementType) && fillPointer == null && adjustable == null) {
 			// A plain :element-type 'single-float array (no fill pointer / adjustable /
 			// displacement) is a packed float[]: _sfvMake(dims, init) allocates it and
@@ -599,6 +610,12 @@ final class JvmArrayCompiler {
 	// float[]). Same literal quoted-symbol unwrap as isDoubleFloatElementType.
 	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
 		return LispNames.SINGLE_FLOAT.equals(elementTypeLocalName(elementType));
+	}
+
+	// Whether a make-array :element-type value designates bfloat16 (packs to a
+	// short[]). Same literal quoted-symbol unwrap as isDoubleFloatElementType.
+	private static boolean isBFloat16ElementType(@Nullable LispVal elementType) {
+		return LispNames.BFLOAT16.equals(elementTypeLocalName(elementType));
 	}
 
 	// The packed integer-vector element width a make-array :element-type argument

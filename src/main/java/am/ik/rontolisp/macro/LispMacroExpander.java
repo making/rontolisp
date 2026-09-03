@@ -25309,18 +25309,23 @@ public final class LispMacroExpander {
 	 * into every artifact that merely defines a {@code print-object} method. The guard is
 	 * the exact set the raw renderer spells {@code #(...)} for: a STRING renders as
 	 * itself, a rank != 1 array as {@code #nA(...)} with nested group parens, and a
-	 * packed FLOAT array as {@code #d(...)}/{@code #f(...)} -- none of which this loop
-	 * writes, and none of which can hold an instance. The float exclusion is spelled as
-	 * those two element types rather than as "the element type is {@code t}" because only
-	 * the former is one value on every backend (the general answer is a {@code T} SYMBOL
-	 * in the interpreter and the {@code t} VALUE on the JVM, which no {@code eq} spans);
-	 * a packed INTEGER vector needs no exclusion at all -- it renders {@code #(...)} and
-	 * its elements are integers, so the walk reproduces the raw text exactly.
+	 * packed FLOAT array as {@code #d(...)}/{@code #f(...)}/{@code #bf16(...)} -- none of
+	 * which this loop writes, and none of which can hold an instance. The float exclusion
+	 * is spelled as the three element types rather than as "the element type is
+	 * {@code t}" because only the former is one value on every backend (the general
+	 * answer is a {@code T} SYMBOL in the interpreter and the {@code t} VALUE on the JVM,
+	 * which no {@code eq} spans); a packed INTEGER vector needs no exclusion at all -- it
+	 * renders {@code #(...)} and its elements are integers, so the walk reproduces the
+	 * raw text exactly. <b>This is a width asked for BY NAME</b>, outside the sealed
+	 * switch's reach (the {@code bfloat16} width was missing here and rendered as a
+	 * general {@code #(...)} of widened doubles in every program that also called
+	 * {@code read}); a fourth width has to be added here by hand.
 	 */
 	private static final String PRINT_OBJECT_VECTOR_ARM = """
 			((and (vectorp %pos-x) (not (stringp %pos-x)) (eql (array-rank %pos-x) 1)
 			      (not (equal (array-element-type %pos-x) 'single-float))
-			      (not (equal (array-element-type %pos-x) 'double-float)))
+			      (not (equal (array-element-type %pos-x) 'double-float))
+			      (not (equal (array-element-type %pos-x) 'bfloat16)))
 			 (if (or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256)
 			         (and *print-level* (>= %pos-lvl *print-level*)))
 			     "#"
