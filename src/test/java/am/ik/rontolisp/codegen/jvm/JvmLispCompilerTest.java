@@ -9210,11 +9210,16 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunBfloat16BulkAgreesWithTheScalarPair() throws Exception {
-		// .todo/671's bulk pair and .todo/487's scalar pair are ONE rounding on this
-		// backend too (the emitted narrow is BFloat16#bits(float) instruction for
-		// instruction), so widening every pattern into an f32 array and narrowing it
-		// straight back is the identity -- except for the 126 signalling NaNs, which
-		// both backends quiet on the way IN because both widen through a double.
+		// .todo/671's bulk pair and .todo/487's scalar pair are ONE rounding: widening
+		// every pattern into an f32 array and narrowing it straight back is the plain
+		// identity over all 65536 patterns, NaN payloads included. widen-float-bits
+		// stores the bit pattern verbatim (a bfloat16 pattern IS an f32's top half
+		// already, so widening is one shift, never a double), and this backend's
+		// narrow emits the same rounding this file's own bfloat16-bits case pins,
+		// applied to the float's raw bits directly rather than through
+		// BFloat16#bits(double) (whose parameter would auto-widen a float argument
+		// first) -- so nothing here touches a double, and nothing quiets a signalling
+		// NaN.
 		assertThat(compileAndRun("""
 				(let* ((n 65536)
 				       (patterns (make-array n :element-type '(unsigned-byte 16)))
@@ -9225,13 +9230,71 @@ class JvmLispCompilerTest {
 				  (rontolisp:widen-float-bits patterns :bfloat16 values)
 				  (rontolisp:narrow-float-bits values :bfloat16 back)
 				  (dotimes (i n)
-				    (let ((want (if (and (= (logand i #x7f80) #x7f80) (/= (logand i #x7f) 0))
-				                    (logior i #x40)
-				                    i)))
-				      (unless (= want (aref back i)) (incf bad))))
+				    (unless (= i (aref back i)) (incf bad)))
 				  (print bad)
 				  (print (list (aref back 16256) (rontolisp:bfloat16-bits (aref values 16256)))))
 				""")).isEqualTo("0\n(16256 16256)");
+	}
+
+	@Test
+	void compileAndRunFloat16Bits() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:float16-bits 1.0)) (print (rontolisp:float16-bits -2.5))"
+				+ " (print (rontolisp:bits-float16 15360))"
+				+ " (print (rontolisp:bits-float16 (rontolisp:float16-bits 1.5)))"
+				// The identity for every FINITE pattern (NaN aside: the JDK's own
+				// floatToFloat16/float16ToFloat pair does not itself round-trip a
+				// signalling NaN, unlike bfloat16-bits above).
+				+ " (print (let ((bad 0)) (dotimes (i 65536 bad)" + "   (let ((v (rontolisp:bits-float16 i)))"
+				+ "     (when (= v v) (unless (= i (rontolisp:float16-bits v)) (incf bad)))))))"
+				+ " (print (mapcar #'rontolisp:float16-bits (list 1.0 2.0)))"
+				+ " (print (mapcar #'rontolisp:bits-float16 (list 15360 16384)))"))
+			.isEqualTo("15360\n49408\n1.0\n1.5\n0\n(15360 16384)\n(1.0 2.0)");
+	}
+
+	@Test
+	void compileAndRunWidenAndNarrowFloatBits() throws Exception {
+		// A single-float destination with a nonzero :start, then narrowed back.
+		assertThat(compileAndRun("""
+				(let* ((bits (make-array 3 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:float16-bits 1.0)
+				                                                  (rontolisp:float16-bits -2.5)
+				                                                  (rontolisp:float16-bits 100.0))))
+				       (dst (make-array 5 :element-type 'single-float :initial-element 0.0))
+				       (back (make-array 5 :element-type '(unsigned-byte 16))))
+				  (rontolisp:widen-float-bits bits :float16 dst :start 2)
+				  (rontolisp:narrow-float-bits dst :float16 back)
+				  (print (list (aref dst 0) (aref dst 1) (aref dst 2) (aref dst 3) (aref dst 4)))
+				  (print (list (aref back 0) (aref back 1) (aref back 2) (aref back 3) (aref back 4))))
+				""")).isEqualTo("(0.0 0.0 1.0 -2.5 100.0)\n(0 0 15360 49408 22080)");
+		// A length-1 tensor: the shape that caught this backend's one real bug (the
+		// packed-float header offset, .kb/packed-integer-vectors.md), pinned on its own.
+		assertThat(compileAndRun("""
+				(let* ((bits (make-array 1 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:float16-bits -2.5))))
+				       (dst (make-array 1 :element-type 'single-float)))
+				  (rontolisp:widen-float-bits bits :float16 dst)
+				  (print (aref dst 0)))
+				""")).isEqualTo("-2.5");
+	}
+
+	// A program that calls NEITHER widen-float-bits NOR narrow-float-bits NOR
+	// float16-bits NOR bits-float16 (the exact shape ci-spec.yaml's own standalone
+	// cases and every trivial "(print (+ 1 2))" smoke test are) used to fail to
+	// compile: BuiltinFunctionWrappers unconditionally emitted first-class wrappers
+	// for widen-float-bits/narrow-float-bits whose bodies called
+	// JvmFloat16RuntimeBuilder's _widenFloatBits/_narrowFloatBits helpers, which are
+	// themselves emitted only when the program's OWN source names one of the two
+	// symbols (JvmLispCompiler#usesFloat16Bits) -- "generated class calls own methods
+	// it does not declare". Fixed by gating both wrappers on
+	// BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS (matching the qualified
+	// spelling their WrapperDef.name actually uses). Pinned here rather than only via
+	// the "does call them" tests above, since those never exercised the bug: an
+	// ungated wrapper still compiles fine in a program that ALSO makes a direct call,
+	// because that direct call is what makes JvmLispCompiler emit the helper the
+	// wrapper needs.
+	@Test
+	void compileAndRunAProgramThatNeverReferencesFloat16OrBfloat16Bits() throws Exception {
+		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
 	}
 
 	@Test

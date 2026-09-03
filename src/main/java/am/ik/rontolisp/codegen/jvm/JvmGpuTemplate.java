@@ -774,7 +774,12 @@ final class JvmGpuTemplate {
 		if (!packed(a) || !(basev instanceof Long bl) || bl < 0 || bl > Integer.MAX_VALUE || !resident(a)) {
 			return null;
 		}
-		if ((singlev != null) != (a instanceof float[])) {
+		// The width arrives as am.ik.rontolisp.FloatWidth's CODE (0 single, 1 double),
+		// spelled as a literal because this template travels with a compiled program and
+		// cannot import the enum. It must name the operand's own width: the CPU widens,
+		// the device only copies. Any other code -- a width no kernel here reads --
+		// declines to the rung below.
+		if (!(singlev instanceof Long code) || code.longValue() != (a instanceof float[] ? 0L : 1L)) {
 			return null;
 		}
 		int[] od = shapeOf(odv);

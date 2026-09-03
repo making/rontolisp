@@ -59,6 +59,35 @@ nowhere else in `src/main`. (The item that asked for the work had counted 70 by 
 86 is what the compiler finds.) Re-run the probe rather than trusting that number once
 the accelerators have moved -- it costs one compile.
 
+**The rule is not "no `default`" -- an arm matching more than one permit IS a default
+however it is spelled.** Two sites proved it on 2026-09-03, neither of them a `default`:
+`NoGcWasmCompiler.typeOf` had `case LispFloatArray ignored -> Ty.F64VEC` after its
+single-float arm, and `compileFloatArrayLiteral` opened with `boolean single = fa
+instanceof LispSingleFloatArray`. A bfloat16 literal was therefore emitted as an F64VEC,
+eight bytes an element, wrong layout, no diagnostic. A supertype pattern over the sealed
+umbrella is correct exactly when the arm's answer is width-INDEPENDENT -- seven of the
+nine such patterns in `src/main` are (`arrayp` answering true, a rank, a total size, a
+no-op arm in a symbol walk) -- and is a silent default the moment it is not.
+
+**Exhaustiveness is checked in the STATEMENT form for the sealed type, and only in the
+EXPRESSION form for the width enum.** JLS 14.11.2: a switch is enhanced, and so required
+to be exhaustive, when the selector is not one of the legacy types (`char`/`byte`/`short`/
+`int` and their boxes, `String`, **enum**) or when any label is a pattern or `null`. A
+switch over `LispFloatArray` has type-pattern labels, so both forms are checked and the
+sites above are safe as statements. A switch over `FloatWidth` has an enum selector with
+enum-constant labels -- the legacy combination -- so only the expression form is checked,
+and a statement switch lets a fourth constant fall straight through. Write a width-enum
+switch as an expression for that reason, and do NOT churn the sealed-type sites for it:
+they already have the property.
+
+**`FloatWidth` and the permits are in bijection** (`FloatWidthTest`), which is what makes
+two ways of asking a width safe at once: switch over the sealed type when you need the
+concrete array, over `LispFloatArray.width()` when you need the width as a VALUE -- the
+`%la-gather-strided` wire and nothing else. The bijection makes that a consequence rather
+than a convention, and it catches the direction the compiler cannot: a CONSTANT added
+ahead of its permit, which leaves every enum switch compiling and looking exhaustive with
+an arm no array can reach.
+
 Three shapes deliberately stay `instanceof`, and the probe does NOT report them, because
 none of them decides anything a new width would change:
 

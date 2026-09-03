@@ -450,6 +450,10 @@ categories:
       - { slug: rontolisp-random-bytes, name: "rontolisp:random-bytes" }
       - { slug: rontolisp-bfloat16-bits, name: "rontolisp:bfloat16-bits" }
       - { slug: rontolisp-bits-bfloat16, name: "rontolisp:bits-bfloat16" }
+      - { slug: rontolisp-float16-bits, name: "rontolisp:float16-bits" }
+      - { slug: rontolisp-bits-float16, name: "rontolisp:bits-float16" }
+      - { slug: rontolisp-widen-float-bits, name: "rontolisp:widen-float-bits" }
+      - { slug: rontolisp-narrow-float-bits, name: "rontolisp:narrow-float-bits" }
       - { slug: rontolisp-make-mutex, name: "rontolisp:make-mutex" }
       - { slug: rontolisp-mutex-acquire, name: "rontolisp:mutex-acquire" }
       - { slug: rontolisp-mutex-release, name: "rontolisp:mutex-release" }
@@ -831,6 +835,17 @@ categories:
       - { slug: tokenizer-vocabulary-size, name: "tokenizer:vocabulary-size" }
       - { slug: tokenizer-bos-id, name: "tokenizer:bos-id" }
       - { slug: tokenizer-eos-id, name: "tokenizer:eos-id" }
+  - title: "gguf Package (Checkpoint Reader)"
+    index_page: reference/functions/gguf.md
+    functions:
+      - { slug: gguf-read, name: "gguf:read" }
+      - { slug: gguf-version, name: "gguf:version" }
+      - { slug: gguf-metadata, name: "gguf:metadata" }
+      - { slug: gguf-metadata-value, name: "gguf:metadata-value" }
+      - { slug: gguf-tensor-names, name: "gguf:tensor-names" }
+      - { slug: gguf-tensor-info, name: "gguf:tensor-info" }
+      - { slug: gguf-tensor, name: "gguf:tensor" }
+      - { slug: gguf-tokenizer-fields, name: "gguf:tokenizer-fields" }
   - title: "metal Package (GPU Drawing)"
     index_page: reference/functions/metal.md
     functions:

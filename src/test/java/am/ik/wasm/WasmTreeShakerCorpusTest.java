@@ -67,13 +67,18 @@ class WasmTreeShakerCorpusTest {
 		// runtime binding for (.kb/uiop.md).
 		// JsonLibrary runs OUTSIDE GeomLibrary, like the CLI: geom:read-gltf parses
 		// through rontolisp:json-parse, so the geom splice introduces the reference.
-		List<LispVal> spliced = am.ik.rontolisp.eval.LispPreludeLibrary.process(
-				am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.JsonLibrary
-					.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.GeomLibrary
-						.process(am.ik.rontolisp.eval.TorchLibrary.process(am.ik.rontolisp.eval.UserMacroExpander
-							.expand(am.ik.rontolisp.eval.HttpServerLibrary.process(inlined,
-									am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))))),
-				am.ik.rontolisp.reader.Features.WASM);
+		List<LispVal> spliced = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(
+					am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.JsonLibrary
+						.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.GeomLibrary
+							.process(am.ik.rontolisp.eval.TorchLibrary.process(am.ik.rontolisp.eval.CheckpointLibrary
+								.process(am.ik.rontolisp.eval.SafetensorsLibrary.process(
+										am.ik.rontolisp.eval.GgufLibrary.process(am.ik.rontolisp.eval.TokenizersLibrary
+											.process(am.ik.rontolisp.eval.UserMacroExpander
+												.expand(am.ik.rontolisp.eval.HttpServerLibrary.process(inlined,
+														am.ik.rontolisp.compiler.ClackEnv
+															.usesBufferedBody(inlined)))))))))))),
+					am.ik.rontolisp.reader.Features.WASM);
 		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner
 			.prune(am.ik.rontolisp.eval.UsocketLibrary.process(
 					am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.VecLibrary.process(spliced))));

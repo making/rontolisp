@@ -28,10 +28,11 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
  * Lisp-level symbol for (now {@code am.ik.rontolisp.BFloat16#bits}), so this item needs
  * no dependency on that one's landing order. Every decoded value stays a raw
  * {@code float} end to end when the destination/source is single-float -- NEVER routed
- * through a {@code double} local, even transiently: an isolated widening ({@code f2d}) is
- * safe, but the narrowing half of a roundtrip ({@code d2f}) quiets a signalling NaN 126
- * of 65536 times (measured against the exact shift/{@code Float.floatToFloat16} oracles),
- * which a shared double intermediate could not avoid.
+ * through a {@code double} local, even transiently: measured (both directions,
+ * exhaustively over all 2^32 float32 patterns), an f32-&gt;f64 widen (f2d) quiets a
+ * signalling NaN exactly as often as a widen-then-narrow roundtrip does (126 of 65536),
+ * so there is no safe direction through {@code double} to fall back on -- only avoiding
+ * it entirely closes the gap.
  */
 final class JvmFloat16RuntimeBuilder {
 

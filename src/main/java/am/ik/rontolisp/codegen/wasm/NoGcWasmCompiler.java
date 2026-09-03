@@ -715,7 +715,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispDouble ignored -> Ty.FLOAT;
 			case LispString ignored -> Ty.STRING;
 			case am.ik.rontolisp.LispSingleFloatArray ignored -> Ty.F32VEC;
-			case LispFloatArray ignored -> Ty.F64VEC;
+			case am.ik.rontolisp.LispDoubleFloatArray ignored -> Ty.F64VEC;
+			// Named rather than left to a `case LispFloatArray` arm over the SEALED
+			// umbrella, which matched this width too and tagged it F64VEC -- the silent
+			// fall into the double arm LispFloatArray's own javadoc warns against. The
+			// scalar backend has an F32VEC and an F64VEC and nothing else.
+			case am.ik.rontolisp.LispBFloat16Array ignored -> throw am.ik.rontolisp.compiler.UnsupportedFloatWidth
+				.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16, "the --no-gc backend");
 			case LispChar ignored -> Ty.INT;
 			case LispTrue ignored -> Ty.INT;
 			case LispNil ignored -> Ty.INT;
@@ -849,7 +855,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				for (int i = 2; i < args.size(); i++) {
 					typeOf(args.get(i), env, tc);
 				}
-				boolean single = isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
+				LispVal makeElementType = findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD);
+				// Refused in the TYPE pass as well as in the codegen one below, so the
+				// two agree: this pass used to answer F64VEC for a width the emitter
+				// then refused, which is a guess standing in for an error.
+				refuseUnsupportedWidth(makeElementType);
+				boolean single = isSingleFloatElementType(makeElementType);
 				if (dims.size() == 2) {
 					return single ? Ty.F32MAT : Ty.F64MAT;
 				}
@@ -3114,7 +3125,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// f64.const + f32.demote_f64 trick (WasmWriter has no writeF32, and the demote is an
 	// exact round-trip of the stored float).
 	private Ty compileFloatArrayLiteral(LispFloatArray fa, Fn fn) {
-		boolean single = fa instanceof am.ik.rontolisp.LispSingleFloatArray;
+		// An exhaustive switch over the PERMITS, not `instanceof LispSingleFloatArray`
+		// with the negative answer read as "therefore double": that shape emitted a
+		// bfloat16 literal as an F64VEC, eight bytes an element, with no diagnostic.
+		// A supertype pattern or a negated instanceof is a default however it is
+		// spelled, and is only safe when the answer does not depend on the width
+		// (.kb/vec.md).
+		boolean single = switch (fa) {
+			case am.ik.rontolisp.LispSingleFloatArray ignored -> true;
+			case am.ik.rontolisp.LispDoubleFloatArray ignored -> false;
+			case am.ik.rontolisp.LispBFloat16Array ignored -> throw am.ik.rontolisp.compiler.UnsupportedFloatWidth
+				.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16, "the --no-gc backend");
+		};
 		if (fa.rank() != 1) {
 			throw new UnsupportedOperationException("--no-gc: a multi-dimensional " + (single ? "#f" : "#d")
 					+ "(...) literal (rank " + fa.rank() + ") in function '" + fn.fnName
@@ -3293,11 +3315,26 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// errors. A single-float array uses a 4-byte f32 stride and narrows the fill on
 	// store. A rank-2 dimension spec ((list d n) or '(d n)) builds the packed matrix
 	// layout instead (compileMakeMatrix); rank >= 3 stays a clear compile error.
+	/**
+	 * Refuses an {@code :element-type} naming a packed float width this backend does not
+	 * carry, before either the type pass or the emitter has to guess at it. A width it
+	 * does not recognize at all is not this method's business -- {@code compileMakeArray}
+	 * says so in its own words.
+	 * @param elementType the resolved element-type argument, or {@code null}
+	 */
+	private static void refuseUnsupportedWidth(@Nullable LispVal elementType) {
+		if (elementTypeNameIs(elementType, LispNames.BFLOAT16)) {
+			throw am.ik.rontolisp.compiler.UnsupportedFloatWidth.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16,
+					"the --no-gc backend");
+		}
+	}
+
 	private Ty compileMakeArray(List<LispVal> args, Fn fn) {
 		if (args.size() < 2) {
 			throw new UnsupportedOperationException("--no-gc: make-array needs a dimension in '" + fn.fnName + "'");
 		}
 		LispVal elementType = findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD);
+		refuseUnsupportedWidth(elementType);
 		boolean single = isSingleFloatElementType(elementType);
 		if (!single && !isDoubleFloatElementType(elementType)) {
 			throw new UnsupportedOperationException(

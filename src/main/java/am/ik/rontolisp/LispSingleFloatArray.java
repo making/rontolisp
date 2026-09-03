@@ -25,6 +25,11 @@ public record LispSingleFloatArray(float[] data, int[] dims) implements LispFloa
 		return LispNames.SINGLE_FLOAT;
 	}
 
+	@Override
+	public FloatWidth width() {
+		return FloatWidth.SINGLE;
+	}
+
 	/**
 	 * The storage, for a HOST read: every reader goes through here (the kernels, the
 	 * printer, a record pattern, Java interop), and the access hook first brings home any

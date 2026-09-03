@@ -4,7 +4,7 @@ The `safetensors` package reads the file a Hugging Face model page holds --
 `model.safetensors`, or a sharded `model.safetensors.index.json` -- into packed
 float arrays, without Python and without a conversion step. It is written in
 rontolisp itself over the [`checkpoint`](checkpoint.md) staging package,
-[`rontolisp:json-parse`](json-parse.md) and the byte-stream primitives, loaded on
+[`rontolisp:json-parse`](rontolisp-json-parse.md) and the byte-stream primitives, loaded on
 first use like `geom`, and it runs on every backend that has a filesystem. It is
 **not part of Common Lisp**; reference its names with the `safetensors:`
 qualifier -- `safetensors:read` is the package's own symbol, not `cl:read`.

@@ -60,6 +60,16 @@ public sealed interface LispFloatArray extends LispVal
 	String elementType();
 
 	/**
+	 * Returns this array's packed float width. The designator every backend reads --
+	 * prefer it to comparing {@link #elementType()} against a name, and prefer an
+	 * exhaustive {@code switch} over it to an {@code instanceof} chain, so a fourth width
+	 * has to be answered here rather than inherited from whichever arm was written last
+	 * ({@code .kb/vec.md}).
+	 * @return the width
+	 */
+	FloatWidth width();
+
+	/**
 	 * Reads the element at the given row-major index, widened to a {@code double} (a
 	 * single-float element is widened f32 -&gt; f64).
 	 * @param flat the row-major index ({@code 0 <= flat < totalSize()})

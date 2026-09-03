@@ -501,6 +501,10 @@ final class WasmQuoteCompiler {
 			case LispArray array -> compileQuotedArray(array, ctx);
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> compilePackedLiteral(fa, ctx);
 			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
+			// Named rather than left to the generic "Cannot quote" default below, so the
+			// message says which width and which backend (.kb/bfloat16.md).
+			case am.ik.rontolisp.LispBFloat16Array ignored -> throw am.ik.rontolisp.compiler.UnsupportedFloatWidth
+				.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16, "the wasm-GC backend");
 			case am.ik.rontolisp.LispIntVector iv -> compileIntVectorLiteral(iv, ctx);
 			// An instance inside quoted data (a #S(...) literal) builds the same
 			// TYPE_INSTANCE struct %obj-new does; it is self-evaluating, so it also

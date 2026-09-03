@@ -641,13 +641,27 @@ final class WasmFloat16Compiler {
 		i32(ctx, Instruction.I32_AND);
 
 		ctx.writer.write(Instruction.IF, 0x7F);
+		// u = doppel >>> 16 (the top sixteen bits ARE already sign + all-ones exponent +
+		// the payload's top seven bits -- a direct copy, not force-quieted) | a
+		// correction bit that fires only when u's payload is all-zero (which would
+		// otherwise read back as infinity, not NaN): ((u & 0x7f) - 1) >>> 31. NOT
+		// `u | 0x40` (this file's first version) -- that forces the quiet bit on every
+		// NaN, which quiets a signalling one exactly as often as the double-detour bug
+		// this pair otherwise avoids (126/65536, measured): a different way to lose the
+		// same patterns, not a fix.
 		loadI32(ctx, doppel);
 		constI32(ctx, 16);
 		i32(ctx, Instruction.I32_SHR_U);
-		constI32(ctx, 0x40);
-		i32(ctx, Instruction.I32_OR);
-		constI32(ctx, 0xffff);
+		loadI32(ctx, doppel);
+		constI32(ctx, 16);
+		i32(ctx, Instruction.I32_SHR_U);
+		constI32(ctx, 0x7f);
 		i32(ctx, Instruction.I32_AND);
+		constI32(ctx, 1);
+		i32(ctx, Instruction.I32_SUB);
+		constI32(ctx, 31);
+		i32(ctx, Instruction.I32_SHR_U);
+		i32(ctx, Instruction.I32_OR);
 		ctx.writer.write(Instruction.ELSE);
 		loadI32(ctx, doppel);
 		constI32(ctx, 0x7fff);

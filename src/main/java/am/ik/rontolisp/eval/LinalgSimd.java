@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
+import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
@@ -1171,7 +1172,22 @@ public final class LinalgSimd {
 		if (!gatherInBounds(od, s, base, a.totalSize())) {
 			return null;
 		}
-		boolean single = !(args.get(4) instanceof LispNil);
+		FloatWidth width = widthArg(args.get(4));
+		if (width == null) {
+			return null;
+		}
+		// A switch EXPRESSION, not a statement switch: only the expression form is
+		// checked for exhaustiveness over an enum, so a fourth width is a compile error
+		// here and a statement switch would have let it fall straight through.
+		Boolean single = switch (width) {
+			case SINGLE -> Boolean.TRUE;
+			case DOUBLE -> Boolean.FALSE;
+			// No lane kernel reads this width; the defun answers.
+			case BFLOAT16 -> null;
+		};
+		if (single == null) {
+			return null;
+		}
 		Object out = LinalgSimdKernels.gatherStrided(java.util.Objects.requireNonNull(data(a)), od, s, base, single);
 		return out instanceof float[] f ? new LispSingleFloatArray(f, od)
 				: new LispDoubleFloatArray((double[]) out, od);
@@ -1183,6 +1199,28 @@ public final class LinalgSimd {
 	 * axis's full negative or positive travel, and the element count must fit an
 	 * {@code int}. An empty output walks nothing and is always in bounds.
 	 */
+	/**
+	 * The packed float width a {@code %la-gather-strided}-shaped call names in its width
+	 * argument -- the small integer {@code linalg::%la-width-code} produces -- or
+	 * {@code null} when the argument is not one, in which case the caller declines to the
+	 * defun like any other unrecognized shape. It was a BOOLEAN until 2026-09-03, which
+	 * admitted exactly two widths ({@code .kb/vec.md}).
+	 * @param arg the width argument
+	 * @return the width, or {@code null}
+	 */
+	static @Nullable FloatWidth widthArg(LispVal arg) {
+		Integer code = smallInt(arg);
+		if (code == null) {
+			return null;
+		}
+		for (FloatWidth width : FloatWidth.values()) {
+			if (width.code() == code) {
+				return width;
+			}
+		}
+		return null;
+	}
+
 	static boolean gatherInBounds(int[] od, int[] s, int base, int size) {
 		long total = 1, lo = base, hi = base;
 		for (int k = 0; k < od.length; k++) {

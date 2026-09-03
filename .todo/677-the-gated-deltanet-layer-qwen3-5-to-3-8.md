@@ -84,14 +84,60 @@ readers must honour (the `1 + w` norms, `-exp(A_log)`, the `q_proj` interleave, 
 un-permuted Qwen RoPE) is written into `.todo/673` / `.todo/675` and the two files'
 headers.
 
-## Remaining (needs `.todo/673` / `.todo/675` and `.todo/674`)
+## Done, part 2 (2026-09-03): the real checkpoint, from safetensors
 
-Verify items 2 and 3 below: the real checkpoint end to end, from GGUF and from
-safetensors, the same text from both, compared by eye against llama.cpp; then the
-tok/s rows. Also to do once a checkpoint runs: `llama2.lisp`'s `generate` stops on
-token 1 (llama2.c's BOS) and its `encode`/`decode-piece` are SentencePiece-shaped --
-Qwen's `<|im_end|>` / `<|endoftext|>` (248044 / 248046) and the chat template are the
-tokenizer item's business, but the stop condition is this file's.
+Qwen3.5-0.8B's BF16 `model.safetensors-00001-of-00001.safetensors` (with its index,
+`config.json`, `tokenizer.json`, `tokenizer_config.json`), read by `.todo/675`'s
+`safetensors:read` through `llama2.lisp`'s `load-hf-checkpoint`, tokenized by
+`.todo/674`'s `tokenizer:make-bpe` (kind `:qwen35`) from `tokenizer.json`, decodes
+coherent text on the JVM class output at temperature 0. `-m chat` wraps the prompt in
+the ChatML template with thinking off:
+
+    Llama qwen35 -m chat -t 0 -n 64 -i "Tell me a short story about a cat."
+    -> "***\n\n### Barnaby the Cat\n\nBarnaby was a small, fluffy cat with a tail that
+        was always a perfect ..."
+
+Measured on dorian (Xeon E5-2697A v4, GraalVM 25.0.4), the JVM class output, f32
+weights, develop `4f43b878` + this item's lane: load 7.1-7.6 s (1.75 GB bf16 -> 3 GB
+f32; tokenizer.json + KV cache 2.4-2.7 s); `--simd` one thread **2.00 / 2.48 tok/s**
+(loadavg 13.2 / 21.0), `--simd --parallel` 64 threads **8.56 tok/s** (loadavg 15.1).
+The parallel row is 3.2 GB x 8.56 = 27 GB/s, the box's DRAM ceiling again
+(`examples/llama2/README.md`, the TinyLlama reading).
+
+What the real config taught, against this item's text and the `qwen35` row:
+
+- **The vocabulary is 248070, not 248320.** `vocab_size` 248320 is the padded embedding /
+  classifier row count; `tokenizer.json` has 248044 entries plus 26 added tokens. The
+  logits are over 248320 rows and the sampler now chooses among the first
+  `tokenizer:vocabulary-size` of them (`sample-argmax` / `softmax-into-list` take `n`),
+  so a padded row can never be chosen. The row keeps no vocab: it comes from the
+  checkpoint and the tokenizer.
+- **The stop token is `<|im_end|>` (248046), from `tokenizer_config.json`'s `eos_token`,
+  not `config.json`'s `eos_token_id` 248044 (`<|endoftext|>`).** Both stop generation;
+  and a stop token inside the PROMPT (the template's own `<|im_end|>`) must not -- the
+  first run stopped at the prompt's `<|im_end|>` and printed nothing.
+- Everything else in the row held: `full_attention_interval` 4 (and `layer_types`
+  agrees), `head_dim` 256, GQA 8/2, `partial_rotary_factor` 0.25 -> 64, `rope_theta`
+  1e7 (under `rope_parameters`), `rms_norm_eps` 1e-6, `tie_word_embeddings`, the `1 +
+  w` norms, `attn_output_gate`, the language model under `model.language_model.` beside
+  153 `model.visual.` and 15 `mtp.` tensors (skipped by prefix, 0.2 GB of I/O).
+- `tokenizer.json` is 13 MB and `rontolisp:json-parse` over it does not finish
+  (`.todo/690`, the measurement is there); `llama2.lisp` reads it with a byte-level JSON
+  reader of its own until that lands.
+- `max_position_embeddings` 262144 is capped to 4096 for the KV cache (`*seq-len-cap*`).
+
+Checkpoint on dorian (not in the repository):
+`/tmp/claude-1000/-home-administrator-rontolisp/2657f381-d6c4-4d97-93ab-c64450bd10ac/scratchpad/qwen35/`
+(`config.json`, `model.safetensors.index.json`, `model.safetensors-00001-of-00001.safetensors`
+1.75 GB, `tokenizer.json`, `tokenizer_config.json`; TinyLlama-1.1B-Chat beside it in
+`../tinyllama/`, LFM2.5-1.2B-Instruct in `../lfm25/`).
+
+## Remaining
+
+- The same text from the GGUF (`.todo/673`, landed by A2; `llama2.lisp` has no GGUF
+  `load-*` yet) and the comparison by eye with `llama.cpp` on the same prompt; the
+  `tok/s` rows at f32 and bf16 on a quiet box, into the README and `.todo/489`.
+- `.todo/678`'s LFM2.5 run through the same path (next week; its files are downloaded).
 
 ## Verify
 

@@ -3948,7 +3948,20 @@ final class JvmSimdVectorTemplate {
 		float[] af = a instanceof float[] v ? v : new float[0];
 		boolean wide = a instanceof double[];
 		int a0 = 1 + laRank(a);
-		boolean single = singlev != null;
+		// The width arrives as am.ik.rontolisp.FloatWidth's CODE (0 single, 1 double),
+		// spelled as a literal because this template travels with a compiled program and
+		// cannot import the enum. It was a nil/non-nil flag until 2026-09-03; reading it
+		// that way now answers "single" for every width, since 0 is not null.
+		//
+		// Anything that is not one of those two codes DECLINES rather than being read as
+		// a width: the defun's shape rules and anything it would signal on declines to
+		// it, so a broken call reaches %la-etype-of-width-code and signals there. Reading
+		// an unrecognized value as "therefore double" would be the guess this whole
+		// changeover exists to remove.
+		if (!(singlev instanceof Long widthCode) || (widthCode != 0L && widthCode != 1L)) {
+			return null;
+		}
+		boolean single = widthCode == 0L;
 		float[] outF = single ? new float[off + n] : new float[0];
 		double[] outD = single ? new double[0] : new double[off + n];
 		if (single) {

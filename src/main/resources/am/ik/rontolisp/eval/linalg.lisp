@@ -48,8 +48,8 @@
   ;; not. init is coerced to the element width.
   (when (eq element-type 'bfloat16)
     ;; Refused rather than quietly built at another width. linalg's width rides as a
-    ;; BOOLEAN through %la-gather-strided (see %la-etype), which cannot say "bfloat16",
-    ;; so carrying it here would produce #d results from #bf16 inputs.
+    ;; width CODE through %la-gather-strided (see %la-etype), and no kernel reads a
+    ;; bfloat16 one yet, so carrying it here would produce #d results from #bf16 inputs.
     (error "linalg: does not yet carry bfloat16 arrays"))
   (if (eq element-type 'single-float)
       (make-array dims :element-type 'single-float :initial-element init)
@@ -64,8 +64,8 @@
   ;; matching linalg's double default.
   ;; A bfloat16 operand is REFUSED here rather than mapped to 'double-float, which
   ;; would answer #d for a #bf16 input -- the failure mode this width exists to avoid.
-  ;; Every internal width question flows through here, the two boolean %la-gather-strided
-  ;; flags included, so this one guard covers them.
+  ;; Every internal width question flows through here, the two %la-gather-strided
+  ;; width codes included, so this one guard covers them.
   (when (eq (array-element-type a) 'bfloat16)
     (error "linalg: does not yet carry bfloat16 arrays"))
   (if (eq (array-element-type a) 'single-float) 'single-float 'double-float))
@@ -445,16 +445,30 @@
         ((null p) (reverse out))
       (setq out (cons (if (= k ax) n (car p)) out)))))
 
-(defun linalg::%la-gather-strided (a od rs base single)
-  ;; A fresh od-shaped array -- single-float when single is non-nil, double
-  ;; otherwise -- filled by walking a's flat row-major index from base,
+(defun linalg::%la-width-code (a)
+  ;; a's packed float width as the small integer every kernel reads, the codes of
+  ;; am.ik.rontolisp.FloatWidth: 0 single-float, 1 double-float. A width linalg does
+  ;; not carry cannot reach here -- %la-etype refuses it first -- but the PROTOCOL
+  ;; can name one, which a boolean could not.
+  (if (eq (linalg::%la-etype a) 'single-float) 0 1))
+
+(defun linalg::%la-etype-of-width-code (w)
+  ;; The inverse: the element-type symbol %la-make wants, for a width code.
+  (cond ((= w 0) 'single-float)
+        ((= w 1) 'double-float)
+        (t (error "linalg: unknown packed float width code"))))
+
+(defun linalg::%la-gather-strided (a od rs base width)
+  ;; A fresh od-shaped array of the width named by the CODE width (see
+  ;; %la-width-code) -- filled by walking a's flat row-major index from base,
   ;; advancing by the INNERMOST-FIRST strides rs through the same odometer
   ;; carry %la-bcast-loop uses -- O(1) amortized per element, no per-element
   ;; division. Every strided read in the library (broadcast-to, slice) is this
   ;; one walk, which is why it is an intercepted member of the --simd seam: the
-  ;; width rides as a flag rather than an element-type symbol so a kernel on
-  ;; any backend can read it without a symbol comparison.
-  (let* ((out (linalg::%la-make od 0.0 (if single 'single-float nil)))
+  ;; width rides as a small integer rather than an element-type symbol so a kernel
+  ;; on any backend can read it without a symbol comparison. It was a BOOLEAN until
+  ;; 2026-09-03, which is a two-valued type and so admitted exactly two widths.
+  (let* ((out (linalg::%la-make od 0.0 (linalg::%la-etype-of-width-code width)))
          (n (array-total-size out))
          (rdims (reverse od))
          (idx (linalg::%la-zero-counters (length od)))
@@ -479,7 +493,7 @@
   ;; broadcast to od (the caller computed od from it).
   (linalg::%la-gather-strided a od
    (linalg::%la-bcast-strides (array-dimensions a) od) 0
-   (eq (linalg::%la-etype a) 'single-float)))
+   (linalg::%la-width-code a)))
 
 (defun linalg::%la-batch-shape (dx dy)
   ;; The broadcast shape of two BATCH dims lists (a stacked matmul's leading
@@ -1051,7 +1065,7 @@
                 (setq os (cons (* step (car pt)) os))
                 (setq base (+ base (* s0 (car pt)))))))))
     (linalg::%la-gather-strided a (reverse od) os base
-                                (eq (linalg::%la-etype a) 'single-float))))
+                                (linalg::%la-width-code a))))
 
 (defun linalg:triu (a &key (k 0))
   ;; The upper triangle of a: a copy with everything BELOW the k-th diagonal

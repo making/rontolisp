@@ -11,6 +11,8 @@ import java.util.Map;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.BFloat16;
+import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
@@ -132,23 +134,30 @@ class GpuOfferDifferentialTest {
 	 *
 	 * @param dims the shape
 	 * @param resident whether the operand must be RESIDENT when the member is offered
-	 * @param single {@code null} to follow the run's width, else the operand's own
+	 * @param width {@code null} to follow the run's width, else the operand's own. A
+	 * {@link FloatWidth} rather than a {@code Boolean}: a boolean admits exactly two
+	 * widths, so the harness could not build the operand a bfloat16 arm needs, and that
+	 * arm sat unreachable while looking covered ({@code .kb/vec.md})
 	 */
-	private record Operand(int[] dims, boolean resident, @Nullable Boolean single) {
+	private record Operand(int[] dims, boolean resident, @Nullable FloatWidth width) {
 		Operand(int... dims) {
 			this(dims, false, null);
 		}
 
 		Operand warmed() {
-			return new Operand(this.dims, true, this.single);
+			return new Operand(this.dims, true, this.width);
 		}
 
 		Operand asSingle() {
-			return new Operand(this.dims, this.resident, Boolean.TRUE);
+			return new Operand(this.dims, this.resident, FloatWidth.SINGLE);
 		}
 
 		Operand asDouble() {
-			return new Operand(this.dims, this.resident, Boolean.FALSE);
+			return new Operand(this.dims, this.resident, FloatWidth.DOUBLE);
+		}
+
+		Operand asBfloat16() {
+			return new Operand(this.dims, this.resident, FloatWidth.BFLOAT16);
 		}
 	}
 
@@ -256,7 +265,8 @@ class GpuOfferDifferentialTest {
 	void theTwoPathsAgreeOnEveryBoundaryShapeAndOnTheBits() {
 		int accepted = 0, declined = 0;
 		for (Case boundary : boundary()) {
-			for (boolean single : DOUBLES ? new boolean[] { false, true } : new boolean[] { true }) {
+			for (FloatWidth single : DOUBLES ? new FloatWidth[] { FloatWidth.DOUBLE, FloatWidth.SINGLE }
+					: new FloatWidth[] { FloatWidth.SINGLE }) {
 				if (assertAgree(boundary, single)) {
 					accepted++;
 				}
@@ -398,8 +408,8 @@ class GpuOfferDifferentialTest {
 	// --- running one case on each path
 	// ---------------------------------------------------
 
-	private boolean assertAgree(Case boundary, boolean single) {
-		String what = boundary.member() + " -- " + boundary.why() + (single ? " (single-float)" : " (double-float)");
+	private boolean assertAgree(Case boundary, FloatWidth single) {
+		String what = boundary.member() + " -- " + boundary.why() + " (" + single + ")";
 		Map<Operand, Object> lispOperands = new IdentityHashMap<>();
 		List<LispVal> lispArgs = new ArrayList<>();
 		for (Object arg : boundary.lisp()) {
@@ -498,15 +508,17 @@ class GpuOfferDifferentialTest {
 	// --- encoding one operand for each path
 	// ----------------------------------------------
 
-	private static LispVal toLisp(Object arg, boolean single, Map<Operand, Object> encoded) {
+	private static LispVal toLisp(Object arg, FloatWidth single, Map<Operand, Object> encoded) {
 		if (arg == NIL) {
 			return LispNil.INSTANCE;
 		}
 		return switch (arg) {
 			case Operand operand -> (LispVal) encoded.computeIfAbsent(operand, o -> {
-				boolean f = o.single() != null ? o.single() : single;
-				LispVal value = f ? new LispSingleFloatArray(floats(o), o.dims().clone())
-						: new LispDoubleFloatArray(doubles(o), o.dims().clone());
+				LispVal value = switch (o.width() != null ? o.width() : single) {
+					case SINGLE -> new LispSingleFloatArray(floats(o), o.dims().clone());
+					case DOUBLE -> new LispDoubleFloatArray(doubles(o), o.dims().clone());
+					case BFLOAT16 -> new LispBFloat16Array(bfloat16s(o), o.dims().clone());
+				};
 				if (o.resident()) {
 					assertThat(interceptor(LispNames.LINALG_EXP, false).body().apply(List.of(value)))
 						.as("the warm-up member must be ACCEPTED, or the operand is not resident")
@@ -529,14 +541,17 @@ class GpuOfferDifferentialTest {
 		};
 	}
 
-	private static @Nullable Object toCompiled(Object arg, boolean single, Map<Operand, Object> encoded) {
+	private static @Nullable Object toCompiled(Object arg, FloatWidth single, Map<Operand, Object> encoded) {
 		if (arg == NIL) {
 			return null;
 		}
 		return switch (arg) {
 			case Operand operand -> encoded.computeIfAbsent(operand, o -> {
-				boolean f = o.single() != null ? o.single() : single;
-				Object value = f ? packedF(o) : packedD(o);
+				Object value = switch (o.width() != null ? o.width() : single) {
+					case SINGLE -> packedF(o);
+					case DOUBLE -> packedD(o);
+					case BFLOAT16 -> packedBf16(o);
+				};
 				if (o.resident()) {
 					assertThat(invoke(bridge(LispNames.LINALG_EXP, false, 1), new Object[] { value }))
 						.as("the warm-up member must be ACCEPTED, or the operand is not resident")
@@ -589,6 +604,29 @@ class GpuOfferDifferentialTest {
 			data[i] = (float) element(i);
 		}
 		return data;
+	}
+
+	private static short[] bfloat16s(Operand o) {
+		short[] data = new short[count(o.dims())];
+		for (int i = 0; i < data.length; i++) {
+			data[i] = (short) BFloat16.bits(element(i));
+		}
+		return data;
+	}
+
+	/**
+	 * The COMPILED side of a bfloat16 operand. The JVM backend's packed representation
+	 * for this width is not this test's to invent -- it is the backend item's -- so this
+	 * says so instead of guessing a header layout that would then have to be unpicked.
+	 * The harness is width-general as of 2026-09-03 and the arm is reachable; the arm's
+	 * other half is what is missing.
+	 * @param o the operand
+	 * @return never returns
+	 */
+	private static Object packedBf16(Operand o) {
+		throw new UnsupportedOperationException(
+				"a compiled bfloat16 operand needs the JVM backend's packed representation for the width,"
+						+ " which does not exist yet; a boundary case must not name FloatWidth.BFLOAT16 until it does");
 	}
 
 	private static double[] packedD(Operand o) {
