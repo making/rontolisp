@@ -450,6 +450,10 @@ categories:
       - { slug: rontolisp-random-bytes, name: "rontolisp:random-bytes" }
       - { slug: rontolisp-bfloat16-bits, name: "rontolisp:bfloat16-bits" }
       - { slug: rontolisp-bits-bfloat16, name: "rontolisp:bits-bfloat16" }
+      - { slug: rontolisp-float16-bits, name: "rontolisp:float16-bits" }
+      - { slug: rontolisp-bits-float16, name: "rontolisp:bits-float16" }
+      - { slug: rontolisp-widen-float-bits, name: "rontolisp:widen-float-bits" }
+      - { slug: rontolisp-narrow-float-bits, name: "rontolisp:narrow-float-bits" }
       - { slug: rontolisp-make-mutex, name: "rontolisp:make-mutex" }
       - { slug: rontolisp-mutex-acquire, name: "rontolisp:mutex-acquire" }
       - { slug: rontolisp-mutex-release, name: "rontolisp:mutex-release" }

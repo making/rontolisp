@@ -16923,6 +16923,63 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAndRunFloat16Bits() throws Exception {
+		// Real here too: sixteen bits fit an i31 (WasmFloat16Compiler).
+		assertThat(compileAndRun("""
+				(print (rontolisp:float16-bits 1.0))
+				(print (rontolisp:float16-bits -2.5))
+				(print (rontolisp:bits-float16 15360))
+				(print (rontolisp:bits-float16 (rontolisp:float16-bits 1.5)))
+				(print (let ((bad 0))
+				         (dotimes (i 65536 bad)
+				           (let ((v (rontolisp:bits-float16 i)))
+				             (when (= v v)
+				               (unless (= i (rontolisp:float16-bits v))
+				                 (incf bad)))))))
+				(print (mapcar #'rontolisp:float16-bits (list 1.0 2.0)))
+				(print (mapcar #'rontolisp:bits-float16 (list 15360 16384)))
+				""")).isEqualTo("15360\n49408\n1.0\n1.5\n0\n(15360 16384)\n(1.0 2.0)");
+	}
+
+	@Test
+	void compileAndRunWidenAndNarrowFloatBits() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((bits (make-array 3 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:float16-bits 1.0)
+				                                                  (rontolisp:float16-bits -2.5)
+				                                                  (rontolisp:float16-bits 100.0))))
+				       (dst (make-array 5 :element-type 'single-float :initial-element 0.0))
+				       (back (make-array 5 :element-type '(unsigned-byte 16))))
+				  (rontolisp:widen-float-bits bits :float16 dst :start 2)
+				  (rontolisp:narrow-float-bits dst :float16 back)
+				  (print (list (aref dst 0) (aref dst 1) (aref dst 2) (aref dst 3) (aref dst 4)))
+				  (print (list (aref back 0) (aref back 1) (aref back 2) (aref back 3) (aref back 4))))
+				""")).isEqualTo("(0.0 0.0 1.0 -2.5 100.0)\n(0 0 15360 49408 22080)");
+		// A length-1 tensor: the shape that caught the JVM arm's one real bug (the
+		// packed-float header offset -- wasm-GC's own array type has no such header,
+		// but the test is pinned on every backend regardless).
+		assertThat(compileAndRun("""
+				(let* ((bits (make-array 1 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:float16-bits -2.5))))
+				       (dst (make-array 1 :element-type 'single-float)))
+				  (rontolisp:widen-float-bits bits :float16 dst)
+				  (print (aref dst 0)))
+				""")).isEqualTo("-2.5");
+	}
+
+	// The JVM twin of this test caught a real bug: BuiltinFunctionWrappers
+	// unconditionally emitted first-class wrappers for widen-float-bits/
+	// narrow-float-bits calling a helper that is itself only emitted when the
+	// program's own source names one of the two symbols -- a program that never
+	// references either (the shape every trivial smoke test and most of
+	// ci-spec.yaml's standalone cases are) failed to compile. WASM shares the same
+	// REFERENCE_GATED_FUNCTIONS gate as the JVM backend, so pinned here too.
+	@Test
+	void compileAndRunAProgramThatNeverReferencesFloat16OrBfloat16Bits() throws Exception {
+		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
+	}
+
+	@Test
 	void compileAndRunDefunKeywordArguments() throws Exception {
 		assertThat(compileAndRun("""
 				(defun f (a &key (k 1 kp) m) (list a k kp m))
