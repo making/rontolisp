@@ -758,22 +758,24 @@ final class WasmReadRuntimeBuilder {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// ref locals: CAR=0, CDR=1 ; i32 locals: BYTE=2, START=3, LEN=4, OFF=5, POS=6,
-		// ESC=7, HP=8, NEG=9, ACC=10, VALID=11, SAWDOT=12, C2=13 ; f64 locals: FVAL=14,
-		// FPLACE=15 ; ref local: ACC64=16 (the decimal-integer accumulator, a
-		// tier-aware exact integer stepped through _big_grow so a token past the i31
-		// range reads as a boxed or limb integer like the frontend). The classifiers
-		// reuse the i32 slots freely between attempts.
+		// ESC=7, HP=8, NEG=9, ACC=10, VALID=11, SAWDOT=12, C2=13, SAWE=14, EXPVAL=15,
+		// EXPSGN=16, EXPDIGIT=17 ; f64 locals: FVAL=18, FPLACE=19, POW10=20 ; ref
+		// local: ACC64=21 (the decimal-integer accumulator, a tier-aware exact integer
+		// stepped through _big_grow so a token past the i31 range reads as a boxed or
+		// limb integer like the frontend). The classifiers reuse the i32 slots freely
+		// between attempts.
 		w.write(4);
 		w.write(2);
 		w.writeRefType(true, Type.EQ.code());
-		w.write(12);
+		w.write(16);
 		w.write(Type.I32);
-		w.write(2);
+		w.write(3);
 		w.write(Type.F64);
 		w.write(1);
 		w.writeRefType(true, Type.EQ.code());
 		final int CAR = 0, CDR = 1, BYTE = 2, START = 3, LEN = 4, OFF = 5, POS = 6, ESC = 7, HP = 8, NEG = 9, ACC = 10,
-				VALID = 11, SAWDOT = 12, C2 = 13, FVAL = 14, FPLACE = 15, ACC64 = 16;
+				VALID = 11, SAWDOT = 12, C2 = 13, SAWE = 14, EXPVAL = 15, EXPSGN = 16, EXPDIGIT = 17, FVAL = 18,
+				FPLACE = 19, POW10 = 20, ACC64 = 21;
 
 		emitSkipWs(w, ctx);
 		// if cursor >= end: return null
@@ -908,8 +910,10 @@ final class WasmReadRuntimeBuilder {
 		// on the symbol path, and a literal /0 denominator signals like the frontend)
 		emitTryRatio(w, ctx, BYTE, START, LEN, POS, NEG, ACC, VALID, SAWDOT, HP, C2);
 
-		// classify: float? (a token with a '.' falls through the integer parser)
-		emitTryFloat(w, BYTE, START, LEN, POS, NEG, VALID, ESC, SAWDOT, FVAL, FPLACE);
+		// classify: float? (a token with a '.' or an exponent marker falls through the
+		// integer parser)
+		emitTryFloat(w, BYTE, START, LEN, POS, NEG, VALID, ESC, SAWDOT, FVAL, FPLACE, SAWE, EXPVAL, EXPSGN, EXPDIGIT,
+				POW10, C2);
 
 		// symbol: off = _intern(start, len)
 		getLocal(w, START);
@@ -1370,17 +1374,31 @@ final class WasmReadRuntimeBuilder {
 
 	/**
 	 * Emits the float classifier/parser for the token at {@code [START, START+LEN)}. A
-	 * decimal float is an optional leading {@code -}, digits, exactly one {@code .}, and
-	 * at least one digit (e.g. {@code 1.0}, {@code -2.5}, {@code .5}, {@code 5.}). On a
-	 * match, builds a {@link WasmLispCompiler#TYPE_FLOAT} struct and returns from the
-	 * function; otherwise falls through. Integer tokens never reach here because the
-	 * integer parser already returned for them, and a token with a {@code .} fails the
-	 * integer parser (so it falls through to this classifier). No exponent support.
+	 * decimal float is an optional leading {@code -}, digits, at most one {@code .}, and
+	 * at least one digit (e.g. {@code 1.0}, {@code -2.5}, {@code .5}, {@code 5.}), plus
+	 * an optional Common Lisp exponent suffix: one marker {@code e}/{@code s}/{@code f}/
+	 * {@code d}/{@code l} (either case), an optional sign, and at least one digit (e.g.
+	 * {@code 1E5}, {@code 1.5F3}, {@code .5E2}, {@code 1.E5}) -- the same grammar the
+	 * frontend lexer's {@code exponentEndsAt} accepts, so {@code 1e}, {@code e5} and
+	 * {@code 1.2.3} stay symbols here too. On a match, builds a
+	 * {@link WasmLispCompiler#TYPE_FLOAT} struct and returns from the function; otherwise
+	 * falls through. Integer tokens never reach here because the integer parser already
+	 * returned for them, and a token with a {@code .} fails the integer parser (so it
+	 * falls through to this classifier). The exponent scales by ONE multiply (or, for a
+	 * negative exponent, divide) by a power built through repeated {@code * 10.0}: exact
+	 * under one f64 rounding for exponents up to 22, and saturating to infinity/zero for
+	 * larger ones like the frontend's {@code Double.parseDouble} does -- without matching
+	 * its rounding past that point, the same ulp tolerance the digit accumulation already
+	 * keeps. A zero mantissa skips the scaling so {@code 0e999} stays {@code 0.0} instead
+	 * of becoming {@code 0 * infinity}.
 	 */
 	private static void emitTryFloat(WasmWriter w, int BYTE, int START, int LEN, int POS, int NEG, int VALID,
-			int SAWDIGIT, int SAWDOT, int FVAL, int FPLACE) {
+			int SAWDIGIT, int SAWDOT, int FVAL, int FPLACE, int SAWE, int EXPVAL, int EXPSGN, int EXPDIGIT, int POW10,
+			int MARK) {
 		// POS = START ; VALID = 1 ; SAWDIGIT = 0 ; SAWDOT = 0 ; NEG = 0
 		// FVAL = 0.0 ; FPLACE = 1.0 (fractional place, multiplied by 0.1 per frac digit)
+		// SAWE = 0 (the exponent marker has been consumed) ; EXPVAL = 0 (its digits,
+		// clamped at 500) ; EXPSGN = 0 (0 none, 1 '+', 2 '-') ; EXPDIGIT = 0
 		getLocal(w, START);
 		setLocal(w, POS);
 		i32(w, 1);
@@ -1391,6 +1409,14 @@ final class WasmReadRuntimeBuilder {
 		setLocal(w, SAWDOT);
 		i32(w, 0);
 		setLocal(w, NEG);
+		i32(w, 0);
+		setLocal(w, SAWE);
+		i32(w, 0);
+		setLocal(w, EXPVAL);
+		i32(w, 0);
+		setLocal(w, EXPSGN);
+		i32(w, 0);
+		setLocal(w, EXPDIGIT);
 		w.write(Instruction.F64_CONST);
 		w.writeF64(0.0);
 		setLocal(w, FVAL);
@@ -1428,6 +1454,69 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, POS);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 		setLocal(w, BYTE);
+		getLocal(w, SAWE);
+		ifVoid(w);
+		// ---- past the exponent marker: digits, and a sign only directly after it ----
+		getLocal(w, BYTE);
+		i32(w, '0');
+		w.write(Instruction.I32_GE_S);
+		getLocal(w, BYTE);
+		i32(w, '9');
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		// EXPDIGIT = 1 ; EXPVAL = min(EXPVAL * 10 + digit, 500) -- the clamp bounds the
+		// scaling loop and, past ~324, the value saturates like parseDouble's anyway
+		i32(w, 1);
+		setLocal(w, EXPDIGIT);
+		getLocal(w, EXPVAL);
+		i32(w, 10);
+		w.write(Instruction.I32_MUL);
+		getLocal(w, BYTE);
+		i32(w, '0');
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, EXPVAL);
+		getLocal(w, EXPVAL);
+		i32(w, 500);
+		w.write(Instruction.I32_GT_S);
+		ifVoid(w);
+		i32(w, 500);
+		setLocal(w, EXPVAL);
+		end(w);
+		w.write(Instruction.ELSE);
+		// a sign is part of the exponent only as its first character
+		getLocal(w, EXPSGN);
+		i32(w, 0);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, EXPDIGIT);
+		i32(w, 0);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		getLocal(w, BYTE);
+		i32(w, '+');
+		w.write(Instruction.I32_EQ);
+		getLocal(w, BYTE);
+		i32(w, '-');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		// EXPSGN = (b == '-') ? 2 : 1
+		getLocal(w, BYTE);
+		i32(w, '-');
+		w.write(Instruction.I32_EQ);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, EXPSGN);
+		w.write(Instruction.ELSE);
+		// a second marker, a dot, a letter ("1E5X"): the whole token is a symbol
+		i32(w, 0);
+		setLocal(w, VALID);
+		end(w);
+		end(w);
+		w.write(Instruction.ELSE);
+		// ---- mantissa ----
 		// if b == '.'
 		getLocal(w, BYTE);
 		i32(w, '.');
@@ -1442,22 +1531,15 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 1);
 		setLocal(w, SAWDOT);
 		w.write(Instruction.ELSE);
-		// if b < '0'
+		// if '0' <= b <= '9'
 		getLocal(w, BYTE);
 		i32(w, '0');
-		w.write(Instruction.I32_LT_S);
-		ifVoid(w);
-		i32(w, 0);
-		setLocal(w, VALID);
-		w.write(Instruction.ELSE);
-		// if b > '9'
+		w.write(Instruction.I32_GE_S);
 		getLocal(w, BYTE);
 		i32(w, '9');
-		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.I32_AND);
 		ifVoid(w);
-		i32(w, 0);
-		setLocal(w, VALID);
-		w.write(Instruction.ELSE);
 		// digit
 		i32(w, 1);
 		setLocal(w, SAWDIGIT);
@@ -1491,6 +1573,39 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.F64_ADD);
 		setLocal(w, FVAL);
 		end(w);
+		w.write(Instruction.ELSE);
+		// a CL exponent marker? (b | 0x20) is compared against lowercase e/s/f/d/l, so
+		// both spellings match without a separate upcase test
+		getLocal(w, BYTE);
+		i32(w, 0x20);
+		w.write(Instruction.I32_OR);
+		setLocal(w, MARK);
+		getLocal(w, MARK);
+		i32(w, 'e');
+		w.write(Instruction.I32_EQ);
+		getLocal(w, MARK);
+		i32(w, 's');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, MARK);
+		i32(w, 'f');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, MARK);
+		i32(w, 'd');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, MARK);
+		i32(w, 'l');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		ifVoid(w);
+		i32(w, 1);
+		setLocal(w, SAWE);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		setLocal(w, VALID);
+		end(w);
 		end(w);
 		end(w);
 		end(w);
@@ -1502,13 +1617,74 @@ final class WasmReadRuntimeBuilder {
 		br(w, 0);
 		end(w); // loop
 		end(w); // block
-		// if VALID and SAWDIGIT and SAWDOT: return TYPE_FLOAT(neg ? -FVAL : FVAL)
+		// if VALID and SAWDIGIT and (SAWDOT or SAWE) and not(SAWS without EXPDIGIT):
+		// scale and return TYPE_FLOAT(neg ? -FVAL : FVAL). An exponent alone qualifies
+		// ("2E3" is a float with no '.'); a bare digit token never reaches here; a
+		// marker that no exponent digit followed ("1E", "1.5E") is the symbol the
+		// frontend reads it as.
+		// VALID & SAWDIGIT & (SAWDOT | SAWE) & (!SAWE | EXPDIGIT) -- the ORs are built
+		// BEFORE they are AND-ed, or the OR would swallow the earlier AND-term
+		getLocal(w, SAWDOT);
+		getLocal(w, SAWE);
+		w.write(Instruction.I32_OR);
+		getLocal(w, SAWE);
+		i32(w, 0);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, EXPDIGIT);
+		w.write(Instruction.I32_OR);
 		getLocal(w, VALID);
 		getLocal(w, SAWDIGIT);
 		w.write(Instruction.I32_AND);
-		getLocal(w, SAWDOT);
+		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_AND);
 		ifVoid(w);
+		// exponent scaling: P = 10^EXPVAL by repeated * 10.0, then ONE FVAL * P (or
+		// / P for a negative exponent). Skipped for a zero mantissa: 0.0 * inf would
+		// turn 0e999 into NaN where the frontend answers 0.0.
+		getLocal(w, SAWE);
+		ifVoid(w);
+		getLocal(w, FVAL);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.0);
+		w.write(Instruction.F64_NE);
+		ifVoid(w);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(1.0);
+		setLocal(w, POW10);
+		block(w);
+		loop(w);
+		getLocal(w, EXPVAL);
+		i32(w, 0);
+		w.write(Instruction.I32_LE_S);
+		brIf(w, 1);
+		getLocal(w, POW10);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(10.0);
+		w.write(Instruction.F64_MUL);
+		setLocal(w, POW10);
+		getLocal(w, EXPVAL);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, EXPVAL);
+		br(w, 0);
+		end(w); // loop
+		end(w); // block
+		getLocal(w, EXPSGN);
+		i32(w, 2);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		getLocal(w, FVAL);
+		getLocal(w, POW10);
+		w.write(Instruction.F64_DIV);
+		setLocal(w, FVAL);
+		w.write(Instruction.ELSE);
+		getLocal(w, FVAL);
+		getLocal(w, POW10);
+		w.write(Instruction.F64_MUL);
+		setLocal(w, FVAL);
+		end(w);
+		end(w);
+		end(w);
 		getLocal(w, NEG);
 		ifVoid(w);
 		getLocal(w, FVAL);

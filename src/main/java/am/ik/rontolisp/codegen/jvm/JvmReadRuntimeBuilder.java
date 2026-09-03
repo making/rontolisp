@@ -1054,6 +1054,14 @@ final class JvmReadRuntimeBuilder {
 		int vloop = a.label();
 		int notDigit = a.label();
 		int notComma = a.label();
+		int expState = a.label();
+		int expBad = a.label();
+		int expSignOk = a.label();
+		int expPlus = a.label();
+		int notMarker = a.label();
+		int expMark = a.label();
+		int expOk = a.label();
+		int markersDone = a.label();
 		int vnext = a.label();
 		int vend = a.label();
 		int sym = a.label();
@@ -1261,6 +1269,15 @@ final class JvmReadRuntimeBuilder {
 		a.istore(3); // sawDigit
 		a.iconst(0);
 		a.istore(4); // sawDot
+		// Exponent state in slots 7/8/9 (free since the ratio scan above ended):
+		// sawExponent = a CL exponent marker has been consumed, expSign = 0 none /
+		// 1 '+' / 2 '-', expDigit = at least one digit followed the marker.
+		a.iconst(0);
+		a.istore(7);
+		a.iconst(0);
+		a.istore(8);
+		a.iconst(0);
+		a.istore(9);
 		// if token[0]=='-': i=1
 		a.aload(0);
 		a.iconst(0);
@@ -1277,6 +1294,11 @@ final class JvmReadRuntimeBuilder {
 		a.iload(1);
 		a.invokevirtual(this.stringCharAt);
 		a.istore(6); // ch
+		// Past an exponent marker only an exponent remains: digits, and a sign only
+		// directly after the marker. Anything else -- a second marker, a dot, a letter
+		// ("1d0x") -- sends the whole token to the symbol path, like the frontend.
+		a.iload(7);
+		a.branch(Opcode.IFNE, expState);
 		// digit?
 		a.iload(6);
 		a.iconst('0');
@@ -1295,11 +1317,69 @@ final class JvmReadRuntimeBuilder {
 		a.bind(notComma);
 		a.iload(6);
 		a.iconst('.');
-		a.branch(Opcode.IF_ICMPNE, sym); // any other char -> symbol
+		a.branch(Opcode.IF_ICMPNE, notMarker);
 		a.iload(4);
 		a.branch(Opcode.IFNE, sym); // second dot -> symbol
 		a.iconst(1);
 		a.istore(4);
+		a.branch(Opcode.GOTO, vnext);
+		a.bind(notMarker);
+		// A CL exponent marker (the token is upcased, so only the uppercase spelling
+		// can appear) starts the exponent part: "1E5", ".5E2", "1.E5".
+		a.iload(6);
+		a.iconst('E');
+		a.branch(Opcode.IF_ICMPEQ, expMark);
+		a.iload(6);
+		a.iconst('S');
+		a.branch(Opcode.IF_ICMPEQ, expMark);
+		a.iload(6);
+		a.iconst('F');
+		a.branch(Opcode.IF_ICMPEQ, expMark);
+		a.iload(6);
+		a.iconst('D');
+		a.branch(Opcode.IF_ICMPEQ, expMark);
+		a.iload(6);
+		a.iconst('L');
+		a.branch(Opcode.IF_ICMPEQ, expMark);
+		a.branch(Opcode.GOTO, sym); // any other char -> symbol
+		a.bind(expMark);
+		a.iconst(1);
+		a.istore(7);
+		a.branch(Opcode.GOTO, vnext);
+		a.bind(expState);
+		// Past an exponent marker: digits, and a sign only directly after the marker.
+		// Anything else -- a second marker, a dot, a letter ("1D0X") -- sends the whole
+		// token to the symbol path, like the frontend's numberFallbackSymbol.
+		a.iload(6);
+		a.iconst('0');
+		a.branch(Opcode.IF_ICMPLT, expBad);
+		a.iload(6);
+		a.iconst('9');
+		a.branch(Opcode.IF_ICMPGT, expBad);
+		a.iconst(1);
+		a.istore(9); // expDigit
+		a.branch(Opcode.GOTO, vnext);
+		a.bind(expBad);
+		a.iload(6);
+		a.iconst('+');
+		a.branch(Opcode.IF_ICMPEQ, expSignOk);
+		a.iload(6);
+		a.iconst('-');
+		a.branch(Opcode.IF_ICMPNE, sym); // not a sign -> symbol
+		a.bind(expSignOk);
+		a.iload(8);
+		a.branch(Opcode.IFNE, sym); // a sign was already consumed
+		a.iload(9);
+		a.branch(Opcode.IFNE, sym); // the sign must come before any exponent digit
+		a.iload(6);
+		a.iconst('-');
+		a.branch(Opcode.IF_ICMPNE, expPlus);
+		a.iconst(2);
+		a.istore(8);
+		a.branch(Opcode.GOTO, vnext);
+		a.bind(expPlus);
+		a.iconst(1);
+		a.istore(8);
 		a.branch(Opcode.GOTO, vnext);
 		a.bind(vnext);
 		a.iinc(1, 1);
@@ -1307,15 +1387,50 @@ final class JvmReadRuntimeBuilder {
 		a.bind(vend);
 		a.iload(3);
 		a.branch(Opcode.IFEQ, sym); // no digit -> symbol
+		// A marker with no exponent digit ("1E", "1E+") is not a number.
+		a.iload(7);
+		a.branch(Opcode.IFEQ, expOk);
+		a.iload(9);
+		a.branch(Opcode.IFEQ, sym);
+		a.bind(expOk);
 		// stripped = token.replace(",", "") ; slot5
 		a.aload(0);
 		ldc(a, ",");
 		ldc(a, "");
 		a.invokevirtual(this.stringReplace);
 		a.astore(5);
-		// double?
+		// double? -- a '.' or an exponent marker makes the token a float
 		a.iload(4);
+		a.iload(7);
+		a.op(Opcode.IOR);
 		a.branch(Opcode.IFEQ, intPath);
+		// Double.parseDouble knows only 'e'/'E' as an exponent marker: rewrite the
+		// other CL markers to 'e' (the token is upcased here, and a valid float token
+		// holds at most one marker, so replacing every spelling is safe -- the same
+		// normalization the frontend lexer applies).
+		a.iload(7);
+		a.branch(Opcode.IFEQ, markersDone);
+		a.aload(5);
+		ldc(a, "S");
+		ldc(a, "e");
+		a.invokevirtual(this.stringReplace);
+		a.astore(5);
+		a.aload(5);
+		ldc(a, "F");
+		ldc(a, "e");
+		a.invokevirtual(this.stringReplace);
+		a.astore(5);
+		a.aload(5);
+		ldc(a, "D");
+		ldc(a, "e");
+		a.invokevirtual(this.stringReplace);
+		a.astore(5);
+		a.aload(5);
+		ldc(a, "L");
+		ldc(a, "e");
+		a.invokevirtual(this.stringReplace);
+		a.astore(5);
+		a.bind(markersDone);
 		a.aload(5);
 		a.invokestatic(this.doubleParse);
 		a.invokestatic(this.doubleValueOf);

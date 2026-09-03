@@ -11319,6 +11319,35 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileReadFromStringExponentFloats() throws Exception {
+		// The emitted reader's number scanner knows the CL exponent markers
+		// (e/s/f/d/l, either case, optional signed integer exponent) like the frontend
+		// lexer, so a run-time-scanned "2e3" is a float on every backend, not a symbol
+		// whose print coincides with one. Tokens that are NOT valid floats ("1e", "e5",
+		// "1.2.3", ...) stay symbols.
+		assertThat(compileAndRun("""
+				(print (floatp (read-from-string "1e-8")))
+				(print (floatp (read-from-string "1E5")))
+				(print (floatp (read-from-string "2e3")))
+				(print (floatp (read-from-string "1d-8")))
+				(print (floatp (read-from-string "1.5f3")))
+				(print (floatp (read-from-string ".5e2")))
+				(print (floatp (read-from-string "1.e5")))
+				(print (= (read-from-string "1E5") 100000.0))
+				(print (= (read-from-string "1e-8") 0.00000001))
+				(print (= (read-from-string "-2d-3") -0.002))
+				(print (= (read-from-string "1.5e3") 1500.0))
+				(print (= (read-from-string "1.0e10") 10000000000))
+				(print (symbolp (read-from-string "1e")))
+				(print (symbolp (read-from-string "1e+")))
+				(print (symbolp (read-from-string "e5")))
+				(print (symbolp (read-from-string "1.2.3")))
+				(print (symbolp (read-from-string "5e")))
+				(print (symbolp (read-from-string "1d0x")))
+				""")).isEqualTo("T\n".repeat(17) + "T");
+	}
+
+	@Test
 	void compileParseIntegerAndReadFromStringAsValues() throws Exception {
 		assertThat(compileAndRun("(print (mapcar #'parse-integer (list \"1\" \"2\" \"3\")))")).isEqualTo("(1 2 3)");
 		assertThat(compileAndRun("(print (funcall #'read-from-string \"(a b c)\"))")).isEqualTo("(A B C)");
