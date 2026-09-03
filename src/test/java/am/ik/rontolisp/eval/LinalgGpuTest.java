@@ -482,11 +482,15 @@ class LinalgGpuTest {
 	void theDeviceIsAskedOnTheSecondSightAndTheLaneKernelOnTheFirst() {
 		assumeThat(takesMatvec()).as("this device keeps resident copies").isTrue();
 		// .kb/vec.md's f32 reduction probe, as a matrix row: the scalar defun (double
-		// accumulation, narrowed) prints 16778240 and the --simd lane kernel (four float
-		// lanes) 16777984. The device accumulates in double, so its answer is the
-		// DEFUN's -- and the first call is the lane kernel's, because the first sight of
-		// a
-		// matrix declines. That makes the chain legible from Lisp: (lane device).
+		// accumulation, narrowed) prints 16778240 and the --simd lane kernel 16778176.
+		// The device accumulates in double, so its answer is the DEFUN's -- and the
+		// first call is the lane kernel's, because the first sight of a matrix declines.
+		// That makes the chain legible from Lisp: (lane device).
+		// .todo/480 gave the lane rung four independent accumulators above 32 columns,
+		// so at 1024 columns it groups as sixteen lanes and answers 16778176 where it
+		// answered 16777984 before. The DEVICE rung is unmoved: it accumulates in
+		// double, like the defun, so it still prints 16778240 -- which is the whole
+		// point of the probe, and the reason the two rungs stay legible apart.
 		int rows = (int) Math.max(128, (am.ik.gpu.GpuThresholds.matvecMinElements() + 1023) / 1024);
 		String program = """
 				(defparameter *w* (linalg:zeros '(%d 1024) :element-type 'single-float))
@@ -497,8 +501,8 @@ class LinalgGpuTest {
 				(defun probe () (round (aref (vec:matvec *w* *x*) 0)))
 				(list (probe) (probe))
 				""".formatted(rows);
-		assertThat(eval(program, true, false, true).print()).as("--gpu --simd").isEqualTo("(16777984 16778240)");
-		assertThat(eval(program, false, false, true).print()).as("--simd").isEqualTo("(16777984 16777984)");
+		assertThat(eval(program, true, false, true).print()).as("--gpu --simd").isEqualTo("(16778176 16778240)");
+		assertThat(eval(program, false, false, true).print()).as("--simd").isEqualTo("(16778176 16778176)");
 		assertThat(eval(program, true, false, false).print()).as("--gpu").isEqualTo("(16778240 16778240)");
 		assertThat(eval(program, false, false, false).print()).as("scalar").isEqualTo("(16778240 16778240)");
 	}

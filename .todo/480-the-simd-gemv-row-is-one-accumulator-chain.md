@@ -156,6 +156,50 @@ Throughput on the same box, 256 tokens, JVM class: `--simd` **359 tok/s** on one
 the one to compare across `.todo/480`; it was 336 when `.todo/457` closed (2026-08-22, a
 222-token story, so not exactly the same run).
 
+### The cols=48 probe disagrees with the model, and the model wins (2026-09-03)
+
+Recorded because the probe's sign is the wrong thing to trust, and this item nearly shipped
+a threshold chosen from one.
+
+x86-64 (`dorian`, Xeon E5-2697A v4, Broadwell, AVX2, GraalVM 25.0.4) reports a LOSS at 48
+columns when `Gate.java`'s `one(256, 48)` is run alone in a fresh JVM, ten times, on each
+JIT: Graal **0.88-0.97x**, C2 **0.74-0.93x**. Neither spread contains 1.0. Measured on the
+MODEL instead -- `llama2.lisp` built from `aad63afd` (this item's parent) and from
+`6a1c47e3` (this item), both compiled to a `.class` with `--simd`, run over stories15M,
+whose `dim=288 heads=6` makes its attention head dimension exactly 48 -- the sign reverses:
+
+> stories15M, JVM class output, one thread, a quiet dorian (load 0.6), twelve alternating
+> pairs: **tok/s 111.96 -> 118.91, 1.062x.** All twelve quantile ratios are at or above
+> 1.000 (1.003-1.073). The 256-token outputs of the two builds are byte-identical under
+> `cmp`. **`Gate.java`'s solo `one(256,48)` reports 0.88-0.97x (Graal) / 0.74-0.93x (C2) on
+> the same box, and the model's sign is the opposite** -- most of llama2's GEMVs have 288 or
+> 768 columns, far above the gate, and their win outweighs the two attention GEMVs that sit
+> near it.
+
+**The sign of a solo probe at cols=48 does not predict the sign for the model**, and AVX2
+does not break the bit-identity contract either.
+
+An earlier, louder run of the same pairs on a loaded box (load up to 288) reported
+1.08-1.24x and a 1.088x median. That figure is withdrawn: **load inflates the ratio**, not
+just its variance -- the slower build loses more to contention than the faster one, so the
+quiet 1.062x is the number to carry. See `.kb/measurement-probes.md`, Rule 5, observation E.
+
+### The harness itself was wrong twice, in two different ways
+
+`Gate.java` returns THREE ratios for the same shape (rows 256, cols 48) inside one process
+on the GB10 -- 0.92x in its section A, 1.29x in section B, 1.21x in its closing table -- and
+0.93x / 1.24x on dorian, where the spread crosses 1.0 and changes the conclusion's sign. It
+reproduces on a quiet box and a loaded one, so it is not noise: both kernels share one
+generic timing method with the baseline always first, so they share a compilation and a
+profile. `Solo.java` removes that (one timing method per kernel, called by name, one shape
+and optionally one KERNEL per process); its GB10 numbers are still to be taken.
+
+**The README's head-dimension table carried 1.21x and its column sweep 1.29x for the same
+shape, in adjacent tables, without noticing they were the same shape.** Both are warm-side
+numbers. Whatever `Solo.java` says, the model measurement above is what decides this item.
+
+The general form of all of this now lives in `.kb/measurement-probes.md`, Rule 5.
+
 ### What this is NOT verified on
 
 - **x64.** Every number is aarch64 (GB10). The gate is derived from the lane count and the

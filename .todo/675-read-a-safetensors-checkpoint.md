@@ -15,11 +15,15 @@ separate `tokenizer.json` (`.todo/674`).
 ## Do
 
 1. `safetensors:read path &key only element-type` -> name -> array: the header through
-   `rontolisp:json-parse` (`.kb/json.md`), each tensor by `file-position` +
-   `read-sequence` -- F32 straight into `#f`, BF16 / F16 through a staging
-   `(unsigned-byte 16)` vector and `widen-float-bits` into `#f` (or `#bf16` once
-   `.todo/484` exists), I64 / other dtypes refused by name. A Lisp library in the
-   `gguf.lisp` shape; if `.todo/673` lands first, share its staging loop.
+   `rontolisp:json-parse` (`.kb/json.md`), each tensor by `read-sequence` -- F32
+   straight into `#f`, BF16 / F16 through a staging `(unsigned-byte 16)` vector and
+   `widen-float-bits` into `#f` (or `#bf16` once `.todo/484` exists), I64 / other
+   dtypes refused by name. A Lisp library in the `gguf.lisp` shape; the staging loop
+   is the `checkpoint` package (`checkpoint.lisp`), written here for `.todo/673` to
+   share. **Not by `file-position`: it answers nil on every backend (`.todo/390`), so
+   the reader walks each file front to back in offset order and skips an excluded
+   tensor with `checkpoint:skip-bytes` -- a shard is opened once and walked once,
+   whatever `:only` keeps.**
 2. `config.json` read with `json-parse` into the same hyperparameter plist
    `llama2.lisp` uses (`hidden_size`, `intermediate_size`, `num_hidden_layers`,
    `num_attention_heads`, `num_key_value_heads`, `vocab_size`, `rope_theta`,
@@ -67,6 +71,34 @@ separate `tokenizer.json` (`.todo/674`).
    12288 auto-adjusted, read the shape), `model.embedding_norm` -> `:rms-final`, no
    `lm_head` (`tie_embedding`). `norm_eps` 1e-5 -> `:eps`, `rope_theta` 1e6,
    `head_dim` = 2048 / 32 = 64 (no field), `:rope :halves`. Plain `x * w` norms.
+
+## Done (2026-09-03)
+
+Shipped as two Lisp-source libraries in the `geom` shape: the `checkpoint` package
+(`checkpoint.lisp`, `eval.CheckpointLibrary`: `make-tensor` / `stage-float-bits` /
+`stage-float32` / `skip-bytes`, the staging every reader shares -- `.todo/673` calls it
+too) and the `safetensors` package (`safetensors.lisp`, `eval.SafetensorsLibrary`:
+`read` / `header` / `entries`), with `.kb/checkpoint-readers.md` for the three facts the
+design rests on (no seek, 8-byte u16 elements, the unchecked `make-array`). Do 2-4 live
+in `examples/llama2/llama2.lisp`'s `load-hf-checkpoint`: `config.json` (text_config
+unwrapped) into the model plist, the HF names of llama / qwen3 / qwen3_5 / smollm3 /
+granite / lfm2 mapped to the table's weights, the per-family conversions, the sharded
+index, the language-model prefix filter. Verified: the fixture
+(`examples/llama2/safetensors-check.lisp`, F32 / F16 / BF16 at rank 1-3 and a
+one-element tensor, `:only`, the forced five-element chunking, the two-shard index) on
+the interpreter and the JVM with and without `--simd`, `SafetensorsLibraryTest`, and
+TinyLlama-1.1B-Chat's BF16 `model.safetensors` decoding coherent text through the
+example on both (the README has the text).
+
+## Remaining
+
+- The WASM legs of the fixture (`examples.yaml` lists interpreter and jvm) once
+  `.todo/671`'s WASM arm of `widen-float-bits` lands: add `wasm` and `wasm-component`.
+- Load time and resident bytes, and the tok/s rows, measured on a QUIET box (the
+  first measurements were taken under a load average above 30 and are not recorded):
+  the README and `.todo/489`.
+- A `#bf16` destination (`:element-type` passed through `checkpoint:make-tensor`) once
+  `.todo/484` / `.todo/485` exist.
 
 ## Verify
 
