@@ -250,6 +250,33 @@ single-threaded. **So an IEEE f16 file needs no f16 array: it is read as `(unsig
 checked against the scalar ones (all 65536 f16 patterns; 64 Mi bf16 narrowings): 0
 mismatches.
 
+### Re-evaluation, 2026-09-03 (`.todo/671`): variant D's fixup mask, and two encode dead ends
+
+`Dec.java`'s variant D (Section... above, the "magic-mul + inf fixup" row) is written with
+a BARE compare, `u.compare(EQ, se)` -- "u equals se exactly", true infinity only. Verified
+exhaustively over all 65536 patterns while implementing `.todo/671`'s WASM decoder: this
+bare form mismatches on 2046/65536 patterns, EVERY f16 NaN (a nonzero mantissa keeps
+`u > se`, so the fixup never fires and a NaN decodes to a large FINITE float instead of a
+NaN). `Load.java`'s `f16ToF32Vector` -- quoted above as "0 mismatches" and that claim
+stands -- has the same fixup with an extra mask, `u.and(se).compare(EQ, se)` ("the
+exponent field is all-ones", covering NaN and infinity alike). `Dec.java` is now fixed to
+match; the 0-mismatch throughput numbers above were never wrong (they came from
+`Load.java`), only `Dec.java`'s own copy of the trick was.
+
+Also tried and abandoned for the ENCODE direction (f32 -> f16 bits, round-to-nearest-even,
+needed for `671`'s `float16-bits` on every backend including WASM): two branchless
+magic-multiply variants (a plain `f * 2^-112` rescale, and the same with a 12-bit
+pre-mask -- the classic "fast half-float" tricks) both get exact round-to-nearest-even in
+the NORMAL-target range but round ties WRONG in the DENORMAL-target range (f16 subnormal
+results): 31744/2^32 mismatches for the pre-masked form when swept over every float32 bit
+pattern, all at exact tie points near the f16 zero/subnormal boundary. What actually
+verifies exact (0/2^32 mismatches, including NaN payload, against `java.lang.Float`'s own
+`floatToFloat16`) is a literal branchy port of `java.lang.Float.floatToFloat16` itself
+(JDK 20+, `java.base/java/lang/Float.java`) rewritten with integer bit ops only (no
+`Math.getExponent`/`Math.abs`) -- more instructions than the branchless tricks, but the
+only one of the three that is actually correct at every tie. `671` uses that port for the
+WASM `float16-bits` encoder; see `WasmFloat16RuntimeBuilder`.
+
 ## 5. The integer widths (`Quant.java`)
 
 GEMV, f32 activations, ggml's block size of 32, one f32 scale per block. Q8_0 in two
