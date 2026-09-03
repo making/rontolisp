@@ -24,6 +24,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.PathnameOps;
+import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -451,6 +452,13 @@ final class CompileTimePathnameFolder {
 	 * recorded by {@link #foldDefParam}), {@code (quote DATUM)}, {@code (list ARGS...)},
 	 * {@code (make-pathname ...)}, {@code (uiop:merge-pathnames* ...)},
 	 * {@code (asdf:find-system ...)}, {@code (asdf:system-source-directory ...)}.
+	 *
+	 * <p>
+	 * Also recognizes {@code (eval (read-from-string "<literal>"))}: local-time asks ASDF
+	 * for its bundled data directory at load time through exactly that shape so it can be
+	 * skipped when ASDF is absent. When the string is a literal, we read it and reduce
+	 * the resulting form, which lets nested {@code asdf:component-pathname} /
+	 * {@code asdf:find-system} calls fold exactly as they do unwrapped.
 	 * <p>
 	 * Returns {@code null} for any other shape -- the caller then falls back to a generic
 	 * recursion.
@@ -486,6 +494,12 @@ final class CompileTimePathnameFolder {
 		if (LispNames.MAKE_PATHNAME.equals(opName)) {
 			return reduceMakePathname(args, systems, parameters, writtenPaths);
 		}
+		if (LispNames.EVAL.equals(opName)) {
+			LispVal unwrapped = reduceEvalReadFromString(args, systems, parameters, writtenPaths);
+			if (unwrapped != null) {
+				return unwrapped;
+			}
+		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(opName);
 		if (qn == null) {
 			return null;
@@ -508,6 +522,36 @@ final class CompileTimePathnameFolder {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * {@code (eval (read-from-string "..."))} over a literal string: read the string at
+	 * fold time and reduce the resulting form. The only shape reduced is the one where
+	 * read-from-string has exactly one argument (the literal string); any other use of
+	 * eval is left untouched.
+	 */
+	private static @Nullable LispVal reduceEvalReadFromString(List<LispVal> evalArgs,
+			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters,
+			java.util.Set<String> writtenPaths) {
+		if (evalArgs.size() != 1) {
+			return null;
+		}
+		LispVal inner = reduce(evalArgs.get(0), systems, parameters, writtenPaths);
+		if (!(inner instanceof LispCons rfs) || !rfs.isProperList()) {
+			return null;
+		}
+		List<LispVal> rfsItems = rfs.toList();
+		if (rfsItems.size() != 2 || !(rfsItems.get(0) instanceof LispSymbol rfsOp)
+				|| !LispNames.READ_FROM_STRING.equals(rfsOp.name()) || !(rfsItems.get(1) instanceof LispString text)) {
+			return null;
+		}
+		try {
+			LispVal parsed = LispReader.readFromString(text.value());
+			return reduce(parsed, systems, parameters, writtenPaths);
+		}
+		catch (RuntimeException ex) {
+			return null;
+		}
 	}
 
 	private static @Nullable LispVal reduceSymbol(LispSymbol sym, Map<String, LispVal> parameters) {
