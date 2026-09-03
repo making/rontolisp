@@ -33,6 +33,8 @@ program no command line (a browser shim, an embedder):
 | `-t` | `LLAMA2_TEMPERATURE` | 1.0 (0 = greedy) |
 | `-p` | `LLAMA2_TOPP` | 0.9 |
 | `-s` | `LLAMA2_SEED` | the clock |
+| `-m` | `LLAMA2_MODE` | `generate` (continue the prompt); `chat` wraps it in the family's chat template |
+| -- | `LLAMA2_TRACE` | set to anything: every token id and its text on stderr |
 
 From this directory, on all four backends. The interpreter takes the program's
 own arguments after `--` (everything before it is the compiler's); a compiled
@@ -92,8 +94,65 @@ rontolisp llama2.lisp --simd -- TinyLlama-1.1B-Chat-v1.0 -z tokenizer.bin -t 0 -
 prints, from the BF16 file, `Once upon a time, there was a young woman named
 Lily. She lived in a small town, where everyone knew each other's names. Lily
 was a kind and gentle soul, always` -- identical on the interpreter and the JVM
-class output. The tok/s rows for this rung are still to be measured on a quiet
-box (`.todo/489`).
+class output. Measured on the JVM class output (develop `116e8c55`, GraalVM
+25.0.4, a 64-thread Xeon E5-2697A v4 -- Broadwell, AVX2 -- at a load average of
+6-27; two runs each):
+
+| | tok/s | per token |
+| --- | --- | --- |
+| `--simd`, one thread | 1.91 / 1.58 | 8.4 GB/s of weights |
+| `--simd --parallel`, 64 threads | 7.48 / 6.97 | 30.7 GB/s |
+
+The load is 8.7-9.9 s (2.2 GB of bf16 into 4.4 GB of f32; the tokenizer and
+the KV cache another 0.4-0.6 s). The reading: a token streams every weight,
+1.1B x 4 bytes = 4.4 GB, so the parallel row is at the box's DRAM bandwidth --
+64 threads buy 4x not because the GEMV stops scaling but because the memory
+bus is the ceiling; the single thread, at 8.4 GB/s, is not bandwidth-bound.
+Halving the bytes (bf16 weights, `.todo/484` / `.todo/487`) is the lever, not
+more threads.
+
+### Qwen3.5-0.8B
+
+The first hybrid: 18 Gated DeltaNet blocks and 6 gated-attention blocks
+([the layer table](#the-layer-table)), read from `Qwen/Qwen3.5-0.8B`'s BF16
+safetensors (the index names one shard; the vision tower and the speculative
+head are skipped by prefix) with its own `tokenizer.json` through the shipped
+[`tokenizer:`](../../doc/en/reference/functions/tokenizer.md) package -- no
+`tokenizer.bin` involved. `-m chat` wraps the prompt in the family's chat
+template with thinking off, and prints the answer alone:
+
+```bash
+rontolisp llama2.lisp -o Llama.class --class-name Llama --simd
+java --add-modules jdk.incubator.vector -Xmx16g Llama Qwen3.5-0.8B -m chat -t 0 -n 64 \
+  -i "Tell me a short story about a cat."
+```
+
+```
+***
+
+### Barnaby the Cat
+
+Barnaby was a small, fluffy cat with a tail that was always a perfect ...
+```
+
+Measured on the same box as the TinyLlama rows, JVM class output, f32 weights
+(the load line: 7.1-7.6 s for 1.75 GB of bf16 into 3 GB, of which
+`tokenizer.json` + the KV cache 2.4-2.7 s):
+
+| | tok/s | loadavg |
+| --- | --- | --- |
+| `--simd`, one thread | 2.00 / 2.48 | 13.2 / 21.0 |
+| `--simd --parallel`, 64 threads | 8.56 | 15.1 |
+
+The parallel row is 3.2 GB x 8.56 = 27 GB/s, the DRAM ceiling once more. Two
+things the real checkpoint taught that its `config.json` does not say: the
+vocabulary is 248070 (`vocab_size` 248320 is the padded embedding table, so
+the sampler chooses among the tokenizer's ids only), and the answer ends at
+`tokenizer_config.json`'s `<|im_end|>`, not at `eos_token_id`'s
+`<|endoftext|>` -- both stop generation, and neither does when it is part of
+the prompt. `tokenizer.json` (13 MB) is read by a byte-level JSON reader of
+this file's own, because `rontolisp:json-parse` over that text does not finish
+(`.todo/690`).
 
 ## The layer table
 
