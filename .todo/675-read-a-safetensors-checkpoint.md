@@ -15,11 +15,15 @@ separate `tokenizer.json` (`.todo/674`).
 ## Do
 
 1. `safetensors:read path &key only element-type` -> name -> array: the header through
-   `rontolisp:json-parse` (`.kb/json.md`), each tensor by `file-position` +
-   `read-sequence` -- F32 straight into `#f`, BF16 / F16 through a staging
-   `(unsigned-byte 16)` vector and `widen-float-bits` into `#f` (or `#bf16` once
-   `.todo/484` exists), I64 / other dtypes refused by name. A Lisp library in the
-   `gguf.lisp` shape; if `.todo/673` lands first, share its staging loop.
+   `rontolisp:json-parse` (`.kb/json.md`), each tensor by `read-sequence` -- F32
+   straight into `#f`, BF16 / F16 through a staging `(unsigned-byte 16)` vector and
+   `widen-float-bits` into `#f` (or `#bf16` once `.todo/484` exists), I64 / other
+   dtypes refused by name. A Lisp library in the `gguf.lisp` shape; the staging loop
+   is the `checkpoint` package (`checkpoint.lisp`), written here for `.todo/673` to
+   share. **Not by `file-position`: it answers nil on every backend (`.todo/390`), so
+   the reader walks each file front to back in offset order and skips an excluded
+   tensor with `checkpoint:skip-bytes` -- a shard is opened once and walked once,
+   whatever `:only` keeps.**
 2. `config.json` read with `json-parse` into the same hyperparameter plist
    `llama2.lisp` uses (`hidden_size`, `intermediate_size`, `num_hidden_layers`,
    `num_attention_heads`, `num_key_value_heads`, `vocab_size`, `rope_theta`,

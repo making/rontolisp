@@ -11,6 +11,7 @@ import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.ExitLibrary;
 import am.ik.rontolisp.eval.FfiInterop;
+import am.ik.rontolisp.eval.CheckpointLibrary;
 import am.ik.rontolisp.eval.GeomLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HostFetchLibrary;
@@ -19,6 +20,7 @@ import am.ik.rontolisp.eval.HttpReactorInliner;
 import am.ik.rontolisp.eval.HttpReactorLibrary;
 import am.ik.rontolisp.eval.HttpServerLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
+import am.ik.rontolisp.eval.SafetensorsLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
@@ -335,11 +337,15 @@ final class CompileFrontend {
 		// JsonLibrary runs AFTER GeomLibrary (geom:read-gltf parses its JSON chunk
 		// through rontolisp:json-parse, so the splice introduces the reference) and
 		// still after the HTTP passes above, whose handlers it also rewrites.
+		// The checkpoint readers run FIRST of all: SafetensorsLibrary (the reader)
+		// before CheckpointLibrary (the staging it is written over), and both before
+		// JsonLibrary and the prelude, which supply the json-parse and
+		// %octets-to-string / widen-float-bits the spliced definitions reach for.
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
-					UrlLibrary.process(AppKitLibrary
-						.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary
-							.process(SceneLibrary.process(TorchLibrary.process(UserMacroExpander.expand(loaded))))))))),
+					UrlLibrary.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
+						.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
+							.process(SafetensorsLibrary.process(UserMacroExpander.expand(loaded))))))))))),
 					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /

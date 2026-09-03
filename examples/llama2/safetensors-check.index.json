@@ -1,0 +1,10 @@
+{
+ "metadata": {
+  "total_size": 0
+ },
+ "weight_map": {
+  "norm.weight": "safetensors-check-00001-of-00002.safetensors",
+  "half.weight": "safetensors-check-00002-of-00002.safetensors",
+  "brain.weight": "safetensors-check-00002-of-00002.safetensors"
+ }
+}

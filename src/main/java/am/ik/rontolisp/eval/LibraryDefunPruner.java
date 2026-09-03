@@ -1150,6 +1150,8 @@ public final class LibraryDefunPruner {
 					Set<String> names = new HashSet<>();
 					collectDefinitionNames(LinalgLibrary.forms(), names);
 					collectDefinitionNames(GeomLibrary.forms(), names);
+					collectDefinitionNames(CheckpointLibrary.forms(), names);
+					collectDefinitionNames(SafetensorsLibrary.forms(), names);
 					collectDefinitionNames(MetalLibrary.forms(), names);
 					collectDefinitionNames(SceneLibrary.forms(), names);
 					collectDefinitionNames(TorchLibrary.forms(), names);
