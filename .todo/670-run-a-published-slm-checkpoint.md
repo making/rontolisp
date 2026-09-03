@@ -111,8 +111,8 @@ what A's half needs from it, in the order A needs it):
 | wave | lane B1 | lane B2 |
 | --- | --- | --- |
 | 1 | `488`'s interception into `--simd` / `--parallel` -- **the kernels already exist in `VecSimdKernels`; only the wiring is missing**, and A's bf16 rungs are blocked on it (High) | `691` then `690`: one `octets-to-string` builtin, the three hand-written UTF-8 decoders folded onto it, and the character-index walk that makes a 13 MB `tokenizer.json` unparseable (Low, then Medium) |
-| 2 | `672` Q8_0: `.todo/673` leaves exactly one branch and one ci-spec `handler-case` to replace, over a reader whose metadata and directory already work (High) | `487`'s remainder, including the census of every site that hand-writes the bf16 arithmetic -- **seven copies of it on develop today, and three of them lost the same 126 NaN patterns for three different reasons on one day** (Medium) |
-| 3 | `490` bf16 on the device (High) | `687` / `683`, both of which say they wait on items that closed (Medium) |
+| 2 | `672` Q8_0: `.todo/673` leaves exactly one branch and one ci-spec `handler-case` to replace, over a reader whose metadata and directory already work. **It does NOT wait on `691`** -- that was said before `673` landed, and the GGUF metadata and vocabulary now demonstrably read; `691` matters to `tokenizer.json`, which is `674`'s side (High) | `487`'s remainder, including the census of every site that hand-writes the bf16 arithmetic -- **seven copies of it on develop today, and three of them lost the same 126 NaN patterns for three different reasons on one day** (Medium) |
+| 3 | `490` bf16 on the device (High) | `687` first, then `683`: both say they wait on items that closed, but `486` defining `FloatWidth` made `687` nearly mechanical while `683` still needs a reflection-test design (Medium) |
 
 Sizing: A1 Medium, A2 High (a Fable-class model); B1 High, B2 Low-to-Medium then Medium.
 
@@ -129,8 +129,19 @@ Sizing: A1 Medium, A2 High (a Fable-class model); B1 High, B2 Low-to-Medium then
    reds on 2026-09-03 were invisible from every lane's own worktree: one because a new
    shipped library changed an existing test's input, two because two lanes' changes were
    each correct alone.
-4. **A suite can hold a defect invisibly while every case sits on one side of its
+4. **Separately from who owns what: never two device-touching runs at once.** `./mvnw
+   test` includes `GpuTest`, so a full suite IS a device-touching run -- the GPU legs and
+   any lane's full suite are serial on that box. Stated as one rule with the line above it
+   produced a self-contradictory instruction on 2026-09-03 ("do not run the GPU tests" and
+   "run the full suite", to the same lane). Ownership says who takes which result;
+   exclusion says what may run at the same time. They are not the same rule.
+5. **A suite can hold a defect invisibly while every case sits on one side of its
    condition** -- and the half that looks more exhaustive is the half that hides it.
+   Three instances in one day: the 1496-error compile regression (the corpus called the
+   function, the standalone cases did not); `PRINT_OBJECT_VECTOR_ARM` excluding a packed
+   width by name, which shows only in a program containing `read-from-string`; and
+   `.todo/692`, filed against a `.todo/671` that closed claiming all four backends --
+   its tests counted backends and never counted `--simd` on each.
 
 ## What is deliberately not in the plan
 
