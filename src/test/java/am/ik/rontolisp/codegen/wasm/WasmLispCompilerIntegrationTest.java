@@ -16967,6 +16967,18 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("-2.5");
 	}
 
+	// The JVM twin of this test caught a real bug: BuiltinFunctionWrappers
+	// unconditionally emitted first-class wrappers for widen-float-bits/
+	// narrow-float-bits calling a helper that is itself only emitted when the
+	// program's own source names one of the two symbols -- a program that never
+	// references either (the shape every trivial smoke test and most of
+	// ci-spec.yaml's standalone cases are) failed to compile. WASM shares the same
+	// REFERENCE_GATED_FUNCTIONS gate as the JVM backend, so pinned here too.
+	@Test
+	void compileAndRunAProgramThatNeverReferencesFloat16OrBfloat16Bits() throws Exception {
+		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
+	}
+
 	@Test
 	void compileAndRunDefunKeywordArguments() throws Exception {
 		assertThat(compileAndRun("""

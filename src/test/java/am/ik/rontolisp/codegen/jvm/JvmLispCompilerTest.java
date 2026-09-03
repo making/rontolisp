@@ -9277,6 +9277,26 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("-2.5");
 	}
 
+	// A program that calls NEITHER widen-float-bits NOR narrow-float-bits NOR
+	// float16-bits NOR bits-float16 (the exact shape ci-spec.yaml's own standalone
+	// cases and every trivial "(print (+ 1 2))" smoke test are) used to fail to
+	// compile: BuiltinFunctionWrappers unconditionally emitted first-class wrappers
+	// for widen-float-bits/narrow-float-bits whose bodies called
+	// JvmFloat16RuntimeBuilder's _widenFloatBits/_narrowFloatBits helpers, which are
+	// themselves emitted only when the program's OWN source names one of the two
+	// symbols (JvmLispCompiler#usesFloat16Bits) -- "generated class calls own methods
+	// it does not declare". Fixed by gating both wrappers on
+	// BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS (matching the qualified
+	// spelling their WrapperDef.name actually uses). Pinned here rather than only via
+	// the "does call them" tests above, since those never exercised the bug: an
+	// ungated wrapper still compiles fine in a program that ALSO makes a direct call,
+	// because that direct call is what makes JvmLispCompiler emit the helper the
+	// wrapper needs.
+	@Test
+	void compileAndRunAProgramThatNeverReferencesFloat16OrBfloat16Bits() throws Exception {
+		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
+	}
+
 	@Test
 	void compileAndRunDestructuringBind() throws Exception {
 		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))")).isEqualTo("10");

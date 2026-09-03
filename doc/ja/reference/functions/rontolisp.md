@@ -11,6 +11,10 @@
 | `rontolisp:random-bytes` | `(rontolisp:random-bytes 16)` | 暗号論的に強い乱数バイトのベクタ (`SecureRandom` / WASI `random_get`) |
 | `rontolisp:bfloat16-bits` | `(rontolisp:bfloat16-bits 1.0)` | 実数の bfloat16 ビットパターン。最近接偶数丸め (0〜65535) |
 | `rontolisp:bits-bfloat16` | `(rontolisp:bits-bfloat16 16256)` | bfloat16 ビットパターンが表す浮動小数点数。65536 パターンすべてで厳密 |
+| `rontolisp:float16-bits` | `(rontolisp:float16-bits 1.0)` | 実数の IEEE binary16 (f16) ビットパターン。最近接偶数丸め (0〜65535) |
+| `rontolisp:bits-float16` | `(rontolisp:bits-float16 15360)` | f16 ビットパターンが表す浮動小数点数 |
+| `rontolisp:widen-float-bits` | `(rontolisp:widen-float-bits bits :float16 dst)` | パックされた `(unsigned-byte 16)` ベクタの f16/bfloat16 ビットパターンを、パックされた浮動小数点配列へ一括で拡張する |
+| `rontolisp:narrow-float-bits` | `(rontolisp:narrow-float-bits src :bfloat16 dst)` | パックされた浮動小数点配列を、パックされた `(unsigned-byte 16)` ベクタの f16/bfloat16 ビットパターンへ一括で狭める |
 | `rontolisp:make-mutex` | `(rontolisp:make-mutex)` | 新しい相互排他ロック。不透明なハンドル(インタプリタと JVM では実体があり、WASM では no-op) |
 | `rontolisp:mutex-acquire` | `(rontolisp:mutex-acquire m)` | このスレッドが mutex を保持するまでブロックし、それを返します(通常は `rontolisp:with-mutex` を使用) |
 | `rontolisp:mutex-release` | `(rontolisp:mutex-release m)` | mutex の獲得を 1 回分解放し、それを返します |
