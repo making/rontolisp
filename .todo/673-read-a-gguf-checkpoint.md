@@ -89,6 +89,19 @@ of 34 bytes: an f16 scale + 32 int8), 30 BF16, and the K-quants (12 Q4_K, 14 Q6_
      `rope.dimension_sections` `[11 11 10 0]` is the vision MRoPE and reduces to 1-D RoPE
      for text.
    - `attention.layer_norm_rms_epsilon` is 1e-6 (Qwen3 too): prepend it as `:eps`.
+7. What an `lfm2` GGUF holds, read off `conversion/lfm2.py` and `src/models/lfm2.cpp`
+   (2026-09-03, `.todo/678`): NOT permuted (`LFM2Model` extends `TextModel`, not
+   `LlamaModel`), so `:rope :halves`. Which block is which: there is no interval key --
+   `lfm2.attention.head_count_kv` is a per-layer ARRAY with 0 for a conv block, and
+   `llama.cpp` reads `n_head_kv(il) == 0` as "short conv"; the reader builds
+   `:layer-types` from it (`:shortconv` / `:attention`). Per conv block
+   `blk.N.shortconv.{in_proj,conv,out_proj}.weight` -> `:conv-in` / `:conv-w`
+   (`[dim, L_cache]`, squeezed) / `:conv-out`; `blk.N.attn_norm` is `operator_norm`
+   (the `:rms-att` of BOTH kinds), `blk.N.ffn_norm` the `:rms-ffn`; the final norm is
+   `token_embd_norm` (`LLM_TENSOR_OUTPUT_NORM_LFM2`, HF's `embedding_norm`), no
+   `output` (tied). `lfm2.shortconv.l_cache` 3, `attention.layer_norm_rms_epsilon`
+   1e-5 -> `:eps`, `feed_forward_length` already auto-adjusted to 8192. Plain
+   `x * w` norms, no offset.
 
 ## Verify
 

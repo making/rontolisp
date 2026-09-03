@@ -56,6 +56,17 @@ separate `tokenizer.json` (`.todo/674`).
      (`head_dim 256 * partial_rotary_factor 0.25`), `rms_norm_eps` 1e-6 -> `:eps`.
    - `layer_types` says which block is `full_attention` (every 4th); `mtp.*` and
      `model.visual.*` are skipped by prefix.
+6. LFM2.5 (`model_type lfm2`, `.todo/678`, `modeling_lfm2.py` read 2026-09-03):
+   `layer_types` ("conv" / "full_attention") -> `:layer-types` (`:shortconv` /
+   `:attention`); per conv block `model.layers.N.conv.{in_proj,out_proj}.weight` ->
+   `:conv-in` / `:conv-out` and `conv.conv.weight [dim, 1, 3]` -> `:conv-w` squeezed
+   to `dim x 3`; per attention block `self_attn.{q,k,v,out}_proj` (`out_proj`, not
+   `o_proj`) and `q_layernorm` / `k_layernorm` -> `:q-norm` / `:k-norm`;
+   `operator_norm` -> `:rms-att` (both kinds), `ffn_norm` -> `:rms-ffn`,
+   `feed_forward.{w1,w2,w3}` -> `:w1` / `:w2` / `:w3` (8192 wide: `block_ff_dim`
+   12288 auto-adjusted, read the shape), `model.embedding_norm` -> `:rms-final`, no
+   `lm_head` (`tie_embedding`). `norm_eps` 1e-5 -> `:eps`, `rope_theta` 1e6,
+   `head_dim` = 2048 / 32 = 64 (no field), `:rope :halves`. Plain `x * w` norms.
 
 ## Verify
 
