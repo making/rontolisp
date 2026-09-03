@@ -92,13 +92,22 @@ the interpreter and the JVM with and without `--simd`, `SafetensorsLibraryTest`,
 TinyLlama-1.1B-Chat's BF16 `model.safetensors` decoding coherent text through the
 example on both (the README has the text).
 
+Measured later the same day on a quiet box (loadavg 0.9, JVM class output, f32
+weights, one thread): TinyLlama-1.1B-Chat decodes at 1.65 tok/s and loads in 8.8 s
+(from its F16 GGUF, the same weights; `.todo/673`'s Verify), which agrees with the
+README's rows the coordinator measured under load (1.58-1.91 tok/s, 8.7-9.9 s) -- the
+single-thread figure is not bandwidth-bound and the load is I/O and widening, so the
+quiet box changes neither; the `--parallel` rows stand as measured (27-31 GB/s, the DRAM
+ceiling, `examples/llama2/README.md`).
+
 ## Remaining
 
-- The WASM legs of the fixture (`examples.yaml` lists interpreter and jvm) once
-  `.todo/671`'s WASM arm of `widen-float-bits` lands: add `wasm` and `wasm-component`.
-- Load time and resident bytes, and the tok/s rows, measured on a QUIET box (the
-  first measurements were taken under a load average above 30 and are not recorded):
-  the README and `.todo/489`.
+- The fixture's `--simd` legs on the two WASM outputs: `.todo/671`'s WASM arm landed
+  and the plain `wasm` / `wasm-component` legs pass the whole fixture (added to
+  `examples.yaml` 2026-09-03), but under `--simd` both trap in `widen-float-bits` with
+  a `cast failure` -- a packed array's data is a v128 lane block there and the widen
+  casts it to the scalar array (`.todo/692`, with the three-line reproducer). The
+  `simd: true` entry lists `interpreter` and `jvm` until that lands.
 - A `#bf16` destination (`:element-type` passed through `checkpoint:make-tensor`) once
   `.todo/484` / `.todo/485` exist.
 
