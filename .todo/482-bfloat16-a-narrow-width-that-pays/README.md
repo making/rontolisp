@@ -257,7 +257,7 @@ mismatches.
 
 ### Re-evaluation, 2026-09-03 (`.todo/671`): variant D's fixup mask, and two encode dead ends
 
-`Dec.java`'s variant D (Section... above, the "magic-mul + inf fixup" row) is written with
+`Dec.java`'s variant D (Section 1 above, the "magic-mul + inf fixup" row) is written with
 a BARE compare, `u.compare(EQ, se)` -- "u equals se exactly", true infinity only. Verified
 exhaustively over all 65536 patterns while implementing `.todo/671`'s WASM decoder: this
 bare form mismatches on 2046/65536 patterns, EVERY f16 NaN (a nonzero mantissa keeps
