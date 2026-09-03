@@ -66,3 +66,111 @@ Two things that follow:
 - Whatever accumulator count lands here must land in the bf16 kernels of both files in the
   same commit, or `VecSimdBf16KernelsTest` / `JvmSimdVectorTemplateBf16Test` go red -- by
   design: they are the alarm that the two arms have drifted apart.
+
+## Built, 2026-09-03
+
+Four independent accumulators per f32 GEMV row above a 32-column gate, in all four
+`--simd` implementations at once. Numbers, harness and the reasoning behind both constants:
+`.todo/480-the-simd-gemv-row-is-one-accumulator-chain/README.md`.
+
+- `eval/VecSimdKernels.matvecRowsF` (interpreter)
+- `codegen/jvm/JvmSimdVectorTemplate.matvecRowsF` (the embedded bridge a `.class` ships)
+- `codegen/wasm/WasmVecSimdRuntimeBuilder.emitRowDotAcc` (wasm-GC)
+- `codegen/wasm/WasmVecLoops.simdMatvecRowDotF32`, called from
+  `NoGcWasmCompiler.compileSimdMatvec` (`--no-gc`)
+
+The order, identical in all four: `(a0 + a1) + (a2 + a3)` into the single accumulator that
+then takes the leftover whole lane groups and the scalar tail in index order. Constants:
+`MATVEC_ACCUMULATORS = 4`, `MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32`.
+
+### The decisions, and why
+
+- **No fused multiply-add**, which is what made the item possible at all. wasm SIMD has no
+  deterministic FMA (`relaxed_madd` is explicitly allowed to differ between engines, so it
+  can never carry a bit-identity contract), and measurement said the win does not need one:
+  4-acc mul-then-add is level with 4-acc FMA (1024x1024, Graal, 2.40x against 2.45x).
+- **`vec:dot` and `vec:sum` are unchanged**, the acceptance criterion's second option.
+  Changing `vec:dot` would move `vec:norm`, `vec:mean` and every `linalg` user transitively
+  -- a blast radius well beyond the GEMV -- and `linalg:dot`'s own M.v kernels were declared
+  out of scope, so leaving `vec:dot` alone keeps the two consistent.
+  **Consequence, deliberate and observable:** `(vec:matvec W x)[i]` no longer equals
+  `(vec:dot row_i x)`. Same value mathematically, different summation order, so possibly
+  different last bits. `doc/{en,ja}/guides/simd-acceleration.md` and `.kb/vec.md` now say
+  so; nothing may assume they agree.
+- **`linalg:dot`'s matrix-by-vector case moved with it, unavoidably.** It is not a kernel
+  of its own: `LinalgSimdKernels.matvecF` delegates to `VecSimdKernels.matvecF`,
+  `JvmSimdVectorTemplate` reaches the same `matvecRowsF`, and both wasm builders route it
+  "via the vec: matvec kernel". Forking to preserve the old bits would duplicate code to
+  protect a number nothing promised and leave `linalg:dot`'s M.v slower than `vec:matvec`
+  for no reason. The matrix-MATRIX product (`matmulRowsF`, a kernel of its own) and
+  `linalg:dot` of two vectors are untouched.
+- **f64 is untouched and unmeasured** -- `.todo/684`.
+
+### Re-pinned
+
+The f32 single-precision probe moves from `2^24 + 768 = 16777984` to `2^24 + 960 =
+16778176` wherever it goes through a GEMV (1024 columns groups as sixteen lanes rather than
+four): `eval/VecSimdTest`, `eval/LinalgSimdTest`, `codegen/jvm/JvmSimdAccelCompilerTest`
+and two probes in `codegen/wasm/WasmLispCompilerIntegrationTest`. `vec:dot` / `vec:sum` /
+`linalg:sum` / `linalg:mean` rows keep 16777984; every `#d` row is unchanged. `.kb/vec.md`,
+`.kb/linalg-simd.md` and `.kb/gpu.md` carry the new value. `ci-spec.yaml` needs nothing:
+`CiSpecE2eTest` runs without `--simd`, so it is the oracle rather than a subject.
+
+### Verified
+
+**The gate fires at the same column count, in the same direction, on all four `--simd`
+implementations.** The 2^24 probe at 16 columns (one chain) and 32 (four chains) answers
+**16777228** and **16777246** on the interpreter, a compiled `.class`, wasm-GC and
+`--no-gc` alike -- both counts are multiples of the lane count, so nobody folds a partial
+group and the four must agree exactly. 31 columns still answers with the single chain
+(16777240) on the interpreter and the JVM, which pins the comparison as `>=` and not `>`.
+Pinned in `eval/VecSimdTest`, `codegen/jvm/JvmSimdAccelCompilerTest` and
+`codegen/wasm/WasmLispCompilerIntegrationTest` (both wasm lowerings).
+
+That last one closed a hole this item opened: every existing `--no-gc` GEMV case ran at 5
+or 6 columns, far below the gate, so `WasmVecLoops.simdMatvecRowDotF32` -- a hand-written
+multi-accumulator wasm loop -- was emitted by the compiler and executed by nothing.
+
+**Acceptance, `vec:matvec` 288x288 hot, one thread** (the shipped kernel through
+`eval/Bf16GemvBench`, same harness before and after, GB10, quiet box):
+
+| | before (1 chain) | after (4 chains) |
+| --- | --- | --- |
+| Graal | 10 us | **6 us** |
+| C2 | 7 us | **4 us** |
+
+Under the 8 us the item asked for, on both JITs.
+
+**llama2 stories15M, 60 greedy tokens, `Once upon a time`: byte-identical on eight legs** --
+interpreter (`--simd`, `--simd --parallel`, and **the scalar path with no flag at all**),
+a compiled `.class` (`--simd`, `--simd --parallel`, and the same class on a JVM WITHOUT
+the incubator module, which degrades to the scalar reference), wasm-GC `--simd` and the
+wasm component `--simd`. Same md5, 222 bytes, and the text `examples/examples.yaml`
+already expected. **The scalar legs agreeing is the stronger half of the claim**: the four
+`--simd` implementations match each other, and they also match the path that does no lane
+folding at all, because greedy argmax absorbs a last-bit difference in the logits.
+`ExamplesE2eTest`'s llama2 slice is green (19 legs).
+
+Throughput on the same box, 256 tokens, JVM class: `--simd` **359 tok/s** on one thread,
+`--simd --parallel` **607** on twenty (386 pinned to one thread). The `--simd` figure is
+the one to compare across `.todo/480`; it was 336 when `.todo/457` closed (2026-08-22, a
+222-token story, so not exactly the same run).
+
+### What this is NOT verified on
+
+- **x64.** Every number is aarch64 (GB10). The gate is derived from the lane count and the
+  accumulator count rather than fitted to a crossover, so it should carry; `.todo/482`'s
+  x64 host runs the same f32 GEMV 2.6-2.9x slower in absolute terms without changing the
+  shape of anything. Untested all the same.
+  **Bit-identity is not at risk either way**: `FSPECIES_REDUCE` stays `SPECIES_128`, so the
+  fold order is the same on an AVX-512 host as on NEON. The threshold is a PERFORMANCE
+  number and machine-dependent; the lane pin is a CORRECTNESS one and is not.
+- **The path below the gate, end to end.** Dropping the gate from the drafted 96 to 32 put
+  stories15M's 48-column attention GEMV ABOVE it, so `ExamplesE2eTest` now exercises the
+  new four-accumulator row for real -- which it would not have at 96. The untested region
+  moved rather than closed: **columns 16-31 take the single-chain path and no example
+  reaches them**, except transiently as an attention `V^T . att`'s sequence length grows
+  through them, which no test asserts on directly.
+- **Models with a head dimension that is not 48.** stories15M is the only checkpoint that
+  runs today. The gate is a pure function of the column count, so 64/128/256 take the same
+  code path as 48, but no end-to-end run has proved it until `.todo/489`'s ladder does.

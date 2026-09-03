@@ -112,9 +112,20 @@ together, never one backend in isolation.
 1. `LispNames` constant + `PackageRegistry.CL_SYMBOLS` entry (else it is misclassified as a
    user symbol).
 2. `Environment.createGlobal()`: `env.define("name", new LispFunction(...))` -> `LispEvaluatorTest`
-3. `Jvm<Name>Compiler` + a case in `JvmExprCompiler.compileCons()` -> `JvmLispCompilerTest`
+3. `Jvm<Name>Compiler` + a case in `JvmExprCompiler.compileCons()` -> `JvmLispCompilerTest`.
+   **A `rontolisp:`-package name does NOT go through that switch** -- it never reaches a
+   `cl:` symbol there, since `compileConsLocated` dispatches every `rontolisp:` member
+   through a SEPARATE qualified-name if-chain first (keyed on
+   `PackageRegistry.splitQualified(sym.name())`; every existing `rontolisp:` primitive,
+   e.g. `version`/`tcp-connect`/`bfloat16-bits`, is a case there). Adding a `rontolisp:`
+   name's case to the `compileCons()` switch instead compiles clean and then silently
+   falls through to "undefined function" at the call site -- it never gets a chance to
+   match, since the qualified if-chain already returned.
 4. `Wasm<Name>Compiler` + a case in `WasmExprCompiler.compileCons()` -> `WasmLispCompilerIntegrationTest`
-   (`WasmEmitHelper.castI31GetS()` to unbox, `ref.i31` to re-box)
+   (`WasmEmitHelper.castI31GetS()` to unbox, `ref.i31` to re-box). The same split as
+   step 3 applies here: `WasmExprCompiler.compileConsLocated` has its own
+   `PackageRegistry.splitQualified`-keyed if-chain for `rontolisp:` members, separate
+   from the `cl:`-symbol switch.
 5. `BuiltinFunctionWrappers.WRAPPER_DEFS` entry so it works as a first-class value.
 6. A case in `src/test/resources/ci-spec.yaml` if it deserves end-to-end coverage.
 7. Docs: a per-operator page under `reference/{functions,macros,special-forms}/` (H1 = name,

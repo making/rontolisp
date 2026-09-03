@@ -1538,8 +1538,14 @@ final class WasmVecSimdRuntimeBuilder {
 	// so the -into form traps on ref.eq against both -- the guard the vec.lisp defun and
 	// the JVM/interpreter kernels raise as an error.
 	//
-	// i32: d, n, kind, shift, nrg, row, flat, base, off, k. f64: sum. f32: sumF.
-	// v128: acc. eq: dims, vbD. $v128arr: gw, gx.
+	// i32: d, n, kind, shift, nrg, row, flat, base, off, k, wide. f64: sum. f32: sumF.
+	// v128: acc, acc1, acc2, acc3. eq: dims, vbD. $v128arr: gw, gx.
+	//
+	// The f32 row folds MATVEC_ACCUMULATORS independent lane accumulators once the row is
+	// wide enough to pay for them (WasmVecLoops.MATVEC_ACC_THRESHOLD, a pure function of
+	// the COLUMN COUNT so the same column count takes the same path on all four --simd
+	// implementations); acc1..acc3 and `wide` exist for that. The f64 row keeps its one
+	// chain -- .todo/480 is about the f32x4 chain, and the f64 one is unmeasured.
 	private static byte[] buildMatvec(boolean into, int vecBase) {
 		int params = into ? 3 : 2;
 		int mat = into ? 1 : 0;
@@ -1548,11 +1554,13 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmWriter w = new WasmWriter(b);
 		int d = params, n = params + 1, kind = params + 2, shift = params + 3, nrg = params + 4;
 		int row = params + 5, flat = params + 6, base = params + 7, off = params + 8, k = params + 9;
-		int sum = params + 10; // f64
-		int sumF = params + 11; // f32
-		int acc = params + 12; // v128
-		int dims = params + 13, vbD = params + 14; // (ref null eq)
-		int gw = params + 15, gx = params + 16;
+		int wide = params + 10; // i32: groups the multi-accumulator loop covers
+		int sum = params + 11; // f64
+		int sumF = params + 12; // f32
+		int acc = params + 13; // v128
+		int acc1 = params + 14, acc2 = params + 15, acc3 = params + 16; // v128
+		int dims = params + 17, vbD = params + 18; // (ref null eq)
+		int gw = params + 19, gx = params + 20;
 
 		if (into) {
 			// out may alias NEITHER x nor w: out[row] folds over all of x, and the row
@@ -1599,18 +1607,21 @@ final class WasmVecSimdRuntimeBuilder {
 		farrayGroups(w, vec, gx);
 		WasmVecLoops.get(w, kind);
 		w.write(Instruction.IF, 0x40);
-		emitMatvecRows(w, d, n, nrg, row, flat, base, off, k, sumF, acc, gw, gx, vbD, true, vecBase);
+		emitMatvecRows(w, d, n, nrg, row, flat, base, off, k, wide, sumF, acc, acc1, acc2, acc3, gw, gx, vbD, true,
+				vecBase);
 		w.write(Instruction.ELSE);
-		emitMatvecRows(w, d, n, nrg, row, flat, base, off, k, sum, acc, gw, gx, vbD, false, vecBase);
+		emitMatvecRows(w, d, n, nrg, row, flat, base, off, k, wide, sum, acc, acc1, acc2, acc3, gw, gx, vbD, false,
+				vecBase);
 		w.write(Instruction.END);
 		finish(w, into, d, vbD);
 		w.write(Instruction.END);
-		return withLocals(b.toByteArray(), 10, 1, 1, 1, 2, 2);
+		return withLocals(b.toByteArray(), 11, 1, 1, 4, 2, 2);
 	}
 
 	// for (row = 0, flat = 0; row < d; row++, flat += n) dst[row] = dot(W row, x)
 	private static void emitMatvecRows(WasmWriter w, int d, int n, int nrg, int row, int flat, int base, int off, int k,
-			int sumLocal, int acc, int gw, int gx, int vbD, boolean single, int vecBase) {
+			int wide, int sumLocal, int acc, int acc1, int acc2, int acc3, int gw, int gx, int vbD, boolean single,
+			int vecBase) {
 		int laneShift = WasmVecLoops.laneShift(single);
 		int lanes = WasmVecLoops.lanes(single);
 		i32Const(w, 0);
@@ -1632,8 +1643,16 @@ final class WasmVecSimdRuntimeBuilder {
 		i32Const(w, lanes - 1);
 		w.write(Instruction.I32_AND);
 		WasmVecLoops.set(w, off);
-		WasmVecLoops.splatZero(w, acc, single);
-		emitLaneChain(w, off, lanes, 0x40, o -> emitRowDot(w, nrg, k, base, o, acc, gw, gx, single));
+		if (single) {
+			// The four accumulators are zeroed inside the chain, one copy per lane
+			// offset, so only the branch that runs pays for them.
+			emitLaneChain(w, off, lanes, 0x40,
+					o -> emitRowDotAcc(w, n, nrg, k, wide, base, o, acc, acc1, acc2, acc3, gw, gx));
+		}
+		else {
+			WasmVecLoops.splatZero(w, acc, false);
+			emitLaneChain(w, off, lanes, 0x40, o -> emitRowDot(w, nrg, k, base, o, acc, gw, gx, false));
+		}
 		// dst[row] = fold(acc), through the shared element writer
 		if (single) {
 			WasmVecLoops.horizontalAddF32(w, acc, sumLocal);
@@ -1677,16 +1696,111 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmVecLoops.closeGroupLoop(w, k);
 	}
 
+	// The f32 row with MATVEC_ACCUMULATORS independent chains above the column gate:
+	//
+	// acc0..acc3 = f32x4.splat(0)
+	// wide = (n >= MATVEC_ACC_THRESHOLD ? n >> 4 : 0) << 2 // GROUPS, not elements
+	// for (k = 0; k < wide; k += 4) acc_a += window(W, base+k+a) * x[k+a], a in 0..3
+	// acc0 = (acc0 + acc1) + (acc2 + acc3)
+	// for (; k < nrg; k++) acc0 += window(W, base+k) * x[k]
+	//
+	// `wide` is computed from the ELEMENT count (n >> 4) and not from the group count
+	// (nrg >> 2) on purpose: nrg is ceil(n/4), so the two differ on a row whose last
+	// group is partial, and the element form is exactly what the JVM and interpreter
+	// kernels compute. That keeps the grouping identical across the four implementations
+	// and confines their remaining divergence to the pre-existing one -- this backend
+	// folds a row's leftover elements as a zero-padded lane group where the JVM adds them
+	// as scalars after the horizontal fold.
+	//
+	// Below the gate the wide loop runs zero times and the four zeroed accumulators fold
+	// to an exact +0.0, so the answer is the single-chain answer, bit for bit.
+	//
+	// Bounds: the wide loop reads groups base+k+3 (+1 more for the shuffle window) with
+	// k+3 <= wide-1 < nrg, so the furthest read is base+nrg -- exactly what the
+	// single-group loop already reaches, and what the trailing zero sentinel group
+	// covers.
+	private static void emitRowDotAcc(WasmWriter w, int n, int nrg, int k, int wide, int base, int off, int acc,
+			int acc1, int acc2, int acc3, int gw, int gx) {
+		int[] accs = { acc, acc1, acc2, acc3 };
+		for (int a : accs) {
+			WasmVecLoops.splatZeroF32(w, a);
+		}
+		WasmVecLoops.get(w, n);
+		i32Const(w, 4);
+		w.write(Instruction.I32_SHR_U);
+		i32Const(w, 2);
+		w.write(Instruction.I32_SHL);
+		i32Const(w, 0);
+		WasmVecLoops.get(w, n);
+		i32Const(w, WasmVecLoops.MATVEC_ACC_THRESHOLD);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.SELECT);
+		WasmVecLoops.set(w, wide);
+		i32Const(w, 0);
+		WasmVecLoops.set(w, k);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		WasmVecLoops.get(w, k);
+		WasmVecLoops.get(w, wide);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		for (int a = 0; a < accs.length; a++) {
+			WasmVecLoops.get(w, accs[a]);
+			emitRowGroupAt(w, gw, base, k, a, off, true);
+			WasmVecLoops.groupGetAt(w, gx, k, a);
+			WasmVecLoops.simd(w, Instruction.F32X4_MUL);
+			WasmVecLoops.simd(w, Instruction.F32X4_ADD);
+			WasmVecLoops.set(w, accs[a]);
+		}
+		WasmVecLoops.get(w, k);
+		i32Const(w, accs.length);
+		w.write(Instruction.I32_ADD);
+		WasmVecLoops.set(w, k);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// acc = (acc0 + acc1) + (acc2 + acc3)
+		WasmVecLoops.get(w, acc);
+		WasmVecLoops.get(w, acc1);
+		WasmVecLoops.simd(w, Instruction.F32X4_ADD);
+		WasmVecLoops.get(w, acc2);
+		WasmVecLoops.get(w, acc3);
+		WasmVecLoops.simd(w, Instruction.F32X4_ADD);
+		WasmVecLoops.simd(w, Instruction.F32X4_ADD);
+		WasmVecLoops.set(w, acc);
+		// the leftover whole groups, one at a time, continuing from k
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		WasmVecLoops.get(w, k);
+		WasmVecLoops.get(w, nrg);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		WasmVecLoops.get(w, acc);
+		emitRowGroupAt(w, gw, base, k, 0, off, true);
+		WasmVecLoops.groupGetAt(w, gx, k, 0);
+		WasmVecLoops.simd(w, Instruction.F32X4_MUL);
+		WasmVecLoops.simd(w, Instruction.F32X4_ADD);
+		WasmVecLoops.set(w, acc);
+		WasmVecLoops.closeGroupLoop(w, k);
+	}
+
 	// Pushes the lane group of row element k*lanes: groups[base+k] when the row is group
 	// aligned, else the i8x16.shuffle window over groups[base+k] and groups[base+k+1].
 	// Package-private: the linalg matrix-product kernel reads its B rows through the
 	// same window.
 	static void emitRowGroup(WasmWriter w, int gw, int base, int k, int off, boolean single) {
-		groupGetOffset(w, gw, base, k, 0);
+		emitRowGroupAt(w, gw, base, k, 0, off, single);
+	}
+
+	// emitRowGroup at a compile-time group offset from the cursor: the multi-accumulator
+	// row loop reads MATVEC_ACCUMULATORS consecutive groups per iteration and advances
+	// the cursor once.
+	private static void emitRowGroupAt(WasmWriter w, int gw, int base, int k, int delta, int off, boolean single) {
+		groupGetOffset(w, gw, base, k, delta);
 		if (off == 0) {
 			return;
 		}
-		groupGetOffset(w, gw, base, k, 1);
+		groupGetOffset(w, gw, base, k, delta + 1);
 		int c = off * (single ? 4 : 8);
 		WasmVecLoops.simd(w, Instruction.I8X16_SHUFFLE);
 		for (int i = 0; i < 16; i++) {

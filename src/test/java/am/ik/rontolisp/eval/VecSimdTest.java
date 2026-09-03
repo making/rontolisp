@@ -112,9 +112,13 @@ class VecSimdTest {
 		assertThat(eval(probe32("4096.0", "(vec:dot v v)"), false).print()).isEqualTo("16778239");
 		assertThat(eval(probe32("16777216.0", "(vec:sum v)"), true).print()).isEqualTo("16777984");
 		assertThat(eval(probe32("16777216.0", "(vec:sum v)"), false).print()).isEqualTo("16778239");
-		// matvec is a dot per row, so its rows accumulate in f32 too. The scalar path
-		// accumulates 16778239 in f64 and narrows on store: an odd multiple of the f32
-		// spacing at 2^24, so it ties to even -> 16778240, not 16778239.
+		// The scalar path accumulates 16778239 in f64 and narrows on store: an odd
+		// multiple of the f32 spacing at 2^24, so it ties to even -> 16778240.
+		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
+		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
+		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
+		// fold 64 each, giving 2^24 + 960 = 16778176. The scalar path is unchanged.
 		String gemv = """
 				(let ((m (make-array '(1 1024) :element-type 'single-float :initial-element 1.0))
 				      (v (vec:ones 1024 :element-type 'single-float)))
@@ -122,7 +126,7 @@ class VecSimdTest {
 				  (setf (aref v 0) 4096.0)
 				  (round (aref (vec:matvec m v) 0)))
 				""";
-		assertThat(eval(gemv, true).print()).isEqualTo("16777984");
+		assertThat(eval(gemv, true).print()).isEqualTo("16778176");
 		assertThat(eval(gemv, false).print()).isEqualTo("16778240");
 		// The #d control: double-float reductions are untouched, exact on both paths.
 		String probe64 = """
@@ -193,6 +197,55 @@ class VecSimdTest {
 	}
 
 	// --- matvec (GEMV) -----------------------------------------------------------
+
+	/**
+	 * The multi-accumulator gate ({@code .todo/480}), pinned on BOTH sides and at the
+	 * boundary. From {@code MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32}
+	 * columns up a GEMV row folds four independent four-lane accumulators as
+	 * {@code (a0 + a1) + (a2 + a3)}; below it, the one chain it always had.
+	 *
+	 * <p>
+	 * The 2^24 probe makes the two legible as different integers, because it makes the
+	 * grouping legible: the lane holding {@code 2^24} swallows every {@code 1.0} added to
+	 * it (a tie to even at the f32 spacing of 2) while the others fold theirs, so the
+	 * answer counts the ones that did NOT land in that lane. At 16 columns one chain
+	 * folds 4 lane groups: 2^24 + 3*4 = 16777228. At 32 columns four chains fold two
+	 * groups each: (2^24 + 2 + 4) + 8 + 8 + 8 = 16777246. At 31 -- one short -- the gate
+	 * must still answer with the single chain, which is what pins its DIRECTION as
+	 * {@code >=} and not {@code >}: 7 lane groups plus a 3-element scalar tail, 2^24 + 24
+	 * = 16777240.
+	 *
+	 * <p>
+	 * <b>16 and 32 are asserted identically on all four {@code --simd}
+	 * implementations</b> -- here, {@code codegen/jvm/JvmSimdAccelCompilerTest},
+	 * {@code codegen/wasm/WasmLispCompilerIntegrationTest} for wasm-GC and for
+	 * {@code --no-gc}. Both column counts are multiples of the lane count, so no
+	 * implementation is folding a partial group and the four must agree exactly. That
+	 * agreement, not the values themselves, is the point: a gate that fired at a
+	 * different column count, or in a different direction, on one backend would show up
+	 * here and nowhere else.
+	 */
+	@Test
+	void theMultiAccumulatorGateFiresAtTheSameColumnCountAsEveryOtherSimdBackend() {
+		assertThat(eval(gateProbe(16), true).print()).as("16 columns: one chain").isEqualTo("16777228");
+		assertThat(eval(gateProbe(31), true).print()).as("31 columns: still one chain").isEqualTo("16777240");
+		assertThat(eval(gateProbe(32), true).print()).as("32 columns: four chains").isEqualTo("16777246");
+	}
+
+	/**
+	 * A 1 x n single-float GEMV whose only large value is {@code 2^24} in column 0, met
+	 * by {@code 4096.0} in the vector, so the product there is {@code 2^24} and every
+	 * other product is {@code 1.0}.
+	 */
+	private static String gateProbe(int columns) {
+		return """
+				(let ((m (make-array '(1 %d) :element-type 'single-float :initial-element 1.0))
+				      (v (vec:ones %d :element-type 'single-float)))
+				  (setf (aref m 0 0) 4096.0)
+				  (setf (vec:aref v 0) 4096.0)
+				  (round (vec:aref (vec:matvec m v) 0)))
+				""".formatted(columns, columns);
+	}
 
 	@Test
 	void matvecMatchesTheScalarOracle() {
