@@ -16967,6 +16967,66 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("-2.5");
 	}
 
+	// .todo/671 shipped widen-float-bits / narrow-float-bits to four backends and pinned
+	// each of them WITHOUT --simd, which is exactly the hole .todo/692 fell into: the
+	// matrix that matters here is backend x --simd, not backend alone. Under --simd a
+	// packed float array's data field is a TYPE_VBLOCK of v128 lane groups instead of a
+	// $f32arr / $f64arr (.kb/vec.md, "Acceleration layer 3"), so the widen's destination
+	// cast and the narrow's source cast both trapped on every --simd build. The element
+	// counts are chosen to leave a partly-used last lane group at both widths (7 with
+	// f32x4, 5 with f64x2), and the first case's :start 2 into a pre-filled destination
+	// pins that _v_set's read-modify-write leaves the untouched head alone.
+	@Test
+	void compileAndRunWidenAndNarrowFloatBitsAcrossTheSimdMatrix() throws Exception {
+		String code = """
+				(let* ((bits (make-array 3 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:float16-bits 1.0)
+				                                                  (rontolisp:float16-bits -2.5)
+				                                                  (rontolisp:float16-bits 100.0))))
+				       (dst (make-array 5 :element-type 'single-float :initial-element 9.0))
+				       (back (make-array 5 :element-type '(unsigned-byte 16))))
+				  (rontolisp:widen-float-bits bits :float16 dst :start 2)
+				  (rontolisp:narrow-float-bits dst :float16 back)
+				  (print dst)
+				  (print back))
+				(let* ((bits (make-array 5 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:bfloat16-bits 1.0)
+				                                                  (rontolisp:bfloat16-bits -2.5)
+				                                                  (rontolisp:bfloat16-bits 0.125)
+				                                                  (rontolisp:bfloat16-bits 64.0)
+				                                                  (rontolisp:bfloat16-bits -0.5))))
+				       (dst (make-array 5 :element-type 'double-float :initial-element 0.0))
+				       (back (make-array 5 :element-type '(unsigned-byte 16))))
+				  (rontolisp:widen-float-bits bits :bfloat16 dst)
+				  (rontolisp:narrow-float-bits dst :bfloat16 back)
+				  (print dst)
+				  (print back))
+				(let* ((bits (make-array 7 :element-type '(unsigned-byte 16)))
+				       (dst (make-array 7 :element-type 'single-float :initial-element 0.0)))
+				  (dotimes (i 7) (setf (aref bits i) (+ 15000 (* i 100))))
+				  (rontolisp:widen-float-bits bits :float16 dst)
+				  (print dst))
+				(let* ((bits (make-array 1 :element-type '(unsigned-byte 16)
+				                         :initial-contents (list (rontolisp:float16-bits -2.5))))
+				       (dst (make-array 1 :element-type 'single-float)))
+				  (rontolisp:widen-float-bits bits :float16 dst)
+				  (print (aref dst 0)))
+				""";
+		String expected = """
+				#f(9.0 9.0 1.0 -2.5 100.0)
+				#(18560 18560 15360 49408 22080)
+				#d(1.0 -2.5 0.125 64.0 -0.5)
+				#(16256 49184 15872 17024 48896)
+				#f(0.82421875 0.8730469 0.921875 0.9707031 1.0390625 1.1367188 1.234375)
+				-2.5""";
+		for (boolean simd : new boolean[] { false, true }) {
+			for (boolean component : new boolean[] { false, true }) {
+				assertThat(compileAndRunWithDir(code, simd, component)).as("simd=%s component=%s", simd, component)
+					.isEqualTo(expected);
+			}
+		}
+	}
+
 	// The JVM twin of this test caught a real bug: BuiltinFunctionWrappers
 	// unconditionally emitted first-class wrappers for widen-float-bits/
 	// narrow-float-bits calling a helper that is itself only emitted when the

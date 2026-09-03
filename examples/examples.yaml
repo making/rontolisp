@@ -325,11 +325,8 @@ examples:
     note: safetensors:read / safetensors:header / safetensors:entries over the checked-in fixture -- F32, F16 and BF16 tensors of rank 1, 2 and 3 and one of a single element, single and double destinations, the dtype refusal, :only skipping a tensor through checkpoint:skip-bytes, the staging chunk forced down to five elements, and the two-shard index
     expect:
       file: .expected/safetensors-check.txt
-  # Under --simd the two WASM outputs trap in widen-float-bits (a packed array's
-  # data is a v128 lane block there and the widen casts it to the scalar array,
-  # .todo/692); they rejoin this entry when that lands.
   - path: llama2/safetensors-check.lisp
-    backends: [interpreter, jvm]
+    backends: [interpreter, jvm, wasm, wasm-component]
     workDir: llama2
     workFiles: [safetensors-check.safetensors, safetensors-check-00001-of-00002.safetensors, safetensors-check-00002-of-00002.safetensors, safetensors-check.index.json]
     simd: true

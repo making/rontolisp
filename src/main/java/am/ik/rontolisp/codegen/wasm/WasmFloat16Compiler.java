@@ -59,6 +59,33 @@ final class WasmFloat16Compiler {
 	/** The zero/subnormal-source threshold: bits of {@code (0x1.0p-24f * 0.5f)}. */
 	private static final int ZERO_THRESHOLD = 0x33000000;
 
+	/**
+	 * How a packed float array's data field (field 1 of {@code TYPE_FARRAY}) is laid out
+	 * at the widen destination / narrow source. The two scalar arms are told apart at
+	 * RUNTIME by {@code ref.test $f32arr}; {@link #VBLOCK} is a COMPILE-time fact
+	 * ({@code ctx.simd}), because a {@code --simd} module has one representation for both
+	 * widths and a default module cannot even declare the type ({@code .kb/vec.md},
+	 * "Acceleration layer 3").
+	 */
+	private enum Layout {
+
+		/**
+		 * {@code (array (mut f32))} -- a {@code single-float} array, no {@code --simd}.
+		 */
+		F32ARR,
+		/**
+		 * {@code (array (mut f64))} -- a {@code double-float} array, no {@code --simd}.
+		 */
+		F64ARR,
+		/**
+		 * A {@code TYPE_VBLOCK} of {@code (array (mut v128))} lane groups, both widths,
+		 * {@code --simd} only: element access goes through {@code _v_get}/{@code _v_set},
+		 * exactly as {@code %read-sequence-packed} and {@code (setf aref)} do.
+		 */
+		VBLOCK
+
+	}
+
 	private WasmFloat16Compiler() {
 	}
 
@@ -147,14 +174,15 @@ final class WasmFloat16Compiler {
 	/**
 	 * {@code (rontolisp:widen-float-bits bits format dst &key (start 0))}: {@code bits} a
 	 * bare {@code TYPE_I16ARR}, {@code dst} a {@code TYPE_FARRAY} whose data (field 1) is
-	 * a bare {@code TYPE_F32ARR}/{@code TYPE_F64ARR} -- wasm-GC's packed float array
-	 * carries no header to offset past (unlike the JVM's bare-array-with-header; the
-	 * class most likely to bite a future port of this file is assuming one exists here
-	 * too). Fills {@code dst}'s data array from {@code start}, row-major, one pass, no
-	 * shared runtime helper (this primitive's typical program has one or two call sites,
-	 * each executed many times at ITS OWN call site, so there is nothing to de-duplicate
-	 * the way {@code FUNC_READ_PACKED} de-duplicates a call site that recurs across a
-	 * whole program).
+	 * a bare {@code TYPE_F32ARR}/{@code TYPE_F64ARR} -- or, under {@code --simd}, a
+	 * {@code TYPE_VBLOCK} of v128 lane groups instead ({@link Layout}) -- wasm-GC's
+	 * packed float array carries no header to offset past (unlike the JVM's
+	 * bare-array-with-header; the class most likely to bite a future port of this file is
+	 * assuming one exists here too). Fills {@code dst}'s data array from {@code start},
+	 * row-major, one pass, no shared runtime helper (this primitive's typical program has
+	 * one or two call sites, each executed many times at ITS OWN call site, so there is
+	 * nothing to de-duplicate the way {@code FUNC_READ_PACKED} de-duplicates a call site
+	 * that recurs across a whole program).
 	 */
 	static void compileWiden(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
@@ -186,39 +214,50 @@ final class WasmFloat16Compiler {
 
 		emitStartFlag(ctx, args, 4, start);
 
-		getRef(ctx, dstStruct);
-		refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
-		structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
-		refTest(ctx, WasmLispCompiler.TYPE_F32ARR);
-		ctx.writer.write(Instruction.IF, 0x40);
-		{
+		if (ctx.simd) {
 			getRef(ctx, dstStruct);
 			refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
 			structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
-			refCast(ctx, WasmLispCompiler.TYPE_F32ARR);
 			int dataArr = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(dataArr);
-			emitWidenLoop(ctx, true, dataArr, bitsArr, n, isFloat16, start, i);
+			emitWidenLoop(ctx, Layout.VBLOCK, dataArr, bitsArr, n, isFloat16, start, i);
 		}
-		ctx.writer.write(Instruction.ELSE);
-		{
+		else {
 			getRef(ctx, dstStruct);
 			refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
 			structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
-			refCast(ctx, WasmLispCompiler.TYPE_F64ARR);
-			int dataArr = ctx.allocTemp();
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(dataArr);
-			emitWidenLoop(ctx, false, dataArr, bitsArr, n, isFloat16, start, i);
+			refTest(ctx, WasmLispCompiler.TYPE_F32ARR);
+			ctx.writer.write(Instruction.IF, 0x40);
+			{
+				getRef(ctx, dstStruct);
+				refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
+				structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
+				refCast(ctx, WasmLispCompiler.TYPE_F32ARR);
+				int dataArr = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(dataArr);
+				emitWidenLoop(ctx, Layout.F32ARR, dataArr, bitsArr, n, isFloat16, start, i);
+			}
+			ctx.writer.write(Instruction.ELSE);
+			{
+				getRef(ctx, dstStruct);
+				refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
+				structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
+				refCast(ctx, WasmLispCompiler.TYPE_F64ARR);
+				int dataArr = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(dataArr);
+				emitWidenLoop(ctx, Layout.F64ARR, dataArr, bitsArr, n, isFloat16, start, i);
+			}
+			ctx.writer.write(Instruction.END);
 		}
-		ctx.writer.write(Instruction.END);
 
 		getRef(ctx, dstStruct);
 		ctx.nextI64Local = savedI64Locals;
 	}
 
-	private static void emitWidenLoop(WasmLispCompiler.Ctx ctx, boolean single, int dataArr, int bitsArr, int n,
+	private static void emitWidenLoop(WasmLispCompiler.Ctx ctx, Layout layout, int dataArr, int bitsArr, int n,
 			int isFloat16, int start, int i) {
 		int bitsVal = ctx.allocI64Temp();
 		int u = ctx.allocI64Temp();
@@ -245,9 +284,12 @@ final class WasmFloat16Compiler {
 		setI64(ctx, bitsVal);
 
 		// push (dataArr, index) -- the value computed below lands on top, ready for
-		// array.set's (arrayref, index, value) stack shape.
+		// array.set's (arrayref, index, value) stack shape, or for _v_set's identical
+		// (eq, i32, f64) one under --simd.
 		getRef(ctx, dataArr);
-		refCast(ctx, single ? WasmLispCompiler.TYPE_F32ARR : WasmLispCompiler.TYPE_F64ARR);
+		if (layout != Layout.VBLOCK) {
+			refCast(ctx, layout == Layout.F32ARR ? WasmLispCompiler.TYPE_F32ARR : WasmLispCompiler.TYPE_F64ARR);
+		}
 		getI64(ctx, start);
 		getI64(ctx, i);
 		ctx.writer.write(Instruction.I64_ADD);
@@ -301,10 +343,21 @@ final class WasmFloat16Compiler {
 		ctx.writer.write(Instruction.F32_REINTERPRET_I32);
 		ctx.writer.write(Instruction.END);
 
-		if (!single) {
-			ctx.writer.write(Instruction.F64_PROMOTE_F32);
+		switch (layout) {
+			case F32ARR -> arraySet(ctx, WasmLispCompiler.TYPE_F32ARR);
+			case F64ARR -> {
+				ctx.writer.write(Instruction.F64_PROMOTE_F32);
+				arraySet(ctx, WasmLispCompiler.TYPE_F64ARR);
+			}
+			// _v_set owns the width branch (a kind-1 vblock demotes the f64 straight
+			// back to the f32 computed above, bit-exact) and returns the value AS
+			// STORED, which this loop does not need.
+			case VBLOCK -> {
+				ctx.writer.write(Instruction.F64_PROMOTE_F32);
+				callVec(ctx, WasmVecSimdRuntimeBuilder.V_SET);
+				ctx.writer.write(Instruction.DROP);
+			}
 		}
-		arraySet(ctx, single ? WasmLispCompiler.TYPE_F32ARR : WasmLispCompiler.TYPE_F64ARR);
 
 		getI64(ctx, i);
 		ctx.writer.write(Instruction.I64_CONST);
@@ -357,49 +410,67 @@ final class WasmFloat16Compiler {
 
 		emitStartFlag(ctx, args, 4, start);
 
-		getRef(ctx, srcStruct);
-		refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
-		structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
-		refTest(ctx, WasmLispCompiler.TYPE_F32ARR);
-		ctx.writer.write(Instruction.IF, 0x40);
-		{
+		if (ctx.simd) {
 			getRef(ctx, srcStruct);
 			refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
 			structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
-			refCast(ctx, WasmLispCompiler.TYPE_F32ARR);
 			int dataArr = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(dataArr);
+			// A vblock's groups array is PADDED (and carries a sentinel group), so its
+			// length is not the element count: the count is the struct's own field 0.
 			getRef(ctx, dataArr);
-			refCast(ctx, WasmLispCompiler.TYPE_F32ARR);
-			arrayLen(ctx);
+			refCast(ctx, WasmLispCompiler.TYPE_VBLOCK);
+			structGet(ctx, WasmLispCompiler.TYPE_VBLOCK, 0);
 			ctx.writer.write(Instruction.I64_EXTEND_U_I32);
 			setI64(ctx, n);
-			emitNarrowLoop(ctx, true, dataArr, dstArr, n, isFloat16, start, i);
+			emitNarrowLoop(ctx, Layout.VBLOCK, dataArr, dstArr, n, isFloat16, start, i);
 		}
-		ctx.writer.write(Instruction.ELSE);
-		{
+		else {
 			getRef(ctx, srcStruct);
 			refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
 			structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
-			refCast(ctx, WasmLispCompiler.TYPE_F64ARR);
-			int dataArr = ctx.allocTemp();
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(dataArr);
-			getRef(ctx, dataArr);
-			refCast(ctx, WasmLispCompiler.TYPE_F64ARR);
-			arrayLen(ctx);
-			ctx.writer.write(Instruction.I64_EXTEND_U_I32);
-			setI64(ctx, n);
-			emitNarrowLoop(ctx, false, dataArr, dstArr, n, isFloat16, start, i);
+			refTest(ctx, WasmLispCompiler.TYPE_F32ARR);
+			ctx.writer.write(Instruction.IF, 0x40);
+			{
+				getRef(ctx, srcStruct);
+				refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
+				structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
+				refCast(ctx, WasmLispCompiler.TYPE_F32ARR);
+				int dataArr = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(dataArr);
+				getRef(ctx, dataArr);
+				refCast(ctx, WasmLispCompiler.TYPE_F32ARR);
+				arrayLen(ctx);
+				ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+				setI64(ctx, n);
+				emitNarrowLoop(ctx, Layout.F32ARR, dataArr, dstArr, n, isFloat16, start, i);
+			}
+			ctx.writer.write(Instruction.ELSE);
+			{
+				getRef(ctx, srcStruct);
+				refCast(ctx, WasmLispCompiler.TYPE_FARRAY);
+				structGet(ctx, WasmLispCompiler.TYPE_FARRAY, 1);
+				refCast(ctx, WasmLispCompiler.TYPE_F64ARR);
+				int dataArr = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(dataArr);
+				getRef(ctx, dataArr);
+				refCast(ctx, WasmLispCompiler.TYPE_F64ARR);
+				arrayLen(ctx);
+				ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+				setI64(ctx, n);
+				emitNarrowLoop(ctx, Layout.F64ARR, dataArr, dstArr, n, isFloat16, start, i);
+			}
+			ctx.writer.write(Instruction.END);
 		}
-		ctx.writer.write(Instruction.END);
 
 		getRef(ctx, dstArr);
 		ctx.nextI64Local = savedI64Locals;
 	}
 
-	private static void emitNarrowLoop(WasmLispCompiler.Ctx ctx, boolean single, int srcDataArr, int dstArr, int n,
+	private static void emitNarrowLoop(WasmLispCompiler.Ctx ctx, Layout layout, int srcDataArr, int dstArr, int n,
 			int isFloat16, int start, int i) {
 		// The branchless float16-bits encode's own scratch slots (see compileBits),
 		// re-run once per element.
@@ -426,11 +497,26 @@ final class WasmFloat16Compiler {
 		// doppel = bits of the source element narrowed to f32 (row-major from 0, no
 		// :start offset on the SOURCE side -- narrow-float-bits reads src whole).
 		getRef(ctx, srcDataArr);
-		refCast(ctx, single ? WasmLispCompiler.TYPE_F32ARR : WasmLispCompiler.TYPE_F64ARR);
-		i64ToI32Index(ctx, i);
-		arrayGet(ctx, single ? WasmLispCompiler.TYPE_F32ARR : WasmLispCompiler.TYPE_F64ARR, Instruction.ARRAY_GET);
-		if (!single) {
-			ctx.writer.write(Instruction.F32_DEMOTE_F64);
+		switch (layout) {
+			case F32ARR -> {
+				refCast(ctx, WasmLispCompiler.TYPE_F32ARR);
+				i64ToI32Index(ctx, i);
+				arrayGet(ctx, WasmLispCompiler.TYPE_F32ARR, Instruction.ARRAY_GET);
+			}
+			case F64ARR -> {
+				refCast(ctx, WasmLispCompiler.TYPE_F64ARR);
+				i64ToI32Index(ctx, i);
+				arrayGet(ctx, WasmLispCompiler.TYPE_F64ARR, Instruction.ARRAY_GET);
+				ctx.writer.write(Instruction.F32_DEMOTE_F64);
+			}
+			// _v_get answers an f64 at either width (a kind-1 vblock's lane is promoted
+			// from the stored f32), so the demote below is exact for a single-float
+			// source and is the same narrowing the F64ARR arm does for a double one.
+			case VBLOCK -> {
+				i64ToI32Index(ctx, i);
+				callVec(ctx, WasmVecSimdRuntimeBuilder.V_GET);
+				ctx.writer.write(Instruction.F32_DEMOTE_F64);
+			}
 		}
 		ctx.writer.write(Instruction.I32_REINTERPRET_F32);
 		ctx.writer.write(Instruction.I64_EXTEND_U_I32);
@@ -753,6 +839,15 @@ final class WasmFloat16Compiler {
 	private static void arrayGet(WasmLispCompiler.Ctx ctx, int type, int opcode) {
 		ctx.writer.write(Instruction.GC_PREFIX, opcode);
 		ctx.writer.writeUnsignedLeb128(type);
+	}
+
+	/**
+	 * A call to one of the {@code --simd} vec runtime helpers
+	 * ({@code _v_get}/{@code _v_set}).
+	 */
+	private static void callVec(WasmLispCompiler.Ctx ctx, int index) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + index);
 	}
 
 	private static void arraySet(WasmLispCompiler.Ctx ctx, int type) {

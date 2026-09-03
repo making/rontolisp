@@ -108,6 +108,29 @@ pinned by `LispEvaluatorTest#bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPa
 plain identity, not a "126 quieted" shape -- an earlier version of both tests asserted
 the ceiling as correct behavior; fixed 2026-09-03 once the ceiling itself was closed).
 
+**Exact means exact through the PAIR, not through the array it writes into**, and on
+wasm-GC those are different ceilings. Measured 2026-09-03 (todo-692), 65536 patterns
+widened into a packed array and narrowed straight back, wasmtime 47:
+
+| wasm-GC path | `single-float` array | `double-float` array |
+| --- | --- | --- |
+| scalar layout (no `--simd`) | 0 bad | 126 bad |
+| `--simd` vblock layout | 126 bad | 126 bad |
+
+The 126 are the signalling patterns, every time. Every cell but the first crosses an f64:
+the double-float arm by the documented `f64 -> f32` demote in
+`WasmFloat16Compiler.emitNarrowLoop`, the vblock cells because `_v_get`/`_v_set` are
+typed `(eq,i32)->f64` / `(eq,i32,f64)->f64` at BOTH widths (`.kb/vec.md`, acceleration
+layer 3). **This is the wasm element model's ceiling, not the pair's**: the same program
+with the pair removed -- a plain `(setf (aref a i) (rontolisp:bits-bfloat16 i))` followed
+by `(rontolisp:bfloat16-bits (aref a i))` over a packed single-float array -- loses the
+identical 126 patterns on wasm-GC WITH and WITHOUT `--simd`, because `aref` boxes through
+the f64 `TYPE_FLOAT` struct either way. So there is nothing for the bulk pair to fix on
+that backend, and no reason for its `--simd` arm to grow f32-native vblock accessors to
+dodge an f64 the very next `aref` re-crosses. The one cell that IS exact stays exact
+because the scalar single-float arm reads and writes `$f32arr` with no conversion at all,
+which is the property the section above names -- keep it that way if that arm is touched.
+
 The measurement that settles which step loses a payload, since it is easy to guess wrong
 (2026-09-03, and guessed wrong twice before it was taken): **BOTH float/double conversions
 quiet a signalling NaN.** Each of the 126 signalling patterns loses its payload through

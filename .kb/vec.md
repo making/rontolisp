@@ -761,11 +761,21 @@ Mechanics:
   `emitPackedWriteF64Vblock`/`compileElementType`, `WasmQuoteCompiler`'s `#d`/`#f` literals
   (`compilePackedVblockLiteral` — one `v128.const` `array.set` per lane group, skipping
   all-zero groups), and `WasmRuntimeBuilder.emitPrintArray` (count/kind from the vblock,
-  elements via `_v_get`; the `--simd` build no longer needs an extra i32 local).
+  elements via `_v_get`; the `--simd` build no longer needs an extra i32 local), and
+  `WasmFloat16Compiler`'s `widen-float-bits` / `narrow-float-bits` destination and source
+  (`Layout.VBLOCK`, todo-692).
   `length`/`%arrayp`/`array-dimensions` read only `dims` and are untouched.
   `compilePackedMakeVblock` skips the fill loop entirely when `:initial-element` is absent or
   a literal POSITIVE zero — `array.new_default` already wrote that. `-0.0` is deliberately
   excluded (different bits).
+- **Every writer of a packed array has to be on this list, and the way one gets missed is a
+  test matrix counting BACKENDS rather than backends x `--simd`.** todo-671 added the bulk
+  float-bits pair to four backends and pinned each of them scalar-only; the wasm arm cast the
+  destination's data field to `$f32arr`/`$f64arr`, which is a `ref.cast` TRAP the moment the
+  field is a vblock, and it shipped green (todo-692, found 2026-09-03 by an unrelated lane
+  adding a `--simd` example leg). Nothing about the vblock is subtle here -- the arm simply
+  never ran under the flag. A new primitive that writes or reads packed float data belongs in
+  `WasmLispCompilerIntegrationTest` under BOTH values of `simd`, not one.
 - **Shared loop seam**: `WasmVecLoops` holds the four linear v128 bodies (`simdMap2`/
   `simdScale`/`simdSum`/`simdDot`), the four scalar ones, AND the four GC group bodies
   (`gcMap2`/`gcScale`/`gcSum`/`gcDot` over `openGroupLoop`/`closeGroupLoop`).
