@@ -391,13 +391,14 @@ final class CompileTimePathnameFolder {
 	}
 
 	/**
-	 * Whether {@code op} names one of the four foldable primitives. A generic call (like
-	 * {@code funcall}, {@code let}) is not considered a fold target: those forms recurse
-	 * through {@link #recurseCons} instead.
+	 * Whether {@code op} names one of the foldable primitives, or the
+	 * {@code (eval (read-from-string "..."))} wrapper those primitives are sometimes
+	 * hidden behind. A generic call (like {@code funcall}, {@code let}) is not considered
+	 * a fold target: those forms recurse through {@link #recurseCons} instead.
 	 */
 	private static boolean isFoldablePrimitiveHead(LispSymbol op) {
 		String name = op.name();
-		if (LispNames.MAKE_PATHNAME.equals(name)) {
+		if (LispNames.MAKE_PATHNAME.equals(name) || LispNames.EVAL.equals(name)) {
 			return true;
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);

@@ -720,6 +720,32 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void foldsEvalReadFromStringWrappedComponentPathname() {
+		// local-time asks for its bundled zoneinfo directory at load time with
+		// (eval (read-from-string "(asdf:component-pathname (asdf:find-system 'local-time
+		// nil))")).
+		// The eval wrapper is transparent to the folder when the string is a literal.
+		String shape = """
+				(asdf:defsystem :demo :components ((:file "main")))
+				(defparameter *root*
+				  (eval (read-from-string "(asdf:component-pathname (asdf:find-system 'demo nil))")))""";
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString(shape),
+				loaderOf(Map.of("main.lisp", "(defun m () 1)")), "projects/demo");
+		assertThat(result.stream().map(LispVal::print)).contains("(DEFPARAMETER *ROOT* \"projects/demo/\")");
+	}
+
+	@Test
+	void leavesEvalReadFromStringIntactWhenStringIsNotFoldable() {
+		// A non-literal read-from-string argument (or an unparseable/eval-only string)
+		// must not be silently dropped: the form stays as-is for the interpreter.
+		List<LispVal> result = LoadInliner.inline(
+				LispReader.readAllFromString("(defparameter *x* (eval (read-from-string (compute-string))))"),
+				loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print))
+			.containsExactly("(DEFPARAMETER *X* (EVAL (READ-FROM-STRING (COMPUTE-STRING))))");
+	}
+
+	@Test
 	void leavesUnfoldableMergePathnamesStarIntact() {
 		// A non-literal specified path with no defparameter binding stays as-is so a
 		// runtime uiop:merge-pathnames* implementation (interpreter path) still handles
