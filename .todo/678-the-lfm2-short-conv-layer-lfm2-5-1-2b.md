@@ -2,8 +2,10 @@
 
 Difficulty: Medium
 
-Part of `.todo/670`. Depends on `.todo/676` (QK-norm attention, tied head) and the
-readers; `.todo/674` with the Llama-3 pre-tokenizer pattern.
+Part of `.todo/670`. `.todo/676` (QK-norm attention, tied head) and `.todo/674` (the
+Llama-3 pre-tokenizer pattern) closed 2026-09-03, and both readers landed the same day.
+Nothing here is blocked; the LFM2.5-1.2B files are downloaded and `.todo/677` has already
+walked this path once with Qwen3.5, so this is the second model through it.
 
 **Why this model**: as of 2026-09-03 it is the newest ~1B model on Hugging Face
 (`LiquidAI/LFM2.5-1.2B-Instruct`, 2026-08-24, 375k downloads in ten days), it is

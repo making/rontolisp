@@ -2,7 +2,9 @@
 
 Difficulty: Low
 
-Part of `.todo/670`. Depends on `.todo/671` (BF16 / F16 tensors into `#f`).
+Part of `.todo/670`. `.todo/671` (BF16 / F16 tensors into `#f`) closed 2026-09-03,
+wasm arm included -- so the fixture's wasm and wasm-component legs, listed under
+Remaining below as waiting on it, are now only unrun.
 
 `model.safetensors` is what Hugging Face's own model pages hold: a `u64` little-endian
 header length, a JSON header `{ "<name>": { "dtype": "BF16", "shape": [..],

@@ -2,8 +2,10 @@
 
 Difficulty: High
 
-The goal `.todo/482` exists for. Depends on `.todo/484`, `.todo/485`, `.todo/487`,
-`.todo/488`.
+The goal `.todo/482` exists for. `.todo/484` and `.todo/485` closed 2026-09-03 and
+`.todo/487` landed its step 1; the f32 rungs below are measured and no longer projections.
+What the bf16 rungs still wait on is `.todo/488`'s wiring, not its kernels -- see the
+precondition under the prediction.
 
 `examples/llama2` runs `stories15M` today: 15M parameters, 60.8 MB of f32 weights, 339
 tok/s single-thread on GB10 (`.todo/457`). The point of adding a narrow width is to move
@@ -57,6 +59,51 @@ classifier and the RoPE base as a parameter.
 
 Llama-3.2-1B is deliberately not the target: different RoPE, GQA layout and tokenizer
 would make this an architecture item rather than a width item.
+
+## Measured at f32, and the prediction bf16 has to beat (2026-09-03, host dorian)
+
+Two published checkpoints, read straight from their BF16 safetensors and widened to `#f`,
+JVM class output under `--simd`, 64 greedy tokens, Xeon E5-2697A v4 (Broadwell, AVX2, 64
+threads), GraalVM 25.0.4:
+
+| | 1 thread | `--parallel` (64) | bytes read per token | parallel bandwidth |
+| --- | --- | --- | --- | --- |
+| Qwen3.5-0.8B | 2.00 / 2.48 tok/s | **8.56 tok/s** | 3.2 GB | **27.0 GB/s** |
+| TinyLlama-1.1B | 1.58 / 1.91 tok/s | **6.97 tok/s** | 4.4 GB | **30.7 GB/s** |
+
+**Two independent models landed on the same ceiling on the same box.** That is what makes
+this a diagnosis rather than a pair of numbers: the parallel leg is bound by DRAM, not by
+thread count -- 64 threads buy about 4x over one, because the weights have to cross the
+bus once per token either way. The single-thread leg is at 8.4 and 5.0 GB/s, nowhere near
+that ceiling, so it is bound by something else.
+
+**The precondition, which `.todo/485` does not satisfy on its own.** 485 adds the
+ARRAY TYPE; it does not wire it into the accelerated path. `eval/VecSimd` declines a
+`LispBFloat16Array` at every dispatch point (`case LispBFloat16Array ignored -> null;`,
+seven of them on develop today) and falls through to the scalar Lisp defun. The fused
+kernels themselves already exist (`eval/VecSimdKernels`, wave 1 of `.todo/488`); what is
+missing is the interception that reaches them, which is `.todo/488`'s remaining wave.
+**Measured before that wiring lands, bf16 will be SLOWER than f32, and that number is
+neither a confirmation nor a refutation of anything below** -- it is the scalar path.
+The decline is deliberate: without it `--simd` would fail outright on a bf16 array, which
+would turn a speed flag into a semantic one.
+
+**The prediction, written before `.todo/485` lands so that measuring it is a test:**
+
+- **The parallel leg roughly doubles** -- bf16 halves the bytes and the bytes are the
+  limit. Qwen3.5-0.8B **~17 tok/s**, TinyLlama-1.1B **~14 tok/s**.
+- **The single-thread leg does not move much.** It is not bandwidth-bound, so removing
+  bandwidth cannot help it. `.todo/488`'s fused kernels are that leg's story, and they
+  should show up here and NOT in the parallel column.
+- **Load-in time drops too**: 8.7-9.9 s for TinyLlama today is 2.2 GB read and widened to
+  4.4 GB; with a `#bf16` destination the widen disappears.
+
+**What a miss would mean, which is the point of writing it down.** If the parallel leg
+does not roughly double, either the bandwidth diagnosis is wrong or the bf16 path has a
+limit that is not bandwidth -- both worth knowing. If the single-thread leg DOES jump,
+the serial leg was not compute-bound after all and `.todo/488`'s premise needs re-reading.
+Re-measure both models, both legs, on a quiet box, and record the result here beside the
+prediction rather than in place of it.
 
 ## What the numbers should look like
 
