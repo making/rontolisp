@@ -83,7 +83,11 @@ generate loop -- and tells the same stories as the C program, token for token,
 from the checked-in 1 MB `stories260K.bin` or the downloadable `stories15M.bin`.
 Its 15 million weights load through `read-sequence` over packed single-float
 arrays; its decode is all `vec:matvec`, which is why `--simd` takes wasm-GC from
-0.4 to 46 tokens/s. Setup, knobs and numbers in [its README](llama2/README.md).
+0.4 to 46 tokens/s. The forward pass is a table of layer kinds -- QK-norm, the
+RoPE layout, a partial rotary dim, an output gate, the attention scale and the
+model-level multipliers are options a loader fills in, and Llama 2 is the row
+where they are all at their default. Setup, knobs and numbers in
+[its README](llama2/README.md).
 
 ## LLM from Scratch — `llm-from-scratch/`
 
