@@ -18780,8 +18780,8 @@ class WasmLispCompilerIntegrationTest {
 				"(linalg:slice #f((1.0 2.0 3.0) (4.0 5.0 6.0)) '((1 2) (0 3 2)))",
 				"(linalg:slice #d((1.0 2.0 3.0) (4.0 5.0 6.0)) '((0 2) (1 1)))",
 				"(linalg:slice #d(((1.0 2.0) (3.0 4.0)) ((5.0 6.0) (7.0 8.0))) '((1 2) nil (-1 nil -1)))",
-				"(linalg::%la-gather-strided #d((1.0 2.0 3.0) (4.0 5.0 6.0)) '(2 2) '(1 3) 1 t)",
-				"(linalg::%la-gather-strided #f((1.0 2.0 3.0) (4.0 5.0 6.0)) '(3) '(2) 0 nil)",
+				"(linalg::%la-gather-strided #d((1.0 2.0 3.0) (4.0 5.0 6.0)) '(2 2) '(1 3) 1 0)",
+				"(linalg::%la-gather-strided #f((1.0 2.0 3.0) (4.0 5.0 6.0)) '(3) '(2) 0 1)",
 				"(linalg::%la-scatter-rows (linalg:zeros '(3 2)) #d((1.0 2.0) (3.0 4.0) (5.0 6.0)) #d(2.0 0.0 2.0))",
 				"(linalg::%la-scatter-rows (linalg:zeros '(3 2) :element-type 'single-float)"
 						+ " #f((1.0 2.0) (3.0 4.0) (5.0 6.0)) #d(2.0 0.0 2.0))",

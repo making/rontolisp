@@ -100,6 +100,10 @@ final class WasmExprCompiler {
 			case am.ik.rontolisp.LispInstance inst -> WasmQuoteCompiler.compileLiteralInstance(inst, ctx);
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> WasmQuoteCompiler.compilePackedLiteral(fa, ctx);
 			case am.ik.rontolisp.LispSingleFloatArray fa -> WasmQuoteCompiler.compileSinglePackedLiteral(fa, ctx);
+			// This backend has no bfloat16 representation; refused where the
+			// representation is chosen (.kb/bfloat16.md).
+			case am.ik.rontolisp.LispBFloat16Array ignored -> throw am.ik.rontolisp.compiler.UnsupportedFloatWidth
+				.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16, "the wasm-GC backend");
 			case am.ik.rontolisp.LispIntVector iv -> WasmQuoteCompiler.compileIntVectorLiteral(iv, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}

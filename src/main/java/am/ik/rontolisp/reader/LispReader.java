@@ -9,6 +9,7 @@ import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -731,7 +732,7 @@ public final class LispReader {
 	// must be real numbers and every level must be uniformly shaped (ragged or mixed
 	// number/list contents are a read error), reusing the #nA validation. #f = "float"
 	// (single), #d = "double"; free in CL, not Scheme's #f=false.
-	private LispVal readFloatArray(Token.FloatWidth width) {
+	private LispVal readFloatArray(FloatWidth width) {
 		String label = switch (width) {
 			case SINGLE -> "#f";
 			case DOUBLE -> "#d";
