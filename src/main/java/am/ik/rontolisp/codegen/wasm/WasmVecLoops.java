@@ -95,6 +95,18 @@ final class WasmVecLoops {
 		w.write(0x00, 0x00);
 	}
 
+	/**
+	 * {@code v128.load} at a compile-time byte offset from the pointer on the stack --
+	 * the multi-accumulator GEMV row reads four consecutive lane groups per iteration and
+	 * advances its cursor once, so three of the four loads carry an offset. Byte-aligned
+	 * like {@link #simdLoad}.
+	 */
+	static void simdLoadAt(WasmWriter w, int byteOffset) {
+		simd(w, Instruction.V128_LOAD);
+		w.write(0x00);
+		w.writeUnsignedLeb128(byteOffset);
+	}
+
 	static void simdStore(WasmWriter w) {
 		simd(w, Instruction.V128_STORE);
 		w.write(0x00, 0x00);
@@ -506,6 +518,125 @@ final class WasmVecLoops {
 		}
 	}
 
+	/**
+	 * The {@code --no-gc} f32 GEMV row reduction: {@link #simdDot}'s f32 arm with
+	 * {@code accumulators} independent lane accumulators on a row wide enough to pay for
+	 * them. Leaves {@code sum(a_i * b_i)} on the stack as an <strong>f64</strong>, like
+	 * {@code simdDot}.
+	 *
+	 * <p>
+	 * <strong>Deliberately not a parameter on {@link #simdDot}.</strong> {@code vec:dot}
+	 * keeps its single chain (see {@code .kb/vec.md}), so sharing one emitter would leave
+	 * {@code dot}'s call sites passing an accumulator count they never vary and a gate
+	 * they do not have -- and would invite the next reader to assume the two kernels are
+	 * still the same thing. They are not: as of {@code .todo/480} a GEMV row and a
+	 * {@code vec:dot} over the same values sum in DIFFERENT orders and may differ in the
+	 * last bits.
+	 *
+	 * <p>
+	 * One accumulator is one dependency chain -- four lanes per add of four-cycle latency
+	 * -- which bounds a row well short of memory. Four independent chains lift it, but
+	 * they cost four zeroed vectors and a three-add fold per row, so on a short row the
+	 * setup is most of the row and the gate keeps the single chain there. Both the count
+	 * and the gate are part of the CROSS-BACKEND bit-identity contract, not tuning knobs:
+	 * the fold order is the value, so the interpreter, the JVM bridge, wasm-GC and this
+	 * backend all use the same ones.
+	 *
+	 * <p>
+	 * The order, exactly: {@code (a0 + a1) + (a2 + a3)} into the accumulator that then
+	 * takes the leftover whole lane groups, then the ascending-lane horizontal fold, then
+	 * the scalar tail in index order.
+	 * @param wide scratch i32 local holding the wide-loop iteration count
+	 */
+	static void simdMatvecRowDotF32(WasmWriter w, int ap, int bp, int count, int rem, int wide, int trem, int acc0,
+			int acc1, int acc2, int acc3, int sumLocal, int accThreshold) {
+		int[] accs = { acc0, acc1, acc2, acc3 };
+		for (int acc : accs) {
+			splatZeroF32(w, acc);
+		}
+		// wide = count >= accThreshold ? count >> 4 : 0 -- 4 groups of 4 f32 per
+		// iteration. Below the gate the wide loop runs zero times and the four zeroed
+		// accumulators fold to an exact +0.0, so the single-chain answer is unchanged.
+		get(w, count);
+		i32Const(w, 4);
+		w.write(Instruction.I32_SHR_U);
+		i32Const(w, 0);
+		get(w, count);
+		i32Const(w, accThreshold);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.SELECT);
+		set(w, wide);
+		get(w, wide);
+		set(w, rem);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, rem);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		for (int a = 0; a < accs.length; a++) {
+			get(w, accs[a]);
+			get(w, ap);
+			simdLoadAt(w, 16 * a);
+			get(w, bp);
+			simdLoadAt(w, 16 * a);
+			simd(w, Instruction.F32X4_MUL);
+			simd(w, Instruction.F32X4_ADD);
+			set(w, accs[a]);
+		}
+		advancePtr(w, ap, 16 * accs.length);
+		advancePtr(w, bp, 16 * accs.length);
+		closeLoop(w, rem);
+		// acc0 = (acc0 + acc1) + (acc2 + acc3)
+		get(w, acc0);
+		get(w, acc1);
+		simd(w, Instruction.F32X4_ADD);
+		get(w, acc2);
+		get(w, acc3);
+		simd(w, Instruction.F32X4_ADD);
+		simd(w, Instruction.F32X4_ADD);
+		set(w, acc0);
+		// rem = (count >> 2) - (wide << 2): the whole lane groups the wide loop left.
+		get(w, count);
+		i32Const(w, 2);
+		w.write(Instruction.I32_SHR_U);
+		get(w, wide);
+		i32Const(w, 2);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_SUB);
+		set(w, rem);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, rem);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		get(w, acc0);
+		get(w, ap);
+		simdLoad(w);
+		get(w, bp);
+		simdLoad(w);
+		simd(w, Instruction.F32X4_MUL);
+		simd(w, Instruction.F32X4_ADD);
+		set(w, acc0);
+		advancePtr(w, ap, 16);
+		advancePtr(w, bp, 16);
+		closeLoop(w, rem);
+		horizontalAddF32(w, acc0, sumLocal);
+		openScalarTailLoop(w, count, trem, 3);
+		get(w, sumLocal);
+		get(w, ap);
+		w.write(Instruction.F32_LOAD, 0x00, 0x00);
+		get(w, bp);
+		w.write(Instruction.F32_LOAD, 0x00, 0x00);
+		w.write(Instruction.F32_MUL);
+		w.write(Instruction.F32_ADD);
+		set(w, sumLocal);
+		advancePtr(w, ap, 4);
+		advancePtr(w, bp, 4);
+		closeLoop(w, trem);
+		get(w, sumLocal);
+		w.write(Instruction.F64_PROMOTE_F32);
+	}
+
 	// --- linear-memory unary ufunc bodies (--no-gc only) ---------------------------
 	//
 	// The --no-gc lowering of the arithmetic unary vec: kernels (sqrt / abs / square /
@@ -754,6 +885,54 @@ final class WasmVecLoops {
 	/** {@code log2(lanes)}: the shift from an element index to its group index. */
 	static int laneShift(boolean single) {
 		return single ? 2 : 1;
+	}
+
+	/** How many independent accumulators a row above the gate folds into. */
+	static final int MATVEC_ACCUMULATORS = 4;
+
+	/**
+	 * Columns at or above which a GEMV row folds {@link #MATVEC_ACCUMULATORS} independent
+	 * lane accumulators instead of one. Shared by both wasm backends and equal, value and
+	 * comparison direction alike, to {@code eval.VecSimdKernels.MATVEC_ACC_THRESHOLD} and
+	 * {@code codegen.jvm.JvmSimdVectorTemplate}'s -- the gate is a pure function of the
+	 * COLUMN COUNT, so the same column count takes the same path and yields the same bits
+	 * on all four {@code --simd} implementations. It has to be a pure function of that
+	 * and nothing else: a GEMV whose column count grows during a run (an attention
+	 * {@code V^T . att}, whose columns are the sequence length) crosses the gate
+	 * mid-generation, and it may cross it only because the column count changed.
+	 *
+	 * <p>
+	 * Measured cleanly (2026-09-03, GB10) four accumulators win at every head dimension a
+	 * real model uses -- 48 (stories15M) 1.21x under Graal / 1.15x under C2, 64
+	 * (SmolLM2-135M, TinyLlama-1.1B, LFM2.5-1.2B) 1.23x / 1.26x, 128 (Qwen3-0.6B, and the
+	 * Gated DeltaNet product) 1.27x / 1.52x, 256 (Qwen3.5-0.8B) 1.29x / 1.57x -- so the
+	 * gate is not a head-dimension question. What it is for is a row too short to fill
+	 * the wide loop twice: at 24 columns C2 measures 0.70x. So it is exactly two full
+	 * wide iterations, {@code 2 * MATVEC_ACCUMULATORS * 4} lanes = 32, derived from the
+	 * kernel's own shape and below every real head dimension.
+	 */
+	// 2 * MATVEC_ACCUMULATORS * lanes, the same derivation the Java kernels write as
+	// `2 * MATVEC_ACCUMULATORS * FSPECIES_REDUCE.length()`. The 4 is the f32x4 lane
+	// count,
+	// fixed by the instruction set here rather than by a species -- the four backends
+	// land
+	// on 32 because they share the derivation, not by coincidence.
+	static final int MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * 4;
+
+	/**
+	 * {@code array.get $v128arr (arr, idx + delta)}: one lane group at a compile-time
+	 * offset from the cursor, for the multi-accumulator row loop that reads
+	 * {@link #MATVEC_ACCUMULATORS} groups per iteration.
+	 */
+	static void groupGetAt(WasmWriter w, int arrLocal, int idxLocal, int delta) {
+		get(w, arrLocal);
+		get(w, idxLocal);
+		if (delta != 0) {
+			i32Const(w, delta);
+			w.write(Instruction.I32_ADD);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 	}
 
 	/** {@code array.get $v128arr (arr, idx)}: pushes one lane group. */

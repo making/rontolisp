@@ -804,6 +804,20 @@ categories:
       - { slug: geom-intersection, name: "geom:intersection" }
       - { slug: geom-section, name: "geom:section" }
       - { slug: geom-history, name: "geom:history" }
+  - title: "tokenizer Package (Model Tokenizers)"
+    index_page: reference/functions/tokenizer.md
+    functions:
+      - { slug: tokenizer-make-bpe, name: "tokenizer:make-bpe" }
+      - { slug: tokenizer-make-sentencepiece, name: "tokenizer:make-sentencepiece" }
+      - { slug: tokenizer-encode, name: "tokenizer:encode" }
+      - { slug: tokenizer-decode, name: "tokenizer:decode" }
+      - { slug: tokenizer-decode-bytes, name: "tokenizer:decode-bytes" }
+      - { slug: tokenizer-pre-tokenize, name: "tokenizer:pre-tokenize" }
+      - { slug: tokenizer-token-string, name: "tokenizer:token-string" }
+      - { slug: tokenizer-token-id, name: "tokenizer:token-id" }
+      - { slug: tokenizer-vocabulary-size, name: "tokenizer:vocabulary-size" }
+      - { slug: tokenizer-bos-id, name: "tokenizer:bos-id" }
+      - { slug: tokenizer-eos-id, name: "tokenizer:eos-id" }
   - title: "metal Package (GPU Drawing)"
     index_page: reference/functions/metal.md
     functions:

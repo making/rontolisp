@@ -90,6 +90,14 @@ final class JvmAsm {
 		this.localOp(Opcode.ISTORE, slot);
 	}
 
+	void fload(int slot) {
+		this.localOp(Opcode.FLOAD, slot);
+	}
+
+	void fstore(int slot) {
+		this.localOp(Opcode.FSTORE, slot);
+	}
+
 	void iinc(int slot, int delta) {
 		if (slot > MAX_ONE_BYTE_LOCAL_SLOT) {
 			this.code.add(Opcode.WIDE);

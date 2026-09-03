@@ -17116,7 +17116,14 @@ class LispEvaluatorTest {
 				  (rontolisp:widen-float-bits patterns :bfloat16 values)
 				  (rontolisp:narrow-float-bits values :bfloat16 back)
 				  (dotimes (i n bad)
-				    (unless (= i (aref back i)) (incf bad))))
+				    ;; The identity, except that storing a signalling NaN into an f32
+				    ;; array quiets it -- the same on every backend, because they all
+				    ;; widen through a double. Those 126 patterns are the ceiling
+				    ;; .todo/671's bulk pair still has; the scalar pair has none.
+				    (let ((want (if (and (= (logand i #x7f80) #x7f80) (/= (logand i #x7f) 0))
+				                    (logior i #x40)
+				                    i)))
+				      (unless (= want (aref back i)) (incf bad)))))
 				""").print()).isEqualTo("0");
 		// And element for element against the scalar, over the values an f32 array can
 		// actually hold after a store (which quiets a signalling NaN on the way in).

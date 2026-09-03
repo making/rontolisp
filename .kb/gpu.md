@@ -3114,8 +3114,9 @@ the library accepts from 4x4x4 up; **where it accepts it is at worst level with 
 CPU BLAS and clearly ahead at f32**; and **a declined member then lands on the best CPU
 path the invocation asked for**, never back on the scalar defun. The last is pinned with
 `.kb/linalg-simd.md`'s own f32 v.M probe, whose two spellings make the fallback target
-legible from Lisp (the defun prints 16778240, the lane kernel 16777216 or 16777984
-depending on the machine -- so the target is READ from an unflagged run rather than written
+legible from Lisp (the defun prints 16778240, the lane kernel 16777216 or, since
+`.todo/480` gave the GEMV row four accumulators, 16778176 depending on the machine and the
+spelling -- so the target is READ from an unflagged run rather than written
 down).
 
 **The wart, measured and accepted:** at n=64-96 with `--gpu --blas` both on, the device

@@ -1581,7 +1581,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		// travels with the output too -- and with nothing else, since no other program
 		// emits a call to it.
 		this.needsHashFoldRuntime = usesEqualpHashTables;
-		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead || this.needsHandleRuntime;
+		// widen-float-bits/narrow-float-bits (.todo/671) can touch a packed float array
+		// and a packed (unsigned-byte 16) vector it received only as a parameter (never
+		// a literal in THIS program's own AST, e.g. a reusable chunk-widening defun a
+		// reader calls with tensors it built elsewhere) -- symbol use alone must force
+		// both array gates on, the literal/make-array scan below cannot see through a
+		// parameter.
+		final boolean usesFloat16Bits = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS));
+		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead || this.needsHandleRuntime
+				|| usesFloat16Bits;
 
 		// Whether the program can produce a packed integer vector (a #N@(...) literal
 		// or make-array :element-type '(unsigned-byte 8|16|32)). When true, the rank-1
@@ -1596,7 +1607,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// make-array), so a program that fetches or serves may hold one and needs the
 		// _iv* dispatch on.
 		boolean usesIntArray = programUsesIntArray(program, closRegistry) || usesSeqIntVector || usesFetch
-				|| usesHttpHandler;
+				|| usesHttpHandler || usesFloat16Bits;
 		// The bulk binary transfer behind read-sequence / write-sequence over a packed
 		// buffer (.kb/binary-sequence-io.md): emitted for a program that has both a
 		// packed buffer to move and a sequence-I/O call to move it with -- the primitive
@@ -2427,6 +2438,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesIntArray) {
 				built.addAll(
 						JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass, usesFloatArray));
+			}
+			// widen-float-bits/narrow-float-bits (.todo/671): bulk f16/bf16 bit <->
+			// packed-float conversion, over the same bare double[]/float[]/long[]
+			// backing the _fv*/_iv* helpers above use. Needs both tiers (a packed float
+			// array AND a packed (unsigned-byte 16) vector), which usesFloat16Bits
+			// already forced on above.
+			if (usesFloat16Bits) {
+				built.addAll(JvmFloat16RuntimeBuilder.build(cp, objectClass, thisClass));
 			}
 			arrayMethods = built;
 		}

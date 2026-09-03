@@ -436,11 +436,17 @@ class LinalgSimdTest {
 		// mean is accelerated transitively through sum, so it moves with it.
 		assertThat(eval(probe32("16777216.0", "(* 1024 (linalg:mean v))"), true).print()).isEqualTo("16777984");
 		assertThat(eval(probe32("16777216.0", "(* 1024 (linalg:mean v))"), false).print()).isEqualTo("16778239");
-		// matrix . vector is a dot per row (four pinned lanes). The scalar path
-		// accumulates 16778239 in f64 and narrows on store: an odd multiple of the f32
-		// spacing at 2^24, so it ties to even -> 16778240.
+		// linalg's matrix . vector is not a kernel of its own: LinalgSimdKernels.matvecF
+		// delegates to vec:matvec's, on every backend, so it moved with it in todo-480.
+		// The scalar path accumulates 16778239 in f64 and narrows on store: an odd
+		// multiple of the f32 spacing at 2^24, so it ties to even -> 16778240.
+		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
+		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
+		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
+		// fold 64 each, giving 2^24 + 960 = 16778176. The scalar path is unchanged.
 		String gemv = probe32("4096.0", "(aref (linalg:dot (linalg:reshape v '(1 1024)) v) 0)");
-		assertThat(eval(gemv, true).print()).isEqualTo("16777984");
+		assertThat(eval(gemv, true).print()).isEqualTo("16778176");
 		assertThat(eval(gemv, false).print()).isEqualTo("16778240");
 		// The MATRIX PRODUCT follows the contract too, since it gained f32 lanes: an
 		// #f cell folds k in the oracle's own ascending order but at single precision.

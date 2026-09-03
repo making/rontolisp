@@ -67,13 +67,25 @@ was measured on this JDK before the design was fixed.
 `.todo/671`'s bulk pair (`rontolisp:widen-float-bits` / `narrow-float-bits`, a
 `(unsigned-byte 16)` vector of patterns against an existing packed float array) shares
 this rounding rather than carrying its own: `eval/FloatBitsWidening` calls
-`BFloat16.bits`. It landed with a private copy of the same six-line trick, which is a
-second thing to keep right and would have put a checkpoint's bulk load a bit away from
-what the program computes element by element. `bits(float)` is the arm that dedup wanted
--- no `double` in the way, so an f32 signalling NaN keeps its payload instead of leaning
-on what the hardware's widening does to one, and the bulk widen-then-narrow round trip is
-exact for all 65536 patterns. Pinned by
-`LispEvaluatorTest#bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair`.
+`BFloat16.bits`, and `codegen/jvm/JvmFloat16RuntimeBuilder` emits `bits(float)`
+instruction for instruction. It landed with a private copy of the same trick on each side,
+which is two more things to keep right and would have put a checkpoint's bulk load a bit
+away from what the program computes element by element. `bits(float)` is the arm that
+dedup wanted: no `double` in the way, so a NaN's payload is carried rather than
+force-quieted. Pinned on both backends by
+`LispEvaluatorTest#bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair` and
+`JvmLispCompilerTest#compileAndRunBfloat16BulkAgreesWithTheScalarPair`.
+
+**The bulk pair's one ceiling, measured 2026-09-03.** A bulk WIDEN into a packed
+single-float array goes through a `double` on both backends -- the interpreter builds the
+value with `BFloat16.value` and casts, the JVM emitter decodes with `f2d` and stores with
+`d2f` -- so a signalling NaN is quieted on the way in, and a widen-then-narrow round trip
+is the identity on 65,410 patterns and maps the other 126 to their quiet counterparts.
+Both backends agree exactly, which is why the tests assert that shape rather than the
+plain identity. Closing it means giving the widen an f32 path that never touches a
+`double` (`Float.intBitsToFloat(bits << 16)` straight into the `float[]`, and the JVM
+emitter's shared `storeElemShared` split in two); that belongs to `.todo/671`'s lane, not
+to 487 step 1. The SCALAR pair has no such ceiling -- it is exact on all 65536.
 
 A `rontolisp:` built-in must be registered in `Environment` under its QUALIFIED name
 (`PackageRegistry.qualify`), and a `BuiltinFunctionWrappers` entry for one must spell the

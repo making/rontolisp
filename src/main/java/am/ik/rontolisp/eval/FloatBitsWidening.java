@@ -2,6 +2,7 @@ package am.ik.rontolisp.eval;
 
 import java.util.List;
 
+import am.ik.rontolisp.BFloat16;
 import am.ik.rontolisp.FloatArrayAccessHook;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
@@ -74,7 +75,7 @@ final class FloatBitsWidening {
 				}
 				else {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.intBitsToFloat((int) bitsData[i] << 16);
+						out[start + i] = (float) BFloat16.value((int) bitsData[i]);
 					}
 				}
 			}
@@ -87,7 +88,7 @@ final class FloatBitsWidening {
 				}
 				else {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.intBitsToFloat((int) bitsData[i] << 16);
+						out[start + i] = BFloat16.value((int) bitsData[i]);
 					}
 				}
 			}
@@ -98,10 +99,14 @@ final class FloatBitsWidening {
 	/**
 	 * {@code (rontolisp:narrow-float-bits src format dst &key (start 0))}: the inverse of
 	 * {@link #widen}. {@code :bfloat16} narrowing IS {@code bfloat16-bits}
-	 * ({@link am.ik.rontolisp.BFloat16}, {@code .kb/bfloat16.md}) -- called rather than
-	 * copied, because a second copy of the rounding is a second thing to keep right, and
-	 * the two disagreeing would put a checkpoint's bulk load a bit away from what the
-	 * program computes element by element.
+	 * ({@link am.ik.rontolisp.BFloat16}, {@code .todo/487}'s single authority for the
+	 * conversion, {@code .kb/bfloat16.md}) -- called rather than copied, because a second
+	 * copy of the rounding is a second thing to keep right and the two disagreeing would
+	 * put a checkpoint's bulk load a bit away from what the program computes element by
+	 * element. Called with the SOURCE'S OWN width, never through an intermediate: a
+	 * {@code double[]} element narrowing through a {@code float} first would round twice,
+	 * and a {@code float[]} element widened to a {@code double} first would come back
+	 * with a signalling NaN's payload quieted.
 	 * @param fnName the operator name, for error messages
 	 * @param args the argument list
 	 * @return {@code dst}

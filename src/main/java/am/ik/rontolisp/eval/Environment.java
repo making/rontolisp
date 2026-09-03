@@ -2363,18 +2363,18 @@ public final class Environment implements Scope {
 		// IEEE binary16 (f16) bit conversion: a real width unlike single/double-float,
 		// which needs no bignum model (16 bits always fits a plain fixnum), so it is a
 		// rontolisp: primitive rather than a float-features one -- see .todo/671.
-		// Float.floatToFloat16/float16ToFloat are JDK 20+ intrinsics.
-		// Registered under the QUALIFIED name, like the bfloat16 pair above: these
-		// belong to rontolisp, and the resolver hands the evaluator "RONTOLISP:..." --
-		// an unqualified binding is simply never found (ShadowedBuiltinsTest is the
-		// same lesson from the wrapper side).
-		String float16Bits = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FLOAT16_BITS);
-		env.defineFunction(float16Bits, new LispFunction(float16Bits, args -> {
+		// Float.floatToFloat16/float16ToFloat are JDK 20+ intrinsics. Registered under
+		// their PACKAGE-QUALIFIED name (the rontolisp:version arrangement above) so
+		// PackageResolver output resolves to them directly; the compiled backends'
+		// dispatch switches still match on the bare LispNames constant, which is a
+		// symbol's unqualified name regardless of package.
+		String float16BitsName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FLOAT16_BITS);
+		env.defineFunction(float16BitsName, new LispFunction(float16BitsName, args -> {
 			requireArgCount(LispNames.FLOAT16_BITS, args, 1);
 			return new LispInteger(Float.floatToFloat16((float) asDouble(args.get(0))) & 0xFFFF);
 		}));
-		String bitsFloat16 = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_FLOAT16);
-		env.defineFunction(bitsFloat16, new LispFunction(bitsFloat16, args -> {
+		String bitsFloat16Name = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_FLOAT16);
+		env.defineFunction(bitsFloat16Name, new LispFunction(bitsFloat16Name, args -> {
 			requireArgCount(LispNames.BITS_FLOAT16, args, 1);
 			return new LispDouble(Float.float16ToFloat((short) asLong(args.get(0))));
 		}));
@@ -2385,12 +2385,12 @@ public final class Environment implements Scope {
 		// "the other width") so a third LispFloatArray permit (.todo/484's #bf16) fails
 		// to compile here instead of silently widening into the wrong width; see
 		// FloatBitsWidening.
-		String widenFloatBits = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS);
-		env.defineFunction(widenFloatBits,
-				new LispFunction(widenFloatBits, args -> FloatBitsWidening.widen(LispNames.WIDEN_FLOAT_BITS, args)));
-		String narrowFloatBits = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS);
-		env.defineFunction(narrowFloatBits,
-				new LispFunction(narrowFloatBits, args -> FloatBitsWidening.narrow(LispNames.NARROW_FLOAT_BITS, args)));
+		String widenFloatBitsName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS);
+		env.defineFunction(widenFloatBitsName, new LispFunction(widenFloatBitsName,
+				args -> FloatBitsWidening.widen(LispNames.WIDEN_FLOAT_BITS, args)));
+		String narrowFloatBitsName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS);
+		env.defineFunction(narrowFloatBitsName, new LispFunction(narrowFloatBitsName,
+				args -> FloatBitsWidening.narrow(LispNames.NARROW_FLOAT_BITS, args)));
 		// random: a non-negative random number below the (positive) limit, of the same
 		// type as the limit (integer -> integer, float -> float). The interpreter and the
 		// JVM backend draw from ThreadLocalRandom (a per-thread generator seeded from the
