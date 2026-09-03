@@ -119,6 +119,8 @@ public final class LispEvaluator {
 
 	private boolean tokenizersLibraryLoaded = false;
 
+	private boolean ggufLibraryLoaded = false;
+
 	private boolean vecLibraryLoaded = false;
 
 	private boolean ironcladNativeInstalled = false;
@@ -7714,6 +7716,19 @@ public final class LispEvaluator {
 			if (!this.tokenizersLibraryLoaded && TokenizersLibrary.isTokenizerQualified(name)) {
 				this.tokenizersLibraryLoaded = true;
 				for (LispVal form : TokenizersLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The gguf package is a Lisp-source library (gguf.lisp): the reader for a
+			// GGUF checkpoint, over nothing but cl and ANSI CL file I/O. Loaded the same
+			// way on the first resolution of a gguf:-qualified function.
+			if (!this.ggufLibraryLoaded && GgufLibrary.isGgufQualified(name)) {
+				this.ggufLibraryLoaded = true;
+				for (LispVal form : GgufLibrary.forms()) {
 					eval(form, this.globalEnv);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

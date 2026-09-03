@@ -6527,6 +6527,16 @@ public final class LispNames {
 	public static final String TOKENIZER_PKG = "TOKENIZER";
 
 	/**
+	 * The {@code gguf} package name: reads a GGUF checkpoint -- the hyperparameters, the
+	 * tokenizer fields and the tensors of a downloaded language model, in one file --
+	 * written in rontolisp itself ({@code gguf.lisp}, see {@code eval.GgufLibrary}) and
+	 * loaded lazily on the first {@code gguf:} resolution, the {@code linalg} pattern. It
+	 * reaches for nothing but {@code cl} and ANSI CL file I/O, so it runs on all four
+	 * backends. Does not use {@code cl}; every exported name is external.
+	 */
+	public static final String GGUF_PKG = "GGUF";
+
+	/**
 	 * The {@code metal} package name: a Metal drawing surface on an {@code appkit} window
 	 * -- the layer, the device, the command queue, the render pass and the buffer helpers
 	 * every Metal program writes identically -- written in rontolisp itself over the

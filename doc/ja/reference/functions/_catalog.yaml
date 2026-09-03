@@ -818,6 +818,17 @@ categories:
       - { slug: tokenizer-vocabulary-size, name: "tokenizer:vocabulary-size" }
       - { slug: tokenizer-bos-id, name: "tokenizer:bos-id" }
       - { slug: tokenizer-eos-id, name: "tokenizer:eos-id" }
+  - title: "gguf パッケージ (チェックポイントリーダ)"
+    index_page: reference/functions/gguf.md
+    functions:
+      - { slug: gguf-read, name: "gguf:read" }
+      - { slug: gguf-version, name: "gguf:version" }
+      - { slug: gguf-metadata, name: "gguf:metadata" }
+      - { slug: gguf-metadata-value, name: "gguf:metadata-value" }
+      - { slug: gguf-tensor-names, name: "gguf:tensor-names" }
+      - { slug: gguf-tensor-info, name: "gguf:tensor-info" }
+      - { slug: gguf-tensor, name: "gguf:tensor" }
+      - { slug: gguf-tokenizer-fields, name: "gguf:tokenizer-fields" }
   - title: "metal パッケージ (GPU 描画)"
     index_page: reference/functions/metal.md
     functions:

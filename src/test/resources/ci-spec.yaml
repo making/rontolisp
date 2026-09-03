@@ -14171,6 +14171,173 @@ cases:
       (1 7 5 2)
       "ab"
 
+  # The gguf package (gguf.lisp, .kb/gguf.md): the header, all the metadata value
+  # shapes, the tensor directory with its ggml dims reversed into row-major, an
+  # alignment that is not the default 32, the F32 tensor bodies, :metadata-only and
+  # :only, and the refusal a quantized tensor gets WHEN ITS BODY IS ASKED FOR --
+  # the file still opens, still lists its directory and still hands over its
+  # tokenizer. The case WRITES its own checkpoint (the position counted by hand:
+  # file-position reports none, which is also why the reader walks the data
+  # sequentially) so it is one self-contained program on every backend. F16 / BF16
+  # bodies are not here because rontolisp:widen-float-bits has no WASM arm yet;
+  # GgufLibraryTest covers them against a checkpoint written by llama.cpp's own
+  # writer.
+  - name: gguf-cross-backend
+    source: |
+      (defparameter *ci-gguf-pos* 0)
+
+      (defun ci-gguf-count (n)
+        (setq *ci-gguf-pos* (+ *ci-gguf-pos* n)))
+
+      (defun ci-gguf-u32 (out n)
+        (let ((v (make-array 1 :element-type '(unsigned-byte 32))))
+          (setf (aref v 0) n)
+          (write-sequence v out)
+          (ci-gguf-count 4)))
+
+      (defun ci-gguf-u64 (out n)
+        (ci-gguf-u32 out (mod n 4294967296))
+        (ci-gguf-u32 out (floor n 4294967296)))
+
+      (defun ci-gguf-bytes (out string)
+        (let ((b (make-array (length string) :element-type '(unsigned-byte 8))))
+          (dotimes (i (length string)) (setf (aref b i) (char-code (char string i))))
+          (write-sequence b out)
+          (ci-gguf-count (length string))))
+
+      (defun ci-gguf-string (out string)
+        (ci-gguf-u64 out (length string))
+        (ci-gguf-bytes out string))
+
+      (defun ci-gguf-kv-string (out key value)
+        (ci-gguf-string out key)
+        (ci-gguf-u32 out 8)
+        (ci-gguf-string out value))
+
+      (defun ci-gguf-kv-u32 (out key value)
+        (ci-gguf-string out key)
+        (ci-gguf-u32 out 4)
+        (ci-gguf-u32 out value))
+
+      (defun ci-gguf-kv-f32 (out key value)
+        (ci-gguf-string out key)
+        (ci-gguf-u32 out 6)
+        (let ((v (make-array 1 :element-type 'single-float :initial-element 0.0)))
+          (setf (aref v 0) value)
+          (write-sequence v out)
+          (ci-gguf-count 4)))
+
+      (defun ci-gguf-kv-strings (out key values)
+        (ci-gguf-string out key)
+        (ci-gguf-u32 out 9)
+        (ci-gguf-u32 out 8)
+        (ci-gguf-u64 out (length values))
+        (dolist (s values) (ci-gguf-string out s)))
+
+      (defun ci-gguf-info (out name dims type offset)
+        ;; ggml writes dims fastest-varying first: the reverse of row-major.
+        (ci-gguf-string out name)
+        (ci-gguf-u32 out (length dims))
+        (dolist (d (reverse dims)) (ci-gguf-u64 out d))
+        (ci-gguf-u32 out type)
+        (ci-gguf-u64 out offset))
+
+      (defun ci-gguf-pad (out n)
+        (let ((z (make-array 1 :element-type '(unsigned-byte 8) :initial-element 0)))
+          (do ((i 0 (+ i 1)))
+              ((>= i n))
+            (write-sequence z out)
+            (ci-gguf-count 1))))
+
+      (defun ci-gguf-write (path)
+        ;; A four-tensor GGUF with an alignment of 64: two F32 tensors this reader
+        ;; loads, a Q4_0 and a Q8_0 it must refuse BY NAME when their bodies are asked
+        ;; for, and the tokenizer fields a byte-level BPE takes. Written here rather
+        ;; than checked in, so the case is one self-contained program on every backend.
+        ;; The position is counted by hand because file-position reports none.
+        (setq *ci-gguf-pos* 0)
+        (with-open-file (out path :direction :output :if-exists :supersede
+                             :element-type '(unsigned-byte 8))
+          (ci-gguf-bytes out "GGUF")
+          (ci-gguf-u32 out 3)
+          (ci-gguf-u64 out 4)
+          (ci-gguf-u64 out 7)
+          (ci-gguf-kv-string out "general.architecture" "ci")
+          (ci-gguf-kv-u32 out "general.alignment" 64)
+          (ci-gguf-kv-f32 out "ci.epsilon" 0.0625)
+          (ci-gguf-kv-string out "tokenizer.ggml.model" "gpt2")
+          (ci-gguf-kv-string out "tokenizer.ggml.pre" "smollm")
+          (ci-gguf-kv-strings out "tokenizer.ggml.tokens" '("a" "b" "ab"))
+          (ci-gguf-kv-strings out "tokenizer.ggml.merges" '("a b"))
+          (ci-gguf-info out "mat" '(2 3) 0 0)
+          (ci-gguf-info out "vec" '(4) 0 64)
+          (ci-gguf-info out "q40" '(1 32) 2 128)
+          (ci-gguf-info out "q80" '(1 32) 8 192)
+          (ci-gguf-pad out (mod (- 64 (mod *ci-gguf-pos* 64)) 64))
+          (let ((base *ci-gguf-pos*)
+                (mat (make-array '(2 3) :element-type 'single-float :initial-element 0.0))
+                (vec (make-array 4 :element-type 'single-float :initial-element 0.0)))
+            (dotimes (i 2)
+              (dotimes (j 3) (setf (aref mat i j) (+ (* 10.0 i) j))))
+            (dotimes (i 4) (setf (aref vec i) (* 0.25 (+ i 1))))
+            (write-sequence mat out)
+            (ci-gguf-count 24)
+            (ci-gguf-pad out (- (+ base 64) *ci-gguf-pos*))
+            (write-sequence vec out)
+            (ci-gguf-count 16)
+            (ci-gguf-pad out (- (+ base 128) *ci-gguf-pos*))
+            (ci-gguf-pad out 18)
+            (ci-gguf-pad out (- (+ base 192) *ci-gguf-pos*))
+            (ci-gguf-pad out 34))))
+
+      (defun ci-gguf ()
+        (ci-gguf-write "ci-model.gguf")
+        (let ((m (gguf:read "ci-model.gguf" :metadata-only t)))
+          (print (gguf:version m))
+          (print (gguf:metadata-value m "general.architecture"))
+          (print (gguf:metadata-value m "general.alignment"))
+          (print (gguf:metadata-value m "ci.epsilon"))
+          (print (gguf:metadata-value m "ci.absent" :default))
+          (print (gguf:tensor-names m))
+          (print (gguf:tensor-info m "mat"))
+          (print (gguf:tensor-info m "q40"))
+          (print (gguf:tokenizer-fields m))
+          (print (gguf:tensor m "mat")))
+        (let ((f (gguf:read "ci-model.gguf" :only '("mat" "vec"))))
+          (print (gguf:tensor f "mat"))
+          (print (gguf:tensor f "vec"))
+          (print (gguf:tensor f "q40")))
+        (print (handler-case (gguf:read "ci-model.gguf" :only '("q40"))
+                 (error (e) (format nil "~a" e))))
+        (print (handler-case (gguf:read "ci-model.gguf" :only '("q80"))
+                 (error (e) (format nil "~a" e))))
+        ;; The vocabulary a GGUF carries drives the tokenizer package unchanged.
+        (let* ((fields (gguf:tokenizer-fields (gguf:read "ci-model.gguf" :metadata-only t)))
+               (tk (tokenizer:make-bpe (getf fields :tokens) (getf fields :merges)
+                                       :kind (getf fields :pre))))
+          (print (tokenizer:encode tk "ab"))
+          (print (tokenizer:decode tk (tokenizer:encode tk "ab")))))
+
+      (ci-gguf)
+    expected: |
+      3
+      "ci"
+      64
+      0.0625
+      :DEFAULT
+      ("mat" "vec" "q40" "q80")
+      (:NAME "mat" :DIMS (2 3) :TYPE 0 :TYPE-NAME "F32" :OFFSET 0 :ELEMENTS 6 :BYTES 24)
+      (:NAME "q40" :DIMS (1 32) :TYPE 2 :TYPE-NAME "Q4_0" :OFFSET 128 :ELEMENTS 32 :BYTES 18)
+      (:MODEL "gpt2" :PRE "smollm" :TOKENS #("a" "b" "ab") :SCORES NIL :MERGES #("a b") :TOKEN-TYPE NIL :BOS NIL :EOS NIL)
+      NIL
+      #f((0.0 1.0 2.0) (10.0 11.0 12.0))
+      #f(0.25 0.5 0.75 1.0)
+      NIL
+      "gguf: the tensor q40 is Q4_0; this reader loads F32, F16 and BF16. Take the publisher's BF16 or F16 file, or read this one with :metadata-only t or with :only naming the tensors you want."
+      "gguf: the tensor q80 is Q8_0, which needs a quantized weight matrix this reader does not have yet. Its directory entry and the file's metadata read fine: pass :metadata-only t, or :only naming the tensors you want."
+      (2)
+      "ab"
+
 # Cases that cannot join the corpus above: one that ENDS the program, one whose
 # subject a backend does not have at all. Each is compiled and run on its own.
 # What an ending case asserts is the standard-error report plus a non-zero exit

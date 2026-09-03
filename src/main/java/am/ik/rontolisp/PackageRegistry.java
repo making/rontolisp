@@ -428,6 +428,20 @@ public final class PackageRegistry {
 	private static final List<String> TOKENIZER_FUNCTION_NAMES = sorted(TOKENIZER_FUNCTIONS);
 
 	/**
+	 * The names exported by the {@code gguf} package (reads a GGUF checkpoint: the
+	 * metadata, the tensor directory, the tensors and the tokenizer fields), implemented
+	 * in {@code gguf.lisp} (see {@code GgufLibrary}). Plain strings, like {@code linalg}:
+	 * they exist only as Lisp-source defuns, and the record they pass around is an
+	 * internal {@code gguf::%file} defstruct, so no type name has to resolve here.
+	 * {@code READ} shadows the {@code cl} name deliberately -- it is {@code gguf:read},
+	 * never bare.
+	 */
+	private static final Set<String> GGUF_FUNCTIONS = Set.of("READ", "VERSION", "METADATA", "METADATA-VALUE",
+			"TENSOR-NAMES", "TENSOR-INFO", "TENSOR", "TOKENIZER-FIELDS");
+
+	private static final List<String> GGUF_FUNCTION_NAMES = sorted(GGUF_FUNCTIONS);
+
+	/**
 	 * The names exported by the {@code metal} package (a Metal drawing surface on an
 	 * {@code appkit} window), implemented in {@code metal.lisp} (see
 	 * {@code MetalLibrary}). Plain strings, like {@code appkit}: they exist only as
@@ -613,8 +627,8 @@ public final class PackageRegistry {
 			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
 					LispNames.TORCH_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
 					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG, LispNames.TOKENIZER_PKG,
-					LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
-					LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
+					LispNames.GGUF_PKG, LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG,
+					LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
 					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
 					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
 					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
@@ -722,6 +736,12 @@ public final class PackageRegistry {
 		// nothing but cl -- the vocabulary is an argument, not a file it opens -- so it
 		// runs everywhere geom does. Does not use cl; every registered name is external.
 		define(new LispPackage(LispNames.TOKENIZER_PKG, List.of(), new HashSet<>(TOKENIZER_FUNCTIONS)));
+		// The reader for a GGUF checkpoint, implemented once in gguf.lisp and
+		// spliced/loaded on demand (GgufLibrary). Reaches for nothing but cl and ANSI CL
+		// file I/O, so it runs on all four backends. Does not use cl -- gguf:read is its
+		// own name and never shadows the standard one -- and every registered name is
+		// external.
+		define(new LispPackage(LispNames.GGUF_PKG, List.of(), new HashSet<>(GGUF_FUNCTIONS)));
 		// A Metal drawing surface over objc:, implemented once in metal.lisp and
 		// spliced/loaded on demand (MetalLibrary). macOS only, like appkit; usable
 		// WITHOUT geom or scene, which is what four examples do. Does not use cl.
@@ -1118,6 +1138,14 @@ public final class PackageRegistry {
 	 */
 	public static List<String> tokenizerFunctionNames() {
 		return TOKENIZER_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code gguf} package, sorted alphabetically.
+	 * @return the sorted exported names
+	 */
+	public static List<String> ggufFunctionNames() {
+		return GGUF_FUNCTION_NAMES;
 	}
 
 	/**
