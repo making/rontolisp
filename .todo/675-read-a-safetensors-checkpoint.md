@@ -28,8 +28,15 @@ separate `tokenizer.json` (`.todo/674`).
    `input_layernorm`, `post_attention_layernorm`, `model.norm.weight`, `lm_head.weight`)
    mapped to that plist. HF's layout is the un-permuted one, so no Q/K fix-up here
    (unlike GGUF).
-3. Sharded checkpoints (`model.safetensors.index.json`): out of scope below ~2B, say so
-   in the error.
+3. Sharded checkpoints: `model.safetensors.index.json` maps tensor name -> shard file.
+   **Read it even for one shard** -- `Qwen/Qwen3.5-0.8B` ships its single shard as
+   `model.safetensors-00001-of-00001.safetensors` with an index (2026-09-03), and
+   SmolLM3-3B is two shards. It is a JSON lookup and a file per tensor group, not a
+   feature.
+4. Prefixes: a multimodal checkpoint keeps its language model under
+   `model.language_model.` beside `model.visual.` and `mtp.` (Qwen3.5); `:only` /
+   a prefix filter skips the tower and the speculative head, and the hyperparameters are
+   under `text_config` in its `config.json`.
 
 ## Verify
 

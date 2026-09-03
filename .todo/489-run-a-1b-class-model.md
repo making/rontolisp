@@ -9,7 +9,28 @@ The goal `.todo/482` exists for. Depends on `.todo/484`, `.todo/485`, `.todo/487
 tok/s single-thread on GB10 (`.todo/457`). The point of adding a narrow width is to move
 that up two orders of magnitude -- to a model someone would actually ask a question.
 
-## The two rungs
+## The rungs (re-ordered 2026-09-03: the user wants the newest models, e.g. Qwen 3.x)
+
+Surveyed on Hugging Face that day. What "newest" means in practice: **Qwen3.5-0.8B**
+(2026-06) is the newest Qwen with a small member -- Qwen3.6 and 3.8 ship only 27B+ and
+3.8-27B has the same architecture -- and **LFM2.5-1.2B-Instruct** (2026-08-24) is the
+newest ~1B model of any family. Both are hybrids, so each is an architecture item
+(`.todo/677`, `.todo/678`) on top of the layer-kind table (`.todo/676`). The order below
+is by increasing architecture delta, and every rung after 0 is a model people actually
+download today:
+
+| rung | model | bf16 | architecture work | item |
+| --- | --- | --- | --- | --- |
+| 0 | TinyLlama-1.1B / SmolLM2-135M, 360M | 2.2 GB / 0.27 GB | none (llama) -- shakes out the readers | below |
+| 1 | `Qwen/Qwen3-0.6B` (2025-04) | 1.5 GB | QK-norm, tied head, vocab 151936 | `676` |
+| 2 | `LiquidAI/LFM2.5-1.2B-Instruct` (2026-08) | 2.34 GB | 10 gated short-conv + 6 attention layers | `678` |
+| 3 | `Qwen/Qwen3.5-0.8B` (2026-06) | 1.5 GB (+0.2 GB vision, skipped) | Gated DeltaNet x 18, gated attention, partial RoPE | `677` |
+| 4 | `Qwen/Qwen3.8-27B` (2026-08) | 54 GB | none beyond rung 3; RAM (fits this box) and `--gpu` | `490`'s successor |
+
+Rung 2 is "the 1B" whose numbers this item reports; rung 3 is the Qwen the user asked
+for. The two original rungs below stay as rung 0.
+
+## The two original rungs
 
 1. **`stories110M`** (karpathy's llama2.c, same `.bin` format the loader already reads):
    110M parameters, 420 MB f32 / 220 MB bf16. An intermediate step that shakes out the

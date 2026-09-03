@@ -40,10 +40,14 @@ so `.todo/488` now takes its numbers under both JITs.
 | `675` | read a safetensors file (+ `config.json`) | Low |
 | `674` | the byte-level BPE tokenizer (SmolLM2, Qwen, Llama 3) from the GGUF fields or `tokenizer.json` | Medium |
 | `672` | the Q8_0 quantized weight matrix and its integer-dot `vec:matvec` | High |
-| `489` | the 1B-class model (re-pointed at the readers; TinyLlama, then SmolLM2) | High |
+| `676` | the forward pass as a table of layer kinds: QK-norm, NoPE, gates, partial RoPE, multipliers (Qwen3, SmolLM3, Granite) | Medium |
+| `677` | the Gated DeltaNet layer: Qwen3.5-0.8B, and with it every Qwen 3.5-3.8 dense model | High |
+| `678` | the LFM2 gated short-conv layer: LFM2.5-1.2B-Instruct, the newest ~1B model | Medium |
+| `489` | the model rungs: TinyLlama / SmolLM2 (loader shakeout), Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High |
 
-**Order: 671 -> 673 / 675 -> 674 -> 489 at f32 -> `.todo/482`'s 483-488 -> 489 at bf16
--> 672 -> 490.** The point of that order: 671 needs no new array type and lands on every
+**Order: 671 -> 673 / 675 -> 674 -> 489 rung 0 at f32 -> 676 -> 678 -> 677 ->
+`.todo/482`'s 483-488 -> 489 at bf16 -> 672 -> 490.** (676-678 are pure Lisp over the
+readers and can overlap the width chain; they touch no Java.) The point of that order: 671 needs no new array type and lands on every
 backend, which lets a BF16 checkpoint load into `#f` BEFORE the bf16 width exists, so
 the readers and the model are debugged at f32 (4.4 GB, fits) with the kernels out of the
 picture, and the width then halves a run that already works. 672 comes after the width
@@ -51,10 +55,12 @@ because its scalar oracle and its `dequantize` target are `#bf16`.
 
 ## What is deliberately not in the plan
 
-- **Not a new inference engine.** `llama2.lisp`'s forward pass stays; the readers hand it
-  the same plist of arrays the `.bin` loader builds. Qwen2 (QKV bias), Llama 3 (RoPE
-  scaling, a 128K vocabulary) and Gemma (a different norm and activation) are
-  architecture deltas to file when a model needs them, not here.
+- **Not an inference framework.** The forward pass stays one Lisp file; what changes
+  (2026-09-03, after surveying what is actually published) is that the layer becomes a
+  KIND with options (`.todo/676`) and two more kinds join it (`.todo/677`, `.todo/678`),
+  because the newest small models are hybrids: Qwen 3.5-3.8 is 3 Gated DeltaNet layers
+  per attention layer, LFM2.5 is 10 short-conv layers per 6 attention layers. Gemma 4
+  (gated licence, KV sharing, per-layer embeddings) waits until asked for.
 - **Not mixed-precision training.** `torch:` stays f32/f64; bf16 is a storage width for
   weights, and nothing here changes what an activation is.
 - **Not the device.** `--gpu` declines every new type until `.todo/490` and its successor;

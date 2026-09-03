@@ -51,6 +51,15 @@ of 34 bytes: an f16 scale + 32 int8), 30 BF16, and the K-quants (12 Q4_K, 14 Q6_
    **permutes Q and K** for its RoPE layout; the reader must undo that (or the forward
    pass must use the interleaved RoPE) -- the reference is `convert_hf_to_gguf.py`'s
    `permute`, and the story test is what catches getting it wrong.
+5. The architecture names the newest models carry (headers read 2026-09-03), for
+   `.todo/676`-`678`'s table: `qwen3` (adds `blk.N.attn_{q,k}_norm`), `qwen35`
+   (`qwen35.full_attention_interval`, `ssm.*` keys, `nextn_predict_layers 1` -- the
+   `block_count 25` includes the MTP block, which is skipped; the linear layers are
+   `blk.N.ssm_{a,dt,alpha,beta,conv1d,norm,out}` + `attn_qkv` + `attn_gate`, norms and
+   conv weights **F32** beside BF16 matrices), `lfm2` (`shortconv.*`; check the names in
+   Liquid's own GGUF), `smollm3`, `granite`. Official Q4_0 files exist for all of them
+   (ggml-org, Liquid): the refusal message must name Q8_0 / BF16 as the files to take
+   instead.
 
 ## Verify
 
