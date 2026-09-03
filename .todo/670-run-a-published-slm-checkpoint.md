@@ -94,11 +94,16 @@ graph has. **The one hand-off that gates the week: B lands `485` and then `488`'
 interception; A's bf16 rungs cannot be measured until both are in.** Until then A works
 the items that need neither.
 
+**One ordering constraint across the two sides**: `.todo/692` (`widen-float-bits` traps
+into a `--simd` wasm destination) and `.todo/488`'s interception both touch the `--simd`
+path, and **692 goes first** -- 488's wiring is what puts bf16 through `--simd`, and it
+should not be laid over a known trap on that path.
+
 **Orchestrator A -- the model side, no GPU:**
 
 | wave | lane A1 | lane A2 |
 | --- | --- | --- |
-| 1 | `678` LFM2.5-1.2B: the gated short-conv layer end to end, both formats, the way `677` went (Medium) | `489` f32 rungs, finishing the set: **Qwen3-0.6B has not been run at all**, then SmolLM2 (High) |
+| 1 | **`692` first** (it gates B's `488` wiring, see above), then `678` LFM2.5-1.2B: the gated short-conv layer end to end, both formats, the way `677` went (Medium) | `489` f32 rungs, finishing the set: **Qwen3-0.6B has not been run at all**, then SmolLM2 (High) |
 | 2 | `682` rename `examples/llama2` -> `examples/llm` -- **its trigger fired twice on 2026-09-03** and nobody noticed (Medium) | `489` at bf16, against the prediction already written there, the moment B's `488` wiring lands; then close `675` and `677` (High) |
 | 3 | `688` the corpus tests' duplicated splice chain, and the "a test that prints a compiler warning must assert on it" rule (Medium) | `490`'s A-side numbers if B gets that far (High) |
 
@@ -121,21 +126,27 @@ Sizing: A1 Medium, A2 High (a Fable-class model); B1 High, B2 Low-to-Medium then
 1. **Only the closer can write back a dependency.** Six items closed on 2026-09-03 and
    twelve open todos still read as blocked by them the same afternoon. The `grep` for
    items naming the number now sits beside the history row in the close procedure.
-2. **Sort every "Remaining" into blocked / not-done / deferred.** Only the first is a
+2. **A count an item wrote down is not a completion test.** The set it counted keeps
+   changing while the item is open -- `.todo/683` said 86 sites and two more appeared
+   during `.todo/485`'s work. A stale dependency line only delays a start, and someone
+   eventually notices the work is startable. **A stale count fakes a finish**: fix the 86
+   it names and the item reads as done. Start an audit from the grep, never from the
+   number.
+3. **Sort every "Remaining" into blocked / not-done / deferred.** Only the first is a
    real remainder; the second is unstarted work wearing a blocker's clothes, and the
    third evaporates without an owner and a date. Of A's nine Remaining lines, two were
    genuinely blocked.
-3. **One session runs the full suite on `develop`; the other runs the GPU legs.** Three
+4. **One session runs the full suite on `develop`; the other runs the GPU legs.** Three
    reds on 2026-09-03 were invisible from every lane's own worktree: one because a new
    shipped library changed an existing test's input, two because two lanes' changes were
    each correct alone.
-4. **Separately from who owns what: never two device-touching runs at once.** `./mvnw
+5. **Separately from who owns what: never two device-touching runs at once.** `./mvnw
    test` includes `GpuTest`, so a full suite IS a device-touching run -- the GPU legs and
    any lane's full suite are serial on that box. Stated as one rule with the line above it
    produced a self-contradictory instruction on 2026-09-03 ("do not run the GPU tests" and
    "run the full suite", to the same lane). Ownership says who takes which result;
    exclusion says what may run at the same time. They are not the same rule.
-5. **A suite can hold a defect invisibly while every case sits on one side of its
+6. **A suite can hold a defect invisibly while every case sits on one side of its
    condition** -- and the half that looks more exhaustive is the half that hides it.
    Three instances in one day: the 1496-error compile regression (the corpus called the
    function, the standalone cases did not); `PRINT_OBJECT_VECTOR_ARM` excluding a packed
