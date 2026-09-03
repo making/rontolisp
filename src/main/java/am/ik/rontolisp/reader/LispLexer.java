@@ -287,6 +287,18 @@ public final class LispLexer {
 				add(tokens, new Token.BitVectorToken(this.input.substring(this.pos + 2, probe)), tokenStart);
 				this.pos = probe;
 			}
+			else if (c == '#' && this.pos + 5 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'b' || this.input.charAt(this.pos + 1) == 'B')
+					&& (this.input.charAt(this.pos + 2) == 'f' || this.input.charAt(this.pos + 2) == 'F')
+					&& this.input.charAt(this.pos + 3) == '1' && this.input.charAt(this.pos + 4) == '6'
+					&& this.input.charAt(this.pos + 5) == '(') {
+				// #bf16( opens a packed bfloat16 array literal. This branch MUST be tried
+				// before the #x/#o/#b radix branch below, which would otherwise claim the
+				// #b: 'f' is not a binary digit, so that reader would only fail rather
+				// than mis-read, but the ordering is the thing that keeps it so.
+				add(tokens, new Token.FloatArrayOpen(Token.FloatWidth.BFLOAT16), tokenStart);
+				this.pos += 6;
+			}
 			else if (c == '#' && this.pos + 2 < this.input.length()
 					&& (this.input.charAt(this.pos + 1) == 'f' || this.input.charAt(this.pos + 1) == 'F')
 					&& this.input.charAt(this.pos + 2) == '(') {
@@ -295,7 +307,7 @@ public final class LispLexer {
 				// at
 				// read time. #f not followed by '(' falls through to symbol reading
 				// below.
-				add(tokens, new Token.FloatArrayOpen(true), tokenStart);
+				add(tokens, new Token.FloatArrayOpen(Token.FloatWidth.SINGLE), tokenStart);
 				this.pos += 3;
 			}
 			else if (c == '#' && this.pos + 2 < this.input.length()
@@ -304,7 +316,7 @@ public final class LispLexer {
 				// #d( opens a packed double-float array literal (e.g., #d(1.0 2.0 3.0));
 				// same nested-list contents and inferred rank as #f(, but the wider (f64)
 				// backing. #d not followed by '(' falls through to symbol reading below.
-				add(tokens, new Token.FloatArrayOpen(false), tokenStart);
+				add(tokens, new Token.FloatArrayOpen(Token.FloatWidth.DOUBLE), tokenStart);
 				this.pos += 3;
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {

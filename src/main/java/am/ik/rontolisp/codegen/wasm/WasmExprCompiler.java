@@ -613,6 +613,23 @@ final class WasmExprCompiler {
 					WasmBFloat16Compiler.compileFromBits(cons, ctx);
 					return;
 				}
+				if (LispNames.FLOAT16_BITS.equals(qn.member())) {
+					// Real here too: sixteen bits fit an i31.
+					WasmFloat16Compiler.compileBits(cons, ctx);
+					return;
+				}
+				if (LispNames.BITS_FLOAT16.equals(qn.member())) {
+					WasmFloat16Compiler.compileFromBits(cons, ctx);
+					return;
+				}
+				if (LispNames.WIDEN_FLOAT_BITS.equals(qn.member())) {
+					WasmFloat16Compiler.compileWiden(cons, ctx);
+					return;
+				}
+				if (LispNames.NARROW_FLOAT_BITS.equals(qn.member())) {
+					WasmFloat16Compiler.compileNarrow(cons, ctx);
+					return;
+				}
 				if (LispNames.MAKE_MUTEX.equals(qn.member()) || LispNames.MUTEX_ACQUIRE.equals(qn.member())
 						|| LispNames.MUTEX_RELEASE.equals(qn.member())) {
 					// No-ops: both WASM backends are single-threaded by construction.
