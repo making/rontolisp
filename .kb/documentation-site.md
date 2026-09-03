@@ -77,6 +77,23 @@ gets.
   response headers, an unseeded `random` -- must not be an arrow at all: reshape
   the example so its value is stable (`(getf res :status)`, a seeded generator),
   leave the line an ordinary comment, or move the block to ` ```console `.
+  **A live built-in package is not stable either.** A `; =>` that counts or lists
+  what a shipped package holds (`(do-symbols (s :rontolisp) ...)`, the `cl`
+  externals) goes red the next time an unrelated item adds one symbol -- twice on
+  2026-09-03 alone, once when four built-ins landed and again for the width beside
+  them, each time reddening a suite belonging to whoever happened to be running it.
+  Build the example's own packages instead: `defpackage` two of them, export three
+  names, and walk those. The example then shows the whole set it visits on the
+  page, which is the better example anyway -- rewriting `do-symbols` this way is
+  what turned up that its "sorted order" is a sort on each symbol's OWNER-QUALIFIED
+  spelling, so an inherited name sorts under the package it came from and can
+  precede a local name that is alphabetically earlier. The page had claimed a flat
+  sort; two probes that disagreed looked like nondeterminism until the sort key in
+  `PackageResolver.accessibleSymbols` explained both. `intern` will
+  not help you build one: there is no intern table, so an interned name never joins
+  the package's accessible set (`.kb/symbol-runtime-api.md`), and `defpackage`'s
+  `:intern` clause is not supported -- for a user package, accessible is exactly
+  its exports plus what it inherits.
 - ` ```console ` = a static transcript or an example that needs stdin/files/network
   or that signals (`read`, `open`, `load`, `with-open-file`, `error`,
   `rontolisp:fetch`). Not executed.
