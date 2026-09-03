@@ -144,7 +144,17 @@ Measured on the same box as the TinyLlama rows, JVM class output, f32 weights
 | `--simd`, one thread | 2.00 / 2.48 | 13.2 / 21.0 |
 | `--simd --parallel`, 64 threads | 8.56 | 15.1 |
 
-The parallel row is 3.2 GB x 8.56 = 27 GB/s, the DRAM ceiling once more. Two
+The parallel row is 3.2 GB x 8.56 = 27 GB/s, the DRAM ceiling once more --
+two independent models on the same box land on the same wall:
+
+```
+Qwen3.5-0.8B     --simd --parallel   8.56 tok/s x 3.2 GB = 27 GB/s
+TinyLlama-1.1B   --simd --parallel   6.97 tok/s x 4.4 GB = 31 GB/s
+```
+
+so the parallel leg is bandwidth-bound, not a property of one model, and the
+prediction for bf16 weights (`.todo/484` / `.todo/487`) is close to twice
+these rows, because they halve the bytes a token streams. Two
 things the real checkpoint taught that its `config.json` does not say: the
 vocabulary is 248070 (`vocab_size` 248320 is the padded embedding table, so
 the sampler chooses among the tokenizer's ids only), and the answer ends at
