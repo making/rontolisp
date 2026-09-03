@@ -126,21 +126,27 @@ Sizing: A1 Medium, A2 High (a Fable-class model); B1 High, B2 Low-to-Medium then
 1. **Only the closer can write back a dependency.** Six items closed on 2026-09-03 and
    twelve open todos still read as blocked by them the same afternoon. The `grep` for
    items naming the number now sits beside the history row in the close procedure.
-2. **Sort every "Remaining" into blocked / not-done / deferred.** Only the first is a
+2. **A count an item wrote down is not a completion test.** The set it counted keeps
+   changing while the item is open -- `.todo/683` said 86 sites and two more appeared
+   during `.todo/485`'s work. A stale dependency line only delays a start, and someone
+   eventually notices the work is startable. **A stale count fakes a finish**: fix the 86
+   it names and the item reads as done. Start an audit from the grep, never from the
+   number.
+3. **Sort every "Remaining" into blocked / not-done / deferred.** Only the first is a
    real remainder; the second is unstarted work wearing a blocker's clothes, and the
    third evaporates without an owner and a date. Of A's nine Remaining lines, two were
    genuinely blocked.
-3. **One session runs the full suite on `develop`; the other runs the GPU legs.** Three
+4. **One session runs the full suite on `develop`; the other runs the GPU legs.** Three
    reds on 2026-09-03 were invisible from every lane's own worktree: one because a new
    shipped library changed an existing test's input, two because two lanes' changes were
    each correct alone.
-4. **Separately from who owns what: never two device-touching runs at once.** `./mvnw
+5. **Separately from who owns what: never two device-touching runs at once.** `./mvnw
    test` includes `GpuTest`, so a full suite IS a device-touching run -- the GPU legs and
    any lane's full suite are serial on that box. Stated as one rule with the line above it
    produced a self-contradictory instruction on 2026-09-03 ("do not run the GPU tests" and
    "run the full suite", to the same lane). Ownership says who takes which result;
    exclusion says what may run at the same time. They are not the same rule.
-5. **A suite can hold a defect invisibly while every case sits on one side of its
+6. **A suite can hold a defect invisibly while every case sits on one side of its
    condition** -- and the half that looks more exhaustive is the half that hides it.
    Three instances in one day: the 1496-error compile regression (the corpus called the
    function, the standalone cases did not); `PRINT_OBJECT_VECTOR_ARM` excluding a packed
