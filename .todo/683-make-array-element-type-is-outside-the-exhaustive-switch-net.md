@@ -92,5 +92,8 @@ sealed. Report what is there rather than assuming.
 
 ## Order
 
-After `.todo/484` (which supplies the third permit this is worth testing against) and
-after `.todo/485`. Not a prerequisite for anything in `.todo/482` or `.todo/670`.
+Was after `.todo/484` (which supplies the third permit this is worth testing against)
+and after `.todo/485`; **both closed 2026-09-03**, so this can start. Not a prerequisite
+for anything in `.todo/482` or `.todo/670`. The site list above grew by two while 485
+was worked (`PRINT_OBJECT_VECTOR_ARM`, the JVM make-array gates); the audit should start
+from the list as it stands, not from the count the item opened with.

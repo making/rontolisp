@@ -2,8 +2,13 @@
 
 Difficulty: High
 
-Part of `.todo/670`. Depends on `.todo/484` / `.todo/485` (its oracle and its
-`dequantize` target are `#bf16`) and on `.todo/671` (its scales are f16 in a GGUF).
+Part of `.todo/670`. Depended on `.todo/484` / `.todo/485` (its oracle and its
+`dequantize` target are `#bf16`) and on `.todo/671` (its scales are f16 in a GGUF); **all
+three closed 2026-09-03** -- `#bf16` exists on the interpreter and the JVM, and
+`rontolisp:widen-float-bits` / `narrow-float-bits` read f16 bits in bulk. Nothing this
+item needs is waiting on another item now; note only that `widen-float-bits` still
+declines a `#bf16` DESTINATION ("does not yet", `.todo/487` steps 3-5), so a dequantize
+into `#bf16` goes through `(setf aref)` or its own kernel until 487 lands.
 
 Measured 2026-09-03 (`.todo/482-bfloat16-a-narrow-width-that-pays/Quant.java`, record in
 the README's round 2, section 5): a GEMV over Q8_0 weights with the activation quantized
