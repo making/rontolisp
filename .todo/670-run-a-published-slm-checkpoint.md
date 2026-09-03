@@ -86,6 +86,57 @@ makes -- and the precondition that `.todo/485` alone does not satisfy it, becaus
 `eval/VecSimd` declines a bf16 array at every dispatch point until `.todo/488`'s wiring
 lands.
 
+## The two machines, because every number above is one of them
+
+- **`dorian`** -- Intel Xeon E5-2697A v4, Broadwell x86-64, 64 threads, 251 GB, GraalVM
+  25.0.4. AVX2 256-bit, **no avx512**. Orchestrator A's box; no GPU.
+- **GB10** -- aarch64 Cortex-X925, 20 cores, 121 GB, NEON 128-bit, CUDA. Orchestrator B's
+  box, and the only one that can run the GPU legs.
+
+A measurement without its base commit, JIT, machine and load average is not comparable to
+another; a quiet window is per-box and each side takes its own. The two full suites agreed
+to the test on 2026-09-03 (9977 against 9976, the one being `692`'s new regression test)
+and differed by 87 skips, which is the GPU classes -- **the numbers that should NOT match
+are the evidence that the rest do.**
+
+## Checkpoints: outside the repo, and gone
+
+Downloaded to a session scratchpad under `/tmp/claude-1000/...` and **not preserved**:
+Qwen3.5-0.8B (safetensors + BF16/Q8_0 GGUF), TinyLlama-1.1B-Chat (safetensors + F16
+GGUF), LFM2.5-1.2B-Instruct, stories15M as GGUF, and a built `llama.cpp` (`llama-cli`,
+`llama-convert-llama2c-to-ggml`). **Re-fetching them is the first step of `678` and of
+`489`'s bf16 rungs**, and `llama.cpp` takes about three minutes to build. None of it
+belongs in the repo.
+
+## Findings handed over that have no item of their own
+
+- **`.todo/483`'s rule is stated wrong in 483.** Not "never write a `default`" but **"an
+  arm matching two or more permits IS a default, whatever it is spelled"** -- a supertype
+  pattern over a sealed umbrella is correct only when the answer does not depend on the
+  width. An audit of the nine sites in `main` found seven correct and two wrong.
+- **`%la-gather-strided` has five readers** (`LinalgSimd`, `LinalgGpu`,
+  `JvmSimdVectorTemplate`, `JvmGpuTemplate`, `WasmLinalgSimdRuntimeBuilder`); grepping the
+  name finds two. One of the three that grep misses was returning a `float[]` for a double
+  gather -- data corruption, not a decline -- and was fixed during `485`.
+- **Seven sites hand-write the bf16 conversion arithmetic** and only one of them
+  (`am.ik.rontolisp.BFloat16`) is the authority, because the root package does not travel
+  into compiled output and the two compile backends must emit it inline. Three of the
+  seven lost the same 126 signalling-NaN patterns on 2026-09-03, for three different
+  reasons. The census belongs to `.todo/487`'s remainder.
+
+## Certified green, 2026-09-03
+
+Certified at `656c170d`; `develop` moved on to `.todo/`-only commits afterwards, and the
+file set is the argument that the certification still holds -- not the elapsed time.
+
+```
+full suite, dorian    9977 / 0 failures / 0 errors / 276 skipped, 227 reports
+full suite, GB10      9976 / 0 / 0 / 189 skipped, 227 reports
+native CiSpecE2eTest  1972 / 0 / 0, incl. the bf16 refusedOn legs on both wasm backends
+llama2 e2e slice      35 / 35
+GPU legs, GB10        205 / 0 / 0 over six classes, with 486 in
+```
+
 ## Lanes for the week of 2026-09-08: two orchestrators, TWO workers each
 
 Everything that is left is either A's model work or B's width work, and the two cross at
