@@ -23,11 +23,15 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
  * {@code float16-bits}/{@code bits-float16} (the scalar pair) need no helper here --
  * {@link JvmFloat16Compiler} compiles them straight to {@code invokestatic
  * java/lang/Float.floatToFloat16}/{@code float16ToFloat} at the call site, the JDK 20+
- * intrinsics. The bf16 round-to-nearest-even narrow ({@link #emitBf16Narrow}) is the same
- * six-line trick {@code eval.FloatBitsWidening#bfloat16BitsOf} implements for the
- * interpreter (a separate copy on purpose -- {@code .todo/487}'s {@code bfloat16-bits}
- * owns the Lisp-level symbol, this is an internal duplicate so this item needs no
- * dependency on that one's landing order).
+ * intrinsics. The bf16 round-to-nearest-even narrow ({@link #emitBf16Narrow}) is an
+ * internal duplicate of the same trick {@code .todo/487}'s {@code bfloat16-bits} owns the
+ * Lisp-level symbol for (now {@code am.ik.rontolisp.BFloat16#bits}), so this item needs
+ * no dependency on that one's landing order. Every decoded value stays a raw
+ * {@code float} end to end when the destination/source is single-float -- NEVER routed
+ * through a {@code double} local, even transiently: an isolated widening ({@code f2d}) is
+ * safe, but the narrowing half of a roundtrip ({@code d2f}) quiets a signalling NaN 126
+ * of 65536 times (measured against the exact shift/{@code Float.floatToFloat16} oracles),
+ * which a shared double intermediate could not avoid.
  */
 final class JvmFloat16RuntimeBuilder {
 
