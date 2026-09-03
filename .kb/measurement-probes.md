@@ -321,3 +321,115 @@ finds a thing SBCL gets wrong. Better still where it is available: `.todo/652` r
 of those same rows and settled it on the implementation contradicting ITSELF -- `mod` and
 `rem` disagreeing with the second value of its own `truncate` -- and a conclusion that never
 used the oracle cannot be undone by the oracle.
+
+## Rule 5: when a number is wrong, the instrument is the first suspect -- and there are five ways it can be wrong
+
+Rules 1-4 are about a number that answers a different question than the one you asked.
+This one is about telling apart FIVE failures that look identical from the outside -- an
+unexpected ratio -- and are not. All five happened on one day (2026-09-03, `.todo/480` and
+`.todo/488`), and only the first two are the familiar ones.
+
+**A. The instrument is broken.** The number is an artifact of the harness and there is no
+real effect underneath it. `.todo/480`'s first probe (`Acc.java`) dispatched the row
+kernel through a five-implementation interface ONCE PER ROW. That call site went
+megamorphic, the JIT stopped inlining the Vector API, and the cost then scaled with the
+number of live vectors -- so the harness was timing BOXING, not the fold. It reported a
+0.48x regression at 48 columns that does not exist, and that number was on its way into a
+threshold before it was caught.
+
+*How it was caught, and this is the transferable part:* an ordering that arithmetic
+forbids. It reported four-accumulator-with-FMA at **0.51x** and plain four-accumulator at
+**0.48x** -- FMA cannot be slower than the multiply-and-add it replaces. **A ranking that
+violates something you know a priori indicts the instrument, not the subject.** Look for
+one deliberately: put a variant in the harness whose relative position you already know
+(a copy of the baseline, a strictly-fewer-instructions arm), and check it lands where it
+must before reading any other row.
+
+**B. The instrument is buried in noise.** The effect is real but smaller than what else
+is moving on the box. This is the familiar one and the cheap one: it announces itself by
+giving different answers to the same question, it is fixed by quieting the machine and
+taking medians, and its numbers are simply discarded. On a shared box the fix is
+procedural -- stop the other work, take the measurement, hand the box back.
+
+**C. The instrument is measuring two different states, and both numbers are real.**
+The worst of the three, because nothing looks broken and no amount of repetition
+converges. `Gate.java`, `.todo/480`'s replacement for `Acc.java`, returns **three**
+different ratios for the same shape (256 rows, 48 columns) inside ONE process: 0.92x,
+1.29x and 1.21x on aarch64; 0.93x and 1.24x on x86-64, where the spread crosses 1.0 and
+so changes the SIGN of the conclusion. It reproduces on a quiet box and on a loaded one,
+at both extremes of system load, which is exactly what rules out B.
+
+The mechanism was a single generic timing method shared by both kernels
+(`time(Gemv, ...)`), with the baseline always running first: two implementations, one
+compilation, one profile, and an ordering that decides whose profile it is. Not
+megamorphic, not broken -- just two JIT states, each measured faithfully.
+
+**Why this one is dangerous:** in A and B the answer is "throw the number away". Here
+BOTH numbers are true measurements of something the machine really does, and the harness
+cannot tell you which state the product is in. Repeating, quieting the box, and taking
+medians all leave the disagreement exactly where it was.
+
+
+**D. The instrument is right, the subject is right, and the subject is only a PART of the
+product.** `Gate.java`'s solo probe measures a real four-accumulator loss at 48 columns on
+x86-64 -- 0.88-0.97x under Graal, 0.74-0.93x under C2, ten fresh JVMs each, neither spread
+containing 1.0. Nothing is broken and nothing is ambiguous. The model still gets **1.09x
+faster**, because stories15M's two attention GEMVs are 48 columns wide and the rest of its
+GEMVs are 288 or more, and the second group dominates the token. **A probe measures the
+member; a product runs a MIX of members, and the mix has its own sign.**
+
+*What to do:* the same as C's step 3, for a different reason -- **never assume a probe's
+sign is the product's sign.** Build the product before and after and run them in pairs:
+
+```bash
+# two worktrees, one per commit, same source for everything but the change
+git worktree add ../before <parent-sha> && git worktree add ../after <sha>
+# ... clean package in each, compile the SAME program with each, then alternate:
+for i in $(seq 1 15); do run_before; run_after; done   # pairs, not two blocks
+```
+Alternating matters: a box whose load drifts during a long run biases two consecutive
+blocks in opposite directions, and pairs keep the comparison inside the drift.
+
+**E. The instrument is fine and the box is loaded, so the RATIO is inflated -- not just
+noisy.** The standard defence against a noisy box is to alternate the two builds in pairs,
+on the grounds that whatever moves moves both. That is true of the DIRECTION and false of
+the SIZE. The same twelve pairs of `.todo/480`'s before/after on stories15M measured
+1.08-1.24x with a median of 1.088 while the box ran at load 288, and 1.003-1.073x with a
+median of **1.062** on the same box at load 0.6. Contention costs the slower build more
+than the faster one, so the ratio comes out bigger than it is.
+
+*What to do:* **pairs preserve the direction, not the magnitude. Take the number you are
+going to publish in a quiet window, and take the absolute values as well as the ratio** --
+a ratio alone cannot tell you it was measured under load, and two absolute figures beside
+a known-idle box can.
+
+### What to do about C, D and E -- commands, not principles
+
+1. **Make the harness call the kernel the way the product calls it.** The shipped GEMV is
+   a direct static call, once per matrix, with the row loop inside one method -- so the
+   probe gets one timing method per kernel, called by name, no interface, no lambda, no
+   method reference. Each is then monomorphic and separately compiled, and neither can
+   inherit the other's profile (`.todo/480-.../Solo.java`).
+2. **One shape per process, and one KERNEL per process.** Take the ratio across two JVMs
+   that never saw the other arm. That removes the shared profile entirely rather than
+   hoping it does not matter.
+3. **Then stop trusting the probe and go to the workload.** A probe cannot settle which
+   JIT state is real; the program can, because it only has one. Run the real model and
+   read the two things that cannot be argued with:
+
+   ```bash
+   # throughput, the same binary before and after, same token count, quiet box
+   cd examples/llama2 && LLAMA2_PROMPT="Once upon a time" LLAMA2_TEMPERATURE=0 \
+     LLAMA2_STEPS=256 java --add-modules jdk.incubator.vector -cp <out> <Class> 2>&1 >/dev/null \
+     | grep 'achieved tok/s'
+   # and the output itself, which must not move at all
+   md5sum <(java --add-modules jdk.incubator.vector -cp <out> <Class>)
+   ```
+
+   `tok/s` prices the change in the state the product is actually in; the `md5` says
+   whether the change was supposed to be invisible and was.
+4. **Record both numbers and say they disagree.** A limitation that names the two states
+   is worth more than a single number with the disagreement quietly resolved -- and
+   resolving it silently is the failure this rule exists to stop. `.todo/480`'s README
+   carried 1.21x and 1.29x for the same shape in two adjacent tables for a day before
+   anyone noticed they were the same shape.

@@ -79,15 +79,23 @@ The block table (`gguf::%type-block`) is only needed to report `:bytes`; the wal
 skips to the next tensor's DECLARED offset rather than past this one's size, so a
 type whose block shape this reader does not know still skips correctly.
 
-**The staging loop is interim.** `gguf::%widen-into` stages a whole tensor's bit
-patterns in one vector, which costs 2 transient bytes per element -- half a gigabyte
-on a 248k x 1024 embedding matrix. A chunked loop belongs beside the safetensors
-reader's rather than being written twice; `%widen-into` is its only call site here.
+**The staging is the `checkpoint` package's** (`.kb/checkpoint-readers.md`), shared
+with the safetensors reader rather than written twice: `checkpoint:make-tensor`
+allocates and CHECKS the destination, `stage-float32` / `stage-float-bits` fill it
+and `skip-bytes` passes over what `:only` excluded. What is left in `gguf.lisp` is
+the FORMAT -- the header, the thirteen value types, the directory and the walk.
 
-**`rontolisp:widen-float-bits` has no WASM arm yet** (`.todo/671`), so a wasm compile
-of a gguf program warns "the function RONTOLISP:WIDEN-FLOAT-BITS is undefined;
-compiled as a call-time error" and an F16 / BF16 body traps if actually read. F32
-works everywhere. That is why the `ci-spec` case covers F32 only.
+The first cut of this reader staged a whole tensor's bit patterns in one vector and
+this file said that cost "2 transient bytes per element". **That was wrong, and the
+`checkpoint` package is what measured it**: a packed `(unsigned-byte 16)` vector is
+a `LispIntVector`, stored as a `long[]`, so it costs EIGHT bytes an element and a
+tensor staged whole costs four times its size on disk. The chunked loop (1M elements
+through one reused buffer, `widen-float-bits`' `:start` placing each chunk) is not an
+optimisation over the simple version, it is the difference between loading a 1.1B
+model and not.
+
+`rontolisp:widen-float-bits` has all four arms as of 2026-09-03, so F16 and BF16
+bodies load everywhere; the `ci-spec` case reads one of each on all four backends.
 
 ## Pins, and what the fixtures are
 
@@ -100,7 +108,8 @@ works everywhere. That is why the `ci-spec` case covers F32 only.
   a Q8_0 and a Q4_K to refuse, and the tokenizer fields. Regenerating it needs the
   Python `gguf` package; nothing in the build does.
 - `ci-spec.yaml`'s `gguf-cross-backend` -- the same shapes on all four backends over
-  a checkpoint the case WRITES itself, so it is one self-contained program.
+  a checkpoint the case WRITES itself, so it is one self-contained program: F32, F16
+  and BF16 bodies, `:metadata-only`, `:only`, `:element-type` and both refusals.
 
 Verified by hand against real checkpoints, 2026-09-03, agreeing with the official
 `gguf` reader field for field, offset for offset and value for value:

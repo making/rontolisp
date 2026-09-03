@@ -23,11 +23,15 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
  * {@code float16-bits}/{@code bits-float16} (the scalar pair) need no helper here --
  * {@link JvmFloat16Compiler} compiles them straight to {@code invokestatic
  * java/lang/Float.floatToFloat16}/{@code float16ToFloat} at the call site, the JDK 20+
- * intrinsics. The bf16 round-to-nearest-even narrow ({@link #emitBf16Narrow}) is the same
- * six-line trick {@code eval.FloatBitsWidening#bfloat16BitsOf} implements for the
- * interpreter (a separate copy on purpose -- {@code .todo/487}'s {@code bfloat16-bits}
- * owns the Lisp-level symbol, this is an internal duplicate so this item needs no
- * dependency on that one's landing order).
+ * intrinsics. The bf16 round-to-nearest-even narrow ({@link #emitBf16Narrow}) is an
+ * internal duplicate of the same trick {@code .todo/487}'s {@code bfloat16-bits} owns the
+ * Lisp-level symbol for (now {@code am.ik.rontolisp.BFloat16#bits}), so this item needs
+ * no dependency on that one's landing order. Every decoded value stays a raw
+ * {@code float} end to end when the destination/source is single-float -- NEVER routed
+ * through a {@code double} local, even transiently: an isolated widening ({@code f2d}) is
+ * safe, but the narrowing half of a roundtrip ({@code d2f}) quiets a signalling NaN 126
+ * of 65536 times (measured against the exact shift/{@code Float.floatToFloat16} oracles),
+ * which a shared double intermediate could not avoid.
  */
 final class JvmFloat16RuntimeBuilder {
 
@@ -93,13 +97,13 @@ final class JvmFloat16RuntimeBuilder {
 	// packed double[]/float[] (rank header at index 0, data from index 1+rank). Fills
 	// dst[1+rank+start .. +bits.length-1) row-major and returns dst. Locals: 0=bits,
 	// 1=format, 2=dst, 3=start, 4=bitsArr, 5=n, 6=float16, 7=dArr, 8=rank, 9=off, 10=i,
-	// 11=bTmp, 12-13=v.
+	// 11=bTmp, 12=vf (the decoded float -- NEVER widened to double: see emitWidenArm).
 	private static ArrayMethod buildWiden(ConstantPool cp, ClassConstant doubleArrayClass,
 			ClassConstant floatArrayClass, ClassConstant longArrayClass, ClassConstant rtExClass,
 			MethodrefConstant rtExInit, MethodrefConstant stringEqualsObj, MethodrefConstant float16ToFloat,
 			MethodrefConstant intBitsToFloat) {
 		int bitsP = 0, formatP = 1, dstP = 2, startP = 3, bitsArr = 4, n = 5, float16 = 6, dArr = 7, rank = 8, off = 9,
-				i = 10, bTmp = 11, v = 12;
+				i = 10, bTmp = 11, vf = 12;
 		JvmAsm a = new JvmAsm();
 		a.aload(bitsP);
 		a.checkcast(longArrayClass);
@@ -118,21 +122,21 @@ final class JvmFloat16RuntimeBuilder {
 		a.instanceOf(doubleArrayClass);
 		a.branch(Opcode.IFEQ, tryFloat);
 		emitWidenArm(a, false, doubleArrayClass, float16ToFloat, intBitsToFloat, dstP, bitsArr, n, float16, startP,
-				dArr, rank, off, i, bTmp, v);
+				dArr, rank, off, i, bTmp, vf);
 		a.bind(tryFloat);
 		a.aload(dstP);
 		a.instanceOf(floatArrayClass);
 		a.branch(Opcode.IFEQ, notArray);
 		emitWidenArm(a, true, floatArrayClass, float16ToFloat, intBitsToFloat, dstP, bitsArr, n, float16, startP, dArr,
-				rank, off, i, bTmp, v);
+				rank, off, i, bTmp, vf);
 		a.bind(notArray);
 		emitThrow(a, cp, rtExClass, rtExInit, "WIDEN-FLOAT-BITS: dst must be a packed float array");
-		return new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), 6, 14, a.finish());
+		return new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), 6, 13, a.finish());
 	}
 
 	private static void emitWidenArm(JvmAsm a, boolean single, ClassConstant arrayClass,
 			MethodrefConstant float16ToFloat, MethodrefConstant intBitsToFloat, int dstP, int bitsArr, int n,
-			int float16, int startP, int dArr, int rank, int off, int i, int bTmp, int v) {
+			int float16, int startP, int dArr, int rank, int off, int i, int bTmp, int vf) {
 		a.aload(dstP);
 		a.checkcast(arrayClass);
 		a.astore(dArr);
@@ -162,29 +166,42 @@ final class JvmFloat16RuntimeBuilder {
 		a.laload();
 		a.l2i();
 		a.istore(bTmp);
+		// Decode straight into a FLOAT local, never a double: float16ToFloat/
+		// intBitsToFloat already answer a float exactly, and a float destination must
+		// store that value AS-IS. Widening it to double here only to narrow back with
+		// d2f (the old shape) is a real bug, not a redundant no-op -- d2f alone quiets a
+		// signalling NaN 126/65536 times (measured against java.lang.Float.floatToFloat16
+		// / bit-shift oracles, both directions), so the roundtrip silently drops every
+		// NaN the source encoded as signalling into the corresponding quiet one.
 		int isBf16 = a.label();
 		int decodeDone = a.label();
 		a.iload(float16);
 		a.branch(Opcode.IFEQ, isBf16);
 		a.iload(bTmp);
 		a.invokestatic(float16ToFloat);
-		a.f2d();
-		a.dstore(v);
+		a.fstore(vf);
 		a.branch(Opcode.GOTO, decodeDone);
 		a.bind(isBf16);
 		a.iload(bTmp);
 		a.iconst(16);
 		a.op(Opcode.ISHL);
 		a.invokestatic(intBitsToFloat);
-		a.f2d();
-		a.dstore(v);
+		a.fstore(vf);
 		a.bind(decodeDone);
 		a.aload(dArr);
 		a.iload(off);
 		a.iload(i);
 		a.op(Opcode.IADD);
-		a.dload(v);
-		storeElemShared(a, single);
+		a.fload(vf);
+		if (single) {
+			a.fastore();
+		}
+		else {
+			// float -> double is a WIDENING conversion: always exact, signal bit
+			// included (unlike the double -> float narrow above, this is safe).
+			a.f2d();
+			a.dastore();
+		}
 		a.iinc(i, 1);
 		a.branch(Opcode.GOTO, loopTop);
 		a.bind(loopEnd);
@@ -259,14 +276,23 @@ final class JvmFloat16RuntimeBuilder {
 		a.iload(i);
 		a.iload(n);
 		a.branch(Opcode.IF_ICMPGE, loopEnd);
-		// fTmp = (float) sArr[off + i] (widened to double by loadElem, narrowed back for
-		// the single-float arm too -- a no-op there -- so both widths share one body).
+		// fTmp = sArr[off + i], as a float. NEVER via loadElemShared's widen-to-double
+		// (that helper exists for callers that want a double either way): a float
+		// source read faload straight into fTmp with no conversion at all, a double
+		// source narrows ONCE with d2f -- either is safe, but a widen-then-narrow
+		// roundtrip (f2d then d2f, what loadElemShared followed by a bare d2f would be
+		// for the single-float arm) quiets a signalling NaN 126/65536 times (measured).
 		a.aload(sArr);
 		a.iload(off);
 		a.iload(i);
 		a.op(Opcode.IADD);
-		loadElemShared(a, single);
-		a.d2f();
+		if (single) {
+			a.faload();
+		}
+		else {
+			a.daload();
+			a.d2f();
+		}
 		a.fstore(fTmp);
 		int isBf16 = a.label();
 		int narrowDone = a.label();
@@ -301,8 +327,9 @@ final class JvmFloat16RuntimeBuilder {
 	// The bf16 round-to-nearest-even narrow, over the raw bits of a float already in
 	// local slot fTmp: NaN is special-cased (a plain bits + 0x7fff + lsb bias-add can
 	// carry a heavy-payload NaN's low bits into the sign -- .todo/482's Enc.java note)
-	// rather than relying on the payload surviving the add. The exact match of
-	// eval.FloatBitsWidening#bfloat16BitsOf -- keep the two in sync.
+	// rather than relying on the payload surviving the add. Emitted instruction for
+	// instruction from am.ik.rontolisp.BFloat16#bits(float), which eval.FloatBitsWidening
+	// calls -- the interpreter and this backend answer one rounding (.kb/bfloat16.md).
 	private static void emitBf16Narrow(JvmAsm a, MethodrefConstant floatToRawIntBits, MethodrefConstant floatIsNaN,
 			int fTmp, int bitsInt, int resultInt) {
 		a.fload(fTmp);
@@ -330,13 +357,24 @@ final class JvmFloat16RuntimeBuilder {
 		a.istore(resultInt);
 		a.branch(Opcode.GOTO, done);
 		a.bind(nanCase);
-		// result = ((bitsInt >>> 16) | 0x0040) & 0xFFFF
+		// result = u | (((u & 0x7f) - 1) >>> 31), where u = (bitsInt >>> 16) & 0xFFFF.
+		// The top sixteen bits of an f32 NaN ALREADY are the sign, an all-ones exponent
+		// and the payload's top seven bits, so the pattern is u unchanged -- carried
+		// across rather than force-quieted, so a signalling NaN survives the round trip
+		// here exactly as it does on the interpreter. The one correction is a payload
+		// whose top seven bits are all zero, which u alone would spell as an infinity.
 		a.iload(bitsInt);
 		a.iconst(16);
 		a.op(Opcode.IUSHR);
-		a.iconst(0x40);
-		a.op(Opcode.IOR);
 		emitMaskU16(a);
+		a.dup();
+		a.iconst(0x7f);
+		a.op(Opcode.IAND);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.iconst(31);
+		a.op(Opcode.IUSHR);
+		a.op(Opcode.IOR);
 		a.istore(resultInt);
 		a.bind(done);
 	}
@@ -381,30 +419,6 @@ final class JvmFloat16RuntimeBuilder {
 		a.ldcString(cp.addString(message));
 		a.invokespecial(rtExInit);
 		a.op(Opcode.ATHROW);
-	}
-
-	// stack: (..., arrayref, index) -> (..., double). Shared with
-	// JvmFloatArrayRuntimeBuilder's identical private helper -- duplicated rather than
-	// exposed there, since these two loops are this class's only callers.
-	private static void loadElemShared(JvmAsm a, boolean single) {
-		if (single) {
-			a.faload();
-			a.f2d();
-		}
-		else {
-			a.daload();
-		}
-	}
-
-	// stack: (..., arrayref, index, double) -> (...).
-	private static void storeElemShared(JvmAsm a, boolean single) {
-		if (single) {
-			a.d2f();
-			a.fastore();
-		}
-		else {
-			a.dastore();
-		}
 	}
 
 	// stack: (..., arrayref, index) -> (..., int).

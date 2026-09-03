@@ -14173,15 +14173,14 @@ cases:
 
   # The gguf package (gguf.lisp, .kb/gguf.md): the header, all the metadata value
   # shapes, the tensor directory with its ggml dims reversed into row-major, an
-  # alignment that is not the default 32, the F32 tensor bodies, :metadata-only and
-  # :only, and the refusal a quantized tensor gets WHEN ITS BODY IS ASKED FOR --
-  # the file still opens, still lists its directory and still hands over its
-  # tokenizer. The case WRITES its own checkpoint (the position counted by hand:
-  # file-position reports none, which is also why the reader walks the data
-  # sequentially) so it is one self-contained program on every backend. F16 / BF16
-  # bodies are not here because rontolisp:widen-float-bits has no WASM arm yet;
-  # GgufLibraryTest covers them against a checkpoint written by llama.cpp's own
-  # writer.
+  # alignment that is not the default 32, the F32 / F16 / BF16 tensor bodies over
+  # the shared checkpoint staging, :metadata-only, :only, :element-type, and the
+  # refusal a quantized tensor gets WHEN ITS BODY IS ASKED FOR -- the file still
+  # opens, still lists its directory and still hands over its tokenizer. The case
+  # WRITES its own checkpoint (the position counted by hand: file-position reports
+  # none, which is also why the reader walks the data sequentially) so it is one
+  # self-contained program on every backend. Fidelity against a checkpoint written
+  # by llama.cpp's own writer is GgufLibraryTest.
   - name: gguf-cross-backend
     source: |
       (defparameter *ci-gguf-pos* 0)
@@ -14250,17 +14249,17 @@ cases:
             (ci-gguf-count 1))))
 
       (defun ci-gguf-write (path)
-        ;; A four-tensor GGUF with an alignment of 64: two F32 tensors this reader
-        ;; loads, a Q4_0 and a Q8_0 it must refuse BY NAME when their bodies are asked
-        ;; for, and the tokenizer fields a byte-level BPE takes. Written here rather
-        ;; than checked in, so the case is one self-contained program on every backend.
-        ;; The position is counted by hand because file-position reports none.
+        ;; A six-tensor GGUF with an alignment of 64: F32, F16 and BF16 tensors this
+        ;; reader loads, a Q4_0 and a Q8_0 it must refuse BY NAME when their bodies are
+        ;; asked for, and the tokenizer fields a byte-level BPE takes. Written here
+        ;; rather than checked in, so the case is one self-contained program on every
+        ;; backend. The position is counted by hand because file-position reports none.
         (setq *ci-gguf-pos* 0)
         (with-open-file (out path :direction :output :if-exists :supersede
                              :element-type '(unsigned-byte 8))
           (ci-gguf-bytes out "GGUF")
           (ci-gguf-u32 out 3)
-          (ci-gguf-u64 out 4)
+          (ci-gguf-u64 out 6)
           (ci-gguf-u64 out 7)
           (ci-gguf-kv-string out "general.architecture" "ci")
           (ci-gguf-kv-u32 out "general.alignment" 64)
@@ -14273,6 +14272,8 @@ cases:
           (ci-gguf-info out "vec" '(4) 0 64)
           (ci-gguf-info out "q40" '(1 32) 2 128)
           (ci-gguf-info out "q80" '(1 32) 8 192)
+          (ci-gguf-info out "f16" '(2 2) 1 256)
+          (ci-gguf-info out "bf16" '(2 2) 30 320)
           (ci-gguf-pad out (mod (- 64 (mod *ci-gguf-pos* 64)) 64))
           (let ((base *ci-gguf-pos*)
                 (mat (make-array '(2 3) :element-type 'single-float :initial-element 0.0))
@@ -14288,7 +14289,24 @@ cases:
             (ci-gguf-pad out (- (+ base 128) *ci-gguf-pos*))
             (ci-gguf-pad out 18)
             (ci-gguf-pad out (- (+ base 192) *ci-gguf-pos*))
-            (ci-gguf-pad out 34))))
+            (ci-gguf-pad out 34)
+            ;; F16 and BF16 bit patterns, of values both widths hold exactly.
+            (ci-gguf-pad out (- (+ base 256) *ci-gguf-pos*))
+            (let ((bits (make-array 4 :element-type '(unsigned-byte 16)))
+                  (vals '(1.0 -2.5 0.25 0.0)))
+              (let ((i 0))
+                (dolist (v vals)
+                  (setf (aref bits i) (rontolisp:float16-bits v))
+                  (setq i (+ i 1))))
+              (write-sequence bits out)
+              (ci-gguf-count 8)
+              (ci-gguf-pad out (- (+ base 320) *ci-gguf-pos*))
+              (let ((i 0))
+                (dolist (v vals)
+                  (setf (aref bits i) (rontolisp:bfloat16-bits v))
+                  (setq i (+ i 1))))
+              (write-sequence bits out)
+              (ci-gguf-count 8)))))
 
       (defun ci-gguf ()
         (ci-gguf-write "ci-model.gguf")
@@ -14303,10 +14321,16 @@ cases:
           (print (gguf:tensor-info m "q40"))
           (print (gguf:tokenizer-fields m))
           (print (gguf:tensor m "mat")))
-        (let ((f (gguf:read "ci-model.gguf" :only '("mat" "vec"))))
+        (let ((f (gguf:read "ci-model.gguf" :only '("mat" "vec" "f16" "bf16"))))
           (print (gguf:tensor f "mat"))
           (print (gguf:tensor f "vec"))
+          (print (gguf:tensor f "f16"))
+          (print (gguf:tensor f "bf16"))
           (print (gguf:tensor f "q40")))
+        ;; The width every tensor lands in is the caller's choice.
+        (print (gguf:tensor (gguf:read "ci-model.gguf" :only '("vec")
+                                                       :element-type 'double-float)
+                            "vec"))
         (print (handler-case (gguf:read "ci-model.gguf" :only '("q40"))
                  (error (e) (format nil "~a" e))))
         (print (handler-case (gguf:read "ci-model.gguf" :only '("q80"))
@@ -14325,14 +14349,17 @@ cases:
       64
       0.0625
       :DEFAULT
-      ("mat" "vec" "q40" "q80")
+      ("mat" "vec" "q40" "q80" "f16" "bf16")
       (:NAME "mat" :DIMS (2 3) :TYPE 0 :TYPE-NAME "F32" :OFFSET 0 :ELEMENTS 6 :BYTES 24)
       (:NAME "q40" :DIMS (1 32) :TYPE 2 :TYPE-NAME "Q4_0" :OFFSET 128 :ELEMENTS 32 :BYTES 18)
       (:MODEL "gpt2" :PRE "smollm" :TOKENS #("a" "b" "ab") :SCORES NIL :MERGES #("a b") :TOKEN-TYPE NIL :BOS NIL :EOS NIL)
       NIL
       #f((0.0 1.0 2.0) (10.0 11.0 12.0))
       #f(0.25 0.5 0.75 1.0)
+      #f((1.0 -2.5) (0.25 0.0))
+      #f((1.0 -2.5) (0.25 0.0))
       NIL
+      #d(0.25 0.5 0.75 1.0)
       "gguf: the tensor q40 is Q4_0; this reader loads F32, F16 and BF16. Take the publisher's BF16 or F16 file, or read this one with :metadata-only t or with :only naming the tensors you want."
       "gguf: the tensor q80 is Q8_0, which needs a quantized weight matrix this reader does not have yet. Its directory entry and the file's metadata read fine: pass :metadata-only t, or :only naming the tensors you want."
       (2)
@@ -14795,6 +14822,53 @@ standalone:
       0.10009765625
       (16256 16258)
       0
+  - name: float16-bits
+    source: |
+      (print (list (rontolisp:float16-bits 1.0) (rontolisp:float16-bits -2.5)
+                   (rontolisp:bits-float16 15872)))
+      (defun f16-bad-round-trips ()
+        ;; NaN aside: Float.float16ToFloat quiets a signalling f16 NaN on the way to
+        ;; float (a JDK behavior, not this primitive's), so a signalling pattern does
+        ;; not round-trip to itself -- the same "NaN payload aside" this whole pair
+        ;; already operates under. Skip the NaN region, check every other pattern
+        ;; exactly.
+        (let ((f16-bad 0))
+          (dotimes (f16-i 65536 f16-bad)
+            (let ((f16-v (rontolisp:bits-float16 f16-i)))
+              (when (= f16-v f16-v)
+                (unless (= f16-i (rontolisp:float16-bits f16-v))
+                  (incf f16-bad)))))))
+      (print (f16-bad-round-trips))
+    stdout: |
+      (15360 49408 1.5)
+      0
+  - name: widen-narrow-float-bits
+    source: |
+      (let* ((f16-bits2 (make-array 3 :element-type '(unsigned-byte 16)))
+             (f16-dst (make-array 5 :element-type 'single-float :initial-element 0.0))
+             (f16-back (make-array 5 :element-type '(unsigned-byte 16))))
+        (setf (aref f16-bits2 0) (rontolisp:float16-bits 1.0))
+        (setf (aref f16-bits2 1) (rontolisp:float16-bits -2.5))
+        (setf (aref f16-bits2 2) (rontolisp:float16-bits 100.0))
+        (rontolisp:widen-float-bits f16-bits2 :float16 f16-dst :start 2)
+        (print (list (aref f16-dst 0) (aref f16-dst 1) (aref f16-dst 2) (aref f16-dst 3) (aref f16-dst 4)))
+        (rontolisp:narrow-float-bits f16-dst :float16 f16-back)
+        (print (list (aref f16-back 0) (aref f16-back 1) (aref f16-back 2) (aref f16-back 3) (aref f16-back 4))))
+      (let* ((bf16-bits2 (make-array 3 :element-type '(unsigned-byte 16)))
+             (bf16-dst (make-array 3 :element-type 'double-float))
+             (bf16-back (make-array 3 :element-type '(unsigned-byte 16))))
+        (setf (aref bf16-bits2 0) (rontolisp:bfloat16-bits 1.0))
+        (setf (aref bf16-bits2 1) (rontolisp:bfloat16-bits -2.5))
+        (setf (aref bf16-bits2 2) (rontolisp:bfloat16-bits 100.0))
+        (rontolisp:widen-float-bits bf16-bits2 :bfloat16 bf16-dst)
+        (print (list (aref bf16-dst 0) (aref bf16-dst 1) (aref bf16-dst 2)))
+        (rontolisp:narrow-float-bits bf16-dst :bfloat16 bf16-back)
+        (print (list (aref bf16-back 0) (aref bf16-back 1) (aref bf16-back 2))))
+    stdout: |
+      (0.0 0.0 1.0 -2.5 100.0)
+      (0 0 15360 49408 22080)
+      (1.0 -2.5 100.0)
+      (16256 49184 17096)
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

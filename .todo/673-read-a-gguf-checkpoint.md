@@ -34,9 +34,16 @@ of 34 bytes: an f16 scale + 32 int8), 30 BF16, and the K-quants (12 Q4_K, 14 Q6_
    `quantized-matrix` (`.todo/672`; the 34-byte blocks are de-interleaved into quants and
    scales, the scales through the f16 decoder); any other type -> an error naming the
    tensor, the type and the quant ("`blk.0.attn_q.weight` is Q4_K; supported: F32, F16,
-   BF16, Q8_0"). Tensors are read in file order with `file-position` (`LispNames.FILE_POSITION`)
-   to each offset, one bulk transfer per tensor, through a staging buffer of a few MB
-   for the converted types -- a 2.2 GB model must not exist twice.
+   BF16, Q8_0"). Tensors are read in file order, one bulk transfer per tensor, through a staging
+   buffer of a few MB for the converted types -- a 2.2 GB model must not exist twice.
+   **Not with `file-position`: it answers nil on every backend (`.todo/390`), so the
+   reader WALKS the file front to back in offset order and passes over a tensor it
+   was told not to load with `checkpoint:skip-bytes` (bounded reads, never staged) --
+   the shape `.todo/675`'s reader has, over the same `checkpoint` package
+   (`checkpoint:make-tensor` / `stage-float-bits` / `stage-float32` / `skip-bytes`,
+   `src/main/resources/am/ik/rontolisp/eval/checkpoint.lisp`), which is also the
+   staging loop to share rather than write again.** GGUF's tensor infos carry offsets
+   in ascending order, so a sequential walk costs nothing a seek would have saved.
 2. `:only` / `:filter` to load a subset by name (the tokenizer-only case, and a test that
    reads infos without the data).
 3. The tokenizer fields surfaced as they are -- `tokenizer.ggml.model` (`llama` =

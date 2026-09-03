@@ -242,6 +242,18 @@ symbols are bare Strings; WASM needs a distinct `TYPE_SYMBOL` or discriminator s
 deferring is cheap. Only pursue if a concrete feature requires symbol identity
 beyond string equality.
 
+**Evidence for the go/no-go, found 2026-09-03** while rewriting the `do-symbols` /
+`do-external-symbols` doc examples to stop counting a shipped package. Without an intern
+table, **a user package's accessible set is exactly its exports plus what it inherits**:
+a name that is interned never joins the set, and `defpackage`'s `:intern` clause is not
+supported. So the internal/external distinction -- the thing `do-symbols` and
+`do-external-symbols` differ over in CL -- **is not constructible in a user package**, and
+the doc example has to teach the difference through INHERITANCE instead. That is a real
+feature the absence blocks, which is the bar this section sets ("only pursue if a concrete
+feature requires symbol identity beyond string equality"). It is one data point, not a
+decision: the example works, taught through the other half of the rule. Recorded so the
+go/no-go has a concrete cost to weigh rather than only the rewrite's price.
+
 ## Status
 
 IN PROGRESS (A2-first) 2026-07-20. Supersedes `.todo/155` item 1 (closed into this

@@ -35,6 +35,14 @@
 ;; A file whose tensor offsets are not ascending is refused by name rather than
 ;; read wrongly.
 ;;
+;; The staging is the checkpoint package's, shared with the safetensors reader
+;; rather than written twice: checkpoint:make-tensor allocates and CHECKS the
+;; destination, stage-float32 / stage-float-bits fill it (chunked, because a
+;; packed (unsigned-byte 16) vector costs eight bytes an element), and
+;; skip-bytes is how a tensor this reader was told not to load is passed over.
+;; What is left here is the FORMAT: the header, the values, the directory and
+;; the walk (.kb/checkpoint-readers.md).
+;;
 ;; Portability constraints honored here (like linalg.lisp, .kb/linalg.md): do
 ;; loops always declare at least one variable, and parameters are never assigned
 ;; with setq (let-rebound instead).
@@ -155,17 +163,13 @@
           (gguf::%utf8 buf n)))))
 
 (defun gguf::%skip (rd n)
-  ;; Read N bytes and throw them away: the only way past a region on a stream
-  ;; that cannot seek. Chunked through the scratch buffer so a skipped 500 MB
-  ;; tensor does not allocate 500 MB.
-  (let ((buf (gguf::%buffer rd (min n 65536))) (left n))
-    (loop while (> left 0)
-          do
-            (let ((take (min left (length buf))))
-              (read-sequence buf (gguf::%rd-stream rd) :end take)
-              (gguf::%advance rd take)
-              (setq left (- left take))))
-    nil))
+  ;; Pass over N bytes: the only way past a region on a stream that cannot seek.
+  ;; checkpoint:skip-bytes does it in bounded reads and never stages what it
+  ;; discards; this wrapper is here only to keep our own byte position honest.
+  (when (> n 0)
+    (checkpoint:skip-bytes (gguf::%rd-stream rd) n)
+    (gguf::%advance rd n))
+  nil)
 
 ;;; --- the metadata values ---------------------------------------------------------
 ;;; The thirteen GGUF value types. An array comes back as a simple vector, whatever
@@ -325,24 +329,15 @@
 
 ;;; --- loading a tensor ---------------------------------------------------------------
 
-(defun gguf::%float-array (dims element-type)
-  (if (eq element-type 'double-float)
-      (make-array dims :element-type 'double-float :initial-element 0.0d0)
-      (make-array dims :element-type 'single-float :initial-element 0.0)))
-
-(defun gguf::%widen-into (rd count format dst)
-  ;; F16 / BF16 bit patterns into a packed float array.
-  ;;
-  ;; INTERIM: this stages the WHOLE tensor's bit patterns in one
-  ;; (unsigned-byte 16) vector, which costs 2 transient bytes per element -- half
-  ;; a gigabyte on a 248k x 1024 embedding matrix. The chunked staging loop that
-  ;; fixes it belongs beside the safetensors reader's, shared rather than written
-  ;; twice; this is its ONLY call site here, so adopting it is a change to this
-  ;; function and nothing else (.kb/gguf.md).
-  (let ((bits (make-array count :element-type '(unsigned-byte 16))))
-    (read-sequence bits (gguf::%rd-stream rd))
+(defun gguf::%widen-into (rd count format dims element-type)
+  ;; F16 / BF16 bit patterns into a fresh packed float array. The staging is the
+  ;; checkpoint package's, shared with the safetensors reader: chunked through
+  ;; one reused buffer, because a packed (unsigned-byte 16) vector costs EIGHT
+  ;; bytes an element and a tensor staged whole would cost four times its size on
+  ;; disk (.kb/checkpoint-readers.md).
+  (let ((dst (checkpoint:make-tensor dims element-type)))
+    (checkpoint:stage-float-bits (gguf::%rd-stream rd) count format dst)
     (gguf::%advance rd (* 2 count))
-    (rontolisp:widen-float-bits bits format dst)
     dst))
 
 (defun gguf::%read-tensor (rd info element-type)
@@ -351,27 +346,22 @@
          (count (getf info :elements))
          (name (getf info :name)))
     (cond ((= type 0)
-           ;; F32 is the array's own bytes: one transfer, no conversion, no copy.
+           ;; F32 is a single-float array's own bytes: one transfer, no
+           ;; conversion, no copy. A double-float destination is the one case
+           ;; that needs a pass afterwards.
            (if (eq element-type 'double-float)
-               (let ((staged
-                      (make-array dims
-                                  :element-type 'single-float
-                                  :initial-element 0.0))
-                     (dst (gguf::%float-array dims 'double-float)))
-                 (read-sequence staged (gguf::%rd-stream rd))
+               (let ((staged (checkpoint:make-tensor dims 'single-float))
+                     (dst (checkpoint:make-tensor dims 'double-float)))
+                 (checkpoint:stage-float32 (gguf::%rd-stream rd) staged)
                  (gguf::%advance rd (* 4 count))
                  (dotimes (i count dst)
                    (setf (row-major-aref dst i) (row-major-aref staged i))))
-               (let ((dst (gguf::%float-array dims 'single-float)))
-                 (read-sequence dst (gguf::%rd-stream rd))
+               (let ((dst (checkpoint:make-tensor dims 'single-float)))
+                 (checkpoint:stage-float32 (gguf::%rd-stream rd) dst)
                  (gguf::%advance rd (* 4 count))
                  dst)))
-          ((= type 1)
-           (gguf::%widen-into rd count
-                              :float16 (gguf::%float-array dims element-type)))
-          ((= type 30)
-           (gguf::%widen-into rd count
-                              :bfloat16 (gguf::%float-array dims element-type)))
+          ((= type 1) (gguf::%widen-into rd count :float16 dims element-type))
+          ((= type 30) (gguf::%widen-into rd count :bfloat16 dims element-type))
           ((= type 8)
            (error (concatenate 'string
                    "gguf: the tensor ~a is Q8_0, which needs a quantized "

@@ -36,8 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * This is the interpreter half; the cross-backend half is the {@code gguf} case of
  * {@code ci-spec.yaml}, which writes a small GGUF from Lisp and reads it back on all four
- * backends. F16 / BF16 tensor bodies are interpreter-and-JVM only for now, because
- * {@code rontolisp:widen-float-bits} has no WASM arm yet.
+ * backends.
  */
 class GgufLibraryTest {
 
@@ -288,13 +287,18 @@ class GgufLibraryTest {
 	}
 
 	@Test
-	void theLibraryReachesForNothingButCommonLispAndFileIo() {
+	void theLibraryReachesForNothingButCommonLispFileIoAndTheSharedStaging() {
 		String source = GgufLibrary.forms().stream().map(LispVal::print).reduce("", String::concat);
 		assertThat(source).doesNotContain("LINALG:").doesNotContain("OBJC:").doesNotContain("JAVA:");
 		// file-position is not in it, deliberately: it repositions nothing on any
-		// backend,
-		// so the data is walked sequentially instead (.kb/gguf.md).
+		// backend, so the data is walked sequentially instead (.kb/gguf.md).
 		assertThat(source).doesNotContain("FILE-POSITION");
+		// The staging is the checkpoint package's, shared with the safetensors reader
+		// rather than written twice, so this file holds the FORMAT and nothing else.
+		assertThat(source).contains("CHECKPOINT:MAKE-TENSOR")
+			.contains("CHECKPOINT:STAGE-FLOAT32")
+			.contains("CHECKPOINT:STAGE-FLOAT-BITS")
+			.contains("CHECKPOINT:SKIP-BYTES");
 	}
 
 }

@@ -104,6 +104,10 @@ public final class LispEvaluator {
 
 	private boolean geomLibraryLoaded = false;
 
+	private boolean checkpointLibraryLoaded = false;
+
+	private boolean safetensorsLibraryLoaded = false;
+
 	/**
 	 * Whether {@link GeomKernels} is installed over the geom.lisp defuns when the library
 	 * loads. On for every program; the one caller that turns it OFF is the test that
@@ -3711,6 +3715,32 @@ public final class LispEvaluator {
 			}
 			if (this.geomKernels) {
 				GeomKernels.install(this.globalEnv, this);
+			}
+		}
+	}
+
+	/** Evaluates the {@code checkpoint} library ({@code CheckpointLibrary}) once. */
+	private void ensureCheckpointLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.checkpointLibraryLoaded) {
+				return;
+			}
+			this.checkpointLibraryLoaded = true;
+			for (LispVal form : CheckpointLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/** Evaluates the {@code safetensors} library ({@code SafetensorsLibrary}) once. */
+	private void ensureSafetensorsLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.safetensorsLibraryLoaded) {
+				return;
+			}
+			this.safetensorsLibraryLoaded = true;
+			for (LispVal form : SafetensorsLibrary.forms()) {
+				eval(form, this.globalEnv);
 			}
 		}
 	}
@@ -7668,6 +7698,25 @@ public final class LispEvaluator {
 			// call.
 			if (!this.geomLibraryLoaded && GeomLibrary.isGeomQualified(name)) {
 				ensureGeomLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The checkpoint package (checkpoint.lisp: tensor staging shared by the
+			// checkpoint readers) and the safetensors package (safetensors.lisp, the
+			// reader over it) load the same way, on the first resolution of a qualified
+			// function; a reader's checkpoint: calls load the staging through this
+			// same hook on their first call.
+			if (!this.checkpointLibraryLoaded && CheckpointLibrary.isCheckpointQualified(name)) {
+				ensureCheckpointLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			if (!this.safetensorsLibraryLoaded && SafetensorsLibrary.isSafetensorsQualified(name)) {
+				ensureSafetensorsLoaded();
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;
