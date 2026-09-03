@@ -312,6 +312,28 @@ examples:
     note: the same check under --simd on every leg -- the lane kernels' single-precision reductions land on the same text
     expect:
       file: .expected/deltanet-check.txt
+  # The shipped safetensors reader (safetensors:read over the checkpoint staging
+  # package, .kb/checkpoint-readers.md) over a few-hundred-byte fixture written by
+  # llama2/safetensors-fixture.py: every supported dtype at rank 1, 2 and 3 and a
+  # one-element tensor, into single and double floats, the I64 refusal, :only, the
+  # chunked staging path (the chunk forced to five elements) and the sharded index.
+  # The values are exact in every width, so the text is the same on every backend.
+  # The WASM legs join when .todo/671's widen-float-bits lands there.
+  - path: llama2/safetensors-check.lisp
+    backends: [interpreter, jvm]
+    workDir: llama2
+    workFiles: [safetensors-check.safetensors, safetensors-check-00001-of-00002.safetensors, safetensors-check-00002-of-00002.safetensors, safetensors-check.index.json]
+    note: safetensors:read / safetensors:header / safetensors:entries over the checked-in fixture -- F32, F16 and BF16 tensors of rank 1, 2 and 3 and one of a single element, single and double destinations, the dtype refusal, :only skipping a tensor through checkpoint:skip-bytes, the staging chunk forced down to five elements, and the two-shard index
+    expect:
+      file: .expected/safetensors-check.txt
+  - path: llama2/safetensors-check.lisp
+    backends: [interpreter, jvm]
+    workDir: llama2
+    workFiles: [safetensors-check.safetensors, safetensors-check-00001-of-00002.safetensors, safetensors-check-00002-of-00002.safetensors, safetensors-check.index.json]
+    simd: true
+    note: the same check under --simd -- a reader must answer the same arrays whatever the acceleration flag
+    expect:
+      file: .expected/safetensors-check.txt
   # LFM2's gated short-conv layer (the :shortconv kind, llama2/shortconv.lisp)
   # against a float64 transcription of Lfm2ShortConv (shortconv-ref.py), four
   # tokens of a dim-8 kernel-3 layer, the same 3-decimal / 2e-5-margin rule.

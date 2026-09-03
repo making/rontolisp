@@ -201,6 +201,18 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.CheckpointLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/checkpoint\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SafetensorsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/safetensors\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.MetalLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/metal\\.lisp"
