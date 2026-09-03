@@ -6515,6 +6515,18 @@ public final class LispNames {
 	public static final String GEOM_PKG = "GEOM";
 
 	/**
+	 * The {@code tokenizer} package name: the byte-level (GPT-2 / SmolLM2 / Qwen / Llama
+	 * 3) and SentencePiece (Llama 2) BPE tokenizers a published language model ships
+	 * with, written in rontolisp itself ({@code tokenizers.lisp}, see
+	 * {@code eval.TokenizersLibrary}) and loaded lazily on the first {@code tokenizer:}
+	 * resolution, the {@code linalg} pattern. It reaches for nothing but {@code cl} --
+	 * not even the filesystem, since the vocabulary is an argument -- so it runs on all
+	 * four backends and in the browser playground. Does not use {@code cl}; every
+	 * exported name is external.
+	 */
+	public static final String TOKENIZER_PKG = "TOKENIZER";
+
+	/**
 	 * The {@code metal} package name: a Metal drawing surface on an {@code appkit} window
 	 * -- the layer, the device, the command queue, the render pass and the buffer helpers
 	 * every Metal program writes identically -- written in rontolisp itself over the
