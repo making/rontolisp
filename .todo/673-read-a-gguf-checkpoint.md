@@ -75,7 +75,8 @@ of 34 bytes: an f16 scale + 32 int8), 30 BF16, and the K-quants (12 Q4_K, 14 Q6_
 6. What a `qwen35` GGUF holds, read off `conversion/qwen.py` and `src/models/qwen35.cpp`
    (2026-09-03, `.todo/677`) -- each of these is a silent-garbage bug if missed, so the
    weights plist `deltanet.lisp` documents is built with them in mind:
-   - Every `*_norm.weight` (`attn_norm`, `attn_post_norm`, `attn_q_norm`, `attn_k_norm`,
+   - Every `*_norm.weight` (`attn_norm`, `post_attention_norm` -- NOT `ffn_norm`, the
+     feed-forward norm's name in every other family -- `attn_q_norm`, `attn_k_norm`,
      `output_norm`) is stored as **`1 + w`** -- the converter adds the 1 because
      `Qwen3_5RMSNorm` computes `x * (1 + w)` -- so the GGUF reader passes them AS IS.
      `blk.N.ssm_norm.weight` (the Gated DeltaNet's own gated norm, `:ssm-norm`) is
@@ -146,24 +147,43 @@ Q8_0 refusals, a 32000-piece SentencePiece vocabulary through
 F16 bodies, 49152 tokens + 48900 merges through `tokenizer:make-bpe` giving ids
 IDENTICAL to the Python `tokenizers` library's).
 
-## Remaining: items 4-7, the MODEL side
+## Done (2026-09-03, `.todo/677`): items 4-7, the MODEL side
 
-Items 4, 5, 6 and 7 all name `examples/llama2/llama2.lisp` -- the per-architecture
-tensor-name mapping, the Q/K permutation rule, and the `qwen35` / `lfm2` specifics --
-which is the model lane's file, not the reader's. `.todo/675` did the same split
-(its "Do 2-4 live in `examples/llama2/llama2.lisp`'s `load-hf-checkpoint`"), so a
-`load-gguf-checkpoint` beside it is the shape: everything it needs is already
-readable through `gguf:tensor-info` / `gguf:tensor` / `gguf:tokenizer-fields`.
+`examples/llama2/llama2.lisp`'s `load-gguf-checkpoint`: `general.architecture` picks
+the `*architectures*` row; the hyperparameters come from `<arch>.embedding_length`,
+`block_count` minus `nextn_predict_layers` (Qwen3.5's MTP block is the last one and is
+passed over by name), `attention.head_count` / `head_count_kv` (an integer, or LFM2's
+per-layer array -- its zeros are the `:shortconv` blocks, `gguf-layer-types`),
+`attention.key_length` (the head dim when it is not `dim / heads`),
+`attention.layer_norm_rms_epsilon`, `rope.freq_base`, `rope.dimension_count`,
+`full_attention_interval`, `context_length`; the tensors are read with `:only` over the
+language model's names and mapped onto the same weights plist the safetensors loader
+builds (`attn_norm`, `ffn_norm` or Qwen3.5's `post_attention_norm`, `attn_{q,k,v,output}`,
+`attn_{q,k}_norm`, `ffn_{gate,up,down}`, the `ssm_*` / `attn_qkv` / `attn_gate` of a
+Gated DeltaNet block, `shortconv.*` of an LFM2 block, `token_embd`, `output_norm` or
+`token_embd_norm`, `output` when present); a missing per-block tensor is an error naming
+it (the first run died on `ffn_norm` with a "mixed single-float and double-float" from
+the nil downstream). What the converter did is left as it is (the `1 + w` norms,
+`-exp(A_log)`, the squeezed conv), and what it did not do -- Qwen3.5's `attn_q` query |
+gate interleave -- is split here, told by the row count. The RoPE layout is `:pairs`
+for `llama` / `smollm3` / `granite` and `:halves` otherwise (the permute rule above).
+The tokenizer comes from `gguf:tokenizer-fields` into `tokenizer:make-bpe` (kind =
+`tokenizer.ggml.pre`, the control-type tokens as specials, BOS only when
+`tokenizer.ggml.add_bos_token` says so) or `tokenizer:make-sentencepiece`.
 
-Also left:
+Verified: ggml-org's `Qwen3.5-0.8B-BF16.gguf` answers the same prompt with the same
+text as the safetensors, token for token, at temperature 0 (`.todo/677`), and the
+`Q8_0` file is refused by name at `token_embd.weight` with the message above.
+
+## Remaining
 
 - **Q8_0 bodies** (`.todo/672`). The refusal names the type and points at
   `:metadata-only` / `:only`; replacing it is a change to `gguf::%read-tensor`'s one
   `(= type 8)` branch and to the one `handler-case` in the ci-spec case.
 - **A `#bf16` destination** once `.todo/484` / `.todo/485` are through: `:element-type`
   already threads to `checkpoint:make-tensor`, so it is a keyword and a test.
-- The `stories15M`-as-GGUF story check and the TinyLlama BF16 run below, which are
-  `.todo/489`'s rungs and need the model side first.
+- The `stories15M`-as-GGUF story check and the TinyLlama BF16 GGUF run, `.todo/489`'s
+  rungs: the loader is there, the files are not on the box.
 
 ## Verify
 

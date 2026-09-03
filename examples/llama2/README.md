@@ -135,9 +135,20 @@ java --add-modules jdk.incubator.vector -Xmx16g Llama Qwen3.5-0.8B -m chat -t 0 
 Barnaby was a small, fluffy cat with a tail that was always a perfect ...
 ```
 
+The same model as ggml-org's `Qwen3.5-0.8B-BF16.gguf` -- one file, the tokenizer
+inside it, read by the shipped
+[`gguf:`](../../doc/en/reference/functions/gguf.md) package -- answers the same
+prompt with the same text, token for token, and needs no `tokenizer.json`
+(`Llama Qwen3.5-0.8B-BF16.gguf -m chat ...`). A `Q8_0` file is refused by
+name until the quantized weight matrix exists. `llama.cpp` on the same GGUF,
+same prompt, thinking off, tells the same cat's story in other words -- the
+same "Barnaby", a different sentence -- which is what two implementations at
+temperature 0 give each other; byte identity is the Q8_0 check's job.
+
 Measured on the same box as the TinyLlama rows, JVM class output, f32 weights
 (the load line: 7.1-7.6 s for 1.75 GB of bf16 into 3 GB, of which
-`tokenizer.json` + the KV cache 2.4-2.7 s):
+`tokenizer.json` + the KV cache 2.4-2.7 s; from the GGUF 7.2 s, its tokenizer
+0.75 s):
 
 | | tok/s | loadavg |
 | --- | --- | --- |
