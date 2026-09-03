@@ -1,6 +1,14 @@
 # Knowledge Base
 
 Detailed, implementation-level notes on invariants referenced from `CLAUDE.md`.
+
+**Editing one of these files: replace a passage you can SEE, never a range you computed.**
+A programmatic edit that slices from one marker to the next -- "everything between this
+paragraph and the next `##`" -- deletes whatever was added between them since you last
+read the file. On 2026-09-03 that silently removed the whole "Refusing a width" section
+from `bfloat16.md` while correcting a paragraph three lines above it, and nothing failed:
+these files have no tests. Anchor on the exact text being replaced, and re-read the
+section headings afterwards.
 Each file expands one bullet from CLAUDE.md's "Key Design Constraints" (or a
 workflow) with full detail: internal class names, per-backend mechanics, edge
 cases, and the tests that pin the behavior. Read the CLAUDE.md summary first;

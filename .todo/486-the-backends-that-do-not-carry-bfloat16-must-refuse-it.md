@@ -89,8 +89,21 @@ wrong number, not a crash.
 
 ## Verify
 
-- A `#bf16(1.0 2.0)` program compiled with `-o x.wasm`, with `--no-gc`, and with
-  `--component`: three clear errors, no output file.
+- A `#bf16(1.0 2.0)` LITERAL compiled with `-o x.wasm`, with `--no-gc`, and with
+  `--component`: a clear compile error naming the width and the backend, no output file.
+- A `make-array :element-type 'bfloat16` is a CALL-TIME signal on the wasm-GC backend
+  rather than a compile error, carrying the same sentence. Not a softening: `vec.lisp`
+  carries a width-dispatching `cond` with a bfloat16 arm that EVERY backend compiles, and
+  on a backend that cannot represent the width that arm is provably dead -- refusing it at
+  compile time failed builds of programs that never name the width (measured 2026-09-03,
+  two `--simd` tests). It is the shape the `%ieee754-*` quartet already uses for the same
+  reason. A LITERAL keeps the compile error: it is hand-written and cannot be dead-arm
+  boilerplate.
+- **The component / WIT export boundary needs NOTHING, and this is a result rather than an
+  omission** (checked 2026-09-03): no site maps a packed float array to a WIT type at all.
+  `list<f32>` / `list<f64>` resolve to the generic `Rep.LIST` in `compiler/WitTypeMapper`
+  and marshal as ordinary lists of boxed doubles, so there is no width there to refuse.
+  Do not re-run this search.
 - `--gpu` and `--simd` runs over a `bfloat16` array answer bit-identically to the
   plain interpreter run.
 - The `ci-spec.yaml` case added by `.todo/484` must declare only the backends that carry

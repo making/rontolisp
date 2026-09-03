@@ -3361,7 +3361,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// that would read outside a declines having read nothing and the defun signals
 	// its own subscript error.
 	//
-	// params: 0 = a, 1 = odl, 2 = rsl, 3 = basev, 4 = singlev.
+	// params: 0 = a, 1 = odl, 2 = rsl, 3 = basev, 4 = width code (0 single, 1 double).
 	// i32: rank 5, n 6, k 7, d 8, src 9, base 10, kind 11, tmp 12, ax 13, count 14.
 	// f64: tf 15, lo 16, hi 17, travel 18.
 	// eq: res 19, od 20, rs 21, s 22, idx 23, cur 24, vbA 25, vbD 26.
@@ -3495,8 +3495,15 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.I32_OR);
 		w.write(Instruction.BR_IF, 1); // a read outside a -> B0
 		w.write(Instruction.END);
+		// kind: 1 = single-float, 0 = double-float. The width argument is
+		// am.ik.rontolisp.FloatWidth's CODE (0 single, 1 double) as an i31, so kind is
+		// i32.eqz of it. It was a nil/non-nil flag until 2026-09-03, and reading it that
+		// way now answers "single" for every width, since an i31 0 is not a null ref.
+		// No other code can arrive: bfloat16 arrays do not exist on this backend at all
+		// (the compile path refuses the width), and linalg's own %la-etype refuses it
+		// before a width code is ever computed.
 		get(w, singlev);
-		w.write(Instruction.REF_IS_NULL);
+		WasmEmitHelper.castI31GetS(w);
 		w.write(Instruction.I32_EQZ);
 		set(w, kind);
 		newVblock(w, n, kind, vbD, vecBase);

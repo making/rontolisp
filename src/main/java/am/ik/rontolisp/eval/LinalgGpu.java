@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
+import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
@@ -1555,7 +1556,7 @@ public final class LinalgGpu {
 	 * {@code linalg:slice} and {@code broadcast-to} -- over a resident operand: one
 	 * strided copy, the innermost-first strides reversed into the device's per-axis
 	 * order, the base as the walk's origin, a negative stride allowed. Declines a width
-	 * flag that is not the operand's (the CPU widens; the device copies), an empty
+	 * code that is not the operand's (the CPU widens; the device copies), an empty
 	 * output, and a walk outside the operand, like {@code LinalgSimd.gatherStrided}.
 	 */
 	private static @Nullable LispVal gatherStrided(List<LispVal> args) {
@@ -1566,15 +1567,21 @@ public final class LinalgGpu {
 		if (a == null || od == null || rs == null || base == null || rs.length != od.length || !resident(a)) {
 			return null;
 		}
-		boolean single = !(args.get(4) instanceof LispNil);
-		Boolean operandSingle = switch (a) {
-			case LispSingleFloatArray ignored -> Boolean.TRUE;
-			case LispDoubleFloatArray ignored -> Boolean.FALSE;
-			// The width flag the defun passes names one of the two IEEE widths, so a
-			// bfloat16 operand is neither: the rung below answers.
-			case LispBFloat16Array ignored -> null;
+		FloatWidth width = LinalgSimd.widthArg(args.get(4));
+		if (width == null || width != a.width()) {
+			// The width the defun names must be the operand's own: the CPU widens, the
+			// device only copies.
+			return null;
+		}
+		// A switch EXPRESSION, not a statement switch: only the expression form is
+		// checked for exhaustiveness over an enum, so a fourth width is a compile error
+		// here and a statement switch would have let it fall straight through.
+		Boolean deviceCarries = switch (width) {
+			case SINGLE, DOUBLE -> Boolean.TRUE;
+			// The device carries no bfloat16 kernel; the rung below answers.
+			case BFLOAT16 -> null;
 		};
-		if (operandSingle == null || single != operandSingle) {
+		if (deviceCarries == null) {
 			return null;
 		}
 		int rank = od.length;

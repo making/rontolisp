@@ -3,6 +3,7 @@ package am.ik.rontolisp.reader;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -296,7 +297,7 @@ public final class LispLexer {
 				// before the #x/#o/#b radix branch below, which would otherwise claim the
 				// #b: 'f' is not a binary digit, so that reader would only fail rather
 				// than mis-read, but the ordering is the thing that keeps it so.
-				add(tokens, new Token.FloatArrayOpen(Token.FloatWidth.BFLOAT16), tokenStart);
+				add(tokens, new Token.FloatArrayOpen(FloatWidth.BFLOAT16), tokenStart);
 				this.pos += 6;
 			}
 			else if (c == '#' && this.pos + 2 < this.input.length()
@@ -307,7 +308,7 @@ public final class LispLexer {
 				// at
 				// read time. #f not followed by '(' falls through to symbol reading
 				// below.
-				add(tokens, new Token.FloatArrayOpen(Token.FloatWidth.SINGLE), tokenStart);
+				add(tokens, new Token.FloatArrayOpen(FloatWidth.SINGLE), tokenStart);
 				this.pos += 3;
 			}
 			else if (c == '#' && this.pos + 2 < this.input.length()
@@ -316,7 +317,7 @@ public final class LispLexer {
 				// #d( opens a packed double-float array literal (e.g., #d(1.0 2.0 3.0));
 				// same nested-list contents and inferred rank as #f(, but the wider (f64)
 				// backing. #d not followed by '(' falls through to symbol reading below.
-				add(tokens, new Token.FloatArrayOpen(Token.FloatWidth.DOUBLE), tokenStart);
+				add(tokens, new Token.FloatArrayOpen(FloatWidth.DOUBLE), tokenStart);
 				this.pos += 3;
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {

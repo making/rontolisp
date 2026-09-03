@@ -1,5 +1,7 @@
 package am.ik.rontolisp.reader;
 
+import am.ik.rontolisp.FloatWidth;
+
 /**
  * Token types produced by the lexer.
  */
@@ -108,28 +110,12 @@ public sealed interface Token {
 	 * {@link RightParen} matching the opening parenthesis. The rank is inferred from the
 	 * nesting depth of the contents at read time.
 	 *
-	 * @param width which packed float width the literal opens
+	 * @param width which packed float width the literal opens -- an
+	 * {@link am.ik.rontolisp.FloatWidth} rather than a boolean, so reading a width off a
+	 * literal is an exhaustive {@code switch} and a fourth width has to be answered
+	 * rather than falling into the double-float arm
 	 */
 	record FloatArrayOpen(FloatWidth width) implements Token {
-	}
-
-	/**
-	 * The packed float width a literal opens. An ENUM rather than a boolean, so that
-	 * reading a width off a literal is an exhaustive {@code switch} and a fourth width
-	 * has to be answered rather than falling into the double-float arm
-	 * ({@code .kb/vec.md}, "Asking a packed array its width").
-	 */
-	enum FloatWidth {
-
-		/** {@code #f(} -- {@code single-float}. */
-		SINGLE,
-
-		/** {@code #d(} -- {@code double-float}. */
-		DOUBLE,
-
-		/** {@code #bf16(} -- {@code bfloat16}. */
-		BFLOAT16
-
 	}
 
 	/**

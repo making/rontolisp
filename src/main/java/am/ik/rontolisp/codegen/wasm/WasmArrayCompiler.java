@@ -6,6 +6,8 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.FloatWidth;
+import am.ik.rontolisp.compiler.UnsupportedFloatWidth;
 import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -127,6 +129,24 @@ final class WasmArrayCompiler {
 		// is a string.
 		boolean charVector = am.ik.rontolisp.macro.LispMacroExpander.isCharacterElementType(elementType);
 		int elementTypeCode = ArrayElementTypes.codeOf(elementType);
+		if (elementTypeCode == ArrayElementTypes.BFLOAT16) {
+			// Refused HERE, where the representation is chosen: this backend has a
+			// TYPE_F32ARR and a TYPE_F64ARR and nothing else, so an unrefused request
+			// falls through to the general BOXED array below and the program answers
+			// different numbers here than on the interpreter -- a wrong number rather
+			// than a crash (.kb/bfloat16.md).
+			//
+			// A CALL-TIME signal rather than a compile error, the shape the %ieee754-*
+			// quartet uses for the same reason: vec.lisp's width-dispatching cond
+			// carries a bfloat16 arm that every backend compiles, and on this one it is
+			// provably dead (no bfloat16 array can be built or read here at all). A
+			// compile error there is a false positive that breaks builds of programs
+			// that never name the width. A program that does reach this call gets the
+			// same sentence, at the call.
+			WasmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.expandUnsupportedCall(cons,
+					UnsupportedFloatWidth.message(FloatWidth.BFLOAT16, "the wasm-GC backend")), ctx);
+			return;
+		}
 		if ((doubleFloat || singleFloat) && fpArg == null && adjArg == null) {
 			// A plain :element-type 'double-float / 'single-float array (no fill pointer
 			// /

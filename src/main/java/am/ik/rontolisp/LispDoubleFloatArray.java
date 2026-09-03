@@ -22,6 +22,11 @@ public record LispDoubleFloatArray(double[] data, int[] dims) implements LispFlo
 		return LispNames.DOUBLE_FLOAT;
 	}
 
+	@Override
+	public FloatWidth width() {
+		return FloatWidth.DOUBLE;
+	}
+
 	/**
 	 * The storage, for a HOST read: every reader goes through here (the kernels, the
 	 * printer, a record pattern, Java interop), and the access hook first brings home any

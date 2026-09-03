@@ -51,6 +51,30 @@ class NoGcWasmCompilerTest {
 				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("UNWIND-PROTECT");
 	}
 
+	// The scalar backend has an F32VEC and an F64VEC and nothing else. A bfloat16 literal
+	// used to be emitted as an F64VEC -- eight bytes an element, the wrong memory layout,
+	// no diagnostic -- because the arm that caught it was a pattern over the SEALED
+	// umbrella rather than one per permit (.kb/vec.md, .kb/bfloat16.md).
+	@Test
+	void bfloat16ArraysAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun bf-make (n) (make-array n :element-type 'bfloat16))
+				(rontolisp:wasm-export 'bf-make :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("bfloat16 arrays are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the --no-gc backend");
+	}
+
+	@Test
+	void bfloat16LiteralsAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun bf-lit () (aref #bf16(1.0 2.0) 0))
+				(rontolisp:wasm-export 'bf-lit :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("bfloat16 arrays are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the --no-gc backend");
+	}
+
 	@Test
 	void emitsPlainMvpModuleWithNoGcTypesImportsOrMemory() {
 		byte[] module = compile("""

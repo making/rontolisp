@@ -329,6 +329,46 @@ class WasmLispCompilerTest {
 			.hasMessageContaining("component");
 	}
 
+	// .todo/482's scope is the interpreter and the JVM. A width this backend does not
+	// carry has to be REFUSED where the representation is chosen, not misread: there is a
+	// TYPE_F32ARR and a TYPE_F64ARR and nothing else, so an unrefused bfloat16 request
+	// used to fall through to the general BOXED array and answer different numbers here
+	// than on the interpreter -- a wrong number rather than a crash, which is exactly the
+	// failure the refusal exists to prevent (.kb/bfloat16.md).
+	// A make-array of this width becomes a CALL-TIME signal rather than a compile error,
+	// unlike the literal below: vec.lisp's width-dispatching cond carries a bfloat16 arm
+	// that every backend compiles, and here it is provably dead (no bfloat16 array can be
+	// built or read on this backend at all), so refusing it at compile time fails builds
+	// of programs that never name the width -- which is what it did, on two --simd tests,
+	// before the shape was changed. So what is asserted is that it COMPILES. The sentence
+	// itself is pinned where it is thrown (the literal case below, and
+	// NoGcWasmCompilerTest); it cannot be looked for in the module bytes, because a
+	// wasm-GC string is emitted as code that builds a $str_bytes array rather than as a
+	// contiguous data segment (.kb/wasm-gc-strings.md).
+	@Test
+	void aBfloat16MakeArrayCompilesToACallTimeSignalOnTheWasmGcBackend() {
+		assertThat(compile("(defun f () (make-array 4 :element-type 'bfloat16)) (print (f))")).isNotEmpty();
+	}
+
+	// A program that merely CARRIES the width-dispatching arm still compiles: that is the
+	// property the call-time shape exists for.
+	@Test
+	void aProgramThatOnlyCarriesTheBfloat16ArmStillCompilesOnTheWasmGcBackend() {
+		assertThat(compile("""
+				(defun mk (et n) (if (eq et 'bfloat16)
+				                     (make-array n :element-type 'bfloat16)
+				                     (make-array n :element-type 'double-float)))
+				(print (aref (mk 'double-float 4) 0))
+				""")).isNotEmpty();
+	}
+
+	@Test
+	void bfloat16LiteralsAreRefusedOnTheWasmGcBackend() {
+		assertThatThrownBy(() -> compile("(print #bf16(1.0 2.0))")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("bfloat16 arrays are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the wasm-GC backend");
+	}
+
 	@Test
 	void httpHandlerInPreview1ModeCompilesToACallTimeError() {
 		// In Preview 1 (no --component) the http-handler directive compiles to a

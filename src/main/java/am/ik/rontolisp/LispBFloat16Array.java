@@ -43,6 +43,11 @@ public record LispBFloat16Array(short[] data, int[] dims) implements LispFloatAr
 		return LispNames.BFLOAT16;
 	}
 
+	@Override
+	public FloatWidth width() {
+		return FloatWidth.BFLOAT16;
+	}
+
 	/**
 	 * The storage, for a HOST read: every reader goes through here (the kernels, the
 	 * printer, a record pattern, Java interop), and the access hook first brings home any
