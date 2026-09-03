@@ -4244,8 +4244,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// cursor ap restarts at the row pointer rp and the x cursor bp at x's data base each
 	// iteration (the dot emitters clobber their pointer locals), rp advancing by cols
 	// elements per row. Under --simd the per-row dot is the same f64x2/f32x4 lane loop
-	// vec:dot uses (WasmVecLoops.simdDot: an f32 row accumulates in f32 lanes and
-	// promotes once -- the --simd single-precision reduction contract); without it the
+	// vec:dot uses at f64 (WasmVecLoops.simdDot), and at f32 the multi-accumulator
+	// sibling WasmVecLoops.simdMatvecRowDotF32 -- vec:dot keeps ONE chain, a GEMV row
+	// folds four above a column gate, so the two no longer sum in the same order
+	// (todo-480; an f32 row still accumulates in f32 lanes and promotes once, the --simd
+	// single-precision reduction contract); without --simd the
 	// v128-free scalar loop (WasmVecLoops.scalarDot), so the module stays MVP-clean.
 	// Widths may not mix: x (and out) must be the same width as W, the vec: fail-fast
 	// rule (compileCoerced turns a mismatch into the incompatible-types error). Like the
@@ -4306,10 +4309,25 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int rem = fn.allocLocal(Ty.F64VEC);
 		int trem = -1;
 		int acc = -1;
+		// The f32 row folds WasmVecLoops.MATVEC_ACCUMULATORS independent chains once it
+		// is wide enough (todo-480); the f64 row keeps its one chain, so it needs neither
+		// the extra accumulators nor the wide-loop counter.
+		int wide = -1;
+		int acc1 = -1;
+		int acc2 = -1;
+		int acc3 = -1;
 		int sum;
 		if (this.simd) {
 			trem = single ? fn.allocLocal(Ty.F64VEC) : -1;
+			wide = single ? fn.allocLocal(Ty.F64VEC) : -1;
 			acc = fn.allocV128Local();
+			if (single) {
+				// Allocated adjacently so the local declaration run-length-encodes to one
+				// entry (the --no-gc shortest-encoding contract).
+				acc1 = fn.allocV128Local();
+				acc2 = fn.allocV128Local();
+				acc3 = fn.allocV128Local();
+			}
 			sum = single ? fn.allocF32Local() : fn.allocLocal(Ty.FLOAT);
 		}
 		else {
@@ -4329,9 +4347,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(ap);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(xp);
 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bp);
-		if (this.simd) {
-			WasmVecLoops.splatZero(w, acc, single);
-			WasmVecLoops.simdDot(w, ap, bp, cols, rem, trem, acc, sum, single);
+		if (this.simd && single) {
+			WasmVecLoops.simdMatvecRowDotF32(w, ap, bp, cols, rem, wide, trem, acc, acc1, acc2, acc3, sum,
+					WasmVecLoops.MATVEC_ACC_THRESHOLD);
+		}
+		else if (this.simd) {
+			WasmVecLoops.splatZero(w, acc, false);
+			WasmVecLoops.simdDot(w, ap, bp, cols, rem, trem, acc, sum, false);
 		}
 		else {
 			WasmVecLoops.scalarDot(w, ap, bp, cols, rem, sum, single);

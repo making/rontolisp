@@ -771,9 +771,19 @@ added to it while the other three fold 256 ones each -> `2^24 + 768 = 16777984`.
 | `(round (linalg:dot v v))`, `v[0] = 4096.0` | 16778239 | **16777984** |
 | `(round (linalg:sum v))`, `v[0] = 2^24` | 16778239 | **16777984** |
 | `(round (* 1024 (linalg:mean v)))`, `v[0] = 2^24` | 16778239 | **16777984** |
-| `(round (aref (linalg:dot (reshape v '(1 1024)) v) 0))` -- GEMV | 16778240 | **16777984** |
+| `(round (aref (linalg:dot (reshape v '(1 1024)) v) 0))` -- GEMV | 16778240 | **16778176** |
 | `(round (aref (linalg:dot v (reshape v '(1024 1))) 0))` -- **v.M** | 16778240 | **16777216** |
 | any of the above at `#d` width | 16778239 | 16778239 |
+
+**The GEMV row moved with `vec:matvec`'s (2026-09-03, `.todo/480`).** `linalg`'s
+matrix-by-vector case is NOT a kernel of its own: `LinalgSimdKernels.matvecF` delegates to
+`VecSimdKernels.matvecF`, `JvmSimdVectorTemplate` reaches the same `matvecRowsF`, and the
+wasm builders route it "via the vec: matvec kernel". So when `.todo/480` gave that row four
+independent accumulators above 32 columns, this probe moved too, to `2^24 + 960 = 16778176`.
+Forking the kernel to hold the old value was considered and rejected: it would duplicate code
+to preserve a number nothing promised, and leave `linalg:dot`'s M.v slower than `vec:matvec`
+for no reason. `linalg:dot` of two VECTORS, `linalg:sum`, `linalg:mean` and the matrix-matrix
+product (`matmulRowsF`, its own kernel) are unchanged.
 
 **Nothing else catches a regression here**: every other `#f` test input stays under `2^24`,
 where an f32 accumulator is exact. Pinned three times -- `eval/LinalgSimdTest`,
