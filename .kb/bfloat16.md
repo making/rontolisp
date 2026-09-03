@@ -5,10 +5,10 @@ exponent bits an f32 has, and seven mantissa bits. It covers the whole f32 range
 trades precision for width, which is what makes it the storage format published
 machine-learning checkpoints use (`.todo/482`).
 
-This file covers the SCALAR conversion pair and the rounding `.todo/671`'s bulk pair
-shares with it. The packed `#bf16` array
-width (`.todo/484`/`485`/`486`) and the file-reading path
-(`.todo/487` steps 3-5) are not built yet; when they land they belong here.
+This file covers the SCALAR conversion pair, the rounding `.todo/671`'s bulk pair shares
+with it, and the packed `#bf16` array width on the interpreter and the JVM
+(`.todo/484`/`485`, "The packed array" below). The file-reading path (`.todo/487` steps
+3-5) is not built yet; when it lands it belongs here.
 
 ## The pair
 
@@ -100,6 +100,54 @@ the same way both times -- as a change to how a NaN is handled, once with no beh
 difference (withdrawn) and once with a real one (the new side was right). A `git merge`
 has nothing to say about it: both sides were correct alone. **If you change NaN handling
 anywhere in this file's subject, tell the other lane before you push.**
+
+## The packed array
+
+`#bf16(...)` / `(make-array dims :element-type 'bfloat16)` is the third permit of the
+sealed `LispFloatArray` (`LispBFloat16Array(short[] data, int[] dims)`, a rontolisp
+extension, a fourth EMPTY subtype of `float` in the type lattice: no scalar has it, every
+`aref` answers a `double`). It exists on the interpreter and the JVM; every other backend
+refuses it by name at the representation chokepoint (`.todo/486`,
+`compiler/UnsupportedFloatWidth`), never degrades it. `vec:` carries the width (the
+element-wise kernels answer `#bf16`, `%make-like` preserves it); `linalg:` declines it
+explicitly at `%la-etype` / `%la-make`.
+
+**The JVM representation is a bare `short[]` with a TWO-SLOTS-PER-DIMENSION header**,
+`[rank, hi_0, lo_0, ..., e_0, ...]`, data offset `1 + 2 * rank`: a dimension is an `int`
+and a `short` caps at 32767, and a 1B-class tensor has dimensions well above that
+(`.todo/485`, option (a)). `codegen/jvm/JvmPackedFloatWidth` is the one place that knows
+the layout at every width, and `.kb/vec.md` says why no emitter may spell the offset
+itself. Element access goes through the program's own `_bf16Value(I)D` / `_bf16Bits(D)I`
+helpers, `BFloat16` emitted instruction for instruction (it lives in the root package and
+does not travel), and the copy is pinned against the authority by
+`JvmBFloat16ArrayTest`: `_bf16Bits` over ALL 2^32 f32 patterns plus the double NaN space,
+`_bf16Value` and `_bf16Print` over all 65536. That test is exhaustive in the NARROW
+direction on purpose -- the three times this arithmetic broke on 2026-09-03, it broke in a
+hand-written copy, in the narrow/NaN direction, and a round trip over the 65536
+representable patterns cannot see it. The element cap is unchanged by the narrowing: a
+`short[]` holds at most 2^31-1 elements, so a single tensor above that needs chunking
+regardless of width (`.todo/489`'s problem, not this file's).
+
+What a `--simd` build does with a bf16 operand on the JVM: the lane kernels carry
+`double[]` and `float[]` only and CAST anything else, so every `vec:` call site asks each
+ARRAY argument, positively, whether it is one of those two and takes the spliced
+`vec.lisp` defun otherwise (`JvmSimdCompiler.emitLaneWidthGuard`; scalar positions --
+`scale`'s factor, `clip`'s bounds -- are not asked). Asking "is it the unsupported one?"
+would let the next representation (`.todo/672`'s quantized matrix) fall through to the
+cast. The interpreter's `VecSimd` decline chain is the same rule. The fused bf16 kernels
+that make the width a performance width are `.todo/488`.
+
+Printing an element is `_bf16Print`: the `Float` whose `Float.toString` is
+`FloatText.bfloat16Text` of the value (below), so `#bf16(0.1)` prints as written and
+`(aref #bf16(0.1) 0)` as `0.10009765625`. A program that also `read`s, or defines a
+`print-object` method, prints through the Lisp-level `%print-object-str` walk instead
+(`LispMacroExpander.PRINT_OBJECT_VECTOR_ARM`), whose vector arm excludes the packed
+widths BY NAME -- `bfloat16` had to be added there by hand, and the miss showed only in
+the `-o Prog.class` E2E of a program that read (`.todo/683` lists the site). The bulk pair (`widen-float-bits` /
+`narrow-float-bits`) declines a bf16 destination/source on both backends with the same
+words until `.todo/487` adds the copy, and `read-sequence` / `write-sequence` decline the
+width on both (the interpreter's `PackedBuffer.of`, the JVM's `_readSeqPacked`) into the
+element loop -- the raw two-byte transfer is 487's.
 
 ## Printing
 

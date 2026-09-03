@@ -66,6 +66,16 @@ errors the new permit produced nor any existing test -- only in evaluating the f
 is the audit's worst case: silent, unreachable from the type system, and invisible to the
 tests that exist.
 
+**Two more, found 2026-09-03 while working `.todo/485`, both extended by hand there.**
+`LispMacroExpander.PRINT_OBJECT_VECTOR_ARM` -- the Lisp-level `%print-object-str` walk
+every program that also `read`s (or defines a `print-object` method) prints through --
+excludes the packed float widths by NAME (`(not (equal (array-element-type x)
+'single-float))` ...), so a width missing there renders as a general `#(...)` of widened
+doubles in exactly those programs and prints correctly everywhere else; found by the
+`-o Prog.class` E2E, not by any unit test. And the JVM compile gates
+`JvmLispCompiler.makeArrayIsPackedFloat` / `JvmArrayCompiler.is*ElementType` match the
+`:element-type` symbol's name, the JVM twin of `Environment`'s string dispatch.
+
 Do the same audit for `packedIntegerElementType` next to it (`(unsigned-byte 8|16|32)`):
 it has the same shape and the same silent `null`, and `LispIntVector` may or may not be
 sealed. Report what is there rather than assuming.

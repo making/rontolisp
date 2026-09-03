@@ -1710,9 +1710,9 @@ final class JvmRuntimeBuilder {
 	 * widens f32-&gt;f64) and reusing the ordinary array renderer, then the leading
 	 * {@code #}/{@code #nA} prefix is rewritten with
 	 * {@code String.replaceFirst(prefixRegex, ...)} (regex {@code ^#\d*A?\(}) to
-	 * {@code #d(} for a {@code double[]} or {@code #f(} for a {@code float[]}. Threaded
-	 * into the two lisp-to-string builders only when the program uses packed float
-	 * arrays.
+	 * {@code #d(} for a {@code double[]}, {@code #f(} for a {@code float[]} or
+	 * {@code #bf16(} for a {@code short[]}. Threaded into the two lisp-to-string builders
+	 * only when the program uses packed float arrays.
 	 */
 	/**
 	 * Constants for the float text of _lispToString/_lispToDisplayString: the lowercase
@@ -1723,10 +1723,10 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant upperE, ConstantPool.StringConstant lowerE) {
 	}
 
-	record PackedPrint(ClassConstant doubleArrayClass, ClassConstant floatArrayClass,
+	record PackedPrint(ClassConstant doubleArrayClass, ClassConstant floatArrayClass, ClassConstant shortArrayClass,
 			MethodrefConstant fvToGeneralMethod, MethodrefConstant stringReplaceFirst,
 			ConstantPool.StringConstant prefixRegex, ConstantPool.StringConstant prefixRepl,
-			ConstantPool.StringConstant prefixReplSingle) {
+			ConstantPool.StringConstant prefixReplSingle, ConstantPool.StringConstant prefixReplBFloat16) {
 	}
 
 	/**
@@ -2490,6 +2490,9 @@ final class JvmRuntimeBuilder {
 					packedPrint.prefixRepl());
 			emitPackedPrintBranch(code, packedPrint.floatArrayClass(), arrayToStringMethod, packedPrint,
 					packedPrint.prefixReplSingle());
+			// if (val instanceof short[]) -> #bf16(...)
+			emitPackedPrintBranch(code, packedPrint.shortArrayClass(), arrayToStringMethod, packedPrint,
+					packedPrint.prefixReplBFloat16());
 		}
 		if (packedIntPrint != null) {
 			// if (val instanceof long[]) return arrayToString(_ivToGeneral(val)); -- a

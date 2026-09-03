@@ -167,8 +167,14 @@ public final class LispArray implements LispVal {
 				case 16 -> ArrayElementTypes.UNSIGNED_BYTE_16;
 				default -> ArrayElementTypes.UNSIGNED_BYTE_32;
 			};
-			case LispSingleFloatArray unused -> ArrayElementTypes.SINGLE_FLOAT;
-			case LispDoubleFloatArray unused -> ArrayElementTypes.DOUBLE_FLOAT;
+			// Exhaustive over the sealed widths, so a new one is a compile error here
+			// rather than the "expects an array" refusal below (which is what the
+			// bfloat16 width fell into when it was added by hand to the other sites).
+			case LispFloatArray packed -> switch (packed) {
+				case LispSingleFloatArray unused -> ArrayElementTypes.SINGLE_FLOAT;
+				case LispDoubleFloatArray unused -> ArrayElementTypes.DOUBLE_FLOAT;
+				case LispBFloat16Array unused -> ArrayElementTypes.BFLOAT16;
+			};
 			default ->
 				throw new IllegalArgumentException("make-array: :displaced-to expects an array, got " + target.print());
 		};

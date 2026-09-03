@@ -14219,6 +14219,40 @@ standalone:
       8
     refusedOn: [wasm, wasm_component]
     refusal: "Cannot compile: FFI:SYMBOL"
+  - name: bfloat16-packed-array
+    source: |
+      ;; The bfloat16 packed array exists on the interpreter and the JVM only
+      ;; (.kb/bfloat16.md, "The packed array"); the two WASM backends refuse it
+      ;; by name at the representation chokepoint rather than degrading it. The
+      ;; length-1 array and the dimension above 32767 are the two shapes the
+      ;; JVM's two-slot header was built for, and the printed forms are the
+      ;; printer half's shortest round-tripping digits.
+      (print #bf16(1.0 2.0 3.0))
+      (print (aref #bf16(7.0) 0))
+      (print (list (aref #bf16(0.1) 0) #bf16(0.1) (array-element-type #bf16(1.0))))
+      (let ((v (make-array 40000 :element-type 'bfloat16)))
+        (setf (aref v 39999) 3.0)
+        (setf (aref v 0) 0.1)
+        (print (list (length v) (aref v 39999) (aref v 0) (aref v 1))))
+      (let ((m (make-array '(2 3) :element-type 'bfloat16 :initial-element 0.5)))
+        (setf (aref m 1 2) 499.5)
+        (print (list m (aref m 1 2) (array-dimensions m))))
+      (let ((v (make-array 65536 :element-type 'bfloat16)) (bad 0))
+        (dotimes (i 65536) (setf (aref v i) (rontolisp:bits-bfloat16 i)))
+        (dotimes (i 65536)
+          (unless (= i (rontolisp:bfloat16-bits (aref v i))) (incf bad)))
+        (print bad))
+      (print (vec:add #bf16(1.0 2.0) #bf16(3.0 4.0)))
+    stdout: |
+      #bf16(1.0 2.0 3.0)
+      7.0
+      (0.10009765625 #bf16(0.1) BFLOAT16)
+      (40000 3.0 0.10009765625 0.0)
+      (#bf16((0.5 0.5 0.5) (0.5 0.5 500.0)) 500.0 (2 3))
+      0
+      #bf16(4.0 6.0)
+    refusedOn: [wasm, wasm_component]
+    refusal: "bfloat16 arrays are supported on the interpreter and the JVM only"
   - name: array-operations-enablement-language-group
     source: |
       (defclass aoe-report () ((suite-name :initform nil) (passed :initform 0)))

@@ -2416,7 +2416,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
 		if (usesArrays) {
 			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(
-					JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass));
+					JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass, usesFloatArray));
 			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
 					thisClass, renderGuard));
 			// The packed float-array helpers (_fv*) dispatch on instanceof double[] and
@@ -2460,14 +2460,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		JvmRuntimeBuilder.@Nullable PackedPrint packedPrint = null;
 		if (usesFloatArray) {
 			packedPrint = new JvmRuntimeBuilder.PackedPrint(cp.addClass(cp.addUtf8("[D")),
-					cp.addClass(cp.addUtf8("[F")),
+					cp.addClass(cp.addUtf8("[F")), cp.addClass(cp.addUtf8("[S")),
 					cp.addMethodref(thisClass,
 							cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_PRINT),
 									cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_DESC))),
 					cp.addMethodref(stringClass,
 							cp.addNameAndType(cp.addUtf8("replaceFirst"),
 									cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"))),
-					cp.addString("^#\\d*A?\\("), cp.addString("#d("), cp.addString("#f("));
+					cp.addString("^#\\d*A?\\("), cp.addString("#d("), cp.addString("#f("), cp.addString("#bf16("));
 		}
 		// The packed integer-vector print branch: a long[] renders as a plain #(...)
 		// vector (CL prints specialized vectors this way) by converting to a general
@@ -4600,7 +4600,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					String name = ts.name();
 					int colon = name.lastIndexOf(':');
 					String local = colon >= 0 ? name.substring(colon + 1) : name;
-					return local.equals(LispNames.DOUBLE_FLOAT) || local.equals(LispNames.SINGLE_FLOAT);
+					return local.equals(LispNames.DOUBLE_FLOAT) || local.equals(LispNames.SINGLE_FLOAT)
+							|| local.equals(LispNames.BFLOAT16);
 				}
 			}
 		}

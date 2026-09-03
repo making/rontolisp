@@ -4,6 +4,7 @@ import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispIntVector;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispVal;
 
@@ -40,9 +41,14 @@ final class LiteralArrays {
 	static LispVal materialize(LispVal datum) {
 		return switch (datum) {
 			case LispArray a -> freshArray(a);
-			case LispSingleFloatArray fa -> new LispSingleFloatArray(fa.data().clone(), fa.dims().clone());
-			case LispDoubleFloatArray fa -> new LispDoubleFloatArray(fa.data().clone(), fa.dims().clone());
-			case LispFloatArray fa -> fa;
+			// Exhaustive over the sealed widths: a catch-all arm here handed the reader's
+			// own datum out for a width it did not name, which is exactly the sharing
+			// this class exists to stop.
+			case LispFloatArray packed -> switch (packed) {
+				case LispSingleFloatArray fa -> new LispSingleFloatArray(fa.data().clone(), fa.dims().clone());
+				case LispDoubleFloatArray fa -> new LispDoubleFloatArray(fa.data().clone(), fa.dims().clone());
+				case LispBFloat16Array fa -> new LispBFloat16Array(fa.data().clone(), fa.dims().clone());
+			};
 			case LispIntVector iv -> new LispIntVector(iv.width(), iv.data().clone());
 			default -> datum;
 		};

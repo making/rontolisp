@@ -1250,6 +1250,16 @@ ArrayList` and both wasm backends a bare `cast failure`. Two of those are a
 HOST-level crash on ordinary user input, which is the same missing-diagnostic
 gap `.todo/627` closed for `adjust-array` on a packed argument.
 
+**Unpinned edge, measured 2026-09-03 (`.todo/485`) at all three packed float widths
+and at `(unsigned-byte 8)`: the VALUE a store THROUGH a view answers differs.** The
+interpreter answers the value as given (`(setf (aref view 0) 0.1)` is `0.1` over a
+`single-float` target, `300` over an `(unsigned-byte 8)` one), the JVM the value as
+stored (`0.10000000149011612`, `44`) -- which is what a store straight into the target
+answers on BOTH backends. The element that lands in the target is the same everywhere;
+only the store form's own value diverges. Keep it out of `ci-spec` and out of the
+parity tests until someone needs it aligned; the JVM's is the answer a direct store
+gives, so aligning means changing the interpreter's `LispArray` displaced store.
+
 The todo offered two shapes -- refuse clearly, or support -- and told the worker
 to price the support arm first, because **`emitResolveDataAndIndex` was inline
 at every `aref`/`aset` site on wasm**, so a third arm there would be a per-site

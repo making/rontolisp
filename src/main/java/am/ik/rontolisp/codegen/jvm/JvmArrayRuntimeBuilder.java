@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+import org.jspecify.annotations.Nullable;
+
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -307,7 +309,7 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
-			ClassConstant selfClass) {
+			ClassConstant selfClass, boolean usesFloatArray) {
 		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		MethodrefConstant alInit = cp.addMethodref(arrayListClass,
@@ -349,6 +351,19 @@ final class JvmArrayRuntimeBuilder {
 		// on a string view's target.
 		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
 		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
+		ClassConstant shortArrayClass = cp.addClass(cp.addUtf8("[S"));
+		// The bfloat16 conversion pair the _fv* tier emits (JvmFloatArrayRuntimeBuilder),
+		// referenced only when that tier is emitted: a short[] cannot exist otherwise,
+		// and the compiler refuses a class that calls an own method it does not declare.
+		// The short[] arms of the displaced-view helpers are emitted under the same gate.
+		MethodrefConstant bf16Value = usesFloatArray
+				? cp.addMethodref(selfClass, cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE),
+						cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE_DESC)))
+				: null;
+		MethodrefConstant bf16Bits = usesFloatArray
+				? cp.addMethodref(selfClass, cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_BITS),
+						cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_BITS_DESC)))
+				: null;
 		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
 		MethodrefConstant numberLongValue = cp.addMethodref(numberClass,
 				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
@@ -964,8 +979,8 @@ final class JvmArrayRuntimeBuilder {
 		rg.iconst(3);
 		rg.aaload();
 		rg.astore(7);
-		emitPackedTargetGet(rg, 7, 1, longArrayClass, doubleArrayClass, floatArrayClass, longValueOf, doubleBoxValueOf,
-				rgRealString);
+		emitPackedTargetGet(rg, 7, 1, longArrayClass, doubleArrayClass, floatArrayClass, shortArrayClass, bf16Value,
+				longValueOf, doubleBoxValueOf, rgRealString);
 		// The string-view arm: header[3] is the immutable runtime string this view
 		// aliases and idx is the 1-based character index into it. Reads by CODE POINT
 		// through _cpoff (the content lives in [1, length-1), inside the framing
@@ -1056,8 +1071,8 @@ final class JvmArrayRuntimeBuilder {
 		rs.aaload();
 		rs.astore(7);
 		emitPackedTargetSet(rs, cp, 7, 1, 2, 8, 9, 10, 11, 12, 14, longArrayClass, doubleArrayClass, floatArrayClass,
-				numberClass, numberLongValue, numberDoubleValue, longValueOf, doubleBoxValueOf, dblCoerce, rtExClass,
-				rtExInit, rsRealString);
+				shortArrayClass, bf16Value, bf16Bits, numberClass, numberLongValue, numberDoubleValue, longValueOf,
+				doubleBoxValueOf, dblCoerce, rtExClass, rtExInit, rsRealString);
 		// The string-view arm: the view aliases an IMMUTABLE runtime string, which no
 		// write can reach. Promote it once -- header[3] becomes a mutable character
 		// vector holding the same characters -- and store into that; every later access
@@ -1266,6 +1281,7 @@ final class JvmArrayRuntimeBuilder {
 		int mdIv = md.label();
 		int mdDv = md.label();
 		int mdFv = md.label();
+		int mdBv = md.label();
 		md.iconst(5);
 		md.istore(mdHeaderSize);
 		md.aload(mdTarget);
@@ -1285,6 +1301,9 @@ final class JvmArrayRuntimeBuilder {
 		md.aload(mdTarget);
 		md.instanceOf(floatArrayClass);
 		md.branch(Opcode.IFNE, mdFv);
+		md.aload(mdTarget);
+		md.instanceOf(shortArrayClass);
+		md.branch(Opcode.IFNE, mdBv);
 		emitLoadHeader(md, arrayListClass, objectArrayClass, alGet, mdTarget);
 		md.astore(mdTargetHeader);
 		emitDimsProduct(md, longClass, objectArrayClass, longIntValue, mdTargetHeader, mdProduct, mdM);
@@ -1331,6 +1350,19 @@ final class JvmArrayRuntimeBuilder {
 		md.f2i();
 		md.iconst(1);
 		md.op(Opcode.IADD);
+		md.op(Opcode.ISUB);
+		md.istore(mdProduct);
+		md.branch(Opcode.GOTO, mdHaveTotal);
+		// A bfloat16 target: length - (1 + 2 * rank), the two-slot header
+		// (JvmPackedFloatWidth.BFLOAT16 owns the offset).
+		md.bind(mdBv);
+		md.aload(mdTarget);
+		md.checkcast(shortArrayClass);
+		md.arraylength();
+		md.aload(mdTarget);
+		md.checkcast(shortArrayClass);
+		JvmPackedFloatWidth.BFLOAT16.loadRank(md);
+		JvmPackedFloatWidth.BFLOAT16.emitDataOffset(md);
 		md.op(Opcode.ISUB);
 		md.istore(mdProduct);
 		md.branch(Opcode.GOTO, mdHaveTotal);
@@ -1492,8 +1524,8 @@ final class JvmArrayRuntimeBuilder {
 		// view answered it while it was a view, and an array's element type is fixed
 		// when it is made.
 		int unNotPacked = un.label();
-		emitPackedElementTypeInto(un, cp, 9, 8, longArrayClass, doubleArrayClass, floatArrayClass, longValueOf,
-				objectClass, unNotPacked, unWalkDone);
+		emitPackedElementTypeInto(un, cp, 9, 8, longArrayClass, doubleArrayClass, floatArrayClass, shortArrayClass,
+				longValueOf, objectClass, unNotPacked, unWalkDone);
 		un.bind(unNotPacked);
 		// A String chain end remembers nothing here: character-ness is the length-7
 		// header's own answer (7 -> 4 below), not a remembered designator.
@@ -1868,8 +1900,8 @@ final class JvmArrayRuntimeBuilder {
 		aet.bind(aetTop);
 		// The hop may land on a PACKED target, whose element type is its representation
 		// rather than a remembered label -- the same answer read a different way.
-		emitPackedElementTypeInto(aet, cp, 0, 2, longArrayClass, doubleArrayClass, floatArrayClass, longValueOf,
-				objectClass, aetNotPacked, aetPackedDone);
+		emitPackedElementTypeInto(aet, cp, 0, 2, longArrayClass, doubleArrayClass, floatArrayClass, shortArrayClass,
+				longValueOf, objectClass, aetNotPacked, aetPackedDone);
 		aet.bind(aetPackedDone);
 		aet.aload(2);
 		aet.areturn();
@@ -2550,9 +2582,11 @@ final class JvmArrayRuntimeBuilder {
 	// packed target and the un-displaced array it becomes give the same answer.
 	private static void emitPackedElementTypeInto(JvmAsm a, ConstantPool cp, int targetSlot, int etSlot,
 			ClassConstant longArrayClass, ClassConstant doubleArrayClass, ClassConstant floatArrayClass,
-			MethodrefConstant longValueOf, ClassConstant objectClass, int notPacked, int done) {
+			ClassConstant shortArrayClass, MethodrefConstant longValueOf, ClassConstant objectClass, int notPacked,
+			int done) {
 		int tryDouble = a.label();
 		int tryFloat = a.label();
+		int tryShort = a.label();
 		a.aload(targetSlot);
 		a.instanceOf(longArrayClass);
 		a.branch(Opcode.IFEQ, tryDouble);
@@ -2588,8 +2622,15 @@ final class JvmArrayRuntimeBuilder {
 		a.bind(tryFloat);
 		a.aload(targetSlot);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
+		a.branch(Opcode.IFEQ, tryShort);
 		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.SINGLE_FLOAT));
+		a.astore(etSlot);
+		a.branch(Opcode.GOTO, done);
+		a.bind(tryShort);
+		a.aload(targetSlot);
+		a.instanceOf(shortArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.BFLOAT16));
 		a.astore(etSlot);
 		a.branch(Opcode.GOTO, done);
 	}
@@ -2599,12 +2640,15 @@ final class JvmArrayRuntimeBuilder {
 	// when it is not (a string view's target). The index arithmetic is the packed
 	// representation's own: an integer vector's element `flat` lives at
 	// {@code l[1 + flat]}, which the 1-based index already IS, and a float array's at
-	// {@code d[1 + rank + flat]} == {@code d[rank + idx]}.
+	// {@code d[1 + rank + flat]} == {@code d[rank + idx]} (and, at bfloat16, at
+	// {@code s[1 + 2 * rank + flat]} == {@code s[2 * rank + idx]}).
 	private static void emitPackedTargetGet(JvmAsm a, int targetSlot, int idxSlot, ClassConstant longArrayClass,
-			ClassConstant doubleArrayClass, ClassConstant floatArrayClass, MethodrefConstant longValueOf,
-			MethodrefConstant doubleBoxValueOf, int notPacked) {
+			ClassConstant doubleArrayClass, ClassConstant floatArrayClass, ClassConstant shortArrayClass,
+			@Nullable MethodrefConstant bf16Value, MethodrefConstant longValueOf, MethodrefConstant doubleBoxValueOf,
+			int notPacked) {
 		int tryDouble = a.label();
 		int tryFloat = a.label();
+		int tryShort = a.label();
 		a.aload(targetSlot);
 		a.instanceOf(longArrayClass);
 		a.branch(Opcode.IFEQ, tryDouble);
@@ -2632,7 +2676,7 @@ final class JvmArrayRuntimeBuilder {
 		a.bind(tryFloat);
 		a.aload(targetSlot);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
+		a.branch(Opcode.IFEQ, tryShort);
 		a.aload(targetSlot);
 		a.checkcast(floatArrayClass);
 		a.dup();
@@ -2643,6 +2687,26 @@ final class JvmArrayRuntimeBuilder {
 		a.op(Opcode.IADD);
 		a.faload();
 		a.f2d();
+		a.invokestatic(doubleBoxValueOf);
+		a.areturn();
+		a.bind(tryShort);
+		if (bf16Value == null) {
+			a.branch(Opcode.GOTO, notPacked);
+			return;
+		}
+		a.aload(targetSlot);
+		a.instanceOf(shortArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(targetSlot);
+		a.checkcast(shortArrayClass);
+		a.dup();
+		JvmPackedFloatWidth.BFLOAT16.loadRank(a);
+		JvmPackedFloatWidth.BFLOAT16.emitDataOffset(a);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.iload(idxSlot);
+		a.op(Opcode.IADD);
+		JvmPackedFloatWidth.BFLOAT16.loadElem(a, bf16Value);
 		a.invokestatic(doubleBoxValueOf);
 		a.areturn();
 	}
@@ -2656,11 +2720,13 @@ final class JvmArrayRuntimeBuilder {
 	private static void emitPackedTargetSet(JvmAsm a, ConstantPool cp, int targetSlot, int idxSlot, int valSlot,
 			int ivArrSlot, int dvArrSlot, int fvArrSlot, int ixSlot, int vSlot, int dvalSlot,
 			ClassConstant longArrayClass, ClassConstant doubleArrayClass, ClassConstant floatArrayClass,
+			ClassConstant shortArrayClass, @Nullable MethodrefConstant bf16Value, @Nullable MethodrefConstant bf16Bits,
 			ClassConstant numberClass, MethodrefConstant numberLongValue, MethodrefConstant numberDoubleValue,
 			MethodrefConstant longValueOf, MethodrefConstant doubleBoxValueOf, MethodrefConstant dblCoerce,
 			ClassConstant rtExClass, MethodrefConstant rtExInit, int notPacked) {
 		int tryDouble = a.label();
 		int tryFloat = a.label();
+		int tryShort = a.label();
 		int intOk = a.label();
 		a.aload(targetSlot);
 		a.instanceOf(longArrayClass);
@@ -2727,7 +2793,7 @@ final class JvmArrayRuntimeBuilder {
 		a.bind(tryFloat);
 		a.aload(targetSlot);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
+		a.branch(Opcode.IFEQ, tryShort);
 		a.aload(targetSlot);
 		a.checkcast(floatArrayClass);
 		a.astore(fvArrSlot);
@@ -2754,6 +2820,41 @@ final class JvmArrayRuntimeBuilder {
 		a.iload(ixSlot);
 		a.faload();
 		a.f2d();
+		a.invokestatic(doubleBoxValueOf);
+		a.areturn();
+		// A bfloat16 target: the slot is fvArrSlot again (a slot's type is per path),
+		// the index 2 * rank + idx, the store and the read-back through the pair.
+		a.bind(tryShort);
+		if (bf16Value == null || bf16Bits == null) {
+			a.branch(Opcode.GOTO, notPacked);
+			return;
+		}
+		a.aload(targetSlot);
+		a.instanceOf(shortArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(targetSlot);
+		a.checkcast(shortArrayClass);
+		a.astore(fvArrSlot);
+		a.aload(fvArrSlot);
+		JvmPackedFloatWidth.BFLOAT16.loadRank(a);
+		JvmPackedFloatWidth.BFLOAT16.emitDataOffset(a);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.iload(idxSlot);
+		a.op(Opcode.IADD);
+		a.istore(ixSlot);
+		a.aload(valSlot);
+		a.invokestatic(dblCoerce);
+		a.checkcast(numberClass);
+		a.invokevirtual(numberDoubleValue);
+		a.dstore(dvalSlot);
+		a.aload(fvArrSlot);
+		a.iload(ixSlot);
+		a.dload(dvalSlot);
+		JvmPackedFloatWidth.BFLOAT16.storeElem(a, bf16Bits);
+		a.aload(fvArrSlot);
+		a.iload(ixSlot);
+		JvmPackedFloatWidth.BFLOAT16.loadElem(a, bf16Value);
 		a.invokestatic(doubleBoxValueOf);
 		a.areturn();
 	}

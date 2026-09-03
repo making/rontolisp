@@ -78,6 +78,7 @@ final class JvmSimpleArrayPCompiler {
 		if (ctx.usesFloatArray) {
 			simpleClasses.add("[D");
 			simpleClasses.add("[F");
+			simpleClasses.add("[S");
 		}
 		for (String cls : simpleClasses) {
 			ctx.emit(Opcode.DUP);

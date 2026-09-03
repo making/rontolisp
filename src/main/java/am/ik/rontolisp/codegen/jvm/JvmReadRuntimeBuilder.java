@@ -126,6 +126,10 @@ final class JvmReadRuntimeBuilder {
 
 	private final MethodrefConstant readPacked;
 
+	// The _fv* tier's bfloat16 narrowing (JvmFloatArrayRuntimeBuilder); the reader
+	// forces that tier on (usesRead -> usesFloatArray), so it is always emitted here.
+	private final MethodrefConstant bf16Bits;
+
 	private final MethodrefConstant readStruct;
 
 	private final MethodrefConstant rdLen;
@@ -297,6 +301,7 @@ final class JvmReadRuntimeBuilder {
 		this.readBits = methodref("_readBits", "()Ljava/lang/Object;");
 		this.readArrayN = methodref("_readArrayN", "(I)Ljava/lang/Object;");
 		this.readPacked = methodref("_readPacked", "(I)Ljava/lang/Object;");
+		this.bf16Bits = methodref(JvmFloatArrayRuntimeBuilder.BF16_BITS, JvmFloatArrayRuntimeBuilder.BF16_BITS_DESC);
 		this.readStruct = methodref("_readStruct", "()Ljava/lang/Object;");
 		this.rdLen = methodref("_rdLen", "(Ljava/lang/Object;Ljava/lang/String;)I");
 		this.rdConsp = methodref("_rdConsp", "(Ljava/lang/Object;)Z");
@@ -1430,6 +1435,9 @@ final class JvmReadRuntimeBuilder {
 		int notBits = a.label();
 		int notSingle = a.label();
 		int singleOpen = a.label();
+		int notBf16 = a.label();
+		int bf16Open = a.label();
+		int bf16F = a.label();
 		int notDouble = a.label();
 		int doubleOpen = a.label();
 		int notDigit = a.label();
@@ -1546,6 +1554,41 @@ final class JvmReadRuntimeBuilder {
 		a.invokestatic(this.readBits);
 		a.areturn();
 		a.bind(notBits);
+		// "#bf16(" (any case) -> packed bfloat16 array. Tried BEFORE the "#b" binary
+		// radix branch below (the frontend lexer orders them the same way): 'f' is not
+		// a binary digit, so the wrong order would fail rather than mis-read, but only
+		// the order keeps it so.
+		a.iload(0);
+		a.iconst('b');
+		a.branch(Opcode.IF_ICMPEQ, bf16Open);
+		a.iload(0);
+		a.iconst('B');
+		a.branch(Opcode.IF_ICMPNE, notBf16);
+		a.bind(bf16Open);
+		branchIfPosPlusGeLen(a, 5, notBf16);
+		charAtPosPlus(a, 2);
+		a.iconst('F');
+		a.branch(Opcode.IF_ICMPEQ, bf16F);
+		charAtPosPlus(a, 2);
+		a.iconst('f');
+		a.branch(Opcode.IF_ICMPNE, notBf16);
+		a.bind(bf16F);
+		charAtPosPlus(a, 3);
+		a.iconst('1');
+		a.branch(Opcode.IF_ICMPNE, notBf16);
+		charAtPosPlus(a, 4);
+		a.iconst('6');
+		a.branch(Opcode.IF_ICMPNE, notBf16);
+		charAtPosPlus(a, 5);
+		a.iconst('(');
+		a.branch(Opcode.IF_ICMPNE, notBf16);
+		for (int skip = 0; skip < 6; skip++) {
+			advance(a);
+		}
+		a.iconst(2);
+		a.invokestatic(this.readPacked);
+		a.areturn();
+		a.bind(notBf16);
 		// "#f(" / "#F(" -> packed single-float array
 		a.iload(0);
 		a.iconst('f');
@@ -2111,14 +2154,22 @@ final class JvmReadRuntimeBuilder {
 		return a.finish();
 	}
 
-	// _readPacked(single): cursor just past "#f(" / "#d("; rank is inferred from the
-	// nesting depth, leaves are coerced to double (narrowed for #f), and the value is
-	// the packed float[]/double[] with the [rank, dims..., elements...] header.
+	// _readPacked(width): cursor just past "#d(" (width 0) / "#f(" (1) / "#bf16(" (2);
+	// rank is inferred from the nesting depth, leaves are coerced to double (narrowed to
+	// the width), and the value is the packed double[]/float[]/short[] with the header
+	// JvmPackedFloatWidth lays out for that width. Locals: 0=width, 1=rows, 2=marker,
+	// 3=rank, 4=dims, 5=out, 6=n, 7=k, 8=arr, 9=base, 10=dim.
 	private List<Integer> buildReadPacked() {
 		JvmAsm a = new JvmAsm();
 		int dlab = a.label();
+		int blab = a.label();
 		int lab = a.label();
 		int dbl = a.label();
+		int bfl = a.label();
+		int bloop1 = a.label();
+		int bdone1 = a.label();
+		int bloop2 = a.label();
+		int bdone2 = a.label();
 		int floop1 = a.label();
 		int fdone1 = a.label();
 		int floop2 = a.label();
@@ -2129,7 +2180,14 @@ final class JvmReadRuntimeBuilder {
 		int ddone2 = a.label();
 		a.iload(0);
 		a.branch(Opcode.IFEQ, dlab);
+		a.iload(0);
+		a.iconst(2);
+		a.branch(Opcode.IF_ICMPEQ, blab);
 		ldc(a, "#f");
+		a.astore(2);
+		a.branch(Opcode.GOTO, lab);
+		a.bind(blab);
+		ldc(a, "#bf16");
 		a.astore(2);
 		a.branch(Opcode.GOTO, lab);
 		a.bind(dlab);
@@ -2162,9 +2220,12 @@ final class JvmReadRuntimeBuilder {
 		a.iconst(1);
 		a.iload(3);
 		a.op(Opcode.IADD);
-		a.istore(9); // base = 1 + rank
+		a.istore(9); // base = 1 + rank (the two CL widths; bfloat16 recomputes it)
 		a.iload(0);
 		a.branch(Opcode.IFEQ, dbl);
+		a.iload(0);
+		a.iconst(2);
+		a.branch(Opcode.IF_ICMPEQ, bfl);
 		// single: float[base + n]
 		a.iload(9);
 		a.iload(6);
@@ -2215,6 +2276,57 @@ final class JvmReadRuntimeBuilder {
 		a.iinc(7, 1);
 		a.branch(Opcode.GOTO, floop2);
 		a.bind(fdone2);
+		a.aload(8);
+		a.areturn();
+		a.bind(bfl);
+		// bfloat16: short[base + n] with base = 1 + 2 * rank; every header word and
+		// element goes through JvmPackedFloatWidth.BFLOAT16 / _bf16Bits.
+		a.iload(3);
+		JvmPackedFloatWidth.BFLOAT16.emitDataOffset(a);
+		a.istore(9);
+		a.iload(9);
+		a.iload(6);
+		a.op(Opcode.IADD);
+		a.newarrayShort();
+		a.astore(8);
+		a.aload(8);
+		a.iload(3);
+		JvmPackedFloatWidth.BFLOAT16.storeRank(a);
+		a.iconst(0);
+		a.istore(7);
+		a.bind(bloop1);
+		a.iload(7);
+		a.iload(3);
+		a.branch(Opcode.IF_ICMPGE, bdone1);
+		a.aload(4);
+		a.iload(7);
+		a.aaload();
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longLongValue);
+		a.l2i();
+		a.istore(10);
+		JvmPackedFloatWidth.BFLOAT16.storeDim(a, 8, 7, 10);
+		a.iinc(7, 1);
+		a.branch(Opcode.GOTO, bloop1);
+		a.bind(bdone1);
+		a.iconst(0);
+		a.istore(7);
+		a.bind(bloop2);
+		a.iload(7);
+		a.iload(6);
+		a.branch(Opcode.IF_ICMPGE, bdone2);
+		a.aload(8);
+		a.iload(9);
+		a.iload(7);
+		a.op(Opcode.IADD);
+		a.aload(5);
+		a.iload(7);
+		a.invokevirtual(this.alGet);
+		a.invokestatic(this.rdF);
+		JvmPackedFloatWidth.BFLOAT16.storeElem(a, this.bf16Bits);
+		a.iinc(7, 1);
+		a.branch(Opcode.GOTO, bloop2);
+		a.bind(bdone2);
 		a.aload(8);
 		a.areturn();
 		a.bind(dbl);
