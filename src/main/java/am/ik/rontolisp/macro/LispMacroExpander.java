@@ -26838,6 +26838,7 @@ public final class LispMacroExpander {
 				case "CHARACTER" -> new LispSymbol(LispNames.CHARACTER_TYPE);
 				case LispNames.SINGLE_FLOAT -> new LispSymbol(LispNames.SINGLE_FLOAT);
 				case LispNames.DOUBLE_FLOAT -> new LispSymbol(LispNames.DOUBLE_FLOAT);
+				case LispNames.BFLOAT16 -> new LispSymbol(LispNames.BFLOAT16);
 				default -> LispTrue.INSTANCE;
 			};
 		}
@@ -32149,6 +32150,7 @@ public final class LispMacroExpander {
 			                                 ((string= %tpc-en "STANDARD-CHAR") 'character)
 			                                 ((string= %tpc-en "SINGLE-FLOAT") 'single-float)
 			                                 ((string= %tpc-en "DOUBLE-FLOAT") 'double-float)
+			                                 ((string= %tpc-en "BFLOAT16") 'bfloat16)
 			                                 (t t)))))
 			            (%tpc-dm (if (or %tpc-sv (string= %tpc-n "VECTOR"))
 			                         (list (if %tpc-sv
@@ -32443,7 +32445,7 @@ public final class LispMacroExpander {
 	 */
 	private static String canonicalSubtypeName(String plain) {
 		return switch (plain) {
-			case "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> "FLOAT";
+			case "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "BFLOAT16" -> "FLOAT";
 			case "BASE-CHAR", "STANDARD-CHAR", "EXTENDED-CHAR" -> "CHARACTER";
 			case "BASE-STRING" -> "STRING";
 			case "SIMPLE-BASE-STRING" -> "SIMPLE-STRING";

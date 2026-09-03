@@ -7797,7 +7797,7 @@ public final class LispEvaluator {
 				// Vector API natives. mean/norm keep their scalar bodies and pick the
 				// natives up through the global function namespace (Lisp-2).
 				if (this.simd) {
-					VecSimd.install(this.globalEnv, this.parallel);
+					VecSimd.install(this.globalEnv, this, this.parallel);
 				}
 				// Opt-in --blas: vec:matvec / vec:matvec-into are a GEMV, so they are
 				// intercepted here on TOP of the lane kernel exactly as linalg:dot is on

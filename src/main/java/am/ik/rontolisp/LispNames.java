@@ -4225,6 +4225,23 @@ public final class LispNames {
 	 */
 	public static final String SINGLE_FLOAT = "SINGLE-FLOAT";
 
+	/**
+	 * The {@code bfloat16} type specifier symbol. As the {@code :element-type} of
+	 * {@code make-array} (and the element type of a {@code #bf16(...)} literal) it
+	 * selects the packed {@link am.ik.rontolisp.LispBFloat16Array} representation: the
+	 * TOP 16 BITS of an f32, so widening to a float is exact and narrowing rounds to
+	 * nearest even. Scalars still read/write as {@code double}, like the two CL widths.
+	 *
+	 * <p>
+	 * This is a rontolisp EXTENSION, not a Common Lisp type: it belongs to the
+	 * {@code rontolisp} package and must never be added to {@code CL_SYMBOLS}. It is a
+	 * fourth subtype of {@code float}, disjoint from {@code single-float},
+	 * {@code double-float} and {@code short-float}. Distinct from
+	 * {@link #BFLOAT16_KEYWORD}, which names a bit-pattern FORMAT for the bulk
+	 * widen/narrow primitives rather than an array element type.
+	 */
+	public static final String BFLOAT16 = "BFLOAT16";
+
 	/** The {@code read-byte} built-in function (binary streams only). */
 	public static final String READ_BYTE = "READ-BYTE";
 

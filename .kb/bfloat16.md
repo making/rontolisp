@@ -52,80 +52,78 @@ on the other neighbour than one direct rounding would choose. Deliberate: the pa
 stores the top half of an f32, and the scalar pair must answer what storing into it and
 reading it back would answer.
 
-**NaN does not go through the f32 at all.** Measured 2026-09-03: `(float)(double)` quiets
-a signalling NaN, so 126 of the 65536 patterns (the sNaN range, `0x7f81..0x7fbf` and its
-negatives) lost their payload and broke the round trip. WASM is worse than merely quiet --
+**NaN does not go through the f32 at all.** Measured 2026-09-03: a float/double conversion
+quiets a signalling NaN in EITHER direction, so 126 of the 65536 patterns (the sNaN range,
+`0x7f81..0x7fbf` and its negatives) lost their payload and broke the round trip. WASM is worse than merely quiet --
 `f32.demote_f64` is free by specification to invent any NaN payload it likes, so the same
 program could answer differently on two engines. Doing the bits explicitly on both sides
 (`i64.reinterpret_f64` / `f64.reinterpret_i64`, `Double.doubleToRawLongBits` /
 `Double.longBitsToDouble`) is what makes the exactness claim true rather than hardware-
-dependent. A `double` holds an sNaN unharmed as long as no arithmetic touches it, which
-was measured on this JDK before the design was fixed.
+dependent. A `double` holds an sNaN unharmed as long as no arithmetic and no width
+conversion touches it, which was measured on this JDK before the design was fixed.
 
 ## One rounding, not two
 
 `.todo/671`'s bulk pair (`rontolisp:widen-float-bits` / `narrow-float-bits`, a
 `(unsigned-byte 16)` vector of patterns against an existing packed float array) shares
-this rounding rather than carrying its own: `eval/FloatBitsWidening` calls
-`BFloat16.bits`, and `codegen/jvm/JvmFloat16RuntimeBuilder` emits `bits(float)`
-instruction for instruction. It landed with a private copy of the same trick on each side,
-which is two more things to keep right and would have put a checkpoint's bulk load a bit
-away from what the program computes element by element. `bits(float)` is the arm that
-dedup wanted: no `double` in the way, so a NaN's payload is carried rather than
-force-quieted. Pinned on both backends by
-`LispEvaluatorTest#bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair` and
-`JvmLispCompilerTest#compileAndRunBfloat16BulkAgreesWithTheScalarPair`.
+this rounding rather than carrying its own, but -- unlike the scalar pair -- it reaches it
+DIFFERENTLY depending on the packed array's width, because `BFloat16`'s API only takes a
+`double`.
 
-**The bulk pair's one ceiling, measured 2026-09-03.** A bulk WIDEN into a packed
-single-float array goes through a `double` on both backends -- the interpreter builds the
-value with `BFloat16.value` and casts, the JVM emitter decodes with `f2d` and stores with
-`d2f` -- so a signalling NaN is quieted on the way in, and a widen-then-narrow round trip
-is the identity on 65,410 patterns and maps the other 126 to their quiet counterparts.
-Both backends agree exactly, which is why the tests assert that shape rather than the
-plain identity. Closing it means giving the widen an f32 path that never touches a
-`double` (`Float.intBitsToFloat(bits << 16)` straight into the `float[]`, and the JVM
-emitter's shared `storeElemShared` split in two); that belongs to `.todo/671`'s lane, not
-to 487 step 1. The SCALAR pair has no such ceiling -- it is exact on all 65536.
+- **A `double-float` array** calls `BFloat16.value`/`BFloat16.bits` directly: a genuine
+  double, so the class's own double-domain NaN handling is exact.
+- **A `single-float` array never calls `BFloat16` at all.** `eval/FloatBitsWidening` and
+  each compile backend's emitter carry their OWN copy of the identical bit trick,
+  operating on the float's raw bits with no `double` ever created --
+  `eval/FloatBitsWidening#bfloat16BitsOfFloat` (narrow) and a plain
+  `Float.intBitsToFloat(bits << 16)` (widen, both directions, all three backends).
 
-A `rontolisp:` built-in must be registered in `Environment` under its QUALIFIED name
-(`PackageRegistry.qualify`), and a `BuiltinFunctionWrappers` entry for one must spell the
-qualified name too. The resolver hands the evaluator `RONTOLISP:...`, so an unqualified
-binding is simply never found -- 671's four built-ins were all unreachable this way until
-2026-09-03. `ShadowedBuiltinsTest` catches the wrapper half; nothing catches the
-`Environment` half but a test that calls the operator.
+That is a deliberate THIRD copy of the rounding (scalar `BFloat16`, this file's
+double-array arm, this file's float-array arm), not a violation of "one rounding" --
+calling `BFloat16.bits(double)` from a `float` source would auto-widen the argument
+first, and an f32-&gt;f64 widen (`f2d`) quiets a signalling NaN exactly as often as a
+widen-then-narrow roundtrip does (126 of 65536, measured exhaustively, BOTH directions,
+2026-09-03): there is no safe direction through `double` for a value that might carry
+NaN, so the float-array arm has to avoid the type entirely rather than pick a "safer"
+conversion. All three copies of the NaN branch (`.todo/487`'s `BFloat16.bits`, this
+file's, the compile backends') use the SAME shape --
+`payload | ((payload - 1) >>> 31)`, keeping a nonzero payload untouched and forcing only
+a zero one nonzero (so it cannot read back as infinity) -- adapted to each format's
+mantissa width. A plain `bits | <quiet bit>` (an earlier version of this file's own
+narrow, and this file's WASM emitter, briefly) forces the quiet bit unconditionally,
+which quiets a signalling NaN exactly as often as the double detour does: a different
+way to lose the same 126 patterns, not a fix.
 
-## Refusing a width: which kind, and how you can tell
+**wasm-GC's inline emitter never had either bug**, and is worth naming as why: its
+bf16 widen was always a bare `i32.shl` + `f32.reinterpret_i32`, no float/double
+conversion of any kind, because that is simply the most direct way to write "shift the
+bits" in a stack machine with no implicit widening. The naive-but-direct implementation
+was the correct one; the JVM and interpreter arms went through more machinery (a shared
+`double` intermediate, a borrowed-looking one-line formula) and both engineering
+shortcuts happened to be exactly where the 126 patterns lived.
 
-Three behaviours, and the last two are worth telling apart deliberately because prose
-cannot do it.
+**The bulk pair is therefore exact on all 65536 patterns, on all three backends**,
+pinned by `LispEvaluatorTest#bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair` and
+`JvmLispCompilerTest#compileAndRunBfloat16BulkAgreesWithTheScalarPair` (both assert the
+plain identity, not a "126 quieted" shape -- an earlier version of both tests asserted
+the ceiling as correct behavior; fixed 2026-09-03 once the ceiling itself was closed).
 
-**A silent DECLINE returns `null` (or `false`) and the rung below answers.** `VecSimd`,
-`LinalgSimd`, `LinalgGpu`, `LinalgBlas`: no lane, device or CBLAS kernel reads this width,
-so the scalar defun runs and the ANSWER is identical, only slower. Nothing is signalled
-because nothing is wrong.
+The measurement that settles which step loses a payload, since it is easy to guess wrong
+(2026-09-03, and guessed wrong twice before it was taken): **BOTH float/double conversions
+quiet a signalling NaN.** Each of the 126 signalling patterns loses its payload through
+`f2d` AND through `d2f` -- it is the conversion, not the array store, and not one
+direction more than the other. `Float.intBitsToFloat` is bit-preserving for all 65536
+patterns, and a `double` built with `Double.longBitsToDouble` holds a signalling NaN
+unharmed through an array, a box and a call as long as no arithmetic and no width
+conversion touches it. So the rule is simply: at this width, a NaN must never cross a
+`double` in either direction.
 
-**A TEMPORARY refusal is a `LispEvalException`, raised at RUN time** by the primitive that
-has not been extended yet, and its message says "does not yet". `FloatBitsWidening`'s two
-arms and `linalg.lisp`'s `%la-make` / `%la-etype` guards are these.
-
-**A PERMANENT refusal is a `LispCompileException`, raised on the COMPILE path**, carrying
-a source position and naming both the width and the backend -- "bfloat16 arrays are
-supported on the interpreter and the JVM only". The backends that will never carry the
-width refuse this way (`.todo/486`).
-
-**The phase and the exception type carry the distinction; the prose only decorates it.**
-Told apart by the word "yet" alone, the difference is invisible to every test and is the
-first thing an edit loses. It cannot be delegated to a `.todo/NNN` reference in the
-message either -- a source comment or message may not carry the working item's number --
-so the type has to be what says it. Two tests hold the line: one per backend on the exact
-refusal text, and one -- the load-bearing one -- asserting that every message containing
-"does not yet" comes out as a `LispEvalException` rather than a compile error, so a
-temporary refusal written in the permanent form goes red.
-
-The refusals READ a width, which is why `.todo/486` also introduces the width designator
-`.todo/687` needs: a refusal written against a boolean is one a fourth width falls
-silently past. An integer code with a `default:` arm is the trap -- it admits a third
-value while re-importing exactly the silence being removed.
+**Two lanes work this file at once.** The scalar pair, the bulk pair and the packed array
+land from different items, and the two times this area broke on 2026-09-03 it presented
+the same way both times -- as a change to how a NaN is handled, once with no behavioural
+difference (withdrawn) and once with a real one (the new side was right). A `git merge`
+has nothing to say about it: both sides were correct alone. **If you change NaN handling
+anywhere in this file's subject, tell the other lane before you push.**
 
 ## Printing
 

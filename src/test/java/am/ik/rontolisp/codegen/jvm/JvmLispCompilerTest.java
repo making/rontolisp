@@ -9210,11 +9210,16 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunBfloat16BulkAgreesWithTheScalarPair() throws Exception {
-		// .todo/671's bulk pair and .todo/487's scalar pair are ONE rounding on this
-		// backend too (the emitted narrow is BFloat16#bits(float) instruction for
-		// instruction), so widening every pattern into an f32 array and narrowing it
-		// straight back is the identity -- except for the 126 signalling NaNs, which
-		// both backends quiet on the way IN because both widen through a double.
+		// .todo/671's bulk pair and .todo/487's scalar pair are ONE rounding: widening
+		// every pattern into an f32 array and narrowing it straight back is the plain
+		// identity over all 65536 patterns, NaN payloads included. widen-float-bits
+		// stores the bit pattern verbatim (a bfloat16 pattern IS an f32's top half
+		// already, so widening is one shift, never a double), and this backend's
+		// narrow emits the same rounding this file's own bfloat16-bits case pins,
+		// applied to the float's raw bits directly rather than through
+		// BFloat16#bits(double) (whose parameter would auto-widen a float argument
+		// first) -- so nothing here touches a double, and nothing quiets a signalling
+		// NaN.
 		assertThat(compileAndRun("""
 				(let* ((n 65536)
 				       (patterns (make-array n :element-type '(unsigned-byte 16)))
@@ -9225,10 +9230,7 @@ class JvmLispCompilerTest {
 				  (rontolisp:widen-float-bits patterns :bfloat16 values)
 				  (rontolisp:narrow-float-bits values :bfloat16 back)
 				  (dotimes (i n)
-				    (let ((want (if (and (= (logand i #x7f80) #x7f80) (/= (logand i #x7f) 0))
-				                    (logior i #x40)
-				                    i)))
-				      (unless (= want (aref back i)) (incf bad))))
+				    (unless (= i (aref back i)) (incf bad)))
 				  (print bad)
 				  (print (list (aref back 16256) (rontolisp:bfloat16-bits (aref values 16256)))))
 				""")).isEqualTo("0\n(16256 16256)");
