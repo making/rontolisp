@@ -8,6 +8,11 @@ Getting data in and out at bf16 is what makes `.todo/489`'s 1B-class model loada
 all: a 1.1B-parameter checkpoint is 2.2 GB of bf16, and it must arrive in one bulk
 transfer per tensor, never through a per-element Lisp loop.
 
+Not here: an IEEE f16 file (GGUF `F16`, an older fp16 checkpoint) is `.todo/671` -- a
+bulk widening of `(unsigned-byte 16)` bits into an existing width, which needs no f16
+array and lands on every backend. Step 3 below and 671 share the staging shape (a u16
+chunk, widened into the destination at an offset); build it once.
+
 ## Do
 
 1. **The bits pair.** `LispNames` already carries `SINGLE_FLOAT_BITS` /

@@ -9,15 +9,51 @@ The goal `.todo/482` exists for. Depends on `.todo/484`, `.todo/485`, `.todo/487
 tok/s single-thread on GB10 (`.todo/457`). The point of adding a narrow width is to move
 that up two orders of magnitude -- to a model someone would actually ask a question.
 
-## The two rungs
+## The rungs (re-ordered 2026-09-03: the user wants the newest models, e.g. Qwen 3.x)
+
+Surveyed on Hugging Face that day. What "newest" means in practice: **Qwen3.5-0.8B**
+(2026-06) is the newest Qwen with a small member -- Qwen3.6 and 3.8 ship only 27B+ and
+3.8-27B has the same architecture -- and **LFM2.5-1.2B-Instruct** (2026-08-24) is the
+newest ~1B model of any family. Both are hybrids, so each is an architecture item
+(`.todo/677`, `.todo/678`) on top of the layer-kind table (`.todo/676`). The order below
+is by increasing architecture delta, and every rung after 0 is a model people actually
+download today:
+
+| rung | model | bf16 | architecture work | item |
+| --- | --- | --- | --- | --- |
+| 0 | TinyLlama-1.1B / SmolLM2-135M, 360M | 2.2 GB / 0.27 GB | none (llama) -- shakes out the readers | below |
+| 1 | `Qwen/Qwen3-0.6B` (2025-04) | 1.5 GB | QK-norm, tied head, vocab 151936 | `676` |
+| 2 | `LiquidAI/LFM2.5-1.2B-Instruct` (2026-08) | 2.34 GB | 10 gated short-conv + 6 attention layers | `678` |
+| 3 | `Qwen/Qwen3.5-0.8B` (2026-06) | 1.5 GB (+0.2 GB vision, skipped) | Gated DeltaNet x 18, gated attention, partial RoPE | `677` |
+| 4 | `Qwen/Qwen3.8-27B` (2026-08) | 54 GB | none beyond rung 3; RAM (fits this box) and `--gpu` | `490`'s successor |
+
+Rung 2 is "the 1B" whose numbers this item reports; rung 3 is the Qwen the user asked
+for. The two original rungs below stay as rung 0.
+
+## The two original rungs
 
 1. **`stories110M`** (karpathy's llama2.c, same `.bin` format the loader already reads):
    110M parameters, 420 MB f32 / 220 MB bf16. An intermediate step that shakes out the
    bulk load path and the larger tensor shapes while staying small enough to keep in the
    examples suite.
 2. **TinyLlama-1.1B** -- the goal. It is the llama2 architecture at 1.1B parameters, so
-   `llama2.lisp`'s loader and forward pass apply unchanged, and karpathy's `export.py`
-   converts it to the same `.bin` format. 2.2 GB at bf16 against 4.4 GB at f32.
+   `llama2.lisp`'s forward pass applies unchanged. 2.2 GB at bf16 against 4.4 GB at f32.
+   **Its source is the published checkpoint, read as published** (2026-09-03):
+   `TinyLlama/TinyLlama-1.1B-Chat-v1.0` is 201 BF16 tensors in one `model.safetensors`
+   (`.todo/675`), and the same model is on Hugging Face as GGUF in BF16 / F16 / Q8_0
+   (`.todo/673`). karpathy's `export.py` is NOT the route: it needs PyTorch, which this
+   box does not have, and it would put a Python step between the model and the language
+   when the readers make the file itself the input. Its vocabulary is Llama 2's 32000
+   SentencePiece pieces, so llama2.c's `tokenizer.bin` is expected to apply -- verify by
+   comparing it piece for piece against the GGUF's `tokenizer.ggml.tokens` before trusting
+   a generation.
+
+Two more rungs, added 2026-09-03, are the *llama-architecture* models the field actually
+publishes small: **SmolLM2-135M and SmolLM2-360M** (`HuggingFaceTB/`, all BF16, GQA, tied
+embeddings, `rope_theta` 100000) -- 135M is 270 MB at bf16 and a plausible examples-suite
+fixture. Their tokenizer is GPT-2-style byte-level BPE, not SentencePiece, which is
+`.todo/674`; the forward pass needs only what `llama2.lisp` already has plus the tied
+classifier and the RoPE base as a parameter.
 
 Llama-3.2-1B is deliberately not the target: different RoPE, GQA layout and tokenizer
 would make this an architecture item rather than a width item.
@@ -51,7 +87,12 @@ per call; at 22 layers x 7 projections that is a lot of garbage per token, and
    contribution is visible rather than asserted.
 4. Watch for the things that only appear at this size:
    - **Heap.** 2.2 GB of `short[]` needs the JVM run to say so; document the `-Xmx`. Check
-     the native-image build too, which is how the fastest path runs.
+     the native-image build too, which is how the fastest path runs. (Memory is a
+     documentation matter at this size, not a feasibility one: 4.4 GB of f32 fits this
+     box and any 8 GB laptop. The first end-to-end run can and should be at f32, through
+     `.todo/671`'s bulk widening, before the width exists -- 7 tok/s projected on one
+     thread, 21 on twenty -- so the loader and the model are debugged apart from the
+     kernel.)
    - **Load time.** 2.2 GB through `read-sequence`; if it is minutes rather than seconds
      the bulk path from `.todo/487` is not actually bulk.
    - **The 2^31-1 array element cap** (`.todo/485`): TinyLlama's largest tensor is the

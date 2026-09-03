@@ -27,6 +27,13 @@ bf16's own ~2x is **orthogonal** to that choice: it applies on both sides, for t
 reason, and neither path needs the other to collect it. That is why this item is a
 follow-on and not a replacement for `.todo/488`.
 
+Measured 2026-09-03 (`.todo/482-bfloat16-a-narrow-width-that-pays/README.md`, round 2,
+section 5): **Q4_0 is a device width, not a CPU one** -- on the Vector API its nibble
+unpack is ALU-bound at 5.7 GB/s, 1.1x f32 on one thread, for 8.5% GEMV error; on the
+device the unpack is free beside the memory traffic. When this item lands bf16, the
+successor is `gemv_q8_0` / `gemv_q4_k` over `.todo/672`'s quantized matrix, and that is
+where the 4x-8x byte reduction of a published Q4_K_M GGUF is collected.
+
 ## Do
 
 1. `gemv_bf16` in `src/main/resources/am/ik/gpu/gemm.cu`, PTX regenerated and checked in
