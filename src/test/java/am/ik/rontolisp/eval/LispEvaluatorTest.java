@@ -17104,8 +17104,13 @@ class LispEvaluatorTest {
 		// (am.ik.rontolisp.BFloat16), not two copies of it: a checkpoint's bulk load
 		// must not sit a bit away from what the program computes element by element.
 		// Widening every pattern into an f32 array and narrowing it straight back is
-		// what says so -- including the 126 signalling NaNs, whose payload a truncating
-		// or force-quiet narrowing loses.
+		// what says so -- the plain identity over all 65536 patterns, NaN payloads
+		// included: widen-float-bits stores the bit pattern verbatim (a bfloat16
+		// pattern IS an f32's top half already, so widening is one shift, never a
+		// double), and narrow-float-bits' float-source arm rounds on the float's raw
+		// bits directly rather than through BFloat16.bits(double) (whose parameter
+		// would auto-widen a float argument first) -- so nothing here ever touches a
+		// double, and nothing quiets a signalling NaN.
 		assertThat(eval("""
 				(let* ((n 65536)
 				       (patterns (make-array n :element-type '(unsigned-byte 16)))
@@ -17116,14 +17121,7 @@ class LispEvaluatorTest {
 				  (rontolisp:widen-float-bits patterns :bfloat16 values)
 				  (rontolisp:narrow-float-bits values :bfloat16 back)
 				  (dotimes (i n bad)
-				    ;; The identity, except that storing a signalling NaN into an f32
-				    ;; array quiets it -- the same on every backend, because they all
-				    ;; widen through a double. Those 126 patterns are the ceiling
-				    ;; .todo/671's bulk pair still has; the scalar pair has none.
-				    (let ((want (if (and (= (logand i #x7f80) #x7f80) (/= (logand i #x7f) 0))
-				                    (logior i #x40)
-				                    i)))
-				      (unless (= want (aref back i)) (incf bad)))))
+				    (unless (= i (aref back i)) (incf bad))))
 				""").print()).isEqualTo("0");
 		// And element for element against the scalar, over the values an f32 array can
 		// actually hold after a store (which quiets a signalling NaN on the way in).
