@@ -69,3 +69,7 @@ not rediscovered as a bug.
   pin it.
 - `-o Prog.class && java Prog` on a program that builds, writes, reads back and prints a
   `#bf16` array.
+- **The `ci-spec.yaml` case `.todo/484` deferred.** 484 left it out on purpose: its own
+  Verify forbade adding one until every backend either carries the width or refuses it.
+  This item and `.todo/486` are what decide that, so **whichever of the two lands second
+  adds the case**, declaring only the backends that carry the width.

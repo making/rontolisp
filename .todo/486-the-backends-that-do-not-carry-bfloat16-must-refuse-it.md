@@ -95,3 +95,10 @@ wrong number, not a crash.
   plain interpreter run.
 - The `ci-spec.yaml` case added by `.todo/484` must declare only the backends that carry
   the width.
+
+  > **2026-09-03: `.todo/484` did NOT add it, deliberately.** Its own Verify forbade
+  > adding the case until every backend either carries the width or refuses it -- which
+  > is what this item and `.todo/485` decide -- so adding it earlier would have broken
+  > the wasm rows. **The case lands here or in 485, whichever is second.** The
+  > interpreter half is done: `#bf16` reads, prints, round-trips, and `vec:` carries the
+  > width, so the case has something to assert the moment the compiled backends agree.
