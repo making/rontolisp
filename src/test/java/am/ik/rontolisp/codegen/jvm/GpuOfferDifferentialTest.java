@@ -11,6 +11,7 @@ import java.util.Map;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
@@ -644,6 +645,13 @@ class GpuOfferDifferentialTest {
 			case LispDoubleFloatArray d -> {
 				for (double v : d.data()) {
 					bits.add(Long.toHexString(Double.doubleToRawLongBits(v)));
+				}
+			}
+			case LispBFloat16Array b -> {
+				// The stored pattern IS the bits at this width -- no conversion, so
+				// nothing a NaN payload could be lost through.
+				for (short v : b.data()) {
+					bits.add(Integer.toHexString(v & 0xFFFF));
 				}
 			}
 		}

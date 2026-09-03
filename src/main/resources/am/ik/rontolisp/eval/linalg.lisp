@@ -46,6 +46,11 @@
   ;; interpreter, JVM AND wasm-GC -- picks the double[]/float[] (TYPE_F64ARR/
   ;; F32ARR) representation statically; a runtime-computed element-type could
   ;; not. init is coerced to the element width.
+  (when (eq element-type 'bfloat16)
+    ;; Refused rather than quietly built at another width. linalg's width rides as a
+    ;; BOOLEAN through %la-gather-strided (see %la-etype), which cannot say "bfloat16",
+    ;; so carrying it here would produce #d results from #bf16 inputs.
+    (error "linalg: does not yet carry bfloat16 arrays"))
   (if (eq element-type 'single-float)
       (make-array dims :element-type 'single-float :initial-element init)
       (make-array dims :element-type 'double-float :initial-element init)))
@@ -57,6 +62,12 @@
   ;; what makes the element-wise / product ops width-polymorphic. A general
   ;; (boxed) array reads back as element-type t, so it maps to 'double-float --
   ;; matching linalg's double default.
+  ;; A bfloat16 operand is REFUSED here rather than mapped to 'double-float, which
+  ;; would answer #d for a #bf16 input -- the failure mode this width exists to avoid.
+  ;; Every internal width question flows through here, the two boolean %la-gather-strided
+  ;; flags included, so this one guard covers them.
+  (when (eq (array-element-type a) 'bfloat16)
+    (error "linalg: does not yet carry bfloat16 arrays"))
   (if (eq (array-element-type a) 'single-float) 'single-float 'double-float))
 
 (defun linalg::%la-like (a)

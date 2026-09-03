@@ -30,10 +30,16 @@
 ;; --no-gc scalar backend these constructors are intercepted natively by
 ;; NoGcWasmCompiler (which reads the same literal :element-type -> F32VEC/F64VEC),
 ;; so this defun is only the interpreter / JVM / wasm-GC implementation.
+;; A cond rather than an if because there are THREE widths: every branch still passes
+;; a LITERAL :element-type, which is what lets each backend pick the representation
+;; statically. A width added to the umbrella has to be added here by hand -- an eq on a
+;; symbol has no exhaustiveness to lean on, the same hole make-array's own dispatch has.
 (defun vec::%make (n init &optional element-type)
-  (if (eq element-type 'single-float)
-      (make-array n :element-type 'single-float :initial-element init)
-      (make-array n :element-type 'double-float :initial-element init)))
+  (cond ((eq element-type 'single-float)
+         (make-array n :element-type 'single-float :initial-element init))
+        ((eq element-type 'bfloat16)
+         (make-array n :element-type 'bfloat16 :initial-element init))
+        (t (make-array n :element-type 'double-float :initial-element init))))
 
 (defun vec:zeros (n &key element-type) (vec::%make n 0.0 element-type))
 
@@ -78,9 +84,11 @@
 ;; wasm-GC had TYPE_F32ARR); the --no-gc backend lowers vec: to native SIMD itself
 ;; and never splices this defun, so it is unaffected. Mirrors linalg::%la-make.
 (defun vec::%make-like (%vec-proto %vec-n)
-  (if (eq (array-element-type %vec-proto) 'single-float)
-      (make-array %vec-n :element-type 'single-float :initial-element 0.0)
-      (make-array %vec-n :element-type 'double-float :initial-element 0.0)))
+  (cond ((eq (array-element-type %vec-proto) 'single-float)
+         (make-array %vec-n :element-type 'single-float :initial-element 0.0))
+        ((eq (array-element-type %vec-proto) 'bfloat16)
+         (make-array %vec-n :element-type 'bfloat16 :initial-element 0.0))
+        (t (make-array %vec-n :element-type 'double-float :initial-element 0.0))))
 
 (defun vec::%map2 (%vec-op %vec-a %vec-b)
   ;; %vec-op applied element-wise over two equal-length vectors -> a fresh vector.

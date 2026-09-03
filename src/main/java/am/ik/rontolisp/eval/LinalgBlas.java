@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.function.Function;
 
 import am.ik.rontolisp.FloatArrayAccessHook;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
@@ -171,6 +172,9 @@ public final class LinalgBlas {
 				LinalgBlasKernels.gemv(m.data(), 0, rows, cols, doubles(x), 0, y, 0, false);
 				yield new LispDoubleFloatArray(y, new int[] { rows });
 			}
+			// No CBLAS has a bfloat16 GEMM or GEMV, so this width declines and the rung
+			// below -- the lane kernel or the scalar defun -- answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -213,6 +217,9 @@ public final class LinalgBlas {
 				FloatArrayAccessHook.written(y.storage());
 				yield out;
 			}
+			// No CBLAS has a bfloat16 GEMM or GEMV, so this width declines and the rung
+			// below -- the lane kernel or the scalar defun -- answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
@@ -273,8 +280,11 @@ public final class LinalgBlas {
 		return null;
 	}
 
-	/** {@code c = a b}, both rank 2 and of the same width, the result fresh. */
-	private static LispVal gemm(LispFloatArray a, LispFloatArray b, int n, int m, int p) {
+	/**
+	 * {@code c = a b}, both rank 2 and of the same width, the result fresh; {@code null}
+	 * at a width no CBLAS has.
+	 */
+	private static @Nullable LispVal gemm(LispFloatArray a, LispFloatArray b, int n, int m, int p) {
 		int[] dims = { n, p };
 		return switch (a) {
 			case LispSingleFloatArray x -> {
@@ -287,11 +297,17 @@ public final class LinalgBlas {
 				LinalgBlasKernels.gemm(x.data(), 0, doubles(b), 0, c, 0, n, m, p);
 				yield new LispDoubleFloatArray(c, dims);
 			}
+			// No CBLAS has a bfloat16 GEMM or GEMV, so this width declines and the rung
+			// below -- the lane kernel or the scalar defun -- answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 
-	/** {@code y = matrix x} (or {@code matrix^T x}), the result a fresh rank-1 array. */
-	private static LispVal gemv(LispFloatArray matrix, LispFloatArray vector, int rows, int cols, int out,
+	/**
+	 * {@code y = matrix x} (or {@code matrix^T x}), the result a fresh rank-1 array;
+	 * {@code null} at a width no CBLAS has.
+	 */
+	private static @Nullable LispVal gemv(LispFloatArray matrix, LispFloatArray vector, int rows, int cols, int out,
 			boolean transposed) {
 		int[] dims = { out };
 		return switch (matrix) {
@@ -305,6 +321,9 @@ public final class LinalgBlas {
 				LinalgBlasKernels.gemv(m.data(), 0, rows, cols, doubles(vector), 0, y, 0, transposed);
 				yield new LispDoubleFloatArray(y, dims);
 			}
+			// No CBLAS has a bfloat16 GEMM or GEMV, so this width declines and the rung
+			// below -- the lane kernel or the scalar defun -- answers.
+			case LispBFloat16Array ignored -> null;
 		};
 	}
 

@@ -31,6 +31,39 @@ downward, and the difference shows up as drift in a model's output rather than a
 failure, so pin it. There is no JDK builtin for either (`Float.floatToFloat16` is IEEE
 f16, a different format -- see `.todo/482` for why it is not what this item uses).
 
+> **2026-09-03, on landing.** The `narrow` above is INCOMPLETE, and neither conversion
+> was written as shown. Both now live in `BFloat16` (`bits(double)` / `value(int)`),
+> which landed alongside this item, and NOWHERE else -- this array and the bulk
+> widen/narrow primitives delegate to it. Two things the sketch above misses:
+>
+> - **The NaN cases.** The bias-add can carry a heavy-payload NaN's low bits up through
+>   the exponent, and a NaN whose top seven payload bits are all zero would come back as
+>   an INFINITY -- a class change, not a rounding difference. `BFloat16.bits` takes NaN
+>   out of the arithmetic path entirely.
+> - **`float` is the wrong entry width.** `setElement` takes a `double`, so narrowing
+>   through a `float` first would round TWICE. `BFloat16.bits(double)` goes straight
+>   there. The existing `narrow-float-bits` still narrows a `#d` source through a float
+>   (`FloatBitsWidening` line ~145) and so still double-rounds; that is not this item's
+>   to fix.
+>
+> A test-side note. `GpuOfferDifferentialTest.bitsOf` needed a bfloat16 arm to keep
+> compiling, and the arm is right (the stored pattern IS the bits at this width, so
+> there is no conversion a NaN payload could be lost through) -- but it is **dead code
+> today**: that test builds its operands as `new LispSingleFloatArray` / `new
+> LispDoubleFloatArray` chosen by a BOOLEAN, and never makes a bfloat16 array. The
+> compiler asking for an arm is not the same as a test exercising it. That boolean is
+> itself another "exactly two widths" assumption, in test code, where no exhaustiveness
+> check reaches it; it is where a bfloat16 row would have to be added when `.todo/486`
+> gives the device something to refuse.
+>
+> A related claim made while landing this, and then WITHDRAWN: that the pre-existing
+> `bfloat16BitsOf` and `BFloat16.bits` disagreed on signalling NaNs. **They agree on all
+> 2^32 float patterns** (checked exhaustively, 2026-09-03). The reason, worth writing
+> down so nobody re-derives it: Java's `float` -> `double` widening QUIETS a signalling
+> NaN, so once the entry width is `float` both spellings land on the same `0x7FC0`.
+> The unification is justified by "one implementation, and no double rounding at the
+> `double` entry point", not by any disagreement.
+
 ## Do
 
 1. `LispBFloat16Array` + the `permits` clause. `elementType()` -> `LispNames.BFLOAT16`
@@ -42,6 +75,14 @@ f16, a different format -- see `.todo/482` for why it is not what this item uses
    width (`.todo/486`).
 2. `toGeneralArray()` -> boxed `LispDouble`s, as the siblings do.
 3. Reader: `#bf16(...)` at every rank, beside the `#f(`/`#d(` dispatch
+
+   > **2026-09-03, on landing.** The reader carried the width as a BOOLEAN --
+   > `Token.FloatArrayOpen(boolean single)` -- which is the same "exactly two widths"
+   > assumption `.todo/483` removed from the Java kernels, in a place that item did not
+   > reach. It is now the three-valued `Token.FloatWidth` enum and `readFloatArray` is an
+   > exhaustive `switch` over it, so a fourth width is a compile error in the reader too.
+   > `.todo/683` collects the places that ask a width BY NAME; this was a place that
+   > asked it by boolean.
    (`LispLexer` ~line 275, `LispReader.readFloatArray`). **The branch must be tried before
    the `#x`/`#o`/`#b` radix branch** or the radix reader claims the `#b`; `f` is not a
    binary digit so there is no real ambiguity, only an ordering bug waiting to happen.
@@ -60,9 +101,43 @@ f16, a different format -- see `.todo/482` for why it is not what this item uses
    `(typep x 'float)` is true, `(subtypep 'bfloat16 'float)` is true, and it is NOT a
    subtype of `short-float`. Touch points: `ArgumentShapes` (`Shape.FLOAT`),
    `DeclaredArrayTypes`, and `LispMacroExpander`'s several float-type-name lists.
+
+   > **2026-09-03, on landing.** What it answers, since "`(typep x 'float)` is true" did
+   > not say for which `x`: **`(typep 1.0 'bfloat16)` is NIL, and so is every other
+   > `typep` against a scalar.** `bfloat16` is an EMPTY subtype of `float` -- the width
+   > exists only as array storage, `aref` answers a `double`, so no value in the
+   > language has this type. `(subtypep 'bfloat16 'float)` is T, which is consistent: an
+   > empty type is a subtype of anything. `(typep #bf16(1.0) '(array bfloat16))` and
+   > `(simple-array bfloat16 (1))` are T, `(array-element-type #bf16(1.0))` is
+   > `BFLOAT16`, and `(type-of #bf16(1.0 2.0))` is `(SIMPLE-ARRAY BFLOAT16 (2))`.
+   >
+   > **`(typep 1.0 'short-float)` is T while `(typep 1.0 'bfloat16)` is NIL**, and the
+   > asymmetry is intended: `short-float` is a standard CL float type an implementation
+   > may collapse onto another width, so a float IS one; `bfloat16` is a rontolisp
+   > extension that names an array element width and nothing else.
+   >
+   > **The lattice also needs `LispMacroExpander.upgradedArrayElementType`, and NOTHING
+   > POINTS AT IT.** `(typep #bf16(1.0) '(array bfloat16))` answered NIL after every
+   > other part of this item was done: that method normalizes a declared element type by
+   > SYMBOL NAME, so it produced no compile error when the permit was added and no
+   > existing test covered it. Found only by running the form. It is another place that
+   > asks a width by name rather than by type -- the family `.todo/683` collects.
 6. `vec::%make` / `vec::%make-like` and the `linalg:` constructors accept
    `:element-type 'bfloat16`, so `vec:zeros`/`ones`/`arange` and the width-preserving
    element-wise kernels carry it.
+
+   > **2026-09-03, on landing.** Only the `vec:` half was done. `linalg:` REFUSES the
+   > width, explicitly and temporarily (`linalg: does not yet carry bfloat16 arrays`),
+   > rather than answering `#d` for a `#bf16` input. When this step was written the
+   > obstacle was not visible: `linalg`'s width rides as a **boolean** through
+   > `%la-gather-strided (a od rs base single)`, whose own comment says the flag exists
+   > "so a kernel on any backend can read it without a symbol comparison". Two sites
+   > feed it (`linalg.lisp` 471 and 1043, both `(eq (%la-etype a) 'single-float)`), and
+   > widening that flag to three values reaches `LinalgSimd.gatherStrided` and
+   > `LinalgGpu.gatherStrided` (which read `args.get(4)` as a boolean) and the compiled
+   > backends -- past "the front end and the interpreter side only". The refusal is one
+   > guard in `%la-etype`, which every internal width question flows through, plus one
+   > in the `%la-make` constructor funnel for an explicitly requested width.
 
 ## Verify
 
@@ -79,3 +154,6 @@ f16, a different format -- see `.todo/482` for why it is not what this item uses
   and is the point of the width.
 - `ci-spec.yaml`: one case, once `.todo/485` and `.todo/486` make every backend either
   carry the width or refuse it -- not before, or the wasm rows break.
+
+  > **2026-09-03: DELIBERATELY NOT DONE, waiting on 485/486.** Not an oversight -- the
+  > line above forbids it until every backend either carries the width or refuses it.

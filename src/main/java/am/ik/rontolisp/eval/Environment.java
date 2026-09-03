@@ -41,30 +41,30 @@ import java.util.function.UnaryOperator;
 import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.BFloat16;
 import am.ik.rontolisp.ArrayGrowth;
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.FloatArrayAccessHook;
 import am.ik.rontolisp.FloatText;
 import am.ik.rontolisp.LispArray;
-import am.ik.rontolisp.FloatArrayAccessHook;
-import am.ik.rontolisp.LispDoubleFloatArray;
-import am.ik.rontolisp.LispFloatArray;
-import am.ik.rontolisp.LispFuture;
-import am.ik.rontolisp.LispSingleFloatArray;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
-import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispEquality;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispDoubleFloatArray;
+import am.ik.rontolisp.LispEquality;
+import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispLayout;
-import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispStream;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -77,6 +77,7 @@ import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FixedDecimal;
 import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -962,6 +963,20 @@ public final class Environment implements Scope {
 				// the initial element coerces to a double (narrowed to a float for
 				// single-float). A non-real is a type error (there is no degrade path).
 				double fill = initGiven ? asDouble(init) : 0.0;
+				if (packedType.equals(LispNames.BFLOAT16)) {
+					short[] bdata = new short[total];
+					if (initialContents != null) {
+						LispVal[] tmp = new LispVal[total];
+						fillInitialContents(initialContents, dims, 0, tmp, 0);
+						for (int i = 0; i < total; i++) {
+							bdata[i] = (short) BFloat16.bits(asDouble(tmp[i]));
+						}
+					}
+					else if (fill != 0.0) {
+						java.util.Arrays.fill(bdata, (short) BFloat16.bits(fill));
+					}
+					return new LispBFloat16Array(bdata, dims);
+				}
 				if (packedType.equals(LispNames.SINGLE_FLOAT)) {
 					float[] sdata = new float[total];
 					if (initialContents != null) {
@@ -1459,6 +1474,7 @@ public final class Environment implements Scope {
 			case LispFloatArray packed -> switch (packed) {
 				case LispSingleFloatArray ignored -> ArrayElementTypes.SINGLE_FLOAT;
 				case LispDoubleFloatArray ignored -> ArrayElementTypes.DOUBLE_FLOAT;
+				case LispBFloat16Array ignored -> ArrayElementTypes.BFLOAT16;
 			};
 			case LispArray array -> array.elementTypeCode();
 			default -> ArrayElementTypes.T;
@@ -1637,8 +1653,13 @@ public final class Environment implements Scope {
 	}
 
 	// The packed float-array element type a make-array :element-type argument designates:
-	// "double-float" or "single-float" (selecting the packed representation), or null for
-	// anything else. The symbol name is matched ignoring any package qualifier.
+	// "double-float", "single-float" or "bfloat16" (selecting the packed
+	// representation), or null for anything else. The symbol name is matched ignoring any
+	// package qualifier.
+	//
+	// This is the ONE width test the sealed umbrella cannot make a compile error: the
+	// argument is a SYMBOL NAME, and a string comparison has no exhaustiveness to lean
+	// on. A width added to LispFloatArray has to be added here by hand.
 	@Nullable private static String packedFloatElementType(@Nullable LispVal elementType) {
 		if (elementType instanceof LispSymbol sym) {
 			String name = sym.name();
@@ -1649,6 +1670,9 @@ public final class Environment implements Scope {
 			}
 			if (local.equals(LispNames.SINGLE_FLOAT)) {
 				return LispNames.SINGLE_FLOAT;
+			}
+			if (local.equals(LispNames.BFLOAT16)) {
+				return LispNames.BFLOAT16;
 			}
 		}
 		return null;

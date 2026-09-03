@@ -2,7 +2,9 @@ package am.ik.rontolisp.eval;
 
 import java.util.List;
 
+import am.ik.rontolisp.BFloat16;
 import am.ik.rontolisp.FloatArrayAccessHook;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispIntVector;
@@ -90,6 +92,12 @@ final class FloatBitsWidening {
 					}
 				}
 			}
+			// A bfloat16 destination is a TEMPORARY decline, not an impossibility: from
+			// :bfloat16 patterns it is a straight copy and from :float16 one conversion,
+			// which is a capability to be added deliberately rather than a side effect
+			// of the width existing.
+			case LispBFloat16Array ignored ->
+				throw new LispEvalException(fnName + ": does not yet write a bfloat16 destination");
 		}
 		return dst;
 	}
@@ -146,25 +154,24 @@ final class FloatBitsWidening {
 					}
 				}
 			}
+			// A bfloat16 SOURCE is the same temporary decline as the destination above:
+			// to :bfloat16 patterns it is a straight copy, to :float16 one conversion.
+			case LispBFloat16Array ignored ->
+				throw new LispEvalException(fnName + ": does not yet read a bfloat16 source");
 		}
 		return dst;
 	}
 
 	/**
 	 * The bf16 round-to-nearest-even narrow of a float, as an unsigned 16-bit pattern.
-	 * NaN is special-cased (a plain {@code bits + 0x7fff + lsb} bias-add can carry a
-	 * heavy-payload NaN's low bits into the sign, per {@code .todo/482}'s
-	 * {@code Enc.java} note) rather than relying on the payload surviving the add.
+	 * The rounding itself -- including the NaN cases a plain bias-add gets wrong -- lives
+	 * ONCE, in {@link BFloat16}, so this primitive and {@code (setf (aref a i))} on a
+	 * packed bfloat16 array cannot answer different patterns for one value.
 	 * @param f the value to narrow
 	 * @return the bf16 bit pattern, unsigned in {@code [0, 65535]}
 	 */
 	private static long bfloat16BitsOf(float f) {
-		int bits = Float.floatToRawIntBits(f);
-		if (Float.isNaN(f)) {
-			return ((bits >>> 16) | 0x0040) & 0xFFFFL;
-		}
-		int rounded = bits + 0x7fff + ((bits >>> 16) & 1);
-		return (rounded >>> 16) & 0xFFFFL;
+		return BFloat16.bits(f);
 	}
 
 	private static boolean isFloat16Format(String fnName, LispVal formatArg) {

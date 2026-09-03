@@ -3552,6 +3552,11 @@ final class JvmArrayRuntimeBuilder {
 				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.SINGLE_FLOAT)));
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.DOUBLE_FLOAT,
 				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.DOUBLE_FLOAT)));
+		// A GENERAL array that merely REMEMBERS bfloat16 decodes here too. The packed
+		// bfloat16 representation itself does not reach this backend yet; this arm only
+		// keeps array-element-type from answering nothing for a remembered width.
+		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.BFLOAT16,
+				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.BFLOAT16)));
 		// ArrayElementTypes.T, which never reaches here: nothing is remembered for it.
 		a.aconstNull();
 		a.astore(etSlot);

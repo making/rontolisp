@@ -2,11 +2,19 @@ package am.ik.rontolisp;
 
 /**
  * Umbrella type for a packed float array: a rank-n array of unboxed floats stored as a
- * flat row-major primitive backing plus an {@code int[]} of dimension sizes. Two concrete
- * widths implement it: {@link LispDoubleFloatArray} ({@code element-type double-float}, a
- * {@code double[]} backing) and {@link LispSingleFloatArray} ({@code element-type
- * single-float}, a {@code float[]} backing). Both are first-class value types, distinct
- * from the general (heterogeneous, boxed) {@link LispArray}.
+ * flat row-major primitive backing plus an {@code int[]} of dimension sizes. Three
+ * concrete widths implement it: {@link LispDoubleFloatArray} ({@code element-type
+ * double-float}, a {@code double[]} backing), {@link LispSingleFloatArray}
+ * ({@code element-type single-float}, a {@code float[]} backing) and
+ * {@link LispBFloat16Array} ({@code element-type bfloat16}, a {@code short[]} of the top
+ * 16 bits of an f32 -- a rontolisp extension, not a CL type). All three are first-class
+ * value types, distinct from the general (heterogeneous, boxed) {@link LispArray}.
+ *
+ * <p>
+ * Because this type is SEALED, every test of which width an array is must be an
+ * exhaustive {@code switch} over it with no {@code default} arm, so that adding a fourth
+ * width is a compile error at each site that has to decide something rather than a silent
+ * fall into the double-float arm ({@code .kb/vec.md}, "Asking a packed array its width").
  *
  * <p>
  * A packed array is produced by the {@code #d(...)} / {@code #f(...)} reader literals
@@ -35,7 +43,8 @@ package am.ik.rontolisp;
  * packed arrays are never {@code equal} even with the same contents, matching Common
  * Lisp.
  */
-public sealed interface LispFloatArray extends LispVal permits LispDoubleFloatArray, LispSingleFloatArray {
+public sealed interface LispFloatArray extends LispVal
+		permits LispBFloat16Array, LispDoubleFloatArray, LispSingleFloatArray {
 
 	/**
 	 * Returns the dimension sizes; the rank is {@code dims().length}.
