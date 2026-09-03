@@ -12,6 +12,18 @@ today, each with its own `nav.yaml`, and docgen renders one site per language
 (`/docs/en/`, `/docs/ja/`) with an automatic language switcher in the header
 (2+ languages -> switcher appears; `en` is the default and gets the `/docs/`
 redirect). Adding another `doc/<lang>/` with a `nav.yaml` auto-creates its site.
+
+**The book measure belongs to the prose, not to the article** (`docs.css`,
+2026-09-03). `article.markdown` fills the content column and each flowing child
+is capped at `--content-max` (68ch); `table` is exempt and takes the whole
+column. Putting the cap back on the article itself is what hid the Result column
+of the `Function | Example | Result` index tables: three columns in 68ch, the
+last one scrolled out of a box with no scrollbar in sight. Two rules keep those
+tables honest -- code in a cell wraps (`white-space: normal`, with the operator
+name in `a.fn-link` still `nowrap`, so one long example cannot claim the column),
+and `table:has(a.fn-link)` pins 22%/30% for name/example, because a handful of
+rows list nine names at once and the auto layout otherwise hands them the table.
+
 Per-operator reference pages live in catalog directories, each with a
 `_catalog.yaml` (categories -> ordered `{slug, name}` entries) and a table
 "index page": `reference/functions/` (index `reference/functions.md`),

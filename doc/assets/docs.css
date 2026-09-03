@@ -457,8 +457,14 @@ body.search-open-body { overflow: hidden; }
 	color: inherit;
 }
 
-/* --- markdown content --- */
-.markdown { max-width: var(--content-max); }
+/* --- markdown content ---
+   The book measure belongs to the PROSE, not to the article: the article fills
+   the content column and each flowing child is capped at --content-max, so a
+   table -- a figure, not a paragraph -- keeps the whole column and its last
+   column stays on screen instead of scrolling out of a 68ch box. */
+.markdown { max-width: none; }
+.markdown > * { max-width: var(--content-max); }
+.markdown > table { max-width: none; }
 .markdown img { max-width: 100%; height: auto; }
 .markdown h1 {
 	font-family: var(--serif);
@@ -601,13 +607,25 @@ body.search-open-body { overflow: hidden; }
 	background: transparent;
 }
 .markdown tr:nth-child(even) td { background: transparent; }
+/* Wrap only when the cell cannot hold the form on one line -- an example that
+   is too long yields, instead of pushing the last column off the table. */
 .markdown td code, .markdown th code {
-	white-space: nowrap;
+	white-space: normal;
+	overflow-wrap: anywhere;
 	background: transparent;
 	padding: 0;
 	color: var(--ink-strong);
 	font-size: 12.5px;
 }
+/* An operator name is the row's identity: never broken across lines. */
+.markdown a.fn-link code { white-space: nowrap; }
+
+/* An operator index table (Function | Example | Result -- the tables whose first
+   column is auto-linked) holds a few rows far wider than the rest, and the auto
+   layout hands them the column, squeezing the others. Pin the proportions so
+   every row reads the same: name, example, then the prose result takes the rest. */
+.markdown table:has(a.fn-link) th:nth-child(1) { width: 22%; }
+.markdown table:has(a.fn-link) th:nth-child(2) { width: 30%; }
 
 /* Function-name links in the Functions table. */
 .markdown a.fn-link {
