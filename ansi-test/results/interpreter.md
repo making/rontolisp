@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**9,259 / 18,053 tests pass (51.3%)** -- 2,788 fail, 6,006 signal an error.
+**9,258 / 18,051 tests pass (51.3%)** -- 2,788 fail, 6,005 signal an error.
 
-7 top-level forms could not be read, 1,940 could not be evaluated, 2 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 1,941 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -25,15 +25,15 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | pathnames | 214 | 97 | 26 | 91 | 45.3% | 17 |
 | printer | 494 | 193 | 123 | 178 | 39.1% | 102 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 18 |
-| reader | 570 | 58 | 286 | 226 | 10.2% | 29 |
-| sequences | 2,455 | 1,847 | 147 | 461 | 75.2% | 848 |
+| reader | 569 | 58 | 286 | 225 | 10.2% | 30 |
+| sequences | 2,454 | 1,847 | 147 | 460 | 75.3% | 849 |
 | streams | 722 | 188 | 85 | 449 | 26.0% | 98 |
-| strings | 495 | 252 | 94 | 149 | 50.9% | 31 |
+| strings | 495 | 251 | 94 | 150 | 50.7% | 31 |
 | structures | 960 | 374 | 178 | 408 | 39.0% | 45 |
 | symbols | 1,135 | 767 | 293 | 75 | 67.6% | 26 |
 | system-construction | 58 | 22 | 4 | 32 | 37.9% | 35 |
 | types-and-classes | 613 | 260 | 239 | 114 | 42.4% | 30 |
-| **total** | **18,053** | **9,259** | **2,788** | **6,006** | **51.3%** | **1,949** |
+| **total** | **18,051** | **9,258** | **2,788** | **6,005** | **51.3%** | **1,951** |
 
 ## Most frequent failure reasons
 
@@ -42,7 +42,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 370 | `IllegalArgumentException: X expects keyword arguments :X, got: :X` |
 | 299 | `IllegalArgumentException: X expects keyword arguments :test/:test-not/:key, got: :X` |
 | 233 | `The variable *MINI-UNIVERSE* is unbound` |
-| 229 | `Function expects 1 argument, got 2` |
+| 230 | `Function expects 1 argument, got 2` |
 | 217 | `The function MAKE-PACKAGE is undefined` |
 | 200 | `The variable *UNIVERSE* is unbound` |
 | 153 | `X: there is no class named X` |
@@ -55,7 +55,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 82 | `Unknown keyword argument: :X` |
 | 80 | `The function FLOAT-RADIX is undefined` |
 | 80 | `The variable *NUMBERS* is unbound` |
-| 74 | `complex numbers are not supported (imaginary part X)` |
+| 77 | `complex numbers are not supported (imaginary part X)` |
 | 69 | `Index 1 out of bounds for length 1` |
 | 65 | `The variable *FLOATS* is unbound` |
 | 63 | `The function CLASS-PRECEDENCE-LIST-FOO is undefined` |
