@@ -1,154 +1,96 @@
 # A quoted datum is ONE shared constant, on all four backends
 
-**Invariant: every evaluation of one `quote` site answers the SAME object, on the
-interpreter, the JVM and both WASM backends. `(eq (f) (f))` for `(defun f () '(1 2 3))`
-is `T` everywhere, and a write through the datum is visible to the next evaluation --
-the CL-conformant constant reading (CLHS leaves writing into a literal undefined; real
-CLs share and corrupt exactly like this).** Pinned by the
-`quoted-datum-shared-cross-backend` ci-spec case,
-`JvmLispCompilerTest.aQuotedDatumIsOneSharedConstantAcrossEvaluations`,
-`WasmLispCompilerIntegrationTest.aQuotedDatumIsOneSharedConstantAcrossEvaluations`
-(Preview 1 AND component) and
-`LispEvaluatorTest.aQuotedDatumIsOneSharedConstantOnEveryBackend`.
+**Invariant: every evaluation of one `quote` site answers the SAME object on the
+interpreter, the JVM and both WASM backends.** `(eq (f) (f))` for
+`(defun f () '(1 2 3))` is `T` everywhere; a write through the datum is visible to the
+next evaluation (CLHS leaves writing into a literal undefined).
 
-The complement of `.kb/array-literals.md`: a BARE array literal is a CONSTRUCTOR
-(fresh per evaluation), the same syntax under `quote` is a CONSTANT (shared). The two
-rules meet exactly at the `'` and neither leaks into the other -- `#(1 2 3)` in code
-position stays fresh (the property `PureBuiltinFolder`'s packed-table fold rests on,
-and the fold splices its results BARE, so it is untouched), `'#(1 2 3)` is shared.
+Complement of `.kb/array-literals.md`: a BARE array literal is a CONSTRUCTOR (fresh per
+evaluation), the same syntax under `quote` a CONSTANT (shared). `#(1 2 3)` in code
+position stays fresh -- the property `PureBuiltinFolder`'s packed-table fold rests on,
+since the fold splices its results BARE; `'#(1 2 3)` is shared.
 
-## The decision (2026-08-30), and why not "fresh everywhere"
+Rejected, do not re-attempt: fresh-per-evaluation. `(quote <value>)` is ALSO the
+interpreter's live-value splice (`quoteValue`, four sites, ~15 more constructions across
+`eval` and `macro`); materializing in `evalQuote` breaks `read-sequence`, and the
+self-evaluating `LispInstance` arm cannot tell a literal from a spliced runtime instance.
 
-`.todo/579` closed the divergence this file replaces: the interpreter shared (its
-`evalQuote` hands back the reader's datum) while all three compile paths rebuilt the
-datum at the site on every evaluation, so `(eq (ql) (ql))` was `T` / `NIL` and a write
-through the constant corrupted it on one backend and vanished on the others. Two
-consistent answers existed and both were measured:
+## Mechanics
 
-- **Fresh per evaluation everywhere** (what `.todo/578` chose for BARE array literals)
-  is affordable on raw cost -- a 2M-iteration interpreter loop over `'(1 2 3 4 5 6 7 8)`
-  ran 418 ms against 420 ms for the equivalent `(list ...)` build, so a per-eval deep
-  copy roughly doubles quote's cost and no more -- but it is structurally hazardous:
-  `(quote <value>)` is ALSO the interpreter's live-value splice (`quoteValue`, four
-  sites, ~15 more constructions across `eval` and `macro`), materializing in
-  `evalQuote` was already tried and broke `read-sequence` outright, and the
-  self-evaluating `LispInstance` arm cannot distinguish a literal from a spliced
-  runtime instance at all. It is also the non-conformant direction.
-- **Shared everywhere** leaves the interpreter (and the splice pattern) completely
-  untouched, matches what a string literal already does on all four
-  (`.kb/string-write-runtime.md`), and costs only a memoization site in each compile
-  backend.
+Only quoted AGGREGATES are memoized -- cons, general array, instance, packed float/int
+array under `quote`. Atoms keep inline emission. Both backends key the memo by the
+DATUM'S IDENTITY (`IdentityHashMap`), so two textually equal quote sites stay distinct
+while a macro expansion splicing ONE template datum into several sites shares one
+constant -- matching the interpreter, which hands out the template's own cons at every
+expansion.
 
-Shared won. The `%UNSPELLED-QUOTE` separation `.todo/579` listed as a prerequisite is
-only a prerequisite of the FRESH answer (it is what would let `evalQuote` tell a
-literal from a splice); under shared the interpreter needs no such distinction and it
-was deliberately not built.
-
-## The mechanics
-
-Only quoted AGGREGATES are memoized -- a cons, a general array, an instance, a packed
-float/int array under `quote`. An atom (number, string, symbol, character, nil, t) has
-no identity a program can observe diverging and keeps its inline emission. Both
-backends key the memo by the DATUM'S IDENTITY (`IdentityHashMap`), so two textually
-equal quote sites stay distinct objects while a macro expansion splicing ONE template
-datum into several sites shares one constant across them -- exactly the interpreter's
-sharing, which hands out the template's own cons at every expansion.
-
-- **Interpreter**: unchanged. `LispEvaluator.evalQuote` hands the datum back as is,
-  and must -- see the splice constraint above.
-- **JVM** (`JvmQuoteCompiler.compile` + `JvmLispCompiler.QuotePool`): one private
-  static **volatile** `Object` field (`_qd$N`) per datum, built LAZILY at the site --
-  `GETSTATIC; DUP; IFNONNULL end; POP; <the old build>; DUP; PUTSTATIC; end:` (~12
-  bytes over the build). Volatile so the racing first evaluations of two threads each
-  publish a fully-constructed datum (the JMM data-race alternative can expose a
-  half-written `Object[]`); the site converges on one object immediately after.
+- **Interpreter**: unchanged. `LispEvaluator.evalQuote` hands the datum back as is, and
+  must (splice constraint above).
+- **JVM** (`JvmQuoteCompiler.compile` + `JvmLispCompiler.QuotePool`): one private static
+  **volatile** `Object` field (`_qd$N`) per datum, built LAZILY at the site --
+  `GETSTATIC; DUP; IFNONNULL end; POP; <build>; DUP; PUTSTATIC; end:` (~12 bytes over the
+  build). Volatile so racing first evaluations each publish a fully-constructed datum (a
+  data race can expose a half-written `Object[]`).
 - **WASM, Preview 1 and component** (`WasmQuoteCompiler.compile` +
   `WasmLispCompiler.QuoteGlobals`): one `(mut (ref null eq)) = null` module global per
-  datum, appended AFTER every fixed-index global (nothing renumbers; the count is only
-  known once every body has compiled), filled lazily at the site --
-  `global.get; ref.is_null; if; <build>; global.set; end; global.get` (~10 bytes).
-  Wasm is single-threaded here, so lazy is race-free. The allocator is shared into
-  `WasmAsyncEmit`'s fresh contexts, so a quote site in a top-level chunk or an async
-  resume body reaches the one table.
+  datum, appended AFTER every fixed-index global (nothing renumbers; the count is known
+  only once every body has compiled), filled lazily --
+  `global.get; ref.is_null; if; <build>; global.set; end; global.get` (~10 bytes). Single
+  threaded, so race-free. The allocator is shared into `WasmAsyncEmit`'s fresh contexts,
+  so quote sites in top-level chunks and async resume bodies reach the one table.
 
-**Why the JVM build is lazy at the site and NOT a `<clinit>` initializer.** A
-`<clinit>` version was built first and measured: `JvmClassShaker` runs on every build
-(not just `--optimize`), the injected built-in wrapper defuns (`find-package`,
-`list-all-packages`, `package-use-list`, `package-used-by-list`) each quote the
-package-registry tables, and with their constants pinned by `<clinit>` a three-defun
-program grew 5,898 -> 18,978 bytes -- the shaken wrappers' ~1.4 KB tables all stayed.
-Lazy at the site puts the build inside the method, so the shaker drops field and build
-with the wrapper. Do not "simplify" this back into the `LayoutPool`/`BigIntPool`
-`<clinit>` shape without re-running that measurement.
+**Trap: the JVM build must stay lazy at the site, not a `<clinit>` initializer.**
+`JvmClassShaker` runs on every build (not just `--optimize`); the injected wrapper defuns
+(`find-package`, `list-all-packages`, `package-use-list`, `package-used-by-list`) each
+quote the package-registry tables, and with their constants pinned by `<clinit>` a
+three-defun program grew 5,898 -> 18,978 bytes. Lazy at the site lets the shaker drop
+field and build with the wrapper. Do not "simplify" this into the
+`LayoutPool`/`BigIntPool` `<clinit>` shape.
 
-## A BARE instance literal shares the same slot (2026-08-30)
+## A BARE instance literal shares the same slot
 
 **Invariant: a `#P"..."` / `#S(...)` in CODE position -- outside any `quote` -- is one
-shared constant per site on all four backends. `(eq (fp) (fp))` for
-`(defun fp () #P"a/b.txt")` is `T` everywhere.** Pinned by the
-`instance-literal-shared-cross-backend` ci-spec case,
-`LispEvaluatorTest.anInstanceLiteralIsOneSharedConstantOnEveryBackend`,
-`JvmLispCompilerTest.aBareInstanceLiteralIsOneSharedConstantAcrossEvaluations` and
-`WasmLispCompilerIntegrationTest.aBareInstanceLiteralIsOneSharedConstantAcrossEvaluations`
-(Preview 1 AND component).
+shared constant per site on all four backends.** `(eq (fp) (fp))` for
+`(defun fp () #P"a/b.txt")` is `T`.
 
-This is the one literal family that does NOT follow `.kb/array-literals.md`'s
-fresh-per-evaluation rule, and the reason is the same constraint that decided `quote`
-above, one level sharper. An instance is self-evaluating (CLHS 3.1.2.1.3), so the
-interpreter answers it from `LispEvaluator.eval`'s `LispInstance` arm -- which hands
-the reader's own object back. That arm ALSO carries every live instance the evaluator
-splices back through `(quote <value>)`, and cannot tell one from the other, so a
-`LiteralArrays`-style materialization there is off the table: the interpreter cannot
-move, and the compile side has to meet it. `.todo/579` left this as the remaining step
-and `.todo/581` took it.
+The one literal family NOT following `.kb/array-literals.md`'s freshness rule: an
+instance is self-evaluating (CLHS 3.1.2.1.3), so the interpreter answers it from
+`LispEvaluator.eval`'s `LispInstance` arm, which also carries spliced live instances and
+cannot tell them apart -- no `LiteralArrays`-style materialization is possible there, so
+the compile side meets the interpreter.
 
-The mechanics are the memo above, verbatim -- `JvmQuoteCompiler.emitSharedConstant` and
+Mechanics = the memo above verbatim: `JvmQuoteCompiler.emitSharedConstant` and
 `WasmQuoteCompiler.emitSharedConstant` are the extracted wrappers, called by `compile`
-for a quoted aggregate and by `compileLiteralInstance` for a bare one, so both paths
-share the `_qd$N` pool and the module-global table. Nothing else changed: an instance
-NESTED inside quoted data was already covered by its enclosing datum's single slot.
+for a quoted aggregate and by `compileLiteralInstance` for a bare one, sharing the
+`_qd$N` pool and the module-global table. An instance NESTED inside quoted data was
+already covered by its enclosing datum's slot; a program with no bare instance literal is
+byte-identical to before.
 
-Cost, measured 2026-08-30 (old jar vs new, same tree otherwise). A program with no bare
-instance literal is BYTE-IDENTICAL, because the wrapper is emitted only at such a site:
+Size cost: ~+40 byte floor on wasm (shaken wrappers' orphaned null globals, ~7 bytes
+each; `WasmTreeShaker` does not drop globals); a few hundred bytes on large `.class`
+outputs. Interpreter: zero.
 
-| artifact | old | new | delta |
-|---|---:|---:|---:|
-| a 2-defun program, one `#P` + one `#S` (`.class`) | 4,805 | 4,938 | +133 |
-| the same program, `.wasm --optimize` | 10,790 | 10,820 | +30 |
-| `hello_world.class` / `hello_world.wasm --optimize` | 2,231 / 578 | 2,231 / 578 | 0 |
-| `pi_approx.class` / `pi_approx.wasm --optimize` | 6,925 / 3,299 | 6,925 / 3,299 | 0 |
-| `zlib.class` / `zlib.wasm --optimize` | 155,132 / 124,081 | 155,132 / 124,081 | 0 |
-
-## Cost, measured 2026-08-30 (old jar vs new, same tree otherwise)
-
-| artifact | old | new | delta |
-|---|---:|---:|---:|
-| `q579.class` (3 defuns) | 5,898 | 6,087 | +189 |
-| `zlib.class` | 154,818 | 155,133 | +315 |
-| `hello_world.wasm --optimize` | 538 | 578 | +40 |
-| `pi_approx.wasm --optimize` | 3,259 | 3,299 | +40 |
-| `webgl-cube --no-wasi --optimize` | 34,618 | 34,688 | +70 |
-| `zlib.wasm --optimize` | 123,961 | 124,081 | +120 |
-
-The wasm floor of +40 bytes is the shaken wrappers' orphaned null globals (~7 bytes
-each; `WasmTreeShaker` does not drop globals). Interpreter: zero change.
-
-## What this deliberately does NOT cover
+## Not covered
 
 - Two DIFFERENT quote sites spelling the same text are not `eq` to each other on the
-  compile paths (one field per datum identity), and generally not on the interpreter
-  either (two reads are two conses). CLHS permits but does not require coalescing.
-- `--no-gc` is scalar-only (no cons/array values at all, `.kb/no-gc-scalar-wasm.md`),
-  so the topic does not arise there.
+  compile paths (one field per datum identity), nor generally on the interpreter. CLHS
+  permits but does not require coalescing.
+- `--no-gc` is scalar-only (`.kb/no-gc-scalar-wasm.md`), so the topic does not arise.
 
-## Where to look when this changes
+## Where to look
 
-- `codegen/jvm/JvmQuoteCompiler.compile` / `.emitSharedConstant` /
-  `.compileLiteralInstance` + `JvmLispCompiler.QuotePool`.
-- `codegen/wasm/WasmQuoteCompiler.compile` / `.emitSharedConstant` /
-  `.compileLiteralInstance` + `WasmLispCompiler.QuoteGlobals` (+ the global-section
-  append and `WasmAsyncEmit`'s context copy).
-- `LispEvaluator.evalQuote` -- the interpreter's half, which must keep handing the
-  datum back verbatim -- and `eval`'s `LispInstance` arm, which must do the same for a
-  bare instance literal and for the same reason.
-- `.kb/array-literals.md` -- the bare-literal freshness rule this one complements.
+- `codegen/jvm/JvmQuoteCompiler.{compile,emitSharedConstant,compileLiteralInstance}` +
+  `JvmLispCompiler.QuotePool`.
+- `codegen/wasm/WasmQuoteCompiler` (same three) + `WasmLispCompiler.QuoteGlobals`, the
+  global-section append, `WasmAsyncEmit`'s context copy.
+- `LispEvaluator.evalQuote` and `eval`'s `LispInstance` arm -- both must keep handing the
+  datum back verbatim.
+
+## Tests
+
+- ci-spec `quoted-datum-shared-cross-backend`, `instance-literal-shared-cross-backend`
+- `LispEvaluatorTest.aQuotedDatumIsOneSharedConstantOnEveryBackend`,
+  `.anInstanceLiteralIsOneSharedConstantOnEveryBackend`
+- `JvmLispCompilerTest.aQuotedDatumIsOneSharedConstantAcrossEvaluations`,
+  `.aBareInstanceLiteralIsOneSharedConstantAcrossEvaluations`
+- `WasmLispCompilerIntegrationTest` (same two names, Preview 1 AND component)

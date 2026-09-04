@@ -1,137 +1,88 @@
 # Quicklisp-format dists (`ql:quickload`'s download half)
 
-**The invariant**: `eval/DistClient` is the ONLY thing that downloads a system, and it
-downloads from a LIST of Quicklisp-format distributions rather than from Quicklisp. Both
-consumers -- the interpreter (`LispEvaluator.quickload`, over the per-evaluator
-`distClient`) and the compile path (`LoadInliner.downloadQuicklisp`, over `Ctx.dists`) --
-call `ensureAvailable(system)` and get back `.asd` directories to put on the ASDF search
-path; everything after that is `.kb/asdf.md`'s business. A dist is a *format*, not a
-vendor: distinfo (`name:`, `system-index-url:`, `release-index-url:`) -> `systems.txt`
-(`project system-file system-name dep...`) + `releases.txt`
-(`project url size md5 sha1 prefix file...`), which Quicklisp and Ultralisp both speak
-byte for byte -- the client parses one shape and cares only about which URLs it reads it
-from.
+**Invariant: `eval/DistClient` is the ONLY thing that downloads a system, and it downloads
+from a LIST of Quicklisp-format distributions rather than from Quicklisp.** Consumers
+`LispEvaluator.quickload` (per-evaluator `distClient`) and `LoadInliner.downloadQuicklisp`
+(`Ctx.dists`) call `ensureAvailable(system)` and get `.asd` directories for the ASDF search
+path; the rest is `.kb/asdf.md`.
 
-**Quicklisp only, by default; Ultralisp is opt-in** (2026-08-17). Three
-channels, in the order a program should reach for them:
+Format, not vendor: distinfo (`name:`, `system-index-url:`, `release-index-url:`) ->
+`systems.txt` (`project system-file system-name dep...`) + `releases.txt`
+(`project url size md5 sha1 prefix file...`). Quicklisp and Ultralisp speak it identically.
 
-- `(ql-dist:install-dist NAME-OR-URL)` -- upstream's own spelling, so a portable script
-  that installs Ultralisp runs here unchanged. Accepts a known name (`quicklisp`,
-  `ultralisp`) or the URL of a distinfo, and `:prompt nil` / any other keyword option is
-  accepted and ignored (nothing here prompts, `AsdfSystems.checkIgnoredLoadOptions`).
-  Answers the dist NAME as a string; installing twice is a no-op that keeps the first
-  position.
-- `--dist ultralisp` (repeatable, comma-separated: `RontoLispCli.distSpecs`, and `--dist`
-  is in `CliOptions.repeatableKeys` beside `-e`) and `RONTOLISP_DISTS`. These exist for the
-  invocation with nowhere to put a form -- `rontolisp test SYSTEM` generates its own
-  program, and a build must not have to edit the sources it compiles. Comma-separated
-  rather than `File.pathSeparator`-joined like `--system-path`, because a URL contains
-  the separator.
-- `ql:update-dist NAME` -- deletes that dist's cached `systems.txt`/`releases.txt` (and
-  clears the parsed copies) so the next lookup re-reads the distribution. The extracted
-  releases are kept: a release directory is named after its version, so a newer one
-  extracts beside the old.
+## Installing (Quicklisp by default; Ultralisp opt-in)
 
-**Search order is installation order, resolved PER SYSTEM.** `locate(name)` walks the
-installed dists and the first whose `systems.txt` lists the name provides it;
-`collectProjects` resolves every dependency the same way, independently, so a dependency
-the requested system's own dist lacks comes from a later one. Quicklisp is installed
-first UNLESS the spec list names it (`distNameOrNull` over each spec in the constructor),
-which is the whole ordering API: `--dist ultralisp` = quicklisp then ultralisp,
-`--dist ultralisp,quicklisp` = the other way. There is no `ql-dist:preference`; the reason
-is that the list is short and an explicit order is auditable where a numeric preference
-per dist is not.
+- `(ql-dist:install-dist NAME-OR-URL)` -- known name (`quicklisp`, `ultralisp`) or distinfo
+  URL. `:prompt nil` and any keyword option accepted and ignored
+  (`AsdfSystems.checkIgnoredLoadOptions`). Answers the NAME; a second install is a no-op
+  keeping the first position.
+- `--dist ultralisp` / `RONTOLISP_DISTS` -- repeatable, COMMA-separated (a URL contains
+  `File.pathSeparator`); `RontoLispCli.distSpecs`, in `CliOptions.repeatableKeys`.
+- `ql:update-dist NAME` -- drops that dist's cached and parsed `systems.txt`/`releases.txt`.
+  Extracted releases are kept (directory named after the version).
 
-**A release contributes the `.asd` files its dist index NAMES, not every `.asd` in its
-tarball.** `releases.txt`'s trailing `file...` column lists a release's system files as
-paths relative to the extraction prefix (`alexandria.asd`, `src/com.inuoe.jzon.asd`), and
-`collectAsdDirs` puts the directories holding THOSE on the search path -- the same set
-Quicklisp itself registers. Walking the whole tarball instead (before 2026-08-29) also
-contributed a release's VENDORED snapshot of ANOTHER library --
-`iterate-release-*/ext/alexandria/alexandria.asd`, `cffi-*/uffi-compat/uffi.asd`, which no
-dist index attributes to that release -- where it competed for the same system name with
-that library's own release. The winner was the PROJECT order in `ensureAvailable`, i.e.
-whichever release the program quickloaded first, so `(ql:quickload "iterate")` then
-`(ql:quickload "alexandria")` got iterate's snapshot and the two forms in the other order
-got a different alexandria. The contribution is per DIRECTORY, not per file, because a
-directory is what `AsdfSystems.locate` consumes (it asks each one for `NAME.asd`): a
-release's own extra `.asd` beside a named one stays reachable (cl-sqlite's
-`sqlite-tests.asd`, trivia's `trivia.benchmark.asd`), which is what an unindexed secondary
-system relies on. The whole-release walk remains the FALLBACK for a release whose index
-names no `.asd` that exists -- a dist is not obliged to write the column, and contributing
-nothing would make the system unloadable. What this moved on a real cache (nothing:
-6 directories dropped out of 94, no emitted byte changed) is measured in
-`.kb/emitted-output-determinism.md`.
+## Search order = installation order, resolved PER SYSTEM
 
-**Within one release the contributed `.asd` directories are SORTED.** `ensureAvailable`
-returns one search path per requested system: the projects in dependency order (the
-`LinkedHashMap` `collectProjects` fills), and within each project every contributed
-directory, in path order (`addAsdDirs`). The sort is not cosmetic -- the index's file
-order is the publisher's, and the fallback walk hands back the host's directory order, so
-before it (2026-08-29) a release shipping
-`foo.asd` beside `test/foo.asd` gave two developers two different search paths and
-therefore two different compiled programs from one lockfile. Sorting also settles that
-case by rule rather than by luck: a parent path is a prefix of its children, so a
-release's top-level `.asd` is always ahead of one nested under it.
-`.kb/emitted-output-determinism.md` carries the invariant and the measurement.
+`locate(name)`: first installed dist whose `systems.txt` lists it wins; `collectProjects`
+resolves each dependency independently. Quicklisp installs first UNLESS the spec list names
+it (`distNameOrNull` per spec in the constructor) -- the whole ordering API. No
+`ql-dist:preference`.
 
-**Index loading is lazy per dist, and that is what makes the default free.** `ensureIndex`
-runs on the first lookup that REACHES a dist, so a second installed dist costs nothing
-until the first comes up short -- and a program whose systems are all in Quicklisp never
-fetches the Ultralisp distinfo at all (pinned:
-`DistClientTest.theFirstDistListingASystemProvidesIt` asserts the ultralisp distinfo URL
-was never requested).
+## What a release contributes
 
-**Identity and cache layout.** A dist's NAME is its cache directory, so name resolution
-must not need the network: `distNameOrNull` answers a known name as written, maps a known
-HOST (`dist.ultralisp.org`, `beta.quicklisp.org`, ...) to that dist's name, and otherwise
-slugs host+path. `distinfoUrl` then canonicalizes a known dist to ONE URL, so
-`http://dist.ultralisp.org/` (the front page's spelling, which serves the distinfo
-directly) and `ultralisp` are one dist sharing one cache rather than two. Cache root:
-`<base>/<dist>/` with `<base>` = `RONTOLISP_DIST_HOME` or `~/.rontolisp`, and
-`RONTOLISP_QUICKLISP_HOME` still overrides the quicklisp dist's directory alone --
-`~/.rontolisp/quicklisp/` is unchanged, so no existing cache is invalidated by the
-multi-dist layout. **Both environment variables are read in `createDefault` and passed in
-as overrides, never inside `homeFor`**: a client built with an explicit base (every test)
-must not pick up the developer's cache.
+- **The `.asd` files its dist index NAMES**, not every `.asd` in the tarball:
+  `releases.txt`'s trailing `file...` column, whose directories `collectAsdDirs` adds. The
+  whole-tarball walk instead let a release's VENDORED snapshot of another library
+  (`iterate-release-*/ext/alexandria/alexandria.asd`, `cffi-*/uffi-compat/uffi.asd`) compete
+  for that system name, making the answer depend on quickload order.
+- Per DIRECTORY, not per file (`AsdfSystems.locate` asks each dir for `NAME.asd`), so an
+  unindexed extra `.asd` beside a named one stays reachable.
+- FALLBACK: a release whose index names no existing `.asd` gets the whole-release walk.
+- **Directories are SORTED within a release** (`addAsdDirs`, path order); projects in
+  dependency order. Unsorted, `foo.asd` beside `test/foo.asd` gave two developers two
+  different compiled programs from one lockfile. See
+  `.kb/emitted-output-determinism.md`.
 
-**Compile path**: `LoadInliner.distDirective` matches a literal top-level
-`ql-dist:install-dist` / `ql:update-dist` (qualified-name match through
-`PackageRegistry.splitQualified`, like the `ql:quickload` matcher beside it), applies it to
-`ctx.dists()` WHILE SPLICING -- the dists have to be configured before the `quickload`
-forms below them download -- and consumes the form, leaving the dist name as a string
-constant (the top-level-statement pass then drops it, `.kb/toplevel-statement-values.md`).
-A computed argument is a hard error, and a NESTED occurrence is rejected by both compilers
-in the same `case` as `REQUIRE`/`PROVIDE`/`ASDF_DEFSYSTEM` (`Jvm/WasmExprCompiler`): a
-compiled program downloads nothing at run time, so a run-time install could only be a lie.
+## Laziness, identity, cache
 
-**Browser playground**: `Target_DistClient` (web profile, `src/web/java`) substitutes
-`createDefault` so the JDK `HttpClient` is unreachable in the Web Image and every download
-raises "not available in the browser playground". `install-dist` itself still succeeds
-there -- it performs no I/O -- and the failure lands on the `quickload` that needs the
-network, which is the same message it had before dists existed.
+- `ensureIndex` runs on the first lookup that REACHES a dist, so a second dist costs
+  nothing until the first comes up short.
+- Name resolution must not need the network: `distNameOrNull` takes a known name as
+  written, maps a known HOST (`dist.ultralisp.org`, `beta.quicklisp.org`, ...) to its name,
+  else slugs host+path. `distinfoUrl` canonicalizes a known dist to ONE URL, so
+  `http://dist.ultralisp.org/` and `ultralisp` share one cache.
+- Root `<base>/<dist>/`; `<base>` = `RONTOLISP_DIST_HOME` or `~/.rontolisp`.
+  `RONTOLISP_QUICKLISP_HOME` still overrides the quicklisp directory alone.
+- **Both env vars are read in `createDefault` and passed in as overrides, never inside
+  `homeFor`** -- a client built with an explicit base (every test) must not pick up the
+  developer's cache.
 
-**Coverage**: `DistClientTest` (index parsing, extraction, caching, transitive deps, the
-secondary-`NAME/SUB` fallback, the two search-path order tests above
-(`theAsdDirectoriesOfAReleaseAreSortedWhateverOrderTheHostWalkedThemIn`,
-`aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd`), the three
-what-a-release-contributes tests
-(`aVendoredExtCopyOfAnotherLibraryNeverReachesTheSearchPath`,
+## Compile path and browser
+
+- `LoadInliner.distDirective` matches a literal top-level `ql-dist:install-dist` /
+  `ql:update-dist` (via `PackageRegistry.splitQualified`), applies it to `ctx.dists()` WHILE
+  SPLICING (dists must be configured before the `quickload` forms below them) and consumes
+  the form, leaving the name as a string constant (dropped later,
+  `.kb/toplevel-statement-values.md`). Computed argument = hard error; NESTED occurrences
+  are rejected by both compilers in the same `case` as `REQUIRE`/`PROVIDE`/`ASDF_DEFSYSTEM`.
+- `Target_DistClient` (web profile, `src/web/java`) substitutes `createDefault`; downloads
+  raise "not available in the browser playground". `install-dist` still succeeds (no I/O),
+  so the failure lands on the `quickload`.
+
+## Coverage
+
+`DistClientTest` -- parsing, extraction, caching, transitive deps, the secondary-`NAME/SUB`
+fallback, the multi-dist group, and:
+`theFirstDistListingASystemProvidesIt` (asserts the ultralisp distinfo URL was never
+requested), `theAsdDirectoriesOfAReleaseAreSortedWhateverOrderTheHostWalkedThemIn`,
+`aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd`,
+`aVendoredExtCopyOfAnotherLibraryNeverReachesTheSearchPath`,
 `aVendoredCopyDoesNotShadowThatLibrarysOwnReleaseInEitherQuickloadOrder`,
-`aReleaseWhoseIndexNamesNoSystemFileFallsBackToTheWholeReleaseWalk`),
-plus the multi-dist group: second-dist-only system, first
-dist wins + no index fetch behind it, explicit reordering, URL-vs-name identity, unknown
-spec, `update-dist` refetch and its not-installed error), `LispEvaluatorQuicklispTest`
-(the interpreter's `install-dist` + `quickload` and the "installed dists (quicklisp)"
-error), `LoadInlinerTest.installDistIsConsumedAtCompileTimeAndTheQuickloadBelowItUsesTheDist`,
+`aReleaseWhoseIndexNamesNoSystemFileFallsBackToTheWholeReleaseWalk`.
+Also `LispEvaluatorQuicklispTest`,
+`LoadInlinerTest.installDistIsConsumedAtCompileTimeAndTheQuickloadBelowItUsesTheDist`,
 `RontoLispCliTest.distSpecsReadTheOptionThenTheEnvironment`. **No automated E2E hits the
-real network** -- verified manually on all four backends (2026-08-17): `--dist
-ultralisp,quicklisp` + `(ql:quickload "split-sequence")` takes the Ultralisp release
-(`sharplispers-split-sequence-*`), and an in-program
-`(ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)` +
-`(ql:quickload "circular-buffer")` -- a system ONLY Ultralisp has -- prints the same
-answer on the interpreter, the JVM, Preview 1 and a component.
+real network**; the four-backend Ultralisp check is manual.
 
-Docs: `guides/asdf-systems.md` ("Adding a dist (Ultralisp)"),
-`reference/functions/ql-dist-install-dist.md`, `reference/functions/ql-update-dist.md`,
-`reference/packages.md` (the `ql-dist` package).
+Docs: `guides/asdf-systems.md`, `reference/functions/ql-dist-install-dist.md`,
+`reference/functions/ql-update-dist.md`, `reference/packages.md`.

@@ -1,44 +1,19 @@
 # `--blas`: the matrix product on a tuned CBLAS
 
-The second acceleration flag over the `linalg:` interception seam (todo-470, 2026-08-20),
-extended to the `vec:` GEMV pair on 2026-09-02 (todo-471).
-Read `.kb/linalg-simd.md` first: this reuses that file's declined-input protocol verbatim
-and only adds an attempt ahead of it. `.kb/linalg.md` has the semantics of the library
-being accelerated.
-
-Two backends, one per interception mechanism -- the same two `--gpu` reaches, and for the
-same reason (the foreign function API). `--gpu` (`.kb/gpu.md`) has since landed on BOTH of
-them and goes AHEAD of this one, so the device is asked first and declines here:
+Second acceleration flag over the `linalg:` interception seam, extended to the `vec:` GEMV pair. Read `.kb/linalg-simd.md` first — this reuses its declined-input protocol verbatim and only adds an attempt ahead of it; `.kb/linalg.md` has the semantics of the library being accelerated.
 
 | backend | interceptor | binding |
 |---|---|---|
 | interpreter (`prog.lisp --blas`, native binary included) | `eval/LinalgBlas` (re-`defineFunction`: `install` for `linalg:`, `installVec` for `vec:`) | `eval/LinalgBlasKernels` (java.lang.foreign) |
-| JVM (`-o Prog.class --blas`) | `codegen/jvm/JvmLinalgKernelCompiler` (`linalg:` call site) and `JvmSimdCompiler.compileMatvecChain` (`vec:`) | `JvmBlasTemplate` (the embedded bridge) |
+| JVM (`-o Prog.class --blas`) | `codegen/jvm/JvmLinalgKernelCompiler` (`linalg:` call site) and `JvmSimdCompiler.compileMatvecChain` (`vec:`) | `JvmBlasTemplate` (embedded bridge) |
 
-WASM has no FFM, so `--blas` with a `.wasm` output is a hard error rather than a silent
-no-op (`RontoLispCli.compileRecorded`). The two WASM backends keep `--simd`.
+WASM has no FFM, so `--blas` with a `.wasm` output is a hard error, not a silent no-op (`RontoLispCli.compileRecorded`); the WASM backends keep `--simd`. `--gpu` (`.kb/gpu.md`) reaches the same two backends and goes AHEAD of this one. User-facing page: `doc/{en,ja}/guides/blas-acceleration.md` — keep the intercepted set, install recommendation, thread note and precision contract in sync with it.
 
-The user-facing description lives in `doc/{en,ja}/guides/blas-acceleration.md` (its own
-page, split out of the `--simd` guide). Keep the intercepted set, the install
-recommendation, the thread note and the precision contract in sync with it.
+## Posture
+**A tuned BLAS is RECOMMENDED, never required.** Nothing bundled, nothing downloaded; a machine without one runs the same programs to the same output. ONE mechanism — find a tuned CBLAS, verify it is tuned, use it, otherwise decline to the kernel we already have. Platforms differ only in what the search finds (macOS finds Accelerate for free; a Linux user is told to install OpenBLAS).
 
-## The decision this item is built on
-
-**A tuned BLAS is RECOMMENDED, never required** (user, 2026-08-20). Nothing is bundled,
-nothing is downloaded, and a machine without one runs the same programs to the same output.
-There is ONE mechanism -- find a tuned CBLAS, verify it is tuned, use it, otherwise decline
-to the kernel we already have -- and the platforms differ only in what the search finds:
-macOS finds Accelerate with the user doing nothing, a Linux user is TOLD in the docs to
-install OpenBLAS and gets 5-20x for it. This is `--gpu`'s posture toward a GPU, one layer
-down.
-
-## Why it is its own flag rather than what `--simd` means
-
-`--simd`'s three backends agree bit for bit with each other and, at `#d`, with the scalar
-defun, because we wrote all three kernels. A vendor BLAS blocks and reorders its reduction,
-so **which library and which VERSION is installed becomes part of the numerical answer**, at
-`linalg`'s DEFAULT width. Folding that into `--simd` would silently change what an existing
-`--simd` build computes. So it is a separate opt-in, and the composition is a chain:
+## Why its own flag, not part of `--simd`
+`--simd`'s three backends agree bit for bit with each other and, at `#d`, with the scalar defun, because we wrote all three kernels. A vendor BLAS blocks and reorders its reduction, so **which library and which VERSION is installed becomes part of the numerical answer** at `linalg`'s DEFAULT width. Composition is a chain:
 
 ```
 --blas --simd   ->  library gemm -> lane kernel -> scalar linalg.lisp defun
@@ -46,478 +21,89 @@ so **which library and which VERSION is installed becomes part of the numerical 
 --simd          ->                 lane kernel -> scalar linalg.lisp defun
 ```
 
-Each link is the SAME partial-kernel protocol: return the null sentinel for an input it
-declines, and the layer below answers. On the interpreter that is install order
-(`LinalgBlas.install` runs LAST, capturing whatever `linalg:dot` was bound to); on the JVM it
-is `JvmLinalgKernelCompiler.compile`, which evaluates each argument form ONCE into a temp and
-emits one `IFNONNULL` per attempt to a common end label. The temps are what make a chain of
-any length safe -- recompiling the argument forms would repeat their side effects.
+Each link uses the SAME partial-kernel protocol: return the null sentinel for a declined input, the layer below answers. Interpreter = install order (`LinalgBlas.install` runs LAST, capturing whatever `linalg:dot` was bound to). JVM = `JvmLinalgKernelCompiler.compile`, which evaluates each argument form ONCE into a temp and emits one `IFNONNULL` per attempt to a common end label — the temps are what make a chain of any length safe, since recompiling argument forms would repeat side effects.
 
-`JvmLinalgSimdCompiler` was renamed `JvmLinalgKernelCompiler` for this: it is the one
-`linalg:` call-site compiler, and it now emits a chain of up to two bridges. The two bridges
-are separate embedded classes on purpose -- `--blas` must not drag in the incubator Vector
-API, which would make the emitted class need `java --add-modules jdk.incubator.vector` to
-run (pinned by `theTwoFlagsAreOrthogonalAndEmbedTheirOwnBridges`).
+`JvmLinalgSimdCompiler` was renamed `JvmLinalgKernelCompiler`: it is the one `linalg:` call-site compiler and emits a chain of up to two bridges. The two bridges are separate embedded classes on purpose — `--blas` must not drag in the incubator Vector API, which would make the emitted class need `java --add-modules jdk.incubator.vector` (pinned by `theTwoFlagsAreOrthogonalAndEmbedTheirOwnBridges`).
 
-## The intercepted set: the product, in both packages that have one
+## The intercepted set (three members, no more)
+- **`linalg:dot`** in its three matrix shapes: matrix x matrix (`cblas_dgemm`/`cblas_sgemm`), matrix x vector and vector x matrix (`cblas_dgemv`/`cblas_sgemv`, the second with `CblasTrans`). `linalg:matmul` at rank <= 2 and `linalg:solve` are accelerated TRANSITIVELY through their `linalg.lisp` bodies.
+- **`vec:matvec`** and **`vec:matvec-into`**: one `cblas_?gemv` with `alpha = 1`, `beta = 0`, `CblasNoTrans`. The `-into` form is the better fit — gemv writes into a caller-supplied `y`, so the interception drops the result allocation as well as the loop. The `vec:` half is what makes the flag reach the shipped numeric examples (`simd-dot`, `simd-gemv`, `tiny-llm`, `llama2` are all `vec:` programs; an LLM decode is GEMV end to end).
+- `vec:mean` / `vec:norm` are not intercepted — they fold, they do not multiply.
 
-Three members, no more:
-
-- **`linalg:dot`**, in its three matrix shapes -- matrix x matrix (`cblas_dgemm` /
-  `cblas_sgemm`), matrix x vector and vector x matrix (`cblas_dgemv` / `cblas_sgemv`, the
-  second with `CblasTrans`). `linalg:matmul` at rank <= 2 and `linalg:solve` are
-  accelerated TRANSITIVELY, because their `linalg.lisp` bodies call `linalg:dot`.
-- **`vec:matvec`** and **`vec:matvec-into`** (todo-471, 2026-09-02) -- one
-  `cblas_?gemv` with `alpha = 1`, `beta = 0`, `CblasNoTrans`. The `-into` form is the
-  better fit of the two: gemv writes into a caller-supplied `y`, so the interception drops
-  the result allocation as well as the loop. `vec:mean` / `vec:norm` are not intercepted
-  and are not accelerated by this flag either -- they fold, they do not multiply.
-
-The `vec:` half is what makes the flag reach the programs it exists for. Before it,
-**not one of the numeric examples this project ships was touched by `--blas`**:
-`simd-dot`, `simd-gemv`, `tiny-llm` and `llama2` are all `vec:` programs, and an LLM
-decode is GEMV from end to end -- one weight matrix times one activation vector, over and
-over.
-
-Everything else declines, by measurement rather than by staging:
-
-- **The memory-bound members would gain nothing.** `linalg:sum`, a vector-vector
-  `linalg:dot` / `vec:dot`, `axpy`, every element-wise `vec:` kernel: the library call
-  cannot beat a lane loop over the same bytes, and `--simd` already covers them. This is
-  the claim that keeps `vec:dot` out even though `vec:matvec` beside it is in.
-- **The stacked rank-3 product (`%la-matmul-nd`) is a separate interception.** `--simd`
-  gained one in todo-467 (2026-08-20); `--blas` deliberately did NOT, and the reasoning was
-  written down there rather than deferred again -- see "Why `--blas` stopped at `dot`"
-  below.
-- **`worth(n, m, p)` = `n*m*p >= 64`.** Measured on an M4 Max, a critical downcall floors at
-  ~30 ns and the crossover against a plain JIT-warm `ikj` triple loop is at about 4x4x4
-  (n=4: 0.039 us against 0.046; n=8: 0.071 against 0.289; n=32: 0.44 against 16.9).
+Declines, by measurement:
+- **Memory-bound members gain nothing**: `linalg:sum`, vector-vector `linalg:dot` / `vec:dot`, `axpy`, every element-wise `vec:` kernel. A library call cannot beat a lane loop over the same bytes, and `--simd` already covers them. This is what keeps `vec:dot` out while `vec:matvec` beside it is in.
+- **The stacked rank-3 product (`linalg::%la-matmul-nd`) is a separate interception**, taken by `--simd` and `--gpu` but not here — see below.
+- **`worth(n, m, p)` = `n*m*p >= 64`.** A critical downcall floors at ~30 ns and the crossover against a JIT-warm `ikj` triple loop is about 4x4x4.
 
 ## `vec:` gets its own guarded call site, not a rung inside the `--simd` bridge
+The `linalg:` kernels are PARTIAL (null sentinel, call site falls through); the `vec:` kernels are TOTAL (they accept packed float arrays of one width and SIGNAL otherwise), so `JvmSimdCompiler` emits a bare `INVOKESTATIC` and `VecSimd` installs a signalling native — no guard to hang a library attempt on.
+- Rejected: putting the attempt inside the lane bridge (`simdMatvec` tries the library, then its own loop). It would make the `vec:` half of `--blas` require `--simd` (a `--blas`-only build would run the scalar `vec.lisp` defun for a GEMV, undiscoverably) and drag FFM into the `--simd` bridge and the Vector API into the `--blas` one, destroying the orthogonality `JvmBlasRuntimeBuilder` exists for.
+- Done: `vec:matvec` / `vec:matvec-into` get a guarded CHAIN of their own — device -> library -> lane kernel -> spliced defun, over one set of temps, each rung declining with `null`, bottom rung total. `--gpu` had already built this for `vec:matvec` (`JvmSimdCompiler.compileGpuMatvec`), so the work was generalizing that site into `compileMatvecChain` (gpu/blas/simd rungs each optional, defun always) and routing both members through it. `JvmExprCompiler` claims the site when `--blas` emitted its bridge (either member) or `--gpu` emitted its own (allocating form only); a `--simd`-only build keeps the bare `INVOKESTATIC` byte for byte. Interpreter install order is the same: `LinalgBlas.installVec` after `VecSimd.install`, before `LinalgGpu.installVec`.
+- Emit gate: `JvmLispCompiler` scans for `JvmLinalgBlas.qualifiedMembers()` — `linalg:dot`, `vec:matvec`, `vec:matvec-into`. A gate on `linalg:dot` alone would embed no bridge for exactly the programs the flag is for.
 
-The `vec:` half raised one real design question (todo-471). The `linalg:` kernels are
-PARTIAL -- they return the null sentinel for anything they decline and the call site falls
-through -- but the `vec:` kernels are TOTAL: they accept packed float arrays of one width
-and SIGNAL on anything else, so `JvmSimdCompiler` emits a bare `INVOKESTATIC` for them and
-`VecSimd` installs a native that signals. There is no guard to hang a library attempt on.
-Two ways out, and they differ in what `--blas` MEANS:
-
-1. Put the attempt INSIDE the lane bridge (`simdMatvec` tries the library, then its own
-   loop). Smaller, and wrong. It makes the `vec:` half of `--blas` require `--simd`: a
-   `--blas`-only build would run the scalar `vec.lisp` defun for a GEMV, which is the one
-   thing this flag must never do, and undiscoverably so. It also drags FFM into the
-   `--simd` bridge and the incubator Vector API into the `--blas` one, destroying the
-   orthogonality `JvmBlasRuntimeBuilder` exists for -- a `--blas` class would then need
-   `java --add-modules jdk.incubator.vector` to run.
-2. **Give `vec:matvec` / `vec:matvec-into` a guarded CHAIN of their own**, the shape
-   `JvmLinalgKernelCompiler` already emits for `linalg:`: device -> library -> lane kernel
-   -> spliced defun, over one set of temps, each rung declining with `null` into the next
-   and the bottom rung total. **This is what was done.**
-
-It duplicates no seam. `--gpu` had already built exactly this for `vec:matvec`
-(`JvmSimdCompiler.compileGpuMatvec`, the one device member outside `linalg:`), so the work
-was to GENERALIZE that one call site into `compileMatvecChain` -- gpu rung optional, blas
-rung optional, simd rung optional, defun always -- and route both members through it.
-`JvmExprCompiler` claims the site when `--blas` emitted its bridge (either member) or
-`--gpu` emitted its own (the allocating form only); a `--simd`-only build keeps the bare
-`INVOKESTATIC` it always emitted, byte for byte. The interpreter is the same story one
-layer up: `LinalgBlas.installVec` runs after `VecSimd.install` and before
-`LinalgGpu.installVec`, so the install order is device -> library -> lanes -> defun there
-too.
-
-The emit gate moved with it: `JvmLispCompiler` scans for
-`JvmLinalgBlas.qualifiedMembers()` -- `linalg:dot`, `vec:matvec`, `vec:matvec-into` --
-rather than the product alone. A gate on `linalg:dot` would embed no bridge for exactly
-the programs the flag is for.
-
-## Why `--blas` stopped at `dot` (todo-467, 2026-08-20)
-
-todo-467 intercepted `linalg::%la-matmul-nd` for `--simd` and asked whether the same member
-should get a `cblas_?gemm` per matrix over this seam. It should, eventually -- a stacked
-product IS a batch of gemms, the `gemm`/`gemmF` entry points here already take element
-OFFSETS, and on a transformer that is where the time is. It was NOT done, on a budget, and
-this is what the next person needs:
-
-- **It is not "a handful of lines over the bridge that already exists".** `--blas` is built
-  around exactly one member: `JvmLinalgBlas.handles` compares against one name,
-  `JvmBlasRuntimeBuilder` registers one `ops` key (`DOT`), and
-  `JvmLinalgKernelCompiler.compile` emits the blas attempt with that key hardcoded. A
-  second member means a member->key map on all three, plus the emit-gate scan.
-- **The template cannot borrow the batch walk.** `JvmBlasTemplate`'s bytes must stand
-  alone once embedded (no reference to any other rontolisp class), so it would need its own
-  copy of `laDims` / `laBcastShape` / `laBatchStrides` / the odometer -- ~120 lines
-  duplicated from `JvmSimdVectorTemplate`, kept in lockstep by hand, in a file whose whole
-  discipline is already "mirrored, change them together". (todo-123 phase 2 found the way
-  out of that for `--gpu`: the blob can carry a CLOSURE of classes, renamed by one prefix
-  rule, so the compiled backend runs the library's own bytes instead of a copy --
-  `.kb/gpu.md`, "The JVM backend". Nothing here has been rebuilt on it; if this member set
-  ever grows, that is the mechanism to grow it on.)
-- **`worth(n, m, p)` has to be re-decided per batch.** The existing threshold is one
-  product's flops; for a batch the right predicate is the PER-MATRIX work (a downcall per
-  matrix, `batches` of them), and whether `batches` small enough to lose to the lane kernel
-  should decline the whole call. That is a measurement, not a transcription. (`--gpu` took
-  this member on 2026-08-21 and its answer does NOT carry over, for the reason this bullet
-  gives: a device runs the whole stack in ONE launch, so its threshold is the TOTAL work
-  and a batch of tiny matrices still pays. A library gemm per matrix is `batches`
-  downcalls, so the per-matrix rule stands here.)
-- **The precision contract grows a case.** `--simd`'s batched kernel is a per-batch
-  `linalg:dot` exactly; a library gemm per batch is "close to", the same way this file
-  already says for rank 2 -- and the docs section here names `linalg:dot` specifically.
-
-None of that is hard. It is simply a second item, and the `--simd` interception is the one
-that had to land (it reaches the WASM backends, which `--blas` never will). `--gpu` has
-since taken the member (`.kb/gpu.md`), so on the interpreter and the JVM a stacked product
-already has a non-CPU path; what `--blas` would add is a rung between the device and the
-lane kernel, for the stacks the device declines.
+## Why `--blas` stopped at `dot` (what a later item needs)
+A stacked product IS a batch of gemms (a `cblas_?gemm` per matrix) and the `gemm`/`gemmF` entry points already take element OFFSETS, but:
+- Not "a handful of lines": `JvmLinalgBlas.handles` compares one name, `JvmBlasRuntimeBuilder` registers one `ops` key (`DOT`), and `JvmLinalgKernelCompiler.compile` hardcodes that key. A second member needs a member->key map on all three plus the emit-gate scan.
+- The template cannot borrow the batch walk: `JvmBlasTemplate`'s bytes must stand alone once embedded (no reference to another rontolisp class), so it would need its own copy of `laDims` / `laBcastShape` / `laBatchStrides` / the odometer (~120 lines duplicated from `JvmSimdVectorTemplate`). The way out exists — `--gpu`'s blob carries a CLOSURE of classes renamed by one prefix rule (`.kb/gpu.md`, "The JVM backend") — and is the mechanism to grow this member set on.
+- `worth(n, m, p)` must be re-decided per batch: for a batch the right predicate is PER-MATRIX work (`batches` downcalls), not total work. `--gpu`'s answer does NOT carry over — a device runs the whole stack in ONE launch, so its threshold is TOTAL work.
+- The precision contract grows a case: `--simd`'s batched kernel is a per-batch `linalg:dot` exactly; a library gemm per batch is only "close to".
 
 ## Identifying a TUNED library is the load-bearing part
+"Found a CBLAS" is not the predicate: the netlib REFERENCE implementation exports the same symbols and is SLOWER than our own `--simd` matmul (~1.6x regression at linalg's default width). The soname proves nothing either — Debian's `libblas.so.3` is an `update-alternatives` symlink.
 
-"Found a CBLAS" is not the useful predicate. The netlib REFERENCE implementation exports the
-same symbols and measured **7-8 GFLOP/s** on a DGX Spark, where the same machine's `--simd`
-matmul does n=512 f64 in 21.2 ms against the reference BLAS's 35.3: **binding what was found
-would have been a silent 1.6x REGRESSION at linalg's default width.** Being slower than the
-unaccelerated build is the one way this feature can do harm.
+**Rule: marker symbols.** A candidate is accepted only if it is Accelerate (by framework path) or exports a symbol a tuned implementation has and the reference does not: `openblas_get_config`, `mkl_get_version` / `MKL_Get_Version`, `bli_info_get_version_str`, `ATL_buildinfo`, `nvpl_blas_get_version`, `armpl_get_version`. Cheap, deterministic, no startup benchmark. `RONTOLISP_BLAS` overrides both search and check; `RONTOLISP_BLAS_VERBOSE=1` prints what was bound.
 
-The soname proves nothing either -- Debian's `libblas.so.3` is an `update-alternatives`
-symlink that points at OpenBLAS when one is installed and at the reference when not.
-
-So the rule is **marker symbols**: a candidate is accepted only if it is Accelerate (by
-framework path) or exports a symbol a tuned implementation has and the reference does not
-(`openblas_get_config`, `mkl_get_version` / `MKL_Get_Version`, `bli_info_get_version_str`,
-`ATL_buildinfo`, `nvpl_blas_get_version`, `armpl_get_version`). The marker is cheap and
-deterministic and costs no startup benchmark; the throughput measurement that established
-the rule lives in `.todo/123-gpu-acceleration/AccelerateProbe.java` and stays runnable, so
-the rule can be re-checked on new hardware. `RONTOLISP_BLAS` overrides both the search and
-the check (the user has asserted it); `RONTOLISP_BLAS_VERBOSE=1` prints what was bound.
-
-The candidate list, the marker list, the thread-query table, `MIN_WORK`,
-`CRITICAL_FLOP_CEILING`, `BARRIER_WORK` and `BARRIER_CALLS` are MIRRORED in
-`eval/LinalgBlasKernels` and `codegen/jvm/JvmBlasTemplate` -- the JVM template's bytes must
-stand alone once embedded, so it cannot call the eval class. Change them together. This is
-the duplication `--gpu`'s JVM half was built to avoid (`.kb/gpu.md`); the same treatment
-would fit here, and has not been applied.
+The candidate list, marker list, thread-query table, `MIN_WORK`, `CRITICAL_FLOP_CEILING`, `BARRIER_WORK` and `BARRIER_CALLS` are MIRRORED in `eval/LinalgBlasKernels` and `codegen/jvm/JvmBlasTemplate` (the template's bytes stand alone once embedded, so it cannot call the eval class). **Change them together.**
 
 ## No copy: `Linker.Option.critical` takes heap segments
+A `critical(true)` downcall accepts heap `MemorySegment`s, and `MemorySegment.ofArray(a).asSlice(off * 8)` carries the compiled representation's dimension header out of the picture for free — so there is no heap->native copy cost. The price: a critical call does NOT transition the thread to native, so the VM cannot reach a safepoint while it runs.
 
-`linalg`'s arrays are Java heap `double[]` / `float[]`, and FFM cannot normally hand a heap
-array to a native call -- which is why todo-470 listed the heap -> native copy as a
-structural cost and shared it with todo-123 phase 3. It is not one. A `critical(true)`
-downcall accepts heap `MemorySegment`s, and `MemorySegment.ofArray(a).asSlice(off * 8)`
-carries the compiled representation's dimension header out of the picture for free. Measured
-(M4 Max, f64, ms per n x n gemm):
-
-| n | copy into a confined arena | critical, no copy |
-|---|---|---|
-| 32 | 0.0241 | **0.0028** |
-| 128 | 0.0297 | **0.0127** |
-| 512 | 0.5604 | **0.3269** |
-| 1024 | 3.4540 | **2.8693** |
-| 2048 | 23.6543 | 22.3545 |
-
-The cost is that a critical call does NOT transition the thread to native, so the VM cannot
-reach a safepoint while it runs. Hence the hybrid: **`2*n*m*p <= 2^32` goes critical, above
-that the operands are staged in a confined arena.** 2^32 flops is ~5 ms on a tuned library,
-and from there up the staging copy is a few percent of the call (5% at n=2048), so the
-bounded GC latency is nearly free exactly where it starts to matter. A gemv is always
-critical: it is memory-bound, so its duration is bounded by the operand it was handed.
-
-## What it is worth
-
-Apple M4 Max, macOS 26.3.1, Accelerate, one `#d` n x n matmul, ms per call. `--simd` is
-post-todo-469:
-
-| n | interpreter scalar | interpreter `--simd` | interpreter `--blas` | JVM `--simd` | JVM `--blas` |
-|---|---|---|---|---|---|
-| 128 | 1152 | 0.550 | **0.040** | 0.350 | **0.026** |
-| 256 | -- | 2.500 | **0.113** | 2.590 | **0.097** |
-| 512 | -- | 20.667 | **0.380** | 21.100 | **0.450** |
-| 1024 | -- | -- | **3.100** | 181.500 | **3.167** |
-
-So 6-54x over `--simd`, and the INTERPRETER lands on the JVM's number: once the product is a
-library call, the interpreter's per-call overhead is all that is left of the gap between the
-two backends. On Linux, OpenBLAS 0.3.26 on a 20-core Grace machine measured 20x `--simd`
-threaded and 5.2x single-threaded (f64, n=512: 21.4 ms against 1.073 / 4.137).
-
-Re-run both halves together, never one against a stale copy of the other:
-`.todo/123-gpu-acceleration/AccelerateProbe.java` for the library and a `linalg:matmul` loop
-for the `--simd` column.
-
-### The GEMV, and what the hardware decides (2026-09-02)
-
-`.todo/471-.../GemvProbe.java` is the gemv counterpart -- it times `cblas_?gemv` against
-the LANE kernel the emitted bridge actually runs (`FloatVector.SPECIES_128` for `#f`,
-`DoubleVector.SPECIES_PREFERRED` for `#d`, both folding with `mul().add()`), so the ratio
-is the one the flag delivers rather than a ratio over a scalar loop. Its directory
-outlived the item that produced it, the way `.todo/123-gpu-acceleration/` did:
-`RONTOLISP_BLAS` (or `PROBE_BLAS`) names the library, so it runs on any machine.
-**Two machines, and they do not tell the same story:**
-
-| rows x cols | M4 Max / Accelerate, ONE thread | dorian / OpenBLAS, 1 thread | dorian / OpenBLAS, 64 threads |
-|---|---|---|---|
-| 256x256 (`simd-gemv`) | 6.3x | 1.69x | 1.35x |
-| 288x288 (llama2 stories15M attention) | 7.0x | 1.81x | 2.01x |
-| 288x768 (its FFN up-projection) | 9.5x | 1.92x | 7.63x |
-| 768x288 (its FFN down-projection) | 8.0x | 1.83x | 8.63x |
-| 4096x288 | 8.0x | 1.73x | 9.58x |
-| 2048x2048 (Accelerate THREADS this one) | 8.2x | 1.97x | 18.65x |
-| f64 256x256 | 6.9x | 1.34x | **0.84x** |
-| f64 512x512 | 7.8x | 1.36x | 7.32x |
-| f64 2048x2048 (Accelerate THREADS this one) | 8.0x | 1.21x | 15.54x |
-
-dorian is a 64-core Intel Xeon E5-2697A v4 with OpenBLAS 0.3.x from Debian. The M4 Max
-column is todo-471's original table (Accelerate, 2026-08), and its thread count was
-established afterwards, by todo-651 on 2026-09-03 -- see "What Accelerate does about
-threads" below. It is ONE at every row but the two marked, so the back-to-back trap the
-next paragraph describes does not reach those numbers and they stand as measured. **The x86-64 single-thread
-ratio is a third of the Apple one**, which is what the lane kernel's pinned
-`SPECIES_128` costs it on Apple and does not cost it here: 128-bit lanes are all NEON has,
-while an AVX2 machine gives the JIT 256-bit registers for the same source, so the kernel
-being beaten is twice as fast to begin with. **The premise -- gemv is worth binding --
-holds on both; the 6-9x figure is Apple's, not the feature's.**
-
-The 64-thread column is the trap. A gemv is memory-bound and short, so a threaded library
-pays a barrier per call that the call itself cannot amortize: at f64 256x256 it is a net
-LOSS, and end to end it is far worse than the table suggests. llama2 stories15M on the JVM
-backend, 150 tokens, greedy:
-
-| build | tok/s |
-|---|---|
-| `--simd` | 101.8, 110.1 |
-| `--simd --blas`, `OPENBLAS_NUM_THREADS=1` | 123.7, 120.8 |
-| `--simd --blas`, 64 threads (the default) | 16.0 |
-
-So on this machine the flag is **1.15x** where it is capped and **5.4x SLOWER** where it
-is not. The threads contract below is not advice for polite multi-tenancy; for a decode
-loop it is the difference between a win and a rout, and the docs say so.
-
-**That ratio table is a back-to-back loop, and it flatters the threaded column** (todo-649,
-2026-09-02). OpenBLAS's pthread pool keeps spinning while calls follow each other with
-nothing in between, so a microbenchmark never pays the wake-up a real program does: the
-same 288x288 `#f` gemv is 17.4 us hot and **90.0 us** when ~200 us of unrelated Java work
-sits between calls, against 13.3 us capped. Trust the end-to-end tok/s, not the ratio
-table -- and re-measured on 2026-09-02 the tok/s themselves move with what else the machine
-is doing: at load average 15-40 the same three builds gave 99-110, 123-128 and **9-64**.
-The threaded loss GROWS with contention, so 5.4x is a floor rather than a figure.
-
-**This trap had already been found once, and the finding did not travel.** todo-478 hit
-the identical mechanism over a `ForkJoinPool` and wrote it up as the decisive probe of
-that item -- `.kb/simd-parallel.md`, "Back-to-back calls are not the workload": a shape
-that measured 1.8x at 768x288 back to back measured **0.5-0.9x with a 20-200 us gap**,
-which is this table's error in the same direction and the same order. Its fix is the one
-every tuned BLAS already ships (workers that spin on an epoch and park only after an idle
-millisecond), which is exactly why OpenBLAS's pool flatters a hot loop here. todo-649 re-
-derived all of it from scratch, because that paragraph is indexed under `--parallel` and
-nobody binding a library reads it. The general rule -- a probe whose SHAPE differs from
-the step's shape measures something the program never runs -- is being lifted out to
-`.kb/measurement-probes.md`, and this section is one of its instances.
-
-The interpreter tells the same story from further away, because there the GEMV is a small
-share of a much slower loop. `simd-gemv` (256x256 `#f`, 100 steps), `java -jar`: 8964 ms
-scalar -> 187 ms `--simd` -> 131 ms `--simd --blas` (1 thread) -> 371 ms `--simd --blas`
-(64 threads). `--blas` WITHOUT `--simd` is 629 ms: the GEMV is a library call, but
-`vec:dot` and `vec:scale` beside it are still interpreted defuns, which is most of what is
-left.
-
-On the NATIVE BINARY the same program is 190 ms under `--blas` alone, 47 ms under `--simd`
-and 49 ms under `--simd --blas` -- **a tie**. At this shape the native binary's lane kernel
-is already at library speed, so the flag buys nothing there and the reason to pass it is
-the bigger shapes, not this one. Which is the general shape of the finding: `--blas` is
-worth passing for a GEMV when the matrix is large, the library is capped to one thread,
-and the rest of the loop is compiled. Two of those three failing is enough to make it a
-wash, and all three failing makes it a loss.
+**Hybrid: `2*n*m*p <= 2^32` goes critical; above that the operands are staged in a confined arena.** 2^32 flops is ~5 ms on a tuned library, and from there up the staging copy is a few percent of the call, so bounded GC latency is nearly free exactly where it matters. A gemv is always critical (memory-bound, duration bounded by the operand it was handed).
 
 ## The two contracts
+### 1. Precision
+An accelerated product is CLOSE to the scalar defun, not equal, at both widths. Over inputs exact at the operand width (integers, powers of two) results match exactly — which is what lets cross-backend tests assert equality; over inexact ones they differ in the last few ulps (pinned at < 1e-12 relative over a 64-long fold rather than at equality, because the library and its version decide the figure). The scalar `linalg.lisp` / `vec.lisp` defun remains the cross-backend oracle, and **`--blas` stays out of `ci-spec.yaml`**.
 
-1. **Precision.** An accelerated product is CLOSE to the scalar defun, not equal to it, at
-   both widths. Over inputs exact at the operand width (integers, powers of two) the results
-   still match exactly -- which is what lets the cross-backend tests assert equality; over
-   inexact ones they differ in the last few ulps (measured < 1e-12 relative over a 64-long
-   fold, pinned at that tolerance rather than at an equality because the library and its
-   version decide the figure). The scalar `linalg.lisp` / `vec.lisp` defun remains the
-   cross-backend oracle, and `--blas` stays out of `ci-spec.yaml`.
+The pinned example outputs were the risk and did not move: the `vec:` half reorders an `#f` reduction on exactly the shapes whose DERIVED integers the examples pin (max relative difference on the classifier-head shape is 5.5e-3, enough to move an argmax). Each was RUN: `simd-gemv` prints the same indices under `--blas`, `--simd --blas` and both thread settings; `tiny-llm` the same nine tokens; `llama2` the same story, byte-identical at 150 tokens on stories15M. Examples were NOT loosened. If a future machine or library version moves one, fix that — do not loosen the expectation.
 
-   **The pinned example outputs were the risk, and they did not move** (2026-09-02). The
-   `vec:` half reorders an `#f` reduction on exactly the shapes whose DERIVED integers the
-   examples pin -- `simd-gemv`'s argmax indices, `tiny-llm`'s token ids, `llama2`'s story
-   -- and the probe's max relative difference on the classifier-head shape is 5.5e-3,
-   easily enough to move an argmax. Every one was run rather than assumed: `simd-gemv`
-   prints the same ten indices and the same step-100 index under `--blas`, `--simd
-   --blas`, and both thread settings; `tiny-llm` the same nine tokens; `llama2` on
-   stories260K the same story, and on stories15M -- 288-wide, with a 32000x288 classifier
-   head folded every token -- byte-identical output at 150 tokens between `--simd` and
-   `--simd --blas`. So the examples were NOT loosened and `--blas` did not need the
-   `--gpu` posture of "not compared against the other backends". If a future machine or
-   library version does move one, THAT is the fix -- not a looser expectation.
-2. **Threads.** A tuned BLAS is multi-threaded and rontolisp is not: one `linalg:matmul` may
-   occupy every core. That is most of the Linux figure above. The docs say so and name
-   `OPENBLAS_NUM_THREADS` / `MKL_NUM_THREADS` / `VECLIB_MAXIMUM_THREADS` rather than fighting
-   them. **For the GEMV half this is not a courtesy, it is a correctness-of-the-claim
-   issue**: a decode loop is thousands of short memory-bound calls, the per-call barrier
-   swamps them, and on a 64-core machine the flag turns a 1.15x win into a 5.4x loss
-   (measured above). rontolisp does not set the variable -- a library's thread pool is the
-   user's to size, and overriding it from inside would be a worse surprise than the one it
-   fixes -- so the docs lead with it on this page. Since todo-478 `--simd --parallel` (`.kb/simd-parallel.md`) threads the lane GEMM
-   too, and the library still wins it by 1.3-3.8x at n = 128..1024 on the GB10 (a blocked
-   SGEMM against an `ikj` lane loop), so this flag stays the answer where a library exists.
+### 2. Threads
+A tuned BLAS is multi-threaded and rontolisp is not: one `linalg:matmul` may occupy every core. The docs name `OPENBLAS_NUM_THREADS` / `MKL_NUM_THREADS` / `VECLIB_MAXIMUM_THREADS` rather than fighting them; rontolisp never sets them (a library's pool is the user's to size).
 
-   **What the binary says about it** (todo-649, 2026-09-02). Not setting the count is only
-   half an answer: it leaves the user who reads the page AFTERWARDS with an acceleration
-   flag that made their program four times slower and no diagnostic of any kind. The other
-   half is a note -- and the measurement decided WHERE it fires. One call at a time, with
-   ~200 us of unrelated Java work in between (the shape a real loop has), on dorian:
+**For the GEMV half this is correctness-of-the-claim, not courtesy.** A decode loop is thousands of short memory-bound calls and the per-call barrier swamps them: on a 64-core OpenBLAS machine `examples/llama2/llama2.lisp` on stories15M runs 123 tok/s with `OPENBLAS_NUM_THREADS=1` and **16 tok/s** at the 64-thread default (a 5.4x LOSS where the capped build is a 1.15x win), and the loss GROWS with machine contention. Since `--simd --parallel` (`.kb/simd-parallel.md`) threads the lane GEMM too, the library still wins it by 1.3-3.8x at n = 128..1024, so this flag stays the answer where a library exists.
 
-   | call | flops | 64 threads | 1 thread |
-   |---|---|---|---|
-   | gemv 288x288 (llama2 attention) | 166 K | 90.0 us | **13.3 us** |
-   | gemv 768x288 (its FFN) | 442 K | 51.1 us | **32.3 us** |
-   | gemv 4096x288 | 2.36 M | **48.8 us** | 177.5 us |
-   | gemv 32000x288 (its classifier head) | 18.4 M | **579 us** | 3291 us |
-   | gemm 64x64x64 | 524 K | 20.4 us | **13.6 us** |
-   | gemm 128x128x128 | 4.19 M | **53.2 us** | 66.0 us |
-   | gemm 256x256x256 | 33.6 M | **122 us** | 484 us |
-   | gemm 1024x1024x1024 | 2.15 G | **4738 us** | 29559 us |
+**Trap: a back-to-back probe flatters the threaded column.** OpenBLAS's pthread pool keeps spinning while calls follow each other, so a microbenchmark never pays the wake-up a real program does — the same 288x288 `#f` gemv is 17.4 us hot and **90.0 us** with ~200 us of unrelated Java work between calls, against 13.3 us capped. Trust end-to-end tok/s, not a ratio table. The identical mechanism was found once before over a `ForkJoinPool` (`.kb/simd-parallel.md`, "Back-to-back calls are not the workload") and the finding did not travel; the general rule — a probe whose SHAPE differs from the step's shape measures something the program never runs — is `.kb/measurement-probes.md`.
 
-   The crossover is between 0.4 and 4 Mflop **and is the same for gemv and gemm**: what
-   loses to a threaded library is a SHORT call, not a particular kernel. Below it the
-   threads cost up to 6.8x; above it they buy up to 6.2x. The probe is
-   `.todo/649-a-blas-build-is-silently-5x-slower-when-the-library-is-threaded/`, kept
-   runnable like `GemvProbe`; its README says why the numbers need a QUIET machine (the
-   same row read 90 us at load 11 and 692 us at load 60). **So a warning at flag time
-   would fire identically on the program it would ruin** -- `examples/ml/blas-matmul.lisp`
-   wants every one of those 64 threads -- and that is why todo-649 did not put one there,
-   against its own first proposal. The note is earned by the CALLS: intercepted products
-   of at most `BARRIER_WORK` = 2^21 flops are counted, and the `BARRIER_CALLS` = 64th one
-   writes a single line to stderr naming the library's variable. 64 is below
-   `examples/ml/simd-gemv.lisp`'s 100 GEMVs -- the smallest shipped program that measurably
-   loses to this (371 ms threaded against 131 ms capped) -- and high enough that a handful
-   of products is not a loop. The thread count comes from an OPTIONAL symbol
-   (`openblas_get_num_threads`, `mkl_get_max_threads` / `MKL_Get_Max_Threads`, an `int()`
-   downcall the metadata already registered), so a library that exports none -- Accelerate,
-   BLIS -- and a library already capped keep today's exact silence. Mirrored, like
-   everything else here, in `eval/LinalgBlasKernels.barrierNote` (pure, and given the
-   running count rather than reading it, so the policy is testable on a machine with no
-   CBLAS) and `codegen/jvm/JvmBlasTemplate.note`.
+**The barrier note is earned by the CALLS, not printed at flag time.** A flag-time warning would fire identically on the program it would ruin (`examples/ml/blas-matmul.lisp` wants all 64 threads). Instead: intercepted products of at most `BARRIER_WORK` = 2^21 flops are counted, and the `BARRIER_CALLS` = 64th one writes ONE line to stderr naming the library's variable. 64 is below `examples/ml/simd-gemv.lisp`'s 100 GEMVs — the smallest shipped program that measurably loses (371 ms threaded vs 131 ms capped) — and high enough that a handful of products is not a loop. The thread count comes from an OPTIONAL symbol (`openblas_get_num_threads`, `mkl_get_max_threads` / `MKL_Get_Max_Threads`, an `int()` downcall the metadata already registered), so a library exporting none (Accelerate, BLIS) and a library already capped keep today's exact silence. Mirrored in `eval/LinalgBlasKernels.barrierNote` (pure, given the running count rather than reading it, so the policy is testable on a machine with no CBLAS) and `codegen/jvm/JvmBlasTemplate.note`.
 
-   **`--blas-threads=N` was considered and declined**, and not for being unworkable:
-   `openblas_set_num_threads(1)` called in process does recover the win (llama2 stories15M,
-   150 tokens, JVM backend: **114-121 tok/s**, against the env var's 123-128 and the
-   threaded default's 30-64 on the same busy machine). It was declined because the remedy
-   already exists on every backend the flag reaches -- the library's own variable, which a
-   compiled `.class` under `java Prog` reads exactly as the interpreter does -- because the
-   flag's own mechanism measured slightly WORSE than that variable (the pool is created and
-   then abandoned), and because delivering it on the compile path would need a numeric
-   constant injected into a template whose bytes are embedded verbatim, a mechanism that
-   does not exist, for a knob whose entire value is saving the user from typing a name the
-   note now prints for them. If a library ever appears whose thread count CANNOT be set
-   from the environment, that is when this gets built.
+On OpenBLAS the threaded/capped crossover is between 0.4 and 4 Mflop and **is the same for gemv and gemm**: what loses to a threaded library is a SHORT call, not a particular kernel. Below it threads cost up to 6.8x; above it they buy up to 6.2x.
 
-   **What Accelerate does about threads (todo-651, M4 Max, macOS 26.3.1, 2026-09-03).**
-   Every number above this line is x86-64 OpenBLAS -- dorian has no Accelerate -- and the
-   note is silent on an Apple machine because Accelerate exports no thread query. That
-   silence is now measured rather than structural, and **the trap does not exist here**.
+**`--blas-threads=N` was considered and declined.** `openblas_set_num_threads(1)` in process does recover the win, but the remedy already exists on every backend the flag reaches (the library's own variable, which a compiled `.class` under `java Prog` reads exactly as the interpreter does); the flag's own mechanism measured slightly worse (the pool is created then abandoned); and the compile path would need a numeric constant injected into a template whose bytes are embedded verbatim, a mechanism that does not exist. Build it only if a library appears whose thread count CANNOT be set from the environment.
 
-   Accelerate exports NONE of the seven symbols the probe asks for -- not
-   `openblas_get_num_threads`, `openblas_set_num_threads`, `openblas_get_parallel`,
-   `mkl_get_max_threads`, `MKL_Get_Max_Threads`, `mkl_set_num_threads`, nor BLIS's
-   `bli_thread_get_num_threads`. So the thread count cannot be asked for and had to be
-   inferred from whether `VECLIB_MAXIMUM_THREADS=1` MOVES the library's own time. It does,
-   which is what makes the inference sound, and it moves at exactly two kinds of shape.
-   Per call, ~200 us of unrelated Java work between calls (`ThreadBarrierProbe`, two
-   rounds, load average 1.4-1.9):
+**Accelerate is different in both directions, measured.** It exports NONE of the seven thread symbols probed (`openblas_get_num_threads`, `openblas_set_num_threads`, `openblas_get_parallel`, `mkl_get_max_threads`, `MKL_Get_Max_Threads`, `mkl_set_num_threads`, `bli_thread_get_num_threads`), so the note is silent on Apple — now for a measured reason, not a structural one.
+- It is single-threaded at every shape a decode loop makes (capping changes nothing from 131 Kflop to 33.6 Mflop, gemv and gemm alike) and threads only the big ones. The switch is NOT a flop count: a 33.6 Mflop `sgemm 256^3` stays serial while an 18.4 Mflop `sgemv 32000x288` threads — an OPERAND BYTES rule (36.9 MB vs 256 KB that fits in cache). **Do not carry OpenBLAS's 0.4-4 Mflop crossover across.**
+- Where it does thread it pays NO wake-up: `dgemv 2048x2048` is the same time hot and with a 200 us gap, where OpenBLAS goes 17.4 -> 90.0 us. The trap is absent.
+- Small shapes' gap cost is a cold cache, not a barrier — the separating test is "does the cap remove the gap's cost", which is cheaper than reading a thread count.
+- End to end (llama2 stories15M, JVM class output, 150 greedy tokens): `--simd` ~540 tok/s, `--simd --blas` **~1025**, `--simd --blas` with `VECLIB_MAXIMUM_THREADS=1` ~930. A 1.90x win uncapped, and capping COSTS 9% — the opposite of OpenBLAS in both directions, which is why the note is earned by calls rather than printed at flag time. **`--blas` needs no change on Apple.** If a future macOS threads the short calls, the observable is the cap moving a 288x288 gemv.
+- **BLIS stays out of `THREAD_QUERIES`**: no machine measured so far has one, and an unmeasured entry is what that decision existed to avoid. It needs a machine with BLIS, not a decision.
 
-   | call | flops | as launched | `VECLIB_MAXIMUM_THREADS=1` |
-   |---|---|---|---|
-   | sgemv 288x288 (llama2 attention) | 166 K | 1.8 / 2.3 us | 1.9 / 2.1 us |
-   | sgemv 768x288 (its FFN) | 442 K | 2.8 / 2.8 us | 2.9 / 2.7 us |
-   | sgemv 4096x288 | 2.36 M | 13.6 / 14.0 us | 13.5 / 13.5 us |
-   | sgemv 32000x288 (its classifier head) | 18.4 M | **135.6 / 185.4 us** | 217.1 / 208.7 us |
-   | dgemv 256x256 | 131 K | 2.2 / 2.4 us | 2.4 / 2.6 us |
-   | dgemv 2048x2048 | 8.39 M | **128.3 / 124.2 us** | 196.9 / 190.1 us |
-   | sgemm 64x64x64 | 524 K | 1.4 / 1.5 us | 1.5 / 1.3 us |
-   | sgemm 128x128x128 | 4.19 M | 4.3 / 4.2 us | 4.2 / 4.3 us |
-   | sgemm 256x256x256 | 33.6 M | 26.3 / 26.4 us | 25.8 / 25.7 us |
-   | sgemm 512x512x512 | 268 M | **104.9 / 105.0 us** | 164.7 / 167.5 us |
-   | sgemm 1024x1024x1024 | 2.15 G | **665.8 / 669.0 us** | 1285.3 / 1306.7 us |
+Probes, kept runnable anywhere: `.todo/123-gpu-acceleration/AccelerateProbe.java` (library vs `--simd`), `GemvProbe.java` (back to back, times against the LANE kernel the bridge actually runs — `FloatVector.SPECIES_128` for `#f`, `DoubleVector.SPECIES_PREFERRED` for `#d`, both folding with `mul().add()`), `ThreadBarrierProbe.java` (one call, unrelated work in between). All need a QUIET machine. `RONTOLISP_BLAS` / `PROBE_BLAS` names the library. Re-run the library and `--simd` halves together, never one against a stale copy of the other.
 
-   **So Accelerate is single-threaded at every shape a decode loop makes** -- capping it
-   changes nothing from 131 Kflop to 33.6 Mflop, gemv and gemm alike -- and threads only
-   the big ones. Note that the switch is NOT the flop count dorian's crossover is stated
-   in: a 33.6 Mflop `sgemm 256^3` stays serial while an 18.4 Mflop `sgemv 32000x288`
-   threads, which is what a rule about OPERAND BYTES rather than work would do (36.9 MB of
-   matrix against 256 KB that fits in cache). Do not carry dorian's 0.4-4 Mflop crossover
-   across; it is that library's, not the flag's.
+Note on the lane kernel's pinned `SPECIES_128`: 128-bit lanes are all NEON has, while an AVX2 machine gives the JIT 256-bit registers for the same source, so x86-64's single-thread ratio over `--simd` is about a third of Apple's. The premise (gemv is worth binding) holds on both; the 6-9x figure is Apple's, not the feature's.
 
-   **And where Accelerate does thread, it pays no wake-up.** `dgemv 2048x2048` is 127-132 us
-   back to back (`GemvProbe`) and **124-128 us with 200 us of unrelated work in between** --
-   the same number, where the identical comparison on OpenBLAS is 17.4 us against 90.0 us.
-   That is the whole trap, absent. The one shape where a gap costs anything the cap can
-   explain is `sgemv 2048x2048` (59.8-61.6 us hot, 82.3-86.8 us with a gap, 71.9-75.2 us
-   capped-with-a-gap), so threading it is a small win hot and a ~1.14x LOSS in situ -- a
-   rounding error beside dorian's 6.8x, at a shape no shipped program runs.
-   **The small shapes' gap cost is not the pool**: `sgemv 256x256` goes 0.85 us hot to 1.75
-   us with a gap and capping does not move it, so what the gap buys there is a cold cache,
-   not a barrier. That test -- does the cap remove the gap's cost -- is what separates the
-   two, and it is cheaper than reading a thread count.
-
-   **End to end it is a 1.9x win, and capping it LOSES 9%.** `examples/llama2/llama2.lisp`,
-   stories15M, JVM class output, 150 greedy tokens, three rounds, byte-identical story in
-   every arm:
-
-   | build | tok/s |
-   |---|---|
-   | `--simd` | 539.9 / 539.9 / 537.9 |
-   | `--simd --blas` (Accelerate as launched) | **1020.6 / 1027.6 / 1027.6** |
-   | `--simd --blas`, `VECLIB_MAXIMUM_THREADS=1` | 925.5 / 919.8 / 943.0 |
-
-   **This is the OPPOSITE of dorian's result in both directions**: there the flag is a 5.4x
-   loss uncapped and a 1.15x win capped; here it is a 1.90x win uncapped and capping it
-   costs 9%. The remedy for one machine is the mistake on the other, which is the case for
-   the note being earned by the CALLS rather than printed at flag time -- and, on this
-   machine, for its not firing at all. **`--blas` needs no change on Apple: today's silence
-   is the right answer, now for a measured reason.** If a future macOS threads the short
-   calls, the observable that would catch it is the cap moving a 288x288 gemv, and this
-   table is the baseline that says it does not today.
-
-   **BLIS is still unmeasured, and stays out.** todo-651's second half was to add
-   `bli_thread_get_num_threads` to `THREAD_QUERIES`; the probe reports the symbol absent on
-   this machine too, because there is no BLIS on it (nothing in Homebrew, nothing in
-   `/opt/homebrew/lib` or `/usr/local/lib`). Neither machine measured so far has one, and
-   an unmeasured third entry is exactly what that item existed to avoid, so `THREAD_QUERIES`
-   keeps its two symbols. It needs a machine with BLIS installed, not a decision.
-
-   Probes: `.todo/471-.../GemvProbe.java` (back to back) and
-   `.todo/649-.../ThreadBarrierProbe.java` (one call, work in between), both unchanged and
-   both runnable anywhere.
+`--blas` WITHOUT `--simd` is also much of a wash on the interpreter: the GEMV becomes a library call but `vec:dot` and `vec:scale` beside it stay interpreted defuns, which is most of what is left. Where `--blas` is a wash: a GEMV on the NATIVE BINARY at small shapes ties `--simd`, because the native binary's lane kernel is already at library speed. The flag is worth passing for a GEMV when the matrix is large, the library is capped to one thread, and the rest of the loop is compiled — two of those three failing makes it a wash, all three a loss.
 
 ## Tests
-
 | what | where |
 |---|---|
 | interpreter, needs a library on the machine (`@EnabledIf`) | `eval/LinalgBlasTest` (both packages) |
 | interpreter, must hold on EVERY machine | `eval/LinalgBlasDeclineTest` (both packages) |
-| the thread-barrier note's policy, on every machine | `eval/LinalgBlasDeclineTest.theThreadBarrierNoteIsEarnedByTheProgramShapeAndNotByTheFlag` |
+| thread-barrier note policy, every machine | `eval/LinalgBlasDeclineTest.theThreadBarrierNoteIsEarnedByTheProgramShapeAndNotByTheFlag` |
 | JVM emit gate + accelerated + declined + arg-evaluated-once | `codegen/jvm/JvmLinalgBlasAccelCompilerTest` (both packages) |
 | the flag is value-less (the `--simd` dead-flag lesson) | `cli/CliOptionsTest`, `cli/RontoLispCliTest` |
 
-The dead-flag guard matters more here than anywhere: every numeric assertion in these files
-would pass on the scalar defun. `#'linalg:dot` printing `#<function LINALG:DOT>` and
-`#'vec:matvec` printing `#<function VEC:MATVEC>` (interpreter), and the bridge name plus
-the `blasMatvec` / `blasMatvecInto` METHODREF appearing in the class bytes (JVM) are the
-assertions that fail when the flag is dead. The bridge's own bytes are base64 string
-constants, so its method names are invisible there -- a methodref in the generated class's
-constant pool is the interception itself.
+**The dead-flag guard matters more here than anywhere**: every numeric assertion in these files would pass on the scalar defun. The assertions that fail when the flag is dead are `#'linalg:dot` printing `#<function LINALG:DOT>` and `#'vec:matvec` printing `#<function VEC:MATVEC>` (interpreter), and the bridge name plus the `blasMatvec` / `blasMatvecInto` METHODREF appearing in the class bytes (JVM) — the bridge's own bytes are base64 string constants, so a methodref in the generated class's constant pool IS the interception.
 
-Native image needs three things: the `JvmBlasTemplate.class` resource entry (already in
-`resource-config.json`, beside the `--simd` one), `--enable-native-access=ALL-UNNAMED`,
-which the `native` profile already passes, and a `foreign.downcalls` entry per SHAPE in
-`reachability-metadata.json` -- six of them, the gemm shape at both widths both critical
-and plain, the gemv shape at both widths critical. Native Image builds a downcall stub
-only for a registered signature and REFUSES the handle for any other, so one missing entry
-sends the whole static block down its catch and the binary reports "the foreign function
-API is unavailable" on a machine whose tuned library is right there. `LinalgBlasKernels`
-records the shapes as it binds them -- `bind` takes the LOOKUP so a machine with no CBLAS
-can bind them against a stub -- and `LinalgBlasDeclineTest` pins them against the file.
-`--gpu` shipped exactly this bug on the CUDA side (`.kb/gpu.md`, "Native image"). The exec jar carries
-`Enable-Native-Access: ALL-UNNAMED` in its manifest; a compiled `.class` does not, so running
-one prints the JVM's restricted-method warning unless the user passes the flag -- which the
-docs say.
+## Native image
+Three things: the `JvmBlasTemplate.class` resource entry (already in `resource-config.json`, beside the `--simd` one), `--enable-native-access=ALL-UNNAMED` (the `native` profile passes it), and a `foreign.downcalls` entry per SHAPE in `reachability-metadata.json` — six: the gemm shape at both widths both critical and plain, the gemv shape at both widths critical. Native Image builds a downcall stub only for a registered signature and REFUSES the handle for any other, so one missing entry sends the whole static block down its catch and the binary reports "the foreign function API is unavailable" on a machine whose tuned library is right there (`--gpu` shipped exactly this bug on the CUDA side). `LinalgBlasKernels` records the shapes as it binds them — `bind` takes the LOOKUP so a machine with no CBLAS can bind against a stub — and `LinalgBlasDeclineTest` pins them against the file.
+
+The exec jar carries `Enable-Native-Access: ALL-UNNAMED` in its manifest; a compiled `.class` does not, so running one prints the JVM's restricted-method warning unless the user passes the flag (the docs say so).

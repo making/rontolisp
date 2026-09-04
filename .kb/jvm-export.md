@@ -1,26 +1,21 @@
 # `rontolisp:jvm-export` (typed Java-callable methods) + `--no-main` library mode
 
-`(rontolisp:jvm-export 'name :params '(T...) :returns T :as "javaName")` is the JVM
-twin of `rontolisp:wasm-export` ([wasm-export-no-wasi.md](wasm-export-no-wasi.md)):
-it declares the Java-boundary types of a top-level `defun` so `JvmLispCompiler`
-emits a thin `public static` wrapper with a primitive/`String`/`byte[]`/handle
-signature next to the untyped `(Object...)Object` method. Directive parsing + the Java-name
-derivation live in `compiler.JvmExportDirective` (backend-free, the
-`WasmImportDirective` arrangement); the bytecode emission in
-`codegen.jvm.JvmExportRuntimeBuilder`. A no-op everywhere else, so one source runs
-on all four backends: the interpreter defines it as a return-the-named-symbol
-function (`Environment`, beside wasm-export's), and both WASM top-level collectors
-skip the form (`WasmLispCompiler` / `NoGcWasmCompiler`, exactly where they collect
-wasm-export). Cross-backend pins: `LispEvaluatorTest#jvmExportIsNoOpReturningTheNamedSymbol`,
-`WasmLispCompilerIntegrationTest#jvmExportDirectiveIsANoOpOnWasm`. Everything else:
-`JvmExportTest` + `JvmExportExampleTest` (compiles
-`examples/jvm/kernels-library.lisp` and calls it from Java). User docs:
-`doc/{en,ja}/guides/jvm-library.md` + `reference/functions/rontolisp-jvm-export.md`.
+`(rontolisp:jvm-export 'name :params '(T...) :returns T :as "javaName")` is the JVM twin of
+`rontolisp:wasm-export` ([wasm-export-no-wasi.md](wasm-export-no-wasi.md)): it declares the
+Java-boundary types of a top-level `defun` so `JvmLispCompiler` emits a thin `public static`
+wrapper with a primitive/`String`/`byte[]`/handle signature next to the untyped
+`(Object...)Object` method.
 
-**A program with no jvm-export compiles byte-identically to before the feature** —
-every mechanism below is gated on `!exportDecls.isEmpty()` (or on `--no-main`,
-which requires it), so the flagless corpus (`ci-spec.yaml`,
-`.kb/emitted-output-determinism.md`) is untouched.
+- Directive parsing + Java-name derivation: `compiler.JvmExportDirective` (backend-free, the
+  `WasmImportDirective` arrangement). Bytecode: `codegen.jvm.JvmExportRuntimeBuilder`.
+- No-op everywhere else, so one source runs on all four backends: the interpreter defines it as
+  a return-the-named-symbol function (`Environment`, beside wasm-export's), and both WASM
+  top-level collectors skip the form (`WasmLispCompiler` / `NoGcWasmCompiler`, exactly where
+  they collect wasm-export).
+- **A program with no jvm-export compiles byte-identically to before the feature** — every
+  mechanism here is gated on `!exportDecls.isEmpty()` (or on `--no-main`, which requires it),
+  so the flagless corpus (`ci-spec.yaml`, `.kb/emitted-output-determinism.md`) is untouched.
+- Docs: `doc/{en,ja}/guides/jvm-library.md`, `reference/functions/rontolisp-jvm-export.md`.
 
 ## The Java type mapping, and the exact-or-throw rule
 
@@ -31,403 +26,310 @@ which requires it), so the flagless corpus (`ci-spec.yaml`,
 | --- | --- | --- |
 | `:s8` `:s16` `:s32` `:s64` | `byte` `short` `int` `long` | none inbound (ranges coincide); result guarded |
 | `:u8` `:u16` | `int` | `_exArg` inbound, `_exRes` outbound |
-| `:u32` `:u64` | `long` | same; `:u64` values >= 2^63 are unrepresentable in the signed-64 house integer and throw, the WASM boundary's trap |
-| `:float` | `double` | result via `checkcast Number; doubleValue` (integer/ratio-as-Number accepted, like wasm's `castFloatGetF64` normalization) |
+| `:u32` `:u64` | `long` | same; `:u64` >= 2^63 is unrepresentable in the signed-64 house integer and throws, the WASM boundary's trap |
+| `:float` | `double` | result via `checkcast Number; doubleValue` (integer/ratio-as-Number accepted, like wasm's `castFloatGetF64`) |
 | `:bool` | `boolean` | `false`=nil (`null`), `true`=`"T"`; any non-nil result is `true` |
 | `:string` | `String` | wrapper adds/strips the FRAME QUOTES storage carries |
 | `:s-expr` | `String` | in: frame + `_readFromString`; out: `_lispToString` |
 | `:bytes` | `byte[]` | copies to/from the packed octet vector `long[]{8, e0, ...}` |
-| `:float-vector` `:float-matrix` | `RontoFloatArray` | JVM-ONLY (`jvmOnly()`); ALIASES the packed float array, rank checked -- see below |
+| `:float-vector` `:float-matrix` | `RontoFloatArray` | JVM-ONLY (`jvmOnly()`); ALIASES the packed float array, rank checked |
 
-The rule is wasm-export's verbatim: **the boundary carries the value exactly, or
-it throws** — `IllegalArgumentException` for an argument outside its declared
-range, `ArithmeticException` for a result outside it, `ClassCastException` for a
-result of the wrong representation (including a BARE string, which is a SYMBOL —
-`_exStr` refuses it rather than conflate the two `.kb/core-representation.md`
-encodings). **`:string` framing is the invariant that must not regress**: a Lisp
-string stores its frame quotes, so an unframed Java `String` passed to the untyped
-method is silently mis-read (`GREET("ron")` answered `"hello, o"`) — the wrapper
-frames on the way in and unframes on the way out, and
-`JvmExportTest#aStringExportFramesOnTheWayInAndUnframesOnTheWayOut` pins it.
+Rule is wasm-export's verbatim: **the boundary carries the value exactly, or it throws** —
+`IllegalArgumentException` for an argument outside its declared range, `ArithmeticException`
+for a result outside it, `ClassCastException` for a result of the wrong representation
+(including a BARE string, which is a SYMBOL — `_exStr` refuses it rather than conflate the two
+`.kb/core-representation.md` encodings).
 
-An `:s-expr` parameter forces the reader runtime on
-(`usesRead |= JvmExportRuntimeBuilder.needsReader`), with read-from-string's full
-consequences (`anyNameResolvable` -> every funcId dispatchable).
+- **`:string` framing must not regress**: a Lisp string stores its frame quotes, so an unframed
+  Java `String` passed to the untyped method is silently mis-read (`GREET("ron")` answered
+  `"hello, o"`). The wrapper frames in and unframes out; pinned by
+  `JvmExportTest#aStringExportFramesOnTheWayInAndUnframesOnTheWayOut`.
+- An `:s-expr` parameter forces the reader runtime on
+  (`usesRead |= JvmExportRuntimeBuilder.needsReader`), with read-from-string's full consequences
+  (`anyNameResolvable` -> every funcId dispatchable).
 
 ## The packed float array (`:float-vector` / `:float-matrix`)
 
 The two designators the JVM boundary has and WASM does not: a packed float array
-([vec.md](vec.md)) crossing as `am.ik.rontolisp.runtime.RontoFloatArray`, ONE handle class
-at every rank and every width. `BoundaryType.FLOAT_VECTOR` / `FLOAT_MATRIX` carry
-`jvmOnly()`, which is what makes `WasmExportCompiler.typeDesignator` refuse them by name
-(pinned by `WasmLispCompilerIntegrationTest#theJvmOnlyHandleDesignatorsAreRefusedByNameOnWasm`)
-instead of failing later in a component lift.
+([vec.md](vec.md)) crossing as `am.ik.rontolisp.runtime.RontoFloatArray`, ONE handle class at
+every rank and width. `BoundaryType.FLOAT_VECTOR` / `FLOAT_MATRIX` carry `jvmOnly()`, which is
+what makes `WasmExportCompiler.typeDesignator` refuse them BY NAME (pinned by
+`WasmLispCompilerIntegrationTest#theJvmOnlyHandleDesignatorsAreRefusedByNameOnWasm`) instead of
+failing later in a component lift.
 
-**The measurement is the design, and it is not a tradeoff.** `examples/jvm/bench/`, in the
-repo because it is the number this whole boundary rests on (2^20 doubles, 300
-iterations after 3000 warm-ups, `--simd`, Oracle GraalVM 25.0.4, Linux x86_64):
+- **The wrapper ALIASES in both directions** — `RontoBoundary.floatArrayArgument` hands over
+  `handle.packed()`, `floatArrayResult` wraps the answered array — because a facade that copies
+  a `double[]` per call is ~10x the kernel and lands slower than plain Java. The only copies are
+  the two the caller asks for: `of(...)` in, `toArray()` out. Pinned by object identity in
+  `JvmExportTest#aHandleHeldAcrossCallsCopiesOnce`. Aliasing is the CONTRACT, not an
+  implementation detail: `set(i, v)` through a handle a kernel returned is visible to a Lisp
+  closure over the same array and vice versa; nothing is defensively copied.
+- **Both widths, any rank.** `double[]` and `float[]` are disjoint representations and a third
+  is coming, so `RontoFloatArray` dispatches width in ONE private place (`widthOf`/`headerAt`)
+  and reports it as `Width`, an enum a caller must not assume has two members. Rank comes from
+  the header, so a matrix is the same class with a rank-2 `dims()`; the designator says which
+  rank the boundary accepts and a mismatch throws there (`IllegalArgumentException` inbound,
+  `ClassCastException` outbound).
+- A declared handle forces `usesFloatArray` on in `JvmLispCompiler`: a library whose only
+  contact with the representation is `aref`/`length` over its argument builds no packed array of
+  its own and would otherwise be emitted without the `_fv*` accessors.
+- **Where the handle type comes from**: the class files are copied VERBATIM at their canonical
+  names next to the output class — not renamed per program the way the acceleration bridges
+  travel ([template-class-embedding.md](template-class-embedding.md)), because a renamed
+  boundary TYPE would give two rontolisp libraries incompatible vector types and no way to feed
+  one's result into the other's kernel. One canonical name makes chaining work while the jar
+  keeps no dependency; identical bytes make the duplicate harmless.
 
-| | ms/call | vs plain Java |
-|---|---|---|
-| plain Java loop, C2 auto-vectorized | 0.89 | 1.00x |
-| `Kernels.NORM2(packed)` on a pre-packed array | 0.29 | 3.06x |
-| **behind the handle** | **0.29** | **3.12x** |
-| behind a facade that copies a `double[]` per call | 2.58 | 0.35x |
+## What travels
 
-The copy is ~10x the kernel: **a `double[]`-in/`double[]`-out designator would hand a
-caller a slower-than-Java result and call it acceleration.** So the wrapper ALIASES in both
-directions -- `RontoBoundary.floatArrayArgument` hands over `handle.packed()`, and
-`floatArrayResult` wraps the answered array -- and the only copies are the two the caller
-asks for, `of(...)` in and `toArray()` out. `JvmExportTest#aHandleHeldAcrossCallsCopiesOnce`
-pins it by object identity, which is the only way to say "no copy" without a profiler.
-
-**Aliasing is therefore the contract, not an implementation detail.** `set(i, v)` through a
-handle a kernel returned is visible to a Lisp closure over the same array and vice versa;
-nothing is defensively copied, because that copy IS the last row of the table. Say it in
-the docs rather than defend against it.
-
-**Both widths, any rank.** `double[]` and `float[]` are disjoint representations and
-`.todo/482`-`487` are adding a third, so `RontoFloatArray` dispatches width in ONE private
-place (`widthOf`/`headerAt`) and reports it as `Width`, an enum a caller must not assume
-has two members. Rank comes from the header, so a matrix is the same class with a rank-2
-`dims()`; the designator only says which rank the boundary accepts, and a mismatch throws
-there (`IllegalArgumentException` inbound, `ClassCastException` outbound -- the wrapper's
-existing split). A declared handle also forces `usesFloatArray` on in `JvmLispCompiler`: a
-library whose only contact with the representation is `aref`/`length` over its argument
-builds no packed array of its own and would otherwise be emitted without the `_fv*`
-accessors.
-
-**Where the handle type comes from** -- the real fork, and the tension is worth naming.
-Emitting the type per library the way the acceleration bridges travel
-([template-class-embedding.md](template-class-embedding.md)) keeps the artifact
-dependency-free, but the RENAME that makes a bridge private to one program is exactly wrong
-for a boundary TYPE: two rontolisp libraries would then have two incompatible vector types
-and a caller could not feed one's result to the other's kernel, which is the first thing
-anyone will try. A shared `rontolisp-runtime` artifact fixes that and is what every JVM
-language does -- at the cost of a dependency the artifact does not have today. What ships
-takes both: the class files are copied VERBATIM at their canonical names next to the output
-class, so one canonical name makes chaining work while the jar still has no dependency, and
-identical bytes make the duplicate harmless.
-
-**What travels.** `am.ik.rontolisp.runtime` is THE package that ships inside someone
-else's artifact, and the mechanism is general -- not the handle's alone:
+`am.ik.rontolisp.runtime` is THE package that ships inside someone else's artifact:
 
 | list | travels when | what it is |
 | --- | --- | --- |
-| `JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` | a `:float-vector` / `:float-matrix` export | `RontoFloatArray` + `RontoBoundary`, the handle type and its marshalling seam |
-| `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / the `%http-server-start` seam | `RontoHttpServer` (the embedded server, shared with the interpreter), `RontoHttpClack` (the per-request Clack glue) and the two declarations they read, `RontoClackEnv` + `RontoHashTable` (`.kb/http-server.md`) |
-| `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` output, or the Maven plugin's `<servlet>true</servlet>` (in ADDITION to the served list either way) | `RontoHttpServlet` + `RontoHttpServletInitializer`, the Servlet transport (`.kb/http-server.md`, "The fifth transport") -- the one sanctioned `jakarta.servlet` import, satisfied by definition (a war runs in a servlet container), `provided` scope in the pom, never in any other artifact |
-| `JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES` | a `(make-hash-table :test 'equalp)` in the source | `RontoHashTable` again, this time for `equalpKey` -- the `equalp` key fold, written in plain Java over the JVM value model rather than transcribed into bytecode (`.kb/hash-tables.md`) |
+| `JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` | a `:float-vector` / `:float-matrix` export | `RontoFloatArray` + `RontoBoundary` |
+| `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / the `%http-server-start` seam | `RontoHttpServer` (embedded server, shared with the interpreter), `RontoHttpClack` (per-request Clack glue), `RontoClackEnv` + `RontoHashTable` (`.kb/http-server.md`) |
+| `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` output, or the plugin's `<servlet>true</servlet>` (IN ADDITION to the served list) | `RontoHttpServlet` + `RontoHttpServletInitializer`, the Servlet transport (`.kb/http-server.md`, "The fifth transport") |
+| `JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES` | a `(make-hash-table :test 'equalp)` in the source | `RontoHashTable` again, for `equalpKey` (`.kb/hash-tables.md`) |
 
-They all go through `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` ->
-`RontoLispCli` (beside a `-o X.class`, INSIDE a `-o X.jar`) and `LispSourceSet` (the Maven
-plugin, into `target/classes` before javac would run); `resource-config.json` matches the
-whole package by pattern so the native binary carries them too. **A served program is
-therefore self-contained -- `java -cp . App`, no rontolisp jar** (the guide
-`doc/{en,ja}/guides/http-handler.md` promises this).
+- Path: `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` -> `RontoLispCli`
+  (beside a `-o X.class`, INSIDE a `-o X.jar`) and `LispSourceSet` (the Maven plugin, into
+  `target/classes` before javac would run); `resource-config.json` matches the whole package by
+  pattern so the native binary carries them too. A served program is therefore self-contained —
+  `java -cp . App`, no rontolisp jar (promised by `doc/{en,ja}/guides/http-handler.md`).
+- **The price**: a class in `runtime` imports nothing at all, not even the build's `@Nullable`
+  (`RuntimeVisible`, so its reference would follow the class into the consumer's artifact).
+  Hence `RontoHashTable.get` takes the absent value instead of answering null,
+  `RontoHttpServer.Request` spells "unknown" as `""`, and `RontoHttpServer` raises its own
+  nested `ServerException` which the interpreter's call site turns back into a
+  `LispEvalException`.
+- The ONE stated exception is the war row: `RontoHttpServlet`/`RontoHttpServletInitializer`
+  import `jakarta.servlet`, satisfied by definition (a war runs in a container), `provided`
+  scope in the pom, never in any other artifact. The war-mode arm of
+  `JvmHttpHandlerTravellingRuntimeTest` admits `jakarta/servlet/**` and keeps failing for any
+  other outside reference.
+- Each travelling list is hand-kept (nothing can enumerate a package from a classpath, less so
+  from inside a native image). `JvmRuntimeClassFilesTest` pins their UNION against the package's
+  actual class files; `JvmHttpHandlerTravellingRuntimeTest` recomputes the served closure from
+  the emitted class's own constant pool and serves it through a class loader that cannot see
+  rontolisp. `package-info.class` deliberately stays behind (it carries only the nullness
+  annotation).
 
-The price is the rule that makes it work: **a class in `runtime` imports nothing at all,
-not even the build's `@Nullable`** -- that annotation is `RuntimeVisible`, so its class
-file reference would follow the class into the consumer's artifact. The ONE stated
-exception is the war row above: the two servlet classes import `jakarta.servlet`,
-because they are emitted into a `.war` alone and a container without `jakarta.servlet`
-is not a container -- the same argument `RontoHttpServer`'s `com.sun.net.httpserver`
-import already makes about the JDK, one module further out. The war-mode arm of
-`JvmHttpHandlerTravellingRuntimeTest` admits `jakarta/servlet/**` as provided and keeps
-failing for any other outside reference. Hence `RontoHashTable.get`
-takes the absent value instead of answering null, `RontoHttpServer.Request` spells "unknown"
-as `""`, and `RontoHttpServer` raises its own nested `ServerException` which the
-interpreter's call site turns back into a `LispEvalException`. Because the package imports
-nothing outside `java.base`, lifting it into a published artifact later is a packaging
-change and not a code motion.
+## `--gpu` residency: the handle does not materialize
 
-Each travelling list is hand-kept (nothing can enumerate a package from a classpath, still
-less from inside a native image). Two tests keep them honest:
-`JvmRuntimeClassFilesTest` pins their UNION against the package's actual class files, and
-`JvmHttpHandlerTravellingRuntimeTest` recomputes the served closure from the emitted
-class's own constant pool and serves it through a class loader that cannot see rontolisp.
-`package-info.class` deliberately stays behind, since it carries only the build's nullness
-annotation.
+The JVM class output has no read seam and ENUMERATES its readers through `_gpuMaterialize`
+([gpu.md](gpu.md), "The two seams, and what must report through them"); a handle's
+`get`/`set`/`toArray` are new readers outside that enumeration. Materializing at the boundary
+would defeat the lazy tier (a result the device still holds would come home only to be
+re-uploaded).
 
-**`--gpu` residency, and why the handle does not materialize.** The JVM class output has no
-read seam and ENUMERATES its readers through `_gpuMaterialize` ([gpu.md](gpu.md), "The two
-seams, and what must report through them"); a handle's `get`/`set`/`toArray` are new readers outside that
-enumeration. Materializing at the boundary would be correct and would also defeat the lazy
-tier -- a result the device still holds would come home only for the next call to re-upload
-it. So the handle is wrapped WITHOUT materializing and carries the guard instead: it adopts
-the generated class (the wrapper passes `ldc thisClass`), resolves that class's private
-`_gpuMaterialize` / `_gpuWritten` once through `MethodHandles`, and reads/writes what the
-guard ANSWERS -- the array, or a lazy result stub's backing, since a lazy result's host
-array is the HEADER ALONE (`.todo/492`; hence `checkPacked` requires `1 + rank` elements
-and not one more). A class with no guards resolves to a marker and costs one reference
-comparison. `RontoFloatArrayTest#aHostReadGoesThroughTheOwnerClassResidencyGuard` pins the
-whole seam with a stand-in owner class, so it is exercised with no device.
-
-**Measured on CUDA, and it holds** (`examples/jvm/bench/`, `./run.sh gpu`: 200 chained
-GEMVs over a resident 2048x2048 f32 matrix, GB10, GraalVM 25.0.4). The Java chain
-`h = Kernels.step(w, h)` runs at **0.070 ms/iteration against the same chain inside Lisp's
-0.070** -- one crossing per iteration costs nothing measurable -- and the library's own
-residency counters, read reflectively out of the compiled class, say **1 upload for the
-whole run** (8 KB) where a boundary that materialized would have paid **200** (1600 KB) and
-0.098-0.117 ms/iteration, i.e. 1.4x-1.7x. `toArray()` moves the result home exactly once
-(one dirty copy cleared, one stub given a backing; a second read moves nothing) and answers
-the same library compiled without `--gpu` BIT FOR BIT, with the host array before that read
-being the 2-element header alone. `set(i, v)` lands on the array the guard answers on both
-sides of the tier -- a lazy result the device still holds, and the resident matrix, whose
-device copy the write invalidates.
-
-**Measured on Metal too, where it holds and is idle** (same harness, M4 Max 40-core GPU +
-GraalVM 25.0.3, macOS 26.3.1). Lazy results are OFF there as a measured policy
-([gpu.md](gpu.md), "Lazy results and the resident tier on Metal"), so every result comes
-home eagerly whether or not it crosses the boundary, and that answers all three at once:
-the Java chain, the same chain inside Lisp and a chain that materializes at every crossing
-are **one number** (0.127-0.149 ms/iteration across the three) and all upload the vector
-**200 times**, the Lisp-internal chain included. `toArray()` moves NOTHING -- the host
-array already carries every element, not the header alone -- and still answers the
-no-`--gpu` build bit for bit. Only the `set` into the RESIDENT MATRIX still exercises the
-seam, and it does: the write invalidates the device copy and the next kernel call sees it.
-So the handle costs nothing on either backend; what it protects is load-bearing on CUDA and
-idle on Metal until `.todo/495` makes lazy results pay there -- which is why
-`floatArrayResult` still does not materialize.
+- So the handle is wrapped WITHOUT materializing and carries the guard: it adopts the generated
+  class (the wrapper passes `ldc thisClass`), resolves that class's private `_gpuMaterialize` /
+  `_gpuWritten` once through `MethodHandles`, and reads/writes what the guard ANSWERS — the
+  array, or a lazy result stub's backing, since a lazy result's host array is the HEADER ALONE
+  (hence `checkPacked` requires `1 + rank` elements and not one more).
+- A class with no guards resolves to a marker and costs one reference comparison.
+- Pinned by `RontoFloatArrayTest#aHostReadGoesThroughTheOwnerClassResidencyGuard` with a
+  stand-in owner class, so the seam is exercised with no device.
+- Measured on CUDA (`examples/jvm/bench/`, `./run.sh gpu`): the Java chain runs at the same
+  per-iteration cost as the same chain inside Lisp, with ONE upload for the whole run where a
+  materializing boundary would have paid one per iteration; `toArray()` moves the result home
+  exactly once and answers the no-`--gpu` build bit for bit.
+- On Metal lazy results are OFF as a measured policy ([gpu.md](gpu.md), "Lazy results and the
+  resident tier on Metal"), so the guard is idle there except for `set` into a resident matrix,
+  which invalidates the device copy. `floatArrayResult` still does not materialize.
 
 ## Exports are tree-shaker roots — the third liveness source
 
-Each wrapper's Java name joins `JvmClassShaker`'s roots next to `main` and the
-invisible-edge roots (`_apply`, `handle`, `run`, `call`): its caller is Java code
-the bytecode cannot show. This is the directive's whole reason to exist under
-`--optimize` (ON by default): without a root, a library's defuns are unreachable
-from `main` and shaken away (`--optimize=off` kept the spike's 3 kernels at
-316,207 bytes vs 35,939 default). It is the third liveness source beside `main`
-and the dispatchable-funcId set of
-[optimize-dead-code-elimination.md](optimize-dead-code-elimination.md); the
-wrapper's `invokestatic` of the target defun keeps the defun itself and its graph.
-Pinned by `JvmExportTest#anExportedDefunSurvivesTheDefaultOptimizeWhileAnUnexportedOneIsShaken`.
-(`--no-prune` is the AST library-splice pruner, a different mechanism; a
-jvm-export form's quoted symbol already counts as a mention there.)
+Each wrapper's Java name joins `JvmClassShaker`'s roots next to `main` and the invisible-edge
+roots (`_apply`, `handle`, `run`, `call`): its caller is Java code the bytecode cannot show.
+This is the directive's whole reason to exist under `--optimize` (ON by default) — without a
+root, a library's defuns are unreachable from `main` and shaken away. Third liveness source
+beside `main` and the dispatchable-funcId set of
+[optimize-dead-code-elimination.md](optimize-dead-code-elimination.md); the wrapper's
+`invokestatic` of the target defun keeps the defun and its graph. Pinned by
+`JvmExportTest#anExportedDefunSurvivesTheDefaultOptimizeWhileAnUnexportedOneIsShaken`.
+(`--no-prune` is the AST library-splice pruner, a different mechanism; a jvm-export form's
+quoted symbol already counts as a mention there.)
 
 ## The top level runs in `<clinit>` (the reactor precedent)
 
-`defvar`/`defparameter` initialization lives in `_top$0..N`, which only `main`
-called — so a typed call arriving first read `null`. With any export, the chunk
-calls (plus the raw-octet `System.out.flush()` epilogue and the
-`JvmUncaughtHandler` exception table) move into a `_top$run` method that
-`<clinit>` invokes LAST, after the ThreadLocal/stream/layout/struct seeding;
-`main` (when kept) emits only `return` — invoking it triggers `<clinit>` first
-(JVMS class initialization), and the JVM's own init locking is the idempotence, so
-no `_inited` guard exists on either path. This is the cross-backend answer: the
-`--no-wasi` reactor "runs its top level at instantiation", and `<clinit>` is the
-JVM's instantiation. Two consequences are documented rather than designed around
-(both true of the reactor too): a top-level form that signals surfaces as
-`ExceptionInInitializerError` — after `_top$run`'s uncaught handler prints the
-one-line report — and poisons the class permanently
-(`JvmExportTest#aTopLevelThatSignalsSurfacesAsExceptionInInitializerErrorOnTheFirstTypedCall`),
-and a top-level `uiop:quit` kills the caller's JVM.
+`defvar`/`defparameter` initialization lives in `_top$0..N`, which only `main` called — so a
+typed call arriving first read `null`. With any export, the chunk calls (plus the raw-octet
+`System.out.flush()` epilogue and the `JvmUncaughtHandler` exception table) move into a
+`_top$run` method that `<clinit>` invokes LAST, after the ThreadLocal/stream/layout/struct
+seeding; `main` (when kept) emits only `return`. Invoking it triggers `<clinit>` first (JVMS
+class initialization), and the JVM's own init locking is the idempotence, so there is no
+`_inited` guard on either path. This is the cross-backend answer: the `--no-wasi` reactor runs
+its top level at instantiation, and `<clinit>` is the JVM's instantiation.
+
+Two consequences, documented rather than designed around (both true of the reactor too):
+
+- A top-level form that signals surfaces as `ExceptionInInitializerError` — after `_top$run`'s
+  uncaught handler prints the one-line report — and poisons the class permanently
+  (`JvmExportTest#aTopLevelThatSignalsSurfacesAsExceptionInInitializerErrorOnTheFirstTypedCall`).
+- A top-level `uiop:quit` kills the caller's JVM.
 
 ## `--no-main`
 
-Names the library mode on the `--no-wasi` precedent: drop `main`, the class is
-entered through exports only. `JvmLispCompiler.noMain(boolean)`;
-`CliOptions.noValueKeys` + `RontoLispCli` route it, refusing a non-JVM
-output, a jar with no `--class-name` (below) and (in the compiler, so an embedder
-gets it too) a program with no jvm-export — `main` is the only shake root such a program has, so a main-less
-export-less class would shake to nothing. Kept ORTHOGONAL to the directive: a
-program may want both a `main` and exports (a CLI tool that is also a library),
-and only the flag says which. It also decides a jar's `Main-Class` (below).
-While here: `-o com/acme/Kernels.class` now creates the
-missing parent directories (`RontoLispCli`), since the `-o` path IS the package.
+Library mode on the `--no-wasi` precedent: drop `main`, the class is entered through exports
+only. `JvmLispCompiler.noMain(boolean)`; `CliOptions.noValueKeys` + `RontoLispCli` route it,
+refusing a non-JVM output, a jar with no `--class-name`, and (in the compiler, so an embedder
+gets it too) a program with no jvm-export — `main` is the only shake root such a program has, so
+a main-less export-less class would shake to nothing. Kept ORTHOGONAL to the directive: a
+program may want both a `main` and exports, and only the flag says which. It also decides a
+jar's `Main-Class`. `-o com/acme/Kernels.class` creates missing parent directories
+(`RontoLispCli`), since the `-o` path IS the package.
 
 ## `-o out.jar` — the consumable artifact
 
-`.class` and `.jar` are the SAME compile; the jar is packaging around it
-(`cli/JvmJarWriter`, `cli/MavenCoordinates`, `cli/JvmArtifactOptions`). Every flag
-that used to test "the JVM class output only" (`--blas` / `--gpu` / `--parallel` /
-`--no-main`) now tests `RontoLispCli.jvmOutput`, which is the two extensions.
+`.class` and `.jar` are the SAME compile; the jar is packaging around it (`cli/JvmJarWriter`,
+`cli/MavenCoordinates`, `cli/JvmArtifactOptions`). Every flag that used to test "the JVM class
+output only" (`--blas` / `--gpu` / `--parallel` / `--no-main`) now tests
+`RontoLispCli.jvmOutput`, which is the two extensions.
 
-- **A `.class` path's directory is the PACKAGE only when it can be one.**
-  `JvmArtifactOptions.classNameFromClassPath` derives the name; the test of "can be one"
-  is the JVM's, not javac's — JVMS 4.2.2 asks each segment to be non-empty and free of
-  `. ; [ /`, and nothing more. That is deliberately WIDER than a Java identifier:
-  measured 2026-08-29, `-o out-dir/T3.class` emits `out-dir.T3` and `java -cp . out-dir.T3`
-  prints its output, so the dashes and digits a directory routinely carries take nothing
-  away. What the rule catches is the path for which a package was never plausible: an
-  ABSOLUTE path opens the name with an EMPTY segment (`/tmp/out/T2` is
-  `ClassFormatError: Illegal class name "/tmp/out/T2"`), and `./` or `../` put a `.`
-  inside one. There the directory is just a directory, the file's stem is the whole name,
-  and `-o /tmp/out/T2.class` is the same `T2` a path-free `-o T2.class` produces —
-  `classRoot` already roots the travelling runtime classes at `/tmp/out/`, so
-  `java -cp /tmp/out T2` runs. A stem that cannot be a class name either (`out/my.prog.class`)
-  is REFUSED naming `--class-name`, since the class file is written under the `-o` name and
-  no fallback is left the JVM would load under it. `--class-name` is how an absolute path
-  still names a package. **Silence was the whole cost**: until 2026-08-29 the compile
-  reported success and only running the artifact reported the illegal name, which cost
-  a `.todo/573` measurement round — two builds emitted into two temp directories differed
-  in every byte for this reason alone, and a harness reads that as a regression. Pinned by
-  `JvmArtifactOptionsTest` (the naming rule, every arm) and
+- **A `.class` path's directory is the PACKAGE only when it can be one**
+  (`JvmArtifactOptions.classNameFromClassPath`). The test is the JVM's, not javac's — JVMS
+  4.2.2 asks each segment to be non-empty and free of `. ; [ /`, nothing more; deliberately
+  WIDER than a Java identifier, so `-o out-dir/T3.class` emits `out-dir.T3` and runs. What it
+  catches is a path for which a package was never plausible: an ABSOLUTE path opens the name
+  with an EMPTY segment (`ClassFormatError: Illegal class name "/tmp/out/T2"`), and `./`/`../`
+  put a `.` inside one — there the file's stem is the whole name, and `classRoot` roots the
+  travelling runtime classes at the directory so `java -cp /tmp/out T2` runs. A stem that
+  cannot be a class name either (`out/my.prog.class`) is REFUSED naming `--class-name`, which
+  is also how an absolute path still names a package. **Silence was the whole cost**: the
+  compile used to report success and only running the artifact reported the illegal name (two
+  builds into two temp directories then differ in every byte, which reads as a regression).
+  Pinned by `JvmArtifactOptionsTest` (every arm) and
   `RontoLispCliTest#anAbsoluteOutputPathEmitsALoadableClass` /
-  `#anAbsoluteOutputPathTakesItsPackageFromClassName`, which LOAD the emitted class
-  through a `URLClassLoader` — the check a compiled `.class` exists to pass.
-- **`--class-name` is required by the LIBRARY jar, not by jar output.** The class name
-  WAS the `-o` path (`outputFile.replace(".class","")` handed straight to the
-  compiler) and a jar path names no class, so the flag started out mandatory for every
-  jar — which made `-o app.jar` unable to produce a runnable app on its own, the one
-  thing a jar is for. The split is what the class IS: a `--no-main` library's class is
-  the artifact's Java API and the caller's `import`, so `RontoLispCli` refuses that jar
-  without the flag; a program jar is entered through the manifest, so its class name is
-  an implementation detail and `JvmArtifactOptions.classNameFromStem` DERIVES one
-  from the file's stem — split on everything a Java identifier cannot hold and rejoined
-  in CamelCase (`app.jar` -> `App`, `my-app-1.0.0.jar` -> `MyApp100`, a digit-leading
-  stem prefixed `_`). Sanitizing is load-bearing rather than cosmetic: a stem is a FILE
-  name, and a `.` left in it reads as a package separator, i.e. a `Main-Class` that does
-  not resolve to the one entry the jar has. Given, the flag also replaces the
-  path-derived name on a `.class` output; `JvmArtifactOptions.classRoot` then roots the
-  travelling runtime classes at the package root when the `-o` path still ends in the
-  package path (the historical behavior, byte for byte) and beside the output file when
-  it does not. Pinned by `RontoLispCliTest#aProgramJarNeedsNoClassNameAndIsExecutable`
-  (which really runs `java -jar`), `#aProgramJarsClassNameIsItsFileNameInCamelCase` and
+  `#anAbsoluteOutputPathTakesItsPackageFromClassName`, which LOAD the emitted class through a
+  `URLClassLoader`.
+- **`--class-name` is required by the LIBRARY jar, not by jar output.** A `--no-main` library's
+  class is the artifact's Java API and the caller's `import`, so `RontoLispCli` refuses that jar
+  without the flag; a program jar is entered through the manifest, so
+  `JvmArtifactOptions.classNameFromStem` DERIVES one from the file's stem — split on everything
+  a Java identifier cannot hold, rejoined CamelCase (`app.jar` -> `App`, `my-app-1.0.0.jar` ->
+  `MyApp100`, a digit-leading stem prefixed `_`). Sanitizing is load-bearing: a `.` left in a
+  stem reads as a package separator, i.e. a `Main-Class` that does not resolve. Given, the flag
+  also replaces the path-derived name on a `.class` output; `JvmArtifactOptions.classRoot` then
+  roots the travelling runtime classes at the package root when the `-o` path still ends in the
+  package path, and beside the output file when it does not. Pinned by
+  `RontoLispCliTest#aProgramJarNeedsNoClassNameAndIsExecutable` (really runs `java -jar`),
+  `#aProgramJarsClassNameIsItsFileNameInCamelCase`,
   `#aLibraryJarStillNeedsAClassNameBecauseItsClassIsItsApi`.
-- **The entries**, in this fixed order: the manifest (`Main-Class` exactly when the
-  class HAS a main, so `java -jar` runs a program jar and a `--no-main` library jar
-  carries none), the `META-INF/maven` pair when `--maven-coordinates` is given, the
-  class at its package path, then `JvmLispCompiler.runtimeClassFiles()` at their
-  canonical names. **The runtime classes are the trap**: leaving them out is a
-  `NoClassDefFoundError` in the CONSUMER, not an error here — pinned by
-  `RontoLispCliTest#aLibraryJarIsSelfContainedOnAClasspathThatCarriesNothingOfRontolisp`,
-  which loads the jar under the PLATFORM loader so nothing of rontolisp is visible
-  except what the jar itself carries.
-- **The embedded pom IS the feature.** With
+- **Entries, in this fixed order**: the manifest (`Main-Class` exactly when the class HAS a
+  main), the `META-INF/maven` pair when `--maven-coordinates` is given, the class at its package
+  path, then `JvmLispCompiler.runtimeClassFiles()` at their canonical names. **The runtime
+  classes are the trap**: leaving them out is a `NoClassDefFoundError` in the CONSUMER, not an
+  error here — pinned by
+  `RontoLispCliTest#aLibraryJarIsSelfContainedOnAClasspathThatCarriesNothingOfRontolisp`, which
+  loads the jar under the PLATFORM loader.
+- **The embedded pom IS the feature**: with
   `META-INF/maven/<groupId>/<artifactId>/pom.xml` + `pom.properties` present,
   `mvn install:install-file -Dfile=out.jar` installs at the right coordinates with no
-  `-DgroupId` / `-DartifactId` / `-Dversion` / `-DpomFile`, and the pom Maven writes
-  beside the artifact is the embedded one rather than a stub. Pinned end to end by
-  `e2e/JarMavenConsumerE2eTest` (opt-in `-Drontolisp.jar.e2e=true`: it shells out to
-  Maven and installs into the developer's REAL local repository — which it must, since
-  that is what `install-file` does — under a groupId namespaced to the test and
-  deleted afterwards).
-- `<dependencies/>` is written EMPTY rather than omitted: emptiness is the property
-  that makes the artifact trivial to consume, so the file states it. The
-  `<description>` carries the `--simd` → `--add-modules jdk.incubator.vector` note:
-  since `.todo/507` a module-less JVM degrades to the scalar kernels rather than
-  failing, so the flag is worth PASSING rather than required — and the consumer, who
-  never saw the build command, has nowhere else to learn that.
+  `-DgroupId`/`-DartifactId`/`-Dversion`/`-DpomFile`, and Maven writes the embedded pom beside
+  the artifact rather than a stub. Pinned end to end by `e2e/JarMavenConsumerE2eTest` (opt-in
+  `-Drontolisp.jar.e2e=true`; it installs into the developer's REAL local repository under a
+  test-namespaced groupId and deletes it afterwards).
+- `<dependencies/>` is written EMPTY rather than omitted: emptiness is the property that makes
+  the artifact trivial to consume. The `<description>` carries the `--simd` ->
+  `--add-modules jdk.incubator.vector` note, since a module-less JVM degrades to the scalar
+  kernels rather than failing (so the flag is worth PASSING, not required) and the consumer
+  never saw the build command.
 - **A jar is emitted output** ([emitted-output-determinism.md](emitted-output-determinism.md)):
-  one fixed DOS timestamp via `setTimeLocal` — `setTime(long)` converts through the
-  default zone and adds an extended-timestamp extra field, so the same build would
-  differ between machines — and a fixed entry order, the runtime classes SORTED
-  because `runtimeClassFiles()` answers a `Map.copyOf` whose iteration order is
-  per-process random.
-- `--emit-pom` writes the same pom beside the jar, the `--emit-wit`-next-to-the-`.wasm`
-  precedent, with `--emit-js-glue`'s refuse-to-overwrite guard against
-  `MavenCoordinates.POM_MARKER` (version-free, so an upgrade still recognizes the pom
-  the previous release wrote).
-- **Not ours: `install` / `deploy`.** Writing the artifact is the compiler's job;
-  putting it in a repository is Maven's, and `install-file` / `deploy-file` already do
-  it.
+  one fixed DOS timestamp via `setTimeLocal` — `setTime(long)` converts through the default zone
+  and adds an extended-timestamp extra field, so the same build would differ between machines —
+  and a fixed entry order, the runtime classes SORTED because `runtimeClassFiles()` answers a
+  `Map.copyOf` whose iteration order is per-process random.
+- `--emit-pom` writes the same pom beside the jar (the `--emit-wit`-next-to-the-`.wasm`
+  precedent) with `--emit-js-glue`'s refuse-to-overwrite guard against
+  `MavenCoordinates.POM_MARKER` (version-free, so an upgrade still recognizes the previous
+  release's pom).
+- **Not ours: `install` / `deploy`** — `install-file` / `deploy-file` already do it.
 
 ## `rontolisp-maven-plugin` — `src/main/lisp` as a source set
 
-The other entry point of the same story, and the PRIMARY one: in a project that owns both
-halves, the Lisp is not a shipped artifact at all, it is another source set. One
-`<plugin>` block, `src/main/lisp/com/acme/Kernels.lisp` beside `src/main/java`, and
-`mvn package` produces one jar with both — Maven already knows how to package
-`target/classes`, so no jar writer, no coordinates flag and no `install-file` is involved.
-Its own module (`rontolisp-maven-plugin/`, outside the root reactor like `docs-tool/`,
-depending on the rontolisp artifact by coordinates), goals `compile` and `testCompile`,
-one parameter per JVM-reaching CLI flag under the same name.
+The other entry point of the same story, and the PRIMARY one: one `<plugin>` block,
+`src/main/lisp/com/acme/Kernels.lisp` beside `src/main/java`, and `mvn package` produces one jar
+with both. Its own module (`rontolisp-maven-plugin/`, outside the root reactor like
+`docs-tool/`, depending on the rontolisp artifact by coordinates), goals `compile` and
+`testCompile`, one parameter per JVM-reaching CLI flag under the same name.
 
-**The path IS the class name** (`src/main/lisp/com/acme/Kernels.lisp` →
-`com.acme.Kernels`), the convention every JVM-language plugin uses; a path segment that is
-not a Java identifier is refused by name rather than producing an unusable class.
-
-**`process-sources`, not `compile` — and this is measured, not chosen.** The classes the
-goal writes (the kernel class, and the `am.ik.rontolisp.runtime` handle a
-`:float-vector` export hands out) are what `src/main/java` compiles AGAINST, so they must
-exist before javac. Maven's model builder merges the lifecycle-injected plugins AHEAD of
-the POM-declared ones, so a goal bound to `compile` runs AFTER
-`maven-compiler-plugin:compile`: bound there, the sample project fails with
-`package com.example does not exist`. `process-sources` / `process-test-sources` is the
-only ordering declaration order cannot break, and it is what `kotlin-maven-plugin`
-documents for the same mixed-source reason. `MavenBuildE2eTest` is the pin, and it is a
-REAL Maven build — nothing else can see a phase-ordering regression.
-
-**A source set is Lisp, not a pile of exports** — the premise the goal is built on. The
-files load each other, most of them have no Java caller at all, and only the ones that
-declare a `rontolisp:jvm-export` have a Java-facing surface. So a file compiles to a class
-exactly when the class would have an ENTRY POINT: `noMain` defaults to TRUE (a source set
-is a library, and the CLI's flag does not), that entry point is the exports, and a file
-declaring none is left as Lisp — spliced into the files that `(load ...)` it, or run by
-the interpreter — rather than failing the build. `<noMain>false</noMain>` gives every file
-`main`, so every file compiles the way the command line compiles a program.
-`JvmSourceCompiler.compileIfExported` is the seam, and it asks the EXPANDED program (the
-list the backend collects directives from), so an export a `(load ...)`ed file or a user
-macro contributes counts.
-
-**`<servlet>true</servlet>` is `-o app.war`'s mode, reached through the same mojo
-parameter shape** (`.todo/533`). It does two things `noMain` does not: it sets
-`JvmSourceCompiler.servlet`, which is what makes `runtimeClassFiles()` add
-`WAR_RUNTIME_CLASS_FILES` (the row above) to what `LispSourceSet` writes into
-`target/classes`, and the goal writes the one file that write loop cannot -- the
-`META-INF/services/jakarta.servlet.ServletContainerInitializer` line naming
-`RontoHttpServletInitializer`, `maven-war-plugin`'s only non-class input, so a war built
-from `target/classes` needs no `web.xml` and no further configuration. It also forces
-`noMain` off for the execution regardless of the `noMain` parameter's own value: a war has
-no `main` to remove, so (like the CLI's own refusal of `--no-main` with a `.war` output)
-every file compiles unconditionally rather than being gated on a `jvm-export`, and each
-one is then required to carry its own `rontolisp:http-handler` (or the internal
-`%http-server-start` seam) -- `JvmLispCompiler`'s existing `servletMode && !usesHttpHandler`
-check (`.kb/http-server.md`) is what a file lacking one fails against, so shared code has
-to be a `(load ...)`ed file rather than a sibling `.lisp` under the source directory.
-Finally, `servlet` and `${project.packaging}` are cross-checked in `CompileMojo` (not
-`TestCompileMojo`, whose classes are never packaged into a war): the two failure messages
-name which of the pair -- `<packaging>war</packaging>` or `<servlet>true</servlet>` -- is
-missing, so the defect surfaces as a build failure rather than as a deployed war that
-404s on every request.
-
-**The path-is-the-class-name rule follows the same line**: it is checked only for a file
-that earns a class, so the Lisp convention `string-utils.lisp` beside `Kernels.lisp` is
-not an error. Requiring every `.lisp` to be a Java identifier was the same wrong premise
-in a second place.
-
-**Staleness is all-or-nothing**, which is `maven-compiler-plugin`'s own rule and the only
-safe one here: a `(load "...")` splices one source into another, so a file whose own
-timestamp did not move can still need recompiling. It reads its state from a STATUS FILE
-(`target/rontolisp/compile-status.txt`, source path -> class name or `-`) rather than from
-the output directory, because a source set whose files need not each produce a class
-cannot ask the output directory whether a missing class was skipped or never built; a
-recorded class that has since been deleted, and an added or removed source, both make it
-stale. A runtime class is rewritten only when its bytes differ, so an unchanged one does
-not make the next build look stale.
+- **The path IS the class name** (`src/main/lisp/com/acme/Kernels.lisp` -> `com.acme.Kernels`);
+  a path segment that is not a Java identifier is refused by name. Checked only for a file that
+  earns a class, so `string-utils.lisp` beside `Kernels.lisp` is not an error.
+- **`process-sources`, not `compile`, and this is measured**: the classes the goal writes (the
+  kernel class, and the `am.ik.rontolisp.runtime` handle a `:float-vector` export hands out) are
+  what `src/main/java` compiles AGAINST. Maven's model builder merges lifecycle-injected plugins
+  AHEAD of POM-declared ones, so a goal bound to `compile` runs AFTER
+  `maven-compiler-plugin:compile` and the sample project fails with `package com.example does
+  not exist`. `process-sources` / `process-test-sources` is the only ordering declaration order
+  cannot break (what `kotlin-maven-plugin` documents for the same reason). `MavenBuildE2eTest`
+  is the pin, and it is a REAL Maven build — nothing else sees a phase-ordering regression.
+- **A source set is Lisp, not a pile of exports**: files load each other, most have no Java
+  caller. A file compiles to a class exactly when the class would have an ENTRY POINT — `noMain`
+  defaults to TRUE (the CLI's flag does not), the entry point is the exports, and a file
+  declaring none is left as Lisp (spliced into files that `(load ...)` it, or run by the
+  interpreter) rather than failing the build. `<noMain>false</noMain>` gives every file `main`.
+  `JvmSourceCompiler.compileIfExported` is the seam and asks the EXPANDED program, so an export
+  contributed by a `(load ...)`ed file or a user macro counts.
+- **`<servlet>true</servlet>` is `-o app.war`'s mode** through the same mojo parameter shape. It
+  sets `JvmSourceCompiler.servlet`, which makes `runtimeClassFiles()` add
+  `WAR_RUNTIME_CLASS_FILES` to what `LispSourceSet` writes into `target/classes`, and the goal
+  writes the one file that loop cannot — the
+  `META-INF/services/jakarta.servlet.ServletContainerInitializer` line naming
+  `RontoHttpServletInitializer`, `maven-war-plugin`'s only non-class input, so a war built from
+  `target/classes` needs no `web.xml`. It also forces `noMain` off for the execution regardless
+  of the parameter: a war has no `main`, so every file compiles unconditionally and each must
+  carry its own `rontolisp:http-handler` (or the internal `%http-server-start` seam) —
+  `JvmLispCompiler`'s `servletMode && !usesHttpHandler` check (`.kb/http-server.md`) is what a
+  file lacking one fails against, so **shared code has to be a `(load ...)`ed file rather than a
+  sibling `.lisp` under the source directory**. `servlet` and `${project.packaging}` are
+  cross-checked in `CompileMojo` (not `TestCompileMojo`, whose classes are never packaged into a
+  war); the two messages name which of `<packaging>war</packaging>` / `<servlet>true</servlet>`
+  is missing, so the defect is a build failure rather than a war that 404s.
+- **Staleness is all-or-nothing** (`maven-compiler-plugin`'s own rule): a `(load "...")` splices
+  one source into another, so a file whose own timestamp did not move can still need
+  recompiling. State comes from a STATUS FILE (`target/rontolisp/compile-status.txt`, source
+  path -> class name or `-`) rather than the output directory, since a source set whose files
+  need not each produce a class cannot ask the output directory whether a missing class was
+  skipped or never built; a recorded class since deleted, and an added or removed source, both
+  make it stale. A runtime class is rewritten only when its bytes differ.
 
 ### The seam: `cli/CompileFrontend` + `cli/JvmSourceCompiler`
 
-The plugin compiles IN PROCESS, not by shelling out to the CLI — and the reason is that
-the front end is where the work is. `cli/CompileFrontend` is the whole of it (the read
-with the target's feature set, the `(load ...)` inlining, user-macro expansion, the
-library splice chain, the WIT lowerings, the `boundp` fold, the library tree-shaker), in
-ONE order-critical place that all four backends and every embedder share.
-`cli/JvmSourceCompiler` is the public embedder entry point: fluent like `JvmLispCompiler`
-itself, source text in, class bytes plus travelling runtime classes out, nothing written
-to disk. `RontoLispCli`'s `-o out.class` / `-o out.jar` path runs the SAME backend half
-(`compileProgram`), which is what
-`JvmSourceCompilerTest#theEmbeddedCompileIsByteIdenticalToTheCommandLines` pins — an
-embedder that got a different program from the same source would be a second compiler.
-Diagnostics are shared too (`cli/CompileDiagnostics`), so an embedder's failure carries
-the same `file:line:column:` prefix the command line prints, and the plugin hands it to
-Maven verbatim as a `MojoFailureException`.
+The plugin compiles IN PROCESS: the front end is where the work is. `cli/CompileFrontend` is
+the whole of it (the read with the target's feature set, the `(load ...)` inlining, user-macro
+expansion, the library splice chain, the WIT lowerings, the `boundp` fold, the library
+tree-shaker), in ONE order-critical place that all four backends and every embedder share.
+`cli/JvmSourceCompiler` is the public embedder entry point: fluent like `JvmLispCompiler`,
+source text in, class bytes plus travelling runtime classes out, nothing written to disk.
+`RontoLispCli`'s `-o out.class` / `-o out.jar` path runs the SAME backend half
+(`compileProgram`) — pinned by
+`JvmSourceCompilerTest#theEmbeddedCompileIsByteIdenticalToTheCommandLines`. Diagnostics are
+shared (`cli/CompileDiagnostics`), so an embedder's failure carries the same
+`file:line:column:` prefix, handed to Maven verbatim as a `MojoFailureException`.
 
-**Its release rides with the core's.** The plugin embeds a rontolisp, so its version must
-say which one: the version scripts (`set-release-version.sh`,
-`set-next-{patch,minor}-version.sh`) set the module's version and its
-`rontolisp.version` property together, and CI deploys it right after the core.
+**Its release rides with the core's**: the version scripts (`set-release-version.sh`,
+`set-next-{patch,minor}-version.sh`) set the module's version and its `rontolisp.version`
+property together, and CI deploys it right after the core.
 
-## Validation (all at compile time, in `JvmLispCompiler` after Pass 1)
+## Validation (compile time, in `JvmLispCompiler` after Pass 1)
 
 - unknown / non-defun target, arity mismatch — wasm-export's checks, same wording;
-- a variadic target (`&optional`/`&rest`/`&key` desugars to variadic) is refused:
-  it has no fixed Java signature;
+- a variadic target (`&optional`/`&rest`/`&key` desugars to variadic) is refused: no fixed Java
+  signature;
 - the wrapper name must be a Java identifier and non-keyword
-  (`JvmExportDirective.isJavaMethodName`; the default derivation is the Lisp
-  member lower-camel-cased, `:as` overrides), must not start with `_` (the
-  generated runtime's namespace) or be `main`, must not equal another export's
-  name or any MANGLED defun name — a duplicate method name is the
-  `ClassFormatError`-at-load family `.kb/core-representation.md` records for
-  redefined defuns.
+  (`JvmExportDirective.isJavaMethodName`; default derivation is the Lisp member
+  lower-camel-cased, `:as` overrides), must not start with `_` (the generated runtime's
+  namespace) or be `main`, and must not equal another export's name or any MANGLED defun name —
+  a duplicate method name is the `ClassFormatError`-at-load family
+  `.kb/core-representation.md` records for redefined defuns.
+
+## Tests
+
+`JvmExportTest`, `JvmExportExampleTest` (compiles `examples/jvm/kernels-library.lisp` and calls
+it from Java), `JvmArtifactOptionsTest`, `RontoLispCliTest`, `JvmSourceCompilerTest`,
+`JvmRuntimeClassFilesTest`, `JvmHttpHandlerTravellingRuntimeTest`, `RontoFloatArrayTest`,
+`MavenBuildE2eTest`, `e2e/JarMavenConsumerE2eTest` (`-Drontolisp.jar.e2e=true`). Cross-backend
+no-op pins: `LispEvaluatorTest#jvmExportIsNoOpReturningTheNamedSymbol`,
+`WasmLispCompilerIntegrationTest#jvmExportDirectiveIsANoOpOnWasm`.

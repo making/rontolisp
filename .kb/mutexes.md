@@ -1,88 +1,57 @@
 # Mutexes (`rontolisp:make-mutex` / `with-mutex`) and the `bordeaux-threads` shim
 
-`.todo/204`. rontolisp really runs concurrent code -- `serve` / `http-handler`
-put **one virtual thread per request** on the interpreter and the JVM -- so a
-program (or a loaded library) needs a way to take a lock. These are it.
+`serve` / `http-handler` run one virtual thread per request (interpreter, JVM).
 
-**The invariant: a mutex handle is OPAQUE.** Every backend hands out a different
-kind of value, and nothing portable may print, order or do arithmetic on one:
+**Invariant: a mutex handle is OPAQUE** — only identity through acquire/release is
+portable; never print, order or do arithmetic on one.
 
-| backend | `make-mutex` returns | acquire / release |
+| backend | handle | acquire/release |
 |---|---|---|
-| interpreter | an integer index into the global environment's lock table (`Environment.registerMutexes`, a `ConcurrentHashMap<Long, ReentrantLock>` + `AtomicLong`) | real `lock()` / `unlock()` |
-| JVM | the `java.util.concurrent.locks.ReentrantLock` **itself**, flowing as an ordinary `Object` (`JvmMutexRuntimeBuilder`: `_mutexNew`/`_mutexAcquire`/`_mutexRelease`) | real `lock()` / `unlock()` |
-| WASM Preview 1 + component | the i31 constant `0` (`WasmMutexCompiler`) | the identity on the argument |
+| interpreter | index into `Environment.registerMutexes` (`ConcurrentHashMap<Long,ReentrantLock>` + `AtomicLong`) | real |
+| JVM | the `ReentrantLock` itself as a plain `Object` (`JvmMutexRuntimeBuilder`: `_mutexNew`/`_mutexAcquire`/`_mutexRelease`) | real |
+| WASM P1 + component | i31 constant `0` (`WasmMutexCompiler`) | identity |
 
-Only the identity through acquire/release is portable, and it is what the
-`mutex-primitives` ci-spec case asserts. The JVM handle is the lock object
-rather than an index **on purpose**: an index needs a table, a table needs a
-lazily initialized static field, and that initialization would itself race --
-which is the bug the primitive exists to fix. `java:` monitors were never an
-option (no reflection metadata on the native binary), and a `synchronized`
-region cannot express acquire / body / release as three separate calls anyway.
+- JVM handle is the lock, not an index: an index needs a lazy static table whose
+  initialization would itself race. `java:` monitors: no reflection metadata on the
+  native binary. `synchronized` cannot express acquire / body / release as three calls.
+- WASM is single-threaded, but the names must EXIST: an undefined function is a
+  compile-time error on the compile backends.
+- Reentrancy deliberate. Releasing an unheld mutex: `LispEvalException` / 
+  `IllegalMonitorStateException` / unnoticed (WASM).
+- `--no-gc` rejects the names; no `BuiltinFunctionWrappers` entry, so
+  `#'rontolisp:make-mutex` is an error.
 
-**Why they exist on WASM at all.** Both WASM backends are single-threaded by
-construction, so exclusion there is a tautology, not a lie. They must still
-EXIST because an undefined function is a **compile-time** error on the compile
-backends and only a call-time one on the interpreter: a library that takes a
-lock on a path a WASM program never runs would otherwise not build. Same reason
-the three SCRAM names had to land before cl-postgres could be compiled at all
-(`.kb/asdf.md`).
+## `with-mutex`
 
-**`with-mutex` is a `LispMacroExpander` expansion** dispatched on the qualified
-name (`LispMacroExpander.expandWithMutex`, the `rontolisp:with-arena` pattern),
-wired into `LispEvaluator.evalCons`, `JvmExprCompiler` and `WasmExprCompiler`.
-It binds the mutex form ONCE to `__mutex_lock`, acquires, and releases under
-`unwind-protect`. The WASM leg passes `unwindProtect = ctx.ehMode` like the
-`usocket:with-*` family -- but unlike them **`with-mutex` does NOT flip a module
-into EH mode** (it is absent from `WasmLispCompiler.programUsesEhForm`): paying
-the EH lowering to guarantee that a no-op runs would buy nothing. It is also in
-the non-strict head list of `WasmAwaitNormalizer` (it takes a lock SPEC and a
-body, so its "arguments" must not be hoisted).
+`LispMacroExpander.expandWithMutex`, dispatched on the qualified name (the
+`rontolisp:with-arena` pattern) from `LispEvaluator.evalCons`, `JvmExprCompiler`,
+`WasmExprCompiler`. Binds the mutex form ONCE to `__mutex_lock`, acquires, releases
+under `unwind-protect`.
 
-Reentrancy is deliberate (`ReentrantLock`, and the nested-acquire case is
-pinned). Releasing a mutex the calling thread does not hold is an error --
-`LispEvalException` on the interpreter, `IllegalMonitorStateException` from
-`unlock()` on the JVM, unnoticed on WASM.
+- WASM passes `unwindProtect = ctx.ehMode` but does NOT flip a module into EH mode
+  (absent from `WasmLispCompiler.programUsesEhForm`).
+- In `WasmAwaitNormalizer`'s non-strict head list (lock SPEC + body must not be hoisted).
 
-Thread CREATION is real since todo-227: `rontolisp:make-thread` and friends
-spawn virtual threads on the interpreter and the JVM (call-time errors from the
-WASM shim defuns) -- mechanics, the bindings alist and the `bt2` package half of
-the shim: `.kb/threads.md`.
+## `bordeaux-threads` (nickname `bt`)
 
-**`bordeaux-threads` (nickname `bt`)** is a Tier-1 shim system
-(`ShimLibraries` + `BuiltinSystems` + a `PackageRegistry` package) whose LOCK
-half covers `make-lock`, `acquire-lock`, `release-lock`, `with-lock-held` and
-`*supports-threads-p*` (the thread half lives in the `bt2` package,
-`.kb/threads.md`) -- upstream's own `.asd` hard-errors on an unknown
-implementation, so a shim is the only route. `with-lock-held` is NOT a shim
-defun but the same built-in expansion as `with-mutex` (dispatched on its
-qualified name in all three dispatchers), so one lowering serves every backend.
-Two deliberate divergences, both supersets: `make-lock` returns a REENTRANT lock
-(upstream's is not -- a program that would deadlock there merely proceeds here),
-and `acquire-lock`'s `:wait-p` is accepted and ignored (the acquisition always
-blocks). `make-lock` takes `&rest` (todo-245): the v1 spelling passes a
-positional name, the v2 spelling (`bt2:make-lock :name "..."` -- dbi's
-cache/thread.lisp) a keyword pair, both onto the ONE defining symbol through the
-package redirects, and the name is ignored either way. `bt2:with-lock-held
-((lock-form))` -- the v2 double-paren shape -- parses through the same
-one-element-spec expansion, since the spec's single element IS the lock form.
+Tier-1 shim (`ShimLibraries` + `BuiltinSystems` + a `PackageRegistry` package);
+upstream's `.asd` hard-errors on an unknown implementation. Lock half: `make-lock`,
+`acquire-lock`, `release-lock`, `with-lock-held`, `*supports-threads-p*`; thread half is
+`bt2` (`.kb/threads.md`).
 
-`bt:*supports-threads-p*` is per-backend, and getting it there is why
-**`ShimLibraries.forms` now takes the TARGET backend's `Features`** instead of
-hardcoding `Features.INTERPRETER`: a `#+rontolisp-wasm` in a shim source now
-says what it means on the backend being built for. It is a claim libraries act
-on, not decoration -- same category as `:unicode` (`.kb/reader-features.md`).
+- `with-lock-held` is not a shim defun but the same built-in expansion as `with-mutex`.
+- Deliberate supersets: `make-lock` is REENTRANT; `acquire-lock`'s `:wait-p` accepted
+  and ignored.
+- `make-lock` takes `&rest`, so v1 positional name and v2 `:name "..."` both reach one
+  symbol; name ignored. `bt2:with-lock-held ((lock-form))` uses the same
+  one-element-spec expansion.
+- `bt:*supports-threads-p*` is per-backend, which is why **`ShimLibraries.forms` takes
+  the TARGET backend's `Features`** rather than hardcoding `Features.INTERPRETER`
+  (`.kb/reader-features.md`).
 
-Coverage: `MutexTest` (interpreter semantics + 4 virtual threads x 2000
-increments), `JvmMutexTest` (the same property against the compiled class,
-invoked from Java threads the way `serve` does), the
-`mutexPrimitivesAreNoOpsThatStillCompose` case in
-`WasmLispCompilerIntegrationTest`, and the `mutex-primitives` ci-spec case
-(all four backends). The JVM test is the one that measures: with the
-`with-mutex` dropped it reports ~3200 of 8000 increments, so the lock is doing
-real work and the test is not vacuous.
+## Tests
 
-Not wired: `--no-gc` (rejects the names like the other `rontolisp:` built-ins),
-and no `BuiltinFunctionWrappers` entry -- `#'rontolisp:make-mutex` is an error,
-like `#'rontolisp:tcp-connect`.
+`MutexTest`; `JvmMutexTest` (drop `with-mutex` and it reports ~3200 of 8000 increments,
+so it is not vacuous);
+`WasmLispCompilerIntegrationTest#mutexPrimitivesAreNoOpsThatStillCompose`; ci-spec
+`mutex-primitives`.

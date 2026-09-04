@@ -1,182 +1,171 @@
 # Time / environment built-ins (`get-universal-time`, `get-internal-real-time`, `get-internal-run-time`, `uiop:getenv`, and the environment-enquiry family)
 
-Implemented in all three backends, returning an **integer everywhere** (the three time built-ins). Interpreter/JVM: `JvmTimeCompiler` via a `systemOps` methodref map on `Ctx`; `JvmGetenvCompiler`. WASM (`WasmTimeCompiler`) reads WASI `clock_time_get` -- or, under `--no-wasi`, the cell a host writes through the exported `__ronto_set_time` hook, all three names off the ONE cell and signalling while it is unset (`.kb/wasm-export-no-wasi.md` has the rule and the reason a host-supplied time is not the fabrication a stubbed clock would be) -- computes in i64 and normalizes through `_int_new`, so the value is an exact boxed integer (`TYPE_BIGNUM`, `.kb/wasm-bignum.md`) and `integerp` answers like the other backends. (Historical: before the boxed exact-integer path existed the WASM value was a FLOAT because the magnitudes exceed the `i31` range; that divergence is retired.) `uiop:getenv` on **Preview 1** uses a `_getenv` runtime helper (`WasmGetenvRuntimeBuilder`) scanning the host-filled WASI environ buffer; **every component variant** instead reads `wasi:cli/environment@0.3.0` through the `environment.lisp` library (see below). `get-universal-time` is seconds since the 1900 CL epoch (Unix + 2208988800). The three time built-ins are registered in `LispNames`/`PackageRegistry.CL_FUNCTIONS`. The WASM clock/environ *imports* exist in both modes (Preview 1 -> real host; component -> adapter over `wasi:clocks@0.3.0`/`wasi:cli/environment@0.3.0`), keeping import indices identical -- but since 2026-07-30 the component's `environ_*` imports are DEAD WEIGHT on every variant (`_getenv` is no longer the component getenv; the base adapter's environ decode and the serve bridge's zero-entry stub are both unreachable from Lisp), kept only because the eight preview1 import slots are index-pinned.
+## The three time built-ins
 
-**`uiop:getenv` is a LISP definition over a per-backend primitive (2026-08-15, todo-356)**: the public name is `uiop-os.lisp`'s defun, which consults the `(setf (uiop:getenv x) v)` OVERRIDE map (the prelude's `%getenv-override` / `%getenv-override-set` over one `%getenv-overrides` alist) and falls back to `rontolisp::%host-getenv` -- `LispNames.HOST_GETENV`, the name every backend below now lowers, and the name `EnvironmentLibrary` keys its component splice on. No host lets a process rewrite its own environment (the JVM cannot at all, WASI's is read-only), so a WRITE has to be an overlay, and putting the read in Lisp is what makes the overlay visible on all four backends from one definition; `.kb/uiop.md` (`uiop/os`'s decisions) has the full shape, including the interpreter's third lazy-load trigger for a setf PLACE. The paragraphs below describe `%host-getenv`, which is what they always described -- only the name at the top changed.
+- Return an **integer on every backend**. In `LispNames` /
+  `PackageRegistry.CL_FUNCTIONS`.
+- Interpreter/JVM: `JvmTimeCompiler` via a `systemOps` methodref map on `Ctx`.
+- WASM (`WasmTimeCompiler`): WASI `clock_time_get`; under `--no-wasi` the single cell a
+  host writes through the exported `__ronto_set_time` hook -- all three names read that ONE
+  cell and signal while it is unset (`.kb/wasm-export-no-wasi.md`). Computes in i64,
+  normalizes through `_int_new`, so the value is an exact boxed integer (`TYPE_BIGNUM`,
+  `.kb/wasm-bignum.md`) and `integerp` agrees.
+- `get-universal-time` = Unix seconds + 2208988800 (1900 CL epoch).
+- `internal-time-units-per-second` is a reader constant **1000** beside `char-code-limit`.
 
-**Reading an environment variable is spelled `uiop:getenv`, and ONLY that (2026-07-29)**: ANSI Common Lisp has no `getenv`, so homing one in `cl` would have shipped a name no other implementation answers to and that a portability `#-`/`#+` could not see coming. It lives in the `uiop` package instead -- the spelling implementation-independent libraries already use -- as one of the uiop members with a real definition (`.kb/uiop.md`). Mechanics: `LispNames.GETENV` is the member name and `LispNames.UIOP_GETENV` (`"UIOP/OS:GETENV"` -- getenv's HOME sub-package, which is what a `uiop:getenv` occurrence resolves to) the canonical qualified spelling; `PackageRegistry` exports it from `uiop/os` and re-exports it from `uiop`, and NOT from `CL_FUNCTIONS` (so `symbol-function` does not know a bare `GETENV`); the interpreter registers `%host-getenv` in `Environment.createGlobal` and both compilers dispatch that internal name in their `compileCons` name switch (it was the QUALIFIED uiop name before todo-356, matched through `UiopExports.denotes` ahead of the function-call path; the public name is a real defun now, so the dispatch moved down to the primitive). There is deliberately no `cl:getenv` alias: a compatibility alias would keep the non-standard spelling alive in user code, which is the thing being retired. Pinned by `LispEvaluatorTest#evalGetenv` + `#bareGetenvIsNotACommonLispFunction`, `JvmLispCompilerTest#compileAndRunGetenv`, `WasmLispCompilerIntegrationTest#componentGetenvFromWasiEnvironment`/`#httpHandlerReadsTheEnvironmentUnderWasmtimeServe`/`#preview1GetenvDoesNotCorruptNewline`, and the ci-spec case `getenv-does-not-corrupt-newline`.
+WASM clock/environ *imports* exist in both modes (Preview 1 -> host; component -> adapter
+over `wasi:clocks@0.3.0` / `wasi:cli/environment@0.3.0`), keeping import indices identical.
+The component's `environ_*` imports are DEAD WEIGHT on every variant, kept only because the
+eight preview1 import slots are index-pinned.
 
-**`%host-argv` rides the same seam (2026-08-25, todo-362)**: the `uiop/image`
-command-line family is one Lisp definition (`uiop-image.lisp`) over a second
-per-backend primitive, `LispNames.HOST_ARGV`, answering
-`(program-name user-arg ...)` everywhere. It shares this file's environment seam
-on `--component` only -- `environment.lisp` binds `get-arguments` beside
-`get-environment`, which is why the fixed import block had to declare it -- and
-takes its own road on the other three: the vector the CLI threads in on the
-interpreter, `main`'s `String[]` behind the class name on the JVM, and on
-Preview 1 an `_argv` helper over `args_sizes_get` / `args_get` bound as APPENDED
-user imports, so no preview1 import slot and no adapter export list moves. The
-full shape, and why the block widening was the only unavoidable part, is in
-`.kb/uiop.md` (`uiop/image`'s decisions).
+## `uiop:getenv` is a LISP definition over a per-backend primitive
 
-**On `--component` getenv is a Lisp library, not an adapter path (todo 217, 2026-07-30)**:
-`uiop:getenv` under `--component` is `environment.lisp` over a wit-imported
-`wasi:cli/environment@0.3.0` (`src/main/resources/am/ik/rontolisp/eval/environment.{lisp,wit}`,
-spliced by `eval/EnvironmentLibrary` when the program references the name -- the
-sockets.lisp / wait.lisp pattern), and `WasmExprCompiler` therefore does NOT dispatch the
-name in component mode: the call resolves to that defun (with an explicit compile error if
-the splice was skipped, so a pipeline that forgets it cannot fall through to a runtime
-"undefined function"). `get-environment` hands back the whole environment as
-`list<tuple<string,string>>` -- a Lisp list of two-element lists -- and the defun walks it,
-so unset answers nil and an empty value answers "".
+- Public name = `uiop-os.lisp`'s defun: consults the `(setf (uiop:getenv x) v)` OVERRIDE
+  map (prelude `%getenv-override` / `%getenv-override-set` over one `%getenv-overrides`
+  alist), falls back to `rontolisp::%host-getenv` (`LispNames.HOST_GETENV`) -- the name
+  every backend lowers and `EnvironmentLibrary` keys its component splice on. No host lets
+  a process rewrite its own environment, so a WRITE must be an overlay; the read in Lisp
+  makes the overlay visible on all four backends from one definition (`.kb/uiop.md`, incl.
+  the interpreter's third lazy-load trigger for a setf PLACE).
+- **Reading an environment variable is spelled `uiop:getenv` and ONLY that** -- ANSI CL has
+  no `getenv`, and there is deliberately no `cl:getenv` alias. `LispNames.GETENV` is the
+  member name, `LispNames.UIOP_GETENV` (`"UIOP/OS:GETENV"`) the canonical qualified
+  spelling; `PackageRegistry` exports from `uiop/os`, re-exports from `uiop`, and keeps it
+  OUT of `CL_FUNCTIONS` (so `symbol-function` does not know a bare `GETENV`). Interpreter
+  registers `%host-getenv` in `Environment.createGlobal`; both compilers dispatch that
+  internal name in `compileCons`.
+- Preview 1: `_getenv` runtime helper (`WasmGetenvRuntimeBuilder`) scanning the host-filled
+  WASI environ buffer behind a FIXED 16 KiB window (`ENV_BUF_ADDR`) -- a >16 KiB
+  environment there is a live hazard.
 
-Why it is ONE binding for base AND serve, and why that mattered: the served component was
-the broken case (`uiop:getenv` -> nil for every variable, silently, whatever
-`wasmtime serve --env` / `-S inherit-env=y` said) because the WASI 0.3 **service** world
-carries no `wasi:cli/environment`, so `adapter-http-server-p1.wat` answers `environ_*` with
-a zero-entry environment and `import-block-http-server.bin` declares no such interface. The
-fix is deliberately NOT a second copy of the base adapter's environ decode: the base /
-sockets blocks already declare the interface, so `WasmComponentBuilder` binds
-`get-environment` FROM the block (`FIXED_BLOCK_IFACES` + the block's own instance index for
-`lowerFixedFromBlock`'s `instanceOf` map -- a user's own `rontolisp:wit-import` of the
-interface now rides the same path instead of being rejected), while serve, whose block has
-none, gets the same binding as an appended `appendUserImports` instance. Two consequences to
-keep: the import is **conditional** on the program actually calling `uiop:getenv` (a
-getenv-free component declares nothing extra and still runs on a host that provides only the
-service world -- wasmCloud is the case that motivated the conditionality; verified
-byte-identical output across preview1 / base / serve / fetch / sockets / keyvalue-serve /
-`--no-gc` before-and-after), and the base path no longer has the adapter's FIXED 16 KiB
-environ window (`ENV_BUF_ADDR`), since the canonical ABI allocates the lifted strings --
-Preview 1 keeps that window, and a >16 KiB environment there is still the old hazard.
-Re-evaluation trigger: if the service world ever gains `wasi:cli/environment` (or the base
-block is regenerated), the adapter/bridge `environ_*` bodies and `_getenv` become removable
-in component mode -- they are already unreachable from Lisp. Compile-level pins:
-`WasmLispCompilerTest#getenvInServeModeImportsWasiCliEnvironment` (the serve user import +
-the emitted WIT line) and `#getenvInBaseComponentBindsTheBlocksEnvironmentInstance` (exactly
-ONE import of the name off serve).
+Pins: `LispEvaluatorTest#evalGetenv`, `#bareGetenvIsNotACommonLispFunction`,
+`JvmLispCompilerTest#compileAndRunGetenv`,
+`WasmLispCompilerIntegrationTest#componentGetenvFromWasiEnvironment` /
+`#httpHandlerReadsTheEnvironmentUnderWasmtimeServe` /
+`#preview1GetenvDoesNotCorruptNewline`, ci-spec `getenv-does-not-corrupt-newline`.
 
-**The universal-time codec (`encode-universal-time` / `decode-universal-time`,
-2026-07-26)**: both are `LispPreludeLibrary` defuns -- pure era-based proleptic
-Gregorian arithmetic over integers, so one definition runs on every backend and
-is exact at any year (no table, no host calendar). `encode` composes
-`days*86400 + h*3600 + m*60 + s + zone*3600` with 25567 as the 1900->1970 day
-offset; `decode` inverts it and returns the nine CL values. Two documented lite
-deviations: a missing (or nil) `time-zone` means **GMT, not the machine's local
-zone** -- no backend-portable local-zone source exists (WASI exposes no
-timezone at all) and defaulting to the one zone every backend agrees on keeps
-the pair backend-identical -- and `daylight-p` always decodes as nil.
-`internal-time-units-per-second` is a reader constant (1000) beside
-`char-code-limit`, matching `get-internal-real-time`'s milliseconds.
+## `%host-argv` rides the same seam
 
-**`rontolisp:random-bytes` (2026-07-26)** is the cryptographic-entropy sibling
-of `random`, and deliberately NOT the same generator: `random` is an ordinary
-PRNG (`Math.random` on the interpreter/JVM), while `random-bytes` draws from
-`java.security.SecureRandom` there and from the WASI `random_get` host function
-on both wasm backends (`wasi:random` under `--component`). The public function
-is a prelude defun over the internal per-backend `rontolisp::%random-byte`
-primitive (one byte per call): the interpreter registers it in `Environment`
-over a process-wide `SecureRandom`, the JVM emits `_randomByte` from
-`JvmSecureRandomRuntimeBuilder` (gated on a reference to the primitive, so an
-entropy-free program never loads `java.security` and stays byte-identical), and
-WASM loads the low byte of a `random_get` draw and boxes it as an i31. This is
-what retired `ironclad-prng.lisp`'s signalling stub -- see `.kb/asdf.md`.
+`uiop/image`'s command-line family is one `uiop-image.lisp` definition over
+`LispNames.HOST_ARGV`, answering `(program-name user-arg ...)` everywhere. `--component`
+shares the environment seam (`environment.lisp` binds `get-arguments` beside
+`get-environment`, which is why the fixed import block had to declare it); interpreter uses
+the vector the CLI threads in, JVM `main`'s `String[]` behind the class name, Preview 1 an
+`_argv` helper over `args_sizes_get` / `args_get` bound as APPENDED user imports (no
+preview1 slot and no adapter export list moves). `.kb/uiop.md`.
 
-**`sleep`: a real host timer everywhere but Preview 1 (todo-225)**.
-`LispMacroExpander.expandSleep` does the shared seconds-to-whole-milliseconds conversion
-(`(round (* n 1000))`, so `0.5` is 500 ms) and the non-positive guard; the wait itself is
-per backend.
+## `--component` getenv is a Lisp library, not an adapter path
 
-- **Interpreter / JVM**: park, through the `%SLEEP-MS` internal primitive -- an
-  `Environment` registration and `JvmSleepCompiler`'s `Number.longValue` +
-  `Thread.sleep(J)`, whose two constant-pool entries are minted at the call site so a
-  sleep-free program keeps its bytes.
-- **`--component`**: `sleep` is NOT a compiler lowering at all but the spliced
-  `wait.lisp` DEFUN (`eval/WaitForLibrary`, whose trigger is `rontolisp:wait-for` OR
-  `sleep`), which FORCES a `wasi:clocks/monotonic-clock` timer future through
-  `rontolisp::%future-force`. Measured: a 2 s sleep costs 0 CPU above the empty-program
-  baseline, where the spin cost 2.16 s of it.
-- **WASM Preview 1**: the clock spin (`expandSleep`'s `spin` arm) -- its nine imports
-  include a clock but no timer to wait on, so burning the interval is the only way to
-  elapse it. **Re-evaluation trigger**: a `poll_oneoff` import would retire it.
-- **WASM `--no-wasi`** (both entry shapes): SIGNALS, a call-time error naming `sleep`
-  with the argument still evaluated for effect (`WasmExprCompiler`, before the spin
-  arm). It has no timer AND no clock that can advance while a call runs -- its clock is
-  a cell only a host write moves (`__ronto_set_time`, `.kb/wasm-export-no-wasi.md`) --
-  so the Preview 1 spin would be an infinite loop rather than a wait. **Re-evaluation
-  trigger**: a `--host-clock` import (the `--host-random` shape) would make the spin
-  terminate and could restore it.
+- `environment.lisp` over wit-imported `wasi:cli/environment@0.3.0`
+  (`src/main/resources/am/ik/rontolisp/eval/environment.{lisp,wit}`, spliced by
+  `eval/EnvironmentLibrary` on reference -- the sockets.lisp / wait.lisp pattern).
+  `WasmExprCompiler` does NOT dispatch the name in component mode; a skipped splice is an
+  explicit COMPILE error, not a runtime "undefined function".
+- `get-environment` returns `list<tuple<string,string>>`; the defun walks it, so unset
+  answers nil and an empty value answers `""`.
+- The WASI 0.3 **service** world carries no `wasi:cli/environment`, so serve's adapter
+  answered `environ_*` with a zero-entry environment (silent nil under
+  `wasmtime serve --env`). `WasmComponentBuilder` now binds `get-environment` FROM the
+  fixed block for base/sockets (`FIXED_BLOCK_IFACES` + the block's instance index for
+  `lowerFixedFromBlock`'s `instanceOf` map -- a user `rontolisp:wit-import` of the
+  interface rides the same path), and for serve as an appended `appendUserImports` instance.
+- The import is **conditional** on the program calling `uiop:getenv`, so a getenv-free
+  component still runs on a host providing only the service world.
+- The base path has no 16 KiB environ window (the canonical ABI allocates lifted strings).
+- Re-evaluation trigger: if the service world gains `wasi:cli/environment` (or the base
+  block is regenerated), the adapter/bridge `environ_*` bodies and `_getenv` become
+  removable in component mode.
+- Pins: `WasmLispCompilerTest#getenvInServeModeImportsWasiCliEnvironment`,
+  `#getenvInBaseComponentBindsTheBlocksEnvironmentInstance`.
 
-**Why the component arm is a defun and FORCES rather than AWAITS** -- three constraints
-that between them leave exactly one shape, all three found by trying the alternatives:
-(1) an `await` is only legal at top level or inside an `async-defun`/`async-lambda`
-(`RONTOLISP:AWAIT is only allowed inside ...`), and `sleep` has to be callable from
-anywhere -- clack's handler `stop` calls it inside a plain defun -- so the wait must be
-`%future-force`, the same synchronous/asynchronous split sockets.lisp's `tcp-*` surface
-uses (`.kb/tcp-sockets.md`); (2) the lowering cannot live in `WasmExprCompiler`, because
-the `await`/future machinery it introduces has to be in the program BEFORE
-`WasmLispCompiler`'s async pass runs and that compiler runs long after it -- a lowering
-emitted there compiles to a `#<FUTURE>` value instead of a wait; (3) being a defun is what
-makes `#'sleep` work, since no built-in wrapper is injected for a name the program
-defines. `WasmExprCompiler` therefore only handles the Preview 1 spin and, in component
-mode, raises an explicit compile error when the splice is missing rather than letting the
-call fall through to a runtime "undefined function" (the `uiop:getenv` pattern).
-`#'sleep` is in `BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS` for the sharper
-version of the same reason: an ungated wrapper would put `(sleep x)` into EVERY component,
-including the ones the splice skipped.
+## Universal-time codec
 
-**Cost of the component arm, accepted deliberately**: awaiting a host timer puts the
-module in async -- and therefore EH -- mode, where the old spin needed neither. That is a real change to the "a
-program without those forms keeps its flags" line, taken because a busy-wait under
-`--component` blocks the whole instance and burns a core.
+`encode-universal-time` / `decode-universal-time` are `LispPreludeLibrary` defuns: pure
+era-based proleptic Gregorian integer arithmetic, one definition everywhere, exact at any
+year. `encode` composes `days*86400 + h*3600 + m*60 + s + zone*3600` with **25567** as the
+1900->1970 day offset; `decode` inverts and returns the nine CL values. Lite deviations: a
+missing or nil `time-zone` means **GMT, not local** (no backend-portable local-zone source;
+WASI exposes no timezone), and `daylight-p` always decodes nil.
 
-Pinned by `LispEvaluatorTest#evalSleepParksAndReturnsNil`,
+## `rontolisp:random-bytes`
+
+Cryptographic sibling of `random` (which is `Math.random` on interpreter/JVM), a prelude
+defun over the per-backend `rontolisp::%random-byte` primitive (one byte per call):
+interpreter = a process-wide `java.security.SecureRandom` in `Environment`; JVM =
+`_randomByte` from `JvmSecureRandomRuntimeBuilder`, gated on a reference to the primitive so
+an entropy-free program never loads `java.security` and stays byte-identical; WASM = low
+byte of a WASI `random_get` draw (`wasi:random` under `--component`), boxed as an i31.
+Retired `ironclad-prng.lisp`'s signalling stub (`.kb/asdf.md`).
+
+## `sleep`
+
+`LispMacroExpander.expandSleep` does the shared conversion `(round (* n 1000))` (so `0.5`
+is 500 ms) and the non-positive guard. The wait is per backend:
+
+- **Interpreter / JVM**: park via the `%SLEEP-MS` primitive -- an `Environment`
+  registration and `JvmSleepCompiler`'s `Number.longValue` + `Thread.sleep(J)`, its two
+  constant-pool entries minted at the call site so a sleep-free program keeps its bytes.
+- **`--component`**: NOT a compiler lowering -- the spliced `wait.lisp` DEFUN
+  (`eval/WaitForLibrary`, triggered by `rontolisp:wait-for` OR `sleep`) FORCES a
+  `wasi:clocks/monotonic-clock` timer future through `rontolisp::%future-force`.
+- **Preview 1**: clock spin (`expandSleep`'s `spin` arm); its nine imports include a clock
+  but no timer. Trigger to revisit: a `poll_oneoff` import.
+- **`--no-wasi`** (both entry shapes): SIGNALS at call time naming `sleep`, argument still
+  evaluated for effect (`WasmExprCompiler`, before the spin arm) -- its clock only moves on
+  a host write, so the spin would never terminate. Trigger to revisit: a `--host-clock`
+  import (the `--host-random` shape).
+
+Three constraints force the component arm to be a defun that FORCES rather than awaits:
+`await` is only legal at top level or inside `async-defun`/`async-lambda` while `sleep`
+must be callable anywhere (clack's handler `stop` calls it in a plain defun), so the wait is
+`%future-force` -- the split `sockets.lisp`'s `tcp-*` surface uses (`.kb/tcp-sockets.md`);
+a lowering in `WasmExprCompiler` runs after the point `WasmLispCompiler`'s async pass needs
+the future machinery, so it would compile to a `#<FUTURE>` value instead of a wait; and
+being a defun is what makes `#'sleep` work. `#'sleep` is in
+`BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS` -- an ungated wrapper would put
+`(sleep x)` into EVERY component, including ones the splice skipped.
+
+Accepted cost: the host timer puts the module in async (therefore EH) mode, where the spin
+needed neither -- a deliberate exception to "a program without those forms keeps its flags".
+
+Pins: `LispEvaluatorTest#evalSleepParksAndReturnsNil`,
 `JvmLispCompilerTest#compileAndRunSleep`,
-`WasmLispCompilerIntegrationTest#sleepSpinsOnTheClockOnPreview1` +
-`#componentSleepUsesTheHostTimerInsteadOfSpinning` (which also pins the plain-defun call
-site and `#'sleep`), and the ci-spec case `clack-enablement-builtins`.
+`WasmLispCompilerIntegrationTest#sleepSpinsOnTheClockOnPreview1`,
+`#componentSleepUsesTheHostTimerInsteadOfSpinning` (also pins the plain-defun call site and
+`#'sleep`), ci-spec `clack-enablement-builtins`.
 
-## The environment-enquiry family (CLHS 25.1.5, 2026-08-16, `.todo/402`)
+## Environment-enquiry family (CLHS 25.1.5)
 
-**All nine are CONSTANTS, and only `machine-type` differs between backends.** They are
-`LispPreludeLibrary` defuns, not per-backend built-ins, precisely because there is
-nothing to read at run time -- which is also what makes `#'software-type` and friends
-first-class for free.
+**All nine are CONSTANTS, and only `machine-type` differs between backends.**
+`LispPreludeLibrary` defuns, not per-backend built-ins -- which makes `#'software-type` and
+friends first-class for free.
 
-| name | answer | why |
-| --- | --- | --- |
-| `lisp-implementation-type` | `"rontolisp"` | one implementation |
-| `lisp-implementation-version` | `Version.getVersion()` | BAKED into the prelude source at class-init, so the four backends report the build that COMPILED them; equal to `(getf (rontolisp:version) :version)` |
-| `software-type` | `"Unix"` | the claim `uiop/os` already makes unconditionally (`os-unix-p` -> `t`, `operating-system` -> `:unix`): every backend presents the POSIX-shaped file model |
-| `software-version` | `nil` | nothing can name a version of that |
-| `machine-type` | `"JVM"` / `"WASM32"` | the ABI the artifact targets, through `%target-machine-type` |
-| `machine-version` | `nil` | an ABI has no version the program can read |
-| `machine-instance` | `nil` | no backend has a host-identity primitive; `uiop:hostname` says the same |
-| `short-site-name` / `long-site-name` | `nil` | no site database |
+| name | answer |
+| --- | --- |
+| `lisp-implementation-type` | `"rontolisp"` |
+| `lisp-implementation-version` | `Version.getVersion()`, BAKED into the prelude source at class-init, so all four backends report the build that COMPILED them; equals `(getf (rontolisp:version) :version)` |
+| `software-type` | `"Unix"` (matches `uiop/os`: `os-unix-p` -> `t`, `operating-system` -> `:unix`) |
+| `software-version` | `nil` |
+| `machine-type` | `"JVM"` / `"WASM32"`, via `%target-machine-type` |
+| `machine-version` | `nil` |
+| `machine-instance` | `nil` (no host-identity primitive; `uiop:hostname` agrees) |
+| `short-site-name` / `long-site-name` | `nil` |
 
-**Why the host is NOT consulted anywhere, including on the interpreter and the JVM.**
-`System.getProperty("os.name")` / `("os.arch")` are available there and are deliberately
-unused. A compiled `.class` runs on a machine the compiler never saw, so baking the
-build host would be wrong and querying it at run time would make the JVM backend answer
-something the WASM backends structurally cannot -- a program's User-Agent would then
-change with where it was RUN, which is exactly what the emitted-output determinism rule
-exists to prevent. `machine-type` names the ABI for the same reason `uiop:architecture`
-does (`.kb/uiop.md`): a class file and a wasm module are both CPU-independent, so the CPU
-is not the answer. Everything unknowable answers `nil` -- CL's own answer when "no
-appropriate and relevant result can be supplied" -- rather than a fabricated string,
-the `uiop:hostname` rule.
+**The host is NOT consulted anywhere, including interpreter and JVM**:
+`System.getProperty("os.name"/"os.arch")` are deliberately unused -- a compiled `.class`
+runs on a machine the compiler never saw, and a run-time query would make the JVM answer
+what the WASM backends structurally cannot, breaking emitted-output determinism.
+`machine-type` names the ABI for the same reason `uiop:architecture` does (`.kb/uiop.md`).
+Everything unknowable answers `nil`, never a fabricated string.
 
-**`%target-machine-type`** is the one per-backend piece: `Environment.createGlobal`
-defines it (`"JVM"`; the interpreter runs on the JVM, so it agrees with the JVM
-backend's emitted class), `JvmExprCompiler` lowers it to the `"JVM"` literal and
-`WasmExprCompiler` to `"WASM32"` -- a literal on both, so it folds like any constant and
-costs a wasm/JVM string and nothing else. **Re-evaluation trigger**: a third compile
-target needs a third arm here and nowhere else; a backend that ever gains a real
-host-identity or OS primitive should revisit `machine-instance` / `software-type` (and
-`uiop:hostname` with them) TOGETHER, not one at a time -- their agreement is the point.
+`%target-machine-type` is the one per-backend piece: `Environment.createGlobal` defines it
+(`"JVM"`), `JvmExprCompiler` lowers to the `"JVM"` literal, `WasmExprCompiler` to
+`"WASM32"`. Re-evaluation trigger: a third compile target needs a third arm here and
+nowhere else; a backend gaining a real host-identity or OS primitive should revisit
+`machine-instance` / `software-type` / `uiop:hostname` TOGETHER.
 
-Pinned by `LispEvaluatorTest#environmentEnquiryFamilyAnswersPerBackendConstants`,
+Pins: `LispEvaluatorTest#environmentEnquiryFamilyAnswersPerBackendConstants`,
 `Jvm/WasmLispCompilerTest#namestringHalvesNstringCaseAndEnvironmentEnquiry` (plus the
-component twin), and the ci-spec case
-`namestring-halves-nstring-case-and-environment-enquiry`, whose `expectedByBackend`
-carries the one `machine-type` divergence and which spells the version as an AGREEMENT
-with `rontolisp:version` rather than a literal a release bump would invalidate.
+component twin), ci-spec `namestring-halves-nstring-case-and-environment-enquiry`, whose
+`expectedByBackend` carries the one `machine-type` divergence and spells the version as an
+AGREEMENT with `rontolisp:version` rather than a literal.

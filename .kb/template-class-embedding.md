@@ -1,31 +1,74 @@
 # Template-class embedding (the `JavaBridgeTemplate` mechanism) is a LAST RESORT
 
-The normal way to give compiled output a runtime helper is, in order of preference:
+Preference order for a runtime helper in compiled output:
 
-1. A macro expansion into existing primitives (`LispMacroExpander` — no backend work at all).
-2. A hand-assembled `Jvm/Wasm<Name>RuntimeBuilder` method (the standard used everywhere else, incl. the full reader and eval interpreters — self-contained, version-61 like the rest of the output after the `StackMapAugmenter` pass ([[stackmap-augmenter]]), byte-level control, no hidden constraints).
-3. Only then, embedding a project-compiled Java class ("template"): read its bytecode from the classpath, rename it into the generated program's own package via constant-pool rewrite (`JvmJavaRuntimeBuilder.renameClass`), base64-embed it, and `Lookup.defineClass` it at first use.
+1. Macro expansion into existing primitives (`LispMacroExpander`).
+2. Hand-assembled `Jvm/Wasm<Name>RuntimeBuilder` method -- the standard everywhere else;
+   version-61 after the `StackMapAugmenter` pass ([[stackmap-augmenter]]).
+3. Embed a project-compiled Java class ("template"): read its bytecode from the classpath,
+   rename it into the generated program's package via constant-pool rewrite
+   (`JvmJavaRuntimeBuilder.renameClass`), base64-embed, `Lookup.defineClass` at first use.
 
-Reach for (3) ONLY when the helper is genuinely too complex/error-prone to hand-assemble AND needs JDK facilities that are impractical in raw bytecode — [[java-interop]] qualifies on both counts (cost-based overload resolution, recursive marshalling, `Proxy` invocation handlers), as do the three acceleration flags' bridges (`jdk.incubator.vector`, a `critical` FFM downcall into a CBLAS, the CUDA driver API). The one template with NO flag in front of it is `JvmGeomTemplate` ([[geom]], "The JVM backend's kernels"): the `geom:` file-scaled loops, whose qualification is the first count alone — a character scanner, Newell's normal and an open-addressing edge set that must round exactly as `eval/GeomKernels` and the `geom.lisp` defuns do, which is not something to hand-assemble. Being flagless costs it two extra rules: the emit gate is a CALL-SITE scan of the pruned program (a program that calls none of the members is byte-identical to before), and `_geomInit` catches the `LinkageError` a `defineClass` can raise so an older JRE than the toolchain degrades to the defuns instead of failing — a flag's user can be told to drop the flag, and this one's cannot. Nothing else in the code base currently does.
+Use (3) only when the helper is too complex to hand-assemble AND needs JDK facilities
+impractical in raw bytecode: [[java-interop]] (overload resolution, recursive marshalling,
+`Proxy`) and the three acceleration flags' bridges (`jdk.incubator.vector`, a `critical` FFM
+downcall into a CBLAS, the CUDA driver API).
 
-Demerits to weigh before adding another template:
-- (a) it silently raises the output's JRE floor — the template carries the project's class version (currently Java 25), so any program using the feature needs a JRE newer than the version-61 "runs on Java 17+" baseline.
-- (b) the template obeys invariants javac cannot check — no nested classes/records (each is a second class file a SINGLE-blob injection cannot carry; lambdas are fine), no imports of other rontolisp classes, and it must be written against the compiled value representation, duplicating logic that then has to be kept manually in sync with its interpreter twin. **The blob does not have to be single, and when the duplication would be large it should not be** — see "A closure of classes" below.
-- (c) the `defineClass` machinery is subtle — same-package requirement (`Lookup.defineClass` demands the lookup class's own runtime package, whatever that is — default or not — hence the rename tracks the generated class's package, not a fixed default), lazy invokestatic resolution ordering (the `_javaInit` guard must run before the first bridge methodref executes), reflection back-calls needing `setAccessible`.
-- (d) the base64 blob bloats every using program's constant pool and must be registered in `resource-config.json` for the native binary to compile the feature.
+## The one flagless template: `JvmGeomTemplate` ([[geom]])
+`geom:` file-scaled loops (character scanner, Newell's normal, open-addressing edge set) that
+must round exactly as `eval/GeomKernels` and the `geom.lisp` defuns do. Two extra rules:
+- emit gate is a CALL-SITE scan of the pruned program (a program calling no member stays
+  byte-identical);
+- `_geomInit` catches the `LinkageError` a `defineClass` can raise, so an older JRE than the
+  toolchain degrades to the defuns instead of failing.
 
-If a new helper seems to need a template, first check whether the complex part can run at COMPILE time instead (like `LoadInliner` or the wasm-component blobs) or be expressed as a smaller hand-assembled runtime plus compile-time constants; when a template really is unavoidable, pin the rename with a round-trip test (see `JvmJavaInteropCompilerTest#renameClassLeavesOtherUtf8EntriesIntact`) and mirror the interpreter test suite against the compiled path.
+## Demerits
+- (a) raises the output's JRE floor silently -- the template carries the project's class
+  version (Java 25) vs. the version-61 "Java 17+" baseline.
+- (b) invariants javac cannot check: no nested classes/records (each is a second class file a
+  SINGLE-blob injection cannot carry; lambdas are fine), no imports of other rontolisp
+  classes, written against the compiled value representation -- logic duplicated from its
+  interpreter twin and kept in sync by hand. (The blob need not be single: see below.)
+- (c) `defineClass` subtleties: same-package requirement (the rename tracks the generated
+  class's package, not a fixed default); lazy invokestatic resolution ordering (`_javaInit`
+  must run before the first bridge methodref executes); reflection back-calls need
+  `setAccessible`.
+- (d) the base64 blob bloats every using program's constant pool and must be in
+  `resource-config.json` for the native binary.
 
-## A closure of classes, when a copy would be too big to keep in sync (`--gpu`, todo-123 phase 2)
+Before adding one: check whether the complex part can run at COMPILE time (like `LoadInliner`
+or the wasm-component blobs) or become a smaller hand-assembled runtime plus compile-time
+constants. If unavoidable, pin the rename with a round-trip test
+(`JvmJavaInteropCompilerTest#renameClassLeavesOtherUtf8EntriesIntact`) and mirror the
+interpreter test suite against the compiled path.
 
-Demerit (b) is a property of the ONE-blob injection, not of the mechanism. `--gpu`'s JVM half embeds `am.ik.gpu` — six class files, four classes, two of them nested — plus a PTX text resource, and it does it by generalizing the injection rather than by flattening the library into a template ([[gpu]], "The JVM backend"):
+## Class-closure injection (`--gpu`, `am.ik.gpu`, [[gpu]])
+Demerit (b) belongs to the ONE-blob injection, not the mechanism. Six class files, four
+classes (two nested), plus a PTX resource:
+- one blob + one `Lookup.defineClass` PER class file, in any order (sibling references
+  resolve lazily);
+- ONE prefix rename over every file (`am/ik/gpu/` -> `RontoLispGpu`), carrying nested classes
+  without naming them and rewriting the glue template's references, so the template is written
+  against the real library and type-checked by javac;
+- a resource read via `getResourceAsStream` cannot follow the classes into the emitted
+  package: it travels as its own string constant, handed in through a public entry point.
 
-- one base64 blob and one `Lookup.defineClass` PER class file, in any order (a sibling reference resolves lazily, on the first instruction that uses it, long after all of them are defined);
-- ONE prefix rename over every file (`am/ik/gpu/` → `RontoLispGpu`), which carries nested classes along without naming them and rewrites the glue template's references at the same time — so the template can be written against the real library and type-checked by javac;
-- a resource the classes read (`getResourceAsStream`) cannot follow them into the emitted program's package, so it travels as its own string constant and is handed in through a small public entry point on the library.
+Cost: 47 KB class files + 10 KB PTX -> ~78 KB base64 (`JvmSimdVectorTemplate` is 83 KB).
+Use when the helper is a LIBRARY: several classes, expensive invariants, an interpreter twin
+that would otherwise fork. `--blas`'s single flat template ([[linalg-blas]]) predates this and
+is still mirrored by hand. Required guard: a test pinning the embedded class LIST against the
+package's actual class files (nothing can enumerate a package from a classpath, still less in
+a native image); every file also in `resource-config.json`.
 
-Cost, measured: 47 KB of class files + 10 KB of PTX → ~78 KB of base64, against `JvmSimdVectorTemplate`'s 83 KB, which every `--simd` linalg program already carries. What it buys is that demerit (b)'s "duplicating logic that then has to be kept manually in sync" disappears entirely — the compiled backend runs the library's own bytes.
-
-Use it when the helper is a LIBRARY rather than a helper: several classes, invariants that were expensive to get right, and an interpreter-side twin that would otherwise fork. `--blas`'s single flat template ([[linalg-blas]]) is the counter-case that predates this and is still mirrored by hand. The guard the closure needs is a test pinning the embedded class LIST against the package's actual class files: nothing can enumerate a package from a classpath, still less from inside a native image, and every file must also be registered in `resource-config.json`.
-
-The second closure is `objc:` ([[objc]], "The JVM backend"; `JvmObjcRuntimeBuilder`, todo-513), which added two rules the `--gpu` one never met. **Definition order is not free**: a method body's reference to a sibling resolves lazily, but the verifier loads a class it must check assignability against WHILE the referencing class is being defined -- the type of a `catch` clause has to be a `Throwable` -- so a class the others catch (`ObjcException`) is defined first, and an alphabetical list dies in `defineClass` with `NoClassDefFoundError`. **A blob may call back into the program**: its glue template takes the program's `_apply` through `bind(Class)` exactly as the `java:` template does, and the compiler then forces the eval runtime and roots `_apply` for the shaker. Its glue is two templates rather than one -- the bridge and the VALUE (`JvmObjcHandle`, the compiled `LispObjcObject`) -- each still a single class file: an enum `switch` in a template lowers to a synthetic `$1` class the blob does not carry, so the template uses an if-chain, and the test pins that neither has a `$` sibling on disk.
+## Second closure: `objc:` (`JvmObjcRuntimeBuilder`, [[objc]])
+- **Definition order is not free**: the verifier loads a class it must check assignability
+  against WHILE the referencing class is defined (a `catch` type must be `Throwable`), so
+  `ObjcException` goes first; an alphabetical list dies in `defineClass` with
+  `NoClassDefFoundError`.
+- **A blob may call back into the program**: the glue template takes the program's `_apply`
+  through `bind(Class)` like the `java:` template; the compiler then forces the eval runtime
+  and roots `_apply` for the shaker.
+- Glue is two templates -- the bridge and the VALUE (`JvmObjcHandle`, the compiled
+  `LispObjcObject`) -- each a single class file: an enum `switch` in a template lowers to a
+  synthetic `$1` class the blob does not carry, so use an if-chain; a test pins that neither
+  has a `$` sibling on disk.

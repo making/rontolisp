@@ -1,33 +1,100 @@
 # Compile-time `load` include (`LoadInliner`, cli pkg)
 
-On the **compile path only** (`RontoLispCli.compileToFile`, before the compilers' `PackageResolver` pass), a **top-level** `(load "literal.lisp")` is spliced in place with the loaded file's forms (recursively, with a path-stack cycle guard), so Pass 1 sees the loaded `defun`s and compiles them natively — no `--dynamic`, no perf loss. Only a literal-path, top-level `load` qualifies; a computed or nested `load` is left untouched (runs at runtime via the embedded reader). Not idempotent (each `load` includes again, matching CL).
+**Compile path only** (`RontoLispCli.compileToFile`, before the compilers' `PackageResolver`
+pass): a **top-level** `(load "literal.lisp")` is spliced in place with the loaded file's
+forms (recursively, path-stack cycle guard), so Pass 1 compiles the loaded `defun`s natively.
+A computed or nested `load` is left untouched (runs at runtime via the embedded reader). Not
+idempotent (each `load` includes again, matching CL). The **interpreter keeps its runtime
+`load`** (no inliner), so no double definition. Tests: `LoadInlinerTest`.
 
-**File-relative paths**: a relative `load` resolves against the directory of the loading file (the entry file at the top level), falling back to CWD for the top-level entry / REPL — applied to BOTH the inliner and the runtime `load` via `SourceLoader.resolve`/`parentDir` (a `null`/empty base dir skips all `java.nio` math, so the no-FS browser loader is untouched). Interpreter threads a `loadDirStack` (`LispEvaluator.setLoadBaseDir`, seeded by `RontoLispCli` with the entry dir, pushed per nested `load`); the inliner takes a `baseDir` arg. So `java -jar JAR examples/browser/hiragana/infer.lisp` resolves its `(load "common.lisp")` from the repo root.
+## File-relative paths
+A relative `load` resolves against the loading file's directory (the entry file at top level),
+falling back to CWD for entry/REPL -- applied to BOTH the inliner and the runtime `load` via
+`SourceLoader.resolve`/`parentDir` (a null/empty base dir skips all `java.nio` math, so the
+no-FS browser loader is untouched). Interpreter threads a `loadDirStack`
+(`LispEvaluator.setLoadBaseDir`, seeded by `RontoLispCli`, pushed per nested `load`); the
+inliner takes a `baseDir` arg.
 
-The **interpreter keeps its runtime `load`** (no inliner), so there is no double-definition. This is what lets a program split across files (a thin driver that `(load "lib.lisp")`s shared `defun`s) compile on JVM/WASM. Tests: `LoadInlinerTest`.
-
-**A top-level `load` carrying CL's keyword options is SPLICED like a bare one** (todo-439),
-as long as the path and every option value is literal. The reason is that none of the four
-options changes WHICH forms are loaded: `:verbose` / `:print` ask for progress output a
-splice does not produce, `:external-format` selects a decoder that does not exist (every
-backend reads UTF-8), and `:if-does-not-exist` is decidable HERE -- the path is literal, so
-the pass probes the loader and, for a false value over an unreadable file, replaces the
-form with `nil` (the answer the runtime `load` would have given) instead of failing the
-compile. A COMPUTED option value is left alone exactly like a computed path: this pass does
-not guess what an expression answers, and the runtime `load` understands the same four
-options (`LispMacroExpander.lowerLoadOptions`, `.kb/read-load-streams.md`) -- which it did
-not before todo-439, so a keyworded `load` used to fall through to a runtime `load` that
-then refused its own arity. Tests: `LoadInlinerTest#inlinesALoadCarryingLiteralKeywordOptions`,
+## Keyword options
+A top-level `load` with CL's keyword options is SPLICED like a bare one when path and every
+option value are literal -- none of the four changes WHICH forms load. `:verbose`/`:print`
+ask for progress a splice does not produce; `:external-format` selects a decoder that does not
+exist (every backend reads UTF-8); `:if-does-not-exist` is decidable here -- for a false value
+over an unreadable file the form becomes `nil`. A COMPUTED option value is left to the runtime
+`load`, which understands the same four (`LispMacroExpander.lowerLoadOptions`,
+`.kb/read-load-streams.md`). Tests:
+`LoadInlinerTest#inlinesALoadCarryingLiteralKeywordOptions`,
 `#aMissingFileUnderIfDoesNotExistNilBecomesNil`, `#aComputedLoadOptionIsLeftToTheRuntimeLoad`.
 
-**`require`/`provide` (idempotent module loading)** live in the same pass: a `provided` set is threaded through the inline recursion. A top-level `(provide NAME)` records NAME and is consumed (replaced by a quoted symbol, like `in-package`); a top-level `(require NAME ["path.lisp"])` splices `NAME.lisp` (or the explicit path) exactly like `load` — unless NAME is already in the set, in which case it is consumed without loading (the diamond-dependency case). `require` does NOT auto-mark: the `(provide NAME)` inside the required file marks the set (so provide-first files also terminate mutual requires; path cycles still hit the `loading` stack guard). The module name is a literal designator only — keyword, quoted symbol, or string; a bare symbol or computed expression is a hard `IllegalStateException` (unlike a computed `load`, which is left for runtime, the compiled runtime reader does not know require/provide). Any `require`/`provide` remaining after the pass (nested or in a compiler unit test that skipped the pass) is an `UnsupportedOperationException` in `Jvm/WasmExprCompiler.compileCons`. Interpreter side: real runtime functions registered next to `load` in `LispEvaluator` (`providedModules` set, shared `loadFile` helper); classified in `PackageRegistry.CL_FUNCTIONS` (so `#'require` works on the interpreter). Both return the module name as a symbol; duplicate provide is a no-op. `*modules*` is not exposed. Tests: `LoadInlinerTest`, `LispEvaluatorTest`, `Jvm/WasmLispCompiler*Test`.
+## `require` / `provide`
+Same pass; a `provided` set is threaded through the inline recursion.
+- `(provide NAME)` records NAME and is consumed (replaced by a quoted symbol, like
+  `in-package`).
+- `(require NAME ["path.lisp"])` splices `NAME.lisp` (or the explicit path) like `load`,
+  unless NAME is already in the set (diamond case), when it is consumed without loading.
+- `require` does NOT auto-mark: the `(provide NAME)` inside the required file marks the set,
+  so provide-first files terminate mutual requires; path cycles hit the `loading` stack guard.
+- Module name must be a literal designator (keyword, quoted symbol, string); a bare symbol or
+  computed expression is a hard `IllegalStateException` -- the compiled runtime reader does
+  not know require/provide.
+- Any `require`/`provide` left after the pass is an `UnsupportedOperationException` in
+  `Jvm/WasmExprCompiler.compileCons`.
+- Interpreter: runtime functions next to `load` in `LispEvaluator` (`providedModules` set,
+  shared `loadFile`); in `PackageRegistry.CL_FUNCTIONS` so `#'require` works. Both return the
+  module name as a symbol; duplicate provide is a no-op. `*modules*` is not exposed.
+- Tests: `LoadInlinerTest`, `LispEvaluatorTest`, `Jvm/WasmLispCompiler*Test`.
 
-**The load context of a spliced file (`*load-pathname*` / `*load-truename*`, todo-375)**: `spliceFile` brackets every file it splices with `(%begin-file PATHNAME TRUENAME)` / `(%end-file)` markers carrying the two strings the interpreter BINDS around the same file -- the spelling `load` was called with and the path it resolved to. An ASDF COMPONENT is spliced under its RESOLVED path for both (that is what real ASDF hands `load`, and the interpreter's `loadFile` does the same for a component now), which is what makes `*load-pathname*` equal `asdf:component-pathname` -- the correlation rove's suite-to-file map is built on, so pin the two together. The markers are emitted unconditionally, because this pass cannot yet know whether anything reads the variables (the library splices run after it); `LispMacroExpander.lowerLoadContextMarkers` -- called by BOTH compile backends (and `NoGcWasmCompiler`) as the first thing they do, before package resolution -- lowers a bracket to top-level `(setq cl:*load-pathname* ...)` statements with the ENCLOSING file's values assigned back at `%end-file`, and DROPS the brackets whole when the program mentions neither variable, so such a program stays byte-identical (pinned by `aLoadContextBracketCostsNothingWhenTheProgramNeverReadsIt`). The restore is static because the bracket is: a top-level form of a spliced file reads its own file, a function CALLED after the load reads what is current then -- the dynamic binding's observable behavior without a binding. The names are spelled `cl:`-qualified because the pass runs BEFORE the resolver and a spliced file's forms sit inside its own `in-package`. `PackageResolver` consumes the bracket like the system one, which is also what keeps the file PATH out of `LibraryDefunPruner`'s reference scan: that scan reads the RESOLVED copy, where the marker is already a quoted symbol, so a path containing a bundled definition's name cannot keep it alive (the unresolved marker is what survives into the pruner's OUTPUT, for the compilers to lower). `*compile-file-pathname*`/`*compile-file-truename*` stay nil (there is no `compile-file`); that they stay nil at READ time too is a decision with its own "why" in `.kb/asdf.md`. Tests: `LoadInlinerTest` (the markers), `Jvm/WasmLispCompiler*Test` (the lowering), `LoadContextE2eTest` (all four backends over a real system, including the `component-pathname` agreement).
+## Load context (`*load-pathname*` / `*load-truename*`)
+`spliceFile` brackets every spliced file with `(%begin-file PATHNAME TRUENAME)` /
+`(%end-file)`: the spelling `load` was called with, and the resolved path. An ASDF COMPONENT
+is spliced under its RESOLVED path for both (as real ASDF and the interpreter's `loadFile`
+do), which makes `*load-pathname*` equal `asdf:component-pathname` -- the correlation rove's
+suite-to-file map needs, so pin the two together.
 
-**The same bracket establishes the context at READ time, and that is a SECOND consumer, not the same one later** (todo-428): the lowering above produces top-level `setq` STATEMENTS, and a `#.` datum of the spliced file has already been evaluated by then -- on the compile path `#.` is not evaluated during the read at all but wrapped in a `(%read-eval datum)` marker that `UserMacroExpander.expand` resolves against its macro-time evaluator, per top-level form (`.kb/reader-features.md`). So `UserMacroExpander`'s top-level loop tracks the `%begin-file`/`%end-file` depth exactly as it already tracked `%begin-system`/`%end-system`, and pushes the bracket's OWN two strings as dynamic bindings in that evaluator (`LispEvaluator.pushLoadContext`/`popLoadContext`, the public face of the push `loadFile` does around a file it reads). Reading the payload is one shared accessor, `LispMacroExpander.loadContextValues`, so the read-time and run-time values cannot drift. Consequences worth knowing:
-- The binding covers the whole span, not just the marker resolution, so a spliced SYSTEM's replayed top-level form (see `.kb/defmacro-backquote.md`) sees the load context too -- which is what the interpreter's replay-equivalent, actually running the file, has always had.
-- No unwind protection and no re-entrancy concern: the macro-time evaluator is local to the pass and dies with a failed compile, and `LoadInliner` emits both halves of the bracket or neither.
-- The ENTRY file is not bracketed, on either path, so a `#.` at the top level of the program the user named reads nil -- the same answer `RontoLispCli.interpret` gives, which never enters `loadFile` for it.
-- What this buys: `(or *compile-file-pathname* *load-truename*)` + `merge-pathnames` + `with-open-file`, THE portable way a library reads a data file shipping beside its source (cl-mustache's `version.lisp-expr`). Before it the compile paths merged against nil, got the bare relative name, and refused the whole system with `OPEN: cannot open file version.lisp-expr` -- a library that loaded interpreted simply was not compilable, and the message blamed the library. Pinned by `LoadInlinerTest#readEvalInALoadedFileSeesThatFilesLoadContext` / `#readEvalLoadContextRestoresTheEnclosingFileAndIsNilOutsideEveryLoad` and by `LoadContextE2eTest`, whose fixture now carries that exact idiom (`src/test/resources/load-context-demo/src/data.lisp-expr`) plus a read-time capture per shape -- component, nested load, plain load -- asserted EQUAL to the run-time pair on all four backends.
+Markers are emitted unconditionally (this pass cannot know whether anything reads the
+variables; library splices run after it). `LispMacroExpander.lowerLoadContextMarkers` --
+called by BOTH compile backends and `NoGcWasmCompiler` first, before package resolution --
+lowers a bracket to top-level `(setq cl:*load-pathname* ...)` with the ENCLOSING file's values
+assigned back at `%end-file`, and DROPS the brackets whole when the program mentions neither
+variable (pinned by `aLoadContextBracketCostsNothingWhenTheProgramNeverReadsIt`). The restore
+is static because the bracket is.
 
-**A reader error in a spliced file names its own origin.** Every file the pass reads (`spliceFile`, including ASDF/Quicklisp component files) is read with the file path passed to `LispReader`, so a parse error inside a multi-file library carries `file:line:column:` instead of a line of the flattened entry program -- and so does a MACRO-EXPANSION or compile error raised long after the read. The whole mechanism, including the cons-identity rule this pass's `CompileTimePathnameFolder` had to start honouring, is `.kb/source-positions.md`.
+Names are `cl:`-qualified because the pass runs BEFORE the resolver and a spliced file's forms
+sit inside its own `in-package`. `PackageResolver` consumes the bracket like the system one,
+which keeps the file PATH out of `LibraryDefunPruner`'s reference scan (that scan reads the
+RESOLVED copy, where the marker is already a quoted symbol, so a path containing a bundled
+definition's name cannot keep it alive). `*compile-file-pathname*`/`*compile-file-truename*`
+stay nil (there is no `compile-file`); why they stay nil at READ time too: `.kb/asdf.md`.
+Tests: `LoadInlinerTest`, `Jvm/WasmLispCompiler*Test`, `LoadContextE2eTest` (all four
+backends over a real system, incl. `component-pathname`).
+
+## The same bracket at READ time -- a SECOND consumer
+The lowering above produces `setq` STATEMENTS, but a `#.` datum of the spliced file is already
+evaluated by then: on the compile path `#.` is wrapped in a `(%read-eval datum)` marker that
+`UserMacroExpander.expand` resolves against its macro-time evaluator, per top-level form
+(`.kb/reader-features.md`). So `UserMacroExpander`'s top-level loop tracks
+`%begin-file`/`%end-file` depth as it tracks `%begin-system`/`%end-system`, and pushes the
+bracket's own two strings as dynamic bindings there
+(`LispEvaluator.pushLoadContext`/`popLoadContext`). One shared accessor,
+`LispMacroExpander.loadContextValues`, keeps read-time and run-time values from drifting.
+- The binding covers the whole span, so a spliced SYSTEM's replayed top-level form
+  (`.kb/defmacro-backquote.md`) sees the load context too.
+- No unwind protection / re-entrancy concern: the macro-time evaluator is local to the pass
+  and dies with a failed compile, and `LoadInliner` emits both halves or neither.
+- The ENTRY file is not bracketed on either path, so a `#.` at the program's top level reads
+  nil -- matching `RontoLispCli.interpret`, which never enters `loadFile` for it.
+- This makes `(or *compile-file-pathname* *load-truename*)` + `merge-pathnames` +
+  `with-open-file` work: the portable way a library reads a data file shipped beside its
+  source (cl-mustache's `version.lisp-expr`). Pinned by
+  `LoadInlinerTest#readEvalInALoadedFileSeesThatFilesLoadContext` /
+  `#readEvalLoadContextRestoresTheEnclosingFileAndIsNilOutsideEveryLoad` and by
+  `LoadContextE2eTest` (fixture `src/test/resources/load-context-demo/src/data.lisp-expr`,
+  read-time capture per shape -- component, nested load, plain load -- asserted EQUAL to the
+  run-time pair on all four backends).
+
+## Reader errors
+Every file the pass reads (`spliceFile`, incl. ASDF/Quicklisp components) is read with its
+path passed to `LispReader`, so a parse error inside a multi-file library carries
+`file:line:column:` instead of a line of the flattened entry program -- as does a
+macro-expansion or compile error raised later. Full mechanism, incl. the cons-identity rule
+`CompileTimePathnameFolder` had to honour: `.kb/source-positions.md`.

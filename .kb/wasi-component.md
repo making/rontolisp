@@ -1,105 +1,332 @@
 # `--component` (WASI 0.3 / Preview 3 output) for the WASM compiler
 
-Opt-in (CLI `--component`; `WasmLispCompiler(dynamic, component)`; threaded as a `component` boolean). Default output stays a Preview 1 core module (no regression). Run a component with `wasmtime run` (wasmtime 46+; `component-model-async` is default-on there, and nothing else is needed: the adapters call the ASYNC (non-blocking) stream/future built-ins and park on a blocking `waitable-set.wait` when one reports BLOCKED -- all base component-model-async, so neither the more-async-builtins nor the stackful-lift gate is involved. A SERVE component runs under `wasmtime serve` -- its `handle` is a CALLBACK async lift against the core's REAL callback (`async_cb`): a pending handler returns the packed WAIT code instead of blocking and the host delivers its events through the callback (`.kb/async-await.md`). wasmCloud (released wash 2.5.2, `dev.wasm_proposals: [gc, exception-handling, component-model-async]`) hosts the components)
+Opt-in: CLI `--component`; `WasmLispCompiler(dynamic, component)`, threaded as a
+`component` boolean. Default output stays a Preview 1 core module (no regression).
 
-**Design**: the rontolisp core module is emitted unchanged from Preview 1 (still imports the twelve `wasi_snapshot_preview1` functions, all `FUNC_*` indices stable), and an **adapter** core module implements them over WASI 0.3's `stream<u8>`/`future<T>` + async canonical ABI. The component's `run` export is a **stackful** async `canon lift` (no callback), so the synchronous `stream.*`/`future.*` built-ins block cooperatively and the adapter stays straight-line.
+**Design**: the core module is emitted UNCHANGED from Preview 1 (still imports the twelve
+`wasi_snapshot_preview1` functions, all `FUNC_*` indices stable); an **adapter** core
+module implements them over WASI 0.3's `stream<u8>`/`future<T>` + async canonical ABI. The
+`run` export is a **stackful** async `canon lift` (no callback), so the synchronous
+`stream.*`/`future.*` built-ins block cooperatively and the adapter stays straight-line.
 
+Hosts: `wasmtime run` (wasmtime 46+, `component-model-async` default-on -- the adapters call
+the ASYNC non-blocking built-ins and park on a blocking `waitable-set.wait` on BLOCKED, all
+base component-model-async, so neither the more-async-builtins nor the stackful-lift gate is
+involved). A SERVE component runs under `wasmtime serve`: its `handle` is a CALLBACK async
+lift against the core's REAL callback (`async_cb`) -- a pending handler returns the packed
+WAIT code instead of blocking (`.kb/async-await.md`). wasmCloud (wash 2.5.2,
+`dev.wasm_proposals: [gc, exception-handling, component-model-async]`) hosts them.
 
-**The fixed surface is fixed only WITHOUT `--optimize`** (todo-270, 2026-08-06). With it, the
-wrapper follows the shaken core: the adapter is narrowed to the preview1 entry points the core
-still imports and re-shaken, its surviving `"w"` imports select the lowerings / built-ins /
-component types the wrapper emits, and `ComponentImportBlock.prune` cuts the import blob down
-to the interfaces those reach. `(print "Hello World!")` therefore imports THREE interfaces
-(`wasi:cli/{types,stdout,stderr}`) instead of eleven, and the component is 2,138 B instead of
-7,690. Two consequences to keep in mind when reading the rest of this file: (a) every
-"component instance N is X" / "component type N is Y" statement below describes the UNPRUNED
-shape, and the code no longer holds any of those as a constant -- the maps come back from
-`ComponentImportBlock.Pruned`; (b) `adapter.wat` exports the two fd-polymorphic shims TWICE,
-as the full `fd_write`/`fd_read` and as the stdio-only `fd_write_stdio`/`fd_read_stdin`, and
-the wrapper retains the narrow pair under the preview1 names when the core imports no
-`path_open` (the only writer of the adapter's fd table) -- which is what lets the whole
-`wasi:filesystem` surface leave a printing component. Mechanics, the blob grammar, the
-`--emit-wit` half and the deliberate serve exemption: `.kb/optimize-dead-code-elimination.md`,
-"The component WRAPPER".
+## The fixed surface is fixed only WITHOUT `--optimize`
+With `--optimize` the wrapper follows the shaken core: the adapter is narrowed to the
+preview1 entry points the core still imports and re-shaken, its surviving `"w"` imports
+select the lowerings/built-ins/component types the wrapper emits, and
+`ComponentImportBlock.prune` cuts the import blob to the interfaces those reach.
+`(print "Hello World!")` imports THREE interfaces (`wasi:cli/{types,stdout,stderr}`) instead
+of eleven; 2,138 B instead of 7,690. Consequences:
 
-**Gotchas to preserve**: `wasi:cli` and `wasi:filesystem` expose DISTINCT `error-code` types -> separate future built-ins (`future-read-cli`/`-fs`); the fs error-code is a string-bearing variant -> `future-read-fs` needs realloc. The directory listing added a THIRD distinction: `read-directory` hands back a `stream<directory-entry>`, structurally distinct from `stream<u8>`, so it needs its own read/drop built-ins and its read carries realloc (each element owns a string name) -- plus a cookie-as-entry-index and a "a short round is NOT the end" rule that Preview 1 does not share (`.kb/directory-listing.md`).
+- Every "component instance N is X" / "type N is Y" statement below is the UNPRUNED shape;
+  the code holds none as a constant -- the maps come back from `ComponentImportBlock.Pruned`.
+- `adapter.wat` exports the two fd-polymorphic shims TWICE, as full `fd_write`/`fd_read` and
+  as stdio-only `fd_write_stdio`/`fd_read_stdin`; the wrapper retains the narrow pair under
+  the preview1 names when the core imports no `path_open` (the only writer of the adapter's
+  fd table), which lets the whole `wasi:filesystem` surface leave a printing component.
 
-**No preopened directory is an ERRNO, not a trap** (2026-07-31; the helper is
-`$ensure_preopens` and caches the WHOLE table since todo-432 --
-`.kb/read-load-streams.md` -- but the errno policy below is unchanged, with
-"no preopen index `dirfd`" standing where "no preopen at all" stood).
-`adapter.wat`'s
-`$ensure_preopen` used to read the first element of the `wasi:filesystem/preopens`
-`get-directories` list unconditionally. Run a component with no `--dir` and that list is
-EMPTY, so it cached descriptor handle 0 and the first `path_open` trapped inside the host
-with `unknown handle index 0` -- before any errno existed for the caller to inspect, and
-so before `probe-file`'s "answer nil on a bad errno" branch or any `handler-case` could
-see it. **The one file primitive documented never to signal therefore aborted the whole
-program**, which is how a library that merely PROBES for an optional file (local-time
-reading `/etc/localtime` inside its own `handler-case`) could not even be loaded under a
-component. It now caches `-1` for "no preopen" and `$path_open` returns errno 76 for it.
-Re-evaluation trigger: this is the adapter compensating for the host, not a rontolisp
-policy -- if a future WASI 0.3 host makes an empty preopen list impossible, or gives
-`open-at` on an invalid descriptor a defined error result, the guard can go. Verified by
-running any `probe-file` program as a component WITHOUT `--dir`; with `--dir` the path was
-always fine, which is why the whole class stayed invisible (`CiSpecE2eTest` passes
-`--dir .`).
+Mechanics, blob grammar, the `--emit-wit` half, the deliberate serve exemption:
+`.kb/optimize-dead-code-elimination.md`, "The component WRAPPER".
 
-**Shared-memory map (fixed for non-serve, 2026-07-26)**: the component's ONE linear
-memory is shared by three writers -- the canonical-ABI allocator, the adapter's fixed
-scratch (page 5: env/preopen buffers, stream/future handle cells, the 64-slot fd
-table), and the rontolisp core's static data/intern table/heap. The non-serve layout
-now separates them structurally:
+## Gotchas
+- `wasi:cli` and `wasi:filesystem` expose DISTINCT `error-code` types -> separate future
+  built-ins (`future-read-cli`/`-fs`); the fs one is string-bearing, so `future-read-fs`
+  needs realloc.
+- `read-directory` returns `stream<directory-entry>`, structurally distinct from
+  `stream<u8>`: own read/drop built-ins, read carries realloc (each element owns a string
+  name), plus cookie-as-entry-index and "a short round is NOT the end", which Preview 1 does
+  not share (`.kb/directory-listing.md`).
 
-- **The core's interned-string data starts at page 6** (`COMPONENT_DATA_BASE_OFFSET`
-  = 0x60000, component only; Preview 1 keeps 256 and stays byte-identical). Before
-  this, a program with more than ~64 KB of interned data grew straight across the
-  serve cabi window (0x10000), the core's env/socket scratch (pages 3-4) and the
-  adapter's page-5 cells: the segment bytes install at instantiation, so the
-  adapter's zero-initialized flag cells read back interned-string bytes and its
-  first blocking wait died with "unknown handle index" inside `fd_write` (cl-postgres,
-  3.0 MB of static data, was the first program big enough).
-- **The non-serve `cabi_realloc` (mem.wat) bumps the core's own HEAP_PTR cell
-  (address 84)** -- one shared monotonic allocator instead of a private bump region.
-  Advancing HEAP_PTR is a PERMANENT allocation in the core's discipline (transient
-  string scratch sits above HEAP_PTR and pops back), so host-lifted buffers can never
-  be overwritten by core activity, and there is no fixed ABI window to outgrow. This
-  is the same contract the core's `__ronto_alloc` and (on wasm-export modules) its
-  appended `cabi_realloc` already follow. A 2026-07-26 attempt to instead RING a
-  fixed ABI window was reverted -- "every canonical-ABI allocation is per-call
-  transient" is false (the free-listed 8 KB socket/stdin read buffers alone are
-  retained indefinitely), and monotonic-shared makes the question moot.
-- **Serve is NOT unified**: `mem-http-client.wat` keeps its per-request-reset cabi
-  cell/window at 0x10000 (`CABI_HP_CELL_ADDR`) because a resident host must reclaim
-  request buffers per call. Its window can still collide with the core's page-3/4
-  scratch past ~128 KB of per-request ABI traffic -- the narrowed residual is
-  `.todo/178`.
+**No preopened directory is an ERRNO, not a trap.** `$ensure_preopen` used to read the first
+element of `wasi:filesystem/preopens` `get-directories` unconditionally; with no `--dir` that
+list is EMPTY, so it cached handle 0 and the first `path_open` trapped in the host with
+`unknown handle index 0` -- before any errno existed, hence before `probe-file`'s "answer nil
+on a bad errno" branch or any `handler-case` could see it: the one file primitive documented
+never to signal aborted the whole program (a library merely PROBING an optional file, e.g.
+local-time reading `/etc/localtime`, could not be loaded). It now caches `-1` and
+`$path_open` returns errno 76. The helper is now `$ensure_preopens`, caching the WHOLE table
+(`.kb/read-load-streams.md`); the errno policy is unchanged, with "no preopen index `dirfd`"
+standing where "no preopen at all" stood. **Trigger**: this is the adapter compensating for
+the host -- if a future WASI 0.3 host makes an empty preopen list impossible, or defines
+`open-at` on an invalid descriptor, the guard can go. Only visible WITHOUT `--dir`
+(`CiSpecE2eTest` passes `--dir .`).
 
-**Index stability**: WASM static function-import indices and the `FUNC_*` constants in `WasmLispCompiler` are kept identical across modes (preview1-style `random_get`/`clock_time_get`/`environ_*` imports exist in both modes -- the `environ_*` pair is dead weight under `--component` since todo 217 put `uiop:getenv` on the `environment.lisp` library over a wit-imported `wasi:cli/environment@0.3.0`, bound FROM the block off serve and as a user import under serve, `.kb/time-environment-builtins.md`; `WasmRandomCompiler` calls `random_get` in both modes (real host entropy in Preview 1, the adapter's `wasi:random` in component); `WasmTimeCompiler` branches on `Ctx.component`; the 0.2-era `FUNC_FETCH_*` reserved slots and the retired `FUNC_TCP_*` trap stubs are both deleted, so `FUNC_START` is `IMPORT_FUNC_COUNT` = 12).
+## Shared-memory map (fixed for non-serve)
+One linear memory, three writers: the canonical-ABI allocator, the adapter's fixed scratch
+(page 5: env/preopen buffers, stream/future handle cells, the 64-slot fd table), the core's
+static data / intern table / heap.
 
-Assembly lives in `WasmComponentBuilder` (codegen.wasm) over `am.ik.wasm.ComponentWriter` (general async-canon-ABI encoder, reusable for future language-level async). The fixed byte blobs (`import-block.bin`, `mem.wasm`, `adapter.wasm`) are loaded from classpath resources under `.../codegen/wasm/component/` and registered for native image in `resource-config.json` (wildcard). **The blobs are generated** from sources under `src/wasm-component/` — to change them follow `src/wasm-component/README.md` (edit sources, run `regen.sh`, re-derive the wiring constants from `wasm-tools dump`, re-test).
+- **The core's interned-string data starts at page 6** (`COMPONENT_DATA_BASE_OFFSET` =
+  0x60000, component only; Preview 1 keeps 256, byte-identical). Before this, >~64 KB of
+  interned data grew across the serve cabi window (0x10000), the core's env/socket scratch
+  (pages 3-4) and the adapter's page-5 cells -- segment bytes install at instantiation, so
+  the adapter's zero-initialized flag cells read back interned-string bytes and its first
+  blocking wait died with "unknown handle index" inside `fd_write`.
+- **The non-serve `cabi_realloc` (mem.wat) bumps the core's own HEAP_PTR cell (address 84)**
+  -- one shared monotonic allocator. Advancing HEAP_PTR is a PERMANENT allocation in the
+  core's discipline (transient string scratch sits above it and pops back), so host-lifted
+  buffers cannot be overwritten and there is no fixed ABI window to outgrow; same contract as
+  `__ronto_alloc` and the wasm-export modules' appended `cabi_realloc`. RINGING a fixed ABI
+  window instead was tried and reverted -- "every canonical-ABI allocation is per-call
+  transient" is false (the free-listed 8 KB socket/stdin read buffers are retained).
+- **Serve is NOT unified**: `mem-http-client.wat` keeps its per-request-reset cabi cell/window
+  at 0x10000 (`CABI_HP_CELL_ADDR`), because a resident host must reclaim request buffers per
+  call. It can still collide with the core's page-3/4 scratch past ~128 KB of per-request ABI
+  traffic (open residual).
 
-**Component-model function exports (todo 92, Tiers 1+2+3)**: a `rontolisp:wasm-export` (`:int`→`s32`/`:float`→`f64` (VT_F64 = 0x75; 0x74 is `char`)/`:bool`→`bool`/void, and since Tier 2 `:string`/`:s-expr`→`string`) is core-exported by the un-gated wrapper machinery, then `WasmComponentBuilder.appendFuncExports` appends per-export alias/type/lift/export sections after the `run` wiring (base: core func 23+/type 24+/component func 12+; http: 53/46/33; sock: 34/31/19) — a **synchronous** `canonLift` by default (NOT the stackful-async lift `run` uses), so `wasmtime run --invoke 'name(args)'` (WAVE) works with no experimental warning, co-existing with `wasi:cli/run`. A scalar export lifts with no canonical options; a `:string`/`:s-expr` boundary (todo 92 Tier 2) lifts with `(memory 0) (realloc ...) string-encoding=utf8 (post-return ...)` — memory 0 is the shared mem.wasm memory the core already imports (same instance the wrapper's `(ptr,len)` points into), but the realloc is NOT mem.wasm's (its `$hp` is un-resettable in the base blob and grow-unguarded): `WasmLispCompiler` appends to the core module a `cabi_realloc` delegating to the grow-guarded `__ronto_alloc` (host-lowered argument bytes land in the core's own bump heap), one retptr shim per string-RETURNING export (MAX_FLAT_RESULTS = 1 → single i32 to an 8-byte (ptr,len) record, allocated BEFORE the wrapper call because the GC wrapper stages its result at the un-advanced HEAP_PTR scratch), and one shared `cabi_post_*` per flat-result signature. The post-return restores HEAP_PTR to a per-call snapshot saved by `cabi_realloc`'s first call (`CABI_MARK_*` cells 160/164/168) **guarded by the runtime intern count** (the serve-reset pattern): interning during a call ratchets (skips the restore) so intern records never dangle; measured flat on jco/Node over 10k×100KB-arg calls (a leak would be ~1GB). `:s-expr` rides the same ABI as printed text (`exportNeedsReader` now un-gated for component non-serve). Bodies in `WasmExportRuntimeBuilder`; kind mapping `WasmExportCompiler.componentPostReturnKind`. Purely additive: an export-free OR scalar-export-only program's component is byte-identical (proven by stash dance across base/http/sock/serve/P1 + --no-gc variants). Constraints enforced in `WasmLispCompiler` (component && !serve): export name must match the component `label` grammar (lower-kebab-case; `COMPONENT_EXPORT_NAME` pattern, fix with `:as`), `"run"` reserved. Runtime constraints (documented, not statically checked): I/O inside a SYNC (default) export is a residual RISK, not a certain trap — the adapter's I/O built-ins are the async (non-blocking) variants, so a host that accepts the bytes immediately (stdout) never parks the task and the print SUCCEEDS (`componentSyncExportWithIoWorksWhenTheHostDoesNotBlock`); only a host reporting BLOCKED would trap the synchronous task with "cannot block a synchronous task", which is what `:async t` removes. `--invoke` does not run `run` first, so defvar-reading exports see uninitialized globals (matches Preview 1).
+## Index stability
+Static function-import indices and the `FUNC_*` constants in `WasmLispCompiler` are identical
+across modes. Preview1-style `random_get`/`clock_time_get`/`environ_*` imports exist in both;
+the `environ_*` pair is dead weight under `--component` since `uiop:getenv` moved onto
+`environment.lisp` over a wit-imported `wasi:cli/environment@0.3.0` (bound FROM the block off
+serve, a user import under serve -- `.kb/time-environment-builtins.md`).
+`WasmRandomCompiler` calls `random_get` in both modes (host entropy in Preview 1, the
+adapter's `wasi:random` in component); `WasmTimeCompiler` branches on `Ctx.component`. The
+0.2-era `FUNC_FETCH_*` slots and retired `FUNC_TCP_*` stubs are deleted, so `FUNC_START` is
+`IMPORT_FUNC_COUNT` = 12.
 
-**`:async t` I/O exports (todo 92 Tier 3)**: the directive option flips the export's component function type to the ASYNC form (`ComponentWriter.asyncFuncTypeScalars`, tag 0x43 vs sync 0x40 — the ONLY byte difference; core module unchanged, same flat signature), making the lift a **stackful async** export like `run`, so the adapter's blocking stream/future built-ins (print, fetch over the 0.2 hybrid, sockets) suspend cooperatively instead of trapping. Explicit opt-in, NOT auto-detected from I/O reachability (funcall/apply route through the arity dispatchers, so a conservative call-graph analysis would flip nearly every export async and break the sync byte-identity guarantee unpredictably). Composes with the Tier 2 canonical string ABI unchanged — wasmtime accepts (and calls) the memory/realloc/utf8/**post-return** options on an async-typed lift, so the CABI_MARK saved-mark reclamation is identical (this is a stackful lift via the async TYPE, not a `canon lift async` callback lift, which would have no post-return). WIT contract: the export is an `async func` (jco types it `Promise`-returning). Host support: wasmtime 46 `--invoke` runs it (verified incl. print inside, fetch inside with `-S http=y` — now over the wit-imported `wasi:http@0.3.0`, run co-existence, sync+async mixed); jco 1.25.2 transpiles it but cannot run it, and there are **TWO DISTINCT upstream jco gaps** here — do not collapse them: (a) the EXPORT-LIFT gap: jco's generated driver assumes callback-style async and misreads the flat result as a callback code ("invalid async return value [13]"), i.e. stackful async exports are unimplemented; (b) the IMPORT-SIDE gap: jco's emitted bundle *references* `FutureReadableEnd` (5x) / `FutureEnd` (2x) / `FutureWritableEnd` (1x) and **defines none of them**, while the analogous stream family (`StreamEnd`/`StreamReadableEnd`/`StreamWritableEnd`/`InternalStream`/`HostStream`) is fully emitted — the future runtime is HALF-EMITTED, so any call that touches a `future<T>`-typed WASI import dies with `ReferenceError: FutureReadableEnd is not defined` at `new InternalFuture` -> `ComponentAsyncState.createFuture` -> `_trampoline0` -> `fd_write`. (b) is reached through `wasi:cli/stdout.write-via-stream` (WIT result `future<result<_, error-code>>`) and therefore fires FIRST — before any export lift — for *anything that prints*, `run` included; reproduced under every jco flag combination (`--async-mode jspi|sync`, `--async-wasi-imports/exports`, `--no-nodejs-compat`, `--instantiation async`, `--tla-compat`). Neither is rontolisp's. Preview 1 / `--no-wasi` ignore `:async` (Decl carries it; core exports don't lift), `--no-gc --component` rejects it (`NoGcWasmCompiler.validateComponentExport`). Pinned by `componentAsyncExport*` + `componentSyncExportWithIoWorksWhenTheHostDoesNotBlock` (which fixes the sync-lift's actual behavior, so the residual risk stays described rather than assumed) in `WasmLispCompilerIntegrationTest`, `componentFetchInsideAsyncExport` (opt-in `RONTOLISP_HTTP_E2E=1`), and the ci-spec `wasm-export-directive-does-not-disturb-run` case (an `:async` directive is inert on the other backends). The generated `.wit` world is the CLI `--emit-wit` option (below). **`:async t` is permanent, not a workaround**: WASI 0.3 has no synchronous write BY DESIGN (`deps/cli/stdio.wit` is `write-via-stream: func(data: stream<u8>) -> future<...>`; the 0.2 `output-stream` resource with `blocking-write-and-flush` was *replaced*, not carried over -- in 0.3 blocking is a property of the task, not of a host function), so on a pure-0.3 import surface an I/O-bearing sync export can NEVER work and an I/O export IS an `async func` in WIT. Importing 0.2 stdio for `fd_write` to route around it (and around jco) was proposed and REJECTED 2026-07-13 -- it would be a permanent 0.2 island (the `wasi:http@0.2` one is gone since the todo-002 cutover, and the LAST one — the `--no-gc` print micro-adapter's 0.2 stdio — was purged by todo-138, which put it on 0.3 with automatic async lifts; the repo now has NO WASI-0.2-era surface); the jco gaps are not 0.2-vs-0.3 (jco targets all of 0.3; they are the stackful-vs-callback export lift and the half-emitted future runtime above — a 0.2 island would route around jco's bugs, not around a missing 0.3), and stackful was the only lift a synchronous source language could use without CPS-ing the whole backend — a constraint the callback-async cutover has since lifted for `handle` (serve lifts callback-async now, with the state machines generated rather than hand-written), so the two lifts coexist and a future `:async t` could follow if there is ever a reason to move it.
+## Assembly
+`WasmComponentBuilder` (codegen.wasm) over `am.ik.wasm.ComponentWriter` (general
+async-canon-ABI encoder). Fixed byte blobs (`import-block.bin`, `mem.wasm`, `adapter.wasm`)
+load from classpath resources under `.../codegen/wasm/component/`, registered for native
+image in `resource-config.json` (wildcard). **The blobs are generated** from
+`src/wasm-component/` -- follow `src/wasm-component/README.md` (edit sources, `regen.sh`,
+re-derive wiring constants from `wasm-tools dump`, re-test).
 
-**`--component --no-wasi` (the GC reactor component)** does NOT use this pipeline either: `WasmComponentBuilder.buildReactor` wraps the ONE core module (which imports nothing — the Preview 1 no-WASI stubs — and runs its top level from its core start section at instantiation) with no import block, no adapter, no mem module and no `wasi:cli/run` export, with or without `--optimize`; only the `wasm-export` functions are lifted (sync by default, the canonical string ABI over the core's OWN memory/`cabi_realloc`). Full mechanics and the CLI/compiler gating: `.kb/wasm-export-no-wasi.md`. It is the `NoGcWasmComponentBuilder` print-free shape on the GC backend, and the ONLY component shape whose `--invoke`d exports see top-level `defparameter` state.
+## Component-model function exports
+`rontolisp:wasm-export` types: `:int`->`s32`, `:float`->`f64` (VT_F64 = 0x75; 0x74 is
+`char`), `:bool`->`bool`, void, `:string`/`:s-expr`->`string`. The un-gated wrapper machinery
+core-exports it; `WasmComponentBuilder.appendFuncExports` appends per-export
+alias/type/lift/export sections after the `run` wiring (base: core func 23+ / type 24+ /
+component func 12+; http: 53/46/33; sock: 34/31/19). Default is a **synchronous** `canonLift`
+(NOT `run`'s stackful-async lift), so `wasmtime run --invoke 'name(args)'` (WAVE) works with
+no experimental warning, co-existing with `wasi:cli/run`.
 
-**`--no-gc --component` (todo 93)** does NOT use this pipeline: a print-free non-GC MVP core module has zero imports, so `NoGcWasmComponentBuilder` wraps it adapter-free (no import block / adapter / mem blobs, no `wasi:cli/run`) into a run-less reactor component of a few hundred bytes that `wasmtime run --invoke` executes with ZERO flags. Same per-export sync-lift wiring as `appendFuncExports` but instance 0 / all index spaces from 0; `:long` -> VT_S64 (valid on the GC path too since the boxed exact-integer sweep, `.kb/wasm-bignum.md`) and `:string` -> VT_STRING on both paths (`WasmExportCompiler.componentValType`). A `:string` export lifts with the canonical options `(memory 0) (realloc ...) string-encoding=utf8 (post-return ...)` over the module's own memory (`canonLiftMemoryReallocUtf8PostReturn`, options in wasm-tools order, byte-pinned) against core-exported `cabi_realloc` / `cabi_post_*` / retptr-shim helpers appended by `NoGcWasmCompiler.assemble()`; the post-return pops the bump heap to its base so a resident instance stays flat. A PRINTING program (the print micro-adapter, WASI 0.3 since todo-138) additionally gets a minimal `wasi:cli/stdout@0.3.0` blob set (`import-block-nogc-print.bin` + the `shim/bridge/fixup-nogc-print` core modules, sourced in `src/wasm-component/`, regen.sh like the sets above): the bridge implements the core's single `fd_write` import over `write-via-stream` + the ASYNC stream/future built-ins with a blocking `waitable-set.wait` park, so every export of a printing program lifts against an ASYNC function type (the GC `:async t` shape; user-level `:async` stays rejected — the flip is automatic). Zero run flags kept (base cm-async, default-on in wasmtime 46+, which becomes the printing component's wasmtime floor; jco cannot call the async-lifted exports). The core-imports-bridge / bridge-reads-core-memory instantiation cycle is broken with the wit-component shim/fixup funcref-table pattern, keeping the printing core byte-identical to the plain `--no-gc` output. fd 1 only (`--no-gc` rejects every other I/O at compile time). Details: `.kb/no-gc-scalar-wasm.md`.
+A scalar export lifts with no canonical options. A `:string`/`:s-expr` boundary lifts with
+`(memory 0) (realloc ...) string-encoding=utf8 (post-return ...)`: memory 0 is the shared
+mem.wasm memory, but the realloc is NOT mem.wasm's (its `$hp` is un-resettable and
+grow-unguarded) -- `WasmLispCompiler` appends to the core a `cabi_realloc` delegating to the
+grow-guarded `__ronto_alloc`, one retptr shim per string-RETURNING export (MAX_FLAT_RESULTS =
+1 -> single i32 to an 8-byte (ptr,len) record, allocated BEFORE the wrapper call because the
+GC wrapper stages its result at the un-advanced HEAP_PTR scratch), and one shared
+`cabi_post_*` per flat-result signature. The post-return restores HEAP_PTR to a per-call
+snapshot saved by `cabi_realloc`'s first call (`CABI_MARK_*` cells 160/164/168) **guarded by
+the runtime intern count** (the serve-reset pattern): interning during a call ratchets (skips
+the restore) so intern records never dangle. `:s-expr` rides the same ABI as printed text
+(`exportNeedsReader` un-gated for component non-serve). Bodies in
+`WasmExportRuntimeBuilder`; kind mapping `WasmExportCompiler.componentPostReturnKind`.
 
-**`--emit-wit` (generated WIT world, closed todos 92+93; re-implemented on `am.ik.wit` by todo 125)**: `-o out.wasm --component --emit-wit` also writes `out.wit`, the component's WIT description, so hosts / binding generators (`jco types out.wit`) need no `wasm-tools component wit` introspection; `--emit-wit` without `--component` (or without a `.wasm` output) is a clear CLI error, and the flag is in `CliOptions.noValueKeys` (the --simd dead-flag lesson). Rendering is `codegen.wasm.WitEmitter` over the `am.ik.wit` document model (`.kb/wit.md`): the FIXED part (world imports + the fixed `wasi:cli/run` / `wasi:http/handler@0.3.0` export + the trailing package definitions, `package root:component; world root` naming) is the per-variant `WasiWitDefinitions` document (variants `base`/`sockets`/`http-server`/`nogc`/`nogc-print` -- the standalone `http-client` and the `http-server-client` variants were removed when fetch/serve became the ONE `http.lisp` library over canon-lowered `wasi:http@0.3.0` user imports: a non-serve fetch selects the `base` variant and its `--emit-wit` world gains the `wasi:http` imports through the user-import path, and serve+fetch is the same `http-server` variant as plain serve), GENERATED by the test-side `WasiWitDefinitionsGenerator` from fixtures under `src/test/resources/.../component/wit/` captured from `wasm-tools component wit`; the per-export items (`export name: [async ]func(p0: s32, ...) -> t;`) are appended to the world as typed `WitItem.ExportNamed` nodes and the whole document is printed by `am.ik.wit.WitPrinter` in the canonical wasm-tools style. The parameter names are the Decl's own (`p0`, `p1`, ... by default; a `:param-names '(text)` list, or the WIT world's names under `rontolisp:wit-export` -- todo 126) and are the very labels `WasmComponentBuilder`/`NoGcWasmComponentBuilder` encode into the lifted functype; the defaults are unchanged, so every pre-`:param-names` artifact is byte-identical. Both compilers record the text during a component compile and expose it via `componentWit()` (`WasmLispCompiler` picks http-server/sockets/base off the same `serve`/`emitHttpImport`/`emitSockImport` selection as the blob wiring (a non-serve fetch is the `base` variant plus canon-lowered `wasi:http` user imports); `NoGcWasmCompiler` picks nogc/nogc-print off `mem.printUsed()`); the CLI writes it next to the `.wasm`. The output is BYTE-identical to `wasm-tools component wit` (1.252.0) on the same bytes for every non-http-server variant; the http-server fixture deviates deliberately by restoring the handler interface's `use types.{request, response, error-code};` clause, which that tool drops, printing WIT that does not re-parse (upstream `deps/http/handler.wit` has the clause) -- the emitted file must be consumable (and must re-parse through our own `WitParser`; pinned in the round-trip suite). Fixtures are captured from reference components built by the FULL pipeline (the run/handler interface definitions are wired by `WasmComponentBuilder`, absent from the `uni*.wit` references), so regeneration is three-phase: `regen.sh` -> rebuild the jar -> `src/wasm-component/regen-wit.sh` -> re-run `WasiWitDefinitionsGenerator` + `spring-javaformat:apply` (see the README there). Pinned by `WasiWitDefinitionsTest` (always-on per-variant byte pin against the fixtures), `WitEmitterTest` (line pins incl. the s64/:async/void/:as shapes) and `WitOracleE2eTest` (live byte-diff against `wasm-tools` on PATH, skipped elsewhere -- the Docker image has only wasmtime); wiring by `componentCompileRecordsTheWitText` (+ variant selection) in `WasmExportCompilerTest`/`NoGcWasmCompilerTest`, CLI by `RontoLispCliTest`. jco 1.25.2 `types` generates correct `.d.ts` from the emitted file (`:long` -> bigint, `:async t` -> Promise).
+Purely additive: an export-free or scalar-export-only program's component is byte-identical.
+Enforced in `WasmLispCompiler` (component && !serve): the export name must match the
+component `label` grammar (lower-kebab-case, `COMPONENT_EXPORT_NAME`, fix with `:as`);
+`"run"` is reserved. Runtime (documented, not statically checked): I/O inside a SYNC export
+is a residual RISK, not a certain trap -- the adapter's I/O built-ins are async, so a host
+accepting bytes immediately (stdout) never parks the task and the print SUCCEEDS
+(`componentSyncExportWithIoWorksWhenTheHostDoesNotBlock`); only a host reporting BLOCKED
+traps with "cannot block a synchronous task", which `:async t` removes. `--invoke` does not
+run `run` first, so defvar-reading exports see uninitialized globals (matches Preview 1).
 
-Since todo 126, a program may instead declare `(rontolisp:wit-export "world.wit" :world w)`; the world is then the authoritative export list, checked at compile time (on EVERY backend) and lowered into the `wasm-export` directives it stands for. That does NOT make `--emit-wit` a consistency check of the export side -- re-emitting reproduces the input world's exports **by construction** (world -> Decl -> functype -> emitted world, over a type set that maps one-to-one), so those lines cannot fail; a diff there tests OUR type mapping, not the user's program. What `--emit-wit` uniquely reports is the IMPORT side, which `wit-export` never reads (6-line world -> 149-line component type; `rontolisp:fetch` -> 216). See `.kb/wit.md` ("the export side is a FIXPOINT, not a check") before touching this, plus the two things a component's TYPE cannot carry (`///` docs; the always-`root:component`/`root` naming), the strict "hand-written `wasm-export` or `rontolisp:http-handler` alongside a world is a compile error" rule, the full check list and `--scaffold-wit`.
+## `:async t` I/O exports
+The option flips the export's component function type to the ASYNC form
+(`ComponentWriter.asyncFuncTypeScalars`, tag 0x43 vs sync 0x40 -- the ONLY byte difference;
+core module unchanged, same flat signature), making the lift **stackful async** like `run`,
+so blocking stream/future built-ins (print, fetch, sockets) suspend instead of trapping.
 
-**Components in a browser (jco)** — measured 2026-07-14 on jco 1.25.2 / Chrome 149 / Node 22.16 / preview2-shim 0.19.0 / preview3-shim 0.2.0; every repo artifact that runs in a browser today is a plain CORE module (Preview 1 + a hand-written `wasi-shim.js`, or a `--no-wasi` reactor + a hand-written import object), so this is the first component-in-a-browser record. Do not re-derive it; re-measure only against a newer jco.
+Explicit opt-in, NOT auto-detected from I/O reachability: funcall/apply route through the
+arity dispatchers, so a conservative call-graph analysis would flip nearly every export async
+and break the sync byte-identity guarantee. Composes with the string ABI unchanged --
+wasmtime accepts memory/realloc/utf8/**post-return** on an async-typed lift, so CABI_MARK
+reclamation is identical (a stackful lift via the async TYPE, not a `canon lift async`
+callback lift, which would have no post-return). In WIT the export is an `async func`.
 
-- **`--no-gc --component` = ZERO browser dependencies.** Its world has no imports, so `npx -y @bytecodealliance/jco transpile cv_nogc.wasm -o dist` emits a SINGLE self-contained ESM (~90 KiB, core wasm base64-inlined) whose only top-level statement of interest is `export { countVowels, }` — **no `import` statements at all**. The page needs no shim, no import map, no polyfill: `const { countVowels } = await import('./dist/cv_nogc.js')`. Verified in Chrome 149 (`countVowels("Hello, World!") = 3`, `("aeiouAEIOU") = 10`, `("rhythm") = 0`, no console errors). jco camelCases the kebab export name (`count-vowels` -> `countVowels`).
-- **A PRINTING `--no-gc --component` no longer runs through jco** (todo-138 reversed this deliberately): its imports are `wasi:cli/stdout@0.3.0` (Node-only shim, no browser build) and its exports are async lifts, hitting both jco 0.3 gaps above — verified post-138 on Node 22 (dies at `new WebAssembly.Suspending`, no JSPI; on a JSPI host it would hit the async-export/future gaps next). The 0.2-era browser trick (preview2-shim import map) died with the island. Print-free components stay fully self-contained and universal.
-- **wasm-GC `--component` LOADS AND COMPUTES in Chrome.** wasm-GC + JSPI + the canonical ABI are all fine there: the analyzer's three SYNC exports returned correctly (`wordCount("the quick brown fox") = 4`, `longestWord = "quick"`, `isPalindrome("A man, a plan, a canal: Panama") = true`), as did `count-vowels` on the GC path. **The blockers are neither wasm-GC nor JSPI nor our lift** — they are the two jco gaps above, and in a browser the IMPORT-side one (`FutureReadableEnd`) fires first, on the print, before any export lift.
-- **`preview3-shim` HAS NO BROWSER BUILD** (0.2.0): its `exports` map has only a `node` condition (no `browser`, no `default`), it ships only `dist/nodejs/`, and that code imports `node:worker_threads`/`net`/`http`/`dgram`/`fs/promises`/`process`/`stream`/... So a GC component in a browser needs a HAND-WRITTEN 0.3 shim (~90 lines). jco destructures exactly **9 names** at module top level and throws if any is missing: `environment.getEnvironment`, `stdout.writeViaStream`, `stderr.writeViaStream`, `stdin.readViaStream`, `monotonicClock.now`, `systemClock.now`, `preopens.getDirectories`, `types.Descriptor`, `random.getRandomU64` (from the four specifiers `@bytecodealliance/preview3-shim/{cli,clocks,filesystem,random}`). For a non-I/O export they only have to EXIST.
-- **Chrome is a BETTER jco host than Node here.** Node 22.16 cannot even import a transpiled GC component: `TypeError: WebAssembly.Suspending is not a constructor` (no JSPI in that V8; `WebAssembly.promising` is likewise undefined). Chrome 149 has both on by default.
-- User-facing half: `doc/{en,ja}/compiling/wasm.md` ("Running a Component in a Browser (jco)").
+**`:async t` is permanent, not a workaround**: WASI 0.3 has no synchronous write BY DESIGN
+(`deps/cli/stdio.wit` is `write-via-stream: func(data: stream<u8>) -> future<...>`; 0.2's
+`output-stream`/`blocking-write-and-flush` was replaced -- in 0.3 blocking is a property of
+the task, not of a host function), so on a pure-0.3 import surface an I/O-bearing sync export
+can NEVER work. Importing 0.2 stdio to route around it was REJECTED: it would be a permanent
+0.2 island, and the repo now has NO WASI-0.2-era surface. Stackful was the only lift a
+synchronous source language could use without CPS-ing the whole backend -- a constraint the
+callback-async cutover has since lifted for `handle`, so both lifts coexist.
 
-**User WIT-interface imports (todo 128, `canon lower`)**: a component is no longer import-locked to the fixed WASI blob surface. `rontolisp:wit-import` under `--component` becomes a component-level **instance import** whose functions are `canon lower`ed into the core module (`WasmComponentBuilder.appendUserImports`: instance type + import + per-function alias + lower (memory 0 / realloc = mem.wasm's `cabi_realloc` = core func 0 / utf8, exactly when the call touches linear memory) + one synthesized core instance per interface, passed as an extra instantiation arg named by the interface's canonical id). Every downstream hardcoded index (the `run` alias/lift/export and `appendFuncExports`) shifts by the user-import counts, so **zero imports = zero shift = byte-identical** (stash-dance proven on base/sockets/serve). **Serve (`build`, todos 135 + todo-002 Phase 2) has NO serve adapter and ONE block**: http.lisp IS the HTTP glue, so its OWN `wasi:http/{types,client}@0.3.0` interfaces are the fixed surface, lowered FROM the import block (`import-block-http-server.bin`, regenerated from the 0.3 `uni-http-server` world: instances 0=clocks/types (dependency-hoisted by wait-for) 1=http/types 2=http/client 3=random 4=system-clock 5=monotonic-clock 6=cli/types 7=stdout 8=stderr; `WasmComponentBuilder.lowerFixedFromBlock` (shared with the base/sockets wait.lisp clocks binding) emits every appendUserImports member kind against the block's instances -- sync decls, async calls, drops, alias built-ins via `WitComponentLevelTypes` seeded with the block's projections, task-returns, waitable builtins) rather than through `appendUserImports`; `appendUserImports` there carries only ADDITIONAL user interfaces (`WasmServeComponentBuilder.additionalImports` partitions the list, and it is also what `WasmLispCompiler` passes to `WitEmitter` so the fixed surface is not double-declared in the emitted WIT). The builder lifts the core's `handle` wasm-export (`[i32 request] -> []`) with `canon lift (memory, utf8, async)` against `async func(request: own<request>) -> result<own<response>, error-code>` -- built over the block's NAMED aliases (type 2=request 3=response 4=http error-code; anonymous structural types in an exported functype fail validation with "instance not valid to be used as export") -- into `wasi:http/handler@0.3.0`; the response is delivered mid-task via `canon task.return`. Serve+fetch selects the SAME block (the `http-server-client` variant is deleted): http.lisp's two halves share the `wasi:http` bindings (merged by `WasmComponentImportCompiler.mergeByIface`; duplicate core imports deduped by `WasmLispCompiler`'s import-slot pass), and the preview1 bridge (`adapter-http-server-p1.wat`, rewritten over the 0.3 service interfaces + stream/future built-ins) is shared. The serve core module has no `cabi_realloc` of its own (`componentStringAbi` is `component && !serve`) and needs none: the `canon lower` realloc is the shared memory module's, core func 0, which the serve builder already aliases. The guest-side marshalling, the instance-type encoder, the settled type tiers, the `result`-as-envelope + Lisp-wrapper design, the member pruning that replaces the tree shaker on this path, and the `pointer not aligned` trap (`__ronto_alloc` returns an unaligned `HEAP_PTR` after interning) are all in `.kb/wit.md` ("Component imports"). `examples/wit/keyvalue` runs against wasmtime's REAL `wasi:keyvalue` host (`-S keyvalue=y`), printing exactly what the interpreter and JVM stores print.
+Host support: wasmtime 46 `--invoke` runs it (verified with print inside, fetch inside with
+`-S http=y` over the wit-imported `wasi:http@0.3.0`, run co-existence, sync+async mixed).
+jco 1.25.2 transpiles but cannot run it, via **TWO DISTINCT upstream gaps -- do not collapse
+them**: (a) EXPORT-LIFT -- jco's driver assumes callback-style async and misreads the flat
+result as a callback code ("invalid async return value [13]"); stackful async exports are
+unimplemented. (b) IMPORT-SIDE -- jco's bundle references `FutureReadableEnd` (5x) /
+`FutureEnd` (2x) / `FutureWritableEnd` (1x) and **defines none**, while the stream family
+(`StreamEnd`/`StreamReadableEnd`/`StreamWritableEnd`/`InternalStream`/`HostStream`) is fully
+emitted, so any call touching a `future<T>`-typed WASI import dies with `ReferenceError:
+FutureReadableEnd is not defined` at `new InternalFuture` ->
+`ComponentAsyncState.createFuture` -> `_trampoline0` -> `fd_write`. (b) is reached through
+`wasi:cli/stdout.write-via-stream` and fires FIRST -- before any export lift -- for anything
+that prints, `run` included; reproduced under every jco flag combination. Neither gap is
+rontolisp's.
 
-Encoders pinned by `ComponentWriterTest`; E2E by `WasmLispCompilerIntegrationTest`. Limitations: `doc/{en,ja}/guides/wasm-component.md`.
+Preview 1 / `--no-wasi` ignore `:async` (Decl carries it; core exports do not lift);
+`--no-gc --component` rejects it (`NoGcWasmCompiler.validateComponentExport`). Pinned by
+`componentAsyncExport*` + `componentSyncExportWithIoWorksWhenTheHostDoesNotBlock` in
+`WasmLispCompilerIntegrationTest`, `componentFetchInsideAsyncExport` (opt-in
+`RONTOLISP_HTTP_E2E=1`), ci-spec `wasm-export-directive-does-not-disturb-run` (an `:async`
+directive is inert on the other backends).
+
+## Shapes that do NOT use this pipeline
+- **`--component --no-wasi` (GC reactor component)**: `WasmComponentBuilder.buildReactor`
+  wraps the ONE core module (imports nothing -- the Preview 1 no-WASI stubs -- and runs its
+  top level from its core start section) with no import block, adapter, mem module or
+  `wasi:cli/run`, with or without `--optimize`; only `wasm-export` functions are lifted (sync
+  by default, canonical string ABI over the core's OWN memory/`cabi_realloc`). Mechanics and
+  gating: `.kb/wasm-export-no-wasi.md`. The ONLY component shape whose `--invoke`d exports
+  see top-level `defparameter` state.
+- **`--no-gc --component`**: a print-free non-GC MVP core has zero imports, so
+  `NoGcWasmComponentBuilder` wraps it adapter-free into a run-less reactor component of a few
+  hundred bytes that `wasmtime run --invoke` executes with ZERO flags. Same per-export
+  sync-lift wiring as `appendFuncExports` but instance 0 / all index spaces from 0;
+  `:long` -> VT_S64 (valid on the GC path too, `.kb/wasm-bignum.md`), `:string` -> VT_STRING
+  on both paths (`WasmExportCompiler.componentValType`). A `:string` export lifts with
+  `canonLiftMemoryReallocUtf8PostReturn` (options in wasm-tools order, byte-pinned) over the
+  module's own memory against core-exported `cabi_realloc` / `cabi_post_*` / retptr shims
+  appended by `NoGcWasmCompiler.assemble()`; the post-return pops the bump heap to base. A
+  PRINTING program additionally gets a minimal `wasi:cli/stdout@0.3.0` blob set
+  (`import-block-nogc-print.bin` + `shim/bridge/fixup-nogc-print` core modules, sourced in
+  `src/wasm-component/`): the bridge implements the core's single `fd_write` over
+  `write-via-stream` + async stream/future built-ins with a blocking `waitable-set.wait`
+  park, so every export of a printing program lifts against an ASYNC function type (the flip
+  is automatic; user-level `:async` stays rejected). Zero run flags kept; wasmtime 46+ is the
+  printing component's floor, and jco cannot call the async-lifted exports. The
+  core-imports-bridge / bridge-reads-core-memory instantiation cycle is broken with the
+  wit-component shim/fixup funcref-table pattern, keeping the printing core byte-identical to
+  plain `--no-gc` output. fd 1 only. Details: `.kb/no-gc-scalar-wasm.md`.
+
+## `--emit-wit`
+`-o out.wasm --component --emit-wit` also writes `out.wit`, so hosts / binding generators
+(`jco types out.wit`) need no `wasm-tools component wit`. `--emit-wit` without `--component`
+(or without a `.wasm` output) is a clear CLI error; the flag is in `CliOptions.noValueKeys`
+(the --simd dead-flag lesson).
+
+Rendering is `codegen.wasm.WitEmitter` over the `am.ik.wit` document model (`.kb/wit.md`).
+The FIXED part (world imports + the fixed `wasi:cli/run` / `wasi:http/handler@0.3.0` export +
+trailing package definitions, `package root:component; world root`) is the per-variant
+`WasiWitDefinitions` document -- variants `base`/`sockets`/`http-server`/`nogc`/`nogc-print`
+(the standalone `http-client` and `http-server-client` variants were removed when fetch/serve
+became the ONE `http.lisp` library over canon-lowered `wasi:http@0.3.0` user imports: a
+non-serve fetch selects `base` and gains `wasi:http` through the user-import path; serve+fetch
+is the same `http-server` variant as plain serve) -- GENERATED by the test-side
+`WasiWitDefinitionsGenerator` from fixtures under `src/test/resources/.../component/wit/`
+captured from `wasm-tools component wit`. Per-export items
+(`export name: [async ]func(p0: s32, ...) -> t;`) are appended as `WitItem.ExportNamed` nodes
+and printed by `am.ik.wit.WitPrinter`. Parameter names are the Decl's own (`p0`, `p1`, ... by
+default; a `:param-names '(text)` list, or the world's names under `rontolisp:wit-export`)
+and are the labels `WasmComponentBuilder`/`NoGcWasmComponentBuilder` encode into the lifted
+functype; defaults unchanged, so pre-`:param-names` artifacts are byte-identical. Both
+compilers record the text and expose it via `componentWit()` (`WasmLispCompiler` picks
+http-server/sockets/base off the same `serve`/`emitHttpImport`/`emitSockImport` selection as
+the blob wiring; `NoGcWasmCompiler` picks nogc/nogc-print off `mem.printUsed()`); the CLI
+writes it beside the `.wasm`.
+
+Output is BYTE-identical to `wasm-tools component wit` (1.252.0) for every non-http-server
+variant; the http-server fixture deviates deliberately by restoring the handler interface's
+`use types.{request, response, error-code};` clause, which that tool drops, printing WIT that
+does not re-parse (upstream `deps/http/handler.wit` has it) -- the emitted file must be
+consumable and must re-parse through our own `WitParser`. Fixtures come from reference
+components built by the FULL pipeline (the run/handler interface definitions are wired by
+`WasmComponentBuilder`, absent from the `uni*.wit` references), so regeneration is
+three-phase: `regen.sh` -> rebuild the jar -> `src/wasm-component/regen-wit.sh` -> re-run
+`WasiWitDefinitionsGenerator` + `spring-javaformat:apply`.
+
+Pinned by `WasiWitDefinitionsTest` (per-variant byte pin), `WitEmitterTest` (line pins incl.
+s64/:async/void/:as shapes), `WitOracleE2eTest` (live byte-diff against `wasm-tools` on PATH,
+skipped elsewhere); wiring by `componentCompileRecordsTheWitText` (+ variant selection) in
+`WasmExportCompilerTest`/`NoGcWasmCompilerTest`; CLI by `RontoLispCliTest`.
+
+A program may instead declare `(rontolisp:wit-export "world.wit" :world w)`; the world is then
+the authoritative export list, checked at compile time on EVERY backend and lowered into the
+`wasm-export` directives it stands for. That does NOT make `--emit-wit` a consistency check of
+the export side -- re-emitting reproduces the input world's exports by construction (world ->
+Decl -> functype -> emitted world, a one-to-one type mapping), so a diff there tests OUR type
+mapping, not the user's program. What `--emit-wit` uniquely reports is the IMPORT side, which
+`wit-export` never reads. See `.kb/wit.md` ("the export side is a FIXPOINT, not a check")
+before touching this, plus the two things a component's TYPE cannot carry (`///` docs; the
+always-`root:component`/`root` naming), the "hand-written `wasm-export` or
+`rontolisp:http-handler` alongside a world is a compile error" rule, the check list and
+`--scaffold-wit`.
+
+## Components in a browser (jco)
+Measured on jco 1.25.2 / Chrome 149 / Node 22.16 / preview3-shim 0.2.0. Re-measure only
+against a newer jco.
+
+- **`--no-gc --component` = ZERO browser dependencies.** No imports in its world, so
+  `jco transpile` emits a SINGLE self-contained ESM (~90 KiB, core wasm base64-inlined) with
+  **no `import` statements at all** -- no shim, import map or polyfill. jco camelCases the
+  kebab export name (`count-vowels` -> `countVowels`).
+- **A PRINTING `--no-gc --component` no longer runs through jco** (deliberate): it imports
+  `wasi:cli/stdout@0.3.0` (Node-only shim) and its exports are async lifts, hitting both jco
+  gaps; on Node 22 it dies at `new WebAssembly.Suspending` (no JSPI).
+- **wasm-GC `--component` LOADS AND COMPUTES in Chrome**; SYNC exports return correctly. The
+  blockers are neither wasm-GC nor JSPI nor our lift -- they are the two jco gaps, and in a
+  browser the IMPORT-side one (`FutureReadableEnd`) fires first, on the print.
+- **`preview3-shim` HAS NO BROWSER BUILD** (0.2.0): `exports` has only a `node` condition, it
+  ships only `dist/nodejs/`, and that code imports node builtins. A GC component in a browser
+  needs a HAND-WRITTEN 0.3 shim (~90 lines). jco destructures exactly **9 names** at module
+  top level and throws if any is missing: `environment.getEnvironment`,
+  `stdout.writeViaStream`, `stderr.writeViaStream`, `stdin.readViaStream`,
+  `monotonicClock.now`, `systemClock.now`, `preopens.getDirectories`, `types.Descriptor`,
+  `random.getRandomU64` (from
+  `@bytecodealliance/preview3-shim/{cli,clocks,filesystem,random}`). For a non-I/O export
+  they only have to EXIST.
+- Node 22.16 cannot import a transpiled GC component at all
+  (`TypeError: WebAssembly.Suspending is not a constructor`); Chrome 149 has JSPI on by
+  default. User-facing half: `doc/{en,ja}/compiling/wasm.md`.
+
+## User WIT-interface imports (`canon lower`)
+`rontolisp:wit-import` under `--component` becomes a component-level **instance import** whose
+functions are `canon lower`ed into the core module
+(`WasmComponentBuilder.appendUserImports`: instance type + import + per-function alias + lower
+(memory 0 / realloc = mem.wasm's `cabi_realloc` = core func 0 / utf8, exactly when the call
+touches linear memory) + one synthesized core instance per interface, passed as an extra
+instantiation arg named by the interface's canonical id). Every downstream hardcoded index
+(the `run` alias/lift/export and `appendFuncExports`) shifts by the user-import counts, so
+**zero imports = zero shift = byte-identical**.
+
+**Serve (`build`) has NO serve adapter and ONE block**: http.lisp IS the HTTP glue, so its own
+`wasi:http/{types,client}@0.3.0` interfaces are the fixed surface, lowered FROM the import
+block (`import-block-http-server.bin`, regenerated from the 0.3 `uni-http-server` world;
+instances 0=clocks/types (dependency-hoisted by wait-for), 1=http/types, 2=http/client,
+3=random, 4=system-clock, 5=monotonic-clock, 6=cli/types, 7=stdout, 8=stderr).
+`WasmComponentBuilder.lowerFixedFromBlock` (shared with the base/sockets wait.lisp clocks
+binding) emits every `appendUserImports` member kind against the block's instances -- sync
+decls, async calls, drops, alias built-ins via `WitComponentLevelTypes` seeded with the
+block's projections, task-returns, waitable builtins. `appendUserImports` there carries only
+ADDITIONAL user interfaces (`WasmServeComponentBuilder.additionalImports` partitions the list,
+and is what `WasmLispCompiler` passes to `WitEmitter` so the fixed surface is not
+double-declared).
+
+The builder lifts the core's `handle` wasm-export (`[i32 request] -> []`) with
+`canon lift (memory, utf8, async)` against
+`async func(request: own<request>) -> result<own<response>, error-code>`, built over the
+block's NAMED aliases (type 2=request, 3=response, 4=http error-code -- anonymous structural
+types in an exported functype fail validation with "instance not valid to be used as
+export"), into `wasi:http/handler@0.3.0`; the response is delivered mid-task via
+`canon task.return`. Serve+fetch selects the SAME block: http.lisp's two halves share the
+`wasi:http` bindings (merged by `WasmComponentImportCompiler.mergeByIface`; duplicate core
+imports deduped by `WasmLispCompiler`'s import-slot pass), and the preview1 bridge
+(`adapter-http-server-p1.wat`, over the 0.3 service interfaces + stream/future built-ins) is
+shared. The serve core module has no `cabi_realloc` of its own (`componentStringAbi` is
+`component && !serve`) and needs none: the `canon lower` realloc is the shared memory
+module's, core func 0, already aliased by the serve builder.
+
+Guest-side marshalling, the instance-type encoder, the settled type tiers, the
+`result`-as-envelope + Lisp-wrapper design, the member pruning that replaces the tree shaker
+on this path, and the `pointer not aligned` trap (`__ronto_alloc` returns an unaligned
+`HEAP_PTR` after interning): `.kb/wit.md` ("Component imports"). `examples/wit/keyvalue` runs
+against wasmtime's REAL `wasi:keyvalue` host (`-S keyvalue=y`).
+
+Encoders pinned by `ComponentWriterTest`; E2E by `WasmLispCompilerIntegrationTest`.
+Limitations: `doc/{en,ja}/guides/wasm-component.md`.

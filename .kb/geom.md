@@ -1,1089 +1,644 @@
 # The `geom` package (solid modeling)
 
-One hand-written Lisp-source library,
-`src/main/resources/am/ik/rontolisp/eval/geom.lisp`, following the `linalg.lisp` /
-`appkit.lisp` pattern (`linalg.md`, `objc.md`) so a single implementation runs
-identically on every backend: rigid `geom:transform` values, a scene-graph
-`geom:node`, boundary-represented `geom:solid`s with a cached model-space triangle
-mesh, nine primitive constructors plus the `triad` convenience, the measurements
-(`bounds`, `volume`, `centroid`, `surface-area`), the booleans (`union`,
-`difference`, `intersection`, `section` -- see "Boolean operations" below) and the
-five model-file readers ("Reading a model file" below). 63
-exported functions plus `geom:*tolerance*` and four CLOS class names
-(todo-586: `move`/`turn` became `translate`/`rotate`, and `scale` split into
-the functional `scale` and the destructive `nscale` -- "Scaling" below).
+One hand-written Lisp library, `src/main/resources/am/ik/rontolisp/eval/geom.lisp`,
+following the `linalg.lisp` / `appkit.lisp` pattern (`linalg.md`, `objc.md`) so one
+implementation runs identically on every backend: rigid `geom:transform` values, a
+scene-graph `geom:node`, boundary-represented `geom:solid`s with a cached model-space
+triangle mesh, nine primitive constructors plus `triad`, the measurements (`bounds`,
+`volume`, `centroid`, `surface-area`), the booleans and five model-file readers. 63
+exported functions plus `geom:*tolerance*` and four CLOS class names.
 
 **The MODELLING half reaches for nothing but `linalg`** -- no `objc:`, no `java:`, no
-`SourceLoader`. That is the whole reason it ships rather than living in
-`examples/macos/`: the same solids tessellate in the browser playground and in a
-`.wasm`, and `scene` (the macOS viewer, "The renderer" below) is a CONSUMER of this
-package, not a peer of it. Nothing may be added here that breaks that.
+`SourceLoader`, so the same solids tessellate in the browser playground and in a `.wasm`.
+`scene` (the macOS viewer) is a CONSUMER of this package.
 
 **The one exception is the five READERS** (`read-obj` / `read-stl` / `read-ply` /
-`read-gltf` / `read-model`,
-"Reading a model file" below), which open a file, and it is an exception the promise
-survives rather than a hole in it: they are ANSI CL I/O on all four backends, and
-`LibraryDefunPruner` drops them from every program that does not call one, so the
-browser demo's module is measurably free of them. Nothing else here may do I/O.
-(The INTERPRETER runs a Java native for `read-obj` since 2026-08-31 --
-"The interpreter's native kernels" below -- but the defun is still the definition, and
-it is still what the other three backends run.)
+`read-gltf` / `read-model`): ANSI CL I/O on all four backends, dropped by
+`LibraryDefunPruner` from every program that does not call one. Nothing else here may do
+I/O. The interpreter and the JVM backend run Java kernels over some of them; the defun is
+still the definition.
 
 ## Wiring (the `linalg` pair, exactly)
 
 | piece | where |
 |---|---|
-| source | `src/main/resources/am/ik/rontolisp/eval/geom.lisp` |
-| splice class | `eval/GeomLibrary` (`forms()` parsed once and cached, `process(program)`, `isGeomQualified`, `mentionsGeomClass`) |
+| source | `eval/geom.lisp` |
+| splice class | `eval/GeomLibrary` (`forms()` parsed once and cached, `process(program)`, `isGeomQualified`, `mentionsGeomClass`, `CLASS_NAMES`) |
 | package | `PackageRegistry.GEOM_FUNCTIONS` + `LispNames.GEOM_PKG` + `geomFunctionNames()` + `BUILTIN_PACKAGE_NAMES` |
 | interpreter | `LispEvaluator.ensureGeomLoaded()` on the first `geom:`-qualified FUNCTION resolution, plus `ensureGeomClassesFor(form)` at the seven `ensureAsdfClassesFor` sites |
-| compile path | `cli/CompileFrontend`, `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`) so the `linalg:` references in the spliced geom bodies pull linalg in too, and `JsonLibrary.process` OUTSIDE both since 2026-08-31 -- `geom:read-gltf` parses through `rontolisp:json-parse`, so the geom splice introduces the reference Json must then rewrite; the browser playground repeats the nesting (a non-glTF geom program is byte-identical either way -- the json defuns prune back out, measured on `(print (geom:volume (geom:box 10)))`'s `.wasm`) |
+| compile path | `cli/CompileFrontend`: `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`); `JsonLibrary.process` OUTSIDE both, since `geom:read-gltf` parses through `rontolisp:json-parse`. The browser playground repeats the nesting. |
 | pruning | `LibraryDefunPruner.prunableNames()` collects `GeomLibrary.forms()` |
-| interpreter natives | `eval/GeomKernels.install`, from `LispEvaluator.ensureGeomLoaded` right after the forms are evaluated ("The interpreter's native kernels" below) |
-| JVM kernels | `codegen/jvm/JvmGeomKernelCompiler` (the call site) + `JvmGeomTemplate` (the embedded bridge) + `JvmGeomRuntimeBuilder` (the injection), gated in `JvmLispCompiler` on `gateMembers()` and dispatched from one `JvmExprCompiler.compileCons` case ("The JVM backend's kernels" below) |
-| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend`, `geom-csg-cross-backend`, `geom-scale-cross-backend`, `geom-read-model-cross-backend` and `geom-read-ply-gltf-cross-backend` (all four backends), `codegen/jvm/JvmGeomKernelCompilerTest` (the JVM kernels against the defuns) |
+| interpreter natives | `eval/GeomKernels.install`, from `ensureGeomLoaded` right after the forms are evaluated |
+| JVM kernels | `codegen/jvm/JvmGeomKernelCompiler` (call site) + `JvmGeomTemplate` (embedded bridge) + `JvmGeomRuntimeBuilder` (injection), gated in `JvmLispCompiler` on `gateMembers()`, one `JvmExprCompiler.compileCons` case |
 | docs | `doc/{en,ja}/guides/solid-modeling.md`, 63 pages under `reference/functions/geom-*.md` |
 
-**The class-mention trigger is not optional.** The interpreter's lazy load fires on
-FUNCTION resolution, but a `defmethod` specializer, a `typep`, a `typecase` clause, a
-`make-instance` or a `defclass` superclass can name `geom:solid` without calling any
-geom function -- and would then see no such class and quietly answer `nil`. That is
-what `GeomLibrary.mentionsGeomClass` / `LispEvaluator.ensureGeomClassesFor` exist for,
-the `AsdfRuntimeLibrary.mentionsComponentClass` twin. A new geom class must be added to
-`GeomLibrary.CLASS_NAMES`. The compile path needs no equivalent: its splice fires on
-any `geom:` symbol anywhere, quoted data included.
+**Trap -- the class-mention trigger is not optional.** The lazy load fires on FUNCTION
+resolution, but a `defmethod` specializer, `typep`, `typecase`, `make-instance` or a
+`defclass` superclass can name `geom:solid` without calling any geom function, and would
+see no such class and quietly answer `nil`. That is `GeomLibrary.mentionsGeomClass` /
+`LispEvaluator.ensureGeomClassesFor` (the `AsdfRuntimeLibrary.mentionsComponentClass`
+twin); a new geom class must be added to `GeomLibrary.CLASS_NAMES`. The compile path needs
+no equivalent -- its splice fires on any `geom:` symbol anywhere, quoted data included.
 
-**A library-internal helper may not be named `%make-<class>`.** `expandDefclass`
-generates the constructor `make-instance` calls as `PKG::%make-<member>` for the class
-`PKG:<member>`, so a hand-written `geom::%make-solid` SILENTLY replaced the constructor
-of `geom:solid` and every `make-instance` then landed in the wrong lambda list
-("Unknown keyword argument: :VERTICES"). The builder is `geom::%build-solid`.
+**Trap -- a library-internal helper may not be named `%make-<class>`.** `expandDefclass`
+generates constructors as `PKG::%make-<member>`, so a hand-written `geom::%make-solid`
+SILENTLY replaced `geom:solid`'s constructor ("Unknown keyword argument: :VERTICES"). The
+builder is `geom::%build-solid`.
 
-## The type model, and why
+## The type model
 
-- **`transform` is a VALUE, not a superclass.** A translation 3-vector and a 3x3
-  rotation, both read-only slots; no parent, no identity, no cache. `compose` /
-  `invert` / `transform-point` / `inverse-transform-point` build new ones, and so do
-  the node mutators -- `translate` / `rotate` / `place` / `reorient` REPLACE `geom::%local`
-  with a fresh transform rather than assigning into the old one. That is what makes it
-  safe to hand one transform to several nodes, and it is a deliberate divergence from
-  the spike (`.todo/563-solid-modeling-and-a-3d-viewer/geom.lisp`), which mutated in
-  place and therefore aliased. The cost is one allocation per pose change, which is
-  noise next to the 9.0 ms frame below.
-- **`node` HAS a transform rather than being one.** Composition, not inheritance: a
-  solid, a camera target and a bare joint frame are all nodes with no slot any of them
-  does not use. `world-transform` is memoized in `geom::%world` and `geom::%stale`
-  drops it down the WHOLE subtree on every pose change -- every slot of a node is
-  internal (`geom::%local` / `%parent` / `%children` / `%world`) and the public
-  readers are plain defuns, so there is no `setf` that could leave the memo stale.
+- **`transform` is a VALUE, not a superclass**: translation 3-vector + 3x3 rotation,
+  read-only slots. `compose` / `invert` / `transform-point` / `inverse-transform-point`
+  build new ones, and so do the node mutators -- `translate` / `rotate` / `place` /
+  `reorient` REPLACE `geom::%local` with a fresh transform rather than assigning into the
+  old one, so one transform can be handed to several nodes safely.
+- **`node` HAS a transform rather than being one.** `world-transform` is memoized in
+  `geom::%world`; `geom::%stale` drops it down the WHOLE subtree on every pose change.
+  Every node slot is internal (`%local` / `%parent` / `%children` / `%world`) and the
+  public readers are plain defuns, so no `setf` can leave the memo stale.
 - **`solid` is a node carrying a boundary representation.** `vertices` is ONE rank-2
-  `(n 3)` packed array of MODEL coordinates, which is what makes a whole-solid
-  transform a single `linalg:matmul` (`%solid-bounds` is the one place that does it);
-  `facets` is a list of index loops.
-- **`:frame` is a keyword, not a positional flag.** `(geom:translate n v :frame :parent)`
-  needs no manual; `:local` is the default.
-
-## float32 everywhere
-
-Every array the package builds is `:element-type 'single-float`, with the literal
-spelled at each `make-array` so all four backends pick the `float[]` (TYPE_F32ARR)
-representation statically -- the same rule `linalg.lisp` documents. The reason is not
-memory: **a packed single-float array IS a GPU vertex buffer's bytes**, and `objc:data`
-takes one of any rank, so `geom:mesh` -> `objc:data` -> `setVertexBytes:` is the whole
-path with no conversion (`objc.md`, "Metal"). Every `linalg` transform preserves the
-input width, so a `#f` value never widens back to `#d` on the way through.
+  `(n 3)` packed array of MODEL coordinates, which makes a whole-solid transform a single
+  `linalg:matmul` (`%solid-bounds` is the one place that does it); `facets` is a list of
+  index loops.
+- **`:frame` is a keyword, not a positional flag**; `:local` is the default.
+- **float32 everywhere**: every array is `:element-type 'single-float`, the literal spelled
+  at each `make-array` so all four backends pick `float[]` (TYPE_F32ARR) statically. A
+  packed single-float array IS a GPU vertex buffer's bytes and `objc:data` takes one of any
+  rank, so `geom:mesh` -> `objc:data` -> `setVertexBytes:` needs no conversion
+  (`objc.md`, "Metal").
 
 ## The winding convention
 
 Each facet is an index loop wound **counter-clockwise seen from OUTSIDE**. `volume`
-integrates the divergence theorem over the mesh triangles, so a facet wound the wrong
-way SUBTRACTS: a mis-wound solid answers a grossly wrong number rather than a slightly
-small one, and `volume` therefore doubles as the winding test for every constructor.
-`GeomLibraryTest` and the ci-spec cases rest on that.
+integrates the divergence theorem over the mesh triangles, so a mis-wound facet SUBTRACTS:
+`volume` is the winding test for every constructor. A tessellated primitive is INSCRIBED in
+its smooth ideal, so measured volume converges from below. These integers are ci-spec
+expectations; a shift is a tessellation change or a bug:
 
-A tessellated primitive is INSCRIBED in its smooth ideal, so every measured volume
-converges on the closed form **from below**. Measured 2026-08-29 (spike, re-checked on
-the shipped library):
+| solid | volume | closed form |
+|---|---|---|
+| `(box '(100 200 300))` | 6000000.0 | exact (area 220000 exact too) |
+| `(cylinder :radius 50 :height 100 :sides 64)` | 784137 | 785398 |
+| `(sphere :radius 50 :sides 32 :stacks 24)` | 518015 | 523599 |
+| `(torus :radius 60 :tube 20 :sides 48 :rings 24)` | 467012 | 473741 |
+| `(cone :radius 50 :height 120 :sides 64)` | 313655 | 314159 |
 
-| solid | measured volume | closed form | error |
-|---|---|---|---|
-| `(box '(100 200 300))` | 6000000.0 | 6000000 | exact (area 220000 exact too) |
-| `(cylinder :radius 50 :height 100 :sides 64)` | 784137 | 785398 | -0.16% |
-| `(sphere :radius 50 :sides 32 :stacks 24)` | 518015 | 523599 | -1.07% |
-| `(torus :radius 60 :tube 20 :sides 48 :rings 24)` | 467012 | 473741 | -1.42% |
-| `(cone :radius 50 :height 120 :sides 64)` | 313655 | 314159 | -0.16% |
-
-Those integers are the ci-spec expectations; a change that shifts one is either a
-tessellation change or a bug.
-
-**And `volume` is the winding test, not the whole mesh's test** (2026-08-30).
-`geom:revolution` used to cap BOTH ends of a profile whose two ends are the same
-point -- a torus's closed cross-section -- laying two coincident discs across the
-hole. They wind opposite ways, so the divergence integral cancelled them exactly
-and the torus's volume above was and is right; `surface-area` counted both
-(87,252 against the closed form's 47,374, +84%) and the renderer drew whichever
-one survived back-face culling, so **a torus rendered as a filled disc**. The
-rule is now `geom::%closed-profile`: a closed profile has no end and gets neither
-cap. The lesson is in the pin: both
-`GeomLibraryTest.aClosedProfileIsCappedAtNeitherEndSoATorusHasAHole` and the
-`geom-solids-cross-backend` ci-spec case assert the AREA (47,155 rounded) and the
-FACET COUNT (1,152 = `sides * rings` and nothing else), because those are the two
-numbers a cancelling pair of facets cannot hide behind. `examples/browser/
-webgl-solids/solids.wasm` draws a torus and was rebuilt with the fix.
+**Trap -- `volume` is the winding test, not the whole mesh's test.** `geom:revolution` used
+to cap BOTH ends of a profile whose ends are the same point (a torus's closed
+cross-section); the two coincident discs wind opposite ways, so the divergence integral
+cancelled them and volume stayed right while `surface-area` counted both and a torus
+rendered as a filled disc. The rule is `geom::%closed-profile`: a closed profile gets
+neither cap. The pins assert the AREA (47,155 rounded) and the FACET COUNT
+(1,152 = `sides * rings`), which a cancelling pair cannot hide behind.
 
 ## The cached mesh -- the load-bearing invariant
 
 `geom:mesh` answers the solid's triangles in MODEL space: 18 floats a triangle (three
-corners of position + normal), fan-triangulated per facet with a Newell normal (correct
-for a slightly non-planar loop, and it never crosses a degenerate pair). Computed once
-and kept in `geom::%mesh`; `geom:wireframe` (each edge once, 6 floats a segment) in
+corners of position + normal), fan-triangulated per facet with a Newell normal, computed
+once into `geom::%mesh`. `geom:wireframe` (each edge once, 6 floats a segment) into
 `geom::%wire`.
 
-**This is a design decision, not an optimization.** A rigid solid's triangles never
-change; only its pose does. Measured 2026-08-29 on an Apple M4 Max
-(`.todo/563-solid-modeling-and-a-3d-viewer/bench.lisp`), a 30-joint chain of cylinders
-and spheres -- 60 solids, 13,800 triangles:
+A rigid solid's triangles never change, only its pose does. On a 30-joint chain (60 solids,
+13,800 triangles), transforming every vertex into world space every frame is 380 ms/frame;
+the cached model-space mesh plus one 4x4 matrix per solid is **9.0 ms**. So `geom:mesh` is
+PUBLIC surface and **a renderer must touch no triangle during a frame**.
 
-| design | per frame |
-|---|---|
-| A: transform every vertex into world space every frame | **380 ms** (2.6 fps) |
-| B: cached model-space mesh + one 4x4 matrix per solid | **9.0 ms** |
+`geom:nscale` is the only vertex mutation and therefore the only place that must
+invalidate: it drops `%mesh`, `%wire` AND `user-data`. **Any future vertex mutation must
+call `geom::%invalidate-mesh`.**
 
-42x, and B pays 179 ms ONCE at load time for those 60 solids. So `geom:mesh` is part of
-the PUBLIC surface rather than a renderer's internal detail, and a renderer must touch
-no triangle during a frame. A later change that regresses this is visible against those
-two numbers.
+`user-data` is a slot a consumer hangs its own state on (a renderer keeps its GPU buffers
+there). **It is a slot because a hash table cannot key on a node**: `:test 'eq` is accepted
+and IGNORED, so a table compares keys STRUCTURALLY (`hash-tables.md`), and two sibling
+nodes with equal slots -- routine in a scene graph -- collide into ONE entry.
 
-`geom:nscale` is the only vertex mutation the package offers and therefore the only
-place that has to invalidate: it drops `%mesh`, `%wire` AND `user-data` (`geom:scale`
-is FUNCTIONAL and builds a new solid -- "Scaling" below). Any future vertex mutation
-must call `geom::%invalidate-mesh`.
+## Scaling and the package's verb convention
 
-`user-data` is a slot a consumer hangs its own state on -- a renderer keeps its GPU
-buffers there. **It is a slot because a hash table cannot key on a node at all.** The
-spike's reason was liveness (a hash of a node was exponential in the graph reachable
-from it) and that half is gone -- the work budget bounds it, so such a `gethash`
-RETURNS (`hash-tables.md`, 2026-08-29). What remains is correctness, and it is the
-worse half: `:test 'eq` is accepted and IGNORED, so a table compares its keys
-STRUCTURALLY (`.todo/012-hash-table-test-semantics.md`), and two sibling nodes with
-equal slots -- routine in a scene graph -- collide into ONE entry. A wrong answer, not
-a slow one. The slot would still be the right design after 012 lands (the cache lives
-with the thing it caches, and `detach` cannot orphan it), so nothing here changes then;
-only the comment's reason would shrink to that last sentence.
+`translate`/`rotate` ACCUMULATE onto a node's local transform; `place`/`reorient` SET it --
+POSE mutators, so plain verbs. Scaling rewrites a `solid`'s MODEL vertices, so it follows
+CL's functional/destructive convention. **The package RULE: a GEOMETRY operation builds by
+default and offers an `n`-spelling for in-place; a pose or graph mutator (`attach`,
+`detach`, `place`...) does neither.**
 
-## Scaling: the pose/geometry split, and the package's verb convention (todo-586, 2026-08-30)
-
-`translate` and `rotate` ACCUMULATE onto a node's local transform; `place` and
-`reorient` SET it. They are POSE mutators: they change where a node is, never what a
-solid is, and CL does not `n`-prefix such operations, so they stay plain verbs. Scaling
-is different in kind -- it rewrites a `solid`'s MODEL vertices -- so it follows CL's own
-functional/destructive convention (`reverse`/`nreverse`, `union`/`nunion`), and that
-convention is the package's RULE for future additions: a GEOMETRY operation builds by
-default and offers an `n`-spelling for in-place, a pose or graph mutator (`attach`,
-`detach`, `place`...) does neither.
-
-- **`geom:scale` is functional**, like the booleans beside it: a new, UNATTACHED root
-  solid carrying the scaled vertices, the facets, color and label, with
-  `(:scale s factor)` in its `history`. Parent, children and `user-data` are not
-  carried -- a solid already in a viewer wants `nscale`.
-- **`geom:nscale` is the in-place version** and the package's ONLY vertex mutation:
-  caches and `user-data` dropped, the same solid answered.
-- **The factor may be a number or a 3-vector/list.** The mesh is rebuilt from the
-  facets with a fresh Newell normal per triangle, so a non-uniform scale of a BREP
-  costs nothing extra once the cache is dropped.
-- **A mirroring factor (negative determinant -- an odd number of negative components)
-  FLIPS the facets**, reversing each loop so the winding stays counter-clockwise seen
-  from outside: mirroring is a real CAD operation (a left-hand part from a right-hand
-  one) and this is its only spelling in the package, so refusing it would be an
-  arbitrary limit, and answering an inside-out solid would be a bug. The pin is the
-  mesh normal of a mirrored box's `+x` face, which volume cannot see (the integral is
-  `abs`'d). A ZERO component would flatten the shell into a degenerate one and is
-  refused naming the function and the factor.
+- **`geom:scale` is functional**: a new UNATTACHED root solid with scaled vertices, the
+  facets, color and label, and `(:scale s factor)` in its `history`. Parent, children and
+  `user-data` are not carried.
+- **`geom:nscale` is in-place** and the package's ONLY vertex mutation.
+- The factor may be a number or a 3-vector/list; the mesh is rebuilt from the facets with a
+  fresh Newell normal per triangle.
+- **A mirroring factor (negative determinant -- an odd number of negative components) FLIPS
+  the facets**, reversing each loop so the winding stays outward. Volume cannot see this
+  (the integral is `abs`'d), so the pin is the mesh normal of a mirrored box's `+x` face. A
+  ZERO component is refused, naming the function and the factor.
 - **The transform stays RIGID -- no scale slot on `geom:transform` or `geom:node`,
-  settled.** A uniform scale would close mathematically (similarities form a group),
-  but `volume`, `centroid` and `surface-area` are computed from the MODEL-space mesh
-  and know nothing of the node's transform, so a scaled NODE would silently report its
-  unscaled measurements; the CSG path (`%world-polygons`), `%solid-bounds`, the
-  per-draw model uniform in `metal.lisp`/`scene.lisp` and `invert` would each need the
-  scale threaded through. This is a CAD-flavoured package -- a boundary representation
-  with booleans and real measurements -- and in CAD scaling changes the PART; the scene
-  graph is for placement.
+  settled.** `volume`, `centroid` and `surface-area` are computed from the MODEL-space mesh
+  and know nothing of the node's transform, so a scaled NODE would silently report unscaled
+  measurements; `%world-polygons`, `%solid-bounds`, the per-draw model uniform in
+  `metal.lisp`/`scene.lisp` and `invert` would each need the scale threaded through.
 
-Pinned by `GeomLibraryTest` (`scaleAnswersANewSolidAndLeavesTheOriginalUntouched`,
-`nscaleMutatesInPlaceAndInvalidatesBothCachesAndTheUserDataSlot`,
-`aScaleFactorMayBeAVectorOrAListForANonUniformScale`,
-`aMirroringFactorFlipsTheFacetsSoTheWindingStaysOutward`,
-`aZeroScaleFactorIsRefusedNamingIt`) and the `geom-scale-cross-backend` ci-spec case
-(all four backends).
+## The printed representation
 
-## The printed representation (todo-584, 2026-08-30)
+`defmethod print-object` on exactly TWO of the four classes:
 
-`geom.lisp` carries `defmethod print-object` on exactly TWO of its four classes:
+- **`geom:solid`** -- `#<GEOM:SOLID "b" 8 vertices 6 facets>`: the label when there is one
+  (prin1-quoted so it cannot be misread as a count) plus the two counts.
+- **`geom:node`** -- `#<GEOM:NODE 1 child>` / `#<GEOM:NODE 2 children>`: the child count
+  and NOTHING that walks the graph. `parent` and `children` point at each other, so after
+  `(geom:attach a b)` the default renderer recursed into a `StackOverflowError`. The
+  renderer's cycle guard (`.kb/pretty-printer.md`) makes that finite now, but `#` markers
+  are a fallback, not a representation.
+- **`geom:transform` and `geom:bounds` deliberately have NO method**: their slots ARE the
+  value, they hold no cache, they cannot cycle.
 
-- **`geom:solid`** -- `#<GEOM:SOLID "b" 8 vertices 6 facets>`: the label when there is
-  one (prin1-quoted, so it cannot be misread as a count), then the two counts that say
-  what the solid is. The default rendering was 520 characters for a box and 2,180 for a
-  cylinder (measured 2026-08-30, the todo's numbers confirmed): every slot, the whole
-  `:VERTICES` array, the full facet list, and -- once built -- 18 floats per triangle of
-  `:MESH-CACHE` plus a renderer's GPU handles in `:USER-DATA`.
-- **`geom:node`** -- `#<GEOM:NODE 1 child>` / `#<GEOM:NODE 2 children>`: the child
-  count, and NOTHING that walks the graph. This is the correctness half, not the
-  cosmetic one: `parent` and `children` point at each other, so after `(geom:attach a
-  b)` the default renderer recursed the cycle into a `StackOverflowError` -- an attached
-  node (every solid in a scene) could not be printed at all. The default renderer's own
-  cycle guard (`.kb/pretty-printer.md`, "A cyclic instance graph") now makes that
-  finite rather than fatal, but `#` markers are a fallback, not a representation; the
-  method is what a caller should see.
-- **`geom:transform` and `geom:bounds` deliberately have NO method.** Their slots ARE
-  the value -- a rigid motion is its 12 numbers, a bounds its two corner points -- they
-  hold no cache, and they cannot cycle (read-only slots, no node references), so the
-  full default rendering is the honest print and a method would only hide it.
+Both use `print-unreadable-object :type t`, so `princ` drops the package qualifier
+(`.kb/clos.md`). A `defmethod print-object` in a spliced library turns on the printer route
+(`printObjectTags`, `.kb/clos.md`) for EVERY program that splices geom, on all three
+compile backends (+9-13%); a program that does NOT reference geom is byte-identical.
 
-Both methods use `print-unreadable-object :type t`, so `princ` drops the package
-qualifier exactly as every other typed `#<...>` does (`.kb/clos.md`).
+**Ordering seam:** the printing operators route BEFORE evaluating the argument, so the first
+`(print (geom:box ...))` of a session must load geom first -- `LispEvaluator.referencesGeom`,
+the twin of the torch pre-load beside it (torch and geom are the only lazily loaded
+libraries with `print-object` methods).
 
-**The cost, measured 2026-08-30** (`(print (geom:volume (geom:box 10)))`, before ->
-after): `.class` 121,902 -> 137,123 (+15,221 B, +12.5%); `.wasm` (Preview 1) 130,351 ->
-141,841 (+11,490 B, +8.8%). A `defmethod print-object` in the spliced library turns on
-the printer route (`printObjectTags`, `.kb/clos.md`) for EVERY program that splices
-geom, on all three compile backends -- that delta is the `%print-object-str` pair, the
-dispatcher and the two methods. Judged payable: it buys every geom program a readable
-solid and a printable scene graph, on an artifact already >120 KB. A program that does
-NOT reference geom is byte-identical to a pre-change build (measured on
-`(print (+ 1 2))` and on `(defstruct pt x y)`-plus-print, whose only delta is the
-~130-175 B cycle guard the pretty-printer file owns). Pinned by
-`GeomLibraryTest.aSolidPrintsItsLabelAndItsTwoCounts` /
-`aNodeInASceneGraphPrintsItsChildCountInsteadOfOverflowingTheStack` /
-`anAttachedSolidPrintsToo` / `aTransformAndABoundsStillPrintTheirSlots` and the
-`geom-print-object-cross-backend` ci-spec case (all four backends, byte-identical).
+## Reading a model file
 
-The interpreter's lazy load has one ordering seam here: the printing operators take
-their routing decision BEFORE evaluating the argument, so the first
-`(print (geom:box ...))` of a session must load geom first --
-`LispEvaluator.referencesGeom`, the twin of the torch pre-load beside it (torch and
-geom are the only lazily loaded libraries with `print-object` methods).
-
-## Reading a model file (2026-08-30; PLY and glTF/GLB 2026-08-31)
-
-`geom:read-obj`, `geom:read-stl`, `geom:read-ply`, `geom:read-gltf` and the
-dispatcher `geom:read-model` answer a `geom:solid` built through
-`geom::%build-solid` -- the other half of `geom:polyhedron`'s own sentence, "for a
-mesh that came from a file" -- except `read-gltf`, which answers the LIST of solids
-its scene poses (the seam's list-answering arm; a single-mesh file is a list of
-one, and `read-model` passes the shape through). They are the only members of the
-package that open a file, and the reason they belong HERE rather than in a package
-of their own is that everything they answer is this package's type: a
-`mesh:read-obj` would be a package whose entire vocabulary is geom's.
+`geom:read-obj`, `read-stl`, `read-ply`, `read-gltf` and the dispatcher `geom:read-model`
+answer a `geom:solid` built through `geom::%build-solid` -- except `read-gltf`, which
+answers the LIST of solids its scene poses (`read-model` passes the shape through).
 
 ### The seam a new format plugs into
 
-Stated before the second reader was written; the fourth and fifth (PLY, glTF) are
-what proved it -- each landed as exactly the four edits below, and the only thing
-the seam did not carry was OUTSIDE it (the `JsonLibrary` splice order, in the
-wiring table above):
+- **A reader is `(path color label) -> a geom:solid`, or a LIST of them.** A node HIERARCHY
+  rides inside a list: the solids are attached to a shared `geom:node`, so each one's
+  `world-transform` carries its parents and the flat list still draws right.
+- **The one internal representation is `geom::%build-solid`'s arguments**: points, index
+  loops, a colour, a label. NOT rich enough for glTF's per-primitive materials (one RGB per
+  solid), and no per-vertex normals, texture coordinates or per-vertex colours survive it --
+  facet normals are Newell's. A reader reads those records past.
+- **Numbers** come out of text through `geom::%scan-number`, out of binary through
+  `read-sequence` over a packed buffer.
+- **Dispatch is a `case`, deliberately not a table**: a Lisp-level registry would make every
+  reader reachable from the dispatcher, so a program reading one format would carry them
+  all; a `case` keeps `LibraryDefunPruner` able to see which arm is reachable.
+- **Adding a format is four localized edits**: one reader defun, one `geom::%model-format`
+  clause, one `geom:read-model` case arm, one `PackageRegistry.GEOM_FUNCTIONS` entry.
 
-- **A reader is `(path color label) -> a geom:solid`, or a LIST of them** for a format
-  carrying several meshes. A list is what `scene:add` already splices and what
-  `geom:triad` already answers, and a NODE HIERARCHY rides inside one: the solids are
-  attached to a shared `geom:node`, so each one's `world-transform` carries its
-  parents and the flat list still draws right. That is the mapping glTF's node tree
-  took ("glTF" below), unchanged from this sentence as written before it landed.
-- **The one internal representation is `geom::%build-solid`'s arguments**: a list of
-  points, a list of index loops, a colour and a label. It is rich enough for OBJ, STL
-  and PLY as they stand. It is NOT rich enough for glTF's per-primitive materials
-  (one RGB per solid is all there is), and no format's per-vertex normals, texture
-  coordinates or per-vertex colours survive it -- `geom` has no slot for any of them
-  and facet normals are Newell's, computed from the geometry. A reader reads those
-  records past rather than half-keeping them, and that is a decision, not an omission.
-- **Numbers** come out of text through `geom::%scan-number` and out of binary through
-  `read-sequence` over a packed buffer. Nothing else is shared and nothing else needs
-  to be.
-- **Dispatch is a `case`, deliberately not a table.** A Lisp-level registry of reader
-  functions would make every reader reachable from the dispatcher, so a program
-  reading one format would carry them all; a `case` keeps `LibraryDefunPruner` able to
-  see which arm a program can reach. Five entries still do not earn a plugin
-  framework, and the pruning is measured: a `read-ply` program carries neither
-  `read-gltf` nor the JSON library
-  (`GeomLibraryTest.aProgramReadingOnePlyCarriesNeitherGltfNorJson`).
-- **Adding a format is four localized edits**: one reader defun, one
-  `geom::%model-format` clause, one `geom:read-model` case arm, and a
-  `PackageRegistry.GEOM_FUNCTIONS` entry for the public name.
+### How a format is decided
 
-### How a format is decided, and why the extension is last
+`geom::%model-format` sniffs the file's own bytes (one 512-byte read), falling back to the
+extension only where no content test can answer: opens with `glTF` -> `:glb`; opens with
+`ply` + a line break -> `:ply`; first token `solid` -> `:stl`; first token
+`v`/`vn`/`vt`/`f`/`g`/`o`/`s`/`usemtl`/`mtllib` -> `:obj`; first token opens with `{` ->
+`:gltf`; otherwise the extension.
 
-`geom::%model-format` sniffs the file's own bytes (one 512-byte read) and falls back
-to the extension only where no content test can answer:
+**A binary STL has no magic number at all**, so a binary `.stl` whose 80-byte header is not
+the word `solid` is named by its extension; `:format` overrides everything. What the
+extension NEVER decides is the ASCII/binary split -- both dialects are `.stl`. `:gltf` and
+`:glb` share `geom:read-gltf`, which re-sniffs the carrier. The file-level refusal is only
+"cannot tell what format"; each reader names what IT cannot carry.
 
-| test | answer |
+**The dialect test does not use `file-length`**, though it answers on all four backends now
+(`fd_filestat_get` is the twelfth preview1 import). Deciding the dialect from the file's
+SHAPE (an ASCII file opens with `solid` and carries `facet`/`endsolid` on its next line) is
+one code path on all four and survives files the length test does not (`trimesh`'s
+`unit_cube.STL` is BINARY with `solid unit_cube` in its header). `read-sequence`'s
+short-fill answer replaces `file-length` for "how much did I get".
+
+### Parsing costs
+
+**Text parsing has no faster spelling available.** Per float on the interpreter:
+`read-from-string` 0.68 us, a parenthesised line through the reader 1.85 us, a hand-rolled
+`char-code` scan 20 us. The reader is 30x faster and UNUSABLE: it answers the SYMBOL
+`|1.30E-2|` for exponent notation on the WASM backends, chokes on `#` and `|`, reads `739/1`
+as a ratio, and drags the runtime reader into compiled output. `parse-integer` is no help
+(5.2 us a call). So the scanner is `char-code`, like `json.lisp`'s.
+
+Two interpreter primitives are pathologically slow, neither on the readers' path and neither
+investigated: `position` on a string is **27.6 us a call** against `subseq`'s 0.5 us and
+`char`'s 0.3 us; `parse-integer` is 5.2 us. Both look like generic-sequence dispatch in Lisp
+rather than a Java builtin.
+
+### The Java kernels (interpreter and JVM backend)
+
+Four file-scaled members are accelerated on both:
+
+| member | what the kernel does |
 |---|---|
-| opens with `glTF` | `:glb` |
-| opens with `ply` + a line break | `:ply` |
-| first token `solid` | `:stl` |
-| first token `v`/`vn`/`vt`/`f`/`g`/`o`/`s`/`usemtl`/`mtllib` | `:obj` |
-| first token opens with `{` | `:gltf` |
-| otherwise | the extension |
-
-**A binary STL has no magic number at all** -- a wart of the format -- so a binary
-`.stl` whose 80-byte header is not the word `solid` is named by its extension, and
-`:format` overrides everything. What the extension NEVER decides is the ASCII/binary
-split, and that is the split that matters: both dialects are `.stl`.
-
-All five answers are read now (`:gltf` and `:glb` share `geom:read-gltf`, which
-re-sniffs the carrier itself). What survives of the refuse-by-name rule is
-per-reader: the file-level refusal is only "cannot tell what format", and each
-reader names what IT cannot carry ("PLY" and "glTF" below).
-
-### The dialect test does not use `file-length`
-
-It was written that way because it could not: `file-length` answered nil on both WASM
-backends, so the classic STL test (the exact `84 + 50n` length arithmetic) classified a
-file on the JVM and TRAPPED on wasm one call later, in `min`. **That gap is closed since
-2026-08-31** (todo-589: `fd_filestat_get` is the twelfth preview1 import, and
-`file-length` answers on all four) -- so the constraint is gone, but the design stays on
-its own merits: deciding the dialect from the file's SHAPE (an ASCII file opens with
-`solid` and carries `facet`/`endsolid` on its next line) is one code path, identical on
-all four backends, and it also survives the file the length test does not
-(`trimesh`'s own `unit_cube.STL` is BINARY with `solid unit_cube` in its header).
-`read-sequence`'s short-fill answer is what replaces `file-length` for "how much did I
-get", and it is identical on all four (verified 2026-08-30).
-
-### Measured (2026-08-30, Apple M4 Max)
-
-Real files: the Stanford bunny (`bunny-big.obj`, 35,947 v / 69,451 f, 2.4 MB), the
-armadillo (49,990 v / 99,976 f, 4.6 MB OBJ and the same mesh as a 5.0 MB binary STL),
-`trimesh`'s `featuretype.STL` (3,476 triangles) and the Utah teapot.
-
-| stage | interpreter | JVM `.class` | wasm preview 1 |
-|---|---|---|---|
-| armadillo.obj parse (150k lines, 450k numbers) | 8,944 ms | **81 ms** | -- |
-| bunny-big.obj parse (105k lines, 316k numbers) | 5,315 ms | 39 ms | 2,679 ms |
-| `geom:polyhedron` of 50k points / 100k facets | 148 ms | 22 ms | -- |
-| armadillo.stl binary read (100k triangles) | 498 ms | -- | -- |
-| bun_zipper.ply ASCII read (3.0 MB, 35,947 v / 69,451 f) [2026-08-31] | 7,314 ms | 243 ms | 3,751 ms |
-| cycloidal.ply binary read (1.08 MB, 21,384 v / 43,368 f) [2026-08-31] | 1,163 ms | 59 ms | 132 ms |
-| Duck.glb read (120 KB, 2,399 v / 4,212 f) [2026-08-31] | 121 ms | 14 ms | 2 ms |
-| Duck as base64-embedded .gltf (138 KB) [2026-08-31] | 985 ms | 81 ms | 22 ms |
-| `geom:mesh` of 100k triangles (PRE-EXISTING) | ~5,200 ms | ~67 ms | -- |
-| `geom:volume` of 100k triangles | 606 ms | 28 ms | -- |
-
-Three things those numbers say:
-
-- **The interpreter is the slow backend and it is still usable**: 9 s to load the
-  biggest test file in the corpus, once, at load time. Compiled, it is 170 ms.
-- **`geom:mesh` costs as much as parsing does** (~52 us a triangle on the
-  interpreter). The loader did not introduce that and cannot fix it; it is the price
-  of the cached mesh the whole renderer rests on, and it is paid once.
-- **Rendering a loaded mesh is unaffected**: a 69,451-triangle bunny in
-  `scene:offscreen` costs 1,075 ms for the frame that uploads the GPU buffers and
-  **7 ms** for every frame after it. "No triangle is touched by Lisp during a frame"
-  holds at 69k triangles exactly as it does at 13.8k.
-
-**Text parsing has no faster spelling available.** Measured per float on the
-interpreter: `read-from-string` 0.68 us, a whole parenthesised line through the reader
-1.85 us, a hand-rolled `char-code` scan 20 us. The reader is 30x faster and is
-UNUSABLE: it answers the SYMBOL `|1.30E-2|` for exponent notation on the WASM
-backends, chokes on `#` and `|`, and reads `739/1` as a ratio -- and `json.lisp`
-already declines it for the second reason, that it drags the runtime reader into
-compiled output. `parse-integer` is no help either (5.2 us a call). So the scanner is
-`char-code`, like `json.lisp`'s -- and since 2026-08-31 the interpreter does not run
-that scan at all for OBJ ("The interpreter's native kernels" below).
-
-**Two interpreter primitives are pathologically slow and were measured on the way
-past**: `position` on a string is **27.6 us a call** (a 46-character string!) against
-`subseq`'s 0.5 us and `char`'s 0.3 us, and `parse-integer` is 5.2 us. Both look like
-generic-sequence dispatch in Lisp rather than a Java builtin. Neither is on the
-readers' path any more, and neither has been investigated.
-
-### The interpreter's native kernels (2026-08-31)
-
-A user pointed a 155 MB scanned hand (1,062,622 v / 2,123,160 f) at the viewer: the
-compiled `.class` had it on screen in seconds and the interpreter had not finished
-after several minutes. Measured afterwards, the interpreter's load was **9 minutes**,
-and the scan was only 62% of it -- `mesh`, `wireframe`, `bounds` and the model-space
-extent the renderer sizes an axis triad by are four more loops that scale with the
-FILE, and none of the five had a faster spelling available IN LISP (see "Text parsing
-has no faster spelling available" above, which measured that). So `eval/GeomKernels`
-puts a Java native over them when `geom.lisp` loads.
-
-The mechanism is `LinalgSimd`'s interception seam verbatim (`.kb/linalg-simd.md`):
-`Environment.defineFunction` over the defun just evaluated, each native a PARTIAL
-function answering Java `null` for an input it declines, the wrapper then applying the
-defun it captured. What is accelerated:
-
-| member | what the native does |
-|---|---|
-| `geom:read-obj` | the whole line walk and number scan, packing straight into the `(n 3)` `single-float` array |
+| `geom:read-obj` | the whole line walk and number scan, packing into the `(n 3)` `single-float` array |
 | `geom:mesh` | the fan triangulation and Newell's normal per facet |
 | `geom:wireframe` | the edge walk, over an open-addressing `long` set instead of an `equal` hash table of conses |
 | `geom::%vertex-extremes` | the posed min/max, without materializing the transformed array |
 
-**It is ALWAYS ON, and `--simd` is not the precedent for that.** `--blas` and `--simd`
-are opt-in because a vendor gemm and a lane reduction REASSOCIATE, so which library is
-installed becomes part of the answer. Nothing here reassociates: every arithmetic step
-is the defun's step transcribed -- `%scan-number`'s mantissa accumulated in `double`
-and scaled once by `Math.pow` (which is what the interpreter's `expt` is for a float
-base), Newell's normal accumulated in `double` over widened `f32` reads, `%unit`'s
-normalization through the same narrow-then-widen chain `emap` / `sum` / `mul` puts it
-through, and the extremes walk narrowing exactly where `%la-matmul` and `%la-bcast`
-narrow. So there is no input on which installing them changes an answer, and a flag
-would only be a way to get the slow one.
+**Interpreter:** `eval/GeomKernels` uses `LinalgSimd`'s interception seam verbatim
+(`.kb/linalg-simd.md`) -- `Environment.defineFunction` over the defun just evaluated, each
+native a PARTIAL function answering Java `null` for an input it declines, the wrapper then
+applying the captured defun.
 
-That claim is the whole licence for the design, so it is pinned twice: `GeomKernelsTest`
-runs every fixture down both paths -- natives installed, and `setGeomKernels(false)` --
-and compares the PRINTED values, which render a packed array element for element; and
-the `geom-read-model-cross-backend` ci-spec case still pins this interpreter against the
-JVM and both WASM backends, none of which has a native at all. **A native that rounds
-differently is a bug, not a tolerance.**
+**JVM:** `codegen/jvm/JvmGeomKernelCompiler` is the `geom:` sibling of
+`JvmLinalgKernelCompiler` (`.kb/linalg-blas.md`) -- a CALL-SITE compiler that evaluates the
+argument forms once into temps, calls into an embedded bridge (`JvmGeomTemplate`, injected
+the way `JvmBlasTemplate` is, `.kb/template-class-embedding.md`) and falls through an
+`IFNONNULL` to the spliced defun over the same temps.
 
-Three `geom.lisp` splits made the seam possible, and each is a split rather than a
-rewrite -- a seam has to be a whole function to be replaceable:
+**Both are ALWAYS ON, and `--simd` is not the precedent.** `--blas`/`--simd` are opt-in
+because a vendor gemm and a lane reduction REASSOCIATE. Nothing here reassociates: every
+step is the defun's step transcribed -- `%scan-number`'s mantissa accumulated in `double`
+and scaled once by `Math.pow`, Newell's normal accumulated in `double` over widened `f32`
+reads, `%unit`'s normalization through the same narrow-then-widen chain `emap`/`sum`/`mul`
+uses, the extremes walk narrowing exactly where `%la-matmul` and `%la-bcast` narrow. **A
+kernel that rounds differently is a bug, not a tolerance.** Both have a
+`setGeomKernels(false)` oracle switch (`LispEvaluator`, `JvmLispCompiler`, package-private)
+so `GeomKernelsTest` and `JvmGeomKernelCompilerTest` run every fixture down both paths and
+compare PRINTED values; `geom-read-model-cross-backend` pins them against the two WASM
+backends, which have no kernel.
 
-- **`geom::%solid-of-vertices`** -- the half of `%build-solid` past the packing, taking
-  a vertex ARRAY. A reader whose numbers came out of text one at a time never needed to
-  build a million three-element lists for `linalg:from-list` to walk back. That split
-  alone took `read-obj` on the hand from 4.2 s to 0.7 s.
-- **`geom::%vertex-extremes`** -- `%solid-bounds`'s `let*`, which posed every vertex
-  through `linalg:matmul` into a 12 MB array read once and thrown away.
-- **`geom::%model-extent`** -- the diagonal of the box a solid's own vertices span, with
-  no transform. `scene.lisp`'s `%gpu-buffers` calls it instead of the
-  `linalg:amax`/`amin` pair it used to fold the columns with (4.2 s on the hand, for a
-  number that sizes an axis triad). It is the ONE `geom::` internal `scene.lisp`
-  reaches for, and it is there because the public bounds API is world-space only.
+Three `geom.lisp` splits made the seam possible (a seam has to be a whole function to be
+replaceable):
 
-Measured on the hand, interpreter, Apple M4 Max (2026-08-31):
+- **`geom::%solid-of-vertices`** -- the half of `%build-solid` past the packing, taking a
+  vertex ARRAY, so a reader need not build a million three-element lists for
+  `linalg:from-list` to walk back.
+- **`geom::%vertex-extremes`** -- `%solid-bounds`'s `let*`, which posed every vertex through
+  `linalg:matmul` into an array read once and thrown away.
+- **`geom::%model-extent`** -- the diagonal of the box a solid's own vertices span, no
+  transform. `scene.lisp`'s `%gpu-buffers` calls it instead of the `linalg:amax`/`amin`
+  pair; it is the ONE `geom::` internal `scene.lisp` reaches for, because the public bounds
+  API is world-space only.
 
-| stage | defuns alone | with the natives | `-o Bench.class` |
-|---|---|---|---|
-| `geom:read-obj` (4.3M lines, 1.06M v, 2.12M f) | 333,707 ms | **724 ms** | 3,542 ms |
-| `geom:mesh` (2.12M facets) | 121,036 ms | **137 ms** | 902 ms |
-| `geom:wireframe` | 28,900 ms | **213 ms** | 1,157 ms |
-| `geom:bounds` | 26,242 ms | **16 ms** | 665 ms |
-| `geom::%model-extent` | 29,692 ms | **5 ms** | 539 ms |
-| **total** | **539,577 ms** | **1,193 ms** | **6,805 ms** |
+On a 155 MB scanned hand (1.06M v / 2.12M f), read+mesh+wireframe+bounds+extent goes
+539,577 ms -> 1,193 ms interpreted and 6,999 ms -> 1,277 ms compiled, all paths printing the
+same bounds to the last digit. NOT accelerated: `read-stl`, `read-ply`, `read-gltf` (the
+ASCII PLY is 7.3 s for a 3 MB file and is the next one worth doing) and every modelling verb.
 
-All three columns print the same bounds to the last digit
-(`#f(-82.854 -42.515068 -14.710137)` / `#f(56.905193 33.82035 228.78455)`), which is
-the bit-identity claim measured on a real file rather than a fixture.
+JVM-only mechanics:
 
-**The last column WAS the finding, and it inverted this file's own premise for a day.**
-"The JVM backend is where a big model gets loaded fast" was true when both backends ran
-the same Lisp; it stopped being true the moment the interpreter got these natives (5.7x
-faster than the compiled class), because the JVM backend still compiled `%scan-number`'s
-character loop and `%facet-normal`'s Newell sum into bytecode and ran them a few hundred
-million times. **That is closed** -- the same four kernels now have a JVM call-site
-compiler, "The JVM backend's kernels" below.
-
-End to end, which is the thing that was actually asked for: the hand in a `scene:offscreen`
-viewer -- read, mesh, wireframe, bounds, extent, the GPU uploads and the first frame --
-is **1,920 ms** from a cold `java -jar`, and every frame after it is 26 ms. It renders
-(a hand on its plinth, over the grid); "no triangle is touched by Lisp during a frame"
-holds at 2.1M triangles exactly as it does at 69k.
-
-What is NOT accelerated: `read-stl`, `read-ply`, `read-gltf` (todo-597 -- the ASCII PLY
-is 7.3 s for a 3 MB file and is the next one worth doing), and every modelling verb.
-Those stay pure `geom.lisp` on all four backends. The natives cover the FILE-scaled
-loops and nothing else, which is why this is four `define` calls and not a Java geom
-library.
-
-### The JVM backend's kernels (2026-08-31)
-
-The same four members, the same transcription, one backend over. `codegen/jvm/
-JvmGeomKernelCompiler` is the `geom:` sibling of `JvmLinalgKernelCompiler`
-(`.kb/linalg-blas.md`): a CALL-SITE compiler that evaluates the argument forms once into
-temps, calls into an embedded bridge (`JvmGeomTemplate`, injected the way
-`JvmBlasTemplate` is -- `.kb/template-class-embedding.md`) and falls through an
-`IFNONNULL` to the spliced `geom.lisp` defun over the same temps. Measured on the same
-155 MB hand, same machine, one `defun` per row with an untouched `mapcar` control row
-before and after:
-
-| stage | interpreter (natives) | `-o Bench.class` BEFORE | `-o Bench.class` AFTER |
-|---|---|---|---|
-| `geom:read-obj` | 695 ms | 4,074 ms | **737 ms** |
-| `geom:mesh` | 281 ms | 921 ms | **282 ms** |
-| `geom:wireframe` | 224 ms | 1,307 ms | **232 ms** |
-| `geom:bounds` | 20 ms | 459 ms | **16 ms** |
-| `geom::%model-extent` | 12 ms | 238 ms | **10 ms** |
-| **total** | **1,232 ms** | **6,999 ms** | **1,277 ms** |
-| control (`mapcar` over 300k) | 334 / 203 ms | 18 / 9 ms | 21 / 9 ms |
-
-**5.5x, and the two backends now land on the same number** -- which is the honest end
-state: both run the same Java loops over the same bytes, so the gap that is left is the
-gap between an interpreted `defvar` and a static field. The control row is what says the
-measurement is the kernels' and not the run's.
-
-Three things had to be decided, and they are the item's whole content:
-
-- **The gate is the CALL SITE, not the splice.** There is no flag here (same licence as
-  the interpreter's natives: nothing reassociates), so the only thing keeping the bridge
-  out of a program that does not need it is `JvmLispCompiler`'s scan of the ALREADY-PRUNED
-  program for `JvmGeomKernelCompiler.members()`. Measured against `(print (geom:volume
-  (geom:box 10)))`: `.class` 141,450 -> 158,245 (**+16,795 B, +11.9%**), because that
-  program does call `geom:mesh`. A program that calls none of them is **byte-identical**
-  -- verified on `(print (+ 1 2))` and on `(defstruct pt x y)`-plus-print. `--dynamic` is
-  excluded outright: it
-  skips the pruner (so the scan would see the whole spliced library) and its point is that
-  a call site honours a definition replaced at run time, which a kernel over the defun
-  would not -- a `--dynamic` geom program is byte-identical too.
-- **All four members arm the bridge since todo-601 (2026-09-02).**
-  `geom::%vertex-extremes` used to be accelerated without arming anything, because
-  `LibraryDefunPruner` counted a `defclass` header's own name as a function reference and
-  `geom:bounds` is both a `defclass` and a `defun`: the class kept the function, which kept
-  `geom::%solid-bounds`, which kept `geom::%vertex-extremes` -- in EVERY program that
-  spliced geom, `(print (geom:vec3 1 2 3))` included -- so a gate naming it would have been
-  a gate on the splice. The pruner now walks a class header by POSITION
-  (`.kb/library-defun-pruning.md`, "A class header is not a call site"), so
-  `%vertex-extremes` survives pruning only where something calls it, and it is a call site
-  like the other three. What that buys: `(print (geom:bounds (geom:box 10)))`, which used
-  to get no acceleration at all, now carries the bridge -- `.class` 155,877 -> 172,676
-  (+16,799 B), the same bridge `geom:mesh` pays for. `(print (geom:vec3 1 2 3))` still
-  carries none.
-- **Bit-identity is pinned against the DEFUN, in the same artifact.** `JvmLispCompiler`
-  gained a package-private `setGeomKernels(false)` -- the interpreter's `LispEvaluator`
-  twin, and for the same reason: it is the oracle
-  `codegen/jvm/JvmGeomKernelCompilerTest` compiles every fixture against, running both
-  classes and comparing the PRINTED values. `ci-spec.yaml`'s
-  `geom-read-model-cross-backend` needed **no new expectation**, and the teapot, both
-  bunnies and spot read on the interpreter, the JVM before and the JVM after print
-  identical volume, area, centroid, mesh head, wireframe head, bounds and model extent.
-
-Two mechanics worth knowing before touching it:
-
+- **The gate is the CALL SITE, not the splice**: `JvmLispCompiler` scans the ALREADY-PRUNED
+  program for `JvmGeomKernelCompiler.members()` (+16.8 KB where it arms; a program calling
+  none of them is byte-identical). **`--dynamic` is excluded outright** -- it skips the
+  pruner, and its point is that a call site honours a definition replaced at run time, which
+  a kernel over the defun would not.
+- **All four members arm the bridge.** `geom::%vertex-extremes` used to be accelerated
+  without arming anything, because `LibraryDefunPruner` counted a `defclass` header's own
+  name as a function reference and `geom:bounds` is both a `defclass` and a `defun`; the
+  pruner now walks a class header by POSITION (`.kb/library-defun-pruning.md`).
 - **`geom:read-obj` is the one member whose accelerated answer is not the member's answer.**
   The bridge scans the file into the packed `(n 3)` array and the index loops and hands
-  those to the LISP `geom::%solid-of-vertices` -- the colour default, the identity
-  transform and the `make-instance` stay in Lisp, exactly as `eval/GeomKernels` leaves
-  them. The `:color` / `:label` tail is built into a rest list ONCE and read by whichever
-  of the two variadic defuns runs, which works because the reader and the builder declare
-  the same two keywords; a tail that is not those literal keywords declines at COMPILE
-  time so the defun's own lambda list still signals about it.
-- **The bridge can decline to exist.** A template carries the project's class version, so
-  a JRE older than the toolchain would answer `UnsupportedClassVersionError` from
-  `Lookup.defineClass` -- which for a flagless acceleration would be a program that used to
-  run and now does not. `_geomInit` catches `LinkageError`, leaves `_geomAvailable` false
-  and says nothing (`--simd`'s degrade minus the warning: there is no flag for the user to
-  act on), and every call site tests `_geomReady()` before resolving a reference into the
-  bridge. So the compiled output's JRE floor is unchanged.
+  those to the LISP `geom::%solid-of-vertices`; the colour default, the identity transform
+  and the `make-instance` stay in Lisp. The `:color`/`:label` tail is built into a rest list
+  ONCE and read by whichever variadic defun runs, which works because the reader and the
+  builder declare the same two keywords; a tail that is not those literal keywords declines
+  at COMPILE time so the defun's own lambda list still signals about it.
+- **The bridge can decline to exist.** A template carries the project's class version, so an
+  older JRE would answer `UnsupportedClassVersionError` from `Lookup.defineClass`.
+  `_geomInit` catches `LinkageError`, leaves `_geomAvailable` false and says nothing, and
+  every call site tests `_geomReady()` first. The compiled output's JRE floor is unchanged.
 
-WASM is still the same argument again and still further off (no `float[]` to pack into
-without the GC array types, and Preview 1 reads through its own stream layer); the JVM
-shape does not carry over as it stands.
+WASM has no equivalent (no `float[]` to pack into without the GC array types; Preview 1 reads
+through its own stream layer).
 
-### What a real file taught, none of it a bug in the reader
+### What a real file taught
 
-- **A file carries its own units.** The Stanford bunny is 0.2 across (metres); a
-  printable part is 200 (millimetres). `scene:fit` had a floor of 100 world units on
-  the camera distance, the projection had `(max d 100.0)` in its frustum and the
-  scroll clamp was `10 .. 200000` -- three absolute constants in a package that has no
-  unit of length -- so a metre-scale model rendered as **zero pixels**. All three are
-  now relative (`SceneOffscreenRenderTest.fitFramesASolidWhoseUnitsAreMetresRather
-  ShrinkingItToADot` renders a box at four scales three decades apart). `scene:grid`'s
-  600-unit default extent is NOT one of them: it is a documented keyword the caller
-  sets, and `:extent nil` drops it.
-- **`:solid` is the shading a dense mesh wants.** The default `:both` draws the
-  wireframe over the triangles, which at 69,451 of them is a dark stipple.
-- **Winding is the file's own.** `geom:volume` is the test, as it is for every
-  constructor; a negative volume means the file is wound clockwise seen from outside,
-  and the reader does not silently fix it.
-- **Cross-format agreement is the parse's oracle.** The teapot read from an OBJ and
-  from an ASCII STL answer the same volume (25.770105759541867) and area to all 17
-  digits, and the armadillo read from an OBJ and from a binary STL written by
-  `struct.pack('<f')` answer the same 237926.39344717923 -- so the `char-code` scanner
-  produces the correctly-rounded float32 for all 450,000 numbers in that file.
+- **A file carries its own units.** The Stanford bunny is 0.2 across (metres); a printable
+  part is 200 (millimetres). `scene:fit`'s 100-world-unit camera floor, the projection's
+  `(max d 100.0)` frustum and the `10 .. 200000` scroll clamp made a metre-scale model
+  render as zero pixels; all three are now relative. `scene:grid`'s 600-unit default extent
+  is NOT one of them -- a documented keyword, and `:extent nil` drops it.
+- **`:solid` is the shading a dense mesh wants**; the default `:both` draws the wireframe
+  over the triangles, a dark stipple at 69,451 of them.
+- **Winding is the file's own.** A negative `geom:volume` means clockwise-from-outside; the
+  reader does not silently fix it.
+- **Cross-format agreement is the parse's oracle**: the teapot from an OBJ and from an ASCII
+  STL answer the same volume (25.770105759541867) and area to all 17 digits; the armadillo
+  from an OBJ and from a binary STL answer the same 237926.39344717923.
 
-### PLY (2026-08-31)
+### PLY
 
-`geom:read-ply`, both `ascii` and `binary_little_endian`; `binary_big_endian` is
-refused BY NAME, because the packed `read-sequence` path is little-endian by
-contract (`binary-sequence-io.md`) and mis-reading every float would be strictly
-worse. The header names every element, its count and every property with its
-type, so the body is walked BY THE HEADER: `x`/`y`/`z` come from wherever the
-vertex element put them, and everything else -- the bunny's `confidence` and
-`intensity`, cycloidal's per-vertex AND per-face uchar colours -- is read past by
-its declared width, never guessed. A file with no `face` element (the bunny's raw
-range scans) answers its vertices with no facets.
+`geom:read-ply` reads `ascii` and `binary_little_endian`; `binary_big_endian` is refused BY
+NAME, because the packed `read-sequence` path is little-endian by contract
+(`binary-sequence-io.md`). The header names every element, count and property with its type,
+so the body is walked BY THE HEADER: `x`/`y`/`z` come from wherever the vertex element put
+them, everything else is read past by its declared width, never guessed. A file with no
+`face` element answers its vertices with no facets.
 
-A binary vertex block has three shapes, fastest first: all properties float32 ->
-ONE `read-sequence` of `count*k` floats, columns sliced (`bun_zipper`'s shape);
-float32 x y z FIRST with fixed-width extras -> one three-float read plus one skip
-per row (cycloidal's 15-byte stride); anything else -> property-by-property
-through `geom::%ply-scalar`, which folds a signed value's two's complement back
-out of the unsigned packed read. A face is two transfers (one count, one bulk
-index read), the STL reader's shape. Skipping is `geom::%skip-bytes` -- bounded
-reads through a scratch buffer, because `file-position` answers nil by design on
-this build, the same reason the STL dialect test cannot use `file-length`.
+A binary vertex block has three shapes, fastest first: all properties float32 -> ONE
+`read-sequence` of `count*k` floats, columns sliced; float32 x y z FIRST with fixed-width
+extras -> one three-float read plus one skip per row; anything else -> property-by-property
+through `geom::%ply-scalar`, which folds a signed value's two's complement back out of the
+unsigned packed read. A face is two transfers (one count, one bulk index read). Skipping is
+`geom::%skip-bytes` -- bounded reads through a scratch buffer, because `file-position`
+answers nil by design on this build.
 
-### glTF 2.0 / GLB (2026-08-31)
+### glTF 2.0 / GLB
 
-`geom:read-gltf`, both carriers: `.glb` (12-byte header, JSON chunk, BIN chunk)
-and `.gltf` with `.bin` files beside it or base64 `data:` uris; a remote uri is
-refused (a file reader does not fetch). The JSON goes through
-`rontolisp:json-parse` -- which is why `JsonLibrary.process` moved OUTSIDE
-`GeomLibrary.process` on both compile paths (wiring table above). Buffers are
-exactly what the packed `read-sequence` was built for: a tight accessor is one
-native transfer (POSITION, indices), a strided one (interleaved attributes; the
-Duck) is a three-float read plus a skip per vertex.
+`geom:read-gltf`, both carriers: `.glb` (12-byte header, JSON chunk, BIN chunk) and `.gltf`
+with `.bin` files beside it or base64 `data:` uris; a remote uri is refused. The JSON goes
+through `rontolisp:json-parse` -- why `JsonLibrary.process` sits OUTSIDE
+`GeomLibrary.process`. A tight accessor is one native `read-sequence` transfer; a strided
+one is a three-float read plus a skip per vertex.
 
-The node hierarchy maps as the seam said it would: one glTF node -> one
-`geom:node` posed by its TRS or matrix, one primitive -> one `geom:solid`
-(coloured by `baseColorFactor`, labelled by mesh/node name) attached under its
-node, the answer the FLAT LIST under one shared root. **A node's scale is baked
-into vertices with `geom:nscale`** -- geometry, not pose ("Scaling" above) --
-accumulated down the tree with each child's translation multiplied by the product
-above it. That composition is EXACT for uniform scales; a non-uniform scale above
-a rotated child would shear, which no rigid transform can carry, so it is refused
-by name -- as is a node MATRIX whose columns are not orthogonal once the column
-norms are out (shear again); a mirroring matrix moves its flip into a negative z
-scale, which `nscale` carries by reversing the facets. Refused by name rather
-than half-read, per the todo's list: `mode` other than 4, sparse accessors, any
-`extensionsRequired` entry (Draco/meshopt arrive this way), skins, animations,
-glTF 1.x. Verified on the Khronos corpus: Box.glb (volume exactly 1.0), Duck in
-all three carriers (identical 1.1957991851442398, the 0.01 node scale baked so
-the extent is 1.65 not 165), SimpleMeshes' two nodes landing side by side --
-each rendered through `scene:offscreen` and looked at.
+One glTF node -> one `geom:node` posed by its TRS or matrix; one primitive -> one
+`geom:solid` (coloured by `baseColorFactor`, labelled by mesh/node name) attached under its
+node; the answer is the FLAT LIST under one shared root. **A node's scale is baked into
+vertices with `geom:nscale`** -- geometry, not pose -- accumulated down the tree with each
+child's translation multiplied by the product above it. EXACT for uniform scales; a
+non-uniform scale above a rotated child would shear and is refused by name, as is a node
+MATRIX whose columns are not orthogonal once the column norms are out. A mirroring matrix
+moves its flip into a negative z scale, which `nscale` carries by reversing the facets. Also
+refused by name rather than half-read: `mode` other than 4, sparse accessors, any
+`extensionsRequired` entry (Draco/meshopt arrive this way), skins, animations, glTF 1.x.
+Verified on the Khronos corpus (Box.glb volume exactly 1.0; Duck identical in all three
+carriers at 1.1957991851442398, the 0.01 node scale baked so the extent is 1.65 not 165).
 
-**The base64 path is the one place buffer bytes are assembled by Lisp
-arithmetic** (base64 plus an IEEE-754 float32 decode -- `read-sequence` has no
-stream to fill there), and it taught the one real lesson of the round: on the
-compiled backends a large string is quadratic to BUILD through
-`make-string` + `(setf (char))` (each write rebuilds the immutable string,
-`string-write-runtime.md`) AND quadratic to SCAN as a mutable character vector
-(each `(char s j)` renders the whole vector -- the todo on string mutability
-carries the measured table). `geom::%utf8-string` first hit the build half: the
-138 KB embedded Duck decoded in 1.1 s interpreted and **30.5 s** compiled. The
-shape that escapes both halves is: build into a fill-pointered character array
-(the one string shape `(setf (char))` writes in place everywhere,
-`adjustable-arrays.md`), then ONE `subseq` on the way out so every later scan
-reads an ordinary string. Same file: **82 ms** compiled. Any future library code
-filling a large string must use that pair.
+**The base64 path is the one place buffer bytes are assembled by Lisp arithmetic** (base64
+plus an IEEE-754 float32 decode -- `read-sequence` has no stream to fill there). The shape to
+use when filling a large string: build into a fill-pointered character array (the one string
+shape `(setf (char))` writes in place everywhere, `adjustable-arrays.md`), then ONE `subseq`
+on the way out. On the 138 KB embedded Duck that is 82 ms compiled against 30.5 s. Both
+quadratic halves that forced it are now CLOSED (`string-index-cost.md`,
+`string-write-runtime.md`), so the pair is a plain idiom, not a required workaround.
 
-**Both quadratic halves are CLOSED (2026-08-31, the string-identity todo):**
-a `(char v j)` into a character vector reads the ELEMENT (no render,
-`string-index-cost.md`), and `subseq` now ANSWERS a mutable character vector on
-the compile paths (`string-write-runtime.md`, "A copy-seq/subseq result is
-mutable with identity"). The pair above still works and stays -- the build half
-was always fine, and the trailing `subseq` now hands the JSON scanner a
-character vector whose per-character reads are O(1) -- but it is a plain
-idiom now, not a required workaround. The
-`geom-read-ply-gltf-cross-backend` ci-spec case is the end-to-end canary that
-re-verified the flip (json-parse fed a runtime-built string on all four
-backends).
+### Reader cost and pruning
 
-### Cost, pruning and the pin
+Against a base `(print (geom:volume (geom:box 10)))` of `.class` 137,917 / `.wasm` 144,437:
+`read-stl` +25,837 / +33,851; `read-ply` +61,875 / +73,468; `read-gltf` +108,179 / +121,916
+(includes the JSON library); `read-model` (reaches all five) +203,673 / +247,011. A program
+that reads no model file carries none of it -- verified by the absence of the readers' error
+strings from `examples/browser/webgl-solids/solids.wasm`.
 
-Re-measured 2026-08-31, against that day's base `(print (geom:volume (geom:box
-10)))` -- `.class` 137,917, `.wasm` 144,437, BYTE-IDENTICAL before and after the
-PLY/glTF round (the moved `JsonLibrary` splices and prunes back out of a non-glTF
-program):
+`geom-read-model-cross-backend` writes a box out as an OBJ and as a binary STL and reads it
+straight back (1000.0 and 600.0 both ways). `geom-read-ply-gltf-cross-backend` covers both
+PLY dialects and a GLB written from Lisp and read back -- the GLB's node both translates and
+scales, so 8000.0 is the scale baked into vertices and `#f(10.0 0.0 0.0)` the pose that
+stayed rigid -- plus the big-endian refusal, verbatim.
 
-| program calls | `.class` | delta | `.wasm` (P1) | delta |
-|---|---|---|---|---|
-| `read-stl` | 163,754 | +25,837 | 178,288 | +33,851 |
-| `read-ply` | 199,792 | +61,875 | 217,905 | +73,468 |
-| `read-gltf` | 246,096 | +108,179 | 266,353 | +121,916 |
-| `read-model` (reaches all five) | 341,590 | +203,673 | 391,448 | +247,011 |
-
-(The 2026-08-30 `read-stl` numbers -- 158,436 / 163,317 -- were stale by the 31st:
-the drift arrived with other landings in between, measured identical with and
-without the readers' change. `read-gltf`'s delta includes the JSON library.)
-A program that reads no model file carries none of it -- verified by the absence of
-the readers' error strings from `examples/browser/webgl-solids/solids.wasm` and
-from a `(geom:volume (geom:box 10))` module, and by
-`GeomLibraryTest.theReadersArePrunedFromAProgramThatReadsNoModelFile` /
-`aProgramReadingOnePlyCarriesNeitherGltfNorJson`.
-
-Pinned by twenty-odd `GeomLibraryTest` cases, the `geom-read-model-cross-backend`
-ci-spec case (a box written out as an OBJ and as a binary STL and read straight
-back: 1000.0 and 600.0 both ways, on all four backends), the
-`geom-read-ply-gltf-cross-backend` case (both PLY dialects and a GLB written from
-Lisp and read back -- the GLB's node both translates and scales, so 8000.0 is the
-scale baked into vertices and `#f(10.0 0.0 0.0)` the pose that stayed rigid --
-plus the big-endian refusal, verbatim) and
-`SceneOffscreenRenderTest.aMeshReadOutOfAModelFileDrawsLikeAnyOtherSolid`.
-
-### What is deliberately not here
+### Deliberately not here
 
 - **WRITING any format.** `read-`/`write-` is the pair the naming leaves room for.
-- **Vertex welding.** An STL solid carries three vertices per facet because the format
-  has no index table; welding is a different operation, on a mesh from any source.
-- **A byte-vector or stream entry point.** The browser can fetch bytes but cannot open
-  a file, so a content-taking reader is the only one it could ever use -- and
-  `read-sequence`'s packed fast path declines every in-memory stream, so a binary
-  format read out of a byte vector would have to decode IEEE-754 in Lisp. The missing
-  primitive is an in-memory byte stream the packed path accepts, not a second API.
+- **Vertex welding.** An STL solid carries three vertices per facet because the format has
+  no index table; welding is a different operation, on a mesh from any source.
+- **A byte-vector or stream entry point.** `read-sequence`'s packed fast path declines every
+  in-memory stream, so a binary format read out of a byte vector would decode IEEE-754 in
+  Lisp. The missing primitive is an in-memory byte stream the packed path accepts, not a
+  second API.
 
 ## Boolean operations (union / difference / intersection / section)
 
-**The algorithm is BSP-tree clipping -- the csg.js formulation -- chosen over the
-classic face-splitting/classification pipeline** (decided 2026-08-29, `.todo/566`).
-Each operand's world-space boundary polygons go into a binary space partition, the
-two trees clip each other, and the surviving fragments are the result's boundary
-(`geom::%bsp-*` in geom.lisp, ~250 lines). Why this trade:
+**The algorithm is BSP-tree clipping -- the csg.js formulation.** Each operand's world-space
+boundary polygons go into a binary space partition, the two trees clip each other, and the
+surviving fragments are the result's boundary (`geom::%bsp-*`, ~250 lines). It has NO
+per-degeneracy special cases -- one epsilon in `geom::%split-polygon` classifies every
+point, so coplanar faces, a vertex/edge on a face, exact touching and a through-hole with
+coplanar caps are one code path. Its weakness (it fragments faces that did not need
+splitting) costs nothing here. Revisit only if face structure must survive (feature naming,
+exact face counts).
 
-- the BSP formulation has NO per-degeneracy special cases -- one epsilon in
-  `geom::%split-polygon` classifies every point, so coplanar faces, a vertex/edge on
-  a face, exact touching and a through-hole with coplanar caps are all the same code
-  path (the ci-spec case and `GeomLibraryTest` pin each one);
-- its weakness -- it fragments faces that did not strictly need splitting -- costs
-  `geom` nothing, because a facet is fan-triangulated for rendering anyway and
-  `volume`/`surface-area` are per-triangle sums. The face-splitting pipeline earns
-  its complexity only when face structure must survive (feature naming, exact face
-  counts), which nothing here needs. Revisit only if that changes.
-
-The load-bearing decisions:
-
-- **The pipeline runs in float64 and narrows on the way out.** Scalar arithmetic is
-  double and an `aref` of a packed float32 vertex WIDENS, so the pipeline points
-  (plain `(x y z)` lists) carry 29 more bits than the data; the result narrows to
-  float32 once, in `%build-solid`'s vertex array. No representation change was
-  needed and the cost is unmeasurable next to the interpretation overhead.
+- **The pipeline runs in float64 and narrows on the way out.** Scalar arithmetic is double
+  and an `aref` of a packed float32 vertex WIDENS, so the pipeline points (plain `(x y z)`
+  lists) carry 29 more bits than the data; the result narrows once in `%build-solid`'s
+  vertex array.
 - **`geom:*tolerance*` is RELATIVE** (default 1.0e-5): the classification epsilon is
-  `(* geom:*tolerance* extent)` with extent the largest side of the operands'
-  combined world bounds (`geom::%operand-epsilon`). geom has no unit of length, so
-  an absolute epsilon cannot serve a 0.001-scale and a 1000-scale model at once;
-  `GeomLibraryTest.theToleranceIsRelative...` pins both scales.
+  `(* geom:*tolerance* extent)`, extent the largest side of the operands' combined world
+  bounds (`geom::%operand-epsilon`). geom has no unit of length, so an absolute epsilon
+  cannot serve a 0.001-scale and a 1000-scale model at once.
 - **Operands in WORLD coordinates, untouched; the result is a new ROOT solid** with
-  world-coordinate vertices and an identity local transform. `(geom:history result)`
-  answers `(op a b)` (the `history` slot on `geom:solid`, nil for primitives), which
-  is what lets a program re-run a model at a different parameter.
+  world-coordinate vertices and an identity local transform. `(geom:history result)` answers
+  `(op a b)` (the `history` slot, nil for primitives).
 - **Result vertices are welded on the epsilon grid** (`geom::%weld-key` in
-  `geom::%csg-solid`): a shared edge split from both sides lands on one key even
-  when the two interpolations differ in the last bits, so the shell closes; the
-  winding survives clipping (an inverted polygon is reversed), so `volume` stays the
-  winding check on the RESULT too -- the volume oracle
-  `vol(A u B) + vol(A n B) = vol(A) + vol(B)` in the tests is also the normals test.
-- **An empty result is an EMPTY solid** (zero-row vertex array, no facets, volume
-  0.0), not an error: disjoint operands intersected answer it.
-- **`geom:section`** is the same classification with one operand trivial: per-facet
-  plane segments (`geom::%facet-section`, oriented along plane-normal x facet-normal
-  so outer loops wind counter-clockwise seen from +normal and holes clockwise),
-  stitched on the weld grid into closed loops; an unclosed chain -- a tangent touch
-  -- is dropped rather than answered broken. A facet lying IN the plane is skipped;
-  its boundary comes from its neighbours' edges (a section exactly on a box face
-  answers that face's loop).
+  `geom::%csg-solid`): a shared edge split from both sides lands on one key even when the
+  two interpolations differ in the last bits, so the shell closes. Winding survives clipping
+  (an inverted polygon is reversed), so `volume` stays the winding check on the RESULT; the
+  volume oracle `vol(A u B) + vol(A n B) = vol(A) + vol(B)` is also the normals test.
+- **An empty result is an EMPTY solid** (zero-row vertex array, no facets, volume 0.0), not
+  an error.
+- **`geom:section`** is the same classification with one operand trivial: per-facet plane
+  segments (`geom::%facet-section`, oriented along plane-normal x facet-normal so outer loops
+  wind counter-clockwise seen from +normal and holes clockwise), stitched on the weld grid
+  into closed loops; an unclosed chain (a tangent touch) is dropped rather than answered
+  broken. A facet lying IN the plane is skipped; its boundary comes from its neighbours'
+  edges.
 
-## Pruning
+## Pruning and cross-backend parity
 
-`geom` is large and a program that uses `box` alone must not carry `revolution`'s
-tessellator. Every geom definition is a `defun`/`defconstant`, so `LibraryDefunPruner`
-keys it by name and the fixpoint reaches only what the program calls; the four
-`defclass` forms -- and, since todo-584, the two `defmethod print-object` forms -- are
-unkeyed and stay roots, which is the type model plus the printed representation and
-nothing more.
-Measured: `(print (geom:volume (geom:box 10)))` compiled to a `.class` carries 16 geom
-methods (vec3, %unit, %identity-rotation, axis-vector, axis-angle-matrix, rpy-matrix,
-make-transform, %build-solid, %solid-of-vertices, mesh, %facet-normal, box, volume and
-the generated accessors) and none of cylinder / cone / sphere / torus / revolution /
-extrusion / wireframe / surface-area / centroid.
+Every geom definition is a `defun`/`defconstant`, so `LibraryDefunPruner` keys it by name
+and the fixpoint reaches only what the program calls; the four `defclass` forms and the two
+`defmethod print-object` forms are unkeyed roots.
+`(print (geom:volume (geom:box 10)))` carries 16 geom methods (vec3, %unit,
+%identity-rotation, axis-vector, axis-angle-matrix, rpy-matrix, make-transform,
+%build-solid, %solid-of-vertices, mesh, %facet-normal, box, volume and the generated
+accessors) and none of cylinder / cone / sphere / torus / revolution / extrusion /
+wireframe / surface-area / centroid.
 
-**A `defclass` and a `defun` of the same name used to keep each other alive
-(todo-601, re-measured 2026-09-02).** Between 2026-08-31 and the fix, the program above
-ALSO carried `bounds`, `geom::%solid-bounds`, `geom::%vertex-extremes`, `bounds-union`,
-`compose` and `world-transform`, and so did `(print (geom:vec3 1 2 3))`, which touches no
-solid at all -- 14 geom defuns for a program whose only geom call is `vec3`. `geom:bounds`
-is the package's one name that is both a `defclass` and a `defun`, and the class form is a
-root that spelled it. `LibraryDefunPruner` now walks a class header by POSITION, so a
-defining occurrence is not a call
-(`.kb/library-defun-pruning.md`, "A class header is not a call site"); `(print (geom:vec3
-1 2 3))` is back to `vec3` plus the `facets-of` the printer reads, and the sixteen above
-are again what a `volume` program carries. The pin is
-`eval/LibraryDefunPrunerTest#aDefclassDoesNotKeepTheDefunOfTheSameName`.
+**Trap (fixed): a `defclass` and a `defun` of the same name used to keep each other alive.**
+`geom:bounds` is the package's one name that is both, and the class form is a root that
+spelled it -- so every geom program, `(print (geom:vec3 1 2 3))` included, also carried
+`bounds`, `%solid-bounds`, `%vertex-extremes`, `bounds-union`, `compose` and
+`world-transform`. `LibraryDefunPruner` now walks a class header by POSITION
+(`.kb/library-defun-pruning.md`).
 
-## Cross-backend parity
+`geom-solids-cross-backend` and `geom-transforms-cross-backend` print exact answers (a box's
+volume and area, its bounds and centroid, a prism's 120.0, the poses that land on integers)
+verbatim -- pinning the packed single-float printer too -- while every trigonometric answer
+is scaled and ROUNDED so a float32 last bit cannot fail the case.
 
-The modeling half is trigonometry over float32, which is exactly where four backends
-could disagree, so the pin is `ci-spec.yaml`'s `geom-solids-cross-backend` and
-`geom-transforms-cross-backend`: the exact answers (a box's volume and area, its bounds
-and centroid, a prism's 120.0, the poses that land on integers) are printed verbatim
-and pin the packed single-float printer too, while every trigonometric answer is scaled
-and ROUNDED so a float32 last bit cannot fail the case. Verified byte-identical on the
-interpreter, a compiled JVM class, WASM preview 1 and the WASI 0.3 component
-(2026-08-29).
+## The arrow and the origin indicator
 
-## The arrow, and where the origin indicator lives (todo-582, 2026-08-29)
+`geom:arrow` is a shaft and a pointed head as ONE solid; `geom:triad` is three of them -- +x
+red, +y green, +z blue, labelled `"x"` / `"y"` / `"z"` -- as a LIST of solids. They replace
+the origin indicator the viewer drew out of `metal:+line+` segments (`scene::%build-axes`,
+scaled by `0.16 * distance`), which had no width.
 
-`geom:arrow` is a shaft and a pointed head as ONE solid, and `geom:triad` is three of
-them -- +x red, +y green, +z blue, labelled `"x"` / `"y"` / `"z"` -- as a LIST of
-solids. They replace the origin indicator the viewer used to draw by itself: three
-`metal:+line+` segments out of a private buffer (`scene::%build-axes`) under a model
-matrix scaled by `0.16 * distance`, drawn whether or not the program asked for one.
-The report against that was three complaints and they were one complaint -- **it was
-not an object**: a line primitive has no width, so it could be neither thickened nor
-tipped, and it was furniture rather than something a caller placed.
+**Built directly, not `union`-ed**: the seam is known at construction time, and the arrow is
+the one solid a program may build several of per frame's worth of furniture. The shell is a
+base cap, `n` shaft quads, `n` quads of the head's underside annulus and `n` head triangles:
+`3n + 1` facets, 142 triangles at the default 24 sides.
 
-**Built directly, not `union`-ed.** A cylinder plus a cone through `geom:union` would
-be correct and is one line, but it is a BSP clip ("Boolean operations" above) for a
-composition whose seam is known at construction time, and the arrow is the one solid a
-program may build several of per frame's worth of furniture. The shell is a base cap,
-`n` shaft quads, `n` quads of the head's underside annulus and `n` head triangles:
-`3n + 1` facets, `142` triangles at the default 24 sides.
+**Its volume is exact, which is what pins the winding.** The closed form is the shape
+actually built -- a prism plus a pyramid on the same regular n-gon,
+`(n/2) sin(2pi/n) * (r^2 * (len - head) + hr^2 * head / 3)` -- so
+`(geom:arrow :length 200 :sides 24)` is `32201.23...` exactly.
 
-**Its volume is exact, which is what pins the winding.** Every other tessellated
-primitive converges on its closed form from below, so its test is a tolerance. The
-arrow's closed form is the shape actually built -- a prism plus a pyramid on the same
-regular n-gon, `(n/2) sin(2pi/n) * (r^2 * (len - head) + hr^2 * head / 3)` -- so
-`(geom:arrow :length 200 :sides 24)` is `32201.23...` exactly, and a facet wound the
-wrong way in any of the four families misses it by a mile rather than by a percent
-(`GeomLibraryTest.anArrowIsAPrismPlusAPyramidAndIsExact`, `geom-arrow-cross-backend`).
+- **A constructed arrow does NOT scale with the view distance, and the viewer's line triads
+  still do.** A solid has a size in world units; a `geom` that asked the camera anything
+  would no longer be backend-independent. The auto-scaled behavior stays on `scene:axes`.
+  `geom:triad`'s default length is **200** (what `0.16 * distance` draws at the viewer's
+  default distance of 1200, rounded); `geom:arrow`'s own default length is `1.0`, and every
+  other measurement it takes is a fraction of the length.
+- **`scene:axes`' `:bodies` and `:both` are unchanged**: a per-body triad is sized from that
+  body's own model extent (`scene::%gpu-buffers`) and drawn under the body's world transform.
+- **The triad is a `geom` function returning solids, not a viewer mode**; `:at` places all
+  three, and it returns a list, which `scene:add` splices.
+- **`scene:axes`' initform is `nil`.** The modes all remain, so `scene::%build-axes` and the
+  unit line buffer survive.
 
-The four decisions the report left open, and what they are:
+## What `scene:add` accepts
 
-- **A constructed arrow does NOT scale with the view distance, and the viewer's line
-  triads still do.** A solid has a size in world units; that is what "an object placed
-  at a point" means, and a `geom` that asked the camera anything would no longer be the
-  backend-independent modeller the whole package rests on. The auto-scaled behavior is
-  genuinely what a viewer's own furniture wants, so it stays exactly where it was, on
-  `scene:axes`. `geom:triad`'s default length is **200**, which is what
-  `0.16 * distance` draws at the viewer's default distance of 1200 (192, rounded to a
-  number a caller can type); `geom:arrow`'s own default length is `1.0`, like every
-  other constructor in the package, and every other measurement it takes is a fraction
-  of the length so one keyword resizes the whole arrow.
-- **`scene:axes`' `:bodies` and `:both` are unchanged.** The report is about the origin.
-  A per-body triad is a different thing: it marks a frame at every solid, it is sized
-  from that body's own model extent (`scene::%gpu-buffers`), and it is drawn under the
-  body's world transform -- furniture that follows the model, not an object in it.
-  Making those solids would mean building and uploading three meshes per body, per
-  frame's worth of poses, to say something a hairline is better at.
-- **The triad is a `geom` function returning solids, not a viewer mode.** Three arrows
-  hung where the caller wants them is the honest spelling; `geom:triad` only saves the
-  three calls and fixes the tints, and `:at` places all three. It returns a list, which
-  `scene:add` splices -- see "What `scene:add` accepts" below.
-- **`scene:axes`' initform is now `nil`.** Nothing is drawn that was not asked for. The
-  modes are all still there, so this is a default change and not a removal;
-  `scene::%build-axes` and the unit line buffer therefore survive, since `:world`,
-  `:bodies` and `:both` all still draw out of it. Both shipped examples
-  (`examples/macos/scene-*.lisp`) and every existing offscreen test already said
-  `(scene:axes v ...)` explicitly, so nothing else moved.
+**Every argument is a solid or a LIST of solids, spliced in order**, and anything else is
+refused THERE, naming it. `(scene:add *v* (geom:triad))` used to cons the list itself into
+`scene::%contents` and complain one frame later from inside the draw callback as `No
+applicable method: GEOM:USER-DATA on CONS`. `scene::%check-solid` runs over every argument
+BEFORE the first one is consed in, so a refused call leaves the viewer as it was.
+`scene:drop` takes the matching shape. `nil` is the empty list and adds nothing; not an
+error. `SceneLibraryTest` needs no display: `scene:viewer-state`'s contents slot has an
+initform, so `(make-instance 'scene:viewer-state)` is a viewer as far as `add`/`drop` care.
 
-The pixel evidence is `SceneOffscreenRenderTest`: an arrow's shaft is a measurable
-number of pixels across and its head narrows to nothing at the tip, the head sits at
-the end `:direction` names (`:-z` moves it to the other end of the frame), a bigger
-`:radius` draws a wider shaft, a triad at the origin draws red, green and blue, and an
-empty viewer is empty until `(scene:axes v :world)` is asked for. `target/scene-frames/
-arrow-*.png` and `triad-at-the-origin.png` are the pictures.
+## The renderer: `metal` and `scene`
 
-## What `scene:add` accepts (todo-583, 2026-08-30)
-
-**Every argument is a solid or a LIST of solids, spliced in order**, and anything
-else is refused THERE, naming it. The report was `(scene:add *v* (geom:triad))`:
-`triad` answers three solids by design, the list itself was consed into
-`scene::%contents`, and the complaint arrived one frame later from inside the draw
-callback as `No applicable method: GEOM:USER-DATA on CONS` -- a message naming
-nothing the caller wrote, on a thread the caller is not on.
-
-The two halves are one decision. Splicing is what makes the package compose: the
-nine constructors that answer one solid and the one that answers three then go into
-a viewer the same way, and no doc page has to spell a `dolist` around the odd one
-out. The check is what makes a mistake a message: `scene::%check-solid` runs over
-every argument BEFORE the first one is consed in, so a refused call leaves the
-viewer exactly as it was.
-
-`scene:drop` took the matching shape for the reason a container's two verbs should
-agree -- what went in as one argument comes back out as one argument, so a viewer
-given `(geom:triad)` is emptied of it by `(scene:drop v *triad*)` rather than by
-three calls. `scene:clear` names no solid at all and needed nothing. `nil` is the
-empty list and adds nothing; it is not an error, because splicing an empty list is
-what `dolist` and `append` do with one.
-
-Pinned by `SceneLibraryTest` (the splice, the order, the refusal's message, the
-untouched viewer, `drop`'s shape) -- which needs no display, since a viewer's
-CONTENTS need no window: `scene:viewer-state`'s contents slot has an initform, so
-`(make-instance 'scene:viewer-state)` is a viewer as far as `add` and `drop` are
-concerned. The picture is `SceneOffscreenRenderTest.aTriadIsAddedAsOneArgument`.
-
-## The renderer: `metal` and `scene` (todo-565, 2026-08-29)
-
-Two more shipped Lisp-source libraries, `eval/metal.lisp` + `eval/MetalLibrary` and
-`eval/scene.lisp` + `eval/SceneLibrary`, wired exactly as the table above wires geom
-(splice class, `PackageRegistry` entry, `LispEvaluator` lazy load, `LibraryDefunPruner`,
-`resource-config.json`, `doc/{en,ja}`) with three differences:
+`eval/metal.lisp` + `eval/MetalLibrary` and `eval/scene.lisp` + `eval/SceneLibrary`, wired
+exactly as geom is, with three differences:
 
 - **They are macOS-only.** Both bottom out in `objc:send`, so `CompileFrontend` refuses a
   `.wasm` output naming the reference -- `AppKitLibrary.firstObjcReference` answers for all
   four macOS packages (`objc`, `appkit`, `metal`, `scene`), which is why it lives there and
-  not in one library per package. The browser playground refuses them the same way.
-- **The splice chain runs them in dependency order, innermost first:** `SceneLibrary`
-  before `MetalLibrary` before `GeomLibrary`/`LinalgLibrary` before `AppKitLibrary`, so
-  each pass sees the references the previous one introduced (`scene` names `geom:`,
-  `metal:`, `linalg:` and `appkit:`; `metal:run`'s clock is `appkit:timer`).
+  not in one library per package.
+- **The splice chain runs innermost first:** `SceneLibrary` before `MetalLibrary` before
+  `GeomLibrary`/`LinalgLibrary` before `AppKitLibrary`, so each pass sees the references the
+  previous one introduced (`scene` names `geom:`, `metal:`, `linalg:`, `appkit:`;
+  `metal:run`'s clock is `appkit:timer`).
 - **`metal` must stay usable without `geom` or `scene`** -- the four
-  `examples/macos/metal-*.lisp` drive it directly. Its promotion, its frozen export list
-  and what it cost are `.kb/objc.md`, "Metal".
+  `examples/macos/metal-*.lisp` drive it directly (`.kb/objc.md`, "Metal").
 
-The thread facts it inherits are `.kb/objc.md`'s and are not restated here: `appkit:timer`
-is the clock, every hop is `objc:on-main` (inline when already on thread 0), and a callback
-runs on thread 0 with the interpreter's GLOBAL dynamic bindings.
+Thread facts are `.kb/objc.md`'s: `appkit:timer` is the clock, every hop is `objc:on-main`
+(inline when already on thread 0), and a callback runs on thread 0 with the interpreter's
+GLOBAL dynamic bindings.
 
-**No triangle is touched by Lisp during a frame.** That is the invariant the two numbers
-above buy, and `scene.lisp` is built for it:
+**No triangle is touched by Lisp during a frame**, and `scene.lisp` is built for it:
 
-- each solid's `geom:mesh` and `geom:wireframe` go into `MTLBuffer`s of their own the
-  FIRST time the solid is drawn, and the entry -- `(mesh-buffer tri-count wire-buffer
-  segment-count axis-length)` -- lives in `geom:user-data`, not in a table keyed by the
-  solid (the reason is the `user-data` paragraph above);
+- each solid's `geom:mesh` and `geom:wireframe` go into `MTLBuffer`s of their own the FIRST
+  time the solid is drawn, and the entry -- `(mesh-buffer tri-count wire-buffer
+  segment-count axis-length)` -- lives in `geom:user-data`, not a table keyed by the solid;
 - the vertex function takes `vp` and `model` as SEPARATE uniforms and transforms the normal
   by `model` too, so a solid that moves needs no re-upload and a frame's whole CPU cost is
   one 4x4 matrix and one draw call per solid;
-- lines -- the ground grid, the axis triads, every wireframe -- go through a second
-  pipeline with `metal:+line+` (`MTLPrimitiveTypeLine` = 1), which the promotion added to
-  the `metal` surface rather than leaving it defined locally.
-
-Three things the spike (`.todo/563-solid-modeling-and-a-3d-viewer/scene.lisp`) did not do
-and the shipped file does:
+- lines (grid, axis triads, every wireframe) go through a second pipeline with `metal:+line+`
+  (`MTLPrimitiveTypeLine` = 1).
 
 - **The callbacks are keyed by VIEW, not by an `*active*` global.** AppKit's callbacks are
   process-wide, so one `objc:define-class "RontoLispSceneView"` serves every viewer and
-  `scene::*views*` maps `(objc:address view)` -> viewer -- `appkit::*actions*` keyed by
-  widget address is the precedent (`.kb/objc.md`). Two viewers therefore orbit
-  independently, which is the whole reason a viewer is an instance.
+  `scene::*views*` maps `(objc:address view)` -> viewer (`appkit::*actions*` keyed by widget
+  address is the precedent). Two viewers orbit independently.
 - **Resize follows the window.** The view posts `NSViewFrameDidChangeNotification` to one
-  shared observer (`setPostsFrameChangedNotifications:` is not optional -- without it
-  NSView posts nothing), which finds the viewer by the notification's object and calls
-  `metal:resize` plus a redraw; the projection's aspect follows the stored width/height.
-- **The camera gestures redraw themselves and the mutators do not.** A drag that changed
-  the camera and drew nothing would make the documented "drag to orbit" false on a viewer
-  that is not animating; a loop adding sixty solids that drew sixty frames would be the
-  opposite mistake. So `scene::%on-mouse-dragged` / `%on-scroll` / `%on-frame-changed` call
-  `scene:refresh` and `scene:add` / `camera` / `grid` / `shading` / `axes` do not.
+  shared observer -- **`setPostsFrameChangedNotifications:` is not optional**, without it
+  NSView posts nothing -- which finds the viewer by the notification's object and calls
+  `metal:resize` plus a redraw.
+- **The camera gestures redraw themselves and the mutators do not.**
+  `scene::%on-mouse-dragged` / `%on-scroll` / `%on-frame-changed` call `scene:refresh`;
+  `scene:add` / `camera` / `grid` / `shading` / `axes` do not.
 
-`MetalLibraryTest` and `SceneLibraryTest` cover the library as a LIBRARY (the public names
-match the registry exactly, the splice fires exactly when referenced, the pruner drops what
-a program does not call, the WASM refusal names the package) and no test opens a window.
-Verified by hand on all three carriers on 2026-08-29 -- `java -jar`, the native binary, and
-`-o Two.class` under `java` plus `-o two.jar` under `java -jar` -- with a probe that
-asserts two viewers route independently, that a frame reaches the encoder, that the
-per-solid buffers are built once, and that a `setFrame:display:` on the window moves the
-viewer's width. What the RENDERER does is the section below.
+`MetalLibraryTest` and `SceneLibraryTest` cover the library as a LIBRARY (public names match
+the registry exactly, the splice fires exactly when referenced, the pruner drops what a
+program does not call, the WASM refusal names the package) and no test opens a window.
 
-## How the renderer is tested (todo-568, 2026-08-29)
+## How the renderer is tested
 
-No test may open a window (`.kb/objc.md`), which left the camera, the projection, the
-per-solid model matrix, the winding convention and the depth test -- arithmetic that breaks
-silently and is obvious in a picture -- with nothing checking them. **`scene:offscreen`
-closes that, and the load-bearing fact is that it is not a second render path.**
-`metal:offscreen` builds a `metal:context` whose `target` slot holds a shared-storage
-BGRA8 texture instead of a `CAMetalLayer`; `metal:frame` asks that slot once per frame and
-takes the drawable's texture or the context's own, so ONE encoding path serves both, and an
-offscreen frame is `waitUntilCompleted`'d instead of presented. `metal:pixels` reads it
-back with `getBytes:bytesPerRow:fromRegion:mipmapLevel:` into an `objc:data` block --
-`width*height*4` bytes, BGRA, row 0 at the top, deliberately NOT converted to RGBA, since
-the format is the layer's. `scene:offscreen` and `scene:viewer` then differ only in the
-context they hand `scene::%viewer-over`.
+No test may open a window (`.kb/objc.md`). **`scene:offscreen` closes that, and it is not a
+second render path.** `metal:offscreen` builds a `metal:context` whose `target` slot holds a
+shared-storage BGRA8 texture instead of a `CAMetalLayer`; `metal:frame` asks that slot once
+per frame and takes the drawable's texture or the context's own, so ONE encoding path serves
+both, and an offscreen frame is `waitUntilCompleted`'d instead of presented. `metal:pixels`
+reads it back with `getBytes:bytesPerRow:fromRegion:mipmapLevel:` into an `objc:data` block
+-- `width*height*4` bytes, BGRA, row 0 at the top, deliberately NOT converted to RGBA.
+`scene:offscreen` and `scene:viewer` differ only in the context they hand
+`scene::%viewer-over`.
 
-`SceneOffscreenRenderTest` (macOS-gated, skipped without a Metal device) asserts the five
-things a picture makes obvious and a number does not: a red box is red in the middle and
-background in the corners; a solid added FIRST is not overwritten by one added behind it
-(the depth attachment); a single facet wound counter-clockwise seen from outside draws and
-the same facet reversed is culled (the winding); `scene:fit` leaves no solid pixel on the
-frame border from four camera angles; and the same scene renders byte-identical twice. Each
-frame is also written to `target/scene-frames/*.png` and every assertion names its file --
-the PNG writer is `javax.imageio` in the TEST, not a rung of `metal`, because a diagnostic
-does not belong on the shipped surface.
+`SceneOffscreenRenderTest` (macOS-gated, skipped without a Metal device) asserts: a red box
+is red in the middle and background in the corners; a solid added FIRST is not overwritten by
+one added behind it (the depth attachment); a facet wound counter-clockwise seen from outside
+draws and the same facet reversed is culled; `scene:fit` leaves no solid pixel on the frame
+border from four camera angles; the same scene renders byte-identical twice; and the arrow /
+triad pixel shapes. Each frame is written to `target/scene-frames/*.png` and every assertion
+names its file -- the PNG writer is `javax.imageio` in the TEST, not a rung of `metal`.
 
-Two changes the test forced, both improvements:
+- **`scene::%render` sets `setFrontFacingWinding:` + `setCullMode:` explicitly.** It culled
+  nothing before. geom winds counter-clockwise seen from outside and Metal decides facing in
+  CLIP space (y up), not in the y-down framebuffer, so the front winding is
+  `metal:+winding-counter-clockwise+` -- measured, not reasoned: the first cut said clockwise
+  and drew every solid's FAR surface, which a centrally symmetric cube cannot tell apart from
+  the near one. **The pinning shape is a single quad, not a box.**
+- **`(scene:grid v :extent nil)` drops the grid**, as `(scene:axes v nil)` drops triads.
+- **A `geom:volume` oracle cannot detect an inverted solid**: the divergence integral is
+  `abs`'d, and a point reflection leaves each triangle's normal unchanged while moving it to
+  the antipode. So the winding check is the renderer's, not the modeller's. (`geom:scale`/
+  `nscale` by `-1` no longer produce that mesh, so an inverted solid can only be built by
+  hand through `geom:polyhedron`.)
 
-- **`scene::%render` now sets `setFrontFacingWinding:` + `setCullMode:` explicitly.** It
-  culled nothing before. geom winds a facet counter-clockwise seen from outside and Metal
-  decides facing in CLIP space (y up), not in the y-down framebuffer, so the front winding
-  is `metal:+winding-counter-clockwise+` -- measured, not reasoned: the first cut said
-  clockwise and drew every solid's FAR surface, which a centrally symmetric test object
-  (a cube) cannot tell apart from the near one. The pinning shape is therefore a single
-  quad, not a box.
-- **`(scene:grid v :extent nil)` drops the grid**, the way `(scene:axes v nil)` drops the
-  triads. A viewer that is a picture of one solid wanted it and there was no way to say it.
+## Clicking: `scene:ray` and `scene:on-click`
 
-**A `geom:volume` oracle cannot detect an inverted solid**: the divergence integral is
-`abs`'d, and a point reflection leaves each triangle's normal unchanged while moving it
-to the antipode. (Since todo-586 `geom:scale`/`geom:nscale` by `-1` no longer produce
-that inverted mesh -- a mirroring factor flips the facets, "Scaling" above -- so an
-inverted solid can only be built by hand through `geom:polyhedron`.) So the winding
-check is the renderer's, not the modeller's, and the two agree by construction rather
-than by measurement.
+- **`scene:ray v x y` is the primitive, and it answers a LINE**: `(origin direction)`, world
+  space, from view coordinates in points (AppKit's -- origin bottom-left, `+y` up).
+- **`scene:on-click v hook` is the convenience, and it answers a POINT** -- where that ray
+  meets the plane through the ORBIT TARGET facing the camera, the one plane a viewer can pick
+  without being told. `nil` removes the hook; it is called on the main thread.
+- **A click is a press released without travelling more than 4 points**, measured by
+  `scene::%moved` accumulated over the drag. The deadzone is in the RELEASE arm and
+  deliberately not in the drag arm: the orbit those four points also performed is invisible,
+  whereas a drag ignoring its first four points would start with a jump. A shift-drag (the
+  pan) never produces a click. The hook is followed by one `scene:refresh`.
 
-## Clicking: `scene:ray` and `scene:on-click` (2026-08-30)
+`scene:ray` needs no window, device or contents, so `SceneLibraryTest` drives it and
+`scene::%click-point` over a bare `(make-instance 'scene:viewer-state :width ... :height ...
+:target ...)`. Uncovered: the NSEvent that reaches them, as with `scene::%view-point`.
 
-A viewer that can be orbited but cannot say WHERE a click landed is half a
-viewer, and it is the half `examples/macos/scene-robot-reach.lisp` needs. The
-two names are one decision taken twice:
-
-- **`scene:ray v x y` is the primitive, and it answers a LINE.** `(origin
-  direction)`, world space, from view coordinates in points (AppKit's -- origin
-  bottom-left, `+y` up). A pixel names a line through the world and which point
-  of it was meant is the program's question; answering only a point would make
-  the viewer decide something it has no business deciding, and a program wanting
-  the ground plane could not undo it.
-- **`scene:on-click v hook` is the convenience, and it answers a POINT** -- where
-  that ray meets the plane through the ORBIT TARGET facing the camera. That is
-  the one plane a viewer can pick without being told, and picking it is what
-  makes "click where you see" true from any camera angle in one line. `nil`
-  removes the hook; it is called on the main thread, like every other callback.
-
-**A click is a press released without travelling more than 4 points**, measured
-by `scene::%moved` accumulated over the drag. The deadzone is in the RELEASE arm
-and deliberately not in the drag arm: the orbit those four points also performed
-is invisible, whereas a drag that ignored its first four points would start with
-a jump. So clicking and orbiting are one gesture and neither needs a modifier --
-and a shift-drag (the pan) never produces a click at all. The hook is followed by
-one `scene:refresh`, on the same reasoning the camera gestures redraw themselves:
-an idle viewer must not answer a click with nothing on screen.
-
-`scene:ray` is camera arithmetic and needs no window, no device and no contents,
-so `SceneLibraryTest` drives it and `scene::%click-point` over a bare
-`(make-instance 'scene:viewer-state :width ... :height ... :target ...)` -- the
-centre pixel lands on the target, a pixel right of centre lands right of it on
-the same plane, and `on-click` installs and removes. What stays uncovered is the
-NSEvent that reaches them, exactly as `scene::%view-point` does.
-
-**`scene:on-click` is where the IK divergence in the example was found, and the
-finding belongs here** because it is about `geom`'s type model, not about that
-program. A chain posed by solving for a WORLD-frame angular velocity has to carry
-it back into each joint's frame as `Rp^T Rot(w) Rp . R`, and that sandwich
-DOUBLES the parent's orthogonality error into the child every time it runs: eight
-solver iterations a frame down a five-joint chain is 2^8 a frame, and the
-measured error went 1e-16 -> 1e-2 in five frames, with links stretching by tens
-of units. Stating the Jacobian in each joint's OWN frame -- block `M . R` with
-`R` the joint's world rotation, update `R . Rot(w)` -- removes the sandwich, and
-the drift falls back to arithmetic (about 1e-8 a frame). It is also 1.5x faster.
-`geom:rotation-of` slots are float32 by the package's own rule, so this is a
-constraint on any consumer that composes rotations, not a quirk of one example.
+**An IK constraint on any consumer that composes rotations.** A chain posed by solving for a
+WORLD-frame angular velocity has to carry it back into each joint's frame as
+`Rp^T Rot(w) Rp . R`, and that sandwich DOUBLES the parent's orthogonality error into the
+child every time it runs: eight solver iterations a frame down a five-joint chain is 2^8 a
+frame, and the error went 1e-16 -> 1e-2 in five frames. Stating the Jacobian in each joint's
+OWN frame -- block `M . R` with `R` the joint's world rotation, update `R . Rot(w)` --
+removes the sandwich (drift ~1e-8 a frame) and is 1.5x faster. `geom:rotation-of` slots are
+float32 by the package's own rule.
 
 ## The browser twin
 
 `examples/browser/webgl-solids/` is the renderer `scene` cannot be: the same design over
-WebGL2, so `geom` has a viewer wherever it runs (`.kb/wit.md`, a `--no-wasi` reactor). It
-consumes `geom:mesh` and `geom:world-transform` UNCHANGED and contains no modeling code at
-all -- a second modelling layer in the browser is exactly how `geom` would grow a browser
-dialect and how the two renderers would drift. The differences are the two that were
-expected: OpenGL's clip space puts z in [-1, 1] where Metal's puts it in [0, 1] (one row of
-the projection), and WebGL renames a buffer behind your back where Metal makes a rewritten
-buffer rotate copies -- which costs the twin nothing, since a mesh here is uploaded once
-and never rewritten. Culling needs no statement at all on that side: GL's default front
-winding is already counter-clockwise, which is geom's.
+WebGL2 (`.kb/wit.md`, a `--no-wasi` reactor). It consumes `geom:mesh` and
+`geom:world-transform` UNCHANGED and contains no modeling code at all -- a second modelling
+layer in the browser is how the two renderers would drift. Two differences: OpenGL's clip
+space puts z in [-1, 1] where Metal's puts it in [0, 1] (one row of the projection), and
+WebGL renames a buffer behind your back where Metal makes a rewritten buffer rotate copies.
+Culling needs no statement: GL's default front winding is already counter-clockwise, geom's.
 
-**The two renderers must orbit the same way, and one sign is all that separates them**
-(2026-08-29). Both drive the identical two constants -- `(- azimuth (* 3.4 dx))`
-and a 2.6-scaled elevation term, clamped to +-1.5 -- over a drag normalized by the viewer's
-height, so a gesture that orbits one must orbit the other. The trap is that the two
-dialects disagree about which way is up: a DOM client delta puts +y DOWN, and AppKit's
-`locationInWindow` puts +y UP, so the same code is two opposite cameras. The elevation term
-is therefore negated in `scene::%orbit`, and NOT in `scene::%view-point` -- the pan arm
-reads the same delta and wants AppKit's sense as it stands, since a target moved AGAINST
-the drag is what makes the model follow the cursor; flipping the point would invert the pan
-along with the orbit. (`dx` needs no flip: right is +x in both.) The browser twin has no
-pan at all, so the pan's convention is the native side's own.
+**The two renderers must orbit the same way, and one sign separates them.** Both drive the
+identical two constants -- `(- azimuth (* 3.4 dx))` and a 2.6-scaled elevation term, clamped
+to +-1.5 -- over a drag normalized by the viewer's height. **The trap:** a DOM client delta
+puts +y DOWN and AppKit's `locationInWindow` puts +y UP, so the same code is two opposite
+cameras. The elevation term is therefore negated in `scene::%orbit` and NOT in
+`scene::%view-point` -- the pan arm reads the same delta and wants AppKit's sense, since a
+target moved AGAINST the drag is what makes the model follow the cursor; flipping the point
+would invert the pan along with the orbit. (`dx` needs no flip.) The browser twin has no pan.
 
 Splitting the arithmetic out of `%on-mouse-dragged` into `scene::%orbit` / `scene::%pan` is
-what makes any of this testable: an NSEvent cannot be built in a test, but a delta can, and
-`SceneOffscreenRenderTest` drives both functions directly -- the elevation and azimuth a
-30-pixel drag lands on, the clamp at either pole, the target a pan moves against the drag,
-and the pixel composite the numbers cannot see (a marker on an opaque plate, in view when
-dragging down puts the camera above it and hidden when dragging up puts the camera below).
-What stays untested is the ONE line that reads the event, `scene::%view-point`: that
-AppKit's `locationInWindow` is y-up is a premise, not an assertion, so a flip introduced
-there would invert both gestures with every test still green.
+what makes this testable: `SceneOffscreenRenderTest` drives both functions directly.
+Untested is the ONE line that reads the event, `scene::%view-point`: that `locationInWindow`
+is y-up is a premise, not an assertion, so a flip there would invert both gestures with every
+test still green.
 
 ## `IndentRules`
 
-**No entry is needed.** Not one member of this package takes a body -- every one is a
-function whose trailing arguments are values or keywords -- so `rontolisp format` laying
-a call out as a function call is correct. A future member that DOES take a body (a
-`with-...` shape) would need one (`formatter.md`).
+**No entry is needed.** Not one member takes a body, so `rontolisp format` laying a call out
+as a function call is correct. A future member that DOES take a body (a `with-...` shape)
+would need one (`formatter.md`).
+
+## Tests
+
+`eval/GeomLibraryTest` -- `aClosedProfileIsCappedAtNeitherEndSoATorusHasAHole`,
+`anArrowIsAPrismPlusAPyramidAndIsExact`, `theToleranceIsRelative...`,
+`scaleAnswersANewSolidAndLeavesTheOriginalUntouched`,
+`nscaleMutatesInPlaceAndInvalidatesBothCachesAndTheUserDataSlot`,
+`aScaleFactorMayBeAVectorOrAListForANonUniformScale`,
+`aMirroringFactorFlipsTheFacetsSoTheWindingStaysOutward`, `aZeroScaleFactorIsRefusedNamingIt`,
+`aSolidPrintsItsLabelAndItsTwoCounts`,
+`aNodeInASceneGraphPrintsItsChildCountInsteadOfOverflowingTheStack`, `anAttachedSolidPrintsToo`,
+`aTransformAndABoundsStillPrintTheirSlots`,
+`theReadersArePrunedFromAProgramThatReadsNoModelFile`,
+`aProgramReadingOnePlyCarriesNeitherGltfNorJson`.
+
+`eval/GeomKernelsTest`; `codegen/jvm/JvmGeomKernelCompilerTest`;
+`eval/LibraryDefunPrunerTest#aDefclassDoesNotKeepTheDefunOfTheSameName`; `MetalLibraryTest`;
+`SceneLibraryTest`; `SceneOffscreenRenderTest` --
+`fitFramesASolidWhoseUnitsAreMetresRatherShrinkingItToADot`, `aTriadIsAddedAsOneArgument`,
+`aMeshReadOutOfAModelFileDrawsLikeAnyOtherSolid`.
+
+ci-spec: `geom-solids-cross-backend`, `geom-arrow-cross-backend`,
+`geom-transforms-cross-backend`, `geom-csg-cross-backend`, `geom-scale-cross-backend`,
+`geom-print-object-cross-backend`, `geom-read-model-cross-backend`,
+`geom-read-ply-gltf-cross-backend`.

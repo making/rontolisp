@@ -1,652 +1,1641 @@
 # asdf (limited system-definition subset)
 
-An API-compatible mini-ASDF, not a port: `asdf:defsystem` + `asdf:load-system` + `asdf:test-system`, with the component METAOBJECTS real at run time — `asdf:find-system` answers a memoized `asdf:system` CLOS instance per name (`eq` across calls), the classes (`component`, `child-component`/`parent-component`, `module`, `system`, `package-inferred-system`, `source-file`, `cl-source-file`, `static-file`) are real on every backend so `typecase`/`typep`/defmethod specializers work, and the readers (`component-name`/`-pathname`/`-children`/`-sideway-dependencies`/`-parent`/`-system`, `registered-systems`, `*user-cache*` = nil) walk the model — the "ASDF component metaobjects at run time" section below. `test-op` is the ONE op with machinery (`:perform (test-op ...)` bodies and `:in-order-to ((test-op ...))` chains are recorded and driven by `asdf:test-system`); there is still no general CLOS `operate`/`perform`, no `compile-op`/fasl output-translations. Shared core: `eval/AsdfSystems.java` parses `defsystem` forms and whole `.asd` files **as plain data** (never evaluated; a `.asd` may contain `defsystem` in any package spelling, `register-system-packages` (RECORDED into the loader's package -> system map since the package-inferred-system work -- real ASDF records "package P lives in system S" for two consumers, a `find-package` miss that autoloads S and a package-inferred system translating a `defpackage` dependency into a system name; only the second reaches here, and it is what un-skipped the form. The first still needs nothing: a package is located by its own `defpackage` and its nicknames -- lack gives every one of its packages the dotted nickname the form would register), `in-package` and `defpackage` (skipped — the system-definition-package header idiom, e.g. cl-utilities' `(defpackage #:cl-utilities-system ...)`), and — since todo-115 M1 — top-level `defparameter` evaluated into a parse-time env by `evalDataForm` when its value is pure data (literals, keyword self-eval, references to earlier defparameters, `quote`/`if`/`or`/`and`/`not`); an IMPURE value does NOT fail the file (todo-420) -- the name is recorded as unevaluable instead, and the CONSUMER decides, the same rule `#.` follows below: only a later form that actually reads the name fails, naming the parameter (cl-json's `*cl-json-directory*`, bound for the test system's own runtime and read by no `.asd` form, is the shape that forced this), and a top-level `progn` is FLATTENED (todo-420) -- its body forms are spliced back onto the form worklist so each subform hits this same recognizer, a nested `progn` recurses, an empty one is a no-op and an unsupported form inside one still errors by its own name rather than by `PROGN` (cl-json.asd's `#+`-gated CLOS-feature announcement, which reduces to the literal `(PROGN)` once the reader drops every implementation keyword it lists)), orders `:components` by a stable topological sort of `:depends-on` (+ `:serial` = implicit dep on the previous sibling; `:module` = path prefix, files stay contiguous; `:static-file` = ordering-only; a component's CLASS -- ASDF's own, one a top-level `defclass` declares, or the system's/module's `:default-component-class` -- decides whether it contributes a file and with which extension, the "component-class surface" section below), a SYSTEM-level `:pathname "dir"` is a path prefix for every component (lack.asd's shape: `:pathname "src"` once, then bare component names -- it composes with both of the below, and an empty string adds no level), a component-level `:pathname "dir"` decouples the component's NAME (its identity in the sibling dependency graph) from the path it contributes -- quri's `uri-classes` module is named that and lives in `src/uri/`; on a `:file` the namestring is used verbatim when it carries an extension and gets `.lisp` appended otherwise, and an EMPTY module `:pathname` adds no directory level (real ASDF's rule). A computed `:pathname` is a hard error -- ASDF-as-data has no pathname machinery to evaluate it), and locates `NAME.asd` via `locate()` by *attempting to read* each search dir through the `SourceLoader` abstraction (no existence check, so the browser playground's in-memory loader works). Secondary names (`lib/tests`) map to the primary `.asd`. Metadata options are parsed and ignored, except that a `:version` written as a plain STRING is recorded and read back by `asdf:component-version` (any other literal form, including `(:read-file-form ...)`, is still never inspected and answers nil -- the "`:defsystem-depends-on`, `component-version`" section below), and the test-op wiring options `:in-order-to`/`:perform` are tolerated and ignored too; any other option/component type is a hard error naming the clause. `parseAsdSource`/`parseDefsystem` take a `reader.Features` (backend features on the compile path via `LoadInliner.Ctx`, `INTERPRETER` in the evaluator): a component-level `:if-feature EXPR` keeps the component in the dependency graph but drops its files when the expression fails (the split-sequence CLOS-file gate), a system-level `:depends-on` entry may be `(:feature EXPR DEPENDENCY-DEF)` (`dependencyName`: dropped when EXPR fails; a *surviving* `(:require MODULE)` is a hard error — implementation-provided modules don't exist here), and `#:lib` designators are stripped in `designator`/`symbolName`. A component NAME (`(:file NAME ...)`/`(:module NAME ...)`) accepts a string OR a symbol (todo-420) -- real ASDF runs it through `coerce-name`, which accepts any string designator and downcases a symbol, so cl-json/test's `(:module :t ...)` names the `t/` directory the same way `(:module "t" ...)` would. **`#.` in a `.asd` — the invariant is that the CONSUMER decides, never the evaluator** (todo-310): the tolerant lexer (`LispLexer` with `tolerateReadEval`, used only by `readAllSkippingReadEval` and `readFirstForm`) re-lexes the raw-skipped datum and wraps it in a `(%read-eval datum)` marker (`LispNames.READ_EVAL`; validated by `LispReader.parsesAsExpressions`), and a datum it cannot re-lex at all in a `(%read-eval-unreadable "RAW TEXT")` marker (`LispNames.READ_EVAL_UNREADABLE`) carrying the source text — one datum either way, so a `#.` inside a plist/alist never shifts the surrounding pairing. **Neither marker is resolved where it is read.** `parseDefsystem`'s option loop resolves per option (`resolveReadEval`, against the enclosing `.asd`'s defparameter env + path, threaded as the private `AsdContext`; the other two `parseDefsystem` callers — a `defsystem` written directly in a `.lisp` file, `LoadInliner`/`LispEvaluator` — pass `AsdContext.NONE`):
-
-- **`IGNORED_OPTIONS` — never resolved, never mentioned**: `:name :description :long-description :version :author :maintainer :license :licence :homepage :bug-tracker :source-control :mailto` plus `:in-order-to`/`:perform`. Nothing reads these, so nothing may complain about them (`:version` is on the list even though `component-version` reads it BACK: what is recorded is the value as WRITTEN when it is a string, so nothing is evaluated and an unresolvable marker stays silent). This is most of the `#.` in a real dist: the cl-project skeleton's `:long-description #.(with-open-file … "README.markdown" …)` (myway, http-body, fast-http, proc-parse, smart-buffer, xsubseq, circular-streams — seven on the ningle+clack graph alone), snooze's and cl-mustache's `:version #.(with-open-file …)`, and `(intern #.(string :run-test-system) …)` in seven `*-test.asd` `:perform` bodies. Warning about a value the very next line discards is what todo-310 removed: `(ql:quickload '(:ningle :clack))` wrote 2.6 KB of stderr before loading anything.
-- **Everything else — resolved, and unresolvable is a HARD ERROR naming the `.asd` and the clause**: `:depends-on :components :serial :pathname :class :rontolisp-features` and the system name, plus everything nested inside `:components` (a component's `:if-feature`/`:pathname`/`:depends-on`). This is the cl-postgres `(:file #.*string-file*)` idiom; a silent nil here drops a dependency or a source file (cffi-toolchain's `:if-feature (#.(if (version< …) :or :and))` shape) and surfaces much later as an undefined symbol far from the cause.
-
-The default direction is deliberate: `IGNORED_OPTIONS` is the closed list, so an option added later is load-bearing without anyone remembering to say so. **Do not teach `evalDataForm` `with-open-file`/`uiop:read-file-string`** — a `.asd` is parsed as data on purpose, and opening a README at parse time to fill a field no one reads is work, not correctness. A top-level marker of either kind is still ignored whole (the ASDF version-guard idiom). Measured over the 241 cached Quicklisp `.asd` files: zero stderr, and zero that fail on the new hard error. Source (non-`.asd`) files support `#.` everywhere since 2026-07-18 (interpreter loadFile + the compile path's marker read; see `.kb/reader-features.md`). Pinned by `AsdfSystemsTest` (`unresolvableReadEvalInIgnoredMetadataIsSilent`, `theClProjectLongDescriptionSkeletonIsSilent`, `aPerformBodyReadEvalIsSilent`, `anUnresolvableReadEvalIn{DependsOn,Components}IsAHardError`, `anUnreadableReadEvalIsSilentInMetadataAndNamedWhereItDecides`, `parsesTheClPostgresAsdHeaderShape`), which capture `System.err` — "says nothing" is half the contract.
-
-**Compile path**: handled *inside* `LoadInliner`'s recursion (not a separate pass — a loaded file can call `load-system`, and a spliced component can `load`/`require`); the `Ctx` record threads the system registry, loaded set, cycle stack and search path. Top-level `(asdf:defsystem ...)` registers + is consumed (quoted symbol, like `provide`); top-level literal `(asdf:load-system NAME)` splices deps then component files (dedup like `require`). Non-literal name = hard error at inline time; a *nested* asdf form survives to the compilers, which reject it in the same `case` as `REQUIRE`/`PROVIDE` (`Jvm/WasmExprCompiler`).
-
-**Compile-time pathname folding (`cli.CompileTimePathnameFolder`)**: after `LoadInliner.inline` returns the flattened program, a walker folds the four ASDF/UIOP pathname primitives real libraries call at load time to build a bundled-data-file path: `(asdf:find-system 'NAME [nil])` → the literal `"name"` (or `nil` when unknown + `error-p` nil), `(asdf:system-source-directory X)` → the recorded `LispSystem.baseDir` + trailing `/`, `(asdf:system-relative-pathname X REL)` → that base with `REL` merged onto it (the one-call form; quri's `etld.lisp` names its bundled effective-TLD list this way, and this fold is what lets the `#.` marker resolve on the compile path at all -- `UserMacroExpander`'s macro-time evaluator has no system registry of its own), `(make-pathname ...)` → the composed namestring (via `eval/PathnameOps.makePathname`), and `(uiop:merge-pathnames* A [B])` → the merged namestring (`PathnameOps.mergePathnames`). A top-level `(defparameter *X* <folded string>)` is recorded so a later primitive whose argument is a reference to `*X*` reduces too — the uax-15 seed shape `(uiop:merge-pathnames* *data-directory* "UnicodeData.txt")` is exactly this case. Quoted data is opaque (`(quote DATUM)` passes through), and a `let`/`lambda` rebinding never triggers the substitution — the reduction only fires inside a foldable primitive's argument position, so the walk stays sound without full lexical-scope tracking. Same pass also rewrites `(with-open-file (var <literal utf-8 path> [:external-format :UTF-8]) BODY...)` into `(with-input-from-string (var <inlined contents>) BODY...)` when the path names a UTF-8 file on disk, chunked at 20k Java-char boundaries and reassembled at runtime via `(concatenate 'string CHUNK1 ...)` so the JVM 65535 UTF-8 byte per-string ceiling is never crossed — a 1.9 MB UnicodeData.txt splits into ~64 chunks. **The bundling rewrite skips a path the program itself opens for OUTPUT** (`collectWrittenPaths`, a pre-pass over the whole program collecting literal namestrings behind `:output`/`:append`): baking the compile-time contents of a file the program then WRITES would make it read stale data — an append-then-read round trip would answer whatever was on disk when it was compiled. This is the only shape where the rewrite is not conservative, and it fails SILENTLY, which is why the guard is a pre-pass rather than a local check. Interpreter path is unaffected: `LoadInliner` runs only on the compile-to-file entry, and the interpreter keeps its runtime pathname/asdf functions in `LispEvaluator`. Coverage: `LoadInlinerTest` (per-pattern fold cases + a bundling case + a chunking case + a missing-file passthrough case + `doesNotBundleAFileTheProgramItselfWrites`) and the ci-spec case `open-if-exists-append-keeps-the-existing-content`.
-
-**Interpreter**: `asdf:defsystem` is an `evalCons` case on the constant `LispNames.ASDF_DEFSYSTEM` (special form — options are data); `asdf:load-system` is a global function registered next to `load`/`require` in `LispEvaluator`, accepts computed names, drives `loadFile` with the system's `baseDir` pushed onto `loadDirStack` (so components and dep-`.asd` lookups resolve against the `.asd` dir). Per-evaluator state: `asdfSystems`/`loadedSystems`/`loadingSystems` + `systemPath`.
-
-**`load-system` / `quickload` keyword options** are accepted and IGNORED on every path (`AsdfSystems.checkIgnoredLoadOptions`, called from `loadSystemName`, `LoadInliner.quickloadNames` and the two interpreter functions): there is no `operate` machinery for `:force`/`:verbose`/`:silent` to drive and a second load is already a no-op. Tolerating them is not cosmetic -- a library that loads a system at RUN time spells the call that way (lack's `find-package-or-load` passes `:verbose nil`), so rejecting the option makes the library unloadable over a clause with no effect either way. The SHAPE is still checked (`:keyword value` pairs), so a stray second system name is an error, not a silently dropped load.
-
-**`:class :package-inferred-system`** is the ONE `:class` value implemented (`.todo/301`); every other class picks a component TYPE that changes how sources load, which a defsystem-as-data front end cannot honor, so it stays a hard error naming the clause. It is not a niche: it is the style that has replaced hand-listed `:components` upstream (ningle, rove, array-operations all declare it), so the subset either grows it or freezes at the 2015 half of Quicklisp. Such a system has NO `:components` at all -- one that lists them anyway is an error, since the derived graph would silently win -- and `LispSystem.packageInferredDir` (non-null iff the class was declared; the system's own `:pathname`, `""` when it has none) is the whole marker. The rules, all in `AsdfSystems`:
-
-- **A sub-system name is a FILE PATH.** `x/a/b` -> `a/b.lisp` under the PRIMARY system's directory + its `packageInferredDir` (array-operations says `:pathname "src/"`, so `array-operations/all` is `src/all.lisp`). The primary is the part before the FIRST slash, whatever the requested name's depth -- `rove/tests/main` resolves under `rove`, even though `rove/tests` is its own explicit `defsystem` in the same `.asd`. `locate` already mapped a secondary name to the primary's `.asd`, which is what makes that lookup work unchanged.
-- **The dependencies are read out of the file's own `defpackage`** (`packageDependencies`): every package named in `:use`, `:mix`, `:reexport`, `:use-reexport` and `:mix-reexport`, plus the FIRST argument of each `:import-from` / `:shadowing-import-from`; `:nicknames`/`:shadow`/`:export`/`:intern`/`:documentation` contribute nothing. Reading the files is not an optimization, it is the WHOLE dependency graph: ningle.asd's `:depends-on` lists only `"ningle/main"` and never mentions myway or alexandria. A file with NO `defpackage`/`uiop:define-package` anywhere is a hard error naming the file (`.todo/373`); forms BEFORE the package declaration are skipped, matching real ASDF's `asdf/package-inferred-system::file-defpackage-form` -- the `(in-package #:cl-user)` header ahead of the `defpackage` is a common style (every one of rove's `core/*.lisp`, `misc/*.lisp`, `reporter*.lisp`), and refusing it made `(ql:quickload "rove")` die on the load gate over a form that declares no dependency at all. Only the FIRST package definition form counts: a second `defpackage` further down the file (an internal package) is not a second declaration to merge.
-- **A package name becomes a SYSTEM name** (`packageSystemName`): what `register-system-packages` recorded, else the downcased package name; `cl`/`common-lisp`/`cl-user`/`common-lisp-user`/`keyword`/`asdf` drop out (they are simply THERE, and without that exclusion a `(:use #:cl)` would ask the loader for a system called `cl`). ningle.asd's three `register-system-packages` lines are load-bearing exactly here: without the map, `app.lisp`'s `(:import-from #:lack.request ...)` asks for a system called `lack.request` and `locate` looks for a `lack.request.asd` that does not exist.
-- **Only the forms up to the package declaration are read** (`LispReader.readFirstFormMatching` with the `defpackage`/`define-package` predicate -- `readFirstForm` is that call with an always-true predicate; tolerant of `#.` like a `.asd` — and the reason the tolerant lexer may not warn: every source in the system is opened here, so one unlexable `#.` early in each file would have printed once per file, for a form that is read and thrown away): every source in the system is opened here, and building the AST of each one whole just to look at its package declaration would cost a full parse per file. It does not record provenance either -- the real load of the same file must be the one that claims its positions.
-- **Derivation is on demand, whole-closure per call.** Both `.asd` consumers call `inferPackageInferredSystems` only when the requested name is still missing after the `.asd` was parsed, and it then derives everything reachable from that name in ONE pass, so the `.asd` is not re-read once per sub-system. An edge back to an already-registered sibling is not followed, so a `defpackage` cycle terminates here and is reported by the caller's existing `:depends-on` cycle guard with the stack that reached it -- the same message a hand-listed cycle gets.
-
-Both consumers, or the compile backends diverge from the interpreter: `LispEvaluator.loadSystem` (which also owns the merged `asdfSystemPackages` map) and `LoadInliner.spliceSystem` (whose `Ctx` carries it). Coverage: the parse/derivation half in `AsdfSystemsTest` (incl. the verbatim `ningle.asd` and its four defpackage headers, the nested rove shape, the array-operations `:pathname`, the sibling cycle, and both skip cases -- a lone `(in-package #:cl-user)` header and several forms ahead of the declaration), plus `PackageInferredSystemE2eTest` -- a four-backend load of the synthetic `src/test/resources/package-inferred-demo` system, which exercises a nested `x/a/b` sub-system (whose file carries the `(in-package #:cl-user)` header), a `uiop:define-package` `:use-reexport` edge and a `register-system-packages` hop to a differently-named companion system.
-
-**Search order**: dir of the loading file, then `--system-path` (CLI), then `RONTOLISP_SOURCE_REGISTRY` env — plus, for a `ql:quickload`, the cache directories the download just wrote, which is the whole of what the dist client contributes here ([dists.md](dists.md): `eval/DistClient` over a LIST of Quicklisp-format distributions, Ultralisp opt-in) — the latter two are `File.pathSeparator`-joined lists parsed by `RontoLispCli.systemPath()` and threaded to both paths (and the REPL). The `asdf` package is seeded in `PackageRegistry` (does not use `cl`; both symbols external).
-
-Gotchas: `.asd` reader limits are the *rontolisp reader's* limits — since Phase 2 of `.todo/054-asdf-support.md`, `#+`/`#-`, `#|...|#` and `#:` work everywhere and `#.` is tolerated (marker + consumer-decides resolution, above) in `.asd` files only. No ci-spec case: the compile path needs the `.asd` on disk at compile time, which the concatenated ci-spec driver cannot provide — coverage is `AsdfSystemsTest` + `LispEvaluatorAsdfTest` + the asdf cases in `LoadInlinerTest` (incl. a compile-and-run-on-JVM case) + `SplitSequenceE2eTest`, `ParseNumberE2eTest`, `ClUtilitiesE2eTest`, `ClWhoE2eTest` and `ClBase64E2eTest` (the REAL split-sequence v2.0.1, parse-number v1.8, cl-utilities v1.2.4, cl-who v1.1.5 and cl-base64 v3.4, vendored under `src/test/resources/{split-sequence,parse-number,cl-utilities,cl-who,cl-base64}`, loaded and exercised on the interpreter and compiled JVM -- cl-base64 additionally on all FOUR backends via `AsdfLibraryE2eSupport`; the residue language features have their own `split-sequence-residue-features` / `parse-number-residue-features` / `cl-utilities-residue-features` / `clwho-string-char-primitives` / `cl-base64-residue-features` ci-spec cases). NO cl-who *render* ci-spec case: it needs `(asdf:load-system :cl-who)` with the `.asd` on disk, but the corpus tree-shaker tests (`JvmClassShakerCorpusTest`/`WasmTreeShakerCorpusTest`) re-compile the concatenated ci-spec sources WITHOUT `--system-path`, so a `cl-who:` reference would fail package resolution there — render coverage is `ClWhoE2eTest` (interpreter + JVM) + manual 4-backend verification.
-
-**cl-who (todo-076/todo-081)**: Edi Weitz's (X)HTML macros load verbatim. `with-html-output(-to-string)` expands a chain of ordinary defuns **+ a generic** (`convert-tag-to-string-list`) at macro-expansion time — so on the compile path the whole render resolves in the `UserMacroExpander` macro-time evaluator and the backends see baked string constants. Four residue fixes landed here, all cross-cutting (not cl-who-specific): (1) **`LispString` is now a mutable-buffer class** (was a record) with `replaceInPlace`, and the interpreter's `replace` mutates the target in place + returns it (the compile path lowers `replace` to a runtime `%arrayp` branch: in place for an allocated buffer, a fresh `concatenate` for a string literal) — cl-who's `string-list-to-string` fills a `make-string` buffer by successive `replace`, which only works with in-place mutation. That mutation was macro-expansion-time only until todo-208 made a plain `make-string` result mutable on the compile backends too. (2) **`(string keyword)` / `string=`/`string-equal` drop the keyword's package colon** (`(string :html)` = `"html"`, matches CL) so tags render `<html>` not `<:html>`; interpreter (`Environment.stringDesignator`) + JVM/WASM `compileString` (literal keyword only). (3) **`format` with a non-literal control string** no longer errors: `expandFormat` distributes over a conditional control (`(if c "a" "b")` → two format calls) and otherwise calls the shared runtime renderer (`%fmt-render`, [format.md](format.md); originally an inline cut-down lambda handling `~~ ~% ~a ~s ~d ~x ~c`, replaced by the full-directive Lisp-source renderer in todo-216 — which is why cl-who's `&#x~x;` entity now renders uppercase hex like the literal path) — cl-who's `escape-string` binds its control to a local var, which the eager compilers must still compile even though the DoD never reaches it. (4) **`UserMacroExpander` registers top-level `defvar`/`defparameter`/`defconstant` (special-variable reads) LAZILY into the macro-time evaluator, and replays pure-config `(setf (PLACE) ...)` into it**, so expansion-time reads of `*html-mode*`/`*downcase-tokens-p*`/... see values and the html mode is a compile-time constant. The name is proclaimed special at once; the value EXPRESSION becomes a thunk (`Environment.defineLazy`) that runs only when something reads that global while macros expand — see `.kb/defmacro-backquote.md` for the mechanism and the measurement that motivates it. The setf-place replay is a WORKAROUND for the lack of dynamic special-variable binding at macro-expansion time; the decision to replay is a **static purity judgment**, NOT a data file: `isPureConfigSetf`/`isPure` accept a top-level `(setf (PLACE args...) V)` only when the `(defun (setf PLACE) ...)` writer is a pure config setter (body assigns special/global variables via a side-effect-free allow-list of control forms + arithmetic/comparison/logic/predicate builtins; `ecase`-over-specials is covered, which is cl-who's actual `html-mode` writer) and V + place args are pure. Deny by default, so an impure writer/value never double-runs a side effect at compile time. No per-library registration -- any library whose config setter fits the allow-list works automatically (the old `macro-time-setf-places.txt` data file is gone). A setter outside the allow-list is simply not replayed (no `eval-when (:compile-toplevel)` compile-time-eval escape hatch). Also: the reader's `skipDatum` now models `*read-suppress*` correctly for a nested `#+`/`#-` (yields no datum, keep skipping) — needed for cl-who's `#+:lispworks #+:lispworks :element-type '...` two-form guard, and `with-output-to-string` accepts the full `(var &optional string-form &key element-type)` spec (nil string-form only). Lite limitations (documented): `:indent` (needs dynamic special rebinding — indentation reads the global), `(let ((*html-mode* ...)) ...)` rebinding ignored (use `(setf (html-mode) :html5)`), hyperdoc `loop ... being the external-symbols` block iterates empty (todo-080 lite).
-
-**cl-base64 (todo-085)**: Kevin Rosenberg's base64 v3.4 loads verbatim and encodes/decodes on all four backends. It forced SEVEN cross-cutting features, none cl-base64-specific: (1) **`symbol-name`/`princ`/`~A`/`string` strip the package marker** (a keyword's `:`, a gensym's `#:` -- `LispSymbol.displayName`; `prin1` keeps them) and (2) **1-arg `intern` interns into the current package on the interpreter** (`PackageResolver.internSpelling`), which together make the macro-time `(intern (concatenate 'string (symbol-name input-type) ...))` function-name synthesis under `(in-package #:cl-base64)` name the same canonical `cl-base64:...` functions the `defpackage` exports (`.kb/symbol-runtime-api.md`). (3) **`(setf (schar s i) c)`/`(setf (char s i) c)`**: `%schar-set` mutates in place on every backend when the place holds an allocated buffer (`make-string` / `make-array :element-type 'character`); only a string LITERAL falls back to the setq-rebuild, on all four backends since todo-580 (`LispMacroExpander.expandScharSetFunctional` compiled, `LispEvaluator.evalScharSet` interpreted -- that place must be a VARIABLE or the write is an error, the update is invisible through aliases, O(n) per write; `.kb/string-write-runtime.md`). (4) **a string is a rank-1 character array**: `(make-array n :element-type 'character)` builds a string (the mutable character vector on the compiled backends, native in the interpreter's `make-array`; `make-string` lowers onto it, todo-208) and `aref` reads a string like `char` (interpreter + `_aref1` string branch on JVM + a `ref.test $str` branch in `WasmArrayCompiler.compileAref`). (5) **`make-array :initial-contents`** (interpreter native, compiled = `lowerInitialContentsMakeArray`; both include rank-n nesting). (6) **`locally` + defclass slot `:type`** are parsed no-ops, and **`write-char`** expands to `write-string` of a one-character string. (7) **`error`/`signal`/`warn` are FUNCTIONS** (the decode error path is `(apply #'error (list 'bad-base64-character :input ...))`): the interpreter rebuilds the literal call from evaluated arguments (`rebuildSignalForm` -- full designator protocol, typed conditions with slots), the compiled backends inject datum-only lite wrappers gated on a `(function op)` reference (`BuiltinFunctionWrappers.SIGNAL_FUNCTIONS`; a symbol datum signals a plain condition via `expandObjectSignal`'s symbol case, still caught by `handler-case`'s `error` clause), and **`cerror` lowers to `error`** with the continue-format dropped OUTSIDE restart mode (in restart mode it is the real continuable `cerror`, `.kb/error-handling.md`). Limits: the WASM backends degrade an integer beyond the `i31` range to a float, so `integer-to-base64-string` diverges there for large integers (the E2E uses 1234567); `base64-stream-to-*`/`*-to-base64-stream` compile but the CL stream objects they expect are untested.
-
-**assoc-utils (todo-086)**: Eitaro Fukamachi's alist library (Public Domain) loads verbatim and runs the read/convert API on all four backends. Six general (non-library-specific) features landed: (1) **`mapl`** — `LispMacroExpander.expandMapl` (like `maplist` but applies to successive cdrs for effect, returns the original list; single-list), a macro-expansion in all three compile dispatchers + interpreter like `maplist`/`mapcon`. (2) **`equalp` + `string<`** — a new `eval/LispPreludeLibrary`: recursive rontolisp-source defuns (canonical bare-cl source, json.lisp pattern) spliced by a cli/playground pre-pass (`LispPreludeLibrary.process`, added after `UrlLibrary.process` in `RontoLispCli`/`RontoPlayground`/both corpus tests/`AsdfLibraryE2eSupport.compileProgram`) when referenced, and lazy-loaded by the interpreter in `resolveFunction` (like linalg/url) via `loadedPreludeNames`. Avoids a hand-assembled `_equalp` runtime helper per backend. Lite: `equalp` on arrays/hash-tables/structures falls back to `eql`; `string<` returns the mismatch index or nil, coercing args with `string`. (3) **`define-modify-macro`** — `LispMacroExpander.expandDefineModifyMacro` lowers `(define-modify-macro NAME (params) FN)` to a `(defmacro NAME (place . params) ...)` producing `(setf place (FN place params...))` (trailing `&rest` spliced via `list*`); the interpreter handles it in `evalCons`, the compile path in `UserMacroExpander.expand` (registers the defmacro, drops the form — compilers never see it). Lite: place subforms may double-evaluate. (4) **`define-setf-expander`** — the 5-value setf-expansion protocol is now supported (todo 155): `LispEvaluator` keeps a `setfExpanders` registry and rewrites a registered place through the five-value protocol (via `multiple-value-list` over the `%mv-spill` channel); `UserMacroExpander` registers the definition into its macro-time evaluator and rewrites `(setf/incf/decf (user-place ...) ...)` before the compilers, so `(setf (aget ...) v)` works on all four backends (the expr-compiler `DEFINE_SETF_EXPANDER` case stays a nil no-op only because the rewrite already happened at macro time). `defsetf` (short + long forms) and a real `get-setf-expansion` (a `LispPreludeLibrary` defun) landed with it, so `incf`/`decf` on a user place work too. `PackageResolver` treats a `define-setf-expander`/`defsetf` body as template context (like `defmacro`) so a backquote-template helper resolves in the defining package. (5) **`sort` with `:key`** — `LispMacroExpander.expandSortWithKey` routes `(sort seq pred :key k)` (any keyword args) through `stable-sort` (a stable order is a valid sort); a plain 2-arg `(sort seq pred)` keeps the existing path. Wired in interpreter `evalCons` (like `reduce`) + JVM/WASM `SORT` case. (6) **`(intern name :keyword)`** — builds a keyword symbol; `LispMacroExpander.isKeywordPackageDesignator` + `internKeywordForm` lower it to `(intern (concatenate 'string ":" name))` (backend-neutral, since a keyword is a symbol whose stored name starts with `:`); interpreter builds `":"+name` directly. Any other package arg still errors. Plus two loop/type extensions: **`loop ... being the {hash-keys,hash-key,hash-values,hash-value} of H [using (hash-value V)|(hash-key K)]`** (`LispMacroExpander.LoopExpander.parseForBeingHash` snapshots the table into a `(key . value)` alist once via a `maphash`-accumulator lambda, then walks it like a list — iteration order follows the backend's hash order), and **`check-type` tolerant of a user `deftype` / unsupported type specifier** (`expandCheckType` catches the `makeTypeTest` `IllegalArgumentException` and skips the assertion — the place is still evaluated; `typecase`/`etypecase` stay strict). `alistp`'s `(return-from alistp nil)` across the `mapl` lambda is a real non-local exit on every backend (the cross-lambda-exit lowering, `.kb/do-return-block.md`), so a compiled `alistp` reports `nil` for a non-alist like the interpreter; `AssocUtilsE2eTest` exercises `alistp` on both an alist (`T`) and a non-alist (`NIL`), and `AssocUtilsUpcaseE2eTest` pins the settable `aget` place. Coverage: `AssocUtilsE2eTest` (all 4 backends via `AsdfLibraryE2eSupport`) + the `assoc-utils-features` ci-spec case (the general features, no asdf load). Vendor: `src/test/resources/assoc-utils` (Public Domain, no LICENSE file).
-
-**cl-postgres (`.todo/115`)**: the `.asd` front-end above (defparameter env / `#.` markers / `(:feature ...)` deps) is exactly what the verbatim cl-postgres.asd needs; pinned by `AsdfSystemsTest.parsesTheClPostgresAsdHeaderShape`. The verbatim upstream driver loads and queries a live PostgreSQL on the interpreter, the JVM and the WASM `--component` backend (Preview 1 has no TCP sockets by design, `.kb/tcp-sockets.md`); an `AsdOverrides` entry (`cl-postgres-deps.asd`) declares the dependencies upstream under-declares (alexandria, cl-ppcre, usocket) so `(ql:quickload "cl-postgres")` resolves as ONE form on the compile paths. That override also spells out the `#.*string-file*` component, and it must stay **`strings-utf-8`**, the branch upstream's own feature test now picks (`.kb/reader-features.md`, `:unicode`): `strings-ascii` announces `client_encoding SQL_ASCII` and encodes one octet per code point, so a non-ASCII query parameter reaches the server as an invalid byte sequence and desyncs the connection. Non-ASCII round-trips (both directions) are pinned by the `unicode` rung of `ClPostgresE2eTest`.
-
-**Built-in shim systems (`eval/ShimLibraries` + `BuiltinSystems`)**: `asdf:load-system`/`ql:quickload` and a `:depends-on` resolve `usocket`, `trivial-gray-streams`, `closer-mop`, `flexi-streams`, `float-features`, `bordeaux-threads`, `babel`, `trivial-features` (the platform-feature announcer, `.todo/401` section below), `cl+ssl` (client-side TLS over `rontolisp:tls-upgrade`, todo-399 -- mechanics and the signal-on-no-backing rules in `.kb/tcp-sockets.md`) and `swank` to bundled shims (`uiop` resolves too, contributing no forms of its own -- its definitions arrive through `eval.UiopLibrary`, `.kb/uiop.md`) (`src/main/resources/am/ik/rontolisp/eval/*.lisp`) instead of downloading — per-implementation portability layers that cannot support rontolisp from their side. `closer-mop`'s `class-slots` returns `(name declared-type)` pairs from `%class-slot-defs` over the ClosRegistry (slot `:type` is recorded); `flexi-streams` carries a REAL `flexi-stream` wrapper class (a Gray stream lending UTF-8 characters to the octet stream it wraps) beside the real in-memory octet pair (`.kb/gray-streams.md`); `float-features` wraps the `%ieee754-*` primitives (interpreter + JVM; no WASM); `trivial-gray-streams` adapts onto rontolisp's own Gray protocol (`.kb/gray-streams.md`); `bordeaux-threads` (nickname `bt`) is the locking subset over the `rontolisp:*-mutex` primitives, with `with-lock-held` a built-in expansion rather than a shim defun, and it is why `ShimLibraries.forms` now takes the TARGET backend's `Features` instead of hardcoding `Features.INTERPRETER` -- a `#+`/`#-` in a shim source now says what it means on the backend being built for (`.kb/mutexes.md`); `babel` is the UTF-8 codec in upstream's own TWO layers, and the lower one is the point: the MAPPING protocol (`lookup-mapping` over `babel:*string-vector-mappings*` -> `code-point-counter` / `octet-counter` / `decoder` / `encoder`) IS the codec, and `string-to-octets` / `octets-to-string` / `string-size-in-octets` are drivers over it that own no coding logic of their own -- because a library that decodes INCREMENTALLY has no whole octet vector to hand a driver and calls the mapping layer per character instead (dexador's `src/decoding-stream.lisp` counts with `max-chars` 1 to find where one character ends and decodes exactly those octets into a one-character `babel:unicode-char` buffer; before todo-398 the shim was the drivers only, and that file failed at its `defpackage` -- `The symbol UNICODE-CHAR is not external in the BABEL package` -- before any of dexador's code ran). What the one character model changes: **an encoding IS its name and a mapping IS its encoding**, so `get-character-encoding` and `lookup-mapping` normalize their argument and answer the keyword, and `*string-vector-mappings*` is the SET of names that have a mapping rather than a hash table of mapping objects -- the same list `list-character-encodings` answers, so the implemented encodings are named once. Everything else follows upstream branch for branch, and the counter and the decoder MUST keep agreeing on where a character ends: the drivers size a string from the counter and then fill it with the decoder, so a disagreement is a wrong-length string rather than a crash -- which is why the 5- and 6-octet UTF-8 forms that never existed are consumed WHOLE by both rather than short by one. The errors are upstream's too: the `character-coding-error` hierarchy with a leaf per malformed shape, `*suppress-character-coding-errors*` swapping the signal for a substitution character (U+FFFD for UTF-8, U+001A for the single-octet encodings), and every `:errorp` defaulting from that special and re-binding it, so the codec is the only place that decides what malformed input costs. **Both packages are Java-seeded, so a `.lisp`-only widening publishes nothing** -- a new name needs its entry in `PackageRegistry`, and a run-time `export` is not a workaround (`.todo/403`); every `babel-encodings` external is re-exported under the `babel:` spelling by an import redirect built by a loop over that set, because upstream's `babel` `:use`s `babel-encodings` and consumers spell both (dexador imports `character-decoding-error` from `babel` and `*suppress-character-coding-errors*` from `babel-encodings`). **Where the shim stops**: the encodings are the three the one character model can mean, and any other `:encoding` signals -- a fourth would need the real per-code-page tables this shim exists to avoid; and `string-size-in-octets` answers ONE value where upstream answers the counter's two, because rontolisp carries secondary values in a global channel (`.kb/multiple-values.md`) and no consumer has ever wanted the index. Pinned on all four backends by `BabelMappingE2eTest`; `uiop` is a package stub plus five real members: `add-package-local-nickname` (consumed at resolve time by `PackageResolver` for literal top-level calls, so it works on every backend), `file-exists-p`, `merge-pathnames*`, `directory-exists-p` / `directory-files` / `subdirectories` / `collect-sub*directories` (the LISTING family, Lisp source in `LispPreludeLibrary` over the one `%list-directory` primitive -- all four backends) and `getenv` -- the last being rontolisp's ONLY spelling of "read an environment variable", since ANSI CL has none (`.kb/time-environment-builtins.md`), plus (todo-226, the clack milestone) `symbol-call` and, in its own `uiop/image` package, `print-condition-backtrace`. **`uiop:symbol-call` is REAL on every backend**: the interpreter's is a runtime name-to-function lookup (`packageResolver.memberSpelling` + `resolveFunction` + `apply`, registered in `LispEvaluator`); the compile paths (todo-229, which built the runtime name table this used to wait for) lower it in `expandUiopStubCall` to `(funcall (intern (string name) (find-package pkg)) args...)` through the `_lookup` registry, and (todo-404) carry uiop's own Lisp definition of it beside that fold, because the fold covers CALL position only and the idiom is usually written as a VALUE (`(apply #'uiop:symbol-call '#:pkg '#:name uri args)`, dexador's backend dispatch, whose uninterned designators the dispatch gate now probes as `#:member`) — mechanics and the emission-gate obligation in `.kb/symbol-runtime-api.md`. Reading it at all was the hard requirement: lack's `src/util.lisp` spells it with a SINGLE colon, so an internal-only symbol failed the whole FILE at read time and no userland `(defun uiop::symbol-call ...)` could work around it. `uiop/image:print-condition-backtrace` is a `LispPreludeLibrary` entry (all four backends) printing the CONDITION and no backtrace -- no backend carries a Lisp-level call stack, and real UIOP falls back to the same shape on an implementation without a backtrace API. It is defined in `uiop/image` (its upstream home, named directly by `lack-middleware-backtrace`'s `(:import-from :uiop/image ...)`) and the `uiop` package IMPORTS the name, so both spellings resolve to ONE symbol and hence one prelude splice -- pinned by `LispPreludeLibraryTest.bothUiopSpellingsOfPrintConditionBacktraceSelectTheOneEntry`; two externals with the same member name would have been two functions. `swank` is the degenerate rung of the ladder: a system whose whole content is `create-server` (signals) and `stop-server` (nil no-op). It exists because clack's `.asd` hard-depends on it and SLIME's own `.asd` is a program the defsystem-as-data front-end cannot read -- without the stub, `(ql:quickload "clack")` fetches the SLIME tarball and dies there. `create-server` SIGNALS rather than no-op'ing because clack reaches it only when `clackup` was passed `:swank-port`, i.e. the caller explicitly asked for a remote REPL. **`clack-handler-rontolisp`** (todo-228) is the Clack handler backend and the one shim that inverts two of the conventions above, both forced by clack's late-bound discovery protocol: its package is NOT seeded in `PackageRegistry` (the shim carries its own `defpackage`, because lack's `find-package-or-load` loads the system only when `find-package` MISSES) and it is registered under TWO system names (`clack-handler-rontolisp` + the dotted `clack.handler.rontolisp` that lack derives from the package name). Three loader-side rules exist for it: the interpreter's runtime `asdf:find-system` answers a BUILT-IN system's name even before it is loaded (the hit that routes `find-package-or-load` onto `load-system` at clackup time), the interpreter's builtin-system branch of `loadSystem` evaluates shim forms through the RESOLVING `eval(form)` so a shim-carried defpackage registers, and `LoadInliner.spliceSystem` splices the handler shim EAGERLY after system `"clack"` (a compiled program cannot load at run time; the baked package table + the `_lookup` registry serve the runtime probes instead). Full mechanics: `.kb/clack.md`. Replacement-by-real-library plan: `.todo/147`.
-
-**ASDF component metaobjects at run time (todo-374, retiring most of todo-228's lowerings)**: one Lisp source, `eval/asdf.lisp` (canonical shape, `eval.AsdfRuntimeLibrary`), defines the class family + `asdf:find-system` + the readers + `system-source-directory`/`system-relative-pathname`/`component-pathname` (designator-accepting: the object or a name; they keep answering NAMESTRINGS, `.kb/pathnames.md`) + `registered-systems` + `asdf:*user-cache*`. The one per-backend seam is the record source `%asdf-system-record`/`%asdf-system-names` — a record is `(CLASS DIR FILES DEPS LOADED-P VERSION)` with FILES `(RELATIVE . RESOLVED)` pairs:
-
-- **Interpreter**: the two are Java built-ins over the live per-evaluator `asdfSystems`/`loadedSystems` (now insertion-ordered, so `registered-systems` is deterministic); a built-in shim system answers a plain record even before it loads (the lack `find-package-or-load` probe route). `asdf.lisp` loads lazily (`ensureAsdfRuntimeLoaded`), triggered by: resolution of any name it defines (function OR variable — `*user-cache*` is a variable read), `defsystem`/`load-system`/`quickload`/`test-system`, and any `defclass`/`defmethod`/`typep`/`typecase`/`etypecase`/`make-instance` form that MENTIONS a component class name (`mentionsComponentClass`) — which is what lets a bare `(defmethod f ((s asdf:system)))` resolve before any system machinery ran. `asdf:load-system`/`asdf:test-system` stay Java (they drive `loadFile`); both accept the metaobject as a designator (`asdfDesignator` reads slot 0 — rove passes the object back in).
-- **Compile paths**: `LoadInliner.inline` ends with fold-then-splice: `CompileTimePathnameFolder.fold` first (so a program whose only asdf use folds away — the uax-15/quri literal shapes — splices NOTHING), then `AsdfRuntimeLibrary.process` prepends `asdf.lisp` + the baked `%asdf-registry%` table (from `Ctx.systems`/`loadedSystems`, LinkedHashMap for order) + the compile seam (the record defuns, runtime `asdf:load-system`/`ql:quickload` = "already spliced -> nil, else the call-time error", and the `asdf:test-system` dispatch) whenever the folded program still references any runtime asdf name (classes, readers, find-system, nested load-system/quickload, test-system). `CompileTimePathnameFolder` no longer folds `find-system` ITSELF (the runtime answer is an object now) but unwraps a nested literal `(asdf:find-system 'x [ep])` in a fold's system-designator position (`systemDesignator`), so `(asdf:system-source-directory (asdf:find-system 'lib nil))` folds exactly as before. The `Jvm/WasmExprCompiler` `ASDF_LOAD_SYSTEM`/`QL_QUICKLOAD`/`ASDF_FIND_SYSTEM` cases now compile an ordinary call when the defun exists (`ctx.functions.containsKey`) and keep the historical stubs (call-time error resp. `expandRuntimeFindSystem`'s arguments-then-nil) ONLY as the no-pipeline fallback — a direct `JvmLispCompiler`/`WasmLispCompiler` compile with no `LoadInliner` in front, i.e. a test seam. Nested `require`/`provide`/`asdf:defsystem` remain compile errors.
-
-**test-op (todo-374 second half)**: `AsdfSystems.parseDefsystem` records `:perform (test-op (o c) BODY...)` into `LispSystem.testOp` (params verbatim; body pre-qualified by `normalizeAsdUserForm` — bare uiop members to their home spelling, bare asdf FUNCTION members to `asdf:`, the resolution a real `.asd` gets from `asdf-user`, **and a uiop member the `.asd` qualified ITSELF (`uiop:symbol-call`, `uiop::`, or the home sub-package) to that same home spelling** — only the home name has a definition behind it, so left as written it reached the perform body as `The function UIOP:SYMBOL-CALL is undefined` while the identical call in a `.lisp` file worked, which is what forced cl-postgres-client's `.asd` onto `(funcall (find-symbol "RUN" "ROVE") ...)`; a body containing an unresolved `#.` marker, or a qualified `test-op :after` method, stays tolerated-and-ignored — recording it would fail the eager compile of the emitted defun) and `:in-order-to ((test-op (test-op ...)))` into `testOpEdges`; both stay in `IGNORED_OPTIONS` so their `#.` markers are never resolved and never warned about. `LispSystem.packageInferredClass` marks which systems instantiate `asdf:package-inferred-system` (a declaring primary AND every derived sub-system — real ASDF's shape, the branch rove's `run-system` typecase takes). Interpreter `asdf:test-system` = `loadSystem` + follow edges (visited-set cycle guard) + eval `((lambda (o c) BODY) nil <metaobject>)`. Compile path: `spliceSystem` emits `(defun %asdf-test-op-<name> (o c) BODY)` at the system's splice point (the body compiles in the system's context), a top-level literal `(asdf:test-system NAME)` splices the system AND its test-op closure (`spliceTestOpClosure` — a plain load never pulls the tests system in) and KEEPS the call, and the generated `%asdf-run-test-op` cond dispatches per name (edges via `%asdf-test-edge` = load-check + recurse, then the perform defun). `asdf:find-system` of an instance answers it unchanged, so `(symbol-call :rove :run c)` chains compose.
-
-**`:defsystem-depends-on`, `asdf:component-version`, and the trivial-features shim (`.todo/401`, 2026-08-16)** -- the three ASDF gaps the dexador spike hit, and dexador.asd's first two lines:
-
-- **`:defsystem-depends-on` is parsed** (`AsdfSystems.dependencyNames`, the same entry shapes `:depends-on` takes -- plain designator, `(:feature EXPR DEP)`, `(:version DEP "1.2.3")`) and recorded on `LispSystem.defsystemDependsOn`, which BOTH loaders resolve through the ordinary shim/built-in/real ladder BEFORE the system's own `:depends-on` (`LispEvaluator.loadSystem`, `LoadInliner.spliceSystem`). It is deliberately NOT merged into `dependsOn`: real ASDF does not make it a sideway dependency, so `asdf:component-sideway-dependencies` must not list it (pinned on all four backends). Nothing evaluates the dependency -- the `.asd`-is-data premise is untouched; it only has to be LOADABLE and to contribute features.
-- **A dependency ANNOUNCES features to the system that names it**, which is the half a reader needs and the reason the option exists: `BuiltinSystems.declaredFeatures` is read at PARSE time (a static table plus the host probe below) (ahead of the option loop, like `:rontolisp-features` and the `collectFeaturePushes` announcement -- one channel, now three spellings), so the announced names hold for this system's own `:if-feature`/`(:feature ...)` clauses and for the reading of its component files. Only a BUILT-IN system announces: a real third-party one announces by RUNNING, and a `.asd` is never evaluated here. **Both `:depends-on` and `:defsystem-depends-on` announce**, because real ASDF loads a `:depends-on` system before this system's files are compiled and so shows them its pushes too (cl+ssl spells the trivial-features dependency that way). The one divergence, and its why: here a `:depends-on` announcement ALSO reaches this definition's own `:if-feature` clauses, because a one-pass parse has no "load between the clauses" -- guaranteeing exactly that is what `:defsystem-depends-on` is for upstream, so the generous direction can only make a `.asd` read the way its author meant.
-- **`trivial-features` is a built-in shim** whose whole content IS the announcement (`BuiltinSystems.DECLARED_FEATURES` + generated `(pushnew :F *features*)` forms from the same list, so the read-time and run-time halves cannot drift). It declares **`:unix`** -- every backend's file/path/environment surface is POSIX-shaped and none is Windows, so `#-windows`/`#+unix` is the branch a consumer must take -- **`:little-endian`** -- the only places a program sees machine layout (WASM linear memory, a reactor's `:bytes` boundary) are little-endian by the wasm spec, and the JVM backend exposes no such view to disagree -- and **`:64-bit`** -- every backend's fixnums are 64-bit and every pointer-shaped value (a JVM reference, a WASM `i31`/`externref`, an FFM `MemorySegment` address) is 8 bytes wherever pointers exist at all, so the 32-bit half could never be true here (`cffi`'s `types.lisp` reads exactly this feature to pick `:size`'s base type, `.todo/540`). **The HOST half is a probe, not a table** (2026-08-27): the same announcement carries the machine the program will run on -- `:darwin` + `:bsd` or `:linux`, and `:arm64` or `:x86-64` (`BuiltinSystems.hostFeatures`, from `os.name`/`os.arch`) -- on the JVM-family targets only, because a wasm module runs on WASI and not on the machine that compiled it, where `:unix` above is already the whole truth. That is why the announcement is now TARGET-AWARE (`declaredFeatures(names, target)`), the one thing the static table could not be. The re-evaluation trigger this section carried fired on a Mac: cffi's whole library-resolution layer runs on `featurep`, so cl-sqlite's `(:darwin (:default "libsqlite3")) (:unix (:or "libsqlite3.so.0" ...))` picked the LINUX names there and `examples/jvm/cffi-sqlite.lisp` died with "Unable to load any of the alternatives"; `:default`'s suffix (`.dylib` vs `.so`) is the same predicate, cffi's own `darwin-frameworks.lisp` component is `:if-feature :darwin`, and `:arm64` is what puts Homebrew's `/opt/homebrew/lib` in the DYLD fallback search path that file installs -- a path dyld itself does not search, so without it no brew-installed library resolves at all. The CPU name is announced for the same reason it was refused before -- it now describes something a program can act on (cl-autowrap gives `size-t` its width from it) rather than an instruction set rontolisp does not have. An unrecognized OS or CPU announces NOTHING for that half rather than guessing, `:32-bit` stays absent (rontolisp is never that), and `:windows` is not announced at all -- `:unix` above would have to come off first. What is host-dependent is now the announcement ONLY: the base `Features` sets stay machine-independent, which is what keeps the `reader-features-variable` ci-spec case's `(length *features*)` the same number on every machine. Upstream's own `.asd` cannot load here at all -- it ends in `(error "Sorry, your Lisp is not supported. Patches welcome.")` for an implementation it does not recognize -- which is the usocket-class boundary of `.todo/147`, not a scope choice.
-- **`asdf:component-version`** is a `version` slot on `asdf:component` (real ASDF's home for it) with the reader, plus a sixth element on the per-backend record (`(CLASS DIR FILES DEPS LOADED-P VERSION)`). `:version` stays in `IGNORED_OPTIONS`, so its `#.` markers are still never resolved and never complained about: the value is recorded AS WRITTEN when it is a plain string and every other spelling answers nil. dexador's `(asdf:component-version (asdf:find-system :dexador))` User-Agent is the consumer.
-- **`asdf:system-relative-pathname` on the compile paths needed nothing**: the todo predicted a missing `AsdfRuntimeLibrary` splice, and the measurement (2026-08-16, all four backends, with the relative argument in a VARIABLE so `CompileTimePathnameFolder` cannot fold it) says the runtime form has worked since todo-374 put `asdf.lisp` behind the trigger set. The spike's warning came from patched sources. It is now PINNED rather than assumed, in the same `AsdfMetaobjectsE2eTest` exercise.
-
-Retiring the `mgl-pax-bootstrap` shim was listed as a consequence of the first bullet and is NOT one: its `.asd` also declares `:around-compile "mgl-pax.asdf:compile-pax"`, a compile hook the subset cannot honor (verified 2026-08-16 -- the parse now names `:AROUND-COMPILE`). The stale reason is corrected everywhere it was written down; the shim stays.
-
-Pinned by: `AsdfMetaobjectsE2eTest` (all four backends: eq-memoized find-system, the readers over a `:components`+`:module` system, defmethod specializers, registered-systems, nested load-system no-op, `test-system` through the `:in-order-to` chain; fixture `src/test/resources/asdf-metaobjects-demo`), the metaobject legs of `PackageInferredSystemE2eTest` (sub-system IS a `package-inferred-system`, one-child shape, defpackage-derived sideway deps), `LispEvaluatorAsdfTest` (`findSystemAnswersAMemoizedComponentMetaobject`, `testSystemFollowsTheInOrderToChainIntoThePerformBody`), `AsdfSystemsTest` (the test-op parse/normalization group) and `LoadInlinerTest.nestedLoadSystemOfASplicedSystemAnswersNilOnJvm`. `asdf.lisp` needs its `resource-config.json` entry (`AsdfRuntimeLibrary` as `typeReachable`) like every classpath-loaded Lisp resource.
-
-**One override RETIRED (2026-08-10)**: `chipz.asd` used to map to a hand-authored
-`chipz-crc32-slice.asd` declaring `package.lisp` + `crc32.lisp` only -- a SCOPE decision
-taken when mito's advisory lock was the closure's single consumer and nothing called
-`chipz:decompress`. `size-report/programs/zlib` calls it, which is exactly the trigger the
-slice wrote down for itself. The real `chipz.asd` now loads verbatim on all four backends
-(`ChipzE2eTest`), so the override and the replacement file are both deleted; the one gate
-it predicted was real and is closed -- `types-and-tables.lisp:107` needed `fill`, which
-rontolisp now has. mito is unaffected: chipz's crc32 of `"mydb"` is `285543882` through
-the full system, the value the slice and SBCL 2.2.9 both answered.
-
-**Replacement `.asd` files (`eval/AsdOverrides`)**: some libraries' `.asd` is an executable PROGRAM, not data — ironclad's defines component classes (`defclass ironclad-source-file (cl-source-file)`), generates its subsystem defsystems with a `defmacro` over `uiop:ensure-list`, and attaches `perform :around` methods. `AsdfSystems` deliberately never evaluates a system definition, so such a file cannot be parsed at all. `AsdOverrides` maps the `.asd` FILE NAME to a bundled replacement source (`src/main/resources/am/ik/rontolisp/eval/*.asd`, written in the supported defsystem subset) and `AsdfSystems.locate` substitutes it after locating the real file — keeping the located PATH, so component files still resolve against the real library tree and the loaded sources are the library's own. One entry serves every backend (both loaders go through `locate`). Registered today: `ironclad.asd` -> `ironclad-slice.asd`, `cl-postgres.asd` ->
-`cl-postgres-deps.asd`, `postmodern.asd` -> `postmodern-deps.asd`, `trivia.asd` ->
-`trivia-trivial.asd`, `dbi.asd` -> `dbi-deps.asd`,
-`tiny-routes.asd` -> `tiny-routes-lite.asd` (not unparseable at all -- replaced only to
-ADD the opt-in `tiny-routes/lite` secondary system beside the verbatim primary; see the
-tiny-routes/lite section below), `cffi.asd` -> `cffi-rontolisp.asd` (unparseable twice
-over -- it opens with `(error "Sorry, this Lisp is not yet supported")` for an
-implementation its own list does not name, and ends in a `defmethod version-satisfies`;
-the replacement names rontolisp's `cffi-sys` backend as the implementation component, see
-`.kb/cffi.md`). **Every bundled replacement `.asd` and every leaf-module shim `.lisp` also needs an entry in `src/main/resources/META-INF/native-image/.../resource-config.json`** (`AsdOverrides` resp. `ShimLibraries` as the `typeReachable` condition) — the native binary loads them off the classpath, and a missing entry fails only there, as `<name> is missing from the classpath` at `asdf:load-system` time. `./mvnw test` cannot catch it: the JVM run reads the resource straight from `target/classes`. This is how `ironclad-slice.asd` shipped unusable on the native binary and stayed that way until the SCRAM work re-ran the native E2E. This is the third tier of the substitution ladder: whole shim system (`ShimLibraries`) > replacement `.asd` (system metadata only, real sources) > leaf-module shim (one component file, real everything else) > derived forms (individual forms of the components that hold them, real everything else -- see the uax-15 section at the end).
-
-**ironclad v0.61 SHA-2/HMAC/PBKDF2/HKDF/SCRAM/RSA slice (todos 173, 175, 424)**: the `ironclad-slice.asd` replacement declares `ironclad/core` (package, conditions, generic, macro-utils, util, common, digests/digest, macs/mac, prng/prng), `ironclad/digest/sha256`, `ironclad/digest/sha512` (SHA-384 AND SHA-512 — one file, as in the real `.asd`), `ironclad/mac/hmac`, `ironclad/kdf/pkcs5`, `ironclad/kdf/hmac`, `ironclad/kdf/password-hash`, `ironclad/kdfs` (kdf/kdf.lisp) and `ironclad/public-key/rsa` (src/math.lisp + public-key/{public-key,pkcs1,rsa}.lisp), with the aggregate `ironclad` = that slice, so a `:depends-on ("ironclad")` (cl-postgres, uuid) resolves to the loadable subset. Real sources, byte-identical results on ALL FOUR backends (`IroncladE2eTest`: FIPS 180-2 SHA-256 one- and two-block, SHA-224, SHA-384/512 one- and two-block, RFC 4231 HMAC-SHA-256/384/512 (SHA-256 through both the `make-mac` and deprecated `make-hmac` APIs), RFC 5869 HKDF test case 1 through `make-kdf :hmac-kdf`, PBKDF2 at 1 and 4096 iterations, RFC 7677 section 3 SCRAM-SHA-256 end to end — `pbkdf2-hash-password` -> ClientKey -> StoredKey -> ClientSignature -> ClientProof — in the shape cl-postgres' `scram.lisp` uses, and the RSA stack over a FIXED 2048-bit key pair so the raw signature is a pinned constant, plus PSS/OAEP round trips and a live `generate-key-pair :rsa :num-bits 1024`). One deliberate deviation from real ASDF's layout, forced by eager compilation: **kdf/kdf.lisp loads LAST** (it `make-instance`s every KDF class and the compilers expand a `make-instance` where it stands, so every class it names must already be registered — which is why kdf/hmac.lisp is declared as a DEPENDENCY of `ironclad/kdfs` rather than a sibling). kdf/hmac.lisp (HKDF) was the file this slice originally had to drop: it builds its output with `(apply #'concatenate '(vector (unsigned-byte 8)) ...)`, which needs both a non-string `concatenate` result type and a first-class `#'concatenate` — both landed, see `.kb/concatenate-result-families.md`. `bordeaux-threads` (an `ironclad/core` `:depends-on` in the real `.asd`) is simply dropped: it has zero call sites in the slice (it serves `prng/`). **The public-key half arrived in todo-424** and it needed nothing: `src/math.lisp` (an `ironclad/core` component in the real `.asd`), `public-key/public-key.lisp`, `pkcs1.lisp` and `rsa.lisp` load and run UNPATCHED on all four backends, and `generate-key-pair` / `sign-message` / `verify-signature` / `encrypt-message` / `decrypt-message` round-trip with and without PSS/OAEP. Two things made it free. (1) The prng shim is enough: RSA key generation and the PSS salt want `random-data`, which draws `rontolisp:random-bytes` — no Fortuna, no `os-prng.lisp`. (2) The kdf.lisp load-order deviation below does NOT recur here, because no file in the RSA subsystem `make-instance`s a class defined in another one (rsa.lisp defines `rsa-public-key`/`rsa-private-key` and instantiates them itself; public-key.lisp's only class, `discrete-logarithm-group`, is instantiated solely by the DSA/ElGamal files, which stay out). math.lisp + the three public-key files are declared as ONE `ironclad/public-key/rsa` subsystem rather than following the real `.asd`'s core/subsystem split, so a program that only wants digests does not compile the bignum machinery. Not a rontolisp gap, recorded so it is not rediscovered: PS512 with a 1024-bit key trips ironclad's own `(>= num-bytes (+ (* 2 digest-len) 2))` assertion — PSS/SHA-512 needs >= 1040 modulus bits. Out of scope, unchanged: ciphers, aead, octet-stream, the rest of prng/, the non-RSA public-key algorithms (DSA, ElGamal, the elliptic curves, ed25519/ed448 — `rsa.lisp` loads without them and each is its own consumer question), the KDFs whose classes live in those subsystems (scrypt, argon2, bcrypt), and the `dotimes-unrolled` users (its DEFINITION loads — `&environment` is accepted and ignored).
-
-**The three SCRAM names (todo-175)**: cl-postgres' `scram.lisp` calls nine `ironclad:` names; the six digest/HMAC/hex ones came with todo-173, and these three closed the gap. Why they had to exist BEFORE cl-postgres could be compiled at all: an undefined function is a **compile-time** error on the JVM/WASM backends (`Cannot compile: SOME-UNDEFINED-FN`) while the interpreter defers it to the call, so even a trust-auth connection that never runs SCRAM would not build.
-
-- `pbkdf2-hash-password` — the REAL `src/kdf/password-hash.lisp`, unmodified, as its own `ironclad/kdf/password-hash` subsystem. Its body is a one-liner over `pbkdf2-derive-key`, all of which the slice already had. Loading it whole (rather than excerpting) is what pulled in the other two entries below plus `with-standard-io-syntax` (needed by the sibling `pbkdf2-hash-password-to-combined-string`, which nothing here calls but the compile paths compile anyway — see `LispMacroExpander.expandWithStandardIoSyntax`). The ASDF-spliced third-party tree is NOT tree-shaken: `LibraryDefunPruner` covers only rontolisp's own bundled libraries, so an unused defun in a loaded library still has to compile.
-- `octets-to-integer` / `integer-to-octets` — a leaf-module shim for `src/public-key/public-key.lisp`, holding those two functions VERBATIM (only the semantics-free `declare`s dropped) and nothing else. The originals are self-contained `ash`/`ldb`/`integer-length`/`ceiling` converters that merely live in a 3,065-line RSA/DSA/ECC file with no route into the slice.
-- `random-data` — a leaf-module shim for `src/prng/prng.lisp` that is now REAL (2026-07-26). The re-evaluation trigger recorded here ("the day a cross-backend entropy source exists, the honest move is a real prng slice, not a wider stub") fired when SCRAM needed `crypto:strong-random` for its client nonce: `rontolisp:random-bytes` was added as the cryptographic-entropy primitive on all four backends (`SecureRandom` / WASI `random_get`, `.kb/time-environment-builtins.md`), so the shim implements `*prng*`, `list-all-prngs`, `make-prng`, `random-data`, `random-bits` and `strong-random` over it. `strong-random` keeps upstream's REJECTION SAMPLING (draw `integer-length` bits, retry while >= limit), so the nonce alphabet stays uniform — a modulo fold would bias the low characters. Deliberate narrowing: `:fortuna`/`:fortuna-generator` are not implemented (`make-prng` accepts any name and returns the OS generator) and the seed-file operations are absent, since an OS generator needs no seeding and every caller in the slice passes `:os`.
-
-`gen-client-proof` XORs two 32-byte digests as 256-bit INTEGERS, so the wasm legs of this were blocked by construction until exact integers there became arbitrary-precision (`.kb/wasm-bignum.md`) — a 256-bit literal did not even compile before. The pinned edge case is that `integer-to-octets` returns the MINIMAL vector: a proof whose high bytes cancel comes back shorter than 32 and must be padded back, which is exactly why cl-postgres has `pad-octet-vector`. An off-by-one there is a silently wrong proof that surfaces only as an authentication failure, so `IroncladE2eTest` pins a synthetic pair whose XOR has two leading zero bytes alongside the RFC vector.
-
-**Native PBKDF2 on the INTERPRETER (`eval/IroncladNative` + `eval/Sha2Kernels`, 2026-08-16)**: `LispEvaluator.loadSystem` rebinds `IRONCLAD::PBKDF2-DERIVE-KEY` to a Java kernel as soon as the system defining it finishes loading — the `LinalgSimd` interception shape (capture the defun, fall back to it on any DECLINED input), keyed on the DEFINITION rather than on a system name so it fires for the `ironclad` aggregate and for a bare `ironclad/kdf/pkcs5` alike. Why only here, and why always on:
-
-| PBKDF2-HMAC-SHA256 x4096 | cost |
-| --- | --- |
-| interpreter, ironclad's Lisp | 17,091 ms |
-| interpreter, native kernel | **9 ms** |
-| JVM `.class` | ~1 s |
-| WASM component | ~3 s |
-
-One SHA-256 compression interpreted out of ironclad's source costs ~0.8 ms and a handshake needs ~16,000 of them; the compiled backends run the same Lisp fast enough that they need no sibling, so this is deliberately a one-backend fast path and NOT a `.kb` divergence — PBKDF2-HMAC-SHA-224/256 is a spec-defined function of its arguments, so the kernel and ironclad's code are interchangeable by construction and no flag gates it (contrast `--simd`, which is opt-in because it trades float precision). Two measured facts decided the boundary. (1) Replacing only `update-sha256-block` + `sha256-expand-block` — the smallest semantic surface — buys ~4x, not enough: the compression function is 77% of the cost and the interpreted mdx buffering around it is the rest. (2) The 4096-round loop re-derives the HMAC key schedule per iteration; the kernel absorbs the two pad blocks once. `Sha2Kernels` is hand-written rather than `java.security.MessageDigest` because it is `LispEvaluator`-reachable and therefore also compiled into the native binary AND the browser Web Image, where a JCA provider is a registration burden or absent ([[web-playground-native-image-gotcha]]). Pinned from both sides: `IroncladNativeTest` (RFC 7914 vectors, the JDK's own `PBKDF2WithHmacSHA*`/`MessageDigest` as an independent oracle across every padding boundary, and the declined inputs still producing ironclad's own `check-type` / unsupported-digest text) and `IroncladE2eTest`, whose three COMPILED legs keep running ironclad's Lisp inner loop over the same vectors. **Re-evaluation trigger**: if the interpreter's own arithmetic/macro costs ever close the ~1900x gap (`.todo/182`, the per-evaluation user-macro re-expansion, is the largest known one), or if a compiled backend regresses into needing the same treatment, revisit the boundary — widening it to `digest-sequence`/the HMAC trio was considered and declined because cl-postgres' remaining ironclad calls are a handful, not a loop.
-
-**Leaf-module shims (`ShimLibraries.leafModuleForms`)**: besides whole shim systems, `ShimLibraries` substitutes individual COMPONENT FILES inside a real system when the component's contract with the rest of that system is a few package-qualified functions. Both system loaders consult it before reading a component file: `LispEvaluator.loadSystem` evaluates the shim forms through the package resolver (interpreter), `cli.LoadInliner.spliceSystem` splices them (compile path). Each shim `.lisp` resource carries the replaced file's own `defpackage` (registering the package exactly as the original would) followed by canonical-shape fully-qualified defuns. A shim MAY instead select a package with `in-package`, and since todo-539 both loaders BRACKET it the way they bracket a real component (`packageResolver.pushPackage()`/`popPackage()` in the interpreter, the `%push-package`/`%pop-package` markers on the compile path, emitted only when `selectsAPackage` is true) — the cffi-sys backend is a near-verbatim analogue of upstream's own `cffi-sbcl.lisp` and opens with one, and every canonical-shape shim's output is unchanged. Registered today: jzon's `eisel-lemire.lisp` -> `jzon-eisel-lemire.lisp` (make-double = coerce + chunked exact-power-of-ten scaling, IEEE multiply/divide only so it is backend-identical; exponent clamped to +/-700; `|exp10| <= 22` rounds once, extremes are a few ulps off), `ratio-to-double.lisp` -> `jzon-ratio-to-double.lisp` (a `coerce` one-liner) and `schubfach.lisp` -> `jzon-schubfach.lisp` (write-float/write-double = `write-string` of `princ-to-string` -- which since todo-431 IS a Schubfach shortest round trip on every backend, spelled with the lowercase exponent marker, so the shim loses nothing but the original's u64/u128 arithmetic). This kills both the original files' `#.` power-of-ten table crash (a load-time special unbound in the macro-time evaluator) and their u64/u128 arithmetic (beyond the WASM numeric model). Making macro-time globals LAZY did not retire that first reason: the special is a `defvar` with NO value form, filled by a later top-level form the macro-time evaluator never runs, so forcing on the `#.` read still finds nothing to force. Also registered: ironclad's `src/prng/prng.lisp` -> `ironclad-prng.lisp` (see the ironclad section above) — a different motive from jzon's, which is portability: that file is perfectly portable, it is simply a CSPRNG the backends already provide, so the shim draws `rontolisp:random-bytes` instead. Its sibling `src/public-key/public-key.lisp` -> `ironclad-public-key.lisp` was registered on a THIRD motive, size of file (two verbatim converters instead of the public-key module), and **todo-424 retired it**: once the real file loads, a shim reproducing two of its functions verbatim is a redefinition race, not a saving. That is the general rule for a size-motivated leaf shim — it lives exactly as long as the real file has no route in. Note the key shape: the map is keyed by SYSTEM name and the component key is the path RELATIVE TO THE SYSTEM'S BASE DIR (`src/prng/prng.lisp`, not `prng.lisp`) because ironclad's components sit under `:module` prefixes; jzon's `.asd` lives in `src/` so its keys are bare names. A substituted component does not have to exist on disk at all — the shim short-circuits before the file is read, which is why the vendored ironclad tree stays pruned. Since todo-296 the system-name key can also be an OPT-IN: `tiny-routes/lite` -> `src/middleware/path-template.lisp` -> `tiny-routes-lite-path-template.lisp` is keyed by a system name that exists solely to carry the substitution (declared by the `tiny-routes-lite.asd` replacement), so the full `tiny-routes` system keeps the real file and the user chooses the ppcre-free matcher by naming the lite system — a third motive beside jzon's portability and ironclad's size-of-file: SIZE OF DEPENDENCY, taken only on request (see the tiny-routes/lite section below). And a FOURTH motive since todo-539, `cffi`: the substituted component `src/cffi-rontolisp.lisp` does not exist upstream AT ALL -- it is the implementation seam every CFFI backend has to write for itself, declared by the replacement `.asd` and supplied only as a resource, so upstream's tree on disk is never edited to add it. Its sibling `src/strings.lisp` -> `cffi-strings.lisp` is jzon's motive again (the real file drives a babel code generator the babel shim does not have). See `.kb/cffi.md`.
-
-**Refused systems (`ShimLibraries.refusalReason`)**: the end of the ladder, where even a stub would be a lie -- a system name mapped to a SENTENCE saying why it cannot load, checked at the top of both loaders beside the conflict check. Registered today: `cffi-grovel` (grovelling compiles and runs a C program to read the platform's headers, which needs a C toolchain at load time) and `cffi-libffi` (structures by value already work through the foreign function API's own struct layout, so there is nothing for it to add). The `swank` shim's motive taken one step further: a clear message beats letting `ql:quickload` fetch something that then dies unparsed, and beats a half-load even more.
-
-**cl-postgres (`.todo/115`, 2026-07-26)**: the driver LOADS AND RUNS on the interpreter -- `open-database` + `exec-query` complete a real query round-trip against PostgreSQL 17 under `trust`, `password`, `md5` AND SCRAM-SHA-256 auth (a SCRAM connect costs ~0.15 s interpreted, ~0.2 s on the JVM and ~0.14 s on a component, re-measured 2026-08-16 against a live `postgres:17-alpine` -- see below), with the verbatim upstream sources (`~/.rontolisp/quicklisp/software/postmodern-*/cl-postgres/`) over `md5`/`split-sequence`/`ironclad`/`cl-base64`/`cl-ppcre`/`uax-15`/`alexandria`. **alexandria became loadable in the same pass** (it is cl-postgres' one indirect dependency and the most-depended-on library in the ecosystem, `.todo/152`): it forced `&whole` in `defmacro`/`destructuring-bind`, a destructuring PATTERN after `&rest`/`&body` (`if-let`), `lambda-list-keywords`, `do-external-symbols`, `intern` with a package designator, `hash-table-test`/`-size`/`-rehash-size`/`-rehash-threshold`, `mismatch`, `bit`, `arrayp`, `with-open-stream` and a first-class reference-gated `#'open` (whose wrapper dispatches an option plist onto the four literal direction/element-type shapes the compiled `open` needs). cl-postgres itself forced `encode-universal-time`/`decode-universal-time`, `force-output`/`finish-output`, `listen`, `open-stream-p`, `decode-float`, `digit-char`, `multiple-value-prog1`, `(close s :abort t)`, `(setf (ldb ...) v)` and the real ironclad prng slice above. The COMPILE paths followed: the whole stack builds and queries live on the JVM and on the WASM `--component` backend too (on Preview 1 the socket calls compile to call-time errors since todo-195 -- no TCP there by design, `.kb/tcp-sockets.md`). Pinned by **`ClPostgresE2eTest`**, which runs by DEFAULT since todo-262 -- Docker is its only gate, and its `RONTOLISP_POSTGRES_E2E` siblings `MitoE2eTest` / `PostmodernE2eTest` stay opt-in (it wants network for the first `ql:quickload`, and ~3 minutes): a Testcontainers `postgres:17-alpine` with a per-role `pg_hba.conf` ladder -- `trustuser`/`passuser`/`md5user`/`scramuser`, one role per method, so a broken rung cannot fall back to another -- and ONE probe program per backend that walks all four and asserts byte-identical output on the interpreter, the JVM and the component, plus the Preview 1 compile error. One fact the test encodes: the component leg connects to the container's IP ADDRESS, not its network alias, because `tcp-connect` takes only IPv4 literals on WASM (`.todo/048`). **The three SCRAM legs used to be separately opt-in** (`RONTOLISP_POSTGRES_SCRAM_E2E=1`) purely because the 4096-round PBKDF2 cost 2m20s interpreted; todo-188 took that to ~50 s (~1 s on the JVM, ~3 s on a component), so they are ordinary legs again, and the native PBKDF2 above later took the interpreted leg to ~0.1 s. The `-c authentication_timeout=600` raise came BACK in todo-262, when the class stopped being opt-in: sharing a full `./mvnw test` (JUnit runs classes 16-wide) pushed the ~50 s interpreter leg past the 60-second default and it died as "Database error: end of file". The default made that leg a stopwatch on ambient load rather than an assertion about SCRAM; the connect costs are recorded HERE, so a regression in them is a change to this file rather than a flaky test. **The ~1 s / ~3 s figures this file carried for the JVM and the component were stale** -- they predate the engine-level fixes ([wasm-gc-final-types.md](wasm-gc-final-types.md), [wasm-gc-heap-pregrow.md](wasm-gc-heap-pregrow.md), [hot-path-method-size.md](hot-path-method-size.md)) and nobody re-measured after them. Measured 2026-08-16 against a live scram-sha-256 server, first connect / second connect: interpreter 155 / 68 ms, JVM 214 / 100 ms, component 140 / 137 ms. PBKDF2 x4096 alone is 9 ms interpreted (the native kernel), 44 ms on the JVM and ~87 ms on a component in steady state (was 137 ms before the todo-413 batch, 2026-08-16: statement-position effect propagation, inline literal add/sub checks, declare-tolerant flet fusion, literal `loop` steps, `%replace-bulk`, packed typed-vector structs -- `.kb/wasm-int-fusion.md` stage 5) -- so the compiled backends are still ~5-10x off the native kernel, and they are off for OPPOSITE reasons: the JVM boxes every intermediate integer while its dispatch is fine; on wasm-GC the compression now runs at its fused floor (~2.6 us/block, standalone parity) and the rest is the per-iteration HMAC re-key + CLOS-chain machinery. The per-backend profiles and what to do about them are `.todo/412` (JVM) and `.todo/417` (wasm). The raise now guards nothing on the interpreter -- the native PBKDF2 retired the reason it was added for -- and stays only as insurance for the ~3 s component leg on a loaded CI machine. The WASM "module-size tax" that used to keep the component at ~28 s turned out to be two engine-level mechanisms, both fixed: non-final GC types sending every hot cast through wasmtime's `is_subtype` libcall ([wasm-gc-final-types.md](wasm-gc-final-types.md)) and the copying collector thrashing a barely-grown heap whose every collection copies the loaded stack's live set ([wasm-gc-heap-pregrow.md](wasm-gc-heap-pregrow.md)). The JVM's version of the tax was different again: its 4-8x was the `_invoke_<arity>` dispatcher crossing HotSpot's HugeMethodLimit, not the runtime type dispatch this file used to suspect -- see [hot-path-method-size.md](hot-path-method-size.md). Full analysis in `.todo/115` and `.todo/188`.
-
-**com.inuoe.jzon v1.1.4 (todo-146)**: the real jzon loads and runs END-TO-END on ALL FOUR backends via `(ql:quickload '#:com.inuoe.jzon)` (live dist or the vendored copy under `src/test/resources/jzon`; `JzonE2eTest` extends `AsdfLibraryE2eSupport` with a combined basic + README exercise, plus an interpreter-only test for the WASM-divergent residue). Its deps resolve to the shim systems above and its numeric leaves to the leaf-module shims. Accepted WASM-side divergences (kept OUT of the 4-backend exercise): large-float print shape (`.todo/46`), hash-table iteration order over multiple keys, and non-ASCII `\u` escapes (`code-char` beyond ASCII emits one raw byte on WASM). Runtime residue on the compiled backends shrank with todo-304: `uiop:native-namestring` is REAL now (= `namestring`, which jzon's pathname stringify method needs on the pathname VALUE); the remaining `uiop:` stubs error at call time. The former `:key-fn` residue is gone — a symbol-valued `:key-fn` resolves through the `_lookup` registry since todo-229 (`.kb/symbol-runtime-api.md`).
-
-**uax-15 v0.1.3 (todos 154 + 159)**: Chris Bagley's Unicode normalization library loads verbatim and runs the four normalize forms on ALL FOUR backends via `Uax15E2eTest` (extends `AsdfLibraryE2eSupport`, transitively pulls the vendored split-sequence + cl-ppcre). Compile-path features it forced: the four pathname primitives + `with-open-file` file-inlining above (todo-159; the 1.9 MB UnicodeData.txt chunks into ~64 `concatenate 'string` chunks so the JVM 65535 UTF-8 byte per-string ceiling is never crossed), a `LOOP` per-clause iteration-head rewrite in `LispMacroExpander`, plus a `WASM UTF-8 string byte model` -- `_charvec_to_str` encodes each character as its 1-4 byte UTF-8 sequence and the byte-indexed accessors (`char`/`aref`/`length`/`subseq`) walk UTF-8 through three shared runtime helpers (`_str_char_count`/`_str_char_at`/`_str_char_byte_offset`) so a non-BMP scratch value stored in a `unicode-string` char vector round-trips through the compiled program unchanged. See `.kb/wasm-gc-strings.md`. The component test also drove the mem module patch (`WasmComponentBuilder.memModuleFor`): the shared canonical-memory module's initial page count now follows the rontolisp core module's memory-import minimum, so a program whose static data alone exceeds 384KB (the mem module's default six pages) no longer traps at instantiation.
-
-
-**Derived uax-15 tables (`eval/Uax15Tables`, `ShimLibraries.rewriteComponentSource`)**: the FOURTH tier of the substitution ladder, and the lightest -- it substitutes INDIVIDUAL FORMS of a real component and hands the rest of the file to the caller's normal read (so package resolution is the one a real component file gets, unlike the canonical-shape leaf shims). uax-15 builds its tables at LOAD time by parsing 2.7 MB of bundled Unicode text through `cl-ppcre`, which cost 404 s on the interpreter, ~30 s per run on the wasm-GC backends and 3.5 s on the JVM. Two rewrites answer that, and BOTH are needed -- deriving the tables and then not building them until something asks. **(1) Derived spans.** Six spans are replaced, each located by a marker that must occur EXACTLY ONCE (an upstream release that moves one throws, naming the marker and the file -- a silent fallback to the real source would put the 30 s back with nothing pointing at why): in `src/precomputed-tables.lisp` the `(defvar *unicode-data* ...)` that reads and splits all 34,924 `UnicodeData.txt` rows becomes `nil` (nothing outside that file ever read the rows), the `let` that folds them into the combining-class + two decomposition maps becomes those tables as data plus one BUILDER `defun` each, the `(defparameter *canonical-comp-map* ...)` + its `maphash` becomes a builder whose body is that same maphash RELOCATED verbatim, and the `(defparameter *unicode-letters* ...)` + the NINE hardcoded CJK/Hangul/Tangut range loops (not seven -- six of them sit behind a `#-utf-16` that is always live) becomes `(defvar *unicode-letters* nil)` plus the UNION of those loops and the data-derived letters as sorted inclusive codepoint RANGES and the `%lite-unicode-letter-p` that binary-searches them (`.todo/344`); in `src/uax-15.lisp` the `let` that folds `DerivedNormalizationProps.txt` into the four illegal-character lists becomes the source RANGE rows, expanded on demand inside `get-illegal-char-list` and cached, and `unicode-letter-p`'s body becomes a call to that predicate, docstring kept verbatim. Everything that COMPUTES a normalization -- and the `CompositionExclusions.txt` read, which stays a top-level form because it is 221 lines -- is verbatim upstream. **(2) Forced reads.** Each of the NINE bare reads of a derived table, in `src/normalize-backend.lisp` (4) and `src/uax-15.lisp` (5 -- `get-mapping` reads `*canonical-decomp-map*` twice, both on its `:nfkd` line), becomes `(or *T* (%lite-build-T))`. The letter table is not among them and has no builder at all: it is the one global that stays `nil` for the life of the program, so a read of it anywhere would silently answer that no character is a letter -- which is why the tables file's own mention count is pinned at one (the emitted `defvar`) and every other component is scanned for the name. Read-site forcing, not entry-point forcing: it keeps the granularity (an `:nfd` normalization structurally never touches the compatibility or composition map) and cannot be bypassed by calling `uax-15::nfc` directly. The counts are an explicit inventory in `Uax15Tables.FORCED_READS` and a mismatch throws, because a read the rewrite failed to reach sees a table that is still `nil` -- a crash, but only when that one table is first needed, and one whose message names neither uax-15 nor the rewrite. The inventory is keyed by component PATH, so a component NOT in it is additionally scanned for the five names and throws if it has one: a release that RENAMES a reader (or adds a new one) would otherwise get the worst combination -- tables lazy because the tables file still matched its own markers, plus a bare read that never forces one. Verified: without that scan, renaming `src/uax-15.lisp` loads silently and then dies inside `unicode-letter-p` while `normalize` still works. That particular symptom went with the letter table -- an unforced letter read answers NIL now rather than dying -- which is exactly why the scan covers the letter name too. **Three things make the `(or ...)` protocol correct and are the whole trap surface**: (a) every table global must start `nil`, so the two upstream `defparameter`s of a fresh (non-nil, hence TRUE) `make-hash-table` are demoted to `(defvar ... nil)` -- the composition map's initializer moves into its builder, the letter table's is simply dropped; left alone, `or` short-circuits onto an empty table forever; (b) the relocated `maphash` reads `*canonical-decomp-map*` and reads inside `precomputed-tables.lisp` are deliberately NEVER rewritten (that file is full of `(setf (gethash K *T*) V)` write places), so the composition-map builder forces its dependency explicitly as its first form -- measured without it, all four backends die; (c) the nine range loops are READ now rather than run, so this rewrite has to interpret a reader conditional it used to leave to the reader -- six of them sit behind `#-utf-16`, which is always live here (`utf-16` is not a rontolisp feature and uax-15 declares no `:rontolisp-features`), and `hardcodedLetterRanges` throws on a loop spelled any other way, or behind any other conditional, rather than silently drop its codepoints. What makes the merge sound is that the ranges are the replaced table's key set MEMBER FOR MEMBER, holes included: `UnicodeData.txt` gives a CJK block only a First and a Last row, and the loops stop short of the Last one (`below #x4DB5` against a `4DBF` row), so `#x4DB4` and `#x4DBF` are letters and `#x4DB5` is not -- the three codepoints `Uax15E2eTest` ends on. The category string the table carried per key is gone with it: nothing ever read it, `unicode-letter-p` being the table's only consumer. When the bundled data files cannot be read the real source loads and builds everything eagerly, and `rewriteTables` appends four IDENTITY builders generated from the same name list the forced reads use -- the only thing keeping the two sides in step, since no E2E ever walks that path -- plus a `%lite-unicode-letter-p` that is NOT an identity: with no derived ranges to search, the eagerly built letter table is the answer. Routing `unicode-letter-p` through a NAME instead of inlining the search into it is what buys that: the replacement in `src/uax-15.lisp` is unconditional, so the two paths cannot disagree about what the data files decided. **Bulk numbers are emitted as decimal runs inside STRING literals scanned by a generated helper, never as numeric literals**: an integer literal costs TWO JVM constant pool entries (an integer is a boxed `long`) and ~25,000 of them push a cl-postgres-scale class past the 65534-entry class-format ceiling, where every emitted u2 index silently truncates -- see `.kb/jvm-method-size-limits.md`, which is what made this substitution first look like an operand-stack bug. The runs are a QUOTED LIST of 1,000-character chunks, cut between integers, never one long literal: **`(char s i)` costs O(i) on every COMPILE backend (the UTF-8 walk in wasm's `_str_char_at`, the code-point walk in the JVM's `offsetByCodePoints`), so scanning a single literal is quadratic** -- a 55,811-character run measured, chunked against one literal: component 90 vs 1439 ms, wasm Preview 1 90 vs 1328, JVM 27 vs 280, interpreter 67 vs 68. **The interpreter number is 1.0x on purpose**: chunking buys the three compile paths, and the interpreter was fixed the other way, by the same measurement -- `Environment.charRef` rebuilt the whole Java `String` from the `int[]` on EVERY `(char s i)`, so one access was O(length) and the interpreter was the WORST of the four; it now indexes the slot. Do not "verify" the chunking rationale by A/B-ing it interpreted; it shows nothing there. The compile-path O(i) remains and is filed as `.todo/185`. Result, measured 2026-07-26 on the native binary + wasmtime 46.0.1, warm: uax-15 load 3741 -> **91 ms** interpreted and 2092 -> **5 ms** on a component; `(ql:quickload "cl-postgres")`, the `examples/db/postgres-hello.lisp` seed, 2.23 s -> **0.10 s** wall on a component and 0.21 s interpreted. A program that DOES normalize pays, at its FIRST `normalize` and never again, only for the tables that form needs -- measured interpreter / component: `:nfc` 68/75 ms, `:nfd` 60/72, `:nfkc` 154/166, `:nfkd` 153/166 (the compatibility forms are the ones that add the 3,796-entry compatibility map). Forcing ALL five tables plus the illegal list costs 290 / 326 ms against the old 3741 / 2092 ms load, so the two constant-factor fixes are worth ~13x / ~6.4x even with laziness completely defeated -- on the interpreter that is `charRef`, on the component it is the chunking. Per table, interpreter / component ms: combining class 12/12, canonical decomp 49/53, compatible decomp 91/102, composition map 2/2, letters 132/148, `:nfc` illegal list 4/9. **The letter row is the one that no longer exists** -- see the ranges below, where the same build re-measures at 444/55 ms on today's native binary rather than 132/148. **The module does NOT shrink** (5.98 MB before and after): an ASDF-spliced third-party tree is never pruned (`.kb/library-defun-pruning.md`) and the fold bakes each `with-open-file` per site, so laziness moves work in time, never out of the artifact. Retiring the letter table is the one part that DOES come out of it, because that deleted emitted code instead of deferring it: on the uax-15 demo, -19,926 bytes of wasm on either backend and -15,671 of JVM class. **The letter table is GONE rather than lazy (`.todo/344`).** It was ~127,000 entries -- 21,765 data-derived plus ~105,000 from the nine loops -- answering one predicate that only ever asks membership, and 1,332 integers of merged ranges answer the same question. What that trades is BUILD time for LOOKUP time, and the trade is measured, 2026-08-13 on the native binary + wasmtime 47, warm, over the uax-15 demo -- the FIRST `unicode-letter-p` call (i.e. the build) and 10,000 further calls, before -> after in ms: interpreter 444/21 -> **42**/393, JVM 128/3 -> **13**/37, wasm Preview 1 55/1 -> **0**/17, component 55/1 -> **1**/15. A repeat lookup now costs what the table used to save, so the table only pays off past ~11,000 calls interpreted and ~34,000-39,000 compiled -- and the only caller in the loadable corpus is postmodern's `valid-sql-identifier-p`, one call per character of one identifier. **If a program ever does cross that, the answer is a memo keyed by the characters it actually asks about, not the 127,000-entry table back.** The search shape is tuned for the INTERPRETER, where a search costs the most: a 3-argument recursion reading the vector out of its global, `low`/`high` EVEN indices into the flat pair run; the two shapes it beat are recorded on `Uax15Tables.LETTER_PREDICATE`. One deliberate BEHAVIOR change, and it is a fix: `(uax-15:unicode-letter-p #\A)` answered NIL with the real load and answers T with the derived table, because upstream keys every data-derived letter entry on `nil` -- its `char-from-hexstring` reads `#+utf-32`, and trivial-utf-16 announces that feature from a `(case char-code-limit ...)`, i.e. a COMPUTED push, which the reader deliberately does not honor (`.kb/reader-features.md`: a literal top-level push it does). A second, benign one: uax-15's four internal table globals read `nil` from user code until the API is called, and `*unicode-letters*` reads `nil` forever. Pinned by `Uax15E2eTest` (all four backends; its exercise LEADS with the two lines that pin the deferral -- all five globals still `nil` after the load, then `uax-15::compose` to force the composition map through the one route that does not go through the decomposition map first -- before the normalizations + the combining-class map + the whole ordered `:nfc` illegal list + `unicode-letter-p`) and `Uax15TablesTest` (the derivation, the builder shape, the demoted defparameters, the dependency force, the folded range loops and the union they produce, the chunk cut, every loud guard -- moved form, wrong read count, an outside-inventory read, a re-spelled range loop, a surviving letter-table mention -- and the fallback cross-checked against the builder names the forced reads actually call).
-**cl-unicode 0.1.6 + cl-ppcre-unicode + cl-str (2026-08-26; compiled 2026-08-28, `.todo/545`)**: `(ql:quickload "str")` resolves and loads the whole graph -- cl-ppcre, cl-unicode/base, cl-unicode, cl-ppcre-unicode, cl-change-case, str -- and `(str:title-case "HELLO LISP!")` answers `"Hello Lisp"` on **all four backends**. Measured, that one program: interpreter 12.9 s of cl-unicode load; `-o Prog.class` compiles in 17.9 s to 5.3 MB and runs in 1.1 s; WASM Preview 1 and `--component` compile in ~17 s to ~5.0 MB and run in ~2.7 s. It took three things, in this order. **(1)** `.todo/543`, the `equalp` key fold on every backend, without which the load dies at `Unknown property name "Cs".` on any compiled backend. **(2)** The generated components stopped being LITERALS. Written out they are ~5 MB holding ~140,000 numbers and ~68,000 character names -- ~208,000 constant pool entries against the 65534 a class may name -- so each table now travels as its own PRINTED TEXT inside ~230 string literals and is read back with `read-from-string` (570 entries), and each of the fourteen range trees became a flat range table `%lookup` binary-searches, BUILT ON FIRST LOOKUP of that property. The measurements that pick reading over scanning, and the two ceilings that bound a chunk, are in `.kb/jvm-method-size-limits.md`; the shape is generated by `eval/ClUnicodeTables` and pinned by `ClUnicodeTablesTest`. Retiring the balanced tree is the one FAITHFULNESS deviation this added, and it is free: `split-range-list`'s round-half-to-EVEN middle only ever decided the tree's shape, never an answer. **(3)** The WASM module's linear memory had to stop giving the bump heap a fixed three growth pages; see `.kb/wasm-gc-heap-pregrow.md`. Before all three, Preview 1 compiled it in 8.6 s to a 6.7 MB module and then spent three MINUTES getting to the `Cs` failure. **cl-unicode is the FIFTH tier of the substitution ladder and the only one that GENERATES a component rather than replacing one.** Three of the eight components its primary system names -- `lists.lisp`, `hash-tables.lisp`, `methods.lisp` -- do not exist in the release at all. Real ASDF materializes them by loading the separate `cl-unicode/build` system (a UCD parser over the bundled `build/data/*.txt`) and running its `:perform (load-op ...)`, which WRITES the three files next to the sources; `:output-files` plus a `component-depends-on` method on `prepare-op` is the wiring. All three are outside the defsystem-as-data subset, which is what the original `ASDF:DEFSYSTEM cl-unicode/build: unsupported option :OUTPUT-FILES` error was reporting -- correctly. `eval/ClUnicodeTables` parses the same bundled data files and emits the same definitions in Java at load time (the fourteen range trees `methods.lisp`'s methods look up, the ten hash tables `hash-tables.lisp` fills, the six property-symbol lists `lists.lisp` sets), reached through `ShimLibraries.leafModuleForms`, which is why that method now takes the system's base directory and the loader. An `AsdOverrides` entry (`cl-unicode-built.asd`) drops the build system, its `component-depends-on` method (a top-level `defmethod` the data-only parse cannot read anyway) and the fiveam test system; every other component is the real upstream source. **The emitted shapes match `build/dump.lisp` exactly, quirks included**, because that is what makes upstream's own test suite meaningful against them: `build-range-list` returns at `+code-point-limit+ - 1`, so the last range ends at `#x10FFFE` and `#x10FFFF` is covered by no range at all; `split-range-list` picks its middle with `(round (1- length) 2)`, i.e. round-half-to-EVEN; and the `pushnew` lists come out in reverse order of first appearance. The dumps are no longer quoted literals at all (above), which retired the reason they used to be chunked at 400 pairs: a quoted list is walked recursively when a form is resolved and read, and 200,000 elements in one literal overflows the stack in `PackageResolver.resolveQuotedDatum`. The reader recursing per element is the same constraint one level down, and is what caps a text chunk at 1,000 elements. Pinned by `ClUnicodeTablesTest` (a synthetic UCD slice covering every reader in `build/read.lisp`, asserted as emitted TEXT) and `AsdfSystemsTest.parsesTheBundledClUnicodeReplacementAsd`. **Three infrastructure gaps fell out of it, each fixed for everyone rather than for cl-unicode**: (1) **`*compile-verbose*` / `*compile-print*` did not exist.** Standard CL variables; nil here like `*load-verbose*`, but portable sources READ them to decide whether to narrate a long build step and an unbound variable is a hard error there. (2) **cl-ppcre's `nsubseq` signalled on every backend**, taking the whole shared-substring surface with it -- a FUNCTION replacement to `regex-replace`/`-all` (cl-unicode's `canonicalize-name` is one) and `:sharedp t` on `scan-to-strings` / `register-groups-bind` / `do-scans`. It is a displaced array over a STRING, which displacement here could not view; `eval/ClPpcreSharedSubseq` rewrote the one definition to `subseq`, which is what cl-ppcre itself uses whenever the caller did not ask to share. Deliberately a rewrite and not a `make-array` that answers a copy: that would have made every OTHER library's displacement silently stop aliasing. **RETIRED 2026-08-28** (`.todo/544`): `make-array :displaced-to` over a string answers a real string VIEW on all four backends (`.kb/adjustable-arrays.md`, "Displacing a STRING"), so the verbatim `nsubseq` loads and runs, and `ClPpcreE2eTest`'s exercise covers the shared-substring entry points it feeds. (3) **an `equalp` hash table placed its keys by `equal`**, so `"CS"` and `"Cs"` were two keys -- and cl-unicode's `*property-map*`, its two name tables and `*property-aliases*` are all `equalp` and all rely on the case-insensitive lookup (`derived.lisp` asks for `"Cs"`; the table holds `"CS"`, because the bidi class `CS` registers after the general category `Cs` in `UnicodeData.txt` order and `*canonical-names*` is last-wins per symbol -- upstream lands there too). Fixed by folding the key before it is placed -- on the interpreter first (`LispEquality.equalpKey`) and, since `.todo/543`, on all four backends (`.kb/hash-tables.md`), which is what the WASM load's `Unknown property name "Cs"` was; whether that load then completes is `.todo/545`, which is about its size and time. **Two character names also had to exist**: `str.lisp`'s whitespace list is written with `#\Vt` and, for the characters with no short name, with UNICODE NAMES (`#\No-break_space`, `#\Ideographic_space`) -- see `.kb/characters-code-points.md`.
-
-**s-sql (`.todo/195`, 2026-07-28)**: `(ql:quickload "s-sql")` loads the verbatim
-upstream sources (postmodern-20260101-git, 3 files) and `(sql (:select '* :from
-'foo :where (:= 'id 1)))` renders identically on ALL FOUR backends -- s-sql
-opens no sockets, so unlike cl-postgres it runs on Preview 1 too (the socket
-calls its cl-postgres dependency drags in now compile to CALL-TIME errors there,
-not compile errors: the pruner cannot drop cl-postgres' defmethod-anchored
-socket chain -- `LibraryDefunPruner.definitionName` prunes defun/defvar-family
-only -- so `WasmExprCompiler`'s Preview-1 tcp family lowers through
-`LispMacroExpander.callTimeUnsupportedStub`, the same policy as an undefined
-function). Language features it forced, each with its own `.kb`/test pin: the
-format `~^` iteration escape + `~:*` inside `~[` (shared `FmtCut` lowering in
-`LispMacroExpander`), the `*standard-output*` redirect
-([standard-output-redirect.md](standard-output-redirect.md)), `readtable-case`
-(a constant-`:upcase` stub), `intern` with a quoted-keyword package designator
-on the compile paths, the sequential loop `for X = init then step` referencing
-a LATER `for Y in` driver (re-timed via end-of-body temps,
-`LoopExpander.retargetSequentialEqualsSteps` -- s-sql's `strcat`), the
-specialized `(vector (unsigned-byte 8))` `typep` (element-type equality, not
-bare `arrayp`), and four structural fixes: `UserMacroExpander` leaves loop
-destructuring patterns (`((x . y) . rest)`) intact, `PackageResolver` walks
-call tails ELEMENT-WISE (a variable named `quote` followed by one argument used
-to read as `(quote DATUM)` and skip resolving the argument -- s-sql's `:copy`
-op), resolves `case`/`ecase`/`ccase` clause KEYS as data with bodies as code (a
-clause head spelled `quote` is a key -- `expand-table-name`), and maps
-`pkg::member` to the bare CL name when the package inherits it from `cl`
-(`cl-postgres::write-string` IS `cl:write-string`). One replay rule landed for
-the operator table: a top-level `(let (...) <definitions only>)` is evaluated
-WHOLE into the macro-time evaluator (`UserMacroExpander
-.registerMacroTimeDefinitions`), because `register-sql-operators` closes each
-of the ~230 `(eql :keyword)` `expand-sql-op` defmethods over a `make-expander`
-closure -- without it the `sql` macro fell to the default op renderer on the
-compile paths while the interpreter worked. The ~230-method eql dispatcher
-stayed under the JVM/WASM method-size guards with no chunking needed. Pinned by
-the `s-sql-enablement-language-group` ci-spec case; the end-to-end quickload
-run is manual (the postmodern tree lives in the quicklisp cache, not vendored).
-
-**postmodern (`.todo/201`, 2026-07-28; the milestone `.todo/202`, 2026-07-29)**: `(ql:quickload "postmodern")` resolves and orders the whole graph -- alexandria, cl-postgres, s-sql, split-sequence, uiop, cl-ppcre, uax-15, then postmodern's own twelve component files -- and **the whole non-MOP build now LOADS AND RUNS**: `with-connection` / `create-table` / `insert-into` / `query` / `with-transaction` / `update` / `query :single` complete a live round trip against PostgreSQL 17, byte-identically on the interpreter, the JVM and the WASM `--component` backend, with the `:reconnect` and `retry-transaction` restart paths driven for real. Preview 1 stays a compile error by design (no sockets, `.kb/tcp-sockets.md`). Pinned by **`PostmodernE2eTest`** (opt-in `RONTOLISP_POSTGRES_E2E=1`, same Testcontainers harness as `ClPostgresE2eTest`) and, for the socket-free language mechanics, the `postmodern-non-mop-milestone` ci-spec case. Four gaps stood between the `.todo/200` state and that, none of them postmodern-specific: `concatenate 'string` had to take any character sequence (`nil` from an `(unless ...)` branch -- `.kb/concatenate-result-families.md`), quoted DATA had to resolve against the reading package and an `:export` of an inherited name had to re-export the source symbol (both `.kb/packages.md`), and `FreeVarAnalyzer` had to see through `with-mutex`'s value-bearing lock spec and stop treating `*error-output*` as a capturable lexical. One known deviation remains visible in a postmodern program's output and is owned elsewhere: a condition prints as a slot dump rather than through its `:report` (`.todo/206`). A second one is gone -- `*error-output*` reaches stderr since `.todo/149` closed (`.kb/standard-output-redirect.md`). The upstream `postmodern.asd` is unreadable as data -- it opens with a top-level `eval-when` pushing `:postmodern-thread-safe` / `:postmodern-use-mop` per implementation -- so an `AsdOverrides` entry substitutes `postmodern-deps.asd`, which **takes both feature decisions statically** (a push in a `.asd` reaches that file's own `#+` but never its component files, `.kb/reader-features.md`). `s-sql.asd` and `simple-date.asd` sit in the same release directory and need no override of their own; `s-sql` locates and loads plainly, and `simple-date` is not a postmodern dependency at all (json-encoder probes for it with runtime `find-package`, `.todo/198`). The `:nicknames (:pomo)` of postmodern's own `defpackage` registers through `PackageResolver` like any user package: `pomo:*database*` resolves to `POSTMODERN:*DATABASE*`. The two decisions:
-
-- **`:postmodern-use-mop` ON** (2026-08-01, the `.todo/203` Phase D flip) -- `table.lisp` joins the build ahead of `deftable.lisp`, the `closer-mop` dependency arrives through upstream's own `(:feature :postmodern-use-mop "closer-mop")` `:depends-on` shape, and postmodern's `defpackage` takes its `#+postmodern-use-mop` branch, `(:use :closer-common-lisp ...)` (`.kb/packages.md`). The DAO layer runs on the static definition-time MOP subset (`.kb/clos.md`). The `:if-feature` / `(:feature ...)` clauses stay VERBATIM so the whole decision remains a feature flip -- pinned by `AsdfSystemsTest.thePostmodernMopBuildIsAFeatureFlip`, which re-parses the bundled resource with the declaration line reduced to `:postmodern-thread-safe` alone and asserts `table.lisp` and `closer-mop` leave the build again; the default parse (table.lisp present, deftable after it, closer-mop declared) is pinned by `parsesTheBundledPostmodernReplacementAsd`.
-- **`:postmodern-thread-safe` ON** (2026-07-28, `.todo/204`) -- declared through the `:rontolisp-features` option below, so the lock sites take their `#+postmodern-thread-safe` branch: three in this build (`connect.lisp`'s connection pool, `prepare.lisp`'s statement-id counter, `query.lisp`'s class-finalize lock), five more in the MOP-only `table.lisp`. It is honest to declare because `bt:with-lock-held` now really serializes -- `bordeaux-threads` is a built-in shim system over the `rontolisp:*-mutex` primitives, a `ReentrantLock` on the interpreter and the JVM and a no-op on the two single-threaded WASM backends (`.kb/mutexes.md`). It was OFF from `.todo/201` until then, and that was a genuine narrowing rather than a scope choice: rontolisp DOES run concurrent handlers (one virtual thread per request under `serve`), so the `(progn ...)` those sites compiled to was correct single-threaded and racy concurrent.
-
-`:depends-on` differs from upstream three ways, all deliberate: `global-vars` is DROPPED (declared upstream, ZERO call sites -- it leaked in as a bordeaux-threads dependency), `bordeaux-threads` goes with the feature decision (declared, and it resolves to the shim system), and `cl-ppcre` + `uax-15` are ADDED (called by `roles.lisp`/`execute-file.lisp` and `util.lisp`, never declared upstream -- they load transitively through cl-postgres today, so leaving them out would make the eagerly-resolving compile paths depend on the order of somebody else's `.asd`). The `postmodern/tests` system is not reproduced (fiveam, simple-date, local-time).
-
-**`:rontolisp-features (...)` (`.todo/204`, 2026-07-28)**: a defsystem option rontolisp adds, and the general mechanism the flip above needed. Real `.asd` files push a feature onto `*features*` from a top-level `eval-when` before their `defsystem` (postmodern does exactly this for both of its); that push happens at LOAD time while the component files' conditionals are resolved at READ time, and a push is only ever read back inside the file that writes it (`.kb/reader-features.md`) -- the replacement declares the feature statically instead. Parsed by `AsdfSystems.declaredFeatures` **before** the option loop (upstream's push precedes the whole form, so it must already hold for the system's own `:if-feature` / `(:feature ...)` clauses whatever order the options appear in) and recorded on `LispSystem.features()`. Each loader then WIDENS its own base set with it -- `Features.with(...)`, additive only, so nothing can switch a backend feature off and claim to be a backend it is not: the interpreter's `loadSystem` reads the components with `Features.INTERPRETER.with(system.features())` (a new 4-arg `LispEvaluator.loadFile` overload) and `LoadInliner.spliceSystem` builds a `Ctx` copy carrying `ctx.features().with(...)` for its own components only (the record copy shares every mutable registry, so state stays one set). A DEPENDENCY keeps the outer set -- it declares its own -- which is pinned on both paths (`aDeclaredRontolispFeatureDoesNotLeakToAnotherSystem`, `aDeclaredRontolispFeatureWidensTheBackendSetForThatSystemOnly`). `.todo/203`'s MOP build needs the same switch for `:postmodern-use-mop`.
-
-Two `AsdfSystems` changes came with it, neither postmodern-specific: a **component-level** `:depends-on` now accepts `(:feature EXPR DEPENDENCY-DEF)` like a system-level one (dropped when the feature is off, so a gated sibling simply disappears from the graph), and a `(:feature ...)` entry at either level now **IGNORES elements past the dependency** instead of erroring. Real ASDF's `resolve-dependency-combination` reads exactly the first and second argument, and upstream postmodern's `deftable` carries a trailing `"config"` that has therefore never had an effect; rejecting it would make a widely-deployed `.asd` unreadable over a no-op clause.
-
-**The feature ANNOUNCEMENT the option encodes is now read directly (`.todo/236`, 2026-08-02)**: a top-level `(eval-when (SITUATION...) (pushnew :F *features*) ...)` -- or a bare top-level `pushnew`/`push` -- in a real `.asd` is parsed by `AsdfSystems.collectFeaturePushes` and handed to `parseDefsystem` as if the system had declared `:rontolisp-features (:F)`, so BOTH spellings travel one path and land in the same `LispSystem.features()` (`mergedFeatures`, pushes first). That is what makes the verbatim `fast-io.asd` readable at all -- it opens with the announcement and the parser used to hard-error on any form outside the DEFSYSTEM/DEFPACKAGE/IN-PACKAGE/DEFPARAMETER/REGISTER-SYSTEM-PACKAGES set. **Scope, and why it is the same scope as the option**: the pushes accumulate in FILE order and reach only the systems defined AFTER them (pinned by `anAnnouncedFeatureReachesOnlyTheSystemsDefinedAfterIt`), matching the load-time push they encode; a dependency parsed from its own `.asd` still declares its own. What the declaration buys is the system's own `:if-feature` / `(:feature ...)` clauses and the reading of its component files -- carrying the announcement OUT of the `.asd`, which is the half the reader cannot do for itself. A `#+` in the SAME `.asd` sees the push without any of this, because the reader honors a source's own literal top-level push (`reader.FeaturePushes`, `.todo/181`); fast-io's own `#+fast-io-sv` is correctly OFF regardless, its push sitting behind an `#+(or sbcl ccl ...)` that no rontolisp backend satisfies, so `:static-vectors` drops. Two shape rules: only the announcement shape is accepted inside the `eval-when` (anything else is a hard error naming the form -- deny by default, the `.asd` is data), and a `(:compile-toplevel)`-ONLY situation list is inert, because ASDF `load`s a system-definition file and never compiles one, so such a push has no effect in a real implementation either. The `*features*` argument is the symbol itself on every backend (`.kb/reader-features.md`: `*features*` is a variable everywhere, never a read-time substitution), so a stray `(pushnew :x '(:a :b))` is not an announcement and stays an error. Pinned by `AsdfSystemsTest.parsesTheFastIoAsdFeatureAnnouncementHeader` (all three feature sets) plus the four scope/shape tests beside it, and end-to-end by `FastIoCircularStreamsE2eTest`.
-
-**The uiop subset postmodern needs (`.todo/201` §3; the arrangement below is SUPERSEDED by `.kb/uiop.md`, which registers all 15 sub-packages and gives every unimplemented member a `not-implemented-error` stub)**: `execute-file.lisp` calls `uiop:file-exists-p` (5), `uiop::get-pathname-defaults` (2) and `util.lisp` calls `uiop:run-program` (1). A name that does not RESOLVE fails the whole file at read time, so `file-exists-p` and `run-program` joined the `uiop` package (external, like real uiop) and `get-pathname-defaults` joined it as an internal symbol (real uiop does not export it either -- every call site spells the double colon). Definitions:
-
-- `uiop::get-pathname-defaults` is REAL and answers `""` on all four backends: every backend resolves a relative path against the host's working directory, and `""` is the namestring designating exactly that, so `(merge-pathnames X (get-pathname-defaults))` yields `X` unchanged. Interpreter = a global function in `LispEvaluator`; compile paths = a case in `LispMacroExpander.expandUiopStubCall`, which must be consulted BEFORE the generic uiop stub lowering swallows the call.
-- `uiop:run-program` signals `uiop:not-implemented-error` naming the operation (it was an undefined-function error until the bundle landed; `.kb/uiop.md`). Spawning an external process is outside every backend's sandbox by design, so an error is the honest answer, not a silent no-op.
-- `uiop:file-exists-p` is REAL on all four backends: its contract is `probe-file`'s (the truename on success, nil otherwise), so the 1-argument call lowers straight onto that primitive -- interpreter = a global function in `LispEvaluator` delegating to the `probe-file` function value, compile paths = a case in `expandUiopStubCall` next to `get-pathname-defaults`, again before the generic stub lowering. The primitive it rides on is in `.kb/read-load-streams.md`; it exists because `open` TRAPS on WASM for a missing path, which no `handler-case` can catch. postmodern's `execute-file` now has its `restart-case` (todo-196 shipped the restart system) AND `alexandria:read-file-into-string` (todo-219 shipped `read-sequence` into a character buffer, see the alexandria entry below), so nothing primitive stands between it and an end-to-end run.
-
-**quri v0.7.0 (`.todo`-less, 2026-07-30)**: Eitaro Fukamachi's and André A. Gomes' URI library loads verbatim via `(ql:quickload "quri")` and runs its whole public API -- parse/render/merge, the percent-encoding pair, the public-suffix lookups and the address predicates -- byte-identically on ALL FOUR backends. Its dependency graph is alexandria, split-sequence, cl-utilities, idna (all real) plus **babel**, which is a new built-in SHIM system (`babel.lisp`, `babel` + `babel-encodings` packages): real babel generates 40+ concrete encodings from ~20,000 lines of code-page tables, and rontolisp has ONE character model (a character IS a Unicode code point, the wire form is UTF-8), so there is nothing for the other 39 to convert between here. The shim implements the UTF-8 codec (`string-to-octets`/`octets-to-string` with `:start`/`:end`/`:errorp`, `string-size-in-octets`, `*default-character-encoding*` = `:utf-8`), treats the `:latin-1`/`:us-ascii` aliases as the code-point identity they are for the octets they can represent, and SIGNALS on any other `:encoding` rather than handing back mis-coded bytes. `babel` joins `.todo/147`'s replacement-by-real-library list.
-
-quri needed exactly one substitution of its own, at the `Uax15Tables` tier (individual forms of a real component -- `eval/QuriEtldTables`, pinned by `QuriEtldTablesTest`): upstream writes its effective-TLD tables as `(defvar *etlds* '#.(load-etld-data))`, a READ-time evaluation whose value is a list of two HASH TABLES. The interpreter can hold that; a compile backend has to emit the datum as a literal and there is no literal syntax for a hash table (`Cannot quote: #<HASH-TABLE ...>`). So three spans move, each located by a marker that must occur EXACTLY ONCE (a moved marker throws, naming it -- a silent fallback would put the un-emittable literal back and the failure would surface deep inside a backend with nothing pointing here): the `defvar` becomes `nil` plus a `%lite-build-etlds` builder, the three `*etlds*` reads in `parse-domain` become `(or *etlds* (%lite-build-etlds))`, and the `with-open-file` header's path becomes the LITERAL namestring with `:element-type 'character` dropped. That last one is not cosmetic: a literal path with only `:external-format` left is exactly the shape `CompileTimePathnameFolder` inlines into the artifact as a `with-input-from-string`, and `:element-type` is precisely the option that suppresses it -- without the rewrite a compiled program would have to find `effective_tld_names.dat` on disk at run time, which the WASM backends cannot. Deliberate narrowing recorded there: `(load-etld-data OTHER-FILE)` reads the bundled list, since honoring the parameter would cost every backend the inlining to serve a caller quri does not have. Everything that COMPUTES a domain is verbatim upstream, and the laziness is a bonus in the uax-15 shape: a program that never asks for a domain never parses the 9,758 lines.
-
-Eleven language-level fixes landed with it, none quri-specific, and the cross-backend pin is the `quri-enablement-language-group` ci-spec case:
-
-- **`(setf (getf place indicator) value)`** -- CL's plist place, lowered inline in `LispMacroExpander.expandSetf` (a `do` walk for the cell, `rplaca` on the VALUE cell when the indicator is present so an alias sees the update, else the pair consed on and stored back through `place`). Inline rather than onto a `LispPreludeLibrary` helper because the expansion happens during expression compilation, long after the pass that splices prelude defuns -- a synthesized call to one would never be resolved. Lite: `place` is evaluated twice.
-- **`format`'s destination is decided at RUN time** when it is not the literal `nil`/`t` (`formatDestinationDispatch`). `nil` as a destination does not name a stream -- it is the "build and return the string" destination -- so a call whose destination is a VARIABLE cannot be lowered to a write. quri's `(render-uri uri &optional stream)` forwards its optional straight through, and the old lowering printed the URI to stdout and returned nil where CL returns the string.
-- **`*print-escape*` / `*print-readably*` exist and `*print-escape*` is BOUND around the `print-object` method call** (`printObjectCall`), `t` for prin1/print/`~S` and `nil` for princ/`~A`, so a portable method that branches on them (the CL idiom, and quri's `uri` method) behaves as it does in CL. Both are `CL_VARIABLES`; the interpreter seeds them into `specialVars` (nothing declares them, yet the route binds one), and the compile path injects `(defvar ...)` from `injectMvSpillGlobal`, which runs AFTER `expandTopLevelDefinitions` and therefore sees the route's own reference.
-- **`princ`/`~A`/`princ-to-string` write a symbol's NAME with no package qualifier** (`LispSymbol.display` = `memberName`; CLHS 22.1.3.3). Load-bearing beyond printing: quri's `defun-with-array-parsing` synthesizes function names with `(intern (format nil "~:@(~a-~a~)" name :string))`, and a leaked qualifier interned INTO the name, defining `parse-scheme-string` under a name no call site resolves to. Fixed on all four -- the JVM's `_lispToDisplayString` and the WASM `_princ_val` symbol branch both became "everything after the last colon", which replaced their separate `#:`/`:` marker branches.
-- **A `defstruct` in a package that EXPORTS its generated names** defines them under the spelling a call site resolves to. `expandDefstruct` takes an export ORACLE (`PackageResolver.spellsAsExternal`, threaded through `expandTopLevelDefinitions` from the resolver each compiler already has); without it every generated name took the internal `::` spelling, correct only for a struct whose names are not exported. quri exports `uri-p`/`uri-scheme`/`make-uri-http`/..., and those resolved to a name nothing had defined -- an undefined function, not a package error.
-- **`(:include parent (slot new-default) ...)`** re-defaults an inherited slot in the child's layout only; the slot keeps its inherited index so the parent's accessors still read it, and overriding a slot the parent does not define is an error. quri's `uri-http`/`uri-ftp`/... are all `(:include uri (scheme "http") (port ...))`.
-- **`nil` and `t` are string designators** (`Environment.stringDesignator`), and `(string nil)`/`(symbol-name nil)` answer `"NIL"`/`"T"` on the interpreter as they already did on the three compile backends -- the interpreter answered `"nil"`/`"t"`, a cross-backend divergence the docs had written down. `string=`/`string-equal` on the compile paths route a non-literal-string operand through the shared `(string ...)` coercion (`normalizeStringComparisonDesignators`) rather than each intrinsic learning the designator rules; quri's `scheme-constructor` asks `(string= scheme "http")` of a relative reference, whose scheme is nil.
-- **`apply` through a COMPUTED designator has no arity ceiling.** The per-arity dispatchers take one physical parameter per Lisp argument, so they stop at `MAX_CALLABLE_ARITY` (7) -- and `_apply` walked the argument list, counted it, and fell off the end of that ladder: nil on the JVM, an `unreachable` trap on WASM. Both backends gained a SPREAD dispatcher (`_invoke_v` / `FUNC_DISPATCH_SPREAD`) over EVERY callable, taking the list whole; each case reads its target's required parameters out of it and hands a variadic target the remaining TAIL, which IS the callee's physical rest parameter. It is also cheaper than raising the ceiling: one case per function, not one per (function, arity) pair. quri's `(apply (scheme-constructor scheme) :scheme s :userinfo u ... )` passes fourteen arguments to a `&key` constructor.
-- **`print-object` is a `cl` symbol.** It was missing from `CL_FUNCTIONS`, so a `defmethod print-object` inside a package that uses `cl` minted THAT package's own generic while the printer hook called the bare name (`The function PRINT-OBJECT is undefined`). The `list-functions` count moved 340 → 341.
-- **`#P"..."`** is a pathname literal denoting the distinct pathname VALUE (todo-304, `.kb/pathnames.md`): the reader builds a `LispInstance` over the fixed `LispLayout.PATHNAME` carrying the namestring. `#P` not followed by a string still reads as a symbol. `asdf:system-relative-pathname` accepts the value as its second argument (quri's read-time-eval datum hands it one).
-- **`uiop:emptyp` / `uiop:first-char` / `uiop:last-char`** are REAL, as `LispPreludeLibrary` entries with upstream's verbatim bodies (they are pure one-liners over primitives every backend has). quri's `render-uri` calls all three to decide whether to insert a path slash.
-
-Two more general fixes came out of the same load and are NOT in the list above because they are plain bugs. **The Gray-streams `format` rewrite wrote unconditionally**: `GrayStreamsLibrary.process` turns `(format STREAM ...)` into "render to a string, hand it to the write-string dispatch, answer nil", and it fires over the WHOLE program as soon as ANY part of it uses the Gray protocol -- so it silently overrode the run-time destination test above and printed the URI where CL returns a string. It now performs the same test ([gray-streams.md](gray-streams.md), where the divergence was documented as tolerable "because jzon never does it" -- a reason that stopped holding here). Only the concatenated ci-spec program catches this: in isolation the quri case passes on all four backends, and the Gray case sits 18 cases upstream of it. And: `LispMacroExpander.rewriteLocalCalls` (the `flet`/`labels` call-site rewrite) tested for a non-symbol head BEFORE testing for an improper list, and that branch rebuilds the form from `cons.toList()`, which DROPS an improper tail. A nested loop destructuring pattern `((field . value) . rest)` inside an `flet` body came back as `((field . value))` and the body's reference to `rest` was unbound -- quri's `url-encode-params`. The improper-list test now runs first.
-
-ONE limitation is left, deliberately, and it is pre-existing rather than something this pass introduced: **quri's `:lenient` percent-decoding crashes on the three compile backends when the input really is malformed**. quri skips a bad escape with a `go` out of a `handler-bind` handler into an enclosing `tagbody`, and a `go` that crosses a lambda has no lowering there (`.kb/do-return-block.md`: a cross-lambda `return-from` does, via `CrossLambdaExitLowering`; `go` never got the same treatment because a block exit LEAVES its block while a `go` RE-ENTERS its tagbody at a label). Well-formed input never reaches the handler, so `url-decode`/`url-decode-params`/`uri-query-params` work on all four backends until a `%ZZ` appears -- and `uri-query-params` defaults to `:lenient t`, which is what makes it worth a todo rather than a footnote: `.todo/217`, which carries the minimal reproduction and the throw-into-the-PC-dispatch shape the fix wants.
-
-`make-list` also grew its `&key initial-element` here (quri's `ip-addr=` pads an abbreviated IPv6 address with `(make-list (- 9 len) :initial-element 0)`); the element form is bound OUTSIDE the loop on the compile paths so it is evaluated once and every cell shares the value, as CL specifies.
-
-Coverage: the `quri-enablement-language-group` ci-spec case (all four backends, no asdf load) + `QuriEtldTablesTest` + the `:pathname` cases in `AsdfSystemsTest` + the `#P` cases in `LispReaderTest` + per-feature cases in `LispEvaluatorTest`. The end-to-end `(ql:quickload "quri")` run is MANUAL on all four backends, like s-sql's and postmodern's: quri's own tree lives in the quicklisp cache, so `AsdfLibraryE2eSupport` (which needs a vendored tree per system) cannot host it. Its alexandria dependency IS vendored now (see the entry below), so vendoring quri's tree next to it is all an automated `QuriE2eTest` would take -- what stands in the way is quri's tree, not the dependency.
-
-**local-time 1.0.6 (`.todo`-less, 2026-07-31)**: Daniel Lowe's date/time library loads verbatim via `(ql:quickload "local-time")` and runs its whole timestamp API -- `encode-timestamp`/`decode-timestamp`, `now`/`today`, the unix and universal-time conversions, `parse-timestring`, `format-timestring` over every bundled format (`+iso-8601-format+`, `+rfc3339-format+`, `+rfc-1123-format+`, `+asctime-format+`, `+iso-week-date-format+`), the comparison family, `timestamp+`/`-`/`adjust-timestamp`/`timestamp-minimize-part`, the julian-date pair and `print-object` -- byte-identically on ALL FOUR backends. Its only declared dependency is `uiop` (the built-in stub package). **Real TZif timezone files load too**, wherever the host has a filesystem: `(local-time:define-timezone tokyo #p"/usr/share/zoneinfo/Asia/Tokyo" :load t)` parses the binary zone file through `read-byte`/`read-sequence` and formats with the right offset, and the load-time `/etc/localtime` read that seeds `*default-timezone*` works the same way. Where it cannot be read -- WASM with no preopened directory, a host without the file -- local-time's own `handler-case` falls back to `+utc-zone+`, which is why making a failed `open` SIGNAL rather than trap on WASM was a precondition (`.kb/read-load-streams.md`).
-
-Six enablement fixes landed with it, and **only the first is local-time-specific**; the rest are cross-backend conformance gaps it happened to be the first library to step on:
-
-- The four **load-context pathname variables** `*load-pathname*` / `*load-truename*` / `*compile-file-pathname*` / `*compile-file-truename*` (`LispNames`, `PackageRegistry.CL_VARIABLES`). The first pair holds the file being loaded while its top-level forms run, on EVERY backend (todo-375): the interpreter REBINDS them dynamically around each loaded file (`LispEvaluator.loadFile`) and the compile paths ASSIGN them per spliced file, from the `%begin-file` brackets `LoadInliner` emits -- so a library that locates a data directory relative to its own source, or that records the file a definition came from (rove), agrees byte for byte across the four. **An ASDF COMPONENT is loaded by its RESOLVED path** (what real ASDF hands `load`; a plain `load` keeps the spelling it was called with), which makes its `*load-pathname*` equal `asdf:component-pathname` -- that equality is the whole point and `LoadContextE2eTest` pins it. Outside a load both are nil, including in a function the load defined and the program calls later; the mechanics and the byte-identity gate are `.kb/load-inliner.md`. Both are also established at READ time, so a `#.` datum reading them answers what the same file's run-time value will be (todo-428; the compile-path half is `UserMacroExpander` over the `%begin-file` bracket, mechanics in `.kb/load-inliner.md`). The compile-file pair is permanently nil on every backend, which is exactly its value in a real CL loading source. **It stays nil at read time too, deliberately** (the decision todo-428 owed): the read-time work binds only the load pair, for three reasons, and the re-evaluation trigger is any one of them expiring. (a) The portable spelling that motivated the work, `(or *compile-file-pathname* *load-truename*)`, now ANSWERS -- its fallback arm is correct, so a non-nil first arm buys nothing. (b) local-time spells `#.(or *compile-file-truename* '*load-truename*)`, whose whole point is that the first arm is nil so the value is the SYMBOL, deferred to load time; a non-nil first arm silently freezes the COMPILING machine's path into the artifact. (c) A library that branches on `*compile-file-pathname*` is asking "am I being compiled to a fasl", and the honest answer here is no: the compile path splices SOURCE and evaluates the datum in a macro-time image, which is CL's `load` situation and not its `compile-file` one. **Re-evaluation trigger**: if a real `compile-file` ever exists, bind both pairs together and revisit local-time's spelling in the same pass -- not one of them alone. `injectMvSpillGlobal` declares whichever of the four the program mentions. local-time reads them as `#.(or *compile-file-truename* '*load-truename*)`, a read-time eval whose value is the SYMBOL when the first is nil. **`*readtable*` rides the same list** (todo-225): it is nil everywhere -- the reader is the frontend's, with no runtime readtable object to name -- but a loader binds it in the SAME `let` as the pathname pair (clack's `%load-file` binds all four around its read/eval loop), so `injectMvSpillGlobal` declares it too and the rebinding compiles instead of failing with `Cannot compile symbol reference: *READTABLE*`.
-- `asdf:component-pathname` -- the same lookup as `asdf:system-source-directory` under the name a library actually calls (a system is the only component object rontolisp materializes), in the interpreter and in `CompileTimePathnameFolder`. local-time locates its bundled `zoneinfo/` with `(asdf:component-pathname (asdf:find-system :local-time nil))`, reached through a runtime `(eval (read-from-string ...))`.
-- `merge-pathnames` and `truename` (CL), both in `LispPreludeLibrary` -- ONE Lisp definition over primitives every backend has, unlike `make-pathname` / `uiop:merge-pathnames*`, which stay Java + compile-time folding because their keyword shapes resolve at compile time. `merge-pathnames`' rule is the one `PathnameOps.mergePathnames` implements and the two renderings are pinned against each other (`LispPreludeLibraryTest#thePreludeMergePathnamesAgreesWithPathnameOps`); `truename` is `(or (probe-file p) (error ...))`, whose load-bearing half is the SIGNAL -- `(ignore-errors (truename x))` is how a library probes for an optional directory. The DIRECTORY-LISTING family joined them the same way (`.kb/directory-listing.md`): `%dir-namestring`, `directory`, `uiop:directory-exists-p` / `directory-files` / `subdirectories` / `collect-sub*directories`, plus `pathname-directory` and `constantly`, all Lisp source over the one per-backend `%list-directory` primitive -- so `reread-timezone-repository` and `find-timezone-by-location-name` now run on ALL FOUR backends. One residue: local-time's DEFAULT repository path is computed with a runtime `make-pathname`, which only the interpreter has (`.todo/222`), so the compile paths need the explicit `:timezone-repository`.
-- The **`find` family took only `:test`/`:key`** and rejected `:start`/`:end`/`:from-end` loudly (`.todo/006`'s last open item). `find`/`find-if`/`find-if-not` now go through the same `buildPositionScan` the position family uses, with the matching ELEMENT as the answer instead of its index -- one scan, one keyword set, one runtime (`positionScanValues` grew an `elementResult` flag, so first-class `#'find` takes them too). local-time's timestring splitter scans a bounded window of the string.
-- `make-array :initial-contents` accepted a list, a string or a general array but not a **packed vector** -- so a `(unsigned-byte 8)` buffer filled by `read-sequence` could not seed another array, which is exactly what the TZif reader does with its standard/wall indicator blocks. `LispIntVector` and `LispFloatArray` are sequences too now.
-- `:element-type 'unsigned-byte` (the unparameterized spelling) opens a BINARY stream (`.kb/read-load-streams.md`).
-
-Two backend defects had to be fixed for the library to work at all, and both were pre-existing bugs with nothing to do with local-time -- see their own files: **argument evaluation order** was right-to-left for `list` (and backquote) on all three compile backends, which made the TZif header decode its six fields in reverse (`.kb/argument-evaluation-order.md`, `.todo/014`), and the WASM **7-parameter callable ceiling** rejected `encode-timestamp-into-values` (7 required + `&key`), so `MAX_CALLABLE_ARITY` was raised to 10 (`.todo/009`).
-
-Coverage: the `local-time-enablement-language-group` ci-spec case (all four backends, no asdf load) + `LispEvaluatorTest#evalFindFamilyTakesThePositionKeywordSet` + `LispPreludeLibraryTest#thePreludeMergePathnamesAgreesWithPathnameOps`. The end-to-end `(ql:quickload "local-time")` run is MANUAL on all four backends, like quri's, s-sql's and postmodern's: local-time's tree lives in the quicklisp cache, so `AsdfLibraryE2eSupport` (which needs a vendored tree per system) cannot host it.
-
-**alexandria 1.0.1 (`.todo/152`, 2026-07-30)**: the ecosystem's most-depended-on utility library is now a FIRST-CLASS loadable system rather than something reached only indirectly. It became loadable during the cl-postgres pass (the language batch it forced is listed in the cl-postgres entry above: `&whole`, a destructuring PATTERN after `&rest`/`&body`, `lambda-list-keywords`, `do-external-symbols`, `intern` with a package designator, the `hash-table-test`/`-size`/`-rehash-size`/`-rehash-threshold` readers, `mismatch`, `bit`, `arrayp`, `with-open-stream`, first-class `#'open`), and cl-postgres, s-sql, postmodern and quri have all depended on it since -- but nothing pinned it on its own. Now the sources are VENDORED unmodified under `src/test/resources/alexandria` (the `.asd` + `alexandria-1/` + `alexandria-2/`; the two `tests.lisp` are `:static-file` entries, ordering-only and never read), the public API of both packages runs byte-identically on ALL FOUR backends, and **`AlexandriaE2eTest`** pins it through `AsdfLibraryE2eSupport` -- the exercise being `examples/asdf/alexandria-demo.lisp` verbatim (keep the two in sync). Vendoring it also unblocks an automated E2E for any dependent whose own tree gets vendored (quri is the near one).
-
-One cross-backend CORRECTNESS bug fell out of the enablement, and it is the reason the entry is worth reading: **`#'mapcar` as a first-class VALUE silently dropped every list but the first on both compile backends.** `alexandria:mappend` is `(apply #'mapcar function lists)`, so it answered `(1 2)` where the interpreter answered `(1 3 2 4)` -- no error, just a wrong list. The wrapper was `binary(MAPCAR)`, and the extra lists went nowhere. Fixing `mapcar` alone exposed that the whole rest of the family diverged the same way (`(mapc f '(1 2) '(3 4))` had three answers, one per backend, in CALL position) -- `.todo/218` closed that: every member now takes N lists everywhere. The family's mechanics live in **`.kb/map-family.md`**; read that before touching any of them.
-
-**`.todo/219` closed the four primitive gaps that used to keep part of the API dark** (2026-07-30), and every one of them was a CL conformance gap failing identically on all four backends rather than a divergence: `coerce` to a COMPUTED result type (float-only before; now the same runtime family dispatch `concatenate` uses, so `copy-sequence`/`coercef`/`median` work), `(last list n)` (`rotate`), `every`/`some`/`notany`/`notevery` over ANY number of sequences (alexandria-2's `dim-in-bounds-p`/`row-major-index`/`rmajor-to-indices`), and `read-sequence` into a CHARACTER buffer (`read-stream-content-into-string`/`read-file-into-string`, and with them postmodern's `execute-file`). The last one needed a fifth widening the todo had not listed: `make-array`'s `:element-type` had to accept a COMPUTED designator, because alexandria allocates its buffer as `(make-array size :element-type (stream-element-type stream))` and only a character vector answers `stringp`, which is what `read-sequence`/`write-sequence` dispatch on. All five are shared lowerings in `LispMacroExpander`, so no backend has its own. Pinned by `AlexandriaE2eTest` + the demo (they are one text), per-backend cases in `LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`, and the `last-with-a-count` / `every-some-over-many-sequences` / `coerce-to-a-computed-result-type` / `read-sequence-into-a-character-buffer` ci-spec cases.
-
-A SECOND cross-backend correctness bug fell out of that pass, in the same family as the `#'mapcar` one above and found the same way -- by a wrapper needing it: **an injected wrapper whose body calls `apply` was reachable while WASM's `apply` runtime was not emitted.** `usesEval` (which gates `_apply` there) scans the SOURCE program, and the wrappers are injected after it, so `(funcall #'mapcar #'list '(1 2) '(3 4))` in a program that used `apply` nowhere else answered `(NIL NIL)` on WASM against `((1 3) (2 4))` everywhere else -- `_apply` degrades to a nil-answering stub rather than trapping. `BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` + `referencesApplyingWrapper` now name that set (the `map*` six, `every`/`some`, `funcall`) and the gate consults it. It survived `.todo/218` because no test spread the lists across a `funcall` -- `WasmLispCompilerIntegrationTest.applyUsingWrapperReachedByFuncallCompilesAndRuns` is the isolated pin (each assertion must be the ONLY form in its program; the ci-spec driver concatenates, so it cannot isolate this).
-
-What alexandria still does NOT get (the list is user-visible in `doc/*/guides/asdf-systems.md`): `type=` needs `subtypep`'s secondary value (`.todo/214`). Two work on the interpreter and are compile-backend ERRORS (loud, not wrong): `format-symbol`/`ensure-symbol` (`intern` with a runtime package designator) and `ensure-function` on a symbol (`symbol-function` with a runtime name). `shuffle`/`random-elt`/`gaussian-random` work everywhere but draw each backend's own entropy, so no cross-backend pin can exist for them.
-
-
-**The lack/clack `.asd` front-end (`.todo/224`, part of the Clack milestone `.todo/223`, 2026-08-01)**: three gaps stood between the ASDF subset and the VERBATIM lack/clack system definitions, and all three are general rather than lack-specific -- the system-level `:pathname` prefix, the `register-system-packages` skip and the ignored `load-system`/`quickload` keyword options, each described above. With them the unpatched `lack.asd` parses whole (the `:pathname "src"` primary system, the eighteen one-line alias systems, and the `lack/tests` system with its own `:pathname`, nested `:module`s, `#+todo`-suppressed component and `:perform`), and every lack/clack component file loads. Pinned by `AsdfSystemsTest` (`aSystemPathnameIsAPrefixForEveryComponent`, `aSystemPathnameComposesWithModulesAndComponentPathnames`, `anEmptySystemPathnameAddsNoDirectoryLevel`, `aComputedSystemPathnameIsAHardError`, `parseAsdSourceSkipsRegisterSystemPackages`, `parsesTheVerbatimLackAsd`, `loadSystemNameIgnoresKeywordOptions`, `loadSystemNameRejectsANonKeywordSecondArgument`) and verified on all four backends with a `:pathname`-shaped system on disk. The rest of the milestone (missing CL builtins, the uiop/usocket/swank shim widening, bordeaux-threads, the `clack.handler.rontolisp` backend) is `.todo/225`-`.todo/231`.
-
-**fast-io v1.0 + circular-streams (`.todo/236`, 2026-08-02)**: Ryan Pavlik's fast-io (MIT) and Eitaro Fukamachi's circular-streams (LLGPL) load verbatim over the vendored alexandria and the built-in trivial-gray-streams shim, and run the buffered-output / circular-input API on ALL FOUR backends (`FastIoCircularStreamsE2eTest`; vendored under `src/test/resources/{fast-io,circular-streams}`). Nothing library-specific landed -- three general mechanisms did, each of which had blocked the load: (1) the `.asd` feature announcement above, (2) `with-slots` binding a write-only unbound slot ([clos.md](clos.md) -- fast-io's `initialize-instance` fills its `:initform`-less `buffer` slot through `(with-slots (buffer) self (setf buffer ...))`, which the eager entry-time fallback read used to turn into `unbound-slot` on every `make-instance`), and (3) a `slot-value` naming a slot NO class declares lowering to a RUN-time error instead of failing the compile ([clos.md](clos.md) -- fast-io's `open-stream-p` reads `'openep`, a typo for its own `openp`, in a method nothing calls; the interpreter never saw it because it expands a method body only when the method is called). **Two upstream facts the exercise encodes, both verified against SBCL 2.2.9 rather than assumed**: circular-streams cannot see the end of a fast-io input stream (fast-io's `stream-read-byte` passes no `eof-error-p` to `fast-read-byte`, so it SIGNALS `end-of-file` where the Gray protocol wants `:eof` -- the E2E reads past EOF through a Gray source of its own), and the `#.`-computed `:long-description` in `circular-streams.asd` is dropped unresolved and unremarked (ignored metadata — it warned until todo-310). One blocker is NOT fixed and is filed as `.todo/237`: fast-io's `defmethod close` makes `close` a user generic that DROPS the built-in on the interpreter (`with-open-file` then dies with "No applicable method: CLOSE on INTEGER" anywhere in the image) while the compile paths ignore the method instead -- a general "a user definition of a built-in name" gap, not a fast-io one.
-
-**trivia via the trivia.trivial route (`.todo/243`, part of the Mito milestone `.todo/238`, 2026-08-03)**: Masataro Asai's trivia (LLGPL, quicklisp dist trivia-20260101-git) loads via `(ql:quickload "trivia")` / `asdf:load-system` and the `match`/`ematch`/`guard`/`defpattern` surface (constant/variable/cons/list*/vector/struct/class patterns, `(type keyword)`, the mito cons/guard/eql nest) runs on ALL FOUR backends (`TriviaE2eTest`, vendored with lisp-namespace under `src/test/resources/{trivia,lisp-namespace}`; the feature-level pins are ci-spec `trivia-enablement-language-group`). **The override**: `AsdOverrides` maps `trivia.asd` -> `trivia-trivial.asd`, declaring system `trivia` as pure metadata over `trivia.trivial` -- upstream's own sanctioned base system ("Systems that intend to enhance Trivia should depend on this package, not the TRIVIA system"). DIVERGENCE RECORD: upstream `trivia` depends on `trivia.balland2006`, the match-clause OPTIMIZER, which needs iterate (a whole loop DSL) + type-i and buys zero semantics; the `:trivial` optimizer route is semantically identical, just unoptimized. Re-evaluation trigger: if a real consumer needs iterate itself, or interpreter match performance becomes the bottleneck, do iterate + type-i + balland2006 as their own milestone and delete the override. Measured for that trigger (2026-08-03, interpreter): a 4-clause `match` in a defun costs ~0.31 s PER CALL interpreted (1,000-iteration loop = 314 s) because the interpreter re-expands user macros every evaluation (`.todo/182`) and one trivia expansion runs the whole level2 expander stack; the compiled backends expand once at compile time and are unaffected -- so the trigger is really "someone hot-loops `match` under the interpreter". **Shims**: `trivial-cltl2` joined the built-in shim systems (`trivial-cltl2.lisp`, nickname `cltl2`) -- the real library is a pure re-export of each host's CLtL2 environment API, all feature-false here, so the shim defines the two members trivia calls: `define-declaration` (a registering no-op expanding to the declaration name -- declarations are no-ops, so there is nothing to register) and `declaration-information` (always nil, which routes trivia's match2*+ onto its `*optimizer*` special = `:trivial`); the other six exports resolve but are undefined when called (the uiop convention). The closer-mop shim gained `compute-slots` (= `class-slots` over the eagerly-final metaobject) and `generic-function-lambda-list` (signals; unreachable behind the empty `generic-function` type). **The general mechanism that landed**: `UserMacroExpander` now REPLAYS plain top-level forms of SPLICED SYSTEMS (inside `%begin-system`/`%end-system` provenance brackets) into the macro-time evaluator, and honors the compile-file situations of a macro-EXPANDED `(eval-when ...)` -- details in [defmacro-backquote.md](defmacro-backquote.md). The rest of the substrate is owned per-topic: the `,@ . ,tail` backquote shape (reader, [defmacro-backquote.md](defmacro-backquote.md)), the empty `&key` section ([lambda-lists.md](lambda-lists.md)), signal's matched-handler unwind + `use-value`/`store-value` ([error-handling.md](error-handling.md)), the find-symbol definition probe / `#'find-symbol` wrapper / runtime `export` lowering ([symbol-runtime-api.md](symbol-runtime-api.md)), and the empty `generic-function`/`bit-vector`/`structure-class`/`built-in-class` types ([declarations-type-checks.md](declarations-type-checks.md)).
-
-**sxql (`.todo/244`, part of the Mito milestone `.todo/238`, 2026-08-03)**: Eitaro Fukamachi's SQL generator (BSD 3-Clause, quicklisp dist sxql-20260101-git) loads verbatim via `(ql:quickload "sxql")` over trivia (the `trivia.trivial` route), alexandria and cl-package-locks (loads as the no-op-shaped lock library it is here), and `sxql:yield` produces SQL text + bind values as multiple values BYTE-IDENTICALLY on all four backends — verified against SBCL 2.2.9 running the same cached sources, so the pins are upstream's own answers. Pinned by **`SxqlE2eTest`** (sxql + cl-package-locks vendored under `src/test/resources/{sxql,cl-package-locks}`; all four backends over the acceptance shapes: select/where incl. `:and`/`:or`/`:in`/`:like`, order-by `:desc`, limit/offset, left-join `:on`, insert-into `set=`, update, delete-from, create-table with column options, drop-table, alter-table) and the `sxql-enablement-language-group` ci-spec case (the general mechanics, no asdf load). Seven general fixes landed, none sxql-specific: (1) the **`package` type specifier** (`makeTypeTest`: a package value is find-package's keyword answer, so the test is keywordp + find-package; `PACKAGE` joined `CL_TYPES` and `RUNTIME_TYPEP_BUILTINS`) — cl-package-locks' resolve-package etypecase. (2) **case/ecase/ccase clause KEY LISTS resolve element-wise like quoted data** (`PackageResolver.resolveCaseKeys`; a lone-symbol key already did) — define-op's `(ecase struct-type ((unary-op ...) ...))` over an imported symbol never matched. (3) **`uiop:split-string`** (LispPreludeLibrary, upstream's right-to-left `:max` semantics rewritten without the flet-return shape — a `return` inside `do` would exit do's own nil block). (4) **a `#.` whose value is a SYMBOL (or cons) in an evaluated position splices as the OBJECT** — `resolveReadTimeEvalInCode`, see `.kb/reader-features.md` — the `(intern name #.*package*)` idiom; `packageDesignator` also takes a qualified symbol by its MEMBER name now. (5) **`delete-duplicates`** (= remove-duplicates' rendering, the sort-via-stable-sort precedent) and **`:from-end`** on both (literal t/nil; from-end tests the candidate against the kept accumulator instead of the tail). `list-functions` count 364 -> 365. (6) **struct CLOS dispatch widened**: a method on an `:include` PARENT struct applies to the child's branch (call-next-method reaches it), `structure-object` methods catch every struct, and the interpreter regenerates struct-testing dispatchers per defstruct — mechanics in `.kb/clos.md`. (7) **runtime slot names normalize to the base spelling** inside the shared `%slot-value-runtime`/`%slot-value-set-runtime`/`%slot-boundp-runtime` defuns (`(intern (symbol-name n))` in the public defun — deliberately IN the defun, not at call sites, so the `intern` spelling is visible to the WASM `usesIntern` emission gate) — compute-select-statement-children reads struct slots through a quoted clause-type list resolved under `sxql/statement`. (8) **`subtypep` walks struct `:include` ancestry** (with `structure-object` as every struct's supertype), resolves a user **deftype** on either side through its expansion, and takes an **`(or ...)`** compound on either side (any branch as super, every branch as sub) — sxql's `(subtypep (type-of clause) 'multiple-allowed-clause)` gates whether a SECOND where/join clause merges or signals, and `multiple-allowed-clause` is a deftype for `(or join-clause where-clause)`; the shared static `LispMacroExpander.subtypep` serves the interpreter and the literal fold, and `subtypepUniverse` now includes struct names, `structure-object` and deftype names so the emitted `%subtypep-ancestor-table%` answers the runtime call identically (pinned by the two-where leg of `SxqlE2eTest` and the subtypep leg of the ci-spec case). Residue: lisp-namespace's `pprint-logical-block` call compiles to a call-time error stub (its error-report path; nothing reaches it).
-
-**The mito-closure tolerance batch (`.todo/241`, 2026-08-03)**: four parse-level widenings, each reproduced by a one-line quickload probe and each a whitelist entry, never a sink -- an unknown top-level form / component type still errors loudly (pinned). (1) **`(:version NAME "1.2.3")` `:depends-on` entries** (mito.asd, mito-core.asd, esrap/tests) resolve to the plain dependency in `AsdfSystems.dependencyName`; the version constraint is NOT checked -- the `:version` option is parsed-and-ignored metadata here, so there is nothing to check against. (2) **A top-level `(defmethod perform ...)` in a `.asd` is tolerated and ignored whole** (WIDENED by `.todo/625` below: EVERY top-level method is now tolerated, and `source-file-type` is read). iterate.asd's test-op wiring and esrap.asd's `perform :after` load-op hook are the driving shapes. esrap's hook pushes six `:esrap.*` capability features + `(provide :esrap)`, and ignoring them is a VERIFIED decision, not an oversight: grep of the whole cached dist for `#+esrap.`/`#-esrap.` and of esrap's sources for any `esrap.` feature read found zero hits (2026-08-03). Re-evaluation trigger: if an esrap release or a downstream starts reading one, fold the pushed keywords into `LispSystem.features()` (the `collectFeaturePushes` channel) instead. (3) **A top-level doc-file component-class `defclass` is tolerated** (SUPERSEDED by `.todo/625` below, which generalized it to any component class, `cl-source-file` subclasses included) and declares its name as an ordering-only component type for the systems defined after it, like the feature pushes; ASDF's own `:doc-file`/`:html-file` are accepted without a defclass. chipz.asd (`txt-file`/`css-file` + a `doc` module of `:html-file`/`:txt-file`/`:css-file` entries) is the driving shape. (4) **`mgl-pax-bootstrap` is a built-in shim system** (`mgl-pax-bootstrap.lisp`; the swank precedent -- its real `.asd` declares `:around-compile`, a compile hook outside the subset; its `:defsystem-depends-on` is readable since `.todo/401`) satisfying trivial-utf-8's hard dependency on the uuid/mito path. The `mgl-pax` package (nickname `pax`) is seeded in `PackageRegistry`; the shim defines `defsection` (expands to `(defvar NAME nil)` so `pax-sections`-style references compile) and nil no-ops for the PAX-World registration pair. Two resolver rules landed with it, both in `PackageResolver.resolve`: **a literal top-level qualified `define-package` (`uiop:` or `mgl-pax:`/`pax:`) is consumed exactly like `defpackage`** (dbi's package headers and trivial-utf-8's opener; the variant's extra clauses -- `:use-reexport`, `:mix` -- and redefinition tolerance still error loudly until a consumer needs them, `.todo/245`), and **`pax:defsection` AUTOEXPORTS its `(SYMBOL LOCATIVE)` entries from the current package** (`consumeDefsectionExports`) -- mgl-pax's documented default and trivial-utf-8's ONLY export mechanism, without which uuid's `trivial-utf-8:string-to-utf-8-bytes` fails to resolve. `asdf:system` joined the asdf package externals (the class name, referenced as data by defsection bodies). Pinned by `AsdfSystemsTest` (the version-entry pair, the perform-defmethod pair, the doc-defclass trio) + `PackageResolverTest` (`definePackageIsConsumedLikeDefpackage`, `aBareDefinePackageIsNotTheVariant`, `paxDefsectionExportsItsEntries`); probes 2026-08-03: `(ql:quickload "uuid")` completes on the interpreter, esrap/chipz reach their source loading (their remaining blockers are `.todo/248`/`.todo/249`), mito/mito-core parse past `:depends-on` into dbi's `:use-reexport` (`.todo/245`).
-
-**cl-dbi + dbd-postgres (`.todo/245`, part of the Mito milestone `.todo/238`, 2026-08-03)**: `(ql:quickload "dbd-postgres")` loads the verbatim cl-dbi-20260101-git sources over cl-postgres, and connect / do-sql / prepare / execute / fetch-all / with-transaction (commit AND rollback) / connect-cached / disconnect run IDENTICALLY on the interpreter, the JVM and the WASM component against `postgres:17-alpine` (manual 3-backend run 2026-08-03; the automated milestone E2E is `.todo/250`). Preview 1 stays out (no sockets); a component needs `-S tcp=y -S inherit-network=y`. The pieces, each owned elsewhere once landed: (1) **`AsdOverrides` maps `dbi.asd` -> `dbi-deps.asd`** -- upstream's .asd PARSES fine, but its cache selection rides a thread-capability feature expression ((:or :abcl (:and :sbcl :sb-thread) ...)) that can never match rontolisp's feature set and MUST NOT be satisfied by claiming one (the additive-features rule), so the verbatim parse picks the single-threaded `cache/single.lisp` on backends that really run concurrent handlers. The replacement takes the decision per backend: `thread.lisp` + the real `bordeaux-threads` dependency behind `:if-feature (:not :rontolisp-wasm)`, `single.lisp` (upstream's own threadless choice) on WASM. DIVERGENCE RECORD + trigger: re-evaluate if the WASM backends gain threads, or if upstream's feature expression changes shape. Driving consumer: `dbi:connect-cached` is per-thread connection pooling keyed by `bt2:current-thread` (lack-middleware-mito calls it from the one-virtual-thread-per-request serve path, `.todo/249`). Pinned by `parsesTheBundledDbiReplacementAsd` (thread on INTERPRETER/JVM features, single on WASM). (2) **`rontolisp:current-thread`** landed for thread.lisp (`.kb/threads.md`), the bt shim's `make-lock` widened to `&rest` (the v2 `:name` keyword spelling), and `bt2:with-lock-held ((lock))` parses through the existing one-element-spec expansion. (3) **`uiop:define-package` + `:use-reexport` + `:shadowing-import-from`** (`.kb/packages.md`) -- dbi.lisp's and dbd/postgres.lisp's package headers. (4) **`trivial-garbage` is a built-in shim system** (`trivial-garbage.lisp`; package `trivial-garbage`, nickname `tg`): the real .asd's leading `#-(or cmu sbcl ...) (error ...)` SURVIVES reader conditionals here so the file cannot parse, and no backend has GC hooks anyway -- `finalize` registers nothing and returns the object (honest: CL guarantees finalizers nothing, so a conforming consumer works when they never fire), `cancel-finalization` is a nil no-op. Consequence, documented on the guide row: a leaked prepared statement lives until the connection closes; `dbi:disconnect` stays the contract. (5) **`asdf:missing-component` / `asdf:retry`** joined the asdf package externals as resolve-only names (dbi's `with-autoload-on-missing` handler-binds them around its runtime `asdf:load-system`; dead here -- a missing system is a hard Java-side error, never a signaled condition). The runtime driver load short-circuits as designed: `dbi:connect` probes `find-driver` FIRST (class-direct-subclasses of dbi-driver), so on the compile paths -- where the program must contain `(ql:quickload "dbd-postgres")` itself and a nested load-system is a call-time error stub -- the stub is dead once the driver is loaded. (6) The CLOS pieces: a DIRECT `(make-instance driver)` with a computed class and the late-bound `#'generic` value (dbi's pool stashes `#'disconnect` before dbd-postgres defines its method) -- both in `.kb/clos.md`.
-
-**mito-core (`.todo/247`, part of the Mito milestone `.todo/238`, 2026-08-03)**: `(ql:quickload '("mito-core" "dbd-postgres"))` loads Eitaro Fukamachi's O/R mapper core (BSD 3-Clause, mito-20260101-git) from its verbatim sources, and the DAO CRUD round trip -- `mito.core:connect-toplevel`, `deftable` (serial auto-pk + `record-timestamps-mixin` injected by the `dao-table-class` metaclass), `ensure-table-exists`, `insert-dao`/`find-dao`/`select-dao`+`sxql:where`/`save-dao`/`delete-dao`, `object-id` -- runs IDENTICALLY on the interpreter, the JVM and the WASM component against `postgres:17-alpine` (manual 3-backend run 2026-08-03; the automated milestone E2E is `.todo/250`). New dependencies loading with it: **dissect** (its stack/restart introspection is the empty-body no-op interface -- no backend carries a Lisp call stack) and **uuid** (via ironclad + trivial-utf-8; v1/v4 generation draws the backend's own entropy through the `make-random-state`-answers-nil + `random`-ignores-the-state model, `.kb/time-environment-builtins.md` adjacent). The enablement batch is general, none of it mito-specific, each owned per-topic: `slot-exists-p` + the whole MOP reconciliation/by-name-protocol/shared-initialize-fill group ([clos.md](clos.md) "mito-core integration batch"), `package-name` (`LispPreludeLibrary` over find-package), the empty-function-body nil (`LambdaLists.expand`), 2-arg `random`/`make-random-state`, `map` with a COMPUTED result type (lowered onto computed `coerce`), case clause key lists as data in the free-variable analysis (`compiler/FreeVarAnalyzer` -- `(lambda flet labels)` as keys used to capture LABELS), the `%error-runtime` chain segmentation (todo-211, [jvm-method-size-limits.md](jvm-method-size-limits.md)), `:import-from` of an INHERITED name ([packages.md](packages.md) `trueHome`), and the `pax:defsection` export residue on the compile paths (`UserMacroExpander.paxDefsectionExportForm` -- the defsection expands to a defvar at macro time, so the compilers' own resolver pass would never see the autoexports; a literal top-level `(export '(...))` is emitted in its place). Pinned by ci-spec `mito-core-enablement-language-group` + per-feature unit tests; the quickload itself is manual (the mito tree lives in the quicklisp cache).
-
-**esrap (`.todo/248`, part of the Mito milestone `.todo/238`, 2026-08-03)**: Nikodemus Siivola's / Jan Moringen's packrat PEG parser (MIT, esrap-20260101-git) loads verbatim via `(ql:quickload "esrap")` / `asdf:load-system` over alexandria and trivial-with-current-source-form, and parses on ALL FOUR backends -- the parser is pure computation, so Preview 1 runs it too. Pinned by **`EsrapE2eTest`** (esrap + trivial-with-current-source-form vendored under `src/test/resources/`; esrap's own README smoke example plus mito's `migration/sql-parse.lisp` grammar VERBATIM, which `mito.migration:migrate` uses to split a migration file into statements, and the parse-error report) and the `esrap-enablement-language-group` ci-spec case. Every expected line was verified against SBCL 2.2.9 running the same sources. Nothing esrap-specific landed; eleven general gaps did, each of which had broken the load or given a WRONG answer:
-
-1. **`(cons CAR-TYPE CDR-TYPE)`** was not a compound type specifier at all -- its arguments fell through to the ranged-NUMERIC default and compiled as bounds, so esrap's whole expression-kind table (`(cons (eql function) (cons symbol null))`) evaluated the symbol `function` as a variable. A non-numeric atomic type spelled compound now ignores its arguments instead of reading them as bounds.
-2. **The SIZE of `(string N)` / `(simple-vector N)` / `(vector T N)` is checked.** Unchecked, `(typep sub '(or character (string 1)))` answered true for every string, so `(or "foo" "bar")` compiled to the single-CHARACTER dispatch and a successful parse advanced one position; and `(typep cell '(simple-vector 41))` answered nil for the packrat cache's own vector, which then reached `gethash`. `(simple-vector N)` carries only a SIZE (its element type is always t) while `(vector ELEMENT-TYPE SIZE)` leads with the element type -- reading one as the other is what produced both.
-3. **A constant DOTTED pair survives a template that also carries a NESTED backquote** (reader, [defmacro-backquote.md](defmacro-backquote.md)): the CLtL2 path's `bq-attach-append` constant fold appended the tail as if it were a proper list, so `(terminal . terminal)` in `*expression-kinds*` became `(terminal)` and every alist lookup answered nil.
-4. **More than one `(:constructor ...)` on one `defstruct` defines them ALL** ([defstruct.md](defstruct.md)); only the last survived.
-5. **`:test-not`** across the whole `:test`-taking family (member/assoc/rassoc/count/position/find/remove/delete/substitute/adjoin/union/intersection/set-difference), as ONE shared `TestSpec` so the compiled call and the first-class function value decide the same way; **`count` gained `:start`/`:end`**.
-6. **`reduce` over an EMPTY sequence calls its function with ZERO arguments** and returns that, CL's own rule -- `(reduce #'append '())` is nil, not an error. The guard is a shared `expandReduce` lowering, so all four backends get it; `#'append`'s wrapper became variadic in the same pass, because on WASM a wrong-arity indirect call TRAPS where the JVM was lenient.
-7. **The character predicates** `char-lessp`/`char-greaterp`/`char-not-lessp`/`char-not-greaterp`/`char-not-equal`, `graphic-char-p`, `standard-char-p` (prelude defuns).
-8. **The printer surface**: `write`, `pprint`, the pprint DISPATCH tables, `pprint-logical-block`, and the whole CL printer-control variable set -- [pretty-printer.md](pretty-printer.md) owns what is real and what a stream with no column cannot do. `*print-level*`/`*print-length*` are not decoration: esrap's `print-object` on a parse result BINDS both.
-9. **The format logical block `~<...~:>` and `~/name/`** ([format.md](format.md)), which is what makes esrap's parse-error report readable rather than a wall of unrendered directives. A `~/name/` is a function REFERENCE and the only trace of one, so `LibraryDefunPruner` scans string literals for it.
-10. **`*modules*`** is a real variable and IS the set `provide` records and `require` consults (esrap's editor-support reads it to detect a swank image); `#'find-package` gained a wrapper (its body is a computed designator, which already lowers to the baked package table); `(compile nil lambda-form)` on the compile paths now EVALUATES the form through the eval runtime instead of signalling, which is `compile`'s own contract where there is no compiler.
-11. **A macro-GENERATED `deftype` reaches the compilers' registry** (`UserMacroExpander.emitMacroGeneratedDeftypes`): alexandria defines its whole `positive-integer`/`array-index` family from one `macrolet`, so nothing in the emitted program named them and a `typecase` clause using one failed the COMPILE while the interpreter -- which evaluates the macrolet -- resolved it.
-
-Residue, both dead in esrap and warned about at compile time: `set` and `break` are undefined (a swank-hook branch and the rule-tracing debugger entry). `char-name` answers nil for a graphic character, which is CL; SBCL's Unicode NAME (`DIGIT_ZERO`) is an extension, and it is the only difference between esrap's parse-error report here and on SBCL.
-
-**tiny-routes (2026-08-08)**: Johnny Ruiz's Clack-targeting routing library
-(BSD 3-Clause, tiny-routes-20241012-git) loads verbatim via
-`(ql:quickload "tiny-routes")` / `asdf:load-system` over cl-ppcre and the uiop
-shim, and routes on ALL FOUR backends -- routing is pure computation, so
-Preview 1 runs it; only SERVING the routes needs `clackup` (`.kb/clack.md`).
-Pinned by **`TinyRoutesE2eTest`** (vendored under `src/test/resources/tiny-routes`,
-`extraSystemPath` = the vendored cl-ppcre; the route macros, `define-routes`
-dispatch, `path-parameter`, the method matcher, the regex template,
-`wrap-request-body` over a `:raw-body` stream, `wrap-query-parameters`, the
-response wrappers and the six deprecated constructors) plus the three tiny-routes
-legs of `ClackE2eTest`, which serve the same routes over real HTTP and are the
-only coverage of the LIVE `ql:quickload` and of the companion system
-`tiny-routes-middleware-cookie` (cl-cookie / quri / local-time / proc-parse --
-more than the hermetic driver vendors). NOTHING tiny-routes-specific landed; the
-three general gaps it found did, each its own item and each a hard failure rather
-than a wrong answer:
-
-1. **The LOOP anaphoric `it` was unbound in any package but `cl-user`**
-   (`LispMacroExpander.LoopExpander`): the substitution matched the symbol by RAW
-   name, and the expander runs AFTER `PackageResolver`, so only the unqualified
-   `cl-user` spelling ever hit. `tiny:routes` -- the dispatch function every
-   application goes through -- is `(loop ... when (funcall handler request) return
-   it)` inside `(in-package :tiny-routes)`. Both compile paths failed at COMPILE
-   time, so a cold `it` branch refused to compile. Matching the MEMBER
-   (`splitQualified`) in any package is the rule: no `cl:it` exists to collide
-   with. `(loop-finish)` carried the identical raw-name compare and was fixed with
-   the same helper.
-2. **`uiop:if-let` / `when-let` / `when-let*` / `with-deprecation`** joined the
-   uiop externals as built-in macro expansions (the `with-temporary-file` pattern
-   above): `tiny-routes.lisp` imports `if-let`, and `response.lisp` wraps its six
-   deprecated constructors in `with-deprecation`, which was a LOAD-time failure
-   ("not external in the UIOP package"). `with-deprecation` lowers to
-   `(progn definitions...)` -- rontolisp has no deprecation-warning machinery and
-   no compile-time warning channel to route one through, so the level form is
-   ignored, and that is stated in its doc page rather than left silent. It also
-   joined `flattenTopLevel`'s splice forms beside `eval-when`: it wraps top-level
-   `defun`s in the wild, and burying those in an expression would stop Pass 1
-   collecting them.
-3. **A serve component whose program ends in a non-`cl-user` package**: the
-   handler bridge `eval/HttpLibrary` synthesizes is appended AFTER the program (so
-   the handler NAME resolves where the directive was written), which left
-   `%serve-dispatch` / `%serve-request-body` / `%serve-handle` resolving in the
-   application's own package while http.lisp -- spliced at the head -- calls the
-   unqualified ones. `(in-package :demo)` before `clack:clackup` therefore failed
-   the `--component` compile with "Cannot compile: %SERVE-DISPATCH". The three
-   synthesized names now carry an explicit `cl-user::` qualifier, which normalizes
-   to the bare name in every package; the handler reference is deliberately left
-   unqualified. See `.kb/clack.md`.
-
-The test system is NOT in scope: `tiny-routes/test` depends on fiveam, whose own
-dependency `net.didierverna.asdf-flv` stops on the unsupported `:long-name`
-defsystem option, and how much of fiveam follows is unmeasured.
-
-**tiny-routes/lite (todo-296, 2026-08-08)**: the OPT-IN ppcre-free variant, and
-the first substitution keyed by a system name that exists solely to carry it.
-Mechanism, three existing tiers composed: `AsdOverrides` maps `tiny-routes.asd`
-to `tiny-routes-lite.asd`, which redeclares the primary system VERBATIM (so the
-plain load is untouched -- todo-295's rejection of a silent substitution
-stands) and adds secondary system `tiny-routes/lite` = same components, no
-`:cl-ppcre`; `ShimLibraries.LEAF_MODULES` substitutes
-`src/middleware/path-template.lisp` under THAT system name only
-(`tiny-routes-lite-path-template.lisp`: same package, same four exports, the
-dispatch cond and the non-ppcre defuns verbatim upstream); `AsdfSystems.locate`
-resolves the slash name to `tiny-routes.asd` by the existing secondary-name
-rule, and `DistClient.ensureAvailable` gained the general fallback that a
-slash name absent from systems.txt downloads its PRIMARY's release (ASDF's
-naming rule guarantees `NAME/SUB` lives in `NAME.asd`). Both tiers are needed
-together -- the file swap alone is -0.9% because the loaded-but-unreferenced
-engine stays anchored through its CLOS surface
-(`.kb/optimize-dead-code-elimination.md`, the routing section, which holds the
-todo-295/296 measurements: the routed Worker probe 1,219,894 -> 487,146 B raw,
-the httpbin-tiny-routes example 1,236,811 -> 501,689 B). The matcher's
-contract is "matches identically or refuses loudly": tokens are
-`:([A-Za-z_][A-Za-z0-9_-]*)` anywhere in the template -- the token-NAME scan is
-as greedy as upstream's, so `/a/:x-:y` parses as ADJACENT tokens `:X-` and
-`:Y` and `/a/b-c-d` binds `(:X- "b-c-" :Y "d")`; do not "fix" that, it is
-upstream's own behavior, empirically pinned -- matched with
-greedy-with-backtracking over `([^/]+)` parts; a template containing any of
-`. \ [ ] ( ) { } | ^ $ * + ?` (live regex syntax upstream) or `:regex t`
-SIGNALS at route-build time naming the escape; a zero-token colon template
-(`/a/:1`) matches nothing on either system (upstream's keyword matcher answers
-a nil plist, so the wrapper never calls the handler). Exact templates
-(no colon) are `string=` on both systems, metacharacters included -- the
-rejection applies only where upstream builds a regex. Pinned by ONE corpus in
-two classes: `TinyRoutesLiteE2eTest` (lite on all four backends, vendored tree
-WITHOUT cl-ppcre on the search path -- passing at all proves the dependency is
-gone -- plus the rejected shapes' verbatim messages) and
-`TinyRoutesLiteUpstreamParityTest` (the REAL engine over the same
-`TinyRoutesLiteCorpus` constants on the interpreter, plus the co-load
-refusal). Co-loading the two systems is REFUSED by both loaders in both orders
-(`ShimLibraries.conflictingSystem`, checked at the top of
-`LispEvaluator.loadSystem` / `LoadInliner.spliceSystem`): they define the same
-packages, so whichever loaded last would silently redefine the matcher --
-against the lite contract in one order, silently re-shipping cl-ppcre in the
-other. Consequence: `tiny-routes-middleware-cookie` (depends on full
-tiny-routes) cannot be combined with lite, correctly -- its cookie middleware
-would drag the engine back anyway. The same session fixed the worker handler
-shim's empty-header envelope (`clack-handler-reactor.lisp` `%header-pairs` now
-answers a VECTOR): tiny-routes' `(ok "x")` carries no
-headers, an empty LIST stringifies as JSON `false`, and the Headers
-constructor on the JS side throws on it -- the first headerless Clack response
-any Worker example ever produced. Docs: the `tiny-routes/lite` subsection of
-`doc/{en,ja}/guides/asdf-systems.md`, the
-`examples/cloudflare-workers/httpbin-tiny-routes` example (the four-way size
-table), the `examples/asdf/README.md` row.
-
-**A cl-ppcre/lite in the same pattern was built, parity-pinned and then REJECTED
-(user decision 2026-08-08, todo-297)** -- do not re-propose it as the answer to
-the engine's module share. The decision record, the measured sizes and the
-mechanism notes are in `.todo/297`; the direction for that item is shrinking the
-REAL engine's compiled share (`.todo/288`).
-
-**rove v0.10.0 (the `.todo/372` milestone, 2026-08-16)**: Eitaro Fukamachi's rove (BSD 3-Clause, quicklisp dist rove-20260101-git) loads verbatim via `(ql:quickload "rove")` / `asdf:load-system`, and a test suite in the shape of its README + `examples/passed.lisp` runs with the spec reporter on ALL FOUR backends -- pinned by **`RoveE2eTest`** (rove + dissect vendored unmodified under `src/test/resources/{rove,dissect}`, next to the already-vendored cl-ppcre on the search path; the demo project `src/test/resources/rove-demo` carries BOTH system shapes rove's `run-system` typecase dispatches on: a `:package-inferred-system`, `my-app/tests`, whose suite is found through the `component-sideway-dependencies` walk over the derived sub-system metaobjects, and a plain `defsystem`, `my-plain/tests`, whose suite is found through the `*load-pathname*`-keyed file->package map recorded per `deftest`). The whole assertion surface is exercised (`deftest`/`testing`/`ok`/`ng`/`signals` with a user condition and `'type-error`/`outputs`/`pass`/`fail`/`skip`/`failing`/`setup`/`teardown`/`defhook`/`diag`, a failing assertion, an assertion whose form signals) and every entry point runs -- `rove:run` on both shapes, `run-test`, `run-suite *package*` (the README FAQ) -- each answering the passed-p boolean the `(uiop:quit (if (rove:run :my-app/tests) 0 1))` exit recipe consumes. The enablement was the sub-item table of the deleted `.todo/372` (recover it via `.todo/.history.md`); the E2E session itself landed only harness catch-up with the CLI pipeline: `AsdfLibraryE2eSupport.compileProgram` now hands `LispPreludeLibrary.process` the TARGET feature set (`uiop:featurep` answers against the `*features*` the backend was SEEDED with; the one-argument overload spliced the interpreter's, `.kb/uiop.md`) and runs `EnvironmentLibrary.process` per backend (rove's `with-local-envs` -- `run`'s `:env` -- reads `uiop:getenv`, which under `--component` is the spliced environment.lisp). Expected lines verified against SBCL 2.2.9 on the same sources modulo the stripped ` (Nms)` durations, the `#+sbcl`-only `at file:line` source-location lines, the dissect stacks (empty no-op interface on every backend), and ONE text divergence: the printer spells an accessible symbol package-qualified (`MY-APP/MAIN:ADD` where SBCL prints `ADD`) -- `.todo/391`; flip `RoveE2eTest`'s expected lines to the SBCL spellings when it lands. Documented non-goals that hold: `uiop:lispize-pathname` stays unreached (`resolve-file`'s fasl arm is dead while `asdf:*user-cache*` is nil, `.todo/365`), `deftest`'s `:compile-at :run-time` is interpreter-only (`.todo/384`), `:style :none` on a compiled program needs the program to load `rove/reporter/none` itself, and a raw wasm TRAP in a test body still ends the run (`.kb/error-handling.md`). Docs: `guides/testing.md` (nav entry) + the `guides/asdf-systems.md` row.
-
-**The examples are the first consumer (`.todo/392`, 2026-08-16)**: three of them CHECK THEMSELVES with rove instead of printing and hoping -- `examples/console/roman.lisp` (the 1..3999 round-trip, in place of an `all-match` flag), `examples/cloudflare-workers/httpbin/check.lisp` (six requests through the hand-written Worker adapter, asserted over the PARSED reply, so every needle `examples.yaml` used to spell is now Lisp) and the new `examples/browser/minesweeper/minesweeper-core-test.lisp` (a test file beside a GUI example, over the rendering-free core nothing verified before). Each is a plain single file: `(asdf:load-system :rove)` + `(use-package :rove)` in `cl-user` + `(uiop:quit (if (run-suite *package*) 0 1))`, which is the shape `guides/testing.md` now teaches beside the ASDF-system one; the source spells the VENDORED route (`--system-path` at `src/test/resources/{rove,dissect,cl-ppcre}`, the cl-who precedent) so `-Drontolisp.examples=true` passes with no network, and the header comments name `(ql:quickload "rove")` as the outside-this-repository spelling. Two harness defects had to go first: `examples.yaml`'s `systemPath` is now a LIST, each element absolutized separately and joined with `File.pathSeparator` (`ExamplesE2eTest.systemPathFlags`; passing `a:b` as ONE path absolutized only `a`, and rove needs three directories -- the scalar spelling still parses, via `ACCEPT_SINGLE_VALUE_AS_ARRAY`, and `net/http-handler-cl-who.lisp` still uses it), and the INTERPRETER leg now passes the `--system-path` flags at all (only the compiling legs did, because the one previous user declared no run backend). Pinned by two opt-in-free `@Test`s in `ExamplesE2eTest` plus the nine example x backend legs; the manifest checks rove's SUMMARY lines only, because the per-assertion lines print forms (`.todo/391`) and rove appends a ` (Nms)` duration past 37 ms. `IndentRules` gained rove's body-taking operators (`testing`/`failing` -> `body(1,2)`, `setup`/`teardown` -> `body(0,2)`, `defhook` -> `body(2,2)`; `deftest` needs none, the `def*` convention reads it) -- without them `rontolisp format` aligns every assertion under the description STRING's own width. **What the conversion FOUND, and both are real bugs the milestone's own demo could not see**: an inner `handler-case` not shadowing an enclosing `handler-bind`, so a rove test over code that catches its own error ended on that case (fixed since -- `.kb/error-handling.md`, "A `handler-case` joins the cluster stack"; check.lisp's unparseable-body probe runs inside its test again) and the `#'coerce`/`#'elt` sweep (rove's `form-inspect` needs every operator in an `ok` to be first-class; the whole catalog is closed and pinned now, `.kb/core-representation.md` "Built-in function wrappers").
-
-**`rontolisp test` -- the CLI runner, and where the verdict comes from (`.todo/395`, 2026-08-16)**: `TestCommand` (package `cli`) is a SOURCE GENERATOR, not a mode: it builds one program -- rove prologue + the target + a verdict epilogue -- and hands it to the ordinary `RontoLispCli` pipeline, so with no `-o` it is interpreted and with `-o` the SAME program compiles, and the emitted `.class` / Preview 1 `.wasm` / `--component` `.wasm` carry the identical exit contract for free (`uiop:quit` is real on all four since `.todo/362`). That is why `test` is parsed by `CliOptions` like an ordinary run (unlike `format`, which owns its whole argv): every compiler flag has to keep working. Upstream `roswell/rove.ros` is the spec -- read it in the quicklisp cache (`~/.rontolisp/quicklisp/software/rove-*/roswell/rove.ros`), it is NOT in the vendored `src/test/resources/rove` copy. Mirrored from it: rove loaded up front (`asdf:load-system` when rove is on the search path, `ql:quickload` otherwise), a `.lisp` target's system name read from its `defpackage` (`AsdfSystems.fileDefpackageName`, the same `file-defpackage-form` rule the package-inferred loader uses), `asdf:load-system` + `asdf:test-system` then `rove:run` as the fallback, and the verdict read from `rove/core/suite:*last-suite-report*` AFTER the run so nothing is executed twice.
-
-**Where the verdict comes from, and the one hook that is not cosmetic**: rove sets `*last-suite-report*` in `call-with-suite` ONLY, which `rove:run`/`rove:run-tests` reach and `rove:run-suite` -- the README-FAQ shape a single test file ends with, and the shape this command exists for -- does not (`run-suite` -> `with-reporter` -> `run-suite-tests`, no `call-with-suite`). So the prologue defines `(defmethod rove:invoke-reporter :after (reporter function) (setf rove/core/suite:*last-suite-report* (rove/core/stats:stats-results reporter)))`: `invoke-reporter` is the one funnel EVERY entry point crosses, and its argument IS the stats object. Without it the runner would have to re-run the target's tests to obtain a report -- `RoveTestCommandE2eTest`'s `containsOnlyOnce("Summary:")` is what pins that it does not. A second replacement in the same prologue: `(defmethod rove:run-suite (suite &key (style rove:*default-reporter*)) ...)` -- same specializer, so CL redefinition semantics REPLACE rove's method -- because rove's own `run-suite` hard-codes `:spec` while every other entry point defaults to `*default-reporter*`, and without the replacement `-r dot` would silently do nothing for exactly the FAQ shape.
-
-**The deliberate divergences from `rove.ros`, with their reasons** (re-evaluation triggers, in the CLAUDE.md sense): (1) failure exits **1**, not `-1` -- the 8-bit mask `.todo/362` applies turns `-1` into 255. (2) No `COVERAGE`/sb-cover arm; still a non-goal. (3) The target's own stdout is NOT swallowed into a broadcast stream the way `run-file-tests` does it. That is not laziness: rove's `*report-stream*` is `(make-synonym-stream '*standard-output*)`, and only `call-with-suite` rebinds `*standard-output*` back to `*rove-standard-output*` -- so on the `run-suite` path, which never reaches it, swallowing stdout would swallow the REPORT. If rove ever moves that rebinding into `run-suite-tests`, the swallow becomes safe and worth taking. (4) A `.lisp` file whose `defpackage` names no locatable system is LOADED instead of erroring (upstream would hand the name to `asdf:load-system` and die), then, if nothing recorded a report, the suite of the package it declares -- CL-USER when it declares none -- is run: without that fallback the FAQ demo, the very file the todo reproduced, is not a valid target. (5) Running NO test exits 1 with a message on stderr, where upstream's `(every #'passedp '())` is a vacuous pass -- a suite that stopped registering its tests is the silence the command exists to end. (6) A system designator (not only a `.lisp`/`.asd` FILE) is a target, since `--system-path` already resolves the registry. (7) `-r` accepts only `spec|dot|none`, and an unknown one is a command-line error (exit **2**, as for any bad argv, keeping "the command was wrong" distinct from "a test failed") rather than upstream's run-time attempt to load `rove/reporter/<style>`; `none` IS loaded up front, because `make-reporter` would otherwise load it at RUN time, which only the interpreter can do. Colors follow the destination (terminal yes, pipe and every compiled artifact no) instead of rove's unconditional ON.
-
-**Not done, deliberately**: a plain `rontolisp FILE` still exits 0 after a red suite (`.kb/toplevel-statement-values.md` -- a top-level form is a statement, as in `sbcl --script`). The todo weighed a stderr hint ("N tests failed; `rontolisp test` exits non-zero") and it was rejected: the generic run path would have to know about rove and read `*last-suite-report*`, and doing it only where it is cheap (the interpreter) is precisely the lagging-backend divergence this tree forbids. Coverage: `RoveTestCommandE2eTest` (8 tests -- the red/green verdict on all four backends as SUBPROCESSES, since a compiled `uiop:quit` is a real `System.exit`/`proc_exit`; the reporter option; the defines-only fallback; a system target and a `.asd`; the no-test rule) plus two `RontoLispCliTest` cases for the help text and the exit-2 argv errors. No ci-spec case is possible: that driver concatenates every case into ONE program and cannot supply a file target. Docs: `doc/{en,ja}/guides/testing.md` leads with the subcommand.
-
-**cl-mustache 0.12.3 (the `.todo/425` milestone, 2026-08-17)**: Kan-Ru Chen's Mustache renderer (MIT/Expat, quicklisp dist `cl-mustache-20241012-git`, 924 lines over `packages.lisp`/`mustache.lisp`/`compat-api-v1.lisp`) loads UNPATCHED via `(ql:quickload "cl-mustache")` / `asdf:load-system` and renders identically on all four backends: `render`/`render*` over string and pathname templates, `compile-template`, `define`, `make-context` with `:data`/`:partials`, alist / hash-table / chained contexts, sections, inverted sections, partials, dynamic partial names and lambda sections. Nothing about the `.asd` needed widening (its `#.`-read-time-eval `:version` reads `version.lisp-expr` beside the source, which the compile-time pathname fold above already resolves), and its only dependency `uiop` is a built-in shim -- **the library was the FORCING FUNCTION for seven general gaps, none of them cl-mustache-specific**, each fixed and closed on its own child todo before this entry existed: `ctypecase` (`.todo/426` -- `ensure-context`, the first call of every entry point), `gethash`'s present-p surviving a FUNCTION return (`.todo/427` -- `context-get` is a `defmethod` whose body IS `(gethash ...)`, so without it every `{{name}}` rendered empty; `.kb/multiple-values.md`), `#.` read-time eval seeing `*load-truename*` on the COMPILE path (`.todo/428`), `signal` of an unhandled condition being fatal on the three compiled backends (`.todo/429` -- a missing partial signals `partial-cant-be-found`), hash-table printing (`.todo/430` -- `{{.}}` over a map; it TRAPPED both WASM backends), WASM float printing (`.todo/431` -- the spec's "Decimal Interpolation" cases), and a runtime-computed absolute path resolving against the preopen NAMES rather than fd 3 (`.todo/432` -- file templates and `*load-path*` partial lookup; `.kb/read-load-streams.md`). Coverage: `ClMustacheE2eTest` (the API surface) and `ClMustacheSpecE2eTest`, both all four backends via `AsdfLibraryE2eSupport`. The second one loads the vendored, machine-generated **194-case mustache spec suite verbatim** through a 20-line `plan`/`is`/`finalize` stand-in for `prove` (not in the tree) that prints ONE character per case, so the expected line pins the pass/fail SET and not just the count. **158/194 is parity with upstream, not a shortfall**: SBCL 2.x fails byte-identically the same 36 through the same shim -- null interpolation, dotted names pushing a context frame, and the entire 26-case `~inheritance.json` module, which postdates the 1.1.2 spec cl-mustache targets. Implementing those is a change to cl-mustache, so the number is a REGRESSION pin: if it moves, a rontolisp change moved it. Upstream's `t/test-api.lisp` scores 20/20 on all four backends too, but is not in the E2E: its `#.(or *load-truename* *compile-file-truename*)` bakes the HOST path of `t/test.mustache`, which the container the WASM legs run in does not have -- `ClMustacheE2eTest` covers the same file-template ground with a template the program writes to `target/` at run time. Vendor: `src/test/resources/cl-mustache` (MIT/Expat, stated in every file header; the distribution ships no separate LICENSE file), `t/test-spec.lisp` + `t/test-api.lisp` + `t/test.mustache` included. Docs: the `guides/asdf-systems.md` row + `examples/asdf/mustache-demo.lisp` and its README row.
-
-**jose (the `.todo/419` milestone, 2026-08-18)**: Eitaro Fukamachi's JOSE / JWT implementation (BSD 2-Clause, quicklisp dist `jose-20250622-git`, four files over `base64.lisp`/`errors.lisp`/`jws.lisp`/`jwt.lisp` plus a `use-reexport` `main.lisp`) loads UNPATCHED via `(ql:quickload "jose")` / `asdf:load-system` and signs, verifies and decodes identically on all four backends. It is a `:class :package-inferred-system`, so its files load off their own `defpackage` headers with no `:components` list, and **the whole dependency graph loads unpatched too** -- cl-json, cl-base64, ironclad, split-sequence, assoc-utils, alexandria and trivial-utf-8 (the last over the built-in `mgl-pax-bootstrap` shim). Nothing about jose itself needed a slice, an override or a leaf shim: what it needed was six general gaps its children closed first (`.todo/420` -- three `.asd` parse widenings `cl-json.asd` wants; `.todo/411` -- `unread-char` on a stream HANDLE, without which cl-json cannot scan a number, so `exp`/`iat` decoded as nothing; `.todo/421` -- `logtest`, which `trivial-utf-8`'s `utf-8-bytes-to-string` calls, so a token's payload could not become a string at all; `.todo/422` -- `loop for VAR fixnum = INIT then STEP`, which ironclad's `math.lisp` uses twice and which is what stopped RSA key generation; `.todo/423` -- `progv` on the compile paths, which cl-json's decoder binds its scope variables with; `.todo/424` -- the SHA-384/512 and RSA halves of the ironclad slice), plus two found while finishing it, both general and both fixed here: `with-input-from-string` over a MUTABLE character vector cast to `String` on the JVM (every string trivial-utf-8 decodes is `make-string` + `(setf char)`, so `jose:decode` fed one straight into cl-json), and a **multi-pair `setq` whose later value form builds a closure** -- `FreeVarAnalyzer` walked the first pair only, so the closure's captures were never recorded: a silently wrong answer on the JVM and `Cannot find variable for closure` on WASM. The second one is cl-json's, not jose's: `set-custom-vars` expands to exactly that shape and `json-rpc.lisp`'s `invoke-rpc` is its only caller, so the defect sat behind the tree-shaker until a program loaded rove beside cl-json and kept it alive. Coverage: `JoseE2eTest` (the API surface -- HS/RS/PS/none, integer claims with the claim-check keywords, every correctable condition, two malformed tokens; every line pinned against SBCL 2.2.9 on the same sources AND the HMAC tokens against Python's `hmac`/`hashlib`, the HS256 one being the token jose's README publishes) and `JoseTestSuiteE2eTest` (upstream's OWN `jose/tests/jwt` through rove, the `rontolisp test jose/tests/jwt` shape), both all four backends via `AsdfLibraryE2eSupport`, with the shared dependency path in `JoseSystems`. `jose/tests/jws` is excluded and always will be: it `(:use #:pem)` and `pem` is in no Quicklisp dist, so it runs on no implementation. Vendor: `src/test/resources/jose` (BSD 2-Clause, stated in the `.asd` and the README; the distribution ships no separate LICENSE file), `tests/` included, and `src/test/resources/trivial-utf-8` (zlib, `COPYING`). Not a rontolisp gap, recorded so it is not rediscovered: PS512 with a 1024-bit key trips ironclad's own `(>= num-bytes (+ (* 2 digest-len) 2))` assertion -- PSS/SHA-512 needs >= 1040 modulus bits. Non-goal: JWE (encryption); jose implements JWS/JWT only, so there is nothing to load -- re-scope if upstream adds it. Docs: the `guides/asdf-systems.md` row (en+ja) + `examples/asdf/jose-demo.lisp` and its README row.
-
-**iterate 1.6.0 (2026-08-27)**: Jonathan Amsterdam's iteration DSL (MIT, quicklisp dist `iterate-release-d27d7ff4-git`, `package.lisp` + `iterate.lisp`) loads verbatim via `(ql:quickload "iterate")` / `asdf:load-system` and runs on ALL FOUR backends. No dependencies, no I/O -- the whole library is a macro over pure computation, so Preview 1 is in. Pinned by **`IterateE2eTest`** (vendored under `src/test/resources/iterate`, no `extraSystemPath`): the clause acceptance list is the numeric driver in every spelling (`from`/`to`/`downto`/`below`/`by`), the sequence drivers (`in`, `on`, `in-string`, `in-vector`, `in-hashtable`), every accumulator (`collect`/`collecting` with and without `into`, `sum`, `multiply`, `maximize`, `minimize`, `counting`, `always`, `thereis`, `appending`, `reducing`), the control clauses (`repeat`, `with`, `while`, `until`, `if-first-time`, `finally`) and a nested `iter` feeding a named outer one through `(in outer ...)`; every expected line was verified against the same sources on SBCL 2.2.9 (byte-identical). Nothing iterate-specific lives in the source tree -- the five things that had to land first are each owned by their own topic: the `,.` splice spelling that the whole of `expand-iterate` is written in ([defmacro-backquote.md](defmacro-backquote.md)), the native `#L`/`#nL` reader macro ([reader-features.md](reader-features.md)), the `ldiff`/`sublis`/`gentemp` prelude defuns, `with-hash-table-iterator` ([hash-tables.md](hash-tables.md)), and `macro-function` answering nil for rontolisp's own `while` ([symbol-runtime-api.md](symbol-runtime-api.md)) -- iterate's walker asks before it recognizes its own clauses, and a yes made `(iter ... (while test))` loop forever. Their feature-level pin is the ci-spec `sharp-l-comma-dot-and-hash-table-iterator` case; `IterateE2eTest` is what pins the LIBRARY against a regression in any of them.
-
-**The two things that shape the exercise, both matching SBCL**: (1) a clause head is an ordinary symbol read in the CURRENT package, so `(iterate:iter (for i from 1 to 5) ...)` leaves `FOR` in `CL-USER` and iterate does not recognize it -- the exercise does `(use-package :iterate)`, which is what a consumer must do on any implementation. (2) iterate's own `iterate-test.lisp` does NOT ride along: it is written against `rt`, which is not vendored here, so the acceptance list is the proof. Trigger to revisit: vendoring `rt` (or porting the suite to rove) would replace the list with upstream's own ~700 tests. Note also the trivia DIVERGENCE RECORD above -- its re-evaluation trigger is "a real consumer needs iterate itself", which iterate WORKING does not by itself make true; `trivia.balland2006` still additionally needs `type-i`.
-
-**array-operations 1.2.1 (2026-08-31)**: the Lisp-Stat array library (MS-PL, quicklisp dist `array-operations-1.2.1`, a `:class :package-inferred-system` over `src/`) loads via `(ql:quickload "array-operations")` / `asdf:load-system` over let-plus + anaphora, and the API runs IDENTICALLY on all four backends (manual run, `(aops:generate #'identity 7 :position)` / `each` / `permute`; its tree and let-plus's live in the quicklisp cache, so `AsdfLibraryE2eSupport` -- which needs a vendored tree per system -- cannot host it, the same reason quri's, local-time's and postmodern's quickloads are manual). The `.asd` needed ONE parse widening, `:long-name` joining the tolerated metadata beside `:homepage`/`:bug-tracker`; everything else the library forced is general and owned per-topic: the nested `with-slots` instance temp ([clos.md](clos.md) -- clunit2, which is the library's own test framework), the read-modify-write place once-only rule ([argument-evaluation-order.md](argument-evaluation-order.md) -- alexandria's `shuffle`, which the permute test uses), a `defmacro` a macro expands to inside a `progn` or a closing `let` ([defmacro-backquote.md](defmacro-backquote.md) -- let-plus and anaphora; without it the JVM and both WASM builds died on "The function DEFMACRO is undefined"), the standard float-range constants read like `pi` (`LispReader.CL_FLOAT_CONSTANTS`, `doc/*/reference/data-types.md` -- `randn` adds `least-positive-double-float` to its uniform draw), and an ITERATIVE `equalp` over an array and a list (`LispPreludeLibrary`; the old per-element `labels` recursion blew the interpreter stack comparing two 720-element rank-5 arrays). Feature-level pin: the ci-spec case `array-operations-enablement-language-group` (all four backends, no asdf load).
-
-**Where it stands against upstream, and what is left**: upstream's own clunit2 suite scores **217/219 here against SBCL 2.2.9's 219/219 on the same sources** (2026-08-31; it was 200/219 when the library first loaded, then 208/219 once the rank-0 gap closed). The remaining 2 are ONE rontolisp answer, and it is CONFORMANT: `(array-element-type (make-array 4 :element-type 'fixnum))` answers `T` where SBCL answers `FIXNUM` -- `array-element-type` returns the UPGRADED element type and there is no fixnum-specialized array here to upgrade to. Nothing about array-operations itself is left. The two gaps that closed were the RANK-0 array (`.todo/603`): `(make-array nil :initial-element x)` used to error "MAKE-ARRAY expects at least one dimension", which is `aops:as-array` of a scalar, so `(aops:dims 1)` failed and `stack-rows`/`stack-cols` lost their 0-dimensional-object arm (8 errors) -- now the empty case of the row-major model on all four backends, `.kb/array-literals.md`, "The RANK-0 array" -- and the ARRAY TYPE LATTICE (`.todo/604`): `type-of` answered `T` for every array instead of `(simple-vector 4)` / `(simple-array single-float (4))`, and `(typep a '(simple-array single-float (2 2)))` answered nil, which is 9 of this suite's assertions and the whole of its `zeros*`/`ones*`/`generate*` type checks (`.kb/declarations-type-checks.md`, "The array type lattice").
-
-Docs: `doc/*/guides/asdf-systems.md` + `reference/functions/asdf-{defsystem,load-system}.md` (+ catalog/nav/packages.md); phased roadmap in `.todo/054-asdf-support.md`.
-
-## Why this is a shim and not real ASDF (spike, 2026-08-18)
-
-The first line of this file says "not a port". This is the measurement behind
-that word, so the next visitor does not have to re-run it.
-
-Upstream ASDF 3.3.7 (`https://common-lisp.net/project/asdf/archives/asdf.lisp`,
-one file, 14,130 lines, 700 KB, MIT) was loaded into the INTERPRETER, with the
-built-in `uiop*`/`asdf` packages sidestepped (the spike renamed `UIOP`->`XIOP`,
-`ASDF`->`XSDF` textually; a real integration would delete them from
-`PackageRegistry` instead). With the patch set below it **loads end to end**,
-and `find-system` then really does walk `*central-registry*`, probe the
-filesystem, `load` a real `.asd` and run `defsystem` ->
-`register-system-definition` -> `parse-defsystem` -> `parse-component-form`.
-So the answer to "could we?" is yes-in-principle. Three things decided against it:
-
-1. **It is a PORT, not a drop-in.** Upstream refuses to load on an
-   implementation it does not know (`#-(or abcl allegro ... sbcl scl xcl)
-   (error "ASDF is not supported on your implementation")`), `detect-os` refuses
-   without `:unix`/`:windows`/`:genera`/`:os-macosx`, and there are 34
-   `not-implemented-error` call sites behind 230 implementation reader
-   conditionals. Every one is a `#+rontolisp` branch we would carry as a fork or
-   a replayed patch set forever. (The port itself is cheaper than the count
-   suggests — filling exactly ONE hole, `getcwd`, was enough to make
-   `probe-file*` / `ensure-pathname` / `sysdef-central-registry-search` work,
-   because `probe-file` / `truename` / `directory "*.*"` are all already real.)
-2. **Startup.** Loading it costs 2.85 s wall / 16.7 s CPU on the interpreter,
-   against a 0.40 s floor for `(print 1)` on the same jar — ~2.45 s is ASDF, ~7x
-   the whole current startup. Only "do not load it unless the program needs it"
-   makes that survivable, and the shim already gives that for free.
-3. **The real blocker was ours, not upstream's**: every hash table here was keyed
-   by `key.print()` with an `EQUAL` test and there is no `eq` table, while
-   ASDF's session cache keys are lists holding live components whose graph is
-   cyclic — a `StackOverflowError` in `LispHashTable.put`, out of the
-   `unwind-protect` cleanup of `find-system`. That, plus `print-object` being
-   dispatched only for a TOP-LEVEL object (so upstream's own component
-   `print-object`, which would cut the cycle, is never consulted), is where the
-   spike stopped. Both are recorded as plain CL defects, with the rest of the
-spike's by-product, under `.todo/436` (`.todo/437` and `.todo/438` were those
-two). **Both have since landed** — a table now places a key by a depth-capped
-structural hash and decides it with `equal` (`.kb/hash-tables.md`), so a cyclic
-key stores and retrieves, and `print-object` is dispatched for a nested object.
-The cyclic-key blocker is therefore gone; reasons 1 and 2 are not, and they are
-what still decides this. Still no `eq` table (`.todo/444`).
-
-Also measured, and worth knowing when widening the shim: the compile paths
-resolve systems at COMPILE time (`cli/LoadInliner` splices component sources,
-`.kb/load-inliner.md`) and the browser playground has no filesystem at all, so a
-runtime facility like real ASDF could only ever run inside the compiler's own
-interpreter as a plan resolver -- never in the artifact.
-
-**Re-evaluate when** any of the three change: the hash-table/identity model
-gains `eq` tables (`.todo/436` item 1, and `.todo/156` Phase 5 is the neighbour),
-a per-library shim fix stops being the cheaper move (the count to watch is the
-open uiop todos, `.todo/355`--`.todo/365`), or upstream gains a portable
-no-`compile-file` mode that removes the port surface.
-
-### Reproducing it
-
-1. Fetch `asdf.lisp` from the URL above.
-2. `sed 's/UIOP/XIOP/g; s/uiop/xiop/g; s/ASDF/XSDF/g; s/asdf/xsdf/g'` — the
-   built-in packages are pre-seeded, so upstream's own `defpackage :uiop/package`
-   otherwise dies with `Package already exists`.
-3. Rewrite each of the 39 `uiop/package:define-package` forms to `defpackage`,
-   expanding `:use-reexport` transitively into an `:export` list and adding
-   `:common-lisp` to every `:use` (upstream inherits CL through
-   `uiop/common-lisp`'s reexport); drop `:recycle` / `:unintern` / `:intern`.
-   `PackageResolver` accepts only `:use-reexport` of the extra clauses today and
-   rejects `:intern` outright. (Step 2's package renaming was also needed because
-   `defpackage` over an EXISTING package was a hard error; that half is fixed --
-   it now MODIFIES the package, as CL requires, `.kb/packages.md` -- so a re-run
-   of this spike needs the `asdf`/`uiop` system renaming only.)
-4. Delete the port guard, `(pushnew :unix *features*)`, and make
-   `not-implemented-error` a no-op so the run measures what lies BEYOND the
-   missing port.
-5. Inject the missing `cl` names as per-package defuns (an unregistered name is
-   a package-INTERNAL symbol here, so one definition per `in-package`), and
-   patch the sites `.todo/436` items 3-10 name.
-
-## Built-in systems have `:depends-on` edges of their own (todo-231)
-
-`BuiltinSystems.DEPENDENCIES` records the edges BETWEEN shim systems; both
-loaders (`LispEvaluator.loadSystem`, `cli.LoadInliner.spliceSystem`) load/splice
-them first, exactly like a third-party `.asd`'s. One edge exists:
-`flexi-streams -> trivial-gray-streams`, because the flexi shim's in-memory
-octet streams are real Gray streams and the protocol must be defined before
-their `defclass` runs (`.kb/gray-streams.md`). Real flexi-streams declares the
-same dependency for the same reason.
-
-uiop also grew a temporary-file quartet on this path --
-`ensure-directory-pathname`, `default-temporary-directory`,
-`delete-file-if-exists` (Lisp source, in the `uiop-*.lisp` resources since the
-sub-package bundle landed -- `.kb/uiop.md`) and `with-temporary-file`, which is a
-MACRO and therefore cannot reach `expandUiopStubCall` (that only sees
-function-call shapes). It is a real built-in expansion, the `usocket:with-*`
-pattern: dispatched in `LispEvaluator.evalCons` and in both expression
-compilers, and expanding into `%temp-file-name` + `open` + a cleanup. Two
-consequences worth knowing:
-
-- a LITERALLY true `:keep` drops the delete from the expansion entirely rather
-  than emitting a never-taken `delete-file`, which is what keeps smart-buffer's
-  spill path clear of the WASM backends' unlink-shaped call-time error;
-- `%temp-file-name` and `uiop:delete-file-if-exists` are reached only from that
-  expansion, which runs INSIDE the expression compilers -- so both are selected
-  by `LispPreludeLibrary.referencedBySurfaceForm` and rooted in
-  `LibraryDefunPruner` the way `%make-broadcast-stream` is. Without that the
-  compile paths emitted "%TEMP-FILE-NAME is undefined".
-
-`EnvironmentLibrary.process` moved to AFTER the whole library-splice chain in
-`RontoLispCli` for the same reason: `uiop:default-temporary-directory` reads
-`TMPDIR` through `uiop:getenv`, and with the pass upstream of the splice a
-smart-buffer program failed the `--component` compile with "compiled without
-EnvironmentLibrary.process".
-
-Finally, the individual-form substitution tier briefly held `eval.AlexandriaSymbols`
-(alexandria's `maybe-intern`, 2026-08-04) next to `Uax15Tables` and `QuriEtldTables`;
-it was deleted (2026-08-15) when `*package*` became a genuine dynamic variable and
-the form it rewrote around started reading the caller's package by itself --
-`.kb/packages.md`.
-
-**Three `.asd` widenings from the cl-json spike (`.todo/419`/`.todo/420`, 2026-08-18)**:
-`(ql:quickload "cl-json")` reproduced all three on ONE file, `cl-json.asd`, and each is
-general rather than cl-json-specific. (1) **A top-level `progn` is FLATTENED** -- its
-body forms are spliced back onto the parse worklist and each subform hits the
-recognizer again, so a nested `progn` recurses, an empty one is a no-op and an
-unsupported form inside one still errors by its OWN name, never `PROGN`'s. cl-json's
-driving shape is a `#+`-gated CLOS-feature announcement (`#-no-cl-json-clos (progn
-#+(or ... sbcl ...) (pushnew :cl-json-clos *features*))`): the outer reader
-conditional survives (rontolisp declares no `:no-cl-json-clos`), the inner one drops
-every implementation keyword the reader doesn't have, and what reaches the parser is
-the literal `(PROGN)` -- previously a hard error naming a form that declares nothing.
-`:cl-json-clos` is correctly NOT pushed here, exactly as on an unlisted
-implementation, so `src/objects.lisp` stays out of the build and the decoder answers
-alists -- the branch `.kb/declarations-type-checks.md`'s float-lattice entry already
-documents jose relying on. (2) **A component NAME accepts a symbol, not only a
-string** (`componentName`) -- real ASDF's `coerce-name` accepts any string
-designator and downcases a symbol, so `cl-json/test`'s `(:module :t :components
-(...))` names the `t/` directory. This mattered even though nobody loads
-`cl-json/test`: the whole `.asd` parses as one unit, so an unparseable secondary
-system killed the primary too. (3) **An impure top-level `defparameter` no longer
-fails the file** -- `*cl-json-directory* (system-relative-pathname "cl-json" "")`
-exists for the test system's own runtime and is read by no `.asd` form, so failing
-the whole parse over a binding nothing asks for was the deny landing in the wrong
-place. The fix moves the denial to the USE site, the same "the CONSUMER decides,
-never the evaluator" rule `#.` already follows (above): `defineParameter` records an
-impure name into a sibling `unevaluable` map (name -> reason) instead of throwing,
-and `evalDataForm`'s symbol-lookup case raises the error -- naming the parameter --
-only when a later form (typically a `#.` reference resolved by `resolveReadEval`)
-actually reads it; a plain "undefined variable" still covers a name never bound at
-all. Pinned by `AsdfSystemsTest` (`aTopLevelPrognIsFlattened`,
-`aNestedPrognFlattensRecursivelyAndAnEmptyOneIsANoOp`,
-`anUnsupportedFormInsideAPrognErrorsByItsOwnNameNotPrognsName`,
-`aModuleComponentNameAcceptsASymbolLikeCoerceName`, `aFileComponentNameAcceptsASymbol`,
-`asdDefparameterWithAnImpureValueParsesFineWhenNothingReadsIt`,
-`anImpureDefparameterErrorsNamingItselfOnlyWhenALaterFormReadsIt`) and verified with
-`(ql:quickload "cl-json")` on the interpreter off the real vendored `cl-json.asd`
-(`~/.rontolisp/quicklisp/software/cl-json-*/cl-json.asd`) -- the system loads; a
-subsequent `json:decode-json` call hits an unrelated Gray-stream gap
-(`UNREAD-CHAR is supported only on a Gray input stream`, `.kb/gray-streams.md`), out
-of this todo's scope.
-
-**The component-class surface (`.todo/625`, 2026-09-01)**: a `.asd` that subclasses `cl-source-file` to change WHICH FILE ON DISK a component names -- the standard ASDF extension idiom, and the one every pre-2010 system reaches for -- used to be a hard error before a single component was read. It is now a first-class part of the parse, because only two things about a component class can ever reach a data-only front end: whether an instance contributes a SOURCE file at all, and which file EXTENSION its name gets. Everything else the upstream subclasses in the wild exist for is `compile-op` warning policy (`(defmethod perform :around ((op compile-op) (c legacy-acl-source-file)) (handler-bind (((or style-warning warning) #'muffle-warning)) ...))`), and there is no compile-file and no fatal warning here, so ignoring it is EXACT rather than approximate. The model is `AsdfSystems.ComponentClass(source, fileType)` + a per-`.asd` `ComponentClasses` scope, replacing the old `Set<String> docComponentTypes`:
-
-- **ASDF's own classes are component types and superclasses without a defclass** (`BUILTIN_COMPONENT_CLASSES`): `cl-source-file` (`.lisp`, and what a bare `(:file ...)` means -- `DEFAULT_COMPONENT_CLASS`), `cl-source-file.cl` (`.cl`), `cl-source-file.lsp` (`.lsp`), `static-file`, `doc-file`, `html-file` (the last three ordering-only). `:static-file`'s old special case in `parseComponent` is gone -- it resolves through the same table.
-- **A top-level `defclass` declares a component class** (`collectComponentClass`): every superclass must resolve in that scope (ASDF's own or one declared EARLIER in the same file -- no generality is lost, since real ASDF's `class-for-type` runs `find-class` while it READS the `defsystem`), `source` and `fileType` are inherited from the first source superclass, and a `(type :initform "cl")` slot overrides the extension (the very slot ASDF's own `source-file-type` reads, and how chipz spells its doc classes). A defclass that is NOT a component class (an operation, a condition) stays a hard error.
-- **`(defmethod source-file-type ((c CLASS) (s module)) "ext")` sets that class's extension**, collected in a PRE-PASS over the file's forms (`collectSourceFileTypes`, descending into `progn`) rather than in file order: real ASDF calls that generic function when it OPERATES on a component, long after the whole file is read, so where the method sits relative to the `defsystem` must not matter -- htmlgen.asd writes it directly under the `defclass`, acl-compat.asd a hundred lines below one. **The CLASS still has to precede its use** (see above); only the METHOD is position-free.
-- **Every other top-level `defmethod` is now tolerated and ignored**, where before only `perform` was and any other name was a hard error. This is the one place the closed world was deliberately opened, and the reason it is safe is that the failure it can hide is not silent: a method that really did move a file (acl-compat's `(defmethod component-pathname ((c unportable-cl-source-file)) ...)`, which puts sources in a per-implementation subdirectory) surfaces as the missing file, NAMED, when the system loads. Re-evaluation trigger: if a system starts failing with a confusing missing-file error traceable to an ignored method, give that method name its own channel rather than restoring the blanket error.
-- **`:default-component-class`** is the class a bare `(:file "name")` takes -- ASDF's `class-for-type` falls back to it at exactly that one spot, so an entry that names its own class keeps it. Readable on the system AND on a module (a module walks up to the enclosing default when it says nothing). It is NOT in `IGNORED_OPTIONS`: it decides which file on disk a component means, so its `#.` markers resolve, and an unknown class is a hard error naming it.
-
-Driving library, and the verification: **portableaserve** (quicklisp `portableaserve-20190813-git`), whose four `.asd` files are the whole idiom in one release. `aserve/aserve.asd` (a `cl-source-file.cl` subclass + a `perform :around` on it + `:default-component-class cl-source-file.cl` + `(:legacy-acl-source-file "main" ...)` entries), `aserve/htmlgen/htmlgen.asd` and `aserve/webactions/webactions.asd` (a plain `cl-source-file` subclass whose extension comes from a `source-file-type` method) now parse COMPLETELY, resolving to `packages.cl macs.cl main.cl headers.cl parse.cl decode.cl publish.cl authorize.cl log.cl client.cl proxy.cl cgi.cl playback.cl` / `htmlgen.cl` / `websession.cl webact.cl clpage.cl clpcode/{clp,http,time,wa}.cl`. Pinned by `AsdfSystemsTest` (`toleratesAClSourceFileSubclassAndLoadsItsComponents`, `aSourceFileTypeMethodSetsTheClassExtensionWhereverItSits`, `aTypeInitformSlotSetsTheClassExtension`, `theBuiltInSourceFileClassesAreComponentTypes`, `aModuleMayRePointTheDefaultComponentClass`, `anUnknownDefaultComponentClassIsAHardError`, plus the two closed-world pins `aDefclassThatIsNotAComponentClassIsAHardError` and `aTopLevelDefmethodOnAnotherNameIsToleratedAndIgnored`) and, end to end through the loader, `LispEvaluatorAsdfTest.loadSystemReadsTheExtensionAComponentClassGivesItsFiles` -- the extension has to travel all the way to the read, not just into `LispSystem.files()`.
-
-**Where aserve still stops, measured 2026-09-01**: `acl-compat/acl-compat.asd`, which the other three all depend on, fails on a top-level `(defun lisp-system-shortname () ...)`, and behind that on `:properties` and on `#-(or lispworks cmu sbcl mcl openmcl clisp allegro) (error "The acl-compat library is not yet supported on this lisp implementation.")`. The last of those is not a parse gap at all -- it is upstream REFUSING an implementation it does not recognize, the same wall trivial-features' own `.asd` puts up. **Settled 2026-09-02: no further widening, and the reason is not the parser** -- see the next section.
-
-## The `.asd`-as-data boundary is not what stops portableaserve (2026-09-02)
-
-`.asd` files are parsed as DATA, never evaluated, and `AsdfSystems` refuses any
-top-level form outside the recognized set with `unsupported form in .asd file`.
-The obvious question a real 2001-vintage system raises is whether that boundary
-should widen into an evaluator. **Measured against `portableaserve-20190813-git`
-(the maintained fork of the AllegroServe port _Practical Common Lisp_ chapters
-26/28/29 target): no. Widening it buys nothing.** The numbers, so the next
-visitor does not re-derive them:
-
-The refusal we hit first is `acl-compat/acl-compat.asd`'s top-level
-`(defun lisp-system-shortname () #+allegro :allegro ... #+sbcl :sbcl)`, called
-from a `(defmethod component-pathname ((c unportable-cl-source-file)) ...)` that
-routes each unportable component into a per-implementation subdirectory
-(`acl-compat/sbcl/`, `.../cmucl/`, ...). That method is not decoration -- four of
-the system's source files come from it -- so honoring it means evaluating the
-`.asd`, and a `defmethod` on `component-pathname` also means real `operate`
-machinery, which this shim deliberately does not have. But behind that door, in
-the order they bite:
-
-1. **Dependencies that do not exist here.** `:depends-on (:puri :cl-ppcre
-   :ironclad :cl-fad #+sbcl :sb-bsd-sockets #+sbcl :sb-posix)`. `puri` and
-   `cl-fad` are absent even from this machine's quicklisp cache (`quri` is not
-   `puri`); `sb-bsd-sockets` and `sb-posix` are SBCL *contrib modules* and cannot
-   exist here by construction.
-2. **Component #1 needs SBCL's packages to be real.** `acl-compat/packages.lisp`
-   is a plain `(:file "packages")` -- no custom component class, nothing the
-   `.asd` parser has any say over -- and it does `#+sbcl (:use #:sb-bsd-sockets)`,
-   `#+sbcl (:use #:sb-ext #:sb-gray)` and
-   `#+sbcl (:import-from :sb-ext #:without-package-locks #:string-to-octets)`.
-   Without `#+sbcl` announced (`.kb/reader-features.md`, `--feature`), the `.asd`
-   itself signals `#-(or lispworks cmu sbcl mcl openmcl clisp allegro) (error
-   "The acl-compat library is not yet supported on this lisp implementation.")`.
-   So the two ways through are "announce `#+sbcl` and need SBCL's internals" or
-   "announce nothing and be refused by name".
-3. **The files the method selects are a port of SBCL's internals.**
-   `acl-compat/sbcl/acl-mp.lisp` carries 62 `sb-thread:` references
-   (`make-thread`, `interrupt-thread`, `with-recursive-lock`, `make-waitqueue`,
-   `condition-wait`, ...); `acl-excl.lisp` uses `sb-posix:stat`/`lstat`/`s-isdir`;
-   `acl-sys.lisp` uses `sb-ext:*posix-argv*`; `acl-socket.lisp` uses
-   `sb-sys:wait-until-fd-usable` over the `sb-bsd-sockets` classes it inherits
-   from `packages.lisp`.
-
-**SBCL on this machine cannot load it either**: `asdf:load-system :aserve`
-answers `Component :PURI not found, required by #<SYSTEM "acl-compat">`. So there
-is not even an oracle to diff against until the rest of that 2001 stack is
-fetched.
-
-The conclusion is about WHAT `acl-compat` is, not about our parser: it is a
-per-implementation compatibility layer whose whole job is to name one host's
-internals, and its rontolisp branch does not exist because only we could write
-it. An `.asd` evaluator would move the failure four files later without moving it
-closer. The reachable path to those chapters is the substitution ladder already
-in this file -- a shim `net.aserve` / `acl-compat` surface (`publish`,
-`request-query`, `with-http-response`, `with-http-body`) over rontolisp's own
-HTTP server (`.kb/http-server.md`, `.kb/clack.md`), which is `.todo/147`'s shape.
-
-**Re-evaluate when** something OTHER than a per-implementation compatibility
-layer is refused by that gate -- a `.asd` whose top-level code is portable CL
-computing component lists or pathnames. That would be an argument about the
-parser; portableaserve is not.
-
-### The _Practical Common Lisp_ book corpus, as a standing result (2026-09-02)
-
-`practicals-1.0.3` (twelve ASDF systems over eleven chapters, loaded through this
-shim with `--system-path`) was diffed byte for byte against SBCL 2.2.9.debian on
-the interpreter. Byte-identical: `spam` (ch.23, over the quicklisp cl-ppcre --
-the bundled 1.2.3 is `.todo/602`), `binary-data` (24), `id3v2` (25),
-`mp3-database` (27) and `html` (30/31). `simple-database` (3), `test-framework`
-(9) and `pathnames` (15) differ ONLY by `.todo/041`'s missing right margin;
-`profiler` (32) dies on `fifth` (`.todo/338`). Chapters 15, 25 and 27 need
-`--feature sbcl`; 26/28/29 are the `net.aserve` rows decided above. **`macro-utilities`
-(8) is byte-identical too, as of 2026-09-02**: it used to diverge because `gensym`'s
-default prefix was lowercase `g`, a name like `"g3"` needing `|...|`-escaping under
-`:case :downcase` where SBCL's uppercase `"G3"` needs none -- fixed by matching CL's
-uppercase `G` default (a name-model conformance miss, not the `.todo/156` intern-table
-axis it was filed under before being split out). `(square (foo))` through chapter 8's
-`once-only` now prints `(let ((g2 (foo))) (* g2 g2))` unescaped like SBCL's `g96`, the
-counter value itself never matching across implementations regardless. The corpus
-needed no shim, no replacement `.asd` and no leaf-module substitution.
-
-**`fifth`..`tenth` landed (2026-09-02, `.todo/633`)**: `profiler` (32)'s
-`show-timing-data` (`compile-timing-data`'s `:key #'fifth`) is now
-byte-identical to SBCL 2.2.9.debian -- verified directly (a `*timing-data*`
-fixture through `show-timing-data`, not the full ASDF harness, which was not
-re-run for this item). `first`..`fourth` already existed; `fifth`..`tenth` now
-follow the same `(nth k x)` macro expansion, on all four backends and the
-compiled `eval` runtime interpreter.
-
+An API-compatible mini-ASDF, **not a port**. Shared core `eval/AsdfSystems.java` parses
+`defsystem` forms and whole `.asd` files **as plain data — never evaluated**.
+
+Surface: `asdf:defsystem` + `asdf:load-system` + `asdf:test-system`, with component
+METAOBJECTS real at run time. `asdf:find-system` answers a memoized `asdf:system` CLOS
+instance per name (`eq` across calls); the classes (`component`,
+`child-component`/`parent-component`, `module`, `system`, `package-inferred-system`,
+`source-file`, `cl-source-file`, `static-file`) are real on every backend so
+`typecase`/`typep`/defmethod specializers work; the readers
+(`component-name`/`-pathname`/`-children`/`-sideway-dependencies`/`-parent`/`-system`,
+`registered-systems`, `*user-cache*` = nil) walk the model. `test-op` is the ONE op with
+machinery. **No general CLOS `operate`/`perform`, no `compile-op`/fasl
+output-translations.** Docs: `doc/*/guides/asdf-systems.md`,
+`reference/functions/asdf-{defsystem,load-system}.md`.
+
+## What a `.asd` may contain
+
+Top-level forms recognized (anything else is a hard error naming the form — deny by
+default):
+
+- `defsystem` in any package spelling.
+- `register-system-packages` — RECORDED into the loader's package -> system map. Only one
+  of real ASDF's two consumers reaches here: a package-inferred system translating a
+  `defpackage` dependency into a system name. (The `find-package`-miss autoload needs
+  nothing: a package is located by its own `defpackage` and nicknames.)
+- `in-package`, `defpackage` — skipped (the system-definition-package header idiom).
+- top-level `defparameter` — evaluated into a parse-time env by `evalDataForm` when the
+  value is pure data (literals, keyword self-eval, references to earlier defparameters,
+  `quote`/`if`/`or`/`and`/`not`). **An IMPURE value does NOT fail the file**: the name is
+  recorded as unevaluable (`defineParameter` fills a sibling `unevaluable` name -> reason
+  map) and only a later form that actually READS it errors, naming the parameter.
+- top-level `progn` — **FLATTENED**: body forms are spliced back onto the worklist so each
+  subform hits the same recognizer; nested `progn` recurses, an empty one is a no-op, and an
+  unsupported form inside still errors by its OWN name, never `PROGN`'s.
+- `(eval-when (SITUATION...) (pushnew :F *features*))` or a bare top-level `pushnew`/`push`
+  — see "Feature announcements" below.
+- component-class `defclass` and any top-level `defmethod` — see "Component-class surface".
+
+### Options
+
+Ordering and layout:
+
+- `:components` ordered by a stable topological sort of `:depends-on`; `:serial` = implicit
+  dep on the previous sibling; `:module` = path prefix with files kept contiguous;
+  `:static-file` = ordering-only.
+- A SYSTEM-level `:pathname "dir"` prefixes every component (lack.asd's shape: `:pathname
+  "src"` once, then bare names). An empty string adds no level.
+- A component-level `:pathname "dir"` decouples the component's NAME (its identity in the
+  sibling dependency graph) from the path it contributes (quri's `uri-classes` module lives
+  in `src/uri/`). On a `:file` the namestring is used verbatim when it carries an extension
+  and gets `.lisp` appended otherwise. An EMPTY module `:pathname` adds no directory level.
+- **A computed `:pathname` is a hard error** — ASDF-as-data has no pathname machinery.
+- A component NAME accepts a string OR a symbol (real ASDF's `coerce-name` downcases a
+  symbol), so `(:module :t ...)` names `t/`.
+- `locate()` finds `NAME.asd` by *attempting to read* each search dir through `SourceLoader`
+  — no existence check, so the browser playground's in-memory loader works. Secondary names
+  (`lib/tests`) map to the primary `.asd`.
+
+Features (`parseAsdSource`/`parseDefsystem` take a `reader.Features`: backend features via
+`LoadInliner.Ctx` on the compile path, `INTERPRETER` in the evaluator):
+
+- component-level `:if-feature EXPR` keeps the component in the dependency graph but drops
+  its files when the expression fails.
+- a `:depends-on` entry may be `(:feature EXPR DEPENDENCY-DEF)` (`dependencyName`; dropped
+  when EXPR fails). A *surviving* `(:require MODULE)` is a hard error.
+- component-level `:depends-on` also accepts `(:feature ...)`; elements past the dependency
+  are IGNORED, matching `resolve-dependency-combination`.
+- `(:version NAME "1.2.3")` entries resolve to the plain dependency; the constraint is NOT
+  checked (`:version` is parsed-and-ignored metadata).
+- `#:lib` designators are stripped in `designator`/`symbolName`.
+- **`:rontolisp-features (...)`** — a rontolisp-added option, parsed by
+  `AsdfSystems.declaredFeatures` **before** the option loop and recorded on
+  `LispSystem.features()`. Each loader WIDENS its own base set with it (`Features.with(...)`,
+  **additive only**, so nothing can switch a backend feature off): the interpreter reads
+  components with `Features.INTERPRETER.with(system.features())` (the 4-arg
+  `LispEvaluator.loadFile` overload) and `LoadInliner.spliceSystem` builds a `Ctx` copy with
+  `ctx.features().with(...)` for its own components only (the record copy shares every
+  mutable registry). A DEPENDENCY keeps the outer set. Exists because a real `.asd` pushes a
+  feature at LOAD time while component conditionals resolve at READ time, and a push is only
+  read back inside the file that writes it (`.kb/reader-features.md`).
+- **`:defsystem-depends-on`** parsed (`dependencyNames`, the same entry shapes) and recorded
+  on `LispSystem.defsystemDependsOn`; both loaders resolve it through the ordinary
+  shim/built-in/real ladder BEFORE the system's own `:depends-on`. Deliberately NOT merged
+  into `dependsOn` — real ASDF does not make it a sideway dependency, so
+  `component-sideway-dependencies` must not list it (pinned on all four backends).
+- `:class :package-inferred-system` — the ONE `:class` value implemented; see below.
+  `:default-component-class` — see "Component-class surface".
+
+Metadata:
+
+- **`IGNORED_OPTIONS` — never resolved, never mentioned**: `:name :description
+  :long-description :version :author :maintainer :license :licence :homepage :bug-tracker
+  :source-control :mailto :long-name`, plus `:in-order-to`/`:perform`. Nothing reads these,
+  so nothing may complain about them. This is most of the `#.` in a real dist (the cl-project
+  skeleton's `:long-description #.(with-open-file …)`, `(intern #.(string :run-test-system)
+  …)` in `*-test.asd` `:perform` bodies).
+- `:version` is on that list even though `asdf:component-version` reads it BACK: what is
+  recorded is the value AS WRITTEN when it is a plain STRING; every other spelling (including
+  `(:read-file-form ...)`) answers nil. It lives in a `version` slot on `asdf:component`,
+  plus a sixth element on the per-backend record.
+- **The default direction is deliberate**: `IGNORED_OPTIONS` is the CLOSED list, so an
+  option added later is load-bearing without anyone remembering to say so.
+
+### `#.` in a `.asd` — the CONSUMER decides, never the evaluator
+
+- The tolerant lexer (`LispLexer` with `tolerateReadEval`, used only by
+  `readAllSkippingReadEval` and `readFirstForm`) re-lexes the raw-skipped datum into a
+  `(%read-eval datum)` marker (`LispNames.READ_EVAL`, validated by
+  `LispReader.parsesAsExpressions`), or, when it cannot re-lex at all, a
+  `(%read-eval-unreadable "RAW TEXT")` marker (`LispNames.READ_EVAL_UNREADABLE`). **One
+  datum either way**, so a `#.` inside a plist/alist never shifts the surrounding pairing.
+- **Neither marker is resolved where it is read.** `parseDefsystem`'s option loop resolves
+  per option (`resolveReadEval`, against the enclosing `.asd`'s defparameter env + path,
+  threaded as the private `AsdContext`; the other `parseDefsystem` callers —
+  `LoadInliner`/`LispEvaluator` for a `defsystem` in a `.lisp` file — pass `AsdContext.NONE`).
+- **Everything outside `IGNORED_OPTIONS` is resolved, and unresolvable is a HARD ERROR**
+  naming the `.asd` and the clause: `:depends-on :components :serial :pathname :class
+  :rontolisp-features :default-component-class`, the system name, and everything nested
+  inside `:components`. A silent nil here drops a dependency or a source file (cl-postgres'
+  `(:file #.*string-file*)`, cffi-toolchain's `:if-feature (#.(if (version< …) :or :and))`)
+  and surfaces much later as an undefined symbol far from the cause.
+- **Do not teach `evalDataForm` `with-open-file`/`uiop:read-file-string`** — a `.asd` is
+  parsed as data on purpose. A top-level marker of either kind is ignored whole (the ASDF
+  version-guard idiom). Source (non-`.asd`) files support `#.` everywhere
+  (`.kb/reader-features.md`).
+- Pinned by `AsdfSystemsTest`: `unresolvableReadEvalInIgnoredMetadataIsSilent`,
+  `theClProjectLongDescriptionSkeletonIsSilent`, `aPerformBodyReadEvalIsSilent`,
+  `anUnresolvableReadEvalIn{DependsOn,Components}IsAHardError`,
+  `anUnreadableReadEvalIsSilentInMetadataAndNamedWhereItDecides`,
+  `parsesTheClPostgresAsdHeaderShape` — all capturing `System.err`, since "says nothing" is
+  half the contract. Also `aTopLevelPrognIsFlattened`,
+  `aNestedPrognFlattensRecursivelyAndAnEmptyOneIsANoOp`,
+  `anUnsupportedFormInsideAPrognErrorsByItsOwnNameNotPrognsName`,
+  `aModuleComponentNameAcceptsASymbolLikeCoerceName`, `aFileComponentNameAcceptsASymbol`,
+  `asdDefparameterWithAnImpureValueParsesFineWhenNothingReadsIt`,
+  `anImpureDefparameterErrorsNamingItselfOnlyWhenALaterFormReadsIt`,
+  `aSystemPathnameIsAPrefixForEveryComponent`,
+  `aSystemPathnameComposesWithModulesAndComponentPathnames`,
+  `anEmptySystemPathnameAddsNoDirectoryLevel`, `aComputedSystemPathnameIsAHardError`,
+  `parseAsdSourceSkipsRegisterSystemPackages`, `parsesTheVerbatimLackAsd`.
+
+### Feature announcements read out of a real `.asd`
+
+`AsdfSystems.collectFeaturePushes` reads a top-level
+`(eval-when (SITUATION...) (pushnew :F *features*))` or a bare `pushnew`/`push` and hands it
+to `parseDefsystem` as if the system had declared `:rontolisp-features (:F)` — both
+spellings land in the same `LispSystem.features()` (`mergedFeatures`, pushes first).
+
+- Scope: pushes accumulate in FILE order and reach only systems defined AFTER them; a
+  dependency parsed from its own `.asd` still declares its own.
+- Only the announcement shape is accepted inside the `eval-when`; anything else is a hard
+  error naming the form. A `(:compile-toplevel)`-ONLY situation list is inert (ASDF `load`s
+  a `.asd`, never compiles one). The `*features*` argument must be the symbol itself, so
+  `(pushnew :x '(:a :b))` is not an announcement and stays an error.
+- A `#+` in the SAME `.asd` sees the push without any of this (`reader.FeaturePushes`).
+- **A DEPENDENCY announces features to the system that names it**:
+  `BuiltinSystems.declaredFeatures` is read at PARSE time (ahead of the option loop, one
+  channel with `:rontolisp-features` and `collectFeaturePushes`), so announced names hold for
+  this system's own `:if-feature`/`(:feature ...)` clauses and for reading its components.
+  **Only a BUILT-IN system announces** — a real third-party one announces by RUNNING, and a
+  `.asd` is never evaluated here. Both `:depends-on` and `:defsystem-depends-on` announce.
+  Divergence: here a `:depends-on` announcement ALSO reaches this definition's own
+  `:if-feature` clauses (a one-pass parse has no "load between the clauses").
+- Pinned by `AsdfSystemsTest.parsesTheFastIoAsdFeatureAnnouncementHeader`,
+  `anAnnouncedFeatureReachesOnlyTheSystemsDefinedAfterIt`,
+  `aDeclaredRontolispFeatureDoesNotLeakToAnotherSystem`,
+  `aDeclaredRontolispFeatureWidensTheBackendSetForThatSystemOnly`, end-to-end by
+  `FastIoCircularStreamsE2eTest`.
+
+### The component-class surface
+
+Only two things about a component class can reach a data-only front end: whether an instance
+contributes a SOURCE file at all, and which file EXTENSION its name gets. Everything else
+upstream subclasses exist for is `compile-op` warning policy, and there is no compile-file
+and no fatal warning here, so ignoring it is EXACT. Model:
+`AsdfSystems.ComponentClass(source, fileType)` + a per-`.asd` `ComponentClasses` scope.
+
+- **ASDF's own classes are component types and superclasses without a defclass**
+  (`BUILTIN_COMPONENT_CLASSES`): `cl-source-file` (`.lisp`, and what a bare `(:file ...)`
+  means — `DEFAULT_COMPONENT_CLASS`), `cl-source-file.cl` (`.cl`), `cl-source-file.lsp`
+  (`.lsp`), `static-file`, `doc-file`, `html-file` (last three ordering-only).
+- **A top-level `defclass` declares a component class** (`collectComponentClass`): every
+  superclass must resolve in that scope (ASDF's own or one declared EARLIER in the same
+  file), `source` and `fileType` are inherited from the first source superclass, and a
+  `(type :initform "cl")` slot overrides the extension. A defclass that is NOT a component
+  class (an operation, a condition) stays a hard error.
+- **`(defmethod source-file-type ((c CLASS) (s module)) "ext")` sets that class's
+  extension**, collected in a PRE-PASS over the file's forms (`collectSourceFileTypes`,
+  descending into `progn`) — real ASDF calls that generic long after the file is read, so
+  the method's position must not matter. **The CLASS still has to precede its use**; only the
+  METHOD is position-free.
+- **Every other top-level `defmethod` is tolerated and ignored.** The one deliberately
+  opened part of the closed world; safe because the failure it can hide is not silent (a
+  method that really moved a file surfaces as the missing file, NAMED). Re-evaluation
+  trigger: if a system fails with a confusing missing-file error traceable to an ignored
+  method, give that method name its own channel rather than restoring the blanket error.
+- **`:default-component-class`** is what a bare `(:file "name")` takes (ASDF's `class-for-type`
+  fallback at exactly that spot), readable on the system AND on a module (a module walks up
+  to the enclosing default). NOT in `IGNORED_OPTIONS`: its `#.` markers resolve and an
+  unknown class is a hard error.
+- Pinned by `AsdfSystemsTest.toleratesAClSourceFileSubclassAndLoadsItsComponents`,
+  `aSourceFileTypeMethodSetsTheClassExtensionWhereverItSits`,
+  `aTypeInitformSlotSetsTheClassExtension`, `theBuiltInSourceFileClassesAreComponentTypes`,
+  `aModuleMayRePointTheDefaultComponentClass`, `anUnknownDefaultComponentClassIsAHardError`,
+  `aDefclassThatIsNotAComponentClassIsAHardError`,
+  `aTopLevelDefmethodOnAnotherNameIsToleratedAndIgnored`, and end-to-end by
+  `LispEvaluatorAsdfTest.loadSystemReadsTheExtensionAComponentClassGivesItsFiles` (the
+  extension must travel all the way to the READ, not just into `LispSystem.files()`).
+- Driving library: **portableaserve** (`aserve.asd`, `htmlgen.asd`, `webactions.asd` all
+  parse completely). Where it stops: see "portableaserve" below.
+
+## `:class :package-inferred-system`
+
+The style that replaced hand-listed `:components` upstream (ningle, rove, array-operations,
+jose). Every other `:class` value picks a component TYPE that changes how sources load,
+which a defsystem-as-data front end cannot honor, so it stays a hard error naming the
+clause. Such a system has NO `:components` (one that lists them anyway is an error);
+`LispSystem.packageInferredDir` (non-null iff declared; the system's own `:pathname`, `""`
+when none) is the whole marker. Rules, all in `AsdfSystems`:
+
+- **A sub-system name is a FILE PATH.** `x/a/b` -> `a/b.lisp` under the PRIMARY system's
+  directory + its `packageInferredDir`. The primary is the part before the FIRST slash
+  whatever the depth, so `rove/tests/main` resolves under `rove` even though `rove/tests` is
+  its own explicit `defsystem` in the same `.asd`.
+- **Dependencies are read out of the file's own `defpackage`** (`packageDependencies`):
+  every package in `:use`, `:mix`, `:reexport`, `:use-reexport`, `:mix-reexport`, plus the
+  FIRST argument of each `:import-from` / `:shadowing-import-from`.
+  `:nicknames`/`:shadow`/`:export`/`:intern`/`:documentation` contribute nothing. This is
+  the WHOLE dependency graph (ningle.asd's `:depends-on` lists only `"ningle/main"`).
+  A file with NO `defpackage`/`uiop:define-package` is a hard error naming the file; forms
+  BEFORE the package declaration are skipped (matching
+  `asdf/package-inferred-system::file-defpackage-form` — the `(in-package #:cl-user)`
+  header is a common style). Only the FIRST package definition form counts.
+- **A package name becomes a SYSTEM name** (`packageSystemName`): what
+  `register-system-packages` recorded, else the downcased package name.
+  `cl`/`common-lisp`/`cl-user`/`common-lisp-user`/`keyword`/`asdf` drop out.
+- **Only forms up to the package declaration are read**
+  (`LispReader.readFirstFormMatching` with the `defpackage`/`define-package` predicate;
+  `readFirstForm` is that with an always-true predicate, tolerant of `#.`). Every source in
+  the system is opened here, which is also why the tolerant lexer may not WARN. No provenance
+  is recorded either — the real load must claim the positions.
+- **Derivation is on demand, whole-closure per call.** Both consumers call
+  `inferPackageInferredSystems` only when the requested name is still missing after the
+  `.asd` was parsed; it then derives everything reachable in ONE pass. An edge back to an
+  already-registered sibling is not followed, so a `defpackage` cycle terminates and is
+  reported by the caller's existing `:depends-on` cycle guard.
+- Consumers: `LispEvaluator.loadSystem` (which owns the merged `asdfSystemPackages` map) and
+  `LoadInliner.spliceSystem` (whose `Ctx` carries it). Coverage: `AsdfSystemsTest` (verbatim
+  `ningle.asd`, the nested rove shape, the array-operations `:pathname`, the sibling cycle,
+  both skip cases) + `PackageInferredSystemE2eTest` (four backends over
+  `src/test/resources/package-inferred-demo`: a nested `x/a/b` sub-system, a
+  `uiop:define-package` `:use-reexport` edge, a `register-system-packages` hop).
+
+## Interpreter / compile path / search order
+
+- **Interpreter**: `asdf:defsystem` is an `evalCons` case on `LispNames.ASDF_DEFSYSTEM`
+  (special form — options are data); `asdf:load-system` is a global function beside
+  `load`/`require`, accepts computed names, drives `loadFile` with the system's `baseDir`
+  pushed onto `loadDirStack`. Per-evaluator state:
+  `asdfSystems`/`loadedSystems`/`loadingSystems` + `systemPath`.
+- **Compile path**: handled *inside* `LoadInliner`'s recursion (a loaded file can call
+  `load-system`, a spliced component can `load`/`require`); the `Ctx` record threads the
+  system registry, loaded set, cycle stack and search path. Top-level
+  `(asdf:defsystem ...)` registers + is consumed; top-level literal
+  `(asdf:load-system NAME)` splices deps then component files (dedup like `require`).
+  Non-literal name = hard error at inline time; a *nested* asdf form is rejected by both
+  compilers in the same `case` as `REQUIRE`/`PROVIDE`.
+- **`load-system` / `quickload` keyword options are accepted and IGNORED on every path**
+  (`AsdfSystems.checkIgnoredLoadOptions`, from `loadSystemName`, `LoadInliner.quickloadNames`
+  and the two interpreter functions): there is no `operate` machinery for
+  `:force`/`:verbose`/`:silent` to drive, and rejecting them would make a library that loads
+  a system at RUN time (lack's `find-package-or-load` passes `:verbose nil`) unloadable over
+  a no-op clause. The SHAPE is still checked, so a stray second system name is an error.
+- **Search order**: dir of the loading file, then `--system-path` (CLI), then
+  `RONTOLISP_SOURCE_REGISTRY` — plus, for a `ql:quickload`, the cache directories the
+  download wrote ([dists.md](dists.md)). The latter two are `File.pathSeparator`-joined lists
+  parsed by `RontoLispCli.systemPath()` and threaded to both paths and the REPL. The `asdf`
+  package is seeded in `PackageRegistry` (does not use `cl`; both symbols external).
+- **No ci-spec case is possible**: the compile path needs the `.asd` on disk at compile time,
+  which the concatenated ci-spec driver cannot provide. Coverage is `AsdfSystemsTest` +
+  `LispEvaluatorAsdfTest` + the asdf cases in `LoadInlinerTest` + the per-library E2Es below.
+
+### Compile-time pathname folding (`cli.CompileTimePathnameFolder`)
+
+After `LoadInliner.inline` returns the flattened program, a walker folds the ASDF/UIOP
+pathname primitives real libraries call at load time to build a bundled-data-file path:
+
+- `(asdf:system-source-directory X)` -> the recorded `LispSystem.baseDir` + trailing `/`.
+- `(asdf:system-relative-pathname X REL)` -> that base with `REL` merged on (one-call form).
+- `asdf:component-pathname` -> the same lookup (a system is the only component object
+  materialized).
+- `(make-pathname ...)` -> the composed namestring (`eval/PathnameOps.makePathname`).
+- `(uiop:merge-pathnames* A [B])` -> the merged namestring (`PathnameOps.mergePathnames`).
+- A top-level `(defparameter *X* <folded string>)` is recorded so a later primitive whose
+  argument references `*X*` reduces too.
+- It no longer folds `find-system` ITSELF (the runtime answer is an object), but unwraps a
+  nested literal `(asdf:find-system 'x [ep])` in a fold's system-designator position
+  (`systemDesignator`).
+- Quoted data is opaque; a `let`/`lambda` rebinding never triggers substitution — the
+  reduction fires only inside a foldable primitive's argument position, so the walk stays
+  sound without full lexical-scope tracking.
+- Same pass rewrites `(with-open-file (var <literal utf-8 path> [:external-format :UTF-8])
+  BODY...)` into `(with-input-from-string (var <inlined contents>) BODY...)` when the path
+  names a UTF-8 file on disk, **chunked at 20k Java-char boundaries** and reassembled with
+  `(concatenate 'string CHUNK1 ...)` so the **JVM 65535 UTF-8 byte per-string ceiling** is
+  never crossed. `:element-type` present SUPPRESSES the inlining.
+- **The bundling rewrite skips a path the program itself opens for OUTPUT**
+  (`collectWrittenPaths`, a pre-pass collecting literal namestrings behind
+  `:output`/`:append`): baking compile-time contents of a file the program then WRITES makes
+  it read stale data. This is the only non-conservative shape and it fails SILENTLY, which
+  is why the guard is a pre-pass rather than a local check.
+- Interpreter unaffected (`LoadInliner` runs only on the compile-to-file entry). Coverage:
+  `LoadInlinerTest` (per-pattern folds, bundling, chunking, missing-file passthrough,
+  `doesNotBundleAFileTheProgramItselfWrites`) + ci-spec
+  `open-if-exists-append-keeps-the-existing-content`.
+
+## ASDF component metaobjects at run time
+
+One Lisp source, `eval/asdf.lisp` (canonical shape, `eval.AsdfRuntimeLibrary`), defines the
+class family + `asdf:find-system` + the readers +
+`system-source-directory`/`system-relative-pathname`/`component-pathname`
+(designator-accepting: the object or a name; they answer NAMESTRINGS, `.kb/pathnames.md`) +
+`registered-systems` + `asdf:*user-cache*`. The one per-backend seam is the record source
+`%asdf-system-record`/`%asdf-system-names`; a record is
+`(CLASS DIR FILES DEPS LOADED-P VERSION)` with FILES `(RELATIVE . RESOLVED)` pairs.
+
+- **Interpreter**: both are Java built-ins over the live per-evaluator
+  `asdfSystems`/`loadedSystems` (insertion-ordered, so `registered-systems` is
+  deterministic); a built-in shim system answers a plain record even before it loads (the
+  lack `find-package-or-load` probe route). `asdf.lisp` loads lazily
+  (`ensureAsdfRuntimeLoaded`) on: resolution of any name it defines (function OR variable),
+  `defsystem`/`load-system`/`quickload`/`test-system`, and any
+  `defclass`/`defmethod`/`typep`/`typecase`/`etypecase`/`make-instance` form MENTIONING a
+  component class name (`mentionsComponentClass`). `asdf:load-system`/`asdf:test-system`
+  stay Java (they drive `loadFile`); both accept the metaobject as a designator
+  (`asdfDesignator` reads slot 0).
+- **Compile paths**: `LoadInliner.inline` ends with fold-then-splice —
+  `CompileTimePathnameFolder.fold` FIRST (so a program whose only asdf use folds away
+  splices NOTHING), then `AsdfRuntimeLibrary.process` prepends `asdf.lisp` + the baked
+  `%asdf-registry%` table (from `Ctx.systems`/`loadedSystems`, `LinkedHashMap` for order) +
+  the compile seam (the record defuns, runtime `asdf:load-system`/`ql:quickload` =
+  "already spliced -> nil, else the call-time error", the `asdf:test-system` dispatch)
+  whenever the folded program still references any runtime asdf name. The
+  `Jvm/WasmExprCompiler` `ASDF_LOAD_SYSTEM`/`QL_QUICKLOAD`/`ASDF_FIND_SYSTEM` cases compile
+  an ordinary call when the defun exists (`ctx.functions.containsKey`), keeping the
+  historical stubs ONLY as the no-pipeline fallback (a direct compile with no `LoadInliner`
+  in front — a test seam). Nested `require`/`provide`/`asdf:defsystem` remain compile errors.
+- `asdf.lisp` needs its `resource-config.json` entry (`AsdfRuntimeLibrary` as
+  `typeReachable`), like every classpath-loaded Lisp resource.
+
+### test-op
+
+- `parseDefsystem` records `:perform (test-op (o c) BODY...)` into `LispSystem.testOp`
+  (params verbatim; body pre-qualified by `normalizeAsdUserForm` — bare uiop members to their
+  home spelling, bare asdf FUNCTION members to `asdf:`, **and a uiop member the `.asd`
+  qualified ITSELF (`uiop:symbol-call`, `uiop::`, or a home sub-package) to that same home
+  spelling**, since only the home name has a definition behind it) and
+  `:in-order-to ((test-op (test-op ...)))` into `testOpEdges`. A body containing an
+  unresolved `#.` marker, or a qualified `test-op :after` method, stays tolerated-and-ignored
+  (recording it would fail the eager compile of the emitted defun). Both options stay in
+  `IGNORED_OPTIONS`, so their `#.` markers are never resolved or warned about.
+- `LispSystem.packageInferredClass` marks which systems instantiate
+  `asdf:package-inferred-system` (a declaring primary AND every derived sub-system — the
+  branch rove's `run-system` typecase takes).
+- Interpreter `asdf:test-system` = `loadSystem` + follow edges (visited-set cycle guard) +
+  eval `((lambda (o c) BODY) nil <metaobject>)`.
+- Compile path: `spliceSystem` emits `(defun %asdf-test-op-<name> (o c) BODY)` at the
+  system's splice point; a top-level literal `(asdf:test-system NAME)` splices the system AND
+  its test-op closure (`spliceTestOpClosure` — a plain load never pulls tests in) and KEEPS
+  the call; the generated `%asdf-run-test-op` cond dispatches per name (edges via
+  `%asdf-test-edge` = load-check + recurse, then the perform defun).
+- Pinned by `AsdfMetaobjectsE2eTest` (all four backends: eq-memoized find-system, the readers
+  over a `:components`+`:module` system, defmethod specializers, registered-systems, nested
+  load-system no-op, `test-system` through the `:in-order-to` chain; fixture
+  `src/test/resources/asdf-metaobjects-demo`), the metaobject legs of
+  `PackageInferredSystemE2eTest`,
+  `LispEvaluatorAsdfTest.findSystemAnswersAMemoizedComponentMetaobject` /
+  `testSystemFollowsTheInOrderToChainIntoThePerformBody`, `AsdfSystemsTest`'s test-op
+  parse/normalization group, and
+  `LoadInlinerTest.nestedLoadSystemOfASplicedSystemAnswersNilOnJvm`.
+
+## The substitution ladder (five tiers, widest first)
+
+1. **Whole shim system** (`eval/ShimLibraries` + `BuiltinSystems`).
+2. **Replacement `.asd`** (`eval/AsdOverrides`) — system metadata only, real sources.
+3. **Leaf-module shim** (`ShimLibraries.leafModuleForms`) — one component file, real
+   everything else.
+4. **Derived forms** (`ShimLibraries.rewriteComponentSource`) — individual FORMS of a real
+   component, the rest read normally.
+5. **Generated component** (cl-unicode) — a component that does not exist in the release.
+
+Beyond the end: **refused systems** (`ShimLibraries.refusalReason`) map a system name to a
+SENTENCE saying why it cannot load, checked at the top of both loaders beside the conflict
+check. Registered: `cffi-grovel` (grovelling compiles and runs a C program to read platform
+headers) and `cffi-libffi` (structures by value already work through the foreign function
+API's own struct layout). A clear message beats letting `ql:quickload` fetch something that
+dies unparsed.
+
+### Tier 1: built-in shim systems
+
+`asdf:load-system`/`ql:quickload` and a `:depends-on` resolve these to bundled shims
+(`src/main/resources/am/ik/rontolisp/eval/*.lisp`) instead of downloading — they are
+per-implementation portability layers that cannot support rontolisp from their side.
+Replacement-by-real-library plan is a standing item.
+
+`BuiltinSystems.DEPENDENCIES` records edges BETWEEN shim systems; both loaders load/splice
+them first. One edge exists: `flexi-streams -> trivial-gray-streams` (the flexi shim's
+in-memory octet streams are real Gray streams and the protocol must be defined before their
+`defclass` runs). `ShimLibraries.forms` takes the TARGET backend's `Features`, so a `#+`/`#-`
+in a shim source says what it means on the backend being built for.
+
+- `usocket`, `trivial-gray-streams` (adapts onto rontolisp's own Gray protocol,
+  `.kb/gray-streams.md`), `closer-mop` (`class-slots` returns `(name declared-type)` pairs
+  from `%class-slot-defs` over the ClosRegistry; plus `compute-slots` and a signalling
+  `generic-function-lambda-list`), `flexi-streams` (a REAL `flexi-stream` wrapper class — a
+  Gray stream lending UTF-8 characters to the octet stream it wraps — beside the real
+  in-memory octet pair), `float-features` (wraps `%ieee754-*`; interpreter + JVM, no WASM),
+  `bordeaux-threads` (nickname `bt`; the locking subset over `rontolisp:*-mutex`, with
+  `with-lock-held` a built-in expansion rather than a shim defun, `.kb/mutexes.md`),
+  `trivial-garbage` (nickname `tg`; `finalize` registers nothing and returns the object,
+  `cancel-finalization` is a nil no-op — CL guarantees finalizers nothing, and no backend has
+  GC hooks; consequence: a leaked prepared statement lives until the connection closes),
+  `trivial-cltl2` (nickname `cltl2`; `define-declaration` a registering no-op,
+  `declaration-information` always nil, which routes trivia's match2*+ onto `:trivial`),
+  `cl+ssl` (client-side TLS over `rontolisp:tls-upgrade`, `.kb/tcp-sockets.md`),
+  `mgl-pax-bootstrap` (package `mgl-pax`, nickname `pax`; `defsection` expands to
+  `(defvar NAME nil)`, nil no-ops for the PAX-World pair; its real `.asd` declares
+  `:around-compile`, a compile hook outside the subset — that is why the shim stays),
+  `swank` (the degenerate rung: `create-server` SIGNALS, `stop-server` is a nil no-op; it
+  exists because clack's `.asd` hard-depends on it and SLIME's own `.asd` is a program the
+  front end cannot read).
+- **`trivial-features`** — whose whole content IS the announcement
+  (`BuiltinSystems.DECLARED_FEATURES` + generated `(pushnew :F *features*)` forms from the
+  same list, so the read-time and run-time halves cannot drift). Declares **`:unix`** (every
+  backend's file/path/environment surface is POSIX-shaped and none is Windows),
+  **`:little-endian`** (WASM linear memory and a reactor's `:bytes` boundary are
+  little-endian by the spec; the JVM backend exposes no such view) and **`:64-bit`** (every
+  backend's fixnums are 64-bit and every pointer-shaped value is 8 bytes; cffi's `types.lisp`
+  reads exactly this to pick `:size`'s base type). **The HOST half is a probe, not a table**:
+  `:darwin` + `:bsd` or `:linux`, and `:arm64` or `:x86-64` (`BuiltinSystems.hostFeatures`,
+  from `os.name`/`os.arch`), announced on the JVM-family targets ONLY, because a wasm module
+  runs on WASI and not on the compiling machine. Hence the announcement is TARGET-AWARE
+  (`declaredFeatures(names, target)`). Needed because cffi's whole library-resolution layer
+  runs on `featurep`: without `:darwin` cl-sqlite picked the LINUX names on a Mac and
+  `examples/jvm/cffi-sqlite.lisp` died with "Unable to load any of the alternatives", and
+  `:arm64` is what puts Homebrew's `/opt/homebrew/lib` in the DYLD fallback search path.
+  An unrecognized OS or CPU announces NOTHING for that half rather than guessing; `:32-bit`
+  stays absent; `:windows` is not announced (`:unix` would have to come off first). **The
+  base `Features` sets stay machine-independent**, which keeps the
+  `reader-features-variable` ci-spec case's `(length *features*)` the same on every machine.
+- **`babel`** (packages `babel` + `babel-encodings`) — upstream's own TWO layers, and the
+  lower one is the point: the MAPPING protocol (`lookup-mapping` over
+  `babel:*string-vector-mappings*` -> `code-point-counter` / `octet-counter` / `decoder` /
+  `encoder`) IS the codec, and `string-to-octets` / `octets-to-string` /
+  `string-size-in-octets` are drivers over it owning no coding logic. A library that decodes
+  INCREMENTALLY has no whole octet vector to hand a driver (dexador's
+  `src/decoding-stream.lisp` counts with `max-chars` 1 and decodes exactly those octets into
+  a one-character `babel:unicode-char` buffer). In the one-character model **an encoding IS
+  its name and a mapping IS its encoding**, so `get-character-encoding` and `lookup-mapping`
+  normalize and answer the keyword, and `*string-vector-mappings*` is the SET of names that
+  have a mapping — the same list `list-character-encodings` answers. **The counter and the
+  decoder MUST agree on where a character ends** (drivers size a string from the counter then
+  fill it with the decoder, so a disagreement is a wrong-length string, not a crash), which
+  is why the 5- and 6-octet UTF-8 forms that never existed are consumed WHOLE by both. Errors
+  are upstream's: the `character-coding-error` hierarchy per malformed shape,
+  `*suppress-character-coding-errors*` swapping the signal for a substitution character
+  (U+FFFD for UTF-8, U+001A for the single-octet encodings), every `:errorp` defaulting from
+  that special and re-binding it. **Both packages are Java-seeded, so a `.lisp`-only widening
+  publishes nothing** — a new name needs its `PackageRegistry` entry, and a run-time `export`
+  is not a workaround; every `babel-encodings` external is re-exported under the `babel:`
+  spelling by an import redirect built from that set (upstream's `babel` `:use`s
+  `babel-encodings` and consumers spell both). **Where it stops**: three encodings
+  (`:utf-8`, `:latin-1`/`:us-ascii` as the code-point identity they are), any other
+  `:encoding` SIGNALS; and `string-size-in-octets` answers ONE value where upstream answers
+  the counter's two (`.kb/multiple-values.md`). Pinned on all four backends by
+  `BabelMappingE2eTest`.
+- **`uiop`** — a package stub whose definitions arrive through `eval.UiopLibrary`
+  (`.kb/uiop.md`, which registers all 15 sub-packages and gives every unimplemented member a
+  `not-implemented-error` stub). Real members: `add-package-local-nickname` (consumed at
+  resolve time by `PackageResolver` for literal top-level calls, so it works on every
+  backend), `file-exists-p` (lowers straight onto `probe-file` — the truename on success,
+  nil otherwise; interpreter global + a case in `LispMacroExpander.expandUiopStubCall`
+  BEFORE the generic stub lowering), `merge-pathnames*`, the LISTING family
+  (`directory-exists-p` / `directory-files` / `subdirectories` / `collect-sub*directories`,
+  Lisp source in `LispPreludeLibrary` over the one `%list-directory` primitive),
+  `getenv` (rontolisp's ONLY spelling of "read an environment variable"; ANSI CL has none),
+  `symbol-call`, `split-string`, `emptyp`/`first-char`/`last-char`, `if-let`/`when-let`/
+  `when-let*`/`with-deprecation` (built-in macro expansions; `with-deprecation` lowers to
+  `(progn definitions...)` and joined `flattenTopLevel`'s splice forms beside `eval-when`,
+  since it wraps top-level `defun`s), the temporary-file quartet
+  (`ensure-directory-pathname`, `default-temporary-directory`, `delete-file-if-exists`,
+  `with-temporary-file`), `native-namestring` (= `namestring`),
+  `uiop::get-pathname-defaults` (internal, like real uiop; answers `""` on all four backends
+  — every backend resolves a relative path against the host cwd, and `""` designates exactly
+  that), and `uiop/image:print-condition-backtrace` (prints the CONDITION and no backtrace;
+  real UIOP falls back to the same shape without a backtrace API).
+  - **`uiop:symbol-call` is REAL on every backend**: the interpreter's is a runtime
+    name-to-function lookup (`packageResolver.memberSpelling` + `resolveFunction` + `apply`);
+    the compile paths lower it in `expandUiopStubCall` to
+    `(funcall (intern (string name) (find-package pkg)) args...)` through the `_lookup`
+    registry, AND carry uiop's own Lisp definition beside that fold, because the fold covers
+    CALL position only while the idiom is usually written as a VALUE
+    (`(apply #'uiop:symbol-call '#:pkg '#:name uri args)`, dexador's backend dispatch) —
+    `.kb/symbol-runtime-api.md`. Reading it at all was the hard requirement: lack's
+    `src/util.lisp` spells it with a SINGLE colon, so an internal-only symbol failed the
+    whole FILE at read time.
+  - `print-condition-backtrace` is defined in `uiop/image` (named directly by
+    `lack-middleware-backtrace`'s `:import-from`) and the `uiop` package IMPORTS the name, so
+    both spellings are ONE symbol and one prelude splice — pinned by
+    `LispPreludeLibraryTest.bothUiopSpellingsOfPrintConditionBacktraceSelectTheOneEntry`.
+  - `uiop:run-program` signals `uiop:not-implemented-error`: spawning an external process is
+    outside every backend's sandbox, so an error is the honest answer.
+  - **`with-temporary-file` is a MACRO** and therefore cannot reach `expandUiopStubCall`
+    (which sees function-call shapes only). It is a real built-in expansion (the
+    `usocket:with-*` pattern) in `LispEvaluator.evalCons` and both expression compilers,
+    expanding into `%temp-file-name` + `open` + a cleanup. Two consequences: a LITERALLY true
+    `:keep` drops the delete from the expansion entirely (keeping smart-buffer's spill path
+    clear of the WASM unlink-shaped call-time error), and `%temp-file-name` /
+    `uiop:delete-file-if-exists` are reached only from that expansion, which runs INSIDE the
+    expression compilers — so both are selected by
+    `LispPreludeLibrary.referencedBySurfaceForm` and rooted in `LibraryDefunPruner` like
+    `%make-broadcast-stream`, or the compile paths emit "%TEMP-FILE-NAME is undefined".
+  - **`EnvironmentLibrary.process` runs AFTER the whole library-splice chain** in
+    `RontoLispCli`: `uiop:default-temporary-directory` reads `TMPDIR` through `uiop:getenv`,
+    and upstream of the splice a smart-buffer program failed the `--component` compile with
+    "compiled without EnvironmentLibrary.process".
+- **`clack-handler-rontolisp`** — the Clack handler backend, and the one shim inverting two
+  conventions, both forced by clack's late-bound discovery: its package is NOT seeded in
+  `PackageRegistry` (the shim carries its own `defpackage`, because lack's
+  `find-package-or-load` loads the system only when `find-package` MISSES) and it is
+  registered under TWO system names (`clack-handler-rontolisp` + the dotted
+  `clack.handler.rontolisp` lack derives from the package name). Three loader-side rules:
+  the interpreter's runtime `asdf:find-system` answers a BUILT-IN system's name even before
+  it loads; the interpreter's builtin-system branch of `loadSystem` evaluates shim forms
+  through the RESOLVING `eval(form)` so a shim-carried defpackage registers; and
+  `LoadInliner.spliceSystem` splices the handler shim EAGERLY after system `"clack"` (a
+  compiled program cannot load at run time; the baked package table + `_lookup` registry
+  serve the runtime probes). Full mechanics: `.kb/clack.md`.
+
+### Tier 2: replacement `.asd` files (`eval/AsdOverrides`)
+
+Some libraries' `.asd` is an executable PROGRAM, not data. `AsdOverrides` maps the `.asd`
+FILE NAME to a bundled replacement (`src/main/resources/am/ik/rontolisp/eval/*.asd`, written
+in the supported subset) and `AsdfSystems.locate` substitutes it **after locating the real
+file — keeping the located PATH**, so component files still resolve against the real library
+tree and the loaded sources are the library's own. One entry serves every backend.
+
+| `.asd` | replacement | reason |
+| --- | --- | --- |
+| `ironclad.asd` | `ironclad-slice.asd` | defines component classes, generates defsystems with a `defmacro`, attaches `perform :around` |
+| `cl-postgres.asd` | `cl-postgres-deps.asd` | declares the deps upstream under-declares (alexandria, cl-ppcre, usocket) + the `#.*string-file*` component |
+| `postmodern.asd` | `postmodern-deps.asd` | opens with a top-level `eval-when` pushing features per implementation |
+| `trivia.asd` | `trivia-trivial.asd` | routes `trivia` onto upstream's own `trivia.trivial` base system |
+| `dbi.asd` | `dbi-deps.asd` | its cache selection rides a thread-capability feature expression that can never match |
+| `tiny-routes.asd` | `tiny-routes-lite.asd` | not unparseable — replaced only to ADD the opt-in `tiny-routes/lite` secondary system |
+| `cffi.asd` | `cffi-rontolisp.asd` | opens with `(error "Sorry, this Lisp is not yet supported")` and ends in a `defmethod version-satisfies`; the replacement names rontolisp's `cffi-sys` backend (`.kb/cffi.md`) |
+| `cl-unicode.asd` | `cl-unicode-built.asd` | drops the build system, its `component-depends-on` method and the fiveam test system |
+
+**Every bundled replacement `.asd` and every leaf-module shim `.lisp` also needs an entry in
+`src/main/resources/META-INF/native-image/.../resource-config.json`** (`AsdOverrides` resp.
+`ShimLibraries` as the `typeReachable` condition). The native binary loads them off the
+classpath, and a missing entry fails ONLY there, as `<name> is missing from the classpath` at
+`asdf:load-system` time — `./mvnw test` cannot catch it (the JVM run reads straight from
+`target/classes`).
+
+RETIRED: `chipz.asd` -> `chipz-crc32-slice.asd`. The real `chipz.asd` loads verbatim on all
+four backends (`ChipzE2eTest`) now that `fill` exists.
+
+### Tier 3: leaf-module shims (`ShimLibraries.leafModuleForms`)
+
+Substitutes individual COMPONENT FILES inside a real system when the component's contract
+with the rest of that system is a few package-qualified functions. Both loaders consult it
+before reading a component file (`LispEvaluator.loadSystem` evaluates the forms through the
+package resolver; `LoadInliner.spliceSystem` splices them). Each shim `.lisp` carries the
+replaced file's own `defpackage` followed by canonical-shape fully-qualified defuns; a shim
+MAY instead select a package with `in-package`, and both loaders then BRACKET it like a real
+component (`packageResolver.pushPackage()`/`popPackage()`; the `%push-package`/`%pop-package`
+markers on the compile path, emitted only when `selectsAPackage` is true).
+
+**Key shape**: the map is keyed by SYSTEM name, and the component key is the path RELATIVE
+TO THE SYSTEM'S BASE DIR (`src/prng/prng.lisp`, not `prng.lisp`), because ironclad's
+components sit under `:module` prefixes; jzon's `.asd` lives in `src/` so its keys are bare.
+A substituted component **does not have to exist on disk at all** — the shim short-circuits
+before the file is read (which is why the vendored ironclad tree stays pruned).
+
+Four motives, and a shim lives exactly as long as its motive:
+
+- **portability**: jzon's `eisel-lemire.lisp` -> `jzon-eisel-lemire.lisp` (make-double =
+  coerce + chunked exact-power-of-ten scaling, IEEE multiply/divide only so it is
+  backend-identical; exponent clamped to +/-700; `|exp10| <= 22` rounds once, extremes a few
+  ulps off), `ratio-to-double.lisp` -> `jzon-ratio-to-double.lisp` (a `coerce` one-liner),
+  `schubfach.lisp` -> `jzon-schubfach.lisp` (write-float/write-double = `write-string` of
+  `princ-to-string`, itself a Schubfach shortest round trip on every backend). This kills
+  both the originals' `#.` power-of-ten table crash and their u64/u128 arithmetic. **Making
+  macro-time globals LAZY did not retire the first reason**: the special is a `defvar` with
+  NO value form, filled by a later top-level form the macro-time evaluator never runs, so
+  forcing on the `#.` read still finds nothing. Also cffi's `src/strings.lisp` ->
+  `cffi-strings.lisp` (the real file drives a babel code generator the shim lacks).
+- **the backends already provide it**: ironclad's `src/prng/prng.lisp` ->
+  `ironclad-prng.lisp` — a perfectly portable CSPRNG, so the shim draws
+  `rontolisp:random-bytes`.
+- **size of dependency, opt-in**: `tiny-routes/lite` -> `src/middleware/path-template.lisp`
+  -> `tiny-routes-lite-path-template.lisp`, keyed by a system name existing solely to carry
+  the substitution.
+- **the implementation seam**: cffi's `src/cffi-rontolisp.lisp` does not exist upstream AT
+  ALL — it is the backend every CFFI port writes for itself, declared by the replacement
+  `.asd` and supplied only as a resource, so upstream's tree on disk is never edited.
+- **size of file** is the fourth, and it EXPIRES: `src/public-key/public-key.lisp` ->
+  `ironclad-public-key.lisp` was retired once the real file loads — a shim reproducing two of
+  its functions verbatim is a redefinition race, not a saving. **General rule: a
+  size-motivated leaf shim lives exactly as long as the real file has no route in.**
+
+### Tier 4: derived forms (`ShimLibraries.rewriteComponentSource`)
+
+Substitutes INDIVIDUAL FORMS of a real component and hands the rest to the caller's normal
+read (so package resolution is the one a real component file gets). Each span is located by
+a marker that must occur **EXACTLY ONCE** — a moved marker THROWS, naming the marker and the
+file, because a silent fallback to the real source would restore the cost with nothing
+pointing at why.
+
+**`eval/Uax15Tables`** (pinned by `Uax15TablesTest`). uax-15 builds its tables at LOAD time
+by parsing 2.7 MB of Unicode text through cl-ppcre. Two rewrites, both needed:
+
+1. **Derived spans.** In `src/precomputed-tables.lisp`: the `(defvar *unicode-data* ...)`
+   that reads and splits all 34,924 `UnicodeData.txt` rows becomes `nil`; the `let` folding
+   them into the combining-class + two decomposition maps becomes those tables as data plus
+   one BUILDER `defun` each; the `(defparameter *canonical-comp-map* ...)` + its `maphash`
+   becomes a builder whose body is that maphash RELOCATED verbatim; the
+   `(defparameter *unicode-letters* ...)` + the NINE hardcoded CJK/Hangul/Tangut range loops
+   (nine, not seven — six sit behind an always-live `#-utf-16`) becomes
+   `(defvar *unicode-letters* nil)` plus the UNION of those loops and the data-derived
+   letters as sorted inclusive codepoint RANGES, searched by `%lite-unicode-letter-p`. In
+   `src/uax-15.lisp`: the `let` folding `DerivedNormalizationProps.txt` into the four illegal
+   lists becomes the source RANGE rows expanded on demand inside `get-illegal-char-list` and
+   cached, and `unicode-letter-p`'s body becomes a call to that predicate. Everything that
+   COMPUTES a normalization is verbatim upstream.
+2. **Forced reads.** Each of the NINE bare reads of a derived table — `src/normalize-backend.lisp`
+   (4) and `src/uax-15.lisp` (5) — becomes `(or *T* (%lite-build-T))`. Read-site forcing, not
+   entry-point forcing: it keeps the granularity and cannot be bypassed by calling
+   `uax-15::nfc` directly. The counts are an explicit inventory in `Uax15Tables.FORCED_READS`
+   and a mismatch THROWS. The inventory is keyed by component PATH, so a component NOT in it
+   is additionally scanned for the five names and throws if it has one.
+
+**Three things make the `(or ...)` protocol correct and are the whole trap surface**:
+(a) every table global must start `nil`, so the two upstream `defparameter`s of a fresh
+(non-nil, hence TRUE) `make-hash-table` are demoted to `(defvar ... nil)` — left alone, `or`
+short-circuits onto an empty table forever; (b) reads inside `precomputed-tables.lisp` are
+deliberately NEVER rewritten (that file is full of `(setf (gethash K *T*) V)` write places),
+so the composition-map builder forces its dependency explicitly as its first form (without
+it all four backends die); (c) the nine range loops are READ now rather than run, so this
+rewrite interprets a reader conditional the reader used to handle —
+`hardcodedLetterRanges` THROWS on a loop spelled any other way, or behind any other
+conditional, rather than silently dropping codepoints.
+
+- The letter table is **GONE rather than lazy**: ~127,000 entries answering one membership
+  predicate, replaced by 1,332 integers of merged ranges. That trades BUILD time for LOOKUP
+  time; the table only pays off past ~11,000 calls interpreted and ~34,000-39,000 compiled,
+  and the only caller in the loadable corpus is postmodern's `valid-sql-identifier-p`. **If a
+  program ever crosses that, the answer is a memo keyed by the characters it actually asks
+  about, not the 127,000-entry table back.** The search shape is tuned for the INTERPRETER: a
+  3-argument recursion reading the vector out of its global, `low`/`high` EVEN indices into
+  the flat pair run (the two shapes it beat are recorded on
+  `Uax15Tables.LETTER_PREDICATE`). What makes the merge sound is that the ranges are the
+  replaced table's key set MEMBER FOR MEMBER, holes included: `UnicodeData.txt` gives a CJK
+  block only First and Last rows and the loops stop short of the Last one
+  (`below #x4DB5` against a `4DBF` row), so `#x4DB4` and `#x4DBF` are letters and `#x4DB5` is
+  not — the three codepoints `Uax15E2eTest` ends on.
+- **Bulk numbers are emitted as decimal runs inside STRING literals scanned by a generated
+  helper, never as numeric literals**: an integer literal costs TWO JVM constant pool entries
+  and ~25,000 of them push a cl-postgres-scale class past the **65534-entry class-format
+  ceiling**, where every emitted u2 index silently truncates (`.kb/jvm-method-size-limits.md`).
+  The runs are a QUOTED LIST of **1,000-character chunks cut between integers**, never one
+  long literal, because **`(char s i)` costs O(i) on every COMPILE backend** (wasm's
+  `_str_char_at` UTF-8 walk, the JVM's `offsetByCodePoints`), making a single-literal scan
+  quadratic. **The interpreter is 1.0x on purpose** — it was fixed the other way
+  (`Environment.charRef` rebuilt the whole Java `String` from the `int[]` on every access;
+  it now indexes the slot), so **do not A/B the chunking rationale interpreted**. The
+  compile-path O(i) remains.
+- When the bundled data files cannot be read, the real source loads and builds everything
+  eagerly, and `rewriteTables` appends four IDENTITY builders generated from the same name
+  list the forced reads use (the only thing keeping the two sides in step, since no E2E walks
+  that path) plus a `%lite-unicode-letter-p` that is NOT an identity: with no derived ranges,
+  the eagerly built letter table is the answer. Routing `unicode-letter-p` through a NAME
+  rather than inlining the search is what buys that.
+- Two behavior changes: `(uax-15:unicode-letter-p #\A)` answers T where the real load answers
+  NIL (upstream keys every data-derived letter entry on `nil` — its `char-from-hexstring`
+  reads `#+utf-32`, which trivial-utf-16 announces from a COMPUTED push the reader
+  deliberately does not honor, `.kb/reader-features.md`); and uax-15's four internal table
+  globals read `nil` from user code until the API is called, `*unicode-letters*` forever.
+- **The module does NOT shrink**: an ASDF-spliced third-party tree is never pruned
+  (`.kb/library-defun-pruning.md`) and the fold bakes each `with-open-file` per site, so
+  laziness moves work in time, never out of the artifact. Retiring the letter table IS an
+  exception (it deleted emitted code): -19,926 bytes of wasm, -15,671 of JVM class.
+- Pinned by `Uax15E2eTest` (all four backends; its exercise LEADS with the two lines pinning
+  the deferral — all five globals still `nil` after the load, then `uax-15::compose` to force
+  the composition map through the one route that does not go through the decomposition map
+  first) and `Uax15TablesTest` (derivation, builder shape, demoted defparameters, dependency
+  force, folded range loops and their union, the chunk cut, every loud guard — moved form,
+  wrong read count, an outside-inventory read, a re-spelled range loop, a surviving
+  letter-table mention — and the fallback cross-checked against the builder names the forced
+  reads call).
+
+**`eval/QuriEtldTables`** (pinned by `QuriEtldTablesTest`). Upstream writes its effective-TLD
+tables as `(defvar *etlds* '#.(load-etld-data))`, a READ-time evaluation whose value is a list
+of two HASH TABLES — the interpreter can hold that, a compile backend has to emit the datum
+as a literal and there is no literal syntax for a hash table (`Cannot quote: #<HASH-TABLE>`).
+Three spans move: the `defvar` becomes `nil` + a `%lite-build-etlds` builder; the three
+`*etlds*` reads in `parse-domain` become `(or *etlds* (%lite-build-etlds))`; and the
+`with-open-file` header's path becomes the LITERAL namestring **with `:element-type
+'character` dropped** — not cosmetic, since a literal path with only `:external-format` left
+is exactly the shape `CompileTimePathnameFolder` inlines, and `:element-type` is precisely
+the option that suppresses it. Narrowing: `(load-etld-data OTHER-FILE)` reads the bundled
+list.
+
+Retired from this tier: `eval.AlexandriaSymbols` (alexandria's `maybe-intern`), deleted once
+`*package*` became a genuine dynamic variable and the form it rewrote around started reading
+the caller's package by itself (`.kb/packages.md`).
+
+### Tier 5: a GENERATED component (`eval/ClUnicodeTables`)
+
+Three of the eight components cl-unicode's primary system names — `lists.lisp`,
+`hash-tables.lisp`, `methods.lisp` — **do not exist in the release at all**. Real ASDF
+materializes them by loading the separate `cl-unicode/build` system (a UCD parser over
+`build/data/*.txt`) and running its `:perform (load-op ...)`, wired with `:output-files` plus
+a `component-depends-on` method on `prepare-op`. All three are outside the subset, which the
+original `ASDF:DEFSYSTEM cl-unicode/build: unsupported option :OUTPUT-FILES` error reported
+correctly. `eval/ClUnicodeTables` parses the same bundled data files and emits the same
+definitions in Java at load time (the fourteen range trees `methods.lisp` looks up, the ten
+hash tables `hash-tables.lisp` fills, the six property-symbol lists `lists.lisp` sets),
+reached through `ShimLibraries.leafModuleForms` — which is why that method takes the system's
+base directory and the loader.
+
+- **The emitted shapes match `build/dump.lisp` exactly, quirks included**, so upstream's own
+  test suite stays meaningful: `build-range-list` returns at `+code-point-limit+ - 1` (the
+  last range ends at `#x10FFFE` and `#x10FFFF` is in no range); `split-range-list` picks its
+  middle with `(round (1- length) 2)`, i.e. round-half-to-EVEN; the `pushnew` lists come out
+  in reverse order of first appearance.
+- **The dumps are not quoted literals**: written out they are ~5 MB holding ~140,000 numbers
+  and ~68,000 character names (~208,000 constant pool entries against the 65534 a class may
+  name), so each table travels as its own PRINTED TEXT inside ~230 string literals read back
+  with `read-from-string` (570 entries), and each of the fourteen range trees became a flat
+  range table `%lookup` binary-searches, BUILT ON FIRST LOOKUP. Retiring the balanced tree is
+  the one FAITHFULNESS deviation and it is free (`split-range-list`'s middle only decided the
+  tree's shape, never an answer). Chunk ceilings: `.kb/jvm-method-size-limits.md`; a quoted
+  list is walked recursively when resolved and read, so 200,000 elements in one literal
+  overflows the stack in `PackageResolver.resolveQuotedDatum`, and the reader recursing per
+  element caps a text chunk at **1,000 elements**.
+- Pinned by `ClUnicodeTablesTest` (a synthetic UCD slice covering every reader in
+  `build/read.lisp`, asserted as emitted TEXT) and
+  `AsdfSystemsTest.parsesTheBundledClUnicodeReplacementAsd`.
+
+## Libraries that load, and what is pinned
+
+Every entry loads its VERBATIM upstream sources unless a substitution is named.
+`AsdfLibraryE2eSupport` hosts the four-backend E2Es and needs a VENDORED tree per system
+(under `src/test/resources/`); a library whose tree lives only in the quicklisp cache is
+verified MANUALLY on all four. Language gaps a library forced are owned by their own topic
+files, named per entry.
+
+- **cl-who 1.1.5** — `ClWhoE2eTest` (interpreter + JVM, vendored). `with-html-output(-to-string)`
+  expands at MACRO-EXPANSION time, so on the compile path the whole render resolves in the
+  `UserMacroExpander` macro-time evaluator and backends see baked string constants. The
+  macro-time config replay it needs is a **static purity judgment, not a data file**:
+  `UserMacroExpander.isPureConfigSetf`/`isPure` accept a top-level `(setf (PLACE args...) V)`
+  only when the `(defun (setf PLACE) ...)` writer is a pure config setter (body assigns
+  special/global variables through a side-effect-free allow-list of control forms +
+  arithmetic/comparison/logic/predicate builtins; `ecase`-over-specials is covered) and V +
+  place args are pure. **Deny by default**; no per-library registration; no
+  `eval-when (:compile-toplevel)` escape hatch. Top-level `defvar`/`defparameter`/`defconstant`
+  register LAZILY (`Environment.defineLazy`) — see `.kb/defmacro-backquote.md`.
+  Lite: `:indent` (needs dynamic special rebinding), `(let ((*html-mode* ...)) ...)` ignored
+  (use `(setf (html-mode) :html5)`), hyperdoc's `loop ... being the external-symbols` empty.
+  **NO render ci-spec case is possible**: it needs the `.asd` on disk, but
+  `JvmClassShakerCorpusTest`/`WasmTreeShakerCorpusTest` re-compile the concatenated ci-spec
+  sources WITHOUT `--system-path`, so a `cl-who:` reference would fail package resolution there.
+- **cl-base64 3.4** — `ClBase64E2eTest` (all four, vendored); ci-spec
+  `cl-base64-residue-features`. Limits: the WASM backends degrade an integer beyond `i31` to a
+  float, so `integer-to-base64-string` diverges for large integers (the E2E uses 1234567);
+  `base64-stream-to-*` compiles but the CL stream objects it expects are untested. Owned
+  elsewhere: `.kb/symbol-runtime-api.md` (the macro-time `intern` name synthesis),
+  `.kb/string-write-runtime.md` (`(setf (schar s i) c)`), `.kb/error-handling.md`
+  (`error`/`signal`/`warn` as FUNCTIONS, `cerror`).
+- **assoc-utils** — `AssocUtilsE2eTest` + `AssocUtilsUpcaseE2eTest` (all four, vendored, Public
+  Domain); ci-spec `assoc-utils-features`. Introduced `eval/LispPreludeLibrary`: recursive
+  rontolisp-source defuns (canonical bare-cl source, the json.lisp pattern) spliced by
+  `LispPreludeLibrary.process` (after `UrlLibrary.process` in
+  `RontoLispCli`/`RontoPlayground`/both corpus tests/`AsdfLibraryE2eSupport.compileProgram`)
+  when referenced, and lazy-loaded by the interpreter in `resolveFunction` via
+  `loadedPreludeNames`. Also brought the 5-value `define-setf-expander` protocol
+  (`LispEvaluator.setfExpanders`; `UserMacroExpander` rewrites `setf`/`incf`/`decf` on a user
+  place BEFORE the compilers, so the expr-compiler `DEFINE_SETF_EXPANDER` case is a nil no-op)
+  and `LoopExpander.parseForBeingHash` (snapshots the table into an alist once via a `maphash`
+  accumulator, so iteration order follows the backend's hash order). Lite: `equalp` on
+  arrays/hash-tables/structures falls back to `eql`; `define-modify-macro` place subforms may
+  double-evaluate.
+- **ironclad 0.61 slice** — `IroncladE2eTest` (all four). `ironclad-slice.asd` declares
+  `ironclad/core` (package, conditions, generic, macro-utils, util, common, digests/digest,
+  macs/mac, prng/prng), `ironclad/digest/sha256`, `ironclad/digest/sha512` (SHA-384 AND
+  SHA-512, one file), `ironclad/mac/hmac`, `ironclad/kdf/pkcs5`, `ironclad/kdf/hmac`,
+  `ironclad/kdf/password-hash`, `ironclad/kdfs` (kdf/kdf.lisp) and `ironclad/public-key/rsa`
+  (src/math.lisp + public-key/{public-key,pkcs1,rsa}.lisp), aggregate `ironclad` = that slice.
+  - **One deliberate deviation from real ASDF's layout, forced by eager compilation:
+    kdf/kdf.lisp loads LAST.** It `make-instance`s every KDF class and the compilers expand a
+    `make-instance` where it stands, so every class it names must already be registered —
+    which is why kdf/hmac.lisp is declared a DEPENDENCY of `ironclad/kdfs`, not a sibling.
+  - `bordeaux-threads` (a real `:depends-on`) is dropped: zero call sites in the slice.
+  - Covered: FIPS 180-2 SHA-256/224, SHA-384/512, RFC 4231 HMAC (both `make-mac` and the
+    deprecated `make-hmac`), RFC 5869 HKDF case 1 via `make-kdf :hmac-kdf`, PBKDF2 at 1 and
+    4096 iterations, RFC 7677 §3 SCRAM-SHA-256 end to end, and the RSA stack over a FIXED
+    2048-bit key pair (so the raw signature is a pinned constant) plus PSS/OAEP round trips and
+    a live `generate-key-pair :rsa :num-bits 1024`.
+  - Out of scope: ciphers, aead, octet-stream, the rest of prng/, the non-RSA public-key
+    algorithms, and the KDFs whose classes live in those subsystems (scrypt, argon2, bcrypt).
+  - **Not a rontolisp gap**: PS512 with a 1024-bit key trips ironclad's own
+    `(>= num-bytes (+ (* 2 digest-len) 2))` assertion — PSS/SHA-512 needs >= 1040 modulus bits.
+  - **`random-data` is a leaf shim** over `rontolisp:random-bytes` implementing `*prng*`,
+    `list-all-prngs`, `make-prng`, `random-data`, `random-bits`, `strong-random`.
+    `strong-random` keeps upstream's REJECTION SAMPLING (draw `integer-length` bits, retry
+    while >= limit) — a modulo fold would bias the low characters of a SCRAM nonce.
+    `:fortuna`/`:fortuna-generator` are not implemented (`make-prng` accepts any name and
+    returns the OS generator); the seed-file operations are absent.
+  - **Why the SCRAM names had to exist before cl-postgres could compile at all**: an undefined
+    function is a **compile-time** error on the JVM/WASM backends while the interpreter defers
+    it to the call, so even a trust-auth connection that never runs SCRAM would not build.
+  - `gen-client-proof` XORs two 32-byte digests as 256-bit INTEGERS, so the wasm legs were
+    blocked until exact integers there became arbitrary-precision (`.kb/wasm-bignum.md`).
+    **Pinned edge case**: `integer-to-octets` returns the MINIMAL vector, so a proof whose high
+    bytes cancel comes back shorter than 32 and must be padded (cl-postgres'
+    `pad-octet-vector`). An off-by-one is a silently wrong proof surfacing only as an
+    authentication failure, so `IroncladE2eTest` pins a synthetic pair whose XOR has two
+    leading zero bytes beside the RFC vector.
+  - **Native PBKDF2 on the INTERPRETER only** (`eval/IroncladNative` + `eval/Sha2Kernels`):
+    `LispEvaluator.loadSystem` rebinds `IRONCLAD::PBKDF2-DERIVE-KEY` to a Java kernel as soon
+    as the system DEFINING it finishes loading — the `LinalgSimd` interception shape (capture
+    the defun, fall back to it on any DECLINED input), keyed on the DEFINITION rather than a
+    system name so it fires for the aggregate and for a bare `ironclad/kdf/pkcs5` alike.
+    Always on and **not a `.kb` divergence**: PBKDF2-HMAC-SHA-224/256 is a spec-defined
+    function of its arguments, so the kernel and ironclad's code are interchangeable by
+    construction (contrast `--simd`, opt-in because it trades float precision). Costs:
+    interpreted Lisp 17,091 ms, kernel 9 ms, JVM `.class` ~1 s, WASM component ~3 s — the
+    compiled backends need no sibling. Boundary set by two measurements: replacing only
+    `update-sha256-block` + `sha256-expand-block` buys ~4x, not enough (the compression
+    function is 77% of the cost, the interpreted mdx buffering the rest), and the 4096-round
+    loop re-derives the HMAC key schedule per iteration, which the kernel absorbs once.
+    `Sha2Kernels` is hand-written rather than `java.security.MessageDigest` because it is
+    `LispEvaluator`-reachable and therefore compiled into the native binary AND the browser Web
+    Image, where a JCA provider is a registration burden or absent
+    ([[web-playground-native-image-gotcha]]). Pinned from both sides by `IroncladNativeTest`
+    (RFC 7914 vectors, the JDK's own `PBKDF2WithHmacSHA*`/`MessageDigest` as an independent
+    oracle across every padding boundary, and the declined inputs still producing ironclad's
+    own `check-type` / unsupported-digest text) and `IroncladE2eTest`, whose three COMPILED legs
+    keep running ironclad's Lisp inner loop. **Re-evaluation trigger**: if the interpreter's own
+    arithmetic/macro costs close the gap, or a compiled backend regresses into needing the same
+    treatment, revisit the boundary — widening it to `digest-sequence`/the HMAC trio was
+    considered and declined.
+- **cl-postgres** — `ClPostgresE2eTest`, which runs by DEFAULT (Docker is its only gate; the
+  `RONTOLISP_POSTGRES_E2E` siblings `MitoE2eTest`/`PostmodernE2eTest` stay opt-in).
+  `open-database` + `exec-query` complete a real round trip against PostgreSQL 17 under
+  `trust`, `password`, `md5` AND SCRAM-SHA-256 on the interpreter, the JVM and the WASM
+  `--component` backend; **Preview 1 has no TCP by design** (`.kb/tcp-sockets.md`) and its
+  socket calls compile to CALL-TIME error stubs. The verbatim `cl-postgres.asd` is exactly what
+  the `.asd` front end above supports (pinned by
+  `AsdfSystemsTest.parsesTheClPostgresAsdHeaderShape`); the `cl-postgres-deps.asd` override
+  declares the under-declared deps (alexandria, cl-ppcre, usocket) so
+  `(ql:quickload "cl-postgres")` resolves as ONE form on the compile paths.
+  **Its `#.*string-file*` component must stay `strings-utf-8`**, the branch upstream's own
+  feature test picks (`.kb/reader-features.md`, `:unicode`): `strings-ascii` announces
+  `client_encoding SQL_ASCII` and encodes one octet per code point, so a non-ASCII query
+  parameter reaches the server as an invalid byte sequence and desyncs the connection (the
+  `unicode` rung pins round trips both ways).
+  Harness: a Testcontainers `postgres:17-alpine` with a per-role `pg_hba.conf` ladder —
+  `trustuser`/`passuser`/`md5user`/`scramuser`, ONE ROLE PER METHOD so a broken rung cannot
+  fall back to another — and one probe program per backend asserting byte-identical output on
+  three backends plus the Preview 1 compile error. **The component leg connects to the
+  container's IP ADDRESS, not its network alias**, because `tcp-connect` takes only IPv4
+  literals on WASM. `-c authentication_timeout=600` is kept as insurance for the ~3 s component
+  leg on a loaded CI machine. Recorded costs, so a regression is a change to this file rather
+  than a flaky test — scram-sha-256 connect, first/second: interpreter 155/68 ms, JVM 214/100,
+  component 140/137; PBKDF2 x4096 alone 9 ms interpreted (native kernel), 44 JVM, ~87 component.
+- **alexandria 1.0.1** — `AlexandriaE2eTest` (all four); vendored UNMODIFIED (the `.asd` +
+  `alexandria-1/` + `alexandria-2/`; the two `tests.lisp` are `:static-file` entries,
+  ordering-only and never read). **The exercise IS `examples/asdf/alexandria-demo.lisp`
+  verbatim — keep the two in sync.** ci-spec `last-with-a-count` /
+  `every-some-over-many-sequences` / `coerce-to-a-computed-result-type` /
+  `read-sequence-into-a-character-buffer`.
+  - **Two cross-backend CORRECTNESS bugs fell out, both found by a wrapper needing them.**
+    (1) **`#'mapcar` as a first-class VALUE silently dropped every list but the first on both
+    compile backends** (the wrapper was `binary(MAPCAR)`), so `alexandria:mappend`
+    (`(apply #'mapcar function lists)`) answered `(1 2)` against the interpreter's `(1 3 2 4)`.
+    Fixing it exposed the whole family diverging the same way; every member now takes N lists
+    everywhere. **Read `.kb/map-family.md` before touching any of them.**
+    (2) **An injected wrapper whose body calls `apply` was reachable while WASM's `apply`
+    runtime was not emitted**: `usesEval` (which gates `_apply`) scans the SOURCE program and
+    wrappers are injected after it, so `(funcall #'mapcar #'list '(1 2) '(3 4))` in a program
+    using `apply` nowhere else answered `(NIL NIL)` on WASM (`_apply` degrades to a
+    nil-answering stub rather than trapping). `BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` +
+    `referencesApplyingWrapper` name that set (the `map*` six, `every`/`some`, `funcall`) and
+    the gate consults it. Pinned in isolation by
+    `WasmLispCompilerIntegrationTest.applyUsingWrapperReachedByFuncallCompilesAndRuns` —
+    **each assertion must be the ONLY form in its program**, so the concatenating ci-spec driver
+    cannot cover it.
+  - Still NOT supported (user-visible in `doc/*/guides/asdf-systems.md`): `type=` (needs
+    `subtypep`'s secondary value); `format-symbol`/`ensure-symbol` and `ensure-function` on a
+    symbol work interpreted and are loud compile-backend ERRORS;
+    `shuffle`/`random-elt`/`gaussian-random` draw each backend's own entropy, so no
+    cross-backend pin can exist for them.
+- **jzon 1.1.4** — `JzonE2eTest` (all four, a combined basic + README exercise; vendored, plus
+  an interpreter-only test for the WASM-divergent residue). Its numeric leaves are the
+  jzon leaf-module shims above. Accepted WASM divergences kept OUT of the four-backend
+  exercise: large-float print shape, hash-table iteration order over multiple keys, and
+  non-ASCII `\u` escapes (`code-char` beyond ASCII emits one raw byte on WASM). Remaining
+  `uiop:` stubs error at call time.
+- **uax-15 0.1.3** — `Uax15E2eTest` (all four; transitively pulls the vendored split-sequence +
+  cl-ppcre). Its table substitution is tier 4 above. Forced the pathname primitives +
+  `with-open-file` file-inlining, a `LOOP` per-clause iteration-head rewrite in
+  `LispMacroExpander`, and the **WASM UTF-8 string byte model** (`.kb/wasm-gc-strings.md`):
+  `_charvec_to_str` encodes each character as its 1-4 byte UTF-8 sequence and the byte-indexed
+  accessors (`char`/`aref`/`length`/`subseq`) walk UTF-8 through
+  `_str_char_count`/`_str_char_at`/`_str_char_byte_offset`. The component test also drove
+  `WasmComponentBuilder.memModuleFor`: the shared canonical-memory module's initial page count
+  follows the core module's memory-import minimum, so a program whose static data exceeds 384KB
+  no longer traps at instantiation.
+- **cl-unicode 0.1.6 + cl-ppcre-unicode + cl-str**: `(ql:quickload "str")` resolves and loads
+  cl-ppcre, cl-unicode/base, cl-unicode, cl-ppcre-unicode, cl-change-case, str, and
+  `(str:title-case "HELLO LISP!")` answers `"Hello Lisp"` on **all four backends**. Three
+  prerequisites, in order: (1) the **`equalp` key fold on every backend**, without which the
+  load dies at `Unknown property name "Cs".` on any compiled backend — cl-unicode's
+  `*property-map*`, its two name tables and `*property-aliases*` are all `equalp` and rely on
+  case-insensitive lookup (`derived.lisp` asks for `"Cs"`, the table holds `"CS"`, because the
+  bidi class `CS` registers after the general category `Cs` in `UnicodeData.txt` order and
+  `*canonical-names*` is last-wins per symbol — upstream lands there too); fixed by folding the
+  key before it is placed (`LispEquality.equalpKey`, then all four, `.kb/hash-tables.md`).
+  (2) The generated components stopped being LITERALS — tier 5 above. (3) The WASM module's
+  linear memory had to stop giving the bump heap a fixed three growth pages
+  (`.kb/wasm-gc-heap-pregrow.md`). One infrastructure gap is worth knowing: cl-ppcre's
+  `nsubseq` used to signal on every backend, taking the whole shared-substring surface with it
+  (`:sharedp t` on `scan-to-strings` / `register-groups-bind` / `do-scans`, a FUNCTION
+  replacement to `regex-replace`/`-all`) — **RETIRED**, since `make-array :displaced-to` over a
+  string answers a real string VIEW on all four (`.kb/adjustable-arrays.md`), so the verbatim
+  `nsubseq` loads and `ClPpcreE2eTest` covers the entry points it feeds. Also needed:
+  `*compile-verbose*`/`*compile-print*` (nil here like `*load-verbose*`, but portable sources
+  READ them and an unbound variable is a hard error) and two character names
+  (`.kb/characters-code-points.md`).
+- **s-sql** — ci-spec `s-sql-enablement-language-group`; the quickload run is MANUAL (the
+  postmodern tree lives in the quicklisp cache). `(sql (:select '* :from 'foo :where (:= 'id
+  1)))` renders identically on ALL FOUR — s-sql opens no sockets, so unlike cl-postgres it runs
+  on Preview 1 (the socket calls its cl-postgres dependency drags in compile to CALL-TIME
+  errors there: the pruner cannot drop cl-postgres' defmethod-anchored socket chain, since
+  `LibraryDefunPruner.definitionName` prunes defun/defvar-family only, so `WasmExprCompiler`'s
+  Preview-1 tcp family lowers through `LispMacroExpander.callTimeUnsupportedStub`, the same
+  policy as an undefined function).
+  **One replay rule landed for its operator table**: a top-level
+  `(let (...) <definitions only>)` is evaluated WHOLE into the macro-time evaluator
+  (`UserMacroExpander.registerMacroTimeDefinitions`), because `register-sql-operators` closes
+  each of the ~230 `(eql :keyword)` `expand-sql-op` defmethods over a `make-expander` closure —
+  without it the `sql` macro fell to the default op renderer on the compile paths while the
+  interpreter worked. The ~230-method eql dispatcher stays under the JVM/WASM method-size
+  guards with no chunking. Other pieces owned elsewhere: `FmtCut` (`~^`, `~:*` inside `~[`),
+  [standard-output-redirect.md](standard-output-redirect.md),
+  `LoopExpander.retargetSequentialEqualsSteps`.
+- **postmodern** — `PostmodernE2eTest` (opt-in `RONTOLISP_POSTGRES_E2E=1`, same Testcontainers
+  harness as `ClPostgresE2eTest`); ci-spec `postmodern-non-mop-milestone` for the socket-free
+  mechanics. The whole graph resolves and the non-MOP build LOADS AND RUNS: `with-connection` /
+  `create-table` / `insert-into` / `query` / `with-transaction` / `update` / `query :single`
+  byte-identically on interpreter, JVM and `--component`, with `:reconnect` and
+  `retry-transaction` restart paths driven for real. Preview 1 stays a compile error by design.
+  Upstream's `.asd` is unreadable as data (a top-level `eval-when` pushing features per
+  implementation), so `postmodern-deps.asd` **takes both feature decisions statically**:
+  - **`:postmodern-use-mop` ON** — `table.lisp` joins ahead of `deftable.lisp`, `closer-mop`
+    arrives through upstream's own `(:feature :postmodern-use-mop "closer-mop")` shape, and
+    postmodern's `defpackage` takes its `#+postmodern-use-mop` branch
+    (`(:use :closer-common-lisp ...)`, `.kb/packages.md`). The DAO layer runs on the static
+    definition-time MOP subset (`.kb/clos.md`). The `:if-feature`/`(:feature ...)` clauses stay
+    VERBATIM so the whole decision remains a feature flip — pinned by
+    `AsdfSystemsTest.thePostmodernMopBuildIsAFeatureFlip` (re-parses the resource with the
+    declaration reduced to `:postmodern-thread-safe` alone and asserts `table.lisp` and
+    `closer-mop` leave the build) and `parsesTheBundledPostmodernReplacementAsd`.
+  - **`:postmodern-thread-safe` ON** via `:rontolisp-features` — three lock sites in this build
+    (connection pool, statement-id counter, class-finalize lock), five more in `table.lisp`.
+    Honest because `bt:with-lock-held` really serializes (`.kb/mutexes.md`). OFF was a genuine
+    narrowing, not a scope choice: rontolisp DOES run concurrent handlers (one virtual thread
+    per request under `serve`), so the `(progn ...)` those sites compiled to was racy.
+  - **`:depends-on` differs from upstream three ways, all deliberate**: `global-vars` DROPPED
+    (declared upstream, ZERO call sites), `bordeaux-threads` follows the feature decision, and
+    `cl-ppcre` + `uax-15` ADDED (called by `roles.lisp`/`execute-file.lisp`/`util.lisp`, never
+    declared upstream; leaving them out would make the eagerly-resolving compile paths depend on
+    the order of somebody else's `.asd`). `postmodern/tests` is not reproduced (fiveam,
+    simple-date, local-time). `s-sql.asd` and `simple-date.asd` sit in the same release
+    directory and need no override; `simple-date` is not a dependency at all (json-encoder
+    probes for it with runtime `find-package`). `:nicknames (:pomo)` registers through
+    `PackageResolver` like any user package.
+  - One deviation remains visible in output: a condition prints as a slot dump rather than
+    through its `:report`.
+- **quri 0.7.0** — ci-spec `quri-enablement-language-group` + `QuriEtldTablesTest`; the
+  quickload run is MANUAL on all four (its tree lives in the quicklisp cache; alexandria IS
+  vendored, so vendoring quri's tree beside it is all an automated `QuriE2eTest` would take).
+  Dependencies: alexandria, split-sequence, cl-utilities, idna (all real) plus the babel shim.
+  Its one substitution is `QuriEtldTables` (tier 4). Two things worth carrying:
+  - **`apply` through a COMPUTED designator has no arity ceiling.** Per-arity dispatchers take
+    one physical parameter per Lisp argument and stop at `MAX_CALLABLE_ARITY`, and `_apply`
+    walked the argument list, counted it, and fell off the end — nil on the JVM, an
+    `unreachable` trap on WASM. Both backends gained a SPREAD dispatcher (`_invoke_v` /
+    `FUNC_DISPATCH_SPREAD`) over EVERY callable, taking the list whole; each case reads its
+    target's required parameters out of it and hands a variadic target the remaining TAIL,
+    which IS the callee's physical rest parameter. Cheaper than raising the ceiling: one case
+    per function, not one per (function, arity) pair.
+  - **`format`'s destination is decided at RUN time** when it is not the literal `nil`/`t`
+    (`formatDestinationDispatch`): `nil` is the build-and-return-the-string destination, so a
+    VARIABLE destination cannot be lowered to a write. The **Gray-streams `format` rewrite used
+    to override it**: `GrayStreamsLibrary.process` turns `(format STREAM ...)` into "render to a
+    string, hand it to the write-string dispatch, answer nil" and fires over the WHOLE program
+    as soon as ANY part uses the Gray protocol; it now performs the same test
+    ([gray-streams.md](gray-streams.md)). **Only the concatenated ci-spec program catches
+    this** — in isolation the quri case passes on all four.
+  - Other pieces owned elsewhere: `#P"..."` and the pathname VALUE (`.kb/pathnames.md`),
+    `print-object` joining `CL_FUNCTIONS`, `princ`/`~A` writing a symbol's NAME with no package
+    qualifier (`LispSymbol.display` = `memberName`, CLHS 22.1.3.3; the JVM's
+    `_lispToDisplayString` and the WASM `_princ_val` symbol branch became "everything after the
+    last colon"), the defstruct export ORACLE (`PackageResolver.spellsAsExternal`, threaded
+    through `expandTopLevelDefinitions`), `(:include parent (slot new-default) ...)` re-defaulting
+    in the child's layout only while the slot keeps its inherited index, `nil`/`t` as string
+    designators, `*print-escape*`/`*print-readably*` BOUND around the `print-object` call
+    (`printObjectCall`), `(setf (getf place indicator) value)` lowered INLINE in
+    `LispMacroExpander.expandSetf` (inline because the expansion happens during expression
+    compilation, long after the prelude-splice pass; lite — `place` is evaluated twice), and
+    `make-list :initial-element` (the element form bound OUTSIDE the loop so every cell shares
+    one value, as CL specifies).
+  - A plain BUG found here: `LispMacroExpander.rewriteLocalCalls` tested for a non-symbol head
+    BEFORE testing for an improper list, and that branch rebuilds from `cons.toList()`, which
+    DROPS an improper tail — a nested loop destructuring pattern `((field . value) . rest)` came
+    back as `((field . value))`. The improper-list test now runs first.
+  - **ONE limitation remains, pre-existing**: quri's `:lenient` percent-decoding crashes on the
+    three compile backends when the input really is malformed — it skips a bad escape with a
+    `go` out of a `handler-bind` handler into an enclosing `tagbody`, and a `go` that crosses a
+    lambda has no lowering there (`.kb/do-return-block.md`). Well-formed input never reaches
+    the handler, and `uri-query-params` defaults to `:lenient t`.
+- **local-time 1.0.6** — ci-spec `local-time-enablement-language-group`; the quickload run is
+  MANUAL on all four. The whole timestamp API is byte-identical on ALL FOUR. **Real TZif
+  timezone files load** wherever the host has a filesystem
+  (`(local-time:define-timezone tokyo #p"/usr/share/zoneinfo/Asia/Tokyo" :load t)` parses the
+  binary zone file through `read-byte`/`read-sequence`); where they cannot be read — WASM with
+  no preopened directory, a host without the file — local-time's own `handler-case` falls back
+  to `+utc-zone+`, which is why making a failed `open` SIGNAL rather than trap on WASM was a
+  precondition (`.kb/read-load-streams.md`).
+  - **The four load-context pathname variables** `*load-pathname*` / `*load-truename*` /
+    `*compile-file-pathname*` / `*compile-file-truename*` (`LispNames`,
+    `PackageRegistry.CL_VARIABLES`). The first pair holds the file being loaded while its
+    top-level forms run, on EVERY backend: the interpreter REBINDS them dynamically around each
+    loaded file (`LispEvaluator.loadFile`), the compile paths ASSIGN them per spliced file from
+    the `%begin-file` brackets `LoadInliner` emits. **An ASDF COMPONENT is loaded by its
+    RESOLVED path** (what real ASDF hands `load`; a plain `load` keeps the spelling it was
+    called with), which makes its `*load-pathname*` equal `asdf:component-pathname` — that
+    equality is the point and `LoadContextE2eTest` pins it. Outside a load both are nil,
+    including inside a function the load defined. Both are also established at READ time, so a
+    `#.` datum reading them answers what the same file's run-time value will be; mechanics and
+    the byte-identity gate are `.kb/load-inliner.md`.
+    **The compile-file pair is permanently nil, at read time too, deliberately**, for three
+    reasons — any one expiring is the re-evaluation trigger: (a) the portable spelling
+    `(or *compile-file-pathname* *load-truename*)` now ANSWERS through its fallback arm;
+    (b) local-time spells `#.(or *compile-file-truename* '*load-truename*)`, whose whole point
+    is that the first arm is nil so the value is the SYMBOL, deferred to load time — a non-nil
+    first arm silently freezes the COMPILING machine's path into the artifact; (c) a library
+    branching on `*compile-file-pathname*` is asking "am I being compiled to a fasl", and the
+    honest answer here is no (the compile path splices SOURCE and evaluates the datum in a
+    macro-time image, CL's `load` situation, not its `compile-file` one).
+    **If a real `compile-file` ever exists, bind both pairs together and revisit local-time's
+    spelling in the same pass — not one of them alone.**
+    **`*readtable*` rides the same list**: nil everywhere (the reader is the frontend's, with no
+    runtime readtable object to name), but a loader binds it in the SAME `let` as the pathname
+    pair (clack's `%load-file` binds all four around its read/eval loop), so
+    `injectMvSpillGlobal` declares it too, or the rebinding fails with
+    `Cannot compile symbol reference: *READTABLE*`. `injectMvSpillGlobal` declares whichever of
+    the four the program mentions.
+  - `merge-pathnames` and `truename` are `LispPreludeLibrary` entries — ONE Lisp definition over
+    primitives every backend has, unlike `make-pathname` / `uiop:merge-pathnames*`, which stay
+    Java + compile-time folding because their keyword shapes resolve at compile time.
+    `merge-pathnames` is pinned against `PathnameOps.mergePathnames`
+    (`LispPreludeLibraryTest#thePreludeMergePathnamesAgreesWithPathnameOps`); `truename` is
+    `(or (probe-file p) (error ...))`, whose load-bearing half is the SIGNAL —
+    `(ignore-errors (truename x))` is how a library probes for an optional directory. The
+    DIRECTORY-LISTING family joined the same way (`.kb/directory-listing.md`).
+    **One residue**: local-time's DEFAULT repository path is computed with a runtime
+    `make-pathname`, which only the interpreter has, so the compile paths need an explicit
+    `:timezone-repository`.
+  - Also landed here: the `find` family taking the whole position keyword set through
+    `buildPositionScan` with the ELEMENT as the answer (`positionScanValues` grew an
+    `elementResult` flag, so first-class `#'find` takes them too),
+    `make-array :initial-contents` from a **packed vector** (`LispIntVector` and
+    `LispFloatArray` are sequences now — what the TZif reader seeds from), and
+    `:element-type 'unsigned-byte` opening a BINARY stream. Pins:
+    `LispEvaluatorTest#evalFindFamilyTakesThePositionKeywordSet`.
+  - **Two pre-existing backend defects had to be fixed for it to work at all**, both unrelated
+    to local-time: argument evaluation order was right-to-left for `list` (and backquote) on
+    all three compile backends, which made the TZif header decode its six fields in reverse
+    (`.kb/argument-evaluation-order.md`), and the WASM 7-parameter callable ceiling rejected
+    `encode-timestamp-into-values`, so `MAX_CALLABLE_ARITY` was raised to 10.
+- **lack / clack `.asd` front end**: the system-level `:pathname` prefix, the
+  `register-system-packages` skip and the ignored `load-system`/`quickload` keyword options
+  (all described above) let the unpatched `lack.asd` parse whole — the `:pathname "src"`
+  primary, the eighteen one-line alias systems, and `lack/tests` with its own `:pathname`,
+  nested `:module`s, `#+todo`-suppressed component and `:perform`. Pinned by `AsdfSystemsTest`
+  (`parsesTheVerbatimLackAsd`, `loadSystemNameIgnoresKeywordOptions`,
+  `loadSystemNameRejectsANonKeywordSecondArgument`, the `:pathname` group). The rest of the
+  milestone is `.kb/clack.md`.
+- **fast-io 1.0 + circular-streams** — `FastIoCircularStreamsE2eTest` (all four; vendored).
+  Nothing library-specific landed; three general mechanisms did, each of which had blocked the
+  load: the `.asd` feature announcement above, `with-slots` binding a write-only unbound slot
+  ([clos.md](clos.md)), and a `slot-value` naming a slot NO class declares lowering to a
+  RUN-time error instead of failing the compile ([clos.md](clos.md) — fast-io's `open-stream-p`
+  reads `'openep`, a typo, in a method nothing calls; the interpreter never saw it because it
+  expands a method body only when called).
+  **Two upstream facts the exercise encodes, both verified against SBCL 2.2.9 rather than
+  assumed**: circular-streams cannot see the end of a fast-io input stream (fast-io's
+  `stream-read-byte` passes no `eof-error-p` to `fast-read-byte`, so it SIGNALS `end-of-file`
+  where the Gray protocol wants `:eof` — the E2E reads past EOF through a Gray source of its
+  own), and the `#.`-computed `:long-description` is dropped unresolved and unremarked.
+  **One blocker is NOT fixed**: fast-io's `defmethod close` makes `close` a user generic that
+  DROPS the built-in on the interpreter (`with-open-file` then dies with "No applicable method:
+  CLOSE on INTEGER" anywhere in the image) while the compile paths ignore the method instead —
+  a general "a user definition of a built-in name" gap.
+- **trivia** — `TriviaE2eTest` (all four; trivia + lisp-namespace vendored); ci-spec
+  `trivia-enablement-language-group`. Covers constant/variable/cons/list*/vector/struct/class
+  patterns, `(type keyword)`, the mito cons/guard/eql nest.
+  **DIVERGENCE RECORD**: `AsdOverrides` maps `trivia.asd` -> `trivia-trivial.asd`, declaring
+  `trivia` as pure metadata over `trivia.trivial` — upstream's own sanctioned base system
+  ("Systems that intend to enhance Trivia should depend on this package, not the TRIVIA
+  system"). Upstream `trivia` depends on `trivia.balland2006`, the match-clause OPTIMIZER,
+  which needs iterate (a whole loop DSL) + type-i and buys ZERO semantics; the `:trivial` route
+  is semantically identical, just unoptimized. **Re-evaluation trigger**: if a real consumer
+  needs iterate itself, or interpreter match performance becomes the bottleneck, do iterate +
+  type-i + balland2006 as their own milestone and delete the override. Measured for that
+  trigger: a 4-clause `match` in a defun costs ~0.31 s PER CALL interpreted, because the
+  interpreter re-expands user macros every evaluation and one trivia expansion runs the whole
+  level2 expander stack; the compiled backends expand once at compile time and are unaffected —
+  so the trigger is really "someone hot-loops `match` under the interpreter".
+  **Shims it needed**: `trivial-cltl2` (above) and two `closer-mop` additions.
+  **The general mechanism that landed**: `UserMacroExpander` REPLAYS plain top-level forms of
+  SPLICED SYSTEMS (inside `%begin-system`/`%end-system` provenance brackets) into the
+  macro-time evaluator, and honors the compile-file situations of a macro-EXPANDED
+  `(eval-when ...)` — [defmacro-backquote.md](defmacro-backquote.md).
+- **sxql** — `SxqlE2eTest` (all four; sxql + cl-package-locks vendored; select/where incl.
+  `:and`/`:or`/`:in`/`:like`, order-by `:desc`, limit/offset, left-join `:on`, insert-into
+  `set=`, update, delete-from, create-table with column options, drop-table, alter-table);
+  ci-spec `sxql-enablement-language-group`. `sxql:yield` produces SQL text + bind values as
+  multiple values BYTE-IDENTICALLY on all four, verified against SBCL 2.2.9 on the same
+  sources, so the pins are upstream's own answers.
+  Two shapes worth carrying: **runtime slot names normalize to the base spelling** inside the
+  shared `%slot-value-runtime`/`%slot-value-set-runtime`/`%slot-boundp-runtime` defuns —
+  `(intern (symbol-name n))` **deliberately IN the public defun, not at call sites**, so the
+  `intern` spelling is visible to the WASM `usesIntern` emission gate; and **`subtypep` walks
+  struct `:include` ancestry** (with `structure-object` as every struct's supertype), resolves a
+  user **deftype** on either side through its expansion, and takes an **`(or ...)`** compound on
+  either side — sxql's `(subtypep (type-of clause) 'multiple-allowed-clause)` gates whether a
+  SECOND where/join clause merges or signals, and `multiple-allowed-clause` is a deftype for
+  `(or join-clause where-clause)`. The shared static `LispMacroExpander.subtypep` serves the
+  interpreter and the literal fold, and `subtypepUniverse` includes struct names,
+  `structure-object` and deftype names so the emitted `%subtypep-ancestor-table%` answers the
+  runtime call identically. Other pieces owned elsewhere: `.kb/clos.md` (struct CLOS dispatch
+  widened to `:include` parents and `structure-object`), `.kb/reader-features.md` (a `#.` whose
+  value is a SYMBOL or cons in an evaluated position splices as the OBJECT,
+  `resolveReadTimeEvalInCode`). Residue: lisp-namespace's `pprint-logical-block` call compiles
+  to a call-time error stub.
+- **The mito-closure tolerance batch**: four parse-level widenings, each a whitelist entry and
+  **never a sink** — an unknown top-level form / component type still errors loudly (pinned).
+  (1) `(:version NAME "1.2.3")` `:depends-on` entries. (2) A top-level `(defmethod perform ...)`
+  tolerated and ignored, since WIDENED to every top-level method with `source-file-type` read.
+  esrap's `perform :after` hook pushes six `:esrap.*` capability features + `(provide :esrap)`,
+  and ignoring them is a **VERIFIED decision**: a grep of the whole cached dist for
+  `#+esrap.`/`#-esrap.` and of esrap's sources for any `esrap.` feature read found zero hits.
+  **Re-evaluation trigger**: if an esrap release or a downstream starts reading one, fold the
+  pushed keywords into `LispSystem.features()` via the `collectFeaturePushes` channel.
+  (3) A top-level doc-file component-class `defclass`, since generalized to any component class
+  (ASDF's own `:doc-file`/`:html-file` are accepted without a defclass; chipz.asd is the driving
+  shape). (4) `mgl-pax-bootstrap` as a built-in shim.
+  Two resolver rules landed in `PackageResolver.resolve`: **a literal top-level qualified
+  `define-package` (`uiop:` or `mgl-pax:`/`pax:`) is consumed exactly like `defpackage`** (the
+  variant's extra clauses — `:use-reexport`, `:mix` — and redefinition tolerance still error
+  loudly until a consumer needs them), and **`pax:defsection` AUTOEXPORTS its
+  `(SYMBOL LOCATIVE)` entries from the current package** (`consumeDefsectionExports`) —
+  mgl-pax's documented default and trivial-utf-8's ONLY export mechanism, without which uuid's
+  `trivial-utf-8:string-to-utf-8-bytes` fails to resolve. `asdf:system` joined the asdf package
+  externals (the class name, referenced as data by defsection bodies). Pinned by
+  `AsdfSystemsTest` (the version-entry pair, the perform-defmethod pair, the doc-defclass trio)
+  and `PackageResolverTest` (`definePackageIsConsumedLikeDefpackage`,
+  `aBareDefinePackageIsNotTheVariant`, `paxDefsectionExportsItsEntries`).
+- **cl-dbi + dbd-postgres** — manual three-backend run; Preview 1 out (no sockets), and a
+  component needs `-S tcp=y -S inherit-network=y`. connect / do-sql / prepare / execute /
+  fetch-all / with-transaction (commit AND rollback) / connect-cached / disconnect run
+  identically on interpreter, JVM and component against `postgres:17-alpine`.
+  **`AsdOverrides` maps `dbi.asd` -> `dbi-deps.asd`**: upstream's `.asd` PARSES fine, but its
+  cache selection rides a thread-capability feature expression
+  (`(:or :abcl (:and :sbcl :sb-thread) ...)`) that can never match rontolisp's feature set and
+  **MUST NOT be satisfied by claiming one** (the additive-features rule), so the verbatim parse
+  picks the single-threaded `cache/single.lisp` on backends that really run concurrent
+  handlers. The replacement takes the decision per backend: `thread.lisp` + the real
+  `bordeaux-threads` behind `:if-feature (:not :rontolisp-wasm)`, `single.lisp` (upstream's own
+  threadless choice) on WASM. **DIVERGENCE RECORD + trigger**: re-evaluate if the WASM backends
+  gain threads, or if upstream's feature expression changes shape. Driving consumer:
+  `dbi:connect-cached` is per-thread connection pooling keyed by `bt2:current-thread`. Pinned by
+  `parsesTheBundledDbiReplacementAsd` (thread on INTERPRETER/JVM features, single on WASM).
+  Also: `rontolisp:current-thread` (`.kb/threads.md`), the bt shim's `make-lock` widened to
+  `&rest` (the v2 `:name` spelling), `uiop:define-package` + `:use-reexport` +
+  `:shadowing-import-from` (`.kb/packages.md`), the `trivial-garbage` shim, and
+  `asdf:missing-component` / `asdf:retry` as resolve-only externals (dbi's
+  `with-autoload-on-missing` handler-binds them around a runtime `asdf:load-system`; dead here
+  — a missing system is a hard Java-side error, never a signaled condition). **The runtime
+  driver load short-circuits as designed**: `dbi:connect` probes `find-driver` FIRST
+  (`class-direct-subclasses` of `dbi-driver`), so on the compile paths — where the program must
+  contain `(ql:quickload "dbd-postgres")` itself and a nested load-system is a call-time error
+  stub — the stub is dead once the driver is loaded. CLOS pieces (a DIRECT `(make-instance
+  driver)` with a computed class, the late-bound `#'generic` value): `.kb/clos.md`.
+- **mito-core** — ci-spec `mito-core-enablement-language-group`; the quickload is manual. The
+  DAO CRUD round trip — `mito.core:connect-toplevel`, `deftable` (serial auto-pk +
+  `record-timestamps-mixin` injected by the `dao-table-class` metaclass), `ensure-table-exists`,
+  `insert-dao`/`find-dao`/`select-dao`+`sxql:where`/`save-dao`/`delete-dao`, `object-id` — runs
+  identically on interpreter, JVM and component. New dependencies: **dissect** (its
+  stack/restart introspection is the empty-body no-op interface — no backend carries a Lisp call
+  stack) and **uuid** (via ironclad + trivial-utf-8; v1/v4 draw the backend's own entropy
+  through the `make-random-state`-answers-nil + `random`-ignores-the-state model). The
+  enablement batch is general and owned per topic: `.kb/clos.md` ("mito-core integration
+  batch"), `compiler/FreeVarAnalyzer` (case clause key lists as data — `(lambda flet labels)` as
+  keys used to capture LABELS), [jvm-method-size-limits.md](jvm-method-size-limits.md) (the
+  `%error-runtime` chain segmentation), `.kb/packages.md` (`:import-from` of an INHERITED name,
+  `trueHome`), plus the `pax:defsection` export residue on the compile paths
+  (`UserMacroExpander.paxDefsectionExportForm` — the defsection expands to a defvar at macro
+  time, so the compilers' own resolver pass would never see the autoexports; a literal top-level
+  `(export '(...))` is emitted in its place).
+- **esrap** — `EsrapE2eTest` (all four; the parser is pure computation, so Preview 1 runs it;
+  esrap + trivial-with-current-source-form vendored); ci-spec
+  `esrap-enablement-language-group`. Exercise: esrap's own README smoke example plus mito's
+  `migration/sql-parse.lisp` grammar VERBATIM (what `mito.migration:migrate` uses to split a
+  migration file into statements) and the parse-error report; every expected line verified
+  against SBCL 2.2.9. Nothing esrap-specific landed; the two gaps worth carrying because each
+  gave a WRONG answer rather than an error:
+  - **The SIZE of `(string N)` / `(simple-vector N)` / `(vector T N)` is checked.** Unchecked,
+    `(typep sub '(or character (string 1)))` answered true for every string — so `(or "foo"
+    "bar")` compiled to the single-CHARACTER dispatch and a successful parse advanced one
+    position — and `(typep cell '(simple-vector 41))` answered nil for the packrat cache's own
+    vector, which then reached `gethash`. **`(simple-vector N)` carries only a SIZE** (element
+    type is always t) while `(vector ELEMENT-TYPE SIZE)` leads with the element type; reading
+    one as the other produced both.
+  - **`(cons CAR-TYPE CDR-TYPE)`** was not a compound type specifier at all — its arguments
+    fell through to the ranged-NUMERIC default and compiled as bounds, so esrap's expression-kind
+    table (`(cons (eql function) (cons symbol null))`) evaluated the symbol `function` as a
+    variable. A non-numeric atomic type spelled compound now ignores its arguments.
+  Others, each owned per topic: a constant DOTTED pair surviving a template that also carries a
+  NESTED backquote ([defmacro-backquote.md](defmacro-backquote.md) — the CLtL2 path's
+  `bq-attach-append` constant fold appended the tail as if proper), multiple
+  `(:constructor ...)` on one `defstruct` ([defstruct.md](defstruct.md)), `:test-not` across the
+  whole `:test`-taking family as ONE shared `TestSpec` (so the compiled call and the first-class
+  value decide the same way) plus `count`'s `:start`/`:end`, **`reduce` over an EMPTY sequence
+  calling its function with ZERO arguments** (CL's rule; `#'append`'s wrapper became variadic in
+  the same pass, because on WASM a wrong-arity indirect call TRAPS where the JVM was lenient),
+  the character predicates, the printer surface ([pretty-printer.md](pretty-printer.md) —
+  `*print-level*`/`*print-length*` are not decoration, esrap's `print-object` BINDS both), the
+  format logical block `~<...~:>` and `~/name/` ([format.md](format.md); a `~/name/` is a
+  function REFERENCE and the only trace of one, so `LibraryDefunPruner` scans string literals
+  for it), `*modules*` as the real set `provide` records and `require` consults,
+  `(compile nil lambda-form)` EVALUATING the form through the eval runtime instead of signalling
+  (`compile`'s own contract where there is no compiler), and **a macro-GENERATED `deftype`
+  reaching the compilers' registry** (`UserMacroExpander.emitMacroGeneratedDeftypes` —
+  alexandria defines its whole `positive-integer`/`array-index` family from one `macrolet`, so
+  nothing in the emitted program named them and a `typecase` clause using one failed the COMPILE
+  while the interpreter resolved it).
+  Residue, both dead in esrap and warned about at compile time: `set` and `break` are undefined.
+  `char-name` answers nil for a graphic character, which is CL — SBCL's Unicode NAME
+  (`DIGIT_ZERO`) is an extension, and the only difference in the parse-error report.
+- **tiny-routes** — `TinyRoutesE2eTest` (all four; routing is pure computation, so Preview 1
+  runs it; vendored, `extraSystemPath` = the vendored cl-ppcre) plus the three tiny-routes legs
+  of `ClackE2eTest`, which serve the same routes over real HTTP and are the only coverage of the
+  LIVE `ql:quickload` and of `tiny-routes-middleware-cookie`. Only SERVING needs `clackup`
+  (`.kb/clack.md`). Three general gaps, each a hard failure:
+  1. **The LOOP anaphoric `it` was unbound in any package but `cl-user`**
+     (`LispMacroExpander.LoopExpander`): the substitution matched the symbol by RAW name, and
+     the expander runs AFTER `PackageResolver`, so only the unqualified `cl-user` spelling ever
+     hit — and `tiny:routes`, the dispatch function every application goes through, is
+     `(loop ... when (funcall handler request) return it)` inside `(in-package :tiny-routes)`.
+     Both compile paths failed at COMPILE time. **Matching the MEMBER (`splitQualified`) in any
+     package is the rule**: no `cl:it` exists to collide with. `(loop-finish)` carried the
+     identical raw-name compare and was fixed with the same helper.
+  2. `uiop:if-let` / `when-let` / `when-let*` / `with-deprecation` as built-in macro expansions.
+  3. **A serve component whose program ends in a non-`cl-user` package**: the handler bridge
+     `eval/HttpLibrary` synthesizes is appended AFTER the program (so the handler NAME resolves
+     where the directive was written), which left `%serve-dispatch` / `%serve-request-body` /
+     `%serve-handle` resolving in the application's own package while http.lisp — spliced at
+     the head — calls the unqualified ones, so `(in-package :demo)` before `clack:clackup`
+     failed the `--component` compile with "Cannot compile: %SERVE-DISPATCH". The three
+     synthesized names now carry an explicit `cl-user::` qualifier, which normalizes to the bare
+     name in every package; the handler reference is deliberately left unqualified.
+  `tiny-routes/test` is out of scope: it depends on fiveam, whose own dependency
+  `net.didierverna.asdf-flv` stops on the unsupported `:long-name` defsystem option.
+- **tiny-routes/lite** — the OPT-IN ppcre-free variant, and the first substitution keyed by a
+  system name existing solely to carry it. Three tiers composed: `AsdOverrides` maps
+  `tiny-routes.asd` -> `tiny-routes-lite.asd`, which redeclares the primary system VERBATIM (so
+  the plain load is untouched — a silent substitution was rejected) and adds secondary system
+  `tiny-routes/lite` = same components, no `:cl-ppcre`; `ShimLibraries.LEAF_MODULES` substitutes
+  `src/middleware/path-template.lisp` under THAT system name only
+  (`tiny-routes-lite-path-template.lisp`: same package, same four exports, the dispatch cond and
+  the non-ppcre defuns verbatim upstream); `AsdfSystems.locate` resolves the slash name by the
+  secondary-name rule; and `DistClient.ensureAvailable` gained the general fallback that a slash
+  name absent from systems.txt downloads its PRIMARY's release (ASDF's naming rule guarantees
+  `NAME/SUB` lives in `NAME.asd`). **Both tiers are needed together** — the file swap alone is
+  -0.9%, because the loaded-but-unreferenced engine stays anchored through its CLOS surface
+  (`.kb/optimize-dead-code-elimination.md`, the routing section, which holds the measurements).
+  **The matcher's contract is "matches identically or refuses loudly"**: tokens are
+  `:([A-Za-z_][A-Za-z0-9_-]*)` anywhere in the template — the token-NAME scan is as greedy as
+  upstream's, so `/a/:x-:y` parses as ADJACENT tokens `:X-` and `:Y` and `/a/b-c-d` binds
+  `(:X- "b-c-" :Y "d")`; **do not "fix" that, it is upstream's own behavior, empirically
+  pinned** — matched with greedy-with-backtracking over `([^/]+)` parts. A template containing
+  any of `. \ [ ] ( ) { } | ^ $ * + ?` (live regex syntax upstream) or `:regex t` SIGNALS at
+  route-build time naming the escape; a zero-token colon template (`/a/:1`) matches nothing on
+  either system (upstream's keyword matcher answers a nil plist, so the wrapper never calls the
+  handler). Exact templates (no colon) are `string=` on both, metacharacters included — the
+  rejection applies only where upstream builds a regex.
+  Pinned by ONE corpus in two classes: `TinyRoutesLiteE2eTest` (lite on all four backends,
+  vendored tree WITHOUT cl-ppcre on the search path — passing at all proves the dependency is
+  gone — plus the rejected shapes' verbatim messages) and `TinyRoutesLiteUpstreamParityTest`
+  (the REAL engine over the same `TinyRoutesLiteCorpus` constants on the interpreter, plus the
+  co-load refusal). **Co-loading the two systems is REFUSED by both loaders in both orders**
+  (`ShimLibraries.conflictingSystem`, checked at the top of `LispEvaluator.loadSystem` /
+  `LoadInliner.spliceSystem`): they define the same packages, so whichever loaded last would
+  silently redefine the matcher — against the lite contract in one order, silently re-shipping
+  cl-ppcre in the other. Consequence: `tiny-routes-middleware-cookie` (depends on full
+  tiny-routes) cannot be combined with lite, correctly. Docs: the `tiny-routes/lite` subsection
+  of `doc/{en,ja}/guides/asdf-systems.md`, `examples/cloudflare-workers/httpbin-tiny-routes`,
+  the `examples/asdf/README.md` row.
+  **A cl-ppcre/lite in the same pattern was built, parity-pinned and then REJECTED (user
+  decision) — do not re-propose it** as the answer to the engine's module share; the direction
+  is shrinking the REAL engine's compiled share.
+- **rove 0.10.0** — `RoveE2eTest` (all four; rove + dissect vendored beside cl-ppcre). The demo
+  project `src/test/resources/rove-demo` carries BOTH system shapes rove's `run-system`
+  typecase dispatches on: a `:package-inferred-system` (`my-app/tests`) whose suite is found
+  through the `component-sideway-dependencies` walk over the derived sub-system metaobjects, and
+  a plain `defsystem` (`my-plain/tests`) whose suite is found through the `*load-pathname*`-keyed
+  file->package map recorded per `deftest`. The whole assertion surface runs
+  (`deftest`/`testing`/`ok`/`ng`/`signals` with a user condition and `'type-error`/`outputs`/
+  `pass`/`fail`/`skip`/`failing`/`setup`/`teardown`/`defhook`/`diag`, a failing assertion, an
+  assertion whose form signals) and every entry point (`rove:run` on both shapes, `run-test`,
+  `run-suite *package*`), each answering the passed-p boolean the
+  `(uiop:quit (if (rove:run :my-app/tests) 0 1))` exit recipe consumes.
+  Harness catch-up: `AsdfLibraryE2eSupport.compileProgram` hands `LispPreludeLibrary.process`
+  the TARGET feature set (`uiop:featurep` answers against the `*features*` the backend was
+  SEEDED with, `.kb/uiop.md`) and runs `EnvironmentLibrary.process` per backend (rove's
+  `with-local-envs` reads `uiop:getenv`, which under `--component` is the spliced
+  environment.lisp). Expected lines verified against SBCL 2.2.9 modulo stripped ` (Nms)`
+  durations, `#+sbcl`-only `at file:line` lines, the dissect stacks, and ONE text divergence:
+  the printer spells an accessible symbol package-qualified (`MY-APP/MAIN:ADD` where SBCL prints
+  `ADD`) — **flip `RoveE2eTest`'s expected lines to the SBCL spellings when that lands.**
+  Documented non-goals that hold: `uiop:lispize-pathname` stays unreached (`resolve-file`'s fasl
+  arm is dead while `asdf:*user-cache*` is nil), `deftest`'s `:compile-at :run-time` is
+  interpreter-only, `:style :none` on a compiled program needs the program to load
+  `rove/reporter/none` itself, and a raw wasm TRAP in a test body still ends the run
+  (`.kb/error-handling.md`). Docs: `guides/testing.md` + the `guides/asdf-systems.md` row.
+- **The examples are rove's first consumer**: `examples/console/roman.lisp` (the 1..3999
+  round-trip), `examples/cloudflare-workers/httpbin/check.lisp` (six requests through the
+  hand-written Worker adapter, asserted over the PARSED reply) and
+  `examples/browser/minesweeper/minesweeper-core-test.lisp` (over the rendering-free core)
+  check themselves. Shape, also taught in `guides/testing.md`: a plain single file with
+  `(asdf:load-system :rove)` + `(use-package :rove)` in `cl-user` +
+  `(uiop:quit (if (run-suite *package*) 0 1))`, spelling the VENDORED route (`--system-path` at
+  `src/test/resources/{rove,dissect,cl-ppcre}`) so `-Drontolisp.examples=true` passes with no
+  network, with `(ql:quickload "rove")` named in a header comment as the outside-this-repository
+  spelling. Two harness defects had to go first: **`examples.yaml`'s `systemPath` is now a
+  LIST**, each element absolutized separately and joined with `File.pathSeparator`
+  (`ExamplesE2eTest.systemPathFlags`; passing `a:b` as ONE path absolutized only `a`, and the
+  scalar spelling still parses via `ACCEPT_SINGLE_VALUE_AS_ARRAY`), and the INTERPRETER leg now
+  passes `--system-path` at all. The manifest checks rove's SUMMARY lines only, because
+  per-assertion lines print forms and rove appends a ` (Nms)` duration past 37 ms.
+  `IndentRules` gained rove's body-taking operators (`testing`/`failing` -> `body(1,2)`,
+  `setup`/`teardown` -> `body(0,2)`, `defhook` -> `body(2,2)`; `deftest` needs none, the `def*`
+  convention reads it) — without them `rontolisp format` aligns every assertion under the
+  description STRING's width. **What the conversion FOUND, both real bugs the milestone's own
+  demo could not see**: an inner `handler-case` not shadowing an enclosing `handler-bind`
+  (fixed — `.kb/error-handling.md`, "A `handler-case` joins the cluster stack") and the
+  `#'coerce`/`#'elt` sweep (rove's `form-inspect` needs every operator in an `ok` to be
+  first-class; `.kb/core-representation.md`, "Built-in function wrappers").
+- **`rontolisp test` — the CLI runner.** `TestCommand` (package `cli`) is a SOURCE GENERATOR,
+  not a mode: it builds ONE program (rove prologue + target + verdict epilogue) and hands it to
+  the ordinary `RontoLispCli` pipeline, so with no `-o` it is interpreted and with `-o` the SAME
+  program compiles, every emitted artifact carrying the identical exit contract for free
+  (`uiop:quit` is real on all four). That is why `test` is parsed by `CliOptions` like an
+  ordinary run — unlike `format`, which owns its whole argv — since every compiler flag must
+  keep working. **Upstream `roswell/rove.ros` is the spec**: read it in the quicklisp cache
+  (`~/.rontolisp/quicklisp/software/rove-*/roswell/rove.ros`); it is NOT in the vendored copy.
+  Mirrored from it: rove loaded up front (`asdf:load-system` when rove is on the search path,
+  `ql:quickload` otherwise), a `.lisp` target's system name read from its `defpackage`
+  (`AsdfSystems.fileDefpackageName`, the same `file-defpackage-form` rule the package-inferred
+  loader uses), `asdf:load-system` + `asdf:test-system` then `rove:run` as the fallback, and the
+  verdict read from `rove/core/suite:*last-suite-report*` AFTER the run so nothing runs twice.
+  - **The one hook that is not cosmetic**: rove sets `*last-suite-report*` in `call-with-suite`
+    ONLY, which `rove:run`/`rove:run-tests` reach and **`rove:run-suite` — the README-FAQ shape a
+    single test file ends with, and the shape this command exists for — does not**
+    (`run-suite` -> `with-reporter` -> `run-suite-tests`, no `call-with-suite`). So the prologue
+    defines `(defmethod rove:invoke-reporter :after (reporter function) (setf
+    rove/core/suite:*last-suite-report* (rove/core/stats:stats-results reporter)))`:
+    `invoke-reporter` is the one funnel EVERY entry point crosses, and its argument IS the stats
+    object. Without it the runner would have to re-run the target's tests —
+    `RoveTestCommandE2eTest`'s `containsOnlyOnce("Summary:")` pins that it does not. A second
+    replacement in the same prologue:
+    `(defmethod rove:run-suite (suite &key (style rove:*default-reporter*)) ...)` — same
+    specializer, so CL redefinition semantics REPLACE rove's method — because rove's own
+    `run-suite` hard-codes `:spec` while every other entry point defaults to
+    `*default-reporter*`, and without the replacement `-r dot` would silently do nothing for
+    exactly the FAQ shape.
+  - **Deliberate divergences from `rove.ros`** (re-evaluation triggers): (1) failure exits **1**,
+    not `-1` — the 8-bit mask turns `-1` into 255. (2) No `COVERAGE`/sb-cover arm; still a
+    non-goal. (3) The target's own stdout is NOT swallowed into a broadcast stream the way
+    `run-file-tests` does it — rove's `*report-stream*` is
+    `(make-synonym-stream '*standard-output*)` and only `call-with-suite` rebinds
+    `*standard-output*` back to `*rove-standard-output*`, so on the `run-suite` path swallowing
+    stdout would swallow the REPORT. **If rove ever moves that rebinding into `run-suite-tests`,
+    the swallow becomes safe and worth taking.** (4) A `.lisp` file whose `defpackage` names no
+    locatable system is LOADED instead of erroring (upstream would hand the name to
+    `asdf:load-system` and die), then, if nothing recorded a report, the suite of the package it
+    declares — CL-USER when it declares none — is run; without that the FAQ demo is not a valid
+    target. (5) Running NO test exits 1 with a message on stderr, where upstream's
+    `(every #'passedp '())` is a vacuous pass — a suite that stopped registering its tests is the
+    silence the command exists to end. (6) A system designator, not only a `.lisp`/`.asd` FILE,
+    is a target. (7) `-r` accepts only `spec|dot|none`, an unknown one being a command-line error
+    (exit **2**, as for any bad argv, keeping "the command was wrong" distinct from "a test
+    failed") rather than upstream's run-time attempt to load `rove/reporter/<style>`; `none` IS
+    loaded up front, because `make-reporter` would otherwise load it at RUN time, which only the
+    interpreter can do. Colors follow the destination (terminal yes, pipe and every compiled
+    artifact no) instead of rove's unconditional ON.
+  - **Not done, deliberately**: a plain `rontolisp FILE` still exits 0 after a red suite (a
+    top-level form is a statement, `.kb/toplevel-statement-values.md`). A stderr hint was
+    weighed and REJECTED: the generic run path would have to know about rove and read
+    `*last-suite-report*`, and doing it only where it is cheap (the interpreter) is precisely
+    the lagging-backend divergence this tree forbids.
+  - Coverage: `RoveTestCommandE2eTest` (8 tests — the red/green verdict on all four backends as
+    SUBPROCESSES, since a compiled `uiop:quit` is a real `System.exit`/`proc_exit`; the reporter
+    option; the defines-only fallback; a system target and a `.asd`; the no-test rule) plus two
+    `RontoLispCliTest` cases for the help text and the exit-2 argv errors. **No ci-spec case is
+    possible**: that driver concatenates every case into ONE program and cannot supply a file
+    target. Docs: `doc/{en,ja}/guides/testing.md` leads with the subcommand.
+- **cl-mustache 0.12.3** — `ClMustacheE2eTest` (the API surface: `render`/`render*` over string
+  and pathname templates, `compile-template`, `define`, `make-context` with `:data`/`:partials`,
+  alist / hash-table / chained contexts, sections, inverted sections, partials, dynamic partial
+  names, lambda sections) and `ClMustacheSpecE2eTest`, both all four; vendored, MIT/Expat.
+  Nothing about the `.asd` needed widening (its `#.` `:version` reads `version.lisp-expr`
+  beside the source, which the compile-time pathname fold resolves). **It was the FORCING
+  FUNCTION for seven general gaps, none cl-mustache-specific**: `ctypecase`; **`gethash`'s
+  present-p surviving a FUNCTION return** (`context-get` is a `defmethod` whose body IS
+  `(gethash ...)`, so without it every `{{name}}` rendered empty — `.kb/multiple-values.md`);
+  `#.` read-time eval seeing `*load-truename*` on the COMPILE path; `signal` of an unhandled
+  condition being fatal on the three compiled backends (a missing partial signals
+  `partial-cant-be-found`); hash-table printing (`{{.}}` over a map — it TRAPPED both WASM
+  backends); WASM float printing (the spec's Decimal Interpolation cases); and a
+  runtime-computed absolute path resolving against the preopen NAMES rather than fd 3 (file
+  templates and `*load-path*` partial lookup, `.kb/read-load-streams.md`).
+  `ClMustacheSpecE2eTest` loads the vendored, machine-generated **194-case mustache spec suite
+  verbatim** through a 20-line `plan`/`is`/`finalize` stand-in for `prove` (not in the tree)
+  that prints ONE character per case, so the expected line pins the pass/fail SET and not just
+  the count. **158/194 is parity with upstream, not a shortfall**: SBCL 2.x fails
+  byte-identically the same 36 through the same shim — null interpolation, dotted names pushing
+  a context frame, and the entire 26-case `~inheritance.json` module, which postdates the 1.1.2
+  spec cl-mustache targets. Implementing those is a change to cl-mustache, so **the number is a
+  REGRESSION pin: if it moves, a rontolisp change moved it.** Upstream's `t/test-api.lisp`
+  scores 20/20 on all four but is NOT in the E2E: its
+  `#.(or *load-truename* *compile-file-truename*)` bakes the HOST path of `t/test.mustache`,
+  which the container the WASM legs run in does not have — `ClMustacheE2eTest` covers the same
+  ground with a template the program writes to `target/` at run time.
+- **jose** — `JoseE2eTest` (HS/RS/PS/none, integer claims with the claim-check keywords, every
+  correctable condition, two malformed tokens; every line pinned against SBCL 2.2.9 on the same
+  sources AND the HMAC tokens against Python's `hmac`/`hashlib`, the HS256 one being the token
+  jose's README publishes) and `JoseTestSuiteE2eTest` (upstream's OWN `jose/tests/jwt` through
+  rove, the `rontolisp test jose/tests/jwt` shape), both all four, shared dependency path in
+  `JoseSystems`; vendored with trivial-utf-8. A `:class :package-inferred-system`, so its files
+  load off their own `defpackage` headers with no `:components`. **The whole dependency graph
+  loads unpatched too** — cl-json, cl-base64, ironclad, split-sequence, assoc-utils, alexandria,
+  trivial-utf-8 (over the `mgl-pax-bootstrap` shim); no slice, override or leaf shim of its own.
+  Two general bugs were found finishing it: `with-input-from-string` over a MUTABLE character
+  vector cast to `String` on the JVM, and **a multi-pair `setq` whose later value form builds a
+  closure** — `FreeVarAnalyzer` walked the first pair only, so the closure's captures were never
+  recorded: a silently wrong answer on the JVM and `Cannot find variable for closure` on WASM.
+  The second is cl-json's, not jose's: `set-custom-vars` expands to exactly that shape and
+  `json-rpc.lisp`'s `invoke-rpc` is its only caller, so it sat behind the tree-shaker until a
+  program loaded rove beside cl-json.
+  `jose/tests/jws` is excluded and always will be: it `(:use #:pem)` and `pem` is in no
+  Quicklisp dist, so it runs on no implementation. **Non-goal: JWE** — jose implements JWS/JWT
+  only; re-scope if upstream adds it.
+- **iterate 1.6.0** — `IterateE2eTest` (all four; a macro over pure computation, so Preview 1 is
+  in; vendored, no `extraSystemPath`). Acceptance list: the numeric driver in every spelling
+  (`from`/`to`/`downto`/`below`/`by`), the sequence drivers (`in`, `on`, `in-string`,
+  `in-vector`, `in-hashtable`), every accumulator (`collect`/`collecting` with and without
+  `into`, `sum`, `multiply`, `maximize`, `minimize`, `counting`, `always`, `thereis`,
+  `appending`, `reducing`), the control clauses (`repeat`, `with`, `while`, `until`,
+  `if-first-time`, `finally`) and a nested `iter` feeding a named outer one through
+  `(in outer ...)`; byte-identical against SBCL 2.2.9. Nothing iterate-specific lives in the
+  tree — the five prerequisites are owned per topic: the `,.` splice spelling and the native
+  `#L`/`#nL` reader macro ([defmacro-backquote.md](defmacro-backquote.md),
+  [reader-features.md](reader-features.md)), the `ldiff`/`sublis`/`gentemp` prelude defuns,
+  `with-hash-table-iterator` ([hash-tables.md](hash-tables.md)), and **`macro-function`
+  answering nil for rontolisp's own `while`** ([symbol-runtime-api.md](symbol-runtime-api.md)) —
+  iterate's walker asks before it recognizes its own clauses, and a yes made
+  `(iter ... (while test))` loop forever. Feature-level pin: ci-spec
+  `sharp-l-comma-dot-and-hash-table-iterator`.
+  Two shape facts, both matching SBCL: a clause head is an ordinary symbol read in the CURRENT
+  package, so `(iterate:iter (for i from 1 to 5) ...)` leaves `FOR` in `CL-USER` and iterate does
+  not recognize it — the exercise does `(use-package :iterate)`, as a consumer must on any
+  implementation; and iterate's own `iterate-test.lisp` does NOT ride along, being written
+  against `rt`, which is not vendored. **Trigger to revisit**: vendoring `rt` (or porting the
+  suite to rove) would replace the acceptance list with upstream's ~700 tests. Note the trivia
+  DIVERGENCE RECORD above — iterate WORKING does not by itself fire its trigger;
+  `trivia.balland2006` still additionally needs `type-i`.
+- **array-operations 1.2.1** — ci-spec `array-operations-enablement-language-group`; the
+  quickload is manual (its tree and let-plus's live in the quicklisp cache). A
+  `:class :package-inferred-system` over `src/`, loading over let-plus + anaphora; the API runs
+  IDENTICALLY on all four (`(aops:generate #'identity 7 :position)` / `each` / `permute`). The
+  `.asd` needed ONE parse widening, `:long-name` joining the tolerated metadata. Everything else
+  is general and owned per topic: the nested `with-slots` instance temp ([clos.md](clos.md), for
+  clunit2, the library's own test framework), the read-modify-write place once-only rule
+  ([argument-evaluation-order.md](argument-evaluation-order.md), for alexandria's `shuffle`), a
+  `defmacro` a macro expands to inside a `progn` or a closing `let`
+  ([defmacro-backquote.md](defmacro-backquote.md) — for let-plus and anaphora; without it the
+  JVM and both WASM builds died on "The function DEFMACRO is undefined"), the standard
+  float-range constants read like `pi` (`LispReader.CL_FLOAT_CONSTANTS`,
+  `doc/*/reference/data-types.md`), and an ITERATIVE `equalp` over an array and a list
+  (`LispPreludeLibrary`; the old per-element `labels` recursion blew the interpreter stack
+  comparing two 720-element rank-5 arrays).
+  **Standing result**: upstream's own clunit2 suite scores **217/219 here against SBCL 2.2.9's
+  219/219 on the same sources**. The remaining 2 are ONE rontolisp answer and it is CONFORMANT:
+  `(array-element-type (make-array 4 :element-type 'fixnum))` answers `T` where SBCL answers
+  `FIXNUM` — `array-element-type` returns the UPGRADED element type and there is no
+  fixnum-specialized array here to upgrade to. Nothing about array-operations itself is left.
+  The two gaps that closed were the RANK-0 array (`(make-array nil :initial-element x)`, now the
+  empty case of the row-major model — `.kb/array-literals.md`, "The RANK-0 array") and the ARRAY
+  TYPE LATTICE (`type-of` answering `T` for every array instead of `(simple-vector 4)` /
+  `(simple-array single-float (4))` — `.kb/declarations-type-checks.md`, "The array type
+  lattice").
+
+## Why this is a shim and not real ASDF (spike)
+
+Upstream ASDF 3.3.7 (one file, 14,130 lines, 700 KB, MIT) **loads end to end** in the
+INTERPRETER with the patch set below, and `find-system` then really walks
+`*central-registry*`, probes the filesystem, `load`s a real `.asd` and runs `defsystem` ->
+`register-system-definition` -> `parse-defsystem` -> `parse-component-form`. Three things
+decided against it:
+
+1. **It is a PORT, not a drop-in.** Upstream refuses on an implementation it does not know
+   (`#-(or abcl allegro ... sbcl scl xcl) (error "ASDF is not supported on your
+   implementation")`), `detect-os` refuses without `:unix`/`:windows`/`:genera`/`:os-macosx`,
+   and there are 34 `not-implemented-error` call sites behind 230 implementation reader
+   conditionals — each a `#+rontolisp` branch carried as a fork or a replayed patch set forever.
+   (The port itself is cheaper than the count suggests: filling exactly ONE hole, `getcwd`, made
+   `probe-file*` / `ensure-pathname` / `sysdef-central-registry-search` work, because
+   `probe-file` / `truename` / `directory "*.*"` are already real.)
+2. **Startup.** Loading it costs 2.85 s wall / 16.7 s CPU on the interpreter against a 0.40 s
+   floor for `(print 1)` on the same jar — ~7x the whole current startup. Only "do not load it
+   unless the program needs it" makes that survivable, and the shim gives that for free.
+3. **The real blocker was OURS**: every hash table was keyed by `key.print()` with an `EQUAL`
+   test and there was no `eq` table, while ASDF's session cache keys are lists holding live
+   components whose graph is cyclic — a `StackOverflowError` in `LispHashTable.put`. **Both
+   halves have since landed** (a table places a key by a depth-capped structural hash and
+   decides it with `equal`, `.kb/hash-tables.md`; `print-object` is dispatched for a nested
+   object), so the cyclic-key blocker is gone. Reasons 1 and 2 still decide it. Still no `eq`
+   table.
+
+Also worth knowing when widening the shim: the compile paths resolve systems at COMPILE time
+(`cli/LoadInliner` splices component sources, `.kb/load-inliner.md`) and the browser playground
+has no filesystem, so a runtime facility like real ASDF could only ever run inside the
+compiler's own interpreter as a plan resolver — never in the artifact.
+
+**Re-evaluate when** any of the three change: the hash-table/identity model gains `eq` tables, a
+per-library shim fix stops being the cheaper move (watch the open uiop items), or upstream gains
+a portable no-`compile-file` mode that removes the port surface.
+
+### Reproducing the spike
+
+1. Fetch `asdf.lisp` from `https://common-lisp.net/project/asdf/archives/asdf.lisp`.
+2. `sed 's/UIOP/XIOP/g; s/uiop/xiop/g; s/ASDF/XSDF/g; s/asdf/xsdf/g'` — the built-in packages
+   are pre-seeded. (`defpackage` over an EXISTING package now MODIFIES it as CL requires
+   (`.kb/packages.md`), so a re-run needs the `asdf`/`uiop` SYSTEM renaming only.)
+3. Rewrite each of the 39 `uiop/package:define-package` forms to `defpackage`, expanding
+   `:use-reexport` transitively into an `:export` list and adding `:common-lisp` to every
+   `:use`; drop `:recycle` / `:unintern` / `:intern`. `PackageResolver` accepts only
+   `:use-reexport` of the extra clauses and rejects `:intern` outright.
+4. Delete the port guard, `(pushnew :unix *features*)`, and make `not-implemented-error` a
+   no-op, so the run measures what lies BEYOND the missing port.
+5. Inject the missing `cl` names as per-package defuns (an unregistered name is a
+   package-INTERNAL symbol here, so one definition per `in-package`).
+
+## The `.asd`-as-data boundary is not what stops portableaserve
+
+**Measured against `portableaserve-20190813-git`: widening the boundary into an evaluator buys
+nothing.** The refusal we hit first is `acl-compat/acl-compat.asd`'s top-level
+`(defun lisp-system-shortname () ...)`, called from a
+`(defmethod component-pathname ((c unportable-cl-source-file)) ...)` routing each unportable
+component into a per-implementation subdirectory. That method is not decoration — four source
+files come from it — so honoring it means evaluating the `.asd`, and a `defmethod` on
+`component-pathname` also means real `operate` machinery. But behind that door, in the order
+they bite:
+
+1. **Dependencies that do not exist here**: `:depends-on (:puri :cl-ppcre :ironclad :cl-fad
+   #+sbcl :sb-bsd-sockets #+sbcl :sb-posix)`. `puri` and `cl-fad` are absent even from this
+   machine's quicklisp cache (`quri` is not `puri`); `sb-bsd-sockets`/`sb-posix` are SBCL
+   *contrib modules* and cannot exist here by construction.
+2. **Component #1 needs SBCL's packages to be real.** `acl-compat/packages.lisp` is a plain
+   `(:file "packages")` — nothing the parser has any say over — and does
+   `#+sbcl (:use #:sb-bsd-sockets)`, `#+sbcl (:use #:sb-ext #:sb-gray)`,
+   `#+sbcl (:import-from :sb-ext #:without-package-locks #:string-to-octets)`. Without `#+sbcl`
+   announced, the `.asd` itself signals its own
+   `#-(or lispworks cmu sbcl mcl openmcl clisp allegro) (error ...)`. So the two ways through
+   are "announce `#+sbcl` and need SBCL's internals" or "announce nothing and be refused by
+   name".
+3. **The files the method selects are a port of SBCL's internals**: `acl-mp.lisp` carries 62
+   `sb-thread:` references, `acl-excl.lisp` uses `sb-posix:stat`/`lstat`/`s-isdir`,
+   `acl-sys.lisp` uses `sb-ext:*posix-argv*`, `acl-socket.lisp` uses
+   `sb-sys:wait-until-fd-usable`.
+
+**SBCL on this machine cannot load it either** (`Component :PURI not found, required by
+#<SYSTEM "acl-compat">`), so there is not even an oracle to diff against. The conclusion is
+about WHAT `acl-compat` is: a per-implementation compatibility layer whose whole job is to name
+one host's internals. An `.asd` evaluator would move the failure four files later. The reachable
+path to the AllegroServe chapters is the substitution ladder — a shim `net.aserve` /
+`acl-compat` surface (`publish`, `request-query`, `with-http-response`, `with-http-body`) over
+rontolisp's own HTTP server (`.kb/http-server.md`, `.kb/clack.md`).
+
+**Re-evaluate when** something OTHER than a per-implementation compatibility layer is refused by
+that gate — a `.asd` whose top-level code is portable CL computing component lists or pathnames.
+
+### The _Practical Common Lisp_ book corpus, as a standing result
+
+`practicals-1.0.3` (twelve ASDF systems over eleven chapters, loaded through this shim with
+`--system-path`) diffed byte for byte against SBCL 2.2.9.debian on the interpreter. **The corpus
+needed no shim, no replacement `.asd` and no leaf-module substitution.**
+
+- Byte-identical: `spam` (ch.23, over the quicklisp cl-ppcre), `binary-data` (24), `id3v2` (25),
+  `mp3-database` (27), `html` (30/31), `macro-utilities` (8) and `profiler` (32)'s
+  `show-timing-data`.
+- Differ ONLY by the missing right margin: `simple-database` (3), `test-framework` (9),
+  `pathnames` (15).
+- Chapters 15, 25 and 27 need `--feature sbcl`; 26/28/29 are the `net.aserve` rows above.
+- `macro-utilities` used to diverge because `gensym`'s default prefix was lowercase `g` — a name
+  like `"g3"` needs `|...|`-escaping under `:case :downcase` where SBCL's uppercase `"G3"` does
+  not. Fixed by matching CL's uppercase `G` default (a name-model conformance miss). The counter
+  value itself never matches across implementations regardless.
+- `fifth`..`tenth` follow the same `(nth k x)` macro expansion as `first`..`fourth`, on all four
+  backends and the compiled `eval` runtime interpreter.

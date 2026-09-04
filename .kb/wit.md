@@ -1,1311 +1,772 @@
 # `am.ik.wit` — the WIT parser/printer library, the settled type mapping, `wit-export` and `wit-import`
 
-Todo 125 (step 1 of the todo-124 "WIT as universal IDL" roadmap), 2026-07-13, plus
-todo 126 (`rontolisp:wit-export`, 2026-07-14) and todo 127 (`rontolisp:wit-import`,
-2026-07-14). Everything downstream (component imports, todo-128) consumes this model;
-nothing downstream re-parses text.
+Everything downstream consumes this model; nothing downstream re-parses text.
 
 ## The library (`am.ik.wit`)
 
-A language-independent sibling of `am.ik.jvm` / `am.ik.wasm`: **no rontolisp imports,
-no external dependencies** (jspecify annotations only, like its siblings).
+Language-independent sibling of `am.ik.jvm` / `am.ik.wasm`: **no rontolisp imports, no
+external dependencies** (jspecify annotations only).
 
-- `WitLexer` — lossless: every input character lands either in a token's `text` or in
-  the **leading trivia** (whitespace + comments, verbatim) of the following token; the
-  `EOF` token carries the trailing trivia. Keywords are not distinguished lexically
-  (contextual in the parser), so `record`/`type`/... work as names where WIT allows.
-  Version tokens (`0.3.0`, `0.2.0-rc-...`) stop before `.{` so
-  `use wasi:io/streams@0.2.0.{...}` lexes correctly.
-- `WitParser` — recursive descent over the corpus grammar: package headers AND explicit
-  `package ... { }` blocks in one file, worlds (`import`/`export` by path or inline
-  extern, `include`, `use`), interfaces, funcs (`async`/`static`/`constructor`),
-  `record`/`variant`/`enum`/`flags`/`resource`/`type`, all type uses incl.
-  `stream`/`future`/`borrow`/`own`/`result<_, E>`, `%`-escaped ids, `@since`/`@unstable`/
-  `@deprecated` gates (parsed and preserved as `WitMeta.Gate`), and `///` doc comments
-  (extracted from trivia into `WitMeta.docs`, which is how `--scaffold-wit` copies them
-  into the generated Lisp).
+- `WitLexer` — lossless: every character lands in a token's `text` or in the **leading
+  trivia** of the following token; `EOF` carries the trailing trivia. Keywords are
+  contextual. Version tokens stop before `.{` so `use wasi:io/streams@0.2.0.{...}` lexes.
+- `WitParser` — recursive descent: package headers AND `package ... { }` blocks in one file,
+  worlds (`import`/`export` by path or inline extern, `include`, `use`), interfaces, funcs
+  (`async`/`static`/`constructor`), `record`/`variant`/`enum`/`flags`/`resource`/`type`, all
+  type uses incl. `stream`/`future`/`borrow`/`own`/`result<_, E>`, `%`-escaped ids,
+  `@since`/`@unstable`/`@deprecated` gates (`WitMeta.Gate`), `///` docs (`WitMeta.docs`).
   Out-of-corpus constructs (nested namespaces, `include ... with`, fixed-size lists) are
-  clear `WitParseException`s with line/column.
-- Model: records/sealed interfaces — `WitDocument` > `WitItem` (PackageHeader /
-  PackageBlock / World / InterfaceDef / Use / TypeAlias / RecordDef / VariantDef /
-  EnumDef / FlagsDef / ResourceDef / FuncDef / ImportRef / ImportNamed / ExportRef /
-  ExportNamed / Include), `WitType` (Prim / Named / ListOf / OptionOf / ResultOf /
-  TupleOf / StreamOf / FutureOf / BorrowOf / OwnOf), `WitFunc`, `WitMeta`,
-  `WitPackageName`, `WitRef`. Record equality = model equality (the idempotence tests
-  rely on it). `Wit` is the static-factory construction DSL (meta-less; construct
-  records directly to attach docs/gates) — generated code and future binders build
-  models through it.
-- `WitParser.parseLocated(source)` -> `WitParseResult` = the document PLUS a
-  `WitLocations` (todo 126), the start offset / 1-based line / column of every item.
-  The positions live **beside** the model in an `IdentityHashMap`, never on the
-  `WitItem` records: the records are pure values and `WitRoundTripTest` pins their
-  structural equality (two structurally equal documents must stay `equals`), which a
-  position field would break. Lookup is therefore BY IDENTITY — the item must be the
-  very instance this parse produced, not a copy. `WitLocations.none()` for a document
-  built in memory. This is what lets `wit-export` say `world.wit:5: ...`.
-- **`%`-escaping is source syntax, not part of the name** (`WitIdentifiers`, todo 126).
-  An identifier colliding with a WIT keyword is written `%type` / `%flags` / `%stream`
-  — all three occur in the vendored WASI WIT — but the identifier, and the
-  component-model `label` it becomes, is the bare word. So the **model holds the bare
-  name**: `WitParser` strips the `%` at every identifier position and `WitPrinter`
-  puts it back on exactly the keywords, which keeps the corpus round-trip and the
-  `wasm-tools` byte-diff green while every consumer (a name check, an export label, a
-  future binder) sees the real name. In `parseType` an escaped word is ALWAYS a
-  `Named` type — `%list` is a user type called `list`, never the built-in. Before the
-  fix the model carried `%flags` verbatim (it had leaked into the generated
-  `WasiWitDefinitions` too), and a world using one lowered to an invalid export label.
-- `WitPrinter`, two modes:
-  - `printVerbatim(tokens)` — byte-identical reassembly of a lexed source.
-  - `print(document)` — **canonical**, byte-compatible with `wasm-tools component wit`
-    output: 2-space indent, blank line between interface members EXCEPT consecutive
-    `use` clauses (they group), blank line between a world's import and export blocks,
-    NO blank between the world and the first package block, TWO blanks between package
-    blocks, trailing commas on all members, docs as `///` lines, gates as
-    `@name(key = value)`.
+  `WitParseException`s with line/column.
+- Model: `WitDocument` > `WitItem` (PackageHeader / PackageBlock / World / InterfaceDef / Use
+  / TypeAlias / RecordDef / VariantDef / EnumDef / FlagsDef / ResourceDef / FuncDef /
+  ImportRef / ImportNamed / ExportRef / ExportNamed / Include), `WitType` (Prim / Named /
+  ListOf / OptionOf / ResultOf / TupleOf / StreamOf / FutureOf / BorrowOf / OwnOf),
+  `WitFunc`, `WitMeta`, `WitPackageName`, `WitRef`. **Record equality = model equality.**
+  `Wit` is the static-factory construction DSL (meta-less).
+- `WitParser.parseLocated` -> `WitParseResult` = document + `WitLocations` (offset / 1-based
+  line / column per item). **Positions live BESIDE the model in an `IdentityHashMap`, never
+  on the records** — a field would break the structural equality `WitRoundTripTest` pins;
+  lookup is BY IDENTITY. `WitLocations.none()` for in-memory documents. This is what lets
+  `wit-export` say `world.wit:5: ...`.
+- **`%`-escaping is source syntax, not part of the name** (`WitIdentifiers`): the model holds
+  the BARE name, `WitPrinter` puts `%` back on exactly the keywords. In `parseType` an
+  escaped word is ALWAYS a `Named` type (`%list` is a user type). Trap: carrying `%flags`
+  verbatim leaked into generated `WasiWitDefinitions` and made a world lower to an invalid
+  export label.
+- `WitPrinter.printVerbatim(tokens)` = byte-identical reassembly; `print(document)` =
+  **canonical**, byte-compatible with `wasm-tools component wit` (2-space indent, blank line
+  between interface members EXCEPT consecutive `use` clauses, blank line between a world's
+  import and export blocks, NO blank between the world and the first package block, TWO
+  blanks between package blocks, trailing commas, `///` docs, `@name(key = value)` gates).
+- `WitResolver` (the parser's model is syntactic; a binder needs resolution):
+  `findInterface(reference)` (indexed over package headers AND `package foo:bar { }` blocks;
+  fully-qualified id, version-less id, or bare name), `resolveType(scope, name)` (own
+  definitions first, then transitively through `use` clauses, following aliases,
+  cycle-guarded), `functions(iface)` (freestanding funcs + every resource's constructor /
+  methods / statics, in document order, tagged with the owning resource).
 
-Tests (`WitRoundTripTest`): the whole in-repo corpus — `src/wasm-component/deps/**`
-(34 files incl. the hard ones, `wasi:filesystem/types` and `wasi:http/types`),
-`uni*.wit`, `examples/count-vowels/count_vowels_component.wit`, and the 7 fixtures —
-(1) verbatim round-trips byte-identically and parses, (2) canonical print reproduces
-the wasm-tools-formatted fixtures byte-for-byte, (3) on the hand-written files the
-canonical print re-parses to the identical model and is print-stable.
+`WitRoundTripTest` covers the whole in-repo corpus (`src/wasm-component/deps/**`, 34 files
+incl. `wasi:filesystem/types` and `wasi:http/types`; `uni*.wit`;
+`examples/count-vowels/count_vowels_component.wit`; 7 fixtures): verbatim round-trips
+byte-identically and parses; canonical print reproduces the wasm-tools-formatted fixtures
+byte-for-byte; on hand-written files canonical print re-parses to the identical model and is
+print-stable.
 
-## `--emit-wit` emission after the migration (todo 125 refactor)
+## `--emit-wit`
 
-`WitEmitter` no longer splices text into classpath templates. The fixed per-variant
-document (world imports + fixed export + reachability-pruned package definitions) is
-**`WasiWitDefinitions`** — Java code building the model through `Wit`, GENERATED by
-`WasiWitDefinitionsGenerator` (test sources) from per-variant fixtures under
-`src/test/resources/am/ik/rontolisp/codegen/wasm/component/wit/`; byte-identical
-package blocks shared by several variants are emitted once (the 0.3 GC trio shares
-cli/clocks/filesystem/random), per-variant projections (wasm-tools prunes each
-package to what the component reaches) get suffixed methods. `WitEmitter`
-appends each `rontolisp:wasm-export` Decl as a typed `export` world item and prints
-canonically. Oracles, strongest first:
+`WitEmitter` splices no text. The fixed per-variant document (world imports + fixed export +
+reachability-pruned package definitions) is **`WasiWitDefinitions`**, GENERATED by
+`WasiWitDefinitionsGenerator` (test sources) from fixtures under
+`src/test/resources/am/ik/rontolisp/codegen/wasm/component/wit/`; shared byte-identical
+package blocks are emitted once (the 0.3 GC trio shares cli/clocks/filesystem/random),
+per-variant projections get suffixed methods. `WitEmitter` appends each
+`rontolisp:wasm-export` Decl as a typed `export` world item and prints canonically.
 
-- `WitOracleE2eTest` — live byte-diff against `wasm-tools component wit` (local only),
-  at `OptimizeLevel.NONE` **and** at `DEFAULT`, where the fixed surface itself is pruned.
-- `WasiWitDefinitionsTest` — always-on byte pin of every variant against its fixture. It
-  pins the UNPRUNED document: pruning is `WitEmitter`'s filter over it, not a second
-  fixture set, so a variant stays one captured artifact.
-- `WitEmitterTest` — line pins of the export shapes.
-- New in the round-trip suite: the emitted WIT re-parses through our own parser.
+Oracles, strongest first: `WitOracleE2eTest` (live byte-diff against
+`wasm-tools component wit`, local only, at `OptimizeLevel.NONE` **and** `DEFAULT`);
+`WasiWitDefinitionsTest` (always-on byte pin of every variant against its fixture — it pins
+the UNPRUNED document, pruning being `WitEmitter`'s filter over it); `WitEmitterTest` (line
+pins); the round-trip suite re-parses emitted WIT.
 
-The old `component/wit/*.wit` main resources are DELETED (the resource-config
-`WitEmitter` entry too); the fixtures are test resources. Regen is now three-phase
-(blobs -> jar -> fixtures -> generator); see `src/wasm-component/README.md`. The
-deliberate deviation is kept: the http-server fixture restores the handler
-interface's `use types.{request, response, error-code};` clause that `wasm-tools`
-drops (its own output does not re-parse); ours must stay consumable.
+The old `component/wit/*.wit` main resources are DELETED (with the resource-config
+`WitEmitter` entry). Regen is three-phase (blobs -> jar -> fixtures -> generator),
+`src/wasm-component/README.md`. **Deliberate deviation**: the http-server fixture restores
+the handler interface's `use types.{request, response, error-code};` clause `wasm-tools`
+drops (its own output does not re-parse).
 
-## Variant renaming (same change, user-requested)
+Two differences from any input file: `///` docs are NOT carried (a component's type does not
+store them and the oracle byte-diffs against `wasm-tools`; they ARE carried into
+`--scaffold-wit`'s output as `;;;`), and **the emitted world is always
+`package root:component; world root`**.
 
-The blob/variant vocabulary was rebuilt around what each surface IS (the old names
-grew by accretion: "http" meant fetch because fetch came first, then the server got
-"serve"):
+## Variant vocabulary
 
-| old | new |
-|---|---|
-| `http` | `http-client` (fetch, `wasi:http/outgoing-handler`) |
-| `serve` | `http-server` (`rontolisp:http-handler`, `wasi:http/incoming-handler`) |
-| `serve-http` | `http-server-client` |
-| `sock` | `sockets` |
+`http` -> `http-client`, `serve` -> `http-server`, `serve-http` -> `http-server-client`,
+`sock` -> `sockets`. Applied to `WitEmitter.VARIANT_*`, fixture names, ALL blob artifacts
+(`import-block-http-server.bin`, `adapter-http-server-p1.wasm`, `mem-http-client.wasm`),
+`src/wasm-component` sources (`core-http-server.wat`, `core-sockets.wat`), regen scripts,
+docs. **Mode vocabulary unchanged**: the `serve` boolean on `WasmLispCompiler`,
+`WasmServeComponentBuilder`, `buildServe` still name the `wasmtime serve` MODE. Historical:
+`http-client` and `http-server-client` are gone — serve and serve+fetch are ONE `http-server`
+variant.
 
-Applied to `WitEmitter.VARIANT_*`, fixture names, ALL blob artifacts
-(`import-block-http-server.bin`, `adapter-http-server-p1.wasm`,
-`mem-http-client.wasm`, ...), the `src/wasm-component` sources
-(`core-http-server.wat`, `core-sockets.wat`, ...), regen scripts and docs.
-**Mode vocabulary is unchanged**: the `serve` boolean on `WasmLispCompiler`,
-`WasmServeComponentBuilder`, `buildServe` still name the `wasmtime serve` MODE.
-(HISTORICAL NOTE: the `http-client` variant died when fetch became a Lisp
-library over user imports, and the `http-server-client` variant died with the
-todo-002 wasi:http@0.3 cutover -- serve and serve+fetch are ONE `http-server`
-variant now; mode `serve` -> variant `http-server`.)
+## The settled type mapping (`compiler/WitTypeMapper`)
 
-## The settled type mapping (`compiler/WitTypeMapper`, todo 124's table)
+`rep(WitType)` / `repOfDefinition(WitItem)` — the ONE vocabulary the binders consult, no
+codegen. Pinned by `WitTypeMapperTest` (reversing a cell is a breaking change). Scalars per
+the settled table (`s64`/`u64` bignum-safe), `record`=keyword plist, `enum`=keyword,
+`variant`=tagged list, `flags`=keyword list, `option<T>`=value-or-nil, `tuple`=list,
+`resource`/`borrow`/`own`=opaque integer handle (`.kb/read-load-streams.md`),
+`stream`/`future`=UNSUPPORTED until language async.
 
-`WitTypeMapper.rep(WitType)` / `repOfDefinition(WitItem)` — the ONE vocabulary the
-future binders consult; no codegen. Pinned by `WitTypeMapperTest` (reversing a cell
-after 126+ ship = breaking change). Highlights: scalars per the todo-124 table
-(`s64`/`u64` bignum-safe), `record`=keyword plist, `enum`=keyword, `variant`=tagged
-list, `flags`=keyword list, `option<T>`=value-or-nil, `tuple`=list,
-`resource`/`borrow`/`own`=opaque integer handle (one handle space,
-`.kb/read-load-streams.md`), `stream`/`future`=UNSUPPORTED until language async.
+**`result<T, E>` = a condition on EVERY backend.** Ok arm = the return value (payload-less ok
+returns `nil`); error arm **signals a condition** carrying the mapped `E`, catchable with
+`handler-case`. wasm-GC compiles `handler-case` through the exception-handling proposal
+(`.kb/error-handling.md`), so it is catchable everywhere except `--no-gc`; catching requires
+wasmtime 37+. Rejected: `(values ok err)` — a bare call silently swallows the error arm
+(nil-ok vs error is ambiguous for `result<option<list<u8>>, error>`), it bypasses the
+condition system (`usocket:socket-error`), `--no-gc` has no spill channel, and migrating later
+breaks user code.
 
-### Decision record: `result<T, E>` = option (c) — condition on EVERY backend
+**`list<u8>` = a string carrying the bytes one-per-char** (the fetch/socket marshalling
+convention), NOT a list of ints. Distinct from WIT `string` (canonical-ABI UTF-8).
 
-Chosen 2026-07-13 (user decision after weighing all three todo-124 options):
+- **Trap**: a rontolisp string is stored UTF-8 (`.kb/wasm-gc-strings.md`), so staging one for
+  a `list<u8>` parameter ENCODES — every byte >= 0x80 doubles, mangling a binary body. So a
+  `list<u8>` / `stream<u8>` PARAMETER also takes a packed `(unsigned-byte 8)` vector
+  (`TYPE_I8ARR`), staged as raw array bytes:
+  `WasmComponentImportCompiler.emitStageBytesParam`, a `ref.test TYPE_I8ARR` whose else-arm is
+  the string staging verbatim. A `string` parameter is untouched.
+- **A `stream<u8>` READ answers a packed byte vector, not a string.** The chunk lifts through
+  `_bytes_from_mem` (raw octets, no decode) in both places a completion is lifted: the async
+  built-in wrapper's immediate path (`emitReadLift`) and the scheduler's kind-1 settle
+  (`_sched_dispatch`). `WasmLispCompiler.streamReadsBytes` forces that ONE helper on
+  (`bytesFromMem = bytesBoundary || streamReadsBytes`), so a module without a byte-stream read
+  is byte-identical. sockets.lisp's chunk cursor moved from `%str-byte-length`/`%str-byte-ref`
+  to `length`/`aref`; stdin.lisp assembles a character from bytes (`%stdin-read-char-f`);
+  `%str-byte-*` stay for the WRITE side.
+- **`list<u8>` RESULTS still lift as byte strings**, so a stream chunk and a list value differ
+  in representation. **Trigger**: the day a `list<u8>` result consumer wants octets, move it to
+  `_bytes_from_mem` and retire the byte-string lift.
 
-- The ok arm is the return value; a payload-less ok arm (`result` / `result<_, E>`)
-  returns `nil`. The error arm **signals a condition** carrying the mapped `E`
-  payload, catchable with `handler-case` — on every backend, as the contract.
-- The WASM catch mechanism this presupposed landed with todo-129
-  (2026-07-14): the wasm-GC backends compile `handler-case` through the
-  exception-handling proposal (`.kb/error-handling.md`, "WASM (todo-129)"), so
-  the error arm is catchable on every backend except `--no-gc` and the
-  todo-128 prerequisite is SATISFIED. Programs that catch require
-  wasmtime 37+ (exception-handling support).
-- Why not (a) multiple values `(values ok err)`: it is implementable today with zero
-  new machinery (a `(values ...)` tail in the synthesized stub rides the `%mv-spill`
-  channel, `.kb/multiple-values.md`) and would even give wasm-GC recoverability now —
-  but a bare call silently swallows the error arm (nil-ok vs error is ambiguous, e.g.
-  `kv:get`'s `result<option<list<u8>>, error>`), it bypasses the todo-116 condition
-  system the rest of the tree uses (`usocket:socket-error`), `--no-gc` has no spill
-  channel at all, and migrating (a)->(c) later breaks user code. (b)->(c) and
-  (c)-now differ only in documentation stance; (a) is the one trap.
-- Why the divergence is safe: user code written for (c) on interpreter/JVM uses
-  `handler-case`, which today does not COMPILE on WASM — so there is no working WASM
-  program whose behavior changes when catching lands; it starts compiling, unchanged.
-
-### Decision record: `list<u8>` = string, and (since) a packed byte vector too
-
-A rontolisp string carrying the bytes one-per-char — the existing fetch/socket
-marshalling convention — NOT a list of ints (consing per byte would make large
-wasi:keyvalue values pathological). Distinct from WIT `string` (canonical-ABI UTF-8).
-
-**The divergence did show up**, and it is what widened this: a rontolisp string is
-stored UTF-8 (`.kb/wasm-gc-strings.md`), so staging one for a `list<u8>` parameter
-ENCODES — every byte >= 0x80 doubles, and a binary HTTP response body left the
-serve component mangled. So a `list<u8>` / `stream<u8>` parameter ALSO takes a
-packed `(unsigned-byte 8)` vector (`TYPE_I8ARR`), staged as its raw array bytes:
-`WasmComponentImportCompiler.emitStageBytesParam`, a `ref.test TYPE_I8ARR` whose
-else-arm is the string staging verbatim. A `string` parameter is untouched, so
-only the three `list<u8>`-shaped sites move a byte of emitted output. The `:bytes`
-boundary type's `_bytes_copy` is the same idea one layer out and is still
-core-module only (below).
-
-**And a `stream<u8>` READ answers a packed byte vector, not a string (todo-370,
-2026-08-15).** The chunk of a byte-stream read -- http.lisp's `body-stream-read`,
-sockets.lisp's recv, stdin.lisp's stdin -- lifts through `_bytes_from_mem` (raw
-octets, no decode) in both places a completion is lifted: the async built-in
-wrapper's immediate path (`emitReadLift`) and the scheduler's kind-1 settle
-(`_sched_dispatch`). `WasmLispCompiler.streamReadsBytes` (any async wrapper over a
-u8 stream) forces that ONE helper on -- `bytesFromMem = bytesBoundary ||
-streamReadsBytes`, its two `:bytes` siblings still gated on the designator -- so a
-module without a byte-stream read is byte-identical. Why: an HTTP body stream is a
-BYTE stream on every backend (`.kb/fetch-http.md`), and the byte-string lift was the
-one place the component made it text (a lossless text, as it happens -- the bytes
-were kept raw -- but `read-all`'s decode and `%http-drain`'s join now speak vectors,
-and one representation across the four backends is the point). sockets.lisp's chunk
-cursor moved from `%str-byte-length`/`%str-byte-ref` to `length`/`aref`, and
-stdin.lisp assembles a character from bytes the way sockets always did (its
-`%stdin-read-char-f`); `%str-byte-*` stay for the WRITE side, where a payload is a
-string whose bytes are the wire's. `list<u8>` RESULTS (kv:get's value, a header
-`field-value`) still lift as byte strings -- the decision above -- so a stream chunk
-and a list value differ in representation; **re-evaluation trigger**: the day a
-`list<u8>` result consumer wants octets, move it to `_bytes_from_mem` the same way
-and retire the byte-string lift.
-
-## What todo 125 deliberately did NOT do
-
-No Lisp-facing surface (that arrived with todo 126 below, for the export side only).
-Zero user-visible behavior change — emitted `.wasm` and `.wit` bytes are identical
-before/after (pinned by `WitOracleE2eTest` + the integration suite).
-
-## `rontolisp:wit-export` — implementing a world (todo 126, 2026-07-14)
-
-Step 2 of todo-124. "This program implements this WIT world": the `.wit` becomes the
-single source of truth for the export surface, so the `:params`/`:returns` lists stop
-being maintained next to a separately-generated `.wit` that can drift until
-`wasmtime --invoke` fails at run time.
+## `rontolisp:wit-export` — implementing a world
 
 ```lisp
 (defun count-vowels (text) ...)          ; WIT: count-vowels: func(text: string) -> s32
-
 (rontolisp:wit-export "count_vowels_component.wit" :world root)
 ```
 
-The path resolves against the source file's directory (`SourceLoader.resolve`, like
-`load`); `:world` takes a bare symbol or a string and may be omitted when the file
-declares exactly one world.
+Path resolves against the source file's directory (`SourceLoader.resolve`); `:world` takes a
+symbol or string and may be omitted when the file declares exactly one world.
 
-### It LOWERS into `wasm-export` — there is no new export path
-
-`compiler/WitExportDirective.lower()` returns, per world export and in world order, one
-`(rontolisp:wasm-export 'name :params '(...) :param-names '(...) :returns ... [:async t])`
-form — exactly what a hand-written export list would have carried. The backends never
-see `wit-export`; `WasmComponentBuilder` / `NoGcWasmComponentBuilder` / `WasmExportCompiler`
-gained no export path. **The emitted component is byte-identical to the hand-written
-equivalent** on both wasm-GC `--component` and `--no-gc --component` (verified by hand;
-count-vowels("Hello, World!") = 3 under wasmtime 46 on both). That byte-identity is the
-whole point of the design: a front-end for machinery that already exists.
-
-`WitExportDirective` itself does no I/O and no codegen — the caller hands it the WIT
-*text* (so the interpreter and the browser playground can source it their own way) and
-splices the returned forms. Its `Backend` enum (`WASM_GC` / `WASM_NO_GC` / `OTHER`)
-selects the backend-specific rules only.
+**It LOWERS into `wasm-export` — there is no new export path.**
+`compiler/WitExportDirective.lower()` returns, per world export in world order, one
+`(rontolisp:wasm-export 'name :params '(...) :param-names '(...) :returns ... [:async t])`.
+The backends never see `wit-export`. **The emitted component is byte-identical to the
+hand-written equivalent** on wasm-GC `--component` and `--no-gc --component` — the design
+invariant. `WitExportDirective` does no I/O and no codegen (the caller hands it the WIT
+text); its `Backend` enum (`WASM_GC` / `WASM_NO_GC` / `WASM_COMPONENT` / `OTHER`) selects
+backend rules only.
 
 Three call sites:
 
-- **Compile path**: `eval/WitExportInliner`, run in `RontoLispCli.compileToFile` between
-  the library splices and `LibraryDefunPruner` — after `LoadInliner` /
-  `UserMacroExpander` (so every `defun`, including a load-spliced or macro-produced one,
-  is a literal top-level form and can be checked) and before the pruner (so the
-  synthesized `wasm-export` directives still count as pruning roots). Backend from
-  `RontoLispCli.witBackend` (`.wasm` + `--no-gc` -> `WASM_NO_GC`, `.wasm` -> `WASM_GC`,
-  else `OTHER`).
-- **Browser playground**: `RontoPlayground.frontend` runs the SAME inliner. It lives in
-  `eval` (not `cli`) and reads the WIT through an injected `SourceLoader` precisely so
-  that it can: the playground has no filesystem and backs the loader with its map of
-  uploaded files, the same way `(load "x.lisp")` works there. Without this the compile
-  buttons met the directive itself and died with `Cannot compile: rontolisp:wit-export`
-  while the REPL on the same page happily checked it — do not regress that asymmetry.
-  (`.wit` is in the upload picker's `accept` list.)
-- **Interpreter**: `LispEvaluator.evalWitExport` — a SPECIAL FORM, so it runs the same
-  contract check against the functions defined **so far**. Put the directive at the END
-  of the file (where the scaffold puts it). It exports nothing and returns `nil`;
-  `Backend.OTHER`, so the WASM-only rules (`s64`, `async`) are not imposed. A plain
-  `rontolisp prog.lisp` therefore already catches a drifted world.
+- **Compile path** `eval/WitExportInliner`, run in `RontoLispCli.compileToFile` **after**
+  `LoadInliner` / `UserMacroExpander` (so every `defun` is a literal top-level form) and
+  **before** `LibraryDefunPruner` (so the synthesized directives count as roots). Backend from
+  `RontoLispCli.witBackend`.
+- **Browser playground** `RontoPlayground.frontend` runs the SAME inliner. It lives in `eval`
+  (not `cli`) and reads the WIT through an injected `SourceLoader` because the playground has
+  no filesystem. **Do not regress**: without it the compile buttons died with
+  `Cannot compile: rontolisp:wit-export` while the REPL checked it fine. (`.wit` is in the
+  upload picker's `accept` list.)
+- **Interpreter** `LispEvaluator.evalWitExport` — a SPECIAL FORM checking the functions
+  defined **so far**, so **put the directive at the END of the file**. Exports nothing,
+  returns `nil`, `Backend.OTHER` (WASM-only rules `s64` / `async` not imposed).
 
-### The world is the AUTHORITATIVE export list (two strict rules)
-
-- A hand-written `rontolisp:wasm-export` in a program that ALSO has a `wit-export` is a
-  **compile error** (`WitExportInliner`). Declare the export in the world, or drop the
-  `wit-export` directive. There is no merge — the component's exports and the `.wit` can
-  never disagree.
-- `rontolisp:http-handler` + `wit-export` is a **compile error** (`RontoLispCli`, serve
-  mode): a serve-mode component's only export is `wasi:http/handler@0.3.0`, so a world
-  of function exports could not be honored. Say so rather than drop it.
+**The world is the AUTHORITATIVE export list.** A hand-written `rontolisp:wasm-export`
+alongside a `wit-export` is a compile error (`WitExportInliner`) — no merge.
+`rontolisp:http-handler` + `wit-export` is a compile error (`RontoLispCli`, serve mode): a
+serve component's only export is `wasi:http/handler@0.3.0`.
 
 ### The contract checks
 
-Every one names the WIT file and line (`WitLocations`), e.g.
-`count-vowels.wit:5: export 'count-vowels' has no matching (defun count-vowels ...) in the program`:
+Each names the WIT file and line (`WitLocations`):
 
-- no world / several worlds and no `:world` / `:world` names a world the file lacks; a
-  world with no exports at all
+- no world / several worlds and no `:world` / `:world` names a missing world; a world with no
+  exports
 - an export the world declares but the program does not define
-- **arity** mismatch; an exported `defun` with `&optional` / `&rest` / `&key` / ... — an
-  exported function takes REQUIRED parameters only
+- **arity** mismatch; an exported `defun` with `&optional` / `&rest` / `&key` (REQUIRED
+  parameters only)
 - a duplicate export
-- an export name that is not a component-model `label` (lower-kebab-case), or the
-  reserved `run` (the component's `wasi:cli/run` entry point) — the WIT makes the
-  *correct* name authoritative, instead of the ad-hoc `:as` fix-up
-- an export that names an interface the file **does not define** (a bare `wasi:*`
-  reference, e.g. `export wasi:http/incoming-handler@0.2.0;`): there are no functions to
-  check, and a program's `wasi:http/handler@0.3.0` export comes from
-  `rontolisp:http-handler`. An interface **defined in the same file** is NOT rejected —
-  it is implemented member by member (see "Interface exports" below)
-- an inline `import name: func(...)` in the world — rejected, not silently dropped; it is
-  the one import shape `rontolisp:wit-import` cannot bind either (it is not an interface),
-  and the message says to declare the interface to call instead
-- a WIT type outside the export boundary's subset (every fixed-width integer `s8` …
-  `u64`, plus `f64` / `bool` / `string` — the table is `compiler/BoundaryType`, and the
-  error message's "supported: ..." list is DERIVED from it, so the two cannot drift).
-  The error names the type's SETTLED house representation via `WitTypeMapper.rep` and
-  says the component boundary cannot marshal it yet — "your `record` is a keyword plist,
-  marshalling it is not built yet", not a bare refusal. The message itself carries no
-  `.todo` pointer: a todo file is deleted the moment the work lands, so a user-facing
-  string must never name one
-- an `async func` under `--no-gc --component` (the adapter-free reactor has no async
-  machinery). Conversely, an `async func` in the world SETS `:async t` on the lowered
-  export: the stackful-async lift an I/O-bearing export needs is now **stated by the
-  WIT** instead of remembered by hand, so "cannot block a synchronous task" stops being
-  a runtime trap you discover late (`.kb/wasi-component.md`, Tier 3).
+- an export name that is not a component-model `label` (lower-kebab-case), or the reserved
+  `run`
+- an export naming an interface the file does NOT define (a bare `wasi:*` reference); one
+  defined in the same file is implemented member by member
+- an inline `import name: func(...)` in the world — rejected, not silently dropped (the one
+  import shape `wit-import` cannot bind either)
+- a WIT type outside the export subset (every fixed-width integer `s8`…`u64`, plus `f64` /
+  `bool` / `string` — `compiler/BoundaryType`, from which the message's "supported: ..." list
+  is DERIVED so they cannot drift). The error names the settled house representation via
+  `WitTypeMapper.rep`. **The message carries no `.todo` pointer**: a todo file is deleted the
+  moment the work lands, so a user-facing string must never name one
+- an `async func` under `--no-gc --component`. Conversely an `async func` SETS `:async t` on
+  the lowered export (`.kb/wasi-component.md`, Tier 3)
 
-A world's `import` items and type definitions are IGNORED by the check (a component's
-imports come from the fixed WASI adapter surface, and the type definitions only spell
-out the signatures). Only the export side is a contract today.
+A world's `import` items and type definitions are IGNORED. Only the export side is a contract.
 
 ### The integer boundary — the exact-or-trap rule (`compiler/BoundaryType`)
 
-**The vocabulary IS the WIT spelling.** `BoundaryType` is the single table both WIT
-front-ends and both WASM backends consult: `:s8 :s16 :s32 :s64 :u8 :u16 :u32 :u64`, plus
-`:float` (f64 — rontolisp has no internal f32, `.kb/wasm-export-no-wasi.md`), `:bool`,
-`:string` and the rontolisp-only `:s-expr` / `:void`. **`:int` and `:long` are permanent
-aliases of `:s32` / `:s64`, normalized at parse time** — that normalization is exactly
-what makes a program written against the pre-WIT vocabulary compile to the same bytes as
-its WIT-spelled twin (`WitExportInlinerTest.theLegacyIntSpellingCompilesToTheSameBytesAsItsWitSpelling`).
-Before this the designator set predated WIT and had no unsigned member, so the canonical
-component-model tutorial world (`add: func(x: u32, y: u32) -> u32`) could not be
-implemented without editing the upstream `.wit`.
+**The vocabulary IS the WIT spelling**: `:s8 :s16 :s32 :s64 :u8 :u16 :u32 :u64`, plus `:float`
+(f64 — no internal f32, `.kb/wasm-export-no-wasi.md`), `:bool`, `:string`, and the
+rontolisp-only `:s-expr` / `:void`. **`:int` / `:long` are permanent aliases of `:s32` /
+`:s64`, normalized at parse time**, which makes a pre-WIT program compile to the same bytes as
+its WIT twin (`WitExportInlinerTest.theLegacyIntSpellingCompilesToTheSameBytesAsItsWitSpelling`).
 
-**Emitting `s32` for a `u32` is not a benign shortcut.** The component model has NO
-integer subtyping (`Explainer.md`: subtyping is relaxed only for `instance`/`component`),
-so `wasm-tools component targets -w <world> <wit> <component>` REJECTS a component that
-lifted the wrong code, and so do jco and every `bindgen`-based host. The pinning test is
-`WitOracleE2eTest` (byte-for-byte against `wasm-tools component wit`).
+**Emitting `s32` for a `u32` is not benign**: the component model has NO integer subtyping, so
+`wasm-tools component targets`, jco and every `bindgen` host REJECT it. Pinned by
+`WitOracleE2eTest`.
 
-**The rule: the boundary carries the value exactly, or the wrapper traps.** It is uniform
-over the whole family, `:int`/`:long` included, and it is derived from two intervals
-(`BoundaryType.range()` vs. the backend's house-integer range) rather than enumerated per
-type — inbound needs a check when the house range does not contain the type's, outbound
-when the type's does not contain the house range. Per backend:
+**The rule: the boundary carries the value exactly, or the wrapper traps** — derived from two
+intervals (`BoundaryType.range()` vs the backend's house-integer range), not enumerated per
+type.
 
-| | wasm-GC (house = exact integer: `i31ref` or the boxed i64, `.kb/wasm-bignum.md`) | `--no-gc` (house = `i64`) |
+| | wasm-GC (house = exact integer: `i31ref` or boxed i64) | `--no-gc` (house = `i64`) |
 |---|---|---|
-| inbound `s8`/`s16`/`u8`/`u16` | plain `ref.i31` (always fits) | `i64.extend_i32_s` / `_u` |
-| inbound `s32`/`u32` | widen to i64 (`i64.extend_i32_s` / `_u`) and normalize through `_int_new` (`WasmExportCompiler.emitBoxWideInt`): an i31 when it fits, the boxed exact integer otherwise — exact over the whole range | `i64.extend_i32_s` / `_u`, exact |
-| inbound `s64` | `_int_new`, exact over the whole range | pass-through, exact |
-| inbound `u64` | traps below 0 as an i64 (a value at or above 2^63 has no exact place in the signed i64 box), then `_int_new` | traps below 0 (same reason) |
-| outbound, up to 32 bits | `WasmEmitHelper.castFloatGetF64` (which converts an exact integer via `f64.convert_i64_s` — exact for anything a 32-bit type can state) then a trapping `i32.trunc_s/u_f64`; sub-32-bit types add one explicit range check (one `i32` scratch local, reserved by `WasmExportCompiler.scratchTypes` right after the parameter slots) | normalize to i64 (`i64.trunc_s/u_f64` for a float body), `NoGcWasmCompiler.emitBoundaryRangeGuard`, then `i32.wrap_i64` |
-| outbound `s64`/`u64` | `WasmExportCompiler.emitWideIntResult`: an exact integer (i31 or box) unboxes through `_int_val` — exact over the full signed 64-bit range, where the f64 route would round past 2^53; a float/ratio result goes `castFloatGetF64` + trapping `i64.trunc_s/u_f64`; a negative from a `u64` export traps on both paths | pass-through (float body: trapping trunc) |
+| inbound `s8`/`s16`/`u8`/`u16` | plain `ref.i31` | `i64.extend_i32_s` / `_u` |
+| inbound `s32`/`u32` | widen to i64 then `_int_new` (`WasmExportCompiler.emitBoxWideInt`) | `i64.extend_i32_s` / `_u` |
+| inbound `s64` | `_int_new` | pass-through |
+| inbound `u64` | traps below 0, then `_int_new` | traps below 0 |
+| outbound <= 32 bits | `WasmEmitHelper.castFloatGetF64` then trapping `i32.trunc_s/u_f64`; sub-32-bit adds one range check (an `i32` scratch local reserved by `WasmExportCompiler.scratchTypes` right after the parameter slots) | normalize to i64, `NoGcWasmCompiler.emitBoundaryRangeGuard`, `i32.wrap_i64` |
+| outbound `s64`/`u64` | `WasmExportCompiler.emitWideIntResult`: exact integer unboxes through `_int_val` (exact over the full signed 64-bit range where f64 would round past 2^53); a float/ratio goes `castFloatGetF64` + trapping `i64.trunc_s/u_f64`; a negative from `u64` traps both paths | pass-through (float body: trapping trunc) |
 
-`:s64` needs neither check nor narrowing on `--no-gc`, which is why its **pass-through
-wrapper elision** (`isPassThroughExport`) survives untouched.
+`:s64` needs neither check nor narrowing on `--no-gc`, which is why its pass-through wrapper
+elision (`isPassThroughExport`) survives. The old wasm-GC 64-bit compile error is retired (the
+boxed exact-integer path, `.kb/wasm-bignum.md`, fired its trigger). **Residual asymmetry**: a
+host-supplied `u64` >= 2^63 has no exact representation — an export wrapper TRAPS, while a
+`--component` import lift degrades to the float approximation
+(`WasmComponentImportCompiler.boxI64`; hosts send `u64::MAX` as a "no limit" sentinel).
 
-**The 64-bit compile error on wasm-GC is retired.** The old refusal ("requires
---no-gc") existed because the house integer's float fallback was exact only below
-2^53, so an `s64`/`u64` boundary would have silently rounded exactly the values the
-type exists to express. Its stated re-evaluation trigger — "if the wasm-GC backend
-ever gains an exact wide-integer representation" — fired when the boxed exact-integer
-path landed (`.kb/wasm-bignum.md`), and the rejection (formerly
-`WasmLispCompiler.wideIntegerType` and a backend check in
-`WitExportDirective.designator`) was removed in the same sweep that widened the
-wrappers. The one residual asymmetry: a host-supplied `u64` at or above 2^63 still has
-no exact representation — an export wrapper TRAPS on it (the declared type is a
-promise the program makes), while a `--component` import lift degrades it to the float
-approximation (`WasmComponentImportCompiler.boxI64`; the host is allowed to send
-`u64::MAX` as a "no limit" sentinel, so trapping would break real programs).
+**The import side is deliberately NOT widened**: `WasmImportCompiler`'s set is still
+`{:s32, :float, :bool, :string, :s-expr}` and `WitImportDirective.designatorOf` maps the whole
+`Rep.INT` family to `:s32`, so a `u32` import above 2^30 keeps its narrowing. Filed as
+`.todo/169`.
 
-**Arithmetic promotes past `i31` now.** wasm-GC `+`/`-`/`*` compute the exact-integer
-fast path in i64 and normalize through `_int_new` (`.kb/wasm-bignum.md`), so `(+ x 1)`
-on a `:u32` argument of `1073741823` answers `1073741824` and the boundary carries it —
-the old failure shape (the wrapped negative stopped by the boundary trap) is gone,
-along with the wide-integer float box it was documented against.
+### Interface exports — `export docs:adder/add;`
 
-**The import side is deliberately NOT widened here.** `WasmImportCompiler`'s accepted set
-is still `{:s32, :float, :bool, :string, :s-expr}` and `WitImportDirective.designatorOf`
-still maps the whole `Rep.INT` family to `:s32`, so a `u32` import above 2^30 keeps its
-pre-existing narrowing. Widening it is its own change: an import's inbound value is a
-host promise, so the exact-or-trap rule has to be worked through for every WASI import a
-program already makes, and it moves the emitted bytes of every Preview 1 `wit-import`
-program. Filed as `.todo/169`, which retires this paragraph when it lands.
+`wit-export` resolves the reference through `WitResolver`
+(`findInterface(ref.target().toString())` -> `canonicalId`), then checks and lowers **each of
+the interface's functions** like a freestanding export. An inline interface
+(`export ops: interface { ... }`) works the same, keyed by its plain name. The only
+`ExportRef` that stays a no-op is `wasi:cli/run`.
 
-### Interface exports — `export docs:adder/add;` (the idiomatic WIT shape)
-
-A world usually exports an **interface**, not a bare function — the common shape splits
-the interface definition from the world:
-
-```wit
-package docs:adder@0.1.0;
-interface add { add: func(x: s32, y: s32) -> s32; }
-world adder { export add; }          // <- an ExportRef to the same-file interface
-```
-
-`wit-export` implements this: it resolves the reference through `WitResolver`
-(`findInterface(ref.target().toString())` → `canonicalId` = `docs:adder/add@0.1.0`),
-then checks and lowers **each of the interface's functions** exactly like a freestanding
-export — same arity/`&optional`/type checks, same `:param-names`. An **inline** interface
-(`export ops: interface { ... }`) works the same way, keyed by its plain name. The only
-`ExportRef` that stays a no-op is the fixed `wasi:cli/run` entry point; a reference to an
-interface the file does not define is still the error above.
-
-**The lowering carries the interface id.** Each member lowers to a `wasm-export` with a
-new **`:interface "docs:adder/add@0.1.0"`** option (`WasmExportCompiler.Decl.iface`,
-component-facing, string). Exports sharing an `iface` are bundled by
+Each member lowers with **`:interface "docs:adder/add@0.1.0"`**
+(`WasmExportCompiler.Decl.iface`). Exports sharing an `iface` are bundled by
 `WasmComponentBuilder.appendFuncExports` / `NoGcWasmComponentBuilder` into **one exported
-component instance** (`ComponentWriter.componentInstanceFromFuncs` +
-`exportInstance(id, idx)`), the same machinery the serve path uses for
-`wasi:http/handler`. So the component genuinely exports `docs:adder/add`, not a flattened
-top-level `add` — `wasm-tools component wit` prints `export docs:adder/add@0.1.0;` and
-`wasmtime --invoke 'add(1,2)'` resolves it inside that instance. Byte-identity to a
-hand-written `wasm-export … :interface …` still holds; the front-end adds no new emit
-path, per the design invariant. A flat (no `:interface`) export stays a top-level
-`exportFunc` and is byte-identical to before.
+component instance** (`ComponentWriter.componentInstanceFromFuncs` + `exportInstance(id, idx)`),
+the machinery the serve path uses. A flat export stays a top-level `exportFunc`,
+byte-identical to before.
 
-**GOTCHA — an instance EXPORT consumes an instance index.** In the GC builder the run
-instance is `11 + userIfaces`, but its `export wasi:cli/run` statement *itself* introduces
-another component instance (`12 + userIfaces`), so the first free index for an exported
-interface's from-exports instance is **`13 + userIfaces`** (not 12). Getting this wrong
-points the export at the run instance and `wasm-tools component wit` prints the wrong
-interface body (it *validates*, so only the WIT diff catches it). The `--no-gc` builder
-has no run instance and only the print block's import instances, so its base is
-`FIRST_PRINT_INSTANCE (2)` with print, `0` without.
+**GOTCHA — an instance EXPORT consumes an instance index.** In the GC builder the run instance
+is `11 + userIfaces`, but its `export wasi:cli/run` statement itself introduces another
+component instance (`12 + userIfaces`), so the first free index for an exported interface's
+from-exports instance is **`13 + userIfaces`** (not 12). Getting it wrong points the export at
+the run instance and prints the wrong interface body — it *validates*, so only the WIT diff
+catches it. `--no-gc`'s base is `FIRST_PRINT_INSTANCE (2)` with print, `0` without.
 
-`--emit-wit` reconstructs the interface: `WitEmitter` emits `export <id>;` in the world
-plus a trailing `package <ns>:<pkg>@<ver> { interface <name> { … } }` block (reusing
-`WitImportWorldEmitter.packageOf` / `interfaceNameOf`). Pinned line-level in
-`WitEmitterTest` and **byte-for-byte vs `wasm-tools`** in `WitOracleE2eTest`
-(`gcInterfaceExportWitMatchesWasmToolsByteForByte`,
-`noGcInterfaceExportWitMatchesWasmToolsByteForByte`). Note wasm-tools separates an
-interface's functions with a blank line — the emitter matches.
+`--emit-wit` reconstructs it: `export <id>;` in the world plus a trailing
+`package <ns>:<pkg>@<ver> { interface <name> { … } }` block (reusing
+`WitImportWorldEmitter.packageOf` / `interfaceNameOf`). Pinned in `WitEmitterTest` and
+byte-for-byte by `WitOracleE2eTest.gcInterfaceExportWitMatchesWasmToolsByteForByte` /
+`noGcInterfaceExportWitMatchesWasmToolsByteForByte`. wasm-tools separates an interface's
+functions with a blank line — the emitter matches.
 
-### `:param-names` on `wasm-export`, and what it makes true
+### `:param-names`
 
-`rontolisp:wasm-export` gained `:param-names '(text)` (a quoted list of symbols or
-strings, each a component-model label; must match the `:params` arity). It fills
-`WasmExportCompiler.Decl.paramNames`, **defaulting to `p0`, `p1`, ...** exactly as
-before. `WasmComponentBuilder.FuncExport` and `NoGcWasmComponentBuilder` now encode
-those labels into the lifted component function type instead of synthesizing `p<i>`
-themselves, and `WitEmitter` prints them.
+`:param-names '(text)` (quoted symbols/strings, each a component-model label, arity matching
+`:params`) fills `WasmExportCompiler.Decl.paramNames`, **defaulting to `p0`, `p1`, ...**.
+`WasmComponentBuilder.FuncExport` and `NoGcWasmComponentBuilder` encode those labels into the
+lifted function type; `WitEmitter` prints them. So a `wit-export` world round-trips through
+`--emit-wit` with its own parameter names while every pre-existing artifact stays
+byte-identical. Ignored on the core-export (Preview 1 / `--no-wasi`) path.
 
-Consequence: a world implemented with `wit-export` (which fills `:param-names` from the
-WIT) **round-trips through `--emit-wit` with its own parameter names**. Because the default is
-unchanged, every pre-existing artifact — and every `--emit-wit` output of a program that uses
-neither `wit-export` nor `:param-names` — is byte-identical. Ignored on the core-export
-(Preview 1 / `--no-wasi`) path, where a WASM parameter has no name.
+### `--emit-wit` on the export side is a FIXPOINT, not a check
 
-### The `--emit-wit` round-trip: the export side is a FIXPOINT, not a check
+**It cannot fail.** `world export item -> WitExportDirective.lower() -> wasm-export Decl ->
+component function type -> WitEmitter -> emitted world export item`, and the accepted boundary
+set (`s32`/`s64`/`f64`/`bool`/`string`, `:async t` <-> `async func`, `:param-names`) is exactly
+the set that maps one-to-one both ways. Re-emitting and diffing (as
+`examples/count-vowels/README.md` does) is a regression test on OUR type mapping. What catches
+a drifted program is the contract check, on every backend.
 
-Do NOT describe (or "harden", or add a test for) `--emit-wit` on a `wit-export` program
-as a consistency check of the export side. **It cannot fail.** The pipeline is
+What `--emit-wit` uniquely reports is the **IMPORT side** (a component's WASI surface comes
+from the BUILD — the blob variant plus what the program reaches). A 6-line hand-written world
+compiles to a 149-line component type (10 `wasi:*` imports + `export wasi:cli/run`); a
+`rontolisp:fetch` call makes it 216 lines / 12 imports; `rontolisp:tcp-*` adds `wasi:sockets`.
+Under `--optimize` the fixed surface is pruned to what the shaken core reaches (the greeter
+drops to 3 imports) — which is why the emitted world is filtered from the SAME set the builder
+prunes the import block to (`WasmComponentBuilder.wasiInterfaces` -> `WitEmitter.emit`'s
+`wasiInterfaces` argument), and why `WitOracleE2eTest` grew `--optimize` legs.
 
-```
-world export item -> WitExportDirective.lower() -> wasm-export Decl
-                  -> component function type -> WitEmitter -> emitted world export item
-```
+A `wit-import` under `--component` is printed into the world (pruned to the bound members) and
+byte-diffed by the oracle. A world's `import` ITEMS are still not the authoritative import list.
 
-and the accepted boundary type set (`s32`/`s64`/`f64`/`bool`/`string`, plus `:async t`
-<-> `async func`, plus `:param-names` since todo 126) is EXACTLY the set that maps
-one-to-one in both directions. Names, parameter names, types and async-ness therefore
-come back out identical by construction — an export line that disagreed with the input
-world would be a bug in `WitTypeMapper`/`WitEmitter`, never a drift in the user's
-program. Re-emitting and diffing (as `examples/count-vowels/README.md` does with
-`git diff --exit-code`) is a **regression test on OUR type mapping**; it is worth having
-and it is worth saying so honestly, but it is not checking the user. The thing that
-catches a drifted program is the `wit-export` contract check itself, which runs on every
-backend (interpreter included).
-
-What `--emit-wit` uniquely and genuinely reports is the **IMPORT side**, which
-`wit-export` never looks at (a component's WASI surface comes from the BUILD -- the blob
-variant, plus what the program reaches). Measured on the greeter example: a **6-line**
-hand-written world compiles to a
-component whose real type is **149 lines** — 10 `wasi:*` imports + `export wasi:cli/run`
-around the single declared export; adding a `rontolisp:fetch` call makes it **216 lines**
-/ 12 imports (+ `wasi:http/{types,client}@0.3.0`),
-and `rontolisp:tcp-*` adds `wasi:sockets`. Under `--optimize` it goes the OTHER way too:
-todo-270 prunes the fixed surface to what the shaken core reaches, so the same greeter
-drops to 3 imports. That is exactly why the emitted world is filtered from the SAME set
-the builder prunes the import block to (`WasmComponentBuilder.wasiInterfaces` ->
-`WitEmitter.emit`'s `wasiInterfaces` argument), and why `WitOracleE2eTest` grew its first
-`--optimize` legs: every case there compiled at `OptimizeLevel.NONE`, so a world that
-still advertised a dropped interface would have gone unnoticed. Short of `wasm-tools`, `--emit-wit` is the
-only way to see it, and it is what a host / `jco` must consume. For a program WITHOUT a
-world (hand-written `wasm-export`, or an `:s-expr` export, which has no WIT spelling)
-`--emit-wit` remains the sole generator, as before todo 126.
-
-Since component imports landed (todo 128), the import side is REAL: a `wit-import` under
-`--component` becomes a component-level instance import, and `--emit-wit` prints it into
-the world (pruned to the bound members) — byte-diffed against `wasm-tools component wit`
-by the oracle. A world's `import` ITEMS are still not the authoritative import list (the
-program declares what it calls with a separate `wit-import` directive); `--emit-wit` now
-reports both sides of the component's real type.
-
-The world's payoff on the **browser** is real TODAY, not a promise: a
-`--no-gc --component` world has no imports, so `jco transpile` turns it into a single
-self-contained ESM with zero `import` statements that a page runs with no shim / import
-map / polyfill — the world's export names (kebab-case, camelCased by jco) ARE the
-JavaScript API. Measured on Chrome 149; the GC path's browser limits and the two upstream
-jco gaps are in `.kb/wasi-component.md` ("Components in a browser (jco)").
-
-Two deliberate differences from the input file, in any case:
-
-1. **`///` doc comments are not carried.** A component's *type* does not store them —
-   `wasm-tools component wit` cannot recover them either, and `WitOracleE2eTest`
-   byte-diffs our `--emit-wit` output against that tool, so carrying them would break the
-   oracle. (The docs ARE carried into `--scaffold-wit`'s output as `;;;` comments: that
-   path reads the WIT text, not a component.)
-2. **The emitted world is always `package root:component; world root`**, whatever the
-   input `.wit` called its package and world. That is what a component's type *is*.
+**Browser payoff, today**: a `--no-gc --component` world has no imports, so `jco transpile`
+turns it into a single self-contained ESM with zero `import` statements — the world's export
+names (camelCased by jco) ARE the JavaScript API. Chrome 149; GC-path limits and the two
+upstream jco gaps in `.kb/wasi-component.md`.
 
 ### `--scaffold-wit`
 
-`rontolisp --scaffold-wit world.wit [--world N] [-o impl.lisp]` (stdout without `-o`).
-It short-circuits in `RontoLispCli.run` before the no-positional-argument REPL fallback,
-because it generates a program instead of running one. `cli/WitScaffolder` emits: a
-header, then per export a `;;;` block carrying the WIT `///` docs plus a `;;; WIT:`
-signature line, a `defun` stub whose parameters are the WIT's own names, and a body
-`(error "name is not implemented yet")`; the `wit-export` directive comes LAST, so the
-interpreter's check (which sees only what precedes it) passes. The output **compiles
-unchanged** — the stubs signal at run time, not at compile time, so a world can be filled
-in one export at a time. **Interface exports scaffold too**: `export add;` (a same-file
-interface) and an inline `export ops: interface { ... }` each emit one stub per interface
-function (via `WitResolver` / the inline members), so the idiomatic separated-interface
-world yields the same fillable skeleton as a world of freestanding functions.
+`rontolisp --scaffold-wit world.wit [--world N] [-o impl.lisp]` (stdout without `-o`),
+short-circuited in `RontoLispCli.run` before the REPL fallback. `cli/WitScaffolder` emits a
+header, then per export a `;;;` block with the WIT `///` docs plus a `;;; WIT:` signature
+line, a `defun` stub with the WIT's own parameter names, and a body
+`(error "name is not implemented yet")`; **the `wit-export` directive comes LAST** so the
+interpreter's check passes. The output compiles unchanged (stubs signal at run time).
+Interface exports scaffold too (one stub per interface function).
 
-### What `wit-export` does NOT do: the import side
+### Decision: an `:s-expr` export has NO WIT spelling — never
 
-A world's `import` items still bind nothing, and the contract check still ignores them.
-Since todo 127 a program declares what it CALLS in a separate `rontolisp:wit-import`
-directive naming the interface (next section) — the two directives do not talk to each
-other. An inline `import name: func(...)` in an implemented world stays an error: it is
-the one import shape `wit-import` cannot bind (it is not an interface), so it must not
-read as supported. Making a world's import LIST authoritative the way its export list is
-needs the component boundary — todo-128 (canon lower, the wasi:keyvalue unblocker) —
-and only then does `--emit-wit` become a two-sided check.
+`:s-expr` is a rontolisp-private wire format, not a WIT boundary.
+`examples/browser/minesweeper/minesweeper-wasm.lisp:86-92` (seven exports) and
+`examples/browser/hiragana/recognize.lisp:34` stay on hand-written `rontolisp:wasm-export`
+**permanently** — that directive is the documented escape hatch.
 
-### Decision record: an `:s-expr` export has NO WIT spelling — (a) never (todo 130)
+**Trap**: `:s-expr` is s-expression TEXT crossing as `(ptr, len)` and parsed by the emitted
+runtime reader, while `designator()` maps WIT `string` to `:string`, a DIFFERENT wire format.
+A blind retrofit does not fail — it **compiles**, and the page breaks at run time. Worse,
+`WasmExportCompiler.componentValType()`'s `:string`/`:s-expr` arm lifts BOTH as component
+`string`, so an `:s-expr` export under `--component --emit-wit` prints a valid world which,
+fed back through `wit-export`, yields `:string` designators and a silently different ABI.
 
-**Decision: (a).** `:s-expr` is a rontolisp-private wire format, not a WIT boundary. The
-two demos that use it — `examples/browser/minesweeper/minesweeper-wasm.lisp:86-92` (SEVEN
-exports, every one taking an `:s-expr` and four returning one: the game state in five of
-them, a host-supplied cell ORDER in `place-mines` and mine LAYOUT in `new-game`, because
-the entropy-free reactor cannot call `random`) and
-`examples/browser/hiragana/recognize.lisp:34` (`recognize(:s-expr) -> :string`, the
-576-pixel bitmap as a list) — stay on hand-written `rontolisp:wasm-export`
-**permanently**, and that directive is the documented escape hatch for this shape. "Not
-supported" is the record; silence was the bug.
+Rewriting the demos' data model is the honest long-term home but is **NOT unblocked**: rich
+types landed on the **import** side only; the export boundary still accepts exactly
+`s32`/`s64`/`f64`/`bool`/`string` (`WitExportDirective.designator()`). A rich-type export LIFT
+does not exist. Annotating a WIT `string` as "s-expression text" is rejected — it makes our WIT
+unportable to `wasm-tools` / `wit-bindgen`.
 
-`:s-expr` is s-expression TEXT crossing as `(ptr, len)` and parsed by the emitted runtime
-reader. No WIT type lowers to it: `designator()` maps WIT `string` to `:string`, a
-*different* wire format (an ordinary Lisp string; nothing parses it). So a blind retrofit
-does not fail — it **compiles**, and the page breaks at run time.
+### Decision: `wit-export` grows NO alias mechanism
 
-Worse, the two already collide in the emitted WIT:
-`WasmExportCompiler.componentValType()` (`:645-656`, the `:string`/`:s-expr` arm at
-`:651`) lifts **both** as component `string`, so an `:s-expr` export under
-`--component --emit-wit` prints `export head: func(p0: string) -> string;` — a valid
-world which, fed back through `wit-export`, yields `:string` designators and a silently
-different ABI. Do not "fix" that by teaching the world about `:s-expr`; fix it by not
-putting `:s-expr` in a world.
+`exportForm()` builds the lowered `wasm-export` from the world's label and `LABEL` enforces
+lower-kebab-case, which for a COMPONENT is right (jco maps `count-vowels` -> `countVowels`).
+Core-module demos wanting camelCase keep hand-writing `rontolisp:wasm-export`. An alias option
+would re-introduce the two-places drift the directive kills.
 
-- **(b) rewrite the data model** remains the honest long-term home (minesweeper's state is
-  a plist of ints, the bitmap is 576 numbers; both are a WIT `record` / `list<u8>` that
-  `WitTypeMapper` already names). It is a **rewrite of the demos, not a retrofit**, and it
-  is NOT unblocked: todo-130 assumed todo-128 was its gate, which is **wrong**. Todo-128
-  and todo-133 landed rich types on the **import** side (`canon lower`). The **export**
-  boundary still accepts exactly `s32`/`s64`/`f64`/`bool`/`string`
-  (`WitExportDirective.designator()`, whose own error says "the component boundary cannot
-  marshal it yet"). A rich-type export LIFT is the real gate and does not exist.
-- **(c) annotate a WIT `string`** as "s-expression text": rejected on sight — it makes our
-  WIT unportable to `wasm-tools` / `wit-bindgen`, which is the whole point of emitting WIT.
+The twelve aliased exports: `webgl-heat3d/heat3d.lisp:242` (`totalHeat`),
+`webgl-robot-arm/robot-arm.lisp:939-940` (`setSolver`, `ikError`),
+`webgl-platformer/platformer.lisp:928,932-939` (`setKey`, `getCoins`, `coinTotal`, `getDeaths`,
+`getState`, `getTime`, `getPx`, `getPy`, `getPz`). They MAY migrate (a kebab export is callable
+as `exports["set-key"](...)`, as `examples/browser/rainbow/rainbow.html:109` does) but are left
+alone: the pages call by dot-property camelCase and
+`webgl-platformer/index.html:375` advertises `lisp.getPx()` as the DevTools handle.
 
-Precedent, and why (a) is not a retreat: an earlier round of the import work already
-lowered rich P1 types through `:s-expr` (prin1 out, embedded reader back) and it was
-REVERTED for the same reason (see "Type tiers, restated" below) — a rontolisp-specific
-pseudo-protocol is not a WIT boundary. Rich types need the component boundary; on the
-export side, that boundary is not built yet.
-
-### Decision record: `:as` camelCase vs. the kebab label — `wit-export` is component-facing (todo 130)
-
-**Decision: (ii).** `wit-export` grows **no** alias mechanism. It emits no `:as` —
-`exportForm()` builds the lowered `wasm-export` from the world's label and `LABEL`
-enforces lower-kebab-case, which for a COMPONENT is simply right (jco maps `count-vowels`
--> `countVowels`). Core-module demos that want camelCase JS names keep hand-writing
-`rontolisp:wasm-export`. `wit-export` is **component-facing**; `:as` is the core-module
-fix-up it replaces, not a gap it must close.
-
-The twelve aliased exports are `webgl-heat3d/heat3d.lisp:242` (`totalHeat`),
-`webgl-robot-arm/robot-arm.lisp:939-940` (`setSolver`, `ikError`) and
-`webgl-platformer/platformer.lisp:928,932-939` (`setKey`, `getCoins`, `coinTotal`,
-`getDeaths`, `getState`, `getTime`, `getPx`, `getPy`, `getPz`).
-
-**The cheap third path was measured, and it works: those demos MAY migrate.** A kebab
-export IS callable from JS as `exports["set-key"](...)`, and the tree already does it —
-`examples/browser/rainbow/rainbow.html:109` is `exports["rainbow-html"](ptr, bytes.length)`.
-So this was never a mechanism gap; it is ~12 lines of `index.html`.
-
-**They are left alone anyway**, deliberately: all three pages call by dot-property
-camelCase (`lisp.totalHeat()` at `webgl-heat3d/index.html:372,393`; `lisp.setKey(...)`,
-`lisp.getPx()`, `lisp.ikError()` &c), and `webgl-platformer/index.html:375` advertises
-`lisp.getPx()` as the DevTools-console handle on the running game. On a raw core module
-loaded with `WebAssembly.instantiate` the export name is literal, so migrating buys the
-contract check and pays for it in `lisp["get-px"]()` at every call site and in that
-affordance. The trade is not worth it while the pages load core modules; if one ever
-becomes a component (the `browser/wit-component` route), the world comes with it and the
-camelCase names come back from jco for free.
-
-**(i) an alias mechanism is rejected**, not deferred: a `:as`-carrying option or a
-WIT-level annotation re-introduces exactly the two-places drift the directive was built to
-kill, on the one field the component model says must be canonical. If it is ever wanted,
-it is its own todo, not a line in this one.
-
-## `rontolisp:wit-import` — calling a WIT interface (todo 127, 2026-07-14)
-
-Step 3 of todo-124, the mirror of `wit-export`: *this program CALLS this WIT
-interface*. One WIT file, a different implementation behind it per backend, zero source
-changes — a `wasi:keyvalue` program is developed against an in-memory bucket (a Lisp file
-it `require`s, see the provider decision below), swapped onto a real store by binding one
-provider, and (once todo-128 lands) compiled to a component that talks to a real host.
+## `rontolisp:wit-import` — calling a WIT interface
 
 ```lisp
-;; kv.wit: interface store {
-;;           open: func(identifier: string) -> result<bucket, error>;
-;;           resource bucket { get: ...; set: ...; delete: ...; }
-;;         }
 (rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)
-
-;; ...and, on the backends that dispatch a provider, WHO implements it -- ordinary user
-;; code, ending in (rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'memory-store).
-(require :kv-memory "memory-store.lisp")
-
-(let ((b (kv:open "cache")))         ; a resource = an opaque integer handle
-  (kv:bucket-set b "hello" "world")  ; a method takes its handle as the FIRST argument
-  (print (kv:bucket-get b "hello"))) ; => "world"
+(require :kv-memory "memory-store.lisp")   ; ends in (rontolisp:wit-provide "..." #'memory-store)
+(kv:bucket-set (kv:open "cache") "hello" "world")   ; a handle is the FIRST argument
 ```
 
-Options (`compiler/WitImportDirective.parse`; every name may be written as a string or as
-a bare symbol in the WIT's own spelling):
+Options (`compiler/WitImportDirective.parse`; any name may be a string or a bare symbol):
 
 | option | meaning |
 |---|---|
-| (the path) | the WIT file, resolved against the source file's directory (`SourceLoader.resolve`, like `load`) and READ through `SourceLoader` — the playground has no filesystem |
-| `:interface` | **required**: `wasi:keyvalue/store@0.2.0`, or the version-less `wasi:keyvalue/store`, or the bare `store`. `WitResolver.findInterface` tries those spellings in that order; an ambiguous one resolves to nothing and the error lists every id the file defines. All three lower to the CANONICAL id, which is what the provider registry is keyed by (see below) |
-| `:package kv` | the bindings land in package `kv`: the directive synthesizes `(defpackage kv (:use cl) (:export ...))` and qualifies each binding `kv:member`. Omitted = the current package |
-| `:from "module"` | Preview 1 only: the WASM import module. Defaults to the interface's BARE name (`store`, `gl`) |
+| (the path) | the WIT file, resolved against the source file's directory and READ through `SourceLoader` |
+| `:interface` | **required**: fully-qualified, version-less, or bare name. `WitResolver.findInterface` tries them in that order; an ambiguous one resolves to nothing and the error lists every id the file defines. All three lower to the CANONICAL id, which keys the provider registry |
+| `:package kv` | synthesizes `(defpackage kv (:use cl) (:export ...))` and qualifies each binding `kv:member`. Omitted = the current package |
+| `:from "module"` | Preview 1 only: the WASM import module. Defaults to the interface's BARE name |
 | `:field-style` | `:camel` (default) or `:kebab` — how a WIT label is spelled as the Preview 1 import FIELD |
 
-### It LOWERS — there is no new call path on any backend
+**It LOWERS — no new call path on any backend.** `WitImportDirective.lower()` returns, in WIT
+order, the forms the directive stands for; no I/O, no codegen.
 
-`WitImportDirective.lower()` returns, in WIT order, the forms the directive stands for.
-Like `WitExportDirective` it does no I/O and no codegen (the caller hands it the WIT
-*text*), and its `Backend` enum is shared with the export side.
-
-| backend | the directive becomes |
+| backend | becomes |
 |---|---|
-| Preview 1 WASM (`-o out.wasm`) | one `(rontolisp:wasm-import 'name :from M :as FIELD :params '(...) :returns T)` per WIT function — literally what a hand-written import block carries. An `async func` member carries `:async t` (todo 336), so the binding answers a settled future there like every other backend's async binding (`.kb/wasm-import.md`) |
-| interpreter, JVM (`-o Prog.class`) | the `defpackage`, then one ordinary `(defun kv:bucket-get (self key) (rontolisp::%wit-call "wasi:keyvalue/store@0.2.0" "bucket-get" self key))` per WIT function — an `async func` member binds as an `async-defun` over the provider call instead, so callers get a (settled) future |
-| `--component` | a component-model **instance import** of the interface, each bound function `canon lower`ed (`(rontolisp::%component-import ...)`, below) — on every variant, `rontolisp:http-handler` (serve) included |
+| Preview 1 WASM | one `(rontolisp:wasm-import 'name :from M :as FIELD :params '(...) :returns T)` per WIT function; an `async func` carries `:async t` (`.kb/wasm-import.md`) |
+| interpreter, JVM | the `defpackage`, then one ordinary `(defun kv:bucket-get (self key) (rontolisp::%wit-call "wasi:keyvalue/store@0.2.0" "bucket-get" self key))` per function; an `async func` binds as an `async-defun` |
+| `--component` | a component-model **instance import**, each bound function `canon lower`ed (`(rontolisp::%component-import ...)`) — every variant, `rontolisp:http-handler` included |
 | `--no-gc` | clear error (`WitImportDirective.lower`) — its MVP module imports nothing |
 
-The Preview 1 output is **measured byte-identical** to the hand-written `wasm-import`
-block it lowers to, and identical again under `--optimize` with a never-called import
-shaken out — the same "front-end for machinery that already exists" property `wit-export`
-has on the export side. The interpreter/JVM binding is an **ordinary defun**, so
-`#'kv:bucket-get` / `funcall` / `mapcar` / `eval` work with no extra wiring (the property
-todo 127 flagged as the one most likely to regress); `%wit-call` is itself an ordinary
-defun, from `wit.lisp` below.
+Preview 1 output is **measured byte-identical** to the hand-written `wasm-import` block, and
+identical again under `--optimize` with a never-called import shaken out. The interpreter/JVM
+binding is an **ordinary defun**, so `#'kv:bucket-get` / `funcall` / `mapcar` / `eval` work.
 
-### Where the passes run — and why the IMPORT inliner runs BEFORE `UserMacroExpander`
-
-The asymmetry a future reader will get backwards. Both inliners live in `eval` and read
-through `SourceLoader` (CLAUDE.md's rule — the playground has its own front-end and no
-filesystem), but they sit on opposite sides of macro expansion:
+### Pass order — the IMPORT inliner runs BEFORE `UserMacroExpander`
 
 - **`eval/WitImportInliner` runs straight after `LoadInliner`, BEFORE `UserMacroExpander`**
-  (`RontoLispCli.compileToFile`; `RontoPlayground.frontend` runs it first too). It has to:
-  the names it binds live in a package the WIT names, so the `(defpackage kv ...)` it
-  synthesizes must exist **before anything resolves a `kv:get` call site** — and
-  `UserMacroExpander` resolves every top-level form through its own `PackageResolver`,
-  where an unknown package is a hard error. It can afford to run that early because it
-  needs nothing macro expansion produces: a `wit-import` is checked against a WIT FILE,
-  never against the program.
-- **`eval/WitExportInliner` runs AFTER `UserMacroExpander`**, for the exactly opposite
-  reason: its contract check must see every `defun`, including one a macro or a `load`
-  produced.
+  (`RontoLispCli.compileToFile`; `RontoPlayground.frontend` first too). It has to: the
+  `(defpackage kv ...)` must exist **before anything resolves a `kv:get` call site**, and
+  `UserMacroExpander` resolves every top-level form through its `PackageResolver`, where an
+  unknown package is a hard error. It can run that early because a `wit-import` is checked
+  against a WIT FILE, never against the program.
+- **`eval/WitExportInliner` runs AFTER `UserMacroExpander`** — its contract check must see
+  every `defun`.
 
-After the import inliner, `WitLibrary.process` splices the runtime alongside the other
-Lisp-source library splices, and `LibraryDefunPruner` runs last (as ever).
+Then `WitLibrary.process` splices the runtime, and `LibraryDefunPruner` runs last.
 
-Because the directive is replaced **in place**, put a `wit-import` at the TOP of the file
-— the opposite end from a `wit-export`, which goes last. On the interpreter both are
-special forms evaluated in source order, so the rule is the same there:
-`LispEvaluator.evalWitImport` reads the WIT through its `SourceLoader`, lowers with
-`Backend.OTHER`, calls `ensureWitLoaded()`, and evaluates each lowered form through
-`packageResolver.resolve` so the synthesized `defpackage` registers exactly as a
-hand-written one would.
+**Put a `wit-import` at the TOP of the file** (the opposite end from a `wit-export`). On the
+interpreter both are special forms in source order: `LispEvaluator.evalWitImport` reads through
+its `SourceLoader`, lowers with `Backend.OTHER`, calls `ensureWitLoaded()`, and evaluates each
+lowered form through `packageResolver.resolve`. `PackageResolver` exempts a `wit-import`'s
+arguments from resolution; the names it BINDS it qualifies itself.
 
-`PackageResolver` exempts a `wit-import`'s arguments from resolution (they are WIT data,
-like `wit-export`'s). The names the directive BINDS need no resolution either — it
-qualifies them itself.
+### The provider: the ESCAPE HATCH ONLY, a Lisp callable
 
-### The provider: decision record — the ESCAPE HATCH ONLY, and it is a Lisp callable
+`(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-dispatch)`, and **NO built-in provider
+for anything**. Two decisions:
 
-Todo 127 recommended (c) built-in providers for the WASI interfaces rontolisp already
-implements + (a) an escape hatch spelled
-`(java:bind-wit "iface" (java:new "com.example.RedisStore" url))`. Shipped: **the escape
-hatch, as `(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-dispatch)`, and NO
-built-in provider for anything.** Two separate decisions; keep them apart.
+1. **A provider is an ordinary Lisp callable** taking the member name (a STRING: `"open"`,
+   `"bucket-get"`) then that function's arguments. `java:bind-wit` was dropped: `java:` interop
+   is JVM + interpreter only and **the native binary cannot INTERPRET it** (no reflection
+   metadata, `.kb/java-interop.md`), and it would drag the hand-synced
+   `JavaInterop`/`JavaBridgeTemplate` pair into the boundary for a dispatch that is one `apply`.
+   A Lisp callable is the same value on every backend, so `wit-provide` needs no `#+jvm` guard.
+   `examples/wit/keyvalue/java-store.lisp` is ~35 lines over a `java.util.LinkedHashMap`. A
+   `ServiceLoader` SPI stays rejected.
+2. **No built-in provider ships.** The rule: *rontolisp's core knows the provider MECHANISM. It
+   does not know what `wasi:keyvalue` is.* A built-in store would hardcode one third-party
+   spec's id, member names AND version into the core, and it contradicts the bet that **a new
+   host interface should cost a `.wit` file, not core code.** Cost: one
+   `(require :kv-memory "memory-store.lisp")` of a ~40-line store
+   (`examples/wit/keyvalue/memory-store.lisp`).
 
-**1. The escape hatch is a Lisp callable, not `java:bind-wit`.** A provider is an ordinary
-Lisp callable taking the bound function's Lisp member name (a STRING: `"open"`,
-`"bucket-get"`) followed by that function's arguments. Why (a) was dropped:
+No provider bound signals `rontolisp:wit-error`. `wit-provide` REPLACES any provider (a
+hash-table put). **On the WASM backends the host IS the provider, so a top-level
+`rontolisp:wit-provide` is dropped by `WitImportInliner`** — inert, not a compile error.
 
-- `java:` interop is JVM + interpreter only, and **the native binary cannot INTERPRET it**
-  (no reflection metadata, `.kb/java-interop.md`) — the escape hatch would be dead in the
-  configuration most users actually run.
-- it would drag the hand-synced `JavaInterop`/`JavaBridgeTemplate` pair (overload
-  selection by cost, sequence marshalling, callback proxying) into the WIT boundary for a
-  dispatch that is one `apply`.
-- a Lisp callable is the same value on every backend that has a provider at all, so
-  `wit-provide` needs no `#+jvm` guard around it.
+### The runtime is `wit.lisp` — neither backend gained a codegen case
 
-A user who wants a Java-backed store loses nothing: they write a few lines of Lisp over
-the existing `java:` interop — a function dispatching on the member string into
-`java:call` — and hand THAT to `wit-provide`. `examples/wit/keyvalue/java-store.lisp` is
-exactly that, ~35 lines over a `java.util.LinkedHashMap`. (b), a `ServiceLoader` SPI,
-stays rejected: invisible magic plus a native-image reflection problem.
+`eval/WitLibrary` + `src/main/resources/am/ik/rontolisp/eval/wit.lisp` (the `usocket.lisp`
+pattern), ~50 lines:
 
-**2. NO built-in provider ships — (c) is REVERSED (user decision, 2026-07-14).** An
-earlier round of this work did ship an in-memory `wasi:keyvalue/store@0.2.0` provider
-inside `wit.lisp`; it was **removed**. The rule now:
-
-> rontolisp's core knows the provider **mechanism**. It does not know what
-> `wasi:keyvalue` is, and it ships no provider for any concrete interface.
-
-The reasoning, so nobody re-adds one:
-
-- a built-in store hardcodes ONE third-party spec's interface id, its member names AND its
-  version (`wasi:keyvalue/store@0.2.0`) into the core of a Lisp. It is version-pinned and
-  name-pinned to something we do not own, and it privileges one spec over every other.
-- it contradicts the bet of todo-124: **a new host interface should cost a `.wit` file,
-  not core code.** An implementation of a WIT interface is ordinary USER code — that is
-  what the mechanism is FOR, and shipping one implementation in the core says the opposite.
-- the cost is honest and small: a `wasi:keyvalue` program cannot run bare, it needs one
-  `(require :kv-memory "memory-store.lisp")` of a ~40-line portable Lisp store. That store
-  is `examples/wit/keyvalue/memory-store.lisp`, and having it be READABLE user code is
-  worth more than having it be invisible.
-
-So `wit.lisp` (below) is now only the registry + `wit-provide` + `%wit-call` + the
-`wit-error` condition — ~50 lines. Calling a wit-imported function with no provider bound
-signals `rontolisp:wit-error`: *"No provider is bound for the WIT interface `<id>` — bind
-one with rontolisp:wit-provide"*. `wit-provide` REPLACES any provider (it is a hash-table
-put), which is how `examples/wit/keyvalue` swaps its memory store for its Java one by
-loading a second file.
-
-On the WASM backends the host IS the provider, so a top-level `rontolisp:wit-provide` is
-**dropped** by `WitImportInliner` — inert, not a compile error. One source runs
-everywhere.
-
-### The runtime is `wit.lisp` — so neither backend gained a codegen case
-
-`eval/WitLibrary` + `src/main/resources/am/ik/rontolisp/eval/wit.lisp`, the `usocket.lisp`
-pattern. Everything the runtime does is expressible in core primitives — a hash table of
-callables, `apply`, a `define-condition` — so ONE implementation in Lisp serves both
-backends that need it and no `Jvm*Compiler`/`Wasm*Compiler` case exists at all:
-
-- `rontolisp::*wit-providers*` — an `equal` hash table, interface id -> callable. The key
-  is the interface's CANONICAL id (`WitResolver.canonicalId`), never the reference as the
-  user spelled it: `findInterface` accepts three spellings of one interface, so lowering
-  the spelling as written gave one interface three registry keys — and a `wit-provide`
-  writes only one of them, so `:interface store` compiled clean and then died at runtime
-  with "No provider is bound" against a store the program had plainly bound.
-  `WitImportDirective.lower` canonicalizes; a `wit-provide` key is therefore always the
-  fully-qualified id, whatever the `:interface` spelling was.
+- `rontolisp::*wit-providers*` — an `equal` hash table, interface id -> callable. **The key is
+  the CANONICAL id** (`WitResolver.canonicalId`), never the user's spelling: `findInterface`
+  accepts three spellings, so lowering as written gave one interface three registry keys and
+  `:interface store` compiled clean then died at runtime with "No provider is bound" against a
+  store the program had plainly bound. `WitImportDirective.lower` canonicalizes.
 - `rontolisp:wit-provide` — `(setf (gethash interface *wit-providers*) provider)`.
-- `rontolisp::%wit-call` — `(apply provider member args)`; an interface with no provider
-  bound signals `rontolisp:wit-error` telling you to call `wit-provide`.
-- `rontolisp:wit-error` (a `define-condition` over the CLOS subset,
-  `.kb/error-handling.md`) + its `rontolisp:wit-error-payload` reader — what the error arm
-  of a WIT `result` signals.
+- `rontolisp::%wit-call` — `(apply provider member args)`.
+- `rontolisp:wit-error` (a `define-condition`, `.kb/error-handling.md`) +
+  `rontolisp:wit-error-payload`.
+- `rontolisp::%wit-result` — yields an envelope's ok value or
+  `(error 'rontolisp:wit-error :payload ...)`.
 
-That is ALL of it — no provider for any concrete interface lives here (the decision record
-above).
+Splice policy: **compile path** — `WitLibrary.process` prepends when the program REFERENCES one
+of those names; idempotent; a WASM program references none (its bindings ARE `wasm-import`
+directives) so its output stays byte-identical. **Interpreter** — lazy `ensureWitLoaded()` on
+the `wit-import` special form and on the first resolution of a runtime name, so a program may
+bind a provider BEFORE the directive that uses it. **`wit.lisp` is not in
+`LibraryDefunPruner`'s prunable set**, like `usocket`: the provider comes out of a hash table
+through `apply`, members are dispatched by STRING, and the condition's reader is named only
+inside its own `:report`.
 
-Splice policy, exactly like the other Lisp-source libraries:
-
-- **compile path**: `WitLibrary.process` prepends the forms when the program REFERENCES
-  one of the runtime's names (`%wit-call` / `wit-provide` / `wit-error` /
-  `wit-error-payload`) — which is precisely when `WitImportInliner` lowered a `wit-import`
-  for the interpreter/JVM boundary, or the program binds a provider itself. It is
-  idempotent (a program that already defines `%wit-call` is left alone). A WASM program
-  references none of those names — its bindings ARE `wasm-import` directives — so its
-  output stays byte-identical to a build that never knew the library.
-- **interpreter**: lazy, `ensureWitLoaded()` — on the `wit-import` special form, and on the
-  first resolution of one of the runtime's own names, so a program may bind a provider
-  BEFORE the directive that uses it.
-- `wit.lisp` is **not in `LibraryDefunPruner`'s prunable set**, like `usocket`
-  (`.kb/library-defun-pruning.md`): the whole runtime is two defuns, a defvar and a
-  condition whose surface is reached indirectly — the provider comes out of a hash table
-  through `apply`,
-  its members are dispatched by STRING, and the condition's reader is named only inside its
-  own `:report` — so a textual reachability shake could only go wrong here and has nothing
-  to win. Spliced, it survives whole.
-
-### Name mapping (user-facing, pinned)
-
-`WitImportDirective.memberName`:
+### Name mapping (`WitImportDirective.memberName`)
 
 | WIT | Lisp |
 |---|---|
 | interface func `create-shader` | `create-shader` (`gl:create-shader` with `:package gl`) |
-| `resource bucket { get: func(...) }` | `bucket-get`, handle FIRST: `(kv:bucket-get b "k")` |
+| `resource bucket { get: func(...) }` | `bucket-get`, handle FIRST |
 | `resource bucket { constructor(...) }` | `bucket-new` |
 | `resource bucket { f: static func(...) }` | `bucket-f` |
-| `resource bucket` — its RELEASE, which WIT declares no func for | `bucket-drop`, handle its only argument — bound only when the program NAMES it ("Resource drops" below) |
+| `resource bucket`'s RELEASE (no WIT func) | `bucket-drop`, handle its only argument — bound only when the program NAMES it |
 
-- The resource prefix is what keeps the flat, Lisp-2 function namespace unambiguous when
-  two resources declare the same method name.
-- WIT parameter names become the Lisp lambda list **verbatim**; a resource method gets a
-  leading `self` (the receiver the WIT model leaves implicit). A method whose WIT signature
-  already declares a parameter called `self` is a clear error naming the line.
-- A constructor's result is its resource (`:int`) — also implicit in the model.
-- An interface that binds the same member name twice is an error naming the line.
-- The Preview 1 import FIELD is `:field-style` applied to the label: `create-shader` ->
-  `createShader`. **`:camel` is the default** because it is the JavaScript convention, what
-  `jco` emits when it transpiles a component, and what the browser demos' hand-written
-  import objects already spell (`.kb/wasm-import.md`). `:kebab` keeps the label verbatim
-  for a host that wants it.
+- The resource prefix keeps the flat Lisp-2 function namespace unambiguous.
+- WIT parameter names become the lambda list **verbatim**; a resource method gets a leading
+  `self`. A method whose WIT signature already declares `self` is a clear error naming the line.
+- A constructor's result is its resource (`:int`).
+- An interface binding the same member name twice is an error naming the line.
+- The Preview 1 FIELD is `:field-style` applied to the label. **`:camel` is the default** (the
+  JS convention, what `jco` emits, what the browser demos spell — `.kb/wasm-import.md`).
 
-### Two type tiers, and why there are two
+### Two type tiers
 
-`WitTypeMapper` says what a WIT type IS in rontolisp; what a BOUNDARY can carry is a
-second question, and the two backends answer it differently. `WitImportDirective` is where
-a WIT type is judged, and its `wasm` flag is the whole difference:
+- **Interpreter / JVM — everything except `stream`/`future`.** The boundary is an ordinary Lisp
+  call: the defun hands its arguments to `%wit-call`, which `apply`s the provider. Nothing is
+  marshalled, so every settled representation crosses by construction; only `Rep.UNSUPPORTED` is
+  refused.
+- **Preview 1 WASM — only the flat set `rontolisp:wasm-import` carries**: `INT`/`HANDLE` ->
+  `:int`, `FLOAT` -> `:float`, `BOOLEAN` -> `:bool`, `STRING`/`BYTE_STRING` -> `:string`, no
+  result -> `:void`. Everything else (`s64`/`u64`, `char`, `list<T>`, `tuple`, `option`,
+  `result`, `record`, `variant`, `enum`, `flags`) is a compile error naming the WIT file and
+  LINE. A core import is a bare host function with **no component type to declare a richer shape
+  with** — rich types need the component boundary.
 
-- **Interpreter / JVM — everything except `stream`/`future`.** The boundary is an ordinary
-  Lisp call: the synthesized defun hands its arguments to `%wit-call`, which `apply`s the
-  provider. Nothing is marshalled, so every settled representation crosses by construction
-  — `record` = keyword plist, `variant` = tagged list, `enum` = keyword, `flags` = keyword
-  list, `option<T>` = value-or-nil, `tuple` = list, `list<u8>` = byte string, `s64` =
-  bignum-safe int. The type designator is computed and then thrown away; only
-  `Rep.UNSUPPORTED` (`stream`/`future`, which have no rontolisp value on ANY backend until
-  language-level async) is refused.
-- **Preview 1 WASM — only the flat set `rontolisp:wasm-import` can carry.** `INT`/`HANDLE`
-  -> `:int`, `FLOAT` -> `:float`, `BOOLEAN` -> `:bool`, `STRING`/`BYTE_STRING` ->
-  `:string`, no result -> `:void`. Everything else — `s64`/`u64`, `char`, `list<T>`,
-  `tuple`, `option`, `result`, `record`, `variant`, `enum`, `flags` — is a compile error
-  naming the WIT file and LINE, and the message says so honestly: the representation IS
-  settled and the other two backends bind it today; it is the WASM import boundary that
-  cannot marshal it yet.
+Consequence: **`wasi:keyvalue/store` does not cross Preview 1** (`open` returns
+`result<bucket, error>`). The interfaces that DO are the flat, host-shaped ones (WebGL).
 
-Say the consequence out loud: `wasi:keyvalue/store` itself does **not** cross the Preview 1
-boundary (`open` returns `result<bucket, error>`, `bucket.get` returns
-`result<option<list<u8>>, error>`). kv is an interpreter/JVM story until todo-128 lifts
-it onto the canonical ABI. The interfaces that DO cross Preview 1 today are the flat,
-host-shaped ones — WebGL, see the spike below.
+`result<T, E>` on interpreter/JVM: **nothing in the lowering inspects the return value.** The
+error arm is **the PROVIDER** calling `(error 'rontolisp:wit-error :payload ...)` with the
+mapped `E` (a `variant` = a tagged list, so a payload-less `no-such-store` arm is the keyword
+`:no-such-store`). Signaling is a provider-side obligation no one enforces.
 
-`result<T, E>` on the interpreter/JVM: **nothing in the lowering inspects the return
-value.** The ok arm is simply what the provider returned; the error arm is **the PROVIDER**
-calling `(error 'rontolisp:wit-error :payload ...)` with the mapped `E` (a `variant` = a
-tagged list, so `wasi:keyvalue`'s payload-less `no-such-store` arm is the keyword
-`:no-such-store`). Signaling is a provider-side obligation that no one enforces — which is
-exactly the settled mapping above (a condition on every backend), and what both stores in
-`examples/wit/keyvalue` do on a bad handle. `handler-case` on `rontolisp:wit-error` plus
-`wit-error-payload` is the caller's half of it.
+### Resource handles
 
-### Resource handles: allocated BY THE PROVIDER, and not in the stream handle space
+An opaque integer (`Rep.HANDLE`) allocated **by the provider** — the host on Preview 1, the Lisp
+callable on interpreter/JVM. Nothing in rontolisp interprets it. **It is NOT the shared
+stream/socket handle space, and `cl:close` does not apply to a WIT resource**: a resource is
+released by its own interface's `drop`, and a provider's handles are its own private numbering.
 
-A WIT `resource` is an opaque integer (`Rep.HANDLE`). Who allocates it is **the provider** —
-the host on Preview 1 (the WebGL demos' handle-table JS bindings are exactly this shape),
-the Lisp callable on the interpreter/JVM. `bucket-new` / `open` returns one; each method
-takes it as the leading `self`. Nothing in rontolisp interprets the integer, so any counter
-a provider likes will do (`examples/wit/keyvalue/memory-store.lisp` counts from 1, its Java
-sibling from 500 — and neither number means anything).
+### The gl.lisp migration
 
-Be honest about what this is NOT: it is **not** the shared stream/socket handle space
-todo 127 sketched (`.kb/read-load-streams.md`), and **`cl:close` does not apply to a WIT
-resource**. A resource is released by its own interface's `drop`, which `wasi:keyvalue`'s
-store does not even expose — there is nothing for `close` to mean here, and a provider's
-handles are its own private numbering, not a slot in a rontolisp table. The shared space
-becomes relevant only when the component ABI needs it (todo-128, where the handles are
-the host's anyway).
+`examples/browser/webgl-common/gl.wit` is checked in; gl.lisp binds it with TWO directives —
+`local:webgl/gl` (29 WebGL2 entries) and `local:webgl/ui` (`fail`) — since one directive binds
+one interface into one module. Neither names `:package`, so the bindings land in the
+hand-written `(defpackage gl ...)`. **All six demos' modules are byte-identical to their
+pre-migration builds.**
 
-### New in `am.ik.wit`: `WitResolver`
-
-The parser's model is deliberately syntactic and lossless: a `use` clause is a
-`WitItem.Use` record and a type reference is a `WitType.Named(name)` with no link to its
-definition. That is right for a round-tripping printer and useless for a binder — you
-cannot classify a type you have not resolved. `WitResolver` is that missing link
-(language-independent, no rontolisp imports, like the rest of the library):
-
-- `findInterface(reference)` — indexed over package headers AND `package foo:bar { }`
-  blocks; accepts the fully-qualified id, the version-less id, or the bare name.
-- `resolveType(scope, name)` — the interface's own definitions first, then transitively
-  through its `use` clauses, following aliases, cycle-guarded.
-- `functions(iface)` (static) — the interface's freestanding funcs plus every resource's
-  constructor / methods / statics, in document order, each tagged with its owning resource.
-
-### The `gl.lisp` spike (the todo asked for it; the answer is "yes, and the WIT names win")
-
-Todo 127's definition of done demanded a spike on
-`examples/browser/webgl-common/gl.lisp` (30 `wasm-import`s: 29 into module `gl` plus the
-one `ui`-module `fail`) — explicitly NOT a migration. Result:
-
-- **Yes on the mechanism.** A hand-written `local:webgl/gl.wit` reproduces the Preview 1
-  boundary **byte-for-byte** (name the interface `gl` and `:from` needs no override;
-  `:field-style :camel` regenerates `createShader` and friends exactly), and `--optimize`
-  still shakes the imports a demo never calls — so declaring the whole WebGL2 union stays
-  free, which is the entire reason gl.lisp exists. todo-124's follow-on prize (one WIT
-  describing the browser boundary) is reachable.
-- **All but four of them are an exact kebab -> camel match** (`create-shader` ->
-  `createShader`, ... , and `ui`'s `fail`), so they migrate untouched.
-- **The four that are not are a RENAME, not a case problem.** They are the places gl.lisp
-  chose different WORDS on the Lisp side: `shader-compiled-p`/`getShaderParameter`,
+- **Four members were a RENAME**: `shader-compiled-p`/`getShaderParameter`,
   `shader-info-log`/`getShaderInfoLog`, `program-linked-p`/`getProgramParameter`,
-  `program-info-log`/`getProgramInfoLog`. `wasm-import` lets the two names differ
-  (`:as "getShaderParameter"` beside the Lisp name `shader-compiled-p`); a **WIT label is
-  ONE name** that becomes both the Lisp name and (camelCased) the host field, so it cannot
-  serve both.
-
-**USER DECISION (2026-07-14): the WIT-generated names win, and `wit-import` does NOT grow a
-per-function alias option.** An alias would restore exactly the two-places-to-maintain
-drift the directive exists to kill — the same argument that makes a `wit-export` world the
-authoritative export list. So the four call sites get renamed instead
-(`get-shader-parameter` &c).
-
-### The migration (todo 132, done 2026-07-17)
-
-`examples/browser/webgl-common/gl.wit` is checked in and gl.lisp binds it with TWO
-directives — `local:webgl/gl` (the 29 WebGL2 entries) and `local:webgl/ui` (`fail`), the
-module split the spike predicted, since one directive binds one interface into one module.
-Neither names `:package`: they bind into the CURRENT package, so the bindings land in the
-hand-written `(defpackage gl ...)` beside the enum constants and the two shader helpers,
-which no directive knows about. **All six demos' modules are byte-identical to their
-pre-migration builds** (measured; the spike held). Notes the spike did not have:
-
+  `program-info-log`/`getProgramInfoLog`. `wasm-import` lets the two names differ; a **WIT label
+  is ONE name** that becomes both the Lisp name and (camelCased) the host field. **Decision: the
+  WIT names win and `wit-import` does NOT grow a per-function alias option** — the four call
+  sites were renamed (`get-shader-parameter` &c).
 - **A `type shader = s32` alias is free and worth it.** GL objects cross as named aliases
-  (`shader`, `program`, `buffer`, `vertex-array`, `uniform-location`) that resolve to plain
-  s32, so the lowering is untouched — but the NAME is the only thing that distinguishes a
-  table handle from an integer value, which is what lets the JS import object be generated
-  rather than hand-written.
-- **The prize landed: `gl-imports.js` is GENERATED from gl.wit** and each page imports it
-  instead of hand-writing the WebGL2 half of its import object.
-  `GlImportObjectTest` regenerates + pins it, and reuses
-  `WitImportDirective.FieldStyle.CAMEL`, so a page can only be handed the field names the
-  lowering actually imports. This is the only part of the migration that buys something a
-  WIT-free build cannot have; the rest is a byte-identical rewrite.
-- **`load` lost the base directory, and that was a real bug.** A `wit-import` inside a
-  library resolves its `.wit` against the file that WROTE it, like `load` — but the splice
-  flattens the program, so `WitImportInliner` had only the ENTRY's directory left and
-  looked for gl.wit beside each demo. `LoadInliner` now rebases a spliced directive's path
-  (`rebaseWitImport`, pinned in `LoadInlinerTest`); a directive in the entry source is
-  passed through untouched. gl.lisp is the first user library to carry a `wit-import`, so
-  it was the first to hit this; `http.lisp` never did because `HttpLibrary` lowers its
-  directives itself off the classpath.
+  (`shader`, `program`, `buffer`, `vertex-array`, `uniform-location`) resolving to plain s32, so
+  the lowering is untouched — but the NAME is the only thing distinguishing a table handle from
+  an integer value.
+- **`gl-imports.js` is GENERATED from gl.wit**; `GlImportObjectTest` regenerates + pins it and
+  reuses `WitImportDirective.FieldStyle.CAMEL`. The only part of the migration buying something
+  a WIT-free build cannot have.
+- **Trap: `load` lost the base directory.** A `wit-import` inside a library resolves its `.wit`
+  against the file that WROTE it, but the splice flattens the program, so `WitImportInliner` had
+  only the ENTRY's directory. `LoadInliner.rebaseWitImport` fixes it (pinned in
+  `LoadInlinerTest`); a directive in the entry source passes through untouched. `http.lisp`
+  never hit this because `HttpLibrary` lowers its directives off the classpath.
 
-## Component imports — `canon lower` (todo 128, 2026-07-14)
+## Component imports — `canon lower`
 
-Step 4 of todo-124, and the payoff: **a `--component` build is no longer import-locked
-to the fixed WASI blob surface.** A `rontolisp:wit-import` under `--component` becomes a
-real component-model instance import whose functions are `canon lower`ed into the core
-module — so the provider is the HOST, and the component composes (`wac plug`) with anyone
-who exports the interface. `examples/wit/keyvalue/page-hits.lisp` runs against
-**wasmtime's own `wasi:keyvalue` implementation** (`-S keyvalue=y`), printing exactly what
-the interpreter's Lisp store and the JVM's `java.util.LinkedHashMap` store print.
+**A `--component` build is no longer import-locked to the fixed WASI blob surface.** A
+`wit-import` under `--component` becomes a real component-model instance import whose functions
+are `canon lower`ed into the core module, so the provider is the HOST and the component composes
+(`wac plug`). `examples/wit/keyvalue/page-hits.lisp` runs against wasmtime's own
+`wasi:keyvalue` (`-S keyvalue=y`), printing what the interpreter's Lisp store and the JVM's
+`java.util.LinkedHashMap` store print.
 
-`rontolisp:fetch` AND `rontolisp:http-handler` are now both consumers of this path:
-both are ONE Lisp-source library (`http.lisp`, spliced by `eval/HttpLibrary` following
-the reachable half) over a wit-imported `wasi:http@0.3.0` surface — fetch calls
-`wasi:http/client.send` (an async-lowered `async func` member), serve implements
-`wasi:http/handler.handle` (a stackful async lift delivering its result via `canon
-task.return`), and both drive `wasi:http/types`' stream/future bodies through the
-alias-derived built-ins. In asyncMode the `<alias>-read` of a stream alias answers a
-chunk the host has IN FLIGHT as a **pending future** (registered with the module
-scheduler; `.kb/async-await.md`) — so user code reads a stream inside an async
-function and awaits the result (an immediate chunk passes through `await`); the
-write-side built-ins keep the blocking waitable-set park. No WAT http adapter
-remains on any path (the serve builder
-lowers http.lisp's imports FROM the block and lifts the core's `handle` wasm-export
-directly). That is the **self-hosting proof of the whole IDL bet** — the core HTTP
-built-ins re-implemented over the same WIT pipeline any user interface arrives
-through, so a new host interface costs a `.wit` file rather than core code. Details in
-`.kb/fetch-http.md`.
+`rontolisp:fetch` AND `rontolisp:http-handler` are both consumers: both are ONE Lisp-source
+library (`http.lisp`, spliced by `eval/HttpLibrary`) over a wit-imported `wasi:http@0.3.0`
+surface — fetch calls `wasi:http/client.send` (an async-lowered `async func`), serve implements
+`wasi:http/handler.handle` (a stackful async lift delivering via `canon task.return`), both
+driving `wasi:http/types`' stream/future bodies through alias-derived built-ins. In asyncMode
+the `<alias>-read` of a stream alias answers an in-flight chunk as a **pending future**
+(registered with the module scheduler, `.kb/async-await.md`); the write-side built-ins keep the
+blocking waitable-set park. No WAT http adapter remains. Details: `.kb/fetch-http.md`.
 
-### The reference probe (do this before touching the encoders again)
-
-Everything here was derived from, and validated against, a hand-built probe in a
-scratchpad, NOT from reading the spec: a WAT core module with hand-computed flat
-signatures + `wasm-tools component embed/new` + `wasmtime -S keyvalue=y`. A checksum over
-all six `wasi:keyvalue` functions came back exactly right, which is what pinned the
-flattening and every load offset. The golden bytes of the resulting instance type are
-`ComponentWriterTest.instanceTypeMatchesWasmToolsReference` (393 bytes); the layout facts
-are `WitCanonicalAbiTest`. Two things that probe taught, which no document says:
-
-- wasmtime's in-memory keyvalue provider recognizes **only the empty store identifier**
-  (`open ""`); anything else is `no-such-store`. Both Lisp stores in the example follow
-  that rule, which is why all three backends print the same `no-such-store` line.
-- a **forged handle traps at the boundary** (`unknown handle index`) before it ever
-  reaches the provider — uncatchable. So a program must not stunt with a made-up handle;
-  the example demonstrates the error arm with a bad store identifier instead.
+**The reference probe (do this before touching the encoders again).** Everything was derived
+from a hand-built probe, NOT the spec: a WAT core module with hand-computed flat signatures +
+`wasm-tools component embed/new` + `wasmtime -S keyvalue=y`. Golden bytes:
+`ComponentWriterTest.instanceTypeMatchesWasmToolsReference` (393 bytes); layout facts:
+`WitCanonicalAbiTest`. Two things it taught: wasmtime's in-memory keyvalue provider recognizes
+**only the empty store identifier** (`open ""`); and a **forged handle traps at the boundary**
+(`unknown handle index`) before reaching the provider — uncatchable.
 
 ### The pieces
 
-- **`compiler/WitImportDirective`** gained the `WASM_COMPONENT` backend (a new
-  `WitExportDirective.Backend` value; `wit-export` treats it exactly like `WASM_GC`). It
-  lowers to an internal `(rontolisp::%component-import "<canonical-iface-id>" "<wit text>"
-  ("member" "lisp-name") ...)` form — **the WIT TEXT TRAVELS INSIDE THE FORM**, so the WASM
-  compiler reads no files and the browser playground (no filesystem) works by construction.
-- **`codegen/wasm/WitCanonicalAbi`** — size / alignment / flattening / despecialization
-  over the `am.ik.wit` model (option = variant{none,some}, result = variant{ok,err}, enum =
-  payload-less variant, tuple = record). No codegen.
-- **`codegen/wasm/WasmComponentImportCompiler`** — the guest-side marshalling, the exact
-  `WasmImportCompiler` pattern: one synthetic defun per bound function (so `#'kv:open` /
-  `funcall` / `mapcar` / `eval` work), a placeholder call `1<<27 + ordinal` that
-  **`WasmImportInjector` renumbers — REUSED UNCHANGED**, and the body deferred until the
-  memory-helper indices are known. Params lower to flat values; results lift recursively
-  from the return area.
-- **`codegen/wasm/WitComponentTypeEncoder`** — the imported instance TYPE. Declaration
-  grammar pinned by the probe: a resource is `export "name" (type (sub resource))`, a named
-  type is a type decl + an `eq`-bound export of the same name, structural types are
-  unexported type decls memoized by shape, and **type decls AND type-bound exports append to
-  the instance type's local type index space; function exports do not**.
-- **`codegen/wasm/WasmComponentBuilder.appendUserImports`** — type + import + per-function
-  alias + `canon lower` (memory 0, realloc = the shared mem module's `cabi_realloc` = core
-  func 0, utf8 — exactly when the call touches linear memory) + one synthesized core
-  instance per interface, passed as an extra instantiation arg named by the canonical id.
-  Every downstream hardcoded index (the `run` alias / lift / export, `appendFuncExports`)
-  shifts by the user-import counts. **Zero imports = zero shift = byte-identical**
-  (stash-dance proven on base / sockets, with and without a `:string`
-  wasm-export — and on both serve variants).
-- **`codegen/wasm/WasmServeComponentBuilder`** (todos 134 + 135 + todo-002 Phase 2) —
-  ONE `build` over ONE block (`import-block-http-server.bin`, from the 0.3
-  `uni-http-server` world; the NARROW/WIDE `ServeBlock` split died with the
-  `http-server-client` variant): serve and serve+fetch are the same shape, http.lisp's
-  two halves sharing the merged `wasi:http` bindings, and the ONLY extra module is the
-  preview1 bridge (`adapter-http-server-p1.wat`, rewritten over the 0.3 service
-  interfaces), instantiated BEFORE the rontolisp core to satisfy its
-  `wasi_snapshot_preview1` imports. Core instances are mem(0) / bridge-w(1) /
-  bridge(2) / one per fixed http iface (via `lowerServeIoFromBlock`, which emits every
-  `appendUserImports` member kind — sync decls, async calls, drops, alias built-ins,
-  task-returns, waitable builtins — against the block's instances and dedups by field)
-  / one per user iface / rontolisp core; the `ServeIo` cursors + `coreInstanceOf` map
-  make every downstream index (the handle functype, the async lift, the exported
-  instance, `appendUserImports`) relative, so nothing is hardcoded per shape. The
-  serve core module exports no `cabi_realloc` (`componentStringAbi` is
-  `component && !serve`) and needs none — the lower's realloc is the shared memory
-  module's, core func 0, aliased there as everywhere.
+- **`compiler/WitImportDirective`** lowers to `(rontolisp::%component-import
+  "<canonical-iface-id>" "<wit text>" ("member" "lisp-name") ...)` — **the WIT TEXT TRAVELS
+  INSIDE THE FORM**, so the WASM compiler reads no files and the playground works by
+  construction.
+- **`codegen/wasm/WitCanonicalAbi`** — size / alignment / flattening / despecialization over the
+  `am.ik.wit` model (option = variant{none,some}, result = variant{ok,err}, enum = payload-less
+  variant, tuple = record). No codegen.
+- **`codegen/wasm/WasmComponentImportCompiler`** — guest-side marshalling, the exact
+  `WasmImportCompiler` pattern: one synthetic defun per bound function, a placeholder call
+  `1<<27 + ordinal` that **`WasmImportInjector` renumbers — REUSED UNCHANGED**, body deferred
+  until the memory-helper indices are known.
+- **`codegen/wasm/WitComponentTypeEncoder`** — the imported instance TYPE. Grammar pinned by the
+  probe: a resource is `export "name" (type (sub resource))`, a named type is a type decl + an
+  `eq`-bound export of the same name, structural types are unexported type decls memoized by
+  shape, and **type decls AND type-bound exports append to the instance type's local type index
+  space; function exports do not**.
+- **`WasmComponentBuilder.appendUserImports`** — type + import + per-function alias +
+  `canon lower` (memory 0, realloc = the shared mem module's `cabi_realloc` = core func 0, utf8 —
+  exactly when the call touches linear memory) + one synthesized core instance per interface,
+  passed as an extra instantiation arg named by the canonical id. Every downstream hardcoded
+  index shifts by the user-import counts. **Zero imports = zero shift = byte-identical.**
+- **`WasmServeComponentBuilder`** — ONE `build` over ONE block (`import-block-http-server.bin`,
+  from the 0.3 `uni-http-server` world; the NARROW/WIDE `ServeBlock` split is gone). The only
+  extra module is the preview1 bridge (`adapter-http-server-p1.wat`), instantiated BEFORE the
+  rontolisp core to satisfy its `wasi_snapshot_preview1` imports. Core instances: mem(0) /
+  bridge-w(1) / bridge(2) / one per fixed http iface (via `lowerServeIoFromBlock`, which emits
+  every `appendUserImports` member kind — sync decls, async calls, drops, alias built-ins,
+  task-returns, waitable builtins — and dedups by field) / one per user iface / rontolisp core.
+  The `ServeIo` cursors + `coreInstanceOf` map make every downstream index relative. The serve
+  core exports no `cabi_realloc` (`componentStringAbi` is `component && !serve`) and needs none.
   `rejectAdapterImportCollisions` runs against the ADDITIONAL imports.
-  **The state a served handler cannot otherwise have**: a
-  `wasi:http` host recreates the instance per request, so its globals are not state; a
-  store behind a WIT import is (`examples/wit/keyvalue/page-hits-server.lisp`). Whether
-  that store SURVIVES is the host's, not ours: wasmtime's `-S keyvalue=y` provider is an
-  in-memory store **rebuilt per instance** (measured: a preset `-S
-  keyvalue-in-memory-data=k=41` reads back 41 on every request, so a counter answers 42
-  forever), while wasmCloud's `wash dev` links an out-of-process provider and the same
-  component counts 1, 2, 3.
+  **State a served handler cannot otherwise have**: a `wasi:http` host recreates the instance per
+  request, so its globals are not state; a store behind a WIT import is
+  (`examples/wit/keyvalue/page-hits-server.lisp`). Whether it SURVIVES is the host's — wasmtime's
+  `-S keyvalue=y` provider is rebuilt per instance (a counter answers 42 forever), wasmCloud's
+  `wash dev` links an out-of-process provider and the same component counts 1, 2, 3.
 - **`codegen/wasm/WitImportWorldEmitter`** — the `--emit-wit` import side.
 
 ### `result` = the envelope + a Lisp wrapper (NOT a codegen catch)
 
-A result-returning function binds TWO names: the synthetic defun takes the internal raw
-name (`kv::%open`) and returns the envelope cons `(:ok . V)` / `(:error . E)`; a generated
-public wrapper `(defun kv:open (identifier) (rontolisp::%wit-result (kv::%open identifier)))`
-unwraps it. `rontolisp::%wit-result` is a new **`wit.lisp`** defun (added to `WitLibrary`'s
-trigger names) that yields the ok value or `(error 'rontolisp:wit-error :payload ...)`.
+A result-returning function binds TWO names: the synthetic defun takes the raw name
+(`kv::%open`) and returns the envelope cons `(:ok . V)` / `(:error . E)`; a generated wrapper
+`(defun kv:open (identifier) (rontolisp::%wit-result (kv::%open identifier)))` unwraps it. The
+error arm then rides the ORDINARY condition machinery, so EH-mode gating, `handler-case`, the
+uncaught-trap shape and the `:report` come for free and stay identical to interpreter/JVM.
+**The codegen never mentions conditions.**
 
-Why this and not a throw emitted by the marshalling codegen: the error arm then rides the
-ORDINARY condition machinery, so EH-mode gating, `handler-case`, the uncaught-trap shape
-and the `:report` all come for free and stay identical to the interpreter/JVM. The
-codegen never mentions conditions at all.
-
-### Type tiers, restated (the doc pages carry the user-facing version)
+### Type tiers, restated
 
 | | Preview 1 core import | `--component` |
 |---|---|---|
 | params | flat set only | **everything except flags and `list<T>`** (`list<u8>` crosses) |
-| results | flat set only | **everything except flags** — scalars, bool, string, char, list<T>, list<u8>, tuple, option, result, record, variant, enum, handles |
+| results | flat set only | **everything except flags** |
 
-Preview 1's limit is not laziness: a core import is a bare host function with **no
-component type to declare a richer shape with**. An earlier round of this work lowered rich
-P1 types through `:s-expr` (prin1 out, embedded reader back) — it was REVERTED: that is a
-rontolisp-specific pseudo-protocol, not a WIT boundary, and it would have broken the P1
-byte-identity property. The honest line is the one shipped: rich types need the component
-boundary. (`flags` is unimplemented in both directions; `stream`/`future` are refused
-everywhere, as ever.)
+`flags` is unimplemented both directions; `stream`/`future` are refused everywhere.
+
+**Rejected precedent**: an earlier round lowered rich P1 types through `:s-expr` (prin1 out,
+embedded reader back) and it was REVERTED — a rontolisp-specific pseudo-protocol is not a WIT
+boundary and it would have broken the P1 byte-identity property.
 
 ### Member pruning replaces the tree shaker on this path
 
-`--component` skips `WasmTreeShaker` by design, so an unused interface function would
-otherwise cost a real import. `WitImportInliner` therefore passes a **member filter** (the
-symbol names the program textually references, the `LibraryDefunPruner` convention) and the
-directive binds only those; `--no-prune` / `--dynamic` disable it. Measured: a program
-calling 2 of `wasi:keyvalue`'s 6 functions imports exactly 2, and the now-unreachable
-`key-response` record vanishes from the component's type too.
+`--component` skips `WasmTreeShaker` by design, so an unused interface function would cost a real
+import. `WitImportInliner` passes a **member filter** (the symbol names the program textually
+references, the `LibraryDefunPruner` convention); `--no-prune` / `--dynamic` disable it. Measured:
+a program calling 2 of `wasi:keyvalue`'s 6 functions imports exactly 2, and the unreachable
+`key-response` record vanishes from the type.
 
-### Resource drops — `<resource>-drop` (step D of todo 136, 2026-07-14)
+### Resource drops — `<resource>-drop`
 
-A `resource` is released by a canonical built-in, not by a WIT function: nothing in
-`WitResolver.functions` yields one, so a program that RECEIVED a handle had no way to give
-it back. `WitImportDirective` therefore walks `iface.items()` for `WitItem.ResourceDef`
-itself and binds **`<resource>-drop`** (`kv:bucket-drop`, one parameter — the handle),
-symmetric with the `<resource>-new` a constructor binds; the synthetic name goes through
-the same `allMembers` set, so an interface that really declares a method called `drop` is
-still the existing "binds 'x' twice" error. Not a nicety: `wasi:http` makes
-`outgoing-body.finish` TRAP unless the child `output-stream` is dropped first
-(`types.wit:518-521`), so without drops a Lisp `fetch` could not send a request BODY at
-all.
+A `resource` is released by a canonical built-in, so nothing in `WitResolver.functions` yields
+one. `WitImportDirective` walks `iface.items()` for `WitItem.ResourceDef` and binds
+**`<resource>-drop`** (one parameter, the handle); the synthetic name goes through the same
+`allMembers` set, so an interface that really declares `drop` is still the "binds 'x' twice"
+error. Not a nicety: `wasi:http` makes `outgoing-body.finish` TRAP unless the child
+`output-stream` is dropped first (`types.wit:518-521`).
 
-**Reference-gated, on every backend — and that is what buys byte identity.** A drop is not
-a WIT function, so it is deliberately OUTSIDE the "Preview 1 binds every function"
-convention: `WitImportInliner` passes `referencedNames(program)` as a **drop filter**
-alongside the component `memberFilter` (`WitImportDirective.lower`'s 6-arg overload), so a
-program that never writes a `-drop` name emits nothing new. Verified: a 0-import component,
-the keyvalue component, a serve component and the Lisp-fetch component all hash the same
-before and after. `--no-prune` / `--dynamic` bind them all; so does the interpreter
-(`LispEvaluator.evalWitImport` passes a null drop filter — it produces no artifact to keep
-identical, and a program may reach a drop through `funcall` / `eval`).
-
-Per backend:
+**Reference-gated on every backend, and that is what buys byte identity.** A drop is not a WIT
+function, so it is deliberately OUTSIDE the "Preview 1 binds every function" convention:
+`WitImportInliner` passes `referencedNames(program)` as a **drop filter** alongside the component
+`memberFilter` (`WitImportDirective.lower`'s 6-arg overload), so a program that never writes a
+`-drop` name emits nothing new. `--no-prune` / `--dynamic` bind them all; so does the interpreter
+(`evalWitImport` passes a null drop filter).
 
 | backend | `(kv:bucket-drop b)` |
 |---|---|
-| interpreter / JVM | the ordinary `providerDefun` — the provider gets the member string `"bucket-drop"`. The core does NOT decide what a drop MEANS; the provider does (a Java store closes a connection, a Lisp store forgets a handle, a provider with nothing to release answers nil) |
-| Preview 1 WASM | a **no-op defun** `(defun kv:bucket-drop (self) self nil)` and **NO `wasm-import`**: importing a `[resource-drop]` field would invent a host function the interface never declared, breaking the byte-identity-with-a-hand-written-import-block property and the browser demos' hand-written JS import objects. A P1 handle is an opaque integer the host handed over; the guest holds nothing |
-| `--component` | core side = an ORDINARY core import (module = the canonical iface id, field = `"[resource-drop]bucket"`, type `(func (param i32))`), so `PLACEHOLDER_FUNC_BASE + ordinal` / `WasmImportInjector` are reused unchanged. Outer side = a SECOND emission kind (below) |
-| `--no-gc` | unchanged — `wit-import` is already rejected there |
+| interpreter / JVM | the ordinary `providerDefun` with member string `"bucket-drop"`. The core does NOT decide what a drop MEANS |
+| Preview 1 WASM | a **no-op defun** `(defun kv:bucket-drop (self) self nil)` and **NO `wasm-import`**: importing a `[resource-drop]` field would invent a host function the interface never declared |
+| `--component` | core side = an ORDINARY core import (module = the canonical iface id, field = `"[resource-drop]bucket"`, type `(func (param i32))`), reusing `PLACEHOLDER_FUNC_BASE + ordinal` / `WasmImportInjector`. Outer side = a SECOND emission kind |
+| `--no-gc` | unchanged — `wit-import` is already rejected |
 
-**Why the outer side is a second emission kind, and the TWO counters it forces.**
-`canon resource.drop` (`ComponentWriter.canonResourceDrop`, fed by an
-`aliasInstanceType(ownerInstance, resource)`) produces a **CORE function with NO component
-function behind it** — unlike a bound function, which costs one component-func alias AND
-one `canon lower`ed core func. So `WasmComponentBuilder` now has two numbers where it had
-one, and mixing them yields a component that VALIDATES while lifting the wrong core
-function:
+**The outer side forces TWO counters.** `canon resource.drop`
+(`ComponentWriter.canonResourceDrop`, fed by `aliasInstanceType(ownerInstance, resource)`)
+produces a **CORE function with NO component function behind it**, unlike a bound function.
+Mixing them yields a component that VALIDATES while lifting the wrong core function:
 
-- `userImportFuncs` = decls only → every **component**-func index (`componentInstanceFromFunc("run", ...)`, `appendFuncExports`'s component cursor)
-- `userImportCoreFuncs` = decls **+ drops** → every **core**-func index (`canonLift`'s operand in `WasmComponentBuilder` and in both `WasmServeComponentBuilder` variants, `appendFuncExports`'s core cursor)
-- `userImportTypes` = interfaces + projected + **dropped** resources → the first free TYPE index. A dropped resource must be projected out of its instance for `canon resource.drop` to name it, and `appendUserImports` REUSES the projection a `use` clause already made (keyed `ifaceId#resource`), so the count must not double it.
+- `userImportFuncs` = decls only -> every **component**-func index
+  (`componentInstanceFromFunc("run", ...)`, `appendFuncExports`'s component cursor)
+- `userImportCoreFuncs` = decls **+ drops** -> every **core**-func index (`canonLift`'s operand
+  in `WasmComponentBuilder` and both `WasmServeComponentBuilder` variants, `appendFuncExports`'s
+  core cursor)
+- `userImportTypes` = interfaces + projected + **dropped** resources -> the first free TYPE
+  index. A dropped resource must be projected out of its instance for `canon resource.drop` to
+  name it, and `appendUserImports` REUSES the projection a `use` clause already made (keyed
+  `ifaceId#resource`), so the count must not double it.
 
-Two more things the drop forced, both of which will bite again:
+Two traps the drop forced:
 
-- **A wrapper's first parameter is local slot 1, not 0.** Every compiled function carries an
-  implicit closure environment in slot 0 and starts its parameters at 1
-  (`WasmComponentImportCompiler.buildDropBody`). The first drop wrapper read slot 0 and
-  trapped casting the null env to an `i31`.
-- **The encoder declares resources LAZILY** (only when a bound function's signature reaches
-  one), so a resource that is ONLY dropped is never declared. `WasmComponentBuilder` /
-  `WitImportWorldEmitter` force-declare it through the `provided` hook, after the function
-  walk — which keeps the bytes unchanged when the resource was already reached (the
-  keyvalue shape). `--emit-wit` prints it into the world the same way; a drop itself never
-  appears there (it is a canonical built-in, not a WIT function), so the emitted world is
-  unchanged.
+- **A wrapper's first parameter is local slot 1, not 0** — every compiled function carries an
+  implicit closure environment in slot 0 (`WasmComponentImportCompiler.buildDropBody`). The first
+  drop wrapper read slot 0 and trapped casting the null env to an `i31`.
+- **The encoder declares resources LAZILY** (only when a bound function's signature reaches one),
+  so a resource that is ONLY dropped is never declared. `WasmComponentBuilder` /
+  `WitImportWorldEmitter` force-declare it through the `provided` hook AFTER the function walk,
+  keeping the bytes unchanged when the resource was already reached. A drop never appears in
+  `--emit-wit`.
 
-**The example teaches the semantics, and had to be fixed to do it.**
-`examples/wit/keyvalue/memory-store.lisp` hung its DATA off the handle, so a naive
-`(remhash handle ...)` would have deleted the STORE. It now keys the data by store
-IDENTIFIER with the handle table as a separate indirection (the Java store likewise), so
-**dropping a handle releases the reference, not the store** — the next `open` sees every
-key. That is the line the doc pages carry too.
+**Semantics**: `examples/wit/keyvalue/memory-store.lisp` keys the data by store IDENTIFIER with
+the handle table as a separate indirection (the Java store likewise), so **dropping a handle
+releases the reference, not the store**.
 
-## Rich PARAMETERS across the component boundary (todo 133, 2026-07-14)
+## Rich PARAMETERS across the component boundary
 
-The v1 cut lowered params flat (scalar / bool / string / `list<u8>` / handle / `option` of
-those) while results lifted recursively. That asymmetry is gone: **a param now lowers
-everything a result lifts, except `list<T>` (T != u8)**. What made it worth doing is that
-serve's and fetch's move onto wit-imported `wasi:http` was blocked by exactly this — and the
-todo's own premise ("the blocking variants are all flat-payload") was WRONG, which is the
-thing to remember:
+**A param lowers everything a result lifts, except `list<T>` (T != u8)** — writing a canonical
+ARRAY into linear memory is a different mechanism (a memory `store` recursion mirroring
+`emitLiftAt`) and nothing in sight needs it (`fields.append` is `list<u8>`). Note the premise
+"the blocking variants are all flat-payload" was WRONG: `wasi:http`'s `method` variant carries a
+**string** (`other(string)`), and `response-outparam.set` takes
+`result<outgoing-response, error-code>` whose `error-code` cases carry **records**
+(`DNS-error-payload`) and `option<string>`.
 
-- `wasi:http`'s `method` variant carries a **string** (`other(string)`), and
-  `response-outparam.set` takes `result<outgoing-response, error-code>` whose `error-code`
-  cases carry **records** (`DNS-error-payload`) and `option<string>`. Cut string/record
-  payloads and the keystone unblocks nothing. So the line is drawn at `list<T>` instead:
-  writing a canonical ARRAY into linear memory is a different mechanism (a memory `store`
-  recursion mirroring `emitLiftAt`), and nothing in sight needs it. `fields.append`
-  (`list<u8>`) is the reason the HTTP libraries never needed it either.
+**The Lisp shape is the LIFT's shape** — no new representation, runtime or helper:
+`emitLowerVariantParam` / `emitLowerRecordParam` consume exactly what `emitVariantCase` /
+`emitLiftRecordAt` build, so a lifted value goes straight back into another call. **The settled
+`result` ARGUMENT is the envelope** `(:ok . V)` / `(:error . E)`. A payload-less arm may be the
+bare keyword (`(cli:exit :ok)`) because the tag/payload split is `consp` ? `car`/`cdr` : the
+value itself.
 
-### The Lisp shape is the LIFT's shape, and the codegen is the mirror image
+**Keyword identity in wasm is `struct.get $string 0` (the interned id) + `i32.eq` against
+`ctx.stringTable.addString(":case").offset()` — NOT `ref.eq`**: `compileStringLiteral` allocates
+a fresh struct each time (`_str_build`) and only field 0 is canonical. The idiom is
+`WasmFetchRuntimeBuilder.buildPlistGet`, which is also what a `record` param calls
+(`FUNC_FETCH_PLIST_GET`, always emitted). A keyword naming no case traps (`unreachable`) —
+deliberate, consistent with `ref.cast` traps; a Lisp-side normalizing wrapper would put a second,
+divergent copy of the shape rules beside the codegen's.
 
-No new representation, no new runtime, no Lisp-side helper: `emitLowerVariantParam` /
-`emitLowerRecordParam` consume exactly what `emitVariantCase` / `emitLiftRecordAt` build.
-A lifted value therefore goes straight back into another call (`(http:set-method r
-(http:method r))`), and **the settled `result` ARGUMENT is the envelope** `(:ok . V)` /
-`(:error . E)` — the same cons `%wit-result` unwraps, so the mapping cell that todo 133
-left open is closed by construction rather than by decree. A payload-less arm may also be
-written as the bare keyword (`(cli:exit :ok)`), because the tag/payload split is
-`consp` ? `car`/`cdr` : the value itself.
+Three things the encoders needed:
 
-Keyword identity in wasm is **`struct.get $string 0` (the interned id) + `i32.eq` against
-`ctx.stringTable.addString(":case").offset()`** — NOT `ref.eq`: `compileStringLiteral`
-allocates a fresh struct each time (`_str_build`), and only field 0 is canonical. The
-idiom is `WasmFetchRuntimeBuilder.buildPlistGet`, which is also what a `record` param calls
-(`FUNC_FETCH_PLIST_GET`, always emitted) to pull a field out of the keyword plist.
+- **The joined payload flats** (`WitCanonicalAbi.flatTypes`): each case's flats are coerced to
+  the joined type per the canonical ABI (`i32`->`i64` = `extend_u`, `f32`->`i32` = `reinterpret`,
+  `f64`->`i64` = `reinterpret`) and unreached positions zero-filled. A joined FLOAT flat rides in
+  an integer scratch local as its bit pattern (`storageOf`), keeping the pools to two. Per-case,
+  per-field and per-ARGUMENT cursors are rolled back, so the cost is the deepest nesting, not the
+  sum.
+- **The scratch pools are SIZED BY MEASUREMENT, not by a constant**: `buildWrapperBody` emits the
+  body twice, reads the cursors' high-water marks, and emits again with pools of exactly that
+  size (what pass 1 buys is the local INDICES). **Trap**: fixed pools (i32 x 24, i64 x 5) were
+  blown through by `wasi:http`'s `response-outparam.set` — the ONE call this work exists for
+  (result -> variant -> option -> record -> option<string>, five levels) — while the test corpus,
+  whose trimmed WIT dropped `error-code`, stayed green. **Do not re-fix by raising a constant.**
+- **`needsMemory` must recurse into variant cases and record fields** — a string inside a case
+  payload stages memory, and missing it emits a `canon lower` with no memory options.
+- **`repOf` must resolve aliases first.** `type headers = fields` is an alias whose target is
+  itself a NAME, and `WitTypeMapper` classifies structurally, so it threw
+  `IllegalArgumentException` — a latent crash on EVERY backend.
+  `WasmComponentImportCompilerTest.followsATypeAlias...` pins it.
 
-A keyword naming no case traps (`unreachable`). That is deliberate and consistent: a type
-error on this backend is a `ref.cast` trap already (`(+ 1 "a")`), and the alternative — a
-Lisp-side normalizing wrapper that could signal — would have put a second, divergent copy
-of the shape rules next to the codegen's.
+Two shapes the gate refuses, one the lift had never seen:
 
-### Three things the encoders needed
+- An **empty `record`** is not encodable in the component model — a compile error naming the WIT
+  line.
+- A **`record` / `tuple` RESULT that flattens to one core value** never reaches the return area,
+  and `emitLiftFlat` had no case for it, so the gate accepted what the codegen refused.
+  `emitLiftRecordFlat` lifts it into the same plist / list.
+- `option<bool>` is representationally ambiguous (`some(false)` and `none` are both nil).
+  **Accepted, not refused** — a known hole, both directions.
 
-- **The joined payload flats** (`WitCanonicalAbi.flatTypes` already computed them): each
-  case's flats are coerced to the joined type per the canonical ABI (`i32`->`i64` =
-  `extend_u`, `f32`->`i32` = `reinterpret`, `f64`->`i64` = `reinterpret`) and the positions
-  a case does not reach are zero-filled. A joined FLOAT flat rides in an integer scratch
-  local as its bit pattern (`storageOf`), which keeps the scratch pools to two. Per-case,
-  per-field and per-ARGUMENT cursors are rolled back (a lowered argument's scratch dies the
-  moment its flats are on the stack), so the cost is the deepest nesting, not the sum.
-- **The scratch pools are SIZED BY MEASUREMENT, not by a constant** -- `buildWrapperBody`
-  emits the body twice, reads the cursors' high-water marks off the first pass, and emits
-  again with pools of exactly that size (the locals declaration is written after the body
-  either way; what pass 1 buys is the local INDICES, which must already be right while the
-  body is written). This is not a nicety: the first cut used fixed pools (i32 x 24, i64 x
-  5) and **`wasi:http`'s `response-outparam.set` -- the ONE call this whole line of work
-  exists for -- blew through them** (result -> variant -> option -> record ->
-  option<string>, five levels), while the test corpus, whose trimmed WIT dropped
-  `error-code`, stayed green. Any constant is walked past by a deeper WIT; do not re-fix
-  this by raising one.
-- **`needsMemory` must recurse into variant cases and record fields** — a string inside a
-  case payload stages memory, and missing that would emit a `canon lower` with no memory
-  options.
-- **`repOf` must resolve aliases first.** `type headers = fields` (every wasi:http-shaped
-  interface writes it) is an alias whose target is itself a NAME, and `WitTypeMapper`
-  classifies structurally, so it threw `IllegalArgumentException`. A latent crash on EVERY
-  backend, not just this one; `WasmComponentImportCompilerTest.followsATypeAlias...` pins it.
+**Verified against real hosts** (a unit test can only say the bytes contain the import name).
+E2Es in `WasmLispCompilerIntegrationTest` (container wasmtime) call wasmtime's own
+implementations: `wasi:http/types` (`set-method :post` / `'(:other . "PATCH")`, read back with
+`method`; an invalid method makes the host answer the error arm -> `wit-error`);
+`wasi:sockets/types` (`tcp-socket-create :ipv4`, `bind '(:ipv4 :port 0 :address (127 0 0 1))`
+= variant -> record -> tuple, read back with `get-local-address`); `wasi:cli/exit` (the arm the
+host received IS the process exit code, `:ok` -> 0, `'(:error)` -> 1).
 
-### Two shapes the gate must refuse, and one the lift had never seen
+**Trap: trimmed WIT in a test must match the host's real interface EXACTLY** (the subtype check
+is structural) — a hand-written `enum error-code` for wasi:sockets failed with "expected variant
+found enum" until copied from the vendored `.wit`.
 
-- An **empty `record`** is not encodable in the component model at all ("record type must
-  have at least one field"), so it is a compile error naming the WIT line rather than an
-  unreadable component.
-- A **`record` / `tuple` RESULT that flattens to one core value** (a single-field record)
-  never reaches the return area -- it comes back IN the flat -- and `emitLiftFlat` had no
-  case for it, so the gate accepted what the codegen then refused. `emitLiftRecordFlat`
-  lifts it into the same plist / list the memory path would have.
-- `option<bool>` remains representationally ambiguous (`some(false)` and `none` are both
-  nil). It is accepted, not refused: a program can still pass `t` or `nil`-as-none, and
-  refusing it would lock out interfaces that only ever use those. Known hole, both
-  directions.
+**A user import must not collide with the WASI surface**:
+`(wit-import "wasi:sockets/types@0.3.0")` in a program also calling `rontolisp:tcp-*` emitted the
+SAME instance import name twice — invalid, and only wasmtime said so, at a byte offset.
+`WasmComponentBuilder.rejectAdapterImportCollisions` names it at compile time; the check lives
+where the blob variant is finally known (`build`), not in the directive.
 
-### Verified against real hosts (nothing else can check a lowered param)
+**The alignment trap**: `__ronto_alloc` returns `HEAP_PTR` as-is, and **`HEAP_PTR` is not always
+8-aligned** (`_intern` advances the pointer by a symbol's exact byte length). Handing it to the
+canonical ABI as a return area traps with `pointer not aligned` — nondeterministically, only
+after a program interns something. The wrapper **aligns HEAP_PTR up to 8 on entry** (also the
+staging floor) and pops back to `align8(max(mark, intern-high-water))` on exit. Do not
+"simplify" either.
 
-A unit test can only say the bytes contain the import name. What proves a param is right is
-a host that ANSWERS with what it received, so the E2Es (in `WasmLispCompilerIntegrationTest`,
-container wasmtime) call wasmtime's own implementations:
+## What CANNOT be externalized as a WIT import
 
-- `wasi:http/types` — `set-method :post` / `'(:other . "PATCH")`, read back with `method`
-  (round trip); an invalid method makes the host answer the error arm -> `wit-error`.
-- `wasi:sockets/types` — `tcp-socket-create :ipv4` (enum), `bind '(:ipv4 :port 0 :address
-  (127 0 0 1))` (variant -> record -> tuple), read back with `get-local-address`. The host
-  binds the address it was handed, which is the actual proof.
-- `wasi:cli/exit` — `exit: func(status: result)`, the cheapest result PARAM: the arm the
-  host received IS the process exit code (`:ok` -> 0, `'(:error)` -> 1).
-
-Trimmed WIT in a test must match the host's real interface EXACTLY (the component-model
-subtype check is structural): a hand-written `enum error-code` for wasi:sockets failed with
-"expected variant found enum" until it was copied from the vendored `.wit`.
-
-### A user import must not collide with the WASI surface (fixed here)
-
-Nothing compared a user's interface id against the fixed adapter blob's imports, so
-`(wit-import "wasi:sockets/types@0.3.0")` in a program that also calls `rontolisp:tcp-*`
-emitted a component with the SAME instance import name twice — invalid, and only wasmtime
-said so, at a byte offset. `WasmComponentBuilder.rejectAdapterImportCollisions` now names
-it at compile time. The surface grows with what the program uses, which is why the check
-lives where the blob variant is finally known (`build`), not in the directive.
-
-### The alignment trap (this cost the only real debugging round)
-
-`__ronto_alloc` returns `HEAP_PTR` as-is, and **`HEAP_PTR` is not always 8-aligned**:
-`_intern` copies a first-seen symbol's bytes into the permanent low region and advances the
-pointer by their exact length. Hand that pointer to the canonical ABI as a return area and
-wasmtime traps with `pointer not aligned` — nondeterministically, only after a program
-happens to intern something. So the wrapper **aligns HEAP_PTR up to 8 on entry** (that is
-also the staging floor) and pops back to `align8(max(mark, intern-high-water))` on exit.
-Do not "simplify" either of those.
-
-## What CANNOT be externalized as a WIT import (so nobody re-proposes it)
-
-The roadmap that produced all of the above (the todo-124 anchor, closed 2026-07-17 once
-the WebGL demos adopted `gl.wit`) left one list worth keeping: the blobs that stay
-hand-written WAT on purpose, and why. Everything else the anchor recorded is here already
--- the type mapping in `compiler/WitTypeMapper` + `WitTypeMapperTest`, the `result<T,E>`
-option (c) decision above.
-
-- **The base adapter.** The core module's `wasi_snapshot_preview1` import layout is
-  Preview-1-IDENTICAL by design, and every `FUNC_*` constant in the WASM backend rests on
-  that layout. It is not a boundary a program chose; it is the one every program has.
-  **Re-evaluated from zero 2026-07-17** (the deferred final item of the sockets/stdin
-  migration), per the "re-read a wall" lesson below: after sockets and async stdin moved
-  off, what remains on `adapter.wat` is the SYNC stdin branch, file I/O
+- **The base adapter (`adapter.wat`).** The core module's `wasi_snapshot_preview1` import layout
+  is Preview-1-IDENTICAL by design and every `FUNC_*` constant rests on it. Re-evaluated from
+  zero after sockets and async stdin moved off; what remains is the SYNC stdin branch, file I/O
   (`path_open`/`fd_read`/`fd_close` + the `fd_write` append cycle), stdout/stderr writes,
-  and env/clock/random. The wall is NOT technical anymore -- every migration mechanism
-  exists (wit-import canon lower, the async promotion rewrite, `%future-force`,
-  `TYPE_WASI_STREAM` handles) -- it is the byte-stability/flag-neutrality CONTRACT for
-  non-async programs: 0.3 file/stdio I/O is stream-based, so a Lisp-library
-  implementation makes every file- or print-using component an async+EH component,
-  exactly the flip the stdin migration deliberately
-  avoided by keeping the adapter's sync branch. Per surface: env/clock/random are
-  sync-lowerable TODAY but buy nothing (no promotion goal, no blob deletion since the
-  `fd_*` surface stays, per-program WIT-world churn) -- declined; file I/O migration's
-  only functional gain is "file reads don't stall async bodies", with no recorded demand
-  -- deferred until that promotion goal is real; stdout writes virtually never block
-  (the sync-export finding) -- declined. So `adapter.wat` STAYS, deliberately.
-  Revisit trigger: a real need for non-stalling file reads inside async bodies (that
-  migration would follow the stdin.lisp pattern: a wit-imported filesystem library
-  behind the same `%io-*` dispatch, async-gated so sync programs stay byte-identical).
-- **The serve preview1 bridge** -- the same thing in miniature.
-- **The `--no-gc` print micro-adapter.** A different backend, whose value model is unboxed
-  i64/f64 over linear memory; `wit-import` is rejected there by design.
+  env/clock/random. **The wall is no longer technical** — every mechanism exists (wit-import
+  canon lower, the async promotion rewrite, `%future-force`, `TYPE_WASI_STREAM` handles) — it is
+  the byte-stability/flag-neutrality CONTRACT for non-async programs: 0.3 file/stdio I/O is
+  stream-based, so a Lisp-library implementation makes every file- or print-using component an
+  async+EH component. env/clock/random are sync-lowerable today but buy nothing — declined; file
+  I/O's only gain is "file reads don't stall async bodies", no recorded demand — deferred;
+  stdout writes virtually never block — declined. **`adapter.wat` STAYS.** Revisit trigger: a
+  real need for non-stalling file reads inside async bodies (following the stdin.lisp pattern —
+  a wit-imported filesystem library behind the same `%io-*` dispatch, async-gated).
+- **The serve preview1 bridge** — the same in miniature.
+- **The `--no-gc` print micro-adapter** — a different backend (unboxed i64/f64 over linear
+  memory); `wit-import` is rejected there by design.
 
-**`wasi:sockets` used to be on this list and is NOT (2026-07-17).** The stated wall -- "its
-0.3 surface is fundamentally `stream`/`future`-based, which has no rontolisp value on ANY
-backend until language-level async" -- was true when written and has since been torn down:
-async/await landed, `stream`/`future` ARE first-class rontolisp values, and
-`stream<u8>`/`future<T>` already cross `canon lower` (it is what `http.lisp` rides).
-`sockets.lisp` now rides a wit-imported `wasi:sockets/types@0.3.0` and
-`adapter-sockets.wat` is deleted (`.kb/tcp-sockets.md`). The lesson worth keeping: a "wall"
-here meant a missing LANGUAGE feature, and the language moved -- so re-read a wall before
-trusting it.
+**`wasi:sockets` used to be on this list and is NOT.** The stated wall — "its 0.3 surface is
+`stream`/`future`-based, which has no rontolisp value on ANY backend until language-level async"
+— was true when written and has been torn down: `stream`/`future` ARE first-class values and
+`stream<u8>`/`future<T>` cross `canon lower`. `sockets.lisp` rides a wit-imported
+`wasi:sockets/types@0.3.0` and `adapter-sockets.wat` is deleted (`.kb/tcp-sockets.md`).
+**Lesson: a "wall" here meant a missing LANGUAGE feature, and the language moved — re-read a wall
+before trusting it.**

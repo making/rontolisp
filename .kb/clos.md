@@ -1,1590 +1,1116 @@
 # CLOS static subset — defclass / defgeneric / defmethod / make-instance / slot-value
 
-User-facing behavior: `doc/en/reference/special-forms/{defclass,defgeneric,defmethod}.md`,
-`doc/en/reference/macros/{make-instance,slot-value}.md`, and the missing-features
-guide (what is out of scope: runtime class ops permanently). Stages 1+2+3 DONE
-(2026-07-06): dispatch + standard method combination (`:before`/`:after`/`:around`
-+ `call-next-method`/`next-method-p`). Multiple inheritance DONE (2026-08-02,
-todo-232) — see "Multiple inheritance" below.
+User docs: `doc/en/reference/special-forms/{defclass,defgeneric,defmethod}.md`,
+`doc/en/reference/macros/{make-instance,slot-value}.md`, missing-features guide.
+Dispatch, standard method combination and multiple inheritance are DONE.
 
-## Design: the defstruct pattern, one shared registry, one shared dispatcher generator
+Everything expands to plain defuns via `LispMacroExpander` (no backend codegen).
+`ClosRegistry` (in `am.ik.rontolisp`) holds classes, generics and `slotPositions` (slot
+base name -> 1-based position, `-1` when unrelated classes disagree -- `slot-value` then
+errors "use the accessor"). One per evaluator (`LispEvaluator.closRegistry`) and per
+compilation (`Jvm/WasmLispCompiler.Ctx`, threaded via `Ctx.Builder` beside
+`structAccessors`).
 
-Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
+## `expandDefclass(cons, closRegistry, structAccessors)`
 
-- `expandDefclass(cons, closRegistry, structAccessors)` — registers a
-  `ClosRegistry.ClassInfo` and generates the internal keyword constructor
-  `%make-<name>` (`&key ((:initarg slot) initform)...` over the FULL slot list)
-  plus one synthesized `(defmethod R ((__obj C)) (nth pos __obj))` per
-  `:reader`/`:accessor` — a METHOD, not a plain defun, because several classes
-  may declare the same reader name over DIFFERENT slot positions (cl-ppcre's
-  `len` in str/repetition/lookbehind/filter) and a user `defmethod` on the same
-  name must merge instead of shadowing. The write side of an `:accessor` is a
-  `%setf-<name>` writer GENERIC (`(defmethod %setf-A (__new (__obj C)) ...)`,
-  new value first) registered in `structAccessors` under
-  `SETF_FUNCTION_MARKER`, so `(setf (A x) v)` funcalls the writer dispatcher.
-  The interpreter's `evalDefclass` just evals the returned forms (a defmethod
-  routes through `evalDefmethod`); the compile path's
-  `expandTopLevelDefinitions` sends them through `addExpandedDefinition` (same
-  expansion + dispatcher-slot placement as a top-level defmethod). A
-  position-ambiguous `slot-value`/`with-slots` name falls back to the reader
-  generic (`expandSlotValue`); its setf re-dispatches through the writer.
-  `initialize-instance` is supported in the `:after` shape: the FIRST user
-  method on it also synthesizes an identity default primary (no system primary
-  exists), and `expandMakeInstance` — when any generic plainly named
-  `initialize-instance` is registered — hoists the initargs into let* temps,
-  calls the constructor, then the generic, and returns the instance. An
-  instance is a first-class object built by `(%obj-new '%class-<name> v...)`
-  (`.kb/instance-syntax.md`), NOT a list; layout = superclass slots
-  (inheritance order) + own slots, so single inheritance keeps slot indexes
-  stable in all descendants, and a reader/writer body is
-  `(%obj-ref __obj i)` / `(%obj-set __obj i __new)`.
-- `registerDefgeneric` / `expandDefmethod` — record into
-  `ClosRegistry.GenericInfo` (methods keyed by `qualifier + specializer`, so
-  same-qualifier-same-specializer redefinition replaces while a `:before dog`
-  and a primary `dog` coexist); each defmethod becomes a plain defun
-  `%<generic>--m<i>` (body kept verbatim: a leading docstring is evaluated and
-  discarded, `declare` expands to nil). Stage 3: an optional `:before`/`:after`/
-  `:around` qualifier precedes the lambda list (stored on `MethodInfo.qualifier`,
-  `""` = primary), and EVERY method-body defun gains a leading `%next-method`
-  thunk parameter — `rewriteNextMethod` turns `(call-next-method args...)` into a
-  guarded `(if %next-method (funcall %next-method args-or-current-params) (error))`
-  and `(next-method-p)` into `(not (null %next-method))`. `call-next-method`/
-  `next-method-p` are matched by package-stripped name (NOT in `CL_SYMBOLS`, so no
-  introspection churn) and are rewritten away before any backend sees them.
-  `MethodInfo.usesNext` records whether a body mentions them.
-- `generateDispatcher(name, registry)` — ONE dispatcher defun per generic: a
-  nested-if chain over the methods, most specific first. An OPTIMIZING compile
-  additionally passes a `DispatchNarrower` (`compiler/GenericDispatchNarrowing`),
-  which omits the branches no call site in the program can select so the shakers
-  drop their method defuns — soundness rules, exclusions and the zlib measurement
-  in `.kb/optimize-dead-code-elimination.md`; every other caller (the
-  interpreter, `ShadowedBuiltins`' structural comparison, non-optimizing builds)
-  passes null and the dispatcher is byte-identical. Specializers may sit on
-  ANY required parameter; methods order by comparing parameters leftmost-first
-  with `specializerRank` per parameter (eql 0, classes 10..99 by descending
-  ancestor-set size = subclass first, built-in types 200s with subtypes like
-  `null`/`package`/`keyword`/`integer` before `symbol`/`number`/`list`, default 1000;
-  stable sort keeps definition order within a rank), and a branch tests every
-  specialized parameter. A generic whose lambda list continues past the
-  required params (`&optional`/`&rest`) gets a variadic dispatcher that
-  forwards the tail to the selected method via `apply` (and `call-next-method`
-  there forwards that tail too -- see the argument-forwarding note below).
-  That `apply` shape -- a literal `#'m` target whose required parameters are
-  all covered by the leading arguments -- is the compile backends' ALIGNED
-  fast path (`Jvm/WasmApplyCompiler`): the required parameters pass directly
-  and the rest parameter takes the tail verbatim (or the excess consed onto
-  it), no argument-list build-then-unpack round trip. Every variadic
-  dispatcher branch and every next-chain lambda is this shape, ~80-300 B of
-  ceremony each before the peephole (230 of the cl-ppcre probe's 259 method
-  calls carried it). Fewer leading arguments than required parameters, or a
-  non-variadic target, keep the build-then-unpack path. Pinned by
-  `JvmLispCompilerTest.compileAndRunApplyAlignedVariadicTarget` /
-  `WasmLispCompilerIntegrationTest.applyAlignedVariadicTarget` (tail identity
-  -- the rest parameter IS the applied list -- and source evaluation order
-  included).
-  `defgeneric` inline
-  `(:method [qualifier] (params) body...)` clauses register like separate
-  defmethods (`registerDefgeneric` collects their method defuns;
-  `expandTopLevelDefinitions` splices them on the compile path). Falls back to
-  the default method or the no-applicable-method signal, which is ONE call of
-  the shared `%no-applicable-method` defun (`noApplicableMethodDefun`), the
-  per-generic message half traveling as a literal prefix argument -- the error
-  tail (condition construction plus the class-naming render) re-inlined per
-  dispatcher cost over a KB of code EACH across a library's synthesized slot
-  accessors (cl-ppcre's probe module dropped 85 KB of wasm when it was
-  outlined, `.kb/optimize-dead-code-elimination.md`). The defun is appended
-  once by `expandTopLevelDefinitions` (a `referencesFunction` scan just before
-  the format-renderer scan, which must see its error form), and the
-  interpreter defines it before its first dispatcher
-  (`LispEvaluator.defineDispatcher`), so the dispatcher AST is one shape
-  everywhere -- `ShadowedBuiltins`' structural dead-dispatcher comparison
-  relies on that. Pinned by
-  `LispMacroExpanderTest.theDispatcherLastResortIsOneCallOfTheSharedNoApplicableMethodSignal`
-  and
-  `WasmLispCompilerTest.aSlotAccessorDispatcherDoesNotCarryItsOwnCopyOfTheNoApplicableMethodTail`;
-  the rendered message is byte-identical to the inline tail it replaced.
-  eql/built-in tests reuse
-  `makeTypeTest`-family helpers (`makeEqlSpecializerTest`: symbols/keywords
-  compare with `equal` — content-safe on WASM — numbers/characters with `eql`);
-  **the TYPE specializers a `defmethod` accepts (`isSupportedTypeSpecializer`) and the
-  types `makeTypeTest` builds are ONE definition, not two lists that drift** — a name
-  admitted there compiles to that type's very test, which is why `package`
-  (todo-376: a keyword naming a registered package, `.kb/symbol-runtime-api.md`)
-  became a specializer by adding the name alone. `package` ranks 205 — ahead of
-  `keyword` (210) and `symbol` (220) — because a package IS a keyword in this value
-  model: rove's `find-suite` pairs a `((package package))` method with an
-  unspecialized DESIGNATOR method that calls `find-package` and recurses, and
-  misordered that recurses forever. A keyword naming no package still falls through
-  to a `keyword`/`symbol` method. Pinned by
-  `LispEvaluatorTest.evalPackageIsADefmethodSpecializer` /
-  `...SpecializerOutranksKeywordAndSymbol` and the `compileAndRun` twins in
-  `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`, plus the
-  `package-defmethod-specializer` ci-spec case;
-  a class test is `(%obj-is x '%class-C ...)` over the statically-known
-  descendant tags. The dispatcher is an ordinary defun, so
-  `#'name`/`funcall`/mapcar work with no `BuiltinFunctionWrappers` entry.
-  An `(eql form)` specializer's form is EVALUATED when the method is defined
-  (CLHS 7.6.2), and the one such form a static walk can evaluate is a constant
-  name: `ClosRegistry` carries a `defconstant` name -> literal value table
-  (`registerConstant`/`findConstant`), filled in DEFINITION ORDER -- by the
-  compile path's top-level walk (`expandTopLevelDefinitions`, from the literal
-  value form, so the `PureBuiltinFolder` pass that runs first widens what
-  counts) and by the interpreter's `evalDefconstant` (from the EVALUATED value,
-  which it has and the walk does not). `parseEqlSpecializerValue` consults it
-  for a BARE symbol only; a quoted `(eql 'x)` is the symbol `x` as before, and
-  a bare symbol naming no constant keeps standing for itself -- not CL, but
-  what sources spelling `(eql foo)` already get, so nothing that worked breaks.
-  Constants are not a CLOS concept; the table lives on the registry because
-  that is the one definition-scoped object the specializer parse already
-  carries, and `macro` sits below `eval` with no macro-time evaluator to ask.
-  Found by the cl+ssl probe, whose `x509.lisp` writes one method per ASN.1
-  string-type constant. Pinned by
-  `LispEvaluatorTest.defmethodEqlSpecializerNamingAConstantDispatchesOnItsValue`
-  / `...NamingNoConstantStaysTheSymbol`, the
-  `compileAndRunDefmethodEqlSpecializerNamingAConstant` twins in
-  `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`, and the
-  `clos-defmethod-eql-specializer-over-a-constant` ci-spec case (all four
-  backends).
-  - Two bodies: `simpleDispatchBody` (unchanged single-call-per-branch) is used
-    when the generic has NO qualifier and NO `call-next-method` usage; otherwise
-    `combinedDispatchBody` emits standard method combination. Combined = one
-    branch per distinct specializer (`specKeyOf`, qualifier-independent) plus the
-    default fallback; each branch's value is `effectiveMethod(branchRep, ...)`.
-  - `effectiveMethod` collects the applicable methods per role (`applicableMethods`
-    filters by `appliesToBranch`: default methods always apply; a class method
-    applies to a class branch whose class has it as an ancestor; a STRUCT (type)
-    method applies to a branch struct that `:include`-descends from it, via the
-    spelling-tolerant `descendantStructTags` — sxql's yield methods over the
-    sql-statement `:include` tree, todo-244; eql and built-in type methods apply
-    only to their exact-same branch — cross-type subtyping among THEM stays out
-    of scope),
-    **plus one branch per position-wise MEET of two INCOMPARABLE specializer
-    vectors** (todo-249, `addMeetBranches`/`specializerMeet`). One branch per
-    method is enough only while the vectors form a chain, because
-    `appliesToBranch` is a SUBSET test: a `(dbd-postgres-connection, DEFAULT)`
-    branch does not admit a `(dbi-connection, string)` method, since `string`
-    is not a subtype of that position's `DEFAULT`. Without a branch for the meet
-    `(dbd-postgres-connection, string)`, a call satisfying BOTH took the coarser
-    branch and the other method vanished from the applicable set — cl-dbi's
-    `do-sql` lost its next method that way, and a `:before`/`:after` in the same
-    shape would vanish too. CL has no such notion: it computes the applicable set
-    from the actual arguments, and a meet branch is what restores that for the
-    combinations that need it. The scan is quadratic but runs to a fixpoint only
-    over pairs that are compatible AND incomparable — rare enough that in
-    cl-dbi's whole surface exactly one pair qualifies — so a generic with none
-    keeps its emitted dispatcher byte-identical. **Re-evaluation trigger**: the
-    JVM 64 KB method ceiling (`.kb/jvm-method-size-limits.md`) is the thing to
-    watch if a future library has many mutually incomparable methods on one
-    generic,
-    then composes them: `:around` (most specific first) wrap a `coreThunk`; the
-    core runs `:before` (msf, for effect), the primary chain (msf, value kept via a
-    `%clos-result` let), then `:after` (LEAST specific first). The primary/around
-    chains are built by `buildNextChain` as nested `(lambda (params) (%m next
-    params))` literals passed as each method's `%next-method` — NO free-variable
-    capture (each lambda re-binds params, method names are global), so it is just
-    first-class `lambda`+`funcall`, well supported on all backends. Base next =
-    `nil` for the innermost primary (so `next-method-p` is nil / `call-next-method`
-    errors) and the `coreThunk` for the innermost around.
+- Registers a `ClosRegistry.ClassInfo`; generates the keyword constructor `%make-<name>`
+  (`&key ((:initarg slot) initform)...` over the FULL slot list) plus one synthesized
+  `(defmethod R ((__obj C)) (nth pos __obj))` per `:reader`/`:accessor` -- a METHOD, not a
+  defun, since several classes may declare one reader name over DIFFERENT slot positions
+  and a user `defmethod` must merge, not shadow.
+- An `:accessor`'s write half is a `%setf-<name>` writer GENERIC
+  (`(defmethod %setf-A (__new (__obj C)) ...)`, new value first) registered in
+  `structAccessors` under `SETF_FUNCTION_MARKER`; `(setf (A x) v)` funcalls that dispatcher.
+- Interpreter `evalDefclass` evals the returned forms; the compile path's
+  `expandTopLevelDefinitions` sends them through `addExpandedDefinition`.
+- A position-ambiguous `slot-value`/`with-slots` name falls back to the reader generic
+  (`expandSlotValue`); its setf re-dispatches through the writer.
+- `initialize-instance` in the `:after` shape: the FIRST user method also synthesizes an
+  identity default primary; `expandMakeInstance`, when a generic plainly named
+  `initialize-instance` is registered, hoists initargs into let* temps, calls the
+  constructor, then the generic, returning the instance.
+- An instance is `(%obj-new '%class-<name> v...)` (`.kb/instance-syntax.md`), NOT a list.
+  Layout = superclass slots (inheritance order) + own slots, so single inheritance keeps
+  indexes stable in descendants; accessor bodies are `(%obj-ref __obj i)` /
+  `(%obj-set __obj i __new)`.
 
-`ClosRegistry` (in `am.ik.rontolisp`) holds classes, generics, and
-`slotPositions` (slot base name -> 1-based position, `-1` when unrelated classes
-disagree — `slot-value` then errors "use the accessor"). It lives per evaluator
-(`LispEvaluator.closRegistry`) and per compilation (`Jvm/WasmLispCompiler.Ctx`,
-threaded through `Ctx.Builder` beside `structAccessors`).
+## `registerDefgeneric` / `expandDefmethod`
 
-## Multiple inheritance (todo-232, 2026-08-02)
+- Records `ClosRegistry.GenericInfo`, methods keyed by `qualifier + specializer`
+  (same-qualifier-same-specializer redefinition replaces; a `:before dog` and a primary
+  `dog` coexist). Each defmethod becomes a defun `%<generic>--m<i>` (body verbatim; a
+  leading docstring is evaluated and discarded, `declare` expands to nil).
+- Optional `:before`/`:after`/`:around` qualifier precedes the lambda list
+  (`MethodInfo.qualifier`, `""` = primary). EVERY method-body defun gains a leading
+  `%next-method` thunk parameter; `rewriteNextMethod` turns `(call-next-method args...)`
+  into `(if %next-method (funcall %next-method args-or-current-params) (error))` and
+  `(next-method-p)` into `(not (null %next-method))`. Both are matched by package-stripped
+  name (NOT in `CL_SYMBOLS`) and rewritten away before any backend sees them.
+  `MethodInfo.usesNext` records whether a body mentions them. `(apply #'call-next-method
+  ...)` / `(funcall #'call-next-method ...)` are rewritten too, not only head position.
+- `defgeneric` inline `(:method [qualifier] (params) body...)` clauses register like
+  separate defmethods; `expandTopLevelDefinitions` splices them on the compile path.
 
-`ClosRegistry.ClassInfo` carries `superclasses` (local precedence order), `cpl`
-(the class precedence list -- CLHS 4.3.5 topological sort in
-`LispMacroExpander.computeCpl`, inconsistent local orders are an
-`IllegalArgumentException`) and `directSlots` (the class's OWN specs, for the
-CPL option merge) beside the effective `slots` and the ancestor SET. The ~20
-consumers that only ask "is X an ancestor?" (descendant tags, typep/subtypep
-tables, refill targeting, ...) ride the set unchanged.
+## `generateDispatcher(name, registry[, builtinFallback])`
 
-- **Layout rule**: the FIRST superclass's effective slots keep their indexes
-  (the prefix rule single inheritance already had), each later superclass
-  appends its not-yet-present slot names, a diamond keeps ONE copy. Inherited
-  slot OPTIONS are then re-merged from the direct specs along the CPL
-  (`cplMergedSlot` + `shadowSlotSpec`), so a non-first superclass's
-  re-declaration still beats the shared base's.
-- **Shifted accessors**: a non-first superclass's readers/accessors bake THEIR
-  index and their class test covers the subclass, so `expandDefclass`
-  synthesizes overriding reader/accessor (+ `%setf-` writer) methods
-  specialized on the SUBCLASS for every inherited slot whose index differs in
-  any CPL ancestor -- subclass-first dispatch makes them win. Single
-  inheritance never shifts, so nothing is synthesized there.
-- **Dispatch refinement** (`miRefinement`, gated on
-  `ClosRegistry.hasMultipleInheritance()` so single-inheritance dispatchers
-  stay byte-identical): a registered class whose applicable class specializers
-  have NO single most-specific member (unrelated supers, e.g. `(a b)` with
-  methods on both) gets an EXACT-TAG branch -- `(%obj-is x '%class-X)`, X
-  alone -- placed by the same specificity sort. Simple body: the branch calls
-  the method X's CPL ranks first. Combined body: the branch's effective method
-  is computed against X (complete applicable set; per-branch method order via
-  `branchSpecificityOrder`, which ranks class specializers by the branch
-  class's CPL index). Classes WITH a dominator need no branch: the dominator's
-  own branch sorts first and `appliesToBranch` over its ancestors is complete.
-  LITE residual: the refinement handles class dispatch on ONE parameter
-  position (every class-specialized method must specialize only that
-  position); a diamond-affected class meeting a generic that class-dispatches
-  on several positions keeps the per-specializer branches, which can miss the
-  second super's methods there. Re-evaluate if a library hits it.
-- `conditionReportGroups` inherits `:report` along the CPL;
-  `define-condition` with several REGISTERED parents now does real MI (slots
-  inherited; an UNREGISTERED extra parent still falls back to the
-  ancestors-only `registerExtraAncestors` route); `change-class`'s initform
-  fill SKIPS a source whose layout is not a base-name prefix of the target
-  (degrades to the layout-swap-only behavior unrelated classes get);
-  `%class-meta-table%`'s superclass column is a LIST (consumed by the
-  `%find-class-materialize` dolist), and mop-protocol.lisp's
-  `finalize-inheritance` merges inherited effective slots across ALL direct
-  supers (first occurrence of a name wins, like the static layout merge).
+ONE dispatcher defun per generic: a nested-if chain, most specific first. It is an ordinary
+defun, so `#'name`/`funcall`/mapcar work with no `BuiltinFunctionWrappers` entry.
 
-Pinned by `LispEvaluatorTest#defclassMultipleInheritance*`/`#defclassDiamond*`/
+- An OPTIMIZING compile passes a `DispatchNarrower` (`compiler/GenericDispatchNarrowing`)
+  omitting branches no call site can select, so the shakers drop those method defuns
+  (`.kb/optimize-dead-code-elimination.md`). Every other caller passes null and the
+  dispatcher is byte-identical.
+- Specializers may sit on ANY required parameter. Ordering compares parameters
+  leftmost-first with `specializerRank`: eql 0, classes 10..99 by descending ancestor-set
+  size (subclass first), built-in types 200s with subtypes (`null`/`package`/`keyword`/
+  `integer`) before `symbol`/`number`/`list`, default 1000; stable sort keeps definition
+  order within a rank. `package` ranks 205, ahead of `keyword` (210) and `symbol` (220),
+  because a package IS a keyword in this value model (`.kb/symbol-runtime-api.md`);
+  misordered, rove's `find-suite` recurses forever. A keyword naming no package falls
+  through to a `keyword`/`symbol` method.
+- **The TYPE specializers `defmethod` accepts (`isSupportedTypeSpecializer`) and the types
+  `makeTypeTest` builds are ONE definition, not two lists that drift.**
+  `makeEqlSpecializerTest`: symbols/keywords compare with `equal` (content-safe on WASM),
+  numbers/characters with `eql`. A class test is `(%obj-is x '%class-C ...)` over the
+  statically-known descendant tags.
+- A generic whose lambda list continues past the required params gets a VARIADIC dispatcher
+  forwarding the tail via `apply` (and `call-next-method` forwards it too). That shape -- a
+  literal `#'m` target whose required parameters are all covered by the leading arguments --
+  is the compile backends' ALIGNED fast path (`Jvm/WasmApplyCompiler`): required parameters
+  pass directly, the rest parameter takes the tail verbatim (or the excess consed on), no
+  build-then-unpack round trip (~80-300 B saved each). Fewer leading arguments than required
+  parameters, or a non-variadic target, keep the build-then-unpack path.
+- The last resort is ONE call of the shared `%no-applicable-method` defun
+  (`noApplicableMethodDefun`), the per-generic message riding as a literal prefix argument;
+  re-inlining the error tail cost over a KB EACH across a library's synthesized accessors.
+  `expandTopLevelDefinitions` appends it once (a `referencesFunction` scan just before the
+  format-renderer scan, which must see its error form); the interpreter defines it before
+  its first dispatcher (`LispEvaluator.defineDispatcher`). The dispatcher AST is therefore
+  ONE shape everywhere, which `ShadowedBuiltins`' structural dead-dispatcher comparison
+  relies on.
+- An `(eql form)` specializer's form is EVALUATED at method definition (CLHS 7.6.2); the
+  only such form a static walk can evaluate is a constant name. `ClosRegistry` carries a
+  `defconstant` name -> literal value table (`registerConstant`/`findConstant`) filled in
+  DEFINITION ORDER by `expandTopLevelDefinitions` (from the literal value form, after
+  `PureBuiltinFolder`) and by the interpreter's `evalDefconstant` (from the EVALUATED
+  value). `parseEqlSpecializerValue` consults it for a BARE symbol only; `(eql 'x)` is the
+  symbol `x`, and a bare symbol naming no constant stands for itself.
+
+### The two dispatch bodies
+
+- `simpleDispatchBody` (one call per branch) when the generic has NO qualifier and NO
+  `call-next-method` usage; otherwise `combinedDispatchBody` = one branch per distinct
+  specializer (`specKeyOf`, qualifier-independent) plus the default fallback, each branch's
+  value `effectiveMethod(branchRep, ...)`.
+- `applicableMethods` filters by `appliesToBranch`: default methods always apply; a class
+  method applies to a class branch whose class has it as an ancestor; a STRUCT (type) method
+  applies to a branch struct that `:include`-descends from it, via the spelling-tolerant
+  `descendantStructTags`; eql and built-in type methods apply only to their exact-same
+  branch (cross-type subtyping among THEM is out of scope).
+- **Plus one branch per position-wise MEET of two INCOMPARABLE specializer vectors**
+  (`addMeetBranches`/`specializerMeet`). One branch per method suffices only while the
+  vectors form a chain, because `appliesToBranch` is a SUBSET test: a
+  `(dbd-postgres-connection, DEFAULT)` branch does not admit a `(dbi-connection, string)`
+  method, so without the meet branch a call satisfying BOTH took the coarser branch and the
+  other method vanished. The scan is quadratic but runs to fixpoint only over compatible
+  AND incomparable pairs, so a generic with none keeps its dispatcher byte-identical.
+  **Trigger**: the JVM 64 KB method ceiling (`.kb/jvm-method-size-limits.md`) if a library
+  ever has many mutually incomparable methods on one generic.
+- Composition: `:around` (most specific first) wrap a `coreThunk`; the core runs `:before`
+  (msf, for effect), the primary chain (msf, value kept via a `%clos-result` let), then
+  `:after` (LEAST specific first). Chains are built by `buildNextChain` as nested
+  `(lambda (params) (%m next params))` literals passed as each method's `%next-method` -- NO
+  free-variable capture. Base next = `nil` for the innermost primary, the `coreThunk` for
+  the innermost around.
+
+## Multiple inheritance
+
+`ClassInfo` carries `superclasses` (local precedence order), `cpl` (CLHS 4.3.5 topological
+sort in `LispMacroExpander.computeCpl`; inconsistent local orders are an
+`IllegalArgumentException`) and `directSlots`, beside the effective `slots` and the ancestor
+SET. The ~20 consumers that only ask "is X an ancestor?" ride the set unchanged.
+
+- **Layout rule**: the FIRST superclass's effective slots keep their indexes, each later
+  superclass appends its not-yet-present slot names, a diamond keeps ONE copy. Inherited
+  slot OPTIONS are re-merged from the direct specs along the CPL (`cplMergedSlot` +
+  `shadowSlotSpec`).
+- **Shifted accessors**: a non-first superclass's accessors bake THEIR index while their
+  class test covers the subclass, so `expandDefclass` synthesizes overriding
+  reader/accessor/`%setf-` writer methods specialized on the SUBCLASS for every inherited
+  slot whose index differs in any CPL ancestor. Single inheritance never shifts.
+- **Dispatch refinement** (`miRefinement`, gated on `ClosRegistry.hasMultipleInheritance()`
+  so single-inheritance dispatchers stay byte-identical): a class whose applicable class
+  specializers have NO single most-specific member gets an EXACT-TAG branch
+  (`(%obj-is x '%class-X)`, X alone) placed by the same specificity sort. Simple body: it
+  calls the method X's CPL ranks first. Combined body: the effective method is computed
+  against X (per-branch order via `branchSpecificityOrder`, ranking class specializers by
+  the branch class's CPL index). Classes WITH a dominator need no branch.
+  **LITE residual**: refinement handles class dispatch on ONE parameter position; a
+  diamond-affected class meeting a generic that class-dispatches on several positions keeps
+  the per-specializer branches and can miss the second super's methods.
+- `conditionReportGroups` inherits `:report` along the CPL; `define-condition` with several
+  REGISTERED parents does real MI (an UNREGISTERED extra parent falls back to
+  `registerExtraAncestors`); `change-class`'s initform fill SKIPS a source whose layout is
+  not a base-name prefix of the target; `%class-meta-table%`'s superclass column is a LIST;
+  mop-protocol.lisp's `finalize-inheritance` merges inherited effective slots across ALL
+  direct supers (first name wins).
+
+Tests: `LispEvaluatorTest#defclassMultipleInheritance*`/`#defclassDiamond*`/
 `#defclassCircularSuperclassesSignalInconsistentPrecedence`,
 `JvmLispCompilerTest#compileAndRunDefclassMultipleInheritance*`,
-`WasmLispCompilerIntegrationTest#compileAndRunDefclassMultipleInheritance`, and
-the `clos-multiple-inheritance-cpl-slots-and-dispatch` ci-spec case (all four
-backends).
+`WasmLispCompilerIntegrationTest#compileAndRunDefclassMultipleInheritance`, ci-spec
+`clos-multiple-inheritance-cpl-slots-and-dispatch`.
 
-## MOP protocol widening for mito (todo-246, 2026-08-03)
+## Where each path hooks in
 
-Extends the Phase B metaclass protocol (see the MOP-boundary section below) to
-mito's `table-class`/`dao-table-class`/`dao-table-mixin` shapes
-(class/table.lisp, dao/table.lisp, dao/mixin.lisp) and its `table-column-class`
-slot-definition subclass (class/column.lisp). Five pieces, landed together:
+- **Interpreter**: `evalDefclass` (expands + evals defuns, then REGENERATES every dispatcher
+  with a class-specialized method), `evalDefstruct` (likewise for struct-specialized or
+  `structure-object` methods, `GenericInfo.hasStructMethod`), `evalDefgeneric`,
+  `evalDefmethod`. Works anywhere (REPL/load/macro expansion). A `#'generic` captured BEFORE
+  a later defmethod is NOT stale: `evalFunction` answers a LATE-BOUND wrapper for any name
+  `closRegistry.findGeneric` knows, resolving at call time. Non-generic names keep the
+  direct value; the compile paths never had the edge. Pinned by
+  `aCapturedGenericFunctionValueSeesLaterMethods`.
+- **Compilers**: `LispMacroExpander.expandTopLevelDefinitions(program, structAccessors,
+  closRegistry)` sits at the old `expandTopLevelDefstructs` slot (after `flattenTopLevel`,
+  before `LambdaLists.desugarProgram` -- the constructors use `&key`). It walks the whole
+  program collecting classes/methods, splices defuns in place, and inserts each generic's
+  dispatcher at its defgeneric's position (or the first defmethod's) AFTER the walk, so
+  descendant and method sets are complete regardless of definition order. Non-top-level
+  defclass/defgeneric/defmethod -> `Jvm/WasmExprCompiler` "only supported as a top-level
+  form".
+- **`make-instance`/`slot-value`** are `CL_MACROS`, expanding at the three dispatch sites
+  (`evalCons` + both ExprCompilers); a literal quoted name gets the static expansion.
+  `expandSetf` has a `closRegistry` parameter with a SLOT_VALUE place case.
+  `#'make-instance` as a VALUE gets a REFERENCE_GATED wrapper forwarding to the generated
+  `%mop-make-instance` (the interpreter defines it natively); a DIRECT call whose class
+  argument is computed lowers in `expandMakeInstance` to `%mop-make-instance` (name symbol
+  or class metaobject) and flips the SAME gate (`referencesMakeInstanceValue`). A runtime
+  slot NAME dispatches through
+  `%slot-value-runtime`/`%slot-boundp-runtime`/`%slot-value-set-runtime` (the setf twin
+  separately gated by `needsRuntimeSlotSetDispatch`, so read-only programs stay
+  byte-identical; the interpreter serves `%slot-value-set-runtime` as a builtin).
+- **`UserMacroExpander`**: top-level defclass/defgeneric/defmethod are `macroEval.eval`'d
+  into the macro-time evaluator (so a defmacro body can CALL a generic at expansion time)
+  AND kept for the compilers. Walker cases keep defmethod lambda lists and defclass
+  names/options verbatim; only defmethod bodies and defclass `:initform` values are walked.
 
-- **`ensure-class-using-class` routing.** `%ensure-class-with-metaclass` no
-  longer builds the class itself: it applies
-  `closer-mop:ensure-class-using-class` with the EXISTING driver-built
-  metaobject (nil on first definition), the name, and
-  `:metaclass`/`:direct-superclasses` (NAMES -- resolution happens inside the
-  chain, after user :arounds may munge the list)/`:direct-slots` + the class
-  initargs. The system default method (mop-protocol.lisp) takes the make path
-  for nil and the reinitialize path for a class -- so a user `:around`
-  specialized on a metaclass (mito's dao-table-class superclass injection)
-  fires on REdefinition, per AMOP. "Existing" is tracked in the protocol's own
-  `%mop-ensured-classes%` alist, deliberately NOT via find-class: the static
-  class table answers a materialized plain view for a class whose driver call
-  has not run yet, so find-class cannot tell "already ensured" from
-  "statically known".
-- **Chain-fill initialization of METAOBJECT instances.** For a class whose
-  ancestors include a seeded MOP base class -- and only when the protocol is
-  loaded (`ClosRegistry.isMopProtocolActive`, set by the interpreter's protocol
-  load and the compile paths' prepend) -- `expandMakeInstance` and the generated
-  `%mop-make-instance` arms allocate the instance UNBOUND (`%obj-new` of unbound
-  markers) instead of calling the keyword constructor, then run the
-  initialization generic on it; the system `shared-initialize` primaries
-  (mop-protocol.lisp, specialized on `standard-class` and the two
-  slot-definition base classes) perform the initarg fill via `%mop-fill-slots`
-  (interpreter: registry-backed builtin, stays correct as classes accrue;
-  compile paths: generated per-class dispatch chunked into `%MOP-FILL-<n>`
-  helpers; slot-names nil = supplied initargs only, non-nil = plus initforms
-  for still-unbound slots -- unsupplied-no-initform stays UNBOUND, mito's
-  col-type `slot-boundp` rides that). This is what makes a user
-  `initialize-instance :around`'s MUNGED initargs take effect (mito rewrites
-  `:direct-superclasses`/`:direct-slots`; its `table-column-class` :around
-  pushes a default initarg into a slot spec's `:initargs`): CL's ordering
-  (:before -> fill) holds natively here, so metaobject classes are EXCLUDED
-  from the initarg re-fill replay -- the refill stays the mechanism for
-  REGULAR classes only, whose constructor still fills first (that divergence
-  stands; its reason, the static constructor model, is unchanged). The
-  standard-class primary additionally -- INSIDE the chain, so an :around's
-  post-`call-next-method` code already sees the results -- resolves
-  `:direct-superclasses` designators (names or metaobjects; mito pushes
-  `(find-class 'dao-class)` instances) into metaobjects on slot 1, and converts
-  the `:direct-slots` canonicalized spec plists into direct-slot-definition
-  metaobjects on slot 2 through `direct-slot-definition-class` +
-  `%mop-make-instance` (which recurses into the same chain, so slot-definition
-  :arounds fire too).
-- **Class REdefinition (metaclass classes).** Re-evaluating a
-  `defclass ... (:metaclass M)` for an existing name reinitializes the SAME
-  metaobject (identity survives, per AMOP: `reinitialize-instance` ->
-  shared-initialize with slot-names nil), re-registers it in the find-class
-  memo (the registry's re-registration had invalidated it) and re-finalizes.
-  Scope + divergence: the INTERPRETER does real redefinition (registry
-  re-registers, constructor/accessors re-evaluate); the COMPILE paths see the
-  program statically -- the static tables (layout, typep tags, baked accessor
-  indexes, constructor) keep the LAST definition
-  (`expandTopLevelDefinitions` nil-s the earlier defclass-generated
-  constructor defun via `classDefunSlots`; two same-name defuns in one class
-  file are a JVM ClassFormatError) while BOTH driver calls still run in
-  top-level order (first creates, second reinitializes), so the metaobject
-  protocol observably matches the interpreter. Reason for the divergence:
-  classes are compile-time-static (dispatch tables, `--optimize` DCE);
-  re-evaluate if a library uses the FIRST layout before redefining. On every
-  path, existing instances are not updated
-  (`update-instance-for-redefined-class` stays out), and a slot whose INDEX
-  changes between definitions poisons the shared `slotPositions` map exactly
-  like two unrelated classes disagreeing (use the accessor).
-- **Slot-definition contract: index 5 = INITFUNCTION** (append-only contract,
-  both slot-definition base classes). The driver call builds each canonicalized
-  spec with `list` -- fresh cells per evaluation, because mito's
-  add-referencing-slots `rplacd`s ghost markers into them -- carrying
-  `:initfunction (lambda () initform)` (nil when no initform), and the default
-  `compute-effective-slot-definition` copies it onto the effective slot. Filled
-  only on DRIVER-built definitions: the materialized plain views (interpreter
-  `classMetaobject`, compiled `%find-class-materialize`) answer nil there --
-  the meta table is quoted data and cannot carry a live thunk. Shim additions
-  (closer-mop.lisp): `slot-definition-readers` (index 4),
-  `slot-definition-initfunction` (5), `class-direct-slots` (2),
-  `class-direct-subclasses` (next bullet).
-- **`class-direct-subclasses`** rides the internal `%class-direct-subclasses`:
-  interpreter = `ClosRegistry.directSubclassNames` -- the metaobject memo's
-  direct-superclass lists FIRST (a driver-built instance may carry a
-  superclass a user :around INJECTED, which the static registry never sees --
-  mito's dao-class push), then the static registry's declared superclasses;
-  compile paths = a generated defun (gated on the reference; forces the
-  metaobject runtime, whose `%class-metaobjects%` memo it scans) plus chunked
-  static-arm helpers (`%CDS-<n>`), names materialized through `%find-class`.
-- **`(apply #'call-next-method ...)` / `(funcall #'call-next-method ...)`** are
-  rewritten by `rewriteNextMethod` onto the guarded `%next-method` thunk with
-  the explicit arguments -- mito spells EVERY :around's chaining this way;
-  before this only the head-position `(call-next-method ...)` call was
-  rewritten and the apply spelling died on an undefined function.
+## Name resolution gotcha
 
-Pinned by `defclassMetaclassEnsureClassUsingClassAndInitargMunging`
-(`LispEvaluatorTest`; `compile`-prefixed in `JvmLispCompilerTest`; same name in
-`WasmLispCompilerIntegrationTest` -- all three share
-`MopWideningFixture.MITO_SHAPE_SOURCE`) and ci-spec `mop-widening-for-mito`
-(all four backends): e-c-u-c :around superclass injection +
-initialize-instance :around initarg munging on the metaclass AND on a
-slot-definition class + custom slot classes with an extra col-type slot +
-initfunction readback + same-name redefinition.
+`defclass`/specializer class names are package-resolved (canonical, `zoo::dog`); the quoted
+name in `(make-instance 'dog)` is NOT. `ClosRegistry.findClass` falls back from the exact
+normalized key to a UNIQUE base-name match across packages; two packages defining the same
+class name make the bare spelling unresolvable (qualify it). `slot-value` matches by slot
+base name likewise. `defmethod` stores the specializer as the FOUND class's canonical name.
 
-## The mito-core integration batch (todo-247, 2026-08-03)
+## Setf methods -- `(defmethod (setf name) ...)` / `(defgeneric (setf name) ...)`
 
-What `(ql:quickload "mito-core")` + live DAO CRUD forced on top of todo-246,
-each a general mechanism:
+`normalizeSetfMethodForm` rewrites onto the `%setf-` writer-generic convention: the name
+becomes `%setf-<place>` (`setfFunctionName`) and the place joins `structAccessors` under
+`SETF_FUNCTION_MARKER`, so `(setf (name args...) v)` funcalls the writer dispatcher with NO
+change to `expandSetf`. A user setf method MERGES with accessor-generated writer methods
+(different specializer) or replaces one (same specializer).
 
-- **Metaobject slots are read/written BY NAME, never by `%obj-ref` index.**
-  `mop-protocol.lisp` and the closer-mop shim used to bake the seeded index
-  contract (slot definitions: 0 name, 1 initargs, ...). That contract is only
-  valid for the seeded base classes themselves: a user slot-definition class
-  may inherit the base through MULTIPLE inheritance with its own mixin FIRST
-  (mito's `table-column-class` is `(column-slot-definitions
-  c2mop:standard-direct-slot-definition)`), which puts the mixin's slots ahead
-  of the base's in the layout -- index 1 read DEFLATE where INITARGS was meant,
-  so every effective slot came out shifted. Both files now spell every access
-  `(slot-value x 'name)` / `(setf (slot-value x 'name) v)`; only the slot NAMES
-  are a contract. The `%obj-ref` index contract remains valid for
-  Java/generated code that CONSTRUCTS instances of the seeded layouts
-  (`%find-class-materialize`, `newSeededInstance`) -- construction picks the
-  layout, so its indexes are its own.
-- **An AMBIGUOUS literal slot name outlines onto the shared runtime dispatch.**
-  `expandAmbiguousSlotRead`/`expandAmbiguousSlotSet` used to inline a
-  per-layout tag dispatch AT EVERY SITE -- registry-proportional, and the
-  by-name protocol above put six such reads into `finalize-inheritance`, which
-  crossed the JVM's 64 KB method limit at mito scale (~250 layouts declaring
-  NAME). They now emit `(%slot-value-runtime obj 'name)` /
-  `(%slot-value-set-runtime obj 'name v)` -- the same chunked defuns a runtime
-  slot name uses; `needsRuntimeSlotNameDispatch`/`needsRuntimeSlotSetDispatch`
-  take the registry and gate on ambiguous literal names too. The INTERPRETER
-  defines both `%slot-value(-set)-runtime` as registry-backed builtins
-  (`LispEvaluator`), because the shared setf expansion emits the calls there as
-  well.
-- **Injected direct superclasses reconcile the STATIC registration.** A user
-  `initialize-instance :around` munges `:direct-superclasses` at ensure-class
-  time (mito's dao-table-class pushes dao-class + the auto-pk/timestamp
-  mixins), which the static layout/ancestors/dispatch/constructor never saw --
-  a `deftable`'d instance was missing the mixin slots and no `insert-dao`
-  method applied. The driver-built metaobject is the truth, per AMOP:
-  `evalDefclass` (interpreter) re-registers the class from
-  `LispMacroExpander.widenDefclassToMetaobjectSupers` (the metaobject's
-  superclass list minus the `standard-object` default, plus per-slot
-  `:initarg`s a slot-definition :around pushed -- ONLY onto specs that declare
-  none, since the static model keeps one initarg per slot) without re-running
-  the driver; `UserMacroExpander.widenMetaclassDefclasses` (compile paths)
-  rewrites the EMITTED defclass form the same way after the macro-time
-  evaluator ran it, so the static tables match the interpreter. The runtime
-  driver re-runs the :around, whose own contains-checks make the injection
-  idempotent over the widened list.
-- **A driver-built class with no direct superclasses defaults to
-  `(standard-object)`**, per AMOP (`mop-protocol.lisp` e-c-u-c) -- the walk
-  shape mito's `map-all-superclasses` relies on (it flushes its accumulator
-  when the chain reaches `(find-class 'standard-object)`). `standard-object`
-  resolves through find-class only (`ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES`
-  + the generated `%find-class` fallback list): `class-of` never answers it and
-  the typep/subtypep special-casing keeps winning. `STANDARD-OBJECT` and
-  `STANDARD-CLASS` joined `PackageRegistry.CL_TYPES` -- the compiled
-  `%find-class` matches SPELLINGS, so a package-local
-  `MITO...::STANDARD-CLASS` resolution missed the seeded entry (the
-  interpreter's registry normalizes spellings and hid the gap).
-- **The synthesized `shared-initialize` system default FILLS.** It used to
-  return the instance unchanged (correct only for the constructor-fills-first
-  make-instance path); mito's `make-dao-instance` is `allocate-instance` +
-  `(shared-initialize obj nil initargs)`, where the default IS the fill. It now
-  calls `%mop-fill-slots` (slot-names nil = supplied declared initargs only,
-  per CL), whose generated dispatch covers EVERY registered class (not only the
-  metaobject-ancestored ones) and is injected whenever the expanded output
-  references it -- programs with an init-protocol method and no metaclass
-  included. The interpreter builtin answers an UNREGISTERED instance untouched
-  instead of throwing, matching the generated dispatch's fall-through.
-- **`slot-exists-p`** (all four backends): true when the instance's layout
-  declares the slot, regardless of boundness -- mito probes
-  `(slot-exists-p x 'col-type)` before `slot-boundp`. Interpreter =
-  `instanceSlotRef != null`; compile paths = a `%obj-is` membership test over
-  the declaring layouts for a literal name, the shared
-  `%slot-exists-p-runtime` dispatch (own gate) for a runtime name.
+**Ordering constraint**: normalization sites are `expandTopLevelDefinitions`'s defmethod AND
+defgeneric branches, the let-nested walkers
+(`expandLetNestedDefmethods`/`rewriteNestedDefmethods`, threading `structAccessors`), and
+the interpreter's `evalDefmethod`/`evalDefgeneric` -- all BEFORE anything casts the name
+position to `LispSymbol`. `#'(setf name)` resolves through the existing setf-function route.
+Package-qualified places produce `%setf-PKG::NAME`.
 
-Pinned by `slotExistsPAnswersDeclaredSlotsRegardlessOfBoundness`
-(`LispEvaluatorTest` + the JVM/WASM twins) and ci-spec
-`mito-core-enablement-language-group`; the end-to-end `(ql:quickload
-'("mito-core" "dbd-postgres"))` + DAO CRUD run is manual on the interpreter,
-the JVM and the WASM component (byte-identical; the automated E2E is
-`.todo/250`).
-
-## Setf methods -- `(defmethod (setf name) ...)` / `(defgeneric (setf name) ...)` (todo-232, 2026-08-02)
-
-`normalizeSetfMethodForm` rewrites the definition onto the `%setf-` writer-generic
-convention the defclass `:accessor` writers already use: the name becomes the
-mangled `%setf-<place>` symbol (`setfFunctionName`) and the place joins
-`structAccessors` under `SETF_FUNCTION_MARKER`, so `(setf (name args...) v)`
-funcalls the writer dispatcher (new value first) with NO change to `expandSetf`.
-A user setf method therefore MERGES with accessor-generated writer methods on the
-same generic (different specializer) or replaces one (same specializer, CL
-redefinition semantics). Normalization sites: `expandTopLevelDefinitions`'s
-defmethod AND defgeneric branches, the let-nested walkers
-(`expandLetNestedDefmethods`/`rewriteNestedDefmethods`, which now thread
-`structAccessors`), and the interpreter's `evalDefmethod`/`evalDefgeneric` -- all
-BEFORE anything casts the name position to `LispSymbol`. `#'(setf name)` resolves
-to the dispatcher through the existing setf-function route (it is just
-`%setf-name`). Package-qualified places produce `%setf-PKG::NAME`, the exact
-shape the defclass accessor writers have exercised since cl-ppcre. Pinned by
-`LispEvaluatorTest#setfMethod*`/`#defgenericSetfNameWithInlineMethod`,
-`Jvm/Wasm*#compileAndRunSetfMethodDispatchesPerClass`, and ci-spec
+Tests: `LispEvaluatorTest#setfMethod*`/`#defgenericSetfNameWithInlineMethod`,
+`Jvm/Wasm*#compileAndRunSetfMethodDispatchesPerClass`, ci-spec
 `clos-setf-methods-and-setf-generic`.
 
-## `(setf (find-class 'alias) (find-class 'target))` -- class name aliases (todo-242, 2026-08-02)
+## `(setf (find-class 'alias) (find-class 'target))` -- class name aliases
 
-**Invariant: an alias is a second NAME for one class, never a second class.** The
-registry keeps `ClosRegistry.classAliases` (alias -> the target's CANONICAL name,
-resolved at registration time so the map is one level deep) and `findClass` consults
-it right after the exact-name lookup, ahead of the package-tolerant fallbacks --
-`aliasTarget` matches the exact spelling, the qualified spelling's member, then a
-UNIQUE member match over the alias table, mirroring `uniqueByMember` (a quoted alias
-name is no more package-resolved than a quoted class name). Because every consumer
-goes through `findClass`, the metaobject, the instance tag, the layout, the ancestor
-set and the `%obj-ref` indexes all stay the TARGET's: `(eq (find-class 'alias)
-(find-class 'target))` holds, and `make-instance` / `typep` / `subtypep` /
-`handler-case` / `class-name` through the alias behave exactly as through the target.
+**Invariant: an alias is a second NAME for one class, never a second class.**
+`ClosRegistry.classAliases` maps alias -> the target's CANONICAL name (resolved at
+registration, so one level deep); `findClass` consults it right after the exact-name lookup,
+ahead of the package-tolerant fallbacks -- `aliasTarget` matches the exact spelling, the
+qualified spelling's member, then a UNIQUE member match over the alias table (mirroring
+`uniqueByMember`). Every consumer goes through `findClass`, so metaobject, instance tag,
+layout, ancestor set and `%obj-ref` indexes stay the TARGET's;
+`(eq (find-class 'alias) (find-class 'target))` holds.
 
-The registration happens at EXPANSION time (`LispMacroExpander.expandSetfFindClass`,
-the `FIND-CLASS` case of `expandSetf`), which is the one moment both paths share: the
-interpreter expands the form as it evaluates it, and the compile path expands it in
-`expandTopLevelDefinitions` -- a dedicated `isSetfFindClassForm` branch beside the
-`deftype` one, so the alias is in the registry BEFORE the class tables are built. It
-becomes an extra SPELLING of the target's `%class-meta-table%` entry (so the runtime
-`%find-class` memoizes one metaobject for both names), an extra name in the runtime
-`typep` tag table, and an extra member of the runtime-`subtypep` universe. The form's
-own value stays the value CL gives it (the target's metaobject), so a macro whose last
-form is the setf still answers a class.
+Registration is at EXPANSION time (`LispMacroExpander.expandSetfFindClass`, the `FIND-CLASS`
+case of `expandSetf`) -- the moment both paths share; the compile path expands it in
+`expandTopLevelDefinitions` via a dedicated `isSetfFindClassForm` branch beside the `deftype`
+one, so the alias is registered BEFORE the class tables are built. It becomes an extra
+SPELLING of the target's `%class-meta-table%` entry, an extra name in the runtime `typep`
+tag table, and an extra member of the runtime-`subtypep` universe. The form's value stays
+the target's metaobject.
 
-**Divergence + its re-evaluation trigger.** Only the ALIASING shape is accepted: both
-names must be literal quoted symbols and the value must be a `find-class` call --
-anything else throws naming the supported shape, and an unknown target throws
-`there is no class named`. The reason is that the compiled backends fix their class
-table at compile time; the same reason makes a NON-top-level alias an error rather
-than a silent wrong answer: `classMetaTableForms` calls
-`ClosRegistry.markClassMetaTableEmitted`, after which `registerClassAlias` refuses
-(the interpreter never emits that table, so it is unaffected). If the class table
-ever becomes runtime-extensible, both restrictions can go -- they are consequences
-of the static class model, not of the alias design. (todo-246 landed
-`ensure-class-using-class`, but only over statically-known names -- the table is
-still fixed at compile time, so the restrictions stand.) The `--no-gc` backend shares one never-mutated `EMPTY_CLOS_REGISTRY`
-for its CLOS-free `expandSetf` overload, so the place is rejected there outright.
+**Divergences.** Only the ALIASING shape is accepted: both names literal quoted symbols, the
+value a `find-class` call -- anything else throws naming the supported shape; an unknown
+target throws `there is no class named`. A NON-top-level alias is an error:
+`classMetaTableForms` calls `ClosRegistry.markClassMetaTableEmitted`, after which
+`registerClassAlias` refuses (the interpreter never emits that table). Both restrictions
+follow from the static class model. `--no-gc` shares one never-mutated
+`EMPTY_CLOS_REGISTRY` for its CLOS-free `expandSetf` overload, so the place is rejected
+outright there.
 
-Consumer: cl-dbi's `defclass/a` / `define-condition/a` (`src/utils.lisp`), which give
-every class a `<bracket>`-spelled twin (`.todo/238`). Tests:
-`LispEvaluatorTest#setfFindClassRegistersAnAliasNameForTheSameClass`/`#setfFindClassAliasIsVisibleToHandlerCase`/`#setfFindClassRejectsNonAliasShapesAndUnknownTargets`,
+Tests: `LispEvaluatorTest#setfFindClassRegistersAnAliasNameForTheSameClass`/
+`#setfFindClassAliasIsVisibleToHandlerCase`/
+`#setfFindClassRejectsNonAliasShapesAndUnknownTargets`,
 `JvmLispCompilerTest#compileSetfFindClassRegistersAnAliasNameForTheSameClass`,
 `WasmLispCompilerIntegrationTest#compileSetfFindClassRegistersAnAliasNameForTheSameClass`,
-ci-spec `find-class-metaobject-substrate`. The macro-namespace twin of this idiom is
+ci-spec `find-class-metaobject-substrate`. Macro-namespace twin:
 `(setf (macro-function ...))`, `.kb/defmacro-backquote.md`.
 
-## A user method on a BUILT-IN name (todo-237, 2026-08-02)
+## A user method on a BUILT-IN name
 
-**A built-in whose name a program defines a method on becomes that generic's
-DEFAULT METHOD.** In CL these are generic functions whose standard methods stay;
-adding one never removes the built-in behavior. Here the dispatcher is an
-ordinary `defun` of the generic's name, so without this it SHADOWS the built-in
-and every non-instance argument dies with "No applicable method: CLOSE on
-INTEGER" — `(ql:quickload "fast-io")` poisoned `close` for the whole image
-(its `gray.lisp` methods `close`, `open-stream-p`, `input-stream-p`,
-`output-stream-p`, `stream-element-type`, all CL built-ins here), so any later
-`with-open-file` anywhere in the program died.
+**A built-in whose name a program defines a method on becomes that generic's DEFAULT
+METHOD.** Otherwise the dispatcher defun SHADOWS the built-in and every non-instance
+argument dies with "No applicable method: CLOSE on INTEGER".
 
-- `generateDispatcher(name, registry, builtinFallback)` is the overload; the
-  2-arg one passes null and emits the byte-identical old shape, which is what
-  keeps a program with no colliding generic byte-identical. The fallback name
-  replaces the
-  `noApplicableMethod(...)` last resort in BOTH bodies (`simpleDispatchBody`,
-  `combinedDispatchBody` -> `effectiveMethod`), supplies `buildCore`'s primary
-  when a branch has only `:before`/`:after` methods, and closes the primary
-  chain as `buildNextChain`'s base — so a bare `(call-next-method)` out of the
-  least specific user primary reaches the built-in, as in CL. A user DEFAULT
-  (unspecialized) method still wins outright: the built-in is the last resort,
-  not a method the specificity sort can outrank.
-- `fallbackCall` takes no leading `%next-method` thunk (the built-in IS the end
-  of the chain) and, for a variadic generic, spells
-  `(apply #'<stash> params... %gf-rest)` — that tail is what carries `close`'s
-  `&key abort` to the built-in.
-- **Interpreter**: `LispEvaluator.defineDispatcher` is the ONE installation
-  seam (all four sites in `evalDefclass`/`evalDefgeneric`/`evalDefmethod` route
-  through it). `builtinDefaultMethodFor` stashes the built-in under
-  `LispMacroExpander.builtinDefaultMethodName` (`%<generic>--builtin`, the
-  `%<generic>--m<i>` convention with a reserved index) and MEMOIZES the hit in
-  `builtinDefaultMethods`. **The memo is load-bearing**: the dispatcher is
-  regenerated on every `defmethod`, and the second pass would find no built-in
-  to stash and silently drop the default method. A Java-backed built-in is a
-  `LispFunction`; a user/prelude/library `defun` is a `LispLambda` and is
-  deliberately left to be shadowed — that type test is also why a MISS needs no
-  memo (a dispatcher is itself a `LispLambda`, so re-probing keeps answering
-  null).
-- **Compile paths** (half 2, `compiler/ShadowedBuiltins`, run by BOTH backends
-  right after `expandTopLevelDefinitions`): `(close X)` is compiler-lowered
-  (`Jvm/WasmExprCompiler` `case LispNames.CLOSE` -> `Jvm/WasmCloseCompiler`)
-  no matter what defuns exist, so the dispatcher defun the splice emits under
-  the generic's own name is dead there. The pass follows the Gray-dispatch
-  model with a COMPUTED name set — every registered generic whose name is in
-  `ShadowedBuiltins.loweredBuiltinFunctions()` — and per name: replaces the
-  dead dispatcher (found by structural equality against a regenerated 2-arg
-  dispatcher, so a user defun of the same name is never mistaken for it) with
-  the SAME dispatcher body the interpreter installs, renamed to
-  `%<name>--dispatch` (`shadowedBuiltinDispatcher`); binds the fallback
-  `%<name>--builtin` with a FORWARDER defun whose body spells the original
-  built-in call, which the compilers still lower (`builtinForwarderDefun`; the
-  `&rest` tail is dropped — the lite built-ins ignore keyword tails, e.g. the
-  lowered `close` strips `:abort`); and rewrites the program's call sites and
-  `#'name` references onto the dispatcher. The walker skips quoted data,
-  `defmacro`/`macrolet` bodies, the generated defuns themselves (rewriting the
-  forwarder's fallback would recurse — the Gray `DISPATCH_DEFUNS` rule) and the
-  non-evaluated positions of `let`/`lambda`/`flet`/`do`/`dolist`/`case`/
-  `handler-case` families. When `close` is shadowed the `with-open-file`/
-  `with-open-stream`/`with-*-to-string` forms are pre-expanded
-  (`unwindProtect=true`) so their implicit `(close f)` routes through the
-  dispatcher exactly like the interpreter's global-binding lookup — a side
-  effect is that such a WASM module is always in EH mode.
-- **The name set**: `BuiltinFunctionWrappers.names()` minus `%`-internals,
-  minus `NOT_SHADOWABLE` (signal operators — they double as handler-case
-  clause heads — and `make-instance`/`class-of`, which have their own dispatch
-  machinery), minus `EXPANSION_LOWERED` (wrapped names the INTERPRETER
-  evaluates via `evalCons`/macro expansion, not a global `LispFunction` — its
-  half stashes nothing for those, so dispatching them here would diverge the
-  other way), plus `LOWERED_WITHOUT_WRAPPER` (lowered names with no wrapper,
-  `close` first among them). **Pinned by `ShadowedBuiltinsTest`: every member
-  must be a Java-backed `LispFunction` in a fresh global environment** — that
-  is the exact interpreter stash criterion, so the two halves keep the same
-  boundary. A new built-in added per the CLAUDE.md workflow lands in
-  `Environment` + `WRAPPER_DEFS` and is therefore shadowable automatically.
-- **Remaining divergences (re-evaluation triggers)**: (1) a plain
-  `(defun close (x) ...)` of a built-in name is still ignored by the compile
-  paths — same boundary as the interpreter half, which deliberately lets
-  defuns shadow each other, but the interpreter DOES honor the defun at call
-  sites while the compilers do not; (2) `EXPANSION_LOWERED` names (mapcar,
-  sort, format, ...) are un-dispatchable on EVERY path today — if the
-  interpreter ever routes them through global function bindings, move them out
-  of the exclusion; (3) under `--component` with sockets spliced,
-  `WasmSocketsRewrite` runs BEFORE this pass and has already turned
-  `close`/`listen`/... call sites into `rontolisp::%io-*` calls — the pass
-  COMPOSES via `WasmSocketsRewrite.builtinDispatchAliases`: those alias heads
-  rewrite onto the dispatcher too, and the forwarder's fall-through calls the
-  `%io-*` defun (socket-table bookkeeping stays in the loop; without this an
-  instance reaching `%io-close` was a wasm CAST-FAILURE trap, caught by the
-  concatenated ci-spec, whose `sleep` case makes the module async and splices
-  the io dispatch). Still open there: the ASYNC read promotions
-  (`read-line`/`read-char`/`read-byte` -> `(await (%*-future ...))`) bypass a
-  user method on those names; (4) a runtime
-  designator (`(funcall 'close x)`, `symbol-function`) does not dispatch on
-  the compile paths (no call site to rewrite — the Gray limitation).
+- `generateDispatcher(name, registry, builtinFallback)` is the overload; the 2-arg one
+  passes null and emits the byte-identical old shape. The fallback replaces
+  `noApplicableMethod(...)` in BOTH bodies, supplies `buildCore`'s primary when a branch has
+  only `:before`/`:after` methods, and closes the primary chain as `buildNextChain`'s base.
+  A user DEFAULT (unspecialized) method still wins outright.
+- `fallbackCall` takes no leading `%next-method` thunk and, for a variadic generic, spells
+  `(apply #'<stash> params... %gf-rest)` -- that tail carries `close`'s `&key abort`.
+- **Interpreter**: `LispEvaluator.defineDispatcher` is the ONE installation seam (all four
+  sites in `evalDefclass`/`evalDefgeneric`/`evalDefmethod` route through it).
+  `builtinDefaultMethodFor` stashes the built-in under
+  `LispMacroExpander.builtinDefaultMethodName` (`%<generic>--builtin`) and MEMOIZES the hit
+  in `builtinDefaultMethods`. **The memo is load-bearing**: the dispatcher is regenerated on
+  every `defmethod`, and the second pass would find no built-in to stash and silently drop
+  the default method. A Java-backed built-in is a `LispFunction`; a user/prelude `defun` is
+  a `LispLambda`, deliberately left to be shadowed -- that type test is also why a MISS
+  needs no memo.
+- **Compile paths** (`compiler/ShadowedBuiltins`, run by BOTH backends right after
+  `expandTopLevelDefinitions`): `(close X)` is compiler-lowered no matter what defuns exist
+  (`Jvm/WasmExprCompiler` `case LispNames.CLOSE` -> `Jvm/WasmCloseCompiler`), so the spliced
+  dispatcher defun is dead. Per name in the COMPUTED set (every registered generic whose
+  name is in `ShadowedBuiltins.loweredBuiltinFunctions()`): replace the dead dispatcher
+  (found by structural equality against a regenerated 2-arg dispatcher, so a user defun of
+  the same name is never mistaken for it) with the interpreter's dispatcher body renamed
+  `%<name>--dispatch` (`shadowedBuiltinDispatcher`); bind `%<name>--builtin` to a FORWARDER
+  defun spelling the original built-in call (`builtinForwarderDefun`; the `&rest` tail is
+  dropped -- lite built-ins ignore keyword tails); rewrite call sites and `#'name`
+  references onto the dispatcher. The walker skips quoted data, `defmacro`/`macrolet`
+  bodies, the generated defuns themselves (the Gray `DISPATCH_DEFUNS` rule -- rewriting the
+  forwarder's fallback would recurse) and the non-evaluated positions of
+  `let`/`lambda`/`flet`/`do`/`dolist`/`case`/`handler-case`. When `close` is shadowed,
+  `with-open-file`/`with-open-stream`/`with-*-to-string` are pre-expanded
+  (`unwindProtect=true`) so their implicit `(close f)` routes through the dispatcher -- side
+  effect: such a WASM module is always in EH mode.
+- **The name set**: `BuiltinFunctionWrappers.names()` minus `%`-internals, minus
+  `NOT_SHADOWABLE` (signal operators, which double as handler-case clause heads, plus
+  `make-instance`/`class-of`), minus `EXPANSION_LOWERED` (names the INTERPRETER evaluates
+  via `evalCons`/macro expansion rather than a global `LispFunction`), plus
+  `LOWERED_WITHOUT_WRAPPER` (`close` first). **Pinned by `ShadowedBuiltinsTest`: every member
+  must be a Java-backed `LispFunction` in a fresh global environment** -- the exact
+  interpreter stash criterion, so the two halves keep one boundary.
+- **Remaining divergences (triggers)**: (1) a plain `(defun close (x) ...)` is ignored by
+  the compile paths while the interpreter honors it at call sites; (2) `EXPANSION_LOWERED`
+  names (mapcar, sort, format, ...) are un-dispatchable everywhere -- move them out of the
+  exclusion if the interpreter ever routes them through global function bindings;
+  (3) under `--component` with sockets spliced, `WasmSocketsRewrite` runs BEFORE this pass
+  and has already turned `close`/`listen`/... into `rontolisp::%io-*` calls -- the pass
+  COMPOSES via `WasmSocketsRewrite.builtinDispatchAliases` (alias heads rewrite onto the
+  dispatcher; the forwarder's fall-through calls the `%io-*` defun). Without it an instance
+  reaching `%io-close` was a wasm CAST-FAILURE trap. Still open: the ASYNC read promotions
+  (`read-line`/`read-char`/`read-byte` -> `(await (%*-future ...))`) bypass a user method;
+  (4) a runtime designator (`(funcall 'close x)`, `symbol-function`) does not dispatch on
+  the compile paths.
 
-Pinned by `LispEvaluatorTest#defmethodOnABuiltinName*`/
+Tests: `LispEvaluatorTest#defmethodOnABuiltinName*`/
 `#defmethodOnAVariadicBuiltinNameForwardsTheKeywordTail`/
 `#defgenericOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod`,
 `JvmLispCompilerTest#compileAndRunDefmethodOnABuiltinName*`/
 `#compileAndRunDefgenericOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod`,
 `WasmLispCompilerIntegrationTest#defmethodOnABuiltinName*`, ci-spec
-`defmethod-on-a-builtin-name-keeps-the-builtin` (concatenated, so it also
-proves the whole-program rewrite does not disturb the other cases' call
-sites), and `FastIoCircularStreamsE2eTest` (a real `(asdf:load-system
-:circular-streams)` pulling fast-io's five built-in-name methods, then a real
-file round-trip through `with-open-file` on all four backends).
+`defmethod-on-a-builtin-name-keeps-the-builtin`, `FastIoCircularStreamsE2eTest`.
 
-## Where each path hooks in
+## The instance-initialization protocol
 
-- **Interpreter**: `evalDefclass` (expands + evals the defuns, then REGENERATES
-  every dispatcher that has a class-specialized method — the new class may
-  extend a descendant set), `evalDefstruct` (likewise regenerates every
-  dispatcher with a struct-specialized or `structure-object` method,
-  `GenericInfo.hasStructMethod` — a later defstruct widens a struct
-  specializer's descendant tag set AND the `structure-object` enumeration;
-  sxql defines convert-for-sql's `structure-object` method in operator.lisp
-  and the clause structs it must catch in clause.lisp, todo-244),
-  `evalDefgeneric` (register + eval dispatcher),
-  `evalDefmethod` (eval method defun + re-eval the regenerated dispatcher).
-  Works anywhere (REPL/load/macro expansion), like defstruct. The former known
-  edge -- a `#'generic` captured BEFORE a later defmethod kept the stale
-  dispatcher -- is CLOSED (todo-245): `evalFunction` answers a LATE-BOUND
-  wrapper for any name `closRegistry.findGeneric` knows, resolving the CURRENT
-  binding at call time (real CL semantics: `#'name` IS the generic object
-  methods join). dbi was the first consumer: it stashes `#'disconnect` in its
-  connection pool's cleanup-fn at load time and dbd-postgres defines the
-  method afterwards. Non-generic names keep the direct value; the compile
-  paths never had the edge (dispatchers are built after the whole-program
-  walk). Pinned by `aCapturedGenericFunctionValueSeesLaterMethods`.
-- **Compilers**: `expandTopLevelDefstructs` grew into
-  `LispMacroExpander.expandTopLevelDefinitions(program, structAccessors,
-  closRegistry)` at the same pipeline slot (after `flattenTopLevel`, before
-  `LambdaLists.desugarProgram` — the constructors use `&key`). It walks the
-  whole program collecting classes/methods, splices defclass/defmethod defuns in
-  place, and inserts each generic's dispatcher at its defgeneric's position (or
-  the first defmethod's) AFTER the walk, so descendant sets and method sets are
-  complete regardless of definition order. Non-top-level
-  defclass/defgeneric/defmethod -> `Jvm/WasmExprCompiler` "only supported as a
-  top-level form" cases (beside DEFSTRUCT).
-- **`make-instance`/`slot-value`** are macro-classified (`CL_MACROS`) and
-  expand at the three dispatch sites (`evalCons` + both ExprCompilers) through
-  the registry; a literal quoted name gets the static expansion.
-  `expandSetf` gained a third parameter (`closRegistry`) with a SLOT_VALUE
-  place case; the three setf dispatch sites pass it. Since the DAO milestone
-  (2026-08-01) the non-literal forms resolve too: `#'make-instance` taken as a
-  VALUE gets a `BuiltinFunctionWrappers` wrapper (REFERENCE_GATED) forwarding
-  to the generated `%mop-make-instance` (the interpreter defines the same
-  function natively beside it) -- postmodern's make-dao
-  `(apply #'make-instance class args)`; and (todo-245) a DIRECT call whose
-  class argument is computed -- `(make-instance driver)`, dbi's connect
-  instantiating the class metaobject find-driver returned -- lowers in
-  `expandMakeInstance` to a `%mop-make-instance` call (a name symbol or a
-  class metaobject both work) and flips the SAME emission gate
-  (`referencesMakeInstanceValue` detects the computed head too), so the
-  runtime defun is present on the compile paths; a runtime slot NAME
-  dispatches through
-  the shared `%slot-value-runtime`/`%slot-boundp-runtime`/
-  `%slot-value-set-runtime` defuns (the setf twin is separately gated on a
-  runtime-name `(setf (slot-value ...))` -- `needsRuntimeSlotSetDispatch` --
-  so read-only programs stay byte-identical; the interpreter serves
-  `%slot-value-set-runtime` as a builtin) -- postmodern's dao-from-fields
-  column writes.
-- **`UserMacroExpander`** (cl-who-critical): top-level
-  defclass/defgeneric/defmethod are `macroEval.eval`'d into the macro-time
-  evaluator (so a defmacro body can CALL a generic at expansion time — cl-who's
-  `process-tag` -> `convert-tag-to-string-list` chain) AND kept in the program
-  for the compilers. Walker cases keep defmethod lambda lists (specializers)
-  and defclass names/options verbatim; only defmethod bodies and defclass
-  `:initform` values are walked.
+`initialize-instance`, `reinitialize-instance`, `shared-initialize` are CL symbols
+(`PackageRegistry.CL_FUNCTIONS`, like `print-object`): CL has ONE generic each, so a method
+in any `(:use :cl)` package joins the same generic. Otherwise each package mints its own and
+`make-instance`'s chain -- which matches generics by PLAIN name, first hit -- runs one
+package's chain while another's hooks never fire. Pinned by
+`LispEvaluatorTest#initProtocolGenericsAreSharedAcrossPackages`.
 
-## The instance-initialization protocol (todo-173)
+They have no system primary in the static subset (the constructor already fills slots), so
+`expandDefmethod` SYNTHESIZES one the first time any method is defined on one of them, plus
+the CL chain: `initialize-instance`'s and `reinitialize-instance`'s defaults are
+`(apply #'shared-initialize instance t/nil initargs)`, `shared-initialize`'s returns the
+instance. When no `shared-initialize` generic exists it is CREATED here; its dispatcher is
+emitted by the caller (the compile path reserves a slot for every registered generic in
+`addExpandedDefinition`; the interpreter defines missing dispatchers after each
+`defmethod`). `expandMakeInstance` calls `shared-initialize` DIRECTLY (slot-names `t`) when
+only that generic exists.
 
-`initialize-instance`, `reinitialize-instance` and `shared-initialize` are CL
-symbols (`PackageRegistry.CL_FUNCTIONS`, like `print-object` and for the same
-reason): CL has ONE generic each, so a method defined inside any `(:use :cl)`
-package joins the same generic. Before that classification (pre-DAO,
-2026-08-01) each package minted its own
-(`CL-PPCRE::INITIALIZE-INSTANCE` vs `POSTMODERN::SHARED-INITIALIZE`), and
-`make-instance`'s protocol chain — which matches generics by PLAIN name and
-takes the first hit — ran one package's chain while another package's hooks
-silently never fired (postmodern's `sql-name`-computing
-`shared-initialize :after` on its slot metaobjects was the symptom; pinned by
-`LispEvaluatorTest#initProtocolGenericsAreSharedAcrossPackages`).
+**The synthesis condition is the absence of an ALL-DEFAULT primary, not of any primary**: a
+class-specialized primary must not displace the system method a sibling's
+`(call-next-method)` has to find.
 
-They have no system-supplied primary method in the static subset (the
-generated constructor already fills the slots), so `expandDefmethod`
-SYNTHESIZES one the first time a program defines any method on one of them —
-and the CL chain with it:
-`initialize-instance`'s and `reinitialize-instance`'s defaults
-`(apply #'shared-initialize instance t/nil initargs)`, `shared-initialize`'s
-returns the instance. When the program has no `shared-initialize` method yet, the
-generic is CREATED here (with its own default); its dispatcher is emitted by the
-caller — the compile path reserves a slot for every registered generic in
-`addExpandedDefinition` (dispatchers are generated after the whole walk, so
-order does not matter), the interpreter defines any missing dispatcher after each
-`defmethod`. `expandMakeInstance` calls `shared-initialize` DIRECTLY (with the
-`t` slot-names argument) when only that generic exists, which is the same
-effective chain CL's default `initialize-instance` primary would run.
+Three congruence rules:
 
-The synthesis condition is the absence of an ALL-DEFAULT primary, not of any
-primary: the system method applies to every instance, so a class-specialized
-primary (ironclad's sha256 register reset) must not displace it — a sibling
-primary's `(call-next-method)` still has to find it.
-
-Three congruence rules landed with it, all general CL semantics the lite model
-had been approximating:
-- **A `&key` method never rejects a sibling's keyword.** CL computes a generic
-  call's valid keyword set as the UNION of the generic's and every applicable
-  method's; the lite model instead appends `&allow-other-keys` to every `&key`
-  method lambda list. (ironclad calls `(update-digest state seq :digest d)`,
-  which reaches an updater declaring only `:start`/`:end`.)
+- **A `&key` method never rejects a sibling's keyword.** CL takes the UNION of the generic's
+  and every applicable method's keyword set; the lite model instead appends
+  `&allow-other-keys` to every `&key` method lambda list.
 - **A defclass constructor tolerates extra initargs** (`&allow-other-keys` on
-  `%make-<name>`): a non-slot initarg belongs to an `initialize-instance` /
-  `shared-initialize` method, not the constructor (`(make-instance 'hmac :key k)`).
-- **A bare `(call-next-method)` forwards the WHOLE original argument list**, not
-  just the required parameters: `rewriteNextMethod` emits `apply` over the
-  method's `&rest` variable, injecting one (`%method-args`) when the method
-  declares a `&key` tail without a `&rest`. Without this, ironclad's hmac
-  `reinitialize-instance` lost the `:key` it forwards to the system default and
-  PBKDF2 silently produced the wrong key.
-  **`&optional` needs more than the rest variable** (todo-249): `&rest` binds
-  what is left AFTER the optionals, so forwarding it alone silently drops them.
-  A method that actually chains therefore has every `&optional` entry normalized
-  to `(var init supplied-p)` (synthesizing the supplied-p variable when the
-  source named none) and the bare call becomes
-  `(apply %next-method req... (append (if sp1 (list o1) nil) ... %method-args))`
-  -- CL's rule that an UNSUPPLIED optional is not passed on, not "pass its
-  default". The widening is gated on the body actually mentioning
-  `call-next-method`/`next-method-p`, so every other method's emitted code is
-  unchanged. The driver: cl-dbi's `(do-sql conn sql &optional params)` has an
-  `:around` that just calls `call-next-method`, so its postgres primary saw
-  `params` NIL, took its no-parameters branch and sent a raw `?` to PostgreSQL.
+  `%make-<name>`): a non-slot initarg belongs to an init-protocol method.
+- **A bare `(call-next-method)` forwards the WHOLE original argument list**:
+  `rewriteNextMethod` emits `apply` over the method's `&rest` variable, injecting one
+  (`%method-args`) when the method declares a `&key` tail without a `&rest`. **`&optional`
+  needs more than the rest variable** -- `&rest` binds what is left AFTER the optionals, so
+  forwarding it alone silently drops them. A method that chains has every `&optional` entry
+  normalized to `(var init supplied-p)` (synthesizing the supplied-p variable) and the bare
+  call becomes `(apply %next-method req... (append (if sp1 (list o1) nil) ...
+  %method-args))` -- CL's rule that an UNSUPPLIED optional is not passed on. Gated on the
+  body mentioning `call-next-method`/`next-method-p`, so other methods' code is unchanged.
   Pinned against SBCL over six tail shapes (none, `&rest`, `&key`, `&optional`,
-  `&optional &rest`, `&optional &key`) for `:around`->primary and
-  primary->primary.
+  `&optional &rest`, `&optional &key`) for `:around`->primary and primary->primary.
 
-**Cold-branch tolerance**: on the COMPILE paths only,
-`expandMakeInstance(cons, registry, true)` lowers an unknown class to a runtime
-`error` call instead of failing the compile — the compilers expand every branch
-eagerly, so a dispatcher naming classes from subsystems that were not loaded
-(ironclad's `make-kdf` listing scrypt/argon2/bcrypt) would otherwise be
-uncompilable. The interpreter passes `false`, so a genuinely wrong class name
-still reports when the branch runs. Same tolerance `format` has for a
-cold-branch control string.
+**Cold-branch tolerance**: on the COMPILE paths only, `expandMakeInstance(cons, registry,
+true)` lowers an unknown class to a runtime `error` instead of failing the compile (the
+compilers expand every branch eagerly). The interpreter passes `false`. Same tolerance
+`format` has for a cold-branch control string.
 
-## Ambiguous slot writes and runtime `typep` (todo-173)
+## Ambiguous slot writes and runtime `typep`
 
-- `(setf (slot-value obj 'NAME) v)` where NAME sits at DIFFERENT indexes in
-  unrelated types no longer errors at compile time: `expandAmbiguousSlotSet`
-  emits an instance-TAG dispatch that writes the type-correct index (the
-  write-side twin of the ambiguous READ dispatch). Routing through the reader
-  generic — the old behavior — only worked when the class declared an
-  `:accessor`; ironclad's `digest` slot has a `:reader` only, and the name
-  collides with the `digest` reader of the `unsupported-digest` condition.
-- `(typep x COMPUTED-SPEC)` no longer errors. The INTERPRETER re-expands per
-  call through `expandRuntimeTypep`: a `cond` keyed on the specifier symbol, one
-  arm per registered layout (matched by canonical name AND plain member name)
-  plus one per built-in atomic type name (`RUNTIME_TYPEP_BUILTINS`), each arm
-  carrying the very test the literal specifier would have compiled to. An
-  unrecognized specifier — a COMPOUND one included — yields nil rather than
-  signalling: this is the lite runtime-dispatch model, not a real type table.
-  **A runtime specifier is matched by SPELLING**, and the reverse of the
-  member-name fallback above (a QUALIFIED specifier against a class registered
-  under a PLAIN name) is deliberately not emitted: it would need a per-call
-  package-prefix strip in generated code, where the compile-time `findClass`
-  does it for free. The only classes registered plainly are the seeded ones, and
-  since todo-380 their names are `cl` symbols, so a `(:use #:cl)` package's
-  `'type-error` IS the plain spelling (`.kb/error-handling.md`,
-  `.kb/packages.md`). Trigger to revisit: a plainly-registered class whose name
-  is not a `cl` symbol.
-- **The COMPILE paths must not inline that dispatch** (todo-115): its size is
-  proportional to the registered-class count, and at cl-postgres scale (165
-  layouts, ~68 KB of AST per call site) three sites each overflowed the JVM's
-  signed-16-bit branch offsets (`StackMapAugmenter: Index -31123 out of
-  bounds`). `expandTypep(cons, registry, false)` — what `Jvm/WasmExprCompiler`
-  call — emits `(%typep-runtime value spec)` instead, and
-  `expandTopLevelDefinitions` injects, once the registry is complete, the
-  `%typep-runtime` defun (bounded: the built-in arms plus a table scan) plus the
-  `%typep-tag-table%` data table — pure quoted data mapping each type name's
-  spellings to the instance tags it accepts, emitted as CHUNKED top-level forms
-  (a defvar plus `(setq .. (append 'chunk ..))` continuations, 48 entries each)
-  so no single method grows with the registry. The same treatment applies to
-  `%subtypep-runtime` (its grouped ancestor sets moved into
-  `%subtypep-ancestor-table%` — the inline shape had silently reached 59 KB) and
-  to a computed `error` condition-type datum WITH initargs: `(error
-  (get-error-type code) :code ...)` lowers to `(%error-runtime datum (list
-  args...))`, dispatching over one small per-condition-class construction helper
-  (`%ERROR-RT-n`, the literal typed expansion over `getf` reads with the slot
-  `:initform` as the getf default) — the old per-site inline expansion reached
-  90 KB, past the JVM's 64 KB hard method limit. Non-condition class names fall
-  to the object-designator path (CL calls that datum undefined behavior; the
-  interpreter's inline dispatch still constructs any class). Pinned by
-  `JvmLispCompilerTest#compileAndRunTypepWithComputedSpecifier` /
-  `#compileAndRunErrorWithComputedConditionType`,
-  `WasmLispCompilerIntegrationTest#typepWithComputedSpecifierAndRuntimeErrorType`
-  and the `runtime-type-dispatch-and-symbol-designators` ci-spec case.
+- `(setf (slot-value obj 'NAME) v)` with NAME at DIFFERENT indexes in unrelated types does
+  not error at compile time: `expandAmbiguousSlotSet` emits an instance-TAG dispatch writing
+  the type-correct index. Routing through the reader generic only worked when the class
+  declared an `:accessor`.
+- `(typep x COMPUTED-SPEC)` does not error. The INTERPRETER re-expands per call through
+  `expandRuntimeTypep`: a `cond` on the specifier symbol, one arm per registered layout
+  (canonical name AND plain member name) plus one per built-in atomic type name
+  (`RUNTIME_TYPEP_BUILTINS`), each arm carrying the very test the literal specifier would
+  have compiled to. An unrecognized specifier -- a COMPOUND one included -- yields nil
+  rather than signalling.
+  **A runtime specifier is matched by SPELLING**; the reverse of the member-name fallback (a
+  QUALIFIED specifier against a class registered under a PLAIN name) is deliberately not
+  emitted. The only plainly-registered classes are the seeded ones, whose names are `cl`
+  symbols, so a `(:use #:cl)` package's `'type-error` IS the plain spelling
+  (`.kb/error-handling.md`, `.kb/packages.md`). **Trigger**: a plainly-registered class whose
+  name is not a `cl` symbol.
+- **The COMPILE paths must not inline that dispatch**: its size is proportional to the
+  registered-class count, and at cl-postgres scale (165 layouts, ~68 KB of AST per call
+  site) three sites overflowed the JVM's signed-16-bit branch offsets
+  (`StackMapAugmenter: Index -31123 out of bounds`). `expandTypep(cons, registry, false)` --
+  what `Jvm/WasmExprCompiler` call -- emits `(%typep-runtime value spec)`, and
+  `expandTopLevelDefinitions` injects, once the registry is complete, the `%typep-runtime`
+  defun (built-in arms plus a table scan) plus the `%typep-tag-table%` data table -- quoted
+  data mapping each type name's spellings to the instance tags it accepts, emitted as
+  CHUNKED top-level forms (a defvar plus `(setq .. (append 'chunk ..))` continuations, 48
+  entries each). Same for `%subtypep-runtime` (grouped ancestor sets moved into
+  `%subtypep-ancestor-table%`; the inline shape had reached 59 KB) and for a computed
+  `error` condition-type datum WITH initargs: `(error (get-error-type code) :code ...)`
+  lowers to `(%error-runtime datum (list args...))`, dispatching over small per-condition
+  helpers (`%ERROR-RT-n`, the literal typed expansion over `getf` reads with the slot
+  `:initform` as the getf default) -- the old per-site inline reached 90 KB, past the JVM
+  64 KB hard method limit. Non-condition class names fall to the object-designator path.
 
-## Runtime slot names + class introspection on the compiled backends (todo-146)
+Tests: `JvmLispCompilerTest#compileAndRunTypepWithComputedSpecifier` /
+`#compileAndRunErrorWithComputedConditionType`,
+`WasmLispCompilerIntegrationTest#typepWithComputedSpecifierAndRuntimeErrorType`, ci-spec
+`runtime-type-dispatch-and-symbol-designators`.
 
-jzon's `coerced-fields` walk (`(slot-value obj (c2mop:slot-definition-name s))`
-over `(c2mop:class-slots (class-of obj))`) forced compile-path support for a
-RUNTIME (non-literal) slot name and for `%class-slot-defs`:
+## Runtime slot names + class introspection on the compiled backends
 
-- `expandClassSlotDefs` (both compilers dispatch `%class-slot-defs` through it):
-  lowers the call site to the SHARED `%class-slot-defs-runtime` defun, injected by
-  `expandTopLevelDefinitions` (gated on a `%class-slot-defs` reference) together
-  with its `%class-slot-defs-table%` data table -- one entry per registered
-  LAYOUT (classes AND structs, since `ClosRegistry.slotDefs` is the one resolver
-  both it and the interpreter use), designators being the instance tag
-  (`%class-NAME`/`%struct-NAME`, what `%class-designator` yields), the plain
-  name, and a class metaobject (what `class-of` yields; its name slot is read),
-  answering the `((slot-name declared-type) ...)` list (a struct's types all
-  read `T`). Anything else (builtin type names included) is nil, the
-  interpreter's semantics. A struct answering here is what lets a slot-walking
-  serializer (json.lisp's `%json-out-instance`) treat a struct like a CLOS
-  instance. It used to inline the membership cond PER CALL SITE; that shape
-  grows with the registry, and the ci-spec corpus's rtd form hit the JVM
-  65535-byte method ceiling (70178 bytes) the day the three MOP base classes
-  joined the registry -- if the shared-defun shape ever needs revisiting, the
-  table is chunked by cons-node budget (`nodeBudgetedTableForms`), not entry
-  count.
-- `expandSlotValue` with a non-literal name falls to `expandRuntimeSlotValue`:
-  a NAME dispatch over every slot name any layout declares. Names sitting at the
-  same index everywhere share one `member` arm (the common case); a name at
-  differing indexes gets an inner `%obj-is` TAG dispatch, so an ambiguous runtime
-  name resolves instead of erroring. Only an unknown name signals at run time.
+- `expandClassSlotDefs` lowers `%class-slot-defs` to the SHARED
+  `%class-slot-defs-runtime` defun, injected by `expandTopLevelDefinitions` (gated on a
+  reference) with its `%class-slot-defs-table%` data table -- one entry per registered
+  LAYOUT (classes AND structs, since `ClosRegistry.slotDefs` is the one resolver both it and
+  the interpreter use). Designators: the instance tag (`%class-NAME`/`%struct-NAME`, what
+  `%class-designator` yields), the plain name, and a class metaobject (its name slot is
+  read). Answers `((slot-name declared-type) ...)`; a struct's types all read `T`; anything
+  else nil. A struct answering here is what lets json.lisp's `%json-out-instance` treat a
+  struct like a CLOS instance. The old per-site inline cond hit the JVM 65535-byte method
+  ceiling (70178 bytes). The table is chunked by cons-node budget
+  (`nodeBudgetedTableForms`), not entry count.
+- `expandSlotValue` with a non-literal name falls to `expandRuntimeSlotValue`: a NAME
+  dispatch over every slot name any layout declares. Names at the same index everywhere
+  share one `member` arm; a name at differing indexes gets an inner `%obj-is` TAG dispatch.
+  Only an unknown name signals at run time.
 - `expandSlotBoundp` with a non-literal name falls to `expandRuntimeSlotBoundp`:
-  instance-tag dispatch over the layouts, each arm a `member` of the runtime name
-  over that type's declared slot names (the lite always-initialized semantics).
+  instance-tag dispatch, each arm a `member` of the runtime name over that type's declared
+  slot names.
 
-Pinned by `runtime-type-dispatch-residue` (ci-spec) and `JzonE2eTest`'s CLOS
-stringification case.
+Tests: ci-spec `runtime-type-dispatch-residue`, `JzonE2eTest`'s CLOS stringification case.
 
-## Name resolution gotcha
+## A RUNTIME class designator: both colon spellings
 
-`defclass`/specializer class names are package-resolved (canonical, e.g.
-`zoo::dog`) but the quoted name in `(make-instance 'dog)` is NOT.
-`ClosRegistry.findClass` therefore falls back from the exact normalized key to a
-UNIQUE base-name match across packages; two packages defining the same class
-name make the bare spelling unresolvable (qualify it). `slot-value` matches by
-slot base name for the same reason. `defmethod` stores the specializer as the
-FOUND class's canonical name (not the spelling at the method site).
+The compile paths carry no package registry at run time, so `intern` always assembles the
+single-colon EXTERNAL spelling `PKG:MEMBER` (`.kb/symbol-runtime-api.md`) while the class is
+registered canonically as `PKG::MEMBER`. Every generated designator dispatch matches by
+SPELLING, so such a lookup used to miss a class the program did not EXPORT
+(`%MOP-MAKE-INSTANCE: not an instantiable class: SPEC-REP`) while the interpreter resolved
+it (`ClosRegistry.normalize` folds `:` to `::`).
 
-## A RUNTIME class designator: both colon spellings (todo-382, 2026-08-16)
+The fix is at the LOOKUP: `LispMacroExpander.addDesignatorSpellings` is the ONE place
+turning a registered name into the spellings that designate it (canonical plus, for a
+qualified name, the single-colon one), and every generated table/dispatch built from a
+class, struct, condition or `(setf find-class)` alias name goes through it:
+`%class-meta-table%`, `%mop-make-instance` (and its `%MMI-REFILL` arms),
+`%allocate-instance`, `%class-direct-subclasses`, the runtime `typep` tag table, the
+`subtypep` universe, and the condition-class dispatch of `error`/`signal`
+(`%error-runtime`). One package cannot house two distinct symbols with one member name, so
+the added spelling can never designate another class; a `cl-user` program is byte-identical.
 
-`(make-instance (intern (format nil "~A-~A" style '#:reporter) package) ...)` --
-rove's `make-reporter` -- names a class by a symbol BUILT at run time. The
-compile paths carry no package registry at run time, so `intern` always
-assembles the single-colon EXTERNAL spelling `PKG:MEMBER` (exportedness is
-compile-time knowledge -- the documented deviation of
-`.kb/symbol-runtime-api.md`, the same reason the function registry ships
-single-colon alias rows), while the class is registered canonically as
-`PKG::MEMBER`. Every generated designator dispatch matches by SPELLING, so
-before this every such lookup missed a class the program did not EXPORT --
-`%MOP-MAKE-INSTANCE: not an instantiable class: SPEC-REP` -- while the
-interpreter resolved it, because `ClosRegistry.normalize` folds `:` to `::`.
-
-The fix is at the LOOKUP, not at the interned symbol (whose own spelling is
-`.todo/254`'s business): `LispMacroExpander.addDesignatorSpellings` is the ONE
-place that turns a registered name into the spellings that designate it -- the
-canonical one plus, for a qualified name, the single-colon one -- and every
-generated table/dispatch built from a class, struct, condition or
-`(setf find-class)` alias name goes through it:
-
-- `%class-meta-table%` (`find-class` / `class-of` / `%class-designator`),
-- `%mop-make-instance` (and its `%MMI-REFILL` arms),
-- `%allocate-instance`, `%class-direct-subclasses`,
-- the runtime `typep` tag table and the `subtypep` universe,
-- the condition-class dispatch of `error`/`signal` (`%error-runtime`).
-
-One package cannot house two distinct symbols with one member name, so the added
-spelling can never designate another class. Cost: the extra symbol rides only in
-the tables a program already emits, and only for PACKAGE-QUALIFIED names -- a
-`cl-user` program is byte-identical, and the whole of rove compiled +959 B on a
-1.71 MB module, so no spellability gate (the `.kb/symbol-runtime-api.md`
-todo-317 one) was added. Pinned by
-`LispEvaluatorTest#evalRuntimeClassDesignatorResolvesAnInternedNonExportedName`,
+Tests: `LispEvaluatorTest#evalRuntimeClassDesignatorResolvesAnInternedNonExportedName`,
 `JvmLispCompilerTest#compileRuntimeClassDesignatorResolvesAnInternedNonExportedName`,
-`WasmLispCompilerIntegrationTest#runtimeClassDesignatorResolvesAnInternedNonExportedName`
-and ci-spec `runtime-class-designator-spellings`.
+`WasmLispCompilerIntegrationTest#runtimeClassDesignatorResolvesAnInternedNonExportedName`,
+ci-spec `runtime-class-designator-spellings`.
 
-**`change-class`'s class argument may be COMPUTED** (todo-442, 2026-08-18): a
-runtime symbol or a class metaobject -- upstream ASDF's `(change-class ret
-class)`. The interpreter resolves the designator natively
-(`LispEvaluator.resolveChangeClassDesignator`: evaluates instance then
-designator in CL order, folds a metaobject to its name slot, re-enters the
-static expansion with the literal spelling). The compile paths lower the site to
-`(%change-class-runtime obj cls (list initargs...))`; `expandTopLevelDefinitions`
-(gate `needsChangeClassRuntime`) generates the dispatch -- metaobject-name
-normalization preamble, then one spelling-matched `%CC-<n>` arm per registered
-NON-SEEDED class (`addDesignatorSpellings`, `equal` compares -- content-safe on
-WASM), each arm the static expansion's shape with the initargs read out of the
-plist via `getf` against a private marker. Because any class can be the runtime
-target, every non-seeded class joins the change-class CAPACITY reservation
-(`registerChangeClassTarget` over the whole registry) -- a program using the
-computed shape pays instance arrays sized to the widest reachable layout, which
-is the price of the JVM identity model; re-evaluate if that cost ever shows up
-in a real program. Pinned by
+## `change-class` -- in place, on all four backends
+
+`(change-class instance 'name initarg value ...)` mutates IN PLACE: object identity and
+every shared slot survive, slots the new class adds are filled from initforms, supplied
+initargs stored, the instance is the value.
+
+- `expandChangeClass` emits: capture the OLD tag -> `(%obj-become obj '%class-T)` -> a
+  `cond` on the captured tag filling `[slotCount(source), slotCount(target))` from the
+  target's initforms -> the initarg stores -> the instance. **The tag is captured BEFORE the
+  swap** (the fill must know which class the instance WAS but can only store into the WIDER
+  layout).
+- **`LispLayout.capacity()` is why this works on the JVM**, where an instance IS its
+  `Object[]` and cannot grow without losing identity: every ancestor of a `change-class`
+  target reserves the target's slot count at construction.
+  `expandTopLevelDefinitions` scans the program for targets (`registerChangeClassTargets` --
+  the form lives in a body, not at top level) and calls `applyChangeClassCapacities()` once
+  the registry is complete. `%obj-slots` and the printers bound themselves by the LAYOUT's
+  slot count, never the array length.
+- **The WASM instance struct's field 0 is MUTABLE** for this, making it structurally
+  identical to `TYPE_P1_FUTURE` `{mut i32, mut eq}` -- so its rec group carries a second,
+  never-instantiated empty struct: wasm canonicalizes a rec GROUP as a whole and a 2-member
+  group can never equal a 1-member one, so `ref.test` keeps telling an instance from a
+  future (`INSTANCE_TYPE_COUNT = 2`). **Do not "simplify" it.**
+- The interpreter needs no reservation (`LispInstance.becomeLayout` grows the array; the
+  LispInstance is the identity); the reservation is harmless there and keeps ONE expansion
+  for all four backends.
+
+**The class argument may be COMPUTED**: a runtime symbol or a class metaobject. The
+interpreter resolves natively (`LispEvaluator.resolveChangeClassDesignator`: evaluates
+instance then designator in CL order, folds a metaobject to its name slot, re-enters the
+static expansion). The compile paths lower to `(%change-class-runtime obj cls (list
+initargs...))`; `expandTopLevelDefinitions` (gate `needsChangeClassRuntime`) generates the
+dispatch -- metaobject-name normalization preamble, then one spelling-matched `%CC-<n>` arm
+per registered NON-SEEDED class (`addDesignatorSpellings`, `equal` compares -- content-safe
+on WASM), each arm the static expansion's shape with initargs read out of the plist via
+`getf` against a private marker. Because any class can be the runtime target, every
+non-seeded class joins the change-class CAPACITY reservation (`registerChangeClassTarget`
+over the whole registry) -- the computed shape pays instance arrays sized to the widest
+reachable layout. Tests:
 `LispEvaluatorTest#changeClassAcceptsAComputedClassDesignator`,
 `JvmLispCompilerTest#compileAndRunChangeClassWithComputedDesignator`,
-`WasmLispCompilerIntegrationTest#reinitializeInstanceAndComputedChangeClass` and
-ci-spec `clos-computed-change-class-442`.
+`WasmLispCompilerIntegrationTest#reinitializeInstanceAndComputedChangeClass`, ci-spec
+`clos-computed-change-class-442`.
 
-## Real slot unboundness (todo-199)
+## Real slot unboundness
 
-**A slot written with no `:initform` starts UNBOUND, not nil.** Reading it signals
-`unbound-slot`; `slot-boundp` says nil; `slot-makunbound` puts it back. This is CL
-semantics and it is what the DAO/serializer idiom ("this column was not fetched")
-rests on -- jzon's `coerced-fields` and `json.lisp`'s `%json-out-instance` both SKIP
-an unbound slot rather than writing `null`.
+**A slot written with no `:initform` starts UNBOUND, not nil.** Reading signals
+`unbound-slot`; `slot-boundp` says nil; `slot-makunbound` puts it back. jzon's
+`coerced-fields` and json.lisp's `%json-out-instance` SKIP an unbound slot.
 
-- The marker is an instance of a LAYOUT-ONLY internal type, `ClosRegistry.UNBOUND_TAG`
-  = `%class-%UNBOUND%` (registered in the `ClosRegistry` constructor, deliberately NOT
-  in `classes()`: a class there would join every typep tag table, `class-slot-defs`
-  answer and `standard-object` descendant set). Testing for it is therefore the same
-  one-compare `%obj-is` every instance-of test is, on all four backends. It prints
-  `#<%UNBOUND%>` if it ever escapes -- printing an instance does not hide unbound
-  slots.
-- `SlotSpec.initformSupplied` records whether the source wrote an `:initform`;
-  `initform` then holds `(%obj-new '%class-%UNBOUND%)`.
-- Every read goes through ONE out-of-line helper, `(%slot-read value instance 'NAME)`,
-  with `(%slot-bound-p value)` for the `slot-boundp` arms
-  (`LispMacroExpander.slotUnboundDefuns`, emitted by `expandTopLevelDefinitions` when
-  `needsSlotUnboundHelper`; the interpreter defines them on first resolution of either
-  name). **They are calls, not inlined `%obj-is` + `if`, for a size reason**: an inline
-  instance-of test is ~60 bytes of JVM bytecode, and one per accessor and per
-  `slot-value` ran the ci-spec corpus past the 64 KB method limit
-  ([jvm-method-size-limits.md](jvm-method-size-limits.md)). In a GENERATED
-  `:reader`/`:accessor` body the `'NAME` rides in `%unspelled-quote`
-  (`LispMacroExpander.checkedSlotRead`, todo-334): the compiler synthesized that
-  spelling, so it must not arm the funcall-dispatch gate's name probes for a same-named
-  defun ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)); a
+- The marker is an instance of a LAYOUT-ONLY internal type, `ClosRegistry.UNBOUND_TAG` =
+  `%class-%UNBOUND%` (registered in the `ClosRegistry` constructor, deliberately NOT in
+  `classes()`: a class there would join every typep tag table, `class-slot-defs` answer and
+  `standard-object` descendant set). Testing for it is the same one-compare `%obj-is`. It
+  prints `#<%UNBOUND%>` if it escapes.
+- `SlotSpec.initformSupplied` records whether the source wrote an `:initform`; `initform`
+  then holds `(%obj-new '%class-%UNBOUND%)`.
+- Every read goes through ONE out-of-line helper `(%slot-read value instance 'NAME)`, with
+  `(%slot-bound-p value)` for the `slot-boundp` arms (`LispMacroExpander.slotUnboundDefuns`,
+  emitted when `needsSlotUnboundHelper`; the interpreter defines them on first resolution).
+  **They are calls, not inlined `%obj-is` + `if`, for a size reason**: an inline instance-of
+  test is ~60 bytes of JVM bytecode, and one per accessor and per `slot-value` ran the
+  ci-spec corpus past the 64 KB method limit
+  ([jvm-method-size-limits.md](jvm-method-size-limits.md)).
+- In a GENERATED accessor body the `'NAME` rides in `%unspelled-quote`
+  (`LispMacroExpander.checkedSlotRead`), so it must not arm the funcall-dispatch gate's name
+  probes ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)); a
   user-written `slot-value` keeps the plain quote.
-- `expandSlotValue` is the CHECKED read; `expandSlotValueRaw` is the unchecked one the
-  `setf` place expansion needs (a write must reach the `%obj-ref` place, and storing
-  into an unbound slot is how it becomes bound). A RUNTIME (non-literal) slot name
-  keeps the raw read -- the wrapper needs the name at expansion time.
+- `expandSlotValue` is the CHECKED read; `expandSlotValueRaw` the unchecked one the `setf`
+  place expansion needs. A RUNTIME slot name keeps the raw read.
 - `unbound-slot` is seeded under `cell-error` (which gained CL's `name` slot, so
-  `cell-error-name` works and `unbound-variable`/`undefined-function` inherit it) with
-  an extra `instance` slot and a `:report` LAMBDA built in Java
-  (`ClosRegistry.unboundSlotReport`, over `%obj-ref` indexes rather than `slot-value`,
-  which would drag the ambiguous-name dispatch into every program). `type-error-datum`,
-  `type-error-expected-type`, `cell-error-name` and `unbound-slot-instance` are prelude
-  defuns (`LispPreludeLibrary`), so one definition serves all four backends.
+  `cell-error-name` works and `unbound-variable`/`undefined-function` inherit it) with an
+  extra `instance` slot and a `:report` LAMBDA built in Java
+  (`ClosRegistry.unboundSlotReport`, over `%obj-ref` indexes rather than `slot-value`, which
+  would drag the ambiguous-name dispatch into every program). `type-error-datum`,
+  `type-error-expected-type`, `cell-error-name`, `unbound-slot-instance` are prelude defuns
+  (`LispPreludeLibrary`).
 
-## Inherited-slot shadowing, `:default-initargs`, `with-accessors` (todo-199)
+## Inherited-slot shadowing, `:default-initargs`, `with-slots`/`with-accessors`
 
-- **A subclass may re-declare an inherited slot** (CLHS 7.5.3): the STORAGE stays the
-  one inherited slot -- so every descendant keeps the index its ancestors baked -- while
-  the subclass specification overrides the initform/initarg it writes and ADDS its
-  readers/accessors to the inherited ones (`LispMacroExpander.shadowSlot`; "written or
-  not" survives parsing as `ParsedSlot.initargSupplied` +
-  `SlotSpec.initformSupplied`). postmodern's `savepoint-handle` re-declares
-  `transaction-handle`'s `open-p`/`connection` this way.
+- **A subclass may re-declare an inherited slot** (CLHS 7.5.3): STORAGE stays the one
+  inherited slot (descendants keep the baked index) while the subclass spec overrides
+  initform/initarg and ADDS its readers/accessors (`LispMacroExpander.shadowSlot`; "written
+  or not" survives parsing as `ParsedSlot.initargSupplied` + `SlotSpec.initformSupplied`).
 - **`(:default-initargs :arg form)` overrides the matching slot's effective initform**,
-  which is where BOTH construction paths read it: the generated constructor's keyword
-  default and the registry initform `buildTypedConstruct` fills unsupplied slots from.
-  Before this it only reached the constructor, so `(error 'my-cond)` ignored it.
-- **`with-accessors`** is the accessor-call twin of `with-slots`, same substitution
-  machinery (`expandWithAccessors`), and needs no registry: an accessor is an ordinary
-  generic and an ordinary `setf` place.
-- **`with-slots` now resolves `defstruct` slots too**: `expandSlotValueRaw` picks the
-  index out of the LAYOUT registry (`uniqueLayoutSlotIndex`, both kinds) instead of the
-  class-only `slotPosition` map, falling back to the tag dispatch when types disagree.
-- **`with-slots`' entry-time fallback binding is BOUNDNESS-GUARDED** (todo-236): besides
-  substituting each slot variable textually, `expandWithSlots` also `let`-binds it to an
-  entry-time read, so code GENERATED inside the body (a user macro whose template
-  mentions a slot variable -- macros expand after this) still resolves the name. That
-  read is `(if (slot-boundp obj 'slot) (slot-value obj 'slot) nil)`, never a bare
-  `slot-value` (`LispMacroExpander.boundOrNil`). **Why the guard is not cosmetic**:
-  `with-slots` BINDS, it never reads, so a body that only ASSIGNS a slot declared without
-  an `:initform` must not signal on entry -- fast-io's
-  `(with-slots (buffer) self (setf buffer (make-output-buffer ...)))` inside
-  `initialize-instance` is exactly that, and it made every
-  `(make-instance 'fast-io:fast-input-stream ...)` die with "The slot BUFFER is unbound".
-  A read the body REALLY performs still signals: that one went through the substitution
-  and is the slot itself. Cost: one extra dispatch per named slot per entry, on the
-  compile paths. `with-accessors`' fallback is NOT guarded -- an accessor is a generic
-  function with no boundness twin, and wrapping it would force EH mode on WASM for every
-  `with-accessors`; a write-only `with-accessors` over an unbound slot still signals.
-  Pinned by `LispEvaluatorTest#withSlotsBindsAWriteOnlyUnboundSlot` +
+  which is where BOTH construction paths read it (the constructor's keyword default and the
+  registry initform `buildTypedConstruct` fills unsupplied slots from). Before this it only
+  reached the constructor, so `(error 'my-cond)` ignored it.
+- **`with-accessors`** is the accessor-call twin of `with-slots` (`expandWithAccessors`),
+  needing no registry. **`with-slots` resolves `defstruct` slots too**: `expandSlotValueRaw`
+  picks the index out of the LAYOUT registry (`uniqueLayoutSlotIndex`, both kinds) instead
+  of the class-only `slotPosition` map, falling back to the tag dispatch when types
+  disagree.
+- **`with-slots`' entry-time fallback binding is BOUNDNESS-GUARDED**: besides substituting
+  each slot variable textually, `expandWithSlots` `let`-binds it to an entry-time read so
+  code GENERATED inside the body (a user macro whose template mentions a slot variable)
+  still resolves. That read is `(if (slot-boundp obj 'slot) (slot-value obj 'slot) nil)`,
+  never a bare `slot-value` (`LispMacroExpander.boundOrNil`). **The guard is not cosmetic**:
+  `with-slots` BINDS, never reads, so a body that only ASSIGNS a slot declared without an
+  `:initform` must not signal on entry (fast-io's `(with-slots (buffer) self (setf buffer
+  ...))` inside `initialize-instance`). A read the body REALLY performs still signals. Cost:
+  one extra dispatch per named slot per entry on the compile paths. **`with-accessors`'
+  fallback is NOT guarded** -- an accessor is a generic with no boundness twin, and wrapping
+  it would force EH mode on WASM for every `with-accessors`; a write-only `with-accessors`
+  over an unbound slot still signals. Pinned by
+  `LispEvaluatorTest#withSlotsBindsAWriteOnlyUnboundSlot` +
   `#withSlotsStillSignalsWhenTheBodyReadsAnUnboundSlot`,
   `JvmLispCompilerTest#compileAndRunWithSlotsWriteOnlyUnboundSlot`,
-  `WasmLispCompilerIntegrationTest#multiParameterDispatchVariadicGenericsAndDefaultInitargs`
-  and the ci-spec case `with-slots-write-only-unbound-slot-and-missing-slot`.
-- **The instance temp a `with-slots`/`with-accessors` binds is named PER FORM, so a
-  NESTED one cannot capture the enclosing one's** (`LispMacroExpander.freshObjVar`). Both
-  expansions substitute their variables with `(slot-value TEMP 'slot)` /
-  `(accessor TEMP)` over a temp the expansion `let`-binds, and the name used to be the
-  fixed `__with_slots_obj`. An inner `with-slots` then rebound it, so every outer read
-  inside the inner body resolved against the INNER instance -- silently, at whatever slot
-  the outer's name sits at in the inner class's layout. clunit2's `handle-assertion` is
-  the shape: `(with-slots (passed ...) *clunit-report* (with-slots (passed-p ...)
-  *clunit-test-report* (incf passed) ...))` incremented the test report's `suite-list`
-  and died on "Expected integer". The name is chosen by scanning the whole form for it
-  and stepping past (`__with_slots_obj`, then `__with_slots_obj2`, ...), which is a pure
-  function of the form -- no counter, so the same program still emits the same bytes
-  (`.kb/emitted-output-determinism.md`). It also covers an inner `with-slots` that only a
-  later user-macro expansion produces: the outer substitution PLANTS its temp name in the
-  body it wraps, so the inner expansion sees the name in use and steps past it. Pinned by
+  `WasmLispCompilerIntegrationTest#multiParameterDispatchVariadicGenericsAndDefaultInitargs`,
+  ci-spec `with-slots-write-only-unbound-slot-and-missing-slot`.
+- **The instance temp is named PER FORM, so a NESTED `with-slots`/`with-accessors` cannot
+  capture the enclosing one's** (`LispMacroExpander.freshObjVar`). With the old fixed
+  `__with_slots_obj` name an inner form rebound it and every outer read inside the inner
+  body resolved against the INNER instance, silently, at whatever slot the outer's name sits
+  at in the inner layout. The name is chosen by scanning the whole form and stepping past
+  (`__with_slots_obj`, `__with_slots_obj2`, ...) -- a pure function of the form, no counter,
+  so the same program emits the same bytes (`.kb/emitted-output-determinism.md`). It also
+  covers an inner `with-slots` produced only by a later user-macro expansion: the outer
+  substitution PLANTS its temp name in the body it wraps. Pinned by
   `LispEvaluatorTest#aNestedWithSlotsDoesNotCaptureTheEnclosingInstance` +
-  `#aNestedWithAccessorsDoesNotCaptureTheEnclosingInstance` and the ci-spec case
+  `#aNestedWithAccessorsDoesNotCaptureTheEnclosingInstance`, ci-spec
   `array-operations-enablement-language-group`.
 - **A `slot-value` naming a slot NO registered class declares is a RUN-time error**
-  (todo-236, `LispMacroExpander.missingSlotStub`): the subforms evaluate for effect, then
+  (`LispMacroExpander.missingSlotStub`): subforms evaluate for effect, then
   `(error "The slot X is missing")` -- read side and `setf` place alike. It used to throw
-  out of the expander, which on the eagerly expanding compile paths failed the whole
-  BUILD over a read that may never execute; the interpreter never noticed because it
-  expands a method body only when the method is called. fast-io's `open-stream-p` reads
-  `'openep`, a typo for its own `openp` slot, in a method nothing in the library calls.
-  Signalling also makes it a condition `handler-case` can see, on every backend, which is
-  what CL's `slot-missing` protocol does. `slot-boundp` on an undeclared slot already
-  answered nil and still does.
+  out of the expander, failing the whole BUILD on the eagerly expanding compile paths over a
+  read that may never execute. Signalling also makes it a condition `handler-case` can see,
+  like CL's `slot-missing` protocol. `slot-boundp` on an undeclared slot answers nil.
 
-## `change-class` -- in place, on all four backends (todo-199)
+## The CLOS surface batch
 
-`(change-class instance 'name initarg value ...)` mutates the instance IN PLACE: the
-object identity and every slot the two layouts share survive, the slots the new class
-adds are filled from their initforms, the supplied initargs are stored, and the
-instance is the value. postmodern's connection pool needs the identity to survive
-(`connect` changes a local and returns it; a copy would strand every other reference).
+- **The instance-initialization generics are CALLABLE with no user method.**
+  `LispMacroExpander.synthesizeCalledInitProtocolGeneric` creates the plainly-named generic
+  and runs the SAME default synthesis (`synthesizeInitProtocolDefault`, chain included). The
+  compile path calls it from `expandTopLevelDefinitions` for any of the three names the
+  program references without a registered generic, reserving dispatcher slots; the
+  interpreter calls it from `resolveFunction`'s tail. Consequence: a program that merely
+  CALLS `reinitialize-instance` now has a `shared-initialize` generic, so
+  `expandMakeInstance` routes construction through the protocol chain -- same values,
+  different emitted shape.
+- **`:writer`** (`SlotSpec.writers`): a symbol defines a two-argument new-value-first
+  generic; `(setf place)` is stored pre-mangled as the `%setf-place` writer-generic name and
+  the emission registers the place under `SETF_FUNCTION_MARKER`. Writers merge on shadowing
+  (`shadowSlotSpec`) and are covered by the MI shifted-accessor synthesis.
+- **`:allocation :class`** (`SlotSpec.sharedCellVar`): the value lives in ONE `defvar`'d
+  global cell per DECLARING class (`%CLASS-CELL-<class>-<slot>%`), initialized at
+  class-definition time; a subclass re-declaring with `:allocation :class` mints a new cell,
+  one re-declaring WITHOUT reverts the slot to `:instance` (CLHS 7.5.3). The slot KEEPS a
+  layout index -- a dead mirror -- so index computations, `slot-exists-p` and
+  `%class-slot-defs` are untouched; every ACCESS routes to the cell: the effective spec's
+  `initform` IS the cell symbol (so the constructor default, `change-class`'s fill and
+  `%mop-fill-slots` read the current value); the constructor stores `(setq <cell> <var>)`;
+  generated reader/accessor/writer methods use `checkedCellRead` and a re-declaring subclass
+  re-emits the EFFECTIVE merged method set specialized on itself (inherited methods bake the
+  ancestor's cell); literal-name `slot-value`/`setf`/`slot-boundp` route through
+  `classSlotAccessByTag` (null for every ordinary program, keeping the historical expansion
+  byte-identical), and the runtime-name dispatches carry the same cell arms via
+  `sharedCellsByTag`; the interpreter's `instanceSlotRef` answers a `CellSlotRef` over the
+  global environment, covering `slot-makunbound`.
+  **Residual**: the instance PRINTER shows the mirror (stale after a shared write), and
+  `equalp`/`%obj-slots` walk mirrors.
+- **`standard-class` as a type specifier** in `typep`/`typecase`: `makeTypeTest` calls
+  `ClosRegistry.ensureMopClassesSeededFor` on an unrecognized symbol specifier before the
+  registry lookup, so `(typecase (find-class 'c) (standard-class ...))` expands to the
+  ordinary descendant-tag test on every backend. `structure-class`/`built-in-class` keep
+  their deliberate empty tests (a struct's metaobject IS a standard-class here).
 
-- `expandChangeClass` emits: capture the OLD tag -> `(%obj-become obj '%class-T)` ->
-  a `cond` on the captured tag filling `[slotCount(source), slotCount(target))` from
-  the target's initforms -> the initarg stores -> the instance. The tag is captured
-  BEFORE the swap because the fill has to know which class the instance WAS but can
-  only store into the WIDER layout, i.e. after it.
-- **`LispLayout.capacity()` is why this works on the JVM**, where an instance IS its
-  `Object[]` and cannot grow without losing identity: every ancestor of a
-  `change-class` target reserves the target's slot count at construction.
-  `expandTopLevelDefinitions` scans the whole program for change-class targets
-  (`registerChangeClassTargets`, the form lives in a body, not at top level) and calls
-  `applyChangeClassCapacities()` once the registry is complete. Only classes a program
-  actually names widen anything. `%obj-slots` and the printers bound themselves by the
-  LAYOUT's slot count, never by the array length.
-- **The WASM instance struct's field 0 became MUTABLE** for this, which makes it
-  structurally identical to `TYPE_P1_FUTURE` `{mut i32, mut eq}` -- so its rec group
-  carries a second, never-instantiated empty struct: wasm canonicalizes a rec GROUP as
-  a whole, and a 2-member group can never equal a 1-member one, so `ref.test` keeps
-  telling an instance from a future (`INSTANCE_TYPE_COUNT = 2`). Do not "simplify" it.
-- The interpreter needs no reservation at all (`LispInstance.becomeLayout` grows the
-  array; the LispInstance, not the array, is the identity) -- the reservation is
-  harmless there and keeps ONE expansion for all four backends.
-
-## The CLOS surface batch (todo-442, 2026-08-18)
-
-Five ordinary-CL gaps upstream ASDF tripped over, closed together. The computed
-`change-class` half is documented in the section above; the rest:
-
-- **The instance-initialization generics are CALLABLE with no user method.** CL
-  supplies each with a system default, so `(reinitialize-instance obj :k v)` is
-  legal with no `defmethod` in sight (ASDF's `(apply 'reinitialize-instance
-  system keys)`). `LispMacroExpander.synthesizeCalledInitProtocolGeneric` is the
-  one entry: it creates the plainly-named generic and runs the SAME default
-  synthesis the first user defmethod triggers (`synthesizeInitProtocolDefault`,
-  chain included). The compile path calls it from `expandTopLevelDefinitions`
-  for any of the three names the program references without a registered
-  generic, reserving dispatcher slots for everything it registers; the
-  interpreter calls it from `resolveFunction`'s tail (the `%slot-read` lazy
-  pattern) and defines the missing dispatchers. Consequence to know: a program
-  that merely CALLS `reinitialize-instance` now has a `shared-initialize`
-  generic, so `expandMakeInstance` routes construction through the protocol
-  chain there -- same values, different emitted shape.
-- **`:writer`** (`SlotSpec.writers`): both spellings -- a symbol defines a
-  two-argument new-value-first generic of that name; `(setf place)` is stored
-  pre-mangled as the `%setf-place` writer-generic name the `:accessor` write
-  halves already use, and the emission registers the place under
-  `SETF_FUNCTION_MARKER`. Writers merge on shadowing (`shadowSlotSpec`) and are
-  covered by the MI shifted-accessor synthesis.
-- **`:allocation :class`** (`SlotSpec.sharedCellVar`): the value lives in ONE
-  `defvar`'d global cell per DECLARING class
-  (`%CLASS-CELL-<class>-<slot>%`), initialized once at class-definition time;
-  a subclass re-declaring with `:allocation :class` mints a new cell, and one
-  re-declaring WITHOUT reverts the slot to `:instance` (allocation follows the
-  most specific specifier, CLHS 7.5.3). The slot KEEPS a layout index -- a dead
-  mirror -- so every index computation, `slot-exists-p` and `%class-slot-defs`
-  are untouched; what changed is that every ACCESS routes to the cell:
-  - the effective spec's `initform` IS the cell symbol (the written initform
-    moved to the `defvar`), so the constructor default, `change-class`'s fill
-    and `%mop-fill-slots` read the cell's current value for free;
-  - the constructor stores `(setq <cell> <var>)`, so a `make-instance` initarg
-    naming a shared slot writes the CELL (CL's fill), a no-op when unsupplied;
-  - generated reader/accessor/writer methods read/write the cell
-    (`checkedCellRead`); a re-declaring subclass re-emits the EFFECTIVE merged
-    method set specialized on itself, because the inherited methods bake the
-    ancestor's cell;
-  - literal-name `slot-value`/`setf`/`slot-boundp` route through
-    `classSlotAccessByTag` (null for every ordinary program, keeping the
-    historical expansion byte-identical; otherwise a tag dispatch over
-    cell-vs-index arms), and the runtime-name dispatches
-    (`%slot-value-runtime`/`-set-`/`%slot-boundp-runtime`) carry the same
-    cell arms via `sharedCellsByTag`; the interpreter's `instanceSlotRef`
-    answers a `CellSlotRef` over the global environment, which also covers
-    `slot-makunbound`.
-  Residual: the instance PRINTER shows the mirror (stale after a shared
-  write), and `equalp`/`%obj-slots` walk mirrors -- revisit if a real program
-  compares or prints class-slotted instances.
-- **`standard-class` as a type specifier** in `typep`/`typecase`:
-  `makeTypeTest` calls `ClosRegistry.ensureMopClassesSeededFor` on an
-  unrecognized symbol specifier before the registry lookup -- the same seeding
-  trigger the interpreter's `typep`/`subtypep` already had -- so
-  `(typecase (find-class 'c) (standard-class ...))` expands to the ordinary
-  descendant-tag test on every backend. (`structure-class`/`built-in-class`
-  keep their deliberate empty tests: a struct's metaobject IS a
-  standard-class here.)
-
-Pinned by `LispEvaluatorTest#reinitializeInstanceIsCallableWithNoUserMethod` /
+Tests: `LispEvaluatorTest#reinitializeInstanceIsCallableWithNoUserMethod` /
 `#defclassWriterSlotOptionDefinesTheWriterGeneric` /
 `#defclassClassAllocationSharesOneCellPerDeclaringClass` /
-`#typecaseStandardClassMatchesAClassMetaobject`, the
+`#typecaseStandardClassMatchesAClassMetaobject`, the JVM
 `compileAndRun{ReinitializeInstanceWithNoUserMethod,DefclassWriterAndClassAllocation}`
-JVM twins, the
-`reinitializeInstanceAndComputedChangeClass` /
-`defclassWriterClassAllocationAndStandardClassTypecase` WASM twins, and ci-spec
-`clos-reinitialize-442` / `clos-slot-options-and-metaobject-types-442`
-(all four backends).
+twins, the WASM `reinitializeInstanceAndComputedChangeClass` /
+`defclassWriterClassAllocationAndStandardClassTypecase` twins, ci-spec
+`clos-reinitialize-442` / `clos-slot-options-and-metaobject-types-442`.
 
-## `print-object` -- the printer consults it (todo-199)
+## `print-object` -- the printer consults it
 
 A `defmethod print-object` makes the printing operators render that type through the
-generic. **Gated on the program defining a method**: with none -- and with no condition
-in reach either, see the second gate below -- every printing operator compiles exactly as
-before and every existing artifact stays byte-identical.
+generic. **Gated on the program defining a method** (plus the condition and `*print-case*`
+gates below): with none, every printing operator compiles exactly as before.
 
-**The DIRECT call is a separate story, and it always works (todo-443).** The printer's
-route above is what a `defmethod` turns on; `(print-object x s)` written by hand resolves
-to the ordinary generated dispatcher defun named `PRINT-OBJECT`, exactly like any other
-generic. What was missing until todo-443 was CL's SYSTEM method, in both its shapes: with
-no generic at all the call was an undefined function, and with a user method on one class
-every other object hit `%no-applicable-method`. `synthesizePrintObjectDefault` now
-registers the default primary -- `(write-string (if *print-escape* (%prin1-to-string o)
-(%princ-to-string o)) s)`, answering the object -- from `expandDefmethod` when the FIRST
-method is defined (the same hook and the same `hasDefaultPrimary` condition the
-init-protocol generics use) and from `expandTopLevelDefinitions` /
-`LispEvaluator.resolveFunction` when the program only CALLS the name
-(`isCallableSystemGenericName` / `synthesizeCalledSystemGeneric`, shared with the init
-protocol). Two consequences worth knowing:
+**The DIRECT call always works.** `(print-object x s)` resolves to the ordinary generated
+dispatcher defun named `PRINT-OBJECT`. `synthesizePrintObjectDefault` registers CL's SYSTEM
+method -- `(write-string (if *print-escape* (%prin1-to-string o) (%princ-to-string o)) s)`,
+answering the object -- from `expandDefmethod` when the FIRST method is defined (same hook
+and `hasDefaultPrimary` condition the init-protocol generics use) and from
+`expandTopLevelDefinitions` / `LispEvaluator.resolveFunction` when the program only CALLS
+the name (`isCallableSystemGenericName` / `synthesizeCalledSystemGeneric`).
 
-- It renders through the RAW `%prin1-to-string` / `%princ-to-string`, not through
-  `%print-object-str`, and that is a correctness requirement rather than a shortcut:
-  `printObjectTags` collects specializers from EVERY parameter while a dispatcher
-  dispatches on the FIRST, so a method specialized on its STREAM parameter puts that
-  class in the routed set and a routed default would recurse forever. The visible cost
-  is that a nested instance inside a value handed to a DIRECT call gets the raw
-  rendering, where the printer's own walk consults the method (the todo-437 walk).
-- Two compile-path scans had to learn the name, because the synthesized defun does not
-  exist yet when they run: the `expandTopLevelDefinitions` fast path (which returns early
-  for a program with no definition to splice -- a program that only calls `print-object`
-  is exactly that), and `injectMvSpillGlobal`'s `*print-escape*` gate, which counts
-  `print-object` as a reference for the same reason it already counted
-  `print-unreadable-object`. Without the second the default read an unseeded global and
-  printed the `princ` spelling on the compile backends.
-
-- `printObjectTags(registry)` is ONE of the two gates and the routed tag set (class
-  specializers and `defstruct` ones -- a struct name parses as a TYPE specializer
-  carrying the struct name, so both descendant-tag families are collected).
-- `expandPrintObjectHook` rewrites `princ-to-string`/`prin1-to-string`/`write-to-string` (and their internal, unwrapped piece spellings `%princ-piece` / `%prin1-piece`, `.kb/string-write-runtime.md`)
-  to `(%print-object-str x escape)` and `print`/`princ`/`prin1` to a
-  `write-string` of it (+ `terpri` for `print`). `format`'s `~A`/`~S` need no case of
-  their own: they lower to those two conversions.
-- The generated `%print-object-str` falls back to `%princ-to-string` /
-  `%prin1-to-string` -- INTERNAL ALIASES of the same two functions. Without them the
-  fallback would re-enter the very rewrite that produced it. The interpreter INLINES
-  the renderer instead of calling the defun, because it re-expands per call and must
-  see a `defmethod` that follows the first print. The raw renderer those aliases reach
-  carries the shared cycle guard since todo-584/585 (`.kb/pretty-printer.md`, "A cyclic
-  value prints finitely"), so a routed instance with no method still prints finitely
-  when its slots cycle -- and the walk's own cons and vector arms carry the guard's
-  Lisp twin (`%pos-walk` threads the rendering path and depth through itself,
-  `%pos-chain-stop` is Floyd over the cdr chain), so a cyclic cons prints the same
-  finite text routed and unrouted.
+- It renders through the RAW `%prin1-to-string`/`%princ-to-string`, not `%print-object-str`,
+  as a **correctness requirement**: `printObjectTags` collects specializers from EVERY
+  parameter while a dispatcher dispatches on the FIRST, so a method specialized on its
+  STREAM parameter puts that class in the routed set and a routed default would recurse
+  forever. Cost: a nested instance inside a value handed to a DIRECT call gets the raw
+  rendering.
+- **Two compile-path scans had to learn the name** (the synthesized defun does not exist
+  when they run): the `expandTopLevelDefinitions` fast path (which returns early for a
+  program with no definition to splice) and `injectMvSpillGlobal`'s `*print-escape*` gate
+  (which counts `print-object` as a reference like `print-unreadable-object`). Without the
+  second the default read an unseeded global and printed the `princ` spelling.
+- `printObjectTags(registry)` is the routed tag set (class specializers and `defstruct`
+  ones -- a struct name parses as a TYPE specializer carrying the struct name).
+- `expandPrintObjectHook` rewrites `princ-to-string`/`prin1-to-string`/`write-to-string`
+  (and the internal unwrapped piece spellings `%princ-piece`/`%prin1-piece`,
+  `.kb/string-write-runtime.md`) to `(%print-object-str x escape)` and
+  `print`/`princ`/`prin1` to a `write-string` of it (+ `terpri` for `print`). `format`'s
+  `~A`/`~S` need no case of their own.
+- The generated `%print-object-str` falls back to `%princ-to-string`/`%prin1-to-string` --
+  INTERNAL ALIASES of the same two functions; without them the fallback would re-enter the
+  rewrite that produced it. The interpreter INLINES the renderer instead of calling the
+  defun, because it re-expands per call and must see a `defmethod` that follows the first
+  print. The raw renderer carries the shared cycle guard (`.kb/pretty-printer.md`, "A cyclic
+  value prints finitely"), and the walk's cons and vector arms carry the guard's Lisp twin
+  (`%pos-walk` threads the rendering path and depth through itself, `%pos-chain-stop` is
+  Floyd over the cdr chain), so a cyclic cons prints the same finite text routed and
+  unrouted.
 - **`*print-escape*` is BOUND around the method call** (`printObjectCall` wraps it in a
-  `let`), `t` for prin1/print/`~S` and `nil` for princ/`~A` -- the escape flag the hook
-  already threads through `%print-object-str` is exactly the value CL binds there, so a
-  portable method that branches on `(and (null *print-readably*) (null *print-escape*))`
-  (quri's `uri` method: bare URI under princ, `#<TYPE uri>` under prin1) behaves as it
-  does in CL. `*print-escape*`/`*print-readably*` are `CL_VARIABLES` holding CL's
-  defaults; the interpreter seeds both into `specialVars` (nothing in user code declares
-  them, yet the route binds one), and the compile path injects `(defvar ...)` from
-  `LispMacroExpander.injectMvSpillGlobal`, which runs AFTER `expandTopLevelDefinitions`
-  and therefore sees the route's own reference. That ORDER is the load-bearing part: a
-  `setq` would not proclaim the name special, and injecting before the expansion would
-  miss the reference the expansion creates.
-- **The THIRD gate is `*print-case*`** (2026-08-15, `.todo/041`): the same rewrite fires
-  for a program that MENTIONS the variable, and the leaf every arm above falls back to
-  becomes `(%print-cased x escape)` -- the shared prelude renderer that applies the
-  variable to each symbol spelling, whose own leaves are the two raw aliases. It sits
-  UNDER the method route, so a `print-object` method still wins where one applies.
-  `.kb/pretty-printer.md` owns the rest.
-- **The SECOND gate is a condition's `:report`** (`.kb/error-handling.md`, todo-206):
-  the same rewrite fires for a program that can build a condition, and the
-  escape-off arm of `%print-object-str` renders one through
-  `%condition-report-str`. A `print-object` method on a condition class still wins,
-  because the method route is tested first. The two share this seam rather than
-  sitting beside each other -- there is exactly one place that decides what text a
+  `let`), `t` for prin1/print/`~S`, `nil` for princ/`~A`, so a portable method branching on
+  `(and (null *print-readably*) (null *print-escape*))` behaves as in CL.
+  `*print-escape*`/`*print-readably*` are `CL_VARIABLES` with CL's defaults; the interpreter
+  seeds both into `specialVars`, and the compile path injects `(defvar ...)` from
+  `LispMacroExpander.injectMvSpillGlobal`, which runs AFTER `expandTopLevelDefinitions` and
+  therefore sees the route's own reference. **That ORDER is load-bearing**: a `setq` would
+  not proclaim the name special, and injecting earlier would miss the reference the
+  expansion creates.
+- **Gate 2 is a condition's `:report`** (`.kb/error-handling.md`): the same rewrite fires for
+  a program that can build a condition, and the escape-off arm of `%print-object-str`
+  renders one through `%condition-report-str`. A `print-object` method on a condition class
+  still wins (the method route is tested first). **Gate 3 is `*print-case*`**: the rewrite
+  fires for a program that MENTIONS the variable, and the leaf every arm falls back to
+  becomes `(%print-cased x escape)` -- the shared prelude renderer applying the variable to
+  each symbol spelling, whose own leaves are the two raw aliases; it sits UNDER the method
+  route (`.kb/pretty-printer.md`). There is exactly one place that decides what text a
   printing operator writes.
-- **The method is consulted for a NESTED value too** (todo-437, 2026-08-18): the
-  generated renderer is a PAIR -- `%print-object-str` walks a cons and a general rank-1
-  vector element-wise by recursing into itself, and `%print-object-leaf` is the routing
-  half above (method / condition report / raw fallback). One Lisp-level walk rather than
-  a hook in each backend's list renderer (hand-emitted bytecode / wasm): the same choice
-  `%print-cased` made, and the two guards are twins that have to be read together.
-  Consequences worth knowing:
-  - **The walk must reproduce the raw renderer byte for byte** for everything it does
-    NOT route -- that is what keeps a routed program's ordinary output unchanged. There
-    are exactly two shapes (`.kb/pretty-printer.md` has the full table): a cons, with one
-    space before every element but the first and `" . "` before a non-nil tail; and
-    `#(...)`. There is no `'x` / `#'f` abbreviation and no `#*` bit-vector syntax
-    anywhere in this implementation, which is why the walk needs neither.
+- **The method is consulted for a NESTED value too**: the generated renderer is a PAIR --
+  `%print-object-str` walks a cons and a general rank-1 vector element-wise by recursing
+  into itself, `%print-object-leaf` is the routing half (method / condition report / raw
+  fallback). One Lisp-level walk rather than a hook in each backend's list renderer, the
+  same choice `%print-cased` made; the two guards are twins to be read together.
+  - **The walk must reproduce the raw renderer byte for byte** for what it does NOT route.
+    Two shapes only (`.kb/pretty-printer.md` has the table): a cons (one space before every
+    element but the first, `" . "` before a non-nil tail) and `#(...)`. No `'x` / `#'f`
+    abbreviation and no `#*` bit-vector syntax exists here.
   - **The vector guard excludes what it cannot spell**: a string, an array of rank != 1
-    (`#nA(...)`, nested group parens) and a packed FLOAT array (`#d(...)`/`#f(...)`) --
-    none of which can hold an instance either. It is written as "the element type is not
-    `single-float`/`double-float`" and NOT as "the element type is `t`", because the
-    general answer is a `T` SYMBOL in the interpreter and the `t` VALUE on the JVM, which
-    no single `eq` spans. A packed INTEGER vector is deliberately walked: it renders
-    `#(...)` and holds integers, so the walk and the raw renderer agree.
-  - **The vector arm is emitted only for a program `programUsesGeneralArrayOp` answers
-    true for**, so a print-object / condition program with no array in it pulls no array
-    runtime (`array-rank`, `array-element-type`, `aref`). An under-approximation costs
-    the OLD behavior for a vector, never wrong output.
-  - **The interpreter stopped INLINING the renderer** (a recursive walk cannot be
-    inlined) and now (re)generates the defun pair whenever the routing moves --
+    (`#nA(...)`), a packed FLOAT array (`#d(...)`/`#f(...)`). Written as "the element type is
+    not `single-float`/`double-float`", NOT "is `t`" -- the general answer is a `T` SYMBOL in
+    the interpreter and the `t` VALUE on the JVM, which no single `eq` spans. A packed
+    INTEGER vector is deliberately walked.
+  - **The vector arm is emitted only when `programUsesGeneralArrayOp` answers true**, so a
+    print-object/condition program with no array pulls no array runtime. An
+    under-approximation costs the OLD behavior for a vector, never wrong output.
+  - **The interpreter stopped INLINING the renderer** (a recursive walk cannot be) and
+    (re)generates the defun pair whenever the routing moves --
     `LispEvaluator.ensurePrintObjectRuntimeLoaded`, stamped on the tag set +
-    `routesConditionReports` + `*print-case*`, exactly like the condition-report runtime
-    beside it. That is what still lets a `defmethod print-object` evaluated AFTER the
-    first print take effect.
-  - **Still not walked, and the re-evaluation trigger**: a value in a STRUCTURE or class
-    SLOT, in a hash table, in an array of rank != 1. `#S(BOX :ITEM #S(NODE :VALUE 9))`
-    where CL prints `#S(BOX :ITEM #<NODE 9>)`. Closing that means rendering the
-    `#S(...)`/`#<...>` frame in Lisp too (per-backend today, and it has to keep the
-    pathname and condition arms); revisit when a library needs it -- the walk gains one
-    arm, nothing else moves.
-  - **Cost**: the walk is O(n^2) in string concatenation, the same as `%print-cased`'s,
-    and it is on the path of every print in a program that merely CAN build a condition.
-    Re-evaluate together with `.kb/pretty-printer.md`'s "stream with no column" trigger:
-    a stream that can be written incrementally is what turns both into one pass.
-- `print-unreadable-object`'s `:type t` prints the type NAME with the
-  `%struct-`/`%class-` tag prefix stripped INLINE (`typeNameOf`), not by calling the
-  prelude's `type-of`: this expansion runs inside the compilers, long after the prelude
-  pre-pass that would have spliced that defun -- a direct compiler invocation (every
-  backend unit test) has no prelude pass at all. The separating space is written only
-  when a body follows. `:identity` is accepted and prints NO address: there
-  is no object-identity token in the value model, and a per-backend one would break the
-  byte-identical cross-backend output the suite rests on.
-- **That type designator follows `*print-escape*`**, because CL writes it with `write`
-  and CLHS 22.1.3.3 drops a symbol's package qualifier when escape is off: `prin1` of a
-  `quri:uri` gives `#<QURI:URI ...>`, `princ` gives `#<URI ...>` (SBCL-checked). Only a
-  package-qualified type can tell the two apart, which is why it went unnoticed until
-  map-set's `#<MAP-SET of 1 element>` (`.kb/defstruct.md`). The escape-off spelling needs
-  no qualifier strip of its own -- the tag prefix attaches to the PACKAGE half
-  (`%struct-MAP-SET:MAP-SET`), so a qualified name's member part is already the bare type
-  name and only the unqualified spelling reaches the prefix-stripping cond. The reference
-  is late (Pass 2), so `injectMvSpillGlobal` counts an un-expanded
-  `print-unreadable-object` operator as the mention that declares `*print-escape*`.
+    `routesConditionReports` + `*print-case*`. That is what lets a `defmethod print-object`
+    evaluated AFTER the first print take effect.
+  - **Still not walked (trigger)**: a value in a STRUCTURE or class SLOT, a hash table, an
+    array of rank != 1 -- `#S(BOX :ITEM #S(NODE :VALUE 9))` where CL prints
+    `#S(BOX :ITEM #<NODE 9>)`. Closing it means rendering the `#S(...)`/`#<...>` frame in
+    Lisp too, keeping the pathname and condition arms.
+  - **Cost**: O(n^2) in string concatenation, like `%print-cased`'s, on the path of every
+    print in a program that merely CAN build a condition. Re-evaluate with
+    `.kb/pretty-printer.md`'s "stream with no column" trigger.
+- `print-unreadable-object`'s `:type t` prints the type NAME with the `%struct-`/`%class-`
+  tag prefix stripped INLINE (`typeNameOf`), not via the prelude's `type-of`: this expansion
+  runs inside the compilers, after the prelude pre-pass, and a direct compiler invocation has
+  no prelude pass. The separating space is written only when a body follows. `:identity` is
+  accepted and prints NO address (no object-identity token exists in the value model).
+- **That type designator follows `*print-escape*`** (CLHS 22.1.3.3 drops a symbol's package
+  qualifier when escape is off): `prin1` of a `quri:uri` gives `#<QURI:URI ...>`, `princ`
+  gives `#<URI ...>` (SBCL-checked). No qualifier strip is needed -- the tag prefix attaches
+  to the PACKAGE half (`%struct-MAP-SET:MAP-SET`), so a qualified name's member part is
+  already the bare type name and only the unqualified spelling reaches the prefix-stripping
+  cond. The reference is late (Pass 2), so `injectMvSpillGlobal` counts an un-expanded
+  `print-unreadable-object` operator as the mention declaring `*print-escape*`.
+
+## Short-form `:method-combination`
+
+`(defgeneric g (x) (:method-combination NAME [:most-specific-first |
+:most-specific-last]))`, NAME one of `ClosRegistry.SHORT_FORM_COMBINATIONS` --
+`progn`/`and`/`or`/`+`/`list`/`nconc`/`append`/`max`/`min`. The CLHS **long** form
+(`define-method-combination`) is out of scope; a NAME outside the set is REJECTED at
+`defgeneric` time, not silently ignored.
+
+- `GenericInfo` gains `methodCombination` + `mostSpecificLast`.
+  `LispMacroExpander.registerDefgeneric` parses and records the option BEFORE the inline
+  `(:method ...)` clauses expand -- an inline `(:method progn ...)` is a plain `defmethod`
+  and must already see the combination.
+- `expandDefmethod` reads the combination for the legal qualifier set: the combination NAME
+  becomes a primary qualifier, `:around` stays legal, `:before`/`:after` are REJECTED
+  (CLHS). A combination generic whose `defmethod` carries no qualifier is rejected too.
+- `LispMacroExpander.shortFormEffectiveMethod` builds `(NAME (m1 nil args...) (m2 nil
+  args...) ...)` over EVERY applicable method of that qualifier in branch-specificity order,
+  reversed under `:most-specific-last`. The `next` argument is nil throughout -- CLHS gives
+  short-form primaries no `call-next-method`; only an `:around` has one, and its next is the
+  combined form (`buildNextChain`/`callWithNext` shared with the standard combination).
+- No applicable method is the ordinary `noApplicableMethod` error, NOT an empty `(progn)`:
+  an empty `(and)` answers `t` and an empty `(+)` zero, hiding a missing method behind a
+  plausible value.
+
+Tests: `LispEvaluatorTest#evalShortFormMethodCombination*`,
+`JvmLispCompilerTest#compileAndRunShortFormMethodCombination`,
+`WasmLispCompilerIntegrationTest#shortFormMethodCombination`, ci-spec
+`defgeneric-short-form-method-combination`.
+
+## MOP boundary -- what is IN
+
+The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real memoized
+`standard-class` instance on all four backends, `eq` to each other for the same class.
+
+- **Interpreter**: Java built-ins over `ClosRegistry.classMetaobject` (designator-aware:
+  plain names AND instance tags; struct layouts answer too -- a struct class is a
+  `standard-class` instance, `structure-class` does not exist) and
+  `ClosRegistry.builtinClassMetaobject` (`BUILTIN_CLASS_NAMES` = exactly the
+  `%class-designator` result set, `T` for everything else). Seeding is lazy
+  (`ensureMopClassesSeeded()`) -- **NEVER seed unconditionally**: that joins every runtime
+  dispatch table and once pushed the ci-spec corpus over the JVM 64 KB method ceiling.
+- **Compile paths**: `expandTopLevelDefinitions`, gated on the program referencing
+  `find-class` OR `class-of`, injects a `%class-meta-table%` data table
+  (node-budget-chunked, one entry per registered class AND struct layout: spellings -- the
+  instance TAG among them -- / superclass / effective-slot data) plus the generated
+  `%find-class` (table scan, then the built-in class fallback, CL errorp semantics) +
+  `%find-class-materialize`. The public `find-class` defun is a thin wrapper injected only
+  when the program references it without defining it, so a user `find-class` never changes
+  what `class-of` answers. `(class-of x)` expands to
+  `(%find-class <%class-designator dispatch> t)`.
+- The OLD tag/type-name view lives on as the internal `%class-designator`, ridden by the
+  light consumers (prelude `type-of`, `print-unreadable-object :type`, the
+  no-applicable-method message, json.lisp's `%json-out-instance`) -- they drag no metaobject
+  runtime in and keep every non-MOP program byte-identical. `%class-slot-defs` accepts a
+  class metaobject as designator (`%class-slot-defs-runtime` gains that preamble only when
+  `standard-class` is registered).
+- **`typep`/`subtypep` take a class METAOBJECT wherever a type specifier is expected.** ONE
+  normalization rule -- "an instance tagged as a `standard-class` descendant continues as
+  its slot-0 name" -- with three emission sites: `subtypep` folds it in Java for the
+  interpreter (`LispMacroExpander.classMetaobjectDesignator`, AHEAD of the `t`/`nil`
+  constant edges), and the emitted `%typep-runtime` (the specifier) / `%subtypep-runtime`
+  (BOTH arguments) carry `LispMacroExpander.metaobjectNameNormalization`, the
+  `(if (%obj-is v '<standard-class descendants>) (setq v (%obj-ref v 0)))` preamble.
+  A metaobject is always a RUNTIME value, so the literal fold is untouched.
+- `class` is a SEEDED slot-less class (`ClosRegistry.CLASS_NAME`), superclass of
+  `standard-class` and hence of every user metaclass, so `(typep x 'class)` is the
+  metaobject predicate through the ordinary ancestor machinery. Never instantiated.
+- **Two traps from LAZY seeding**: (a) the preamble's tag list is
+  `descendantTags(STANDARD-CLASS)`, and an EMPTY one means "no metaobject can exist" on the
+  compile paths (final registry) but NOT in the interpreter, where the `(find-class 'c)` in
+  the test's own argument seeds AFTER the expansion -- hence the `liveRegistry` flag, which
+  falls back to the constant `%class-STANDARD-CLASS` tag instead of dropping the preamble;
+  (b) a type SPECIFIER naming a MOP base class is itself a seeding trigger
+  (`ClosRegistry.ensureMopClassesSeededFor`, from the interpreter's `typep`/`subtypep`),
+  or `(typep (find-class 'c) 'class)` as a program's first MOP form folds to constant nil.
+- The built-in `T` class's name slot holds the boolean `t`, not the symbol, so the runtime
+  `typep` universal-type arms match BOTH spellings (`universalTypeMatchTest`, plus the
+  instance branch's `(member tn '(t atom))`); `subtypep`'s `(eq b t)` edge already did.
+- `#'class-of`'s wrapper is REFERENCE_GATED in `BuiltinFunctionWrappers` -- ungated it
+  referenced `%find-class` in programs the injection scan said needed no runtime.
+  `class-name` is a prelude defun over metaobject slot 0.
+- **Metaobject slot order is a `%obj-ref` index contract** shared with the closer-mop shim --
+  append, never reorder: class = name, direct-superclasses, direct-slots, effective-slots,
+  finalized-p; slot-definition = name, initargs, initform, type, readers, initfunction (5).
+- **`allocate-instance`** is IN: an instance of a registered CLOS class (metaobject or name
+  designator) with EVERY slot the unbound marker -- no initforms, no `initialize-instance`;
+  initargs accepted and ignored. Interpreter: a registry-backed built-in. Compile paths:
+  `%obj-new` needs a LITERAL tag, so `LispMacroExpander.allocateInstanceDefuns` (gated by
+  `needsAllocateInstanceRuntime`; a user defun wins) emits one construction arm per
+  registered class, chunked into `%ALLOC-INST-<n>` helpers by cons-node budget, plus the
+  public `allocate-instance` defun over an `or`-chain. It does NOT seed the MOP classes.
+  Built-in and struct classes signal.
+- The `closer-common-lisp` package table.lisp `:use`s is a resolver-level flat re-export
+  (`.kb/packages.md`).
+
+### The metaclass protocol (Phase B)
+
+A `defclass` carrying `(:metaclass M)` -- `M` must be registered and descend from
+`standard-class` -- keeps its full static expansion (constructor, accessors, registry entry;
+instances stay ordinary) and additionally emits ONE
+`(%ensure-class-with-metaclass 'name 'M '(supers) (list slot-specs...) (list
+class-initargs...))` driver call as its last generated form.
+
+- Unknown CLASS options become metaclass initargs whose value is the option TAIL list
+  (`(:table-name "u")` -> `:table-name ("u")`, AMOP canonicalization); unknown SLOT options
+  are collected per slot (single occurrence each) and ride the canonical
+  `(:name .. :initargs .. :initform .. :type .. :readers ..)` spec plist as
+  `direct-slot-definition-class` initargs.
+- The driver + system defaults for `closer-mop:{validate-superclass (permissive t),
+  direct-slot-definition-class, effective-slot-definition-class,
+  compute-effective-slot-definition, finalize-inheritance}` are Lisp source:
+  `macro/mop-protocol.lisp` via `MopProtocol.forms()` (the `FormatRenderer` pattern),
+  SELF-CONTAINED over the `%obj-ref` index contract -- no closer-mop shim dependency,
+  defMETHODs only (no defgenerics) so user hook methods defined before OR after merge into
+  the same generics.
+- The dynamic-extent contract postmodern relies on holds: the default
+  `compute-effective-slot-definition` calls `effective-slot-definition-class` and
+  instantiates its answer INSIDE the user override's `call-next-method`.
+- `finalize-inheritance` runs EAGERLY at definition time (documented divergence).
+- The protocol runs "in the evaluator at hand": the interpreter's `evalDefclass` loads it
+  once (`ensureMopProtocolLoaded`), which also covers the compile paths' macro-time
+  evaluator; the compiled program runs the driver call at program start in top-level order.
+- Compile-path gate (`usesMetaclassProtocol` / `namesMopBaseSuperclass`): PREPENDS
+  `MopProtocol.forms()` (before the reference scans, so the driver's own `find-class` use
+  switches the metaobject runtime on) and appends `seededMopConstructorDefuns` (keyword
+  constructors for the three seeded MOP base classes, whose defclass never ran), the
+  generated `%mop-make-instance` (designator -> name -> per-class `apply` of the constructor
+  + the initialization generic; a METAOBJECT-ancestored class's arm allocates UNBOUND for
+  the chain fill instead; arms bounded to METAOBJECT-ancestored classes, WIDENED to every
+  program-registered class -- seeded condition classes excluded, no keyword constructor --
+  and chunked into `%MMI-<n>` helpers with the init call hoisted, whenever the program takes
+  `#'make-instance` as a value) and `%register-class-metaobject` (prepends onto
+  `%class-metaobjects%` so the driver-built instance shadows the materialized plain view --
+  the memo scan takes the first hit; the interpreter twin primes
+  `ClosRegistry.classMetaobjects` via `registerClassMetaobject`).
+- **Lite divergence + the initarg RE-FILL repair.** For REGULAR (non-metaobject) classes,
+  shared-initialize hooks run AFTER constructor slot-filling, which IS observable (upstream
+  dao-class's `shared-initialize :before` RESETS its `direct-keys` slot and counts on CL's
+  :before -> initarg-fill order). Repair: for a REGULAR class specialized by a `:before`
+  method on initialize-instance/shared-initialize (`ClosRegistry.initRefillTargets`,
+  ancestor-inclusive via `needsInitRefill`), make-instance re-sets every DECLARED-initarg
+  slot the call supplies (`SlotSpec.initargSupplied`; the slot-name-default keyword an
+  `:initarg`-less slot gets is deliberately NOT refilled) after the initialization generic
+  returns, leftmost initarg wins. Three emission sites, one semantic: `expandMakeInstance`
+  folds it statically per literal call site (`%obj-set` with the baked index; the
+  interpreter's `%mop-make-instance`/`#'make-instance` builtin re-enters this expansion with
+  quoted args, so `literalKeyword` unwraps both spellings), and the generated
+  `%mop-make-instance` runtime carries `%MMI-REFILL` (one cond bounded by the
+  :before-specialized class set) + `%MMI-INIT-TAIL` (plist scan), called inside the
+  per-class arm right after the initialization generic.
+  **Residual (accepted)**: a specialized PRIMARY without call-next-method should suppress
+  the fill entirely, and an `:after` writing a supplied declared-initarg slot on a
+  refill-target class would be re-clobbered -- both need the fill INSIDE the generic chain,
+  which the static constructor model cannot do. Pinned by
+  `defclassMetaclassSharedInitializeBeforeRunsBeforeInitargFilling` (all three suites) and
+  the PostmodernE2eTest DAO leg.
+- Other lite divergences: inherited effective slots are reused from the superclass
+  metaobject unless shadowed (the direct-definition list handed to
+  compute-effective-slot-definition is the shadowing definition alone); validate-superclass's
+  default is permissive.
+
+### MOP widening (mito shapes)
+
+- **`ensure-class-using-class` routing.** `%ensure-class-with-metaclass` applies
+  `closer-mop:ensure-class-using-class` with the EXISTING driver-built metaobject (nil on
+  first definition), the name, `:metaclass`/`:direct-superclasses` (NAMES -- resolved inside
+  the chain, after user `:around`s may munge the list)/`:direct-slots` + the class initargs.
+  The system default takes the make path for nil and the reinitialize path for a class, so a
+  user `:around` on a metaclass fires on REdefinition, per AMOP. "Existing" is tracked in the
+  protocol's own `%mop-ensured-classes%` alist, deliberately NOT via find-class: the static
+  class table answers a materialized plain view for a class whose driver call has not run.
+- **Chain-fill initialization of METAOBJECT instances.** For a class whose ancestors include
+  a seeded MOP base class, and only when `ClosRegistry.isMopProtocolActive`,
+  `expandMakeInstance` and the generated `%mop-make-instance` arms allocate the instance
+  UNBOUND instead of calling the keyword constructor, then run the initialization generic.
+  The system `shared-initialize` primaries (on `standard-class` and the two slot-definition
+  base classes) fill via `%mop-fill-slots` (interpreter: registry-backed builtin; compile
+  paths: generated per-class dispatch chunked into `%MOP-FILL-<n>` helpers; slot-names nil =
+  supplied initargs only, non-nil = plus initforms for still-unbound slots --
+  unsupplied-no-initform stays UNBOUND). This is what makes a user
+  `initialize-instance :around`'s MUNGED initargs take effect; CL's ordering holds natively
+  here, so metaobject classes are EXCLUDED from the initarg re-fill replay. The
+  standard-class primary additionally -- INSIDE the chain -- resolves `:direct-superclasses`
+  designators into metaobjects on slot 1 and converts `:direct-slots` canonicalized spec
+  plists into direct-slot-definition metaobjects on slot 2 through
+  `direct-slot-definition-class` + `%mop-make-instance` (recursing into the same chain).
+- **Class REdefinition (metaclass classes).** Re-evaluating a `defclass ... (:metaclass M)`
+  reinitializes the SAME metaobject (identity survives), re-registers it in the find-class
+  memo and re-finalizes. **Divergence**: the INTERPRETER does real redefinition; the COMPILE
+  paths keep the LAST definition in the static tables (`expandTopLevelDefinitions` nil-s the
+  earlier defclass-generated constructor defun via `classDefunSlots`; two same-name defuns in
+  one class file are a JVM ClassFormatError) while BOTH driver calls still run in top-level
+  order. Existing instances are not updated (`update-instance-for-redefined-class` is out),
+  and a slot whose INDEX changes between definitions poisons the shared `slotPositions` map.
+- **Slot-definition contract: index 5 = INITFUNCTION** (append-only). The driver builds each
+  canonicalized spec with `list` -- fresh cells per evaluation, because mito's
+  add-referencing-slots `rplacd`s ghost markers into them -- carrying
+  `:initfunction (lambda () initform)`; the default `compute-effective-slot-definition`
+  copies it onto the effective slot. Filled only on DRIVER-built definitions: the
+  materialized plain views (`classMetaobject`, `%find-class-materialize`) answer nil (the
+  meta table is quoted data and cannot carry a live thunk). Shim additions (closer-mop.lisp):
+  `slot-definition-readers` (4), `slot-definition-initfunction` (5), `class-direct-slots` (2),
+  `class-direct-subclasses`.
+- **`class-direct-subclasses`** rides `%class-direct-subclasses`: interpreter =
+  `ClosRegistry.directSubclassNames` -- the metaobject memo's direct-superclass lists FIRST
+  (a driver-built instance may carry a superclass a user `:around` INJECTED), then the static
+  registry's declared superclasses; compile paths = a generated defun (gated on the
+  reference; forces the metaobject runtime, whose `%class-metaobjects%` memo it scans) plus
+  chunked static-arm helpers (`%CDS-<n>`), names materialized through `%find-class`.
+
+Tests: `defclassMetaclassEnsureClassUsingClassAndInitargMunging` (`LispEvaluatorTest`,
+`compile`-prefixed in `JvmLispCompilerTest`, same name in
+`WasmLispCompilerIntegrationTest` -- all three share `MopWideningFixture.MITO_SHAPE_SOURCE`),
+ci-spec `mop-widening-for-mito`.
+
+### The mito-core integration batch
+
+- **Metaobject slots are read/written BY NAME, never by `%obj-ref` index.** The seeded index
+  contract holds only for the seeded base classes themselves: a user slot-definition class
+  may inherit the base through MULTIPLE inheritance with its own mixin FIRST (mito's
+  `table-column-class`), putting the mixin's slots ahead of the base's.
+  `mop-protocol.lisp` and the closer-mop shim spell every access `(slot-value x 'name)` /
+  `(setf (slot-value x 'name) v)`; only the slot NAMES are a contract. The `%obj-ref` index
+  contract remains valid for Java/generated code that CONSTRUCTS instances of the seeded
+  layouts (`%find-class-materialize`, `newSeededInstance`).
+- **An AMBIGUOUS literal slot name outlines onto the shared runtime dispatch.**
+  `expandAmbiguousSlotRead`/`expandAmbiguousSlotSet` emit `(%slot-value-runtime obj 'name)`
+  / `(%slot-value-set-runtime obj 'name v)` instead of a per-site registry-proportional tag
+  dispatch (six such reads in `finalize-inheritance` crossed the JVM 64 KB method limit at
+  ~250 layouts). `needsRuntimeSlotNameDispatch`/`needsRuntimeSlotSetDispatch` take the
+  registry and gate on ambiguous literal names too. The INTERPRETER defines both
+  `%slot-value(-set)-runtime` as registry-backed builtins.
+- **Injected direct superclasses reconcile the STATIC registration.** A user
+  `initialize-instance :around` munging `:direct-superclasses` at ensure-class time is
+  invisible to the static layout/ancestors/dispatch/constructor. The driver-built metaobject
+  is the truth: `evalDefclass` (interpreter) re-registers the class from
+  `LispMacroExpander.widenDefclassToMetaobjectSupers` (the metaobject's superclass list minus
+  the `standard-object` default, plus per-slot `:initarg`s a slot-definition `:around` pushed
+  -- ONLY onto specs that declare none) without re-running the driver;
+  `UserMacroExpander.widenMetaclassDefclasses` (compile paths) rewrites the EMITTED defclass
+  form the same way after the macro-time evaluator ran it. The runtime driver re-runs the
+  `:around`, whose contains-checks make the injection idempotent.
+- **A driver-built class with no direct superclasses defaults to `(standard-object)`**, per
+  AMOP -- the walk shape mito's `map-all-superclasses` relies on. `standard-object` resolves
+  through find-class ONLY (`ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES` + the generated
+  `%find-class` fallback list): `class-of` never answers it and the typep/subtypep
+  special-casing keeps winning. `STANDARD-OBJECT`/`STANDARD-CLASS` are in
+  `PackageRegistry.CL_TYPES` -- the compiled `%find-class` matches SPELLINGS, so a
+  package-local `MITO...::STANDARD-CLASS` resolution otherwise missed the seeded entry.
+- **The synthesized `shared-initialize` system default FILLS** (it used to return the
+  instance unchanged): mito's `make-dao-instance` is `allocate-instance` +
+  `(shared-initialize obj nil initargs)`, where the default IS the fill. It calls
+  `%mop-fill-slots` (slot-names nil = supplied declared initargs only), whose generated
+  dispatch covers EVERY registered class and is injected whenever the expanded output
+  references it. The interpreter builtin answers an UNREGISTERED instance untouched instead
+  of throwing, matching the generated dispatch's fall-through.
+- **`slot-exists-p`** (all four backends): true when the instance's layout declares the slot,
+  regardless of boundness. Interpreter = `instanceSlotRef != null`; compile paths = a
+  `%obj-is` membership test over the declaring layouts for a literal name, the shared
+  `%slot-exists-p-runtime` dispatch (own gate) for a runtime name.
+
+Tests: `slotExistsPAnswersDeclaredSlotsRegardlessOfBoundness` (`LispEvaluatorTest` +
+JVM/WASM twins), ci-spec `mito-core-enablement-language-group`. The end-to-end
+`(ql:quickload '("mito-core" "dbd-postgres"))` + DAO CRUD run is manual on the interpreter,
+the JVM and the WASM component.
+
+### Definition-time method construction (Phase C)
+
+The `(funcall (compile nil `(lambda () ,code)))` idiom of postmodern's `build-dao-methods`
+(`%eval`), where `code` is a `let*`/`labels` form whose nested `defmethod`s carry the class
+METAOBJECT spliced as a literal specializer (plus `(eql (class-name ,class))`).
+
+- The evaluator's `compile` built-in (`LispEvaluator`; CL semantics otherwise: coerce a
+  literal lambda to a function in the null lexical env, a non-nil name installs and returns
+  the name) intercepts a NO-ARGUMENT definition containing a defmethod and folds the
+  metaobject literals first (`macro/MopEvalCapture`): specializer position -> the class name,
+  `(eql (class-name <inst>))` -> `(eql 'name)`, every other occurrence ->
+  `(find-class 'name)`. **Load-bearing ordering**: valid during finalization only because the
+  driver registers the metaobject BEFORE `finalize-inheritance` (mop-protocol.lisp, like CL's
+  ensure-class).
+- The live interpreter returns a function evaluating the folded body in place. The compile
+  paths' MACRO-TIME evaluator records the body into the splice sink `UserMacroExpander`
+  attaches (`setMopEvalSpliceSink`), and the pass -- also activated by a bare `:metaclass`
+  defclass -- splices the folded forms right after the triggering defclass, where
+  `expandLetNestedDefmethods` (defmethods at ANY depth, quote-skipped, byte-identical for the
+  shallow case) registers them statically and the nested method-body defuns compile to
+  global-closure setqs.
+- Run-time re-execution in a compiled program goes through the generated `compile` runtime
+  (`macro/CompileRuntime` + `compile-runtime.lisp`, injected gated on a compile reference
+  without a user defun, registered in the native-image resource-config): a
+  defmethod-containing definition answers a do-nothing function, anything else signals -- so
+  a method-defining form built from RUNTIME data is silently absorbed rather than signalled,
+  the one soft edge. A method under a false definition-time guard (`when key-fields`) still
+  registers in the dispatcher; calling it fails on the unassigned body global instead of
+  no-applicable-method.
+
+MOP tests: `LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`
+`*FindClass*` + `*CloserMopShim*` +
+`classOf*`/`compileAndRunClassOf`/`classOfAndSlotAccessors` +
+`allocateInstance*`/`compileAllocateInstance*` +
+`typepAndSubtypepAcceptClassMetaobjectsAsTypeSpecifiers` (`compile`-prefixed on the JVM) +
+`defclassMetaclass*`/`compileDefclassMetaclass*`/`defclassMetaclassRunsTheClassDefinitionProtocol`
+(WASM), `compileCoercesALambdaExpressionToAFunction` +
+`compileInterceptsDefinitionTimeMethodConstruction` (all three suites), ci-spec
+`find-class-metaobject-substrate` (raw metaobject print shape included),
+`defclass-metaclass-protocol`, `compile-definition-time-method-construction`.
+
+### Registry-growth lesson
+
+The RUNTIME-slot-name `slot-value`/`slot-boundp` dispatch used to be inlined per call site
+and grows with every layout times its slots; five extra ci-spec classes pushed a corpus
+dolist body past the JVM's SIGNED 16-BIT branch encoding (32 KB, hit before the 64 KB method
+cap). It is now outlined into the shared
+`%slot-value-runtime`/`%slot-boundp-runtime`/`%slot-value-set-runtime` defuns
+(`runtimeSlotValueDefuns` etc., gated on a non-literal-name site,
+`needsRuntimeSlotNameDispatch` / `needsRuntimeSlotSetDispatch`; the interpreter resolves
+runtime names natively and never calls the read pair, serving the set twin as a builtin).
+The defuns are CHAINED-CHUNKED by cons-node budget (`chainedDispatchDefuns`: overflow arms
+call `%SVR-<n>`/`%SBR-<n>`/`%SVW-<n>` helpers; a dispatch that fits stays one defun,
+byte-identical to the pre-chunking shape). Top-level compile crashes name the offending form
+(`JvmLispCompiler` chunk-loop wrapper).
 
 ## Out of scope / known gaps
 
-- Qualifiers (`:before`/`:after`/`:around`) + `call-next-method`/`next-method-p`:
-  DONE (Stage 3, 2026-07-06). Combination is for class + default methods;
-  eql/type-specialized qualified methods combine only with same-specializer
-  primaries + the default method (cross-type subtyping among specializers is not
-  computed).
-- MOP boundary (redrawn 2026-08-01, the DAO/MOP milestone): the STATIC metaobject
-  subset is IN -- `find-class` AND `class-of` answer a real memoized
-  `standard-class` instance on all four backends, `eq` to each other for the
-  same class. Interpreter: Java built-ins over `ClosRegistry.classMetaobject`
-  (designator-aware: plain names AND instance tags; struct layouts answer too --
-  a struct class is a `standard-class` instance, `structure-class` does not
-  exist) and `ClosRegistry.builtinClassMetaobject`
-  (`ClosRegistry.BUILTIN_CLASS_NAMES` = exactly the `%class-designator` result
-  set, `T` for everything else e.g. arrays); lazy `ensureMopClassesSeeded()` --
-  NEVER seed unconditionally: an unconditional seed joins every runtime dispatch
-  table and once pushed the ci-spec corpus over the JVM 64 KB method ceiling.
-  Compile paths: `LispMacroExpander.expandTopLevelDefinitions` injects, gated on
-  the program referencing `find-class` OR `class-of`, a `%class-meta-table%`
-  data table (node-budget-chunked, one entry per registered class AND struct
-  layout: spellings -- the instance TAG among them, so a `class-of` designator
-  resolves by the same scan -- / superclass / effective-slot data) plus the
-  generated `%find-class` (internal resolver: table scan, then the built-in
-  class fallback, CL errorp semantics) + `%find-class-materialize` pair; the
-  public `find-class` defun is a thin wrapper injected only when the program
-  references it without defining it, so a user `find-class` never changes what
-  `class-of` answers. `(class-of x)` expands to `(%find-class
-  <%class-designator dispatch> t)`. The OLD tag/type-name view lives on as the
-  internal `%class-designator`, which is what the light consumers ride (prelude
-  `type-of`, `print-unreadable-object :type`, the no-applicable-method message,
-  json.lisp's `%json-out-instance`) -- they drag no metaobject runtime in and
-  keep every non-MOP program byte-identical. `%class-slot-defs` accepts a class
-  metaobject as designator too (reads its name slot; the generated
-  `%class-slot-defs-runtime` gains that preamble only when `standard-class` is
-  registered). `typep`/`subtypep` take a class METAOBJECT wherever a type
-  specifier is expected (todo-230, 2026-08-03): it designates its own class, so
-  `(subtypep (find-class 'sub) (find-class 'super))` answers exactly like the
-  name spelling and `(typep x (find-class 'c))` tests the value against it --
-  mito's `contains-class-or-subclasses` (src/core/util.lisp) rides both. ONE
-  normalization rule -- "an instance tagged as a `standard-class` descendant
-  continues as its slot-0 name" -- with three emission sites: `subtypep` folds
-  it in Java for the interpreter (`LispMacroExpander.classMetaobjectDesignator`,
-  applied AHEAD of the `t`/`nil` constant edges), and the emitted
-  `%typep-runtime` (the specifier) / `%subtypep-runtime` (BOTH arguments) carry
-  `LispMacroExpander.metaobjectNameNormalization`, the very
-  `(if (%obj-is v '<standard-class descendants>) (setq v (%obj-ref v 0)))`
-  preamble `%class-slot-defs-runtime` uses. A metaobject is always a RUNTIME
-  value, so the specifier is never literal and the runtime dispatch is always
-  the path taken; the literal fold is untouched.
-  `class` is a SEEDED slot-less class (`ClosRegistry.CLASS_NAME`), the
-  superclass of `standard-class` and hence of every user metaclass, so
-  `(typep x 'class)` is the metaobject predicate through the ordinary ancestor
-  machinery rather than a fourth special case. It is never instantiated and
-  contributes no slots, so the `%obj-ref` index contract below is unchanged.
-  Two traps this cost a round to learn, both from the LAZY seeding:
-  (a) the preamble's tag list is `descendantTags(STANDARD-CLASS)`, and an EMPTY
-  one means "no metaobject can exist" on the compile paths (final registry) but
-  NOT in the interpreter, where the `(find-class 'c)` in the test's own argument
-  seeds AFTER the expansion -- hence the `liveRegistry` flag, which falls back
-  to the constant `%class-STANDARD-CLASS` tag (the only tag possible while no
-  user metaclass is defined) instead of dropping the preamble;
-  (b) a type SPECIFIER naming a MOP base class is itself a seeding trigger
-  (`ClosRegistry.ensureMopClassesSeededFor`, called from the interpreter's
-  `typep`/`subtypep`) -- otherwise `(typep (find-class 'c) 'class)` as a
-  program's first MOP form expands to a constant nil before anything seeds.
-  The built-in `T` class's name slot holds the boolean `t`, not the symbol, so
-  the runtime `typep` universal-type arms match BOTH spellings
-  (`universalTypeMatchTest`, plus the instance branch's `(member tn '(t atom))`);
-  `subtypep`'s existing `(eq b t)` edge already did.
-  `#'class-of`'s wrapper is REFERENCE_GATED in
-  `BuiltinFunctionWrappers` -- ungated it referenced `%find-class` in programs
-  the injection scan said needed no runtime. `class-name` is core (a prelude
-  defun over metaobject slot 0). The metaobject slot order (name,
-  direct-superclasses, direct-slots, effective-slots, finalized-p;
-  slot-definitions: name, initargs, initform, type, readers) is a `%obj-ref`
-  index contract shared with the closer-mop shim -- append, never reorder.
-  `allocate-instance` (2026-08-01) is IN: an instance of a registered CLOS
-  class (metaobject or name designator) with EVERY slot the unbound marker --
-  no initforms, no `initialize-instance` -- the `dao-from-fields` idiom;
-  initargs accepted and ignored. Interpreter: a registry-backed built-in
-  beside `find-class` (`LispEvaluator`). Compile paths: `%obj-new` needs a
-  LITERAL tag, so `LispMacroExpander.allocateInstanceDefuns` (gated on an
-  `allocate-instance` reference, `needsAllocateInstanceRuntime`; a user defun
-  wins) emits one construction arm per registered class, chunked into
-  `%ALLOC-INST-<n>` helper defuns by cons-node budget so no method grows with
-  the registry (the `%error-runtime` lesson), plus the public
-  `allocate-instance` defun over an `or`-chain. It does NOT seed the MOP
-  classes: a metaobject argument only comes from find-class/class-of, whose
-  own references seed already. Built-in and struct classes signal (a struct's
-  construction contract is its positional constructor). The
-  `closer-common-lisp` package that table.lisp `:use`s is a resolver-level
-  flat re-export -- mechanics in `.kb/packages.md`.
-  The metaclass protocol (Phase B, 2026-08-01) is IN: a `defclass` carrying
-  `(:metaclass M)` -- `M` must be registered and descend from `standard-class`,
-  i.e. defined by an earlier `defclass (standard-class)` -- keeps its full
-  static expansion (constructor, accessors, registry entry; instances of the
-  class stay ordinary) and additionally emits ONE
-  `(%ensure-class-with-metaclass 'name 'M '(supers) (list slot-specs...)
-  (list class-initargs...))` driver call as its last generated form (the spec
-  spines are `list`-built and carry `:initfunction` thunks since todo-246 --
-  see the widening section above; the driver itself now routes through
-  `ensure-class-using-class`). Unknown CLASS
-  options become metaclass initargs whose value is the option TAIL list
-  (`(:table-name "u")` -> `:table-name ("u")`, AMOP canonicalization); unknown
-  SLOT options are collected per slot (single occurrence each) and ride the
-  canonical `(:name .. :initargs .. :initform .. :type .. :readers ..)` spec
-  plist as `direct-slot-definition-class` initargs. The driver + the system
-  default methods for `closer-mop:{validate-superclass (permissive t),
-  direct-slot-definition-class, effective-slot-definition-class,
-  compute-effective-slot-definition, finalize-inheritance}` are Lisp source:
-  `macro/mop-protocol.lisp` via `MopProtocol.forms()` (the `FormatRenderer`
-  pattern), SELF-CONTAINED over the `%obj-ref` index contract -- no closer-mop
-  shim dependency, defMETHODs only (no defgenerics) so user hook methods
-  defined before OR after merge into the same generics. The dynamic-extent
-  contract postmodern relies on holds: the default
-  `compute-effective-slot-definition` calls `effective-slot-definition-class`
-  and instantiates its answer INSIDE the user override's `call-next-method`
-  (so a `*direct-column-slot*` binding is visible to the effective slot
-  class's `:initform`). `finalize-inheritance` runs EAGERLY at definition time
-  (documented divergence; user `:after` methods = postmodern's
-  `build-dao-methods` hook, Phase C). The protocol runs "in the evaluator at
-  hand": the interpreter's `evalDefclass` loads the protocol once
-  (`ensureMopProtocolLoaded`; a defclass merely EXTENDING a seeded MOP base
-  class just seeds), which also covers the compile paths' macro-time
-  evaluator; the compiled program runs the same driver call at program start
-  in top-level order. Compile-path gate (`usesMetaclassProtocol` /
-  `namesMopBaseSuperclass` in `expandTopLevelDefinitions`): PREPENDS
-  `MopProtocol.forms()` to the program (before the reference scans, so the
-  driver's own `find-class` use switches the metaobject runtime on) and
-  appends `seededMopConstructorDefuns` (keyword constructors for the three
-  seeded MOP base classes, whose defclass never ran), the generated
-  `%mop-make-instance` (runtime-class make-instance: designator -> name ->
-  per-class `apply` of the generated constructor + the program's
-  initialization generic; a METAOBJECT-ancestored class's arm instead
-  allocates UNBOUND for the chain fill since todo-246 -- see the widening
-  section; arms bounded to METAOBJECT-ancestored classes,
-  WIDENED to every program-registered class -- seeded condition classes
-  excluded, they have no keyword constructor -- and chunked into `%MMI-<n>`
-  helpers with the init call hoisted, whenever the program takes
-  `#'make-instance` as a value) and
-  `%register-class-metaobject` (prepends onto `%class-metaobjects%`, so the
-  driver-built metaclass instance shadows the materialized plain view -- the
-  memo scan takes the first hit; the interpreter twin primes
-  `ClosRegistry.classMetaobjects` via `registerClassMetaobject`). Lite
-  divergences (documented on the defclass page): for REGULAR (non-metaobject)
-  classes -- metaobject classes moved to the chain fill in todo-246, where
-  CL's order holds natively -- shared-initialize hooks run
-  AFTER constructor slot-filling -- and that IS observable, the earlier "the
-  default primary is identity, so the DAO protocol cannot tell" claim was
-  wrong: upstream dao-class's `shared-initialize :before` RESETS its
-  `direct-keys` slot and counts on CL's order (:before -> initarg fill) to
-  restore it from the `:keys` class option. The repair is the initarg RE-FILL
-  (2026-08-01): for a REGULAR class specialized by a `:before` method on
-  initialize-instance/shared-initialize (`ClosRegistry.initRefillTargets`,
-  ancestor-inclusive via `needsInitRefill`), make-instance re-sets every
-  DECLARED-initarg slot the call supplies (`SlotSpec.initargSupplied`; the
-  slot-name-default keyword a `:initarg`-less slot gets is deliberately NOT
-  refilled -- dao-class's `table-name` slot must keep the :before's write)
-  after the initialization generic returns, leftmost initarg wins. Three
-  emission sites, one semantic: `expandMakeInstance` folds it statically per
-  literal call site (`%obj-set` with the baked slot index; the interpreter's
-  `%mop-make-instance`/`#'make-instance` builtin re-enters this expansion with
-  quoted args, so `literalKeyword` unwraps both spellings), and the generated
-  `%mop-make-instance` runtime carries `%MMI-REFILL` (one cond bounded by the
-  :before-specialized class set) + `%MMI-INIT-TAIL` (plist scan) -- called
-  inside the per-class arm right after the initialization generic, and after
-  the hoisted init call in the chunked `#'make-instance`-as-value mode.
-  Residual (accepted, no known library hits it): a specialized PRIMARY without
-  call-next-method should suppress the fill entirely, and an `:after` writing a
-  supplied declared-initarg slot on a refill-target class would be re-clobbered
-  -- both need the fill to happen INSIDE the generic chain, which the static
-  constructor model cannot do. Pinned by
-  `defclassMetaclassSharedInitializeBeforeRunsBeforeInitargFilling` (all three
-  suites) and the PostmodernE2eTest DAO leg. Other lite divergences: inherited
-  effective slots are reused from the
-  superclass metaobject unless shadowed (the direct-definition list handed to
-  compute-effective-slot-definition is the shadowing definition alone), and
-  validate-superclass's default is permissive.
-  Definition-time method construction (Phase C, 2026-08-01) is IN: the
-  `(funcall (compile nil `(lambda () ,code)))` idiom of postmodern's
-  `build-dao-methods` (`%eval`), where `code` is a `let*`/`labels` form whose
-  nested `defmethod`s carry the class METAOBJECT spliced as a literal
-  specializer (plus `(eql (class-name ,class))`) and whose bodies close over
-  the bindings. The evaluator's `compile` built-in (`LispEvaluator`; CL
-  semantics otherwise: coerce a literal lambda to a function in the null
-  lexical env, a non-nil name installs and returns the name) intercepts a
-  NO-ARGUMENT definition containing a defmethod and folds the metaobject
-  literals first (`macro/MopEvalCapture`): specializer position -> the class
-  name, `(eql (class-name <inst>))` -> `(eql 'name)`, every other occurrence
-  -> `(find-class 'name)` -- valid during finalization because the driver now
-  registers the metaobject BEFORE `finalize-inheritance` (mop-protocol.lisp,
-  like CL's ensure-class; that ordering is LOAD-BEARING for the fold). Then:
-  the live interpreter returns a function evaluating the folded body in place
-  (nested defmethods + closures are native); the compile paths' MACRO-TIME
-  evaluator records the body into the splice sink `UserMacroExpander`
-  attaches (`setMopEvalSpliceSink`), and the pass -- now also activated by a
-  bare `:metaclass` defclass -- splices the folded forms right after the
-  triggering defclass, where `expandLetNestedDefmethods` (widened from
-  cl-ppcre's direct-body idiom to defmethods at ANY depth, quote-skipped,
-  byte-identical for the shallow case) registers them statically and the
-  nested method-body defuns compile to global-closure setqs. The run-time
-  re-execution of the same call in a compiled program goes through the
-  generated `compile` runtime (`macro/CompileRuntime` +
-  `compile-runtime.lisp`, injected gated on a compile reference without a
-  user defun, registered in the native-image resource-config): a
-  defmethod-containing definition answers a do-nothing function (the splice
-  already did the work), anything else signals -- so a method-defining form
-  built from RUNTIME data is silently absorbed rather than signalled, the one
-  soft edge of the divergence. A method under a false definition-time guard
-  (`when key-fields`) still registers in the dispatcher; calling it fails on
-  the unassigned body global instead of no-applicable-method.
-  Pinning tests: `LispEvaluatorTest`/`JvmLispCompilerTest`/
-  `WasmLispCompilerIntegrationTest` `*FindClass*` + `*CloserMopShim*` +
-  `classOf*`/`compileAndRunClassOf`/`classOfAndSlotAccessors` +
-  `allocateInstance*`/`compileAllocateInstance*` +
-  `typepAndSubtypepAcceptClassMetaobjectsAsTypeSpecifiers` (all three suites,
-  `compile`-prefixed on the JVM) +
-  `defclassMetaclass*`/`compileDefclassMetaclass*`/
-  `defclassMetaclassRunsTheClassDefinitionProtocol` (WASM),
-  `compileCoercesALambdaExpressionToAFunction` +
-  `compileInterceptsDefinitionTimeMethodConstruction` (all three suites),
-  ci-spec `find-class-metaobject-substrate` (raw metaobject print shape
-  included), `defclass-metaclass-protocol` (the dao-class shape end to end)
-  and `compile-definition-time-method-construction`. Still
-  OUT (the divergence's remaining "why": classes are compile-time-static,
-  `--optimize` DCE and the dispatch tables depend on it): runtime class
-  construction (`ensure-class` from computed data, a non-top-level
-  `defclass`), `add-method`, `compute-applicable-methods`,
-  `update-instance-for-*`. `remove-method` (todo-443) EXISTS as a `cl` name and
-  signals when called: a method here is a registry row plus a generated defun,
-  never a first-class object, and without `find-method` no caller can even name
-  the method it means. Re-evaluate together with `add-method` if method
-  metaobjects ever land. Class REdefinition of a statically-known name is IN
-  since todo-246 (the widening section above); redefinition from computed data
-  remains out with the rest.
-  Known static-model seam: on the compile paths `find-class`/`class-of` see the
-  WHOLE program's classes regardless of form order, while the interpreter only
-  knows classes already defined at call time.
-  Registry-growth lesson (relearned 2026-08-01, Phase B): the RUNTIME-slot-name
-  `slot-value`/`slot-boundp` dispatch used to be inlined per call site and
-  grows with every layout times its slots -- the metaclass protocol's five
-  extra ci-spec classes pushed a corpus dolist body past the JVM's SIGNED
-  16-BIT branch encoding (32 KB, hit before the 64 KB method cap). It is now
-  outlined into the shared `%slot-value-runtime`/`%slot-boundp-runtime`/
-  `%slot-value-set-runtime` defuns (`runtimeSlotValueDefuns` etc., gated on a
-  non-literal-name site, `needsRuntimeSlotNameDispatch` /
-  `needsRuntimeSlotSetDispatch`; the interpreter resolves runtime names
-  natively and never calls the read pair, and serves the set twin as a
-  builtin). The defuns themselves are CHAINED-CHUNKED by cons-node budget
-  (`chainedDispatchDefuns`: overflow arms call `%SVR-<n>`/`%SBR-<n>`/
-  `%SVW-<n>` helpers; a dispatch that fits stays one defun, byte-identical to
-  the pre-chunking shape) -- the full postmodern MOP build's registry pushed
-  the single-defun shape past the JVM's signed 16-bit branch encoding.
-  Top-level compile crashes now name the
-  offending form (`JvmLispCompiler` chunk-loop wrapper).
-  `change-class` is the ONE runtime exception and is not MOP: both classes are literal, so
-  the whole change is a static expansion (see above).
+- Qualifier combination is for class + default methods; eql/type-specialized qualified
+  methods combine only with same-specializer primaries + the default method.
+- Still OUT of the MOP (classes are compile-time-static; `--optimize` DCE and the dispatch
+  tables depend on it): runtime class construction (`ensure-class` from computed data, a
+  non-top-level `defclass`), `add-method`, `compute-applicable-methods`,
+  `update-instance-for-*`. `remove-method` EXISTS as a `cl` name and SIGNALS when called: a
+  method here is a registry row plus a generated defun, never a first-class object, and
+  without `find-method` no caller can name the method it means. Re-evaluate with
+  `add-method` if method metaobjects land. Class REdefinition of a statically-known name is
+  IN; redefinition from computed data is out.
+- **Known static-model seam**: on the compile paths `find-class`/`class-of` see the WHOLE
+  program's classes regardless of form order, while the interpreter only knows classes
+  already defined at call time.
+- `change-class` is the ONE runtime exception and is not MOP (both classes are literal, so
+  the whole change is a static expansion).
 - eql specializers on strings.
-  (Multiple inheritance is IN since 2026-08-02; `:writer` and `:allocation
-  :class` are IN since 2026-08-18 -- see "The CLOS surface batch" below.)
-  The `:type` slot option is RECORDED since 2026-07-18 (`SlotSpec.type`, plain
-  name, `"t"` when omitted; still a checking no-op) so introspection can
-  report it.
-- Compiled runtime `eval`: generated functions are callable; defining
-  classes/methods or using `make-instance`/`slot-value` inside `eval` is not
+- The `:type` slot option is RECORDED (`SlotSpec.type`, plain name, `"t"` when omitted;
+  still a checking no-op).
+- Compiled runtime `eval`: generated functions are callable; defining classes/methods or
+  using `make-instance`/`slot-value` inside `eval` is not
   (doc/en/guides/eval-limitations.md).
 - `--no-gc` rejects via its generic top-level error, like defstruct.
-- `defclass`/`defgeneric`/`defmethod` are in `PackageRegistry.CL_SPECIAL_FORMS`,
-  `make-instance`/`slot-value`/`with-slots`/`with-accessors`/`change-class` in
-  `CL_MACROS` — pinned in ci-spec (`rontolisp-package-introspection`), the three
-  backend tests, and the doc pages; update all together if those sets change again.
+- `defclass`/`defgeneric`/`defmethod` are in `PackageRegistry.CL_SPECIAL_FORMS`;
+  `make-instance`/`slot-value`/`with-slots`/`with-accessors`/`change-class` in `CL_MACROS`
+  -- pinned in ci-spec (`rontolisp-package-introspection`), the three backend tests and the
+  doc pages; update all together.
 
-Pinning tests: `LispEvaluatorTest#defgeneric*`/`defclass*`/`defmethod*`/
-`closInUserPackage`, `JvmLispCompilerTest#compileAndRunDefgeneric*`/
-`compileAndRunDefclass*`/`compileAndRunMacroCallingGenericAtExpansionTime`/
-`compileNestedDefmethodFails`, `WasmLispCompilerIntegrationTest#compileAndRunDefgeneric*`/
-`compileAndRunDefclass*`, `UserMacroExpanderTest#defmethodLambdaListStaysVerbatim*`/
-`defclassKeepsNamesAndOptions*`/`macroBodyMayCallAGenericFunctionAtExpansionTime`,
-ci-spec cases `clos-defgeneric-defmethod-eql-dispatch`,
-`clos-defclass-slots-inheritance-and-dispatch`, and
-`clos-method-qualifiers-and-call-next-method` (all four backends), and the five
-`doc/*/reference/**` pages via `DocExamplesTest`. Stage 3 pinning:
+## Core pinning tests
+
+`LispEvaluatorTest#defgeneric*`/`defclass*`/`defmethod*`/`closInUserPackage`,
+`JvmLispCompilerTest#compileAndRunDefgeneric*`/`compileAndRunDefclass*`/
+`compileAndRunMacroCallingGenericAtExpansionTime`/`compileNestedDefmethodFails`,
+`WasmLispCompilerIntegrationTest#compileAndRunDefgeneric*`/`compileAndRunDefclass*`,
+`UserMacroExpanderTest#defmethodLambdaListStaysVerbatim*`/`defclassKeepsNamesAndOptions*`/
+`macroBodyMayCallAGenericFunctionAtExpansionTime`,
+`LispMacroExpanderTest.theDispatcherLastResortIsOneCallOfTheSharedNoApplicableMethodSignal`,
+`WasmLispCompilerTest.aSlotAccessorDispatcherDoesNotCarryItsOwnCopyOfTheNoApplicableMethodTail`,
+`JvmLispCompilerTest.compileAndRunApplyAlignedVariadicTarget` /
+`WasmLispCompilerIntegrationTest.applyAlignedVariadicTarget`,
+`LispEvaluatorTest.evalPackageIsADefmethodSpecializer` /
+`...SpecializerOutranksKeywordAndSymbol` + `compileAndRun` twins,
+`LispEvaluatorTest.defmethodEqlSpecializerNamingAConstantDispatchesOnItsValue` /
+`...NamingNoConstantStaysTheSymbol` +
+`compileAndRunDefmethodEqlSpecializerNamingAConstant` twins.
+
+ci-spec: `clos-defgeneric-defmethod-eql-dispatch`,
+`clos-defclass-slots-inheritance-and-dispatch`,
+`clos-method-qualifiers-and-call-next-method`, `package-defmethod-specializer`,
+`clos-defmethod-eql-specializer-over-a-constant`. Plus the five `doc/*/reference/**` pages
+via `DocExamplesTest`. Stage 3:
 `LispEvaluatorTest#{defmethodBeforeAndAfterQualifiersRunAroundThePrimary,
 callNextMethodChainsPrimariesAndNextMethodP,aroundMethodWrapsAndCallNextMethodInvokesTheCore,
 callNextMethodWithNewArguments,callNextMethodWithNoNextMethodSignals}` and the
-`compileAndRun{MethodQualifiersAndCallNextMethod,AroundMethodAndNextMethodP}`
-tests in the JVM/WASM suites.
-
-## Short-form `:method-combination` (todo-234)
-
-`(defgeneric g (x) (:method-combination NAME [:most-specific-first |
-:most-specific-last]))` where NAME is one of `ClosRegistry.SHORT_FORM_COMBINATIONS`
--- `progn`/`and`/`or`/`+`/`list`/`nconc`/`append`/`max`/`min`. The CLHS **long**
-form (`define-method-combination`) is out of scope and a NAME outside the set is
-rejected at `defgeneric` time, not silently ignored.
-
-The whole family is ONE mechanism, which is why it is implemented once:
-
-- `ClosRegistry.GenericInfo` gains `methodCombination` + `mostSpecificLast`.
-  `LispMacroExpander.registerDefgeneric` parses the option and records it BEFORE
-  the inline `(:method ...)` clauses expand -- an inline `(:method progn ...)`
-  is a plain `defmethod` and must already see the combination.
-- `expandDefmethod` reads the generic's combination to decide the legal qualifier
-  set: the combination NAME becomes a primary qualifier, `:around` stays legal,
-  and `:before`/`:after` are REJECTED (CLHS). A combination generic whose
-  `defmethod` carries no qualifier is rejected too -- an unqualified method has
-  no role there, and accepting it would silently never run.
-- `LispMacroExpander.shortFormEffectiveMethod` builds the effective method:
-  `(NAME (m1 nil args...) (m2 nil args...) ...)` over EVERY applicable method of
-  that qualifier in branch-specificity order, reversed under
-  `:most-specific-last`. The `next` argument is nil throughout -- CLHS gives
-  short-form primaries no `call-next-method`; only an `:around` has one, and its
-  next is the combined form (built exactly as in the standard combination, so
-  `buildNextChain`/`callWithNext` are shared).
-- No applicable method is the ordinary `noApplicableMethod` error, NOT an empty
-  `(progn)`: an empty `(and)` answers `t` and an empty `(+)` zero, which would
-  hide a missing method behind a plausible value.
-
-Because the effective method is built by the SHARED expander and emitted as
-ordinary Lisp, all four backends get it from the one implementation. Pinned by
-`LispEvaluatorTest#evalShortFormMethodCombination*`,
-`JvmLispCompilerTest#compileAndRunShortFormMethodCombination`,
-`WasmLispCompilerIntegrationTest#shortFormMethodCombination` and the ci-spec case
-`defgeneric-short-form-method-combination`.
-
-Why it exists: yason's `(defgeneric encode-slots (object) (:method-combination
-progn :most-specific-last))` was yason's ONLY blocker, and yason gates http-body
--> lack-request (`.kb/lack.md`).
+`compileAndRun{MethodQualifiersAndCallNextMethod,AroundMethodAndNextMethodP}` JVM/WASM tests.

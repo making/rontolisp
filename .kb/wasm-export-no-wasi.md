@@ -1,104 +1,350 @@
 # `rontolisp:wasm-export` (host-callable Lisp functions) + `--no-wasi` reactor mode
 
-> **JVM twin:** [jvm-export.md](jvm-export.md) — `rontolisp:jvm-export` + `--no-main`
-> are this directive and this mode on the JVM backend (typed Java-callable methods;
-> the top level runs in `<clinit>` as the reactor's runs at instantiation). The two
-> share `compiler/BoundaryType` and the exact-or-trap conversion rule.
+> JVM twin: [jvm-export.md](jvm-export.md) — `rontolisp:jvm-export` + `--no-main`; shares
+> `compiler/BoundaryType` and the exact-or-trap rule.
 
-`(rontolisp:wasm-export 'name :as "alias" :params '(T...) :returns T)` is a directive in the `rontolisp` package (`:as` renames the WASM export -- `Decl.exportName()`, default the Lisp name; honored by both the GC backend and `NoGcWasmCompiler`) (`LispNames.WASM_EXPORT`, registered alongside `fetch`/`version`/`list-*` as an implementation-specific extension, not CL standard) that exports a top-level `defun` as a host-callable WASM function. No-op on interpreter/JVM (returns the named symbol). Since todo-92 it also works under `--component`: an export is core-exported and lifted into a typed component-model export (sync canonLift by default, WAVE-invokable; scalars option-free, `:string`/`:s-expr` through the canonical string ABI since Tier 2; an I/O-bearing body declares `:async t` since Tier 3 to lift as a stackful async export instead of trapping -- the option is ignored outside `--component` and rejected under `--no-gc --component`; see `.kb/wasi-component.md`); everything below describes the Preview 1 / `--no-gc` core-module mechanics.
+`(rontolisp:wasm-export 'name :as "alias" :params '(T...) :returns T)` exports a top-level
+`defun` as a host-callable WASM function. `LispNames.WASM_EXPORT`, `rontolisp` package, not CL
+standard. `:as` = `Decl.exportName()` (default the Lisp name; GC backend and
+`NoGcWasmCompiler`). No-op on interpreter/JVM (returns the named symbol). Under `--component`
+an export is core-exported then lifted — sync canonLift by default (WAVE-invokable), scalars
+option-free, `:string`/`:s-expr` via the canonical string ABI, an I/O-bearing body needing
+`:async t` (stackful async export) or it traps; ignored outside `--component`, rejected under
+`--no-gc --component` (`.kb/wasi-component.md`). Below = Preview 1 / `--no-gc` core modules.
 
-Type designators bridge the GC calling convention to a host ABI. **The vocabulary is `compiler/BoundaryType`, whose integer members are spelled the way WIT spells them** (`:s8`..`:u64`; `:int`/`:long` are permanent parse-time aliases of `:s32`/`:s64`) -- the full table and the exact-or-trap range rule live in `.kb/wit.md` ("The integer boundary"), because the export boundary and the WIT world are one contract. In brief: an integer up to 32 bits <-> i32 (normalized through `_int_new` on the GC backend: an i31 when it fits, the boxed exact integer past that, `.kb/wasm-bignum.md`), `:s64`/`:u64` <-> i64 (every backend; a u64 at or above 2^63 traps), `:float`<->`TYPE_FLOAT` f64, `:bool`<->nil/t i32, `:string`/`:s-expr`<->`(ptr,len)` in linear memory (via the embedded reader/printer); omitted/nil/`:void` `:returns` = void (no WASM result). On `--no-gc` the scalar backend's internal integer type IS i64, so `:s64` pins param/return to i64 (no `i64.extend_i32_s`/`i32.wrap_i64`) -- `NoGcWasmCompiler.compileWrapperBody` has an explicit `S64` param/return branch, `boundaryTy` falls through to INT, and `requireSupported` now rejects only `:s-expr` (everything else crosses on an i64 house integer). **Pass-through wrapper elision**: when EVERY param and the return cross identically (`:s64` over inferred i64, `:float` over inferred f64 -- the only two boundary types that need neither a range guard nor a narrowing) and the module uses no linear memory (`Mem.used()` false -- a memory-using module's scalar-return wrapper must keep the todo-88 heap reset, and its `:string` boundaries marshal), `NoGcWasmCompiler.isPassThroughExport` elides the wrapper entirely: the export names the internal function directly, so no `get_local*n; call; end` trampoline and no duplicate host func type are emitted (a `:long`-return over an inferred f64 body still gets its truncating wrapper). The `Mem` helper indices planned over `exportDecls.size()` stay correct because elision requires `Mem.used()` false, and a memoryless module emits no helpers. The GC backend carries the 64-bit designators too, through the boxed exact-integer representation (the old "requires --no-gc" refusal is retired -- its re-evaluation trigger fired when `.kb/wasm-bignum.md` landed; see `.kb/wit.md` for the boundary table). `WasmImportCompiler` keeps its own (deliberately unwidened) `KNOWN_PARAM_TYPES` = `{:s32, :float, :bool, :string, :s-expr, :bytes}`, so imports reject the 64-bit AND the new unsigned/narrow designators; widening the import boundary to the integer family is its own change (`.kb/wit.md`). `:bytes` (both directives, GC core modules only) is the raw byte-transfer type -- an `(unsigned-byte 8)` vector, no UTF-8, caller-passes-the-buffer results (the export signature gains a trailing `(ptr,cap)` and answers the FULL length as one i32) -- mechanics and pins in `.kb/wasm-import.md`. Memory types emit a `__ronto_alloc` bump allocator + `_string_from_mem` helper (appended after lambdas at `FUNC_USER_BASE + numDefuns + numLambdas`, so `FUNC_*` indices stay fixed); a data segment seeds `HEAP_PTR_ADDR` so host calls work without `_start` running. Parsing/wrapper emission in `WasmExportCompiler`; helpers in `WasmExportRuntimeBuilder`; wiring in `WasmLispCompiler` (Pass 1 collects `Decl`s out of `topLevelExprs`, validates name-exists/arity, builds `ExportPlan`s).
+## Boundary types
 
-**Why `:float` is f64, not f32 (deliberate; decided 2026-07-07)**: unlike the `:int`(i32)/`:long`(i64) width pair, there is only ONE float type. rontolisp has NO internal f32 -- every float is f64 in all backends (GC `TYPE_FLOAT = struct {f64 value}` at `WasmLispCompiler.TYPE_FLOAT`; scalar `FLOAT -> Type.F64` in `NoGcWasmCompiler`). So `:float`<->f64 is a pass-through of the only real float type, and the `:int`/`:long` analogy does NOT carry over: for integers both widths are genuinely native to *some* backend (i31ref on GC, i64 on scalar), so `:long` has real utility (avoids truncation on the scalar path that actually computes in i64); for floats an f32 boundary would be pure promote/demote glue around f64 compute (`f32.demote_f64`/`f64.promote_f32`), giving no real single-precision path -- only host-ABI matching (e.g. WebGL/OpenGL f32 APIs). It was PROPOSED to rename `:float`->f32 and add `:double`->f64 (C/Java convention), but rejected: renaming `:float` is a silent ABI break for every existing export/import (tests `gl:frame`/`area`/`root`/`half`, the `doc/{en,ja}/compiling/wasm.md` `:float|f64` type table), a host passing a JS number (f64) into a now-f32 param would lose precision silently; and CL's own type names are `single-float`/`double-float`, so overloading the abstract supertype `float` to mean single is C-ism, not Lisp-idiomatic. **Decision: keep `:float`=f64, add nothing.** If an f32 host ABI is ever genuinely needed, add it ADDITIVELY as a new `:single`/`:f32` designator (with promote/demote) and optionally a `:double`=f64 alias -- never redefine `:float`.
+`compiler/BoundaryType`, WIT spelling (`:s8`..`:u64`; `:int`/`:long` = permanent parse-time
+aliases of `:s32`/`:s64`). Table + exact-or-trap range rule: `.kb/wit.md` ("The integer
+boundary") — export boundary and WIT world are one contract.
 
-**`--no-wasi`** (CLI `--no-wasi`; `WasmLispCompiler(dynamic, component, noWasi)`) emits a module with **no `wasi_snapshot_preview1` imports** so a host instantiates it with no import object (reactor/library module); because it is a reactor, not a WASI command, its top-level init entry is exported as **`_initialize`** (reactor ABI, host-run once after instantiation) instead of `_start` — the `WasmLispCompiler` export section keys the name off `noWasi`, and it stays a tree-shaker root either way. **Index stability**: the nine WASI import slots (function indices 0-8, `IMPORT_FUNC_COUNT`) are filled with internal stubs carrying the SAME type indices the imports used, so every `FUNC_*` constant stays valid (no `Ctx`/expression-codegen change). Since 2026-08-09 only TWO of the nine are `unreachable` (stack-polymorphic, so one shape satisfies every signature) — `fd_read` and `clock_time_get`; the other seven answer, and the clock is served past its slot by a host hook (`__ronto_set_time`) rather than by the slot itself. Which ones answer, and why, is the "what a stub may answer" section below; that rule is the invariant, the stub list is just its consequence.
+- <=32-bit integer <-> i32 via `_int_new` on GC (i31 if it fits, else boxed exact,
+  `.kb/wasm-bignum.md`); `:s64`/`:u64` <-> i64 on every backend, u64 >= 2^63 traps.
+- `:float` <-> `TYPE_FLOAT` f64; `:bool` <-> nil/t i32; `:string`/`:s-expr` <-> `(ptr,len)` in
+  linear memory; omitted/nil/`:void` returns = void.
+- `:bytes` (both directives, GC core modules only): `(unsigned-byte 8)` vector, no UTF-8,
+  caller-passes-the-buffer — trailing `(ptr,cap)`, answers the FULL length as one i32
+  (`.kb/wasm-import.md`).
+- `:float` is f64 deliberately; there is no internal f32 (`WasmLispCompiler.TYPE_FLOAT =
+  struct{f64}`, scalar `FLOAT -> Type.F64`). Renaming it is a silent ABI break — an f32
+  boundary must be additive (`:single`/`:f32`, optional `:double`).
+- IMPORTS deliberately narrower: `WasmImportCompiler.KNOWN_PARAM_TYPES` =
+  `{:s32, :float, :bool, :string, :s-expr, :bytes}`. Widening is its own change (`.kb/wit.md`).
 
-**`--component --no-wasi` = a REACTOR COMPONENT that imports nothing (2026-08-09)**: the flag is no longer masked in component mode (the old "a component has its own import story" reason described the WASI 0.3 adapter, which stops holding when the core imports no preview1 function at all). The core module keeps the exact Preview 1 no-WASI contract above (stubs, the fd_write sink, `NoWasiFilesystemStubs`, `DATA_BASE_OFFSET` 256 — no page-6 base, since there is no adapter scratch to clear), but declares/exports its OWN memory, keeps `TYPE_START` at `() -> ()`, exports NO `run`/`_initialize`, and instead carries a core **start section** (`WasmWriter.writeStartSection(FUNC_START)`, between export and code; the tree shaker already roots+renumbers it), so **the top-level forms run at instantiation** — the one component shape where an `--invoke`d export sees `defparameter` globals assigned. `WasmComponentBuilder.buildReactor` wraps it with NO import block / adapter / mem module, with or without `--optimize` (the zero-import property is the flag's contract, not a narrowing outcome): core module 0 → core instance 0 (no args) → per-export alias/type/lift/export via `appendFuncExports` with every cursor at 0 (`NoGcWasmComponentBuilder`'s print-free shape on the GC backend); a `:string`/`:s-expr` boundary lifts over the core's own exported memory + its own `cabi_realloc`/`cabi_post_*`. `--emit-wit` = `WitEmitter.VARIANT_REACTOR` (the `nogc` empty world). Inside the compiler `Ctx.component` is `component && !noWasi` — every ctx.component dispatch asks "are the wasi:*-binding splices here?", and the reactor's answer is the Preview 1 one — with `Ctx.noWasi` feeding the reject messages (fetch/wait-for/tcp name the `--no-wasi` conflict instead of suggesting `--component`); `asyncMode` stays off (P1 degenerate lowering — no waitables exist to park on). The CLI gates the five wasi:*-binding library splices (http/wait/sockets/stdin/environment) as ONE decision (`spliceBackend` = `WASM_GC` for a reactor, `RontoLispCli`), the compiler enforces it (`componentImports` non-empty + reactor = error naming the interface; a user `rontolisp:wit-import` hits the same guard), and serve + `--no-wasi` is a ctor hard error (a serve component's entire surface is wasi:http). `reactor = noWasi || noGc` in the CLI now, so `#+rontolisp-reactor` (the clack shim) selects the reactor branch under the component too — `examples/net/httpbin-clack.lisp` compiles to a zero-import `handle-request` component. Consequence to keep in mind: a trap in a top-level form now kills INSTANTIATION rather than a host `_initialize` call — there is no `_initialize` to place a try/catch around, so whatever a top-level form may hit has to be decided by the stub policy below rather than handled by the host (that is why the policy is written as one rule covering both entry shapes). Byte-identity: plain `--component` and plain `--no-wasi` outputs are unchanged (verified byte-for-byte at the todo-298 landing). Pinned by `componentNoWasiIsAReactorThatImportsNothing` / `componentNoWasiReactorRecordsTheEmptyWorldWit` (structural, both optimize levels) and the `componentNoWasiReactor*` invoke tests; jco `--instantiation sync -b 0 --bindgen-enable-wasm-exnref` output instantiates with `{}` on plain node (no `WebAssembly.promising`, no preview-shim) — `examples/cloudflare-workers/httpbin-component` is that build.
+## Emission
 
-**What a `--no-wasi` stub may answer — THE rule (widened 2026-08-09)**: a stub may answer when the answer is **true of this module**; it may not answer when answering means inventing a value the program cannot tell from a real one — but a value the HOST hands over is not an invention, and the two hooks below are that third case, not an exception to the rule. "No destination for output", "no environment variables" and "no files" are all facts about a reactor, and reporting a fact is not fabrication — whereas an `fd_read` reporting EOF says input ENDED where none ever existed, and a `clock_time_get` answering 0 names a time that is not the time. The rule, not the stub list, is the invariant; the nine slots fall out of it:
+- `WasmExportCompiler` parses + emits wrappers; helpers `WasmExportRuntimeBuilder`; wiring
+  `WasmLispCompiler` (Pass 1 collects `Decl`s from `topLevelExprs`, validates
+  name-exists/arity, builds `ExportPlan`s).
+- Memory types add `__ronto_alloc` (bump allocator) + `_string_from_mem` after lambdas at
+  `FUNC_USER_BASE + numDefuns + numLambdas`, so `FUNC_*` stay fixed; a data segment seeds
+  `HEAP_PTR_ADDR` so host calls work without `_start`.
+- `--no-gc`: internal integer IS i64, so `:s64` pins param/return to i64 (no
+  `i64.extend_i32_s`/`i32.wrap_i64`) — explicit `S64` branch in
+  `NoGcWasmCompiler.compileWrapperBody`, `boundaryTy` falls through to INT, `requireSupported`
+  rejects only `:s-expr`.
+- **Pass-through wrapper elision** (`NoGcWasmCompiler.isPassThroughExport`): every param and
+  the return crossing identically (`:s64` over inferred i64, `:float` over inferred f64 — the
+  only two needing neither range guard nor narrowing) AND `Mem.used()` false => the export names
+  the internal function directly. A `:long` return over an inferred f64 body still gets a
+  truncating wrapper; a memory-using module keeps its heap reset and `:string` marshalling.
 
-| slot | `--no-wasi` behaviour | why |
-| --- | --- | --- |
-| `fd_write` | SINK: `*nwritten = iovs[0].len`, errno 0 | no destination exists, so the bytes are discarded |
-| `environ_sizes_get` / `environ_get` | EMPTY environment (0 vars, 0 bytes, errno 0) | `wasmtime run` with no `--env` is the same state |
-| `path_open` | errno 44 `ENOENT` | no filesystem, so no file is found |
-| `fd_close` / `fd_readdir` | errno 8 `EBADF` | with every open failing, no descriptor can reach them |
-| `random_get` | SplitMix64 over `RANDOM_STATE_ADDR` (a host import under `--host-random`) | CL's `random` is a PRNG over `*random-state*`, not entropy. Since 2026-08-26 `random` no longer CALLS this slot -- the generator step is inlined at the draw site on every build (`.kb/random.md`), so here the slot is reached only by `--host-random`'s seeding call and is otherwise shaken out |
-| `fd_read` | `unreachable` | answering would invent input |
-| `clock_time_get` | `unreachable` — now a BACKSTOP, not the clock | the clock built-ins read `HOST_TIME_ADDR` instead (below); nothing else calls this slot |
+## `--no-wasi` (reactor mode)
 
-Bodies in `WasmIoRuntimeBuilder` (`buildNoWasiFdWriteSinkBody`, `buildNoWasiEnvironSizesGetBody`, `buildNoWasiRandomGetBody`, `buildNoWasiErrnoBody`); the emit loop is the `if (this.noWasi)` block in `WasmLispCompiler`'s code section. Pinned WHOLE — all nine bodies, byte for byte — by `WasmExportCompilerTest.noWasiStubsAnswerWhereverThereIsATrueAnswerAndTrapWhereThereIsNot`, plus the `noWasiModule*` end-to-end tests in `WasmLispCompilerIntegrationTest` and the `--no-wasi` leg of `examples/cloudflare-workers/`.
+CLI `--no-wasi`; `WasmLispCompiler(dynamic, component, noWasi)`. No `wasi_snapshot_preview1`
+imports, so a host instantiates with no import object. Init entry exported as `_initialize`
+(reactor ABI) instead of `_start`, keyed off `noWasi`; a tree-shaker root either way.
+**Index stability**: the nine WASI import slots (indices 0-8, `IMPORT_FUNC_COUNT`) are filled
+with internal stubs carrying the SAME type indices, so every `FUNC_*` constant stays valid.
 
-**Output (decided 2026-08-07)**: `fd_write` discarding is what makes `clack:clackup` — `:server :rontolisp` on a `--no-wasi` build, or the explicit `:server :reactor` — work on a reactor (`.kb/clack.md`): clackup's start-up banner and `clack.handler:run`'s debug NOTICE are unconditional `format t` calls in upstream clack, and every OTHER library that logs while it loads was equally unloadable. Every emitter passes ONE iovec and drops the errno, so the single-iovec accounting is exact; a caller that loops on `*nwritten` must widen the stub.
+**THE rule** (the invariant; the slot list is its consequence): a stub may answer when the
+answer is *true of this module*; it may not answer when answering invents a value the program
+cannot tell from a real one. A value the HOST hands over is not an invention.
 
-**`random` (decided 2026-08-09, the todo-284 case)**: the load-time trap that made the whole `lack-request -> http-body -> fast-http -> smart-buffer` chain — i.e. every Clack application that reads its request through `lack-request`, `ningle` included — unloadable on a Worker was ONE upstream form, `smart-buffer`'s `(merge-pathnames (format nil "smart-buffer-~36R" (random (expt 36 8))) (uiop:default-temporary-directory))`, which needs `random_get` AND `TMPDIR`. Both now answer. `random` is served by a self-contained SplitMix64 generator (golden-ratio gamma + two xor-shift-multiply rounds) over the 8-byte cell at `RANDOM_STATE_ADDR`; the state starts at the zero of untouched linear memory, which is a valid SplitMix64 seed, so no data segment seeds it. **That generator is now what EVERY wasm build draws from** (2026-08-26, `.kb/random.md`): the step is inlined at the draw site rather than reached through the `random_get` slot, and a build that HAS a host seeds the cell from eight `random_get` bytes on its first draw. `--no-wasi` is the one build with no host to ask, so it alone keeps the fixed start state -- what changed here is nothing, which is the point. **Why that is inside the contract rather than fabrication**: `random` is not an entropy API — CL specifies a pseudo-random draw from `*random-state*`, a conforming image may start from a fixed state, and here `make-random-state` already answers `nil`, so no state object is observable and "the sequence repeats across instances" is a property of the contract, not a lie about the host. **The entropy API is deliberately NOT served from it**: `rontolisp::%random-byte` (behind `rontolisp:random-bytes`) lowers to a call-time error under `--no-wasi` (`WasmExprCompiler`), because passing a fixed-seed generator off as cryptographic entropy is exactly the "cannot tell from real" the rule forbids. Unseeded, every instance of one module walks the same sequence.
+| slot | behaviour |
+| --- | --- |
+| `fd_write` | SINK: `*nwritten = iovs[0].len`, errno 0 |
+| `environ_sizes_get` / `environ_get` | EMPTY environment: 0 vars, 0 bytes, errno 0 |
+| `path_open` | errno 44 `ENOENT` |
+| `fd_close` / `fd_readdir` | errno 8 `EBADF` |
+| `random_get` | SplitMix64 over `RANDOM_STATE_ADDR`; a host import under `--host-random` |
+| `fd_read` | `unreachable` — answering would invent input |
+| `clock_time_get` | `unreachable`, BACKSTOP only — clock built-ins read `HOST_TIME_ADDR` |
 
-**`__ronto_seed_random (i64) -> ()` is the way out of that (same landing)**: a `--no-wasi` CORE module also exports a one-instruction hook that overwrites `RANDOM_STATE_ADDR`, so a host with entropy can hand it over — `inst.exports.__ronto_seed_random(seed)` before `_initialize`, which is early enough that even a library's LOAD-TIME `(random ...)` draws from it. An EXPORT, deliberately, not an optional import: a core wasm import is not optional, so importing entropy would make the module un-instantiable with `{}`, which is the entire contract of the flag; and a documented magic address in exported memory would freeze an internal cell as ABI. Emitted when `noWasi && !component`, appended after the memory helpers (`memoryHelperCount`, so only the COMPUTED wrapper/ABI bases shift — every fixed `FUNC_*` is under `userFuncBase()`), with its `(i64)->()` type after the host-arena pair at `abiTypeBase`. **Not on the reactor COMPONENT**: its top level runs at instantiation, so there is no window before the load-time draws, and exposing it there means lifting it into the WIT world — a world-shape decision, not a core export. **Seeding does NOT re-enable `random-bytes`**: SplitMix64 is invertible from one output, so a host-seeded stream is unpredictable but not cryptographically strong, and shipping something that only looks like a CSPRNG is the failure mode the whole rule is about. Pinned by `noWasiCoreModuleExportsTheHostSeedHook` (present on the core module, absent on Preview 1 and on the reactor component) and driven for real by every `examples/cloudflare-workers/*/src/index.js`.
+- The two `unreachable` bodies are stack-polymorphic, so one shape fits every signature.
+- `random` no longer CALLS its slot: the step is inlined at the draw site on every build
+  (`.kb/random.md`); only `--host-random`'s seeding call reaches it.
+- Bodies in `WasmIoRuntimeBuilder` (`buildNoWasiFdWriteSinkBody`,
+  `buildNoWasiEnvironSizesGetBody`, `buildNoWasiRandomGetBody`, `buildNoWasiErrnoBody`); emit
+  loop = the `if (this.noWasi)` block in `WasmLispCompiler`'s code section.
+- **Trap**: emitters pass ONE iovec and drop the errno, so a caller looping on `*nwritten`
+  needs a wider stub. The sink is what lets `clack:clackup` (`:server :rontolisp` /
+  `:server :reactor`) load on a reactor (`.kb/clack.md`).
+- Pinned WHOLE, all nine bodies byte for byte, by
+  `WasmExportCompilerTest.noWasiStubsAnswerWhereverThereIsATrueAnswerAndTrapWhereThereIsNot`;
+  also `noWasiModule*` in `WasmLispCompilerIntegrationTest`, and the `--no-wasi` leg of
+  `examples/cloudflare-workers/`.
 
-**`--host-random` is the first opt-in out of the zero-import contract (decided 2026-08-09; `--host-fetch` below is the second, and the family rule)**: **its meaning narrowed on 2026-08-26** -- it used to mean a host call per `random` draw, and now means the module-local generator is SEEDED from the host on its first draw instead of starting fixed (`.kb/random.md`); `rontolisp:random-bytes` still takes the host's bytes one byte at a time, which is the property the flag exists for, and the flag now does automatically what a JS host previously had to do by calling `__ronto_seed_random`. `WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd, hostRandom)` / CLI `--host-random` leaves eight stubs alone and turns slot `FUNC_RANDOM_GET` into a forwarding body (`local.get 0; local.get 1; call <import>`, `WasmIoRuntimeBuilder.buildNoWasiHostRandomGetBody`) over ONE injected import, `env.random_get(buf, len) -> errno`. **Why a flag and not a `wasm-import` option**: the slot's signature is preview1's raw `(ptr,len)->errno`, which is outside `WasmImportCompiler`'s boundary vocabulary entirely (there is no pointer designator, and the function is not Lisp-callable), so spelling it as a directive would mean a second, non-Lisp meaning for `wasm-import`; a flag also keeps a quickloaded library's `(random ...)` served without the library knowing, which is the whole point. **Why `env` and not `wasi_snapshot_preview1`**: the module still imports no WASI function -- it imports the one host function the flag asked for -- so the `--no-wasi` contract sentence above stays literally true; the SIGNATURE is preview1's so a host can forward its own WASI implementation unchanged. Mechanics: the entry is appended LAST in `hostImports` (a program's own `rontolisp:wasm-import` ordinals, and its bytes, are unchanged) and reuses the fixed `TYPE_INTERN` (`(i32,i32)->i32`) rather than appending a type, so `abiTypeBase` -- planned over `importSlots` -- is untouched. `__ronto_seed_random` is NOT emitted (`seedRandom = noWasi && !component && !hostRandom`): no module-local state is left to seed, and an exported no-op hook would read as "seeding still matters here". `WasmExprCompiler`'s `RANDOM_BYTE_INTERNAL` gate becomes `ctx.noWasi && !ctx.hostRandom` -- the entropy API is sound exactly when the entropy is the host's, which is the same rule the table above states, not an exception to it. **Rejected combinations, both in the ctor**: without `--no-wasi` (every other build already draws from the host) and with `--component` -- a reactor component imports NOTHING by contract, and lifting an entropy import into its WIT world is a world-shape decision, not a core export one; a plain `--component` build already has `wasi:random`, so the answer there is to drop `--no-wasi`. `--no-gc` is rejected in the CLI (that backend has no `random` at all). Zero imports stays the DEFAULT: pinned by `hostRandomForwardsTheRandomGetSlotAndRetiresTheSeedHook` (stub body, no seed hook) and `hostRandomJoinsTheOrdinalSpaceLastAndIsTheOnlyImportOnItsOwn` / `underHostRandomTheEntropyApiReachesTheHostAndAnUnusedImportIsStillShaken` in `WasmImportCompilerTest` -- the second of those is also how the un-gated `%random-byte` is pinned: under `--optimize` the import survives only because something calls the slot, and a program that never draws is shaken back to zero imports. Verified on node 24 by COUNTING host calls (a fresh `env.random_get` per instance: different sequences, `random-bytes` answering, and smart-buffer's exact load-time form `(random (expt 36 8))` drawing from the host inside `_initialize`).
+## `--component --no-wasi` = a reactor component that imports nothing
 
-**`--host-fetch` is the second opt-in (todo-335, 2026-08-12): `rontolisp:fetch` over an `env.fetch` host import.** Same family, different mechanics: where `--host-random` forwards a preview1 SLOT at one raw import, `--host-fetch` splices a LISP lowering (`eval/HostFetchLibrary`, CLI-gated on `noWasi && hostFetch` and on the program actually referencing `rontolisp:fetch`) whose `rontolisp:wasm-import`s — `env.fetch(request-json) -> response-head-json` (`:string` -> `:string`) and, since todo-347, `env.readResponseBody(ptr, cap) -> i32` (`:bytes`, `:async t`) carrying the reply BODY out of band — ride the ordinary synthetic-defun machinery, appended after the program so a program's own import ordinals are unchanged. The envelope is derived from `compiler/FetchResponseShape` (the new `request` record + the existing `response` record + the reserved error key), the result is the same `(:status :headers :body)` plist as every backend with `:body` the same asynchronous stream (pulled a chunk at a time through the body import), and the future is the settled `TYPE_P1_FUTURE` — settled at the reply's HEAD, so only a failure before the headers signals at the call (details and pins in `.kb/fetch-http.md`). Guards mirror `--host-random`: `hostFetch` requires `noWasi`, rejects `component` (a reactor component imports nothing; plain `--component` already has wasi:http), and the CLI rejects non-wasm output and `--no-gc`. The BUILD prints the standing host obligation (synchronous `env.fetch` always valid; a `WebAssembly.Suspending` one requires `promising`-entered exports and serialised calls), and `NoWasiLoadPathRefusals` gained a FETCH kind: a fetch the LOAD PATH reaches states that a suspending host cannot serve `_initialize` (`Kind.FETCH` is an obligation line, like the clock's; without the flag a `--no-wasi` fetch is a compile error naming `--host-fetch`, so there is nothing to report). The refusals pass also learned that `rontolisp:async-defun` is a DEFERRED head (it runs before the async lowering, and an async-defun's body runs at its call) and that an `async-lambda` is a value like `lambda` — without that, every fetch-capable handler was falsely on the load path. Zero imports stays the default: a `--host-fetch` build that never fetches gets no splice and no import (pinned in `WasmImportCompilerTest`).
+Core module keeps the Preview 1 no-WASI contract (stubs, fd_write sink,
+`NoWasiFilesystemStubs`, `DATA_BASE_OFFSET` 256, no page-6 base) but declares/exports its OWN
+memory, keeps `TYPE_START` at `() -> ()`, exports NO `run`/`_initialize`, and carries a core
+start section (`WasmWriter.writeStartSection(FUNC_START)`, between export and code; the shaker
+roots and renumbers it). **Top-level forms run at instantiation** — the one component shape
+where an `--invoke`d export sees `defparameter` globals assigned.
 
-**`__ronto_set_time (i64) -> ()` is the clock (decided 2026-08-09)**: a `--no-wasi` CORE module exports a second one-instruction hook, the seed hook's twin, that writes **nanoseconds since the Unix epoch** (preview1's own `clock_time_get` unit) into `HOST_TIME_ADDR` (cell 224, 8 bytes, still under the `DATA_BASE_OFFSET=256` headroom, no data segment — zero-initialized memory IS the unset state). `get-universal-time` / `get-internal-real-time` / `get-internal-run-time` then read THAT cell (`WasmTimeCompiler.compileFromHostCell`) instead of calling the `clock_time_get` slot, which is why the slot is now only a backstop. **Why this is not the fabrication the rule forbids, and is in fact the rule's other half**: the host genuinely knows the time; handing it over is the same move `__ronto_seed_random` already makes for entropy, and the number the program reads is a real reading taken by the only party able to take one. **While the cell is zero the three built-ins still SIGNAL** — a catchable Lisp condition naming the operator and the hook, via `callTimeUnsupportedStub` under an `i64.eqz` guard — because zero is not "no time", it is 1970, exactly the answer a program could not tell from a real one. That is why `random`'s constant start state is fine and the clock's is not. **The clock does not advance between host calls, and that is the shape rather than a compromise**: a Cloudflare Worker's own clock is frozen for the duration of a request (a deliberate timing-attack mitigation), so a value that moves only when the host moves it is exactly what that platform has; every `examples/cloudflare-workers/*/src/index.js` calls the setter twice — once before `_initialize`, which is what makes a library that timestamps while it LOADS (`lack-middleware-session`) loadable at all, and once per request. Emitted when `noWasi && !component` — independently of the seed hook, so `--host-random` (which retires that one) leaves this one alone — appended after it, sharing its `(i64) -> ()` type entry, and again NOT on the reactor COMPONENT (its top level runs at instantiation, so there is no window before the load-time reads, and exposing it would mean lifting it into the WIT world). The refusal MESSAGE differs there accordingly (`Ctx.reactorComponent`, the raw `--component --no-wasi` shape that `Ctx.component` deliberately reports as false): naming a hook that build does not have would be worse than saying it has none. **Consequence — `sleep` refuses on `--no-wasi`** (`WasmExprCompiler`): Preview 1 elapses an interval by SPINNING on the clock, and a clock only a host can move can never advance while a call is running, so the spin would be an infinite loop; it signals instead (argument still evaluated for effect). **Re-evaluation trigger**: the missing piece is a clock that advances DURING a call — if that is ever needed (a real `sleep`, a timing measurement inside one call), the shape is a `--host-clock` flag forwarding the `clock_time_get` slot to an `env.clock_time_get` import, exactly as `--host-random` does for entropy, and it would cost the same zero-import property. Pinned by `noWasiCoreModuleExportsTheHostClockHook` (present on the core module and under `--host-random`, absent on Preview 1 and — as an export, vs. the message text — on the reactor component), `noWasiModuleSignalsForTheClockAndForRealEntropy` (unset → signals; the hook is callable) and `noWasiModuleRefusesToSleepInsteadOfSpinningForever`. Verified on node 24: with the hook called, `get-universal-time` is exactly `floor(Date.now()/1000) + 2208988800` and `get-internal-real-time` exactly `Date.now()`, frozen until the next host write; and the `clack` + `lack-middleware-session` reactor of the todo-306 measurement instantiates, serves, and sets a real session cookie (with `--host-random` for the session id, which is `random-bytes`).
+- `WasmComponentBuilder.buildReactor`: no import block/adapter/mem module at either
+  `--optimize` level; core module 0 -> core instance 0 -> per-export alias/type/lift/export via
+  `appendFuncExports`, every cursor 0; string boundaries lift over the core's own memory + its
+  `cabi_realloc`/`cabi_post_*`. `--emit-wit` = `WitEmitter.VARIANT_REACTOR` (`nogc` empty world).
+- `Ctx.component` = `component && !noWasi`; `Ctx.noWasi` feeds reject messages (fetch/wait-for/
+  tcp name the `--no-wasi` conflict); `Ctx.reactorComponent` = the raw shape `Ctx.component`
+  deliberately reports as false; `asyncMode` off.
+- The CLI gates the five wasi:*-binding library splices (http/wait/sockets/stdin/environment)
+  as ONE decision (`spliceBackend` = `WASM_GC` for a reactor, `RontoLispCli`); the compiler
+  enforces it (`componentImports` non-empty + reactor = error naming the interface; a user
+  `rontolisp:wit-import` hits the same guard). serve + `--no-wasi` = ctor hard error.
+- `reactor = noWasi || noGc` in the CLI, so `#+rontolisp-reactor` (the clack shim) selects the
+  reactor branch under the component too.
+- **Trap**: a trap in a top-level form kills INSTANTIATION; no `_initialize` exists to wrap in
+  try/catch, so what a top-level form may hit is decided by the stub policy.
+- Plain `--component` and plain `--no-wasi` outputs stay byte-unchanged. Pinned by
+  `componentNoWasiIsAReactorThatImportsNothing`,
+  `componentNoWasiReactorRecordsTheEmptyWorldWit` (both optimize levels), the
+  `componentNoWasiReactor*` invoke tests; jco `--instantiation sync -b 0
+  --bindgen-enable-wasm-exnref` output instantiates with `{}` on plain node
+  (`examples/cloudflare-workers/httpbin-component`).
 
-**The BUILD names every refusal the load path can reach (2026-08-09, `compiler/NoWasiLoadPathRefusals`)**: a refusal is a call-time condition, which is right for a call SITE (it may be dead code) -- but reached from a TOP-LEVEL form there is no caller to catch it and output is a sink, so the host sees a bare `RuntimeError: unreachable` naming nobody. Finding the four blockers of the `lack-request -> http-body -> fast-http -> smart-buffer` chain cost one node run each plus reading wasm function indices out of a backtrace; every one was a build-time-decidable fact. So `WasmLispCompiler.compile` runs an AST reachability pass under `--no-wasi` (right BEFORE `NoWasiFilesystemStubs.rewrite`, which is what takes `with-open-file`/`open` out of the program) and emits ONE `CompileWarnings.warn` line per primitive: the operator, the source position, the chain that reached it, and the way out where there is one. **The clock is the reason this is not just "list the refusals"**: since `__ronto_set_time` exists, a program that reads it from a top-level form IS loadable -- on a host that sets it first -- so its line states a build-time HOST OBLIGATION, not a refusal (entropy/`--host-random` is the same shape). Roots = every top-level form that is not a `defun`/`defmethod`/`defmacro`/`defgeneric`; edges = OPERATOR position plus an immediately-applied `(lambda ...)`. Four decisions carry the precision, each a documented approximation: (1) **a function VALUE is not an edge** -- `#'app` into `lack:builder` must not put the handler's body on the load path, which is exactly what keeps an EXPORT-only refusal quiet; (2) **a `handler-case` protected form / `ignore-errors` body is not reported** (the guard propagates through call edges, and a definition later reached UNGUARDED is re-walked) -- upstream local-time opens `/etc/localtime` from a top-level form and falls back to UTC, and every refusal but stdin is catchable, so `Kind.STDIN` reports even when guarded; (3) **a `defstruct`/`defclass` slot initform counts as load-time** even though CL evaluates it per construction -- it is the one shape a name-based graph cannot reach (lack gets to `(get-universal-time)` in `cookie-state`'s `expires` default through `find-middleware`, i.e. `intern` + `symbol-value`), and the line names the definition so a reader can tell it from a plain top-level call; (4) **a `with-open-file` BODY is not walked**, mirroring the rewrite below, or clack's `(read in nil eof)` would be reported as a stdin trap the module does not contain. Binding forms (`let`/`let*`/`do`/`do*`/`flet`/`labels`/`macrolet`/`symbol-macrolet`, and the slot lists) are walked structurally so a `(let ((app ...)))` does not forge an edge to a `(defun app ...)`. **That standing line is retired (2026-08-10, `compiler/ArgumentShapes`)**: the pass used to print `WITH-OPEN-FILE` via `CLACK:CLACKUP -> CLACK:EVAL-FILE -> CLACK::%LOAD-FILE` for EVERY clack / ningle / tiny-routes program -- `clackup`'s `(clackup "app.lisp")` branch, statically reachable and dynamically dead on a reactor -- and a warning class whose only routine instance is a false positive teaches the reader to skip the class. Rule (5): **a call edge carries the SHAPES of the actual arguments**, binds them to the callee's parameters, and a `typecase`/`etypecase` clause (or an `if`/`when`/`cond` test that is a `typep`) whose type a known shape cannot have is not walked. The lattice is `ArgumentShapes.Shape`: FUNCTION (`#'f`, a literal `lambda`), a literal's/quoted datum's type, `(make-instance 'class)` as INSTANCE -- an instance type is disjoint from `pathname`, which is an instance of its own fixed layout here -- and UNKNOWN, which satisfies EVERY type and therefore prunes nothing. **A wrong prune is a missed refusal**, so a shape is read only where the site states it syntactically, and four things carry that: the memoization keys on the shapes as well as the name and the guard; a `flet`/`labels` body is walked at its CALL SITES with the shapes bound (clack's `typecase` is inside a local `buildapp`, so one walk with unknown parameters would keep the line) and a local taken as `#'name` is additionally walked with nothing known; a name the body rebinds outside the modelled scoping (a `dolist` variable, a `loop` `with`, a `setq` target) drops to UNKNOWN for the whole body; and a top-level variable's shape (`(defvar *app* (make-instance 'ningle:app))`, `(defparameter *app* (routes ...))` through a one-form `defun`'s RETURN shape -- which is how ningle and tiny-routes spell theirs) is retracted the moment anything in the program assigns it as a bare symbol or binds the name anywhere, since a caller's `(let ((*app* ...)) ...)` is a rebinding no lexical walk can see. **Re-evaluation trigger**: the remaining false positives are the shapes the lattice has no point for -- a value out of a multi-branch function, a struct slot, a list element. If one of those ever becomes the routine line, the answer is another lattice point with the same "UNKNOWN prunes nothing" discipline, not an exception. One IS routine and is filed rather than fixed: a `lack:builder` around the application (the standard way to add a middleware, and what `clackup` itself uses for the default ones) hands `clackup` the value of a `reduce`, which is UNKNOWN, so the retired `WITH-OPEN-FILE` line comes straight back for any program that grows past one handler -- while the same middleware applied as a plain call (`(wrap-json *app*)`) stays quiet, because a one-form defun's RETURN shape is already read. Measured 2026-08-10 on `examples/net/httpbin-clack.lisp` (`.todo/312`), which is why the shipped clack examples hand `clackup` either the application value itself or one middleware applied as a plain call -- `(wrap-json #'app)`, which both `httpbin-clack/worker.lisp` and `net/httpbin-clack.lisp` do to show Clack's composition unit without waking the line -- and why `examples/cloudflare-workers/httpbin-clack/README.md` tells a reader adding a `builder` stack that the line is a false alarm. The same predicate takes the branch OUT of the module under `--optimize` (`compiler/DeadTypeBranchPruner`, `.kb/optimize-dead-code-elimination.md`) -- one blindness, two symptoms. Pinned by `NoWasiLoadPathRefusalsTest.aBranchTheArgumentRulesOutIsNotOnTheLoadPath` (both directions: a function argument prunes, a `(clackup "app.lisp")` still reports), `aTopLevelVariableStatesItsShapeTooAndARebindingRetractsIt` and `aNameTheBodyRebindsCannotCarryTheCallersShape`; verified over all eight `examples/cloudflare-workers/*` builds, which now print no load-path line at all. GC backend only (`--no-gc` answers a different subset and would need its own table). Output is untouched -- the pass only prints (verified byte-for-byte on `examples/cloudflare-workers/httpbin`). A position is missing when `PackageResolver` rebuilt every cons of the form (`.kb/source-positions.md`: a resolved qualified symbol forces the rebuild, and the pass falls back to the innermost SURVIVING located ancestor). Pinned by `NoWasiLoadPathRefusalsTest`; verified against the todo-306 `lack-middleware-session` program, where the build names the clock and node then confirms it (`_initialize` traps without `__ronto_set_time`, loads with it).
+## Randomness
 
-**The filesystem lowers to call-time Lisp errors, not just stub errnos**: `with-open-file` / `open` are rewritten at the AST (`compiler/NoWasiFilesystemStubs`, below), and that rewrite is NOT made redundant by `path_open`'s errno: the errno is the backstop for what the rewrite cannot see (`probe-file`, `directory`, `load`, an `open` reached through `funcall`), while the rewrite is what names WASI in the message and what drops the dead `read`/`eval` bodies out of the module.
+SplitMix64 (golden-ratio gamma + two xor-shift-multiply rounds) over the 8-byte cell at
+`RANDOM_STATE_ADDR`; its zero start state is a valid seed, so no data segment seeds it. EVERY
+wasm build draws from it (`.kb/random.md`); a build with a host seeds from eight `random_get`
+bytes on its first draw. `--no-wasi` alone keeps the fixed start state — unseeded, every
+instance walks the same sequence, which is inside the CL contract (`*random-state*` may start
+fixed; `make-random-state` answers `nil`). The entropy API is deliberately NOT served from it:
+`rontolisp::%random-byte` (behind `rontolisp:random-bytes`) lowers to a call-time error under
+`--no-wasi` (`WasmExprCompiler`).
 
-**`with-open-file` / `open` lower to call-time error stubs (2026-08-08, `compiler/NoWasiFilesystemStubs`)**: a `--no-wasi` module has no filesystem by construction (the `path_open` slot answers `ENOENT`, see the stub table above -- when this landed it was one of the then-eight `unreachable` stubs, and the rewrite is what kept the trap off the two forms most programs use), so `WasmLispCompiler.compile` rewrites every reachable `(with-open-file ...)` / `(open ...)` form -- quoted data excluded, and `open` left alone when the program defines its own `(defun open ...)` -- into `(progn <path-expr> (error "... requires WASI; a --no-wasi module has no filesystem"))`. Same observable behaviour as before minus the trap: the real form computed its path and then died in `path_open`; the stub computes the path and signals a catchable, self-describing error. The rewrite runs FIRST, right after `flattenTopLevel`, and that ordering is the point: every downstream scan (`usesRead`/`usesEval`, EH mode, the funcall-dispatch gate) reads the program that is actually compiled, so the `read`+`eval` inside clack's dead `%load-file` file loader -- statically reachable from `clackup`'s pathname branch, dynamically dead on a reactor -- no longer forces the reader+eval runtimes into every Worker module or holds the dispatch gate open (`.kb/optimize-dead-code-elimination.md` has the numbers; hello-clack halved). WASM `--no-wasi` only -- the JVM, the interpreter and the WASI-carrying WASM targets keep real files, the same per-target line the "no filesystem" limitation in the examples' READMEs already draws. The rule above is untouched: this stub SIGNALS, it does not fabricate a stream.
+**`__ronto_seed_random (i64) -> ()`**: a `--no-wasi` CORE module exports a one-instruction hook
+overwriting `RANDOM_STATE_ADDR`; call it before `_initialize`, early enough for a library's
+LOAD-TIME `(random ...)`. An EXPORT, since a core wasm import is not optional and would break
+instantiation with `{}`. Emitted when `noWasi && !component`, after the memory helpers
+(`memoryHelperCount`: only COMPUTED wrapper/ABI bases shift, every fixed `FUNC_*` is under
+`userFuncBase()`), `(i64)->()` type after the host-arena pair at `abiTypeBase`. NOT on the
+reactor COMPONENT (top level runs at instantiation, so there is no window before the load-time
+draws). **Seeding does NOT re-enable `random-bytes`** — SplitMix64 is invertible from one
+output. Pinned by `noWasiCoreModuleExportsTheHostSeedHook`.
 
-**Host arena API on the GC backend (todo 124)**: a memory-EXPORTING module (i.e. `memoryHelpers && !component` -- under `--component` the memory is imported and the canonical `cabi_realloc`/`cabi_post_*` pair does the same job) also emits and exports `__ronto_alloc_mark () -> i32` / `__ronto_alloc_reset (i32) -> ()`, the wasm-GC counterpart of the `--no-gc` pair (`.kb/no-gc-scalar-wasm.md`, todo-89): the engine collects the Lisp side, but the host's input buffer is linear memory it never traces, so a resident host that allocates one per call grows memory forever (measured: 262144 -> 2424832 over 100000 calls). Bodies in `WasmExportRuntimeBuilder.buildAllocMarkBody/buildAllocResetBody`; the two functions are appended right after `__ronto_alloc`/`_str_from_mem` (so `helperFuncCount` is 4, shifting only the COMPUTED wrapper/ABI bases -- the fixed `FUNC_*` constants are all below `userFuncBase`), with their two signatures appended at `abiTypeBase` (mutually exclusive with the component string-ABI block). **The pop is guarded**: unlike `--no-gc`'s global 0, `HEAP_PTR_ADDR` here is a stack pointer over a PERMANENT low region -- the interned-symbol byte pool (`.kb/wasm-gc-strings.md`) -- so `__ronto_alloc_reset` does `HEAP_PTR = max(mark, RT_INTERN_HEAP_ADDR)`, where cell 172 is the pool's high-water mark, written by `_intern` (`WasmReadRuntimeBuilder.buildInternBody(.., recordHighWater)`, emitted ONLY for host-arena modules, so every other module's `_intern` is byte-identical). Stateless (no active flag -> nests, and a stale mark cannot corrupt anything) and it needs no warn/trap: a call that interns a new symbol simply keeps its input buffer, because the permanent bytes now sit above it. todo-88's automatic scalar-return reset is deliberately NOT ported -- cons/closures/hash/global `setq` exist here, so "nothing allocated during the call outlives it" is not true by construction. Verified by hand on Node (100000 calls, a fresh input buffer each, `memory.buffer.byteLength` flat at 262144 where the un-bracketed loop reaches 2424832; a body that interns 2000 new symbols inside the bracket keeps every `symbol-name` intact, and the reset visibly stops at the intern high-water instead of the mark). `examples/count-vowels/` deliberately does NOT demo this backend -- for a function inside the non-GC subset the wasm-GC build is strictly worse (3457 B + a GC-capable engine vs 667 B on any engine) and the host code is now identical, so the example's wasm-GC case was dropped 2026-07-13.
+**`--host-random`** (first opt-in out of the zero-import contract):
+`WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd, hostRandom)`. The
+module-local generator is SEEDED from the host on its first draw; `rontolisp:random-bytes`
+takes the host's bytes one at a time, the property the flag exists for. Slot `FUNC_RANDOM_GET`
+becomes a forwarding body (`WasmIoRuntimeBuilder.buildNoWasiHostRandomGetBody`) over ONE
+injected import `env.random_get(buf, len) -> errno` (module `env`, preview1's signature, so no
+WASI function is imported and a host can forward its own); the other eight stubs untouched.
 
-**Re-entry guard (todo-337)**: a module whose host import may SUSPEND (`wasm-import
-:async t`, or `--host-fetch` with fetch used) can be re-entered while a call is parked
-(JSPI), and the arena bracket above is exactly what cannot survive that -- interleaved
-marks are not nested marks, and a `(ptr,len)` result sits at un-advanced `HEAP_PTR`
-until the host reads it. Every export wrapper of such a module sets a guard global on
-entry (a second entry TRAPS) and clears it on return; a module that cannot suspend is
-byte-identical. Mechanics, the measured corruption and the pins: `.kb/wasm-import.md`
-("The re-entry guard").
+- Appended LAST in `hostImports`, reusing the fixed `TYPE_INTERN` `(i32,i32)->i32` rather than
+  appending a type — program import ordinals/bytes and `abiTypeBase` (planned over
+  `importSlots`) untouched.
+- `__ronto_seed_random` NOT emitted (`seedRandom = noWasi && !component && !hostRandom`);
+  `WasmExprCompiler`'s `RANDOM_BYTE_INTERNAL` gate becomes `ctx.noWasi && !ctx.hostRandom`.
+- Rejected in the ctor without `--no-wasi` and with `--component`; `--no-gc` rejected in the CLI.
+- Pinned by `hostRandomForwardsTheRandomGetSlotAndRetiresTheSeedHook`,
+  `hostRandomJoinsTheOrdinalSpaceLastAndIsTheOnlyImportOnItsOwn`,
+  `underHostRandomTheEntropyApiReachesTheHostAndAnUnusedImportIsStillShaken`
+  (`WasmImportCompilerTest`); the last also pins the un-gated `%random-byte` — a program that
+  never draws is shaken back to zero imports.
 
-**The boundary RESOLVES a future its target answers (2026-08-12)**: an export declares a
-scalar/string, so a target that answers a FUTURE -- the settled `TYPE_P1_FUTURE` a
-degenerate async body produces outside asyncMode (`.kb/async-await.md`), or the one a
-`wasm-import ... :async t` wrapper builds -- must be resolved before the unbox, or the
-wrapper casts the struct to the declared type and traps with `illegal cast` on the very
-first call. `WasmExportCompiler.emitBody` calls `_p1_future_await` right after the target
-call; the `--component` wrapper's `asyncTarget` poll/`_sched_loop` branch is the same
-courtesy, and the reactor transport's `rontolisp::%future-force` (`http-reactor.lisp`) is
-the spelling every worked example had to use by hand. **Why the resolve is DYNAMIC rather
-than keyed on the target being an async-defun**: a plain defun handing back someone else's
-future has exactly the same boundary problem, and `_p1_future_await` passes a non-future
-straight through -- so ONE unconditional call covers both shapes and needs no `ref.test`
-around it. It costs 2 bytes on an export of a module that can hold a future at all
-(`Ctx.p1Futures`: after the async lowering, `%async-run` in the program or an `:async t`
-import -- those are the struct's only two producers) and NOTHING anywhere else, including
-a `:void` export whose value is dropped. Verified byte-for-byte over the whole
-`size-report/programs` flag matrix, `count-vowels` and the `--no-gc` Worker (identical);
-the four async Worker builds gain exactly the call, +2 bytes each, plus the helper body
-the shaker now roots where nothing awaited before (`httpbin` +31), with
-`httpbin-component`'s `handle-request` answering byte-identical JSON before and after.
-Pinned by `WasmExportCompilerTest.anExportResolvesADegenerateFutureOnlyWhereOneCanExist`
-(the wrapper body, all three cases) and
-`WasmLispCompilerIntegrationTest.preview1ExportResolvesTheFutureItsTargetAnswers` /
-`anExportHandsBackAnAsyncImportsFutureWithoutForcingItByHand`. **asyncMode
-(`--component`, non-reactor) makes the SAME dynamic decision (todo-342)**: the wrapper's
-poll / `_sched_loop` block was already fully dynamic (`_poll` passes a non-future
-through; the `ref.test` decides whether to drive the blocking loop), so the gate is
-`Ctx.asyncFuncBase >= 0` -- every asyncMode export polls, not just one whose target is
-an async-defun -- and a callback-lifted export takes the callback driver
-unconditionally (callback exports exist only under asyncMode, so the old
-non-async-target EXIT tail was unreachable and is gone). The cost is the poll +
-`ref.test` + `_sched_loop` branch in an asyncMode export wrapper whose target is NOT an
-async-defun (+25 bytes measured on the todo-342 probe, vs. P1's 2 --
-`_p1_future_await` needs no branch); an export whose target IS one already had the
-branch and stays byte-identical, as does every component with no async surface (no
-`asyncFuncBase`; verified over the size-report matrix and the Worker builds). The finding that MASKED the trap in
-the simplest spelling was the fusion inliner splicing a one-form async-defun's raw body
-into a synchronous caller (`futurep` answered NIL); asyncMode async-defuns are excluded
-from `Ctx.inlinableDefuns` (`.kb/wasm-int-fusion.md`). Pinned by
-`componentExportResolvesTheFutureItsTargetAnswers` /
-`componentAsyncDefunKeepsItsFutureThroughASyncCaller` and the
-`async-future-survives-a-synchronous-caller` ci-spec case.
+## `--host-fetch` (second opt-in): `rontolisp:fetch` over `env.fetch`
 
-Tests: `WasmExportCompilerTest` (structural, no Docker), `WasmLispCompilerIntegrationTest` (`wasmtime --invoke`). Limitations (README "Exporting Lisp functions"). Component typed exports shipped in todo-92 (see `.kb/wasi-component.md`); follow-up in `.todo/021` (memory-ABI CI).
+Splices a LISP lowering (`eval/HostFetchLibrary`, CLI-gated on `noWasi && hostFetch` and on the
+program referencing `rontolisp:fetch`) whose `rontolisp:wasm-import`s ride the ordinary
+synthetic-defun machinery, appended after the program so program import ordinals are unchanged:
+`env.fetch(request-json) -> response-head-json` (`:string`->`:string`) and
+`env.readResponseBody(ptr, cap) -> i32` (`:bytes`, `:async t`), the reply BODY out of band.
+Envelope from `compiler/FetchResponseShape`; result is the same `(:status :headers :body)`
+plist as every backend; the future is the settled `TYPE_P1_FUTURE`, settled at the reply's
+HEAD, so only a failure before the headers signals at the call (`.kb/fetch-http.md`). Guards
+mirror `--host-random`: requires `noWasi`, rejects `component`, CLI rejects non-wasm output and
+`--no-gc`. The BUILD prints the standing host obligation (a synchronous `env.fetch` is always
+valid; a `WebAssembly.Suspending` one requires `promising`-entered exports and serialised
+calls). A build that never fetches gets no splice and no import (`WasmImportCompilerTest`).
+
+## `__ronto_set_time (i64) -> ()` — the clock
+
+Seed hook's twin on a `--no-wasi` CORE module; writes nanoseconds since the Unix epoch
+(preview1's `clock_time_get` unit) into `HOST_TIME_ADDR` (cell 224, 8 bytes, under the
+`DATA_BASE_OFFSET=256` headroom, no data segment — zero-initialized memory IS the unset state).
+`get-universal-time` / `get-internal-real-time` / `get-internal-run-time` read THAT cell
+(`WasmTimeCompiler.compileFromHostCell`) instead of the slot.
+
+- **While the cell is zero the three built-ins SIGNAL** — a catchable condition naming the
+  operator and the hook, via `callTimeUnsupportedStub` under an `i64.eqz` guard; zero is 1970,
+  an answer a program could not tell from a real one.
+- The clock does not advance between host calls, matching a Worker's request-frozen clock;
+  every `examples/cloudflare-workers/*/src/index.js` calls the setter before `_initialize`
+  (what makes `lack-middleware-session`, which timestamps while it LOADS, loadable) and once
+  per request.
+- Emitted when `noWasi && !component`, independently of the seed hook (so `--host-random`,
+  which retires that one, leaves this one alone), appended after it, sharing its `(i64)->()`
+  type. NOT on the reactor COMPONENT; the refusal MESSAGE differs there
+  (`Ctx.reactorComponent`).
+- **`sleep` refuses on `--no-wasi`** (`WasmExprCompiler`): Preview 1 elapses an interval by
+  SPINNING on the clock, which cannot advance during a call, so it would spin forever. It
+  signals instead (argument still evaluated for effect).
+- **Re-evaluation trigger**: a clock that advances DURING a call would be a `--host-clock` flag
+  forwarding `clock_time_get` to an `env.clock_time_get` import, as `--host-random` does — at
+  the same cost to zero imports.
+- Pinned by `noWasiCoreModuleExportsTheHostClockHook`,
+  `noWasiModuleSignalsForTheClockAndForRealEntropy`,
+  `noWasiModuleRefusesToSleepInsteadOfSpinningForever`. With the hook set, `get-universal-time`
+  = `floor(Date.now()/1000) + 2208988800`, `get-internal-real-time` = `Date.now()`.
+
+## The build names every refusal the load path can reach
+
+`compiler/NoWasiLoadPathRefusals`. A refusal is a call-time condition, right for a call SITE;
+from a TOP-LEVEL form nothing catches it and output is a sink, so the host sees a bare
+`RuntimeError: unreachable` naming nobody. `WasmLispCompiler.compile` runs an AST reachability
+pass under `--no-wasi` (right BEFORE `NoWasiFilesystemStubs.rewrite`), emitting ONE
+`CompileWarnings.warn` line per primitive: operator, source position, the chain that reached
+it, the way out where there is one. Where a hook exists (clock, entropy/`--host-random`,
+`Kind.FETCH`) the line is a build-time HOST OBLIGATION, not a refusal.
+
+Roots = every top-level form that is not a `defun`/`defmethod`/`defmacro`/`defgeneric`; edges =
+OPERATOR position plus an immediately-applied `(lambda ...)`. Binding forms
+(`let`/`let*`/`do`/`do*`/`flet`/`labels`/`macrolet`/`symbol-macrolet`, and slot lists) are
+walked structurally so `(let ((app ...)))` forges no edge to `(defun app ...)`.
+`rontolisp:async-defun` is a DEFERRED head, `async-lambda` a value like `lambda` — else every
+fetch-capable handler is falsely on the load path. Five approximations:
+
+1. A function VALUE is not an edge (`#'app` into `lack:builder`) — keeps EXPORT-only refusals
+   quiet.
+2. A `handler-case` protected form / `ignore-errors` body is not reported (the guard propagates
+   through call edges; a definition later reached UNGUARDED is re-walked). `Kind.STDIN` reports
+   even when guarded — every other refusal is catchable.
+3. A `defstruct`/`defclass` slot initform counts as load-time — the one shape a name-based
+   graph cannot reach (lack reaches `(get-universal-time)` in `cookie-state`'s `expires`
+   default via `find-middleware`); the line names the definition.
+4. A `with-open-file` BODY is not walked, mirroring the rewrite below, else clack's
+   `(read in nil eof)` reports a stdin trap the module does not contain.
+5. A call edge carries the SHAPES of the actual arguments (`compiler/ArgumentShapes`), bound to
+   the callee's parameters; a `typecase`/`etypecase` clause (or `if`/`when`/`cond` test that is
+   a `typep`) whose type a known shape cannot have is not walked. `ArgumentShapes.Shape` =
+   FUNCTION (`#'f`, literal `lambda`), a literal's/quoted datum's type, `(make-instance
+   'class)` as INSTANCE (disjoint from `pathname`), UNKNOWN (satisfies EVERY type, prunes
+   nothing).
+
+**A wrong prune is a missed refusal**, so a shape is read only where the site states it
+syntactically: memoization keys on shapes as well as name and guard; a `flet`/`labels` body is
+walked at its CALL SITES with shapes bound, plus once with nothing known if taken as `#'name`;
+a name rebound outside the modelled scoping (`dolist` variable, `loop` `with`, `setq` target)
+drops to UNKNOWN for the whole body; a top-level variable's shape (`(defvar *app*
+(make-instance 'ningle:app))`, `(defparameter *app* (routes ...))` through a one-form `defun`'s
+RETURN shape) is retracted the moment anything assigns it as a bare symbol or binds the name
+anywhere.
+
+- **Known routine false positive, filed not fixed**: `lack:builder` hands `clackup` the value
+  of a `reduce` (UNKNOWN), so the `WITH-OPEN-FILE` line via `CLACK:CLACKUP -> CLACK:EVAL-FILE
+  -> CLACK::%LOAD-FILE` returns for any program past one handler, while the same middleware as
+  a plain call (`(wrap-json *app*)`) stays quiet. The shipped clack examples therefore hand
+  `clackup` the application value or `(wrap-json #'app)`
+  (`examples/cloudflare-workers/httpbin-clack/worker.lisp`, `examples/net/httpbin-clack.lisp`),
+  and that example's README warns the line is a false alarm.
+- **Re-evaluation trigger**: remaining false positives are shapes the lattice has no point for
+  (a value out of a multi-branch function, a struct slot, a list element); the answer is
+  another lattice point with the same "UNKNOWN prunes nothing" discipline.
+- The same predicate takes the branch OUT of the module under `--optimize`
+  (`compiler/DeadTypeBranchPruner`, `.kb/optimize-dead-code-elimination.md`).
+- GC backend only. Output untouched — the pass only prints. A position is missing when
+  `PackageResolver` rebuilt every cons of the form (`.kb/source-positions.md`); it falls back
+  to the innermost SURVIVING located ancestor.
+- Pinned by `NoWasiLoadPathRefusalsTest`, notably
+  `aBranchTheArgumentRulesOutIsNotOnTheLoadPath`,
+  `aTopLevelVariableStatesItsShapeTooAndARebindingRetractsIt`,
+  `aNameTheBodyRebindsCannotCarryTheCallersShape`. All eight `examples/cloudflare-workers/*`
+  builds print no load-path line.
+
+## Filesystem: `with-open-file` / `open` lower to call-time error stubs
+
+`compiler/NoWasiFilesystemStubs`. `WasmLispCompiler.compile` rewrites every reachable
+`(with-open-file ...)` / `(open ...)` form — quoted data excluded, `open` left alone when the
+program defines its own `(defun open ...)` — into `(progn <path-expr> (error "... requires
+WASI; a --no-wasi module has no filesystem"))`. It SIGNALS, it does not fabricate a stream, and
+does not make `path_open`'s errno redundant: the errno backstops what the rewrite cannot see
+(`probe-file`, `directory`, `load`, an `open` reached through `funcall`).
+
+**Ordering**: the rewrite runs FIRST, right after `flattenTopLevel`, so every downstream scan
+(`usesRead`/`usesEval`, EH mode, the funcall-dispatch gate) reads the program actually compiled
+— the `read`+`eval` inside clack's dead `%load-file` no longer drags the reader+eval runtimes
+into every Worker module or holds the dispatch gate open
+(`.kb/optimize-dead-code-elimination.md`). WASM `--no-wasi` only; JVM, interpreter and
+WASI-carrying WASM targets keep real files.
+
+## Host arena API on the GC backend
+
+A memory-EXPORTING module (`memoryHelpers && !component`; `--component` uses the canonical
+`cabi_realloc`/`cabi_post_*` instead) also exports `__ronto_alloc_mark () -> i32` /
+`__ronto_alloc_reset (i32) -> ()`, the wasm-GC counterpart of the `--no-gc` pair
+(`.kb/no-gc-scalar-wasm.md`). Host input buffers are untraced linear memory, so a resident host
+allocating one per call grows memory forever.
+
+- Bodies `WasmExportRuntimeBuilder.buildAllocMarkBody`/`buildAllocResetBody`, appended after
+  `__ronto_alloc`/`_str_from_mem` (`helperFuncCount` 4: only COMPUTED wrapper/ABI bases shift,
+  fixed `FUNC_*` are below `userFuncBase`), signatures at `abiTypeBase` (exclusive with the
+  component string-ABI block).
+- **The pop is guarded**: `HEAP_PTR_ADDR` is a stack pointer over the PERMANENT interned-symbol
+  byte pool (`.kb/wasm-gc-strings.md`), so `__ronto_alloc_reset` does
+  `HEAP_PTR = max(mark, RT_INTERN_HEAP_ADDR)`; cell 172 is the pool's high-water mark, written
+  by `_intern` (`WasmReadRuntimeBuilder.buildInternBody(.., recordHighWater)`, host-arena
+  modules only, so every other module's `_intern` is byte-identical).
+- Stateless, so it nests, and a stale mark cannot corrupt anything. The `--no-gc` automatic
+  scalar-return reset is deliberately NOT ported (cons/closures/hash/global `setq` exist here).
+- `examples/count-vowels/` deliberately does NOT demo this backend: inside the non-GC subset
+  the wasm-GC build is strictly worse (larger, and needs a GC-capable engine).
+
+**Re-entry guard**: a module whose host import may SUSPEND (`wasm-import :async t`, or
+`--host-fetch` with fetch used) can be re-entered while a call is parked (JSPI), and the arena
+bracket cannot survive that — interleaved marks are not nested marks, and a `(ptr,len)` result
+sits at un-advanced `HEAP_PTR` until the host reads it. Every export wrapper of such a module
+sets a guard global on entry (a second entry TRAPS) and clears it on return; a module that
+cannot suspend is byte-identical. `.kb/wasm-import.md` ("The re-entry guard").
+
+## The boundary RESOLVES a future its target answers
+
+An export declares a scalar/string, so a target answering a FUTURE — the settled
+`TYPE_P1_FUTURE` a degenerate async body produces outside asyncMode (`.kb/async-await.md`), or
+the one a `wasm-import ... :async t` wrapper builds — must be resolved before the unbox, **or
+the wrapper casts the struct to the declared type and traps with `illegal cast` on the very
+first call**.
+
+- `WasmExportCompiler.emitBody` calls `_p1_future_await` right after the target call; the
+  `--component` wrapper's `asyncTarget` poll/`_sched_loop` branch is the same courtesy; the
+  reactor transport's `rontolisp::%future-force` (`http-reactor.lisp`) is the by-hand spelling.
+- **DYNAMIC, not keyed on the target being an async-defun**: a plain defun handing back someone
+  else's future has the same problem, and `_p1_future_await` passes a non-future through — one
+  unconditional call, no `ref.test`. Costs bytes only on a module that can hold a future at all
+  (`Ctx.p1Futures`: after the async lowering, `%async-run` in the program or an `:async t`
+  import), nothing elsewhere, including a `:void` export whose value is dropped.
+- **asyncMode (`--component`, non-reactor) makes the SAME dynamic decision**: the gate is
+  `Ctx.asyncFuncBase >= 0`, so every asyncMode export polls, and a callback-lifted export takes
+  the callback driver unconditionally (callback exports exist only under asyncMode, so the old
+  non-async-target EXIT tail was unreachable and is gone). An export whose target IS an
+  async-defun stays byte-identical, as does every component with no async surface.
+- asyncMode async-defuns are excluded from `Ctx.inlinableDefuns` (`.kb/wasm-int-fusion.md`):
+  the fusion inliner splicing a one-form async-defun's raw body into a synchronous caller made
+  `futurep` answer NIL and masked the trap.
+- Pinned by `WasmExportCompilerTest.anExportResolvesADegenerateFutureOnlyWhereOneCanExist`,
+  `WasmLispCompilerIntegrationTest.preview1ExportResolvesTheFutureItsTargetAnswers`,
+  `anExportHandsBackAnAsyncImportsFutureWithoutForcingItByHand`,
+  `componentExportResolvesTheFutureItsTargetAnswers`,
+  `componentAsyncDefunKeepsItsFutureThroughASyncCaller`, and the ci-spec case
+  `async-future-survives-a-synchronous-caller`.
+
+## Tests
+
+`WasmExportCompilerTest` (structural, no Docker); `WasmLispCompilerIntegrationTest`
+(`wasmtime --invoke`); `WasmImportCompilerTest`; `NoWasiLoadPathRefusalsTest`. Limitations:
+README "Exporting Lisp functions". Component typed exports: `.kb/wasi-component.md`.
+Unfinished: memory-ABI CI.

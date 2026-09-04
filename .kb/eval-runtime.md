@@ -1,111 +1,92 @@
 # `eval` in all three backends (interpreter, WASM, JVM)
 
-A runtime tree-walking interpreter sharing the compiled value representation (`null`=nil, `Long`=int, `Double`=float, `String`=symbol or `"..."`-prefixed string, `Object[2]`=cons, `Object[]` with an `Integer` head=function value; interpreted closures use the sentinel `funcId == -1`). Interpreter: a `LispFunction` registered in `LispEvaluator`'s constructor (avoids a circular dep). WASM (`WasmEvalRuntimeBuilder`/`WasmEvalCompiler`) and JVM (`JvmEvalRuntimeBuilder`/`JvmEvalCompiler`) mirror each other: five functions `_lookup`/`_env_lookup`/`_eval`/`_apply`/`_store` plus a persistent top-level env (`GLOBAL_ENV` wasm global / `_genv` JVM field). Emitted only when the program calls `eval` (`programUsesEval`); WASM keeps stubs to hold fixed function indices, JVM needs none (methods are by name). WASM trick: the `StringTable` dedups strings, so a quoted symbol and a `let`/`lambda`/`setq` name share one data offset and lookup is an `i32` offset compare; JVM uses `String.equals`/`instanceof` directly. `setq`/`setf`/`push`/`pop` all delegate to `_store`.
+Runtime tree-walking interpreter over the compiled value representation: `null`=nil, `Long`=int,
+`Double`=float, `String`=symbol or `"..."`-prefixed string, `Object[2]`=cons, `Object[]` with
+`Integer` head=function value; interpreted closures use sentinel `funcId == -1`. Supported forms and
+limitations identical across WASM/JVM -- README "Compiled `eval` limitations".
 
-## `apply` no longer turns the interpreter on (WASM; todo-315)
+## Shape
+- Interpreter: a `LispFunction` registered in `LispEvaluator`'s constructor (avoids a circular dep).
+- WASM (`WasmEvalRuntimeBuilder`/`WasmEvalCompiler`) and JVM (`JvmEvalRuntimeBuilder`/`JvmEvalCompiler`)
+  mirror each other: `_lookup`/`_env_lookup`/`_eval`/`_apply`/`_store` + a persistent top-level env
+  (`GLOBAL_ENV` wasm global / `_genv` JVM field). `setq`/`setf`/`push`/`pop` delegate to `_store`.
+- Emitted only when `programUsesEval`. WASM keeps stubs to hold fixed function indices; JVM needs none.
+- WASM `StringTable` dedups strings -> lookup is an `i32` offset compare; JVM uses
+  `String.equals`/`instanceof`.
 
-`_apply` + the SPREAD dispatcher are a separate tier below the interpreter, gated by
-`LispMacroExpander.needsApplyRuntime` (plus the `referencesApplyingWrapper` clause for the
-injected `#'mapcar`-family/`#'funcall` wrapper bodies, which are added after the scan):
-
-- `(apply #'name ...)` / `(apply 'name ...)` whose literal target names a top-level defun
-  (or, for the `#'` spelling, an injectable built-in wrapper -- the `'name` spelling does
-  not fire the wrapper-injection gate, so it counts only against defuns) compiles to a
-  physical direct call (`Wasm/JvmApplyCompiler`) and forces NOTHING. `(print (apply #'+
-  (list 1 2)))` costs 27 bytes over the base program where it used to cost ~13 KB
-  unoptimized.
-- A computed designator, a literal `lambda` designator, a `multiple-value-call`, an apply
-  of a `flet`/`labels`-bound name (the call-site rewrite makes the designator a variable
-  -- the scan tracks the local names), or an unknown literal target forces
-  `usesApplyRuntime`: the real `_apply` body (WITHOUT the `$fenv` and interpreted-closure
-  arms -- `buildApplyBody(usesEval)`; nothing can create either without `_eval`/`_store`),
-  the spread dispatcher body, and the `_lookup` registry (the registry-live arg of
-  `dispatchableFuncIds` and the registry-blob gate both include `usesApplyRuntime`, so a
-  runtime SYMBOL designator still resolves).
+## WASM: `apply` is a tier below the interpreter
+Gate `LispMacroExpander.needsApplyRuntime`, plus a `referencesApplyingWrapper` clause for the injected
+`#'map*`/`every`/`some`/`#'funcall` wrapper bodies (added after the scan).
+- `(apply #'name ...)`/`(apply 'name ...)` on a literal top-level defun -- or, for `#'` only, an
+  injectable built-in wrapper (`'name` does not fire the wrapper-injection gate) -- becomes a direct
+  call (`Wasm/JvmApplyCompiler`), forcing nothing.
+- Computed designator, literal `lambda` designator, `multiple-value-call`, apply of a `flet`/`labels`
+  name (call-site rewrite makes the designator a variable; the scan tracks local names), or unknown
+  literal target -> `usesApplyRuntime`: the `_apply` body without the `$fenv`/interpreted-closure arms
+  (`buildApplyBody(usesEval)`), the spread dispatcher, and the `_lookup` registry
+  (`dispatchableFuncIds`' registry-live arg and the registry-blob gate include `usesApplyRuntime`, so
+  a runtime SYMBOL designator still resolves).
 - `eval`/`load`/`--dynamic`/`boundp`/`symbol-value`/`fboundp`/`fmakunbound`/
-  `(setf (symbol-function ...))` still force the full eval runtime, which implies the
-  apply tier.
+  `(setf (symbol-function ...))` force the full eval runtime, implying the apply tier.
 
-**The JVM keeps `apply` and `multiple-value-call` forcing `usesEval`** -- it has no
-separate apply tier -- **but the injected wrappers no longer force it.** They used to: the
-`map*`/`every`/`some`/`funcall` wrapper bodies are `(apply f ...)`, they went into every
-program, the finished class then called an `_apply` it had never declared, and the
-post-compile self-check (`gateGroupFor`/`GateUnderpredicted`, `.kb/adjustable-arrays.md`)
-answered that by forcing `GROUP_EVAL` on -- for programs with no `eval` in them. Free
-while `--optimize` shook the unreferenced wrappers back out, and anything but free once
-the program had a top-level global: the forced gate made the mirror below real, so one
-`setq` turned a 4 KB class into a 34 KB one. So `BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS`
-is now injected exactly when the program can reach one -- `#'name` or `'name` anywhere
-(`referencesFunctionDesignator`, position-blind on purpose), a computed `funcall`/`apply`
-target, or a name the program reads or builds at run time -- and that same reference is
-what forces `usesEval`. Pinned by `JvmLispCompilerTest`'s
-`aProgramThatNeverMentionsEvalCarriesNoEvalRuntime` /
-`namingOneOfTheApplyingWrappersBringsTheEvalRuntimeBack`.
+## JVM: `apply`/`multiple-value-call` force `usesEval`
+No separate apply tier. `BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` is injected exactly when the
+program can reach one -- `#'name`/`'name` anywhere (`referencesFunctionDesignator`, position-blind on
+purpose), a computed `funcall`/`apply` target, or a name read/built at run time -- and that reference
+is also what forces `usesEval`.
+- Trap: inject those bodies unconditionally and the class calls an undeclared `_apply`; the
+  post-compile self-check (`gateGroupFor`/`GateUnderpredicted`, `.kb/adjustable-arrays.md`) then forces
+  `GROUP_EVAL` on eval-free programs -- 4 KB -> 34 KB once one top-level global makes the mirror below
+  real. `GateUnderpredicted` stays as backstop for genuinely under-predicted gates; the ARRAY gate had
+  the same wrapper problem (`FILL`/`COERCE`/`VECTOR`/`SVREF`/... call `_aset1`).
+- Pins: `JvmLispCompilerTest.aProgramThatNeverMentionsEvalCarriesNoEvalRuntime`,
+  `namingOneOfTheApplyingWrappersBringsTheEvalRuntimeBack`.
 
-`GateUnderpredicted` stays: it is the backstop for a gate that is genuinely
-under-predicted. The ARRAY gate used to fire it on every compile for the same wrapper
-reason (`FILL`/`COERCE`/`VECTOR`/`SVREF`/... call `_aset1`); fixed the same way --
-`.kb/adjustable-arrays.md`'s "The array-gated wrapper set is complete" section.
+## Name-registry gate
+JVM: `_lookup` when `usesEval || usesRuntimeFunctionDesignator || !indirectCallArities.isEmpty()`. The
+source scan reads only `funcall`/`apply`; the last clause covers every other designator-caller
+(`mapcar`, `sort`, `remove-if`, `maphash`, `(f x)` with an expression head) and is effectively always
+true, since injected wrapper bodies take the designator as a PARAMETER and so dispatch in every program
+(measured: `(print (+ 1 2))` dispatches `__every_pred`, `__reduce_gfn` and a dozen more). Narrowing it wants
+demand-driven wrapper injection or the WASM scheme below (not built).
 
-**The name registry is no longer a passenger of that gate.** `_lookup` used to ride along
-on an always-on `usesEval`. On the JVM it is now `usesEval ||
-usesRuntimeFunctionDesignator || !indirectCallArities.isEmpty()`. The source scan reads
-`funcall`/`apply` only, so the last clause is what covers every OTHER operator that calls
-a designator it cannot read -- `mapcar`, `sort`, `remove-if`, `maphash`, a bare `(f x)`
-whose head is an expression: a dispatcher is exactly a call site a SYMBOL can arrive at,
-and only `_lookup` resolves one. That clause is effectively always true, because the
-injected wrapper bodies take their designator as a PARAMETER and so dispatch in every
-program -- measured, not assumed: `(print (+ 1 2))` dispatches `__every_pred`,
-`__reduce_gfn` and a dozen more out of the catalog. Narrowing it wants either the
-demand-driven wrapper injection `.todo/519` started or the WASM answer below, which
-separates the injected bodies from the user's without either.
+WASM cannot afford an always-true clause (wit-import module bytes are pinned); both halves are recorded
+during EMISSION, not scanned off the source:
+- **Symbol can ARRIVE**: `Ctx.runtimeDesignatorDispatch`, set wherever Pass 2 dispatches a designator
+  that is not `#'name`/`'name`/a literal `lambda` (`LispMacroExpander.isStaticFunctionDesignator`) --
+  `WasmDesignatorCall.prepare` (map family, `reduce`, `sort`), `WasmFunctionCallCompiler.compileFuncall`,
+  `WasmHashTableCompiler.compileMaphash`. Must be emission-time: `(every f l)` becomes a Pass 2 `do`
+  over `(funcall #pred elem)`, so a source scan misses `every`, `remove-if`, `count-if`, `find-if`,
+  `position-if`.
+- **Name can ANSWER**: `Ctx.userSpelledLiterals` (user-spelled half of `spelledLiterals`) holds a
+  defun-name spelling (`DesignatorSpellings`), or the program can build/read one (`nameResolvable`).
+- Both halves exclude the INJECTED runtime, whose bodies funcall a designator parameter and quote
+  `'list`/`'cons`/`'string` for their own `coerce`; unfiltered, the gate is true for `(print (+ 1 2))`.
+  `Ctx.injectedRuntimeBody` marks those bodies while emitted, `Ctx.injectedRuntimeLambdas` carries the
+  mark to lambdas they build (`stable-sort`'s comparator, `complement`'s closure) so Pass 2c re-enters
+  them with the same answer.
+- Pins: `WasmLispCompilerTest.onlyAnUnreadableDesignatorPullsInTheNameRegistry`,
+  `WasmLispCompilerIntegrationTest.aComputedSymbolDesignatorResolvesForEveryOperatorThatCallsIt`
+  (+ `--component` twin).
 
-## The WASM registry gate reads what Pass 2 emitted, in two halves
+## A literal `boundp` never reaches the gate
+`compiler/CompileTimeBoundp` folds `(boundp 'name)` over a literal symbol on both compile paths, and in
+the CLI/playground before the tree-shaker (the `(unless (boundp '+k+) (defconstant +k+ v))` guard also
+keeps a library constant from being a top-level definer). Only a computed designator
+`(boundp (intern ...))` opens the gate. `.kb/compile-time-boundp.md` (incl. why `fboundp` is out).
 
-WASM cannot afford the JVM's always-true clause -- a wit-import module's bytes are pinned
--- so it asks the same question precisely, and both halves are recorded during EMISSION
-rather than scanned off the source:
+## Top-level global mirroring
+When `usesEval`, a top-level `setq`/`defvar`/`defparameter`/`defconstant` (`Ctx.topLevel`) also calls
+`_store(name, value, genv)` so an eval'd form resolves it
+(`Jvm/WasmSetqCompiler.mirrorTopLevelGlobal`); the compiled value stays in a `main`/`_start` local, so
+the mirror is write-through one-way.
 
-- **A symbol can ARRIVE**: `Ctx.runtimeDesignatorDispatch` is set wherever Pass 2
-  dispatches a designator that is not `#'name` / `'name` / a literal `lambda`
-  (`LispMacroExpander.isStaticFunctionDesignator`) -- `WasmDesignatorCall.prepare` for the
-  map family / `reduce` / `sort`, `WasmFunctionCallCompiler.compileFuncall`,
-  `WasmHashTableCompiler.compileMaphash`. Emission-time, because the sequence predicates
-  reach their call through a Pass 2 macro expansion no pre-scan sees: `(every f l)` becomes
-  a `do` loop over `(funcall #pred elem)`, which is why the funcall/apply source scan
-  missed `every`, `remove-if`, `count-if`, `find-if` and `position-if` alike.
-- **A name can ANSWER**: `Ctx.userSpelledLiterals` -- the half of `spelledLiterals` the
-  user's own text spells -- must hold a spelling of some defun name
-  (`DesignatorSpellings`), or the program must be able to build or read one
-  (`nameResolvable`).
-
-Both halves exist to keep the INJECTED runtime out of the answer. The wrapper catalog's
-bodies funcall a designator parameter and quote `'list`/`'cons`/`'string` for their own
-`coerce` calls, so a gate reading either half over the whole module is true for
-`(print (+ 1 2))`. `Ctx.injectedRuntimeBody` marks those bodies while they are emitted
-(and `Ctx.injectedRuntimeLambdas` carries the mark to the lambdas they build -- the
-`stable-sort` comparator, `complement`'s closure -- so Pass 2c re-enters them with the same
-answer); a designator arriving inside one can only have come from a `funcall`/`apply` the
-source scan already reads. A program whose designators the compiler can read is
-byte-identical to one built before any of this existed. Pinned by
-`WasmLispCompilerTest.onlyAnUnreadableDesignatorPullsInTheNameRegistry` and
-`WasmLispCompilerIntegrationTest.aComputedSymbolDesignatorResolvesForEveryOperatorThatCallsIt`
-(plus its `--component` twin).
-
-## A literal `boundp` never reaches this gate
-
-`boundp` is in the OR-chain above, but a `(boundp 'name)` over a LITERAL symbol is
-decided at compile time and is gone before the scan runs: the program is closed, so the
-answer is which top-level forms before it declare the name a global.
-`compiler/CompileTimeBoundp` folds it on both compile paths (and, in the CLI and the
-playground, before the tree-shaker, because the `(unless (boundp '+k+) (defconstant +k+
-v))` guard is also what keeps a library constant from being a top-level definer). Only a
-COMPUTED designator -- `(boundp (intern ...))` -- still opens the gate. Full mechanics,
-what is deliberately not decidable, and why `fboundp` is left out:
-`.kb/compile-time-boundp.md`.
-
-**Top-level global mirroring**: when `usesEval`, a top-level `setq`/`defvar`/`defparameter`/`defconstant` in compiled code (the `Ctx.topLevel` context) also calls `_store(name, value, genv)` to copy the binding into the eval global env, so an eval'd expression can resolve a global the compiled program defined (`Jvm/WasmSetqCompiler.mirrorTopLevelGlobal`; the compiled value still lives in a `main`/`_start` local, the mirror is write-through one-way).
-
-**Only a name with a global backing store is mirrored** -- `ctx.globals`/`ctx.globalIndices`, the dedicated store every `defvar` and every top-level `setq` place gets (`compiler/GlobalVarCollector`). A LEXICAL of a top-level form is not mirrored: CL's `eval` resolves against the null lexical environment, so no eval'd form can name a top-level `let`/`loop`/`do` variable -- and the macro expanders' temporaries (`__loop_acc0`, the `while` cursor, `__nrev_*`) are symbols in no package at all. The gate is `Jvm/WasmSetqCompiler.mirrorsTopLevelGlobal(name, ctx)`, and it is a NAME test, not a scope test, because `GlobalVarCollector` is deliberately scope-blind (a name that is only ever a `let` variable still gets a store it never uses): the plain-lexical arm of each `setq` emitter therefore does not call the mirror at all. `_store` is an `_envLookup` -- a linear walk of an alist with a `String.equals` per entry -- so mirroring a loop variable cost one walk per assignment per iteration: 7.1x on the JVM and 3.0x on wasm-GC for `(print (loop for i from 1 to 10^8 sum i))`. Pinned by `Jvm/WasmLispCompilerTest.aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv`.
-
-Supported forms and the limitations are identical across WASM/JVM and listed in the README "Compiled `eval` limitations".
+**Only a name with a global backing store is mirrored** -- `ctx.globals`/`ctx.globalIndices`, the store
+every `defvar` and top-level `setq` place gets (`compiler/GlobalVarCollector`). A top-level LEXICAL is
+not: CL's `eval` resolves against the null lexical environment, and expander temporaries
+(`__loop_acc0`, the `while` cursor, `__nrev_*`) are symbols in no package. `mirrorsTopLevelGlobal(name,
+ctx)` is a NAME test, not a scope test, because `GlobalVarCollector` is deliberately scope-blind; the
+plain-lexical arm of each `setq` emitter does not call the mirror at all. `_store` is an `_envLookup`
+(linear alist walk, `String.equals` per entry), so mirroring a loop variable costs one walk per
+assignment per iteration (7.1x JVM / 3.0x wasm-GC on `loop ... sum` to 10^8). Pin:
+`Jvm/WasmLispCompilerTest.aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv`.

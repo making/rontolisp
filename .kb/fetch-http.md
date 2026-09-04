@@ -1,532 +1,388 @@
 # Futures (`rontolisp:await` / `futurep`) and `rontolisp:fetch` (async HTTP)
 
-`rontolisp`-package functions (not CL standard). `fetch` starts the request and
-immediately returns a **future** (`.kb/async-await.md` has the full future/stream
-machinery); `await` resolves it, `futurep` is the type predicate. The promise-era
-`then`/`promisep` surface is DELETED (the todo-139 breaking redesign): composition is
-`async-defun`/`async-lambda` + `await`. Futures print as `#<FUTURE>`, streams as
+`rontolisp`-package functions (not CL standard). `fetch` starts the request and immediately
+returns a **future** (`.kb/async-await.md` has the future/stream machinery); `await` resolves
+it, `futurep` is the type predicate. The promise-era `then`/`promisep` surface is DELETED:
+composition is `async-defun`/`async-lambda` + `await`. Futures print `#<FUTURE>`, streams
 `#<STREAM>`, on every backend.
 
-**Future representation per backend**: interpreter = `LispFuture` (wraps a
-`CompletableFuture<LispVal>`; the resolver `LispEvaluator.awaitValue` joins and
-flattens); JVM = a bare `java.util.concurrent.CompletableFuture` (nothing else in the
-runtime value representation is one); WASM `--component` asyncMode = the first-class
-`TYPE_FUTURE` struct (state machines + scheduler, `.kb/async-await.md`); Preview 1 =
-the internal degenerate `TYPE_P1_FUTURE` struct (settled at creation;
+**Future representation**: interpreter = `LispFuture` (wraps `CompletableFuture<LispVal>`;
+`LispEvaluator.awaitValue` joins and flattens); JVM = a bare
+`java.util.concurrent.CompletableFuture`; WASM `--component` asyncMode = the first-class
+`TYPE_FUTURE` struct; Preview 1 = the degenerate `TYPE_P1_FUTURE` (settled at creation,
 `FUNC_P1_FUTURE_AWAIT` resolves it).
 
-`await`/`futurep` compile/run on every backend and WASM mode (Preview 1 included);
-**fetch itself needs a transport**: `WasmFetchCompiler` is a compile error on plain
-Preview 1 (no host wasi:http), and on `--no-wasi` WITHOUT `--host-fetch` (the message
-names the flag); the JVM emits the fetch/await runtime when fetch or await is used.
-**On a `--no-wasi` reactor, `--host-fetch` is the transport (todo-335, 2026-08-12;
-the body split out of the envelope by todo-347, 2026-08-13)**:
-`HostFetchLibrary` (eval pkg) splices a generated Lisp lowering — TWO
-`rontolisp:wasm-import`s (both riding the ordinary synthetic-defun machinery, appended
-after the program so user import ordinals are unchanged):
+`await`/`futurep` work on every backend and WASM mode. **fetch needs a transport**:
+`WasmFetchCompiler` is a compile error on plain Preview 1 (no host wasi:http) and on
+`--no-wasi` WITHOUT `--host-fetch` (the message names the flag); the JVM emits the
+fetch/await runtime when fetch or await is used.
+
+Interpreter (`eval/HttpSupport.requestAsync` via `HttpClient.sendAsync` — request-building
+failures fail the future; the per-request client is deliberately never closed) and JVM
+(`JvmFetchRuntimeBuilder`) use the JDK `java.net.http.HttpClient`.
+
+**Error timing** is JS-like: options validated at `fetch` time; request/transport failures
+surface at `await` on EVERY backend (on WASM the send result's error arm becomes a
+`rontolisp:wit-error` condition, catchable with `handler-case`; interpreter/JVM signal a plain
+error — a known type divergence). A fetch that cannot even start (malformed URL) returns `nil`
+instead of a future on WASM.
+
+## `--host-fetch` (the `--no-wasi` reactor transport)
+
+`HostFetchLibrary` (eval pkg) splices generated Lisp — TWO `rontolisp:wasm-import`s riding the
+ordinary synthetic-defun machinery, appended after the program so user import ordinals are
+unchanged:
 
 ```
 env.fetch(headPtr, headLen) -> (ptr, len)   ; request head JSON -> response HEAD json
 env.readResponseBody(ptr, cap) -> i32       ; :bytes, :async t; 0 = EOF, <0 = failed
 ```
 
-plus envelope defuns whose JSON keys are DERIVED
-from `FetchResponseShape`'s records (a `request` record — url/method/headers/body,
-`body` an `option<string>` so an absent `:body` crosses as an absent key — beside the
-existing `response` record; the error arm is the reserved
-`FetchResponseShape.HOST_ENVELOPE_ERROR_KEY` and SIGNALS at the fetch). `fetch` is a
-plain defun over an async-defun runner, so it answers the settled `TYPE_P1_FUTURE`
-(started == settled: the host call blocks the wasm stack — synchronously, or suspended
-through JSPI — so `(await (fetch ...))` reads identically and never suspends; a
-transport failure BEFORE the head signals at the CALL, the P1 degenerate divergence).
-The splice is gated on the program
-referencing `rontolisp:fetch` (a build that never fetches still imports NOTHING), the
-compiler guards the flag (`hostFetch` requires `noWasi`, rejects `component`; CLI
-rejects `.class`/`--no-gc`), and the BUILD prints the host obligation (a synchronous
-`env.fetch` is always valid; a `WebAssembly.Suspending` one requires
-`WebAssembly.promising` entry + serialised calls — a re-entered export refuses with a
-trap, the todo-337 guard in `.kb/wasm-import.md`), plus a
-`NoWasiLoadPathRefusals` line when the LOAD PATH reaches a fetch (a suspending host
-cannot serve `_initialize`). Envelope pinned by `HostFetchLibraryTest` (generated Lisp
-AND `examples/cloudflare-workers/dog-fetcher/src/index.js` against the records) and
-`FetchResponseShapeTest`; imports by `WasmImportCompilerTest`; the showcase — verified
-under `wrangler dev` against the real dog.ceo before the todo-347 split, and after it by
-driving the SHIPPED `src/index.js` (both imports behind `WebAssembly.Suspending`) under
-node 24 `--experimental-wasm-jspi` against a stub upstream that answers in 7-octet
-chunks — is
-`examples/cloudflare-workers/dog-fetcher`, itself a `:server :rontolisp` ONE-SOURCE
-program (interpreter/JVM socket, `wasmtime serve`, and the Worker — all four legs
-verified; `.kb/clack.md`), and `examples/net/dog-fetcher.lisp` compiles UNEDITED under
-`--no-wasi --host-fetch` (its `http-handler` lowers to the reactor transport).
+plus envelope defuns whose JSON keys are DERIVED from `FetchResponseShape`'s records (a
+`request` record — url/method/headers/body, `body` an `option<string>` so an absent `:body`
+crosses as an absent key — beside the `response` record; the error arm is the reserved
+`FetchResponseShape.HOST_ENVELOPE_ERROR_KEY` and SIGNALS at the fetch). `fetch` is a plain
+defun over an async-defun runner, so it answers the settled `TYPE_P1_FUTURE` (started ==
+settled: the host call blocks the wasm stack, so `(await (fetch ...))` never suspends; a
+transport failure BEFORE the head signals at the CALL — the P1 degenerate divergence).
 
-**The `:body` split, and what it changed (todo-347)** -- and, since todo-351, what
-NOT asking for it costs -- it is opt-in now, `--host-boundary=streaming` against a default
-of `envelope` (`compiler/HostBoundary`): without it the import, the
-counter, the pull thunk and the negative-count channel are all gone, `%host-fetch-body`
-collapses to its in-band arm over the head's own `"body"` key, and the module imports
-`env.fetch` alone. `:body` is still the same first-class stream -- the in-band arm was
-always the already-buffered case of the same abstract source -- so nothing a program
-writes changes; what it pays instead is the copy and the flattening the split was built to
-avoid, which is nothing worth naming for a document-shaped reply and is why the SPLIT is
-still the default. Read the rest of this block as what that default buys.
+Gates: splice requires the program to reference `rontolisp:fetch`; `hostFetch` requires
+`noWasi` and rejects `component`; the CLI rejects `.class`/`--no-gc`. The BUILD prints the host
+obligation (a synchronous `env.fetch` is always valid; a `WebAssembly.Suspending` one requires
+`WebAssembly.promising` entry + serialised calls — a re-entered export traps,
+`.kb/wasm-import.md`), plus a `NoWasiLoadPathRefusals` line when the LOAD PATH reaches a fetch
+(a suspending host cannot serve `_initialize`).
 
-The reply body used to ride the
-response envelope as one JSON string, so a reactor's `:body` was an EAGER STRING decided
-before any Lisp ran: the whole reply was copied into linear memory twice, a BINARY reply
-could not cross at all (a `:string` result is a non-validating UTF-8 decode -- `ff fe 41`
-came back as code point 0x1FE062 and two NULs), and a Worker could not forward a streamed
-upstream response. The body now crosses through its own import and `:body` is
-`rontolisp::%stream-new` over a pull thunk on it, so the contract below is finally true on
-all four backends rather than three. Mechanics, all in `HostFetchLibrary`:
+### The `:body` split
 
-- the thunk is the reactor's own transport calls (`%http-reactor-buffer` /
-  `%http-reactor-chunk` / `%http-reactor-body-stream`, `.kb/clack.md`), so ONE reused
-  receive buffer serves both directions of every reactor boundary (and, since todo-370,
-  no per-chunk decode at all: the stream answers octets). **Consequence to know before measuring a fetch-only build**: naming
-  them splices `http-reactor.lisp` (and with it `http-server.lisp`), which every real
-  `--host-fetch` program -- they are reactors -- already had. Lift the three helpers into
-  a library of their own if a fetch-only Worker ever needs those bytes back;
-- the thunk CALLS the import rather than taking `#'name` (the suspending-import report
-  follows calls), and its parameter is `token`, not `open` -- `NoWasiFilesystemStubs`
-  rewrites a variable of that name into a call to `cl:open`;
-- **the head's `"body"` key survives as the IN-BAND fallback**: a host that would rather
-  answer the whole reply at once still may, and that string is the already-buffered case
-  of the same abstract source. Absent -- the normal case -- puts the stream over the
-  import, and an absent-body reply (a HEAD, a 204) is that stream finding EOF at its
-  first pull;
-- **one live reply body, deliberately no handle -- in the SERIALISED shape.** The host
-  has ONE read cursor, moved by each `env.fetch`; a module-side counter
-  (`%host-fetch-open`) makes draining a SUPERSEDED body signal instead of answering the
-  next reply's octets. Under `--reentrant` the handle EXISTS (todo-369): the import
-  becomes `env.readResponseBody(id, ptr, cap)`, the reply head carries its own id in
-  the reserved `"body-id"` key (`FetchResponseShape.HOST_BODY_ID_KEY`), the generated
-  `defaultHost()` keeps one reader per reply (dropped when drained), and the counter,
-  the superseded error and `lisp.drop` are all absent from that shape -- each reply is
-  drained independently. The id is the REPLY's, not the request's, precisely because a
-  second fetch inside one call used to supersede the first; the serialised shape here
-  is unchanged in every byte. `.kb/wasm-import.md` (the todo-369 bullet) has the whole
-  design;
-- **a NEGATIVE count is the error channel** the split needs: without one a transport that
-  died mid-body would look like a short body. It signals at the DRAIN, which is the
-  semantic change this forced -- the future now settles at the HEADERS, so only a failure
-  before them still signals at the call (documented in `doc/{en,ja}/guides/http-fetch.md`).
+Opt-in `--host-boundary=streaming` against a default of `envelope` (`compiler/HostBoundary`).
+Without it the import, the counter, the pull thunk and the negative-count channel are gone,
+`%host-fetch-body` collapses to its in-band arm over the head's own `"body"` key, and the
+module imports `env.fetch` alone. `:body` is the same first-class stream either way.
 
-The host half of both imports is now GENERATED (`--emit-js-glue`, `.kb/wasm-import.md`):
-`examples/cloudflare-workers/dog-fetcher/src/worker.js` is emitted from these two
-declarations and checked in, and `src/index.js` is `worker(module)` -- the envelope above
-and the `ReadableStream` the reply body is pulled from are both in the generated file,
-which is why `HostFetchLibraryTest` still pins it against `FetchResponseShape`. **Without the split the host half is generated
-TOO** (todo-351): `env.fetch`'s two directions are both fixed by `FetchResponseShape`, so
-with no reader for a host to own, what it DOES is the same twenty lines in every program
-and the glue writes them (`defaultHost()`). That is the line the emitter draws, and it is
-the split itself: a body out of band is a reader the host owns and a cursor whose lifetime
-only it can see, and neither is derivable from a declaration.
+What the split buys: the reply body used to ride the envelope as one JSON string, so `:body`
+was an EAGER STRING — copied into linear memory twice, a BINARY reply could not cross at all
+(`ff fe 41` came back as code point 0x1FE062 and two NULs), and a Worker could not forward a
+streamed upstream response. Mechanics, all in `HostFetchLibrary`:
 
-Pinned by `WasmHostFetchBodyE2eTest` (node, a JS host sharing the module's memory: the
-portable drain over a body every chunk boundary of which falls inside a code point, one
-pull per chunk plus the EOF one, `ff fe 41` crossing exactly, the in-band fallback, a
-256 KiB reply never drained leaving `memory.buffer.byteLength` where it was over four
-fetches AND four drains of the same body ending where the first left it, the mid-body
-failure at the drain and the superseded-body guard). What ONE drain PEAKS at is not this
-boundary either: since todo-370 the chunks are octet vectors joined once and decoded once
-at `read-all` (there is no per-chunk decode any more; the string output stream that
-decode used to write into appends into a GC byte buffer, `[[read-load-streams]]`).
+- The thunk is the reactor's own transport calls (`%http-reactor-buffer` /
+  `%http-reactor-chunk` / `%http-reactor-body-stream`, `.kb/clack.md`), so ONE reused receive
+  buffer serves both directions of every reactor boundary and the stream answers octets.
+  **Consequence**: naming them splices `http-reactor.lisp` (and with it `http-server.lisp`).
+  Lift the three helpers into their own library if a fetch-only Worker needs those bytes back.
+- The thunk CALLS the import rather than taking `#'name` (the suspending-import report follows
+  calls), and its parameter is `token`, not `open` — `NoWasiFilesystemStubs` rewrites a
+  variable of that name into a call to `cl:open`.
+- **The head's `"body"` key survives as the IN-BAND fallback.** Absent (the normal case) puts
+  the stream over the import; an absent-body reply (a HEAD, a 204) is that stream finding EOF
+  at its first pull.
+- **One live reply body, no handle — in the SERIALISED shape.** The host has ONE read cursor,
+  moved by each `env.fetch`; a module-side counter (`%host-fetch-open`) makes draining a
+  SUPERSEDED body signal instead of answering the next reply's octets. Under `--reentrant` the
+  handle EXISTS: the import becomes `env.readResponseBody(id, ptr, cap)`, the reply head
+  carries its id in the reserved `"body-id"` key (`FetchResponseShape.HOST_BODY_ID_KEY`), the
+  generated `defaultHost()` keeps one reader per reply (dropped when drained), and the
+  counter, the superseded error and `lisp.drop` are absent from that shape. The id is the
+  REPLY's, not the request's. The serialised shape is byte-unchanged. `.kb/wasm-import.md`.
+- **A NEGATIVE count is the error channel** — without one a transport that died mid-body would
+  look like a short body. It signals at the DRAIN, so the future settles at the HEADERS and
+  only a failure before them signals at the call (`doc/{en,ja}/guides/http-fetch.md`).
 
-**The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
-backend** -- `:body` is an asynchronous stream drained with
-`(rontolisp:await (rontolisp:read-all ...))`, and it is a BYTE stream (the next
-block). Its shape is written once, in
-`compiler/FetchResponseShape` (the fetch-only remainder of the pre-Clack
-`HttpPlistShape`), so its keys and order are derived, not hand-written, in each
-backend's fetch runtime (`Environment`'s fetch result, `JvmAsyncRuntimeBuilder`,
-and the `%http-response-plist` helpers `HttpLibrary` splices for http.lisp's
-fetch half). The SERVER side no longer shares this shape: since the Clack
-cutover a handler receives the Clack environment and returns the Clack response
-(`.kb/http-server.md`), while fetch deliberately keeps this plist -- it is the
-client side, a different thing.
+The host half of both imports is GENERATED (`--emit-js-glue`, `.kb/wasm-import.md`):
+`examples/cloudflare-workers/dog-fetcher/src/worker.js` is emitted from these two declarations
+and checked in; `src/index.js` is `worker(module)`. Without the split the host half is
+generated too (`defaultHost()`), since `env.fetch`'s two directions are both fixed by
+`FetchResponseShape`. That is the line the emitter draws, and it IS the split: a body out of
+band is a reader the host owns and a cursor whose lifetime only it can see.
 
-**`:body` is a stream of OCTET chunks on every backend, and `read-all` is where the
-bytes become text (todo-370, 2026-08-15).** Every chunk a fetched reply's `:body`
-answers -- and every chunk a served request's default `:raw-body` answers, the same
-rule -- is an `(unsigned-byte 8)` vector holding the wire's bytes; nothing on the
-transport decodes. That is what makes the natural proxy shape,
-`(list status headers (getf res :body))`, byte-exact: `%http-drain` joins the octet
-chunks into one octet vector and every transport writes it as it is (`.kb/http-server.md`,
-"A binary response body is byte-exact"). Before, the stream was a CHARACTER stream on
-every backend (each transport decoded per chunk, with a chunk-boundary carry) and a
-relayed body was re-encoded by the sink, so a JPEG's `ff d8 ff` came out `c3 bf d8` -- a
-stray `ff` decoded to U+00FF and re-encoded; sequences that happened to be valid UTF-8
-round-tripped, so the corruption was silent and content-dependent (measured building
-`examples/cloudflare-workers/dog-relay`). The bivalent-stream alternative (octets kept
-until something asks for text, `stream-read` decoding on demand) was rejected: it needs a
-second read primitive on four stream runtimes and a carry inside each, where "the chunks
-are bytes; the drain decodes" needs one prelude defun. Per backend:
+Pinned by `HostFetchLibraryTest` (generated Lisp AND `dog-fetcher/src/index.js` against the
+records), `FetchResponseShapeTest`, `WasmImportCompilerTest`, and `WasmHostFetchBodyE2eTest`
+(node, a JS host sharing the module's memory: the portable drain over a body every chunk
+boundary of which falls inside a code point, one pull per chunk plus the EOF one, `ff fe 41`
+crossing exactly, the in-band fallback, a 256 KiB reply never drained leaving
+`memory.buffer.byteLength` where it was over four fetches AND four drains, the mid-body failure
+at the drain, the superseded-body guard). Showcase:
+`examples/cloudflare-workers/dog-fetcher`, itself a `:server :rontolisp` ONE-SOURCE program
+(all four legs verified, `.kb/clack.md`); `examples/net/dog-fetcher.lisp` compiles UNEDITED
+under `--no-wasi --host-fetch`.
 
-- interpreter: `HttpSupport.BodyPump` writes one `LispIntVector` per publisher batch (no
-  `CharsetDecoder`, no carry); the playground's `BrowserHttpResponses.toStart` settles the
-  broker's text as its UTF-8 octets; `invokeHttpHandler`'s default `:raw-body` is one
-  settled octet chunk, and `responseBody`'s stream arm drains octet chunks to bytes;
+## The response plist
+
+**`(:status <int> :headers <alist> :body <stream>)` on every backend.** `:body` is drained
+with `(rontolisp:await (rontolisp:read-all ...))`. The shape is written once in
+`compiler/FetchResponseShape`, so keys and order are derived in each backend's fetch runtime
+(`Environment`'s fetch result, `JvmAsyncRuntimeBuilder`, the `%http-response-plist` helpers
+`HttpLibrary` splices). The SERVER side no longer shares it (`.kb/http-server.md`).
+
+### `:body` is a stream of OCTET chunks on every backend
+
+Every chunk a fetched reply's `:body` answers — and every chunk a served request's default
+`:raw-body` answers — is an `(unsigned-byte 8)` vector holding the wire's bytes; nothing on the
+transport decodes. That makes `(list status headers (getf res :body))` byte-exact:
+`%http-drain` joins the octet chunks and every transport writes the result as is. Before, the
+stream was a CHARACTER stream and a relayed body was re-encoded by the sink, so a JPEG's
+`ff d8 ff` came out `c3 bf d8` — silent, content-dependent corruption. The bivalent-stream
+alternative was rejected: it needs a second read primitive on four stream runtimes and a carry
+inside each.
+
+- interpreter: `HttpSupport.BodyPump` writes one `LispIntVector` per publisher batch;
+  `BrowserHttpResponses.toStart` settles the broker's text as UTF-8 octets;
+  `invokeHttpHandler`'s default `:raw-body` is one settled octet chunk; `responseBody`'s
+  stream arm drains octet chunks to bytes.
 - JVM: `_fetch` takes the reply with `BodyHandlers.ofByteArray()` and `_await`'s response
-  branch queues ONE `long[]{8, ...}` chunk built by `_iv_of_bytes` (`JvmAsyncRuntimeBuilder`);
-  `_drain_body` drains octet chunks to one `long[]` (string chunks to their quoted
-  concatenation, a mixed stream refused); `handle`'s `:raw-body` is
-  `RontoHttpClack.bodyOctets` in both modes -- which also retired the buffered mode
-  passing `bodyString()` to `%http-body-stream`, a decode-then-encode of a binary POST; and
-  `usesIntArray` is forced on by `usesFetch || usesHttpHandler`, since the chunks are
-  packed vectors no scanned `make-array` built;
+  branch queues ONE `long[]{8, ...}` chunk built by `_iv_of_bytes`; `_drain_body` drains octet
+  chunks to one `long[]` (string chunks to their quoted concatenation, a mixed stream
+  refused); `handle`'s `:raw-body` is `RontoHttpClack.bodyOctets` in both modes; `usesIntArray`
+  is forced on by `usesFetch || usesHttpHandler`.
 - `--component`: the `stream<u8>` READ lift answers a packed vector (`_bytes_from_mem`,
-  `.kb/wit.md`), so http.lisp's `%http-body-value` needs no change and `%http-write-body`
-  stages the joined vector raw;
+  `.kb/wit.md`), so `%http-body-value` needs no change and `%http-write-body` stages the joined
+  vector raw.
 - `--no-wasi` reactor: `%http-reactor-body-stream` is `%stream-new` over
-  `%http-reactor-octet-source` (an octet chunk untouched, a string chunk -- the in-band
-  `"body"` key, a host handing over text -- UTF-8 encoded once);
-  `%http-reactor-text-source` stays for `%http-reactor-body-text`, the hand-written
-  reactors' text drain.
+  `%http-reactor-octet-source` (an octet chunk untouched, a string chunk UTF-8 encoded once);
+  `%http-reactor-text-source` stays for `%http-reactor-body-text`.
 
-`read-all` (prelude, `.kb/async-await.md`) joins the octet chunks (`%octets-join`, one
-blit) and decodes them once with `rontolisp::%octets-to-string` -- LENIENT UTF-8, the rule
-`http-server.lisp`'s request decoder applies (a byte that leads no sequence is its own
-character), one Lisp definition compiled on the compile paths and mirrored natively by
-`Environment` on the interpreter (the `char-name` arrangement; `LispPreludeLibraryTest`
-pins the two against each other). Decoding once at the drain also retires the per-chunk
-carry: a chunk boundary inside a code point costs nothing. `stream-read` on such a body
-answers the octet vector -- the documented contract now (`rontolisp-stream-read.md`).
-Since todo-371 the per-byte loop is only the FALLBACK: the definition first offers the
-vector to the native `rontolisp::%octets-to-string-strict`, so valid UTF-8 -- every real
-body -- is a platform decode on the interpreter and the JVM and one `array.copy` on wasm,
-and only malformed bytes walk (a 500 KB body: 102 ms -> 2 ms on wasm, 19 ms -> 3 ms on the
-JVM). The raw copy that todo-370 rejected is exactly what it does, made sound by a STRICT
-validator -- `_str_char_at`'s lead ranges are NOT that validator, and the difference is
-the whole reason this needed writing (`.kb/async-await.md`). Gates: ci-spec
+`read-all` (prelude) joins the chunks (`%octets-join`, one blit) and decodes once with
+`rontolisp::%octets-to-string` — LENIENT UTF-8, the rule `http-server.lisp`'s request decoder
+applies, one Lisp definition compiled on the compile paths and mirrored natively by
+`Environment` (`LispPreludeLibraryTest` pins the two). `stream-read` on such a body answers the
+octet vector (`rontolisp-stream-read.md`). The per-byte loop is only the FALLBACK: the
+definition first offers the vector to the native `rontolisp::%octets-to-string-strict`, so
+valid UTF-8 is a platform decode on interpreter/JVM and one `array.copy` on wasm (500 KB body:
+102 -> 2 ms wasm, 19 -> 3 ms JVM). The raw copy is sound only because the validator is STRICT —
+`_str_char_at`'s lead ranges are NOT that validator. Gates: ci-spec
 `read-all-decodes-an-octet-chunk-stream` (all four backends),
 `HttpHandlerTest.directiveRelaysAFetchedBodyByteExactlyAndReadAllStillDecodesIt` + its
 `HttpHandlerJvmTest` twin,
 `WasmLispCompilerIntegrationTest.httpHandlerRelaysAFetchedBodyByteExactlyUnderWasmtimeServe`,
-and the `/relay` leg of `WasmHostGlueE2eTest.theEmittedWorkerHalfServesTheStreamingBoundaryToo`
-(the reactor, through the generated `worker()`).
+`/relay` leg of `WasmHostGlueE2eTest.theEmittedWorkerHalfServesTheStreamingBoundaryToo`.
 
-**The ONE request header we add on the caller's behalf is `User-Agent:
-rontolisp/<version> (<git-commit>)`** (todo-346) -- the abbreviated commit is an RFC 9110
-comment after the product token, so a request names the BUILD that made it; it is dropped
-entirely when the build had no git repository to read it from (never `(unknown)`), and
-anything that is not a plain hash is dropped rather than escaped, because a parenthesis
-would end the comment and this string is baked into generated Lisp source, where a quote
-would end the literal. It is added only when the caller's `:headers` alist names no
-user-agent field -- the test is case-insensitive, HTTP field names being so, and any
-value the caller gave is theirs, the empty string included. It is declared once beside
-the response shape, in `compiler/FetchResponseShape` (`USER_AGENT_HEADER`,
-`defaultUserAgent()` over the `userAgent(version, commit)` seam that lets the
-composition be pinned off a build's own commit, `isUserAgentHeader`), because three
-transports that each default
-differently are three different requests: the JDK writes `Java-http-client/<jdk>` when
-no field is set and the component writes NOTHING, which is the bug this closes (fly.io's
-edge answers an agent-less request `402 Payment Required`, so the same program that
-worked on the interpreter came back empty under `--component`). Hence the JDK paths set
-it EXPLICITLY, overriding a default rather than filling a hole: interpreter in
-`HttpSupport.requestAsync`, JVM as a scan pass over the header alist plus a conditional
-`Builder.header` in the emitted `_fetch`, component through the generated
-`%http-user-agent-header` / `%http-default-user-agent` defuns (a module has no `Version`
-to read) that http.lisp's `%fetch-user-agent-set-p` and `%fetch-send` call -- both
-dropped by the reachability walk in a serve-only component. **Sending NO user-agent is
-deliberately not offered**: with no field set the JDK client writes its own, so a
-suppression option would mean something different per backend.
+### The default User-Agent
 
-Two backends are exceptions, and the reason is WHO OWNS THE FIELD, not that the default
-is unwanted -- re-evaluate either one the day that changes: the **browser playground**
-(`Target_HttpSupport` substitutes `requestAsync` whole, so the default is structurally
-absent; `User-Agent` is a forbidden header name a page may not set) and **`--host-fetch`
-reactors** (the request record crosses the caller's headers only; the host's own
-`fetch` supplies the agent, and in a browser-shaped host it may not be overridden).
-Pinned by `LispEvaluatorTest#fetchSendsADefaultUserAgent` and
-`JvmLispCompilerTest#compileAndRunFetchSendsADefaultUserAgent` -- a local server echoing
-what it RECEIVED, both the default and a caller's lowercase `("user-agent" . ...)`
-winning -- the `/agent` leg of the opt-in `componentFetchOverHttp`, and
-`FetchResponseShapeTest` / `HttpLibraryTest` for the generated literals and the
-serve-only drop.
+**The ONE request header added on the caller's behalf is
+`User-Agent: rontolisp/<version> (<git-commit>)`** (RFC 9110 comment after the product token).
+Dropped entirely when the build had no git repository (never `(unknown)`); anything not a plain
+hash is dropped rather than escaped (a parenthesis would end the comment, and the string is
+baked into generated Lisp source where a quote would end the literal). Added only when the
+caller's `:headers` alist names no user-agent field — case-insensitive, and any caller value
+wins, the empty string included.
 
-**Error timing** is JS-like: options are validated at `fetch` time; request/transport
-failures surface at `await` -- EVERY backend signals there (on WASM the send result's
-error arm becomes a `rontolisp:wit-error` condition, catchable with `handler-case`; the
-interpreter/JVM signal a plain error there, a known type divergence). A fetch that
-cannot even start (malformed URL) returns `nil` instead of a future on WASM.
+Declared once in `compiler/FetchResponseShape` (`USER_AGENT_HEADER`, `defaultUserAgent()` over
+the `userAgent(version, commit)` seam, `isUserAgentHeader`), because three transports default
+differently: the JDK writes `Java-http-client/<jdk>` when no field is set and the component
+writes NOTHING (fly.io's edge answers an agent-less request `402 Payment Required`). So the JDK
+paths set it EXPLICITLY: interpreter in `HttpSupport.requestAsync`, JVM as a scan pass over the
+header alist plus a conditional `Builder.header` in the emitted `_fetch`, component through the
+generated `%http-user-agent-header` / `%http-default-user-agent` defuns (a module has no
+`Version` to read) that `%fetch-user-agent-set-p` and `%fetch-send` call — both dropped by the
+reachability walk in a serve-only component. **Sending NO user-agent is deliberately not
+offered** (with no field set the JDK writes its own, so suppression would differ per backend).
 
-Interpreter (`eval/HttpSupport.requestAsync`, via `HttpClient.sendAsync` -- request
-building failures fail the future; the per-request client is deliberately never closed)
-and JVM (`JvmFetchRuntimeBuilder`) use the JDK `java.net.http.HttpClient`.
+Two exceptions, because of WHO OWNS THE FIELD — re-evaluate if that changes: the **browser
+playground** (`Target_HttpSupport` substitutes `requestAsync` whole; `User-Agent` is a
+forbidden header a page may not set) and **`--host-fetch` reactors** (the request record
+crosses the caller's headers only; the host's own `fetch` supplies the agent). Pinned by
+`LispEvaluatorTest#fetchSendsADefaultUserAgent`,
+`JvmLispCompilerTest#compileAndRunFetchSendsADefaultUserAgent`, the `/agent` leg of the opt-in
+`componentFetchOverHttp`, and `FetchResponseShapeTest` / `HttpLibraryTest`.
 
-**Uniformly WASI 0.3, one `http.lisp` for fetch AND serve (the todo-002 cutover,
-committed `bef8c1b`).** fetch and serve are ONE Lisp-source library
-(`src/main/resources/am/ik/rontolisp/eval/http.lisp` + its embedded `http.wit`, the
-vendored `wasi:http@0.3.0` types/handler/client plus a clocks/types shim and four
-transparent type aliases: `body-stream`, `trailers-future`, `transmit-future`,
-`handle-result`), spliced by `eval/HttpLibrary` with a REACHABILITY-based member filter
-from the active roots (`rontolisp:fetch` / `%serve-handle`) -- a fetch-only program binds
-no serve member (no task-return) and vice versa. Everything rides the general
-`wit-import` canon-lower machinery (`.kb/wit.md`): there is no http blob variant for the
-non-serve path and no WAT http adapter anywhere. `WasmFetchCompiler` is a validator that
-falls through: under `--component` it runs the compile-time arity / literal-`:method`
-check and control reaches the http.lisp defun; in Preview 1 it raises the component-only
-compile error.
+## Uniformly WASI 0.3: one `http.lisp` for fetch AND serve
 
-- **fetch (outgoing)**: `%fetch-send` builds the request resource, writes the body via
-  the `body-stream` alias built-ins, and calls `%http-client:send` -- an `async func`
-  member, so it async-lowers (`canon lower ... async`): the start wrapper returns a
-  `(packed . retptr)` token, which `rontolisp::%subtask-future` turns into a
-  first-class PENDING `TYPE_FUTURE` (registry + task waitable-set; the generated
-  LIFT wrapper reads the result out at retptr when the scheduler sees the subtask's
-  RETURNED event). The public `send` binding is an async-defun that awaits and
-  unwraps the `result<response, error-code>` envelope, so awaiting SIGNALS the error
-  arm (`rontolisp:wit-error`); `rontolisp:fetch` composes it through the async-defun
+fetch and serve are ONE Lisp-source library
+(`src/main/resources/am/ik/rontolisp/eval/http.lisp` + its embedded `http.wit`: vendored
+`wasi:http@0.3.0` types/handler/client, a clocks/types shim, and four transparent type aliases
+`body-stream`, `trailers-future`, `transmit-future`, `handle-result`), spliced by
+`eval/HttpLibrary` with a REACHABILITY-based member filter from the active roots
+(`rontolisp:fetch` / `%serve-handle`). Everything rides the general `wit-import` canon-lower
+machinery (`.kb/wit.md`): no http blob variant for the non-serve path, no WAT http adapter.
+`WasmFetchCompiler` is a validator that falls through: under `--component` it runs the
+compile-time arity / literal-`:method` check and control reaches the http.lisp defun; in
+Preview 1 it raises the component-only compile error.
+
+- **fetch (outgoing)**: `%fetch-send` builds the request resource, writes the body via the
+  `body-stream` alias built-ins, and calls `%http-client:send` — an `async func` member, so it
+  async-lowers (`canon lower ... async`): the start wrapper returns a `(packed . retptr)`
+  token, which `rontolisp::%subtask-future` turns into a first-class PENDING `TYPE_FUTURE`
+  (registry + task waitable-set; the generated LIFT wrapper reads the result at retptr when the
+  scheduler sees the subtask's RETURNED event). The public `send` binding is an async-defun
+  that awaits and unwraps the `result<response, error-code>` envelope, so awaiting SIGNALS the
+  error arm (`rontolisp:wit-error`); `rontolisp:fetch` composes it through the async-defun
   `%fetch-run` and keeps the nil-on-start-failure contract. `:body` comes back as a
-  `TYPE_WASI_STREAM` (see `.kb/async-await.md`). Run flags:
-  `wasmtime run -S http=y`
-  (everything is base component-model-async, default-on; `-S http=y` links the
-  host's `wasi:http`).
-  Non-fetch components do not import `wasi:http`.
-- **serve (incoming)**: the handler implements `handler.handle: async func(request) ->
-  result<response, error-code>` as a CALLBACK async lift (stub callback; the task's
-  blocking is the parked waitable-set.wait inside the wrappers); the response is delivered
-  MID-TASK via `canon task.return` (the `<alias>-task-return` member kind) before the
-  body is streamed -- the task's core return would otherwise complete the task
-  before the host could read the contents stream (the built-ins are RENDEZVOUS,
-  unbuffered). Serve and serve+fetch are ONE component shape over ONE import block
-  (`import-block-http-server.bin`, regenerated from the 0.3 `uni-http-server` world);
-  `WasmServeComponentBuilder.build` lowers http.lisp's own wasi:http surface FROM the
-  block (`lowerServeIoFromBlock` emits every appendUserImports member kind against the
-  block's instances) and an ADDITIONAL user `wit-import` (e.g. wasi:keyvalue) rides
-  `appendUserImports` alongside. Run flags: `wasmtime serve` -- no gated feature flags
-  (the `service` world's client import is host-provided by default -- no `-S http=y`).
+  `TYPE_WASI_STREAM`. Run: `wasmtime run -S http=y`. Non-fetch components do not import
+  `wasi:http`.
+- **serve (incoming)**: the handler implements
+  `handler.handle: async func(request) -> result<response, error-code>` as a CALLBACK async
+  lift (stub callback; blocking is the parked waitable-set.wait inside the wrappers); the
+  response is delivered MID-TASK via `canon task.return` before the body streams — the task's
+  core return would otherwise complete the task before the host could read the contents stream
+  (the built-ins are RENDEZVOUS, unbuffered). Serve and serve+fetch are ONE component shape
+  over ONE import block (`import-block-http-server.bin`, from the 0.3 `uni-http-server` world);
+  `WasmServeComponentBuilder.build` lowers http.lisp's own wasi:http surface FROM the block
+  (`lowerServeIoFromBlock`), and an ADDITIONAL user `wit-import` (e.g. wasi:keyvalue) rides
+  `appendUserImports` alongside. Run: `wasmtime serve` (no gated feature flags).
 - **Bodies (shared, symmetric)**: request and response are the same 0.3 shape
-  (`contents: option<stream<u8>>` + a trailers future), so `%http-body-value` serves
-  both directions: it runs `consume-body` (which MOVES its resource) eagerly and
-  wraps the (stream, trailers, transmit-res) protocol into a first-class stream
-  value via `rontolisp::%stream-new` -- the read thunk issues one built-in read
-  per call (an in-flight chunk = a PENDING future the scheduler settles, so the task
-  keeps running), and the close thunk (run ONCE, at EOF or an early stream-close) drops
-  the readable end + the unread trailers and resolves the transmit future ok (an
-  unfinished body traps). `%serve-handle` stream-closes the request body after
-  dispatch so the protocol completes even when the handler never read it; a
-  STREAM response body drains inside `%http-serve-request` via
-  `rontolisp::%http-drain`, which lives in http-server.lisp since the Clack
-  cutover (both libraries stay prelude-free). http.lisp accepts the per-call
-  bump-heap growth of an async start (the start wrapper must not pop its staging --
-  args + retptr outlive the call until the lift).
+  (`contents: option<stream<u8>>` + a trailers future), so `%http-body-value` serves both
+  directions: it runs `consume-body` (which MOVES its resource) eagerly and wraps the (stream,
+  trailers, transmit-res) protocol into a first-class stream via `rontolisp::%stream-new` — the
+  read thunk issues one built-in read per call (an in-flight chunk = a PENDING future the
+  scheduler settles), and the close thunk (run ONCE, at EOF or an early stream-close) drops the
+  readable end + unread trailers and resolves the transmit future ok (an unfinished body
+  traps). `%serve-handle` stream-closes the request body after dispatch; a STREAM response body
+  drains inside `%http-serve-request` via `rontolisp::%http-drain`, which lives in
+  http-server.lisp (both libraries stay prelude-free). http.lisp accepts the per-call bump-heap
+  growth of an async start (the start wrapper must not pop its staging — args + retptr outlive
+  the call until the lift).
 
-**Browser playground**: truly async. The Web Image runtime runs inside a Web Worker
-(`web/ronto-worker.js`); the web-profile substitution
-(`src/web/java/.../eval/Target_HttpSupport.java`) calls `BrowserHttp.start`, which posts
-the request plus a growable `SharedArrayBuffer` to the main thread. The main-thread
-broker (`brokerFetch` in `web/playground.html`) runs the real browser `fetch()`
-concurrently (overlap works; subject to CORS) and writes
-`[i32 state, i32 len, utf8...]` into the buffer. The pending future is a `BrowserFuture`
-whose `join()` runs a settler that blocks via `Atomics.wait`
-(`BrowserHttp.awaitResponse`) and completes the root; `newIncompleteFuture()` propagates
-the settler through `thenApply`, which is how Environment's derived future stays
-joinable. Web Image has no JSPI and no threads (verified against GraalVM 25), so
+## Browser playground
+
+Truly async. The Web Image runtime runs inside a Web Worker (`web/ronto-worker.js`); the
+web-profile substitution (`src/web/java/.../eval/Target_HttpSupport.java`) calls
+`BrowserHttp.start`, which posts the request plus a growable `SharedArrayBuffer` to the main
+thread. The broker (`brokerFetch` in `web/playground.html`) runs the real browser `fetch()`
+concurrently (overlap works; subject to CORS) and writes `[i32 state, i32 len, utf8...]` into
+the buffer. The pending future is a `BrowserFuture` whose `join()` runs a settler blocking via
+`Atomics.wait` (`BrowserHttp.awaitResponse`); `newIncompleteFuture()` propagates the settler
+through `thenApply`. Web Image has no JSPI and no threads (verified against GraalVM 25), so
 blocking-in-JS is the only way to await there. `SharedArrayBuffer` needs cross-origin
-isolation: GitHub Pages gets COOP/COEP from `web/coi-serviceworker.min.js` (MIT,
-vendored; one automatic reload on first visit). Without isolation -- or on the main
-thread, e.g. `compile-run.html` -- `start` returns `"sync"` and the substitution falls
-back to the synchronous XHR (`BrowserHttp.request`, settled future, no overlap).
+isolation: GitHub Pages gets COOP/COEP from `web/coi-serviceworker.min.js` (MIT, vendored; one
+automatic reload on first visit). Without isolation — or on the main thread, e.g.
+`compile-run.html` — `start` returns `"sync"` and the substitution falls back to the
+synchronous XHR (`BrowserHttp.request`, settled future, no overlap).
 
-Tests: interpreter/JVM use a local `HttpServer` (awaited-twice, two-in-flight
-out-of-order cases); Preview-1 await passthrough runs under wasmtime in
-`WasmLispCompilerIntegrationTest.promiseOpsWorkInPreview1Mode`; deterministic
-component error-path + `-S http` gate tests plus an opt-in (`RONTOLISP_HTTP_E2E=1`)
-success test exercise overlap and out-of-order awaits; ci-spec has network-free
-`async-defun-await-futurep` / `await-passes-non-futures-through` cases covering all
-four backends.
+Tests: interpreter/JVM use a local `HttpServer` (awaited-twice, two-in-flight out-of-order
+cases); Preview-1 await passthrough in
+`WasmLispCompilerIntegrationTest.promiseOpsWorkInPreview1Mode`; deterministic component
+error-path + `-S http` gate tests plus an opt-in (`RONTOLISP_HTTP_E2E=1`) success test; ci-spec
+`async-defun-await-futurep` / `await-passes-non-futures-through` (all four backends).
 
 ## `rontolisp:http-handler` (incoming HTTP / serving)
 
-The incoming counterpart of `fetch`. Since the Clack cutover its value model
-is CLACK'S, not fetch's: the handler (a quoted defun name, like `wasm-export`)
-receives the Clack ENVIRONMENT plist (`:request-method` keyword, decoded
-`:path-info`, `:query-string`, the `:headers` equal table, `:raw-body`, ...)
-and returns the Clack RESPONSE list `(status headers [body])` -- so a Clack
-application is a rontolisp handler with zero per-request conversion. The whole
-contract -- the `compiler/ClackEnv` shape declaration, the shared
-`http-server.lisp` model, the per-backend construction division and its
-measurements, the two `:raw-body` modes -- lives in `.kb/http-server.md`; the
-directive also takes `:raw-body :stream|:buffered` after the optional port.
-Query-string DECODING policy lives in the URL library (`.kb/url.md`);
-`:query-string` stays raw.
+Its value model is CLACK'S, not fetch's: the handler (a quoted defun name, like `wasm-export`)
+receives the Clack ENVIRONMENT plist (`:request-method` keyword, decoded `:path-info`,
+`:query-string`, the `:headers` equal table, `:raw-body`, …) and returns the Clack RESPONSE
+list `(status headers [body])`. Full contract — `compiler/ClackEnv`, the shared
+`http-server.lisp` model, the per-backend construction division, the two `:raw-body` modes — is
+`.kb/http-server.md`; the directive takes `:raw-body :stream|:buffered` after the optional
+port. Query-string DECODING policy: `.kb/url.md`; `:query-string` stays raw.
 
-ONE VIRTUAL THREAD PER REQUEST is a correctness constraint on everything a handler
-touches, not just an implementation note: process-wide mutable state reached from a
-handler must be thread-safe. The rule, the bugs it has already produced (the stream
-table, the interpreter's lazy library loads) and the shape new code must follow are in
-`.kb/concurrent-served-requests.md`; locks for program-level state are in
-`.kb/mutexes.md`.
+**ONE VIRTUAL THREAD PER REQUEST is a correctness constraint on everything a handler touches**:
+process-wide mutable state reached from a handler must be thread-safe
+(`.kb/concurrent-served-requests.md`; locks in `.kb/mutexes.md`).
 
-- **Interpreter (implemented)** -- `RontoHttpServer` (**`runtime` pkg** -- it
-  TRAVELS with a compiled program, `.kb/jvm-export.md`; `public` for the web
-  substitution): a blocking JDK `com.sun.net.httpserver.HttpServer`,
-  ONE VIRTUAL THREAD PER REQUEST (`Executors.newVirtualThreadPerTaskExecutor`).
-  `serve(port, handler)` blocks forever (Ctrl-C to stop); `start(port, handler)`
-  is the non-blocking test seam (port 0 = ephemeral) and `stopAllForTesting()`
-  shuts servers down. Registered in `LispEvaluator` (not `Environment`) because
-  serving a request applies the handler via the evaluator's `apply`;
-  `invokeHttpHandler` builds the Clack environment and normalizes the Clack
-  response, in Java (`.kb/http-server.md`).
-  Since todo-228 the class also carries the STOPPABLE per-server seam behind
-  the internal `rontolisp::%http-server-start/-join/-stop/-port` functions
-  (`startServer`/`joinServer`/`stopServer`/`serverPort`: handler as a FUNCTION
-  VALUE, bind address, opaque integer handle -- the socket/mutex convention --
-  idempotent stop, interrupt-tolerant join) -- the clack-handler-rontolisp
-  acceptor, `.kb/clack.md`. The JVM lowering (`JvmHttpServerSeamCompiler`)
-  reuses the directive's `_httpHandlerFn` slot and injected `handle` runtime,
-  so `JvmLispCompiler`'s `usesHttpHandler` gate also fires on
-  `%http-server-start` -- which is also why there is ONE handler slot and so
-  one Clack server per process.
-  Tests: `HttpHandlerTest` (Java seam round trip + directive round trip via a
-  background thread + validation + the stoppable-seam group).
-  **Every entry point reachable from `LispEvaluator` must have a matching
-  `@Substitute` in `Target_RontoHttpServer` (`src/web/java`).** GraalVM Web
-  Image's points-to analysis reaches `java.lang.VirtualThread.runContinuation`
-  -- which calls a `Thread.isInterrupted()` substitution unavailable on the
-  `svm-wasm` platform -- from ANY un-substituted method that still touches the
-  real `HttpServer`/`Executors.newVirtualThreadPerTaskExecutor` (build failure,
-  not a runtime one: `[1/8] Performing analysis...` reports "Method ...
-  Target_java_lang_Thread.isInterrupted() is not available in this platform"
-  while parsing `VirtualThread.runContinuation`). `serve` alone was substituted
-  when the directive shipped; todo-228 added `startServer`/`joinServer`/
-  `stopServer`/`serverPort` without extending the substitution, which passed
-  every JVM-side test (the class compiles and runs fine there) but broke the
-  `Deploy playground to GitHub Pages` build, because the pages workflow is the
-  only CI job that actually runs `-Pweb` `native-image --tool:svm-wasm`. Add
-  the stub to `Target_RontoHttpServer` in the SAME commit as any new
-  `RontoHttpServer` entry point, and verify with
-  `./mvnw -Pweb -DskipTests package` (needs a `wasm-as` on `PATH`, e.g. from
-  the Binaryen release the pages workflow installs) -- `./mvnw test` does not
-  catch this.
-- **JVM (implemented)** -- reuses the interpreter's `RontoHttpServer` server:
-  the generated class ITSELF implements `RontoHttpServer.Handler` (the same
-  mechanism as the tls-connect trust-all `X509TrustManager`; the public no-arg
-  constructor is shared between the two and emitted when either is used, and
-  `handle` joins the trust methods as an extra `--optimize` shaker root because
-  the server invokes it through the interface). The directive site
-  (`JvmHttpHandlerCompiler`) resolves the quoted handler name against the Pass-1
-  function registry like `#'name`, stores the funcref in the `_httpHandlerFn`
-  static field, and emits `RontoHttpServer.serve(port, new Prog())` (port
-  default 8080; a non-literal port expression compiles as `(int) Long`; the
-  optional trailing `:raw-body` keyword pair is validated and dropped -- the
-  mode is a compile-time constant `ClackEnv.usesBufferedBody` already read off
-  the program). The injected `public handle(Request)` method
-  (`JvmHttpHandlerRuntimeBuilder`) is thin glue since the Clack cutover: the
-  environment is built by `runtime/RontoHttpClack.buildEnv` (real Java in
-  the runtime value rep), the handler runs via `_invoke_1` + `_await` (arity 1
-  force-registered like the fetch runtime), the response goes through a DIRECT
-  call to the compiled `%http-normalize-response` and `_drain_body`, and
-  `RontoHttpClack.toResponse` marshals the triple back
-  (`.kb/http-server.md` has the full division and its measurements).
-  The compiled class IS standalone: the two classes it calls live in
-  `am.ik.rontolisp.runtime`, import nothing but `java.base` + `jdk.httpserver`,
-  and travel with the output at their canonical names -- so `java -cp . App`
-  serves with no rontolisp jar anywhere (`.kb/jvm-export.md`, "What travels").
-  Tests: `HttpHandlerJvmTest` (eval pkg for the shutdown seam; compile + curl
-  round trips incl. `--optimize` and the buffered `:raw-body`),
-  `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`, and
-  `JvmHttpHandlerTravellingRuntimeTest` (the travelling set == the emitted
-  class's real closure, and the class served through an isolated class loader).
-- **WASM component (implemented, `--component`; serve and serve+fetch are ONE
-  shape)** -- the HTTP glue is **`http.lisp`** over wit-imported `wasi:http@0.3.0`
-  (see the fetch section above for the splice and the async machinery). There is
-  no hand-written serve adapter and no wide/narrow block split: `HttpLibrary.process`
-  (spliced in the CLI right after `WitImportInliner`, before `UserMacroExpander`,
-  gated to `--component` serve -- and off for a `wit-export` world) replaces the
-  `rontolisp:http-handler` directive with the serve half of http.lisp, a
-  `(defun %serve-dispatch (r) (HANDLER r))` bridge, a mode-matched
-  `%serve-request-body` (the `:raw-body` mode synthesized at compile time,
-  `.kb/http-server.md`), and a
-  `(rontolisp:wasm-export '%serve-handle :as "handle" :params '(:int) :returns :void)`.
-  Since todo-228 the directive is detected NESTED inside a defun body too (a
-  `(rontolisp:http-handler '<literal-name> ...)` call still yields a static
-  handler name; quoted data excluded, first name wins, the call site lowers to
-  nil) -- the clack-handler-rontolisp shim's `run` is the driving shape, and
-  `HttpHandlerInliner.usesHttpHandler` (the CLI's serve-mode switch) walks the
-  same way. The bridge + export are appended AFTER the program so a
-  package-qualified nested handler name resolves against its own spliced
-  defpackage. `.kb/clack.md` has the whole flow.
-  The core `handle` export is `[i32 request] -> []` and is lifted
-  `canon lift (memory, utf8, async)` against
-  `async func(request: own<request>) -> result<own<response>, error-code>` -- the
-  function type must be built over the block's NAMED aliases (request/response/
-  error-code): the component-model export rule requires every non-structural type an
-  exported function references to be NAMED (anonymous structural types there fail
-  validation with "instance not valid to be used as export"). The response is
-  delivered mid-task via `canon task.return`, then the body streams (rendezvous
-  order: task.return -> stream.write -> drop-writable -> future.write trailers).
-  **Headers are marshalled both directions** (`fields-copy-all` in,
-  `fields.append` out). http.lisp uses `handler-case`, so a serve component is
-  EH-mode. Run with `wasmtime serve`.
-  **Top-level init runs on the FIRST handle call, once per instance** -- and an
-  instance serves MANY requests, not one: `wasmtime serve` (and Spin) retire a
-  WASIp3 instance after `--max-instance-reuse-count` requests, 128 by default,
-  so init is amortized ~128:1 rather than paid per request
-  (`.kb/tcp-sockets.md`'s three-host comparison has the measurement). What the
-  instance lifetime DOES make per-request-visible is anything `_start` itself
-  costs: that is why serve mode pre-grows a 1 MiB GC heap instead of 16 MiB
-  (`.kb/wasm-gc-heap-pregrow.md`, worth +30% rps at the default reuse count).
-  A serve component never lifts `run`, so the `handle` wrapper
-  (`WasmExportCompiler.emitBody`) calls `_start` under a serve-only
-  `(mut i32)` init flag (`serveInitGlobalIndex`, the last module global;
-  non-serve output is byte-identical) before the request task begins --
-  without it NO top-level form ran and every defvar/defparameter global read
-  back null inside a handler (the "cast failure" trap on first arithmetic;
-  the 0.2-era serve adapter used to run `run` once as init, and the callback
-  cutover lost that). Init runs inside the handle call's task context, so a
-  top-level suspension drives through the blocking event loop as under
-  `wasmtime run`. Pinned by
-  `httpHandlerReadsATopLevelGlobalUnderWasmtimeServe`; the serve+tcp
-  composition (the shape that surfaced the bug) by
-  `httpHandlerConnectsTcpUnderWasmtimeServe` -- tcp under `wasmtime serve`
-  additionally needs `-S cli=y -S tcp=y -S inherit-network=y`
-  (`.kb/tcp-sockets.md`).
-  An ADDITIONAL `rontolisp:wit-import` (e.g. `wasi:keyvalue`, so a handler's state
-  lives in a real store) rides `appendUserImports` alongside the fixed surface.
-  `adapter-http-server-p1.wat` is the preview1 bridge (instantiated BEFORE the
-  core), rewritten over the 0.3 service interfaces + stream/future built-ins: it
-  implements `random_get` over `wasi:random`, `clock_time_get` over `wasi:clocks`,
-  and `fd_write` (fd 1/2) over the cli stdout/stderr path, so `random` / time
-  built-ins / `print` work inside a served handler; `environ_*` report a zero
-  environment (`uiop:getenv` -> nil), `fd_read` is immediate EOF, `path_open` returns
-  errno 76 (file streams stay unavailable -- the serve world has no filesystem).
-  The canonical-ABI allocator (`mem-http-client.wat`, bump pointer in the
-  `CABI_HP_CELL_ADDR` = 0x10000 linear cell, base 0x10008) is reset at the top of
-  the serve `handle` wrapper for hosts that reuse one instance across requests
-  (wasmtime serve re-instantiates per request, so it never sees the growth).
-  serve + `rontolisp:tcp-*` COMPILES now (sockets.lisp is one more user WIT
-  import beside the fixed wasi:http surface, `.kb/tcp-sockets.md`); on Preview-1
-  WASM the directive is a CALL-time error stub since todo-228 (same "requires
-  --component" message; was a compile error -- the clack shim's `run` carries
-  the directive as dead code there, the todo-195 socket policy), and so are
-  `stream-read`/`stream-close`/`streamp` when no stream type exists (Preview 1
-  or a non-async component; an uncaught error is a silent trap on Preview 1,
-  so pin messages through handler-case). Hosts: wasmtime 46+; wasmCloud
-  hosts it (released wash 2.5.2, `wash dev` with `dev.wasm_proposals:
-  [gc, exception-handling, component-model-async]` -- verified 2026-07-16 on
-  examples/wasmcloud/http-handler); Spin hosts it from the canary build
-  (https://github.com/spinframework/spin/releases/tag/canary -- 4.1.0-pre0,
-  wasmtime 47 -- gc + exceptions default-on, `wasi:http@0.3.0`
-  final) with a plain `spin.toml`, verified 2026-07-30 on
-  examples/net/http-handler (plus magic-8-ball for wasi:random and dog-fetcher
-  for outbound fetch, the latter needing `allowed_outbound_hosts`); jco cannot
-  run the 0.3 async ABI. Spin is the host that actually EXERCISES the allocator
-  reset above -- it serves 128 requests per instance by default (measured, and
-  the count is `--max-instance-reuse-count`; `.kb/tcp-sockets.md` has the
-  three-host instance-lifetime comparison), so the "hosts that reuse one
-  instance across requests" clause is no longer hypothetical.
-  Why released Spin 4.0.2 cannot host it, and the re-evaluation trigger: it
-  embeds wasmtime 44, whose p3 WIT is the `0.3.0-rc-2026-03-15` SNAPSHOT of
-  every WASI package (`wasi:http`, `wasi:cli`, `wasi:clocks`, `wasi:random`),
-  not the released `0.3.0` we emit -- so the imports fail to link
-  ("instance export `fields` has the wrong type") even with GC forced on. The
-  gate is the wasmtime version a host embeds, NOT the GC proposal any more:
-  a host on wasmtime 46+ needs no flags at all. (4.0.2's
-  `--experimental-wasm-feature gc` exists in the source but is behind the
-  `experimental-wasm-features` cargo feature, which spin's release workflow
-  passes only for canary builds, so the released binary has no such option.)
-  Tests: the serve cases in `WasmLispCompilerIntegrationTest` (echo / big
-  response / random-clock-print / keyvalue / fetch-inside-serve proxy, all
-  through the `compileServeComponent` CLI-path helper).
+### Interpreter
+
+`RontoHttpServer` (**`runtime` pkg** — it TRAVELS with a compiled program, `.kb/jvm-export.md`;
+`public` for the web substitution): a blocking JDK `com.sun.net.httpserver.HttpServer`, one
+virtual thread per request (`Executors.newVirtualThreadPerTaskExecutor`). `serve(port, handler)`
+blocks forever; `start(port, handler)` is the non-blocking test seam (port 0 = ephemeral) and
+`stopAllForTesting()` shuts servers down. Registered in `LispEvaluator` (not `Environment`)
+because serving applies the handler via the evaluator's `apply`; `invokeHttpHandler` builds the
+Clack environment and normalizes the response, in Java.
+
+It also carries the STOPPABLE per-server seam behind
+`rontolisp::%http-server-start/-join/-stop/-port`
+(`startServer`/`joinServer`/`stopServer`/`serverPort`: handler as a FUNCTION VALUE, bind
+address, opaque integer handle, idempotent stop, interrupt-tolerant join) — the
+clack-handler-rontolisp acceptor, `.kb/clack.md`. The JVM lowering
+(`JvmHttpServerSeamCompiler`) reuses the directive's `_httpHandlerFn` slot and injected
+`handle` runtime, so `usesHttpHandler` also fires on `%http-server-start` — which is why there
+is ONE handler slot and one Clack server per process.
+
+**Trap: every entry point reachable from `LispEvaluator` must have a matching `@Substitute` in
+`Target_RontoHttpServer` (`src/web/java`).** GraalVM Web Image's points-to analysis reaches
+`java.lang.VirtualThread.runContinuation` — which calls a `Thread.isInterrupted()` substitution
+unavailable on `svm-wasm` — from ANY un-substituted method still touching the real
+`HttpServer`/`Executors.newVirtualThreadPerTaskExecutor`. BUILD failure, not runtime, and only
+the `Deploy playground to GitHub Pages` job runs `-Pweb native-image --tool:svm-wasm`. Add the
+stub in the SAME commit as any new entry point and verify with `./mvnw -Pweb -DskipTests
+package` (needs `wasm-as` on `PATH`).
+
+Tests: `HttpHandlerTest`.
+
+### JVM
+
+Reuses `RontoHttpServer`: the generated class ITSELF implements `RontoHttpServer.Handler` (same
+mechanism as the tls-connect trust-all `X509TrustManager`; the public no-arg constructor is
+shared and emitted when either is used, and `handle` joins the trust methods as an extra
+`--optimize` shaker root). `JvmHttpHandlerCompiler` resolves the quoted handler name against
+the Pass-1 function registry like `#'name`, stores the funcref in `_httpHandlerFn`, and emits
+`RontoHttpServer.serve(port, new Prog())` (port default 8080; a non-literal port compiles as
+`(int) Long`; the trailing `:raw-body` pair is validated and dropped — the mode is the
+compile-time constant `ClackEnv.usesBufferedBody`). The injected `public handle(Request)`
+(`JvmHttpHandlerRuntimeBuilder`) is thin glue: environment from
+`runtime/RontoHttpClack.buildEnv`, handler via `_invoke_1` + `_await` (arity 1 force-registered
+like the fetch runtime), response through a DIRECT call to the compiled
+`%http-normalize-response` and `_drain_body`, and `RontoHttpClack.toResponse` marshalling back.
+The compiled class IS standalone: the two classes it calls live in `am.ik.rontolisp.runtime`,
+import nothing but `java.base` + `jdk.httpserver`, and travel at their canonical names, so
+`java -cp . App` serves with no rontolisp jar (`.kb/jvm-export.md`).
+
+Tests: `HttpHandlerJvmTest`, `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`,
+`JvmHttpHandlerTravellingRuntimeTest`.
+
+### WASM component (`--component`; serve and serve+fetch are ONE shape)
+
+`HttpLibrary.process` (spliced in the CLI right after `WitImportInliner`, before
+`UserMacroExpander`, gated to `--component` serve and off for a `wit-export` world) replaces
+the directive with the serve half of http.lisp, a `(defun %serve-dispatch (r) (HANDLER r))`
+bridge, a mode-matched `%serve-request-body`, and
+`(rontolisp:wasm-export '%serve-handle :as "handle" :params '(:int) :returns :void)`. The
+directive is detected NESTED inside a defun body too (quoted data excluded, first name wins,
+the call site lowers to nil) — the clack shim's `run` is the driving shape, and
+`HttpHandlerInliner.usesHttpHandler` walks the same way. Bridge + export are appended AFTER the
+program so a package-qualified nested handler name resolves against its own spliced defpackage.
+
+The core `handle` export is `[i32 request] -> []`, lifted `canon lift (memory, utf8, async)`
+against `async func(request: own<request>) -> result<own<response>, error-code>`. **The
+function type must be built over the block's NAMED aliases** (request/response/error-code): the
+component-model export rule requires every non-structural type an exported function references
+to be NAMED (anonymous structural types fail validation with "instance not valid to be used as
+export"). Response delivered mid-task via `canon task.return`, then the body streams
+(rendezvous order: task.return -> stream.write -> drop-writable -> future.write trailers).
+**Headers are marshalled both directions** (`fields-copy-all` in, `fields.append` out).
+http.lisp uses `handler-case`, so a serve component is EH-mode.
+
+**Top-level init runs on the FIRST handle call, once per instance** — and an instance serves
+MANY requests: `wasmtime serve` (and Spin) retire a WASIp3 instance after
+`--max-instance-reuse-count` requests, 128 by default. What the instance lifetime makes
+per-request-visible is what `_start` costs: hence serve mode pre-grows a 1 MiB GC heap instead
+of 16 MiB (`.kb/wasm-gc-heap-pregrow.md`, +30% rps at the default reuse count). A serve
+component never lifts `run`, so the `handle` wrapper (`WasmExportCompiler.emitBody`) calls
+`_start` under a serve-only `(mut i32)` init flag (`serveInitGlobalIndex`, the last module
+global; non-serve output byte-identical) before the request task begins — without it NO
+top-level form ran and every defvar/defparameter global read back null inside a handler (a
+"cast failure" trap on first arithmetic). Init runs inside the handle call's task context.
+Pinned by `httpHandlerReadsATopLevelGlobalUnderWasmtimeServe`; the serve+tcp composition by
+`httpHandlerConnectsTcpUnderWasmtimeServe` — tcp under `wasmtime serve` additionally needs
+`-S cli=y -S tcp=y -S inherit-network=y` (`.kb/tcp-sockets.md`).
+
+`adapter-http-server-p1.wat` is the preview1 bridge (instantiated BEFORE the core), over the
+0.3 service interfaces + stream/future built-ins: `random_get` over `wasi:random`,
+`clock_time_get` over `wasi:clocks`, `fd_write` (fd 1/2) over the cli stdout/stderr path, so
+`random` / time built-ins / `print` work inside a handler; `environ_*` report a zero environment
+(`uiop:getenv` -> nil), `fd_read` is immediate EOF, `path_open` returns errno 76 (the serve
+world has no filesystem). The canonical-ABI allocator (`mem-http-client.wat`, bump pointer in
+the `CABI_HP_CELL_ADDR` = 0x10000 linear cell, base 0x10008) is reset at the top of the serve
+`handle` wrapper for hosts that reuse one instance across requests.
+
+serve + `rontolisp:tcp-*` COMPILES (sockets.lisp is one more user WIT import beside the fixed
+wasi:http surface, `.kb/tcp-sockets.md`). On Preview-1 WASM the directive is a CALL-time error
+stub (same "requires --component" message — the clack shim's `run` carries the directive as
+dead code there), and so are `stream-read`/`stream-close`/`streamp` when no stream type exists;
+an uncaught error is a silent trap on Preview 1, so pin messages through handler-case.
+
+Hosts: wasmtime 46+; wasmCloud (wash 2.5.2, `wash dev` with
+`dev.wasm_proposals: [gc, exception-handling, component-model-async]`, verified on
+examples/wasmcloud/http-handler); Spin canary (4.1.0-pre0, wasmtime 47 — gc + exceptions
+default-on, `wasi:http@0.3.0` final) with a plain `spin.toml`, verified on
+examples/net/http-handler (plus magic-8-ball for wasi:random and dog-fetcher for outbound
+fetch, the latter needing `allowed_outbound_hosts`); jco cannot run the 0.3 async ABI. Spin
+EXERCISES the allocator reset (128 requests per instance by default). **Why released Spin 4.0.2
+cannot host it, and the re-evaluation trigger**: it embeds wasmtime 44, whose p3 WIT is the
+`0.3.0-rc-2026-03-15` SNAPSHOT of every WASI package, not the released `0.3.0` we emit — the
+imports fail to link ("instance export `fields` has the wrong type") even with GC forced on.
+The gate is the wasmtime version a host embeds, NOT the GC proposal: a host on wasmtime 46+
+needs no flags.
+
+Tests: the serve cases in `WasmLispCompilerIntegrationTest` (echo / big response /
+random-clock-print / keyvalue / fetch-inside-serve proxy, through the `compileServeComponent`
+CLI-path helper).

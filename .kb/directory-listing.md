@@ -1,10 +1,6 @@
 # Directory listing: `%list-directory` and the family above it
 
-**The invariant**: there is exactly ONE directory-listing call per backend,
-`%list-directory`, and every user-facing spelling is Lisp source over it
-(`LispPreludeLibrary`). Nothing about pattern handling, path prefixing, entry
-kind or ordering is decided per backend, so the four cannot drift. Adding a
-spelling means adding a prelude entry, never touching a backend.
+**Invariant: exactly ONE directory-listing call per backend, `%list-directory`; every user-facing spelling is Lisp source over it (`LispPreludeLibrary`).** Adding a spelling means adding a prelude entry, never touching a backend.
 
 ```
 %list-directory  (per backend: interpreter / JVM / WASM P1 / WASM component)
@@ -21,212 +17,43 @@ spelling means adding a prelude entry, never touching a backend.
   uiop:directory-exists-p  "is it a readable directory", + its namestring
 ```
 
-`pathname-directory` and `constantly` landed with the family (both ANSI CL, both
-prelude Lisp) because the walk's callers need them; `pathname-directory` is pure
-namestring work and reads nothing. Everything user-facing here is an ANSI name
-except the four `uiop:` ones, which are ASDF's.
+`pathname-directory` and `constantly` landed with the family. All names are ANSI except the four `uiop:` ones.
 
-## The primitive's contract
-
-`(%list-directory "dir/")` answers
-
-- `nil` when the path is not a readable directory (missing, a plain file, an
-  unreadable one, or a host with no filesystem), and
-- `(t . names)` otherwise, where each name is the BARE entry name with a
-  trailing `/` when it is itself a directory.
-
-**The leading `t` is load-bearing**: an empty directory and a missing one would
-otherwise both be `nil`, and `uiop:directory-exists-p` has to tell them apart. A
-bare list cannot carry that distinction, so the cons is the cheapest thing that
-can.
-
-**It never signals.** Same rule as `probe-file`, for the same reason: a WASM trap
-is not catchable, so a library that walks an OPTIONAL tree (local-time's
-timezone repository) would abort the whole program instead of falling back.
-
-**The host's order is kept** and `directory` sorts with `string<`. Sorting in the
-shared Lisp is what makes the same program print the same listing on every
-backend; sorting per backend would only mean four chances to disagree.
-
-**`.` and `..` never appear.** `Files.list` omits them and wasi:filesystem's
-`read-directory` omits them by contract, but a preview1 `fd_readdir` YIELDS them
--- so the WASM P1 runtime drops them explicitly. Keeping them would be a
-one-backend divergence AND would make `collect-sub*directories` walk its own
-parent forever.
-
-## Per backend
+## Primitive contract
+`(%list-directory "dir/")` -> `nil` when the path is not a readable directory (missing, a plain file, unreadable, no filesystem), else `(t . names)`, each name BARE with a trailing `/` when itself a directory.
+- The leading `t` is load-bearing: `uiop:directory-exists-p` must tell empty from missing.
+- It never signals (as `probe-file`): a WASM trap is not catchable, so walking an OPTIONAL tree would abort the program.
+- Host order is kept; `directory` sorts with `string<` in shared Lisp, so all backends print the same listing.
+- `.` and `..` never appear — preview1 `fd_readdir` YIELDS them, so the WASM P1 runtime drops them explicitly; otherwise `collect-sub*directories` walks its own parent forever.
+- An unreadable directory reads as absent (`Files.list` needs read permission where `Files.isDirectory` does not), matching the WASM backends.
 
 | backend | how |
 | --- | --- |
-| interpreter | `SourceLoader.listDirectory` (default `null`, `Files.list` in the filesystem loader). The default is why the browser playground answers rather than fails |
-| JVM | `_listDirectory` (`JvmIoRuntimeBuilder`, `File.list()` + per-entry `isDirectory`), wired by `JvmListDirectoryCompiler`. **Gated**: emitted only for a program that calls the primitive, so every artifact compiled without one keeps its bytes |
+| interpreter | `SourceLoader.listDirectory` (default `null`, `Files.list` in the filesystem loader) — the default is why the browser playground answers rather than fails |
+| JVM | `_listDirectory` (`JvmIoRuntimeBuilder`), wired by `JvmListDirectoryCompiler`; gated to programs that call the primitive |
 | WASM Preview 1 | `_list_directory` (`WasmIoRuntimeBuilder`) over `path_open` + the `fd_readdir` import |
-| WASM `--component` | the same core runtime; `adapter.wat`'s `$fd_readdir` implements the preview1 shape over `wasi:filesystem`'s `read-directory` |
+| WASM `--component` | same core runtime; `adapter.wat`'s `$fd_readdir` over wasi:filesystem `read-directory` |
 
-### `fd_readdir` is a NINTH preview1 import
-
-(The count is 12: todo-432 added `fd_prestat_get` / `fd_prestat_dir_name` for
-absolute-path resolution and todo-589 added `fd_filestat_get` for `file-length` --
-`.kb/read-load-streams.md`. What follows is the recipe, and it is the same one for any
-thirteenth.)
-
-`IMPORT_FUNC_COUNT` went 8 -> 9 and `FUNC_START` with it, so **every emitted WASM
-function index shifted** -- that is inherent to extending the import surface, not
-a regression. The three consequences to keep in step:
-
-- `--no-wasi` defines a ninth trap stub (same type index as the import).
-- `adapter.wat` exports `fd_readdir` (component mode).
-- `adapter-http-server-p1.wat` exports it too, as errno 76 -- the serve world has
-  no filesystem, and `%list-directory` reads a nonzero errno as `nil`.
-
-The type is appended AFTER the last fixed type (`TYPE_FD_READDIR`, with
-`IARR_TYPE_LAST` re-based onto it) so the conditional `--simd` / async / instance
-blocks follow it and no existing type index moves.
-
-### The component adapter's traps for the unwary
-
-**`read-directory` is a `stream<directory-entry>`, not a byte stream.** It is a
-structurally distinct stream type, so it needs its OWN `stream.read` /
-`stream.drop-readable` built-ins, and the read carries the `realloc` option the
-byte-stream read does not (each element owns a `string` name). The lowered
-element is 24 bytes: the `descriptor-type` variant at 0, the name pointer at 16,
-its length at 20.
-
-**The cookie is an ENTRY INDEX, not a resume token.** WASI 0.3 hands back a
-stream positioned at the start of the directory every time, so the adapter skips
-`cookie` entries and stamps each emitted dirent's `d_next` with its 1-based
-index.
-
-**A short round does NOT mean the directory is exhausted.** A preview1 host fills
-the caller's buffer and truncates the last entry, so `used < buflen` reads as
-"that was the end" there. The adapter cannot truncate -- it stops at the last
-record that fits WHOLE -- so that rule silently truncated the listing on the
-component backend alone (1000 files came back as 221). Only an EMPTY round ends
-the walk; a round that decoded no complete entry bails out so a pathological host
-cannot spin the loop forever.
-
-**The listing buffer must sit BELOW `HEAP_PTR`.** `_list_directory` advances
-`HEAP_PTR` over its 8 KiB buffer + 512-byte name scratch for the duration of the
-walk and pops back at the end. Under `--component` this is not tidiness: every
-entry name the canonical ABI lifts is allocated through `cabi_realloc`, which
-bumps that very cell (`.kb/wasi-component.md`), so an un-advanced buffer would be
-overwritten by the names being read into it.
-
-**A directory is opened READ, not write.** `adapter.wat`'s `$path_open` derived
-its descriptor-flags from `(i32.eqz oflags)`, which made every non-zero `oflags`
--- including the `directory` bit -- ask for write access. Harmless until
-something opened a directory; now it tests the create/truncate bits instead.
+## Traps
+- **Adding a preview1 import** (`fd_readdir` was the ninth; the count is 12 with `fd_prestat_get`/`fd_prestat_dir_name` and `fd_filestat_get` for `file-length`, `.kb/read-load-streams.md`): `IMPORT_FUNC_COUNT` and `FUNC_START` rise, so every emitted function index shifts; `--no-wasi` needs a matching trap stub; `adapter.wat` must export the name and `adapter-http-server-p1.wat` export it as errno 76 (no filesystem in the serve world, and `%list-directory` reads nonzero errno as `nil`); append the type AFTER the last fixed type (`TYPE_FD_READDIR`, `IARR_TYPE_LAST` re-based onto it) so no existing type index moves.
+- `read-directory` is a `stream<directory-entry>`, structurally distinct from a byte stream: its own `stream.read` / `stream.drop-readable` built-ins, and the read carries the `realloc` option. Lowered element is 24 bytes: `descriptor-type` at 0, name pointer at 16, length at 20.
+- The cookie is an ENTRY INDEX, not a resume token: WASI 0.3 restarts the stream at the directory start, so the adapter skips `cookie` entries and stamps `d_next` with the 1-based index.
+- A short round does NOT mean exhausted. The adapter stops at the last WHOLE record, so preview1's `used < buflen` rule silently truncated component listings (1000 files -> 221). Only an EMPTY round ends the walk; a round decoding no complete entry bails.
+- The listing buffer must sit BELOW `HEAP_PTR` (`_list_directory` advances it over its 8 KiB buffer + 512-byte name scratch and pops back), because every lifted name is allocated through `cabi_realloc`, which bumps that cell (`.kb/wasi-component.md`).
+- `adapter.wat`'s `$path_open` must test the create/truncate bits, not `(i32.eqz oflags)`, or any non-zero `oflags` (the `directory` bit included) asks for write access.
 
 ## `directory` IS ANSI's `directory`
+- `"d/*"` is a wild NAME with NO type: matches `sub` and `README`, not `a.txt`; `"d/*.*"` matches everything (`%pathname-typed-p`), and `"d/a*"` matches nothing when the only `a` entry is `a.txt`.
+- A non-wild pathspec designates ITSELF: `"d"` and `"d/"` both answer `("d/")`.
+- DIRECTORY components ARE wild: the pathspec splits at its last `/`, a wildcard prefix goes through `%wild-dirs`, and `%directory-in` runs in each so wild and non-wild share IDENTICAL name matching. A `**` component contributes the base itself BEFORE descending, so `:wild-inferiors` matches zero levels; any other wild component descends one level via `%wild-match` (no type rule — a directory has no type).
+- `uiop:directory-files` takes UIOP's optional PATTERN as a wildcard NAMESTRING, not a pathname object: `(uiop:directory-files "db/" "*.up.sql")`; omitted it is `"*.*"` (`*wild-file-for-directory*`), and a pattern with a DIRECTORY component is an error as in real UIOP.
+- Limit, from the pathname VALUE carrying a FLAT namestring (`.kb/pathnames.md`): `translate-pathname` substitutes captures POSITIONALLY, so an asymmetric wildcard pair diverges from SBCL.
 
-`.todo/221` listed globbing as a non-goal and the first cut took it literally --
-`(directory "src/")` listed the directory, which is not what CL means. That was
-reverted: a non-goal is the todo author's scope, not a licence to diverge from
-the standard, and matching is what the operator IS. The wild-component matcher is
-~15 lines of prelude Lisp, and the eleven-case expectation table in
-`LispEvaluatorTest#directoryMatchesPathnamesTheWayAnsiDoes` was checked
-**against SBCL on the same tree** -- all eleven agree, including the two that
-only fall out of the type rule:
+## `make-pathname` / `pathname-name` / `pathname-type`
+`make-pathname` is prelude Lisp (no Java `Environment` entry), so all four backends run ONE definition; `cli/CompileTimePathnameFolder` stays as the compile-time literal-shape half.
+- `:defaults` defaults COMPONENT-WISE; it is not a merge. A supplied component REPLACES the defaults' one — `(make-pathname :directory '(:relative "m") :defaults "d/a.sql")` is `"m/b.sql"` — and an explicit `nil` means "no component". Trap: running name+type through `merge-pathnames` silently drops the defaults' TYPE when only `:name` is supplied.
+- The LAST dot separates the type; a dot at position 0 does not. `"d/a.b.c"` = name `"a.b"` type `"c"`; `"d/.a"` = name `".a"`, no type. One rendering, `%pathname-split`, is read by `pathname-name`, `pathname-type` AND `make-pathname`'s defaulting; `PathnameOps.components` is its Java twin.
+- `pathname` is a DISTINCT type carrying its namestring: `.kb/pathnames.md`.
 
-- `"d/*"` is a wild NAME with NO type, so it matches `sub` and `README` but not
-  `a.txt`; `"d/*.*"` is the one that matches everything (`%pathname-typed-p`).
-- `"d/a*"` therefore matches nothing when the only `a` entry is `a.txt`.
-- A non-wild pathspec designates ITSELF: `"d"` and `"d/"` both answer `("d/")`,
-  a file answers itself, a missing name answers nil.
-
-**DIRECTORY components ARE wild** since todo-441. The pathspec splits at its
-last `/` into a directory prefix and a name component; when the prefix holds a
-wildcard, `%wild-dirs` expands it to every existing directory namestring it
-matches and `%directory-in` -- the per-directory half factored out of
-`directory`, so the wild and non-wild paths run the IDENTICAL name matching --
-runs in each. A `**` component contributes the base itself BEFORE descending,
-which is what makes `:wild-inferiors` match zero levels: `"d/**/*.lisp"` answers
-the `.lisp` files directly in `d/` as well as those below it. Any other wild
-component descends exactly one level, matched by the same `%wild-match` the name
-uses (no `%pathname-typed-p` rule -- a directory has no type). All seven shapes
-were diffed against SBCL on the same tree.
-
-The walk terminates because `%directory-subdirs` only ever answers what the host
-reports below the base; a symlink cycle would spin it, exactly as it would spin
-`uiop:collect-sub*directories`.
-
-One limit remains, a consequence of the pathname VALUE carrying a FLAT
-namestring (`.kb/pathnames.md`) rather than of this operator:
-`translate-pathname` substitutes its captures POSITIONALLY, so an asymmetric
-wildcard pair diverges from SBCL (`.kb/pathnames.md`, `.todo/447`).
-
-**`uiop:directory-files` takes UIOP's optional PATTERN** (todo-249) -- as the
-NAMESTRING of a wildcard rather than a wildcard pathname object, appended to the
-directory and matched by exactly the rules above:
-`(uiop:directory-files "db/" "*.up.sql")`. Omitting it is `"*.*"`, UIOP's own
-`*wild-file-for-directory*` default. A pattern carrying a DIRECTORY component is
-an error, as it is in real UIOP -- there is no directory-wildcard machinery here
-to give it a meaning. The caller that asked for it is mito's migration reader,
-which lists `*.up.sql` out of a `migrations/` directory.
-
-**An unreadable directory reads as absent.** `Files.list` needs read permission
-where `Files.isDirectory` does not, so a directory you may stat but not read
-answers `nil`. Accepted: it is the same answer the WASM backends give for it, and
-the alternative is a second primitive whose only job is the difference.
-
-## `make-pathname` / `pathname-name` / `pathname-type`: the same family, at RUN time
-
-The pathname DECOMPOSITION siblings landed with todo-249, and closing
-`.todo/222` was the price of admission: `make-pathname` used to exist only as
-`cli/CompileTimePathnameFolder`'s literal-shape fold plus an interpreter Java
-function, so a call with a COMPUTED `:defaults` or `:name` compiled to a
-call-time error on all three compiled backends. It is now prelude Lisp as well,
-and the Java `Environment` entry is gone -- the interpreter and the three
-compiled backends run the ONE definition, and the folder (which is what makes an
-ASDF-located data directory a literal in the emitted artifact) stays as the
-compile-time half. `LispPreludeLibraryTest#thePreludeMakePathnameAgreesWithPathnameOps`
-pins the two renderings against each other, the `merge-pathnames` precedent.
-
-Two rules are load-bearing and both are SBCL-checked:
-
-- **`:defaults` defaults COMPONENT-WISE; it is not a merge.** A supplied
-  component REPLACES the defaults' one -- `(make-pathname :directory '(:relative
-  "m") :defaults "d/a.sql")` is `"m/b.sql"`, not `"d/m/b.sql"` -- and an
-  explicitly supplied `nil` means "no component", not "take the default". The
-  first cut composed name+type into a filename and then ran the whole thing
-  through `merge-pathnames`, which silently dropped the defaults' TYPE whenever
-  only `:name` was supplied; mito's migration down-file path
-  (`(make-pathname :name "...down" :defaults up-file)`) is the caller that
-  surfaced it.
-- **The LAST dot separates the type, and a dot at position 0 does not.**
-  `"d/a.b.c"` is name `"a.b"` type `"c"`; `"d/.a"` is name `".a"` with no type.
-  One rendering, `%pathname-split`, is read by `pathname-name`, `pathname-type`
-  AND `make-pathname`'s defaulting, so the three cannot disagree;
-  `PathnameOps.components` is its Java twin.
-
-`pathname` also stopped being an EMPTY type in the same pass -- and todo-304
-then made it a DISTINCT type: a pathname is an instance carrying its
-namestring, `pathnamep`/`(typep x 'pathname)` test exactly that value, the
-family here answers pathnames and accepts both spellings, and the whole "is a
-namestring a pathname" question is gone. Model, gate coupling and the prelude
-coerce/wrap pattern: `.kb/pathnames.md`.
-
-## Coverage
-
-- `LispPreludeLibraryTest#thePreludeMakePathnameAgreesWithPathnameOps`,
-  `#thePreludePathnameSplitAgreesWithPathnameOps`
-- `LispEvaluatorTest#directoryMatchesPathnamesTheWayAnsiDoes` (the SBCL-checked
-  table), `#uiopDirectoryWalkersRunOverTheSamePrimitive`,
-  `#directoryGoesThroughTheInstalledSourceLoader`,
-  `#wildPathnameComponentsBuildMatchTranslateAndWalk` (the wild-directory walk,
-  seven shapes diffed against SBCL on the same tree)
-- `JvmLispCompilerTest#directoryMatchesPathnamesAndDrivesTheUiopWalkers`,
-  `#wildPathnameComponentsBuildMatchTranslateAndWalk`
-- `WasmLispCompilerIntegrationTest#directoryListsEntriesOverFdReaddir`,
-  `#directoryListingResumesPastOneReaddirRound` (400 files = several rounds),
-  `#componentDirectoryListing`,
-  `#componentDirectoryListingWithoutAPreopenAnswersNil`,
-  `#wildDirectoryComponentsDriveTheRecursiveWalk` + its component twin (the tree
-  is built with `mkdir` in the CONTAINER -- neither WASM backend can create a
-  directory, `.todo/257`)
-- the `directory-listing-and-uiop-walkers` and `wild-pathnames` ci-spec cases
-  (all four backends; the latter's walk half is limited to the zero-level branch
-  for the same mkdir reason)
-- the driver that asked for it: `(ql:quickload "local-time")` +
-  `reread-timezone-repository` + `find-timezone-by-location-name`, verified by
-  hand on all four backends (`.kb/asdf.md`)
+## Tests
+`LispPreludeLibraryTest#thePreludeMakePathnameAgreesWithPathnameOps`, `#thePreludePathnameSplitAgreesWithPathnameOps`; `LispEvaluatorTest#directoryMatchesPathnamesTheWayAnsiDoes` (an eleven-case SBCL-checked table), `#uiopDirectoryWalkersRunOverTheSamePrimitive`, `#directoryGoesThroughTheInstalledSourceLoader`, `#wildPathnameComponentsBuildMatchTranslateAndWalk` (seven shapes diffed against SBCL); `JvmLispCompilerTest#directoryMatchesPathnamesAndDrivesTheUiopWalkers`, `#wildPathnameComponentsBuildMatchTranslateAndWalk`; `WasmLispCompilerIntegrationTest#directoryListsEntriesOverFdReaddir`, `#directoryListingResumesPastOneReaddirRound`, `#componentDirectoryListing`, `#componentDirectoryListingWithoutAPreopenAnswersNil`, `#wildDirectoryComponentsDriveTheRecursiveWalk` + its component twin; ci-spec `directory-listing-and-uiop-walkers`, `wild-pathnames`. Trees are built with `mkdir` in the CONTAINER — neither WASM backend can create a directory, which is also why `wild-pathnames`' walk half is limited to the zero-level branch.

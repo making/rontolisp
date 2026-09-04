@@ -1,7 +1,6 @@
 # `flet` / `labels` (local functions)
 
-Both are `LispMacroExpander` expansions (CL_MACROS; no per-backend codegen).
-`expandFletLabels` rewrites
+`LispMacroExpander` expansions (CL_MACROS; no per-backend codegen). `expandFletLabels`:
 
 ```lisp
 (flet ((f (x) (+ x 1))) (f 2))          ; -> (let ((__flet0_f (lambda (x) (+ x 1)))) (funcall __flet0_f 2))
@@ -10,87 +9,27 @@ Both are `LispMacroExpander` expansions (CL_MACROS; no per-backend codegen).
                                         ;      (funcall __labels1_f 5))
 ```
 
-- **Lisp-2 body rewrite** (`rewriteLocalCalls`): only call position `(f args...)`
-  -> `(funcall var args...)` and `(function f)`/`#'f` -> `var`; a bare `f` stays a
-  variable reference. The walker mirrors `UserMacroExpander.expandAll`'s
-  shape-awareness (quote/defmacro/defpackage kept verbatim; let/do binding names,
-  lambda/defun parameter lists (defaults ARE rewritten), dolist/dotimes/
-  with-open-file spec vars, case-family keys, defstruct slot names stay) plus
-  nested `flet`/`labels` scoping: inner same-name defs shadow (removed from the
-  map for the inner body; flet defs are walked with the outer map, labels defs
-  with the shadowed one). `loop` clauses are walked generically, so `for`
-  destructuring patterns colliding with a local function name would misrewrite
-  (same pre-existing limitation as UserMacroExpander). **The improper-list test
-  runs BEFORE the non-symbol-head test**, and the order is load-bearing: the
-  non-symbol-head branch rebuilds the form from `cons.toList()`, which DROPS an
-  improper tail, so a nested loop destructuring pattern `((field . value) . rest)`
-  (whose car is a cons, hence a non-symbol head) came back as
-  `((field . value))` and the body's reference to `rest` was unbound. An improper
-  list is never a call form, so testing for it first costs nothing. Found via
-  quri's `url-encode-params`, whose loop pattern sits inside an `flet` body.
-- **labels = letrec lowering**: bind vars to nil, `setq` each to its lambda; the
-  lambdas capture the vars, `FreeVarAnalyzer.findCapturedVars` boxes them, so
-  mutual recursion works in all backends (verified on all four).
-- **A local no surviving reference names is dropped, binding and all** (todo-333,
-  2026-08-12, unconditional -- every backend and the interpreter alike, since
-  constructing the closure is the binding's only effect). Reachability runs on
-  the REWRITTEN forms: every real reference to a local is an occurrence of its
-  unique `__<op><n>_<name>` variable (a bare original name is a variable in
-  Lisp-2 and never meant the local), so the roots are the rewritten body forms
-  and, for `labels`, a kept definition's rewritten lambda contributes its own
-  references (an `flet` definition sees only outer bindings -- no edges);
-  over-finding an occurrence, e.g. in quoted data, only KEEPS a local. Why this
-  exists: the labels lowering constructs every closure up front, so when
-  `ConstantCaseArmPruner` deletes the `case`/`ecase` arm holding the only
-  `#'state` reference (chipz's zlib states, `.kb/library-defun-pruning.md`), the
-  dead state's lambda still compiled into the module and kept everything its
-  body named -- the drop is what lets the shakers collect it. Pinned by
-  `LispMacroExpanderTest.labelsDropsALocalNoSurvivingReferenceNames` /
-  `labelsKeepsALocalReferencedOnlyAsAValue` /
-  `aSelfRecursiveLabelsLocalNothingElseNamesIsDropped` /
-  `fletDropsAnUnreferencedLocal`. NOTE it changes emitted bytes at EVERY level
-  (the no-flag zlib module moved with it), so "no-flag byte-identical" claims
-  predating it are historical.
-- **Unique variable names** (`__<op><counter>_<name>`, static `FLET_COUNTER`):
-  NOT fixed names, because a JVM let-init lambda that captures a same-named
-  outer variable miscompiles (see todo-062);
-  unique names avoid same-name nesting entirely. Counter values differ between
-  the analyzers'/interpreter's throwaway expansions and the compile one -- fine,
-  every generated name is bound inside its own expansion (macroexpand output
-  diverges across backends like gensym, so no ci-spec macroexpand case). The
-  counter value also depends on HOW MUCH the macro-time evaluator evaluates,
-  which is demand-driven since macro-time globals went lazy
-  (`.kb/defmacro-backquote.md`): a `defvar` init that no macro reads no longer
-  bumps it. Same license -- names renumber, nothing rebinds -- but it means two
-  otherwise-identical compilers can emit different temp names, so a renumbering
-  in a diff is not by itself evidence of a behavior change. What IS a bug is a
-  compiler whose output varies between JVM RUNS of the same jar; see
-  `.kb/emitted-output-determinism.md`.
-- **Lambda lists are desugared in the expansion** via `LambdaLists.expand` (the
-  native "required + &rest" shape + let* prologue): `LambdaLists.desugarProgram`
-  does not look inside flet definition lists, and `FreeVarAnalyzer.extractParamNames`
-  chokes on raw `(b 10)` optionals; desugaring here also puts defaults into
-  expression position for the body rewrite.
-- **Def-name validation**: duplicate names and names in
-  `PackageRegistry.specialOperatorNames()` are `IllegalArgumentException`s
-  (locally shadowing an ordinary built-in function like `list` is allowed and
-  works).
-- Wiring: `expandBuiltinMacro` + evaluator + Jvm/WasmExprCompiler +
-  NoGcWasmCompiler.expandMacro (--no-gc then fails on the lambda, as before) +
-  FreeVarAnalyzer (both walks, expand-before-walking) + a UserMacroExpander
-  `expandAll` case (def names/lambda lists kept so a user macro of the same name
-  is not expanded there).
-- Interpreter-only caveat: the rewrite happens before user-macro expansion at
-  eval time, so a user macro called in an flet body receives already-rewritten
-  argument forms; a macro that treats an argument as *data* (quotes it) sees
-  `(funcall __flet0_f ...)` instead of `(f ...)`. The compile path is unaffected
-  (UserMacroExpander runs first). `macrolet`/`symbol-macrolet` stay in
-  `.todo/034-local-function-definition.md`.
-- **wasm-GC fusion rides this lowering** (todo 194 stage 3): `WasmLetCompiler`
-  registers a `__FLET*`-named binding whose init lambda has plain params and a
-  single closed integer-tree body (the `(block name expr)` wrapper is unwrapped;
-  an exit form could never pass the closed-tree check), and the fusion
-  classifier substitutes it at `(funcall __FLETn_f ...)` sites -- see
-  `.kb/wasm-int-fusion.md`. The lambda itself still compiles normally, so
-  `#'f`-as-value and non-fusable call sites are untouched; `labels` bindings
-  (nil-then-setq) never register.
+## Body rewrite (`rewriteLocalCalls`, Lisp-2)
+- Only call position `(f args...)` -> `(funcall var args...)` and `(function f)`/`#'f` -> `var`. A bare `f` stays a variable reference.
+- Shape-awareness mirrors `UserMacroExpander.expandAll`: quote/defmacro/defpackage verbatim; let/do binding names, lambda/defun parameter lists (defaults ARE rewritten), dolist/dotimes/with-open-file spec vars, case-family keys, defstruct slot names stay.
+- Nested `flet`/`labels` shadow: an inner same-name def is removed from the map for the inner body; flet defs are walked with the outer map, labels defs with the shadowed one.
+- `loop` clauses are walked generically, so a `for` destructuring pattern colliding with a local function name would misrewrite (same limitation as UserMacroExpander).
+- **Ordering trap: the improper-list test runs BEFORE the non-symbol-head test.** The non-symbol-head branch rebuilds from `cons.toList()`, DROPPING an improper tail, so a loop pattern `((field . value) . rest)` came back as `((field . value))` and `rest` was unbound. An improper list is never a call form.
+
+## Lowering and pruning
+- **labels = letrec**: bind to nil, `setq` each to its lambda; `FreeVarAnalyzer.findCapturedVars` boxes the vars, so mutual recursion works on all four backends.
+- **A local no surviving reference names is dropped, binding and all** — unconditional, every backend (constructing the closure is the binding's only effect). Reachability runs on the REWRITTEN forms: every real reference is an occurrence of the unique `__<op><n>_<name>` variable, so roots are the rewritten body forms plus, for `labels`, a kept definition's rewritten lambda; an `flet` definition contributes no edges. Over-finding (quoted data) only KEEPS a local. Needed because the labels lowering constructs every closure up front: when `ConstantCaseArmPruner` deletes the arm holding the only `#'state` reference (chipz zlib states, `.kb/library-defun-pruning.md`), the dead lambda still compiled in. It changes emitted bytes at EVERY level, so older "no-flag byte-identical" claims are historical.
+- **Unique variable names** `__<op><counter>_<name>` (static `FLET_COUNTER`), not fixed names: a JVM let-init lambda capturing a same-named outer variable miscompiles. Counter values differ between the analyzers'/interpreter's throwaway expansions and the compile one, and depend on how much the macro-time evaluator evaluates (demand-driven since macro-time globals went lazy, `.kb/defmacro-backquote.md`). Renumbering in a diff is not a behavior change; output varying between JVM RUNS of one jar IS a bug (`.kb/emitted-output-determinism.md`). Hence no ci-spec macroexpand case.
+- **Lambda lists are desugared in the expansion** via `LambdaLists.expand`: `LambdaLists.desugarProgram` does not look inside flet definition lists, `FreeVarAnalyzer.extractParamNames` chokes on raw `(b 10)` optionals, and it puts defaults into expression position for the body rewrite.
+- **Def-name validation**: duplicate names and names in `PackageRegistry.specialOperatorNames()` are `IllegalArgumentException`. Shadowing an ordinary built-in function like `list` is allowed.
+
+## Wiring
+`expandBuiltinMacro` + evaluator + Jvm/WasmExprCompiler + `NoGcWasmCompiler.expandMacro` (`--no-gc` then fails on the lambda, as before) + `FreeVarAnalyzer` (both walks, expand-before-walking) + a `UserMacroExpander.expandAll` case (def names/lambda lists kept so a user macro of the same name is not expanded there).
+
+## Caveats
+- Interpreter-only: the rewrite precedes user-macro expansion at eval time, so a user macro called in an flet body receives already-rewritten argument forms; one that quotes an argument as *data* sees `(funcall __flet0_f ...)`. The compile path is unaffected (UserMacroExpander runs first).
+- `macrolet`/`symbol-macrolet` unimplemented (`.todo/034-local-function-definition.md`).
+- **wasm-GC fusion rides this lowering**: `WasmLetCompiler` registers a `__FLET*`-named binding whose init lambda has plain params and a single closed integer-tree body (the `(block name expr)` wrapper is unwrapped), and the fusion classifier substitutes it at `(funcall __FLETn_f ...)` sites — `.kb/wasm-int-fusion.md`. The lambda still compiles normally; `labels` bindings (nil-then-setq) never register.
+
+## Tests
+`LispMacroExpanderTest.labelsDropsALocalNoSurvivingReferenceNames`, `.labelsKeepsALocalReferencedOnlyAsAValue`, `.aSelfRecursiveLabelsLocalNothingElseNamesIsDropped`, `.fletDropsAnUnreferencedLocal`.

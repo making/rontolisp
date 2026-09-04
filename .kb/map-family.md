@@ -1,193 +1,93 @@
 # The `map*` family over N lists
 
-**Invariant**: `mapcar`, `mapc`, `mapcan`, `maplist`, `mapcon` and `mapl` each take a
-function plus ANY number of lists, on ALL FOUR backends, in call position AND as a
-first-class value. The function is called with one argument per list and the walk stops
-as soon as the SHORTEST list runs out (CL's termination rule). A call with no list at
-all is rejected -- never taken for a one-list call.
+**Invariant**: `mapcar`/`mapc`/`mapcan`/`maplist`/`mapcon`/`mapl` take a function plus ANY number
+of lists, on all four backends, in call position AND as a value; one arg per list; stop at the
+SHORTEST list; zero lists is an error, never a one-list call.
 
-The family is the canonical place a per-backend divergence hides in silence: the count
-is static in call position, so a backend that compiles only `(op f l)` and ignores the
-rest of the argument list produces a plausible WRONG list rather than an error. That is
-exactly what shipped until `.todo/218` (see "History" below).
+**Trap**: the count is static in call position, so a backend compiling only `(op f l)` emits a
+plausible WRONG list, not an error.
 
-## The three implementations, and why there are three
+## Implementations
 
-| operator | call position | first-class value |
-| --- | --- | --- |
-| `mapcar` / `mapc` / `mapcan` | per-backend inline emitter | shared wrapper |
-| `maplist` / `mapcon` / `mapl` | shared macro expansion | shared wrapper |
+- `LispMacroExpander.expandMapFamily` (`maplist`/`mapcon`/`mapl`; `LispEvaluator.evalCons` and
+  both `compileCons`es). Axes: `tails` (cdrs, not cars), `MapAccumulation`
+  `COLLECT`/`CONCATENATE`/`DISCARD` (`DISCARD` answers the FIRST list). Lowering: `let`
+  (function, then lists, left to right), one `listp` guard per list, `do` ending on
+  `(or (atom #c0) (atom #c1) ...)` -- one list gives the bare `(atom #c0)`. `do` steps before
+  testing, so `cdr` never sees the terminating atom.
+- Inline emitters `Jvm/WasmMapcarCompiler`, `Jvm/WasmMapcCompiler`, `Jvm/WasmMapcanCompiler`:
+  slot per list, exit when ANY cursor is not a cons, one `car` per list,
+  `_invoke_<nLists>`/`dispatch_<nLists>`. **`ctx.indirectCallArities` must get `nLists`, not 1**
+  -- a stale `1` trapped a two-list `mapc` on WASM. A literal `#'name`/`'name` of matching arity
+  is called DIRECTLY via `Wasm/JvmDesignatorCall`, registering no arity
+  (`.kb/optimize-dead-code-elimination.md`). `mapc`'s first list gets its own slot (it is the
+  return value); `mapcan` walks the list slots.
+- Interpreter: `LispEvaluator.mapFamilyValues` + `mapValues`/`mapForEffect`/`mapcanValues` --
+  **the reference the compile backends are diffed against; widen it first.**
+- `BuiltinFunctionWrappers.mapFamilyWrapper` (value path, RUNTIME count): one
+  `(lambda (f l &rest more) ...)` for all six -- `(op f l)` when `more` is nil, else a `do` over
+  `(cons l more)` ending on `(member nil ls)`, stepped by a single-list `mapcar` of `cdr`.
+  **`(member nil ls)` detects PROPER-list exhaustion only**; improper lists are caught by the
+  call-position `atom` test, not here.
+- Wrappers are injected UNGATED (not in `REFERENCE_GATED_FUNCTIONS`); `--optimize` strips
+  unreferenced ones. **Never gate them on `referencesFunctionValue`**: a reference the gate
+  misses then answers one list silently.
+- Interpreter built-ins ARE the function objects and use no wrappers, so `maplist`/`mapcon`/`mapl`
+  also need `defineFunction` registrations; without them `#'maplist` is "The function MAPLIST is
+  undefined" while both compile backends wrap it happily.
 
-1. **`LispMacroExpander.expandMapFamily`** -- the shared N-list lowering behind
-   `maplist`/`mapcon`/`mapl`, reached identically by `LispEvaluator.evalCons` and both
-   `compileCons`es, so those three have exactly one implementation for every backend.
-   Two axes parameterize it: `tails` (the function receives the successive cdrs
-   themselves, not their cars) and `MapAccumulation` (`COLLECT` a fresh list /
-   `CONCATENATE` the values / `DISCARD` them and answer the FIRST list). It emits
+## Errors
 
-   ```lisp
-   (let ((#fn F) (#l0 L0) (#l1 L1))       ; left-to-right: function, then lists
-     (if (listp #l0) nil (error ...))     ; every list position is guarded
-     (if (listp #l1) nil (error ...))
-     (do ((#acc nil)                       ; COLLECT / CONCATENATE only
-          (#c0 #l0 (cdr #c0)) (#c1 #l1 (cdr #c1)))
-         ((or (atom #c0) (atom #c1)) RESULT)
-       BODY))
-   ```
+- Every list position is guarded: a non-list signals `<NAME>: argument is not a list ... (use map
+  for strings/vectors)` on interpreter and JVM, traps `unreachable` on WASM; `nil` is a valid
+  empty list.
+- `(mapcan #'list)` -> `<NAME> expects at least 2 arguments`: `LispEvaluator.requireMapLists`,
+  `expandMapFamily`, and an `UnsupportedOperationException` from the emitter for
+  `mapcar`/`mapc`/`mapcan` (a compile error; the count is static).
 
-   With ONE list the end test is the bare `(atom #c0)`, so the single-list expansion
-   the backends compiled before the widening is unchanged. `do` evaluates the step
-   forms before the test, so `cdr` is never applied to the atom that ends the walk.
+## `map` is a different lowering
 
-2. **Per-backend inline emitters** for the three hot members: `Jvm/WasmMapcarCompiler`,
-   `Jvm/WasmMapcCompiler`, `Jvm/WasmMapcanCompiler`. Each keeps one slot per list,
-   branches to the exit as soon as ANY cursor is not a cons, pushes one `car` per list
-   and calls `_invoke_<nLists>` / `dispatch_<nLists>` (so `ctx.indirectCallArities` must
-   be told `nLists`, not 1 -- a stale `1` there is what made a two-list `mapc` trap on
-   WASM). **Unless the designator is one the compiler can READ**: a literal `#'name` /
-   `'name` naming a function that takes `nLists` arguments is called DIRECTLY instead,
-   through `Wasm/JvmDesignatorCall` -- the same decision `funcall`, `reduce` and `sort`
-   make, and the arity is then not registered at all. Why, and what it is deliberately
-   not applied to: `.kb/optimize-dead-code-elimination.md`, "A designator the compiler
-   can READ never enters `valueFuncIds`". `mapc` keeps its first list in a slot of its own because it is the return
-   value; `mapcan` walks the list slots directly, since only the concatenation survives.
-   The interpreter's counterparts are `LispEvaluator.mapFamilyValues` (the shared walk)
-   plus `mapValues`/`mapForEffect`/`mapcanValues` (the three finishers) --
-   **the interpreter is the reference the compile backends are diffed against**, so widen
-   it first.
+- `expandMap` reads operands by INDEX (it serves vectors and strings); its list read carries a
+  cons cursor with the indexed read as fallback (`.kb/seq-coerce-runtime.md`). This family never
+  had that defect.
+- `(map 'string ...)` collects pieces and joins by repeated PAIRWISE concatenation
+  (`joinStringPiecesReversed`), not per-element `%string-concat`. **Every literal
+  `(coerce x 'string)` runs this body**: `coerceToStringBody` is a `(map 'string #'identity ...)`
+  form under `%seq-to-string`.
+- Open defect, untouched: `make-string` yields a mutable character VECTOR on the compiled backends
+  whose `(char v i)` renders the whole vector per access -- quadratic in the READ
+  (`.kb/adjustable-arrays.md`, `.kb/geom.md`).
 
-3. **`BuiltinFunctionWrappers.mapFamilyWrapper`** -- the value path, where the list count
-   is a RUNTIME property, so a fixed-arity wrapper cannot forward the extra lists. One
-   shape for all six, parameterized by the same two axes:
+## Divergences from CL
 
-   ```lisp
-   (lambda (f l &rest more)
-     (if (null more)
-         (op f l)                                   ; one list: the primitive
-         (do ((ls (cons l more)) (acc nil))          ; N lists: shortest-list walk
-             ((member nil ls) RESULT)
-           BODY
-           (setq ls (mapcar (lambda (x) (cdr x)) ls)))))
-   ```
-
-   All six are injected UNGATED, like every other non-`REFERENCE_GATED_FUNCTIONS`
-   wrapper. Widening the five thin `binary(op)` wrappers into these `do` loops costs a
-   trivial program ~10 KB of `.class` / ~13 KB of `.wasm` (measured: 180 KB -> 190 KB,
-   292 KB -> 305 KB), and `--optimize` strips every unreferenced wrapper again (22 KB
-   `.wasm` / 3.6 KB `.class`). Gating them on `referencesFunctionValue` instead would
-   trade that default-mode size back for a silent one-list answer whenever the gate
-   cannot see the reference -- the exact failure mode this whole file exists to prevent.
-
-   The inner `mapcar`s are single-list, so they compile as the primitive. `(member nil
-   ls)` is "some list is exhausted" for PROPER lists -- an improper list is not caught
-   here, unlike the `atom` test the call-position lowering uses. The interpreter does not
-   use these wrappers: its own built-ins ARE the function objects, which is why
-   `maplist`/`mapcon`/`mapl` needed `defineFunction` registrations of their own (they are
-   macro-expanded in call position, so without them `#'maplist` answered "The function
-   MAPLIST is undefined" while both compile backends wrapped it happily).
-
-## Non-list arguments and arity
-
-Every list position is guarded, not just the first: a non-list (e.g. a string) signals
-`<NAME>: argument is not a list ... (use map for strings/vectors)` in the interpreter
-and on the JVM, and traps (`unreachable`) on WASM. `nil` is a valid empty list. Use
-`map` for strings/vectors.
-
-**CL's `map` is a different lowering, and was 400x slower than this family over a
-list until 2026-08-31.** `expandMap` reads each operand by INDEX -- it has to
-serve a vector and a string as well -- and its list read was `(nth i s)`, an
-`nth` walk from the head, so `(map 'list #'1+ <4000-element list>)` cost 22.2 ms
-on wasm-GC against `mapcar`'s 0.027. Each operand now carries a cons cursor with
-the indexed read as its fallback (`.kb/seq-coerce-runtime.md`, "The rest of the
-`elt`-per-element family"); `mapcar` and the rest of this family never had the
-defect, because a list is all they take and a `cdr` walk is all they do.
-
-**`(map 'string ...)` was quadratic a SECOND time, in the OUTPUT, and the cursor
-could not reach it.** The `'string` accumulator was `(%string-concat acc
-(%princ-piece call))` per element -- one rebuild of the whole result per
-element -- where `'list` conses and `nreverse`s. Since 2026-08-31 it collects the
-pieces into a list and joins them by repeated PAIRWISE concatenation, O(n log n)
-characters copied instead of O(n^2), with no mutable buffer (the expansion has
-none on any backend) and no operator the loop did not already use.
-`joinStringPiecesReversed` is the whole of it. **Every literal `(coerce x
-'string)` runs this body** -- `coerceToStringBody` is a `(map 'string #'identity
-...)` form, so the shared `%seq-to-string` conversion carries the join once for
-the program. `(coerce <n-element character list> 'string)`, ms per call,
-before -> after at n = 4000: wasm-GC 11.85 -> **0.43** (28x), the JVM 1.10 ->
-**0.73**, and the interpreter's native `coerce` arm never ran this at all.
-
-**The number `.todo/595` carried for it was measuring something else.** It read
-`(map 'string #'char-upcase <4000-char string>)` at 56.2 ms on wasm-GC, and the
-source there was a `make-string`, which on the compiled backends is a mutable
-character VECTOR whose `(char v i)` renders the whole vector per access
-(`.kb/adjustable-arrays.md`, `.kb/geom.md`). That row is quadratic in the READ,
-which this change does not touch and which is a separate known defect; over an
-ORDINARY string the accumulator is what the row measures. Both numbers are in the
-table `.kb/seq-coerce-runtime.md` records.
-
-A call with no list -- `(mapcan #'list)` -- is a `<NAME> expects at least 2 arguments`
-error: `LispEvaluator.requireMapLists` for the interpreter and the built-in function
-objects, `expandMapFamily` for the shared three, and an `UnsupportedOperationException`
-from the emitter for `mapcar`/`mapc`/`mapcan` (a compile error, since the count is
-static in call position).
-
-## Deliberate divergences from CL
-
-- `mapcan`/`mapcon` concatenate with non-destructive `append`, not `nconc`. This is
-  documented user-visible behavior (`doc/*/reference/functions/mapcan.md`), not an
-  oversight; a caller that relies on the argument lists being spliced sees fresh conses
-  instead.
-- `every`/`some` are a different family (they take SEQUENCES, so each argument is coerced
-  to a list first, and there is no listp guard). They take any number of sequences too
-  since `.todo/219` -- `LispMacroExpander.expandEverySomeFamily` plus
-  `BuiltinFunctionWrappers.everySomeWrapper` -- but the lowerings are their own; nothing
-  here is shared with them beyond the shape.
-
-## Pinning tests
-
-- ci-spec (all four backends): `mapcar-as-a-first-class-value-over-many-lists`,
-  `mapc-over-many-lists`, `mapcan-over-many-lists`, `maplist-over-many-lists`,
-  `mapcon-over-many-lists`, `mapl-over-many-lists`.
-- `LispEvaluatorTest`: `mapFamilyOverMultipleLists`, `mapFamilyAsValuesOverMultipleLists`,
-  `mapFamilyRejectsACallWithNoList`, `mapFamilySignalsErrorOnNonList`,
-  `mapcarAsValueOverMultipleLists`.
-- `JvmLispCompilerTest`: `compileAndRunMapFamilyMultipleLists`,
-  `compileAndRunMapFamilyAsValuesOverMultipleLists`,
-  `compileAndRunMapcarAsValueOverMultipleLists`.
-- `WasmLispCompilerIntegrationTest`: `mapFamilyMultipleListsCompilesAndRuns`,
-  `mapFamilyAsValuesOverMultipleListsCompilesAndRuns`,
-  `mapcarAsValueOverMultipleListsCompilesAndRuns`, `mapFamilyTrapsOnNonList`,
-  `applyUsingWrapperReachedByFuncallCompilesAndRuns` (see the WASM `apply`-gate note below;
-  each of its assertions must be the ONLY form in its program).
-
-## History
-
-`#'mapcar` as a VALUE dropped every list but the first on both compile backends until the
-alexandria enablement pass (2026-07-30) walked into it: `alexandria:mappend` is `(apply
-#'mapcar function lists)`, so it answered `(1 2)` where the interpreter answered `(1 3 2
-4)` -- no error, just a wrong list (`.kb/asdf.md`, alexandria entry). That pass fixed
-`mapcar` alone and left `.todo/218` for the rest of the family, which was worse: one form,
-`(mapc f '(1 2) '(3 4))`, had THREE answers -- an arity error in the interpreter, a
-silently empty walk returning `(1 2)` on the JVM, an `unreachable` trap on WASM -- and
-`mapcan`/`maplist`/`mapcon` silently ignored the extra lists in CALL position too. Closing
-it widened all three implementations above at once rather than making the wrong answers
-loud and stopping there, because the wrong answers only existed for a count CL specifies.
+- `mapcan`/`mapcon` use non-destructive `append`, not `nconc` -- documented
+  (`doc/*/reference/functions/mapcan.md`); callers relying on splicing see fresh conses.
+- `every`/`some` are a separate family (SEQUENCES, coerced to lists first, no `listp` guard),
+  N-ary via `LispMacroExpander.expandEverySomeFamily` + `BuiltinFunctionWrappers.everySomeWrapper`;
+  no lowering shared.
 
 ## The wrapper's `apply` and the WASM emission gate
 
-`mapFamilyWrapper` forwards a RUNTIME number of lists, so its body calls `apply`. On WASM
-the `apply` runtime (`_apply`, pulled in with the eval runtime) is gated on `usesEval`,
-which scans the SOURCE program -- and the wrappers are injected AFTER that scan. So a
-program that took `#'mapcar` as a value but used `apply` nowhere else got a wrapper calling
-an `_apply` that had degraded to a nil-answering stub: `(funcall #'mapcar #'list '(1 2)
-'(3 4))` answered `(NIL NIL)` where the interpreter and the JVM answered `((1 3) (2 4))`.
-Not a trap -- the same silent-wrong-list failure mode this file exists to prevent, and it
-survived `.todo/218` because no test spread the lists across a `funcall` (the existing
-value-path cases all used `apply`, which forces the gate on by itself).
+`mapFamilyWrapper` bodies call `apply`; WASM's `_apply` is gated on `usesEval`, which scans the
+SOURCE, and wrappers are injected AFTER that scan. **Trap**: `#'mapcar` as a value in a program
+with no other `apply` got a nil-answering `_apply` stub --
+`(funcall #'mapcar #'list '(1 2) '(3 4))` answered `(NIL NIL)`.
+`BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` lists such wrappers (the `map*` six,
+`every`/`some`, `funcall`); `referencesApplyingWrapper` answers "reachable as a value here" and
+`WasmLispCompiler.usesEval` consults it. **Any new wrapper whose body calls `apply` must join that
+set**; any runtime gated on a program scan has the same trap.
 
-`BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` is the set of wrappers whose bodies call
-`apply` -- the `map*` six, `every`/`some`, and `funcall` itself -- and
-`referencesApplyingWrapper` answers "is one of them reachable as a first-class value here".
-`WasmLispCompiler`'s `usesEval` consults it. **Any new wrapper whose body calls `apply` must
-join that set**, and any backend that gates a runtime on a program scan has the same trap:
-the scan does not see the injected wrappers.
+## Tests
+
+- ci-spec, all four backends: `mapcar-as-a-first-class-value-over-many-lists`,
+  `{mapc,mapcan,maplist,mapcon,mapl}-over-many-lists`.
+- `LispEvaluatorTest#mapFamilyOverMultipleLists, #mapFamilyAsValuesOverMultipleLists,
+  #mapFamilyRejectsACallWithNoList, #mapFamilySignalsErrorOnNonList,
+  #mapcarAsValueOverMultipleLists`.
+- `JvmLispCompilerTest#compileAndRunMapFamilyMultipleLists,
+  #compileAndRunMapFamilyAsValuesOverMultipleLists, #compileAndRunMapcarAsValueOverMultipleLists`.
+- `WasmLispCompilerIntegrationTest#mapFamilyMultipleListsCompilesAndRuns,
+  #mapFamilyAsValuesOverMultipleListsCompilesAndRuns,
+  #mapcarAsValueOverMultipleListsCompilesAndRuns, #mapFamilyTrapsOnNonList,
+  #applyUsingWrapperReachedByFuncallCompilesAndRuns` -- each assertion of the last must be the
+  ONLY form in its program.
