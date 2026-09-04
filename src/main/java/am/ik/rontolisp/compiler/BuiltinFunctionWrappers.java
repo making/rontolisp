@@ -764,6 +764,26 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(name, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"), List.of(dispatch));
 	}
 
+	// (name a &optional s) where the optional argument is a STREAM DESIGNATOR: an omitted
+	// stream and an explicit nil are the SAME designator
+	// (.kb/standard-output-redirect.md),
+	// so the body forwards the parameter unconditionally and no presence test is needed
+	// --
+	// a bound nil reaches the operator's own *standard-output* / *standard-input*
+	// resolution, exactly like the (defun emit (x &optional stream) (princ x stream))
+	// forwarding StreamDesignators was written for (unlike unaryOptionalSecond, whose nil
+	// is not a legal value and whose presence dispatch is therefore required).
+	private static WrapperDef unaryOptionalStream(String name) {
+		return new WrapperDef(name, List.of("a", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(name, "a", "s")));
+	}
+
+	// (name &optional s) -- the stream-only operators: terpri, fresh-line, force-output,
+	// finish-output, clear-output, read-line, read-char, listen. Same designator rule as
+	// unaryOptionalStream: the omitted and the nil stream are one designator.
+	private static WrapperDef optionalStream(String name) {
+		return new WrapperDef(name, List.of(LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(name, "s")));
+	}
+
 	// (name a b &optional c) dispatching on c's presence -- the CL subseq shape, whose
 	// wrapper must accept the optional end (cl-ppcre funcalls #'subseq with 3 args).
 	// Also getf's default, where the nil dispatch is exact: an omitted default and an
@@ -1279,8 +1299,11 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.ROUND), unary(LispNames.FFLOOR), unary(LispNames.FCEILING), unary(LispNames.FROUND),
 			unary(LispNames.FTRUNCATE),
 			// Math/IO/list (arity 1)
-			unary(LispNames.ABS), unary(LispNames.PRINT), unary(LispNames.PRIN1), unary(LispNames.PRINC),
-			unary(LispNames.PRINC_TO_STRING), unary(LispNames.PRIN1_TO_STRING),
+			// print / prin1 / princ carry the optional stream: the wrapper forwards it
+			// unconditionally, since an omitted stream and an explicit nil are the same
+			// designator (.kb/standard-output-redirect.md).
+			unary(LispNames.ABS), unaryOptionalStream(LispNames.PRINT), unaryOptionalStream(LispNames.PRIN1),
+			unaryOptionalStream(LispNames.PRINC), unary(LispNames.PRINC_TO_STRING), unary(LispNames.PRIN1_TO_STRING),
 			// list is variadic: the rest list IS the result
 			new WrapperDef(LispNames.LIST, List.of(LispNames.LAMBDA_REST, "r"), List.of(new LispSymbol("r"))),
 			// Math functions (arity 1)
@@ -1393,19 +1416,31 @@ public final class BuiltinFunctionWrappers {
 			// adjust-array is the 2-arg (no keyword) form; array-displacement yields
 			// its primary value (the target) -- the offset needs a direct mv consumer.
 			binary(LispNames.ADJUST_ARRAY), unary(LispNames.ARRAY_DISPLACEMENT), variadicMakeArray(),
-			// terpri: 0-arity
-			new WrapperDef(LispNames.TERPRI, List.of(), List.of(call(LispNames.TERPRI))),
-			// fresh-line: 0-arity
-			new WrapperDef(LispNames.FRESH_LINE, List.of(), List.of(call(LispNames.FRESH_LINE))),
-			// read-line: 0-arity
-			new WrapperDef(LispNames.READ_LINE, List.of(), List.of(call(LispNames.READ_LINE))),
+			// terpri / fresh-line / read-line: the optional stream, forwarded
+			// unconditionally (omitted == nil == the standard stream designator).
+			optionalStream(LispNames.TERPRI), optionalStream(LispNames.FRESH_LINE), optionalStream(LispNames.READ_LINE),
+			// write-line / force-output / finish-output / clear-output: the same optional
+			// stream. WASM flushes nothing (every write goes out synchronously) and
+			// clear-output evaluates its designator for effect, but every backend accepts
+			// the argument in call position, so the wrapper body compiles everywhere.
+			unaryOptionalStream(LispNames.WRITE_LINE), optionalStream(LispNames.FORCE_OUTPUT),
+			optionalStream(LispNames.FINISH_OUTPUT), optionalStream(LispNames.CLEAR_OUTPUT),
+			// listen: the interpreter and the JVM probe the designator. On WASM any
+			// listen
+			// CALL SITE lowers to the compiler's call-time unsupported stub, and the
+			// --component sockets rewrite runs before this catalog is injected, so
+			// #'listen reaches that stub on WASM even where (listen s) in call position
+			// would reach %io-listen (the same WASM-side limit as the read family).
+			optionalStream(LispNames.LISTEN),
 			// The signalling read family (all three REFERENCE_GATED_FUNCTIONS): read-char
-			// keeps its 0-arity stdin shape, peek-char carries the peek-type + stream a
-			// funcall would pass, read-byte's stream argument is mandatory.
-			new WrapperDef(LispNames.READ_CHAR, List.of(), List.of(call(LispNames.READ_CHAR))),
+			// carries the optional stream like its stdin-shaped peers, peek-char carries
+			// the peek-type + stream a funcall would pass, read-byte's stream argument is
+			// mandatory.
+			optionalStream(LispNames.READ_CHAR),
 			new WrapperDef(LispNames.PEEK_CHAR, List.of(LispNames.LAMBDA_OPTIONAL, "a", "b"),
 					List.of(call(LispNames.PEEK_CHAR, "a", "b"))),
-			// read-char-no-hang mirrors read-char's 0-arity stdin shape; unread-char is
+			// read-char-no-hang keeps its 0-arity stdin shape (the non-blocking probe has
+			// no stream-forwarded implementation behind the wrapper); unread-char is
 			// binary (character + stream) -- its body signals on a handle, and a Gray
 			// instance reaches it only through a rewritten CALL site, so #'unread-char is
 			// the handle answer by construction.
@@ -1418,9 +1453,14 @@ public final class BuiltinFunctionWrappers {
 			// values: variadic; with no runtime multiple-value representation the
 			// function value yields its primary value ((car nil) is nil for zero args)
 			new WrapperDef(LispNames.VALUES, List.of(LispNames.LAMBDA_REST, "r"), List.of(call(LispNames.CAR, "r"))),
-			// write-string: the 1-arg (standard output) form; write-to-string is a
-			// prin1-to-string alias
-			unary(LispNames.WRITE_STRING),
+			// write-string: the optional stream plus the :start / :end keyword bounds the
+			// interpreter's function accepts -- the same runtime keyword re-extraction
+			// boundedSequenceIo does for read-sequence / write-sequence, which
+			// write-string
+			// matches (string, stream positional; :start / :end keywords).
+			// write-to-string
+			// is a prin1-to-string alias
+			boundedSequenceIo(LispNames.WRITE_STRING),
 			new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a"), List.of(call(LispNames.PRIN1_TO_STRING, "a"))),
 			// symbol runtime API: the pure string<->symbol converters get plain
 			// wrappers. find-symbol folds at compile time (literal-only, like

@@ -24,6 +24,19 @@ dispatch the explicit 2-argument forms use.
   `Environment.createGlobal`, applied by `emitTo`, `fresh-line`, `write-line`, `force-output`;
   input via `Environment.defaultInput` (the `defaultOutput` twin), consulted by `read-line`,
   the shared `inputReader` (read-char/peek-char), `read`, `listen`.
+- **First-class VALUES (`#'princ` and the rest) forward the stream by the same rule.**
+  `BuiltinFunctionWrappers` builds the wrapper defun every `#'` reference of a built-in
+  compiles to (its `lambdaFor` is also the interpreter's catalog answer), and the family's
+  wrappers carry the optional stream and forward it UNCONDITIONALLY -- `(lambda (a &optional
+  s) (princ a s))`, no presence dispatch -- because the bound nil an omitted optional
+  carries IS the standard-stream designator (the presence-dispatched `unaryOptionalSecond`
+  shape would be wrong for an operator whose nil is legal). Covered for
+  `print/prin1/princ/terpri/fresh-line/write-line/write-string` (its `:start`/`:end`
+  keywords ride the `boundedSequenceIo` re-extraction), `force-output/finish-output/
+  clear-output/read-line/read-char/listen`; `#'peek-char` already forwarded
+  peek-type + stream, `#'unread-char` by its binary shape. `#'listen` reaches the WASM
+  expression compiler's call-time unsupported stub (the sockets rewrite runs before the
+  catalog is injected, and no non-blocking probe exists on this target).
 - **A SYNONYM stream is a value riding this seam, not a designator.**
   `(make-synonym-stream 'sym)` builds an instance carrying a closure reading `sym`;
   `StreamDesignators.throughSynonym` wraps the result in a `%STREAM-TARGET` call, so every
@@ -184,6 +197,8 @@ built once whichever branch consumes it.
   `evalSynonymStreamOverStandardOutputFollowsALaterBinding`,
   `evalMakeSynonymStreamResolvesTheNamedVariable`; ci-spec `postmodern-language-incidentals`,
   `synonym-stream-value`.
+- first-class values: `funcallOfPrintFamilyForwardsItsStreamArgument` (JVM + WASM; the JVM
+  copy also asserts `#'listen`), ci-spec `first-class-print-family-stream-argument`.
 - `*error-output*`: `errorOutputIsTheProcessErrorStream`,
   `bindingErrorOutputCapturesWarnAndRestores` (JVM + WASM);
   `evalErrorOutputIsTheProcessErrorStreamAndWarnFollowsARebinding`,

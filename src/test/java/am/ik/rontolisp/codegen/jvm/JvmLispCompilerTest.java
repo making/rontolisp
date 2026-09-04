@@ -4225,6 +4225,49 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void funcallOfPrintFamilyForwardsItsStreamArgument() throws Exception {
+		// A #' reference to the print family used as a first-class value with the
+		// optional stream: the wrapper defun the compile paths build for the
+		// reference dropped the second argument (stdout on the JVM, an arity trap on
+		// wasm). An omitted stream and an explicit nil are the SAME designator
+		// (.kb/standard-output-redirect.md), so the wrapper forwards the parameter
+		// unconditionally and its nil default needs no branch of its own.
+		assertThat(compileAndRun("""
+				(princ (with-output-to-string (s) (funcall #'princ 'foo s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'prin1 '(a b) s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'print 'z s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'terpri s)))
+				(princ "|")
+				(princ (with-output-to-string (s)
+				          (funcall #'princ "ab" s)
+				          (funcall #'fresh-line s)
+				          (funcall #'princ "-c" s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'write-line "hi" s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'write-string "xyz" s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'write-string "a-long-string" s :start 2 :end 5)))
+				(princ "|")
+				(funcall #'force-output nil)
+				(funcall #'finish-output nil)
+				(funcall #'clear-output nil)
+				(princ (with-input-from-string (s "one\\ncp\\n") (funcall #'read-line s)))
+				(princ "|")
+				(princ (with-input-from-string (s "c") (funcall #'read-char s)))
+				(princ "|")
+				(princ (with-input-from-string (s "p") (funcall #'peek-char nil s)))
+				(princ "|")
+				(princ (with-input-from-string (s "l") (if (funcall #'listen s) "ready" "empty")))
+				(princ "|")
+				(princ (with-output-to-string (*standard-output*) (funcall #'princ 'dyn)))
+				(princ "|done")""")).isEqualTo("FOO|(A B)|Z\n|\n|ab\n-c|hi\n|xyz|lon|one|c|p|ready|DYN|done");
+	}
+
+	@Test
 	void errorOutputIsTheProcessErrorStream() throws Exception {
 		// *error-output* is the standard ERROR designator (the reserved handle 2), so a
 		// diagnostic written through it stays off the program's standard output.

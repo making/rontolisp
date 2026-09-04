@@ -11331,6 +11331,56 @@ cases:
       >>binary<|
       A65
 
+  - name: first-class-print-family-stream-argument
+    source: |
+      ;; The print/read family as a first-class VALUE must carry the optional
+      ;; STREAM. The wrapper defun a #' reference compiles to used to drop its
+      ;; second argument -- the capture below came out empty on the JVM and the
+      ;; whole program trapped on wasm (arity check) -- and an omitted stream
+      ;; and an explicit nil are ONE designator
+      ;; (.kb/standard-output-redirect.md), which is why the optional's nil
+      ;; default needs no branch of its own.
+      (princ (with-output-to-string (s) (funcall #'princ 'foo s)))
+      (princ "|")
+      (princ (with-output-to-string (s) (funcall #'prin1 '(a b) s)))
+      (princ "|")
+      (princ (with-output-to-string (s) (funcall #'print 'z s)))
+      (princ "|")
+      (princ (with-output-to-string (s) (funcall #'terpri s)))
+      (princ "|")
+      (princ (with-output-to-string (s)
+        (funcall #'princ "ab" s)
+        (funcall #'fresh-line s)
+        (funcall #'princ "-c" s)))
+      (princ "|")
+      (princ (with-output-to-string (s) (funcall #'write-line "hi" s)))
+      (princ "|")
+      (princ (with-output-to-string (s) (funcall #'write-string "xyz" s)))
+      (princ "|")
+      (princ (with-output-to-string (s) (funcall #'write-string "a-long-string" s :start 2 :end 5)))
+      (princ "|")
+      (funcall #'force-output nil)
+      (funcall #'finish-output nil)
+      (funcall #'clear-output nil)
+      ;; The read trio off a string stream -- inside a plain defun, the same
+      ;; shape the input-designator cases use for the --component await limit.
+      ;; #'listen is not here: it lowers to the call-time unsupported stub on
+      ;; wasm (no non-blocking probe outside a --component socket stream).
+      (defun first-class-io-reads (s)
+        (list (funcall #'read-line s) (funcall #'read-char s) (funcall #'peek-char nil s)))
+      (print (first-class-io-reads (make-string-input-stream "one\ncp\n")))
+      ;; A stream-argument-less first-class call keeps the redirect: the nil
+      ;; the omitted optional binds IS the standard-output designator.
+      (princ (with-output-to-string (*standard-output*) (funcall #'princ 'dyn)))
+      (write-line "|done")
+    expected: |
+      FOO|(A B)|Z
+      |
+      |ab
+      -c|hi
+      |xyz|lon|("one" #\c #\p)
+      DYN|done
+
   - name: postmodern-non-mop-milestone
     source: |
       ;; The four language mechanics the non-MOP postmodern build needed on top of
