@@ -3431,8 +3431,9 @@ final class JvmReadRuntimeBuilder {
 		a.pop();
 		a.branch(Opcode.GOTO, loop);
 		a.bind(done);
-		a.op(Opcode.LCONST_1);
-		a.invokestatic(this.longValueOf);
+		// t is the symbol "T" (the compiled runtime's true, like every other
+		// symbol), NOT the integer 1 -- the interpreter's load answers t.
+		ldc(a, "T");
 		a.areturn();
 		return a.finish();
 	}

@@ -13787,6 +13787,9 @@ cases:
     # :if-does-not-exist is real (a false value answers nil), the rest are
     # accepted and ignored. The load is written inside a call so it stays a
     # RUNTIME load -- a top-level one is spliced by the compile-path inliner.
+    # The success case rides along: a runtime load of a file the program just
+    # wrote answers t and evaluates its forms -- three backends used to answer
+    # the integer 1 here.
     source: |
       (defun ci439-wr (path text dir ie)
         (with-open-file (out path :direction dir :if-exists ie) (write-string text out)))
@@ -13799,10 +13802,14 @@ cases:
       (print (ci439-rd "c439.dat" 'character))
       (print (ci439-rd1 "c439.dat" (list 'unsigned-byte 8)))
       (print (load "no-such-439.lisp" :if-does-not-exist nil))
+      (ci439-wr "c439-ok.lisp" "(print 'ci439-loaded)" :output :supersede)
+      (print (load "c439-ok.lisp"))
     expected: |
       "onetwo"
       111
       NIL
+      CI439-LOADED
+      T
 
   - name: string-designators
     # CL coerces a string DESIGNATOR -- a string, a symbol (nil and t are

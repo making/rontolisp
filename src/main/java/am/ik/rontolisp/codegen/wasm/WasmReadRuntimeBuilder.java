@@ -2331,9 +2331,10 @@ final class WasmReadRuntimeBuilder {
 		br(w, 0);
 		end(w); // loop
 		end(w); // block
-		// return t
-		i32(w, 1);
-		i31New(w);
+		// return t -- the cached symbol t from _t_sym, the same instance every
+		// other true result uses, NOT the i31 1 (the interpreter's load answers t)
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

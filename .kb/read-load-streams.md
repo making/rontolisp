@@ -723,7 +723,12 @@ selection, `LispPreludeLibrary.referencedBySurfaceForm` splices `probe-file` on 
 instead: the program writing `:if-does-not-exist` on a `load` at all
 (`LispMacroExpander.callsLoadWithIfDoesNotExist`). What a top-level literal `load` with options does
 is `.kb/load-inliner.md`. Pinned by `LispEvaluatorTest#loadAcceptsTheKeywordOptions`, ci-spec
-`computed-stream-options-439`.
+`computed-stream-options`.
+
+The SUCCESS value is `t` on every backend: JVM `_load` returns the symbol String `"T"`, the WASM
+`_load` calls `_t_sym`. Both runtime helpers once answered the integer 1 -- truthy, so only reading
+the value showed it; the ci-spec case prints a successful runtime load (a file the program wrote
+itself) alongside the `:if-does-not-exist` nil for that reason.
 
 ## `:if-exists :append`
 
