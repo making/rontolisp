@@ -9,6 +9,10 @@ on:
     - src/**
     - examples/**
     - pom.xml
+    - rontolisp-maven-plugin/**
+    # The wrapper's Maven version names the default lifecycle bindings the
+    # plugin's offline fixture must match, so a bump needs this workflow.
+    - .mvn/**
     - .github/workflows/ci.yaml
   pull_request:
     branches:
@@ -17,6 +21,8 @@ on:
     paths:
     - src/**
     - pom.xml
+    - rontolisp-maven-plugin/**
+    - .mvn/**
     - .github/workflows/ci.yaml
   # On demand, so the suite can be re-run against an unchanged tree. Timing work needs
   # that: runner speed varies by up to 1.4x between runs, which is larger than most of
