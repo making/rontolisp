@@ -9,13 +9,17 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
 
 import org.apache.catalina.startup.Tomcat;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -50,10 +54,13 @@ class MavenBuildE2eTest {
 	@Test
 	void aRealBuildCompilesTheLispBeforeTheJavaAndJarsBoth() throws Exception {
 		Ready ready = assumeReady();
+		Map<String, String> plugins = lifecyclePluginVersions(ready.localRepository());
+		assumeTrue(plugins != null, "a lifecycle plugin the offline fixture declares is not in the local"
+				+ " repository: run `./mvnw -f rontolisp-maven-plugin/pom.xml install -DskipTests` first");
 		Path maven = ready.maven();
 		String version = ready.version();
 
-		writeProject(version);
+		writeProject(version, plugins);
 		run(maven, this.project, "-o", "-q", "package");
 
 		Path jar = this.project.resolve("target/consumer-1.0.0.jar");
@@ -70,7 +77,7 @@ class MavenBuildE2eTest {
 		assertThat(run(maven, this.project, "-o", "package")).contains("Nothing to compile");
 	}
 
-	private void writeProject(String version) throws Exception {
+	private void writeProject(String version, Map<String, String> plugins) throws Exception {
 		Path kernels = this.project.resolve("src/main/lisp/com/example/Kernels.lisp");
 		Files.createDirectories(kernels.getParent());
 		Files.writeString(kernels, """
@@ -110,50 +117,60 @@ class MavenBuildE2eTest {
 				}
 				""");
 		// The source-set plugin needs no dependency, source-directory declaration, or
-		// jar configuration. Pin the lifecycle jar plugin to the version the root build
-		// already resolved so this fixture can run offline.
-		Files.writeString(this.project.resolve("pom.xml"), """
-				<project xmlns="http://maven.apache.org/POM/4.0.0">
-				  <modelVersion>4.0.0</modelVersion>
-				  <groupId>app</groupId>
-				  <artifactId>consumer</artifactId>
-				  <version>1.0.0</version>
-				  <properties>
-				    <maven.compiler.release>%d</maven.compiler.release>
-				    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-				  </properties>
-				  <build>
-				    <plugins>
-				      <plugin>
-				        <groupId>org.apache.maven.plugins</groupId>
-				        <artifactId>maven-jar-plugin</artifactId>
-				        <version>3.4.1</version>
-				      </plugin>
-				      <!-- Pinned to what this module already resolved: the build runs offline. -->
-				      <plugin>
-				        <groupId>org.apache.maven.plugins</groupId>
-				        <artifactId>maven-surefire-plugin</artifactId>
-				        <version>3.5.2</version>
-				      </plugin>
-				      <plugin>
-				        <groupId>org.apache.maven.plugins</groupId>
-				        <artifactId>maven-compiler-plugin</artifactId>
-				        <version>3.13.0</version>
-				      </plugin>
-				      <plugin>
-				        <groupId>am.ik.rontolisp</groupId>
-				        <artifactId>rontolisp-maven-plugin</artifactId>
-				        <version>%s</version>
-				        <executions>
-				          <execution>
-				            <goals><goal>compile</goal></goals>
-				          </execution>
-				        </executions>
-				      </plugin>
-				    </plugins>
-				  </build>
-				</project>
-				""".formatted(Runtime.version().feature(), version));
+		// jar configuration. Every lifecycle plugin this `package` binds is declared with
+		// the newest version the local repository holds: the build runs offline, and the
+		// running Maven's own default bindings -- which change between Maven versions
+		// (3.9.16 moved maven-jar-plugin from 3.4.1 to 3.5.0) -- would name a version the
+		// seeding build may never have downloaded.
+		Files.writeString(this.project.resolve("pom.xml"),
+				"""
+						<project xmlns="http://maven.apache.org/POM/4.0.0">
+						  <modelVersion>4.0.0</modelVersion>
+						  <groupId>app</groupId>
+						  <artifactId>consumer</artifactId>
+						  <version>1.0.0</version>
+						  <properties>
+						    <maven.compiler.release>%d</maven.compiler.release>
+						    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+						  </properties>
+						  <build>
+						    <plugins>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-resources-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-jar-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-surefire-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-compiler-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>am.ik.rontolisp</groupId>
+						        <artifactId>rontolisp-maven-plugin</artifactId>
+						        <version>%s</version>
+						        <executions>
+						          <execution>
+						            <goals><goal>compile</goal></goals>
+						          </execution>
+						        </executions>
+						      </plugin>
+						    </plugins>
+						  </build>
+						</project>
+						""".formatted(Runtime.version().feature(), plugins.get("maven-resources-plugin"),
+						plugins.get("maven-jar-plugin"), plugins.get("maven-surefire-plugin"),
+						plugins.get("maven-compiler-plugin"), version));
 	}
 
 	/**
@@ -288,14 +305,56 @@ class MavenBuildE2eTest {
 				"no Maven executable found (mvn on PATH, MAVEN_HOME, or the ./mvnw distribution)");
 		String version = System.getProperty("rontolisp.plugin.version");
 		assumeTrue(version != null, "rontolisp.plugin.version is unset");
-		Path installed = Path.of(System.getProperty("user.home"), ".m2", "repository", "am", "ik", "rontolisp",
-				"rontolisp-maven-plugin", version, "rontolisp-maven-plugin-" + version + ".jar");
+		Path localRepository = Path.of(System.getProperty("user.home"), ".m2", "repository");
+		Path installed = localRepository.resolve(Path.of("am", "ik", "rontolisp", "rontolisp-maven-plugin", version,
+				"rontolisp-maven-plugin-" + version + ".jar"));
 		assumeTrue(Files.isRegularFile(installed),
 				"the plugin is not in the local repository: run `./mvnw -f rontolisp-maven-plugin/pom.xml install`");
-		return new Ready(maven.get(), version);
+		return new Ready(maven.get(), version, localRepository);
 	}
 
-	private record Ready(Path maven, String version) {
+	/**
+	 * The newest version of each lifecycle plugin the offline fixture's {@code
+	 * package} binds, keyed by artifact id, or null when the local repository holds none
+	 * of one of them. The running Maven's default bindings cannot be trusted to name a
+	 * downloadable version -- they change between Maven versions (3.9.16 moved
+	 * {@code maven-jar-plugin} from 3.4.1 to 3.5.0) -- so the fixture declares exactly
+	 * what the repository holds, which the module's own {@code install} seeded: every
+	 * plugin here runs during that build. The newest is taken because a repository that
+	 * has seen several wrapper bumps holds several versions, and any of them resolves.
+	 */
+	private static @Nullable Map<String, String> lifecyclePluginVersions(Path localRepository) throws Exception {
+		Map<String, String> versions = new LinkedHashMap<>();
+		for (String artifactId : List.of("maven-resources-plugin", "maven-jar-plugin", "maven-surefire-plugin",
+				"maven-compiler-plugin")) {
+			Optional<String> newest = newestVersion(localRepository, artifactId);
+			if (newest.isEmpty()) {
+				return null;
+			}
+			versions.put(artifactId, newest.get());
+		}
+		return versions;
+	}
+
+	private static Optional<String> newestVersion(Path localRepository, String artifactId) throws Exception {
+		Path plugin = localRepository.resolve("org")
+			.resolve("apache")
+			.resolve("maven")
+			.resolve("plugins")
+			.resolve(artifactId);
+		if (!Files.isDirectory(plugin)) {
+			return Optional.empty();
+		}
+		try (Stream<Path> versions = Files.list(plugin)) {
+			return versions.filter(Files::isDirectory)
+				.map(path -> path.getFileName().toString())
+				.filter(version -> Files
+					.isRegularFile(plugin.resolve(version).resolve(artifactId + "-" + version + ".jar")))
+				.max(Comparator.naturalOrder());
+		}
+	}
+
+	private record Ready(Path maven, String version, Path localRepository) {
 	}
 
 	private record ProcessResult(int status, String output) {
