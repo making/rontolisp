@@ -2224,23 +2224,44 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int CABI_HP_BASE = 0x10008; // 65544, just above the 8-byte cell
 
-	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
+	// The env/argv scratch BLOCK: four 16 KiB regions the WASI environ_get / args_get
+	// host calls fill in -- a pointer array and the NUL-separated string buffer for
+	// each of the two. The offsets below are relative to a base the PROGRAM decides
+	// (scratchBase in compile()), not to a fixed address: these are the only writes a
+	// module makes at an address it did not derive from its own static-data end, and a
+	// program whose static data reaches page 3 -- ~192 KB of interned strings, which
+	// the ci-spec corpus passed -- had environ_get / args_get land inside its own
+	// interned strings and case-fold tables. The corruption reads as an unrelated
+	// primitive quietly returning the wrong answer (char-downcase folding nothing, so
+	// every format directive and every char-equal downstream of it goes wrong), and
+	// which primitive it hits moves with the layout. Placing the block above the static
+	// data and the intern table plus heap above the BLOCK makes the overlap impossible:
+	// see .kb/wasm-linear-memory-layout.md.
+	static final int SCRATCH_ENV_PTRS_OFFSET = 0x0000;
 
-	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB
+	static final int SCRATCH_ENV_BUF_OFFSET = 0x4000; // + 16 KiB
 
-	// argv scratch, the same shape one page-3 region higher: the count / buffer-size
-	// words, then the pointer array and the "arg\0" buffer args_get fills. The words
-	// live here rather than beside ENV_COUNT_ADDR because the low scratch region ends
-	// at 255 and DATA_BASE_OFFSET (256) may not move -- shifting it would change the
-	// static-data base of every module. The module's memory is floored at four pages,
-	// so page 3 is always there.
-	static final int ARGV_COUNT_ADDR = 0x38000; // 229376, page 3 + 32 KiB
+	// argv scratch, the same shape one region higher: the count / buffer-size words,
+	// then the pointer array and the "arg\0" buffer args_get fills. The words live
+	// here rather than beside ENV_COUNT_ADDR because the low scratch region ends at
+	// 255 and DATA_BASE_OFFSET (256) may not move -- shifting it would change the
+	// static-data base of every module.
+	static final int SCRATCH_ARGV_COUNT_OFFSET = 0x8000; // + 32 KiB
 
-	static final int ARGV_BUFSIZE_ADDR = 0x38004;
+	static final int SCRATCH_ARGV_BUFSIZE_OFFSET = 0x8004;
 
-	static final int ARGV_PTRS_ADDR = 0x38010;
+	static final int SCRATCH_ARGV_PTRS_OFFSET = 0x8010;
 
-	static final int ARGV_BUF_ADDR = 0x3C000; // 245760, page 3 + 48 KiB
+	static final int SCRATCH_ARGV_BUF_OFFSET = 0xC000; // + 48 KiB
+
+	/** What the env/argv scratch block reserves above the static data. */
+	static final int SCRATCH_REGION_SIZE = 0x10000;
+
+	// The base the block keeps for a program that reads neither its environment nor
+	// its command line: page 3, where it has always been. No emitted body can reach
+	// the helpers there, so the address is dead -- keeping it leaves every such
+	// module's bytes exactly as they were, and leaves the four-page floor alone.
+	static final int SCRATCH_UNUSED_BASE = 0x30000;
 
 	// Socket scratch cell in page 4 (0x40000), between the rontolisp data/heap (pages
 	// 0-3) and the adapter scratch (page 5+). sock.tcp-connect / tcp-listen /
@@ -2719,6 +2740,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// command line at all -- the expression compiler answers nil there, the way it
 		// does for %host-getcwd.
 		boolean usesHostArgv = !this.component && !this.noWasi && programUsesSymbol(program, LispNames.HOST_ARGV);
+		// Whether anything the module emits can reach the WASI environ_get / args_get
+		// calls, and with them the env/argv scratch block. _getenv is emitted
+		// unconditionally but is only CALLED for %host-getenv, and only off
+		// --component (where uiop:getenv is the spliced environment.lisp defun over
+		// wasi:cli/environment instead -- .kb/time-environment-builtins.md).
+		boolean usesEnvArgvScratch = usesHostArgv
+				|| (!this.component && programUsesSymbol(program, LispNames.HOST_GETENV));
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
 		boolean usesRead = programUsesSymbol(program, LispNames.READ)
 				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad;
@@ -4778,7 +4806,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// This keeps runtime interning and heap allocation above the static data no
 		// matter how large the program is.
 		int staticEnd = alnumOffset + alnumBytes.length;
-		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (staticEnd + 15) & ~15);
+		// The env/argv scratch block sits directly above the static data, and the
+		// intern table and heap above the BLOCK, so neither the data (which grows up
+		// from DATA_BASE_OFFSET) nor the bump heap (which grows up from heapBase) can
+		// reach what environ_get / args_get write. A program that can call neither
+		// keeps the historical page-3 base and stays byte-identical.
+		int scratchBase = usesEnvArgvScratch ? ((staticEnd + 15) & ~15) : SCRATCH_UNUSED_BASE;
+		int allocBase = usesEnvArgvScratch ? scratchBase + SCRATCH_REGION_SIZE : staticEnd;
+		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (allocBase + 15) & ~15);
 		int heapBase = rtInternBase + RT_INTERN_REGION_SIZE;
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -6398,7 +6433,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable, ostreamTableGlobalIndex))
 					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable))
 					.addFunction(WasmRuntimeBuilder.buildEqualBody(this.usesInstances ? instanceTypeBase() : -1))
-					.addFunction(WasmGetenvRuntimeBuilder.build());
+					.addFunction(WasmGetenvRuntimeBuilder.build(scratchBase));
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
@@ -6577,7 +6612,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// declares.
 				code.addFunction(argvOrdinals == null ? WasmArgvRuntimeBuilder.buildStub()
 						: WasmArgvRuntimeBuilder.build(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[0],
-								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[1]));
+								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[1], scratchBase));
 				// equalp key-fold body (FUNC_EQUALP_KEY); an identity stub unless the
 				// program writes a :test 'equalp table, since nothing else calls it.
 				code.addFunction(equalpDepthGlobalIndex < 0 ? WasmEqualpKeyRuntimeBuilder.buildStub()

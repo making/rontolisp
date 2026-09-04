@@ -47,7 +47,15 @@ final class WasmGetenvRuntimeBuilder {
 	private WasmGetenvRuntimeBuilder() {
 	}
 
-	static byte[] build() {
+	/**
+	 * The helper's body.
+	 * @param scratchBase the base of the program's env/argv scratch block, which the
+	 * compiler places above the static data (see
+	 * {@code .kb/wasm-linear-memory-layout.md}) -- the pointer array and the string
+	 * buffer this body hands {@code environ_get} are offsets from it
+	 * @return the encoded function body
+	 */
+	static byte[] build(int scratchBase) {
 		final ByteArrayOutputStream body = new ByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 
@@ -72,14 +80,14 @@ final class WasmGetenvRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		setLocal(w, NAME_LEN);
 
-		// environ_sizes_get(ENV_COUNT_ADDR, ENV_BUFSIZE_ADDR); environ_get(ENV_PTRS_ADDR,
-		// ENV_BUF_ADDR)
+		// environ_sizes_get(ENV_COUNT_ADDR, ENV_BUFSIZE_ADDR);
+		// environ_get(scratch PTRS, scratch BUF)
 		i32(w, WasmLispCompiler.ENV_COUNT_ADDR);
 		i32(w, WasmLispCompiler.ENV_BUFSIZE_ADDR);
 		call(w, WasmLispCompiler.FUNC_ENVIRON_SIZES_GET);
 		w.write(Instruction.DROP);
-		i32(w, WasmLispCompiler.ENV_PTRS_ADDR);
-		i32(w, WasmLispCompiler.ENV_BUF_ADDR);
+		i32(w, scratchBase + WasmLispCompiler.SCRATCH_ENV_PTRS_OFFSET);
+		i32(w, scratchBase + WasmLispCompiler.SCRATCH_ENV_BUF_OFFSET);
 		call(w, WasmLispCompiler.FUNC_ENVIRON_GET);
 		w.write(Instruction.DROP);
 
@@ -99,8 +107,8 @@ final class WasmGetenvRuntimeBuilder {
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF);
 		w.writeUnsignedLeb128(1); // br to $done
-		// p = load(ENV_PTRS_ADDR + i*4)
-		i32(w, WasmLispCompiler.ENV_PTRS_ADDR);
+		// p = load(scratch PTRS + i*4)
+		i32(w, scratchBase + WasmLispCompiler.SCRATCH_ENV_PTRS_OFFSET);
 		getLocal(w, I);
 		i32(w, 4);
 		w.write(Instruction.I32_MUL);

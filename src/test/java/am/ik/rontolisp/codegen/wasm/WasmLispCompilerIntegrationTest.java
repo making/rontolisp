@@ -4781,6 +4781,41 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void preview1ArgvDoesNotCorruptStaticDataItGrewPast() throws Exception {
+		// The scratch block the host fills for args_get / environ_get used to sit at a
+		// FIXED page-3 address (0x38000 for argv, 0x30000 for the environment), which a
+		// program with more than ~192 KB of interned strings grows straight across: the
+		// pointer array and the string buffer then land INSIDE the program's own static
+		// data. Nothing traps -- some other constant quietly reads back wrong, and which
+		// one moves with the layout (on the ci-spec corpus it was the char-downcase fold
+		// table, so every format directive and every char-equal after it went wrong).
+		// Build past the old base, read the command line, then check the bytes that used
+		// to be overwritten. See .kb/wasm-linear-memory-layout.md.
+		// 2800 strings put the blob across all three old argv cells -- the count /
+		// buffer-size words (0x38000), the pointer array (0x38010) and the "arg\0"
+		// buffer (0x3C000). The variable rather than the accessor because the
+		// uiop/image defvar seeds it at LOAD time, before the blob's own strings are
+		// materialized out of linear memory; an accessor call after that reads copies
+		// the clobber can no longer reach, which is exactly why the corpus failure
+		// surfaced in the case-fold TABLE (read from linear memory on every call)
+		// rather than in a string.
+		StringBuilder source = new StringBuilder("(defvar *blob* (list");
+		for (int i = 0; i < 2800; i++) {
+			source.append("\n  \"").append("q".repeat(84)).append("%04d".formatted(i)).append('"');
+		}
+		source.append("""
+				))
+				(print uiop:*command-line-arguments*)
+				(let ((bad 0))
+				  (dolist (s *blob*)
+				    (unless (= 88 (length s)) (incf bad))
+				    (dotimes (i 84) (unless (char= (char s i) #\\q) (incf bad) (return))))
+				  (print bad))""");
+		assertThat(compileAndRunWithArguments(source.toString(), false, "alpha", "beta"))
+			.isEqualTo("(\"alpha\" \"beta\")\n0");
+	}
+
+	@Test
 	void componentTimeFromWasiClocks() throws Exception {
 		// Component mode reads time from wasi:clocks. The value is an exact integer
 		// (boxed past the i31 range), like the interpreter and JVM.

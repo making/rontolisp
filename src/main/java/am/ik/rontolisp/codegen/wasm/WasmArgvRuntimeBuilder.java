@@ -55,9 +55,14 @@ final class WasmArgvRuntimeBuilder {
 	 * (placeholder-encoded)
 	 * @param argsGetFunc the function index to call for {@code args_get}
 	 * (placeholder-encoded)
+	 * @param scratchBase the base of the program's env/argv scratch block, which the
+	 * compiler places above the static data (see
+	 * {@code .kb/wasm-linear-memory-layout.md}) -- the count / buffer-size words, the
+	 * pointer array and the string buffer this body hands the two host calls are all
+	 * offsets from it
 	 * @return the encoded function body
 	 */
-	static byte[] build(int argsSizesGetFunc, int argsGetFunc) {
+	static byte[] build(int argsSizesGetFunc, int argsGetFunc, int scratchBase) {
 		final ByteArrayOutputStream body = new ByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 
@@ -68,18 +73,18 @@ final class WasmArgvRuntimeBuilder {
 		w.writeUnsignedLeb128(1);
 		w.writeRefType(true, Type.EQ.code());
 
-		// args_sizes_get(ARGV_COUNT_ADDR, ARGV_BUFSIZE_ADDR); args_get(ARGV_PTRS_ADDR,
-		// ARGV_BUF_ADDR)
-		i32(w, WasmLispCompiler.ARGV_COUNT_ADDR);
-		i32(w, WasmLispCompiler.ARGV_BUFSIZE_ADDR);
+		// args_sizes_get(scratch COUNT, scratch BUFSIZE);
+		// args_get(scratch PTRS, scratch BUF)
+		i32(w, scratchBase + WasmLispCompiler.SCRATCH_ARGV_COUNT_OFFSET);
+		i32(w, scratchBase + WasmLispCompiler.SCRATCH_ARGV_BUFSIZE_OFFSET);
 		call(w, argsSizesGetFunc);
 		w.write(Instruction.DROP);
-		i32(w, WasmLispCompiler.ARGV_PTRS_ADDR);
-		i32(w, WasmLispCompiler.ARGV_BUF_ADDR);
+		i32(w, scratchBase + WasmLispCompiler.SCRATCH_ARGV_PTRS_OFFSET);
+		i32(w, scratchBase + WasmLispCompiler.SCRATCH_ARGV_BUF_OFFSET);
 		call(w, argsGetFunc);
 		w.write(Instruction.DROP);
 
-		i32(w, WasmLispCompiler.ARGV_COUNT_ADDR);
+		i32(w, scratchBase + WasmLispCompiler.SCRATCH_ARGV_COUNT_OFFSET);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		setLocal(w, COUNT);
 		// acc = nil ; i = count - 1 -- built BACKWARDS, so the list comes out in order.
@@ -98,8 +103,8 @@ final class WasmArgvRuntimeBuilder {
 		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.BR_IF);
 		w.writeUnsignedLeb128(1); // br to $done
-		// p = load(ARGV_PTRS_ADDR + i*4)
-		i32(w, WasmLispCompiler.ARGV_PTRS_ADDR);
+		// p = load(scratch PTRS + i*4)
+		i32(w, scratchBase + WasmLispCompiler.SCRATCH_ARGV_PTRS_OFFSET);
 		getLocal(w, I);
 		i32(w, 4);
 		w.write(Instruction.I32_MUL);
