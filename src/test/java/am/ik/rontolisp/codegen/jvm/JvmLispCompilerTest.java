@@ -820,6 +820,23 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileRuntimeScansLongFlatDefinitionsOnTheCdrLoop() throws Exception {
+		// %compile-defines-methods-p iterates the CDR spine (only the CAR direction
+		// recurses), so a definition with ten thousand body forms -- an ordinary flat
+		// list -- answers instead of overflowing the stack. The first call has no
+		// defmethod anywhere and takes the eval branch; the second finds one on the
+		// spine and answers the no-op function, which must not evaluate the defmethod.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(let ((body nil))
+				  (dotimes (i 10000) (setq body (cons '(quote nil) body)))
+				  (print (functionp (compile nil (cons 'lambda (cons nil body))))))
+				(print (null (funcall (compile nil (list 'lambda nil '(defmethod cx-noop ()))))))
+				""")))).isEqualTo("""
+				T
+				T""");
+	}
+
+	@Test
 	void compileCloserCommonLispPackageServesTheDaoPackageShape() throws Exception {
 		// (:use :closer-common-lisp) implies cl, and the closer-mop members inherit
 		// through the re-export -- the postmodern DAO package shape on the compile

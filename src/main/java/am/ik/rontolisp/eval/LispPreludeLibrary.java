@@ -174,20 +174,34 @@ public final class LispPreludeLibrary {
 				        (return (nreverse %ld-acc))
 				        (setq %ld-acc (cons (car %ld-tail) %ld-acc)))))
 				""");
+		// sublis walks the CDR direction with a loop like tree-equal below; the entry
+		// test is still applied to every spine node (the recursive shape called the walk
+		// on the cdr, which checked the next node there), and -- as before -- every cons
+		// is copied.
 		SOURCES.put(LispNames.SUBLIS, """
 				(defun sublis (%sb-alist %sb-tree &key %sb-key %sb-test %sb-test-not)
-				  (labels ((%sb-walk (%sb-x)
-				             (let* ((%sb-probe (if %sb-key (funcall %sb-key %sb-x) %sb-x))
-				                    (%sb-entry
-				                      (cond (%sb-test-not
-				                             (assoc %sb-probe %sb-alist :test-not %sb-test-not))
-				                            (%sb-test
-				                             (assoc %sb-probe %sb-alist :test %sb-test))
-				                            (t (assoc %sb-probe %sb-alist)))))
-				               (cond (%sb-entry (cdr %sb-entry))
-				                     ((consp %sb-x)
-				                      (cons (%sb-walk (car %sb-x)) (%sb-walk (cdr %sb-x))))
-				                     (t %sb-x)))))
+				  (labels ((%sb-entry (%sb-x)
+				             (let ((%sb-probe (if %sb-key (funcall %sb-key %sb-x) %sb-x)))
+				               (cond (%sb-test-not
+				                       (assoc %sb-probe %sb-alist :test-not %sb-test-not))
+				                     (%sb-test
+				                       (assoc %sb-probe %sb-alist :test %sb-test))
+				                     (t (assoc %sb-probe %sb-alist)))))
+				           (%sb-walk (%sb-x)
+				             (if (consp %sb-x)
+				                 (let* ((%sb-head (cons nil nil)) (%sb-tail %sb-head) (%sb-p %sb-x))
+				                   (while (and (consp %sb-p) (not (%sb-entry %sb-p)))
+				                     (let ((%sb-cell (cons (%sb-walk (car %sb-p)) nil)))
+				                       (setf (cdr %sb-tail) %sb-cell)
+				                       (setq %sb-tail %sb-cell))
+				                     (setq %sb-p (cdr %sb-p)))
+				                   (setf (cdr %sb-tail)
+				                         (if (consp %sb-p)
+				                             (cdr (%sb-entry %sb-p))
+				                             (%sb-walk %sb-p)))
+				                   (cdr %sb-head))
+				                 (let ((%sb-e (%sb-entry %sb-x)))
+				                   (if %sb-e (cdr %sb-e) %sb-x)))))
 				    (%sb-walk %sb-tree)))
 				""");
 		// The counter is a defvar for the same reason the %symbol-plists store is one:
@@ -231,7 +245,16 @@ public final class LispPreludeLibrary {
 				           h))
 				        ((symbolp obj) (sxhash (symbol-name obj)))
 				        ((consp obj)
-				         (logand (+ (* 31 (sxhash (car obj))) (sxhash (cdr obj))) most-positive-fixnum))
+				         ;; The spine is folded with a LOOP -- recursing on the cdr put one
+				         ;; frame per element on the stack. Each level combined as
+				         ;; (logand (+ (* 31 (sxhash car)) <rest>) most-positive-fixnum);
+				         ;; mod distributes over the +, so the fold can run leftward taking
+				         ;; the mod each step and answer exactly what the recursion did.
+				         (let ((h 0) (p obj))
+				           (while (consp p)
+				             (setq h (logand (+ h (* 31 (sxhash (car p)))) most-positive-fixnum))
+				             (setq p (cdr p)))
+				           (logand (+ h (sxhash p)) most-positive-fixnum)))
 				        (t 0)))
 				""");
 		SOURCES.put(LispNames.SBIT, """
@@ -1631,14 +1654,40 @@ public final class LispPreludeLibrary {
 				      (setf (aref %rb-out %rb-i) (rontolisp::%random-byte)))
 				    %rb-out))
 				""");
+		// subst walks the CDR direction with a loop like tree-equal below -- one frame
+		// per
+		// element is a StackOverflowError on an ordinary flat list. The structure-sharing
+		// test the recursive body made is kept exactly: the spine cells are built
+		// speculatively, but the chain is closed at the CELL of the last node whose CAR
+		// differed (or at the end when the tail itself differs) and shares the original
+		// rest, so an unchanged subtree -- including the spine suffix below the deepest
+		// change -- comes back as-is and a tree with no match is returned identically.
 		SOURCES.put(LispNames.SUBST, """
 				(defun subst (new old tree &key (test #'eql) key)
-				  (labels ((walk (x)
-				             (cond ((funcall test old (if key (funcall key x) x)) new)
-				                   ((consp x)
-				                    (let ((a (walk (car x))) (d (walk (cdr x))))
-				                      (if (and (eq a (car x)) (eq d (cdr x))) x (cons a d))))
-				                   (t x))))
+				  (labels ((match (x) (funcall test old (if key (funcall key x) x)))
+				           (walk (x)
+				             (if (consp x)
+				                 (let* ((head (cons nil nil)) (tail head) (p x)
+				                       (changed nil) (link nil) (attach nil))
+				                   (while (and (consp p) (not (match p)))
+				                     (let ((a (walk (car p))))
+				                       (let ((cell (cons a nil)))
+				                         (setf (cdr tail) cell)
+				                         (setq tail cell))
+				                       (unless (eq a (car p))
+				                         (setq changed t)
+				                         (setq link tail)
+				                         (setq attach (cdr p))))
+				                     (setq p (cdr p)))
+				                   (let ((d (if (consp p) new (walk p))))
+				                     (unless (eq d p)
+				                       (setq changed t)
+				                       (setq link tail)
+				                       (setq attach d))
+				                     (if changed
+				                         (progn (setf (cdr link) attach) (cdr head))
+				                         x)))
+				                 (if (match x) new x))))
 				    (walk tree)))
 				""");
 		// mismatch: the index INTO SEQUENCE1 of the first differing element, or nil
@@ -1708,10 +1757,22 @@ public final class LispPreludeLibrary {
 				                     (progn (setq result i) (setq done t)))))))
 				    result))
 				""");
+		// copy-tree walks the CDR direction with a loop like tree-equal below -- the
+		// recursive shape put one frame per element on the stack and a flat list of ten
+		// thousand conses, an ordinary size, overflowed on every backend. Only the CAR
+		// direction recurses, so the depth is the tree's nesting depth; the spine is
+		// built forward from a dummy head and the non-cons tail is attached as-is.
 		SOURCES.put(LispNames.COPY_TREE, """
 				(defun copy-tree (tree)
 				  (if (consp tree)
-				      (cons (copy-tree (car tree)) (copy-tree (cdr tree)))
+				      (let* ((head (cons nil nil)) (tail head) (p tree))
+				        (while (consp p)
+				          (let ((cell (cons (copy-tree (car p)) nil)))
+				            (setf (cdr tail) cell)
+				            (setq tail cell))
+				          (setq p (cdr p)))
+				        (setf (cdr tail) p)
+				        (cdr head))
 				      tree))
 				""");
 		// tree-equal: same SHAPE, leaves matching under :test / :test-not. A cons is

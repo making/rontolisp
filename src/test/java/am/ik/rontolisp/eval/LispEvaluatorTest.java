@@ -4676,6 +4676,36 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void consTreePreludeWalksLoopTheCdrDirection() {
+		// The cons-tree prelude defuns (copy-tree, subst, sublis, sxhash, and equalp's
+		// cons arm) iterate the CDR spine and recurse only on the CAR. A plain flat list
+		// is an ordinary shape, so these answer on the strictest of the four backends
+		// (the interpreter, one Java frame chain per Lisp call) where one frame per
+		// element would be a StackOverflowError.
+		assertThat(eval("""
+				(let ((a nil))
+				  (dotimes (i 100000) (setq a (cons i a)))
+				  (list (length (copy-tree a))
+				        (length (subst 1 2 a))
+				        (length (sublis '((2 . 1)) a))
+				        (integerp (sxhash a))))
+				""").print()).isEqualTo("(100000 100000 100000 T)");
+		assertThat(eval("""
+				(let ((a nil) (b nil))
+				  (dotimes (i 100000) (setq a (cons i a)) (setq b (cons i b)))
+				  (equalp a b))
+				""").print()).isEqualTo("T");
+		// sxhash iterates the spine but keeps the exact value the recursive shape
+		// computed (the fold is mod-additive, so it can be taken per step).
+		assertThat(eval("(sxhash '(1 2 3))").print()).isEqualTo("77483");
+		assertThat(eval("(sxhash '(1 2 . 3))").print()).isEqualTo("96");
+		assertThat(eval("(sxhash '(1 2 (3 4) 5))").print()).isEqualTo("2480479");
+		// The dotted tail is attached as-is, the way the recursive cons returned it.
+		assertThat(eval("(copy-tree '(1 2 . 3))").print()).isEqualTo("(1 2 . 3)");
+		assertThat(eval("(copy-tree nil)").print()).isEqualTo("NIL");
+	}
+
+	@Test
 	void evalCountIfNot() {
 		assertThat(eval("(count-if-not #'evenp (list 1 2 3 4 5))").print()).isEqualTo("3");
 		assertThat(eval("(count-if-not #'evenp (vector 1 2 3 4 5))").print()).isEqualTo("3");
@@ -4745,6 +4775,19 @@ class LispEvaluatorTest {
 		assertThat(eval("(subst 'x 'a '(a (b a) c))").print()).isEqualTo("(X (B X) C)");
 		assertThat(eval("(subst 9 '(char-class-test) '(f (char-class-test) g) :test #'equal)").print())
 			.isEqualTo("(F 9 G)");
+		// A SPINE node matching splices NEW where the loop stops, and the untouched
+		// continuation past it is shared -- the same shape the recursive walk made.
+		assertThat(eval("(subst 'z 'b '(a b c))").print()).isEqualTo("(A Z C)");
+		// Structure sharing: an unchanged subtree comes back as-is, only the spine above
+		// a change is rebuilt, and a tree with no match at all is returned identically.
+		assertThat(evalMulti("""
+				(let* ((keep (list 7 8))
+				       (x (list (list 'a) keep))
+				       (y (subst 'z 'a x)))
+				  (list (eq (cadr y) keep)
+				        (not (eq (car y) (car x)))
+				        (eq x (subst 9 5 x))))
+				""").print()).isEqualTo("(T T T)");
 	}
 
 	@Test
@@ -6240,6 +6283,9 @@ class LispEvaluatorTest {
 		assertThat(eval("(ldiff '(1 2 . 3) nil)").print()).isEqualTo("(1 2 . 3)");
 		assertThat(eval("(sublis '((a . 1) (b . 2)) '(a (b c) . a))").print()).isEqualTo("(1 (2 C) . 1)");
 		assertThat(eval("(sublis (pairlis '(x y) '(10 20)) '(+ x y))").print()).isEqualTo("(+ 10 20)");
+		// The loop applies the entry test at every CDR position of the spine, the way
+		// the recursive shape's walk of the cdr checked the next node there.
+		assertThat(eval("(sublis '((b . 9)) '((a) b (c)))").print()).isEqualTo("((A) 9 (C))");
 		// gentemp answers a fresh INTERNED symbol, a different one every call.
 		assertThat(eval("(let ((a (gentemp \"Q\")) (b (gentemp \"Q\"))) (list (eq a b) (symbolp a)))").print())
 			.isEqualTo("(NIL T)");

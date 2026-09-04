@@ -26,11 +26,14 @@
       (lambda () nil)
       (eval definition)))
 
+;; The CDR direction is a LOOP, not a recursion: the definition of a function
+;; with a long body is an ordinary flat list of body forms, and one frame per
+;; element overflowed the stack. Only the CAR direction recurses, so the depth
+;; is the form's nesting depth.
 (defun %compile-defines-methods-p (form)
-  (if (consp form)
-      (if (eq (car form) 'defmethod)
-          t
-          (if (%compile-defines-methods-p (car form))
-              t
-              (%compile-defines-methods-p (cdr form))))
-      nil))
+  (let ((p form) (found nil))
+    (while (and (consp p) (not found))
+      (cond ((eq (car p) 'defmethod) (setq found t))
+            ((%compile-defines-methods-p (car p)) (setq found t))
+            (t (setq p (cdr p)))))
+    found))

@@ -8307,6 +8307,31 @@ cases:
       ((1 A) (1 B) (2 C))
       T
       T
+  - name: cons-tree-prelude-long-lists
+    source: |
+      ; copy-tree / subst / sublis / sxhash walk the CDR direction with a loop, so
+      ; a long flat list does not recurse once per element (and equalp, whose cons
+      ; arm already looped, is pinned alongside). subst keeps its structure
+      ; sharing: a tree with no match answers identically.
+      (defun mk388 (n) (let ((out nil)) (dotimes (i n) (setq out (cons i out))) out))
+      (let ((a (mk388 10000)))
+        (print (length (copy-tree a)))
+        (print (length (subst 1 2 a)))
+        (print (length (sublis '((2 . 1)) a)))
+        (print (integerp (sxhash a)))
+        (print (eq a (subst 9 -1 a)))
+        (print (equalp a (mk388 10000))))
+      (print (copy-tree '(1 2 . 3)))
+      (print (subst 'z 'b '(a b c)))
+    expected: |
+      10000
+      10000
+      10000
+      T
+      T
+      T
+      (1 2 . 3)
+      (A Z C)
   - name: reader-block-comments
     source: |
       #| a block comment
