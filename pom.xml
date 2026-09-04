@@ -188,7 +188,7 @@ gitBranch=${git.branch}
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
-				<version>3.15.0</version>
+				<version>3.16.0</version>
 				<configuration>
 					<!-- JvmSimdVectorTemplate uses the incubator Vector API (embedded as a
 					     resource for the simd JVM acceleration bridge; never loaded as a
