@@ -1,26 +1,26 @@
 # rontolisp examples
 
-Practical, self-contained rontolisp programs. Unless noted otherwise each one
-runs identically on the interpreter, the JVM and WASM.
+Practical, self-contained rontolisp programs. Unless a directory says otherwise,
+everything in it runs identically on the interpreter, the JVM and WASM. Each
+directory holds a README of its own; the individual programs explain themselves
+in their header comments. How big the compiled artifacts are is measured, not
+documented here: [`size-report/`](../size-report).
 
 | Directory | Programs |
 | --- | --- |
 | [`console/`](console) | Algorithms and console I/O — pure, cross-backend |
-| [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`, `--simd`) |
-| [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02-ch08, ported |
-| [`llama2/`](llama2) | llama2.c's `run.c` ported whole: a Llama 2 inference engine over the real TinyStories checkpoints, and the example `--simd` is for |
-| [`llm-from-scratch/`](llm-from-scratch) | 『作ってわかる大規模言語モデルの仕組み』 chapters 2 and 3, ported: attention, an encoder/decoder Transformer, then a GPT trained on 漱石 and sampled from — all on the `torch` package |
+| [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`, `--simd`, `--gpu`) |
+| [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02–ch08, ported |
+| [`llama2/`](llama2) | llama2.c's `run.c` ported whole: a Llama 2 inference engine over the real TinyStories checkpoints — the example `--simd` is for |
+| [`llm-from-scratch/`](llm-from-scratch) | 『作ってわかる大規模言語モデルの仕組み』 ch2–ch3, ported on the `torch` package: attention, a Transformer, a GPT trained on 漱石 |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
-| [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API on top |
+| [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API |
 | [`jvm/`](jvm) | A Java-callable library class, a C library through `cffi`, `java:` interop and Swing GUIs (JVM only) |
-| [`macos/`](macos) | A native Cocoa window, and the Objective-C runtime under it, through the built-in `appkit` / `objc` packages (macOS only -- `java -jar`, the native binary, a compiled class) |
+| [`macos/`](macos) | A native Cocoa window, the Objective-C runtime, and Metal under it, through the built-in `appkit` / `objc` / `metal` / `scene` packages (macOS only) |
 | [`browser/`](browser) | Browser demos: compile to WASM, run in a page |
-| [`count-vowels/`](count-vowels), [`wit/`](wit) | Crossing the WASM boundary: exporting to a host, implementing a WIT world, calling one, composing with Rust |
+| [`count-vowels/`](count-vowels), [`wit/`](wit) | Crossing the WASM boundary: exporting to a host, implementing and calling a WIT world, composing with Rust |
 | [`asdf/`](asdf) | Loading real third-party libraries with `asdf:load-system` / `ql:quickload` |
 | [`wasmcloud/`](wasmcloud), [`cloudflare-workers/`](cloudflare-workers), [`gae/`](gae) | Platform templates |
-
-How big the compiled artifacts are is measured, not documented here:
-[`size-report/`](../size-report).
 
 Assuming the executable JAR is built (`./mvnw clean package`):
 
@@ -28,272 +28,35 @@ Assuming the executable JAR is built (`./mvnw clean package`):
 JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 ```
 
-## Console & algorithms — `console/`
+## Where things run
 
-| File | What it demonstrates |
+Most programs run on all four backends (see [Running](#running) below). These
+areas need a narrower set:
+
+- **`net/` servers** on WASM need `--component` plus
+  `wasmtime run ... -S tcp=y -S inherit-network=y`; the `http-handler` ones run
+  under `wasmtime serve`. TLS (`tls-listen`) is interpreter/JVM only.
+- **`jvm/`** is JVM-family only: the CFFI bindings need a foreign function API
+  neither WASM backend has; the `java:` interop and Swing demos need the JVM and
+  a display, and the native binary carries no reflection metadata for them.
+- **`macos/`** is macOS, every JVM-side shape of the language (`java -jar`, the
+  native binary, a compiled `.class`/`.jar`); the window and Metal examples need
+  a display, so they are not in `examples.yaml`. The two that open nothing —
+  `objc-runtime.lisp`, `system-frameworks.lisp` — run in a terminal and are
+  listed there under `os: [mac]`.
+
+## Guides by area
+
+The examples are the runnable half; each has a guide behind it:
+
+| Topic | Guide |
 | --- | --- |
-| [`nqueens.lisp`](console/nqueens.lisp) | Backtracking search: recursion, list manipulation, ASCII board output |
-| [`life.lisp`](console/life.lisp) | Conway's Game of Life on a toroidal 2-D `make-array`; `(load ...)`s the rendering-free `life-core.lisp` |
-| [`sorting.lisp`](console/sorting.lisp) | Quicksort and merge sort parameterized by a first-class comparator |
-| [`calc.lisp`](console/calc.lisp) | A prefix-arithmetic interpreter: recursive evaluation over an alist environment |
-| [`mandelbrot.lisp`](console/mandelbrot.lisp) | ASCII Mandelbrot: floating-point arithmetic and nested loops |
-| [`mandelbrot-nogc.lisp`](console/mandelbrot-nogc.lisp) | The same, as a `--no-gc` export typed by a checked-in WIT world. One directive, two builds: a plain MVP module whose host reads the string out of linear memory, and a `--component` one where `wasmtime --invoke` returns it |
-| [`line-numbers.lisp`](console/line-numbers.lisp) | A `cat -n` clone: `with-open-file`, `read-line`, `write-line`, `format nil` |
-| [`parse-numbers.lisp`](console/parse-numbers.lisp) | `parse-integer` and character classification over file lines |
-| [`sieve.lisp`](console/sieve.lisp) | Sieve of Eratosthenes over a boolean array, plus prime factorization |
-| [`hanoi.lisp`](console/hanoi.lisp) | Tower of Hanoi, in a printing and a list-returning variant |
-| [`roman.lisp`](console/roman.lisp) | Roman numerals both ways, and an example that **checks itself**: the full 3999-value round-trip is a [rove](#an-example-that-checks-itself) assertion |
-| [`word-frequency.lisp`](console/word-frequency.lisp) | Hash-table accumulation, custom-comparator `sort`, `maphash` |
-| [`contact-book.lisp`](console/contact-book.lisp) | `defstruct` with `setf`-able accessors and `&key` lambda lists |
-| [`error-handling.lisp`](console/error-handling.lisp) | Typed conditions on a bank account: `define-condition`, `handler-case` dispatch by class, `ignore-errors`, `unwind-protect`, non-fatal `signal`. **Interpreter/JVM only** |
-| [`l-system.lisp`](console/l-system.lisp) | L-system fractals: string rewriting by hash-table rule dispatch, `&rest` args |
-
-## Numerical & machine learning — `ml/`
-
-| File | What it demonstrates |
-| --- | --- |
-| [`nn.lisp`](ml/nn.lisp) | XOR by backpropagation with hand-written loops over rank-1/rank-2 arrays |
-| [`nn-vec.lisp`](ml/nn-vec.lisp) | The same net over the `vec`/`linalg` packages and single-float (`#f`) packed arrays |
-| [`simd-dot.lisp`](ml/simd-dot.lisp) | The smallest thing `--simd` speeds up: one `vec:dot` over 1024 doubles, 4000 times. The answer is an exact integer, so only the elapsed time moves |
-| [`simd-gemv.lisp`](ml/simd-gemv.lisp) | `vec:matvec` (GEMV) + `vec:dot` — the two kernels LLM inference lives in. Prints `argmax` indices, so acceleration cannot change the output. See the [SIMD guide](../doc/en/guides/simd-acceleration.md) |
-| [`blas-matmul.lisp`](ml/blas-matmul.lisp) | One `linalg:matmul` at linalg's default `double-float` width — the example both acceleration flags reach. Its entries are small integers, so the printed numbers are exact and neither `--simd` nor `--blas` can move them |
-| [`gpu-matmul.lisp`](ml/gpu-matmul.lisp) | The same product at **single-float** width — the width a Mac's GPU can take. One `linalg:matmul` and a timing loop; run it flagless, with `--simd` and with `--gpu --simd`. Deliberately small enough to read at a glance, and the one example not pinned by `ExamplesE2eTest`: it prints a wall-clock time and nothing else. See the [GPU guide](../doc/en/guides/gpu-acceleration.md) |
-| [`simd-gemv-nogc.lisp`](ml/simd-gemv-nogc.lisp) | The same inner loop as a `--no-gc` reactor: the host calls the exported `fingerprint`. The `-into` kernels keep the never-freed bump heap at three blocks |
-| [`tiny-llm.lisp`](ml/tiny-llm.lisp) | A 2-layer transformer decoder — llama2's `forward()` without the tokenizer or weight loader: RMSNorm, causal attention over a KV cache, SwiGLU, greedy decode. Thirteen GEMVs per pass. The KV cache stores **V transposed**, which keeps the attention sum one `vec:matvec`. The whole engine, over real checkpoints, is [`llama2/`](llama2) |
-| [`mlp.lisp`](ml/mlp.lisp) | A generalized multi-layer perceptron for 2-D circle classification |
-| [`maze-rl.lisp`](ml/maze-rl.lisp) | Tabular Q-learning on a grid maze. **Non-deterministic:** `random` is unseeded and per-backend |
-| [`linear-regression.lisp`](ml/linear-regression.lisp) | Least-squares polynomial fitting through the normal equations, in exact rationals |
-| [`deep-digits.lisp`](ml/deep-digits.lisp) | A 15-16-16-10 leaky-ReLU MLP over pixel bitmaps, trained by full-batch matrix backprop. Fully deterministic on every backend |
-| [`numerical-calculus.lisp`](ml/numerical-calculus.lisp) | `linalg:diff` / `linalg:gradient` (numpy's `np.diff`/`np.gradient`), including non-uniform spacing |
-| [`heat3d.lisp`](ml/heat3d.lisp) | Rank-3 arrays: 3-subscript `aref`, `#nA` syntax, `row-major-aref`, rank-generic `linalg`, and exact rational heat conservation |
-
-## Deep Learning from Scratch — `deep-learning-from-scratch/`
-
-A chapter-by-chapter port of the sample code of *Deep Learning from Scratch*
-(ゼロから作るDeep Learning, O'Reilly Japan) by Koki Saitoh, with the book's
-`common/` library rebuilt on `linalg:` and CLOS layer classes. MNIST scripts
-need a one-time `./download-mnist.sh`. Per-program table in
-[its README](deep-learning-from-scratch/README.md).
-
-## llama2.c — `llama2/`
-
-[`llama2.lisp`](llama2/llama2.lisp) is Andrej Karpathy's `run.c` in one Lisp
-file -- checkpoint loader, tokenizer + BPE encoder, forward pass, sampler,
-generate loop -- and tells the same stories as the C program, token for token,
-from the checked-in 1 MB `stories260K.bin` or the downloadable `stories15M.bin`.
-Its 15 million weights load through `read-sequence` over packed single-float
-arrays; its decode is all `vec:matvec`, which is why `--simd` takes wasm-GC from
-0.4 to 46 tokens/s. The forward pass is a table of layer kinds -- QK-norm, the
-RoPE layout, a partial rotary dim, an output gate, the attention scale and the
-model-level multipliers are options a loader fills in, and Llama 2 is the row
-where they are all at their default. Setup, knobs and numbers in
-[its README](llama2/README.md).
-
-## LLM from Scratch — `llm-from-scratch/`
-
-The Transformer chapter of 『作ってわかる大規模言語モデルの仕組み』 (Elith
-Inc., Nikkei BP), rewritten on the [`torch`
-package](../doc/en/guides/neural-networks.md): scaled dot-product and
-multi-head attention, sinusoidal positional encoding, LayerNorm, the
-encoder/decoder Transformer with its padding and causal masks, and a
-Japanese-English training loop with greedy decoding over a twelve-pair corpus
-that lives in the file. `nn.Module` becomes `torch:module` plus a `forward`
-defun, `nn.ModuleList` a plain list, `DataLoader` `torch:shuffled-batches`.
-
-Chapter 3 continues into GPT: a character-level tokenizer, a decoder-only stack
-with learned positions, pre-LayerNorm blocks and a causal mask, AdamW over two
-parameter groups with gradient clipping and a warmup-then-cosine schedule, and
-temperature / top-k sampling. It trains on the public-domain opening of
-『吾輩は猫である』, inlined — nothing is downloaded — and because the sampler
-draws from the same seeded generator, the generated passages are byte-identical
-on every backend. Section 3.2's byte-pair encoder needs no `torch` at all, and
-its hundred merges come out in the book's exact order. Mapping table and the
-book-vs-tested shapes in [its README](llm-from-scratch/README.md).
-
-## Networking, HTTP & services — `net/`
-
-Servers on WASM need `--component` plus
-`wasmtime run ... -S tcp=y -S inherit-network=y`; the
-`http-handler` ones run under `wasmtime serve`.
-
-| File | What it demonstrates |
-| --- | --- |
-| [`echo-server.lisp`](net/echo-server.lisp) | TCP echo server: `rontolisp:tcp-listen`/`tcp-accept`, then the ordinary stream functions over the socket handle |
-| [`echo-client.lisp`](net/echo-client.lisp) | Its client, via `rontolisp:tcp-connect`. Either end can run on a different backend |
-| [`http-hello.lisp`](net/http-hello.lisp) | Minimal HTTP/1.1 by hand: `read-line` over the request, `Content-Length`, `Connection: close` |
-| [`https-hello.lisp`](net/https-hello.lisp) | The same over TLS via `rontolisp:tls-listen` (PKCS12 keystore). Everything after the listen call is unchanged. Interpreter/JVM only |
-| [`hello-clack.lisp`](net/hello-clack.lisp) | **One source, five hosts.** The smallest **Clack** application, and the one `:server :rontolisp` serves everywhere: the interpreter and a compiled JVM class bind `PORT`, `-o app.war` deploys into any Servlet 6 container, `--component` runs under `wasmtime serve`, and `--no-wasi` is the Cloudflare Worker [`cloudflare-workers/hello-clack-one-source/`](cloudflare-workers/hello-clack-one-source) deploys — with no edit between them. See the [Clack guide](../doc/en/guides/clack.md) |
-| [`hello-clack-accesslog.lisp`](net/hello-clack-accesslog.lisp) | The same application with **lack's accesslog middleware** composed around it by `lack:builder` — one Apache combined-format line per request on standard output, reporting the status and content length the application returned. The middleware is quickloaded by name, because `find-middleware` would otherwise try to load its system at run time |
-| [`http-handler.lisp`](net/http-handler.lisp) | The `rontolisp:http-handler` hello world: Clack environment plist in, `(status headers body)` out. See the [Serving HTTP guide](../doc/en/guides/http-handler.md) |
-| [`http-handler-cl-who.lisp`](net/http-handler-cl-who.lisp) | The same, rendering through the real **cl-who**: the markup DSL expands at macro-expansion time, `esc` escapes at run time |
-| [`httpbin.lisp`](net/httpbin.lisp) | A mini **httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echo the request as JSON, plus 405 and 404 |
-| [`httpbin-clos.lisp`](net/httpbin-clos.lisp) | The **CLOS** flavour: the envelope is a `defclass`, so `json-stringify` serializes slots in definition order — byte-identical output, and the same shape jzon produces |
-| [`httpbin-jzon.lisp`](net/httpbin-jzon.lisp) | The **jzon** flavour: only the two JSON call sites change, since `rontolisp:json-*` is a subset of jzon |
-| [`httpbin-clack.lisp`](net/httpbin-clack.lisp) | The **Clack** flavour: an application *function*, a `cond` over `:path-info` (clack has no router) and one middleware — a function from application to application. rontolisp's server protocol *is* Clack's, so this one file is also, unchanged, the war a Servlet container deploys and the Worker of [`cloudflare-workers/httpbin-clack-one-source/`](cloudflare-workers/httpbin-clack-one-source) — `hello-clack.lisp`'s five hosts, with endpoints. See the [Clack guide](../doc/en/guides/clack.md) |
-| [`httpbin-tiny-routes.lisp`](net/httpbin-tiny-routes.lisp) | The **tiny-routes** flavour: routes composed with `define-routes`, threaded through the library's own middleware by `pipe`, and a wrong method *declining* into the catch-all that tells 405 from 404 |
-| [`httpbin-ningle.lisp`](net/httpbin-ningle.lisp) | The **ningle** flavour, the other routing model: routes are assigned to an application *object*, a controller returns the body and mutates `*response*`, the request arrives already parsed, and the 404 is an overridden `ningle:not-found` method |
-| [`magic-8-ball.lisp`](net/magic-8-ball.lisp) | The Spin tutorial's Magic 8 Ball JSON API. Inside a serve component `random` works via `wasi:random` |
-| [`dog-fetcher.lisp`](net/dog-fetcher.lisp) | `rontolisp:fetch` *inside* a handler — the proxy/aggregator shape |
-| [`linalg-api.lisp`](net/linalg-api.lisp) | A linear-algebra JSON service: `POST /solve` and `POST /fit`, with 400s for bad input. Integer inputs are solved exactly |
-| [`kv-server.lisp`](net/kv-server.lisp) | A mini **Redis**: enough RESP2 that the real `redis-cli` works, plus inline commands for `nc` |
-| [`kv-server-tls.lisp`](net/kv-server-tls.lisp) | The same over TLS on 6380 (`redis-cli --tls --insecure`). Interpreter/JVM only |
-
-[`net/http-handler/`](net/http-handler) holds a `spin.toml` for the
-`http-handler.lisp` component: `spin build && spin up` serves it on `:3000`. It
-needs the [Spin canary](https://github.com/spinframework/spin/releases/tag/canary)
-build (4.1.0-pre0+); 4.0.2 speaks an older `wasi:http` snapshot.
-
-## A library the JVM ecosystem consumes — `jvm/`
-
-A compiled `.class` that Java code calls, rather than a program that runs. See
-the [JVM library guide](../doc/en/guides/jvm-library.md).
-
-| File | What it demonstrates |
-| --- | --- |
-| [`kernels-library.lisp`](jvm/kernels-library.lisp) | `rontolisp:jvm-export` + `--no-main`: typed `public static` methods over scalars, strings and packed float arrays |
-| [`bench/`](jvm/bench) | What the packed float-array boundary costs — the handle against a plain Java loop, the raw kernel, and a copying facade |
-
-## A C library through CFFI — `jvm/`
-
-Upstream CFFI, quickloaded and bound to the machine's own shared library by the
-foreign function API. The JVM family only — the interpreter, the native binary
-and a compiled `.class`/`.jar`; neither WASM backend has a foreign function API.
-See the [C libraries guide](../doc/en/guides/cffi.md).
-
-| File | What it demonstrates |
-| --- | --- |
-| [`cffi-sqlite.lisp`](jvm/cffi-sqlite.lisp) | A real SQLite database through **cl-sqlite**: a table created, rows inserted, updated and read back, plus a prepared statement stepped by hand. Needs `libsqlite3` on the machine |
-
-## Java interop / GUI (JVM only) — `jvm/`
-
-These drive real Java APIs through the `java:` package, so they need the JVM (as
-interpreter or via `-o Prog.class`) and a display — not the WASM backend, and
-not the GraalVM native binary, which carries no reflection metadata for them.
-See the [Java interop guide](../doc/en/guides/java-interop.md).
-
-| File | What it demonstrates |
-| --- | --- |
-| [`java-interop.lisp`](jvm/java-interop.lisp) | A Swing window through `java:new`/`call`/`field`/`proxy`, with a Lisp lambda as the `ActionListener` |
-| [`swing.lisp`](jvm/swing.lisp) | A reusable Swing grid-window helper written entirely on `java:`, in its own package; the demos splice it in with `(require :swing "swing.lisp")` |
-| [`life-gui.lisp`](jvm/life-gui.lisp) | Game of Life animated on a `javax.swing.Timer`, loading the same `life-core.lisp` as `life.lisp` |
-| [`minesweeper-swing.lisp`](browser/minesweeper/minesweeper-swing.lisp) | Minesweeper on the desktop, loading the same core as the browser build |
-
-## Native macOS — `macos/`
-
-A Cocoa window with no Swing, no `java:` and nothing installed: the built-in
-`appkit` package is a widget layer written in rontolisp over `objc`, which binds
-AppKit through the foreign function API. macOS, and every JVM-side
-shape of the language: under `java -jar`, in the `rontolisp` native binary — which
-is where `java:` cannot interpret at all — and compiled to a `.class` / `.jar`.
-A program need not open a window at all: [`menubar.lisp`](macos/menubar.lisp) is a
-menu bar item, its menu entries Lisp closures.
-`objc` reaches further than AppKit: every framework on the machine speaks the
-Objective-C runtime, and one that is not linked into the process is one `NSBundle`
-message away, which is what [`system-frameworks.lisp`](macos/system-frameworks.lisp)
-is about. Metal is one of them, and it is Objective-C nearly end to end, so the GPU
-is reachable with nothing added: [`metal-triangle.lisp`](macos/metal-triangle.lisp),
-[`metal-cube.lisp`](macos/metal-cube.lisp) and
-[`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) are the AppKit twins of the WebGL
-examples under [`browser/`](browser), and
-[`metal-pagoda-garden.lisp`](macos/metal-pagoda-garden.lisp) is a voxel scene with no twin
-anywhere. All four drive the built-in `metal` package -- the layer, the pipeline and the
-frame loop every Metal program writes identically -- and the rung above it is `scene`, a
-3-D viewer for [`geom`](../doc/en/guides/solid-modeling.md) solids:
-[`scene-solids.lisp`](macos/scene-solids.lisp),
-[`scene-robot-arm.lisp`](macos/scene-robot-arm.lisp) and
-[`scene-robot-reach.lisp`](macos/scene-robot-reach.lisp) are what a modelled machine looks
-like when the camera and the frame loop are already written — the last of them is the whole
-of `metal-robot-arm.lisp`, click and gripper included, in a quarter of the lines —
-and [`scene-model-file.lisp`](macos/scene-model-file.lisp) is the same viewer over a mesh
-that came off disk rather than out of a constructor.
-The window examples are not in `examples.yaml`: they need a display. The two that
-open nothing — [`objc-runtime.lisp`](macos/objc-runtime.lisp) and
-[`system-frameworks.lisp`](macos/system-frameworks.lisp) — run in a terminal and are
-listed there, with their output checked on macOS (`os: [mac]`) and their compile legs
-everywhere.
-See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
-
-| File | What it demonstrates |
-| --- | --- |
-| [`counter.lisp`](macos/counter.lisp) | A window, a label and a button whose action is a Lisp closure; one raw `objc:send` for what the widget layer lacks; `appkit:wait` so the script outlives its last form |
-| [`cocoa.lisp`](macos/cocoa.lisp) | A clickable grid of tiles over the built-in `appkit:` rungs (`panel`, `label`, `on-click`), in its own package -- the board-game policy the widget layer deliberately leaves out; the AppKit counterpart of [`swing.lisp`](jvm/swing.lisp)'s `label-grid-window` |
-| [`minesweeper-macos.lisp`](browser/minesweeper/minesweeper-macos.lisp) | Minesweeper as a native Cocoa window, loading the same core as the browser and Swing builds |
-| [`life-macos.lisp`](macos/life-macos.lisp) | Game of Life on an `appkit:timer`, loading the same `life-core.lisp` as [`life-gui.lisp`](jvm/life-gui.lisp) -- the same world, a Cocoa surface instead of a Swing one; a click edits the world under the simulation |
-| [`listener.lisp`](macos/listener.lisp) | A Lisp listener in a Cocoa window, the way Clozure CL's IDE does it: an `NSTextView` transcript in an `NSScrollView`, an editable `NSTextField` whose Return key is a Lisp closure (`objc:define-class` again, this time for a target/action), and `eval` on what it reads -- printed output captured, an error shown as a line. The window and the evaluator are one image, so a form typed in opens the next window |
-| [`menubar.lisp`](macos/menubar.lisp) | A Lisp that lives in the menu bar and opens no window of its own: `appkit:status-item` with `:dock nil` (no Dock icon, no app switcher entry), an `appkit:menu` whose entries are Lisp closures, an `appkit:timer` writing a clock into the title, and one entry that opens a window — the menu and the evaluator are one image. `appkit:quit` is the way out |
-| [`system-frameworks.lisp`](macos/system-frameworks.lisp) | macOS itself as a Lisp library, with nothing installed: Vision, NaturalLanguage, Core Image and the speech synthesizer, each mapped in at run time by an `NSBundle` message. A string is drawn into an image by Core Image and read back out of it by Vision, and `equal` decides whether the round trip held; the speech is synthesized to an AIFF instead of the speakers, so the example is silent. Prints to a terminal |
-| [`metal-triangle.lisp`](macos/metal-triangle.lisp) | The WebGL hello world on a Mac GPU, the twin of [`webgl-triangle`](browser/webgl-triangle): one gradient triangle, no vertex buffer at all (the shader looks its corners up by `vertex_id`), Metal Shading Language compiled from a Lisp string at run time |
-| [`metal-cube.lisp`](macos/metal-cube.lisp) | The full pipeline, the twin of [`webgl-cube`](browser/webgl-cube): a vertex buffer and a per-frame MVP matrix, both `objc:data` over packed single-float arrays -- the matrix comes straight out of the built-in [`linalg`](../doc/en/guides/linear-algebra.md) package, since a linalg result IS a packed array and `objc:data` takes one of any rank; back-face culling instead of a depth buffer (a cube is convex) and face normals from `dfdx`/`dfdy`; the frame loop is an `appkit:timer` |
-| [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) | The twin of [`webgl-robot-arm`](browser/webgl-robot-arm), and the whole of a renderer: a depth attachment, a lit-triangle pipeline and an additive glow-sprite one, geometry re-tessellated every frame into shared `MTLBuffer`s rotated through three slots, and the mouse -- an `NSView` subclass defined at run time whose `mouseDown:` / `mouseDragged:` / `scrollWheel:` are Lisp closures, installed as the window's content view. Click and the arm solves damped-least-squares Jacobian IK onto the unprojected point along a minimum-jerk trajectory; drag to orbit, scroll to zoom. Every coordinate is a packed single-float vector and every combination of them a [`linalg`](../doc/en/guides/linear-algebra.md) call, so the look-at, the Jacobian and the damped normal equations read as the matrix expressions they are |
-| [`metal-pagoda-garden.lisp`](macos/metal-pagoda-garden.lisp) | A voxel garden: a five-storey pagoda over a koi pond, cherry trees always in bloom, a torii, an arched bridge, stone lanterns and a raked karesansui, on an island floating over a sea of cloud. Its ~13,000 voxels are ONE cube drawn 13,000 times -- the vertex function divides `vertex_id` by 36 to find its voxel and takes the remainder for the corner, so the buffer holds one 32-byte record per voxel and no vertex descriptor, index buffer or instancing selector is involved. Three pipelines: a procedural sky (gradient, sun, clouds, stars, a moon) generated from three vertices and no buffer at all, the lit voxels, and additive glow sprites. The water, the koi, the petals and the sun move; click for night and the lanterns, the windows and the fireflies come up. The whole scene is built by one seeded 32-bit LCG, so the same garden grows on every backend |
-| [`scene-solids.lisp`](macos/scene-solids.lisp) | Every [`geom`](../doc/en/guides/solid-modeling.md) primitive on a shelf, in a window: `scene:viewer` opens it, `scene:add` fills it and `scene:fit` frames it -- three lines from a model to a picture, with nothing required and nothing copied, since `geom`, `metal` and `scene` all ship inside the interpreter. `scene:axes :bodies` draws each solid's own frame, the origin is a `geom:triad` -- three `geom:arrow` solids placed there rather than viewer furniture -- and `geom:volume` is printed to the terminal beside each shape as the gauge |
-| [`scene-robot-arm.lisp`](macos/scene-robot-arm.lisp) | The same machine as [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp), written the other way round, and the pair is the point: there the program tessellates tapered tubes into shared `MTLBuffer`s every frame, here it is six `geom` solids on a kinematic chain and the whole per-frame cost is four joint angles -- a rigid solid's mesh went to the GPU once, and a frame hands it one 4x4 matrix per solid. What did NOT move into the library is the solver: the damped-least-squares Jacobian iteration is ordinary Lisp over [`linalg`](../doc/en/guides/linear-algebra.md), and reads as the matrix expression it is because a `geom` transform answers world positions and axes outright |
-| [`scene-robot-reach.lisp`](macos/scene-robot-reach.lisp) | The same program as [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) — click and the arm reaches for that point in 3-D on a minimum-jerk trajectory, the three-finger gripper opening for the flight and closing on arrival — with the renderer deleted. The machine is fifty-odd `geom` solids on a kinematic chain and a frame changes nothing but poses; the gripper is a sub-chain of nodes rather than a mesh, and the wake is 24 spheres whose radius and colour ARE their age, so no triangle is touched between frames. `scene:on-click` does the unprojection, which is the one thing that moved INTO the library: a pixel names a line through the world and only the viewer knows the camera. What stayed in the program is the arithmetic — the min-jerk profile and the damped-least-squares Jacobian IK over [`linalg`](../doc/en/guides/linear-algebra.md), stated in each joint's own frame, where a link cannot stretch and there is nothing to re-normalize |
-| [`scene-model-file.lisp`](macos/scene-model-file.lisp) | A mesh off disk, in a window: `geom:read-obj` / `geom:read-stl` / `geom:read-model` answer an ordinary `geom:solid`, so a file someone else authored goes into the viewer exactly the way a `geom:box` does and `geom:volume` measures it the same. Hand it a path and it views that; with no argument it writes its own two files first — a lathed vase as a Wavefront OBJ and a slotted bracket as a binary STL — and reads them straight back, which is also the honest test of a reader: the volume that comes back has to be the volume that went out. The format is decided from the file's own bytes, which is the only thing that can tell the two STL dialects apart |
-| [`objc-runtime.lisp`](macos/objc-runtime.lisp) | The package with the windows left out: selectors as strings guarded by `respondsToSelector:`, class clusters found by walking the hierarchy, a method's own type encoding read through `NSMethodSignature`, key-value coding and a sort by a text key, a run-time class whose `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter` observer. Prints to a terminal |
-
-```bash
-java -jar $JAR examples/macos/objc-runtime.lisp        # no window; prints and exits
-java -jar $JAR examples/macos/system-frameworks.lisp  # no window either; Vision, speech, Core Image
-java -jar $JAR examples/macos/counter.lisp
-java -jar $JAR examples/macos/life-macos.lisp
-java -jar $JAR examples/macos/listener.lisp
-java -jar $JAR examples/macos/menubar.lisp             # no window; look at the menu bar
-java -jar $JAR examples/macos/metal-triangle.lisp
-java -jar $JAR examples/macos/metal-cube.lisp
-java -jar $JAR examples/macos/metal-robot-arm.lisp
-java -jar $JAR examples/macos/metal-pagoda-garden.lisp
-java -jar $JAR examples/macos/scene-solids.lisp
-java -jar $JAR examples/macos/scene-robot-arm.lisp
-java -jar $JAR examples/macos/scene-model-file.lisp    # or hand it a path: ... -- model.obj
-./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
-java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp
-java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp \
-  -o Minesweeper.class && java Minesweeper
-```
-
-## Browser demos
-
-A Lisp program compiled to `.wasm` and driven from plain HTML/JavaScript —
-except [`wit-component/`](browser/wit-component), which loads a *component* and
-needs no glue at all. Each directory has its own README.
-
-| Directory | What it demonstrates |
-| --- | --- |
-| [`wit-component/`](browser/wit-component) | The first rontolisp component in a browser: a Mandelbrot/Julia explorer whose page supplies *nothing* — no `instantiate`, no import object, no WASI shim, no `(ptr, len)` decoding. A WIT world types the exports and `jco transpile` produces one self-contained ES module |
-| [`rainbow/`](browser/rainbow) | HSV↔RGB and shortest-arc hue interpolation in Lisp, behind one `rainbow-html(string) -> string` export |
-| [`wasm-browser/`](browser/wasm-browser) | The plumbing: running a rontolisp `.wasm` from plain HTML + JavaScript, stdin, command-line arguments and env included |
-| [`minesweeper/`](browser/minesweeper) | A playable Minesweeper whose rules live in a `minesweeper-core.lisp` shared with the Swing and native-macOS builds — and checked head-less by [`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp) |
-| [`hiragana/`](browser/hiragana) | A 46-class handwriting recognizer: the ch07 SimpleConvNet trained offline on Kuzushiji-49, its weights read back at startup, driven from a `<canvas>` |
-| [`webgl-triangle/`](browser/webgl-triangle) | The WebGL hello world and the smallest `rontolisp:wasm-import` program: ten imported host functions, no exports, no frame loop |
-| [`webgl-cube/`](browser/webgl-cube) | Hello 3D: perspective and rotation matrices computed in Lisp every frame; bulk floats cross through a staging array |
-| [`webgl-galaxy/`](browser/webgl-galaxy) | A spiral galaxy driven entirely from Lisp, GLSL sources included, over 32 host functions declared by a WIT — the JavaScript is generated one-line bindings |
-| [`webgl-heat3d/`](browser/webgl-heat3d) | The rank-3 array showcase: the page's whole state is one `(n n n)` array, diffused and projected every frame |
-| [`webgl-robot-arm/`](browser/webgl-robot-arm) | A 3-D arm that reaches where you click: damped-least-squares Jacobian IK every frame (FABRIK and the analytic closed form on a HUD toggle), on a minimum-jerk trajectory. Every coordinate is a float vector and every combination of them a `linalg` call; [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) is the same program with the host boundary removed |
-| [`webgl-platformer/`](browser/webgl-platformer) | A one-stage 3D platformer: gravity, coyote time, per-axis AABB collision, enemy patrols and the follow camera, all in Lisp |
-| [`webgl-battlefront/`](browser/webgl-battlefront) | A Pointer-Lock snow battle: third-person aim camera, blaster bolts, a lightsaber that hits *and* deflects, and stormtrooper/AT-AT/boss AI |
-| [`webgl-solids/`](browser/webgl-solids) | The [`geom`](../doc/en/guides/solid-modeling.md) solid modeller in a browser, and the twin of the macOS viewer `scene` ([`scene-solids.lisp`](macos/scene-solids.lisp)): the same solids, the same booleans and the same one-buffer-per-solid design, Metal there and WebGL here. No modeling code of its own — every triangle is `geom:mesh` and every pose `geom:world-transform` |
-| [`webgl-common/`](browser/webgl-common) | Not a demo but the shared `gl` package the others splice in with `(require :gl ...)`; `--optimize` tree-shakes the entries a demo never calls |
-
-## Crossing the WASM boundary — `count-vowels/`, `wit/`
-
-| Directory | What it demonstrates |
-| --- | --- |
-| [`count-vowels/`](count-vowels) | *Share a string through Wasm memory.* A `--no-gc` MVP module any engine runs: the host allocates through `__ronto_alloc`, writes UTF-8 bytes, then calls `count-vowels(ptr, len)`. The export's type lives in a checked-in WIT world, so a drifted signature is a compile error naming the WIT line. Driven from a pure-Java host and a three-line Node script; the `--component` build lets the canonical ABI do the memory work instead |
-| [`wit/world/`](wit/world) | *Someone handed me a `.wit`, now what.* `--scaffold-wit` turns a world nobody wrote for rontolisp into a compiling skeleton — one `defun` stub per export, the WIT's own parameter names and docs — which you fill in one export at a time. Renaming a `defun` fails the build with the WIT line number |
-| [`wit/keyvalue/`](wit/keyvalue) | The other direction: **calling** a WIT interface. `wit-import` binds the real upstream `wasi:keyvalue/store` as ordinary `defun`s, and what those calls reach is bound separately — two Lisp providers here, or wasmtime's own store under `--component` |
-| [`wit/lisp-calls-rust/`](wit/lisp-calls-rust) | **Lisp calls Rust**: a Lisp command imports an interface a Rust component exports, `wac plug`ged into one component. The app also runs standalone, where a bundled Lisp provider answers the same interface |
-| [`wit/rust-calls-lisp/`](wit/rust-calls-lisp) | **Rust calls Lisp**: a Lisp component exports a plain function a Rust component imports and calls |
-| [`wit/pipeline/`](wit/pipeline) | **Both directions chained**: Lisp → Rust → Lisp across three components. `wac plug` cannot wire a plug into a plug, so a `composition.wac` spells out each edge for one `wac compose` |
-
-## Third-party libraries & platform templates
-
-| Directory | What it demonstrates |
-| --- | --- |
-| [`asdf/`](asdf) | Loading unmodified upstream libraries — split-sequence, parse-number, cl-utilities, cl-who, cl-mustache, assoc-utils, cl-base64, md5, chipz, cl-ppcre, jzon, ironclad, jose, uax-15, tiny-routes, clack — on all four backends |
-| [`wasmcloud/`](wasmcloud) | The wasmCloud Rust templates ported to `rontolisp:http-handler`, each with a `.wash/config.yaml` so `wash dev` builds and serves it |
-| [`cloudflare-workers/`](cloudflare-workers) | Twelve independent Workers: two subjects written once with no library and then in the idiom of each web library, plus two that call out over HTTP on the two `--host-boundary` shapes — from a `--no-gc` module with zero imports to a routed application deployed by `npx wrangler deploy` |
-| [`gae/`](gae) | Google App Engine standard, two ways: `-o app.jar` on the second-generation Java runtime, and `-o app.war` unpacked under its Jetty. Both compile [`net/httpbin-clack.lisp`](net/httpbin-clack.lisp) unchanged; the README measures why the jar wins |
+| SIMD / GPU acceleration | [simd-acceleration](../doc/en/guides/simd-acceleration.md), [gpu-acceleration](../doc/en/guides/gpu-acceleration.md) |
+| Linear algebra, neural networks (`linalg`, `torch`) | [linear-algebra](../doc/en/guides/linear-algebra.md), [neural-networks](../doc/en/guides/neural-networks.md) |
+| Web: Clack, serving HTTP | [clack](../doc/en/guides/clack.md), [http-handler](../doc/en/guides/http-handler.md) |
+| JVM: calling library classes, C libraries, Java interop | [jvm-library](../doc/en/guides/jvm-library.md), [cffi](../doc/en/guides/cffi.md), [java-interop](../doc/en/guides/java-interop.md) |
+| macOS GUI and 3-D (`appkit`, `objc`, `metal`, `scene`) | [objc-appkit](../doc/en/guides/objc-appkit.md), [solid-modeling](../doc/en/guides/solid-modeling.md) |
+| Testing with rove | [testing](../doc/en/guides/testing.md) |
 
 ## Running
 
@@ -318,20 +81,30 @@ java -jar $JAR examples/console/line-numbers.lisp -o ln.wasm
 wasmtime run --dir . ln.wasm
 ```
 
+The macOS GUI and Metal examples run the same ways on a Mac; a representative
+set:
+
+```bash
+java -jar $JAR examples/macos/counter.lisp
+java -jar $JAR examples/macos/menubar.lisp              # no window; look at the menu bar
+java -jar $JAR examples/macos/metal-cube.lisp
+java -jar $JAR examples/macos/scene-robot-arm.lisp
+./target/rontolisp examples/macos/counter.lisp         # the native binary, after ./mvnw -Pnative package
+java -jar $JAR examples/macos/counter.lisp -o Counter.class && java Counter
+```
+
 ## An example that checks itself
 
 Most examples print a result and leave the checking to
-[`examples.yaml`](examples.yaml). Three of them do it in the Lisp instead, with
+[`examples.yaml`](examples.yaml). Three do it in the Lisp instead, with
 [rove](../doc/en/guides/testing.md) — the shape to copy when what you are
 writing has a right answer rather than only an output:
+`console/roman.lisp` asserts the full 1..3999 Roman-numeral round-trip,
+`cloudflare-workers/httpbin/check.lisp` asserts the Worker's parsed reply, and
+`browser/minesweeper/minesweeper-core-test.lisp` checks a GUI example's
+rendering-free core head-less.
 
-| File | What it asserts |
-| --- | --- |
-| [`console/roman.lisp`](console/roman.lisp) | The demo prints its tables, then asserts the encodings, the out-of-range errors and the whole 1..3999 round-trip |
-| [`cloudflare-workers/httpbin/check.lisp`](cloudflare-workers/httpbin/check.lisp) | Drives the Worker's `handle-request` over six requests and asserts the **parsed** reply, field by field |
-| [`browser/minesweeper/minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp) | A test file beside a GUI example: its rules live in a rendering-free core, so they can be checked head-less |
-
-The recipe is four lines. Load rove, silence its ANSI colors, write `deftest`s,
+The recipe is a few lines. Load rove, silence its ANSI colors, write `deftest`s,
 and make the verdict the exit code:
 
 ```lisp
@@ -355,10 +128,6 @@ compiled class / module is self-contained:
 SP=src/test/resources/rove:src/test/resources/dissect:src/test/resources/cl-ppcre
 java -jar $JAR examples/console/roman.lisp --system-path $SP
 ```
-
-rove records a failing test through
-`handler-bind`. The full story — the entry points, the exit code, and what does
-not work — is the [Testing guide](../doc/en/guides/testing.md).
 
 ## Verifying every non-GUI example at once
 
@@ -395,11 +164,7 @@ the whole suite.
 
 Adding an example means appending an entry to `examples.yaml` — no Java changes.
 To regenerate an externalised expected file, run the example and save its
-stdout. GUI examples (`jvm/`, `macos/` and the `browser/` demos) are excluded: they open a
-window or run in a page and cannot be checked headless — though the part of one
-that is not GUI can be, which is what
-[`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp)
-is, and what [`objc-runtime.lisp`](macos/objc-runtime.lisp) and
-[`system-frameworks.lisp`](macos/system-frameworks.lisp) are throughout — they
-open nothing, so their output is checked like any other example, under
-`os: [mac]` for the runtime they need.
+stdout. GUI examples (`jvm/`, `macos/` and the `browser/` demos) are excluded:
+they open a window or run in a page and cannot be checked headless — though the
+part of one that is not GUI can be, which is what
+`minesweeper-core-test.lisp` and the terminal-only `macos/` programs are.
