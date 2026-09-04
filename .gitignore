@@ -80,3 +80,4 @@ examples/browser/hiragana/data/
 ### Spin manifest example: `spin build` compiles app.wasm, `spin up` writes .spin/logs ###
 app.wasm
 .spin/
+c439-ok.lisp
