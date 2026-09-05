@@ -383,6 +383,24 @@ touched nothing under `src/` or `examples/` (the diff of those two trees between
 the two Qwen-and-llama rows above are flat by 16: the per-model saturation point
 `.todo/678`'s lane found at one width holds at the second.
 
+### Qwen3-0.6B (rung 1), chat prompt
+
+`-m chat -i "Tell me a short story about a cat."` (21 prompt ids). Text in every run:
+"Once upon a time, there lived a cat named Luna. She was smal...". Load: f32 5.0-5.2 s,
+bf16 3.0-3.2 s.
+
+| threads | f32 tok/s | bf16 tok/s | bf16 / f32 |
+| --- | --- | --- | --- |
+| 1 | 2.52 (2.14-2.56) | 2.77 (2.68-2.95) | 1.10x |
+| 8 | 7.70 (7.62-7.73) | 9.24 (9.15-9.42) | 1.20x |
+| 16 | 9.47 (9.15-9.51) | 11.72 (11.58-11.84) | 1.24x |
+| 32 | 9.50 (9.12-9.92) | 12.41 (12.40-12.63) | 1.31x |
+
+The f32 arm is flat by 16 (+0.3% to 32); the bf16 arm gains 6% from 16 to 32 with
+non-overlapping spreads, so this is the one model where halving the bytes moved the knee
+a little -- and it is the model with the smallest ratios of the four, since its token is
+the 622 MB tied classifier plus 28 layers of 6-13 MB matrices.
+
 ## What the numbers should look like
 
 Estimated, not measured -- the arithmetic is here so the first real run can be checked
