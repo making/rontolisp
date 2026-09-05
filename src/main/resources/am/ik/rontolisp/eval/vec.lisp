@@ -328,15 +328,28 @@
 ;; y = W x over a Q8_0 quantized matrix W (rontolisp:quantize, a GGUF's Q8_0
 ;; tensor): ggml's Q8_0 x Q8_1 shape, runq.c's shape. x is quantized to int8 per
 ;; block of 32 first -- sx = amax / 127 in double, q = (round (/ x sx)), CL's
-;; round-half-even, 0 where the block is all zero -- then each row folds, block by
-;; block, an INTEGER dot of the 32 weight quants against the 32 activation quants
-;; and ONE double multiply-add, isum * (sw * sx), into a double accumulator; the
-;; store narrows to out's width. Integer sums are exact in any order, so this
-;; defun and the --simd lane kernels (VecSimdKernels / JvmSimdVectorTemplate)
-;; agree BIT FOR BIT: the only floating-point steps are that one product and one
-;; add per block, in the same order on both. The dead quantized arm compiles on
-;; every backend; only the interpreter and the JVM can ever reach it
-;; (.kb/quantized-matrix.md).
+;; round-half-even, 0 where the block is all zero -- then each row folds, block
+;; by block, FOUR exact integer dots (lane i over the block's columns j with
+;; j mod 4 = i, the four int lanes the --simd kernel holds) and, per lane, ONE
+;; SINGLE-FLOAT multiply-add lane * p, p = sw * sx narrowed to f32, into four f32
+;; accumulators, folded once per row as (acc0 + acc2) + (acc1 + acc3) in f32; the
+;; store narrows or widens to out's width. Every f32 step is spelled here as a
+;; double operation narrowed through vec::%f32 -- a single-float cell -- which is
+;; the f32 operation itself (a double has 53 >= 2 * 24 + 2 bits, so a product or
+;; sum of two f32 values rounded once is correctly rounded). Integer sums are
+;; exact in any order, so this defun and the --simd lane kernels (VecSimdKernels /
+;; JvmSimdVectorTemplate) agree BIT FOR BIT. The four accumulators and the f32
+;; width are the pinned part -- change them together with the kernels or not at
+;; all. The dead quantized arm compiles on every backend; only the interpreter
+;; and the JVM can ever reach it (.kb/quantized-matrix.md).
+(defvar vec::%f32-cell
+  (make-array 1 :element-type 'single-float :initial-element 0.0))
+
+(defun vec::%f32 (v)
+  ;; v rounded to single-float, as a double: the narrowing store of a #f array.
+  (setf (aref vec::%f32-cell 0) v)
+  (aref vec::%f32-cell 0))
+
 (defun vec::%matvec-quantized (out w x)
   (let* ((dims (array-dimensions w))
          (d (car dims))
@@ -355,24 +368,36 @@
               (setf (aref xq j)
                     (if (= sx 0.0) 0 (round (/ (aref x j) sx)))))))))
     (dotimes (i d out)
-      (let ((acc 0.0))
+      (let ((acc0 0.0) (acc1 0.0) (acc2 0.0) (acc3 0.0))
         (dotimes (b nb)
-          (let ((isum 0) (base (* b 32)))
-            (dotimes (k 32)
-              (let ((j (+ base k)))
-                (setq isum
-                 (+ isum (* (rontolisp::%quantized-quant w i j) (aref xq j))))))
-            (setq acc
-                  (+ acc
-                     (* isum
-                        (* (rontolisp::%quantized-scale w i b) (aref xs b)))))))
-        (setf (aref out i) acc)))))
+          (let ((s0 0) (s1 0) (s2 0) (s3 0) (base (* b 32)))
+            (dotimes (k 8)
+              (let ((j (+ base (* 4 k))))
+                (setq s0
+                 (+ s0 (* (rontolisp::%quantized-quant w i j) (aref xq j))))
+                (setq s1
+                      (+ s1
+                         (* (rontolisp::%quantized-quant w i (+ j 1))
+                            (aref xq (+ j 1)))))
+                (setq s2
+                      (+ s2
+                         (* (rontolisp::%quantized-quant w i (+ j 2))
+                            (aref xq (+ j 2)))))
+                (setq s3
+                      (+ s3
+                         (* (rontolisp::%quantized-quant w i (+ j 3))
+                            (aref xq (+ j 3)))))))
+            (let ((p
+                   (vec::%f32
+                    (* (rontolisp::%quantized-scale w i b) (aref xs b)))))
+              (setq acc0 (vec::%f32 (+ acc0 (vec::%f32 (* s0 p)))))
+              (setq acc1 (vec::%f32 (+ acc1 (vec::%f32 (* s1 p)))))
+              (setq acc2 (vec::%f32 (+ acc2 (vec::%f32 (* s2 p)))))
+              (setq acc3 (vec::%f32 (+ acc3 (vec::%f32 (* s3 p))))))))
+        (setf (aref out i)
+              (vec::%f32
+               (+ (vec::%f32 (+ acc0 acc2)) (vec::%f32 (+ acc1 acc3)))))))))
 
-;; y = W x written into out (returned), allocating nothing -- the destination-passing
-;; sibling of vec:matvec. Unlike the element-wise -into kernels, out MUST NOT alias
-;; x or w: out[i] is a dot product over ALL of x, so storing it would clobber an
-;; element a later row still has to read. The eq guard costs one comparison per GEMV
-;; and turns silent corruption into an error.
 (defun vec:matvec-into (out w x)
   (when (eq out x)
     (error "vec:matvec-into: out must not be the same vector as x"))

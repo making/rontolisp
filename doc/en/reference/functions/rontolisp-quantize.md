@@ -38,10 +38,10 @@ survives; in general a value moves by at most half a quant, `amax / 254`.
 
 [`vec:matvec`](../../guides/simd-acceleration.md) and `vec:matvec-into` take a
 quantized matrix as the matrix, against an `#f` or `#d` vector, and compute
-ggml's integer-dot shape: the activation quantized to int8 per block of 32, an
-exact integer dot per block, one double multiply-add per block. That is the same
-value bit for bit on the interpreter and the JVM, with and without `--simd` and
-`--parallel`. Every other `vec:` and `linalg:` operation wants a packed float
+ggml's integer-dot shape: the activation quantized to int8 per block of 32, four
+exact integer lane sums per block, one double multiply-add per lane into four
+accumulators. That is the same value bit for bit on the interpreter and the JVM,
+with and without `--simd` and `--parallel`. Every other `vec:` and `linalg:` operation wants a packed float
 array -- [`rontolisp:dequantize`](rontolisp-dequantize.md) first (`linalg:row`
 is the exception: it reads a row of a quantized matrix straight into an `#f`
 vector). The quantized product is a quantization error away from the f32 one

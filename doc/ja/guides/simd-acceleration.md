@@ -65,7 +65,7 @@ JSON や `linalg` ライブラリと同様、`vec` は Lisp ソース(`vec.lisp`
 
 [`ml/nn-vec.lisp` の例](https://github.com/making/rontolisp/blob/develop/examples/ml/nn-vec.lisp)は、単精度の順伝播を `vec:matvec` で組み立てた小さな XOR ネットワークです。
 
-`W` には**量子化行列**（[`rontolisp:quantize`](../reference/functions/rontolisp-quantize.md) の型。ggml の `Q8_0` で、`Q8_0` の GGUF の重みはこれとして読み込まれます）も渡せ、`#f` か `#d` のベクタに掛けます。これは ggml の整数内積の形（活性値を 32 要素ブロックごとに int8 に量子化し、ブロックごとに厳密な整数内積、ブロックごとに 1 回の double 積和）で走り、浮動小数点の幅と違って `--simd` と `--parallel` の下でもスカラー defun の答えとビット単位で同じです。インタプリタと JVM のみ。
+`W` には**量子化行列**（[`rontolisp:quantize`](../reference/functions/rontolisp-quantize.md) の型。ggml の `Q8_0` で、`Q8_0` の GGUF の重みはこれとして読み込まれます）も渡せ、`#f` か `#d` のベクタに掛けます。これは ggml の整数内積の形（活性値を 32 要素ブロックごとに int8 に量子化し、ブロックごとに 4 レーンの厳密な整数和、レーンごとに 1 回の double 積和）で走り、浮動小数点の幅と違って `--simd` と `--parallel` の下でもスカラー defun の答えとビット単位で同じです。インタプリタと JVM のみ。
 
 ## メモリ: ベクトルはどこに置かれ、何が回収するのか
 

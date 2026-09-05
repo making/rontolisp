@@ -357,6 +357,15 @@ test input stays under `2^24`, and `ci-spec.yaml` never passes `--simd`.
   PER WIDTH: no decoder shared behind a flag, no width switch inside the lane loop. A shape that is
   fast under one JIT and boxed under the other is not done, and a number without its JIT beside it
   is not a number.
+- **The second JIT cliff is a CONVERSION, and it is Graal's.** `convertShape(VectorOperators.I2D,
+  DoubleVector.SPECIES_128, part)` -- four int lanes into two double lanes -- is not intrinsified
+  by Oracle GraalVM 25.0.4: a GEMV using it ran at 0.02 Gelem/s, a thousand times slower than the
+  same integer work with a horizontal reduce, and 250x slower than the shipped kernel, with no
+  warning (2026-09-05, `.todo/672`'s README; C2 ran the same code at 5 Gelem/s). What to use
+  instead: convert int lanes to f32 with `convert(VectorOperators.I2F, 0)` (same shape, exact
+  below 2^24) and accumulate in an f32 vector; a scalar oracle can still mirror that bit for bit,
+  because 53 >= 2 * 24 + 2 makes a double op rounded once the f32 op (`.kb/quantized-matrix.md`).
+  Never assume a lane conversion is intrinsified: time it under both JITs before building on it.
 - **Benchmarking discipline.** Run benchmarks SEQUENTIALLY. Take N >= 9 samples and print them ALL
   before claiming two configurations differ (a GraalVM scalar timing turned out bimodal --
   `226 269 269 271 271 381 383 395 400`). Measure allocation with `-XX:+UseEpsilonGC -Xmx12g

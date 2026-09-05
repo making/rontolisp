@@ -103,17 +103,23 @@ class JvmSimdVectorTemplateQ8Test {
 		}
 		double[] r = new double[rows];
 		for (int i = 0; i < rows; i++) {
-			double acc = 0.0;
+			// Four accumulators, lane k over the columns j with j mod 4 = k, folded as
+			// (acc0 + acc2) + (acc1 + acc3): the defun's four and its fold.
+			// Every step a double operation narrowed to f32 (the defun's vec::%f32).
+			double[] acc = new double[4];
 			for (int b = 0; b < nb; b++) {
 				int bo = 16 + (i * nb + b) * 34;
-				long isum = 0;
+				long[] lane = new long[4];
 				for (int k = 0; k < 32; k++) {
-					isum += m[bo + 2 + k] * xq[b * 32 + k];
+					lane[k % 4] += m[bo + 2 + k] * xq[b * 32 + k];
 				}
 				double sw = Float.float16ToFloat((short) ((m[bo] & 0xff) | (m[bo + 1] << 8)));
-				acc = acc + isum * (sw * xs[b]);
+				double p = (float) (sw * xs[b]);
+				for (int k = 0; k < 4; k++) {
+					acc[k] = (float) (acc[k] + (float) (lane[k] * p));
+				}
 			}
-			r[i] = acc;
+			r[i] = (float) ((float) (acc[0] + acc[2]) + (float) (acc[1] + acc[3]));
 		}
 		return r;
 	}

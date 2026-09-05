@@ -59,20 +59,33 @@ does not exist) and the kernels `VecSimdKernels.matvecQ8F/D` /
 1. Quantize the activation per block of 32: `amax` over `(abs x)` with a strict `>`,
    `sx = amax / 127` IN DOUBLE, `q = (round (/ x sx))` -- CL `round` = `Math.rint`, ties to
    even -- and `0` when `sx` is 0. Never f32 arithmetic here: the defun has none.
-2. Per row, per block: an exact integer dot (lanes: two `ByteVector.SPECIES_128` loads each
-   side, `B2S` into `ShortVector.SPECIES_128`, short multiply, short add of the two halves
-   -- `|2 x 128 x 127| = 32512 < 32767`, which is why the activation is clipped to +-127 and
-   never -128 -- `S2I` into `IntVector.SPECIES_128`, int adds, ONE `reduceLanes(ADD)`, exact
-   in any order), then ONE double step `acc = acc + isum * (sw * sx)`, `sw` the binary16
-   scale widened. No FMA: two roundings on both sides, and the defun has no fused form.
-3. Store narrowed to the result width (`vec::%make-like` follows `x`: `#f` x -> `#f`, `#d`
-   -> `#d`; `-into` writes the destination given).
-No threshold, no accumulator split, no lane-count pin: a block is the unit, an integer
-sum does not depend on the fold, and the only floating-point work is one op per 32
-elements. That makes this a STRONGER contract than `#f`'s (`.kb/vec.md`): the flag cannot
-change a bit, so tests assert equality, and `ci-spec`'s standalone `quantized-matrix` case
-prints the product. **Trap**: a NaN activation is `round`'s error on the defun and 0 in the
-kernel -- finite inputs only, as for every `vec:` member.
+2. Per row, per block: FOUR exact integer lane sums -- lane `i` over the block's columns
+   `j` with `j mod 4 = i` (lanes: two `ByteVector.SPECIES_128` loads each side, `B2S` into
+   `ShortVector.SPECIES_128`, short multiply, short add of the two halves -- `|2 x 128 x
+   127| = 32512 < 32767`, which is why the activation is clipped to +-127 and never -128 --
+   `S2I` into `IntVector.SPECIES_128`, int adds; the defun four `s0..s3` over `j = base + 4k
+   + i`) -- then per lane ONE f32 multiply-add: the lane sum to f32 (`convert(I2F, 0)`,
+   exact below 2^24) times `p = (float) (sw * sx)`, `sw` the binary16 scale widened, added
+   into one `FloatVector.SPECIES_128` accumulator. No FMA: two roundings on both sides, and
+   the defun has no fused form.
+3. Per row, fold `(acc0 + acc2) + (acc1 + acc3)` in f32 and store narrowed or widened to the
+   result width (`vec::%make-like` follows `x`: `#f` x -> `#f`, `#d` -> `#d`; `-into` writes
+   the destination given).
+**The defun spells every f32 step as a double operation narrowed once through a
+single-float cell (`vec::%f32`), and that IS the f32 operation: 53 >= 2 * 24 + 2**, the
+innocuous-double-rounding bound, so a product or a sum of two f32 values rounded once from
+double is correctly rounded -- the emap rule of `.kb/vec.md`, applied to a reduction.
+**The four lanes and the f32 width are the pinned part**, as `FSPECIES_REDUCE` is for `#f`:
+`IntVector.SPECIES_128` / `FloatVector.SPECIES_128` are fixed and a host with wider vectors
+must not widen them. No threshold, no other accumulator split: a block is the unit and an
+integer sum does not depend on the fold. Still a STRONGER contract than `#f`'s: the flag
+cannot change a bit, so tests assert equality, and `ci-spec`'s standalone `quantized-matrix`
+case prints the product. **Two shapes were built and rejected first** (2026-09-05, the
+README): one `reduceLanes` per block plus a scalar double chain, latency-bound at 5-6 Gelem/s
+on one thread whatever the shape; and double lanes through `convertShape(I2D)`, which Graal
+25 does not intrinsify -- 0.02 Gelem/s (`.kb/vec.md`, the second JIT cliff). The first is
+kept in `Q8GemvBench` as a probe. **Trap**: a NaN activation is `round`'s error on the defun
+and 0 in the kernel -- finite inputs only, as for every `vec:` member.
 - Bit-identity is between OUR defun and OUR kernels. ggml's `Q8_0 x Q8_0` kernel quantizes
   the activation in f32 and folds in f32 in its own order, so the two implementations agree
   on the ARGMAX most of the time and not on the bits (below).
@@ -104,6 +117,17 @@ four wrappers on the reference for the same reason.
   `quantized-matrix-p` -> `(progn x nil)`. `--no-gc`: all four names refused at compile time.
   Pinned by `WasmLispCompilerTest` / `NoGcWasmCompilerTest`; ci-spec `refusedOn`.
 - `--gpu`/`--blas`: silent decline. `rontolisp:jvm-export`: not a boundary type.
+
+## What it costs (2026-09-05, GB10, `.todo/672-.../README.md`)
+One thread, 4096x4096, against the shipped f32 GEMV: **Graal 1.42-1.52x** (bf16 1.31-1.41x),
+**C2 0.70-0.77x** -- slower than f32 on a stock OpenJDK. Instruction-bound, not
+bandwidth-bound: the Vector API has no int8 dot-product instruction, so a block costs ~30
+instructions where ggml's NEON kernel spends two `SDOT`s, and C2 compiles the chain worse
+than Graal. The quarter-size bytes pay where bandwidth is the limit: `--parallel` (20
+threads) 2.6-4.5x f32 under Graal (105-140 Gelem/s, past the f32 arm's 41 Gelem/s memory
+wall) and 1.4-2.3x under C2. The item's 2.00x premise was a one-accumulator f32 baseline
+with an FMA arm; the C2 serial regression is `.todo/706`. No size gate, for `.todo/488`'s
+reason. Relative error against f64: Q8_0 7.5e-3 .. 7.8e-3, bf16 1.6e-3, f32 2e-7.
 
 ## Against llama.cpp (2026-09-05, GB10)
 Raw completion of `"Once upon a time"` -- four token ids `12162 5028 264 854`, no BOS, no

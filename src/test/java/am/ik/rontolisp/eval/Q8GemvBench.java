@@ -93,17 +93,23 @@ public final class Q8GemvBench {
 		}
 		double[] r = new double[rows];
 		for (int i = 0; i < rows; i++) {
-			double acc = 0.0;
+			// Four accumulators, lane k over the columns j with j mod 4 = k, folded as
+			// (acc0 + acc2) + (acc1 + acc3): the defun's four and its fold.
+			// Every step a double operation narrowed to f32 (the defun's vec::%f32).
+			double[] acc = new double[4];
 			for (int b = 0; b < nb; b++) {
 				int bo = (i * nb + b) * 34;
-				long isum = 0;
+				long[] lane = new long[4];
 				for (int k = 0; k < 32; k++) {
-					isum += blocks[bo + 2 + k] * xq[b * 32 + k];
+					lane[k % 4] += blocks[bo + 2 + k] * xq[b * 32 + k];
 				}
 				double sw = Float.float16ToFloat((short) ((blocks[bo] & 0xff) | (blocks[bo + 1] << 8)));
-				acc = acc + isum * (sw * xs[b]);
+				double p = (float) (sw * xs[b]);
+				for (int k = 0; k < 4; k++) {
+					acc[k] = (float) (acc[k] + (float) (lane[k] * p));
+				}
 			}
-			r[i] = acc;
+			r[i] = (float) ((float) (acc[0] + acc[2]) + (float) (acc[1] + acc[3]));
 		}
 		return r;
 	}
@@ -116,6 +122,61 @@ public final class Q8GemvBench {
 			den += reference[i] * reference[i];
 		}
 		return Math.sqrt(num / den);
+	}
+
+	// --- the shape that lost: one horizontal reduce per block, then a scalar double
+	// chain
+	// ---
+	// Measured and NOT shipped, kept as a probe so the decision is reproducible: the same
+	// integer work reduced to one int per block with reduceLanes(ADD) and folded in one
+	// scalar double accumulator. Its answer is a different (also valid) fold, so it is
+	// timed only, never compared bit for bit with the shipped kernel.
+
+	private static final jdk.incubator.vector.VectorSpecies<Byte> B128 = jdk.incubator.vector.ByteVector.SPECIES_128;
+
+	private static final jdk.incubator.vector.VectorSpecies<Short> S128 = jdk.incubator.vector.ShortVector.SPECIES_128;
+
+	private static final jdk.incubator.vector.VectorSpecies<Integer> I128 = jdk.incubator.vector.IntVector.SPECIES_128;
+
+	private static int probeBlockDot(byte[] w, int wo, byte[] xq, int xo) {
+		jdk.incubator.vector.ByteVector w0 = jdk.incubator.vector.ByteVector.fromArray(B128, w, wo);
+		jdk.incubator.vector.ByteVector w1 = jdk.incubator.vector.ByteVector.fromArray(B128, w, wo + 16);
+		jdk.incubator.vector.ByteVector x0 = jdk.incubator.vector.ByteVector.fromArray(B128, xq, xo);
+		jdk.incubator.vector.ByteVector x1 = jdk.incubator.vector.ByteVector.fromArray(B128, xq, xo + 16);
+		jdk.incubator.vector.ShortVector p = ((jdk.incubator.vector.ShortVector) w0
+			.convertShape(jdk.incubator.vector.VectorOperators.B2S, S128, 0))
+			.mul((jdk.incubator.vector.ShortVector) x0.convertShape(jdk.incubator.vector.VectorOperators.B2S, S128, 0))
+			.add(((jdk.incubator.vector.ShortVector) w0.convertShape(jdk.incubator.vector.VectorOperators.B2S, S128, 1))
+				.mul((jdk.incubator.vector.ShortVector) x0.convertShape(jdk.incubator.vector.VectorOperators.B2S, S128,
+						1)));
+		jdk.incubator.vector.ShortVector q = ((jdk.incubator.vector.ShortVector) w1
+			.convertShape(jdk.incubator.vector.VectorOperators.B2S, S128, 0))
+			.mul((jdk.incubator.vector.ShortVector) x1.convertShape(jdk.incubator.vector.VectorOperators.B2S, S128, 0))
+			.add(((jdk.incubator.vector.ShortVector) w1.convertShape(jdk.incubator.vector.VectorOperators.B2S, S128, 1))
+				.mul((jdk.incubator.vector.ShortVector) x1.convertShape(jdk.incubator.vector.VectorOperators.B2S, S128,
+						1)));
+		return ((jdk.incubator.vector.IntVector) p.convertShape(jdk.incubator.vector.VectorOperators.S2I, I128, 0))
+			.add((jdk.incubator.vector.IntVector) p.convertShape(jdk.incubator.vector.VectorOperators.S2I, I128, 1))
+			.add((jdk.incubator.vector.IntVector) q.convertShape(jdk.incubator.vector.VectorOperators.S2I, I128, 0))
+			.add((jdk.incubator.vector.IntVector) q.convertShape(jdk.incubator.vector.VectorOperators.S2I, I128, 1))
+			.reduceLanes(jdk.incubator.vector.VectorOperators.ADD);
+	}
+
+	private static void probeReducePerBlock(float[] r, byte[] w, int rows, int cols, float[] x) {
+		int nb = cols / 32;
+		byte[] xq = new byte[cols];
+		double[] xs = new double[nb];
+		VecSimdKernels.quantizeActivationF(x, 0, cols, xq, xs);
+		for (int row = 0; row < rows; row++) {
+			int base = row * nb * 34;
+			double acc = 0.0;
+			for (int b = 0; b < nb; b++) {
+				int bo = base + b * 34;
+				int isum = probeBlockDot(w, bo + 2, xq, b * 32);
+				acc = acc + isum * (VecSimdKernels.q8Scale(w, bo) * xs[b]);
+			}
+			r[row] = (float) acc;
+		}
 	}
 
 	public static void main(String[] args) {
@@ -147,11 +208,12 @@ public final class Q8GemvBench {
 			System.out.printf("%n=== %dx%d (%.1f MB f32 / %.1f MB bf16 / %.1f MB q8_0)%n%-24s %9s %9s %8s%n", rows,
 					cols, elements * 4 / 1e6, elements * 2 / 1e6, q8.length / 1e6, "variant", "ms", "Gelem/s",
 					"vs f32");
-			String[] names = { "f32 lanes", "bf16 fused", "q8 int-dot", "f32 lanes --parallel", "bf16 fused --parallel",
-					"q8 int-dot --parallel" };
+			String[] names = { "f32 lanes", "bf16 fused", "q8 int-dot", "q8 reduce/block (probe)",
+					"f32 lanes --parallel", "bf16 fused --parallel", "q8 int-dot --parallel" };
 			Variant[] variants = { () -> VecSimdKernels.matvecIntoF(r, wf, rows, cols, x, false),
 					() -> VecSimdKernels.matvecIntoBf16(r, wb, rows, cols, x, false),
 					() -> VecSimdKernels.matvecIntoQ8F(r, q8, rows, cols, x, false),
+					() -> probeReducePerBlock(r, q8, rows, cols, x),
 					() -> VecSimdKernels.matvecIntoF(r, wf, rows, cols, x, true),
 					() -> VecSimdKernels.matvecIntoBf16(r, wb, rows, cols, x, true),
 					() -> VecSimdKernels.matvecIntoQ8F(r, q8, rows, cols, x, true) };
@@ -162,10 +224,10 @@ public final class Q8GemvBench {
 				if (i == 0) {
 					baseline = ns;
 				}
-				if (i == 3) {
+				if (i == 4) {
 					parallelBaseline = ns;
 				}
-				long against = i >= 3 ? parallelBaseline : baseline;
+				long against = i >= 4 ? parallelBaseline : baseline;
 				System.out.printf("%-24s %9.3f %9.2f %7.2fx%n", names[i], ns / 1e6, elements / (double) ns,
 						against / (double) ns);
 			}

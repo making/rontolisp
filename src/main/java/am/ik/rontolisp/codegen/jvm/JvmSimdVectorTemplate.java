@@ -4473,25 +4473,38 @@ final class JvmSimdVectorTemplate {
 	}
 
 	// --- Q8_0 quantized-matrix GEMV: the integer dot ----------------------------------
-	// ggml's Q8_0 x Q8_1 shape, runq.c's shape (.kb/quantized-matrix.md). The compiled
-	// quantized matrix is a bare byte[]: a header of little-endian ints -- the format
-	// code, the rank, the dimensions (JvmQuantizedMatrixRuntimeBuilder owns it; qmOff /
-	// qmDim below are the only two places here that spell it) -- and then the ggml
-	// blocks verbatim, per block one binary16 scale and 32 int8 quants, 34 bytes. The
-	// activation is quantized to int8 per block of 32 first (absmax / 127 in DOUBLE,
-	// round half even, exactly what the vec.lisp defun writes), then per row and block:
-	// B2S widen, short multiply, short add of the two halves (|2 x 128 x 127| < 32767,
-	// which is why the activation is clipped to +-127 and never -128), S2I widen, int
-	// add, ONE horizontal integer reduce, and ONE double multiply-add, isum * (sw * sx),
-	// into a double accumulator; the store narrows to the result width. An integer sum
-	// is exact in any order, so the lane fold and the defun's scalar loop agree on isum
-	// by construction, and the only floating-point steps are that product and that add,
-	// in the same order on both -- this kernel is the defun BIT FOR BIT, a stronger
-	// contract than the f32 kernels' lane-count pin, at one double op per 32 elements.
-	// No threshold and no accumulator split: a block is the unit, and independent int
-	// accumulators would not change a bit. eval.VecSimdKernels mirrors these operation
-	// for operation over its header-free representation. No FMA in the double step: two
-	// roundings on both sides, and the defun has no fused form to mirror one with.
+	// ggml's Q8_0 x Q8_1 shape, runq.c's shape (.kb/quantized-matrix.md). The matrix is
+	// the ggml block layout verbatim -- per block one binary16 scale then 32 int8 quants,
+	// 34 bytes, behind the int header JvmQuantizedMatrixRuntimeBuilder owns (qmOff /
+	// qmDim below are the only two places here that spell it) -- and the activation is
+	// quantized to int8 per block of 32 first (absmax /
+	// 127 in DOUBLE, round half even, exactly what the vec.lisp defun writes). Per row
+	// and block: B2S widen, short multiply, short add of the two halves (|2 x 128 x 127|
+	// < 32767, which is why the activation is clipped to +-127 and never -128), S2I
+	// widen and int add into FOUR integer lanes -- lane i holds the exact sum over the
+	// block's columns j with j mod 4 = i -- then, per lane, ONE f32 multiply-add: the
+	// lane sum converted to f32 (exact, |sum| < 2^24) times p = (float) (sw * sx), added
+	// into a four-lane f32 accumulator, folded once per row as (acc0 + acc2) + (acc1 +
+	// acc3) in f32; the store narrows or widens to the result width. An integer sum is
+	// exact in any order, so the lanes and the defun's scalar loop agree on every lane
+	// sum by construction; and every f32 step is one the defun reproduces EXACTLY by
+	// computing in double and narrowing through a single-float cell (a double holds
+	// 53 >= 2 * 24 + 2 bits, so a product or sum of two f32 values rounded once from
+	// double is the f32 operation itself -- the emap rule of .kb/vec.md, applied to a
+	// reduction). This kernel is therefore the defun BIT FOR BIT, a stronger contract
+	// than the f32 kernels' lane-count pin. The four lanes are the pinned part: the
+	// defun spells them as four accumulators, so IntVector.SPECIES_128 and
+	// FloatVector.SPECIES_128 are fixed, like FSPECIES_REDUCE. No threshold, no other
+	// accumulator split: a block is the unit and a row of one block runs the same lanes.
+	//
+	// Why f32 lanes: measured 2026-09-05 (.todo/672's README). One reduceLanes(ADD) plus
+	// a scalar double chain per block was latency-bound at 5-6 Gelem/s on one thread at
+	// every shape (level with the fused bf16 kernel at 4096x4096, below f32 under C2);
+	// double lanes through an int-to-double convertShape are not intrinsified by Graal 25
+	// and ran at 0.02 Gelem/s; convert(I2F) into f32 lanes is the shape .todo/482's
+	// Quant.java measured fast under both JITs. eval.VecSimdKernels mirrors these
+	// operation for operation over its header-free representation. No FMA, deliberately:
+	// `acc + lane * p` is two roundings on both sides, and the defun has no fused form.
 
 	/** The byte species one half-block loads: sixteen quants. */
 	private static final VectorSpecies<Byte> BSPECIES_Q8 = ByteVector.SPECIES_128;
@@ -4499,8 +4512,13 @@ final class JvmSimdVectorTemplate {
 	/** The short species the products land in: eight lanes, 128 bits. */
 	private static final VectorSpecies<Short> SSPECIES_Q8 = ShortVector.SPECIES_128;
 
-	/** The int species the block sum lands in: four lanes, 128 bits. */
+	/**
+	 * The int species the block sum lands in: four lanes, 128 bits (pinned, see above).
+	 */
 	private static final VectorSpecies<Integer> ISPECIES_Q8 = IntVector.SPECIES_128;
+
+	/** The f32 species the four lane accumulators live in: 128 bits (pinned). */
+	private static final VectorSpecies<Float> FSPECIES_Q8 = FloatVector.SPECIES_128;
 
 	private static final int Q8_BLOCK = 32;
 
@@ -4528,9 +4546,10 @@ final class JvmSimdVectorTemplate {
 
 	/**
 	 * The integer dot of one block's 32 weight quants at {@code wo} against the 32
-	 * activation quants at {@code xo}. Exact.
+	 * activation quants at {@code xo}, as four exact lane sums: lane {@code i} is the sum
+	 * over the columns {@code j} of the block with {@code j mod 4 = i}.
 	 */
-	private static int q8BlockDot(byte[] w, int wo, byte[] xq, int xo) {
+	private static IntVector q8BlockDot(byte[] w, int wo, byte[] xq, int xo) {
 		ByteVector w0 = ByteVector.fromArray(BSPECIES_Q8, w, wo);
 		ByteVector w1 = ByteVector.fromArray(BSPECIES_Q8, w, wo + 16);
 		ByteVector x0 = ByteVector.fromArray(BSPECIES_Q8, xq, xo);
@@ -4543,11 +4562,26 @@ final class JvmSimdVectorTemplate {
 			.mul((ShortVector) x1.convertShape(VectorOperators.B2S, SSPECIES_Q8, 0))
 			.add(((ShortVector) w1.convertShape(VectorOperators.B2S, SSPECIES_Q8, 1))
 				.mul((ShortVector) x1.convertShape(VectorOperators.B2S, SSPECIES_Q8, 1)));
-		IntVector sum = ((IntVector) p.convertShape(VectorOperators.S2I, ISPECIES_Q8, 0))
+		return ((IntVector) p.convertShape(VectorOperators.S2I, ISPECIES_Q8, 0))
 			.add((IntVector) p.convertShape(VectorOperators.S2I, ISPECIES_Q8, 1))
 			.add((IntVector) q.convertShape(VectorOperators.S2I, ISPECIES_Q8, 0))
 			.add((IntVector) q.convertShape(VectorOperators.S2I, ISPECIES_Q8, 1));
-		return sum.reduceLanes(VectorOperators.ADD);
+	}
+
+	/**
+	 * One row of the integer-dot GEMV: the four f32 lane accumulators over the row's
+	 * blocks, folded as {@code (acc0 + acc2) + (acc1 + acc3)} -- the defun's four
+	 * accumulators and its fold.
+	 */
+	private static float q8Row(byte[] w, int base, int nb, byte[] xq, double[] xs) {
+		FloatVector acc = FloatVector.zero(FSPECIES_Q8);
+		for (int b = 0; b < nb; b++) {
+			int bo = base + b * Q8_BLOCK_BYTES;
+			IntVector isum = q8BlockDot(w, bo + 2, xq, b * Q8_BLOCK);
+			FloatVector p = FloatVector.broadcast(FSPECIES_Q8, (float) (q8Scale(w, bo) * xs[b]));
+			acc = acc.add(((FloatVector) isum.convert(VectorOperators.I2F, 0)).mul(p));
+		}
+		return (acc.lane(0) + acc.lane(2)) + (acc.lane(1) + acc.lane(3));
 	}
 
 	/**
@@ -4599,14 +4633,7 @@ final class JvmSimdVectorTemplate {
 		int nb = cols / Q8_BLOCK;
 		int rowBytes = nb * Q8_BLOCK_BYTES;
 		for (int row = from; row < to; row++) {
-			int base = ow + row * rowBytes;
-			double acc = 0.0;
-			for (int b = 0; b < nb; b++) {
-				int bo = base + b * Q8_BLOCK_BYTES;
-				int isum = q8BlockDot(w, bo + 2, xq, b * Q8_BLOCK);
-				acc = acc + isum * (q8Scale(w, bo) * xs[b]);
-			}
-			r[or + row] = (float) acc;
+			r[or + row] = q8Row(w, ow + row * rowBytes, nb, xq, xs);
 		}
 	}
 
@@ -4616,14 +4643,7 @@ final class JvmSimdVectorTemplate {
 		int nb = cols / Q8_BLOCK;
 		int rowBytes = nb * Q8_BLOCK_BYTES;
 		for (int row = from; row < to; row++) {
-			int base = ow + row * rowBytes;
-			double acc = 0.0;
-			for (int b = 0; b < nb; b++) {
-				int bo = base + b * Q8_BLOCK_BYTES;
-				int isum = q8BlockDot(w, bo + 2, xq, b * Q8_BLOCK);
-				acc = acc + isum * (q8Scale(w, bo) * xs[b]);
-			}
-			r[or + row] = acc;
+			r[or + row] = q8Row(w, ow + row * rowBytes, nb, xq, xs);
 		}
 	}
 

@@ -10,8 +10,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The integer-dot GEMV kernels of {@link VecSimdKernels} over a Q8_0 quantized matrix
  * ({@code .kb/quantized-matrix.md}), against a scalar transcription of the
  * {@code vec.lisp} defun's arithmetic: the activation quantized to int8 per block of 32
- * ({@code sx = amax / 127} in double, {@code round} half even), an exact integer dot per
- * block, ONE double multiply-add per block, the store narrowed to the result width.
+ * ({@code sx = amax / 127} in double, {@code round} half even), four exact integer lane
+ * sums per block (lane {@code i} over the columns {@code j mod 4 = i}), one single-float
+ * multiply-add per lane into four f32 accumulators folded as {@code (acc0 +
+ * acc2) + (acc1 + acc3)} -- each f32 step spelled as a double operation narrowed once,
+ * which is the f32 operation -- and the store at the result width.
  *
  * <p>
  * The contract is BIT identity, not a tolerance -- integer sums are exact in any order
@@ -82,17 +85,23 @@ class VecSimdQ8KernelsTest {
 		}
 		double[] r = new double[rows];
 		for (int i = 0; i < rows; i++) {
-			double acc = 0.0;
+			// Four accumulators, lane k over the columns j with j mod 4 = k, folded as
+			// (acc0 + acc2) + (acc1 + acc3): the defun's four and its fold.
+			// Every step a double operation narrowed to f32 (the defun's vec::%f32).
+			double[] acc = new double[4];
 			for (int b = 0; b < nb; b++) {
 				int bo = (i * nb + b) * 34;
-				long isum = 0;
+				long[] lane = new long[4];
 				for (int k = 0; k < 32; k++) {
-					isum += blocks[bo + 2 + k] * xq[b * 32 + k];
+					lane[k % 4] += blocks[bo + 2 + k] * xq[b * 32 + k];
 				}
 				double sw = Float.float16ToFloat((short) ((blocks[bo] & 0xff) | (blocks[bo + 1] << 8)));
-				acc = acc + isum * (sw * xs[b]);
+				double p = (float) (sw * xs[b]);
+				for (int k = 0; k < 4; k++) {
+					acc[k] = (float) (acc[k] + (float) (lane[k] * p));
+				}
 			}
-			r[i] = acc;
+			r[i] = (float) ((float) (acc[0] + acc[2]) + (float) (acc[1] + acc[3]));
 		}
 		return r;
 	}

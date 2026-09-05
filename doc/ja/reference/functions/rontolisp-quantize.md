@@ -37,8 +37,8 @@ ggml の `Q8_0` の一つだけです。32 要素のブロックごとに binary
 
 [`vec:matvec`](../../guides/simd-acceleration.md) と `vec:matvec-into` は行列として量子化行列を受け取り、`#f`
 または `#d` のベクタに対して ggml の整数内積の形（活性値を 32 要素ブロックごとに
-int8 へ量子化し、ブロックごとに厳密な整数内積、ブロックごとに 1 回の double 積和）で
-計算します。これはインタプリタと JVM、`--simd` / `--parallel` の有無を問わずビット
+int8 へ量子化し、ブロックごとに 4 レーンの厳密な整数和、レーンごとに 1 回の double
+積和を 4 つのアキュムレータへ）で計算します。これはインタプリタと JVM、`--simd` / `--parallel` の有無を問わずビット
 単位で同じ値です。他の `vec:` / `linalg:` 操作はパックされた浮動小数点配列を要求する
 ので、先に [`rontolisp:dequantize`](rontolisp-dequantize.md) してください（例外は
 `linalg:row` で、量子化行列の 1 行をそのまま `#f` ベクタに読み出します）。量子化した
