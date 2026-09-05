@@ -135,8 +135,17 @@ C2. **`.todo/480` is worth 1.1-1.5x to the f32 GEMV on its own**, before bf16 ex
 
 Taken on a box cleared for it: no maven anywhere, the other lanes held off the JVM.
 **Base commit `2275c000`. NVIDIA GB10, aarch64 Cortex-X925, NEON 128-bit, 20 cores,
-Oracle GraalVM 25.0.4, `RONTOLISP_THREADS` default (20). Load average 0.64 immediately
-before the first JVM and 0.67 immediately after the last.** `dorian`, the project's other
+Oracle GraalVM 25.0.4. `RONTOLISP_THREADS` UNSET, so `SimdParallel.threads()` took
+`Runtime.availableProcessors()` = **20 threads, the calling thread included**. Load
+average 0.64 immediately before the first JVM and 0.67 immediately after the last.**
+
+**Every ratio in this section is GB10-local and self-contained**: the f32 arm and the
+bf16 arm of a cell are timed in the SAME JVM, in the same run, over the same values, and
+the harness divides one by the other. No number here divides by an f32 figure from
+`.todo/482`, `.todo/670` or `dorian`, so a contaminated baseline elsewhere cannot flatter
+a bf16 result here. The 0.80x / 1.02x that this section supersedes were GB10 figures from
+this same harness on 2026-09-03, taken beside two busy lanes -- not dorian's, and not
+`Worth.java`'s. `dorian`, the project's other
 box, is Broadwell AVX2 with 64 threads: a ratio measured here is NOT a ratio measured
 there, and no table in this file covers both.
 
@@ -207,7 +216,7 @@ rule held.
 alternative to the fused kernel that is bit-identical to it, and it loses everywhere, so
 there is nothing for a size gate to switch to (below).
 
-### `--parallel`, 20 threads
+### `--parallel`, 20 threads (`RONTOLISP_THREADS` unset -> `availableProcessors()` = 20)
 
 | kernels, shape | Graal f32 | Graal bf16 | Graal | C2 f32 | C2 bf16 | C2 |
 | --- | --- | --- | --- | --- | --- | --- |
