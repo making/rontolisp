@@ -7734,6 +7734,18 @@ class WasmLispCompilerIntegrationTest {
 		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"あいうえおかきくけこさしすせそた\"")), "Hiragana");
 	}
 
+	// Same over content holding an ASTRAL character -- a four-byte UTF-8 sequence, and
+	// on the UTF-16 backends a surrogate pair. It is the shape with no shortcut anywhere:
+	// the cursor's "every character before it is one byte" fast path cannot hold, so
+	// every index here is the walk itself. This is the only place either WASM leg pins
+	// the cost of that shape -- ci-spec carries the CORRECTNESS of it on all four
+	// backends and no timing at all (.kb/string-index-cost.md).
+	@Test
+	void aCharacterIndexDoesNotDecodeFromTheStartOfAStringHoldingAnAstralCharacter() throws Exception {
+		String unit = "\"" + "\uD83D\uDE00" + "0123456789abcde\"";
+		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted(unit)), "one astral character in every 16");
+	}
+
 	// Builds a 1,024-character string and the 131,072-character string that IS that
 	// string 128 times over, scans each, and prints the two elapsed times in ms. Both
 	// grow from the same literal rather than the shorter (defvar *long* *short*), which

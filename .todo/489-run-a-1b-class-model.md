@@ -186,13 +186,26 @@ alone.
   --repeat-penalty 1.0 --top-k 0 --top-p 1.0 --min-p 0` (dorian, x86 build of
   2026-09-03) against our f32 widening of the same file, the same 64 tokens of text
   ("there were 3000 people in a town. The number of people who are in the town is
-  3000. ..."). The chat-mode comparison agreed only on its first eleven words -- the
-  two chat harnesses, as with 677.
-- The interpreter leg of every `tokenizer.json` model dies in the file's JSON reader
-  (`subseq` of an adjustable `(unsigned-byte 8)` buffer is a `simple-vector` on every
-  backend; only the interpreter's `%octets-to-string` refuses it) -- filed as `.todo/698`,
-  narrowed the same day to "which callers still use a bare `subseq`" since a packed copy
-  is a known fix; confirm its state before acting on it. The JVM legs above are unaffected.
+  3000. ..."). The chat-mode comparison agreed only on its first eleven words, and the
+  trace of that prompt found the reason: the reader matched whole only the added tokens
+  flagged `"special"`, so Qwen's unflagged `<think>` went in as three ids. Fixed the same
+  day in `examples/llama2/checkpoint-tokenizer.lisp` (both readers; failing-first pin
+  `checkpoint-tokenizer-check.lisp` over a `tokenizers`-library fixture, all four
+  backends), recorded in `.kb/tokenizers.md` and `.todo/701`. After it, every chat
+  prompt's ids equal the Python library's for the rendered string (Qwen3.5 21 ids,
+  Qwen3-0.6B 21, LFM2.5 18 and SmolLM2 18 -- the last two UNCHANGED by the fix, as the
+  mechanism predicted: nothing in their templates for it to bite), and both Qwen models
+  answer the chat prompt as the safetensors and the GGUF leg alike: Qwen3.5 "In the
+  quiet, dusty corner of the old bakery, lived **Barnaby**...", Qwen3-0.6B "Once upon a
+  time, there lived a cat named Luna..." -- no think-aloud preamble. `llama-cli`'s chat
+  mode still thinks aloud on both, which is now a question about its template rendering
+  against ours (`.todo/701`), not about ids.
+- The interpreter leg of a `tokenizer.json` model died in this file's own byte-level JSON
+  reader until `.todo/690` (2026-09-05) replaced that reader with `rontolisp:json-parse`;
+  it runs now (SmolLM2-135M-Instruct chat, identical text to the JVM, 2.85 tok/s under
+  `--simd`, `tokenizer.json` + KV cache 12.2 s against the JVM's 1.1 s). The builtin defect
+  that killed it (`subseq` of an adjustable `(unsigned-byte 8)` buffer answers a
+  `simple-vector` on every backend) is still `.todo/698`'s.
 - Checkpoints: `/home/administrator/models/{qwen3-0.6b,qwen3-0.6b-gguf,smollm2-135m,
   smollm2-135m-instruct,smollm2-360m-instruct}` beside the ones the other lane restored
   there (`tinyllama`, `qwen35`, `smollm2-135m-f16.gguf`); the HF cache under
@@ -229,6 +242,66 @@ the first number is taken:
    trust; an absolute from a non-quiet window is contaminated in bf16's favour (the f32
    arm is the more bandwidth-bound of the two, so a co-tenant costs it more). "Held" or
    "missed" is not to be written on tok/s alone.
+
+## Handover, 2026-09-05 (this lane stopped here; one lane continues)
+
+**Widths as things stand, per rung.** Every rung above was measured at `-w f32` (the
+default): the checkpoint's BF16 / F16 tensors widened to `#f` as they are read, norms
+`#f`, activations `#f`. With `-w bf16` (`LLAMA2_WEIGHTS=bf16`; `examples/llama2/llama2.lisp`,
+develop `495c4a6b`) the plumbing is in place and VERIFIED AT F32 ONLY: every rank-2 tensor
+is asked from the reader at the weight width; every rank-1 tensor (norms, biases,
+`A_log`, `dt_bias`) is widened to `#f` by `as-f32-vector` as the reader hands it over;
+the embedding row is copied into a fresh `#f` vector (`embedding-row`; `linalg:row`
+declines bf16); Qwen3.5's query | gate split keeps the source width; the squeezed conv
+weight is `#f` (read element-wise); the KV cache, the recurrent states and every
+activation are `#f`. A `.bin` refuses `-w bf16` by message. On a safetensors or GGUF file
+`-w bf16` today stops at `checkpoint:make-tensor: BFLOAT16 is not a packed float element
+type` -- the reader has no `#bf16` destination yet, which is `.todo/675`'s remainder,
+NOT STARTED (the interface it must meet is written there).
+
+**Where the bf16 measurement resumes.** Once 675's remainder lands: compile `Llama` /
+`LlamaP` as the README says, run each rung with `-w f32` and `-w bf16` back to back in
+one quiet window (no other rontolisp lane; `RONTOLISP_THREADS=32` on the parallel rows,
+64 as a second row), 64 greedy tokens of the chat prompt, and for each arm record tok/s,
+GB/s (= tok/s x bytes per token: parameters x 4 at f32, x 2 at bf16) and Gelem/s (= tok/s
+x parameters), plus the load line. The rules in "The bf16 rungs (wave 2)" above apply
+unchanged; the reading is per model against its OWN f32 parallel bandwidth in the table
+above, and a bf16 activation seen anywhere is a defect. Check the `--add-modules
+jdk.incubator.vector` flag first if a cell is absurdly slow -- without it `java -jar`
+silently runs the scalar defuns. The chat prompt's ids are the reference library's now
+(the added-token fix), so chat rows are measurable; the raw "Once upon a time" rows are
+the `llama.cpp`-identical ones.
+
+**Load times after `.todo/690`** (which replaced the example's own byte-level JSON reader
+with `rontolisp:json-parse`): on the JVM the `tokenizer.json` + KV-cache figure is
+unchanged within noise (Qwen3.5 2.8 s against 2.6-3.0 s before; the byte reader had been
+the JVM's workaround for the same defect), and the interpreter leg, dead before, is 12.2 s
+for SmolLM2-135M. The load column in the README stands.
+
+**One caveat on the f32 chat rows above**: they were taken before the added-token fix,
+over a chat prompt whose think block was three ids (Qwen3.5 24 prompt ids, now 21;
+Qwen3-0.6B likewise). tok/s is per generated token and the decode reads the same
+weights, so the rows stand as throughput; the first bf16 run should take its f32 arm
+again over the current prompt anyway, since the comparison is within one window.
+
+**Left unfinished by this lane, all filed:** `.todo/675`'s remainder (the `#bf16`
+destination, interface below in 675); the bf16 rungs themselves (this item, wave 2);
+`.todo/697` (the `--parallel` default), `.todo/698` (`subseq` of an adjustable packed
+vector), `.todo/701` (the chat-template measurement, unowned), `.todo/703` (`make-array`
+on an unknown element type). Not filed, small: the README's TinyLlama table still shows
+the 2026-09-03 rows without a thread count (the re-measured ones are in this item); `-w
+bf16` on a wasm output has not been exercised (it should stop at `make-tensor`'s message
+the same way); `examples/llama2/checkpoint-tokenizer-check.lisp` covers the `:gpt2` kind
+only -- the Split-regex kinds are covered by the real checkpoints' id dumps recorded
+above, not by a fixture. Checkpoints under `/home/administrator/models/` (see above),
+`llama.cpp` with `llama-cli` and `llama-completion` at
+`/home/administrator/models/tools/llama.cpp-bin/` -- **copied out of the session
+scratchpad on 2026-09-05 so a `/tmp` cleanup cannot take the oracle with it**, the same
+move the checkpoints got that morning. `llama-cli --version` reports build 1, commit
+`67a17c1`, GNU 13.3.0, Linux x86_64. Binaries and their `libggml*.so` only; the source
+tree stays in `/tmp` and a rebuild takes about three minutes if a newer one is wanted.
+Record the commit with any comparison -- an oracle without its version is `.todo/670`
+standing rule 10 with the roles reversed.
 
 ## What the numbers should look like
 

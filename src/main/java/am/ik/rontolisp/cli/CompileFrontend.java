@@ -161,7 +161,6 @@ final class CompileFrontend {
 		// and the ASDF components below, and the compiled program's run-time *features*
 		// is seeded from it (WasmLispCompiler.runtimeFeatures / JvmLispCompiler).
 		features = features.with(declaredFeatures);
-		WitExportDirective.Backend witBackend = witBackend(wasm, noGc, component);
 		// (rontolisp:wit-import "kv.wit" :interface "..."): bind a WIT interface's
 		// functions. Unlike wit-export this runs BEFORE UserMacroExpander, because the
 		// names it binds live in a package the WIT names -- the (defpackage kv ...) it
@@ -177,6 +176,51 @@ final class CompileFrontend {
 				: LispReader.readAllFromString(source, features, entryFile);
 		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), baseDir, systemPath, features,
 				dists);
+		return expand(loaded, features, baseDir, wasm, dynamic, component, noWasi, noGc, hostFetch, boundary, reentrant,
+				noPrune);
+	}
+
+	/**
+	 * The pass pipeline: everything between the read and the backend, in the one order
+	 * that is correct.
+	 * <p>
+	 * <b>This method exists to have exactly one copy of that order.</b> The corpus guards
+	 * ({@code JvmClassShakerCorpusTest}, {@code WasmTreeShakerCorpusTest}) compile the
+	 * whole {@code ci-spec.yaml} catalogue and claim to decode "exactly the class the
+	 * real CLI emits", so they have to run this pipeline rather than restate it -- and
+	 * they did restate it, and drifted: on 2026-09-03 a {@code tokenizer:} case joined
+	 * the corpus and went red because their copies had never gained
+	 * {@link am.ik.rontolisp.eval.TokenizersLibrary}, which was one of EIGHT passes they
+	 * were missing. Membership is not the whole hazard either: a copy that applies every
+	 * pass in a different ORDER is wrong in a way no census can see (theirs ran
+	 * {@link am.ik.rontolisp.eval.VecLibrary} ahead of the Gray-streams, usocket and
+	 * unread-char rewrites instead of after them, so a {@code vec:} reference any of
+	 * those three introduces was spliced by the CLI and missed by both guards). Hence a
+	 * method and not an exported list of libraries for a caller to fold: the order
+	 * travels with the code, or it is duplicated again.
+	 * <p>
+	 * The read and the {@code (load ...)} inlining stay in {@link #run} above, because a
+	 * caller may legitimately want its own source loader -- the corpus guards pass one
+	 * that THROWS, which is how they assert the catalogue never comes to depend on a file
+	 * on disk.
+	 * @param loaded the read, load-inlined top-level forms
+	 * @param features the feature set the program was read with
+	 * @param baseDir the directory relative paths resolve against
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param dynamic {@code --dynamic}
+	 * @param component {@code --component}
+	 * @param noWasi {@code --no-wasi}
+	 * @param noGc {@code --no-gc}
+	 * @param hostFetch {@code --host-fetch}
+	 * @param boundary the host boundary, already defaulted
+	 * @param reentrant {@code --reentrant}
+	 * @param noPrune {@code --no-prune}
+	 * @return the expanded program and what a backend needs to know about it
+	 */
+	static Result expand(List<LispVal> loaded, Features features, @Nullable String baseDir, boolean wasm,
+			boolean dynamic, boolean component, boolean noWasi, boolean noGc, boolean hostFetch, HostBoundary boundary,
+			boolean reentrant, boolean noPrune) {
+		WitExportDirective.Backend witBackend = witBackend(wasm, noGc, component);
 		// Expand the (rontolisp:async (defun ...)) wrapper before anything scans for
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.

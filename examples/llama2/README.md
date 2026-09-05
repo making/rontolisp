@@ -34,6 +34,7 @@ program no command line (a browser shim, an embedder):
 | `-p` | `LLAMA2_TOPP` | 0.9 |
 | `-s` | `LLAMA2_SEED` | the clock |
 | `-m` | `LLAMA2_MODE` | `generate` (continue the prompt); `chat` wraps it in the family's chat template |
+| `-w` | `LLAMA2_WEIGHTS` | `f32` (a bf16 / f16 checkpoint is widened as it is read); `bf16` keeps the file's own bits for the weight matrices -- the norms and every activation stay f32 either way |
 | -- | `LLAMA2_TRACE` | set to anything: every token id and its text on stderr |
 
 From this directory, on all four backends. The interpreter takes the program's
@@ -91,7 +92,15 @@ Qwen 3.5), and its `post_processor` (or `tokenizer_config.json`'s
 `<|im_start|>` as its `bos_token` and adds none. That is per FILE, not per
 family: SmolLM2 and TinyLlama are both `model_type` `llama`, and TinyLlama's
 `tokenizer.json` is SentencePiece under the same `"BPE"` model type, with no
-`ByteLevel` step, which sends the loader to `tokenizer.bin`.
+`ByteLevel` step, which sends the loader to `tokenizer.bin`. Both readers --
+this one and the GGUF's -- live in [`checkpoint-tokenizer.lisp`](checkpoint-tokenizer.lisp),
+and both match EVERY added token whole, flagged `"special"` or not (a GGUF's
+token types 3 and 4), because the reference implementation does: Qwen3 ships
+`<think>` and `</think>` unflagged, and a reader that took only the flagged
+ones fed a chat prompt's think block as `<th` `ink` `>`, three ids for one.
+[`checkpoint-tokenizer-check.lisp`](checkpoint-tokenizer-check.lisp) pins both
+readers' ids against the Python `tokenizers` library over the fixture
+[`tokenizer-fixture.py`](tokenizer-fixture.py) writes, on all four backends.
 
 TinyLlama-1.1B-Chat uses the Llama 2 tokenizer -- the same 32000-entry
 `tokenizer.bin` the stories do:
@@ -147,11 +156,7 @@ java --add-modules jdk.incubator.vector -Xmx16g Llama Qwen3.5-0.8B -m chat -t 0 
 ```
 
 ```
-***
-
-### Barnaby the Cat
-
-Barnaby was a small, fluffy cat with a tail that was always a perfect ...
+In the quiet, dusty corner of the old bakery, lived **Barnaby**, a cat with a coat of soft, burnt-orange fur and a tail that twitched when he felt the wind. Barnaby was not
 ```
 
 The same model as ggml-org's `Qwen3.5-0.8B-BF16.gguf` -- one file, the tokenizer
@@ -161,13 +166,17 @@ prompt with the same text, token for token, and needs no `tokenizer.json`
 (`Llama Qwen3.5-0.8B-BF16.gguf -m chat ...`). The publisher's `Q8_0` file loads
 too, its weight matrices staying quantized (`rontolisp:quantize`'s type, 0.83 GB
 of Q8_0 blocks read straight into place) and its GEMVs running the integer-dot
-kernel. Against `llama.cpp` on the same GGUFs, **raw completion** of the same
-four prompt token ids at temperature 0 -- raw rather than chat, because the
-chat template rendering is the one component shown to differ on the Qwen
-family: the BF16 file is token-identical over the 64 tokens compared, and the
-Q8_0 file agrees for 60 tokens and then picks a different word (two Q8_0
-kernels are two fold orders, and this one is the scalar defun's bits, not
-ggml's); the method and the ids are in `.todo/672`'s record.
+kernel. The prompt's 21 ids are the Python `tokenizers` library's for the same
+rendered string, and on a RAW completion -- no chat template on either side,
+"Once upon a time" -- the model's 64 ids are `llama.cpp`'s on the same BF16
+GGUF, token for token (`.todo/677`); the Q8_0 file agrees with it for 60 tokens
+and then picks a different word (two Q8_0 kernels are two fold orders of the
+same 7.6e-3 quantization error, and this one is the scalar defun's bits, not
+ggml's; the method, the ids and the numbers are in `.todo/672`'s record). Its
+`-m chat` is not `llama-cli`'s: the two harnesses render "thinking off"
+differently (`llama-cli --reasoning-budget 0` still opens a `[Start thinking]`
+block on this model), which is a question about the two template strings
+(`.todo/701`), not about the arithmetic.
 
 Measured on the same box as the TinyLlama rows, JVM class output, f32 weights
 (the load line: 7.1-7.6 s for 1.75 GB of bf16 into 3 GB, of which
@@ -199,6 +208,103 @@ the prompt. `tokenizer.json` (13 MB) is read by a byte-level JSON reader of
 this file's own, because `rontolisp:json-parse` over that text does not finish
 (`.todo/690`).
 
+### LFM2.5-1.2B-Instruct
+
+The second hybrid, and the simplest one in the field: ten of sixteen blocks are
+a **gated short convolution** and six are attention with QK-norm
+([the layer table](#the-layer-table)). The conv block has no matrix state at
+all -- one projection to `B | C | x'`, a causal depthwise convolution of kernel
+3 over the gated input `B * x'`, a gate by `C`, and a projection back
+(`shortconv.lisp`, over the `causal-conv.lisp` step it shares with Gated
+DeltaNet). Its state is the previous two input vectors, 2 x 2048 floats a
+layer.
+
+`LiquidAI/LFM2.5-1.2B-Instruct` reads from its BF16 `model.safetensors` -- one
+file and no index, which the reader takes as readily as a sharded set -- and
+from Liquid's OWN `LFM2.5-1.2B-Instruct-BF16.gguf`, published by the model's
+maker rather than converted by a third party:
+
+```bash
+rontolisp llama2.lisp -o Llama.class --class-name Llama --simd
+java --add-modules jdk.incubator.vector -Xmx24g Llama LFM2.5-1.2B-Instruct \
+  -m chat -t 0 -n 64 -i "Tell me a short story about a cat."
+```
+
+```
+Once upon a time, in a quiet little village, there lived a curious cat named
+Whiskers. Whiskers wasn’t like the other cats—she had a knack for finding the
+most unexpected things. One sunny morning,
+```
+
+The two files agree token for token, in `-m chat` and in plain continuation.
+A `Q8_0` file is refused by name at `token_embd.weight` until the quantized
+weight matrix exists.
+
+**And `llama.cpp` on that GGUF prints the same bytes.** Same prompt, same
+temperature 0, the whole overlap identical -- 581 characters (585 UTF-8
+bytes), counted over a
+stated window (from the first generated byte to the end of the shorter of the
+two outputs; that is the exact figure, where the ~143 tokens it re-encodes to
+is not, since a byte-level BPE re-encode of decoded text need not reproduce
+the sequence that generated it). Qwen3.5-0.8B
+was then checked the same way on the other box and is token-identical to
+`llama.cpp` too, so this is **two models, two architectures, two machines**,
+not one lucky prompt -- and it is not the byte-identity check a `Q8_0` file
+will get, whose subject is the quantized kernel rather than the forward pass.
+
+What the real checkpoint taught, none of it in `config.json`:
+
+- **The GGUF names the Llama 3 pre-tokenizer after itself.**
+  `tokenizer.ggml.pre` is `lfm2`, though `tokenizer.json` holds the Llama 3
+  pattern character for character (`llama.cpp` maps it the same way, beside
+  `llama-v3` and `llama-bpe`). An unmapped alias is refused by name, so the
+  model does not load at all -- and the safetensors path, which reads the
+  pattern itself, never sees it. The alias now maps; a family's own name for a
+  shape it merely shares is accepted wherever a keyword is
+  (`.kb/tokenizers.md`).
+- `block_ff_dim` is not in the file: `intermediate_size` 12288 is the figure
+  BEFORE `block_auto_adjust_ff_dim`, and the width the weights actually have is
+  8192 (`2/3 x 12288`, rounded to `block_multiple_of`). The GGUF states the
+  adjusted 8192 outright as `lfm2.feed_forward_length`.
+- The GGUF gives the layer pattern as the per-layer `lfm2.attention.head_count_kv`
+  array `#(0 0 8 0 0 8 0 0 8 0 8 0 8 0 8 0)` -- a zero KV-head count is a conv
+  block -- where `config.json` gives it as `layer_types`. Both reach the table
+  as `:layer-types`.
+- The norms are named `operator_norm` / `ffn_norm` and the final one
+  `embedding_norm`; attention output is `self_attn.out_proj`, the MLP
+  `feed_forward.w1/w2/w3`, and QK-norm `q_layernorm` / `k_layernorm`.
+- `vocab_size` 65536 is padded again: `tokenizer.json` defines 64909 ids
+  (64400 + 509 added), and the sampler chooses among those.
+- The stop token is `<|im_end|>` (7), which `config.json` states as
+  `eos_token_id` directly -- unlike Qwen3.5, where it is only in
+  `tokenizer_config.json`.
+
+Measured on the same box as the rows above -- JVM class output, `--simd`, f32
+weights, `-Xmx16g`, `-m chat -t 0 -n 64`, GraalVM 25.0.4 on JDK 25. Load 9.0-9.8 s
+from the GGUF (its tokenizer 0.32-0.34 s) and 8.9-9.1 s from the safetensors
+(`tokenizer.json` + the KV cache 1.54-1.67 s). Medians of 3-7 runs, spread in
+brackets; "quiet" on this box means no other LANE, since it carries steady
+co-tenants (`clickhouse-server` ~17% CPU, `mysqld`) that were running for every
+row on this page:
+
+| threads | LFM2.5-1.2B | Qwen3.5-0.8B, same window |
+| --- | --- | --- |
+| 1 | 2.13 (1.87-2.20) | 2.95 (2.54-2.99) |
+| 8 | 7.21 (7.16-7.22) | 7.76 (7.74-7.88) |
+| 16 | 8.83 (8.79-8.86) | 8.76 (8.68-9.05) |
+| 32 | 9.30 (9.21-9.64) | 8.71 (8.57-8.75) |
+
+**The two models scale differently, and that is the interesting row.** Between 16
+and 32 threads LFM2.5 gains 5% while Qwen3.5 stays flat: Qwen3.5 is saturated
+by 16 threads and LFM2.5 is still climbing at 32. Both ratios come from
+cells whose own spread is under 2%, so neither depends on the noisier one-thread
+figure. At ONE thread the two models are indistinguishable per byte moved (about
+9-10 GB/s each, with overlapping spreads); the difference is entirely in how far
+each scales. So the parallel leg is not simply the memory wall it looks like from
+a single model -- dispatch and barrier cost rises with thread count, and a model
+whose token is 576 small 128 x 128 GEMVs pays far more of it than one whose token
+is thirty large matvecs. Four models is not yet a law, and `--parallel`'s default
+of one thread per core is not the fastest setting for either of these.
 ### Qwen3-0.6B
 
 The dense Qwen: 28 blocks of GQA attention with QK-norm (`head_dim` 128 on a
@@ -209,18 +315,19 @@ unsloth's `Qwen3-0.6B-BF16.gguf` with the tokenizer inside it, the same prompt
 as above (`-m chat -t 0 -n 64`) gives the same 64 tokens from both:
 
 ```
-Okay, the user wants a short story about a cat. Let me start by brainstorming some ideas. A cat can be a simple character, so maybe a cat who has a special ability or a unique trait
+Once upon a time, there lived a cat named Luna. She was small and fluffy, with a curious heart. One day, she found a hidden treasure in the forest. As she explored, she discovered a magical book
 ```
 
-That is the model thinking out loud through an empty `<think>` block, not a
-template bug: `llama.cpp` on the same GGUF, thinking off (`--reasoning-budget
-0`), opens with the same eleven words and then brainstorms in other words --
-the two chat harnesses render the template differently, not the arithmetic,
-because with no template at all (`llama-completion -no-cnv --temp 0
---repeat-penalty 1.0 --top-k 0 --top-p 1.0 --min-p 0` against `Llama
-Qwen3-0.6B-BF16.gguf -t 0 -n 64 -i "Once upon a time"`) both print the same 64
-tokens: `Once upon a time, there were 3000 people in a town. The number of
-people who are in the town is 3000. ...`. Measured on dorian (JVM class output, f32 weights, develop
+Before the added-token fix above the same command printed the model thinking
+out loud ("Okay, the user wants a short story about a cat. Let me start by
+brainstorming...") -- its empty `<think>` block had gone in as three tokens,
+so it was answering a different prompt. With no template at all
+(`llama-completion -no-cnv --temp 0 --repeat-penalty 1.0 --top-k 0 --top-p 1.0
+--min-p 0` against `Llama Qwen3-0.6B-BF16.gguf -t 0 -n 64 -i "Once upon a
+time"`) `llama.cpp` and this file print the same 64 tokens: `Once upon a time,
+there were 3000 people in a town. The number of people who are in the town is
+3000. ...`; in chat mode `llama-cli` still thinks out loud on this model where
+we do not, the harness difference `.todo/701` measures. Measured on dorian (JVM class output, f32 weights, develop
 `2275c000`, GraalVM 25.0.4, no other rontolisp run on the box -- its steady
 co-tenants, a `clickhouse-server` at ~17% of a core and a `mysqld`, keep the
 idle 1-minute load average at 0.3-0.9; the `loadavg` column is that figure
@@ -307,12 +414,13 @@ recorded beside it when the model was loaded:
 
 | option | what varies | who has it |
 | --- | --- | --- |
-| `:q-norm` / `:k-norm` | RMSNorm over each head's own dims of q and k | Qwen3 |
+| `:q-norm` / `:k-norm` | RMSNorm over each head's own dims of q and k | Qwen3, LFM2.5 |
 | `:rope` | `:pairs` (adjacent pairs, what llama2.c's `.bin` and a llama.cpp-converted GGUF of a Llama-family model hold -- the converter permutes Q and K only for those), `:halves` (Hugging Face's `rotate_half`, what a safetensors file and a Qwen GGUF hold), or `nil` -- no rotation at all | SmolLM3 leaves every 4th block unrotated |
 | `:rotary-dim` | how many of each head's dims rotate | partial-RoPE models (Qwen3.5: 64 of 256) |
 | `:scale` | the attention scale, when it is not `1/sqrt(head-size)` | Granite |
 | `:gate` | an output gate over the head outputs, before `wo` | gated attention (Qwen3.5) |
-| `:full-attention-interval` | a hybrid: every Nth block is `:attention`, the rest `:deltanet` | Qwen3.5 (4) |
+| `:full-attention-interval` | a hybrid: every Nth block is `:attention`, the rest the row's `:mixer` | Qwen3.5 (4) |
+| `:layer-types` | the same thing given as an explicit per-block list, which WINS over the interval -- what a reader builds from `layer_types` or from a GGUF's per-layer KV-head array | LFM2.5, whose pattern is irregular |
 | model-wide | `:rope-theta`, `:eps`, and the embedding / residual / logit multipliers | Granite, and everything since Llama 2 moved `rope_theta` |
 
 `*architectures*` is the other half: one row per `general.architecture` (GGUF) /

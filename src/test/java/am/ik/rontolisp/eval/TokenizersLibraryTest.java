@@ -212,6 +212,19 @@ class TokenizersLibraryTest {
 			.isEqualTo(eval("(tokenizer:pre-tokenize :gpt2 \"a 12345\")"));
 	}
 
+	/**
+	 * A family whose GGUF names the Llama 3 shape after ITSELF. LFM2.5's tokenizer.json
+	 * holds the Llama 3 pattern character for character, and llama.cpp maps its `lfm2`
+	 * alongside `llama3` / `llama-v3` / `llama-bpe` -- so the string has to reach the
+	 * same scanner, not an error.
+	 */
+	@Test
+	void aFamilyAliasOfTheLlama3ShapeIsAccepted() {
+		String llama3 = eval("(tokenizer:pre-tokenize :llama3 \"Hi there, 2025!\")");
+		assertThat(eval("(tokenizer:pre-tokenize \"lfm2\" \"Hi there, 2025!\")")).isEqualTo(llama3);
+		assertThat(eval("(tokenizer:pre-tokenize \"llama-v3\" \"Hi there, 2025!\")")).isEqualTo(llama3);
+	}
+
 	@Test
 	void anUnknownPreTokenizerIsRefusedByName() {
 		assertThat(eval("""

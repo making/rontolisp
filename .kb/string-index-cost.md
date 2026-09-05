@@ -97,6 +97,27 @@ Measured 2026-09-05 (JDK 25, this rule against the previous one, same tree):
 - One emoji in front of 30,720 digits, scanned whole against the same characters in 481-character
   pieces: 630 ms / 14 ms -> 9 ms / 5 ms.
 
+**What the 340x is and is not.** It is a claim about `rontolisp:json-parse`, not about loading a
+model. `examples/llama2/llama2.lisp`'s checkpoint load did NOT get faster: re-measured on the
+shipped tree it is 9.0-9.8 s from GGUF and 8.9-9.1 s from safetensors, the same as before within
+noise. That file carried its own byte-level JSON reader **because `json-parse` could not finish**,
+so it never paid the cost and had nothing to recover. Deleting those 180 lines removed a workaround
+at equal speed (425 ms against 447 ms), which is a maintenance win and not a throughput one.
+
+Four separate things landed here and only the first two are speed for an existing caller:
+
+1. the interpreter's `subseq` no longer renders the whole buffer per call -- general, and the one
+   defect nothing anywhere had routed around;
+2. a surrogate-bearing string is indexed in constant time -- the 45x above;
+3. `rontolisp:json-parse` becomes usable on a large file **at all**, so nothing has to route around
+   it in future -- the value is to callers that do not exist yet;
+4. one existing workaround deleted at parity.
+
+The generalisation to avoid, because it was made and was wrong: a mechanism being fixed does not
+mean its known callers were paying for it. Check which callers were actually on the slow path
+before claiming a speedup for them. **And read a workaround as evidence** -- the byte reader sitting
+in the tree was a recorded fact about `json-parse` that nobody had read as one.
+
 ## Cutting a piece out is an index too
 `(subseq s a b)` may not cost the STRING's length either. On the interpreter it copies the slice
 straight out of the code-point buffer (`LispString.subsequence`); it used to render the whole
@@ -135,10 +156,18 @@ on a 12.8 MB file. Tracked as `.todo/704`.
   orders over one mixed ASCII / 2-byte / 3-byte / astral string, then cost as `SCAN-FLAT` /
   `LENGTH-FLAT` -- 131,072 characters as ONE string against 1,024-character chunks.
   Comparing the two halves is what makes the bound machine-independent.
-- ci-spec `character-index-into-a-string-holding-a-surrogate-pair` (all four backends): the same
-  SCAN-FLAT comparison over a string with an astral character in every 16, built through
-  `rontolisp:octets-to-string` so the JVM half is an immutable string rather than a character
-  vector.
+- ci-spec `character-index-into-a-string-holding-a-surrogate-pair` (all four backends):
+  CORRECTNESS only over a string with an astral character in every 16 -- the lengths, three
+  indexes, and that a walk of the long string reads exactly what 128 walks of the short one do.
+  Built through `rontolisp:octets-to-string` so the JVM half is an immutable string rather than a
+  character vector. **No timing token**: a verdict derived from `get-internal-real-time` is a
+  machine-speed value inside a file whose contract is exact strings, and a flake in it fails the
+  run carrying every other case's evidence. Sizing the scan so a quadratic implementation could
+  not finish was priced and rejected -- the driver's ceiling is a fixed
+  `CiSpecE2eTest.EXEC_TIMEOUT_SECONDS = 300` per invocation, so at 2^20 characters (the smallest
+  size whose n^2 exceeds it, and then only 3.7x) detection is a property of the RUNNER's speed
+  rather than of the code, and a timeout names the command, i.e. a backend and not a case.
+  The cost belongs in the per-backend pins below.
 - `JvmLispCompilerTest.compileACharacterIndexDoesNotWalk{FromTheStartOfTheString,ForANonLatin1String}`
   (the second over Hiragana, so the LATIN1 shortcut cannot carry it),
   `#compileACharacterIndexIntoACharacterVectorReadsTheElement`,
@@ -147,9 +176,14 @@ on a 12.8 MB file. Tracked as `.todo/704`.
   mechanism in miniature: two short strings indexed between every two indexes into a long one).
 - `LispEvaluatorTest.evalSubseqDoesNotRenderTheWholeStringItCutsFrom`,
   `#evalSubseqOfAStringIsByCodePointAndFollowsAView`.
-- `WasmLispCompilerIntegrationTest.aCharacterIndexDoesNotDecodeFromTheStartOf{TheString,AMultiByteString}`,
+- `WasmLispCompilerIntegrationTest.aCharacterIndexDoesNotDecodeFromTheStartOf{TheString,AMultiByteString,AStringHoldingAnAstralCharacter}`,
   `#aStringLengthDoesNotRecountTheWholeStringOnEveryCall`,
-  `#aCharacterIndexIntoACharacterVectorDoesNotRenderTheVector`.
+  `#aCharacterIndexIntoACharacterVectorDoesNotRenderTheVector`. **The COMPONENT leg has no cost
+  pin of its own, and does not need one -- but that is an inference, not a measurement**: the
+  cursor lives in `TYPE_STRING` in the CORE module, which the component wraps unchanged, and only
+  the I/O adapter and the entropy/clock source differ between the two legs. If the string runtime
+  ever moves out of the shared core module, or the component grows a string representation of its
+  own, this sentence is the notice that a pin went dark with it.
 
 Related: `.kb/characters-code-points.md`, `.kb/wasm-gc-strings.md`,
 `.kb/length-runtime.md`, `.kb/string-write-runtime.md`.
