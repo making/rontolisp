@@ -2,11 +2,29 @@
 
 Difficulty: Medium
 
-Filed 2026-09-05 from `.todo/670`'s week. The finding that produced it: a `src/main`
-change altered **Qwen3.5-0.8B's f32 greedy decode** -- the same prompt ids and the same
-f32 weights produced "### Barnaby the Cat" on one jar and "Here is a short story about a
-cat named **" on another. Both outputs are coherent English. The full suite was green on
-both sides, and it was found only because a lane happened to compare two traces by hand.
+Filed 2026-09-05 from `.todo/670`'s week. **The incident that produced it was not a
+defect, and the correction is why the item is worth more, not less.**
+
+What was reported: a `src/main` change had altered Qwen3.5-0.8B's f32 greedy decode --
+"### Barnaby the Cat" on one jar against "Here is a short story about a cat named **" on
+another, same prompt ids, same weights. What was actually happening: those are the HEAD
+of a 34-token run and the TAIL of a 64-token run **of one identical text**. The full
+64-token output is "Here is a short story about a cat named **Barnaby**. ... ### Barnaby
+the Cat ...". Two views of one string, read as two strings.
+
+Established since, and recorded so nobody re-opens it: both clean jars (`2275c000` and
+`1cb95b03`) against the original source, serial and `--parallel` at 32 and 1 threads,
+twice each -- all identical; and an f32 `vec:` kernel probe (sum / dot / matvec /
+matvec-into / element-wise, four shapes, both backends) is **bit-identical between the
+jars**. `.todo/488` is exonerated by measurement as well as by its diff.
+
+**The gap this item names survives the retraction untouched, and the episode is now its
+best argument.** A lane spent a build-and-bisect cycle deciding whether the decoder had
+changed, and could not answer it from the repo -- because there is nothing to run that
+says yes or no. With the assertion below, the first command would have printed green and
+the question would have closed in seconds. The hole is not "a defect got through"; it is
+**"we cannot cheaply tell whether one did"**, which is the condition that makes both a
+real change and a phantom one expensive.
 
 **The hole, stated exactly: no test anywhere asserts on the DECODED TEXT of any model.**
 Every existing check is a token count, a tensor shape, a refusal message, or a comparison
@@ -74,8 +92,7 @@ decoded text, and does not cover the architecture whose defect motivated it, is 
 
 ## Not in scope
 
-- Fixing the Qwen3.5 f32 decode difference. As of filing it is not established to BE a
-  defect: `.todo/488`'s diff changes no f32 reduction order, lane count or accumulator
-  structure, and the two live hypotheses are a mixed/incrementally-built `target/` and a
-  call site emitting different bytecode. That investigation belongs where it lands.
+- Fixing the Qwen3.5 f32 decode difference. **There is no difference** -- see the
+  retraction above. `.todo/488` changed no f32 reduction order, lane count or accumulator
+  structure by its diff, and the kernel probe agrees bit for bit.
 - Any new test surface for the large checkpoints. They are not in the repo and must not be.
