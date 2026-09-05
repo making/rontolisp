@@ -97,6 +97,27 @@ Measured 2026-09-05 (JDK 25, this rule against the previous one, same tree):
 - One emoji in front of 30,720 digits, scanned whole against the same characters in 481-character
   pieces: 630 ms / 14 ms -> 9 ms / 5 ms.
 
+**What the 340x is and is not.** It is a claim about `rontolisp:json-parse`, not about loading a
+model. `examples/llama2/llama2.lisp`'s checkpoint load did NOT get faster: re-measured on the
+shipped tree it is 9.0-9.8 s from GGUF and 8.9-9.1 s from safetensors, the same as before within
+noise. That file carried its own byte-level JSON reader **because `json-parse` could not finish**,
+so it never paid the cost and had nothing to recover. Deleting those 180 lines removed a workaround
+at equal speed (425 ms against 447 ms), which is a maintenance win and not a throughput one.
+
+Four separate things landed here and only the first two are speed for an existing caller:
+
+1. the interpreter's `subseq` no longer renders the whole buffer per call -- general, and the one
+   defect nothing anywhere had routed around;
+2. a surrogate-bearing string is indexed in constant time -- the 45x above;
+3. `rontolisp:json-parse` becomes usable on a large file **at all**, so nothing has to route around
+   it in future -- the value is to callers that do not exist yet;
+4. one existing workaround deleted at parity.
+
+The generalisation to avoid, because it was made and was wrong: a mechanism being fixed does not
+mean its known callers were paying for it. Check which callers were actually on the slow path
+before claiming a speedup for them. **And read a workaround as evidence** -- the byte reader sitting
+in the tree was a recorded fact about `json-parse` that nobody had read as one.
+
 ## Cutting a piece out is an index too
 `(subseq s a b)` may not cost the STRING's length either. On the interpreter it copies the slice
 straight out of the code-point buffer (`LispString.subsequence`); it used to render the whole
