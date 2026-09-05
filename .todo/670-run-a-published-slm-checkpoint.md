@@ -75,12 +75,45 @@ Closed: `671`, `673`, `674`, `676`, and on the width side `480`, `484`, `485`, `
 | Qwen3.5-0.8B | 2.00-2.92 tok/s | 8.56 tok/s | 3.2 GB | **27.0 GB/s** |
 | TinyLlama-1.1B | 1.58-1.91 tok/s | 6.97 tok/s | 4.4 GB | **30.7 GB/s** |
 
-**Two independent models on one ceiling**: the parallel leg is DRAM-bound, not
-thread-bound, which is why 64 threads buy about 4x over one; the single-thread leg is at
-8.4 and 5.0 GB/s and is bound by something else. `.todo/489` carries the prediction that
-makes -- and its precondition: `eval/VecSimd` declines a bf16 array at every dispatch
-point until `.todo/488`'s wiring lands, so measuring earlier falsifies a correct
-diagnosis for the wrong reason.
+**"Two independent models on one ceiling" was wrong, and it is corrected here once,
+2026-09-05, on four models measured on a quiet dorian.** 27.0 and 30.7 were close enough
+to read as one number. Four are not: at 32 threads LFM2.5-1.2B reaches 43.5 GB/s,
+TinyLlama-1.1B 39, Qwen3.5-0.8B 26.9-29, Qwen3-0.6B 22. There is no box ceiling in that
+spread. What replaces it:
+
+- **The parallel leg is not DRAM-bound. It is bound by the parallel machinery** --
+  work distribution, barrier cost, per-row dispatch -- **and how much of that a model
+  pays depends on how its work is cut up.** Qwen3.5's Gated DeltaNet does 576 small
+  128x128 GEMVs per token; LFM2.5 does about 30 big matvecs. Dispatch cost rises with
+  thread count while per-thread work shrinks, so a model paying more of it peaks earlier.
+- **The signature is a saturation KNEE at a model-specific thread count**, and it is the
+  finding, not the bandwidths. From the two tight cells (medians, 3-7 runs): 8 -> 16
+  threads is x1.225 for LFM2.5 and x1.129 for Qwen3.5; 16 -> 32 is x1.053 for LFM2.5 and
+  **x0.994 for Qwen3.5, which goes DOWN**. Qwen3.5 is finished by 16 threads; LFM2.5 is
+  still climbing at 32.
+- **At ONE thread the two models are indistinguishable** -- 9.97 against 9.12 GB/s with
+  overlapping spreads. That is what rules the alternative out: locality would show the
+  per-model difference on both legs, and it shows on neither at one thread. The whole
+  difference is in how far each model scales.
+
+Two independent routes reached this: dorian's knee above, and GB10 measuring the same
+41-42 Gelem/s at BOTH 4.2 MB and 67 MB of weights, which a DRAM ceiling has no reason to
+bind identically (`.todo/488`'s README, qualified in `bc421524`). Four models on one box
+and one kernel sweep on another is not a law -- **the clean discriminator, still unrun, is
+a parallel f32 GEMV at a shape small enough to be unambiguously cache-resident (256x256):
+if it still lands on the same rate, the cap is the machinery and no model is involved.**
+
+Two consequences worth carrying: a parallel GEMV rate is a property of how the work was
+cut up, not of the machine and not of the weights -- which reaches `.todo/672` and the
+device legs as much as `.todo/489`; and the f32 rows above are SOUND, re-measured on a
+quiet box and corroborated twice (8.92/8.71 against the recorded 8.56). A contamination
+suspicion was raised, tested, and did not hold; the 10x collapse seen while two lanes
+shared the box is `.todo/697`'s mechanism and not what 2026-09-03 recorded.
+
+`.todo/489` carries the prediction the f32 rows make. Its precondition is discharged:
+`.todo/488`'s wiring landed 2026-09-05 (`5eebb771`), and the fused pairing is bf16
+weights against f32 activations only -- every other pairing declines to the scalar defun
+(`.todo/696`).
 
 ## The two machines, because every number here is one of them
 
