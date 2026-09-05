@@ -364,6 +364,25 @@ Load: f32 8.0-8.2 s, bf16 4.25-4.5 s.
 Both arms saturate at 16 threads here too (f32 +4% from 16 to 32, bf16 -3%, both inside
 the spread).
 
+### LFM2.5-1.2B-Instruct (rung 2), chat prompt
+
+`-m chat -i "Tell me a short story about a cat."` (18 prompt ids). Text in every run:
+"Once upon a time, in a quiet little village, there lived a c...". Load: f32 8.4-8.7 s,
+bf16 4.8-5.2 s. The 16- and 32-thread cells ran after the merge to `43ee622d`, which
+touched nothing under `src/` or `examples/` (the diff of those two trees between
+`b87aed25` and `43ee622d` is empty), on the same class files.
+
+| threads | f32 tok/s | bf16 tok/s | bf16 / f32 |
+| --- | --- | --- | --- |
+| 1 | 2.14 (1.77-2.15) | 2.52 (2.34-2.82) | 1.18x |
+| 8 | 7.09 (6.82-7.42) | 10.41 (10.19-11.13) | 1.47x |
+| 16 | 8.57 (8.34-8.78) | 13.69 (13.48-14.45) | 1.60x |
+| 32 | 9.19 (8.73-9.27) | 15.14 (13.89-15.67) | 1.65x |
+
+**Still climbing at 32 threads in BOTH arms** (f32 +7% from 16 to 32, bf16 +11%), where
+the two Qwen-and-llama rows above are flat by 16: the per-model saturation point
+`.todo/678`'s lane found at one width holds at the second.
+
 ## What the numbers should look like
 
 Estimated, not measured -- the arithmetic is here so the first real run can be checked
