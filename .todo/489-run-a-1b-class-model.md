@@ -303,6 +303,67 @@ tree stays in `/tmp` and a rebuild takes about three minutes if a newer one is w
 Record the commit with any comparison -- an oracle without its version is `.todo/670`
 standing rule 10 with the roles reversed.
 
+## The bf16 rungs, measured (2026-09-05, dorian, one lane)
+
+**Conditions for every row in this section**, stated once: develop `b87aed25` (no kernel
+or example touched by this lane), `examples/llm/llm.lisp` compiled to `Llama.class`
+(`--simd`, the 1-thread rows) and `LlamaP.class` (`--simd --parallel`, every other row),
+`java --add-modules jdk.incubator.vector -Xmx24g`, Oracle GraalVM 25.0.4 with its Graal
+JIT, Xeon E5-2697A v4 (Broadwell, AVX2, 64 hardware threads), `RONTOLISP_THREADS`
+explicit on every row, 64 greedy tokens (`-t 0 -n 64`). **The two arms of a cell are
+interleaved** -- f32, bf16, f32, bf16, f32, bf16 -- so every ratio is a within-window
+comparison; each cell is the median of 3 with the spread in brackets. "Quiet" means no
+other rontolisp lane and no maven anywhere on the box (the coordinator held it); the
+steady co-tenants (`clickhouse-server` ~17% of a core, `mysqld`, a `bundle`, a `node`)
+were present throughout. The 1-minute load average was read before and after every run
+and is in the scratchpad TSV; across the whole window it ran 1.0-17, all of it the
+previous run's own workers decaying (the 32-thread cells push it highest), and no run was
+discarded. The `bf16/f32` column is tok/s over tok/s, same model, same binary, same
+window, and carries no byte estimate. Load is the `loaded ... in N ms` line (weights
+only, `tokenizer` + KV cache excluded) and is the reader's result (`.todo/487`'s bulk
+`read-sequence` into `#bf16`), not the kernels'. Checks applied to every cell: the text
+is identical between the two arms of every run; the load line says
+`weights=BFLOAT16` on the bf16 arm; and **the bf16-activation check is a positive test
+with a known signature** -- a bf16 activation declines every `vec:` kernel to the scalar
+defun and shows as a ~100x collapse in tok/s -- which never fired in any cell.
+
+### Qwen3.5-0.8B (rung 3), chat prompt
+
+`-m chat -i "Tell me a short story about a cat."` (21 prompt ids, the added-token fix
+in). Text in every run: "In the quiet, dusty corner of the old bakery, lived
+**Barnaby**...". Load: f32 6.6-7.3 s, bf16 5.0-5.4 s.
+
+| threads | f32 tok/s | bf16 tok/s | bf16 / f32 |
+| --- | --- | --- | --- |
+| 1 | 2.92 (2.54-2.94) | 3.44 (3.41-3.68) | 1.18x |
+| 8 | 8.25 (8.01-8.30) | 10.39 (9.76-10.52) | 1.26x |
+| 16 | 9.47 (9.24-9.55) | 12.21 (12.20-12.26) | 1.29x |
+| 32 | 9.01 (8.84-10.01) | 12.01 (12.00-12.32) | 1.33x |
+
+**Both arms saturate at 16 threads, and the knee did not move when the bytes halved**
+(f32 9.47 -> 9.01, bf16 12.21 -> 12.01 from 16 to 32). That is byte-estimate-free and it
+is the line to keep: if the parallel cap were DRAM, halving the weight bytes should have
+pushed the knee outward, and it did not budge.
+
+### TinyLlama-1.1B-Chat (rung 0), raw completion
+
+`-z tokenizer.bin -i "Once upon a time"` -- NOT the chat prompt: the `llama` row carries
+no chat template, so `-m chat` feeds the raw prompt, the model answers EOS (id 2) at the
+first sampled position, and the printed tok/s is then over the nine prompt positions
+only (a defect to fix, filed below; 12 such runs were discarded). Text in every run:
+"Once upon a time, there was a young woman named Lily. She lived in a small town...".
+Load: f32 8.0-8.2 s, bf16 4.25-4.5 s.
+
+| threads | f32 tok/s | bf16 tok/s | bf16 / f32 |
+| --- | --- | --- | --- |
+| 1 | 2.26 (2.00-2.26) | 2.85 (2.56-2.91) | 1.26x |
+| 8 | 7.04 (7.04-7.07) | 10.04 (9.79-10.17) | 1.43x |
+| 16 | 8.47 (8.43-8.47) | 12.36 (12.23-12.38) | 1.46x |
+| 32 | 8.80 (8.27-8.83) | 12.04 (11.80-12.22) | 1.37x |
+
+Both arms saturate at 16 threads here too (f32 +4% from 16 to 32, bf16 -3%, both inside
+the spread).
+
 ## What the numbers should look like
 
 Estimated, not measured -- the arithmetic is here so the first real run can be checked
