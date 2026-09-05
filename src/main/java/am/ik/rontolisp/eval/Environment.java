@@ -3752,19 +3752,19 @@ public final class Environment implements Scope {
 			LispVal endArg = (args.size() == 3 && !(args.get(2) instanceof LispNil)) ? args.get(2) : null;
 			int start = requireIndex(LispNames.SUBSEQ, args.get(1));
 			if (args.get(0) instanceof LispString str) {
-				String s = str.value();
 				// Bounds are CHARACTER positions (code points), not UTF-16 code units, so
-				// a
-				// non-BMP glyph still counts as one index step.
-				int cpLen = s.codePointCount(0, s.length());
+				// a non-BMP glyph still counts as one index step. The slice is copied
+				// straight out of the code-point buffer: rendering the string through
+				// value() first cost O(length) per call whatever the slice's width, which
+				// made a left-to-right parse that cuts one piece per token out of a long
+				// document quadratic (.kb/string-index-cost.md).
+				int cpLen = str.length();
 				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : cpLen;
 				if (start < 0 || end > cpLen || start > end) {
 					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
 							+ " for string of length " + cpLen);
 				}
-				int startCU = s.offsetByCodePoints(0, start);
-				int endCU = s.offsetByCodePoints(0, end);
-				return new LispString(s.substring(startCU, endCU));
+				return str.subsequence(start, end);
 			}
 			if (args.get(0) instanceof LispCons || args.get(0) instanceof LispNil) {
 				List<LispVal> elements = new ArrayList<>();

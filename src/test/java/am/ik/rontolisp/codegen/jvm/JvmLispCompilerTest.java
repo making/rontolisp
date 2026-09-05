@@ -11264,6 +11264,92 @@ class JvmLispCompilerTest {
 		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"あいうえおかきくけこさしすせそた\"")), "Hiragana");
 	}
 
+	// The same invariant for the shape the probe above CANNOT answer: a string that
+	// holds a surrogate pair. There is no arithmetic from a character index to a code
+	// unit offset then, and the fallback -- String.offsetByCodePoints(1, i) on every
+	// index, with nothing remembered -- made a scan quadratic in a string that is
+	// otherwise pure ASCII: ONE emoji at the front of 30,720 digits cost 630 ms against
+	// 14 ms for the same characters in 481-character pieces. The breakpoint table
+	// (_cpidx) is what flattens it (.kb/string-index-cost.md).
+	@Test
+	void compileACharacterIndexIntoAStringWithASurrogatePairDoesNotWalkFromTheStart() throws Exception {
+		String emoji = "\uD83D\uDE00";
+		String shortLit = emoji + "0123456789abcde".repeat(32);
+		String longLit = emoji + "0123456789abcde".repeat(2048);
+		String output = compileAndRun("""
+				(defun scan-sum (s)
+				  (let ((total 0))
+				    (dotimes (i (length s))
+				      (setq total (+ total (char-code (char s i)))))
+				    total))
+				(defvar *short* "%s")
+				(defvar *long* "%s")
+				(scan-sum "warm")
+				(defvar *t0* (get-internal-real-time))
+				(defvar *whole* (scan-sum *long*))
+				(defvar *t1* (get-internal-real-time))
+				(defvar *chunked* 0)
+				(dotimes (k 64) (setq *chunked* (+ *chunked* (scan-sum *short*))))
+				(defvar *t2* (get-internal-real-time))
+				;; Both halves read the same 30,720 digits; the short one carries the
+				;; emoji 64 times over and the long one once.
+				(print (= (+ *whole* (* 63 128512)) *chunked*))
+				(princ (- *t1* *t0*)) (terpri)
+				(princ (- *t2* *t1*)) (terpri)
+				""".formatted(shortLit, longLit));
+		assertScanIsFlat(output, "one surrogate pair at the front");
+	}
+
+	// A LONG string must not be evicted from the index memory by SHORT ones. Proving a
+	// string flat costs its whole length when the JVM cannot store it as LATIN1, so the
+	// memory is what keeps a scan linear -- and under the old "keep the two most recent"
+	// rule any two short strings touched between two indexes threw the long one out and
+	// it was re-proven at O(n) on the next character. That is not a corner: a JSON parse
+	// cuts one fresh short string out per token, so rontolisp:json-parse over a real
+	// 10.8-million-character tokenizer.json was still inside its first object after ten
+	// minutes. The victim is the shorter slot now (.kb/string-index-cost.md).
+	//
+	// Both halves are built through rontolisp:octets-to-string, the one producer whose
+	// result is an immutable java.lang.String rather than a character vector -- a vector
+	// reads its element through _rmGet and never reaches the memory under test.
+	@Test
+	void compileACharacterIndexKeepsTheLongStringWhenShortOnesAreIndexedBetween() throws Exception {
+		String output = compileAndRun(
+				"""
+						;; Two SHORT strings, indexed between every two indexes into the long one.
+						;; Both are non-LATIN1, so each is a miss the old rule remembered.
+						(defvar *k1* "\u3042\u3044\u3046\u3048\u304A")
+						(defvar *k2* "\u304B\u304D\u304F\u3051\u3053")
+						(defun repeat-octets (src times)
+						  (let* ((n (length src))
+						         (out (make-array (* n times) :element-type '(unsigned-byte 8))))
+						    (dotimes (k times out) (replace out src :start1 (* k n)))))
+						(defvar *unit*
+						  (rontolisp:string-to-octets
+						   "\u0430\u0431\u0432\u0433\u0434\u0435\u0436\u0437\u0438\u0439\u043A\u043B\u043C\u043D\u043E\u043F\u0440\u0441\u0442\u0443\u0444\u0445\u0446\u0447\u0448\u0449\u044A\u044B\u044C\u044D\u044E\u044F"))
+						(defvar *short* (rontolisp:octets-to-string (repeat-octets *unit* 32)))
+						(defvar *long* (rontolisp:octets-to-string (repeat-octets *unit* 4096)))
+						(defun scan-interleaved (s)
+						  (let ((total 0))
+						    (dotimes (i (length s))
+						      (setq total (+ total (char-code (char s i))))
+						      (setq total (+ total (char-code (char *k1* 0))))
+						      (setq total (+ total (char-code (char *k2* 0)))))
+						    total))
+						(scan-interleaved "warm")
+						(defvar *t0* (get-internal-real-time))
+						(defvar *whole* (scan-interleaved *long*))
+						(defvar *t1* (get-internal-real-time))
+						(defvar *chunked* 0)
+						(dotimes (k 128) (setq *chunked* (+ *chunked* (scan-interleaved *short*))))
+						(defvar *t2* (get-internal-real-time))
+						(print (= *whole* *chunked*))
+						(princ (- *t1* *t0*)) (terpri)
+						(princ (- *t2* *t1*)) (terpri)
+						""");
+		assertScanIsFlat(output, "a long string indexed between two short ones");
+	}
+
 	// Builds a 1,024-character string and the 131,072-character string that IS that
 	// string 128 times over, scans each, and prints the two elapsed times in ms. Both
 	// grow from the same literal rather than the shorter (defvar *long* *short*), which
