@@ -41,8 +41,32 @@ So the shape is two halves and only one of them is testable today:
 - **Recorded observation, not a pin**: the Qwen3.5-0.8B greedy output recorded in
   `.todo/489` beside the token counts, for the DeltaNet path. The checkpoint is ~3 GB and
   external to the repo, so no suite can run it -- it is findable by someone who thinks to
-  look, which is strictly weaker than detectable. Closing THAT half needs either a small
-  DeltaNet fixture or a way to carry a checkpoint hash, and neither is in scope here.
+  look, which is strictly weaker than detectable.
+
+Three ways to close THAT half, and the third is probably cheapest. Price them before
+starting:
+
+1. A small real DeltaNet checkpoint. None exists at a size the repo can carry.
+2. Carry a checkpoint hash and skip when the file is absent. Cheap, but the pin only runs
+   where someone has downloaded 3 GB, so CI never runs it.
+3. **SYNTHESISE one.** A regression pin does not need a TRAINED model, it needs
+   deterministic output through the DeltaNet path: a toy Gated DeltaNet from a fixed seed
+   -- a few layers, a tiny hidden size, a few hundred vocabulary entries -- a fixed
+   prompt, and an assertion on the exact token ids. **The text will be garbage, and that
+   is fine**: garbage that changes when a reduction order moves is the same alarm the real
+   model would give. A few hundred KB, or generated deterministically at test time and
+   never committed.
+
+**The obstacle to (3), which is what to price first: we cannot write a GGUF.**
+`gguf.lisp` exports `read`, `version`, `metadata`, `metadata-value`, `tensor-names`,
+`tensor-info`, `tensor`, `tokenizer-fields` -- all read-side, and a grep for a write side
+across `src/main` finds nothing. 670's "stories15M converted to GGUF" was llama.cpp's
+converter, not us. So (3) needs a minimal GGUF **writer** first.
+
+Price it on its second use, not this one: a writer is also how `.todo/672`'s Q8_0 reader
+gets fixtures, and how any future architecture gets them, without downloading anything.
+If a writer is about half a wave, (3) wins on that alone; if it is a wave, (2) is cheaper
+and this pin stays out of CI.
 
 State the limitation in whatever lands. A fixture assertion that is described as covering
 decoded text, and does not cover the architecture whose defect motivated it, is the shape
