@@ -62,27 +62,108 @@ generated rather than hand-computed) on all four backends with and without `--si
 `embedding_norm` / `token_embd_norm` final norm) is in `.todo/673` item 7 and
 `.todo/675` item 5.
 
+## Done, part 2 (2026-09-05): the real checkpoint, both formats, and llama.cpp
+
+**LFM2.5-1.2B-Instruct runs from its BF16 `model.safetensors` and from Liquid's OWN
+`LFM2.5-1.2B-Instruct-BF16.gguf`, token for token identical between the two**, in
+`-m chat` and in plain continuation, on the JVM class output at temperature 0. The
+checkpoint is `/home/administrator/models/lfm25{,-gguf}` on dorian (`.todo/670`'s
+per-box paragraph; the GGUFs were the one file set genuinely missing and were fetched
+from `LiquidAI/LFM2.5-1.2B-Instruct-GGUF`, which publishes BF16 / F16 / Q4_0 / Q4_K_M /
+Q5_K_M / Q6_K / Q8_0 / QAD-Q4_0).
+
+    Llama LFM2.5-1.2B-Instruct -m chat -t 0 -n 64 -i "Tell me a short story about a cat."
+    -> "Once upon a time, in a quiet little village, there lived a curious cat named
+        Whiskers. Whiskers wasn't like the other cats--she had a knack for finding the
+        most unexpected things. One sunny morning,"
+
+**And `llama.cpp` on the same GGUF prints the same BYTES** -- same prompt, temperature 0,
+the whole 155-token overlap identical, where `.todo/677`'s Qwen3.5 run got the same
+character in a different sentence. Stated as a FACT and not a rule (`.todo/670` rule 7):
+one model, one prompt, one lane, and nobody has tried to break it. It is also NOT the
+byte-identity check `.todo/672` owes, whose subject is the quantized kernel.
+
+The Q8_0 file is still refused by name at `token_embd.weight`, as `.todo/677` recorded.
+
+**The reader-independent half written on 2026-09-03 needed no change.** The `lfm2` row,
+`:layer-types`, `operator_norm` / `ffn_norm` / `embedding_norm`, `feed_forward.w1/w2/w3`,
+`self_attn.out_proj`, `q_layernorm` / `k_layernorm`, the 8192 FFN width, the GGUF
+`head_count_kv` zero array as `:shortconv`, and `shortconv.lisp` itself all held against
+the real file on the first run.
+
+### The one bug the real file found
+
+**The GGUF names the Llama 3 pre-tokenizer after itself**: `tokenizer.ggml.pre` is
+`lfm2`, though `tokenizer.json` holds the Llama 3 pattern character for character and
+`llama.cpp` maps `lfm2` to `LLAMA_VOCAB_PRE_TYPE_LLAMA3` beside `llama3` / `llama-v3` /
+`llama-bpe`. `%normalize-kind` accepted only `llama3` and `llama-bpe`, so the model did
+not load at all -- while `.kb/tokenizers.md` and both doc trees ALREADY said ":llama3
+(Llama 3, LFM2.5)". The shape was implemented and documented as covering this model and
+only the alias string was missing, so nothing in the repository looked wrong.
+
+Two things worth keeping from it. It was reachable ONLY through the GGUF -- the
+safetensors path reads `tokenizer.json`'s pattern itself and never consults an alias --
+which is `.todo/670` rule 6's shape again: every existing case sat on one side of the
+condition. And the alias set is llama.cpp's, not ours, so it grows with the field:
+`llama-v3` went in at the same time, and the next family to name this shape after itself
+will fail exactly the same way, loudly and at load time, which is the right failure.
+
+Landed: the alias in `src/main/resources/am/ik/rontolisp/eval/tokenizers.lisp`,
+`TokenizersLibraryTest#aFamilyAliasOfTheLlama3ShapeIsAccepted` written failing first, and
+the "a family's own name for a shape it merely shares" clause in `.kb/tokenizers.md` and
+`doc/{en,ja}/reference/functions/tokenizer-pre-tokenize.md`.
+
+### What the real config taught, against this item's text
+
+- `intermediate_size` is **12288**, not 8192: it is the figure BEFORE
+  `block_auto_adjust_ff_dim`, and `2/3 x 12288` rounded to `block_multiple_of` 256 is the
+  8192 the weights actually have. The GGUF states the adjusted width outright as
+  `lfm2.feed_forward_length`. This item's header said 8192 and was right about the
+  weights; the config key it named is not where that number is.
+- `vocab_size` 65536 is a PADDED table again (Qwen3.5's lesson, second model running):
+  `tokenizer.json` defines 64909 ids (64400 + 509 added), and the sampler chooses among
+  those.
+- The stop token `<|im_end|>` is 7 and `config.json` states it as `eos_token_id`
+  directly -- UNLIKE Qwen3.5, where the usable stop token was only in
+  `tokenizer_config.json`. The trap `.todo/677` found does not fire here, and
+  `generate`'s handling of it was already correct.
+- `layer_types` is 10 `conv` + 6 `full_attention` at layers **2, 5, 8, 10, 12, 14**, and
+  the GGUF says the same thing as `lfm2.attention.head_count_kv` =
+  `#(0 0 8 0 0 8 0 0 8 0 8 0 8 0 8 0)`.
+- `max_position_embeddings` 128000, capped to 4096 by `*seq-len-cap*`.
+
+The README's `### LFM2.5-1.2B-Instruct` section carries the user-facing half of all of
+this.
+
 ## Remaining
 
-The readers it waited on are in: `.todo/674` (the tokenizer) and `.todo/673` (the GGUF
-reader, plus `llama2.lisp`'s `load-gguf-checkpoint`, whose `lfm2` mapping -- the
-per-layer `head_count_kv` zeros as `:shortconv`, `shortconv.*`, `token_embd_norm` -- is
-written but has not run a file yet) closed 2026-09-03; `.todo/675` (the safetensors
-reader, with `load-hf-checkpoint`'s `lfm2` mapping) is open only for its WASM fixture
-leg. What remains is this item's own run: LFM2.5-1.2B-Instruct from its safetensors
-(downloaded to dorian's scratchpad, `../lfm25/` beside the Qwen files named in
-`.todo/677`) and from Liquid's BF16 GGUF, the same text from both, the llama.cpp
-comparison, the tok/s rows -- the path `.todo/677` walked for Qwen3.5, with the stop
-token trap it found (`tokenizer_config.json`'s `<|im_end|>`, and never a stop token that
-is part of the prompt) already handled in `generate`.
+Everything except the timing rows is done (above). What is left, sorted the way
+`.todo/670` rule 3 asks:
 
-Verify items 2-4 below: the real checkpoint from GGUF and from safetensors, the
-llama.cpp comparison (byte-identical through Q8_0 once `.todo/672` lands), the tok/s
-rows. The attention layers' 64-wide head is a reader-independent thing to check when
-the model runs: whether the 64-column `vec:matvec` rows of the attention take the
-lane kernel (`.todo/480`'s column gate sits above it). `generate`'s stop token
-(`<|im_end|>` 7) and the `<|startoftext|>` prefix are `llama2.lisp`'s side of the
-tokenizer item.
+**Blocked (on the box, not on code).** The `tok/s` rows -- single thread and `--parallel`
+with `RONTOLISP_THREADS` recorded, f32, into the README and `.todo/489` as "the 1B". Two
+lanes measuring `--parallel` on dorian at once destroy each other's numbers
+(`.todo/697`), so this waits for an exclusive window. The bf16 rows are unblocked as of
+2026-09-05 (`.todo/488` landed) but belong to `.todo/489`, which owns that table.
+
+**Carried out of this item, to measure in the same window.** `.todo/670`'s "two
+independent models on one ceiling" (27.0 and 30.7 GB/s) may not be a box ceiling at all.
+LFM2.5 is ~1.17B parameters, so ~4.7 GB of f32 a token, and in a contended window it sat
+well above 31 GB/s while Qwen3.5-0.8B, measured back to back on the same binary in the
+same window, stayed at its recorded ~28. Those absolute numbers are discarded
+(`.todo/697`), but the RATIO between two models measured together is not something
+contention manufactures. The prediction, made from the shapes before looking: LFM2.5
+streams better because its weights sit in fewer, larger matrices -- three big matvecs per
+conv block -- where Qwen3.5's Gated DeltaNet does 576 small 128 x 128 GEMVs a token. If it
+holds, "the parallel leg is DRAM-bound, not thread-bound" stays true and the single number
+under it does not, which is what `.todo/489`'s parallel prediction rests on. Only this
+worktree can load LFM2.5 until this item pushes, so this measurement cannot be `489`'s
+until then.
+
+**Done, not deferred.** The 64-wide attention head takes the lane kernel: the gate is
+`MATVEC_ACC_THRESHOLD` = 32 COLUMNS (`.kb/vec.md`), and LFM2.5's head dim is 64 =
+2048 / 32 heads. This item's header said "the 32-wide head dim", which read the head
+COUNT as the head dim; there is no short-row problem here to check.
 
 ## Verify
 

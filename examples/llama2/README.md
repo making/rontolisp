@@ -184,6 +184,73 @@ the prompt. `tokenizer.json` (13 MB) is read by a byte-level JSON reader of
 this file's own, because `rontolisp:json-parse` over that text does not finish
 (`.todo/690`).
 
+### LFM2.5-1.2B-Instruct
+
+The second hybrid, and the simplest one in the field: ten of sixteen blocks are
+a **gated short convolution** and six are attention with QK-norm
+([the layer table](#the-layer-table)). The conv block has no matrix state at
+all -- one projection to `B | C | x'`, a causal depthwise convolution of kernel
+3 over the gated input `B * x'`, a gate by `C`, and a projection back
+(`shortconv.lisp`, over the `causal-conv.lisp` step it shares with Gated
+DeltaNet). Its state is the previous two input vectors, 2 x 2048 floats a
+layer.
+
+`LiquidAI/LFM2.5-1.2B-Instruct` reads from its BF16 `model.safetensors` -- one
+file and no index, which the reader takes as readily as a sharded set -- and
+from Liquid's OWN `LFM2.5-1.2B-Instruct-BF16.gguf`, published by the model's
+maker rather than converted by a third party:
+
+```bash
+rontolisp llama2.lisp -o Llama.class --class-name Llama --simd
+java --add-modules jdk.incubator.vector -Xmx24g Llama LFM2.5-1.2B-Instruct \
+  -m chat -t 0 -n 64 -i "Tell me a short story about a cat."
+```
+
+```
+Once upon a time, in a quiet little village, there lived a curious cat named
+Whiskers. Whiskers wasn’t like the other cats—she had a knack for finding the
+most unexpected things. One sunny morning,
+```
+
+The two files agree token for token, in `-m chat` and in plain continuation.
+A `Q8_0` file is refused by name at `token_embd.weight` until the quantized
+weight matrix exists.
+
+**And `llama.cpp` on that GGUF prints the same bytes.** Same prompt, same
+temperature 0, the whole 155-token overlap identical -- not "the same story in
+other words", which is what the Qwen3.5 row above gets and what two
+implementations at temperature 0 normally give each other. Worth stating
+carefully: it is one model on one prompt, so it is a fact and not a rule, and
+it is not the byte-identity check `.todo/672` owes on a Q8_0 file, whose point
+is the quantized kernel rather than the forward pass.
+
+What the real checkpoint taught, none of it in `config.json`:
+
+- **The GGUF names the Llama 3 pre-tokenizer after itself.**
+  `tokenizer.ggml.pre` is `lfm2`, though `tokenizer.json` holds the Llama 3
+  pattern character for character (`llama.cpp` maps it the same way, beside
+  `llama-v3` and `llama-bpe`). An unmapped alias is refused by name, so the
+  model does not load at all -- and the safetensors path, which reads the
+  pattern itself, never sees it. The alias now maps; a family's own name for a
+  shape it merely shares is accepted wherever a keyword is
+  (`.kb/tokenizers.md`).
+- `block_ff_dim` is not in the file: `intermediate_size` 12288 is the figure
+  BEFORE `block_auto_adjust_ff_dim`, and the width the weights actually have is
+  8192 (`2/3 x 12288`, rounded to `block_multiple_of`). The GGUF states the
+  adjusted 8192 outright as `lfm2.feed_forward_length`.
+- The GGUF gives the layer pattern as the per-layer `lfm2.attention.head_count_kv`
+  array `#(0 0 8 0 0 8 0 0 8 0 8 0 8 0 8 0)` -- a zero KV-head count is a conv
+  block -- where `config.json` gives it as `layer_types`. Both reach the table
+  as `:layer-types`.
+- The norms are named `operator_norm` / `ffn_norm` and the final one
+  `embedding_norm`; attention output is `self_attn.out_proj`, the MLP
+  `feed_forward.w1/w2/w3`, and QK-norm `q_layernorm` / `k_layernorm`.
+- `vocab_size` 65536 is padded again: `tokenizer.json` defines 64909 ids
+  (64400 + 509 added), and the sampler chooses among those.
+- The stop token is `<|im_end|>` (7), which `config.json` states as
+  `eos_token_id` directly -- unlike Qwen3.5, where it is only in
+  `tokenizer_config.json`.
+
 ## The layer table
 
 The one thing here that is not `run.c`: the forward pass is a **table of layer
@@ -199,12 +266,13 @@ recorded beside it when the model was loaded:
 
 | option | what varies | who has it |
 | --- | --- | --- |
-| `:q-norm` / `:k-norm` | RMSNorm over each head's own dims of q and k | Qwen3 |
+| `:q-norm` / `:k-norm` | RMSNorm over each head's own dims of q and k | Qwen3, LFM2.5 |
 | `:rope` | `:pairs` (adjacent pairs, what llama2.c's `.bin` and a llama.cpp-converted GGUF of a Llama-family model hold -- the converter permutes Q and K only for those), `:halves` (Hugging Face's `rotate_half`, what a safetensors file and a Qwen GGUF hold), or `nil` -- no rotation at all | SmolLM3 leaves every 4th block unrotated |
 | `:rotary-dim` | how many of each head's dims rotate | partial-RoPE models (Qwen3.5: 64 of 256) |
 | `:scale` | the attention scale, when it is not `1/sqrt(head-size)` | Granite |
 | `:gate` | an output gate over the head outputs, before `wo` | gated attention (Qwen3.5) |
-| `:full-attention-interval` | a hybrid: every Nth block is `:attention`, the rest `:deltanet` | Qwen3.5 (4) |
+| `:full-attention-interval` | a hybrid: every Nth block is `:attention`, the rest the row's `:mixer` | Qwen3.5 (4) |
+| `:layer-types` | the same thing given as an explicit per-block list, which WINS over the interval -- what a reader builds from `layer_types` or from a GGUF's per-layer KV-head array | LFM2.5, whose pattern is irregular |
 | model-wide | `:rope-theta`, `:eps`, and the embedding / residual / logit multipliers | Granite, and everything since Llama 2 moved `rope_theta` |
 
 `*architectures*` is the other half: one row per `general.architecture` (GGUF) /

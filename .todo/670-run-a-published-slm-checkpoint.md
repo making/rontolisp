@@ -42,7 +42,7 @@ so `.todo/488` now takes its numbers under both JITs.
 | `672` | the Q8_0 quantized weight matrix and its integer-dot `vec:matvec` | High | not started; `673` leaves it one branch to replace |
 | `676` | the forward pass as a table of layer kinds: QK-norm, NoPE, gates, partial RoPE, multipliers (Qwen3, SmolLM3, Granite) | Medium | **closed 2026-09-03** |
 | `677` | the Gated DeltaNet layer: Qwen3.5-0.8B, and with it every Qwen 3.5-3.8 dense model | High | Qwen3.5-0.8B runs from both formats; bf16 `tok/s` is unblocked -- `488`'s wiring landed 2026-09-05 |
-| `678` | the LFM2 gated short-conv layer: LFM2.5-1.2B-Instruct, the newest ~1B model | Medium | not started; the LFM2.5 files are downloaded |
+| `678` | the LFM2 gated short-conv layer: LFM2.5-1.2B-Instruct, the newest ~1B model | Medium | **closed 2026-09-05**: runs from both formats, token for token, and byte-identical to `llama.cpp` |
 | `489` | the model rungs: TinyLlama / SmolLM2 (loader shakeout), Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High | f32 rungs measured for two models; bf16 rungs are unblocked -- `488`'s wiring landed 2026-09-05, at 1.49x (Graal) / 2.00x (C2) of f32 on a DRAM-bound GEMV |
 
 **Order: 671 -> 673 / 675 -> 674 -> 489 rung 0 at f32 -> 676 -> 678 -> 677 ->
@@ -92,11 +92,16 @@ diagnosis for the wrong reason.
 A measurement without its base commit, JIT, machine and load average is not comparable to
 another; a quiet window is per-box and each side takes its own.
 
-**The checkpoints are gone.** They lived in a session scratchpad under `/tmp/claude-1000/`
-and were not preserved: Qwen3.5-0.8B (safetensors + BF16/Q8_0 GGUF), TinyLlama-1.1B-Chat
-(safetensors + F16 GGUF), LFM2.5-1.2B-Instruct, stories15M as GGUF, and a built
-`llama.cpp`. **Re-fetching them is the first step of `678` and of `489`'s bf16 rungs**;
-`llama.cpp` takes about three minutes to build. None of it belongs in the repo.
+**The checkpoints, per box** (this paragraph said they were gone on both boxes until
+2026-09-05; see standing rule 9). On **dorian** they are in `/home/administrator/models/`:
+the 2026-09-03 session scratchpad survived after all, and its contents were moved out of
+`/tmp` on 2026-09-05 so no cleanup can take them again. What each file is, is recorded in
+`.todo/677`'s "Checkpoint on dorian" block -- read it there, not here. On **GB10** there are
+none: nothing under `/tmp/claude-1000/**/scratchpad`, `~/models` empty, and the 105 GB HF
+cache holding only `unsloth/Qwen3.8-Flash-Next-GGUF`, so a GB10 lane still re-fetches what it
+needs (`llama.cpp` takes about three minutes to build). LFM2.5's GGUFs were the one file set
+genuinely missing on dorian and were fetched on 2026-09-05 from `LiquidAI/`'s own repository.
+None of it belongs in the repo.
 
 ## Certified green, 2026-09-03, at develop `080b3d75`
 
