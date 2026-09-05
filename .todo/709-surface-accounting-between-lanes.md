@@ -1,0 +1,108 @@
+# 709. The wave-end process draft: surface accounting between lanes
+
+Difficulty: Low
+
+Filed 2026-09-05 by orchestrator A, mid-wave, **to make durable what until now existed
+only in two orchestrators' conversation.** Both sides agreed to draft it at wave end and
+neither had written it down; a session ending would have lost it, which is itself an
+instance of what the wave kept finding.
+
+**Nothing here is a rule yet.** It is a draft to be co-signed by both orchestrators, or
+cut down, at the next planning. Orchestrator B (`session_013dsYLqVDdAhRxX2FPt25VU`,
+GB10) co-authored most of it and several clauses are its wording verbatim.
+
+## Part 1 -- Surface accounting: three elements, three owners
+
+The wave lost time twice to two lanes standing on one surface. Neither was visible from
+inside either item; both took one command to settle once someone looked at FILES instead
+of at INTENTIONS.
+
+1. **Lane, at close-out: list the FILES you touched**, `git diff --name-only
+   origin/develop...HEAD`, not only the items you closed.
+2. **Lane, before answering an overlap question: grep and diff, never recollect.** The
+   failure is not carelessness. A truthful account of the WORK answers a different
+   question than one about the PATH -- B answered "672 is not in `examples/`", which was
+   accurate about its code and wrong about the directory, because 672 cited the path eight
+   times and edited a README inside it.
+3. **Orchestrator, periodically and unprompted: intersect the live lanes' surfaces.** For
+   each worktree, `git diff --name-only` against its merge base plus uncommitted and
+   stashed files, then `comm -12`. **Only this one catches an overlap nobody suspects**,
+   and it is the cheapest because it needs no one to have a hunch. B ran it across two
+   lanes and found `JvmIoRuntimeBuilder.java` in both -- known to neither lane nor to B --
+   in about fifteen seconds. **It scales quadratically with lane count** (3 lanes is 3
+   pairs, 4 is 6), which is an argument for the single-lane arrangement both sides moved to.
+
+### Two clauses on element 2, both earned the hard way
+
+- **Grep loosely first, then narrow -- never the reverse -- and check relative as well as
+  absolute forms.** The reason, which is what makes anyone actually check: **an anchored
+  pattern encodes an assumption about the surrounding syntax, and that assumption is
+  invisible in the pattern.** `^\s+path:` cannot match `  - path:` because YAML list
+  syntax puts `- ` between the indent and the key; nothing in the pattern says it is
+  making a claim about list-versus-mapping form, which is why it reads as more rigorous
+  and matches less. **Three people wrote the same too-narrow pattern independently** on
+  one day (51 / 41 / 53 files against a true 74-94), so it is the natural pattern to
+  write, not anyone's lapse. The nine entries B's anchor missed were exactly the
+  functional ones -- the syntax carrying the operational meaning was the syntax the anchor
+  tripped on.
+- **Grep finds citations, `git ls-files` finds members, and a rename needs both.**
+  `examples/llama2/.gitignore` appeared in no content search -- loose, anchored, relative
+  or absolute -- because its NAME is in the renamed path and its CONTENTS mention nothing.
+  Only `git mv` found it. That is not a sharper grep; it is a different instrument for a
+  different question.
+
+## Part 2 -- Failure directions, for whoever writes the `.kb` card
+
+Sorted 2026-09-05. **The first three are failures of a record about ITSELF; the last group
+are failures of the ARRANGEMENT, and filing them together would suggest a remedy that does
+not apply.**
+
+**Record-about-itself (three directions, and they do not merge):**
+
+- **Under-record** -- written silent at the only moment the information existed: the
+  thread count on a `--parallel` row, a checkpoint path with no digest, dorian's steady
+  co-tenants. `.todo/670` rule 10. Not discoverable later, because there is no trace to
+  trip over -- the only way to find it is to re-measure and disagree with yourself.
+- **Mis-record** -- a quantity asserted as measured that nobody established: a GB/token
+  divisor, a one-accumulator baseline, "155 tokens" written from looking rather than
+  counting. **This direction has NO rule and is currently defended by nothing but luck** --
+  its three instances were each caught by a different accident. Whatever is written for it
+  should carry a procedure.
+- **Over-read** -- a record read as carrying more than it can support: a count read as an
+  audit (a census said three decoders where two existed), a word read as a policy ("lenient"
+  is a category containing drop-the-tail and byte-substitute), a cell read as its column
+  (one of eight parallel cells), an umbrella read as beating its child (`.todo/670` rule 9),
+  a plausible cause read as an identified one (contention explained everything until a
+  quiet box reproduced the effect anyway).
+
+**Arrangement (a different kind, three instances):**
+
+- **The index names items, not surfaces.** An overlap between two items is a property of
+  neither, so no care inside either can surface it. Both items were correct, neither stale.
+  The remedy is not "write more carefully" but "index a second dimension" -- Part 1.
+- **A hole created by the coordination that was supposed to close it.** Three `ci-spec.yaml`
+  changes landed, every lane was told to skip the native pass because one merged run would
+  cover them all, and the session owing that run ended. The centralisation was the right
+  call and it manufactured a single point of failure.
+- **The gap between assignments.** A suite ran before the last change landed; an acceptance
+  slice covered that change's own surface; the COMBINATION went unverified. **Neither time
+  did anyone skip a step they were assigned. Both times the gap was between the
+  assignments.**
+
+## Part 3 -- Two practices already adopted, not waiting for this item
+
+- **Close-outs list files touched.** In use on both sides since 2026-09-05.
+- **A step that reports success is not evidence until someone has watched it report
+  failure.** `.todo/688` removed `TokenizersLibrary` from `expand` and confirmed the guard
+  went red with ten undefined `TOKENIZER:` names before trusting its green. The 682 lane
+  found three defects the same way -- chasing a 39-to-38 count, reading a skip list instead
+  of trusting it, hand-reviewing ambiguous hits -- **every one by looking at the OUTPUT of
+  a step rather than at its exit status.**
+
+## Do
+
+Both orchestrators read this at the next planning and either co-sign it into `.kb` (Part 1
+as a practice with named owners; Part 2 as the card, or two cards citing each other) or cut
+it. **Do not land it as a rule on one orchestrator's say-so** -- the standard the wave held
+itself to was that a rule derived from one lane's reading is a hypothesis until the other
+lane has tried to break it, and most of Part 2 has exactly one instance behind it.
