@@ -14,9 +14,10 @@
 - **トークナイザとハイパーパラメータはタダで読めます。**どちらもファイル先頭の
   キー/値ブロックにあるので、`(gguf:read path :metadata-only t)` は重みの手前で
   止まり、ギガバイト側には一切触れません。
-- **量子化テンソルは「その本体を要求されたとき」だけ拒否されます。**F32 / F16 /
-  BF16 は読み込め、Q4_K_M や Q8_0 のファイルでも、開くこと・ディレクトリ全体を
-  見ること・語彙を取り出すことはできます。
+- **F32 / F16 / BF16 はパックされた浮動小数点配列に、Q8_0 は量子化行列に読み込めます**
+  （[`rontolisp:quantize`](rontolisp-quantize.md)。インタプリタと JVM のみ）。**それ以外の
+  量子化テンソルは「その本体を要求されたとき」だけ拒否されます。**Q4_K_M のファイルでも、
+  開くこと・ディレクトリ全体を見ること・語彙を取り出すことはできます。
 
 | 関数 | 例 | 結果 |
 |------|----|------|
@@ -26,5 +27,5 @@
 | `gguf:metadata-value` | `(gguf:metadata-value f "llama.block_count")` | 1 つのキーの値。既定値が返るのは本当にキーが無いときだけ |
 | `gguf:tensor-names` | `(gguf:tensor-names f)` | テンソル名をディレクトリ順で |
 | `gguf:tensor-info` | `(gguf:tensor-info f "token_embd.weight")` | 1 つのテンソルのディレクトリエントリ。dims は**行優先**、型・要素数・バイト数・オフセット |
-| `gguf:tensor` | `(gguf:tensor f "output_norm.weight")` | テンソルとして読み込まれたパック済み浮動小数点配列。未読み込みなら `nil` |
+| `gguf:tensor` | `(gguf:tensor f "output_norm.weight")` | テンソルとして読み込まれたパック済み浮動小数点配列（Q8_0 テンソルなら量子化行列）。未読み込みなら `nil` |
 | `gguf:tokenizer-fields` | `(gguf:tokenizer-fields f)` | トークナイザ関連フィールドを plist で。`tokenizer:make-bpe` が受け取る形 |

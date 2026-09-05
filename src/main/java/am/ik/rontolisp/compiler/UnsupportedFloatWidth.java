@@ -52,6 +52,28 @@ public final class UnsupportedFloatWidth {
 	}
 
 	/**
+	 * The same refusal for the block-quantized weight matrix
+	 * ({@code rontolisp:quantized-matrix}, {@code .kb/quantized-matrix.md}), which is not
+	 * a width of the packed float array but is carried by the same two backends and
+	 * refused by the same two.
+	 * @param backend the backend, named as the message will read it
+	 * @return the exception to throw
+	 */
+	public static UnsupportedOperationException refuseQuantized(String backend) {
+		return new UnsupportedOperationException(quantizedMessage(backend));
+	}
+
+	/**
+	 * {@link #refuseQuantized}'s sentence as text, for the call-time form a spliced
+	 * library's dead arm compiles to.
+	 * @param backend the backend, named as the message will read it
+	 * @return the message
+	 */
+	public static String quantizedMessage(String backend) {
+		return "quantized matrices are supported on the interpreter and the JVM only, not on " + backend;
+	}
+
+	/**
 	 * The Lisp element-type name of a width, as a program spells it. An exhaustive switch
 	 * EXPRESSION, so a width added to {@link FloatWidth} has to be named here rather than
 	 * inheriting whichever arm came last -- the statement form would not be checked, the

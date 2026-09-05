@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.DoubleVector;
 import jdk.incubator.vector.FloatVector;
 import jdk.incubator.vector.IntVector;
@@ -1257,6 +1258,199 @@ final class VecSimdKernels {
 	static float[] matvecBf16(short[] w, int rows, int cols, float[] x, boolean parallel) {
 		float[] r = new float[rows];
 		matvecIntoBf16(r, w, rows, cols, x, parallel);
+		return r;
+	}
+
+	// --- Q8_0 quantized-matrix GEMV: the integer dot ----------------------------------
+	// ggml's Q8_0 x Q8_1 shape, runq.c's shape (.kb/quantized-matrix.md). The matrix is
+	// the ggml block layout verbatim -- per block one binary16 scale then 32 int8 quants,
+	// 34 bytes -- and the activation is quantized to int8 per block of 32 first (absmax /
+	// 127 in DOUBLE, round half even, exactly what the vec.lisp defun writes). Per row
+	// and block: B2S widen, short multiply, short add of the two halves (|2 x 128 x 127|
+	// < 32767, which is why the activation is clipped to +-127 and never -128), S2I
+	// widen, int add, ONE horizontal integer reduce, and ONE double multiply-add,
+	// isum * (sw * sx), into a double accumulator; the store narrows to the result
+	// width. An integer sum is exact in any order, so the lane fold and the defun's
+	// scalar loop agree on isum by construction, and the only floating-point steps are
+	// that product and that add, in the same order on both -- this kernel is the defun
+	// BIT FOR BIT, a stronger contract than the f32 kernels' lane-count pin, and it
+	// costs nothing: one double op per 32 elements. That is also why there is no
+	// threshold and no accumulator split here: a block IS the unit, a row of one block
+	// runs the same lanes, and independent int accumulators would not change a bit.
+	//
+	// No FMA in the double step, deliberately: `acc + isum * p` is two roundings on
+	// both sides, and the defun has no fused form to mirror one with.
+
+	/** The byte species one half-block loads: sixteen quants. */
+	private static final VectorSpecies<Byte> BSPECIES_Q8 = ByteVector.SPECIES_128;
+
+	/** The short species the products land in: eight lanes, 128 bits. */
+	private static final VectorSpecies<Short> SSPECIES_Q8 = ShortVector.SPECIES_128;
+
+	/** The int species the block sum lands in: four lanes, 128 bits. */
+	private static final VectorSpecies<Integer> ISPECIES_Q8 = IntVector.SPECIES_128;
+
+	/** ggml's Q8_0 block: 32 elements. */
+	static final int Q8_BLOCK = 32;
+
+	/** ggml's Q8_0 block bytes: a binary16 scale and 32 quants. */
+	static final int Q8_BLOCK_BYTES = 34;
+
+	/**
+	 * The scale of the block at {@code off}: its binary16 {@code d}, widened (exact).
+	 * @param w the blocks
+	 * @param off the block's first byte
+	 * @return the scale
+	 */
+	static double q8Scale(byte[] w, int off) {
+		return Float.float16ToFloat((short) ((w[off] & 0xff) | (w[off + 1] << 8)));
+	}
+
+	/**
+	 * The integer dot of one block's 32 weight quants at {@code wo} against the 32
+	 * activation quants at {@code xo}. Exact.
+	 */
+	private static int q8BlockDot(byte[] w, int wo, byte[] xq, int xo) {
+		ByteVector w0 = ByteVector.fromArray(BSPECIES_Q8, w, wo);
+		ByteVector w1 = ByteVector.fromArray(BSPECIES_Q8, w, wo + 16);
+		ByteVector x0 = ByteVector.fromArray(BSPECIES_Q8, xq, xo);
+		ByteVector x1 = ByteVector.fromArray(BSPECIES_Q8, xq, xo + 16);
+		ShortVector p = ((ShortVector) w0.convertShape(VectorOperators.B2S, SSPECIES_Q8, 0))
+			.mul((ShortVector) x0.convertShape(VectorOperators.B2S, SSPECIES_Q8, 0))
+			.add(((ShortVector) w0.convertShape(VectorOperators.B2S, SSPECIES_Q8, 1))
+				.mul((ShortVector) x0.convertShape(VectorOperators.B2S, SSPECIES_Q8, 1)));
+		ShortVector q = ((ShortVector) w1.convertShape(VectorOperators.B2S, SSPECIES_Q8, 0))
+			.mul((ShortVector) x1.convertShape(VectorOperators.B2S, SSPECIES_Q8, 0))
+			.add(((ShortVector) w1.convertShape(VectorOperators.B2S, SSPECIES_Q8, 1))
+				.mul((ShortVector) x1.convertShape(VectorOperators.B2S, SSPECIES_Q8, 1)));
+		IntVector sum = ((IntVector) p.convertShape(VectorOperators.S2I, ISPECIES_Q8, 0))
+			.add((IntVector) p.convertShape(VectorOperators.S2I, ISPECIES_Q8, 1))
+			.add((IntVector) q.convertShape(VectorOperators.S2I, ISPECIES_Q8, 0))
+			.add((IntVector) q.convertShape(VectorOperators.S2I, ISPECIES_Q8, 1));
+		return sum.reduceLanes(VectorOperators.ADD);
+	}
+
+	/**
+	 * Quantizes {@code n} activations at {@code xo} to int8 per block of 32, the defun's
+	 * rule exactly: {@code sx = amax / 127} in double, {@code q = rint(x / sx)} (CL's
+	 * {@code round}, half to even), all zero where the block is. A NaN never raises
+	 * {@code amax} (the compare is strict, like the defun's {@code >}).
+	 */
+	static void quantizeActivationF(float[] x, int xo, int n, byte[] xq, double[] xs) {
+		for (int b = 0; b * Q8_BLOCK < n; b++) {
+			int base = b * Q8_BLOCK;
+			double amax = 0.0;
+			for (int k = 0; k < Q8_BLOCK; k++) {
+				double v = Math.abs((double) x[xo + base + k]);
+				if (v > amax) {
+					amax = v;
+				}
+			}
+			double sx = amax / 127.0;
+			xs[b] = sx;
+			for (int k = 0; k < Q8_BLOCK; k++) {
+				xq[base + k] = sx == 0.0 ? 0 : (byte) (int) Math.rint(x[xo + base + k] / sx);
+			}
+		}
+	}
+
+	/** {@link #quantizeActivationF} over a double vector. */
+	static void quantizeActivationD(double[] x, int xo, int n, byte[] xq, double[] xs) {
+		for (int b = 0; b * Q8_BLOCK < n; b++) {
+			int base = b * Q8_BLOCK;
+			double amax = 0.0;
+			for (int k = 0; k < Q8_BLOCK; k++) {
+				double v = Math.abs(x[xo + base + k]);
+				if (v > amax) {
+					amax = v;
+				}
+			}
+			double sx = amax / 127.0;
+			xs[b] = sx;
+			for (int k = 0; k < Q8_BLOCK; k++) {
+				xq[base + k] = sx == 0.0 ? 0 : (byte) (int) Math.rint(x[xo + base + k] / sx);
+			}
+		}
+	}
+
+	/**
+	 * The row loop: the double accumulator of one row's blocks, narrowed on the store.
+	 * The same rows whichever thread runs them, so {@code --parallel} splits them as it
+	 * splits every GEMV.
+	 */
+	private static void matvecRowsQ8F(float[] r, byte[] w, int cols, byte[] xq, double[] xs, int from, int to) {
+		int nb = cols / Q8_BLOCK;
+		int rowBytes = nb * Q8_BLOCK_BYTES;
+		for (int row = from; row < to; row++) {
+			int base = row * rowBytes;
+			double acc = 0.0;
+			for (int b = 0; b < nb; b++) {
+				int bo = base + b * Q8_BLOCK_BYTES;
+				int isum = q8BlockDot(w, bo + 2, xq, b * Q8_BLOCK);
+				acc = acc + isum * (q8Scale(w, bo) * xs[b]);
+			}
+			r[row] = (float) acc;
+		}
+	}
+
+	/** {@link #matvecRowsQ8F} into a double result. */
+	private static void matvecRowsQ8D(double[] r, byte[] w, int cols, byte[] xq, double[] xs, int from, int to) {
+		int nb = cols / Q8_BLOCK;
+		int rowBytes = nb * Q8_BLOCK_BYTES;
+		for (int row = from; row < to; row++) {
+			int base = row * rowBytes;
+			double acc = 0.0;
+			for (int b = 0; b < nb; b++) {
+				int bo = base + b * Q8_BLOCK_BYTES;
+				int isum = q8BlockDot(w, bo + 2, xq, b * Q8_BLOCK);
+				acc = acc + isum * (q8Scale(w, bo) * xs[b]);
+			}
+			r[row] = acc;
+		}
+	}
+
+	/**
+	 * {@code vec:matvec-into} over a Q8_0 matrix ({@code rows x cols} blocks at
+	 * {@code w}) and an f32 vector, into a bare f32 result.
+	 */
+	static void matvecIntoQ8F(float[] r, byte[] w, int rows, int cols, float[] x, boolean parallel) {
+		byte[] xq = new byte[cols];
+		double[] xs = new double[cols / Q8_BLOCK];
+		quantizeActivationF(x, 0, cols, xq, xs);
+		if (parallel && SimdParallel.worth(rows, cols)) {
+			SimdParallel.rows(rows, cols, (from, to) -> matvecRowsQ8F(r, w, cols, xq, xs, from, to));
+		}
+		else {
+			matvecRowsQ8F(r, w, cols, xq, xs, 0, rows);
+		}
+	}
+
+	/** {@link #matvecIntoQ8F} over a double vector, into a bare double result. */
+	static void matvecIntoQ8D(double[] r, byte[] w, int rows, int cols, double[] x, boolean parallel) {
+		byte[] xq = new byte[cols];
+		double[] xs = new double[cols / Q8_BLOCK];
+		quantizeActivationD(x, 0, cols, xq, xs);
+		if (parallel && SimdParallel.worth(rows, cols)) {
+			SimdParallel.rows(rows, cols, (from, to) -> matvecRowsQ8D(r, w, cols, xq, xs, from, to));
+		}
+		else {
+			matvecRowsQ8D(r, w, cols, xq, xs, 0, rows);
+		}
+	}
+
+	/** {@code vec:matvec} over a Q8_0 matrix and an f32 vector: a fresh f32 result. */
+	static float[] matvecQ8F(byte[] w, int rows, int cols, float[] x, boolean parallel) {
+		float[] r = new float[rows];
+		matvecIntoQ8F(r, w, rows, cols, x, parallel);
+		return r;
+	}
+
+	/**
+	 * {@code vec:matvec} over a Q8_0 matrix and a double vector: a fresh double result.
+	 */
+	static double[] matvecQ8D(byte[] w, int rows, int cols, double[] x, boolean parallel) {
+		double[] r = new double[rows];
+		matvecIntoQ8D(r, w, rows, cols, x, parallel);
 		return r;
 	}
 

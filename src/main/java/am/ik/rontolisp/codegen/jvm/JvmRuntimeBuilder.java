@@ -1726,7 +1726,9 @@ final class JvmRuntimeBuilder {
 	record PackedPrint(ClassConstant doubleArrayClass, ClassConstant floatArrayClass, ClassConstant shortArrayClass,
 			MethodrefConstant fvToGeneralMethod, MethodrefConstant stringReplaceFirst,
 			ConstantPool.StringConstant prefixRegex, ConstantPool.StringConstant prefixRepl,
-			ConstantPool.StringConstant prefixReplSingle, ConstantPool.StringConstant prefixReplBFloat16) {
+			ConstantPool.StringConstant prefixReplSingle, ConstantPool.StringConstant prefixReplBFloat16,
+			@org.jspecify.annotations.Nullable ClassConstant byteArrayClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant qmToString) {
 	}
 
 	/**
@@ -2493,6 +2495,22 @@ final class JvmRuntimeBuilder {
 			// if (val instanceof short[]) -> #bf16(...)
 			emitPackedPrintBranch(code, packedPrint.shortArrayClass(), arrayToStringMethod, packedPrint,
 					packedPrint.prefixReplBFloat16());
+			if (packedPrint.byteArrayClass() != null && packedPrint.qmToString() != null) {
+				// if (val instanceof byte[]) return _qmToString(val); -- the quantized
+				// matrix's #<quantized-matrix q8-0 (rows cols)>, the same for prin1 and
+				// princ (.kb/quantized-matrix.md).
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.INSTANCEOF);
+				emitU2(code, packedPrint.byteArrayClass().index());
+				int ifNotQuantized = code.size();
+				code.add(Opcode.IFEQ);
+				emitU2(code, 0);
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.INVOKESTATIC);
+				emitU2(code, packedPrint.qmToString().index());
+				code.add(Opcode.ARETURN);
+				patchBranch(code, ifNotQuantized, code.size());
+			}
 		}
 		if (packedIntPrint != null) {
 			// if (val instanceof long[]) return arrayToString(_ivToGeneral(val)); -- a

@@ -14377,8 +14377,10 @@ cases:
 
       (defun ci-gguf-write (path)
         ;; A six-tensor GGUF with an alignment of 64: F32, F16 and BF16 tensors this
-        ;; reader loads, a Q4_0 and a Q8_0 it must refuse BY NAME when their bodies are
-        ;; asked for, and the tokenizer fields a byte-level BPE takes. Written here
+        ;; reader loads, a Q4_0 it must refuse BY NAME when its body is asked for, a
+        ;; Q8_0 (a quantized matrix, interpreter and JVM only -- the standalone
+        ;; quantized-matrix case below reads one) and the tokenizer fields a
+        ;; byte-level BPE takes. Written here
         ;; rather than checked in, so the case is one self-contained program on every
         ;; backend. The position is counted by hand because file-position reports none.
         (setq *ci-gguf-pos* 0)
@@ -14460,8 +14462,6 @@ cases:
                             "vec"))
         (print (handler-case (gguf:read "ci-model.gguf" :only '("q40"))
                  (error (e) (format nil "~a" e))))
-        (print (handler-case (gguf:read "ci-model.gguf" :only '("q80"))
-                 (error (e) (format nil "~a" e))))
         ;; The vocabulary a GGUF carries drives the tokenizer package unchanged.
         (let* ((fields (gguf:tokenizer-fields (gguf:read "ci-model.gguf" :metadata-only t)))
                (tk (tokenizer:make-bpe (getf fields :tokens) (getf fields :merges)
@@ -14488,7 +14488,6 @@ cases:
       NIL
       #d(0.25 0.5 0.75 1.0)
       "gguf: the tensor q40 is Q4_0; this reader loads F32, F16 and BF16. Take the publisher's BF16 or F16 file, or read this one with :metadata-only t or with :only naming the tensors you want."
-      "gguf: the tensor q80 is Q8_0, which needs a quantized weight matrix this reader does not have yet. Its directory entry and the file's metadata read fine: pass :metadata-only t, or :only naming the tensors you want."
       (2)
       "ab"
 
@@ -14574,6 +14573,52 @@ standalone:
       #bf16(4.0 6.0)
     refusedOn: [wasm, wasm_component]
     refusal: "bfloat16 arrays are supported on the interpreter and the JVM only"
+  - name: quantized-matrix
+    source: |
+      ;; The block-quantized weight matrix (.kb/quantized-matrix.md) exists on the
+      ;; interpreter and the JVM only; the two WASM backends refuse rontolisp:quantize
+      ;; by name at compile time. Everything printed is either exact (a dequantized
+      ;; Q8_0 value is q * a binary16, exact in f32) or an integer, and the GEMV is
+      ;; the defun bit for bit whichever kernel runs it, so the two lines agree
+      ;; across the interpreter, the JVM, --simd and --parallel. The blocks written
+      ;; and read back are the ggml bytes a GGUF tensor is.
+      (defparameter *qw* (make-array '(3 64) :element-type 'single-float :initial-element 0.0))
+      (dotimes (i 3) (dotimes (j 64)
+        (setf (aref *qw* i j) (* 0.02 (sin (+ (* 0.37 i) (* 1.91 j) (* 0.01 i j)))))))
+      (defparameter *qm* (rontolisp:quantize *qw* 'q8-0))
+      (print *qm*)
+      (print (list (array-dimensions *qm*) (array-element-type *qm*) (rontolisp:quantized-matrix-p *qm*)
+                   (arrayp *qm*) (typep *qm* 'rontolisp:quantized-matrix) (type-of *qm*)))
+      (print (list (aref *qm* 1 5) (rontolisp::%quantized-quant *qm* 1 5) (rontolisp::%quantized-scale *qm* 1 0)))
+      (print (handler-case (setf (aref *qm* 0 0) 1.0) (error (e) :immutable)))
+      (defparameter *qx* (make-array 64 :element-type 'single-float :initial-element 0.0))
+      (dotimes (j 64) (setf (aref *qx* j) (cos (* 0.73 j))))
+      (print (vec:matvec *qm* *qx*))
+      (print (let ((out (make-array 3 :element-type 'double-float :initial-element 0.0)))
+               (vec:matvec-into out *qm* (rontolisp:dequantize (rontolisp:quantize *qx* 'q8-0) 'double-float))))
+      (with-open-file (out "ci-q8.bin" :direction :output :if-exists :supersede
+                           :element-type '(unsigned-byte 8))
+        (print (write-sequence *qm* out)))
+      (let ((m2 (rontolisp:make-quantized-matrix 'q8-0 '(3 64))))
+        (with-open-file (in "ci-q8.bin" :element-type '(unsigned-byte 8))
+          (print (read-sequence m2 in)))
+        (print (equalp (rontolisp:dequantize m2 'single-float) (rontolisp:dequantize *qm* 'single-float)))
+        (print (aref m2 2 63)))
+      (print (length (rontolisp:dequantize (rontolisp:make-quantized-matrix 'q8-0 40000) 'bfloat16)))
+    stdout: |
+      #<quantized-matrix q8-0 (3 64)>
+      ((3 64) Q8-0 T NIL T QUANTIZED-MATRIX)
+      (-0.010393381118774414 -66 1.5747547149658203e-4)
+      :IMMUTABLE
+      #f(0.0031668935 0.0017174269 0.007640896)
+      #d(0.0031676442740717903 0.0017160059069283307 0.00763897187425755)
+      #<quantized-matrix q8-0 (3 64)>
+      204
+      T
+      0.0037794113159179688
+      40000
+    refusedOn: [wasm, wasm_component]
+    refusal: "quantized matrices are supported on the interpreter and the JVM only"
   - name: array-operations-enablement-language-group
     source: |
       (defclass aoe-report () ((suite-name :initform nil) (passed :initform 0)))

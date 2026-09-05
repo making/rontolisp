@@ -93,6 +93,18 @@ final class JvmSimdCompiler {
 			LispNames.VEC_MATVEC, 0, LispNames.VEC_MATVEC_INTO, 1);
 
 	/**
+	 * The two members with an integer-dot kernel over a Q8_0 quantized matrix
+	 * ({@code .kb/quantized-matrix.md}), mapped to the operand position a {@code byte[]}
+	 * may appear in -- the weight matrix. Every OTHER array operand of such a call must
+	 * then be of ONE width, all {@code float[]} or all {@code double[]}: the kernel takes
+	 * an f32 or an f64 activation and writes a destination of the same width, and a mixed
+	 * destination is a shape only the defun computes. A member absent from this map
+	 * declines a {@code byte[]} in every position.
+	 */
+	private static final Map<String, Integer> QUANTIZED_OPERAND = Map.of(LispNames.VEC_MATVEC, 0,
+			LispNames.VEC_MATVEC_INTO, 1);
+
+	/**
 	 * Returns whether the given {@code simd} package member is one of the vectorizable
 	 * kernels this compiler accelerates.
 	 */
@@ -397,6 +409,14 @@ final class JvmSimdCompiler {
 	 * the kernel call, so the bridge stays TOTAL over what the guard admits -- no
 	 * decline, no null check, and a call site that never sees the width emits exactly
 	 * what it emitted before.
+	 *
+	 * <p>
+	 * The two GEMV members of {@link #QUANTIZED_OPERAND} have a third arm ahead of those
+	 * two, for a Q8_0 quantized matrix (a {@code byte[]},
+	 * {@code .kb/quantized-matrix.md}) at the weight position: the remaining array
+	 * operands must then all be {@code float[]} or all {@code double[]}, the two
+	 * activation widths the integer-dot kernel takes. The three arms are exclusive, and
+	 * each ends at the kernel call.
 	 */
 	private static void emitLaneWidthGuard(JvmLispCompiler.Ctx ctx, String member, int[] slots,
 			List<Integer> fallbackBranches) {
@@ -404,7 +424,63 @@ final class JvmSimdCompiler {
 		int doubleArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[D")).index();
 		int floatArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[F")).index();
 		Integer bf16Operand = BF16_OPERAND.get(member);
-		int skipGeneral = -1;
+		Integer quantizedOperand = QUANTIZED_OPERAND.get(member);
+		List<Integer> skipGenerals = new ArrayList<>();
+		if (quantizedOperand != null) {
+			// if (!(slot_q instanceof byte[])) goto next arm; then the other array
+			// operands are all float[] or all double[] (decided by the first of them),
+			// else fallback.
+			int byteArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[B")).index();
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slots[quantizedOperand]);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(byteArrayClass);
+			int notQuantized = ctx.code.size();
+			ctx.emit(Opcode.IFEQ);
+			ctx.emitU2(0);
+			int first = quantizedOperand == 0 ? 1 : 0;
+			// if (slot_first instanceof float[]) { others float[] } else { first
+			// double[]; others double[] }
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slots[first]);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(floatArrayClass);
+			int notFloat = ctx.code.size();
+			ctx.emit(Opcode.IFEQ);
+			ctx.emitU2(0);
+			for (int i = 0; i < arrays; i++) {
+				if (i == quantizedOperand || i == first) {
+					continue;
+				}
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slots[i]);
+				ctx.emit(Opcode.INSTANCEOF);
+				ctx.emitU2(floatArrayClass);
+				fallbackBranches.add(ctx.code.size());
+				ctx.emit(Opcode.IFEQ);
+				ctx.emitU2(0);
+			}
+			skipGenerals.add(ctx.code.size());
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, notFloat, ctx.code.size());
+			for (int i = 0; i < arrays; i++) {
+				if (i == quantizedOperand) {
+					continue;
+				}
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slots[i]);
+				ctx.emit(Opcode.INSTANCEOF);
+				ctx.emitU2(doubleArrayClass);
+				fallbackBranches.add(ctx.code.size());
+				ctx.emit(Opcode.IFEQ);
+				ctx.emitU2(0);
+			}
+			skipGenerals.add(ctx.code.size());
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, notQuantized, ctx.code.size());
+		}
 		if (bf16Operand != null) {
 			// if (!(slot_p instanceof short[])) goto general;
 			int shortArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[S")).index();
@@ -428,7 +504,7 @@ final class JvmSimdCompiler {
 				ctx.emit(Opcode.IFEQ);
 				ctx.emitU2(0);
 			}
-			skipGeneral = ctx.code.size();
+			skipGenerals.add(ctx.code.size());
 			ctx.emit(Opcode.GOTO);
 			ctx.emitU2(0);
 			JvmEmitHelper.patchBranch(ctx, general, ctx.code.size());
@@ -452,7 +528,7 @@ final class JvmSimdCompiler {
 			ctx.emitU2(0);
 			JvmEmitHelper.patchBranch(ctx, isDouble, ctx.code.size());
 		}
-		if (skipGeneral >= 0) {
+		for (int skipGeneral : skipGenerals) {
 			JvmEmitHelper.patchBranch(ctx, skipGeneral, ctx.code.size());
 		}
 	}

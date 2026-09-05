@@ -15,9 +15,11 @@ Two things worth knowing before you read one:
 - **The tokenizer and the hyperparameters are free.** They live in the key/value
   block at the front of the file, so `(gguf:read path :metadata-only t)` stops
   before the weights and never touches the gigabytes.
-- **A quantized tensor is refused when its body is asked for, and never
-  earlier.** F32, F16 and BF16 load; a Q4_K_M or Q8_0 file still opens, still
-  lists its whole directory and still hands over its vocabulary.
+- **F32, F16 and BF16 load into packed float arrays, Q8_0 into a quantized
+  matrix** ([`rontolisp:quantize`](rontolisp-quantize.md); interpreter and JVM
+  only). **Any other quantized tensor is refused when its body is asked for, and
+  never earlier**: a Q4_K_M file still opens, still lists its whole directory
+  and still hands over its vocabulary.
 
 | Function | Example | Result |
 |----------|---------|--------|
@@ -27,5 +29,5 @@ Two things worth knowing before you read one:
 | `gguf:metadata-value` | `(gguf:metadata-value f "llama.block_count")` | one key's value, or a default that really means absent |
 | `gguf:tensor-names` | `(gguf:tensor-names f)` | the tensor names, in directory order |
 | `gguf:tensor-info` | `(gguf:tensor-info f "token_embd.weight")` | one tensor's directory entry: dims (ROW-MAJOR), type, elements, bytes, offset |
-| `gguf:tensor` | `(gguf:tensor f "output_norm.weight")` | the packed float array loaded for a tensor, or `nil` when it was not loaded |
+| `gguf:tensor` | `(gguf:tensor f "output_norm.weight")` | the packed float array (a quantized matrix for a Q8_0 tensor) loaded for a tensor, or `nil` when it was not loaded |
 | `gguf:tokenizer-fields` | `(gguf:tokenizer-fields f)` | the tokenizer fields as a plist, in the shape `tokenizer:make-bpe` takes |

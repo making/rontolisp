@@ -3229,6 +3229,7 @@ public final class LispEvaluator {
 			case LispSymbol s -> s.isKeyword() ? "keyword" : "symbol";
 			case LispCons ignored -> "cons";
 			case LispHashTable ignored -> "hash-table";
+			case am.ik.rontolisp.LispQuantizedMatrix ignored -> "quantized-matrix";
 			case LispFunction ignored -> "function";
 			default -> "t";
 		};
@@ -4291,6 +4292,9 @@ public final class LispEvaluator {
 			case am.ik.rontolisp.LispThread th -> th;
 			case LispStream s -> s;
 			case LispInstance inst -> inst;
+			// A quantized matrix has no literal syntax; one reaches eval only as a value
+			// a macro-time form handed back, and is itself.
+			case am.ik.rontolisp.LispQuantizedMatrix qm -> qm;
 			// A #S(...) literal the top-level fold did not reach (one produced by a
 			// runtime read, say) is folded here, so evaluating it always yields the
 			// instance rather than a carrier leaking into user data.

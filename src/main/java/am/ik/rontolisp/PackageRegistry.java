@@ -704,8 +704,17 @@ public final class PackageRegistry {
 				// here and NOT in CL_TYPES: `bfloat16` is not a Common Lisp type name,
 				// unlike short-float / long-float, which the standard defines even where
 				// they collapse onto another width.
-				LispNames.BFLOAT16));
+				LispNames.BFLOAT16,
+				// The block-quantized weight matrix (.kb/quantized-matrix.md): its
+				// constructors, its predicate, its type name and the q8-0 format
+				// designator. Extensions like bfloat16 above, so they live here too.
+				LispNames.QUANTIZE, LispNames.DEQUANTIZE, LispNames.MAKE_QUANTIZED_MATRIX, LispNames.QUANTIZED_MATRIX_P,
+				LispNames.QUANTIZED_MATRIX, LispNames.Q8_0));
 		Set<String> rontolispSymbols = new HashSet<>(rontolispExternals);
+		// Internal: the two raw accessors vec.lisp's integer-dot GEMV reads a quantized
+		// matrix through, spelled rontolisp::%quantized-* by their one call site.
+		rontolispSymbols.add(LispNames.QUANTIZED_QUANT_INTERNAL);
+		rontolispSymbols.add(LispNames.QUANTIZED_SCALE_INTERNAL);
 		// Internal: the stoppable HTTP server seam behind the clack-handler-rontolisp
 		// shim, spelled rontolisp::%http-server-* by its call sites. Owned by the
 		// package rather than left to the resolver's tolerance for an unknown ::

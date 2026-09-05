@@ -66,9 +66,18 @@
   ;; would answer #d for a #bf16 input -- the failure mode this width exists to avoid.
   ;; Every internal width question flows through here, the two %la-gather-strided
   ;; width codes included, so this one guard covers them.
+  ;; A Q8_0 quantized matrix (rontolisp:quantize, a GGUF's Q8_0 tensor) reads as
+  ;; SINGLE-FLOAT: every dequantized value is exact in f32, and f32 is the
+  ;; activation width a quantized weight is paired with -- so linalg:row over a
+  ;; quantized embedding table answers the #f vector the rest of a decode step
+  ;; expects, not a #d one that the next vec: call refuses as mixed-width
+  ;; (.kb/quantized-matrix.md).
   (when (eq (array-element-type a) 'bfloat16)
     (error "linalg: does not yet carry bfloat16 arrays"))
-  (if (eq (array-element-type a) 'single-float) 'single-float 'double-float))
+  (if (or (eq (array-element-type a) 'single-float)
+          (eq (array-element-type a) 'q8-0))
+      'single-float
+      'double-float))
 
 (defun linalg::%la-like (a)
   ;; A fresh zero-filled packed array with the same shape AND width as a.

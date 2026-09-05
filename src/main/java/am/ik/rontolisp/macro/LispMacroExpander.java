@@ -14556,6 +14556,11 @@ public final class LispMacroExpander {
 		}
 		clauses.add(listToCons(List.of(mvCall(LispNames.FUNCTIONP, v), unspelledQuoteOf("FUNCTION"))));
 		clauses.add(listToCons(List.of(mvCall(LispNames.CONSP, v), unspelledQuoteOf("CONS"))));
+		// A quantized matrix is its own type; the predicate is a constant nil on a
+		// backend that has none, so the clause costs nothing there.
+		clauses.add(listToCons(
+				List.of(mvCall(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P), v),
+						unspelledQuoteOf(LispNames.QUANTIZED_MATRIX))));
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, unspelledQuoteOf("T"))));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
@@ -26799,6 +26804,9 @@ public final class LispMacroExpander {
 			case "HASH-TABLE" -> LispNames.HASH_TABLE_P;
 			case "FUNCTION" -> LispNames.FUNCTIONP;
 			case "STREAM" -> LispNames.STREAMP;
+			// The block-quantized weight matrix, its own type (.kb/quantized-matrix.md).
+			case LispNames.QUANTIZED_MATRIX ->
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P);
 			default -> null;
 		};
 	}

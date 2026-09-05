@@ -8220,6 +8220,51 @@ public final class LispNames {
 	public static final String NARROW_FLOAT_BITS = "NARROW-FLOAT-BITS";
 
 	/**
+	 * {@code rontolisp:quantize} -- a packed float array to a block-quantized weight
+	 * matrix ({@code am.ik.rontolisp.LispQuantizedMatrix}), by ggml's rule for the format
+	 * named. See {@code .kb/quantized-matrix.md}.
+	 */
+	public static final String QUANTIZE = "QUANTIZE";
+
+	/**
+	 * {@code rontolisp:dequantize} -- a quantized matrix to a fresh packed float array of
+	 * the element type named.
+	 */
+	public static final String DEQUANTIZE = "DEQUANTIZE";
+
+	/**
+	 * {@code rontolisp:make-quantized-matrix} -- an all-zero quantized matrix of a format
+	 * and shape, the destination a checkpoint reader fills with {@code read-sequence}.
+	 */
+	public static final String MAKE_QUANTIZED_MATRIX = "MAKE-QUANTIZED-MATRIX";
+
+	/** {@code rontolisp:quantized-matrix-p} -- the type predicate. */
+	public static final String QUANTIZED_MATRIX_P = "QUANTIZED-MATRIX-P";
+
+	/** {@code rontolisp:quantized-matrix} -- the type name {@code typep} answers to. */
+	public static final String QUANTIZED_MATRIX = "QUANTIZED-MATRIX";
+
+	/**
+	 * {@code q8-0} -- the format designator of ggml's {@code Q8_0}
+	 * ({@code am.ik.rontolisp.QuantizedFormat#Q8_0}), and what {@code array-element-type}
+	 * answers for a matrix in it.
+	 */
+	public static final String Q8_0 = "Q8-0";
+
+	/**
+	 * {@code rontolisp::%quantized-quant} -- the signed 8-bit quant at {@code (row, col)}
+	 * of a quantized matrix, an integer. Internal: what {@code vec.lisp}'s integer-dot
+	 * GEMV reads, so the scalar oracle folds the same integers the lane kernel folds.
+	 */
+	public static final String QUANTIZED_QUANT_INTERNAL = "%QUANTIZED-QUANT";
+
+	/**
+	 * {@code rontolisp::%quantized-scale} -- the scale of block {@code b} of row
+	 * {@code row} of a quantized matrix, a double (the binary16 widened, exact).
+	 */
+	public static final String QUANTIZED_SCALE_INTERNAL = "%QUANTIZED-SCALE";
+
+	/**
 	 * The {@code :float16} format keyword
 	 * {@link #WIDEN_FLOAT_BITS}/{@link #NARROW_FLOAT_BITS} take.
 	 */

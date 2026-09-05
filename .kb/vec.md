@@ -189,6 +189,11 @@ kernel's over the widened operand BIT FOR BIT, so the width joins the reduction 
 rather than adding one of its own. Mechanics, the decline sites and the cache-resident cost:
 `.kb/bfloat16.md`.
 
+**A Q8_0 quantized matrix rides layers 0 and 1 too, in `matvec` / `matvec-into` only**, against an
+`#f` or `#d` vector: the integer-dot kernel, which is the defun BIT FOR BIT (no lane-count pin, no
+threshold -- an integer sum is exact in any fold), so the width has no entry in the reduction
+contract at all. Everything else declines it to the defun. `.kb/quantized-matrix.md`.
+
 **Layer 2, `--no-gc`**: `NoGcWasmCompiler` lowers the whole surface itself; `isSimdCall(name)` (a
 `"vec:"` prefix test) dispatches in `collectCalls`, `typeOf`/`typeOfSimd` and
 `compileCall`/`compileSimd`. `--simd` picks real fixed-width v128 (`f64x2` with a one-element

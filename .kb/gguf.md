@@ -32,8 +32,10 @@ walked SEQUENTIALLY in ascending offset order through a 64 KB scratch buffer.
 ## What loads, what is refused
 
 F32 goes straight into a packed float array; F16/BF16 through an `(unsigned-byte 16)` staging
-vector + `rontolisp:widen-float-bits`; Q8_0 and everything else are refused BY NAME, pointing at
-the publisher's BF16/F16 file.
+vector + `rontolisp:widen-float-bits`; Q8_0 into a `rontolisp:quantized-matrix` -- `make-quantized-
+matrix` then ONE `read-sequence`, the file's blocks being the matrix's storage, `:element-type`
+ignored (`.kb/quantized-matrix.md`; interpreter and JVM, the WASM backends signal at that tensor);
+everything else is refused BY NAME, pointing at the publisher's BF16/F16 file.
 
 - **A refusal fires when a tensor's BODY is asked for, never earlier**, so an all-Q4_K checkpoint
   can still be inspected and its tokenizer taken.

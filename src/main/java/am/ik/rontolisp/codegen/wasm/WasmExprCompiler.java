@@ -630,6 +630,36 @@ final class WasmExprCompiler {
 					WasmFloat16Compiler.compileWiden(cons, ctx);
 					return;
 				}
+				if (LispNames.QUANTIZE.equals(qn.member()) || LispNames.DEQUANTIZE.equals(qn.member())) {
+					// PERMANENT: the block-quantized weight matrix exists on the
+					// interpreter and the JVM only (.kb/quantized-matrix.md), and these
+					// two are the user-facing operations on it.
+					throw am.ik.rontolisp.compiler.UnsupportedFloatWidth.refuseQuantized("the wasm-GC backend");
+				}
+				if (LispNames.MAKE_QUANTIZED_MATRIX.equals(qn.member())
+						|| LispNames.QUANTIZED_QUANT_INTERNAL.equals(qn.member())
+						|| LispNames.QUANTIZED_SCALE_INTERNAL.equals(qn.member())) {
+					// A CALL-TIME signal, the shape the bfloat16 make-array arm takes:
+					// gguf.lisp's Q8_0 arm and vec.lisp's integer-dot GEMV name these
+					// in arms every backend compiles and only two can reach.
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandUnsupportedCall(cons,
+							am.ik.rontolisp.compiler.UnsupportedFloatWidth.quantizedMessage("the wasm-GC backend")),
+							ctx);
+					return;
+				}
+				if (LispNames.QUANTIZED_MATRIX_P.equals(qn.member())) {
+					// No quantized matrix can exist here, so the predicate is nil --
+					// evaluated, so its argument's effects still happen.
+					java.util.List<LispVal> predicateParts = cons.toList();
+					if (predicateParts.size() != 2) {
+						throw new UnsupportedOperationException(
+								"rontolisp:quantized-matrix-p expects 1 argument, got " + (predicateParts.size() - 1));
+					}
+					WasmExprCompiler.compileExpr(new LispCons(new LispSymbol(LispNames.PROGN),
+							new LispCons(predicateParts.get(1), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))),
+							ctx);
+					return;
+				}
 				if (LispNames.NARROW_FLOAT_BITS.equals(qn.member())) {
 					WasmFloat16Compiler.compileNarrow(cons, ctx);
 					return;

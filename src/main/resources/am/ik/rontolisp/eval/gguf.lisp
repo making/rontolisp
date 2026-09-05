@@ -363,12 +363,17 @@
           ((= type 1) (gguf::%widen-into rd count :float16 dims element-type))
           ((= type 30) (gguf::%widen-into rd count :bfloat16 dims element-type))
           ((= type 8)
-           (error (concatenate 'string
-                   "gguf: the tensor ~a is Q8_0, which needs a quantized "
-                   "weight matrix this reader does not have yet. Its "
-                   "directory entry and the file's metadata read fine: pass "
-                   ":metadata-only t, or :only naming the tensors you want.")
-                  name))
+           ;; Q8_0 is a quantized weight matrix's own bytes (.kb/quantized-matrix.md):
+           ;; the tensor's blocks -- one binary16 scale then 32 int8 quants, 34 bytes,
+           ;; repeated in row order -- are the matrix's storage, so one transfer
+           ;; fills it and nothing is staged or converted. The matrix keeps its
+           ;; format whatever :element-type asked for; (rontolisp:dequantize m et)
+           ;; widens it on demand. Only the interpreter and the JVM carry the type;
+           ;; on the WASM backends make-quantized-matrix signals by name here.
+           (let ((m (rontolisp:make-quantized-matrix 'q8-0 dims)))
+             (read-sequence m (gguf::%rd-stream rd))
+             (gguf::%advance rd (getf info :bytes))
+             m))
           (t (error (concatenate 'string
                      "gguf: the tensor ~a is ~a; this reader loads F32, F16 "
                      "and BF16. Take the publisher's BF16 or F16 file, or "

@@ -377,6 +377,21 @@ final class JvmAsm {
 		this.code.add(9);
 	}
 
+	// --- byte arrays (the quantized matrix's block storage) ---------------------------
+
+	void newarrayByte() {
+		this.code.add(Opcode.NEWARRAY);
+		this.code.add(8);
+	}
+
+	void baload() {
+		this.code.add(Opcode.BALOAD);
+	}
+
+	void bastore() {
+		this.code.add(Opcode.BASTORE);
+	}
+
 	void saload() {
 		this.code.add(Opcode.SALOAD);
 	}

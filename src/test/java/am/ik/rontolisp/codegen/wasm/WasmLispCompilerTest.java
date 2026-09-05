@@ -363,6 +363,29 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void quantizeIsRefusedOnTheWasmGcBackendAndTheDeadArmsStillCompile() {
+		// The block-quantized weight matrix exists on the interpreter and the JVM only
+		// (.kb/quantized-matrix.md): the user-facing operations refuse at compile time.
+		assertThatThrownBy(() -> compile("(print (rontolisp:quantize #f(1.0 2.0) 'q8-0))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("quantized matrices are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the wasm-GC backend");
+		assertThatThrownBy(() -> compile("(print (rontolisp:dequantize 3 'single-float))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("quantized matrices are supported on the interpreter and the JVM only");
+		// vec.lisp's integer-dot GEMV arm and a reader's make-quantized-matrix are dead
+		// arms every backend compiles: a call-time signal, never a compile error, and the
+		// predicate they branch on is a constant nil.
+		assertThat(compile("""
+				(defun f (w x) (vec:matvec w x))
+				(print (f #f((1.0 2.0)) #f(1.0 1.0)))
+				(print (rontolisp:quantized-matrix-p 3))
+				(defun g (dims) (rontolisp:make-quantized-matrix 'q8-0 dims))
+				(print (rontolisp::%quantized-quant 1 2 3))
+				""")).isNotEmpty();
+	}
+
+	@Test
 	void bfloat16LiteralsAreRefusedOnTheWasmGcBackend() {
 		assertThatThrownBy(() -> compile("(print #bf16(1.0 2.0))")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("bfloat16 arrays are supported on the interpreter and the JVM only")

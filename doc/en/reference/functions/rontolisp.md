@@ -15,6 +15,10 @@ package system. Each name below links to its own page.
 | `rontolisp:bits-float16` | `(rontolisp:bits-float16 15360)` | the float an f16 bit pattern encodes |
 | `rontolisp:widen-float-bits` | `(rontolisp:widen-float-bits bits :float16 dst)` | widen a packed `(unsigned-byte 16)` vector of f16/bfloat16 bit patterns into a packed float array, in bulk |
 | `rontolisp:narrow-float-bits` | `(rontolisp:narrow-float-bits src :bfloat16 dst)` | narrow a packed float array into a packed `(unsigned-byte 16)` vector of f16/bfloat16 bit patterns, in bulk |
+| `rontolisp:quantize` | `(rontolisp:quantize w 'q8-0)` | a packed float matrix as a block-quantized weight matrix (ggml's `Q8_0`: 32-element blocks, one binary16 scale and 32 int8 quants), the operand `vec:matvec` runs its integer-dot GEMV over; interpreter and JVM |
+| `rontolisp:dequantize` | `(rontolisp:dequantize m 'single-float)` | a quantized matrix expanded into a fresh packed float array of the element type named |
+| `rontolisp:make-quantized-matrix` | `(rontolisp:make-quantized-matrix 'q8-0 '(rows cols))` | an all-zero quantized matrix, the destination `read-sequence` fills with a Q8_0 tensor's bytes |
+| `rontolisp:quantized-matrix-p` | `(rontolisp:quantized-matrix-p m)` | `t` if the value is a quantized matrix (also `(typep m 'rontolisp:quantized-matrix)`) |
 | `rontolisp:make-mutex` | `(rontolisp:make-mutex)` | a fresh mutual-exclusion lock, as an opaque handle (real on the interpreter and the JVM, a no-op on WASM) |
 | `rontolisp:mutex-acquire` | `(rontolisp:mutex-acquire m)` | block until this thread holds the mutex; returns it (prefer `rontolisp:with-mutex`) |
 | `rontolisp:mutex-release` | `(rontolisp:mutex-release m)` | release one acquisition of the mutex; returns it |

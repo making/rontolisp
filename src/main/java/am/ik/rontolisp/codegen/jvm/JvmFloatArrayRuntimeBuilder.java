@@ -131,9 +131,20 @@ final class JvmFloatArrayRuntimeBuilder {
 	private JvmFloatArrayRuntimeBuilder() {
 	}
 
+	/**
+	 * The references the quantized matrix's arms need ({@code .kb/quantized-matrix.md}):
+	 * a {@code byte[]} is the fourth packed shape these helpers meet, and every arm
+	 * delegates to a {@code _qm*} helper ({@link JvmQuantizedMatrixRuntimeBuilder}),
+	 * which exists exactly when this record is non-null.
+	 */
+	private record Quantized(ClassConstant byteArrayClass, MethodrefConstant aref1, MethodrefConstant aref2,
+			MethodrefConstant arefN, MethodrefConstant dims, MethodrefConstant length, MethodrefConstant qmInt) {
+
+	}
+
 	/** The constant-pool references one emitted body needs, per width. */
 	private record Refs(ClassConstant doubleArrayClass, ClassConstant floatArrayClass, ClassConstant shortArrayClass,
-			MethodrefConstant bf16Value, MethodrefConstant bf16Bits) {
+			MethodrefConstant bf16Value, MethodrefConstant bf16Bits, @Nullable Quantized quantized) {
 
 		ClassConstant arrayClass(JvmPackedFloatWidth w) {
 			return switch (w) {
@@ -154,7 +165,8 @@ final class JvmFloatArrayRuntimeBuilder {
 	 * @return the helper methods
 	 */
 	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
-			ClassConstant selfClass, @Nullable MethodrefConstant written, @Nullable MethodrefConstant materialize) {
+			ClassConstant selfClass, @Nullable MethodrefConstant written, @Nullable MethodrefConstant materialize,
+			boolean quantized) {
 		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
 		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
 		ClassConstant shortArrayClass = cp.addClass(cp.addUtf8("[S"));
@@ -198,7 +210,19 @@ final class JvmFloatArrayRuntimeBuilder {
 		MethodrefConstant bf16Value = self(cp, selfClass, BF16_VALUE, BF16_VALUE_DESC);
 		MethodrefConstant bf16Bits = self(cp, selfClass, BF16_BITS, BF16_BITS_DESC);
 		MethodrefConstant bf16Print = self(cp, selfClass, BF16_PRINT, BF16_PRINT_DESC);
-		Refs refs = new Refs(doubleArrayClass, floatArrayClass, shortArrayClass, bf16Value, bf16Bits);
+		Quantized qm = quantized ? new Quantized(cp.addClass(cp.addUtf8("[B")),
+				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.AREF1,
+						JvmQuantizedMatrixRuntimeBuilder.BINARY_DESC),
+				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.AREF2,
+						JvmQuantizedMatrixRuntimeBuilder.TERNARY_DESC),
+				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.AREFN,
+						JvmQuantizedMatrixRuntimeBuilder.BINARY_DESC),
+				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.DIMS, JvmQuantizedMatrixRuntimeBuilder.UNARY_DESC),
+				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.LENGTH,
+						JvmQuantizedMatrixRuntimeBuilder.UNARY_DESC),
+				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.INT, JvmQuantizedMatrixRuntimeBuilder.INT_DESC))
+				: null;
+		Refs refs = new Refs(doubleArrayClass, floatArrayClass, shortArrayClass, bf16Value, bf16Bits, qm);
 
 		List<ArrayMethod> methods = new ArrayList<>();
 		methods.add(buildToGeneral(cp, TO_GENERAL, refs, arrayListClass, objectClass, alInit, alAdd, longValueOf,
@@ -396,6 +420,24 @@ final class JvmFloatArrayRuntimeBuilder {
 		}
 	}
 
+	/**
+	 * The quantized matrix's arm, ahead of the width dispatch: {@code if (arr instanceof
+	 * byte[]) body}, where the body leaves the method. Nothing when no quantized matrix
+	 * can exist in the program, so such a program's helpers keep their bytes.
+	 */
+	private static void emitQuantizedArm(JvmAsm a, Refs refs, int arr, java.util.function.Consumer<Quantized> body) {
+		Quantized qm = refs.quantized();
+		if (qm == null) {
+			return;
+		}
+		int next = a.label();
+		a.aload(arr);
+		a.instanceOf(qm.byteArrayClass());
+		a.branch(Opcode.IFEQ, next);
+		body.accept(qm);
+		a.bind(next);
+	}
+
 	// _fvAref1(arr, i): packed -> Double.valueOf(d[off + (int) i]); else _aref1.
 	// Serves rank-1 aref and row-major-aref (rank read from the header). Locals:
 	// 0=arr, 1=i, 2=d, 3=rank.
@@ -406,6 +448,12 @@ final class JvmFloatArrayRuntimeBuilder {
 		JvmAsm a = new JvmAsm();
 		// --gpu: the element read below must see the device's bytes if it holds them.
 		emitMaterialize(a, arr, materialize);
+		emitQuantizedArm(a, refs, arr, qm -> {
+			a.aload(arr);
+			a.aload(i);
+			a.invokestatic(qm.aref1());
+			a.areturn();
+		});
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
@@ -439,6 +487,13 @@ final class JvmFloatArrayRuntimeBuilder {
 		int arr = 0, i = 1, j = 2, d = 3, rank = 4, cols = 5;
 		JvmAsm a = new JvmAsm();
 		emitMaterialize(a, arr, materialize);
+		emitQuantizedArm(a, refs, arr, qm -> {
+			a.aload(arr);
+			a.aload(i);
+			a.aload(j);
+			a.invokestatic(qm.aref2());
+			a.areturn();
+		});
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
@@ -483,6 +538,12 @@ final class JvmFloatArrayRuntimeBuilder {
 		int arr = 0, subs = 1, d = 2, subsArr = 3, rank = 4, flat = 5, k = 6;
 		JvmAsm a = new JvmAsm();
 		emitMaterialize(a, arr, materialize);
+		emitQuantizedArm(a, refs, arr, qm -> {
+			a.aload(arr);
+			a.aload(subs);
+			a.invokestatic(qm.arefN());
+			a.areturn();
+		});
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
@@ -584,6 +645,14 @@ final class JvmFloatArrayRuntimeBuilder {
 			@Nullable MethodrefConstant written) {
 		int arr = 0, i = 1, val = 2, d = 3, rank = 4, idx = 5, dval = 6;
 		JvmAsm a = new JvmAsm();
+		// A quantized matrix has no slot to store into (.kb/quantized-matrix.md): the
+		// interpreter's sentence, word for word.
+		ConstantPool.StringConstant immutable = cp.addString(am.ik.rontolisp.LispNames.ASET
+				+ ": a quantized matrix is immutable (dequantize it into a packed float array to change it)");
+		ClassConstant rtExForQuantized = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		MethodrefConstant rtExInitForQuantized = cp.addMethodref(rtExForQuantized,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		emitQuantizedArm(a, refs, arr, qm -> emitThrow(a, rtExForQuantized, rtExInitForQuantized, immutable));
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
@@ -617,6 +686,14 @@ final class JvmFloatArrayRuntimeBuilder {
 			@Nullable MethodrefConstant written) {
 		int arr = 0, i = 1, j = 2, val = 3, d = 4, rank = 5, cols = 6, idx = 7, dval = 8;
 		JvmAsm a = new JvmAsm();
+		// A quantized matrix has no slot to store into (.kb/quantized-matrix.md): the
+		// interpreter's sentence, word for word.
+		ConstantPool.StringConstant immutable = cp.addString(am.ik.rontolisp.LispNames.ASET
+				+ ": a quantized matrix is immutable (dequantize it into a packed float array to change it)");
+		ClassConstant rtExForQuantized = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		MethodrefConstant rtExInitForQuantized = cp.addMethodref(rtExForQuantized,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		emitQuantizedArm(a, refs, arr, qm -> emitThrow(a, rtExForQuantized, rtExInitForQuantized, immutable));
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
@@ -662,6 +739,14 @@ final class JvmFloatArrayRuntimeBuilder {
 			MethodrefConstant asetN, @Nullable MethodrefConstant written) {
 		int arr = 0, subs = 1, val = 2, d = 3, subsArr = 4, rank = 5, flat = 6, k = 7, idx = 8, dval = 9;
 		JvmAsm a = new JvmAsm();
+		// A quantized matrix has no slot to store into (.kb/quantized-matrix.md): the
+		// interpreter's sentence, word for word.
+		ConstantPool.StringConstant immutable = cp.addString(am.ik.rontolisp.LispNames.ASET
+				+ ": a quantized matrix is immutable (dequantize it into a packed float array to change it)");
+		ClassConstant rtExForQuantized = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		MethodrefConstant rtExInitForQuantized = cp.addMethodref(rtExForQuantized,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		emitQuantizedArm(a, refs, arr, qm -> emitThrow(a, rtExForQuantized, rtExInitForQuantized, immutable));
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
@@ -695,6 +780,11 @@ final class JvmFloatArrayRuntimeBuilder {
 			MethodrefConstant longValueOf, MethodrefConstant arrayDims) {
 		int arr = 0, d = 1, rank = 2, result = 3, j = 4;
 		JvmAsm a = new JvmAsm();
+		emitQuantizedArm(a, refs, arr, qm -> {
+			a.aload(arr);
+			a.invokestatic(qm.dims());
+			a.areturn();
+		});
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
@@ -756,6 +846,15 @@ final class JvmFloatArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
 		int arr = 0, given = 1, rank = 2, giv = 3;
 		JvmAsm a = new JvmAsm();
+		emitQuantizedArm(a, refs, arr, qm -> {
+			a.aload(arr);
+			a.checkcast(qm.byteArrayClass());
+			a.iconst(4);
+			a.invokestatic(qm.qmInt());
+			a.istore(rank);
+			emitRankCheckAndReturn(cp, a, longClass, longIntValue, sbClass, sbInit, sbAppendStr, sbAppendInt,
+					sbToString, rtExClass, rtExInit, arr, given, rank, giv);
+		});
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
@@ -816,6 +915,11 @@ final class JvmFloatArrayRuntimeBuilder {
 			MethodrefConstant toGeneral, MethodrefConstant lengthHelper) {
 		int arr = 0, d = 1, rank = 2;
 		JvmAsm a = new JvmAsm();
+		emitQuantizedArm(a, refs, arr, qm -> {
+			a.aload(arr);
+			a.invokestatic(qm.length());
+			a.areturn();
+		});
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			int rankN = asm.label();
 			asm.aload(arr);
@@ -1028,6 +1132,10 @@ final class JvmFloatArrayRuntimeBuilder {
 	// Locals: 0=arr.
 	private static ArrayMethod buildElementType(ConstantPool cp, Refs refs) {
 		JvmAsm a = new JvmAsm();
+		emitQuantizedArm(a, refs, 0, qm -> {
+			a.ldcString(cp.addString(am.ik.rontolisp.LispNames.Q8_0));
+			a.areturn();
+		});
 		emitWidthDispatch(a, refs, 0, (asm, w) -> {
 			asm.ldcString(cp.addString(switch (w) {
 				case DOUBLE -> am.ik.rontolisp.LispNames.DOUBLE_FLOAT;
@@ -1050,6 +1158,8 @@ final class JvmFloatArrayRuntimeBuilder {
 			MethodrefConstant rtExInit) {
 		JvmAsm a = new JvmAsm();
 		ConstantPool.StringConstant message = cp.addString("not applicable to a packed float array");
+		ConstantPool.StringConstant quantizedMessage = cp.addString("not applicable to a quantized matrix");
+		emitQuantizedArm(a, refs, 0, qm -> emitThrow(a, rtExClass, rtExInit, quantizedMessage));
 		emitWidthDispatch(a, refs, 0, (asm, w) -> emitThrow(asm, rtExClass, rtExInit, message));
 		a.aload(0);
 		a.areturn();

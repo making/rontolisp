@@ -53,6 +53,7 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispEquality;
 import am.ik.rontolisp.LispFloatArray;
+import am.ik.rontolisp.LispQuantizedMatrix;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispHashTable;
@@ -1116,6 +1117,10 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispFloatArray fa) {
 				return fa.aref(subs);
 			}
+			if (args.get(0) instanceof LispQuantizedMatrix qm) {
+				// Dequantize-on-read: q * scale, a double (.kb/quantized-matrix.md).
+				return new LispDouble(qm.aref(subs));
+			}
 			if (args.get(0) instanceof LispIntVector iv) {
 				if (subs.length != 1) {
 					throw new LispEvalException(LispNames.AREF + ": a packed integer vector is rank 1");
@@ -1136,8 +1141,9 @@ public final class Environment implements Scope {
 			// fill pointer only limits the effective length).
 			int[] sizes = (args.get(0) instanceof LispString str) ? new int[] { str.capacity() }
 					: (args.get(0) instanceof LispFloatArray fa) ? fa.dims()
-							: (args.get(0) instanceof LispIntVector iv) ? new int[] { iv.length() }
-									: requireArray(LispNames.ARRAY_DIMENSIONS, args.get(0)).dimensions();
+							: (args.get(0) instanceof LispQuantizedMatrix qm) ? qm.dims()
+									: (args.get(0) instanceof LispIntVector iv) ? new int[] { iv.length() }
+											: requireArray(LispNames.ARRAY_DIMENSIONS, args.get(0)).dimensions();
 			LispVal dims = LispNil.INSTANCE;
 			for (int i = sizes.length - 1; i >= 0; i--) {
 				dims = new LispCons(new LispInteger(sizes[i]), dims);
@@ -1164,6 +1170,9 @@ public final class Environment implements Scope {
 				fa.aset(asDouble(value), subs);
 				return fa.aref(subs);
 			}
+			if (args.get(0) instanceof LispQuantizedMatrix) {
+				throw new LispEvalException(quantizedImmutable(LispNames.ASET));
+			}
 			if (args.get(0) instanceof LispIntVector iv) {
 				// Mask-store to the element width and return the value AS STORED, so the
 				// effective element value is consistent across backends and widths.
@@ -1188,6 +1197,10 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispFloatArray fa) {
 				return fa.readFlat(rowMajorIndex(LispNames.ROW_MAJOR_AREF, fa.totalSize(), args.get(1)));
 			}
+			if (args.get(0) instanceof LispQuantizedMatrix qm) {
+				return new LispDouble(
+						qm.elementAt(rowMajorIndex(LispNames.ROW_MAJOR_AREF, qm.totalSize(), args.get(1))));
+			}
 			if (args.get(0) instanceof LispIntVector iv) {
 				return new LispInteger(intVectorRead(LispNames.ROW_MAJOR_AREF, iv, (int) asLong(args.get(1))));
 			}
@@ -1209,6 +1222,9 @@ public final class Environment implements Scope {
 				// returned value matches what is stored across widths and backends.
 				fa.setElement(flat, asDouble(value));
 				return fa.readFlat(flat);
+			}
+			if (args.get(0) instanceof LispQuantizedMatrix) {
+				throw new LispEvalException(quantizedImmutable(LispNames.ROW_MAJOR_ASET));
 			}
 			if (args.get(0) instanceof LispIntVector iv) {
 				int flat = (int) asLong(args.get(1));
@@ -1279,6 +1295,11 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ARRAY_ELEMENT_TYPE, args, 1);
 			if (args.get(0) instanceof LispFloatArray fa) {
 				return new LispSymbol(fa.elementType());
+			}
+			if (args.get(0) instanceof LispQuantizedMatrix qm) {
+				// The format symbol (q8-0): what vec.lisp's GEMV dispatches on, and the
+				// answer no packed float array can give.
+				return new LispSymbol(qm.format().lispName());
 			}
 			if (args.get(0) instanceof LispIntVector iv) {
 				return iv.elementTypeSpec();
@@ -1590,6 +1611,12 @@ public final class Environment implements Scope {
 			return array;
 		}
 		throw new LispEvalException(fn + " expects an array, got " + val.print());
+	}
+
+	// The one refusal a quantized matrix gives: an element has no slot of its own (a
+	// value is q * scale over a 32-element block), so there is nothing to store into.
+	private static String quantizedImmutable(String fn) {
+		return fn + ": a quantized matrix is immutable (dequantize it into a packed float array to change it)";
 	}
 
 	// Requires a general (boxed) array. A packed double-float array is rejected with a
@@ -2415,6 +2442,30 @@ public final class Environment implements Scope {
 		String narrowFloatBitsName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS);
 		env.defineFunction(narrowFloatBitsName, new LispFunction(narrowFloatBitsName,
 				args -> FloatBitsWidening.narrow(LispNames.NARROW_FLOAT_BITS, args)));
+		// The block-quantized weight matrix (.kb/quantized-matrix.md): ggml's Q8_0 held
+		// verbatim, dequantized on read, immutable. The two %-accessors are what
+		// vec.lisp's integer-dot GEMV reads, so the scalar oracle folds the very
+		// integers the lane kernels fold.
+		String quantizeName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZE);
+		env.defineFunction(quantizeName,
+				new LispFunction(quantizeName, args -> QuantizedMatrices.quantize(quantizeName, args)));
+		String dequantizeName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DEQUANTIZE);
+		env.defineFunction(dequantizeName,
+				new LispFunction(dequantizeName, args -> QuantizedMatrices.dequantize(dequantizeName, args)));
+		String makeQuantizedName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_QUANTIZED_MATRIX);
+		env.defineFunction(makeQuantizedName,
+				new LispFunction(makeQuantizedName, args -> QuantizedMatrices.make(makeQuantizedName, args)));
+		String quantizedPName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P);
+		env.defineFunction(quantizedPName,
+				new LispFunction(quantizedPName, args -> QuantizedMatrices.isMatrix(quantizedPName, args)));
+		String quantizedQuantName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.QUANTIZED_QUANT_INTERNAL);
+		env.defineFunction(quantizedQuantName,
+				new LispFunction(quantizedQuantName, args -> QuantizedMatrices.quant(quantizedQuantName, args)));
+		String quantizedScaleName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.QUANTIZED_SCALE_INTERNAL);
+		env.defineFunction(quantizedScaleName,
+				new LispFunction(quantizedScaleName, args -> QuantizedMatrices.scale(quantizedScaleName, args)));
 		// random: a non-negative random number below the (positive) limit, of the same
 		// type as the limit (integer -> integer, float -> float). The interpreter and the
 		// JVM backend draw from ThreadLocalRandom (a per-thread generator seeded from the
@@ -3178,6 +3229,15 @@ public final class Environment implements Scope {
 			}
 			if (args.get(0) instanceof LispIntVector iv) {
 				return new LispInteger(iv.length());
+			}
+			if (args.get(0) instanceof LispQuantizedMatrix qm) {
+				// A rank-1 quantized matrix is a sequence of its dequantized values, as
+				// a packed vector is; a rank-2 one is not.
+				if (qm.rank() != 1) {
+					throw new LispEvalException(
+							LispNames.LENGTH + ": argument is not a sequence (rank-" + qm.rank() + " array)");
+				}
+				return new LispInteger(qm.totalSize());
 			}
 			long count = 0;
 			LispVal cur = args.get(0);

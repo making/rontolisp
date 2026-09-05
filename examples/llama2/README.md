@@ -148,11 +148,16 @@ The same model as ggml-org's `Qwen3.5-0.8B-BF16.gguf` -- one file, the tokenizer
 inside it, read by the shipped
 [`gguf:`](../../doc/en/reference/functions/gguf.md) package -- answers the same
 prompt with the same text, token for token, and needs no `tokenizer.json`
-(`Llama Qwen3.5-0.8B-BF16.gguf -m chat ...`). A `Q8_0` file is refused by
-name until the quantized weight matrix exists. `llama.cpp` on the same GGUF,
-same prompt, thinking off, tells the same cat's story in other words -- the
-same "Barnaby", a different sentence -- which is what two implementations at
-temperature 0 give each other; byte identity is the Q8_0 check's job.
+(`Llama Qwen3.5-0.8B-BF16.gguf -m chat ...`). The publisher's `Q8_0` file loads
+too, its weight matrices staying quantized (`rontolisp:quantize`'s type, 0.83 GB
+of Q8_0 blocks read straight into place) and its GEMVs running the integer-dot
+kernel. Against `llama.cpp` on the same GGUFs, **raw completion** of the same
+four prompt token ids at temperature 0 -- raw rather than chat, because the
+chat template rendering is the one component shown to differ on the Qwen
+family: the BF16 file is token-identical over the 64 tokens compared, and the
+Q8_0 file agrees for 60 tokens and then picks a different word (two Q8_0
+kernels are two fold orders, and this one is the scalar defun's bits, not
+ggml's); the method and the ids are in `.todo/672`'s record.
 
 Measured on the same box as the TinyLlama rows, JVM class output, f32 weights
 (the load line: 7.1-7.6 s for 1.75 GB of bf16 into 3 GB, of which

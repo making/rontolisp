@@ -15,6 +15,10 @@
 | `rontolisp:bits-float16` | `(rontolisp:bits-float16 15360)` | f16 ビットパターンが表す浮動小数点数 |
 | `rontolisp:widen-float-bits` | `(rontolisp:widen-float-bits bits :float16 dst)` | パックされた `(unsigned-byte 16)` ベクタの f16/bfloat16 ビットパターンを、パックされた浮動小数点配列へ一括で拡張する |
 | `rontolisp:narrow-float-bits` | `(rontolisp:narrow-float-bits src :bfloat16 dst)` | パックされた浮動小数点配列を、パックされた `(unsigned-byte 16)` ベクタの f16/bfloat16 ビットパターンへ一括で狭める |
+| `rontolisp:quantize` | `(rontolisp:quantize w 'q8-0)` | パックされた浮動小数点行列をブロック量子化した重み行列に（ggml の `Q8_0`。32 要素ブロックごとに binary16 のスケールと int8 の量子 32 個）。`vec:matvec` が整数内積 GEMV を走らせる被演算子。インタプリタと JVM |
+| `rontolisp:dequantize` | `(rontolisp:dequantize m 'single-float)` | 量子化行列を、指定した要素型の新しいパック浮動小数点配列に展開する |
+| `rontolisp:make-quantized-matrix` | `(rontolisp:make-quantized-matrix 'q8-0 '(rows cols))` | 全要素ゼロの量子化行列。`read-sequence` が Q8_0 テンソルのバイト列で埋める宛先 |
+| `rontolisp:quantized-matrix-p` | `(rontolisp:quantized-matrix-p m)` | 値が量子化行列なら `t`（`(typep m 'rontolisp:quantized-matrix)` でも可） |
 | `rontolisp:make-mutex` | `(rontolisp:make-mutex)` | 新しい相互排他ロック。不透明なハンドル(インタプリタと JVM では実体があり、WASM では no-op) |
 | `rontolisp:mutex-acquire` | `(rontolisp:mutex-acquire m)` | このスレッドが mutex を保持するまでブロックし、それを返します(通常は `rontolisp:with-mutex` を使用) |
 | `rontolisp:mutex-release` | `(rontolisp:mutex-release m)` | mutex の獲得を 1 回分解放し、それを返します |

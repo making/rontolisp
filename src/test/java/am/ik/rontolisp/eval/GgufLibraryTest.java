@@ -215,11 +215,28 @@ class GgufLibraryTest {
 				  (error (e) (format nil "~a" e)))
 				""".formatted(fixture.toString().replace("\\", "\\\\")));
 		assertThat(refusal).contains("t.q4_k").contains("Q4_K").contains("F32, F16").contains(":metadata-only");
-		String q8 = eval("""
-				(handler-case (gguf:read "%s" :only '("t.q8_0"))
-				  (error (e) (format nil "~a" e)))
-				""".formatted(fixture.toString().replace("\\", "\\\\")));
-		assertThat(q8).contains("t.q8_0").contains("Q8_0");
+	}
+
+	/**
+	 * A Q8_0 tensor loads as a quantized matrix ({@code .kb/quantized-matrix.md}): the
+	 * file's blocks are the matrix's own storage, so the fixture's block -- {@code d} =
+	 * 0.5 as a binary16, then the quants -16..15 -- reads back as -8.0 .. 7.5.
+	 */
+	@Test
+	void aQ80TensorLoadsAsAQuantizedMatrix() {
+		String program = """
+				(defparameter f (gguf:read "%s" :only '("t.q8_0")))
+				(defparameter m (gguf:tensor f "t.q8_0"))
+				""".formatted(fixture.toString().replace("\\", "\\\\"));
+		assertThat(eval(program + "m")).isEqualTo("#<quantized-matrix q8-0 (1 64)>");
+		assertThat(eval(program + "(list (array-element-type m) (rontolisp:quantized-matrix-p m)"
+				+ " (rontolisp::%quantized-scale m 0 0) (aref m 0 0) (aref m 0 16) (aref m 0 31))"))
+			.isEqualTo("(Q8-0 T 0.5 -8.0 0.0 7.5)");
+		assertThat(eval(program + "(getf (gguf:tensor-info f \"t.q8_0\") :bytes)")).isEqualTo("68");
+		// :element-type does not apply to a quantized tensor; it keeps its format.
+		assertThat(eval("""
+				(gguf:tensor (gguf:read "%s" :only '("t.q8_0") :element-type 'double-float) "t.q8_0")
+				""".formatted(fixture.toString().replace("\\", "\\\\")))).isEqualTo("#<quantized-matrix q8-0 (1 64)>");
 	}
 
 	@Test

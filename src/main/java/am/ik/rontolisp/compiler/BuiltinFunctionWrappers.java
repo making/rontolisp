@@ -188,6 +188,13 @@ public final class BuiltinFunctionWrappers {
 		// declare, exactly FILE_LENGTH/FILE_WRITE_DATE's reason above.
 		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS));
 		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS));
+		// The quantized-matrix primitives for the same reason: their JVM helpers are
+		// emitted only for a program that can build one (JvmLispCompiler's
+		// usesQuantized scan), and the WASM backends refuse two of them at compile time.
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZE));
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DEQUANTIZE));
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_QUANTIZED_MATRIX));
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P));
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 
@@ -1337,6 +1344,11 @@ public final class BuiltinFunctionWrappers {
 			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_FLOAT16)),
 			ternary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS)),
 			ternary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS)),
+			// The block-quantized weight matrix (.kb/quantized-matrix.md).
+			binary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZE)),
+			binary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DEQUANTIZE)),
+			binary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_QUANTIZED_MATRIX)),
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P)),
 			// open as a first-class value: (apply #'open path options) is the portable
 			// way to build an option list at run time (alexandria's
 			// with-input-from-file).

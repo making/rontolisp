@@ -5,6 +5,7 @@ import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispQuantizedMatrix;
 import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispVal;
 import java.nio.ByteBuffer;
@@ -45,6 +46,11 @@ record PackedBuffer(LispVal value, int width, int size) {
 		}
 		if (value instanceof LispIntVector iv) {
 			return new PackedBuffer(iv, iv.width() / 8, iv.length());
+		}
+		if (value instanceof LispQuantizedMatrix qm) {
+			// The ggml blocks as they are: one element = one byte, so a GGUF tensor is
+			// one transfer in and a written matrix is what llama.cpp reads back.
+			return new PackedBuffer(qm, 1, qm.blocks().length);
 		}
 		return null;
 	}
@@ -104,6 +110,7 @@ record PackedBuffer(LispVal value, int width, int size) {
 					};
 				}
 			}
+			case LispQuantizedMatrix qm -> bytes.get(qm.blocks(), start, n);
 			default -> throw new IllegalStateException();
 		}
 	}
@@ -123,6 +130,7 @@ record PackedBuffer(LispVal value, int width, int size) {
 					}
 				}
 			}
+			case LispQuantizedMatrix qm -> bytes.put(qm.blocks(), start, n);
 			default -> throw new IllegalStateException();
 		}
 	}

@@ -440,6 +440,11 @@ final class JvmExprCompiler {
 					JvmFloat16Compiler.compileNarrow(cons, ctx, className);
 					return;
 				}
+				if (JvmQuantizedMatrixCompiler.handles(qn.member())) {
+					// The block-quantized weight matrix (.kb/quantized-matrix.md).
+					JvmQuantizedMatrixCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			if (qn != null && LispNames.JAVA_PKG.equals(qn.pkg()) && JvmJavaInteropCompiler.handles(qn.member())) {

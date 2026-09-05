@@ -1591,8 +1591,19 @@ public final class JvmLispCompiler implements LispCompiler {
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS))
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS));
+		// The block-quantized weight matrix (.kb/quantized-matrix.md): a program can hold
+		// one only by naming a constructor -- quantize, or make-quantized-matrix (what
+		// gguf.lisp's Q8_0 arm calls, kept by the pruner only when gguf:read is) -- so
+		// the _qm* helpers, the byte[] arms of the _fv* helpers and the print branch are
+		// emitted on that scan alone; dequantize and the two raw accessors compile to a
+		// call-time signal without it (JvmQuantizedMatrixCompiler), and the packed float
+		// tier the matrix dequantizes into is forced on with it.
+		final boolean usesQuantized = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZE))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_QUANTIZED_MATRIX));
 		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead || this.needsHandleRuntime
-				|| usesFloat16Bits;
+				|| usesFloat16Bits || usesQuantized;
 
 		// Whether the program can produce a packed integer vector (a #N@(...) literal
 		// or make-array :element-type '(unsigned-byte 8|16|32)). When true, the rank-1
@@ -1828,6 +1839,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.printControls(printControls)
 			.printControlVariables(printControlVariables)
 			.usesFloatArray(usesFloatArray)
+			.usesQuantized(usesQuantized)
 			.typedLoops(!this.optimize.prefersSizeOverSpeed())
 			.usesIntArray(usesIntArray)
 			.usesTypedArray(usesTypedArray)
@@ -2430,7 +2442,13 @@ public final class JvmLispCompiler implements LispCompiler {
 				// every packed READ materializes first (.kb/gpu.md, "Device residency").
 				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
 						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.WRITTEN) : null,
-						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.MATERIALIZE) : null));
+						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.MATERIALIZE) : null,
+						usesQuantized));
+				if (usesQuantized) {
+					// The quantized matrix's own helpers; the _fv* byte[] arms above
+					// delegate to them.
+					built.addAll(JvmQuantizedMatrixRuntimeBuilder.build(cp, thisClass));
+				}
 			}
 			// The packed integer-vector helpers (_iv*) dispatch on instanceof long[]
 			// and delegate any other array shape down the chain (to the _fv* tier when
@@ -2467,7 +2485,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					cp.addMethodref(stringClass,
 							cp.addNameAndType(cp.addUtf8("replaceFirst"),
 									cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"))),
-					cp.addString("^#\\d*A?\\("), cp.addString("#d("), cp.addString("#f("), cp.addString("#bf16("));
+					cp.addString("^#\\d*A?\\("), cp.addString("#d("), cp.addString("#f("), cp.addString("#bf16("),
+					usesQuantized ? cp.addClass(cp.addUtf8("[B")) : null,
+					usesQuantized ? cp.addMethodref(thisClass,
+							cp.addNameAndType(cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.TO_STRING),
+									cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.TO_STRING_DESC)))
+							: null);
 		}
 		// The packed integer-vector print branch: a long[] renders as a plain #(...)
 		// vector (CL prints specialized vectors this way) by converting to a general
@@ -2683,7 +2706,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
-					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo, usesArrays)
+					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo, usesArrays, usesQuantized)
 			.methods();
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
@@ -5778,6 +5801,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesFloatArray = false;
 
 		/**
+		 * True when the program can build a block-quantized weight matrix
+		 * ({@code rontolisp:quantize} / {@code rontolisp:make-quantized-matrix}), so the
+		 * {@code _qm*} helpers exist ({@link JvmQuantizedMatrixRuntimeBuilder}). Shared
+		 * across every context.
+		 */
+		boolean usesQuantized = false;
+
+		/**
 		 * True when a {@code dotimes} in the typed subset compiles to a guarded primitive
 		 * loop ({@link JvmTypedLoopCompiler}); off under {@code --optimize=size}, which
 		 * declines the speed-for-size trades. Shared across every context.
@@ -6214,6 +6245,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.printControls = builder.printControls;
 			this.printControlVariables = builder.printControlVariables;
 			this.usesFloatArray = builder.usesFloatArray;
+			this.usesQuantized = builder.usesQuantized;
 			this.typedLoops = builder.typedLoops;
 			this.intFusion = builder.intFusion;
 			this.inlinableDefuns = builder.inlinableDefuns;
@@ -6508,6 +6540,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean printControlVariables = false;
 
 			private boolean usesFloatArray = false;
+
+			private boolean usesQuantized = false;
 
 			private boolean typedLoops = true;
 
@@ -6951,6 +6985,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesFloatArray(boolean usesFloatArray) {
 				this.usesFloatArray = usesFloatArray;
+				return this;
+			}
+
+			Builder usesQuantized(boolean usesQuantized) {
+				this.usesQuantized = usesQuantized;
 				return this;
 			}
 

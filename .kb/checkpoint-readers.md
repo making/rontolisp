@@ -1,8 +1,9 @@
 # Checkpoint readers: the `checkpoint` staging package and `safetensors:read`
 
-**Invariant: a published checkpoint's tensors land in PACKED float arrays, staged in
-bounded chunks, through a file walked front to back — same arrays on every backend, with
-and without `--simd`.**
+**Invariant: a published checkpoint's tensors land in PACKED float arrays (a GGUF's Q8_0
+tensor in a `rontolisp:quantized-matrix`, `.kb/quantized-matrix.md`), staged in bounded
+chunks, through a file walked front to back — same arrays on every backend, with and
+without `--simd`.**
 
 ## Libraries
 - `checkpoint` (`eval/checkpoint.lisp`, `eval.CheckpointLibrary`): `make-tensor`,

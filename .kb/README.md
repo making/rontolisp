@@ -152,6 +152,7 @@ last read the file, and nothing fails -- these files have no tests.
 - [simd-parallel.md](simd-parallel.md) -- `--parallel` over the `--simd` matrix products
 - [gpu.md](gpu.md) -- `--gpu` and `am.ik.gpu`, the never-throwing declining device layer
 - [vec.md](vec.md) -- the `vec` package, the packed float-array type, and its `--simd`/`--no-gc` acceleration layers
+- [quantized-matrix.md](quantized-matrix.md) -- `rontolisp:quantized-matrix`: ggml's Q8_0 held verbatim, and the integer-dot GEMV that is the defun bit for bit
 - [torch.md](torch.md) -- the `torch` package: tensors + reverse-mode autograd over the linalg kernels
 - [geom.md](geom.md) -- the `geom` package: solid modeling over the linalg kernels
 - [checkpoint-readers.md](checkpoint-readers.md) -- the `checkpoint` staging package and the `safetensors` reader

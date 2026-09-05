@@ -65,6 +65,8 @@ Matrix times vector (a fresh vector): `vec:matvec` is GEMV -- a rank-2 packed ma
 
 The [`ml/nn-vec.lisp` example](https://github.com/making/rontolisp/blob/develop/examples/ml/nn-vec.lisp) is a small XOR network whose single-float forward pass is built from `vec:matvec`.
 
+`W` may also be a **quantized matrix** -- [`rontolisp:quantize`](../reference/functions/rontolisp-quantize.md)'s type, ggml's `Q8_0`, which is what a `Q8_0` GGUF's weights load as -- against an `#f` or `#d` vector. That runs ggml's integer-dot shape (the activation quantized to int8 per block of 32, an exact integer dot per block, one double multiply-add per block), and unlike the float widths it is the scalar defun's answer bit for bit under `--simd` and `--parallel` too. Interpreter and JVM only.
+
 ## Memory: where vectors live, and what reclaims them
 
 A packed float array is an ordinary garbage-collected value on three of the four targets, and a block of WebAssembly linear memory on the fourth. Only the last one asks you to think about memory growth.

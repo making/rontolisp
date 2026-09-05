@@ -84,11 +84,12 @@
 ;; wasm-GC had TYPE_F32ARR); the --no-gc backend lowers vec: to native SIMD itself
 ;; and never splices this defun, so it is unaffected. Mirrors linalg::%la-make.
 (defun vec::%make-like (%vec-proto %vec-n)
-  (cond ((eq (array-element-type %vec-proto) 'single-float)
-         (make-array %vec-n :element-type 'single-float :initial-element 0.0))
-        ((eq (array-element-type %vec-proto) 'bfloat16)
-         (make-array %vec-n :element-type 'bfloat16 :initial-element 0.0))
-        (t (make-array %vec-n :element-type 'double-float :initial-element 0.0))))
+  (cond
+   ((eq (array-element-type %vec-proto) 'single-float)
+    (make-array %vec-n :element-type 'single-float :initial-element 0.0))
+   ((eq (array-element-type %vec-proto) 'bfloat16)
+    (make-array %vec-n :element-type 'bfloat16 :initial-element 0.0))
+   (t (make-array %vec-n :element-type 'double-float :initial-element 0.0))))
 
 (defun vec::%map2 (%vec-op %vec-a %vec-b)
   ;; %vec-op applied element-wise over two equal-length vectors -> a fresh vector.
@@ -312,13 +313,59 @@
 ;; jdk.incubator.vector). The reads widen f32 -> f64 and the store narrows back,
 ;; exactly as the accelerated kernel does.
 (defun vec:matvec (w x)
+  (if (rontolisp:quantized-matrix-p w)
+      (vec::%matvec-quantized (vec::%make-like x (car (array-dimensions w))) w
+                              x)
+      (let* ((dims (array-dimensions w))
+             (d (car dims))
+             (n (cadr dims))
+             (out (vec::%make-like x d)))
+        (dotimes (i d out)
+          (let ((acc 0.0))
+            (dotimes (j n) (setq acc (+ acc (* (aref w i j) (aref x j)))))
+            (setf (aref out i) acc))))))
+
+;; y = W x over a Q8_0 quantized matrix W (rontolisp:quantize, a GGUF's Q8_0
+;; tensor): ggml's Q8_0 x Q8_1 shape, runq.c's shape. x is quantized to int8 per
+;; block of 32 first -- sx = amax / 127 in double, q = (round (/ x sx)), CL's
+;; round-half-even, 0 where the block is all zero -- then each row folds, block by
+;; block, an INTEGER dot of the 32 weight quants against the 32 activation quants
+;; and ONE double multiply-add, isum * (sw * sx), into a double accumulator; the
+;; store narrows to out's width. Integer sums are exact in any order, so this
+;; defun and the --simd lane kernels (VecSimdKernels / JvmSimdVectorTemplate)
+;; agree BIT FOR BIT: the only floating-point steps are that one product and one
+;; add per block, in the same order on both. The dead quantized arm compiles on
+;; every backend; only the interpreter and the JVM can ever reach it
+;; (.kb/quantized-matrix.md).
+(defun vec::%matvec-quantized (out w x)
   (let* ((dims (array-dimensions w))
          (d (car dims))
          (n (cadr dims))
-         (out (vec::%make-like x d)))
+         (nb (floor n 32))
+         (xq (make-array n))
+         (xs (make-array nb :element-type 'double-float :initial-element 0.0)))
+    (dotimes (b nb)
+      (let ((amax 0.0) (base (* b 32)))
+        (dotimes (k 32)
+          (let ((v (abs (aref x (+ base k))))) (when (> v amax) (setq amax v))))
+        (let ((sx (/ amax 127.0)))
+          (setf (aref xs b) sx)
+          (dotimes (k 32)
+            (let ((j (+ base k)))
+              (setf (aref xq j)
+                    (if (= sx 0.0) 0 (round (/ (aref x j) sx)))))))))
     (dotimes (i d out)
       (let ((acc 0.0))
-        (dotimes (j n) (setq acc (+ acc (* (aref w i j) (aref x j)))))
+        (dotimes (b nb)
+          (let ((isum 0) (base (* b 32)))
+            (dotimes (k 32)
+              (let ((j (+ base k)))
+                (setq isum
+                 (+ isum (* (rontolisp::%quantized-quant w i j) (aref xq j))))))
+            (setq acc
+                  (+ acc
+                     (* isum
+                        (* (rontolisp::%quantized-scale w i b) (aref xs b)))))))
         (setf (aref out i) acc)))))
 
 ;; y = W x written into out (returned), allocating nothing -- the destination-passing
@@ -331,8 +378,10 @@
     (error "vec:matvec-into: out must not be the same vector as x"))
   (when (eq out w)
     (error "vec:matvec-into: out must not be the same array as w"))
-  (let* ((dims (array-dimensions w)) (d (car dims)) (n (cadr dims)))
-    (dotimes (i d out)
-      (let ((acc 0.0))
-        (dotimes (j n) (setq acc (+ acc (* (aref w i j) (aref x j)))))
-        (setf (aref out i) acc)))))
+  (if (rontolisp:quantized-matrix-p w)
+      (vec::%matvec-quantized out w x)
+      (let* ((dims (array-dimensions w)) (d (car dims)) (n (cadr dims)))
+        (dotimes (i d out)
+          (let ((acc 0.0))
+            (dotimes (j n) (setq acc (+ acc (* (aref w i j) (aref x j)))))
+            (setf (aref out i) acc))))))

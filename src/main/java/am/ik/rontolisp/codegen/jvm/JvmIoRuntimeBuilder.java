@@ -404,6 +404,13 @@ final class JvmIoRuntimeBuilder {
 
 	private final @Nullable PackedSequenceIo packedSequenceIo;
 
+	/**
+	 * Whether a quantized matrix -- a {@code byte[]} of ggml blocks behind an int header
+	 * ({@link JvmQuantizedMatrixRuntimeBuilder}) -- can exist in the program, so the bulk
+	 * transfer takes it as a buffer of bytes ({@code .kb/quantized-matrix.md}).
+	 */
+	private final boolean quantizedBuffer;
+
 	@Nullable private final MethodrefConstant fileLastModified;
 
 	@Nullable private final MethodrefConstant fileMkdirs;
@@ -458,12 +465,13 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
 			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo,
-			boolean arrayRuntime) {
+			boolean arrayRuntime, boolean quantizedBuffer) {
 		this.sockets = sockets;
+		this.quantizedBuffer = quantizedBuffer;
 		this.errorOutput = errorOutput;
 		this.listDirectory = listDirectory;
 		this.fileMeta = fileMeta;
-		this.packedSequenceIo = packedSequenceIo ? PackedSequenceIo.mint(cp) : null;
+		this.packedSequenceIo = packedSequenceIo ? PackedSequenceIo.mint(cp, thisClass) : null;
 		this.strvRef = arrayRuntime ? cp.addMethodref(thisClass, cp
 			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
 				: null;
@@ -666,10 +674,10 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
 			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo,
-			boolean arrayRuntime) {
+			boolean arrayRuntime, boolean quantizedBuffer) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
 				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
-				errorOutput, listDirectory, fileMeta, packedSequenceIo, arrayRuntime);
+				errorOutput, listDirectory, fileMeta, packedSequenceIo, arrayRuntime, quantizedBuffer);
 	}
 
 	/**
@@ -685,9 +693,10 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant doubleBufferGet, MethodrefConstant floatBufferPut, MethodrefConstant doubleBufferPut,
 			MethodrefConstant bbGet, MethodrefConstant bbGetShort, MethodrefConstant bbGetInt, MethodrefConstant bbPut,
 			MethodrefConstant bbPutShort, MethodrefConstant bbPutInt, MethodrefConstant outputStreamWriteBytes,
-			StringConstant boundsMessage) {
+			StringConstant boundsMessage, ClassConstant byteArrayClass, MethodrefConstant qmInt,
+			MethodrefConstant bbGetBytes, MethodrefConstant bbPutBytes) {
 
-		static PackedSequenceIo mint(ConstantPool cp) {
+		static PackedSequenceIo mint(ConstantPool cp, ClassConstant thisClass) {
 			ClassConstant byteBuffer = cp.addClass(cp.addUtf8("java/nio/ByteBuffer"));
 			ClassConstant floatBuffer = cp.addClass(cp.addUtf8("java/nio/FloatBuffer"));
 			ClassConstant doubleBuffer = cp.addClass(cp.addUtf8("java/nio/DoubleBuffer"));
@@ -726,7 +735,15 @@ final class JvmIoRuntimeBuilder {
 							cp.addNameAndType(cp.addUtf8("putInt"), cp.addUtf8("(I)Ljava/nio/ByteBuffer;"))),
 					cp.addMethodref(cp.addClass(cp.addUtf8("java/io/OutputStream")),
 							cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("([B)V"))),
-					cp.addString("read-sequence/write-sequence: :start/:end exceed the buffer size"));
+					cp.addString("read-sequence/write-sequence: :start/:end exceed the buffer size"),
+					cp.addClass(cp.addUtf8("[B")),
+					cp.addMethodref(thisClass,
+							cp.addNameAndType(cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.INT),
+									cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.INT_DESC))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([BII)Ljava/nio/ByteBuffer;"))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([BII)Ljava/nio/ByteBuffer;"))));
 		}
 	}
 
@@ -2892,12 +2909,56 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.GOTO);
 		emitU2(code, 0);
 		patchBranch(code, ifNotLong, code.size());
+		int gotoShaped4 = -1;
+		if (this.quantizedBuffer) {
+			// else if (seq instanceof byte[]) { base = 8 + 4 * _qmInt(seq, 4); width = 1;
+			// size = len - base } -- a quantized matrix's ggml blocks, one byte an
+			// element, so a GGUF tensor is one transfer (.kb/quantized-matrix.md).
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, io.byteArrayClass().index());
+			int ifNotByte = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, io.byteArrayClass().index());
+			code.add(Opcode.ICONST_4);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, io.qmInt().index());
+			code.add(Opcode.ICONST_4);
+			code.add(Opcode.IMUL);
+			code.add(Opcode.BIPUSH);
+			code.add(8);
+			code.add(Opcode.IADD);
+			code.add(Opcode.ISTORE);
+			code.add(BASE);
+			code.add(Opcode.ICONST_1);
+			code.add(Opcode.ISTORE);
+			code.add(WIDTH);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, io.byteArrayClass().index());
+			code.add(Opcode.ARRAYLENGTH);
+			code.add(Opcode.ILOAD);
+			code.add(BASE);
+			code.add(Opcode.ISUB);
+			code.add(Opcode.ISTORE);
+			code.add(SIZE);
+			gotoShaped4 = code.size();
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotByte, code.size());
+		}
 		// else return null (not a packed buffer -- declined)
 		code.add(Opcode.ACONST_NULL);
 		code.add(Opcode.ARETURN);
 		patchBranch(code, gotoShaped1, code.size());
 		patchBranch(code, gotoShaped2, code.size());
 		patchBranch(code, gotoShaped3, code.size());
+		if (gotoShaped4 >= 0) {
+			patchBranch(code, gotoShaped4, code.size());
+		}
 		// --- the stream --------------------------------------------------------
 		// if (handle instanceof Long) { entry = _streams[idx]; if (!(entry instanceof
 		// InputStream/OutputStream)) return null; stream = entry } else stream =
@@ -3092,6 +3153,31 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.GOTO);
 		emitU2(code, 0);
 		patchBranch(code, ifNotDouble2, code.size());
+		int gotoMoved3 = -1;
+		if (this.quantizedBuffer) {
+			// else if (seq instanceof byte[]) bb.get/put((byte[]) seq, base + s, n)
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, io.byteArrayClass().index());
+			int ifNotByte2 = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD);
+			code.add(BB);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, io.byteArrayClass().index());
+			emitBasePlusS(code, BASE, S);
+			code.add(Opcode.ILOAD);
+			code.add(N);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, (read ? io.bbGetBytes() : io.bbPutBytes()).index());
+			code.add(Opcode.POP);
+			gotoMoved3 = code.size();
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotByte2, code.size());
+		}
 		// else (long[]): for (k = 0; k < n; k++) one element of the width
 		code.add(Opcode.ICONST_0);
 		code.add(Opcode.ISTORE);
@@ -3196,6 +3282,9 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, ifLoopDone, code.size());
 		patchBranch(code, gotoMoved1, code.size());
 		patchBranch(code, gotoMoved2, code.size());
+		if (gotoMoved3 >= 0) {
+			patchBranch(code, gotoMoved3, code.size());
+		}
 		if (read) {
 			// return Long.valueOf(s + n)
 			code.add(Opcode.ILOAD);

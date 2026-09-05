@@ -79,6 +79,9 @@ it BY NAME at `compiler/UnsupportedFloatWidth`. `vec:` carries the width; `linal
   layout. `eval/VecSimdKernels`' mirror takes bare arrays, as its f32 kernels do. Only
   `widenBf16Into` / `narrowBf16Into` are header-free on both sides -- they are bulk buffer
   conversions, not bridge entries.
+- The Q8_0 quantized matrix is NOT a fourth width of this umbrella and not a float width at all
+  (`.kb/quantized-matrix.md`); `rontolisp:dequantize m 'bfloat16` narrows into this one through
+  `BFloat16.bits` / `_bf16Bits`.
 - **No element-wise bf16 kernel**: widening is one shift but NARROWING is not vectorized
   (round-to-nearest-even with a NaN guard), so an element-wise arm would be a scalar store loop.
   `.todo/696`.

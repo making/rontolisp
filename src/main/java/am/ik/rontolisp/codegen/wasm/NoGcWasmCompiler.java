@@ -368,6 +368,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 		}
 
+		// The block-quantized weight matrix (.kb/quantized-matrix.md): the interpreter
+		// and the JVM only, refused by name like the bfloat16 width.
+		for (String quantizedName : List.of(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZE),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DEQUANTIZE),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_QUANTIZED_MATRIX),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P))) {
+			if (referencesSymbol(program, quantizedName)) {
+				throw am.ik.rontolisp.compiler.UnsupportedFloatWidth.refuseQuantized("the --no-gc backend");
+			}
+		}
+
 		// Collect defuns and export directives. A --no-gc module is a pure-compute
 		// reactor, so only function definitions and export directives are allowed at top
 		// level; a stray expression would need a top-level init body (and most likely

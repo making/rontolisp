@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispQuantizedMatrix;
 import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
@@ -136,6 +137,13 @@ public final class VecSimd {
 			};
 		});
 		defineFn(globalEnv, evaluator, LispNames.VEC_MATVEC, 2, (name, args) -> {
+			if (args.get(0) instanceof LispQuantizedMatrix qm) {
+				// The integer-dot GEMV over a Q8_0 matrix (.kb/quantized-matrix.md):
+				// the defun bit for bit, so nothing here can change an answer. Any
+				// shape the kernels do not take declines to the defun, whose own
+				// error is the one the program would have met without the flag.
+				return quantizedMatvec(qm, args.get(1), parallel);
+			}
 			LispFloatArray w = array(name, args.get(0));
 			LispFloatArray x = array(name, args.get(1));
 			if (w.rank() != 2) {
@@ -356,6 +364,9 @@ public final class VecSimd {
 			return args.get(0);
 		});
 		defineFn(globalEnv, evaluator, LispNames.VEC_MATVEC_INTO, 3, (name, args) -> {
+			if (args.get(1) instanceof LispQuantizedMatrix qm) {
+				return quantizedMatvecInto(name, args.get(0), qm, args.get(2), parallel);
+			}
 			LispFloatArray out = array(name, args.get(0));
 			LispFloatArray w = array(name, args.get(1));
 			LispFloatArray x = array(name, args.get(2));
@@ -542,13 +553,78 @@ public final class VecSimd {
 		if (scalarDefun == null) {
 			throw new IllegalStateException("vec.lisp must be loaded before " + qualified + " can be accelerated");
 		}
+		boolean takesQuantized = LispNames.VEC_MATVEC.equals(name) || LispNames.VEC_MATVEC_INTO.equals(name);
 		globalEnv.defineFunction(qualified, new LispFunction(qualified, args -> {
 			if (args.size() != arity) {
 				throw new LispEvalException(qualified + " expects " + arity + " arguments, got " + args.size());
 			}
+			if (!takesQuantized && anyQuantized(args)) {
+				// Only the two GEMV members have a kernel for a quantized matrix; every
+				// other member hands the value to the defun, whose answer (an error,
+				// for all of them today) is the one the program gets without --simd.
+				return evaluator.applyGlobal(scalarDefun, args);
+			}
 			LispVal fast = body.apply(name, args);
 			return fast != null ? fast : evaluator.applyGlobal(scalarDefun, args);
 		}));
+	}
+
+	private static boolean anyQuantized(List<LispVal> args) {
+		for (LispVal a : args) {
+			if (a instanceof LispQuantizedMatrix) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * {@code vec:matvec} over a Q8_0 matrix: a rank-2 matrix against an {@code #f} or
+	 * {@code #d} vector at least as long as its rows, a result of the vector's width.
+	 * Anything else declines.
+	 */
+	private static @Nullable LispVal quantizedMatvec(LispQuantizedMatrix qm, LispVal x, boolean parallel) {
+		if (qm.rank() != 2) {
+			return null;
+		}
+		int rows = qm.rows();
+		int cols = qm.cols();
+		if (x instanceof LispSingleFloatArray fx && fx.totalSize() >= cols) {
+			return vector(VecSimdKernels.matvecQ8F(qm.blocks(), rows, cols, fx.data(), parallel));
+		}
+		if (x instanceof LispDoubleFloatArray dx && dx.totalSize() >= cols) {
+			return vector(VecSimdKernels.matvecQ8D(qm.blocks(), rows, cols, dx.data(), parallel));
+		}
+		return null;
+	}
+
+	/**
+	 * {@code vec:matvec-into} over a Q8_0 matrix: the destination and the vector share a
+	 * width ({@code #f} or {@code #d}) and the destination holds the rows; anything else
+	 * declines, and a destination aliasing the vector signals as the defun does.
+	 */
+	private static @Nullable LispVal quantizedMatvecInto(String name, LispVal out, LispQuantizedMatrix qm, LispVal x,
+			boolean parallel) {
+		if (qm.rank() != 2) {
+			return null;
+		}
+		int rows = qm.rows();
+		int cols = qm.cols();
+		if (out instanceof LispSingleFloatArray r && x instanceof LispSingleFloatArray fx && r.totalSize() >= rows
+				&& fx.totalSize() >= cols) {
+			requireDisjoint(name, r.data() == fx.data());
+			VecSimdKernels.matvecIntoQ8F(r.data(), qm.blocks(), rows, cols, fx.data(), parallel);
+			FloatArrayAccessHook.written(r.storage());
+			return out;
+		}
+		if (out instanceof LispDoubleFloatArray r && x instanceof LispDoubleFloatArray dx && r.totalSize() >= rows
+				&& dx.totalSize() >= cols) {
+			requireDisjoint(name, r.data() == dx.data());
+			VecSimdKernels.matvecIntoQ8D(r.data(), qm.blocks(), rows, cols, dx.data(), parallel);
+			FloatArrayAccessHook.written(r.storage());
+			return out;
+		}
+		return null;
 	}
 
 	/**
