@@ -14302,6 +14302,12 @@ cases:
         b"))
         (print (tokenizer:pre-tokenize :qwen2 "a
         b"))
+        ;; The GGUF tokenizer.ggml.pre SPELLINGS, which are strings rather than
+        ;; keywords: a family's own name for a shape it merely shares must reach that
+        ;; shape's scanner ("lfm2" -> Llama 3) and a different spelling a different one,
+        ;; so the two lines below must NOT agree.
+        (print (tokenizer:pre-tokenize "lfm2" "a 2025"))
+        (print (tokenizer:pre-tokenize "gpt-2" "a 2025"))
         ;; A byte-level BPE over a 25-token vocabulary: the merge loop, the specials and
         ;; Llama 3's ignore-merges.
         (let ((tk (tokenizer:make-bpe *ci-tok-tokens* *ci-tok-merges*
@@ -14343,6 +14349,8 @@ cases:
        " " b")
       ("a" "
       " " " " b")
+      ("a" " " "202" "5")
+      ("a" " 2025")
       (19 24)
       (0 19 24)
       (0 19)

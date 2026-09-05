@@ -81,10 +81,23 @@ starting:
 across `src/main` finds nothing. 670's "stories15M converted to GGUF" was llama.cpp's
 converter, not us. So (3) needs a minimal GGUF **writer** first.
 
-Price it on its second use, not this one: a writer is also how `.todo/672`'s Q8_0 reader
-gets fixtures, and how any future architecture gets them, without downloading anything.
-If a writer is about half a wave, (3) wins on that alone; if it is a wave, (2) is cheaper
-and this pin stays out of CI.
+**But a Lisp writer may not be needed at all, and there is now precedent in the repo.**
+2026-09-05, the same day: the added-token fix's pin is
+`examples/llama2/checkpoint-tokenizer-check.lisp` over a CHECKED-IN fixture built by
+`tokenizer-fixture.py` -- one tiny byte-level BPE emitted both as `tokenizer.json` +
+config AND as a GGUF metadata block, with ids taken from the Python `tokenizers` library
+as the oracle. Generated once, offline, committed as bytes; the repo reads it and never
+writes one.
+
+That is the shape (3) wants. A synthetic DeltaNet fixture can be generated the same way
+-- a script that is a development tool, not a dependency, and a few hundred KB of
+committed bytes. **So the writer question is about the SECOND use, not this one**: a Lisp
+GGUF writer is how `.todo/672`'s Q8_0 reader and any future architecture get fixtures
+generated in-language, and it may still be worth building for that. It is not a
+precondition for this pin.
+
+Check the precedent before assuming it transfers: `tokenizer-fixture.py` emits a metadata
+block, not tensor data, and a DeltaNet fixture needs real tensors in a real tensor table.
 
 State the limitation in whatever lands. A fixture assertion that is described as covering
 decoded text, and does not cover the architecture whose defect motivated it, is the shape

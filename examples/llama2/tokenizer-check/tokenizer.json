@@ -1,0 +1,566 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "<|im_start|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "<|im_end|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 123,
+      "content": "<think>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    },
+    {
+      "id": 124,
+      "content": "</think>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": false
+    }
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "ByteLevel",
+    "add_prefix_space": false,
+    "trim_offsets": true,
+    "use_regex": true
+  },
+  "post_processor": null,
+  "decoder": {
+    "type": "ByteLevel",
+    "add_prefix_space": true,
+    "trim_offsets": true,
+    "use_regex": true
+  },
+  "model": {
+    "type": "BPE",
+    "dropout": null,
+    "unk_token": null,
+    "continuing_subword_prefix": null,
+    "end_of_word_suffix": null,
+    "fuse_unk": false,
+    "byte_fallback": false,
+    "ignore_merges": false,
+    "vocab": {
+      "<|im_start|>": 0,
+      "<|im_end|>": 1,
+      ",": 2,
+      ".": 3,
+      "L": 4,
+      "O": 5,
+      "S": 6,
+      "a": 7,
+      "b": 8,
+      "c": 9,
+      "d": 10,
+      "e": 11,
+      "g": 12,
+      "h": 13,
+      "i": 14,
+      "k": 15,
+      "l": 16,
+      "m": 17,
+      "n": 18,
+      "o": 19,
+      "p": 20,
+      "r": 21,
+      "s": 22,
+      "t": 23,
+      "u": 24,
+      "v": 25,
+      "w": 26,
+      "y": 27,
+      "Ċ": 28,
+      "Ġ": 29,
+      "Ġt": 30,
+      "he": 31,
+      "Ġa": 32,
+      "ed": 33,
+      "hi": 34,
+      "Ġs": 35,
+      "Ġthe": 36,
+      "On": 37,
+      "ay": 38,
+      "er": 39,
+      "in": 40,
+      "ok": 41,
+      "si": 42,
+      "ser": 43,
+      "user": 44,
+      "Ġb": 45,
+      "Ġl": 46,
+      "Ġp": 47,
+      "Ġin": 48,
+      "Li": 49,
+      "She": 50,
+      "al": 51,
+      "am": 52,
+      "an": 53,
+      "ar": 54,
+      "as": 55,
+      "aw": 56,
+      "ce": 57,
+      "de": 58,
+      "day": 59,
+      "gi": 60,
+      "ig": 61,
+      "im": 62,
+      "it": 63,
+      "ky": 64,
+      "le": 65,
+      "ly": 66,
+      "lay": 67,
+      "nk": 68,
+      "nam": 69,
+      "on": 70,
+      "ou": 71,
+      "ov": 72,
+      "pon": 73,
+      "re": 74,
+      "rl": 75,
+      "red": 76,
+      "st": 77,
+      "ssi": 78,
+      "tsi": 79,
+      "tle": 80,
+      "upon": 81,
+      "was": 82,
+      "Ġok": 83,
+      "Ġuser": 84,
+      "ĠLi": 85,
+      "Ġday": 86,
+      "Ġgi": 87,
+      "Ġnam": 88,
+      "Ġou": 89,
+      "Ġred": 90,
+      "Ġupon": 91,
+      "Ġwas": 92,
+      "Ġto": 93,
+      "Ġthi": 94,
+      "Ġtim": 95,
+      "Ġassi": 96,
+      "Ġshe": 97,
+      "Ġsaw": 98,
+      "Ġsky": 99,
+      "Ġthere": 100,
+      "One": 101,
+      "Once": 102,
+      "Ġbal": 103,
+      "Ġbig": 104,
+      "Ġlit": 105,
+      "Ġlov": 106,
+      "Ġpar": 107,
+      "Ġplay": 108,
+      "ant": 109,
+      "stant": 110,
+      "tside": 111,
+      "ĠLily": 112,
+      "Ġgirl": 113,
+      "Ġnamed": 114,
+      "Ġoutside": 115,
+      "Ġthink": 116,
+      "Ġtime": 117,
+      "Ġassistant": 118,
+      "Ġball": 119,
+      "Ġlittle": 120,
+      "Ġloved": 121,
+      "Ġpark": 122
+    },
+    "merges": [
+      [
+        "Ġ",
+        "t"
+      ],
+      [
+        "h",
+        "e"
+      ],
+      [
+        "Ġ",
+        "a"
+      ],
+      [
+        "e",
+        "d"
+      ],
+      [
+        "h",
+        "i"
+      ],
+      [
+        "Ġ",
+        "s"
+      ],
+      [
+        "Ġt",
+        "he"
+      ],
+      [
+        "O",
+        "n"
+      ],
+      [
+        "a",
+        "y"
+      ],
+      [
+        "e",
+        "r"
+      ],
+      [
+        "i",
+        "n"
+      ],
+      [
+        "o",
+        "k"
+      ],
+      [
+        "s",
+        "i"
+      ],
+      [
+        "s",
+        "er"
+      ],
+      [
+        "u",
+        "ser"
+      ],
+      [
+        "Ġ",
+        "b"
+      ],
+      [
+        "Ġ",
+        "l"
+      ],
+      [
+        "Ġ",
+        "p"
+      ],
+      [
+        "Ġ",
+        "in"
+      ],
+      [
+        "L",
+        "i"
+      ],
+      [
+        "S",
+        "he"
+      ],
+      [
+        "a",
+        "l"
+      ],
+      [
+        "a",
+        "m"
+      ],
+      [
+        "a",
+        "n"
+      ],
+      [
+        "a",
+        "r"
+      ],
+      [
+        "a",
+        "s"
+      ],
+      [
+        "a",
+        "w"
+      ],
+      [
+        "c",
+        "e"
+      ],
+      [
+        "d",
+        "e"
+      ],
+      [
+        "d",
+        "ay"
+      ],
+      [
+        "g",
+        "i"
+      ],
+      [
+        "i",
+        "g"
+      ],
+      [
+        "i",
+        "m"
+      ],
+      [
+        "i",
+        "t"
+      ],
+      [
+        "k",
+        "y"
+      ],
+      [
+        "l",
+        "e"
+      ],
+      [
+        "l",
+        "y"
+      ],
+      [
+        "l",
+        "ay"
+      ],
+      [
+        "n",
+        "k"
+      ],
+      [
+        "n",
+        "am"
+      ],
+      [
+        "o",
+        "n"
+      ],
+      [
+        "o",
+        "u"
+      ],
+      [
+        "o",
+        "v"
+      ],
+      [
+        "p",
+        "on"
+      ],
+      [
+        "r",
+        "e"
+      ],
+      [
+        "r",
+        "l"
+      ],
+      [
+        "r",
+        "ed"
+      ],
+      [
+        "s",
+        "t"
+      ],
+      [
+        "s",
+        "si"
+      ],
+      [
+        "t",
+        "si"
+      ],
+      [
+        "t",
+        "le"
+      ],
+      [
+        "u",
+        "pon"
+      ],
+      [
+        "w",
+        "as"
+      ],
+      [
+        "Ġ",
+        "ok"
+      ],
+      [
+        "Ġ",
+        "user"
+      ],
+      [
+        "Ġ",
+        "Li"
+      ],
+      [
+        "Ġ",
+        "day"
+      ],
+      [
+        "Ġ",
+        "gi"
+      ],
+      [
+        "Ġ",
+        "nam"
+      ],
+      [
+        "Ġ",
+        "ou"
+      ],
+      [
+        "Ġ",
+        "red"
+      ],
+      [
+        "Ġ",
+        "upon"
+      ],
+      [
+        "Ġ",
+        "was"
+      ],
+      [
+        "Ġt",
+        "o"
+      ],
+      [
+        "Ġt",
+        "hi"
+      ],
+      [
+        "Ġt",
+        "im"
+      ],
+      [
+        "Ġa",
+        "ssi"
+      ],
+      [
+        "Ġs",
+        "he"
+      ],
+      [
+        "Ġs",
+        "aw"
+      ],
+      [
+        "Ġs",
+        "ky"
+      ],
+      [
+        "Ġthe",
+        "re"
+      ],
+      [
+        "On",
+        "e"
+      ],
+      [
+        "On",
+        "ce"
+      ],
+      [
+        "Ġb",
+        "al"
+      ],
+      [
+        "Ġb",
+        "ig"
+      ],
+      [
+        "Ġl",
+        "it"
+      ],
+      [
+        "Ġl",
+        "ov"
+      ],
+      [
+        "Ġp",
+        "ar"
+      ],
+      [
+        "Ġp",
+        "lay"
+      ],
+      [
+        "an",
+        "t"
+      ],
+      [
+        "st",
+        "ant"
+      ],
+      [
+        "tsi",
+        "de"
+      ],
+      [
+        "ĠLi",
+        "ly"
+      ],
+      [
+        "Ġgi",
+        "rl"
+      ],
+      [
+        "Ġnam",
+        "ed"
+      ],
+      [
+        "Ġou",
+        "tside"
+      ],
+      [
+        "Ġthi",
+        "nk"
+      ],
+      [
+        "Ġtim",
+        "e"
+      ],
+      [
+        "Ġassi",
+        "stant"
+      ],
+      [
+        "Ġbal",
+        "l"
+      ],
+      [
+        "Ġlit",
+        "tle"
+      ],
+      [
+        "Ġlov",
+        "ed"
+      ],
+      [
+        "Ġpar",
+        "k"
+      ]
+    ]
+  }
+}
