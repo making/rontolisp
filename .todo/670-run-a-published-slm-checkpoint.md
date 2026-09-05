@@ -143,6 +143,35 @@ needs (`llama.cpp` takes about three minutes to build). LFM2.5's GGUFs were the 
 genuinely missing on dorian and were fetched on 2026-09-05 from `LiquidAI/`'s own repository.
 None of it belongs in the repo.
 
+## Certified green, 2026-09-05, at develop `4358af09`
+
+Everything below ran on **GB10 alone**, and that is a difference from 2026-09-03 worth
+stating rather than glossing: orchestrator A's session ENDED mid-wave, after `.todo/688`
+pushed and before it could run the authoritative suite or the merged native pass it had
+committed to. The whole verification burden moved to this box, so there is no cross-box
+comparison this time and no accounted-for delta to read -- one machine, one set of numbers,
+all four runs over the same head with every worktree clean.
+
+| run | box | result | ran at |
+| --- | --- | --- | --- |
+| full suite (GPU legs included) | GB10 | 10607 / 0 / 0, 189 skipped, 231 reports | `4358af09` |
+| native `CiSpecE2eTest` | GB10 | 2000 / 0 / 0 | `4358af09` |
+| `ExamplesE2eTest` llama2 slice | GB10 | 39 / 0 / 0 | `4358af09` |
+| GPU classes within the suite | GB10 | `GpuTest` 57, `LinalgGpuTest` 40, both 0 skipped | `4358af09` |
+
+An earlier identical pass ran at `7fc9cb80` (native 2000, suite 10597, examples 39) before
+`.todo/487`'s six commits; both are recorded because the second is what certifies the head.
+
+**Why the native run mattered more than usual this wave:** `.todo/672` and `.todo/690` each
+added a `ci-spec.yaml` case and `.todo/691` changed one, and NONE of them had run on a
+native binary -- every lane was told to skip it because a single merged pass was going to
+cover all four changes, and the session that owed that pass ended. A verification that is
+owed by one party and skipped by everyone else is a gap that looks exactly like coverage
+until someone checks who actually ran it.
+
+`MetalGpuTest` 54 skips (no Metal on Linux) is the whole of the 189-skip figure's device
+component, unchanged.
+
 ## Certified green, 2026-09-03, at develop `080b3d75`
 
 Both orchestrators stopped here, every worktree clean.
