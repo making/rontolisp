@@ -86,15 +86,22 @@ spread. What replaces it:
   pays depends on how its work is cut up.** Qwen3.5's Gated DeltaNet does 576 small
   128x128 GEMVs per token; LFM2.5 does about 30 big matvecs. Dispatch cost rises with
   thread count while per-thread work shrinks, so a model paying more of it peaks earlier.
-- **The signature is a saturation KNEE at a model-specific thread count**, and it is the
-  finding, not the bandwidths. From the two tight cells (medians, 3-7 runs): 8 -> 16
-  threads is x1.225 for LFM2.5 and x1.129 for Qwen3.5; 16 -> 32 is x1.053 for LFM2.5 and
-  **x0.994 for Qwen3.5, which goes DOWN**. Qwen3.5 is finished by 16 threads; LFM2.5 is
-  still climbing at 32.
-- **At ONE thread the two models are indistinguishable** -- 9.97 against 9.12 GB/s with
-  overlapping spreads. That is what rules the alternative out: locality would show the
-  per-model difference on both legs, and it shows on neither at one thread. The whole
-  difference is in how far each model scales.
+- **The signature is a model-specific SATURATION POINT**, and it is the finding, not the
+  bandwidths. It is carried entirely by within-model scaling -- tok/s over tok/s, same
+  model, same binary, no byte estimate anywhere. 1 -> 32 threads is 2.13 -> 9.30 for
+  LFM2.5 (**4.37x**) against 2.95 -> 8.71 for Qwen3.5 (**2.95x**); stepwise, 8 -> 16 is
+  x1.225 against x1.129, and 16 -> 32 is x1.053 against x0.994. **Qwen3.5 is saturated by
+  16 threads; LFM2.5 is still climbing at 32.** Say saturated, NOT "loses ground": 0.6%
+  on a median of 3-7 runs with co-tenants present is a plateau with noise on it, not a
+  turnover. A genuine decrease with added threads would be the stronger claim -- locality
+  cannot explain it at all -- and it is held in reserve until a quiet box can support it.
+- One-thread figures point the same way but cannot carry weight on their own: 9.97
+  against 9.12 GB/s with overlapping spreads. **That is a cross-model GB/s comparison, so
+  it divides by the parameter-count GB/token estimate, which is activation-blind and omits
+  exactly the recurrent state Qwen3.5 has.** If Qwen3.5's true bytes/token exceed 3.2 the
+  two are not indistinguishable -- the error runs against the conclusion, which is why it
+  is named here rather than left for a reader to find. The scaling curves above do not
+  need this leg.
 
 Two independent routes reached this: dorian's knee above, and GB10 measuring the same
 41-42 Gelem/s at BOTH 4.2 MB and 67 MB of weights, which a DRAM ceiling has no reason to
