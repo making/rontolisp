@@ -1,57 +1,55 @@
-# 701. Chat templates are hand-written guesses that nothing checks; two of three families diverge from the model's own
+# 701. Diff every checkpoint's own `tokenizer.chat_template` against the hand-written one -- a measurement, not a renderer
 
-Difficulty: Medium
+Difficulty: Low
 
-Filed 2026-09-05 from three temperature-0 comparisons against `llama.cpp` on the same
-GGUF, taken by three lanes for three other reasons:
+Filed 2026-09-05, rewritten the same day. **The evidence this item was filed on has been
+reassigned**: it was three temperature-0 comparisons against `llama.cpp` in which Qwen3.5
+and Qwen3-0.6B agreed in raw completion and diverged in chat mode while LFM2.5 agreed in
+chat mode, first read as "our Qwen template is wrong" and then widened to "hand-written
+templates are the defect". A token trace showed the divergence was never in the template
+RENDERING but in the TOKENIZATION of the rendered string, and that defect is fixed under
+`.todo/489` and recorded in `.kb/tokenizers.md` -- the section below keeps the account.
+**This item does not cite those three divergences.** What it asks is narrower and cheap.
+
+## The measurement
+
+Every checkpoint ships its own `tokenizer.chat_template` (`tokenizer_config.json`; a
+GGUF's `tokenizer.chat_template`). `examples/llama2/llama2.lisp` renders a hand-written
+per-family approximation (`*chatml*`, `*chatml-think-off*`, the row's `:chat`). Nobody has
+shown one of ours renders a wrong STRING -- `.todo/678`'s lane verified LFM2.5's by
+reading its jinja -- and nobody has shown the others render the right one. One script
+settles it: render each model's own template for the one-user-turn case (Python's
+`jinja2`, or `llama-cli --verbose-prompt`, whichever is on the box) and diff against what
+`LLAMA2_TRACE=1` shows we feed, across every model on disk -- Qwen3.5-0.8B, Qwen3-0.6B,
+LFM2.5-1.2B, TinyLlama-1.1B-Chat, SmolLM2-135M/360M-Instruct.
+
+- **No template diverges** -> close this item with that as the finding. We then KNOW the
+  approximations are right for every family we support, rather than believing it because
+  nothing has caught fire.
+- **One diverges** -> the item has evidence, and it arrived before a user did. Whether the
+  answer is then to fix that template or to render the model's own (a jinja subset) is
+  decided on that evidence, not on this item's history.
+
+Owner: unassigned for the next wave; the other orchestrator has offered to take it.
+
+## What the original evidence turned out to be (kept so nobody re-derives it)
 
 | model | raw completion (no template either side) | `-m chat` against `llama-cli`'s jinja |
 | --- | --- | --- |
-| LFM2.5-1.2B-Instruct | -- | **identical**, 581 characters (`.todo/678`) |
-| Qwen3.5-0.8B | **identical**, 64 ids, prompt ids proven equal first (`.todo/677`) | diverges after the first sentence ("the same Barnaby, a different story") |
-| Qwen3-0.6B | **identical**, 64 tokens of text (`.todo/489`) | diverges after eleven words |
+| LFM2.5-1.2B-Instruct | -- | identical, 581 characters (`.todo/678`) |
+| Qwen3.5-0.8B | identical, 64 ids, prompt ids proven equal first (`.todo/677`) | diverged after the first sentence |
+| Qwen3-0.6B | identical, 64 tokens of text (`.todo/489`) | diverged after eleven words |
 
-**The signature: raw completion agrees, chat diverges.** It localises the fault to prompt
-construction with no arithmetic investigation at all, and it finds the next instance in
-a single run -- one raw comparison and one chat comparison per model is the test.
-
-**The defect is not "the Qwen arm is wrong"; it is that the templates are hand-written
-at all.** Every checkpoint ships its own `tokenizer.chat_template` (in
-`tokenizer_config.json`, and in a GGUF's `tokenizer.chat_template`); `llama.cpp` renders
-that; `examples/llama2/llama2.lisp` renders a per-family approximation from the
-architecture row (`*chatml*`, `*chatml-think-off*`, `:chat`), and nothing at the point of
-use says whether the two agree. LFM2.5 passing is not evidence that its template is
-right by construction -- `.todo/678`'s lane established it by reading LFM2.5's jinja
-AFTERWARDS and showing it renders the same string. Two of three families diverge; the
-third matches by a coincidence someone verified retroactively. Fixing Qwen alone would
-leave the mechanism that produced the bug, and make the next family a coin flip that
-reads as done (`.todo/670` rule 2).
-
-## Three options -- the next lane picks, with the tradeoff visible
-
-1. **Narrow**: fix the Qwen rendering. The likeliest suspect is the think block --
-   what `enable_thinking=False` renders, where the newlines fall, whether a system turn
-   is injected by default. Cheap, and leaves the mechanism intact.
-2. **Real**: render the model's own `tokenizer.chat_template`. Needs a jinja subset (the
-   templates use `for`, `if`/`elif`, `set`, string methods, `|tojson`, `loop.first`,
-   `messages[0].role`) -- genuine work, and the only version where a new family is
-   correct by construction rather than by someone remembering to diff two prompts.
-3. **Cheap middle, possibly the right first step**: keep the hand-written templates but
-   VERIFY them -- render the model's own template at load (a subset is enough for the
-   one-user-turn case), diff against the row's, and fail loudly on disagreement. Turns a
-   silent wrong answer into a startup error without a full renderer, and turns the
-   raw-vs-chat asymmetry into a test rather than a discovery.
-
-## Whichever option
-
-- **Diff the two rendered prompts before touching anything.** `llama-cli --verbose-prompt
-  -st` prints the ids of what it fed the model; `LLAMA2_TRACE=1` prints ours. Same model,
-  same user message, thinking off on both sides. The first differing id is the defect.
-- The bar afterwards: identical ids in, identical ids out, at temperature 0 with
-  `--repeat-penalty 1.0 --top-k 0 --top-p 1.0 --min-p 0`, for Qwen3-0.6B, Qwen3.5-0.8B
-  AND LFM2.5 (the one that passes today must keep passing by construction, not by luck).
-- The README's Qwen3.5 paragraph explains the divergence as "what two implementations at
-  temperature 0 give each other". It is not; the raw runs prove the arithmetic identical.
-  Rewrite it.
-- Cross-reference from `.todo/677` when it closes (rule 9: the child that owns the fact
-  carries it).
+`LLAMA2_TRACE=1` on Qwen3.5-0.8B in chat mode fed ids 13314 `<th`, 741 `ink`, 29 `>`
+where `llama.cpp` feeds the one id of `<think>`. `load-hf-bpe-tokenizer` matched whole
+only the `added_tokens` flagged `"special": true`; the `tokenizers` library matches EVERY
+added token whole (`special` only governs `skip_special_tokens` on decode). Qwen3-0.6B
+and Qwen3.5 carry `<think>`, `</think>` and `<tool_call>` with `"special": false` (12 of
+26 added tokens). **The families that matched are the ones with nothing for this bug to
+bite -- LFM2.5's six non-special added tokens are absent from its template, SmolLM2 has
+none at all.** The GGUF reader had the same hole one level down: token type 3 (control)
+taken as special and type 4 (user-defined) not, both of which `llama.cpp` matches whole.
+The signature that found it -- raw completion agrees, chat diverges -- is still the
+one-run test for the next instance: the think block only appears in the chat path. The
+orchestrators' two earlier framings ("the Qwen arm is wrong", then "hand-written
+templates are the defect") were both written before the trace and did not survive it.

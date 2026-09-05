@@ -151,6 +151,13 @@
 ;; run.c's -m: "generate" continues the prompt; "chat" wraps it in the model's
 ;; chat template (the families that have one, with thinking off)
 (defparameter *mode* (flag-or-env "-m" "LLAMA2_MODE" "generate"))
+;; -w: the width the weight MATRICES are held at -- "f32" (the default: a
+;; published bf16 / f16 checkpoint is widened as it is read) or "bf16" (the
+;; file's own bits, half the bytes a token streams; interpreter and JVM only).
+;; The norms, the biases and every activation stay f32 whichever is chosen:
+;; the accelerated pairing is bf16 weights against f32 activations and
+;; nothing else (.kb/bfloat16.md), so a bf16 activation anywhere is a defect.
+(defparameter *weights* (flag-or-env "-w" "LLAMA2_WEIGHTS" "f32"))
 ;; LLAMA2_TRACE=1: every token id and its text on stderr as it is produced
 (defparameter *trace* (env-or "LLAMA2_TRACE" nil))
 
@@ -158,6 +165,33 @@
 ;;; The checkpoint is raw little-endian int32 / float32, exactly what run.c
 ;;; mmaps. Floats go straight into packed single-float arrays: `read-sequence`
 ;;; over a packed float array reads raw IEEE-754 elements in bulk.
+
+(defun weight-element-type ()
+  ;; The packed array element type -w asks for.
+  (cond ((string= *weights* "f32") 'single-float)
+        ((string= *weights* "bf16") 'bfloat16)
+        (t (error "-w ~a: the weight width is f32 or bf16" *weights*))))
+
+(defun as-f32-vector (v)
+  ;; A rank-1 weight (a norm, a bias, a per-head scalar) as a packed
+  ;; single-float vector: the forward pass keeps every element-wise operand and
+  ;; every activation at f32 whatever width the matrices were loaded at, so
+  ;; the readers hand rank-1 tensors through here and nothing else touches a
+  ;; vector of the weight width.
+  (if (eq (array-element-type v) 'single-float)
+      v
+      (let ((out
+             (make-array (length v)
+                         :element-type 'single-float
+                         :initial-element 0.0)))
+        (dotimes (i (length v) out) (setf (aref out i) (aref v i))))))
+
+(defun embedding-row (emb token dim)
+  ;; Row TOKEN of the embedding table as a fresh packed single-float vector:
+  ;; the activation the layers start from, f32 whatever the table's width
+  ;; (linalg:row declines a bfloat16 matrix, and the copy is dim elements).
+  (let ((x (make-array dim :element-type 'single-float :initial-element 0.0)))
+    (dotimes (i dim x) (setf (aref x i) (aref emb token i)))))
 
 (defun read-i32 (s)
   ;; A little-endian signed 32-bit integer.
@@ -426,6 +460,10 @@
   ;; option keeps its default -- the table degenerates to :attention + :swiglu
   ;; per block. The one thing the FILE decides rather than the family is the RoPE
   ;; layout: run.c rotates adjacent pairs, so :pairs goes in front of the row.
+  ;; Its weights are f32 in the file, and stay so.
+  (unless (eq (weight-element-type) 'single-float)
+    (error "-w ~a: a .bin checkpoint is f32; bf16 weights need a safetensors or GGUF file"
+           *weights*))
   (with-open-file (s path :element-type '(unsigned-byte 8))
     (let* ((dim (read-i32 s))
            (hidden (read-i32 s))
@@ -554,7 +592,9 @@
   (vec:add v (vec:ones (length v) :element-type 'single-float)))
 
 (defun squeeze-middle (a)
-  ;; A [c, 1, k] conv1d weight as the c x k matrix the conv step takes.
+  ;; A [c, 1, k] conv1d weight as the c x k matrix the conv step takes -- at
+  ;; f32 whatever the file's width: the step reads it element by element
+  ;; (causal-conv.lisp), and it is kernel x channels small.
   (let* ((dims (array-dimensions a))
          (c (first dims))
          (k (third dims))
@@ -570,13 +610,12 @@
   ;; its gate row i.
   (let* ((dim (array-dimension w 1))
          (rows (* n-heads hs))
+         (etype (array-element-type w)) ; the two halves keep the weight width
          (wq
-          (make-array (list rows dim)
-                      :element-type 'single-float
-                      :initial-element 0.0))
+          (make-array (list rows dim) :element-type etype :initial-element 0.0))
          (gate
           (make-array (list rows dim)
-                      :element-type 'single-float
+                      :element-type etype
                       :initial-element 0.0)))
     (dotimes (h n-heads)
       (dotimes (i hs)
@@ -636,14 +675,18 @@
                                     (or (starts-with name prefix)
                                         (string= name "lm_head.weight")
                                         (and (not qwen35)
-                                             (starts-with name "model."))))))
+                                             (starts-with name "model."))))
+                            :element-type (weight-element-type)))
          (n-att (if lfm2 "operator_norm" "input_layernorm"))
          (n-ffn (if lfm2 "ffn_norm" "post_attention_layernorm"))
          (per-layer
           (lambda (f)
             (let ((v (make-array n-layers)))
               (dotimes (l n-layers v) (setf (aref v l) (funcall f l)))))))
-    (labels ((tensor (name) (gethash name tensors))
+    (labels ((tensor (name)
+               ;; a matrix at the weight width; a vector always at f32
+               (let ((v (gethash name tensors)))
+                 (if (and v (= (array-rank v) 1)) (as-f32-vector v) v)))
              (layer-tensor (l suffix)
                (tensor (format nil "~alayers.~a.~a" prefix l suffix)))
              (norm-tensor (l suffix)
@@ -894,12 +937,16 @@
                      (and (starts-with name "blk.")
                           (parse-integer name :start 4 :junk-allowed t))))
                 (when (or (null blk) (< blk n-layers)) (push name names))))))
-         (file (gguf:read path :only wanted))
+         (file
+          (gguf:read path :only wanted :element-type (weight-element-type)))
          (per-layer
           (lambda (f)
             (let ((v (make-array n-layers)))
               (dotimes (l n-layers v) (setf (aref v l) (funcall f l)))))))
-    (labels ((tensor (name) (gguf:tensor file name))
+    (labels ((tensor (name)
+               ;; a matrix at the weight width; a vector always at f32
+               (let ((v (gguf:tensor file name)))
+                 (if (and v (= (array-rank v) 1)) (as-f32-vector v) v)))
              (layer-tensor (l suffix)
                (tensor (format nil "blk.~a.~a" l suffix)))
              (required (l suffix)
@@ -1681,7 +1728,7 @@
 
 (defun forward (model state token pos)
   ;; -> the logits over the vocabulary
-  (let ((x (linalg:row (getf model :emb) token))
+  (let ((x (embedding-row (getf model :emb) token (getf model :dim)))
         (layers (getf model :layers))
         (emb-mult (getf model :emb-mult))
         (logit-mult (getf model :logit-mult)))
@@ -1856,10 +1903,11 @@
               *prompt*))
          (state (make-state model)))
     (format *error-output*
-            "loaded ~a: dim=~a hidden=~a layers=~a heads=~a kv-heads=~a vocab=~a seq-len=~a in ~a ms (tokenizer + kv cache ~a ms)~%"
+            "loaded ~a: dim=~a hidden=~a layers=~a heads=~a kv-heads=~a vocab=~a seq-len=~a weights=~a in ~a ms (tokenizer + kv cache ~a ms)~%"
             *checkpoint* (getf model :dim) (getf model :hidden)
             (getf model :n-layers) (getf model :n-heads)
             (getf model :n-kv-heads) (getf model :vocab) (getf model :seq-len)
-            (- t1 t0) (- (get-internal-real-time) t1))
+            (array-element-type (getf model :wcls)) (- t1 t0)
+            (- (get-internal-real-time) t1))
     (setq *rng-state* (logand *seed* +mask64+))
     (generate model state tk prompt *steps*)))
