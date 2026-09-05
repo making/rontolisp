@@ -278,6 +278,12 @@ unchanged within noise (Qwen3.5 2.8 s against 2.6-3.0 s before; the byte reader 
 the JVM's workaround for the same defect), and the interpreter leg, dead before, is 12.2 s
 for SmolLM2-135M. The load column in the README stands.
 
+**One caveat on the f32 chat rows above**: they were taken before the added-token fix,
+over a chat prompt whose think block was three ids (Qwen3.5 24 prompt ids, now 21;
+Qwen3-0.6B likewise). tok/s is per generated token and the decode reads the same
+weights, so the rows stand as throughput; the first bf16 run should take its f32 arm
+again over the current prompt anyway, since the comparison is within one window.
+
 **Left unfinished by this lane, all filed:** `.todo/675`'s remainder (the `#bf16`
 destination, interface below in 675); the bf16 rungs themselves (this item, wave 2);
 `.todo/697` (the `--parallel` default), `.todo/698` (`subseq` of an adjustable packed
