@@ -1064,8 +1064,9 @@
 ;;; per token float32 score, int32 length, UTF-8 bytes -- is the SentencePiece
 ;;; shape (pieces with scores, the dummy prefix space, byte-fallback pieces);
 ;;; a Hugging Face checkpoint's tokenizer.json is the byte-level BPE shape
-;;; (vocab + ranked merges + added tokens), whose pre-tokenizer the
-;;; architecture row names.
+;;; (vocab + ranked merges + added tokens), whose pre-tokenizer the file
+;;; itself describes -- SmolLM2 and TinyLlama are both model_type llama, and
+;;; only the file tells a byte-level BPE from a SentencePiece one.
 
 (defun load-tokenizer (path vocab)
   ;; tokenizer.bin -> a SentencePiece tokenizer with llama2.c's BOS 1 / EOS 2.
@@ -1293,12 +1294,90 @@
   ;; object with a "content"; absent or null is nil.
   (cond ((stringp v) v) ((hash-table-p v) (gethash "content" v)) (t nil)))
 
-(defun load-hf-tokenizer (dir kind)
+(defun json-null-p (v) (or (null v) (eq v 'null)))
+
+(defun split-regex-kind (regex fallback)
+  ;; A Split pre-tokenizer's regex -> the kind whose scanner it is, told apart
+  ;; by the one clause that differs (tokenizers.lisp lists them): the number
+  ;; run `\p{N}{1,3}` is Llama 3's, a lone `\p{N}` Qwen 2.5 / 3's, and the
+  ;; word class `[\p{L}\p{M}]+` Qwen 3.5's. FALLBACK for a regex none of
+  ;; those matches -- the architecture row's kind, or nil.
+  (cond ((search "[\\p{L}\\p{M}]+" regex) :qwen35)
+        ((search "\\p{N}{1,3}" regex) :llama3)
+        ((search "|\\p{N}|" regex) :qwen2)
+        (t fallback)))
+
+(defun hf-tokenizer-kind (json fallback)
+  ;; The pre-tokenizer kind a tokenizer.json describes, read off its
+  ;; pre_tokenizer block rather than assumed from the family: a Digits step in
+  ;; front of ByteLevel is :smollm, ByteLevel with its own regex :gpt2, a Split
+  ;; regex whichever scanner it spells. Nil when the file is not byte-level BPE
+  ;; at all -- TinyLlama's is SentencePiece under the same "BPE" model type,
+  ;; with no ByteLevel step -- which sends the caller to tokenizer.bin.
+  (let ((pre (gethash "pre_tokenizer" json)))
+    (if (json-null-p pre)
+        nil
+        (let ((steps
+               (if (string= (gethash "type" pre) "Sequence")
+                   (coerce (gethash "pretokenizers" pre) 'list)
+                   (list pre)))
+              (digits nil)
+              (byte-level nil)
+              (own-regex nil)
+              (split nil))
+          (dolist (step steps)
+            (let ((type (gethash "type" step)))
+              (cond ((string= type "Digits") (setq digits t))
+                    ((string= type "ByteLevel")
+                     (setq byte-level t)
+                     (when (gethash "use_regex" step) (setq own-regex t)))
+                    ((string= type "Split")
+                     (setq split (gethash "Regex" (gethash "pattern" step)))))))
+          (cond ((not byte-level) nil)
+                (split (split-regex-kind split fallback))
+                ((and own-regex digits) :smollm)
+                (own-regex :gpt2)
+                (t fallback))))))
+
+(defun template-opens-with-special-p (processor)
+  ;; Whether a post_processor (or one of a Sequence's) is a TemplateProcessing
+  ;; whose single-sequence template starts with a special token.
+  (let ((type (gethash "type" processor)))
+    (cond ((string= type "Sequence")
+           (some #'template-opens-with-special-p
+                 (coerce (gethash "processors" processor) 'list)))
+          ((string= type "TemplateProcessing")
+           (let ((single (gethash "single" processor)))
+             (and (> (length single) 0)
+              (not (json-null-p (gethash "SpecialToken" (aref single 0)))))))
+          (t nil))))
+
+(defun hf-adds-bos-p (json config)
+  ;; Whether encoding prepends BOS. tokenizer_config.json's add_bos_token says
+  ;; so when it is there; otherwise it is the post_processor's business -- a
+  ;; TemplateProcessing opening with a special token (Llama 3, LFM2). Qwen's
+  ;; ByteLevel post-processor and SmolLM2's null add none, whatever bos_token
+  ;; the config names (SmolLM2 names <|im_start|>, and prepending it would put
+  ;; a second one in front of every chat turn).
+  (multiple-value-bind (v present) (gethash "add_bos_token" config)
+    (if (and present (not (json-null-p v)))
+        v
+        (let ((post (gethash "post_processor" json)))
+          (and (not (json-null-p post))
+               (template-opens-with-special-p post))))))
+
+(defun load-hf-tokenizer (dir fallback-kind)
   ;; tokenizer.json (the vocab, the ranked merges, the added tokens) and
   ;; tokenizer_config.json (which added tokens are BOS and EOS) -> a byte-level
-  ;; BPE tokenizer of the pre-tokenizer KIND the architecture row names.
+  ;; BPE tokenizer of the pre-tokenizer kind the file describes (FALLBACK-KIND,
+  ;; the architecture row's, when it describes one this file cannot name), or
+  ;; nil when the file is not byte-level BPE.
   (let* ((json (json-parse-file (concatenate 'string dir "tokenizer.json")))
-         (config
+         (kind (hf-tokenizer-kind json fallback-kind)))
+    (and kind (load-hf-bpe-tokenizer dir json kind))))
+
+(defun load-hf-bpe-tokenizer (dir json kind)
+  (let* ((config
           (json-parse-file (concatenate 'string dir "tokenizer_config.json")))
          (vocab (gethash "vocab" (gethash "model" json)))
          (merges (gethash "merges" (gethash "model" json)))
@@ -1314,7 +1393,9 @@
         (let ((a (aref added i)))
           (setf (aref tokens (gethash "id" a)) (gethash "content" a))
           (when (gethash "special" a) (push (gethash "content" a) specials))))
-      (let ((bos (token-name (gethash "bos_token" config)))
+      (let ((bos
+             (and (hf-adds-bos-p json config)
+                  (token-name (gethash "bos_token" config))))
             (eos (token-name (gethash "eos_token" config))))
         (tokenizer:make-bpe tokens merges
          :kind kind
@@ -1714,6 +1795,12 @@
                       :adjustable t))
          (start nil)
          (pos 0))
+    ;; run.c prints each token as it is fed back in, which never shows the
+    ;; first one -- BOS, in every prompt it sees. A tokenizer that adds no BOS
+    ;; (SmolLM2, Qwen) starts the prompt with a word, which is echoed here.
+    (unless (or (eql token (tokenizer:bos-id tk)) (string= *mode* "chat"))
+      (push-token-bytes pending tk token nil)
+      (print-complete pending))
     (loop while (< pos steps)
           do
             (let* ((logits (forward model state token pos))
@@ -1750,15 +1837,22 @@
     (setq *steps* (getf model :seq-len)))
   (let* ((dir (checkpoint-directory *checkpoint*))
          (tk
-          (cond ((and (getf model :gguf-tokenizer) (null (flag-value "-z")))
-                 (load-gguf-tokenizer model))
-                ((and dir (null (flag-value "-z")) (getf model :tokenizer)
+          (or (cond ((and (getf model :gguf-tokenizer) (null (flag-value "-z")))
+                     (load-gguf-tokenizer model))
+                    ((and dir (null (flag-value "-z"))
                       (probe-file (concatenate 'string dir "tokenizer.json")))
-                 (load-hf-tokenizer dir (getf model :tokenizer)))
-                (t (load-tokenizer *tokenizer* (getf model :vocab)))))
+                     ;; nil for a SentencePiece tokenizer.json (TinyLlama):
+                     ;; that one is tokenizer.bin's shape
+                     (load-hf-tokenizer dir (getf model :tokenizer)))
+                    (t nil)) (load-tokenizer *tokenizer* (getf model :vocab))))
+         (template
+          ;; the family's, or ChatML for a checkpoint whose vocabulary has
+          ;; its turn marker (SmolLM2 is model_type llama, and llama has none)
+          (or (getf model :chat)
+              (and (tokenizer:token-id tk "<|im_start|>") *chatml*)))
          (prompt
-          (if (and (string= *mode* "chat") (getf model :chat))
-              (format nil (getf model :chat) *prompt*)
+          (if (and (string= *mode* "chat") template)
+              (format nil template *prompt*)
               *prompt*))
          (state (make-state model)))
     (format *error-output*
