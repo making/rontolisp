@@ -82,9 +82,22 @@ the whole overlap identical -- 581 characters, and ~143 tokens because re-encodi
 decoded text through a byte-level BPE need not reproduce the sequence that generated it,
 so only the character count is exact -- where `.todo/677`'s
 Qwen3.5 run got the same
-character in a different sentence. Stated as a FACT and not a rule (`.todo/670` rule 7):
-one model, one prompt, one lane, and nobody has tried to break it. It is also NOT the
-byte-identity check `.todo/672` owes, whose subject is the quantized kernel.
+character in a different sentence. It is not the byte-identity check `.todo/672` owes,
+whose subject is the quantized kernel.
+
+**It is no longer a single-model fact.** `.todo/670` rule 7 asked for a break attempt and
+got a confirmation instead: the same comparison was run independently for Qwen3.5-0.8B on
+GB10 and came out token-identical to `llama.cpp` too. **Two models, two architectures --
+a gated short conv and a Gated DeltaNet -- two boxes, two orchestrators, both
+token-identical to ggml at temperature 0.** That second run also settled what
+`.todo/677`'s "same character, different sentence" was: the chat harness, not the
+arithmetic (that item's lane writes it up; not restated here beyond this pointer, per
+rule 9).
+
+And it used a better technique for the input half than the one below: **raw completion,
+no chat template on either side**, with both sides' ids dumped and compared. Removing the
+template beats proving that two templates render the same string, and it settles the input
+question without looking at any output at all. Prefer it next time.
 
 A comparison like this has THREE outcomes, not two, and only two of them are results:
 identical; divergent with the two prompts PROVEN to be the same token sequence; and
@@ -162,68 +175,94 @@ the "a family's own name for a shape it merely shares" clause in `.kb/tokenizers
 The README's `### LFM2.5-1.2B-Instruct` section carries the user-facing half of all of
 this.
 
+## The numbers (2026-09-05), and what they did to the prediction
+
+dorian, develop merged to `ee919526` plus this lane, GraalVM 25.0.4 on JDK 25, JVM class
+output, `--simd`, f32 weights widened from the BF16 GGUF at load, `-Xmx16g`, `-m chat -t 0
+-n 64`, the same prompt `.todo/489` used. **"Quiet" here means no other LANE**: dorian's
+steady co-tenants (`clickhouse-server` ~17% CPU, `mysqld`, a `bundle`, a `node`, all at
+47-day uptimes) ran throughout, as they did for the 2026-09-03 rows. loadavg was taken
+before and after every run; no run showed a woken box and none was discarded.
+
+Medians, with the observed spread:
+
+| threads | LFM2.5-1.2B | Qwen3.5-0.8B |
+| --- | --- | --- |
+| 1 (`--simd`) | **2.13** (1.87-2.20, 7 runs) | 2.95 (2.54-2.99, 6 runs) |
+| 8 | **7.21** (7.16-7.22) | 7.76 (7.74-7.88) |
+| 16 | **8.83** (8.79-8.86) | 8.76 (8.68-9.05) |
+| 32 | **9.30** (9.21-9.64) | 8.71 (8.57-8.75) |
+
+Load: 8.4-8.8 s from the GGUF (its tokenizer 0.31-0.38 s), 8.6-8.7 s from the safetensors
+(`tokenizer.json` + KV cache 1.27-1.59 s).
+
+**Cross-lane check.** `.todo/489` measured the Qwen3.5 column independently, in its own
+window: 3.06 at one thread against this 2.95, and 9.18 / 9.13 at 32 against this 8.71.
+These rows are 4-5% LOW against `489`'s, consistently rather than randomly -- most likely
+the previous run's thread pool still decaying, since loadavg at the start of the parallel
+cells here was 6-10. Two lanes agreeing to 5% on one cell is the cross-lane form of the
+self-disagreement check, and it also corroborates `.todo/670`'s 2026-09-03 table a second
+time.
+
+### The knee, which is the actual result
+
+Take the ratio between ADJACENT parallel cells only. Both are tight (under 2% spread), so
+this leans on no single-thread denominator at all:
+
+| | 8 -> 16 | 16 -> 32 |
+| --- | --- | --- |
+| LFM2.5-1.2B | **x1.225** | **x1.053** |
+| Qwen3.5-0.8B | x1.129 | **x0.994 -- it goes DOWN** |
+
+**Qwen3.5 is finished by 16 threads and loses ground at 32; LFM2.5 is still climbing.**
+Speedup over one thread: LFM2.5 3.39x / 4.15x / 4.37x at 8 / 16 / 32, Qwen3.5 2.63x /
+2.97x / 2.95x. `.todo/489`'s 64-thread Qwen3.5 figures (8.92 / 8.71) sit on its own
+32-thread number, which is the same saturation seen from further out.
+
+### The prediction's fate: direction right, mechanism wrong
+
+Derived GB/s, and the dependency is stated in the same breath -- these divide tok/s by a
+GB/token estimated from PARAMETER COUNT, which omits the KV cache, the activations and
+(for Qwen3.5) the recurrent state, so they carry an error the ratios above do not:
+
+| threads | LFM2.5 (4.68 GB/token) | Qwen3.5 (3.09 GB/token) |
+| --- | --- | --- |
+| 1 | 9.97 | 9.12 |
+| 32 | **43.5** | 26.9 |
+
+The **direction predicted above held**: LFM2.5 sits above Qwen3.5, above `.todo/489`'s
+TinyLlama at 39, and far above the 27-31 GB/s `.todo/670` reads as a ceiling. The
+**mechanism named above did not**. Locality predicts the per-model difference appears at
+ONE THREAD as well; it does not -- 9.97 against 9.12, with run-to-run spreads that overlap
+(8.75-10.30 against 7.85-9.24), so the two models stream indistinguishably on one core.
+The whole difference is in how far each one SCALES, and it appears as a curve that turns
+over at a different thread count per model. That is the parallel-machinery account --
+dispatch and barrier traffic, which 576 small 128 x 128 GEMVs a token generate far more of
+than ~30 big matvecs, and whose cost rises with thread count while per-thread work shrinks,
+producing exactly a curve that peaks earlier. Not the locality account this item predicted
+from.
+
+Both halves are worth keeping. A prediction stated in advance is what makes "right about
+the ordering, wrong about the cause" a distinguishable outcome at all, and it is a more
+useful result than either a clean confirmation or a miss. **Four models is a hypothesis
+with four points, not a law**; `.todo/670`'s "two independent models on one ceiling"
+sentence is corrected ONCE, by whoever holds all four, not here.
+
 ## Remaining
 
-Everything except the timing rows is done (above). What is left, sorted the way
-`.todo/670` rule 3 asks:
+Nothing. Every Verify item is met and the numbers are in this file and in
+`examples/llama2/README.md`.
 
-**Blocked (on the box, not on code).** The `tok/s` rows -- single thread and `--parallel`
-with `RONTOLISP_THREADS` recorded, f32, into the README and `.todo/489` as "the 1B". Two
-lanes measuring `--parallel` on dorian at once destroy each other's numbers
-(`.todo/697`), so this waits for an exclusive window. **"Quiet box" on dorian means "no
-other LANE", never "no other load"**: it carries permanent co-tenants at 47-day uptimes
-(`clickhouse-server` ~17% CPU, `mysqld`, a `bundle`, a `node`), which were running during
-the 2026-09-03 rows and during `.todo/489`'s re-measure too -- a constant, not a variable,
-and probably why those two agree. Every row here names them. The bf16 rows are unblocked as of
-2026-09-05 (`.todo/488` landed) but belong to `.todo/489`, which owns that table.
+Two things this item HANDS ON rather than leaves undone:
 
-**Carried out of this item, to measure in the same window.** `.todo/670`'s "two
-independent models on one ceiling" (27.0 and 30.7 GB/s) may not be a box ceiling at all.
-
-The claim is about ACCESS SHAPE, and it is stated before the measurement so that the
-measurement can refute it. A token of LFM2.5 is three big matvecs per conv block (6144 x
-2048 and 2048 x 2048) over ten blocks, plus 8192-wide SwiGLU; a token of Qwen3.5-0.8B is
-576 small 128 x 128 GEMVs -- 18 Gated DeltaNet layers x 16 heads x 2 -- with a 1 MB state
-per layer between them. Same bytes streamed buys different locality, so **the prediction
-is that LFM2.5 achieves a higher GB/s than Qwen3.5 on the same box**, and that 27-31 GB/s
-is a per-model figure rather than a wall. If that holds, "the parallel leg is DRAM-bound,
-not thread-bound" stays true while the single number under it does not -- and that number
-is what `.todo/489`'s parallel prediction rests on.
-
-Contended runs on 2026-09-05 pointed this way, and that is ALL they are: a hint that
-suggested the question. They are not evidence and are not quoted. Two models timed back to
-back are not timed together -- a co-tenant arriving between the arms hits one and not the
-other -- so a sequential ratio from a contended window can be manufactured, unlike a
-within-run ratio, which cannot. (`.todo/488`'s README is the standing caution for the
-parallel column generally: one run per cell disagreed with its own twin by 40% on a QUIET
-box, from the scheduler alone. So every parallel figure here is a spread over several
-runs, and the first check is whether a model disagrees with ITSELF.)
-
-Only this worktree can load LFM2.5 until this item pushes, so this measurement cannot be
-`.todo/489`'s until then, however much `489` owns the table.
-
-**The prediction, written down before the run** (2026-09-05, before any quiet-box number
-for LFM2.5 existed). Exact parameter counts, summed from the GGUF tensor tables rather
-than from a config: LFM2.5-1.2B **1,170,340,608** over 148 tensors -> **4.68 GB** of f32 a
-token; Qwen3.5-0.8B **772,845,888** over 335 tensors -> **3.09 GB** (`.todo/670`'s table
-says 3.2, which is `vocab_size`'s padded rows rather than the tensors that exist -- and
-note every figure in that table is DECIMAL GB, not GiB, so a bandwidth quoted in GiB is
-not comparable to it). `.todo/489`'s quiet-box points at 32 threads are TinyLlama-1.1B
-39 GB/s, Qwen3.5-0.8B 29, Qwen3-0.6B 22 -- already a far wider spread than the 27.0-30.7
-pair `.todo/670` reads a single ceiling off. **LFM2.5 should land ABOVE Qwen3.5 and near
-TinyLlama, in the mid-to-high 30s**, because its access shape is the plain-matvec one:
-ten conv blocks of three large matvecs plus 8192-wide SwiGLU, with no small-GEMV inner
-loop anywhere. If it lands at or below Qwen3.5's ~29 the access-shape account is wrong
-and the record should say so.
-
-Four models is still not a law -- state the result as a hypothesis with four points, and
-leave `.todo/670`'s "two independent models on one ceiling" sentence alone: it is
-corrected ONCE, by whoever holds all four numbers, not twice by two lanes.
-
-**Done, not deferred.** The 64-wide attention head takes the lane kernel: the gate is
-`MATVEC_ACC_THRESHOLD` = 32 COLUMNS (`.kb/vec.md`), and LFM2.5's head dim is 64 =
-2048 / 32 heads. This item's header said "the 32-wide head dim", which read the head
-COUNT as the head dim; there is no short-row problem here to check.
+- **The `tok/s` rows go to `.todo/489`**, which owns the model-rung table; they are
+  measured here because until this item pushes, no other worktree can load LFM2.5 at all.
+  The bf16 rungs are `489`'s too, unblocked since `.todo/488` landed on 2026-09-05.
+- **`.todo/670`'s "two independent models on one ceiling" is now wrong** and is corrected
+  ONCE, by whoever holds all four models' numbers, not from here. The finding that
+  replaces it -- a per-model saturation thread count, dispatch cost rather than a memory
+  wall -- is written above with the ratios it rests on, and `.todo/489` has three more
+  models to place against it.
 
 ## Verify
 

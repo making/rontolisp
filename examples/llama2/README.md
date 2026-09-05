@@ -217,13 +217,13 @@ A `Q8_0` file is refused by name at `token_embd.weight` until the quantized
 weight matrix exists.
 
 **And `llama.cpp` on that GGUF prints the same bytes.** Same prompt, same
-temperature 0, the whole overlap identical -- 581 characters, about 140 tokens
--- not "the same story in
-other words", which is what the Qwen3.5 row above gets and what two
-implementations at temperature 0 normally give each other. Worth stating
-carefully: it is one model on one prompt, so it is a fact and not a rule, and
-it is not the byte-identity check `.todo/672` owes on a Q8_0 file, whose point
-is the quantized kernel rather than the forward pass.
+temperature 0, the whole overlap identical -- 581 characters (the exact figure;
+re-encoding that text gives ~143 tokens, but a byte-level BPE re-encode of
+decoded text need not reproduce the sequence that generated it). Qwen3.5-0.8B
+was then checked the same way on the other box and is token-identical to
+`llama.cpp` too, so this is **two models, two architectures, two machines**,
+not one lucky prompt -- and it is not the byte-identity check a `Q8_0` file
+will get, whose subject is the quantized kernel rather than the forward pass.
 
 What the real checkpoint taught, none of it in `config.json`:
 
@@ -251,6 +251,33 @@ What the real checkpoint taught, none of it in `config.json`:
 - The stop token is `<|im_end|>` (7), which `config.json` states as
   `eos_token_id` directly -- unlike Qwen3.5, where it is only in
   `tokenizer_config.json`.
+
+Measured on the same box as the rows above -- JVM class output, `--simd`, f32
+weights, `-Xmx16g`, `-m chat -t 0 -n 64`, GraalVM 25.0.4 on JDK 25. Load 8.4-8.8 s
+from the GGUF (its tokenizer 0.31-0.38 s) and 8.6-8.7 s from the safetensors
+(`tokenizer.json` + the KV cache 1.27-1.59 s). Medians of 3-7 runs, spread in
+brackets; "quiet" on this box means no other LANE, since it carries steady
+co-tenants (`clickhouse-server` ~17% CPU, `mysqld`) that were running for every
+row on this page:
+
+| threads | LFM2.5-1.2B | Qwen3.5-0.8B, same window |
+| --- | --- | --- |
+| 1 | 2.13 (1.87-2.20) | 2.95 (2.54-2.99) |
+| 8 | 7.21 (7.16-7.22) | 7.76 (7.74-7.88) |
+| 16 | 8.83 (8.79-8.86) | 8.76 (8.68-9.05) |
+| 32 | 9.30 (9.21-9.64) | 8.71 (8.57-8.75) |
+
+**The two models scale differently, and that is the interesting row.** Between 16
+and 32 threads LFM2.5 gains 5% while Qwen3.5 loses half a percent: Qwen3.5 is
+saturated by 16 threads and LFM2.5 is still climbing at 32. Both ratios come from
+cells whose own spread is under 2%, so neither depends on the noisier one-thread
+figure. At ONE thread the two models are indistinguishable per byte moved (about
+9-10 GB/s each, with overlapping spreads); the difference is entirely in how far
+each scales. So the parallel leg is not simply the memory wall it looks like from
+a single model -- dispatch and barrier cost rises with thread count, and a model
+whose token is 576 small 128 x 128 GEMVs pays far more of it than one whose token
+is thirty large matvecs. Four models is not yet a law, and `--parallel`'s default
+of one thread per core is not the fastest setting for either of these.
 
 ## The layer table
 
