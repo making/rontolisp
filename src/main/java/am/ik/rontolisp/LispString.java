@@ -180,6 +180,40 @@ public final class LispString implements LispVal {
 	}
 
 	/**
+	 * Answers a FRESH string holding characters {@code [start, end)} of this one -- the
+	 * {@code subseq} of a string, in code-point units on both bounds.
+	 *
+	 * <p>
+	 * It copies out of the code-point buffer rather than going through {@link #value()}:
+	 * rendering the whole string into a {@code java.lang.String} first made a single
+	 * {@code (subseq s a b)} cost O(length of s) whatever the slice's width, so a
+	 * left-to-right scan that cuts pieces out of one long string -- what
+	 * {@code rontolisp:json-parse} does once per token -- was quadratic in the document
+	 * ({@code .kb/string-index-cost.md}).
+	 * @param start the first character index to copy (0-based, inclusive)
+	 * @param end the character index to stop before (exclusive)
+	 * @return the fresh slice
+	 */
+	public LispString subsequence(int start, int end) {
+		if (this.displacedTo == null) {
+			return fromCodePoints(java.util.Arrays.copyOfRange(this.chars, start, end));
+		}
+		int[] out = new int[end - start];
+		LispString owner = this.storage();
+		int base = this.base() + start;
+		System.arraycopy(owner.chars, base, out, 0, out.length);
+		return fromCodePoints(out);
+	}
+
+	// Wraps an ALREADY-OWNED code-point buffer, without the copy the (String)
+	// constructor makes. Private because the caller must not keep the array.
+	private static LispString fromCodePoints(int[] codePoints) {
+		LispString string = new LispString("");
+		string.chars = codePoints;
+		return string;
+	}
+
+	/**
 	 * Answers a FRESH string equal to this one with the code point at {@code index}
 	 * replaced -- the rebuild the compiled backends' {@code %schar-set-runtime} performs
 	 * for an immutable string. The result is an ordinary allocated string, not a source

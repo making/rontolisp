@@ -10719,6 +10719,61 @@ cases:
       T
       SCAN-FLAT
       LENGTH-FLAT
+  - name: character-index-into-a-string-holding-a-surrogate-pair
+    source: |
+      ;; The same cost invariant for the shape the case above cannot reach: a
+      ;; string whose characters are NOT all one storage unit. Every backend has
+      ;; a shortcut for the flat case -- 1 + i on the JVM's UTF-16 string, the
+      ;; one-byte-prefix cursor on both WASM ones -- and an astral character in
+      ;; every 16 disables all of them, so what is measured here is the fallback:
+      ;; the JVM's breakpoint table and WASM's cursor walk
+      ;; (.kb/string-index-cost.md).
+      ;;
+      ;; Both strings go through rontolisp:octets-to-string because on the JVM
+      ;; that is the producer whose result is an immutable string rather than a
+      ;; mutable character vector, and a character vector reads its element
+      ;; without ever asking where character i starts -- the case above already
+      ;; covers that representation.
+      (defvar *sur-short* "😀0123456789abcde")
+      (dotimes (i 4) (setq *sur-short* (concatenate 'string *sur-short* *sur-short*)))
+      (defvar *sur-src* "😀0123456789abcde")
+      (dotimes (i 11) (setq *sur-src* (concatenate 'string *sur-src* *sur-src*)))
+      (setq *sur-short*
+            (rontolisp:octets-to-string (rontolisp:string-to-octets *sur-short*)))
+      (defvar *sur-long*
+        (rontolisp:octets-to-string (rontolisp:string-to-octets *sur-src*)))
+      (print (length *sur-short*))
+      (print (length *sur-long*))
+      (print (char-code (char *sur-long* 0)))
+      (print (char-code (char *sur-long* 16)))
+      (print (char-code (char *sur-long* 32767)))
+      (defun sur-scan (s)
+        (let ((total 0))
+          (dotimes (i (length s))
+            (setq total (+ total (char-code (char s i)))))
+          total))
+      (sur-scan "warm")
+      (defvar *sur-t0* (get-internal-real-time))
+      (defvar *sur-whole* (sur-scan *sur-long*))
+      (defvar *sur-t1* (get-internal-real-time))
+      (defvar *sur-chunked* 0)
+      (dotimes (k 128)
+        (setq *sur-chunked* (+ *sur-chunked* (sur-scan *sur-short*))))
+      (defvar *sur-t2* (get-internal-real-time))
+      ;; The long string IS the short one 128 times over, so both halves read the
+      ;; same characters and the two times compare.
+      (print (= *sur-whole* *sur-chunked*))
+      (print (if (<= (- *sur-t1* *sur-t0*) (+ 500 (* 6 (- *sur-t2* *sur-t1*))))
+                 'surrogate-scan-flat
+                 'surrogate-scan-quadratic))
+    expected: |
+      256
+      32768
+      128512
+      128512
+      101
+      T
+      SURROGATE-SCAN-FLAT
   - name: character-vector-index-reads-the-element
     source: |
       ;; (char v i) / (schar v i) / (elt v i) on a MUTABLE CHARACTER VECTOR (a
