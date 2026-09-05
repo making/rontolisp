@@ -89,6 +89,40 @@ not apply.**
   did anyone skip a step they were assigned. Both times the gap was between the
   assignments.**
 
+## The mis-record procedure, owed and now written
+
+Part 2 flags mis-record as the direction with no rule, defended by luck. This is the
+procedure it asked for, contributed by the GB10 side; it is a DRAFT like the rest.
+
+**Every number entering a record carries how it was obtained, and a derived number names
+its inputs.** Four tags are enough: **measured** (someone ran it), **derived** (computed
+from other numbers -- name them), **counted** (enumerated, not eyeballed), **estimated**.
+
+It is mechanical, it costs a word, and it is applied at the only moment the information
+exists -- the same argument that carries rule 10. Checked against all three of the day's
+instances, it catches each for a different reason, which is the test a procedure has to
+pass:
+
+- **The GB/token divisor.** Written as *derived (tok/s / parameter-count bytes)* the
+  dependency is visible in the sentence, so a reader sees what has to hold for the number
+  to mean anything. Untagged it read as a measurement of bandwidth.
+- **The 1.6x that was withdrawn.** Written as *measured 2026-09-03, against the
+  one-accumulator f32 kernel* it carries its own expiry: the baseline is named, so when
+  `.todo/480` lands four accumulators the number is visibly stale rather than merely wrong.
+- **"155 tokens".** There is no honest tag for a glance. Being required to write **counted**
+  is what sends you to count -- the tag cannot be applied truthfully without doing the work,
+  which is the property that makes it a procedure rather than a reminder.
+
+The third case is the one that shows the shape: **the procedure works because one of the
+tags is unavailable to a writer who has not done the work.** A rule that only asks for care
+can be satisfied by feeling careful.
+
+Two things it deliberately does not do. It does not ask anyone to re-derive a number they
+are quoting -- naming the input is enough, and the reader decides. And it says nothing
+about whether a number is RIGHT; it makes the class of claim visible so that over-read has
+less to work with, which is why this direction and over-read are neighbours rather than
+duplicates.
+
 ## Part 3 -- Two practices already adopted, not waiting for this item
 
 - **Close-outs list files touched.** In use on both sides since 2026-09-05.
