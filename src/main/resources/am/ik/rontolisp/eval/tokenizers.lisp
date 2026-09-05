@@ -159,7 +159,12 @@
    ((or (string= kind "gpt-2") (string= kind "gpt2") (string= kind "default"))
     :gpt2)
    ((string= kind "smollm") :smollm)
-   ((or (string= kind "llama3") (string= kind "llama-bpe")) :llama3)
+   ;; a family whose GGUF names the Llama 3 shape after ITSELF: LFM2 / LFM2.5's
+   ;; tokenizer.json holds that pattern character for character, and llama.cpp
+   ;; maps `lfm2` to LLAMA_VOCAB_PRE_TYPE_LLAMA3 with the spellings beside it
+   ((or (string= kind "llama3") (string= kind "llama-v3")
+        (string= kind "llama-bpe") (string= kind "lfm2"))
+    :llama3)
    ((or (string= kind "qwen2") (string= kind "qwen3")) :qwen2)
    ((string= kind "qwen35") :qwen35)
    (t (error "tokenizer: unknown pre-tokenizer ~s" kind))))

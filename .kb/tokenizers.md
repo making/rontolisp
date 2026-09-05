@@ -42,7 +42,11 @@ matched **leftmost-FIRST** (Rust `regex` semantics), so alternative order is loa
 `:gpt2` (GPT-2) | `:smollm` = `:gpt2` with every `\p{N}` character split off FIRST (SmolLM2) |
 `:llama3` (Llama 3, LFM2.5) | `:qwen2` = `:llama3` with one digit at a time (Qwen 2.5/3) |
 `:qwen35` = `:qwen2` with `[\p{L}\p{M}]+` as the word class (Qwen 3.5-3.8). GGUF spellings
-(`gpt-2`, `smollm`, `llama-bpe`, `qwen2`, ...) are accepted as strings wherever a keyword is.
+(`gpt-2`, `smollm`, `llama-bpe`, `qwen2`, ...) are accepted as strings wherever a keyword is,
+**including a family's own name for a shape it only shares**: LFM2.5 writes `lfm2`, whose
+tokenizer.json holds the Llama 3 pattern character for character (llama.cpp maps it the same
+way, beside `llama-v3` / `llama-bpe`). An unmapped alias is refused by name, so the model
+does not load at all -- which is how `lfm2` was found (2026-09-05).
 
 Three traps a straight reading of the patterns gets wrong:
 - **SmolLM2 is not plain GPT-2**: `Digits(individual_digits)` runs IN FRONT of ByteLevel, and the
