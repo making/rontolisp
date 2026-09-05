@@ -143,6 +143,33 @@ needs (`llama.cpp` takes about three minutes to build). LFM2.5's GGUFs were the 
 genuinely missing on dorian and were fetched on 2026-09-05 from `LiquidAI/`'s own repository.
 None of it belongs in the repo.
 
+## Re-certified after the rename, 2026-09-05, at develop `d4225aa5`
+
+`.todo/682` (`examples/llama2` -> `examples/llm`) landed at `6a319b6a`, AFTER both boxes'
+authoritative runs -- dorian's at `6a6ebbac`, GB10's at `4358af09`. **So the tree that
+shipped the rename had exactly one verification: its own 39-test acceptance slice.** Rule 8
+decides whether an earlier run still certifies a later head, and its test is the file set:
+`git diff --stat 4358af09 <head> -- src/` gave 11 files and 22/22 lines, three of them in
+`src/main`. Not empty, so the certification lapsed and was re-taken.
+
+| run | box | result | ran at |
+| --- | --- | --- | --- |
+| full suite (GPU legs included) | GB10 | 10607 / 0 / 0, 189 skipped, 231 reports | `b87aed25` |
+| native `CiSpecE2eTest` | GB10 | 2000 / 0 / 0 | `d4225aa5` |
+| `ExamplesE2eTest` `only=llm/` | dorian | 39 / 0 / 0, 3 skipped | `6a319b6a` |
+
+**Do not read the totals against any other box or any other day** -- `.todo/708`. What
+these certify is failures, errors and the report-file count.
+
+**Why the gap existed is worth more than the numbers.** Nobody skipped a step they were
+assigned: one box ran the suite before the last change landed, the other ran an acceptance
+slice covering that change's own surface, and the COMBINATION was what nothing covered.
+That is the second instance in one day of coverage falling into the seam between two
+correct plans -- the first was the native pass this morning, owed by a session that ended.
+Neither is a record read wrongly or written incompletely; both are properties of the
+arrangement. `.todo/709` Part 2 keeps them separate from the record failures for that
+reason.
+
 ## Certified green, 2026-09-05, at develop `4358af09`
 
 Everything below ran on **GB10 alone**, and that is a difference from 2026-09-03 worth

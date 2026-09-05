@@ -53,6 +53,33 @@ owns it.** An unformatted file sitting mid-edit in one lane's worktree fails the
 tree's suite, in a file the main tree does not contain, and the failure names a path the
 person reading it has never heard of. Nearly undiagnosable from the main tree.
 
+**Third consequence of the same rename, found 2026-09-05 after this item was filed.**
+`examples/llama2/.gitignore` listed `stories15M.bin` and `tokenizer.bin`;
+`download-stories15M.sh` fetches them and `examples.yaml` documents the RUN legs as
+skipping themselves when they are absent. 682 moved that .gitignore to
+`examples/llm/.gitignore`, correctly. The two artefacts were UNTRACKED, so nothing moved
+them, and they stayed behind with their rule one path away -- and the next `git add` on
+another lane swept 61 MB onto develop inside a commit whose message says it files a todo
+(`97b81823`; untracked again in `e34da35c`, still in history). **A directory-local ignore
+rule protects by LOCATION, so moving the rule stops protecting whatever stayed -- and what
+stayed is invisible to the rename precisely because being ignored is what kept it out of
+the rename.** `git status` afterwards shows them as ordinary new untracked files, with no
+history to suggest otherwise.
+
+This is the same shape as the formatting leg and it strengthens the item's thesis rather
+than adding a separate one: **the rename's consequences all landed outside the renamed
+paths, so no review of the rename's own diff could have found any of them.** Three now,
+by three different mechanisms -- line lengths in files that merely cite the path, a test
+corpus that walks directories nobody listed, and an ignore rule that stopped covering the
+files it was written for. Whatever pin comes out of the "Do" below should be read with
+that in mind: the class is wider than the formatter.
+
+It also gives the umbrella's "do not compare test totals across boxes until 708 lands" a
+second, independent reason. While those binaries were tracked, a fresh clone HAD
+`stories15M.bin`, so the llm RUN legs that `examples.yaml` describes as self-skipping
+would have run. Any total taken from a clone made between `97b81823` and `e34da35c` is
+not comparable to one taken outside that window.
+
 ## Do
 
 1. Add a filter for `/.claude/` -- one line, beside the two that exist. Prefer excluding
