@@ -43,6 +43,16 @@ formatting the same files 25 times over.
    the source is another worktree. Nobody has hit this yet; nothing prevents it.
 3. It formats ~590 files 25 times for no coverage.
 
+**The composition is the reason this matters, not the 17014 tests.** Two individually
+harmless mechanisms meet: a rename can change formatting (682 shortened
+`examples/llama2` to `examples/llm`, which changed javadoc line lengths in `LinalgBlas`
+and `TokenizersLibraryTest` and failed the build until `spring-javaformat` was
+re-applied -- a formatting consequence of a RENAME that nobody would predict), and the
+walk reads other lanes' trees. Together: **a worktree is not private to the lane that
+owns it.** An unformatted file sitting mid-edit in one lane's worktree fails the MAIN
+tree's suite, in a file the main tree does not contain, and the failure names a path the
+person reading it has never heard of. Nearly undiagnosable from the main tree.
+
 ## Do
 
 1. Add a filter for `/.claude/` -- one line, beside the two that exist. Prefer excluding
