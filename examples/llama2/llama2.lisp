@@ -518,7 +518,7 @@
         (dolist (chunk (nreverse chunks))
           (replace bytes chunk :start1 at)
           (setq at (+ at (length chunk))))
-        (rontolisp::%octets-to-string bytes)))))
+        (rontolisp:octets-to-string bytes)))))
 
 (defun hf-config (dir)
   ;; config.json, with a multimodal checkpoint's text_config unwrapped (its
@@ -1092,7 +1092,7 @@
         (let ((len (aref u32 0)))
           (read-sequence buf s :end len)
           (setf (aref pieces i)
-                (rontolisp::%octets-to-string (subseq buf 0 len)))))
+                (rontolisp:octets-to-string (subseq buf 0 len)))))
       (tokenizer:make-sentencepiece pieces scores :bos 1 :eos 2))))
 
 ;;; --- JSON off a byte vector -------------------------------------------------------
@@ -1154,19 +1154,8 @@
 
 (defun utf8-push (cp out)
   ;; The UTF-8 bytes of code point CP onto the fill-pointer vector OUT.
-  (cond ((< cp 128) (vector-push-extend cp out))
-        ((< cp 2048)
-         (vector-push-extend (+ 192 (ash cp -6)) out)
-         (vector-push-extend (+ 128 (logand cp 63)) out))
-        ((< cp 65536)
-         (vector-push-extend (+ 224 (ash cp -12)) out)
-         (vector-push-extend (+ 128 (logand (ash cp -6) 63)) out)
-         (vector-push-extend (+ 128 (logand cp 63)) out))
-        (t
-         (vector-push-extend (+ 240 (ash cp -18)) out)
-         (vector-push-extend (+ 128 (logand (ash cp -12) 63)) out)
-         (vector-push-extend (+ 128 (logand (ash cp -6) 63)) out)
-         (vector-push-extend (+ 128 (logand cp 63)) out))))
+  (let ((bytes (rontolisp:string-to-octets (string (code-char cp)))))
+    (dotimes (i (length bytes)) (vector-push-extend (aref bytes i) out))))
 
 (defun json-string ()
   ;; The string at *json-pos* (its opening quote), escapes resolved, as a
@@ -1183,7 +1172,7 @@
               (t (setq i (+ i 1))))))
     (setq *json-pos* (+ i 1))
     (if plain
-        (rontolisp::%octets-to-string (subseq b start i))
+        (rontolisp:octets-to-string (subseq b start i))
         (let ((out
                (make-array (- i start)
                            :element-type '(unsigned-byte 8)
@@ -1218,7 +1207,10 @@
                                        (setq j (+ j 6))))
                                    (utf8-push cp out)))
                                 (t (vector-push-extend e out)))))))
-          (rontolisp::%octets-to-string (subseq out 0 (fill-pointer out)))))))
+          ;; OUT is fill-pointer/adjustable, so COERCE (not SUBSEQ alone) is
+          ;; what gets back to a packed vector (.kb/packed-integer-vectors.md).
+          (rontolisp:octets-to-string
+           (coerce out '(vector (unsigned-byte 8))))))))
 
 (defun json-number ()
   (let* ((b *json-bytes*) (start *json-pos*) (i start) (float nil))
@@ -1232,7 +1224,7 @@
                   (setq i (+ i 1)))
                 (return)))))
     (setq *json-pos* i)
-    (let ((text (rontolisp::%octets-to-string (subseq b start i))))
+    (let ((text (rontolisp:octets-to-string (subseq b start i))))
       (if float (read-from-string text) (parse-integer text)))))
 
 (defun json-value ()
@@ -1337,7 +1329,12 @@
 
 (defun utf8-length (b)
   ;; The length of the sequence lead byte B starts; 1 for anything that is not
-  ;; a lead byte, so a stray byte is passed through rather than waited on.
+  ;; a lead byte, so a stray byte -- a real SentencePiece byte-fallback token
+  ;; like <0xC0> is one -- is passed through immediately rather than held
+  ;; waiting for continuation bytes that will never arrive. FRAMING, not
+  ;; decoding: it only measures how many bytes a sequence claims, it never
+  ;; assembles or inspects one (rontolisp:octets-to-string does that, once
+  ;; complete-prefix below has found where it is safe to call it).
   (cond ((< b 128) 1)
         ((< b 194) 1)
         ((< b 224) 2)
@@ -1361,7 +1358,7 @@
     (when (> k 0)
       (let ((bytes (make-array k :element-type '(unsigned-byte 8))))
         (dotimes (i k) (setf (aref bytes i) (aref pending i)))
-        (write-string (rontolisp::%octets-to-string bytes)))
+        (write-string (rontolisp:octets-to-string bytes)))
       (dotimes (i (- n k)) (setf (aref pending i) (aref pending (+ k i))))
       (setf (fill-pointer pending) (- n k)))))
 
@@ -1725,7 +1722,7 @@
               (setq pos (+ pos 1))
               (when *trace*
                 (format *error-output* "~a:~a ~s~%" pos next
-                        (rontolisp::%octets-to-string
+                        (rontolisp:octets-to-string
                          (coerce (tokenizer:decode-bytes tk (list next))
                                  '(vector (unsigned-byte 8))))))
               ;; a stop token ends the answer -- when the model produced it; the

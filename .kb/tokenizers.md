@@ -6,9 +6,13 @@ Llama 3, LFM2.5) and **SentencePiece-style BPE with per-piece scores**
 (`tokenizer:make-sentencepiece` -- Llama 2, TinyLlama) behind one `tokenizer:encode` /
 `tokenizer:decode`. Eleven exported functions; the record is the internal `tokenizer::%tk`.
 
-**Invariant: this package does no I/O and reaches for nothing but `cl`.** The vocabulary is an
-ARGUMENT, which is what lets it run in the browser playground and compile to both WASM backends.
-Pinned by `TokenizersLibraryTest.theLibraryReachesForNothingButCommonLisp`.
+**Invariant: this package does no I/O and reaches for nothing but `cl` and the core**
+`rontolisp:octets-to-string` / `string-to-octets` **codec pair** (`.todo/691`; neither is I/O or a
+host dependency, so the invariant's actual purpose -- browser playground and both WASM backends --
+holds unchanged). The vocabulary is an ARGUMENT, which is what lets it run in the browser
+playground and compile to both WASM backends. Pinned by
+`TokenizersLibraryTest.theLibraryReachesForNothingButCommonLisp` (checks for `linalg:`/`objc:`/
+`java:`/file I/O, not for every non-`cl` name).
 
 ## Wiring (the `geom` pair)
 `eval/TokenizersLibrary` (`forms()`, `process(program)`, `isTokenizerQualified`);
@@ -26,7 +30,11 @@ Pinned by `TokenizersLibraryTest.theLibraryReachesForNothingButCommonLisp`.
    rank. Llama 3's `ignore_merges` short-circuits a whole-word vocabulary hit.
 
 `tokenizer:decode` = reverse table + UTF-8 decode over the WHOLE id list (a multi-byte character
-straddles tokens routinely); `tokenizer:decode-bytes` is the streaming half.
+straddles tokens routinely), with an incomplete TRAILING sequence DROPPED rather than shown as
+spurious bytes (`tokenizer::%complete-byte-prefix`, a length CLASSIFIER answering "how many bytes",
+never a decode -- `.kb/characters-code-points.md`'s codec-pair section says why a round trip
+through `rontolisp:octets-to-string`/`string-to-octets` cannot answer that question instead);
+`tokenizer:decode-bytes` is the streaming half.
 
 ## The five pre-tokenizer shapes (hand-coded scanners, no regex engine)
 Keyed by `tokenizer.ggml.pre` (or `tokenizer.json`'s `pre_tokenizer`); each is an ALTERNATION

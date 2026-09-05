@@ -454,6 +454,8 @@ categories:
       - { slug: rontolisp-bits-float16, name: "rontolisp:bits-float16" }
       - { slug: rontolisp-widen-float-bits, name: "rontolisp:widen-float-bits" }
       - { slug: rontolisp-narrow-float-bits, name: "rontolisp:narrow-float-bits" }
+      - { slug: rontolisp-octets-to-string, name: "rontolisp:octets-to-string" }
+      - { slug: rontolisp-string-to-octets, name: "rontolisp:string-to-octets" }
       - { slug: rontolisp-make-mutex, name: "rontolisp:make-mutex" }
       - { slug: rontolisp-mutex-acquire, name: "rontolisp:mutex-acquire" }
       - { slug: rontolisp-mutex-release, name: "rontolisp:mutex-release" }

@@ -118,16 +118,62 @@ supplementary code point takes); a `java.lang.Character` return becomes `new int
   `emitEqComparison`/`emitEqlComparison` following a `ref.eq`-false miss with a
   `ref.test $type_char` guard (`emitCharCodePointEqOrElse`; `_equal` already had its branch).
 
+## The UTF-8 <-> octets codec pair (`.todo/691`)
+`rontolisp:octets-to-string` / `rontolisp:string-to-octets` are the only sanctioned way to cross
+between a packed `(unsigned-byte 8)` vector and a string; a program hand-writing continuation-byte
+arithmetic against either direction is the bug 691 closed. Both are plain `LispPreludeLibrary`
+defuns (`am.ik.rontolisp.eval.LispPreludeLibrary`, keys `LispNames.OCTETS_TO_STRING` /
+`STRING_TO_OCTETS`) -- no per-backend compiler case, no `Environment.defineFunction`: the decoder
+delegates to the existing internal `rontolisp::%octets-to-string` (below), and the encoder is total
+arithmetic over primitives every backend already compiles, so ordinary prelude splicing carries
+both. **Do not add a `BuiltinFunctionWrappers` entry for either** -- that catalog is for names
+`evalCons`/`compileCons` lower BEFORE generic function-call resolution ever runs (bfloat16-bits,
+`typep`, ...); adding one for an ordinary prelude defun makes `resolveFunction`'s wrapper fallback
+fire before the prelude ever loads the real definition, and the wrapper's own body calls the same
+unresolved name again -- infinite recursion on the first `#'octets-to-string` or bare call.
+
+**Decode is total and lenient, arm for arm the pre-existing internal decoder**
+(`rontolisp::%octets-to-string` / `%octets-to-string-strict`, `.kb/fetch-http.md`,
+`.kb/http-server.md`): a byte that leads no valid sequence, and a sequence the vector's end cuts
+short, both decode to their OWN byte value as a one-character result, never a signal. An overlong
+encoding and a UTF-8-encoded surrogate are NOT rejected by the lenient fallback (only the strict
+platform decoder refuses them, and refusing falls through to lenient) -- each decodes to the code
+point its bits assemble, since a CHARACTER admits any code point 0..`#x10FFFF` including surrogates
+(above). Consequence: `octets-to-string` then `string-to-octets` round-trips only for a WELL-FORMED,
+non-overlong, non-truncated input -- a malformed byte's lenient answer does not generally re-encode
+to the same bytes. **Encode is total** over every code point with no malformed case at all.
+
+**Framing is not decoding, and the round-trip pair cannot replace a length classifier.**
+`encode(decode(x)) = x` looks like a byte-count-free way to ask "how many of these bytes are safe to
+act on now" (a streaming printer holding back an incomplete tail, or a decoder dropping one) -- it
+is not: a byte that leads NO valid sequence at all (a real SentencePiece byte-fallback token, e.g.
+`<0xC0>`) never round-trips at any prefix length, so the technique either stalls several calls
+waiting for bytes that will never validate it, or -- worse, over a FIXED buffer that never grows
+past the point a fallback would flush it -- drops the byte silently. Tried and reverted while
+landing 691; `examples/llama2/llama2.lisp`'s `utf8-length`/`complete-prefix`/`print-complete` and
+`eval/tokenizers.lisp`'s `tokenizer::%utf8-lead-length`/`%complete-byte-prefix` each keep their OWN
+hand-written lead-byte length table for exactly this reason -- FRAMING ("how many bytes"), never
+DECODING ("what character"), and 691's own verify step ("no continuation-byte mask in `examples/`")
+did not anticipate the distinction and was not fully satisfiable as written. `.todo/699` tracks
+folding the two copies (kept in step today only by a comment in each pointing at the other, plus
+`TokenizersLibraryTest`'s exhaustive 0..255 pin on the library half) into one shared surface, with
+the same constraint that made this non-trivial: an example may reach only a package's PUBLIC
+symbols, and the framer must stay separable from the decoder.
+
 ## Tests
 ci-spec `code-point-characters-beyond-ascii`, `eq-on-characters-by-code-point`,
-`string-case-ops-full-unicode`, `character-names-short-and-unicode`, `string-comparison-family`
-(all four backends). Per-backend: `LispEvaluatorTest#evalStringOrderingPredicates`,
+`string-case-ops-full-unicode`, `character-names-short-and-unicode`, `string-comparison-family`,
+`octets-string-conversions`, `tokenizer-decode-drops-an-incomplete-trailing-sequence` (all four
+backends). Per-backend: `LispEvaluatorTest#evalStringOrderingPredicates`,
 `#evalStringCaseOpsFoldEveryCharacterIndependently`, `#evalStringCapitalizeIsFullUnicode`;
 `JvmLispCompilerTest#compileAndRunStringOrderingPredicates`,
 `#compileAndRunStringCaseOpsAreFullUnicodeAndLengthPreserving`;
 `WasmLispCompilerIntegrationTest#stringOrderingPredicates`, `#eqOnCharactersComparesByCodePoint`,
-`#stringCaseOpsAreFullUnicode`, `#stringCapitalizeWordConstituentsAreFullUnicode`.
+`#stringCaseOpsAreFullUnicode`, `#stringCapitalizeWordConstituentsAreFullUnicode`;
+`TokenizersLibraryTest#decodeBytesIsTheStreamingHalf`,
+`#utf8LeadLengthIsHowManyBytesNotWhatCharacterOverEveryLeadByte` (the framer, by value, 0..255).
 
 ## Related
 [[string-index-cost]], [[wasm-gc-strings]], [[reader-case-upcase]] (SYMBOL names, not CHARACTER
-values).
+values), [[fetch-http]] / [[http-server]] (the internal decoder this pair's decode half wraps),
+[[tokenizers]] / [[gguf]] (the two libraries whose hand-written decoders 691 deleted).

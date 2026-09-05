@@ -1357,6 +1357,61 @@ public final class LispPreludeLibrary {
 				                    (write-char (code-char b) s)
 				                    (setq i (+ i 1)))))))))))
 				""");
+		// rontolisp:octets-to-string: the PUBLIC name for the decoder above (.todo/691).
+		// A thin delegator, not a second definition -- the lenient policy (an
+		// (unsigned-byte 8) vector, never nil, never signals; a byte that leads no
+		// valid sequence, one a shorter prefix truncates, and one whose 4-byte
+		// assembly falls outside the Unicode range all decode to their OWN byte value
+		// as a character) is %octets-to-string's alone, so the http body / read-all /
+		// fetch call sites and a user program calling this name see the identical
+		// answer for the identical bytes on every backend. Overlong and
+		// surrogate-encoding sequences are NOT rejected by the lenient fallback (only
+		// the strict fast path -- a platform decoder -- refuses them, and refusing
+		// silently falls through to the lenient arm), so they decode to the code
+		// point their bits assemble rather than to their own bytes; a rontolisp
+		// CHARACTER has no narrower range than any other code point
+		// (.kb/characters-code-points.md), so a decoded surrogate is not itself an
+		// error here. Pinned by ci-spec `octets-string-conversions`.
+		SOURCES.put(LispNames.OCTETS_TO_STRING, """
+				(defun rontolisp:octets-to-string (octets)
+				  (rontolisp::%octets-to-string octets))
+				""");
+		// rontolisp:string-to-octets: the encoder half. Total over every CHARACTER
+		// value -- 0 to #x10FFFF, surrogates included -- so unlike the decoder it has
+		// no malformed case to pin: every code point has exactly one (shortest, i.e.
+		// non-overlong) UTF-8 encoding. Round-trips through octets-to-string for
+		// every well-formed input; the reverse round-trip (octets-to-string then
+		// string-to-octets) only reproduces the original bytes when they were already
+		// a well-formed, non-overlong encoding -- a malformed byte decodes to a
+		// character whose canonical re-encoding can differ in length from the byte it
+		// came from, which is exactly the signal examples/llama2/llama2.lisp's
+		// streaming printer uses to tell a still-arriving multi-byte character from a
+		// finished one.
+		SOURCES.put(LispNames.STRING_TO_OCTETS, """
+				(defun rontolisp:string-to-octets (string)
+				  (let ((%s2o-bytes nil))
+				    (dotimes (%s2o-i (length string))
+				      (let ((%s2o-c (char-code (char string %s2o-i))))
+				        (cond ((< %s2o-c #x80) (push %s2o-c %s2o-bytes))
+				              ((< %s2o-c #x800)
+				               (push (logior #xC0 (ash %s2o-c -6)) %s2o-bytes)
+				               (push (logior #x80 (logand %s2o-c #x3F)) %s2o-bytes))
+				              ((< %s2o-c #x10000)
+				               (push (logior #xE0 (ash %s2o-c -12)) %s2o-bytes)
+				               (push (logior #x80 (logand (ash %s2o-c -6) #x3F)) %s2o-bytes)
+				               (push (logior #x80 (logand %s2o-c #x3F)) %s2o-bytes))
+				              (t
+				               (push (logior #xF0 (ash %s2o-c -18)) %s2o-bytes)
+				               (push (logior #x80 (logand (ash %s2o-c -12) #x3F)) %s2o-bytes)
+				               (push (logior #x80 (logand (ash %s2o-c -6) #x3F)) %s2o-bytes)
+				               (push (logior #x80 (logand %s2o-c #x3F)) %s2o-bytes)))))
+				    (setq %s2o-bytes (nreverse %s2o-bytes))
+				    (let ((%s2o-out (make-array (length %s2o-bytes) :element-type '(unsigned-byte 8)))
+				          (%s2o-k 0))
+				      (dolist (%s2o-b %s2o-bytes %s2o-out)
+				        (setf (aref %s2o-out %s2o-k) %s2o-b)
+				        (setq %s2o-k (+ %s2o-k 1))))))
+				""");
 		// read-all: the stream drained into ONE string. A STRING passes through: a body
 		// that has already fully arrived (the declared absent-body default, a user
 		// plist) is its own drained value, so the one drain spelling works whatever
