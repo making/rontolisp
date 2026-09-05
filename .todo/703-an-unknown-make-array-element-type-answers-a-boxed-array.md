@@ -20,10 +20,12 @@ the packed width both ways:
 
 (develop `21a82d97`). `checkpoint:make-tensor` passes the symbol as a variable, which is
 how a `#bf16` checkpoint destination is inert on the JVM until the runtime dispatch learns
-the third width -- that instance is fixed under `.todo/675`'s remainder, with a pin that is
-literal AND variable over both widths on both backends (every existing case passed the
-type as a literal; the variable path had no coverage, so the defect sat entirely on one
-side of the condition -- `.todo/670` rule 6, the week's fourth instance).
+the third width. **That instance is CLOSED (2026-09-05, `.todo/487`, commit `35e1ab9b`) --
+see the section at the end; this item's mechanism question is untouched.** The pin it
+called for exists and is keyed to `ArrayElementTypes` rather than to a list of widths
+(every existing case passed the type as a literal; the variable path had no coverage, so
+the defect sat entirely on one side of the condition -- `.todo/670` rule 6, the week's
+fourth instance).
 
 **The mechanism question, which the instance fix does not answer.** `make-array
 :element-type` with a type the backend does not recognise answers a boxed general array

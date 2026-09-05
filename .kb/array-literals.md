@@ -157,8 +157,12 @@ type and zero fill.**
   `%make-array-et-alias` (one arm per registered alias, answering the canonical spelling),
   which the lowering wraps the designator in — otherwise `et` bound to `'octet` reaches the
   `t` arm while the interpreter packs. **That table carries ONLY the aliases naming one of
-  the six specialized codes**: a general resolver cost array-operations +10.1% raw wasm
-  (alexandria registers 43 aliases at ~220 bytes each).
+  the specialized codes** — it asks `ArrayElementTypes.codeOf`, so it needs no count: a
+  general resolver cost array-operations +10.1% raw wasm (alexandria registers 43 aliases at
+  ~220 bytes each). This bullet said "six" while the code was correct, the exact INVERSE of
+  the four transcriptions above, where correct prose sat beside stale code. **The count in
+  prose was wrong in both directions independently, in one file, in one afternoon: the prose
+  is the unreliable half whichever way it drifts. Count against the class.**
 - **`typep` had the same hole, closed on a DIFFERENT narrowing** — only the aliases the
   PROGRAM SPELLS can reach a runtime `typep` (+1.9%); the make-array narrowing does not carry
   over. Full story: `.kb/declarations-type-checks.md`.

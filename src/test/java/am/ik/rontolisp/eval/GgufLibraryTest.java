@@ -197,7 +197,28 @@ class GgufLibraryTest {
 				(handler-case (gguf:read "%s" :element-type 'fixnum)
 				  (error (e) (format nil "~a" e)))
 				""".formatted(fixture.toString().replace("\\", "\\\\"))))
-			.contains(":element-type must be 'single-float or 'double-float");
+			.contains(":element-type must be 'single-float, 'double-float or 'bfloat16");
+	}
+
+	// The third destination (interpreter and JVM only; every other backend refuses the
+	// width by name). What each source type costs to reach it differs, and the fixture
+	// shows all three: a BF16 tensor is the file's own bytes and comes back EQUAL to the
+	// single-float read, because widening a bfloat16 is exact; an F32 tensor is narrowed
+	// AS IT STREAMS, never through a whole f32 transient; an F16 tensor goes through the
+	// chunk-sized f32 scratch. Every value in this fixture happens to fit eight mantissa
+	// bits, so all three come back unchanged -- which is the point of the fixture, not a
+	// property of the conversion (.todo/487 steps 3 and 4, .kb/bfloat16.md).
+	@Test
+	void everyTensorTypeReadsIntoABfloat16Destination() {
+		String path = fixture.toString().replace("\\", "\\\\");
+		String read = "(gguf:read \"%s\" :only '(\"t.f32\" \"t.f16\" \"t.bf16\" \"t.vec\") :element-type 'bfloat16)"
+			.formatted(path);
+		assertThat(eval("(array-element-type (gguf:tensor %s \"t.bf16\"))".formatted(read))).isEqualTo("BFLOAT16");
+		assertThat(eval("(gguf:tensor %s \"t.bf16\")".formatted(read)))
+			.isEqualTo("#bf16((1.0 -2.5) (0.25 0.0) (-0.75 3.5) (8.0 -0.125))");
+		assertThat(eval("(gguf:tensor %s \"t.f16\")".formatted(read)))
+			.isEqualTo("#bf16((-1.0 -0.75 -0.5 -0.25 0.0) (0.25 0.5 0.75 1.0 1.25))");
+		assertThat(eval("(gguf:tensor %s \"t.vec\")".formatted(read))).isEqualTo("#bf16(1.0 2.0 3.0 4.0 5.0)");
 	}
 
 	// --- what is refused, and when ------------------------------------------------

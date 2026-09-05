@@ -106,6 +106,38 @@ class SafetensorsLibraryTest {
 		assertThatThrownBy(() -> eval("(safetensors:read \"" + path + "\")")).hasMessageContaining("ids is I64");
 	}
 
+	// :element-type 'bfloat16 is the third destination (interpreter and JVM only; every
+	// other backend refuses the width by name). What each dtype costs to get there is
+	// the point, and it is NOT uniform -- the frozen interface in .todo/675 said the
+	// values would be EQUAL to the single-float read because "widening is exact", which
+	// holds for a BF16 SOURCE and for nothing else:
+	//
+	// BF16 source -> the file's own bytes, one read-sequence, no conversion: equal.
+	// F32 source -> narrowed as it streams; equal only where the value already fits
+	// eight mantissa bits, which the fixture's four F32 values do.
+	// F16 source -> staged through an f32 scratch and narrowed; 65504 is the f16
+	// maximum and is NOT a bfloat16, so it rounds to nearest even and
+	// comes back 65536.
+	@Test
+	void readsIntoABfloat16DestinationAndNarrowsOnlyWhereTheWidthRequiresIt() throws IOException {
+		Path file = writeFixture(this.dir.resolve("model.safetensors"));
+		String path = file.toString().replace("\\", "/");
+		String read = "(safetensors:read \"" + path + "\" :element-type 'bfloat16"
+				+ " :only (lambda (n) (not (string= n \"ids\"))))";
+		assertThat(eval("(array-element-type (gethash \"c\" " + read + "))").print()).isEqualTo("BFLOAT16");
+		// BF16 -> bfloat16: the same two bytes, so the value is the one the
+		// single-float read gives.
+		assertThat(eval("(gethash \"c\" " + read + ")").print()).isEqualTo("#bf16(-2.5)");
+		// F32 -> bfloat16, narrowed while streaming, never through a whole f32 tensor.
+		assertThat(eval("(gethash \"a.weight\" " + read + ")").print()).isEqualTo("#bf16((1.5 -2.0) (0.25 8.0))");
+		// F16 -> bfloat16 through the f32 scratch; the f16 maximum does not survive the
+		// narrower mantissa, and round-to-nearest-even is what decides where it lands.
+		assertThat(eval("(gethash \"b.weight\" " + read + ")").print()).isEqualTo("#bf16(1.0 -0.5 65500.0)");
+		// The same pattern, read as a number rather than printed: 0x4780 is 65536.
+		assertThat(eval("(rontolisp:bfloat16-bits (row-major-aref (gethash \"b.weight\" " + read + ") 2))").print())
+			.isEqualTo("18304");
+	}
+
 	/**
 	 * A four-tensor file: a 2x2 F32, a 3-element F16 (with the f16 maximum), a
 	 * one-element BF16 and an I64 to refuse, with a header padded to 8 bytes the way

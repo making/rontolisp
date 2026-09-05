@@ -39,7 +39,10 @@
 
 (defun checkpoint:make-tensor (shape element-type)
   ;; A packed float array of SHAPE (a dimension list, or one integer) and
-  ;; ELEMENT-TYPE ('single-float or 'double-float), verified to be packed.
+  ;; ELEMENT-TYPE ('single-float, 'double-float or 'bfloat16), verified to be
+  ;; packed. The type arrives as a VALUE, which is the only way a reader can
+  ;; pass it and was the shape that caught the runtime-:element-type dispatch
+  ;; missing bfloat16 on every compile backend (.todo/487).
   (let ((a (make-array shape :element-type element-type :initial-element 0.0)))
     (unless (eq (array-element-type a) element-type)
       (error
@@ -54,27 +57,84 @@
   ;; Returns DST. Chunked through the one staging buffer; the last, shorter
   ;; chunk goes through a buffer of its own size, since widen-float-bits widens
   ;; the whole vector it is given.
-  (let ((buf (checkpoint::%staging-buffer)) (done 0))
+  (if (and (eq format :bfloat16) (eq (array-element-type dst) 'bfloat16))
+      ;; BF16 bits into a bf16 destination are the SAME BYTES: one bulk
+      ;; read-sequence, no staging buffer and no conversion at all. That is the
+      ;; whole point of the width on the load path -- a 2.2 GB checkpoint moves
+      ;; once (.kb/bfloat16.md).
+      (progn
+        (read-sequence dst stream :start start :end (+ start count))
+        dst)
+      (checkpoint::%stage-widened stream count format dst start)))
+
+(defun checkpoint::%stage-widened (stream count format dst start)
+  ;; The general path: 16-bit patterns staged through the reusable buffer and
+  ;; widened into DST a chunk at a time. A bf16 DST fed :float16 bits lands
+  ;; here too, through an f32 scratch of the chunk's size -- widen-float-bits
+  ;; has no bf16 destination arm, and the per-element store narrows
+  ;; round-to-nearest-even through the array's own setter.
+  (let ((buf (checkpoint::%staging-buffer))
+        (done 0)
+        (narrow (eq (array-element-type dst) 'bfloat16)))
     (loop while (< done count)
           do
-            (let ((n (min checkpoint::%chunk (- count done))))
-              (if (= n checkpoint::%chunk)
-                  (progn
-                    (read-sequence buf stream)
-                    (rontolisp:widen-float-bits buf format dst
-                                                :start (+ start done)))
-                  (let ((tail (make-array n :element-type '(unsigned-byte 16))))
-                    (read-sequence tail stream)
-                    (rontolisp:widen-float-bits tail format dst
-                                                :start (+ start done))))
+            (let* ((n (min checkpoint::%chunk (- count done)))
+                   (bits
+                    (if (= n checkpoint::%chunk)
+                        buf
+                        (make-array n :element-type '(unsigned-byte 16)))))
+              ;; BITS is exactly N long either way -- the shared buffer when the
+              ;; chunk is full, a buffer of its own size for the short tail --
+              ;; so one whole-vector read fills it.
+              (read-sequence bits stream)
+              (if narrow
+                  (let ((scratch
+                         (make-array n
+                                     :element-type 'single-float
+                                     :initial-element 0.0)))
+                    (rontolisp:widen-float-bits bits format scratch)
+                    (dotimes (i n)
+                      (setf (row-major-aref dst (+ start done i))
+                            (row-major-aref scratch i))))
+                  (rontolisp:widen-float-bits bits format dst
+                                              :start (+ start done)))
               (setq done (+ done n))))
     dst))
 
 (defun checkpoint:stage-float32 (stream dst)
   ;; An F32 tensor is the destination's own bytes: one bulk transfer into DST,
   ;; a packed single-float array of any rank. Returns DST.
-  (read-sequence dst stream)
-  dst)
+  ;;
+  ;; A bfloat16 DST is the one shape that is not its own bytes, so the f32
+  ;; words are staged a chunk at a time and NARROWED in, never by materializing
+  ;; the whole f32 tensor first -- at 1B parameters that transient is 4.4 GB
+  ;; (.todo/487 step 4).
+  (if (eq (array-element-type dst) 'bfloat16)
+      (checkpoint::%stage-float32-narrowed stream dst)
+      (progn
+        (read-sequence dst stream)
+        dst)))
+
+(defun checkpoint::%stage-float32-narrowed (stream dst)
+  ;; F32 words from STREAM into a bfloat16 DST, chunked through one f32
+  ;; scratch. The per-element store narrows round-to-nearest-even through the
+  ;; array's own setter, which is the same rounding am.ik.rontolisp.BFloat16
+  ;; does everywhere else (.kb/bfloat16.md).
+  (let ((count (array-total-size dst))
+        (scratch
+         (make-array checkpoint::%chunk
+                     :element-type 'single-float
+                     :initial-element 0.0))
+        (done 0))
+    (loop while (< done count)
+          do
+            (let ((n (min checkpoint::%chunk (- count done))))
+              (read-sequence scratch stream :end n)
+              (dotimes (i n)
+                (setf (row-major-aref dst (+ done i))
+                      (row-major-aref scratch i)))
+              (setq done (+ done n))))
+    dst))
 
 (defun checkpoint:skip-bytes (stream n)
   ;; Pass over N bytes of STREAM, in bounded reads through a scratch buffer.

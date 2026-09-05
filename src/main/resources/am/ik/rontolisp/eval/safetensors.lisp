@@ -19,7 +19,10 @@
 ;;;;     -> a hash table, tensor name -> array. PATH is a .safetensors file, a
 ;;;;     .index.json, or a directory holding model.safetensors[.index.json].
 ;;;;     ONLY is nil (everything) or a predicate over the name; ELEMENT-TYPE
-;;;;     'single-float (default) or 'double-float.
+;;;;     'single-float (default), 'double-float, or 'bfloat16 on the interpreter
+;;;;     and the JVM (every other backend refuses that width by name). A BF16
+;;;;     tensor into a bfloat16 destination is ONE read-sequence of the file's
+;;;;     own bytes -- no widen, no staging buffer (.kb/bfloat16.md).
 ;;;;   (safetensors:header path) -> (values header data-start)
 ;;;;     the parsed JSON (name -> {"dtype" "shape" "data_offsets"}, plus
 ;;;;     "__metadata__") and the file offset the data starts at.
@@ -71,7 +74,10 @@
          (dst (checkpoint:make-tensor dims element-type)))
     (cond
      ((not (eq format :f32)) (checkpoint:stage-float-bits s count format dst))
-     ((eq element-type 'single-float) (checkpoint:stage-float32 s dst))
+     ;; An F32 tensor into a single-float destination is its own bytes, and into
+     ;; a bfloat16 one is narrowed AS IT STREAMS -- both are one staged pass, no
+     ;; whole-tensor transient (.todo/487 step 4).
+     ((not (eq element-type 'double-float)) (checkpoint:stage-float32 s dst))
      (t
       ;; an F32 tensor into a double array: through a single-float one
       (let ((f32 (checkpoint:make-tensor dims 'single-float)))

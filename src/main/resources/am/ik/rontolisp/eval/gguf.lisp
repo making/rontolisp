@@ -337,7 +337,10 @@
                  (gguf::%advance rd (* 4 count))
                  (dotimes (i count dst)
                    (setf (row-major-aref dst i) (row-major-aref staged i))))
-               (let ((dst (checkpoint:make-tensor dims 'single-float)))
+               ;; single-float takes the bytes as they are; bfloat16 is
+               ;; narrowed AS IT STREAMS by the same staged pass, never through
+               ;; a whole f32 tensor (.todo/487 step 4).
+               (let ((dst (checkpoint:make-tensor dims element-type)))
                  (checkpoint:stage-float32 (gguf::%rd-stream rd) dst)
                  (gguf::%advance rd (* 4 count))
                  dst)))
@@ -405,12 +408,13 @@ functions take. :METADATA-ONLY stops after the tensor directory, which is where
 the hyperparameters and the whole tokenizer already are, so it never touches the
 gigabytes. :ONLY is a list of tensor names to load; the rest are skipped (the
 data is still read past, since a rontolisp stream cannot seek). :ELEMENT-TYPE
-picks the packed float width every tensor lands in -- 'single-float (the default)
-or 'double-float."
-  (unless (or (eq element-type 'single-float) (eq element-type 'double-float))
-    (error
-     "gguf:read: :element-type must be 'single-float or 'double-float, not ~s"
-     element-type))
+picks the packed float width every tensor lands in -- 'single-float (the default),
+'double-float, or 'bfloat16 on the interpreter and the JVM (every other backend
+refuses that width by name)."
+  (unless (or (eq element-type 'single-float) (eq element-type 'double-float)
+              (eq element-type 'bfloat16))
+    (error "gguf:read: :element-type must be 'single-float, 'double-float or 'bfloat16, not ~s"
+           element-type))
   (with-open-file (s path :element-type '(unsigned-byte 8))
     (let ((rd (gguf::%open-reader s)))
       (gguf::%read-magic rd)

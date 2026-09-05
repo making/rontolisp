@@ -4,6 +4,8 @@
 
 バイトストリーム `stream` の現在位置から、F32 テンソル（任意ランクのパックされた単精度配列 `dst` のバイト列、リトルエンディアン）を 1 回の `read-sequence` で読み込みます。`dst` を返します。変換の要らない幅のための、[`checkpoint:stage-float-bits`](checkpoint-stage-float-bits.md) の対です。
 
+`bfloat16` の `dst` だけはそのバイト列ではないので、チャンクごとにステージングして**流しながら丸めます**。先に f32 テンソル全体を作ることは決してしません。10 億パラメータならそれは 4.4 GB の一時領域になります。
+
 ```console
 CL-USER> (with-open-file (s "model.safetensors" :element-type '(unsigned-byte 8))
            (checkpoint:skip-bytes s data-start)

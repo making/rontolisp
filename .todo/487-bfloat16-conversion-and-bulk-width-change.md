@@ -112,10 +112,27 @@ list of seven would be a fifth transcription with a green tick on it:
 fails when the generator is made to skip a width. `.todo/703`'s mechanism question is
 untouched and its evidence is stronger; the entry there says so.
 
-**Still open here**: step 2 (`coerce` and the bulk width change), the rest of step 3
-(675's bullets 3-5), step 4 (f32 -> bf16 at load), step 5 (the widen-once scratch), the
-signalling-NaN reachability question below, and the remaining census rows (the three
-travelling templates and `NoGcWasmCompiler.compileFloatArrayLiteral`).
+**Steps 3 and 4 are now DONE end to end**, which is all five of `.todo/675`'s frozen
+bullets. `checkpoint:stage-float-bits` takes BF16 bits into a `#bf16` destination as ONE
+`read-sequence` with no widen and no staging buffer; `:float16` bits into one go through a
+chunk-sized f32 scratch; `checkpoint:stage-float32` narrows f32 words into a `#bf16`
+destination AS THEY STREAM (step 4), never through a whole-tensor transient, and both
+readers hand a `bfloat16` destination straight to it. `safetensors:read` and `gguf:read`
+take `:element-type 'bfloat16`; docs mirrored en/ja on the five pages;
+`.kb/checkpoint-readers.md` carries the source-by-destination table.
+
+**One correction to 675's frozen text, measured**: it said a `'bfloat16` read would be EQUAL
+to the `'single-float` one "because widening is exact". That holds for a BF16 SOURCE and for
+nothing else -- bfloat16 has eight mantissa bits, so an F16 or F32 value outside them
+changes. The f16 maximum 65504 rounds to the pattern `0x4780` (value 65536), which prints as
+`65500.0` because `FloatText.bfloat16Text` answers the shortest decimal that reads back as
+the same bfloat16. The tests assert the narrowed value.
+
+**Still open here**: step 2 (`coerce` and the bulk width change -- `widen-float-bits` /
+`narrow-float-bits` still decline a bf16 source or destination, which nothing above needed),
+step 5 (the widen-once scratch), the signalling-NaN reachability question below, and the
+remaining census rows (the three travelling templates and
+`NoGcWasmCompiler.compileFloatArrayLiteral`).
 
 ## Do
 

@@ -122,21 +122,32 @@ ceiling, `examples/llama2/README.md`).
   put in `.kb` together so a kernel author greps one place. Relevant here because
   `stage-float-bits` narrowing an F32 tensor to bf16 in bulk is exactly where someone
   reaches for lanes.
-- **A `#bf16` destination -- the remainder, NOT STARTED as of 2026-09-05** (`.todo/485`
+- ~~**A `#bf16` destination**~~ -- **ALL FIVE BULLETS DONE 2026-09-05 under `.todo/487`**
+  (1 and 2 in `35e1ab9b`, 3-5 in the commit after it). One correction to the frozen text
+  below, measured: bullet 5's "widening is exact, so the values are EQUAL" holds for a BF16
+  SOURCE only -- an F16 or F32 value outside bfloat16's eight mantissa bits changes, and the
+  tests assert the narrowed value. `.todo/489`'s "Where the bf16 measurement resumes" applies
+  now (`.todo/485`
   exists; `.todo/488`'s fused kernels take bf16 weights against f32 activations, and
   `examples/llama2/llama2.lisp`'s `-w bf16` is already wired to ask for it, so this is
   the one thing between the readers and `.todo/489`'s bf16 rungs). The interface was
   frozen between the two orchestrators on 2026-09-05; build exactly this:
-  1. `checkpoint:make-tensor shape 'bfloat16` answers a `#bf16` array. **The JVM's
-     RUNTIME `make-array` dispatch does not know `bfloat16` through a VARIABLE** --
-     `(let ((e 'bfloat16)) (make-array 4 :element-type e :initial-element 0.0))` is a
-     general array on the JVM class output and `#bf16` on the interpreter, while the
-     literal works on both (`.todo/703` has the program) -- so that dispatch is the
-     fourth site, and `make-tensor`'s assertion is what catches it today. Pin: literal
-     AND variable element type, over `'single-float` and `'bfloat16`, on both backends,
-     asserting `array-element-type` by value (every existing case passes a literal; the
-     variable path had no coverage).
-  2. `read-sequence` over a `#bf16` array is one bulk transfer: interpreter
+  1. ~~`checkpoint:make-tensor shape 'bfloat16` answers a `#bf16` array, and the RUNTIME
+     `make-array` dispatch learns the width~~ -- **DONE 2026-09-05 under `.todo/487`,
+     commit `35e1ab9b`.** It was not one site but FOUR transcriptions of the same arm
+     list (the program-scan mask, the inline lowering's arms, `%make-array-et`,
+     `%make-array-et-fp`), each documented as covering seven `ArrayElementTypes` codes
+     and each spelling six; and it was not JVM-only -- wasm answered a boxed array too,
+     walking past the refusal `WasmArrayCompiler` puts on the LITERAL spelling for
+     exactly that reason. Fixed by DERIVING all four from
+     `ArrayElementTypes.specializedCodes()` rather than adding a seventh copy. The pin
+     asked for here exists and is stronger: keyed to the enum rather than listing widths,
+     literal versus variable over EVERY code, on all three engines, plus both JVM
+     lowerings -- names in `.kb/array-literals.md`.
+  2. ~~`read-sequence` over a `#bf16` array is one bulk transfer~~ -- **DONE 2026-09-05
+     under `.todo/487`, commit `35e1ab9b`**, exactly as frozen below, with the
+     `0x3F80` / `0x803F` pin on both engines. Original text kept for the record:
+     interpreter
      `eval/PackedBuffer` (a `LispBFloat16Array` arm, `short[]`, width 2, through the
      `ByteOrder.LITTLE_ENDIAN` buffer the other arms use, and `FloatArrayAccessHook.written`
      like the float arms) and JVM `JvmIoRuntimeBuilder.buildSeqPacked` (a `short[]` arm,
