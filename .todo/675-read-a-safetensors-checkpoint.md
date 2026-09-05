@@ -115,8 +115,56 @@ ceiling, `examples/llama2/README.md`).
   before 692's fix, so it is a separate pre-existing bug in the component I/O path. The
   line above claiming both WASM legs "pass the whole fixture" was only ever true of the
   Preview 1 one.
-- A `#bf16` destination (`:element-type` passed through `checkpoint:make-tensor`) once
-  `.todo/484` / `.todo/485` exist.
+- **A `#bf16` destination -- the remainder, NOT STARTED as of 2026-09-05** (`.todo/485`
+  exists; `.todo/488`'s fused kernels take bf16 weights against f32 activations, and
+  `examples/llama2/llama2.lisp`'s `-w bf16` is already wired to ask for it, so this is
+  the one thing between the readers and `.todo/489`'s bf16 rungs). The interface was
+  frozen between the two orchestrators on 2026-09-05; build exactly this:
+  1. `checkpoint:make-tensor shape 'bfloat16` answers a `#bf16` array. **The JVM's
+     RUNTIME `make-array` dispatch does not know `bfloat16` through a VARIABLE** --
+     `(let ((e 'bfloat16)) (make-array 4 :element-type e :initial-element 0.0))` is a
+     general array on the JVM class output and `#bf16` on the interpreter, while the
+     literal works on both (`.todo/703` has the program) -- so that dispatch is the
+     fourth site, and `make-tensor`'s assertion is what catches it today. Pin: literal
+     AND variable element type, over `'single-float` and `'bfloat16`, on both backends,
+     asserting `array-element-type` by value (every existing case passes a literal; the
+     variable path had no coverage).
+  2. `read-sequence` over a `#bf16` array is one bulk transfer: interpreter
+     `eval/PackedBuffer` (a `LispBFloat16Array` arm, `short[]`, width 2, through the
+     `ByteOrder.LITTLE_ENDIAN` buffer the other arms use, and `FloatArrayAccessHook.written`
+     like the float arms) and JVM `JvmIoRuntimeBuilder.buildSeqPacked` (a `short[]` arm,
+     data offset `1 + 2 * rank` per `JvmPackedFloatWidth`'s two-slots-per-dimension
+     header, `asShortBuffer().get/put`). **An explicit little-endian 16-bit read, never a
+     byte copy**: safetensors and GGUF are little-endian by specification, and a copy on
+     one backend beside `PackedBuffer`'s explicit ordering on the other would make the
+     two disagree on one file. Pin on a value whose failure is unmistakable: bf16
+     `0x3F80` is `1.0` and byte-swapped `0x803F` is a tiny negative denormal.
+     `write-sequence` the mirror. `.kb/binary-sequence-io.md` and `.kb/bfloat16.md` ("the
+     bulk pair, `read-sequence` and `write-sequence` all still decline bf16") change with
+     it.
+  3. `checkpoint:stage-float-bits stream count format dst` with a `#bf16` DST: for
+     `:bfloat16` bits it is `(read-sequence dst stream :start start :end (+ start
+     count))` -- **BF16 file bits are one `read-sequence` with no widen at all**, which
+     is the whole point of the width on the load path; for `:float16` bits, chunk through
+     an `#f` staging array of chunk size (`widen-float-bits` into it as today) and store
+     each element into DST (`(setf (row-major-aref dst i) ...)` narrows round-to-nearest-
+     even through the array's own setter). No `#bf16` arm in `widen-float-bits` itself is
+     needed for this; `eval/FloatBitsWidening` keeps its "does not yet" decline unless
+     someone wants the bulk pair too.
+  4. `safetensors:read` / `gguf:read` accept `:element-type 'bfloat16`: a BF16 tensor is
+     case 3's first arm, an F16 tensor its second, an F32 tensor (the norms in some
+     files) is staged as `#f` and narrowed element by element like the existing
+     double-float arm. The docs (`doc/en` + `doc/ja` reference pages for both readers,
+     `checkpoint-make-tensor`, `checkpoint-stage-float-bits`) and
+     `.kb/checkpoint-readers.md` say `'bfloat16` is the third destination, interpreter
+     and JVM only (every other backend refuses the width by name, unchanged).
+  5. Tests: `LispEvaluatorTest` + `JvmLispCompilerTest` for 1 and 2 (the pins named);
+     `SafetensorsLibraryTest` / the GGUF test with a BF16 and an F16 tensor into
+     `'bfloat16` compared element for element against the `'single-float` read (widening
+     is exact, so the values are EQUAL, not close); `examples/llama2/safetensors-check.lisp`
+     may gain a `'bfloat16` section on the interpreter and JVM legs only. No `ci-spec.yaml`
+     case is needed unless a wasm `refusedOn` leg is wanted.
+  Then `.todo/489`'s "Where the bf16 measurement resumes" applies as written.
 
 ## Verify
 
