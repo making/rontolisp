@@ -263,12 +263,26 @@ direction and 15 in the other; a list produced by diffing closes exactly. **Diff
 lists class by class rather than reasoning about which classes ought to differ** -- and note
 that the "residual" was never a measurement result at all, only the shape of the omission.
 
-One detail left for whoever reads the censuses next: the GB10 table as relayed sums to 188
-across 32 classes against its stated 33 / 189, so one 1-skip line is missing from the relay.
-The net is invariant to which line it is -- if it is `ObjcNativeImageForeignConfigTest` the
-split is 120/-33, otherwise 121/-34, and both give +87 -- but the COUNT of differing classes
-is not: 17 in the first case, 19 in the second. Read it off GB10's file rather than inferring
-it, which is the same instruction as above applied to the relay instead of the data.
+The relay of that census dropped a line, and how it was resolved is worth one paragraph.
+As relayed the GB10 table summed to 188 across 32 classes against its stated 33 / 189. The
+missing entry is `ObjcNativeImageForeignConfigTest` 1 -- read off the file, not inferred --
+which dorian also skips 1 of 3, so it is shared-and-equal, contributes 0, and the split is
++120 / -33 with **17** differing classes as stated. The umbrella's figures were computed
+from the file and never had the gap.
+
+**The near miss was that the arithmetic was self-consistent under the wrong reading.**
+188 plus a missing 1 gives 189 whichever class the 1 belongs to, and the split lands on +87
+either way, so nothing in the numbers objects. The only quantity that discriminates is the
+class COUNT -- 17 against 19 -- and that is precisely the figure a reader takes on trust
+from a sentence instead of recomputing. **A sum that closes is not evidence about its
+terms.** Note the asymmetry with the defect this section closes: the five-class list summed
+to 111 against an 87 it was explaining, and that visible mismatch is what eventually exposed
+it. Here the sum closed perfectly and hid a missing term completely. **The self-consistent
+case is the harder one and it is the common one.**
+
+The operational form, for the filing rather than for this item: **relay a census from the
+file, and state its total AND its class count** -- the total alone cannot detect a dropped
+line.
 
 The two censuses also bound this item's defect from both sides. They are not the certified
 pair -- GB10's run is `21a82d97` (9849 tests, 222 reports), dorian's is `b87aed25` (26359,
