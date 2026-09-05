@@ -10721,13 +10721,22 @@ cases:
       LENGTH-FLAT
   - name: character-index-into-a-string-holding-a-surrogate-pair
     source: |
-      ;; The same cost invariant for the shape the case above cannot reach: a
-      ;; string whose characters are NOT all one storage unit. Every backend has
-      ;; a shortcut for the flat case -- 1 + i on the JVM's UTF-16 string, the
-      ;; one-byte-prefix cursor on both WASM ones -- and an astral character in
-      ;; every 16 disables all of them, so what is measured here is the fallback:
-      ;; the JVM's breakpoint table and WASM's cursor walk
-      ;; (.kb/string-index-cost.md).
+      ;; The CORRECTNESS half of the invariant above, for the shape that case
+      ;; cannot reach: a string whose characters are NOT all one storage unit.
+      ;; Every backend has a shortcut for the flat case -- 1 + i on the JVM's
+      ;; UTF-16 string, the one-byte-prefix cursor on both WASM ones -- and an
+      ;; astral character in every 16 disables all of them, so every index below
+      ;; goes through the fallback: the JVM's breakpoint table and WASM's cursor
+      ;; walk (.kb/string-index-cost.md).
+      ;;
+      ;; The COST half is pinned per backend in JUnit, not here. A verdict
+      ;; derived from get-internal-real-time is a machine-speed token inside a
+      ;; file whose contract is exact strings, and a flake in it fails the run
+      ;; carrying every other case's evidence. Sizing the scan so that a
+      ;; quadratic implementation could not finish instead was measured and
+      ;; rejected: the driver's ceiling is a fixed 300 s per invocation, so the
+      ;; size that detects one is a property of the runner rather than of the
+      ;; code, and a timeout names the COMMAND -- a backend, not a case.
       ;;
       ;; Both strings go through rontolisp:octets-to-string because on the JVM
       ;; that is the producer whose result is an immutable string rather than a
@@ -10752,20 +10761,15 @@ cases:
           (dotimes (i (length s))
             (setq total (+ total (char-code (char s i)))))
           total))
-      (sur-scan "warm")
-      (defvar *sur-t0* (get-internal-real-time))
       (defvar *sur-whole* (sur-scan *sur-long*))
-      (defvar *sur-t1* (get-internal-real-time))
       (defvar *sur-chunked* 0)
       (dotimes (k 128)
         (setq *sur-chunked* (+ *sur-chunked* (sur-scan *sur-short*))))
-      (defvar *sur-t2* (get-internal-real-time))
-      ;; The long string IS the short one 128 times over, so both halves read the
-      ;; same characters and the two times compare.
+      ;; The long string IS the short one 128 times over, so a left-to-right walk
+      ;; of it must read exactly the characters 128 walks of the short one do --
+      ;; which is the property an index that answers by its own position has and
+      ;; one that drifts with the cursor does not.
       (print (= *sur-whole* *sur-chunked*))
-      (print (if (<= (- *sur-t1* *sur-t0*) (+ 500 (* 6 (- *sur-t2* *sur-t1*))))
-                 'surrogate-scan-flat
-                 'surrogate-scan-quadratic))
     expected: |
       256
       32768
@@ -10773,7 +10777,6 @@ cases:
       128512
       101
       T
-      SURROGATE-SCAN-FLAT
   - name: character-vector-index-reads-the-element
     source: |
       ;; (char v i) / (schar v i) / (elt v i) on a MUTABLE CHARACTER VECTOR (a
