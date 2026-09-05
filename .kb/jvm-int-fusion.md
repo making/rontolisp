@@ -1,76 +1,130 @@
 # JVM integer expression-tree fusion (outlined `_fx$N` methods)
 
-**Invariant: fusing an integer expression tree must never change a result, an observable side effect, or an error shape — the fast path is an optimization with a total fallback, not a semantic variant.**
+**Invariant: fusing an integer expression tree must never change a result, an observable side
+effect, or an error shape -- the fast path is an optimization with a total fallback.**
 
-JVM analogue of `.kb/wasm-int-fusion.md`, integer sibling of `.kb/jvm-typed-loops.md`. A nested arithmetic/bitwise tree over `+ - * mod rem logand logior logxor lognot ash` (plus `1+`/`1-`, normalized into `+`/`-` with a constant 1) compiles into ONE unboxed evaluation: non-constant leaves evaluated once, left to right; interior stays raw `long`; only the root boxes. Without it every interior op paid a generic-helper call (`_add(Object, Object)`-family) plus a `Long` allocation per intermediate — the cost was the allocation rate, not the arithmetic.
+JVM analogue of `.kb/wasm-int-fusion.md`, integer sibling of `.kb/jvm-typed-loops.md`. A nested
+tree over `+ - * mod rem logand logior logxor lognot ash` (plus `1+`/`1-`, normalized to `+`/`-`
+with a constant 1) becomes ONE unboxed evaluation: non-constant leaves evaluated once, left to
+right; interior raw `long`; only the root boxes. It removes an allocation rate, not arithmetic.
 
 ## Outlined, not inline
-A fused site is its OWN private static method (`_fx$N`); the call site is one `invokestatic` over the once-evaluated leaves.
-- **Method size**: a fused site emits its tree twice (fast + fallback), and ironclad's `update-sha256-block` sat at the 8000-byte `HugeMethodLimit` (`.kb/hot-path-method-size.md`). Outlining makes the enclosing method SMALLER than the generic emission (one call replaces the per-op chain): 8,755 -> 5,339 bytes.
-- **Sharing**: structurally identical sites share one method (`State.byKey`, keyed on the tree's op/leaf-kind/constant structure plus the descriptor); SHA-256's 64 rounds collapse into a handful of `_fx$N`s.
-- **Stack discipline**: inside the method the operand stack is the tree's own, so overflow can bail through an `ArithmeticException` handler (entering a handler discards the stack) without touching an enclosing expression's pending operands.
-- HotSpot inlines the small `_fx$N`s at hot call sites (a `(+ i 1)` step method is well under `FreqInlineSize`) and escape analysis then removes even the root box; the big SHA-round methods stay out of line but compile whole, with register-allocated `long`s.
+A fused site is its own private static `_fx$N`; the call site is one `invokestatic` over the
+once-evaluated leaves. A fused site emits its tree TWICE (fast + fallback), so inlining would cross
+the 8000-byte `HugeMethodLimit` (`.kb/hot-path-method-size.md`). Structurally identical sites share
+one method (`State.byKey`). Inside the method the operand stack is the tree's own, so an overflow
+bail through the `ArithmeticException` handler (which discards the stack) cannot disturb an
+enclosing expression's pending operands.
 
 ## How exactness survives the raw path
-- **Per-leaf guard**: each leaf arrives as an `Object` parameter, unboxed behind `instanceof Long`; anything else (Double, BigInteger, nil) branches to the fallback. On this backend an integer in `long` range is always a `Long` (`BigInteger` only holds magnitudes outside it, `.kb/core-representation.md`), so the one test is the whole tier check.
-- **Per-operation overflow check**: `+ - *` through `Math.addExact`/`subtractExact`/`multiplyExact`, `mod` through `Math.floorMod` (exactly `_mod`'s Long fast path), `rem` through `LREM`, `ash` through the emitted `_fxAsh(JJ)J` helper (count narrowed to `int` first, like `_ash`; a wide or overflowing left shift throws). The whole fast path sits in an `ArithmeticException`-typed exception region whose handler IS the bail.
-- **The fallback recomputes the WHOLE tree from the SAME parameters** through the generic helpers (`_add`-family, `_logand`, `_ash`, `_cmpb`) — identical bit for bit, including `BigInteger` promotion; the operations are pure and the leaves' side effects ran once at the call site.
-- Strength reductions, exact for any `long`: `(mod x 2^k)` with a positive power-of-two literal is `x & (2^k - 1)`; `(ash x -k)` with a literal non-positive count is an arithmetic right shift clamped at 63.
-- **Masked-wrap peephole**: under a non-negative literal `logand` mask or a power-of-two `mod`, the whole `+ - *`/left-`ash`-by-literal subtree emits as UNCHECKED wrap-around `long` ops (the low `k <= 63` bits of a wrapped result equal the infinite-precision ones), so `mod32+`/`rol32` code pays no checks.
+- **Per-leaf guard**: each leaf arrives as `Object`, unboxed behind `instanceof Long`. An integer
+  in `long` range is always a `Long` here (`.kb/core-representation.md`), so that one test is the
+  whole tier check.
+- **Per-operation overflow check**: `Math.addExact`/`subtractExact`/`multiplyExact`,
+  `Math.floorMod` (`mod`), `LREM` (`rem`), the emitted `_fxAsh(JJ)J` (`ash`, count narrowed to
+  `int` first). The fast path sits in an `ArithmeticException` region whose handler IS the bail.
+- **The fallback recomputes the WHOLE tree from the SAME parameters** through `_add`-family,
+  `_logand`, `_ash`, `_cmpb` -- identical bit for bit incl. `BigInteger` promotion; leaf side
+  effects ran once at the call site.
+- Exact strength reductions: `(mod x 2^k)` positive power-of-two literal -> `x & (2^k - 1)`;
+  `(ash x -k)` literal non-positive count -> arithmetic right shift clamped at 63.
+- **Masked-wrap peephole**: under a non-negative literal `logand` mask or a power-of-two `mod`, the
+  `+ - *`/left-`ash`-by-literal subtree emits as UNCHECKED wrap-around `long` ops.
 
 ## Entry points beyond plain trees
-- **Fused comparisons** (`= < > <= >=`, binary): an `_fx$N` returning a raw `int` truth value — `LCMP` + the operator's branch on the fast path, generic `_cmpb`-with-mask on the fallback (so NaN and cross-tier operands keep the generic result). Value position boxes the int through the shared t/nil emission; **condition position** (`if`/`while` tests, hence `when`/`unless`/`dotimes`/`loop` heads) branches on the raw int with `IFEQ`, skipping the boxed round trip per iteration. The both-plain-leaves shape (`(< x y)`) keeps the generic emission.
-- **Substitution**: a call to a fusion-inlinable defun (uniquely defined, fixed arity, single closed integer-tree body — `Ctx.inlinableDefuns`, computed in `JvmLispCompiler` before Pass 2; never under `--dynamic`) or a `(funcall __FLETn_f ...)` of a let-bound local function (`Ctx.localIntLambdas`, registered by `JvmLetCompiler`) substitutes the body with parameters bound to the classified arguments, so the tree spans `mod32+`/`rol32`/`sigma0` helpers. A parameter used more than once shares its argument's node (leaves evaluate once); a failed substitution rolls back the leaves it registered so a side-effecting argument is not evaluated twice. An accessor-shaped defun body (exactly `(aref P I)`) maps onto an ArefLeaf over the caller's operands.
-- **Packed aref leaves** (whenever `Ctx.usesArrays`): a rank-1 `(aref a i)` leaf passes the array as one argument and the fast path reads the element raw from EITHER packed representation — the bare `long[]` packed integer vector (elements from slot 1, past the width header; only under `Ctx.usesIntArray`) and the general array's length-6 header over a flat `long[]` (elements from slot 0, `.kb/adjustable-arrays.md`). The general discriminator is `_arrayp`'s plus header length: `instanceof ArrayList`, `size() != 0`, `get(0) instanceof Object[]`, `length == 6` — 4 is a character vector, 5 a displacement, 3 the boxed general array. The nil sentinel (`Long.MIN_VALUE`), an out-of-range index and every non-packed shape bail; the fallback calls the same rank-1 helper the ordinary emission would (`_ivAref1`/`_fvAref1`/`_arrayAref1` by the same gate), so strings, floats, displaced and fill-pointered arrays and every error shape reproduce. The INDEX is itself a fusion node: a literal folds in, a symbol and a `random` draw read the raw slot the prologue filled, anything else is one opaque guarded argument. A bailing site is ~1.5 ns/read slower than the unfused emission — paid only by a general array WIDENED out of the packed shape, since a packed float array and a string fail the first `instanceof` and a fresh `(make-array n)` starts packed.
-- **Random leaves**: `(random <integer>)` draws straight into a raw slot, the same expression `_random` computes for a `Long` limit — `(long) (ThreadLocalRandom.current().nextDouble() * limit)`, ONE formula, not two generators (`.kb/random.md`). A LITERAL limit needs no call argument. **This is the only IMPURE leaf and its protocol follows from that**: the fallback re-emits its tree, and a node bound to a substituted parameter used twice re-emits TWICE, so a fallback allowed to draw would make `(defun dif (x) (- x x))` over `(dif (random lim))` stop answering 0. The draw therefore happens exactly once per leaf, in the prologue, on every path, and the fallback only READS it: a `Long` limit draws raw and sets the leaf's flag; anything else takes its one draw from `_random` into a boxed slot, clears the flag and raises the method's shared bail flag, tested ONCE after all the draws — nothing in the draw phase branches away. Reordering the draw against other leaves' call-site evaluation is unobservable: there are no random-state objects.
-- **Unboxed dual-representation locals** (`RawLocal`): an eligible `let` binding gets a raw `long` slot, a boxed shadow slot and an `int` flag slot. Eligible = plain lexical, not special, not captured (`FreeVarAnalyzer.findCapturedVars`, asked by `JvmLetCompiler` BEFORE `rawBindingEligible` — "does this name need a cell" has ONE owner, `.kb/core-representation.md`), not a promoted top-level global, not a duplicate in its `let`, in a body defining no nested `defun` (which lowers to a closure over the binding AND reaches it through the global backing store), REASSIGNS the name an integer-shaped value (`rawBindingEligible`; an init-only binding boxes once either way), and neither the init nor the assignment values are float-contaminated (a Double never fills the raw slot, `.kb/jvm-double-arithmetic.md`).
-  - The flag is non-zero while the raw slot is authoritative; cleared, the shadow is — INCLUDING when it holds nil. Trap: null cannot be the raw marker, a local assigned nil must read back as nil.
-  - A flag slot rather than a wasm-style sentinel object, so no static field and no `<clinit>` rides along (injected wrapper defuns compile with fusion and are then dead-code-shaken, and a field left residue in every artifact).
-  - All three slots are pre-initialized at the binding: a shadow-only store path must still leave the long slot DEFINED, or a later read's `LLOAD` fails verification.
-  - Assignments funnel through `JvmSetqCompiler` into `JvmIntFusionCompiler.compileRawStore`, dispatching on the RESULT type: a `Long` fills the raw slot and sets the flag (whichever path computed it), anything else lands boxed in the shadow. Raw-to-raw copies transfer all three slots; boxed reads elsewhere go through `_ubRead(Object, long, int)`. An assignment in STATEMENT position stores and stops (`JvmSetqCompiler.compileForEffect`, from `JvmExprCompiler.compileForEffect`) instead of re-reading through `_ubRead` for the caller to `pop`.
-  - `dotimes`/`loop` counters and accumulators are this shape (`let` + `while` + `setq`), which with fused compares makes a counted integer loop's head and step allocation-free after JIT.
-  - `MAX_RAW_ASSIGN_SITES` / `MAX_LET_BODY_ASSIGN_SITES` keep generated straight-line code (fast-http state machines) from paying the per-site dispatch bytes thousands of times.
-  - A name in `Ctx.rawLocals` is never in `Ctx.locals`; `JvmLetCompiler` saves/restores both maps and removes a name from either on shadowing; `JvmDefvarCompiler` checks both.
-- **Unboxed promoted GLOBALS** (`Ctx.rawGlobals`, `JvmRawGlobals`): the same triple as CLASS FIELDS — `_gr$X` (`long`), `_gk$X` (`int` flag) beside the ordinary `_g$X`, which stays the boxed shadow, so a non-raw store is byte-for-byte the unfused `putstatic` and a program's start state (flag 0, shadow null = nil) is a plain global's. Without it a top-level `(setq s (+ s 1))` boxed into a static every iteration — the one allocation escape analysis cannot remove, because the value ESCAPES — plus a GC write barrier.
-  - Eligibility is program-wide and deliberately narrow: fusion on, not `--dynamic`, NO eval runtime (the `_genv` mirror holds the box, and `eval`/`load`/the FFI seams reach a variable by name), nothing concurrent (threads, an http handler, async, sockets — three fields where there was one, and a non-volatile `long` may tear), never DYNAMICALLY bound (a `defvar` name is special by CL's rule, but only a `let` naming it makes it bindable, and that keeps the save/restore over the single `_g$` field), not a compiler-internal cell (`%MV-SPILL`, the stream specials), at least one integer-shaped assignment, few enough assignment sites.
-  - Everything else keeps working because a LEXICAL binding still wins at every site (resolved before the global, `JvmIntFusionCompiler.resolveRaw`, the resolution order `compileSymbolRef` uses) and a non-integer value lands in the shadow. Three emissions know the representation and every read/write goes through one: `JvmExprCompiler.compileSpecialRead`, `JvmSetqCompiler`, `JvmDefvarCompiler`.
-- **The counted-loop STEP is emitted INLINE, ahead of the outlined method** (`emitRawStepFastPath`): `(+ i c)` / `(- i c)` / `(1+ i)` / `(1- i)` over a dual-representation local or promoted global, assigned back into one (both halves of the triple through the same field-aware emitters) — the shape every `dotimes`/`do`/`loop for` steps with. The site emits the raw case itself, guarded by the source's flag and by `Math.addExact`'s overflow condition spelled out for the constant addend, and branches into the outlined call for exactly two declines: a stale raw slot (bignum, float, nil) and a step that would overflow. Both guards keep the fallback's answer.
-  - What this buys is the LAYOUT of whatever the loop builds, not the call or the allocation: C2 scalar-replaces a box that dies one instruction later only once it COMPILES the loop, and a loop building a data structure runs far too few iterations (1000 is orders below any OSR threshold), so every dead counter box was a real object interleaved with the loop's cells — `(loop for i from 1 to 1000 collect i)` laid its list out over 64 bytes per element instead of 48, and nothing compacts it away.
-  - Pinned by `JvmLispCompilerTest.aCountedLoopStepPromotesAtTheFixnumBoundaryAndKeepsSteppingOnABignum` (crosses both guards in both directions).
+- **Fused comparisons** (`= < > <= >=`, binary): `_fx$N` returning a raw `int`; generic
+  `_cmpb`-with-mask on the fallback. **Condition position** (`if`/`while`, hence
+  `when`/`unless`/`dotimes`/`loop` heads) branches with `IFEQ`, no boxed round trip per iteration.
+  Two plain leaves stay generic.
+- **Substitution** of a fusion-inlinable defun (`Ctx.inlinableDefuns`, computed before Pass 2,
+  never under `--dynamic`) or a let-bound local function (`Ctx.localIntLambdas`, `JvmLetCompiler`),
+  so a tree spans `mod32+`/`rol32`/`sigma0`. A parameter used twice SHARES its argument's node; a
+  failed substitution rolls back the leaves it registered. A body that is exactly `(aref P I)` maps
+  onto an ArefLeaf.
+- **Packed aref leaves** (whenever `Ctx.usesArrays`): a rank-1 `(aref a i)` reads raw from either
+  the bare `long[]` packed integer vector (elements from slot 1, past the width header; only under
+  `Ctx.usesIntArray`) or the general array's length-6 header over a flat `long[]` (elements from
+  slot 0, `.kb/adjustable-arrays.md`). Discriminator: `instanceof ArrayList`, `size() != 0`,
+  `get(0) instanceof Object[]`, `length == 6` -- **4 is a character vector, 5 a displacement, 3 the
+  boxed general array**. The nil sentinel (`Long.MIN_VALUE`), an out-of-range index and every
+  non-packed shape bail into the same `_ivAref1`/`_fvAref1`/`_arrayAref1` the ordinary emission
+  would use. The INDEX is itself a fusion node.
+- **Random leaves**: `(random <integer>)` draws with the same formula `_random` uses for a `Long`
+  limit, `(long) (ThreadLocalRandom.current().nextDouble() * limit)` (`.kb/random.md`). **The only
+  IMPURE leaf, and its protocol follows**: the fallback re-emits its tree and a shared parameter
+  node re-emits twice, so a drawing fallback would make `(dif (random lim))` over
+  `(defun dif (x) (- x x))` stop answering 0. The draw happens exactly once per leaf, in the
+  prologue, on every path; the fallback only READS it. A non-`Long` limit draws once through
+  `_random` into a boxed slot and raises the shared bail flag, tested ONCE after all draws.
+- **Unboxed dual-representation locals** (`RawLocal`): raw `long` slot + boxed shadow + `int` flag.
+  Eligible = plain lexical, not special, not captured (`FreeVarAnalyzer.findCapturedVars`, asked by
+  `JvmLetCompiler` BEFORE `rawBindingEligible`), not a promoted global, not a duplicate in its
+  `let`, body defines no nested `defun`, REASSIGNS an integer-shaped value, and neither init nor
+  assignment is float-contaminated (`.kb/jvm-double-arithmetic.md`). Traps: **null cannot be the
+  raw marker** (a local assigned nil must read back as nil), so a flag, not a sentinel -- which
+  also keeps a static field and `<clinit>` out; **all three slots are pre-initialized at the
+  binding**, or a later `LLOAD` fails verification. Stores go through `JvmSetqCompiler` ->
+  `JvmIntFusionCompiler.compileRawStore` (dispatching on the RESULT type), reads elsewhere through
+  `_ubRead(Object, long, int)`; `MAX_RAW_ASSIGN_SITES` / `MAX_LET_BODY_ASSIGN_SITES` cap the
+  per-site bytes. A name in `Ctx.rawLocals` is never in `Ctx.locals`.
+- **Unboxed promoted GLOBALS** (`Ctx.rawGlobals`, `JvmRawGlobals`): the same triple as CLASS FIELDS
+  -- `_gr$X`, `_gk$X` beside the boxed shadow `_g$X`, so a non-raw store is byte-for-byte the
+  unfused `putstatic`. Eligibility is program-wide and narrow: fusion on, not `--dynamic`, NO eval
+  runtime (`_genv` holds the box), nothing concurrent (a non-volatile `long` may tear), never
+  DYNAMICALLY bound, not a compiler-internal cell (`%MV-SPILL`, the stream specials), at least one
+  integer assignment, few enough sites. A LEXICAL binding still wins at every site
+  (`JvmIntFusionCompiler.resolveRaw`). Three emissions know the representation:
+  `JvmExprCompiler.compileSpecialRead`, `JvmSetqCompiler`, `JvmDefvarCompiler`.
+- **The counted-loop STEP is emitted INLINE, ahead of the outlined method**
+  (`emitRawStepFastPath`), guarded by the source's flag and by `Math.addExact`'s overflow condition
+  spelled out for the constant addend; exactly two declines branch into the outlined call (a stale
+  raw slot, an overflowing step). What it buys is the LAYOUT of what the loop builds -- C2
+  scalar-replaces a dead box only once it COMPILES the loop, and a 1000-iteration loop never
+  reaches an OSR threshold. Pinned by
+  `JvmLispCompilerTest.aCountedLoopStepPromotesAtTheFixnumBoundaryAndKeepsSteppingOnABignum`.
 
 ## When fusion does NOT trigger (and must keep not triggering)
-- Under `--optimize=size` (`Ctx.intFusion`, the same `!prefersSizeOverSpeed()` gate as `Ctx.typedLoops`) and under `--dynamic`. `-Drontolisp.debug.nointfusion=true` force-disables at COMPILE time for A/B profiling. With fusion off every site falls through byte-identically.
-- A single fusable operation with neither a raw-reading leaf (RawLeaf/ArefLeaf/RandomLeaf) nor a literal operand.
-- A node `JvmLispCompiler.hasDoubleLiteral` claims (the recursive double-literal routing predicate the per-op compilers read) keeps the unboxed-double path, as a leaf here. An immediate `BigInteger`/ratio literal likewise stays generic. A tree the classifier DOES take over leaves that turn out to be `Double`s does NOT bail: the method carries a second, all-Double fast path where the `Long` guards jump (`.kb/jvm-double-arithmetic.md`).
-- More than 64 ops or 32 leaves (the method carries the tree twice).
-- Division (`/`) is never fused (exact ratios); a comparison over two plain leaves stays generic.
-- A constant-folded root (all-literal tree) declines — the existing literal emission owns it.
+- `--optimize=size` (`Ctx.intFusion`, the `!prefersSizeOverSpeed()` gate) and `--dynamic`;
+  `-Drontolisp.debug.nointfusion=true` force-disables at COMPILE time. Off, every site falls
+  through byte-identically.
+- A single fusable op with neither a raw-reading leaf nor a literal operand; more than 64 ops or 32
+  leaves; division (`/`, exact ratios); a comparison over two plain leaves; a constant-folded root.
+- A node `JvmLispCompiler.hasDoubleLiteral` claims, and an immediate `BigInteger`/ratio literal. A
+  taken tree whose leaves turn out to be `Double`s does NOT bail: the method carries a second
+  all-Double fast path (`.kb/jvm-double-arithmetic.md`).
+- **Other integer-valued built-ins do not earn a leaf** (measured): `char-code`, `elt` on a packed
+  vector, `length` (whose answer IS a three-way dispatch).
 
 ## Mechanics
-The method PROLOGUE runs in four passes, because a leaf's raw value can be another leaf's input: random slots pre-set, then the draws (before any guard, so a bail always finds the value drawn), then the `ExprLeaf`/`RawLeaf` guards fill their slots, last the aref reads, whose index reads a slot an earlier pass filled.
-
-`JvmIntFusionCompiler` (classify -> leaves-as-arguments -> outlined method) hooks into `JvmExprCompiler`'s arithmetic/bitwise/comparison cases, the `funcall` case, `compileSymbolRef` (raw-local reads), `JvmSetqCompiler` (raw-local stores), `JvmIfCompiler`/`JvmWhileCompiler` (raw conditions) and `JvmLetCompiler` (raw locals, local lambdas). The shared `State` (one per compile, threaded through every `Ctx`) holds pending methods, the dedup map, and the lazily-minted sentinel/`_ubRead`/`_fxAsh` constants; Pass 2d in `JvmLispCompiler` emits the pending bodies (they compile no Lisp, so the list cannot grow under the walk), and the class gains the `_ubSentinel` field, its `<clinit>` line and the helpers only when something used them — a program with no fused site and no raw local is byte-identical to before. Emissions go through the ordinary `Ctx`/`OperandStack`/`StackMapAugmenter` pipeline.
-
-## Measured shape (kept because it bounds later decisions)
-- ironclad PBKDF2-HMAC-SHA256: unfused ~3.75 s -> fused ~0.69 s per batch (5.4x), identical digests. Allocation 13.9 GB -> 4.35 GB; `java.lang.Long` 12.8 GB -> 3.07 GB. What remains is one root box per fused site plus `_ivAref1`/`_ivAset1` boundary boxes and the generic `_aref1` ArrayList read; `update-sha256-block` went 8,755 -> 5,339 bytecodes (JIT-compiled again), and admitting ironclad's functional round-temp chains to `rawBindingEligible` nearly doubled `update-sha512-block`.
-- Packed aref hit 0.088 vs unfused 0.108 vs a WIDENED general array 0.123 (per 10^7, 1,000-element cache-resident array): speculation wins ~2 ns/read where it hits, loses ~1.5 ns where it misses.
-- The promoted global made `(defparameter s 0)` accumulation cost the same per assignment as a `let` local (0.160 -> 0.036 vs 0.033).
-- **Other integer-valued built-ins do NOT earn a leaf** (measured, not assumed): `char-code` over `(char s i)` costs 1.3 ns/iteration (HotSpot inlines `_charCode` and EA removes both the `int[1]` and the box); `elt` on a packed vector is 0.7 ns/read behind fused `aref` and is not the spelling a hot loop uses; `length`'s answer IS a three-way string/vector/list dispatch, so a leaf would reproduce `_length` and save only the return box.
-
-## Pinning tests
-- `JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath` — overflow promotion, float/nil bails, mod/rem/ash sign semantics, the strength reductions, side-effects-once under substitution, the raw-local nil re-read, packed-aref raw reads and error shapes, the general array's packed shape with a literal / symbol / `random` index, its nil-element, widened, displaced, string and float-index bails, a `random` leaf with a literal and a variable limit, a float limit's bail into `_random`, a `random` leaf under an overflow promotion, a `random` leaf substituted into a defun body using its parameter TWICE (must still answer 0 — the once-only-draw pin), NaN comparisons, zero divisors, and that `SIZE` compiles the same program to different bytes.
-- `fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther` (the same leaf in a program with NO packed integer vector, so only the ArrayList dispatch is emitted, plus fill-pointered and adjustable bails).
-- `unboxedTopLevelGlobalsAnswerWhatTheBoxedStaticFieldAnswers` (every tier — float, string, nil, a bignum promotion out of `long` range — read back through the shadow; a lexical binding still winning; one global declining while another in the same program takes).
-- `aDynamicallyBoundSpecialAndAnEvaldGlobalDeclineTheUnboxedRepresentation` (pinned by the absence of the `_gr$` field as well as by the answers).
-- `theSizeLevelChangesNothingWithoutASpeedForSizeTrade`.
-- `JvmLibraryMethodSizeTest` (no emitted defun/lambda method of the ironclad-loading program crosses 8000 bytecodes).
-- ci-spec `fused-integer-expression-trees`, `flet-fusion-and-unboxed-locals`, `fused-comparisons-and-raw-leaf-stores`, `fused-random-and-aref-leaves` (pin all four backends against each other).
+The prologue runs in FOUR passes, because a leaf's raw value can be another leaf's input: random
+slots pre-set, then the draws (before any guard, so a bail always finds the value drawn), then the
+`ExprLeaf`/`RawLeaf` guards, last the aref reads. `JvmIntFusionCompiler` hooks into
+`JvmExprCompiler` (arithmetic/bitwise/comparison, `funcall`, `compileSymbolRef`),
+`JvmSetqCompiler`, `JvmIfCompiler`/`JvmWhileCompiler`, `JvmLetCompiler`. The shared `State` holds
+pending methods, the dedup map and the lazily-minted `_ubSentinel`/`_ubRead`/`_fxAsh`; Pass 2d
+emits the pending bodies (they compile no Lisp, so the list cannot grow under the walk). A program
+with no fused site and no raw local is byte-identical to before.
 
 ## Not this mechanism's fault
-A `let` variable captured by a closure in one branch arm and assigned INLINE in a sibling arm failing with `class java.lang.Long cannot be cast to class [Ljava/lang/Object;` is the ONE-BYTE local index limit (`.kb/jvm-method-size-limits.md`), not fusion: it reproduces byte-identically with fusion off, under `--optimize=size` and `-Drontolisp.debug.nointfusion=true`. Past 255 slots `astore 256/257/258` truncates to `astore 0/1/2`, and slots 0/1/2 held the parameter and the two capture cells, so the next `aload 2; checkcast [Ljava/lang/Object;` read a `Long`. `rawBindingEligible` is never asked about the name.
+A captured `let` variable assigned INLINE in a sibling branch failing with
+`class java.lang.Long cannot be cast to class [Ljava/lang/Object;` is the ONE-BYTE local index
+limit (`.kb/jvm-method-size-limits.md`) -- past 255 slots `astore 256/257/258` truncates to
+`astore 0/1/2`. It reproduces with fusion off.
 
-## Re-evaluation triggers
-- The store dispatch re-boxes a raw local's fast-path value at every assignment (`Long.valueOf` inside `_fx$N`, unboxed again at the site). EA removes it where the method inlines; if a profile shows allocation on a hot NON-inlined store, a raw-returning variant (`(...)J` + a separate bail protocol) is next.
-- Params are not eligible for the dual representation (they arrive boxed by signature), so a defun-body accumulator that is a parameter stays boxed — same trigger as the wasm file's.
-- `%aset` values fuse boxed (`_ivAset1` still takes a boxed operand); a raw store path would shave one box per store.
-- A global refused WHOLESALE: any program touching `eval`, threads, an http handler, async or sockets keeps the boxed static field for every global. The concurrency half is the conservative reading (a torn non-volatile `long`), not a measured problem; a `volatile` triple, or a per-name "assigned only from the main thread" proof, would narrow it.
+## Pinning tests
+`JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath`,
+`.fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther`,
+`.unboxedTopLevelGlobalsAnswerWhatTheBoxedStaticFieldAnswers`,
+`.aDynamicallyBoundSpecialAndAnEvaldGlobalDeclineTheUnboxedRepresentation` (pinned by the ABSENCE
+of the `_gr$` field too), `.theSizeLevelChangesNothingWithoutASpeedForSizeTrade`;
+`JvmLibraryMethodSizeTest`; ci-spec `fused-integer-expression-trees`,
+`flet-fusion-and-unboxed-locals`, `fused-comparisons-and-raw-leaf-stores`,
+`fused-random-and-aref-leaves`.
+
+## Unfinished
+- The store dispatch re-boxes a raw local's fast-path value at every assignment; a raw-returning
+  `(...)J` variant with its own bail protocol is next.
+- Params are not eligible for the dual representation (they arrive boxed by signature).
+- `%aset` values fuse boxed (`_ivAset1` still takes a boxed operand).
+- A program touching `eval`, threads, an http handler, async or sockets keeps the boxed static
+  field for EVERY global; the concurrency half is a conservative reading, not a measured problem.

@@ -1,123 +1,272 @@
 # Packages
 
-Three built-in packages: `cl` (standard symbols), `cl-user` (default, uses `cl`), `rontolisp` (does NOT use `cl`; owns `version` and the implementation-specific extensions). One read/compile-time pass, `PackageResolver` (root `am.ik.rontolisp`), runs before the evaluator and both compilers and rewrites every form into a canonical shape the backends already handle.
+Three built-in packages: `cl`, `cl-user` (default, uses `cl`), `rontolisp` (does NOT use `cl`).
+One read/compile-time pass, `PackageResolver` (root `am.ik.rontolisp`), runs before the evaluator
+and both compilers and rewrites every form into a canonical shape.
 
-**Canonical shape**: bare names for `cl`/`cl-user` symbols; `pkg:name` for external members, `pkg::name` for internal ones — so canonical forms re-resolve to themselves. `*package*` stays the bare cl variable, read at RUN time. `(in-package P)` is consumed and replaced by `(setq *package* :P)`.
+**Canonical shape**: bare names for `cl`/`cl-user` symbols; `pkg:name` external, `pkg::name`
+internal -- so canonical forms re-resolve to themselves. `*package*` stays the bare cl variable,
+read at RUN time. `(in-package P)` is consumed and replaced by `(setq *package* :P)`.
 
-Hard errors (`LispPackageException`): an unqualified `cl` symbol in a package that does not use `cl`; a single-colon reference to a non-external member ("The symbol X is not external in the P package (use P::X)").
-
-Adding a package is a registry change, not a resolver change. The registry is per-resolver-instance, so a `defpackage`'d package never leaks between independent compiles; the backends only ever see canonical `pkg:name`/`pkg::name` strings, so no per-backend codegen exists.
+Hard errors (`LispPackageException`): an unqualified `cl` symbol in a package that does not use
+`cl`; a single-colon reference to a non-external member. Adding a package is a registry change, not
+a resolver change; the registry is per-resolver-instance, and the backends only ever see canonical
+strings, so no per-backend codegen exists.
 
 ## External vs internal (`:` / `::`)
-- `LispPackage` carries an `externals` set (3-arg constructor = everything exported); `PackageRegistry.QualifiedName` carries an `internal` flag parsed from the double colon.
-- `cl` exports `CL_EXTERNALS` (= `CL_SYMBOLS` minus the `%`-prefixed `CL_INTERNALS`; car/cdr compositions count as external via `isCarCdrComposition`), `cl-user` exports nothing (like `COMMON-LISP-USER`), `rontolisp`/`java` export every registered symbol.
-- `pkg::anything` interns permissively (the member need not be registered); an unregistered member (a defun made under `(in-package rontolisp)`, the `rontolisp::%json-*` helpers) is internal, so its canonical spelling is double-colon. The JVM method-name mangler maps each `:` to `$colon`, so `::` names compile fine.
-
-## `cl`'s symbol set
-`PackageRegistry.CL_SYMBOLS` = union of `CL_SPECIAL_FORMS` / `CL_MACROS` / `CL_FUNCTIONS` / `CL_VARIABLES` / `CL_INTERNALS` / `CL_TYPES` / `CL_CONDITION_TYPES` (single source of truth). `CL_CONDITION_TYPES` is `Set.copyOf(ClosRegistry.CONDITION_CLASS_NAMES)`, so a condition class added to the hierarchy is a `cl` symbol by construction — required, since a condition name is what a `handler-case` clause, a `define-condition` parent and a RUNTIME `(typep c ty)` specifier all spell; while `type-error` was a user symbol, a `(:use #:cl)` package read it as `MY-PKG::TYPE-ERROR` and the runtime type test (which matches the registry's PLAIN class name by spelling) answered nil. Condition names join `CL_TYPES` in being external and non-callable.
+- `LispPackage` carries an `externals` set (3-arg constructor = everything exported);
+  `PackageRegistry.QualifiedName` carries an `internal` flag parsed from the double colon.
+- `cl` exports `CL_EXTERNALS` (= `CL_SYMBOLS` minus the `%`-prefixed `CL_INTERNALS`; car/cdr
+  compositions via `isCarCdrComposition`); `cl-user` exports nothing; `rontolisp`/`java` export
+  everything registered.
+- `pkg::anything` interns permissively; an unregistered member is internal. The JVM method-name
+  mangler maps each `:` to `$colon`.
+- `PackageRegistry.CL_SYMBOLS` = union of `CL_SPECIAL_FORMS`/`CL_MACROS`/`CL_FUNCTIONS`/
+  `CL_VARIABLES`/`CL_INTERNALS`/`CL_TYPES`/`CL_CONDITION_TYPES` (single source of truth).
+  `CL_CONDITION_TYPES` is `Set.copyOf(ClosRegistry.CONDITION_CLASS_NAMES)`, so a condition class is
+  a `cl` symbol by construction -- required, because a RUNTIME `(typep c ty)` matches the
+  registry's PLAIN class name by spelling. Condition names are external and non-callable.
 
 ## `defpackage`
-`(defpackage NAME (:use ...) (:export ...) (:nicknames ...) (:import-from PKG ...))` is a literal, top-level, read/compile-time directive like `in-package`. `PackageResolver.resolveDefpackage` parses it, registers a `LispPackage` (exports = owned + external; later-interned symbols are internal, canonical `pkg::name`), and replaces it with a quoted package symbol. It does NOT switch the current package. It is in `CL_SPECIAL_FORMS`.
-- Name/clause arguments: keywords, bare symbols, strings, or `#:name` uninterned symbols (the `#:` prefix is stripped in `designator`). `:documentation`/`:size` parsed and ignored.
-- `(:shadow name...)` records names in `LispPackage.shadows` (also owned): `resolveUnqualified` checks `current.shadows(name)` BEFORE the `isClSymbol` branch, so the name always resolves package-locally (cl-ppcre shadows `digit-char-p` and `defconstant`; `evalCons` dispatches on the FULL resolved name, so a shadowed `pkg::defconstant` reaches the user macro, not the special form).
-- `(:shadowing-import-from PKG name...)` is recorded as an IMPORT (shares `collectImportFrom` with `:import-from`, shadowing entries merged LAST so they beat a plain import of the same name). The imports map is the FIRST thing `resolveUnqualified` consults — before the shadow set, the cl table and the use list — giving a recorded import the always-wins precedence CL gives a shadowing import (dbd-postgres takes `database-error-message`/`-code` from `cl-postgres-error` over its use list's dbi.error pair). Pinned by `shadowingImportFromWinsOverTheUseList`.
-- **A `defpackage` over an EXISTING package MODIFIES it** (CLHS 11.1.2.1): use list, exports, owned symbols, imports and shadows are unioned, and an existing `:nicknames` entry is a re-declaration, not a collision. Required because rontolisp PRE-SEEDS its shim libraries' packages, so upstream cl+ssl's own `(defpackage :cl+ssl ...)` signalled `Package already exists` before a line ran (`.kb/cffi.md`). A name that is another package's NICKNAME stays a hard error (adjusting through it would apply the definition to a package of a different name); the built-in nicknames stay reserved.
-- Hard errors: `:use`/`:import-from`/`:shadowing-import-from` of a nonexistent package; `:nicknames` colliding with a DIFFERENT package/nickname; any other clause; a non-top-level `defpackage` (explicit check in `resolveCons`). No `:use` clause = empty use list (SBCL-like; `cl` must be listed explicitly).
+A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpackage` registers a
+`LispPackage` (exports = owned + external) and replaces the form with a quoted package symbol; it
+does NOT switch the current package. It is in `CL_SPECIAL_FORMS`. Designators: keywords, bare
+symbols, strings, `#:name` (stripped in `designator`); `:documentation`/`:size` ignored.
+- `(:shadow name...)` -> `LispPackage.shadows`; `resolveUnqualified` checks `current.shadows(name)`
+  BEFORE the `isClSymbol` branch, and `evalCons` dispatches on the FULL resolved name, so a
+  shadowed `pkg::defconstant` reaches the user macro, not the special form.
+- `(:shadowing-import-from PKG name...)` is recorded as an IMPORT (shares `collectImportFrom` with
+  `:import-from`, shadowing entries merged LAST). **The imports map is the FIRST thing
+  `resolveUnqualified` consults** -- before the shadow set, the cl table and the use list -- which
+  is CL's always-wins precedence. Pinned by `shadowingImportFromWinsOverTheUseList`.
+- **A `defpackage` over an EXISTING package MODIFIES it** (CLHS 11.1.2.1): use list, exports, owned
+  symbols, imports and shadows unioned; an existing `:nicknames` entry is a re-declaration.
+  Required because rontolisp PRE-SEEDS its shim libraries' packages (`.kb/cffi.md`). A name that is
+  another package's NICKNAME stays a hard error.
+- Hard errors: `:use`/`:import-from`/`:shadowing-import-from` of a nonexistent package;
+  `:nicknames` colliding with a DIFFERENT package/nickname; any other clause; a non-top-level
+  `defpackage`. No `:use` clause = empty use list (SBCL-like).
 
 ## `define-package` (uiop / mgl-pax variant)
-A literal top-level `(uiop:define-package ...)` / `(mgl-pax:define-package ...)` — the qualifier is REQUIRED and must canonicalize to `UIOP` or `MGL-PAX` (`isDefinePackageOperator`); a bare `define-package` stays a user symbol — is consumed by `PackageResolver.resolve` exactly like `defpackage`. One variant-only clause: `(:use-reexport PKG...)` uses the packages AND re-exports all their externals, over the same import-redirect machinery (`resolveDefpackage(cons, true)`). In a plain `defpackage` that clause is a hard error, as are the variant's other extras (`:mix`, `:recycle`, redefinition tolerance) until a consumer needs them. `mgl-pax:defsection` is consumed in the same place but ADDITIVELY (the form still resolves and expands through the shim macro): its `(SYMBOL LOCATIVE)` entries are exported from the current package (`consumeDefsectionExports`) — mgl-pax's documented autoexport, and trivial-utf-8's ONLY export mechanism. Pinned by `definePackageIsConsumedLikeDefpackage`, `definePackageUseReexportUsesAndReexports`, `aBareDefinePackageIsNotTheVariant`, `paxDefsectionExportsItsEntries`.
+A literal top-level `(uiop:define-package ...)` / `(mgl-pax:define-package ...)` -- the qualifier is
+REQUIRED and must canonicalize to `UIOP` or `MGL-PAX` (`isDefinePackageOperator`); a bare
+`define-package` stays a user symbol -- is consumed exactly like `defpackage`. One variant-only
+clause, `(:use-reexport PKG...)` (`resolveDefpackage(cons, true)`); in a plain `defpackage` it is a
+hard error, as are `:mix`, `:recycle`, redefinition tolerance. `mgl-pax:defsection` is consumed
+ADDITIVELY: its `(SYMBOL LOCATIVE)` entries are exported from the current package
+(`consumeDefsectionExports`) -- trivial-utf-8's ONLY export mechanism. Pinned by
+`definePackageIsConsumedLikeDefpackage`, `definePackageUseReexportUsesAndReexports`,
+`aBareDefinePackageIsNotTheVariant`, `paxDefsectionExportsItsEntries`.
 
 ## Nicknames
-`PackageRegistry` keeps an instance `nicknames` map (nickname -> canonical name), seeded from static `BUILTIN_NICKNAMES`: `common-lisp` -> `cl`, `common-lisp-user` -> `cl-user`, `rl` -> `rontolisp`, `la` -> `linalg`, `quicklisp` -> `ql`. Seeded names are reserved (a `defpackage` named `rl` or taking `:nicknames :la` fails the `contains()` collision check).
+Instance `nicknames` map seeded from static `BUILTIN_NICKNAMES`: `common-lisp` -> `cl`,
+`common-lisp-user` -> `cl-user`, `rl` -> `rontolisp`, `la` -> `linalg`, `quicklisp` -> `ql`. Seeded
+names are reserved. User `:nicknames` stay instance-only.
 
-**`splitQualified` normalizes a built-in nickname in the package part** (static `canonicalBuiltinName`) — this is what makes nicknames work on the compile path. The pre-resolution passes match `qn.pkg()` against a canonical package literal and run BEFORE `PackageResolver`: the library splice scanners (`JsonLibrary`/`LinalgLibrary`/`UrlLibrary`/`VecLibrary`/`UsocketLibrary`/`WitLibrary`/`HttpLibrary`), `LoadInliner`'s `ql:quickload`, `HttpHandlerInliner`, the `wasm-import`/`wit-import`/`wit-export` directive matchers, `LispMacroExpander.isAsyncSugarHead`. Without normalization `rl:json-parse` never triggered the json.lisp splice and died with `Cannot compile: rontolisp:json-parse` (interpreter unaffected — it lazy-loads post-resolution). Pinned by `JvmLispCompilerTest.compileAndRunBuiltinNicknamesTriggerLibrarySplice`. The five library walkers also canonicalize their top-level `in-package` tracking through `canonicalBuiltinName`.
+**`splitQualified` normalizes a built-in nickname in the package part** (static
+`canonicalBuiltinName`) -- what makes nicknames work on the compile path, because the
+pre-resolution passes match `qn.pkg()` against a canonical literal and run BEFORE the resolver: the
+library splice scanners (`JsonLibrary`/`LinalgLibrary`/`UrlLibrary`/`VecLibrary`/`UsocketLibrary`/
+`WitLibrary`/`HttpLibrary`), `LoadInliner`'s `ql:quickload`, `HttpHandlerInliner`, the
+`wasm-import`/`wit-import`/`wit-export` matchers, `LispMacroExpander.isAsyncSugarHead`. Without it
+`rl:json-parse` never triggered the json.lisp splice (interpreter unaffected -- it lazy-loads
+post-resolution). Pinned by `JvmLispCompilerTest.compileAndRunBuiltinNicknamesTriggerLibrarySplice`.
 
-User `defpackage :nicknames` stay instance-only (they cannot alias a built-in package). `get`/`contains` resolve through `canonicalName()`, and `PackageResolver` canonicalizes explicitly wherever the raw spelling matters (`resolveQualified`'s pkg part, `resolveInPackage`'s stored `currentPackage`, `:use`/`:import-from` designators), so `common-lisp:car` -> bare `car`.
-
-**Package-local nicknames are GLOBAL nicknames**: the `(:local-nicknames (nick actual)...)` clause and `uiop:add-package-local-nickname` both funnel into `PackageResolver.registerLocalNickname` (no per-package scoping; collisions rejected like `:nicknames`; re-registering the same nickname->target is idempotent for the REPL). The uiop FUNCTION exists on the interpreter (third scope argument accepted and ignored), and a literal top-level `(uiop:add-package-local-nickname 'nick 'pkg)` is CONSUMED by `PackageResolver.resolve` like a defpackage, so the idiom works on every backend. A non-literal call stays a runtime call (interpreter only). Pinned by `LispEvaluatorTest.uiopAddPackageLocalNicknameShortensAPackageName`, `JvmLispCompilerTest.compileAndRunUiopAddPackageLocalNickname`, ci-spec `uiop-add-package-local-nickname`.
+**Package-local nicknames are GLOBAL nicknames**: `(:local-nicknames (nick actual)...)` and
+`uiop:add-package-local-nickname` both funnel into `PackageResolver.registerLocalNickname`; a
+literal top-level call is CONSUMED like a defpackage, so the idiom works on every backend, while a
+non-literal call stays a runtime call (interpreter only). ci-spec
+`uiop-add-package-local-nickname`.
 
 ## Resolution order and imports
-- `resolveUnqualified` consults, in order: `current.imports()` (so `(:import-from #:common-lisp #:car)` works in a use-nothing package), the shadow set, the `cl` table, `current.owns()`, then the use list.
-- **Use-list visibility** checks `exports` (not `owns`) of used packages — CL semantics. Symbol conflicts between used packages resolve first-wins in `:use` order (real CL signals a conflict).
-- `resolveQualified` redirects through `imports` after the externality check, so exporting an imported name makes `mypkg:name` resolve to the original definition. Uninterned `#:g1`-style symbols pass through `resolveSymbol` unresolved (like keywords and `&`-markers).
-- **An `:export` of an INHERITED name re-exports the used package's symbol**: `resolveDefpackage` records every exported name the package does not shadow, does not `:import-from`, is not a `cl` symbol, and that some used package exports, as an `imports` entry pointing at that used package. In CL `(:use :s-sql)` + `(:export #:sql)` exports the very same `S-SQL:SQL` symbol; resolution here is textual and `resolveUnqualified` checks `current.owns()` (= the export list) BEFORE the use list, so without this postmodern minted a distinct `POSTMODERN:SQL` and every `pomo:sql` / `pomo:sql-compile` died undefined. A re-exported `cl` symbol needs no entry (the `isClSymbol` branch runs before the `owns()` check).
-- **The recorded entry must point at the TRUE home, not the used package** (`trueHome`): a used package may hold the name only as a redirect (a re-export chain, the closer-common-lisp overlay), and recording the intermediate spells the exporter's own references under a package that names no definition — postmodern's MOP `(:use :closer-common-lisp)` + `(:export #:class-finalized-p)` resolved every internal `class-finalized-p` call to the undefined `CLOSER-COMMON-LISP:CLASS-FINALIZED-P` instead of the `closer-mop:` shim defun. `trueHome` follows the source package's own import entry (one hop suffices by induction), and the same guard applies to `:import-from` recordings. **`trueHome` also walks the source's USE list**: CL's import works on any ACCESSIBLE symbol, so `(:import-from #:mito.class #:table-column-references-column)`, where mito.class merely uses mito.class.column and does not re-export the name, must reach the exporting package's symbol rather than mint a `mito.class::`-internal one nothing defines; when the source neither owns nor imports the member (and it is not a `cl` symbol), `trueHome` recurses into the first used package that exports it. Pinned by `PackageResolverTest#{reExportOfARedirectedMemberRecordsItsTrueHome,importFromARedirectedMemberRecordsItsTrueHome}`.
+- `resolveUnqualified` consults, in order: `current.imports()`, the shadow set, the `cl` table,
+  `current.owns()`, then the use list.
+- **Use-list visibility checks `exports`, not `owns`.** Conflicts resolve first-wins in `:use`
+  order (real CL signals). `resolveQualified` redirects through `imports` after the externality
+  check. Uninterned `#:g1` symbols pass through unresolved, like keywords and `&`-markers.
+- **An `:export` of an INHERITED name re-exports the used package's symbol**: `resolveDefpackage`
+  records every exported name the package does not shadow, does not `:import-from`, is not a `cl`
+  symbol, and that some used package exports, as an `imports` entry. Without it `(:use :s-sql)` +
+  `(:export #:sql)` minted a distinct `POSTMODERN:SQL`.
+- **The recorded entry must point at the TRUE home, not the used package** (`trueHome`): a used
+  package may hold the name only as a redirect. `trueHome` follows the source's own import entry
+  (one hop suffices by induction) and **also walks the source's USE list**, since CL's import works
+  on any ACCESSIBLE symbol; when the source neither owns nor imports the member it recurses into
+  the first used package that exports it. Same guard for `:import-from`. Pinned by
+  `PackageResolverTest#{reExportOfARedirectedMemberRecordsItsTrueHome,importFromARedirectedMemberRecordsItsTrueHome}`.
 
 ## Quoted data resolves against the current package
-`resolveCons` sends every `(quote DATUM)` through `resolveQuotedData`, resolving each symbol recursively — what CL's reader does when it interns a quoted datum's symbols in `*package*`. Covers: (1) `defmacro`/`macrolet` backquote templates (the reader expands backquote into `list`/`cons`/`quote` before this pass), where a bare template symbol like cl-utilities' `(zero-length-p ,seq)` must resolve to the same canonical spelling (`cl-utilities::zero-length-p`) as the defun it names, and an exported local-function name (`collecting`'s `collect` labels binding) to the same single-colon spelling as its qualified call sites, and an exported local-function name to the same single-colon spelling as its qualified call sites; (2) a lone quoted symbol in ordinary code (ironclad's `defdigest` plist indicators read back by `digestp`); (3) a quoted DATA TABLE whose symbols name functions or macros — postmodern's `*result-styles*`, a `defparameter` of `(:rows list-row-reader all-rows)` triples in `config.lisp` that the `query` macro splices into its expansion, so `ALL-ROWS` has to be the same `POSTMODERN::ALL-ROWS` the `defmacro` registers.
+`resolveCons` sends every `(quote DATUM)` through `resolveQuotedData` -- what CL's reader does when
+it interns a quoted datum's symbols in `*package*`. Covers backquote templates, a lone quoted
+symbol, and a quoted DATA TABLE whose symbols name functions or macros.
 
-**Data position is more permissive than code position** (`inQuotedData`): the reader only INTERNS, so a `cl` symbol quoted in a package that does not use `cl` is that package's own symbol (`'(car x)` under `(in-package :rontolisp)` = `(RONTOLISP::CAR RONTOLISP::X)`) rather than a hard error, and a quoted `*package*` is the SYMBOL, not the current package's name. ONE exemption, host-facing data (`inHostFacingData`): the options of a `rontolisp:wasm-import`/`wasm-export` directive are an export field name or a WIT type, never a Lisp symbol — but the directive's quoted NAME argument does name a function, so `resolveWasmDirective` resolves it like a defun name (`.kb/wasm-import.md`).
+**Data position is more permissive than code position** (`inQuotedData`): a `cl` symbol quoted in a
+package that does not use `cl` is that package's own symbol (`'(car x)` under `(in-package
+:rontolisp)` = `(RONTOLISP::CAR RONTOLISP::X)`) rather than a hard error, and a quoted `*package*`
+is the SYMBOL. ONE exemption, host-facing data (`inHostFacingData`): a
+`rontolisp:wasm-import`/`wasm-export` directive's options are export field names or WIT types, but
+its quoted NAME argument does name a function, so `resolveWasmDirective` resolves it like a defun
+name (`.kb/wasm-import.md`).
 
-## Directives that are consumed at read/compile time
-All of these must be directives for the same reason `in-package` is: their effect is consulted by `resolveUnqualified` while the resolver walks the program, so a runtime-only effect would be invisible to the very forms it affects — and invisible entirely on the compiled backends, which have no registry. Each is consumed by `PackageResolver.resolve` and listed in `UserMacroExpander.isPackageDirective` (so the macro pass tracks the same state and keeps the form verbatim for the compilers' own pass). Each takes LITERAL designators (a designator, or a QUOTED list; an unquoted list is a call this pass cannot see through); a computed call falls through to an interpreter-only runtime function that resolves through the SAME resolver, while the compiled backends report an undefined function (or run `expandRuntimeExport`: arguments for effect, then `t`).
+## Directives consumed at read/compile time
+Their effect is consulted by `resolveUnqualified` as the resolver walks, so a runtime-only effect
+would be invisible to the forms it affects -- and invisible entirely on the compiled backends. Each
+is consumed by `PackageResolver.resolve` and listed in `UserMacroExpander.isPackageDirective` (the
+macro pass tracks the same state and keeps the form verbatim). Each takes LITERAL designators; a
+computed call falls through to an interpreter-only runtime function using the SAME resolver.
 
 | directive | resolver entry | notes |
 |---|---|---|
-| `use-package` (`LispNames.USE_PACKAGE`) | `PackageResolver.usePackage(List<String>, String)` | replaced by `T`, the standard function's value; only EXTERNAL symbols inherited; re-using is a no-op; using a package in itself is an error |
-| `export` / `unexport` (`(export SYMBOLS [PACKAGE])`) | `PackageResolver.exportSymbols(List<String>, String, boolean)` | export also adds the name to `symbols` and records the same re-export import redirect the `:export` clause does for an INHERITED name |
-| `import` (`(import SYMBOLS [PACKAGE])`) | `PackageResolver.importSymbols(List<String>, String)` | same `imports` redirect (member -> `trueHome`) as `:import-from`, so clause and function are ONE mechanism; the argument keeps its QUALIFIER (it names the source package); an UNQUALIFIED argument is a no-op, as in CL |
+| `use-package` (`LispNames.USE_PACKAGE`) | `usePackage` | replaced by `T`; only EXTERNAL symbols inherited; using a package in itself is an error |
+| `export` / `unexport` | `exportSymbols` | export also records the same re-export redirect the `:export` clause does |
+| `import` | `importSymbols` | same `imports` redirect (member -> `trueHome`) as `:import-from`; the argument keeps its QUALIFIER; an UNQUALIFIED argument is a no-op, as in CL |
 | `uiop:add-package-local-nickname` | `registerLocalNickname` | see Nicknames |
 
-All are CL FUNCTIONS (`CL_FUNCTIONS`), hence usable as function values. Pinned by the `usePackage*` / `import*` tests in `PackageResolverTest`, `LispEvaluatorTest#{evalExportMakesASymbolExternal,evalUnexportMakesASymbolInternalAgain,importMakesASymbolAccessibleUnqualified}`, `JvmLispCompilerTest#{compileAndRunUsePackage,compileAndRunExportAndUnexport}`, `WasmLispCompilerIntegrationTest#{usePackageInheritsTheExternalSymbols,exportAndUnexport}`, ci-spec `use-package` / `export-and-unexport`.
+All are CL FUNCTIONS, hence usable as function values. ci-spec `use-package`,
+`export-and-unexport`.
 
-### A directive changes ACCESSIBILITY, never IDENTITY
-**The SPELLING is the package's DECLARED external set.** A symbol IS its canonical spelling here, so deciding the colon from the LIVE external set meant `export` re-keyed the symbol underneath definitions already made under it: `(defpackage :spike (:use :cl))` + `(defun spike::my-fn ...)` + `(export '(spike::my-fn) :spike)` compiled the function as `SPIKE::MY-FN` while every later `spike:my-fn` resolved to `SPIKE:MY-FN` — `The function SPIKE:MY-FN is undefined`, silently, on all four backends, for the everyday CL file shape.
-- `PackageResolver.declaredExternals` captures a package's external set the first time an `export`/`unexport` touches it. `spellsExternal` (the spelling oracle behind `canonical` and the public `spellsAsExternal`) reads THAT; `isExternal` — the single-colon accessibility check and the use-list visibility test — keeps reading the LIVE set.
-- So `pkg:name` and `pkg::name` name one symbol on either side of the directive, a reference BEFORE the export is still CL's "not external" error, and `unexport` gets the mirror fix free.
-- Consequences: a LATE-exported symbol prints `PKG::NAME` where CL prints `PKG:NAME` from a package where it is not accessible (the qualifier is stored, not recomputed at print time; WHETHER it is printed is decided at print time, so from a package that inherits it the symbol prints bare — `.kb/pretty-printer.md`). `mgl-pax:defsection`'s autoexport is such a directive.
-- A package the directives never touch has no entry, so the `defpackage`-only corpus resolves byte-identically. **Re-evaluate when** symbol identity stops being spelling: with a real intern table the printer can recompute the qualifier from accessibility and the declared-set pin becomes unnecessary.
-- Pinned by `PackageResolverTest#{exportAfterTheDefinitionKeepsOneSpellingForTheSymbol,unexportKeepsTheDeclaredSpellingToo,paxDefsectionExportsItsEntries}`, `LispEvaluatorTest#evalExportAfterTheDefinitionsPublishesThemUnderTheSingleColon`, `JvmLispCompilerTest#compileAndRunExportAfterTheDefinitions`, `WasmLispCompilerIntegrationTest#exportAfterTheDefinitions`, ci-spec `export-after-the-definitions`.
+**A directive changes ACCESSIBILITY, never IDENTITY. The SPELLING is the package's DECLARED
+external set.** A symbol IS its canonical spelling here, so deciding the colon from the LIVE set
+meant `export` re-keyed the symbol underneath definitions already made under it --
+`The function SPIKE:MY-FN is undefined`, silently, on all four backends, for the everyday CL file
+shape. `PackageResolver.declaredExternals` captures a package's external set the first time an
+`export`/`unexport` touches it; `spellsExternal` (behind `canonical` and `spellsAsExternal`) reads
+THAT, while `isExternal` -- the single-colon accessibility check and the use-list visibility test --
+keeps reading the LIVE set. Consequence: a LATE-exported symbol prints `PKG::NAME` where CL prints
+`PKG:NAME` (`.kb/pretty-printer.md`). A package the directives never touch has no entry, so the
+`defpackage`-only corpus resolves byte-identically. ci-spec `export-after-the-definitions`.
 
-### A COMPUTED `export` never reaches the resolver
-`(export (intern "X" "PKG") "PKG")` after `(defun pkg::x ...)` does not make a later `pkg:x` compile — only a LITERAL export folds (`tryConsumeExport`), and resolution rejects the non-external spelling. The RUNTIME designator route works (the `_lookup` alias rows serve `PKG:NAME` for every `PKG::NAME` defun, `.kb/symbol-runtime-api.md`), so the gap is purely the compile-time spelling. Deliberately not widened: the only shape that could license it is "a package some computed export targets exports everything", and this subset denies by default — a defun made under `(in-package p)` is not even in the registry's owned set, so the widening would accept ANY `pkg:x` and swallow typos.
+**A COMPUTED `export` never reaches the resolver**: only a LITERAL export folds
+(`tryConsumeExport`). The RUNTIME designator route works (`.kb/symbol-runtime-api.md`), so the gap
+is purely compile-time spelling; deliberately not widened, because the widening would accept ANY
+`pkg:x` and swallow typos.
 
 ## Registry queries
-`list-all-packages`, `package-use-list`, `package-used-by-list` share one table, `PackageResolver.runtimePackageUseTable()` (every registered package's upcased canonical name -> the upcased names it uses, plus the `keyword` pseudo-package). The interpreter reads the LIVE registry through it; the compile paths bake it into `Ctx.packageUseTable` at the same single site `packageTable` is threaded and lower the calls in `LispMacroExpander.expandPackageQuery` — a constant for `list-all-packages` and for a LITERAL designator, otherwise an `assoc` keyed by the name `find-package` answers (which is what makes a nickname, a string and a package value reach the same row), with an unknown designator signalling as on the interpreter. A "package" is its keyword, so all three answer lists of keywords. `package-shadowing-symbols` is a `LispPreludeLibrary` defun answering nil over a `package-name` designator check: there is no symbol shadowing here (`:shadow` records names for RESOLUTION; runtime `shadow`/`shadowing-import` and `unintern` are documented non-goals, `.kb/symbol-runtime-api.md`). All five are CL FUNCTIONS.
+`list-all-packages`, `package-use-list`, `package-used-by-list` share one table,
+`PackageResolver.runtimePackageUseTable()`. The interpreter reads the LIVE registry; the compile
+paths bake it into `Ctx.packageUseTable` beside `packageTable` and lower the calls in
+`LispMacroExpander.expandPackageQuery` -- a constant for `list-all-packages` and a LITERAL
+designator, otherwise an `assoc` keyed by the name `find-package` answers. A "package" is its
+keyword, so all three answer lists of keywords. `package-shadowing-symbols` is a
+`LispPreludeLibrary` defun answering nil (runtime `shadow`/`shadowing-import`/`unintern` are
+documented non-goals). All five are CL FUNCTIONS.
 
-**Divergence**: the baked table is frozen at compile time, so a package a compiled program creates later is invisible to the queries there — the same freeze `find-package` has. Pinned by `LispEvaluatorTest#packageRegistryQueries*`, `JvmLispCompilerTest#compileAndRunPackageRegistryQueries`, `WasmLispCompilerIntegrationTest#packageRegistryQueries`, ci-spec `package-registry-queries`.
+**Divergence**: the baked table is frozen at compile time, so a package a compiled program creates
+later is invisible there -- the same freeze `find-package` has. A COMPUTED `(find-package x)`
+becomes an `assoc` over `runtimePackageTable()` / `PackageRegistry.designatorTable()` (canonical
+names plus every nickname, each also uppercase), read AFTER `resolveProgram`
+(`.kb/symbol-runtime-api.md`). ci-spec `package-registry-queries`.
 
-**A COMPUTED `(find-package x)`** is answered from a table baked at compile time: a literal designator folds in `resolveCons`; a computed one becomes `(cdr (assoc (string x) '(("CL" . :CL) ...) :test #'string=))` over `PackageResolver.runtimePackageTable()` — `PackageRegistry.designatorTable()` (canonical names plus every nickname, each also uppercase, since `findPackageName` matches verbatim or after lowercasing) read AFTER `resolveProgram` so it covers every `defpackage` in the program, threaded into `Ctx.packageTable`. Mechanics and the sibling `find-symbol`/`fmakunbound` work: `.kb/symbol-runtime-api.md`.
-
-**There is no package introspection, deliberately.** `rontolisp:list-functions` / `list-macros` / `list-special-forms` (shared through a `PackageIntrospection` helper the interpreter and both compilers folded to a constant symbol list), `Jvm`/`WasmIntrospectionCompiler`, the resolver's designator normalization, `PackageRegistry.clMacroNames`/`clSpecialFormNames` and `Environment.globalFunctionNames` are GONE. The listings were never complete (car/cdr compositions are recognized by pattern; a name defined at runtime through `load`/`eval` was invisible to the compiled snapshot; a computed designator only worked on the interpreter and answered nil for an unknown package instead of signalling), and every name added to `CL_FUNCTIONS`/`CL_MACROS`/`CL_SPECIAL_FORMS` or to `rontolisp` broke four pinned expectations plus the doc pages quoting them. Classification is visible only where load-bearing: `#'name`, `special-operator-p`, `macro-function`, the reference docs. **Do not bring the listings back.**
+**There is no package introspection, deliberately.** `rontolisp:list-functions`/`list-macros`/
+`list-special-forms`, `PackageIntrospection`, `Jvm`/`WasmIntrospectionCompiler`,
+`clMacroNames`/`clSpecialFormNames`, `Environment.globalFunctionNames` are GONE: the listings were
+never complete and every name added to `CL_FUNCTIONS`/`CL_MACROS`/`CL_SPECIAL_FORMS` broke four
+pinned expectations plus the doc pages. Classification stays visible only at `#'name`,
+`special-operator-p`, `macro-function` and the reference docs. **Do not bring the listings back.**
 
 ## Pre-seeded shim packages with redirects
-- **`closer-common-lisp` (nickname `c2cl`) is a FLAT RE-EXPORT package**: seeded in `PackageRegistry` as the `cl` externals overlaid with `CLOSER_MOP_EXTERNALS` (closer-mop wins collisions, e.g. `class-name` -> `closer-mop:class-name`). Every member is in `LispPackage.imports` pointing at its HOME package, so `resolveQualified`/`memberSpelling` redirect textually — `c2cl:class-slots` IS `closer-mop:class-slots`, `c2cl:mapcar` the bare cl name; the package owns nothing.
-  - **Using it implies using `cl`**: `PackageResolver.withImpliedUses` appends `cl` to the use list at `defpackage :use` / `use-package` time, because cl visibility is judged by a DIRECT use (`currentUsesCl`, `resolveQualified`'s inherited-cl branch).
-  - **The use-list loops in `resolveUnqualified` redirect through a used package's `imports` map** (`usedExport`) — before this a re-exported member inherited through `:use` resolved under the re-exporting package's spelling (a distinct symbol), a latent bug for ANY re-export package.
-  - The `C2CL` built-in nickname moved from `CLOSER-MOP` to this package (upstream c2cl always meant closer-common-lisp; existing spellings resolve to the same place through the redirect); `C2MOP` stays on `closer-mop`. Pinned by `PackageResolverTest#{closerCommonLispQualifiedMembersResolveToTheirHomePackages,usingCloserCommonLispMakesClAndCloserMopVisible,useListReExportResolvesToTheHomePackage}` and `closerCommonLispPackageServesTheDaoPackageShape` in `LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`.
-- **babel** records its babel-encodings members as import redirects: real babel `:use`s babel-encodings and re-exports `*default-character-encoding*` / `list-character-encodings`, so `babel:X` and `babel-encodings:X` are ONE symbol. Both names sit in `LispPackage.imports` pointing at `babel-encodings`; the shim's own `(defun babel:list-character-encodings ...)` canonicalizes through the same redirect. Pinned by `PackageResolverTest#babelSpellingsOfTheBabelEncodingsMembersResolveToTheirHome`.
+- **`closer-common-lisp` (nickname `c2cl`) is a FLAT RE-EXPORT package**: the `cl` externals
+  overlaid with `CLOSER_MOP_EXTERNALS` (closer-mop wins collisions); every member is in
+  `LispPackage.imports` pointing at its HOME package, and the package owns nothing. **Using it
+  implies using `cl`** (`PackageResolver.withImpliedUses`, because cl visibility is judged by a
+  DIRECT use). **The use-list loops in `resolveUnqualified` redirect through a used package's
+  `imports` map** (`usedExport`) -- otherwise a re-exported member inherited through `:use`
+  resolves under the re-exporting package's spelling, a latent bug for ANY re-export package.
+  `C2CL` lives here; `C2MOP` stays on `closer-mop`. Pinned by
+  `PackageResolverTest#{closerCommonLispQualifiedMembersResolveToTheirHomePackages,usingCloserCommonLispMakesClAndCloserMopVisible,useListReExportResolvesToTheHomePackage}`.
+- **babel** records its babel-encodings members as import redirects, so `babel:X` and
+  `babel-encodings:X` are ONE symbol
+  (`PackageResolverTest#babelSpellingsOfTheBabelEncodingsMembersResolveToTheirHome`).
 
 ## The prelude splice selects by SYMBOL, not by member name
-`LispPreludeLibrary.process` (the compile-path pass that prepends the prelude `defun`s a program references and skips the ones the program defines itself) runs its selection on a `new PackageResolver().resolveProgram(program)` copy, so a reference and a definition are matched as the symbols they resolve to. Member-name matching was a correctness bug: alexandria defines its own `alist-hash-table` / `plist-hash-table` / `hash-table-alist` / `hash-table-plist`, and `ALEXANDRIA:ALIST-HASH-TABLE` counted as "the program already defines this", so `(rl:alist-hash-table ...)` compiled to a call-time undefined function. The bare-`cl` entries had the same hole against a `(:shadow #:equalp)`-style library defun. The interpreter never had it (it resolves a prelude name lazily, at call time, off the already-resolved symbol).
-
-Two deliberate asymmetries: the entry-to-entry edges of the fixpoint (`string<` -> `%string-compare`) stay member-matched, the prelude sources being resolver fixed points; and a program that throws `LispPackageException` falls back to member matching, a package error not being this pass's to report. Same shape as `LibraryDefunPruner`'s resolved copy (`.kb/library-defun-pruning.md`). The other splice pre-passes (`JsonLibrary`/`LinalgLibrary`/`UrlLibrary`/`VecLibrary`/`UsocketLibrary`/`GrayStreamsLibrary`/`HttpLibrary`) are unaffected: they trigger on a package-qualified name plus their own `in-package` tracking. Pinned by `LispPreludeLibraryTest`.
+`LispPreludeLibrary.process` runs its selection on a
+`new PackageResolver().resolveProgram(program)` copy, so a reference and a definition are matched as
+the symbols they resolve to. Member-name matching was a correctness bug: alexandria's own
+`alist-hash-table` counted as "the program already defines this", so `(rl:alist-hash-table ...)`
+compiled to an undefined function. Two deliberate asymmetries: the entry-to-entry edges of the
+fixpoint stay member-matched (the prelude sources are resolver fixed points), and a program that
+throws `LispPackageException` falls back to member matching. Same shape as `LibraryDefunPruner`'s
+resolved copy (`.kb/library-defun-pruning.md`); the other splice pre-passes trigger on a qualified
+name plus their own `in-package` tracking. Pinned by `LispPreludeLibraryTest`.
 
 ## UserMacroExpander resolves through its own evaluator's resolver
-On the compile path, `UserMacroExpander.expand` resolves every top-level form via `macroEval.resolvePackages` before matching/expanding, so a `defmacro` under `(in-package P)` registers its canonical qualified name and qualified call sites match. `in-package`/`defpackage` directives (in any spelling, `cl:in-package` included) update the macro evaluator's resolver state but are kept VERBATIM in the output for the compilers' own pass. A form the walk did not change keeps its ORIGINAL spelling (compared by `print()`), because the resolved canonical form is not always re-resolvable — a `cl:` symbol canonicalizes to a bare name, an error under a package that does not use `cl` (this bit the ci-spec corpus's `(cl:print ...)` under `(in-package rontolisp)`). Known residue: a macro EXPANSION spliced into a non-cl-using package region contains canonical bare cl names and hits the same re-resolution error — macro consumers should live in cl-using packages.
+`UserMacroExpander.expand` resolves every top-level form via `macroEval.resolvePackages` before
+matching, so a `defmacro` under `(in-package P)` registers its canonical qualified name.
+`in-package`/`defpackage` directives (any spelling) update the macro evaluator's state but are kept
+VERBATIM for the compilers' own pass. **A form the walk did not change keeps its ORIGINAL
+spelling** (compared by `print()`), because a canonical form is not always re-resolvable -- a `cl:`
+symbol canonicalizes to a bare name, an error under a package that does not use `cl`. Known
+residue: a macro EXPANSION spliced into a non-cl-using package region hits the same error.
 
 ## `load`/`load-system` scope `*package*`
-A loaded file's internal `(in-package ...)` must not leak to the caller. `PackageResolver` has a package stack (`pushPackage`/`popPackage`).
-- Interpreter: `LispEvaluator.loadFile` pushes before the per-file eval loop and pops in the `finally`, covering `load`/`require`/`asdf:load-system`/component files.
-- Compile path: `LoadInliner.spliceFile` brackets a spliced file with internal `(%push-package)`/`(%pop-package)` marker forms (`LispNames.PUSH_PACKAGE`/`POP_PACKAGE`) — but ONLY when the file has a top-level `in-package` (`selectsAPackage`), so a plain-defun file splices byte-identically. `PackageResolver.resolve` consumes the markers (save/restore, then a quoted package symbol like `in-package`); `UserMacroExpander.isPackageDirective` treats them as package directives.
-- Without this, a `defun` after `(asdf:load-system :cl-who)` was interned under `cl-who`, so an unqualified `'name` lookup failed. Tests: `LispEvaluatorAsdfTest`, `LoadInlinerTest`.
+`PackageResolver` has a package stack (`pushPackage`/`popPackage`). Interpreter:
+`LispEvaluator.loadFile` pushes before the per-file eval loop and pops in the `finally`. Compile
+path: `LoadInliner.spliceFile` brackets a spliced file with `(%push-package)`/`(%pop-package)`
+markers (`LispNames.PUSH_PACKAGE`/`POP_PACKAGE`) -- but ONLY when the file has a top-level
+`in-package` (`selectsAPackage`), so a plain-defun file splices byte-identically;
+`PackageResolver.resolve` consumes the markers and `isPackageDirective` treats them as directives.
+Tests: `LispEvaluatorAsdfTest`, `LoadInlinerTest`.
 
-## `*package*` is a DYNAMIC variable — two faces, kept in step
-CL reads `*package*` when a form RUNS. Folding a value-position `*package*` to `(quote CURRENT)` at resolution time is right at top level and wrong inside any defun that outlives its file (alexandria's `maybe-intern` interned into ALEXANDRIA for every caller; rove's `set-test` — `(pushnew name (slot-value (package-suite *package*) '%tests))` — registered every test under `rove/core/suite/package`, so `(rove:run-suite *package*)` found 0 tests), and a `*package*` inside a macro EXPANSION was never folded and read "unbound" on the interpreter.
-- **Value**: the package KEYWORD `find-package` answers (`:CL-USER`), so `(eq *package* (find-package ...))` holds, `(package-name *package*)` works, a `:test 'eq` hash keyed on packages works, `(typep *package* 'package)` is true, and `(print *package*)` prints `:CL-USER`. `#.*package*` splices the keyword raw (self-evaluating), so sxql's `(intern name #.*package*)` works.
-- **Resolver**: a value-position `*package*` resolves through the GENERIC cl-symbol path — bare `*PACKAGE*` when the current package uses `cl`, the usual undefined-symbol error otherwise; quoted it is the same symbol. `(in-package P)` is still consumed (resolution-time state decides which package a source symbol belongs to) but leaves `(setq *package* :P)` (`packageAssignment`); the `%pop-package` restore leaves the same assignment for the SAVED package, `%push-package` leaves the old quoted constant. Top-level forms run in resolution order, so the two states agree at every top-level point.
-- **Interpreter**: the variable IS the resolver's current package — ONE cell. `evalSymbolRef`/`symbol-value`/`boundp` read `currentPackageValue()` (before the dynamic store and the env), `setq` writes through `assignCurrentPackage` (a non-designator signals), `evalLet`'s `*package*` binding is `rebindCurrentPackage` + restore in the `finally`. So a 1-argument `intern`, `read`, a lazily expanded macro and the value the program reads can never disagree. Consequences: a top-level `(setq *package* (find-package :foo))` makes the interpreter resolve the NEXT top-level form in FOO (the compile paths resolve the whole file up front — documented divergence in `doc/*/reference/packages.md`); and it is the one special the interpreter does NOT thread-scope (`DynamicBindings` is per thread, the resolver is per evaluator).
-- **Compile paths**: `LispMacroExpander.injectMvSpillGlobal` prepends `(defvar *package* :cl-user)` when the program READS the variable — any mention other than the top-level `(setq *package* :P)` shape, or a `with-standard-io-syntax` (which expands to a `let` of it in Pass 2, after the scan) — making it a global with a backing store and a proclaimed special, so a `let` of it is the ordinary shallow binding of `.kb/dynamic-special-variables.md`. A program that only SWITCHES packages never observes the variable, so its assignments are DROPPED (the `.kb/toplevel-statement-values.md` rule) and such a program stays byte-identical to one without `in-package` — UNLESS its PRINTER observes it: a program that leaves `cl-user` and can `prin1` a symbol keeps the assignments, the printed qualifier depending on the current package (`.kb/pretty-printer.md`).
-- **`with-standard-io-syntax`** expands to `(let ((*package* :cl-user)) body...)`. `*print-escape*`/`*print-readably*`/`*print-pretty*` are honored but still not rebound by it (documented deviation).
+## `*package*` is a DYNAMIC variable -- two faces, kept in step
+CL reads `*package*` when a form RUNS; folding a value-position `*package*` to `(quote CURRENT)` is
+right at top level and wrong inside any defun that outlives its file.
+- **Value**: the package KEYWORD `find-package` answers (`:CL-USER`), so `eq` against
+  `find-package`, `package-name`, an `:test 'eq` hash keyed on packages, `(typep * 'package)` and
+  printing all work. `#.*package*` splices the keyword raw.
+- **Resolver**: a value-position `*package*` resolves through the GENERIC cl-symbol path.
+  `(in-package P)` still leaves `(setq *package* :P)` (`packageAssignment`), and the `%pop-package`
+  restore leaves the same assignment for the SAVED package. Top-level forms run in resolution
+  order, so the two states agree at every top-level point.
+- **Interpreter**: the variable IS the resolver's current package -- ONE cell.
+  `evalSymbolRef`/`symbol-value`/`boundp` read `currentPackageValue()` (before the dynamic store
+  and the env), `setq` writes through `assignCurrentPackage`, `evalLet`'s binding is
+  `rebindCurrentPackage` + restore in the `finally`, so a 1-argument `intern`, `read`, a lazily
+  expanded macro and the value the program reads can never disagree. Consequences: a top-level
+  `(setq *package* (find-package :foo))` makes the interpreter resolve the NEXT top-level form in
+  FOO (the compile paths resolve the whole file up front -- documented divergence); and it is the
+  one special the interpreter does NOT thread-scope.
+- **Compile paths**: `LispMacroExpander.injectMvSpillGlobal` prepends `(defvar *package* :cl-user)`
+  when the program READS the variable -- any mention other than the top-level `(setq *package* :P)`
+  shape, or a `with-standard-io-syntax` -- making it an ordinary proclaimed special
+  (`.kb/dynamic-special-variables.md`). A program that only SWITCHES packages never observes it, so
+  its assignments are DROPPED and it stays byte-identical to one without `in-package` -- UNLESS its
+  PRINTER observes it (`.kb/pretty-printer.md`).
+- **`with-standard-io-syntax`** expands to `(let ((*package* :cl-user)) body...)`;
+  `*print-escape*`/`*print-readably*`/`*print-pretty*` are honored but not rebound by it.
 
-**A user macro called from inside a FUNCTION BODY expands with the macro's DEFINING package current** (`LispEvaluator.UserMacro.definitionPackage`, swapped in `expandMacroCall`, restored in the `finally`); a TOP-LEVEL macro call keeps the current package. CL expands a macro while COMPILING the calling file; the interpreter expands LAZILY, and only a top-level call site still has its file's package current — so this is what a file-at-a-time compile does, and what `UserMacroExpander`'s macro-time evaluator gets for free. The `functionBodyDepth` counter (incremented around every user-lambda body in `apply`) tells the two apart. Both halves are load-bearing: fast-http's `callback-data` is used inside a defun of its own file and expands `(alexandria:format-symbol t "~A-~A" :callbacks name)` into an accessor call, while trivia's top-level `(lispn:define-namespace pattern function)` must generate `TRIVIA.LEVEL2.IMPL::SYMBOL-PATTERN` — the CALLING file's package. Known approximation: a macro defined in P and called inside a function of a DIFFERENT file Q gets P where CL would use Q. Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`, `TriviaE2eTest`, `SxqlE2eTest`.
+**A user macro called from inside a FUNCTION BODY expands with the macro's DEFINING package
+current** (`LispEvaluator.UserMacro.definitionPackage`, swapped in `expandMacroCall`, restored in
+the `finally`); a TOP-LEVEL macro call keeps the current package. `functionBodyDepth` (incremented
+around every user-lambda body in `apply`) tells them apart. Both halves are load-bearing
+(fast-http's `callback-data` vs trivia's top-level `lispn:define-namespace`). Known approximation:
+a macro defined in P and called inside a function of a DIFFERENT file Q gets P where CL uses Q.
+Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`, `TriviaE2eTest`,
+`SxqlE2eTest`.
 
 ## The REPL prompt IS the current package
-`CL-USER> `: `ReplBuffer.prompt` asks `LispEvaluator.currentPackageName()` (the resolver's current package, upcased) BEFORE EVERY LINE, so an `(in-package :app)` typed at one prompt shows as `APP> ` at the next. Both REPL drivers (JLine and the plain `BufferedReader` behind a pipe) take the prompt from that single method; the continuation line of an unbalanced form is blanked to the SAME WIDTH. Correct because the resolver is one per evaluator and a REPL line is a top-level form. Pinned by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrentPackage}`; transcripts on every `doc/*/**` page show the prompt EXCEPT `compiling/self-hosted-repl.md`, whose `> ` is the example program's own `princ`.
+`ReplBuffer.prompt` asks `LispEvaluator.currentPackageName()` BEFORE EVERY LINE. Both REPL drivers
+take the prompt from that single method; the continuation line is blanked to the SAME WIDTH. Pinned
+by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrentPackage}`; every
+`doc/*/**` transcript shows the prompt except `compiling/self-hosted-repl.md`.
 
 ## Assorted standard names
-- Six CL FUNCTIONS `user-homedir-pathname`, `copy-symbol`, `invoke-debugger`, `remove-method`, `compile-file`, `compile-file-pathname` (all `LispPreludeLibrary` defuns, the last three signalling); two CL MACROS `do-symbols`, `with-compilation-unit`; two CL VARIABLES `*load-verbose*` / `*load-print*` (nil everywhere); constants `most-positive-fixnum` / `most-negative-fixnum` (already READER substitutions, only lacking registration); three CL TYPES `file-stream`, `synonym-stream`, `readtable`.
-- `do-symbols` is interpreter-only like `do-external-symbols` (no runtime package registry on the compile paths) and reads `PackageResolver.accessibleSymbols`, sibling of `externalSymbols`: the package's OWN names plus the externals of every package it uses, each canonicalized against the package that OWNS it, so a `(:use :cl)` package's listing carries bare `cl` names and a name accessible along two routes is listed once.
-- **A `cl:`-qualified read-time constant**: `LispReader.readSymbol` substitutes `nil`/`t`/`pi`/`most-*-fixnum`/`array-*-limit`/`char-code-limit`/`internal-time-units-per-second`/`lambda-list-keywords` before ANY package resolution, so `cl:pi` reached `PackageResolver` as an ordinary symbol reference (unbound, or "not external in the CL package"). `unqualifyClConstant` strips a `cl:`/`cl::` qualifier for exactly that name set (`CL_READ_TIME_CONSTANTS`), so the qualified spelling means the standard constant on every backend with no per-backend binding. Pinned by `LispEvaluatorTest#aClQualifiedReadTimeConstantAnswersTheConstant` and ci-spec `missing-cl-names-443`.
+- CL FUNCTIONS `user-homedir-pathname`, `copy-symbol`, `invoke-debugger`, `remove-method`,
+  `compile-file`, `compile-file-pathname` (`LispPreludeLibrary` defuns, the last three signalling);
+  CL MACROS `do-symbols`, `with-compilation-unit`; CL VARIABLES `*load-verbose*`/`*load-print*`
+  (nil); constants `most-positive-fixnum`/`most-negative-fixnum`; CL TYPES `file-stream`,
+  `synonym-stream`, `readtable`.
+- `do-symbols` is interpreter-only like `do-external-symbols` and reads
+  `PackageResolver.accessibleSymbols` (own names plus the externals of every used package, each
+  canonicalized against the OWNING package, so a name accessible two ways is listed once).
+- **A `cl:`-qualified read-time constant**: `LispReader.readSymbol` substitutes
+  `nil`/`t`/`pi`/`most-*-fixnum`/`array-*-limit`/`char-code-limit`/
+  `internal-time-units-per-second`/`lambda-list-keywords` before ANY package resolution, so `cl:pi`
+  reached the resolver as an ordinary reference; `unqualifyClConstant` strips a `cl:`/`cl::`
+  qualifier for exactly that set (`CL_READ_TIME_CONSTANTS`). ci-spec `missing-cl-names-443`.
 
 ## Tests
-`PackageResolverTest` (incl. the `::` cases, the defpackage clause/error cases, the json.lisp fixed-point pin, and `#{packageVarStaysARuntimeVariableRead,inPackageAcceptsKeywordAndBareSymbolAndAssignsTheRuntimeVariable,popPackageMarkerRestoresTheRuntimeVariableToo}`), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsPackageToClUser}`, `JvmLispCompilerTest#compileAndRunPackageVarIsReadWhenTheFormRuns`, `WasmLispCompilerIntegrationTest#packageVarIsReadWhenTheFormRuns`, package cases in the per-backend tests, and the `defpackage-use-export` / `packages-cl-user-default-uses-cl-and-the` ci-spec cases. Limitations: README.
+`PackageResolverTest` (the `::` cases, the defpackage clause/error cases, the json.lisp fixed-point
+pin, the `*package*` runtime-variable cases), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsPackageToClUser}`,
+`JvmLispCompilerTest#compileAndRunPackageVarIsReadWhenTheFormRuns`,
+`WasmLispCompilerIntegrationTest#packageVarIsReadWhenTheFormRuns`, ci-spec
+`defpackage-use-export`, `packages-cl-user-default-uses-cl-and-the`. Limitations: README.

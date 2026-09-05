@@ -1,37 +1,65 @@
 # Test execution: how the suite actually runs
 
-## Sequencing: `same_thread` by default, and a fork is a separate JVM
-- `src/test/resources/junit-platform.properties` sets `parallel.mode.default` and `parallel.mode.classes.default` to `same_thread`. A class opts its OWN methods into concurrency only with class-level `@Execution(ExecutionMode.CONCURRENT)`: today `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, and every subclass of `AsdfLibraryE2eSupport` (~thirty per-library E2E tests, e.g. `Uax15E2eTest`). Everything else — including all of `am.ik.gpu` / `eval.LinalgGpuTest` — runs one method at a time in one thread.
-- **Trap: `[rontolisp] JUnit parallelism = N` at the start of a run is NOT evidence of parallel test execution.** It is `CoreCountParallelismStrategy` printing the value it derived from core count for `junit.jupiter.execution.parallel.config.custom.class`, which governs intra-class parallelism only for a class that opted in. Two sessions chased a parallelism race that was never in play.
-- `pom.xml` surefire runs `forkCount=2`, `reuseForks=true`. A fork is a separate JVM PROCESS, so nothing in one process's heap (a weakly-keyed cache, a static counter, `am.ik.gpu.DeviceResidency`'s live set) is visible across forks. Two classes interfere only by landing in the SAME fork; surefire guarantees neither which fork nor what order.
+## Sequencing
+
+- `src/test/resources/junit-platform.properties` sets `parallel.mode.default` and
+  `parallel.mode.classes.default` to `same_thread`. A class opts its OWN methods into
+  concurrency only with class-level `@Execution(ExecutionMode.CONCURRENT)`: today
+  `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, and every subclass of
+  `AsdfLibraryE2eSupport`. Everything else -- including all of `am.ik.gpu` /
+  `eval.LinalgGpuTest` -- runs one method at a time in one thread.
+- **Trap: `[rontolisp] JUnit parallelism = N` at the start of a run is NOT evidence of
+  parallel test execution.** It is `CoreCountParallelismStrategy` printing the value it
+  derived for `junit.jupiter.execution.parallel.config.custom.class`, which governs
+  intra-class parallelism only for a class that opted in.
+- `pom.xml` surefire runs `forkCount=2`, `reuseForks=true`. A fork is a separate JVM PROCESS,
+  so nothing in one process's heap (a weakly-keyed cache, a static counter,
+  `am.ik.gpu.DeviceResidency`'s live set) is visible across forks; surefire guarantees neither
+  which fork nor what order.
 
 ## Determinism a test assumes but the JVM does not owe it
-- **A test asserting an exact `residentBytes()` must KEEP ITS ARRAYS REACHABLE.** A resident copy goes when its host array is collected (`aCollectedHostArrayTakesItsResidentCopyWithIt` pins this), so a total counted over arrays the method has stopped referencing can change under the assertion. The rule: `Reference.reachabilityFence` on every array the total counts, placed after the last assertion — and never pass an array anonymously (`Gpu.map(op, a, 0, new float[n], 0, n)`), which makes it unreachable from the moment it exists. "It is used further down, so it is alive" depends on where the next statement happens to sit and is not a rule.
-- **A PROCESS-WIDE counter's diff around one call is not that call's own effect.** `DeviceResidency.dirtyCount()`/`backingCount()` are live-set sizes over the shared weakly-keyed cache. `before + 1` assumes nothing else changes in between, but an earlier test's unreachable entry can be collected at any time — including during the call under test if it allocates (`eval` always does). `System.gc()` before the snapshot is a hint, not a guarantee. The fix is a PER-HANDLE predicate: `DeviceResidency.dirty(Object)`/`.backed(Object)`, exposed to tests as `GpuThresholds.isDirty(Object)`/`.isBacked(Object)`, which no unrelated test's garbage can move.
+
+- **A test asserting an exact `residentBytes()` must KEEP ITS ARRAYS REACHABLE**
+  (`aCollectedHostArrayTakesItsResidentCopyWithIt`): `Reference.reachabilityFence` on every
+  array the total counts, after the last assertion, and never pass an array anonymously
+  (`Gpu.map(op, a, 0, new float[n], 0, n)`).
+- **A PROCESS-WIDE counter's diff around one call is not that call's own effect.**
+  `DeviceResidency.dirtyCount()`/`backingCount()` are live-set sizes over a shared weakly-keyed
+  cache; `System.gc()` is a hint, not a guarantee. Use the PER-HANDLE predicate
+  `DeviceResidency.dirty(Object)`/`.backed(Object)`, exposed as
+  `GpuThresholds.isDirty(Object)`/`.isBacked(Object)`.
 
 ## A test that never ran the mechanism it asserts on
-A test exercising a THRESHOLD-gated mechanism must build a shape that clears the threshold **gating the mechanism under test**, on the machine it runs on. Otherwise nothing errors: the gated path declines, the fallback computes the same answer, every assertion passes, and the test pins nothing.
 
-Three spellings of the mistake (all found in the `--gpu` suites; per-test detail in `.kb/gpu.md`, "Tests"):
-- A shape sized off threshold A while mechanism B is under test (fused row members have their own threshold, not the fold's).
-- **A `Long.MAX_VALUE` sentinel put through arithmetic**: `2 * threshold` wraps NEGATIVE, `(threshold + 383) / 384` likewise, and the following `Math.max(floor, ...)` hands back the caller's own floor — a shape below EVERY threshold. Two independent sites had it.
-- A hard-coded dimension predating a second backend: a 64-cube product is 262144 multiply-adds; one backend's floor is 131072, the other's 4194304.
+A test exercising a THRESHOLD-gated mechanism must build a shape clearing the threshold
+**gating the mechanism under test**, on the machine it runs on. Otherwise nothing errors: the
+gated path declines, the fallback computes the same answer, every assertion passes, and the
+test pins nothing. Three spellings (all found in the `--gpu` suites; per-test detail in
+`.kb/gpu.md`, "Tests"): a shape sized off threshold A while mechanism B is under test; a
+`Long.MAX_VALUE` sentinel put through arithmetic (`2 * threshold` wraps NEGATIVE, and a
+following `Math.max(floor, ...)` hands back the caller's own floor); a hard-coded dimension
+predating a second backend.
 
-### Assert the mechanism ran
-- Best: a RUNTIME census — a counter only the accepted path moves. For `--gpu` that is a residency lookup, hit or miss (`GpuThresholds.residencyHits()`/`.residencyMisses()`); a decline never gets that far.
-- Where the mechanism runs in another loader/process and no counter is reachable (a compiled class carries its own library copy), assert the SHAPE against the threshold in force via `GpuThresholds.acceptedForSize(threshold, elements)` — it at least fails loudly when a floor moves.
-- A census over a TABLE of cases wants both bounds: `accepted > n` AND `declined > n`, so all-accept drift is caught as well as all-decline. `codegen/jvm/GpuOfferDifferentialTest` is the model.
-- **The census must not sit downstream of the sizing it checks** — a suite with the right census still failed on Metal because operand sizing collapsed first and an earlier assertion fired.
-- **Deriving a shape from the threshold accessors is right and not enough.** `am/ik/gpu/MetalGpuTest` derives every shape that way and asserts each member's accept/decline boolean, so it cannot go vacuous — but it is one-backend. A cross-backend test reads the same accessors and gets a sentinel on one and a number on the other. Rule: **every threshold you read is either a size or a `never`, and the expression must answer sensibly for both** — branch on the sentinel, or clamp before multiplying, and never let `Math.max` with a floor disguise the result.
-
-### "Runs everywhere" is not "pins everywhere"
-`am/ik/gpu/GpuDeclineTest` is written as "what every machine must do, with a GPU or without" and its shapes are deliberately hard-coded (sizing off a machine's thresholds would make a GPU-less runner test something else). On a Mac it runs against a live Metal device: three of its enumerations become a free "with a device present" pin (the element-wise one at `mapMinElements() * 2`, the strided one at 4096 x 64 = 262144 — exactly the strided floor there), while two are vacuous there (the batched enumeration builds 2097152 units against a 4194304 floor; the fused one builds 128 elements), so every case in them declines on SIZE and the condition under test is never reached. On CUDA the SAME suite splits differently — the batched enumeration is a free pin and the strided one covers the fold, while the fused one is vacuous on both. See `.kb/gpu.md`, "What GpuTest claims, and where Metal answers it" and "The same two questions on CUDA". When writing the device-present sibling, **assert an accepted baseline at the same shape first** — that line separates "this condition declines" from "this shape was never offered".
-
-### Whose arrays the baseline uses
-Accepting a call can leave its operands resident, and a resident operand is offered whatever its size, so the baseline can move the gate the declines below it are meant to hit.
-- **Baseline over its OWN arrays**, enumeration operand left fresh — what SIZE-derived declines need (`GpuTest`).
-- **Enumeration operand made resident ON PURPOSE, baseline taken over it** — what STRUCTURE-derived declines need (an op code with no name, a span outside the array, a too-short result array, an empty extent): residency takes the size rule out of the answer. `MetalGpuTest` does this, with a fresh array for the one row that IS size-derived.
-- **Which one a suite needs is a per-backend fact**, because whether an accepted call adopts its operands is. On CUDA an accepted call leaves the operand resident: `CudaGemm.stage()` `put`s an input into the residency UNCONDITIONALLY on first sight, from every member path. On Metal an accepted `gemm` leaves `isBacked` false on both inputs — the second-sight rule is applied on its general path (`MetalGemm:1283`, and `:2582` for the mask). CUDA spells that rule exactly once, in the GEMV path (`CudaGemm:2595`, the resident-matrix rule), and nowhere else. Neither backend's result licenses the other.
-
-### Proving a test is vacuous takes a mutation, not an argument
-Restore the old constant with the new census in place: if the value assertions still pass and only the census fails, the test was pinning nothing. Cheap, and how each entry in the `.kb/gpu.md` list was established.
+- Best proof: a RUNTIME census -- a counter only the accepted path moves
+  (`GpuThresholds.residencyHits()`/`.residencyMisses()`). Where the mechanism runs in another
+  loader/process, assert the SHAPE against the threshold via
+  `GpuThresholds.acceptedForSize(threshold, elements)`.
+- A census over a TABLE of cases wants both bounds -- `accepted > n` AND `declined > n`;
+  `codegen/jvm/GpuOfferDifferentialTest` is the model.
+- **The census must not sit downstream of the sizing it checks.**
+- **Deriving a shape from the threshold accessors is right and not enough**
+  (`am/ik/gpu/MetalGpuTest` is one-backend). **Every threshold you read is either a size or a
+  `never`, and the expression must answer sensibly for both** -- branch on the sentinel, or
+  clamp before multiplying, and never let `Math.max` with a floor disguise the result.
+- `am/ik/gpu/GpuDeclineTest` is "what every machine must do, with a GPU or without", so its
+  shapes are deliberately hard-coded; which of its enumerations become free device-present
+  pins and which go vacuous differs between Metal and CUDA (`.kb/gpu.md`). When writing a
+  device-present sibling, **assert an accepted baseline at the same shape first**.
+- Whose arrays the baseline uses is a per-backend fact: SIZE-derived declines need a baseline
+  over its OWN arrays with the enumeration operand left fresh (`GpuTest`); STRUCTURE-derived
+  declines need the enumeration operand made resident ON PURPOSE (`MetalGpuTest`). CUDA's
+  `CudaGemm.stage()` `put`s an input into the residency unconditionally on first sight; an
+  accepted Metal `gemm` leaves `isBacked` false on both inputs.
+- **Proving a test vacuous takes a mutation, not an argument**: restore the old constant with
+  the new census in place; if the value assertions still pass and only the census fails, the
+  test was pinning nothing.
