@@ -103,8 +103,10 @@ it BY NAME at `compiler/UnsupportedFloatWidth`. `vec:` carries the width; `linal
   would make the ANSWER depend on the matrix size, which no other backend reproduces. Under
   `--parallel` the arm is at or above parity from 1024x1024 up.
 - Printing is `_bf16Print` over `FloatText.bfloat16Text`. A program that `read`s or defines a
-  `print-object` method goes through `LispMacroExpander.PRINT_OBJECT_VECTOR_ARM`, whose vector arm
-  excludes the packed widths BY NAME -- the miss showed only in an `-o Prog.class` E2E.
+  `print-object` method goes through `LispMacroExpander.printObjectVectorArm()`, whose
+  exclusions are DERIVED from `LispFloatArray.WIDTHS` per permit's own `elementType()` answer
+  (2026-09-05) -- spelling them by hand is what let bfloat16 render as a general `#(...)` of
+  widened doubles, found only in an `-o Prog.class` E2E.
 - **`read-sequence` / `write-sequence` move a bf16 array in ONE bulk transfer** of its STORED
   PATTERNS -- two little-endian bytes an element, which is what a BF16 safetensors or GGUF
   tensor holds -- so such a tensor loads with no conversion at all and writing it back

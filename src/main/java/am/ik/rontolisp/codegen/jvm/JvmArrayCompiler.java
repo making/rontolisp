@@ -8,9 +8,13 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.ArrayGrowth;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDoubleFloatArray;
+import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -162,35 +166,25 @@ final class JvmArrayCompiler {
 			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.MAKE, JvmIntArrayRuntimeBuilder.MAKE_DESC);
 			return;
 		}
-		if (ctx.usesFloatArray && isBFloat16ElementType(elementType) && fillPointer == null && adjustable == null) {
-			// A plain :element-type 'bfloat16 array (no fill pointer / adjustable /
-			// displacement) is a packed short[]: _bfvMake(dims, init) allocates it and
-			// fills with the coerced (narrowed to bfloat16) init (default 0.0 inside the
-			// helper).
+		LispFloatArray packedProto = ctx.usesFloatArray ? LispFloatArray.prototypeFor(elementType) : null;
+		if (packedProto != null && fillPointer == null && adjustable == null) {
+			// A plain :element-type naming a packed float width (no fill pointer /
+			// adjustable / displacement) is a packed array on the width's own backing:
+			// the width's _*Make(dims, init) allocates it and fills with the coerced
+			// (narrowed to the width where it is narrower) init (default 0.0 inside the
+			// helper). The switch covers the PERMITS with no default arm, so the next
+			// width is a compile error here rather than a silent fall to the general
+			// boxed path (.kb/vec.md, "Asking a packed array its width").
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			compileKeywordValueOrNull(initValue, ctx, className);
-			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.BFLOAT16_MAKE,
-					JvmFloatArrayRuntimeBuilder.MAKE_DESC);
-			return;
-		}
-		if (ctx.usesFloatArray && isSingleFloatElementType(elementType) && fillPointer == null && adjustable == null) {
-			// A plain :element-type 'single-float array (no fill pointer / adjustable /
-			// displacement) is a packed float[]: _sfvMake(dims, init) allocates it and
-			// fills with the coerced (narrowed to f32) init (default 0.0 inside the
-			// helper).
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			compileKeywordValueOrNull(initValue, ctx, className);
-			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.SINGLE_MAKE,
-					JvmFloatArrayRuntimeBuilder.MAKE_DESC);
-			return;
-		}
-		if (ctx.usesFloatArray && isDoubleFloatElementType(elementType) && fillPointer == null && adjustable == null) {
-			// A plain :element-type 'double-float array (no fill pointer / adjustable /
-			// displacement) is a packed double[]: _fvMake(dims, init) allocates it and
-			// fills with the coerced init (default 0.0 inside the helper).
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			compileKeywordValueOrNull(initValue, ctx, className);
-			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+			switch (packedProto) {
+				case LispBFloat16Array ignored -> invokeHelper(ctx, className,
+						JvmFloatArrayRuntimeBuilder.BFLOAT16_MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+				case LispSingleFloatArray ignored -> invokeHelper(ctx, className,
+						JvmFloatArrayRuntimeBuilder.SINGLE_MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+				case LispDoubleFloatArray ignored -> invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.MAKE,
+						JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+			}
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -598,26 +592,6 @@ final class JvmArrayCompiler {
 		}
 	}
 
-	// Whether a make-array :element-type value designates double-float. On the compile
-	// path the value is a literal quoted symbol -- (quote double-float) -- so the quote
-	// is
-	// unwrapped and the symbol name matched (ignoring any package qualifier).
-	private static boolean isDoubleFloatElementType(@Nullable LispVal elementType) {
-		return LispNames.DOUBLE_FLOAT.equals(elementTypeLocalName(elementType));
-	}
-
-	// Whether a make-array :element-type value designates single-float (packs to a
-	// float[]). Same literal quoted-symbol unwrap as isDoubleFloatElementType.
-	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
-		return LispNames.SINGLE_FLOAT.equals(elementTypeLocalName(elementType));
-	}
-
-	// Whether a make-array :element-type value designates bfloat16 (packs to a
-	// short[]). Same literal quoted-symbol unwrap as isDoubleFloatElementType.
-	private static boolean isBFloat16ElementType(@Nullable LispVal elementType) {
-		return LispNames.BFLOAT16.equals(elementTypeLocalName(elementType));
-	}
-
 	// The packed integer-vector element width a make-array :element-type argument
 	// designates: 8/16/32 for the literal quoted list '(unsigned-byte 8|16|32), else 0.
 	// The head symbol name is matched ignoring any package qualifier, like the float
@@ -644,20 +618,6 @@ final class JvmArrayCompiler {
 	// The local (package-qualifier-stripped) symbol name of a literal quoted
 	// :element-type
 	// value, or null when it is not a quoted symbol.
-	private static @Nullable String elementTypeLocalName(@Nullable LispVal elementType) {
-		LispVal sym = elementType;
-		if (sym instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
-				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
-			sym = rest.car();
-		}
-		if (sym instanceof LispSymbol s) {
-			String name = s.name();
-			int colon = name.lastIndexOf(':');
-			return colon >= 0 ? name.substring(colon + 1) : name;
-		}
-		return null;
-	}
-
 	private static @Nullable LispVal findKeywordValue(List<LispVal> args, String keyword) {
 		for (int i = 2; i + 1 < args.size(); i += 2) {
 			if (args.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {

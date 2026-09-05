@@ -4622,28 +4622,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// Whether a (make-array ...) call carries :element-type 'double-float or
-	// 'single-float (a literal quoted symbol at the call site, package qualifier ignored)
-	// --
-	// either produces a packed float array.
+	// Whether a (make-array ...) call carries a :element-type naming a packed float
+	// width (a literal quoted symbol at the call site or a deftype alias of one -- the
+	// alias resolves to the BARE symbol, and prototypeFor accepts both shapes) --
+	// whatever produces a packed float array. Resolved through the SAME table as
+	// JvmArrayCompiler.compileMake's gate, so the gate that emits the _*fvMake helpers
+	// and the gate that runs them can never disagree about a width.
 	private static boolean makeArrayIsPackedFloat(LispCons makeArray, ClosRegistry closRegistry) {
 		List<LispVal> args = makeArray.toList();
 		for (int i = 2; i + 1 < args.size(); i++) {
 			if (args.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
-				LispVal type = LispMacroExpander.resolveElementTypeAlias(args.get(i + 1), closRegistry);
-				if (type instanceof LispSymbol resolved) {
-					// An alias resolves to the BARE symbol, without the quote wrapper the
-					// literal spelling still carries.
-					type = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(resolved, LispNil.INSTANCE));
-				}
-				if (type instanceof LispCons q && q.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name())
-						&& q.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol ts) {
-					String name = ts.name();
-					int colon = name.lastIndexOf(':');
-					String local = colon >= 0 ? name.substring(colon + 1) : name;
-					return local.equals(LispNames.DOUBLE_FLOAT) || local.equals(LispNames.SINGLE_FLOAT)
-							|| local.equals(LispNames.BFLOAT16);
-				}
+				return am.ik.rontolisp.LispFloatArray
+					.prototypeFor(LispMacroExpander.resolveElementTypeAlias(args.get(i + 1), closRegistry)) != null;
 			}
 		}
 		return false;

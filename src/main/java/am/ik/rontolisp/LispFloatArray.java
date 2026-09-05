@@ -70,6 +70,58 @@ public sealed interface LispFloatArray extends LispVal
 	FloatWidth width();
 
 	/**
+	 * One ZERO-LENGTH array per permit -- the table {@link #prototypeFor} resolves a
+	 * {@code make-array :element-type} designator through. Hand-written because it is the
+	 * one name -&gt; width point no compiler can reach (a new width's name is new source
+	 * text), and pinned against {@link Class#getPermittedSubclasses()} by
+	 * {@code eval/PackedFloatReachabilityTest}: a permit missing from this table turns
+	 * that test red, and a permit present here but unhandled at an allocation site is a
+	 * compile error at every exhaustive {@code switch} over this type that switches on
+	 * what {@link #prototypeFor} answers.
+	 */
+	LispFloatArray[] WIDTHS = { new LispDoubleFloatArray(new double[0], new int[] { 0 }),
+			new LispSingleFloatArray(new float[0], new int[] { 0 }),
+			new LispBFloat16Array(new short[0], new int[] { 0 }) };
+
+	/**
+	 * The packed float width a {@code make-array :element-type} designator names, as the
+	 * zero-length {@link #WIDTHS} prototype of that width, or null when the designator
+	 * names no packed float width. The match is against each permit's own
+	 * {@link #elementType()} answer, never against a private set of string constants, so
+	 * the name {@code make-array} accepts is by construction the name
+	 * {@code array-element-type} reports back. A {@code (quote <sym>)} wrapper and any
+	 * package qualifier are stripped, so the compile paths (where the designator is still
+	 * a literal) and the interpreter (where it is the evaluated symbol) resolve the same
+	 * way; a {@code deftype} alias must already have been resolved by the caller.
+	 * <p>
+	 * Switch over the result with the sealed type's patterns and NO {@code default} arm:
+	 * that is what makes the width -&gt; allocation direction a compile error for the
+	 * next permit, the way every {@code instanceof} width test was converted to one.
+	 * @param elementType the {@code :element-type} argument (quoted or bare, qualified or
+	 * not), or null when absent
+	 * @return the zero-length prototype of the named width, or null
+	 */
+	static @org.jspecify.annotations.Nullable LispFloatArray prototypeFor(
+			@org.jspecify.annotations.Nullable LispVal elementType) {
+		LispVal spec = elementType;
+		if (spec instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			spec = rest.car();
+		}
+		if (spec instanceof LispSymbol sym) {
+			String name = sym.name();
+			int colon = name.lastIndexOf(':');
+			String local = colon >= 0 ? name.substring(colon + 1) : name;
+			for (LispFloatArray proto : WIDTHS) {
+				if (proto.elementType().equals(local)) {
+					return proto;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * Reads the element at the given row-major index, widened to a {@code double} (a
 	 * single-float element is widened f32 -&gt; f64).
 	 * @param flat the row-major index ({@code 0 <= flat < totalSize()})

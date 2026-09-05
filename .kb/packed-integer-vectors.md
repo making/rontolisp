@@ -24,6 +24,20 @@ Rank-n falls back for every specialized type except packed floats; CHARACTER deg
   Gelem/s on a 1 Mi-element chunk, 1.3-1.7x slower than a real `short[]`
   ([binary-sequence-io.md](binary-sequence-io.md)); stage huge buffers in chunks.
 
+## Two hand-written width lists (audited 2026-09-05, `.todo/683`)
+The float umbrella's exhaustive-switch net has no analogue here: `LispIntVector` is NOT
+sealed -- ONE final class carrying the width as a field -- and `(unsigned-byte N)` is parsed
+from the SPECIFIER, not resolved from permit names, so there is no `permits` clause for a
+reflective reachability test to enumerate (contrast [vec.md](vec.md), "Asking a packed array
+its width"). The widths therefore live in exactly two lists, and their failure modes differ:
+- `LispNames.unsignedByteWidth` PARSES 8/16/32 and answers 0 for anything else -- an unlisted
+  width silently degrades to the general boxed array (the `.todo/683` shape).
+- the `LispIntVector` constructor ACCEPTS 8/16/32 and throws otherwise -- an unsupported
+  width at the allocation is loud at least.
+Adding an integer width means editing BOTH; `PackedFloatReachabilityTest`'s last two tests
+pin both directions as they stand (every listed width builds and answers its specifier;
+`(unsigned-byte 64)` degrades silently while the constructor refuses it).
+
 ## "Literal" includes a `deftype` alias of one
 `LispMacroExpander.resolveElementTypeAlias(spec, closRegistry)` is the one resolver: strips
 the compile paths' quote, follows alias chains (16 hops, terminating `(deftype a () 'a)`),

@@ -53,8 +53,23 @@ count (add a throwaway third permit, `./mvnw compile`), never count by hand.
 - Deliberately still `instanceof`: a same-width guard inside an arm; the must-be-double requirements
   (`%la-adam-step`, `%la-rng-fill`, `%la-dropout-mask`); `floats`/`doubles` in
   `LinalgBlas`/`LinalgSimd`/`LinalgGpu`; `eval/PackedBuffer.of`, `eval/GeomKernels`.
-- **The one width test that cannot be a compile error** is `make-array`'s in `Environment`: it
-  dispatches on the `:element-type` STRING. A new width must be added there by hand.
+- **The one width test that cannot be a compile error** is the NAME -> width direction: a new
+  width's name is new source text, and no switch can demand it. It is now DERIVED, not
+  transcribed: `LispFloatArray.WIDTHS` holds one zero-length prototype per permit and
+  `LispFloatArray.prototypeFor` resolves a `:element-type` designator (quoted or bare,
+  qualifier stripped) by matching the permits' own `elementType()` answers, so the name
+  `make-array` accepts is by construction the name `array-element-type` reports back. Every
+  consumer -- `eval/Environment`'s allocation, the JVM/WASM make-array gates, the `--no-gc`
+  type pass and emitter and its `vec:` constructor interception, `upgradedArrayElementType`
+  (the `typep` upgrade), and the `%print-object-str` vector arm's exclusion list -- switches
+  over what `prototypeFor` answers with NO `default` arm, so a permit added without an arm
+  at any of them is a compile error (483's probe re-run 2026-09-05: 100 sites). The table is
+  the single hand-written point; `eval/PackedFloatReachabilityTest` pins it against
+  `getPermittedSubclasses()` and walks every permit through every door (make-array,
+  `array-element-type`, `typep`, `vec:zeros/ones/arange` and `vec::%make-like` via `vec:add`,
+  the printer exclusion) -- which is the loud failure the compiler cannot give. A door loop
+  must iterate the PERMITS, never `WIDTHS` itself: a missing row would otherwise shrink the
+  loop silently, reproducing the boxed fallback inside the test that exists to catch it.
 
 ## vec.lisp -- the scalar reference
 

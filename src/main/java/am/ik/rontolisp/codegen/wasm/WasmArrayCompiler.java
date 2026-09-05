@@ -9,9 +9,13 @@ import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.compiler.UnsupportedFloatWidth;
 import am.ik.rontolisp.ArrayGrowth;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDoubleFloatArray;
+import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -112,8 +116,7 @@ final class WasmArrayCompiler {
 		// picks the same representation as the literal '(unsigned-byte 8) spelling.
 		LispVal elementType = am.ik.rontolisp.macro.LispMacroExpander
 			.resolveElementTypeAlias(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD), ctx.closRegistry);
-		boolean singleFloat = isSingleFloatElementType(elementType);
-		boolean doubleFloat = isDoubleFloatElementType(elementType);
+		LispFloatArray packedProto = LispFloatArray.prototypeFor(elementType);
 		LispVal fpArg = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjArg = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
 		// A rank-1 :element-type 'character array is the general array shape holding
@@ -129,32 +132,52 @@ final class WasmArrayCompiler {
 		// is a string.
 		boolean charVector = am.ik.rontolisp.macro.LispMacroExpander.isCharacterElementType(elementType);
 		int elementTypeCode = ArrayElementTypes.codeOf(elementType);
-		if (elementTypeCode == ArrayElementTypes.BFLOAT16) {
-			// Refused HERE, where the representation is chosen: this backend has a
-			// TYPE_F32ARR and a TYPE_F64ARR and nothing else, so an unrefused request
-			// falls through to the general BOXED array below and the program answers
-			// different numbers here than on the interpreter -- a wrong number rather
-			// than a crash (.kb/bfloat16.md).
-			//
-			// A CALL-TIME signal rather than a compile error, the shape the %ieee754-*
-			// quartet uses for the same reason: vec.lisp's width-dispatching cond
-			// carries a bfloat16 arm that every backend compiles, and on this one it is
-			// provably dead (no bfloat16 array can be built or read here at all). A
-			// compile error there is a false positive that breaks builds of programs
-			// that never name the width. A program that does reach this call gets the
-			// same sentence, at the call.
-			WasmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.expandUnsupportedCall(cons,
-					UnsupportedFloatWidth.message(FloatWidth.BFLOAT16, "the wasm-GC backend")), ctx);
-			return;
-		}
-		if ((doubleFloat || singleFloat) && fpArg == null && adjArg == null) {
-			// A plain :element-type 'double-float / 'single-float array (no fill pointer
-			// /
-			// adjustable / displacement) is a packed farray: emitParseDims for the shape,
-			// then a TYPE_F64ARR (double) or TYPE_F32ARR (single) of the coerced init
-			// (default 0.0).
-			compilePackedMake(args, ctx, singleFloat);
-			return;
+		if (packedProto != null) {
+			// The switch covers the PERMITS with no default arm. This backend has a
+			// TYPE_F32ARR and a TYPE_F64ARR and nothing else, so the next width must be
+			// ANSWERED here -- compiled, or refused the way bfloat16 is -- at the point
+			// the representation is chosen; an unanswered one falls through to the
+			// general BOXED array below and the program answers different numbers here
+			// than on the interpreter -- a wrong number rather than a crash
+			// (.kb/bfloat16.md, "A guard on one spelling of an operation is not a
+			// guard").
+			switch (packedProto) {
+				case LispBFloat16Array ignored -> {
+					// A CALL-TIME signal rather than a compile error, the shape the
+					// %ieee754-* quartet uses for the same reason: vec.lisp's
+					// width-dispatching cond carries a bfloat16 arm that every backend
+					// compiles, and on this one it is provably dead (no bfloat16 array
+					// can be built or read here at all). A compile error there is a
+					// false positive that breaks builds of programs that never name the
+					// width. A program that does reach this call gets the same sentence,
+					// at the call. The refusal is unconditional: even with a fill
+					// pointer, degrading to the general representation here would answer
+					// different numbers than the interpreter.
+					WasmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.expandUnsupportedCall(cons,
+							UnsupportedFloatWidth.message(FloatWidth.BFLOAT16, "the wasm-GC backend")), ctx);
+					return;
+				}
+				case LispSingleFloatArray ignored -> {
+					if (fpArg == null && adjArg == null) {
+						// A plain :element-type 'single-float array (no fill pointer /
+						// adjustable / displacement) is a packed farray: emitParseDims
+						// for the shape, then a TYPE_F32ARR of the coerced init
+						// (default 0.0).
+						compilePackedMake(args, ctx, true);
+						return;
+					}
+				}
+				case LispDoubleFloatArray ignored -> {
+					if (fpArg == null && adjArg == null) {
+						// A plain :element-type 'double-float array (no fill pointer /
+						// adjustable / displacement) is a packed farray: emitParseDims
+						// for the shape, then a TYPE_F64ARR of the coerced init
+						// (default 0.0).
+						compilePackedMake(args, ctx, false);
+						return;
+					}
+				}
+			}
 		}
 		int packedIntWidth = packedIntElementWidth(elementType);
 		if (packedIntWidth > 0 && fpArg == null && adjArg == null) {
@@ -1096,8 +1119,19 @@ final class WasmArrayCompiler {
 				default -> DeclaredArrayTypes.Kind.U32;
 			};
 		}
-		if (isDoubleFloatElementType(resolved) || isSingleFloatElementType(resolved)) {
-			return DeclaredArrayTypes.Kind.FLOAT;
+		LispFloatArray packedProto = LispFloatArray.prototypeFor(resolved);
+		if (packedProto != null) {
+			// FLOAT is the packed f64/f32 representation of this backend. A width the
+			// backend does not have (bfloat16) is refused by compileMake where the
+			// representation is chosen, so nothing built through it ever reads this
+			// answer, and the probe keeps passing it through as GENERAL. The switch
+			// covers the PERMITS with no default arm, so the next width is answered
+			// here too (.kb/vec.md, "Asking a packed array its width").
+			return switch (packedProto) {
+				case LispSingleFloatArray ignored -> DeclaredArrayTypes.Kind.FLOAT;
+				case LispDoubleFloatArray ignored -> DeclaredArrayTypes.Kind.FLOAT;
+				case LispBFloat16Array ignored -> DeclaredArrayTypes.Kind.GENERAL;
+			};
 		}
 		if (LispMacroExpander.isCharacterElementType(resolved)) {
 			// A character vector's representation is the marked general array OR a
@@ -2666,22 +2700,6 @@ final class WasmArrayCompiler {
 			}
 		}
 		return null;
-	}
-
-	// Whether a make-array :element-type value designates double-float. On the compile
-	// path the value is a literal quoted symbol -- (quote double-float) -- so the quote
-	// is
-	// unwrapped and the symbol name matched (ignoring any package qualifier). Mirrors the
-	// JVM JvmArrayCompiler.isDoubleFloatElementType.
-	private static boolean isDoubleFloatElementType(@Nullable LispVal elementType) {
-		return LispNames.DOUBLE_FLOAT.equals(elementTypeLocalName(elementType));
-	}
-
-	// Whether a make-array :element-type value designates single-float (packs to an f32
-	// array, not yet supported on the WASM backend). Mirrors the JVM
-	// JvmArrayCompiler.isSingleFloatElementType.
-	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
-		return LispNames.SINGLE_FLOAT.equals(elementTypeLocalName(elementType));
 	}
 
 	// The packed integer-vector width (8/16/32) a make-array :element-type value

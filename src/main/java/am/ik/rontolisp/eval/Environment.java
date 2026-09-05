@@ -955,55 +955,68 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.MAKE_ARRAY + ": :displaced-index-offset requires :displaced-to");
 			}
 			boolean hasFillPointer = fillPointerArg != null && !(fillPointerArg instanceof LispNil);
-			String packedType = packedFloatElementType(elementTypeArg);
-			if (packedType != null && !hasFillPointer && !adjustable) {
-				// :element-type 'double-float / 'single-float with no fill pointer /
+			LispFloatArray packedProto = LispFloatArray.prototypeFor(elementTypeArg);
+			if (packedProto != null && !hasFillPointer && !adjustable) {
+				// A :element-type naming a packed float width with no fill pointer /
 				// adjustability / displacement selects the packed float-array
-				// representation (unboxed double[] / float[]). :initial-contents fills it
+				// representation (the width's unboxed backing). :initial-contents fills
+				// it
 				// (any rank, walked row-major like the general array below); otherwise
-				// the initial element coerces to a double (narrowed to a float for
-				// single-float). A non-real is a type error (there is no degrade path).
+				// the initial element coerces to a double (narrowed to the width where
+				// the
+				// backing is narrower). A non-real is a type error (there is no degrade
+				// path). The switch is over the PERMITS with no default arm, so the
+				// width -> allocation direction is a compile error for the next permit;
+				// the name -> width direction reads each permit's own elementType()
+				// answer
+				// (LispFloatArray.prototypeFor), and PackedFloatReachabilityTest pins
+				// that
+				// every permit is in that table.
 				double fill = initGiven ? asDouble(init) : 0.0;
-				if (packedType.equals(LispNames.BFLOAT16)) {
-					short[] bdata = new short[total];
-					if (initialContents != null) {
-						LispVal[] tmp = new LispVal[total];
-						fillInitialContents(initialContents, dims, 0, tmp, 0);
-						for (int i = 0; i < total; i++) {
-							bdata[i] = (short) BFloat16.bits(asDouble(tmp[i]));
+				switch (packedProto) {
+					case LispBFloat16Array ignored -> {
+						short[] bdata = new short[total];
+						if (initialContents != null) {
+							LispVal[] tmp = new LispVal[total];
+							fillInitialContents(initialContents, dims, 0, tmp, 0);
+							for (int i = 0; i < total; i++) {
+								bdata[i] = (short) BFloat16.bits(asDouble(tmp[i]));
+							}
 						}
-					}
-					else if (fill != 0.0) {
-						java.util.Arrays.fill(bdata, (short) BFloat16.bits(fill));
-					}
-					return new LispBFloat16Array(bdata, dims);
-				}
-				if (packedType.equals(LispNames.SINGLE_FLOAT)) {
-					float[] sdata = new float[total];
-					if (initialContents != null) {
-						LispVal[] tmp = new LispVal[total];
-						fillInitialContents(initialContents, dims, 0, tmp, 0);
-						for (int i = 0; i < total; i++) {
-							sdata[i] = (float) asDouble(tmp[i]);
+						else if (fill != 0.0) {
+							java.util.Arrays.fill(bdata, (short) BFloat16.bits(fill));
 						}
+						return new LispBFloat16Array(bdata, dims);
 					}
-					else if (fill != 0.0) {
-						java.util.Arrays.fill(sdata, (float) fill);
+					case LispSingleFloatArray ignored -> {
+						float[] sdata = new float[total];
+						if (initialContents != null) {
+							LispVal[] tmp = new LispVal[total];
+							fillInitialContents(initialContents, dims, 0, tmp, 0);
+							for (int i = 0; i < total; i++) {
+								sdata[i] = (float) asDouble(tmp[i]);
+							}
+						}
+						else if (fill != 0.0) {
+							java.util.Arrays.fill(sdata, (float) fill);
+						}
+						return new LispSingleFloatArray(sdata, dims);
 					}
-					return new LispSingleFloatArray(sdata, dims);
-				}
-				double[] fdata = new double[total];
-				if (initialContents != null) {
-					LispVal[] tmp = new LispVal[total];
-					fillInitialContents(initialContents, dims, 0, tmp, 0);
-					for (int i = 0; i < total; i++) {
-						fdata[i] = asDouble(tmp[i]);
+					case LispDoubleFloatArray ignored -> {
+						double[] fdata = new double[total];
+						if (initialContents != null) {
+							LispVal[] tmp = new LispVal[total];
+							fillInitialContents(initialContents, dims, 0, tmp, 0);
+							for (int i = 0; i < total; i++) {
+								fdata[i] = asDouble(tmp[i]);
+							}
+						}
+						else if (fill != 0.0) {
+							java.util.Arrays.fill(fdata, fill);
+						}
+						return new LispDoubleFloatArray(fdata, dims);
 					}
 				}
-				else if (fill != 0.0) {
-					java.util.Arrays.fill(fdata, fill);
-				}
-				return new LispDoubleFloatArray(fdata, dims);
 			}
 			int packedIntWidth = packedIntElementWidth(elementTypeArg);
 			if (packedIntWidth > 0 && dims.length == 1 && !hasFillPointer && !adjustable) {
@@ -1677,32 +1690,6 @@ public final class Environment implements Scope {
 		}
 		throw new LispEvalException(
 				fn + ": a packed integer vector stores integers, got " + (val == null ? "nil" : val.print()));
-	}
-
-	// The packed float-array element type a make-array :element-type argument designates:
-	// "double-float", "single-float" or "bfloat16" (selecting the packed
-	// representation), or null for anything else. The symbol name is matched ignoring any
-	// package qualifier.
-	//
-	// This is the ONE width test the sealed umbrella cannot make a compile error: the
-	// argument is a SYMBOL NAME, and a string comparison has no exhaustiveness to lean
-	// on. A width added to LispFloatArray has to be added here by hand.
-	@Nullable private static String packedFloatElementType(@Nullable LispVal elementType) {
-		if (elementType instanceof LispSymbol sym) {
-			String name = sym.name();
-			int colon = name.lastIndexOf(':');
-			String local = colon >= 0 ? name.substring(colon + 1) : name;
-			if (local.equals(LispNames.DOUBLE_FLOAT)) {
-				return LispNames.DOUBLE_FLOAT;
-			}
-			if (local.equals(LispNames.SINGLE_FLOAT)) {
-				return LispNames.SINGLE_FLOAT;
-			}
-			if (local.equals(LispNames.BFLOAT16)) {
-				return LispNames.BFLOAT16;
-			}
-		}
-		return null;
 	}
 
 	// Fills array storage row-major from a make-array :initial-contents argument: a

@@ -871,7 +871,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				// two agree: this pass used to answer F64VEC for a width the emitter
 				// then refused, which is a guess standing in for an error.
 				refuseUnsupportedWidth(makeElementType);
-				boolean single = isSingleFloatElementType(makeElementType);
+				boolean single = switch (LispFloatArray.prototypeFor(makeElementType)) {
+					case null -> false;
+					case am.ik.rontolisp.LispDoubleFloatArray ignored -> false;
+					case am.ik.rontolisp.LispSingleFloatArray ignored -> true;
+					// Unreachable -- refuseUnsupportedWidth threw first; the arm keeps
+					// this switch exhaustive over the permits, so the type pass and the
+					// emitter cannot disagree about the next width.
+					case am.ik.rontolisp.LispBFloat16Array ignored ->
+						throw am.ik.rontolisp.compiler.UnsupportedFloatWidth.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16,
+								"the --no-gc backend");
+				};
 				if (dims.size() == 2) {
 					return single ? Ty.F32MAT : Ty.F64MAT;
 				}
@@ -3354,9 +3364,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param elementType the resolved element-type argument, or {@code null}
 	 */
 	private static void refuseUnsupportedWidth(@Nullable LispVal elementType) {
-		if (elementTypeNameIs(elementType, LispNames.BFLOAT16)) {
-			throw am.ik.rontolisp.compiler.UnsupportedFloatWidth.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16,
-					"the --no-gc backend");
+		LispFloatArray proto = LispFloatArray.prototypeFor(elementType);
+		if (proto != null) {
+			// The switch covers the PERMITS with no default arm, so the next width must
+			// be refused or carried HERE, where the representation is decided, rather
+			// than guessed at by whichever pass reads the designator next (.kb/vec.md,
+			// "Asking a packed array its width").
+			switch (proto) {
+				case am.ik.rontolisp.LispBFloat16Array ignored -> throw am.ik.rontolisp.compiler.UnsupportedFloatWidth
+					.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16, "the --no-gc backend");
+				case am.ik.rontolisp.LispSingleFloatArray ignored -> {
+				}
+				case am.ik.rontolisp.LispDoubleFloatArray ignored -> {
+				}
+			}
 		}
 	}
 
@@ -3366,12 +3387,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		LispVal elementType = findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD);
 		refuseUnsupportedWidth(elementType);
-		boolean single = isSingleFloatElementType(elementType);
-		if (!single && !isDoubleFloatElementType(elementType)) {
-			throw new UnsupportedOperationException(
+		boolean single = switch (LispFloatArray.prototypeFor(elementType)) {
+			case null -> throw new UnsupportedOperationException(
 					"--no-gc: make-array is only supported with :element-type " + "'double-float or 'single-float in '"
 							+ fn.fnName + "' (the scalar backend has no general array " + "type)");
-		}
+			case am.ik.rontolisp.LispSingleFloatArray ignored -> true;
+			case am.ik.rontolisp.LispDoubleFloatArray ignored -> false;
+			// Unreachable -- refuseUnsupportedWidth threw first; the arm exists so this
+			// switch stays exhaustive over the permits, which is the point.
+			case am.ik.rontolisp.LispBFloat16Array ignored -> throw am.ik.rontolisp.compiler.UnsupportedFloatWidth
+				.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16, "the --no-gc backend");
+		};
 		if (findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD) != null
 				|| findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD) != null
 				|| findKeywordValue(args, LispNames.DISPLACED_TO_KEYWORD) != null) {
@@ -3560,38 +3586,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 		}
 		return null;
-	}
-
-	// Whether an :element-type value designates double-float (the only packed element
-	// type
-	// on this backend), unwrapping a (quote double-float) and ignoring any package
-	// qualifier. Mirrors WasmArrayCompiler.isDoubleFloatElementType.
-	private static boolean isDoubleFloatElementType(@Nullable LispVal elementType) {
-		return elementTypeNameIs(elementType, LispNames.DOUBLE_FLOAT);
-	}
-
-	// Whether an :element-type value designates single-float (the f32 packed width),
-	// unwrapping a (quote single-float) and ignoring any package qualifier. Mirrors
-	// isDoubleFloatElementType / WasmArrayCompiler.isSingleFloatElementType.
-	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
-		return elementTypeNameIs(elementType, LispNames.SINGLE_FLOAT);
-	}
-
-	// Shared unwrap for an :element-type designator: strips a (quote <sym>) wrapper and
-	// any
-	// package qualifier, then compares the bare name.
-	private static boolean elementTypeNameIs(@Nullable LispVal elementType, String expected) {
-		LispVal sym = elementType;
-		if (sym instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
-				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
-			sym = rest.car();
-		}
-		if (sym instanceof LispSymbol s) {
-			String name = s.name();
-			int colon = name.lastIndexOf(':');
-			return (colon >= 0 ? name.substring(colon + 1) : name).equals(expected);
-		}
-		return false;
 	}
 
 	// --- vec: package (native WASM SIMD over the packed f64 vector)
@@ -3928,13 +3922,28 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		};
 	}
 
-	// The width a vec:zeros/ones/arange call constructs: F32VEC when a literal
-	// :element-type 'single-float keyword pair follows the count, else F64VEC (the
-	// double default). Mirrors make-array's :element-type keying and vec::%make in
-	// vec.lisp (whose &key prologue reads the same pair on the other backends).
+	// The width a vec:zeros/ones/arange call constructs: F32VEC for a literal
+	// :element-type 'single-float keyword pair following the count, F64VEC for
+	// 'double-float or for a name vec::%make does not recognize (its double default).
+	// A PERMIT this backend does not carry (bfloat16) is refused HERE, where the
+	// representation is chosen -- letting it fall to the double default would build an
+	// eight-byte vector the interpreter answers as a two-byte one, the same wrong
+	// number every other refusal in .kb/bfloat16.md exists to prevent. The switch covers
+	// the PERMITS with no default arm, so the next width is answered here too.
 	private static Ty constructorVecType(List<LispVal> args) {
-		return args.size() == 4 && isElementTypeKeyword(args.get(2)) && isSingleFloatElementType(args.get(3))
-				? Ty.F32VEC : Ty.F64VEC;
+		if (args.size() == 4 && isElementTypeKeyword(args.get(2))) {
+			LispFloatArray proto = LispFloatArray.prototypeFor(args.get(3));
+			if (proto != null) {
+				return switch (proto) {
+					case am.ik.rontolisp.LispSingleFloatArray ignored -> Ty.F32VEC;
+					case am.ik.rontolisp.LispDoubleFloatArray ignored -> Ty.F64VEC;
+					case am.ik.rontolisp.LispBFloat16Array ignored ->
+						throw am.ik.rontolisp.compiler.UnsupportedFloatWidth.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16,
+								"the --no-gc backend");
+				};
+			}
+		}
+		return Ty.F64VEC;
 	}
 
 	// Whether a constructor argument is the literal :element-type keyword.

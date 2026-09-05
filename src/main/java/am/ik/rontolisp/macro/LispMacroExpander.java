@@ -25316,38 +25316,55 @@ public final class LispMacroExpander {
 	 * itself, a rank != 1 array as {@code #nA(...)} with nested group parens, and a
 	 * packed FLOAT array as {@code #d(...)}/{@code #f(...)}/{@code #bf16(...)} -- none of
 	 * which this loop writes, and none of which can hold an instance. The float exclusion
-	 * is spelled as the three element types rather than as "the element type is
+	 * is spelled as the packed element types rather than as "the element type is
 	 * {@code t}" because only the former is one value on every backend (the general
 	 * answer is a {@code T} SYMBOL in the interpreter and the {@code t} VALUE on the JVM,
 	 * which no {@code eq} spans); a packed INTEGER vector needs no exclusion at all -- it
 	 * renders {@code #(...)} and its elements are integers, so the walk reproduces the
-	 * raw text exactly. <b>This is a width asked for BY NAME</b>, outside the sealed
-	 * switch's reach (the {@code bfloat16} width was missing here and rendered as a
-	 * general {@code #(...)} of widened doubles in every program that also called
-	 * {@code read}); a fourth width has to be added here by hand.
+	 * raw text exactly.
+	 * <p>
+	 * <b>This is a width asked for BY NAME</b>, outside the sealed switch's reach -- the
+	 * {@code bfloat16} width was missing here once and rendered as a general
+	 * {@code #(...)} of widened doubles in every program that also called {@code read},
+	 * found only by an {@code -o Prog.class} E2E. The exclusion conjuncts are therefore
+	 * DERIVED from {@code LispFloatArray.WIDTHS}, one per permit's own
+	 * {@code elementType()} answer, never spelled by hand; a permit missing from that
+	 * table fails {@code PackedFloatReachabilityTest}, which reads the same table.
+	 * @return the arm's source text
 	 */
-	private static final String PRINT_OBJECT_VECTOR_ARM = """
-			((and (vectorp %pos-x) (not (stringp %pos-x)) (eql (array-rank %pos-x) 1)
-			      (not (equal (array-element-type %pos-x) 'single-float))
-			      (not (equal (array-element-type %pos-x) 'double-float))
-			      (not (equal (array-element-type %pos-x) 'bfloat16)))
-			 (if (or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256)
-			         (and *print-level* (>= %pos-lvl *print-level*)))
-			     "#"
-			     (let ((%pos-acc "#(") (%pos-i 0) (%pos-n (length %pos-x)) (%pos-sep "")
-			           (%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1))
-			           (%pos-subl (+ %pos-lvl 1)))
-			       (when (and *print-length* (< *print-length* %pos-n))
-			         (setq %pos-n *print-length*))
-			       (while (< %pos-i %pos-n)
-			         (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
-			                                     (%pos-walk (aref %pos-x %pos-i) %pos-esc %pos-sub %pos-subd %pos-subl)))
-			         (setq %pos-sep " ")
-			         (setq %pos-i (+ %pos-i 1)))
-			       (when (< %pos-n (length %pos-x))
-			         (setq %pos-acc (concatenate 'string %pos-acc %pos-sep "...")))
-			       (concatenate 'string %pos-acc ")"))))
-			""";
+	private static String printObjectVectorArm() {
+		// Plain concatenation, NOT String.formatted: the generated source is full of
+		// %pos-* names, and every one of them is an invalid format specifier.
+		StringBuilder exclusions = new StringBuilder();
+		for (LispFloatArray proto : LispFloatArray.WIDTHS) {
+			exclusions.append("\n			      (not (equal (array-element-type %pos-x) '")
+				.append(proto.elementType())
+				.append("))");
+		}
+		// Closes the (and ... whose head the first text block opens; one paren for
+		// however many conjuncts the table emitted, including none.
+		exclusions.append(")\n");
+		return """
+				((and (vectorp %pos-x) (not (stringp %pos-x)) (eql (array-rank %pos-x) 1)""" + exclusions
+				+ """
+						 (if (or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256)
+						         (and *print-level* (>= %pos-lvl *print-level*)))
+						     "#"
+						     (let ((%pos-acc "#(") (%pos-i 0) (%pos-n (length %pos-x)) (%pos-sep "")
+						           (%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1))
+						           (%pos-subl (+ %pos-lvl 1)))
+						       (when (and *print-length* (< *print-length* %pos-n))
+						         (setq %pos-n *print-length*))
+						       (while (< %pos-i %pos-n)
+						         (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
+						                                     (%pos-walk (aref %pos-x %pos-i) %pos-esc %pos-sub %pos-subd %pos-subl)))
+						         (setq %pos-sep " ")
+						         (setq %pos-i (+ %pos-i 1)))
+						       (when (< %pos-n (length %pos-x))
+						         (setq %pos-acc (concatenate 'string %pos-acc %pos-sep "...")))
+						       (concatenate 'string %pos-acc ")"))))
+						""";
+	}
 
 	/**
 	 * The generated renderer pair. {@code (%print-object-str x escape)} is the entry
@@ -25375,7 +25392,7 @@ public final class LispMacroExpander {
 			boolean walkVectors) {
 		String source = "(defun %print-object-str (%pos-x %pos-esc) (%pos-walk %pos-x %pos-esc nil 0 0))\n"
 				+ "(defun %pos-walk (%pos-x %pos-esc %pos-path %pos-depth %pos-lvl) (cond " + PRINT_OBJECT_CONS_ARM
-				+ (walkVectors ? PRINT_OBJECT_VECTOR_ARM : "") + "(t (%print-object-leaf %pos-x %pos-esc))))\n"
+				+ (walkVectors ? printObjectVectorArm() : "") + "(t (%print-object-leaf %pos-x %pos-esc))))\n"
 				+ PRINT_OBJECT_GUARD_HELPERS;
 		List<LispVal> walker = LispReader.readAllFromString(source, Features.INTERPRETER);
 		LispSymbol value = new LispSymbol("__pox");
@@ -26836,22 +26853,32 @@ public final class LispMacroExpander {
 	/**
 	 * The element type an array built with this declared element type actually reports
 	 * from {@code array-element-type} -- the "upgraded" type, mirroring exactly the
-	 * representation {@code make-array} selects: the two float widths and the three
+	 * representation {@code make-array} selects: the packed float widths and the three
 	 * packed unsigned-integer widths keep their own name, the character family answers
 	 * {@code character}, and EVERYTHING else (fixnum, integer, bit, a user class) lands
 	 * in the general boxed array whose element type is {@code t}. So
 	 * {@code (typep a '(simple-array fixnum (4)))} is a {@code t}-array test here, which
 	 * is conformant: there is no fixnum-specialized array to upgrade to.
+	 * <p>
+	 * The packed float names are NOT spelled in the switch: each permit of
+	 * {@link LispFloatArray} answers its own name through {@code elementType()}, so a
+	 * width added to the sealed umbrella upgrades here without this method being edited.
+	 * (Until 2026-09-05 it was the switch above, and a new permit reached {@code t}
+	 * silently -- {@code (typep #bf16(1.0) '(array bfloat16)}) answered {@code NIL} until
+	 * it was extended by hand, invisible to every test that existed.)
 	 * @param spec the declared element type (already alias-resolved)
 	 * @return the element type value an array of that kind answers
 	 */
 	private static LispVal upgradedArrayElementType(LispVal spec) {
 		if (spec instanceof LispSymbol sym) {
-			return switch (canonicalElementTypeName(sym)) {
+			String canonical = canonicalElementTypeName(sym);
+			for (LispFloatArray proto : LispFloatArray.WIDTHS) {
+				if (proto.elementType().equals(canonical)) {
+					return new LispSymbol(proto.elementType());
+				}
+			}
+			return switch (canonical) {
 				case "CHARACTER" -> new LispSymbol(LispNames.CHARACTER_TYPE);
-				case LispNames.SINGLE_FLOAT -> new LispSymbol(LispNames.SINGLE_FLOAT);
-				case LispNames.DOUBLE_FLOAT -> new LispSymbol(LispNames.DOUBLE_FLOAT);
-				case LispNames.BFLOAT16 -> new LispSymbol(LispNames.BFLOAT16);
 				default -> LispTrue.INSTANCE;
 			};
 		}

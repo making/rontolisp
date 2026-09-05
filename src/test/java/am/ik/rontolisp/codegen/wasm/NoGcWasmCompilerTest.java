@@ -85,6 +85,23 @@ class NoGcWasmCompilerTest {
 			.hasMessageContaining("the --no-gc backend");
 	}
 
+	// vec:zeros/ones/arange read the width from a literal :element-type pair; before the
+	// dispatch ran through the prototype table a bfloat16 name fell into the DOUBLE
+	// default
+	// and built an eight-byte vector whose numbers differed from the interpreter's. The
+	// refusal belongs where the representation is chosen, and this backend refuses at
+	// COMPILE time like it refuses the literal and make-array above (.kb/bfloat16.md,
+	// "The packed array": interpreter and JVM only).
+	@Test
+	void bfloat16VecConstructorsAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun bv (n) (vec:zeros n :element-type 'bfloat16))
+				(rontolisp:wasm-export 'bv :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("bfloat16 arrays are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the --no-gc backend");
+	}
+
 	@Test
 	void emitsPlainMvpModuleWithNoGcTypesImportsOrMemory() {
 		byte[] module = compile("""
