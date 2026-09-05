@@ -295,8 +295,13 @@ the same way); `examples/llama2/checkpoint-tokenizer-check.lisp` covers the `:gp
 only -- the Split-regex kinds are covered by the real checkpoints' id dumps recorded
 above, not by a fixture. Checkpoints under `/home/administrator/models/` (see above),
 `llama.cpp` with `llama-cli` and `llama-completion` at
-`/tmp/claude-1000/-home-administrator-rontolisp/2657f381-d6c4-4d97-93ab-c64450bd10ac/scratchpad/llama.cpp/build/bin/`
-(a `/tmp` path; rebuild takes three minutes if it is gone).
+`/home/administrator/models/tools/llama.cpp-bin/` -- **copied out of the session
+scratchpad on 2026-09-05 so a `/tmp` cleanup cannot take the oracle with it**, the same
+move the checkpoints got that morning. `llama-cli --version` reports build 1, commit
+`67a17c1`, GNU 13.3.0, Linux x86_64. Binaries and their `libggml*.so` only; the source
+tree stays in `/tmp` and a rebuild takes about three minutes if a newer one is wanted.
+Record the commit with any comparison -- an oracle without its version is `.todo/670`
+standing rule 10 with the roles reversed.
 
 ## What the numbers should look like
 
