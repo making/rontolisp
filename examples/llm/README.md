@@ -404,6 +404,51 @@ rows; the 135M model spends its token in the 30-layer walk around its
 576-wide GEMVs, which is where `.kb/jvm-typed-loops.md`'s work sits, not the
 weight width's.
 
+### bf16 weights: `-w bf16`
+
+Every checkpoint above is published in bf16, and `-w bf16` keeps the file's own bits
+for the weight matrices -- half the bytes a token streams, no widen at load -- while
+the norms, the biases, the KV cache and every activation stay f32 (`--simd` fuses
+exactly that pairing, bf16 weights against f32 activations, in `vec:dot` /
+`vec:matvec`; interpreter and JVM only). The text is the same as at f32 on every
+model below, token for token, over 156 runs. Measured on dorian (develop `b87aed25`,
+JVM class output, `--simd` for one thread and `--simd --parallel` with
+`RONTOLISP_THREADS` explicit otherwise, `-Xmx24g`, GraalVM 25.0.4's Graal JIT, `-t 0
+-n 64` of the chat prompt -- TinyLlama on the raw "Once upon a time", see the note --
+the f32 and bf16 arms interleaved run by run, medians of 3, no other rontolisp lane on
+the box; the load is the weights alone):
+
+| model | 1 thread f32 -> bf16 | 16 threads | 32 threads | load f32 -> bf16 |
+| --- | --- | --- | --- | --- |
+| Qwen3.5-0.8B | 2.92 -> 3.44 (1.18x) | 9.47 -> 12.21 (1.29x) | 9.01 -> 12.01 (1.33x) | 6.9 -> 5.2 s |
+| TinyLlama-1.1B | 2.26 -> 2.85 (1.26x) | 8.47 -> 12.36 (1.46x) | 8.80 -> 12.04 (1.37x) | 8.1 -> 4.4 s |
+| LFM2.5-1.2B | 2.14 -> 2.52 (1.18x) | 8.57 -> 13.69 (1.60x) | 9.19 -> 15.14 (1.65x) | 8.5 -> 5.0 s |
+| Qwen3-0.6B | 2.52 -> 2.77 (1.10x) | 9.47 -> 11.72 (1.24x) | 9.50 -> 12.41 (1.31x) | 5.1 -> 3.1 s |
+| SmolLM2-360M | 4.19 -> 4.87 (1.16x) | 14.84 -> 17.65 (1.19x) | 14.25 -> 16.91 (1.19x) | 2.8 -> 1.5 s |
+| SmolLM2-135M | 8.36 -> 9.70 (1.16x) | 28.99 -> 29.77 (1.03x) | 28.09 -> 29.01 (1.03x) | 1.4 -> 0.8 s |
+
+Two readings. **The parallel leg does not double, and the thread count at which each
+model stops scaling is the same at both widths** -- flat by 16 for the Qwens, TinyLlama
+and SmolLM2, still climbing at 32 for LFM2.5 -- so the parallel cap is the parallel
+machinery (work distribution, barrier cost), not the memory bus: halving the bytes a
+token streams would have moved a bandwidth knee, and it did not move. The model that
+scales furthest (LFM2.5, thirty large matvecs per token) gets the most from the width,
+and a model whose token was never on the bus (SmolLM2-135M) gets nothing on the
+parallel leg. **The serial leg moves 1.1-1.3x** (1.25-1.38x under C2,
+`-XX:-UseJVMCICompiler`, the JIT a stock OpenJDK runs a `.class` under) against the
+fused GEMV's own 1.5-2.0x, because a token is the GEMVs plus the attention, the norms,
+the logit argmax and the layer walk, none of which the width touches. The load halves
+on every model; that is the reader (BF16 file bits into a `#bf16` array in one
+`read-sequence`), not the kernels. The full per-thread tables with spreads are in
+`.todo/489`.
+
+One trap in the harness: `-m chat` on a model whose row carries no chat template
+(TinyLlama-Chat is `model_type` `llama`, and the `llama` row has none) does not fail
+-- it feeds the raw prompt, the model answers EOS at once, and the printed tok/s
+covers the nine prompt positions. TinyLlama's rows above are the raw completion for
+that reason, and its earlier "chat prompt" rows on this page should be read with it in
+mind.
+
 ## The layer table
 
 The one thing here that is not `run.c`: the forward pass is a **table of layer

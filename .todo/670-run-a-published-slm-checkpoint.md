@@ -43,7 +43,7 @@ so `.todo/488` now takes its numbers under both JITs.
 | `676` | the forward pass as a table of layer kinds: QK-norm, NoPE, gates, partial RoPE, multipliers (Qwen3, SmolLM3, Granite) | Medium | **closed 2026-09-03** |
 | `677` | the Gated DeltaNet layer: Qwen3.5-0.8B, and with it every Qwen 3.5-3.8 dense model | High | Qwen3.5-0.8B runs from both formats; bf16 `tok/s` is unblocked -- `488`'s wiring landed 2026-09-05 |
 | `678` | the LFM2 gated short-conv layer: LFM2.5-1.2B-Instruct, the newest ~1B model | Medium | **closed 2026-09-05**: runs from both formats, token for token, and byte-identical to `llama.cpp` |
-| `489` | the model rungs: TinyLlama / SmolLM2 (loader shakeout), Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High | f32 rungs measured for two models; bf16 rungs are unblocked -- `488`'s wiring landed 2026-09-05, at 1.49x (Graal) / 2.00x (C2) of f32 on a DRAM-bound GEMV |
+| `489` | the model rungs: TinyLlama / SmolLM2 (loader shakeout), Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High | f32 AND bf16 rungs measured on six models 2026-09-05 -- the result and its reading are in `489`, beside the prediction |
 
 **Order: 671 -> 673 / 675 -> 674 -> 489 rung 0 at f32 -> 676 -> 678 -> 677 ->
 `.todo/482`'s 483-488 (only `487`'s remainder is left; `488` closed 2026-09-05) -> 489 at bf16 -> 672 -> 490.** (676-678 are pure Lisp over the
