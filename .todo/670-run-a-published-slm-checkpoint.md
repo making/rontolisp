@@ -184,11 +184,37 @@ Both orchestrators stopped here, every worktree clean.
 | llama2 e2e slices | dorian | 35 / 35 | `656c170d` |
 | GPU legs, 6 classes | GB10 | 205 / 0 / 0, with `486` in | `281fda90` |
 
-**Neither pair of numbers matches and every difference is accounted for**: 9977 against
-9976 is the regression test `692` added, and the 87-skip gap is the device (`GpuTest` 57 +
-`MetalGpuTest` 54 skip where there is neither). **The numbers that should NOT match are
-the evidence that the rest do** -- two suites agreeing exactly across boxes with different
-hardware would be the result to distrust.
+**"Every difference is accounted for" was a claim nobody had checked, and it was wrong
+twice. Corrected 2026-09-05.** The sentence said the 87-skip gap was the device,
+`GpuTest` 57 + `MetalGpuTest` 54 -- **which is 111, not 87**, so it named two classes
+summing to a different number than the gap it explained, and that stood as certified for
+two days.
+
+The arithmetic error turned out to be downstream of a larger one. **The test COUNTS were
+never comparable between boxes at all** (`.todo/708`): `LispFormatterTest` builds its
+corpus with `Files.walk(Path.of("."))` filtering only `/target/` and `/ansi-test/suite/`,
+so it formats every `.lisp` under `.claude/worktrees/` as well. Dorian ran 26359 tests on
+2026-09-05 against GB10's 10607 on the same source with 231 report files on both -- the
+gap being 25 stale agent worktrees against 1. **One term of the comparison is "how many
+agents ran on this box recently".** So the old 87-versus-111 gap may never have needed
+explaining; it was a subtraction between two numbers that were not commensurable.
+
+What IS comparable, and what the certification actually rests on: **zero failures, zero
+errors, and an identical report-file count on both boxes.** A differing report count means
+a class was DROPPED rather than skipped, which no skip accounting would reveal -- that is
+the check worth keeping. Checked 2026-09-05: `LispFormatterTest` is the ONLY
+worktree-sensitive class in the suite (`DocExamplesTest` walks too, but is scoped to
+`doc/en` and `doc/ja`), and no SKIPPED class on either box is worktree-sensitive, so the
+skip breakdown below is sound even though the totals are not.
+
+Real skip accounting, both boxes, 2026-09-05: dorian 276, GB10 189. Dorian-only:
+`GpuTest` 57, `LinalgGpuTest` 40, `JvmLinalgGpuAccelCompilerTest` 22 (**+119**, the
+device). GB10-only: `WitOracleE2eTest` 12, `WasmReentrantE2eTest` 5 (**-17**). Net +102 --
+neither the 87 asserted nor the 111 named. `MetalGpuTest`'s 54 skip on BOTH boxes: GB10
+has CUDA, not Metal.
+
+**Do not compare test totals across boxes until `.todo/708` lands.** Compare failures,
+errors and report counts.
 
 ## Findings from the run, and where each one now lives
 
