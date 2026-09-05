@@ -9,7 +9,7 @@ the lead-byte length CLASSIFIER two call sites still need -- a different questio
 technique cannot answer without a real regression (below), so both places keep their
 own copy of the same six-branch table:
 
-- `examples/llama2/llama2.lisp`'s `utf8-length`
+- `examples/llm/llm.lisp`'s `utf8-length`
 - `src/main/resources/am/ik/rontolisp/eval/tokenizers.lisp`'s `tokenizer::%utf8-lead-length`
 
 They are byte-for-byte the same table today, held in step only by a comment in each
@@ -38,7 +38,7 @@ Fold the two copies into one, subject to the two constraints that made this
 non-trivial the first time:
 
 1. **An example program may only reach a package's PUBLIC (`tokenizer:`) symbols.**
-   `examples/llama2/llama2.lisp` cannot call `tokenizer::%utf8-lead-length` directly
+   `examples/llm/llm.lisp` cannot call `tokenizer::%utf8-lead-length` directly
    (double-colon, internal) without becoming the fourth thing that reaches past a
    package boundary an example is supposed to respect. Either export a public
    `tokenizer:` name for it, or find a different shared home neither file already
@@ -51,7 +51,7 @@ non-trivial the first time:
 
 ## Verify
 
-- `examples/llama2/llama2.lisp`'s `utf8-length` and the tokenizer package's classifier
+- `examples/llm/llm.lisp`'s `utf8-length` and the tokenizer package's classifier
   are ONE definition, or one calls the other.
 - The exhaustive 0..255 pin (`TokenizersLibraryTest`) still passes and now also covers
   whatever the example calls.

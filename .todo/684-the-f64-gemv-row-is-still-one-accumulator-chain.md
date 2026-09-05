@@ -45,7 +45,7 @@ measured, and the f32 numbers do not carry over unexamined:
 ## Why it is not urgent
 
 `vec:` defaults to `double-float`, but the workload that made `.todo/480` worth doing is
-LLM inference, which is `#f` throughout (`examples/llama2`, and every checkpoint in
+LLM inference, which is `#f` throughout (`examples/llm`, and every checkpoint in
 `.todo/489`'s ladder). No `#d` GEMV in this repo is on a hot path. So this is a real gap
 with no known victim -- the reason it is filed rather than done.
 

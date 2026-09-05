@@ -3,7 +3,7 @@
 Difficulty: Medium
 
 Found 2026-09-05 measuring `.todo/489`'s f32 rungs on dorian (Xeon E5-2697A v4, 64
-threads, GraalVM 25.0.4, develop `2275c000`), JVM class output of `examples/llama2`,
+threads, GraalVM 25.0.4, develop `2275c000`), JVM class output of `examples/llm`,
 `--simd --parallel`, greedy, 64 tokens:
 
 | model | threads | tok/s | load average before the run | what else ran |
@@ -28,7 +28,7 @@ does nothing for a worker that is holding a leaf when it is preempted.
 The user guide already says "size the count to what the machine's job allows"
 (`doc/en/guides/simd-acceleration.md`, `--parallel`), which is true and not a defence:
 the default is what runs when nobody read that line, and it is the one setting that
-collapses. Every `--parallel` number in `examples/llama2/README.md` was taken with the
+collapses. Every `--parallel` number in `examples/llm/README.md` was taken with the
 default, and the 2026-09-03 rows (8.56 / 6.97 tok/s) happened to be taken in a quieter
 minute than the 2026-09-05 ones.
 
@@ -47,7 +47,7 @@ minute than the 2026-09-05 ones.
    - Work-stealing that lets the caller finish a preempted worker's leaf instead of
      waiting for it -- the real fix, and the one with the most surface.
 3. Whatever lands, `RONTOLISP_THREADS` keeps overriding it, and the README rows in
-   `examples/llama2` are re-measured at the new default with the load average beside
+   `examples/llm` are re-measured at the new default with the load average beside
    them.
 
 Two lanes measuring `--parallel` on one box at the same time produce two garbage numbers

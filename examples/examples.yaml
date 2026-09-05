@@ -276,7 +276,7 @@ examples:
         - "prompt:    (3 14 1 5)"
         - "generated: (39 27 23 18 42 7 5 39 27)"
 
-  # --- llama2: llama2.c ported whole (see its README.md) ----------------------
+  # --- llm: llama2.c ported whole (see its README.md) ----------------------
   # Both entries run under --simd (the interpreter's scalar kernels take ~15 s per
   # stories15M token), and the threaded legs (interpreter, JVM) under --simd
   # --parallel as well: the row-parallel GEMV must tell the same story as the
@@ -285,9 +285,9 @@ examples:
   # the program falls back to, so both halves of it are covered.
   # Greedy decoding, so the story is byte-identical on every backend AND to the C
   # program's -- the whole point of an `equals`.
-  - path: llama2/llama2.lisp
+  - path: llm/llm.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
-    workDir: llama2
+    workDir: llm
     workFiles: [stories260K.bin, tok512.bin]
     simd: true
     parallel: true
@@ -296,17 +296,17 @@ examples:
     expect:
       equals: |
         Once upon a time, there was a little girl named Lily. She loved to play outside in the park. One day, she saw a big, r
-  # The Gated DeltaNet layer (Qwen3.5's :deltanet kind, llama2/deltanet.lisp)
+  # The Gated DeltaNet layer (Qwen3.5's :deltanet kind, llm/deltanet.lisp)
   # against a float64 transcription of the PyTorch reference (deltanet-ref.py):
   # the recurrence alone, then a whole decode step over five tokens, at 3
   # decimals with a 2e-5 margin from every rounding boundary, so the text is
   # the same with single-float arithmetic and the WASM exp approximation.
-  - path: llama2/deltanet-check.lisp
+  - path: llm/deltanet-check.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     note: deltanet.lisp's arithmetic pinned against deltanet-ref.py -- torch_recurrent_gated_delta_rule at heads 2 / dim 4 over three tokens plus the final states, then Qwen3_5GatedDeltaNet.forward (conv, SiLU, l2norm, the gates, the recurrence, the gated RMSNorm, out_proj) over five tokens of a dim-8 two-head kernel-4 layer. The scalar vec.lisp kernels on every backend
     expect:
       file: .expected/deltanet-check.txt
-  - path: llama2/deltanet-check.lisp
+  - path: llm/deltanet-check.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     simd: true
     note: the same check under --simd on every leg -- the lane kernels' single-precision reductions land on the same text
@@ -314,53 +314,53 @@ examples:
       file: .expected/deltanet-check.txt
   # The shipped safetensors reader (safetensors:read over the checkpoint staging
   # package, .kb/checkpoint-readers.md) over a few-hundred-byte fixture written by
-  # llama2/safetensors-fixture.py: every supported dtype at rank 1, 2 and 3 and a
+  # llm/safetensors-fixture.py: every supported dtype at rank 1, 2 and 3 and a
   # one-element tensor, into single and double floats, the I64 refusal, :only, the
   # chunked staging path (the chunk forced to five elements) and the sharded index.
   # The values are exact in every width, so the text is the same on every backend.
-  - path: llama2/safetensors-check.lisp
+  - path: llm/safetensors-check.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
-    workDir: llama2
+    workDir: llm
     workFiles: [safetensors-check.safetensors, safetensors-check-00001-of-00002.safetensors, safetensors-check-00002-of-00002.safetensors, safetensors-check.index.json]
     note: safetensors:read / safetensors:header / safetensors:entries over the checked-in fixture -- F32, F16 and BF16 tensors of rank 1, 2 and 3 and one of a single element, single and double destinations, the dtype refusal, :only skipping a tensor through checkpoint:skip-bytes, the staging chunk forced down to five elements, and the two-shard index
     expect:
       file: .expected/safetensors-check.txt
-  - path: llama2/safetensors-check.lisp
+  - path: llm/safetensors-check.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
-    workDir: llama2
+    workDir: llm
     workFiles: [safetensors-check.safetensors, safetensors-check-00001-of-00002.safetensors, safetensors-check-00002-of-00002.safetensors, safetensors-check.index.json]
     simd: true
     note: the same check under --simd -- a reader must answer the same arrays whatever the acceleration flag
     expect:
       file: .expected/safetensors-check.txt
-  # llama2/tokenizer-fixture.py: one tiny byte-level BPE tokenizer as a Hugging Face
+  # llm/tokenizer-fixture.py: one tiny byte-level BPE tokenizer as a Hugging Face
   # tokenizer.json + tokenizer_config.json pair and as a GGUF metadata block, with
   # added tokens flagged special (<|im_start|>, <|im_end|>) and not (<think>,
   # </think>); the ids are the Python `tokenizers` library's.
-  - path: llama2/checkpoint-tokenizer-check.lisp
+  - path: llm/checkpoint-tokenizer-check.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
-    workDir: llama2
+    workDir: llm
     workFiles: [tokenizer-check/tokenizer.json, tokenizer-check/tokenizer_config.json, tokenizer-check.gguf]
-    note: load-hf-tokenizer and load-gguf-tokenizer (the readers llama2.lisp uses for a published checkpoint's tokenizer) over the checked-in fixture, encoding a plain text, a chat turn with a think block, and a word glued to an added token -- every added token is one id whether or not it is flagged special, on both readers, the same ids the reference implementation gives
+    note: load-hf-tokenizer and load-gguf-tokenizer (the readers llm.lisp uses for a published checkpoint's tokenizer) over the checked-in fixture, encoding a plain text, a chat turn with a think block, and a word glued to an added token -- every added token is one id whether or not it is flagged special, on both readers, the same ids the reference implementation gives
     expect:
       file: .expected/checkpoint-tokenizer-check.txt
-  # LFM2's gated short-conv layer (the :shortconv kind, llama2/shortconv.lisp)
+  # LFM2's gated short-conv layer (the :shortconv kind, llm/shortconv.lisp)
   # against a float64 transcription of Lfm2ShortConv (shortconv-ref.py), four
   # tokens of a dim-8 kernel-3 layer, the same 3-decimal / 2e-5-margin rule.
-  - path: llama2/shortconv-check.lisp
+  - path: llm/shortconv-check.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     note: shortconv.lisp's arithmetic pinned against shortconv-ref.py -- in_proj, the B | C | x split, the gated causal conv of kernel 3 (causal-conv.lisp, shared with deltanet.lisp) with no activation, out_proj -- over four tokens, so the two-row window fills and wraps. The scalar vec.lisp kernels on every backend
     expect:
       file: .expected/shortconv-check.txt
-  - path: llama2/shortconv-check.lisp
+  - path: llm/shortconv-check.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     simd: true
     note: the same check under --simd on every leg
     expect:
       file: .expected/shortconv-check.txt
-  - path: llama2/llama2.lisp
+  - path: llm/llm.lisp
     backends: [interpreter, jvm, wasm]
-    workDir: llama2
+    workDir: llm
     workFiles: [stories15M.bin, tokenizer.bin]
     simd: true
     parallel: true
@@ -368,7 +368,7 @@ examples:
       LLAMA2_PROMPT: Once upon a time
       LLAMA2_TEMPERATURE: "0"
       LLAMA2_STEPS: "60"
-    note: the llama2.c README demo itself, over stories15M.bin (60 MB, gitignored -- llama2/download-stories15M.sh); the RUN legs skip themselves when it is absent. 60 greedy tokens = the same text `run stories15M.bin -t 0 -n 60 -i "Once upon a time"` prints. Measured 2026-08-22 with --simd - JVM 221 tok/s (319 with --simd --parallel on 20 threads, 278 with --gpu --simd, story unchanged), wasm-GC 125 tok/s, interpreter 44 tok/s
+    note: the llama2.c README demo itself, over stories15M.bin (60 MB, gitignored -- llm/download-stories15M.sh); the RUN legs skip themselves when it is absent. 60 greedy tokens = the same text `run stories15M.bin -t 0 -n 60 -i "Once upon a time"` prints. Measured 2026-08-22 with --simd - JVM 221 tok/s (319 with --simd --parallel on 20 threads, 278 with --gpu --simd, story unchanged), wasm-GC 125 tok/s, interpreter 44 tok/s
     expect:
       equals: |
         Once upon a time, there was a little girl named Lily. She loved to play outside in the sunshine. One day, she saw a big, red ball in the sky. It was the sun! She thought it was so pretty.

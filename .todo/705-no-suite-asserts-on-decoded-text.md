@@ -83,7 +83,7 @@ converter, not us. So (3) needs a minimal GGUF **writer** first.
 
 **But a Lisp writer may not be needed at all, and there is now precedent in the repo.**
 2026-09-05, the same day: the added-token fix's pin is
-`examples/llama2/checkpoint-tokenizer-check.lisp` over a CHECKED-IN fixture built by
+`examples/llm/checkpoint-tokenizer-check.lisp` over a CHECKED-IN fixture built by
 `tokenizer-fixture.py` -- one tiny byte-level BPE emitted both as `tokenizer.json` +
 config AND as a GGUF metadata block, with ids taken from the Python `tokenizers` library
 as the oracle. Generated once, offline, committed as bytes; the repo reads it and never

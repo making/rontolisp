@@ -3,12 +3,18 @@ import jdk.incubator.vector.*;
 /**
  * Where the GEMV column gate belongs, measured at the shapes real models actually use.
  *
- * The gate has to be a pure function of the COLUMN COUNT: llama2's `V^T . att` (line 633
- * of examples/llama2/llama2.lisp) is a GEMV whose rows are the head dimension and whose
- * COLUMNS are the sequence length, so the same call site crosses the gate as generation
- * proceeds -- and it may cross it only because the column count changed, never because of
- * a row count, a call count or any other state. Its sibling at line 621 (`K . q`) is the
- * other way round: columns fixed at the head dimension, rows growing with the sequence.
+ * The gate has to be a pure function of the COLUMN COUNT: the `(vec:matvec vth att)` of
+ * examples/llm/llm.lisp is a GEMV whose rows are the head dimension and whose COLUMNS are
+ * the sequence length, so the same call site crosses the gate as generation proceeds --
+ * and it may cross it only because the column count changed, never because of a row
+ * count, a call count or any other state. Its sibling `K . q` is the other way round:
+ * columns fixed at the head dimension, rows growing with the sequence.
+ *
+ * (This measurement is from 2026-08-22 and is not restated. Only the POINTER above was
+ * rewritten, on 2026-09-05, when examples/llama2 became examples/llm: it cited "line 633"
+ * and "line 621", and the file had grown enough that 633 was config reading and the GEMV
+ * had moved to 1312. A line number into a living file decays silently and nothing checks
+ * it, so it is named by the call it points at instead.)
  *
  * So the two tables below:
  *

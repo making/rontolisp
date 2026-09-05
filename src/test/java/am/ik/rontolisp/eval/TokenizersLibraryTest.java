@@ -148,10 +148,10 @@ class TokenizersLibraryTest {
 	// --- the SentencePiece half ---------------------------------------------------
 
 	/**
-	 * The same encoder llama2.lisp carries, over the whole 512-piece vocabulary of
-	 * {@code examples/llama2/tok512.bin}: the dummy prefix space, the byte-fallback
-	 * pieces for everything outside a 512-token vocabulary (CJK and emoji here) and the
-	 * greedy merge by score.
+	 * The same encoder llm.lisp carries, over the whole 512-piece vocabulary of
+	 * {@code examples/llm/tok512.bin}: the dummy prefix space, the byte-fallback pieces
+	 * for everything outside a 512-token vocabulary (CJK and emoji here) and the greedy
+	 * merge by score.
 	 */
 	@Test
 	void sentencepieceMatchesRunCsEncoder() {
@@ -286,9 +286,9 @@ class TokenizersLibraryTest {
 	 * one of those needs. This pins {@code tokenizer::%utf8-lead-length} BY VALUE over
 	 * the entire byte range so the classifier can never drift from what a byte-fallback
 	 * token actually needs, and so it stays byte-for-byte the SAME table
-	 * examples/llama2/llama2.lisp's utf8-length hand-writes independently (an example may
-	 * reach only {@code tokenizer:} public symbols, so the two cannot share the
-	 * definition itself -- .todo/691's close).
+	 * examples/llm/llm.lisp's utf8-length hand-writes independently (an example may reach
+	 * only {@code tokenizer:} public symbols, so the two cannot share the definition
+	 * itself -- .todo/691's close).
 	 */
 	@Test
 	void utf8LeadLengthIsHowManyBytesNotWhatCharacterOverEveryLeadByte() {

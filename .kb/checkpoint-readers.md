@@ -68,11 +68,11 @@ the end of the header, row-major.
   `read-sequence`, F16/BF16 through `stage-float-bits`, else an error naming tensor and
   dtype; `:only` is a name predicate; a directory argument probes
   `model.safetensors.index.json` then `model.safetensors`.
-- Per-family name mapping is the consumer's (`examples/llama2/llama2.lisp`
+- Per-family name mapping is the consumer's (`examples/llm/llm.lisp`
   `load-hf-checkpoint`); the reader is per FORMAT.
 
 ## Tests
-`examples/llama2/safetensors-check.lisp` over `safetensors-check.safetensors`
+`examples/llm/safetensors-check.lisp` over `safetensors-check.safetensors`
 (`safetensors-fixture.py`), expected `examples/.expected/safetensors-check.txt`, entry in
 `examples.yaml` — interpreter leg only until the JVM/WASM arms of `widen-float-bits` land.
 The `bfloat16` destination is pinned per engine, not cross-backend (two backends refuse the

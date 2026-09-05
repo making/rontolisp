@@ -19,7 +19,7 @@ weight-matrix type, not a float width (`.todo/672`); Q4_0 measured 1.1x on the C
 is not filed for it.
 
 **The goal this item exists for: run a 1B-class model on rontolisp** (item 489).
-`examples/llama2` today runs `stories15M` -- 60.8 MB of weights. A 1.1B-parameter model is
+`examples/llm` today runs `stories15M` -- 60.8 MB of weights. A 1.1B-parameter model is
 2.2 GB at 2 bytes a weight and 4.4 GB at 4. Both fit this box (121 GB) and a laptop; what
 the halving buys at this size is **tokens per second** -- decode streams every weight
 once per token, so the width is the bandwidth (1.6-2.0x measured, one thread and twenty)

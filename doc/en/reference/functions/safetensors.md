@@ -16,7 +16,7 @@ their offsets from the end of the header. F32, F16 and BF16 tensors are read;
 any other dtype is an error naming the tensor. A file is walked front to back
 (streams do not reposition), and a tensor the `:only` predicate excludes is
 skipped, not staged, so a multimodal checkpoint's vision tower costs its bytes
-of I/O and nothing else. `examples/llama2/llama2.lisp` reads TinyLlama, Qwen3.5
+of I/O and nothing else. `examples/llm/llm.lisp` reads TinyLlama, Qwen3.5
 and LFM2.5 checkpoints through it.
 
 | Function | Example | Result |

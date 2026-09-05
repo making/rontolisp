@@ -1,7 +1,7 @@
 ;;;; A SentencePiece-style fixture: the whole 512-piece vocabulary of
-;;;; examples/llama2/tok512.bin (stories260K), which is small enough to check
+;;;; examples/llm/tok512.bin (stories260K), which is small enough to check
 ;;;; in untrimmed. The expected ids are run.c's encode(), which is what
-;;;; llama2.lisp already implements -- see .kb/tokenizers.md.
+;;;; llm.lisp already implements -- see .kb/tokenizers.md.
 
 (defparameter *fixture-pieces*
   #("<unk>"

@@ -8,7 +8,7 @@ is the plan those numbers imply, and `.todo/482` stays the width half of it.
 
 **The goal: a small language model that someone downloaded from Hugging Face runs on
 rontolisp from the file they downloaded** -- no Python, no `export.py`, no conversion
-step outside the language. `examples/llama2` runs karpathy's `.bin`, a format one
+step outside the language. `examples/llm` runs karpathy's `.bin`, a format one
 project writes; the models people actually run are published in two formats,
 **safetensors** (bf16, one JSON header and raw tensors) and **GGUF** (F32 / F16 / BF16 /
 Q8_0 / Q4_K_M, the tokenizer and the hyperparameters in the same file), and in the widths
@@ -224,7 +224,7 @@ known `--simd` trap) is DISCHARGED: `692` closed 2026-09-03, which is why A1 sta
 | wave | lane A1 | lane A2 |
 | --- | --- | --- |
 | 1 | `678` LFM2.5-1.2B: the gated short-conv layer end to end, both formats, the way `677` went (Medium) -- `692`, which used to lead this cell and gate B's `488` wiring, closed 2026-09-03 | `489` f32 rungs, finishing the set: **Qwen3-0.6B has not been run at all**, then SmolLM2 (High) |
-| 2 | `682` rename `examples/llama2` -> `examples/llm` -- **its trigger fired twice on 2026-09-03** and nobody noticed (Medium) | `489` at bf16, against the prediction already written there, the moment B's `488` wiring lands; then close `675` and `677` (High) |
+| 2 | `682` rename `examples/llm` -> `examples/llm` -- **its trigger fired twice on 2026-09-03** and nobody noticed (Medium) | `489` at bf16, against the prediction already written there, the moment B's `488` wiring lands; then close `675` and `677` (High) |
 | 3 | `688` the corpus tests' duplicated splice chain, and the "a test that prints a compiler warning must assert on it" rule (Medium) | `490`'s A-side numbers if B gets that far (High) |
 
 A1 owns `examples/llm/*` in wave 2 (the rename), so A2 must not edit those files that

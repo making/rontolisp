@@ -264,7 +264,7 @@ public final class LinalgGpu {
 	/**
 	 * Overrides {@code vec:matvec} in the given (global) environment with the device GEMV
 	 * -- the one member of {@code --gpu} outside {@code linalg:}, and the seam
-	 * {@code examples/llama2}'s decode loop runs on. Must be called AFTER the
+	 * {@code examples/llm}'s decode loop runs on. Must be called AFTER the
 	 * {@code vec.lisp} forms have been evaluated into the environment and after
 	 * {@link VecSimd#install} (whichever binding it finds is what it declines to), and
 	 * only when {@link #available()} is {@code true}. It is a separate entry point from

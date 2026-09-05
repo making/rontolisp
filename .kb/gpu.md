@@ -276,7 +276,7 @@ The census: the chapter-2 Transformer makes ~4,100 offers with 212 declines, 191
 `%la-scaled-masked-softmax` and its grad refusing an `f(64 1 19)` padding mask against an
 `f(64 19 19)` score on `suffixLength`; the chapter-3 GPT makes 12, its `(1 256 256)` mask being a
 suffix once the leading extent-1 axis is dropped, and its 634 `torch:clip-grad-norm` offers all
-accepted over resident operands; llama2 offers only `vec:matvec`, **1440 a run declining on SIZE** at
+accepted over resident operands; llm offers only `vec:matvec`, **1440 a run declining on SIZE** at
 `f(288 288)` = 82944 against `MATVEC_POOLED_MIN_ELEMENTS` 2^17. The GPT's mask is a `double[]` over a
 `float` score -- **the only production shape here that exercises the either-width mask clause.**
 
@@ -527,13 +527,13 @@ moving.
 a MARK -- an entry with no buffer, counting for nothing in the budget, cleared by `written` exactly as
 a copy is; the second sight of the same span, unwritten, uploads it; every later one is a hit. So
 weights are resident from their second token, and a matrix the program REWRITES between calls
-(llama2's KV cache) is "first sight" every time and never pays the cold trip it would lose (0.87x at
+(llm's KV cache) is "first sight" every time and never pays the cold trip it would lose (0.87x at
 384x384 f32 cold).
 
 **The accumulator is a double at both widths.** Over 1024 rows of 768 inexact floats the double kernel
 is bit-identical on **1024 of 1024** rows, a float kernel on 268, the `--simd` lane kernel on 144 --
 the product of two floats is exact in double, so only the ORDER of a double sum separates device from
-defun. It is what lets llama2's story stay byte-identical with the flag on. Pinned as a relative
+defun. It is what lets llm's story stay byte-identical with the flag on. Pinned as a relative
 tolerance plus ">99% of rows identical".
 
 **The seam is a CHAIN on both backends.** Interpreter: `LinalgGpu.installVec`, called from the VEC

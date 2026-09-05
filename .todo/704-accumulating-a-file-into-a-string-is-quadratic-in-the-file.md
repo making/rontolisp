@@ -37,5 +37,5 @@ The one path that is already linear is `read-file-bytes` + `rontolisp:octets-to-
 3. Pin it as a ratio the way `.kb/string-index-cost.md`'s cases are pinned: reading one
    N-character file against reading the same characters as many small files, on all four
    backends (the accumulate is portable Lisp, so all four share it).
-4. Then `examples/llama2/llama2.lisp` can drop its own `read-file-bytes`-plus-decode
+4. Then `examples/llm/llm.lisp` can drop its own `read-file-bytes`-plus-decode
    detour for `uiop:read-file-string`, if the numbers say so.

@@ -2,11 +2,11 @@
 
 Difficulty: Low
 
-Found 2026-09-05 while running `examples/llama2/llama2.lisp` over `Qwen3.5-0.8B-BF16.gguf`
+Found 2026-09-05 while running `examples/llm/llm.lisp` over `Qwen3.5-0.8B-BF16.gguf`
 from the exec jar (`.todo/672`'s llama.cpp comparison):
 
 ```
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/llama2/llama2.lisp --simd --parallel -- model.gguf -t 0 -n 68 -i "Once upon a time"
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/llm/llm.lisp --simd --parallel -- model.gguf -t 0 -n 68 -i "Once upon a time"
 ```
 
 prints one line to stderr -- `rontolisp: warning: --simd: jdk.incubator.vector is

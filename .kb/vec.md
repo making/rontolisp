@@ -272,7 +272,7 @@ total. `JvmSimdCompiler.compileMatvecChain` emits it (a `--simd`-only build keep
 `INVOKESTATIC` byte for byte); on the interpreter the same order is install order: `VecSimd.install`
 -> `LinalgBlas.installVec` -> `LinalgGpu.installVec`. Precision: a library gemv reorders the `#f`
 fold, up to 5.5e-3 relative on llama2's classifier-head shape -- enough to move an `argmax`, so the
-examples pinning derived integers (`simd-gemv`, `tiny-llm`, `llama2`) are RUN under the flag.
+examples pinning derived integers (`simd-gemv`, `tiny-llm`, `llm`) are RUN under the flag.
 
 ## The f32-reduction precision contract
 

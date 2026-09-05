@@ -164,7 +164,7 @@ a threshold chosen from one.
 x86-64 (`dorian`, Xeon E5-2697A v4, Broadwell, AVX2, GraalVM 25.0.4) reports a LOSS at 48
 columns when `Gate.java`'s `one(256, 48)` is run alone in a fresh JVM, ten times, on each
 JIT: Graal **0.88-0.97x**, C2 **0.74-0.93x**. Neither spread contains 1.0. Measured on the
-MODEL instead -- `llama2.lisp` built from `aad63afd` (this item's parent) and from
+MODEL instead -- `llm.lisp` built from `aad63afd` (this item's parent) and from
 `6a1c47e3` (this item), both compiled to a `.class` with `--simd`, run over stories15M,
 whose `dim=288 heads=6` makes its attention head dimension exactly 48 -- the sign reverses:
 

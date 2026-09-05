@@ -20,7 +20,7 @@ the documented "~1e-6 relative" holds only for |x| below ~20:
 Beyond |x/256| ~ 2 the truncated polynomial goes NEGATIVE, the squarings turn that into
 a huge positive number, and `exp` of a large negative argument answers `Infinity`
 instead of `0.0`. Found 2026-08-19 by an attention softmax written over whole-vector
-kernels with a `-1e30` causal mask (`examples/llama2/`): the masked weights became
+kernels with a `-1e30` causal mask (`examples/llm/`): the masked weights became
 `Infinity`, every logit NaN, every token `<unk>` -- on WASM only. A softmax over
 32000 logits routinely sees `logit - max` around -30..-60, where the error is already
 1e-5..1e-4; a real model will hit the cliff.

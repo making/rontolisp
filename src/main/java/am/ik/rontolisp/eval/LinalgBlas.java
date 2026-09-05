@@ -105,10 +105,10 @@ public final class LinalgBlas {
 	 * Overrides {@code vec:matvec} and {@code vec:matvec-into} in the given (global)
 	 * environment with the library GEMV -- the {@code vec:} half of {@code --blas}, and
 	 * the seam {@code examples/ml/simd-gemv}, {@code examples/tiny-llm} and
-	 * {@code examples/llama2} spend their time in. Must be called AFTER the
-	 * {@code vec.lisp} forms have been evaluated into the environment and after
-	 * {@link VecSimd#install} (whichever binding it finds is what it declines to), and
-	 * only when {@link #available()} is {@code true}.
+	 * {@code examples/llm} spend their time in. Must be called AFTER the {@code vec.lisp}
+	 * forms have been evaluated into the environment and after {@link VecSimd#install}
+	 * (whichever binding it finds is what it declines to), and only when
+	 * {@link #available()} is {@code true}.
 	 *
 	 * <p>
 	 * It is a separate entry point from {@link #install} for the reason

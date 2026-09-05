@@ -1,4 +1,4 @@
-"""Reference for examples/llama2/deltanet-check.lisp: a transcription of
+"""Reference for examples/llm/deltanet-check.lisp: a transcription of
 transformers' modeling_qwen3_5.py (read 2026-09-03) -- torch_recurrent_gated_delta_rule,
 causal_conv1d_update, l2norm, Qwen3_5RMSNormGated and Qwen3_5GatedDeltaNet.forward --
 in plain float64 Python, over pseudo-random inputs from a fixed LCG. Prints the Lisp

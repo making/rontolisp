@@ -39,7 +39,7 @@ both WASM backends refuse it by name. `.todo/672`.
 - `rontolisp:dequantize m 'single-float|'double-float|'bfloat16` -> a fresh packed array.
   `linalg::%la-etype` maps `q8-0` to `single-float`, so `linalg:row` over a quantized
   embedding table answers the `#f` row the rest of a decode step expects (the `Q8_0` file
-  of Qwen3.5 ran through `llama2.lisp` unchanged once that line was in).
+  of Qwen3.5 ran through `llm.lisp` unchanged once that line was in).
 
 ## `quantize` is `quantize_row_q8_0_ref`, byte for byte
 f32 absmax per block (a NaN never raises it: strict `>`), `d = amax / 127f`, `id = 1f / d`
@@ -132,7 +132,7 @@ reason. Relative error against f64: Q8_0 7.5e-3 .. 7.8e-3, bf16 1.6e-3, f32 2e-7
 ## Against llama.cpp (2026-09-05, GB10)
 Raw completion of `"Once upon a time"` -- four token ids `12162 5028 264 854`, no BOS, no
 template, identical on both sides by construction -- at temperature 0 over ggml-org's
-`Qwen3.5-0.8B` GGUFs, `llama.cpp 0eadefebd` CPU/NEON against `examples/llama2/llama2.lisp
+`Qwen3.5-0.8B` GGUFs, `llama.cpp 0eadefebd` CPU/NEON against `examples/llm/llm.lisp
 --simd --parallel` (the build at this item's close): BF16 file token-identical over 64
 generated tokens; Q8_0 file identical for 60 tokens then a different word (`llama.cpp`'s
 Q8_0 output equals its own BF16 output over all 64). Raw rather than chat because the chat

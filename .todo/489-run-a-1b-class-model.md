@@ -7,7 +7,7 @@ The goal `.todo/482` exists for. `.todo/484` and `.todo/485` closed 2026-09-03 a
 `.todo/488`'s wiring closed 2026-09-05, so the bf16 rungs are unblocked -- see the
 precondition under the prediction for what it does and does not cover.
 
-`examples/llama2` runs `stories15M` today: 15M parameters, 60.8 MB of f32 weights, 339
+`examples/llm` runs `stories15M` today: 15M parameters, 60.8 MB of f32 weights, 339
 tok/s single-thread on GB10 (`.todo/457`). The point of adding a narrow width is to move
 that up two orders of magnitude -- to a model someone would actually ask a question.
 
@@ -39,7 +39,7 @@ for. The two original rungs below stay as rung 0.
    bulk load path and the larger tensor shapes while staying small enough to keep in the
    examples suite.
 2. **TinyLlama-1.1B** -- the goal. It is the llama2 architecture at 1.1B parameters, so
-   `llama2.lisp`'s forward pass applies unchanged. 2.2 GB at bf16 against 4.4 GB at f32.
+   `llm.lisp`'s forward pass applies unchanged. 2.2 GB at bf16 against 4.4 GB at f32.
    **Its source is the published checkpoint, read as published** (2026-09-03):
    `TinyLlama/TinyLlama-1.1B-Chat-v1.0` is 201 BF16 tensors in one `model.safetensors`
    (`.todo/675`), and the same model is on Hugging Face as GGUF in BF16 / F16 / Q8_0
@@ -54,7 +54,7 @@ Two more rungs, added 2026-09-03, are the *llama-architecture* models the field 
 publishes small: **SmolLM2-135M and SmolLM2-360M** (`HuggingFaceTB/`, all BF16, GQA, tied
 embeddings, `rope_theta` 100000) -- 135M is 270 MB at bf16 and a plausible examples-suite
 fixture. Their tokenizer is GPT-2-style byte-level BPE, not SentencePiece, which is
-`.todo/674`; the forward pass needs only what `llama2.lisp` already has plus the tied
+`.todo/674`; the forward pass needs only what `llm.lisp` already has plus the tied
 classifier and the RoPE base as a parameter.
 
 Llama-3.2-1B is deliberately not the target: different RoPE, GQA layout and tokenizer
@@ -109,8 +109,8 @@ prediction rather than in place of it.
 
 ## Re-measured at f32 on a quiet box, and the rest of the f32 set (2026-09-05, dorian)
 
-Provenance for every row: develop `2275c000` plus this item's `llama2.lisp` tokenizer
-change (no kernel touched), JVM class output of `examples/llama2/llama2.lisp` under
+Provenance for every row: develop `2275c000` plus this item's `llm.lisp` tokenizer
+change (no kernel touched), JVM class output of `examples/llm/llm.lisp` under
 `--simd` (and `--simd --parallel` for the threaded rows), GraalVM 25.0.4 with its Graal
 JIT, `-Xmx16g`, 64 greedy tokens of the README's chat prompt, Xeon E5-2697A v4 (Broadwell,
 AVX2, 64 hardware threads), **the thread count explicit on every `--parallel` row** --
@@ -189,7 +189,7 @@ alone.
   3000. ..."). The chat-mode comparison agreed only on its first eleven words, and the
   trace of that prompt found the reason: the reader matched whole only the added tokens
   flagged `"special"`, so Qwen's unflagged `<think>` went in as three ids. Fixed the same
-  day in `examples/llama2/checkpoint-tokenizer.lisp` (both readers; failing-first pin
+  day in `examples/llm/checkpoint-tokenizer.lisp` (both readers; failing-first pin
   `checkpoint-tokenizer-check.lisp` over a `tokenizers`-library fixture, all four
   backends), recorded in `.kb/tokenizers.md` and `.todo/701`. After it, every chat
   prompt's ids equal the Python library's for the rendered string (Qwen3.5 21 ids,
@@ -234,7 +234,7 @@ the first number is taken:
    take `:element-type` `'single-float` (default) or `'double-float` and widen a BF16
    tensor through the checkpoint package's chunked widen; a `'bfloat16` target that
    copies the bits is `.todo/675`'s remainder ("waits on `487` steps 3-5"), and
-   `llama2.lisp` then has to keep every ACTIVATION buffer at `#f` while the weight
+   `llm.lisp` then has to keep every ACTIVATION buffer at `#f` while the weight
    matrices are `#bf16` (point 1). Check both before the first timed run.
 3. **Report Gelem/s and GB/s for each arm on each leg, and say which wall each is at**,
    with the f32 arm's bandwidth taken in the same window as the bf16 arm's. Where the
@@ -247,7 +247,7 @@ the first number is taken:
 
 **Widths as things stand, per rung.** Every rung above was measured at `-w f32` (the
 default): the checkpoint's BF16 / F16 tensors widened to `#f` as they are read, norms
-`#f`, activations `#f`. With `-w bf16` (`LLAMA2_WEIGHTS=bf16`; `examples/llama2/llama2.lisp`,
+`#f`, activations `#f`. With `-w bf16` (`LLAMA2_WEIGHTS=bf16`; `examples/llm/llm.lisp`,
 develop `495c4a6b`) the plumbing is in place and VERIFIED AT F32 ONLY: every rank-2 tensor
 is asked from the reader at the weight width; every rank-1 tensor (norms, biases,
 `A_log`, `dt_bias`) is widened to `#f` by `as-f32-vector` as the reader hands it over;
@@ -291,7 +291,7 @@ vector), `.todo/701` (the chat-template measurement, unowned), `.todo/703` (`mak
 on an unknown element type). Not filed, small: the README's TinyLlama table still shows
 the 2026-09-03 rows without a thread count (the re-measured ones are in this item); `-w
 bf16` on a wasm output has not been exercised (it should stop at `make-tensor`'s message
-the same way); `examples/llama2/checkpoint-tokenizer-check.lisp` covers the `:gpt2` kind
+the same way); `examples/llm/checkpoint-tokenizer-check.lisp` covers the `:gpt2` kind
 only -- the Split-regex kinds are covered by the real checkpoints' id dumps recorded
 above, not by a fixture. Checkpoints under `/home/administrator/models/` (see above),
 `llama.cpp` with `llama-cli` and `llama-completion` at
@@ -316,7 +316,7 @@ single-thread (`.todo/482-bfloat16-a-narrow-width-that-pays/Worth.java`, 4096x40
 | 1.1B at f32 | ~8 tok/s | and 4.4 GB resident |
 
 If the real numbers come in far below these, the cause is more likely per-token allocation
-than the kernels -- `llama2.lisp` calls `vec:matvec`, which allocates a fresh result vector
+than the kernels -- `llm.lisp` calls `vec:matvec`, which allocates a fresh result vector
 per call; at 22 layers x 7 projections that is a lot of garbage per token, and
 `vec:matvec-into` already exists.
 
@@ -358,6 +358,6 @@ is not, keep `stories15M` as the E2E-sized case and let both larger models be ma
 ## Done means
 
 A prompt goes in and coherent text comes out, from a 1.1B-parameter model, on rontolisp,
-with the numbers above filled in for real and the `examples/llama2` README carrying them.
+with the numbers above filled in for real and the `examples/llm` README carrying them.
 Output will not be token-identical to an f32 run and must not be asserted to be; bf16
 weights are what the model was published as, so the bar is that the text reads correctly.

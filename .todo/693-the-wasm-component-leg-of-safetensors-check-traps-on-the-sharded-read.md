@@ -8,7 +8,7 @@ BEFORE 692's fix (checked directly against a worktree at that commit). 692's own
 reproducer passes on this backend; this one does not.
 
 ```
-cd examples/llama2
+cd examples/llm
 rontolisp safetensors-check.lisp -o prog.wasm --component
 wasmtime run --dir . prog.wasm
 ```

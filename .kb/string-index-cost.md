@@ -98,7 +98,7 @@ Measured 2026-09-05 (JDK 25, this rule against the previous one, same tree):
   pieces: 630 ms / 14 ms -> 9 ms / 5 ms.
 
 **What the 340x is and is not.** It is a claim about `rontolisp:json-parse`, not about loading a
-model. `examples/llama2/llama2.lisp`'s checkpoint load did NOT get faster: re-measured on the
+model. `examples/llm/llm.lisp`'s checkpoint load did NOT get faster: re-measured on the
 shipped tree it is 9.0-9.8 s from GGUF and 8.9-9.1 s from safetensors, the same as before within
 noise. That file carried its own byte-level JSON reader **because `json-parse` could not finish**,
 so it never paid the cost and had nothing to recover. Deleting those 180 lines removed a workaround

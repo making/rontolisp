@@ -12819,7 +12819,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (expt (/ 1.0 0.0) (give 0.5)))
 				(print (expt (/ 1.0 0.0) (give -0.5)))
 				""")).isEqualTo("8.0\n1.0\n0.0\nInfinity\nNaN\n-8.0\n2000\n1000000\n1414214\n1.5\nInfinity\n0.0");
-		// A literal float exponent, the shape the RoPE table of examples/llama2 needs.
+		// A literal float exponent, the shape the RoPE table of examples/llm needs.
 		assertThat(compileAndRun("(print (round (* 1000 (expt 10000.0 0.75))))")).isEqualTo("1000000");
 	}
 

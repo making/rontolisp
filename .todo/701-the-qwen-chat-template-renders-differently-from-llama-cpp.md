@@ -14,7 +14,7 @@ RENDERING but in the TOKENIZATION of the rendered string, and that defect is fix
 ## The measurement
 
 Every checkpoint ships its own `tokenizer.chat_template` (`tokenizer_config.json`; a
-GGUF's `tokenizer.chat_template`). `examples/llama2/llama2.lisp` renders a hand-written
+GGUF's `tokenizer.chat_template`). `examples/llm/llm.lisp` renders a hand-written
 per-family approximation (`*chatml*`, `*chatml-think-off*`, the row's `:chat`).
 
 **As of the tokenizer fix (`495c4a6b`, 2026-09-05) there IS a demonstrated rendering

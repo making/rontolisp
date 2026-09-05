@@ -2,8 +2,8 @@
 
 Difficulty: Low
 
-Found 2026-09-05 running `examples/llama2` on the interpreter with a Hugging Face
-checkpoint (`.todo/489`): `java --add-modules jdk.incubator.vector -jar ... llama2.lisp
+Found 2026-09-05 running `examples/llm` on the interpreter with a Hugging Face
+checkpoint (`.todo/489`): `java --add-modules jdk.incubator.vector -jar ... llm.lisp
 --simd -- Qwen3-0.6B -m chat ...` dies in the file's byte-level JSON reader with
 
 ```
@@ -47,9 +47,9 @@ either takes a plain `make-array` buffer or goes through `coerce` / `%packed`. S
 packed-vector copy is a known working fix**, and the question reduces from "is the
 builtin wrong" (it is, item 1 above, on every backend) to **which callers outside those
 three files still hand a bare `subseq` of an adjustable buffer to `octets-to-string`**
--- `examples/llama2/llama2.lisp`'s `json-string` WAS one, until `.todo/690` deleted that
+-- `examples/llm/llm.lisp`'s `json-string` WAS one, until `.todo/690` deleted that
 byte-level reader the same day (its work is `rontolisp:json-parse` now), which put the
-interpreter leg of `examples/llama2` back without touching the builtin. Start from the
+interpreter leg of `examples/llm` back without touching the builtin. Start from the
 grep, not from this list.
 
 ## Do
@@ -60,6 +60,6 @@ grep, not from this list.
    width, not only `(unsigned-byte 8)`: `.kb/packed-integer-vectors.md` lists them, and the
    float widths are `.kb/vec.md`'s.
 3. Decide `%octets-to-string`'s strictness once and make the four backends agree.
-4. Re-run `examples/llama2` on the interpreter with a `tokenizer.json` checkpoint
+4. Re-run `examples/llm` on the interpreter with a `tokenizer.json` checkpoint
    (SmolLM2-135M-Instruct is the small one, 270 MB) and put the interpreter leg back into
    `.todo/489`'s table.

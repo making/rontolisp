@@ -74,7 +74,7 @@ encoding can rewrite a case), the trimmed vocabulary and merges, and **the ids t
 original relative rank order) and every string it found -- 16-22 KB instead of 1-4 MB.
 Regenerating needs the model's `tokenizer.json` and the Python `tokenizers` library, neither in
 the repo. The SentencePiece fixture is the WHOLE 512-piece vocabulary of
-`examples/llama2/tok512.bin`; expectations are run.c's `encode()`.
+`examples/llm/tok512.bin`; expectations are run.c's `encode()`.
 
 ## Pins
 `TokenizersLibraryTest` (interpreter: six fixtures with ids AND round-trip, the pre-tokenizers
@@ -83,10 +83,10 @@ alone, accessors, `:bos`/`:eos`, the splice, the no-I/O invariant); ci-spec
 in the case.
 
 ## Consumers
-`examples/llama2/llama2.lisp` still carries its own SentencePiece encoder; the `sentencepiece`
+`examples/llm/llm.lisp` still carries its own SentencePiece encoder; the `sentencepiece`
 fixture exists so folding the two is a deletion rather than a rewrite (ids pinned on both sides).
 
-`examples/llama2/checkpoint-tokenizer.lisp` reads a published checkpoint's tokenizer into
+`examples/llm/checkpoint-tokenizer.lisp` reads a published checkpoint's tokenizer into
 `make-bpe` -- `tokenizer.json` + `tokenizer_config.json`, or a GGUF's `tokenizer.*` fields --
 and is where the SPECIALS list is decided. **Every added token is matched whole, whatever its
 `"special"` flag says** (the flag only tells a decoder what to skip); in a GGUF that is token type
@@ -96,7 +96,7 @@ fed a chat prompt's think block as `<th` `ink` `>` -- three ids where the refere
 so the model answered a different prompt from `llama.cpp`'s and the divergence read as a
 template bug (`.todo/701`, 2026-09-05). The signature that finds the next instance in one run:
 raw completion token-identical to `llama.cpp`, chat mode divergent. Pin:
-`examples/llama2/checkpoint-tokenizer-check.lisp` over `tokenizer-fixture.py`'s fixture (both
+`examples/llm/checkpoint-tokenizer-check.lisp` over `tokenizer-fixture.py`'s fixture (both
 readers, ids from the Python library), all four backends via `examples.yaml`.
 
 The pre-tokenizer KIND and the BOS rule are the file's, not the family's: the `pre_tokenizer`

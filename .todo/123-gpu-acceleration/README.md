@@ -1,5 +1,11 @@
 # The `--gpu` feasibility spike (CUDA 2026-08-20, Metal 2026-08-20; phase 5's own probes 2026-08-21)
 
+> The paths in this record predate 2026-09-05, when `examples/llama2` was renamed to
+> `examples/llm` and `llama2.lisp` to `llm.lisp` (`.todo/682`). They are left as they
+> were: this is a dated measurement, and rewriting its paths would make it claim it was
+> taken against a tree that did not exist when it ran.
+
+
 Throwaway probes kept for reproducibility, NOT project code: they are outside `src/`, are
 not in the reactor, are not formatted by `spring-javaformat:apply`, and nothing builds or
 tests them. They exist so that the numbers in `../../.kb/gpu.md` can be re-derived on

@@ -1,5 +1,11 @@
 # The Q8_0 quantized matrix: the oracle chain and the both-JIT harness, 2026-09-05
 
+> The paths in this record predate 2026-09-05, when `examples/llama2` was renamed to
+> `examples/llm` and `llama2.lisp` to `llm.lisp` (`.todo/682`). They are left as they
+> were: this is a dated measurement, and rewriting its paths would make it claim it was
+> taken against a tree that did not exist when it ran.
+
+
 The record for `.todo/672` (closed 2026-09-05; the mechanics live in
 `.kb/quantized-matrix.md`). Three things are here that the `.kb` file only summarizes: how
 the item's central check -- "the number a Q8_0 model produces is the number `llama.cpp`

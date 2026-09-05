@@ -1,4 +1,4 @@
-# llama2.c in rontolisp
+# A language model engine in rontolisp
 
 [Andrej Karpathy's llama2.c](https://github.com/karpathy/llama2.c) `run.c`,
 ported whole to one Lisp file: the checkpoint loader, the SentencePiece-style
@@ -44,16 +44,21 @@ artifact takes them straight after itself:
 ```bash
 ARGS='stories15M.bin -t 0 -i "Once upon a time"'
 
-rontolisp llama2.lisp --simd -- $ARGS                            # interpreter
-rontolisp llama2.lisp -o Prog.class --simd && \
+rontolisp llm.lisp --simd -- $ARGS                            # interpreter
+rontolisp llm.lisp -o Prog.class --simd && \
   java --add-modules jdk.incubator.vector Prog $ARGS
-rontolisp llama2.lisp -o Prog.class --gpu --simd && \
+rontolisp llm.lisp -o Prog.class --gpu --simd && \
   java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog $ARGS  # + an NVIDIA GPU
-rontolisp llama2.lisp -o llama2.wasm --simd && \
-  wasmtime run --dir . llama2.wasm $ARGS
-rontolisp llama2.lisp -o llama2.wasm --simd --component && \
-  wasmtime run --dir . llama2.wasm $ARGS
+rontolisp llm.lisp -o llm.wasm --simd && \
+  wasmtime run --dir . llm.wasm $ARGS
+rontolisp llm.lisp -o llm.wasm --simd --component && \
+  wasmtime run --dir . llm.wasm $ARGS
 ```
+
+Its `ExamplesE2eTest` slice is `-Drontolisp.examples.only=llm/` **with the
+slash**: `only=llm` is a plain substring match on the example's path, so without
+it the slice also pulls in `ml/tiny-llm.lisp` and the whole of
+`llm-from-scratch/` -- 72 legs where this directory alone is 35.
 
 Every one of them prints
 
@@ -107,7 +112,7 @@ TinyLlama-1.1B-Chat uses the Llama 2 tokenizer -- the same 32000-entry
 
 ```bash
 # download config.json + model.safetensors (2.2 GB) into a directory, then
-rontolisp llama2.lisp --simd -- TinyLlama-1.1B-Chat-v1.0 -z tokenizer.bin -t 0 -n 40 -i "Once upon a time"
+rontolisp llm.lisp --simd -- TinyLlama-1.1B-Chat-v1.0 -z tokenizer.bin -t 0 -n 40 -i "Once upon a time"
 ```
 
 prints, from the BF16 file, `Once upon a time, there was a young woman named
@@ -150,7 +155,7 @@ head are skipped by prefix) with its own `tokenizer.json` through the shipped
 template with thinking off, and prints the answer alone:
 
 ```bash
-rontolisp llama2.lisp -o Llama.class --class-name Llama --simd
+rontolisp llm.lisp -o Llama.class --class-name Llama --simd
 java --add-modules jdk.incubator.vector -Xmx16g Llama Qwen3.5-0.8B -m chat -t 0 -n 64 \
   -i "Tell me a short story about a cat."
 ```
@@ -225,7 +230,7 @@ from Liquid's OWN `LFM2.5-1.2B-Instruct-BF16.gguf`, published by the model's
 maker rather than converted by a third party:
 
 ```bash
-rontolisp llama2.lisp -o Llama.class --class-name Llama --simd
+rontolisp llm.lisp -o Llama.class --class-name Llama --simd
 java --add-modules jdk.incubator.vector -Xmx24g Llama LFM2.5-1.2B-Instruct \
   -m chat -t 0 -n 64 -i "Tell me a short story about a cat."
 ```

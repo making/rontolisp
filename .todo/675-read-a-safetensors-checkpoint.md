@@ -31,7 +31,7 @@ separate `tokenizer.json` (`.todo/674`).
    tensor with `checkpoint:skip-bytes` -- a shard is opened once and walked once,
    whatever `:only` keeps.**
 2. `config.json` read with `json-parse` into the same hyperparameter plist
-   `llama2.lisp` uses (`hidden_size`, `intermediate_size`, `num_hidden_layers`,
+   `llm.lisp` uses (`hidden_size`, `intermediate_size`, `num_hidden_layers`,
    `num_attention_heads`, `num_key_value_heads`, `vocab_size`, `rope_theta`,
    `tie_word_embeddings`), and the HF tensor names (`model.embed_tokens.weight`,
    `model.layers.N.self_attn.{q,k,v,o}_proj.weight`, `mlp.{gate,up,down}_proj`,
@@ -52,7 +52,7 @@ separate `tokenizer.json` (`.todo/674`).
    conversions at write time, so a GGUF already carries them -- `.todo/673` item 6):
    - **`Qwen3_5RMSNorm` computes `x * (1 + w)`**: add 1.0 to `input_layernorm`,
      `post_attention_layernorm`, `self_attn.q_norm`, `self_attn.k_norm` and `model.norm`
-     before handing them to `llama2.lisp`, whose RMSNorm multiplies by the weight. Do
+     before handing them to `llm.lisp`, whose RMSNorm multiplies by the weight. Do
      NOT add it to `linear_attn.norm.weight` (`:ssm-norm`, `Qwen3_5RMSNormGated` uses
      the raw weight). Qwen3 (not 3.5) has the plain `x * w` norm.
    - `linear_attn.A_log` -> `:ssm-a` is **`-exp(A_log)`**, per head; `linear_attn.dt_bias`
@@ -86,11 +86,11 @@ Shipped as two Lisp-source libraries in the `geom` shape: the `checkpoint` packa
 too) and the `safetensors` package (`safetensors.lisp`, `eval.SafetensorsLibrary`:
 `read` / `header` / `entries`), with `.kb/checkpoint-readers.md` for the three facts the
 design rests on (no seek, 8-byte u16 elements, the unchecked `make-array`). Do 2-4 live
-in `examples/llama2/llama2.lisp`'s `load-hf-checkpoint`: `config.json` (text_config
+in `examples/llm/llm.lisp`'s `load-hf-checkpoint`: `config.json` (text_config
 unwrapped) into the model plist, the HF names of llama / qwen3 / qwen3_5 / smollm3 /
 granite / lfm2 mapped to the table's weights, the per-family conversions, the sharded
 index, the language-model prefix filter. Verified: the fixture
-(`examples/llama2/safetensors-check.lisp`, F32 / F16 / BF16 at rank 1-3 and a
+(`examples/llm/safetensors-check.lisp`, F32 / F16 / BF16 at rank 1-3 and a
 one-element tensor, `:only`, the forced five-element chunking, the two-shard index) on
 the interpreter and the JVM with and without `--simd`, `SafetensorsLibraryTest`, and
 TinyLlama-1.1B-Chat's BF16 `model.safetensors` decoding coherent text through the
@@ -102,7 +102,7 @@ weights, one thread): TinyLlama-1.1B-Chat decodes at 1.65 tok/s and loads in 8.8
 README's rows the coordinator measured under load (1.58-1.91 tok/s, 8.7-9.9 s) -- the
 single-thread figure is not bandwidth-bound and the load is I/O and widening, so the
 quiet box changes neither; the `--parallel` rows stand as measured (27-31 GB/s, the DRAM
-ceiling, `examples/llama2/README.md`).
+ceiling, `examples/llm/README.md`).
 
 ## Remaining
 
@@ -129,7 +129,7 @@ ceiling, `examples/llama2/README.md`).
   tests assert the narrowed value. `.todo/489`'s "Where the bf16 measurement resumes" applies
   now (`.todo/485`
   exists; `.todo/488`'s fused kernels take bf16 weights against f32 activations, and
-  `examples/llama2/llama2.lisp`'s `-w bf16` is already wired to ask for it, so this is
+  `examples/llm/llm.lisp`'s `-w bf16` is already wired to ask for it, so this is
   the one thing between the readers and `.todo/489`'s bf16 rungs). The interface was
   frozen between the two orchestrators on 2026-09-05; build exactly this:
   1. ~~`checkpoint:make-tensor shape 'bfloat16` answers a `#bf16` array, and the RUNTIME
@@ -179,7 +179,7 @@ ceiling, `examples/llama2/README.md`).
   5. Tests: `LispEvaluatorTest` + `JvmLispCompilerTest` for 1 and 2 (the pins named);
      `SafetensorsLibraryTest` / the GGUF test with a BF16 and an F16 tensor into
      `'bfloat16` compared element for element against the `'single-float` read (widening
-     is exact, so the values are EQUAL, not close); `examples/llama2/safetensors-check.lisp`
+     is exact, so the values are EQUAL, not close); `examples/llm/safetensors-check.lisp`
      may gain a `'bfloat16` section on the interpreter and JVM legs only. No `ci-spec.yaml`
      case is needed unless a wasm `refusedOn` leg is wanted.
   Then `.todo/489`'s "Where the bf16 measurement resumes" applies as written.

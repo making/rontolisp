@@ -75,9 +75,9 @@ does anyway and what makes the bit-comparison against HF's own recurrent path po
 
 ## Done (2026-09-03, commit pending the readers)
 
-The reader-independent half is in `examples/llama2/deltanet.lisp` (the `:deltanet`
+The reader-independent half is in `examples/llm/deltanet.lisp` (the `:deltanet`
 kind: `deltanet-layer` / `deltanet-state` / `deltanet-forward`, the recurrence
-`gated-delta-rule`), wired into `llama2.lisp`'s table (`qwen35` row,
+`gated-delta-rule`), wired into `llm.lisp`'s table (`qwen35` row,
 `:full-attention-interval`, the `:ssm` states) and pinned by `deltanet-check.lisp`
 against `deltanet-ref.py` (Verify item 1, all four backends with and without `--simd`,
 in `examples.yaml`). `vec:ger-into` was NOT added: the decay and the rank-1 update are
@@ -92,7 +92,7 @@ headers.
 
 Qwen3.5-0.8B's BF16 `model.safetensors-00001-of-00001.safetensors` (with its index,
 `config.json`, `tokenizer.json`, `tokenizer_config.json`), read by `.todo/675`'s
-`safetensors:read` through `llama2.lisp`'s `load-hf-checkpoint`, tokenized by
+`safetensors:read` through `llm.lisp`'s `load-hf-checkpoint`, tokenized by
 `.todo/674`'s `tokenizer:make-bpe` (kind `:qwen35`) from `tokenizer.json`, decodes
 coherent text on the JVM class output at temperature 0. `-m chat` wraps the prompt in
 the ChatML template with thinking off:
@@ -106,7 +106,7 @@ weights, develop `4f43b878` + this item's lane: load 7.1-7.6 s (1.75 GB bf16 -> 
 f32; tokenizer.json + KV cache 2.4-2.7 s); `--simd` one thread **2.00 / 2.48 tok/s**
 (loadavg 13.2 / 21.0), `--simd --parallel` 64 threads **8.56 tok/s** (loadavg 15.1).
 The parallel row is 3.2 GB x 8.56 = 27 GB/s, the box's DRAM ceiling again
-(`examples/llama2/README.md`, the TinyLlama reading).
+(`examples/llm/README.md`, the TinyLlama reading).
 
 What the real config taught, against this item's text and the `qwen35` row:
 
@@ -126,7 +126,7 @@ What the real config taught, against this item's text and the `qwen35` row:
   w` norms, `attn_output_gate`, the language model under `model.language_model.` beside
   153 `model.visual.` and 15 `mtp.` tensors (skipped by prefix, 0.2 GB of I/O).
 - `tokenizer.json` is 13 MB and `rontolisp:json-parse` over it does not finish
-  (`.todo/690`, the measurement is there); `llama2.lisp` reads it with a byte-level JSON
+  (`.todo/690`, the measurement is there); `llm.lisp` reads it with a byte-level JSON
   reader of its own until that lands.
 - `max_position_embeddings` 262144 is capped to 4096 for the KV cache (`*seq-len-cap*`).
 

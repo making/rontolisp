@@ -53,8 +53,8 @@ which row cannot change a bit** and every byte-identity statement in `.kb/linalg
 - **The yield matters as much as the spin**: `Thread.yield()` every 64 spins (19 pure spinners on
   a 20-core box crowd out the caller, the JIT and the GC).
 - Expected 1.7-5.6x per GEMV, ~1.8x whole-program on a decode loop; ceiling is memory bandwidth.
-- **`--gpu --simd --parallel` is slower than either alone on llama2** -- correct and pinned,
-  documented as not a win. The interpreter gains nothing on llama2 either.
+- **`--gpu --simd --parallel` is slower than either alone on llm** -- correct and pinned,
+  documented as not a win. The interpreter gains nothing on llm either.
 - GEMM: the row split buys 5.6-7.6x, but a tuned threaded BLAS still wins 1.3-3.8x, so `--blas`
   stays the answer where a library exists. `--blas` differs in the last digits; parallel does not.
 
@@ -64,5 +64,5 @@ which row cannot change a bit** and every byte-identity statement in `.kb/linalg
   `underGpuTheParallelLanesSitBelowTheDeviceDecision`.
 - `eval/SimdParallelTest` -- every row once, a failing leaf surfaces on the caller, threshold,
   bit-identity, flag inert without `--simd`.
-- `cli/CliOptionsTest`, `cli/RontoLispCliTest`; `e2e/ExamplesE2eTest` (llama2 byte-identical,
+- `cli/CliOptionsTest`, `cli/RontoLispCliTest`; `e2e/ExamplesE2eTest` (llm byte-identical,
   `parallel: true` in `examples/examples.yaml`).

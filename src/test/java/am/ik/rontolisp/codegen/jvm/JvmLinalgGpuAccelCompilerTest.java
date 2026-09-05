@@ -869,7 +869,7 @@ class JvmLinalgGpuAccelCompilerTest {
 	 * because the interpreter does not accept a packed array for either; on the JVM they
 	 * expand to the setter this program already exercises. {@code read-sequence} over a
 	 * binary file IS here: its bulk primitive writes the storage behind the setter's back
-	 * on both backends, and it is how a model's weights arrive ({@code examples/llama2}).
+	 * on both backends, and it is how a model's weights arrive ({@code examples/llm}).
 	 */
 	private static String residencyWriters(int side, String type, String file) {
 		int n = side * side;

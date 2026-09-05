@@ -203,7 +203,7 @@ GC 配列からレーングループを読むと、線形メモリからの `v12
 
 - `RONTOLISP_THREADS` でスレッド数を決めます(呼び出し元のスレッドを含む。デフォルトは利用可能なプロセッサ数。`RONTOLISP_THREADS=1` で逐次実行)。ワーカースレッドはデーモンスレッドで、分割に値する最初の呼び出しで作られ、それより前には作られません。そうした呼び出しをしないプログラムはスレッドを 1 本も起動しません。呼び出しの合間、ワーカーは眠る前に 1 ミリ秒ほどスピンし続けます -- 1 ミリ秒の別の仕事のあとに来る積でも元が取れるのはそのためです -- ので、積のループが走っている間スレッドはビジーです。[`--blas`](blas-acceleration.md) で `OPENBLAS_NUM_THREADS` を決めるのと同じように、そのマシンの仕事に許される数に合わせてください。
 - インタープリタ(ネイティブバイナリを含む)と JVM の `.class` のみです。WebAssembly にはスレッドがないので、`.wasm` 出力ではこのフラグは黙って無視されるのではなくコンパイルエラーになります。また分割する対象のカーネルを持つ `--simd` が必要で、`--parallel` 単独もエラーです。
-- 大きな積で逐次カーネルの数倍を期待してください。コア数倍にはなりません。行列×ベクトル積は行列を一度流すだけなので、メモリ帯域が上限です。20 コアのマシンでは、32000x288 の単精度行列×ベクトル積が約 3.8 倍、768x288 のものが約 1.8 倍、`examples/llama2` のデコードループが `--simd` 比で約 1.9 倍です([その README](../../../examples/llama2/README.md))。
+- 大きな積で逐次カーネルの数倍を期待してください。コア数倍にはなりません。行列×ベクトル積は行列を一度流すだけなので、メモリ帯域が上限です。20 コアのマシンでは、32000x288 の単精度行列×ベクトル積が約 3.8 倍、768x288 のものが約 1.8 倍、`examples/llm` のデコードループが `--simd` 比で約 1.9 倍です([その README](../../../examples/llm/README.md))。
 
 ```lisp
 (let ((w (linalg:reshape (linalg:arange 0 230400) '(800 288)))
@@ -244,7 +244,7 @@ wasmtime run --invoke fingerprint gemv.wasm 100
 
 どちらのビルドも `85` を表示します(他のすべてのバックエンドと同じ支配方向です)。そして `-into` カーネルにより、何ステップ実行しても、解放されることのない `--no-gc` のバンプヒープはちょうど 3 ブロックのままです。20000 ステップではスカラーモジュールが約 600 ms、`--simd` が約 120 ms でした。
 
-エンジン全体は [`examples/llama2/llama2.lisp`](https://github.com/making/rontolisp/blob/develop/examples/llama2/llama2.lisp) です。llama2.c の `run.c` を 1 ファイルに移植したもの -- チェックポイントローダ、トークナイザ、順伝播、サンプラ -- で、本物の TinyStories チェックポイントを読み込み、C プログラムと同じ物語をトークン単位で語ります。1500 万個の重みはパックド単精度配列への `read-sequence` で読み込まれ、デコードは 1 トークンあたり 100 回超の `vec:matvec` です。stories15M では `--simd` により JVM が 104 から 336 トークン/秒に、wasm-GC が 0.4 から 125 に上がり（いずれもシングルスレッド）、`--simd --parallel` では JVM が 20 スレッドで 637 に達します（`run.c -O2` シングルスレッドは 147。2026-08-22 に本プロジェクトの NVIDIA GB10 マシンで計測）。[その README](https://github.com/making/rontolisp/blob/develop/examples/llama2/README.md) を参照してください。
+エンジン全体は [`examples/llm/llm.lisp`](https://github.com/making/rontolisp/blob/develop/examples/llm/llm.lisp) です。llama2.c の `run.c` を 1 ファイルに移植したもの -- チェックポイントローダ、トークナイザ、順伝播、サンプラ -- で、本物の TinyStories チェックポイントを読み込み、C プログラムと同じ物語をトークン単位で語ります。1500 万個の重みはパックド単精度配列への `read-sequence` で読み込まれ、デコードは 1 トークンあたり 100 回超の `vec:matvec` です。stories15M では `--simd` により JVM が 104 から 336 トークン/秒に、wasm-GC が 0.4 から 125 に上がり（いずれもシングルスレッド）、`--simd --parallel` では JVM が 20 スレッドで 637 に達します（`run.c -O2` シングルスレッドは 147。2026-08-22 に本プロジェクトの NVIDIA GB10 マシンで計測）。[その README](https://github.com/making/rontolisp/blob/develop/examples/llm/README.md) を参照してください。
 
 インタプリタと JVM のカーネルがベクトル化するには、1 行が 128 要素以上である必要があります。それ未満ではスカラーループを実行します。ベクトルレジスタを埋める方が高くつくからです。2 つの WASM バックエンドにこの閾値はありません。
 

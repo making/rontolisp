@@ -150,7 +150,7 @@ is not: a byte that leads NO valid sequence at all (a real SentencePiece byte-fa
 `<0xC0>`) never round-trips at any prefix length, so the technique either stalls several calls
 waiting for bytes that will never validate it, or -- worse, over a FIXED buffer that never grows
 past the point a fallback would flush it -- drops the byte silently. Tried and reverted while
-landing 691; `examples/llama2/llama2.lisp`'s `utf8-length`/`complete-prefix`/`print-complete` and
+landing 691; `examples/llm/llm.lisp`'s `utf8-length`/`complete-prefix`/`print-complete` and
 `eval/tokenizers.lisp`'s `tokenizer::%utf8-lead-length`/`%complete-byte-prefix` each keep their OWN
 hand-written lead-byte length table for exactly this reason -- FRAMING ("how many bytes"), never
 DECODING ("what character"), and 691's own verify step ("no continuation-byte mask in `examples/`")

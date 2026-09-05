@@ -25,9 +25,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * The {@code checkpoint} and {@code safetensors} packages ({@code checkpoint.lisp} /
  * {@code safetensors.lisp}, spliced/loaded by {@link CheckpointLibrary} /
  * {@link SafetensorsLibrary}): the interpreter half. The cross-backend half is
- * {@code examples/llama2/safetensors-check.lisp} over its checked-in fixture
+ * {@code examples/llm/safetensors-check.lisp} over its checked-in fixture
  * ({@code examples.yaml}), and the real thing is TinyLlama's BF16 checkpoint through
- * {@code examples/llama2/llama2.lisp} ({@code .kb/checkpoint-readers.md}).
+ * {@code examples/llm/llm.lisp} ({@code .kb/checkpoint-readers.md}).
  */
 class SafetensorsLibraryTest {
 

@@ -631,7 +631,7 @@ class ExamplesE2eTest {
 			if (!Files.isRegularFile(src)) {
 				abort("required work file is missing: " + rel + " (looked in " + src
 						+ ") -- run the example directory's download script (deep-learning-from-scratch/download-mnist.sh"
-						+ " for a dataset/*-ubyte file, llama2/download-stories15M.sh for stories15M.bin)");
+						+ " for a dataset/*-ubyte file, llm/download-stories15M.sh for stories15M.bin)");
 			}
 			Path dst = runDir.resolve(rel);
 			Path parent = dst.getParent();

@@ -51,15 +51,15 @@
 ;;;; artifact simply after itself:
 ;;;;
 ;;;;   ARGS='stories15M.bin -t 0 -i "Once upon a time"'
-;;;;   rontolisp llama2.lisp --simd -- $ARGS                          # interpreter
-;;;;   rontolisp llama2.lisp -o Prog.class --simd && \
+;;;;   rontolisp llm.lisp --simd -- $ARGS                          # interpreter
+;;;;   rontolisp llm.lisp -o Prog.class --simd && \
 ;;;;     java --add-modules jdk.incubator.vector Prog $ARGS
-;;;;   rontolisp llama2.lisp -o Prog.class --gpu --simd && \
+;;;;   rontolisp llm.lisp -o Prog.class --gpu --simd && \
 ;;;;     java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog $ARGS
-;;;;   rontolisp llama2.lisp -o llama2.wasm --simd && \
-;;;;     wasmtime run --dir . llama2.wasm $ARGS
-;;;;   rontolisp llama2.lisp -o llama2.wasm --simd --component && \
-;;;;     wasmtime run --dir . llama2.wasm $ARGS
+;;;;   rontolisp llm.lisp -o llm.wasm --simd && \
+;;;;     wasmtime run --dir . llm.wasm $ARGS
+;;;;   rontolisp llm.lisp -o llm.wasm --simd --component && \
+;;;;     wasmtime run --dir . llm.wasm $ARGS
 ;;;;
 ;;;; Temperature 0 is greedy decoding: the story is the same on every run, every
 ;;;; backend and in the C program (the whole 256-token story of the prompt above
@@ -105,7 +105,7 @@
 ;;;; weight matrix, ~0.2 s on every backend.
 
 ;;; --- knobs (run.c's flags, then the environment) -----------------------------
-;;; `llama2 stories15M.bin -z tokenizer.bin -t 0 -n 40 -i "Once upon a time"`,
+;;; `llm stories15M.bin -z tokenizer.bin -t 0 -n 40 -i "Once upon a time"`,
 ;;; the C program's own command line, on every backend. The LLAMA2_* variables
 ;;; stay as the fallback: a host that hands the program no command line (a
 ;;; browser shim, an embedder) still has an environment to set.

@@ -1346,7 +1346,7 @@ public final class LispPreludeLibrary {
 		// string-to-octets) only reproduces the original bytes when they were already
 		// a well-formed, non-overlong encoding -- a malformed byte decodes to a
 		// character whose canonical re-encoding can differ in length from the byte it
-		// came from, which is exactly the signal examples/llama2/llama2.lisp's
+		// came from, which is exactly the signal examples/llm/llm.lisp's
 		// streaming printer uses to tell a still-arriving multi-byte character from a
 		// finished one.
 		SOURCES.put(LispNames.STRING_TO_OCTETS, """

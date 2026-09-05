@@ -1,4 +1,4 @@
-;;;; The LFM2 gated short-conv mixer: the :shortconv layer kind of llama2.lisp's
+;;;; The LFM2 gated short-conv mixer: the :shortconv layer kind of llm.lisp's
 ;;;; table (LFM2 / LFM2.5, `general.architecture` / `model_type` lfm2).
 ;;;;
 ;;;; Ten of LFM2.5-1.2B's sixteen blocks mix tokens with the simplest hybrid

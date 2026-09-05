@@ -1,7 +1,7 @@
 ;;;; The tokenizer a published checkpoint carries, read into the shipped
 ;;;; tokenizer: package -- from a Hugging Face checkpoint's tokenizer.json +
 ;;;; tokenizer_config.json (load-hf-tokenizer), or from a GGUF's tokenizer.*
-;;;; metadata (load-gguf-tokenizer). llama2.lisp loads this file; so does
+;;;; metadata (load-gguf-tokenizer). llm.lisp loads this file; so does
 ;;;; checkpoint-tokenizer-check.lisp, which pins the ids against the Python
 ;;;; `tokenizers` library over the fixture tokenizer-fixture.py writes.
 ;;;;

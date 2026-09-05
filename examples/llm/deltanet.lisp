@@ -1,4 +1,4 @@
-;;;; The Gated DeltaNet mixer: the :deltanet layer kind of llama2.lisp's table.
+;;;; The Gated DeltaNet mixer: the :deltanet layer kind of llm.lisp's table.
 ;;;;
 ;;;; Qwen3.5 (and 3.6 / 3.8, the same architecture) replaces three of every four
 ;;;; attention layers with a gated linear recurrence: per head a k x v state
@@ -14,7 +14,7 @@
 ;;;; Qwen3_5RMSNormGated. Prefill is the same recurrence run token by token,
 ;;;; which is what a decode-only engine does anyway. It is its own file so that
 ;;;; deltanet-check.lisp can pin the arithmetic against a transcription of the
-;;;; PyTorch reference without loading the engine (llama2.lisp runs a model
+;;;; PyTorch reference without loading the engine (llm.lisp runs a model
 ;;;; when it is loaded).
 ;;;;
 ;;;; THE DECODE STEP, per token, from the normed hidden x (dim):
@@ -56,7 +56,7 @@
 ;;;;   :ssm-dt-bias  dt_bias [heads]                          ssm_dt.bias
 ;;;;   :ssm-norm     norm.weight [vd] -- RAW: unlike every other Qwen3.5 norm
 ;;;;                 this one is not stored as an offset from 1 (see the
-;;;;                 architecture table in llama2.lisp)   ssm_norm (F32)
+;;;;                 architecture table in llm.lisp)   ssm_norm (F32)
 ;;;;   :ssm-out      out_proj [dim, value_dim]                ssm_out
 ;;;;
 ;;;; heads, kd and vd are read off the shapes: heads = (length :ssm-a), vd =

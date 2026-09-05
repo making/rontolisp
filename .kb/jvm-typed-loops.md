@@ -73,7 +73,7 @@ join; a loop pushing `nextLocal` past 250 stays boxed (one-byte slot operands), 
 require `Ctx.usesFloatArray`. Interpreter and both wasm backends are untouched. Pins:
 `JvmLispCompilerTest.typedLoopsMatchTheBoxedPathAndTheSizeLevelDeclinesThem`,
 `theSizeLevelChangesNothingWithoutATypedLoop`, ci-spec `jvm-typed-numeric-loops`, `ExamplesE2eTest`'s
-llama2 `equals` stories.
+llm `equals` stories.
 
 ## Not done
 
