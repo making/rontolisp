@@ -224,6 +224,21 @@ component leg of `safetensors-check`), both filed 2026-09-03 and neither in a wa
    PER BOX: rewritten as "the checkpoints survived" it would have been wrong for GB10,
    where they had not, and that direction is worse than the original error -- it skips a
    re-fetch that is needed rather than repeating one that is not.
+10. **Record a checkpoint's SIZE and sha256 beside its path, because provenance is
+    recoverable from the file but not the file from the provenance.** A publisher's
+    manifest carries the digest of every file it serves -- Hugging Face answers
+    `/api/models/<id>?blobs=true` with the LFS sha256 -- so a checkpoint whose repo path
+    was lost can be re-identified by matching bytes we already have, in the direction
+    that can fail. A path with no hash beside it recovers nothing when the path rots.
+    Demonstrated 2026-09-05: `.todo/677` recorded the Qwen3.5-0.8B GGUFs' paths and their
+    publisher (`ggml-org`) but not the repo id, and the id came back as
+    `ggml-org/Qwen3.5-0.8B-GGUF` only because the two digests taken off dorian matched
+    that repo's manifest exactly. The corollary is what makes it a rule rather than an
+    anecdote: **guessing a repo id would have destroyed the evidence that recovered it**,
+    since a guess that reads plausibly is indistinguishable from a checked one once it is
+    written down. And once upstream is the reference, no box's copy is privileged -- each
+    verifies independently, and a later mismatch is a corrupt fetch rather than the
+    file-versus-implementation ambiguity rule 7 was written about.
 
 ## What is deliberately not in the plan
 
