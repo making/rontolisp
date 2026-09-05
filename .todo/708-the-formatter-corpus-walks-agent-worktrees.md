@@ -80,6 +80,44 @@ second, independent reason. While those binaries were tracked, a fresh clone HAD
 would have run. Any total taken from a clone made between `97b81823` and `e34da35c` is
 not comparable to one taken outside that window.
 
+**The fix is free only on the box that makes it.** Untracking a file DELETES it for every
+puller who had it, because to them it arrives as an ordinary tracked deletion. The other
+orchestrator's box had both artefacts tracked at `examples/llama2/` with nothing having
+moved them, so its `git merge origin/develop` removed 61 MB from its working tree -- not
+untracked, deleted -- and nothing printed, because the RUN legs self-skip when the fixtures
+are absent. **`examples.yaml`'s skip, designed so a developer without the download is not
+failed by it, is also what hides the download being destroyed.** It recovered from a
+pre-rename worktree. The general form: a fix that moves content to safety on the box that
+authors it is a deletion everywhere else, and silence is the designed behaviour on both
+sides of that line.
+
+**The class is 18, not one.** `git ls-files '*/.gitignore'` returns 18 directory-local
+ignore files -- `ansi-test/`, `bench-report/`, `size-report/`, seven under `examples/wit/`,
+`examples/{browser,cloudflare-workers,count-vowels,deep-learning-from-scratch,gae,llm,wasmcloud}/`,
+and two vendored suites under `src/test/resources/`. Every one is one directory rename away
+from this, and several ignore whole build trees (`/target/`, `node_modules/`, `dist/`) where
+the swept-in payload would be far larger than 61 MB. The check is mechanical and belongs on
+the rename procedure, not in anyone's memory: **after moving a directory that contains a
+`.gitignore`, run `git status --porcelain` for untracked files at the OLD path before the
+next `git add`** -- that is the only moment they are visible.
+
+Three worktrees on the A box (`agent-a1beecb937abffbc6`, `agent-a436eebef9812f005`,
+`agent-a59d84ba6c788cb33`) still hold untracked copies at `examples/llama2/`, currently
+ignored by their own pre-rename `.gitignore`. They are armed, not firing: the rule leaves
+only when that tree merges develop, and they are finished agents' trees that nothing will
+merge. Disarm by deleting the copies once the content is verified identical to
+`examples/llm/`. This is item 3's cleanup arriving with a second reason.
+
+**A fourth consequence, and it needs no tracking at all.** The other orchestrator's
+`ExamplesE2eTest` 39/0/0 was taken at `4358af09`, BEFORE the rename, when `examples.yaml`
+said `workDir: llama2` and its box had the fixtures there -- so the three `stories15M` legs
+RAN. After the rename the same box's files sit at `llama2/` while the leg looks in `llm/`,
+so they SKIP, with the files physically present and nothing printed. **The rename alone
+silently changed which legs execute on any box that had the fixtures.** That is independent
+of the clone-side reason above and points the same way: no examples total spanning
+`d4225aa5` is comparable to one taken before it. Three unrelated mechanisms now say do not
+compare suite totals across boxes or across today.
+
 ## Do
 
 1. Add a filter for `/.claude/` -- one line, beside the two that exist. Prefer excluding
