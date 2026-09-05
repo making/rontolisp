@@ -103,11 +103,23 @@ the rename procedure, not in anyone's memory: **after moving a directory that co
 next `git add`** -- that is the only moment they are visible.
 
 Three worktrees on the A box (`agent-a1beecb937abffbc6`, `agent-a436eebef9812f005`,
-`agent-a59d84ba6c788cb33`) still hold untracked copies at `examples/llama2/`, currently
-ignored by their own pre-rename `.gitignore`. They are armed, not firing: the rule leaves
-only when that tree merges develop, and they are finished agents' trees that nothing will
-merge. Disarm by deleting the copies once the content is verified identical to
-`examples/llm/`. This is item 3's cleanup arriving with a second reason.
+`agent-a59d84ba6c788cb33`) held untracked copies at `examples/llama2/`, ignored by their own
+pre-rename `.gitignore` -- armed, not firing, since the rule only leaves when that tree
+merges develop and they are finished agents' trees that nothing will merge. **Disarmed
+2026-09-05** after verifying all six files byte-identical to the preserved pair (sha256
+`cd590644...81f49a` / `50a52ef8...ece361`, the same digests the B box recovered from its own
+pre-rename worktree): the untracked binaries were deleted and nothing else was touched. The
+`examples/llama2/` directories REMAIN in those trees and must -- at a pre-rename HEAD they
+are the real tracked directory, still holding `causal-conv.lisp` and
+`download-stories15M.sh`. All three trees report clean. The content survives only in
+`examples/llm/`, which is the point: **one copy, in the one place the surviving `.gitignore`
+covers.**
+
+The deferral is worth as much as the disarm. It waited because the single lane held the box
+for interleaved timed cells, and verifying identity meant hashing 240 MB -- a disk-I/O burst
+during a tok/s run is exactly the contention that makes a measurement quietly wrong. **A
+trap that nothing will trigger is not urgent, and the reason for a delay belongs in the
+record beside the delay**, or the next reader sees only an item that sat.
 
 **A fourth consequence, and it needs no tracking at all.** The other orchestrator's
 `ExamplesE2eTest` 39/0/0 was taken at `4358af09`, BEFORE the rename, when `examples.yaml`

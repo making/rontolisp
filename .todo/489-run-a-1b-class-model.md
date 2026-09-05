@@ -4,8 +4,8 @@ Difficulty: High
 
 The goal `.todo/482` exists for. `.todo/484` and `.todo/485` closed 2026-09-03 and
 `.todo/487` landed its step 1; the f32 rungs below are measured and no longer projections.
-`.todo/488`'s wiring closed 2026-09-05, so the bf16 rungs are unblocked -- see the
-precondition under the prediction for what it does and does not cover.
+`.todo/488`'s wiring closed 2026-09-05, and **the bf16 rungs were measured the same day
+on all six models** -- "The bf16 rungs, measured" below, beside the prediction.
 
 `examples/llm` runs `stories15M` today: 15M parameters, 60.8 MB of f32 weights, 339
 tok/s single-thread on GB10 (`.todo/457`). The point of adding a narrow width is to move
@@ -435,6 +435,113 @@ Knee at 16 in both arms; the parallel ratio is 1.03x, i.e. nothing -- at 0.54 GB
 per token this model's token was never on the bus (the f32 row said so), and halving
 bytes it does not stream buys nothing. The 1-thread ratio (1.16x) is the same as every
 other model's.
+
+### C2 corroboration cells (`-XX:-UseJVMCICompiler`, same classes, same window)
+
+`.todo/488` measured its kernel under both JITs (1.49x Graal / 2.00x C2 at 4096x4096,
+one thread) because a stock OpenJDK runs a compiled `.class` under C2. Three cells:
+
+| cell | f32 tok/s | bf16 tok/s | bf16 / f32 | Graal, same cell |
+| --- | --- | --- | --- | --- |
+| TinyLlama, 1 thread | 2.23 (2.13-2.40) | 3.07 (3.05-3.20) | 1.38x | 1.26x |
+| Qwen3.5, 1 thread | 3.10 (2.36-3.17) | 3.88 (3.77-4.09) | 1.25x | 1.18x |
+| TinyLlama, 32 threads | 9.43 (8.84-9.64) | 12.52 (12.35-13.46) | 1.33x | 1.37x |
+
+The serial ratio is a little higher under C2 and the parallel ratio is the same under
+either JIT -- the compiler moves the SERIAL ratio and not the parallel one, which is
+488's direction reproduced one level up the stack. Three cells on two models: a
+corroborating direction, not a measured C2 / Graal factor. Neither JIT reaches the
+kernel's own ratio at the model level.
+
+### The result, beside the prediction
+
+**All six models, the number the item asked for** (medians, Graal, 32 threads unless
+said; load is weights only):
+
+| model | 1 thread f32 -> bf16 | 16 threads | 32 threads | load f32 -> bf16 |
+| --- | --- | --- | --- | --- |
+| Qwen3.5-0.8B | 2.92 -> 3.44 (1.18x) | 9.47 -> 12.21 (1.29x) | 9.01 -> 12.01 (1.33x) | 6.9 -> 5.2 s |
+| TinyLlama-1.1B | 2.26 -> 2.85 (1.26x) | 8.47 -> 12.36 (1.46x) | 8.80 -> 12.04 (1.37x) | 8.1 -> 4.4 s |
+| LFM2.5-1.2B | 2.14 -> 2.52 (1.18x) | 8.57 -> 13.69 (1.60x) | 9.19 -> 15.14 (1.65x) | 8.5 -> 5.0 s |
+| Qwen3-0.6B | 2.52 -> 2.77 (1.10x) | 9.47 -> 11.72 (1.24x) | 9.50 -> 12.41 (1.31x) | 5.1 -> 3.1 s |
+| SmolLM2-360M | 4.19 -> 4.87 (1.16x) | 14.84 -> 17.65 (1.19x) | 14.25 -> 16.91 (1.19x) | 2.8 -> 1.5 s |
+| SmolLM2-135M | 8.36 -> 9.70 (1.16x) | 28.99 -> 29.77 (1.03x) | 28.09 -> 29.01 (1.03x) | 1.4 -> 0.8 s |
+
+**The prediction missed on both legs, and 489 said in advance what each miss means.**
+
+- *"The parallel leg roughly doubles -- Qwen3.5-0.8B ~17 tok/s, TinyLlama-1.1B ~14."*
+  Measured 12.0 and 12.0 tok/s at 32 threads: **1.33x and 1.37x, not 2x.** The item's
+  fork: "either the bandwidth diagnosis is wrong or the bf16 path has a limit that is
+  not bandwidth". The knee decides between them, and it is byte-estimate-free: **the
+  saturation point did not move when the bytes halved**, on any model -- flat by 16 in
+  both arms for Qwen3.5, TinyLlama and both SmolLM2s, still climbing at 32 in both arms
+  for LFM2.5. If the parallel cap were DRAM, halving the bytes streamed per token would
+  push the knee outward; it did not budge, so the cap is the parallel machinery, which
+  is `.todo/670`'s account of 2026-09-05 confirmed at a second width and on a second
+  day. The corroborating order is the same one: the model least bound by the machinery
+  (LFM2.5, ~30 big matvecs per token, still climbing at 32) gets the most from the bytes
+  (1.65x), Qwen3.5 (576 small DeltaNet reads per token, saturated by 16) the least of
+  the 1B-class (1.33x), and SmolLM2-135M, whose token was never on the bus, gets nothing
+  (1.03x). Weights-only GB/s says the same thing with the stated caveat: at 32 threads
+  the bf16 arm streams 19 (Qwen3.5), 27 (TinyLlama), 35 (LFM2.5) and 15 (Qwen3-0.6B)
+  GB/s of WEIGHTS against the f32 arm's 29 / 39 / 43 / 23 -- below the f32 arm's figure
+  on every model, which a bandwidth wall could not produce. That division uses
+  parameters x 2 bytes, is activation-blind, and omits the KV cache and Qwen3.5's
+  recurrent state -- bytes that do NOT halve with the weights, so the bf16 arm's true
+  traffic is more than the figure and the comparison errs against the conclusion, not
+  for it.
+- *"The single-thread leg does not move much."* It moved **1.10-1.26x under Graal
+  (1.16 / 1.16 / 1.10 / 1.18 / 1.26 / 1.18 for 135M / 360M / 0.6B / 0.8B / 1.1B / 1.2B)
+  and 1.25-1.38x under C2**: a flat line across a 9x range of model size, with no
+  trend, all well under the kernel's own 1.49x / 2.00x. Two accounts are ruled out by
+  the flatness alone, with no byte estimate involved. A serial leg that streams its
+  weights from DRAM and nothing else would gain near the kernel's factor, and it does
+  not; a serial leg with no bandwidth component at all would gain nothing, and it
+  gains 1.2x on every model including the 135M one whose matrices 488 measured as
+  cache-resident. What is left is a token whose time is the GEMVs plus everything the
+  width never touches -- the attention over the KV cache, the norms and element-wise
+  work, the argmax over a 32000-248320-wide logit row, the layer walk -- moving by the
+  GEMV's share of it. That is consistent with the re-reading 488's README already made
+  when `.todo/480` landed (four accumulators put the serial f32 GEMV on the bus at
+  these sizes, so the prediction's "not bandwidth-bound" predates the kernel it was
+  measured on); it is not a measurement of the share, which would take a profile.
+  The item's fork ("if the single-thread leg DOES jump, `.todo/488`'s premise needs
+  re-reading") is answered by 488's own re-reading; nothing further in 488 is put in
+  doubt.
+- *"Load-in time drops too."* **Held**: 0.5-0.6x of the f32 load on every model
+  (TinyLlama 8.1 -> 4.4 s). This is the reader's result (`.todo/487`'s bulk
+  `read-sequence` into `#bf16`, no widen), not the kernels', and it is reported apart
+  from tok/s so neither win overstates the other.
+
+**Two further findings.**
+
+- **488's cache-resident regression does not appear in a decode, and cannot.** 488
+  measured 0.72-0.84x below ~4 MB of weights by re-running one matrix; SmolLM2-135M's
+  3.5 MB matrices are in that regime and its serial ratio is 1.16x, the same as every
+  other model's. A decode reads each matrix once per token and 30 layers of them
+  between visits, so nothing is cache-resident whatever its size; "cache-resident" was
+  a property of the bench harness, not of any model. The no-gate decision in 488 stands
+  for a second reason.
+- **`-m chat` on a model whose row has no chat template does not fail -- it measures
+  the wrong thing.** The `llama` row (TinyLlama, SmolLM2 without `<|im_start|>`) has no
+  template, so the raw prompt goes in, TinyLlama-Chat answers EOS at its first sampled
+  position, and the printed tok/s is the nine prompt positions, JIT-cold. It is a
+  property of the harness and will bite any future rung on a base model. Twelve such runs
+  were discarded here; TinyLlama's rows are the raw completion. **The 2026-09-05 f32
+  TinyLlama rows above (1.86 / 8.84 / 8.17, "chat prompt") may carry the same defect:
+  TinyLlama has no chat template, so they may be measuring nine prompt positions rather
+  than generation; not re-taken, marked.** Not filed by this lane (the coordinator files
+  it for the next wave's lane design); the fix is TinyLlama-Chat's Zephyr template on the
+  `llama` row or a refusal of `-m chat` where no template exists.
+
+**Method notes.** The bf16 TinyLlama load-line check (`weights=BFLOAT16`) and the
+text-identity check held in all 156 timed runs, and the positive bf16-activation test
+(a ~100x collapse) never fired. The scratchpad TSV (label, width, threads, run,
+loadavg before / after, load ms, tok/s, head, text) and every run's full output were
+kept for the window and are not in the repository; the per-model tables above are the
+record. x64 kernel-level numbers (`.todo/696` item 3, the 488 bench on this box) are
+still unrun -- the C2 / Graal model-level cells here are the nearest thing and are not a
+substitute.
 
 ## What the numbers should look like
 

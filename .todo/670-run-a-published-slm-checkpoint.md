@@ -47,7 +47,7 @@ its numbers under both JITs.
 | `672` | the Q8_0 weight matrix and its integer-dot `vec:matvec` | High | **closed 2026-09-05**; one-thread follow-up is `.todo/706` |
 | `675` | read a safetensors file (+ `config.json`) | Medium | reader done; the `#bf16` target waits on `487` steps 3-5 |
 | `677` | the Gated DeltaNet layer: Qwen3.5-0.8B, and every Qwen 3.5-3.8 dense model | High | runs from both formats; bf16 `tok/s` unblocked since `488` landed |
-| `489` | the model rungs: TinyLlama / SmolLM2, Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High | f32 rungs done; bf16 rungs in flight on dorian. Precondition discharged: `488`'s wiring landed 09-05 at `5eebb771`, 1.49x (Graal) / 2.00x (C2) of f32 on a DRAM-bound GEMV, and the fused pairing is bf16 weights against f32 activations only -- every other pairing declines to the scalar defun (`.todo/696`) |
+| `489` | the model rungs: TinyLlama / SmolLM2, Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High | **f32 AND bf16 rungs measured on six models 2026-09-05** -- the result and its reading are in `489`, beside the prediction. The precondition was `488`'s wiring, landed 09-05 at `5eebb771`; the fused pairing is bf16 weights against f32 activations only, every other pairing declining to the scalar defun (`.todo/696`) |
 | `490` | bf16 on the device | High | not started; GB10 only |
 
 **Order: 671 -> 673 / 675 -> 674 -> 489 rung 0 at f32 -> 676 -> 678 -> 677 -> 482's
@@ -92,20 +92,32 @@ Qwen3.5-0.8B 26.9-29, Qwen3-0.6B 22. No box ceiling lives in that spread. What r
   activation-blind parameter-count estimate that omits exactly Qwen3.5's recurrent state.
   The error runs AGAINST the conclusion, which is why it is named here.
 
-Two routes reached this: dorian's knee, and GB10 measuring 41-42 Gelem/s at BOTH 4.2 MB and
-67 MB of weights, which a DRAM ceiling has no reason to bind identically (`.todo/488`'s
-README). **The clean discriminator is still unrun: a parallel f32 GEMV at 256x256, small
-enough to be unambiguously cache-resident. If it lands on the same rate, the cap is the
-machinery and no model is involved** -- that is `.todo/702`.
+Three routes reach this now. Dorian's knee; GB10 measuring 41-42 Gelem/s at BOTH 4.2 MB
+and 67 MB of weights, which a DRAM ceiling has no reason to bind identically (`.todo/488`'s
+README); and **the strongest one, added 2026-09-05 by `489`'s bf16 rungs: the saturation
+point did not move when the bytes halved.** On any of six models -- flat by 16 threads in
+both arms for Qwen3.5, TinyLlama and both SmolLM2s, still climbing at 32 in both arms for
+LFM2.5. If the parallel cap were DRAM, halving the bytes streamed per token would push the
+knee outward; it did not budge. That leg is byte-estimate-free and it is a second WIDTH as
+well as a second model set, so it is independent of the activation-blind estimate that
+weakens the one-thread GB/s comparison.
+
+**The clean discriminator is still unrun** and is now confirmatory rather than sole: a
+parallel f32 GEMV at 256x256, small enough to be unambiguously cache-resident. If it lands
+on the same rate, the cap is the machinery with no model involved at all -- `.todo/702`.
 
 Carry two consequences: a parallel GEMV rate is a property of how the work was cut up, not
 of the machine and not of the weights; and the f32 rows above are SOUND, re-measured quiet
 and corroborated twice (8.92 / 8.71 against the recorded 8.56). The 10x collapse seen while
 two lanes shared the box is `.todo/697`'s mechanism, not what 2026-09-03 recorded.
 
-**Open, and B's to take at planning:** the one-thread bf16 ratio is 1.18x at Qwen3.5-0.8B
-and 1.26x at TinyLlama-1.1B, against `.todo/489`'s written prediction that it "does not
-move much". Both models move, both fall well short of 2x. Not this wave's work.
+**Closed 2026-09-05, and it was not B's to take after all: `489` measured all six models
+at bf16 the same day.** The prediction missed on both legs and the item had said in advance
+what each miss meant. One thread was to "not move much" and moved 1.10x-1.26x; the parallel
+leg was to roughly double and gave 1.03x-1.65x at 32 threads, nowhere near 2x. The fork the
+item wrote for that case -- bandwidth diagnosis wrong, or a bf16 limit that is not
+bandwidth -- is decided by the knee, above. **Numbers, conditions and reading are in
+`489`; do not restate them here** (rule 9).
 
 ## The two machines, because every number here is one of them
 
@@ -219,7 +231,7 @@ Sonnet.** A dead worker is RESUMED, never respawned.
 | # | item | difficulty | why here, why now |
 | --- | --- | --- | --- |
 | B-1 | `708` the formatter corpus walks `.claude/worktrees/` | Low | Two blocks of this file say "do not compare totals until 708 lands". One filter line plus a pin; it also lifts the standing caveat off every future certification. Do #3 (25 stale worktrees) is cleanup, NOT part of the fix -- the fix must work with them present |
-| B-2 | `702` is the parallel cap machinery or memory | Low | One benchmark on a cleared GB10, and this file has carried "the clean discriminator is still unrun" since 09-03. A 256x256 f32 GEMV landing on the same 41-42 Gelem/s settles it with no model involved. Needs a verified-quiet box: load < 1.5, checked, not assumed |
+| B-2 | `702` is the parallel cap machinery or memory | Low | One benchmark on a cleared GB10. `489`'s knee-invariance already answers it at a second width, so this is no longer the sole evidence -- but it is the only leg with NO model in it, and a 256x256 f32 GEMV landing on the same 41-42 Gelem/s closes the question outright. Needs a verified-quiet box: load < 1.5, checked, not assumed |
 | B-3 | `707` `coerce` / `concatenate` drop a packed FLOAT element type | Medium | A live correctness defect at all three float widths, on the width chain B owns. Verified independently 09-05 |
 | B-4 | `710` a closed item's artefacts and an open item share one namespace | Medium | The path-citation link check FIRST -- it is what makes the rename safe and earns its place alone. **Fold in the live duplicate found 09-05: `338-ansi-conformance-the-ranked-gap.md` and `338-string-concat-renders-through-the-value-printer.md` are both open on one number**; `.todo/.history.md` says the later commit's side renumbers |
 | B-5 | `490` bf16 on the device | High | The last child of the width chain, and GB10 is the only box that can run it |
