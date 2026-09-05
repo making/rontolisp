@@ -150,6 +150,23 @@ not.** The three legs that did not run are the ones that load the renamed exampl
 failure", reached by a different road: nobody needed to watch it fail, only to compare its
 skip count against the baseline's, and the baseline was two tables up in the same file.
 
+**And the equality was not a coincidence that hid the change -- it was CAUSED by the
+change.** The legs that dropped out contributed nothing to a passing total, so removing them
+could not move it. That is the property to carry away: **an acceptance slice whose
+composition can shrink silently will report equality most convincingly exactly when it has
+stopped testing the thing.** A total is invariant under the deletion of everything that
+passed, which is the whole population of a green run.
+
+**How the cause was recovered is not a method and must not be read as one.** `6a319b6a` is
+gone from the working tree, and the question was never "does the leg skip today" but "what
+did the box hold on the day the row was written". A run today would have measured a
+different day and looked authoritative doing it. The answer survived only because the
+blocked pull happened to expose the old path's disk state inside the same session. **A skip
+count's meaning is a property of a box at a moment, and nothing in the record captures the
+box.** Two tables gave the delta; only a live session held the cause. Anything built on this
+should either record the fixture state beside the count or accept that the count is
+unreadable after the box moves on.
+
 ## Do
 
 1. Add a filter for `/.claude/` -- one line, beside the two that exist. Prefer excluding
