@@ -212,6 +212,18 @@ component leg of `safetensors-check`), both filed 2026-09-03 and neither in a wa
    elapsed time.** Every run in the table above did: `git diff --stat <ran-at> <head> --
    src/` empty means a re-run would only re-measure `.todo/` edits. One command, and it is
    the whole argument.
+9. **An umbrella's status paragraph is evidence only where no child covers the same
+   fact.** Where a child does, the child wins and the umbrella should POINT at it rather
+   than restate it. Rule 1 says only the closer may write back a dependency; this is the
+   same failure in the other direction, and it is the more expensive one -- the closer
+   wrote the truth into their own item and the umbrella went on asserting the opposite,
+   so the record that was right was not the record anyone read. Found 2026-09-05: this
+   file said "The checkpoints are gone" while `.todo/677` had carried a "Checkpoint on
+   dorian (not in the repository)" block with the correct paths the whole time, and two
+   lanes were sent to re-download 12 GB that was on disk. A restated fact also decays
+   PER BOX: rewritten as "the checkpoints survived" it would have been wrong for GB10,
+   where they had not, and that direction is worse than the original error -- it skips a
+   re-fetch that is needed rather than repeating one that is not.
 
 ## What is deliberately not in the plan
 
