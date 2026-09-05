@@ -15,10 +15,21 @@ RENDERING but in the TOKENIZATION of the rendered string, and that defect is fix
 
 Every checkpoint ships its own `tokenizer.chat_template` (`tokenizer_config.json`; a
 GGUF's `tokenizer.chat_template`). `examples/llama2/llama2.lisp` renders a hand-written
-per-family approximation (`*chatml*`, `*chatml-think-off*`, the row's `:chat`). Nobody has
-shown one of ours renders a wrong STRING -- `.todo/678`'s lane verified LFM2.5's by
-reading its jinja -- and nobody has shown the others render the right one. One script
-settles it: render each model's own template for the one-user-turn case (Python's
+per-family approximation (`*chatml*`, `*chatml-think-off*`, the row's `:chat`).
+
+**As of the tokenizer fix (`495c4a6b`, 2026-09-05) there IS a demonstrated rendering
+divergence, and tokenization is ruled out.** Both Qwen models now answer the chat prompt
+with no think-aloud preamble, safetensors and GGUF legs byte-identical to each other,
+while `llama-cli`'s chat mode still thinks aloud on both **even at
+`--reasoning-budget 0`**. Tokenization cannot account for it: after the fix our ids match
+the Python `tokenizers` library exactly for the string we render -- Qwen3.5 21 ids,
+Qwen3-0.6B 21, LFM2.5 18, SmolLM2 18. **So what remains between us and `llama.cpp` on
+those two models is the rendered string and nothing else.** That is one positive case,
+found before this item was worked, and it is what the script below now has to explain --
+not a hunch. `.todo/678`'s lane separately verified LFM2.5's template by reading its
+jinja, so at least one family is known correct.
+
+One script settles the rest: render each model's own template for the one-user-turn case (Python's
 `jinja2`, or `llama-cli --verbose-prompt`, whichever is on the box) and diff against what
 `LLAMA2_TRACE=1` shows we feed, across every model on disk -- Qwen3.5-0.8B, Qwen3-0.6B,
 LFM2.5-1.2B, TinyLlama-1.1B-Chat, SmolLM2-135M/360M-Instruct.
