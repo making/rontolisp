@@ -115,6 +115,13 @@ ceiling, `examples/llama2/README.md`).
   before 692's fix, so it is a separate pre-existing bug in the component I/O path. The
   line above claiming both WASM legs "pass the whole fixture" was only ever true of the
   Preview 1 one.
+- **Before writing any lane code on this path, read the two JIT cliffs.** `.todo/488`
+  recorded a C2 inlining cliff (a fused kernel at 0.20x); 2026-09-05 `.todo/672` found
+  that **Graal 25 does not intrinsify the int-to-double lane conversion -- 0.02 Gelem/s,
+  about a 250x cliff**, which is a property of the JIT and not of Q8_0. Both are being
+  put in `.kb` together so a kernel author greps one place. Relevant here because
+  `stage-float-bits` narrowing an F32 tensor to bf16 in bulk is exactly where someone
+  reaches for lanes.
 - **A `#bf16` destination -- the remainder, NOT STARTED as of 2026-09-05** (`.todo/485`
   exists; `.todo/488`'s fused kernels take bf16 weights against f32 activations, and
   `examples/llama2/llama2.lisp`'s `-w bf16` is already wired to ask for it, so this is
