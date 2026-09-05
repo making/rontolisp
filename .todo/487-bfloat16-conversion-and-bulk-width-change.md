@@ -128,10 +128,35 @@ changes. The f16 maximum 65504 rounds to the pattern `0x4780` (value 65536), whi
 `65500.0` because `FloatText.bfloat16Text` answers the shortest decimal that reads back as
 the same bfloat16. The tests assert the narrowed value.
 
-**Still open here**: step 2 (`coerce` and the bulk width change -- `widen-float-bits` /
-`narrow-float-bits` still decline a bf16 source or destination, which nothing above needed),
-and step 5 (the widen-once scratch). The census rows and the signalling-NaN reachability
-question are settled in the two sections below.
+**Steps 2 and 5 are devolved, with the measurements that say so.**
+
+- **Step 2's correctness half is `.todo/707`, and it is not a bfloat16 gap at all.**
+  `(coerce v '(array bfloat16))` does not work -- and neither does
+  `(coerce '(1.0 2.0) '(vector single-float))`, nor the `concatenate` spelling, at any of
+  the three float widths: the result is a GENERAL vector from a list, or the argument
+  UNCHANGED when it is already a packed array of another width. The packed INTEGER half
+  works (`ConcatenateForms.packedVectorCoerce`), and that class's comment claims the
+  divergence is "retired" -- retired for `(unsigned-byte N)` only. Filed with the fix's
+  shape (carry an `ArrayElementTypes` code, not a second width field) rather than fixed
+  here, because it is one mechanism serving two operators at three widths on four
+  backends and has nothing to do with this item's width in particular.
+- **Step 2's VECTORIZED half has lost its caller.** It existed for the checkpoint load
+  path; that path now moves a BF16 tensor with no conversion at all and narrows an F32 one
+  as it streams (steps 3 and 4 above), so there is nothing left for an 11.9 Gelem/s
+  converter to serve. `.todo/707` says to add lanes only when a caller is measured to want
+  them.
+- **Step 5 should NOT be built, and the measurement is already in the tree.** The
+  widen-once f32 scratch was for "the paths `.todo/488` does not fuse". For the fused GEMV,
+  `.kb/bfloat16.md` records that widen-into-a-scratch-then-f32-kernel -- the only
+  bit-identical alternative -- is *slower at EVERY shape on both JITs*, so it is not a
+  path to switch to. For the element-wise members that DECLINE, the blocker is that
+  NARROWING is not vectorized (`.todo/696`), which a widen-once scratch does not address:
+  the result still has to be stored back at the width. No caller benefits, so building it
+  would be machinery with no user -- if one appears, `Worth.java`'s reuse-of-16 crossover
+  is the number to re-measure against.
+
+The census rows and the signalling-NaN reachability question are settled in the two
+sections below.
 
 ## Do
 
