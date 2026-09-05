@@ -219,7 +219,7 @@ gitBranch=${git.branch}
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
-				<version>3.5.6</version>
+				<version>3.6.0</version>
 				<configuration>
 					<!-- The JVM simd acceleration test defines the embedded Vector API
 					     bridge (Lookup.defineClass) and invokes it in-process, so the test
