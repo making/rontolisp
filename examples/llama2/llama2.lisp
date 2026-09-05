@@ -355,6 +355,8 @@
 ;; the hybrid kinds: <kind>-layer, <kind>-state, <kind>-forward
 (load "deltanet.lisp")
 (load "shortconv.lisp")
+;; the tokenizer a checkpoint carries: tokenizer.json or a GGUF's fields
+(load "checkpoint-tokenizer.lisp")
 
 (defun layer-weight (weights key l)
   ;; The layer-L entry of an OPTIONAL per-layer weight vector (q_norm and the
@@ -537,26 +539,6 @@
 ;;; the un-permuted one, so the RoPE layout is :halves for every family.
 
 (defparameter *seq-len-cap* 4096)
-
-(defun read-text-file (path)
-  ;; The whole UTF-8 text of a file, read as bytes in 1 MB chunks (file-length
-  ;; is nil on WASM) and decoded once -- tokenizer.json is 13 MB, and a
-  ;; line-by-line concatenation of it is quadratic.
-  (with-open-file (s path :element-type '(unsigned-byte 8))
-    (let ((chunks '())
-          (total 0)
-          (buf (make-array 1048576 :element-type '(unsigned-byte 8))))
-      (loop
-        (let ((n (read-sequence buf s)))
-          (when (= n 0) (return))
-          (push (subseq buf 0 n) chunks)
-          (setq total (+ total n))
-          (when (< n 1048576) (return))))
-      (let ((bytes (make-array total :element-type '(unsigned-byte 8))) (at 0))
-        (dolist (chunk (nreverse chunks))
-          (replace bytes chunk :start1 at)
-          (setq at (+ at (length chunk))))
-        (rontolisp:octets-to-string bytes)))))
 
 (defun hf-config (dir)
   ;; config.json, with a multimodal checkpoint's text_config unwrapped (its
@@ -1064,29 +1046,6 @@
                         :layers (transformer-layers n-layers head-size weights
                                                     options))))))))
 
-(defun load-gguf-tokenizer (model)
-  ;; The tokenizer the GGUF carries: byte-level BPE (model "gpt2") or
-  ;; SentencePiece ("llama"), each in the shape the tokenizer package takes.
-  ;; A BOS the file says not to add (Qwen) is left out of the tokenizer.
-  (let* ((f (getf model :gguf-tokenizer))
-         (bos (and (getf model :add-bos) (getf f :bos))))
-    (if (string= (getf f :model) "llama")
-        (tokenizer:make-sentencepiece (getf f :tokens) (getf f :scores)
-                                      :bos bos
-                                      :eos (getf f :eos))
-        (let ((specials '())
-              (tokens (getf f :tokens))
-              (types (getf f :token-type)))
-          ;; token type 3 = control: the special tokens matched whole
-          (when types
-            (dotimes (i (length types))
-              (when (= (aref types i) 3) (push (aref tokens i) specials))))
-          (tokenizer:make-bpe tokens (getf f :merges)
-                              :kind (getf f :pre)
-                              :specials specials
-                              :bos bos
-                              :eos (getf f :eos))))))
-
 (defun checkpoint-directory (path)
   ;; The directory of a Hugging Face checkpoint, with its trailing slash; nil
   ;; for llama2.c's .bin.
@@ -1142,132 +1101,6 @@
           (setf (aref pieces i)
                 (rontolisp:octets-to-string (subseq buf 0 len)))))
       (tokenizer:make-sentencepiece pieces scores :bos 1 :eos 2))))
-
-;;; --- a Hugging Face checkpoint's JSON -----------------------------------------------
-;;; tokenizer.json is 13 MB of non-Latin-1 text. It used to need a byte-level
-;;; JSON reader of its own here, because a character index into such a string
-;;; re-proved it surrogate-free from the start whenever a short string was cut
-;;; out between two accesses -- which is what a parse does, one per token -- so
-;;; rontolisp:json-parse over it did not finish. The index memory keeps the
-;;; longer string now (.kb/string-index-cost.md) and the two readers cost the
-;;; same on this file (425 ms against 447 ms, 2026-09-05), so the shared one
-;;; carries it and the 180 lines of hand-written JSON are gone.
-
-(defun json-parse-file (path) (rontolisp:json-parse (read-text-file path)))
-
-(defun token-name (v)
-  ;; tokenizer_config.json spells a special token as a string or as an
-  ;; object with a "content"; absent or null is nil.
-  (cond ((stringp v) v) ((hash-table-p v) (gethash "content" v)) (t nil)))
-
-(defun json-null-p (v) (or (null v) (eq v 'null)))
-
-(defun split-regex-kind (regex fallback)
-  ;; A Split pre-tokenizer's regex -> the kind whose scanner it is, told apart
-  ;; by the one clause that differs (tokenizers.lisp lists them): the number
-  ;; run `\p{N}{1,3}` is Llama 3's, a lone `\p{N}` Qwen 2.5 / 3's, and the
-  ;; word class `[\p{L}\p{M}]+` Qwen 3.5's. FALLBACK for a regex none of
-  ;; those matches -- the architecture row's kind, or nil.
-  (cond ((search "[\\p{L}\\p{M}]+" regex) :qwen35)
-        ((search "\\p{N}{1,3}" regex) :llama3)
-        ((search "|\\p{N}|" regex) :qwen2)
-        (t fallback)))
-
-(defun hf-tokenizer-kind (json fallback)
-  ;; The pre-tokenizer kind a tokenizer.json describes, read off its
-  ;; pre_tokenizer block rather than assumed from the family: a Digits step in
-  ;; front of ByteLevel is :smollm, ByteLevel with its own regex :gpt2, a Split
-  ;; regex whichever scanner it spells. Nil when the file is not byte-level BPE
-  ;; at all -- TinyLlama's is SentencePiece under the same "BPE" model type,
-  ;; with no ByteLevel step -- which sends the caller to tokenizer.bin.
-  (let ((pre (gethash "pre_tokenizer" json)))
-    (if (json-null-p pre)
-        nil
-        (let ((steps
-               (if (string= (gethash "type" pre) "Sequence")
-                   (coerce (gethash "pretokenizers" pre) 'list)
-                   (list pre)))
-              (digits nil)
-              (byte-level nil)
-              (own-regex nil)
-              (split nil))
-          (dolist (step steps)
-            (let ((type (gethash "type" step)))
-              (cond ((string= type "Digits") (setq digits t))
-                    ((string= type "ByteLevel")
-                     (setq byte-level t)
-                     (when (gethash "use_regex" step) (setq own-regex t)))
-                    ((string= type "Split")
-                     (setq split (gethash "Regex" (gethash "pattern" step)))))))
-          (cond ((not byte-level) nil)
-                (split (split-regex-kind split fallback))
-                ((and own-regex digits) :smollm)
-                (own-regex :gpt2)
-                (t fallback))))))
-
-(defun template-opens-with-special-p (processor)
-  ;; Whether a post_processor (or one of a Sequence's) is a TemplateProcessing
-  ;; whose single-sequence template starts with a special token.
-  (let ((type (gethash "type" processor)))
-    (cond ((string= type "Sequence")
-           (some #'template-opens-with-special-p
-                 (coerce (gethash "processors" processor) 'list)))
-          ((string= type "TemplateProcessing")
-           (let ((single (gethash "single" processor)))
-             (and (> (length single) 0)
-              (not (json-null-p (gethash "SpecialToken" (aref single 0)))))))
-          (t nil))))
-
-(defun hf-adds-bos-p (json config)
-  ;; Whether encoding prepends BOS. tokenizer_config.json's add_bos_token says
-  ;; so when it is there; otherwise it is the post_processor's business -- a
-  ;; TemplateProcessing opening with a special token (Llama 3, LFM2). Qwen's
-  ;; ByteLevel post-processor and SmolLM2's null add none, whatever bos_token
-  ;; the config names (SmolLM2 names <|im_start|>, and prepending it would put
-  ;; a second one in front of every chat turn).
-  (multiple-value-bind (v present) (gethash "add_bos_token" config)
-    (if (and present (not (json-null-p v)))
-        v
-        (let ((post (gethash "post_processor" json)))
-          (and (not (json-null-p post))
-               (template-opens-with-special-p post))))))
-
-(defun load-hf-tokenizer (dir fallback-kind)
-  ;; tokenizer.json (the vocab, the ranked merges, the added tokens) and
-  ;; tokenizer_config.json (which added tokens are BOS and EOS) -> a byte-level
-  ;; BPE tokenizer of the pre-tokenizer kind the file describes (FALLBACK-KIND,
-  ;; the architecture row's, when it describes one this file cannot name), or
-  ;; nil when the file is not byte-level BPE.
-  (let* ((json (json-parse-file (concatenate 'string dir "tokenizer.json")))
-         (kind (hf-tokenizer-kind json fallback-kind)))
-    (and kind (load-hf-bpe-tokenizer dir json kind))))
-
-(defun load-hf-bpe-tokenizer (dir json kind)
-  (let* ((config
-          (json-parse-file (concatenate 'string dir "tokenizer_config.json")))
-         (vocab (gethash "vocab" (gethash "model" json)))
-         (merges (gethash "merges" (gethash "model" json)))
-         (added (gethash "added_tokens" json))
-         (n 0))
-    (maphash (lambda (k id) (when (>= id n) (setq n (+ id 1)))) vocab)
-    (dotimes (i (length added))
-      (let ((id (gethash "id" (aref added i))))
-        (when (>= id n) (setq n (+ id 1)))))
-    (let ((tokens (make-array n :initial-element "")) (specials '()))
-      (maphash (lambda (k id) (setf (aref tokens id) k)) vocab)
-      (dotimes (i (length added))
-        (let ((a (aref added i)))
-          (setf (aref tokens (gethash "id" a)) (gethash "content" a))
-          (when (gethash "special" a) (push (gethash "content" a) specials))))
-      (let ((bos
-             (and (hf-adds-bos-p json config)
-                  (token-name (gethash "bos_token" config))))
-            (eos (token-name (gethash "eos_token" config))))
-        (tokenizer:make-bpe tokens merges
-         :kind kind
-         :specials specials
-         :bos (and bos (position bos tokens :test #'string=))
-         :eos (and eos (position eos tokens :test #'string=)))))))
 
 ;;; --- printing tokens as they come ------------------------------------------------
 ;;; A token is bytes, and a character straddles two tokens routinely, so the
@@ -1704,7 +1537,8 @@
   (let* ((dir (checkpoint-directory *checkpoint*))
          (tk
           (or (cond ((and (getf model :gguf-tokenizer) (null (flag-value "-z")))
-                     (load-gguf-tokenizer model))
+                     (load-gguf-tokenizer (getf model :gguf-tokenizer)
+                                          (getf model :add-bos)))
                     ((and dir (null (flag-value "-z"))
                       (probe-file (concatenate 'string dir "tokenizer.json")))
                      ;; nil for a SentencePiece tokenizer.json (TinyLlama):

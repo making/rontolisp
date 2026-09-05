@@ -81,3 +81,22 @@ in the case.
 ## Consumers
 `examples/llama2/llama2.lisp` still carries its own SentencePiece encoder; the `sentencepiece`
 fixture exists so folding the two is a deletion rather than a rewrite (ids pinned on both sides).
+
+`examples/llama2/checkpoint-tokenizer.lisp` reads a published checkpoint's tokenizer into
+`make-bpe` -- `tokenizer.json` + `tokenizer_config.json`, or a GGUF's `tokenizer.*` fields --
+and is where the SPECIALS list is decided. **Every added token is matched whole, whatever its
+`"special"` flag says** (the flag only tells a decoder what to skip); in a GGUF that is token type
+3 (control) AND 4 (user-defined), both of which `llama.cpp` matches whole. Qwen3 / Qwen3.5 ship
+`<think>`, `</think>` and `<tool_call>` unflagged, and a reader that took only the flagged ones
+fed a chat prompt's think block as `<th` `ink` `>` -- three ids where the reference gives one --
+so the model answered a different prompt from `llama.cpp`'s and the divergence read as a
+template bug (`.todo/701`, 2026-09-05). The signature that finds the next instance in one run:
+raw completion token-identical to `llama.cpp`, chat mode divergent. Pin:
+`examples/llama2/checkpoint-tokenizer-check.lisp` over `tokenizer-fixture.py`'s fixture (both
+readers, ids from the Python library), all four backends via `examples.yaml`.
+
+The pre-tokenizer KIND and the BOS rule are the file's, not the family's: the `pre_tokenizer`
+block (`Digits` + `ByteLevel` -> `:smollm`, `ByteLevel` with `use_regex` -> `:gpt2`, a `Split`
+regex by its number clause -> `:llama3` / `:qwen2` / `:qwen35`; no `ByteLevel` step ->
+SentencePiece, not this reader), and `add_bos_token` or a `TemplateProcessing` post-processor
+opening with a special token. SmolLM2 names `<|im_start|>` as `bos_token` and adds none.

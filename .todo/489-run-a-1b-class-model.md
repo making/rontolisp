@@ -186,13 +186,26 @@ alone.
   --repeat-penalty 1.0 --top-k 0 --top-p 1.0 --min-p 0` (dorian, x86 build of
   2026-09-03) against our f32 widening of the same file, the same 64 tokens of text
   ("there were 3000 people in a town. The number of people who are in the town is
-  3000. ..."). The chat-mode comparison agreed only on its first eleven words -- the
-  two chat harnesses, as with 677.
-- The interpreter leg of every `tokenizer.json` model dies in the file's JSON reader
-  (`subseq` of an adjustable `(unsigned-byte 8)` buffer is a `simple-vector` on every
-  backend; only the interpreter's `%octets-to-string` refuses it) -- filed as `.todo/698`,
-  narrowed the same day to "which callers still use a bare `subseq`" since a packed copy
-  is a known fix; confirm its state before acting on it. The JVM legs above are unaffected.
+  3000. ..."). The chat-mode comparison agreed only on its first eleven words, and the
+  trace of that prompt found the reason: the reader matched whole only the added tokens
+  flagged `"special"`, so Qwen's unflagged `<think>` went in as three ids. Fixed the same
+  day in `examples/llama2/checkpoint-tokenizer.lisp` (both readers; failing-first pin
+  `checkpoint-tokenizer-check.lisp` over a `tokenizers`-library fixture, all four
+  backends), recorded in `.kb/tokenizers.md` and `.todo/701`. After it, every chat
+  prompt's ids equal the Python library's for the rendered string (Qwen3.5 21 ids,
+  Qwen3-0.6B 21, LFM2.5 18 and SmolLM2 18 -- the last two UNCHANGED by the fix, as the
+  mechanism predicted: nothing in their templates for it to bite), and both Qwen models
+  answer the chat prompt as the safetensors and the GGUF leg alike: Qwen3.5 "In the
+  quiet, dusty corner of the old bakery, lived **Barnaby**...", Qwen3-0.6B "Once upon a
+  time, there lived a cat named Luna..." -- no think-aloud preamble. `llama-cli`'s chat
+  mode still thinks aloud on both, which is now a question about its template rendering
+  against ours (`.todo/701`), not about ids.
+- The interpreter leg of a `tokenizer.json` model died in this file's own byte-level JSON
+  reader until `.todo/690` (2026-09-05) replaced that reader with `rontolisp:json-parse`;
+  it runs now (SmolLM2-135M-Instruct chat, identical text to the JVM, 2.85 tok/s under
+  `--simd`, `tokenizer.json` + KV cache 12.2 s against the JVM's 1.1 s). The builtin defect
+  that killed it (`subseq` of an adjustable `(unsigned-byte 8)` buffer answers a
+  `simple-vector` on every backend) is still `.todo/698`'s.
 - Checkpoints: `/home/administrator/models/{qwen3-0.6b,qwen3-0.6b-gguf,smollm2-135m,
   smollm2-135m-instruct,smollm2-360m-instruct}` beside the ones the other lane restored
   there (`tinyllama`, `qwen35`, `smollm2-135m-f16.gguf`); the HF cache under

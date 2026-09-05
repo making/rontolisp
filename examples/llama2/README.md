@@ -34,6 +34,7 @@ program no command line (a browser shim, an embedder):
 | `-p` | `LLAMA2_TOPP` | 0.9 |
 | `-s` | `LLAMA2_SEED` | the clock |
 | `-m` | `LLAMA2_MODE` | `generate` (continue the prompt); `chat` wraps it in the family's chat template |
+| `-w` | `LLAMA2_WEIGHTS` | `f32` (a bf16 / f16 checkpoint is widened as it is read); `bf16` keeps the file's own bits for the weight matrices -- the norms and every activation stay f32 either way |
 | -- | `LLAMA2_TRACE` | set to anything: every token id and its text on stderr |
 
 From this directory, on all four backends. The interpreter takes the program's
@@ -91,7 +92,15 @@ Qwen 3.5), and its `post_processor` (or `tokenizer_config.json`'s
 `<|im_start|>` as its `bos_token` and adds none. That is per FILE, not per
 family: SmolLM2 and TinyLlama are both `model_type` `llama`, and TinyLlama's
 `tokenizer.json` is SentencePiece under the same `"BPE"` model type, with no
-`ByteLevel` step, which sends the loader to `tokenizer.bin`.
+`ByteLevel` step, which sends the loader to `tokenizer.bin`. Both readers --
+this one and the GGUF's -- live in [`checkpoint-tokenizer.lisp`](checkpoint-tokenizer.lisp),
+and both match EVERY added token whole, flagged `"special"` or not (a GGUF's
+token types 3 and 4), because the reference implementation does: Qwen3 ships
+`<think>` and `</think>` unflagged, and a reader that took only the flagged
+ones fed a chat prompt's think block as `<th` `ink` `>`, three ids for one.
+[`checkpoint-tokenizer-check.lisp`](checkpoint-tokenizer-check.lisp) pins both
+readers' ids against the Python `tokenizers` library over the fixture
+[`tokenizer-fixture.py`](tokenizer-fixture.py) writes, on all four backends.
 
 TinyLlama-1.1B-Chat uses the Llama 2 tokenizer -- the same 32000-entry
 `tokenizer.bin` the stories do:
@@ -147,11 +156,7 @@ java --add-modules jdk.incubator.vector -Xmx16g Llama Qwen3.5-0.8B -m chat -t 0 
 ```
 
 ```
-***
-
-### Barnaby the Cat
-
-Barnaby was a small, fluffy cat with a tail that was always a perfect ...
+In the quiet, dusty corner of the old bakery, lived **Barnaby**, a cat with a coat of soft, burnt-orange fur and a tail that twitched when he felt the wind. Barnaby was not
 ```
 
 The same model as ggml-org's `Qwen3.5-0.8B-BF16.gguf` -- one file, the tokenizer
@@ -159,10 +164,14 @@ inside it, read by the shipped
 [`gguf:`](../../doc/en/reference/functions/gguf.md) package -- answers the same
 prompt with the same text, token for token, and needs no `tokenizer.json`
 (`Llama Qwen3.5-0.8B-BF16.gguf -m chat ...`). A `Q8_0` file is refused by
-name until the quantized weight matrix exists. `llama.cpp` on the same GGUF,
-same prompt, thinking off, tells the same cat's story in other words -- the
-same "Barnaby", a different sentence -- which is what two implementations at
-temperature 0 give each other; byte identity is the Q8_0 check's job.
+name until the quantized weight matrix exists. The prompt's 21 ids are the
+Python `tokenizers` library's for the same rendered string, and on a RAW
+completion -- no chat template on either side, "Once upon a time" -- the
+model's 64 ids are `llama.cpp`'s on the same GGUF, token for token
+(`.todo/677`). Its `-m chat` is not `llama-cli`'s: the two harnesses render
+"thinking off" differently (`llama-cli --reasoning-budget 0` still opens a
+`[Start thinking]` block on this model), which is a question about the two
+template strings (`.todo/701`), not about the arithmetic.
 
 Measured on the same box as the TinyLlama rows, JVM class output, f32 weights
 (the load line: 7.1-7.6 s for 1.75 GB of bf16 into 3 GB, of which
@@ -204,18 +213,19 @@ unsloth's `Qwen3-0.6B-BF16.gguf` with the tokenizer inside it, the same prompt
 as above (`-m chat -t 0 -n 64`) gives the same 64 tokens from both:
 
 ```
-Okay, the user wants a short story about a cat. Let me start by brainstorming some ideas. A cat can be a simple character, so maybe a cat who has a special ability or a unique trait
+Once upon a time, there lived a cat named Luna. She was small and fluffy, with a curious heart. One day, she found a hidden treasure in the forest. As she explored, she discovered a magical book
 ```
 
-That is the model thinking out loud through an empty `<think>` block, not a
-template bug: `llama.cpp` on the same GGUF, thinking off (`--reasoning-budget
-0`), opens with the same eleven words and then brainstorms in other words --
-the two chat harnesses render the template differently, not the arithmetic,
-because with no template at all (`llama-completion -no-cnv --temp 0
---repeat-penalty 1.0 --top-k 0 --top-p 1.0 --min-p 0` against `Llama
-Qwen3-0.6B-BF16.gguf -t 0 -n 64 -i "Once upon a time"`) both print the same 64
-tokens: `Once upon a time, there were 3000 people in a town. The number of
-people who are in the town is 3000. ...`. Measured on dorian (JVM class output, f32 weights, develop
+Before the added-token fix above the same command printed the model thinking
+out loud ("Okay, the user wants a short story about a cat. Let me start by
+brainstorming...") -- its empty `<think>` block had gone in as three tokens,
+so it was answering a different prompt. With no template at all
+(`llama-completion -no-cnv --temp 0 --repeat-penalty 1.0 --top-k 0 --top-p 1.0
+--min-p 0` against `Llama Qwen3-0.6B-BF16.gguf -t 0 -n 64 -i "Once upon a
+time"`) `llama.cpp` and this file print the same 64 tokens: `Once upon a time,
+there were 3000 people in a town. The number of people who are in the town is
+3000. ...`; in chat mode `llama-cli` still thinks out loud on this model where
+we do not, the harness difference `.todo/701` measures. Measured on dorian (JVM class output, f32 weights, develop
 `2275c000`, GraalVM 25.0.4, no other rontolisp run on the box -- its steady
 co-tenants, a `clickhouse-server` at ~17% of a core and a `mysqld`, keep the
 idle 1-minute load average at 0.3-0.9; the `loadavg` column is that figure

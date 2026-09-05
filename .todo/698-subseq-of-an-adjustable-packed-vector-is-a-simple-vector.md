@@ -47,8 +47,10 @@ either takes a plain `make-array` buffer or goes through `coerce` / `%packed`. S
 packed-vector copy is a known working fix**, and the question reduces from "is the
 builtin wrong" (it is, item 1 above, on every backend) to **which callers outside those
 three files still hand a bare `subseq` of an adjustable buffer to `octets-to-string`**
--- `examples/llama2/llama2.lisp`'s `json-string` is one. Start from the grep, not from
-this list.
+-- `examples/llama2/llama2.lisp`'s `json-string` WAS one, until `.todo/690` deleted that
+byte-level reader the same day (its work is `rontolisp:json-parse` now), which put the
+interpreter leg of `examples/llama2` back without touching the builtin. Start from the
+grep, not from this list.
 
 ## Do
 

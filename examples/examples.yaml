@@ -333,6 +333,17 @@ examples:
     note: the same check under --simd -- a reader must answer the same arrays whatever the acceleration flag
     expect:
       file: .expected/safetensors-check.txt
+  # llama2/tokenizer-fixture.py: one tiny byte-level BPE tokenizer as a Hugging Face
+  # tokenizer.json + tokenizer_config.json pair and as a GGUF metadata block, with
+  # added tokens flagged special (<|im_start|>, <|im_end|>) and not (<think>,
+  # </think>); the ids are the Python `tokenizers` library's.
+  - path: llama2/checkpoint-tokenizer-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    workDir: llama2
+    workFiles: [tokenizer-check/tokenizer.json, tokenizer-check/tokenizer_config.json, tokenizer-check.gguf]
+    note: load-hf-tokenizer and load-gguf-tokenizer (the readers llama2.lisp uses for a published checkpoint's tokenizer) over the checked-in fixture, encoding a plain text, a chat turn with a think block, and a word glued to an added token -- every added token is one id whether or not it is flagged special, on both readers, the same ids the reference implementation gives
+    expect:
+      file: .expected/checkpoint-tokenizer-check.txt
   # LFM2's gated short-conv layer (the :shortconv kind, llama2/shortconv.lisp)
   # against a float64 transcription of Lfm2ShortConv (shortconv-ref.py), four
   # tokens of a dim-8 kernel-3 layer, the same 3-decimal / 2e-5-margin rule.
