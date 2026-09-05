@@ -233,12 +233,20 @@ component leg of `safetensors-check`), both filed 2026-09-03 and neither in a wa
     Demonstrated 2026-09-05: `.todo/677` recorded the Qwen3.5-0.8B GGUFs' paths and their
     publisher (`ggml-org`) but not the repo id, and the id came back as
     `ggml-org/Qwen3.5-0.8B-GGUF` only because the two digests taken off dorian matched
-    that repo's manifest exactly. The corollary is what makes it a rule rather than an
-    anecdote: **guessing a repo id would have destroyed the evidence that recovered it**,
-    since a guess that reads plausibly is indistinguishable from a checked one once it is
-    written down. And once upstream is the reference, no box's copy is privileged -- each
-    verifies independently, and a later mismatch is a corrupt fetch rather than the
-    file-versus-implementation ambiguity rule 7 was written about.
+    that repo's manifest exactly, and GB10's independent fetch from that id then hashed
+    to the same two digests -- three copies, one manifest, checked in the direction that
+    can fail. **The digest and the refusal to guess are two independent goods and it is
+    worth keeping them apart**: refusing to guess is why the id is VERIFIED rather than
+    merely written down; the recorded digest is why a guess would have been SURVIVABLE --
+    a wrong one is caught by the bytes on the first fetch, a right one is harmless. What a
+    guess actually costs is not the evidence, which sits there either way, but the
+    QUESTION: a written repo id reads as known, so nobody queries the manifest. That is
+    why the mechanical half is the half to state first. "Do not guess" is advice about
+    judgement and the next person under time pressure will violate it; "record the digest
+    beside the path" still works when they do, and a rule should be robust to the failure
+    it is written about. And once upstream is the reference, no box's copy is privileged
+    -- each verifies independently, and a later mismatch is a corrupt fetch rather than
+    the file-versus-implementation ambiguity rule 7 was written about.
 
 ## What is deliberately not in the plan
 
