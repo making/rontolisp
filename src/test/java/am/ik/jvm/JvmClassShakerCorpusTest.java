@@ -50,52 +50,15 @@ class JvmClassShakerCorpusTest {
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndBehavesIdentically() throws Exception {
-		// Mirror the CLI compile path: user macros (defmacro) are expanded, and the
-		// reactor transport (the corpus drives %http-reactor-dispatch), the server value
-		// model, the JSON, linalg, URL, prelude (equalp/string<) and usocket libraries
-		// are spliced
-		// by the pre-passes, and the LibraryDefunPruner drops the spliced defuns the
-		// corpus never reaches -- so the shaker decodes exactly the class the real CLI
-		// emits (the per-backend unit tests keep full-library codegen coverage).
-		// #. in the corpus rides the marker read (resolved in UserMacroExpander), like
-		// the CLI.
-		String source = corpusSource();
-		List<LispVal> read = source.contains("#.")
-				? LispReader.readAllWithReadEvalMarkers(source, am.ik.rontolisp.reader.Features.JVM)
-				: LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.JVM);
-		// LoadInliner splices the built-in ASDF shim systems the corpus load-systems
-		// (bordeaux-threads' bt2 case), exactly like the CLI; the corpus references no
-		// filesystem source, so the loader throws.
-		List<LispVal> inlined = am.ik.rontolisp.cli.LoadInliner.inline(read, path -> {
-			throw new java.io.FileNotFoundException(path);
-		}, null, List.of(), am.ik.rontolisp.reader.Features.JVM);
-		// The prelude splice takes the TARGET features, like the CLI: the uiop splice it
-		// drives reads its resources with them, and uiop:featurep -- which the corpus
-		// reaches -- is written over *features*, a symbol the compile backends have no
-		// runtime binding for (.kb/uiop.md).
-		// JsonLibrary runs OUTSIDE GeomLibrary, like the CLI: geom:read-gltf parses
-		// through rontolisp:json-parse, so the geom splice introduces the reference.
-		List<LispVal> spliced = am.ik.rontolisp.eval.LispPreludeLibrary
-			.process(
-					am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.JsonLibrary
-						.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.GeomLibrary
-							.process(am.ik.rontolisp.eval.TorchLibrary.process(am.ik.rontolisp.eval.CheckpointLibrary
-								.process(am.ik.rontolisp.eval.SafetensorsLibrary.process(
-										am.ik.rontolisp.eval.GgufLibrary.process(am.ik.rontolisp.eval.TokenizersLibrary
-											.process(am.ik.rontolisp.eval.UserMacroExpander
-												.expand(am.ik.rontolisp.eval.HttpServerLibrary.process(
-														am.ik.rontolisp.eval.HttpReactorLibrary.process(inlined),
-														am.ik.rontolisp.compiler.ClackEnv
-															.usesBufferedBody(inlined)))))))))))),
-					am.ik.rontolisp.reader.Features.JVM);
-		// UnreadCharLibrary runs LAST of the splices, over the Gray rewrite's output,
-		// exactly like the CLI: the corpus unreads a character on a stream HANDLE, and
-		// the pushback that carries it is spliced Lisp.
-		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner.prune(am.ik.rontolisp.eval.UnreadCharLibrary
-			.process(am.ik.rontolisp.eval.UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
-				.process(am.ik.rontolisp.eval.VecLibrary.process(spliced)))));
+		// The CLI's own pass pipeline, not a copy of it: CorpusFrontend calls
+		// CompileFrontend.expand, so the shaker decodes exactly the class the real CLI
+		// emits and no pass or ordering can drift out of this test again. It used to be
+		// spelled out here and had fallen ten passes behind (.todo/688).
+		List<LispVal> program = am.ik.rontolisp.cli.CorpusFrontend.program(corpusSource(),
+				am.ik.rontolisp.reader.Features.JVM, false, false);
 
-		byte[] plain = new JvmLispCompiler("Test", false, OptimizeLevel.NONE).compile(program);
+		byte[] plain = withoutUndefinedWarnings(
+				() -> new JvmLispCompiler("Test", false, OptimizeLevel.NONE).compile(program));
 		// The corpus class is the one that once crossed the JVM 65535 constant-pool
 		// ceiling. The LibraryDefunPruner keeps the pool small by dropping
 		// unreachable spliced library defuns; guard the headroom so a growing corpus
@@ -107,7 +70,8 @@ class JvmClassShakerCorpusTest {
 					+ "LibraryDefunPruner and ConstantPool deduplication)")
 			.isLessThanOrEqualTo(52000);
 		// A decoder gap (unrecognized opcode / constant tag) throws here, by design.
-		byte[] optimized = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] optimized = withoutUndefinedWarnings(
+				() -> new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program));
 
 		assertThat(optimized.length).as("optimized should shrink the class").isLessThan(plain.length);
 		try {
@@ -140,6 +104,42 @@ class JvmClassShakerCorpusTest {
 			}
 			return baos.toString();
 		}
+	}
+
+	/**
+	 * Compiles with {@code System.err} captured and fails on any
+	 * {@code warning: ... is undefined} line.
+	 *
+	 * <p>
+	 * <b>A test that prints a compile warning must assert on it.</b> When the corpus lost
+	 * its {@code TokenizersLibrary} splice, the WASM guard compiled fifteen
+	 * undefined-call warnings to standard output and PASSED -- the program was broken,
+	 * the breakage was on the console, and nobody reads the output of a green test
+	 * (.todo/688). Warnings reach {@code System.err} whether a backend buffers them per
+	 * attempt or prints them straight through ({@code compiler/CompileWarnings}), so
+	 * capturing that stream catches both.
+	 * @param compile the compile to run
+	 * @return whatever it produced
+	 */
+	private static <T> T withoutUndefinedWarnings(java.util.function.Supplier<T> compile) {
+		java.io.PrintStream saved = System.err;
+		java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+		T result;
+		try {
+			System.setErr(new java.io.PrintStream(captured, true, java.nio.charset.StandardCharsets.UTF_8));
+			result = compile.get();
+		}
+		finally {
+			System.setErr(saved);
+		}
+		String warnings = captured.toString(java.nio.charset.StandardCharsets.UTF_8);
+		saved.print(warnings);
+		assertThat(
+				warnings.lines().filter(line -> line.contains("warning: ") && line.contains("is undefined")).toList())
+			.as("undefined-function warnings from the corpus compile: a name the corpus "
+					+ "reaches is not being spliced, so the pass pipeline is wrong")
+			.isEmpty();
+		return result;
 	}
 
 }

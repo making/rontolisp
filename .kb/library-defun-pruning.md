@@ -11,8 +11,11 @@
 `LibraryDefunPruner.prune(program)` runs at the END of the compile-path splice chain:
 `RontoLispCli.compileToFile` (skipped under `--dynamic` and `--no-prune`, both in
 `CliOptions`, `--no-prune` in `noValueKeys`), `RontoPlayground.compileJvm`/`compileWasm`,
-`JvmClassShakerCorpusTest` / `WasmTreeShakerCorpusTest`, `AsdfLibraryE2eSupport.compileProgram`
-(the 12 real-library E2E subclasses). NOT the interpreter nor the per-library compiler tests.
+`AsdfLibraryE2eSupport.compileProgram` (the 12 real-library E2E subclasses). NOT the
+interpreter nor the per-library compiler tests. `JvmClassShakerCorpusTest` /
+`WasmTreeShakerCorpusTest` reach it through `CompileFrontend.expand` like everything else
+(`CorpusFrontend`); they used to run their own copy of the chain and it drifted ten passes
+behind -- see CLAUDE.md's `CompileFrontend` bullet.
 
 - **Part 1 — rontolisp's own libraries**: top-level `defun`/`defparameter`/`defvar`/
   `defconstant` whose name is defined by linalg, torch, vec, json (+ its `#'` wrapper defuns),

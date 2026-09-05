@@ -100,6 +100,15 @@ am.ik.objc -> (nothing)
   WIT lowerings and the tree-shaker, in one order-critical place. Every backend and every
   embedder goes through it; a JVM embedder goes through `cli/JvmSourceCompiler`, which is
   the same backend half the CLI's `-o out.class` runs (`.kb/jvm-export.md`).
+  **The pass pipeline itself is `CompileFrontend.expand`, and nothing may restate it** --
+  `run` is the read plus `(load ...)` inlining in front of it, and a caller that needs its
+  own source loader calls `expand` directly rather than copying the order. The two corpus
+  guards used to copy it and drifted: eight passes behind when a `tokenizer:` case joined
+  `ci-spec.yaml` and went red, ten when that was finally fixed, and -- invisibly to any
+  census of pass NAMES -- `VecLibrary` applied in the wrong POSITION, so a `vec:` reference
+  introduced by the Gray-streams / usocket / unread-char rewrites was spliced by the CLI
+  and missed by both guards. They now reach it through `src/test/.../cli/CorpusFrontend`.
+  A list of libraries exported for a caller to fold is the same bug with more steps.
 
 Where behavior must be identical across the interpreter, the JVM and both WASM backends,
 the topic's `.kb` file says so and names the pinning test -- change the file and the test

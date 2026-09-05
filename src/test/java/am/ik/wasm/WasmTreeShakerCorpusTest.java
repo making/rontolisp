@@ -44,51 +44,22 @@ class WasmTreeShakerCorpusTest {
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndStaysValid() throws Exception {
-		// Mirror the CLI compile path: user macros (defmacro) are expanded, the
-		// JSON, linalg, URL, prelude (equalp/string<) and usocket libraries are spliced
-		// by the pre-passes, and the LibraryDefunPruner drops the spliced defuns the
-		// corpus never reaches -- so the shaker decodes exactly the module the real CLI
-		// emits (the per-backend unit tests keep full-library codegen coverage).
-		// #. in the corpus rides the marker read (resolved in UserMacroExpander), like
-		// the CLI.
 		String source = corpusSource();
-		List<LispVal> read = source.contains("#.")
-				? LispReader.readAllWithReadEvalMarkers(source, am.ik.rontolisp.reader.Features.WASM)
-				: LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.WASM);
-		// LoadInliner splices the built-in ASDF shim systems the corpus load-systems
-		// (bordeaux-threads' bt2 case), exactly like the CLI; the corpus references no
-		// filesystem source, so the loader throws.
-		List<LispVal> inlined = am.ik.rontolisp.cli.LoadInliner.inline(read, path -> {
-			throw new java.io.FileNotFoundException(path);
-		}, null, List.of(), am.ik.rontolisp.reader.Features.WASM);
-		// The prelude splice takes the TARGET features, like the CLI: the uiop splice it
-		// drives reads its resources with them, and uiop:featurep -- which the corpus
-		// reaches -- is written over *features*, a symbol the compile backends have no
-		// runtime binding for (.kb/uiop.md).
-		// JsonLibrary runs OUTSIDE GeomLibrary, like the CLI: geom:read-gltf parses
-		// through rontolisp:json-parse, so the geom splice introduces the reference.
-		List<LispVal> spliced = am.ik.rontolisp.eval.LispPreludeLibrary
-			.process(
-					am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.JsonLibrary
-						.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.GeomLibrary
-							.process(am.ik.rontolisp.eval.TorchLibrary.process(am.ik.rontolisp.eval.CheckpointLibrary
-								.process(am.ik.rontolisp.eval.SafetensorsLibrary.process(
-										am.ik.rontolisp.eval.GgufLibrary.process(am.ik.rontolisp.eval.TokenizersLibrary
-											.process(am.ik.rontolisp.eval.UserMacroExpander
-												.expand(am.ik.rontolisp.eval.HttpServerLibrary.process(inlined,
-														am.ik.rontolisp.compiler.ClackEnv
-															.usesBufferedBody(inlined)))))))))))),
-					am.ik.rontolisp.reader.Features.WASM);
-		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner
-			.prune(am.ik.rontolisp.eval.UsocketLibrary.process(
-					am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.VecLibrary.process(spliced))));
-
 		// Both modes exercise renumbering: default WASI drops unused function imports,
 		// no-wasi drops the trap-stub functions that fill the import slots.
 		for (boolean noWasi : new boolean[] { false, true }) {
-			byte[] plain = new WasmLispCompiler(false, false, noWasi, OptimizeLevel.NONE).compile(program);
+			// The CLI's own pass pipeline, not a copy of it: CorpusFrontend calls
+			// CompileFrontend.expand, so the shaker decodes exactly the module the real
+			// CLI emits. It runs INSIDE the loop because --no-wasi reaches the front end
+			// too (the feature set, and which wasi:*-binding libraries splice), which
+			// the hand-written copy this replaces could not express at all (.todo/688).
+			List<LispVal> program = am.ik.rontolisp.cli.CorpusFrontend.program(source,
+					am.ik.rontolisp.reader.Features.WASM, true, noWasi);
+			byte[] plain = withoutUndefinedWarnings(
+					() -> new WasmLispCompiler(false, false, noWasi, OptimizeLevel.NONE).compile(program));
 			// A decoder gap (unrecognized opcode) throws here -> test failure, by design.
-			byte[] optimized = new WasmLispCompiler(false, false, noWasi, OptimizeLevel.DEFAULT).compile(program);
+			byte[] optimized = withoutUndefinedWarnings(
+					() -> new WasmLispCompiler(false, false, noWasi, OptimizeLevel.DEFAULT).compile(program));
 
 			assertThat(optimized.length).as("optimized should shrink the module (noWasi=%s)", noWasi)
 				.isLessThan(plain.length);
@@ -160,6 +131,42 @@ class WasmTreeShakerCorpusTest {
 		catch (IOException | InterruptedException ex) {
 			return false;
 		}
+	}
+
+	/**
+	 * Compiles with {@code System.err} captured and fails on any
+	 * {@code warning: ... is undefined} line.
+	 *
+	 * <p>
+	 * <b>A test that prints a compile warning must assert on it.</b> When the corpus lost
+	 * its {@code TokenizersLibrary} splice, the WASM guard compiled fifteen
+	 * undefined-call warnings to standard output and PASSED -- the program was broken,
+	 * the breakage was on the console, and nobody reads the output of a green test
+	 * (.todo/688). Warnings reach {@code System.err} whether a backend buffers them per
+	 * attempt or prints them straight through ({@code compiler/CompileWarnings}), so
+	 * capturing that stream catches both.
+	 * @param compile the compile to run
+	 * @return whatever it produced
+	 */
+	private static <T> T withoutUndefinedWarnings(java.util.function.Supplier<T> compile) {
+		java.io.PrintStream saved = System.err;
+		java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+		T result;
+		try {
+			System.setErr(new java.io.PrintStream(captured, true, java.nio.charset.StandardCharsets.UTF_8));
+			result = compile.get();
+		}
+		finally {
+			System.setErr(saved);
+		}
+		String warnings = captured.toString(java.nio.charset.StandardCharsets.UTF_8);
+		saved.print(warnings);
+		assertThat(
+				warnings.lines().filter(line -> line.contains("warning: ") && line.contains("is undefined")).toList())
+			.as("undefined-function warnings from the corpus compile: a name the corpus "
+					+ "reaches is not being spliced, so the pass pipeline is wrong")
+			.isEmpty();
+		return result;
 	}
 
 }
