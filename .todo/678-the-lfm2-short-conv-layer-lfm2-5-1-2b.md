@@ -212,9 +212,13 @@ this leans on no single-thread denominator at all:
 | | 8 -> 16 | 16 -> 32 |
 | --- | --- | --- |
 | LFM2.5-1.2B | **x1.225** | **x1.053** |
-| Qwen3.5-0.8B | x1.129 | **x0.994 -- it goes DOWN** |
+| Qwen3.5-0.8B | x1.129 | **x0.994 -- flat** |
 
-**Qwen3.5 is finished by 16 threads and loses ground at 32; LFM2.5 is still climbing.**
+**Qwen3.5 is saturated by 16 threads; LFM2.5 is still climbing at 32.** Saturated, not
+"loses ground": 0.6% below its own 16-thread median, over 3-7 runs with co-tenants
+present, is a plateau with noise on it and not a turnover. A genuine DECREASE with added
+threads would be the stronger claim, since locality cannot explain one at all -- it is
+held in reserve until a quiet box can support it.
 Speedup over one thread: LFM2.5 3.39x / 4.15x / 4.37x at 8 / 16 / 32, Qwen3.5 2.63x /
 2.97x / 2.95x. `.todo/489`'s 64-thread Qwen3.5 figures (8.92 / 8.71) sit on its own
 32-thread number, which is the same saturation seen from further out.
@@ -245,8 +249,8 @@ from.
 Both halves are worth keeping. A prediction stated in advance is what makes "right about
 the ordering, wrong about the cause" a distinguishable outcome at all, and it is a more
 useful result than either a clean confirmation or a miss. **Four models is a hypothesis
-with four points, not a law**; `.todo/670`'s "two independent models on one ceiling"
-sentence is corrected ONCE, by whoever holds all four, not here.
+with four points, not a law.** `.todo/670` now carries the correction and the four-model
+picture, reached independently from GB10's side as well; read it there, not here.
 
 ## Remaining
 
@@ -258,11 +262,9 @@ Two things this item HANDS ON rather than leaves undone:
 - **The `tok/s` rows go to `.todo/489`**, which owns the model-rung table; they are
   measured here because until this item pushes, no other worktree can load LFM2.5 at all.
   The bf16 rungs are `489`'s too, unblocked since `.todo/488` landed on 2026-09-05.
-- **`.todo/670`'s "two independent models on one ceiling" is now wrong** and is corrected
-  ONCE, by whoever holds all four models' numbers, not from here. The finding that
-  replaces it -- a per-model saturation thread count, dispatch cost rather than a memory
-  wall -- is written above with the ratios it rests on, and `.todo/489` has three more
-  models to place against it.
+- **`.todo/670`'s "two independent models on one ceiling" was wrong**; it is corrected
+  there, with these numbers and GB10's independent route to the same conclusion, and
+  `.todo/702` is the run that decides it outright. Nothing further is owed from here.
 
 ## Verify
 
