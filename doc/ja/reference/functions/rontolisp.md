@@ -19,6 +19,8 @@
 | `rontolisp:dequantize` | `(rontolisp:dequantize m 'single-float)` | 量子化行列を、指定した要素型の新しいパック浮動小数点配列に展開する |
 | `rontolisp:make-quantized-matrix` | `(rontolisp:make-quantized-matrix 'q8-0 '(rows cols))` | 全要素ゼロの量子化行列。`read-sequence` が Q8_0 テンソルのバイト列で埋める宛先 |
 | `rontolisp:quantized-matrix-p` | `(rontolisp:quantized-matrix-p m)` | 値が量子化行列なら `t`（`(typep m 'rontolisp:quantized-matrix)` でも可） |
+| `rontolisp:octets-to-string` | `(rontolisp:octets-to-string #8@(72 105))` | packed な `(unsigned-byte 8)` ベクタをデコードし、そのバイト列が表す UTF-8 テキストを返す。全域的かつ寛容 |
+| `rontolisp:string-to-octets` | `(rontolisp:string-to-octets "Hi")` | 文字列を UTF-8 としてエンコードし、packed な `(unsigned-byte 8)` ベクタとして返す |
 | `rontolisp:make-mutex` | `(rontolisp:make-mutex)` | 新しい相互排他ロック。不透明なハンドル(インタプリタと JVM では実体があり、WASM では no-op) |
 | `rontolisp:mutex-acquire` | `(rontolisp:mutex-acquire m)` | このスレッドが mutex を保持するまでブロックし、それを返します(通常は `rontolisp:with-mutex` を使用) |
 | `rontolisp:mutex-release` | `(rontolisp:mutex-release m)` | mutex の獲得を 1 回分解放し、それを返します |

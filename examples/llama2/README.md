@@ -82,9 +82,19 @@ layout is `:rope :halves`. `max_position_embeddings` is capped at 4096 for the
 KV cache (`*seq-len-cap*`), and generation stops on the config's `eos_token_id`
 as well as on llama2.c's BOS.
 
+The tokenizer beside the weights is read the same way: `tokenizer.json`'s own
+`pre_tokenizer` block says which byte-level BPE scanner the file wants (a
+`Digits` step before `ByteLevel` is SmolLM2's, a `Split` regex is told apart
+by its number clause -- `\p{N}{1,3}` Llama 3, `\p{N}` Qwen, `[\p{L}\p{M}]+`
+Qwen 3.5), and its `post_processor` (or `tokenizer_config.json`'s
+`add_bos_token`) says whether a BOS is prepended -- SmolLM2 names
+`<|im_start|>` as its `bos_token` and adds none. That is per FILE, not per
+family: SmolLM2 and TinyLlama are both `model_type` `llama`, and TinyLlama's
+`tokenizer.json` is SentencePiece under the same `"BPE"` model type, with no
+`ByteLevel` step, which sends the loader to `tokenizer.bin`.
+
 TinyLlama-1.1B-Chat uses the Llama 2 tokenizer -- the same 32000-entry
-`tokenizer.bin` the stories do -- so it runs today, before the byte-level BPE
-tokenizer item lands:
+`tokenizer.bin` the stories do:
 
 ```bash
 # download config.json + model.safetensors (2.2 GB) into a directory, then
@@ -188,6 +198,99 @@ the sampler chooses among the tokenizer's ids only), and the answer ends at
 the prompt. `tokenizer.json` (13 MB) is read by a byte-level JSON reader of
 this file's own, because `rontolisp:json-parse` over that text does not finish
 (`.todo/690`).
+
+### Qwen3-0.6B
+
+The dense Qwen: 28 blocks of GQA attention with QK-norm (`head_dim` 128 on a
+1024-wide model -- `config.json` says so and the loader believes it over
+`hidden_size / heads`), a tied 151936 x 1024 classifier, the `qwen3` row. Read
+from `Qwen/Qwen3-0.6B`'s BF16 safetensors with its `tokenizer.json`, and from
+unsloth's `Qwen3-0.6B-BF16.gguf` with the tokenizer inside it, the same prompt
+as above (`-m chat -t 0 -n 64`) gives the same 64 tokens from both:
+
+```
+Okay, the user wants a short story about a cat. Let me start by brainstorming some ideas. A cat can be a simple character, so maybe a cat who has a special ability or a unique trait
+```
+
+That is the model thinking out loud through an empty `<think>` block, not a
+template bug: `llama.cpp` on the same GGUF, thinking off (`--reasoning-budget
+0`), opens with the same eleven words and then brainstorms in other words --
+the two chat harnesses render the template differently, not the arithmetic,
+because with no template at all (`llama-completion -no-cnv --temp 0
+--repeat-penalty 1.0 --top-k 0 --top-p 1.0 --min-p 0` against `Llama
+Qwen3-0.6B-BF16.gguf -t 0 -n 64 -i "Once upon a time"`) both print the same 64
+tokens: `Once upon a time, there were 3000 people in a town. The number of
+people who are in the town is 3000. ...`. Measured on dorian (JVM class output, f32 weights, develop
+`2275c000`, GraalVM 25.0.4, no other rontolisp run on the box -- its steady
+co-tenants, a `clickhouse-server` at ~17% of a core and a `mysqld`, keep the
+idle 1-minute load average at 0.3-0.9; the `loadavg` column is that figure
+at the start of each run, and the values above idle are the previous run's
+own worker threads decaying. It is recorded because on this box it is the
+number that decides the `--parallel` row -- see below):
+
+| | tok/s | loadavg |
+| --- | --- | --- |
+| `--simd`, one thread | 2.45 / 2.18 (2.56 on the idle box before the day started) | 17.1 / 9.8 |
+| `--simd --parallel`, `RONTOLISP_THREADS=32` | **9.72 / 9.00** | 3.7 / 6.2 |
+| `--simd --parallel`, 64 threads (the default) | 9.17 / 8.37 | 7.7 / 16.2 |
+
+The load: 5.7-6.2 s for 1.5 GB of bf16 into 2.4 GB of f32, of which
+`tokenizer.json` (11 MB) + the KV cache 2.6-3.0 s; from the GGUF 5.5 s, its
+tokenizer 1.0 s. A token streams 0.6B x 4 = 2.4 GB, so 5.8 GB/s on one thread
+and 23 GB/s on 32. Re-measured the same day with the thread count explicit,
+TinyLlama reaches 39 GB/s on 32 threads (8.84 tok/s x 4.4 GB) and Qwen3.5-0.8B
+29 (9.18 x 3.2), so "the DRAM wall" is a per-model figure on this box, ordered
+by how the model streams its weights -- TinyLlama's big plain matvecs best,
+Qwen3.5's 576 small Gated DeltaNet reads per token worst -- which is what
+`.todo/678`'s lane predicted from the access shape before any of it was
+measured (`.todo/489` has the table).
+
+**The 64-thread row is the one to read twice.** Under the default thread count,
+one busy core anywhere on the box -- another lane's build, a second decode --
+costs this program 10x: the rows of a GEMV are handed out to spinning workers
+and the caller waits for the last one, so a worker descheduled mid-leaf holds
+every GEMV for a scheduler quantum. Measured on the same day with a six-core
+build running beside it: **0.62 tok/s at 64 threads against 9.88 at 32**, and
+Qwen3.5-0.8B 0.83 where the table above says 8.56. `RONTOLISP_THREADS=32` is
+the setting to use on a shared 64-thread box until the default changes
+(`.todo/697`).
+
+### SmolLM2
+
+`HuggingFaceTB/SmolLM2-135M` (base and `-Instruct`) and `SmolLM2-360M-Instruct`
+are `model_type` `llama` -- GQA, `rope_theta` 100000, tied embeddings -- so the `llama` row
+runs them unchanged; what they bring is the GPT-2-style byte-level BPE
+`tokenizer.json` above (the `:smollm` scanner, digits split one at a time)
+and a ChatML chat template that the family row does not carry, so `-m chat`
+uses ChatML whenever the vocabulary has `<|im_start|>`. From the BF16
+safetensors, greedy:
+
+```bash
+java --add-modules jdk.incubator.vector Llama SmolLM2-135M-Instruct -m chat -t 0 -n 64 \
+  -i "Tell me a short story about a cat."
+# One of the most beloved and beloved cats in the world is Luna, a gentle and curious feline with a heart of gold. ...
+java --add-modules jdk.incubator.vector Llama SmolLM2-135M -t 0 -n 48 -i "Once upon a time"
+# Once upon a time, there was a little girl named Lily. She lived in a big house with her family, ...
+```
+
+The Instruct checkpoint continuing "Once upon a time" loops ("I was a young
+man, a young woman, and a young man again"), and that loop is the oracle: the
+F16 GGUF of the same Instruct model prints it token for token, and so does
+`llama.cpp` on that GGUF (`llama-completion -no-cnv --temp 0`) -- three
+readers of two files agreeing on 48 tokens. A tokenizer that adds no BOS
+starts the prompt with a word, which `run.c`'s print loop never showed (it
+prints each token as it is fed back in, and the first is always BOS there);
+the loop now echoes it. Same box, same day, f32 weights, JVM class output:
+
+| | 135M, one thread | 135M, 32 threads | 360M, one thread | 360M, 32 threads |
+| --- | --- | --- | --- | --- |
+| tok/s | 8.69 | **28.9** | 4.26 | **14.0** |
+| loadavg | 18.2 | 15.9 | 16.5 | 12.3 |
+
+At 0.54 GB (135M) and 1.4 GB (360M) of f32 per token these are not bandwidth
+rows; the 135M model spends its token in the 30-layer walk around its
+576-wide GEMVs, which is where `.kb/jvm-typed-loops.md`'s work sits, not the
+weight width's.
 
 ## The layer table
 

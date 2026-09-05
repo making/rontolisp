@@ -8102,10 +8102,21 @@ public final class LispNames {
 	 */
 	public static final String FLEXI_STREAM_BOUND = "FLEXI-STREAM-BOUND";
 
-	/** {@code string-to-octets} -- the flexi-streams shim's UTF-8 encoder. */
+	/**
+	 * {@code string-to-octets} -- the flexi-streams shim's UTF-8 encoder, AND (as
+	 * {@code rontolisp:string-to-octets}, a distinct symbol the same bare member name
+	 * serves since prelude selection matches by RESOLVED symbol, not by this String alone
+	 * -- {@code am.ik.rontolisp.eval.LispPreludeLibrary#process}) the language's own
+	 * encoder (.todo/691).
+	 */
 	public static final String STRING_TO_OCTETS = "STRING-TO-OCTETS";
 
-	/** {@code octets-to-string} -- the flexi-streams shim's UTF-8 decoder. */
+	/**
+	 * {@code octets-to-string} -- the flexi-streams shim's UTF-8 decoder, AND (as
+	 * {@code rontolisp:octets-to-string}, a distinct symbol -- see
+	 * {@link #STRING_TO_OCTETS}) a thin public delegator to the native
+	 * {@link #OCTETS_TO_STRING_INTERNAL} lenient decoder (.todo/691).
+	 */
 	public static final String OCTETS_TO_STRING = "OCTETS-TO-STRING";
 
 	/**

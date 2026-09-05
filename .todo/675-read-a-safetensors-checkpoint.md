@@ -1,6 +1,10 @@
 # 675. Read a safetensors checkpoint
 
-Difficulty: Low
+Difficulty: Medium (was Low, which sized "read a safetensors file" -- done 2026-09-03; the
+remainder, a `#bf16` destination through `checkpoint:make-tensor` / `stage-float-bits` /
+`safetensors:read` / `gguf:read` and a bulk little-endian `read-sequence` over a bf16 array
+on interpreter AND JVM with a cross-backend identity pin, is loader plumbing across two
+backends, re-sized 2026-09-05 when the other orchestrator's lane took it)
 
 Part of `.todo/670`. `.todo/671` (BF16 / F16 tensors into `#f`) closed 2026-09-03,
 wasm arm included -- so the fixture's wasm and wasm-component legs, listed under

@@ -151,6 +151,13 @@
 ;; run.c's -m: "generate" continues the prompt; "chat" wraps it in the model's
 ;; chat template (the families that have one, with thinking off)
 (defparameter *mode* (flag-or-env "-m" "LLAMA2_MODE" "generate"))
+;; -w: the width the weight MATRICES are held at -- "f32" (the default: a
+;; published bf16 / f16 checkpoint is widened as it is read) or "bf16" (the
+;; file's own bits, half the bytes a token streams; interpreter and JVM only).
+;; The norms, the biases and every activation stay f32 whichever is chosen:
+;; the accelerated pairing is bf16 weights against f32 activations and
+;; nothing else (.kb/bfloat16.md), so a bf16 activation anywhere is a defect.
+(defparameter *weights* (flag-or-env "-w" "LLAMA2_WEIGHTS" "f32"))
 ;; LLAMA2_TRACE=1: every token id and its text on stderr as it is produced
 (defparameter *trace* (env-or "LLAMA2_TRACE" nil))
 
@@ -158,6 +165,33 @@
 ;;; The checkpoint is raw little-endian int32 / float32, exactly what run.c
 ;;; mmaps. Floats go straight into packed single-float arrays: `read-sequence`
 ;;; over a packed float array reads raw IEEE-754 elements in bulk.
+
+(defun weight-element-type ()
+  ;; The packed array element type -w asks for.
+  (cond ((string= *weights* "f32") 'single-float)
+        ((string= *weights* "bf16") 'bfloat16)
+        (t (error "-w ~a: the weight width is f32 or bf16" *weights*))))
+
+(defun as-f32-vector (v)
+  ;; A rank-1 weight (a norm, a bias, a per-head scalar) as a packed
+  ;; single-float vector: the forward pass keeps every element-wise operand and
+  ;; every activation at f32 whatever width the matrices were loaded at, so
+  ;; the readers hand rank-1 tensors through here and nothing else touches a
+  ;; vector of the weight width.
+  (if (eq (array-element-type v) 'single-float)
+      v
+      (let ((out
+             (make-array (length v)
+                         :element-type 'single-float
+                         :initial-element 0.0)))
+        (dotimes (i (length v) out) (setf (aref out i) (aref v i))))))
+
+(defun embedding-row (emb token dim)
+  ;; Row TOKEN of the embedding table as a fresh packed single-float vector:
+  ;; the activation the layers start from, f32 whatever the table's width
+  ;; (linalg:row declines a bfloat16 matrix, and the copy is dim elements).
+  (let ((x (make-array dim :element-type 'single-float :initial-element 0.0)))
+    (dotimes (i dim x) (setf (aref x i) (aref emb token i)))))
 
 (defun read-i32 (s)
   ;; A little-endian signed 32-bit integer.
@@ -426,6 +460,10 @@
   ;; option keeps its default -- the table degenerates to :attention + :swiglu
   ;; per block. The one thing the FILE decides rather than the family is the RoPE
   ;; layout: run.c rotates adjacent pairs, so :pairs goes in front of the row.
+  ;; Its weights are f32 in the file, and stay so.
+  (unless (eq (weight-element-type) 'single-float)
+    (error "-w ~a: a .bin checkpoint is f32; bf16 weights need a safetensors or GGUF file"
+           *weights*))
   (with-open-file (s path :element-type '(unsigned-byte 8))
     (let* ((dim (read-i32 s))
            (hidden (read-i32 s))
@@ -518,7 +556,7 @@
         (dolist (chunk (nreverse chunks))
           (replace bytes chunk :start1 at)
           (setq at (+ at (length chunk))))
-        (rontolisp::%octets-to-string bytes)))))
+        (rontolisp:octets-to-string bytes)))))
 
 (defun hf-config (dir)
   ;; config.json, with a multimodal checkpoint's text_config unwrapped (its
@@ -554,7 +592,9 @@
   (vec:add v (vec:ones (length v) :element-type 'single-float)))
 
 (defun squeeze-middle (a)
-  ;; A [c, 1, k] conv1d weight as the c x k matrix the conv step takes.
+  ;; A [c, 1, k] conv1d weight as the c x k matrix the conv step takes -- at
+  ;; f32 whatever the file's width: the step reads it element by element
+  ;; (causal-conv.lisp), and it is kernel x channels small.
   (let* ((dims (array-dimensions a))
          (c (first dims))
          (k (third dims))
@@ -570,13 +610,12 @@
   ;; its gate row i.
   (let* ((dim (array-dimension w 1))
          (rows (* n-heads hs))
+         (etype (array-element-type w)) ; the two halves keep the weight width
          (wq
-          (make-array (list rows dim)
-                      :element-type 'single-float
-                      :initial-element 0.0))
+          (make-array (list rows dim) :element-type etype :initial-element 0.0))
          (gate
           (make-array (list rows dim)
-                      :element-type 'single-float
+                      :element-type etype
                       :initial-element 0.0)))
     (dotimes (h n-heads)
       (dotimes (i hs)
@@ -636,14 +675,18 @@
                                     (or (starts-with name prefix)
                                         (string= name "lm_head.weight")
                                         (and (not qwen35)
-                                             (starts-with name "model."))))))
+                                             (starts-with name "model."))))
+                            :element-type (weight-element-type)))
          (n-att (if lfm2 "operator_norm" "input_layernorm"))
          (n-ffn (if lfm2 "ffn_norm" "post_attention_layernorm"))
          (per-layer
           (lambda (f)
             (let ((v (make-array n-layers)))
               (dotimes (l n-layers v) (setf (aref v l) (funcall f l)))))))
-    (labels ((tensor (name) (gethash name tensors))
+    (labels ((tensor (name)
+               ;; a matrix at the weight width; a vector always at f32
+               (let ((v (gethash name tensors)))
+                 (if (and v (= (array-rank v) 1)) (as-f32-vector v) v)))
              (layer-tensor (l suffix)
                (tensor (format nil "~alayers.~a.~a" prefix l suffix)))
              (norm-tensor (l suffix)
@@ -894,12 +937,16 @@
                      (and (starts-with name "blk.")
                           (parse-integer name :start 4 :junk-allowed t))))
                 (when (or (null blk) (< blk n-layers)) (push name names))))))
-         (file (gguf:read path :only wanted))
+         (file
+          (gguf:read path :only wanted :element-type (weight-element-type)))
          (per-layer
           (lambda (f)
             (let ((v (make-array n-layers)))
               (dotimes (l n-layers v) (setf (aref v l) (funcall f l)))))))
-    (labels ((tensor (name) (gguf:tensor file name))
+    (labels ((tensor (name)
+               ;; a matrix at the weight width; a vector always at f32
+               (let ((v (gguf:tensor file name)))
+                 (if (and v (= (array-rank v) 1)) (as-f32-vector v) v)))
              (layer-tensor (l suffix)
                (tensor (format nil "blk.~a.~a" l suffix)))
              (required (l suffix)
@@ -1064,8 +1111,9 @@
 ;;; per token float32 score, int32 length, UTF-8 bytes -- is the SentencePiece
 ;;; shape (pieces with scores, the dummy prefix space, byte-fallback pieces);
 ;;; a Hugging Face checkpoint's tokenizer.json is the byte-level BPE shape
-;;; (vocab + ranked merges + added tokens), whose pre-tokenizer the
-;;; architecture row names.
+;;; (vocab + ranked merges + added tokens), whose pre-tokenizer the file
+;;; itself describes -- SmolLM2 and TinyLlama are both model_type llama, and
+;;; only the file tells a byte-level BPE from a SentencePiece one.
 
 (defun load-tokenizer (path vocab)
   ;; tokenizer.bin -> a SentencePiece tokenizer with llama2.c's BOS 1 / EOS 2.
@@ -1092,221 +1140,110 @@
         (let ((len (aref u32 0)))
           (read-sequence buf s :end len)
           (setf (aref pieces i)
-                (rontolisp::%octets-to-string (subseq buf 0 len)))))
+                (rontolisp:octets-to-string (subseq buf 0 len)))))
       (tokenizer:make-sentencepiece pieces scores :bos 1 :eos 2))))
 
-;;; --- JSON off a byte vector -------------------------------------------------------
-;;; tokenizer.json is 13 MB of non-Latin-1 text, and a character index into
-;;; such a string re-proves it surrogate-free from the start on every access
-;;; when small strings are cut out between accesses (.todo/690), so
-;;; rontolisp:json-parse over it does not finish. This reader walks the BYTES
-;;; with typed loops and decodes one token string at a time. The values it
-;;; builds are json-parse's: objects as string-keyed hash tables, arrays as
-;;; vectors, true/false/null as t / nil / the symbol null.
+;;; --- a Hugging Face checkpoint's JSON -----------------------------------------------
+;;; tokenizer.json is 13 MB of non-Latin-1 text. It used to need a byte-level
+;;; JSON reader of its own here, because a character index into such a string
+;;; re-proved it surrogate-free from the start whenever a short string was cut
+;;; out between two accesses -- which is what a parse does, one per token -- so
+;;; rontolisp:json-parse over it did not finish. The index memory keeps the
+;;; longer string now (.kb/string-index-cost.md) and the two readers cost the
+;;; same on this file (425 ms against 447 ms, 2026-09-05), so the shared one
+;;; carries it and the 180 lines of hand-written JSON are gone.
 
-(defun read-file-bytes (path)
-  ;; The whole file as an (unsigned-byte 8) vector, read in 1 MB chunks
-  ;; (file-length is nil on WASM).
-  (with-open-file (s path :element-type '(unsigned-byte 8))
-    (let ((chunks '())
-          (total 0)
-          (buf (make-array 1048576 :element-type '(unsigned-byte 8))))
-      (loop
-        (let ((n (read-sequence buf s)))
-          (when (= n 0) (return))
-          (push (subseq buf 0 n) chunks)
-          (setq total (+ total n))
-          (when (< n 1048576) (return))))
-      (let ((bytes (make-array total :element-type '(unsigned-byte 8))) (at 0))
-        (dolist (chunk (nreverse chunks) bytes)
-          (replace bytes chunk :start1 at)
-          (setq at (+ at (length chunk))))))))
-
-(defvar *json-bytes* nil)
-
-(defvar *json-pos* 0)
-
-(defun json-skip-ws ()
-  (let ((b *json-bytes*) (i *json-pos*) (n (length *json-bytes*)))
-    (loop while
-            (and (< i n)
-                 (let ((c (aref b i))) (or (= c 32) (= c 10) (= c 13) (= c 9))))
-          do (setq i (+ i 1)))
-    (setq *json-pos* i)))
-
-(defun json-expect (byte)
-  (json-skip-ws)
-  (unless (= (aref *json-bytes* *json-pos*) byte)
-    (error "json: expected ~a at byte ~a" (code-char byte) *json-pos*))
-  (setq *json-pos* (+ *json-pos* 1)))
-
-(defun json-hex (i)
-  ;; The four hex digits at I of the byte vector.
-  (let ((v 0))
-    (dotimes (k 4 v)
-      (let* ((c (aref *json-bytes* (+ i k)))
-             (d
-              (cond ((and (>= c 48) (<= c 57)) (- c 48))
-                    ((and (>= c 97) (<= c 102)) (- c 87))
-                    ((and (>= c 65) (<= c 70)) (- c 55))
-                    (t (error "json: bad hex digit at byte ~a" (+ i k))))))
-        (setq v (+ (* v 16) d))))))
-
-(defun utf8-push (cp out)
-  ;; The UTF-8 bytes of code point CP onto the fill-pointer vector OUT.
-  (cond ((< cp 128) (vector-push-extend cp out))
-        ((< cp 2048)
-         (vector-push-extend (+ 192 (ash cp -6)) out)
-         (vector-push-extend (+ 128 (logand cp 63)) out))
-        ((< cp 65536)
-         (vector-push-extend (+ 224 (ash cp -12)) out)
-         (vector-push-extend (+ 128 (logand (ash cp -6) 63)) out)
-         (vector-push-extend (+ 128 (logand cp 63)) out))
-        (t
-         (vector-push-extend (+ 240 (ash cp -18)) out)
-         (vector-push-extend (+ 128 (logand (ash cp -12) 63)) out)
-         (vector-push-extend (+ 128 (logand (ash cp -6) 63)) out)
-         (vector-push-extend (+ 128 (logand cp 63)) out))))
-
-(defun json-string ()
-  ;; The string at *json-pos* (its opening quote), escapes resolved, as a
-  ;; Lisp string; the fast path is a run of bytes with no escape, decoded in
-  ;; one piece.
-  (let* ((b *json-bytes*) (start (+ *json-pos* 1)) (i start) (plain t))
-    ;; find the closing quote, noting whether any escape occurs
-    (loop
-      (let ((c (aref b i)))
-        (cond ((= c 34) (return))
-              ((= c 92)
-               (setq plain nil)
-               (setq i (+ i 2)))
-              (t (setq i (+ i 1))))))
-    (setq *json-pos* (+ i 1))
-    (if plain
-        (rontolisp::%octets-to-string (subseq b start i))
-        (let ((out
-               (make-array (- i start)
-                           :element-type '(unsigned-byte 8)
-                           :fill-pointer 0
-                           :adjustable t))
-              (j start))
-          (loop while (< j i)
-                do
-                  (let ((c (aref b j)))
-                    (if (/= c 92)
-                        (progn
-                          (vector-push-extend c out)
-                          (setq j (+ j 1)))
-                        (let ((e (aref b (+ j 1))))
-                          (setq j (+ j 2))
-                          (cond ((= e 110) (vector-push-extend 10 out))
-                                ((= e 116) (vector-push-extend 9 out))
-                                ((= e 114) (vector-push-extend 13 out))
-                                ((= e 98) (vector-push-extend 8 out))
-                                ((= e 102) (vector-push-extend 12 out))
-                                ((= e 117)
-                                 (let ((cp (json-hex j)))
-                                   (setq j (+ j 4))
-                                   ;; a surrogate pair spelled as two escapes
-                                   (when (and (>= cp 55296) (< cp 56320)
-                                              (= (aref b j) 92)
-                                              (= (aref b (+ j 1)) 117))
-                                     (let ((lo (json-hex (+ j 2))))
-                                       (setq cp
-                                             (+ 65536 (* (- cp 55296) 1024)
-                                                (- lo 56320)))
-                                       (setq j (+ j 6))))
-                                   (utf8-push cp out)))
-                                (t (vector-push-extend e out)))))))
-          (rontolisp::%octets-to-string (subseq out 0 (fill-pointer out)))))))
-
-(defun json-number ()
-  (let* ((b *json-bytes*) (start *json-pos*) (i start) (float nil))
-    (loop
-      (let ((c (aref b i)))
-        (if (or (and (>= c 48) (<= c 57)) (= c 45) (= c 43))
-            (setq i (+ i 1))
-            (if (or (= c 46) (= c 101) (= c 69))
-                (progn
-                  (setq float t)
-                  (setq i (+ i 1)))
-                (return)))))
-    (setq *json-pos* i)
-    (let ((text (rontolisp::%octets-to-string (subseq b start i))))
-      (if float (read-from-string text) (parse-integer text)))))
-
-(defun json-value ()
-  (json-skip-ws)
-  (let ((c (aref *json-bytes* *json-pos*)))
-    (cond ((= c 123) (json-object))
-          ((= c 91) (json-array))
-          ((= c 34) (json-string))
-          ((= c 116)
-           (setq *json-pos* (+ *json-pos* 4))
-           t)
-          ((= c 102)
-           (setq *json-pos* (+ *json-pos* 5))
-           nil)
-          ((= c 110)
-           (setq *json-pos* (+ *json-pos* 4))
-           'null)
-          (t (json-number)))))
-
-(defun json-object ()
-  (json-expect 123)
-  (let ((table (make-hash-table :test 'equal)))
-    (json-skip-ws)
-    (if (= (aref *json-bytes* *json-pos*) 125)
-        (progn
-          (setq *json-pos* (+ *json-pos* 1))
-          table)
-        (loop
-          (json-skip-ws)
-          (let ((key (json-string)))
-            (json-expect 58)
-            (setf (gethash key table) (json-value)))
-          (json-skip-ws)
-          (let ((c (aref *json-bytes* *json-pos*)))
-            (setq *json-pos* (+ *json-pos* 1))
-            (cond ((= c 125) (return table))
-                  ((/= c 44)
-                   (error "json: expected , or } at byte ~a"
-                          (- *json-pos* 1)))))))))
-
-(defun json-array ()
-  (json-expect 91)
-  (let ((items '()))
-    (json-skip-ws)
-    (if (= (aref *json-bytes* *json-pos*) 93)
-        (progn
-          (setq *json-pos* (+ *json-pos* 1))
-          (vector))
-        (loop
-          (push (json-value) items)
-          (json-skip-ws)
-          (let ((c (aref *json-bytes* *json-pos*)))
-            (setq *json-pos* (+ *json-pos* 1))
-            (cond ((= c 93) (return (coerce (nreverse items) 'vector)))
-                  ((/= c 44)
-                   (error "json: expected , or ] at byte ~a"
-                          (- *json-pos* 1)))))))))
-
-(defun json-parse-bytes (bytes)
-  (let ((*json-bytes* bytes) (*json-pos* 0)) (json-value)))
-
-(defun json-parse-file (path) (json-parse-bytes (read-file-bytes path)))
+(defun json-parse-file (path) (rontolisp:json-parse (read-text-file path)))
 
 (defun token-name (v)
   ;; tokenizer_config.json spells a special token as a string or as an
   ;; object with a "content"; absent or null is nil.
   (cond ((stringp v) v) ((hash-table-p v) (gethash "content" v)) (t nil)))
 
-(defun load-hf-tokenizer (dir kind)
+(defun json-null-p (v) (or (null v) (eq v 'null)))
+
+(defun split-regex-kind (regex fallback)
+  ;; A Split pre-tokenizer's regex -> the kind whose scanner it is, told apart
+  ;; by the one clause that differs (tokenizers.lisp lists them): the number
+  ;; run `\p{N}{1,3}` is Llama 3's, a lone `\p{N}` Qwen 2.5 / 3's, and the
+  ;; word class `[\p{L}\p{M}]+` Qwen 3.5's. FALLBACK for a regex none of
+  ;; those matches -- the architecture row's kind, or nil.
+  (cond ((search "[\\p{L}\\p{M}]+" regex) :qwen35)
+        ((search "\\p{N}{1,3}" regex) :llama3)
+        ((search "|\\p{N}|" regex) :qwen2)
+        (t fallback)))
+
+(defun hf-tokenizer-kind (json fallback)
+  ;; The pre-tokenizer kind a tokenizer.json describes, read off its
+  ;; pre_tokenizer block rather than assumed from the family: a Digits step in
+  ;; front of ByteLevel is :smollm, ByteLevel with its own regex :gpt2, a Split
+  ;; regex whichever scanner it spells. Nil when the file is not byte-level BPE
+  ;; at all -- TinyLlama's is SentencePiece under the same "BPE" model type,
+  ;; with no ByteLevel step -- which sends the caller to tokenizer.bin.
+  (let ((pre (gethash "pre_tokenizer" json)))
+    (if (json-null-p pre)
+        nil
+        (let ((steps
+               (if (string= (gethash "type" pre) "Sequence")
+                   (coerce (gethash "pretokenizers" pre) 'list)
+                   (list pre)))
+              (digits nil)
+              (byte-level nil)
+              (own-regex nil)
+              (split nil))
+          (dolist (step steps)
+            (let ((type (gethash "type" step)))
+              (cond ((string= type "Digits") (setq digits t))
+                    ((string= type "ByteLevel")
+                     (setq byte-level t)
+                     (when (gethash "use_regex" step) (setq own-regex t)))
+                    ((string= type "Split")
+                     (setq split (gethash "Regex" (gethash "pattern" step)))))))
+          (cond ((not byte-level) nil)
+                (split (split-regex-kind split fallback))
+                ((and own-regex digits) :smollm)
+                (own-regex :gpt2)
+                (t fallback))))))
+
+(defun template-opens-with-special-p (processor)
+  ;; Whether a post_processor (or one of a Sequence's) is a TemplateProcessing
+  ;; whose single-sequence template starts with a special token.
+  (let ((type (gethash "type" processor)))
+    (cond ((string= type "Sequence")
+           (some #'template-opens-with-special-p
+                 (coerce (gethash "processors" processor) 'list)))
+          ((string= type "TemplateProcessing")
+           (let ((single (gethash "single" processor)))
+             (and (> (length single) 0)
+              (not (json-null-p (gethash "SpecialToken" (aref single 0)))))))
+          (t nil))))
+
+(defun hf-adds-bos-p (json config)
+  ;; Whether encoding prepends BOS. tokenizer_config.json's add_bos_token says
+  ;; so when it is there; otherwise it is the post_processor's business -- a
+  ;; TemplateProcessing opening with a special token (Llama 3, LFM2). Qwen's
+  ;; ByteLevel post-processor and SmolLM2's null add none, whatever bos_token
+  ;; the config names (SmolLM2 names <|im_start|>, and prepending it would put
+  ;; a second one in front of every chat turn).
+  (multiple-value-bind (v present) (gethash "add_bos_token" config)
+    (if (and present (not (json-null-p v)))
+        v
+        (let ((post (gethash "post_processor" json)))
+          (and (not (json-null-p post))
+               (template-opens-with-special-p post))))))
+
+(defun load-hf-tokenizer (dir fallback-kind)
   ;; tokenizer.json (the vocab, the ranked merges, the added tokens) and
   ;; tokenizer_config.json (which added tokens are BOS and EOS) -> a byte-level
-  ;; BPE tokenizer of the pre-tokenizer KIND the architecture row names.
+  ;; BPE tokenizer of the pre-tokenizer kind the file describes (FALLBACK-KIND,
+  ;; the architecture row's, when it describes one this file cannot name), or
+  ;; nil when the file is not byte-level BPE.
   (let* ((json (json-parse-file (concatenate 'string dir "tokenizer.json")))
-         (config
+         (kind (hf-tokenizer-kind json fallback-kind)))
+    (and kind (load-hf-bpe-tokenizer dir json kind))))
+
+(defun load-hf-bpe-tokenizer (dir json kind)
+  (let* ((config
           (json-parse-file (concatenate 'string dir "tokenizer_config.json")))
          (vocab (gethash "vocab" (gethash "model" json)))
          (merges (gethash "merges" (gethash "model" json)))
@@ -1322,7 +1259,9 @@
         (let ((a (aref added i)))
           (setf (aref tokens (gethash "id" a)) (gethash "content" a))
           (when (gethash "special" a) (push (gethash "content" a) specials))))
-      (let ((bos (token-name (gethash "bos_token" config)))
+      (let ((bos
+             (and (hf-adds-bos-p json config)
+                  (token-name (gethash "bos_token" config))))
             (eos (token-name (gethash "eos_token" config))))
         (tokenizer:make-bpe tokens merges
          :kind kind
@@ -1337,7 +1276,12 @@
 
 (defun utf8-length (b)
   ;; The length of the sequence lead byte B starts; 1 for anything that is not
-  ;; a lead byte, so a stray byte is passed through rather than waited on.
+  ;; a lead byte, so a stray byte -- a real SentencePiece byte-fallback token
+  ;; like <0xC0> is one -- is passed through immediately rather than held
+  ;; waiting for continuation bytes that will never arrive. FRAMING, not
+  ;; decoding: it only measures how many bytes a sequence claims, it never
+  ;; assembles or inspects one (rontolisp:octets-to-string does that, once
+  ;; complete-prefix below has found where it is safe to call it).
   (cond ((< b 128) 1)
         ((< b 194) 1)
         ((< b 224) 2)
@@ -1361,7 +1305,7 @@
     (when (> k 0)
       (let ((bytes (make-array k :element-type '(unsigned-byte 8))))
         (dotimes (i k) (setf (aref bytes i) (aref pending i)))
-        (write-string (rontolisp::%octets-to-string bytes)))
+        (write-string (rontolisp:octets-to-string bytes)))
       (dotimes (i (- n k)) (setf (aref pending i) (aref pending (+ k i))))
       (setf (fill-pointer pending) (- n k)))))
 
@@ -1603,7 +1547,7 @@
 
 (defun forward (model state token pos)
   ;; -> the logits over the vocabulary
-  (let ((x (linalg:row (getf model :emb) token))
+  (let ((x (embedding-row (getf model :emb) token (getf model :dim)))
         (layers (getf model :layers))
         (emb-mult (getf model :emb-mult))
         (logit-mult (getf model :logit-mult)))
@@ -1717,6 +1661,12 @@
                       :adjustable t))
          (start nil)
          (pos 0))
+    ;; run.c prints each token as it is fed back in, which never shows the
+    ;; first one -- BOS, in every prompt it sees. A tokenizer that adds no BOS
+    ;; (SmolLM2, Qwen) starts the prompt with a word, which is echoed here.
+    (unless (or (eql token (tokenizer:bos-id tk)) (string= *mode* "chat"))
+      (push-token-bytes pending tk token nil)
+      (print-complete pending))
     (loop while (< pos steps)
           do
             (let* ((logits (forward model state token pos))
@@ -1725,7 +1675,7 @@
               (setq pos (+ pos 1))
               (when *trace*
                 (format *error-output* "~a:~a ~s~%" pos next
-                        (rontolisp::%octets-to-string
+                        (rontolisp:octets-to-string
                          (coerce (tokenizer:decode-bytes tk (list next))
                                  '(vector (unsigned-byte 8))))))
               ;; a stop token ends the answer -- when the model produced it; the
@@ -1753,22 +1703,30 @@
     (setq *steps* (getf model :seq-len)))
   (let* ((dir (checkpoint-directory *checkpoint*))
          (tk
-          (cond ((and (getf model :gguf-tokenizer) (null (flag-value "-z")))
-                 (load-gguf-tokenizer model))
-                ((and dir (null (flag-value "-z")) (getf model :tokenizer)
+          (or (cond ((and (getf model :gguf-tokenizer) (null (flag-value "-z")))
+                     (load-gguf-tokenizer model))
+                    ((and dir (null (flag-value "-z"))
                       (probe-file (concatenate 'string dir "tokenizer.json")))
-                 (load-hf-tokenizer dir (getf model :tokenizer)))
-                (t (load-tokenizer *tokenizer* (getf model :vocab)))))
+                     ;; nil for a SentencePiece tokenizer.json (TinyLlama):
+                     ;; that one is tokenizer.bin's shape
+                     (load-hf-tokenizer dir (getf model :tokenizer)))
+                    (t nil)) (load-tokenizer *tokenizer* (getf model :vocab))))
+         (template
+          ;; the family's, or ChatML for a checkpoint whose vocabulary has
+          ;; its turn marker (SmolLM2 is model_type llama, and llama has none)
+          (or (getf model :chat)
+              (and (tokenizer:token-id tk "<|im_start|>") *chatml*)))
          (prompt
-          (if (and (string= *mode* "chat") (getf model :chat))
-              (format nil (getf model :chat) *prompt*)
+          (if (and (string= *mode* "chat") template)
+              (format nil template *prompt*)
               *prompt*))
          (state (make-state model)))
     (format *error-output*
-            "loaded ~a: dim=~a hidden=~a layers=~a heads=~a kv-heads=~a vocab=~a seq-len=~a in ~a ms (tokenizer + kv cache ~a ms)~%"
+            "loaded ~a: dim=~a hidden=~a layers=~a heads=~a kv-heads=~a vocab=~a seq-len=~a weights=~a in ~a ms (tokenizer + kv cache ~a ms)~%"
             *checkpoint* (getf model :dim) (getf model :hidden)
             (getf model :n-layers) (getf model :n-heads)
             (getf model :n-kv-heads) (getf model :vocab) (getf model :seq-len)
-            (- t1 t0) (- (get-internal-real-time) t1))
+            (array-element-type (getf model :wcls)) (- t1 t0)
+            (- (get-internal-real-time) t1))
     (setq *rng-state* (logand *seed* +mask64+))
     (generate model state tk prompt *steps*)))

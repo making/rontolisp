@@ -458,6 +458,8 @@ categories:
       - { slug: rontolisp-dequantize, name: "rontolisp:dequantize" }
       - { slug: rontolisp-make-quantized-matrix, name: "rontolisp:make-quantized-matrix" }
       - { slug: rontolisp-quantized-matrix-p, name: "rontolisp:quantized-matrix-p" }
+      - { slug: rontolisp-octets-to-string, name: "rontolisp:octets-to-string" }
+      - { slug: rontolisp-string-to-octets, name: "rontolisp:string-to-octets" }
       - { slug: rontolisp-make-mutex, name: "rontolisp:make-mutex" }
       - { slug: rontolisp-mutex-acquire, name: "rontolisp:mutex-acquire" }
       - { slug: rontolisp-mutex-release, name: "rontolisp:mutex-release" }

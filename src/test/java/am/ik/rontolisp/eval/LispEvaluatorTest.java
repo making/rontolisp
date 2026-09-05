@@ -1607,6 +1607,59 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSubseqOfAStringIsByCodePointAndFollowsAView() {
+		// A supplementary code point is ONE index step on both bounds.
+		assertThat(eval("(subseq \"a\uD83D\uDE00b\uD83D\uDE00c\" 1 4)"))
+			.isEqualTo(new LispString("\uD83D\uDE00b\uD83D\uDE00"));
+		// A fill pointer is the string's length, so subseq sees only the active prefix.
+		assertThat(evalMulti("""
+				(defvar *v* (make-array 8 :element-type 'character :fill-pointer 0))
+				(dolist (c '(#\\a #\\b #\\c)) (vector-push-extend c *v*))
+				(subseq *v* 1)
+				""")).isEqualTo(new LispString("bc"));
+		// A displaced view resolves through to its target's CURRENT buffer.
+		assertThat(evalMulti("""
+				(defvar *target* (make-string 6 :initial-element #\\a))
+				(replace *target* "abcdef")
+				(defvar *view* (make-array 4 :element-type 'character :displaced-to *target*
+				                           :displaced-index-offset 1))
+				(setf (aref *target* 2) #\\Z)
+				(subseq *view* 1 3)
+				""")).isEqualTo(new LispString("Zd"));
+	}
+
+	// Cutting a piece out of a string may not cost the STRING's length: subseq used to
+	// render the whole code-point buffer into a java.lang.String and then substring it,
+	// so a parser that cuts one token out of a long document per step was quadratic in
+	// the document -- rontolisp:json-parse over a 10.8 million character tokenizer.json
+	// took hours on the interpreter (.kb/string-index-cost.md). Both halves below do the
+	// SAME 8,192 one-character cuts; only the string they cut from differs in length.
+	@Test
+	void evalSubseqDoesNotRenderTheWholeStringItCutsFrom() {
+		String output = evalMulti("""
+				(defun cut-head (s n)
+				  (let ((total 0))
+				    (dotimes (i n) (setq total (+ total (length (subseq s 0 1)))))
+				    total))
+				(defvar *short* "%s")
+				(defvar *long* "%s")
+				(cut-head *short* 64)
+				(let ((t0 (get-internal-real-time)))
+				  (cut-head *long* 8192)
+				  (let ((t1 (get-internal-real-time)))
+				    (cut-head *short* 8192)
+				    (list (- t1 t0) (- (get-internal-real-time) t1))))
+				""".formatted("x".repeat(256), "x".repeat(1048576))).print();
+		String[] halves = output.replace("(", "").replace(")", "").trim().split("\\s+");
+		long longString = Long.parseLong(halves[0]);
+		long shortString = Long.parseLong(halves[1]);
+		assertThat(longString)
+			.as("8,192 one-character cuts out of a 1,048,576-character string (%d ms) against "
+					+ "the same cuts out of a 256-character one (%d ms)", longString, shortString)
+			.isLessThanOrEqualTo(500 + 6 * shortString);
+	}
+
+	@Test
 	void evalSubseqList() {
 		assertThat(eval("(subseq '(1 2 3 4 5) 1 3)").print()).isEqualTo("(2 3)");
 		assertThat(eval("(subseq '(1 2 3 4 5) 2)").print()).isEqualTo("(3 4 5)");

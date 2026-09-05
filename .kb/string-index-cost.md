@@ -43,31 +43,91 @@ WHOLE vector per index.
 - **Soundness: a string's bytes never change after it is built** -- an indexed write
   rebuilds (`.kb/string-write-runtime.md`), so a cursor cannot go stale.
 
-## JVM: prove the string cannot need the walk, then remember the proof
-`JvmStringIndexRuntimeBuilder` emits `_cpoff(String, int) -> int` and
-`_scount(String) -> int`; every character index and string length reads through them. The
-proof:
+## JVM: two shapes, and a memory that keeps the expensive one
+`JvmStringIndexRuntimeBuilder` emits `_cpoff(String, int) -> int` and `_scount(String) -> int`,
+which every character index and string length reads through, plus `_cpidx(String) -> int[]`, the
+slow half they share.
+
+**Flat** -- no surrogate pair anywhere -- is decided by one comparison:
 
     s.codePointCount(1, len - 1) == len - 2      // no surrogate pair anywhere
 
 When it holds, offset is `1 + i` and count `len - 2`. The probe is CONSTANT TIME for a
-LATIN1-backed string, so every ASCII/Latin-1 string is O(1) with nothing remembered. For a
-wider string the result is remembered in two plain static fields holding the last two
-strings PROVEN surrogate-free -- safe under one-virtual-thread-per-request
-(`.kb/concurrent-served-requests.md`) because a `String` is immutable, a reference field is
-written atomically (hence not `volatile`, and a bare reference rather than a pair needing
-publication), and only the POSITIVE fact is cached. TWO entries because `%string-compare`
-steps two strings at once.
+LATIN1-backed string, so every ASCII/Latin-1 string is O(1) with nothing remembered; for a wider
+one the fact is remembered in two plain static fields (`_cpsimple0/1`).
+
+**Wide** -- one surrogate pair is enough -- has no such arithmetic and used to fall back to
+`offsetByCodePoints(1, i)` on EVERY index with nothing remembered, which is quadratic in a string
+that is otherwise pure ASCII. It gets a BREAKPOINT TABLE now, built in one pass: `t[0]` is the
+character count and `t[1 + k]` the code-unit offset of character `k << 5`, so an index walks at
+most 31 characters from the nearest breakpoint and costs the same wherever it lands. One int per
+32 characters.
+
+**How each pair is published.** The flat pair is plain: a `String` is immutable so the fact cannot
+go stale, a reference field is written atomically, only the POSITIVE fact is cached, and a miss
+costs a re-probe -- hence no `volatile`, safe under one-virtual-thread-per-request
+([[concurrent-served-requests]]). The wide pair (`_cpwide0/1`) IS volatile: a slot is an
+`Object[]{String, int[]}`, and a plain store publishes neither the second element nor the table's
+contents, so a racing reader could match the string and then read an unwritten offset -- an answer
+pointing inside the framing quote. The release fence is the publication.
+
+**The victim is the SHORTER slot, in both pairs.** What the memory buys is the walk it skips, and
+that cost is the string's LENGTH, not how recently it was touched. Under the old "shift slot0 into
+slot1" rule any two short strings touched between two indexes evicted a long one -- and a JSON
+parse is precisely that shape, one fresh short string cut out per token interleaved with every
+index into the document, so the document was re-proven at O(n) every few characters. TWO entries in
+each pair because the walks come in pairs (`%string-compare` steps two strings at once).
+
+**The assumption, stated in the open: length is a PROXY for value.** A large string indexed ONCE
+holds its slot against a smaller one indexed constantly -- index a 10 MB string once, then
+alternate hot indexing between two 1 MB strings, and the cold 10 MB entry never leaves while the
+two hot ones fight over the remaining slot; recency would have aged it out. The shape is reachable,
+the regression is bounded by the two slots, and two slots do not justify an aging policy. What to
+widen for is more than two HOT strings at once, and the state to add then is a hit count per slot,
+not a timestamp.
+
+Measured 2026-09-05 (JDK 25, this rule against the previous one, same tree):
+- `rontolisp:json-parse` over the real Qwen3.5-0.8B `tokenizer.json` -- 12,807,982 bytes,
+  10,769,328 characters, 745,102 above U+00FF and NONE astral, so the document is flat and
+  UTF16-backed -- on the JVM class output: did not finish (still inside `vocab` at 180 s, with
+  `StringUTF16.codePointCount` under `_cpoff` under `%JSON-SKIP-WS` at every sample, the frames
+  `.todo/690` reported) -> **525 ms**. The text has to arrive as a `java.lang.String` to be the
+  subject at all: `rontolisp:octets-to-string` produces one, while `uiop:read-file-string` and
+  `concatenate` produce a character vector, which reads its element and never probes.
+- One emoji in front of 30,720 digits, scanned whole against the same characters in 481-character
+  pieces: 630 ms / 14 ms -> 9 ms / 5 ms.
+
+## Cutting a piece out is an index too
+`(subseq s a b)` may not cost the STRING's length either. On the interpreter it copies the slice
+straight out of the code-point buffer (`LispString.subsequence`); it used to render the whole
+buffer into a `java.lang.String` through `value()` and then `substring` it, which cost O(length of
+s) whatever the slice's width -- so the same JSON parse was quadratic on the interpreter for a
+reason of its own. Synthetic tokenizer-shaped JSON, 2026-09-05: 88k characters 1.5 s, 178k 4.8 s,
+378k 19 s, 778k 77 s (clean N^2) -> 0.45 / 0.53 / 0.72 / 1.58 s, and the real 10,769,328-character
+`tokenizer.json` **15.7 s** (against an N^2 extrapolation of about four hours, which is why the
+report saw no first timing line in seven minutes).
+
+Whole-string consumers (`string=`, `concatenate`, `write-string`, `_equal`/`_hash`/`_print_val`)
+still render once per CALL, which is their own cost and not an index's. **Separate mechanism, not
+fixed here**: ACCUMULATING a file into a string is quadratic in its own right on the compile path
+-- `uiop:read-file-string`'s chunked `concatenate` and the `apply #'concatenate 'string` over
+`read-line` results both re-copy the accumulator per chunk, and neither reaches `json-parse` at all
+on a 12.8 MB file. Tracked as `.todo/704`.
 
 ## Costs and what is still not constant
 - WASM: **8 bytes per string** plus the bigger helper bodies (`zlib` +262 bytes at either
   `--optimize` level); `subseq`/`replace`/`search`/`position` needed no special-casing.
 - **WASM, a multi-byte string indexed randomly far from its cursor**: O(min(i, |i - ci|)).
   The fix if it matters is a stride index on the same struct, NOT walking from zero.
-- **JVM, a string containing a surrogate PAIR** still walks `offsetByCodePoints` per index;
-  a WASM-style cursor cannot hang off a `java.lang.String`.
-- **JVM, more than two wide strings interleaved** thrash the two-slot memory. Widen the
-  slot count before anything more clever.
+- **JVM, a surrogate-bearing string** costs the walk from its nearest breakpoint, at most 31
+  characters -- a constant, not the index. A WASM-style cursor cannot hang off a
+  `java.lang.String`, which is why the table lives beside it instead of in it.
+- **JVM, more than two HOT wide strings interleaved** still thrash: the memory holds two, and it
+  now keeps the two LONGEST rather than the two most recent (the assumption above). Widen the slot
+  count, with a per-slot hit count, before anything more clever.
+- **JVM, retention**: the two pairs hold up to four strings alive that the program might otherwise
+  have dropped. They are objects the program allocated itself, and the count is fixed; a
+  `WeakReference` slot would remove even that, at one `get()` per index on the hottest path.
 
 ## Pinning tests
 - ci-spec `character-vector-index-reads-the-element`,
@@ -75,9 +135,18 @@ steps two strings at once.
   orders over one mixed ASCII / 2-byte / 3-byte / astral string, then cost as `SCAN-FLAT` /
   `LENGTH-FLAT` -- 131,072 characters as ONE string against 1,024-character chunks.
   Comparing the two halves is what makes the bound machine-independent.
+- ci-spec `character-index-into-a-string-holding-a-surrogate-pair` (all four backends): the same
+  SCAN-FLAT comparison over a string with an astral character in every 16, built through
+  `rontolisp:octets-to-string` so the JVM half is an immutable string rather than a character
+  vector.
 - `JvmLispCompilerTest.compileACharacterIndexDoesNotWalk{FromTheStartOfTheString,ForANonLatin1String}`
   (the second over Hiragana, so the LATIN1 shortcut cannot carry it),
-  `#compileACharacterIndexIntoACharacterVectorReadsTheElement`.
+  `#compileACharacterIndexIntoACharacterVectorReadsTheElement`,
+  `#compileACharacterIndexIntoAStringWithASurrogatePairDoesNotWalkFromTheStart`,
+  `#compileACharacterIndexKeepsTheLongStringWhenShortOnesAreIndexedBetween` (the tokenizer.json
+  mechanism in miniature: two short strings indexed between every two indexes into a long one).
+- `LispEvaluatorTest.evalSubseqDoesNotRenderTheWholeStringItCutsFrom`,
+  `#evalSubseqOfAStringIsByCodePointAndFollowsAView`.
 - `WasmLispCompilerIntegrationTest.aCharacterIndexDoesNotDecodeFromTheStartOf{TheString,AMultiByteString}`,
   `#aStringLengthDoesNotRecountTheWholeStringOnEveryCall`,
   `#aCharacterIndexIntoACharacterVectorDoesNotRenderTheVector`.

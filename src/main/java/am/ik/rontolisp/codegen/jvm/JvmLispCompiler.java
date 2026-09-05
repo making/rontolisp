@@ -2833,6 +2833,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			.map(cp::addUtf8)
 			.toList();
 		final Utf8Constant stringIndexFieldDesc = cp.addUtf8(JvmStringIndexRuntimeBuilder.FIELD_DESC);
+		final List<Utf8Constant> stringIndexWideFieldNames = java.util.Arrays
+			.stream(JvmStringIndexRuntimeBuilder.WIDE_FIELDS)
+			.map(cp::addUtf8)
+			.toList();
+		final Utf8Constant stringIndexWideFieldDesc = cp.addUtf8(JvmStringIndexRuntimeBuilder.WIDE_FIELD_DESC);
 
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
@@ -3047,6 +3052,19 @@ public final class JvmLispCompiler implements LispCompiler {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(siName)
 						.writeU2(stringIndexFieldDesc)
+						.writeU2(0));
+				}
+				// The two breakpoint tables, for the strings that DO hold a surrogate
+				// pair. VOLATILE, unlike the pair above: each slot is an Object[]{string,
+				// table} whose table was FILLED before the slot was stored, and a plain
+				// store publishes neither the second element nor the table's contents --
+				// a racing reader could match the string and then read an unwritten
+				// offset, answering a position inside the framing quote. The release
+				// fence is the publication (.kb/string-index-cost.md).
+				for (Utf8Constant siName : stringIndexWideFieldNames) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
+						.writeU2(siName)
+						.writeU2(stringIndexWideFieldDesc)
 						.writeU2(0));
 				}
 				if (httpHandlerRuntime != null) {

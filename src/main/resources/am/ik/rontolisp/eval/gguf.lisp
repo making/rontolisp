@@ -131,28 +131,6 @@
           (setf (gguf::%rd-bytes rd) bigger)
           bigger))))
 
-(defun gguf::%utf8 (bytes n)
-  ;; The first N bytes as a string; a character is a code point on every backend.
-  (let ((chars '()) (i 0))
-    (loop while (< i n)
-          do
-            (let* ((b0 (aref bytes i))
-                   (len
-                    (cond ((< b0 128) 1) ((< b0 224) 2) ((< b0 240) 3) (t 4)))
-                   (cp
-                    (cond ((= len 1) b0)
-                          ((= len 2) (mod b0 32))
-                          ((= len 3) (mod b0 16))
-                          (t (mod b0 8)))))
-              (if (> (+ i len) n)
-                  (setq i n)
-                  (progn
-                    (dotimes (k (- len 1))
-                      (setq cp (+ (* cp 64) (mod (aref bytes (+ i 1 k)) 64))))
-                    (push (code-char cp) chars)
-                    (setq i (+ i len))))))
-    (coerce (nreverse chars) 'string)))
-
 (defun gguf::%string (rd)
   (let ((n (gguf::%u64 rd)))
     (if (= n 0)
@@ -160,7 +138,10 @@
         (let ((buf (gguf::%buffer rd n)))
           (read-sequence buf (gguf::%rd-stream rd) :end n)
           (gguf::%advance rd n)
-          (gguf::%utf8 buf n)))))
+          ;; BUF is the reused scratch buffer (gguf::%buffer), sized to at least N
+          ;; but often larger from an earlier, bigger string -- SUBSEQ trims it to
+          ;; exactly the N bytes this string owns before decoding.
+          (rontolisp:octets-to-string (subseq buf 0 n))))))
 
 (defun gguf::%skip (rd n)
   ;; Pass over N bytes: the only way past a region on a stream that cannot seek.
