@@ -292,6 +292,18 @@ component leg of `safetensors-check`), both filed 2026-09-03 and neither in a wa
     it is written about. And once upstream is the reference, no box's copy is privileged
     -- each verifies independently, and a later mismatch is a corrupt fetch rather than
     the file-versus-implementation ambiguity rule 7 was written about.
+11. **A closer must check for items waiting on an EVENT, not only for items naming its
+    number.** Rule 1 catches the forward direction -- six items closed and twelve todos
+    still reading as blocked by them. This is the same failure with the arrow reversed,
+    and **no grep finds it**: the firing item never mentions the waiting one, so grepping
+    for a number cannot surface a trigger. `.todo/682` was gated on "the first published
+    checkpoint that runs end to end". It fired THREE times -- Qwen3.5-0.8B from
+    safetensors, the same model from its GGUF, LFM2.5-1.2B on both -- and none of the
+    three noticed, because the trigger lived in 682 while the people firing it were
+    closing `677` and `678`, and 682 named neither as a dependency nor was named by them.
+    What works: **when an item's Done section describes a capability arriving for the
+    first time, grep `.todo/` for the CAPABILITY** -- the format, the model class, the
+    surface -- not for the number.
 
 ## What is deliberately not in the plan
 
