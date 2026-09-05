@@ -401,6 +401,23 @@ non-overlapping spreads, so this is the one model where halving the bytes moved 
 a little -- and it is the model with the smallest ratios of the four, since its token is
 the 622 MB tied classifier plus 28 layers of 6-13 MB matrices.
 
+### SmolLM2-360M-Instruct (rung 0), chat prompt
+
+`-m chat -i "Tell me a short story about a cat."` (18 prompt ids). Text in every run:
+"Once upon a time, in a small village nestled between rolling...". Load: f32 2.7-3.0 s,
+bf16 1.5-1.6 s.
+
+| threads | f32 tok/s | bf16 tok/s | bf16 / f32 |
+| --- | --- | --- | --- |
+| 1 | 4.19 (4.19-4.22) | 4.87 (4.75-4.97) | 1.16x |
+| 8 | 12.51 (12.48-12.60) | 14.83 (14.62-14.87) | 1.19x |
+| 16 | 14.84 (13.50-16.09) | 17.65 (17.20-18.21) | 1.19x |
+| 32 | 14.25 (14.02-14.76) | 16.91 (16.24-17.47) | 1.19x |
+
+Knee at 16 in both arms, and 32 is 4% BELOW 16 in both -- the same direction, both
+inside the 16-thread cell's spread, so a plateau and not yet the turnover `.todo/670`
+holds in reserve. The ratio is flat at 1.19x from 8 threads up.
+
 ## What the numbers should look like
 
 Estimated, not measured -- the arithmetic is here so the first real run can be checked
