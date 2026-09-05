@@ -83,6 +83,27 @@ character in a different sentence. Stated as a FACT and not a rule (`.todo/670` 
 one model, one prompt, one lane, and nobody has tried to break it. It is also NOT the
 byte-identity check `.todo/672` owes, whose subject is the quantized kernel.
 
+A comparison like this has THREE outcomes, not two, and only two of them are results:
+identical; divergent with the two prompts PROVEN to be the same token sequence; and
+divergent without that proof, which is a harness gap and says nothing about the
+arithmetic. This one is the first, and byte-identical output is itself strong evidence
+that the inputs matched -- two chat templates rendered differently would not converge on
+155 identical tokens. The prompt equality is recorded anyway, because the claim's strength
+should not have to be inferred by the reader.
+
+The prompt we feed is 18 ids:
+
+    (1 6 6423 708 52486 1123 768 3290 4161 1337 768 5641 523 7 708 6 64015 708)
+    <|startoftext|> <|im_start|> user Ċ Tell Ġme Ġa Ġshort Ġstory Ġabout Ġa Ġcat .
+    <|im_end|> Ċ <|im_start|> assistant Ċ
+
+and LFM2.5's own jinja template, read out of the GGUF's `tokenizer.chat_template`,
+renders a single user message with `add_generation_prompt` to `{{- bos_token -}}` +
+`"<|im_start|>user\n"` + content + `"<|im_end|>\n"` + `"<|im_start|>assistant\n"` --
+character for character what `*chatml*` plus `:bos t` produces here, with no system
+prompt, no tools and no think block on this family. So the two front ends agree by
+CONSTRUCTION and not only by their outputs agreeing.
+
 The Q8_0 file is still refused by name at `token_embd.weight`, as `.todo/677` recorded.
 
 **The reader-independent half written on 2026-09-03 needed no change.** The `lfm2` row,
@@ -117,9 +138,12 @@ the "a family's own name for a shape it merely shares" clause in `.kb/tokenizers
 
 - `intermediate_size` is **12288**, not 8192: it is the figure BEFORE
   `block_auto_adjust_ff_dim`, and `2/3 x 12288` rounded to `block_multiple_of` 256 is the
-  8192 the weights actually have. The GGUF states the adjusted width outright as
-  `lfm2.feed_forward_length`. This item's header said 8192 and was right about the
-  weights; the config key it named is not where that number is.
+  8192 the weights actually have. This item's header said 8192 and was right about the
+  weights; the config key it named is not where that number is. **The GGUF states the
+  ADJUSTED width outright** as `lfm2.feed_forward_length` 8192, so the two formats
+  disagree here and neither is wrong -- `config.json` records the model's hyperparameter
+  and the GGUF records the tensor shape. Do not "fix" one to match the other; the reader
+  takes the FFN width from the weights it loaded either way.
 - `vocab_size` 65536 is a PADDED table again (Qwen3.5's lesson, second model running):
   `tokenizer.json` defines 64909 ids (64400 + 509 added), and the sampler chooses among
   those.
