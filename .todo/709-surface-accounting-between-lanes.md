@@ -147,7 +147,7 @@ about whether a number is RIGHT; it makes the class of claim visible so that ove
 less to work with, which is why this direction and over-read are neighbours rather than
 duplicates.
 
-## Part 3 -- Two practices already adopted, not waiting for this item
+## Part 3 -- Three practices already adopted, not waiting for this item
 
 - **Close-outs list files touched.** In use on both sides since 2026-09-05.
 - **A step that reports success is not evidence until someone has watched it report
@@ -156,6 +156,17 @@ duplicates.
   found three defects the same way -- chasing a 39-to-38 count, reading a skip list instead
   of trusting it, hand-reviewing ambiguous hits -- **every one by looking at the OUTPUT of
   a step rather than at its exit status.**
+- **A number whose meaning is in doubt is marked in place, never reconciled or deleted.** A
+  number that is doubted and SAID to be doubted is still evidence; the same number silently
+  re-fitted, or silently removed, is not -- and the reader who needs the warning is the one
+  who was not there. In use since 2026-09-05, when `.todo/489`'s recorded f32 TinyLlama rows
+  (1.86 / 8.84, labelled "chat prompt") fell under suspicion: TinyLlama's llama row has no
+  chat template, so `-m chat` may have been timing nine prompt positions rather than
+  generation. The rows stay, with the suspicion and the reason beside them and "not
+  re-taken" stated. **This is the practice that keeps the boundary above from being an
+  excuse** -- the procedure cannot detect a harness answering the wrong question, but once a
+  human suspects one, this is what stops the evidence from being tidied away before anyone
+  can check.
 
 ## Do
 
