@@ -161,6 +161,50 @@ decides whether an earlier run still certifies a later head, and its test is the
 **Do not read the totals against any other box or any other day** -- `.todo/708`. What
 these certify is failures, errors and the report-file count.
 
+**The two tables in this file already hold the fourth consequence, and neither of us read
+it.** Pre-rename, GB10's examples slice is `39 / 0 / 0` with no skip. Post-rename, dorian's
+is `39 / 0 / 0, 3 skipped`. Same total, same zero failures; the entire difference is a skip
+count. Three `stories15M` legs stopped executing when 682 moved `workDir` to `llm`, and the
+only trace it left is a number in an adjacent cell that both of us wrote down and read past.
+
+So the skip is not silent -- the COUNT prints. What does not print is the REASON, and
+`3 skipped` is identical whether the developer never ran `download-stories15M.sh` (designed,
+harmless, exactly what `examples.yaml` promises) or has the fixtures on disk at the
+pre-rename path, in which case a leg you believe you certified did not run. **A skip count
+is only a signal against a prior skip count for the same slice**, which is why it took two
+tables in one file to see it. Do not re-run these; record that the 39s differ in what they
+covered and move on.
+
+**And it lands on the acceptance run above.** "The tree that shipped the rename had exactly
+one verification: its own 39-test acceptance slice" is worse than it reads. That slice
+returned `39 / 0 / 0`, equal to the pre-rename baseline, and the equality held while the
+COMPOSITION did not: the three legs it stopped running are the ones that load the renamed
+example's real 60 MB checkpoint -- the legs most specific to the change being accepted.
+**The rename was accepted by a run that skipped the part of the suite the rename was most
+likely to break, and the skip count saying so was in the row.** Confirmed on dorian from
+disk state, not from a re-run: at `6a319b6a` the fixtures sat in the main tree at
+`examples/llama2/` while `examples/llm/` held only `stories260K.bin` and `tok512.bin`.
+
+This is `.todo/709` Part 3's "a step that reports success is not evidence until someone has
+watched it report failure", reached by a cheaper road: nobody had to watch it fail, only to
+read its skip count against the baseline's. Where a negative control is expensive, **the
+comparison against the prior run of the same slice is the move that was available all
+along** -- and an acceptance slice, which by construction has a baseline, is exactly where
+it costs nothing.
+
+**Why the 39 held is a property of SKIP, not of passing.** Two invariances are in play and
+only one is the dangerous one. Failures and errors are invariant under the removal of any
+test that passed -- on a green run, the whole population -- and that is true of deletion and
+skipping alike. But `Tests run` is invariant under skipping ONLY: surefire counts a skipped
+test as run. Measured, not reasoned: `Tests run: 54, Failures: 0, Errors: 0, Skipped: 54 --
+in am.ik.gpu.MetalGpuTest`, a class that executes nothing and contributes its full 54.
+
+So had 682 DELETED the three legs, the row would have read `36` and the delta would have
+been sitting in the number everyone actually reads. It read `39` because they were skipped.
+**Skipping is strictly the more dangerous of the two, and it is the mode the harness chose
+for an absent fixture** -- a choice that is right for the developer it was written for and
+that hides a composition change from every reader of the total.
+
 **Why the gap existed is worth more than the numbers.** Nobody skipped a step they were
 assigned: one box ran the suite before the last change landed, the other ran an acceptance
 slice covering that change's own surface, and the COMBINATION was what nothing covered.
@@ -239,6 +283,54 @@ Real skip accounting, both boxes, 2026-09-05: dorian 276, GB10 189. Dorian-only:
 device). GB10-only: `WitOracleE2eTest` 12, `WasmReentrantE2eTest` 5 (**-17**). Net +102 --
 neither the 87 asserted nor the 111 named. `MetalGpuTest`'s 54 skip on BOTH boxes: GB10
 has CUDA, not Metal.
+
+**The 87 is commensurable, and this correction contradicted itself about that. 2026-09-05.**
+`276 - 189 = 87` is a subtraction of SKIP counts, and skips are unaffected by the
+`LispFormatterTest` contamination -- the extra worktree `.lisp` files RUN, they do not skip.
+The paragraph above says the gap "may never have needed explaining; it was a subtraction
+between two numbers that were not commensurable"; the paragraph after it says no skipped
+class on either box is worktree-sensitive, so the skip breakdown is sound. Both cannot be
+true. The incommensurability is a property of the TOTALS (9977 vs 9976) and does not reach
+the skips. **The 87 was a real gap, correctly computed, explained with the wrong two
+classes** -- that is all that was ever wrong with it.
+
+**The residual is closed: the diff is exactly 87, and the error was SELECTION, not
+arithmetic.** Both boxes' complete per-class skip censuses were compared class by class
+(dorian's 24 classes summing to 276, in `.todo/708`; GB10's 33 classes summing to 189, from
+`target/surefire-reports/`). **Seventeen classes differ, not five.** Dorian-only:
+`GpuTest` 57, `LinalgGpuTest` 40, `JvmLinalgGpuAccelCompilerTest` 22,
+`GpuOfferDifferentialTest` 1 (**+120**). GB10-only: `WitOracleE2eTest` 12,
+`WasmReentrantE2eTest` 5, `WasmHostGlueE2eTest` 4, `WasmComponentImportCompilerTest` 3 and
+nine more WASM/wit classes at 1 each (**-33**). Net **+87**, which is `276 - 189` exactly.
+`MetalGpuTest` skips 54 on BOTH boxes and cancels -- the largest term in either table and
+invisible in the difference.
+
+So the missing 15 was never a measurement problem. The old accounting named the classes
+someone **expected** to differ -- the device and two wit/wasm ones -- and the tree has
+thirteen more GB10-only WASM classes at 1-4 skips each plus one more dorian GPU class.
+**Reasoning about which classes ought to differ produced a five-term list; diffing the two
+lists produced seventeen and closed to the digit.** The diff needed no run, only two
+censuses that already existed on disk.
+
+Provenance, because the two censuses are not the certified pair: GB10's is a run at
+`21a82d97` (9849 tests, 222 reports) and dorian's is `b87aed25` (26359, 231). Their SKIP
+totals are 189 and 276, equal to the certified figures on both boxes and on both days --
+and skips are the quantity in question, so the diff stands. This is also a second,
+independent confirmation that the `LispFormatterTest` contamination does not reach the
+skips: the totals moved by 16510 between these two runs and the skip counts did not move at
+all.
+
+What was actually wrong with the original sentence, in full: it explained a real,
+correctly-computed, commensurable 87 with a five-class subset that summed to 111. One error,
+of selection, and everything this correction added on top of it -- the incommensurability
+claim and the 15 -- was mine.
+
+**An explanation that fits an adjacent quantity is the most expensive kind of wrong, because
+it closes the item.** That caution survives the closure and is the reason it is written
+here: the mechanism offered for the 15 was that the two fully-skipped classes' 111 was
+"already inside both boxes' totals". True, freshly verified, about `Tests run` -- and the 87
+is a skip gap. Had it been accepted the item would have closed at the wrong answer with a
+correct fact holding the door.
 
 **Do not compare test totals across boxes until `.todo/708` lands.** Compare failures,
 errors and report counts.
