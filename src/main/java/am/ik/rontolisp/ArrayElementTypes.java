@@ -62,6 +62,50 @@ public final class ArrayElementTypes {
 	 */
 	public static final int DEFAULT_CHARACTER = ' ';
 
+	/**
+	 * The designator spellings that upgrade to {@link #CHARACTER}. The only code with
+	 * more than one spelling, and the reason a generated dispatch tests it with
+	 * {@code member} rather than {@code eq}.
+	 */
+	public static final java.util.List<String> CHARACTER_SPELLINGS = java.util.List.of("CHARACTER", "BASE-CHAR",
+			"STANDARD-CHAR");
+
+	// Every code but T, in the order a generated dispatch should read.
+	private static final int[] SPECIALIZED = { CHARACTER, UNSIGNED_BYTE_8, UNSIGNED_BYTE_16, UNSIGNED_BYTE_32,
+			SINGLE_FLOAT, DOUBLE_FLOAT, BFLOAT16 };
+
+	/**
+	 * Every code but {@link #T}, as a bit mask -- {@code 1 << code} for each.
+	 *
+	 * <p>
+	 * <b>Derived, not transcribed.</b> A {@code make-array} whose {@code :element-type}
+	 * is a runtime value has to be turned back into literal spellings, one per code, and
+	 * that list was written out by hand in four places -- the mask, the inline lowering's
+	 * arms, and the two {@code %make-array-et*} prelude helpers. All four were documented
+	 * as covering seven codes and all four spelled six: {@code bfloat16} was missing from
+	 * the day the width landed until 2026-09-05, so a runtime designator naming it
+	 * degraded to a BOXED general array on every backend but the interpreter
+	 * ({@code .todo/487}). The set is a fact about THIS class, so every site now derives
+	 * it from {@link #specializedCodes()} and an eighth width is one entry here.
+	 */
+	public static final int ALL_SPECIALIZED_MASK = specializedMask();
+
+	private static int specializedMask() {
+		int mask = 0;
+		for (int code : SPECIALIZED) {
+			mask |= 1 << code;
+		}
+		return mask;
+	}
+
+	/**
+	 * Every code but {@link #T}, in the order a generated dispatch should read them.
+	 * @return a fresh array of the specialized codes
+	 */
+	public static int[] specializedCodes() {
+		return SPECIALIZED.clone();
+	}
+
 	private ArrayElementTypes() {
 	}
 
@@ -77,7 +121,7 @@ public final class ArrayElementTypes {
 		LispVal spec = unquote(elementType);
 		if (spec instanceof LispSymbol sym) {
 			return switch (localName(sym.name())) {
-				case "CHARACTER", "BASE-CHAR", "STANDARD-CHAR" -> CHARACTER;
+				case "CHARACTER", "BASE-CHAR", "STANDARD-CHAR" -> CHARACTER; // CHARACTER_SPELLINGS
 				case LispNames.SINGLE_FLOAT -> SINGLE_FLOAT;
 				case LispNames.DOUBLE_FLOAT -> DOUBLE_FLOAT;
 				case LispNames.BFLOAT16 -> BFLOAT16;

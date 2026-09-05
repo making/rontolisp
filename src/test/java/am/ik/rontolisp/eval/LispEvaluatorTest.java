@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
@@ -1604,6 +1605,23 @@ class LispEvaluatorTest {
 	void evalSubseq() {
 		assertThat(eval("(subseq \"hello world\" 6)")).isEqualTo(new LispString("world"));
 		assertThat(eval("(subseq \"hello world\" 0 5)")).isEqualTo(new LispString("hello"));
+	}
+
+	// The interpreter reads a make-array :element-type designator at RUN time, so a
+	// designator held in a variable and one written literally are the same call here --
+	// which is exactly why this engine is the REFERENCE the two compile paths are held
+	// against, and why the defect they had was invisible from here. Keyed to
+	// ArrayElementTypes rather than listing the widths (.todo/487).
+	@Test
+	void evalMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling() {
+		for (int code : ArrayElementTypes.specializedCodes()) {
+			String designator = ArrayElementTypes.valueOf(code).print();
+			LispVal runtime = evalMulti("(defun mk (n et) (make-array n :element-type et))\n"
+					+ "(array-element-type (mk 4 '" + designator + "))");
+			LispVal literal = eval("(array-element-type (make-array 4 :element-type '" + designator + "))");
+			assertThat(runtime.print()).as("a runtime :element-type designating %s", designator)
+				.isEqualTo(literal.print());
+		}
 	}
 
 	@Test
@@ -8745,6 +8763,36 @@ class LispEvaluatorTest {
 				  (list (read-sequence buf2 in) (aref buf2 0) (aref buf2 1) (aref buf2 2) (aref buf2 3)))
 				""".formatted(file, file));
 		assertThat(result.print()).isEqualTo("(4 65 0 10 34)");
+	}
+
+	// A #bf16 array moves as its STORED PATTERNS -- two little-endian bytes an element,
+	// which is what a BF16 safetensors or GGUF tensor holds -- so such a file loads with
+	// no conversion and writing it back reproduces the bytes. The value is chosen so a
+	// byte-swap could not pass unnoticed: bf16 0x3F80 is exactly 1.0, and the swapped
+	// 0x803F is a tiny negative denormal (.kb/bfloat16.md, .todo/487 step 3).
+	@Test
+	void readWriteSequenceMovesABfloat16ArrayAsItsStoredPatterns(@TempDir Path tempDir) {
+		String file = tempDir.resolve("bf16.dat").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(defvar *src* (make-array 3 :element-type 'bfloat16))
+				(setf (aref *src* 0) 1.0)
+				(setf (aref *src* 1) -2.0)
+				(setf (aref *src* 2) 0.5)
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8)
+				                 :if-exists :supersede)
+				  (write-sequence *src* out))
+				;; The bytes on the wire, read back as raw 16-bit words: the stored
+				;; patterns themselves, little-endian.
+				(defvar *bits* (make-array 3 :element-type '(unsigned-byte 16)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (read-sequence *bits* in))
+				(defvar *back* (make-array 3 :element-type 'bfloat16))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (list (read-sequence *back* in) (aref *bits* 0) (aref *back* 0) (aref *back* 1)
+				        (aref *back* 2)))
+				""".formatted(file, file, file));
+		assertThat(result.print()).as("bf16 1.0 is 0x3F80 = 16256; a byte swap would read 0x803F = 32831")
+			.isEqualTo("(3 16256 1.0 -2.0 0.5)");
 	}
 
 	@Test

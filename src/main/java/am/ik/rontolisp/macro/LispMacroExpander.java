@@ -29505,11 +29505,15 @@ public final class LispMacroExpander {
 	 * null
 	 * @return the bit mask of codes
 	 */
-	/** Every code but {@link ArrayElementTypes#T}, as a bit mask. */
-	private static final int ALL_SPECIALIZED_ELEMENT_TYPE_CODES = (1 << ArrayElementTypes.CHARACTER)
-			| (1 << ArrayElementTypes.UNSIGNED_BYTE_8) | (1 << ArrayElementTypes.UNSIGNED_BYTE_16)
-			| (1 << ArrayElementTypes.UNSIGNED_BYTE_32) | (1 << ArrayElementTypes.SINGLE_FLOAT)
-			| (1 << ArrayElementTypes.DOUBLE_FLOAT);
+	/**
+	 * Every code but {@link ArrayElementTypes#T}, as a bit mask -- DERIVED from
+	 * {@link ArrayElementTypes#ALL_SPECIALIZED_MASK}, never restated. A runtime
+	 * designator can name any specialized width, so a mask that omits one leaves that
+	 * width's gate off and the allocation degrades to a boxed general array; this was one
+	 * of four hand-written copies that all said seven and all spelled six
+	 * ({@code .todo/487}).
+	 */
+	private static final int ALL_SPECIALIZED_ELEMENT_TYPE_CODES = ArrayElementTypes.ALL_SPECIALIZED_MASK;
 
 	public static int makeArrayElementTypeCodes(List<LispVal> program, @Nullable ClosRegistry registry) {
 		int mask = 0;
@@ -29744,19 +29748,18 @@ public final class LispMacroExpander {
 		}
 		LispSymbol size = new LispSymbol("__mae_n");
 		LispSymbol et = new LispSymbol("__mae_et");
-		// Built from the fallthrough up, so the arms read in the order above.
+		// Built from the fallthrough up over ArrayElementTypes' OWN list of specialized
+		// codes, so the arms read in that order and an eighth width needs no edit here.
+		// A backend that cannot carry a width refuses that arm's literal designator where
+		// the representation is chosen and answers a CALL-TIME signal (WasmArrayCompiler
+		// for bfloat16), which is why spelling every width costs such a backend nothing
+		// until a program actually asks for one.
 		LispVal body = runtimeElementTypeArm(size, others, null);
-		for (int width : new int[] { 32, 16, 8 }) {
-			LispVal spec = unsignedByteSpec(width);
-			body = makeIf(mvCall(LispNames.EQUAL, et, listToCons(List.of(new LispSymbol(LispNames.QUOTE), spec))),
-					runtimeElementTypeArm(size, others, spec), body);
+		int[] codes = ArrayElementTypes.specializedCodes();
+		for (int i = codes.length - 1; i >= 0; i--) {
+			body = makeIf(runtimeElementTypeTest(et, codes[i]),
+					runtimeElementTypeArm(size, others, ArrayElementTypes.valueOf(codes[i])), body);
 		}
-		for (String floatName : new String[] { LispNames.DOUBLE_FLOAT, LispNames.SINGLE_FLOAT }) {
-			body = makeIf(mvCall(LispNames.EQ_GENERAL, et, quoteOf(floatName)),
-					runtimeElementTypeArm(size, others, new LispSymbol(floatName)), body);
-		}
-		body = makeIf(memberOfTypeNames(et, "CHARACTER", "BASE-CHAR", "STANDARD-CHAR"),
-				runtimeElementTypeArm(size, others, new LispSymbol(LispNames.CHARACTER_TYPE)), body);
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(size, parts.get(1))), listToCons(List.of(et, elementType))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
@@ -29909,6 +29912,25 @@ public final class LispMacroExpander {
 	 * call with the size bound to a temporary and the {@code :element-type} spelled as a
 	 * literal (or dropped entirely for the general {@code t} arm).
 	 */
+	/**
+	 * The test one generated arm of the runtime-{@code :element-type} dispatch uses:
+	 * {@code member} over {@link ArrayElementTypes#CHARACTER_SPELLINGS} for the one code
+	 * with several spellings, {@code equal} for a compound designator like
+	 * {@code (unsigned-byte 8)}, {@code eq} for a plain type-name symbol. The SHAPE of
+	 * {@link ArrayElementTypes#valueOf} decides which, so a new code needs no case here.
+	 * @param et the symbol holding the runtime designator
+	 * @param code the specialized element-type code this arm serves
+	 * @return the test expression
+	 */
+	private static LispVal runtimeElementTypeTest(LispSymbol et, int code) {
+		if (code == ArrayElementTypes.CHARACTER) {
+			return memberOfTypeNames(et, ArrayElementTypes.CHARACTER_SPELLINGS.toArray(new String[0]));
+		}
+		LispVal spec = ArrayElementTypes.valueOf(code);
+		LispVal quoted = listToCons(List.of(new LispSymbol(LispNames.QUOTE), spec));
+		return mvCall(spec instanceof LispCons ? LispNames.EQUAL : LispNames.EQ_GENERAL, et, quoted);
+	}
+
 	private static LispVal runtimeElementTypeArm(LispSymbol size, List<LispVal> others,
 			@Nullable LispVal elementTypeSpec) {
 		List<LispVal> call = new java.util.ArrayList<>();

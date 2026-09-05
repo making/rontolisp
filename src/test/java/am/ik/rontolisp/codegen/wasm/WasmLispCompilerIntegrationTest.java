@@ -269,6 +269,47 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("T\n".repeat(17) + "T");
 	}
 
+	// A make-array whose :element-type is a RUNTIME value has to answer what the LITERAL
+	// spelling answers, on every code -- including the ones this backend refuses, where
+	// "the same answer" is the same refusal. The widths come FROM ArrayElementTypes
+	// rather than being listed: four hand-written copies of that list existed, all
+	// documented as covering seven codes and all spelling six, and the copy that mattered
+	// most was this backend's, because WasmArrayCompiler refuses the LITERAL bfloat16
+	// spelling precisely so an unrefused request cannot fall through to a boxed general
+	// array -- and the runtime designator walked around that guard and answered the boxed
+	// array anyway, a wrong number rather than a refusal (.todo/487).
+	@Test
+	void aRuntimeElementTypeDesignatorAnswersWhatTheLiteralSpellingAnswers() throws Exception {
+		for (int code : am.ik.rontolisp.ArrayElementTypes.specializedCodes()) {
+			String designator = am.ik.rontolisp.ArrayElementTypes.valueOf(code).print();
+			String runtime = runElementTypeProbe(
+					"(defun mk (n et) (make-array n :element-type et))\n(print (array-element-type (mk 4 '" + designator
+							+ ")))");
+			String literal = runElementTypeProbe(
+					"(print (array-element-type (make-array 4 :element-type '" + designator + ")))");
+			assertThat(runtime).as("a runtime :element-type designating %s", designator).isEqualTo(literal);
+		}
+	}
+
+	// The probe's answer, or "refused" when the backend declines the width -- at compile
+	// time (an UnsupportedOperationException) or at the call (a non-zero exit). Both are
+	// legitimate answers for a width this backend does not carry; what is not legitimate
+	// is one spelling answering a value and the other refusing.
+	private static String runElementTypeProbe(String lispCode) throws Exception {
+		byte[] wasmBytes;
+		try {
+			wasmBytes = new WasmLispCompiler()
+				.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+		}
+		catch (UnsupportedOperationException refused) {
+			return "refused";
+		}
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
+				path("test.wasm"));
+		return result.getExitCode() == 0 ? result.getStdout().trim() : "refused";
+	}
+
 	private static String compileAndRunProgram(List<LispVal> program) throws Exception {
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));

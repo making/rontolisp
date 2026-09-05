@@ -123,6 +123,23 @@ slot it already had, so no array grew:
 **Invariant: `(make-array n :element-type et)` with `et` a VALUE builds what the literal
 spelling of that value would build on all four backends — representation, remembered element
 type and zero fill.**
+- **The arm set is DERIVED from `ArrayElementTypes`, never restated.** It used to be written
+  out by hand in four places — the program-scan mask, the inline lowering's arms, and the two
+  `%make-array-et*` helper sources — and all four were documented as covering seven codes while
+  spelling six. `bfloat16` was missing from every one of them from the day the width landed
+  until 2026-09-05, so a runtime designator naming it built a BOXED general array on every
+  backend but the interpreter, whose `make-array` reads the designator at run time and was
+  therefore the one engine that could not see the defect (`.todo/487`). All four now read
+  `ArrayElementTypes.specializedCodes()` / `ALL_SPECIALIZED_MASK`; an eighth width is one entry
+  in that class. **Count arms against the class, never against a sentence.**
+- **The wasm case is why it mattered.** `WasmArrayCompiler` refuses the LITERAL
+  `:element-type 'bfloat16` at the point the representation is chosen, with a comment saying it
+  exists so that "an unrefused request falls through to the general BOXED array below and the
+  program answers different numbers here than on the interpreter — a wrong number rather than a
+  crash". The runtime-designator path reached the same allocation by another route and walked
+  around the guard, producing exactly that wrong number. **A guard on one spelling of an
+  operation is not a guard**: the next width added must be refused where the REPRESENTATION is
+  chosen, which both spellings pass through, not where one of them is written.
 - **The dispatch is a PRELUDE HELPER, not an inline expansion**: wasm emits `make-array`
   entirely inline and seven arms cost ~1.3 KB per site (array-operations +32.6% inline vs
   +0.50% via the helper). A program with no runtime designator is unchanged.
@@ -167,7 +184,17 @@ where the JVM's is an `invokestatic` on a body emitted once.
 ci-spec `array-literal-freshness-cross-backend`, `rank-zero-arrays-cross-backend`,
 `character-element-type-above-rank-one`, `general-array-remembers-its-element-type`,
 `runtime-element-type-make-array`, `runtime-element-type-deftype-alias`, `packed-float-*`,
-`packed-single-float-*`, `setf-elt-cross-backend`. `LispEvaluatorTest`
+`packed-single-float-*`, `setf-elt-cross-backend`.
+**The runtime-vs-literal pins are keyed to `ArrayElementTypes.specializedCodes()`, never to a
+list of widths** — a hand-written list of seven would be a fifth transcription with a green tick
+on it: `LispPreludeLibraryTest#bothMakeArrayElementTypeHelpersCoverEverySpecializedCode` (both
+generated helpers carry an arm per code),
+`LispEvaluatorTest#evalMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling` (the
+reference engine), `JvmLispCompilerTest#compileAndRunMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling`
+(both lowerings: through the helper and with the arms inline),
+`WasmLispCompilerIntegrationTest#aRuntimeElementTypeDesignatorAnswersWhatTheLiteralSpellingAnswers`
+(where a width the backend refuses must be refused through BOTH spellings, not answered by one).
+`LispEvaluatorTest`
 (`everyArrayLiteralSyntaxIsFreshAtEveryEvaluation`,
 `writingThroughAnArrayLiteralDoesNotReachTheNextEvaluation`,
 `anArrayNestedInAnArrayLiteralIsFreshToo`, `rank2ArrayLiteralIsMutable`,

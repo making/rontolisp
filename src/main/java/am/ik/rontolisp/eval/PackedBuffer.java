@@ -1,6 +1,7 @@
 package am.ik.rontolisp.eval;
 
 import am.ik.rontolisp.FloatArrayAccessHook;
+import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
@@ -15,9 +16,17 @@ import org.jspecify.annotations.Nullable;
 /**
  * The packed buffers {@code %read-sequence-packed} / {@code %write-sequence-packed} move
  * in bulk, viewed as a flat row-major element sequence of a fixed byte width: a packed
- * float array of any rank (f32 = 4 bytes, f64 = 8 bytes) or a packed
+ * float array of any rank (f32 = 4 bytes, f64 = 8 bytes, bfloat16 = 2 bytes) or a packed
  * {@code (unsigned-byte 8|16|32)} vector (1 / 2 / 4 bytes). Elements are little-endian on
  * the wire.
+ *
+ * <p>
+ * A {@code bfloat16} array's element on the wire is its STORED PATTERN -- the top sixteen
+ * bits of an f32, the two bytes a BF16 safetensors or GGUF tensor holds -- so a bf16 file
+ * reads into a bf16 array in ONE transfer with no conversion at all, and writing it back
+ * reproduces the file byte for byte, signalling NaN payloads included. It is deliberately
+ * NOT the widened f32: a width that converted on the wire could not round-trip
+ * ({@code .kb/bfloat16.md}, {@code .todo/487} step 3).
  *
  * <p>
  * {@code objc:data} / {@code objc:bytes} hand the same bytes to Objective-C
@@ -43,6 +52,9 @@ record PackedBuffer(LispVal value, int width, int size) {
 		}
 		if (value instanceof LispDoubleFloatArray d) {
 			return new PackedBuffer(d, 8, d.totalSize());
+		}
+		if (value instanceof LispBFloat16Array b) {
+			return new PackedBuffer(b, 2, b.totalSize());
 		}
 		if (value instanceof LispIntVector iv) {
 			return new PackedBuffer(iv, iv.width() / 8, iv.length());
@@ -100,6 +112,8 @@ record PackedBuffer(LispVal value, int width, int size) {
 				bytes.asFloatBuffer().get((float[]) FloatArrayAccessHook.written(f.storage()), start, n);
 			case LispDoubleFloatArray d ->
 				bytes.asDoubleBuffer().get((double[]) FloatArrayAccessHook.written(d.storage()), start, n);
+			case LispBFloat16Array b ->
+				bytes.asShortBuffer().get((short[]) FloatArrayAccessHook.written(b.storage()), start, n);
 			case LispIntVector iv -> {
 				long[] data = iv.data();
 				for (int k = 0; k < n; k++) {
@@ -119,6 +133,7 @@ record PackedBuffer(LispVal value, int width, int size) {
 		switch (this.value) {
 			case LispSingleFloatArray f -> bytes.asFloatBuffer().put(f.data(), start, n);
 			case LispDoubleFloatArray d -> bytes.asDoubleBuffer().put(d.data(), start, n);
+			case LispBFloat16Array b -> bytes.asShortBuffer().put(b.data(), start, n);
 			case LispIntVector iv -> {
 				long[] data = iv.data();
 				for (int k = 0; k < n; k++) {

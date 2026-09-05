@@ -49,5 +49,32 @@ that does not, on one backend and not the other.
 3. Retire `checkpoint:make-tensor`'s assertion only if the dispatch signals itself; until
    then it stays.
 
-Not to be worked inside `.todo/675` or `.todo/489`: the instance is fixed there, the
+Not to be worked inside `.todo/675` or `.todo/489`: the instance is fixed elsewhere, the
 mechanism is this item.
+
+## 2026-09-05: the instance is closed, and the evidence for the mechanism is stronger
+
+Closed under `.todo/487`'s remainder, not `.todo/675`'s -- 487 owns the width's reach and
+its census is what found the cause. **The bf16 case was never "unknown".** The closed code
+space is right and `ArrayElementTypes.codeOf` / `valueOf` handle `bfloat16` correctly; what
+was wrong is that the arm list the runtime dispatch needs had been TRANSCRIBED four times
+(the program-scan mask, the inline lowering's arms, `%make-array-et`, `%make-array-et-fp`),
+each copy documented as covering seven codes and each spelling six. Known-and-untranscribed,
+not unknown. All four derive from `ArrayElementTypes.specializedCodes()` now, and the pins
+are keyed to that method on all three engines rather than listing widths.
+
+So this item's question is untouched and its scope unchanged: **a designator that genuinely
+IS unknown still answers a boxed general array and signals nothing.** `'single-flaot` still
+builds a working array that is quietly general. Two things the instance added to the case
+for signalling:
+
+- The wasm reading is worse than "silently general". `WasmArrayCompiler` refuses the LITERAL
+  `:element-type 'bfloat16` at the point the representation is chosen, with a comment saying
+  it exists so an unrefused request cannot fall through to a boxed array and answer different
+  numbers than the interpreter. The runtime designator reached the same allocation by another
+  route and produced exactly that. A refusal that only one spelling passes through is not a
+  refusal -- which is an argument for putting the check where the REPRESENTATION is chosen,
+  the shape step 1 below is weighing.
+- The defect was invisible from the interpreter, which reads the designator at run time and
+  answers correctly both ways. Any decision here has to be checked on a compile backend;
+  the reference engine cannot see this class of divergence at all.

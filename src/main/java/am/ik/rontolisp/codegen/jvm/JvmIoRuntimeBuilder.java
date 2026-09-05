@@ -687,22 +687,25 @@ final class JvmIoRuntimeBuilder {
 	 * buffer, so every other artifact keeps its original bytes.
 	 */
 	private record PackedSequenceIo(ClassConstant floatArrayClass, ClassConstant doubleArrayClass,
-			ClassConstant longArrayClass, ClassConstant byteBufferClass, MethodrefConstant readNBytes,
-			MethodrefConstant byteBufferWrap, MethodrefConstant byteBufferOrder, FieldrefConstant littleEndian,
-			MethodrefConstant asFloatBuffer, MethodrefConstant asDoubleBuffer, MethodrefConstant floatBufferGet,
-			MethodrefConstant doubleBufferGet, MethodrefConstant floatBufferPut, MethodrefConstant doubleBufferPut,
-			MethodrefConstant bbGet, MethodrefConstant bbGetShort, MethodrefConstant bbGetInt, MethodrefConstant bbPut,
-			MethodrefConstant bbPutShort, MethodrefConstant bbPutInt, MethodrefConstant outputStreamWriteBytes,
-			StringConstant boundsMessage, ClassConstant byteArrayClass, MethodrefConstant qmInt,
-			MethodrefConstant bbGetBytes, MethodrefConstant bbPutBytes) {
+			ClassConstant shortArrayClass, ClassConstant longArrayClass, ClassConstant byteBufferClass,
+			MethodrefConstant readNBytes, MethodrefConstant byteBufferWrap, MethodrefConstant byteBufferOrder,
+			FieldrefConstant littleEndian, MethodrefConstant asFloatBuffer, MethodrefConstant asDoubleBuffer,
+			MethodrefConstant asShortBuffer, MethodrefConstant floatBufferGet, MethodrefConstant doubleBufferGet,
+			MethodrefConstant shortBufferGet, MethodrefConstant floatBufferPut, MethodrefConstant doubleBufferPut,
+			MethodrefConstant shortBufferPut, MethodrefConstant bbGet, MethodrefConstant bbGetShort,
+			MethodrefConstant bbGetInt, MethodrefConstant bbPut, MethodrefConstant bbPutShort,
+			MethodrefConstant bbPutInt, MethodrefConstant outputStreamWriteBytes, StringConstant boundsMessage,
+			ClassConstant byteArrayClass, MethodrefConstant qmInt, MethodrefConstant bbGetBytes,
+			MethodrefConstant bbPutBytes) {
 
 		static PackedSequenceIo mint(ConstantPool cp, ClassConstant thisClass) {
 			ClassConstant byteBuffer = cp.addClass(cp.addUtf8("java/nio/ByteBuffer"));
 			ClassConstant floatBuffer = cp.addClass(cp.addUtf8("java/nio/FloatBuffer"));
 			ClassConstant doubleBuffer = cp.addClass(cp.addUtf8("java/nio/DoubleBuffer"));
+			ClassConstant shortBuffer = cp.addClass(cp.addUtf8("java/nio/ShortBuffer"));
 			ClassConstant byteOrder = cp.addClass(cp.addUtf8("java/nio/ByteOrder"));
 			return new PackedSequenceIo(cp.addClass(cp.addUtf8("[F")), cp.addClass(cp.addUtf8("[D")),
-					cp.addClass(cp.addUtf8("[J")), byteBuffer,
+					cp.addClass(cp.addUtf8("[S")), cp.addClass(cp.addUtf8("[J")), byteBuffer,
 					cp.addMethodref(cp.addClass(cp.addUtf8("java/io/InputStream")),
 							cp.addNameAndType(cp.addUtf8("readNBytes"), cp.addUtf8("(I)[B"))),
 					cp.addMethodref(byteBuffer,
@@ -716,14 +719,20 @@ final class JvmIoRuntimeBuilder {
 							cp.addNameAndType(cp.addUtf8("asFloatBuffer"), cp.addUtf8("()Ljava/nio/FloatBuffer;"))),
 					cp.addMethodref(byteBuffer,
 							cp.addNameAndType(cp.addUtf8("asDoubleBuffer"), cp.addUtf8("()Ljava/nio/DoubleBuffer;"))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("asShortBuffer"), cp.addUtf8("()Ljava/nio/ShortBuffer;"))),
 					cp.addMethodref(floatBuffer,
 							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([FII)Ljava/nio/FloatBuffer;"))),
 					cp.addMethodref(doubleBuffer,
 							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([DII)Ljava/nio/DoubleBuffer;"))),
+					cp.addMethodref(shortBuffer,
+							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([SII)Ljava/nio/ShortBuffer;"))),
 					cp.addMethodref(floatBuffer,
 							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([FII)Ljava/nio/FloatBuffer;"))),
 					cp.addMethodref(doubleBuffer,
 							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([DII)Ljava/nio/DoubleBuffer;"))),
+					cp.addMethodref(shortBuffer,
+							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([SII)Ljava/nio/ShortBuffer;"))),
 					cp.addMethodref(byteBuffer, cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()B"))),
 					cp.addMethodref(byteBuffer, cp.addNameAndType(cp.addUtf8("getShort"), cp.addUtf8("()S"))),
 					cp.addMethodref(byteBuffer, cp.addNameAndType(cp.addUtf8("getInt"), cp.addUtf8("()I"))),
@@ -2876,6 +2885,54 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.GOTO);
 		emitU2(code, 0);
 		patchBranch(code, ifNotDouble, code.size());
+		// else if (seq instanceof short[]) { base = 1 + 2 * (int) seq[0]; width = 2; ...
+		// }
+		// The bfloat16 width's header takes TWO slots per dimension, because a dimension
+		// is an int and a short caps at 32767 (JvmPackedFloatWidth.BFLOAT16) -- the one
+		// place in this method where the data offset is not 1 + rank. An element on the
+		// wire is the stored pattern itself, so a BF16 tensor reads in with no conversion
+		// (.kb/bfloat16.md, .todo/487 step 3).
+		//
+		// UNGATED, unlike the quantized arm below: this arm and its transfer twin are
+		// ~45 bytes together, they are emitted only for a program that already does
+		// packed bulk I/O, and the scan that would gate them cannot see a bf16 array
+		// arriving as a PARAMETER -- the hole the usesFloat16Bits comment in
+		// JvmLispCompiler describes, where the author forced the gate on for the same
+		// reason. A gate that guessed wrong would not signal: it would decline into the
+		// element loop and read a whole tensor one boxed element at a time.
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, io.shortArrayClass().index());
+		int ifNotShort = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.shortArrayClass().index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.SALOAD);
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.IMUL);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.IADD);
+		code.add(Opcode.ISTORE);
+		code.add(BASE);
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.ISTORE);
+		code.add(WIDTH);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.shortArrayClass().index());
+		code.add(Opcode.ARRAYLENGTH);
+		code.add(Opcode.ILOAD);
+		code.add(BASE);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.ISTORE);
+		code.add(SIZE);
+		int gotoShaped2b = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotShort, code.size());
 		// else if (seq instanceof long[]) { base = 1; width = (int) seq[0] / 8; size =
 		// len - 1 }
 		code.add(Opcode.ALOAD_0);
@@ -2955,6 +3012,7 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.ARETURN);
 		patchBranch(code, gotoShaped1, code.size());
 		patchBranch(code, gotoShaped2, code.size());
+		patchBranch(code, gotoShaped2b, code.size());
 		patchBranch(code, gotoShaped3, code.size());
 		if (gotoShaped4 >= 0) {
 			patchBranch(code, gotoShaped4, code.size());
@@ -3178,6 +3236,32 @@ final class JvmIoRuntimeBuilder {
 			emitU2(code, 0);
 			patchBranch(code, ifNotByte2, code.size());
 		}
+		// else if (seq instanceof short[]) bb.asShortBuffer().get/put((short[]) seq,
+		// base + s, n) -- the bfloat16 width moves as its stored patterns, in one bulk
+		// transfer like the two f32/f64 arms above and unlike the long[] element loop.
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, io.shortArrayClass().index());
+		int ifNotShort2 = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD);
+		code.add(BB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, io.asShortBuffer().index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.shortArrayClass().index());
+		emitBasePlusS(code, BASE, S);
+		code.add(Opcode.ILOAD);
+		code.add(N);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, (read ? io.shortBufferGet() : io.shortBufferPut()).index());
+		code.add(Opcode.POP);
+		int gotoMoved2b = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotShort2, code.size());
 		// else (long[]): for (k = 0; k < n; k++) one element of the width
 		code.add(Opcode.ICONST_0);
 		code.add(Opcode.ISTORE);
@@ -3282,6 +3366,7 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, ifLoopDone, code.size());
 		patchBranch(code, gotoMoved1, code.size());
 		patchBranch(code, gotoMoved2, code.size());
+		patchBranch(code, gotoMoved2b, code.size());
 		if (gotoMoved3 >= 0) {
 			patchBranch(code, gotoMoved3, code.size());
 		}

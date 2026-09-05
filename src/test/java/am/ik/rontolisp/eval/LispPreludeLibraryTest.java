@@ -2,7 +2,9 @@ package am.ik.rontolisp.eval;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
+import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -36,6 +38,58 @@ class LispPreludeLibraryTest {
 			return name.name();
 		}
 		return null;
+	}
+
+	// The two %make-array-et* helpers turn a RUNTIME :element-type designator back into
+	// literal spellings, one arm per specialized code, because every backend but the
+	// interpreter decides an array's representation from the literal designator at the
+	// call site. The set of arms is a fact about ArrayElementTypes, and this test asks
+	// the ENUM rather than listing the widths: a hand-written list of seven would be a
+	// fifth transcription with a green tick on it. Four such transcriptions existed --
+	// these two helpers, the inline lowering and the program-scan mask -- all documented
+	// as covering seven codes and all spelling six, so bfloat16 through a runtime
+	// designator degraded to a boxed general array everywhere but the interpreter
+	// (.todo/487).
+	@Test
+	void bothMakeArrayElementTypeHelpersCoverEverySpecializedCode() {
+		// Each helper is selected by the call SHAPE: the -fp twin only by a site that
+		// also spells :fill-pointer / :adjustable.
+		Map<String, String> probes = Map.of("%MAKE-ARRAY-ET", "(defun f (n et) (make-array n :element-type et))",
+				"%MAKE-ARRAY-ET-FP", "(defun f (n et) (make-array n :element-type et :fill-pointer 0 :adjustable t))");
+		for (String helper : probes.keySet()) {
+			List<LispVal> spliced = LispPreludeLibrary.process(LispReader.readAllFromString(probes.get(helper)));
+			LispVal defun = spliced.stream().filter(v -> helper.equals(definitionName(v))).findFirst().orElse(null);
+			assertThat(defun).as("%s must be spliced for a runtime :element-type site", helper).isNotNull();
+			List<String> designators = new ArrayList<>();
+			collectElementTypeDesignators(defun, designators);
+			for (int code : ArrayElementTypes.specializedCodes()) {
+				assertThat(designators)
+					.as("%s must carry an arm allocating %s -- the arms are generated from "
+							+ "ArrayElementTypes.specializedCodes(), so a missing one means the "
+							+ "generator stopped agreeing with the code space", helper,
+							ArrayElementTypes.valueOf(code).print())
+					.contains(ArrayElementTypes.valueOf(code).print());
+			}
+		}
+	}
+
+	// Every (quote <designator>) that follows an :element-type keyword in the form,
+	// printed. The helper's arms are the only place one appears in it.
+	private static void collectElementTypeDesignators(LispVal form, List<String> out) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		for (int i = 0; i + 1 < parts.size(); i++) {
+			if (parts.get(i) instanceof LispSymbol kw && ":ELEMENT-TYPE".equals(kw.name())
+					&& parts.get(i + 1) instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+					&& "QUOTE".equals(q.name()) && quoted.cdr() instanceof LispCons rest) {
+				out.add(rest.car().print());
+			}
+		}
+		for (LispVal part : parts) {
+			collectElementTypeDesignators(part, out);
+		}
 	}
 
 	@Test

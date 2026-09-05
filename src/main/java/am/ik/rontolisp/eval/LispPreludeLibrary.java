@@ -6,7 +6,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispPackageException;
 import am.ik.rontolisp.LispSymbol;
@@ -898,7 +900,13 @@ public final class LispPreludeLibrary {
 		// Every backend but the interpreter decides an array's representation from the
 		// literal designator at the call site, so a designator held in a variable has to
 		// be turned back into a literal one -- which means spelling out the whole upgrade
-		// space, all seven ArrayElementTypes codes. Doing that AT each call site costs
+		// space, all seven ArrayElementTypes codes. SEVEN: this comment said seven while
+		// the cond spelled six from the day bfloat16 landed until 2026-09-05, so a
+		// runtime designator naming that width degraded to a BOXED general array on
+		// every backend but the interpreter -- and on wasm walked straight past the
+		// refusal WasmArrayCompiler puts on the literal spelling for exactly that reason
+		// (.todo/487). Count the arms against ArrayElementTypes, never against this
+		// sentence. Doing that AT each call site costs
 		// ~1.3 KB of wasm per site (measured; .kb/array-literals.md), and
 		// array-operations alone has 21 of them, so the arms live here instead and every
 		// site becomes one call. Each arm's literal spelling is what the backends'
@@ -906,63 +914,17 @@ public final class LispPreludeLibrary {
 		// carries the remembered element type and its zero fill where it degrades. The
 		// unsupplied element is the arm's OWN zero, which is why %mae-given is a
 		// parameter rather than a nil test at the call site.
-		SOURCES.put(LispNames.MAKE_ARRAY_ET_INTERNAL, """
-				(defun %make-array-et (%mae-dims %mae-et %mae-init %mae-given)
-				  (cond ((member %mae-et '(character base-char standard-char))
-				         (make-array %mae-dims :element-type 'character
-				                     :initial-element (if %mae-given %mae-init #\\Space)))
-				        ((eq %mae-et 'single-float)
-				         (make-array %mae-dims :element-type 'single-float
-				                     :initial-element (if %mae-given %mae-init 0.0)))
-				        ((eq %mae-et 'double-float)
-				         (make-array %mae-dims :element-type 'double-float
-				                     :initial-element (if %mae-given %mae-init 0.0)))
-				        ((equal %mae-et '(unsigned-byte 8))
-				         (make-array %mae-dims :element-type '(unsigned-byte 8)
-				                     :initial-element (if %mae-given %mae-init 0)))
-				        ((equal %mae-et '(unsigned-byte 16))
-				         (make-array %mae-dims :element-type '(unsigned-byte 16)
-				                     :initial-element (if %mae-given %mae-init 0)))
-				        ((equal %mae-et '(unsigned-byte 32))
-				         (make-array %mae-dims :element-type '(unsigned-byte 32)
-				                     :initial-element (if %mae-given %mae-init 0)))
-				        (t (make-array %mae-dims :initial-element (if %mae-given %mae-init nil)))))
-				""");
+		SOURCES.put(LispNames.MAKE_ARRAY_ET_INTERNAL,
+				makeArrayElementTypeDispatch(LispNames.MAKE_ARRAY_ET_INTERNAL, "%mae", "", ""));
 		// %make-array-et-fp: the same dispatch for a site that also spells :fill-pointer
 		// or :adjustable. Those two are what force EVERY arm to the general
 		// representation, so keeping them out of the helper above is what lets it pick a
 		// packed one; here they ride along and the arms differ only in the element type
 		// each general array remembers. Two sites in array-operations' similar-array,
 		// one in the whole quicklisp cache besides.
-		SOURCES.put(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, """
-				(defun %make-array-et-fp (%maef-dims %maef-et %maef-init %maef-given %maef-fp %maef-adj)
-				  (cond ((member %maef-et '(character base-char standard-char))
-				         (make-array %maef-dims :element-type 'character
-				                     :initial-element (if %maef-given %maef-init #\\Space)
-				                     :fill-pointer %maef-fp :adjustable %maef-adj))
-				        ((eq %maef-et 'single-float)
-				         (make-array %maef-dims :element-type 'single-float
-				                     :initial-element (if %maef-given %maef-init 0.0)
-				                     :fill-pointer %maef-fp :adjustable %maef-adj))
-				        ((eq %maef-et 'double-float)
-				         (make-array %maef-dims :element-type 'double-float
-				                     :initial-element (if %maef-given %maef-init 0.0)
-				                     :fill-pointer %maef-fp :adjustable %maef-adj))
-				        ((equal %maef-et '(unsigned-byte 8))
-				         (make-array %maef-dims :element-type '(unsigned-byte 8)
-				                     :initial-element (if %maef-given %maef-init 0)
-				                     :fill-pointer %maef-fp :adjustable %maef-adj))
-				        ((equal %maef-et '(unsigned-byte 16))
-				         (make-array %maef-dims :element-type '(unsigned-byte 16)
-				                     :initial-element (if %maef-given %maef-init 0)
-				                     :fill-pointer %maef-fp :adjustable %maef-adj))
-				        ((equal %maef-et '(unsigned-byte 32))
-				         (make-array %maef-dims :element-type '(unsigned-byte 32)
-				                     :initial-element (if %maef-given %maef-init 0)
-				                     :fill-pointer %maef-fp :adjustable %maef-adj))
-				        (t (make-array %maef-dims :initial-element (if %maef-given %maef-init nil)
-				                       :fill-pointer %maef-fp :adjustable %maef-adj))))
-				""");
+		SOURCES.put(LispNames.MAKE_ARRAY_ET_FP_INTERNAL,
+				makeArrayElementTypeDispatch(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, "%maef", " %maef-fp %maef-adj",
+						"\n                     :fill-pointer %maef-fp :adjustable %maef-adj"));
 		SOURCES.put(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, """
 				(defclass %broadcast-stream (rontolisp:fundamental-character-output-stream)
 				  ((components :initarg :components :reader %broadcast-stream-components)))
@@ -3045,6 +3007,119 @@ public final class LispPreludeLibrary {
 	private static String member(String name) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		return qn == null ? name : qn.member();
+	}
+
+	/**
+	 * The source of one {@code %make-array-et*} prelude defun, GENERATED from
+	 * {@link ArrayElementTypes#specializedCodes()} rather than transcribed.
+	 *
+	 * <p>
+	 * A {@code make-array} whose {@code :element-type} is only known at RUN time has to
+	 * be turned back into literal spellings -- every backend but the interpreter decides
+	 * an array's representation from the literal designator at the call site -- so the
+	 * dispatch must name every specialized code. Doing that AT each call site costs ~1.3
+	 * KB of wasm per site (measured 2026-08-31; {@code .kb/array-literals.md}) and
+	 * array-operations alone has 21 of them, so the arms live in this helper and every
+	 * site becomes one call. Each arm's literal spelling is what the backends'
+	 * recognizers read: it selects the packed representation where one exists and carries
+	 * the remembered element type and its zero fill where it degrades. The unsupplied
+	 * element is the arm's OWN zero, which is why the {@code given} parameter exists
+	 * rather than a nil test at the call site.
+	 *
+	 * <p>
+	 * <b>Why it is generated.</b> This list was written out by hand here, in the
+	 * {@code -fp} twin, in the inline lowering and in the program-scan mask -- four
+	 * copies, each documented as covering seven codes and each spelling six.
+	 * {@code bfloat16} was missing from all four from the day the width landed until
+	 * 2026-09-05, so a runtime designator naming it degraded to a BOXED general array on
+	 * every backend but the interpreter, and on wasm walked past the refusal
+	 * {@code WasmArrayCompiler} puts on the literal spelling for exactly that reason
+	 * ({@code .todo/487}). The set is a fact about {@link ArrayElementTypes}; an eighth
+	 * width is one entry there and all four sites follow.
+	 * @param name the defun's name
+	 * @param prefix the defun's parameter-name prefix ({@code %mae} / {@code %maef})
+	 * @param extraParams the extra parameters, each preceded by a space, or empty
+	 * @param extraKeywords the extra keyword arguments every arm passes on, or empty
+	 * @return the defun source
+	 */
+	private static String makeArrayElementTypeDispatch(String name, String prefix, String extraParams,
+			String extraKeywords) {
+		String dims = prefix + "-dims";
+		String et = prefix + "-et";
+		String init = prefix + "-init";
+		String given = prefix + "-given";
+		StringBuilder sb = new StringBuilder();
+		sb.append("(defun ")
+			.append(name)
+			.append(" (")
+			.append(dims)
+			.append(' ')
+			.append(et)
+			.append(' ')
+			.append(init)
+			.append(' ')
+			.append(given)
+			.append(extraParams)
+			.append(")\n  (cond ");
+		boolean first = true;
+		for (int code : ArrayElementTypes.specializedCodes()) {
+			if (!first) {
+				sb.append("\n        ");
+			}
+			first = false;
+			sb.append('(')
+				.append(elementTypeTestSource(et, code))
+				.append("\n         (make-array ")
+				.append(dims)
+				.append(" :element-type ")
+				.append(quotedDesignatorSource(code))
+				.append("\n                     :initial-element (if ")
+				.append(given)
+				.append(' ')
+				.append(init)
+				.append(' ')
+				.append(zeroSource(code))
+				.append(')')
+				.append(extraKeywords)
+				.append("))");
+		}
+		sb.append("\n        (t (make-array ")
+			.append(dims)
+			.append(" :initial-element (if ")
+			.append(given)
+			.append(' ')
+			.append(init)
+			.append(" nil)")
+			.append(extraKeywords)
+			.append("))))\n");
+		return sb.toString();
+	}
+
+	// (member et '(character base-char standard-char)) for the one code with several
+	// spellings, (equal et '(unsigned-byte n)) for a compound designator, (eq et 'name)
+	// for a plain type-name symbol -- decided by the SHAPE of ArrayElementTypes.valueOf,
+	// so a new code needs no case here.
+	private static String elementTypeTestSource(String et, int code) {
+		if (code == ArrayElementTypes.CHARACTER) {
+			return "(member " + et + " '(" + String.join(" ", ArrayElementTypes.CHARACTER_SPELLINGS).toLowerCase()
+					+ "))";
+		}
+		LispVal spec = ArrayElementTypes.valueOf(code);
+		return "(" + (spec instanceof LispCons ? "equal " : "eq ") + et + " " + quotedDesignatorSource(code) + ")";
+	}
+
+	private static String quotedDesignatorSource(int code) {
+		return "'" + ArrayElementTypes.valueOf(code).print().toLowerCase();
+	}
+
+	// The arm's own zero, as source: the character type's space, the float widths' 0.0,
+	// the integer widths' 0.
+	private static String zeroSource(int code) {
+		LispVal zero = ArrayElementTypes.defaultElement(code);
+		if (code == ArrayElementTypes.CHARACTER) {
+			return "#\\Space";
+		}
+		return zero instanceof LispDouble ? "0.0" : "0";
 	}
 
 }

@@ -96,8 +96,22 @@ it BY NAME at `compiler/UnsupportedFloatWidth`. `vec:` carries the width; `linal
 - Printing is `_bf16Print` over `FloatText.bfloat16Text`. A program that `read`s or defines a
   `print-object` method goes through `LispMacroExpander.PRINT_OBJECT_VECTOR_ARM`, whose vector arm
   excludes the packed widths BY NAME -- the miss showed only in an `-o Prog.class` E2E.
-- The bulk pair, `read-sequence` and `write-sequence` all still decline bf16
-  (`PackedBuffer.of`, `_readSeqPacked`) into the element loop.
+- **`read-sequence` / `write-sequence` move a bf16 array in ONE bulk transfer** of its STORED
+  PATTERNS -- two little-endian bytes an element, which is what a BF16 safetensors or GGUF
+  tensor holds -- so such a tensor loads with no conversion at all and writing it back
+  reproduces the file byte for byte, signalling NaN payloads included. Deliberately not the
+  widened f32: a width that converted on the wire could not round-trip. Interpreter
+  `PackedBuffer.of` (width 2, `asShortBuffer`), JVM `_readSeqPacked` / `_writeSeqPacked` (the
+  `short[]` arm, data offset `1 + 2 * rank` -- the one arm in that method whose offset is not
+  `1 + rank`). Measured 2026-09-05: 2^21 elements round-trip with zero mismatches, 5 ms on the
+  JVM and 10 ms on the interpreter. The bulk `widen-float-bits` / `narrow-float-bits` pair
+  still declines a bf16 source or destination (`.todo/487` step 2).
+- **A runtime `:element-type` reaches the width now too.** `(make-array n :element-type et)`
+  with `et` a VALUE -- which is what `checkpoint:make-tensor` does, so it is the only way a
+  checkpoint reader allocates -- built a boxed general array for `bfloat16` on every backend
+  but the interpreter until 2026-09-05, because the dispatch's arm list was transcribed four
+  times and every copy spelled six of the seven codes. It is derived from `ArrayElementTypes`
+  now: `.kb/array-literals.md`, "A RUNTIME `:element-type`".
 
 ## Refusing a width: three behaviours
 - **Silent DECLINE** (`null`/`false`, the rung below answers, answer identical): `VecSimd`,

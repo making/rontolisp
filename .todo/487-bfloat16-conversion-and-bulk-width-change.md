@@ -68,6 +68,55 @@ QUIETS a signalling NaN (126 of the 65536 patterns broke the round trip until th
 was carried across by hand), and WASM's `f32.demote_f64` is free by specification to
 invent any NaN payload at all -- so neither direction may route a NaN through the f32.
 
+## Progress, 2026-09-05: step 3 landed, and what the census found under it
+
+**Step 3 is DONE for the primitive** -- `read-sequence` / `write-sequence` move a `#bf16`
+array in ONE bulk transfer of its STORED PATTERNS (two little-endian bytes an element, what
+a BF16 safetensors or GGUF tensor holds), interpreter `PackedBuffer` and JVM
+`_readSeqPacked` / `_writeSeqPacked`. 2^21 elements round-trip with zero mismatches, 5 ms on
+the JVM and 10 ms on the interpreter. **This delivers `.todo/675`'s frozen-interface bullets
+1 and 2 verbatim** -- 675 can point here rather than restate them. Bullets 3-5 (the
+`checkpoint:stage-float-bits` bf16 arm, `safetensors:read` / `gguf:read` accepting
+`:element-type 'bfloat16`, and their docs) are the rest of step 3 and are NOT done.
+
+**The census found the blocker under it, and it is the finding this item exists for.** A
+`make-array` whose `:element-type` is a runtime VALUE -- which is what
+`checkpoint:make-tensor` does, so it is the only way a checkpoint reader allocates -- has to
+be turned back into literal spellings, one arm per `ArrayElementTypes` code. That list was
+TRANSCRIBED FOUR TIMES: the program-scan mask, the inline lowering's arms, `%make-array-et`
+and `%make-array-et-fp`. Every copy was documented as covering seven codes and every copy
+spelled six. `bfloat16` was missing from all four from the day the width landed, so:
+
+- interpreter `BFLOAT16` (it reads the designator at run time, and is therefore the one
+  engine that could not see the defect),
+- JVM class output `T` -- a boxed general array that does not even remember the width,
+- wasm `T` -- **past a guard whose own comment says it exists to stop exactly that**.
+  `WasmArrayCompiler` refuses the LITERAL `:element-type 'bfloat16` where the representation
+  is chosen, so that "an unrefused request falls through to the general BOXED array below and
+  the program answers different numbers here than on the interpreter -- a wrong number rather
+  than a crash". The runtime designator reached the same allocation by another route. A guard
+  on one spelling of an operation is not a guard.
+
+Fixed by DERIVING rather than adding a seventh copy: `ArrayElementTypes` grew
+`specializedCodes()` / `ALL_SPECIALIZED_MASK` / `CHARACTER_SPELLINGS`, and all four sites read
+them (both prelude helpers are now GENERATED from the code list, character-for-character what
+they were plus the missing arm). An eighth width is one entry in that class. The pins are
+keyed to the same method on all three engines, never to a list of widths -- a hand-written
+list of seven would be a fifth transcription with a green tick on it:
+`LispPreludeLibraryTest#bothMakeArrayElementTypeHelpersCoverEverySpecializedCode`,
+`LispEvaluatorTest#evalMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling`,
+`JvmLispCompilerTest#compileAndRunMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling`
+(both lowerings, through the helper and inline), and
+`WasmLispCompilerIntegrationTest#aRuntimeElementTypeDesignatorAnswersWhatTheLiteralSpellingAnswers`
+(where a refused width must be refused through BOTH spellings). Verified the prelude pin
+fails when the generator is made to skip a width. `.todo/703`'s mechanism question is
+untouched and its evidence is stronger; the entry there says so.
+
+**Still open here**: step 2 (`coerce` and the bulk width change), the rest of step 3
+(675's bullets 3-5), step 4 (f32 -> bf16 at load), step 5 (the widen-once scratch), the
+signalling-NaN reachability question below, and the remaining census rows (the three
+travelling templates and `NoGcWasmCompiler.compileFloatArrayLiteral`).
+
 ## Do
 
 1. **The bits pair.** `LispNames` already carries `SINGLE_FLOAT_BITS` /

@@ -37,6 +37,71 @@ class JvmLispCompilerTest {
 		return compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 	}
 
+	// The compile-path twin of
+	// LispEvaluatorTest#readWriteSequenceMovesABfloat16ArrayAsItsStoredPatterns: a #bf16
+	// array moves as its stored patterns, two little-endian bytes an element, in ONE
+	// bulk transfer through _readSeqPacked / _writeSeqPacked's short[] arm -- whose data
+	// offset is 1 + 2 * rank, the only arm in that method where it is not 1 + rank
+	// (JvmPackedFloatWidth's two-slots-per-dimension header). The value is chosen so a
+	// byte swap could not pass: bf16 0x3F80 is exactly 1.0, swapped 0x803F is a tiny
+	// negative denormal (.kb/bfloat16.md, .todo/487 step 3).
+	@Test
+	void compileAndRunReadWriteSequenceMovesABfloat16ArrayAsItsStoredPatterns() throws Exception {
+		String file = this.tempDir.resolve("bf16.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(defvar *src* (make-array 3 :element-type 'bfloat16))
+				(setf (aref *src* 0) 1.0)
+				(setf (aref *src* 1) -2.0)
+				(setf (aref *src* 2) 0.5)
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8)
+				                 :if-exists :supersede)
+				  (write-sequence *src* out))
+				(defvar *bits* (make-array 3 :element-type '(unsigned-byte 16)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (read-sequence *bits* in))
+				(defvar *back* (make-array 3 :element-type 'bfloat16))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-sequence *back* in)))
+				(print (aref *bits* 0))
+				(print (aref *back* 0))
+				(print (aref *back* 1))
+				(print (aref *back* 2))
+				""".formatted(file, file, file)))
+			.as("bf16 1.0 is 0x3F80 = 16256; a byte swap would read 0x803F = 32831")
+			.isEqualTo("3\n16256\n1.0\n-2.0\n0.5");
+	}
+
+	// A make-array whose :element-type is a RUNTIME value must pick the same
+	// representation the literal spelling picks -- this backend decides from the literal
+	// designator at the call site, so the runtime one is lowered back into literal arms,
+	// one per ArrayElementTypes code. The widths are taken FROM the enum rather than
+	// listed here: four hand-written copies of that list existed, all documented as
+	// covering seven codes and all spelling six, so bfloat16 through a runtime
+	// designator answered a BOXED general array (.todo/487). A list of seven in this
+	// test would have been the fifth copy.
+	//
+	// Both lowerings are covered. compileAndRun(String) splices the prelude, so the site
+	// becomes one call to %make-array-et; compileAndRun(List) does not, so the arms are
+	// spelled inline. The two must answer the same thing.
+	@Test
+	void compileAndRunMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling() throws Exception {
+		StringBuilder program = new StringBuilder("(defun mk (n et) (make-array n :element-type et))\n");
+		StringBuilder expected = new StringBuilder();
+		for (int code : am.ik.rontolisp.ArrayElementTypes.specializedCodes()) {
+			String designator = am.ik.rontolisp.ArrayElementTypes.valueOf(code).print();
+			program.append("(print (array-element-type (mk 4 '").append(designator).append(")))\n");
+			program.append("(print (array-element-type (make-array 4 :element-type '")
+				.append(designator)
+				.append(")))\n");
+			expected.append(designator).append('\n').append(designator).append('\n');
+		}
+		String want = expected.toString().stripTrailing();
+		assertThat(compileAndRun(program.toString())).as("through the %make-array-et prelude helper").isEqualTo(want);
+		assertThat(compileAndRun(LispReader.readAllFromString(program.toString())))
+			.as("with the arms spelled inline at the call site")
+			.isEqualTo(want);
+	}
+
 	@Test
 	void aFoldedCallPrintsWhatTheRuntimeWouldHave() throws Exception {
 		// The pure-builtin fold renders in JAVA at compile time what the emitted class
