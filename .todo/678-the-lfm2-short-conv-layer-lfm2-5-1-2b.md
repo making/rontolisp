@@ -148,17 +148,28 @@ lanes measuring `--parallel` on dorian at once destroy each other's numbers
 
 **Carried out of this item, to measure in the same window.** `.todo/670`'s "two
 independent models on one ceiling" (27.0 and 30.7 GB/s) may not be a box ceiling at all.
-LFM2.5 is ~1.17B parameters, so ~4.7 GB of f32 a token, and in a contended window it sat
-well above 31 GB/s while Qwen3.5-0.8B, measured back to back on the same binary in the
-same window, stayed at its recorded ~28. Those absolute numbers are discarded
-(`.todo/697`), but the RATIO between two models measured together is not something
-contention manufactures. The prediction, made from the shapes before looking: LFM2.5
-streams better because its weights sit in fewer, larger matrices -- three big matvecs per
-conv block -- where Qwen3.5's Gated DeltaNet does 576 small 128 x 128 GEMVs a token. If it
-holds, "the parallel leg is DRAM-bound, not thread-bound" stays true and the single number
-under it does not, which is what `.todo/489`'s parallel prediction rests on. Only this
-worktree can load LFM2.5 until this item pushes, so this measurement cannot be `489`'s
-until then.
+
+The claim is about ACCESS SHAPE, and it is stated before the measurement so that the
+measurement can refute it. A token of LFM2.5 is three big matvecs per conv block (6144 x
+2048 and 2048 x 2048) over ten blocks, plus 8192-wide SwiGLU; a token of Qwen3.5-0.8B is
+576 small 128 x 128 GEMVs -- 18 Gated DeltaNet layers x 16 heads x 2 -- with a 1 MB state
+per layer between them. Same bytes streamed buys different locality, so **the prediction
+is that LFM2.5 achieves a higher GB/s than Qwen3.5 on the same box**, and that 27-31 GB/s
+is a per-model figure rather than a wall. If that holds, "the parallel leg is DRAM-bound,
+not thread-bound" stays true while the single number under it does not -- and that number
+is what `.todo/489`'s parallel prediction rests on.
+
+Contended runs on 2026-09-05 pointed this way, and that is ALL they are: a hint that
+suggested the question. They are not evidence and are not quoted. Two models timed back to
+back are not timed together -- a co-tenant arriving between the arms hits one and not the
+other -- so a sequential ratio from a contended window can be manufactured, unlike a
+within-run ratio, which cannot. (`.todo/488`'s README is the standing caution for the
+parallel column generally: one run per cell disagreed with its own twin by 40% on a QUIET
+box, from the scheduler alone. So every parallel figure here is a spread over several
+runs, and the first check is whether a model disagrees with ITSELF.)
+
+Only this worktree can load LFM2.5 until this item pushes, so this measurement cannot be
+`.todo/489`'s until then, however much `489` owns the table.
 
 **Done, not deferred.** The 64-wide attention head takes the lane kernel: the gate is
 `MATVEC_ACC_THRESHOLD` = 32 COLUMNS (`.kb/vec.md`), and LFM2.5's head dim is 64 =
