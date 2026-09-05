@@ -114,3 +114,27 @@ boundary type until someone needs one.
   4096x4096 ratio must be clearly above bf16's, or the int-dot did not vectorize.
 - A `.class` with a Q8_0 GEMV over a matrix of > 32767 columns and > 32767 rows: the
   header scheme's regression, as in `.todo/485`.
+
+## The fixture, and its identity
+
+The Q8_0 checkpoint this item reads is Qwen3.5-0.8B published by **ggml-org**
+(`general.architecture = qwen35`, offered in BF16 / Q8_0 / Q4_0; `.todo/677` records the
+publisher but never wrote down the repo id string, and a guessed one is worse than none).
+Identify the file by its bytes, not by where it was fetched from:
+
+| file | bytes | sha256 |
+| --- | --- | --- |
+| `Qwen3.5-0.8B-Q8_0.gguf` | 833592096 | `37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f` |
+| `Qwen3.5-0.8B-BF16.gguf` | 1557662496 | `9a7bed4041b7975e0f71fa34670d1e9025213bc92905ac0db75d36c4fa3fa623` |
+
+Taken on dorian 2026-09-05, where both files live in `/home/administrator/models/`. **GB10
+has neither and must re-fetch** -- its only cached model is `unsloth/Qwen3.8-Flash-Next-GGUF`
+(Q4_K_XL + a BF16 companion), which is not this.
+
+Why the hashes are worth the two lines: this item's central check is a byte-equality
+against what `llama.cpp` produces from the same file. If the two boxes' copies hash
+alike, then any divergence found later is in the code, full stop. Without that, a
+mismatch has two candidate causes -- the implementation or the file -- and
+`.todo/670`'s rule 7 is the record of what it costs to be unable to tell them apart. A
+re-fetch that lands different bytes is not automatically wrong; diff the GGUF metadata
+headers before concluding anything about the repo path.
