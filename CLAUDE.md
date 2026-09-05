@@ -217,6 +217,9 @@ exercise:
 ./mvnw clean package -DskipTests
 ./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false -Drontolisp.examples=true test
 # narrow it while iterating: -Drontolisp.examples.only=cloudflare
+# ...but `only=` is a plain SUBSTRING match on the example's path, not a directory name.
+# `only=llm` also matches `ml/tiny-llm.lisp` and `examples/llm-from-scratch/` -- 72 legs
+# instead of 39. Anchor a directory with a trailing slash: `only=llm/`.
 ```
 
 It is the longest run in the repo. **Split it with `-Drontolisp.examples.only=` from the
