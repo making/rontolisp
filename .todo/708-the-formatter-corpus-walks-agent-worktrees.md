@@ -206,8 +206,9 @@ about; the skip count is not, and that is itself a check -- **dorian read 276 sk
 2026-09-03 as well, so the contamination did not move it.** Extra worktree `.lisp` files RUN;
 they do not skip.
 
-**So dorian's 2026-09-05 skip total is 276, not 261, and the 15 is a genuine unexplained
-residual. It stays open.** The date-mismatch hypothesis is refused by this number.
+**So dorian's 2026-09-05 skip total is 276, not 261.** The date-mismatch hypothesis is
+refused by this number, and the 15 is CLOSED by the diff below -- not as a residual, but as
+an artefact of how the original list was built.
 
 Complete per-class list, summing to exactly 276 (no class omitted):
 
@@ -238,13 +239,61 @@ Complete per-class list, summing to exactly 276 (no class omitted):
 | `am.ik.rontolisp.e2e.ServeConditionCatchComponentE2eTest` | 1 | 1 |
 | `am.ik.rontolisp.e2e.ServeMethodCaseComponentE2eTest` | 1 | 1 |
 
-Closing the 15 needs GB10's equivalent list, not more of dorian's. The named breakdown so far
-(+119 dorian, -17 GB10) uses three dorian classes and two GB10 ones; this table has 24
-skipping classes, and `MetalGpuTest`'s 54 is the largest term nobody has placed -- it should
-cancel if GB10 also skips it, and if it does not, it is bigger than the residual. **Diff the
-two lists class by class rather than reasoning about which classes ought to differ.**
+### The diff, and what the 15 actually was
 
-A caution earned today: **an explanation that fits an ADJACENT quantity is the most expensive
+GB10's census (33 classes, 189 skips, from a run at `21a82d97` -- 9849 tests, 222 reports)
+diffed against dorian's above:
+
+- **dorian-only: `GpuTest` 57, `LinalgGpuTest` 40, `JvmLinalgGpuAccelCompilerTest` 22,
+  `GpuOfferDifferentialTest` 1 = +120**
+- **GB10-only: `WitOracleE2eTest` 12, `WasmReentrantE2eTest` 5, `WasmHostGlueE2eTest` 4,
+  `WasmComponentImportCompilerTest` 3, and nine more WASM/wit classes at 1 each = -33**
+- **+120 - 33 = +87 = 276 - 189, to the digit.** No class is shared-but-unequal.
+
+**`MetalGpuTest` skips 54 on GB10 as well, so it cancels** -- the largest term in either
+table, and completely absent from the difference. That is the whole hazard in one term: the
+biggest number in the data contributes nothing to the question, and a reader building a list
+by expectation would either name it and be wrong or omit it and never know why.
+
+**The error was never arithmetic. It was SELECTION.** The original five-term list named the
+classes someone expected to differ -- the device, two wit/wasm ones. The tree has thirteen
+GB10-only WASM classes at 1-4 skips each plus one more dorian GPU class nobody would think to
+name. Seventeen classes differ, not five. A list produced by reasoning missed by 24 in one
+direction and 15 in the other; a list produced by diffing closes exactly. **Diff the two
+lists class by class rather than reasoning about which classes ought to differ** -- and note
+that the "residual" was never a measurement result at all, only the shape of the omission.
+
+The relay of that census dropped a line, and how it was resolved is worth one paragraph.
+As relayed the GB10 table summed to 188 across 32 classes against its stated 33 / 189. The
+missing entry is `ObjcNativeImageForeignConfigTest` 1 -- read off the file, not inferred --
+which dorian also skips 1 of 3, so it is shared-and-equal, contributes 0, and the split is
++120 / -33 with **17** differing classes as stated. The umbrella's figures were computed
+from the file and never had the gap.
+
+**The near miss was that the arithmetic was self-consistent under the wrong reading.**
+188 plus a missing 1 gives 189 whichever class the 1 belongs to, and the split lands on +87
+either way, so nothing in the numbers objects. The only quantity that discriminates is the
+class COUNT -- 17 against 19 -- and that is precisely the figure a reader takes on trust
+from a sentence instead of recomputing. **A sum that closes is not evidence about its
+terms.** Note the asymmetry with the defect this section closes: the five-class list summed
+to 111 against an 87 it was explaining, and that visible mismatch is what eventually exposed
+it. Here the sum closed perfectly and hid a missing term completely. **The self-consistent
+case is the harder one and it is the common one.**
+
+The operational form, for the filing rather than for this item: **relay a census from the
+file, and state its total AND its class count** -- the total alone cannot detect a dropped
+line.
+
+The two censuses also bound this item's defect from both sides. They are not the certified
+pair -- GB10's run is `21a82d97` (9849 tests, 222 reports), dorian's is `b87aed25` (26359,
+231) -- but their skip totals equal the certified figures on both boxes and both days, and
+skips are the quantity in question. **Between those two runs the totals moved by 16510 and
+the skip counts did not move at all.** The contamination's reach is measured from both
+directions rather than argued.
+
+A caution earned today, which survives the closure and should not be deleted with it --
+the 15 came within an hour of being closed at the wrong answer by a fact verified twenty
+minutes earlier: **an explanation that fits an ADJACENT quantity is the most expensive
 kind of wrong, because it closes the item.** The 87 is a difference of SKIP counts, so the
 worktree contamination -- which changes what RUNS -- cannot reach it, and neither can an
 argument about what `Tests run` includes. An unexplained 15 stays visible and irritating
