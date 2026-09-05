@@ -117,6 +117,30 @@ The third case is the one that shows the shape: **the procedure works because on
 tags is unavailable to a writer who has not done the work.** A rule that only asks for care
 can be satisfied by feeling careful.
 
+**What it does NOT catch, established 2026-09-05 by an instance offered as a worked
+example for it.** `.todo/489`'s lane found that `-m chat` on a model with no chat template
+does not fail: TinyLlama's llama row has no template, so chat mode fed the raw prompt, the
+model answered EOS at the first sampled position, and the printed tok/s covered only the
+nine PROMPT positions. Twelve runs were discarded.
+
+**Tag that number and it comes out `measured`, truthfully.** Someone ran it; the harness
+executed; the figure is what the run produced. The procedure above is silent, and so is
+every other record-keeping rule here -- nobody under-recorded, nobody over-read, and the
+label that carried the discrepancy ("chat prompt") was present, correct, and read by
+nobody as a contradiction for two days.
+
+So this is not a mis-record instance with a sharper edge; **it is outside the record
+entirely.** The harness emitted a well-formed number for a question it was not asked, and
+no discipline applied to WRITING the number could have known. What is needed is that the
+harness REFUSE -- an incompatible model class and mode should be an error, not a number --
+which is a validation defect and not a documentation practice.
+
+Worth stating because the temptation was to accept it as evidence for the procedure. **A
+procedure that appears to cover an instance it cannot detect is worse than one with a
+stated boundary**, and this one's boundary is: it makes the CLASS of a claim visible, and
+it assumes the measurement answered the question it was set. Nothing here defends the
+second assumption; only a harness can.
+
 Two things it deliberately does not do. It does not ask anyone to re-derive a number they
 are quoting -- naming the input is enough, and the reader decides. And it says nothing
 about whether a number is RIGHT; it makes the class of claim visible so that over-read has
