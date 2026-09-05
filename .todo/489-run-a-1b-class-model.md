@@ -21,13 +21,13 @@ newest ~1B model of any family. Both are hybrids, so each is an architecture ite
 is by increasing architecture delta, and every rung after 0 is a model people actually
 download today:
 
-| rung | model | bf16 | architecture work | item |
-| --- | --- | --- | --- | --- |
-| 0 | TinyLlama-1.1B / SmolLM2-135M, 360M | 2.2 GB / 0.27 GB | none (llama) -- shakes out the readers | below |
-| 1 | `Qwen/Qwen3-0.6B` (2025-04) | 1.5 GB | QK-norm, tied head, vocab 151936 | `676` |
-| 2 | `LiquidAI/LFM2.5-1.2B-Instruct` (2026-08) | 2.34 GB | 10 gated short-conv + 6 attention layers | `678` |
-| 3 | `Qwen/Qwen3.5-0.8B` (2026-06) | 1.5 GB (+0.2 GB vision, skipped) | Gated DeltaNet x 18, gated attention, partial RoPE | `677` |
-| 4 | `Qwen/Qwen3.8-27B` (2026-08) | 54 GB | none beyond rung 3; RAM (fits this box) and `--gpu` | `490`'s successor |
+| rung | model | bf16 | architecture work | item | f32 run |
+| --- | --- | --- | --- | --- | --- |
+| 0 | TinyLlama-1.1B / SmolLM2-135M, 360M | 2.2 GB / 0.27 GB | none (llama) -- shakes out the readers | below | 2026-09-03 / 2026-09-05 |
+| 1 | `Qwen/Qwen3-0.6B` (2025-04) | 1.5 GB | QK-norm, tied head, vocab 151936 | `676` | 2026-09-05 |
+| 2 | `LiquidAI/LFM2.5-1.2B-Instruct` (2026-08) | 2.34 GB | 10 gated short-conv + 6 attention layers | `678` | `678`'s lane |
+| 3 | `Qwen/Qwen3.5-0.8B` (2026-06) | 1.5 GB (+0.2 GB vision, skipped) | Gated DeltaNet x 18, gated attention, partial RoPE | `677` | 2026-09-03, re-measured 2026-09-05 |
+| 4 | `Qwen/Qwen3.8-27B` (2026-08) | 54 GB | none beyond rung 3; RAM (fits this box) and `--gpu` | `490`'s successor | -- |
 
 Rung 2 is "the 1B" whose numbers this item reports; rung 3 is the Qwen the user asked
 for. The two original rungs below stay as rung 0.
@@ -106,6 +106,129 @@ limit that is not bandwidth -- both worth knowing. If the single-thread leg DOES
 the serial leg was not compute-bound after all and `.todo/488`'s premise needs re-reading.
 Re-measure both models, both legs, on a quiet box, and record the result here beside the
 prediction rather than in place of it.
+
+## Re-measured at f32 on a quiet box, and the rest of the f32 set (2026-09-05, dorian)
+
+Provenance for every row: develop `2275c000` plus this item's `llama2.lisp` tokenizer
+change (no kernel touched), JVM class output of `examples/llama2/llama2.lisp` under
+`--simd` (and `--simd --parallel` for the threaded rows), GraalVM 25.0.4 with its Graal
+JIT, `-Xmx16g`, 64 greedy tokens of the README's chat prompt, Xeon E5-2697A v4 (Broadwell,
+AVX2, 64 hardware threads), **the thread count explicit on every `--parallel` row** --
+a `--parallel` figure without one is not comparable to anything, and the missing count
+on the 2026-09-03 rows is what made the question below worth two runs. **"Quiet box"
+here means no other rontolisp LANE running, not no other load**: dorian carries steady
+co-tenants with 47-day uptimes (`clickhouse-server` at ~17% of a core, `mysqld`, a
+`bundle`, a `node`), its idle 1-minute load average is 0.3-0.9, and those were there
+during the 2026-09-03 rows too -- a constant that cancels between two dorian runs and
+does NOT cancel against GB10's 164 GB/s or any absolute GB/s claim. The other lane was
+off the box for the whole block; the 1-minute load average at each run's start was
+1.5-19, all of it the PREVIOUS run's own spinning workers decaying. The GB/s column is
+the 32-thread tok/s (first run) times the bytes per token, nothing else; the bytes are
+the parameter count times four. Load-in times are in the README.
+
+| | 1 thread | 32 threads | 64 threads (default) | bytes / token | GB/s at 32 threads |
+| --- | --- | --- | --- | --- | --- |
+| Qwen3.5-0.8B | 3.06 | 9.18 / 9.13 | 8.92 / 8.71 | 3.2 GB | 29 |
+| TinyLlama-1.1B | 1.86 | 8.84 | 8.17 / 8.01 | 4.4 GB | 39 |
+| Qwen3-0.6B (rung 1, first run) | 2.45 / 2.18 (GGUF 2.21) | 9.72 / 9.00 | 9.17 / 8.37 | 2.4 GB | 23 |
+| SmolLM2-360M-Instruct | 4.26 | 13.97 | -- | 1.4 GB | 20 |
+| SmolLM2-135M-Instruct | 8.69 | 28.89 | -- | 0.54 GB | 16 |
+
+**The 2026-09-03 rows are CONFIRMED, not superseded.** The suspicion tested was that
+8.56 / 6.97 had been taken under lane contention (two lanes worked this box that day, and
+a 64-thread run with one busy core beside it collapses 10x -- `.todo/697`) and were too
+low, which would have flattered the bf16 prediction stated as their multiple. On the
+quiet box Qwen3.5-0.8B at 64 threads is 8.7-8.9 against 8.56 (within 5%) and TinyLlama
+8.0-8.2 against 6.97 (10-15% higher, not a collapse; 7.48 was the README's other run).
+Contention did not produce those rows; the suspicion did not hold, and that is the whole
+result. The single-thread rows moved more (3.06 against 2.00 / 2.48; the 09-03 ones were
+taken at a load average of 13-21 by their own note), which is the direction a serial run
+takes a busy box's DRAM traffic -- record it, do not build on it.
+
+**"Two independent models on one ceiling" does not survive its own numbers.** 27.0 and
+30.7 GB/s read as one wall; 39, 29, 23, 20 and 16 GB/s across five models on one quiet
+box do not, and the order is the one `.todo/678`'s lane PREDICTED before any of it was
+measured, from access shape: TinyLlama is plain llama with big matvecs and streams best,
+Qwen3.5 spends 576 of its GEMVs per token on 128 x 128 Gated DeltaNet reads and streams
+worse, and the small SmolLM2 models spend their token in the layer walk around their
+576- and 960-wide products, not on the bus. That is 678's finding, measured here for a
+different purpose; two lanes landing on it independently is why it is stated as more than
+a hypothesis, and five models is still five points, not a law. What survives unchanged:
+the parallel leg is DRAM-shaped (32 threads beat 64 on every row, and the serial leg is at
+5-8 GB/s with the same weights), so "bf16 halves the bytes" still addresses the right
+limit -- but the ceiling it is halved against is per model, so the doubling prediction
+above has to be read against each model's OWN f32 parallel bandwidth, not against one
+box number. Which is why the bf16 rows below carry Gelem/s and GB/s per arm, not tok/s
+alone.
+
+**The other rungs, first run 2026-09-05:**
+
+- Rung 1, Qwen3-0.6B: runs from `Qwen/Qwen3-0.6B`'s safetensors and from unsloth's BF16
+  GGUF, the same 64 tokens from both; `llama.cpp` on the GGUF opens with the same eleven
+  words (then diverges on its bf16 kernels). It answers the chat prompt by thinking out
+  loud through the empty `<think>` block, and so does `llama.cpp` -- the model's habit,
+  not a template bug. `head_dim` 128 on a 1024-wide model, read from `config.json`.
+- Rung 0, SmolLM2: 135M (base and Instruct) and 360M-Instruct from safetensors, after the
+  reader learned to take the pre-tokenizer kind and the BOS rule from `tokenizer.json`
+  itself rather than from the family row (SmolLM2 and TinyLlama are both `model_type`
+  `llama`; only the file tells byte-level BPE from SentencePiece). The Instruct 135M
+  continuing "Once upon a time" loops, and the loop is the oracle: the surviving F16 GGUF
+  is that Instruct checkpoint and prints it token for token, and so does `llama.cpp` on
+  that GGUF. Both are in the README with the commands.
+- The correctness bar the rungs are now held to is TOKEN identity with `llama.cpp` at
+  temperature 0 on a RAW completion (no chat template on either side, the prompt ids
+  proven equal before any output is read): Qwen3.5-0.8B on GB10 (`.todo/677`, resolved
+  2026-09-05 by the other orchestrator's lane -- the earlier "same character, different
+  sentence" was the two chat harnesses, not arithmetic) and LFM2.5-1.2B on this box
+  (`.todo/678`) both meet it, which makes it a two-architecture, two-box result. The
+  SmolLM2-135M-Instruct loop above is the same kind of check, and Qwen3-0.6B meets it
+  too: raw "Once upon a time" on the BF16 GGUF, `llama-completion -no-cnv --temp 0
+  --repeat-penalty 1.0 --top-k 0 --top-p 1.0 --min-p 0` (dorian, x86 build of
+  2026-09-03) against our f32 widening of the same file, the same 64 tokens of text
+  ("there were 3000 people in a town. The number of people who are in the town is
+  3000. ..."). The chat-mode comparison agreed only on its first eleven words -- the
+  two chat harnesses, as with 677.
+- The interpreter leg of every `tokenizer.json` model dies in the file's JSON reader
+  (`subseq` of an adjustable `(unsigned-byte 8)` buffer is a `simple-vector` on every
+  backend; only the interpreter's `%octets-to-string` refuses it) -- filed as `.todo/698`,
+  narrowed the same day to "which callers still use a bare `subseq`" since a packed copy
+  is a known fix; confirm its state before acting on it. The JVM legs above are unaffected.
+- Checkpoints: `/home/administrator/models/{qwen3-0.6b,qwen3-0.6b-gguf,smollm2-135m,
+  smollm2-135m-instruct,smollm2-360m-instruct}` beside the ones the other lane restored
+  there (`tinyllama`, `qwen35`, `smollm2-135m-f16.gguf`); the HF cache under
+  `~/.cache/huggingface/hub` holds the same files. Not in the repo.
+
+**The bf16 rungs (wave 2), and how they are to be read.** Three things are fixed before
+the first number is taken:
+
+1. **Activations are f32 by plan, permanently** -- `.todo/670` ("bf16 is a storage width
+   for weights, and nothing here changes what an activation is") and `.todo/482`
+   ("same f32 activations; only the weight format"). It is what `.todo/488`'s fused
+   pairing is, and what `.todo/672`'s Q8_0 rows will be. **A bf16 activation vector
+   observed anywhere in a rung's forward pass is a loader or forward-pass DEFECT to
+   report and fix, not an explanation for a flat number.** (Whether the kernels could
+   take another pairing is a plan question nobody has asked, not a wall in the code.)
+2. **The single-thread expectation, restated.** The line above was written when 488's
+   kernel was thought to be 1.6x; that figure is withdrawn (it was against a
+   one-accumulator f32 baseline). The honest ratio is 1.49x under Graal and 2.00x under
+   C2 at 4096 x 4096 one thread on GB10, and BELOW f32 while a matrix is cache-resident
+   (about 4 MB of weights). So the serial leg should move by less than 1.5x on the big
+   GEMVs and not at all on the small ones: Qwen3-0.6B's per-layer matrices are 6-13 MB of
+   f32 (the 622 MB tied classifier dominates), TinyLlama's 8-46 MB, both above the
+   crossover; Qwen3.5's 128 x 128 DeltaNet reads (64 KB) are not and will not see it.
+   The old line stays above as written.
+0. **The loader has no `#bf16` destination yet.** `safetensors:read` and `gguf:read`
+   take `:element-type` `'single-float` (default) or `'double-float` and widen a BF16
+   tensor through the checkpoint package's chunked widen; a `'bfloat16` target that
+   copies the bits is `.todo/675`'s remainder ("waits on `487` steps 3-5"), and
+   `llama2.lisp` then has to keep every ACTIVATION buffer at `#f` while the weight
+   matrices are `#bf16` (point 1). Check both before the first timed run.
+3. **Report Gelem/s and GB/s for each arm on each leg, and say which wall each is at**,
+   with the f32 arm's bandwidth taken in the same window as the bf16 arm's. Where the
+   loader can hold both widths in one process, the within-run ratio is the number to
+   trust; an absolute from a non-quiet window is contaminated in bf16's favour (the f32
+   arm is the more bandwidth-bound of the two, so a co-tenant costs it more). "Held" or
+   "missed" is not to be written on tok/s alone.
 
 ## What the numbers should look like
 
