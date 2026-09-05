@@ -84,9 +84,10 @@ not comparable to one taken outside that window.
 puller who had it, because to them it arrives as an ordinary tracked deletion. The other
 orchestrator's box had both artefacts tracked at `examples/llama2/` with nothing having
 moved them, so its `git merge origin/develop` removed 61 MB from its working tree -- not
-untracked, deleted -- and nothing printed, because the RUN legs self-skip when the fixtures
-are absent. **`examples.yaml`'s skip, designed so a developer without the download is not
-failed by it, is also what hides the download being destroyed.** It recovered from a
+untracked, deleted -- and the loss reaches the report only as a larger skip count, because
+the RUN legs self-skip when the fixtures are absent. **`examples.yaml`'s skip, designed so a
+developer without the download is not failed by it, reports the download being destroyed in
+exactly the same integer.** It recovered from a
 pre-rename worktree. The general form: a fix that moves content to safety on the box that
 authors it is a deletion everywhere else, and silence is the designed behaviour on both
 sides of that line.
@@ -112,11 +113,42 @@ merge. Disarm by deleting the copies once the content is verified identical to
 `ExamplesE2eTest` 39/0/0 was taken at `4358af09`, BEFORE the rename, when `examples.yaml`
 said `workDir: llama2` and its box had the fixtures there -- so the three `stories15M` legs
 RAN. After the rename the same box's files sit at `llama2/` while the leg looks in `llm/`,
-so they SKIP, with the files physically present and nothing printed. **The rename alone
-silently changed which legs execute on any box that had the fixtures.** That is independent
+so they SKIP, with the files physically present. **The rename alone changed which legs
+execute on any box that had the fixtures.** That is independent
 of the clone-side reason above and points the same way: no examples total spanning
 `d4225aa5` is comparable to one taken before it. Three unrelated mechanisms now say do not
 compare suite totals across boxes or across today.
+
+**The count prints; the reason does not -- and the proof was in 670 before either
+orchestrator wrote about it.** Two certification rows sit in the same file: pre-rename GB10
+examples slice `39 / 0 / 0` (line 186), post-rename dorian `only=llm/` `39 / 0 / 0, 3
+skipped` (line 159). Same total, same zero failures. **The whole difference between "the
+three `stories15M` legs ran" and "they did not" is a skip count in an adjacent cell that
+both orchestrators wrote down and read past.** So do not say the suite was silent; that
+invites the fix "make it print", and it already prints.
+
+The accurate form: **a skip count is only a signal against a prior skip count for the same
+slice.** `3 skipped` is byte-identical whether the developer never ran
+`download-stories15M.sh` -- designed, harmless, exactly what `examples.yaml` promises -- or
+has the fixtures on disk at the pre-rename path, in which case a leg someone believes they
+certified did not run. Its designed meaning and its defect meaning produce the same integer,
+so in isolation it is unreadable by construction. It took two tables in one file, from two
+boxes days apart, to make the delta visible, and it was visible for hours before anyone read
+it as a delta.
+
+**Dorian's three were the relocation case, not the designed one.** Determined 2026-09-05
+from this session's own evidence rather than a fresh run: when the pull that hit the tracked
+binaries was blocked, the fixtures were found on disk at `examples/llama2/stories15M.bin`
+and `tokenizer.bin` in the MAIN tree, while `examples/llm/` held only `stories260K.bin` and
+`tok512.bin`. So at `6a319b6a` the files were present and the leg looked one directory away.
+
+Which lands on the acceptance run itself: **`.todo/682`'s acceptance was read as "39/0/0,
+identical to the pre-rename baseline", and the equality held while the composition did
+not.** The three legs that did not run are the ones that load the renamed example's real
+60 MB checkpoint -- the legs most specific to the change being accepted. This is 709 Part
+3's "a step that reports success is not evidence until someone has watched it report
+failure", reached by a different road: nobody needed to watch it fail, only to compare its
+skip count against the baseline's, and the baseline was two tables up in the same file.
 
 ## Do
 
