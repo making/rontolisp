@@ -401,6 +401,41 @@ non-overlapping spreads, so this is the one model where halving the bytes moved 
 a little -- and it is the model with the smallest ratios of the four, since its token is
 the 622 MB tied classifier plus 28 layers of 6-13 MB matrices.
 
+### SmolLM2-360M-Instruct (rung 0), chat prompt
+
+`-m chat -i "Tell me a short story about a cat."` (18 prompt ids). Text in every run:
+"Once upon a time, in a small village nestled between rolling...". Load: f32 2.7-3.0 s,
+bf16 1.5-1.6 s.
+
+| threads | f32 tok/s | bf16 tok/s | bf16 / f32 |
+| --- | --- | --- | --- |
+| 1 | 4.19 (4.19-4.22) | 4.87 (4.75-4.97) | 1.16x |
+| 8 | 12.51 (12.48-12.60) | 14.83 (14.62-14.87) | 1.19x |
+| 16 | 14.84 (13.50-16.09) | 17.65 (17.20-18.21) | 1.19x |
+| 32 | 14.25 (14.02-14.76) | 16.91 (16.24-17.47) | 1.19x |
+
+Knee at 16 in both arms, and 32 is 4% BELOW 16 in both -- the same direction, both
+inside the 16-thread cell's spread, so a plateau and not yet the turnover `.todo/670`
+holds in reserve. The ratio is flat at 1.19x from 8 threads up.
+
+### SmolLM2-135M-Instruct (rung 0), chat prompt
+
+`-m chat -i "Tell me a short story about a cat."` (18 prompt ids). Text in every run:
+"One of the most beloved and beloved cats in the world is Lun...". Load: f32
+1.36-1.46 s, bf16 0.75-0.81 s.
+
+| threads | f32 tok/s | bf16 tok/s | bf16 / f32 |
+| --- | --- | --- | --- |
+| 1 | 8.36 (8.01-8.74) | 9.70 (9.21-10.36) | 1.16x |
+| 8 | 25.74 (24.17-26.03) | 27.81 (25.90-27.85) | 1.08x |
+| 16 | 28.99 (28.39-29.03) | 29.77 (29.62-31.33) | 1.03x |
+| 32 | 28.09 (27.21-28.16) | 29.01 (28.99-30.10) | 1.03x |
+
+Knee at 16 in both arms; the parallel ratio is 1.03x, i.e. nothing -- at 0.54 GB of f32
+per token this model's token was never on the bus (the f32 row said so), and halving
+bytes it does not stream buys nothing. The 1-thread ratio (1.16x) is the same as every
+other model's.
+
 ## What the numbers should look like
 
 Estimated, not measured -- the arithmetic is here so the first real run can be checked
