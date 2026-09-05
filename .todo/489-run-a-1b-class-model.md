@@ -418,6 +418,24 @@ Knee at 16 in both arms, and 32 is 4% BELOW 16 in both -- the same direction, bo
 inside the 16-thread cell's spread, so a plateau and not yet the turnover `.todo/670`
 holds in reserve. The ratio is flat at 1.19x from 8 threads up.
 
+### SmolLM2-135M-Instruct (rung 0), chat prompt
+
+`-m chat -i "Tell me a short story about a cat."` (18 prompt ids). Text in every run:
+"One of the most beloved and beloved cats in the world is Lun...". Load: f32
+1.36-1.46 s, bf16 0.75-0.81 s.
+
+| threads | f32 tok/s | bf16 tok/s | bf16 / f32 |
+| --- | --- | --- | --- |
+| 1 | 8.36 (8.01-8.74) | 9.70 (9.21-10.36) | 1.16x |
+| 8 | 25.74 (24.17-26.03) | 27.81 (25.90-27.85) | 1.08x |
+| 16 | 28.99 (28.39-29.03) | 29.77 (29.62-31.33) | 1.03x |
+| 32 | 28.09 (27.21-28.16) | 29.01 (28.99-30.10) | 1.03x |
+
+Knee at 16 in both arms; the parallel ratio is 1.03x, i.e. nothing -- at 0.54 GB of f32
+per token this model's token was never on the bus (the f32 row said so), and halving
+bytes it does not stream buys nothing. The 1-thread ratio (1.16x) is the same as every
+other model's.
+
 ## What the numbers should look like
 
 Estimated, not measured -- the arithmetic is here so the first real run can be checked
