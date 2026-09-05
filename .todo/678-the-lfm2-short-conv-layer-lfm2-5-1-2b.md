@@ -78,7 +78,9 @@ Q5_K_M / Q6_K / Q8_0 / QAD-Q4_0).
         most unexpected things. One sunny morning,"
 
 **And `llama.cpp` on the same GGUF prints the same BYTES** -- same prompt, temperature 0,
-the whole overlap identical -- 581 characters, ~143 tokens -- where `.todo/677`'s
+the whole overlap identical -- 581 characters, and ~143 tokens because re-encoding
+decoded text through a byte-level BPE need not reproduce the sequence that generated it,
+so only the character count is exact -- where `.todo/677`'s
 Qwen3.5 run got the same
 character in a different sentence. Stated as a FACT and not a rule (`.todo/670` rule 7):
 one model, one prompt, one lane, and nobody has tried to break it. It is also NOT the
@@ -168,7 +170,11 @@ Everything except the timing rows is done (above). What is left, sorted the way
 **Blocked (on the box, not on code).** The `tok/s` rows -- single thread and `--parallel`
 with `RONTOLISP_THREADS` recorded, f32, into the README and `.todo/489` as "the 1B". Two
 lanes measuring `--parallel` on dorian at once destroy each other's numbers
-(`.todo/697`), so this waits for an exclusive window. The bf16 rows are unblocked as of
+(`.todo/697`), so this waits for an exclusive window. **"Quiet box" on dorian means "no
+other LANE", never "no other load"**: it carries permanent co-tenants at 47-day uptimes
+(`clickhouse-server` ~17% CPU, `mysqld`, a `bundle`, a `node`), which were running during
+the 2026-09-03 rows and during `.todo/489`'s re-measure too -- a constant, not a variable,
+and probably why those two agree. Every row here names them. The bf16 rows are unblocked as of
 2026-09-05 (`.todo/488` landed) but belong to `.todo/489`, which owns that table.
 
 **Carried out of this item, to measure in the same window.** `.todo/670`'s "two
@@ -195,6 +201,24 @@ runs, and the first check is whether a model disagrees with ITSELF.)
 
 Only this worktree can load LFM2.5 until this item pushes, so this measurement cannot be
 `.todo/489`'s until then, however much `489` owns the table.
+
+**The prediction, written down before the run** (2026-09-05, before any quiet-box number
+for LFM2.5 existed). Exact parameter counts, summed from the GGUF tensor tables rather
+than from a config: LFM2.5-1.2B **1,170,340,608** over 148 tensors -> **4.68 GB** of f32 a
+token; Qwen3.5-0.8B **772,845,888** over 335 tensors -> **3.09 GB** (`.todo/670`'s table
+says 3.2, which is `vocab_size`'s padded rows rather than the tensors that exist -- and
+note every figure in that table is DECIMAL GB, not GiB, so a bandwidth quoted in GiB is
+not comparable to it). `.todo/489`'s quiet-box points at 32 threads are TinyLlama-1.1B
+39 GB/s, Qwen3.5-0.8B 29, Qwen3-0.6B 22 -- already a far wider spread than the 27.0-30.7
+pair `.todo/670` reads a single ceiling off. **LFM2.5 should land ABOVE Qwen3.5 and near
+TinyLlama, in the mid-to-high 30s**, because its access shape is the plain-matvec one:
+ten conv blocks of three large matvecs plus 8192-wide SwiGLU, with no small-GEMV inner
+loop anywhere. If it lands at or below Qwen3.5's ~29 the access-shape account is wrong
+and the record should say so.
+
+Four models is still not a law -- state the result as a hypothesis with four points, and
+leave `.todo/670`'s "two independent models on one ceiling" sentence alone: it is
+corrected ONCE, by whoever holds all four numbers, not twice by two lanes.
 
 **Done, not deferred.** The 64-wide attention head takes the lane kernel: the gate is
 `MATVEC_ACC_THRESHOLD` = 32 COLUMNS (`.kb/vec.md`), and LFM2.5's head dim is 64 =
