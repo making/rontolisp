@@ -60,59 +60,21 @@
       (setf (gethash (aref tokenizer::*byte-to-char* b) h) b))))
 
 ;;; --- UTF-8 --------------------------------------------------------------------
-;;; A character is a code point on every backend, so these two are the whole of
-;;; the conversion between a rontolisp string and the bytes a tokenizer counts.
-
-(defun tokenizer::%utf8-push (cp out)
-  ;; Appends the UTF-8 encoding of the code point CP to OUT, a fill-pointer
-  ;; vector the caller sized for four bytes per character.
-  (cond ((< cp 128) (vector-push cp out))
-        ((< cp 2048)
-         (vector-push (+ 192 (floor cp 64)) out)
-         (vector-push (+ 128 (mod cp 64)) out))
-        ((< cp 65536)
-         (vector-push (+ 224 (floor cp 4096)) out)
-         (vector-push (+ 128 (mod (floor cp 64) 64)) out)
-         (vector-push (+ 128 (mod cp 64)) out))
-        (t
-         (vector-push (+ 240 (floor cp 262144)) out)
-         (vector-push (+ 128 (mod (floor cp 4096) 64)) out)
-         (vector-push (+ 128 (mod (floor cp 64) 64)) out)
-         (vector-push (+ 128 (mod cp 64)) out)))
-  out)
-
-(defun tokenizer::%utf8-decode (bytes)
-  ;; A byte vector as a string. A truncated trailing sequence -- which is what a
-  ;; half-generated character looks like -- is dropped rather than signalled.
-  (let ((chars '()) (i 0) (n (length bytes)))
-    (loop while (< i n)
-          do
-            (let* ((b0 (aref bytes i))
-                   (len
-                    (cond ((< b0 128) 1) ((< b0 224) 2) ((< b0 240) 3) (t 4)))
-                   (cp
-                    (cond ((= len 1) b0)
-                          ((= len 2) (mod b0 32))
-                          ((= len 3) (mod b0 16))
-                          (t (mod b0 8)))))
-              (if (> (+ i len) n)
-                  (setq i n)
-                  (progn
-                    (dotimes (k (- len 1))
-                      (setq cp (+ (* cp 64) (mod (aref bytes (+ i 1 k)) 64))))
-                    (push (code-char cp) chars)
-                    (setq i (+ i len))))))
-    (coerce (nreverse chars) 'string)))
+;;; A character is a code point on every backend, so rontolisp:octets-to-string /
+;;; string-to-octets are the whole of the conversion between a rontolisp string
+;;; and the bytes a tokenizer counts.
 
 (defun tokenizer::%byte-level-string (text)
   ;; TEXT's UTF-8 bytes, each mapped to its GPT-2 character: the spelling the
-  ;; vocabulary and the merge list are written in.
-  (let ((bytes (make-array (* 4 (length text)) :fill-pointer 0)))
-    (dotimes (i (length text))
-      (tokenizer::%utf8-push (char-code (char text i)) bytes))
-    (let ((out (make-array (fill-pointer bytes))))
-      (dotimes (i (fill-pointer bytes) (coerce out 'string))
-        (setf (aref out i) (aref tokenizer::*byte-to-char* (aref bytes i)))))))
+  ;; vocabulary and the merge list are written in. Encoding TEXT once and mapping
+  ;; the whole byte vector is the same result as mapping character by character
+  ;; (UTF-8 has no cross-character state), and is one call rather than one per
+  ;; character.
+  (let* ((bytes (rontolisp:string-to-octets text))
+         (n (length bytes))
+         (out (make-string n)))
+    (dotimes (i n out)
+      (setf (char out i) (aref tokenizer::*byte-to-char* (aref bytes i))))))
 
 ;;; --- Unicode general categories -------------------------------------------------
 ;;; Every pre-tokenizer below is written against \p{L}, \p{N} and \p{M}, so those
@@ -611,9 +573,8 @@ token."
       (let* ((c (subseq text i (+ i 1))) (id (gethash c index)))
         (if id
             (vector-push id out)
-            (let ((bytes (make-array 4 :fill-pointer 0)))
-              (tokenizer::%utf8-push (char-code (char text i)) bytes)
-              (dotimes (k (fill-pointer bytes))
+            (let ((bytes (rontolisp:string-to-octets c)))
+              (dotimes (k (length bytes))
                 (let ((bid (tokenizer::%byte-piece-id tk (aref bytes k))))
                   (unless bid
                     (error "tokenizer: the vocabulary has no byte-fallback piece for ~a"
@@ -696,7 +657,10 @@ two tokens, so a generation loop accumulates bytes and decodes what is complete.
         (specials (tokenizer::%tk-special-set tk))
         (room 0))
     (dolist (id ids) (setq room (+ room (* 4 (length (aref tokens id))))))
-    (let ((out (make-array (+ room 1) :fill-pointer 0)))
+    (let ((out
+           (make-array (+ room 1)
+                       :element-type '(unsigned-byte 8)
+                       :fill-pointer 0)))
       (dolist (id ids out)
         (let* ((tok (aref tokens id))
                (fallback (if bpe nil (tokenizer::%byte-piece-value tok))))
@@ -708,17 +672,62 @@ two tokens, so a generation loop accumulates bytes and decodes what is complete.
                        (error "tokenizer: ~s is not a byte-level character"
                               (char tok i)))
                      (vector-push b out))))
-                (t
-                 (dotimes (i (length tok))
-                   (tokenizer::%utf8-push (char-code (char tok i)) out)))))))))
+                (t (let ((tok-bytes (rontolisp:string-to-octets tok)))
+                     (dotimes (i (length tok-bytes))
+                       (vector-push (aref tok-bytes i) out))))))))))
+
+(defun tokenizer::%packed (bytes k)
+  ;; BYTES's first K bytes as a fresh PLAIN (unsigned-byte 8) vector: a
+  ;; fill-pointer array (decode-bytes's own return shape) is never packed,
+  ;; whatever :element-type it declares (.kb/packed-integer-vectors.md), and
+  ;; packed is what rontolisp:octets-to-string / string-to-octets require.
+  ;; COERCE (not SUBSEQ alone) is what respects a fill pointer's active
+  ;; length while rebuilding the packed representation.
+  (coerce (subseq bytes 0 k) '(vector (unsigned-byte 8))))
+
+(defun tokenizer::%utf8-lead-length (b)
+  ;; The length of the sequence lead byte B starts; 1 for anything that is not
+  ;; a lead byte, so a stray byte -- a real SentencePiece byte-fallback token
+  ;; like <0xC0> is one -- is passed through immediately rather than held
+  ;; waiting for continuation bytes that will never arrive. Mirrors
+  ;; examples/llama2/llama2.lisp's utf8-length (kept in step deliberately,
+  ;; .todo/691): both need the SAME lead-byte ranges, for the same reason.
+  (cond ((< b 128) 1)
+        ((< b 194) 1)
+        ((< b 224) 2)
+        ((< b 240) 3)
+        ((< b 245) 4)
+        (t 1)))
+
+(defun tokenizer::%complete-byte-prefix (bytes)
+  ;; How many of BYTES's leading bytes are NOT part of a sequence the
+  ;; buffer's end cuts short: FRAMING, not decoding -- it never inspects a
+  ;; continuation byte's value or assembles a code point, only walks forward
+  ;; by each lead byte's OWN claimed length and stops at the first one the
+  ;; buffer cannot supply in full. A round-trip-through-the-codec test
+  ;; (encode(decode(x)) = x) looks like it could replace this, but it asks a
+  ;; different question: it also rejects a byte that leads no valid sequence
+  ;; at all, which %utf8-lead-length above passes through instead of holding.
+  ;; What tokenizer:decode uses to DROP a trailing sequence decode-bytes has
+  ;; not finished handing back yet.
+  (let ((n (length bytes)) (i 0))
+    (loop
+      (when (>= i n) (return n))
+      (let ((len (tokenizer::%utf8-lead-length (aref bytes i))))
+        (if (> (+ i len) n) (return i) (setq i (+ i len)))))))
 
 (defun tokenizer:decode (tk ids)
   "The text the token ids IDS stand for -- a WHOLE sequence, so that it round-trips
 tokenizer:encode. A SentencePiece encode opens with a dummy prefix space, and this
-takes it back off, exactly as sentencepiece's own decode does; a generation loop
-that decodes one token at a time wants tokenizer:decode-bytes instead, which never
-touches what it is given."
-  (let ((text (tokenizer::%utf8-decode (tokenizer:decode-bytes tk ids))))
+takes it back off, exactly as sentencepiece's own decode does. IDS ending mid-character
+(what a generation loop's partial history looks like) has its incomplete trailing
+sequence DROPPED rather than shown as spurious bytes -- a generation loop that wants to
+see every byte as it arrives calls tokenizer:decode-bytes instead, which never touches
+what it is given."
+  (let* ((%tk-bytes (tokenizer:decode-bytes tk ids))
+         (%tk-k (tokenizer::%complete-byte-prefix %tk-bytes))
+         (text
+          (rontolisp:octets-to-string (tokenizer::%packed %tk-bytes %tk-k))))
     (if (and (eq (tokenizer::%tk-model tk) :sentencepiece) (> (length text) 0)
              (char= (char text 0) #\Space))
         (subseq text 1)

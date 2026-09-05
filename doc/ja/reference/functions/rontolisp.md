@@ -15,6 +15,8 @@
 | `rontolisp:bits-float16` | `(rontolisp:bits-float16 15360)` | f16 ビットパターンが表す浮動小数点数 |
 | `rontolisp:widen-float-bits` | `(rontolisp:widen-float-bits bits :float16 dst)` | パックされた `(unsigned-byte 16)` ベクタの f16/bfloat16 ビットパターンを、パックされた浮動小数点配列へ一括で拡張する |
 | `rontolisp:narrow-float-bits` | `(rontolisp:narrow-float-bits src :bfloat16 dst)` | パックされた浮動小数点配列を、パックされた `(unsigned-byte 16)` ベクタの f16/bfloat16 ビットパターンへ一括で狭める |
+| `rontolisp:octets-to-string` | `(rontolisp:octets-to-string #8@(72 105))` | packed な `(unsigned-byte 8)` ベクタをデコードし、そのバイト列が表す UTF-8 テキストを返す。全域的かつ寛容 |
+| `rontolisp:string-to-octets` | `(rontolisp:string-to-octets "Hi")` | 文字列を UTF-8 としてエンコードし、packed な `(unsigned-byte 8)` ベクタとして返す |
 | `rontolisp:make-mutex` | `(rontolisp:make-mutex)` | 新しい相互排他ロック。不透明なハンドル(インタプリタと JVM では実体があり、WASM では no-op) |
 | `rontolisp:mutex-acquire` | `(rontolisp:mutex-acquire m)` | このスレッドが mutex を保持するまでブロックし、それを返します(通常は `rontolisp:with-mutex` を使用) |
 | `rontolisp:mutex-release` | `(rontolisp:mutex-release m)` | mutex の獲得を 1 回分解放し、それを返します |

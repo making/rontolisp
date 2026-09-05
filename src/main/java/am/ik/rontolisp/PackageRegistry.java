@@ -700,6 +700,13 @@ public final class PackageRegistry {
 				// The IEEE binary16 scalar pair and the bulk widen/narrow over packed
 				// float arrays (eval.FloatBitsWidening), .todo/671.
 				LispNames.FLOAT16_BITS, LispNames.BITS_FLOAT16, LispNames.WIDEN_FLOAT_BITS, LispNames.NARROW_FLOAT_BITS,
+				// The UTF-8 codec pair (eval.LispPreludeLibrary), .todo/691. The same
+				// bare member names ALSO name flexi-streams:string-to-octets /
+				// flexi-streams:octets-to-string, a different pair of symbols with a
+				// wider (:external-format/:start/:end) surface -- prelude selection
+				// matches by resolved symbol, not by this name alone, so the two never
+				// collide.
+				LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING,
 				// The bfloat16 array element type. A rontolisp EXTENSION, so it lives
 				// here and NOT in CL_TYPES: `bfloat16` is not a Common Lisp type name,
 				// unlike short-float / long-float, which the standard defines even where

@@ -15038,6 +15038,74 @@ standalone:
       (0 0 15360 49408 22080)
       (1.0 -2.5 100.0)
       (16256 49184 17096)
+  - name: octets-string-conversions
+    source: |
+      (print (rontolisp:octets-to-string #8@(72 105)))
+      (print (rontolisp:string-to-octets "Hi"))
+      (print (rontolisp:octets-to-string #8@()))
+      (print (rontolisp:string-to-octets ""))
+      (print (rontolisp:octets-to-string
+              (rontolisp:string-to-octets "Hello, 世界! 😀")))
+      ;; overlong: #xC1 #x81 assembles the same bits as ASCII 'A' (65) --
+      ;; the lenient fallback does not reject an overlong lead, only the
+      ;; strict fast path does, and refusing falls through to this answer.
+      (print (mapcar #'char-code (coerce (rontolisp:octets-to-string #8@(#xC1 #x81)) 'list)))
+      ;; a lone continuation byte decodes to its own value
+      (print (mapcar #'char-code (coerce (rontolisp:octets-to-string #8@(#x80)) 'list)))
+      ;; a 3-byte sequence the vector truncates after its first continuation
+      ;; byte: each remaining byte decodes to its own value, never dropped
+      (print (mapcar #'char-code (coerce (rontolisp:octets-to-string #8@(#xE2 #x82)) 'list)))
+      ;; a UTF-8-encoded surrogate (CESU-8's spelling of U+D800) decodes to
+      ;; that code point rather than being rejected -- a rontolisp CHARACTER
+      ;; admits any code point 0..#x10FFFF, surrogates included -- and
+      ;; re-encodes back to the identical bytes
+      (print (mapcar #'char-code (coerce (rontolisp:octets-to-string #8@(#xED #xA0 #x80)) 'list)))
+      (print (rontolisp:string-to-octets (rontolisp:octets-to-string #8@(#xED #xA0 #x80))))
+    stdout: |
+      "Hi"
+      #(72 105)
+      ""
+      #()
+      "Hello, 世界! 😀"
+      (65)
+      (128)
+      (226 130)
+      (55296)
+      #(237 160 128)
+  - name: tokenizer-decode-drops-an-incomplete-trailing-sequence
+    source: |
+      ;; A SentencePiece byte-fallback vocabulary spells the exact three bytes
+      ;; of "日" (U+65E5, E6 97 A5) as <0xE6>/<0x97>/<0xA5> tokens with ids
+      ;; 3/4/5. tokenizer:decode on a prefix of that id list must DROP the
+      ;; incomplete trailing sequence rather than show spurious bytes -- the
+      ;; policy tokenizer::%utf8-decode had before .todo/691 folded it onto
+      ;; rontolisp:octets-to-string, now restored via a length classifier
+      ;; that answers "how many bytes", not "what character" (a round-trip
+      ;; through the codec pair answers a different question and both holds
+      ;; back and drops bytes that must be passed through immediately -- a
+      ;; real byte-fallback token like <0xC0>, exercised below).
+      (let ((tk (tokenizer:make-sentencepiece
+                 #("<unk>" "<s>" "</s>" "<0xE6>" "<0x97>" "<0xA5>")
+                 #(0.0 0.0 0.0 0.0 0.0 0.0)
+                 :bos 1 :eos 2)))
+        (print (tokenizer:decode tk (list 3)))
+        (print (tokenizer:decode tk (list 3 4)))
+        (print (tokenizer:decode tk (list 3 4 5))))
+      ;; A byte-fallback token that is not a valid UTF-8 lead at all (0xC0)
+      ;; decodes immediately -- the framer never holds it waiting for
+      ;; continuation bytes that will never arrive (the length classifier
+      ;; answers 1 for it, not 2), unlike the genuinely incomplete 3-byte
+      ;; sequence above.
+      (let ((tk (tokenizer:make-sentencepiece
+                 #("<unk>" "<s>" "</s>" "<0xC0>")
+                 #(0.0 0.0 0.0 0.0)
+                 :bos 1 :eos 2)))
+        (print (mapcar #'char-code (coerce (tokenizer:decode tk (list 3)) 'list))))
+    stdout: |
+      ""
+      ""
+      "日"
+      (192)
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

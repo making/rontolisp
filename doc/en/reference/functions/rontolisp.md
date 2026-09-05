@@ -15,6 +15,8 @@ package system. Each name below links to its own page.
 | `rontolisp:bits-float16` | `(rontolisp:bits-float16 15360)` | the float an f16 bit pattern encodes |
 | `rontolisp:widen-float-bits` | `(rontolisp:widen-float-bits bits :float16 dst)` | widen a packed `(unsigned-byte 16)` vector of f16/bfloat16 bit patterns into a packed float array, in bulk |
 | `rontolisp:narrow-float-bits` | `(rontolisp:narrow-float-bits src :bfloat16 dst)` | narrow a packed float array into a packed `(unsigned-byte 16)` vector of f16/bfloat16 bit patterns, in bulk |
+| `rontolisp:octets-to-string` | `(rontolisp:octets-to-string #8@(72 105))` | decode a packed `(unsigned-byte 8)` vector as the UTF-8 text its bytes spell; total and lenient |
+| `rontolisp:string-to-octets` | `(rontolisp:string-to-octets "Hi")` | encode a string as UTF-8, as a packed `(unsigned-byte 8)` vector |
 | `rontolisp:make-mutex` | `(rontolisp:make-mutex)` | a fresh mutual-exclusion lock, as an opaque handle (real on the interpreter and the JVM, a no-op on WASM) |
 | `rontolisp:mutex-acquire` | `(rontolisp:mutex-acquire m)` | block until this thread holds the mutex; returns it (prefer `rontolisp:with-mutex`) |
 | `rontolisp:mutex-release` | `(rontolisp:mutex-release m)` | release one acquisition of the mutex; returns it |

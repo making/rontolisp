@@ -275,6 +275,46 @@ class TokenizersLibraryTest {
 		assertThat(eval(evaluator, "(tokenizer:decode *tk* (list (car '%s)))".formatted(ids))).isEqualTo("\"\"");
 	}
 
+	/**
+	 * {@code tokenizer::%complete-byte-prefix} answers "how many bytes", not "what
+	 * character" -- it is FRAMING, deliberately kept separate from decoding (.todo/691).
+	 * Conflating the two questions is exactly the defect this item found and fixed twice
+	 * over: a round-trip-through-the-codec test looks like it could answer this instead,
+	 * but it holds back (or, worse, in {@code tokenizer:decode}, drops) a byte that leads
+	 * no valid sequence at all -- a real SentencePiece byte-fallback token, e.g.
+	 * {@code <0xC0>} -- rather than passing it through immediately, which is what a stray
+	 * one of those needs. This pins {@code tokenizer::%utf8-lead-length} BY VALUE over
+	 * the entire byte range so the classifier can never drift from what a byte-fallback
+	 * token actually needs, and so it stays byte-for-byte the SAME table
+	 * examples/llama2/llama2.lisp's utf8-length hand-writes independently (an example may
+	 * reach only {@code tokenizer:} public symbols, so the two cannot share the
+	 * definition itself -- .todo/691's close).
+	 */
+	@Test
+	void utf8LeadLengthIsHowManyBytesNotWhatCharacterOverEveryLeadByte() {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		for (int b = 0; b < 256; b++) {
+			int expected;
+			if (b < 128 || b < 194 || b >= 245) {
+				// ASCII, a lone/overlong-only lead (0x80-0xC1), or a byte no UTF-8
+				// sequence ever starts with (0xF5-0xFF): pass through as ONE byte
+				// rather than wait on continuation bytes that will never arrive.
+				expected = 1;
+			}
+			else if (b < 224) {
+				expected = 2;
+			}
+			else if (b < 240) {
+				expected = 3;
+			}
+			else {
+				expected = 4;
+			}
+			assertThat(eval(evaluator, "(tokenizer::%%utf8-lead-length %d)".formatted(b))).as("byte %d", b)
+				.isEqualTo(String.valueOf(expected));
+		}
+	}
+
 	// --- the splice ---------------------------------------------------------------
 
 	@Test
