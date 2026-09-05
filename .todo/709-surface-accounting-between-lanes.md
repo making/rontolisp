@@ -156,6 +156,14 @@ duplicates.
   found three defects the same way -- chasing a 39-to-38 count, reading a skip list instead
   of trusting it, hand-reviewing ambiguous hits -- **every one by looking at the OUTPUT of
   a step rather than at its exit status.**
+  **Boundary, added 2026-09-05: the CHEAP form of this is a comparison, and it only exists
+  where a baseline does.** An acceptance slice always has one, so there the instrument is
+  free -- read the new run's skip count against the prior run's for the same slice, and the
+  negative control is unnecessary. `.todo/682`'s acceptance had a baseline two tables up in
+  the same file and nobody read it as a delta. **A first run of a new slice has no baseline,
+  and for that the negative control remains the only instrument.** Keep both halves: a rule
+  that looks like it always has a cheap path will be applied where there is no baseline and
+  will report nothing, confidently.
 - **A number whose meaning is in doubt is marked in place, never reconciled or deleted.** A
   number that is doubted and SAID to be doubted is still evidence; the same number silently
   re-fitted, or silently removed, is not -- and the reader who needs the warning is the one
