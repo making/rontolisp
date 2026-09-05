@@ -65,7 +65,8 @@ public record LispBFloat16Array(short[] data, int[] dims) implements LispFloatAr
 	 * the array to the accelerator that may already hold it and must not have it
 	 * downloaded first, and for an in-place kernel reporting a write, which names the
 	 * identity the device is keyed on. Every other caller reads through {@link #data()}.
-	 * No accelerator accepts this width today, but the seam is reported through all the
+	 * No DEVICE or library accelerator accepts this width today -- the `--simd` lane
+	 * kernels do, but only as a read operand -- and the seam is reported through all the
 	 * same so residency stays correct the moment one does.
 	 * @return the flat row-major elements, possibly stale on the host
 	 */

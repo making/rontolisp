@@ -32,6 +32,14 @@ in service of the tok/s.
 `short[]`: **half the memory of `#f`, a quarter of `#d`, and 1.6x the GEMV throughput of
 `#f` on a matrix too large for cache.**
 
+> **Confirmed on the shipped kernels, 2026-09-05** (`.todo/488` closed): 1.49x under
+> Graal and 2.00x under C2 at 4096x4096, one thread, on a cleared GB10 at base commit
+> `2275c000`. The tables in THIS item are its spike probes (`Worth.java`, four
+> accumulators + FMA) and stand as such; the shipped kernels differ from that shape only
+> by the second rounding, which wasm's lack of a deterministic FMA makes permanent. The
+> full record, the cache-resident cost and the no-size-gate decision are in
+> `.todo/488-the-fused-bfloat16-gemv-kernels/README.md`.
+
 Scope: **interpreter and JVM only.** The wasm backends, `--no-gc` and the component path
 do not get the width and must refuse it loudly (item 486).
 
@@ -103,7 +111,7 @@ carry this item.
 | `485` | the same width on the JVM backend; the embedded header does not fit in a `short` | High |
 | `486` | the backends that do not carry it must refuse it, and `--gpu`/BLAS must decline it | Low |
 | `487` | conversion and bulk width change: the bits pair, `coerce`, reading a bf16 file | Medium |
-| `488` | the fused bf16 GEMV / dot kernels -- where the 1.6x comes from | Medium |
+| `488` | the fused bf16 GEMV / dot kernels -- where the 1.6x comes from | DONE 2026-09-05 |
 | `489` | the goal: a 1B-class model on rontolisp | High |
 | `490` | bf16 on the device: `gemv_bf16`, the residency cap, the precision row | High |
 

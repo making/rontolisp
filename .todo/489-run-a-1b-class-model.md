@@ -4,8 +4,8 @@ Difficulty: High
 
 The goal `.todo/482` exists for. `.todo/484` and `.todo/485` closed 2026-09-03 and
 `.todo/487` landed its step 1; the f32 rungs below are measured and no longer projections.
-What the bf16 rungs still wait on is `.todo/488`'s wiring, not its kernels -- see the
-precondition under the prediction.
+`.todo/488`'s wiring closed 2026-09-05, so the bf16 rungs are unblocked -- see the
+precondition under the prediction for what it does and does not cover.
 
 `examples/llama2` runs `stories15M` today: 15M parameters, 60.8 MB of f32 weights, 339
 tok/s single-thread on GB10 (`.todo/457`). The point of adding a narrow width is to move
@@ -77,16 +77,18 @@ thread count -- 64 threads buy about 4x over one, because the weights have to cr
 bus once per token either way. The single-thread leg is at 8.4 and 5.0 GB/s, nowhere near
 that ceiling, so it is bound by something else.
 
-**The precondition, which `.todo/485` does not satisfy on its own.** 485 adds the
-ARRAY TYPE; it does not wire it into the accelerated path. `eval/VecSimd` declines a
-`LispBFloat16Array` at every dispatch point (`case LispBFloat16Array ignored -> null;`,
-seven of them on develop today) and falls through to the scalar Lisp defun. The fused
-kernels themselves already exist (`eval/VecSimdKernels`, wave 1 of `.todo/488`); what is
-missing is the interception that reaches them, which is `.todo/488`'s remaining wave.
-**Measured before that wiring lands, bf16 will be SLOWER than f32, and that number is
-neither a confirmation nor a refutation of anything below** -- it is the scalar path.
-The decline is deliberate: without it `--simd` would fail outright on a bf16 array, which
-would turn a speed flag into a semantic one.
+**The precondition, satisfied 2026-09-05 (`.todo/488`).** `.todo/485` added the ARRAY
+TYPE and nothing more; until 488's wiring landed, `eval/VecSimd` declined a
+`LispBFloat16Array` at every dispatch point and fell through to the scalar Lisp defun, so
+a bf16 measurement was a measurement of the scalar path and neither confirmed nor refuted
+anything below. It now fuses -- but over ONE pairing, which is the shape a decode step
+has and the shape to write the rungs in: **bf16 weights against f32 activations**, in
+`vec:sum`, `vec:dot` and `vec:matvec` / `matvec-into`. A bf16 ACTIVATION vector declines
+to the defun and will measure slow; so does every element-wise `vec:` member over bf16
+(`.todo/696`). The measured GEMV ratio against `#f` on this box is 1.49x under Graal and
+2.00x under C2 at 4096x4096 one thread, and 0.72-0.84x while the matrix is cache-resident
+(`.todo/488-the-fused-bfloat16-gemv-kernels/README.md`), so a model whose per-layer
+matrices are small will not see the headline.
 
 **The prediction, written before `.todo/485` lands so that measuring it is a test:**
 

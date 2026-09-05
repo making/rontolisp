@@ -54,10 +54,42 @@ it BY NAME at `compiler/UnsupportedFloatWidth`. `vec:` carries the width; `linal
 - Access goes through the program's own `_bf16Value(I)D` / `_bf16Bits(D)I`, pinned by
   `JvmBFloat16ArrayTest` over ALL 2^32 f32 patterns plus the double NaN space -- exhaustive in the
   NARROW direction on purpose. Element cap: `short[]`, 2^31-1 elements.
-- `--simd` on the JVM: lane kernels carry `double[]`/`float[]` only, so every `vec:` call site asks
-  each ARRAY argument POSITIVELY whether it is one of those two
-  (`JvmSimdCompiler.emitLaneWidthGuard`; scalar positions are not asked). Trap: asking "is it the
-  unsupported one?" lets the next representation fall through to the cast.
+- **`--simd` FUSES the decode shape and DECLINES every other pairing** (`.todo/488`). `vec:sum` over
+  a bf16 vector, `vec:dot` with a bf16 FIRST operand, and `vec:matvec` / `matvec-into` over a bf16
+  matrix run kernels that decode inside the lane loop -- provided every OTHER array operand is
+  `single-float`: bf16 weights against f32 activations is the only pairing the plan has
+  (`.todo/670`, `.todo/482`) and the only one with a kernel. The product keeps x's width, as the
+  defun's does. The contract is an EQUIVALENCE and not a tolerance -- widening is exact, so a fused
+  kernel is the f32 kernel over the widened operand BIT FOR BIT -- which is why the width needed no
+  entry of its own in the cross-backend identity contract: it joins the f32 reduction contract
+  instead, four pinned lanes and all (`.kb/vec.md`, "The lane-count pin"; the bf16 decode's
+  `ShortVector.SPECIES_64` is pinned for the same reason `FSPECIES_REDUCE` is).
+- **Everything else DECLINES to the scalar defun, and that includes a MIXED bf16/f32 element-wise
+  call**, which used to raise the fixed-width error under `--simd` while the defun computed it
+  happily -- `--simd` may not turn an answer into an error. Interpreter: `eval/VecSimd`'s `anyBf16`
+  guard, asked BEFORE each member's width switch (the mismatch arms signal). JVM:
+  `JvmSimdCompiler.emitLaneWidthGuard`'s second arm, keyed on `BF16_OPERAND` -- when the designated
+  operand is a `short[]` every other array operand must be a `float[]`, otherwise the ordinary
+  two-width test runs over every position. Both arms end at the kernel, so the bridge stays TOTAL:
+  no null-check rung, and a call site that never sees the width emits the bytes it always did.
+  Trap: every test is POSITIVE -- asking "is it the unsupported one?" lets the next representation
+  fall through to the cast.
+- The JVM fused kernels read the two-slot header like every other kernel in
+  `JvmSimdVectorTemplate`; `bf16Off` / `bf16Dim` are the only two places in it that spell the
+  layout. `eval/VecSimdKernels`' mirror takes bare arrays, as its f32 kernels do. Only
+  `widenBf16Into` / `narrowBf16Into` are header-free on both sides -- they are bulk buffer
+  conversions, not bridge entries.
+- **No element-wise bf16 kernel**: widening is one shift but NARROWING is not vectorized
+  (round-to-nearest-even with a NaN guard), so an element-wise arm would be a scalar store loop.
+  `.todo/696`.
+- **What it costs where it does not pay.** The fused GEMV is BELOW f32 on one thread while the
+  matrix is cache-resident and above it once it is not: on a GB10, 1024x1024 loses and 4096x4096
+  wins clearly (the numbers, both JITs, in `.todo/488`'s README). The crossover is a cache
+  hierarchy and moves with the box. There is no size gate, deliberately: the only BIT-IDENTICAL
+  alternative -- widen into an f32 scratch, then the f32 kernel -- is slower at EVERY shape on both
+  JITs, so there is nothing to switch to; and the other one, declining to the defun above a size,
+  would make the ANSWER depend on the matrix size, which no other backend reproduces. Under
+  `--parallel` the arm is at or above parity from 1024x1024 up.
 - Printing is `_bf16Print` over `FloatText.bfloat16Text`. A program that `read`s or defines a
   `print-object` method goes through `LispMacroExpander.PRINT_OBJECT_VECTOR_ARM`, whose vector arm
   excludes the packed widths BY NAME -- the miss showed only in an `-o Prog.class` E2E.
@@ -84,6 +116,10 @@ first that narrows back to `singleText`, keeping the plain-versus-exponent decis
 (`.kb/format.md`). Nothing calls it yet -- the WASM mirror lands with the array width.
 
 ## Tests
-`BFloat16Test`, `JvmBFloat16ArrayTest`, `LispEvaluatorTest`,
+`BFloat16Test`, `JvmBFloat16ArrayTest` (the `--simd` section: the fused decode shape equals the
+widened-f32 kernel and the interpreter's `--simd`, the declined members equal the defun, and the
+lane-count probe), `eval/VecSimdTest` (the interpreter twin, plus the mixed bf16/f32 element-wise
+values), `eval/VecSimdBf16KernelsTest` / `codegen/jvm/JvmSimdVectorTemplateBf16Test` (the kernels
+themselves), `JvmSimdParallelCompilerTest`, `LispEvaluatorTest`,
 `JvmLispCompilerTest#compileAndRunBfloat16Bits`,
 `WasmLispCompilerIntegrationTest#compileAndRunBfloat16Bits`; ci-spec `bfloat16-bits`.

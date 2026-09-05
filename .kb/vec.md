@@ -179,6 +179,16 @@ degrade**: `_simdInit` CATCHES the `LinkageError`, warns once on stderr, leaves 
 false, and every call site checks `_simdReady()` before falling back to the defun -- the same
 degrade `--blas`/`--gpu` give with no library/device.
 
+**bfloat16 rides layers 0 and 1 only, over ONE pairing**: `sum` / `dot` / `matvec` / `matvec-into`
+fuse a bf16 DECODE into the lane loop when the operand at the weight position is `#bf16` and every
+other array operand is `#f` -- bf16 weights against f32 activations, the only pairing the plan has.
+Every other member and every other pairing DECLINES to the scalar defun, INCLUDING a mixed
+bf16/f32 element-wise call, which `--simd` used to raise the fixed-width error on and which the
+defun computes happily; a flag may not turn an answer into an error. The fused answer is the f32
+kernel's over the widened operand BIT FOR BIT, so the width joins the reduction contract below
+rather than adding one of its own. Mechanics, the decline sites and the cache-resident cost:
+`.kb/bfloat16.md`.
+
 **Layer 2, `--no-gc`**: `NoGcWasmCompiler` lowers the whole surface itself; `isSimdCall(name)` (a
 `"vec:"` prefix test) dispatches in `collectCalls`, `typeOf`/`typeOfSimd` and
 `compileCall`/`compileSimd`. `--simd` picks real fixed-width v128 (`f64x2` with a one-element
@@ -269,7 +279,10 @@ so all four agree; the scalar `vec.lisp` reference stays the more accurate f64-a
   lanes, `+ 896` at 8, `+ 960` at 16), so `FSPECIES_REDUCE` is `FloatVector.SPECIES_128`, not
   `SPECIES_PREFERRED`, in BOTH `eval.VecSimdKernels` and `JvmSimdVectorTemplate` -- a compiled class
   must not answer differently on an AVX-512 host, and the WASM kernels are always `f32x4`.
-  Element-wise f32 kernels and f64 reductions keep `SPECIES_PREFERRED`. The two kernel files mirror
+  Element-wise f32 kernels and f64 reductions keep `SPECIES_PREFERRED`. A `#bf16` operand decodes
+  into those same four lanes (`ShortVector.SPECIES_64` -> `IntVector.SPECIES_128`, pinned for the
+  same reason) and accumulates in f32, so every probe below transfers verbatim to that width -- 2^24
+  and 1.0 are both exact in bfloat16. The two kernel files mirror
   each other operation for operation (`THRESHOLD = 128`, two-rounding mul-then-add, f64-then-narrow
   `scaleF`), so interpreter `--simd` == compiled `.class --simd` bit for bit; the eval copy is NOT
   reused from `codegen.jvm` (`eval` may not depend on it).
@@ -331,6 +344,14 @@ test input stays under `2^24`, and `ci-spec.yaml` never passes `--simd`.
 - Interpreter budget for `ExamplesE2eTest`: heat3d 0.0 s .. simd-gemv 4.7 s .. deep-digits 10.1 s ..
   tiny-llm ~13 s .. mlp 38.4 s. It fails spuriously when the GraalVM JIT prints a "Systemic Graal
   compilation failure" warning onto the program's stdout -- re-run.
+- **Take every lane-kernel number under BOTH JITs.** Graal (this box's default, CI's and the
+  native image's) and C2 (`-XX:-UseJVMCICompiler`, what a stock OpenJDK runs a compiled `.class`
+  under). A method that overruns C2's inlining budget for a Vector API call chain gets every vector
+  BOXED -- same bits, no warning, no exception, and `.todo/482` round 2 measured 1.51x under Graal
+  and **0.20x** under C2 on identical arithmetic. The rule that avoids it is ONE SMALL KERNEL METHOD
+  PER WIDTH: no decoder shared behind a flag, no width switch inside the lane loop. A shape that is
+  fast under one JIT and boxed under the other is not done, and a number without its JIT beside it
+  is not a number.
 - **Benchmarking discipline.** Run benchmarks SEQUENTIALLY. Take N >= 9 samples and print them ALL
   before claiming two configurations differ (a GraalVM scalar timing turned out bimodal --
   `226 269 269 271 271 381 383 395 400`). Measure allocation with `-XX:+UseEpsilonGC -Xmx12g
@@ -341,11 +362,17 @@ test input stays under `2^24`, and `ci-spec.yaml` never passes `--simd`.
 
 ## Tests
 
-- `eval/VecSimdTest` (every kernel vs the oracle at both widths, below/above `THRESHOLD`; the
+- `eval/VecSimdTest` (every kernel vs the oracle at both widths, below/above `THRESHOLD`; the bf16
+  fused-equals-widened equivalence at eight shapes, the bf16 lane-count probe, the declined pairings
+  and the mixed bf16/f32 element-wise VALUES; the
   `#<function vec:dot>` vs `#<lambda>` interception guard; `-into` aliasing and alias errors;
   mixed-width and rank errors), `eval/LinalgSimdTest`, `FloatWidthTest`.
 - `JvmSimdAccelCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `JvmSimdModuleFallbackTest`,
-  `JvmBFloat16ArrayTest` (every case on both backends).
+  `JvmBFloat16ArrayTest` (every case on both backends; its `--simd` section pins the fused decode
+  against BOTH the widened-f32 kernel and the interpreter's `--simd`),
+  `JvmSimdParallelCompilerTest` (the bf16 GEMV serial == parallel == widened f32, and past the
+  `--gpu` chain), and the kernels themselves in `eval/VecSimdBf16KernelsTest` /
+  `codegen/jvm/JvmSimdVectorTemplateBf16Test`.
 - `NoGcWasmCompilerTest`: `0xFD` presence/absence, `f64.load/store` 0x2B/0x39 and `f32.load/store`
   0x2A/0x38, `#f` narrow/widen, compile errors (mixed width, from-list, `matvec-into`),
   `{expAndSign,logAndTanh,sinCosTan}LowerNativelyOnNoGc`, and

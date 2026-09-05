@@ -109,6 +109,46 @@ class JvmSimdParallelCompilerTest {
 		}
 	}
 
+	/**
+	 * A 600x300 bfloat16 matrix, its EXACT f32 widening and an f32 activation vector, all
+	 * from a deterministic LCG so no value is exact at either width. Above the 2^17 work
+	 * threshold, so the rows really are split.
+	 */
+	private static final String BF16_FIXTURE = """
+			(defparameter *wb* (make-array '(600 300) :element-type 'bfloat16 :initial-element 0.0))
+			(defparameter *wf* (make-array '(600 300) :element-type 'single-float :initial-element 0.0))
+			(defparameter *x* (make-array 300 :element-type 'single-float :initial-element 0.0))
+			(let ((s 1))
+			  (dotimes (i 600)
+			    (dotimes (j 300)
+			      (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+			      (setf (aref *wb* i j) (- (/ s 1073741824.0) 1.0))
+			      (setf (aref *wf* i j) (aref *wb* i j))))
+			  (dotimes (j 300)
+			    (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+			    (setf (aref *x* j) (- (/ s 1073741824.0) 1.0))))
+			""";
+
+	@Test
+	void theFusedBf16ProductIsBitIdenticalSerialParallelAndAgainstTheWidenedF32() throws Exception {
+		// The bf16 arm inherits the row split unchanged: it is the same row chains, so
+		// the same bits, whichever thread runs which row. And it stays the f32 kernel's
+		// answer over the widened matrix, which is the fused kernels' whole contract.
+		String product = BF16_FIXTURE + "(print (linalg:to-list (vec:matvec *wb* *x*)))";
+		assertMatchesSerial(product);
+		String into = BF16_FIXTURE + """
+				(defparameter *out* (make-array 600 :element-type 'single-float :initial-element 0.0))
+				(vec:matvec-into *out* *wb* *x*)
+				(print (linalg:to-list *out*))
+				""";
+		assertMatchesSerial(into);
+		assertThat(run(compile(product, true, false)))
+			.isEqualTo(run(compile(BF16_FIXTURE + "(print (linalg:to-list (vec:matvec *wf* *x*)))", true, false)));
+		// The --gpu chain (compileMatvecChain) emits the same width guard: no device
+		// carries a bfloat16 kernel, so the weights fall past it onto the fused lanes.
+		assertThat(run(compile(product, true, true))).isEqualTo(run(compile(product, false, false)));
+	}
+
 	@Test
 	void theLinalgProductsAreBitIdenticalToTheSerialKernelsAtBothWidths() throws Exception {
 		for (String option : new String[] { DOUBLE, SINGLE }) {

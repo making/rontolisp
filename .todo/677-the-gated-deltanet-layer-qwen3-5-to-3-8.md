@@ -5,8 +5,9 @@ Difficulty: High
 Part of `.todo/670`. `.todo/676` (the layer-kind table, QK-norm, partial RoPE) and
 `.todo/674` (the Qwen3.5 pre-tokenizer) closed 2026-09-03; `.todo/675` landed the
 safetensors reader and `.todo/673` the GGUF one. Nothing here waits on a reader any
-more. What remains waiting is the bf16 `tok/s` row, which needs `.todo/485` and
-`.todo/488`'s wiring -- see `.todo/489`.
+more. The bf16 `tok/s` row is unblocked too:
+`.todo/485` closed 2026-09-03 and `.todo/488`'s wiring 2026-09-05 -- see `.todo/489` for
+the pairing it covers.
 
 **Why this model**: the user wants the newest small models, and as of 2026-09-03 the
 newest Qwen with a small member is Qwen3.5 (2026-06: 0.8B / 2B / 4B / 9B dense; 3.6 and

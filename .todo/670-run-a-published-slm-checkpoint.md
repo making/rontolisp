@@ -41,12 +41,12 @@ so `.todo/488` now takes its numbers under both JITs.
 | `674` | the byte-level BPE tokenizer (SmolLM2, Qwen, Llama 3) from the GGUF fields or `tokenizer.json` | Medium | **closed 2026-09-03** |
 | `672` | the Q8_0 quantized weight matrix and its integer-dot `vec:matvec` | High | not started; `673` leaves it one branch to replace |
 | `676` | the forward pass as a table of layer kinds: QK-norm, NoPE, gates, partial RoPE, multipliers (Qwen3, SmolLM3, Granite) | Medium | **closed 2026-09-03** |
-| `677` | the Gated DeltaNet layer: Qwen3.5-0.8B, and with it every Qwen 3.5-3.8 dense model | High | Qwen3.5-0.8B runs from both formats; bf16 `tok/s` waits on `488`'s wiring, not on `485` (closed) |
+| `677` | the Gated DeltaNet layer: Qwen3.5-0.8B, and with it every Qwen 3.5-3.8 dense model | High | Qwen3.5-0.8B runs from both formats; bf16 `tok/s` is unblocked -- `488`'s wiring landed 2026-09-05 |
 | `678` | the LFM2 gated short-conv layer: LFM2.5-1.2B-Instruct, the newest ~1B model | Medium | not started; the LFM2.5 files are downloaded |
-| `489` | the model rungs: TinyLlama / SmolLM2 (loader shakeout), Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High | f32 rungs measured for two models; bf16 rungs wait on `488`'s wiring alone (`485` closed) |
+| `489` | the model rungs: TinyLlama / SmolLM2 (loader shakeout), Qwen3-0.6B, LFM2.5-1.2B, Qwen3.5-0.8B | High | f32 rungs measured for two models; bf16 rungs are unblocked -- `488`'s wiring landed 2026-09-05, at 1.49x (Graal) / 2.00x (C2) of f32 on a DRAM-bound GEMV |
 
 **Order: 671 -> 673 / 675 -> 674 -> 489 rung 0 at f32 -> 676 -> 678 -> 677 ->
-`.todo/482`'s 483-488 (only `487`'s remainder and `488` are left) -> 489 at bf16 -> 672 -> 490.** (676-678 are pure Lisp over the
+`.todo/482`'s 483-488 (only `487`'s remainder is left; `488` closed 2026-09-05) -> 489 at bf16 -> 672 -> 490.** (676-678 are pure Lisp over the
 readers and can overlap the width chain; they touch no Java.) The point of that order: 671 needs no new array type and lands on every
 backend, which lets a BF16 checkpoint load into `#f` BEFORE the bf16 width exists, so
 the readers and the model are debugged at f32 (4.4 GB, fits) with the kernels out of the
@@ -161,7 +161,7 @@ what A's half needs from it, in the order A needs it):
 
 | wave | lane B1 | lane B2 |
 | --- | --- | --- |
-| 1 | `488`'s interception into `--simd` / `--parallel` -- **the kernels already exist in `VecSimdKernels`; only the wiring is missing**, and A's bf16 rungs are blocked on it (High) | `691` then `690`: one `octets-to-string` builtin, the three hand-written UTF-8 decoders folded onto it, and the character-index walk that makes a 13 MB `tokenizer.json` unparseable (Low, then Medium) |
+| 1 | ~~`488`'s interception into `--simd` / `--parallel`~~ **DONE 2026-09-05**: `sum` / `dot` / `matvec` / `matvec-into` fuse bf16 weights against f32 activations, serial and `--parallel`, interpreter and JVM, bit-identical to the f32 kernel over the widened matrix. Element-wise, x64 and the narrow-x-narrow pairing went to `696` | `691` then `690`: one `octets-to-string` builtin, the three hand-written UTF-8 decoders folded onto it, and the character-index walk that makes a 13 MB `tokenizer.json` unparseable (Low, then Medium) |
 | 2 | `672` Q8_0: `.todo/673` leaves exactly one branch and one ci-spec `handler-case` to replace, over a reader whose metadata and directory already work. **It does NOT wait on `691`** -- that was said before `673` landed, and the GGUF metadata and vocabulary now demonstrably read; `691` matters to `tokenizer.json`, which is `674`'s side (High) | `487`'s remainder, including the duplicate census -- its scope is written into 487 itself (Medium) |
 | 3 | `490` bf16 on the device (High) | `687` first, then `683`: `486` already landed 687's width wire, so what is left there is the constructors carrying a third width plus one pinning hole; `683` still needs a reflection-test design (Medium) |
 

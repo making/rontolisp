@@ -81,6 +81,18 @@ final class JvmSimdCompiler {
 			LispNames.VEC_CLIP, 2, LispNames.VEC_CLIP_INTO, 2);
 
 	/**
+	 * The members with a FUSED bfloat16 kernel, mapped to the one operand position a
+	 * {@code short[]} may appear in: the weight matrix of a GEMV, the first operand of a
+	 * dot, the operand of a sum. Every OTHER array operand of such a call must then be a
+	 * {@code float[]} -- that pairing, bf16 weights against f32 activations, is the only
+	 * one {@link JvmSimdVectorTemplate} carries a kernel for, and the guard below is what
+	 * keeps the bridge TOTAL over what reaches it. A member absent from this map declines
+	 * a {@code short[]} in every position, as it did before the width existed.
+	 */
+	private static final Map<String, Integer> BF16_OPERAND = Map.of(LispNames.VEC_SUM, 0, LispNames.VEC_DOT, 0,
+			LispNames.VEC_MATVEC, 0, LispNames.VEC_MATVEC_INTO, 1);
+
+	/**
 	 * Returns whether the given {@code simd} package member is one of the vectorizable
 	 * kernels this compiler accelerates.
 	 */
@@ -375,12 +387,52 @@ final class JvmSimdCompiler {
 	 * ({@link #SCALAR_TAIL}) is not an array and is not asked. Each failing test branches
 	 * to the caller's fallback; the positions are appended to {@code fallbackBranches}
 	 * for the caller to patch.
+	 *
+	 * <p>
+	 * The four members of {@link #BF16_OPERAND} carry a FUSED bfloat16 kernel as well, so
+	 * their guard has a second arm: when the designated operand is a {@code short[]},
+	 * every other array operand must be a {@code float[]} (bf16 weights, f32
+	 * activations); when it is not, the ordinary two-width test runs over every position
+	 * and a {@code short[]} anywhere fails it. The two arms are exclusive and both end at
+	 * the kernel call, so the bridge stays TOTAL over what the guard admits -- no
+	 * decline, no null check, and a call site that never sees the width emits exactly
+	 * what it emitted before.
 	 */
 	private static void emitLaneWidthGuard(JvmLispCompiler.Ctx ctx, String member, int[] slots,
 			List<Integer> fallbackBranches) {
 		int arrays = slots.length - SCALAR_TAIL.getOrDefault(member, 0);
 		int doubleArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[D")).index();
 		int floatArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[F")).index();
+		Integer bf16Operand = BF16_OPERAND.get(member);
+		int skipGeneral = -1;
+		if (bf16Operand != null) {
+			// if (!(slot_p instanceof short[])) goto general;
+			int shortArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[S")).index();
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slots[bf16Operand]);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(shortArrayClass);
+			int general = ctx.code.size();
+			ctx.emit(Opcode.IFEQ);
+			ctx.emitU2(0);
+			for (int i = 0; i < arrays; i++) {
+				if (i == bf16Operand) {
+					continue;
+				}
+				// if (!(slot_i instanceof float[])) goto fallback
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slots[i]);
+				ctx.emit(Opcode.INSTANCEOF);
+				ctx.emitU2(floatArrayClass);
+				fallbackBranches.add(ctx.code.size());
+				ctx.emit(Opcode.IFEQ);
+				ctx.emitU2(0);
+			}
+			skipGeneral = ctx.code.size();
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, general, ctx.code.size());
+		}
 		for (int i = 0; i < arrays; i++) {
 			// if (!(slot instanceof double[]) && !(slot instanceof float[])) goto
 			// fallback
@@ -399,6 +451,9 @@ final class JvmSimdCompiler {
 			ctx.emit(Opcode.IFEQ);
 			ctx.emitU2(0);
 			JvmEmitHelper.patchBranch(ctx, isDouble, ctx.code.size());
+		}
+		if (skipGeneral >= 0) {
+			JvmEmitHelper.patchBranch(ctx, skipGeneral, ctx.code.size());
 		}
 	}
 

@@ -462,6 +462,13 @@ final class JvmSimdVectorTemplate {
 		if (v instanceof float[] fx) {
 			return sumF(fx);
 		}
+		if (v instanceof short[] bx) {
+			// bfloat16: the fused decode, which is sumF over the widened array bit for
+			// bit. Reached only through the call site's width guard
+			// (JvmSimdCompiler.emitLaneWidthGuard), which lets this width past for the
+			// members that have a fused kernel and no others.
+			return sumBf16(bx);
+		}
 		double[] x = (double[]) java.util.Objects.requireNonNull(v);
 		int ox = 1 + (int) x[0];
 		int n = x.length - ox;
@@ -482,6 +489,12 @@ final class JvmSimdVectorTemplate {
 	}
 
 	static @Nullable Object simdDot(@Nullable Object a, @Nullable Object b) {
+		if (a instanceof short[] bw) {
+			// bfloat16 weights against f32 activations, the one pairing with a fused
+			// kernel: dotF(widen(w), x), bit for bit. The call site's width guard admits
+			// no other combination.
+			return dotBf16(bw, asFloat(b));
+		}
 		if (a instanceof float[] fx) {
 			return dotF(fx, asFloat(b));
 		}
@@ -537,6 +550,11 @@ final class JvmSimdVectorTemplate {
 	}
 
 	private static @Nullable Object matvec(@Nullable Object w, @Nullable Object x, boolean parallel) {
+		if (w instanceof short[] bw) {
+			// bfloat16 weights, f32 activations, an f32 product -- the decode shape, and
+			// the width the scalar defun answers with too (vec::%make-like follows x).
+			return matvecBf16(bw, asFloat(x), parallel);
+		}
 		if (w instanceof float[] fw) {
 			float[] fx = asFloat(x);
 			int d = (int) fw[1];
@@ -880,6 +898,11 @@ final class JvmSimdVectorTemplate {
 		if (out == x || out == w) {
 			throw new IllegalArgumentException(
 					"vec:matvec-into: out must not be the same array as w or x (each out element folds over all of x)");
+		}
+		if (w instanceof short[] bw) {
+			float[] fr = (float[]) java.util.Objects.requireNonNull(out);
+			matvecIntoBf16(fr, 1 + (int) fr[0], bw, asFloat(x), parallel);
+			return out;
 		}
 		if (out instanceof float[] fr) {
 			float[] fw = asFloat(w);
@@ -4192,11 +4215,18 @@ final class JvmSimdVectorTemplate {
 	// at 1.5-2.1x under Graal on the identical arithmetic. Keep these methods small, and
 	// take every number under both JITs.
 	//
-	// Unlike every other kernel here the operands are BARE arrays with NO dimension
-	// header -- the packed bf16 array type does not exist yet, so these are standalone
-	// kernels mirroring eval.VecSimdKernels' operation for operation; the `--simd` /
-	// `--parallel` interception grows header-aware bridge entries in front of them once
-	// the type does.
+	// The fused kernels read the compiled packed representation, like every other kernel
+	// here, so they carry the bfloat16 HEADER LAYOUT: a dimension is an int and a short
+	// caps at 32767, so each dimension takes TWO header slots and the data starts at
+	// `1 + 2 * rank`, not `1 + rank` (.kb/bfloat16.md). bf16Off / bf16Dim below are the
+	// only two places that spell it -- a kernel hard-coding the one-slot formula reads a
+	// length-1 array's rank word as its element, silently. eval.VecSimdKernels mirrors
+	// these operation for operation over ITS representation, which is a bare short[] with
+	// no header, exactly as its f32 kernels mirror the f32 ones here.
+	//
+	// widenBf16Into / narrowBf16Into are the exception: they are bulk conversions between
+	// two raw buffers (what a checkpoint loader wants, and the equivalence route the
+	// tests pin the fused kernels against), so they take no header and read from zero.
 
 	/**
 	 * The short species the bf16 decode loads: four lanes, matching
@@ -4209,6 +4239,20 @@ final class JvmSimdVectorTemplate {
 
 	/** The int species the decode widens into: four lanes, 128 bits. */
 	private static final VectorSpecies<Integer> ISPECIES_BF16 = IntVector.SPECIES_128;
+
+	/**
+	 * Where a packed bfloat16 array's elements start: {@code 1 + 2 * rank}. Each
+	 * dimension takes two header slots because a {@code short} cannot hold one
+	 * ({@code .kb/bfloat16.md}); the rank itself fits in the first slot.
+	 */
+	private static int bf16Off(short[] a) {
+		return 1 + 2 * a[0];
+	}
+
+	/** Dimension {@code k} of a packed bfloat16 array: its two header slots rejoined. */
+	private static int bf16Dim(short[] a, int k) {
+		return ((a[1 + 2 * k] & 0xffff) << 16) | (a[2 + 2 * k] & 0xffff);
+	}
 
 	/**
 	 * Widens four bf16 elements at {@code off} into four floats. {@code convertShape} --
@@ -4289,19 +4333,20 @@ final class JvmSimdVectorTemplate {
 	 * @return {@code sumF(widen(x))}, bit for bit
 	 */
 	static double sumBf16(short[] x) {
-		int n = x.length;
+		int ox = bf16Off(x);
+		int n = x.length - ox;
 		int i = 0;
 		float acc = 0.0f;
 		if (n >= THRESHOLD) {
 			FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
 			int bound = FSPECIES_REDUCE.loopBound(n);
 			for (; i < bound; i += FSPECIES_REDUCE.length()) {
-				vacc = vacc.add(widenBf16(x, i));
+				vacc = vacc.add(widenBf16(x, ox + i));
 			}
 			acc = sumLanesF(vacc);
 		}
 		for (; i < n; i++) {
-			acc += bf16ToFloat(x[i]);
+			acc += bf16ToFloat(x[ox + i]);
 		}
 		return acc;
 	}
@@ -4312,19 +4357,21 @@ final class JvmSimdVectorTemplate {
 	 * @return {@code dotF(widen(w), x)}, bit for bit
 	 */
 	static double dotBf16(short[] w, float[] x) {
-		int n = Math.min(w.length, x.length);
+		int ow = bf16Off(w);
+		int ox = 1 + (int) x[0];
+		int n = Math.min(w.length - ow, x.length - ox);
 		int i = 0;
 		float acc = 0.0f;
 		if (n >= THRESHOLD) {
 			FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
 			int bound = FSPECIES_REDUCE.loopBound(n);
 			for (; i < bound; i += FSPECIES_REDUCE.length()) {
-				vacc = vacc.add(widenBf16(w, i).mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i)));
+				vacc = vacc.add(widenBf16(w, ow + i).mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)));
 			}
 			acc = sumLanesF(vacc);
 		}
 		for (; i < n; i++) {
-			acc += bf16ToFloat(w[i]) * x[i];
+			acc += bf16ToFloat(w[ow + i]) * x[ox + i];
 		}
 		return acc;
 	}
@@ -4334,13 +4381,16 @@ final class JvmSimdVectorTemplate {
 	 * row's bits still depend on nothing but the row and {@code --parallel} may split
 	 * them exactly as it splits the f32 rows.
 	 */
-	private static void matvecRowsBf16(float[] r, short[] w, int cols, float[] x, int from, int to) {
+	private static void matvecRowsBf16(float[] r, int or, short[] w, float[] x, int from, int to) {
+		int ow = bf16Off(w);
+		int cols = bf16Dim(w, 1);
+		int ox = 1 + (int) x[0];
 		int lanes = FSPECIES_REDUCE.length();
 		int wide = cols >= MATVEC_ACC_THRESHOLD ? cols / (MATVEC_ACCUMULATORS * lanes) * (MATVEC_ACCUMULATORS * lanes)
 				: 0;
 		int bound = FSPECIES_REDUCE.loopBound(cols);
 		for (int row = from; row < to; row++) {
-			int base = row * cols;
+			int base = ow + row * cols;
 			int i = 0;
 			float acc = 0.0f;
 			if (cols >= MATVEC_ROW_THRESHOLD) {
@@ -4351,25 +4401,25 @@ final class JvmSimdVectorTemplate {
 					FloatVector a2 = a0;
 					FloatVector a3 = a0;
 					for (; i < wide; i += MATVEC_ACCUMULATORS * lanes) {
-						a0 = a0.add(widenBf16(w, base + i).mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i)));
+						a0 = a0.add(widenBf16(w, base + i).mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)));
 						a1 = a1.add(widenBf16(w, base + i + lanes)
-							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i + lanes)));
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i + lanes)));
 						a2 = a2.add(widenBf16(w, base + i + 2 * lanes)
-							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i + 2 * lanes)));
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i + 2 * lanes)));
 						a3 = a3.add(widenBf16(w, base + i + 3 * lanes)
-							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i + 3 * lanes)));
+							.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i + 3 * lanes)));
 					}
 					vacc = a0.add(a1).add(a2.add(a3));
 				}
 				for (; i < bound; i += lanes) {
-					vacc = vacc.add(widenBf16(w, base + i).mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i)));
+					vacc = vacc.add(widenBf16(w, base + i).mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)));
 				}
 				acc = sumLanesF(vacc);
 			}
 			for (; i < cols; i++) {
-				acc += bf16ToFloat(w[base + i]) * x[i];
+				acc += bf16ToFloat(w[base + i]) * x[ox + i];
 			}
-			r[row] = acc;
+			r[or + row] = acc;
 		}
 	}
 
@@ -4377,22 +4427,28 @@ final class JvmSimdVectorTemplate {
 	 * The {@code matvec-into} row loop over a bf16 matrix and an f32 vector, into a bare
 	 * f32 result.
 	 */
-	static void matvecIntoBf16(float[] r, short[] w, int rows, int cols, float[] x, boolean parallel) {
+	static void matvecIntoBf16(float[] r, int or, short[] w, float[] x, boolean parallel) {
+		int rows = bf16Dim(w, 0);
+		int cols = bf16Dim(w, 1);
 		if (parallel && parallelWorth(rows, cols)) {
 			parallelRows(rows, cols, (from, to) -> {
-				matvecRowsBf16(r, w, cols, x, from, to);
+				matvecRowsBf16(r, or, w, x, from, to);
 				return 0;
 			});
 		}
 		else {
-			matvecRowsBf16(r, w, cols, x, 0, rows);
+			matvecRowsBf16(r, or, w, x, 0, rows);
 		}
 	}
 
-	/** The {@code matvec} row loop over a bf16 matrix: {@link #dotBf16} once per row. */
-	static float[] matvecBf16(short[] w, int rows, int cols, float[] x, boolean parallel) {
-		float[] r = new float[rows];
-		matvecIntoBf16(r, w, rows, cols, x, parallel);
+	/**
+	 * The {@code matvec} row loop over a bf16 matrix: {@link #dotBf16} once per row, into
+	 * a fresh packed f32 vector -- the width the scalar defun gives the product too
+	 * ({@code vec::%make-like} follows {@code x}).
+	 */
+	static float[] matvecBf16(short[] w, float[] x, boolean parallel) {
+		float[] r = newVecF(bf16Dim(w, 0));
+		matvecIntoBf16(r, 2, w, x, parallel);
 		return r;
 	}
 

@@ -85,6 +85,9 @@ public final class VecSimd {
 		defineFn(globalEnv, evaluator, LispNames.VEC_SCALE, 2, (name, args) -> {
 			LispFloatArray v = array(name, args.get(0));
 			double s = scalar(name, args.get(1));
+			if (anyBf16(v)) {
+				return null;
+			}
 			return switch (v) {
 				case LispDoubleFloatArray d -> vector(VecSimdKernels.scale(d.data(), s));
 				case LispSingleFloatArray f -> vector(VecSimdKernels.scaleF(f.data(), s));
@@ -97,8 +100,10 @@ public final class VecSimd {
 			return switch (v) {
 				case LispDoubleFloatArray d -> new LispDouble(VecSimdKernels.sum(d.data()));
 				case LispSingleFloatArray f -> new LispDouble(VecSimdKernels.sumF(f.data()));
-				// No lane kernel reads this width; the scalar defun answers.
-				case LispBFloat16Array ignored -> null;
+				// The fused decode: sumBf16 is sumF over the widened array, bit for bit,
+				// so this width joins the f32 reduction contract rather than making a
+				// new one (.kb/bfloat16.md, "The packed array").
+				case LispBFloat16Array b -> new LispDouble(VecSimdKernels.sumBf16(b.data()));
 			};
 		});
 		defineFn(globalEnv, evaluator, LispNames.VEC_DOT, 2, (name, args) -> {
@@ -106,19 +111,28 @@ public final class VecSimd {
 			LispFloatArray b = array(name, args.get(1));
 			return switch (a) {
 				case LispDoubleFloatArray x -> {
+					if (b instanceof LispBFloat16Array) {
+						yield null;
+					}
 					if (!(b instanceof LispDoubleFloatArray y)) {
 						throw mixedWidth(name);
 					}
 					yield new LispDouble(VecSimdKernels.dot(x.data(), y.data()));
 				}
 				case LispSingleFloatArray x -> {
+					if (b instanceof LispBFloat16Array) {
+						yield null;
+					}
 					if (!(b instanceof LispSingleFloatArray y)) {
 						throw mixedWidth(name);
 					}
 					yield new LispDouble(VecSimdKernels.dotF(x.data(), y.data()));
 				}
-				// No lane kernel reads this width; the scalar defun answers.
-				case LispBFloat16Array ignored -> null;
+				// The fused decode, over the ONE pairing it has a kernel for: bf16
+				// weights and f32 activations. Any other pairing declines (never
+				// signals) -- the scalar defun widens both operands and answers.
+				case LispBFloat16Array w -> b instanceof LispSingleFloatArray y
+						? new LispDouble(VecSimdKernels.dotBf16(w.data(), y.data())) : null;
 			};
 		});
 		defineFn(globalEnv, evaluator, LispNames.VEC_MATVEC, 2, (name, args) -> {
@@ -131,19 +145,29 @@ public final class VecSimd {
 			int cols = w.dims()[1];
 			return switch (w) {
 				case LispDoubleFloatArray mw -> {
+					if (x instanceof LispBFloat16Array) {
+						yield null;
+					}
 					if (!(x instanceof LispDoubleFloatArray vx)) {
 						throw mixedWidth(name);
 					}
 					yield vector(VecSimdKernels.matvec(mw.data(), rows, cols, vx.data(), parallel));
 				}
 				case LispSingleFloatArray mw -> {
+					if (x instanceof LispBFloat16Array) {
+						yield null;
+					}
 					if (!(x instanceof LispSingleFloatArray vx)) {
 						throw mixedWidth(name);
 					}
 					yield vector(VecSimdKernels.matvecF(mw.data(), rows, cols, vx.data(), parallel));
 				}
-				// No lane kernel reads this width; the scalar defun answers.
-				case LispBFloat16Array ignored -> null;
+				// The decode shape: bf16 weights, f32 activations, an f32 result -- the
+				// width the scalar defun gives it too (vec::%make-like follows x). A bf16
+				// x narrows every stored element, which no lane kernel does, so that
+				// pairing declines.
+				case LispBFloat16Array mw -> x instanceof LispSingleFloatArray vx
+						? vector(VecSimdKernels.matvecBf16(mw.data(), rows, cols, vx.data(), parallel)) : null;
 			};
 		});
 		installUnary(globalEnv, evaluator);
@@ -166,6 +190,9 @@ public final class VecSimd {
 			LispFloatArray v = array(name, args.get(0));
 			double lo = scalar(name, args.get(1));
 			double hi = scalar(name, args.get(2));
+			if (anyBf16(v)) {
+				return null;
+			}
 			return switch (v) {
 				case LispDoubleFloatArray x -> {
 					double[] r = new double[x.data().length];
@@ -192,6 +219,9 @@ public final class VecSimd {
 			LispFloatArray v = array(name, args.get(1));
 			double lo = scalar(name, args.get(2));
 			double hi = scalar(name, args.get(3));
+			if (anyBf16(out, v)) {
+				return null;
+			}
 			switch (out) {
 				case LispDoubleFloatArray r -> {
 					if (!(v instanceof LispDoubleFloatArray x)) {
@@ -300,6 +330,9 @@ public final class VecSimd {
 			LispFloatArray out = array(name, args.get(0));
 			LispFloatArray v = array(name, args.get(1));
 			double s = scalar(name, args.get(2));
+			if (anyBf16(out, v)) {
+				return null;
+			}
 			switch (out) {
 				case LispDoubleFloatArray r -> {
 					if (!(v instanceof LispDoubleFloatArray x)) {
@@ -331,6 +364,18 @@ public final class VecSimd {
 			}
 			int rows = w.dims()[0];
 			int cols = w.dims()[1];
+			if (w instanceof LispBFloat16Array || x instanceof LispBFloat16Array) {
+				// The decode shape, into an f32 destination; anything else with a bf16
+				// operand declines to the scalar defun rather than signalling.
+				if (!(out instanceof LispSingleFloatArray r) || !(w instanceof LispBFloat16Array mw)
+						|| !(x instanceof LispSingleFloatArray vx)) {
+					return null;
+				}
+				requireDisjoint(name, r.data() == vx.data());
+				VecSimdKernels.matvecIntoBf16(r.data(), mw.data(), rows, cols, vx.data(), parallel);
+				FloatArrayAccessHook.written(r.storage());
+				return args.get(0);
+			}
 			switch (out) {
 				case LispDoubleFloatArray r -> {
 					if (!(w instanceof LispDoubleFloatArray mw) || !(x instanceof LispDoubleFloatArray vx)) {
@@ -348,7 +393,8 @@ public final class VecSimd {
 					VecSimdKernels.matvecIntoF(r.data(), mw.data(), rows, cols, vx.data(), parallel);
 					FloatArrayAccessHook.written(r.storage());
 				}
-				// No lane kernel reads this width; the scalar defun answers.
+				// Unreachable: a bf16 destination was answered above. The arm is what
+				// keeps the switch exhaustive over the sealed umbrella (.kb/vec.md).
 				case LispBFloat16Array ignored -> {
 					return null;
 				}
@@ -366,6 +412,9 @@ public final class VecSimd {
 			FloatKernel1Into f32) {
 		defineFn(globalEnv, evaluator, name, 1, (fnName, args) -> {
 			LispFloatArray v = array(fnName, args.get(0));
+			if (anyBf16(v)) {
+				return null;
+			}
 			return switch (v) {
 				case LispDoubleFloatArray x -> {
 					double[] r = new double[x.data().length];
@@ -389,6 +438,9 @@ public final class VecSimd {
 		defineFn(globalEnv, evaluator, name, 2, (fnName, args) -> {
 			LispFloatArray out = array(fnName, args.get(0));
 			LispFloatArray v = array(fnName, args.get(1));
+			if (anyBf16(out, v)) {
+				return null;
+			}
 			switch (out) {
 				case LispDoubleFloatArray r -> {
 					if (!(v instanceof LispDoubleFloatArray x)) {
@@ -422,6 +474,9 @@ public final class VecSimd {
 			LispFloatArray out = array(fnName, args.get(0));
 			LispFloatArray a = array(fnName, args.get(1));
 			LispFloatArray b = array(fnName, args.get(2));
+			if (anyBf16(out, a, b)) {
+				return null;
+			}
 			switch (out) {
 				case LispDoubleFloatArray r -> {
 					if (!(a instanceof LispDoubleFloatArray x) || !(b instanceof LispDoubleFloatArray y)) {
@@ -452,6 +507,9 @@ public final class VecSimd {
 		defineFn(globalEnv, evaluator, name, 2, (fnName, args) -> {
 			LispFloatArray a = array(fnName, args.get(0));
 			LispFloatArray b = array(fnName, args.get(1));
+			if (anyBf16(a, b)) {
+				return null;
+			}
 			return switch (a) {
 				case LispDoubleFloatArray x -> {
 					if (!(b instanceof LispDoubleFloatArray y)) {
@@ -491,6 +549,27 @@ public final class VecSimd {
 			LispVal fast = body.apply(name, args);
 			return fast != null ? fast : evaluator.applyGlobal(scalarDefun, args);
 		}));
+	}
+
+	/**
+	 * Whether any operand is a packed bfloat16 array. The element-wise members have no
+	 * fused bf16 kernel -- an intermediate at 8 mantissa bits compounds fast, so this
+	 * width is for STORAGE, and the element-wise route would be widen, compute in f32 and
+	 * narrow on store ({@code .todo}'s follow-up) -- so they DECLINE the width rather
+	 * than signal the mixed-width error, and the scalar {@code vec.lisp} defun answers.
+	 * Asked before the width switch because the mismatch arms below signal: a bf16
+	 * operand beside an f32 one is a shape the oracle computes happily, and
+	 * {@code --simd} may not turn it into an error.
+	 * @param arrays the member's array operands
+	 * @return {@code true} when at least one is a bfloat16 array
+	 */
+	private static boolean anyBf16(LispFloatArray... arrays) {
+		for (LispFloatArray a : arrays) {
+			if (a instanceof LispBFloat16Array) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static String qualified(String name) {

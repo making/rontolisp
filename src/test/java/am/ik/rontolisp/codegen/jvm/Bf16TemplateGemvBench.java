@@ -15,6 +15,12 @@ import java.util.Random;
  * kernels -- is changing an inlining decision, which is exactly the failure mode
  * {@code .todo/482} round 2 found.
  *
+ * <p>
+ * Both arms here go through the real bridge entries ({@code simdMatvecInto} /
+ * {@code simdMatvecIntoParallel}) over headered packed arrays, so what is timed is the
+ * dispatch a compiled program pays as well as the loop -- including the bfloat16 header's
+ * two-slots-per-dimension arithmetic.
+ *
  * <pre>{@code
  * CP=target/classes:target/test-classes
  * java --add-modules jdk.incubator.vector -cp $CP am.ik.rontolisp.codegen.jvm.Bf16TemplateGemvBench
@@ -74,40 +80,46 @@ public final class Bf16TemplateGemvBench {
 			int cols = shape[1];
 			int elements = rows * cols;
 			Random random = new Random(11);
-			// The f32 baseline runs through the real bridge entry, so it carries the
-			// rank-2 packed header [2, rows, cols, ...]; the bf16 kernels are standalone
-			// and take a bare short[] until the packed bf16 type exists.
+			// Both arms run through the real bridge entry, so both carry a rank-2 packed
+			// header: [2, rows, cols, ...] at f32, and [2, rows>>>16, rows&0xffff,
+			// cols>>>16, cols&0xffff, ...] at bfloat16, where a dimension needs two
+			// slots because a short cannot hold one (.kb/bfloat16.md).
 			float[] wf = new float[3 + elements];
 			wf[0] = 2.0f;
 			wf[1] = rows;
 			wf[2] = cols;
-			short[] wb = new short[elements];
+			short[] wb = new short[5 + elements];
+			wb[0] = 2;
+			wb[1] = (short) (rows >>> 16);
+			wb[2] = (short) rows;
+			wb[3] = (short) (cols >>> 16);
+			wb[4] = (short) cols;
 			for (int i = 0; i < elements; i++) {
 				short bits = JvmSimdVectorTemplate.floatToBf16((float) (random.nextGaussian() * 0.02));
-				wb[i] = bits;
+				wb[5 + i] = bits;
 				wf[3 + i] = JvmSimdVectorTemplate.bf16ToFloat(bits);
 			}
 			float[] xp = new float[2 + cols];
 			xp[0] = 1.0f;
 			xp[1] = cols;
-			float[] x = new float[cols];
 			for (int i = 0; i < cols; i++) {
-				x[i] = (float) random.nextGaussian();
-				xp[2 + i] = x[i];
+				xp[2 + i] = (float) random.nextGaussian();
 			}
 			float[] rp = new float[2 + rows];
 			rp[0] = 1.0f;
 			rp[1] = rows;
-			float[] r = new float[rows];
+			float[] r = new float[2 + rows];
+			r[0] = 1.0f;
+			r[1] = rows;
 			int iterations = elements > (1 << 22) ? 10 : 40;
 
 			System.out.printf("%n=== %dx%d (%.1f MB f32 / %.1f MB bf16)%n%-26s %9s %9s %8s%n", rows, cols,
 					elements * 4 / 1e6, elements * 2 / 1e6, "variant", "ms", "Gelem/s", "vs f32");
 			String[] names = { "f32 lanes", "bf16 fused", "f32 lanes --parallel", "bf16 fused --parallel" };
 			Variant[] variants = { () -> JvmSimdVectorTemplate.simdMatvecInto(rp, wf, xp),
-					() -> JvmSimdVectorTemplate.matvecIntoBf16(r, wb, rows, cols, x, false),
+					() -> JvmSimdVectorTemplate.simdMatvecInto(r, wb, xp),
 					() -> JvmSimdVectorTemplate.simdMatvecIntoParallel(rp, wf, xp),
-					() -> JvmSimdVectorTemplate.matvecIntoBf16(r, wb, rows, cols, x, true) };
+					() -> JvmSimdVectorTemplate.simdMatvecIntoParallel(r, wb, xp) };
 			long baseline = 0;
 			for (int i = 0; i < names.length; i++) {
 				long ns = time(variants[i], iterations);
@@ -117,12 +129,12 @@ public final class Bf16TemplateGemvBench {
 				System.out.printf("%-26s %9.3f %9.2f %7.2fx%n", names[i], ns / 1e6, elements / (double) ns,
 						baseline / (double) ns);
 			}
-			JvmSimdVectorTemplate.matvecIntoBf16(r, wb, rows, cols, x, false);
+			JvmSimdVectorTemplate.simdMatvecInto(r, wb, xp);
 			JvmSimdVectorTemplate.simdMatvecInto(rp, wf, xp);
 			double fused = 0.0;
 			double widened = 0.0;
 			for (int i = 0; i < rows; i++) {
-				fused += r[i];
+				fused += r[2 + i];
 				widened += rp[2 + i];
 			}
 			System.out.printf("checksum fused=%a widen-then-f32=%a identical=%b%n", fused, widened, fused == widened);

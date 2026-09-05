@@ -29,8 +29,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class VecSimdTest {
 
 	private LispVal eval(String input, boolean simd) {
+		return eval(input, simd, false);
+	}
+
+	private LispVal eval(String input, boolean simd, boolean parallel) {
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		evaluator.setSimd(simd);
+		evaluator.setParallel(parallel);
 		LispVal result = LispNil.INSTANCE;
 		for (LispVal expr : LispReader.readAllFromString(input)) {
 			result = evaluator.eval(expr);
@@ -638,6 +643,165 @@ class VecSimdTest {
 			.isEqualTo(eval("(vec:relu (vec:from-list '(-1.0 2.0)))", false).print());
 		assertThat(eval("(let ((v (vec:from-list '(-9.0 9.0)))) (vec:clip-into v v -1.0 1.0) v)", true).print())
 			.isEqualTo("#d(-1.0 1.0)");
+	}
+
+	// --- the fused bfloat16 kernels --------------------------------------------------
+
+	/**
+	 * A program binding {@code wb} (a {@code rows x cols} bfloat16 matrix), {@code wf}
+	 * (its EXACT f32 widening -- bf16 is the top half of an f32, so the copy loses
+	 * nothing), {@code vb}/{@code vf} (a bfloat16 vector and its widening) and {@code x}
+	 * (f32 activations), then evaluating {@code body}. The values come from a
+	 * deterministic LCG and are deliberately NOT exact at either width: the fused
+	 * kernels' contract is bit equality with the f32 kernel over the widened operand, and
+	 * only inexact values can catch a decode that rounds differently.
+	 */
+	private static String bf16Fixture(int rows, int cols, String body) {
+		return """
+				(let ((s 1)
+				      (wb (make-array '(%1$d %2$d) :element-type 'bfloat16 :initial-element 0.0))
+				      (wf (make-array '(%1$d %2$d) :element-type 'single-float :initial-element 0.0))
+				      (vb (make-array %2$d :element-type 'bfloat16 :initial-element 0.0))
+				      (vf (make-array %2$d :element-type 'single-float :initial-element 0.0))
+				      (x (make-array %2$d :element-type 'single-float :initial-element 0.0)))
+				  (dotimes (i %1$d)
+				    (dotimes (j %2$d)
+				      (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				      (setf (aref wb i j) (- (/ s 1073741824.0) 1.0))
+				      (setf (aref wf i j) (aref wb i j))))
+				  (dotimes (j %2$d)
+				    (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				    (setf (aref vb j) (- (/ s 1073741824.0) 1.0))
+				    (setf (aref vf j) (aref vb j))
+				    (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				    (setf (aref x j) (- (/ s 1073741824.0) 1.0)))
+				  %3$s)
+				""".formatted(rows, cols, body);
+	}
+
+	/** The GEMV / dot / sum shapes, straddling both row gates and the lane threshold. */
+	private static int[][] bf16Shapes() {
+		return new int[][] { { 1, 1 }, { 3, 8 }, { 3, 16 }, { 5, 33 }, { 17, 127 }, { 17, 128 }, { 8, 288 },
+				{ 4, 300 } };
+	}
+
+	@Test
+	void theFusedBf16KernelsEqualTheF32KernelsOverTheWidenedOperand() {
+		// The item's contract: bf16 -> f32 is exact (bits << 16), so a kernel that
+		// decodes lane by lane and accumulates in f32 must produce, bit for bit, what
+		// the f32 kernel produces over the widened array -- which is why this width
+		// needs no entry of its own in the cross-backend identity contract.
+		for (int[] shape : bf16Shapes()) {
+			int rows = shape[0], cols = shape[1];
+			for (String[] pair : new String[][] { { "(vec:sum vb)", "(vec:sum vf)" },
+					{ "(vec:dot vb x)", "(vec:dot vf x)" }, { "(vec:matvec wb x)", "(vec:matvec wf x)" },
+					{ "(vec:matvec-into (vec:zeros %d :element-type 'single-float) wb x)".formatted(rows),
+							"(vec:matvec-into (vec:zeros %d :element-type 'single-float) wf x)".formatted(rows) } }) {
+				assertThat(eval(bf16Fixture(rows, cols, pair[0]), true).print()).as("%s at %dx%d", pair[0], rows, cols)
+					.isEqualTo(eval(bf16Fixture(rows, cols, pair[1]), true).print());
+			}
+		}
+	}
+
+	@Test
+	void fusedBf16ReductionsAccumulateInSinglePrecisionAtTheSamePinnedLanes() {
+		// The dead-flag guard AND the lane-count pin at this width, in one probe: the
+		// equality above would hold just as well if BOTH sides declined to the defun, so
+		// pin the exact value the four pinned f32 lanes produce.
+		//
+		// 2^24 and 1.0 are both exact in bfloat16 (8 mantissa bits are enough for a
+		// power of two and for one), so the .kb/vec.md probe transfers verbatim: at 2^24
+		// the f32 spacing is 2, the lane holding it swallows every 1.0 added to it, and
+		// the other three lanes fold 256 ones each -> 2^24 + 768 = 16777984. The GEMV
+		// row's four independent accumulators distribute the ones as sixteen lanes
+		// would -> 2^24 + 960 = 16778176. The scalar defun keeps accumulating in f64.
+		String sum = """
+				(let ((v (make-array 1024 :element-type 'bfloat16 :initial-element 1.0)))
+				  (setf (aref v 0) 16777216.0)
+				  (round (vec:sum v)))
+				""";
+		assertThat(eval(sum, true).print()).isEqualTo("16777984");
+		assertThat(eval(sum, false).print()).isEqualTo("16778239");
+		String dot = """
+				(let ((v (make-array 1024 :element-type 'bfloat16 :initial-element 1.0))
+				      (x (vec:ones 1024 :element-type 'single-float)))
+				  (setf (aref v 0) 4096.0)
+				  (setf (aref x 0) 4096.0)
+				  (round (vec:dot v x)))
+				""";
+		assertThat(eval(dot, true).print()).isEqualTo("16777984");
+		assertThat(eval(dot, false).print()).isEqualTo("16778239");
+		String gemv = """
+				(let ((m (make-array '(1 1024) :element-type 'bfloat16 :initial-element 1.0))
+				      (x (vec:ones 1024 :element-type 'single-float)))
+				  (setf (aref m 0 0) 4096.0)
+				  (setf (aref x 0) 4096.0)
+				  (round (aref (vec:matvec m x) 0)))
+				""";
+		assertThat(eval(gemv, true).print()).isEqualTo("16778176");
+		// The scalar defun folds 16778239 in f64 and narrows on store: an odd multiple
+		// of the f32 spacing at 2^24, so it ties to even.
+		assertThat(eval(gemv, false).print()).isEqualTo("16778240");
+		// The product keeps x's width, the width the scalar defun gives it too
+		// (vec::%make-like follows x), so the bf16 matrix does not narrow the result.
+		assertThat(eval(bf16Fixture(4, 300, "(vec:matvec wb x)"), true).print()).startsWith("#f(");
+	}
+
+	@Test
+	void theFusedBf16GemvIsBitIdenticalUnderParallel() {
+		// --parallel splits the GEMV by ROW RANGE and the bf16 arm inherits that
+		// unchanged: a row's chain depends on nothing but the row.
+		for (int[] shape : new int[][] { { 8, 288 }, { 256, 300 } }) {
+			String gemv = bf16Fixture(shape[0], shape[1], "(vec:matvec wb x)");
+			assertThat(eval(gemv, true, true).print()).as("%dx%d", shape[0], shape[1])
+				.isEqualTo(eval(gemv, true, false).print());
+			String into = bf16Fixture(shape[0], shape[1],
+					"(vec:matvec-into (vec:zeros %d :element-type 'single-float) wb x)".formatted(shape[0]));
+			assertThat(eval(into, true, true).print()).as("%dx%d -into", shape[0], shape[1])
+				.isEqualTo(eval(into, true, false).print());
+		}
+	}
+
+	@Test
+	void aBf16OperandWithoutAFusedKernelDeclinesToTheScalarDefun() {
+		// Only the decode shape -- bf16 weights against f32 activations -- has a fused
+		// kernel. Every other pairing DECLINES: the scalar vec.lisp defun answers, bit
+		// for bit, so --simd stays a speed flag at this width. Note the element-wise
+		// members decline a MIXED bf16/f32 pair rather than signalling the fixed-width
+		// error: the defun computes it happily and --simd may not turn that into an
+		// error.
+		for (String body : new String[] { "(vec:add vb vb)", "(vec:add vf vb)", "(vec:mul vb vf)", "(vec:scale vb 3.0)",
+				"(vec:exp vb)", "(vec:relu vb)", "(vec:clip vb -0.5 0.5)", "(vec:dot vb vb)", "(vec:dot vf vb)",
+				"(vec:matvec wb vb)", "(vec:matvec wf vb)",
+				"(vec:add-into (vec:zeros 300 :element-type 'bfloat16) vb vb)" }) {
+			String program = bf16Fixture(4, 300, body);
+			assertThat(eval(program, true).print()).as(body).isEqualTo(eval(program, false).print());
+		}
+	}
+
+	@Test
+	void aMixedBf16AndSingleFloatElementWiseCallComputesRatherThanSignalling() {
+		// A BEHAVIOUR CHANGE, pinned by value and not merely by "does not throw": before
+		// the fused kernels these calls raised the fixed-width error under --simd while
+		// the scalar defun computed them happily, so --simd was turning an answer into
+		// an error. Now every element-wise member DECLINES a bf16 operand -- in either
+		// position -- and the defun answers. The result keeps the FIRST operand's width
+		// (vec::%make-like follows a), as it always did.
+		assertThat(eval("(vec:add #f(1.0 2.0) #bf16(0.5 0.25))", true).print()).isEqualTo("#f(1.5 2.25)");
+		assertThat(eval("(vec:add #bf16(1.0 2.0) #f(0.5 0.25))", true).print()).isEqualTo("#bf16(1.5 2.25)");
+		assertThat(eval("(vec:mul #f(3.0) #bf16(0.5))", true).print()).isEqualTo("#f(1.5)");
+		assertThat(eval("(vec:maximum #f(1.0) #bf16(2.0))", true).print()).isEqualTo("#f(2.0)");
+		assertThat(eval("(let ((o (vec:zeros 2 :element-type 'single-float)))"
+				+ " (vec:add-into o #f(1.0 2.0) #bf16(0.5 0.25)))", true)
+			.print()).isEqualTo("#f(1.5 2.25)");
+		// The two CL float widths still signal against each other: that contract is
+		// unchanged, and only the width with no kernel of its own declines.
+		assertThatThrownBy(() -> eval("(vec:add #d(1.0) #f(1.0))", true)).isInstanceOf(LispEvalException.class);
+		// A bf16 second operand where the FIRST has a fused kernel is still a decline,
+		// not a signal: only bf16-weights-by-f32-activations is fused.
+		assertThat(eval("(vec:dot #f(1.0 2.0) #bf16(3.0 4.0))", true).print()).isEqualTo("11.0");
+		assertThat(eval("(vec:matvec #f((1.0 2.0) (3.0 4.0)) #bf16(1.0 1.0))", true).print())
+			.isEqualTo("#bf16(3.0 7.0)");
 	}
 
 	// --- fixed-width contract ----------------------------------------------------

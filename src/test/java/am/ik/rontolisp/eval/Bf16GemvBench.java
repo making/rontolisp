@@ -36,12 +36,14 @@ import jdk.incubator.vector.VectorSpecies;
  * unchanged and the arm has to stay bandwidth-bound rather than dispatch-bound.
  *
  * <p>
- * Both accumulate with ONE f32 accumulator and a two-rounding mul-then-add, because that
- * is what the shipped f32 kernel does and the equivalence contract (fused ==
- * widen-then-f32-kernel, bit for bit) is what makes these kernels safe. {@code .todo/480}
- * proposes four accumulators + FMA for the f32 kernels; when it lands, both arms gain
- * them together. Never compare a four-accumulator bf16 kernel with a one-accumulator f32
- * baseline -- that flatters bf16 and the ratio will not reproduce.
+ * Both arms accumulate exactly alike, because the equivalence contract (fused ==
+ * widen-then-f32-kernel, bit for bit) is what makes these kernels safe: since
+ * {@code .todo/480} landed that is FOUR f32 accumulators above
+ * {@code MATVEC_ACC_THRESHOLD} columns and one below, with a two-rounding mul-then-add
+ * (never {@code fma} -- wasm SIMD has no deterministic fused multiply-add, so a kernel
+ * that needed one could not be mirrored there). Never compare a four-accumulator bf16
+ * kernel with a one-accumulator f32 baseline; that flatters bf16 and the ratio will not
+ * reproduce.
  *
  * <pre>{@code
  * ./mvnw -o test-compile
@@ -76,15 +78,14 @@ public final class Bf16GemvBench {
 		}
 	}
 
-	// --- the .todo/480 shape, measured but NOT shipped -----------------------------
+	// --- the .todo/482 probe shape, measured but NOT shipped -----------------------
 	// Four accumulators and a single-rounding fma, the shape .todo/482's probes used and
-	// the shape its 1.60x assumed. It is NOT what the kernels above compute: four
-	// accumulators change the fold order and fma removes a rounding, so a bf16 kernel in
-	// this shape is not bit-equal to the shipped f32 one and the equivalence contract
-	// would not hold. Both arms are here so the pair can be measured together -- the
-	// number .todo/480 would unlock for .todo/488, and the reason the ratio in the table
-	// above is not the spike's. Never compare one of these against a single-accumulator
-	// baseline.
+	// the shape its 1.60x was measured in. The accumulators are now the shipped kernels'
+	// too (.todo/480); the FMA is not and never will be, because it removes a rounding
+	// and wasm has no deterministic one to mirror it with. So this arm is the upper
+	// bound the shipped kernels are measured against, and the gap between the two rows
+	// is what the second rounding costs. Never compare one of these against a
+	// single-accumulator baseline.
 
 	private static final VectorSpecies<Float> FS = FloatVector.SPECIES_128;
 

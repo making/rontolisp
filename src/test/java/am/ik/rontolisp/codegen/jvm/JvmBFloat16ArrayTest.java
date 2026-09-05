@@ -67,6 +67,17 @@ class JvmBFloat16ArrayTest {
 		return baos.toString().trim();
 	}
 
+	/** The interpreter with {@code --simd} installed, the other half of the flag. */
+	private String interpretSimd(String lispCode) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.setSimd(true);
+		for (LispVal expr : LispReader.readAllFromString(lispCode)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString().trim();
+	}
+
 	private byte[] compile(String lispCode, boolean accel) {
 		List<LispVal> program = LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		program = LinalgLibrary.process(VecLibrary.process(program));
@@ -472,6 +483,20 @@ class JvmBFloat16ArrayTest {
 			               (vec:matvec (make-array '(3 300) :element-type 'bfloat16 :initial-element 0.3) v))))
 			""";
 
+	/**
+	 * {@link #VEC_ROUNDING_PROGRAM} without {@code vec:sum}: every member left is one
+	 * {@code --simd} DECLINES at this width, so its answer is the defun's bit for bit.
+	 * {@code vec:sum} over a bf16 vector runs the fused kernel instead and joins the f32
+	 * reduction contract, which accumulates in f32 rather than the defun's f64.
+	 */
+	private static final String VEC_ROUNDING_DECLINED_PROGRAM = """
+			(print (vec:exp #bf16(0.0 1.0 -0.5)))
+			(let ((v (vec:zeros 300 :element-type 'bfloat16)) (w (vec:zeros 300 :element-type 'bfloat16)))
+			  (dotimes (i 300) (setf (aref v i) (* i 0.37)) (setf (aref w i) 1.5))
+			  (print (list (vec:dot v w) (aref (vec:mul v w) 299) (vec:scale v 0.1)
+			               (vec:matvec (make-array '(3 300) :element-type 'bfloat16 :initial-element 0.3) v))))
+			""";
+
 	@Test
 	void vecKernelsPreserveTheBf16WidthOnTheJvm() throws Exception {
 		assertAgreedText(VEC_EXACT_PROGRAM, """
@@ -487,16 +512,105 @@ class JvmBFloat16ArrayTest {
 	}
 
 	@Test
-	void aSimdBuildDeclinesABf16OperandToTheDefunBitForBit() throws Exception {
-		// The lane kernels carry double[] and float[] only; a bfloat16 operand takes
-		// the spliced vec.lisp defun over the packed representation, so --simd is a
-		// speed flag and not a semantics flag at this width too.
+	void aSimdBuildDeclinesABf16OperandWithNoFusedKernelToTheDefunBitForBit() throws Exception {
+		// The lane kernels carry double[] and float[] only, except for the four members
+		// with a FUSED bf16 kernel (below). Every other bf16 operand takes the spliced
+		// vec.lisp defun over the packed representation, so --simd stays a speed flag
+		// and not a semantics flag at this width. Both programs here are exact at the
+		// width or reach only declined members, so the defun's answer is the answer.
 		assertThat(run(compile(VEC_EXACT_PROGRAM, true))).isEqualTo(interpret(VEC_EXACT_PROGRAM));
-		assertThat(run(compile(VEC_ROUNDING_PROGRAM, true))).isEqualTo(interpret(VEC_ROUNDING_PROGRAM));
+		assertThat(run(compile(VEC_ROUNDING_DECLINED_PROGRAM, true)))
+			.isEqualTo(interpret(VEC_ROUNDING_DECLINED_PROGRAM));
 		// The single-float operands beside it are still the lane kernels' (the same
 		// bits as the defun, which is the contract that lets this be asserted).
 		String mixedProgram = "(print (vec:add #f(1.0 2.0) #f(3.0 4.0))) (print (vec:sum #bf16(1.0 2.0)))";
 		assertThat(run(compile(mixedProgram, true))).isEqualTo("#f(4.0 6.0)\n3.0");
+	}
+
+	/**
+	 * The bfloat16 / widened-f32 fixture, mirroring {@code eval.VecSimdTest}'s:
+	 * {@code wb} a {@code rows x cols} bf16 matrix, {@code wf} its EXACT f32 widening,
+	 * {@code vb} / {@code vf} a bf16 vector and its widening, {@code x} f32 activations.
+	 * The values are a deterministic LCG and are exact at NEITHER width, which is what
+	 * makes the equivalence below able to fail.
+	 */
+	private static String bf16Fixture(int rows, int cols, String body) {
+		return """
+				(let ((s 1)
+				      (wb (make-array '(%1$d %2$d) :element-type 'bfloat16 :initial-element 0.0))
+				      (wf (make-array '(%1$d %2$d) :element-type 'single-float :initial-element 0.0))
+				      (vb (make-array %2$d :element-type 'bfloat16 :initial-element 0.0))
+				      (vf (make-array %2$d :element-type 'single-float :initial-element 0.0))
+				      (x (make-array %2$d :element-type 'single-float :initial-element 0.0)))
+				  (dotimes (i %1$d)
+				    (dotimes (j %2$d)
+				      (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				      (setf (aref wb i j) (- (/ s 1073741824.0) 1.0))
+				      (setf (aref wf i j) (aref wb i j))))
+				  (dotimes (j %2$d)
+				    (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				    (setf (aref vb j) (- (/ s 1073741824.0) 1.0))
+				    (setf (aref vf j) (aref vb j))
+				    (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				    (setf (aref x j) (- (/ s 1073741824.0) 1.0)))
+				  %3$s)
+				""".formatted(rows, cols, body);
+	}
+
+	/** The four fused members over {@code prefix}b / {@code prefix}f operands. */
+	private static String fusedProducts(int rows, String w, String v) {
+		return """
+				(progn (print (vec:sum %2$s))
+				       (print (vec:dot %2$s x))
+				       (print (vec:matvec %1$s x))
+				       (print (vec:matvec-into (vec:zeros %3$d :element-type 'single-float) %1$s x)))
+				""".formatted(w, v, rows);
+	}
+
+	@Test
+	void aSimdBuildFusesTheBf16DecodeShapeAndAgreesWithTheWidenedF32Kernel() throws Exception {
+		// sum over bf16, dot(bf16, f32) and the two GEMVs over bf16 weights run the
+		// FUSED decode: the answer is the f32 kernel's over the widened operand, bit for
+		// bit -- bf16 -> f32 being exact (bits << 16) is what lets the contract be an
+		// equivalence rather than a tolerance, and why the width needs no entry of its
+		// own in the cross-backend identity contract. The interpreter's --simd install
+		// must land on the same bits as the embedded bridge, as it must at every other
+		// width.
+		for (int[] shape : new int[][] { { 1, 1 }, { 3, 16 }, { 5, 33 }, { 8, 288 } }) {
+			int rows = shape[0], cols = shape[1];
+			String fused = bf16Fixture(rows, cols, fusedProducts(rows, "wb", "vb"));
+			String widened = bf16Fixture(rows, cols, fusedProducts(rows, "wf", "vf"));
+			String compiled = run(compile(fused, true));
+			assertThat(compiled).as("fused == widen-then-f32 at %dx%d", rows, cols)
+				.isEqualTo(run(compile(widened, true)));
+			assertThat(compiled).as("interpreter --simd == compiled --simd at %dx%d", rows, cols)
+				.isEqualTo(interpretSimd(fused));
+		}
+	}
+
+	@Test
+	void theFusedBf16ReductionsAccumulateAtTheSameFourPinnedLanesAsF32() throws Exception {
+		// The dead-flag guard and the lane-count pin in one probe (.kb/vec.md): 2^24 and
+		// 1.0 are both exact in bfloat16, so the f32 probe transfers verbatim. Four
+		// pinned lanes give 2^24 + 768 for the single-chain reductions and 2^24 + 960
+		// for the GEMV row's four accumulators; the scalar defun keeps folding in f64.
+		String probe = """
+				(let ((v (make-array 1024 :element-type 'bfloat16 :initial-element 1.0))
+				      (d (make-array 1024 :element-type 'bfloat16 :initial-element 1.0))
+				      (m (make-array '(1 1024) :element-type 'bfloat16 :initial-element 1.0))
+				      (x (vec:ones 1024 :element-type 'single-float)))
+				  (setf (aref v 0) 16777216.0)
+				  (setf (aref d 0) 4096.0)
+				  (setf (aref m 0 0) 4096.0)
+				  (setf (aref x 0) 4096.0)
+				  (print (round (vec:sum v)))
+				  (print (round (vec:dot d x)))
+				  (print (round (aref (vec:matvec m x) 0))))
+				""";
+		assertThat(run(compile(probe, true))).isEqualTo("16777984\n16777984\n16778176");
+		assertThat(interpretSimd(probe)).isEqualTo("16777984\n16777984\n16778176");
+		assertThat(run(compile(probe, false))).isEqualTo("16778239\n16778239\n16778240");
+		assertThat(interpret(probe)).isEqualTo("16778239\n16778239\n16778240");
 	}
 
 	@Test

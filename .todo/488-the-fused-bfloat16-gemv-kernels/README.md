@@ -32,11 +32,18 @@ same bits. Graal is what this box, CI and the native image run; C2
 (`-XX:-UseJVMCICompiler`) is what a stock OpenJDK runs a compiled `.class` under. A shape
 that is fast under one and boxed under the other is not done.
 
-**The cliff did not reproduce here**: the shipped kernels run at 0.85-1.02x under C2 and
-0.76-0.82x under Graal, and the 4-accumulator probe reaches 1.97x under C2. The
-one-small-method-per-width rule held.
+**The cliff did not reproduce here**, on 2026-09-03 or on 2026-09-05: the
+one-small-method-per-width rule held at every shape on both JITs. (The ratios quoted in
+this paragraph on 2026-09-03 -- 0.85-1.02x under C2, 0.76-0.82x under Graal -- were
+against the one-accumulator f32 baseline of the day; the current ones are at the end of
+this file.)
 
-## The finding: the 1.6x is `.todo/480`'s, not this item's
+## The finding of 2026-09-03: the 1.6x is `.todo/480`'s, not this item's
+
+**Superseded by the 2026-09-05 measurement at the end of this file, which is the record
+to read. `.todo/480` landed, and the headline reproduces.** Kept because it is the
+reasoning that predicted it, and because every table between here and there was taken
+against a one-accumulator f32 baseline that no longer exists.
 
 The headline of `.todo/488` -- 1.60x at 4096x4096 -- **does not reproduce against the
 shipped kernels, and the reason is not bf16.** The shipped f32 GEMV row is a single
@@ -59,7 +66,7 @@ is what makes the diagnosis certain rather than a guess.
 
 **`.todo/480` is a prerequisite of `.todo/488`, not an independent optimization.**
 
-## Provisional numbers (2026-09-03)
+## Provisional numbers (2026-09-03) -- SUPERSEDED, see the end of this file
 
 **These are a smoke run, not a measurement**: taken while two other lanes were building
 and running suites on the same 20 cores, one run per cell, no medians. The
@@ -124,12 +131,129 @@ one is entirely the accumulator count.
 Note what the f32 column alone says: 3.045 -> 2.030 ms under Graal, 2.234 -> 1.976 under
 C2. **`.todo/480` is worth 1.1-1.5x to the f32 GEMV on its own**, before bf16 exists.
 
-## Still open in `.todo/488`
+## The measurement that closed the item, 2026-09-05
 
-- The interception wiring (`--simd` / `--parallel` binding these kernels) -- the packed
-  bf16 array type does not exist yet, so the kernels take bare `short[]`.
-- The element-wise `vec:` kernels over bf16 (widen, compute in f32, narrow on store).
-- x64. Every number here is aarch64. A left shift is a left shift, so the shape should
-  hold, but the crossover size will move with the cache hierarchy.
-- The cache-resident regression (0.76-0.91x at 288x288 and 1024x1024) and whether a size
-  threshold is wanted. Do not decide it until `.todo/480` has moved the baseline.
+Taken on a box cleared for it: no maven anywhere, the other lanes held off the JVM.
+**Base commit `2275c000`. NVIDIA GB10, aarch64 Cortex-X925, NEON 128-bit, 20 cores,
+Oracle GraalVM 25.0.4, `RONTOLISP_THREADS` default (20). Load average 0.64 immediately
+before the first JVM and 0.67 immediately after the last.** `dorian`, the project's other
+box, is Broadwell AVX2 with 64 threads: a ratio measured here is NOT a ratio measured
+there, and no table in this file covers both.
+
+f32 activations throughout; the bf16 weights are narrowed from the same N(0, 0.02)
+gaussians the f32 baseline runs over, so both arms multiply the same values (the
+checksum line in the harness output asserts the two answers are bit-identical, and it
+printed `identical=true` at every shape on both JITs).
+
+### The shipped kernels, one thread -- bf16 fused against the shipped f32 GEMV
+
+`eval.VecSimdKernels` (the interpreter's):
+
+| shape | Graal f32 | Graal bf16 | Graal | C2 f32 | C2 bf16 | C2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 288x288 | 0.006 ms | 0.008 | 0.73x | 0.004 | 0.005 | 0.75x |
+| 1024x1024 | 0.063 | 0.088 | 0.72x | 0.048 | 0.062 | 0.77x |
+| 4096x4096 | 2.172 | 1.458 | **1.49x** | 2.140 | 1.069 | **2.00x** |
+
+`codegen.jvm.JvmSimdVectorTemplate` (the copy embedded in every `--simd` `.class`, and
+now reached through the real bridge entries over headered arrays, so the header
+arithmetic is timed too):
+
+| shape | Graal f32 | Graal bf16 | Graal | C2 f32 | C2 bf16 | C2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 288x288 | 0.006 ms | 0.008 | 0.76x | 0.005 | 0.006 | 0.83x |
+| 1024x1024 | 0.064 | 0.090 | 0.72x | 0.055 | 0.066 | 0.84x |
+| 4096x4096 | 1.982 | 1.503 | **1.32x** | 2.026 | 1.118 | **1.81x** |
+
+The two harnesses agree to within 0.17x, so the surrounding 4000-line class still is not
+changing an inlining decision -- the question the template harness exists to answer.
+
+### What superseded what, and why the number moved
+
+**The item's headline 1.60x now reproduces against the shipped kernels (1.32-2.00x at
+4096x4096), and the 2026-09-03 tables above -- 0.80x Graal / 1.02x C2 -- are withdrawn.**
+Nothing about the bf16 arm changed to do it. What changed is the BASELINE: `.todo/480`
+landed four independent accumulators in the GEMV row, in all four `--simd`
+implementations at once, and the bf16 arm inherits them because the equivalence contract
+forces it to carry the f32 arm's accumulator count.
+
+The mechanism is visible in the same run, in the `f32 4acc+fma` probe row. At 4096x4096
+the f32 arm is **unchanged** by four accumulators -- 2.184 ms against the shipped
+kernel's 2.172 under Graal, 2.102 against 2.140 under C2 -- because at 67 MB it was
+already bandwidth-bound and had no dependency chain left to hide. The bf16 arm was not:
+halving the weight bytes buys nothing while a single accumulator chain bounds the row, so
+before `.todo/480` the fused kernel spent its bandwidth saving on latency it could not
+use. Four accumulators put the bf16 row on the same bound the f32 row was already on, and
+the halved bytes finally show up as speed. That is the whole story of the 0.80x -> 1.49x
+move, and it is why "the 1.6x is `.todo/480`'s, not this item's" was the right diagnosis
+on 2026-09-03.
+
+The `4acc+fma` probe -- the `.todo/482` shape, which the shipped kernels now differ from
+only by the second rounding (never `fma`: wasm SIMD has no deterministic fused
+multiply-add, so a kernel needing one could not be mirrored) -- reaches 1.74x Graal /
+2.14x C2 at 4096x4096. The gap to the shipped 1.49x / 2.00x is what that second rounding
+costs, and it is the price of the cross-backend contract, not a regression.
+
+C2's 0.20x inlining cliff did not reproduce at any shape. The one-small-method-per-width
+rule held.
+
+### The route that loses, still
+
+| variant, 4096x4096 | Graal | C2 |
+| --- | --- | --- |
+| bf16 widened into an f32 scratch, then the f32 kernel | 0.57x | 0.56x |
+
+0.46-0.57x at every shape on both JITs. This matters beyond curiosity: it is the ONLY
+alternative to the fused kernel that is bit-identical to it, and it loses everywhere, so
+there is nothing for a size gate to switch to (below).
+
+### `--parallel`, 20 threads
+
+| kernels, shape | Graal f32 | Graal bf16 | Graal | C2 f32 | C2 bf16 | C2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| eval, 1024x1024 | 0.027 ms | 0.021 | 1.26x | 0.025 | 0.017 | 1.47x |
+| eval, 4096x4096 | 0.413 | 0.289 | 1.43x | 0.408 | 0.317 | 1.29x |
+| template, 1024x1024 | 0.025 | 0.018 | 1.37x | 0.025 | 0.017 | 1.47x |
+| template, 4096x4096 | 0.409 | 0.393 | 1.04x | 0.394 | 0.398 | 0.99x |
+
+The parallel f32 arm sits at 41-42 Gelem/s in every single cell -- 164 GB/s of weights,
+which is this box's ceiling and not a kernel property. The bf16 arm reaches 58 Gelem/s
+where it is given the chance and 42 where it is not, and the 4096x4096 template row
+(1.04x / 0.99x) is the one cell that disagrees with its eval twin (1.43x / 1.29x) on
+identical arithmetic. **Treat the parallel column as the noisy one**: the 2026-09-03 run
+recorded the same spread and attributed it to the other lanes, and this run had none, so
+the cause is the box's own scheduling and not contention. One run per cell is not enough
+here; the single-threaded columns are the ones to quote.
+
+### The threshold decision: NO size gate, and why
+
+The cache-resident regression is real and reproduces: **0.72-0.84x on one thread at
+1024x1024 (4.2 MB of f32 weights) and 0.73-0.83x at 288x288**, crossing 1.0x somewhere
+between 4 MB and 67 MB on this cache hierarchy. It is left in place unconditionally.
+
+- **There is nothing to gate TO.** The only bit-identical alternative is the
+  widen-into-scratch route, and it is slower than the fused kernel at every shape on both
+  JITs (0.46-0.57x). A gate would switch from the slower-than-f32 path to the
+  even-slower path.
+- **The other candidate changes the ANSWER.** Declining to the scalar defun above (or
+  below) a size makes a reduction's bits depend on the matrix size -- the defun folds in
+  f64, the kernel in f32 -- and nothing else in `vec:` has a size gate that moves a
+  value across backends. `.kb/vec.md` already forbids consulting anything but the column
+  count in the GEMV gate for exactly this reason.
+- **The regime that motivates the width is the one where it wins.** An LLM's weights do
+  not fit in cache; that is the whole premise of `.todo/489`. And a program that chose
+  `#bf16` chose half the memory, which it gets at every shape.
+- Under `--parallel` the arm is at or above parity from 1024x1024 up.
+
+Recorded so the next reader does not rediscover it: **fused bf16 stops winning below
+roughly 4 MB of weights on a GB10, and the loss there is 0.72-0.84x.**
+
+## Still open, filed as `.todo/696`
+
+- The element-wise `vec:` kernels over a narrow width, and the measurement that has to
+  come first (widening vectorizes; round-to-nearest-even narrowing does not).
+- Whether the bridge could take a NARROW x NARROW pairing. Short answer, argued there:
+  yes, as an extension rather than a rewrite.
+- x64. Every number in this file is aarch64.
+- The width has no `doc/` page at all, so the fused kernels' user-visible behaviour has
+  none either.

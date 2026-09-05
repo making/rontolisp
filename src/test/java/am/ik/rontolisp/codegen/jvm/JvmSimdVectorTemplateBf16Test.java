@@ -25,9 +25,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * compiled {@code --simd} class actually runs.
  *
  * <p>
- * These kernels take BARE {@code short[]} arrays with no dimension header -- the packed
- * bf16 array type does not exist yet, so they are standalone until the interception layer
- * grows header-aware entries in front of them. The interpreter twin is pinned by
+ * Both arms are driven through the BRIDGE ENTRIES, over the compiled packed
+ * representation each width carries -- {@code [2, rows, cols, e...]} at f32 and
+ * {@code [2, rows_hi, rows_lo, cols_hi, cols_lo, e...]} at bfloat16, where a dimension
+ * takes two slots because a {@code short} cannot hold one ({@code .kb/bfloat16.md}) -- so
+ * the equivalence is asserted over exactly the code a compiled {@code --simd} class runs,
+ * header arithmetic included. {@code widenBf16Into} is the one header-free member: it is
+ * a bulk conversion between two raw buffers. The interpreter twin is pinned by
  * {@code eval.VecSimdBf16KernelsTest}; the two files may not reference each other (the
  * package dependency rule), so each is pinned against its own f32 kernel, which the
  * existing {@code --simd} tests already pin to the other's.
@@ -59,6 +63,36 @@ class JvmSimdVectorTemplateBf16Test {
 			x[i] = (float) random.nextGaussian();
 		}
 		return x;
+	}
+
+	/** A rank-1 packed bfloat16 vector: {@code [1, n_hi, n_lo, e...]}. */
+	private static short[] packedBf16(short[] w) {
+		short[] v = new short[3 + w.length];
+		v[0] = 1;
+		v[1] = (short) (w.length >>> 16);
+		v[2] = (short) w.length;
+		System.arraycopy(w, 0, v, 3, w.length);
+		return v;
+	}
+
+	/** A rank-2 packed bfloat16 matrix: {@code [2, r_hi, r_lo, c_hi, c_lo, e...]}. */
+	private static short[] packedBf16Matrix(short[] w, int rows, int cols) {
+		short[] m = new short[5 + w.length];
+		m[0] = 2;
+		m[1] = (short) (rows >>> 16);
+		m[2] = (short) rows;
+		m[3] = (short) (cols >>> 16);
+		m[4] = (short) cols;
+		System.arraycopy(w, 0, m, 5, w.length);
+		return m;
+	}
+
+	/** A fresh rank-1 packed f32 destination {@code [1, n, 0...]}. */
+	private static float[] destination(int n) {
+		float[] r = new float[2 + n];
+		r[0] = 1.0f;
+		r[1] = n;
+		return r;
 	}
 
 	/** A rank-1 packed vector {@code [1, n, e...]} of the widened patterns. */
@@ -164,7 +198,7 @@ class JvmSimdVectorTemplateBf16Test {
 	void theFusedSumIsBitIdenticalToTheF32SumOverTheWidenedArray() {
 		for (int n : new int[] { 1, 7, 63, THRESHOLD - 1, THRESHOLD, THRESHOLD + 1, 291, 1024, 4096 }) {
 			short[] w = weights(n, 31 + n);
-			assertThat(JvmSimdVectorTemplate.sumBf16(w)).as("n = %d", n)
+			assertThat(JvmSimdVectorTemplate.simdSum(packedBf16(w))).as("n = %d", n)
 				.isEqualTo(JvmSimdVectorTemplate.simdSum(packedWidened(w)));
 		}
 	}
@@ -174,7 +208,7 @@ class JvmSimdVectorTemplateBf16Test {
 		for (int n : new int[] { 1, 7, 63, THRESHOLD - 1, THRESHOLD, THRESHOLD + 1, 291, 1024, 4096 }) {
 			short[] w = weights(n, 101 + n);
 			float[] x = activations(n, 202 + n);
-			assertThat(JvmSimdVectorTemplate.dotBf16(w, x)).as("n = %d", n)
+			assertThat(JvmSimdVectorTemplate.simdDot(packedBf16(w), packed(x))).as("n = %d", n)
 				.isEqualTo(JvmSimdVectorTemplate.simdDot(packedWidened(w), packed(x)));
 		}
 	}
@@ -185,7 +219,8 @@ class JvmSimdVectorTemplateBf16Test {
 			int rows = shape[0], cols = shape[1];
 			short[] w = weights(rows * cols, 7L * rows + cols);
 			float[] x = activations(cols, 9L * rows + cols);
-			assertThat(JvmSimdVectorTemplate.matvecBf16(w, rows, cols, x, false)).as("%dx%d", rows, cols)
+			assertThat(elements(JvmSimdVectorTemplate.simdMatvec(packedBf16Matrix(w, rows, cols), packed(x))))
+				.as("%dx%d", rows, cols)
 				.isEqualTo(elements(JvmSimdVectorTemplate.simdMatvec(packedWidenedMatrix(w, rows, cols), packed(x))));
 		}
 	}
@@ -196,18 +231,19 @@ class JvmSimdVectorTemplateBf16Test {
 			int rows = shape[0], cols = shape[1];
 			short[] w = weights(rows * cols, 7L * rows + cols);
 			float[] x = activations(cols, 9L * rows + cols);
-			assertThat(JvmSimdVectorTemplate.matvecBf16(w, rows, cols, x, true)).as("%dx%d", rows, cols)
-				.isEqualTo(JvmSimdVectorTemplate.matvecBf16(w, rows, cols, x, false));
+			short[] m = packedBf16Matrix(w, rows, cols);
+			assertThat(elements(JvmSimdVectorTemplate.simdMatvecParallel(m, packed(x)))).as("%dx%d", rows, cols)
+				.isEqualTo(elements(JvmSimdVectorTemplate.simdMatvec(m, packed(x))));
 		}
 	}
 
 	@Test
 	void theFusedGemvIntoWritesWhatTheAllocatingFusedGemvReturns() {
-		short[] w = weights(64 * 1024, 4242);
-		float[] x = activations(1024, 2424);
-		float[] out = new float[64];
-		JvmSimdVectorTemplate.matvecIntoBf16(out, w, 64, 1024, x, true);
-		assertThat(out).isEqualTo(JvmSimdVectorTemplate.matvecBf16(w, 64, 1024, x, false));
+		short[] m = packedBf16Matrix(weights(64 * 1024, 4242), 64, 1024);
+		float[] x = packed(activations(1024, 2424));
+		float[] out = destination(64);
+		JvmSimdVectorTemplate.simdMatvecIntoParallel(out, m, x);
+		assertThat(elements(out)).isEqualTo(elements(JvmSimdVectorTemplate.simdMatvec(m, x)));
 	}
 
 	private static int[][] shapes() {
