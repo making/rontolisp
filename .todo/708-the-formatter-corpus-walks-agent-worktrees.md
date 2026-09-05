@@ -151,11 +151,35 @@ failure", reached by a different road: nobody needed to watch it fail, only to c
 skip count against the baseline's, and the baseline was two tables up in the same file.
 
 **And the equality was not a coincidence that hid the change -- it was CAUSED by the
-change.** The legs that dropped out contributed nothing to a passing total, so removing them
-could not move it. That is the property to carry away: **an acceptance slice whose
-composition can shrink silently will report equality most convincingly exactly when it has
-stopped testing the thing.** A total is invariant under the deletion of everything that
-passed, which is the whole population of a green run.
+change.** But by a narrower mechanism than "the legs contributed nothing to a passing
+total", which was the first form written here and is wrong. **Surefire counts a SKIPPED test
+in `Tests run`.** Measured on both boxes, from report files rather than reasoned from the
+counting rule:
+
+```
+Tests run: 57, Failures: 0, Errors: 0, Skipped: 57 -- in am.ik.gpu.GpuTest
+Tests run: 54, Failures: 0, Errors: 0, Skipped: 54 -- in am.ik.gpu.MetalGpuTest
+```
+
+A class that executes nothing contributes its full count to `Tests run`. So there are two
+invariances and only one of them is dangerous:
+
+- **Failures and errors** are invariant under the removal of any test that passed -- on a
+  green run, the whole population. True of deletion and skipping alike.
+- **`Tests run`** is invariant under SKIPPING only. Deletion moves it.
+
+Had 682 deleted the three legs the row would have read `36`, and the delta would have been
+in the number everyone actually reads. It read `39` because they were skipped. **Skipping
+preserves the headline count while removing the coverage; deletion removes both** -- so
+skipping is strictly the more dangerous mode, and it is the one the harness chose for an
+absent fixture. That choice is right for the developer it was written for and hides a
+composition change from every reader of the total.
+
+Which is why the failure does not read HIGH when the instrument breaks. It reads
+**unchanged**, and unchanged is worse: a high reading invites a second look, an unchanged
+one is what the reader was hoping for. `39 = 39` was received as confirmation. `36` would
+have been received as a question. **An acceptance slice whose composition can shrink
+silently reports equality most convincingly exactly when it has stopped testing the thing.**
 
 **How the cause was recovered is not a method and must not be read as one.** `6a319b6a` is
 gone from the working tree, and the question was never "does the leg skip today" but "what
@@ -165,7 +189,11 @@ blocked pull happened to expose the old path's disk state inside the same sessio
 count's meaning is a property of a box at a moment, and nothing in the record captures the
 box.** Two tables gave the delta; only a live session held the cause. Anything built on this
 should either record the fixture state beside the count or accept that the count is
-unreadable after the box moves on.
+unreadable after the box moves on. **The cheap version must not be lost behind the thorough
+one**: the skip count is ALREADY the signal -- it moved 0 -> 3 while the total held -- and
+what is missing is only that nobody compares it against the prior run of the same slice.
+Recording fixture state is the thorough version and needs new plumbing; the comparison needs
+none and would have caught this one.
 
 ## Do
 
