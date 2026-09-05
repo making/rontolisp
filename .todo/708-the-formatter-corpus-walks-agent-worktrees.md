@@ -195,6 +195,63 @@ what is missing is only that nobody compares it against the prior run of the sam
 Recording fixture state is the thorough version and needs new plumbing; the comparison needs
 none and would have caught this one.
 
+## Dorian's skip census, 2026-09-05 -- the input the 87 accounting needs
+
+Recorded here rather than in `.todo/670` because rule 9 puts the fact in the child. The
+umbrella's 87 accounting should point at this table.
+
+`target/surefire-reports/` from the 08:02-08:17 run at `b87aed25`: **26359 run, 0 failures,
+0 errors, 276 skipped, 231 reports.** The 26359 is the contaminated total this item is
+about; the skip count is not, and that is itself a check -- **dorian read 276 skipped on
+2026-09-03 as well, so the contamination did not move it.** Extra worktree `.lisp` files RUN;
+they do not skip.
+
+**So dorian's 2026-09-05 skip total is 276, not 261, and the 15 is a genuine unexplained
+residual. It stays open.** The date-mismatch hypothesis is refused by this number.
+
+Complete per-class list, summing to exactly 276 (no class omitted):
+
+| class | run | skipped |
+|---|---|---|
+| `am.ik.gpu.GpuTest` | 57 | 57 |
+| `am.ik.gpu.MetalGpuTest` | 54 | 54 |
+| `am.ik.rontolisp.eval.LinalgGpuTest` | 40 | 40 |
+| `am.ik.rontolisp.codegen.jvm.JvmLinalgGpuAccelCompilerTest` | 37 | 22 |
+| `am.ik.rontolisp.eval.SceneOffscreenRenderTest` | 18 | 18 |
+| `am.ik.rontolisp.e2e.PostmodernE2eTest` | 14 | 14 |
+| `am.ik.rontolisp.e2e.LackEcosystemE2eTest` | 10 | 10 |
+| `am.ik.rontolisp.e2e.ClackE2eTest` | 9 | 9 |
+| `am.ik.rontolisp.e2e.MitoE2eTest` | 9 | 9 |
+| `am.ik.rontolisp.codegen.jvm.JvmObjcInteropCompilerTest` | 12 | 8 |
+| `am.ik.rontolisp.eval.ObjcInteropTest` | 8 | 6 |
+| `am.ik.rontolisp.e2e.LackEcosystemWasmE2eTest` | 6 | 6 |
+| `am.ik.rontolisp.e2e.WarE2eTest` | 5 | 5 |
+| `am.ik.rontolisp.codegen.wasm.WasmLispCompilerIntegrationTest` | 1483 | 5 |
+| `am.ik.rontolisp.e2e.NingleE2eTest` | 4 | 4 |
+| `am.ik.objc.ObjcNativeImageForeignConfigTest` | 3 | 1 |
+| `am.ik.rontolisp.codegen.jvm.GpuOfferDifferentialTest` | 2 | 1 |
+| `am.ik.rontolisp.compiler.GlImportObjectTest` | 2 | 1 |
+| `am.ik.rontolisp.compiler.HostGlueEmitterTest` | 17 | 1 |
+| `am.ik.rontolisp.DocExamplesTest` | 2127 | 1 |
+| `am.ik.rontolisp.e2e.JvmLibraryMethodSizeTest` | 2 | 1 |
+| `am.ik.rontolisp.e2e.JarMavenConsumerE2eTest` | 1 | 1 |
+| `am.ik.rontolisp.e2e.ServeConditionCatchComponentE2eTest` | 1 | 1 |
+| `am.ik.rontolisp.e2e.ServeMethodCaseComponentE2eTest` | 1 | 1 |
+
+Closing the 15 needs GB10's equivalent list, not more of dorian's. The named breakdown so far
+(+119 dorian, -17 GB10) uses three dorian classes and two GB10 ones; this table has 24
+skipping classes, and `MetalGpuTest`'s 54 is the largest term nobody has placed -- it should
+cancel if GB10 also skips it, and if it does not, it is bigger than the residual. **Diff the
+two lists class by class rather than reasoning about which classes ought to differ.**
+
+A caution earned today: **an explanation that fits an ADJACENT quantity is the most expensive
+kind of wrong, because it closes the item.** The 87 is a difference of SKIP counts, so the
+worktree contamination -- which changes what RUNS -- cannot reach it, and neither can an
+argument about what `Tests run` includes. An unexplained 15 stays visible and irritating
+until someone resolves it; a 15 explained by a real mechanism that describes a different
+measurement is finished, filed and unrecoverable. Such a mechanism is always available,
+because quantities in one report are correlated by construction.
+
 ## Do
 
 1. Add a filter for `/.claude/` -- one line, beside the two that exist. Prefer excluding
