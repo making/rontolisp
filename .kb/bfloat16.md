@@ -16,6 +16,15 @@ because `BFloat16` does not travel with a compiled program. Sixteen bits fit an 
   65536, never a sample.
 - **Narrowing rounds to NEAREST EVEN**: `(f + 0x7fff + ((f >>> 16) & 1)) >>> 16` over the f32 bits.
   A truncating `>>> 16` passes a casual test and biases every sum downward.
+- **A signalling NaN cannot exist in a packed SINGLE-FLOAT array at all**, which is what makes
+  `NoGcWasmCompiler.compileFloatArrayLiteral`'s `f64.const` + `f32.demote_f64` round trip safe
+  rather than lucky: there is no f32 SCALAR, so an element crosses a `double` on the way in and
+  on the way out and both crossings quiet it -- `(%ieee754-single-from-bits #x7F800001)` already
+  answers `#x7FC00001`. Nor can the `#f(...)` reader syntax produce a NaN of any kind (`nan` is
+  not a number token, an overflowing literal is Infinity, and `#.` is not evaluated inside the
+  literal); a QUIET NaN reaches the emitter only through `#.` at an ordinary expression position,
+  and is the canonical `0x7ff8000000000000`. Checked 2026-09-05, `.todo/487`; pinned by
+  `LispEvaluatorTest#evalASignallingNaNCannotSurviveIntoAPackedSingleFloatArray`.
 - **A NaN never changes class**, and **at this width a NaN must never cross a `double` in either
   direction**: `f2d`/`d2f` alike quiet a signalling NaN, losing 126 of the 65536 patterns (sNaN
   `0x7f81..0x7fbf` and negatives), and `f32.demote_f64` may invent any payload. Both sides do the

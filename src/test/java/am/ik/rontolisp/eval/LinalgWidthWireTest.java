@@ -68,6 +68,40 @@ class LinalgWidthWireTest {
 		}
 	}
 
+	// THREE TRAVELLING TEMPLATES read the width as a two-valued boolean --
+	// `boolean single = a instanceof float[]`, with the negative half read as "therefore
+	// double": JvmSimdVectorTemplate (11 sites), JvmGpuTemplate (12) and JvmBlasTemplate
+	// (2). A bfloat16 array is a short[], so it is neither half, and none of the three
+	// has a differential test that would catch an edit letting one through
+	// (.todo/487's census, .todo/687 owns converting the mechanism).
+	//
+	// What keeps them safe today is not anything in the templates: it is that linalg:
+	// REFUSES the width upstream, at %la-make and %la-etype, and the refusal had no test
+	// at all. This is that test. It is behavioural rather than source-shape because the
+	// property is what a caller SEES -- a stated refusal, the "does not yet" temporary
+	// form (.kb/bfloat16.md, "Refusing a width") -- and because a leak would not present
+	// as a wrong answer here but as a ClassCastException inside a template, three layers
+	// down from anything a reader would suspect.
+	@Test
+	void linalgRefusesABfloat16OperandRatherThanLettingItReachATemplate() {
+		LispEvaluator evaluator = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		for (LispVal form : LispReader.readAllFromString("""
+				(defvar *b* (make-array '(2 2) :element-type 'bfloat16 :initial-element 1.0))
+				""")) {
+			evaluator.eval(form);
+		}
+		for (String call : List.of("(linalg:matmul *b* *b*)", "(linalg:add *b* *b*)")) {
+			String answer = evaluator
+				.eval(LispReader.readFromString("(handler-case " + call + " (error (e) (format nil \"~a\" e)))"))
+				.display();
+			assertThat(answer).as("%s must state the refusal, not reach a template", call)
+				.isEqualTo("linalg: does not yet carry bfloat16 arrays");
+		}
+		// Not everything is refused, and that is deliberate: a reduction that never asks
+		// the width wire answers correctly at any width.
+		assertThat(evaluator.eval(LispReader.readFromString("(linalg:sum *b*)")).print()).isEqualTo("4.0");
+	}
+
 	private static void collectCalls(LispVal form, String suffix, List<LispCons> found) {
 		if (!(form instanceof LispCons cons)) {
 			return;

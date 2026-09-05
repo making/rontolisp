@@ -130,9 +130,8 @@ the same bfloat16. The tests assert the narrowed value.
 
 **Still open here**: step 2 (`coerce` and the bulk width change -- `widen-float-bits` /
 `narrow-float-bits` still decline a bf16 source or destination, which nothing above needed),
-step 5 (the widen-once scratch), the signalling-NaN reachability question below, and the
-remaining census rows (the three travelling templates and
-`NoGcWasmCompiler.compileFloatArrayLiteral`).
+and step 5 (the widen-once scratch). The census rows and the signalling-NaN reachability
+question are settled in the two sections below.
 
 ## Do
 
@@ -172,6 +171,30 @@ are transcriptions of a width DECISION with no differential test, which is why a
 the width wire could break them silently -- the same class of duplicate as the seven copies
 of the bf16 arithmetic, found by a different symptom. Count both.
 
+**COUNTED, 2026-09-05, from the grep and not from this paragraph.** The three templates are
+`JvmSimdVectorTemplate` (11 sites), `JvmGpuTemplate` (12) and `JvmBlasTemplate` (2), each
+spelling `boolean single = a instanceof float[]` with the negative half read as "therefore
+double". `JvmGeomTemplate` carries none, so "three" is right. A bfloat16 array is a
+`short[]` and therefore NEITHER half.
+
+What keeps them safe is not in the templates: `linalg:` refuses the width upstream at
+`%la-make` / `%la-etype`, so a bf16 array never reaches one. **That refusal had no test at
+all** -- neither `LinalgBlasDeclineTest` nor `LinalgGpuDeclineTest` mentions the width --
+and a leak would not present as a wrong answer but as a `ClassCastException` inside a
+travelling template, three layers below anything a reader would suspect. Pinned now by
+`LinalgWidthWireTest#linalgRefusesABfloat16OperandRatherThanLettingItReachATemplate`, which
+also records that `linalg:sum` correctly answers at the width, because a reduction that
+never asks the width wire needs no refusal.
+
+Converting the boolean itself is `.todo/687`'s, not this item's; what this item owed was
+the count and the missing guard, and both are now here.
+
+`NoGcWasmCompiler.compileFloatArrayLiteral` is the fourth row, and it is NOT of this class:
+its width switch is already exhaustive over the sealed permits and refuses bfloat16 by name
+(the comment above it says a supertype pattern or a negated `instanceof` would have emitted
+a bf16 literal as an `F64VEC` with no diagnostic). Its open question was the signalling-NaN
+reachability one, settled below.
+
 One open-reachability site, recorded as unchecked rather than asserted as a bug:
 `compileFloatArrayLiteral` crosses a `double` TWICE per element -- `elementAt` is an
 implicit f32 -> f64 widening (`LispSingleFloatArray:56` returns `data()[flat]`), then a
@@ -180,6 +203,32 @@ claims the round trip is lossless, which is true of every value except a signall
 (`.kb/bfloat16.md`: a NaN must never cross a `double` in either direction). **Whether a
 signalling NaN can reach an `#f(...)` literal through the reader is UNCHECKED** -- settle
 that before deciding whether the comment is wrong or merely unreachable.
+
+**SETTLED 2026-09-05: MERELY UNREACHABLE, and the comment now says why instead of claiming
+losslessness.** A signalling NaN cannot reach that method, for three independent reasons,
+any one sufficient:
+
+1. **The `#f(...)` reader syntax admits no NaN at all.** `#f(nan)` is *"expected a number,
+   got NAN"*; an overflowing literal answers Infinity (`#f(1e400)` -> `#f(Infinity)`), not
+   NaN; and `#.` is NOT evaluated inside a float-array literal (*"expected a number, got
+   %READ-EVAL"*). So the literal syntax the question asked about is a dead end on its own.
+2. **The route that DOES put a float-array value in the AST cannot carry one.** `#.` at an
+   ordinary expression position produces a real `LispSingleFloatArray` literal -- verified,
+   a `#.`-built array reaches the compiler and its NaN element is emitted -- but there is no
+   f32 SCALAR, so the element crosses a `double` on the way IN:
+   `(%ieee754-single-from-bits #x7F800001)` already answers `#x7FC00001`, quiet, payload
+   intact.
+3. **`elementAt` widens f32 -> f64 on the way OUT**, quieting anything that somehow got
+   stored, before the method sees it.
+
+A QUIET NaN IS reachable: a `--no-gc` module built from a `#.` array holding `(/ 0.0 0.0)`
+carries `f64.const 0x7ff8000000000000` followed by `f32.demote_f64` (checked in the emitted
+bytes). That payload is the canonical one every implementation reproduces, so nothing
+observable is lost -- but `f32.demote_f64` is free by specification to invent any payload,
+so the claim rests on the canonical value and on the unreachability above, not on the round
+trip being lossless for an arbitrary pattern. The comment says exactly that now, and the
+load-bearing half is pinned by
+`LispEvaluatorTest#evalASignallingNaNCannotSurviveIntoAPackedSingleFloatArray`.
 
 ## Verify
 

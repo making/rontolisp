@@ -1607,6 +1607,26 @@ class LispEvaluatorTest {
 		assertThat(eval("(subseq \"hello world\" 0 5)")).isEqualTo(new LispString("hello"));
 	}
 
+	// There is no f32 SCALAR: a single-float array's element crosses a double on the way
+	// in and on the way out, and both crossings QUIET a signalling NaN. So a signalling
+	// NaN cannot live in a packed single-float array at all, whatever bit pattern the
+	// program hands it -- which is what makes NoGcWasmCompiler.compileFloatArrayLiteral's
+	// f64.const + f32.demote_f64 round trip safe: the one value it could not carry
+	// cannot reach it (.kb/bfloat16.md, .todo/487).
+	@Test
+	void evalASignallingNaNCannotSurviveIntoAPackedSingleFloatArray() {
+		// 0x7F800001: exponent all ones, payload nonzero, quiet bit CLEAR.
+		assertThat(eval("(%ieee754-single-bits (%ieee754-single-from-bits 2139095041))").print())
+			.as("the scalar itself is already quiet -- 0x7FC00001 -- because it crossed a double")
+			.isEqualTo("2143289345");
+		assertThat(evalMulti("""
+				(defvar *a* (make-array 1 :element-type 'single-float))
+				(setf (aref *a* 0) (%ieee754-single-from-bits 2139095041))
+				(%ieee754-single-bits (aref *a* 0))
+				""").print()).as("and storing it into the array cannot make it signalling again")
+			.isEqualTo("2143289345");
+	}
+
 	// The interpreter reads a make-array :element-type designator at RUN time, so a
 	// designator held in a variable and one written literally are the same call here --
 	// which is exactly why this engine is the REFERENCE the two compile paths are held

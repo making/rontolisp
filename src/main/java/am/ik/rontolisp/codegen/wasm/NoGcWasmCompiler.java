@@ -3179,10 +3179,30 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// Pushes an f32 constant via the widening f64.const + f32.demote_f64 trick
-	// (WasmWriter
-	// has no writeF32). (double) value is the exact widening and demote narrows back to
-	// the
-	// same f32 bits, so the round-trip is lossless.
+	// (WasmWriter has no writeF32). (double) value is the exact widening and demote
+	// narrows back to the same f32 bits for every value that can reach here.
+	//
+	// The exception the round trip does NOT survive is a signalling NaN -- f2d and d2f
+	// alike quiet one, and f32.demote_f64 is free by specification to invent any NaN
+	// payload (.kb/bfloat16.md). CHECKED 2026-09-05 (.todo/487) rather than assumed:
+	// a signalling NaN cannot reach this method, for three independent reasons, any one
+	// of which is sufficient.
+	//
+	// 1. The #f(...) reader syntax admits no NaN at all. `#f(nan)` is "expected a
+	// number, got NAN"; an overflowing literal answers Infinity, not NaN; and `#.` is
+	// not evaluated inside a float-array literal ("expected a number, got %READ-EVAL").
+	// 2. The one route that DOES put a float-array value in the AST -- `#.` at an
+	// ordinary expression position -- cannot carry a signalling NaN into the array,
+	// because there is no f32 SCALAR: the element crosses a double on the way in, and
+	// (%ieee754-single-from-bits #x7F800001) already answers #x7FC00001.
+	// 3. LispSingleFloatArray.elementAt widens f32 -> f64 on the way out, so anything
+	// that did get stored is quiet again before this method sees it.
+	//
+	// A QUIET NaN is reachable (a `#.`-built array holding (/ 0.0 0.0) emits
+	// f64.const 0x7ff8000000000000 here), and its payload is the canonical one every
+	// implementation reproduces -- so nothing observable is lost. The claim rests on
+	// that and on the unreachability above, not on the round trip being lossless for an
+	// arbitrary bit pattern.
 	private static void f32Const(WasmWriter w, float value) {
 		WasmVecLoops.f32Const(w, value);
 	}
