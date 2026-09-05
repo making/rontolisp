@@ -234,6 +234,34 @@ recorded the same spread and attributed it to the other lanes, and this run had 
 the cause is the box's own scheduling and not contention. One run per cell is not enough
 here; the single-threaded columns are the ones to quote.
 
+**Qualification added 2026-09-05, after the numbers above were taken.** "This box's
+ceiling and not a kernel property" generalises further than this data supports, for two
+independent reasons, and the sentence should be read as *a rate the f32 arm reaches on
+the shapes measured here* until someone widens it.
+
+- **The same 41-42 Gelem/s appears at BOTH shapes** -- 1024x1024 is 4.2 MB of f32 weights
+  and 4096x4096 is 67 MB, and the arm runs 39-42 Gelem/s at each. A GEMV re-reads no
+  weight, so both stream; but 4.2 MB can live in this part's system-level cache and 67 MB
+  cannot, and a DRAM bandwidth ceiling has no reason to bind the two identically. Either
+  the small shape is not cache-resident in the way the single-threaded 0.72-0.84x
+  regression implies it is, or 41-42 Gelem/s is a limit of the parallel machinery -- work
+  distribution, barrier cost, per-row dispatch -- rather than of memory. Those predict
+  different things about every future width, so the question is worth one experiment: run
+  the parallel f32 arm at a shape small enough to be unambiguously resident (256x256, say)
+  and see whether it still lands on 41-42.
+- **On `dorian` the analogous figure is per-MODEL, not per-box.** Measured on a quiet
+  machine 2026-09-05 at 32 threads: TinyLlama-1.1B 39 GB/s, Qwen3.5-0.8B 29, Qwen3-0.6B
+  22 -- and the ordering was predicted from access shape (plain-llama's big matvecs above
+  Gated DeltaNet's 576 small 128x128 GEMVs per token) before those numbers were taken.
+  `.todo/670`'s "two independent models on one ceiling" is being corrected on the strength
+  of it. That is a different box and a whole-model measurement rather than a kernel one,
+  so it does not transfer -- but it removes the prior that a parallel GEMV rate measured
+  on one workload is a property of the machine.
+
+Neither point changes any ratio in the tables above; both are within-run and unaffected.
+What is affected is the one sentence that stepped from "the f32 arm sits at 41-42" to
+"which is this box's ceiling".
+
 ### The threshold decision: NO size gate, and why
 
 The cache-resident regression is real and reproduces: **0.72-0.84x on one thread at
