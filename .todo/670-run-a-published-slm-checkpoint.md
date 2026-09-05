@@ -242,15 +242,31 @@ Sonnet.** A dead worker is RESUMED, never respawned.
 - **`.todo/709` is an explicit DRAFT and needs co-signing or cutting by both
   orchestrators.** It is process, so one side adopting it unilaterally is the failure it
   is written about.
-- **A holds the pen on one unfiled item**: what a directory rename does to the machinery
-  AROUND the moved paths (four mechanisms, all silent, none in the rename's own diff) plus
-  the reading disciplines that caught them. Drafted, shown, not landed.
+- **A's unfiled item is now filed as `711`** (the four mechanisms as a `.kb` card) and
+  `712` (the `-m chat` defect). `711` deliberately does NOT carry the reading disciplines
+  that caught them -- diff the lists rather than reasoning about which terms ought to
+  differ; a sum that closes is not evidence about its terms; relay a census from the file
+  with its total AND its class count. Those are process, not rename-specific, and they
+  belong to the `709` co-sign above or nowhere.
 - **The one-thread bf16 ratio** (1.18x / 1.26x against `489`'s prediction) is B's to take
   into `489` rather than to run as a lane.
 
-**Orchestrator A -- dorian, the model side, no GPU.** `489`'s bf16 rungs were in flight at
-the close of 09-05 (LFM2.5-1.2B); `675` and `677` close behind them. A's queue is A's to
-order.
+**Orchestrator A -- dorian, the model side, no GPU.** `489`'s bf16 rungs FINISHED on
+09-05 after this section was drafted: six models at both widths, pushed at `8ba82c8d`, the
+reading beside the prediction in `489` and the summary in `examples/llm/README.md`. In
+order:
+
+| # | item | difficulty | why here, why now |
+| --- | --- | --- | --- |
+| A-1 | close `489` | Low | The Done criteria are met and the lane deliberately left closing to lane design: it needs the child table above, the `675` / `677` cross-references, and standing rule 11's sweep for items waiting on the CAPABILITY ("a 1B-class model runs at bf16"), which no grep for the number will find. Small, and it unblocks reading the chain's state |
+| A-2 | `712` `-m chat` with no template answers a different question | Low | Filed 09-05 out of the rungs. It cost twelve discarded timed runs and left a suspect pair of rows on develop; A runs every future rung, so A pays again until it is fixed. One condition plus a failing test on the checked-in `stories260K` |
+| A-3 | `675` read a safetensors checkpoint | Medium | Unblocked: the `#bf16` target was waiting on `487` steps 3-5, and `487` closed 09-05 at `5eebb771`. Read the two JIT cliffs pointed at from the item before writing lane code -- `488`'s C2 inlining cliff and `672`'s finding that Graal 25 does not intrinsify the int-to-double lane conversion |
+| A-4 | `677` the Gated DeltaNet layer | High | Runs from both formats already; the bf16 `tok/s` leg has been unblocked since `488` landed, and `489` has now measured the width on six models, so the remaining work is this layer's own |
+| A-5 | `711` what a directory rename breaks outside its own diff | Medium | Filed 09-05, the `.kb` card owed from `708`'s account. Last deliberately: its value does NOT decay, because `708` holds the evidence durably -- so it loses nothing by waiting behind work that does |
+
+**`489` stays OPEN until A-1**, not because anything is unmeasured but because closing it is
+the sweep, and the lane that measured it was right to refuse to do that from inside a
+worktree.
 
 **Unassigned pool, neither side's yet:** `693` and `694` (filed 09-03, never in a wave),
 `683`, `684`, `686`, `687`, `689`, `696`, `697`, `698`, `699`, `700`, `701`, `703`, `704`,
