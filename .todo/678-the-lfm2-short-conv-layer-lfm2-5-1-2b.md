@@ -78,7 +78,8 @@ Q5_K_M / Q6_K / Q8_0 / QAD-Q4_0).
         most unexpected things. One sunny morning,"
 
 **And `llama.cpp` on the same GGUF prints the same BYTES** -- same prompt, temperature 0,
-the whole 155-token overlap identical, where `.todo/677`'s Qwen3.5 run got the same
+the whole overlap identical -- 581 characters, ~143 tokens -- where `.todo/677`'s
+Qwen3.5 run got the same
 character in a different sentence. Stated as a FACT and not a rule (`.todo/670` rule 7):
 one model, one prompt, one lane, and nobody has tried to break it. It is also NOT the
 byte-identity check `.todo/672` owes, whose subject is the quantized kernel.
@@ -88,7 +89,7 @@ identical; divergent with the two prompts PROVEN to be the same token sequence; 
 divergent without that proof, which is a harness gap and says nothing about the
 arithmetic. This one is the first, and byte-identical output is itself strong evidence
 that the inputs matched -- two chat templates rendered differently would not converge on
-155 identical tokens. The prompt equality is recorded anyway, because the claim's strength
+581 identical characters. The prompt equality is recorded anyway, because the claim's strength
 should not have to be inferred by the reader.
 
 The prompt we feed is 18 ids:

@@ -217,7 +217,8 @@ A `Q8_0` file is refused by name at `token_embd.weight` until the quantized
 weight matrix exists.
 
 **And `llama.cpp` on that GGUF prints the same bytes.** Same prompt, same
-temperature 0, the whole 155-token overlap identical -- not "the same story in
+temperature 0, the whole overlap identical -- 581 characters, about 140 tokens
+-- not "the same story in
 other words", which is what the Qwen3.5 row above gets and what two
 implementations at temperature 0 normally give each other. Worth stating
 carefully: it is one model on one prompt, so it is a fact and not a rule, and
