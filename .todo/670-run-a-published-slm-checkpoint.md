@@ -212,6 +212,41 @@ component leg of `safetensors-check`), both filed 2026-09-03 and neither in a wa
    elapsed time.** Every run in the table above did: `git diff --stat <ran-at> <head> --
    src/` empty means a re-run would only re-measure `.todo/` edits. One command, and it is
    the whole argument.
+9. **An umbrella's status paragraph is evidence only where no child covers the same
+   fact.** Where a child does, the child wins and the umbrella should POINT at it rather
+   than restate it. Rule 1 says only the closer may write back a dependency; this is the
+   same failure in the other direction, and it is the more expensive one -- the closer
+   wrote the truth into their own item and the umbrella went on asserting the opposite,
+   so the record that was right was not the record anyone read. Found 2026-09-05: this
+   file said "The checkpoints are gone" while `.todo/677` had carried a "Checkpoint on
+   dorian (not in the repository)" block with the correct paths the whole time, and two
+   lanes were sent to re-download 12 GB that was on disk. A restated fact also decays
+   PER BOX: rewritten as "the checkpoints survived" it would have been wrong for GB10,
+   where they had not, and that direction is worse than the original error -- it skips a
+   re-fetch that is needed rather than repeating one that is not.
+10. **Record a checkpoint's SIZE and sha256 beside its path, because provenance is
+    recoverable from the file but not the file from the provenance.** A publisher's
+    manifest carries the digest of every file it serves -- Hugging Face answers
+    `/api/models/<id>?blobs=true` with the LFS sha256 -- so a checkpoint whose repo path
+    was lost can be re-identified by matching bytes we already have, in the direction
+    that can fail. A path with no hash beside it recovers nothing when the path rots.
+    Demonstrated 2026-09-05: `.todo/677` recorded the Qwen3.5-0.8B GGUFs' paths and their
+    publisher (`ggml-org`) but not the repo id, and the id came back as
+    `ggml-org/Qwen3.5-0.8B-GGUF` only because the two digests taken off dorian matched
+    that repo's manifest exactly, and GB10's independent fetch from that id then hashed
+    to the same two digests -- three copies, one manifest, checked in the direction that
+    can fail. **The digest and the refusal to guess are two independent goods and it is
+    worth keeping them apart**: refusing to guess is why the id is VERIFIED rather than
+    merely written down; the recorded digest is why a guess would have been SURVIVABLE --
+    a wrong one is caught by the bytes on the first fetch, a right one is harmless. What a
+    guess actually costs is not the evidence, which sits there either way, but the
+    QUESTION: a written repo id reads as known, so nobody queries the manifest. That is
+    why the mechanical half is the half to state first. "Do not guess" is advice about
+    judgement and the next person under time pressure will violate it; "record the digest
+    beside the path" still works when they do, and a rule should be robust to the failure
+    it is written about. And once upstream is the reference, no box's copy is privileged
+    -- each verifies independently, and a later mismatch is a corrupt fetch rather than
+    the file-versus-implementation ambiguity rule 7 was written about.
 
 ## What is deliberately not in the plan
 

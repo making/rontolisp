@@ -114,3 +114,41 @@ boundary type until someone needs one.
   4096x4096 ratio must be clearly above bf16's, or the int-dot did not vectorize.
 - A `.class` with a Q8_0 GEMV over a matrix of > 32767 columns and > 32767 rows: the
   header scheme's regression, as in `.todo/485`.
+
+## The fixture, and its identity
+
+The Q8_0 checkpoint this item reads is **`ggml-org/Qwen3.5-0.8B-GGUF`**
+(`general.architecture = qwen35`, published in BF16 / Q8_0 / Q4_0). Identify the file by
+its bytes, not by where it was fetched from:
+
+| file | bytes | sha256 |
+| --- | --- | --- |
+| `Qwen3.5-0.8B-Q8_0.gguf` | 833592096 | `37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f` |
+| `Qwen3.5-0.8B-BF16.gguf` | 1557662496 | `9a7bed4041b7975e0f71fa34670d1e9025213bc92905ac0db75d36c4fa3fa623` |
+| `Qwen3.5-0.8B-Q4_0.gguf` | 563036064 | `57d1997790d1744fba5b40a7317df71ea5e2acee28c47e78f0cce39c0703f8cf` |
+
+**The repo id above was recovered, not remembered.** `.todo/677` recorded the publisher
+but never the repo id string, and on 2026-09-05 the two hashes in this table were taken
+from dorian's local copies with no repo path attached. The id is the one repo under
+`ggml-org` whose LFS `sha256` fields -- served by
+`https://huggingface.co/api/models/ggml-org/Qwen3.5-0.8B-GGUF?blobs=true` -- match those
+bytes exactly. That is why it is written down as a fact and not as a guess: a guessed
+repo id would have to be trusted, and this one was *checked against the bytes we already
+had*. The same query is how to re-identify any other checkpoint whose provenance was
+lost -- the publisher's own manifest carries the digest, so provenance is recoverable
+from the file, not only the file from the provenance.
+
+Two consequences worth stating, because they change what a later mismatch means:
+
+- **The oracle no longer has two boxes in it.** The publisher's manifest is the
+  reference; both boxes are checked against it independently, so neither box's copy is
+  privileged and a fetch can be verified without asking the other orchestrator.
+- **A hash mismatch after this is a corrupt or truncated download, not an ambiguity.**
+  This item's central check is a byte-equality against what `llama.cpp` produces from the
+  same file; with the digest pinned upstream, any divergence found later is in the code.
+  `.todo/670` rule 7 is the record of what it costs to be unable to tell those apart.
+
+Locations: dorian `/home/administrator/models/`; GB10 `/home/maki/models/qwen35-gguf/`
+(fetched 2026-09-05 -- GB10's only other cached model is
+`unsloth/Qwen3.8-Flash-Next-GGUF`, Q4_K_XL plus a BF16 companion, which is not this).
+None of it belongs in the repository.
