@@ -149,7 +149,7 @@ npx @bytecodealliance/jco types sumsq.wit -o types/
 # types/sumsq.d.ts: export function sumsquared(p0: number, p1: number): number;
 ```
 
-world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは `wasi:cli/stdout@0.3.0` のインポート — と `async func` のエクスポート — を持ちます)。さらに、[ツリーシェイキング](../compiling/wasm.md#optimize-tree-shaking)は `--optimize=off` を渡さない限り有効なので、そのバリアントのうちプログラムが実際に到達できる部分だけになります: 上の world はビルドバリアントの固定表面すべてではなく、本当に必要な 2 つの `wasi:cli` インポートです。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/handler@0.3.0` をエクスポートします。`--component` なしの `--emit-wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
+world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) では world のインポートはプログラムが到達するホスト関数で、プログラムが印字するときはさらに `wasi:cli/stdout@0.3.0` のインポート — と `async func` のエクスポート — を持ちます)。さらに、[ツリーシェイキング](../compiling/wasm.md#optimize-tree-shaking)は `--optimize=off` を渡さない限り有効なので、そのバリアントのうちプログラムが実際に到達できる部分だけになります: 上の world はビルドバリアントの固定表面すべてではなく、本当に必要な 2 つの `wasi:cli` インポートです。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/handler@0.3.0` をエクスポートします。`--component` なしの `--emit-wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
 
 ### `--emit-wit` は何のためにあるか
 

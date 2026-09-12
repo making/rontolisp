@@ -250,6 +250,41 @@ class WitOracleE2eTest {
 	}
 
 	@Test
+	void noGcComponentImportWitsMatchWasmToolsByteForByte() throws Exception {
+		// Both import-name shapes the wrap emits: an interface id prints as
+		// `import docs:host/env@0.1.0;` plus its package block, a plain label as the
+		// inline `import env: interface { ... }` -- and each function under its
+		// :param-names (the labels of the instance type). The lists are what the core
+		// REACHES: the uncalled `spare` is not in the type, so it must not be in the WIT.
+		NoGcWasmCompiler byId = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		byte[] idComponent = byId.compile(LispReader.readAllFromString(
+				"""
+						(rontolisp:wasm-import 'add :from "docs:host/env@0.1.0" :as "add" :params '(:s32 :s32) :param-names '(a b) :returns :s32)
+						(rontolisp:wasm-import 'greet :from "docs:host/env@0.1.0" :as "greet" :params '(:string) :param-names '(name) :returns :string)
+						(rontolisp:wasm-import 'spare :from "docs:host/env@0.1.0" :as "spare" :params '() :returns :void)
+						(defun run (n) (length (greet (if (> (add n n) 10) "big" "small"))))
+						(rontolisp:wasm-export 'run :params '(:s32) :returns :s32)
+						"""));
+		assertThat(byId.componentWit()).isEqualTo(oracle(idComponent));
+		NoGcWasmCompiler byLabel = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		byte[] labelComponent = byLabel.compile(LispReader.readAllFromString("""
+				(rontolisp:wasm-import 'host-log :from "env" :as "host-log" :params '(:string) :returns :void)
+				(rontolisp:wasm-import 'measure :from "env" :as "measure" :params '(:s32) :returns :s64)
+				(defun run (n) (host-log "hello") (measure n))
+				(rontolisp:wasm-export 'run :params '(:s32) :returns :s64)
+				"""));
+		assertThat(byLabel.componentWit()).isEqualTo(oracle(labelComponent));
+		// The print micro-adapter's fixed stdout import precedes the user import.
+		NoGcWasmCompiler print = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		byte[] printComponent = print.compile(LispReader.readAllFromString("""
+				(rontolisp:wasm-import 'measure :from "env" :as "measure" :params '(:s32) :returns :s64)
+				(defun run (n) (print n) (measure n))
+				(rontolisp:wasm-export 'run :params '(:s32) :returns :s64)
+				"""));
+		assertThat(print.componentWit()).isEqualTo(oracle(printComponent));
+	}
+
+	@Test
 	void noGcInterfaceExportWitMatchesWasmToolsByteForByte() throws Exception {
 		// The adapter-free reactor carries an interface export too: its exported instance
 		// starts at component instance 0 (no run instance, no imports), and the emitted

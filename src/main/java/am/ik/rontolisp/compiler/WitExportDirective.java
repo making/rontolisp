@@ -113,8 +113,26 @@ public final class WitExportDirective {
 		/** The scalar backend ({@code -o out.wasm --no-gc}). */
 		WASM_NO_GC,
 
+		/**
+		 * The scalar backend in component mode ({@code -o out.wasm --no-gc --component}).
+		 * {@code wit-export} treats it exactly like {@link #WASM_NO_GC} (the export
+		 * boundary is the same scalar one); {@code wit-import} lowers to the same
+		 * {@code rontolisp:wasm-import} block but names the import by the interface's
+		 * canonical id and the function by its WIT label, which is what the component's
+		 * {@code canon lower}ed import instance is typed by.
+		 */
+		WASM_NO_GC_COMPONENT,
+
 		/** The interpreter or the JVM backend: the directive is inert. */
-		OTHER
+		OTHER;
+
+		/**
+		 * Whether this is the scalar ({@code --no-gc}) backend, in either output shape.
+		 * @return {@code true} for {@link #WASM_NO_GC} and {@link #WASM_NO_GC_COMPONENT}
+		 */
+		public boolean isNoGc() {
+			return this == WASM_NO_GC || this == WASM_NO_GC_COMPONENT;
+		}
 
 	}
 
@@ -414,7 +432,7 @@ public final class WitExportDirective {
 			throw error(witPath, locations, item, "export '" + name + "' declares " + func.params().size()
 					+ " parameter(s), but (defun " + name + " ...) takes " + lambdaList.size());
 		}
-		if (func.async() && backend == Backend.WASM_NO_GC) {
+		if (func.async() && backend.isNoGc()) {
 			throw error(witPath, locations, item,
 					"export '" + name + "' is an async func, which --no-gc --component cannot lift "
 							+ "(the adapter-free reactor has no async machinery)");

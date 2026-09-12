@@ -463,7 +463,7 @@ final class CompileFrontend {
 			return WitExportDirective.Backend.OTHER;
 		}
 		if (noGc) {
-			return WitExportDirective.Backend.WASM_NO_GC;
+			return component ? WitExportDirective.Backend.WASM_NO_GC_COMPONENT : WitExportDirective.Backend.WASM_NO_GC;
 		}
 		return component ? WitExportDirective.Backend.WASM_COMPONENT : WitExportDirective.Backend.WASM_GC;
 	}

@@ -132,9 +132,9 @@ value model differs.
 - **Only REACHED imports are imported.** A declared-but-uncalled host function is never enqueued,
   so it costs neither an import entry nor a byte at any optimize level -- the rule every other
   function here follows. Ordinals are assigned in DECLARATION order among the reached ones.
-- **Refusals**: `:async t` (a settled future is still a future, and there is no value for one)
-  and `--component` (a component's imports are canonical-ABI imports the core-module wrap does
-  not build). `rontolisp:wit-import` lowers to this and is accepted, except an `async func`.
+- **Refusals**: `:async t` (a settled future is still a future, and there is no value for one).
+  `rontolisp:wit-import` lowers to this and is accepted, except an `async func`. Under
+  `--component` the reached imports become the component's own (below, "Host imports").
 - The host types are appended AFTER every other type-section entry (nothing renumbers), and the
   injector prepends the entries ahead of a printing program's `fd_write`, which shifts with
   everything else. Pins: `NoGcWasmCompilerTest` (`aHostImportBecomesTheModulesOnlyImportEntry`,
@@ -216,11 +216,52 @@ ZERO flags. A 4-export program is ~400 bytes; `:long` maps to VT_S64 (0x78).
     bridge GLOBAL. Any other fd returns errno 8.
   - `rg '@0\.2\.0' src/wasm-component src/main` must hit nothing but
     `wasi:keyvalue@0.2.0-draft` (and `am.ik.wit` examples).
+- **Host imports** (`.todo/794`, landed 2026-09-12): the REACHED `rontolisp:wasm-import`s
+  become component-model instance imports, one imported instance per `:from` module, typed by
+  the reached functions under their `:param-names` (`WasmImportDirective` parses the option;
+  only this wrap reads it). A scalar-only import is `alias -> canon lower (no options) -> core
+  instance` AHEAD of the core's instantiation. A `:string` argument or result makes the lower
+  name the core's own memory (and `cabi_realloc` for a result), which cannot exist before the
+  core does -- the wit-component instantiation cycle -- so those imports go through a shim +
+  fixup pair GENERATED from the signatures (`am.ik.wasm.WasmShimModules`: a funcref table
+  exported as `$imports`, trampolines `"0".."n-1"`, a fixup whose element segment patches the
+  lowered functions in once memory is aliased). Only the string-involving imports take the
+  table (wit-component's rule); the scalar ones stay direct. A `:string` RESULT takes the
+  canonical retptr shape in the CORE (`coreParamTypes`: host params + trailing `i32`, no
+  results; the wrapper `__alloc`s the 8-byte record and reads `(ptr,len)` back), so that is the
+  one import shape whose core is NOT byte-identical to the Preview 1 module (there the result
+  is the two-value `(ptr,len)`); it also gates `cabi_realloc` on
+  (`NoGcWasmComponentBuilder.needsRealloc`, the one predicate both compiler and wrap use).
+  Names follow the component grammar and are checked by `validateComponentImport`: `:from` a
+  label or a WIT interface id (`INTERFACE_ID`), `:as` and every param name a label; two
+  bindings of one `(module, field)` are refused (an instance type declares a name once).
+  `WitImportDirective` lowers under `Backend.WASM_NO_GC_COMPONENT` with the interface's
+  CANONICAL id as `:from`, the WIT label verbatim as `:as` and the WIT parameter names as
+  `:param-names` (so a composed provider type-checks down to the names), and refuses
+  resources and non-scalar types at the WIT line -- Preview 1 `--no-gc` keeps the bare-name /
+  camelCase lowering and its bytes. `--emit-wit` renders the imports (`WitEmitter.emitNoGc`:
+  an id prints as `import ns:pkg/iface;` + package block, a label as the inline
+  `import env: interface {...}`), byte-identical to `wasm-tools component wit`. Every index in
+  the builder is a CURSOR; with no imports every cursor starts where the fixed indices were, so
+  every pre-existing output is byte-identical (verified against the previous jar on the
+  scalar / string / print / print+string shapes). Print composes: the fixed print shim and the
+  generated import shim are two tables the core instantiates against, two fixups.
+  **Measured 2026-09-12** (`--optimize=size`): the `.todo/789` reactor (two `:string` imports)
+  is 1,027 B as a component (530 B core; wit-component's own wrap of the same core, stripped,
+  is 1,041 B) against 2,650 B for the wasm-GC `--component` of the same WIT world -- NOT the
+  ~110 KB `.todo/794` assumed, which is jco's transpiled JS runtime and is paid by both. A
+  scalar-only import costs ~90 B of import block, a string-involving set ~400 B (shim +
+  fixup + wiring). `wasmtime --invoke` cannot host a user import at all (no linker entry): the
+  hosts are jco (`--map env=./env.js`; jco 1.33 / node 24 runs it with NO JSPI, where the GC
+  component of the same world needs `--experimental-wasm-jspi` for its async `wasi:cli/run`
+  lift) and composition (`wac plug` / `wasm-tools compose` with a provider component -- a
+  rontolisp `--no-gc --component` that `wit-export`s the interface works, and that is the E2E).
 - Component-mode-only compile errors (in `compile()`, not codegen): non-kebab export names
-  (`WasmExportCompiler.COMPONENT_EXPORT_NAME`) and `:async`. `:s-expr` stays rejected for ALL
-  `--no-gc` by `validateScalarTypes`. `--optimize` composes (shake before the wrap; the cabi
-  exports are roots). `--emit-wit` writes the WIT world (`nogc`/`nogc-print` templates off
-  `mem.printUsed()`; `.kb/wasi-component.md`).
+  (`WasmExportCompiler.COMPONENT_EXPORT_NAME`), non-component import names, and `:async`.
+  `:s-expr` stays rejected for ALL `--no-gc` by `validateScalarTypes`. `--optimize` composes
+  (shake before the wrap; the cabi exports are roots). `--emit-wit` writes the WIT world
+  (`nogc`/`nogc-print` templates off `mem.printUsed()`, plus the reached imports;
+  `.kb/wasi-component.md`).
 
 ## `--no-wasi`
 A PRINTING program's `fd_write` import is replaced by an internal discarding SINK at the same
@@ -229,7 +270,9 @@ verbatim), so the module keeps ZERO imports while `Mem.funcBase()` stays 1; a pr
 program is a byte-exact no-op. Under `--component` the wrap consequently never wires the
 print micro-adapter (`printAdapter = printUsed && !noWasi` selects the build AND the WIT
 template): a printing program takes the print-FREE shape (one core module, no import block,
-SYNC lifts). **Do NOT re-split this from the GC half.**
+SYNC lifts). **Do NOT re-split this from the GC half.** `--no-wasi` says nothing about USER
+imports on this backend: a `--no-gc --component --no-wasi` program keeps its host imports (only
+the WASI one is sunk).
 
 ## Tests
 `NoGcWasmCompilerTest` (structural, no Docker): the heap-reset trio,
@@ -241,10 +284,19 @@ SYNC lifts). **Do NOT re-split this from the GC half.**
 `componentNoWasiPrintingProgramTakesThePrintFreeShape`, and the host-import group
 (`aHostImportBecomesTheModulesOnlyImportEntry`, `theHostImportsPrecedeAPrintingModulesFdWrite`,
 `aDeclaredButUncalledImportCostsTheModuleNothing`, `aScalarImportNeedsNeitherMemoryNorAnAllocator`,
-`aStringBoundaryOnAnImportPullsInTheMemoryAndTheAllocator`, the four refusals,
-`aConsumedPackageDeclarationIsDroppedRatherThanRefused`). Host imports at RUNTIME are a JS host on
-node: `NoGcWasmImportE2eTest` -- nothing smaller can read a `:string` argument's bytes or write a
-`:string` result's, since a preloaded wasm host has its own linear memory. Runtime parity: the `noGc*` cases in
+`aStringBoundaryOnAnImportPullsInTheMemoryAndTheAllocator`, the refusals,
+`aConsumedPackageDeclarationIsDroppedRatherThanRefused`), the component-import group
+(`aScalarComponentImportIsAnInstanceImportLoweredAheadOfTheCore`,
+`aStringComponentImportGoesThroughAGeneratedShimAndFixup`,
+`aStringResultComponentImportTakesTheReturnPointerAbiAndPullsInRealloc`,
+`componentPrintComposesWithTheImportShim`, `componentImportNamesFollowTheComponentModelGrammar`,
+`anUncalledComponentImportDeclaresNothing`) and `WitOracleE2eTest.noGcComponentImportWitsMatch...`.
+Host imports at RUNTIME are a JS host on node: `NoGcWasmImportE2eTest` -- nothing smaller can
+read a `:string` argument's bytes or write a `:string` result's, since a preloaded wasm host has
+its own linear memory. Component imports at runtime: `NoGcWasmComponentImportE2eTest` (wasmtime +
+wasm-tools on PATH) composes the consumer with a rontolisp provider and invokes the result --
+scalars and strings both ways, the wit-import lowering's byte identity with the hand-written
+block, and a printing consumer through both shims. Runtime parity: the `noGc*` cases in
 `WasmLispCompilerIntegrationTest` (string primitives, print vs the interpreter, flat-heap
 loops under a 2-page cap, WAVE invoke with no flags, the canonical string ABI, `--optimize`
 composition, the print micro-adapter and its chunk cap). The `:string`-parameter side needs a

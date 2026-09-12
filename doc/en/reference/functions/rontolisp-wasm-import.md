@@ -1,6 +1,6 @@
 # rontolisp:wasm-import
 
-`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) :returns type [:async t])`
+`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) [:param-names '(name...)] :returns type [:async t])`
 
 Declares a function the WASM host provides (JavaScript in a browser, or another
 module preloaded into wasmtime) and makes it callable from Lisp under `name`
@@ -28,6 +28,13 @@ for a complete browser program.
   Defaults to the bare Lisp name (without any package qualifier).
 - `:params` — a list of boundary type designators, one per parameter. Omitted,
   `nil` or `'()` means no arguments.
+- `:param-names` — the parameter names of the **component-model** signature,
+  one per `:params` entry, as symbols or strings; defaults to `p0`, `p1`, ….
+  Read only by
+  [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component),
+  where they are the labels of the imported function's type (a WIT world's
+  names, when the import stands for one); a core module's imports have no
+  parameter names.
 - `:returns` — the result boundary type designator. Omitted, `nil`, `'()` or
   `:void` declares a void result (Lisp receives `nil`).
 
@@ -109,12 +116,18 @@ spells both directions `async func`, and the directive carries the direction.)
 
 ## Limitations
 
-- Core modules only: `--component` rejects the directive with an error. On the
-  interpreter and JVM the declared name signals an error when called.
+- On the default (wasm-GC) backend, core modules only: `--component` rejects
+  the directive with an error (a component binds interfaces with
+  [`rontolisp:wit-import`](rontolisp-wit-import.md)). On the interpreter and
+  JVM the declared name signals an error when called.
 - [`--no-gc`](../../guides/wasm-nogc.md#host-imports-rontolispwasm-import) takes
   the directive, with its own type vocabulary: the whole fixed-width integer
   family (its house integer is `i64`), `:float`, `:bool`, `:string` and `:void`,
-  but not `:s-expr`, not `:bytes`, not `:async t`, and not under `--component`.
+  but not `:s-expr`, not `:bytes` and not `:async t`. Under
+  [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component)
+  the reached imports become the component's imports, so `:from` must be a
+  lower-kebab-case label or a WIT interface id, and `:as` and every
+  `:param-names` entry a lower-kebab-case label.
 - The directive must appear at top level, before use like a `defun`.
 - Instantiating the compiled module requires the host to provide every declared
   import; `wasmtime run` needs a `--preload <module>=<file>.wasm` for each

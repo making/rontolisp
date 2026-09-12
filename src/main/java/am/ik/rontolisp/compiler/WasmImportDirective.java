@@ -27,6 +27,11 @@ import org.jspecify.annotations.Nullable;
  * @param module the WASM import module name ({@code :from}, default {@code "env"})
  * @param field the WASM import field name ({@code :as}, default the Lisp name)
  * @param paramTypes the raw parameter type designator keywords, in order
+ * @param paramNames the component-model parameter names, one per parameter
+ * ({@code :param-names}, default {@code p0}, {@code p1}, ...): the labels the imported
+ * function's type carries when the module is wrapped as a component
+ * ({@code --no-gc --component}), and therefore the names a WIT world must agree on.
+ * Meaningless on a core module (a core import's parameters have no names) and on the JVM
  * @param returnType the raw return type designator keyword, or {@code null} when omitted
  * / declared void
  * @param async whether the host function may SUSPEND ({@code :async t}): the call then
@@ -36,7 +41,7 @@ import org.jspecify.annotations.Nullable;
  * carries the direction
  */
 public record WasmImportDirective(String name, String module, String field, List<String> paramTypes,
-		@Nullable String returnType, boolean async) {
+		List<String> paramNames, @Nullable String returnType, boolean async) {
 
 	/** The default import module name when {@code :from} is omitted. */
 	public static final String DEFAULT_MODULE = "env";
@@ -84,6 +89,7 @@ public record WasmImportDirective(String name, String module, String field, List
 		String module = DEFAULT_MODULE;
 		@Nullable String field = null;
 		@Nullable List<String> params = null;
+		@Nullable List<String> paramNames = null;
 		@Nullable String returns = null;
 		boolean async = false;
 		int i = 2;
@@ -97,6 +103,7 @@ public record WasmImportDirective(String name, String module, String field, List
 				case ":FROM" -> module = stringValue(value, keyword, form);
 				case ":AS" -> field = stringValue(value, keyword, form);
 				case ":PARAMS" -> params = quotedKeywordList(value, form);
+				case ":PARAM-NAMES" -> paramNames = quotedNameList(value, form);
 				case ":RETURNS" -> returns = returnKeyword(value, form);
 				case ":ASYNC" -> async = booleanValue(value, keyword, form);
 				default -> throw new UnsupportedOperationException(
@@ -104,8 +111,55 @@ public record WasmImportDirective(String name, String module, String field, List
 			}
 			i += 2;
 		}
-		return new WasmImportDirective(name, module, field == null ? unqualifiedMember(name) : field,
-				params == null ? List.of() : params, returns, async);
+		List<String> types = params == null ? List.of() : params;
+		if (paramNames != null && paramNames.size() != types.size()) {
+			throw new UnsupportedOperationException("rontolisp:wasm-import :param-names has " + paramNames.size()
+					+ " name(s) but :params declares " + types.size() + " parameter(s) in " + form.print());
+		}
+		return new WasmImportDirective(name, module, field == null ? unqualifiedMember(name) : field, types,
+				paramNames == null ? defaultParamNames(types.size()) : paramNames, returns, async);
+	}
+
+	// p0, p1, ... -- the same default labels the export side gives a component function
+	// type, so a program that names neither side gets one convention.
+	private static List<String> defaultParamNames(int count) {
+		List<String> names = new ArrayList<>(count);
+		for (int i = 0; i < count; i++) {
+			names.add("p" + i);
+		}
+		return List.copyOf(names);
+	}
+
+	// A :param-names value is a quoted list of names (symbols or strings). A symbol is
+	// taken as its bare member name lowercased, like the default field; whether each name
+	// is a valid component-model label is the component wrap's question, since a core
+	// module never reads them.
+	private static List<String> quotedNameList(LispVal value, LispCons form) {
+		if (value instanceof LispNil) {
+			return List.of();
+		}
+		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest) {
+			List<String> result = new ArrayList<>();
+			if (rest.car() instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					result.add(switch (element) {
+						case LispString str -> str.value();
+						case LispSymbol sym when !sym.isKeyword() -> unqualifiedMember(sym.name());
+						default -> throw new UnsupportedOperationException(
+								"rontolisp:wasm-import :param-names expects symbols or strings in " + form.print()
+										+ ", got: " + element.print());
+					});
+				}
+			}
+			else if (!(rest.car() instanceof LispNil)) {
+				throw new UnsupportedOperationException(
+						"rontolisp:wasm-import :param-names expects a list in " + form.print());
+			}
+			return List.copyOf(result);
+		}
+		throw new UnsupportedOperationException(
+				"rontolisp:wasm-import :param-names expects a quoted list in " + form.print());
 	}
 
 	// The host-facing default field is the symbol's bare member name, lowercased: the

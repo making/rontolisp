@@ -229,9 +229,9 @@ rontolisp badge.lisp --no-gc --no-wasi --optimize=size -o badge.wasm
   関数 1 つにつき `wasm-import` 1 つで、手書きのブロックとバイト単位で同一
   です([WIT コントラクト](wit-contracts.md))。唯一の例外は `async func` で、
   `:async t` は future を返しますが、このバックエンドに future を表す値は
-  ありません。`--no-gc --component` もホストインポートを取りません —
-  コンポーネントのインポートは正準 ABI を通るもので、コアモジュールのラップは
-  それを組み立てないからです。
+  ありません。`--no-gc --component` では同じ宣言がそのままコンポーネント自身の
+  インポートになります — [コンポーネントでのホストインポート](#host-imports-in-a-component)
+  を参照してください。
 
 ホストインポートこそこのバックエンドの用途です。ホストから呼ばれることが
 仕事のモジュール — ホスト関数がいくつか、算術、文字列リテラル、エクスポート
@@ -286,10 +286,49 @@ wasmtime run --invoke 'show(4)' show.wasm
 # ()
 ```
 
+### コンポーネントでのホストインポート
+
+[`rontolisp:wasm-import`](#host-imports-rontolispwasm-import) は `--component` でも動作します。エクスポートから到達するホスト関数はすべて**コンポーネントモデルのインポート**になります — `:from` モジュールごとにインポートされるインスタンスが 1 つ、各関数は指定子と `:param-names`(デフォルトは `p0`、`p1`、…)で型付けされます — そしてコアへ `canon lower` されます。名前はコンポーネントモデルの名前でなければなりません: `:from` は lower-kebab-case のラベル(`"env"`)か WIT インターフェース id(`"docs:host/env@0.1.0"`)、`:as` は lower-kebab-case のラベルです。それ以外はコンパイラが改名を求めます。
+
+```lisp
+;; badge-component.lisp
+(rontolisp:wasm-import 'set-text :from "env" :as "set-text"
+                       :params '(:string :string) :param-names '(id text) :returns :void)
+(rontolisp:wasm-import 'measure :from "env" :as "measure"
+                       :params '(:s32) :param-names '(n) :returns :s64)
+
+(defun refresh (n)
+  (set-text "status" "running")
+  (measure n))
+
+(rontolisp:wasm-export 'refresh :params '(:s32) :returns :s64)
+```
+
+```bash
+rontolisp badge-component.lisp --no-gc --component -o badge.wasm --emit-wit
+cat badge.wit
+```
+
+```console
+package root:component;
+
+world root {
+  import env: interface {
+    set-text: func(id: string, text: string);
+
+    measure: func(n: s32) -> s64;
+  }
+
+  export refresh: func(p0: s32) -> s64;
+}
+```
+
+`:string` は双方向ともコンポーネントモデルの `string` として越えます — ホストは引数をモジュールのメモリから読み出し、結果は正準の `cabi_realloc` を通じて書き込みます — ので、JavaScript ホストには素の文字列が見えます: `setText(id, text)` と `measure(n)` をエクスポートする `env.js` に対して `jco transpile badge.wasm --map env=./env.js` とするだけで、`(ptr,len)` のグルーも JSPI も不要です。`wasmtime run --invoke` はユーザーインポートを単独では満たせません。そのインターフェースをエクスポートするコンポーネントと合成してください(`wac plug`、または `wasm-tools compose main.wasm -d provider.wasm`)— プロバイダは同じインターフェースを `wit-export` する別の rontolisp プログラムでも構いません。[`rontolisp:wit-import`](wit-contracts.md) はまさにこれへ展開され、インターフェース id をインポート名に、WIT の関数名とパラメータ名をそのまま使うため、`.wit` から作ったコンポーネントはそのインターフェースの任意のプロバイダと合成できます。宣言されるのはエクスポートから到達するインポートだけで、印字するプログラムはその横に print マイクロアダプタを保ちます。
+
 素の `--no-gc` 出力とのトレードオフ、および現在の制限:
 
 - コンポーネントはコンポーネントモデル対応のホストを必要とします。生のコアモジュールは素の埋め込み API を通じて**任意の** WebAssembly エンジンで動きます。両方の出力が使えます — ホストごとに選んでください。コンポーネントは `--no-gc` のデフォルトでは*ありません*。(`--component` なしでは、`:string` は代わりに手動の `(ptr,len)` コア ABI で境界を渡ります。)
 - コンポーネントは純粋なリアクターです: `wasi:cli/run` エントリはありません(トップレベルでは何も実行されません)。エクスポート内の印字は上記のマイクロアダプタで動作します。それ以外の I/O は通常どおり `--no-gc` サブセットの外です。`:async t` は拒否されます — 印字するプログラムのエクスポートは自動的に async リフトされ、それ以外にエクスポートがサスペンドし得るものは存在しません。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
 - ツリーシェイキングは組み合わせられます: コアモジュールはラップの前にシェイクされます。
-- [`--emit-wit`](wit-contracts.md#emitting-the-wit-world---emit-wit) も組み合わせられ、型付きエクスポートだけの小さなインポートなし world(プログラムが印字するときは `wasi:cli/stdout@0.3.0` インポートと `async func` のエクスポート署名付き)を書き出します。
+- [`--emit-wit`](wit-contracts.md#emitting-the-wit-world---emit-wit) も組み合わせられ、型付きエクスポートとプログラムが到達するホストインポートだけの小さな world(プログラムが印字するときは `wasi:cli/stdout@0.3.0` インポートと `async func` のエクスポート署名付き)を書き出します。

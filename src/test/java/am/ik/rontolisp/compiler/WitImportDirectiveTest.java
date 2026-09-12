@@ -811,6 +811,42 @@ class WitImportDirectiveTest {
 	}
 
 	@Test
+	void theNoGcComponentLowersToTheCanonicalImportNames() {
+		// The same wasm-import block as Preview 1 --no-gc, named the way the component's
+		// canon-lowered instance import is typed: the interface's canonical id as the
+		// module (never the bare name or :from), the WIT label verbatim as the field
+		// (never the camelCase field style), and the WIT parameter names carried as
+		// :param-names -- a composed provider type-checks against all three.
+		assertThat(printed(lowerApi("  count: func(name: string) -> u32;", Backend.WASM_NO_GC_COMPONENT)))
+			.isEqualTo("(RONTOLISP:WASM-IMPORT '|count| :FROM \"example:app/api@0.1.0\" :AS \"count\" :PARAMS"
+					+ " '(:STRING) :PARAM-NAMES '(\"name\") :RETURNS :U32)");
+		assertThat(printed(lower(iface("  set-text: func(id: string, text: string);"), Backend.WASM_NO_GC_COMPONENT,
+				new Directive(WIT, API, "host", "env", FieldStyle.CAMEL))))
+			.isEqualTo("(DEFPACKAGE |host| (:USE CL) (:EXPORT |set-text|))\n(RONTOLISP:WASM-IMPORT 'host:|set-text|"
+					+ " :FROM \"example:app/api@0.1.0\" :AS \"set-text\" :PARAMS '(:STRING :STRING) :PARAM-NAMES"
+					+ " '(\"id\" \"text\") :RETURNS :VOID)");
+	}
+
+	@Test
+	void theNoGcComponentRefusesWhatItsInstanceTypeCannotName() {
+		// A component's import instance type names the REAL WIT types, and the scalar
+		// wrap can spell only the flat primitives: a resource (whose handle Preview 1
+		// --no-gc passes as an opaque :int), a method on one, and a list all stop at the
+		// WIT line, pointing at the default backend's --component.
+		assertThatThrownBy(() -> lowerKeyvalue(Backend.WASM_NO_GC_COMPONENT, null))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageStartingWith("kv.wit:")
+			.hasMessageContaining("belongs to the resource 'bucket', which --no-gc --component cannot bind");
+		assertThatThrownBy(() -> lowerApi("  tags: func(all: list<string>) -> u32;", Backend.WASM_NO_GC_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageStartingWith(
+					"kv.wit:4: 'tags': the WIT type of parameter 'all' is not one --no-gc --component" + " can carry");
+		assertThatThrownBy(() -> lowerApi("  pull: async func(url: string) -> string;", Backend.WASM_NO_GC_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageStartingWith("kv.wit:4: 'pull' is an async func, which --no-gc cannot bind");
+	}
+
+	@Test
 	void theNoGcBackendRefusesAnAsyncFuncAgainstTheWitFile() {
 		// :async t answers a (settled) future, and --no-gc has no value for one. The
 		// refusal names the WIT member and line, not the wasm-import the lowering would

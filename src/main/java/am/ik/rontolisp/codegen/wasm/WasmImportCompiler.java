@@ -102,6 +102,9 @@ final class WasmImportCompiler {
 	 * @param module the WASM import module name ({@code :from}, default {@code "env"})
 	 * @param field the WASM import field name ({@code :as}, default the Lisp name)
 	 * @param paramTypes the declared parameter type designators, in order
+	 * @param paramNames the component-model parameter names ({@code :param-names},
+	 * default {@code p0}, {@code p1}, ...): read only by the {@code --no-gc --component}
+	 * wrap, whose imported instance type carries them
 	 * @param returnType the declared return type designator ({@code :void} when omitted)
 	 * @param async whether the host function may suspend ({@code :async t}): the wrapper
 	 * then wraps the boxed result in a settled {@code TYPE_P1_FUTURE}, so the call
@@ -109,8 +112,8 @@ final class WasmImportCompiler {
 	 * can observe a pending state -- the host call blocks the wasm stack (synchronously,
 	 * or suspended through JSPI), so started == settled is the option's contract here
 	 */
-	record Decl(String name, String module, String field, List<BoundaryType> paramTypes, BoundaryType returnType,
-			boolean async) {
+	record Decl(String name, String module, String field, List<BoundaryType> paramTypes, List<String> paramNames,
+			BoundaryType returnType, boolean async) {
 	}
 
 	/**
@@ -153,8 +156,8 @@ final class WasmImportCompiler {
 		}
 		BoundaryType returns = directive.returnType() == null ? BoundaryType.VOID
 				: knownType(directive.returnType(), form, true, accepted, backend);
-		return new Decl(directive.name(), directive.module(), directive.field(), List.copyOf(params), returns,
-				directive.async());
+		return new Decl(directive.name(), directive.module(), directive.field(), List.copyOf(params),
+				directive.paramNames(), returns, directive.async());
 	}
 
 	// One designator from the directive, restricted to the import vocabulary. The

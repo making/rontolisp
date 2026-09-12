@@ -993,6 +993,26 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void noGcComponentWithHostImportsWritesTheirWit() throws Exception {
+		// --no-gc --component takes rontolisp:wasm-import: the reached host functions
+		// become the component's imports, and --emit-wit describes them beside the
+		// exports (a plain :from label prints as an inline interface).
+		Path file = tempDir.resolve("test.lisp");
+		Files.writeString(file,
+				"""
+						(rontolisp:wasm-import 'host-log :from "env" :as "host-log" :params '(:string) :param-names '(line) :returns :void)
+						(defun run (n) (host-log "hello") n)
+						(rontolisp:wasm-export 'run :params '(:int) :returns :int)
+						""");
+		Path wasmFile = tempDir.resolve("test.wasm");
+		runCli("", file.toString(), "-o", wasmFile.toString(), "--no-gc", "--component", "--emit-wit");
+		assertThat(Files.exists(wasmFile)).isTrue();
+		String wit = Files.readString(tempDir.resolve("test.wit"));
+		assertThat(wit).contains("  import env: interface {\n    host-log: func(line: string);\n  }\n")
+			.contains("  export run: func(p0: s32) -> s32;");
+	}
+
+	@Test
 	void witWithoutComponentIsAClearError() throws Exception {
 		Path file = tempDir.resolve("test.lisp");
 		Files.writeString(file, "(print 1)");

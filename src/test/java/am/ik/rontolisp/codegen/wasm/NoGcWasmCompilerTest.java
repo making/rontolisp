@@ -1793,6 +1793,13 @@ class NoGcWasmCompilerTest {
 		return new NoGcWasmCompiler(OptimizeLevel.NONE, false, true).compile(program);
 	}
 
+	// The plain core module at the SAME level as compileComponent, for the
+	// byte-identity pairs below (the default level would shake helpers the component's
+	// core keeps).
+	private static byte[] compilePlainUnoptimized(String source) {
+		return new NoGcWasmCompiler(OptimizeLevel.NONE, false).compile(LispReader.readAllFromString(source));
+	}
+
 	private static final String COMPONENT_PROGRAM = """
 			(defun sumsquared (a b) (+ (* a a) (* b b)))
 			(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
@@ -2385,16 +2392,171 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void aComponentBuildRefusesAHostImport() {
-		// The --no-gc component wrap has no import block at all: a component's imports
-		// are component-model imports through the canonical ABI, which it does not
-		// build. The reactor form is what takes host imports.
-		assertThatThrownBy(() -> compileComponent("""
-				(rontolisp:wasm-import 'host-add :from "host" :as "add" :params '(:int :int) :returns :int)
+	void aScalarComponentImportIsAnInstanceImportLoweredAheadOfTheCore() {
+		// A host import under --component is a component-model instance import (one per
+		// :from module, typed by the reached functions under their :param-names) whose
+		// function is aliased, canon-lowered with NO options (flat scalars touch no
+		// memory) and handed to the core's instantiation -- so there is no shim, the
+		// component has exactly one core module, and that core is byte-identical to the
+		// plain --no-gc output.
+		String program = """
+				(rontolisp:wasm-import 'host-add :from "host" :as "add" :params '(:int :int) :param-names '(a b) :returns :int)
 				(defun sum (a b) (host-add a b))
 				(rontolisp:wasm-export 'sum :as "sum" :params '(:int :int) :returns :int)
+				""";
+		byte[] component = compileComponent(program);
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).hasSize(1);
+		assertThat(coreModules.get(0)).isEqualTo(compilePlainUnoptimized(program));
+		String text = new String(component, StandardCharsets.ISO_8859_1);
+		assertThat(text).contains("host", "add");
+		// The import section (id 10) names the instance; the type section carries the
+		// instance type's func type with the two labels, and the canon section an
+		// optionless lower (01 00 <func> 00) ahead of the lifts.
+		assertThat(sectionPayloads(component, 10)).hasSize(1);
+		byte[] instanceType = sectionPayloads(component, 7).get(0);
+		assertThat(containsSequence(instanceType, 0x42)).as("instance type").isTrue();
+		assertThat(containsSequence(instanceType, 0x01, 'a', 0x7a, 0x01, 'b', 0x7a)).as("named s32 params").isTrue();
+		byte[] lowers = sectionPayloads(component, 8).get(0);
+		assertThat(containsSequence(lowers, 0x01, 0x00, 0x00, 0x00)).as("canon lower, no options").isTrue();
+		assertThat(sectionPayloads(component, 1)).as("no shim module").hasSize(1);
+	}
+
+	@Test
+	void aStringComponentImportGoesThroughAGeneratedShimAndFixup() {
+		// A :string argument makes the lower name the core's own memory, which does not
+		// exist until the core is instantiated -- the wit-component cycle. The wrap
+		// generates a funcref-table shim (instantiated first; the core imports its
+		// trampolines) and a fixup whose element segment patches the real lowered
+		// function in once memory is aliased: three core modules, the shim exporting the
+		// "$imports" table, and a lower with the (memory 0) utf8 options (02 03 00 00). A
+		// string ARGUMENT alone changes nothing in the core: still byte-identical.
+		String program = """
+				(rontolisp:wasm-import 'host-log :from "env" :as "host-log" :params '(:string) :returns :void)
+				(defun run (n) (host-log "hello") n)
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+				""";
+		byte[] component = compileComponent(program);
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).as("core + shim + fixup").hasSize(3);
+		assertThat(coreModules.get(0)).isEqualTo(compilePlainUnoptimized(program));
+		assertThat(new String(coreModules.get(1), StandardCharsets.ISO_8859_1)).contains("$imports", "0");
+		assertThat(new String(coreModules.get(2), StandardCharsets.ISO_8859_1)).contains("$imports");
+		boolean memoryUtf8Lower = false;
+		for (byte[] canon : sectionPayloads(component, 8)) {
+			if (containsSequence(canon, 0x01, 0x00, 0x00, 0x02, 0x03, 0x00, 0x00)) {
+				memoryUtf8Lower = true;
+			}
+		}
+		assertThat(memoryUtf8Lower).as("canon lower (memory 0) string-encoding=utf8").isTrue();
+		// The core's export list carries no cabi_realloc: only a :string RESULT (or a
+		// :string export) needs the host to allocate in this memory.
+		assertThat(exportNames(Objects.requireNonNull(sections(coreModules.get(0)).get(7))))
+			.doesNotContain("cabi_realloc");
+	}
+
+	@Test
+	void aStringResultComponentImportTakesTheReturnPointerAbiAndPullsInRealloc() {
+		// The canonical ABI caps flat results at one, so a :string result comes back
+		// through a trailing i32 return pointer the wrapper allocates, and the host
+		// writes the bytes through cabi_realloc -- exported by the core for that reason
+		// alone (no :string export here), and named in the lower's options with memory
+		// and utf8 (03 03 00 04 <realloc> 00). This is the one shape whose core differs
+		// from the plain --no-gc output (there the result is the (ptr,len) pair).
+		String program = """
+				(rontolisp:wasm-import 'host-name :from "env" :as "host-name" :params '(:int) :returns :string)
+				(defun name-len (n) (length (host-name n)))
+				(rontolisp:wasm-export 'name-len :as "name-len" :params '(:int) :returns :int)
+				""";
+		byte[] component = compileComponent(program);
+		byte[] core = sectionPayloads(component, 1).get(0);
+		assertThat(core).isNotEqualTo(compilePlainUnoptimized(program));
+		Map<Integer, byte[]> coreSections = sections(core);
+		assertThat(exportNames(Objects.requireNonNull(coreSections.get(7)))).contains("cabi_realloc", "memory");
+		// The import's type: (i32 i32) -> () -- the :int argument and the return
+		// pointer, no results -- is the last entry of the type section.
+		byte[] types = Objects.requireNonNull(coreSections.get(1));
+		assertThat(types[types.length - 5]).as("func type").isEqualTo((byte) 0x60);
+		assertThat(types[types.length - 4]).as("two params").isEqualTo((byte) 0x02);
+		assertThat(types[types.length - 3]).isEqualTo((byte) 0x7f);
+		assertThat(types[types.length - 2]).isEqualTo((byte) 0x7f);
+		assertThat(types[types.length - 1]).as("no results").isEqualTo((byte) 0x00);
+		boolean reallocLower = false;
+		for (byte[] canon : sectionPayloads(component, 8)) {
+			if (containsSequence(canon, 0x03, 0x03, 0x00, 0x04) && containsSequence(canon, 0x00, 0x00)) {
+				reallocLower = true;
+			}
+		}
+		assertThat(reallocLower).as("canon lower (memory 0) (realloc n) string-encoding=utf8").isTrue();
+	}
+
+	@Test
+	void componentPrintComposesWithTheImportShim() {
+		// The print micro-adapter's fixed shim/fixup and the generated import shim/fixup
+		// are two independent tables: the core instantiates against both, and each
+		// fixup patches its own. Six core modules, one export lifted async as every
+		// printing export is, and the core still byte-identical to the plain printing
+		// output.
+		String program = """
+				(rontolisp:wasm-import 'host-log :from "env" :as "host-log" :params '(:string) :returns :void)
+				(defun run (n) (print n) (host-log "hello") n)
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+				""";
+		byte[] component = compileComponent(program);
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).as("core + print shim/bridge/fixup + import shim/fixup").hasSize(6);
+		assertThat(coreModules.get(0)).isEqualTo(compilePlainUnoptimized(program));
+		String text = new String(component, StandardCharsets.ISO_8859_1);
+		assertThat(text).contains("wasi:cli/stdout@0.3.0", "write-via-stream", "host-log");
+	}
+
+	@Test
+	void componentImportNamesFollowTheComponentModelGrammar() {
+		// The module becomes an imported instance and the field a function of its type,
+		// so both (and every :param-names entry) must be component-model names: a
+		// kebab label, or for the module a WIT interface id. The Preview 1 module
+		// accepts any spelling, which is why the check lives with the wrap.
+		assertThatThrownBy(() -> compileComponent("""
+				(rontolisp:wasm-import 'host-log :from "env" :as "host_log" :params '(:string) :returns :void)
+				(defun run (n) (host-log "x") n)
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("is not supported with --no-gc --component");
+			.hasMessageContaining(":as \"host_log\" is not a valid component-model function name");
+		assertThatThrownBy(() -> compileComponent("""
+				(rontolisp:wasm-import 'host-log :from "My Host" :as "host-log" :params '(:string) :returns :void)
+				(defun run (n) (host-log "x") n)
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":from \"My Host\" is not a valid component-model import name");
+		assertThatThrownBy(() -> compileComponent(
+				"""
+						(rontolisp:wasm-import 'host-add :from "docs:host/env@0.1.0" :as "add" :params '(:int) :param-names '(Bad_Name) :returns :int)
+						(defun run (n) (host-add n))
+						(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+						"""))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":param-names entry 'bad_name' is not a valid component-model parameter name");
+		// Two bindings of one (module, field) cannot both appear in the instance type.
+		assertThatThrownBy(() -> compileComponent("""
+				(rontolisp:wasm-import 'one :from "env" :as "add" :params '(:int :int) :returns :int)
+				(rontolisp:wasm-import 'two :from "env" :as "add" :params '(:int :int) :returns :int)
+				(defun run (n) (+ (one n n) (two n n)))
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("both bind \"env\".\"add\", which --no-gc --component cannot import twice");
+	}
+
+	@Test
+	void anUncalledComponentImportDeclaresNothing() {
+		// Only the imports the exports reach are imported, and the component declares
+		// exactly what the core imports: with nothing reached there is no import block
+		// at all, and the component is byte-identical to the import-free one.
+		String declared = """
+				(rontolisp:wasm-import 'host-add :from "env" :as "add" :params '(:int :int) :returns :int)
+				(defun sumsquared (a b) (+ (* a a) (* b b)))
+				(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
+				""";
+		assertThat(compileComponent(declared)).isEqualTo(compileComponent(COMPONENT_PROGRAM));
 	}
 
 	@Test

@@ -95,6 +95,23 @@ class WasmImportCompilerTest {
 	}
 
 	@Test
+	void parsesParamNamesWithTheExportSidesDefault() {
+		// :param-names are the labels of the imported function's component type (read by
+		// the --no-gc --component wrap alone); the default is the export side's p0, p1,
+		// ... so a program naming neither side gets one convention, and a count that
+		// disagrees with :params is refused at the parse.
+		assertThat(
+				parse("(rontolisp:wasm-import 'greet :params '(:string :s32) :param-names '(name times))").paramNames())
+			.containsExactly("name", "times");
+		assertThat(parse("(rontolisp:wasm-import 'greet :params '(:string) :param-names '(\"who\"))").paramNames())
+			.containsExactly("who");
+		assertThat(parse("(rontolisp:wasm-import 'greet :params '(:string :s32))").paramNames()).containsExactly("p0",
+				"p1");
+		assertThatThrownBy(() -> parse("(rontolisp:wasm-import 'greet :params '(:string) :param-names '(a b))"))
+			.hasMessageContaining(":param-names has 2 name(s) but :params declares 1");
+	}
+
+	@Test
 	void parsesAsyncOption() {
 		// :async t declares that the host may suspend: the call answers a settled
 		// future. The default -- and an explicit nil -- is the plain synchronous

@@ -98,8 +98,7 @@ public final class WitImportInliner {
 	public static List<LispVal> inline(List<LispVal> program, @Nullable String baseDir,
 			WitExportDirective.Backend backend, SourceLoader loader, boolean pruneMembers) {
 		boolean wasm = backend == WitExportDirective.Backend.WASM_GC
-				|| backend == WitExportDirective.Backend.WASM_COMPONENT
-				|| backend == WitExportDirective.Backend.WASM_NO_GC;
+				|| backend == WitExportDirective.Backend.WASM_COMPONENT || backend.isNoGc();
 		if (!usesWitImport(program) && !(wasm && bindsProvider(program))) {
 			return program;
 		}

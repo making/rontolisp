@@ -436,6 +436,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 						+ "' has the same name as a top-level defun (one name, one function)");
 			}
 		}
+		if (this.component) {
+			// Two declarations of one (module, field) would put one function name twice
+			// into the imported instance's type, which a component cannot express; on the
+			// core module they are two import entries the host satisfies from one slot.
+			Map<String, String> fieldOwner = new HashMap<>();
+			for (WasmImportCompiler.Decl decl : importDecls.values()) {
+				String previous = fieldOwner.put(decl.module() + "\u0000" + decl.field(), decl.name());
+				if (previous != null) {
+					throw new UnsupportedOperationException("rontolisp:wasm-import '" + decl.name() + "' and '"
+							+ previous + "' both bind \"" + decl.module() + "\".\"" + decl.field()
+							+ "\", which --no-gc --component cannot import twice (the imported instance declares"
+							+ " each function once); call the one binding from both places");
+				}
+			}
+		}
 		this.imports = importDecls;
 		if (exportDecls.isEmpty()) {
 			throw new UnsupportedOperationException(
@@ -572,11 +587,26 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// program takes the print-FREE shape: one core module, no imports, SYNC
 			// lifts -- and the nogc (empty-world) WIT.
 			final boolean printAdapter = mem.printUsed() && !this.noWasi;
-			this.componentWit = WitEmitter.emit(printAdapter ? WitEmitter.VARIANT_NOGC_PRINT : WitEmitter.VARIANT_NOGC,
-					exportDecls);
-			return NoGcWasmComponentBuilder.build(module, exportDecls, printAdapter);
+			this.componentWit = WitEmitter.emitNoGc(
+					printAdapter ? WitEmitter.VARIANT_NOGC_PRINT : WitEmitter.VARIANT_NOGC, exportDecls, hostImports);
+			return NoGcWasmComponentBuilder.build(module, exportDecls, printAdapter, hostImports);
 		}
 		return module;
+	}
+
+	// The core signature the module imports a host function with. On the core-module
+	// output it is the flat host ABI (a :string result answers two values); under
+	// --component the import is a canon-lowered component function, whose :string result
+	// arrives through a trailing return pointer instead (the canonical ABI caps flat
+	// results at one), so the wrapper allocates the 8-byte record and reads the pair
+	// back.
+	private Type[] importParamTypes(WasmImportCompiler.Decl decl) {
+		return this.component ? NoGcWasmComponentBuilder.coreParamTypes(decl) : WasmImportCompiler.hostParamTypes(decl);
+	}
+
+	private Type[] importResultTypes(WasmImportCompiler.Decl decl) {
+		return this.component ? NoGcWasmComponentBuilder.coreResultTypes(decl)
+				: WasmImportCompiler.hostResultTypes(decl);
 	}
 
 	/**
@@ -615,17 +645,45 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private void validateImport(WasmImportCompiler.Decl decl) {
 		if (this.component) {
-			throw new UnsupportedOperationException("rontolisp:wasm-import '" + decl.name()
-					+ "' is not supported with --no-gc --component: a component's imports are component-model"
-					+ " imports lowered through the canonical ABI, which the core-module wrap does not build."
-					+ " Compile the reactor form instead (--no-gc, with --no-wasi for a module that imports"
-					+ " nothing else)");
+			validateComponentImport(decl);
 		}
 		if (decl.async()) {
 			throw new UnsupportedOperationException("rontolisp:wasm-import :async is not supported with --no-gc for '"
 					+ decl.name() + "': a started-equals-settled future is still a future, and this backend has no"
 					+ " value to represent one (the whole async surface is rejected here). Drop :async t -- the host"
 					+ " call is synchronous");
+		}
+	}
+
+	/**
+	 * Validates a {@code rontolisp:wasm-import} directive against the {@code --component}
+	 * constraints: the import becomes a component-model instance import, so its module
+	 * name is the instance's import name (a lower-kebab-case label, or a fully-qualified
+	 * WIT interface id) and its field and parameter names are labels of the instance's
+	 * type. The types themselves need no further check -- every designator this backend
+	 * takes has a component value type -- and {@code :async} is refused after this like
+	 * everywhere else on {@code --no-gc}.
+	 * @param decl the parsed declaration
+	 */
+	private static void validateComponentImport(WasmImportCompiler.Decl decl) {
+		if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.module()).matches()
+				&& !NoGcWasmComponentBuilder.INTERFACE_ID.matcher(decl.module()).matches()) {
+			throw new UnsupportedOperationException("rontolisp:wasm-import '" + decl.name() + "' :from \""
+					+ decl.module() + "\" is not a valid component-model import name under --no-gc --component:"
+					+ " the module becomes an imported instance, named either by a lower-kebab-case label (e.g."
+					+ " \"env\") or by a WIT interface id (e.g. \"docs:host/env@0.1.0\")");
+		}
+		if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.field()).matches()) {
+			throw new UnsupportedOperationException("rontolisp:wasm-import '" + decl.name() + "' :as \"" + decl.field()
+					+ "\" is not a valid component-model function name under --no-gc --component"
+					+ " (lower-kebab-case words, e.g. \"host-log\"); rename it with :as \"kebab-name\"");
+		}
+		for (String paramName : decl.paramNames()) {
+			if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(paramName).matches()) {
+				throw new UnsupportedOperationException(
+						"rontolisp:wasm-import '" + decl.name() + "' :param-names entry '" + paramName
+								+ "' is not a valid component-model parameter name (lower-kebab-case words)");
+			}
 		}
 	}
 
@@ -1509,6 +1567,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// under --component with a :string boundary, so both the non-component output
 		// and a scalar-only component's core module stay byte-identical.
 		boolean componentStringAbi = this.component && exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
+		// cabi_realloc alone is also what a :string-RETURNING import's canon lower names
+		// (the host lowers the result into this memory through it), so it rides that
+		// too; the post-returns and retptr shims stay the exports' own.
+		boolean componentRealloc = this.component && NoGcWasmComponentBuilder.needsRealloc(exportDecls, hostImports);
 		List<Integer> stringReturnDecls = new ArrayList<>();
 		LinkedHashMap<String, @Nullable Type> postKinds = new LinkedHashMap<>();
 		if (componentStringAbi) {
@@ -1523,10 +1585,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 		}
 		int reallocIndex = mem.funcBase() + localFuncCount;
-		int postBase = reallocIndex + 1;
+		int postBase = reallocIndex + (componentRealloc ? 1 : 0);
 		int shimBase = postBase + postKinds.size();
-		int totalFuncCount = localFuncCount
-				+ (componentStringAbi ? 1 + postKinds.size() + stringReturnDecls.size() : 0);
+		int totalFuncCount = localFuncCount + (componentRealloc ? 1 : 0) + postKinds.size() + stringReturnDecls.size();
 		// Function index k uses type index k (shifted by funcBase), so the host-ABI
 		// types appended after the last function's type start here.
 		final int importTypeBase = mem.funcBase() + totalFuncCount;
@@ -1583,9 +1644,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					// __write_stdout (ptr i32, len i32) -> (): the sole fd_write caller.
 					typeSec.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[0]);
 				}
-				if (componentStringAbi) {
+				if (componentRealloc) {
 					// cabi_realloc (old, old-size, align, new-size) -> i32.
 					typeSec.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
+				}
+				if (componentStringAbi) {
 					// cabi_post_* (flat results) -> (), one per signature.
 					for (Type paramType : postKinds.values()) {
 						typeSec.addFunc(paramType == null ? new Type[0] : new Type[] { paramType }, new Type[0]);
@@ -1598,9 +1661,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				// The host-ABI signature of each reached rontolisp:wasm-import, LAST --
 				// an import entry names a type index but no function index, so appending
 				// them here renumbers nothing and a module that declares none keeps its
-				// exact bytes.
+				// exact bytes. Under --component a :string result takes the canonical
+				// retptr shape (NoGcWasmComponentBuilder.coreParamTypes).
 				for (WasmImportCompiler.Decl decl : hostImports) {
-					typeSec.addFunc(WasmImportCompiler.hostParamTypes(decl), WasmImportCompiler.hostResultTypes(decl));
+					typeSec.addFunc(importParamTypes(decl), importResultTypes(decl));
 				}
 			});
 		// Import section: exactly the one fd_write, and only when the program prints.
@@ -1659,9 +1723,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					exports.addExport("__ronto_alloc_mark", ExternalKind.FUNCTION, mem.markIndex());
 					exports.addExport("__ronto_alloc_reset", ExternalKind.FUNCTION, mem.resetIndex());
 				}
-				if (componentStringAbi) {
-					// The canonical string ABI helpers the component wrap aliases.
+				if (componentRealloc) {
+					// The canonical string ABI helper the component wrap aliases for the
+					// host to lower strings into this memory through.
 					exports.addExport(NoGcWasmComponentBuilder.CABI_REALLOC, ExternalKind.FUNCTION, reallocIndex);
+				}
+				if (componentStringAbi) {
+					// The post-returns the string-involving exports' lifts name.
 					int p = 0;
 					for (String kind : postKinds.keySet()) {
 						exports.addExport(NoGcWasmComponentBuilder.postReturnExportName(kind), ExternalKind.FUNCTION,
@@ -1706,8 +1774,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				if (mem.printUsed()) {
 					code.addFunction(writeStdoutBody(mem));
 				}
-				if (componentStringAbi) {
+				if (componentRealloc) {
 					code.addFunction(cabiReallocBody(mem.allocIndex()));
+				}
+				if (componentStringAbi) {
 					for (int p = 0; p < postKinds.size(); p++) {
 						code.addFunction(postReturnBody(mem.heapBase()));
 					}
@@ -2296,6 +2366,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmWriter w = new WasmWriter(bodyStream);
 		List<Ty> locals = new ArrayList<>();
 		int nextLocal = decl.paramTypes().size();
+		// Under --component a :string result comes back through a return pointer the
+		// caller supplies as a trailing argument: an 8-byte (ptr,len) record off the bump
+		// heap, allocated before the arguments are marshalled (they are locals, so
+		// nothing moves) and read back after the call.
+		boolean retptr = this.component && NoGcWasmComponentBuilder.returnsString(decl);
+		int retptrLocal = -1;
+		if (retptr) {
+			retptrLocal = nextLocal++;
+			locals.add(Ty.STRING);
+			w.write(Instruction.I32_CONST).writeSignedLeb128(8);
+			w.write(Instruction.CALL).writeUnsignedLeb128(mem.allocIndex());
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(retptrLocal);
+		}
 		for (int p = 0; p < decl.paramTypes().size(); p++) {
 			BoundaryType hostType = decl.paramTypes().get(p);
 			if (hostType == BoundaryType.STRING) {
@@ -2327,7 +2410,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 			}
 		}
+		if (retptr) {
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(retptrLocal);
+		}
 		w.write(Instruction.CALL).writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + ordinal);
+		if (retptr) {
+			// The host filled the record: push (ptr, len) the way the two-value host
+			// ABI below expects them on the stack.
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(retptrLocal).write(Instruction.I32_LOAD, 0x02, 0x00);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(retptrLocal).write(Instruction.I32_LOAD, 0x02, 0x04);
+		}
 		switch (decl.returnType()) {
 			// Nothing came back; every function here answers one value, and nil IS 0.
 			case VOID -> i64Const(w, 0);

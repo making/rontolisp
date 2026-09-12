@@ -82,8 +82,8 @@ declares exactly one.
 `(rontolisp:wasm-export 'name :params ... :param-names ... :returns ... [:async t])`; the
 backends never see `wit-export`, and **the emitted component is byte-identical to the
 hand-written equivalent** on wasm-GC and `--no-gc` `--component` — the design invariant. It does
-no I/O and no codegen; its `Backend` enum (`WASM_GC` / `WASM_NO_GC` / `WASM_COMPONENT` / `OTHER`)
-selects backend rules only.
+no I/O and no codegen; its `Backend` enum (`WASM_GC` / `WASM_NO_GC` / `WASM_NO_GC_COMPONENT` /
+`WASM_COMPONENT` / `OTHER`; `isNoGc()` covers both scalar shapes) selects backend rules only.
 
 Three call sites: `eval/WitExportInliner` on the compile path (**after** `LoadInliner` /
 `UserMacroExpander`, so every `defun` is a literal top-level form, and **before**
@@ -218,6 +218,17 @@ directive stands for; no I/O, no codegen.
   `WitImportDirectiveTest.theNoGcBackendGetsThePreview1LoweringWithItsOwnWidths`,
   `NoGcWasmImportE2eTest.aWitImportedInterfaceIsTheHandWrittenImportBlock` (byte identity with
   the hand-written block, then run on node).
+- **`--no-gc --component`** (`Backend.WASM_NO_GC_COMPONENT`): the same `wasm-import` block, named
+  the way the wrap's canon-lowered instance import is typed -- the interface's CANONICAL id as
+  `:from` (never the bare name or the directive's `:from`), the WIT label verbatim as `:as`
+  (never the camelCase field style) and the WIT parameter names as `:param-names` -- so a
+  composed provider of that interface type-checks down to the names. Resources (a handle has
+  no scalar component type; Preview 1 passes it as an opaque `:int`) and any non-primitive type
+  are refused at the WIT line (`validateNoGcComponentFunc`), as is a `-drop`; the async refusal
+  is the no-gc one. Pins: `WitImportDirectiveTest.theNoGcComponentLowersToTheCanonicalImportNames`
+  / `.theNoGcComponentRefusesWhatItsInstanceTypeCannotName`,
+  `NoGcWasmComponentImportE2eTest.theWitImportLoweringIsTheHandWrittenBlock`. The wrap itself:
+  `.kb/no-gc-scalar-wasm.md`, "Host imports" under `--no-gc --component`.
 
 ### Pass order — the IMPORT inliner runs BEFORE `UserMacroExpander`
 `eval/WitImportInliner` runs straight after `LoadInliner`, BEFORE `UserMacroExpander`. It has to:

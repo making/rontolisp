@@ -1,6 +1,6 @@
 # rontolisp:wasm-import
 
-`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) :returns type [:async t])`
+`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) [:param-names '(name...)] :returns type [:async t])`
 
 WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロードされた別の
 モジュール) が提供する関数を宣言し、`name` という名前でトップレベルの `defun`
@@ -29,6 +29,13 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
   デフォルトは (パッケージ修飾子を除いた) 素の Lisp 名。
 - `:params` — 各引数に対応する境界型指定子のリスト。省略、`nil`、`'()` の場合は
   引数なしを意味します。
+- `:param-names` — **コンポーネントモデル**のシグネチャにおけるパラメータ名。
+  `:params` の各項目に 1 つずつ、シンボルまたは文字列で指定します。デフォルトは
+  `p0`、`p1`、…。読むのは
+  [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component)
+  だけで、そこではインポートされる関数の型のラベルになります (インポートが WIT
+  world を表すときはその名前)。コアモジュールのインポートにパラメータ名は
+  ありません。
 - `:returns` — 戻り値の境界型指定子。省略、`nil`、`'()`、`:void` の場合は void の
   戻り値 (Lisp は `nil` を受け取る) を宣言します。
 
@@ -111,13 +118,18 @@ pull ループはリニアメモリをフラットに保ちます。
 
 ## 制限事項
 
-- コアモジュール専用です。`--component` はこのディレクティブをエラーで拒否
-  します。インタプリタおよび JVM では、宣言した名前を呼び出すとエラーを通知
-  します。
+- デフォルト (wasm-GC) バックエンドではコアモジュール専用です。`--component` は
+  このディレクティブをエラーで拒否します (コンポーネントはインターフェースを
+  [`rontolisp:wit-import`](rontolisp-wit-import.md) で束縛します)。インタプリタ
+  および JVM では、宣言した名前を呼び出すとエラーを通知します。
 - [`--no-gc`](../../guides/wasm-nogc.md#host-imports-rontolispwasm-import) は
   このディレクティブを受け付けます。型の語彙は独自で、固定幅整数のファミリ全体
   (ハウス整数が `i64` のため)、`:float`、`:bool`、`:string`、`:void` を運びます。
-  `:s-expr`、`:bytes`、`:async t` は運べず、`--component` との併用も不可です。
+  `:s-expr`、`:bytes`、`:async t` は運べません。
+  [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component)
+  では到達するインポートがコンポーネントのインポートになるため、`:from` は
+  lower-kebab-case のラベルか WIT インターフェース id、`:as` と `:param-names`
+  の各項目は lower-kebab-case のラベルでなければなりません。
 - ディレクティブは `defun` と同様、使用前にトップレベルに置く必要があります。
 - コンパイルしたモジュールのインスタンス化には、ホストが宣言済みのすべての
   インポートを提供する必要があります。`wasmtime run` ではインポートモジュール名

@@ -386,9 +386,8 @@ Three rules worth knowing:
   one `wasm-import` per WIT function, byte-for-byte the hand-written block
   ([WIT contracts](wit-contracts.md)). Its one exception is an `async func`:
   `:async t` answers a future, and this backend has no value for one.
-  `--no-gc --component` takes no host imports either — a component's
-  imports go through the canonical ABI, which the core-module wrap does not
-  build.
+  Under `--no-gc --component` the same declarations become the component's
+  own imports — see [host imports in a component](#host-imports-in-a-component).
 
 Host imports are what this backend is for. A module whose whole job is to
 be called by its host — a few host functions, some arithmetic, string
@@ -471,6 +470,65 @@ wasmtime run --invoke 'show(4)' show.wasm
 # ()
 ```
 
+### Host imports in a component
+
+[`rontolisp:wasm-import`](#host-imports-rontolispwasm-import) works under
+`--component` too. Every host function the exports reach becomes a
+**component-model import** — one imported instance per `:from` module, each
+function typed by its designators under its `:param-names` (`p0`, `p1`, …
+by default) — and is `canon lower`ed into the core. The names must be
+component-model names: `:from` is a lower-kebab-case label (`"env"`) or a
+WIT interface id (`"docs:host/env@0.1.0"`), `:as` a lower-kebab-case label;
+the compiler asks for a rename otherwise.
+
+```lisp
+;; badge-component.lisp
+(rontolisp:wasm-import 'set-text :from "env" :as "set-text"
+                       :params '(:string :string) :param-names '(id text) :returns :void)
+(rontolisp:wasm-import 'measure :from "env" :as "measure"
+                       :params '(:s32) :param-names '(n) :returns :s64)
+
+(defun refresh (n)
+  (set-text "status" "running")
+  (measure n))
+
+(rontolisp:wasm-export 'refresh :params '(:s32) :returns :s64)
+```
+
+```bash
+rontolisp badge-component.lisp --no-gc --component -o badge.wasm --emit-wit
+cat badge.wit
+```
+
+```console
+package root:component;
+
+world root {
+  import env: interface {
+    set-text: func(id: string, text: string);
+
+    measure: func(n: s32) -> s64;
+  }
+
+  export refresh: func(p0: s32) -> s64;
+}
+```
+
+A `:string` crosses as a component-model `string` in both directions — the
+host reads an argument out of the module's memory and writes a result in
+through the canonical `cabi_realloc` — so a JavaScript host sees plain
+strings: `jco transpile badge.wasm --map env=./env.js` against an `env.js`
+exporting `setText(id, text)` and `measure(n)`, with no `(ptr,len)` glue
+and no JSPI. `wasmtime run --invoke` cannot satisfy a user import by
+itself; compose the component with one that exports the interface
+(`wac plug`, or `wasm-tools compose main.wasm -d provider.wasm`) — a
+provider can be another rontolisp program that `wit-export`s the same
+interface. [`rontolisp:wit-import`](wit-contracts.md) lowers to exactly
+this, with the interface's id as the import name and the WIT's function and
+parameter names, so a component built from a `.wit` composes with any
+provider of that interface. Only the imports the exports reach are
+declared, and a printing program keeps its print micro-adapter beside them.
+
 Trade-offs against the plain `--no-gc` output, and current limits:
 
 - A component needs a component-model-capable host; the raw core module
@@ -489,6 +547,6 @@ Trade-offs against the plain `--no-gc` output, and current limits:
   `:as`.
 - Tree shaking composes: the core module is shaken before the wrap.
 - [`--emit-wit`](wit-contracts.md#emitting-the-wit-world---emit-wit)
-  composes too, and writes a tiny import-free world of just the typed
-  exports (plus the `wasi:cli/stdout@0.3.0` import — and `async func`
-  export signatures — when the program prints).
+  composes too, and writes a tiny world of just the typed exports and the
+  host imports the program reaches (plus the `wasi:cli/stdout@0.3.0` import
+  — and `async func` export signatures — when the program prints).

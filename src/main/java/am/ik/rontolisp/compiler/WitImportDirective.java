@@ -316,9 +316,14 @@ public final class WitImportDirective {
 		// integer/float/bool/string set) is one that backend's unboxed value model
 		// carries -- so a wit-imported interface is byte-for-byte the hand-written import
 		// block on both, and one WIT world serves both.
-		boolean wasm = backend == WitExportDirective.Backend.WASM_GC
-				|| backend == WitExportDirective.Backend.WASM_NO_GC;
-		boolean noGc = backend == WitExportDirective.Backend.WASM_NO_GC;
+		boolean wasm = backend == WitExportDirective.Backend.WASM_GC || backend.isNoGc();
+		boolean noGc = backend.isNoGc();
+		// --no-gc --component: the same wasm-import block, but the import is named the
+		// way the component's canon-lowered instance import is typed -- the interface's
+		// canonical id as the module, the WIT label verbatim as the field, and the WIT
+		// parameter names carried along -- so the wrap can declare the instance type a
+		// host (or a composed provider) checks the module against.
+		boolean noGcComponent = backend == WitExportDirective.Backend.WASM_NO_GC_COMPONENT;
 		boolean component = backend == WitExportDirective.Backend.WASM_COMPONENT;
 		String module = directive.module() == null ? iface.name() : directive.module();
 		// The provider registry is keyed by the interface's CANONICAL id, never by the
@@ -384,6 +389,9 @@ public final class WitImportDirective {
 						+ "' is an async func, which --no-gc cannot bind (the scalar backend has no future value);"
 						+ " compile it on the default GC backend, or against a synchronous WIT world");
 			}
+			if (noGcComponent) {
+				validateNoGcComponentFunc(func, witPath, locations, resolver, iface, member);
+			}
 			List<Param> params = parameters(func, witPath, locations, resolver, iface, member, wasm, false, noGc);
 			String returns = resultDesignator(func, witPath, locations, resolver, iface, member, wasm, noGc);
 			if (!wasm && func.def().func().async()) {
@@ -399,8 +407,12 @@ public final class WitImportDirective {
 				bindings.add(asyncProviderDefun(name, ifaceId, member, params));
 				continue;
 			}
+			if (noGcComponent) {
+				bindings.add(wasmImportForm(name, ifaceId, func.def().name(), params, returns, false, true));
+				continue;
+			}
 			bindings.add(wasm ? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns,
-					func.def().func().async()) : providerDefun(name, ifaceId, member, params));
+					func.def().func().async(), false) : providerDefun(name, ifaceId, member, params));
 		}
 		// A resource is released by its own interface's `drop`, which WIT declares no
 		// function for -- see the lower() javadoc for the name and why it is bound only
@@ -422,6 +434,11 @@ public final class WitImportDirective {
 			String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
 			if (component) {
 				componentMembers.add(dropBinding(resource.name(), name));
+			}
+			else if (noGcComponent) {
+				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": '" + member
+						+ "' releases the resource '" + resource.name() + "', which --no-gc --component cannot bind"
+						+ NO_GC_COMPONENT_RESOURCE_REASON);
 			}
 			else if (wasm) {
 				// Preview 1: a handle is an opaque integer the host handed over -- there
@@ -530,6 +547,45 @@ public final class WitImportDirective {
 		}
 		forms.addAll(bindings);
 		return forms;
+	}
+
+	private static final String NO_GC_COMPONENT_RESOURCE_REASON = " (a resource handle has no scalar component"
+			+ " type; the scalar component binds freestanding functions over the fixed-width integers, float64, bool"
+			+ " and string). Bind the interface on the default backend's --component, which carries handles";
+
+	// What the --no-gc component wrap can type its import instance with: freestanding
+	// functions whose every parameter and result is a WIT primitive with a boundary
+	// designator. The Preview 1 --no-gc lowering is more permissive (a handle crosses as
+	// an opaque :int), but a component's import instance type must name the real WIT
+	// type, and a resource has no scalar spelling -- so the refusal happens here,
+	// against the WIT line, before a mis-typed instance import could reach a host.
+	private static void validateNoGcComponentFunc(WitResolver.Func func, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
+		if (func.resource() != null) {
+			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+					+ "' belongs to the resource '" + func.resource() + "', which --no-gc --component cannot bind"
+					+ NO_GC_COMPONENT_RESOURCE_REASON);
+		}
+		for (var param : func.def().func().params()) {
+			requireScalarWitType(param.type(), "parameter '" + param.name() + "'", func, witPath, locations, resolver,
+					iface, member);
+		}
+		WitType result = func.def().func().result();
+		if (result != null) {
+			requireScalarWitType(result, "the result", func, witPath, locations, resolver, iface, member);
+		}
+	}
+
+	private static void requireScalarWitType(WitType type, String what, WitResolver.Func func, String witPath,
+			WitLocations locations, WitResolver resolver, WitItem.InterfaceDef iface, String member) {
+		WitType resolved = resolveAliases(type, resolver, iface).type();
+		if (resolved instanceof WitType.Prim prim && BoundaryType.forWitName(prim.name()) != null) {
+			return;
+		}
+		throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+				+ "': the WIT type of " + what + " is not one --no-gc --component can carry (a fixed-width integer,"
+				+ " float64, bool or string); compile the interface on the default backend's --component, where the"
+				+ " canonical ABI marshals it");
 	}
 
 	// The internal raw name of a result-returning binding: pkg::%member (the public
@@ -1147,11 +1203,16 @@ public final class WitImportDirective {
 	// (rontolisp:wasm-import 'name :from "module" :as "field" :params '(...) :returns
 	// ... [:async t]) -- :async t when the WIT member is an `async func`, so the P1
 	// binding answers a (settled) future like every other backend's.
+	// With `namedParams`, the WIT parameter names ride along as :param-names (the
+	// --no-gc --component wrap types its import instance with them; a core module never
+	// reads them, so the Preview 1 block stays the hand-written one).
 	private static LispVal wasmImportForm(String name, String module, String field, List<Param> params, String returns,
-			boolean async) {
+			boolean async, boolean namedParams) {
 		List<LispVal> designators = new ArrayList<>();
+		List<LispVal> paramNames = new ArrayList<>();
 		for (Param param : params) {
 			designators.add(new LispSymbol(param.designator()));
+			paramNames.add(new LispString(param.name()));
 		}
 		List<LispVal> out = new ArrayList<>();
 		out.add(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_IMPORT)));
@@ -1162,6 +1223,10 @@ public final class WitImportDirective {
 		out.add(new LispString(field));
 		out.add(new LispSymbol(":PARAMS"));
 		out.add(quote(list(designators)));
+		if (namedParams) {
+			out.add(new LispSymbol(":PARAM-NAMES"));
+			out.add(quote(list(paramNames)));
+		}
 		out.add(new LispSymbol(":RETURNS"));
 		out.add(new LispSymbol(returns));
 		if (async) {

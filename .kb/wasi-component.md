@@ -137,17 +137,20 @@ Preview 1 / `--no-wasi` ignore `:async`; `--no-gc --component` rejects it
   functions are lifted, sync by default over the core's OWN memory/`cabi_realloc`
   (`.kb/wasm-export-no-wasi.md`). The ONLY component shape whose `--invoke`d exports see
   top-level `defparameter` state.
-- **`--no-gc --component`**: `NoGcWasmComponentBuilder` wraps a zero-import core adapter-free
-  into a run-less reactor component that `wasmtime run --invoke` runs with ZERO flags. Same
-  sync-lift wiring but instance 0 / all index spaces from 0; `:long` -> VT_S64, `:string` ->
+- **`--no-gc --component`**: `NoGcWasmComponentBuilder` wraps the core adapter-free into a
+  run-less reactor component that `wasmtime run --invoke` runs with ZERO flags when it imports
+  nothing. Same sync-lift wiring, every index a cursor from 0; `:long` -> VT_S64, `:string` ->
   VT_STRING (`WasmExportCompiler.componentValType`) lifted with
   `canonLiftMemoryReallocUtf8PostReturn` (options in wasm-tools order, byte-pinned) against
-  shims appended by `NoGcWasmCompiler.assemble()`. A PRINTING program additionally gets
-  `import-block-nogc-print.bin` + shim/bridge/fixup core modules implementing `fd_write` over
-  `write-via-stream`, so its exports lift ASYNC automatically (user `:async` stays rejected);
-  the instantiation cycle is broken with the wit-component shim/fixup funcref-table pattern,
-  keeping the printing core byte-identical to plain `--no-gc`. fd 1 only.
-  `.kb/no-gc-scalar-wasm.md`.
+  shims appended by `NoGcWasmCompiler.assemble()`. The reached `rontolisp:wasm-import`s are
+  its instance imports (scalar ones lowered ahead of the core; string-involving ones through a
+  GENERATED shim/fixup pair, `am.ik.wasm.WasmShimModules`) -- such a component needs a host or
+  a composition, since `--invoke` satisfies no user import. A PRINTING program additionally
+  gets `import-block-nogc-print.bin` + shim/bridge/fixup core modules implementing `fd_write`
+  over `write-via-stream`, so its exports lift ASYNC automatically (user `:async` stays
+  rejected); the instantiation cycle is broken with the wit-component shim/fixup funcref-table
+  pattern, keeping the printing core byte-identical to plain `--no-gc`, and the two shim pairs
+  compose. fd 1 only. `.kb/no-gc-scalar-wasm.md`.
 
 ## `--emit-wit`
 `-o out.wasm --component --emit-wit` also writes `out.wit`; without `--component` (or without
@@ -185,6 +188,15 @@ level and throws if any is missing (`environment.getEnvironment`, `stdout.writeV
 `stderr.writeViaStream`, `stdin.readViaStream`, `monotonicClock.now`, `systemClock.now`,
 `preopens.getDirectories`, `types.Descriptor`, `random.getRandomU64`) -- for a non-I/O export
 they only have to EXIST. Node 22.16 has no JSPI. User half: `doc/{en,ja}/compiling/wasm.md`.
+
+Re-measured 2026-09-12 on jco 1.33.0 / node 24.19 (Linux) for the IMPORT-bearing shapes: a
+`--no-gc --component` with `:string` imports transpiles with `--map env=./env.js` and runs
+against a plain JS module (`hostLog("module initialized")`, typed strings both ways) with NO
+JSPI flag; the wasm-GC `--component` of the same WIT world transpiles but throws
+`WebAssembly.promising is not a function` at instantiation until node gets
+`--experimental-wasm-jspi`, because its fixed `wasi:cli/run` export is an async lift. So the
+no-gc component is the JSPI-free typed-string component for a browser host, at 1,027 B against
+2,650 B (`.kb/no-gc-scalar-wasm.md`).
 
 ## User WIT-interface imports (`canon lower`)
 `rontolisp:wit-import` under `--component` becomes a component-level **instance import** whose

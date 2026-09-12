@@ -102,6 +102,62 @@ final class WitEmitter {
 	 */
 	static String emit(String variant, List<WasmExportCompiler.Decl> exportDecls,
 			List<WasmComponentImportCompiler.Import> imports, @Nullable Set<String> wasiInterfaces) {
+		List<WitItem> importItems = new ArrayList<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			importItems.add(WitImportWorldEmitter.importItem(imported));
+		}
+		return emit(variant, exportDecls, importItems,
+				imports.isEmpty() ? List.of() : WitImportWorldEmitter.packageBlocks(imports), wasiInterfaces);
+	}
+
+	/**
+	 * Renders the WIT text of a {@code --no-gc --component} component: the variant's
+	 * fixed world (the empty one, or the print micro-adapter's stdout import) plus the
+	 * typed exports and the host imports the core reaches. An import module that is a WIT
+	 * interface id ({@code docs:host/env}) prints as an {@code import <id>;} with a
+	 * package block defining the interface; a plain label ({@code env}) prints as an
+	 * inline {@code import env: interface { ... }} -- the two shapes
+	 * {@code wasm-tools component wit} reads back from the component's instance import.
+	 * @param variant {@link #VARIANT_NOGC} or {@link #VARIANT_NOGC_PRINT}
+	 * @param exportDecls the export directives, in export order
+	 * @param imports the reached host imports, in the core's import order
+	 * @return the WIT text (ends with a newline)
+	 */
+	static String emitNoGc(String variant, List<WasmExportCompiler.Decl> exportDecls,
+			List<WasmImportCompiler.Decl> imports) {
+		// One imported instance per module, in first-appearance order; the functions of
+		// one module in core import order.
+		LinkedHashMap<String, List<WitItem>> byModule = new LinkedHashMap<>();
+		for (WasmImportCompiler.Decl decl : imports) {
+			byModule.computeIfAbsent(decl.module(), k -> new ArrayList<>())
+				.add(new WitItem.FuncDef(WitMeta.none(), decl.field(), WitItem.FuncKind.PLAIN, witFunc(decl)));
+		}
+		List<WitItem> importItems = new ArrayList<>();
+		LinkedHashMap<WitPackageName, List<WitItem>> byPackage = new LinkedHashMap<>();
+		byModule.forEach((module, funcs) -> {
+			if (NoGcWasmComponentBuilder.INTERFACE_ID.matcher(module).matches()) {
+				WitPackageName pkg = WitImportWorldEmitter.packageOf(module);
+				String iface = WitImportWorldEmitter.interfaceNameOf(module);
+				importItems.add(new WitItem.ImportRef(WitMeta.none(), new WitRef(pkg, iface)));
+				byPackage.computeIfAbsent(pkg, k -> new ArrayList<>())
+					.add(new WitItem.InterfaceDef(WitMeta.none(), iface, List.copyOf(funcs)));
+			}
+			else {
+				importItems.add(new WitItem.ImportNamed(WitMeta.none(), module,
+						new WitItem.Extern.ExternInterface(List.copyOf(funcs))));
+			}
+		});
+		List<WitItem> blocks = new ArrayList<>();
+		byPackage
+			.forEach((pkg, ifaces) -> blocks.add(new WitItem.PackageBlock(WitMeta.none(), pkg, List.copyOf(ifaces))));
+		return emit(variant, exportDecls, importItems, blocks, null);
+	}
+
+	// The one renderer: the variant's fixed document, the user import items spliced
+	// into the world's import block, the typed exports, then the user-import package
+	// blocks and the exported-interface blocks.
+	private static String emit(String variant, List<WasmExportCompiler.Decl> exportDecls, List<WitItem> importItems,
+			List<WitItem> importPackageBlocks, @Nullable Set<String> wasiInterfaces) {
 		WitDocument document = prune(WasiWitDefinitions.document(variant), wasiInterfaces);
 		// On the nogc-print variant EVERY export is an async lift (the print bridge's
 		// blocking waitable-set park is legal only inside an async-typed task), so the
@@ -122,7 +178,7 @@ final class WitEmitter {
 				byInterface.computeIfAbsent(decl.iface(), k -> new ArrayList<>()).add(decl);
 			}
 		}
-		if (!exportDecls.isEmpty() || !imports.isEmpty()) {
+		if (!exportDecls.isEmpty() || !importItems.isEmpty()) {
 			WitItem.World world = document.world();
 			List<WitItem> items = new ArrayList<>(world.items());
 			// A user import joins the world's import block: after the fixed WASI imports,
@@ -133,10 +189,6 @@ final class WitEmitter {
 					firstExport = i;
 					break;
 				}
-			}
-			List<WitItem> importItems = new ArrayList<>();
-			for (WasmComponentImportCompiler.Import imported : imports) {
-				importItems.add(WitImportWorldEmitter.importItem(imported));
 			}
 			items.addAll(firstExport, importItems);
 			// Flat function exports first (in export order), then one interface reference
@@ -153,10 +205,7 @@ final class WitEmitter {
 		// Package blocks: the imported interfaces first (as before), then a block per
 		// exported-interface package, defining the interfaces the world's `export <id>;`
 		// references -- the tail wasm-tools prints for a component's exported instances.
-		List<WitItem> extraBlocks = new ArrayList<>();
-		if (!imports.isEmpty()) {
-			extraBlocks.addAll(WitImportWorldEmitter.packageBlocks(imports));
-		}
+		List<WitItem> extraBlocks = new ArrayList<>(importPackageBlocks);
 		extraBlocks.addAll(exportPackageBlocks(byInterface, forceAsync));
 		if (!extraBlocks.isEmpty()) {
 			List<WitItem> items = new ArrayList<>(document.items());
@@ -308,6 +357,18 @@ final class WitEmitter {
 
 	// The WIT function type of an export declaration: its parameter labels and boundary
 	// types, and its result, with `async func` forced on the nogc-print variant.
+	// A host import's WIT function type: the declared boundary types under the
+	// directive's parameter names, never async (--no-gc refuses :async t).
+	private static WitFunc witFunc(WasmImportCompiler.Decl decl) {
+		List<WitFunc.Param> params = new ArrayList<>();
+		List<am.ik.rontolisp.compiler.BoundaryType> paramTypes = decl.paramTypes();
+		for (int i = 0; i < paramTypes.size(); i++) {
+			params.add(new WitFunc.Param(decl.paramNames().get(i), witType(paramTypes.get(i))));
+		}
+		Integer result = WasmExportCompiler.componentValType(decl.returnType());
+		return new WitFunc(false, List.copyOf(params), result == null ? null : witTypeOf(result));
+	}
+
 	private static WitFunc witFunc(WasmExportCompiler.Decl decl, boolean forceAsync) {
 		List<WitFunc.Param> params = new ArrayList<>();
 		List<am.ik.rontolisp.compiler.BoundaryType> paramTypes = decl.paramTypes();

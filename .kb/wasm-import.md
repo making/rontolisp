@@ -72,7 +72,11 @@ CONTENT against a Node host in `WasmStringParamBoundaryE2eTest` (every combinati
 runtime-built string, the flat-memory loop).
 
 ## Modes, other backends, aliases
-- `--component` throws a clear `UnsupportedOperationException`. Interpreter and JVM
+- `--component` on wasm-GC throws a clear `UnsupportedOperationException` (a GC component binds
+  interfaces through `wit-import`'s `%component-import`); `--no-gc --component` TAKES it, the
+  reached imports becoming the component's instance imports (`.kb/no-gc-scalar-wasm.md`, "Host
+  imports" under `--no-gc --component`), which is why the directive carries `:param-names`
+  (parsed generically, default `p0..`, read by that wrap alone). Interpreter and JVM
   define error-signalling stubs so shared sources load everywhere (`JvmLispCompiler` pass 1
   synthesizes `(defun name (...) (error ...))`; the directive is an `ACONST_NULL` no-op).
 - **`--no-gc` takes the directive too** (`.kb/no-gc-scalar-wasm.md`, "Host imports"), through

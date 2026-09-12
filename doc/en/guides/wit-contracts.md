@@ -224,8 +224,9 @@ npx @bytecodealliance/jco types sumsq.wit -o types/
 The world's imports follow the build variant (plain, `rontolisp:fetch`,
 `rontolisp:tcp-*`, or `rontolisp:http-handler`; with
 [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component)
-the world is import-free, or carries the `wasi:cli/stdout@0.3.0` import — and
-`async func` exports — when the program prints) and, since
+the world's imports are the host functions the program reaches, plus the
+`wasi:cli/stdout@0.3.0` import — and `async func` exports — when the program
+prints) and, since
 [tree shaking](../compiling/wasm.md#optimize-tree-shaking) is on unless you pass
 `--optimize=off`, the part of that variant the program can actually reach: the
 world above is the two `wasi:cli` imports it really needs, not the build
