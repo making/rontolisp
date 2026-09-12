@@ -82,19 +82,10 @@ For scale: the same program on `--no-gc` is 528 bytes, because that backend has 
 boxed value model nor the limb tier. The wasm-GC number is what it is for reasons; this
 particular 182 bytes is not one of them.
 
-**The same conclusion was reached from the other end in `791`, and whoever picks up any of
-`798`/`799`/`800`/`801` should read the two together.** There, the `car`/`cdr` lowering
-change took the hello-clack Worker from 916,587 to 815,414 bytes -- and binaryen found the
-SAME 182,697 bytes in the module before and after it. An external optimizer's reach is a
-fixed quantity that a lowering change moves straight past; it is not a ceiling on how small
-the module can get, and it is not a measure of what is left to win. Here the same fact
-arrives as a floor instead: `-Oz` stops at 1,495 on a 1,658-byte module, so on this one
-there is almost nothing left for it to reach at all.
-
-Read together they say the same thing twice: **measure what the emitter emits, not what an
-optimizer can recover from it.** `791`'s pass ranking, this item's per-function
-decomposition, and `799`'s pattern census are all that measurement; the binaryen numbers in
-all three are context, never the target.
+The 1,495 is why this item is worth doing and not a reason to think it is nearly done:
+`.kb/optimize-dead-code-elimination.md`, "What an external optimizer still finds", states
+the rule and both halves of the evidence -- a residue is neither a ceiling nor a measure of
+what is left, and this item's 182 bytes are a round trip no optimizer can see as one.
 
 ## Touch points
 

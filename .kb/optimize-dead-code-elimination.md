@@ -390,6 +390,26 @@ core's `mem`/`memory` **memory** import, kept verbatim with every other non-func
 
 ## What an external optimizer still finds, and what it is made of
 
+**The rule this section exists to serve: measure what the emitter emits, not what an
+optimizer can recover from it.** A binaryen number is context, never a target -- it does
+not bound how small a module can get and it does not measure what is left to win. Both
+directions have now been walked into:
+
+- The `car`/`cdr` lowering change below took the hello-clack Worker from 916,587 to 815,414
+  bytes, and **binaryen found the SAME 182,697 bytes in the module before and after it**.
+  The optimizer's reach is a fixed quantity a lowering change walks straight past, so a
+  residue is not a ceiling.
+- The `.todo/789` reactor is 1,658 bytes and `-Oz` stops at 1,495 -- within five bytes of
+  what a hand-written non-GC toolchain emits for the same program. A residue near zero is
+  not "nothing left to win" either: 182 of those bytes are a literal string walked out of
+  linear memory into a GC array and back (`.todo/801`), which no optimizer can see as a
+  round trip.
+
+So the measurements that pay are the pass ranking below, a per-function decomposition of
+one module, and the shape census -- what the backend chose to emit. The residue tables are
+how you find WHERE to look, and nothing more. (The first version of the ranking below was
+read the other way round, which is how both corrections were found.)
+
 `wasm-opt` (binaryen 130/132) run as a PROBE over the shaken output -- never a build step;
 the core libraries take no external dependency. Two corrections to how the residue was
 first read (`.todo/791`), so the next measurement does not repeat them:
