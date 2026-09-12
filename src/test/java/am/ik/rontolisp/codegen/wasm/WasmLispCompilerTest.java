@@ -1203,6 +1203,40 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aConsAccessSiteIsOneCallAtTheSizeLevelAndReadsAPlainLocalInPlaceOtherwise() {
+		// The three spellings of a (car x) site (.kb/cons-access-runtime.md), pinned as
+		// byte budgets on one site in statement position (its value dropped): under
+		// --optimize=size the operand plus one call of the shared _car body; at the
+		// default level the 17-byte inline shape, reading a plain local operand where
+		// it lives -- it used to spill into a fresh temp first, 4 bytes and a local per
+		// site that nothing else read; a computed operand still needs that temp.
+		assertThat(marginalConsSiteBytes(OptimizeLevel.SIZE, "x")).isLessThanOrEqualTo(6);
+		assertThat(marginalConsSiteBytes(OptimizeLevel.DEFAULT, "x")).isLessThanOrEqualTo(18);
+		assertThat(marginalConsSiteBytes(OptimizeLevel.DEFAULT, "(cdr x)")).isGreaterThan(18);
+		// The shared body ships once, and only when a site calls it: this program has no
+		// integer arithmetic, so the one function the size level adds over the default
+		// one is _car (its _cdr twin is unreferenced and shaken like every other level's
+		// pair). Counted rather than searched for by its bytes: the type-test fold sees
+		// every caller here passing a cons and re-spells the body without its nil arm.
+		assertThat(functionCount(compileConsSites(OptimizeLevel.SIZE, "x", 5)))
+			.isEqualTo(functionCount(compileConsSites(OptimizeLevel.DEFAULT, "x", 5)) + 1);
+	}
+
+	private static int marginalConsSiteBytes(OptimizeLevel level, String operand) {
+		return compileConsSites(level, operand, 5).length - compileConsSites(level, operand, 4).length;
+	}
+
+	private static byte[] compileConsSites(OptimizeLevel level, String operand, int count) {
+		StringBuilder source = new StringBuilder("(defun f (x)");
+		for (int k = 0; k < count; k++) {
+			source.append(" (car ").append(operand).append(')');
+		}
+		source.append(" x)\n(print (f (list 1 2 3)))");
+		return new WasmLispCompiler(false, false, false, level)
+			.compile(LispReader.readAllFromString(source.toString()));
+	}
+
+	@Test
 	void anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime() {
 		// A byte budget, because nothing else notices: every arrangement of this code
 		// compiles and runs correctly, and the only difference is how many times the

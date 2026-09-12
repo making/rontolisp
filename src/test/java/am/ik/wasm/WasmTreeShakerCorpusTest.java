@@ -61,12 +61,24 @@ class WasmTreeShakerCorpusTest {
 			byte[] optimized = withoutUndefinedWarnings(
 					() -> new WasmLispCompiler(false, false, noWasi, OptimizeLevel.DEFAULT).compile(program));
 
+			// The size level swaps emissions rather than only dropping them (the shared
+			// cons readers, .kb/cons-access-runtime.md), so it is validated on the
+			// corpus too: a rewrite that validates on a toy and not on the corpus is
+			// exactly what this test exists to catch.
+			byte[] smallest = withoutUndefinedWarnings(
+					() -> new WasmLispCompiler(false, false, noWasi, OptimizeLevel.SIZE).compile(program));
+
 			assertThat(optimized.length).as("optimized should shrink the module (noWasi=%s)", noWasi)
 				.isLessThan(plain.length);
+			assertThat(smallest.length).as("--optimize=size should not exceed the default level (noWasi=%s)", noWasi)
+				.isLessThanOrEqualTo(optimized.length);
 
-			validateWithWasmTools(optimized, noWasi);
-			roundTripIsAFixpoint(plain, "plain-" + (noWasi ? "nowasi" : "wasi"));
-			roundTripIsAFixpoint(optimized, "optimized-" + (noWasi ? "nowasi" : "wasi"));
+			String mode = noWasi ? "nowasi" : "wasi";
+			validateWithWasmTools(optimized, "optimized-" + mode);
+			validateWithWasmTools(smallest, "size-" + mode);
+			roundTripIsAFixpoint(plain, "plain-" + mode);
+			roundTripIsAFixpoint(optimized, "optimized-" + mode);
+			roundTripIsAFixpoint(smallest, "size-" + mode);
 		}
 	}
 
@@ -111,16 +123,16 @@ class WasmTreeShakerCorpusTest {
 	// otherwise
 	// the structural correctness check is skipped (the no-throw + shrink assertions above
 	// still run on every JVM).
-	private void validateWithWasmTools(byte[] module, boolean noWasi) throws Exception {
+	private void validateWithWasmTools(byte[] module, String label) throws Exception {
 		assumeTrue(onPath("wasm-tools"), "wasm-tools not on PATH; skipping validation");
-		Path file = this.workDir.resolve("corpus-" + (noWasi ? "nowasi" : "wasi") + ".wasm");
+		Path file = this.workDir.resolve("corpus-" + label + ".wasm");
 		Files.write(file, module);
 		Process process = new ProcessBuilder("wasm-tools", "validate", "-f", "gc", file.toString())
 			.redirectErrorStream(true)
 			.start();
 		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 		int exit = process.waitFor();
-		assertThat(exit).as("wasm-tools validate (noWasi=%s) failed:%n%s", noWasi, output).isZero();
+		assertThat(exit).as("wasm-tools validate (%s) failed:%n%s", label, output).isZero();
 	}
 
 	private static boolean onPath(String tool) {

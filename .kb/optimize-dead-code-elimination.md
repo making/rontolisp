@@ -388,34 +388,67 @@ EXPORTS and hence already shaker roots**; the core's imports are satisfied `from
 dropped import leaves one unused name in the map. `WasmComponentBuilder.memModuleFor` reads the
 core's `mem`/`memory` **memory** import, kept verbatim with every other non-function import.
 
-## What an external optimizer still finds (measured 2026-09-12)
+## What an external optimizer still finds, and what it is made of
 
-`wasm-opt -Oz --all-features` (binaryen 132) run as a PROBE over the shaken output -- not a proposed
-build step, and the core libraries take no external dependency. Read it as "how much is left", by
-section and by corpus. `bench.lisp` is the reactor module of `.todo/789`; the rontolisp column is
-`--optimize=size` except `webgl-triangle`, which is `--optimize`.
+`wasm-opt` (binaryen 130/132) run as a PROBE over the shaken output -- never a build step;
+the core libraries take no external dependency. Two corrections to how the residue was
+first read (`.todo/791`), so the next measurement does not repeat them:
 
-| Program | before globals+hooks | after | delta | then `-Oz` | residue |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `bench.lisp` `--no-wasi` | 1,808 | **1,658** | -150 (-8.3%) | 1,505 | 153 (9.2%) |
-| `examples/browser/webgl-triangle` | 1,830 | **1,683** | -147 (-8.0%) | 1,340 | 343 (20.4%) |
-| `hello_world` `--no-wasi` | 643 | **493** | -150 (-23.3%) | 349 | 144 (29.2%) |
-| `hello_world` (WASI) | 590 | **509** | -81 (-13.7%) | 391 | 118 (23.2%) |
-| `pi_approx` `--no-wasi` | 1,688 | **1,528** | -160 (-9.5%) | 1,022 | 506 (33.1%) |
-| `pi_approx` (WASI) | 1,635 | **1,544** | -91 (-5.6%) | 1,064 | 480 (31.1%) |
-| `zlib` `--no-wasi` | 94,172 | **94,069** | -103 (-0.1%) | 75,517 | 18,552 (19.7%) |
-| `zlib` (WASI) | 94,167 | **94,099** | -68 (-0.1%) | 75,887 | 18,212 (19.4%) |
+- **Binaryen's writer is not rontolisp's**: the module re-encoded with NO passes grows by
+  1,452 B on `zlib` and 13,080 B on the hello-clack Worker (~0 on the small modules), so a
+  pass run alone "grows the module" by that tax before it saves anything, and every number
+  below is `size - optimized + tax`.
+- **`inlining-optimizing` is not the inliner**: it re-runs the whole default function
+  pipeline over every function a call site changed, which is nearly all of them, so alone it
+  ranked first (71-90% of the residue). With inlining skipped (`-Oz
+  --skip-pass=inlining --skip-pass=inlining-optimizing`) the residue is 90% intact on the two
+  large modules; only on the small ones is inlining the enabler (of `heap2local`: a boxed
+  float built by one function and unboxed by the next).
 
-Two things the table says. The globals/types/hooks drop is a FLOOR effect: a fixed ~80-150 bytes
-every module paid, which is a quarter of `hello_world` and a rounding error on `zlib`. And 65 of it
-is below what an external optimizer can reach at all -- `-Oz` on the old `bench.lisp` stopped at
-1,574, sixty-nine bytes above the new floor of 1,505, because the host hooks are EXPORTS and an
-export is a root for binaryen too.
+`--optimize=size`, `--no-wasi`, measured 2026-09-12 on `e0bcf42f0` (before the cons readers
+below):
 
-The residue column is the second thing, and it is not what `.todo/791` estimated before `790`
-landed: not ~114 bytes of tidying on a toy, but **19-33% of every module in the corpus**, 18.5 KB on
-`zlib`. That is a sized opportunity for a post-emit code-section pass, not a cleanup -- see
-`.todo/791`.
+| Program | size | `-Oz` residue | without inlining | inlining's marginal |
+| --- | ---: | ---: | ---: | ---: |
+| `zlib` (size-report) | 94,069 | 20,237 (21.5%) | 18,252 | 1,985 (10%) |
+| hello-clack Worker | 916,587 | 204,809 (22.3%) | 184,091 | 20,718 (10%) |
+| `pi_approx` | 1,528 | 506 (33%) | 249 | 257 (51%) |
+| the `.todo/789` reactor | 1,658 | 160 (9.7%) | 111 | 49 (31%) |
+| `webgl-triangle` (`--optimize`) | 1,683 | 305 (18%) | 108 | 197 (65%) |
+
+Single passes alone, tax-corrected, `zlib` / Worker: `coalesce-locals` 3,627 / 40,542,
+`simplify-locals-nostructure` 3,761 / 30,927, `merge-similar-functions` 1,662 / 31,236,
+`local-cse` 1,063 / 15,125, `remove-unused-brs` 1,590 / 695, `vacuum` 1,035 / 6,200,
+`precompute-propagate` 827 / 6,662, `optimize-instructions` 440 / 3,700, `rse` 409 / 2,908,
+`code-folding` 189, `dce` 4. **The residue is local plumbing and lowering shapes, not
+functions**, and a per-function diff against binaryen's text (the scripts and tables:
+`.todo/artefacts/791-module-level-slack-globals-types-data-hooks/`) names the shapes. A
+census over the flat `wasm-tools print` of the Worker / `zlib`:
+
+| shape | Worker | `zlib` | per site |
+| --- | ---: | ---: | --- |
+| `car`/`cdr`: `local.get; local.set t; local.get t; ref.is_null; if ... end` (every site a fresh temp) | 8,141 | 344 | 17-21 B -> **landed**, `.kb/cons-access-runtime.md` |
+| `local.set N; local.get N` (a `tee`) | 9,700 | 869 | 2 B |
+| `local.get A; local.set B; local.get B` (a copy into a temp) | 4,181 | 342 | 4 B + a local |
+| `if (result eqref) call err else nil end; ref.is_null` (an assertion in value position) | 3,304 | 303 | ~8 B |
+| a pure value then `drop` (`ref.null eq`, a constant, a `local.get`) | 1,416 | 267 | 2-3 B |
+| `local.tee N; drop` (a statement `setq`) | 1,197 | 127 | 1 B |
+| `br 0; end; unreachable; end` (a counted loop's tail) | 1,488 | 185 | 1 B |
+| the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) | 701 | 22 | ~140 B |
+| a boxed variable built empty then `struct.set` (`ref.null; struct.new; local.set`) | 204 | 45 | ~8 B |
+| a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B |
+| `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B |
+
+The first row is `.kb/cons-access-runtime.md`; the rest are `.todo/798` (the adjacent-
+instruction peepholes and the fold debris, byte-level), `.todo/799` (the lowering shapes,
+expander and emitter level) and `.todo/800` (the single-call-site inliner). After the
+first row landed: `zlib` 90,874 (residue 18,542), Worker 815,414 (residue 182,697 -- the
+same bytes as before, so the 101 KB was outside binaryen's reach: it does not outline).
+
+**A residue is a property of the real output, never of a spike**, and a pass ranked by
+running it ALONE says how much binaryen's writer costs as much as what the pass does. The
+"~114 bytes of tidying" this section first estimated came from `-Oz` on a hand-spiked
+1,090-byte module; the corpus said 19-33% of every module.
 
 ## The funcall-dispatch gate (what makes `--optimize` reach library code)
 **A function gets an arity-dispatch case, and a `_lookup` registry row, only when the program can

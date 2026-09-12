@@ -271,6 +271,74 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Compiles {@code (car x)} (field 0) or {@code (cdr x)} (field 1): nil answers nil, a
+	 * cons its field, anything else traps on the cast. Three spellings of the one shape,
+	 * chosen by what is being optimized for ({@code .kb/cons-access-runtime.md}): under
+	 * {@code --optimize=size} the site is the operand plus one {@code call} of the shared
+	 * {@code _car}/{@code _cdr} body; otherwise the shape is inline, reading a plain
+	 * local operand twice where it already lives and spilling any other operand into a
+	 * fresh temp first.
+	 * @param operand the argument form
+	 * @param field the cons field
+	 * @param ctx the compile context
+	 */
+	static void compileConsField(am.ik.rontolisp.LispVal operand, int field, WasmLispCompiler.Ctx ctx) {
+		if (ctx.optimize.prefersSizeOverSpeed()) {
+			WasmExprCompiler.compileExpr(operand, ctx);
+			WasmConsRuntimeBuilder.emitCall(ctx.writer, field);
+			return;
+		}
+		int slot = WasmExprCompiler.plainLocalSlot(operand, ctx);
+		if (slot >= 0) {
+			emitInlineConsField(ctx.writer, slot, field);
+			return;
+		}
+		WasmExprCompiler.compileExpr(operand, ctx);
+		emitConsField(ctx, field);
+	}
+
+	/**
+	 * The same as {@link #compileConsField} for an operand already on the stack.
+	 * @param ctx the compile context
+	 * @param field the cons field
+	 */
+	static void emitConsField(WasmLispCompiler.Ctx ctx, int field) {
+		if (ctx.optimize.prefersSizeOverSpeed()) {
+			WasmConsRuntimeBuilder.emitCall(ctx.writer, field);
+			return;
+		}
+		int tmpSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		emitInlineConsField(ctx.writer, tmpSlot, field);
+	}
+
+	/**
+	 * The inline shape over the list in {@code slot}: {@code local.get slot; ref.is_null;
+	 * if (result eqref) ref.null eq else local.get slot; ref.cast $cons; struct.get $cons
+	 * field end}. Shared with the {@code _car}/{@code _cdr} bodies, so a call and an
+	 * inline site cannot drift apart.
+	 */
+	static void emitInlineConsField(WasmWriter w, int slot, int field) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(field);
+		w.write(Instruction.END);
+	}
+
+	/**
 	 * Emits a list-type guard for the {@code map*} family over the value in
 	 * {@code listSlot}: if the value is neither null (nil) nor a cons, the function traps
 	 * ({@code unreachable}). This matches the interpreter, which signals an error rather

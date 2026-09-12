@@ -1833,23 +1833,17 @@ final class WasmRuntimeBuilder {
 	// Pushes car (head = true) or cdr (head = false) of the cons in `slot`, answering
 	// null for null so a short argument list binds the missing parameters to nil instead
 	// of trapping on the ref.cast.
-	private static void emitNullSafeCell(WasmWriter w, int slot, boolean head) {
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(slot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
-		w.write(Instruction.ELSE);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(slot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(head ? 0 : 1);
-		w.write(Instruction.END);
+	// The nil-passing car/cdr of the list in `slot`: the shared inline shape, or under
+	// --optimize=size a call of the shared _car/_cdr body, exactly as a compiled
+	// (car x)/(cdr x) site chooses (.kb/cons-access-runtime.md).
+	private static void emitNullSafeCell(WasmWriter w, int slot, boolean head, boolean sharedConsReaders) {
+		if (sharedConsReaders) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(slot);
+			WasmConsRuntimeBuilder.emitCall(w, head ? 0 : 1);
+			return;
+		}
+		WasmEmitHelper.emitInlineConsField(w, slot, head ? 0 : 1);
 	}
 
 	/**
@@ -1906,7 +1900,7 @@ final class WasmRuntimeBuilder {
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase) {
 		DispatchFunctions built = buildDispatch(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase,
-				false, null, 0, null, -1);
+				false, null, 0, null, -1, false);
 		if (!built.pages().isEmpty()) {
 			throw new IllegalStateException("dispatcher for arity " + arity + " needs pages; use buildDispatch");
 		}
@@ -1955,7 +1949,7 @@ final class WasmRuntimeBuilder {
 	static DispatchFunctions buildDispatch(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase, boolean spread, @Nullable Set<Integer> dispatchable, int pageFuncBase,
-			@Nullable ArityReport report, int arityChkIndex) {
+			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders) {
 		int dispatchArgs = spread ? 1 : arity;
 		List<DispatchTarget> targets = dispatchTargets(arity, defuns, lambdaDecls, spread, dispatchable, userFuncBase);
 		// The callables this dispatcher CANNOT serve: their funcId reaching it is a call
@@ -1987,7 +1981,8 @@ final class WasmRuntimeBuilder {
 			ByteArrayOutputStream body = new ByteArrayOutputStream();
 			WasmWriter w = new WasmWriter(body);
 			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, report != null);
-			emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, 0, report, arityChkIndex);
+			emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, 0, report, arityChkIndex,
+					sharedConsReaders);
 			byte[] single = body.toByteArray();
 			// levels == 1: every callable is inside one page already, so the body is
 			// large because its CASES are (a spread dispatcher over ten-parameter
@@ -2014,7 +2009,7 @@ final class WasmRuntimeBuilder {
 			SortedMap<Integer, Integer> pageMisses = missShapes.subMap(leaf.getKey() << DISPATCH_PAGE_BITS,
 					((leaf.getKey() + 1) << DISPATCH_PAGE_BITS));
 			pages.add(buildDispatchLeafPage(leaf.getValue(), pageMisses, leaf.getKey(), arity, dispatchArgs, spread,
-					report, arityChkIndex));
+					report, arityChkIndex, sharedConsReaders));
 		}
 		for (int level = 1; level <= levels - 2; level++) {
 			Map<Integer, Map<Integer, Integer>> parents = new TreeMap<>();
@@ -2591,7 +2586,7 @@ final class WasmRuntimeBuilder {
 	 */
 	private static void emitDispatchCases(WasmWriter w, List<DispatchTarget> targets,
 			SortedMap<Integer, Integer> missShapes, int arity, int dispatchArgs, boolean spread, int funcIdBias,
-			@Nullable ArityReport report, int arityChkIndex) {
+			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders) {
 		int funcIdLocal = dispatchArgs + 1;
 		int argListLocal = dispatchArgs + 2;
 		if (targets.isEmpty() && missShapes.isEmpty()) {
@@ -2727,8 +2722,8 @@ final class WasmRuntimeBuilder {
 				// Push car(cursor) per required parameter, stepping the cursor; a short
 				// argument list yields nil rather than trapping, like car/cdr do.
 				for (int a = 0; a < target.required(); a++) {
-					emitNullSafeCell(w, argListLocal, true);
-					emitNullSafeCell(w, argListLocal, false);
+					emitNullSafeCell(w, argListLocal, true, sharedConsReaders);
+					emitNullSafeCell(w, argListLocal, false, sharedConsReaders);
 					w.write(Instruction.SET_LOCAL);
 					w.writeUnsignedLeb128(argListLocal);
 				}
@@ -2786,13 +2781,14 @@ final class WasmRuntimeBuilder {
 	 * symbol designator into one -- so it only has to read the funcId back out.
 	 */
 	private static byte[] buildDispatchLeafPage(List<DispatchTarget> targets, SortedMap<Integer, Integer> missShapes,
-			int page, int arity, int dispatchArgs, boolean spread, @Nullable ArityReport report, int arityChkIndex) {
+			int page, int arity, int dispatchArgs, boolean spread, @Nullable ArityReport report, int arityChkIndex,
+			boolean sharedConsReaders) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		emitPageLocals(w, report != null);
 		emitPageFuncIdDigit(w, dispatchArgs, 0);
 		emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, page << DISPATCH_PAGE_BITS, report,
-				arityChkIndex);
+				arityChkIndex, sharedConsReaders);
 		return body.toByteArray();
 	}
 

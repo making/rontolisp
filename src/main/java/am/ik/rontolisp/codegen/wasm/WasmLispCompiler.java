@@ -1673,7 +1673,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	// declining stub body, which costs its call sites nothing because it has none.
 	static final int FUNC_READ_SEQ_CHARS = FUNC_RENAME_FILE + 1;
 
-	static final int FX_FUNC_LAST = FUNC_READ_SEQ_CHARS;
+	// _car / _cdr ((ref null eq) list) -> (ref null eq): the nil-passing cons field
+	// readers (WasmConsRuntimeBuilder). Under --optimize=size every car/cdr site is a
+	// call to one of these instead of its own 19-byte inline shape
+	// (.kb/cons-access-runtime.md); at the other levels the bodies are unreferenced
+	// and the shaker drops them. Reuse the unary callable signature
+	// (TYPE_CALLABLE_BASE + 0); appended after the last fixed helper so no index above
+	// shifts.
+	static final int FUNC_CAR = FUNC_READ_SEQ_CHARS + 1;
+
+	static final int FUNC_CDR = FUNC_CAR + 1;
+
+	static final int FX_FUNC_LAST = FUNC_CDR;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -4700,7 +4711,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (indirectCallArities.contains(arity)) {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
-						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex);
+						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
+						this.optimize.prefersSizeOverSpeed());
 				dispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -4723,7 +4735,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (usesApplyRuntime) {
 			WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(0, defuns, lambdaDecls,
 					numDefuns, stringTable, usesEval, userFuncBase(), true, dispatchableFuncIds,
-					dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex);
+					dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
+					this.optimize.prefersSizeOverSpeed());
 			dispatchBodies.add(built.body());
 			for (byte[] page : built.pages()) {
 				dispatchPageBodies.add(page);
@@ -4751,7 +4764,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (indirectCallArities.contains(arity)) {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
-						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex);
+						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
+						this.optimize.prefersSizeOverSpeed());
 				extraDispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -6216,6 +6230,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _read_seq_chars (seq,
 															// stream, start, end) ->
 															// value (FUNC_READ_SEQ_CHARS)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _car (list) -> value
+															// (FUNC_CAR)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _cdr (list) -> value
+															// (FUNC_CDR)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -7073,6 +7091,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// it.
 				code.addFunction(usesCharSequenceIo ? WasmCharIoRuntimeBuilder.buildReadSeqCharsBody()
 						: WasmCharIoRuntimeBuilder.buildStub());
+				// the nil-passing cons field readers (FUNC_CAR, FUNC_CDR): called from
+				// every car/cdr site under --optimize=size, dead and shaken otherwise.
+				code.addFunction(WasmConsRuntimeBuilder.buildFieldBody(0));
+				code.addFunction(WasmConsRuntimeBuilder.buildFieldBody(1));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

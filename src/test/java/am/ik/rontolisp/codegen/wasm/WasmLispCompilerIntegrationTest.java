@@ -1696,6 +1696,61 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void consAccessAnswersTheSameAtEveryLevel() throws Exception {
+		// A (car x)/(cdr x) site, and the argument walk the spread dispatcher performs
+		// for an apply of a computed function, have three spellings by level
+		// (.kb/cons-access-runtime.md): inline over a plain local read in place, inline
+		// over a spilled temp, and under --optimize=size one call of the shared
+		// _car/_cdr body. The answer must not depend on which one a site got: nil in,
+		// nil out; a cons's field; a special (spilled), a parameter (in place) and a
+		// do-stepped local as operands; the required parameters of an apply'd
+		// function walked off its list, exact and with a rest tail; and a non-list
+		// trapping on the cast through the shared reader exactly as it did inline.
+		String program = """
+				(defvar *l* (list 1 (list 2 3) nil))
+				(defun second-of (x) (car (cdr x)))
+				(defun walk (l) (let ((n 0)) (do ((c l (cdr c))) ((null c) n) (when (car c) (setq n (+ n 1))))))
+				(defun three (a b c) (list a b c))
+				(defun rest-of (a &rest r) (list a r))
+				(print (car nil))
+				(print (cdr nil))
+				(print (car *l*))
+				(print (cdr *l*))
+				(print (second-of *l*))
+				(print (car (car (cdr *l*))))
+				(print (walk *l*))
+				(print (apply #'three '(1 2 3)))
+				(print (apply (car (list #'three)) 1 '(2 3)))
+				(print (apply (car (list #'rest-of)) '(1 2 3 4)))
+				(let ((f (car (list #'second-of)))) (print (funcall f (list 'a 'b))))
+				""";
+		String expected = """
+				NIL
+				NIL
+				1
+				((2 3) NIL)
+				(2 3)
+				2
+				2
+				(1 2 3)
+				(1 2 3)
+				(1 (2 3 4))
+				B""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			byte[] module = new WasmLispCompiler(false, false, false, level)
+				.compile(LispReader.readAllFromString(program));
+			assertThat(runModule(module, "cons-" + level.name().toLowerCase() + ".wasm")).as(level.name())
+				.isEqualTo(expected);
+		}
+		byte[] trapping = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+			.compile(LispReader.readAllFromString("(print (car (car (list 5))))"));
+		wasmtime.copyFileToContainer(Transferable.of(trapping), path("cons-trap.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", path("cons-trap.wasm"));
+		assertThat(result.getExitCode()).as("(car 5) must trap through the shared reader as it does inline")
+			.isNotZero();
+	}
+
+	@Test
 	void theSizeLevelDeclinesTheSpeedTradesWithoutChangingAnyResult() throws Exception {
 		// --optimize=size declines the two wasm-GC emissions that spend bytes on speed:
 		// integer expression-tree fusion (every fused site emits its tree TWICE, raw

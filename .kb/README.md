@@ -170,6 +170,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasm-unboxed-locals.md](wasm-unboxed-locals.md) -- dual-representation `let` locals
 - [wasm-callable-arity.md](wasm-callable-arity.md) -- the 10-parameter callable limit as an index origin
 - [wasm-function-body-size.md](wasm-function-body-size.md) -- no emitted function body may grow without bound
+- [cons-access-runtime.md](cons-access-runtime.md) -- `car`/`cdr` as one shared callee under `--optimize=size`; the temp-free plain-local read; what an external optimizer's residue is made of
 - [wasm-shortest-encoding.md](wasm-shortest-encoding.md) -- every emitted byte in its shortest legal encoding
 - [wasm-shared-coercion.md](wasm-shared-coercion.md) -- the numeric-to-`f64` coercion is one runtime function, never an inlined ladder
 - [wasm-linear-memory-layout.md](wasm-linear-memory-layout.md) -- what lives where in an emitted module's linear memory, and the rule that every address a module writes is derived from its own static-data end: the env/argv scratch block that used to be FIXED in page 3 and landed inside the static data of any program with more than ~192 KB of interned strings (silently -- on the ci-spec corpus it ate the `char-downcase` fold table, so `format` printed every directive verbatim and 335 of 474 cases failed on the WASM leg with `char-upcase` still perfect), why the block is reserved only for a program that can reach `environ_get`/`args_get`, and the two fixed component-only regions that remain

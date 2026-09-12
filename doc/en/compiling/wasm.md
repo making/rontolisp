@@ -286,20 +286,24 @@ back.
 
 ### Optimizing for Size (`--optimize=size`)
 
-Two wasm-GC emissions deliberately spend bytes to gain speed, and both are on at
-`--optimize=off` and `--optimize=default` alike:
+Three wasm-GC emissions deliberately spend bytes to gain speed, and all three
+are on at `--optimize=off` and `--optimize=default` alike:
 
 - an integer expression tree like `(logand (+ (ash x 7) i) #xFFFFFFFF)` compiles
   **twice** — once as a single unboxed `i64` computation, and once through the
   generic helpers, as the fallback a float, a ratio or an overflow into bignum
   territory takes;
 - a `let` binding whose assignments are integer arithmetic gets an unboxed
-  `i64` slot beside its ordinary boxed one.
+  `i64` slot beside its ordinary boxed one;
+- a `car` or `cdr` — and the walk `apply` performs over its argument list for a
+  function it resolves at run time — spells its nil-passing read inline, 17
+  bytes a site, instead of calling one shared reader.
 
-`--optimize=size` declines both. Nothing the program computes changes — the
-fast path only ever existed as an alternative to the fallback, which stays —
-but the arithmetic now runs through the generic helpers, so the price is real,
-and how much you pay depends on how integer-heavy the program is:
+`--optimize=size` declines all three. Nothing the program computes changes —
+the fast paths only ever existed as alternatives to what stays — but the
+arithmetic now runs through the generic helpers and every `car`/`cdr` is a
+call, so the price is real, and how much you pay depends on how integer-heavy
+the program is (the shared reader alone costs 1-3% on a list-traversal loop):
 
 | program | `--optimize=default` | `--optimize=size` | run time |
 | --- | --- | --- | --- |
@@ -307,6 +311,7 @@ and how much you pay depends on how integer-heavy the program is:
 | a `vec:`-kernel neural-net training loop | 271,233 B | 214,169 B (-21.0%) | 1.07 s -> 1.26 s (+18%) |
 | a float MLP training loop (no `vec:`) | 159,747 B | 125,496 B (-21.4%) | 5.6 s -> 6.1 s (+9%) |
 | `cl-postgres` hello world (`--component`) | 8,024,998 B | 6,384,099 B (-20.4%) | — |
+| the `hello-clack` Cloudflare Worker (`--no-wasi`) | 990,451 B | 815,414 B (-17.7%) | — |
 
 (wasmtime 47, best of three runs.) The size win barely varies; the run-time
 price does, because only integer arithmetic fuses — a float kernel pays it on

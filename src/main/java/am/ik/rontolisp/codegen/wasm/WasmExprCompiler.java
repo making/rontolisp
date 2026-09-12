@@ -170,6 +170,29 @@ final class WasmExprCompiler {
 		ctx.writer.write(Instruction.DROP);
 	}
 
+	/**
+	 * The local slot a form reads as a bare {@code local.get}, or -1. Exactly the
+	 * variables {@link #compileSymbolRef} compiles to that one instruction: a lexical
+	 * local that is not a special (a dual-bound special reads its global), not an unboxed
+	 * dual-representation local (a boxing read) and not a boxed captured cell (an unbox).
+	 * An emitter that needs its operand twice reads such a slot in place instead of
+	 * spilling a copy into a temp.
+	 * @param form the operand form
+	 * @param ctx the compile context
+	 * @return the slot, or -1 when the form is anything else
+	 */
+	static int plainLocalSlot(LispVal form, WasmLispCompiler.Ctx ctx) {
+		if (!(form instanceof LispSymbol sym) || sym.isKeyword()) {
+			return -1;
+		}
+		String name = sym.name();
+		if (ctx.specialVars.contains(name) || ctx.rawLocals.containsKey(name) || ctx.boxedVars.contains(name)) {
+			return -1;
+		}
+		Integer slot = ctx.locals.get(name);
+		return slot == null ? -1 : slot;
+	}
+
 	static void compileSymbolRef(LispSymbol sym, WasmLispCompiler.Ctx ctx) {
 		String name = sym.name();
 		// DYNAMIC-FIRST read of a dual-bound special (see WasmLetCompiler): in the
