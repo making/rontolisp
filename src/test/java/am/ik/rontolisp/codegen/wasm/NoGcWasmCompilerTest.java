@@ -805,16 +805,61 @@ class NoGcWasmCompilerTest {
 		// Each literal is [len:i32 LE][bytes] laid out back to back. The only aligned
 		// access into one is the i32.load that reads the length, whose alignment
 		// immediate is a HINT in wasm -- so an odd-length literal costs its own bytes
-		// and nothing more.
+		// and nothing more. Both literals are read as VALUES (length), which is what
+		// gives them a header to pack.
+		byte[] module = compile("""
+				(defun emit () (+ (length "abc") (length "de")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns :int)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c', 2, 0, 0, 0, 'd', 'e' }))
+			.as("the two literals sit back to back, no padding between them")
+			.isTrue();
+	}
+
+	@Test
+	void aLiteralOnlyFoldedImportSitesReadCarriesNoLengthHeader() {
+		// A folded import call site pushes a literal's content address and byte length
+		// as two constants and never reads a [len] header, so a literal that appears
+		// nowhere else is laid out as its bytes alone: five bytes, not thirteen.
 		byte[] module = compile("""
 				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
 				(defun emit () (progn (js-log "abc") (js-log "de")))
 				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns nil)
 				""");
 		byte[] data = Objects.requireNonNull(sections(module).get(11));
-		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c', 2, 0, 0, 0, 'd', 'e' }))
-			.as("the two literals sit back to back, no padding between them")
+		assertThat(containsBytes(data, new byte[] { 'a', 'b', 'c', 'd', 'e' })).as("raw bytes, back to back").isTrue();
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c' })).as("no header before \"abc\"")
+			.isFalse();
+	}
+
+	@Test
+	void aLiteralAlsoReadAsAValueKeepsItsLengthHeader() {
+		// One spelling is one block. "abc" is folded at the import site AND read by
+		// length, so it keeps its header (the folded site points past it); "de" is only
+		// folded, so it has none.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun emit () (progn (js-log "abc") (js-log "de") (length "abc")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns :int)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c', 'd', 'e' }))
+			.as("\"abc\" headered, \"de\" bare right behind it")
 			.isTrue();
+	}
+
+	@Test
+	void theRuntimeTextFragmentsKeepTheirHeadersWhenAFoldedSiteSharesTheSpelling() {
+		// The printer hands "NIL" out as a header pointer, so a folded site passing the
+		// same spelling must not strip it.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun emit () (progn (js-log "NIL") (print nil)))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns nil)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'N', 'I', 'L' })).isTrue();
 	}
 
 	// --- print / stdout --------------------------------------------------------------

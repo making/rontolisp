@@ -125,6 +125,29 @@ the padding that used to 4-align each block bought nothing and is gone (2026-09-
 bytes on the `.todo/artefacts/805-.../bench.lisp` reactor, output identical). The
 Schubfach tables after the literals DO keep their alignment: those are i64/f64 table reads
 in the float renderer's inner loop.
+
+**A literal only folded import sites use has no header.** A folded site (below) pushes the
+content address and byte length as constants, so a spelling whose EVERY occurrence is a
+folded site's `:string` argument is laid out as its bytes alone (`MemLayout.regions` holds
+every literal's content address, `literals` only the headered ones' header address, so a
+value use of a header-free literal fails loudly). Used any other way too -- `length`,
+`print`, an unfolded import -- it keeps its header and the folded site points past it. The
+printer's and `__ftoa`'s fragments are header pointers by contract and are never stripped.
+- **Classified by count over one walk**: `collectCalls` tallies every literal occurrence
+  over the same expanded forms that record the import sites, and a spelling is header-free
+  when the folded sites' tally equals it.
+- **The fold and the layout are circular**, resolved in one order: `chooseFoldedImports`
+  is sized against the all-headered plan, then `withHeaderFree` re-lays the SAME literal
+  order. Dropping headers only lowers addresses, so a sized constant can only shorten.
+  Every gate (`printUsed`, `hostArena`, ...) is a property of the bodies, not the layout.
+- `chooseFoldedImports` does not count the four bytes per literal folding now also saves;
+  an import just the wrong side of its comparison stays unfolded. Left alone until a
+  measurement asks (the accounting is whole-program: spellings are shared across imports).
+- Measured 2026-09-13 on `.todo/artefacts/810-no-gc-dead-literal-length-headers/reactor.lisp`
+  (eleven folded-only literals): `--optimize=size` 930 -> 886 raw, gzip 650 -> 626, data
+  484 -> 440, code unchanged; `--optimize=off` 1353 -> 1309. Host output identical; that
+  artefact's `probe/` matches the interpreter at both levels, and its no-fold control is
+  byte-identical. A lower `heapBase` can shorten its LEB128 in the global section.
 - `(concatenate 'string ...)` bump-allocates via `__alloc` (mut-i32 heap-pointer global 0)
   and copies via `__memcpy`. Only the STRING result family exists, so any other designator —
   or a computed one — is a compile error naming it
@@ -449,7 +472,11 @@ the WASI one is sunk).
 `aModuleThatOnlyPassesItsOwnLiteralsOutOmitsTheArenaApi`,
 `aStringReturningImportKeepsTheArenaApi`, `aWrapperThatCannotAllocateCarriesNoHeapBracket`,
 `aComparisonFeedsTheBranchWithoutBeingWidenedFirst`, `theConstantTrueArmOfACondEmitsNoTest`,
-`stringLiteralsArePackedWithoutAlignmentPadding`), the VOID group
+`stringLiteralsArePackedWithoutAlignmentPadding`,
+`aLiteralOnlyFoldedImportSitesReadCarriesNoLengthHeader`,
+`aLiteralAlsoReadAsAValueKeepsItsLengthHeader`,
+`theRuntimeTextFragmentsKeepTheirHeadersWhenAFoldedSiteSharesTheSpelling`; the content
+each shape hands the host is `NoGcWasmImportE2eTest.aFoldedLiteralReachesTheHostIntactWhetherOrNotItKeepsItsHeader`), the VOID group
 (`aVoidImportCallLeavesNothingForItsCallerToDrop`, `aVoidBodyMakesAVoidExportAPassThrough`,
 `theDeadNilOfACondTArmDoesNotDragAVoidChainBackToAnInteger`,
 `aWhileLoopPushesNothingForTheFormAfterItToDrop`), the heap-reset trio,

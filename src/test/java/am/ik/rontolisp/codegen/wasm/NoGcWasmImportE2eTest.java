@@ -244,6 +244,41 @@ class NoGcWasmImportE2eTest {
 	}
 
 	@Test
+	void aFoldedLiteralReachesTheHostIntactWhetherOrNotItKeepsItsHeader() throws Exception {
+		// A literal only folded sites use is laid out without its [len] header; one also
+		// read as a value keeps it, and the folded site points past it. Either way the
+		// host sees the literal's own bytes: "both" (headered, also counted by length),
+		// "only" (bare), the empty literal, and a UTF-8 literal whose length is in BYTES.
+		String module = """
+				(rontolisp:wasm-import 'js-say :from "env" :as "say" :params '(:string) :returns :void)
+				(defun boot ()
+				  (js-say "both")
+				  (js-say "only")
+				  (js-say "")
+				  (js-say "日本語")
+				  (length "both"))
+				(rontolisp:wasm-export 'boot :params '() :returns :s32)
+				""";
+		String driver = """
+				const fs = require('fs');
+				const dec = new TextDecoder();
+				let inst;
+				const seen = [];
+				const env = {
+				  say: (p, n) => seen.push('[' + dec.decode(new Uint8Array(inst.exports.memory.buffer, p, n)) + ']'),
+				};
+				inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])), { env });
+				console.log(inst.exports.boot());
+				console.log(seen.join(''));
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
+			assertThat(run(module, driver, level, "header-free-" + level.spelling()).lines().toList())
+				.as("optimize=%s", level.spelling())
+				.containsExactly("4", "[both][only][][日本語]");
+		}
+	}
+
+	@Test
 	void aWitImportedInterfaceIsTheHandWrittenImportBlock() throws Exception {
 		// The same lowering both WASM core-module backends take: a wit-import is exactly
 		// the wasm-import block it stands for, so binding an interface from its WIT

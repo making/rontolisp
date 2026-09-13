@@ -83,8 +83,11 @@ is worth a separate shape or should simply be left on the generic path.
 
 ## Related
 
-- `.todo/810` -- the header-free literal layout, which this extends the
-  classification of.
+- `.todo/810` (closed) -- the header-free literal layout, which this extends the
+  classification of. Landed as `NoGcWasmCompiler.headerFreeLiterals`: `collectCalls`
+  tallies every literal occurrence (`literalOccurrences`) beside `importCallSites`, and a
+  spelling whose folded-site tally equals it is laid out header-free. A folded print
+  site is one more tally to add there (`.kb/no-gc-scalar-wasm.md`, "Strings").
 - `.todo/805` -- the same fold at an import call site, and the byte arithmetic
   that decides when folding a site is cheaper than keeping the wrapper. A print
   site has no wrapper to remove, so the arithmetic here is simpler: the fold is
