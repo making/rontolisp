@@ -147,7 +147,9 @@ printer's and `__ftoa`'s fragments are header pointers by contract and are never
   (eleven folded-only literals): `--optimize=size` 930 -> 886 raw, gzip 650 -> 626, data
   484 -> 440, code unchanged; `--optimize=off` 1353 -> 1309. Host output identical; that
   artefact's `probe/` matches the interpreter at both levels, and its no-fold control is
-  byte-identical. A lower `heapBase` can shorten its LEB128 in the global section.
+  byte-identical. With `.todo/811`'s range guard merged the same reactor is 900 -> 856
+  (gzip 613; code 200, data 440): the two compose exactly. A lower `heapBase` can shorten
+  its LEB128 in the global section.
 - `(concatenate 'string ...)` bump-allocates via `__alloc` (mut-i32 heap-pointer global 0)
   and copies via `__memcpy`. Only the STRING result family exists, so any other designator —
   or a computed one — is a compile error naming it
