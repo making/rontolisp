@@ -4,8 +4,12 @@
 
 Difficulty: Medium
 
-Found while measuring [`805`](805-no-gc-literal-import-call-sites.md) and
-[`804`](804-no-gc-module-surface.md) on the same browser reactor.
+Found while measuring `805` and `804` on the same browser reactor; both have since landed
+(`.kb/no-gc-scalar-wasm.md`), and `805` MULTIPLIED what is left here. Re-measured
+2026-09-13 on that reactor after it: **eight** `i64.const 0` where there were four, because
+a folded `:void` import call carries the pair at every site instead of once in the wrapper,
+and `InitApp` / `AppendLogMessage` are still export WRAPPERS for no reason but to drop it.
+The module is 953 bytes.
 
 ## The shape
 
@@ -20,8 +24,8 @@ form evaluated for effect still produces a value, so
   reason except to `drop` that 0 and close the arena bracket. Their internal functions
   return an integer where the export type is `()`, so `isPassThroughExport` refuses them.
 
-Measured on the reactor: **~17 bytes** of `i64.const 0` / `drop` pairs, plus the two export
-wrappers those pairs keep alive.
+Measured on the reactor: **~17 bytes** of `i64.const 0` / `drop` pairs before `805`, **24**
+after it (eight pairs), plus the two export wrappers those pairs keep alive.
 
 ## What to do
 

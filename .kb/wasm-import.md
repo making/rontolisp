@@ -118,6 +118,15 @@ a site straight to the host call instead -- one `memory.copy` and no wrapper -- 
   same module with the argument BUILT at runtime carries all of it) and
   `.theLiteralLoweringDeclinesTheShapesItCannotMarshal`; the CONTENT is
   `WasmStringParamBoundaryE2eTest`, whose literal exports are exactly this path.
+- **`--no-gc` has the same idea and shares no code with it**
+  ([[no-gc-scalar-wasm]], "A literal `:string` argument is two constants"). There a string
+  value IS a `[len][bytes]` pointer, so a literal's pointer AND length are both compile-time
+  constants and the site needs no staging block, no copy and no helper -- what it removes is
+  the WRAPPER, and only when every reached site of that import qualifies (including the ones
+  a thin forwarder hides), because that backend has no first-class functions and can
+  therefore see every reference. `canLowerLiteralCallSite` is not shared either: the
+  vocabularies differ (`:s32` here, the whole fixed-width family there), so the same question
+  has two answers.
 
 Pins: `WasmImportCompilerTest.twoMemoryTypedParamsStageOnDistinctRegions` (the `HEAP_PTR`
 advance, once per staged parameter, absent at one -- measured on RUNTIME-built arguments,

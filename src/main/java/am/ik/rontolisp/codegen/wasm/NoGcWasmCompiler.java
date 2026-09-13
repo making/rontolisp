@@ -452,6 +452,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 		}
 		this.imports = importDecls;
+		this.importCallSites = new LinkedHashMap<>();
+		this.foldedImports = Set.of();
+		this.foldTargets = Map.of();
+		this.foldOrdinals = Map.of();
+		this.forwarders = Map.of();
 		if (exportDecls.isEmpty()) {
 			throw new UnsupportedOperationException(
 					"--no-gc requires at least one (rontolisp:wasm-export ...) directive (there is nothing to export)");
@@ -475,6 +480,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 						+ decl.paramTypes().size());
 			}
 		}
+
+		// The thin Lisp helpers over the raw imports: a call to one is the call to the
+		// import, so it is where the literal-argument fold below looks for its
+		// arguments. Computed before the BFS, which records the call sites against it.
+		this.forwarders = findForwarders(defuns, importDecls, exportDecls);
 
 		// Every name the program DEFINES, which is not the same as the reachable set
 		// below: a (defun sqrt ...) is never enqueued, because every (sqrt ...) call
@@ -532,8 +542,48 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// the
 		// memory/allocator machinery at all (only when a string literal or a :string
 		// boundary type is present).
-		int internalCount = reachable.size();
 		MemLayout layout = planMemory(reachable, defuns, importDecls, exportDecls, types);
+
+		// An import every reached call site hands literals to loses its wrapper: those
+		// sites call the host function themselves, and with nothing left that can name
+		// the wrapper (this backend has no first-class functions) it is never emitted.
+		// The type and memory plans above are unaffected -- the declaration still pins
+		// the same boundary, and the literals are laid out by the bodies that hold them
+		// -- so only the EMITTED function list narrows, which is why the decision sits
+		// between the two.
+		this.foldedImports = chooseFoldedImports(importDecls, importOrdinals, index.keySet(), layout);
+		List<String> emitted = reachable;
+		if (!this.foldedImports.isEmpty()) {
+			Map<String, WasmImportCompiler.Decl> targets = new LinkedHashMap<>();
+			Map<String, Integer> ordinals = new LinkedHashMap<>();
+			for (String name : this.foldedImports) {
+				targets.put(name, Objects.requireNonNull(importDecls.get(name)));
+				ordinals.put(name, Objects.requireNonNull(importOrdinals.get(name)));
+			}
+			for (Map.Entry<String, String> forwarder : this.forwarders.entrySet()) {
+				if (this.foldedImports.contains(forwarder.getValue())) {
+					targets.put(forwarder.getKey(), Objects.requireNonNull(importDecls.get(forwarder.getValue())));
+					ordinals.put(forwarder.getKey(), Objects.requireNonNull(importOrdinals.get(forwarder.getValue())));
+				}
+			}
+			this.foldTargets = targets;
+			this.foldOrdinals = ordinals;
+			// Every name that folds is now unreachable: a folded import's wrapper has no
+			// caller left, and a forwarder to it had no other body than that call. A
+			// forwarder's own callee IS the import, so nothing cascades and the rest of
+			// the reachable set is untouched -- only the numbering closes up.
+			emitted = new ArrayList<>();
+			LinkedHashMap<String, Integer> kept = new LinkedHashMap<>();
+			for (String name : reachable) {
+				if (targets.containsKey(name)) {
+					continue;
+				}
+				kept.put(name, kept.size());
+				emitted.add(name);
+			}
+			index = kept;
+		}
+		int internalCount = emitted.size();
 
 		// Internal functions occupy indices 0..N-1; the emitted wrappers follow in
 		// export-directive order; the memory helpers (when present) come after the
@@ -564,7 +614,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		Mem mem = placeFunctions(layout, internalCount, wrapperCount);
 
 		List<byte[]> internalBodies = new ArrayList<>();
-		for (String name : reachable) {
+		for (String name : emitted) {
 			WasmImportCompiler.Decl imported = importDecls.get(name);
 			internalBodies.add(imported != null
 					? compileImportWrapperBody(imported, Objects.requireNonNull(importOrdinals.get(name)), mem)
@@ -585,7 +635,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		for (String name : importOrdinals.keySet()) {
 			hostImports.add(Objects.requireNonNull(importDecls.get(name)));
 		}
-		byte[] module = assemble(reachable, internalBodies, exportDecls, wrapperBodies, wrapperOrdinals, exportOrdinals,
+		byte[] module = assemble(emitted, internalBodies, exportDecls, wrapperBodies, wrapperOrdinals, exportOrdinals,
 				internalCount, types, mem, hostImports);
 		if (this.optimize.eliminatesDeadCode()) {
 			// The single-call-site move first: it unreferences the callee rather than
@@ -1687,7 +1737,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	}
 
-	private byte[] assemble(List<String> reachable, List<byte[]> internalBodies,
+	private byte[] assemble(List<String> emitted, List<byte[]> internalBodies,
 			List<WasmExportCompiler.Decl> exportDecls, List<byte[]> wrapperBodies, int[] wrapperOrdinals,
 			int[] exportOrdinals, int internalCount, Types types, Mem mem, List<WasmImportCompiler.Decl> hostImports) {
 		// The local (non-imported) function count: internals, the emitted wrappers
@@ -1745,7 +1795,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// signature, then the helpers.
 		int[] funcTypes = new int[totalFuncCount];
 		int nextFunc = 0;
-		for (String name : reachable) {
+		for (String name : emitted) {
 			funcTypes[nextFunc++] = typeTable.intern(wasmParamTypes(name, types),
 					new Type[] { wasmType(returnTy(name, types)) });
 		}
@@ -2553,22 +2603,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				continue;
 			}
 			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(p);
-			switch (hostType) {
-				// The internal f64 is the host f64 (:float pins the parameter to FLOAT).
-				case FLOAT -> {
-				}
-				// nil (0) -> 0, anything else -> 1.
-				case BOOL -> {
-					i64Const(w, 0);
-					w.write(Instruction.I64_NE);
-				}
-				default -> {
-					nextLocal += emitBoundaryRangeGuard(w, hostType, false, nextLocal, locals);
-					if (hostType.bits() < 64) {
-						w.write(Instruction.I32_WRAP_I64);
-					}
-				}
-			}
+			int[] scratch = { nextLocal };
+			emitImportArgUnbox(w, hostType, () -> {
+				locals.add(Ty.INT);
+				return scratch[0]++;
+			});
+			nextLocal = scratch[0];
 		}
 		if (retptr) {
 			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(retptrLocal);
@@ -2581,17 +2621,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(retptrLocal).write(Instruction.I32_LOAD, 0x02, 0x04);
 		}
 		switch (decl.returnType()) {
-			// Nothing came back; every function here answers one value, and nil IS 0.
-			case VOID -> i64Const(w, 0);
-			case FLOAT -> {
-			}
-			// Normalize to the 0/1 the rest of the backend reads as nil/t, so (eq r t)
-			// holds for a host that answers any non-zero i32.
-			case BOOL -> {
-				w.write(Instruction.I32_EQZ);
-				w.write(Instruction.I32_EQZ);
-				w.write(Instruction.I64_EXTEND_U_I32);
-			}
 			// (ptr,len) the host wrote into this module's linear memory -> a fresh
 			// internal [len][bytes] block.
 			case STRING -> {
@@ -2619,21 +2648,328 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				w.write(Instruction.CALL).writeUnsignedLeb128(mem.memcpyIndex());
 				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 			}
-			// An integer the house i64 states exactly needs only the widening in its own
-			// signedness; :s64 is the identity and :u64 is the one value range the
-			// SIGNED house integer cannot hold, so it is the one guarded here.
 			default -> {
-				BoundaryType type = decl.returnType();
-				if (type.bits() < 64) {
-					w.write(type.signed() ? Instruction.I64_EXTEND_S_I32 : Instruction.I64_EXTEND_U_I32);
-				}
-				else {
-					nextLocal += emitBoundaryRangeGuard(w, type, false, nextLocal, locals);
-				}
+				int[] scratch = { nextLocal };
+				emitImportResultBox(w, decl.returnType(), () -> {
+					locals.add(Ty.INT);
+					return scratch[0]++;
+				});
+				nextLocal = scratch[0];
 			}
 		}
 		w.write(Instruction.END);
 		return withLocals(bodyStream.toByteArray(), locals);
+	}
+
+	/**
+	 * Converts the internal value on the stack -- already of the parameter's inferred
+	 * {@link Ty} -- into the host-ABI value the boundary designator takes. Shared by the
+	 * import wrapper and the folded call site ({@link #compileFoldedImportCall}), so the
+	 * two cannot marshal a designator differently; {@code :string} is NOT here, because
+	 * that is exactly where they differ (the wrapper reads its parameter local twice, a
+	 * folded site knows both halves as constants).
+	 * @param w the writer
+	 * @param hostType the boundary designator
+	 * @param allocScratch allocates an i64 scratch local, for the range guard
+	 */
+	private static void emitImportArgUnbox(WasmWriter w, BoundaryType hostType,
+			java.util.function.IntSupplier allocScratch) {
+		switch (hostType) {
+			// The internal f64 is the host f64 (:float pins the parameter to FLOAT).
+			case FLOAT -> {
+			}
+			// nil (0) -> 0, anything else -> 1.
+			case BOOL -> {
+				i64Const(w, 0);
+				w.write(Instruction.I64_NE);
+			}
+			default -> {
+				if (needsBoundaryRangeGuard(hostType, false)) {
+					emitRangeChecks(w, hostType, false, allocScratch.getAsInt());
+				}
+				if (hostType.bits() < 64) {
+					w.write(Instruction.I32_WRAP_I64);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Boxes the host's answer into the internal value the caller reads -- the other
+	 * shared half of the wrapper and a folded call site. A {@code :string} result is not
+	 * here: it copies through the allocator into a fresh block, which is the reason such
+	 * an import is never folded.
+	 * @param w the writer
+	 * @param returnType the boundary designator
+	 * @param allocScratch allocates an i64 scratch local, for the {@code :u64} guard
+	 */
+	private static void emitImportResultBox(WasmWriter w, BoundaryType returnType,
+			java.util.function.IntSupplier allocScratch) {
+		switch (returnType) {
+			// Nothing came back; every function here answers one value, and nil IS 0.
+			case VOID -> i64Const(w, 0);
+			case FLOAT -> {
+			}
+			// Normalize to the 0/1 the rest of the backend reads as nil/t, so (eq r t)
+			// holds for a host that answers any non-zero i32.
+			case BOOL -> {
+				w.write(Instruction.I32_EQZ);
+				w.write(Instruction.I32_EQZ);
+				w.write(Instruction.I64_EXTEND_U_I32);
+			}
+			// An integer the house i64 states exactly needs only the widening in its own
+			// signedness; :s64 is the identity and :u64 is the one value range the
+			// SIGNED house integer cannot hold, so it is the one guarded here.
+			default -> {
+				if (returnType.bits() < 64) {
+					w.write(returnType.signed() ? Instruction.I64_EXTEND_S_I32 : Instruction.I64_EXTEND_U_I32);
+				}
+				else if (needsBoundaryRangeGuard(returnType, false)) {
+					emitRangeChecks(w, returnType, false, allocScratch.getAsInt());
+				}
+			}
+		}
+	}
+
+	/**
+	 * Every transparent forwarder in the program: a {@code defun} whose whole body is one
+	 * call handing its own parameters, in order and unchanged, to a host import -- the
+	 * thin Lisp helper a host-facing module is written with -- mapped to the import at
+	 * the end of the chain.
+	 *
+	 * <p>
+	 * A call to one IS the call to the import, one frame up, which is where a literal
+	 * argument is written; the forwarder itself only names the boundary. So the fold
+	 * reads its arguments there, and when it takes every site the forwarder has nothing
+	 * left to do and is not emitted either. A forwarder an EXPORT names is not one of
+	 * these: the host can call it, so it stays, and so does the wrapper behind it.
+	 * @param defuns every top-level function
+	 * @param importDecls every import declaration, by Lisp name
+	 * @param exportDecls the export directives
+	 * @return each forwarder's name mapped to the import it forwards to
+	 */
+	private static Map<String, String> findForwarders(Map<String, Defun> defuns,
+			Map<String, WasmImportCompiler.Decl> importDecls, List<WasmExportCompiler.Decl> exportDecls) {
+		Set<String> exported = new HashSet<>();
+		for (WasmExportCompiler.Decl decl : exportDecls) {
+			exported.add(decl.name());
+		}
+		Map<String, String> direct = new LinkedHashMap<>();
+		for (Defun defun : defuns.values()) {
+			String target = forwardTarget(defun);
+			if (target != null && !exported.contains(defun.name())) {
+				direct.put(defun.name(), target);
+			}
+		}
+		// Resolve each chain to the import at its end; a chain that reaches something
+		// else (or loops) is not a forwarder to an import and is dropped.
+		Map<String, String> resolved = new LinkedHashMap<>();
+		for (Map.Entry<String, String> entry : direct.entrySet()) {
+			String target = entry.getValue();
+			for (int hop = 0; hop <= direct.size() && !importDecls.containsKey(target); hop++) {
+				String next = direct.get(target);
+				if (next == null) {
+					break;
+				}
+				target = next;
+			}
+			if (importDecls.containsKey(target)) {
+				resolved.put(entry.getKey(), target);
+			}
+		}
+		return resolved;
+	}
+
+	// The single call a forwarder's body is, or null when the body is anything else: a
+	// name in call position handed this function's own parameters, in order, with nothing
+	// before or after it.
+	private static @Nullable String forwardTarget(Defun defun) {
+		if (defun.body().size() != 1 || !(defun.body().get(0) instanceof LispCons call)
+				|| !(call.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		List<LispVal> parts = call.toList();
+		if (parts.size() - 1 != defun.params().size()) {
+			return null;
+		}
+		for (int p = 0; p < defun.params().size(); p++) {
+			if (!(parts.get(p + 1) instanceof LispSymbol arg) || !arg.name().equals(defun.params().get(p))) {
+				return null;
+			}
+		}
+		return head.name();
+	}
+
+	/**
+	 * Decides which host imports lose their wrapper entirely: those whose every REACHED
+	 * call site hands a LITERAL to every {@code :string} parameter, and whose sites' own
+	 * bytes then come to less than the wrapper's (and any forwarder's that goes with it).
+	 *
+	 * <p>
+	 * The wrapper's whole body is generic address arithmetic over its parameter locals:
+	 * {@code local.get p; i32.const 4; i32.add; local.get p; i32.load} turns a
+	 * {@code [len][bytes]} header pointer into the {@code (content ptr, len)} pair the
+	 * host reads. For a LITERAL both halves are compile-time constants -- the header sits
+	 * at a fixed address in the static data segment -- so a site that knows its argument
+	 * pushes two constants and calls the host function itself. Nothing is staged and
+	 * nothing is copied: the pointer handed over is the module's own permanent literal
+	 * block, the same pointer the wrapper would have computed, under the same contract
+	 * ({@code .kb/no-gc-scalar-wasm.md}, "Host imports").
+	 *
+	 * <p>
+	 * The decision is per IMPORT and whole-program rather than per site, for two reasons.
+	 * A site that folds does not remove the wrapper by itself -- only the LAST one does
+	 * -- so a mixed import would pay the constants at some sites and keep the wrapper for
+	 * the others, which is a pure loss. And this backend has no first-class functions at
+	 * all ({@code #'name} and {@code funcall} are compile errors), so the reached call
+	 * sites ARE every reference a wrapper can have: when they all fold, nothing can reach
+	 * it and it is never emitted -- at every optimize level, without waiting for the tree
+	 * shaker.
+	 *
+	 * <p>
+	 * The arithmetic is what keeps it a win rather than a habit. Each folded site costs
+	 * the length constant per {@code :string} argument plus the marshalling the wrapper
+	 * used to hold once (a {@code :bool} comparison, a narrow integer's range guard, the
+	 * result boxing); against that stand the wrapper's body and function-section entry
+	 * and every forwarder's. Many sites of a wide import therefore do NOT fold, and the
+	 * crossing point is measured here rather than guessed. Two small terms are left out,
+	 * each worth about a byte and pulling in opposite directions: the wrapper's type
+	 * entry (which may be another function's too, so it is not counted as saved) and a
+	 * folded site's scratch local (counted at a one-byte index).
+	 * @param importDecls every declaration, by Lisp name
+	 * @param importOrdinals the reached imports and their ordinals
+	 * @param reached every reached function, which is what makes a forwarder's body a
+	 * cost the fold actually removes
+	 * @param layout the memory plan, which is where a literal's address comes from
+	 * @return the names whose wrapper is not emitted
+	 */
+	private Set<String> chooseFoldedImports(Map<String, WasmImportCompiler.Decl> importDecls,
+			Map<String, Integer> importOrdinals, Set<String> reached, MemLayout layout) {
+		// A wrapper considered here has no :string result and no return pointer, so its
+		// body names no helper index and any placement answers the same bytes.
+		Mem sizingMem = placeFunctions(layout, 0, 0);
+		Set<String> folded = new LinkedHashSet<>();
+		for (Map.Entry<String, Integer> entry : importOrdinals.entrySet()) {
+			String name = entry.getKey();
+			WasmImportCompiler.Decl decl = Objects.requireNonNull(importDecls.get(name));
+			// Nothing to fold without a :string parameter (the scalars marshal the same
+			// either way), and a :string RESULT copies the host's bytes into a fresh
+			// block through the allocator -- a wrapper's worth of code that a call site
+			// would only repeat.
+			if (!decl.paramTypes().contains(BoundaryType.STRING) || decl.returnType() == BoundaryType.STRING) {
+				continue;
+			}
+			List<ImportSite> sites = this.importCallSites.get(name);
+			if (sites == null || sites.isEmpty()) {
+				continue;
+			}
+			int cost = 0;
+			for (ImportSite site : sites) {
+				Integer overhead = foldedSiteOverhead(decl, site.form(), layout);
+				if (overhead == null) {
+					cost = Integer.MAX_VALUE;
+					break;
+				}
+				cost += overhead;
+			}
+			int saved = compileImportWrapperBody(decl, entry.getValue(), sizingMem).length + 1;
+			for (Map.Entry<String, String> forwarder : this.forwarders.entrySet()) {
+				if (forwarder.getValue().equals(name) && reached.contains(forwarder.getKey())) {
+					// Its body is the locals vector, one local.get per parameter, the
+					// call and the end byte, plus its function-section entry.
+					saved += 2 * decl.paramTypes().size() + 5;
+				}
+			}
+			if (cost < saved) {
+				folded.add(name);
+			}
+		}
+		return folded;
+	}
+
+	/**
+	 * What folding ONE call site costs in bytes, or {@code null} when the site cannot
+	 * fold at all (a {@code :string} argument that is not a literal, a literal the layout
+	 * has no address for, or an arity the generic path is about to report).
+	 *
+	 * <p>
+	 * Both sides are measured by emitting them, not modelled: the only difference between
+	 * the two paths is what a {@code :string} argument pushes (two constants against the
+	 * header pointer) plus the marshalling that moves out of the wrapper and into the
+	 * site. Every other argument compiles identically -- the declaration pins the same
+	 * {@link Ty} either way -- and both paths end in one {@code call}.
+	 * @param decl the import
+	 * @param site the call form
+	 * @param layout the memory plan
+	 * @return the extra bytes this site pays, or null if it cannot fold
+	 */
+	private @Nullable Integer foldedSiteOverhead(WasmImportCompiler.Decl decl, LispCons site, MemLayout layout) {
+		List<LispVal> args = site.toList();
+		if (args.size() - 1 != decl.paramTypes().size()) {
+			return null;
+		}
+		ByteArrayOutputStream loweredBytes = new ByteArrayOutputStream();
+		ByteArrayOutputStream wrappedBytes = new ByteArrayOutputStream();
+		WasmWriter lowered = new WasmWriter(loweredBytes);
+		WasmWriter wrapped = new WasmWriter(wrappedBytes);
+		for (int p = 0; p < decl.paramTypes().size(); p++) {
+			BoundaryType hostType = decl.paramTypes().get(p);
+			if (hostType != BoundaryType.STRING) {
+				emitImportArgUnbox(lowered, hostType, () -> 0);
+				continue;
+			}
+			if (!(args.get(p + 1) instanceof LispString literal)) {
+				return null;
+			}
+			Integer offset = layout.literals().get(literal.value());
+			if (offset == null) {
+				return null;
+			}
+			emitLiteralRegion(lowered, offset, literal.value());
+			wrapped.write(Instruction.I32_CONST).writeSignedLeb128(offset);
+		}
+		emitImportResultBox(lowered, decl.returnType(), () -> 0);
+		return loweredBytes.size() - wrappedBytes.size();
+	}
+
+	/**
+	 * Compiles one call to a folded import: the {@code :string} arguments as the
+	 * constants their literals are, everything else marshalled exactly as the wrapper
+	 * would have, and the host function called directly through its placeholder index.
+	 * @param decl the import
+	 * @param ordinal the import's ordinal among the reached imports
+	 * @param args the call form's parts, operator first
+	 * @param fn the body being compiled
+	 * @return the internal type the call leaves on the stack
+	 */
+	private Ty compileFoldedImportCall(WasmImportCompiler.Decl decl, int ordinal, List<LispVal> args, Fn fn) {
+		List<BoundaryType> paramTypes = decl.paramTypes();
+		if (args.size() - 1 != paramTypes.size()) {
+			throw new UnsupportedOperationException("--no-gc: call to '" + decl.name() + "' in '" + fn.fnName
+					+ "' passes " + (args.size() - 1) + " argument(s) but it takes " + paramTypes.size());
+		}
+		for (int p = 0; p < paramTypes.size(); p++) {
+			BoundaryType hostType = paramTypes.get(p);
+			LispVal arg = args.get(p + 1);
+			if (hostType == BoundaryType.STRING) {
+				// Guaranteed by chooseFoldedImports, which walked these same sites.
+				String content = ((LispString) arg).value();
+				emitLiteralRegion(fn.writer,
+						Objects.requireNonNull(fn.mem.literals().get(content),
+								() -> "--no-gc: import literal not laid out in '" + fn.fnName + "': " + content),
+						content);
+				continue;
+			}
+			// A literal argument evaluates to nothing observable, so pushing the regions
+			// before a later argument is evaluated preserves source order -- and, unlike
+			// the wasm-GC side, there is nothing to preserve it AGAINST: the regions are
+			// the module's own static data, which no allocation can land on.
+			compileCoerced(arg, fn, boundaryTy(hostType));
+			emitImportArgUnbox(fn.writer, hostType, () -> fn.allocLocal(Ty.INT));
+		}
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + ordinal);
+		emitImportResultBox(fn.writer, decl.returnType(), () -> fn.allocLocal(Ty.INT));
+		return importReturnTy(decl);
 	}
 
 	private byte[] compileWrapperBody(WasmExportCompiler.Decl decl, int targetIndex, Types types, Mem mem) {
@@ -2841,18 +3177,34 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private static int emitBoundaryRangeGuard(WasmWriter w, BoundaryType type, boolean fromFloat, int slot,
 			List<Ty> wrapperLocals) {
-		boolean narrowSigned = type.signed() && type.bits() < 64;
-		boolean narrowUnsigned = !type.signed() && type.bits() < 64;
-		// A u64 result is only at risk coming out of the signed house i64: a negative
-		// Lisp
-		// integer is not a u64. Out of i64.trunc_u_f64 the whole 0..2^64-1 range is
-		// already
-		// exact, so nothing is left to check.
-		boolean unsignedFromSignedHouse = !type.signed() && type.bits() == 64 && !fromFloat;
-		if (!narrowSigned && !narrowUnsigned && !unsignedFromSignedHouse) {
+		if (!needsBoundaryRangeGuard(type, fromFloat)) {
 			return 0;
 		}
 		wrapperLocals.add(Ty.INT);
+		emitRangeChecks(w, type, fromFloat, slot);
+		return 1;
+	}
+
+	/**
+	 * Whether {@link #emitRangeChecks} has anything to emit for this crossing -- the
+	 * scratch local's allocation is the caller's (a wrapper appends to its own list, a
+	 * folded call site asks the body for one), so the question has to be answerable
+	 * before the emission.
+	 * @param type the boundary designator
+	 * @param fromFloat whether the value arrives out of a float truncation
+	 * @return whether the value needs a range check
+	 */
+	private static boolean needsBoundaryRangeGuard(BoundaryType type, boolean fromFloat) {
+		// A u64 result is only at risk coming out of the signed house i64: a negative
+		// Lisp integer is not a u64. Out of i64.trunc_u_f64 the whole 0..2^64-1 range is
+		// already exact, so nothing is left to check.
+		return type.bits() < 64 || (!type.signed() && !fromFloat);
+	}
+
+	// The checks themselves, over a scratch local the caller has already allocated.
+	private static void emitRangeChecks(WasmWriter w, BoundaryType type, boolean fromFloat, int slot) {
+		boolean narrowSigned = type.signed() && type.bits() < 64;
+		boolean narrowUnsigned = !type.signed() && type.bits() < 64;
 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(slot);
 		BoundaryType.Range range = Objects.requireNonNull(type.range());
 		if (narrowSigned) {
@@ -2869,7 +3221,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			emitTrapIf(w, slot, Instruction.I64_LT_S, 0);
 		}
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
-		return 1;
 	}
 
 	// `if (local[slot] <op> bound) unreachable` -- the boundary refusing a value it
@@ -3161,7 +3512,53 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private Map<String, WasmImportCompiler.Decl> imports = Map.of();
 
+	/**
+	 * Every reached call site of every host import, keyed by the IMPORT's Lisp name --
+	 * filled by {@link #collectCallsCons} during the same BFS that decides reachability,
+	 * and read only by {@link #chooseFoldedImports}. A call to a transparent forwarder is
+	 * recorded here as a call to the import it forwards to, which is the whole reason
+	 * {@link #forwarders} exists.
+	 */
+	private Map<String, List<ImportSite>> importCallSites = new LinkedHashMap<>();
+
+	/**
+	 * A reached call to a host import: the name actually in call position -- the import
+	 * itself, or a transparent forwarder to it -- and the form.
+	 */
+	private record ImportSite(String callee, LispCons form) {
+	}
+
+	/**
+	 * Every transparent forwarder, by Lisp name, to the host import it forwards to: a
+	 * {@code defun} whose whole body is one call passing its own parameters, in order, to
+	 * an import (possibly through another such forwarder), and which no export names. A
+	 * call to one IS a call to the import, so it is where the fold looks for its
+	 * arguments -- see {@link #findForwarders}.
+	 */
+	private Map<String, String> forwarders = Map.of();
+
+	/**
+	 * The host imports whose every reached call site hands nothing but literals to the
+	 * {@code :string} parameters, and for which the sites' own bytes come to less than
+	 * the wrapper's. Those sites call the host function DIRECTLY, and neither the wrapper
+	 * nor any forwarder to it is emitted -- see {@link #chooseFoldedImports}.
+	 */
+	private Set<String> foldedImports = Set.of();
+
+	/**
+	 * Every Lisp name a folded call site may stand under -- a folded import and every
+	 * transparent forwarder to it -- mapped to the import's declaration and its ordinal.
+	 * {@link #compileUserCall} reads this and nothing else to decide.
+	 */
+	private Map<String, WasmImportCompiler.Decl> foldTargets = Map.of();
+
+	private Map<String, Integer> foldOrdinals = Map.of();
+
 	private Ty compileUserCall(String name, List<LispVal> args, Fn fn) {
+		WasmImportCompiler.Decl folded = this.foldTargets.get(name);
+		if (folded != null) {
+			return compileFoldedImportCall(folded, Objects.requireNonNull(this.foldOrdinals.get(name)), args, fn);
+		}
 		Ty[] paramTypes = fn.types.params().get(name);
 		Integer funcIndex = fn.index.get(name);
 		if (paramTypes == null || funcIndex == null) {
@@ -5563,10 +5960,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (off == null) {
 			throw new IllegalStateException("--no-gc: print literal not laid out in '" + fn.fnName + "': " + content);
 		}
-		fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(off + 4);
-		fn.writer.write(Instruction.I32_CONST)
-			.writeSignedLeb128(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+		emitLiteralRegion(fn.writer, off, content);
 		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.writeStdoutIndex());
+	}
+
+	// Pushes a laid-out literal's (content ptr, byte length) -- the pair every consumer
+	// of raw text in this backend takes, from __write_stdout to a host import's :string
+	// parameter. Both halves are compile-time constants: the [len][bytes] header sits at
+	// a fixed address in the static data segment, so the `ptr+4; [ptr]` arithmetic a
+	// runtime string needs has nothing left to compute.
+	private static void emitLiteralRegion(WasmWriter w, int headerOffset, String content) {
+		w.write(Instruction.I32_CONST).writeSignedLeb128(headerOffset + 4);
+		w.write(Instruction.I32_CONST)
+			.writeSignedLeb128(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
 	}
 
 	// Writes the [len][bytes] string held in the given local to stdout with the
@@ -6041,6 +6447,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		if (defuns.containsKey(name) || this.imports.containsKey(name)) {
 			callees.add(name);
+			// Every REACHED call site of every host import, in one place: what decides
+			// whether the import's wrapper is worth emitting at all
+			// (chooseFoldedImports). This walk and compileCall expand macros the same
+			// way and walk the same forms, so the sites recorded here are the sites
+			// compileUserCall will reach -- a `(if t ...)` dead branch the emitter folds
+			// away is walked here and can only make the decision more conservative,
+			// never less. The one call NOT recorded is a transparent forwarder's own:
+			// its arguments are its parameters by definition, and the site that has the
+			// literals is the call to the FORWARDER, one frame up.
+			String imported = this.imports.containsKey(name) ? name : this.forwarders.get(name);
+			if (imported != null && !this.forwarders.containsKey(fnName)) {
+				this.importCallSites.computeIfAbsent(imported, ignored -> new ArrayList<>())
+					.add(new ImportSite(name, cons));
+			}
 			for (int i = 1; i < args.size(); i++) {
 				collectCalls(args.get(i), bound, defuns, callees, fnName);
 			}

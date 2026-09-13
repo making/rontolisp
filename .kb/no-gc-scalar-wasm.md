@@ -155,7 +155,8 @@ value model differs.
   `i32.wrap_i64` behind the guard below; `:bool` is one `i64.ne 0` out / `i32.eqz;i32.eqz` in;
   `:void` answers the i64 zero. A `:string` ARGUMENT is `(ptr+4, [ptr])` of a block the module
   already holds -- **no staging, no copy, and therefore none of the aliasing the wasm-GC
-  wrapper had to fix** (`.kb/wasm-import.md`). That pointer is BORROWED and durable, not
+  wrapper had to fix** (`.kb/wasm-import.md`); a LITERAL argument does not even compute
+  that pair, and takes the wrapper with it (below). That pointer is BORROWED and durable, not
   scratch: it can be the module's own literal storage (`StringTable` dedups identical
   spellings into one block) or another live block, valid for the whole life of the instance
   -- the contract is READ-ONLY, and a host that writes through it corrupts every other use
@@ -179,9 +180,65 @@ value model differs.
   injector prepends the entries ahead of a printing program's `fd_write`, which shifts with
   everything else. Pins: `NoGcWasmCompilerTest` (`aHostImportBecomesTheModulesOnlyImportEntry`,
   `theHostImportsPrecedeAPrintingModulesFdWrite`, `aDeclaredButUncalledImportCostsTheModuleNothing`,
-  `aScalarImportNeedsNeitherMemoryNorAnAllocator`, the refusals) and the node host in
-  `NoGcWasmImportE2eTest` (every type both ways, both guards, both flatness loops, the
-  wit-import byte identity).
+  `aScalarImportNeedsNeitherMemoryNorAnAllocator`, the refusals, and the six
+  `...TakesTheWrapperWithIt` / `...KeepsItsWrapper` / `theFoldIsDeclined...` pairs below)
+  and the node host in `NoGcWasmImportE2eTest` (every type both ways, both guards, both
+  flatness loops, the wit-import byte identity, and
+  `aLiteralStringArgumentReachesTheHostWithoutTheWrapper` for the fold's CONTENT).
+
+### A literal `:string` argument is two constants, and the wrapper goes with it
+The wrapper's whole body for a `:string` parameter is `local.get p; i32.const 4; i32.add;
+local.get p; i32.load` -- ten bytes turning a `[len][bytes]` header pointer into the
+`(content ptr, len)` pair. For a LITERAL both halves are compile-time constants (the block
+sits at a fixed address in the static data segment), so the SITE pushes two constants and
+calls the host function itself. Nothing is staged and nothing is copied: the pointer is the
+module's own permanent literal block, the same one the wrapper would have computed, so the
+borrowed/read-only contract above is unchanged word for word. This is the `--no-gc` half of
+the wasm-GC lowering in `.kb/wasm-import.md` ("A literal `:string` argument does not
+round-trip") -- different mechanism, nothing shared but the idea: there the saving is a
+byte-loop round trip through a GC array and the bytes land in a reserved staging block,
+here there is nothing to stage and the saving IS the wrapper.
+`WasmImportCompiler.canLowerLiteralCallSite` is deliberately not reused: the GC side's
+parameter vocabulary is `:s32` only where this one takes the whole fixed-width family, so
+the two questions have different answers.
+
+- **Whole-program and per IMPORT, never per site.** A folded site does not remove the
+  wrapper by itself -- only the last one does -- so a mixed import would pay the length
+  constants at its literal sites AND keep the wrapper, a pure loss. The fold is taken only
+  when EVERY reached site qualifies. This backend has no first-class functions
+  (`#'name`/`funcall` are compile errors), so the reached call sites are every reference a
+  wrapper can have: when they all fold it is simply never emitted -- at every optimize
+  level, without waiting for the tree shaker.
+- **A thin forwarder is where the literal is.** `(defun set-text (id text) (js-set-text id
+  text))` -- the shape a host-facing module is actually written in -- puts a PARAMETER at
+  the import call site and the literal one frame up. `findForwarders` reads through it: a
+  defun whose whole body is one call handing its own parameters, in order, to an import
+  (chains resolved) and which no export names IS that call, so its own sites are where the
+  fold looks; when the fold takes them all, the forwarder is not emitted either, and the
+  program that called the import directly compiles to the same bytes.
+- **This is the half `800` could not hand over.** The single-call-site move is a BYTE-level
+  pass, so the literals it substitutes into a wrapper's address arithmetic arrive after
+  emission, where no source-level lowering can see them -- which is why this item read as
+  worth zero for as long as it was scoped to import call sites alone. Measured 2026-09-13
+  on `.todo/artefacts/805-no-gc-literal-import-call-sites/bench.lisp` (four DOM imports
+  behind four forwarders, seven literals crossing out): folding import call sites alone is
+  **0 bytes**, every literal being at a forwarder site; reading through the forwarders is
+  **1,011 -> 953** (-5.7%; 8 functions -> 5, code 300 -> 256, types 47 -> 36) at
+  `--optimize=size` and **1,483 -> 1,378** at `--optimize=off`, with the node host's output
+  identical byte for byte.
+- **Measured, not assumed.** Each folded site costs the length constant per `:string`
+  argument plus the marshalling the wrapper held ONCE (`:bool`'s comparison, a narrow
+  integer's range guard, the result boxing); against that stand the wrapper's body and
+  function entry and every forwarder's. `chooseFoldedImports` emits both sides and compares
+  bytes, so enough sites of a wide enough import decline the fold and the pass cannot grow
+  a module. Two terms are left out, about a byte each and opposite in sign: the wrapper's
+  type entry (which may be another function's too, so it is not counted as saved) and a
+  folded site's scratch local.
+- **Never folded**: a `:string` RESULT (copying the host's bytes into a fresh block through
+  the allocator is a wrapper's worth of code a call site would only repeat), an import with
+  no `:string` parameter at all (the scalars marshal the same either way), and an EXPORTED
+  forwarder (the host can call it with a string of its own, which is a site the fold cannot
+  see).
 
 ## Scope and pipeline
 Only `(rontolisp:wasm-export ...)` functions with boundary types

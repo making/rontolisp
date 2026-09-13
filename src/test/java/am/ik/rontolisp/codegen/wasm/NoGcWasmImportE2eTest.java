@@ -198,6 +198,52 @@ class NoGcWasmImportE2eTest {
 	}
 
 	@Test
+	void aLiteralStringArgumentReachesTheHostWithoutTheWrapper() throws Exception {
+		// The shape a host-facing reactor is written in: a thin Lisp helper per host
+		// function, and the literals at the HELPER's call sites. Every :string argument
+		// is a literal, so every site crosses as the two constants its [len][bytes]
+		// block already is, and neither the helper nor the import wrapper is emitted at
+		// all. What the host must still see is each argument's OWN bytes: the pointers
+		// are into the module's permanent literal block, where one spelling used twice
+		// is ONE block -- so "status" reaching all three calls intact is the pin, and
+		// the scalars beside it show the rest of the marshalling moved with them.
+		String module = """
+				(rontolisp:wasm-import 'js-set-text :from "env" :as "set_text"
+				                       :params '(:string :string) :returns :void)
+				(rontolisp:wasm-import 'js-mark :from "env" :as "mark"
+				                       :params '(:string :s32 :bool :float) :returns :s32)
+				(defun set-text (element-id text) (js-set-text element-id text))
+				(defun boot (n)
+				  (set-text "status" "ready")
+				  (set-text "status" "done")
+				  (js-mark "status" n t 0.5))
+				(rontolisp:wasm-export 'boot :params '(:s32) :returns :s32)
+				""";
+		String driver = """
+				const fs = require('fs');
+				const dec = new TextDecoder();
+				let inst;
+				const seen = [];
+				const str = (p, n) => dec.decode(new Uint8Array(inst.exports.memory.buffer, p, n));
+				const env = {
+				  set_text: (p1, n1, p2, n2) => seen.push(str(p1, n1) + '=' + str(p2, n2)),
+				  mark: (p, len, n, flag, weight) => {
+				    seen.push(str(p, len) + ':' + n + ':' + flag + ':' + weight);
+				    return n + 1;
+				  },
+				};
+				inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])), { env });
+				console.log(inst.exports.boot(41));
+				console.log(seen.join(' | '));
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(run(module, driver, level, "literal-" + level.spelling()).lines().toList())
+				.as("optimize=%s", level.spelling())
+				.containsExactly("42", "status=ready | status=done | status:41:1:0.5");
+		}
+	}
+
+	@Test
 	void aWitImportedInterfaceIsTheHandWrittenImportBlock() throws Exception {
 		// The same lowering both WASM core-module backends take: a wit-import is exactly
 		// the wasm-import block it stands for, so binding an interface from its WIT

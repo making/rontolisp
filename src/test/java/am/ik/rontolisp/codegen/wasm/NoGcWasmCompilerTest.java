@@ -2539,6 +2539,123 @@ class NoGcWasmCompilerTest {
 		assertThat(exportNames(Objects.requireNonNull(sections(result).get(7)))).contains("memory", "__ronto_alloc");
 	}
 
+	// --- the literal :string call site (the wrapper's whole job, done at compile time) -
+
+	// The import wrapper's whole body for a :string parameter: `local.get p; i32.const 4;
+	// i32.add; local.get p; i32.load` -- the [len][bytes] header pointer turned into the
+	// (content ptr, len) pair the host reads. Present exactly when a wrapper survived.
+	private static boolean marshalsAStringHeader(byte[] module) {
+		byte[] code = Objects.requireNonNull(sections(module).get(10));
+		return containsSequence(code, 0x20, 0x00, 0x41, 0x04, 0x6A, 0x20, 0x00, 0x28, 0x02, 0x00);
+	}
+
+	@Test
+	void aLiteralStringArgumentCrossesAsTwoConstantsAndTakesTheWrapperWithIt() {
+		// For a LITERAL both halves of that pair are compile-time constants -- the block
+		// sits at a fixed address in the static data segment -- so the site pushes two
+		// of them and calls the host function itself. With no first-class functions on
+		// this backend that call site was the wrapper's only reference, so nothing is
+		// left to emit it for. The PAIR is the same module with the argument arriving at
+		// run time, which carries all of it.
+		String program = """
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string) :returns :void)
+				(defun go (s) (emit %s) 1)
+				(rontolisp:wasm-export 'go :params '(:string) :returns :int)
+				""";
+		byte[] folded = compilePlainUnoptimized(program.formatted("\"hi\""));
+		byte[] wrapped = compilePlainUnoptimized(program.formatted("s"));
+		assertThat(marshalsAStringHeader(folded)).isFalse();
+		assertThat(marshalsAStringHeader(wrapped)).isTrue();
+		assertThat(functionBodies(Objects.requireNonNull(sections(folded).get(10))))
+			.hasSize(functionBodies(Objects.requireNonNull(sections(wrapped).get(10))).size() - 1);
+		assertThat(importedFunctions(folded)).containsExactly("host.emit");
+		// The module lengths are not comparable (the literal is six bytes of data the
+		// other program has no reason to hold); the code section is what moved.
+		assertThat(Objects.requireNonNull(sections(folded).get(10)).length)
+			.isLessThan(Objects.requireNonNull(sections(wrapped).get(10)).length);
+	}
+
+	@Test
+	void aThinForwarderOverAnImportIsWhereTheLiteralIs() {
+		// The shape a host-facing module is actually written in: a Lisp helper per host
+		// function, and the literals at the HELPER's call sites. The helper only names
+		// the boundary -- its arguments are its own parameters -- so the fold reads the
+		// site one frame up, and when it takes every site the helper has nothing left to
+		// do either. Byte-identical to the program that called the import directly.
+		byte[] viaForwarder = compile("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string :string) :returns :void)
+				(defun say (element-id text) (emit element-id text))
+				(defun go (n) (say "id" "one") (say "id" "two") n)
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				""");
+		byte[] direct = compile("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string :string) :returns :void)
+				(defun go (n) (emit "id" "one") (emit "id" "two") n)
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				""");
+		assertThat(viaForwarder).isEqualTo(direct);
+		assertThat(marshalsAStringHeader(viaForwarder)).isFalse();
+	}
+
+	@Test
+	void anExportedForwarderKeepsItsWrapper() {
+		// The host can call an exported helper with a string of its own, so neither it
+		// nor the wrapper behind it can go: the fold is whole-program, and an export is
+		// a call site it cannot see.
+		assertThat(marshalsAStringHeader(compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string) :returns :void)
+				(defun say (text) (emit text))
+				(defun go (n) (say "hi") n)
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'say :params '(:string) :returns :int)
+				"""))).isTrue();
+	}
+
+	@Test
+	void oneSiteThatCannotFoldKeepsTheWrapperForAllOfThem() {
+		// A folded site does not remove the wrapper by itself -- only the last one does
+		// -- so an import with a runtime-string site anywhere would pay the length
+		// constants at its literal sites AND keep the wrapper. It folds nothing instead.
+		assertThat(marshalsAStringHeader(compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string) :returns :void)
+				(defun go (s) (emit "hi") (emit s) 1)
+				(rontolisp:wasm-export 'go :params '(:string) :returns :int)
+				"""))).isTrue();
+	}
+
+	@Test
+	void theFoldIsDeclinedWhenTheSitesWouldCostMoreThanTheWrapper() {
+		// Each folded site pays the length constant per :string argument, and the
+		// wrapper is paid once. Enough sites of a wide enough import and the arithmetic
+		// turns over -- which the compiler measures rather than guesses, so the fold
+		// cannot grow a module. Three :string parameters, eight sites.
+		StringBuilder wide = new StringBuilder("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit"
+				                       :params '(:string :string :string) :returns :void)
+				(defun go (n)
+				""");
+		for (int i = 0; i < 8; i++) {
+			wide.append("  (emit \"a").append(i).append("\" \"b").append(i).append("\" \"c").append(i).append("\")\n");
+		}
+		wide.append("""
+				  n)
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				""");
+		assertThat(marshalsAStringHeader(compilePlainUnoptimized(wide.toString()))).isTrue();
+	}
+
+	@Test
+	void aStringReturningImportKeepsItsWrapperHoweverItsArgumentsArrive() {
+		// The result is bytes the host wrote into this memory, copied into a fresh
+		// [len][bytes] block through the allocator: a wrapper's worth of code that a
+		// call site would only repeat, so the argument side never decides this one.
+		assertThat(marshalsAStringHeader(compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'ask :from "host" :as "ask" :params '(:string) :returns :string)
+				(defun go () (length (ask "q")))
+				(rontolisp:wasm-export 'go :params '() :returns :int)
+				"""))).isTrue();
+	}
+
 	@Test
 	void theImportTypeDesignatorsThisBackendRefusesNameWhatItTakes() {
 		// Two designators, both a heap object the scalar value model has no runtime for
