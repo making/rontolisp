@@ -21,7 +21,8 @@ within ~12 tests before this session's change, so the committed series is
 trustworthy.
 
 A local full run on 2026-09-13, after `.todo/797` landed, reads **13,771 / 19,482
-(70.7%)** with `reader` at 47.8%. The checked-in report is NOT refreshed from a
+(70.7%)** with `reader` at 47.8%; a second run the same day, after `.todo/807`'s
+first pass, reads **13,808 / 19,482 (70.9%)**. The checked-in report is NOT refreshed from a
 local run (one machine, one stall window -- `ansi-test/README.md`), so it still
 carries the pre-797 numbers until the daily workflow rewrites it.
 
@@ -74,7 +75,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 
 | family | tests | owner |
 |---|---:|---|
-| the reader syntax-type surface, re-measured 2026-09-13 after `.todo/797` | 141 | `.todo/807` -- and only ~35-40 of it is the READER |
+| the reader syntax-type surface, re-measured 2026-09-13 a SECOND time, after `.todo/807`'s first pass (`#+` at runtime, radix rationals and `#<n>R`, reader labels) closed 35 | 108 | `.todo/807` -- whose largest remaining family is not a syntax at all but "a read error must be a `reader-error`/`end-of-file` CONDITION", 28 tests, and needs `.todo/039` first |
 | bit arrays: the eleven `bit-*` ops (~310) plus `bit-vector-p` 38 / `simple-bit-vector-p` 28 / `array-in-bounds-p` 27 | ~400 | `.todo/043`, `.todo/180` |
 | `loop` -- 173 of `iteration`'s 208 wrong values | 173 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
