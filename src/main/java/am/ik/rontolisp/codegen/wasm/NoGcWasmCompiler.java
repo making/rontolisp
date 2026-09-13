@@ -533,13 +533,36 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// memory/allocator machinery at all (only when a string literal or a :string
 		// boundary type is present).
 		int internalCount = reachable.size();
-		Mem mem = planMemory(reachable, defuns, importDecls, exportDecls, internalCount, types);
+		MemLayout layout = planMemory(reachable, defuns, importDecls, exportDecls, types);
 
 		// Internal functions occupy indices 0..N-1; the emitted wrappers follow in
 		// export-directive order; the memory helpers (when present) come after the
 		// wrappers. An export whose host signature already matches the internal
 		// function exactly and needs no heap reset is a pure pass-through: no wrapper
 		// is emitted and the export names the internal function directly.
+		//
+		// Deciding this BEFORE the helper indices are placed is what lets any wrapper be
+		// elided: the helpers sit after the wrappers, so their indices are a function of
+		// how many wrappers there ARE, never of how many exports were declared. The
+		// decision itself needs only the export directive, the inferred types and
+		// whether the module uses memory -- all of which the layout already answers.
+		int[] wrapperOrdinals = new int[exportDecls.size()];
+		int[] exportOrdinals = new int[exportDecls.size()];
+		int wrapperCount = 0;
+		for (int j = 0; j < exportDecls.size(); j++) {
+			WasmExportCompiler.Decl decl = exportDecls.get(j);
+			if (isPassThroughExport(decl, types, layout.used())) {
+				wrapperOrdinals[j] = -1;
+				exportOrdinals[j] = Objects.requireNonNull(index.get(decl.name()));
+			}
+			else {
+				wrapperOrdinals[j] = wrapperCount;
+				exportOrdinals[j] = internalCount + wrapperCount;
+				wrapperCount++;
+			}
+		}
+		Mem mem = placeFunctions(layout, internalCount, wrapperCount);
+
 		List<byte[]> internalBodies = new ArrayList<>();
 		for (String name : reachable) {
 			WasmImportCompiler.Decl imported = importDecls.get(name);
@@ -548,19 +571,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					: compileDefunBody(Objects.requireNonNull(defuns.get(name)), name, types, index, mem));
 		}
 		List<byte[]> wrapperBodies = new ArrayList<>();
-		int[] wrapperOrdinals = new int[exportDecls.size()];
-		int[] exportOrdinals = new int[exportDecls.size()];
 		for (int j = 0; j < exportDecls.size(); j++) {
-			WasmExportCompiler.Decl decl = exportDecls.get(j);
-			int target = Objects.requireNonNull(index.get(decl.name()));
-			if (isPassThroughExport(decl, types, mem)) {
-				wrapperOrdinals[j] = -1;
-				exportOrdinals[j] = target;
-			}
-			else {
-				wrapperOrdinals[j] = wrapperBodies.size();
-				exportOrdinals[j] = internalCount + wrapperBodies.size();
-				wrapperBodies.add(compileWrapperBody(decl, target, types, mem));
+			if (wrapperOrdinals[j] >= 0) {
+				WasmExportCompiler.Decl decl = exportDecls.get(j);
+				wrapperBodies.add(compileWrapperBody(decl, Objects.requireNonNull(index.get(decl.name())), types, mem));
 			}
 		}
 
@@ -1307,11 +1321,35 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	}
 
+	/**
+	 * What the module needs from linear memory, decided before any function index exists:
+	 * the literal layout and the three gates ({@code used}, {@code printUsed},
+	 * {@code ftoaUsed}) that say which helper functions will be emitted at all.
+	 *
+	 * <p>
+	 * This half is deliberately index-FREE. The helpers sit after the export wrappers, so
+	 * their indices depend on how many wrappers are emitted, which in turn depends on
+	 * {@code used} -- placing them here would mean assuming a wrapper count before the
+	 * pass-through decision that determines it. {@link #placeFunctions} assigns the
+	 * indices once that count is known.
+	 *
+	 * @param literals string-literal content to its header address in the data segment
+	 * @param data the static data-segment bytes (laid out from {@code STR_DATA_BASE})
+	 * @param heapBase the initial bump-allocator pointer (just past the static data)
+	 * @param iovAddr the address of the 16-byte fd_write scratch; 0 when print is unused
+	 * @param schubBase the address of the Schubfach tables (0 when no float is rendered)
+	 * @param used whether the module uses linear memory at all
+	 * @param printUsed whether the module prints (fd_write import + __write_stdout)
+	 * @param ftoaUsed whether the module renders a float to text (__ftoa)
+	 */
+	private record MemLayout(Map<String, Integer> literals, byte[] data, int heapBase, int iovAddr, int schubBase,
+			boolean used, boolean printUsed, boolean ftoaUsed) {
+	}
+
 	private static final int STR_DATA_BASE = 8;
 
-	private Mem planMemory(List<String> reachable, Map<String, Defun> defuns,
-			Map<String, WasmImportCompiler.Decl> imports, List<WasmExportCompiler.Decl> exportDecls, int internalCount,
-			Types types) {
+	private MemLayout planMemory(List<String> reachable, Map<String, Defun> defuns,
+			Map<String, WasmImportCompiler.Decl> imports, List<WasmExportCompiler.Decl> exportDecls, Types types) {
 		// Gather every string literal in every reachable body (deterministic order), then
 		// lay each out as a 4-byte-aligned [len:i32 LE][bytes] header. A host import has
 		// no body: everything below that walks one skips it.
@@ -1431,11 +1469,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		// printUsed implies non-empty literals (the "\n" entry), so `used` follows.
 		boolean used = !literals.isEmpty() || boundaryString || stringOp || floatVec;
-		int funcBase = printUsed ? 1 : 0;
-		// Helper indices assume one wrapper per export directive. That holds whenever
-		// the helpers exist: pass-through wrapper elision requires !used, and a module
-		// with used == false emits none of these helpers.
-		int allocIndex = funcBase + internalCount + exportDecls.size();
+		return new MemLayout(offsets, data.toByteArray(), heapBase, iovAddr, schubBase, used, printUsed, ftoaUsed);
+	}
+
+	/**
+	 * Assign a function index to every helper the layout calls for. The helpers follow
+	 * the internal functions and the EMITTED export wrappers, so the caller passes the
+	 * wrapper count it actually arrived at -- never the export-directive count, which is
+	 * the same number only while no wrapper is elided.
+	 * @param layout the index-free memory plan
+	 * @param internalCount the number of internal functions (indices 0..N-1)
+	 * @param wrapperCount the number of export wrappers actually emitted
+	 * @return the complete memory plan
+	 */
+	private static Mem placeFunctions(MemLayout layout, int internalCount, int wrapperCount) {
+		int funcBase = layout.printUsed() ? 1 : 0;
+		int allocIndex = funcBase + internalCount + wrapperCount;
 		int memcpyIndex = allocIndex + 1;
 		int streqIndex = memcpyIndex + 1;
 		int itoaIndex = streqIndex + 1;
@@ -1445,12 +1494,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int markIndex = itoaIndex + 1;
 		int resetIndex = markIndex + 1;
 		// The printing helpers append after the arena pair, again gated.
-		int ftoaIndex = ftoaUsed ? resetIndex + 1 : -1;
+		int ftoaIndex = layout.ftoaUsed() ? resetIndex + 1 : -1;
 		// __ftoa is followed by its five Schubfach helpers (see Mem.schub*Index).
-		int writeStdoutIndex = printUsed ? (ftoaUsed ? ftoaIndex + 6 : resetIndex + 1) : -1;
-		return new Mem(offsets, data.toByteArray(), STR_DATA_BASE, heapBase, iovAddr, funcBase, allocIndex, memcpyIndex,
-				streqIndex, itoaIndex, markIndex, resetIndex, ftoaIndex, schubBase, writeStdoutIndex, used, printUsed,
-				ftoaUsed);
+		int writeStdoutIndex = layout.printUsed() ? (layout.ftoaUsed() ? ftoaIndex + 6 : resetIndex + 1) : -1;
+		return new Mem(layout.literals(), layout.data(), STR_DATA_BASE, layout.heapBase(), layout.iovAddr(), funcBase,
+				allocIndex, memcpyIndex, streqIndex, itoaIndex, markIndex, resetIndex, ftoaIndex, layout.schubBase(),
+				writeStdoutIndex, layout.used(), layout.printUsed(), layout.ftoaUsed());
 	}
 
 	/** The printing operators that gate the fd_write import. */
@@ -1551,10 +1600,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// The local (non-imported) function count: internals, the emitted wrappers
 		// (pass-through exports have none and name their internal function directly),
 		// then the six memory helpers (when memory is used), then __ftoa /
-		// __write_stdout (when a float is rendered / when printing is used).
-		// A memory-using module emits a wrapper for EVERY export (the heap reset /
-		// marshalling), so the helper indices planned in planMemory over
-		// exportDecls.size() stay correct.
+		// __write_stdout (when a float is rendered / when printing is used). The helper
+		// indices came from placeFunctions over this same wrapper count, so an elided
+		// wrapper moves them all down together.
 		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 6 : 0) + (mem.ftoaUsed() ? 6 : 0)
 				+ (mem.printUsed() ? 1 : 0);
 		// Canonical string ABI for --component :string exports:
@@ -2311,11 +2359,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * its arguments.
 	 * @param decl the parsed export directive
 	 * @param types the inferred internal types
-	 * @param mem the memory plan
+	 * @param memUsed whether the module uses linear memory
 	 * @return true when the export can name the internal function directly
 	 */
-	private static boolean isPassThroughExport(WasmExportCompiler.Decl decl, Types types, Mem mem) {
-		if (mem.used()) {
+	private static boolean isPassThroughExport(WasmExportCompiler.Decl decl, Types types, boolean memUsed) {
+		if (memUsed) {
 			return false;
 		}
 		Ty[] internalParams = Objects.requireNonNull(types.params().get(decl.name()));
