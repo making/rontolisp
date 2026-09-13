@@ -1746,8 +1746,7 @@ class NoGcWasmCompilerTest {
 	 * The function index of {@code __alloc}, found by its body: it is the only function
 	 * that GROWS linear memory, so it is the only one carrying
 	 * {@code memory.size; i32.sub; memory.grow; drop} (3F 00 6B 40 00 1A). None of the
-	 * modules here declares an import, so a code-section entry index is a function
-	 * index.
+	 * modules here declares an import, so a code-section entry index is a function index.
 	 * @param module the compiled module
 	 * @return the allocator's function index, or -1 when the module has no allocator
 	 */
