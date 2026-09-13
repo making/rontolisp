@@ -437,6 +437,43 @@ FRAMES, not bytes, and was not built. Pins: `WasmLocalOrderTest` (the hot local,
 vector, the frame left alone) and `WasmTreeShakerCorpusTest` (must not grow, must validate and
 round-trip over the corpus).
 
+### Sparse arity ladders
+
+`WasmRuntimeBuilder.emitCaseSelector`: the selector over a dispatcher's case blocks is one of
+three shapes, chosen by exact byte count -- a `br_table` over `[0, max]` (one label per id, the
+holes naming the default), the same table BIASED to the smallest live id (the id less `min`
+indexes it; a smaller id wraps to a huge unsigned index, which is the default), or a comparison
+chain (`i64.const id; i64.eq; br_if depth` per live id, `br default` after) when the chain is
+under HALF the table. A tie keeps the plainer shape, so a dense ladder is byte-identical: the
+hello-clack Worker's six ladders are 902 live of 903 and did not move. Under `--optimize` a
+ladder carries only the callables taken as VALUES (the funcall-dispatch gate below), so a library
+program's ladders are sparse by nature: `zlib`'s arity-0 ladder tabled 419 labels for one
+callable at 418, its arity-3/4/5 ladders 2-4 callables over 239-514 slots, and its two dense
+ones started 133 slots in; the httpbin Worker's five ladders each started at 190. Two rules
+the first cut lacked, each a measurement (`size-measurement.md`):
+
+- **The half rule is the raw/gzip trade.** A chain's bytes are incompressible (a distinct id per
+  case) where a table's holes are a run of one byte gzip folds to nothing: with "chain whenever
+  shorter", `zlib`'s two 57/69-of-558 ladders became chains and the module went -2,086 B raw and
+  **+1,168 B gzip**; under the half rule they stay biased tables and both numbers fall.
+- **The ids are i64 constants, never i32.** The tree shaker keeps a string-blob range that any
+  surviving `i32.const` lands in ("String blob: droppable ranges" -- an address is an
+  indistinguishable `i32.const`), and funcIds live exactly where the small literals do: spelled as
+  `i32.const`, the chains pinned 770 B of `zlib`'s blob (a 756-byte printer range plus
+  `"Infinity"`). An i64 is never an address, so the bias is `i64.extend_i32_u; i64.const min;
+  i64.sub; i32.wrap_i64` and a compare `i64.extend_i32_u; i64.const id; i64.eq` -- one byte more
+  per compare, and no coupling to the shake.
+
+Measured 2026-09-13 (`--optimize=size`, raw / gzip): `zlib` 81,720 -> 79,005 (-3.3%) / 28,737 ->
+28,692, httpbin Worker 161,569 -> 160,649 / 55,412 -> 55,400, hello-clack and hello-tiny-routes
+byte-identical; `zlib`'s default labels 3,799 -> 989. The paged dispatcher's leaf pages use the
+same selector. `wasm-function-body-size.md`'s early-out ("the flat shape is not built when its
+label count alone settles the gate") is now conservative rather than exact -- a sparse ladder past
+the gate would have been a small chain -- and stays, because paging is always correct and the
+gate is about the body bound, not bytes. Pinned by
+`WasmDispatchPagingTest#aSparseLadderSelectsByComparisonAndADenseOneByTable` (the i64 compare
+included) and `WasmLispCompilerIntegrationTest#aSparseArityLadderDispatchesTheSame`.
+
 ### The single-call-site move
 `am.ik.wasm.WasmInliner.inline` runs between `WasmPeephole.rewrite` and
 `WasmTreeShaker.shake` on BOTH wasm backends (`WasmLispCompiler.shakeCore`;
@@ -664,7 +701,7 @@ census over the flat `wasm-tools print` of the Worker / `zlib`:
 | the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) -- 106 + 10 of the Worker's sites were the prologue, the rest other list loops | 701 | 22 | ~140 B -> **landed**, `.kb/lambda-lists.md` |
 | a boxed variable built empty then `struct.set` (`ref.null; struct.new; local.set`) | 204 | 45 | ~8 B |
 | a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B -> **landed**, "The local renumbering" |
-| `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B |
+| `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B -> **landed**, "Sparse arity ladders" |
 
 The first row is `.kb/cons-access-runtime.md`; the four marked **landed** are the peepholes
 ("The adjacent-instruction peepholes" above, `.todo/798`); the lowering shapes are `.todo/799`

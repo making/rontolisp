@@ -2627,7 +2627,7 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.BLOCK, 0x40);
 		}
 
-		// Load funcId and br_table
+		// Load funcId
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(funcIdLocal);
 
@@ -2640,19 +2640,7 @@ final class WasmRuntimeBuilder {
 		for (Map.Entry<Integer, Integer> miss : missShapes.entrySet()) {
 			funcIdToCase.put(miss.getKey() - funcIdBias, targets.size() + armShapes.indexOf(miss.getValue()));
 		}
-
-		w.write(Instruction.BR_TABLE);
-		w.writeUnsignedLeb128(maxFuncId + 1); // label count
-		for (int fid = 0; fid <= maxFuncId; fid++) {
-			Integer caseJ = funcIdToCase.get(fid);
-			if (caseJ != null) {
-				w.writeUnsignedLeb128(numCases - 1 - caseJ);
-			}
-			else {
-				w.writeUnsignedLeb128(numCases); // default
-			}
-		}
-		w.writeUnsignedLeb128(numCases); // default label
+		emitCaseSelector(w, funcIdToCase, maxFuncId, numCases, funcIdLocal);
 
 		// Case bodies: close blocks from innermost to outermost
 		for (int k = 0; k < numCases; k++) {
@@ -2839,6 +2827,109 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(dispatchArgs + 1);
+	}
+
+	/**
+	 * The selector over the case blocks, the funcId already on the stack: a
+	 * {@code br_table} over {@code [0, max]} (one label per id, the holes naming the
+	 * default), the same table BIASED to the smallest live id (the id less {@code min}
+	 * indexes it; a smaller id wraps to a huge unsigned index, which is the default), or
+	 * -- when the live ids are sparse enough for it to be under HALF the table -- a
+	 * comparison chain, one {@code i64.eq; br_if} per live id and a {@code br} to the
+	 * default. Exact byte counts decide, and a tie keeps the plainer shape, so a dense
+	 * ladder (every Worker's) is byte-identical to what it was. What it was:
+	 * {@code zlib}'s arity-0 ladder tabled 419 labels for one callable at 418, and its
+	 * six ladders together carried 3,799 default labels
+	 * ({@code .kb/optimize-dead-code-elimination.md}, "Sparse arity ladders").
+	 * <p>
+	 * The half rule: a chain's bytes are incompressible (a distinct id per case) where a
+	 * table's holes are a run of one byte gzip folds to nothing, so a mid-density ladder
+	 * pays more compressed than it saves raw ({@code zlib}'s 57-of-558 ladder as a chain:
+	 * -106 B raw, +300 B gzip); a truly sparse one wins both ways. And the ids are
+	 * compared (and the bias subtracted) as I64 constants: the tree shaker keeps a
+	 * string-blob range that any surviving {@code i32.const} lands in, because a
+	 * linear-memory address is an indistinguishable {@code i32.const} -- an i64 is never
+	 * an address, so a funcId spelled that way cannot pin a string. Spelled as i32, the
+	 * first cut kept 770 bytes of {@code zlib}'s blob alive.
+	 */
+	private static void emitCaseSelector(WasmWriter w, Map<Integer, Integer> funcIdToCase, int maxFuncId, int numCases,
+			int funcIdLocal) {
+		List<Integer> ids = new ArrayList<>(funcIdToCase.keySet());
+		java.util.Collections.sort(ids);
+		int minFuncId = ids.get(0);
+		int plain = tableBytes(funcIdToCase, 0, maxFuncId, numCases);
+		int biased = minFuncId == 0 ? plain
+				: 1 + 1 + signedLebBytes(minFuncId) + 1 + 1 + tableBytes(funcIdToCase, minFuncId, maxFuncId, numCases);
+		int chain = 1 + unsignedLebBytes(numCases);
+		for (int i = 0; i < ids.size(); i++) {
+			int id = ids.get(i);
+			chain += (i == 0 ? 0 : 1 + unsignedLebBytes(funcIdLocal)) + 1 + 1 + signedLebBytes(id) + 1 + 1
+					+ unsignedLebBytes(caseLabel(funcIdToCase, id, numCases));
+		}
+		if (chain * 2 < biased) {
+			for (int i = 0; i < ids.size(); i++) {
+				int id = ids.get(i);
+				if (i > 0) {
+					w.write(Instruction.GET_LOCAL);
+					w.writeUnsignedLeb128(funcIdLocal);
+				}
+				w.write(Instruction.I64_EXTEND_U_I32);
+				w.write(Instruction.I64_CONST);
+				w.writeSignedLeb128(id);
+				w.write(Instruction.I64_EQ);
+				w.write(Instruction.BR_IF);
+				w.writeUnsignedLeb128(caseLabel(funcIdToCase, id, numCases));
+			}
+			w.write(Instruction.BR);
+			w.writeUnsignedLeb128(numCases); // default
+			return;
+		}
+		int from = 0;
+		if (biased < plain) {
+			w.write(Instruction.I64_EXTEND_U_I32);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(minFuncId);
+			w.write(Instruction.I64_SUB);
+			w.write(Instruction.I32_WRAP_I64);
+			from = minFuncId;
+		}
+		w.write(Instruction.BR_TABLE);
+		w.writeUnsignedLeb128(maxFuncId - from + 1); // label count
+		for (int fid = from; fid <= maxFuncId; fid++) {
+			w.writeUnsignedLeb128(caseLabel(funcIdToCase, fid, numCases));
+		}
+		w.writeUnsignedLeb128(numCases); // default label
+	}
+
+	// The br_table's label for an id: its case's depth, or the default's for a hole.
+	private static int caseLabel(Map<Integer, Integer> funcIdToCase, int fid, int numCases) {
+		Integer caseJ = funcIdToCase.get(fid);
+		return caseJ != null ? numCases - 1 - caseJ : numCases;
+	}
+
+	private static int tableBytes(Map<Integer, Integer> funcIdToCase, int from, int maxFuncId, int numCases) {
+		int bytes = 1 + unsignedLebBytes(maxFuncId - from + 1) + unsignedLebBytes(numCases);
+		for (int fid = from; fid <= maxFuncId; fid++) {
+			bytes += unsignedLebBytes(caseLabel(funcIdToCase, fid, numCases));
+		}
+		return bytes;
+	}
+
+	private static int unsignedLebBytes(int value) {
+		int bytes = 1;
+		while ((value >>>= 7) != 0) {
+			bytes++;
+		}
+		return bytes;
+	}
+
+	private static int signedLebBytes(int value) {
+		int bytes = 1;
+		while (value < -64 || value > 63) {
+			value >>= 7;
+			bytes++;
+		}
+		return bytes;
 	}
 
 	/**

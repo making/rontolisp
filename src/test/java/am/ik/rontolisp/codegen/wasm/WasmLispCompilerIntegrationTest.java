@@ -19250,6 +19250,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aSparseArityLadderDispatchesTheSame() throws Exception {
+		// 300 defuns nobody takes as a value, then function values whose funcIds sit far
+		// apart: under --optimize the ladders carry only the values, so the arity-0 one
+		// has two live ids 292 apart, the arity-1 one a single lambda at 300, and the
+		// spread dispatcher one defun at 150 -- each a comparison chain or a biased table
+		// rather than a label per hole. The values flow through a list so the compiler
+		// cannot read the designator and call directly.
+		StringBuilder src = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			src.append("(defun d").append(i).append(" () ").append(i).append(")\n");
+		}
+		src.append("(print (mapcar #'funcall (list #'d7 #'d299)))\n");
+		src.append("(let ((fs (list (lambda (x) (* x 2))))) (print (funcall (car fs) 21)))\n");
+		src.append("(print (apply (car (list #'d150)) nil))\n");
+		String expected = "(7 299)\n42\n150";
+		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+			.compile(LispReader.readAllFromString(src.toString()));
+		assertThat(runModule(small, "sparse-ladder-size.wasm")).isEqualTo(expected);
+		assertThat(compileAndRun(src.toString())).isEqualTo(expected);
+	}
+
+	@Test
 	void compileAndRunTestsCompiledAsTests() throws Exception {
 		// Every shape WasmConditionCompiler compiles as a raw i32 -- a predicate, a
 		// negation of one, an and/or chain in test position, a constant test, a

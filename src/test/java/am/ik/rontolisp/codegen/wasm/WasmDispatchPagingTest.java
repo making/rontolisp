@@ -46,6 +46,57 @@ class WasmDispatchPagingTest {
 	}
 
 	@Test
+	void aSparseLadderSelectsByComparisonAndADenseOneByTable() {
+		// 417 lambdas of which one or two have arity 1, at the far end of the id space,
+		// so the arity-1 ladder is sparse: a br_table over [0, 416] would spend a label
+		// on every hole (zlib's arity-0 ladder: 517 bytes for one callable). One live id
+		// is a one-label table biased to it; two ids 316 apart are a comparison chain;
+		// six lambdas at 0..5 keep the plain six-label table. Ids are i64 constants, so
+		// the tree shaker cannot read one as an address into the string blob.
+		WasmLispCompiler.StringTable st = new WasmLispCompiler.StringTable(0, false, false);
+		byte[] one = WasmRuntimeBuilder.buildDispatchBody(1, List.of(), lambdas(417, java.util.Set.of(416)), 0, st,
+				false, 0);
+		byte[] two = WasmRuntimeBuilder.buildDispatchBody(1, List.of(), lambdas(417, java.util.Set.of(100, 416)), 0, st,
+				false, 0);
+		byte[] dense = WasmRuntimeBuilder.buildDispatchBody(1, List.of(),
+				lambdas(6, java.util.Set.of(0, 1, 2, 3, 4, 5)), 0, st, false, 0);
+
+		// i64.extend_i32_u; i64.const 416; i64.sub; i32.wrap_i64; br_table 1
+		assertThat(indexOf(one, new byte[] { (byte) 0xAD, 0x42, (byte) 0xA0, 0x03, 0x7D, (byte) 0xA7, 0x0E, 1 }))
+			.as("a one-label table biased to the id")
+			.isNotNegative();
+		assertThat(one.length).isLessThan(128);
+		// i64.extend_i32_u; i64.const 100; i64.eq; br_if ... i64.const 416; i64.eq
+		assertThat(indexOf(two, new byte[] { (byte) 0xAD, 0x42, (byte) 0xE4, 0x00, 0x51, 0x0D }))
+			.as("the first id compared as i64")
+			.isNotNegative();
+		assertThat(indexOf(two, new byte[] { 0x42, (byte) 0xA0, 0x03, 0x51 })).as("the second id compared as i64")
+			.isNotNegative();
+		assertThat(indexOf(two, new byte[] { 0x0E })).as("no br_table in the chain").isNegative();
+		assertThat(indexOf(dense, new byte[] { 0x0E, 6 })).as("a six-label br_table").isNotNegative();
+	}
+
+	// count lambdas, funcIds 0..count-1; those in arityOne take one parameter, the rest
+	// two, so only they join the arity-1 ladder.
+	private static List<WasmLispCompiler.LambdaInfo> lambdas(int count, java.util.Set<Integer> arityOne) {
+		List<WasmLispCompiler.LambdaInfo> out = new java.util.ArrayList<>();
+		for (int id = 0; id < count; id++) {
+			out.add(new WasmLispCompiler.LambdaInfo(id, "_lambda_" + id,
+					arityOne.contains(id) ? List.of("x") : List.of("x", "y"), false, List.of(), List.of(), id));
+		}
+		return out;
+	}
+
+	private static int indexOf(byte[] haystack, byte[] needle) {
+		for (int i = 0; i + needle.length <= haystack.length; i++) {
+			if (java.util.Arrays.equals(haystack, i, i + needle.length, needle, 0, needle.length)) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	@Test
 	void aFuncIdFromNoCounterIsRejectedRatherThanEmitted() {
 		// One lambda, so the only funcId this compile could have handed out is 0; 2^24
 		// is the value that used to reach the level count and hang there.

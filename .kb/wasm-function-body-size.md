@@ -81,7 +81,10 @@ so **the body no longer depends on the function count** — one extra call per l
   at least a byte, so `maxFuncId >= DISPATCH_PAGE_BUDGET_BYTES` means an over-budget body
   whatever the cases hold, and `levels == 1` cannot rescue it (that means
   `maxFuncId < 256`). Emitting it anyway would allocate the array only to measure it.
-  Output is unchanged for every program either way.
+  Output is unchanged for every program either way. Since the selector may be a biased table
+  or a comparison chain (`.kb/optimize-dead-code-elimination.md`, "Sparse arity ladders"), the
+  early-out is conservative rather than exact: a sparse ladder past the gate would have been a
+  small chain, and is paged instead, which is always correct.
 - **The radix depth is counted from the bit length** (`WasmRuntimeBuilder.dispatchLevels`,
   pinned by `WasmDispatchPagingTest`), never by shifting the id 8 more bits per round:
   Java takes a shift distance mod 32, so the fourth round of such a loop shifts by 0,
