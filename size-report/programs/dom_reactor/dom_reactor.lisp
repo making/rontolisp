@@ -12,9 +12,12 @@
 ;;;; (only defun / wasm-import / wasm-export at top level), so the same file
 ;;;; measures the wasm-GC and the MVP core lowering of the same program.
 ;;;;
-;;;; The literals are deliberately sized: this program is also measured against
-;;;; a hand-written non-GC toolchain emitting the same page, and the data
-;;;; section is only comparable if the text it holds is the same length.
+;;;; It is a port of hike-lang's examples/browser/main.hike
+;;;; (https://github.com/kanryu/hike-lang), import for import and export for
+;;;; export, and the size report compares the two section by section. The
+;;;; literals are therefore deliberately SIZED: the data section is only
+;;;; comparable if the text it holds is the same length, so the prose here is
+;;;; written to that program's byte lengths rather than to taste.
 ;;;;
 ;;;; Run:
 ;;;;   rontolisp size-report/programs/dom_reactor/dom_reactor.lisp \
