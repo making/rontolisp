@@ -3408,25 +3408,52 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// The checks themselves, over a scratch local the caller has already allocated.
+	//
+	// For :s8, :s16, :s32 and :u32 this is the canon-compare shape the wasm-GC lowering
+	// (WasmExportCompiler.emitNarrowIntResult) already uses: in range exactly when
+	// narrowing to the declared width and widening back is the identity, so
+	// `v != canon(v)` traps with one compare regardless of width, and the bound itself
+	// never needs a constant. :u8 and :u16 keep their single bound compare -- the bound
+	// there is a two- or three-byte constant, cheaper than the mask the canon form would
+	// need -- and :u64 keeps the plain sign check (only the sign can be wrong). Measured
+	// 2026-09-14 against c972efa5d, .todo/811.
 	private static void emitRangeChecks(WasmWriter w, BoundaryType type, boolean fromFloat, int slot) {
 		boolean narrowSigned = type.signed() && type.bits() < 64;
 		boolean narrowUnsigned = !type.signed() && type.bits() < 64;
 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(slot);
-		BoundaryType.Range range = Objects.requireNonNull(type.range());
-		if (narrowSigned) {
-			emitTrapIf(w, slot, Instruction.I64_LT_S, range.min().longValueExact());
-			emitTrapIf(w, slot, Instruction.I64_GT_S, range.max().longValueExact());
+		if (narrowSigned || type == BoundaryType.U32) {
+			emitCanonCompareTrap(w, type, slot);
 		}
 		else if (narrowUnsigned) {
 			// One unsigned comparison covers both ends: a negative i64 read as an
 			// unsigned
 			// 64-bit value is larger than any sub-64-bit unsigned maximum.
+			BoundaryType.Range range = Objects.requireNonNull(type.range());
 			emitTrapIf(w, slot, Instruction.I64_GT_U, range.max().longValueExact());
 		}
 		else {
 			emitTrapIf(w, slot, Instruction.I64_LT_S, 0);
 		}
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
+	}
+
+	// `if (local[slot] != canon(local[slot])) unreachable` -- traps unless narrowing to
+	// the declared width and widening back is the identity. One compare regardless of
+	// width, and no bound constant.
+	private static void emitCanonCompareTrap(WasmWriter w, BoundaryType type, int slot) {
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
+		switch (type) {
+			case S8 -> w.write(Instruction.I64_EXTEND8_S);
+			case S16 -> w.write(Instruction.I64_EXTEND16_S);
+			case S32 -> w.write(Instruction.I32_WRAP_I64, Instruction.I64_EXTEND_S_I32);
+			case U32 -> w.write(Instruction.I32_WRAP_I64, Instruction.I64_EXTEND_U_I32);
+			default -> throw new IllegalArgumentException("not a canon-compare boundary type: " + type);
+		}
+		w.write(Instruction.I64_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
 	}
 
 	// `if (local[slot] <op> bound) unreachable` -- the boundary refusing a value it
