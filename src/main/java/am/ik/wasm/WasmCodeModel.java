@@ -280,6 +280,49 @@ final class WasmCodeModel {
 	}
 
 	/**
+	 * Writes a locals vector as the emitter would: one run per stretch of equal types.
+	 * @param out the code entry being written
+	 * @param locals the locals in declaration order (parameters excluded)
+	 */
+	static void writeLocals(java.io.ByteArrayOutputStream out, List<ValType> locals) {
+		List<ValType> kinds = new ArrayList<>();
+		List<Integer> runs = new ArrayList<>();
+		for (ValType t : locals) {
+			if (!kinds.isEmpty() && kinds.get(kinds.size() - 1).equals(t)) {
+				runs.set(runs.size() - 1, runs.get(runs.size() - 1) + 1);
+			}
+			else {
+				kinds.add(t);
+				runs.add(1);
+			}
+		}
+		WasmSections.writeU(out, kinds.size());
+		for (int i = 0; i < kinds.size(); i++) {
+			WasmSections.writeU(out, runs.get(i));
+			writeValType(out, kinds.get(i));
+		}
+	}
+
+	/**
+	 * Writes a value type in its shortest legal encoding, as the emitter does: a nullable
+	 * reference to an abstract heap type is its one-byte shorthand.
+	 * @param out the destination
+	 * @param t the type
+	 */
+	static void writeValType(java.io.ByteArrayOutputStream out, ValType t) {
+		if (t.isRef()) {
+			if (t.code() == 0x63 && t.heap() < 0) {
+				out.write(t.heap() + 0x80);
+				return;
+			}
+			out.write(t.code());
+			WasmSections.writeS(out, t.heap());
+			return;
+		}
+		out.write(t.code());
+	}
+
+	/**
 	 * Decodes one code entry.
 	 * @param entry the code entry (locals + instruction stream)
 	 * @param types the type section, for the {@code typeidx} block-type form

@@ -7583,6 +7583,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			pinned[i] = owners.length > 0 ? owners[0] : -1;
 		}
 		coreModule = am.ik.wasm.WasmInliner.inline(coreModule, pinned);
+		// Then the single-use local sink, over the residue the move's argument hand-over
+		// and the emitter's own temporaries leave: a function's own locals only, so it
+		// is invisible to every index-addressed claim the shake reads.
+		coreModule = am.ik.wasm.WasmLocalSink.sink(coreModule);
 		// Last, over the shaken bodies, the local renumbering: a function with more than
 		// 128 locals (Ctx.allocTemp never recycles one) gets its one-byte indices for
 		// the locals it uses most. A permutation inside each function, so it can follow

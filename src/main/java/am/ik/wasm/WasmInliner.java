@@ -570,22 +570,7 @@ public final class WasmInliner {
 		List<ValType> all = new ArrayList<>(existing.size() + added.size());
 		all.addAll(existing);
 		all.addAll(added);
-		List<ValType> kinds = new ArrayList<>();
-		List<Integer> runs = new ArrayList<>();
-		for (ValType t : all) {
-			if (!kinds.isEmpty() && kinds.get(kinds.size() - 1).equals(t)) {
-				runs.set(runs.size() - 1, runs.get(runs.size() - 1) + 1);
-			}
-			else {
-				kinds.add(t);
-				runs.add(1);
-			}
-		}
-		WasmSections.writeU(out, kinds.size());
-		for (int i = 0; i < kinds.size(); i++) {
-			WasmSections.writeU(out, runs.get(i));
-			writeValType(out, kinds.get(i));
-		}
+		WasmCodeModel.writeLocals(out, all);
 	}
 
 	private static void writeBlockType(ByteArrayOutputStream out, List<ValType> results) {
@@ -593,20 +578,7 @@ public final class WasmInliner {
 			out.write(0x40);
 			return;
 		}
-		writeValType(out, results.get(0));
-	}
-
-	private static void writeValType(ByteArrayOutputStream out, ValType t) {
-		if (t.isRef()) {
-			if (t.code() == 0x63 && t.heap() < 0) {
-				out.write(t.heap() + 0x80); // the one-byte abstract shorthand
-				return;
-			}
-			out.write(t.code());
-			WasmSections.writeS(out, t.heap());
-			return;
-		}
-		out.write(t.code());
+		WasmCodeModel.writeValType(out, results.get(0));
 	}
 
 	private static int lebLen(int value) {
