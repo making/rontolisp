@@ -25,11 +25,13 @@ import am.ik.wasm.Type;
  * {@code negated} asks for the COMPLEMENT: non-0 exactly when the test is false, which is
  * what an {@code if} (whose wasm THEN arm is the Lisp else arm) and a loop's exit
  * {@code br_if} want. A {@code not}/{@code null} flips the request instead of emitting an
- * {@code i32.eqz}; {@code and}/{@code or} short-circuit through {@code if (result i32)}
- * blocks over their operands compiled the same way, so a chain of predicates never
- * materialises a box; anything else is compiled as a value and tested with one
- * {@code ref.is_null}. The value-position predicates ({@code WasmNullPredCompiler},
- * {@code WasmConspCompiler}, ...) stay what they are: a value needs the box.
+ * {@code i32.eqz}; a two-operand {@code char=}/{@code char<}/{@code char<=} is its
+ * code-point compare; {@code and}/{@code or} short-circuit through
+ * {@code if (result i32)} blocks over their operands compiled the same way, so a chain of
+ * predicates never materialises a box; anything else is compiled as a value and tested
+ * with one {@code ref.is_null}. The value-position predicates
+ * ({@code WasmNullPredCompiler}, {@code WasmConspCompiler}, ...) stay what they are: a
+ * value needs the box.
  */
 final class WasmConditionCompiler {
 
@@ -107,6 +109,16 @@ final class WasmConditionCompiler {
 				else {
 					WasmEmitHelper.emitEqComparison(ctx);
 				}
+				if (negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
+			case LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE -> {
+				if (args.size() != 3) {
+					return false;
+				}
+				WasmCharCompiler.emitPairCompareI32(cons, ctx, WasmCharCompiler.pairCompareOpcode(head.name()));
 				if (negated) {
 					ctx.writer.write(Instruction.I32_EQZ);
 				}

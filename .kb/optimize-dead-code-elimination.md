@@ -474,6 +474,21 @@ gate is about the body bound, not bytes. Pinned by
 `WasmDispatchPagingTest#aSparseLadderSelectsByComparisonAndADenseOneByTable` (the i64 compare
 included) and `WasmLispCompilerIntegrationTest#aSparseArityLadderDispatchesTheSame`.
 
+### A char comparison pair is one code-point compare
+
+`WasmCharCompiler.compileChain` compiled every `char=`/`char<`/`char<=` -- nearly all of them
+two-operand -- as the n-ary chain: three eqref temps, each code point boxed as an i31 to be
+stored and cast back to be compared, and a literal `#\~` built as a char struct, cast and read
+back first (the census's "literal compared through its box", 228 sites on the Worker). The pair
+is now `pushCode a; pushCode b; i32.eq` -- a literal's code point the `i32.const` it is -- boxed
+once in value position and, through `WasmConditionCompiler`, not at all as a test; the n-ary
+chain keeps its shape for the rare three-operand call. Measured 2026-09-13 over the ladder
+numbers (`--optimize=size`, raw / gzip): hello-clack Worker 730,394 -> 719,754 (-1.5%) / 197,943
+-> 194,536, httpbin Worker 160,649 -> 155,838 (-3.0%) / 55,400 -> 53,849, hello-tiny-routes
+767,253 -> 756,000, `zlib` 79,005 -> 78,572; the box-then-unbox census row 228 -> 68 on the
+Worker (what is left is a char-valued runtime call whose result is read back, not a literal).
+Pinned by `WasmLispCompilerIntegrationTest#aCharComparisonPairIsOneCodePointCompare`.
+
 ### The single-call-site move
 `am.ik.wasm.WasmInliner.inline` runs between `WasmPeephole.rewrite` and
 `WasmTreeShaker.shake` on BOTH wasm backends (`WasmLispCompiler.shakeCore`;
@@ -699,6 +714,7 @@ census over the flat `wasm-tools print` of the Worker / `zlib`:
 | `local.tee N; drop` (a statement `setq`) | 1,197 | 127 | 1 B -> **landed** |
 | `br 0; end; unreachable; end` (a non-terminating loop's tail, written by the FOLD) | 1,488 | 185 | 1 B -> **landed** |
 | the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) -- 106 + 10 of the Worker's sites were the prologue, the rest other list loops | 701 | 22 | ~140 B -> **landed**, `.kb/lambda-lists.md` |
+| a char literal built, cast and read back in a `char=` chain (`struct.new $char; ref.cast; struct.get`) | 228 | 14 | ~10 B -> **landed**, "A char comparison pair" |
 | a boxed variable built empty then `struct.set` (`ref.null; struct.new; local.set`) | 204 | 45 | ~8 B |
 | a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B -> **landed**, "The local renumbering" |
 | `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B -> **landed**, "Sparse arity ladders" |

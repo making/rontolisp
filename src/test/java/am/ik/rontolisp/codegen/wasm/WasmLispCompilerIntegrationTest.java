@@ -19272,6 +19272,29 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aCharComparisonPairIsOneCodePointCompare() throws Exception {
+		// Two-operand char=/char</char<= is the code points pushed and one i32 compare
+		// (a literal's code point is the constant, not a char struct built, cast and
+		// read back), in value position and as a test, beside the n-ary chains, the
+		// descending and /= expansions, and non-ASCII code points.
+		assertThat(compileAndRun(
+				"""
+						(defun p (x) (print x))
+						(defun cmp (a b) (list (char= a b) (char< a b) (char<= a b) (char> a b) (char>= a b) (char/= a b)))
+						(p (cmp #\\a #\\b)) (p (cmp #\\b #\\a)) (p (cmp #\\a #\\a))
+						(p (list (char= #\\a) (char< #\\a #\\b #\\c) (char< #\\a #\\c #\\b) (char<= #\\a #\\a #\\b) (char= #\\x #\\x #\\x) (char= #\\x #\\x #\\y)))
+						(defun k (c) (if (char= c #\\~) :tilde (if (not (char< c #\\a)) :lower-or-more (when (char<= #\\0 c) :digit-ish))))
+						(p (list (k #\\~) (k #\\z) (k #\\5) (k #\\Space)))
+						(defun scan (s) (let ((n 0)) (dotimes (i (length s)) (when (or (char= (char s i) #\\a) (char= (char s i) #\\e)) (setq n (+ n 1)))) n))
+						(p (scan "banana bread"))
+						(p (list (char= (code-char 955) (code-char 955)) (char< (code-char 955) #\\a) (char-code (if (char= #\\A (char-upcase #\\a)) #\\y #\\n))))
+						(p (let ((c #\\q)) (list (and (char= c #\\q) (char<= #\\a c #\\z)) (or (char= c #\\x) (char= c #\\q)) (not (char= c #\\q)))))
+						"""))
+			.isEqualTo("(NIL T T NIL NIL T)\n(NIL NIL NIL T T T)\n(T NIL T NIL T NIL)\n(T T NIL T T NIL)\n"
+					+ "(:TILDE :LOWER-OR-MORE :DIGIT-ISH NIL)\n5\n(T NIL 121)\n(T T NIL)");
+	}
+
+	@Test
 	void compileAndRunTestsCompiledAsTests() throws Exception {
 		// Every shape WasmConditionCompiler compiles as a raw i32 -- a predicate, a
 		// negation of one, an and/or chain in test position, a constant test, a

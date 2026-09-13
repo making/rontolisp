@@ -176,8 +176,47 @@ final class WasmCharCompiler {
 		compileChain(cons, ctx, Instruction.I32_LE_S);
 	}
 
+	/**
+	 * A two-operand {@code char=}/{@code char<}/{@code char<=} as a raw i32 (0 = false,
+	 * non-0 = true): both code points pushed, one compare -- no temp, no i31 box. The
+	 * value-position compile boxes this into t/nil; {@link WasmConditionCompiler} tests
+	 * it directly.
+	 * @param cons the comparison form, exactly two operands
+	 * @param ctx the function context
+	 * @param cmpOpcode the i32 comparison
+	 */
+	static void emitPairCompareI32(LispCons cons, WasmLispCompiler.Ctx ctx, int cmpOpcode) {
+		List<LispVal> args = cons.toList();
+		pushCode(args.get(1), ctx);
+		pushCode(args.get(2), ctx);
+		ctx.writer.write(cmpOpcode);
+	}
+
+	/**
+	 * The i32 comparison a {@code char=}/{@code char<}/{@code char<=} head names, or -1.
+	 * @param name the operator name
+	 * @return the opcode, or -1 for any other name
+	 */
+	static int pairCompareOpcode(String name) {
+		return switch (name) {
+			case am.ik.rontolisp.LispNames.CHAR_EQ -> Instruction.I32_EQ;
+			case am.ik.rontolisp.LispNames.CHAR_LT -> Instruction.I32_LT_S;
+			case am.ik.rontolisp.LispNames.CHAR_LE -> Instruction.I32_LE_S;
+			default -> -1;
+		};
+	}
+
 	private static void compileChain(LispCons cons, WasmLispCompiler.Ctx ctx, int cmpOpcode) {
 		List<LispVal> args = cons.toList();
+		if (args.size() == 3) {
+			// The pair, which is nearly every site: the chain below spent three eqref
+			// temps and an i31 box per operand on it (a literal #\~ was built as a char
+			// struct, cast and read back, then boxed again -- 228 sites on the
+			// hello-clack Worker).
+			emitPairCompareI32(cons, ctx, cmpOpcode);
+			WasmEmitHelper.emitBoolFromI32(ctx);
+			return;
+		}
 		int prev = ctx.allocTemp();
 		int cur = ctx.allocTemp();
 		int acc = ctx.allocTemp();
@@ -212,8 +251,14 @@ final class WasmCharCompiler {
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
-	// Pushes the i32 code point of the character produced by the argument expression.
+	// Pushes the i32 code point of the character produced by the argument expression --
+	// a literal's as the constant it is, not through a char struct.
 	private static void pushCode(LispVal arg, WasmLispCompiler.Ctx ctx) {
+		if (arg instanceof am.ik.rontolisp.LispChar c) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(c.codePoint());
+			return;
+		}
 		WasmExprCompiler.compileExpr(arg, ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
