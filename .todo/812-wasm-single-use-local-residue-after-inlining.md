@@ -112,3 +112,9 @@ forwarders, a recursive `fib`, and four exports (two returning `:s32`, two
 `.todo/artefacts/805-no-gc-literal-import-call-sites/bench.lisp`, one literal
 level higher: the literals sit inside the forwarders rather than at the import
 call site. At `--optimize=size` it is 930 bytes, code section 230.
+
+## Artefacts
+
+`.todo/artefacts/812-wasm-single-use-local-residue/residue.sh` counts both populations off
+`wasm-tools print`. Do not count the adjacent pairs off the raw bytes -- `0x21`/`0x20`
+occur as immediates and a byte scan reports pairs in zlib that the disassembly denies.

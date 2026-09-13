@@ -1,0 +1,28 @@
+;;;; Import ARGUMENT range guards: each export takes a full :s64 and hands it,
+;;;; unchanged, to a host import declared with a narrow parameter type. The
+;;;; host records what arrives; the guard sits in the import wrapper.
+(rontolisp:wasm-import 'sink-s8 :from "env" :as "sink_s8" :params '(:s8) :returns nil)
+(rontolisp:wasm-import 'sink-s16 :from "env" :as "sink_s16" :params '(:s16) :returns nil)
+(rontolisp:wasm-import 'sink-s32 :from "env" :as "sink_s32" :params '(:s32) :returns nil)
+(rontolisp:wasm-import 'sink-u8 :from "env" :as "sink_u8" :params '(:u8) :returns nil)
+(rontolisp:wasm-import 'sink-u16 :from "env" :as "sink_u16" :params '(:u16) :returns nil)
+(rontolisp:wasm-import 'sink-u32 :from "env" :as "sink_u32" :params '(:u32) :returns nil)
+(rontolisp:wasm-import 'sink-u64 :from "env" :as "sink_u64" :params '(:u64) :returns nil)
+;; A :u64 import RESULT is the one result guard on this side.
+(rontolisp:wasm-import 'src-u64 :from "env" :as "src_u64" :params '() :returns :u64)
+(defun via-s8 (x) (sink-s8 x))
+(defun via-s16 (x) (sink-s16 x))
+(defun via-s32 (x) (sink-s32 x))
+(defun via-u8 (x) (sink-u8 x))
+(defun via-u16 (x) (sink-u16 x))
+(defun via-u32 (x) (sink-u32 x))
+(defun via-u64 (x) (sink-u64 x))
+(defun get-u64 () (src-u64))
+(rontolisp:wasm-export 'via-s8 :as "via_s8" :params '(:s64) :returns nil)
+(rontolisp:wasm-export 'via-s16 :as "via_s16" :params '(:s64) :returns nil)
+(rontolisp:wasm-export 'via-s32 :as "via_s32" :params '(:s64) :returns nil)
+(rontolisp:wasm-export 'via-u8 :as "via_u8" :params '(:s64) :returns nil)
+(rontolisp:wasm-export 'via-u16 :as "via_u16" :params '(:s64) :returns nil)
+(rontolisp:wasm-export 'via-u32 :as "via_u32" :params '(:s64) :returns nil)
+(rontolisp:wasm-export 'via-u64 :as "via_u64" :params '(:s64) :returns nil)
+(rontolisp:wasm-export 'get-u64 :as "get_u64" :params '() :returns :s64)

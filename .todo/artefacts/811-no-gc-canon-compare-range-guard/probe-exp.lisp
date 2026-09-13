@@ -1,0 +1,23 @@
+;;;; Export RESULT range guards: each export takes the value as a full :s64
+;;;; (no guard on the way in) and answers it through a narrow result type.
+(defun id-s8 (x) x)
+(defun id-s16 (x) x)
+(defun id-s32 (x) x)
+(defun id-u8 (x) x)
+(defun id-u16 (x) x)
+(defun id-u32 (x) x)
+(defun id-u64 (x) x)
+;; FLOAT-typed bodies: the result crosses i64.trunc first, then the same guard.
+(defun fl-s8 (x) (* 1.0 x))
+(defun fl-s32 (x) (* 1.0 x))
+(defun fl-u32 (x) (* 1.0 x))
+(rontolisp:wasm-export 'id-s8 :as "id_s8" :params '(:s64) :returns :s8)
+(rontolisp:wasm-export 'id-s16 :as "id_s16" :params '(:s64) :returns :s16)
+(rontolisp:wasm-export 'id-s32 :as "id_s32" :params '(:s64) :returns :s32)
+(rontolisp:wasm-export 'id-u8 :as "id_u8" :params '(:s64) :returns :u8)
+(rontolisp:wasm-export 'id-u16 :as "id_u16" :params '(:s64) :returns :u16)
+(rontolisp:wasm-export 'id-u32 :as "id_u32" :params '(:s64) :returns :u32)
+(rontolisp:wasm-export 'id-u64 :as "id_u64" :params '(:s64) :returns :u64)
+(rontolisp:wasm-export 'fl-s8 :as "fl_s8" :params '(:s64) :returns :s8)
+(rontolisp:wasm-export 'fl-s32 :as "fl_s32" :params '(:s64) :returns :s32)
+(rontolisp:wasm-export 'fl-u32 :as "fl_u32" :params '(:s64) :returns :u32)

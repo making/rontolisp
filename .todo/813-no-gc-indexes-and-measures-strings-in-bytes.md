@@ -89,3 +89,9 @@ every string-using module, 1 is the answer and the finding is the deliverable.
   rather than answering them, so the two items do not overlap.
 - `.kb/characters-code-points.md` is where the cross-backend character contract
   lives and should name whichever way this is resolved.
+
+## Artefacts
+
+`.todo/artefacts/813-no-gc-strings-are-byte-indexed/bytes.sh` asks the four questions of
+the interpreter, the wasm-GC backend and `--no-gc` in one run and prints the three answers
+in the same spelling, so they diff directly.

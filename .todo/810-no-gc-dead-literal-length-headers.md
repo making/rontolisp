@@ -167,3 +167,10 @@ seven entries are used and none duplicate, and the extra entry is `fib`'s
 `(i64)->(i64)` where a 32-bit implementation shares one `(i32)->(i32)` type
 between `fib` and an export. That is the i64-native value model's price and the
 i32 tier is already rejected -- it answers 3504 for `(mod (fact 13) 10000)`.
+
+## Artefacts
+
+`.todo/artefacts/810-no-gc-dead-literal-length-headers/` -- the benchmark, the host
+harness, the section dumper, `strip.mjs` (the hand verification, no build needed),
+`prototype.diff` (the working implementation), and `probe/` (the classification harness
+that `ng805` is not). Its README is the reproduction recipe.

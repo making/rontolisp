@@ -89,3 +89,11 @@ is worth a separate shape or should simply be left on the generic path.
   that decides when folding a site is cheaper than keeping the wrapper. A print
   site has no wrapper to remove, so the arithmetic here is simpler: the fold is
   a win at every site.
+
+## Artefacts
+
+`.todo/artefacts/814-no-gc-printed-literal-fold/` -- the two benchmark programs with their
+interpreter spellings, `measure-print.sh`, and `ext-patch.py`, which is the measuring hack
+that produced the numbers above. Read its header before running it: it makes
+`(princ <literal>)` VOID, which is wrong, and is why the numbers need re-measuring on a
+correct implementation.

@@ -108,3 +108,10 @@ a test that pins which imports fold would see it.
 
 Run `spring-javaformat:apply`, and update the guard's description in
 `.kb/no-gc-scalar-wasm.md` so the file states the shape that is emitted.
+
+## Artefacts
+
+`.todo/artefacts/811-no-gc-canon-compare-range-guard/` -- `prototype.diff`, the per-width
+probes and the trap driver (`trap.sh`, `extra.sh` for the second engine), the interpreter
+oracle, the one-to-four-site fold programs, and `canon.mjs`, which rewrites the `:s32`
+guards in an emitted binary so the size can be confirmed without building anything.

@@ -1,0 +1,10 @@
+;;; The same four questions for the interpreter and the JVM backend.
+(defun row (s)
+  (princ (list (length s)
+               (char-code (char s 0))
+               (char-code (char s 1))
+               (length (subseq s 1))))
+  (terpri))
+(row "abc")
+(row "日本語")
+(row "aé日")

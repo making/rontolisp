@@ -1,0 +1,52 @@
+diff --git a/src/main/java/am/ik/rontolisp/codegen/wasm/NoGcWasmCompiler.java b/src/main/java/am/ik/rontolisp/codegen/wasm/NoGcWasmCompiler.java
+index c7e6a765f..30576fcad 100644
+--- a/src/main/java/am/ik/rontolisp/codegen/wasm/NoGcWasmCompiler.java
++++ b/src/main/java/am/ik/rontolisp/codegen/wasm/NoGcWasmCompiler.java
+@@ -3286,22 +3286,34 @@ public final class NoGcWasmCompiler implements LispCompiler {
+ 
+ 	// The checks themselves, over a scratch local the caller has already allocated.
+ 	private static void emitRangeChecks(WasmWriter w, BoundaryType type, boolean fromFloat, int slot) {
+-		boolean narrowSigned = type.signed() && type.bits() < 64;
+-		boolean narrowUnsigned = !type.signed() && type.bits() < 64;
+ 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(slot);
+ 		BoundaryType.Range range = Objects.requireNonNull(type.range());
+-		if (narrowSigned) {
+-			emitTrapIf(w, slot, Instruction.I64_LT_S, range.min().longValueExact());
+-			emitTrapIf(w, slot, Instruction.I64_GT_S, range.max().longValueExact());
+-		}
+-		else if (narrowUnsigned) {
++		switch (type) {
++			// In range exactly when narrowing to the declared width and widening back
++			// is the identity: `v != canon(v)` traps in one compare with no constant
++			// (the wasm-GC export wrapper's shape). Taken only where it is shorter than
++			// the bound compare(s): a signed bound costs a two-to-five-byte constant per
++			// end, u32's one bound five, while u8/u16's one bound is two or three bytes
++			// and the mask the canon would need costs more than that.
++			case S8, S16, S32, U32 -> {
++				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
++				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
++				switch (type) {
++					case S8 -> w.write(Instruction.I64_EXTEND8_S);
++					case S16 -> w.write(Instruction.I64_EXTEND16_S);
++					case S32 -> w.write(Instruction.I32_WRAP_I64, Instruction.I64_EXTEND_S_I32);
++					default -> w.write(Instruction.I32_WRAP_I64, Instruction.I64_EXTEND_U_I32);
++				}
++				w.write(Instruction.I64_NE);
++				w.write(Instruction.IF, 0x40);
++				w.write(Instruction.UNREACHABLE);
++				w.write(Instruction.END);
++			}
+ 			// One unsigned comparison covers both ends: a negative i64 read as an
+-			// unsigned
+-			// 64-bit value is larger than any sub-64-bit unsigned maximum.
+-			emitTrapIf(w, slot, Instruction.I64_GT_U, range.max().longValueExact());
+-		}
+-		else {
+-			emitTrapIf(w, slot, Instruction.I64_LT_S, 0);
++			// unsigned 64-bit value is larger than any sub-64-bit unsigned maximum.
++			case U8, U16 -> emitTrapIf(w, slot, Instruction.I64_GT_U, range.max().longValueExact());
++			// :u64 out of the signed house i64: only the sign can be wrong.
++			default -> emitTrapIf(w, slot, Instruction.I64_LT_S, 0);
+ 		}
+ 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
+ 	}

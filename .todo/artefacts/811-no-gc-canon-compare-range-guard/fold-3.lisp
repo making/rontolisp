@@ -1,0 +1,7 @@
+(rontolisp:wasm-import (quote host-put) :from "env" :as "host_put" :params (quote (:string :s32)) :returns nil)
+(defun go (x)
+  (host-put "k1" x)
+  (host-put "k2" x)
+  (host-put "k3" x)
+)
+(rontolisp:wasm-export (quote go) :as "go" :params (quote (:s64)) :returns nil)
