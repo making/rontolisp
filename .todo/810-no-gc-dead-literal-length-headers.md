@@ -110,12 +110,53 @@ reader will hit the same circularity.
   and the fold's own `aLiteralStringArgumentReachesTheHostWithoutTheWrapper` /
   `aModuleThatOnlyPassesItsOwnLiteralsOutOmitsTheArenaApi`.
 
-## A second phase, only if the first one measures well
+## Prototyped 2026-09-14 -- what it cost and what it broke
 
-`print` of a literal lowers to `__write_stdout(strLocal + 4 + from, to - from)`
--- and for a literal BOTH operands are compile-time constants too, exactly like
-the import fold. If print sites were classified the same way, a printing program
-could also drop its headers. Measure it; do not assume it.
+A working prototype confirmed the figures exactly (930 -> 886, data 484 -> 440,
+code unchanged; `--optimize=off` 1353 -> 1309, the same 44 bytes) and the GC
+backend's output stayed md5-identical. What it learned:
+
+- **The circularity resolves cleanly.** Split the literal-laying half of
+  `planMemory` into its own function, let `planMemory` return an all-headered
+  plan, decide the fold against that, then re-lay the SAME literal order with
+  the header-free set applied. Only the data bytes and the addresses derived
+  from them move; every gate (`printUsed`, `ftoaUsed`, `hostArena`, `allocates`)
+  is a property of the bodies and the boundary, not of the layout.
+- **Keep two maps, not one.** Content-address-for-every-literal, and
+  header-address-for-the-headered-ones. A value-position use of a header-free
+  literal then fails loudly on a missing header address instead of reading a
+  neighbour's bytes as a length.
+- **One pinned test genuinely changes.**
+  `NoGcWasmCompilerTest.stringLiteralsArePackedWithoutAlignmentPadding` pins
+  `[3,0,0,0,a,b,c,2,0,0,0,d,e]` for a program whose only use of `"abc"` and
+  `"de"` is a `js-log` site -- which is exactly the case that now emits
+  `abcde`. The test's own claim (no padding between headered blocks) is still
+  true, so give it a program that reads both literals as values and pin the
+  header-free shape in a new test beside it. The fold's other two tests pass
+  unchanged.
+- **`--optimize=off` moves a byte outside the data section** on some programs:
+  a lower `heapBase` can shorten its LEB128 in the global section.
+- **`ng805.mjs` does not exercise this path at all.** Every one of its import
+  call sites has a runtime argument somewhere, so the fold is declined and its
+  module is byte-identical before and after. That makes it a good check that a
+  non-folding program's layout does not move, and NOT a regression harness for
+  the fold. Write a probe that actually folds.
+
+## A hazard the fold decision has either way
+
+`chooseFoldedImports` weighs a site's cost against the wrapper's, and does not
+count the four bytes per literal that folding now also saves. An import sitting
+just the wrong side of that comparison would fold if it did. Folding is a
+whole-program per-import decision and spellings can be shared between imports,
+so the accounting is not local -- leave it alone unless a measurement asks for
+it, but know it is there.
+
+## A second phase, filed separately
+
+`print` of a literal has the same two constants available and does not use them.
+That turned out to be a bigger and differently-shaped win than this item (the
+code section, not the data section), so it is `.todo/814` rather than a
+follow-on here.
 
 ## Where the remaining sections stand
 

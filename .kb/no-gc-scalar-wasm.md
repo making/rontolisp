@@ -131,7 +131,15 @@ in the float renderer's inner loop.
   (`.kb/concatenate-result-families.md`). Other primitives: `length`, `subseq` (no bounds
   check), `string=` (`__streq`), `char`, `princ-to-string` (`__itoa` / `__ftoa`).
 - **A character IS its i64 code point**: `char-code`/`code-char` are identities, `char=` is
-  numeric `=`, so `(char= (char s i) #\x)` matches the other backends.
+  numeric `=`. But `char` INDEXES THE BYTE ARRAY, so `(char s i)` answers a code point only
+  while `s` is ASCII, and `(char= (char s i) #\x)` matches the other backends only there.
+- **`length`, `char` and `subseq` count and index BYTES, not characters** (measured
+  2026-09-14). For `"日本語"` -- 3 characters, 9 UTF-8 bytes -- the interpreter, the JVM and
+  the wasm-GC backend answer `(length s)` 3, `(char-code (char s 0))` 26085 and
+  `(length (subseq s 1))` 2; `--no-gc` answers **9**, **230** (日's first UTF-8 byte) and
+  **8**. ASCII agrees everywhere, which is why it went unnoticed. This is a real
+  cross-backend divergence and not yet a documented one: `.todo/813` holds the options and
+  the cost of each.
 - The four helpers occupy function indices `internalCount+0..+3` (alloc, memcpy, streq,
   itoa), where `internalCount` counts the internal functions and the EMITTED wrappers --
   `planMemory` answers the layout and the three gates, `placeFunctions` assigns the
