@@ -104,8 +104,9 @@ from the GC backend: `/` is floating-point division (no `1/3` ratios), and a
 value is false in a boolean context exactly when it is zero (Common Lisp
 treats only `nil` as false). The **boundary** designators stay host-width —
 `:int`/`:bool` cross as a 32-bit `i32` (as in the GC backend), so a returned
-value outside the 32-bit range wraps; the wide `i64` range applies only to
-the internal computation. When a parameter or result can exceed the 32-bit
+value outside the 32-bit range TRAPS rather than arriving wrapped (the
+boundary carries the value exactly or traps -- see below); the wide `i64`
+range applies only to the internal computation. When a parameter or result can exceed the 32-bit
 range, declare it `:long` — it crosses the boundary as `i64` with no
 `wrap`/`extend`. For the numeric kernels this mode targets
 (factorials, math/finance functions, validators) the results match the

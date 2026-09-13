@@ -68,7 +68,22 @@ there -- it is a property of the EXPORT DECLARATIONS, not of the call graph: any
 with a `:string`/`:s-expr`/`:bytes` parameter needs the host to allocate, nothing else
 does. Do not make it cleverer than that.
 
-## 3. Smaller, same family
+## 3. The data section pads every literal to 4 bytes (-14 bytes)
+
+The 498-byte data section is 433 bytes of text, **44 bytes of `[len:i32]` prefixes** and
+**14 bytes of 4-byte alignment padding** between blocks. The padding buys nothing: the
+`i32.load` that reads a prefix carries `align=2`, which in wasm is a HINT -- an unaligned
+address is legal and every engine handles it. Dropping the padding alone measures
+1,383 -> **1,369**, output identical under node.
+
+The 44 bytes of prefixes are NOT in this item: `[len][bytes]` is this backend's only
+representation of a STRING value, and a runtime-built string (`concatenate`, a `:string`
+import result) must carry one, so dropping it for literals alone would give the type two
+pointer shapes. That needs a whole-program escape analysis per literal and is not worth 44
+bytes. (`emitWriteLiteral` already does the same specialization in the one place it is
+free: printing a literal emits its constant length.)
+
+## 4. Smaller, same family
 
 - **The arena bracket on a wrapper that cannot allocate** (~6 bytes x 4 exports = 24).
   Every export wrapper opens with `global.get 0; local.set n` and closes with `local.get n;
@@ -88,8 +103,14 @@ does. Do not make it cleverer than that.
 
 ## What it adds up to
 
-Measured: 68 + 124 + 24 + 22 = **238 bytes, 17% of the module**, none of it requiring a
-decision about semantics. 1,383 -> ~1,145.
+Measured: 68 + 124 + 24 + 22 + 14 = **252 bytes, 18% of the module**, none of it requiring
+a decision about semantics. 1,383 -> ~1,131.
+
+**Interaction, measured**: item 1's 68 bytes assume today's 20 functions. `800`'s inliner
+and [`805`](805-no-gc-literal-import-call-sites.md) between them remove eight of them, and
+the type section then holds 16 entries of which 10 are distinct -- item 1 becomes **33
+bytes**. Whichever lands second is worth less; neither is worth less than it costs. The
+other four items here are unaffected.
 
 ## Touch points
 
