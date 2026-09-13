@@ -2,7 +2,7 @@
 
 Difficulty: Medium
 
-## Symptom (pre-existing; found 2026-08-06 while widening the string case operators)
+## Symptom (pre-existing, found 2026-08-06; still reproducing 2026-09-13)
 
 ```lisp
 (print (alpha-char-p #\é))            ; interpreter/JVM: T    wasm: NIL
@@ -19,7 +19,15 @@ walk. A violation of the "identical on all four backends" governing rule.
 
 Knock-on: the prelude `alphanumericp` is `(or (alpha-char-p c) (digit-char-p c))`,
 so it inherits the `alpha-char-p` gap; check `digit-char-p`'s radix walk on wasm
-in the same pass. `--no-gc` not yet checked; check it first.
+in the same pass.
+
+**`--no-gc` is not a fifth opinion (checked 2026-09-13).** It REJECTS
+`alpha-char-p`, `digit-char-p`, `char-equal`, `string-equal` and `char-upcase`
+at `collectCalls` ("unsupported operation ... not a numeric primitive or an
+eligible function"); the only character operation it compiles is the exact
+comparison family (`char=` and friends), which is code-point-exact and has no
+ASCII assumption. So the divergence is confined to the wasm GC backend, and a
+fix needs to move only that one.
 
 ## Fix sketch
 
