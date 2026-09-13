@@ -159,6 +159,19 @@ wrapper is elided and the export names the internal function directly
 internal function is itself `(...) -> ()`; a `:void` export of a value-answering body still
 takes a wrapper, whose whole content is the `drop`. Two documented divergences (README
 "Non-GC Output"): no rational type, and `0` is false.
+- **`emitRangeChecks`'s guard shape follows the width, not one fixed pattern.** `:s8`,
+  `:s16`, `:s32` and `:u32` use the canon-compare shape `WasmExportCompiler.emitNarrowIntResult`
+  (wasm-GC) already uses: narrowing to the declared width and widening back is the identity
+  exactly when the value is in range, so `v != canon(v)` traps with ONE compare and no bound
+  constant (`I64_EXTEND8_S` / `I64_EXTEND16_S` / `I32_WRAP_I64;I64_EXTEND_S_I32` /
+  `I32_WRAP_I64;I64_EXTEND_U_I32`). `:u8` and `:u16` keep the single bound compare
+  (`I64_GT_U` against the max) instead: their bound is a two- or three-byte constant, cheaper
+  than the mask the canon form would need. `:u64` keeps the plain `I64_LT_S 0` sign check --
+  only the sign can be wrong. Measured 2026-09-14 against `c972efa5d` (`.todo/811`): canon
+  form is smaller for `:s8`/`:s16`/`:s32`/`:u32` (-10/-12/-15/-2 bytes) and larger for
+  `:u8`/`:u16` (+3/+3), so those two are excluded. `emitTrapIf`'s two-bound-compare shape
+  from before this measurement is gone for every type it used to serve except `:u64`'s
+  single-sided check.
 - **Wrapper auto-reset for scalar returns**: `__ronto_alloc` never frees. When the return
   type is a **non-memory scalar** (NOT `:string`/`:s-expr`), `Mem.used()` **and**
   `Mem.allocates()`, `compileWrapperBody` snapshots heap global 0 at entry (before arg
