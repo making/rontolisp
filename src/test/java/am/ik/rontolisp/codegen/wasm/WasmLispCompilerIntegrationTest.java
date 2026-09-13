@@ -19295,6 +19295,44 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aConditionalInStatementPositionCompilesForEffect() throws Exception {
+		// An if/when/unless/cond/and/or whose value nobody reads is a void wasm if over
+		// arms compiled for effect: every arm shape (a call, a setq, nil, a literal, a
+		// nested if, a return-from out of an arm, a let), in defun bodies, loops and
+		// progns, beside the same operators in value position and the interpreter's
+		// answers.
+		assertThat(compileAndRun(
+				"""
+						(defun p (x) (print x))
+						(defvar *log* nil)
+						(defun note (x) (push x *log*) x)
+						(defun f (x) (if x (note :then) (note :else)) (when x (note :when)) (unless x (note :unless)) (if x (note :only-then)) (if x nil (note :only-else)) (if (consp x) 1 2) (cond ((null x) (note :cond-nil)) ((atom x) (note :cond-atom) (note :cond-atom-2)) (t (note :cond-t))) (and x (note :and)) (or x (note :or)) (if (and x (consp x)) (note :chain) (note :no-chain)) :done)
+						(p (list (f nil) (f 1) (f '(1))))
+						(p (reverse *log*))
+						(defun g (l) (let ((n 0)) (dolist (x l) (if (evenp x) (setq n (+ n x)) (setq n (- n 1))) (when (> x 5) (setq n (* n 2)))) n))
+						(p (list (g '(1 2 3 4)) (g '(6 7)) (g nil)))
+						(defun h (x) (block b (if x (return-from b :early) nil) (when (null x) (return-from b :late)) :never))
+						(p (list (h 1) (h nil)))
+						(defun k (x) (if x :a :b) (if (if x 1 nil) (note :inner) (note :inner-else)) (let ((y (if x 3 4))) (if (> y 3) (note :big) (note :small)) y))
+						(setq *log* nil)
+						(p (list (k t) (k nil) (reverse *log*)))
+						(defun m (n) (let ((acc nil)) (dotimes (i n) (cond ((= i 0) (push :zero acc)) ((evenp i) (push i acc)) (t nil))) (nreverse acc)))
+						(p (m 5))
+						(defun w (x) (when x :value))
+						(defun u (x) (unless x :value))
+						(p (list (w t) (w nil) (u t) (u nil) (if nil 1) (if t 1)))
+						(defun q (x) (progn (if x (note :q1)) (if x (note :q2) (note :q3)) nil) x)
+						(setq *log* nil)
+						(p (list (q 1) (q nil) (reverse *log*)))
+						"""))
+			.isEqualTo("(:DONE :DONE :DONE)\n"
+					+ "(:ELSE :UNLESS :ONLY-ELSE :COND-NIL :OR :NO-CHAIN :THEN :WHEN :ONLY-THEN :COND-ATOM :COND-ATOM-2 :AND"
+					+ " :NO-CHAIN :THEN :WHEN :ONLY-THEN :COND-T :AND :CHAIN)\n(4 22 0)\n(:EARLY :LATE)\n"
+					+ "(3 4 (:INNER :SMALL :INNER-ELSE :BIG))\n(:ZERO 2 4)\n(:VALUE NIL NIL :VALUE NIL 1)\n"
+					+ "(1 NIL (:Q1 :Q2 :Q3))");
+	}
+
+	@Test
 	void compileAndRunTestsCompiledAsTests() throws Exception {
 		// Every shape WasmConditionCompiler compiles as a raw i32 -- a predicate, a
 		// negation of one, an and/or chain in test position, a constant test, a

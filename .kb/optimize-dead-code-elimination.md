@@ -489,6 +489,20 @@ numbers (`--optimize=size`, raw / gzip): hello-clack Worker 730,394 -> 719,754 (
 Worker (what is left is a char-valued runtime call whose result is read back, not a literal).
 Pinned by `WasmLispCompilerIntegrationTest#aCharComparisonPairIsOneCodePointCompare`.
 
+### A conditional in statement position compiles for effect
+
+`WasmExprCompiler.compileForEffect` hands an `if` -- and, through their expansions, a
+`when`/`unless`/`cond`/`and`/`or` -- to `WasmIfCompiler.compileForEffect`: a void wasm `if`
+whose arms compile for effect, so neither arm materialises a value and no `drop` follows; an arm
+that is nil or a literal is no arm at all, the test's polarity picks the live one and no `else`
+is written. Value position is untouched (`(if c a b)` as a function's last form still answers),
+and state-machine mode does not reach it (its `if` routes resumes through its arms). Before, a
+statement `(when c (setq x ...))` was `if (result eqref) ... ref.null eq else ... end; drop`: the
+Worker had 743 such blocks, 44 with a bare nil arm. Measured 2026-09-13 over the char-pair
+numbers (`--optimize=size`, raw / gzip): hello-clack Worker 719,754 -> 716,057 / 194,536 ->
+194,305, hello-tiny-routes 756,000 -> 752,239, httpbin 155,838 -> 154,998, `zlib` 78,572 -> 78,330.
+Pinned by `WasmLispCompilerIntegrationTest#aConditionalInStatementPositionCompilesForEffect`.
+
 ### The single-call-site move
 `am.ik.wasm.WasmInliner.inline` runs between `WasmPeephole.rewrite` and
 `WasmTreeShaker.shake` on BOTH wasm backends (`WasmLispCompiler.shakeCore`;
@@ -715,7 +729,7 @@ census over the flat `wasm-tools print` of the Worker / `zlib`:
 | `br 0; end; unreachable; end` (a non-terminating loop's tail, written by the FOLD) | 1,488 | 185 | 1 B -> **landed** |
 | the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) -- 106 + 10 of the Worker's sites were the prologue, the rest other list loops | 701 | 22 | ~140 B -> **landed**, `.kb/lambda-lists.md` |
 | a char literal built, cast and read back in a `char=` chain (`struct.new $char; ref.cast; struct.get`) | 228 | 14 | ~10 B -> **landed**, "A char comparison pair" |
-| a boxed variable built empty then `struct.set` (`ref.null; struct.new; local.set`) | 204 | 45 | ~8 B |
+| a boxed variable built empty then `struct.set` (`ref.null; struct.new; local.set`) | 204 | 45 | ~8 B -> **not a shape**: by type the Worker's are 69 closures with a null environment and 50 `(cons x nil)`; 6 (Worker) / 32 (`zlib`) are cells, all the `labels` case that needs the cell first |
 | a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B -> **landed**, "The local renumbering" |
 | `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B -> **landed**, "Sparse arity ladders" |
 

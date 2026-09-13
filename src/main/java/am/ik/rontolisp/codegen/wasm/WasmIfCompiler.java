@@ -17,6 +17,57 @@ final class WasmIfCompiler {
 	private WasmIfCompiler() {
 	}
 
+	/**
+	 * Statement-position {@code if} (its value is discarded): a void wasm {@code if}
+	 * whose arms compile for effect, so neither arm materialises a value and no
+	 * {@code drop} follows -- a {@code (when c (setq ...))} is the test, the store and
+	 * nothing else. An arm that is a literal or nil is no arm at all: the test alone
+	 * selects whether the other one runs, with the polarity chosen so no {@code else} is
+	 * written. Not in state-machine mode, whose {@code if} routes resumes through its
+	 * arms ({@code WasmExprCompiler.compileForEffect} does not reach here then).
+	 * @param cons the if form
+	 * @param ctx the function context
+	 */
+	static void compileForEffect(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		LispVal test = parts.get(1);
+		LispVal thenForm = parts.get(2);
+		LispVal elseForm = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
+		if (test instanceof LispTrue || test instanceof LispNil) {
+			WasmExprCompiler.compileForEffect(test instanceof LispTrue ? thenForm : elseForm, ctx);
+			return;
+		}
+		boolean thenEmpty = hasNoEffect(thenForm);
+		boolean elseEmpty = hasNoEffect(elseForm);
+		if (thenEmpty && elseEmpty) {
+			WasmConditionCompiler.compile(test, ctx, false);
+			ctx.writer.write(Instruction.DROP);
+			return;
+		}
+		// With one arm empty the test's own polarity picks the live arm as the wasm
+		// THEN; with both, the Lisp then-arm is the wasm then-arm.
+		WasmConditionCompiler.compile(test, ctx, thenEmpty);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.wasmCtrlDepth++;
+		WasmExprCompiler.compileForEffect(thenEmpty ? elseForm : thenForm, ctx);
+		if (!thenEmpty && !elseEmpty) {
+			ctx.writer.write(Instruction.ELSE);
+			WasmExprCompiler.compileForEffect(elseForm, ctx);
+		}
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+	}
+
+	// A form whose evaluation in statement position does nothing: nil, t, a keyword, a
+	// self-evaluating literal.
+	private static boolean hasNoEffect(LispVal form) {
+		return form instanceof LispNil || form instanceof LispTrue || form instanceof am.ik.rontolisp.LispString
+				|| form instanceof am.ik.rontolisp.LispInteger || form instanceof am.ik.rontolisp.LispDouble
+				|| form instanceof am.ik.rontolisp.LispChar || form instanceof am.ik.rontolisp.LispBigInteger
+				|| form instanceof am.ik.rontolisp.LispRatio
+				|| (form instanceof am.ik.rontolisp.LispSymbol sym && sym.isKeyword());
+	}
+
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
 		if (ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(cons) > 0) {

@@ -165,6 +165,33 @@ final class WasmExprCompiler {
 				WasmPrognCompiler.compileForEffect(cons, ctx);
 				return;
 			}
+			// A conditional in statement position selects between arms nobody reads: a
+			// void wasm if over arms compiled for effect (WasmIfCompiler), which the
+			// when/unless/cond/and/or expansions reach through their if.
+			if (LispNames.IF.equals(sym.name()) && cons.toList().size() >= 3) {
+				WasmIfCompiler.compileForEffect(cons, ctx);
+				return;
+			}
+			if (LispNames.WHEN.equals(sym.name())) {
+				compileForEffect(LispMacroExpander.expandWhen(cons), ctx);
+				return;
+			}
+			if (LispNames.UNLESS.equals(sym.name())) {
+				compileForEffect(LispMacroExpander.expandUnless(cons), ctx);
+				return;
+			}
+			if (LispNames.COND.equals(sym.name())) {
+				compileForEffect(LispMacroExpander.expandCond(cons), ctx);
+				return;
+			}
+			if (LispNames.AND.equals(sym.name())) {
+				compileForEffect(LispMacroExpander.expandAnd(cons), ctx);
+				return;
+			}
+			if (LispNames.OR.equals(sym.name())) {
+				compileForEffect(LispMacroExpander.expandOr(cons), ctx);
+				return;
+			}
 		}
 		compileExpr(expr, ctx);
 		ctx.writer.write(Instruction.DROP);
