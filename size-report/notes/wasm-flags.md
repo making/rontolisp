@@ -238,7 +238,10 @@ above.
 ### A total is not a comparison
 
 Compare section by section, or the answer is decided by things neither compiler
-is being judged on. A worked example, measured 2026-09-13 on a browser-facing
+is being judged on. (One of three ways "smaller" splits into numbers that do not
+move together; `.kb/size-measurement.md` names the other two, of which the
+sharpest is that raw and compressed bytes move in OPPOSITE directions when a
+change relocates bytes instead of deleting them.) A worked example, measured 2026-09-13 on a browser-facing
 reactor (four host DOM imports, four exports, seven string literals) against a
 hand-written non-GC toolchain emitting the same program:
 

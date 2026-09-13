@@ -122,6 +122,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Compile path and optimization
 
+- [size-measurement.md](size-measurement.md) -- "smaller" is five different numbers: raw vs gzip when bytes are moved, a total vs a section, a residue vs what is left
 - [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md) -- the `--optimize` flag: levels, what the shaker drops, the duplicate-body fold, dispatch pruning
 - [pure-builtin-fold.md](pure-builtin-fold.md) -- compile-time fold of pure built-ins over literal arguments, and what is deliberately out
 - [toplevel-statement-values.md](toplevel-statement-values.md) -- a top-level form is a statement; nothing may be emitted only to be dropped

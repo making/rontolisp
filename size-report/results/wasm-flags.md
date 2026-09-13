@@ -5,25 +5,25 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-09-13
-- rontolisp: 0.1.0-SNAPSHOT (`9e802f9`)
+- rontolisp: 0.1.0-SNAPSHOT (`dfca731`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
 | hello_world | `--optimize=off` | core (command) | Preview 1 | 384,271 |
-| hello_world | `--optimize` | core (command) | Preview 1 | 509 |
-| hello_world | `--optimize=size` | core (command) | Preview 1 | 509 |
-| hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,664 |
-| hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 244 |
+| hello_world | `--optimize` | core (command) | Preview 1 | 500 |
+| hello_world | `--optimize=size` | core (command) | Preview 1 | 500 |
+| hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,655 |
+| hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 232 |
 | pi_approx | `--optimize=off` | core (command) | Preview 1 | 384,639 |
 | pi_approx | `--optimize` | core (command) | Preview 1 | 2,442 |
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 1,544 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 2,699 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 3,343 |
 | zlib | `--optimize=off` | core (command) | Preview 1 | 627,039 |
-| zlib | `--optimize` | core (command) | Preview 1 | 116,605 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 90,904 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 95,045 |
+| zlib | `--optimize` | core (command) | Preview 1 | 116,528 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 90,817 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 94,958 |
 
 ## What is measured
 
@@ -265,7 +265,10 @@ above.
 ### A total is not a comparison
 
 Compare section by section, or the answer is decided by things neither compiler
-is being judged on. A worked example, measured 2026-09-13 on a browser-facing
+is being judged on. (One of three ways "smaller" splits into numbers that do not
+move together; `.kb/size-measurement.md` names the other two, of which the
+sharpest is that raw and compressed bytes move in OPPOSITE directions when a
+change relocates bytes instead of deleting them.) A worked example, measured 2026-09-13 on a browser-facing
 reactor (four host DOM imports, four exports, seven string literals) against a
 hand-written non-GC toolchain emitting the same program:
 

@@ -466,7 +466,8 @@ core's `mem`/`memory` **memory** import, kept verbatim with every other non-func
 ## What an external optimizer still finds, and what it is made of
 
 **The rule this section exists to serve: measure what the emitter emits, not what an
-optimizer can recover from it.** A binaryen number is context, never a target -- it does
+optimizer can recover from it.** It is one of three ways "smaller" splits into numbers that
+do not move together -- [size-measurement.md](size-measurement.md) names the other two. A binaryen number is context, never a target -- it does
 not bound how small a module can get and it does not measure what is left to win. Both
 directions have now been walked into:
 
