@@ -5,25 +5,29 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-09-13
-- rontolisp: 0.1.0-SNAPSHOT (`d53c166`)
+- rontolisp: 0.1.0-SNAPSHOT (`f097ebd`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
-| hello_world | `--optimize=off` | core (command) | Preview 1 | 384,271 |
-| hello_world | `--optimize` | core (command) | Preview 1 | 500 |
-| hello_world | `--optimize=size` | core (command) | Preview 1 | 500 |
-| hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,655 |
-| hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 229 |
-| pi_approx | `--optimize=off` | core (command) | Preview 1 | 384,639 |
-| pi_approx | `--optimize` | core (command) | Preview 1 | 2,442 |
-| pi_approx | `--optimize=size` | core (command) | Preview 1 | 1,544 |
-| pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 2,699 |
-| pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 3,333 |
-| zlib | `--optimize=off` | core (command) | Preview 1 | 627,039 |
-| zlib | `--optimize` | core (command) | Preview 1 | 116,528 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 90,817 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 94,958 |
+| hello_world | `--optimize=off` | core (command) | Preview 1 | 369,998 |
+| hello_world | `--optimize` | core (command) | Preview 1 | 487 |
+| hello_world | `--optimize=size` | core (command) | Preview 1 | 487 |
+| hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,642 |
+| hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 224 |
+| pi_approx | `--optimize=off` | core (command) | Preview 1 | 370,366 |
+| pi_approx | `--optimize` | core (command) | Preview 1 | 2,385 |
+| pi_approx | `--optimize=size` | core (command) | Preview 1 | 1,504 |
+| pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 2,659 |
+| pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 3,289 |
+| zlib | `--optimize=off` | core (command) | Preview 1 | 562,487 |
+| zlib | `--optimize` | core (command) | Preview 1 | 102,909 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 78,330 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 82,462 |
+| dom_reactor | `--no-wasi --optimize=off` | core (reactor) | none | 371,686 |
+| dom_reactor | `--no-wasi --optimize` | core (reactor) | none | 2,936 |
+| dom_reactor | `--no-wasi --optimize=size` | core (reactor) | none | 2,635 |
+| dom_reactor | `--no-gc --no-wasi --optimize=size` | core (reactor) | none | 930 |
 
 ## What is measured
 
@@ -33,12 +37,17 @@ How the report is built and run: [../README.md](../README.md).
 | --- | --- |
 | [`programs/hello_world/`](../programs/hello_world) | Write `Hello, World!` to stdout, and nothing else |
 | [`programs/pi_approx/`](../programs/pi_approx) | Approximate pi with the Leibniz series, 1,000,000 terms, to 15 decimal places |
+| [`programs/dom_reactor/`](../programs/dom_reactor) | A browser-facing reactor: four host DOM imports, four exports a page calls, a recursive `fib`. No stdout, no `_start`, nothing to print -- the shape a module takes when the host is a web page |
 | [`programs/zlib/`](../programs/zlib) | Read gzip data from stdin, decompress it with [chipz](https://github.com/froydnj/chipz) 0.8, write the octets to stdout. chipz is `ql:quickload`ed from the live Quicklisp dist like the Worker family, so the row tracks whatever version the dist serves; the pinned copy `ChipzE2eTest` runs against is `src/test/resources/chipz/` |
 
 The two micro programs have a `-nogc` companion each, because `--no-gc` accepts
 only `(defun ...)` and `rontolisp:wasm-export` at top level and has no `format`.
 `zlib` has none: that backend has no arrays at all, so a deflate library cannot
-be expressed there. They follow
+be expressed there. `dom_reactor` needs none either, for the opposite reason --
+it is already inside that subset, so ONE source measures the wasm-GC and the MVP
+core lowering of the same program and the two rows differ only in the backend.
+It has no `--component` row: its import names are the page's (`js_set_text`),
+and the component model wants lower-kebab-case. They follow
 [wado-lang/wado `wasm-size/`](https://github.com/wado-lang/wado/tree/main/wasm-size),
 a cross-language Wasm size comparison, so the rows can be read next to C, Rust,
 Zig, Moonbit and Wado.
@@ -71,6 +80,15 @@ reporting a smaller number for a module that stopped working: the two micro
 programs must still print the right answer under `wasmtime`, and `zlib` -- which
 prints nothing -- must gunzip the check stream to exactly the octets it was made
 from.
+
+**`dom_reactor` cannot be checked by `wasmtime` at all**: its imports come from a
+host page's `env` module, which no WASI runtime supplies. Its check runs under
+`node` against [`programs/dom_reactor/host.mjs`](../programs/dom_reactor/host.mjs),
+which stubs the four DOM calls, drives the four exports, and pins the WHOLE
+transcript -- every string the module hands out, not just the two integers it
+returns. A module that loses a literal, reads the wrong length or folds a branch
+away still instantiates and still returns the right integers; only the text
+catches it. Without `node` on PATH those four rows are measured but not run.
 
 ## Reading the numbers
 
@@ -268,31 +286,47 @@ Compare section by section, or the answer is decided by things neither compiler
 is being judged on. (One of three ways "smaller" splits into numbers that do not
 move together; `.kb/size-measurement.md` names the other two, of which the
 sharpest is that raw and compressed bytes move in OPPOSITE directions when a
-change relocates bytes instead of deleting them.) A worked example, measured 2026-09-13 on a browser-facing
-reactor (four host DOM imports, four exports, seven string literals) against a
-hand-written non-GC toolchain emitting the same program:
+change relocates bytes instead of deleting them.) The worked example is the
+`dom_reactor` row above, measured 2026-09-14 against a hand-written non-GC
+toolchain emitting the same page -- the same four imports, the same four
+exports, the same eleven literals, which is why this program's literal text is
+written to fixed lengths:
 
 | Section | that toolchain | rontolisp `--no-gc` |
 | --- | ---: | ---: |
-| total | 1,490 | **1,383** |
-| code | **299** | 491 |
-| data | 451 | 498 |
-| exports | 378 (24 entries) | **128 (8)** |
-| types | **31 (6)** | 129 (24) |
-| globals | 56 | **7** |
+| total | 1,490 | **930** |
+| code | 299 | **230** |
+| data | **451** | 484 |
+| imports | 78 (4) | 78 (4) |
+| exports | 378 (24 entries) | **69 (5)** |
+| types | **31 (6)** | 36 (7) |
+| globals | 56 | **none** |
+| custom | 148 | **none** |
 
-rontolisp wins the total and loses the only row that measures code generation.
-The 378-byte export section is every internal function plus the linker's own
-symbols (`__dso_handle`, `__data_end`, `__stack_low`, `__heap_base`); exporting
-only the four entry points the page calls would put that toolchain around
-1,180 and the totals the other way round. The 129-byte type section is
-rontolisp emitting one entry per function with no deduplication -- 24 types of
-which 12 are distinct.
+**The total is the least informative row.** 378 of that toolchain's bytes are an
+export section holding every internal function plus the linker's own symbols
+(`__dso_handle`, `__data_end`, `__stack_low`, `__heap_base`), and 148 more are a
+custom section; exporting only the four entry points the page calls would put it
+near 1,180. Read `code` first -- that is the row that measures code generation,
+and it stands at 299 against 230 whatever is decided about the other rows.
 
-So: **a total can be moved by deciding what to export, and a type section by
-deciding whether to fold duplicates -- neither is what "how big is the code"
-asks.** Read `code` first, then ask what the other rows are paying for. The
-same discipline in the other direction: `.kb/optimize-dead-code-elimination.md`,
+The two rows still going the other way are worth naming, because each says
+something different:
+
+- **data, 484 against 451.** The literal TEXT is 477 bytes against 443: this
+  backend packs its literals with no NUL terminator and no alignment padding, so
+  the text itself is the smaller of the two. The 44-byte difference is a
+  four-byte `[len]` header on each of the eleven literals -- which this program
+  never reads, because a literal handed to a host import is lowered as two
+  compile-time constants (`.kb/no-gc-scalar-wasm.md`, "A literal `:string`
+  argument is two constants").
+- **types, 36 against 31.** Seven entries, all used, none duplicated -- this is
+  not the missing-deduplication story it used to be. The extra entry is `fib`'s
+  `(i64) -> (i64)`: integers here are i64, exact to 2^63, so `fib` cannot share a
+  type with the `(i32) -> (i32)` export the way a 32-bit implementation's can.
+  That is the value model's price, and it is five bytes.
+
+The same discipline in the other direction: `.kb/optimize-dead-code-elimination.md`,
 "What an external optimizer still finds", on why a residue is neither a ceiling
 nor a measure of what is left.
 
