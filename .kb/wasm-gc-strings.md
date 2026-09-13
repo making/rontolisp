@@ -145,10 +145,74 @@ byte-identical: `hello_world` 588, `pi_approx` 4,826 (its `format` opens the gat
 the CONTENT against a Node host in `WasmStringParamBoundaryE2eTest`, whose fill-pointered
 character-vector argument is exactly the case a wrong gate would corrupt.
 
+## The byte loop stays: `array.new_data` would cost the data section's tree shake
+
+`_str_build` is **68 bytes** in every module (`-Drontolisp.wasm.debug-func-sizes`, measured on
+`hello_world`, `webgl-triangle` and `zlib`), and 66 of them are the
+`while (i < len) arr[i] = mem[off + i]` loop. `array.new_data $str_bytes $seg (offset) (size)`
+is one instruction that does exactly that copy; the replacement body is about 25 bytes (no
+locals: `off`, `len`, then `off - dataBase` / `len` / `array.new_data` between the `struct.new`
+operands), so the CEILING of the change is roughly **-40** per module once the `DataCount`
+section a passive segment needs is paid back. That ceiling is the whole prize, and it is not
+close to the price.
+
+**The obstacle is not who else reads the literal bytes out of linear memory.** That list is
+real -- `_intern` / `_rd_memeq` under `usesRead`, `_lit_stage` for a literal `:string` import
+argument ([[wasm-import]]), and the word-read blobs appended into the SAME segment (the
+Schubfach float tables, the instance-layout records, the reader's char-name table and struct
+directory, the eval funcId->name registry, the runtime intern table's rows) -- but a
+`memory.init` in a start function, or a gate of the `Ctx.charvecPossible` kind, answers it for
+about 25 bytes.
+
+**The obstacle is the tree shaker.** `WasmTreeShaker.rebuildDataSection` cuts every dead
+literal out of the blob and re-emits the survivors as one ACTIVE segment per surviving run,
+each at the absolute address it already had, so no baked `i32.const` moves (2 to 19 runs on
+the corpus: 6 data segments on `hello_world`, 22 on `zlib`). A passive segment has no such
+freedom. The ONE shared `_str_build` carries one segment-index IMMEDIATE and one affine
+`off - dataBase`, so the blob addressed that way must stay whole and contiguous -- and the
+literals `_str_build` builds are exactly the shakeable ones (`StringTable.attributing`: a
+string first interned inside the pass-2 window is a candidate).
+
+Measured 2026-09-13, jar, `--optimize` / `--optimize=size`, by emptying the range list the
+shaker is handed. `uncut` is the whole blob pinned (strings, their intern rows and the
+appended blobs); `strings only` is the optimistic variant where the blobs are somehow left in
+their own cuttable active segments and only the literals are pinned:
+
+| module | raw | uncut | strings only | gzip | uncut gz |
+| --- | --- | --- | --- | --- | --- |
+| `hello_world` | 487 | +2,418 | +1,632 | 388 | +1,520 |
+| `pi_approx` | 1,504 | +2,418 | +1,632 | 910 | +1,556 |
+| `webgl-triangle` | 1,653 | +2,423 | +1,637 | 1,039 | +1,535 |
+| `webgl-galaxy` | 17,531 | +2,500 | +1,714 | 7,866 | +1,640 |
+| `webgl-cube` | 18,001 | +2,509 | +1,723 | 6,687 | +1,686 |
+| `rainbow` | 28,138 | +1,673 | +1,638 | 11,827 | +847 |
+| `webgl-heat3d` | 31,457 | +2,563 | +1,776 | 11,875 | +1,722 |
+| `webgl-platformer` | 68,670 | +2,508 | +1,722 | 22,403 | +1,686 |
+| `zlib` (`=size`) | 78,330 | +2,968 | +2,219 | 28,323 | +1,572 |
+| `zlib` | 102,909 | +2,968 | +2,219 | 36,607 | +1,648 |
+| `webgl-robot-arm` | 169,578 | +1,455 | +1,455 | 56,002 | +635 |
+| `webgl-solids` | 222,795 | +987 | +987 | 77,069 | +259 |
+| `minesweeper` | 262,355 | +120 | +92 | 65,004 | +43 |
+| `webgl-battlefront` | 287,832 | +1,449 | +1,449 | 86,150 | +651 |
+
+So the trade is **-40 bytes of code against +92 to +2,968 bytes of data**, and the mildest
+module in the corpus still loses at twice the ceiling while the typical one loses 40-60x.
+Raw and gzip agree here -- this is a change that ADDS bytes rather than relocating them
+([[size-measurement]]) -- so naming a different target number does not change the answer.
+The only shape where the passive segment would be free is `--optimize=off`, where nothing is
+shaken and nothing ships.
+
+What would buy the instruction back is making every baked literal offset a renumbered
+reference class the shaker rewrites, the way function and type indices already are, so the
+blob could be compacted instead of holed -- carried by every pass that splices a body (the
+inliner, the body folder, the peephole, the ref-type folder, the import injector), for 40
+bytes. That is the measurement's answer, not a plan.
+
 ## Other constraints
 - `emitGrowHeapTo` guards at string builders are KEPT: the scratch grows ON DEMAND, so peak linear
   memory is bounded by the largest single live string, not the sum of all builds.
-- No `DataCount`/`array.new_data`/segment reorder (the builders copy from linear). Adding
+- No `DataCount`/`array.new_data`/segment reorder: the builders copy from linear, and the
+  section above is the measurement that says they should keep doing it. Adding
   `TYPE_STR_TO_MEM`/`TYPE_WRITE_STR_GC` shifts the wrapper TYPE base and `FUNC_USER_BASE`, but the
   component binds by export name ([[wasi-component]]).
 - `--simd` puts NOTHING in linear memory: packed float arrays become `TYPE_VBLOCK` over
