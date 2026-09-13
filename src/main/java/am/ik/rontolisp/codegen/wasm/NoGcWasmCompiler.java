@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -483,6 +484,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		this.imports = importDecls;
 		this.importCallSites = new LinkedHashMap<>();
+		this.literalOccurrences = new HashMap<>();
 		this.foldedImports = Set.of();
 		this.foldTargets = Map.of();
 		this.foldOrdinals = Map.of();
@@ -582,6 +584,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// -- so only the EMITTED function list narrows, which is why the decision sits
 		// between the two.
 		this.foldedImports = chooseFoldedImports(importDecls, importOrdinals, index.keySet(), layout);
+		// A literal whose every occurrence is a folded site's :string argument is never
+		// read as a string value, so it loses its [len] header. The two decisions are
+		// circular -- the fold sizes each site's address constants against a layout, and
+		// the layout needs the fold -- and are resolved in this order: the fold is sized
+		// against the all-headered plan, then the SAME literal order is re-laid with the
+		// header-free set applied. Dropping headers only lowers addresses, so a constant
+		// the sizing measured can only get shorter, never flip a fold into a loss; and
+		// nothing has been emitted yet, so every body compiles against the final layout.
+		layout = layout.withHeaderFree(headerFreeLiterals(importDecls, layout));
 		List<String> emitted = reachable;
 		if (!this.foldedImports.isEmpty()) {
 			Map<String, WasmImportCompiler.Decl> targets = new LinkedHashMap<>();
@@ -1378,7 +1389,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * program keeps zero imports and stays byte-identical, so the {@code --component}
 	 * wrap needs no adapter for it.
 	 *
-	 * @param literals string-literal content to its header address in the data segment
+	 * @param literals string-literal content to its header address in the data segment,
+	 * for the HEADERED literals only (see {@link MemLayout})
+	 * @param regions every literal's content to its content address, headered or not
 	 * @param data the static data-segment bytes (laid out from {@code dataBase})
 	 * @param dataBase the memory address at which {@code data} is placed
 	 * @param heapBase the initial bump-allocator pointer (just past the static data)
@@ -1405,10 +1418,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * and the mark/reset bodies behind two of them) is emitted at all
 	 * @param allocates whether anything in the module can bump the heap during a call
 	 */
-	private record Mem(Map<String, Integer> literals, byte[] data, int dataBase, int heapBase, int iovAddr,
-			int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex, int markIndex, int resetIndex,
-			int ftoaIndex, int schubBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed,
-			boolean hostArena, boolean allocates) {
+	private record Mem(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int dataBase,
+			int heapBase, int iovAddr, int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex,
+			int markIndex, int resetIndex, int ftoaIndex, int schubBase, int writeStdoutIndex, boolean used,
+			boolean printUsed, boolean ftoaUsed, boolean hostArena, boolean allocates) {
 
 		// The five Schubfach helpers behind __ftoa, appended right after it
 		// in this order; bodies come from WasmSchubfachRuntimeBuilder.
@@ -1460,7 +1473,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * pass-through decision that determines it. {@link #placeFunctions} assigns the
 	 * indices once that count is known.
 	 *
-	 * @param literals string-literal content to its header address in the data segment
+	 * <p>
+	 * A literal is laid out in one of two shapes. HEADERED: {@code [len:i32 LE][bytes]},
+	 * the string value a Lisp-level use reads, its header address in {@code literals}.
+	 * HEADER-FREE: the bytes alone, for a literal whose every occurrence is a
+	 * {@code :string} argument of a folded import call site
+	 * ({@link #chooseFoldedImports}) -- such a site pushes the content address and the
+	 * byte length as two constants and never reads a header. {@code regions} maps every
+	 * literal, in either shape, to its content address. A header-free literal has no
+	 * {@code literals} entry, so a value use of one fails loudly instead of reading a
+	 * neighbour's bytes as a length.
+	 *
+	 * @param literals string-literal content to its header address, headered ones only
+	 * @param regions every literal's content to its content address
 	 * @param data the static data-segment bytes (laid out from {@code STR_DATA_BASE})
 	 * @param heapBase the initial bump-allocator pointer (just past the static data)
 	 * @param iovAddr the address of the 16-byte fd_write scratch; 0 when print is unused
@@ -1474,17 +1499,115 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param allocates whether anything in the module can bump the heap during a call,
 	 * which is what an export wrapper's save/restore bracket exists to undo
 	 */
-	private record MemLayout(Map<String, Integer> literals, byte[] data, int heapBase, int iovAddr, int schubBase,
-			boolean used, boolean printUsed, boolean ftoaUsed, boolean hostArena, boolean allocates) {
+	private record MemLayout(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int heapBase,
+			int iovAddr, int schubBase, boolean used, boolean printUsed, boolean ftoaUsed, boolean hostArena,
+			boolean allocates) {
+
+		/**
+		 * The same plan with the given literals laid out header-free, in the same order.
+		 * Every gate is unchanged -- each is a property of the bodies and the boundary,
+		 * not of the layout -- so only the data bytes and the addresses derived from them
+		 * move.
+		 */
+		MemLayout withHeaderFree(Set<String> headerFree) {
+			if (headerFree.isEmpty()) {
+				return this;
+			}
+			DataPlan plan = layoutData(this.regions.keySet(), headerFree, this.ftoaUsed, this.printUsed);
+			return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
+					plan.schubBase(), this.used, this.printUsed, this.ftoaUsed, this.hostArena, this.allocates);
+		}
+	}
+
+	/**
+	 * The data-segment half of a {@link MemLayout}, as {@link #layoutData} answers it.
+	 */
+	private record DataPlan(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int heapBase,
+			int iovAddr, int schubBase) {
 	}
 
 	private static final int STR_DATA_BASE = 8;
 
+	/**
+	 * Lays the literals out from {@link #STR_DATA_BASE} in the given order -- each
+	 * headered, or its bytes alone when named in {@code headerFree} -- then the Schubfach
+	 * tables and the fd_write scratch.
+	 */
+	private static DataPlan layoutData(Collection<String> literals, Set<String> headerFree, boolean ftoaUsed,
+			boolean printUsed) {
+		LinkedHashMap<String, Integer> offsets = new LinkedHashMap<>();
+		LinkedHashMap<String, Integer> regions = new LinkedHashMap<>();
+		ByteArrayOutputStream data = new ByteArrayOutputStream();
+		int cursor = STR_DATA_BASE;
+		for (String s : literals) {
+			// Blocks are packed, not 4-byte aligned. The only aligned access into one is
+			// the `i32.load align=2` that reads the [len] header, and in wasm the
+			// alignment immediate is a HINT: an unaligned address is legal and every
+			// engine serves it. Padding to it cost a byte per odd-length literal and
+			// bought nothing. (The Schubfach tables below keep their alignment: those
+			// are i64/f64 table reads in the float renderer's inner loop, where the hint
+			// is worth honouring.)
+			byte[] bytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			if (!headerFree.contains(s)) {
+				offsets.put(s, cursor);
+				writeI32LE(data, bytes.length);
+				cursor += 4;
+			}
+			regions.put(s, cursor);
+			data.write(bytes, 0, bytes.length);
+			cursor += bytes.length;
+		}
+		// The Schubfach tables behind __ftoa: raw bytes after the literals.
+		int schubBase = 0;
+		if (ftoaUsed) {
+			while ((cursor & 3) != 0) {
+				data.write(0);
+				cursor++;
+			}
+			schubBase = cursor;
+			byte[] blob = SchubfachTables.blob();
+			data.write(blob, 0, blob.length);
+			cursor += blob.length;
+		}
+		int heapBase = (cursor + 7) & ~7;
+		// The fd_write scratch (iovec + nwritten) sits between the static data and the
+		// bump heap, present only when the module prints.
+		int iovAddr = 0;
+		if (printUsed) {
+			iovAddr = heapBase;
+			heapBase += 16;
+		}
+		return new DataPlan(offsets, regions, data.toByteArray(), heapBase, iovAddr, schubBase);
+	}
+
+	/**
+	 * The fixed text fragments the runtime helpers hand out as HEADER pointers -- the
+	 * printer's, and {@code __ftoa}'s IEEE specials -- pooled only when used. They stay
+	 * headered whatever a body does with the same spelling.
+	 */
+	private static List<String> runtimeLiterals(boolean printUsed, boolean ftoaUsed) {
+		List<String> out = new ArrayList<>();
+		if (printUsed) {
+			out.add("\n");
+			out.add("\"");
+			// The single-escape byte print emits before an embedded " / \ (todo 216).
+			out.add("\\");
+			out.add("T");
+			out.add("NIL");
+		}
+		if (ftoaUsed) {
+			out.add("NaN");
+			out.add("Infinity");
+			out.add("-Infinity");
+		}
+		return out;
+	}
+
 	private MemLayout planMemory(List<String> reachable, Map<String, Defun> defuns,
 			Map<String, WasmImportCompiler.Decl> imports, List<WasmExportCompiler.Decl> exportDecls, Types types) {
-		// Gather every string literal in every reachable body (deterministic order), then
-		// lay each out as a 4-byte-aligned [len:i32 LE][bytes] header. A host import has
-		// no body: everything below that walks one skips it.
+		// Gather every string literal in every reachable body (deterministic order); they
+		// are laid out below (layoutData). A host import has no body: everything below
+		// that walks one skips it.
 		LinkedHashSet<String> literals = new LinkedHashSet<>();
 		for (String name : reachable) {
 			if (imports.containsKey(name)) {
@@ -1510,57 +1633,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				break;
 			}
 		}
-		if (printUsed) {
-			literals.add("\n");
-			literals.add("\"");
-			// The single-escape byte print emits before an embedded " / \ (todo 216).
-			literals.add("\\");
-			literals.add("T");
-			literals.add("NIL");
-		}
-		if (ftoaUsed) {
-			// __ftoa returns these header pointers directly for the IEEE specials.
-			literals.add("NaN");
-			literals.add("Infinity");
-			literals.add("-Infinity");
-		}
-		LinkedHashMap<String, Integer> offsets = new LinkedHashMap<>();
-		ByteArrayOutputStream data = new ByteArrayOutputStream();
-		int cursor = STR_DATA_BASE;
-		for (String s : literals) {
-			// Blocks are packed, not 4-byte aligned. The only aligned access into one is
-			// the `i32.load align=2` that reads the [len] header, and in wasm the
-			// alignment immediate is a HINT: an unaligned address is legal and every
-			// engine serves it. Padding to it cost a byte per odd-length literal and
-			// bought nothing. (The Schubfach tables below keep their alignment: those
-			// are i64/f64 table reads in the float renderer's inner loop, where the hint
-			// is worth honouring.)
-			offsets.put(s, cursor);
-			byte[] bytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-			writeI32LE(data, bytes.length);
-			data.write(bytes, 0, bytes.length);
-			cursor += 4 + bytes.length;
-		}
-		// The Schubfach tables behind __ftoa: raw bytes after the literals.
-		int schubBase = 0;
-		if (ftoaUsed) {
-			while ((cursor & 3) != 0) {
-				data.write(0);
-				cursor++;
-			}
-			schubBase = cursor;
-			byte[] blob = SchubfachTables.blob();
-			data.write(blob, 0, blob.length);
-			cursor += blob.length;
-		}
-		int heapBase = (cursor + 7) & ~7;
-		// The fd_write scratch (iovec + nwritten) sits between the static data and the
-		// bump heap, present only when the module prints.
-		int iovAddr = 0;
-		if (printUsed) {
-			iovAddr = heapBase;
-			heapBase += 16;
-		}
+		literals.addAll(runtimeLiterals(printUsed, ftoaUsed));
+		// Every literal headered for now. Which ones can drop the header depends on the
+		// import fold, and the fold is sized against THIS plan (chooseFoldedImports), so
+		// the caller re-lays the same order once the fold is decided (withHeaderFree).
+		DataPlan plan = layoutData(literals, Set.of(), ftoaUsed, printUsed);
 
 		boolean boundaryString = false;
 		// Whether the HOST has anything to do with the bump heap, which is what the
@@ -1638,8 +1715,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// Printing renders through __itoa / __ftoa, both of which allocate the text they
 		// return; a string-producing op and a packed vector allocate by definition.
 		allocates |= stringOp || floatVec || printUsed;
-		return new MemLayout(offsets, data.toByteArray(), heapBase, iovAddr, schubBase, used, printUsed, ftoaUsed,
-				hostArena, allocates);
+		return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
+				plan.schubBase(), used, printUsed, ftoaUsed, hostArena, allocates);
 	}
 
 	/**
@@ -1672,10 +1749,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			next += 6;
 		}
 		int writeStdoutIndex = layout.printUsed() ? next : -1;
-		return new Mem(layout.literals(), layout.data(), STR_DATA_BASE, layout.heapBase(), layout.iovAddr(), funcBase,
-				allocIndex, memcpyIndex, streqIndex, itoaIndex, markIndex, resetIndex, ftoaIndex, layout.schubBase(),
-				writeStdoutIndex, layout.used(), layout.printUsed(), layout.ftoaUsed(), layout.hostArena(),
-				layout.allocates());
+		return new Mem(layout.literals(), layout.regions(), layout.data(), STR_DATA_BASE, layout.heapBase(),
+				layout.iovAddr(), funcBase, allocIndex, memcpyIndex, streqIndex, itoaIndex, markIndex, resetIndex,
+				ftoaIndex, layout.schubBase(), writeStdoutIndex, layout.used(), layout.printUsed(), layout.ftoaUsed(),
+				layout.hostArena(), layout.allocates());
 	}
 
 	/** The printing operators that gate the fd_write import. */
@@ -2971,6 +3048,51 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	/**
+	 * The literals whose EVERY occurrence in a reached body is a {@code :string} argument
+	 * of a folded import's call site: those are pushed as (content address, byte length)
+	 * constants and never read through a header, so they are laid out without one. A
+	 * spelling used any other way as well -- read by {@code length}, printed, handed to
+	 * an unfolded import's wrapper -- keeps its header, and a folded site then points
+	 * past it. The runtime helpers' own fragments ({@link #runtimeLiterals}) are header
+	 * pointers by contract and stay headered whatever a body does with the spelling.
+	 *
+	 * <p>
+	 * Counted, not matched: the folded sites' literals per spelling against
+	 * {@link #literalOccurrences}. Both tallies come from the one walk
+	 * ({@link #collectCalls}) over the same expanded forms -- a site's arguments are
+	 * walked right after the site is recorded -- so they agree occurrence for occurrence,
+	 * and a macro that duplicates a literal into a value position raises only the second.
+	 * @param importDecls every import declaration, by Lisp name
+	 * @param layout the all-headered plan the fold was sized against
+	 * @return the spellings to lay out header-free
+	 */
+	private Set<String> headerFreeLiterals(Map<String, WasmImportCompiler.Decl> importDecls, MemLayout layout) {
+		if (this.foldedImports.isEmpty()) {
+			return Set.of();
+		}
+		Map<String, Integer> folded = new HashMap<>();
+		for (String name : this.foldedImports) {
+			List<BoundaryType> paramTypes = Objects.requireNonNull(importDecls.get(name)).paramTypes();
+			for (ImportSite site : this.importCallSites.getOrDefault(name, List.of())) {
+				List<LispVal> args = site.form().toList();
+				for (int p = 0; p < paramTypes.size(); p++) {
+					if (paramTypes.get(p) == BoundaryType.STRING && args.get(p + 1) instanceof LispString literal) {
+						folded.merge(literal.value(), 1, Integer::sum);
+					}
+				}
+			}
+		}
+		Set<String> headerFree = new LinkedHashSet<>();
+		for (Map.Entry<String, Integer> entry : folded.entrySet()) {
+			if (entry.getValue().equals(this.literalOccurrences.get(entry.getKey()))) {
+				headerFree.add(entry.getKey());
+			}
+		}
+		headerFree.removeAll(runtimeLiterals(layout.printUsed(), layout.ftoaUsed()));
+		return headerFree;
+	}
+
+	/**
 	 * What folding ONE call site costs in bytes, or {@code null} when the site cannot
 	 * fold at all (a {@code :string} argument that is not a literal, a literal the layout
 	 * has no address for, or an arity the generic path is about to report).
@@ -3004,11 +3126,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			if (!(args.get(p + 1) instanceof LispString literal)) {
 				return null;
 			}
+			// Sized on the all-headered plan, where every literal has a header address.
 			Integer offset = layout.literals().get(literal.value());
 			if (offset == null) {
 				return null;
 			}
-			emitLiteralRegion(lowered, offset, literal.value());
+			emitLiteralRegion(lowered, offset + 4, literal.value());
 			wrapped.write(Instruction.I32_CONST).writeSignedLeb128(offset);
 		}
 		emitImportResultBox(lowered, decl.returnType(), () -> 0);
@@ -3038,7 +3161,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				// Guaranteed by chooseFoldedImports, which walked these same sites.
 				String content = ((LispString) arg).value();
 				emitLiteralRegion(fn.writer,
-						Objects.requireNonNull(fn.mem.literals().get(content),
+						Objects.requireNonNull(fn.mem.regions().get(content),
 								() -> "--no-gc: import literal not laid out in '" + fn.fnName + "': " + content),
 						content);
 				continue;
@@ -3288,25 +3411,52 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// The checks themselves, over a scratch local the caller has already allocated.
+	//
+	// For :s8, :s16, :s32 and :u32 this is the canon-compare shape the wasm-GC lowering
+	// (WasmExportCompiler.emitNarrowIntResult) already uses: in range exactly when
+	// narrowing to the declared width and widening back is the identity, so
+	// `v != canon(v)` traps with one compare regardless of width, and the bound itself
+	// never needs a constant. :u8 and :u16 keep their single bound compare -- the bound
+	// there is a two- or three-byte constant, cheaper than the mask the canon form would
+	// need -- and :u64 keeps the plain sign check (only the sign can be wrong). Measured
+	// 2026-09-14 against c972efa5d, .todo/811.
 	private static void emitRangeChecks(WasmWriter w, BoundaryType type, boolean fromFloat, int slot) {
 		boolean narrowSigned = type.signed() && type.bits() < 64;
 		boolean narrowUnsigned = !type.signed() && type.bits() < 64;
 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(slot);
-		BoundaryType.Range range = Objects.requireNonNull(type.range());
-		if (narrowSigned) {
-			emitTrapIf(w, slot, Instruction.I64_LT_S, range.min().longValueExact());
-			emitTrapIf(w, slot, Instruction.I64_GT_S, range.max().longValueExact());
+		if (narrowSigned || type == BoundaryType.U32) {
+			emitCanonCompareTrap(w, type, slot);
 		}
 		else if (narrowUnsigned) {
 			// One unsigned comparison covers both ends: a negative i64 read as an
 			// unsigned
 			// 64-bit value is larger than any sub-64-bit unsigned maximum.
+			BoundaryType.Range range = Objects.requireNonNull(type.range());
 			emitTrapIf(w, slot, Instruction.I64_GT_U, range.max().longValueExact());
 		}
 		else {
 			emitTrapIf(w, slot, Instruction.I64_LT_S, 0);
 		}
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
+	}
+
+	// `if (local[slot] != canon(local[slot])) unreachable` -- traps unless narrowing to
+	// the declared width and widening back is the identity. One compare regardless of
+	// width, and no bound constant.
+	private static void emitCanonCompareTrap(WasmWriter w, BoundaryType type, int slot) {
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
+		switch (type) {
+			case S8 -> w.write(Instruction.I64_EXTEND8_S);
+			case S16 -> w.write(Instruction.I64_EXTEND16_S);
+			case S32 -> w.write(Instruction.I32_WRAP_I64, Instruction.I64_EXTEND_S_I32);
+			case U32 -> w.write(Instruction.I32_WRAP_I64, Instruction.I64_EXTEND_U_I32);
+			default -> throw new IllegalArgumentException("not a canon-compare boundary type: " + type);
+		}
+		w.write(Instruction.I64_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
 	}
 
 	// `if (local[slot] <op> bound) unreachable` -- the boundary refusing a value it
@@ -3630,6 +3780,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * {@link #forwarders} exists.
 	 */
 	private Map<String, List<ImportSite>> importCallSites = new LinkedHashMap<>();
+
+	/**
+	 * How many times each string literal occurs in the reached bodies, counted by
+	 * {@link #collectCalls} over the same macro-expanded forms that fill
+	 * {@link #importCallSites} -- the other half of {@link #headerFreeLiterals}'s
+	 * comparison.
+	 */
+	private Map<String, Integer> literalOccurrences = new HashMap<>();
 
 	/**
 	 * A reached call to a host import: the name actually in call position -- the import
@@ -6075,7 +6233,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// Writes a static literal's content bytes to stdout via the __write_stdout funnel.
 	private void emitWriteLiteral(Fn fn, String content) {
-		Integer off = fn.mem.literals().get(content);
+		Integer off = fn.mem.regions().get(content);
 		if (off == null) {
 			throw new IllegalStateException("--no-gc: print literal not laid out in '" + fn.fnName + "': " + content);
 		}
@@ -6085,11 +6243,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// Pushes a laid-out literal's (content ptr, byte length) -- the pair every consumer
 	// of raw text in this backend takes, from __write_stdout to a host import's :string
-	// parameter. Both halves are compile-time constants: the [len][bytes] header sits at
-	// a fixed address in the static data segment, so the `ptr+4; [ptr]` arithmetic a
-	// runtime string needs has nothing left to compute.
-	private static void emitLiteralRegion(WasmWriter w, int headerOffset, String content) {
-		w.write(Instruction.I32_CONST).writeSignedLeb128(headerOffset + 4);
+	// parameter. Both halves are compile-time constants: the bytes sit at a fixed address
+	// in the static data segment, so the `ptr+4; [ptr]` arithmetic a runtime string needs
+	// has nothing left to compute -- and a literal only ever pushed this way carries no
+	// [len] header at all (MemLayout).
+	private static void emitLiteralRegion(WasmWriter w, int contentOffset, String content) {
+		w.write(Instruction.I32_CONST).writeSignedLeb128(contentOffset);
 		w.write(Instruction.I32_CONST)
 			.writeSignedLeb128(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
 	}
@@ -6455,8 +6614,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			case LispDouble ignored -> {
 			}
-			case LispString ignored -> {
-			}
+			case LispString s -> this.literalOccurrences.merge(s.value(), 1, Integer::sum);
 			case LispFloatArray ignored -> {
 			}
 			case LispChar ignored -> {

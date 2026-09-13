@@ -125,6 +125,31 @@ the padding that used to 4-align each block bought nothing and is gone (2026-09-
 bytes on the `.todo/artefacts/805-.../bench.lisp` reactor, output identical). The
 Schubfach tables after the literals DO keep their alignment: those are i64/f64 table reads
 in the float renderer's inner loop.
+
+**A literal only folded import sites use has no header.** A folded site (below) pushes the
+content address and byte length as constants, so a spelling whose EVERY occurrence is a
+folded site's `:string` argument is laid out as its bytes alone (`MemLayout.regions` holds
+every literal's content address, `literals` only the headered ones' header address, so a
+value use of a header-free literal fails loudly). Used any other way too -- `length`,
+`print`, an unfolded import -- it keeps its header and the folded site points past it. The
+printer's and `__ftoa`'s fragments are header pointers by contract and are never stripped.
+- **Classified by count over one walk**: `collectCalls` tallies every literal occurrence
+  over the same expanded forms that record the import sites, and a spelling is header-free
+  when the folded sites' tally equals it.
+- **The fold and the layout are circular**, resolved in one order: `chooseFoldedImports`
+  is sized against the all-headered plan, then `withHeaderFree` re-lays the SAME literal
+  order. Dropping headers only lowers addresses, so a sized constant can only shorten.
+  Every gate (`printUsed`, `hostArena`, ...) is a property of the bodies, not the layout.
+- `chooseFoldedImports` does not count the four bytes per literal folding now also saves;
+  an import just the wrong side of its comparison stays unfolded. Left alone until a
+  measurement asks (the accounting is whole-program: spellings are shared across imports).
+- Measured 2026-09-13 on `.todo/artefacts/810-no-gc-dead-literal-length-headers/reactor.lisp`
+  (eleven folded-only literals): `--optimize=size` 930 -> 886 raw, gzip 650 -> 626, data
+  484 -> 440, code unchanged; `--optimize=off` 1353 -> 1309. Host output identical; that
+  artefact's `probe/` matches the interpreter at both levels, and its no-fold control is
+  byte-identical. With `.todo/811`'s range guard merged the same reactor is 900 -> 856
+  (gzip 613; code 200, data 440): the two compose exactly. A lower `heapBase` can shorten
+  its LEB128 in the global section.
 - `(concatenate 'string ...)` bump-allocates via `__alloc` (mut-i32 heap-pointer global 0)
   and copies via `__memcpy`. Only the STRING result family exists, so any other designator —
   or a computed one — is a compile error naming it
@@ -159,6 +184,19 @@ wrapper is elided and the export names the internal function directly
 internal function is itself `(...) -> ()`; a `:void` export of a value-answering body still
 takes a wrapper, whose whole content is the `drop`. Two documented divergences (README
 "Non-GC Output"): no rational type, and `0` is false.
+- **`emitRangeChecks`'s guard shape follows the width, not one fixed pattern.** `:s8`,
+  `:s16`, `:s32` and `:u32` use the canon-compare shape `WasmExportCompiler.emitNarrowIntResult`
+  (wasm-GC) already uses: narrowing to the declared width and widening back is the identity
+  exactly when the value is in range, so `v != canon(v)` traps with ONE compare and no bound
+  constant (`I64_EXTEND8_S` / `I64_EXTEND16_S` / `I32_WRAP_I64;I64_EXTEND_S_I32` /
+  `I32_WRAP_I64;I64_EXTEND_U_I32`). `:u8` and `:u16` keep the single bound compare
+  (`I64_GT_U` against the max) instead: their bound is a two- or three-byte constant, cheaper
+  than the mask the canon form would need. `:u64` keeps the plain `I64_LT_S 0` sign check --
+  only the sign can be wrong. Measured 2026-09-14 against `c972efa5d` (`.todo/811`): canon
+  form is smaller for `:s8`/`:s16`/`:s32`/`:u32` (-10/-12/-15/-2 bytes) and larger for
+  `:u8`/`:u16` (+3/+3), so those two are excluded. `emitTrapIf`'s two-bound-compare shape
+  from before this measurement is gone for every type it used to serve except `:u64`'s
+  single-sided check.
 - **Wrapper auto-reset for scalar returns**: `__ronto_alloc` never frees. When the return
   type is a **non-memory scalar** (NOT `:string`/`:s-expr`), `Mem.used()` **and**
   `Mem.allocates()`, `compileWrapperBody` snapshots heap global 0 at entry (before arg
@@ -449,7 +487,11 @@ the WASI one is sunk).
 `aModuleThatOnlyPassesItsOwnLiteralsOutOmitsTheArenaApi`,
 `aStringReturningImportKeepsTheArenaApi`, `aWrapperThatCannotAllocateCarriesNoHeapBracket`,
 `aComparisonFeedsTheBranchWithoutBeingWidenedFirst`, `theConstantTrueArmOfACondEmitsNoTest`,
-`stringLiteralsArePackedWithoutAlignmentPadding`), the VOID group
+`stringLiteralsArePackedWithoutAlignmentPadding`,
+`aLiteralOnlyFoldedImportSitesReadCarriesNoLengthHeader`,
+`aLiteralAlsoReadAsAValueKeepsItsLengthHeader`,
+`theRuntimeTextFragmentsKeepTheirHeadersWhenAFoldedSiteSharesTheSpelling`; the content
+each shape hands the host is `NoGcWasmImportE2eTest.aFoldedLiteralReachesTheHostIntactWhetherOrNotItKeepsItsHeader`), the VOID group
 (`aVoidImportCallLeavesNothingForItsCallerToDrop`, `aVoidBodyMakesAVoidExportAPassThrough`,
 `theDeadNilOfACondTArmDoesNotDragAVoidChainBackToAnInteger`,
 `aWhileLoopPushesNothingForTheFormAfterItToDrop`), the heap-reset trio,
