@@ -672,8 +672,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// fit the move's budget; then the single-call-site move, which unreferences
 			// the callee rather than deleting it, so the shake behind it is what collects
 			// the body, the function entry and the type only that entry named.
-			module = am.ik.wasm.WasmTreeShaker
-				.shake(am.ik.wasm.WasmInliner.inline(am.ik.wasm.WasmPeephole.rewrite(module)));
+			module = am.ik.wasm.WasmLocalOrder.reorder(am.ik.wasm.WasmTreeShaker
+				.shake(am.ik.wasm.WasmInliner.inline(am.ik.wasm.WasmPeephole.rewrite(module))));
 		}
 		if (this.component) {
 			// Post-stage wrap: the core module is byte-identical to the non-component

@@ -7583,13 +7583,19 @@ public final class WasmLispCompiler implements LispCompiler {
 			pinned[i] = owners.length > 0 ? owners[0] : -1;
 		}
 		coreModule = am.ik.wasm.WasmInliner.inline(coreModule, pinned);
+		// Last, over the shaken bodies, the local renumbering: a function with more than
+		// 128 locals (Ctx.allocTemp never recycles one) gets its one-byte indices for
+		// the locals it uses most. A permutation inside each function, so it can follow
+		// everything that reads function indices or moves bodies between them.
 		if (funcNames == null) {
-			return am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges, hostCellHooks);
+			return am.ik.wasm.WasmLocalOrder
+				.reorder(am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges, hostCellHooks));
 		}
 		am.ik.wasm.WasmTreeShaker.ShakeResult res = am.ik.wasm.WasmTreeShaker.shakeWithRemap(coreModule,
 				caseFoldSegments, stringRanges, hostCellHooks);
-		dumpFuncSizes(res.module(), funcNames, importShift, res.importedFunctionCount(), res.funcRemap());
-		return res.module();
+		byte[] shaken = am.ik.wasm.WasmLocalOrder.reorder(res.module());
+		dumpFuncSizes(shaken, funcNames, importShift, res.importedFunctionCount(), res.funcRemap());
+		return shaken;
 	}
 
 	/**

@@ -106,6 +106,15 @@ class WasmTreeShakerCorpusTest {
 			roundTripIsAFixpoint(withoutMove, "peepholed-" + mode);
 			validateWithWasmTools(withMove, "inlined-" + mode);
 			roundTripIsAFixpoint(withMove, "inlined-" + mode);
+			// The local renumbering, last, over the shaken module as the compile path
+			// runs it: a permutation of each function's own locals, so it may never grow
+			// the module, and every body it touches goes through the validator and the
+			// round-trip oracle.
+			byte[] ordered = WasmLocalOrder.reorder(withMove);
+			assertThat(ordered.length).as("the local renumbering must not grow the module (noWasi=%s)", noWasi)
+				.isLessThanOrEqualTo(withMove.length);
+			validateWithWasmTools(ordered, "ordered-" + mode);
+			roundTripIsAFixpoint(ordered, "ordered-" + mode);
 		}
 	}
 

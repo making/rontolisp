@@ -413,6 +413,30 @@ rewriting their call sites rewrites nothing. The population is a fixed set of ru
 it will not grow. The prediction the item carried ("20-30 B on each small module") is what this
 replaces.
 
+### The local renumbering
+
+`am.ik.wasm.WasmLocalOrder.reorder` runs LAST on both wasm backends -- over the shaken module
+(`WasmLispCompiler.shakeCore`, `NoGcWasmCompiler.compile`), because a permutation of one
+function's own locals can follow everything that reads function indices or moves bodies
+between them. In a function with more than 128 locals (parameters included) every
+`local.get`/`set`/`tee` of a local from index 128 up costs two bytes, and `Ctx.allocTemp` is
+`nextLocal++` -- a fresh local per temporary, never recycled, so the locals a body uses most sit
+wherever they were allocated (`USOCKET:SOCKET-CONNECT` declares ~120; 22 Worker functions
+exceed 128). The pass gives the one-byte indices to the locals with the most uses (ties keep
+declaration order), groups each of the hot and the cold set by type so the declaration vector
+stays a few runs (a 130-run alternating vector becomes four), keeps every parameter where it is,
+and asks no liveness. A frame that fits in one byte is left byte-identical. **The number this pass
+is for is raw bytes of the code section**, and it is a permutation, so gzip follows: measured
+2026-09-13 over the condition-mode numbers above, hello-clack Worker 734,519 -> 730,394 raw /
+200,909 -> 197,943 gzip (the regrouped vectors compress better than the bytes they lose),
+hello-tiny-routes 771,400 -> 767,253, httpbin 161,833 -> 161,569, `zlib` 81,726 -> 81,720 (its one
+wide function has no hot set to speak of: 152 -> 146 two-byte immediates), the small modules
+untouched; the Worker's two-byte `local.*` immediates 6,314 -> 2,189. Recycling temporaries in
+the emitter (the `Ctx` scratch slot the census proposed, with its chunk-cut trap) would shrink
+FRAMES, not bytes, and was not built. Pins: `WasmLocalOrderTest` (the hot local, the regrouped
+vector, the frame left alone) and `WasmTreeShakerCorpusTest` (must not grow, must validate and
+round-trip over the corpus).
+
 ### The single-call-site move
 `am.ik.wasm.WasmInliner.inline` runs between `WasmPeephole.rewrite` and
 `WasmTreeShaker.shake` on BOTH wasm backends (`WasmLispCompiler.shakeCore`;
@@ -639,7 +663,7 @@ census over the flat `wasm-tools print` of the Worker / `zlib`:
 | `br 0; end; unreachable; end` (a non-terminating loop's tail, written by the FOLD) | 1,488 | 185 | 1 B -> **landed** |
 | the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) -- 106 + 10 of the Worker's sites were the prologue, the rest other list loops | 701 | 22 | ~140 B -> **landed**, `.kb/lambda-lists.md` |
 | a boxed variable built empty then `struct.set` (`ref.null; struct.new; local.set`) | 204 | 45 | ~8 B |
-| a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B |
+| a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B -> **landed**, "The local renumbering" |
 | `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B |
 
 The first row is `.kb/cons-access-runtime.md`; the four marked **landed** are the peepholes
