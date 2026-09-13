@@ -32,8 +32,10 @@ level alone, never by the program:
   a 16M-`car`/`cdr` list-traversal loop (wasmtime 47, best of five), the shared reader at
   the default level costs +1.4% (1.45 -> 1.47 s) and would have gained 2.4 KB on `zlib`
   (2.1%) and 49 KB on the hello-clack Worker (5.0%).
-- Temps are still a fresh local per computed operand (`Ctx.allocTemp` never recycles):
-  reusing one scratch slot per function is `.todo/799`'s item, not this one's.
+- Temps are still a fresh local per computed operand (`Ctx.allocTemp` never recycles). The
+  BYTES that cost -- a two-byte index for every local from 128 up -- are recovered by the
+  local renumbering (`.kb/optimize-dead-code-elimination.md`, "The local renumbering"), which
+  made a scratch slot unnecessary for size; the frames stay wide.
 
 ## Measured 2026-09-12 (before -> after)
 

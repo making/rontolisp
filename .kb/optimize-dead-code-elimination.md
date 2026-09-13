@@ -733,13 +733,21 @@ census over the flat `wasm-tools print` of the Worker / `zlib`:
 | a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B -> **landed**, "The local renumbering" |
 | `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B -> **landed**, "Sparse arity ladders" |
 
-The first row is `.kb/cons-access-runtime.md`; the four marked **landed** are the peepholes
-("The adjacent-instruction peepholes" above, `.todo/798`); the lowering shapes are `.todo/799`
-(expander and emitter level), and the single-call-site move is landed too ("The single-call-site
-move" above -- where the reading of the `zlib`/Worker inlining share is corrected). After the
-first row landed: `zlib` 90,874 (residue 18,542), Worker 815,414 (residue 182,697 -- the
-same bytes as before, so the 101 KB was outside binaryen's reach: it does not outline). After
-the peepholes: `zlib` 88,315, Worker 795,062.
+The first row is `.kb/cons-access-runtime.md`; the four marked **landed** first are the peepholes
+("The adjacent-instruction peepholes" above, `.todo/798`); the lowering shapes landed 2026-09-13
+as `.todo/799`, one section each above ("A test is compiled as a test", "The local renumbering",
+"Sparse arity ladders", "A char comparison pair", "A conditional in statement position", and
+`.kb/lambda-lists.md` for the `&key` prologue), and the single-call-site move is landed too
+("The single-call-site move" above -- where the reading of the `zlib`/Worker inlining share is
+corrected). After the first row landed: `zlib` 90,874 (residue 18,542), Worker 815,414 (residue
+182,697 -- the same bytes as before, so the 101 KB was outside binaryen's reach: it does not
+outline). After the peepholes: `zlib` 88,315, Worker 795,062. **After the lowering shapes**
+(`--optimize=size`, raw / gzip): hello-clack Worker 716,057 (-9.9%) / 194,305 (-7.2%), `zlib`
+78,330 (-11.3%) / 28,452, httpbin Worker 154,998 (-10.2%) / 53,809, hello-tiny-routes 752,239
+(-10.4%) / 204,488, `hello_world` and `pi_approx` byte-identical. Three of the census's rows read
+their bytes wrong, and each correction is in its section: the "assertion" was the `t` literal, the
+701 "keyword loops" were 116 keyword sites, and the "boxed variable built empty" was closures and
+conses -- the census names WHERE to look, and the shape is only known once the site is read.
 
 **A residue is a property of the real output, never of a spike**, and a pass ranked by
 running it ALONE says how much binaryen's writer costs as much as what the pass does. The
