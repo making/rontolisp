@@ -578,6 +578,75 @@ those bytes by re-encoding locals across the whole function afterwards, which th
 do and which is not worth its compressed cost. **The prize is the small host-facing module, not
 the library.**
 
+### The single-use local
+`am.ik.wasm.WasmLocalSink.sink` runs behind `WasmInliner.inline` and in front of the shake on BOTH
+wasm backends (`WasmLispCompiler.shakeCore`; `NoGcWasmCompiler.compile`), at every
+`eliminatesDeadCode()` level. A local written ONCE, by a pure expression, and read ONCE, at a point
+the write dominates, does not need to exist: the expression is moved to the read, the `local.set`
+and the `local.get` go, the local leaves the declaration vector and every local above it moves down
+an index. Three things pay for the one decode:
+
+- **The sink itself.** The expression is pure (reads of locals and globals, constants, non-trapping
+  numeric ops, `ref.i31`/`ref.test`/`ref.is_null`/`ref.eq`, `struct.new*`, `array.new_fixed`, and
+  `array.new`/`array.new_default` of a small constant length -- an allocation nothing but the sunk
+  local can reach before the read); its inputs are unchanged from the expression to the read
+  (no write of a local it reads; no `global.set` and no `call` when it reads a global), the range
+  extended to the end of the outermost `loop` opened after the write and still open at the read;
+  and the write dominates the read (no `else`/`end` between them closes a block open at the write).
+  The expression may sit behind a stack-neutral gap -- the inliner's reverse hand-over
+  `e1; e2; set b; set a` -- whose instructions join the scanned range. A `tee` sinks a COPY, taken
+  only when the copy is shorter than the `tee` plus the `get`.
+- **Dead writes.** A local nothing reads: each `tee` is deleted, each `set` becomes a `drop` or --
+  when the walk back finds a pure expression feeding it -- goes with it. `zlib` had 162 such
+  locals, the hello-clack Worker 664.
+- **The frame.** A local nothing touches leaves the declaration, and a `set N; get N` pair the
+  deletions (or the inliner) leave adjacent is written as `tee N` on the way out, so the peephole
+  in front does not have to run again. `zlib`'s frames: 2,475 -> 1,508 locals; hello-clack's
+  15,244 -> 10,868, its two-byte `local.*` immediates 3,175 -> 1,797 BEFORE `WasmLocalOrder` sees
+  them.
+
+Bodies are re-sunk to a fixpoint (a local whose expression reads a sunk local waits a round), and
+a function's own locals are all it renumbers, so every index-addressed claim the shake reads is
+untouched. **The number this pass is for is raw bytes of the code section, and it DELETES bytes**,
+so gzip follows -- and falls faster, because a fresh local per temporary is exactly the
+low-repetition byte a compressor cannot fold.
+
+**Measured 2026-09-13 against `f097ebdd6`, `size-report/measure.sh`, both families**
+(`--optimize=size` unless the row says otherwise; raw / gzip where the report records gzip):
+
+| artifact | before | after | |
+| --- | ---: | ---: | --- |
+| `zlib` `--optimize=size` | 78,330 | 76,003 | -3.0% |
+| `zlib` `--optimize` | 102,909 | 100,589 | -2.3% |
+| `pi_approx` | 1,504 | 1,489 | |
+| `hello_world` | 487 | 480 | |
+| `pi_approx_nogc` | 3,289 | 3,279 | |
+| hello-clack Worker | 716,057 / 194,305 | 705,732 / 186,458 | -1.4% / -4.0% |
+| hello-ningle Worker | 2,977,818 / 619,011 | 2,932,328 / 577,004 | -1.5% / -6.8% |
+| httpbin Worker | 154,998 / 53,809 | 151,052 / 51,082 | -2.6% / -5.1% |
+| the Worker family, 16 rows | 15,354,414 / 3,788,432 | 15,105,500 / 3,570,331 | **-1.6% / -5.8%** |
+
+Every row is smaller on both axes; the worst gzip row is `hello` at -4 B. The `.todo/812` reactor
+(`.todo/artefacts/810-.../reactor.lisp`, `--no-gc --no-wasi`): 930 -> 921, code 230 -> 221.
+
+**The item's premise was measured the wrong way round.** `.todo/812` counted the single-use
+residue AFTER the whole pipeline -- 723 locals on `zlib`, one on the reactor, "single-digit bytes"
+if only the inliner's hand-over was the target -- and split the fix into a cheap copy-propagation
+half (the definition is `local.get M`, `M` never written: 107 of the 723) and an expression-sinking
+half worth doing only if the first left a large remainder. Both halves are one walk over the
+decoded body with one legality argument, the copy is the expression of length one, and the split
+was never worth making. What the census could not see was the other two populations the same
+renumbering collects for free, and that the Worker family carries proportionally far more of all
+three than `zlib` does (5,443 single-use locals in hello-clack; 2,181 remain, nearly all a `call`
+result or a block result stored and used once, which no pure-expression rule reaches). The
+post-pipeline residue on `zlib` is now 216: 131 `call` results, 29 block results, 17 `array.new`
+of a computed length.
+
+Pins: `WasmLocalSinkTest` (the sink, the gap, the renumbering, the loop-carried input, the
+undominated read, the global across a call, the tee copy, the dead writes, the chained round, the
+adjacent pair) and `WasmTreeShakerCorpusTest` (the whole `ci-spec` corpus at every level validates
+and round-trips with the pass in the pipeline).
+
 ### The component WRAPPER: adapter + WASI surface
 The adapter and the `wasi:*` declarations follow the core through one chain, every step *observed*
 rather than declared (`WasmComponentBuilder.fixedSurface`, base variant only): the core's surviving
@@ -722,7 +791,7 @@ census over the flat `wasm-tools print` of the Worker / `zlib`:
 | --- | ---: | ---: | --- |
 | `car`/`cdr`: `local.get; local.set t; local.get t; ref.is_null; if ... end` (every site a fresh temp) | 8,141 | 344 | 17-21 B -> **landed**, `.kb/cons-access-runtime.md` |
 | `local.set N; local.get N` (a `tee`) | 9,700 | 869 | 2 B -> **landed**, "The adjacent-instruction peepholes" |
-| `local.get A; local.set B; local.get B` (a copy into a temp) | 4,181 | 342 | 4 B + a local |
+| `local.get A; local.set B; local.get B` (a copy into a temp) | 4,181 | 342 | 4 B + a local -> **landed**, "The single-use local" (the expression of length one) |
 | `if (result eqref) call err else nil end; ref.is_null` (a predicate boxed into t/nil and tested -- the `call` is `_t_sym`, not an error) | 3,304 | 303 | ~8 B -> **landed**, "A test is compiled as a test" |
 | a pure value then `drop` (`ref.null eq`, a constant, a `local.get`) | 1,416 | 267 | 2-3 B -> **landed** |
 | `local.tee N; drop` (a statement `setq`) | 1,197 | 127 | 1 B -> **landed** |

@@ -26,3 +26,12 @@ Measured 2026-09-14 at `--optimize=size`:
 | `size-report/programs/zlib/zlib.lisp` | GC | 0 | 723 |
 
 `dsect.mjs` prints per-section payloads if the code section size is wanted alongside.
+
+## Outcome (2026-09-13)
+
+Landed as `am.ik.wasm.WasmLocalSink`, one pass for both halves the item separated (the copy is
+the expression of length one) plus the two populations the census could not see -- dead writes
+and untouched frames. The numbers, and why the "single-digit bytes" reading was the wrong
+number: `.kb/optimize-dead-code-elimination.md`, "The single-use local". `residue.sh` still
+counts the post-pipeline residue (`zlib` 723 -> 216, the reactor 1 -> 0); note that its
+adjacent-pair awk skips a `local.set` that directly follows another `local.set`.

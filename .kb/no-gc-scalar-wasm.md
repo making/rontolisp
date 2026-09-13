@@ -361,7 +361,7 @@ yielding reachable defuns in discovery order with stable indices) -> `inferTypes
 `compileExpr` per body + a host wrapper. The three share one dispatch shape and expand the
 same macros the other backends do. Reuses `WasmExportCompiler.parse`/`isExportForm`/
 `paramWasmTypes`/`resultWasmTypes` + the `T_*` constants; composes with `--optimize`
-(`WasmTreeShaker` is GC-agnostic, and `WasmPeephole` + `WasmInliner` run in front of it here
+(`WasmTreeShaker` is GC-agnostic, and `WasmPeephole` + `WasmInliner` + `WasmLocalSink` run in front of it here
 exactly as they do on the GC backend -- this is the backend the move pays on, the browser reactor
 of `.todo/804` going 1,090 -> 1,011 B and its code section 360 -> 300 in 17 -> 8 functions:
 `.kb/optimize-dead-code-elimination.md`, "The single-call-site move"; the peepholes take the
