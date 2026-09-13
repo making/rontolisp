@@ -72,11 +72,9 @@ class PackageRegistryTest {
 			.sorted()
 			.toList();
 		// while is rontolisp's own loop primitive and lives in cl because that is where
-		// the built-in operators live; boole-3 .. boole-16 are invented spellings of the
-		// standard's boole-and / boole-ior / ... constants. Both make the suite's
+		// the built-in operators live, which makes the suite's
 		// no-extra-symbols-exported-from-common-lisp fail; see .kb/packages.md.
-		assertThat(extra).containsExactly("BOOLE-10", "BOOLE-11", "BOOLE-12", "BOOLE-13", "BOOLE-14", "BOOLE-15",
-				"BOOLE-16", "BOOLE-3", "BOOLE-4", "BOOLE-5", "BOOLE-6", "BOOLE-7", "BOOLE-8", "BOOLE-9", "WHILE");
+		assertThat(extra).containsExactly("WHILE");
 	}
 
 	@Test

@@ -62,6 +62,28 @@ public final class ClConstants {
 	}
 
 	/**
+	 * The sixteen {@code boole} constants' values, keyed by their standard name. Only
+	 * {@code boole-1} and {@code boole-2} are standard SPELLINGS that also read as
+	 * numbers; the other fourteen (CLHS 12.1.4) are {@code boole-clr} ..
+	 * {@code boole-xor}. The values themselves are implementation-dependent (CLHS never
+	 * fixes them), so 1..16 in this table's iteration order is as good as any other
+	 * assignment.
+	 */
+	private static final Map<String, Integer> BOOLE_VALUES = booleValues();
+
+	private static Map<String, Integer> booleValues() {
+		Map<String, Integer> table = new LinkedHashMap<>();
+		List<String> names = List.of(LispNames.BOOLE_1, LispNames.BOOLE_2, LispNames.BOOLE_AND, LispNames.BOOLE_ANDC1,
+				LispNames.BOOLE_ANDC2, LispNames.BOOLE_C1, LispNames.BOOLE_C2, LispNames.BOOLE_CLR, LispNames.BOOLE_EQV,
+				LispNames.BOOLE_IOR, LispNames.BOOLE_NAND, LispNames.BOOLE_NOR, LispNames.BOOLE_ORC1,
+				LispNames.BOOLE_ORC2, LispNames.BOOLE_SET, LispNames.BOOLE_XOR);
+		for (int i = 0; i < names.size(); i++) {
+			table.put(names.get(i), i + 1);
+		}
+		return Map.copyOf(table);
+	}
+
+	/**
 	 * Every constant-variable name in this table, for the global seeders and the package
 	 * registry.
 	 */
@@ -72,11 +94,8 @@ public final class ClConstants {
 		names.addAll(Set.of(LispNames.PI, LispNames.MOST_POSITIVE_FIXNUM, LispNames.MOST_NEGATIVE_FIXNUM,
 				LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT, LispNames.CHAR_CODE_LIMIT,
 				LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.LAMBDA_LIST_KEYWORDS, LispNames.ARRAY_RANK_LIMIT,
-				LispNames.CALL_ARGUMENTS_LIMIT, LispNames.LAMBDA_PARAMETERS_LIMIT, LispNames.MULTIPLE_VALUES_LIMIT,
-				LispNames.BOOLE_1, LispNames.BOOLE_2, LispNames.BOOLE_3, LispNames.BOOLE_4, LispNames.BOOLE_5,
-				LispNames.BOOLE_6, LispNames.BOOLE_7, LispNames.BOOLE_8, LispNames.BOOLE_9, LispNames.BOOLE_10,
-				LispNames.BOOLE_11, LispNames.BOOLE_12, LispNames.BOOLE_13, LispNames.BOOLE_14, LispNames.BOOLE_15,
-				LispNames.BOOLE_16));
+				LispNames.CALL_ARGUMENTS_LIMIT, LispNames.LAMBDA_PARAMETERS_LIMIT, LispNames.MULTIPLE_VALUES_LIMIT));
+		names.addAll(BOOLE_VALUES.keySet());
 		return Set.copyOf(names);
 	}
 
@@ -225,10 +244,9 @@ public final class ClConstants {
 		if (LispNames.MULTIPLE_VALUES_LIMIT.equals(member)) {
 			return new LispInteger(wasm ? 256 : 1024);
 		}
-		if (member.startsWith("BOOLE-")) {
-			// boole constants are 1..16 as integers
-			int n = Integer.parseInt(member.substring(6));
-			return new LispInteger(n);
+		Integer booleValue = BOOLE_VALUES.get(member);
+		if (booleValue != null) {
+			return new LispInteger(booleValue);
 		}
 		return null;
 	}

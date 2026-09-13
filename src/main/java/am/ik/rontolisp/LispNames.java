@@ -8222,47 +8222,47 @@ public final class LispNames {
 	/** The {@code boole-2} constant. */
 	public static final String BOOLE_2 = "BOOLE-2";
 
-	/** The {@code boole-3} constant. */
-	public static final String BOOLE_3 = "BOOLE-3";
+	/** The {@code boole-and} constant. */
+	public static final String BOOLE_AND = "BOOLE-AND";
 
-	/** The {@code boole-4} constant. */
-	public static final String BOOLE_4 = "BOOLE-4";
+	/** The {@code boole-andc1} constant. */
+	public static final String BOOLE_ANDC1 = "BOOLE-ANDC1";
 
-	/** The {@code boole-5} constant. */
-	public static final String BOOLE_5 = "BOOLE-5";
+	/** The {@code boole-andc2} constant. */
+	public static final String BOOLE_ANDC2 = "BOOLE-ANDC2";
 
-	/** The {@code boole-6} constant. */
-	public static final String BOOLE_6 = "BOOLE-6";
+	/** The {@code boole-c1} constant. */
+	public static final String BOOLE_C1 = "BOOLE-C1";
 
-	/** The {@code boole-7} constant. */
-	public static final String BOOLE_7 = "BOOLE-7";
+	/** The {@code boole-c2} constant. */
+	public static final String BOOLE_C2 = "BOOLE-C2";
 
-	/** The {@code boole-8} constant. */
-	public static final String BOOLE_8 = "BOOLE-8";
+	/** The {@code boole-clr} constant. */
+	public static final String BOOLE_CLR = "BOOLE-CLR";
 
-	/** The {@code boole-9} constant. */
-	public static final String BOOLE_9 = "BOOLE-9";
+	/** The {@code boole-eqv} constant. */
+	public static final String BOOLE_EQV = "BOOLE-EQV";
 
-	/** The {@code boole-10} constant. */
-	public static final String BOOLE_10 = "BOOLE-10";
+	/** The {@code boole-ior} constant. */
+	public static final String BOOLE_IOR = "BOOLE-IOR";
 
-	/** The {@code boole-11} constant. */
-	public static final String BOOLE_11 = "BOOLE-11";
+	/** The {@code boole-nand} constant. */
+	public static final String BOOLE_NAND = "BOOLE-NAND";
 
-	/** The {@code boole-12} constant. */
-	public static final String BOOLE_12 = "BOOLE-12";
+	/** The {@code boole-nor} constant. */
+	public static final String BOOLE_NOR = "BOOLE-NOR";
 
-	/** The {@code boole-13} constant. */
-	public static final String BOOLE_13 = "BOOLE-13";
+	/** The {@code boole-orc1} constant. */
+	public static final String BOOLE_ORC1 = "BOOLE-ORC1";
 
-	/** The {@code boole-14} constant. */
-	public static final String BOOLE_14 = "BOOLE-14";
+	/** The {@code boole-orc2} constant. */
+	public static final String BOOLE_ORC2 = "BOOLE-ORC2";
 
-	/** The {@code boole-15} constant. */
-	public static final String BOOLE_15 = "BOOLE-15";
+	/** The {@code boole-set} constant. */
+	public static final String BOOLE_SET = "BOOLE-SET";
 
-	/** The {@code boole-16} constant. */
-	public static final String BOOLE_16 = "BOOLE-16";
+	/** The {@code boole-xor} constant. */
+	public static final String BOOLE_XOR = "BOOLE-XOR";
 
 	/** The {@code *print-circle*} variable (accepted and ignored by the printer). */
 	public static final String PRINT_CIRCLE_VAR = "*PRINT-CIRCLE*";

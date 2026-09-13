@@ -67,14 +67,23 @@ the same question through `(find-symbol x "CL")` -- `functionp.4`, `function.4`,
 `cl-function-symbols.1`, `cl-macro-symbols.1`, the `pprint-dispatch` family -- did not move:
 each is blocked by a missing OPERATOR, which is the distinction this change draws.
 
-**Two names still make `no-extra-symbols-exported-from-common-lisp` fail**, and neither is a name
-list bug the above can fix: `while` is rontolisp's own loop primitive and lives in `cl` because
-that is where the built-in operators live (moving it is a language change, not a registry one),
-and `boole-3` .. `boole-16` are invented spellings of the standard's `boole-and` / `boole-ior` /
-... constants (`ClConstants`, ci-spec `standard-limits-and-boole-constants`). `PackageRegistryTest`
-pins the external set against the standard's own checked-in list
-(`src/test/resources/cl-standard-symbol-names.txt`) in BOTH directions, listing those 15 by name,
-so neither a missing standard name nor a new extension can arrive unnoticed.
+**`boole-3` .. `boole-16` were invented spellings** of the standard's `boole-and` / `boole-ior` /
+... constants (CLHS 12.1.4); `.todo/803` renamed them in `LispNames` and `ClConstants` (values
+kept in the same 1..16 assignment, boole-1/boole-2 unchanged) and dropped the fourteen correct
+spellings from `PackageRegistry.CL_EXPORTED_ONLY`, where `.todo/796` had had to list them as
+missing standard names while the invented spellings sat beside them. `boole` itself stays
+unimplemented (still in `CL_EXPORTED_ONLY`) -- a prelude defun over these constants belongs with
+`.todo/037`'s `logeqv`/`lognor` row.
+
+**One name still makes `no-extra-symbols-exported-from-common-lisp` fail**, and it is not a name
+list bug: `while` is rontolisp's own loop primitive and lives in `cl` because that is where the
+built-in operators live. Moving it to another package would make bare `(while ...)` stop resolving
+in `cl-user`, which is a LANGUAGE change and a documentation change, not a registry one --
+`PackageRegistry.NO_MACRO_FUNCTION` already carries the note that `while` is not a CL name at all.
+This is accepted as the price of the extension. `PackageRegistryTest` pins the external set
+against the standard's own checked-in list (`src/test/resources/cl-standard-symbol-names.txt`) in
+BOTH directions, listing `while` by name, so neither a missing standard name nor a new extension
+can arrive unnoticed.
 
 ## `defpackage`
 A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpackage` registers a
