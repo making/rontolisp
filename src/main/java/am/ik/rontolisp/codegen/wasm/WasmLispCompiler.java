@@ -461,7 +461,26 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * shifts, and only when one of those conditional blocks is present.
 	 */
 	int userFuncBase() {
+		return litStageFuncBase() + (this.emitsLitStage ? 1 : 0);
+	}
+
+	/**
+	 * The index of {@code _lit_stage}, right after {@code _arity_chk}, so adding it moves
+	 * no fixed index -- only {@link #userFuncBase()}, which every consumer already reads
+	 * dynamically. Only meaningful when {@link #emitsLitStage} is set.
+	 */
+	private int litStageFuncBase() {
 		return arityChkFuncBase() + (this.emitsArityChk ? 1 : 0);
+	}
+
+	/**
+	 * The module index the literal {@code :string} import call-site lowering stages
+	 * through ({@code WasmImportCompiler.compileLiteralImportCall}), or {@code -1} when
+	 * this module carries no such helper.
+	 * @return the function index, or -1
+	 */
+	int litStageFuncIndex() {
+		return this.emitsLitStage ? litStageFuncBase() : -1;
 	}
 
 	/**
@@ -651,6 +670,19 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * in the pre-pass, because {@link #userFuncBase()} shifts by it.
 	 */
 	private boolean emitsArityChk;
+
+	/**
+	 * Whether this module carries {@code _lit_stage}, the linear-to-linear staging helper
+	 * a literal {@code :string} argument reaches a host import through. It shifts
+	 * {@link #userFuncBase()}, so the decision is made in front of pass 2 -- before any
+	 * call site is compiled -- from the DIRECTIVES alone: a module declaring a host
+	 * import with a {@code :string} parameter may lower such a site, and one that
+	 * declares none never can. Deliberately loose in the same direction
+	 * {@link #emitsArityChk} is: a module whose every site turns out not to qualify pays
+	 * one unreferenced function (which {@code --optimize} shakes), while the reverse -- a
+	 * site emitted against an index the module never reserved -- cannot happen.
+	 */
+	private boolean emitsLitStage;
 
 	/**
 	 * The widest call this module can make through a per-arity dispatcher -- a
@@ -3117,6 +3149,14 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ componentImports.get(0).ifaceId()
 							+ "' (rontolisp:wit-import); drop --no-wasi or the import");
 		}
+		// Whether a literal :string argument may be staged straight into linear memory
+		// at its call site (see emitsLitStage): asked of the DIRECTIVES, in front of
+		// pass 2, because the helper's presence shifts userFuncBase().
+		this.emitsLitStage = !this.reentrant
+				&& importDecls.stream().anyMatch(WasmImportCompiler::canLowerLiteralCallSite);
+		// Filled in by the lowered call sites themselves (Ctx.litStageBytes) and read by
+		// the static layout below, which reserves exactly the widest site's regions.
+		int[] litStageBytes = new int[1];
 		// Register each import as a synthetic defun so ordinary calls, #'name, funcall
 		// and eval all reach it through the regular defun machinery; Pass 2a swaps in
 		// the marshalling wrapper body instead of compiling the (empty) Lisp body.
@@ -3760,6 +3800,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			.callArityCeiling(callArityCeiling())
 			.extraDispatchFuncBase(extraDispatchFuncBase())
 			.arityChkFuncIndex(arityChkFuncIndex())
+			.litStageFuncIndex(litStageFuncIndex())
+			.litStageBytes(litStageBytes)
+			.importDecls(importWrappers)
 			.numDefuns(defuns.size())
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.warnedClRedefinitions(warnedClRedefinitions)
@@ -4357,6 +4400,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		{
 			for (WasmImportCompiler.Decl decl : importWrappers.values()) {
 				int ordinal = Objects.requireNonNull(importSlotIndex.get(decl.module() + "\0" + decl.field()));
+				// The literal call-site lowering settled its own ordinal from the
+				// declarations alone, long before this list existed
+				// (WasmImportCompiler.hostImportOrdinal); a site calling one placeholder
+				// while the wrapper calls another would be a silently wrong host call, so
+				// the two answers are checked against each other rather than trusted.
+				if (ordinal != WasmImportCompiler.hostImportOrdinal(importWrappers, decl.name())) {
+					throw new IllegalStateException(
+							"host import ordinal disagrees for " + decl.name() + ": slot " + ordinal + " vs site "
+									+ WasmImportCompiler.hostImportOrdinal(importWrappers, decl.name()));
+				}
 				byte[] body = WasmImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal, strFromMemFuncIndex,
 						allocFuncIndex, bytesCopyFuncIndex, bytesFillFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.name())), body);
@@ -5157,7 +5210,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// keeps the historical page-3 base and stays byte-identical.
 		int scratchBase = usesEnvArgvScratch ? ((staticEnd + 15) & ~15) : SCRATCH_UNUSED_BASE;
 		int allocBase = usesEnvArgvScratch ? scratchBase + SCRATCH_REGION_SIZE : staticEnd;
-		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (allocBase + 15) & ~15);
+		// The literal :string staging block, between them and the intern table: the
+		// widest single lowered call site's regions, reserved once because they all
+		// belong to ONE host call and nothing else ever writes there
+		// (WasmStringRuntimeBuilder.buildLitStageBody). Reserving it here rather than
+		// staging on the bump heap is what lets _lit_stage skip the grow guard -- the
+		// block is inside the module's own minimum memory by construction. A module that
+		// lowered nothing reserves nothing and keeps every address it had.
+		int litStageBase = litStageBytes[0] > 0 ? (allocBase + 15) & ~15 : allocBase;
+		int litStageEnd = litStageBase + litStageBytes[0];
+		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (litStageEnd + 15) & ~15);
 		int heapBase = rtInternBase + RT_INTERN_REGION_SIZE;
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -6269,6 +6331,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.emitsArityChk) {
 					fnDef.addFunction(TYPE_STR_TO_MEM);
 				}
+				// The literal :string staging helper, right after it: reuses
+				// TYPE_RD_MEMEQ's (i32, i32, i32) -> i32 signature, so no module gains a
+				// type entry for it either.
+				if (this.emitsLitStage) {
+					fnDef.addFunction(TYPE_RD_MEMEQ);
+				}
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -7131,6 +7199,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// The wrong-argument-count guard body, in arityChkFuncBase() order.
 				if (this.emitsArityChk) {
 					code.addFunction(arityChkBody);
+				}
+				// The literal :string staging helper, in litStageFuncBase() order.
+				if (this.emitsLitStage) {
+					code.addFunction(WasmStringRuntimeBuilder.buildLitStageBody(litStageBase));
 				}
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
@@ -9235,6 +9307,30 @@ public final class WasmLispCompiler implements LispCompiler {
 		int reentryGuardGlobalIndex = -1;
 
 		/**
+		 * The module index of {@code _lit_stage}, the linear-to-linear staging helper a
+		 * literal {@code :string} argument reaches a host import through, or {@code -1}
+		 * when this module carries none.
+		 */
+		int litStageFuncIndex = -1;
+
+		/**
+		 * The widest literal {@code :string} call site's total staged byte count -- the
+		 * size of the reserved block {@code _lit_stage} copies into. A one-element holder
+		 * because every context of a compilation shares the answer, like
+		 * {@link #runtimeDesignatorDispatch}; zero when nothing lowered, and then the
+		 * static layout reserves nothing and the module is byte-identical to a build that
+		 * never knew about the lowering.
+		 */
+		int[] litStageBytes = new int[1];
+
+		/**
+		 * The parsed {@code rontolisp:wasm-import} declarations by Lisp name -- what lets
+		 * the user-call path see that a callee is a host import and what its parameter
+		 * types are. Empty on every module that declares none.
+		 */
+		Map<String, WasmImportCompiler.Decl> importDecls = Map.of();
+
+		/**
 		 * Whether this module is compiled {@code --reentrant}: the guard is retired, the
 		 * dynamically-bound specials read/write/bind through the per-call task record
 		 * ({@link WasmDynVars}), and cross-park linear staging goes through the
@@ -9356,6 +9452,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.callArityCeiling = builder.callArityCeiling;
 			this.extraDispatchFuncBase = builder.extraDispatchFuncBase;
 			this.arityChkFuncIndex = builder.arityChkFuncIndex;
+			this.litStageFuncIndex = builder.litStageFuncIndex;
+			this.litStageBytes = builder.litStageBytes;
+			this.importDecls = builder.importDecls;
 			this.numDefuns = builder.numDefuns;
 			this.userDefunNames = builder.userDefunNames;
 			this.usesFmakunbound = builder.usesFmakunbound;
@@ -9497,6 +9596,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int extraDispatchFuncBase = FUNC_USER_BASE;
 
 			private int arityChkFuncIndex = -1;
+
+			private int litStageFuncIndex = -1;
+
+			private int[] litStageBytes = new int[1];
+
+			private Map<String, WasmImportCompiler.Decl> importDecls = Map.of();
 
 			private int numDefuns = 0;
 
@@ -9802,6 +9907,21 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder extraDispatchFuncBase(int extraDispatchFuncBase) {
 				this.extraDispatchFuncBase = extraDispatchFuncBase;
+				return this;
+			}
+
+			Builder litStageFuncIndex(int litStageFuncIndex) {
+				this.litStageFuncIndex = litStageFuncIndex;
+				return this;
+			}
+
+			Builder litStageBytes(int[] litStageBytes) {
+				this.litStageBytes = litStageBytes;
+				return this;
+			}
+
+			Builder importDecls(Map<String, WasmImportCompiler.Decl> importDecls) {
+				this.importDecls = importDecls;
 				return this;
 			}
 

@@ -80,6 +80,14 @@ final class WasmFunctionCallCompiler {
 	}
 
 	private static void compileDirectCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// A host import whose every :string argument is a literal reaches the host
+		// without the wrapper, and without the GC byte array the wrapper would have
+		// unbuilt one instruction later (WasmImportCompiler.compileLiteralImportCall).
+		// The wrapper stays where anything else needs it -- #'name, funcall, dispatch,
+		// a runtime string argument -- and the tree shaker drops it when nothing does.
+		if (WasmImportCompiler.compileLiteralImportCall(name, cons, ctx)) {
+			return;
+		}
 		WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(name);
 		if (fi != null) {
 			WasmEmitHelper.requireNoCharvecHelper(ctx, name);

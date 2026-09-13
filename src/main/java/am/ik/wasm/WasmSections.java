@@ -506,12 +506,19 @@ public final class WasmSections {
 			case 0x43 -> p[0] += 4; // f32.const
 			case 0x44 -> p[0] += 8; // f64.const
 			case 0xFB -> scanGc(buf, p, refs); // wasm-GC prefix
-			// Misc prefix: the saturating truncations (0x00-0x07) carry no immediate.
+			// Misc prefix: the saturating truncations (0x00-0x07) carry no immediate;
+			// memory.copy (0x0A) carries two memory indices, memory.fill (0x0B) one.
 			case 0xFC -> {
 				int sub = readU(buf, p);
-				if (sub > 0x07) {
-					throw new IllegalStateException(
-							String.format("WasmSections: unhandled misc opcode 0xFC 0x%02X", sub));
+				switch (sub) {
+					case 0x0A -> p[0] += 2;
+					case 0x0B -> p[0]++;
+					default -> {
+						if (sub > 0x07) {
+							throw new IllegalStateException(
+									String.format("WasmSections: unhandled misc opcode 0xFC 0x%02X", sub));
+						}
+					}
 				}
 			}
 			case 0xFD -> skipSimd(buf, p); // fixed-width SIMD prefix

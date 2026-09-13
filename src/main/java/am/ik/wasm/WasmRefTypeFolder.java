@@ -679,7 +679,10 @@ public final class WasmRefTypeFolder {
 			return switch (in.op) {
 				case 0x01, 0x1A, 0x1B, 0x20, 0x23, 0x41, 0x42, 0x43, 0x44, 0xD0, 0xD1, 0xD3 -> true;
 				case 0xFB -> in.sub == 0x00 || in.sub == 0x01 || in.sub == 0x14 || in.sub == 0x15 || in.sub == 0x1C;
-				case 0xFC -> true; // the saturating truncations never trap
+				// The saturating truncations never trap; the bulk-memory pair
+				// (memory.copy 0x0A / memory.fill 0x0B) both writes memory and traps
+				// out of bounds.
+				case 0xFC -> in.sub <= 0x07;
 				default -> false;
 			};
 		}
@@ -1547,9 +1550,17 @@ public final class WasmRefTypeFolder {
 				case 0xFB -> {
 					return stepGc(i, in);
 				}
-				case 0xFC -> { // saturating truncation
-					Val a = pop();
-					push(Val.scalar(a.spanStart()));
+				case 0xFC -> {
+					if (in.sub == 0x0A || in.sub == 0x0B) {
+						// memory.copy / memory.fill: three operands, no result.
+						pop();
+						pop();
+						pop();
+					}
+					else { // saturating truncation
+						Val a = pop();
+						push(Val.scalar(a.spanStart()));
+					}
 					emit(in);
 					return i + 1;
 				}

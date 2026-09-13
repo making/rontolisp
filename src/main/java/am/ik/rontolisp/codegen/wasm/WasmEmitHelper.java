@@ -1106,6 +1106,26 @@ final class WasmEmitHelper {
 	static void compileStringLiteral(String displayForm, WasmLispCompiler.Ctx ctx) {
 		// The emitted value is a literal the program can hold at run time, so its
 		// spelling is a designator the dispatch gate's name probes must see.
+		internSpelledLiteral(displayForm, ctx);
+		compileUnspelledLiteral(displayForm, ctx);
+	}
+
+	/**
+	 * Records a literal's spelling the way {@link #compileStringLiteral} does and interns
+	 * its bytes in the data segment, WITHOUT emitting the build -- the half a call site
+	 * that consumes the bytes rather than the Lisp value needs (the literal
+	 * {@code :string} host-import lowering, {@code WasmImportCompiler}).
+	 *
+	 * <p>
+	 * The spelling is recorded even though this caller never produces a Lisp string from
+	 * it: the record is what the dispatch gate's name probes read, and keeping it makes
+	 * the lowering a change of INSTRUCTIONS only -- no site can close a gate the general
+	 * emission would have held open.
+	 * @param displayForm the framed string (or symbol name) to intern
+	 * @param ctx the compilation context
+	 * @return the data-segment entry (offset and BYTE length of the framed form)
+	 */
+	static WasmLispCompiler.StringTable.StringEntry internSpelledLiteral(String displayForm, WasmLispCompiler.Ctx ctx) {
 		ctx.spelledLiterals.add(displayForm);
 		if (!ctx.injectedRuntimeBody) {
 			// ... and the registry gate needs to know whether the USER's text is what
@@ -1115,7 +1135,7 @@ final class WasmEmitHelper {
 			// (Ctx.userSpelledLiterals).
 			ctx.userSpelledLiterals.add(displayForm);
 		}
-		compileUnspelledLiteral(displayForm, ctx);
+		return ctx.stringTable.addString(displayForm);
 	}
 
 	/**

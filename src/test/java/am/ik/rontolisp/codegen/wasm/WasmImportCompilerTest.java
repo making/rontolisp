@@ -209,8 +209,12 @@ class WasmImportCompilerTest {
 		// non-advancing scratch, so its module is byte-identical to a build made before
 		// this existed. The content is checked against a real host in
 		// WasmStringParamBoundaryE2eTest.
-		assertThat(countOf(compileNoWasi(importing("'(:string :string)")), HEAP_PTR_ADVANCE)).isEqualTo(2);
-		assertThat(countOf(compileNoWasi(importing("'(:string :s-expr)")), HEAP_PTR_ADVANCE)).isEqualTo(2);
+		// Runtime-built arguments, because a site whose every :string argument is a
+		// LITERAL does not reach the wrapper at all any more (see
+		// aLiteralStringArgumentCrossesWithoutTheGcRoundTrip) -- and the wrapper is
+		// exactly what a runtime string still goes through.
+		assertThat(countOf(compileNoWasi(importingRuntime("'(:string :string)")), HEAP_PTR_ADVANCE)).isEqualTo(2);
+		assertThat(countOf(compileNoWasi(importingRuntime("'(:string :s-expr)")), HEAP_PTR_ADVANCE)).isEqualTo(2);
 		assertThat(countOf(compileNoWasi(importing("'(:string :int :s-expr :string)")), HEAP_PTR_ADVANCE)).isEqualTo(3);
 		assertThat(countOf(compileNoWasi(importing("'(:string)")), HEAP_PTR_ADVANCE)).isZero();
 		assertThat(countOf(compileNoWasi(importing("'(:string :int)")), HEAP_PTR_ADVANCE)).isZero();
@@ -234,6 +238,57 @@ class WasmImportCompilerTest {
 		}
 		return "(rontolisp:wasm-import 'ask :from \"host\" :params " + paramTypes + " :returns :int)\n"
 				+ "(defun probe () (ask" + args + "))\n" + "(rontolisp:wasm-export 'probe :params '() :returns :int)\n";
+	}
+
+	// The same import called with a RUNTIME-built string wherever it takes a :string:
+	// the shape that still marshals through the wrapper.
+	private static String importingRuntime(String paramTypes) {
+		return importing(paramTypes).replace("\"s\"", "(subseq \"ss\" 0 1)");
+	}
+
+	// The round trip this item is about: a literal's bytes are IN linear memory, the
+	// boundary wants them IN linear memory, and the general path walks them into a GC
+	// array (_str_build) so the wrapper can walk them back out (_str_to_mem). A module
+	// whose only string work is that carries neither helper nor the wrapper once the
+	// site stages the literal itself. The pin is the PAIR, not an absolute size: the
+	// same module with the argument BUILT at runtime has to carry all of it. Content is
+	// checked against a real host in WasmStringParamBoundaryE2eTest, whose two-literal
+	// and one-literal exports are exactly this lowering.
+	@Test
+	void aLiteralStringArgumentCrossesWithoutTheGcRoundTrip() {
+		for (String params : List.of("'(:string)", "'(:string :string)", "'(:string :int)")) {
+			int literal = compileNoWasiSize(importing(params)).length;
+			int runtime = compileNoWasiSize(importingRuntime(params)).length;
+			assertThat(runtime - literal).as("params %s", params).isGreaterThan(150);
+			// ... and the staging never moves HEAP_PTR: the regions go to a block
+			// reserved in the static layout, sized by the widest site.
+			assertThat(countOf(compileNoWasi(importing(params)), HEAP_PTR_ADVANCE)).as("params %s", params).isZero();
+		}
+	}
+
+	// A declaration whose shape the lowering cannot take keeps the wrapper: an :s-expr
+	// parameter has to be PRINTED first, a :bytes one stages a runtime vector, and the
+	// three result types outside the flat set need scratch slots a call site has not
+	// got.
+	@Test
+	void theLiteralLoweringDeclinesTheShapesItCannotMarshal() {
+		assertThat(WasmImportCompiler
+			.canLowerLiteralCallSite(parse("(rontolisp:wasm-import 'g :params '(:string :int) :returns :bool)")))
+			.isTrue();
+		assertThat(WasmImportCompiler
+			.canLowerLiteralCallSite(parse("(rontolisp:wasm-import 'g :params '(:int) :returns :int)"))).isFalse();
+		assertThat(WasmImportCompiler
+			.canLowerLiteralCallSite(parse("(rontolisp:wasm-import 'g :params '(:string :s-expr) :returns :int)")))
+			.isFalse();
+		assertThat(WasmImportCompiler
+			.canLowerLiteralCallSite(parse("(rontolisp:wasm-import 'g :params '(:string :bytes) :returns :int)")))
+			.isFalse();
+		for (String returns : List.of(":string", ":s-expr", ":bytes")) {
+			assertThat(WasmImportCompiler.canLowerLiteralCallSite(
+					parse("(rontolisp:wasm-import 'g :params '(:string) :returns " + returns + ")")))
+				.as("returns %s", returns)
+				.isFalse();
+		}
 	}
 
 	// i32.const 7; i32.add; i32.const -8; i32.and; i32.store align=2 offset=0 -- the

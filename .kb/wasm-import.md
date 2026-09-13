@@ -65,8 +65,63 @@ it survived to be found by generating a host.
   instance. Same question on both backends, different answer; both are written down
   together in `doc/*/guides/wasm-host-boundary.md`.
 
+### A literal `:string` argument does not round-trip
+A literal's bytes START in linear memory -- the interned data segment put them there -- and
+the boundary WANTS bytes in linear memory. The general path nevertheless walks them
+byte-by-byte into a GC array (`_str_build`) so the wrapper can walk them byte-by-byte back
+out (`_str_to_mem`): a pure round trip, invisible to any optimizer because each half is an
+ordinary call to a shared helper. `WasmImportCompiler.compileLiteralImportCall` lowers such
+a site straight to the host call instead -- one `memory.copy` and no wrapper -- reached from
+`WasmFunctionCallCompiler.compileDirectCall`, ahead of the generic user-call path.
+
+- **It COPIES; it never hands over the data segment's own pointer.** Identical spellings are
+  deduplicated into one block that also spells interned symbol names, so a host write through
+  such a pointer would corrupt every other use of that spelling for the life of the instance
+  -- the reason `789`'s item 2 was rejected and what `795` wrote down for `--no-gc`. **What
+  this saves is the two byte loops and the GC array between them, not the copy.**
+- **Destination: a RESERVED block above the static data**, sized by the WIDEST lowered site
+  (`Ctx.litStageBytes`, laid out beside the intern table in `compile`), not the `HEAP_PTR`
+  scratch. That is what keeps `_lit_stage` at 24 bytes: a fixed block inside the module's own
+  minimum memory cannot be out of bounds, so the `emitGrowHeapTo` guard every other
+  linear-memory writer carries -- two thirds of what the helper would otherwise be -- is not
+  emitted. Every staged length at a site is a compile-time constant, so a `delta` per region
+  replaces the wrapper's mark/restore bracket, which a call site has no i32 local to hold.
+  **Same contract as the un-advanced scratch**: the host reads its memory-typed arguments
+  before it answers, and a write through the pointer reaches a block the next lowered call
+  overwrites.
+- **Which sites**: every `:string` argument a LITERAL, every parameter in
+  `{:string,:s32,:float,:bool}`, the result in `{:void,:s32,:float,:bool}`, not `--reentrant`.
+  `:s-expr` has to be printed first, `:bytes` stages a runtime vector, and a
+  `:string`/`:s-expr`/`:bytes` RESULT needs scratch slots (or, for `:string`, the
+  `_str_from_mem` index, settled only after every user body is emitted) a call site has not
+  got. Arguments AFTER the first staged region are evaluated into temps first -- the regions
+  are live and un-popped, so anything allocating linear memory in between would land on them.
+- **The wrapper still exists** for `#'name`/`funcall`/`mapcar`/dispatch and for a RUNTIME
+  string argument; the shaker drops it when no site needs it, and with it `_str_build` and
+  `_str_to_mem` when nothing else in the module builds a string.
+- `_lit_stage` sits right after `_arity_chk` (`litStageFuncBase()`), so it shifts
+  `userFuncBase()` and no fixed index. Its presence is decided from the DIRECTIVES in front
+  of pass 2 (`canLowerLiteralCallSite`), deliberately loose in the same direction
+  `emitsArityChk` is: a module whose sites all turn out not to qualify pays one unreferenced
+  function, while a site emitted against an index the module never reserved cannot happen. A
+  site settles its import ordinal the same way, from the declarations alone, and `compile`
+  checks that answer against the core import slot list rather than trusting it.
+- **Measured 2026-09-13** on the `789` reactor (`--no-wasi --optimize=size`): **1,654 ->
+  1,308 bytes (-21%)**, `_str_build` 69 + `_str_to_mem` 113 + the two import wrappers gone,
+  `_lit_stage` 24 in. For scale, `-Oz` over the OLD module stopped at 1,495
+  ([[optimize-dead-code-elimination]], "What an external optimizer still finds"). Where the
+  round trip's helpers stay alive for other reasons the lowering costs a few bytes per site
+  and the helper once: `webgl-cube`/`galaxy`/`heat3d` -15 each, `platformer` +8,
+  `battlefront` +9, `robot-arm` +27, `solids` +45 -- under 0.03% on every one of them, and
+  every module that declares no `:string` import is byte-identical. Pins:
+  `WasmImportCompilerTest.aLiteralStringArgumentCrossesWithoutTheGcRoundTrip` (the PAIR: the
+  same module with the argument BUILT at runtime carries all of it) and
+  `.theLiteralLoweringDeclinesTheShapesItCannotMarshal`; the CONTENT is
+  `WasmStringParamBoundaryE2eTest`, whose literal exports are exactly this path.
+
 Pins: `WasmImportCompilerTest.twoMemoryTypedParamsStageOnDistinctRegions` (the `HEAP_PTR`
-advance, once per staged parameter, absent at one),
+advance, once per staged parameter, absent at one -- measured on RUNTIME-built arguments,
+since a literal site no longer reaches the wrapper),
 `WasmReentrantCompilerTest.parkHelpersRideOnlyAReentrantModuleWithAMemoryBoundary`, and the
 CONTENT against a Node host in `WasmStringParamBoundaryE2eTest` (every combination, a
 runtime-built string, the flat-memory loop).

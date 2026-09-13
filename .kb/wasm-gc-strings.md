@@ -61,6 +61,12 @@ Two disciplines share the linear scratch at `HEAP_PTR_ADDR`:
   PARAMETER goes through `WasmImportCompiler.emitStagedMemoryParam`, which ADVANCES `HEAP_PTR`
   past its region so several coexist -- [[wasm-import]]), the fetch wire,
   `tcp` host, and a string INPUT stream's source copy.
+- `_lit_stage(src,len,delta)->ptr` -- the ONE staging that touches neither helper: a host
+  import argument that is a LITERAL is `memory.copy`d from the data segment into a block
+  reserved above the static data, at the call site, so the bytes never become a GC array
+  to be unbuilt one instruction later ([[wasm-import]], "A literal `:string` argument does
+  not round-trip"). Conditional, sized by the widest site, and absent from a module that
+  declares no `:string` import.
 - `_write_str_gc(str,from,to,esc)` (`FUNC_WRITE_STR_GC`) -- appends straight from the GC array to
   `CAPTURE_CUR` in capture mode (so it can never alias the capture buffer) or stages into scratch +
   `_write_str`. `princ` passes `(1,len-1,0)`, a symbol `(start,len,0)`, **`prin1` `(1,len-1,1)`** --

@@ -833,6 +833,11 @@ final class WasmAsyncEmit {
 			// same form inside a defun reports a wrong argument count
 			// (Ctx.arityChkFuncIndex).
 			.arityChkFuncIndex(proto.arityChkFuncIndex)
+			// NOT optional for the same reason: a chunk built here compiles call sites
+			// too, and a literal :string host-import site must lower the same way at the
+			// top level as it does inside a defun.
+			.litStageFuncIndex(proto.litStageFuncIndex)
+			.importDecls(proto.importDecls)
 			.numDefuns(proto.numDefuns)
 			.userDefunNames(proto.userDefunNames)
 			.usesFmakunbound(proto.usesFmakunbound)

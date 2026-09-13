@@ -62,6 +62,65 @@ final class WasmStringRuntimeBuilder {
 	 * (so identity/{@code eq} are unchanged).
 	 * @return the function body
 	 */
+	/**
+	 * Builds {@code _lit_stage(src, len, delta) -> ptr}: copies {@code len} bytes of
+	 * linear memory at {@code src} to {@code stageBase + delta} and answers that address.
+	 *
+	 * <p>
+	 * The helper the literal {@code :string} call-site lowering stages through
+	 * ({@code WasmImportCompiler.compileLiteralImportCall}). A literal's bytes START in
+	 * linear memory -- the interned data segment put them there -- and the host boundary
+	 * WANTS them in linear memory, so the general path's detour through a GC byte array
+	 * ({@code _str_build} out, {@code _str_to_mem} back) is a pure round trip that
+	 * linear-to-linear {@code memory.copy} does in one instruction.
+	 *
+	 * <p>
+	 * It is a COPY and not the data segment's own pointer on purpose: identical literals
+	 * are deduplicated into one block that also spells interned symbol names, so a host
+	 * writing through such a pointer would corrupt every other use of that spelling for
+	 * the life of the instance ({@code .kb/wasm-import.md}). What this saves is the two
+	 * byte loops and the GC array between them, never the copy.
+	 *
+	 * <p>
+	 * The destination is a RESERVED block above the static data, not the {@code HEAP_PTR}
+	 * scratch, and that is what keeps the helper small: a fixed block inside the module's
+	 * own minimum memory can never be out of bounds, so the whole {@code emitGrowHeapTo}
+	 * guard every other linear-memory writer carries (about two-thirds of what this
+	 * function would otherwise be) is not emitted. The block is sized by the widest
+	 * single call site, so the call it stages for owns all of it, and {@code delta} --
+	 * every staged length at a site being a compile-time constant -- lays the site's
+	 * regions out inside it without the wrapper's mark/restore bracket, which a call site
+	 * has no i32 local to hold anyway.
+	 * @param stageBase the reserved block's base address, settled with the rest of the
+	 * static layout (and therefore baked in here, where the body is built, rather than
+	 * read out of a cell by every site)
+	 * @return the function body
+	 */
+	static byte[] buildLitStageBody(int stageBase) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: src = 0, len = 1, delta = 2. locals: dst = 3 (i32).
+		w.write(1); // 1 local group
+		w.write(1); // 1 local (dst)
+		w.write(Type.I32);
+		int src = 0, len = 1, delta = 2, dst = 3;
+		// dst = stageBase + delta
+		i32(w, stageBase);
+		get(w, delta);
+		w.write(Instruction.I32_ADD);
+		set(w, dst);
+		// memory.copy(dst, src, len)
+		get(w, dst);
+		get(w, src);
+		get(w, len);
+		w.write(Instruction.MISC_PREFIX);
+		w.writeUnsignedLeb128(Instruction.MEMORY_COPY);
+		w.write(0x00, 0x00);
+		get(w, dst);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
 	static byte[] buildStrBuildBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);

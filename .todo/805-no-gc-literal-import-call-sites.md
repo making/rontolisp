@@ -5,9 +5,10 @@ itself is not re-measured (it needs the spike again).
 
 Difficulty: Medium
 
-Twin of [`801`](801-literal-string-argument-round-trips-through-the-gc-heap.md) on the
-other backend, with a different mechanism, a different prize, and a prerequisite `801` does
-not have.
+Twin of the wasm-GC literal call-site lowering on the other backend, with a different
+mechanism, a different prize, and a prerequisite that one does not have. The GC half
+LANDED 2026-09-13 (`801`, closed; `.kb/wasm-import.md`, "A literal `:string` argument does
+not round-trip") -- read it before starting here, because the PREDICATE is now written.
 
 ## The finding that matters most
 
@@ -82,24 +83,27 @@ drops it; a version that looks at statement position (see
 
 ## The sound version is cheap ON THIS BACKEND
 
-`801` says the call site cannot see that the callee is an import because `importWrappers`
-is local to `WasmLispCompiler.compile`. **That is the wasm-GC backend; it is not true
-here.** `NoGcWasmCompiler.imports` is already a field (`Map<String,
-WasmImportCompiler.Decl>`, kept for `collectCallsCons`). Only `importOrdinals` is a local
-of `compile()`; the spike needed one more field. What is left:
+The wasm-GC side had to lift `importWrappers` out of `WasmLispCompiler.compile` first
+(it is `Ctx.importDecls` now). **Here that was never in the way**:
+`NoGcWasmCompiler.imports` is already a field (`Map<String, WasmImportCompiler.Decl>`,
+kept for `collectCallsCons`). Only `importOrdinals` is a local of `compile()`; the spike
+needed one more field. What is left:
 
 - statement-vs-value position, so a `:void` call does not push and drop.
 - The wrapper keeps being emitted as an internal function; `--optimize` shakes it when
   nothing else needs it (`#'name`, `funcall`, dispatch). Under `--optimize=off` this is a
   pure 48-byte loss -- gate it, or accept that `off` means what it says.
 
-**No aliasing question arises here, unlike `801`.** The pointer handed to the host is the
-module's own permanent literal block -- the same pointer the wrapper computes today -- so
-this changes no contract (`.todo/795` still describes it exactly). `801`'s copy into
-staging is required on the GC side for a reason that does not exist on this one.
+**No aliasing question arises here, unlike the GC side.** The pointer handed to the host
+is the module's own permanent literal block -- the same pointer the wrapper computes today
+-- so this changes no contract (`.todo/795` still describes it exactly). The GC side's copy
+into staging is required there for a reason that does not exist on this one.
 
-The shared part with `801` is the PREDICATE ("are this call's memory-typed arguments all
-literals?"), which belongs on `WasmImportCompiler.Decl`. The emission cannot be shared.
+The shared part is the PREDICATE ("are this call's memory-typed arguments all literals?"),
+and it is already written and shared:
+`WasmImportCompiler.canLowerLiteralCallSite(Decl)` answers the DECLARATION half and the
+call-site half sits beside it in `compileLiteralImportCall`. The emission cannot be
+shared.
 
 ## Sequencing, and an honest note on its worth
 
@@ -114,8 +118,9 @@ measured:
 - **117 of this item's 139 bytes were bytes an external optimizer already found.** `-Oz`
   took the pre-`804` baseline from 1,383 to 1,118; between two `-Oz`ed modules this item was
   worth 22. rontolisp ships no optimizer, so all 139 are real shipped bytes -- but by the rule in
-  `.kb/optimize-dead-code-elimination.md` this is the *weaker* kind of win, and `801`'s 182
-  bytes on the GC side (a round trip no optimizer can see as one) are the stronger kind.
+  `.kb/optimize-dead-code-elimination.md` this is the *weaker* kind of win, and the GC
+  side's round trip (which no optimizer could see as one) was the stronger kind -- it
+  landed first for exactly that reason, and took its reactor from 1,654 to 1,308 bytes.
   Rank accordingly if the queue is ever short of time.
 
 The spike material -- benchmark, JS host, size scripts, and the measured `.wat`/diff --

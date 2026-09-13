@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.WasmImportDirective;
 import am.ik.wasm.Instruction;
@@ -197,6 +198,186 @@ final class WasmImportCompiler {
 	 */
 	static boolean usesStrFromMem(Decl decl) {
 		return decl.returnType() == BoundaryType.STRING || decl.returnType() == BoundaryType.S_EXPR;
+	}
+
+	/**
+	 * The result types the literal call-site lowering can box without the wrapper's
+	 * scratch slots: everything whose boxing reads only the value the host left on the
+	 * stack. {@code :s-expr} needs the {@code (ptr,len)} locals the reader is driven
+	 * from, {@code :string} the {@code _str_from_mem} index (settled only after every
+	 * user body is emitted) and {@code :bytes} the whole caller-passes-the-buffer
+	 * bracket, so a site returning one of those keeps the wrapper.
+	 */
+	private static final List<BoundaryType> LOWERABLE_RESULT_TYPES = List.of(BoundaryType.VOID, BoundaryType.S32,
+			BoundaryType.FLOAT, BoundaryType.BOOL);
+
+	/**
+	 * The parameter types the literal call-site lowering can push: a {@code :string}
+	 * (which is what it stages) plus the scalars, none of which touch linear memory.
+	 * {@code :s-expr} would have to print its argument first and {@code :bytes} stages a
+	 * runtime vector, so neither is a literal in the sense this lowering means.
+	 */
+	private static final List<BoundaryType> LOWERABLE_PARAM_TYPES = List.of(BoundaryType.STRING, BoundaryType.S32,
+			BoundaryType.FLOAT, BoundaryType.BOOL);
+
+	/**
+	 * Whether a declaration's SHAPE admits the literal {@code :string} call-site lowering
+	 * -- asked of the directive alone, so the module can reserve {@code _lit_stage}
+	 * before any call site is compiled ({@code WasmLispCompiler.emitsLitStage}). Whether
+	 * a given SITE takes it also depends on its arguments; see
+	 * {@link #compileLiteralImportCall}.
+	 * @param decl the parsed declaration
+	 * @return whether a site of this import may lower
+	 */
+	static boolean canLowerLiteralCallSite(Decl decl) {
+		return decl.paramTypes().contains(BoundaryType.STRING) && LOWERABLE_PARAM_TYPES.containsAll(decl.paramTypes())
+				&& LOWERABLE_RESULT_TYPES.contains(decl.returnType());
+	}
+
+	/**
+	 * The import ordinal a call to {@code name} encodes in its
+	 * {@link #PLACEHOLDER_FUNC_BASE} immediate: the position of its {@code (module,
+	 * field)} pair among the DISTINCT pairs the {@code rontolisp:wasm-import}
+	 * declarations name, in declaration order.
+	 *
+	 * <p>
+	 * That is the same dedup {@code WasmLispCompiler} builds its core import slots from
+	 * -- two wrappers may bind one host function and the component model forbids
+	 * importing a {@code (module, field)} twice -- and the wasm-import slots LEAD that
+	 * list, so a call site can settle its ordinal long before the slot list exists.
+	 * {@code WasmLispCompiler} checks the two answers against each other where it builds
+	 * the wrapper bodies, so the two cannot drift apart.
+	 * @param decls the module's declarations by Lisp name, in declaration order
+	 * @param name the Lisp name called
+	 * @return the ordinal, or -1 when the name is not a declared import
+	 */
+	static int hostImportOrdinal(java.util.Map<String, Decl> decls, String name) {
+		java.util.LinkedHashMap<String, Integer> slots = new java.util.LinkedHashMap<>();
+		for (Decl decl : decls.values()) {
+			slots.putIfAbsent(decl.module() + "\0" + decl.field(), slots.size());
+		}
+		Decl decl = decls.get(name);
+		return decl == null ? -1 : slots.get(decl.module() + "\0" + decl.field());
+	}
+
+	/**
+	 * Compiles a call to a host import whose every {@code :string} argument is a LITERAL
+	 * straight into the host call, bypassing the wrapper -- the whole point being what
+	 * the bypass does NOT do.
+	 *
+	 * <p>
+	 * A literal's bytes start in linear memory: the interned data segment put them there.
+	 * The host boundary wants bytes in linear memory. The general path nevertheless walks
+	 * them byte-by-byte into a GC array ({@code _str_build}) so that the wrapper can walk
+	 * them byte-by-byte back out ({@code _str_to_mem}) -- a round trip no optimizer can
+	 * see as one, because each half is an ordinary call to a shared helper. Here the same
+	 * bytes cross as one {@code memory.copy} inside {@code _lit_stage}, and in a module
+	 * whose only string work was this, BOTH helpers and the wrapper itself become
+	 * unreachable.
+	 *
+	 * <p>
+	 * It is a COPY, never the data segment's own pointer: identical spellings are
+	 * deduplicated into one block that also spells interned symbol names, so handing the
+	 * host a pointer INTO the segment would let a write corrupt every other use of that
+	 * spelling ({@code .kb/wasm-import.md}, {@code .kb/no-gc-scalar-wasm.md}). What this
+	 * saves is the two byte loops and the GC array between them, not the copy.
+	 *
+	 * <p>
+	 * The regions land at fixed deltas off the UN-ADVANCED {@code HEAP_PTR} scratch --
+	 * the staging a single memory-typed parameter has always used, under the same
+	 * contract (the host reads its memory-typed arguments before it answers). Every
+	 * staged length here is a compile-time constant, so the deltas replace the wrapper's
+	 * mark/restore bracket, which a call site has no i32 local to hold anyway.
+	 * @param name the Lisp name in call position
+	 * @param cons the call form
+	 * @param ctx the compilation context
+	 * @return whether the site was compiled here
+	 */
+	static boolean compileLiteralImportCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
+		Decl decl = ctx.importDecls.get(name);
+		if (decl == null || ctx.litStageFuncIndex < 0 || ctx.reentrant || !canLowerLiteralCallSite(decl)) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		int numParams = decl.paramTypes().size();
+		// A wrong argument count is the generic path's to report, with its message.
+		if (parts.size() - 1 != numParams) {
+			return false;
+		}
+		String[] literals = new String[numParams];
+		int firstLiteral = -1;
+		for (int i = 0; i < numParams; i++) {
+			if (decl.paramTypes().get(i) != BoundaryType.STRING) {
+				continue;
+			}
+			if (!(parts.get(i + 1) instanceof am.ik.rontolisp.LispString literal)) {
+				return false;
+			}
+			literals[i] = literal.literal();
+			if (firstLiteral < 0) {
+				firstLiteral = i;
+			}
+		}
+		int ordinal = hostImportOrdinal(ctx.importDecls, name);
+		// Arguments BEFORE the first staged region are pushed as they are evaluated;
+		// the ones after it have to be evaluated into temps FIRST, because the regions
+		// sit on un-advanced scratch and anything that allocates linear memory while
+		// they are live would land on top of them. Source order is preserved either way
+		// -- what is skipped over is a literal, which evaluates to nothing observable.
+		int[] slots = new int[numParams];
+		java.util.Arrays.fill(slots, -1);
+		for (int i = 0; i < firstLiteral; i++) {
+			WasmExprCompiler.compileExpr(parts.get(i + 1), ctx);
+			emitUnboxTop(ctx, decl.paramTypes().get(i));
+		}
+		for (int i = firstLiteral + 1; i < numParams; i++) {
+			if (literals[i] != null) {
+				continue;
+			}
+			WasmExprCompiler.compileExpr(parts.get(i + 1), ctx);
+			slots[i] = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slots[i]);
+		}
+		if (decl.async()) {
+			// The settled future's kind field, under the boxed result (buildWrapperBody).
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(2);
+		}
+		int delta = 0;
+		for (int i = firstLiteral; i < numParams; i++) {
+			if (literals[i] == null) {
+				emitUnboxParam(ctx, decl.paramTypes().get(i), slots[i]);
+				continue;
+			}
+			WasmLispCompiler.StringTable.StringEntry entry = WasmEmitHelper.internSpelledLiteral(literals[i], ctx);
+			// The boundary is the CONTENT: the interned form is quote-framed, exactly as
+			// _str_build would have copied it and _str_to_mem written it back.
+			int contentOffset = entry.offset() + 1;
+			int contentLength = entry.length() - 2;
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(contentOffset);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(contentLength);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(delta);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.litStageFuncIndex);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(contentLength);
+			delta += contentLength;
+		}
+		// The reserved block has to hold this site's whole run at once; every other site
+		// lays its own out from the same base, so what it must be is the WIDEST.
+		ctx.litStageBytes[0] = Math.max(ctx.litStageBytes[0], delta);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(PLACEHOLDER_FUNC_BASE + ordinal);
+		emitBoxResult(ctx, decl.returnType(), -1, -1, false);
+		if (decl.async()) {
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+		}
+		return true;
 	}
 
 	/** Returns whether the declaration's result is parsed with the embedded reader. */
@@ -643,6 +824,13 @@ final class WasmImportCompiler {
 	private static void emitUnboxParam(WasmLispCompiler.Ctx ctx, BoundaryType type, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
+		emitUnboxTop(ctx, type);
+	}
+
+	// The same conversion over the boxed Lisp value already on the stack: what a call
+	// site pushing an argument in place (rather than out of a wrapper's parameter slot)
+	// needs.
+	private static void emitUnboxTop(WasmLispCompiler.Ctx ctx, BoundaryType type) {
 		switch (type) {
 			case S32 -> WasmEmitHelper.castI31GetS(ctx);
 			// Accepts an int, ratio or float Lisp value (numeric contagion like the

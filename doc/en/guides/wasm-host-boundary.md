@@ -179,9 +179,10 @@ Boundary details beyond the scalar types:
   must read every argument it needs before it answers.
 - **The pointer is borrowed and read-only.** Writing through it is undefined,
   and what it damages differs by output shape: here the region is scratch the
-  wrapper stages for this one call and pops when it returns, so a write during
-  the call reaches memory that is already dead a moment later — harmless by
-  accident, not by contract. On
+  compiler stages for this one call — popped when the call returns, or, where
+  the argument was a literal, overwritten by the next call that stages one — so
+  a write during the call reaches memory that is already dead a moment later —
+  harmless by accident, not by contract. On
   [`--no-gc`](wasm-nogc.md#host-imports-rontolispwasm-import) there is no
   staging at all: the pointer is `(ptr, len)` of a block the module already
   holds, live for the whole instance, so a write through it corrupts that

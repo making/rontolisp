@@ -474,11 +474,13 @@ directions have now been walked into:
   bytes, and **binaryen found the SAME 182,697 bytes in the module before and after it**.
   The optimizer's reach is a fixed quantity a lowering change walks straight past, so a
   residue is not a ceiling.
-- The `.todo/789` reactor is 1,658 bytes and `-Oz` stops at 1,495 -- within five bytes of
-  what a hand-written non-GC toolchain emits for the same program. A residue near zero is
-  not "nothing left to win" either: 182 of those bytes are a literal string walked out of
-  linear memory into a GC array and back (`.todo/801`), which no optimizer can see as a
-  round trip.
+- The `.todo/789` reactor was 1,658 bytes and `-Oz` stopped at 1,495 -- within five bytes
+  of what a hand-written non-GC toolchain emits for the same program. A residue near zero
+  is not "nothing left to win" either: 182 of those bytes were a literal string walked out
+  of linear memory into a GC array and back, which no optimizer can see as a round trip.
+  todo 801 removed it at the emitter (2026-09-13, [[wasm-import]] "A literal `:string`
+  argument does not round-trip"): the same reactor is **1,308 bytes with no optimizer at
+  all**, 187 BELOW the figure `-Oz` had "stopped at". The residue was never the floor.
 
 So the measurements that pay are the pass ranking below, a per-function decomposition of
 one module, and the shape census -- what the backend chose to emit. The residue tables are

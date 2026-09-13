@@ -574,6 +574,13 @@ public interface Instruction {
 	/** {@code I64_TRUNC_SAT_F64_S} (0xFC 0x06). */
 	int I64_TRUNC_SAT_F64_S = 0x06;
 
+	/**
+	 * {@code MEMORY_COPY} (0xFC 0x0A): copies {@code n} bytes between two ranges of
+	 * linear memory, {@code (dst, src, n)} deepest-first on the stack. Two zero memory
+	 * indices follow the opcode (destination, then source).
+	 */
+	int MEMORY_COPY = 0x0A;
+
 	// Reference instructions (no prefix)
 	/** {@code REF_NULL} (0xD0). */
 	int REF_NULL = 0xD0;

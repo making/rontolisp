@@ -436,9 +436,17 @@ final class WasmCodeModel {
 				case 0xFB -> decodeGc(buf, p, start);
 				case 0xFC -> {
 					int sub = WasmSections.readU(buf, p);
-					if (sub > 0x07) {
-						throw new IllegalStateException(
-								String.format("WasmCodeModel: unhandled misc opcode 0xFC 0x%02X", sub));
+					// memory.copy (0x0A) carries two memory indices, memory.fill (0x0B)
+					// one; the saturating truncations (0x00-0x07) carry none.
+					switch (sub) {
+						case 0x0A -> p[0] += 2;
+						case 0x0B -> p[0]++;
+						default -> {
+							if (sub > 0x07) {
+								throw new IllegalStateException(
+										String.format("WasmCodeModel: unhandled misc opcode 0xFC 0x%02X", sub));
+							}
+						}
 					}
 					yield new Instr(op, sub, start);
 				}
