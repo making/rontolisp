@@ -6,9 +6,12 @@ own semantics to keep; land them one at a time, largest first)
 Third of the three items `791` item 3's measurement split into
 (`.kb/optimize-dead-code-elimination.md`, "What an external optimizer still finds, and what
 it is made of"; scripts in `.todo/artefacts/791-module-level-slack-globals-types-data-hooks/`).
-What is left of the residue after `.todo/798`'s peepholes is not what a post-emit pass can
-reach: it is HOW a few very common forms are lowered. Measured 2026-09-12 on the
-hello-clack Worker (`--optimize=size`, 815,414 B) and `zlib` (90,874 B), by shape:
+What is left of the residue after the adjacent-instruction peepholes (`.todo/798`, landed
+2026-09-13: `.kb/optimize-dead-code-elimination.md`, "The adjacent-instruction peepholes")
+is not what a post-emit pass can reach: it is HOW a few very common forms are lowered.
+Measured 2026-09-12 on the hello-clack Worker (`--optimize=size`, 815,414 B) and `zlib`
+(90,874 B); the same two artifacts are 795,062 B and 88,315 B once the peepholes land, so
+a before/after on a shape below is measured against those. By shape:
 
 1. **The `&key` prologue** (`LambdaLists.keyCellScan` / `unknownKeyCheck`): every keyword
    parameter is its own inline `do` loop over the rest list, ~140 B of wasm each; 701 of
@@ -45,9 +48,9 @@ hello-clack Worker (`--optimize=size`, 815,414 B) and `zlib` (90,874 B), by shap
    them (`%FMT-CONTROL`, 228 literal box-then-unbox sites on the Worker) -- the literal's
    code is a compile-time constant and the comparison an `i32.eq`.
 7. **Statement values**: a `setq`'s value dropped (`local.tee; drop`, 1,197), nil-valued
-   statements (`ref.null eq; drop`, part of 1,416) -- `.todo/798` removes the bytes; the
-   emitter could stop producing them by compiling a non-final `progn` form in a
-   value-free mode.
+   statements (`ref.null eq; drop`, part of 1,416) -- the peepholes already remove the
+   bytes; the emitter could stop producing them by compiling a non-final `progn` form in a
+   value-free mode, which is the only part of this row still worth anything.
 
 Each chunk is measured the same way: the census scripts before and after, on the
 size-report programs and the Worker. The JVM backend shares 1 and 6 (the expander is

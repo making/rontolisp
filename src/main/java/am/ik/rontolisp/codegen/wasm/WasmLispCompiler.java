@@ -7496,10 +7496,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			List<am.ik.wasm.WasmTreeShaker.HostCellHook> hostCellHooks, @Nullable Map<Integer, String> funcNames,
 			int importShift) {
 		// The type-test fold first, then the call redirection through the forwarders it
-		// leaves: both rewrite bodies in place and renumber nothing, so the segment and
-		// range claims above still speak in the module's indices, and the reachability
-		// shake then drops what the folded branches and the bypassed hops stopped
-		// calling (.kb/wasm-ref-type-fold.md).
+		// leaves, then the adjacent-instruction peepholes: all three rewrite bodies in
+		// place and renumber nothing, so the segment and range claims above still speak
+		// in the module's indices, and the reachability shake then drops what the folded
+		// branches and the bypassed hops stopped calling (.kb/wasm-ref-type-fold.md).
 		String coreDump = System.getProperty("rontolisp.wasm.debug-core");
 		if (coreDump != null) {
 			// -Drontolisp.wasm.debug-core=<path>: the core module as the shake path
@@ -7536,6 +7536,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		coreModule = am.ik.wasm.WasmCallForwarding.redirect(am.ik.wasm.WasmRefTypeFolder.fold(coreModule));
+		// Then the adjacent-instruction peepholes, over the bodies those two leave: the
+		// emitter's own store/load pairs and statement-position values, plus the
+		// `i32.const; drop` / `ref.null; drop` debris the fold makes of a folded
+		// argument. Before the move below, so a body it shrinks can still fit the
+		// move's budget.
+		coreModule = am.ik.wasm.WasmPeephole.rewrite(coreModule);
 		// Then the single-call-site move, which needs both of those in front of it (the
 		// fold is what leaves a helper with one caller) and the shake behind it (it
 		// unreferences the callee rather than deleting it). The case-fold owners are

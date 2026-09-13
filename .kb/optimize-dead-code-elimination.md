@@ -44,13 +44,15 @@ only INTEGER arithmetic fuses. **The two wasm trades are ONE level, not two swit
 the locals alone.
 
 ## Before the wasm shaker: the type-test fold and the forwarder redirect
-`am.ik.wasm.WasmRefTypeFolder.fold` then `WasmCallForwarding.redirect` run in
+`am.ik.wasm.WasmRefTypeFolder.fold`, then `WasmCallForwarding.redirect`, then
+`WasmPeephole.rewrite` ("The adjacent-instruction peepholes" below, which also picks up the
+`i32.const; drop` / `ref.null; drop` debris the fold leaves) run in
 `WasmLispCompiler.shakeCore` ahead of `WasmTreeShaker.shake` at every level but `off`: a
 whole-module type-flow analysis folds every `ref.test`/`ref.cast`/`ref.is_null` the module's own
 constructors decide, prunes the arms that die, and redirects calls through the forwarding stubs
 that leaves -- the generic arithmetic's float and rational arms in an integer-only program, the
 printer's arms for types the program never builds (`.kb/wasm-ref-type-fold.md`: the licence, the
-lattice, the numbers). Both rewrite bodies in place and renumber nothing, so the claims below
+lattice, the numbers). All three rewrite bodies in place and renumber nothing, so the claims below
 still speak in pre-shake indices.
 
 ## Before the shakers: a `typecase` clause no call can select
@@ -308,8 +310,72 @@ bytes MORE gzip. Pins: `WasmBodyFolderTest`; `-Drontolisp.wasm.debug-func-sizes`
 group by its survivor. **The JVM twin is measured, not implemented** (zlib: 48 duplicate methods,
 8,331 B): JVM methods are reachable BY NAME, so the survivor set needs its own soundness argument.
 
+### The adjacent-instruction peepholes
+`am.ik.wasm.WasmPeephole.rewrite` runs between `WasmCallForwarding.redirect` and
+`WasmInliner.inline` on BOTH wasm backends (`WasmLispCompiler.shakeCore`;
+`NoGcWasmCompiler.compile`), at every `eliminatesDeadCode()` level. Every rewrite is decided by two
+or three instructions that are ADJACENT in one block's decoded instruction list -- no dataflow, no
+renumbering, nothing whole-module -- and all of them DELETE bytes rather than relocating any, which
+is why raw and gzip move together here and the move above has to argue about that (`size-measurement.md`).
+**The number this pass is for is raw bytes of the `code` section**; gzip was measured as a check and
+falls by the same fraction.
+
+- `local.set N; local.get N` -> `local.tee N` (2 B). **The two-value shape
+  `set b; set a; get a; get b` is this same rule**, applied to its middle pair: the census counted
+  it separately (685 sites on the Worker, 87 on `zlib`) and it needs no rule of its own.
+- `local.tee N; drop` -> `local.set N` (1 B), including the `tee` the rule above has just made, so a
+  statement-position assignment (`set N; get N; drop`) collapses back to `set N`.
+- a pure value then `drop` -> nothing (2-3 B): a constant, `ref.null`, `local.get`, `global.get`.
+- `br 0; end; unreachable; end` -> the `unreachable` goes (1 B). **Two conditions, and the pass is
+  unsound without either.** The `end` must close a LOOP whose last instruction is that `br 0`, so
+  nothing falls out of it and the trap is dynamically dead -- over a plain `block` the same `br 0`
+  LEAVES the block and lands on the trap. And the loop must be the whole of an enclosing block that
+  takes and leaves nothing, so the stack at that point is already what the enclosing `end` wants --
+  otherwise the trap is what makes the module validate (`i32.const 1; loop ... end; unreachable;
+  end` in a result-less block is legal and stops being legal without it). That narrow form is not a
+  compromise: it covers 185 of 185 sites on `zlib` and 1,481 of 1,488 on the Worker.
+  **Every one of those sites is the type-test fold's own**: `--optimize=off` emits none, and
+  `WasmRefTypeFolder`'s `stepEnd` writes the trap whenever a block's end is never reached, because
+  at that point it cannot know whether what follows is the enclosing `end` or code that would stop
+  validating without it. The peephole is the lookahead the fold cannot do, which is why the two
+  disagree by design -- a second `fold` over the compiler's output writes the trap back
+  (`WasmRefTypeFolderTest.theIntegerOnlyReactorLosesTheFloatAndRationalTiers` states the fixpoint
+  on the fold's own output for exactly this reason).
+
+The local rules run as one left-to-right pass that collapses the output's tail to a fixpoint, so a
+pair a rewrite creates is taken without a second traversal. Measured 2026-09-13 (`--optimize=size`
+unless the artifact's own flags say otherwise), raw / gzip:
+
+| artifact | before | after | gzip before | gzip after |
+| --- | ---: | ---: | ---: | ---: |
+| hello-clack Worker | 815,348 | 795,062 (-2.5%) | 215,054 | 209,489 (-2.6%) |
+| hello-tiny-routes Worker | 860,937 | 839,368 | 226,882 | 220,880 |
+| hello-ningle Worker | 3,438,910 | 3,373,895 | 703,627 | 684,364 |
+| httpbin Worker | 176,793 | 172,614 | 58,057 | 57,195 |
+| `zlib` | 90,817 | 88,315 (-2.8%) | 30,957 | 30,134 |
+| `pi_approx` | 1,544 | 1,504 | 925 | 910 |
+| `hello_world` | 500 | 487 | 393 | 388 |
+| `pi_approx` (`--no-gc`) | 3,333 | 3,289 | | |
+| `hello` Worker (`--no-gc`) | 507 | 489 | | |
+
+Pins: `WasmPeepholeTest` (one hand-assembled body per shape, including the two the loop-tail rule
+must refuse), and `WasmTreeShakerCorpusTest`, which runs the pass by hand over the whole `ci-spec`
+corpus in the position the compile path runs it -- it must shrink the module, and what it leaves
+must validate and re-encode to itself.
+
+**What did NOT pay, measured and not landed: answering a `call` at the call site.**
+`.todo/798` also asked for two rewrites in `WasmCallForwarding` for the bodies the type-test fold
+leaves beside its forwarders -- the identity (`local.get 0; end`, so the `call` is deleted) and the
+constant (`() -> (t)` whose body is one constant, so the `call` becomes that constant). Both were
+built and measured over 13 artifacts: **0 bytes on twelve of them and 153 B on one** (the 3.4 MB
+ningle Worker, 0.005%). The shapes are there -- 7 to 8 functions match in every module -- but they
+are already UNREFERENCED when the pass runs, so the shaker was collecting them for free and
+rewriting their call sites rewrites nothing. The population is a fixed set of runtime helpers, so
+it will not grow. The prediction the item carried ("20-30 B on each small module") is what this
+replaces.
+
 ### The single-call-site move
-`am.ik.wasm.WasmInliner.inline` runs between `WasmCallForwarding.redirect` and
+`am.ik.wasm.WasmInliner.inline` runs between `WasmPeephole.rewrite` and
 `WasmTreeShaker.shake` on BOTH wasm backends (`WasmLispCompiler.shakeCore`;
 `NoGcWasmCompiler.compile`), at every `eliminatesDeadCode()` level. A defined function the whole
 module `call`s from exactly one place has its body moved to that call site and is left
@@ -526,23 +592,24 @@ census over the flat `wasm-tools print` of the Worker / `zlib`:
 | shape | Worker | `zlib` | per site |
 | --- | ---: | ---: | --- |
 | `car`/`cdr`: `local.get; local.set t; local.get t; ref.is_null; if ... end` (every site a fresh temp) | 8,141 | 344 | 17-21 B -> **landed**, `.kb/cons-access-runtime.md` |
-| `local.set N; local.get N` (a `tee`) | 9,700 | 869 | 2 B |
+| `local.set N; local.get N` (a `tee`) | 9,700 | 869 | 2 B -> **landed**, "The adjacent-instruction peepholes" |
 | `local.get A; local.set B; local.get B` (a copy into a temp) | 4,181 | 342 | 4 B + a local |
 | `if (result eqref) call err else nil end; ref.is_null` (an assertion in value position) | 3,304 | 303 | ~8 B |
-| a pure value then `drop` (`ref.null eq`, a constant, a `local.get`) | 1,416 | 267 | 2-3 B |
-| `local.tee N; drop` (a statement `setq`) | 1,197 | 127 | 1 B |
-| `br 0; end; unreachable; end` (a counted loop's tail) | 1,488 | 185 | 1 B |
+| a pure value then `drop` (`ref.null eq`, a constant, a `local.get`) | 1,416 | 267 | 2-3 B -> **landed** |
+| `local.tee N; drop` (a statement `setq`) | 1,197 | 127 | 1 B -> **landed** |
+| `br 0; end; unreachable; end` (a non-terminating loop's tail, written by the FOLD) | 1,488 | 185 | 1 B -> **landed** |
 | the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) | 701 | 22 | ~140 B |
 | a boxed variable built empty then `struct.set` (`ref.null; struct.new; local.set`) | 204 | 45 | ~8 B |
 | a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B |
 | `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B |
 
-The first row is `.kb/cons-access-runtime.md`; the rest are `.todo/798` (the adjacent-
-instruction peepholes and the fold debris, byte-level), `.todo/799` (the lowering shapes,
-expander and emitter level) and the single-call-site move (landed; "The single-call-site move"
-above -- where the reading of the `zlib`/Worker inlining share is corrected). After the
+The first row is `.kb/cons-access-runtime.md`; the four marked **landed** are the peepholes
+("The adjacent-instruction peepholes" above, `.todo/798`); the lowering shapes are `.todo/799`
+(expander and emitter level), and the single-call-site move is landed too ("The single-call-site
+move" above -- where the reading of the `zlib`/Worker inlining share is corrected). After the
 first row landed: `zlib` 90,874 (residue 18,542), Worker 815,414 (residue 182,697 -- the
-same bytes as before, so the 101 KB was outside binaryen's reach: it does not outline).
+same bytes as before, so the 101 KB was outside binaryen's reach: it does not outline). After
+the peepholes: `zlib` 88,315, Worker 795,062.
 
 **A residue is a property of the real output, never of a spike**, and a pass ranked by
 running it ALONE says how much binaryen's writer costs as much as what the pass does. The

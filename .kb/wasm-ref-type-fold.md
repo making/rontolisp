@@ -71,6 +71,9 @@ fewer, or wrapped in a `block` of the same block type when one does; `br_if` on 
 as `br` or nothing; an impossible `ref.cast` as `unreachable`. **A block whose end is
 unreachable gets an explicit `unreachable` after it**: a block's END is not
 stack-polymorphic for the validator (`expected i64 but nothing on stack` was the symptom).
+It is written unconditionally, because at that point the pass cannot see whether what
+follows is the enclosing `end` or code that would stop validating without it; the peephole
+below deletes it again wherever the answer is the first one.
 Catch labels are relative to the try_table's ENCLOSING context, not its own label
 (`wasm-tools print` shows `(catch 0 0 (;@2;))` for the enclosing block).
 
@@ -81,6 +84,12 @@ Catch labels are relative to the try_table's ENCLOSING context, not its own labe
   every `call` of it is rewritten to `g`, chains to their last link -- and the shaker drops
   the stub. It exists because the fold leaves exactly such stubs of the dispatching
   helpers (`_rat_add` -> `_big_add`, `_rat_cmp` -> `_big_cmp`).
+- **`WasmPeephole.rewrite`** (same call, behind the redirect): the adjacent-instruction
+  peepholes, which also collect the fold's own `i32.const; drop` / `ref.null; drop` debris
+  (`.kb/optimize-dead-code-elimination.md`, "The adjacent-instruction peepholes"). The
+  fold's `unreachable`-after-a-block above is the one thing it must NOT undo blindly --
+  it deletes such a trap only behind a loop that cannot terminate, in a block that leaves
+  nothing.
 - **The integer export lane** (`WasmExportCompiler.emitNarrowIntResult`, every integer
   result up to 32 bits): `if (i31 | bignum | bigint) _int_val else _as_f64; trunc; extend`
   into ONE i64 scratch, then `v != canon(v)` (wrap+extend, `extend8_s`, a mask) traps.

@@ -88,11 +88,21 @@ class WasmTreeShakerCorpusTest {
 			// callee, and the body it moves is budgeted for exactly that reason
 			// (.kb/optimize-dead-code-elimination.md, "The single-call-site move").
 			byte[] prepared = WasmCallForwarding.redirect(WasmRefTypeFolder.fold(plain));
-			byte[] withoutMove = WasmTreeShaker.shake(prepared);
-			byte[] withMove = WasmTreeShaker.shake(WasmInliner.inline(prepared));
+			// The adjacent-instruction peepholes, in the position the compile path runs
+			// them: over what the fold and the redirection leave, in front of the move.
+			// They too run INSIDE the two optimized compiles above, so this is the only
+			// place their own shrink is visible -- and the only place every body they
+			// rewrite is put through the validator and the round-trip oracle.
+			byte[] peepholed = WasmPeephole.rewrite(prepared);
+			assertThat(peepholed.length).as("the peepholes must shrink the module (noWasi=%s)", noWasi)
+				.isLessThan(prepared.length);
+			byte[] withoutMove = WasmTreeShaker.shake(peepholed);
+			byte[] withMove = WasmTreeShaker.shake(WasmInliner.inline(peepholed));
 			assertThat(withMove.length)
 				.as("the single-call-site move must not grow the shaken module (noWasi=%s)", noWasi)
 				.isLessThanOrEqualTo(withoutMove.length);
+			validateWithWasmTools(withoutMove, "peepholed-" + mode);
+			roundTripIsAFixpoint(withoutMove, "peepholed-" + mode);
 			validateWithWasmTools(withMove, "inlined-" + mode);
 			roundTripIsAFixpoint(withMove, "inlined-" + mode);
 		}

@@ -330,8 +330,15 @@ class WasmRefTypeFolderTest {
 		// so the probe is the TESTS: no surviving body asks "is it a float" any more.
 		assertThat(floatTests(shakenOnly)).isPositive();
 		assertThat(floatTests(folded)).isZero();
-		// The compiler's output is already folded: a second pass finds nothing.
-		assertThat(WasmRefTypeFolder.fold(folded)).isSameAs(folded);
+		// The compiler's output is already folded: a second pass prunes nothing. It is
+		// not BYTE-identical any more, and that is not a fold that missed something: the
+		// peepholes that run behind the fold delete the explicit `unreachable` it writes
+		// after a loop that cannot terminate, and a second fold writes it back
+		// (.kb/optimize-dead-code-elimination.md, "The adjacent-instruction peepholes").
+		// What the second pass produces is where the fold itself stops.
+		byte[] refolded = WasmRefTypeFolder.fold(folded);
+		assertThat(floatTests(refolded)).isZero();
+		assertThat(WasmRefTypeFolder.fold(refolded)).isSameAs(refolded);
 	}
 
 	// How many ref.test / ref.cast instructions across the module name a struct whose one
