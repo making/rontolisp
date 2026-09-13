@@ -139,7 +139,7 @@ above.
 
 Compare section by section, or the answer is decided by things neither compiler
 is being judged on. The worked example is the `dom_reactor` row, measured
-2026-09-14 against
+2026-09-13 against
 [hike-lang](https://github.com/kanryu/hike-lang/blob/main/examples/browser/main.hike),
 a hand-written non-GC toolchain emitting the same page -- same four imports, same
 four exports, same eleven literals, which is why this program's literal text is
@@ -147,9 +147,9 @@ written to fixed lengths:
 
 | Section | hike | rontolisp `--no-gc` |
 | --- | ---: | ---: |
-| total | 1,490 | **930** |
-| code | 299 | **230** |
-| data | **451** | 484 |
+| total | 1,490 | **856** |
+| code | 299 | **200** |
+| data | 451 | **440** |
 | imports | 78 (4) | 78 (4) |
 | exports | 378 (24 entries) | **69 (5)** |
 | types | **31 (6)** | 36 (7) |
@@ -161,21 +161,22 @@ section holding every internal function plus the linker's own symbols
 (`__dso_handle`, `__data_end`, `__stack_low`, `__heap_base`), and 148 more are a
 custom section; exporting only the four entry points the page calls would put it
 near 1,180. Read `code` first -- that is the row that measures code generation,
-and it stands at 299 against 230 whatever is decided about the others.
+and it stands at 299 against 200 whatever is decided about the others.
 
-The two rows going the other way each say something different:
+Two rows are worth reading past their totals:
 
-- **data, 484 against 451.** The literal TEXT is 477 against 443: this backend
-  packs literals with no NUL terminator and no alignment padding, so the text
-  itself is the smaller of the two. The 44-byte difference is a four-byte `[len]`
-  header on each of the eleven literals -- which this program never reads,
-  because a literal handed to a host import is lowered as two compile-time
-  constants (`.kb/no-gc-scalar-wasm.md`).
-- **types, 36 against 31.** Seven entries, all used, none duplicated -- not the
-  missing-deduplication story it used to be. The extra entry is `fib`'s
-  `(i64) -> (i64)`: integers here are i64, exact to 2^63, so `fib` cannot share a
-  type with the `(i32) -> (i32)` export the way a 32-bit implementation's can.
-  That is the value model's price, and it is five bytes.
+- **data, 440 against 451, of which the literal TEXT is 433 against 443.** This
+  backend packs literals with no NUL terminator and no alignment padding, and a
+  literal that only ever crosses to a host import carries no `[len]` header
+  either -- such a site is lowered as two compile-time constants, so the header
+  would be four bytes nothing reads (`.kb/no-gc-scalar-wasm.md`). Eleven literals,
+  44 bytes.
+- **types, 36 against 31.** The only section still larger, and not the
+  missing-deduplication story it used to be: seven entries, all used, none
+  duplicated. The extra one is `fib`'s `(i64) -> (i64)`. Integers here are i64,
+  exact to 2^63, so `fib` cannot share a type with the `(i32) -> (i32)` export
+  the way a 32-bit implementation's can. That is the value model's price, and it
+  is five bytes.
 
 The same discipline in the other direction:
 `.kb/optimize-dead-code-elimination.md`, "What an external optimizer still
