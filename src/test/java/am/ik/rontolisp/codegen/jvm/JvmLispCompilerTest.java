@@ -13157,6 +13157,20 @@ class JvmLispCompilerTest {
 			.isEqualTo("(+ 1 2)\n42");
 	}
 
+	// read-from-string's SECOND value, CL's stop index, on the compiled backend too: the
+	// emitted reader's cursor after the datum. The multiple-value lowering is what asks
+	// for it, so a plain (read-from-string s) still parses once. See
+	// .kb/read-load-streams.md.
+	@Test
+	void compileReadFromStringStopIndex() throws Exception {
+		assertThat(compileAndRun("""
+				(print (multiple-value-list (read-from-string "abc")))
+				(print (multiple-value-list (read-from-string "(1 2) x")))
+				(print (nth-value 1 (read-from-string "42")))
+				(multiple-value-bind (v i) (read-from-string "(a b)") (print v) (print i))
+				""")).isEqualTo("(ABC 3)\n((1 2) 5)\n2\n(A B)\n5");
+	}
+
 	@Test
 	void compileReadFromStringDottedPair() throws Exception {
 		assertThat(compileAndRun("(print (read-from-string \"(a . 1)\")) (print (read-from-string \"(a b . c)\")) "

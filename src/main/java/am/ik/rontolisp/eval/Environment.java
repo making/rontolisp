@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.DoublePredicate;
 import java.util.function.DoubleUnaryOperator;
@@ -82,6 +83,7 @@ import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FixedDecimal;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.reader.LispLexer;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -312,6 +314,25 @@ public final class Environment implements Scope {
 	 */
 	public void setReadTimeEvalResolver(UnaryOperator<LispVal> resolver) {
 		this.readTimeEvalResolver = resolver;
+	}
+
+	/**
+	 * Answers the current -- dynamic binding first -- value of {@code *read-suppress*}.
+	 * Set by the evaluator for the same reason
+	 * {@link #setReadTimeEvalResolver(UnaryOperator)} is: the built-in holds the GLOBAL
+	 * environment, and {@code (let ((*read-suppress* t)) (read-from-string ...))} is a
+	 * dynamic binding only the evaluator can see. A {@code null} query (a bare
+	 * {@code Environment}) reads as false.
+	 */
+	@Nullable private BooleanSupplier readSuppressQuery;
+
+	/**
+	 * Installs the {@code *read-suppress*} query consulted by the runtime read built-ins;
+	 * see {@link #readSuppressQuery}.
+	 * @param query answers whether reading is currently suppressed
+	 */
+	public void setReadSuppressQuery(BooleanSupplier query) {
+		this.readSuppressQuery = query;
 	}
 
 	/**
@@ -669,6 +690,9 @@ public final class Environment implements Scope {
 		// #. read-time eval is enabled by default; binding it nil makes the marker
 		// resolver signal (LispEvaluator.resolveReadTimeEval), per CLHS.
 		env.define(LispNames.READ_EVAL_VAR, LispTrue.INSTANCE);
+		// *read-suppress* is nil by default; binding it true makes read/read-from-string
+		// consume the datum's characters and answer nil (CLHS 2.2).
+		env.define(LispNames.READ_SUPPRESS_VAR, LispNil.INSTANCE);
 		// The load-context pathname variables. *load-pathname* / *load-truename* are
 		// REBOUND around each loaded file (LispEvaluator.loadFile); the compile-file pair
 		// is permanently nil because rontolisp has no compile-file (see LispNames).
@@ -6084,9 +6108,29 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.READ_FROM_STRING + " expects a string");
 			}
+			if (env.readSuppressQuery != null && env.readSuppressQuery.getAsBoolean()) {
+				// *read-suppress* (CLHS 2.2): the characters of the datum are consumed
+				// -- which is the stop index, and the whole of what a suppressed read
+				// answers -- and the datum is neither built nor complained about.
+				// Nothing is parsed, so an unknown package, an unresolvable symbol and
+				// an out-of-range digit all pass silently.
+				return LispNil.INSTANCE;
+			}
 			// Folds like read above (upcase premise), so (read-from-string "foo") is
 			// the symbol FOO and (read-from-string "car") folds to the standard car.
 			return readRuntimeDatum.apply(str.value());
+		}));
+		// The stop index -- read-from-string's SECOND value -- as its own built-in, so
+		// only a multiple-value consumer's lowering pays for it (LispMacroExpander's
+		// read-from-string producer). A raw-character scan rather than a second parse:
+		// it must answer for the text a suppressed read swallows, which by definition
+		// does not parse.
+		env.defineFunction(LispNames.READ_FROM_STRING_END, new LispFunction(LispNames.READ_FROM_STRING_END, args -> {
+			requireMinArgCount(LispNames.READ_FROM_STRING_END, args, 1);
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.READ_FROM_STRING_END + " expects a string");
+			}
+			return readDatumStop(str.value());
 		}));
 		// parse-integer: parse an integer from a string, with the common :radix,
 		// :junk-allowed, :start and :end keywords.
@@ -6116,6 +6160,23 @@ public final class Environment implements Scope {
 			env.define(LispNames.MV_SPILL, new LispCons(valueAndPos[1], LispNil.INSTANCE));
 			return valueAndPos[0];
 		}));
+	}
+
+	/**
+	 * The index after the datum {@code read-from-string} reads out of {@code input} --
+	 * its second value. The scan is deliberately SEPARATE from the parse: it answers for
+	 * text the parse refuses, which is what a suppressed read needs. An input the scan
+	 * cannot delimit at all answers the whole length rather than signalling: a
+	 * disagreement between the scan and the parse must never turn a working read into an
+	 * error.
+	 */
+	private static LispVal readDatumStop(String input) {
+		try {
+			return new LispInteger(LispLexer.datumEnd(input, am.ik.rontolisp.reader.Features.INTERPRETER));
+		}
+		catch (RuntimeException ex) {
+			return new LispInteger(input.length());
+		}
 	}
 
 	// Shared parse-integer logic: trims whitespace, accepts an optional sign, and

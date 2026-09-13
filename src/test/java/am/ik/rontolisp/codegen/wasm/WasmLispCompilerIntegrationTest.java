@@ -11535,6 +11535,17 @@ class WasmLispCompilerIntegrationTest {
 
 	// read tests
 
+	// read-from-string's SECOND value, CL's stop index, on the WASM backend: how far the
+	// emitted reader's cursor moved over the datum. See .kb/read-load-streams.md.
+	@Test
+	void readFromStringStopIndex() throws Exception {
+		assertThat(compileAndRun("""
+				(print (multiple-value-list (read-from-string "abc")))
+				(print (nth-value 1 (read-from-string "(1 2)")))
+				(multiple-value-bind (v i) (read-from-string "(a b)") (print v) (print i))
+				""")).isEqualTo("(ABC 3)\n5\n(A B)\n5");
+	}
+
 	@Test
 	void readInteger() throws Exception {
 		assertThat(compileAndRunWithStdin("(print (read))", "42")).isEqualTo("42");

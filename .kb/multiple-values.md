@@ -18,7 +18,11 @@ multiple-value representation. A `%mv-spill` global carries the cases the syntac
 **nested single-binding lets** (`nestMvBindings`) so evaluation order holds on every backend.
 `isMvProducerForm` recognizes literal `values`, the floor family, `gethash` (a runtime `(gensym)`
 sentinel default plus `(eq v sentinel)` distinguishes a stored nil from a missing key), `subtypep`
-(answer + valid-p, [[declarations-type-checks]]), else one temp. Consumers: `expandMultipleValueBind` (missing -> nil, surplus evaluated and dropped),
+(answer + valid-p, [[declarations-type-checks]]), one-argument `read-from-string` (datum + stop
+index, [[read-load-streams]]), else one temp. A producer the form is NOT recognized as goes through
+`spillEscapingMvProducers` FIRST, so a recognized producer in the TAIL of the `(let ...)`/`(progn
+...)` the consumer was handed publishes -- the tier boundary is otherwise visible through a wrapper
+nobody wrote for that purpose. Consumers: `expandMultipleValueBind` (missing -> nil, surplus evaluated and dropped),
 `expandMultipleValueList`, `expandNthValue`, `expandMultipleValueCall` (fn temp FIRST, then
 producers' temps, into one direct `funcall` -- static count, no runtime spreading).
 
@@ -80,8 +84,8 @@ value-escaping position publishes its secondary to `%mv-spill`
 (`LispMacroExpander.spillEscapingMvProducers`), so `(defun f (h) (gethash "K" h))` answers two
 values however many calls away, including through a `defmethod`. Wiring is SELECTIVE -- an
 unconditional spill would tax the hottest built-ins on every call:
-- TAIL positions only, through `progn`/`locally`, the `let` family, `flet`/`labels`/`macrolet`
-  bodies, `if`/`when`/`unless`, the last form of `and`/`or`, `cond`/`case`/`typecase` clause
+- TAIL positions only, through `progn`/`locally`/`with-standard-io-syntax`, the `let` family,
+  `flet`/`labels`/`macrolet` bodies, `if`/`when`/`unless`, the last form of `and`/`or`, `cond`/`case`/`typecase` clause
   bodies (a bodyless `(test)` clause keeps primary-value-only semantics), `block` family,
   `multiple-value-bind` bodies, an `unwind-protect` protected form, `return`/`return-from`, `the`.
 - `injectMvSpillGlobal` applies it to every top-level `defun` body, gated on `usesMv`;
@@ -101,9 +105,9 @@ the macro expander.
 - `ReplBuffer.eval` echoes EVERY form right after it runs (as SBCL does);
   `RontoPlayground.evalLine` (`src/web/java`, also the doc site's "Run" cells) echoes the LAST.
 - Diffed against SBCL 2.2.9. Remaining differences: a non-tail `values` nobody consumes leaks;
-  `read-from-string` is single-valued ([[gensym-macroexpand]] for `macroexpand-1`/`macroexpand`,
-  [[declarations-type-checks]] for `subtypep`'s valid-p); `print` omits CL's leading newline /
-  trailing space.
+  `print` omits CL's leading newline / trailing space. ([[gensym-macroexpand]] for
+  `macroexpand-1`/`macroexpand`, [[declarations-type-checks]] for `subtypep`'s valid-p,
+  [[read-load-streams]] for `read-from-string`'s stop index.)
 
 ## Documented deviations
 - A `values` in a NON-tail position with no consumer leaves a stale spill. `funcall #'values`

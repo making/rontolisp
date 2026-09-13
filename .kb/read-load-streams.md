@@ -55,6 +55,46 @@ It consumes exactly ONE datum's characters and leaves the stream after them.
 Pinned by `LispEvaluatorTest#read*`, `JvmLispCompilerTest#compileAndRunRead*`,
 `WasmLispCompilerIntegrationTest#read*`, ci-spec `read-stream-datum-by-datum`.
 
+## `read-from-string` answers the STOP INDEX, and honors `*read-suppress*`
+**Invariant: the second value exists on ALL FOUR backends; the suppressed MODE is the
+interpreter's alone** (the `*read-eval*` shape -- the emitted readers have no such mode).
+- The index is `%read-from-string-end`, emitted ONLY by the multiple-value lowering of a
+  `read-from-string` producer (`LispMacroExpander.isMvProducerForm`), so a plain
+  `(read-from-string s)` parses once and pays nothing. Interpreter: `LispLexer.datumEnd`,
+  a RAW-CHARACTER scan (`skipDatum`, the `#+`/`#-` walk) rather than a second parse --
+  which is what lets it answer for text the parse refuses. JVM: `_readFromString` then
+  `_readPos`. WASM: the cursor delta, the start value riding the OPERAND STACK across the
+  parse call rather than costing a scratch address.
+- CLHS 23.2 decides the last character: a token's whitespace terminator is CONSUMED with
+  the token, a terminating macro character is given back. `"abc  def"` -> 4, `"(1 2) x"`
+  -> 5. `LispLexer.lastSkipEndedInToken` is the flag; a datum that ended at a closing
+  delimiter or a string's own closing quote takes no trailing character.
+- `*read-suppress*` (CLHS 2.2): the datum's characters are consumed and NOTHING is parsed,
+  so an unknown package, a bogus character name and an out-of-range digit all pass. The
+  interpreter's built-in reads the variable through `Environment.setReadSuppressQuery`,
+  which the evaluator installs for the reason the `#.` resolver is installed: the built-in
+  holds the GLOBAL environment and the binding is always dynamic.
+- **`read` must stay SINGLE-valued**: its prelude body ends in `(values (read-from-string
+  %rd-text))`, and without that `values` the index rides out of the tail through the spill
+  and every `(read s)` answers two values.
+- **The publication is TAIL-position only.** `lowerMvProducer` runs
+  `spillEscapingMvProducers` over a producer form it does not itself recognize, so a
+  recognized producer at the end of the `(let ...)`/`(progn ...)` the consumer was handed
+  publishes -- and one whose value is DISCARDED (a loop step, a `let` initform) does not.
+  Measured: publishing on EVERY call was +219/-62 on the ANSI suite, the 62 being the
+  discarded calls' indices surfacing as an enclosing form's second value; tail-only was
+  +213/0 (`.todo/715`).
+- Not supported, and the six ANSI `READ-FROM-STRING.*` tests still on it: the real lambda
+  list (`eof-error-p`, `eof-value`, `:start`, `:end`, `:preserve-whitespace`). The
+  producer is recognized at ONE argument only, so a call carrying them keeps the old
+  single value rather than answering an index computed as if they were absent.
+
+Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
+`#aDiscardedReadFromStringLeavesNoSecondValueBehind`,
+`#readSuppressConsumesTheDatumAndAnswersNil`,
+`JvmLispCompilerTest#compileReadFromStringStopIndex`,
+`WasmLispCompilerIntegrationTest#readFromStringStopIndex`.
+
 ## `read-line`, `read-char`, `peek-char`
 - `read-line` strips one trailing CR everywhere (`BufferedReader.readLine`; WASM `_read_line` does an
   explicit `pos--` on `0x0D`), so a lone `\r\n` line reads `""`, not `"\r"`.

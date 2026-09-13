@@ -19,6 +19,46 @@ final class WasmReadFromStringCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		emitSetup(cons, ctx);
+		// parse one datum
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+	}
+
+	/**
+	 * Compiles {@code (%read-from-string-end s)} -- the stop index
+	 * {@code read-from-string} answers as its SECOND value, emitted only by the
+	 * multiple-value lowering of a {@code read-from-string} producer. The datum is parsed
+	 * and dropped; the answer is how far the reader's cursor moved. The cursor's starting
+	 * value rides the operand stack ACROSS the parse call (negated, so the two land as an
+	 * addition) rather than in a scratch word, which would cost a memory address and the
+	 * layout shift that comes with one.
+	 * @param cons the call form
+	 * @param ctx the compilation context
+	 */
+	static void compileEnd(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		emitSetup(cons, ctx);
+		// -cursor_before
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		loadCursor(ctx);
+		ctx.writer.write(Instruction.I32_SUB);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		ctx.writer.write(Instruction.DROP);
+		loadCursor(ctx);
+		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	// Pushes mem[READ_CURSOR_ADDR].
+	private static void loadCursor(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_CURSOR_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+	}
+
+	private static void emitSetup(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		int val = ctx.allocTemp();
 		// A mutable character vector normalizes to a string first.
@@ -64,9 +104,6 @@ final class WasmReadFromStringCompiler {
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.I32_ADD);
 		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
-		// parse one datum
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 	}
 
 	// Pushes mem[HEAP_PTR_ADDR] (the reader input scratch base).

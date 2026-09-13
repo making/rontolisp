@@ -7150,6 +7150,17 @@ public final class LispNames {
 	 */
 	public static final String READ_EVAL_VAR = "*READ-EVAL*";
 
+	/**
+	 * {@code *read-suppress*} -- when true the reader still PARSES a datum (consuming
+	 * exactly the characters a real read would) but yields {@code nil} and suppresses
+	 * every error the datum would otherwise signal (CLHS 2.2). Seeded {@code nil} and
+	 * proclaimed special on the interpreter, honored by the runtime {@code read} /
+	 * {@code read-from-string} built-ins through {@code LispReader.datumEnd}. Like
+	 * {@link #READ_EVAL_VAR} the variable exists only on the interpreter: the compiled
+	 * runtime readers have no suppressed mode (see {@code .kb/read-load-streams.md}).
+	 */
+	public static final String READ_SUPPRESS_VAR = "*READ-SUPPRESS*";
+
 	/** The canonical qualified spelling of {@code asdf:defsystem}. */
 	public static final String ASDF_DEFSYSTEM = ASDF_PKG + ":" + DEFSYSTEM;
 
@@ -7507,6 +7518,18 @@ public final class LispNames {
 	 * never spells it.
 	 */
 	public static final String SUBTYPEP_VALID = "%SUBTYPEP-VALID";
+
+	/**
+	 * The {@code read-from-string} STOP-INDEX companion: CL's SECOND value, the index of
+	 * the first character the read did not consume. Only the multiple-value lowering of a
+	 * {@code read-from-string} producer emits it -- a program never spells it. The
+	 * interpreter answers from a raw-character scan of the datum
+	 * ({@code LispLexer.datumEnd}), which is what lets it answer for text the parse
+	 * refuses (a suppressed read); the compiled backends read their runtime reader's
+	 * cursor after parsing the datum, so there the index exists exactly where the datum
+	 * does.
+	 */
+	public static final String READ_FROM_STRING_END = "%READ-FROM-STRING-END";
 
 	/**
 	 * The shared runtime-{@code %subtypep-valid} dispatch defun the compilers inject once

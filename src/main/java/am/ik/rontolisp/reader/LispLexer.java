@@ -926,6 +926,39 @@ public final class LispLexer {
 		}
 	}
 
+	/**
+	 * Answers the index one past the last character a {@code read} of this input would
+	 * consume, starting the scan at offset 0 -- the second value of CL's
+	 * {@code read-from-string}, and the whole answer of a read under a true
+	 * {@code *read-suppress*} (CLHS 2.2: the characters are consumed, the datum is not
+	 * built). The walk is the raw-character {@code skipDatum} the {@code #+}/{@code #-}
+	 * guard uses, so a suppressed read consumes exactly what a real one does without
+	 * parsing -- which is what lets it swallow the tokens a real read would refuse (an
+	 * unknown package, an out-of-range digit, a bogus character name).
+	 * <p>
+	 * A token ends at its terminator; CLHS 23.2 says {@code read} CONSUMES a whitespace
+	 * terminator and gives a terminating macro character back, so one trailing whitespace
+	 * character joins the count after a token and after nothing else.
+	 * @param input the source text
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @return the index of the first character the read did not consume
+	 * @throws LispReadException when the input holds no complete datum
+	 */
+	public static int datumEnd(String input, Features features) {
+		LispLexer lexer = new LispLexer(input, features, ReadEvalMode.SKIP_UNREADABLE);
+		lexer.skipDatum();
+		int end = lexer.pos;
+		if (lexer.lastSkipEndedInToken && end < input.length() && Character.isWhitespace(input.charAt(end))) {
+			end++;
+		}
+		return end;
+	}
+
+	// Whether the last unit skipDatumOrConditional consumed ended at a token's
+	// terminator (rather than at a closing delimiter it consumed itself), which is what
+	// decides whether a following whitespace character is consumed with the datum.
+	private boolean lastSkipEndedInToken;
+
 	// Skips one datum at the raw character level, without tokenizing it, so a form
 	// guarded by a failing #+/#- may use syntax the reader does not support. A nested
 	// #+/#- produces NO datum under *read-suppress* (it consumes its feature expression
@@ -964,6 +997,7 @@ public final class LispLexer {
 	// a non-space character that is neither EOF nor ')'.
 	private boolean skipDatumOrConditional() {
 		char c = this.input.charAt(this.pos);
+		this.lastSkipEndedInToken = false;
 		if (c == '\'' || c == '`') {
 			this.pos++;
 			skipDatum();
@@ -988,7 +1022,19 @@ public final class LispLexer {
 		if (c == '#' && this.pos + 1 < this.input.length()) {
 			char next = this.input.charAt(this.pos + 1);
 			if (next == '\\') {
-				skipCharLiteralRaw();
+				skipCharLiteralRaw(this.pos + 1);
+				return true;
+			}
+			// #<n>\x -- the infix numeric argument the standard allows on every dispatch
+			// macro character. Only #\ needs it spelled out here: the fall-through token
+			// walk below already carries the digits of #0(, #2A( and friends, but a
+			// backslash is a token character, so #0\Space would end at the backslash.
+			int afterArg = this.pos + 1;
+			while (afterArg < this.input.length() && isDigit(this.input.charAt(afterArg))) {
+				afterArg++;
+			}
+			if (afterArg > this.pos + 1 && afterArg < this.input.length() && this.input.charAt(afterArg) == '\\') {
+				skipCharLiteralRaw(afterArg);
 				return true;
 			}
 			if (next == '\'') {
@@ -1029,12 +1075,16 @@ public final class LispLexer {
 			else if (this.pos < this.input.length() && this.input.charAt(this.pos) == '"') {
 				skipStringRaw();
 			}
+			else {
+				this.lastSkipEndedInToken = true;
+			}
 			return true;
 		}
 		// A symbol or number token.
 		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
 			this.pos++;
 		}
+		this.lastSkipEndedInToken = true;
 		return true;
 	}
 
@@ -1055,7 +1105,7 @@ public final class LispLexer {
 				skipBlockComment();
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
-				skipCharLiteralRaw();
+				skipCharLiteralRaw(this.pos + 1);
 			}
 			else if (c == '(') {
 				depth++;
@@ -1090,19 +1140,23 @@ public final class LispLexer {
 		this.pos++; // skip closing "
 	}
 
-	private void skipCharLiteralRaw() {
+	// Skips a #\ character literal at the raw character level. backslashPos is the index
+	// of the '\' (the '#' and any infix numeric argument sit before it). The character
+	// right after the backslash is taken WHATEVER it is -- that is what makes #\( and
+	// #\; single characters rather than an open paren and a comment -- and the token
+	// continues over the constituent characters behind it, so a character NAME (#\Space,
+	// and the bogus #\boguscharname a suppressed read must swallow) is one unit.
+	private void skipCharLiteralRaw(int backslashPos) {
 		int start = this.pos;
-		this.pos += 2; // skip "#\"
+		this.pos = backslashPos + 1;
 		if (this.pos >= this.input.length()) {
 			throw errAt(start, "Unexpected end of input after #\\");
 		}
-		char first = this.input.charAt(this.pos);
 		this.pos++;
-		if (Character.isLetter(first)) {
-			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
-				this.pos++;
-			}
+		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+			this.pos++;
 		}
+		this.lastSkipEndedInToken = true;
 	}
 
 	private static boolean isDigit(char c) {

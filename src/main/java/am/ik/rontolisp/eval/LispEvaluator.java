@@ -542,6 +542,10 @@ public final class LispEvaluator {
 		// *read-eval* joins them: (let ((*read-eval* nil)) (read ...)) must bind
 		// dynamically for the #. check in resolveReadTimeEval to see it.
 		this.specialVars.add(LispNames.READ_EVAL_VAR);
+		// *read-suppress* joins them for the same reason: the suppressed read is always
+		// spelled (let ((*read-suppress* t)) (read ...)), which is a dynamic binding or
+		// nothing.
+		this.specialVars.add(LispNames.READ_SUPPRESS_VAR);
 		// *default-pathname-defaults* joins them: a portable program binds it around a
 		// block of path work ((let ((*default-pathname-defaults* d)) ...)), which is a
 		// dynamic binding or nothing.
@@ -929,6 +933,13 @@ public final class LispEvaluator {
 		// it (a bare Environment) the error-mode read signals, matching the compiled
 		// backends' embedded readers.
 		this.globalEnv.setReadTimeEvalResolver(this::resolveReadTimeEval);
+		// *read-suppress* for the runtime readers: the built-in holds the global
+		// environment, so the dynamic binding a (let ((*read-suppress* t)) ...) makes is
+		// visible only from here.
+		this.globalEnv.setReadSuppressQuery(() -> {
+			LispVal suppress = currentSpecialValue(LispNames.READ_SUPPRESS_VAR);
+			return suppress != null && !(suppress instanceof LispNil);
+		});
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -4696,21 +4707,24 @@ public final class LispEvaluator {
 		if (!this.packageResolver.currentPackageIsPristineClUser()) {
 			return true;
 		}
-		LispVal printControls = printerVariable(LispNames.PRINT_CASE_VAR);
+		LispVal printControls = currentSpecialValue(LispNames.PRINT_CASE_VAR);
 		if (printControls instanceof LispSymbol mode && !LispNames.PRINT_CASE_UPCASE.equals(mode.name())) {
 			return true;
 		}
-		if (!(printerVariable(LispNames.PRINT_LENGTH_VAR) instanceof LispNil)
-				|| !(printerVariable(LispNames.PRINT_LEVEL_VAR) instanceof LispNil)
-				|| !(printerVariable(LispNames.PRINT_RADIX_VAR) instanceof LispNil)
-				|| printerVariable(LispNames.PRINT_GENSYM_VAR) instanceof LispNil) {
+		if (!(currentSpecialValue(LispNames.PRINT_LENGTH_VAR) instanceof LispNil)
+				|| !(currentSpecialValue(LispNames.PRINT_LEVEL_VAR) instanceof LispNil)
+				|| !(currentSpecialValue(LispNames.PRINT_RADIX_VAR) instanceof LispNil)
+				|| currentSpecialValue(LispNames.PRINT_GENSYM_VAR) instanceof LispNil) {
 			return true;
 		}
-		return !(printerVariable(LispNames.PRINT_BASE_VAR) instanceof LispInteger base && base.value() == 10);
+		return !(currentSpecialValue(LispNames.PRINT_BASE_VAR) instanceof LispInteger base && base.value() == 10);
 	}
 
-	/** The current value of a printer variable, dynamic binding first. */
-	private @Nullable LispVal printerVariable(String name) {
+	/**
+	 * The current value of a standard special variable -- the printer controls, the
+	 * reader controls -- dynamic binding first, global default behind it.
+	 */
+	private @Nullable LispVal currentSpecialValue(String name) {
 		return this.dynamicBindings.isBound(name) ? this.dynamicBindings.get(name) : this.globalEnv.lookupOrNull(name);
 	}
 

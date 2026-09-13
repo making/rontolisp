@@ -20,6 +20,11 @@ the report's reason table -- see "How to count" below.
 within ~12 tests before this session's change, so the committed series is
 trustworthy.
 
+A local full run on 2026-09-13, after `.todo/797` landed, reads **13,771 / 19,482
+(70.7%)** with `reader` at 47.8%. The checked-in report is NOT refreshed from a
+local run (one machine, one stall window -- `ansi-test/README.md`), so it still
+carries the pre-797 numbers until the daily workflow rewrites it.
+
 Against the previous reading in this file (55.5%, 10,809 / 19,461): `.todo/736`,
 `.todo/740`+`.todo/776`, `.todo/744`, `.todo/775`, `.todo/778`, `.todo/772`,
 `.todo/773`, `.todo/679`, `.todo/741`, `.todo/742`, `.todo/743` and the
@@ -69,7 +74,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 
 | family | tests | owner |
 |---|---:|---|
-| `*read-suppress*` (161) + the reader syntax-type surface (192) | 353 | **`.todo/797`** (new) |
+| the reader syntax-type surface, re-measured 2026-09-13 after `.todo/797` | 141 | `.todo/807` -- and only ~35-40 of it is the READER |
 | bit arrays: the eleven `bit-*` ops (~310) plus `bit-vector-p` 38 / `simple-bit-vector-p` 28 / `array-in-bounds-p` 27 | ~400 | `.todo/043`, `.todo/180` |
 | `loop` -- 173 of `iteration`'s 208 wrong values | 173 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
@@ -77,12 +82,12 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 | ~180 | `.todo/037` |
 | a `setf` place the expander does not support | 79 | `.todo/001`, `.todo/041` |
 | `pprint-tabular`/`-fill`/`-linear` (27+) and `setf readtable-case` | ~140 | `.todo/041`, `.todo/001` |
-| `read-from-string` has no index second value (57 `reader` + 10 `misc`) | 67 | `.todo/214` |
+| `read-from-string`'s lambda list (`eof-error-p`, `:start`/`:end`, `:preserve-whitespace`) -- six `READ-FROM-STRING.*` tests; the INDEX landed 2026-09-13 | 6 | `.todo/214` |
 | `copy-structure` | 31 | `.todo/043` |
 
-`read-from-string`'s 67 is also the SECOND HALF of every `*read-suppress*` test
-(each wants `(nil <index>)`), so `.todo/214` and `.todo/797` only pay off
-together.
+`read-from-string`'s index was also the SECOND HALF of every `*read-suppress*`
+test (each wants `(nil <index>)`); both landed together on 2026-09-13, which is
+what the entry below measures.
 
 ### 3. Billed by the suite, DECIDED AGAINST -- do not read these as gaps
 
@@ -163,6 +168,21 @@ Only the entries whose FINDING outlives the change are kept; the rest are in
   missing OPERATOR, which is the distinction. `.kb/packages.md`, "The `cl` external list
   is the STANDARD's list". Still open beside it: `no-extra-symbols-exported-from-common-lisp`,
   which fails on `while` plus the invented `boole-3` .. `boole-16` -- `.todo/803`.
+- **2026-09-13, `.todo/797`** -- `*read-suppress*` plus `read-from-string`'s stop index,
+  which is the other half of every one of its tests. **+213, 0 regressed**; `reader`
+  10.8% -> 47.8%, the second-largest single move the report has recorded. The row priced
+  the pair at 161 + 67 = 228; 213 of that landed and the remaining 15 are
+  `read-from-string`'s real lambda list (6) plus tests failing for a second reason.
+  **The NARROWING is the finding.** A first cut published the index from the built-in on
+  EVERY call, the `parse-integer` precedent: **+219 and -62**. The 62 were the SAME bug in
+  both directions -- an index left on the `%mv-spill` channel by a call whose value was
+  DISCARDED (a loop step, a `let` initform, `read`'s own internal parse) surfacing as the
+  enclosing form's second value, in `reader`, `sequences`, `strings` and `pathnames`
+  alike. Publishing from TAIL positions only (`lowerMvProducer` now runs
+  `spillEscapingMvProducers` over a producer form it does not recognize) gave **+213 and
+  zero regressions**. Over-claiming is a wrong answer even when the claim is a mechanism
+  the codebase already had. `.kb/read-load-streams.md`, "`read-from-string` answers the
+  STOP INDEX".
 - **2026-09-12, `.todo/214`'s `subtypep` row** -- `subtypep` answers CL's
   valid-p as its second value, on all four backends. **+443, 0 regressed**
   (66.3% -> 68.6%), against the 112 this file used to price it at: the row

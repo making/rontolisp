@@ -1385,6 +1385,7 @@ final class WasmExprCompiler {
 					}
 				}
 				case LispNames.READ_FROM_STRING -> WasmReadFromStringCompiler.compile(cons, ctx);
+				case LispNames.READ_FROM_STRING_END -> WasmReadFromStringCompiler.compileEnd(cons, ctx);
 				// A string=/string-equal call with the bounding-index keywords is lowered
 				// onto subseq first, so the intrinsic below always sees two strings.
 				case LispNames.STRING_EQ -> {

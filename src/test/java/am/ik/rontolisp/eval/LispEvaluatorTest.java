@@ -21055,4 +21055,64 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("\"(SPB-LIB:FN SPB-LIB::X CAR)\"");
 	}
 
+	// read-from-string answers CL's SECOND value, the index of the first character it
+	// did not read. CLHS 23.2: a token's whitespace terminator is CONSUMED with the
+	// token, a terminating macro character is given back -- so "abc def" stops at 4 and
+	// "(1 2) x" at 5. See .kb/read-load-streams.md.
+	@Test
+	void readFromStringAnswersTheStopIndexAsItsSecondValue() {
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"abc\"))").print()).isEqualTo("(ABC 3)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"abc  def\"))").print()).isEqualTo("(ABC 4)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"(1 2) x\"))").print()).isEqualTo("((1 2) 5)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"123.45\"))").print()).isEqualTo("(123.45 6)");
+		assertThat(evalMulti("(nth-value 1 (read-from-string \"#x1f\"))").print()).isEqualTo("4");
+		// Across a function boundary and through a wrapper the consumer was handed: the
+		// tier boundary is not observable through either.
+		assertThat(evalMulti("""
+				(defun rfs (s) (read-from-string s))
+				(multiple-value-list (rfs "abcd"))
+				""").print()).isEqualTo("(ABCD 4)");
+		assertThat(evalMulti("(multiple-value-list (progn (let ((y 1)) y) (read-from-string \"ab\")))").print())
+			.isEqualTo("(AB 2)");
+	}
+
+	// A read-from-string whose value is DISCARDED contributes no second value to the
+	// form around it: the index rides the spill from TAIL positions only. Publishing on
+	// every call instead makes the last such call's index surface as the enclosing
+	// form's second value, which it is not.
+	@Test
+	void aDiscardedReadFromStringLeavesNoSecondValueBehind() {
+		assertThat(evalMulti("""
+				(multiple-value-list
+				 (loop for s in '("a" "bb" "ccc") for v = (read-from-string s) collect v))
+				""").print()).isEqualTo("((A BB CCC))");
+		assertThat(evalMulti("(multiple-value-list (let ((x (read-from-string \"(1 2)\"))) (length x)))").print())
+			.isEqualTo("(2)");
+		// read is CL's one-value operator however it is spelled inside.
+		assertThat(evalMulti("(with-input-from-string (s \"12 34\") (multiple-value-list (read s)))").print())
+			.isEqualTo("(12)");
+	}
+
+	// *read-suppress* (CLHS 2.2): the reader consumes exactly the characters a real read
+	// would and yields nil, suppressing every error the datum would otherwise signal --
+	// an unknown package, a bogus character name, an out-of-range digit.
+	@Test
+	void readSuppressConsumesTheDatumAndAnswersNil() {
+		assertThat(evalMulti("""
+				(let ((*read-suppress* t))
+				  (list (multiple-value-list (read-from-string "NONEXISTENT-PACKAGE::FOO"))
+				        (multiple-value-list (read-from-string "123.45"))
+				        (multiple-value-list (read-from-string "#\\boguscharname"))
+				        (multiple-value-list (read-from-string "#0\\ "))
+				        (multiple-value-list (read-from-string "(1 .. 2 . 3)"))
+				        (multiple-value-list (read-from-string "#*73298723497132"))))
+				""").print()).isEqualTo("((NIL 24) (NIL 6) (NIL 15) (NIL 4) (NIL 12) (NIL 16))");
+		// The binding is DYNAMIC, so it reaches the read behind a call, and nil again
+		// outside it.
+		assertThat(evalMulti("""
+				(defun rd (s) (read-from-string s))
+				(list (let ((*read-suppress* t)) (rd "zzz::q")) (rd "q"))
+				""").print()).isEqualTo("(NIL Q)");
+	}
+
 }

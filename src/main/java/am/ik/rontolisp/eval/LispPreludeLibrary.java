@@ -2963,6 +2963,11 @@ public final class LispPreludeLibrary {
 		// pushback cell unread-char uses (unread-char.lisp on the compile paths, the
 		// Environment cell on the interpreter), which is what lets read and read-line
 		// be mixed on one stream. See .kb/read-load-streams.md.
+		//
+		// The (values ...) around the parse is load-bearing: read-from-string answers
+		// its stop index as a SECOND value, and CL's read answers ONE value. Left bare,
+		// the index would ride out of read's tail through the spill and surface as a
+		// second value of every (read s).
 		SOURCES.put(LispNames.READ, """
 				(defun read (&optional stream eof-error-p eof-value recursive-p)
 				  (let ((%rd-out (make-string-output-stream)))
@@ -2972,7 +2977,7 @@ public final class LispPreludeLibrary {
 				            (when (and %rd-c (not (%rd-whitespace-p %rd-c)))
 				              (unread-char %rd-c stream)))
 				          (close %rd-out)
-				          (read-from-string %rd-text))
+				          (values (read-from-string %rd-text)))
 				        (progn
 				          (close %rd-out)
 				          (if eof-error-p (error 'end-of-file) eof-value)))))

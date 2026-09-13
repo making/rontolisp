@@ -39,14 +39,15 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 - 組み込みの `#'name` を渡した `multiple-value-call` はラッパーの固定
   アリティのままです — それ以外の引数個数にはユーザ定義関数か `lambda` を
   渡してください。
-- CL で副次値を持つ他の組み込み関数（`read-from-string` など）は単一値の
-  ままです —
+- CL で副次値を持つ他の組み込み関数（`decode-universal-time`、比に対する
+  `truncate` 系の剰余など）は単一値のままです —
   [`find-symbol`](../reference/functions/find-symbol.md) と
   [`intern`](../reference/functions/intern.md) はアクセス可能性ステータスを、
   [`macroexpand-1`](../reference/functions/macroexpand-1.md) /
   [`macroexpand`](../reference/functions/macroexpand.md) は `expanded-p` を、
-  [`subtypep`](../reference/functions/subtypep.md) は `valid-p` を
-  返します。
+  [`subtypep`](../reference/functions/subtypep.md) は `valid-p` を、
+  [`read-from-string`](../reference/functions/read-from-string.md) は
+  停止インデックスを返します。
 
 ## 非局所脱出
 

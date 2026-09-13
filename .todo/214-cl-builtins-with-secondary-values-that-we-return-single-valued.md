@@ -11,12 +11,24 @@ the list stops being open-ended. The transcript below is the state of 2026-07-30
 regressions** -- and the valid-p RULE is the finding: see
 `.kb/declarations-type-checks.md`, "`subtypep` answers CL's VALID-P").
 
-**What is left here is `read-from-string`'s index** (67 ANSI tests: 57 in
-`reader`, 10 in `misc`, measured 2026-09-12) and the `decode-universal-time` /
-`truncate`-on-ratio rows below. `read-from-string` is NOT the shape `subtypep`
-was: it has a dedicated compiler per backend (`JvmReadFromStringCompiler`,
-`WasmReadFromStringCompiler`), so the index is real work on three backends
-rather than a second pure read over the same temps.
+`read-from-string`'s index **landed 2026-09-13** with `.todo/797` (`+213` ANSI
+tests with `*read-suppress*`, 0 regressions; `.kb/read-load-streams.md`,
+"`read-from-string` answers the STOP INDEX"). It was not the shape `subtypep`
+was -- a dedicated compiler per backend -- and the answer was a companion
+built-in, `%read-from-string-end`, emitted ONLY by the multiple-value lowering:
+the interpreter scans the datum's characters, the JVM reads `_readPos` after the
+parse, WASM the cursor delta. A plain `(read-from-string s)` pays nothing.
+
+**What is left of the row**: `read-from-string`'s real LAMBDA LIST. Six ANSI
+tests (`READ-FROM-STRING.10`, `.13`-`.17`) pass `eof-error-p`/`eof-value` and
+`:preserve-whitespace` / `:end` / `:allow-other-keys`, all of which the built-in
+ignores -- so the producer is recognized at ONE argument only and such a call
+keeps its old single value rather than answering an index computed as if the
+keywords were absent. `:start`/`:end` move the index; `:preserve-whitespace`
+decides whether the token's terminator is counted. Take the arguments and the
+index together or not at all.
+
+Also left: the `decode-universal-time` / `truncate`-on-ratio rows below.
 
 ```console
 $ sbcl --noinform                  $ rontolisp
@@ -33,7 +45,7 @@ T                                             <- SBCL also echoes the expanded-p
 
 | operator | CL secondary value(s) | ours |
 | --- | --- | --- |
-| `read-from-string` | index after the object read | primary only |
+| `read-from-string` | index after the object read | **done** (2026-09-13, `.todo/797`); the keyword/optional arguments are not |
 | `macroexpand-1` / `macroexpand` | expanded-p | **done** (2026-08-15, `.todo/378`) |
 | `intern` | `:internal` / `:external` / `:inherited` / nil | **done** (2026-08-12) |
 | `find-symbol` | same status keyword | **done** (2026-08-12) |

@@ -1035,6 +1035,7 @@ final class JvmExprCompiler {
 				case LispNames.NE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx, className);
 				case LispNames.READ_FROM_STRING -> JvmReadFromStringCompiler.compile(cons, ctx, className);
+				case LispNames.READ_FROM_STRING_END -> JvmReadFromStringCompiler.compileEnd(cons, ctx, className);
 				// A string=/string-equal call with the bounding-index keywords is lowered
 				// onto subseq first, so the intrinsic below always sees two strings.
 				case LispNames.STRING_EQ -> {

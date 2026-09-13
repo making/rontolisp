@@ -33376,6 +33376,7 @@ public final class LispMacroExpander {
 			case LispNames.ARRAY_DISPLACEMENT -> size == 2;
 			case LispNames.SUBTYPEP -> size == 3;
 			case LispNames.FIND_SYMBOL, LispNames.INTERN -> size == 2 || size == 3;
+			case LispNames.READ_FROM_STRING -> size == 2;
 			default -> false;
 		};
 	}
@@ -33575,6 +33576,24 @@ public final class LispMacroExpander {
 					}
 					return new MvProducer(bindings, values, null);
 				}
+				case LispNames.READ_FROM_STRING: {
+					// (read-from-string s) -> datum + stop index. The index is a
+					// SECOND scan of the same argument temp, not a second parse: it
+					// has to answer for the text a suppressed read swallows, which by
+					// definition does not parse. Binding the argument keeps it
+					// evaluated once however many values the consumer takes; a literal
+					// string is passed through, like find-symbol's name, so the
+					// compile paths still fold the read against it.
+					LispVal textRef = parts.get(1);
+					if (!(textRef instanceof LispString)) {
+						LispSymbol t = new LispSymbol(prefix + "_t");
+						bindings.add(new MvBinding(t, textRef));
+						textRef = t;
+					}
+					values.add(mvCall(LispNames.READ_FROM_STRING, textRef));
+					values.add(mvCall(LispNames.READ_FROM_STRING_END, textRef));
+					return new MvProducer(bindings, values, null);
+				}
 				case LispNames.GETHASH: {
 					// (gethash key table [default]) -> value + present-p. A fresh
 					// gensym is the not-found default, so a stored nil (or the
@@ -33619,8 +33638,18 @@ public final class LispMacroExpander {
 		// (the REPL echo is one -- see LispEvaluator.evalValues -- and a function
 		// that internally consumes a callee's values must still look single-valued
 		// to ITS caller).
+		// The form's own TAIL is rewritten first: a recognized producer sitting at the
+		// end of a (let ...) / (progn ...) the consumer was handed publishes through the
+		// spill, exactly as it would from a defun body. Without this the tier boundary
+		// would be visible through a wrapper nobody wrote for that purpose --
+		// (multiple-value-list (let ((*read-suppress* t)) (read-from-string s))) would
+		// lose the second value that the bare call answers. It is the TAIL only, which
+		// is what keeps a producer whose value is DISCARDED (one step of a loop, a let
+		// initform) out of the channel -- publishing on every call instead makes the
+		// last such call's extras surface as the enclosing form's, which they are not.
 		LispSymbol tmp = new LispSymbol(prefix + "_0");
-		bindings.add(new MvBinding(tmp, makeProgn(List.of(setMvSpill(LispNil.INSTANCE), producer))));
+		bindings.add(new MvBinding(tmp,
+				makeProgn(List.of(setMvSpill(LispNil.INSTANCE), spillEscapingMvProducers(producer)))));
 		values.add(tmp);
 		LispSymbol rest = new LispSymbol(prefix + "_rest");
 		bindings.add(new MvBinding(rest, makeProg1(new LispSymbol(LispNames.MV_SPILL), setMvSpill(LispNil.INSTANCE))));
@@ -33661,12 +33690,16 @@ public final class LispMacroExpander {
 	 * preserved there too.
 	 *
 	 * <p>
-	 * Callers: the compile paths apply this to every top-level {@code defun} body (see
-	 * {@link #injectMvSpillGlobal}; {@code defmethod} bodies are defuns by then), gated
-	 * on the program using a multiple-value operator so a consumer-free program stays
-	 * byte-identical; the interpreter applies it in {@code evalDefun}, where the spill
-	 * global always exists. Unchanged subtrees keep their cons identity
-	 * (.kb/source-positions.md).
+	 * Callers: {@link #lowerMvProducer} applies it to a producer form it does not itself
+	 * recognize, so a recognized producer in the TAIL of the wrapper a consumer was
+	 * handed --
+	 * {@code (multiple-value-list (let ((*read-suppress* t)) (read-from-string s)))} --
+	 * publishes like the bare call does; the compile paths apply this to every top-level
+	 * {@code defun} body (see {@link #injectMvSpillGlobal}; {@code defmethod} bodies are
+	 * defuns by then), gated on the program using a multiple-value operator so a
+	 * consumer-free program stays byte-identical; the interpreter applies it in
+	 * {@code evalDefun}, where the spill global always exists. Unchanged subtrees keep
+	 * their cons identity (.kb/source-positions.md).
 	 * @param form a function-body form in tail position
 	 * @return the rewritten form, or {@code form} itself when nothing changed
 	 */
@@ -33689,7 +33722,8 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		int last = parts.size() - 1;
 		return switch (op.name()) {
-			case LispNames.PROGN, LispNames.LOCALLY, LispNames.AND, LispNames.OR -> spillTailAt(cons, parts, last, 1);
+			case LispNames.PROGN, LispNames.LOCALLY, LispNames.AND, LispNames.OR, LispNames.WITH_STANDARD_IO_SYNTAX ->
+				spillTailAt(cons, parts, last, 1);
 			case LispNames.LET, LispNames.LET_STAR, LispNames.FLET, LispNames.LABELS, LispNames.MACROLET,
 					LispNames.WHEN, LispNames.UNLESS, LispNames.BLOCK, LispNames.BLOCK_INTERNAL,
 					LispNames.FN_BLOCK_INTERNAL ->
