@@ -209,6 +209,12 @@ Traps:
   `*SharpLAndCommaDotAndWithHashTableIterator`, ci-spec `sharp-l-comma-dot-and-hash-table-iterator`.
 - **Symbol single-escapes** (parse-number) and **`|...|`** (jzon) keep the next character / the
   whole run verbatim in the name. The compiled runtime readers know neither.
+- **`#b`/`#o`/`#x`/`#<n>R` read RATIONALS, not only integers** (CLHS 2.3.2.1): an optional sign,
+  digits in the radix, and an optional `/denominator` whose digits are in the SAME radix and carry
+  no sign of their own (`#b-10/11` is -2/3). `#<n>R` spells the radix as the dispatch's infix
+  argument and must name 2..36; `LispLexer.readRadixNumber` is the one scanner all four spellings
+  reach. A constituent character behind the digits invalidates the whole token rather than ending
+  a number early.
 
 ## Tests
 ci-spec `reader-block-comments`, `reader-feature-conditionals`, `reader-per-backend-features`

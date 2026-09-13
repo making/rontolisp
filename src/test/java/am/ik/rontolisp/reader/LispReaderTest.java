@@ -1064,6 +1064,40 @@ class LispReaderTest {
 			.isEqualTo(new LispSymbol("OTHER:CURRENT-FILE"));
 	}
 
+	@Test
+	void readRadixLiteralsAreRATIONALsAndNotOnlyIntegers() {
+		// CLHS 2.3.2.1 spells #b/#o/#x/#nR over "rational", so a denominator is part of
+		// the syntax and is read in the SAME radix; only the numerator carries a sign.
+		assertThat(LispReader.readFromString("#b010001/100").print()).isEqualTo("17/4");
+		assertThat(LispReader.readFromString("#B-1/10").print()).isEqualTo("-1/2");
+		assertThat(LispReader.readFromString("#b-0/10").print()).isEqualTo("0");
+		assertThat(LispReader.readFromString("#O11/10").print()).isEqualTo("9/8");
+		assertThat(LispReader.readFromString("#x-1/10").print()).isEqualTo("-1/16");
+		// A sign is optional on either side of zero, and an explicit + is a sign too.
+		assertThat(LispReader.readFromString("#b+1011").print()).isEqualTo("11");
+		assertThat(LispReader.readFromString("#x-10").print()).isEqualTo("-16");
+	}
+
+	@Test
+	void readSharpRIsTheRadixSpelledOutAsAnInfixArgument() {
+		// #<n>R is the general form the fixed #b/#o/#x abbreviate; the digits above 9
+		// are letters and the spelling is case-insensitive on both halves.
+		assertThat(LispReader.readFromString("#17r11").print()).isEqualTo("18");
+		assertThat(LispReader.readFromString("#12R414A6B2").print()).isEqualTo("12293990");
+		assertThat(LispReader.readFromString("#12r414a6b2").print()).isEqualTo("12293990");
+		assertThat(LispReader.readFromString("#36r0").print()).isEqualTo("0");
+		assertThat(LispReader.readFromString("#3r10/11").print()).isEqualTo("3/4");
+		assertThat(LispReader.readFromString("#5R-10/11").print()).isEqualTo("-5/6");
+		// A radix outside 2..36 names no digits at all, and a digit outside the radix is
+		// a bad token rather than a symbol behind a number.
+		assertThatThrownBy(() -> LispReader.readFromString("#1r0")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Radix must be between 2 and 36");
+		assertThatThrownBy(() -> LispReader.readFromString("#2r2")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digits");
+		assertThatThrownBy(() -> LispReader.readFromString("#b1012")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digits");
+	}
+
 	private static LispVal list(LispVal... items) {
 		LispVal result = LispNil.INSTANCE;
 		for (int i = items.length - 1; i >= 0; i--) {

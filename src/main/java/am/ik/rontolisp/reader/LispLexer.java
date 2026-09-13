@@ -394,6 +394,26 @@ public final class LispLexer {
 					this.pos = probe + 1;
 				}
 				else if (probe < this.input.length()
+						&& (this.input.charAt(probe) == 'R' || this.input.charAt(probe) == 'r')) {
+					// #<n>R: a rational in an explicit radix, the general form the fixed
+					// #b/#o/#x spellings abbreviate (CLHS 2.4.8.10). The radix is the
+					// infix argument and must be 2..36 -- an out-of-range one is a read
+					// error rather than a symbol, because no symbol spelling can reach
+					// here.
+					int radix;
+					try {
+						radix = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw err("Invalid radix: " + this.input.substring(this.pos, probe + 1));
+					}
+					if (radix < 2 || radix > 36) {
+						throw err("Radix must be between 2 and 36: " + this.input.substring(this.pos, probe + 1));
+					}
+					add(tokens, readRadixNumber(radix, probe + 1, this.input.substring(this.pos, probe + 1)),
+							tokenStart);
+				}
+				else if (probe < this.input.length()
 						&& (this.input.charAt(probe) == '=' || this.input.charAt(probe) == '#')) {
 					// #n= labels the next datum, #n# references it.
 					int label;
@@ -568,10 +588,9 @@ public final class LispLexer {
 		return c == 'x' || c == 'X' || c == 'o' || c == 'O' || c == 'b' || c == 'B';
 	}
 
-	// Reads a #x/#o/#b radix integer literal (e.g., #x10000, #o400, #b1010, #x-10).
-	// The digits (after an optional sign) must be non-empty and valid in the radix;
-	// a literal that does not fit in a long is promoted to an arbitrary-precision
-	// integer, matching decimal literals.
+	// Reads a #x/#o/#b radix literal (e.g., #x10000, #o400, #b1010, #x-10), delegating
+	// to the shared scanner below. The infix-argument spelling #<n>R goes through the
+	// same scanner from the #<digits> branch above.
 	private Token readRadixNumber() {
 		char marker = this.input.charAt(this.pos + 1);
 		int radix = switch (Character.toLowerCase(marker)) {
@@ -579,26 +598,74 @@ public final class LispLexer {
 			case 'o' -> 8;
 			default -> 2;
 		};
-		this.pos += 2; // skip "#x" / "#o" / "#b"
-		int start = this.pos;
-		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '-') {
+		return readRadixNumber(radix, this.pos + 2, "#" + marker);
+	}
+
+	// Reads a RATIONAL in an explicit radix: an optional sign, digits, and -- CLHS
+	// 2.3.2.1, which spells the radix syntaxes over "rational" and not over "integer"
+	// -- an optional /denominator, whose digits are in the same radix and carry no sign
+	// of their own (#b-10/11 is -2/3, not -2/-3). The digits must be non-empty and
+	// valid in the radix; a value that does not fit in a long is promoted to an
+	// arbitrary-precision integer, matching decimal literals.
+	//
+	// afterMarker is the index just past the dispatch (#x.., #o.., #b.., #<n>R..), and
+	// marker names it for the error message.
+	private Token readRadixNumber(int radix, int afterMarker, String marker) {
+		int start = afterMarker;
+		this.pos = afterMarker;
+		boolean negative = false;
+		if (this.pos < this.input.length()
+				&& (this.input.charAt(this.pos) == '-' || this.input.charAt(this.pos) == '+')) {
+			negative = this.input.charAt(this.pos) == '-';
 			this.pos++;
 		}
+		java.math.BigInteger numerator = readRadixDigits(radix, marker, start);
+		if (negative) {
+			numerator = numerator.negate();
+		}
+		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '/') {
+			this.pos++;
+			java.math.BigInteger denominator = readRadixDigits(radix, marker, start);
+			requireRadixTokenEnd(marker, start);
+			return new Token.RatioToken(numerator, denominator);
+		}
+		requireRadixTokenEnd(marker, start);
+		try {
+			return new Token.NumberToken(numerator.longValueExact());
+		}
+		catch (ArithmeticException overflow) {
+			return new Token.BigIntegerToken(numerator);
+		}
+	}
+
+	// One non-empty run of digits valid in the radix, as a magnitude (the sign is the
+	// caller's). Advances past the run.
+	private java.math.BigInteger readRadixDigits(int radix, String marker, int start) {
 		int digitsStart = this.pos;
 		while (this.pos < this.input.length() && Character.digit(this.input.charAt(this.pos), radix) >= 0) {
 			this.pos++;
 		}
-		if (this.pos == digitsStart || (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos)))) {
-			throw err("Invalid digits after #" + marker + ": "
-					+ this.input.substring(start, Math.min(this.pos + 1, this.input.length())));
+		if (this.pos == digitsStart) {
+			throw radixErr(marker, start);
 		}
-		String digits = this.input.substring(start, this.pos);
-		try {
-			return new Token.NumberToken(Long.parseLong(digits, radix));
+		return new java.math.BigInteger(this.input.substring(digitsStart, this.pos), radix);
+	}
+
+	// A radix literal ends at a token terminator like any other number: a constituent
+	// character behind the digits (#b1012, #x1/2/3) makes the whole token invalid
+	// rather than a number followed by a symbol.
+	private void requireRadixTokenEnd(String marker, int start) {
+		if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+			throw radixErr(marker, start);
 		}
-		catch (NumberFormatException overflow) {
-			return new Token.BigIntegerToken(new java.math.BigInteger(digits, radix));
+	}
+
+	private LispReadException radixErr(String marker, int start) {
+		int end = this.pos;
+		while (end < this.input.length() && isSymbolChar(this.input.charAt(end))) {
+			end++;
 		}
+		return err("Invalid digits after " + marker + ": " + this.input.substring(start, end));
 	}
 
 	private void consumeDigitsWithGrouping() {
