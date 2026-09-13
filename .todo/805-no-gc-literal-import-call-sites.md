@@ -92,6 +92,9 @@ measured:
   bytes on the GC side (a round trip no optimizer can see as one) are the stronger kind.
   Rank accordingly if the queue is ever short of time.
 
+The spike material -- benchmark, JS host, size scripts, and the measured `.wat`/diff --
+is in [`artefacts/805-no-gc-literal-import-call-sites/`](artefacts/805-no-gc-literal-import-call-sites/).
+
 ## Touch points
 
 - `codegen/wasm/NoGcWasmCompiler.java` (`imports`, `importOrdinals`, the call-site

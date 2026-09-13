@@ -1,0 +1,7 @@
+(defun square (n) (* n n))
+(defun square-mod (n) (mod (* n n) 1000))
+(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+(defun fact-digits (n) (mod (fact n) 10000))
+(rontolisp:wasm-export 'square :as "Square" :params '(:s32) :returns :s32)
+(rontolisp:wasm-export 'square-mod :as "SquareMod" :params '(:s32) :returns :s32)
+(rontolisp:wasm-export 'fact-digits :as "FactDigits" :params '(:s32) :returns :s32)

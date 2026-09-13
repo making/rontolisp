@@ -62,6 +62,9 @@ the programs `doc/*/guides/wasm-nogc.md` advertises this backend for. The measur
 the reasoning are in this file's commit message and were not filed as a todo, because the
 answer is "no".
 
+The spike material -- benchmark, JS host, size scripts, and the measured `.wat`/diff --
+is in [`artefacts/806-no-gc-internal-void/`](artefacts/806-no-gc-internal-void/).
+
 ## Touch points
 
 - `codegen/wasm/NoGcWasmCompiler.java` (`Ty`/`Ty.join`, `valType`, statement position,
