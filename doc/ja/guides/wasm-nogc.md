@@ -66,7 +66,7 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, ~108 bytes, no wasm-GC run
 (describe-int -42)  ; => "-42 has 3 chars"
 ```
 
-文字列を使用するモジュールは(拡張可能な)リニアメモリを持ち、その `memory` と `__ronto_alloc(size)` バンプアロケータを関数とともにエクスポートします。`:string` パラメータはホストがメモリに書き込む `(ptr, len)` ペアとして渡され、`:string` の結果も同じ方法で返されます — そのため文字列を返すエクスポートは、`wasmtime --invoke` だけではなく、エクスポートされたメモリを読み書きできるホスト(JavaScript、小さな Node スクリプト、ブラウザのプレイグラウンド)を必要とします。[ブラウザガイド](wasm-browser.md#passing-strings-string)で JS 側を詳しく説明し、[`--no-gc --component`](#compact-component-output---no-gc---component) はこの手動プロトコルを丸ごと不要にします。
+文字列を使用するモジュールは(拡張可能な)リニアメモリを持ち、その `memory` を関数とともにエクスポートします。宣言された境界が*ホスト*にヒープの扱いを求める場合には、`__ronto_alloc(size)` バンプアロケータもエクスポートされます — [アリーナ API](#reclaiming-memory-the-arena-api)を参照してください。`:string` パラメータはホストがメモリに書き込む `(ptr, len)` ペアとして渡され、`:string` の結果も同じ方法で返されます — そのため文字列を返すエクスポートは、`wasmtime --invoke` だけではなく、エクスポートされたメモリを読み書きできるホスト(JavaScript、小さな Node スクリプト、ブラウザのプレイグラウンド)を必要とします。[ブラウザガイド](wasm-browser.md#passing-strings-string)で JS 側を詳しく説明し、[`--no-gc --component`](#compact-component-output---no-gc---component) はこの手動プロトコルを丸ごと不要にします。
 
 これが ASCII アートのマンデルブロレンダラーを wasm-GC なしで動かせる理由です: [`examples/console/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/console/mandelbrot-nogc.lisp) は浮動小数点の脱出時間ループを保ちながら、描画したグリッドを印字する代わりに 1 つの文字列として返します:
 
@@ -118,6 +118,8 @@ $ wasmtime run --invoke show show.wasm 4
 | --- | --- | --- |
 | `__ronto_alloc_mark` | `() -> i32` | snapshot the current bump-heap top |
 | `__ronto_alloc_reset` | `(i32 mark) -> ()` | restore the top to a saved mark |
+
+この 2 つと `__ronto_alloc` 自身は、宣言された境界がホストにヒープの扱いを求めるときにだけエクスポートされます: エクスポートが `:string` を受け取る(ホストが入力バッファを確保する)、エクスポートが `:string` を返す(結果は生きたポインタで、ホストだけがポップできる)、インポートしたホスト関数が `:string` を返す(ホストが結果のバイト列をこのメモリに書き込む)。テキストが*外向き*にしか渡らないモジュール — 文字列リテラルを `(ptr, len)` としてホストインポートに渡すだけのモジュール — は 3 つともエクスポートせず、必要ともしません: 外から確保するものはなく、内側でヒープが動くこともなく、エクスポートのラッパーにもリセットは入りません。
 
 入力を確保する**前**にスナップショットを取り、結果を読み出した**後**に復元すれば、常駐インスタンスは何回呼び出されても完全に平坦なままです:
 

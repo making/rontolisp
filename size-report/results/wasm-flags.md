@@ -5,7 +5,7 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-09-13
-- rontolisp: 0.1.0-SNAPSHOT (`fcb0e87`)
+- rontolisp: 0.1.0-SNAPSHOT (`e061fe8`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
@@ -14,12 +14,12 @@ How the report is built and run: [../README.md](../README.md).
 | hello_world | `--optimize` | core (command) | Preview 1 | 509 |
 | hello_world | `--optimize=size` | core (command) | Preview 1 | 509 |
 | hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,664 |
-| hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 406 |
+| hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 244 |
 | pi_approx | `--optimize=off` | core (command) | Preview 1 | 384,639 |
 | pi_approx | `--optimize` | core (command) | Preview 1 | 2,442 |
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 1,544 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 2,699 |
-| pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 3,442 |
+| pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 3,343 |
 | zlib | `--optimize=off` | core (command) | Preview 1 | 627,039 |
 | zlib | `--optimize` | core (command) | Preview 1 | 116,605 |
 | zlib | `--optimize=size` | core (command) | Preview 1 | 90,904 |

@@ -17,6 +17,13 @@ pointer kinds: rank-1 `F64VEC`/`F32VEC` (`[count:i32][data]`) and rank-2 `F64MAT
 (`[rows:i32][cols:i32][data]` row-major), consumed by `vec:matvec`/`matvec-into`. Rank >= 3,
 rank-2 `#d`/`#f` literals and `array-dimensions` are compile errors; the rank is static.
 
+The **type section carries each distinct signature once** (`TypeTable`, interned in
+emission order). A wasm function type is structural and only ever named by INDEX -- by a
+`func` entry or an import entry -- so folding the duplicates renumbers nothing else. It
+used to be one entry per function, which on a 20-function module meant 24 entries of which
+12 were distinct (129 -> 61 bytes, 2026-09-13). The printing module's `fd_write` signature
+is interned FIRST so it stays type 0, which is what the import entry names.
+
 ## Value model and inference
 `inferTypes` is a **monotone fixpoint** over the call graph: exported params pinned to the
 boundary designator; all other param types, **all let/`do`-bound local types**
@@ -47,10 +54,23 @@ result = join(normal completion, every enclosing `return` value); `return` is a 
 `Fn.ctrlDepth - blockMarker` (depth bumped by `if` +1, `while` +2, `%block` +1); `setq` is a
 `local.tee` to a param/let slot (no globals).
 
+A **predicate feeds `if`/`br_if` directly**: a comparison, `not`/`null` and `string=` each
+produce the i32 0/1 that a branch consumes, and only widen it because the VALUE domain is
+i64. `emitPredicate` records that the widening is the last byte written and `takeFlag`
+takes it back off when the consumer turns out to be a branch, so neither the widening nor
+the `!= 0` that would undo it is emitted (the test is positional, so it can never fire on
+anything else). A CONSTANT test decides the branch at compile time instead: the macro
+expander ends every `cond` in `(if t ... nil)`, and that arm now costs nothing.
+
 ## Strings
-A string is an `i32` pointer to `[len:i32 LE][UTF-8 bytes]`; literals are 4-byte aligned from
-`STR_DATA_BASE`=8, so addr 0 is always a valid zero-length string (the empty string /
-nil-in-string-context).
+A string is an `i32` pointer to `[len:i32 LE][UTF-8 bytes]`; literals are laid out back to
+back (NOT aligned) from `STR_DATA_BASE`=8, so addr 0 is always a valid zero-length string
+(the empty string / nil-in-string-context). The `i32.load align=2` that reads a length
+header is a HINT in wasm -- an unaligned address is legal and every engine serves it -- so
+the padding that used to 4-align each block bought nothing and is gone (2026-09-13; 14
+bytes on the `.todo/artefacts/805-.../bench.lisp` reactor, output identical). The
+Schubfach tables after the literals DO keep their alignment: those are i64/f64 table reads
+in the float renderer's inner loop.
 - `(concatenate 'string ...)` bump-allocates via `__alloc` (mut-i32 heap-pointer global 0)
   and copies via `__memcpy`. Only the STRING result family exists, so any other designator —
   or a computed one — is a compile error naming it
@@ -59,27 +79,47 @@ nil-in-string-context).
 - **A character IS its i64 code point**: `char-code`/`code-char` are identities, `char=` is
   numeric `=`, so `(char= (char s i) #\x)` matches the other backends.
 - The four helpers occupy function indices `internalCount+0..+3` (alloc, memcpy, streq,
-  itoa). Memory + helpers are emitted **only when the module uses strings** (`Mem.used`;
-  `usesStringOp`), so a pure-numeric module stays byte-identical. `usesMemory` modules also
-  export `memory` and `__ronto_alloc`.
+  itoa), where `internalCount` counts the internal functions and the EMITTED wrappers --
+  `planMemory` answers the layout and the three gates, `placeFunctions` assigns the
+  indices once the wrapper count is known, and nothing assumes one wrapper per export
+  directive. Memory + helpers are emitted **only when the module uses strings**
+  (`Mem.used`; `usesStringOp`), so a pure-numeric module stays byte-identical.
+  A `usesMemory` module exports `memory`; the allocator family is separately gated
+  (`Mem.hostArena`, "Boundary" below).
 
 ## Boundary (host ABI)
 `:int`/`:bool` are `i32`, `:float` `f64`, `:string` a `(ptr,len)` i32 pair. Wrappers convert
 host<->internal, so a returned value outside i32 wraps even though internals are i64. With no
-conversion needed and `Mem.used()` false, the wrapper is elided and the export names the
-internal function directly (`isPassThroughExport`, `.kb/wasm-export-no-wasi.md`). Two
-documented divergences (README "Non-GC Output"): no rational type, and `0` is false.
+conversion needed and nothing in the module able to allocate (`Mem.allocates()` false), the
+wrapper is elided and the export names the internal function directly
+(`isPassThroughExport`, `.kb/wasm-export-no-wasi.md`). Two documented divergences (README
+"Non-GC Output"): no rational type, and `0` is false.
 - **Wrapper auto-reset for scalar returns**: `__ronto_alloc` never frees. When the return
-  type is a **non-memory scalar** (NOT `:string`/`:s-expr`) **and** `Mem.used()`,
-  `compileWrapperBody` snapshots heap global 0 at entry (before arg boxing) and restores it
-  just before `END`. Reclaims only wrapper-internal scratch — the host's own pre-call input
-  buffer sits below the mark and stays live.
-- **Host arena API**: `__ronto_alloc_mark () -> i32` / `__ronto_alloc_reset (i32 mark)` over
-  the same heap global, emitted ONLY when `mem.used()`, appended after the four string
-  helpers (`--no-gc` has no fixed-index invariant). Take the mark BEFORE the host's
-  `__ronto_alloc` input buffer, reset AFTER reading the result. Caveats: reset only to a mark
-  taken BEFORE live data, and a `:string`-RETURNING export's bytes must be read out BEFORE
-  the reset. Example: `examples/count-vowels/`.
+  type is a **non-memory scalar** (NOT `:string`/`:s-expr`), `Mem.used()` **and**
+  `Mem.allocates()`, `compileWrapperBody` snapshots heap global 0 at entry (before arg
+  boxing) and restores it just before `END`. Reclaims only wrapper-internal scratch — the
+  host's own pre-call input buffer sits below the mark and stays live.
+- **`Mem.allocates()`** is the module-level answer to "can anything bump the heap during a
+  call": a `:string` export PARAMETER or import RESULT (both copy into a fresh block), a
+  string-producing op (`concatenate`/`subseq`/`princ-to-string`), a packed vector, or
+  printing (`__itoa`/`__ftoa` allocate the text they return). A module whose only use of
+  memory is reading its own literals — the host-facing reactor that passes text OUT —
+  answers false, and then no wrapper carries the bracket and a scalar identity export can
+  be a pass-through even though the module has memory.
+- **Host arena API**: `__ronto_alloc` plus `__ronto_alloc_mark () -> i32` /
+  `__ronto_alloc_reset (i32 mark)` over the same heap global, appended after the four
+  string helpers (`--no-gc` has no fixed-index invariant). All three are exported ONLY when
+  the BOUNDARY DECLARATIONS give a host something to do with the heap (`Mem.hostArena`):
+  an export takes a `:string` (the host allocates the input buffer here), a reached import
+  RETURNS a `:string` (the host writes the result bytes here), or an export RETURNS a
+  `:string` (the pointer escapes, so that wrapper cannot auto-reset and only the host can
+  pop). Anything else is an API nothing can call — 124 bytes of it on the
+  `.todo/artefacts/805-.../bench.lisp` reactor. The mark/reset BODIES are gated with the
+  exports (they exist only to be exported); `__alloc` itself is still emitted with the
+  other three helpers and drops out through the tree shaker when nothing calls it. Take the
+  mark BEFORE the host's `__ronto_alloc` input buffer, reset AFTER reading the result.
+  Caveats: reset only to a mark taken BEFORE live data, and a `:string`-RETURNING export's
+  bytes must be read out BEFORE the reset. Example: `examples/count-vowels/`.
 - **`rontolisp:with-arena`** closes the intra-call hole. Cross-backend it is
   `LispMacroExpander.expandWithArena` lowering to `progn` (ci-spec
   `with-arena-is-observationally-a-progn`); here `compileWithArena` resets to the mark, and
@@ -275,7 +315,12 @@ imports on this backend: a `--no-gc --component --no-wasi` program keeps its hos
 the WASI one is sunk).
 
 ## Tests
-`NoGcWasmCompilerTest` (structural, no Docker): the heap-reset trio,
+`NoGcWasmCompilerTest` (structural, no Docker): the module-surface group
+(`theTypeSectionWritesEachSignatureOnce`, `distinctSignaturesStillGetTheirOwnTypeEntry`,
+`aModuleThatOnlyPassesItsOwnLiteralsOutOmitsTheArenaApi`,
+`aStringReturningImportKeepsTheArenaApi`, `aWrapperThatCannotAllocateCarriesNoHeapBracket`,
+`aComparisonFeedsTheBranchWithoutBeingWidenedFirst`, `theConstantTrueArmOfACondEmitsNoTest`,
+`stringLiteralsArePackedWithoutAlignmentPadding`), the heap-reset trio,
 `stringModuleExportsTheHostArenaApi`, `printGatesTheFdWriteImportOnAndOff`,
 `componentWrapsThePlainCoreModuleVerbatim`,
 `componentStringExportAppendsTheCanonicalStringAbi`,
@@ -284,7 +329,7 @@ the WASI one is sunk).
 `componentNoWasiPrintingProgramTakesThePrintFreeShape`, and the host-import group
 (`aHostImportBecomesTheModulesOnlyImportEntry`, `theHostImportsPrecedeAPrintingModulesFdWrite`,
 `aDeclaredButUncalledImportCostsTheModuleNothing`, `aScalarImportNeedsNeitherMemoryNorAnAllocator`,
-`aStringBoundaryOnAnImportPullsInTheMemoryAndTheAllocator`, the refusals,
+`aStringBoundaryOnAnImportPullsInTheMemoryAndOnlyAResultTheAllocator`, the refusals,
 `aConsumedPackageDeclarationIsDroppedRatherThanRefused`), the component-import group
 (`aScalarComponentImportIsAnInstanceImportLoweredAheadOfTheCore`,
 `aStringComponentImportGoesThroughAGeneratedShimAndFixup`,

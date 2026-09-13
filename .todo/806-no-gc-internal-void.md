@@ -36,22 +36,20 @@ value -- so that a form in statement position produces nothing and a `:void` bou
 - It is the true fix for `AppendLogMessage`'s remaining bytes, and it is what lets the two
   void exports reach `isPassThroughExport` at all.
 
-## The layout coupling in front of it
+## The layout coupling in front of it -- DONE (2026-09-13)
 
-`isPassThroughExport` has a second gate, `if (mem.used()) return false;`, and half of it is
-not semantic. `NoGcWasmCompiler.planMemory` computes `allocIndex = funcBase + internalCount
-+ exportDecls.size()` -- **one wrapper per export, assumed before the pass-through decision
-exists** (the comment at that line says so). A spike that elided more wrappers than planned
-threw `Index 25 out of bounds`.
+`planMemory` used to compute `allocIndex = funcBase + internalCount + exportDecls.size()`
+-- one wrapper per export, assumed before the pass-through decision exists -- and a spike
+that elided more wrappers than planned threw `Index 25 out of bounds`. That is gone:
+`planMemory` now answers the index-FREE layout, the pass-through decision runs against it,
+and `placeFunctions` assigns the helper indices over the wrapper count actually arrived at.
+Nothing assumes a wrapper count any more, so this item may elide as many as it earns.
 
-So decoupling the helper index base from the export count is a **prerequisite for anything
-that elides a wrapper**: this item, `804` item 3's per-wrapper arena gate, and any future
-pass-through widening. It is bookkeeping, not design, and it should probably be done first
-and on its own.
-
-The semantic half of that gate is real and stays: the arena bracket reclaims what the body
-allocated, so a wrapper may only be elided when nothing reachable from the export can bump
-the heap.
+The semantic half of that gate is real and stayed, in the form `804` gave it: a wrapper may
+only be elided when nothing in the module can bump the heap during the call
+(`Mem.allocates()`), because the bracket exists to reclaim what the body allocated. Both
+void exports here are refused for the OTHER reason -- their internal functions return an
+integer where the export type is `()` -- which is what this item fixes.
 
 ## Not to be confused with
 

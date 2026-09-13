@@ -48,6 +48,13 @@ its output survived. `spiked-functions.wat` is therefore the specification of wh
 sound version has to emit, not a diff to re-apply. The i32 spike in
 [`../806-no-gc-internal-void/`](../806-no-gc-internal-void) DOES carry its diff.
 
+## After `804` landed (2026-09-13)
+
+`804` is in, so the baseline this directory describes is history: the same build of
+`bench.lisp` now measures **1,090 bytes** (types 129 -> 57 over 12 distinct entries,
+exports 128 -> 69, code 491 -> 360, data 497 -> 481). `805` and `800` must be re-measured
+against that module, not against the 1,383/1,382 rows below.
+
 ## The measured ladder
 
 | | total | code (functions) | types |

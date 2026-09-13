@@ -246,18 +246,32 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void memoryUsingModuleKeepsTheHeapResetWrapperForALongExport() {
-		// A string literal makes the module use linear memory, so a scalar-return
-		// export must keep its wrapper for the bump-heap reset even when the
-		// host signature matches the internal one exactly.
+	void anAllocatingModuleKeepsTheHeapResetWrapperForALongExport() {
+		// princ-to-string renders into a fresh heap block, so the call can move the heap
+		// pointer and a scalar-return export keeps its wrapper for the reset even when
+		// the host signature matches the internal one exactly.
 		byte[] module = compile("""
-				(defun withlit (a) (+ a (length "hello")))
+				(defun withlit (a) (+ a (length (princ-to-string a))))
 				(rontolisp:wasm-export 'withlit :params '(:long) :returns :long)
 				""");
 		Map<Integer, byte[]> sections = sections(module);
 		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
 				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "withlit"));
-		assertThat(containsGlobalReset(wrapper)).as("memory-using :long export keeps the heap-reset wrapper").isTrue();
+		assertThat(containsGlobalReset(wrapper)).as("an allocating :long export keeps the heap-reset wrapper").isTrue();
+	}
+
+	@Test
+	void aLiteralOnlyModuleNeedsNoWrapperForAMatchingLongExport() {
+		// The same export over a module that only READS a literal: memory is used, but
+		// nothing can bump the heap, so there is nothing to reset and the identity
+		// wrapper is elided -- the export names the internal function itself.
+		byte[] module = compile("""
+				(defun withlit (a) (+ a (length "hello")))
+				(rontolisp:wasm-export 'withlit :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5); // memory (the literal lives there)
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "withlit")).isEqualTo(0);
 	}
 
 	@Test
@@ -586,6 +600,136 @@ class NoGcWasmCompilerTest {
 		assertThat(reset).containsExactly(0x00, 0x20, 0x00, 0x24, 0x00, 0x0B);
 	}
 
+	// --- module surface: types, the arena API, wrappers, literals ----------------------
+
+	@Test
+	void theTypeSectionWritesEachSignatureOnce() {
+		// A wasm function type is structural, so functions of the same shape share one
+		// entry: three (i64, i64) -> i64 internals, one type. The export is a
+		// pass-through (nothing marshals, nothing allocates), so it adds no wrapper and
+		// no host type either.
+		byte[] module = compile("""
+				(defun add (a b) (+ a b))
+				(defun mul (a b) (* a b))
+				(defun combine (a b) (+ (add a b) (mul a b)))
+				(rontolisp:wasm-export 'combine :params '(:long :long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(funcTypes(Objects.requireNonNull(sections.get(1)))).hasSize(1);
+		// Three functions, all naming type 0.
+		assertThat(Objects.requireNonNull(sections.get(3))).containsExactly(0x03, 0x00, 0x00, 0x00);
+	}
+
+	@Test
+	void distinctSignaturesStillGetTheirOwnTypeEntry() {
+		// The other half of the dedup: two shapes, two entries, and each function names
+		// the one that describes it.
+		byte[] module = compile("""
+				(defun twice (a) (* a 2))
+				(defun sum (a b) (+ (twice a) b))
+				(rontolisp:wasm-export 'sum :params '(:long :long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(funcTypes(Objects.requireNonNull(sections.get(1)))).hasSize(2);
+	}
+
+	@Test
+	void aModuleThatOnlyPassesItsOwnLiteralsOutOmitsTheArenaApi() {
+		// The host-facing reactor shape: string literals cross OUT to an import as the
+		// (ptr,len) of a block this module already owns. The host never allocates in
+		// here and nothing in here bumps the heap, so the three arena entry points are
+		// an API the boundary cannot use -- only `memory` (which the host reads the
+		// literal through) is exported beside the function.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun greet () (js-log "hello"))
+				(rontolisp:wasm-export 'greet :as "Greet" :params '() :returns nil)
+				""");
+		List<String> exports = exportNames(Objects.requireNonNull(sections(module).get(7)));
+		assertThat(exports).contains("Greet", "memory")
+			.doesNotContain("__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
+	}
+
+	@Test
+	void aStringReturningImportKeepsTheArenaApi() {
+		// The host writes the result bytes into THIS module's memory before handing back
+		// (ptr,len), and the allocator it reserves them with is the exported one -- so
+		// an import's :string RESULT keeps the arena API even though no export mentions
+		// a string.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-name :from "env" :as "name" :params '() :returns :string)
+				(defun name-length () (length (js-name)))
+				(rontolisp:wasm-export 'name-length :as "NameLength" :params '() :returns :int)
+				""");
+		assertThat(exportNames(Objects.requireNonNull(sections(module).get(7)))).contains("NameLength", "memory",
+				"__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
+	}
+
+	@Test
+	void aWrapperThatCannotAllocateCarriesNoHeapBracket() {
+		// The scalar auto-reset exists to undo allocation during the call. A module
+		// whose only use of memory is reading its own literals has no call site that can
+		// move the heap pointer, so the wrapper saves and restores nothing.
+		byte[] module = compile("""
+				(defun report (n) (+ n (length "tick")))
+				(rontolisp:wasm-export 'report :as "Report" :params '(:s32) :returns :s32)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "Report"));
+		assertThat(containsGlobalReset(wrapper)).as("nothing allocates, so nothing is reset").isFalse();
+	}
+
+	@Test
+	void aComparisonFeedsTheBranchWithoutBeingWidenedFirst() {
+		// `if` consumes an i32 condition and a comparison produces exactly that, so the
+		// widening into the i64 value domain (and the `!= 0` that would undo it) is not
+		// emitted: i64.lt_s (0x53) is followed directly by if (0x04) with an i64 result
+		// type (0x7E).
+		byte[] module = compile("""
+				(defun classify (n) (if (< n 10) 1 2))
+				(rontolisp:wasm-export 'classify :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] body = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "classify"));
+		assertThat(containsSequence(body, 0x53, 0x04, 0x7E)).as("i64.lt_s feeds if directly").isTrue();
+		// i64.extend_i32_s (0xAC) followed by the i64.const 0 / i64.ne truthiness test.
+		assertThat(containsSequence(body, 0xAC, 0x42, 0x00, 0x52)).as("no widen-and-compare-back").isFalse();
+	}
+
+	@Test
+	void theConstantTrueArmOfACondEmitsNoTest() {
+		// cond's final (t ...) arm expands to (if t ... nil). The test is decided here,
+		// not at run time, so the body carries neither the constant-true test
+		// (i64.const 1; i64.const 0; i64.ne) nor a branch for it.
+		byte[] module = compile("""
+				(defun pick (n) (cond ((= n 1) 10) ((= n 2) 20) (t 30)))
+				(rontolisp:wasm-export 'pick :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] body = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "pick"));
+		assertThat(containsSequence(body, 0x42, 0x01, 0x42, 0x00, 0x52)).as("no constant-true test").isFalse();
+	}
+
+	@Test
+	void stringLiteralsArePackedWithoutAlignmentPadding() {
+		// Each literal is [len:i32 LE][bytes] laid out back to back. The only aligned
+		// access into one is the i32.load that reads the length, whose alignment
+		// immediate is a HINT in wasm -- so an odd-length literal costs its own bytes
+		// and nothing more.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun emit () (progn (js-log "abc") (js-log "de")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns nil)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c', 2, 0, 0, 0, 'd', 'e' }))
+			.as("the two literals sit back to back, no padding between them")
+			.isTrue();
+	}
+
 	// --- print / stdout --------------------------------------------------------------
 
 	// The exact import-section payload a printing module must carry: exactly one entry,
@@ -642,8 +786,11 @@ class NoGcWasmCompilerTest {
 				""");
 		Map<Integer, byte[]> sections = sections(module);
 		assertThat(sections).containsKey(2).containsKey(5);
-		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("show", "memory", "__ronto_alloc",
-				"__ronto_alloc_mark", "__ronto_alloc_reset");
+		// The memory is exported; the arena API is not. Printing allocates (__itoa /
+		// __ftoa render into fresh blocks) but nothing crosses the BOUNDARY in memory,
+		// so there is no host buffer to place and no result pointer to pop.
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("show", "memory")
+			.doesNotContain("__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
 	}
 
 	@Test
@@ -1571,13 +1718,14 @@ class NoGcWasmCompilerTest {
 	 * Matched on {@code allocVec}'s full trailing instruction sequence
 	 * ({@code i32.shl; i32.add; call $__ronto_alloc}) rather than the bare {@code call}:
 	 * a two-byte {@code 0x10 <index>} scan hits false positives inside the v128
-	 * immediates of a {@code --simd} body. The allocator's function index is read from
-	 * the export section (a memory-using module exports it) rather than recomputed.
+	 * immediates of a {@code --simd} body. The allocator is found by its BODY (see
+	 * {@link #allocFunctionIndex}), not by its export: a packed-vector module allocates
+	 * without any memory-typed boundary, and the export is gated on the boundary.
 	 */
 	private static int allocCallCount(byte[] module) {
 		Map<Integer, byte[]> sections = sections(module);
-		int allocIndex = exportedFunctionIndex(Objects.requireNonNull(sections.get(7)), "__ronto_alloc");
-		assertThat(allocIndex).as("__ronto_alloc is exported by a memory-using --no-gc module").isNotNegative();
+		int allocIndex = allocFunctionIndex(module);
+		assertThat(allocIndex).as("a --no-gc module that allocates emits __alloc").isNotNegative();
 		assertThat(allocIndex).as("a single-byte LEB index keeps the byte scan exact").isLessThan(128);
 		byte[] body = functionBodies(Objects.requireNonNull(sections.get(10))).get(0);
 		int count = 0;
@@ -1594,6 +1742,25 @@ class NoGcWasmCompilerTest {
 	}
 
 	/** Splits a code section into its per-function bodies (each a size-prefixed blob). */
+	/**
+	 * The function index of {@code __alloc}, found by its body: it is the only function
+	 * that GROWS linear memory, so it is the only one carrying
+	 * {@code memory.size; i32.sub; memory.grow; drop} (3F 00 6B 40 00 1A). None of the
+	 * modules here declares an import, so a code-section entry index is a function
+	 * index.
+	 * @param module the compiled module
+	 * @return the allocator's function index, or -1 when the module has no allocator
+	 */
+	private static int allocFunctionIndex(byte[] module) {
+		List<byte[]> bodies = functionBodies(Objects.requireNonNull(sections(module).get(10)));
+		for (int i = 0; i < bodies.size(); i++) {
+			if (containsSequence(bodies.get(i), 0x3F, 0x00, 0x6B, 0x40, 0x00, 0x1A)) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
 	private static List<byte[]> functionBodies(byte[] codeSection) {
 		List<byte[]> bodies = new ArrayList<>();
 		int[] p = { 0 };
@@ -2332,11 +2499,12 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void aStringBoundaryOnAnImportPullsInTheMemoryAndTheAllocator() {
+	void aStringBoundaryOnAnImportPullsInTheMemoryAndOnlyAResultTheAllocator() {
 		// A :string crossing either way is linear memory: an ARGUMENT is handed over as
 		// the (ptr,len) of a block the module already holds, and a RESULT is bytes the
 		// host wrote here through the exported __ronto_alloc. Both need the memory
-		// exported, so both flag it used.
+		// exported, so both flag it used -- but only the RESULT asks the HOST to put
+		// bytes in here, and only it therefore exports the allocator.
 		byte[] param = compile("""
 				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string) :returns :void)
 				(defun go () (emit "hi") 1)
@@ -2349,9 +2517,10 @@ class NoGcWasmCompilerTest {
 				""");
 		for (byte[] module : List.of(param, result)) {
 			assertThat(sections(module)).containsKey(5);
-			assertThat(exportNames(Objects.requireNonNull(sections(module).get(7)))).contains("memory",
-					"__ronto_alloc");
 		}
+		assertThat(exportNames(Objects.requireNonNull(sections(param).get(7)))).contains("memory")
+			.doesNotContain("__ronto_alloc");
+		assertThat(exportNames(Objects.requireNonNull(sections(result).get(7)))).contains("memory", "__ronto_alloc");
 	}
 
 	@Test

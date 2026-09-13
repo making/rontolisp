@@ -551,7 +551,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int wrapperCount = 0;
 		for (int j = 0; j < exportDecls.size(); j++) {
 			WasmExportCompiler.Decl decl = exportDecls.get(j);
-			if (isPassThroughExport(decl, types, layout.used())) {
+			if (isPassThroughExport(decl, types, layout.allocates())) {
 				wrapperOrdinals[j] = -1;
 				exportOrdinals[j] = Objects.requireNonNull(index.get(decl.name()));
 			}
@@ -1268,9 +1268,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param streqIndex the function index of the {@code __streq} string-compare helper
 	 * @param itoaIndex the function index of the {@code __itoa} integer-to-string helper
 	 * @param markIndex the function index of the {@code __ronto_alloc_mark}
-	 * arena-snapshot export
+	 * arena-snapshot export (-1 when the boundary gives no host a use for it)
 	 * @param resetIndex the function index of the {@code __ronto_alloc_reset}
-	 * arena-restore export
+	 * arena-restore export (-1 when the boundary gives no host a use for it)
 	 * @param ftoaIndex the function index of the {@code __ftoa} float-to-string helper
 	 * (-1 when no float is rendered)
 	 * @param writeStdoutIndex the function index of the {@code __write_stdout} funnel,
@@ -1278,10 +1278,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param used whether the module uses linear memory at all
 	 * @param printUsed whether the module prints (fd_write import + __write_stdout)
 	 * @param ftoaUsed whether the module renders a float to text (__ftoa)
+	 * @param hostArena whether the arena API (the {@code __ronto_alloc} family of exports
+	 * and the mark/reset bodies behind two of them) is emitted at all
+	 * @param allocates whether anything in the module can bump the heap during a call
 	 */
 	private record Mem(Map<String, Integer> literals, byte[] data, int dataBase, int heapBase, int iovAddr,
 			int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex, int markIndex, int resetIndex,
-			int ftoaIndex, int schubBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed) {
+			int ftoaIndex, int schubBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed,
+			boolean hostArena, boolean allocates) {
 
 		// The five Schubfach helpers behind __ftoa, appended right after it
 		// in this order; bodies come from WasmSchubfachRuntimeBuilder.
@@ -1341,9 +1345,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param used whether the module uses linear memory at all
 	 * @param printUsed whether the module prints (fd_write import + __write_stdout)
 	 * @param ftoaUsed whether the module renders a float to text (__ftoa)
+	 * @param hostArena whether the boundary gives the HOST a reason to touch the bump
+	 * heap, which is what the {@code __ronto_alloc} / {@code __ronto_alloc_mark} /
+	 * {@code __ronto_alloc_reset} exports and the mark/reset bodies are for
+	 * @param allocates whether anything in the module can bump the heap during a call,
+	 * which is what an export wrapper's save/restore bracket exists to undo
 	 */
 	private record MemLayout(Map<String, Integer> literals, byte[] data, int heapBase, int iovAddr, int schubBase,
-			boolean used, boolean printUsed, boolean ftoaUsed) {
+			boolean used, boolean printUsed, boolean ftoaUsed, boolean hostArena, boolean allocates) {
 	}
 
 	private static final int STR_DATA_BASE = 8;
@@ -1396,10 +1405,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		ByteArrayOutputStream data = new ByteArrayOutputStream();
 		int cursor = STR_DATA_BASE;
 		for (String s : literals) {
-			while ((cursor & 3) != 0) {
-				data.write(0);
-				cursor++;
-			}
+			// Blocks are packed, not 4-byte aligned. The only aligned access into one is
+			// the `i32.load align=2` that reads the [len] header, and in wasm the
+			// alignment immediate is a HINT: an unaligned address is legal and every
+			// engine serves it. Padding to it cost a byte per odd-length literal and
+			// bought nothing. (The Schubfach tables below keep their alignment: those
+			// are i64/f64 table reads in the float renderer's inner loop, where the hint
+			// is worth honouring.)
 			offsets.put(s, cursor);
 			byte[] bytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 			writeI32LE(data, bytes.length);
@@ -1428,9 +1440,38 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 
 		boolean boundaryString = false;
+		// Whether the HOST has anything to do with the bump heap, which is what the
+		// __ronto_alloc / __ronto_alloc_mark / __ronto_alloc_reset exports are for. It
+		// is a property of the boundary DECLARATIONS alone, in three shapes:
+		//
+		// - an export takes a :string -- the host allocates the input buffer in here;
+		// - a reached import RETURNS a :string -- the host writes the result bytes in
+		// here, through the same allocator, before handing back (ptr,len);
+		// - an export RETURNS a :string -- the pointer escapes to the host, so that
+		// wrapper cannot auto-reset the heap and only the host can pop it.
+		//
+		// Every other module allocates only inside a call whose wrapper restores the
+		// heap pointer on the way out (compileWrapperBody's scalar auto-reset), so a
+		// host that called the allocator would have nothing to pass the block to and
+		// nothing to reclaim. A :string ARGUMENT to an import is not on this list: it
+		// hands the host the (ptr,len) of a block this module already owns.
+		boolean hostArena = false;
+		// Whether anything can bump the heap DURING a call, which is what the export
+		// wrappers' auto-reset bracket exists to undo. Every __alloc call site in the
+		// emitted code is one of: a :string export parameter copied in (below), a
+		// :string import result copied in (below), a string-producing op, a packed
+		// vector, or the int/float renderers behind printing. A module whose only use of
+		// memory is reading its own literals -- the shape a host-facing reactor that
+		// only passes text OUT takes -- never calls it, and every one of its wrappers
+		// would save and restore a heap pointer that cannot move.
+		boolean allocates = false;
 		for (WasmExportCompiler.Decl decl : exportDecls) {
 			if (decl.returnType() == BoundaryType.STRING || decl.paramTypes().contains(BoundaryType.STRING)) {
 				boundaryString = true;
+				hostArena = true;
+			}
+			if (decl.paramTypes().contains(BoundaryType.STRING)) {
+				allocates = true;
 			}
 		}
 		// A host import's :string boundary is the same linear-memory crossing an
@@ -1444,6 +1485,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			if (decl != null
 					&& (decl.returnType() == BoundaryType.STRING || decl.paramTypes().contains(BoundaryType.STRING))) {
 				boundaryString = true;
+				hostArena |= decl.returnType() == BoundaryType.STRING;
+				allocates |= decl.returnType() == BoundaryType.STRING;
 			}
 		}
 		// A body can produce a string without any literal or :string boundary (e.g.
@@ -1469,7 +1512,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		// printUsed implies non-empty literals (the "\n" entry), so `used` follows.
 		boolean used = !literals.isEmpty() || boundaryString || stringOp || floatVec;
-		return new MemLayout(offsets, data.toByteArray(), heapBase, iovAddr, schubBase, used, printUsed, ftoaUsed);
+		// Printing renders through __itoa / __ftoa, both of which allocate the text they
+		// return; a string-producing op and a packed vector allocate by definition.
+		allocates |= stringOp || floatVec || printUsed;
+		return new MemLayout(offsets, data.toByteArray(), heapBase, iovAddr, schubBase, used, printUsed, ftoaUsed,
+				hostArena, allocates);
 	}
 
 	/**
@@ -1488,18 +1535,24 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int memcpyIndex = allocIndex + 1;
 		int streqIndex = memcpyIndex + 1;
 		int itoaIndex = streqIndex + 1;
+		int next = itoaIndex + 1;
 		// The host arena API __ronto_alloc_mark/_reset: two more exported functions over
 		// the same heap-pointer global, appended after the four string helpers. --no-gc
-		// has no fixed-index invariant, so appending is free (nothing renumbers).
-		int markIndex = itoaIndex + 1;
-		int resetIndex = markIndex + 1;
+		// has no fixed-index invariant, so appending is free (nothing renumbers) -- and
+		// so is leaving them out when the boundary gives no host a use for them.
+		int markIndex = layout.hostArena() ? next++ : -1;
+		int resetIndex = layout.hostArena() ? next++ : -1;
 		// The printing helpers append after the arena pair, again gated.
-		int ftoaIndex = layout.ftoaUsed() ? resetIndex + 1 : -1;
+		int ftoaIndex = layout.ftoaUsed() ? next : -1;
 		// __ftoa is followed by its five Schubfach helpers (see Mem.schub*Index).
-		int writeStdoutIndex = layout.printUsed() ? (layout.ftoaUsed() ? ftoaIndex + 6 : resetIndex + 1) : -1;
+		if (layout.ftoaUsed()) {
+			next += 6;
+		}
+		int writeStdoutIndex = layout.printUsed() ? next : -1;
 		return new Mem(layout.literals(), layout.data(), STR_DATA_BASE, layout.heapBase(), layout.iovAddr(), funcBase,
 				allocIndex, memcpyIndex, streqIndex, itoaIndex, markIndex, resetIndex, ftoaIndex, layout.schubBase(),
-				writeStdoutIndex, layout.used(), layout.printUsed(), layout.ftoaUsed());
+				writeStdoutIndex, layout.used(), layout.printUsed(), layout.ftoaUsed(), layout.hostArena(),
+				layout.allocates());
 	}
 
 	/** The printing operators that gate the fd_write import. */
@@ -1594,6 +1647,43 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// --- Module assembly ---------------------------------------------------------------
 
+	/**
+	 * The module's function types, each written once. A wasm function type is structural:
+	 * two functions of the same shape are the same type, and a `func` section entry (like
+	 * an import entry) names a type by INDEX, so folding the duplicates renumbers nothing
+	 * else in the module. Entries keep first-use order, which is what makes the emitted
+	 * section deterministic.
+	 */
+	private static final class TypeTable {
+
+		private record Sig(List<Type> params, List<Type> results) {
+		}
+
+		private final LinkedHashMap<Sig, Integer> indices = new LinkedHashMap<>();
+
+		/**
+		 * The index of this signature's entry, adding it if it is new.
+		 * @param params the parameter types
+		 * @param results the result types
+		 * @return the type index to name this signature by
+		 */
+		int intern(Type[] params, Type[] results) {
+			return this.indices.computeIfAbsent(new Sig(List.of(params), List.of(results)),
+					unused -> this.indices.size());
+		}
+
+		/**
+		 * Write every interned signature, in order.
+		 * @param typeSec the type section being built
+		 */
+		void writeTo(am.ik.wasm.TypeDef typeSec) {
+			for (Sig sig : this.indices.keySet()) {
+				typeSec.addFunc(sig.params().toArray(Type[]::new), sig.results().toArray(Type[]::new));
+			}
+		}
+
+	}
+
 	private byte[] assemble(List<String> reachable, List<byte[]> internalBodies,
 			List<WasmExportCompiler.Decl> exportDecls, List<byte[]> wrapperBodies, int[] wrapperOrdinals,
 			int[] exportOrdinals, int internalCount, Types types, Mem mem, List<WasmImportCompiler.Decl> hostImports) {
@@ -1603,8 +1693,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// __write_stdout (when a float is rendered / when printing is used). The helper
 		// indices came from placeFunctions over this same wrapper count, so an elided
 		// wrapper moves them all down together.
-		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 6 : 0) + (mem.ftoaUsed() ? 6 : 0)
-				+ (mem.printUsed() ? 1 : 0);
+		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 4 : 0) + (mem.hostArena() ? 2 : 0)
+				+ (mem.ftoaUsed() ? 6 : 0) + (mem.printUsed() ? 1 : 0);
 		// Canonical string ABI for --component :string exports:
 		// cabi_realloc (the host lowers string arguments through it), one retptr shim
 		// per :string-RETURNING export (MAX_FLAT_RESULTS = 1, so the lifted core
@@ -1636,85 +1726,95 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int postBase = reallocIndex + (componentRealloc ? 1 : 0);
 		int shimBase = postBase + postKinds.size();
 		int totalFuncCount = localFuncCount + (componentRealloc ? 1 : 0) + postKinds.size() + stringReturnDecls.size();
-		// Function index k uses type index k (shifted by funcBase), so the host-ABI
-		// types appended after the last function's type start here.
-		final int importTypeBase = mem.funcBase() + totalFuncCount;
+		// The type table: every signature the module needs, each written ONCE. A wasm
+		// function type is structural, so two functions of the same shape share one
+		// entry -- a `func` section holds type INDICES, and nothing else in the module
+		// names a function's type. Signatures are interned in emission order (the
+		// printing module's fd_write first, so it stays type 0 for the import entry
+		// below), which keeps the section deterministic and keeps the FIRST function of
+		// each shape at the index it always had.
+		TypeTable typeTable = new TypeTable();
+		if (mem.printUsed()) {
+			typeTable.intern(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
+		}
+		// One entry per local function, in function-section order: internal function k's
+		// inferred (i64|f64|i32 ...) -> (i64|f64|i32), then each emitted wrapper's host
+		// signature, then the helpers.
+		int[] funcTypes = new int[totalFuncCount];
+		int nextFunc = 0;
+		for (String name : reachable) {
+			funcTypes[nextFunc++] = typeTable.intern(wasmParamTypes(name, types),
+					new Type[] { wasmType(returnTy(name, types)) });
+		}
+		for (int j = 0; j < exportDecls.size(); j++) {
+			if (wrapperOrdinals[j] < 0) {
+				continue; // pass-through: no wrapper, no host type
+			}
+			WasmExportCompiler.Decl decl = exportDecls.get(j);
+			funcTypes[nextFunc++] = typeTable.intern(WasmExportCompiler.paramWasmTypes(decl),
+					WasmExportCompiler.resultWasmTypes(decl));
+		}
+		if (mem.used()) {
+			// __alloc, __memcpy, __streq, __itoa.
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32 }, new Type[] { Type.I32 });
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32, Type.I32 }, new Type[0]);
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I64 }, new Type[] { Type.I32 });
+		}
+		if (mem.hostArena()) {
+			// The host arena API: __ronto_alloc_mark () -> i32 and
+			// __ronto_alloc_reset (i32) -> ().
+			funcTypes[nextFunc++] = typeTable.intern(new Type[0], new Type[] { Type.I32 });
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32 }, new Type[0]);
+		}
+		if (mem.ftoaUsed()) {
+			// __ftoa (f64) -> i32 (a fresh [len][bytes] string pointer), then its five
+			// Schubfach helpers in Mem.schub*Index order: __schub_umulhi (i64, i64) ->
+			// i64, __schub_g (i32) -> (i64, i64), __schub_rop (i64, i64, i64) -> i64,
+			// __schub_f64_dec (f64) -> (i64, i32), __schub_dec_fmt (i64, i32, i32, i32)
+			// -> i32.
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.F64 }, new Type[] { Type.I32 });
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I64, Type.I64 }, new Type[] { Type.I64 });
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32 }, new Type[] { Type.I64, Type.I64 });
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I64, Type.I64, Type.I64 },
+					new Type[] { Type.I64 });
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.F64 }, new Type[] { Type.I64, Type.I32 });
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I64, Type.I32, Type.I32, Type.I32 },
+					new Type[] { Type.I32 });
+		}
+		if (mem.printUsed()) {
+			// __write_stdout (ptr i32, len i32) -> (): the sole fd_write caller.
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32 }, new Type[0]);
+		}
+		if (componentRealloc) {
+			// cabi_realloc (old, old-size, align, new-size) -> i32.
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 },
+					new Type[] { Type.I32 });
+		}
+		if (componentStringAbi) {
+			// cabi_post_* (flat results) -> (), one per signature.
+			for (Type paramType : postKinds.values()) {
+				funcTypes[nextFunc++] = typeTable.intern(paramType == null ? new Type[0] : new Type[] { paramType },
+						new Type[0]);
+			}
+			// Retptr shims: the wrapper's host parameters, a single i32 result.
+			for (int j : stringReturnDecls) {
+				funcTypes[nextFunc++] = typeTable.intern(WasmExportCompiler.paramWasmTypes(exportDecls.get(j)),
+						new Type[] { Type.I32 });
+			}
+		}
+		// The host-ABI signature of each reached rontolisp:wasm-import, LAST -- an import
+		// entry names a type index but no function index, so interning them here
+		// renumbers nothing. Under --component a :string result takes the canonical
+		// retptr shape (NoGcWasmComponentBuilder.coreParamTypes).
+		int[] importTypes = new int[hostImports.size()];
+		for (int i = 0; i < hostImports.size(); i++) {
+			WasmImportCompiler.Decl decl = hostImports.get(i);
+			importTypes[i] = typeTable.intern(importParamTypes(decl), importResultTypes(decl));
+		}
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
-		w.write("\0asm")
-			.writeLittleEndian4(1)
-			// Type section: one function type per function (no dedup needed). When the
-			// module prints, type 0 is the imported fd_write's (i32,i32,i32,i32)->i32 and
-			// every local function's type index shifts by funcBase, keeping the function
-			// index = type index correspondence. Internal function k: its inferred
-			// (i64|f64|i32 ...) -> (i64|f64|i32). Wrapper j: the host signature. Then,
-			// when memory is used, the helper types.
-			.writeTypeSection(typeSec -> {
-				if (mem.printUsed()) {
-					typeSec.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
-				}
-				for (String name : reachable) {
-					typeSec.addFunc(wasmParamTypes(name, types), new Type[] { wasmType(returnTy(name, types)) });
-				}
-				for (int j = 0; j < exportDecls.size(); j++) {
-					if (wrapperOrdinals[j] < 0) {
-						continue; // pass-through: no wrapper, no host type
-					}
-					WasmExportCompiler.Decl decl = exportDecls.get(j);
-					typeSec.addFunc(WasmExportCompiler.paramWasmTypes(decl), WasmExportCompiler.resultWasmTypes(decl));
-				}
-				if (mem.used()) {
-					typeSec.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I32 });
-					typeSec.addFunc(new Type[] { Type.I32, Type.I32, Type.I32 }, new Type[0]);
-					typeSec.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
-					typeSec.addFunc(new Type[] { Type.I64 }, new Type[] { Type.I32 });
-					// __ronto_alloc_mark () -> i32 and __ronto_alloc_reset (i32) -> ()
-					// (the host arena API).
-					typeSec.addFunc(new Type[0], new Type[] { Type.I32 });
-					typeSec.addFunc(new Type[] { Type.I32 }, new Type[0]);
-				}
-				if (mem.ftoaUsed()) {
-					// __ftoa (f64) -> i32 (a fresh [len][bytes] string pointer).
-					typeSec.addFunc(new Type[] { Type.F64 }, new Type[] { Type.I32 });
-					// Its five Schubfach helpers, in Mem.schub*Index order:
-					// __schub_umulhi (i64, i64) -> i64
-					typeSec.addFunc(new Type[] { Type.I64, Type.I64 }, new Type[] { Type.I64 });
-					// __schub_g (i32) -> (i64, i64)
-					typeSec.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I64, Type.I64 });
-					// __schub_rop (i64, i64, i64) -> i64
-					typeSec.addFunc(new Type[] { Type.I64, Type.I64, Type.I64 }, new Type[] { Type.I64 });
-					// __schub_f64_dec (f64) -> (i64, i32)
-					typeSec.addFunc(new Type[] { Type.F64 }, new Type[] { Type.I64, Type.I32 });
-					// __schub_dec_fmt (i64, i32, i32, i32) -> i32
-					typeSec.addFunc(new Type[] { Type.I64, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
-				}
-				if (mem.printUsed()) {
-					// __write_stdout (ptr i32, len i32) -> (): the sole fd_write caller.
-					typeSec.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[0]);
-				}
-				if (componentRealloc) {
-					// cabi_realloc (old, old-size, align, new-size) -> i32.
-					typeSec.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
-				}
-				if (componentStringAbi) {
-					// cabi_post_* (flat results) -> (), one per signature.
-					for (Type paramType : postKinds.values()) {
-						typeSec.addFunc(paramType == null ? new Type[0] : new Type[] { paramType }, new Type[0]);
-					}
-					// Retptr shims: the wrapper's host parameters, a single i32 result.
-					for (int j : stringReturnDecls) {
-						typeSec.addFunc(WasmExportCompiler.paramWasmTypes(exportDecls.get(j)), new Type[] { Type.I32 });
-					}
-				}
-				// The host-ABI signature of each reached rontolisp:wasm-import, LAST --
-				// an import entry names a type index but no function index, so appending
-				// them here renumbers nothing and a module that declares none keeps its
-				// exact bytes. Under --component a :string result takes the canonical
-				// retptr shape (NoGcWasmComponentBuilder.coreParamTypes).
-				for (WasmImportCompiler.Decl decl : hostImports) {
-					typeSec.addFunc(importParamTypes(decl), importResultTypes(decl));
-				}
-			});
+		w.write("\0asm").writeLittleEndian4(1).writeTypeSection(typeTable::writeTo);
 		// Import section: exactly the one fd_write, and only when the program prints.
 		// A print-free module keeps zero imports, so its --component wrap needs no
 		// adapter. Under --no-wasi the import is replaced by an internal discarding
@@ -1726,15 +1826,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.writeImportSection(
 					imports -> imports.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, 0));
 		}
-		// Function section: local function index (funcBase + k) uses type index
-		// (funcBase + k), mirroring the type-section shift above. The --no-wasi sink
-		// occupies index 0 with the fd_write type.
+		// Function section: local function k names the table entry its signature was
+		// interned at. The --no-wasi sink occupies index 0 with the fd_write type.
 		w.writeFunction(func -> {
 			if (fdWriteSink) {
 				func.addFunction(0);
 			}
 			for (int k = 0; k < totalFuncCount; k++) {
-				func.addFunction(k + mem.funcBase());
+				func.addFunction(funcTypes[k]);
 			}
 		});
 		// Memory + global (the bump-allocator heap pointer): emitted only when the module
@@ -1750,8 +1849,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// Export section: each directive exports its wrapper (or, for a
 			// pass-through, the internal function itself) under its :as alias
 			// (default: the function name). When memory is used, also export the linear
-			// memory and the bump allocator so a host can write :string inputs and read
-			// :string results.
+			// memory so a host can read a :string result; when the boundary asks the
+			// host to manage memory itself, the allocator and the arena API with it.
 			.writeExport(exports -> {
 				for (int j = 0; j < exportDecls.size(); j++) {
 					// A :string-returning export in component mode is exported as its
@@ -1762,12 +1861,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 							ordinal >= 0 ? shimBase + ordinal : mem.funcIndex(exportOrdinals[j]));
 				}
 				if (mem.used()) {
+					// The memory itself is exported for every memory-using module: a
+					// :string crossing in EITHER direction is read through it, and an
+					// import's :string argument points into it.
 					exports.addExport("memory", ExternalKind.MEMORY, 0);
+				}
+				if (mem.hostArena()) {
+					// The allocator, and the arena API over it: snapshot the bump-heap
+					// top before the host allocates its own input buffer, then restore it
+					// after the call so a resident instance stays flat regardless of how
+					// many times it is called. Emitted only where the boundary gives the
+					// host something to allocate or something to reclaim -- otherwise the
+					// wrappers' own auto-reset already keeps the heap flat and this is an
+					// API nothing can use (mem.hostArena()).
 					exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, mem.allocIndex());
-					// The host arena API: snapshot the bump-heap top before the host
-					// allocates its own input buffer, then restore it after the call so a
-					// resident instance stays flat regardless of how many times it is
-					// called.
 					exports.addExport("__ronto_alloc_mark", ExternalKind.FUNCTION, mem.markIndex());
 					exports.addExport("__ronto_alloc_reset", ExternalKind.FUNCTION, mem.resetIndex());
 				}
@@ -1807,6 +1914,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					code.addFunction(memcpyBody());
 					code.addFunction(streqBody());
 					code.addFunction(itoaBody(mem.allocIndex()));
+				}
+				if (mem.hostArena()) {
 					code.addFunction(markBody());
 					code.addFunction(resetBody());
 				}
@@ -1850,9 +1959,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// so nothing may validate or emit it; the injector runs BEFORE the tree shaker,
 		// which renumbers what survives.
 		List<am.ik.wasm.WasmImportInjector.HostImport> entries = new ArrayList<>();
-		int typeIndex = importTypeBase;
-		for (WasmImportCompiler.Decl decl : hostImports) {
-			entries.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), typeIndex++));
+		for (int i = 0; i < hostImports.size(); i++) {
+			WasmImportCompiler.Decl decl = hostImports.get(i);
+			entries.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypes[i]));
 		}
 		return am.ik.wasm.WasmImportInjector.inject(module, entries, WasmImportCompiler.PLACEHOLDER_FUNC_BASE);
 	}
@@ -2334,10 +2443,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// --- Function bodies ---------------------------------------------------------------
 
 	private byte[] compileDefunBody(Defun defun, String name, Types types, Map<String, Integer> index, Mem mem) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
-		WasmWriter w = new WasmWriter(bodyStream);
+		Body bodyStream = new Body();
 		Ty[] paramTypes = Objects.requireNonNull(types.params().get(name));
-		Fn fn = new Fn(w, types, index, name, new HashSet<>(defun.params()), mem);
+		Fn fn = new Fn(bodyStream, types, index, name, new HashSet<>(defun.params()), mem);
+		WasmWriter w = fn.writer;
 		for (int i = 0; i < defun.params().size(); i++) {
 			fn.bind(defun.params().get(i), i, paramTypes[i]);
 		}
@@ -2352,18 +2461,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	/**
 	 * Whether an export needs no wrapper at all: every parameter and the return value
 	 * cross the host boundary in the internal representation unchanged ({@code :long}
-	 * over an inferred i64, {@code :float} over an inferred f64) and the module has no
-	 * linear memory (a memory-using module's scalar-return wrapper must reset the bump
-	 * heap, and its {@code :string} boundaries marshal). Such an export names the
-	 * internal function directly instead of an identity wrapper that would only forward
-	 * its arguments.
+	 * over an inferred i64, {@code :float} over an inferred f64) and nothing in the
+	 * module can bump the heap during the call, so there is no allocation for a wrapper
+	 * to reset. (A {@code :string} boundary is both -- it marshals AND it allocates, so
+	 * it fails this on either count.) Such an export names the internal function directly
+	 * instead of an identity wrapper that would only forward its arguments.
 	 * @param decl the parsed export directive
 	 * @param types the inferred internal types
-	 * @param memUsed whether the module uses linear memory
+	 * @param allocates whether anything in the module can bump the heap during a call
 	 * @return true when the export can name the internal function directly
 	 */
-	private static boolean isPassThroughExport(WasmExportCompiler.Decl decl, Types types, boolean memUsed) {
-		if (memUsed) {
+	private static boolean isPassThroughExport(WasmExportCompiler.Decl decl, Types types, boolean allocates) {
+		if (allocates) {
 			return false;
 		}
 		Ty[] internalParams = Objects.requireNonNull(types.params().get(decl.name()));
@@ -2542,9 +2651,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// is returned -- no heap pointer escapes to the host. Snapshot the heap-pointer
 		// global (index 0) at wrapper entry and restore it at exit so a long-lived,
 		// repeatedly-called instance stops growing. Gated on the return type NOT being a
-		// memory designator (:string/:s-expr, whose result pointer must stay live) and on
-		// mem.used() (a pure-numeric export has no heap global at all).
-		boolean resetHeap = mem.used() && decl.returnType() != BoundaryType.STRING
+		// memory designator (:string/:s-expr, whose result pointer must stay live), on
+		// mem.used() (a pure-numeric export has no heap global at all) and on
+		// mem.allocates() -- a module that only reads its own literals has no call site
+		// that can move the pointer, and the bracket would restore what never changed.
+		boolean resetHeap = mem.used() && mem.allocates() && decl.returnType() != BoundaryType.STRING
 				&& decl.returnType() != BoundaryType.S_EXPR;
 		int mark = -1;
 		if (resetHeap) {
@@ -3074,7 +3185,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		LispVal then = args.get(2);
 		LispVal els = args.size() > 3 ? args.get(3) : LispNil.INSTANCE;
 		Ty result = staticType(then, fn).join(staticType(els, fn));
-		emitTruthy(compileExpr(test, fn), fn.writer); // -> i32 (1 if non-zero)
+		// A constant test decides the branch here rather than at run time. The
+		// macro expander's `cond` ends every chain in one (`(t ...)` becomes
+		// `(if t ... nil)`), so this is not a hand-written rarity.
+		if (test instanceof LispTrue) {
+			compileCoerced(then, fn, result);
+			return result;
+		}
+		if (test instanceof LispNil) {
+			compileCoerced(els, fn, result);
+			return result;
+		}
+		Ty testTy = compileExpr(test, fn);
+		if (!takeFlag(fn)) {
+			emitTruthy(testTy, fn.writer); // -> i32 (1 if non-zero)
+		}
 		fn.writer.write(Instruction.IF).write(result.valType());
 		// The branches may contain a `return`, whose br depth counts this `if`.
 		fn.ctrlDepth++;
@@ -3200,7 +3325,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.LOOP, 0x40);
 		fn.ctrlDepth += 2;
 		Ty testTy = compileExpr(args.get(1), fn);
-		emitFalsy(testTy, w); // -> i32 (1 if the test is zero/false)
+		if (takeFlag(fn)) {
+			w.write(Instruction.I32_EQZ); // the predicate's own flag, negated
+		}
+		else {
+			emitFalsy(testTy, w); // -> i32 (1 if the test is zero/false)
+		}
 		w.write(Instruction.BR_IF, 1);
 		for (int i = 2; i < args.size(); i++) {
 			compileExpr(args.get(i), fn);
@@ -5273,8 +5403,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		compileCoerced(args.get(1), fn, Ty.STRING);
 		compileCoerced(args.get(2), fn, Ty.STRING);
 		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.streqIndex());
-		fn.writer.write(Instruction.I64_EXTEND_U_I32);
-		return Ty.INT;
+		return emitPredicate(fn, Instruction.I64_EXTEND_U_I32);
 	}
 
 	// (subseq s start [end]): allocate a fresh [len][bytes] header holding the content
@@ -5696,8 +5825,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		compileCoerced(args.get(1), fn, operand);
 		compileCoerced(args.get(2), fn, operand);
 		fn.writer.write(operand == Ty.INT ? intOp : floatOp); // -> i32 (0/1)
-		fn.writer.write(Instruction.I64_EXTEND_S_I32); // booleans live in the INT domain
-		return Ty.INT;
+		// Booleans live in the INT domain, so the flag is widened -- unless the consumer
+		// is a branch, which takes it back off (emitPredicate).
+		return emitPredicate(fn, Instruction.I64_EXTEND_S_I32);
 	}
 
 	// (not x): logical negation -> (x == 0) as an i64 0/1.
@@ -5712,8 +5842,45 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			fn.writer.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_EQ);
 		}
-		fn.writer.write(Instruction.I64_EXTEND_S_I32);
+		return emitPredicate(fn, Instruction.I64_EXTEND_S_I32);
+	}
+
+	/**
+	 * Finish a predicate: the comparison left an i32 0/1 on the stack and the value
+	 * domain is i64, so widen it -- and record that the widening is the last byte of the
+	 * body, so a consumer that wanted the flag rather than the value can take it back off
+	 * ({@link #takeFlag}).
+	 * @param fn the function being compiled
+	 * @param widenOp the widening instruction (signed or unsigned; the flag is 0/1, so
+	 * the two agree -- each producer keeps the one it always emitted)
+	 * @return the INT type every rontolisp boolean has
+	 */
+	private static Ty emitPredicate(Fn fn, int widenOp) {
+		fn.writer.write(widenOp);
+		fn.predicateEnd = fn.body.size();
 		return Ty.INT;
+	}
+
+	/**
+	 * Take back the widening of the predicate that just finished, leaving its i32 flag on
+	 * the stack -- which is exactly what {@code if} and {@code br_if} consume. False when
+	 * the expression just compiled did not end in one, in which case the caller emits the
+	 * general truthiness test instead.
+	 *
+	 * <p>
+	 * The test is positional and therefore exact: {@code predicateEnd} is only ever set
+	 * to the body size immediately after a widening byte, so it can still equal that size
+	 * only if nothing has been written since.
+	 * @param fn the function being compiled
+	 * @return true when the flag is now on the stack in place of the i64 value
+	 */
+	private static boolean takeFlag(Fn fn) {
+		if (fn.predicateEnd != fn.body.size()) {
+			return false;
+		}
+		fn.body.dropLastByte();
+		fn.predicateEnd = -1;
+		return true;
 	}
 
 	// Converts the top-of-stack value into an i32 truthiness flag: true (1) iff it is not
@@ -6141,7 +6308,23 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// Per-function compilation state.
+	/**
+	 * A function body under construction. {@code dropLastByte} is what lets a predicate
+	 * hand its i32 flag straight to an {@code if} (see {@code emitPredicate}): the
+	 * widening to the i64 value domain is already written when the consumer turns out not
+	 * to want it.
+	 */
+	private static final class Body extends ByteArrayOutputStream {
+
+		void dropLastByte() {
+			this.count--;
+		}
+
+	}
+
 	private static final class Fn {
+
+		final Body body;
 
 		final WasmWriter writer;
 
@@ -6178,8 +6361,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 		int nextLocal;
 
-		Fn(WasmWriter writer, Types types, Map<String, Integer> index, String fnName, Set<String> paramNames, Mem mem) {
-			this.writer = writer;
+		// The body offset just past a predicate's widening byte (emitPredicate). When it
+		// still equals the body size, that byte is the last thing written and the i32
+		// flag under it is intact -- which is what takeFlag tests.
+		int predicateEnd = -1;
+
+		Fn(Body body, Types types, Map<String, Integer> index, String fnName, Set<String> paramNames, Mem mem) {
+			this.body = body;
+			this.writer = new WasmWriter(body);
 			this.types = types;
 			this.index = index;
 			this.fnName = fnName;

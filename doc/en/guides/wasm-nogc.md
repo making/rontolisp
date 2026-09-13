@@ -139,9 +139,11 @@ integer — enough for routing/parsing kernels, not just accumulation:
 (describe-int -42)  ; => "-42 has 3 chars"
 ```
 
-A module that uses strings gains a (growable) linear memory, and exports
-that `memory` plus a `__ronto_alloc(size)` bump allocator alongside your
-functions. A `:string` parameter arrives as a `(ptr, len)` pair the host
+A module that uses strings gains a (growable) linear memory and exports
+that `memory` alongside your functions. It exports a `__ronto_alloc(size)`
+bump allocator too whenever the declared boundary gives the *host*
+something to do with the heap — see [the arena
+API](#reclaiming-memory-the-arena-api). A `:string` parameter arrives as a `(ptr, len)` pair the host
 writes into memory, and a `:string` result is returned the same way — so a
 string-valued export needs a host that can read/write the exported memory
 (JavaScript, a small Node script, the browser playground) rather than just
@@ -245,6 +247,16 @@ mechanisms keep it flat:
 | --- | --- | --- |
 | `__ronto_alloc_mark` | `() -> i32` | snapshot the current bump-heap top |
 | `__ronto_alloc_reset` | `(i32 mark) -> ()` | restore the top to a saved mark |
+
+These two and `__ronto_alloc` itself are exported when — and only when —
+the declared boundary gives a host something to do with the heap: an
+export takes a `:string` (the host allocates the input buffer), an export
+returns a `:string` (the result is a live pointer only the host can pop),
+or an imported host function returns a `:string` (the host writes the
+result bytes into this memory). A module whose text only travels *outward*
+— string literals handed to host imports as `(ptr, len)` — exports none of
+the three and needs none of them: nothing outside allocates here, nothing
+inside moves the heap, and its export wrappers carry no reset either.
 
 Snapshot **before** allocating the input, restore **after** reading the
 result, and a resident instance stays perfectly flat no matter how many

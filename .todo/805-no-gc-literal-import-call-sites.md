@@ -79,12 +79,14 @@ literals?"), which belongs on `WasmImportCompiler.Decl`. The emission cannot be 
 
 ## Sequencing, and an honest note on its worth
 
-Land `804` (252 bytes, no semantics), then `800`, then this. Two interactions, both
+`804` landed first (2026-09-13), as planned; then `800`, then this. Two interactions, both
 measured:
 
-- After this item and `800`, `804` item 1's type deduplication falls from 68 bytes to 33 --
-  eight fewer functions means eight fewer duplicate type entries. Whichever lands second
-  collects less.
+- `804` item 1's type deduplication therefore collected its full 68 bytes (69 as emitted).
+  Had this item and `800` landed first it would have been 33 -- eight fewer functions means
+  eight fewer duplicate type entries. Whichever lands second collects less; the baseline
+  this item's 139 bytes were measured against is now the post-`804` module (1,382 -> 1,090
+  on the reactor), so re-measure before believing the figure below.
 - **117 of this item's 139 bytes are bytes an external optimizer already finds.** `-Oz`
   takes the baseline from 1,383 to 1,118; between two `-Oz`ed modules this item is worth
   22. rontolisp ships no optimizer, so all 139 are real shipped bytes -- but by the rule in
