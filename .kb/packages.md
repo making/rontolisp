@@ -24,9 +24,9 @@ strings, so no per-backend codegen exists.
 ## External vs internal (`:` / `::`)
 - `LispPackage` carries an `externals` set (3-arg constructor = everything exported);
   `PackageRegistry.QualifiedName` carries an `internal` flag parsed from the double colon.
-- `cl` exports `CL_EXTERNALS` (= `CL_SYMBOLS` minus the `%`-prefixed `CL_INTERNALS`; car/cdr
-  compositions via `isCarCdrComposition`); `cl-user` exports nothing; `rontolisp`/`java` export
-  everything registered.
+- `cl` exports `CL_EXTERNALS` (= `CL_SYMBOLS` minus the `%`-prefixed `CL_INTERNALS`, plus
+  `CL_EXPORTED_ONLY`; car/cdr compositions via `isCarCdrComposition`); `cl-user` exports nothing;
+  `rontolisp`/`java` export everything registered.
 - `pkg::anything` interns permissively; an unregistered member is internal. The JVM method-name
   mangler maps each `:` to `$colon`.
 - `PackageRegistry.CL_SYMBOLS` = union of `CL_SPECIAL_FORMS`/`CL_MACROS`/`CL_FUNCTIONS`/
@@ -34,6 +34,47 @@ strings, so no per-backend codegen exists.
   `CL_CONDITION_TYPES` is `Set.copyOf(ClosRegistry.CONDITION_CLASS_NAMES)`, so a condition class is
   a `cl` symbol by construction -- required, because a RUNTIME `(typep c ty)` matches the
   registry's PLAIN class name by spelling. Condition names are external and non-callable.
+
+## The `cl` external list is the STANDARD's list, not the implemented one
+CLHS 11.1.2.1 fixes the `common-lisp` package's external set at the **978 standard names**,
+independently of whether an implementation has an operator behind one: the name being there is a
+`find-symbol` / `do-external-symbols` answer, not a promise that calling it works. The 187 names
+rontolisp does not implement are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
+because there is no implementation to name, and a name that gains one moves OUT of the set into
+its category.
+
+**The split is the whole design: exported is not the same question as owned.**
+`CL_EXPORTED_ONLY` joins the package's `externals` (and its `symbols`, so externals stay a
+subset) but NOT the static `CL_SYMBOLS` that `isClSymbol` reads -- and every RESOLUTION decision
+reads `isClSymbol`. So nothing about resolution moved: a bare `bit-and` still interns in the
+current package, `(defun bit-and ...)` still does not meet the `cannot redefine the standard
+operator` guard (`.kb/lisp2-namespaces.md`), `LibraryDefunPruner`'s reference scan still does not
+see the name as resolvable (`.kb/library-defun-pruning.md`), and `(bit-and a b)` still signals
+`undefined-function`. The wider question -- "does `cl` ANSWER for this name?" -- is
+`isClMemberName`, and only the symbol API asks it: `PackageResolver.memberSpelling` /
+`memberStatus` and the compile paths' literal `find-symbol` fold
+(`LispMacroExpander.expandFindSymbolInPackage` / `clPackageStatus`), which must move together or
+the interpreter and the compiled backends disagree. `fboundp` / `macro-function` /
+`special-operator-p` are untouched and answer nil, which is the point.
+
+`cl:bit-and` now resolves (to the bare name) where it used to be a `not external` package error --
+the symbol exists, so a single colon reaches it.
+
+Measured on the ANSI suite (interpreter, 2026-09-13, suite `ca06bd9`): **+187 tests, 0 regressed**
+(13,371 -> 13,558 of 19,482; `symbols` 214 -> 27 failures), the whole of
+`symbols/cl-symbols.lsp`'s `test-if-not-in-cl-package` row and nothing else. The tests that ask
+the same question through `(find-symbol x "CL")` -- `functionp.4`, `function.4`,
+`cl-function-symbols.1`, `cl-macro-symbols.1`, the `pprint-dispatch` family -- did not move:
+each is blocked by a missing OPERATOR, which is the distinction this change draws.
+
+**Two names still make `no-extra-symbols-exported-from-common-lisp` fail**, and neither is a name
+list bug the above can fix: `while` is rontolisp's own loop primitive and lives in `cl` because
+that is where the built-in operators live (moving it is a language change, not a registry one),
+and `boole-3` .. `boole-16` are invented spellings of the standard's `boole-and` / `boole-ior` /
+... constants (`ClConstants`, ci-spec `standard-limits-and-boole-constants`). `PackageRegistryTest`
+pins the external set against the standard's own checked-in list
+(`src/test/resources/cl-standard-symbol-names.txt`) in BOTH directions, listing those 15 by name,
+so neither a missing standard name nor a new extension can arrive unnoticed.
 
 ## `defpackage`
 A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpackage` registers a

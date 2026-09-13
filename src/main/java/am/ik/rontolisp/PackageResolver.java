@@ -2197,7 +2197,9 @@ public final class PackageResolver {
 			return ":" + member;
 		}
 		if (LispNames.CL_PKG.equals(pkg)) {
-			return PackageRegistry.isClSymbol(member) ? member : null;
+			// The wider question: cl EXPORTS every standard name, implemented or not
+			// (CLHS 11.1.2.1), and find-symbol is where that shows.
+			return PackageRegistry.isClMemberName(member) ? member : null;
 		}
 		if (LispNames.CL_USER_PKG.equals(pkg)) {
 			return member;
@@ -2243,7 +2245,7 @@ public final class PackageResolver {
 			return LispNames.STATUS_EXTERNAL;
 		}
 		if (LispNames.CL_PKG.equals(pkg)) {
-			return PackageRegistry.isClSymbol(member) ? clSymbolStatus(member, false) : null;
+			return PackageRegistry.isClMemberName(member) ? clSymbolStatus(member, false) : null;
 		}
 		if (LispNames.CL_USER_PKG.equals(pkg)) {
 			// cl-user provides every name (there is no intern table); a standard symbol

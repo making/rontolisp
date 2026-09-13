@@ -11748,8 +11748,9 @@ public final class LispMacroExpander {
 			// literal
 			// name folds to the interpreter's answer here instead of taking the
 			// build-a-spelling deviation: nil for a name cl does not own, which is what
-			// keeps this value and %find-symbol-status nil together.
-			return PackageRegistry.isClSymbol(str.value()) ? quoteOf(str.value()) : LispNil.INSTANCE;
+			// keeps this value and %find-symbol-status nil together. "Owns" is the wide
+			// reading: cl exports every standard name, implemented or not.
+			return PackageRegistry.isClMemberName(str.value()) ? quoteOf(str.value()) : LispNil.INSTANCE;
 		}
 		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) || LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
@@ -11774,7 +11775,7 @@ public final class LispMacroExpander {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name, new LispSymbol(":KEYWORD")));
 		}
 		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) && name instanceof LispString str) {
-			return PackageRegistry.isClSymbol(str.value()) ? quoteOf(str.value()) : LispNil.INSTANCE;
+			return PackageRegistry.isClMemberName(str.value()) ? quoteOf(str.value()) : LispNil.INSTANCE;
 		}
 		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) || LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
@@ -11908,7 +11909,7 @@ public final class LispMacroExpander {
 
 	/** The status of a literal name in the {@code cl} package: nil unless cl owns it. */
 	private static LispVal clPackageStatus(String name) {
-		if (!PackageRegistry.isClSymbol(name)) {
+		if (!PackageRegistry.isClMemberName(name)) {
 			return LispNil.INSTANCE;
 		}
 		return new LispSymbol(name.startsWith("%") ? LispNames.STATUS_INTERNAL : LispNames.STATUS_EXTERNAL);

@@ -329,12 +329,66 @@ public final class PackageRegistry {
 			CL_INTERNALS, CL_TYPES, CL_CONDITION_TYPES);
 
 	/**
+	 * The standard names the {@code cl} package EXPORTS without implementing: CLHS
+	 * 11.1.2.1 fixes the package's external list at the 978 standard names, and a name is
+	 * exported whether or not an implementation has an operator behind it -- the name
+	 * being there is a {@code find-symbol} / {@code do-external-symbols} answer, not a
+	 * promise that calling it works. So these names are external and NOTHING else: they
+	 * are deliberately absent from {@link #CL_SYMBOLS}, the set {@link #isClSymbol} reads
+	 * and every resolution decision is made from, so a bare {@code bit-and} still interns
+	 * in the current package, a program may still {@code defun} one without meeting the
+	 * "cannot redefine the standard operator" guard, and {@code (bit-and a b)} still
+	 * signals an undefined function. {@link #isClMemberName} is the wider question --
+	 * "does {@code cl} answer for this name?" -- and only the symbol API asks it.
+	 * <p>
+	 * Plain strings rather than {@link LispNames} constants, exactly because there is no
+	 * implementation to name: a name that gains one moves OUT of this set and into its
+	 * category above. {@code PackageRegistryTest} pins the whole external set against the
+	 * standard's own list, so neither direction can drift.
+	 */
+	private static final Set<String> CL_EXPORTED_ONLY = Set.of("&ALLOW-OTHER-KEYS", "&AUX", "&BODY", "&ENVIRONMENT",
+			"&KEY", "&OPTIONAL", "&REST", "&WHOLE", "**", "***", "*BREAK-ON-SIGNALS*", "*DEBUGGER-HOOK*",
+			"*MACROEXPAND-HOOK*", "*READ-BASE*", "*READ-SUPPRESS*", "++", "+++", "//", "///", "ADD-METHOD",
+			"ARITHMETIC-ERROR-OPERANDS", "ARITHMETIC-ERROR-OPERATION", "ARRAY-IN-BOUNDS-P", "BIT-AND", "BIT-ANDC1",
+			"BIT-ANDC2", "BIT-EQV", "BIT-IOR", "BIT-NAND", "BIT-NOR", "BIT-NOT", "BIT-ORC1", "BIT-ORC2", "BIT-VECTOR-P",
+			"BIT-XOR", "BOOLE", "BOOLE-AND", "BOOLE-ANDC1", "BOOLE-ANDC2", "BOOLE-C1", "BOOLE-C2", "BOOLE-CLR",
+			"BOOLE-EQV", "BOOLE-IOR", "BOOLE-NAND", "BOOLE-NOR", "BOOLE-ORC1", "BOOLE-ORC2", "BOOLE-SET", "BOOLE-XOR",
+			"BREAK", "BROADCAST-STREAM", "BROADCAST-STREAM-STREAMS", "CALL-METHOD", "CALL-NEXT-METHOD", "CHAR-INT",
+			"CLEAR-INPUT", "COMPILATION-SPEED", "COMPILED-FUNCTION", "COMPILER-MACRO", "COMPILER-MACRO-FUNCTION",
+			"COMPUTE-APPLICABLE-METHODS", "CONCATENATED-STREAM", "CONCATENATED-STREAM-STREAMS", "COPY-STRUCTURE",
+			"DEBUG", "DECLARATION", "DEFINE-METHOD-COMBINATION", "DEPOSIT-FIELD", "DESCRIBE", "DESCRIBE-OBJECT",
+			"DISASSEMBLE", "DRIBBLE", "DYNAMIC-EXTENT", "ECHO-STREAM", "ECHO-STREAM-INPUT-STREAM",
+			"ECHO-STREAM-OUTPUT-STREAM", "ED", "ENSURE-GENERIC-FUNCTION", "EXTENDED-CHAR", "FILE-AUTHOR",
+			"FILE-ERROR-PATHNAME", "FILE-STRING-LENGTH", "FIND-METHOD", "FLOAT-DIGITS", "FLOAT-PRECISION",
+			"FLOAT-RADIX", "FLOAT-SIGN", "FLOATING-POINT-INEXACT", "FLOATING-POINT-INVALID-OPERATION",
+			"FLOATING-POINT-OVERFLOW", "FLOATING-POINT-UNDERFLOW", "FORMATTER", "FTYPE", "FUNCTION-KEYWORDS",
+			"GET-DECODED-TIME", "GET-DISPATCH-MACRO-CHARACTER", "GET-MACRO-CHARACTER", "HASH-TABLE", "IGNORABLE",
+			"IGNORE", "INLINE", "INSPECT", "INTEGER-DECODE-FLOAT", "INTERACTIVE-STREAM-P", "INVALID-METHOD-ERROR",
+			"INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LDB-TEST", "LOAD-LOGICAL-PATHNAME-TRANSLATIONS", "LOGCOUNT",
+			"LOGEQV", "LOGICAL-PATHNAME-TRANSLATIONS", "LOGNAND", "LOGNOR", "LOOP-FINISH", "MAKE-CONCATENATED-STREAM",
+			"MAKE-DISPATCH-MACRO-CHARACTER", "MAKE-ECHO-STREAM", "MAKE-INSTANCES-OBSOLETE", "MAKE-METHOD",
+			"MAKE-TWO-WAY-STREAM", "MAKUNBOUND", "METHOD", "METHOD-COMBINATION", "METHOD-COMBINATION-ERROR",
+			"METHOD-QUALIFIERS", "NAME-CHAR", "NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD",
+			"NOTINLINE", "OPTIMIZE", "PATHNAME-MATCH-P", "PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL",
+			"PPRINT-LINEAR", "PPRINT-POP", "PPRINT-TABULAR", "PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT",
+			"RANDOM-STATE", "RANDOM-STATE-P", "RATIONALIZE", "READ-DELIMITED-LIST", "READ-PRESERVING-WHITESPACE",
+			"READER-ERROR", "READTABLEP", "RESTART", "ROOM", "SAFETY", "SET", "SET-MACRO-CHARACTER",
+			"SET-SYNTAX-FROM-CHAR", "SHADOW", "SHADOWING-IMPORT", "SIMPLE-BASE-STRING", "SIMPLE-BIT-VECTOR-P",
+			"SIMPLE-VECTOR-P", "SLOT-MISSING", "SLOT-UNBOUND", "SPACE", "SPECIAL", "SPEED", "STANDARD",
+			"STANDARD-METHOD", "STEP", "STORAGE-CONDITION", "STREAM-ERROR-STREAM", "STREAM-EXTERNAL-FORMAT",
+			"STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "TWO-WAY-STREAM", "TWO-WAY-STREAM-INPUT-STREAM",
+			"TWO-WAY-STREAM-OUTPUT-STREAM", "UNINTERN", "UNTRACE", "UNUSE-PACKAGE",
+			"UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS", "UPGRADED-ARRAY-ELEMENT-TYPE",
+			"VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
+
+	/**
 	 * The exported {@code cl} symbols: everything but the {@code %}-prefixed internals
 	 * (car/cdr compositions are recognized separately by
-	 * {@link LispNames#isCarCdrComposition} and are also external).
+	 * {@link LispNames#isCarCdrComposition} and are also external), plus the standard
+	 * names {@link #CL_EXPORTED_ONLY} exports without implementing.
 	 */
 	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
-			CL_TYPES, CL_CONDITION_TYPES);
+			CL_TYPES, CL_CONDITION_TYPES, CL_EXPORTED_ONLY);
 
 	/**
 	 * The functions exported by the {@code linalg} package (numpy-style vector/matrix
@@ -689,7 +743,10 @@ public final class PackageRegistry {
 	 * Creates a registry seeded with the built-in packages.
 	 */
 	public PackageRegistry() {
-		define(new LispPackage(LispNames.CL_PKG, List.of(), CL_SYMBOLS, CL_EXTERNALS));
+		// The owned set is the implemented symbols PLUS the export-only standard names,
+		// so the package's externals stay a subset of its symbols; the resolution
+		// predicate isClSymbol still reads CL_SYMBOLS alone.
+		define(new LispPackage(LispNames.CL_PKG, List.of(), union(CL_SYMBOLS, CL_EXPORTED_ONLY), CL_EXTERNALS));
 		// cl-user exports nothing, like the Common Lisp COMMON-LISP-USER package: its
 		// symbols are reachable as cl-user::name, never cl-user:name.
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
@@ -1467,6 +1524,28 @@ public final class PackageRegistry {
 	 */
 	public static boolean isClSymbol(String name) {
 		return CL_SYMBOLS.contains(name) || LispNames.isCarCdrComposition(name);
+	}
+
+	/**
+	 * Returns whether the {@code cl} package ANSWERS for the given name -- the question
+	 * {@code find-symbol} / {@code intern} / {@code do-external-symbols} ask, which is
+	 * wider than {@link #isClSymbol}: it also admits the standard names the package
+	 * exports without implementing ({@link #CL_EXPORTED_ONLY}). Resolution never asks
+	 * this; a reference to such a name still interns in the current package and still
+	 * signals an undefined function when called.
+	 * @param name the symbol name
+	 * @return {@code true} if the {@code cl} package provides the name
+	 */
+	public static boolean isClMemberName(String name) {
+		return isClSymbol(name) || CL_EXPORTED_ONLY.contains(name);
+	}
+
+	/**
+	 * Returns the standard names the {@code cl} package exports without implementing.
+	 * @return the export-only standard names
+	 */
+	public static Set<String> clExportedOnlyNames() {
+		return CL_EXPORTED_ONLY;
 	}
 
 	/**

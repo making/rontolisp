@@ -15058,6 +15058,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void findSymbolAnswersForTheExportedOnlyStandardNames() throws Exception {
+		// The cl package exports every standard name (CLHS 11.1.2.1) whether or not an
+		// operator stands behind it; the same fold the JVM backend uses.
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"BIT-AND\" 'common-lisp)))"
+				+ "(print (multiple-value-list (find-symbol \"&AUX\" :cl)))"
+				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
+				+ "(print (fboundp 'bit-and))"))
+			.isEqualTo("(BIT-AND :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
+	}
+
+	@Test
 	void symbolPlistReadsTheWholePropertyList() throws Exception {
 		// The prelude splice mirrors the CLI pipeline (symbol-plist and get are prelude
 		// defuns, and (setf get) is the setf-function the place expansion needs).
