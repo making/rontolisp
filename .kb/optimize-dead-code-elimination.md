@@ -326,6 +326,16 @@ falls by the same fraction.
 - `local.tee N; drop` -> `local.set N` (1 B), including the `tee` the rule above has just made, so a
   statement-position assignment (`set N; get N; drop`) collapses back to `set N`.
 - a pure value then `drop` -> nothing (2-3 B): a constant, `ref.null`, `local.get`, `global.get`.
+- `if (result T) call F else ref.null end; ref.is_null` -> `i32.eqz` (8 B and a call) when the
+  caller names `F` as a pure non-null producer -- `WasmLispCompiler.peepholePureNonNullCalls()`,
+  which is `_t_sym` alone: it lazily builds the `t` symbol into its global and answers it, and
+  every other consumer of the symbol calls it for itself. The shape is a predicate's i32 boxed
+  into t/nil (`WasmEmitHelper.emitBoolFromI32`) and tested for nil by its consumer; the census
+  had read the `call` as an error signal ("an assertion in value position") -- it was the `t`
+  literal, 3,304 times on the Worker. The emitter side of the same shape is
+  `WasmConditionCompiler` (below); this rule is what catches the predicates it does not name.
+- `i32.eqz; i32.eqz` in front of an `if` or `br_if` -> nothing (2 B): the branch asks only
+  whether the operand is zero. Only there -- an `i32.and` would see the value.
 - `br 0; end; unreachable; end` -> the `unreachable` goes (1 B). **Two conditions, and the pass is
   unsound without either.** The `end` must close a LOOP whose last instruction is that `br 0`, so
   nothing falls out of it and the trap is dynamically dead -- over a plain `block` the same `br 0`
@@ -359,9 +369,38 @@ unless the artifact's own flags say otherwise), raw / gzip:
 | `hello` Worker (`--no-gc`) | 507 | 489 | | |
 
 Pins: `WasmPeepholeTest` (one hand-assembled body per shape, including the two the loop-tail rule
-must refuse), and `WasmTreeShakerCorpusTest`, which runs the pass by hand over the whole `ci-spec`
-corpus in the position the compile path runs it -- it must shrink the module, and what it leaves
-must validate and re-encode to itself.
+must refuse and the box the pass must keep when nobody vouches for the call), and
+`WasmTreeShakerCorpusTest`, which runs the pass by hand over the whole `ci-spec` corpus in the
+position the compile path runs it, with the same pure-call predicate -- it must shrink the module,
+and what it leaves must validate and re-encode to itself.
+
+### A test is compiled as a test, not as a value
+
+`WasmConditionCompiler.compile(test, ctx, negated)` is what `if`, `while` and a value-position
+`not`/`null` hand their test to: a raw i32, non-0 exactly when the test is true (false when
+`negated`, which is what an `if` -- whose wasm THEN arm is the Lisp else arm -- and a loop's exit
+`br_if` want). `not`/`null` flip `negated` and recurse; `consp`/`atom` are one `ref.test`;
+`eq`/`eql` the comparison's own i32; a numeric comparison goes to
+`WasmComparisonCompiler.tryCompileConditionI32` (the fused or `_rat_cmp_bits` i32, the hook that
+used to be the whole of this); `and`/`or` short-circuit through `if (result i32)` blocks over their
+operands compiled the same way, so a chain of predicates never materialises a box; `t`/`nil` are
+constants, and `WasmIfCompiler` selects the arm of a constant test at compile time (a `cond`'s
+`(t ...)` clause used to reach the backend as `(if t x nil)`, its `t` a `_t_sym` call tested and
+never false -- `LispMacroExpander.expandCondClauses` now folds it, and `expandAnd` produces
+`(if x (if y z nil) nil)` instead of `(cond ((not x) nil) ... (t z))`, for every backend).
+Anything else is compiled as a value and tested with one `ref.is_null`; the peephole above then
+takes the predicates this compiler does not name (`stringp`, `symbolp`, `%obj-is`, ...), whose
+box it turns back into the `i32.eqz` a chain operand wrote, and the double-negation rule folds
+the pair. Measured 2026-09-13 (after the `&key` helpers, `--optimize=size`, raw / gzip):
+hello-clack Worker 775,987 -> 734,519 (-5.3%) / 206,264 -> 200,909, `zlib` 85,687 -> 81,726
+(-4.6%), httpbin Worker 172,507 -> 161,833 (-6.2%), hello-tiny-routes 814,808 -> 771,400 -- of
+which the peephole rule's own share, over what the compiler leaves, is 9,096 B on the Worker
+and 1,012 on `zlib`; the boxed-and-tested census row is 2,911 -> 951 -> 0 on the Worker. The
+predicate is shifted by the host-import count like the case-fold owner claims
+(`peepholePureNonNullCalls(importShift)`): the first cut named the emitted index and missed
+every site of the httpbin Worker, whose two `env` imports sit in front. Pinned by
+`WasmLispCompilerIntegrationTest#compileAndRunTestsCompiledAsTests` (every shape on a program
+that runs, the same program on the JVM and the interpreter) and the corpus guard.
 
 **What did NOT pay, measured and not landed: answering a `call` at the call site.**
 `.todo/798` also asked for two rewrites in `WasmCallForwarding` for the bodies the type-test fold
@@ -594,11 +633,11 @@ census over the flat `wasm-tools print` of the Worker / `zlib`:
 | `car`/`cdr`: `local.get; local.set t; local.get t; ref.is_null; if ... end` (every site a fresh temp) | 8,141 | 344 | 17-21 B -> **landed**, `.kb/cons-access-runtime.md` |
 | `local.set N; local.get N` (a `tee`) | 9,700 | 869 | 2 B -> **landed**, "The adjacent-instruction peepholes" |
 | `local.get A; local.set B; local.get B` (a copy into a temp) | 4,181 | 342 | 4 B + a local |
-| `if (result eqref) call err else nil end; ref.is_null` (an assertion in value position) | 3,304 | 303 | ~8 B |
+| `if (result eqref) call err else nil end; ref.is_null` (a predicate boxed into t/nil and tested -- the `call` is `_t_sym`, not an error) | 3,304 | 303 | ~8 B -> **landed**, "A test is compiled as a test" |
 | a pure value then `drop` (`ref.null eq`, a constant, a `local.get`) | 1,416 | 267 | 2-3 B -> **landed** |
 | `local.tee N; drop` (a statement `setq`) | 1,197 | 127 | 1 B -> **landed** |
 | `br 0; end; unreachable; end` (a non-terminating loop's tail, written by the FOLD) | 1,488 | 185 | 1 B -> **landed** |
-| the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) | 701 | 22 | ~140 B |
+| the `&key` prologue's per-keyword `do` loop (`LambdaLists.keyCellScan`) -- 106 + 10 of the Worker's sites were the prologue, the rest other list loops | 701 | 22 | ~140 B -> **landed**, `.kb/lambda-lists.md` |
 | a boxed variable built empty then `struct.set` (`ref.null; struct.new; local.set`) | 204 | 45 | ~8 B |
 | a `local.*` immediate of 128 or more (a 2-byte index; `Ctx.allocTemp` never recycles) | 11,646 | 240 | 1 B |
 | `br_table` labels naming the default arm (a sparse arity ladder) | 6 | 3,785 | 1 B |

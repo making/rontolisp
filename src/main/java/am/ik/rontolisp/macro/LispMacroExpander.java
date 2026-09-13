@@ -197,6 +197,8 @@ public final class LispMacroExpander {
 	 * (cond (test) rest...)          -> (let ((__cond test)) (if __cond __cond (cond rest...)))
 	 * (cond (test body) rest...)     -> (if test body (cond rest...))
 	 * (cond (test b1 b2...) rest...) -> (if test (progn b1 b2...) (cond rest...))
+	 * (cond (t b1 b2...) rest...)    -> (progn b1 b2...)        ; rest... is unreachable
+	 * (cond (nil ...) rest...)       -> (cond rest...)
 	 * </pre>
 	 * @param cons the cond expression
 	 * @return the expanded expression
@@ -218,6 +220,15 @@ public final class LispMacroExpander {
 		List<LispVal> clauseParts = clause.toList();
 		LispVal test = clauseParts.get(0);
 		List<LispVal> body = clauseParts.subList(1, clauseParts.size());
+		if (test instanceof LispTrue) {
+			// A constant-true clause ends the chain: the later clauses can never be
+			// selected, and an (if t ...) would test a literal at run time.
+			return body.isEmpty() ? LispTrue.INSTANCE : body.size() == 1 ? body.get(0) : makeProgn(body);
+		}
+		if (test instanceof LispNil) {
+			// A constant-false clause is never selected.
+			return expandCondClauses(clauses.subList(1, clauses.size()));
+		}
 		LispVal elseExpr = expandCondClauses(clauses.subList(1, clauses.size()));
 		if (body.isEmpty()) {
 			// Bodyless clause: (cond (test) ...) -> (let ((__cond test)) (if __cond
@@ -417,13 +428,19 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (and ...) into cond expressions.
+	 * Expands (and ...) into nested if expressions.
 	 *
 	 * <pre>
 	 * (and)            -> t
 	 * (and x)          -> x
-	 * (and x y ... z)  -> (cond ((not x) nil) ((not y) nil) ... (t z))
+	 * (and x y ... z)  -> (if x (if y ... z nil) nil)
 	 * </pre>
+	 *
+	 * Each operand but the last is a TEST with the rest as its then-branch -- no
+	 * {@code cond}, no {@code not}: a backend compiles a test in condition position
+	 * directly (a predicate's own i32 on wasm), where the former
+	 * {@code (cond ((not x) nil) ... (t z))} boxed every {@code not} and ended in an
+	 * {@code (if t z nil)} whose test was materialised and tested.
 	 * @param cons the and expression
 	 * @return the expanded expression
 	 */
@@ -433,21 +450,11 @@ public final class LispMacroExpander {
 			// (and) -> t
 			return LispTrue.INSTANCE;
 		}
-		if (parts.size() == 2) {
-			// (and x) -> x
-			return parts.get(1);
+		LispVal expr = parts.get(parts.size() - 1);
+		for (int i = parts.size() - 2; i >= 1; i--) {
+			expr = makeIf(parts.get(i), expr, LispNil.INSTANCE);
 		}
-		// (and x y ... z) -> (cond ((not x) nil) ((not y) nil) ... (t z))
-		List<LispVal> args = parts.subList(1, parts.size());
-		// Build clauses list from right to left
-		LispVal lastClause = listToCons(List.of(LispTrue.INSTANCE, args.get(args.size() - 1)));
-		LispVal clauses = new LispCons(lastClause, LispNil.INSTANCE);
-		for (int i = args.size() - 2; i >= 0; i--) {
-			LispVal notClause = listToCons(List.of(makeNot(args.get(i)), LispNil.INSTANCE));
-			clauses = new LispCons(notClause, clauses);
-		}
-		LispCons condExpr = new LispCons(new LispSymbol(LispNames.COND), clauses);
-		return expandCond(condExpr);
+		return expr;
 	}
 
 	/**

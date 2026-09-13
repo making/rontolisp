@@ -29,13 +29,11 @@ final class WasmWhileCompiler {
 		// The test and body are compiled inside the block/loop pair; track the two extra
 		// levels so a return nested in the body computes the correct br depth.
 		ctx.wasmCtrlDepth += 2;
-		// Evaluate the test; exit the block (depth 1) when it is nil. A fusable binary
-		// comparison (under any number of `not`s) yields the EXIT condition as a raw
-		// i32, so the loop pays neither the t/nil boxing nor an inversion per iteration.
-		if (!WasmComparisonCompiler.tryCompileConditionI32(parts.get(1), ctx, true)) {
-			WasmExprCompiler.compileExpr(parts.get(1), ctx);
-			ctx.writer.write(Instruction.REF_IS_NULL);
-		}
+		// Evaluate the test; exit the block (depth 1) when it is nil. A predicate or a
+		// comparison (under any number of `not`s, through an and/or chain) yields the
+		// EXIT condition as a raw i32, so the loop pays neither the t/nil boxing nor an
+		// inversion per iteration.
+		WasmConditionCompiler.compile(parts.get(1), ctx, true);
 		ctx.writer.write(Instruction.BR_IF, 1);
 		// Body: statement position (values discarded; a packed integer-vector store
 		// skips its value-as-stored box, see compileForEffect).

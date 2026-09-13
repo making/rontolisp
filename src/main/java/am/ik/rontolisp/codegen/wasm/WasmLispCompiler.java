@@ -1384,6 +1384,34 @@ public final class WasmLispCompiler implements LispCompiler {
 	// same bytes as a per-site build, so eq/eql/print behavior is unchanged.
 	static final int FUNC_T_SYM = FUNC_IV_SET + 1;
 
+	/**
+	 * The calls {@code WasmPeephole} may drop together with a null test of their value:
+	 * {@code _t_sym} alone -- it lazily builds the {@code t} symbol into its global and
+	 * answers it, so it cannot trap, stores nothing another function reads other than
+	 * that memo (which every other consumer of the symbol calls for itself), and is never
+	 * null. Exposed so a test running the pass by hand runs the same pass.
+	 * @param importShift how many host imports {@code WasmImportInjector} put in front of
+	 * the fixed index space -- the pre-shake module names {@code _t_sym} that far past
+	 * {@link #FUNC_T_SYM}, the same way the case-fold owner claims are shifted
+	 * @return the predicate over pre-shake function indices
+	 */
+	public static java.util.function.IntPredicate peepholePureNonNullCalls(int importShift) {
+		return f -> f == FUNC_T_SYM + importShift;
+	}
+
+	/**
+	 * The host-import shift of a Preview 1 core module as {@code shakeCore} receives it,
+	 * read back off the module for a test that drives the shake passes by hand: every
+	 * import beyond the fixed WASI set is a host import, and {@code --no-wasi} keeps the
+	 * fixed set's index slots as defined stubs while importing none of them.
+	 * @param coreModule the core module with its host imports injected
+	 * @param noWasi whether it was compiled with {@code --no-wasi}
+	 * @return the number of host imports in front of the fixed index space
+	 */
+	public static int hostImportShift(byte[] coreModule, boolean noWasi) {
+		return am.ik.wasm.WasmSections.importedFunctionCount(coreModule) - (noWasi ? 0 : IMPORT_FUNC_COUNT);
+	}
+
 	// _probe_file ((ref null eq) path) -> (ref null eq): the path when it names an
 	// existing file, null otherwise. Deliberately NOT part of the _open block above:
 	// _open TRAPS on a non-zero path_open errno, which no handler-case can catch, so
@@ -7539,9 +7567,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Then the adjacent-instruction peepholes, over the bodies those two leave: the
 		// emitter's own store/load pairs and statement-position values, plus the
 		// `i32.const; drop` / `ref.null; drop` debris the fold makes of a folded
-		// argument. Before the move below, so a body it shrinks can still fit the
-		// move's budget.
-		coreModule = am.ik.wasm.WasmPeephole.rewrite(coreModule);
+		// argument, and a t/nil box (_t_sym is a pure non-null producer: the symbol it
+		// lazily builds is what every other consumer calls for itself) that its
+		// consumer only tests for nil. Before the move below, so a body it shrinks can
+		// still fit the move's budget.
+		coreModule = am.ik.wasm.WasmPeephole.rewrite(coreModule, peepholePureNonNullCalls(importShift));
 		// Then the single-call-site move, which needs both of those in front of it (the
 		// fold is what leaves a helper with one caller) and the shake behind it (it
 		// unreferences the callee rather than deleting it). The case-fold owners are

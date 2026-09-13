@@ -3,6 +3,8 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -21,15 +23,25 @@ final class WasmIfCompiler {
 			compileAsync(parts, ctx);
 			return;
 		}
-		// A fusable binary comparison keeps its truth value as a raw i32 (no t/nil
-		// boxing); the wasm-if arms stay THEN-on-nil either way.
-		if (WasmComparisonCompiler.tryCompileConditionI32(parts.get(1), ctx)) {
-			ctx.writer.write(Instruction.I32_EQZ);
+		LispVal test = parts.get(1);
+		if (test instanceof LispTrue || test instanceof LispNil) {
+			// A constant test selects its arm at compile time: (cond ... (t x)) and the
+			// (and ...) chain end both spell one, and the dead arm would otherwise be
+			// emitted behind a _t_sym call that is tested and never false.
+			LispVal live = test instanceof LispTrue ? parts.get(2) : parts.size() > 3 ? parts.get(3) : null;
+			if (live == null) {
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+			}
+			else {
+				WasmExprCompiler.compileExpr(live, ctx);
+			}
+			return;
 		}
-		else {
-			WasmExprCompiler.compileExpr(parts.get(1), ctx);
-			ctx.writer.write(Instruction.REF_IS_NULL);
-		}
+		// The test as a raw i32 (a predicate's own ref.test / ref.eq, a comparison's
+		// mask bit, an and/or chain of those; ref.is_null over anything else), non-0
+		// when it is FALSE: the wasm-if arms stay THEN-on-nil.
+		WasmConditionCompiler.compile(test, ctx, true);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		// The branches are compiled inside the if structure; track the depth so a return

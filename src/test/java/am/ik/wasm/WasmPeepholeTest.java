@@ -18,11 +18,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class WasmPeepholeTest {
 
-	// Type 0: (i32) -> i32; type 1: () -> (); type 2: () -> i32.
+	// Type 0: (i32) -> i32; type 1: () -> (); type 2: () -> i32; type 3: () -> eqref.
 	private static final Consumer<TypeDef> TYPES = types -> types
 		.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I32 })
 		.addFunc(new Type[] {}, new Type[] {})
-		.addFunc(new Type[] {}, new Type[] { Type.I32 });
+		.addFunc(new Type[] {}, new Type[] { Type.I32 })
+		.addFunc(new Type[] {}, new Type[] { Type.EQ });
 
 	private static byte[] module(int[] funcTypes, List<byte[]> bodies) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -81,6 +82,14 @@ class WasmPeepholeTest {
 				case Instruction.TEE_LOCAL -> "local.tee " + in.a;
 				case Instruction.I32_CONST -> "i32.const";
 				case Instruction.I32_ADD -> "i32.add";
+				case Instruction.I32_AND -> "i32.and";
+				case Instruction.I32_EQZ -> "i32.eqz";
+				case Instruction.IF -> "if";
+				case Instruction.ELSE -> "else";
+				case Instruction.BR_IF -> "br_if " + in.a;
+				case Instruction.CALL -> "call " + in.a;
+				case Instruction.REF_NULL -> "ref.null";
+				case Instruction.REF_IS_NULL -> "ref.is_null";
 				default -> String.format("0x%02X", in.op);
 			});
 		}
@@ -168,6 +177,93 @@ class WasmPeepholeTest {
 		// The `local.get 1; drop` inside the block still goes: that pair IS adjacent.
 		assertThat(code(WasmPeephole.rewrite(module), 0)).containsExactly("local.get 0", "local.set 1", "block", "end",
 				"end");
+	}
+
+	// `if (result eqref) call tSym else ref.null eq end`: an i32 boxed into a language's
+	// true object (tSym, a pure non-null producer) or its nil.
+	private static void boxedTruth(WasmWriter w, int tSym) {
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(tSym);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.END);
+	}
+
+	@Test
+	void foldsABoxedTruthThatIsOnlyTestedForNullIntoTheTestOfItsCondition() {
+		// The box is null exactly when the condition was 0, so `ref.is_null` of the box
+		// is `i32.eqz` of the condition -- but only when the caller vouches for the
+		// call: without that, the call may be what the program is there for.
+		byte[] tested = body(0, w -> {
+			local(w, Instruction.GET_LOCAL, 0);
+			boxedTruth(w, 1);
+			w.write(Instruction.REF_IS_NULL);
+		});
+		byte[] tSym = body(0, w -> {
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		});
+		byte[] module = module(new int[] { 0, 3 }, List.of(tested, tSym));
+
+		assertThat(code(WasmPeephole.rewrite(module, f -> f == 1), 0)).containsExactly("local.get 0", "i32.eqz", "end");
+		assertThat(WasmPeephole.rewrite(module)).isSameAs(module);
+	}
+
+	@Test
+	void deletesADoubleNegationOnlyABranchConsumes() {
+		// An `if`/`br_if` asks whether the operand is zero, which two negations leave
+		// as it was; an `i32.and` would see the value itself, so that pair stays. The
+		// third body is the chain a re-tested box leaves in front of its consumer's own
+		// negation: the first rule makes the pair, this one takes it, in one pass.
+		byte[] branched = body(0, w -> {
+			local(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.END);
+		});
+		byte[] valued = body(0, w -> {
+			local(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_AND);
+		});
+		byte[] chained = body(0, w -> {
+			w.write(Instruction.BLOCK);
+			w.write(0x40);
+			local(w, Instruction.GET_LOCAL, 0);
+			boxedTruth(w, 3);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.END);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+		});
+		byte[] tSym = body(0, w -> {
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		});
+		byte[] rewritten = WasmPeephole
+			.rewrite(module(new int[] { 0, 0, 0, 3 }, List.of(branched, valued, chained, tSym)), f -> f == 3);
+
+		assertThat(code(rewritten, 0)).containsExactly("local.get 0", "if", "i32.const", "else", "i32.const", "end",
+				"end");
+		assertThat(code(rewritten, 1)).containsExactly("local.get 0", "i32.eqz", "i32.eqz", "i32.const", "i32.and",
+				"end");
+		assertThat(code(rewritten, 2)).containsExactly("block", "local.get 0", "br_if 0", "end", "i32.const", "end");
 	}
 
 	@Test

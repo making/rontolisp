@@ -15463,6 +15463,47 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTestsCompiledAsTests() throws Exception {
+		// The shared expander's and/cond shapes (an and is nested ifs, a cond's constant
+		// clause is folded) on the JVM: the same program and answers as
+		// WasmLispCompilerIntegrationTest#compileAndRunTestsCompiledAsTests.
+		assertThat(compileAndRun(
+				"""
+						(defun p (x) (print x))
+						(p (list (and) (and 1) (and 1 2) (and nil 2) (and 1 nil 3) (and 1 2 3)))
+						(p (list (or) (or 1) (or nil 2) (or nil nil) (or nil 1 (error "no"))))
+						(p (list (cond) (cond (t)) (cond (t 1 2)) (cond (nil 1) (t 2)) (cond ((consp 1) 1) (5) (t 9)) (cond ((atom 1) 'a 'b) (t 'c))))
+						(defun f (x) (if (and (consp x) (eq (car x) 'a)) :a (if (or (null x) (atom x)) :atom :other)))
+						(p (list (f '(a 1)) (f '(b 1)) (f nil) (f 3)))
+						(defun g (x) (list (not (consp x)) (null (cdr x)) (not (not x)) (not (and x (consp x))) (not (or (null x) (eql (car x) 1)))))
+						(p (list (g '(1)) (g '(2 3)) (g nil)))
+						(defun h (l) (let ((n 0)) (while (and l (< n 3)) (setq n (+ n 1)) (setq l (cdr l))) n))
+						(p (list (h '(1 2 3 4 5)) (h '(1)) (h nil)))
+						(defun k (l) (do ((c l (cdr c))) ((or (atom c) (eql (car c) 'stop)) (if (consp c) :stopped :end)) nil))
+						(p (list (k '(1 2 stop 3)) (k '(1 2)) (k 'x)))
+						(defun r (l) (block b (if (or (null l) (return-from b :early)) :nil :cons)))
+						(p (list (r nil) (r '(1))))
+						(defun s (x) (if (not (or (eq x 'a) (eq x 'b))) :other :ab))
+						(p (list (s 'a) (s 'b) (s 'c)))
+						(defun u (x) (case x ((a b) 1) (c 2) (otherwise 3)))
+						(p (list (u 'a) (u 'b) (u 'c) (u 'd)))
+						(defun v (x y) (if (and (numberp x) (numberp y) (< x y)) :lt :not))
+						(p (list (v 1 2) (v 2 1) (v 'a 1) (v 1 'b)))
+						(defun w (x) (if x (if t 1 2) (if nil 3 4)))
+						(p (list (w t) (w nil) (if t 5) (if nil 5)))
+						(p (list (and 1 (or nil 2) (and 3 4)) (or (and 1 nil) (and 2 3)) (not (and 1 (or nil nil)))))
+						(p (let ((i 0) (acc nil)) (while (or (< i 2) (and (< i 4) (evenp i))) (push i acc) (setq i (+ i 1))) acc))
+						(p (list (eql 1.5 1.5) (eq 'a 'a) (eql #\\a #\\a) (eq 1 1) (eql (expt 2 70) (expt 2 70)) (if (eql 3/4 3/4) 1 2) (if (eq 3.0 3.0) 1 2) (if (eql 3.0 3.0) 1 2)))
+						(defun tst (x) (if (and (stringp x) (string= x "hi")) :hi (if (or (eql x 1) (eql x 2)) :onetwo :no)))
+						(p (list (tst "hi") (tst "ho") (tst 1) (tst 2) (tst 3)))
+						"""))
+			.isEqualTo("(T 1 2 NIL NIL 3)\n(NIL 1 2 NIL 1)\n(NIL T 2 2 5 B)\n(:A :OTHER :ATOM :ATOM)\n"
+					+ "((NIL T T NIL NIL) (NIL NIL T NIL T) (T T NIL T NIL))\n(3 1 0)\n(:STOPPED :END :END)\n"
+					+ "(:NIL :EARLY)\n(:AB :AB :OTHER)\n(1 1 2 3)\n(:LT :NOT :NOT :NOT)\n(1 4 5 NIL)\n(4 3 T)\n"
+					+ "(2 1 0)\n(T T T T T 1 2 1)\n(:HI :NO :ONETWO :ONETWO :NO)");
+	}
+
+	@Test
 	void compileAndRunDefunKeywordArguments() throws Exception {
 		assertThat(compileAndRun("""
 				(defun f (a &key (k 1 kp) m) (list a k kp m))

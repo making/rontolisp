@@ -93,7 +93,8 @@ class WasmTreeShakerCorpusTest {
 			// They too run INSIDE the two optimized compiles above, so this is the only
 			// place their own shrink is visible -- and the only place every body they
 			// rewrite is put through the validator and the round-trip oracle.
-			byte[] peepholed = WasmPeephole.rewrite(prepared);
+			byte[] peepholed = WasmPeephole.rewrite(prepared,
+					WasmLispCompiler.peepholePureNonNullCalls(WasmLispCompiler.hostImportShift(plain, noWasi)));
 			assertThat(peepholed.length).as("the peepholes must shrink the module (noWasi=%s)", noWasi)
 				.isLessThan(prepared.length);
 			byte[] withoutMove = WasmTreeShaker.shake(peepholed);

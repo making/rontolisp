@@ -47,21 +47,19 @@ final class WasmComparisonCompiler {
 	 * Compiles a CONDITION-position test as a raw i32 truth value (0 = false, non-0 =
 	 * true) when it is a binary numeric comparison -- fused when the fusion compiler
 	 * takes it, through the generic {@code _rat_cmp_bits} mask test otherwise -- so the
-	 * consumer ({@code while}/{@code if}) tests the i32 directly, skipping the boxed
-	 * t/nil round trip (a {@code _t_sym} call per true evaluation). Returns {@code false}
-	 * having emitted nothing for every other shape (a literal-double or complex operand
-	 * keeps its own compilation).
-	 */
-	static boolean tryCompileConditionI32(LispVal test, WasmLispCompiler.Ctx ctx) {
-		return tryCompileConditionI32(test, ctx, false);
-	}
-
-	/**
-	 * The same, with {@code negated} asking for the COMPLEMENT: a non-0 i32 exactly when
-	 * the test is false, which is what a loop's exit {@code br_if} wants. A
-	 * {@code (not ...)} wrapper flips the request instead of emitting an {@code i32.eqz},
-	 * so {@code loop}'s numeric head -- whose test is spelled {@code (not (> i limit))}
+	 * consumer tests the i32 directly, skipping the boxed t/nil round trip (a
+	 * {@code _t_sym} call per true evaluation). Returns {@code false} having emitted
+	 * nothing for every other shape (a literal-double or complex operand keeps its own
+	 * compilation). The numeric arm of {@link WasmConditionCompiler}, which is what the
+	 * consumers ({@code if}/{@code while}/{@code not}) call: a {@code (not ...)} wrapper
+	 * flips {@code negated} there instead of emitting an {@code i32.eqz}, so
+	 * {@code loop}'s numeric head -- whose test is spelled {@code (not (> i limit))}
 	 * ({@code .kb/loop-iteration-heads.md}) -- exits on the bare compare.
+	 * @param test the test form
+	 * @param ctx the function context
+	 * @param negated whether to answer the COMPLEMENT: non-0 exactly when the test is
+	 * false, which is what a loop's exit {@code br_if} wants
+	 * @return whether the test was compiled
 	 */
 	static boolean tryCompileConditionI32(LispVal test, WasmLispCompiler.Ctx ctx, boolean negated) {
 		if (!(test instanceof LispCons cons) || !cons.isProperList()
@@ -69,13 +67,6 @@ final class WasmComparisonCompiler {
 			return false;
 		}
 		List<LispVal> args = cons.toList();
-		if (args.size() == 2 && (am.ik.rontolisp.LispNames.NOT.equals(head.name())
-				|| am.ik.rontolisp.LispNames.NULL.equals(head.name()))) {
-			// `not` and `null` are the same function and are dispatched by name here
-			// exactly as WasmExprCompiler dispatches them, so no user definition can be
-			// meant instead.
-			return tryCompileConditionI32(args.get(1), ctx, !negated);
-		}
 		if (args.size() != 3) {
 			return false;
 		}

@@ -62,6 +62,18 @@ class LispEvaluatorTest {
 	// -- the same one the quote compilers dump an instance as. See
 	// .kb/make-load-form.md.
 	@Test
+	void aConstantCondClauseFoldsAndAnAndIsNestedIfs() {
+		// The shared expander: a (t ...) clause ends the chain (its later clauses are
+		// unreachable), a (nil ...) clause is skipped, (cond (t)) answers the test
+		// itself, and an and answers its last operand or the first nil one -- the same
+		// program the two compiler tests run.
+		assertThat(evalMulti(
+				"(list (cond (t)) (cond (t 1 2)) (cond (nil 1) (t 2)) (cond ((consp 1) 1) (5) (t 9)) (and) (and 1)"
+						+ " (and 1 nil 3) (and 1 2 3) (or nil 1 (error \"no\")))")
+			.print()).isEqualTo("(T 2 2 5 T 1 NIL 3 1)");
+	}
+
+	@Test
 	void makeLoadFormSavingSlotsAnswersTheInstanceCreationForm() {
 		assertThat(evalMulti("""
 				(defstruct pt x y)
