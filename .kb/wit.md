@@ -269,7 +269,27 @@ shipping nothing: *rontolisp's core knows the provider MECHANISM; it does not kn
 ### Name mapping and the two type tiers
 An interface func `create-shader` binds `create-shader`; `resource bucket`'s method `get` binds
 `bucket-get` with the handle FIRST, its `constructor` binds `bucket-new`, a `static func f` binds
-`bucket-f`, its RELEASE binds `bucket-drop`. WIT parameter names become the lambda list
+`bucket-f`, its RELEASE binds `bucket-drop`.
+
+- **WITH `:package` the label is kept verbatim and qualified** (`kv:|bucket-get|`): a `kv:bucket-get`
+  call site meets it through the package's export table, which matches case-insensitively.
+  **WITHOUT `:package` the binding is named the READER's spelling of the label** -- upcased,
+  `add-ints` -> `ADD-INTS` (and the internal `%member` / `%member-start` names with it). There is no
+  export table in between there, so the definition and the call site have to produce the same string
+  by themselves, and a call site goes through the upcasing reader. Binding the label verbatim bound a
+  name NOTHING could reach: the guide's own package-less example failed on every backend at once
+  (undefined function on the interpreter, a call-time error stub on wasm-GC, `unsupported operation`
+  under `--no-gc`), and it silently dropped gl.lisp's whole error path -- `ui.fail` plus the two
+  info-log imports feeding it -- out of all eight checked-in browser demos, which is what measuring
+  this cost: the fix makes each demo ~290 bytes bigger and its shader failures visible again. Pins:
+  `WitImportDirectiveTest.{bindsTheNamesInTheCurrentPackageWithoutThePackageOption,aPackageLessBindingIsNamedWhatACallSiteReadsTo}`,
+  `WitImportInlinerTest.aPackageLessImportIsTheHandWrittenImportBlockToo`,
+  `LispEvaluatorTest.aPackageLessWitImportBindsNamesTheProgramCanCall`,
+  `NoGcWasmImportE2eTest.aPackageLessWitImportIsCallableFromTheProgramThatDeclaredIt`.
+  The WIT member STRING a provider is dispatched with, the Preview 1 import field and the component
+  import name are all unaffected -- they are the WIT's names, not the reader's.
+  `PackageResolver`'s lower-kebab retry stays as a safety net for hand-written lower-case code; it is
+  no longer what makes a `wit-import` binding reachable. WIT parameter names become the lambda list
 **verbatim**, a resource method gaining a leading `self` (a signature already declaring `self`,
 or a member name bound twice, is a clear error naming the line); a constructor's result is its
 resource (`:int`). The Preview 1 FIELD is `:field-style` applied to the label, **`:camel` by
@@ -290,8 +310,11 @@ default** (`.kb/wasm-import.md`).
 
 ### The gl.lisp migration
 `examples/browser/webgl-common/gl.wit` is checked in; gl.lisp binds `local:webgl/gl` and
-`local:webgl/ui` with two directives, neither naming `:package`. **All six demos' modules are
-byte-identical to their pre-migration builds.**
+`local:webgl/ui` with two directives, neither naming `:package`. The demos' modules were
+byte-identical to their pre-migration builds -- **and that identity was hiding the package-less
+naming bug above**: `gl::fail`, unexported, never met its call site, so the shaker took the error
+path and both info-log imports with it. Since the fix each demo imports `ui.fail` again (2026-09-13;
+the checked-in `.wasm` artifacts were rebuilt with it).
 
 - Four members were a RENAME: a WIT label is ONE name that becomes both the Lisp name and the
   camelCased host field, and **the WIT names win — `wit-import` does NOT grow a per-function

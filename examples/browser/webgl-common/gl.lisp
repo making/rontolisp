@@ -26,11 +26,13 @@
 ;;;; those are page-specific by design and deliberately stay off the WIT.
 ;;;;
 ;;;; The directives bind into the CURRENT package rather than naming one, so the
-;;;; bindings land in `gl` beside the constants and helpers below: under
-;;;; (in-package gl) each WIT label canonicalizes to gl:label (or gl::fail for
-;;;; the unexported fail helper), which is what call sites resolve to. The
-;;;; defpackage stays hand-written for the same reason -- it has to export the
-;;;; constants and helpers too, which no directive knows about.
+;;;; bindings land in `gl` beside the constants and helpers below: a package-less
+;;;; binding is named the reader's spelling of its WIT label, so under
+;;;; (in-package gl) each label canonicalizes to gl:LABEL (or gl::FAIL for the
+;;;; unexported fail helper) -- exactly what a call site here, or (gl:clear ...)
+;;;; in a demo, resolves to. The defpackage stays hand-written for another
+;;;; reason -- it has to export the constants and helpers too, which no directive
+;;;; knows about.
 
 (provide :gl)
 

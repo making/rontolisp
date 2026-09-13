@@ -309,6 +309,13 @@ interface math {
 (rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
 ```
 
+The example names no `:package`, so the bindings land in the **current**
+package under the name the reader gives each WIT label: `add-ints` binds
+`ADD-INTS`, which is exactly what `(add-ints n 10)` reads to. `:package` is
+still the better default for anything larger — it keeps a label that collides
+with a `cl` name (`open`, `close`, `delete`) out of the way, and it says at
+every call site where the function came from.
+
 On Preview 1 WASM each WIT function becomes a
 [`rontolisp:wasm-import`](wasm-host-boundary.md#importing-host-functions): the
 import **module** is the interface's bare name (`math`, overridable with

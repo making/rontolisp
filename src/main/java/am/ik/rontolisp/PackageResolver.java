@@ -1697,19 +1697,23 @@ public final class PackageResolver {
 				}
 			}
 		}
-		// The mirror image: `name` itself already arrives lower-kebab (a wit-import
-		// directive's OWN quoted binding name is built directly as `new
-		// LispSymbol(member)` from the WIT label, bypassing the reader entirely --
-		// unlike a call site's `gl:create-shader`, which the reader upcases before this
-		// method ever sees it). When the surrounding package was declared with an
-		// ordinary hand-written `defpackage` (gl.lisp exports CREATE-SHADER precisely
-		// because ITS `:export` clause IS read through the normal upcasing reader), the
-		// lower-kebab retry above never fires -- lower.equals(name) is already true --
-		// so without this the binding would resolve to the internal, lowercase
+		// The mirror image: `name` itself already arrives lower-kebab, from AST someone
+		// injected rather than from source text, while the surrounding package was
+		// declared with an ordinary hand-written `defpackage` whose `:export` clause IS
+		// read through the normal upcasing reader (gl.lisp exports CREATE-SHADER). The
+		// lower-kebab retry above never fires there -- lower.equals(name) is already
+		// true -- so without this the definition resolves to the internal, lowercase
 		// GL::create-shader while every call site resolves to the external
 		// GL:CREATE-SHADER: the function compiles under one name and is called under
 		// another (undefined-function, silently downgraded to a WASM call-time-error
 		// stub that traps at runtime instead of failing to compile).
+		//
+		// It is a safety net, NOT the wit-import path: a package-less binding is named
+		// the READER's spelling of its WIT label by WitImportDirective itself
+		// (.kb/wit.md). Reconciling the two spellings here can only work for a name the
+		// package DECLARES, and gl.lisp's unexported `fail` declared none -- it matched
+		// neither retry, and the whole error path behind it was tree-shaken out of every
+		// browser demo without a word.
 		String upper = name.toUpperCase(java.util.Locale.ROOT);
 		if (!upper.equals(name)) {
 			if (current.owns(upper) || current.exports(upper)) {

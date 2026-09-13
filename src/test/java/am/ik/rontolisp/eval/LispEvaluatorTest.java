@@ -18580,6 +18580,34 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aPackageLessWitImportBindsNamesTheProgramCanCall(@TempDir Path tempDir) throws Exception {
+		// The guide's own first wit-import example (doc/*/guides/wit-contracts.md): no
+		// :package, so the interface's functions land in the CURRENT package and the
+		// program calls them unqualified. Every one of them has to answer to the name a
+		// call site READS to -- ADD-INTS -- because without a package there is no export
+		// table in between to reconcile two spellings. Binding the WIT label verbatim
+		// instead bound |add-ints|, which nothing could reach: the documented example
+		// failed here with "The function ADD-INTS is undefined" and on every other
+		// backend too.
+		Path path = tempDir.resolve("host.wit");
+		Files.writeString(path, """
+				package example:host@0.1.0;
+
+				interface math {
+				  add-ints: func(a: s32, b: s32) -> s32;
+				}
+				""");
+		String program = "(rontolisp:wit-import \"" + path.toString().replace("\\", "\\\\")
+				+ "\" :interface \"example:host/math@0.1.0\")\n";
+		assertThat(evalMulti(program + """
+				(rontolisp:wit-provide "example:host/math@0.1.0"
+				                       (lambda (member a b) member (+ a b)))
+				(defun add10 (n) (add-ints n 10))
+				(list (add10 32) (funcall #'add-ints 1 2))
+				""").print()).isEqualTo("(42 3)");
+	}
+
+	@Test
 	void evaluatesTagbodyGoAndProg() {
 		assertThat(evalMulti("""
 				(prog ((n 5) (acc 1))

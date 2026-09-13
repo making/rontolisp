@@ -184,6 +184,8 @@ interface math {
 (rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
 ```
 
+この例は `:package` を指定していないため、束縛は**現在の**パッケージに入り、名前は各 WIT ラベルをリーダーが読んだ綴りになります: `add-ints` は `ADD-INTS` を束縛し、これは `(add-ints n 10)` が読まれる先とまったく同じです。とはいえ規模が大きくなれば `:package` のほうが既定として優れています — `cl` の名前 (`open`、`close`、`delete`) と衝突するラベルを避けられますし、呼び出し箇所ごとにその関数の出どころを示せます。
+
 Preview 1 WASM では、各 WIT 関数が [`rontolisp:wasm-import`](wasm-host-boundary.md#importing-host-functions) になります。インポート**モジュール**はインターフェースの素の名前 (`math`。`:from` で変更可)、インポート**フィールド**は WIT ラベルの camelCase 表記 (`addInts` — JavaScript の慣習であり、`jco` が生成するものでもあります。`:field-style :kebab` でラベルのままにできます) です。したがってホスト側の満たし方は従来どおりです。ここではそのフィールド名で関数をエクスポートする、もう 1 つの Lisp モジュールが担います:
 
 ```console

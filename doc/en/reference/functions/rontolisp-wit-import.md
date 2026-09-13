@@ -103,7 +103,9 @@ host that has never heard of the program. The output is identical all three ways
   defines it only once. A string or a bare symbol.
 - `:package` — the Lisp package the bindings land in (`kv:open`, `kv:bucket-get`).
   A `defpackage` exporting them is synthesized, so no `defpackage` is written by
-  hand. Omitted, the names land in the current package.
+  hand. Omitted, the names land in the current package under the reader's
+  spelling of the WIT label — `add-ints` binds `ADD-INTS`, the name a
+  hand-written `(add-ints n 10)` resolves to.
 - `:from` — the Preview 1 WASM import module name. Defaults to the interface's
   bare name (`store`). Ignored on the other backends (a component imports the
   interface under its fully-qualified id, which is not renameable).

@@ -2,6 +2,7 @@ package am.ik.rontolisp.eval;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -98,6 +99,15 @@ class WitImportInlinerTest {
 			  }
 
 			  open: func(identifier: string) -> result<bucket, error>;
+			}
+			""";
+
+	/** The guide's own first wit-import example, bound with no :package option. */
+	private static final String MATH_WIT = """
+			package example:host@0.1.0;
+
+			interface math {
+			  add-ints: func(a: s32, b: s32) -> s32;
 			}
 			""";
 
@@ -302,6 +312,36 @@ class WitImportInlinerTest {
 		// Idempotent: the spliced program already defines %wit-call, so a second pass
 		// cannot prepend a second copy of the runtime.
 		assertThat(WitLibrary.process(spliced)).isSameAs(spliced);
+	}
+
+	/**
+	 * The same acceptance test for the form that names no {@code :package} -- the one the
+	 * guide's first {@code wit-import} example uses. A package-less binding lands in the
+	 * current package with NO export table between it and the call site, so it has to
+	 * carry the name the reader gives {@code (add-ints n 10)}: {@code ADD-INTS}. Bound as
+	 * the WIT label verbatim it was {@code |add-ints|}, and the two never met -- the call
+	 * compiled to a call-time error stub and the import was shaken out, byte-identical to
+	 * nothing at all.
+	 */
+	@Test
+	void aPackageLessImportIsTheHandWrittenImportBlockToo() throws IOException {
+		Files.writeString(this.tempDir.resolve("host.wit"), MATH_WIT);
+		String body = """
+				(defun add10 (n) (add-ints n 10))
+				(rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
+				""";
+		List<LispVal> fromWit = WitImportInliner.inline(
+				LispReader.readAllFromString(
+						"(rontolisp:wit-import \"host.wit\" :interface \"example:host/math@0.1.0\")\n" + body),
+				this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
+		List<LispVal> byHand = LispReader.readAllFromString(
+				"(rontolisp:wasm-import 'add-ints :from \"math\" :as \"addInts\" :params '(:int :int) :returns :int)\n"
+						+ body);
+		assertThat(compile(fromWit, OptimizeLevel.DEFAULT)).isEqualTo(compile(byHand, OptimizeLevel.DEFAULT));
+		// And the import really survived the shaker: a binding nothing can reach is one
+		// the shaker drops, so an identity between two import-less modules would prove
+		// nothing.
+		assertThat(new String(compile(fromWit, OptimizeLevel.DEFAULT), StandardCharsets.UTF_8)).contains("addInts");
 	}
 
 	// The wit-import program: the directive plus the shared body, lowered for Preview 1

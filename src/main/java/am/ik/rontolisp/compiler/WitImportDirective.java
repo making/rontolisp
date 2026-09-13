@@ -3,6 +3,7 @@ package am.ik.rontolisp.compiler;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.SequencedSet;
 import java.util.Set;
@@ -184,9 +185,9 @@ public final class WitImportDirective {
 				// :interface and :from name WIT-side things (lower-kebab), so a bare
 				// symbol -- upcased by the reader -- lowercases; :package names the
 				// Lisp-side package and keeps the reader's spelling.
-				case ":INTERFACE" -> iface = designator(value, ":interface", form).toLowerCase(java.util.Locale.ROOT);
+				case ":INTERFACE" -> iface = designator(value, ":interface", form).toLowerCase(Locale.ROOT);
 				case ":PACKAGE" -> pkg = designator(value, ":package", form);
-				case ":FROM" -> module = designator(value, ":from", form).toLowerCase(java.util.Locale.ROOT);
+				case ":FROM" -> module = designator(value, ":from", form).toLowerCase(Locale.ROOT);
 				case ":FIELD-STYLE" -> fieldStyle = fieldStyle(value, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wit-import option " + keyword.name() + " in " + form.print());
@@ -347,7 +348,7 @@ public final class WitImportDirective {
 				continue;
 			}
 			boundMembers.add(member);
-			String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
+			String name = bindingName(directive.pkg(), member);
 			if (component) {
 				validateComponentFunc(func, witPath, locations, resolver, iface, member);
 				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true, false);
@@ -431,7 +432,7 @@ public final class WitImportDirective {
 				continue;
 			}
 			boundMembers.add(member);
-			String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
+			String name = bindingName(directive.pkg(), member);
 			if (component) {
 				componentMembers.add(dropBinding(resource.name(), name));
 			}
@@ -494,7 +495,7 @@ public final class WitImportDirective {
 				validateComponentParam(target.type(), witPath, locations, resolver, target.iface(), alias, member,
 						"the task result", true);
 				boundMembers.add(member);
-				String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
+				String name = bindingName(directive.pkg(), member);
 				componentMembers.add(taskReturnBinding(alias.name(), name));
 				continue;
 			}
@@ -520,7 +521,7 @@ public final class WitImportDirective {
 				}
 				validateAsyncAlias(target, witPath, locations, resolver, alias, member, op);
 				boundMembers.add(member);
-				String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
+				String name = bindingName(directive.pkg(), member);
 				componentMembers.add(asyncBinding(alias.name(), op, name));
 			}
 		}
@@ -591,12 +592,34 @@ public final class WitImportDirective {
 	// The internal raw name of a result-returning binding: pkg::%member (the public
 	// wrapper defun unwraps its envelope).
 	private static String rawName(@Nullable String pkg, String member) {
-		return pkg == null ? "%" + member : PackageRegistry.qualifyInternal(pkg, "%" + member);
+		return pkg == null ? readerSpelling("%" + member) : PackageRegistry.qualifyInternal(pkg, "%" + member);
 	}
 
 	// An internal (non-exported) name in the directive's package.
 	private static String internalName(@Nullable String pkg, String bare) {
-		return pkg == null ? bare : PackageRegistry.qualifyInternal(pkg, bare);
+		return pkg == null ? readerSpelling(bare) : PackageRegistry.qualifyInternal(pkg, bare);
+	}
+
+	// The Lisp name one binding is DEFINED under.
+	//
+	// With :package the WIT label is qualified and kept verbatim, and a kv:add-ints call
+	// site meets it through the package's export table, which matches case-insensitively.
+	// WITHOUT :package there is no export table in between: the definition and every call
+	// site have to produce the SAME string by themselves, and a call site goes through
+	// the
+	// READER, which upcases. So a package-less binding is named the reader's spelling of
+	// the label. Binding the label verbatim instead defined |add-ints| while every call
+	// site said ADD-INTS, and the two never met -- the documented package-less example
+	// failed on every backend at once (undefined function on the interpreter, a call-time
+	// error stub on wasm-GC, an unsupported operation under --no-gc).
+	private static String bindingName(@Nullable String pkg, String member) {
+		return pkg == null ? readerSpelling(member) : PackageRegistry.qualify(pkg, member);
+	}
+
+	// What the reader makes of a name written in source: WIT labels are lower-kebab, the
+	// reader upcases, so this is the one spelling a hand-written call site can produce.
+	private static String readerSpelling(String label) {
+		return label.toUpperCase(Locale.ROOT);
 	}
 
 	// (:async-call "send" "pkg::%send-start" "pkg::%send-lift") -- an async func member

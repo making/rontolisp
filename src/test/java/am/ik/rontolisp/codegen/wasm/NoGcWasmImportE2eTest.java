@@ -295,6 +295,45 @@ class NoGcWasmImportE2eTest {
 		assertThat(runNode(driverFile, wasmFile)).isEqualTo("11 9");
 	}
 
+	@Test
+	void aPackageLessWitImportIsCallableFromTheProgramThatDeclaredIt() throws Exception {
+		// The guide's own first wit-import example (doc/*/guides/wit-contracts.md), which
+		// omits :package: the interface's functions land in the CURRENT package and
+		// `(add-ints n 10)` calls one unqualified. With no package there is no export
+		// table between the binding and the call site, so the binding has to carry the
+		// name the READER produces -- ADD-INTS. Bound as the WIT label verbatim it was
+		// |add-ints|, which this backend could not even compile a call to ("unsupported
+		// operation 'ADD-INTS'"); nothing ran the package-less form end to end, which is
+		// how the documented example stayed broken.
+		Files.writeString(this.tempDir.resolve("host.wit"), """
+				package example:host@0.1.0;
+
+				interface math {
+				  add-ints: func(a: s32, b: s32) -> s32;
+				}
+				""", StandardCharsets.UTF_8);
+		String program = """
+				(rontolisp:wit-import "host.wit" :interface "example:host/math@0.1.0")
+
+				(defun add10 (n) (add-ints n 10))
+				(rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
+				""";
+		byte[] wasm = compileNoGc(CompileFrontendAccess.wasmReactor(program, this.tempDir.toString(), true),
+				OptimizeLevel.SIZE);
+		String driver = """
+				const fs = require('fs');
+				const math = { addInts: (a, b) => a + b };
+				const inst = new WebAssembly.Instance(
+				  new WebAssembly.Module(fs.readFileSync(process.argv[2])), { math });
+				console.log(inst.exports.add10(32));
+				""";
+		Path wasmFile = this.tempDir.resolve("packageless.wasm");
+		Files.write(wasmFile, wasm);
+		Path driverFile = this.tempDir.resolve("packageless.js");
+		Files.writeString(driverFile, driver, StandardCharsets.UTF_8);
+		assertThat(runNode(driverFile, wasmFile)).isEqualTo("42");
+	}
+
 	private static byte[] compileNoGc(List<LispVal> program, OptimizeLevel level) {
 		return new NoGcWasmCompiler(level, false, false, true).compile(program);
 	}

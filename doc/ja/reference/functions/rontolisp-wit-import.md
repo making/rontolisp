@@ -104,7 +104,9 @@ rontolisp counter.lisp -o Counter.class && java Counter
   インターフェース名 (`store`) で書けます。文字列または素のシンボルです。
 - `:package` — 束縛が入る Lisp パッケージ (`kv:open`、`kv:bucket-get`)。それらを
   エクスポートする `defpackage` が合成されるため、`defpackage` を手で書く必要は
-  ありません。省略すると、名前は現在のパッケージに入ります。
+  ありません。省略すると、名前は WIT ラベルをリーダーが読んだ綴りで現在のパッケージに
+  入ります — `add-ints` は `ADD-INTS` を束縛し、これは手書きの `(add-ints n 10)` が
+  解決する先の名前です。
 - `:from` — Preview 1 WASM のインポートモジュール名。既定値はインターフェースの素の
   名前 (`store`) です。他のバックエンドでは無視されます (コンポーネントは
   インターフェースを完全修飾 id でインポートし、これは改名できません)。
