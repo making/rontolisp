@@ -7464,6 +7464,17 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		coreModule = am.ik.wasm.WasmCallForwarding.redirect(am.ik.wasm.WasmRefTypeFolder.fold(coreModule));
+		// Then the single-call-site move, which needs both of those in front of it (the
+		// fold is what leaves a helper with one caller) and the shake behind it (it
+		// unreferences the callee rather than deleting it). The case-fold owners are
+		// pinned: their segment claims name them by index, so a moved body would take
+		// the table with it (.kb/optimize-dead-code-elimination.md).
+		int[] pinned = new int[caseFoldSegments.size()];
+		for (int i = 0; i < pinned.length; i++) {
+			int[] owners = caseFoldSegments.get(i).ownerFuncIndices();
+			pinned[i] = owners.length > 0 ? owners[0] : -1;
+		}
+		coreModule = am.ik.wasm.WasmInliner.inline(coreModule, pinned);
 		if (funcNames == null) {
 			return am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges, hostCellHooks);
 		}

@@ -588,7 +588,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		byte[] module = assemble(reachable, internalBodies, exportDecls, wrapperBodies, wrapperOrdinals, exportOrdinals,
 				internalCount, types, mem, hostImports);
 		if (this.optimize.eliminatesDeadCode()) {
-			module = am.ik.wasm.WasmTreeShaker.shake(module);
+			// The single-call-site move first: it unreferences the callee rather than
+			// deleting it, so the shake behind it is what collects the body, the function
+			// entry and the type only that entry named.
+			module = am.ik.wasm.WasmTreeShaker.shake(am.ik.wasm.WasmInliner.inline(module));
 		}
 		if (this.component) {
 			// Post-stage wrap: the core module is byte-identical to the non-component

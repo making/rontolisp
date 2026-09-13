@@ -235,8 +235,11 @@ class NoGcWasmCompilerTest {
 	@Test
 	void longBoundaryOverAFloatResultKeepsTheTruncatingWrapper() {
 		// The internal return type is inferred f64, so the :long boundary needs an
-		// i64.trunc_f64_s conversion -- the wrapper stays.
-		byte[] module = compile("""
+		// i64.trunc_f64_s conversion -- the wrapper stays. Counted at OptimizeLevel.NONE:
+		// the wrapper is the only caller of `half`, so the default level moves the body
+		// into it and the two bodies this counts become one (the conversion is still
+		// there -- what it is asserting is that the wrapper was EMITTED).
+		byte[] module = compilePlainUnoptimized("""
 				(defun half (a) (/ (float a) 2.0))
 				(rontolisp:wasm-export 'half :params '(:long) :returns :long)
 				""");
@@ -608,7 +611,11 @@ class NoGcWasmCompilerTest {
 		// entry: three (i64, i64) -> i64 internals, one type. The export is a
 		// pass-through (nothing marshals, nothing allocates), so it adds no wrapper and
 		// no host type either.
-		byte[] module = compile("""
+		//
+		// OptimizeLevel.NONE out loud: this is what the EMITTER writes, and `add`/`mul`
+		// have one call site each, so the default level moves both into `combine` and
+		// there is one function left to name a type.
+		byte[] module = compilePlainUnoptimized("""
 				(defun add (a b) (+ a b))
 				(defun mul (a b) (* a b))
 				(defun combine (a b) (+ (add a b) (mul a b)))
@@ -623,8 +630,9 @@ class NoGcWasmCompilerTest {
 	@Test
 	void distinctSignaturesStillGetTheirOwnTypeEntry() {
 		// The other half of the dedup: two shapes, two entries, and each function names
-		// the one that describes it.
-		byte[] module = compile("""
+		// the one that describes it. OptimizeLevel.NONE for the same reason as its twin
+		// above -- `twice` has one call site.
+		byte[] module = compilePlainUnoptimized("""
 				(defun twice (a) (* a 2))
 				(defun sum (a b) (+ (twice a) b))
 				(rontolisp:wasm-export 'sum :params '(:long :long) :returns :long)
@@ -1977,7 +1985,10 @@ class NoGcWasmCompilerTest {
 		// module section 0 carrying the byte-identical non-component module, then the
 		// instantiate / alias / type / lift / export wiring -- no import block, no
 		// adapter module, no shared-memory module (the compact selling point).
-		byte[] plain = compile(COMPONENT_PROGRAM);
+		// Both halves at OptimizeLevel.NONE: compileComponent is unoptimized, and the
+		// default level moves `sumsquared` into its export wrapper (the single-call-site
+		// move), so compile() here would compare two different programs.
+		byte[] plain = compilePlainUnoptimized(COMPONENT_PROGRAM);
 		byte[] component = compileComponent(COMPONENT_PROGRAM);
 		assertThat(new String(component, 0, 4, StandardCharsets.ISO_8859_1)).isEqualTo("\0asm");
 		assertThat(component[6]).as("component layer byte").isEqualTo((byte) 0x01);
@@ -2345,15 +2356,21 @@ class NoGcWasmCompilerTest {
 		// The index shift is unchanged: the exported wrapper sits at the printing
 		// build's index, one above the silent build's (the sink occupies index 0 the
 		// way the import did).
-		byte[] importing = compile(printing);
+		// The same level as the noWasi build above: the claim is about the shift the sink
+		// causes at emission, and comparing it against an optimized build compares that
+		// shift with whatever the shake and the single-call-site move did as well.
+		byte[] importing = compilePlainUnoptimized(printing);
 		assertThat(exportedFuncIndex(Objects.requireNonNull(sections(noWasi).get(7)), "show"))
 			.isEqualTo(exportedFuncIndex(Objects.requireNonNull(sections(importing).get(7)), "show"));
 		String silent = """
 				(defun show (n) n)
 				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
 				""";
+		// Both at OptimizeLevel.NONE, the flag the one difference: what is claimed is
+		// that --no-wasi changes nothing here, not that it changes nothing the shake and
+		// the single-call-site move would also have done.
 		assertThat(new NoGcWasmCompiler(OptimizeLevel.NONE, false, false, true)
-			.compile(LispReader.readAllFromString(silent))).isEqualTo(compile(silent));
+			.compile(LispReader.readAllFromString(silent))).isEqualTo(compilePlainUnoptimized(silent));
 	}
 
 	@Test

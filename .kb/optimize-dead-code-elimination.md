@@ -308,6 +308,81 @@ bytes MORE gzip. Pins: `WasmBodyFolderTest`; `-Drontolisp.wasm.debug-func-sizes`
 group by its survivor. **The JVM twin is measured, not implemented** (zlib: 48 duplicate methods,
 8,331 B): JVM methods are reachable BY NAME, so the survivor set needs its own soundness argument.
 
+### The single-call-site move
+`am.ik.wasm.WasmInliner.inline` runs between `WasmCallForwarding.redirect` and
+`WasmTreeShaker.shake` on BOTH wasm backends (`WasmLispCompiler.shakeCore`;
+`NoGcWasmCompiler.compile`), at every `eliminatesDeadCode()` level. A defined function the whole
+module `call`s from exactly one place has its body moved to that call site and is left
+UNREFERENCED -- the shake behind it is what deletes the code entry, the function-section entry and
+any type only that entry named. Nothing is renumbered here, so an `OwnedDataSegment` claim or a
+`-Drontolisp.wasm.debug-func-sizes` name map still reads in the module's own indices. Out of scope:
+a callee that is exported, named by the start section, recursive, its own caller, or PINNED by the
+backend (`WasmLispCompiler` pins the three case-fold owners: their segment claim names them by
+index, so a moved body would take the table with it). A module with a table or element section is
+declined wholesale; `ref.func` takes it out through `WasmCodeModel`, which refuses to decode one.
+
+**The move alone is a LOSS** -- `wasm-opt --inlining` makes `zlib` 15,214 B BIGGER, because handed-
+over arguments become `local.set`/`local.get` pairs the caller never had and every local index past
+127 costs a second byte. So the pass is the move plus its arithmetic, and all three parts are load-
+bearing:
+
+- **Stack hand-over.** A callee that reads each parameter exactly once, in order, as the first
+  instructions of its body -- every forwarder, every thin import wrapper -- needs no locals at all:
+  the arguments are already on the stack in that order, so those leading `local.get`s are dropped.
+  **The wrapper block a `return` needs then has to declare them**: it is emitted as
+  `block (type <the callee's own type index>)`, because values pushed before a block are
+  unreachable from inside one that declares no parameters. A bare `block (result t)` there decodes,
+  validates nothing, and is the one bug in this pass wasm-tools caught that structure assertions
+  could not.
+- **Argument substitution.** When the instruction that pushes an argument is re-materializable (a
+  constant, or a `local.get` of a local the moved body never writes), every parameter read becomes
+  that instruction again and the push is deleted -- no local, no `local.set`. Chosen per parameter,
+  by byte count against the local it would replace.
+- **A measured decision.** The rewritten caller is encoded and compared against the caller plus the
+  callee it replaces; anything not strictly smaller is abandoned. The pass therefore cannot grow
+  the code or function section of any module whatever its local numbering does
+  (`WasmTreeShakerCorpusTest` asserts it over the whole `ci-spec` corpus, both WASI modes).
+
+**Two things that guard alone does not see, both measured the hard way on `zlib` (2026-09-13).**
+
+1. **A body the duplicate fold was going to reclaim anyway is worth nothing here, and costs the
+   caller its whole size.** `WasmBodyFolder` (above) drops all but one of a set of byte-identical
+   bodies for free; moving the once-called member removes a body the fold was removing and leaves
+   the caller carrying those bytes for good. Ignoring this, the pass claimed 530 B over 134 moves
+   and DELIVERED +274 -- the first run of it made `zlib` bigger. A candidate whose (canonical type,
+   code bytes) pair another defined function repeats is therefore declined. A CALLER never has a
+   twin, so only the callee side needs the test: a byte-identical body repeats the same `call`
+   immediate, which would make its callee's call site count two.
+2. **Relocating bytes costs REPETITION, which is what the artifact's compressor lives on.** What a
+   move reclaims is the per-function overhead -- a size prefix, the locals-vector byte, the
+   terminating `end`, the `call`, a function-section entry: 6 to 12 bytes, never a function of how
+   big the body is. So `WasmInliner.MAX_MOVED_BODY` caps the moved code entry at **64 bytes**, and
+   that number is a measurement, not a taste. Over 23 artifacts -- the `size-report` corpus, the
+   Cloudflare Worker family and the `--no-gc` browser reactor of `.todo/804` -- summed against the
+   same build without the pass:
+
+   | budget | raw | gzipped | worst gzip row |
+   | --- | ---: | ---: | --- |
+   | 64 bytes (shipped) | **-911** | **-95** | `zlib_optimize` +103 (+0.26%) |
+   | 256 bytes | -4,143 | +3,670 | `zlib_size` +1,018 (+3.3%) |
+   | no budget | -50,722 | +16,064 | `hello-ningle` +3,686 |
+
+   A Worker's platform limit counts COMPRESSED bytes (`size-report/notes/cloudflare-workers.md`),
+   so the uncapped row is not a win on the artifacts that consume the GC backend most. 64 is the
+   knee: the smallest budget at which the host-facing `--no-gc` modules -- the ones this pass
+   exists for -- reach their FULL win.
+
+**What it is worth, at that budget** (2026-09-13, `--optimize=size` unless stated): the `.todo/804`
+browser reactor 1,090 -> **1,011 B (-7.2%)**, its code section 360 -> 300 in 17 -> 8 functions --
+one byte off the 299 a hand-written non-GC toolchain emits for the same program, with `.todo/805`
+still to come. `hello`, the `--no-gc` Worker: 532 -> 510 (-4.1% raw, -3.2% gz).
+`hello_world_nogc` 244 -> 232. On the GC backend it is a rounding error by design: `zlib` -87 of
+90,904, the big clack/ningle Workers -24 to -88 of 800 KB. That is the honest correction to
+`.todo/791` item 3's reading of binaryen's 1,985-byte inlining share on `zlib`: binaryen recovers
+those bytes by re-encoding locals across the whole function afterwards, which this pass does not
+do and which is not worth its compressed cost. **The prize is the small host-facing module, not
+the library.**
+
 ### The component WRAPPER: adapter + WASI surface
 The adapter and the `wasi:*` declarations follow the core through one chain, every step *observed*
 rather than declared (`WasmComponentBuilder.fixedSurface`, base variant only): the core's surviving
@@ -461,7 +536,8 @@ census over the flat `wasm-tools print` of the Worker / `zlib`:
 
 The first row is `.kb/cons-access-runtime.md`; the rest are `.todo/798` (the adjacent-
 instruction peepholes and the fold debris, byte-level), `.todo/799` (the lowering shapes,
-expander and emitter level) and `.todo/800` (the single-call-site inliner). After the
+expander and emitter level) and the single-call-site move (landed; "The single-call-site move"
+above -- where the reading of the `zlib`/Worker inlining share is corrected). After the
 first row landed: `zlib` 90,874 (residue 18,542), Worker 815,414 (residue 182,697 -- the
 same bytes as before, so the 101 KB was outside binaryen's reach: it does not outline).
 

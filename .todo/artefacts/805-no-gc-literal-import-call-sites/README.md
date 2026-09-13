@@ -48,12 +48,28 @@ its output survived. `spiked-functions.wat` is therefore the specification of wh
 sound version has to emit, not a diff to re-apply. The i32 spike in
 [`../806-no-gc-internal-void/`](../806-no-gc-internal-void) DOES carry its diff.
 
-## After `804` landed (2026-09-13)
+## After `804` and `800` landed (2026-09-13)
 
-`804` is in, so the baseline this directory describes is history: the same build of
-`bench.lisp` now measures **1,090 bytes** (types 129 -> 57 over 12 distinct entries,
-exports 128 -> 69, code 491 -> 360, data 497 -> 481). `805` and `800` must be re-measured
-against that module, not against the 1,383/1,382 rows below.
+Both are in, so the baseline this directory describes is history twice over. The same build
+of `bench.lisp`:
+
+| | total | types | exports | code (functions) | data |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| as measured here | 1,382 | 129 (24) | 128 | 491 (20) | 497 |
+| after `804` | 1,090 | 57 | 69 | 360 (17) | 481 |
+| after `800` | **1,011** | 47 | 69 | **300 (8)** | 481 |
+
+`800`'s share was **-79 bytes**, not the 62 the ladder below predicted, and it took the
+function count to 8 -- one byte of code section away from the 299 a hand-written non-GC
+toolchain emits for this program. `host.mjs` was run against every step and produced output
+identical to the baseline's. `805` must be re-measured against the 1,011-byte module; the
+rows below predict nothing about it any more.
+
+`spiked-functions.wat` is still the specification of what `805` has to EMIT, but it is no
+longer a description of what is in the way: `800` already removed the four forwarders and
+the `set-badge-color` wrapper, and folded the two literals of that call into `InitApp` as
+`i32.const 59; i32.const 4; i32.add; i32.const 59; i32.load`. Three wrappers survive, each
+with two or three call sites.
 
 ## The measured ladder
 

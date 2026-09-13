@@ -79,6 +79,22 @@ class WasmTreeShakerCorpusTest {
 			roundTripIsAFixpoint(plain, "plain-" + mode);
 			roundTripIsAFixpoint(optimized, "optimized-" + mode);
 			roundTripIsAFixpoint(smallest, "size-" + mode);
+
+			// The single-call-site move, isolated. It runs INSIDE the two optimized
+			// compiles above, so the only way to see what it is worth -- and that it is
+			// not worth less than nothing -- is to run the same three passes by hand over
+			// the same bytes. It may never make the shipped module bigger: everything it
+			// relocates has to come back with interest once the shake collects the
+			// callee, and the body it moves is budgeted for exactly that reason
+			// (.kb/optimize-dead-code-elimination.md, "The single-call-site move").
+			byte[] prepared = WasmCallForwarding.redirect(WasmRefTypeFolder.fold(plain));
+			byte[] withoutMove = WasmTreeShaker.shake(prepared);
+			byte[] withMove = WasmTreeShaker.shake(WasmInliner.inline(prepared));
+			assertThat(withMove.length)
+				.as("the single-call-site move must not grow the shaken module (noWasi=%s)", noWasi)
+				.isLessThanOrEqualTo(withoutMove.length);
+			validateWithWasmTools(withMove, "inlined-" + mode);
+			roundTripIsAFixpoint(withMove, "inlined-" + mode);
 		}
 	}
 
