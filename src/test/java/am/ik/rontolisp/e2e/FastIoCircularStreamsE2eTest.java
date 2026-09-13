@@ -93,9 +93,9 @@ class FastIoCircularStreamsE2eTest extends AsdfLibraryE2eSupport {
 			;; with-open-file died with "No applicable method: CLOSE on INTEGER" (and the
 			;; compile paths silently ignored the methods instead). The built-in must stay
 			;; each generic's default method, so a real file round-trip after the load works.
-			(with-open-file (fio-out "target/fio-roundtrip.tmp" :direction :output)
+			(with-open-file (fio-out "target/fio-roundtrip-%%WORK%%.tmp" :direction :output)
 			  (write-line "roundtrip" fio-out))
-			(with-open-file (fio-in "target/fio-roundtrip.tmp")
+			(with-open-file (fio-in "target/fio-roundtrip-%%WORK%%.tmp")
 			  (format t "~a~%" (open-stream-p fio-in))
 			  (format t "~a~%" (read-line fio-in)))
 			""";

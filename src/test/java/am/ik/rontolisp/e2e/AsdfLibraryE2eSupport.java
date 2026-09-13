@@ -81,9 +81,22 @@ abstract class AsdfLibraryE2eSupport {
 	}
 
 	/**
-	 * The exercise program: an {@code asdf:load-system} plus prints of the public API.
+	 * The exercise program: an {@code asdf:load-system} plus prints of the public API. A
+	 * subclass whose program touches the filesystem must build its path from
+	 * {@link #WORK_TOKEN} (e.g. {@code "target/foo-%%WORK%%.tmp"}) rather than a fixed
+	 * name -- {@link #exerciseFor(String)} replaces the token with a name unique to the
+	 * leg about to run, so the four backends (and, for the two WASM legs, the one shared
+	 * wasmtime container) never contend for the same path. A program with no such path
+	 * needs no token at all; the replacement is then a no-op.
 	 */
 	protected abstract String exercise();
+
+	/** Substituted into a subclass's {@link #exercise()} for the leg about to run. */
+	protected static final String WORK_TOKEN = "%%WORK%%";
+
+	private String exerciseFor(String leg) {
+		return exercise().replace(WORK_TOKEN, leg);
+	}
 
 	/** The expected stdout, one trimmed line per element. */
 	protected abstract List<String> expected();
@@ -126,7 +139,7 @@ abstract class AsdfLibraryE2eSupport {
 		runOnAnInterpreterStack(() -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
 			evaluator.setSystemPath(systemPath());
-			for (LispVal expr : LispReader.readAllFromString(exercise())) {
+			for (LispVal expr : LispReader.readAllFromString(exerciseFor("interpreter"))) {
 				evaluator.eval(expr);
 			}
 		});
@@ -162,7 +175,7 @@ abstract class AsdfLibraryE2eSupport {
 		// plus the JVM backend half -- which is exactly what the CLI's -o out.class is,
 		// so this leg cannot compile a program the command line would not.
 		byte[] classBytes = new JvmSourceCompiler(artifactName()).systemPath(systemPath())
-			.compile(exercise(), null)
+			.compile(exerciseFor("jvm"), null)
 			.classBytes();
 		assertThat(runMain(classBytes, artifactName()).lines().map(String::trim).map(this::normalizeLine))
 			.containsExactlyElementsOf(expected());
@@ -171,7 +184,7 @@ abstract class AsdfLibraryE2eSupport {
 	@Test
 	void compilesAndRunsOnWasmPreview1() throws Exception {
 		assumeTrue(DOCKER_AVAILABLE, "Docker is not available");
-		CompileFrontendAccess.Program program = wasmProgram(false);
+		CompileFrontendAccess.Program program = wasmProgram(false, "wasm-p1");
 		byte[] wasmBytes = new WasmLispCompiler().runtimeFeatures(program.features().names()).compile(program.forms());
 		assertThat(runWasm(wasmBytes, false).lines().map(String::trim).map(this::normalizeLine))
 			.containsExactlyElementsOf(expected());
@@ -180,7 +193,7 @@ abstract class AsdfLibraryE2eSupport {
 	@Test
 	void compilesAndRunsOnWasmComponent() throws Exception {
 		assumeTrue(DOCKER_AVAILABLE, "Docker is not available");
-		CompileFrontendAccess.Program program = wasmProgram(true);
+		CompileFrontendAccess.Program program = wasmProgram(true, "wasm-component");
 		byte[] wasmBytes = new WasmLispCompiler(false, true).runtimeFeatures(program.features().names())
 			.compile(program.forms());
 		assertThat(runWasm(wasmBytes, true).lines().map(String::trim).map(this::normalizeLine))
@@ -198,8 +211,8 @@ abstract class AsdfLibraryE2eSupport {
 	// the same reason -- each library below exercises its own API on three compile
 	// backends, so a definition the pass drops that the program still needs fails here
 	// rather than in a user's build.
-	private CompileFrontendAccess.Program wasmProgram(boolean component) {
-		return CompileFrontendAccess.withSystemPath(exercise(), systemPath(), true, component);
+	private CompileFrontendAccess.Program wasmProgram(boolean component, String leg) {
+		return CompileFrontendAccess.withSystemPath(exerciseFor(leg), systemPath(), true, component);
 	}
 
 	// Defines the compiled class from its bytes and runs main, capturing UTF-8 stdout.
