@@ -26,13 +26,62 @@ is interned FIRST so it stays type 0, which is what the import entry names.
 
 ## Value model and inference
 `inferTypes` is a **monotone fixpoint** over the call graph: exported params pinned to the
-boundary designator; all other param types, **all let/`do`-bound local types**
-(`Types.locals`) and all return types start at INT and only widen to FLOAT. `compileExpr`
+boundary designator; all other param types and **all let/`do`-bound local types**
+(`Types.locals`) start at INT and only widen to FLOAT. `compileExpr`
 consults `staticType` to insert promotions (`coerce`: `f64.convert_i64_s` /
 `i64.trunc_s_f64`); let/`do` locals are allocated at their widened type so `setq`
 (`local.tee`) stays type-consistent. `i64` makes integer arithmetic exact to 2^63. `Ty.join`:
-INT doubles as the bottom and yields to STRING; FLOAT-vs-STRING is a type error; mixing a
+INT doubles as the numeric bottom and yields to STRING; FLOAT-vs-STRING is a type error; mixing a
 string with a number is rejected (except nil->"").
+
+**VOID is the fourth point and the TRUE bottom** (`join(VOID, X) = X`): a form that leaves
+the stack untouched. It is not part of the arithmetic lattice -- it never meets INT/FLOAT
+in an expression, only in "what does this statement leave behind" -- and the ONE place it
+meets a value is `coerce`, which materializes the nil it stands for in the consumer's own
+representation (`pushNil`: the i64/f64 zero, or the address-0 empty-string header). The
+other direction, `coerce(X, VOID)`, is the single place a `drop` is decided, which is what
+makes a void statement free. Four things are void, and nothing else is:
+`while`, `terpri`, an empty `progn`, and a call to a `:void` host import. It then SPREADS
+through the return fixpoint -- `returns` seeds at VOID rather than INT, so a function all
+of whose paths are void is itself `(...) -> ()` -- with one pin: a function exported under
+a VALUE-returning designator seeds at INT, because it owes the host a value even when its
+body is a bare `while`.
+- A **local slot is never VOID** (`slotTy`): storage holds the nil, and the initializer
+  materializes it.
+- A **constant `if` test takes only the branch it selects into the result type**, and an
+  ABSENT else contributes VOID rather than the INT zero an explicit `nil` would. Both
+  halves are load-bearing: the macro expander ends every `cond` in `(if t ... nil)`, and
+  without the first rule that dead nil drags an all-void chain back to INT and puts an
+  `i64.const 0` in every arm. Both arms are still WALKED whatever the test says -- the
+  walk is what records call sites and widens locals.
+- `typeOf` and `compileExpr` must answer the SAME type for every form, or the emitted
+  stack does not match the declared block/function type and the module fails validation.
+  The pairs that have to move together are `while`, `terpri`, `progn`, `%block`/`return`
+  and both `if` rules.
+- Measured 2026-09-13 on `.todo/artefacts/805-.../bench.lisp`: **953 -> 931 B**
+  (-2.3%) at `--optimize=size`, 1,378 -> 1,350 at `--optimize=off`, with ZERO
+  `i64.const 0` / `drop` pairs left in the module and `InitApp` reaching
+  `isPassThroughExport`. `AppendLogMessage` keeps its wrapper and always would have:
+  its `:s32` parameter needs the `i64.extend_i32_s` no pass-through can skip. A
+  pure-numeric program pays the same way through `while`: the
+  `(let ((acc 0)) (dotimes ...) acc)` shape is 116 -> 106 B.
+
+### There is no i32 tier, and there must not be one
+Measured 2026-09-13 and **rejected**; the spike, its script and the demonstration are in
+`.todo/artefacts/806-no-gc-internal-void/`. Making INT an `i32` module-wide (every
+`i64.*` opcode its `i32.*` twin, the extend/wrap pairs gone) was worth 1,383 -> 1,310 B on
+the 20-function reactor, and 1,260 with `:s32` pass-through exports -- and it is not
+available at any price: **every boundary value can fit `:s32` while an INTERMEDIATE
+crosses 2^31**, so `(mod (* n n) 1000)` of 65536 answers 0 for 296 and
+`(mod (fact 13) 10000)` answers 3504 for 800. Silently wrong, on exactly the shapes
+`doc/*/guides/wasm-nogc.md` advertises this backend for. No boundary guard can see an
+intermediate, and a range analysis does not rescue it either: it would have to bound every
+integer-valued expression in a body, `(+ a b)` of two `:s32` already needs 33 bits, and
+interval widening gives top at `fib`'s first recursive `+`. It succeeds exactly where the
+tier is worth about two bytes (comparisons, indices) and fails wherever the bytes are.
+Today's wrap point is 2^63, documented; 2^31 is reached by `13!`. If a narrow tier is ever
+wanted it has to be an explicit user DECLARATION, so the wrap point is the user's stated
+contract the way `:s32` already is at the boundary.
 
 ## Arithmetic
 `mod`/`rem` native per type (FLOAT = the EXACT `WasmFmodRuntimeBuilder` reduction, inlined at
@@ -49,8 +98,11 @@ is unaffected. `ffloor`/`fceiling`/`fround`/`ftruncate` inherit all of it throug
 
 ## Iteration and control
 `dotimes`/`do`/`do*` expand to `let`/`while`/`%block`(`BLOCK_INTERNAL`)/`setq`/`return`.
-`while` is a `block`/`loop` pair leaving nil (i64 0); `%block` is a **typed** wasm block whose
-result = join(normal completion, every enclosing `return` value); `return` is a `br` at depth
+`while` is a `block`/`loop` pair leaving NOTHING -- it is VOID, because the nil the other
+backends answer there is never read as a value, and where it is the join materializes it;
+`%block` is a **typed** wasm block whose
+result = join(normal completion, every enclosing `return` value), the empty blocktype
+`0x40` when that join is VOID; `return` is a `br` at depth
 `Fn.ctrlDepth - blockMarker` (depth bumped by `if` +1, `while` +2, `%block` +1); `setq` is a
 `local.tee` to a param/let slot (no globals).
 
@@ -60,7 +112,9 @@ i64. `emitPredicate` records that the widening is the last byte written and `tak
 takes it back off when the consumer turns out to be a branch, so neither the widening nor
 the `!= 0` that would undo it is emitted (the test is positional, so it can never fire on
 anything else). A CONSTANT test decides the branch at compile time instead: the macro
-expander ends every `cond` in `(if t ... nil)`, and that arm now costs nothing.
+expander ends every `cond` in `(if t ... nil)`, and that arm now costs nothing -- neither
+its test NOR its dead `nil`, which does not enter the result type either ("Value model and
+inference", VOID).
 
 ## Strings
 A string is an `i32` pointer to `[len:i32 LE][UTF-8 bytes]`; literals are laid out back to
@@ -92,7 +146,10 @@ in the float renderer's inner loop.
 host<->internal, so a returned value outside i32 wraps even though internals are i64. With no
 conversion needed and nothing in the module able to allocate (`Mem.allocates()` false), the
 wrapper is elided and the export names the internal function directly
-(`isPassThroughExport`, `.kb/wasm-export-no-wasi.md`). Two documented divergences (README
+(`isPassThroughExport`, `.kb/wasm-export-no-wasi.md`). The identities are `:s64`/INT,
+`:float`/FLOAT and **`:void`/VOID** -- the last one only reachable because a void body's
+internal function is itself `(...) -> ()`; a `:void` export of a value-answering body still
+takes a wrapper, whose whole content is the `drop`. Two documented divergences (README
 "Non-GC Output"): no rational type, and `0` is false.
 - **Wrapper auto-reset for scalar returns**: `__ronto_alloc` never frees. When the return
   type is a **non-memory scalar** (NOT `:string`/`:s-expr`), `Mem.used()` **and**
@@ -153,7 +210,8 @@ value model differs.
   backends.
 - **Marshalling is nearly empty**: `:s64`/`:float` are the identity; a narrower integer is
   `i32.wrap_i64` behind the guard below; `:bool` is one `i64.ne 0` out / `i32.eqz;i32.eqz` in;
-  `:void` answers the i64 zero. A `:string` ARGUMENT is `(ptr+4, [ptr])` of a block the module
+  `:void` answers NOTHING -- the forwarder's type is `(...) -> ()` and the call site pushes
+  nothing for anyone to drop. A `:string` ARGUMENT is `(ptr+4, [ptr])` of a block the module
   already holds -- **no staging, no copy, and therefore none of the aliasing the wasm-GC
   wrapper had to fix** (`.kb/wasm-import.md`); a LITERAL argument does not even compute
   that pair, and takes the wrapper with it (below). That pointer is BORROWED and durable, not
@@ -382,7 +440,10 @@ the WASI one is sunk).
 `aModuleThatOnlyPassesItsOwnLiteralsOutOmitsTheArenaApi`,
 `aStringReturningImportKeepsTheArenaApi`, `aWrapperThatCannotAllocateCarriesNoHeapBracket`,
 `aComparisonFeedsTheBranchWithoutBeingWidenedFirst`, `theConstantTrueArmOfACondEmitsNoTest`,
-`stringLiteralsArePackedWithoutAlignmentPadding`), the heap-reset trio,
+`stringLiteralsArePackedWithoutAlignmentPadding`), the VOID group
+(`aVoidImportCallLeavesNothingForItsCallerToDrop`, `aVoidBodyMakesAVoidExportAPassThrough`,
+`theDeadNilOfACondTArmDoesNotDragAVoidChainBackToAnInteger`,
+`aWhileLoopPushesNothingForTheFormAfterItToDrop`), the heap-reset trio,
 `stringModuleExportsTheHostArenaApi`, `printGatesTheFdWriteImportOnAndOff`,
 `componentWrapsThePlainCoreModuleVerbatim`,
 `componentStringExportAppendsTheCanonicalStringAbi`,

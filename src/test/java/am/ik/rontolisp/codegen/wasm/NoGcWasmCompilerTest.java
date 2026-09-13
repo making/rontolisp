@@ -299,7 +299,10 @@ class NoGcWasmCompilerTest {
 	void aFloatAccumulatorWidensTheLocalAndReturnTypeToF64() {
 		// acc starts as an integer 0 but is summed with floats, so the inferred local and
 		// the function's return type widen to f64.
-		List<int[][]> funcTypes = funcTypes(Objects.requireNonNull(sections(compile("""
+		// Unoptimized, so the internal function is still its own entry: at --optimize
+		// the single-call-site move folds it into the wrapper and there is only the
+		// host signature left to read.
+		List<int[][]> funcTypes = funcTypes(Objects.requireNonNull(sections(compilePlainUnoptimized("""
 				(defun sumsq (n)
 				  (let ((acc 0))
 				    (dotimes (i n) (setq acc (+ acc (* (float i) (float i)))))
@@ -689,6 +692,82 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void aVoidImportCallLeavesNothingForItsCallerToDrop() {
+		// The import answers nothing, so its wrapper's type is (i64) -> () and the call
+		// site pushes nothing: neither the i64 zero the wrapper used to invent for a
+		// statement nor the drop that immediately undid it is emitted.
+		byte[] module = compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'ping :from "host" :as "ping" :params '(:long) :returns :void)
+				(defun go (n) (ping n) (ping (+ n 1)) n)
+				(rontolisp:wasm-export 'go :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		List<int[][]> types = funcTypes(Objects.requireNonNull(sections.get(1)));
+		// go is (i64) -> i64 (it still answers its own value); the import's forwarder,
+		// which used to be (i64) -> i64 too, now answers nothing.
+		assertThat(types.get(0)[1]).containsExactly(0x7E);
+		assertThat(types).anySatisfy(type -> {
+			assertThat(type[0]).containsExactly(0x7E);
+			assertThat(type[1]).isEmpty();
+		});
+		assertThat(containsSequence(localFunctionBody(module, "go"), 0x1A)).as("nothing to drop").isFalse();
+	}
+
+	@Test
+	void aVoidBodyMakesAVoidExportAPassThrough() {
+		// The void half of the pass-through rule: notify's own last form answers
+		// nothing, so the internal function is already the () -> () the :void export
+		// needs and the wrapper that existed only to drop the i64 zero is gone.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'ping :from "host" :as "ping" :params '(:long) :returns :void)
+				(defun notify () (ping 1) (ping 2))
+				(rontolisp:wasm-export 'notify :as "Notify" :params '() :returns :void)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(funcTypes(Objects.requireNonNull(sections.get(1))))
+			.allSatisfy(type -> assertThat(type[1]).as("no function in the module answers a value").isEmpty());
+		// Two internals (notify and the ping forwarder) behind the one host import, and
+		// no wrapper: the export names notify itself.
+		assertThat(functionBodies(Objects.requireNonNull(sections.get(10)))).hasSize(2);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "Notify")).isEqualTo(1);
+	}
+
+	@Test
+	void theDeadNilOfACondTArmDoesNotDragAVoidChainBackToAnInteger() {
+		// The macro expander ends every cond in `(if t ... nil)`. That nil is dead --
+		// the constant test has already decided the branch -- so it must not join an
+		// all-void chain back up to INT and put the zero it stands for into every arm.
+		byte[] module = compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'ping :from "host" :as "ping" :params '(:long) :returns :void)
+				(defun dispatch (n)
+				  (cond ((= n 1) (ping 10))
+				        ((= n 2) (ping 20))
+				        (t (ping 30))))
+				(rontolisp:wasm-export 'dispatch :params '(:long) :returns :void)
+				""");
+		byte[] body = localFunctionBody(module, "dispatch");
+		assertThat(containsSequence(body, 0x04, 0x40)).as("if with the empty blocktype").isTrue();
+		assertThat(containsSequence(body, 0x04, 0x7E)).as("no arm carries an i64 result").isFalse();
+	}
+
+	@Test
+	void aWhileLoopPushesNothingForTheFormAfterItToDrop() {
+		// while is VOID: the nil the other backends answer here is never read, so the
+		// loop's two ENDs are followed straight by the next form rather than by the
+		// i64 zero and the drop that undid it.
+		byte[] module = compilePlainUnoptimized("""
+				(defun count-up (n)
+				  (let ((i 0))
+				    (while (< i n) (setq i (+ i 1)))
+				    i))
+				(rontolisp:wasm-export 'count-up :params '(:long) :returns :long)
+				""");
+		assertThat(containsSequence(localFunctionBody(module, "count-up"), 0x0B, 0x0B, 0x42, 0x00, 0x1A))
+			.as("loop end, then nil, then drop")
+			.isFalse();
+	}
+
+	@Test
 	void aComparisonFeedsTheBranchWithoutBeingWidenedFirst() {
 		// `if` consumes an i32 condition and a comparison produces exactly that, so the
 		// widening into the i64 value domain (and the `!= 0` that would undo it) is not
@@ -892,6 +971,15 @@ class NoGcWasmCompilerTest {
 	// Whether the byte array contains the given (unsigned) byte sequence anywhere. Used
 	// to
 	// confirm a specific SIMD opcode (SIMD_PREFIX 0xFD + a sub-opcode) is emitted.
+	// The body of the local function an export names, addressed the way the code section
+	// is: the export carries an ABSOLUTE function index, so the host imports in front of
+	// the local ones have to come off it first.
+	private static byte[] localFunctionBody(byte[] module, String exportName) {
+		Map<Integer, byte[]> sections = sections(module);
+		int absolute = exportedFuncIndex(Objects.requireNonNull(sections.get(7)), exportName);
+		return functionBody(Objects.requireNonNull(sections.get(10)), absolute - importedFunctions(module).size());
+	}
+
 	private static boolean containsSequence(byte[] haystack, int... needle) {
 		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
 			for (int j = 0; j < needle.length; j++) {

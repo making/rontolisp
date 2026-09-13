@@ -1,6 +1,8 @@
 # 806: the i32 tier that was measured and rejected, and the void finding that came out of it
 
-Numbers and the reading: [`../../806-no-gc-internal-void.md`](../../806-no-gc-internal-void.md).
+Numbers and the reading: `.kb/no-gc-scalar-wasm.md` ("There is no i32 tier, and there must
+not be one" and the VOID half of "Value model and inference"). The item is closed and its
+text is recoverable from the deletion history; this directory is how to reproduce it.
 The benchmark and the JS host are in
 [`../805-no-gc-literal-import-call-sites/`](../805-no-gc-literal-import-call-sites);
 use `bench.lisp` from there.
@@ -52,11 +54,15 @@ the bytes are.
 declaration, so that the wrap point is the user's stated contract the way `:s32` already is
 at the boundary.
 
-## What came out of it instead
+## What came out of it instead, and landed
 
-The void finding that `806` is actually about, and the `planMemory` layout coupling in
-front of it (`allocIndex = funcBase + internalCount + exportDecls.size()` assumes one
-wrapper per export, decided before pass-through exists -- a spike that elided more wrappers
-than planned threw `Index 25 out of bounds`).
+The internal VOID the spike exposed: a fourth point in the value lattice, so a form in
+statement position produces nothing and a `:void` boundary is `(...) -> ()` on both sides.
+Landed 2026-09-13 -- the reactor above went 953 -> 931 B at `--optimize=size` with zero
+`i64.const 0` / `drop` pairs left and `InitApp` reaching `isPassThroughExport`. Two
+predictions this directory's first draft made did NOT hold and are corrected in
+`.kb/no-gc-scalar-wasm.md`: `AppendLogMessage` keeps its wrapper whatever happens to the
+void (its `:s32` parameter needs an `i64.extend_i32_s`), and most of the win is not at the
+import boundary at all but in `while` and in the dead `nil` the `cond` expansion leaves.
 
 `sizes.mjs` prints the per-function table the numbers above come from.
