@@ -27,7 +27,7 @@ How the report is built and run: [../README.md](../README.md).
 | dom_reactor | `--no-wasi --optimize=off` | core (reactor) | none | 371,686 |
 | dom_reactor | `--no-wasi --optimize` | core (reactor) | none | 2,936 |
 | dom_reactor | `--no-wasi --optimize=size` | core (reactor) | none | 2,635 |
-| dom_reactor | `--no-gc --no-wasi --optimize=size` | core (reactor) | none | 930 |
+| dom_reactor | `--no-gc --no-wasi --optimize=size` | core (reactor) | none | 856 |
 
 ## What is measured
 
