@@ -826,9 +826,27 @@ public final class LispLexer {
 		this.pos += 2; // skip "#+" / "#-"
 		LispVal expr = readFeatureExpr();
 		if (this.features.isEnabled(expr) == negated) {
-			skipDatum();
+			skipSuppressed();
 		}
 	}
+
+	// Skips the form a FAILED guard covers. Everything inside it is read under CL's
+	// *read-suppress* rules, which is what the flag records: a nested #+/#- there yields
+	// no datum at all rather than deciding which of the forms behind it is the datum.
+	private void skipSuppressed() {
+		boolean outer = this.suppressed;
+		this.suppressed = true;
+		try {
+			skipDatum();
+		}
+		finally {
+			this.suppressed = outer;
+		}
+	}
+
+	// Whether the skip in progress is covered by a failed #+/#- guard; see
+	// skipSuppressed.
+	private boolean suppressed;
 
 	private LispVal readFeatureExpr() {
 		skipInterTokenSpace();
@@ -1048,13 +1066,30 @@ public final class LispLexer {
 				return true;
 			}
 			if (next == '+' || next == '-') {
-				// A nested conditional inside a skipped form: skip its feature
-				// expression and its guarded form, like *read-suppress*. It yields NO
-				// datum, so report false -- the enclosing skipDatum keeps going.
+				if (this.suppressed) {
+					// A nested conditional inside a skipped form: skip its feature
+					// expression and its guarded form, like *read-suppress*. It yields
+					// NO datum, so report false -- the enclosing skipDatum keeps going.
+					this.pos += 2;
+					skipDatum();
+					skipDatum();
+					return false;
+				}
+				// Not suppressed -- this walk is deciding WHERE THE DATUM ENDS
+				// (datumEnd), so the guard has to be evaluated exactly as a real read
+				// evaluates it. When it holds, the form behind it IS the datum and the
+				// scan stops there; when it fails, the form is skipped and the scan
+				// keeps looking, which is the read's own behavior and the only way
+				// read-from-string's second value can answer for either branch.
+				boolean negated = next == '-';
 				this.pos += 2;
+				LispVal expr = readFeatureExpr();
+				if (this.features.isEnabled(expr) == negated) {
+					skipSuppressed();
+					return false;
+				}
 				skipDatum();
-				skipDatum();
-				return false;
+				return true;
 			}
 			if (next == '.') {
 				this.pos += 2;

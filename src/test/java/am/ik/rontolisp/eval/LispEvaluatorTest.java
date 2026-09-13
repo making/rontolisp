@@ -12529,6 +12529,35 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalARuntimeReadTestsItsConditionalsAgainstTheLiveFeaturesList() {
+		// The direction the READ-TIME set cannot supply: a read-time set is fixed for
+		// the duration of the frontend's one read, while read/read-from-string run
+		// later and CL says they test the *features* list as it stands then. Both the
+		// datum and the stop index follow the branch the guard picks.
+		assertThat(eval("""
+				(let ((*features* '(:a :x :b)))
+				  (multiple-value-list (read-from-string "#+X :good :bad")))""").print()).isEqualTo("(:GOOD 10)");
+		assertThat(eval("""
+				(let ((*features* '(:a :x :b)))
+				  (multiple-value-list (read-from-string "#+(and a c) :bad :good")))""").print())
+			.isEqualTo("(:GOOD 22)");
+		// A push reaches the reads that follow it, which is the whole point of the
+		// variable being a variable.
+		assertThat(evalMulti("""
+				(push :later *features*)
+				(read-from-string "#+later :yes #-later :no")
+				""").print()).isEqualTo(":YES");
+		// A feature expression is read with *package* bound to KEYWORD (CLHS
+		// 24.1.2.1.1), so an unqualified #+X asks about the KEYWORD :X and a
+		// *features* holding the plain symbol X answers no -- while the qualified
+		// spelling asks about that symbol and answers yes.
+		assertThat(eval("""
+				(let ((*features* '(x)))
+				  (list (read-from-string "#+X :bad :good")
+				        (read-from-string "#+CL-USER::X :good :bad")))""").print()).isEqualTo("(:GOOD :GOOD)");
+	}
+
+	@Test
 	void evalReadEvalNilMakesSharpDotSignal() {
 		// CLHS: binding *read-eval* to nil makes reading #. signal, catchably; the
 		// read after the binding exits works again.
@@ -15573,7 +15602,9 @@ class LispEvaluatorTest {
 	void runtimeReadErrorsAreCatchableConditions() {
 		// A runtime read error is a catchable condition (CL's reader-error is an error
 		// subtype), carrying the frontend's message -- the same contract the compiled
-		// backends' emitted readers follow.
+		// backends' emitted readers follow. A bad radix token names the WHOLE token it
+		// refused, not the first character past the last good digit: "#xZZ" is one
+		// token, and half of it is not what the reader complained about.
 		assertThat(evalMulti("""
 				(defstruct point x y)
 				(list
@@ -15582,7 +15613,7 @@ class LispEvaluatorTest {
 				  (handler-case (read-from-string "#S(NOSUCH :X 1)") (error (e) (simple-condition-format-control e)))
 				  (handler-case (read-from-string "#S(POINT :Z 1)") (error (e) (simple-condition-format-control e)))
 				  (handler-case (read-from-string "1/0") (error (e) (simple-condition-format-control e))))
-				""").print()).isEqualTo("(\"Unknown character name: #\\\\Foo\" \"Invalid digits after #x: Z\" "
+				""").print()).isEqualTo("(\"Unknown character name: #\\\\Foo\" \"Invalid digits after #x: ZZ\" "
 				+ "\"#S(NOSUCH ...): NOSUCH is not a defined structure type\" "
 				+ "\"#S(POINT ...): POINT has no slot named :Z\" \"Division by zero in ratio literal: 1/0\")");
 	}

@@ -336,6 +336,38 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Answers the feature set a RUN-TIME {@code read} / {@code read-from-string} tests
+	 * its {@code #+}/{@code #-} guards against: the live value of {@code *features*}.
+	 * Installed by the evaluator for the same reason
+	 * {@link #setReadSuppressQuery(BooleanSupplier)} is -- the built-in holds the global
+	 * environment, and {@code (let ((*features* '(:x))) (read-from-string ...))} is a
+	 * dynamic binding only the evaluator can see. A {@code null} query (a bare
+	 * {@code Environment}) reads with the static interpreter set.
+	 * <p>
+	 * This is the direction the read-time set cannot supply: a READ-TIME feature set is
+	 * fixed for the duration of the frontend's one read, while a program's own
+	 * {@code (push :x *features*)} happens later and must reach the reads it makes after
+	 * it. The two are seeded from the same names so they cannot disagree about the build
+	 * ({@code .kb/reader-features.md}).
+	 */
+	@Nullable private Supplier<am.ik.rontolisp.reader.Features> readFeaturesQuery;
+
+	/**
+	 * Installs the {@code *features*} query consulted by the runtime read built-ins; see
+	 * {@link #readFeaturesQuery}.
+	 * @param query answers the current feature set
+	 */
+	public void setReadFeaturesQuery(Supplier<am.ik.rontolisp.reader.Features> query) {
+		this.readFeaturesQuery = query;
+	}
+
+	/** The feature set the runtime read built-ins test their guards against. */
+	private am.ik.rontolisp.reader.Features currentReadFeatures() {
+		return this.readFeaturesQuery == null ? am.ik.rontolisp.reader.Features.INTERPRETER
+				: this.readFeaturesQuery.get();
+	}
+
+	/**
 	 * Value expressions registered by {@link #defineLazy} that have not been forced yet.
 	 * Allocated on first use: only the compile path's macro-time environment ever has
 	 * one, so an ordinary (per-call) environment pays a null check and no map.
@@ -6091,10 +6123,10 @@ public final class Environment implements Scope {
 		// keeps the error-mode read, matching the compiled backends' embedded readers.
 		java.util.function.Function<String, LispVal> readRuntimeDatum = input -> {
 			if (env.readTimeEvalResolver != null && input.contains("#.")) {
-				return env.readTimeEvalResolver.apply(LispReader.readFromStringWithReadEvalMarkers(input,
-						am.ik.rontolisp.reader.Features.INTERPRETER));
+				return env.readTimeEvalResolver
+					.apply(LispReader.readFromStringWithReadEvalMarkers(input, env.currentReadFeatures()));
 			}
-			return LispReader.readFromString(input, am.ik.rontolisp.reader.Features.INTERPRETER);
+			return LispReader.readFromString(input, env.currentReadFeatures());
 		};
 		// read itself is NOT here: it is prelude rontolisp over read-char /
 		// unread-char / read-from-string (LispPreludeLibrary), so one definition
@@ -6130,7 +6162,7 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.READ_FROM_STRING_END + " expects a string");
 			}
-			return readDatumStop(str.value());
+			return readDatumStop(str.value(), env.currentReadFeatures());
 		}));
 		// parse-integer: parse an integer from a string, with the common :radix,
 		// :junk-allowed, :start and :end keywords.
@@ -6169,10 +6201,12 @@ public final class Environment implements Scope {
 	 * cannot delimit at all answers the whole length rather than signalling: a
 	 * disagreement between the scan and the parse must never turn a working read into an
 	 * error.
+	 * @param input the source text
+	 * @param features the features the {@code #+}/{@code #-} guards in it test
 	 */
-	private static LispVal readDatumStop(String input) {
+	private static LispVal readDatumStop(String input, am.ik.rontolisp.reader.Features features) {
 		try {
-			return new LispInteger(LispLexer.datumEnd(input, am.ik.rontolisp.reader.Features.INTERPRETER));
+			return new LispInteger(LispLexer.datumEnd(input, features));
 		}
 		catch (RuntimeException ex) {
 			return new LispInteger(input.length());

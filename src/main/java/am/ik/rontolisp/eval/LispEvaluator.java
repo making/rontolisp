@@ -940,6 +940,12 @@ public final class LispEvaluator {
 			LispVal suppress = currentSpecialValue(LispNames.READ_SUPPRESS_VAR);
 			return suppress != null && !(suppress instanceof LispNil);
 		});
+		// *features* for the runtime readers, the same way and for the same reason: CL's
+		// #+/#- test the LIVE list, so a (push :x *features*) -- or the
+		// (let ((*features* '(:x))) ...) a test writes -- decides the guards of every
+		// read that follows it. The read-time set cannot answer for that; it was fixed
+		// when the frontend read this source.
+		this.globalEnv.setReadFeaturesQuery(this::currentReadFeatures);
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -4718,6 +4724,32 @@ public final class LispEvaluator {
 			return true;
 		}
 		return !(currentSpecialValue(LispNames.PRINT_BASE_VAR) instanceof LispInteger base && base.value() == 10);
+	}
+
+	/**
+	 * The feature set the runtime {@code read} / {@code read-from-string} test their
+	 * {@code #+}/{@code #-} guards against: the live {@code *features*} list, entry by
+	 * entry, as each symbol prints. Keeping the printed spelling is what preserves the
+	 * keyword distinction CL's own comparison makes -- an unqualified {@code #+X} asks
+	 * about the KEYWORD {@code :X} (the feature expression is read with {@code *package*}
+	 * bound to {@code KEYWORD}, CLHS 24.1.2.1.1) and so does not match a
+	 * {@code *features*} entry that is a symbol in some other package. A value that is
+	 * not a list of symbols leaves the static set in place rather than signalling: a
+	 * reader must not be the thing that reports a malformed {@code *features*}.
+	 */
+	private am.ik.rontolisp.reader.Features currentReadFeatures() {
+		LispVal features = currentSpecialValue(LispNames.FEATURES_VAR);
+		if (!(features instanceof LispCons cons) || !cons.isProperList()) {
+			return features instanceof LispNil ? am.ik.rontolisp.reader.Features.ofRuntimeList(List.of())
+					: am.ik.rontolisp.reader.Features.INTERPRETER;
+		}
+		List<String> names = new ArrayList<>();
+		for (LispVal entry : cons.toList()) {
+			if (entry instanceof LispSymbol symbol) {
+				names.add(symbol.name());
+			}
+		}
+		return am.ik.rontolisp.reader.Features.ofRuntimeList(names);
 	}
 
 	/**

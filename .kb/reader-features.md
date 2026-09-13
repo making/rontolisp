@@ -61,6 +61,32 @@ Three callers; nothing may switch a backend feature off and claim to be that bac
    `.aDeclaredFeatureReachesTheCompiledBackendsToo`.
 3. A source's own feature push -- `FeaturePushes`, below.
 
+## A RUNTIME read tests the live `*features*` (interpreter)
+The other direction, and the one the read-time set cannot supply: `read` / `read-from-string` run
+AFTER the frontend's one read, and CL says their `#+`/`#-` test `*features*` as it stands then --
+so a `(push :x *features*)` decides the guards of every read that follows it, and
+`(let ((*features* '(:a :x :b))) (read-from-string "#+X :good :bad"))` is `:good`.
+`Environment.setReadFeaturesQuery`, installed by `LispEvaluator` beside `setReadSuppressQuery` and
+for the same reason (the built-in holds the GLOBAL environment; a `let` binding is visible only
+from the evaluator), hands the reader `Features.ofRuntimeList` over the live list.
+- **The keyword distinction is kept, because CL's is.** A feature expression is read with
+  `*package*` bound to `KEYWORD` (CLHS 24.1.2.1.1), so unqualified `#+X` asks about `:X` and does
+  NOT match a `*features*` holding the plain symbol `X`, while `#+CL-TEST::X` asks about the symbol
+  and does. In a runtime set the names arrive as each symbol PRINTS (`":X"` vs `"X"`), which is the
+  only place the two are distinguishable -- a rontolisp symbol carries no package ([[.todo/156]]),
+  so `FOO::X` and `BAR::X` are one name. The static sets spell their names bare and compare with the
+  colon stripped; nothing else changes for them.
+- **The stop index follows the same branch.** `LispLexer.datumEnd` -- `read-from-string`'s second
+  value, and the whole answer of a suppressed read -- used to treat every `#+` as a FAILED guard and
+  walk on to the next form, so the index was right only when the guarded form happened to be last.
+  It now evaluates the guard: a holding guard makes the form behind it the datum and stops there.
+  Inside a form a failed guard already covers, the old rule stands (`LispLexer.suppressed`) -- a
+  nested conditional there yields no datum at all, which is what makes the `#+f #+f A B` two-form
+  idiom skip both.
+- INTERPRETER only: the readers emitted into compiled output know no `#+` at all
+  ([[read-load-streams]]). Pinned by
+  `LispEvaluatorTest.evalARuntimeReadTestsItsConditionalsAgainstTheLiveFeaturesList`.
+
 ## Threading
 `LispReader.readAllFromString(input, features)` (1-arg overload = INTERPRETER). Reading happens
 once at the frontend, so a compiled program's `#+` set is fixed at compile time.

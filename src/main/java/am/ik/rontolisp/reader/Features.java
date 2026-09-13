@@ -127,8 +127,21 @@ public final class Features {
 
 	private final List<String> names;
 
+	/**
+	 * Whether a name in {@link #names} is a SYMBOL DESIGNATOR that carries its own
+	 * keyword-ness (a leading {@code :}) rather than a bare feature name. True only for
+	 * {@link #ofRuntimeList(List)}: the static sets spell their names bare, and stripping
+	 * a query's colon is the whole of the comparison there.
+	 */
+	private final boolean designators;
+
 	private Features(List<String> names) {
+		this(names, false);
+	}
+
+	private Features(List<String> names, boolean designators) {
 		this.names = names;
+		this.designators = designators;
 	}
 
 	/**
@@ -138,6 +151,24 @@ public final class Features {
 	 */
 	public static Features of(String... names) {
 		return new Features(List.of(names));
+	}
+
+	/**
+	 * The feature set a RUNTIME {@code read} / {@code read-from-string} tests: the live
+	 * value of the {@code *features*} variable, which a program may rebind or push onto
+	 * at will. The names arrive as the list holds them -- {@code ":X"} for a keyword,
+	 * {@code "X"} for a symbol read in some other package -- and the comparison KEEPS
+	 * that distinction, because Common Lisp's does: a feature expression is read with
+	 * {@code *package*} bound to {@code KEYWORD} (CLHS 24.1.2.1.1), so the unqualified
+	 * {@code #+X} asks about {@code :X} and only a qualified {@code #+FOO::X} asks about
+	 * a symbol in another package. The static sets above cannot make that distinction and
+	 * do not need to: every name in them is a keyword.
+	 * @param names the {@code *features*} entries, each printed as the symbol reads
+	 * ({@code ":X"} or {@code "X"})
+	 * @return the feature set
+	 */
+	public static Features ofRuntimeList(List<String> names) {
+		return new Features(List.copyOf(names), true);
 	}
 
 	/**
@@ -183,6 +214,15 @@ public final class Features {
 	 * @return {@code true} if the feature is active
 	 */
 	public boolean contains(String feature) {
+		if (this.designators) {
+			String name = queriedDesignator(feature);
+			for (String candidate : this.names) {
+				if (listedDesignator(candidate).equals(name)) {
+					return true;
+				}
+			}
+			return false;
+		}
 		String name = featureName(feature);
 		for (String candidate : this.names) {
 			if (candidate.equalsIgnoreCase(name)) {
@@ -229,6 +269,35 @@ public final class Features {
 			default ->
 				throw new LispReadException("Unknown feature expression operator " + op.name() + ": " + cons.print());
 		};
+	}
+
+	/**
+	 * A name out of the {@code *features*} list, normalized for comparison: the
+	 * upper-cased member name, prefixed with {@code ":"} when the entry IS a keyword --
+	 * which, for a list entry, is exactly when it prints with a leading colon. A package
+	 * prefix is dropped because a rontolisp symbol does not carry its package
+	 * ({@code .todo/156}), so {@code FOO::X} and {@code BAR::X} are one name here.
+	 */
+	private static String listedDesignator(String name) {
+		String text = name.startsWith("#:") ? name.substring(2) : name;
+		return text.startsWith(":") ? ":" + memberOf(text) : memberOf(text);
+	}
+
+	/**
+	 * A name out of a {@code #+}/{@code #-} feature EXPRESSION, normalized the same way
+	 * -- except that an UNQUALIFIED name is a keyword here, because the expression is
+	 * read with {@code *package*} bound to {@code KEYWORD} (CLHS 24.1.2.1.1). That is the
+	 * whole difference between the two sides, and the thing that makes {@code #+X} ask
+	 * about {@code :X} while a {@code *features*} holding the symbol {@code X} answers
+	 * no.
+	 */
+	private static String queriedDesignator(String feature) {
+		String text = feature.startsWith("#:") ? feature.substring(2) : feature;
+		return text.indexOf(':') < 0 || text.startsWith(":") ? ":" + memberOf(text) : memberOf(text);
+	}
+
+	private static String memberOf(String text) {
+		return text.substring(text.lastIndexOf(':') + 1).toUpperCase(Locale.ROOT);
 	}
 
 	private static String featureName(String name) {
