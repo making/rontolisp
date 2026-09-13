@@ -52,6 +52,10 @@ knows nothing about `ClosRegistry`, so reading is split in two:
   must PRECEDE the literal, on every backend. The interpreter's runtime `read`/`read-from-string`
   fold their RESULT through the same folder — `LispEvaluator.registerEval` rebinds the FUNCTION
   binding, not the call sites, so `#'read-from-string` and every library that funcalls it fold too.
+- The fold carries the conses and arrays on its CURRENT PATH by identity and returns a back edge
+  unwalked: a datum a `#n=` label closed into a circle ([[reader-features]]) has one, and a walk
+  that REBUILDS what it changes can only leave it alone. On the path and not "ever seen", so the
+  same label referenced twice side by side still folds both times.
 - The carrier is a first-class `LispVal`, not a `(%read-struct ...)` marker cons: being neither
   symbol nor cons it rides through `quote`, backquote templates and `#(...)` literals with no special
   case. The fold walks conses AND `LispArray` storage for the same reason.

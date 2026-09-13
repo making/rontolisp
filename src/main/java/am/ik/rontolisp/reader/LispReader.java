@@ -423,16 +423,26 @@ public final class LispReader {
 			case Token.SharpL sharp -> readSharpL(sharp.nArgs());
 			case Token.SharpC ignored -> readSharpC();
 			case Token.LabelDef def -> {
-				// #n=: record the next datum under the label. Lite: no circular
-				// structures -- a #n# inside the labeled datum itself is unresolvable.
+				// #n=: the label has to be visible to a #n# INSIDE its own datum -- that
+				// is the whole point of the syntax (CLHS 2.4.8.3) -- so a placeholder
+				// cell stands for the label while the datum is read and every reference
+				// to it is patched to the finished object afterwards. The placeholder is
+				// compared by IDENTITY, so it can never collide with a datum of its own.
+				LispCons placeholder = new LispCons(LispNil.INSTANCE, LispNil.INSTANCE);
+				this.labels.put(def.label(), placeholder);
 				LispVal datum = readExpr();
+				if (datum == placeholder) {
+					throw err("#" + def.label() + "= labels nothing but its own reference");
+				}
 				this.labels.put(def.label(), datum);
+				patchLabel(datum, placeholder, datum,
+						java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
 				yield datum;
 			}
 			case Token.LabelRef ref -> {
 				LispVal datum = this.labels.get(ref.label());
 				if (datum == null) {
-					throw err("#" + ref.label() + "# references an undefined (or circular) reader label");
+					throw err("#" + ref.label() + "# references an undefined reader label");
 				}
 				yield datum;
 			}
@@ -440,7 +450,52 @@ public final class LispReader {
 	}
 
 	/** The datums recorded by {@code #n=} reader labels, shared across the read. */
-	private final java.util.Map<Integer, LispVal> labels = new java.util.HashMap<>();
+	private final java.util.Map<String, LispVal> labels = new java.util.HashMap<>();
+
+	/**
+	 * Replaces every reference to a {@code #n=} placeholder inside the finished datum
+	 * with the datum itself, which is what closes a circular structure. The walk carries
+	 * an IDENTITY-visited set because the structure becomes circular while it is running
+	 * -- a structural set would not terminate, and would conflate two equal-but-distinct
+	 * cells.
+	 */
+	private void patchLabel(LispVal node, LispCons placeholder, LispVal value, java.util.Set<LispVal> seen) {
+		switch (node) {
+			case LispCons cons -> {
+				if (!seen.add(cons)) {
+					return;
+				}
+				if (cons.car() == placeholder) {
+					cons.setCar(value);
+				}
+				else {
+					patchLabel(cons.car(), placeholder, value, seen);
+				}
+				if (cons.cdr() == placeholder) {
+					cons.setCdr(value);
+				}
+				else {
+					patchLabel(cons.cdr(), placeholder, value, seen);
+				}
+			}
+			case am.ik.rontolisp.LispArray array -> {
+				if (!seen.add(array)) {
+					return;
+				}
+				LispVal[] data = array.data();
+				for (int i = 0; i < data.length; i++) {
+					if (data[i] == placeholder) {
+						data[i] = value;
+					}
+					else {
+						patchLabel(data[i], placeholder, value, seen);
+					}
+				}
+			}
+			default -> {
+			}
+		}
+	}
 
 	private LispVal readRatio(Token.RatioToken ratio) {
 		if (ratio.denominator().signum() == 0) {

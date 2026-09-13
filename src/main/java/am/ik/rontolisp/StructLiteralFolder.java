@@ -1,7 +1,10 @@
 package am.ik.rontolisp;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Folds every {@link LispStructLiteral} a {@code #S(NAME :SLOT value ...)} source literal
@@ -65,31 +68,59 @@ public final class StructLiteralFolder {
 	 * @return the folded form, or {@code form} itself when it holds no struct literal
 	 */
 	public static LispVal fold(LispVal form, ClosRegistry registry) {
+		return fold(form, registry, Collections.newSetFromMap(new IdentityHashMap<>()));
+	}
+
+	/**
+	 * The walk itself, carrying the aggregates on the CURRENT PATH by identity. A datum a
+	 * {@code #n=} reader label closed into a circle (CLHS 2.4.8.3) has a back edge, and
+	 * this walk REBUILDS what it changes, so a back edge can only be left alone: the node
+	 * is returned as it stands the second time the path reaches it. On the path and not
+	 * "ever seen", so a DAG -- the same label referenced twice, side by side -- still
+	 * folds both occurrences.
+	 */
+	private static LispVal fold(LispVal form, ClosRegistry registry, Set<LispVal> active) {
 		switch (form) {
 			case LispStructLiteral literal -> {
-				return foldLiteral(literal, registry);
+				return foldLiteral(literal, registry, active);
 			}
 			case LispCons cons -> {
-				LispVal car = fold(cons.car(), registry);
-				LispVal cdr = fold(cons.cdr(), registry);
-				return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+				if (!active.add(cons)) {
+					return form;
+				}
+				try {
+					LispVal car = fold(cons.car(), registry, active);
+					LispVal cdr = fold(cons.cdr(), registry, active);
+					return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+				}
+				finally {
+					active.remove(cons);
+				}
 			}
 			case LispArray array -> {
 				// A #(...) / #nA(...) literal may hold struct literals; the packed float
 				// arrays cannot, their elements are numbers. Only a literal's own storage
 				// is walked -- a displaced view is never reader-produced.
-				LispVal[] data = array.data();
-				LispVal[] folded = null;
-				for (int i = 0; i < data.length; i++) {
-					LispVal element = fold(data[i], registry);
-					if (element != data[i] && folded == null) {
-						folded = data.clone();
-					}
-					if (folded != null) {
-						folded[i] = element;
-					}
+				if (!active.add(array)) {
+					return form;
 				}
-				return folded == null ? form : new LispArray(array.dimensions(), folded);
+				try {
+					LispVal[] data = array.data();
+					LispVal[] folded = null;
+					for (int i = 0; i < data.length; i++) {
+						LispVal element = fold(data[i], registry, active);
+						if (element != data[i] && folded == null) {
+							folded = data.clone();
+						}
+						if (folded != null) {
+							folded[i] = element;
+						}
+					}
+					return folded == null ? form : new LispArray(array.dimensions(), folded);
+				}
+				finally {
+					active.remove(array);
+				}
 			}
 			default -> {
 				return form;
@@ -98,7 +129,7 @@ public final class StructLiteralFolder {
 	}
 
 	/** Builds the instance one {@code #S(...)} literal denotes. */
-	private static LispInstance foldLiteral(LispStructLiteral literal, ClosRegistry registry) {
+	private static LispInstance foldLiteral(LispStructLiteral literal, ClosRegistry registry, Set<LispVal> active) {
 		LispLayout layout = registry.findStructLayout(literal.typeName());
 		if (layout == null) {
 			String hint = registry.findClassLayout(literal.typeName()) != null
@@ -116,12 +147,12 @@ public final class StructLiteralFolder {
 			}
 			// Leftmost wins: a repeated slot keeps the value written first.
 			if (slots[index] == null) {
-				slots[index] = fold(literal.slotValues().get(i), registry);
+				slots[index] = fold(literal.slotValues().get(i), registry, active);
 			}
 		}
 		for (int i = 0; i < slots.length; i++) {
 			if (slots[i] == null) {
-				slots[i] = defaultSlotValue(literal, layout, i, registry);
+				slots[i] = defaultSlotValue(literal, layout, i, registry, active);
 			}
 		}
 		return new LispInstance(layout, slots);
@@ -135,7 +166,7 @@ public final class StructLiteralFolder {
 	 * value on others.
 	 */
 	private static LispVal defaultSlotValue(LispStructLiteral literal, LispLayout layout, int index,
-			ClosRegistry registry) {
+			ClosRegistry registry, Set<LispVal> active) {
 		LispVal initform = layout.initforms().get(index);
 		LispVal constant = constantValue(initform);
 		if (constant == null) {
@@ -143,7 +174,7 @@ public final class StructLiteralFolder {
 					"#S(" + literal.typeName() + " ...): slot " + layout.slotNames().get(index)
 							+ " is omitted and its initform " + initform.print() + " is not a constant");
 		}
-		return fold(constant, registry);
+		return fold(constant, registry, active);
 	}
 
 	/**

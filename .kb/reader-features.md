@@ -209,12 +209,23 @@ Traps:
   `*SharpLAndCommaDotAndWithHashTableIterator`, ci-spec `sharp-l-comma-dot-and-hash-table-iterator`.
 - **Symbol single-escapes** (parse-number) and **`|...|`** (jzon) keep the next character / the
   whole run verbatim in the name. The compiled runtime readers know neither.
+  **A `:` in either is still read as a package marker** -- the token carries no record of which
+  characters were escaped -- so `\:` and `|:|` read as the keyword `:||` and `|a:b|` as `B`. The
+  fix needs a symbol model that carries escapes ([[.todo/156]]); 4 ANSI `SYNTAX.ESCAPED.*` tests
+  sit on it.
 - **`#b`/`#o`/`#x`/`#<n>R` read RATIONALS, not only integers** (CLHS 2.3.2.1): an optional sign,
   digits in the radix, and an optional `/denominator` whose digits are in the SAME radix and carry
   no sign of their own (`#b-10/11` is -2/3). `#<n>R` spells the radix as the dispatch's infix
   argument and must name 2..36; `LispLexer.readRadixNumber` is the one scanner all four spellings
   reach. A constituent character behind the digits invalidates the whole token rather than ending
   a number early.
+- **`#n=` / `#n#` reader labels are unbounded and may close a CIRCLE.** The label is kept as
+  DIGITS (`Token.LabelDef`), because CLHS 2.4.8.3 bounds neither the value nor the digit count --
+  an int label made `#123456789123456789=` a read error. The label is in scope INSIDE its own
+  datum: a placeholder cons stands for it while the datum is read and `LispReader.patchLabel`
+  replaces every reference by identity afterwards, so `#1=(A B . #1#)` is the circular list it
+  says. `StructLiteralFolder` therefore carries the aggregates on the CURRENT PATH and returns a
+  back edge unwalked -- it rebuilds what it changes, and a circular datum cannot be rebuilt.
 
 ## Tests
 ci-spec `reader-block-comments`, `reader-feature-conditionals`, `reader-per-backend-features`

@@ -1098,6 +1098,23 @@ class LispReaderTest {
 			.hasMessageContaining("Invalid digits");
 	}
 
+	@Test
+	void readALabelIsAnUnboundedDecimalAndMayCloseACircle() {
+		// CLHS 2.4.8.3 bounds neither the digit count nor the nesting: #n= is in scope
+		// INSIDE its own datum, which is the only way a self-referential structure can
+		// be written at all.
+		LispVal wide = LispReader.readFromString("(#123456789123456789=(17) #123456789123456789#)");
+		assertThat(wide).isInstanceOf(LispCons.class);
+		LispCons wideList = (LispCons) wide;
+		assertThat(wideList.car()).isSameAs(((LispCons) wideList.cdr()).car());
+		LispCons circular = (LispCons) LispReader.readFromString("#1=(A B . #1#)");
+		assertThat(((LispCons) circular.cdr()).cdr()).isSameAs(circular);
+		LispArray vector = (LispArray) LispReader.readFromString("#1=#(A B #1#)");
+		assertThat(vector.data()[2]).isSameAs(vector);
+		// A label that stands for nothing but itself has no datum to record.
+		assertThatThrownBy(() -> LispReader.readFromString("#1=#1#")).isInstanceOf(LispReadException.class);
+	}
+
 	private static LispVal list(LispVal... items) {
 		LispVal result = LispNil.INSTANCE;
 		for (int i = items.length - 1; i >= 0; i--) {

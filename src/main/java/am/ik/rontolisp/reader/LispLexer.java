@@ -415,14 +415,11 @@ public final class LispLexer {
 				}
 				else if (probe < this.input.length()
 						&& (this.input.charAt(probe) == '=' || this.input.charAt(probe) == '#')) {
-					// #n= labels the next datum, #n# references it.
-					int label;
-					try {
-						label = Integer.parseInt(this.input.substring(this.pos + 1, probe));
-					}
-					catch (NumberFormatException overflow) {
-						throw err("Invalid reader label: " + this.input.substring(this.pos, probe));
-					}
+					// #n= labels the next datum, #n# references it. The label is kept as
+					// DIGITS: CLHS 2.4.8.3 bounds neither the value nor the digit count,
+					// and a label wide enough to overflow an int used to be a read error
+					// (the suite writes #123456789123456789=).
+					String label = new java.math.BigInteger(this.input.substring(this.pos + 1, probe)).toString();
 					add(tokens, this.input.charAt(probe) == '=' ? new Token.LabelDef(label) : new Token.LabelRef(label),
 							tokenStart);
 					this.pos = probe + 1;

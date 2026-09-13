@@ -86,20 +86,23 @@ public sealed interface Token {
 
 	/**
 	 * Reader-label definition ({@code #n=}) token: the next datum is recorded under the
-	 * label. Lite: forward/circular references are not supported.
+	 * label, and a {@code #n#} INSIDE that datum refers to it, which is what makes a
+	 * circular structure readable.
 	 *
-	 * @param label the label number
+	 * @param label the label, as the decimal digits were written with leading zeros
+	 * dropped -- a STRING and not an {@code int} because CLHS 2.4.8.3 puts no bound on
+	 * the digit count ({@code #123456789123456789=} is a valid label)
 	 */
-	record LabelDef(int label) implements Token {
+	record LabelDef(String label) implements Token {
 	}
 
 	/**
 	 * Reader-label reference ({@code #n#}) token: stands for the datum recorded by the
 	 * matching {@link LabelDef}.
 	 *
-	 * @param label the label number
+	 * @param label the label, spelled as in {@link LabelDef}
 	 */
-	record LabelRef(int label) implements Token {
+	record LabelRef(String label) implements Token {
 	}
 
 	/**
