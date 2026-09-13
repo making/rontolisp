@@ -8119,6 +8119,19 @@ public final class LispEvaluator {
 			if (loadedElsewhere != null) {
 				return loadedElsewhere;
 			}
+			// The keyword helpers a desugared &key prologue calls
+			// (LambdaLists.runtimeDefun):
+			// the ONE Lisp definition the compilers prepend to a program, evaluated here
+			// on
+			// the first call -- a lambda-creation-time expansion is what introduces the
+			// reference, so no earlier hook can see it coming.
+			if (LambdaLists.isRuntimeHelper(name)) {
+				eval(LambdaLists.runtimeDefun(name), this.globalEnv);
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
 			// The linalg package is a Lisp-source library (linalg.lisp): evaluate its
 			// definitions into the global environment the first time a linalg:-qualified
 			// function is resolved, then retry the lookup.

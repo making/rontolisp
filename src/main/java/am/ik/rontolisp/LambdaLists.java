@@ -25,11 +25,16 @@ import org.jspecify.annotations.Nullable;
  *
  * Optional/key defaults are evaluated only when the argument is absent (the {@code if}
  * guards), in left-to-right {@code let*} scope so a default can reference earlier
- * parameters, matching Common Lisp. Keyword parsing scans the rest list with a
- * {@code do}/{@code return} loop (the same shape {@code getf} expands to), so no new
- * backend primitives are needed. Unknown keywords signal an error unless
- * {@code &allow-other-keys} is declared or the caller passes {@code :allow-other-keys t}.
- * {@code &whole} is not supported (it is only meaningful for macros).
+ * parameters, matching Common Lisp. Keyword parsing is a CALL per keyword parameter
+ * ({@code %ll-key-cell}, the plist cell for the keyword or nil) plus one per function
+ * ({@code %ll-check-keys}, the unknown-keyword check); both are ordinary {@code defun}s
+ * built here ({@link #runtimeDefun}) -- {@link #desugarProgram} prepends them to a
+ * program that spells {@code &key}, the interpreter evaluates them on first resolution --
+ * so the scan loop exists once per program rather than once per keyword parameter (a
+ * {@code defstruct}-heavy program carried hundreds of inline copies). Unknown keywords
+ * signal an error unless {@code &allow-other-keys} is declared or the caller passes
+ * {@code :allow-other-keys t}. {@code &whole} is not supported (it is only meaningful for
+ * macros).
  */
 public final class LambdaLists {
 
@@ -39,6 +44,14 @@ public final class LambdaLists {
 	private static final String CUR_VAR = "__ll_cur";
 
 	private static final String CELL_VAR_PREFIX = "__ll_cell_";
+
+	private static final String PLIST_PARAM = "__ll_plist";
+
+	private static final String KEY_PARAM = "__ll_key";
+
+	private static final String UPPER_PARAM = "__ll_upper";
+
+	private static final String KNOWN_PARAM = "__ll_known";
 
 	private LambdaLists() {
 	}
@@ -178,15 +191,129 @@ public final class LambdaLists {
 	 * {@link #expand}. Quoted data is left untouched (so forms destined for a runtime
 	 * {@code eval} keep their source shape). Used by the compilers as a pre-pass; the
 	 * interpreter expands lazily at lambda-creation time instead.
+	 *
+	 * <p>
+	 * A program that spells {@code &key} anywhere gets the two keyword helpers
+	 * ({@link #runtimeDefun}) PREPENDED, because the prologues this pass and every later
+	 * expansion emit call them: the ones this pass writes for
+	 * {@code defun}/{@code lambda} as well as the ones {@code flet}/{@code labels} and
+	 * {@code destructuring-bind} write while the backend compiles their bodies -- both
+	 * spell {@code &key} in the program, so the one scan covers every caller. Quoted data
+	 * counts too: the scan may only over-approximate (an unused helper is two small
+	 * defuns the shakers collect), never miss. A program without {@code &key} is returned
+	 * form for form.
 	 * @param program the top-level forms
 	 * @return the rewritten forms
 	 */
 	public static List<LispVal> desugarProgram(List<LispVal> program) {
-		List<LispVal> out = new ArrayList<>(program.size());
+		List<LispVal> out = new ArrayList<>(program.size() + 2);
+		if (program.stream().anyMatch(LambdaLists::spellsKey)) {
+			out.addAll(runtimeDefuns());
+		}
 		for (LispVal form : program) {
 			out.add(desugar(form));
 		}
 		return out;
+	}
+
+	// The CDR direction is a loop: a long body is a flat list, and one frame per element
+	// would be the list's length deep. Only the CAR direction recurses.
+	private static boolean spellsKey(LispVal form) {
+		LispVal p = form;
+		while (p instanceof LispCons cons) {
+			if (spellsKey(cons.car())) {
+				return true;
+			}
+			p = cons.cdr();
+		}
+		return p instanceof LispSymbol sym && LispNames.LAMBDA_KEY.equals(sym.name());
+	}
+
+	/**
+	 * Whether {@code name} is one of the keyword helpers {@link #runtimeDefun} defines.
+	 * @param name a function name
+	 * @return {@code true} for {@code %ll-key-cell} and {@code %ll-check-keys}
+	 */
+	public static boolean isRuntimeHelper(String name) {
+		return LispNames.LL_KEY_CELL.equals(name) || LispNames.LL_CHECK_KEYS.equals(name);
+	}
+
+	/**
+	 * Both keyword helpers, in definition order, for a program that expands {@code &key}
+	 * ({@link #desugarProgram} prepends them).
+	 * @return the two {@code defun} forms
+	 */
+	public static List<LispVal> runtimeDefuns() {
+		return List.of(runtimeDefun(LispNames.LL_KEY_CELL), runtimeDefun(LispNames.LL_CHECK_KEYS));
+	}
+
+	/**
+	 * The {@code defun} of one keyword helper -- the single definition every backend
+	 * runs: the compilers get it through {@link #desugarProgram}, the interpreter
+	 * evaluates it into its global environment when a prologue first calls it.
+	 *
+	 * <p>
+	 * {@code (%ll-key-cell plist key upper)} is the {@code do} loop returning the plist
+	 * cell whose indicator is {@code key} -- or {@code upper}, the upcased twin a
+	 * lowercase-authored keyword also accepts, nil when the spellings coincide -- or nil:
+	 * the same stepping shape {@code getf} expands to, over a plist that may be dotted or
+	 * odd. {@code (%ll-check-keys plist known)} walks the same plist and signals a
+	 * {@code program-error} through {@code %program-error} on the first indicator outside
+	 * {@code known} unless the caller passed {@code :allow-other-keys} with a true value,
+	 * and on a tail of ODD length, which no {@code :allow-other-keys} makes legal (CLHS
+	 * 3.5.1.6: the last indicator has no value to pair with). The unknown-indicator
+	 * complaint comes FIRST: a trailing POSITIONAL argument is both an unknown indicator
+	 * and an odd tail, and naming it is the more useful reading ({@code (linalg:sum m 0)}
+	 * -- the numpy-style libraries' own trap); the odd-length complaint is what is left,
+	 * a DECLARED keyword with no value. {@code :allow-other-keys} itself is accepted in
+	 * both spellings: the upcase reader mode upcases a caller's while a
+	 * lowercase-authored library keeps its own.
+	 * @param name {@link LispNames#LL_KEY_CELL} or {@link LispNames#LL_CHECK_KEYS}
+	 * @return the {@code defun} form
+	 */
+	public static LispVal runtimeDefun(String name) {
+		LispSymbol plist = new LispSymbol(PLIST_PARAM);
+		LispSymbol cur = new LispSymbol(CUR_VAR);
+		LispVal bindings = list(list(cur, plist, call("CDDR", cur)));
+		LispVal endClause = list(call(LispNames.ATOM, cur), LispNil.INSTANCE);
+		LispVal indicator = call(LispNames.CAR, cur);
+		if (LispNames.LL_KEY_CELL.equals(name)) {
+			LispSymbol key = new LispSymbol(KEY_PARAM);
+			LispSymbol upper = new LispSymbol(UPPER_PARAM);
+			// eq, not eql: the key is always a keyword SYMBOL, for which the two agree,
+			// and eq is one ref.eq where the generic eql carries every numeric arm.
+			LispVal match = list(new LispSymbol(LispNames.OR),
+					list(new LispSymbol(LispNames.EQ_GENERAL), indicator, key), list(new LispSymbol(LispNames.AND),
+							upper, list(new LispSymbol(LispNames.EQ_GENERAL), indicator, upper)));
+			LispVal body = list(new LispSymbol(LispNames.IF), match, list(new LispSymbol(LispNames.RETURN), cur),
+					LispNil.INSTANCE);
+			return list(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(plist, key, upper),
+					list(new LispSymbol(LispNames.DO), bindings, endClause, body));
+		}
+		if (!LispNames.LL_CHECK_KEYS.equals(name)) {
+			throw new IllegalArgumentException("Not a lambda-list helper: " + name);
+		}
+		LispSymbol known = new LispSymbol(KNOWN_PARAM);
+		LispSymbol allowUpper = new LispSymbol(LispNames.ALLOW_OTHER_KEYS_KEYWORD);
+		LispSymbol allowLower = new LispSymbol(LispNames.ALLOW_OTHER_KEYS_KEYWORD.toLowerCase(java.util.Locale.ROOT));
+		LispVal accepted = list(new LispSymbol(LispNames.OR), list(new LispSymbol(LispNames.MEMBER), indicator, known),
+				list(new LispSymbol(LispNames.EQ_GENERAL), indicator, allowUpper),
+				list(new LispSymbol(LispNames.EQ_GENERAL), indicator, allowLower),
+				list(new LispSymbol(LispNames.GETF), plist, allowUpper),
+				list(new LispSymbol(LispNames.GETF), plist, allowLower));
+		// The message is concatenated rather than formatted: no format machinery for a
+		// check every &key function carries.
+		LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL),
+				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Unknown keyword argument: "),
+						call(LispNames.PRIN1_TO_STRING, indicator)));
+		LispVal oddSignal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL),
+				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Odd number of keyword arguments: "),
+						call(LispNames.PRIN1_TO_STRING, indicator)));
+		LispVal odd = list(new LispSymbol(LispNames.IF), call(LispNames.ATOM, call(LispNames.CDR, cur)), oddSignal,
+				LispNil.INSTANCE);
+		LispVal body = list(new LispSymbol(LispNames.IF), accepted, odd, signal);
+		return list(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(plist, known),
+				list(new LispSymbol(LispNames.DO), bindings, endClause, body));
 	}
 
 	private static LispVal desugar(LispVal form) {
@@ -545,26 +672,15 @@ public final class LambdaLists {
 	// --- code generation helpers ---
 
 	/**
-	 * A {@code do} loop returning the plist cons cell whose car is the keyword, or nil:
-	 * {@code (do ((__ll_cur src (cddr __ll_cur))) ((atom __ll_cur) nil)
-	 * (if (eql (car __ll_cur) :kw) (return __ll_cur) nil))} — the same stepping shape
-	 * {@code getf} expands to, so it works in every backend.
+	 * {@code (%ll-key-cell src :kw upper)}: the plist cons cell whose car is the keyword
+	 * (or its upcased twin), or nil -- {@link #runtimeDefun} has the loop.
 	 */
 	private static LispVal keyCellScan(LispSymbol source, LispSymbol keyword) {
-		LispSymbol cur = new LispSymbol(CUR_VAR);
-		LispVal bindings = list(list(cur, source, call("CDDR", cur)));
-		LispVal endClause = list(call(LispNames.ATOM, cur), LispNil.INSTANCE);
-		LispVal match = list(new LispSymbol(LispNames.EQL), call(LispNames.CAR, cur), keyword);
 		// A lowercase-derived keyword (an internal lowercase-authored &key parameter)
-		// also accepts its upcased twin: user call sites read upcased.
+		// also accepts its upcased twin: user call sites read upcased. Nil when the
+		// spellings coincide, so a nil INDICATOR never matches through the twin.
 		LispSymbol upper = upcasedTwin(keyword);
-		if (upper != null) {
-			match = list(new LispSymbol(LispNames.OR), match,
-					list(new LispSymbol(LispNames.EQL), call(LispNames.CAR, cur), upper));
-		}
-		LispVal body = list(new LispSymbol(LispNames.IF), match, list(new LispSymbol(LispNames.RETURN), cur),
-				LispNil.INSTANCE);
-		return list(new LispSymbol(LispNames.DO), bindings, endClause, body);
+		return list(new LispSymbol(LispNames.LL_KEY_CELL), source, keyword, upper != null ? upper : LispNil.INSTANCE);
 	}
 
 	// The all-uppercase spelling of a keyword whose name has lowercase letters, or null
@@ -575,16 +691,13 @@ public final class LambdaLists {
 	}
 
 	/**
-	 * A {@code do} loop over the keyword tail signalling on the first indicator that is
-	 * not a declared keyword, unless the caller passed {@code :allow-other-keys} with a
-	 * true value -- and on a tail of ODD length, which no {@code :allow-other-keys} makes
-	 * legal (CLHS 3.5.1.6: the last indicator has no value to pair with, so the call is
-	 * malformed whatever the indicators are). Both signals are a {@code program-error}
-	 * (CLHS 3.5.1.4), through the internal {@code %program-error} primitive every backend
-	 * lowers.
+	 * {@code (%ll-check-keys src '(:kw ...))}: the unknown-keyword / odd-tail
+	 * {@code program-error} check over the keyword tail against the declared keywords
+	 * (each with its upcased twin) -- {@link #runtimeDefun} has the loop and the
+	 * {@code :allow-other-keys} rules, so the literal carries only what differs per
+	 * function.
 	 */
 	private static LispVal unknownKeyCheck(LispSymbol source, List<KeyParam> keys) {
-		LispSymbol cur = new LispSymbol(CUR_VAR);
 		List<LispVal> known = new ArrayList<>();
 		for (KeyParam key : keys) {
 			known.add(key.keyword());
@@ -593,35 +706,9 @@ public final class LambdaLists {
 				known.add(upper);
 			}
 		}
-		known.add(new LispSymbol(LispNames.ALLOW_OTHER_KEYS_KEYWORD));
-		// The upcase reader mode upcases a caller's :ALLOW-OTHER-KEYS while this
-		// generated literal stays lowercase; accept both spellings (the &key keywords
-		// themselves are derived from the parameter names, so they always match).
-		known.add(new LispSymbol(":ALLOW-OTHER-KEYS"));
-		LispVal knownList = list(new LispSymbol(LispNames.QUOTE), list(known.toArray(LispVal[]::new)));
-		LispVal bindings = list(list(cur, source, call("CDDR", cur)));
-		LispVal endClause = list(call(LispNames.ATOM, cur), LispNil.INSTANCE);
-		LispVal ok = list(new LispSymbol(LispNames.MEMBER), call(LispNames.CAR, cur), knownList);
-		LispVal callerOverride = list(new LispSymbol(LispNames.OR),
-				list(new LispSymbol(LispNames.GETF), source, new LispSymbol(LispNames.ALLOW_OTHER_KEYS_KEYWORD)),
-				list(new LispSymbol(LispNames.GETF), source, new LispSymbol(":ALLOW-OTHER-KEYS")));
-		// The message is concatenated rather than formatted: no format machinery for a
-		// check every &key function carries.
-		LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL),
-				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Unknown keyword argument: "),
-						call(LispNames.PRIN1_TO_STRING, call(LispNames.CAR, cur))));
-		LispVal oddSignal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL),
-				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Odd number of keyword arguments: "),
-						call(LispNames.PRIN1_TO_STRING, call(LispNames.CAR, cur))));
-		// The unknown-indicator complaint comes FIRST: a trailing POSITIONAL argument is
-		// both an unknown indicator and an odd tail, and naming it is the more useful of
-		// the two readings ((linalg:sum m 0) -- the numpy-style libraries' own trap).
-		// The odd-length complaint is what is left: a DECLARED keyword with no value.
-		LispVal odd = list(new LispSymbol(LispNames.IF), call(LispNames.ATOM, call(LispNames.CDR, cur)), oddSignal,
-				LispNil.INSTANCE);
-		LispVal accepted = list(new LispSymbol(LispNames.OR), ok, callerOverride);
-		LispVal body = list(new LispSymbol(LispNames.IF), accepted, odd, signal);
-		return list(new LispSymbol(LispNames.DO), bindings, endClause, body);
+		LispVal knownList = known.isEmpty() ? LispNil.INSTANCE
+				: list(new LispSymbol(LispNames.QUOTE), list(known.toArray(LispVal[]::new)));
+		return list(new LispSymbol(LispNames.LL_CHECK_KEYS), source, knownList);
 	}
 
 	private static LispVal call(String fn, LispVal arg) {

@@ -9,6 +9,26 @@ User docs: `doc/en/reference/special-forms/defun.md`, `lambda.md`.
   the `%program-error` primitive of [error-handling.md](error-handling.md) ("Argument-shape
   errors") -- unless `&allow-other-keys` is declared or the caller passes
   `:allow-other-keys t`; `&whole` is rejected.
+- **The keyword scan is a CALL, not an inline loop.** A keyword parameter binds
+  `(%ll-key-cell rest :kw upper)` (the plist cell or nil; `upper` is the upcased twin a
+  lowercase-authored keyword also accepts, nil when the spellings coincide) and a function
+  runs `(%ll-check-keys rest '(:kw ...))` once (the unknown-keyword / odd-tail signal, the
+  `:allow-other-keys` rules in both spellings). Both are ordinary defuns with ONE Lisp body,
+  `LambdaLists.runtimeDefun`: `desugarProgram` PREPENDS them to any program that spells
+  `&key` anywhere -- quoted data included, because the scan may only over-approximate: the
+  `flet`/`labels` and `destructuring-bind` prologues are written while the backend compiles
+  a body, long after the pass, and all they have in common is the spelling -- and the
+  interpreter evaluates them on the first resolution (`LispEvaluator.resolveFunction`, beside
+  the prelude hook), which is the only place that can see a lambda-creation-time expansion
+  coming. The names are `PackageRegistry.CL_SYMBOLS` members so a package never qualifies
+  them. Before this (2026-09-13) every keyword parameter carried its own `do` loop: the
+  hello-clack Worker went 795,062 -> 775,987 B (-2.4%, `--optimize=size`; gzip 209,489 -> 206,264), `zlib` 88,315 ->
+  85,687, hello-tiny-routes 839,368 -> 814,808, hello_world/pi_approx unchanged -- and NOT
+  the ~10% the census had attributed to the prologue: of its 701 "keyword-loop heads" on
+  the Worker, 106 were keyword parameters and 10 the checks; the rest are other
+  `do`-over-a-list loops with the same head shape
+  ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)). Pinned by
+  `LambdaListsTest`.
 - **Trap**: `&key` with NO key params still switches the tail to keyword convention
   (`Parsed.sawKey`); losing that marker makes the function fixed-arity.
 - Helpers use the `__ll_` prefix; `PackageResolver` passes `&`-prefixed symbols through
@@ -42,6 +62,7 @@ required params for a variadic.
   one arity per builtin.
 
 ## Tests
+`LambdaListsTest` (the expansion shape and the two helper bodies);
 `LispEvaluatorTest#defun{Rest,Optional,Keyword,Aux}`, `#defunEmptyKeySection`;
 `JvmLispCompilerTest#compileAndRunDefun{Rest,Optional,KeywordArguments}`;
 `WasmLispCompilerIntegrationTest#compileAndRunDefun{RestAndOptional,KeywordArguments}`,

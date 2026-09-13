@@ -3391,6 +3391,22 @@ public final class LispNames {
 	 */
 	public static final String SET_XOR_MATCH = "%SET-XOR-MATCH";
 
+	/**
+	 * The {@code %ll-key-cell} internal helper a desugared {@code &key} prologue calls
+	 * once per keyword parameter: the plist cell whose indicator is the keyword (or its
+	 * upcased twin), or nil. Defined by {@code LambdaLists.runtimeDefun}, one Lisp body
+	 * for every backend.
+	 */
+	public static final String LL_KEY_CELL = "%LL-KEY-CELL";
+
+	/**
+	 * The {@code %ll-check-keys} internal helper a desugared {@code &key} prologue calls
+	 * once per function: the unknown-keyword and odd-tail {@code program-error} check
+	 * over the plist against the declared keyword list. Defined beside
+	 * {@link #LL_KEY_CELL}.
+	 */
+	public static final String LL_CHECK_KEYS = "%LL-CHECK-KEYS";
+
 	/** The {@code string-trim} built-in function. */
 	public static final String STRING_TRIM = "STRING-TRIM";
 
