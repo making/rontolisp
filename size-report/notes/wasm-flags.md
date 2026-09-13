@@ -235,6 +235,37 @@ here, so read it as context rather than as a controlled benchmark. Each language
 is built with its own size-optimization flags. The rontolisp rows are the table
 above.
 
+### A total is not a comparison
+
+Compare section by section, or the answer is decided by things neither compiler
+is being judged on. A worked example, measured 2026-09-13 on a browser-facing
+reactor (four host DOM imports, four exports, seven string literals) against a
+hand-written non-GC toolchain emitting the same program:
+
+| Section | that toolchain | rontolisp `--no-gc` |
+| --- | ---: | ---: |
+| total | 1,490 | **1,383** |
+| code | **299** | 491 |
+| data | 451 | 498 |
+| exports | 378 (24 entries) | **128 (8)** |
+| types | **31 (6)** | 129 (24) |
+| globals | 56 | **7** |
+
+rontolisp wins the total and loses the only row that measures code generation.
+The 378-byte export section is every internal function plus the linker's own
+symbols (`__dso_handle`, `__data_end`, `__stack_low`, `__heap_base`); exporting
+only the four entry points the page calls would put that toolchain around
+1,180 and the totals the other way round. The 129-byte type section is
+rontolisp emitting one entry per function with no deduplication -- 24 types of
+which 12 are distinct.
+
+So: **a total can be moved by deciding what to export, and a type section by
+deciding whether to fold duplicates -- neither is what "how big is the code"
+asks.** Read `code` first, then ask what the other rows are paying for. The
+same discipline in the other direction: `.kb/optimize-dead-code-elimination.md`,
+"What an external optimizer still finds", on why a residue is neither a ceiling
+nor a measure of what is left.
+
 ### hello_world
 
 | Language | WASI | Size (bytes) |
