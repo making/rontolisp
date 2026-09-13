@@ -14645,6 +14645,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void findSymbolAnswersForTheStandardNamesClExportsWithoutImplementing() {
+		// CLHS 11.1.2.1: the cl package's external list IS the standard's 978 names,
+		// whether or not an operator stands behind one. The name being there is a
+		// find-symbol answer and nothing more -- calling it still signals.
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"BIT-AND\" 'common-lisp))").print())
+			.isEqualTo("(BIT-AND :EXTERNAL)");
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"ARRAY-IN-BOUNDS-P\" :cl))").print())
+			.isEqualTo("(ARRAY-IN-BOUNDS-P :EXTERNAL)");
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"&AUX\" 'common-lisp))").print())
+			.isEqualTo("(&AUX :EXTERNAL)");
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp))").print())
+			.isEqualTo("(NIL NIL)");
+		// Exported, not bound: the operator question is separate and still answers no.
+		assertThat(evalMulti("(fboundp 'bit-and)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(macro-function 'bit-and)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(special-operator-p 'bit-and)")).isEqualTo(LispNil.INSTANCE);
+		// ... and the name is not a standard OPERATOR, so a program may still define it.
+		assertThat(evalMulti("(defun bit-and (a b) (list a b)) (bit-and 1 2)").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
 	void symbolPlistReadsTheWholePropertyList() {
 		assertThat(evalMulti("(symbol-plist 'sp-none)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(setf (get 'sp-x 'a) 1) (symbol-plist 'sp-x)").print()).isEqualTo("(A 1)");

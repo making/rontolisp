@@ -6,6 +6,8 @@ Like [`intern`](intern.md) but never creates: returns the symbol when the name i
 
 Deviations from Common Lisp: on the compiled backends (JVM/WASM) only a **literal** string can answer `nil` — the check is folded at compile time against the compile-time view (cl symbols plus the program's own `defun`s), so runtime-defined variables and macros are not visible there (the interpreter checks the live image, including global variables and `defmacro` macros). A computed name is interned instead, so it always yields a symbol, and its status is read off the spelling that lowering builds (`:external` for a qualified one, `:internal` for a bare one) rather than from the image.
 
+With `common-lisp` (or `cl`) as the package, the answer is the **standard's** name list: CLHS 11.1.2.1 makes the package export all 978 standard names, so a name is found whether or not rontolisp implements an operator behind it. Being exported is not being defined — `fboundp`, `macro-function` and `special-operator-p` still answer `nil` for such a name, calling it still signals `undefined-function`, and a program may still `defun` it.
+
 A second value reports the ANSI accessibility status of the name in that package — `:external`, `:inherited`, `:internal`, or `nil` when the package does not provide it, so the two values are `nil` together:
 
 ```lisp
@@ -35,4 +37,12 @@ A second value reports the ANSI accessibility status of the name in that package
 
 ```lisp
 (find-symbol "TIMESTAMP" :simple-date) ; => NIL
+```
+
+```lisp
+(multiple-value-list (find-symbol "BIT-AND" 'common-lisp)) ; => (BIT-AND :EXTERNAL)
+```
+
+```lisp
+(fboundp 'bit-and) ; => NIL
 ```

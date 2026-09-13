@@ -3056,6 +3056,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFindSymbolAnswersForTheExportedOnlyStandardNames() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#findSymbolAnswersForTheStandardNamesClExportsWithoutImplementing:
+		// the fold reads the same name list, so the four backends cannot disagree.
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"BIT-AND\" 'common-lisp)))"
+				+ "(print (multiple-value-list (find-symbol \"&AUX\" :cl)))"
+				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
+				+ "(print (fboundp 'bit-and))"))
+			.isEqualTo("(BIT-AND :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
+	}
+
+	@Test
 	void compileAndRunSymbolPlist() throws Exception {
 		assertThat(compileAndRun("(print (symbol-plist 'sp-none))(setf (get 'sp-x 'a) 1)(print (symbol-plist 'sp-x))"))
 			.isEqualTo("NIL\n(A 1)");

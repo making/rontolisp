@@ -71,7 +71,6 @@ and note that closing it ADMITS ~435 tests that may then fail.
 |---|---:|---|
 | `*read-suppress*` (161) + the reader syntax-type surface (192) | 353 | **`.todo/797`** (new) |
 | bit arrays: the eleven `bit-*` ops (~310) plus `bit-vector-p` 38 / `simple-bit-vector-p` 28 / `array-in-bounds-p` 27 | ~400 | `.todo/043`, `.todo/180` |
-| the CL package does not EXPORT the standard names | 187 | **`.todo/796`** (new) |
 | `loop` -- 173 of `iteration`'s 208 wrong values | 173 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
@@ -154,6 +153,16 @@ Only the entries whose FINDING outlives the change are kept; the rest are in
   operators recorded as "already present and correct" were losing ~90 tests to a
   first-class surface that took no keywords. The downward-blindness rule comes
   from here. `.kb/cons-set-and-tree-operators.md`.
+- **2026-09-13, `.todo/796`** -- the `cl` package exports the standard's 978 names, whether
+  or not rontolisp implements the operator (CLHS 11.1.2.1). **+187, 0 regressed**, exactly
+  what the row priced it at and exactly the `symbols/cl-symbols.lsp` probe -- the one row so
+  far where the census was neither blind up nor down, because the question is
+  name-presence and is asked in ONE place. The tests that ask it through
+  `(find-symbol x "CL")` (`functionp.4`, `function.4`, `cl-function-symbols.1`,
+  `cl-macro-symbols.1`, the `pprint-dispatch` family) did NOT move: each is blocked by a
+  missing OPERATOR, which is the distinction. `.kb/packages.md`, "The `cl` external list
+  is the STANDARD's list". Still open beside it: `no-extra-symbols-exported-from-common-lisp`,
+  which fails on `while` plus the invented `boole-3` .. `boole-16` -- `.todo/803`.
 - **2026-09-12, `.todo/214`'s `subtypep` row** -- `subtypep` answers CL's
   valid-p as its second value, on all four backends. **+443, 0 regressed**
   (66.3% -> 68.6%), against the 112 this file used to price it at: the row

@@ -329,6 +329,15 @@ temporary hides both (binding them turned `CAR :INHERITED` into a runtime-built
   exports all but the `%`-prefixed internals; `cl-user` uses `cl`, so a standard symbol read
   through it is `:inherited`, and every other name is `:internal`. `%find-symbol-status` adds
   the same definition-IS-an-interning probe.
+
+**The `cl` arm admits the standard names `cl` exports WITHOUT implementing** (CLHS 11.1.2.1, the
+978): `PackageRegistry.isClMemberName`, not `isClSymbol`, in `memberSpelling`/`memberStatus` and
+in the compile paths' literal fold. `(find-symbol "BIT-AND" 'common-lisp)` is `BIT-AND :EXTERNAL`
+on all four backends while `fboundp`, `macro-function` and `special-operator-p` still answer nil
+— exported is a different question from bound, and the resolver never asks the wider one
+(`.kb/packages.md`, "The `cl` external list is the STANDARD's list"). The 1-argument form and the
+`cl-user` arm stay on `isClSymbol`, so they still answer nil for such a name where CL answers
+`:inherited` — the deviation below, deliberately not widened.
 - **JVM + WASM**: one shared fold, `LispMacroExpander.expandFindSymbolStatus`, called from
   `Jvm`/`WasmSymbolApiCompiler.compileFindSymbolStatus` — a keyword or nil constant, never a
   runtime call. Anything it cannot decide reports the status of the SPELLING the lowering
