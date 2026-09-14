@@ -6,12 +6,12 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-09-14
-- rontolisp: 0.1.0-SNAPSHOT (`14a4e95`)
+- rontolisp: 0.1.0-SNAPSHOT (`ff82deb`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
 | --- | --- | ---: | ---: | ---: |
-| hello | `--no-gc --optimize` | 451 | 367 | 0.0% |
+| hello | `--no-gc --optimize` | 465 | 379 | 0.0% |
 | hello-clack | `--no-wasi --optimize=size` | 705,519 | 186,366 | 5.9% |
 | hello-tiny-routes | `--no-wasi --optimize=size` | 741,016 | 195,570 | 6.2% |
 | hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 1,174,186 | 287,488 | 9.1% |
