@@ -3050,6 +3050,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void noGcPrintedLiteralsFoldAtBothLevels() throws Exception {
+		// .todo/814: a statement (princ <literal>) writes its region as two
+		// constants, a value-position one leaves the header address behind as the
+		// value as well, and print keeps its quotes and escapes. Every line below
+		// is byte-identical to the interpreter: the statement sites ("head", the
+		// outer "self"/"mid", "tick", "日本語"), the value sites (the inner
+		// "self"/"mid", "abc" under length, the cond arms), print's escape loop
+		// and the untouched princ-to-string.
+		String program = """
+				(defun show (c)
+				  (princ "head") (terpri)
+				  (princ (princ "self")) (terpri)
+				  (princ (concatenate 'string (princ "mid") "!")) (terpri)
+				  (print "q\\"q")
+				  (princ (princ-to-string 42)) (terpri)
+				  (princ (length (princ "abc"))) (terpri)
+				  (while (> c 0) (princ "tick") (setq c (- c 1))) (terpri)
+				  (cond ((= c 0) (princ "zero")) (t (princ "nzero"))) (terpri)
+				  (princ "日本語") (terpri)
+				  c)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""";
+		String expected = """
+				head
+				selfself
+				midmid!
+				"q\\"q"
+				42
+				abc3
+				ticktick
+				zero
+				日本語
+				0""";
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "2")).isEqualTo(expected);
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "show", "2")).isEqualTo(expected);
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.SIZE, program, "show", "2")).isEqualTo(expected);
+	}
+
+	@Test
 	void noGcPrintLoopKeepsTheHeapFlat() throws Exception {
 		// Each print renders a transient digit string inside an internal heap-pointer
 		// mark/reset bracket, so 20000 prints stay within a 2-page memory cap -- a

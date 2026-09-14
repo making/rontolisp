@@ -131,7 +131,8 @@ content address and byte length as constants, so a spelling whose EVERY occurren
 folded site's `:string` argument is laid out as its bytes alone (`MemLayout.regions` holds
 every literal's content address, `literals` only the headered ones' header address, so a
 value use of a header-free literal fails loudly). Used any other way too -- `length`,
-`print`, an unfolded import -- it keeps its header and the folded site points past it. The
+`print`, a value-position `princ`, an unfolded import -- it keeps its header and the
+folded site points past it. The
 printer's and `__ftoa`'s fragments are header pointers by contract and are never stripped.
 - **Classified by count over one walk**: `collectCalls` tallies every literal occurrence
   over the same expanded forms that record the import sites, and a spelling is header-free
@@ -150,6 +151,37 @@ printer's and `__ftoa`'s fragments are header pointers by contract and are never
   byte-identical. With `.todo/811`'s range guard merged the same reactor is 900 -> 856
   (gzip 613; code 200, data 440): the two compose exactly. A lower `heapBase` can shorten
   its LEB128 in the global section.
+- **A statement `(princ <literal>)` is two constants as well** (`.todo/814`,
+  landed 2026-09-14). Printing funnels through `__write_stdout(ptr, len)`, and the
+  generic string path computes the pair from the header at run time -- but for a
+  literal both halves are compile-time constants, the same lowering `terpri`'s
+  `"\n"` already uses. So `compileStatement` writes the region directly and leaves
+  nothing behind (VOID, no DROP); a value-position `princ` of a literal writes the
+  same two constants and leaves the header address as the value. `print` keeps the
+  generic path (its quotes, escapes and trailing newline are a run loop, not one
+  literal), and `princ-to-string` never prints.
+  - **Statement position is carried down the reachability walk**: `collectCalls`
+    threads a `stmt` flag mirroring exactly where the emitter's `compileStatement`
+    runs (non-last `progn`/`%block`/body forms of `let`/`with-arena`,
+    `while` bodies; tests, last forms, `if` branches, `setq` right-hand sides,
+    call arguments and `print` are value positions), tallied per spelling in
+    `printLiteralSites` beside `literalOccurrences`. A spelling whose folded
+    import + print tallies equal its total is laid out header-free, and a folded
+    site of a headered spelling points past it. A value use keeps the header by
+    construction, so the value shape's address is always laid out (its generic
+    fallback fails loudly if the two ever disagree).
+  - Measured 2026-09-14 on `.todo/artefacts/814-no-gc-printed-literal-fold/`
+    (`hello.lisp`: one statement princ plus `terpri`; `report.lisp`: nine
+    statement princ sites over seven spellings): `--optimize=size` hello 217 ->
+    206 (code 61 -> 54, data 50 -> 46), report 729 -> 642 (code 468 -> 411, data
+    141 -> 112); `--optimize=off` hello 628 -> 608, report 1003 -> 851.
+    Interpreter and `wasmtime` agree on both at both levels. The win is the code
+    section, not the data header -- the opposite of 810, where the header IS the
+    point -- and the two compose. The value shape measured separately on a
+    3-statement + 4-value probe: statement-only 977 -> 960 off (651 -> 641 size),
+    both shapes 960 -> 920 off (641 -> 609 size), so ~10/~8 bytes per value site;
+    kept, since it always wins (no wrapper tradeoff) and stays sound through the
+    same count comparison.
 - `(concatenate 'string ...)` bump-allocates via `__alloc` (mut-i32 heap-pointer global 0)
   and copies via `__memcpy`. Only the STRING result family exists, so any other designator —
   or a computed one — is a compile error naming it
@@ -515,8 +547,17 @@ the WASI one is sunk).
 `stringLiteralsArePackedWithoutAlignmentPadding`,
 `aLiteralOnlyFoldedImportSitesReadCarriesNoLengthHeader`,
 `aLiteralAlsoReadAsAValueKeepsItsLengthHeader`,
+`aStatementPrincOfALiteralWritesTwoConstants`,
+`aValuePositionPrincOfALiteralWritesTwoConstantsAndLeavesTheValue`,
+`aPrincAsTheLastFormOfAVoidExportWritesTwoConstantsAndLeavesTheValue`,
+`printOfALiteralKeepsTheGenericPath`,
+`aLiteralPrintedAndReadAsAValueKeepsItsLengthHeader`,
+`aLiteralPrintedAndPassedToAFoldedImportCarriesNoLengthHeader`,
 `theRuntimeTextFragmentsKeepTheirHeadersWhenAFoldedSiteSharesTheSpelling`; the content
-each shape hands the host is `NoGcWasmImportE2eTest.aFoldedLiteralReachesTheHostIntactWhetherOrNotItKeepsItsHeader`), the VOID group
+each shape hands the host is
+`NoGcWasmImportE2eTest.aFoldedLiteralReachesTheHostIntactWhetherOrNotItKeepsItsHeader`,
+and a spelling both printed and imported is
+`NoGcWasmImportE2eTest.aPrintedLiteralReachesBothTheHostAndStdoutIntact`), the VOID group
 (`aVoidImportCallLeavesNothingForItsCallerToDrop`, `aVoidBodyMakesAVoidExportAPassThrough`,
 `theDeadNilOfACondTArmDoesNotDragAVoidChainBackToAnInteger`,
 `aWhileLoopPushesNothingForTheFormAfterItToDrop`), the heap-reset trio,
@@ -541,7 +582,8 @@ its own linear memory. Component imports at runtime: `NoGcWasmComponentImportE2e
 wasm-tools on PATH) composes the consumer with a rontolisp provider and invokes the result --
 scalars and strings both ways, the wit-import lowering's byte identity with the hand-written
 block, and a printing consumer through both shims. Runtime parity: the `noGc*` cases in
-`WasmLispCompilerIntegrationTest` (string primitives, print vs the interpreter, flat-heap
+`WasmLispCompilerIntegrationTest` (string primitives, print vs the interpreter,
+`noGcPrintedLiteralsFoldAtBothLevels`, flat-heap
 loops under a 2-page cap, WAVE invoke with no flags, the canonical string ABI, `--optimize`
 composition, the print micro-adapter and its chunk cap). The `:string`-parameter side needs a
 memory-writing host, exercised by `examples/console/mandelbrot-nogc.lisp`.

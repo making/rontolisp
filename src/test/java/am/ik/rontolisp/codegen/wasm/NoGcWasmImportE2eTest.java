@@ -279,6 +279,61 @@ class NoGcWasmImportE2eTest {
 	}
 
 	@Test
+	void aPrintedLiteralReachesBothTheHostAndStdoutIntact() throws Exception {
+		// .todo/814: a spelling printed by a statement princ AND passed to a folded
+		// import is pushed as two constants at both sites. "both" is also read by
+		// length, so it keeps its header and both folded sites point past it;
+		// "only" is never read through a header, so it carries none. Either way
+		// the host sees the literal's own bytes and stdout the display text. The
+		// module prints, so unlike the other cases here it keeps WASI: the driver
+		// serves fd_write itself (one iovec per call, exactly what __write_stdout
+		// passes) instead of node:wasi.
+		String module = """
+				(rontolisp:wasm-import 'js-say :from "env" :as "say" :params '(:string) :returns :void)
+				(defun boot ()
+				  (js-say "both") (princ "both") (terpri)
+				  (js-say "only") (princ "only") (terpri)
+				  (length "both"))
+				(rontolisp:wasm-export 'boot :params '() :returns :s32)
+				""";
+		String driver = """
+				const fs = require('fs');
+				const dec = new TextDecoder();
+				let inst;
+				const seen = [];
+				const printed = [];
+				const mem = () => new DataView(inst.exports.memory.buffer);
+				const str = (p, n) => dec.decode(new Uint8Array(inst.exports.memory.buffer, p, n));
+				const env = {
+				  say: (p, n) => seen.push('[' + str(p, n) + ']'),
+				};
+				const wasi = {
+				  fd_write: (fd, iovs, iovsLen, nwritten) => {
+				    let bytes = [];
+				    for (let i = 0; i < iovsLen; i++) {
+				      const p = mem().getUint32(iovs + i * 8, true);
+				      const n = mem().getUint32(iovs + i * 8 + 4, true);
+				      bytes = bytes.concat([...new Uint8Array(inst.exports.memory.buffer, p, n)]);
+				      printed.push(str(p, n));
+				    }
+				    mem().setUint32(nwritten, bytes.length, true);
+				    return 0;
+				  },
+				};
+				inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])),
+				  { env, wasi_snapshot_preview1: wasi });
+				console.log(inst.exports.boot());
+				console.log(seen.join(''));
+				console.log(JSON.stringify(printed.join('')));
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
+			assertThat(runWithWasi(module, driver, level, "print-fold-" + level.spelling()).lines().toList())
+				.as("optimize=%s", level.spelling())
+				.containsExactly("4", "[both][only]", "\"both\\nonly\\n\"");
+		}
+	}
+
+	@Test
 	void aWitImportedInterfaceIsTheHandWrittenImportBlock() throws Exception {
 		// The same lowering both WASM core-module backends take: a wit-import is exactly
 		// the wasm-import block it stands for, so binding an interface from its WIT
@@ -375,6 +430,17 @@ class NoGcWasmImportE2eTest {
 
 	private String run(String module, String driverJs, OptimizeLevel level, String name) throws Exception {
 		byte[] wasm = compileNoGc(LispReader.readAllFromString(module), level);
+		Path wasmFile = this.tempDir.resolve(name + ".wasm");
+		Files.write(wasmFile, wasm);
+		Path driver = this.tempDir.resolve(name + ".js");
+		Files.writeString(driver, driverJs, StandardCharsets.UTF_8);
+		return runNode(driver, wasmFile);
+	}
+
+	// As run, but the module keeps WASI (fd_write import) so a printing program
+	// can run under the driver's own fd_write shim.
+	private String runWithWasi(String module, String driverJs, OptimizeLevel level, String name) throws Exception {
+		byte[] wasm = new NoGcWasmCompiler(level, false).compile(LispReader.readAllFromString(module));
 		Path wasmFile = this.tempDir.resolve(name + ".wasm");
 		Files.write(wasmFile, wasm);
 		Path driver = this.tempDir.resolve(name + ".js");

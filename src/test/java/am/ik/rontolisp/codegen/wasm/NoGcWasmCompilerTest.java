@@ -921,6 +921,107 @@ class NoGcWasmCompilerTest {
 		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'N', 'I', 'L' })).isTrue();
 	}
 
+	@Test
+	void aStatementPrincOfALiteralWritesTwoConstants() {
+		// (princ "Hi") in statement position writes its region as two constants --
+		// the same lowering terpri's "\n" uses -- leaving nothing behind, so the
+		// body carries no DROP (0x1A) and no i32.load (0x28) reading a length
+		// header, and the spelling is laid out header-free. Unoptimized: the
+		// default level may inline the defun into its wrapper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun main () (princ "Hi") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x1A)).as("no drop: the statement leaves nothing").isFalse();
+		assertThat(containsSequence(body, 0x28)).as("no i32.load: no length header is read").isFalse();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 'H', 'i', 1, 0, 0, 0, '\n' }))
+			.as("\"Hi\" header-free, the headered runtime \"\\n\" right behind it")
+			.isTrue();
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' })).as("no header before \"Hi\"").isFalse();
+	}
+
+	@Test
+	void aValuePositionPrincOfALiteralWritesTwoConstantsAndLeavesTheValue() {
+		// princ answers its argument: as the last form of a function whose result
+		// is used, (princ "Hi") writes two constants like a statement site but
+		// leaves the header address behind as the value -- so the body reads no
+		// length (no i32.load, 0x28) and the spelling keeps its header.
+		// Unoptimized: the default level may inline the defun into its wrapper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun f () (princ "Hi"))
+				(rontolisp:wasm-export 'f :as "f" :params '() :returns :string)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x28)).as("no i32.load: the write is two constants").isFalse();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' }))
+			.as("\"Hi\" keeps its header: the value is the header address")
+			.isTrue();
+	}
+
+	@Test
+	void aPrincAsTheLastFormOfAVoidExportWritesTwoConstantsAndLeavesTheValue() {
+		// The last form answers the function result even under :void (the wrapper
+		// drops it), so it is a value position, not a statement: two constants
+		// plus the header address, and the header stays. Unoptimized: the default
+		// level may inline the defun into its wrapper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun main () (princ "Hi"))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x28)).as("no i32.load: the write is two constants").isFalse();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' })).as("\"Hi\" keeps its header").isTrue();
+	}
+
+	@Test
+	void printOfALiteralKeepsTheGenericPath() {
+		// print frames the text in quotes and escapes embedded " / \, which is a
+		// run loop over the bytes (i32.load8_u, 0x2D), not one literal write: the
+		// spelling keeps its header even in statement position. Unoptimized: the
+		// default level may inline the defun into its wrapper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun main () (print "Hi") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x2D)).as("the escape scan reads bytes").isTrue();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' })).as("\"Hi\" keeps its header").isTrue();
+	}
+
+	@Test
+	void aLiteralPrintedAndReadAsAValueKeepsItsLengthHeader() {
+		// "abc" is folded at the statement princ but also read by length, so it
+		// keeps its header and the folded site points past it.
+		byte[] module = compile("""
+				(defun emit () (progn (princ "abc") (length "abc")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns :int)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c' })).as("\"abc\" keeps its header")
+			.isTrue();
+	}
+
+	@Test
+	void aLiteralPrintedAndPassedToAFoldedImportCarriesNoLengthHeader() {
+		// "abc" is only ever pushed as two constants -- at the folded import site
+		// and at the statement princ -- so it carries no header; "de" is read by
+		// length, so it keeps its own.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun emit () (progn (js-log "abc") (princ "abc") (length "de")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns :int)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c' })).as("no header before \"abc\"")
+			.isFalse();
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'd', 'e' })).as("\"de\" keeps its header").isTrue();
+	}
+
 	// --- print / stdout --------------------------------------------------------------
 
 	// The exact import-section payload a printing module must carry: exactly one entry,
@@ -1082,6 +1183,16 @@ class NoGcWasmCompilerTest {
 		Map<Integer, byte[]> sections = sections(module);
 		int absolute = exportedFuncIndex(Objects.requireNonNull(sections.get(7)), exportName);
 		return functionBody(Objects.requireNonNull(sections.get(10)), absolute - importedFunctions(module).size());
+	}
+
+	// The first internal function body in the code section. Internal bodies are
+	// emitted before the export wrappers and the memory helpers, so in a
+	// single-defun UNOPTIMIZED program (compilePlainUnoptimized -- the default level
+	// may inline the defun into its wrapper) this is the defun itself -- the shape
+	// to assert on when the export is NOT a pass-through (a printing program always
+	// takes a wrapper, which is what localFunctionBody would then return).
+	private static byte[] internalFunctionBody(byte[] module) {
+		return functionBodies(Objects.requireNonNull(sections(module).get(10))).get(0);
 	}
 
 	private static boolean containsSequence(byte[] haystack, int... needle) {

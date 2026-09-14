@@ -488,6 +488,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		this.imports = importDecls;
 		this.importCallSites = new LinkedHashMap<>();
 		this.literalOccurrences = new HashMap<>();
+		this.printLiteralSites = new HashMap<>();
 		this.foldedImports = Set.of();
 		this.foldTargets = Map.of();
 		this.foldOrdinals = Map.of();
@@ -549,7 +550,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			Defun defun = Objects.requireNonNull(defuns.get(name));
 			Set<String> callees = new LinkedHashSet<>();
-			collectCalls(progn(defun.body()), new HashSet<>(defun.params()), defuns, callees, name);
+			collectCalls(progn(defun.body()), new HashSet<>(defun.params()), defuns, callees, name, false);
 			for (String callee : callees) {
 				if (!defuns.containsKey(callee) && !importDecls.containsKey(callee)) {
 					throw new UnsupportedOperationException(
@@ -3404,26 +3405,30 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The literals whose EVERY occurrence in a reached body is a {@code :string} argument
-	 * of a folded import's call site: those are pushed as (content address, byte length)
-	 * constants and never read through a header, so they are laid out without one. A
-	 * spelling used any other way as well -- read by {@code length}, printed, handed to
-	 * an unfolded import's wrapper -- keeps its header, and a folded site then points
-	 * past it. The runtime helpers' own fragments ({@link #runtimeLiterals}) are header
-	 * pointers by contract and stay headered whatever a body does with the spelling.
+	 * The literals whose EVERY occurrence in a reached body is a folded {@code :string}
+	 * argument of a folded import's call site or a folded {@code princ} statement: those
+	 * are pushed as (content address, byte length) constants and never read through a
+	 * header, so they are laid out without one. A spelling used any other way as well --
+	 * read by {@code length}, printed by {@code print}, a value-position {@code princ},
+	 * handed to an unfolded import's wrapper -- keeps its header, and a folded site then
+	 * points past it. The runtime helpers' own fragments ({@link #runtimeLiterals}) are
+	 * header pointers by contract and stay headered whatever a body does with the
+	 * spelling.
 	 *
 	 * <p>
 	 * Counted, not matched: the folded sites' literals per spelling against
-	 * {@link #literalOccurrences}. Both tallies come from the one walk
+	 * {@link #literalOccurrences}. All three tallies come from the one walk
 	 * ({@link #collectCalls}) over the same expanded forms -- a site's arguments are
-	 * walked right after the site is recorded -- so they agree occurrence for occurrence,
-	 * and a macro that duplicates a literal into a value position raises only the second.
+	 * walked right after the site is recorded, and a statement {@code princ} is tallied
+	 * where the emitter's {@code compileStatement} folds it -- so they agree occurrence
+	 * for occurrence, and a macro that duplicates a literal into a value position raises
+	 * only the second.
 	 * @param importDecls every import declaration, by Lisp name
 	 * @param layout the all-headered plan the fold was sized against
 	 * @return the spellings to lay out header-free
 	 */
 	private Set<String> headerFreeLiterals(Map<String, WasmImportCompiler.Decl> importDecls, MemLayout layout) {
-		if (this.foldedImports.isEmpty()) {
+		if (this.foldedImports.isEmpty() && this.printLiteralSites.isEmpty()) {
 			return Set.of();
 		}
 		Map<String, Integer> folded = new HashMap<>();
@@ -3437,6 +3442,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					}
 				}
 			}
+		}
+		// A statement (princ <literal>) writes its region as two constants, so its
+		// occurrences are region-only uses the same way a folded import site's are.
+		// The fold is a win at every site (no wrapper to remove), so every such site
+		// counts -- there is no per-import gate to pass first.
+		for (Map.Entry<String, Integer> entry : this.printLiteralSites.entrySet()) {
+			folded.merge(entry.getKey(), entry.getValue(), Integer::sum);
 		}
 		Set<String> headerFree = new LinkedHashSet<>();
 		for (Map.Entry<String, Integer> entry : folded.entrySet()) {
@@ -4146,6 +4158,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private Map<String, Integer> literalOccurrences = new HashMap<>();
 
 	/**
+	 * How many times each string literal is the argument of a {@code princ} in STATEMENT
+	 * position in the reached bodies -- the print fold's half of
+	 * {@link #headerFreeLiterals}'s comparison. Counted by {@link #collectCalls} over the
+	 * same expanded forms as {@link #literalOccurrences}, with the statement-position
+	 * flag carried down the walk the way the emitter's {@code compileStatement} decides
+	 * it, so the two agree occurrence for occurrence.
+	 */
+	private Map<String, Integer> printLiteralSites = new HashMap<>();
+
+	/**
 	 * A reached call to a host import: the name actually in call position -- the import
 	 * itself, or a transparent forwarder to it -- and the form.
 	 */
@@ -4263,7 +4285,32 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// Compiles a form in STATEMENT position: evaluated for its effect, its value
 	// discarded. A VOID form leaves nothing on the stack and therefore costs no DROP --
 	// which is the whole point of the fourth lattice point.
+	//
+	// A statement (princ <literal>) writes its region as two constants
+	// (emitWriteLiteral, the same lowering terpri's "\n" uses) instead of computing
+	// the (ptr, len) pair from the header at run time. Legal only here: princ answers
+	// its argument, so a value-position site must still leave it behind. print keeps
+	// the generic path -- its quotes, escapes and trailing newline are not one
+	// literal. The walk tallies exactly these sites (printLiteralSites), so a
+	// princ-only spelling is laid out header-free and this points past the header
+	// wherever one is still needed.
 	private void compileStatement(LispVal expr, Fn fn) {
+		LispVal target = expr;
+		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol head) {
+			List<LispVal> raw = cons.toList();
+			LispVal expanded = expandMacro(head.name(), cons, raw.size() - 1);
+			if (expanded != null) {
+				target = expanded;
+			}
+		}
+		if (target instanceof LispCons call && call.car() instanceof LispSymbol op
+				&& LispNames.PRINC.equals(op.name())) {
+			List<LispVal> callArgs = call.toList();
+			if (callArgs.size() == 2 && callArgs.get(1) instanceof LispString lit) {
+				emitWriteLiteral(fn, lit.value());
+				return;
+			}
+		}
 		coerce(fn.writer, compileExpr(expr, fn), Ty.VOID);
 	}
 
@@ -6584,6 +6631,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				return t;
 			}
 			case STRING -> {
+				// A princ of a literal in VALUE position still writes its region as
+				// two constants -- it just leaves the header address behind as the
+				// value as well. A value use keeps the header by construction (the
+				// header-free comparison counts only statement sites), so the
+				// address is always laid out; the generic path below stays as the
+				// fallback, which fails loudly if the two ever disagree.
+				if (!print && arg instanceof LispString literal && fn.mem.literals().containsKey(literal.value())) {
+					emitWriteLiteral(fn, literal.value());
+					w.write(Instruction.I32_CONST)
+						.writeSignedLeb128(Objects.requireNonNull(fn.mem.literals().get(literal.value())));
+					return Ty.STRING;
+				}
 				// A string argument is passthrough -- nothing allocated, no bracket.
 				// print (prin1 semantics) frames it in quotes and escapes the embedded
 				// " / \ so the text reads back; princ writes it bare.
@@ -6992,8 +7051,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// Validates that an expression is eligible for the scalar backend and records the
 	// names of every eligible function it calls. Throws (naming the op + the function) on
 	// anything unsupported, so the boundary is explicit.
+	//
+	// stmt is whether the form sits in STATEMENT position -- evaluated for its effect,
+	// its value discarded -- exactly where the emitter's compileStatement runs. Only a
+	// statement (princ <literal>) folds to two constants (and only such a site counts
+	// toward printLiteralSites); every value position stays on the generic path, so the
+	// walk and the emitter agree occurrence for occurrence.
 	private void collectCalls(LispVal expr, Set<String> bound, Map<String, Defun> defuns, Set<String> callees,
-			String fnName) {
+			String fnName, boolean stmt) {
 		switch (expr) {
 			case LispInteger ignored -> {
 			}
@@ -7017,7 +7082,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 							+ "' is not a parameter or let binding (scalar mode has no globals or heap values)");
 				}
 			}
-			case LispCons cons -> collectCallsCons(cons, bound, defuns, callees, fnName);
+			case LispCons cons -> collectCallsCons(cons, bound, defuns, callees, fnName, stmt);
 			case am.ik.rontolisp.LispComplex c ->
 				throw new UnsupportedOperationException("--no-gc: complex numbers are not supported in function '"
 						+ fnName + "': " + c.print() + " (the scalar backend is for pure numeric exports)");
@@ -7027,7 +7092,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private void collectCallsCons(LispCons cons, Set<String> bound, Map<String, Defun> defuns, Set<String> callees,
-			String fnName) {
+			String fnName, boolean stmt) {
 		if (!(cons.car() instanceof LispSymbol head)) {
 			throw new UnsupportedOperationException(
 					"--no-gc: cannot call a non-symbol / first-class function in '" + fnName + "': " + cons.print());
@@ -7036,7 +7101,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		List<LispVal> args = cons.toList();
 		LispVal expanded = expandMacro(name, cons, args.size() - 1);
 		if (expanded != null) {
-			collectCalls(expanded, bound, defuns, callees, fnName);
+			collectCalls(expanded, bound, defuns, callees, fnName, stmt);
 			return;
 		}
 		if (isComplexOperator(name)) {
@@ -7063,7 +7128,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				throw new UnsupportedOperationException("--no-gc: " + name + " takes exactly one argument in '" + fnName
 						+ "' (the optional stream argument is not supported with --no-gc)");
 			}
-			collectCalls(args.get(1), bound, defuns, callees, fnName);
+			// A statement (princ <literal>) is two constants at emission (the print
+			// fold); print needs its quotes and escapes, and every value position
+			// stays generic, so neither counts here.
+			if (stmt && LispNames.PRINC.equals(name) && args.get(1) instanceof LispString lit) {
+				this.printLiteralSites.merge(lit.value(), 1, Integer::sum);
+			}
+			collectCalls(args.get(1), bound, defuns, callees, fnName, false);
 			return;
 		}
 		if (LispNames.TERPRI.equals(name)) {
@@ -7078,8 +7149,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				throw new UnsupportedOperationException("--no-gc: " + LispNames.WITH_ARENA_QUALIFIED
 						+ " expects an empty option list in '" + fnName + "': (rontolisp:with-arena () body...)");
 			}
+			// A progn with a reclamation boundary at emission: every form but the
+			// last is a statement.
 			for (int i = 2; i < args.size(); i++) {
-				collectCalls(args.get(i), bound, defuns, callees, fnName);
+				collectCalls(args.get(i), bound, defuns, callees, fnName, i < args.size() - 1);
 			}
 			return;
 		}
@@ -7104,15 +7177,28 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				if (a instanceof LispSymbol sym && sym.isKeyword()) {
 					continue;
 				}
-				collectCalls(a, bound, defuns, callees, fnName);
+				collectCalls(a, bound, defuns, callees, fnName, false);
 			}
 			return;
 		}
-		if (LispNames.IF.equals(name) || LispNames.PROGN.equals(name) || LispNames.WHILE.equals(name)
-				|| LispNames.BLOCK_INTERNAL.equals(name) || LispNames.RETURN.equals(name) || BUILTINS.contains(name)
+		if (LispNames.PROGN.equals(name) || LispNames.BLOCK_INTERNAL.equals(name)) {
+			// Every form but the last is a statement; the last answers the value.
+			for (int i = 1; i < args.size(); i++) {
+				collectCalls(args.get(i), bound, defuns, callees, fnName, i < args.size() - 1);
+			}
+			return;
+		}
+		if (LispNames.WHILE.equals(name)) {
+			// The test answers the loop condition; every body form is a statement.
+			for (int i = 1; i < args.size(); i++) {
+				collectCalls(args.get(i), bound, defuns, callees, fnName, i > 1);
+			}
+			return;
+		}
+		if (LispNames.IF.equals(name) || LispNames.RETURN.equals(name) || BUILTINS.contains(name)
 				|| ARRAY_OPS.contains(name)) {
 			for (int i = 1; i < args.size(); i++) {
-				collectCalls(args.get(i), bound, defuns, callees, fnName);
+				collectCalls(args.get(i), bound, defuns, callees, fnName, false);
 			}
 			return;
 		}
@@ -7133,7 +7219,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					.add(new ImportSite(name, cons));
 			}
 			for (int i = 1; i < args.size(); i++) {
-				collectCalls(args.get(i), bound, defuns, callees, fnName);
+				collectCalls(args.get(i), bound, defuns, callees, fnName, false);
 			}
 			return;
 		}
@@ -7165,7 +7251,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				throw new UnsupportedOperationException("--no-gc: setq target '" + s.name() + "' in function '" + fnName
 						+ "' is not a parameter or let binding (scalar mode has no globals)");
 			}
-			collectCalls(args.get(2 + 2 * p), bound, defuns, callees, fnName);
+			collectCalls(args.get(2 + 2 * p), bound, defuns, callees, fnName, false);
 		}
 	}
 
@@ -7184,7 +7270,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					"--no-gc: concatenate only supports 'string in '" + fnName + "' (got " + args.get(1).print() + ")");
 		}
 		for (int i = 2; i < args.size(); i++) {
-			collectCalls(args.get(i), bound, defuns, callees, fnName);
+			collectCalls(args.get(i), bound, defuns, callees, fnName, false);
 		}
 	}
 
@@ -7200,13 +7286,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispVal dims = args.get(1);
 			if (!(dims instanceof LispCons c && c.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name()))) {
 				for (LispVal dim : dimExprs(dims)) {
-					collectCalls(dim, bound, defuns, callees, fnName);
+					collectCalls(dim, bound, defuns, callees, fnName, false);
 				}
 			}
 		}
 		LispVal init = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
 		if (init != null) {
-			collectCalls(init, bound, defuns, callees, fnName);
+			collectCalls(init, bound, defuns, callees, fnName, false);
 		}
 	}
 
@@ -7232,7 +7318,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				List<LispVal> bp = b.toList();
 				// Parallel let: initializers see the outer scope only.
 				if (bp.size() > 1) {
-					collectCalls(bp.get(1), bound, defuns, callees, fnName);
+					collectCalls(bp.get(1), bound, defuns, callees, fnName, false);
 				}
 				inner.add(((LispSymbol) bp.get(0)).name());
 			}
@@ -7242,7 +7328,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 		}
 		for (int i = 2; i < parts.size(); i++) {
-			collectCalls(parts.get(i), inner, defuns, callees, fnName);
+			// A let body is a progn at emission: every form but the last is a
+			// statement.
+			collectCalls(parts.get(i), inner, defuns, callees, fnName, i < parts.size() - 1);
 		}
 	}
 
