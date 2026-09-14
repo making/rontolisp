@@ -1,0 +1,7 @@
+(defun main (n)
+  (princ (> n 0)) (terpri)
+  (princ (< n 0)) (terpri)
+  (princ (and (> n 0) (< n 100))) (terpri)
+  (print (< n 0)) (terpri)
+  (princ (if (> n 0) "yes" "no")) (terpri))
+(rontolisp:wasm-export 'main :as "main" :params '(:s32) :returns nil)
