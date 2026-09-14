@@ -194,7 +194,10 @@ class WitScaffolderTest {
 				""");
 		Path lisp = this.tempDir.resolve("analyzer.lisp");
 		runCli("--scaffold-wit", wit.toString(), "-o", lisp.toString());
-		assertThatCode(() -> new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, false)
+		assertThatCode(() -> WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.build()
 			.compile(WitExportInliner.inline(LispReader.readAllFromString(Files.readString(lisp)),
 					this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem())))
 			.doesNotThrowAnyException();

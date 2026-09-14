@@ -59,8 +59,11 @@ class JvmClassShakerCorpusTest {
 		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(corpusSource(),
 				am.ik.rontolisp.reader.Features.JVM, false, false);
 
-		byte[] plain = withoutUndefinedWarnings(
-				() -> new JvmLispCompiler("Test", false, OptimizeLevel.NONE).compile(program));
+		byte[] plain = withoutUndefinedWarnings(() -> JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(program));
 		// The corpus class is the one that once crossed the JVM 65535 constant-pool
 		// ceiling. The LibraryDefunPruner keeps the pool small by dropping
 		// unreachable spliced library defuns; guard the headroom so a growing corpus
@@ -72,8 +75,11 @@ class JvmClassShakerCorpusTest {
 					+ "LibraryDefunPruner and ConstantPool deduplication)")
 			.isLessThanOrEqualTo(52000);
 		// A decoder gap (unrecognized opcode / constant tag) throws here, by design.
-		byte[] optimized = withoutUndefinedWarnings(
-				() -> new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program));
+		byte[] optimized = withoutUndefinedWarnings(() -> JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program));
 
 		assertThat(optimized.length).as("optimized should shrink the class").isLessThan(plain.length);
 		try {

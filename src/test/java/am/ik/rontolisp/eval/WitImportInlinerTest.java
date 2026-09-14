@@ -357,7 +357,7 @@ class WitImportInlinerTest {
 	}
 
 	private static byte[] compile(List<LispVal> program, OptimizeLevel optimize) {
-		return new WasmLispCompiler(false, false, false, optimize, false, false).compile(program);
+		return WasmLispCompiler.builder().optimize(optimize).build().compile(program);
 	}
 
 }

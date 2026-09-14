@@ -85,11 +85,10 @@ class ClRedefinitionWarningsTest {
 				(defun twice (x) (sqrt x))
 				(rontolisp:wasm-export 'twice :params '(:long) :returns :long)
 				""";
-		assertThat(compileCapturingErr(
-				program -> new am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler(OptimizeLevel.NONE, false, false, false)
-					.compile(program),
-				source))
-			.contains("redefines the COMMON-LISP function SQRT");
+		assertThat(compileCapturingErr(program -> am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(program), source)).contains("redefines the COMMON-LISP function SQRT");
 	}
 
 	@Test

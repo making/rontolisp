@@ -1,6 +1,6 @@
 # `--component` (WASI 0.3 / Preview 3 output) for the WASM compiler
 
-Opt-in: CLI `--component`; `WasmLispCompiler(dynamic, component)`. Default output stays a
+Opt-in: CLI `--component`; `WasmLispCompiler.builder().component(true)`. Default output stays a
 Preview 1 core module (no regression).
 
 **Design**: the core module is emitted UNCHANGED from Preview 1 (still imports the fifteen

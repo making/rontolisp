@@ -36,7 +36,11 @@ class JvmExportTest {
 
 	private Class<?> compileToClass(String lispCode, boolean noMain) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] classBytes = new JvmLispCompiler("ExportTest", false, OptimizeLevel.DEFAULT).noMain(noMain)
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("ExportTest")
+			.optimize(OptimizeLevel.DEFAULT)
+			.noMain(noMain)
+			.build()
 			.compile(program);
 		Path classFile = this.tempDir.resolve("ExportTest.class");
 		Files.write(classFile, classBytes);
@@ -472,7 +476,10 @@ class JvmExportTest {
 				(defun echo (v) v)
 				(rontolisp:jvm-export 'echo :params '(:float-vector) :returns :float-vector)
 				"""));
-		JvmLispCompiler compiler = new JvmLispCompiler("ExportTest", false, OptimizeLevel.DEFAULT);
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
+			.className("ExportTest")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build();
 		compiler.compile(withHandle);
 		assertThat(compiler.runtimeClassFiles().keySet()).containsExactlyInAnyOrder(
 				"am/ik/rontolisp/runtime/RontoBoundary.class", "am/ik/rontolisp/runtime/RontoFloatArray.class",
@@ -484,7 +491,10 @@ class JvmExportTest {
 				(defun echo (x) x)
 				(rontolisp:jvm-export 'echo :params '(:s32) :returns :s32)
 				"""));
-		JvmLispCompiler plain = new JvmLispCompiler("ExportTest", false, OptimizeLevel.DEFAULT);
+		JvmLispCompiler plain = JvmLispCompiler.builder()
+			.className("ExportTest")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build();
 		plain.compile(withoutHandle);
 		assertThat(plain.runtimeClassFiles()).isEmpty();
 	}

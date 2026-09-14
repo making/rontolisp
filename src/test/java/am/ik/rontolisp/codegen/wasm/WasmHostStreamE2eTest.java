@@ -126,7 +126,7 @@ class WasmHostStreamE2eTest {
 	@Test
 	void aNoWasiModulePullsItsBodyThroughAHostImportAndDrainsItPortably() throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(MODULE));
-		byte[] wasm = new WasmLispCompiler(false, false, true).compile(program);
+		byte[] wasm = WasmLispCompiler.builder().noWasi(true).build().compile(program);
 		Path wasmFile = this.tempDir.resolve("stream.wasm");
 		Files.write(wasmFile, wasm);
 		Path driver = this.tempDir.resolve("driver.js");

@@ -231,11 +231,18 @@ public final class JvmSourceCompiler {
 		// The JVM backend cannot parse PEM in hand-assembled bytecode, so rewrite
 		// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 		// (WASM keeps tls-listen-pem, which its compiler rejects outright).
-		JvmLispCompiler compiler = new JvmLispCompiler(this.internalClassName, this.dynamic, this.optimize, this.simd,
-				this.blas, this.gpu, this.parallel)
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
+			.className(this.internalClassName)
+			.dynamic(this.dynamic)
+			.optimize(this.optimize)
+			.simd(this.simd)
+			.blas(this.blas)
+			.gpu(this.gpu)
+			.parallel(this.parallel)
 			.noMain(this.noMain)
 			.servlet(this.servlet)
-			.runtimeFeatures(features.names());
+			.runtimeFeatures(features.names())
+			.build();
 		byte[] bytes = compiler.compile(TlsPemInliner.inline(program, this.baseDir));
 		// A :float-vector / :float-matrix export hands out a handle class; it travels
 		// beside the program's own class so the artifact still has no dependency

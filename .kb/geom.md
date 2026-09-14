@@ -190,8 +190,8 @@ equivalent (no `float[]` to pack into; Preview 1 reads through its own stream la
   embedded `JvmGeomTemplate` (`.kb/template-class-embedding.md`).
 - **Both are ALWAYS ON, and `--simd` is not the precedent**: `--blas`/`--simd` are opt-in because a
   vendor gemm and a lane reduction REASSOCIATE, and nothing here does. **A kernel that rounds
-  differently is a bug, not a tolerance.** The `setGeomKernels(false)` oracle switch (`LispEvaluator`,
-  `JvmLispCompiler`) lets `GeomKernelsTest` / `JvmGeomKernelCompilerTest` run every fixture down both
+  differently is a bug, not a tolerance.** The geom-kernel oracle switch (`LispEvaluator.setGeomKernels(false)`,
+  `JvmLispCompiler.Builder#geomKernels(false)`) lets `GeomKernelsTest` / `JvmGeomKernelCompilerTest` run every fixture down both
   paths and compare PRINTED values.
 - Three `geom.lisp` splits made the seam possible (a seam has to be a whole function to be
   replaceable): `geom::%solid-of-vertices`, `geom::%vertex-extremes` and `geom::%model-extent` -- the

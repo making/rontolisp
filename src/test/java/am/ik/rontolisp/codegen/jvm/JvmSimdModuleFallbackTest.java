@@ -38,13 +38,23 @@ class JvmSimdModuleFallbackTest {
 
 	private Compiled compileVec(String lispCode, boolean parallel) {
 		List<LispVal> program = VecLibrary.process(LispReader.readAllFromString(lispCode));
-		JvmLispCompiler compiler = new JvmLispCompiler("Test", false, OptimizeLevel.NONE, true, false, false, parallel);
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(true)
+			.parallel(parallel)
+			.build();
 		return new Compiled(compiler.compile(program), compiler.runtimeClassFiles());
 	}
 
 	private Compiled compileLinalg(String lispCode, boolean parallel) {
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
-		JvmLispCompiler compiler = new JvmLispCompiler("Test", false, OptimizeLevel.NONE, true, false, false, parallel);
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(true)
+			.parallel(parallel)
+			.build();
 		return new Compiled(compiler.compile(program), compiler.runtimeClassFiles());
 	}
 

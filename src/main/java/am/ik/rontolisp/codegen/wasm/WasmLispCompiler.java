@@ -94,11 +94,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	/**
 	 * The names the compiled program's {@code *features*} starts out holding. The WASM
-	 * backend's own set unless the frontend {@link #runtimeFeatures(List) says otherwise}
-	 * -- reading and running must agree on it, and only the frontend knows what it read
-	 * with (a {@code --component} or {@code --no-wasi} build carries more).
+	 * backend's own set unless the frontend {@link Builder#runtimeFeatures(List) says
+	 * otherwise} -- reading and running must agree on it, and only the frontend knows
+	 * what it read with (a {@code --component} or {@code --no-wasi} build carries more).
 	 */
-	private List<String> runtimeFeatures = LispMacroExpander.backendFeatures(true);
+	private final List<String> runtimeFeatures;
 
 	/**
 	 * The one import a {@code --host-random} module carries: preview1's
@@ -122,242 +122,42 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final String WASI_PREVIEW1_MODULE = "wasi_snapshot_preview1";
 
 	/**
-	 * Creates a new WASM compiler.
-	 * <p>
-	 * Compiles at {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize}
-	 * selects, so an embedder that names no level gets what this project's own frontend
-	 * gives. Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
+	 * Creates a new WASM compiler, every option at its default: a Preview 1 core module
+	 * at {@link OptimizeLevel#DEFAULT}. {@link #builder()} sets the others.
 	 */
 	public WasmLispCompiler() {
-		this(false);
+		this(builder());
 	}
 
-	/**
-	 * Creates a new WASM compiler.
-	 * @param dynamic when {@code true}, unresolved function calls and variable references
-	 * are not rejected at compile time but resolved at runtime against the embedded
-	 * {@code eval} global environment (late binding), so a program that defines functions
-	 * via {@code load} can compile without changes. This forces the {@code eval} runtime
-	 * to be emitted.
-	 */
-	public WasmLispCompiler(boolean dynamic) {
-		this(dynamic, false);
-	}
-
-	/**
-	 * Creates a new WASM compiler.
-	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
-	 * @param component when {@code true}, the output is a WASI 0.2 (Preview 2)
-	 * <strong>component</strong> instead of a Preview 1 core module: the core module
-	 * imports its linear memory and exports a {@code run} entry, and is wrapped by
-	 * {@link WasmComponentBuilder} so it prints through {@code wasi:cli/stdout} and runs
-	 * with {@code wasmtime run}. Reading and file I/O are not yet available in component
-	 * mode.
-	 */
-	public WasmLispCompiler(boolean dynamic, boolean component) {
-		this(dynamic, component, false);
-	}
-
-	/**
-	 * Creates a new WASM compiler.
-	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
-	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
-	 * @param noWasi when {@code true}, the output imports <strong>no</strong>
-	 * {@code wasi_snapshot_preview1} functions, so a host can instantiate it with no
-	 * import object (a "reactor"/library module). The nine WASI import slots (function
-	 * indices 0-8) are filled with internal stubs so every fixed {@code FUNC_*} index
-	 * stays valid: {@code fd_write} is a sink (print/format-t output is discarded), the
-	 * other eight are {@code unreachable} traps (read/open/getenv/time/random trap).
-	 * Combined with {@code component}, the output is a <strong>reactor component</strong>
-	 * that imports nothing at all: the core module keeps this exact Preview 1 no-WASI
-	 * contract, declares its own memory, runs its top-level forms from the core start
-	 * section at instantiation (there is no {@code wasi:cli/run} export), and only the
-	 * {@code (rontolisp:wasm-export ...)} functions are lifted as typed component-model
-	 * exports.
-	 * <p>
-	 * Compiles at {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize}
-	 * selects, so an embedder that names no level gets what this project's own frontend
-	 * gives. Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
-	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi) {
-		this(dynamic, component, noWasi, OptimizeLevel.DEFAULT);
-	}
-
-	/**
-	 * Creates a new WASM compiler.
-	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
-	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
-	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
-	 * @param optimize what to optimize the module FOR (the CLI's {@code --optimize}).
-	 * Every level but {@link OptimizeLevel#NONE} runs the emitted core module through
-	 * {@link am.ik.wasm.WasmTreeShaker} -- functions unreachable from the module's roots
-	 * (its exports and {@code _start}) are dropped and the survivors renumbered, in
-	 * {@code component} mode too; combined with {@code noWasi} a pure-compute reactor
-	 * module shrinks to a handful of functions. {@link OptimizeLevel#SIZE} additionally
-	 * declines the two emissions that spend bytes on speed: integer expression-tree
-	 * fusion ({@code .kb/wasm-int-fusion.md}) and unboxed dual-representation locals
-	 * ({@code .kb/wasm-unboxed-locals.md}).
-	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize) {
-		this(dynamic, component, noWasi, optimize, false);
-	}
-
-	/**
-	 * Creates a new WASM compiler.
-	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
-	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
-	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
-	 * @param optimize see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
-	 * @param serve when {@code true} (implies {@code component}), the program serves HTTP
-	 * via {@code rontolisp:http-handler}: the {@code HttpHandlerInliner} has spliced in a
-	 * {@code %http-dispatch} {@code wasm-export} wrapper, so the wasm-export memory-ABI
-	 * machinery is enabled even in component mode, and the core is wrapped by
-	 * {@link WasmComponentBuilder#buildServe} into a {@code wasi:http/incoming-handler}
-	 * component (runnable under {@code wasmtime serve} or any {@code wasi:http} 0.2 host
-	 * with wasm-GC enabled, e.g. jco or wasmCloud) instead of the {@code wasi:cli/run}
-	 * component.
-	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve) {
-		this(dynamic, component, noWasi, optimize, serve, false);
-	}
-
-	/**
-	 * Creates a new WASM compiler.
-	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
-	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
-	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
-	 * @param optimize see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
-	 * @param serve see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean)}
-	 * @param simd when {@code true} (the CLI's {@code --simd}), the vectorizable
-	 * {@code vec:} kernels are intercepted at their call sites and routed to emitted v128
-	 * runtime helpers ({@link WasmVecSimdRuntimeBuilder}) instead of the scalar
-	 * {@code vec.lisp} defuns. This also switches the packed float-array representation:
-	 * a {@code TYPE_FARRAY}'s data field then holds a {@code TYPE_VBLOCK} over an
-	 * {@code (array (mut v128))} of lane groups instead of a {@code TYPE_F64ARR}/
-	 * {@code TYPE_F32ARR}. Both are ordinary GC objects the engine collects; the data
-	 * field is {@code (ref null eq)} either way, and the representation is fixed at
-	 * compile time, so one module only ever holds one of the two. Without {@code simd}
-	 * the output is byte-identical to a build of this compiler that never knew about the
-	 * flag.
-	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
-			boolean simd) {
-		this(dynamic, component, noWasi, optimize, serve, simd, false);
-	}
-
-	/**
-	 * Creates a new WASM compiler.
-	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
-	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
-	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
-	 * @param optimize see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
-	 * @param serve see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean)}
-	 * @param simd see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean)}
-	 * @param hostRandom when {@code true} (the CLI's {@code --host-random}, which
-	 * requires {@code noWasi} and rejects {@code component}), the {@code random_get} slot
-	 * forwards to a single host import {@code env.random_get(buf, len) -> errno} instead
-	 * of running the module-local SplitMix64 stub. The module then imports exactly that
-	 * one function -- the zero-import default is unchanged, this is the opt-in -- and in
-	 * exchange {@code rontolisp:random-bytes} works instead of signalling, and the
-	 * module-local generator behind {@code random} is SEEDED from the host on its first
-	 * draw instead of starting fixed (so a quickloaded library's {@code (random ...)}
-	 * draws from an unpredictable stream without the library knowing;
-	 * {@code .kb/random.md}). No {@code __ronto_seed_random} is exported, because the
-	 * flag already does automatically what that hook exists for.
-	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
-			boolean simd, boolean hostRandom) {
-		this(dynamic, component, noWasi, optimize, serve, simd, hostRandom, false);
-	}
-
-	/**
-	 * Creates a new WASM compiler.
-	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
-	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
-	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
-	 * @param optimize see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
-	 * @param serve see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean)}
-	 * @param simd see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean)}
-	 * @param hostRandom see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean, boolean)}
-	 * @param hostFetch when {@code true} (the CLI's {@code --host-fetch}, which requires
-	 * {@code noWasi} and rejects {@code component}), {@code rontolisp:fetch} compiles on
-	 * the reactor: the call falls through to the {@code HostFetchLibrary} splice, whose
-	 * transport is one injected host import {@code env.fetch(request-json) ->
-	 * response-json} riding the ordinary {@code wasm-import} machinery. The zero-import
-	 * default is unchanged -- a program that never fetches gets no splice and no import.
-	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
-			boolean simd, boolean hostRandom, boolean hostFetch) {
-		this(dynamic, component, noWasi, optimize, serve, simd, hostRandom, hostFetch, false);
-	}
-
-	/**
-	 * Creates a new WASM compiler.
-	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
-	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
-	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
-	 * @param optimize see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
-	 * @param serve see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean)}
-	 * @param simd see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean)}
-	 * @param hostRandom see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean, boolean)}
-	 * @param hostFetch see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean, boolean, boolean)}
-	 * @param reentrant when {@code true} (the CLI's {@code --reentrant}), the module OWNS
-	 * its per-call state and a JSPI host may OVERLAP calls into one instance instead of
-	 * serialising them: the export wrappers drop the re-entry guard, every
-	 * dynamically-bound special moves into a per-call task record swapped around the
-	 * suspending host calls (the JVM {@code _d$} hybrid shape), and linear-memory staging
-	 * that must survive a park moves off the {@code HEAP_PTR} scratch stack into recycled
-	 * park blocks ({@code __ronto_park_alloc}/{@code __ronto_park_free}). What it buys is
-	 * I/O overlap on one instance -- one stack still runs at a time. Requires a program
-	 * that CAN suspend (an {@code :async t} import, or {@code --host-fetch} with
-	 * {@code rontolisp:fetch} used) and changes the host ABI of the memory-typed
-	 * boundaries (see the build's obligation lines); without the flag the output is
-	 * byte-identical to a build that never knew about it
-	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
-			boolean simd, boolean hostRandom, boolean hostFetch, boolean reentrant) {
-		this.dynamic = dynamic;
-		this.component = component;
-		this.noWasi = noWasi;
-		this.optimize = optimize;
-		this.serve = serve && component;
-		this.simd = simd;
-		this.hostRandom = hostRandom;
-		this.hostFetch = hostFetch;
-		this.reentrant = reentrant;
+	private WasmLispCompiler(Builder builder) {
+		this.dynamic = builder.dynamic;
+		this.component = builder.component;
+		this.noWasi = builder.noWasi;
+		this.optimize = builder.optimize;
+		this.serve = builder.serve && builder.component;
+		this.simd = builder.simd;
+		this.hostRandom = builder.hostRandom;
+		this.hostFetch = builder.hostFetch;
+		this.reentrant = builder.reentrant;
+		this.runtimeFeatures = builder.runtimeFeatures;
 		// A component's calls are driven by the component-model scheduler, not by JSPI,
 		// and its per-call machinery (cabi marks, task records) is its own; the flag is
 		// a core-module (JSPI host) contract.
-		if (reentrant && component) {
+		if (this.reentrant && this.component) {
 			throw new UnsupportedOperationException("--reentrant cannot be combined with --component: overlapped calls "
 					+ "are a JSPI (core module) host contract; a component's concurrency is the component model's");
 		}
 		// Late binding reads specials through the eval mirror (GLOBAL_ENV), which is one
 		// per instance, not one per call -- a --dynamic module would keep the very
 		// corruption the per-task store exists to remove.
-		if (reentrant && dynamic) {
+		if (this.reentrant && this.dynamic) {
 			throw new UnsupportedOperationException(
 					"--reentrant cannot be combined with --dynamic: late-bound variable "
 							+ "reads go through the eval mirror, which is per-instance state the per-task store does not cover");
 		}
 		// A serve component's entire surface is wasi:http -- its imports AND its
 		// handler export -- so a serve build cannot promise "no WASI imports".
-		if (this.serve && noWasi) {
+		if (this.serve && this.noWasi) {
 			throw new UnsupportedOperationException(
 					"--no-wasi cannot be combined with rontolisp:http-handler: a serve component's entire surface is "
 							+ "wasi:http (its imports and the wasi:http/handler export), which --no-wasi excludes; "
@@ -365,7 +165,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		// --host-random routes ONE WASI slot at a host function, so it only means
 		// anything where that slot is a module-local stub in the first place.
-		if (hostRandom && !noWasi) {
+		if (this.hostRandom && !this.noWasi) {
 			throw new UnsupportedOperationException("--host-random requires --no-wasi: every other WASM build already "
 					+ "draws `random` from the host's wasi_snapshot_preview1 random_get");
 		}
@@ -373,7 +173,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// entropy import would be a WIT world-shape decision, not a core export one.
 		// Plain --component already has the host's entropy (wasi:random), so the
 		// answer there is to drop --no-wasi rather than to grow the world.
-		if (hostRandom && component) {
+		if (this.hostRandom && this.component) {
 			throw new UnsupportedOperationException(
 					"--host-random cannot be combined with --component: a --no-wasi reactor component imports nothing "
 							+ "at all, and a plain --component build already draws `random` from wasi:random; "
@@ -381,7 +181,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		// --host-fetch lowers fetch at a host import, so it only means anything where
 		// fetch has no transport of its own in the first place.
-		if (hostFetch && !noWasi) {
+		if (this.hostFetch && !this.noWasi) {
 			throw new UnsupportedOperationException("--host-fetch requires --no-wasi: rontolisp:fetch on a "
 					+ "WASI build is the component's wasi:http surface (--component), not a host import");
 		}
@@ -389,12 +189,246 @@ public final class WasmLispCompiler implements LispCompiler {
 		// imports NOTHING, and lifting a fetch import into its WIT world is a
 		// world-shape decision, not a core import one; a plain --component build
 		// already fetches over wasi:http.
-		if (hostFetch && component) {
+		if (this.hostFetch && this.component) {
 			throw new UnsupportedOperationException(
 					"--host-fetch cannot be combined with --component: a --no-wasi reactor component imports nothing "
 							+ "at all, and a plain --component build already fetches over wasi:http; "
 							+ "drop --component (core module) or drop --no-wasi (component)");
 		}
+	}
+
+	/**
+	 * Creates a builder for a WASM compiler. Every option defaults to what the CLI
+	 * selects when its flag is absent.
+	 * @return a new builder
+	 */
+	public static Builder builder() {
+		return new Builder();
+	}
+
+	/**
+	 * Builder for {@link WasmLispCompiler}.
+	 */
+	public static final class Builder {
+
+		private boolean dynamic;
+
+		private boolean component;
+
+		private boolean noWasi;
+
+		private OptimizeLevel optimize = OptimizeLevel.DEFAULT;
+
+		private boolean serve;
+
+		private boolean simd;
+
+		private boolean hostRandom;
+
+		private boolean hostFetch;
+
+		private boolean reentrant;
+
+		private List<String> runtimeFeatures = LispMacroExpander.backendFeatures(true);
+
+		private Builder() {
+		}
+
+		/**
+		 * Selects late binding ({@code --dynamic}). When {@code true}, unresolved
+		 * function calls and variable references are not rejected at compile time but
+		 * resolved at runtime against the embedded {@code eval} global environment, so a
+		 * program that defines functions via {@code load} can compile without changes.
+		 * This forces the {@code eval} runtime to be emitted.
+		 * @param dynamic whether to resolve unresolved references at run time
+		 * @return this builder
+		 */
+		public Builder dynamic(boolean dynamic) {
+			this.dynamic = dynamic;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --component}. When {@code true}, the output is a WASI 0.2
+		 * (Preview 2) <strong>component</strong> instead of a Preview 1 core module: the
+		 * core module imports its linear memory and exports a {@code run} entry, and is
+		 * wrapped by {@link WasmComponentBuilder} so it prints through
+		 * {@code wasi:cli/stdout} and runs with {@code wasmtime run}. Reading and file
+		 * I/O are not yet available in component mode.
+		 * @param component whether to emit a component
+		 * @return this builder
+		 */
+		public Builder component(boolean component) {
+			this.component = component;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --no-wasi}. When {@code true}, the output imports
+		 * <strong>no</strong> {@code wasi_snapshot_preview1} functions, so a host can
+		 * instantiate it with no import object (a "reactor"/library module). The nine
+		 * WASI import slots (function indices 0-8) are filled with internal stubs so
+		 * every fixed {@code FUNC_*} index stays valid: {@code fd_write} is a sink
+		 * (print/format-t output is discarded), the other eight are {@code unreachable}
+		 * traps (read/open/getenv/time/random trap). Combined with {@link #component},
+		 * the output is a <strong>reactor component</strong> that imports nothing at all:
+		 * the core module keeps this exact Preview 1 no-WASI contract, declares its own
+		 * memory, runs its top-level forms from the core start section at instantiation
+		 * (there is no {@code wasi:cli/run} export), and only the
+		 * {@code (rontolisp:wasm-export ...)} functions are lifted as typed
+		 * component-model exports.
+		 * @param noWasi whether to import no WASI functions
+		 * @return this builder
+		 */
+		public Builder noWasi(boolean noWasi) {
+			this.noWasi = noWasi;
+			return this;
+		}
+
+		/**
+		 * Sets what to optimize the module FOR (the CLI's {@code --optimize}). Every
+		 * level but {@link OptimizeLevel#NONE} runs the emitted core module through
+		 * {@link am.ik.wasm.WasmTreeShaker} -- functions unreachable from the module's
+		 * roots (its exports and {@code _start}) are dropped and the survivors
+		 * renumbered, in {@link #component} mode too; combined with {@link #noWasi} a
+		 * pure-compute reactor module shrinks to a handful of functions.
+		 * {@link OptimizeLevel#SIZE} additionally declines the two emissions that spend
+		 * bytes on speed: integer expression-tree fusion ({@code .kb/wasm-int-fusion.md})
+		 * and unboxed dual-representation locals ({@code .kb/wasm-unboxed-locals.md}).
+		 * <p>
+		 * Defaults to {@link OptimizeLevel#DEFAULT} -- the level an absent
+		 * {@code --optimize} selects, so an embedder that names no level gets what this
+		 * project's own frontend gives. Declining the optimizer is asked for by name:
+		 * {@link OptimizeLevel#NONE}.
+		 * @param optimize the optimization level
+		 * @return this builder
+		 */
+		public Builder optimize(OptimizeLevel optimize) {
+			this.optimize = optimize;
+			return this;
+		}
+
+		/**
+		 * Selects serve mode. When {@code true} (it takes effect only together with
+		 * {@link #component}), the program serves HTTP via
+		 * {@code rontolisp:http-handler}: the {@code HttpHandlerInliner} has spliced in a
+		 * {@code %http-dispatch} {@code wasm-export} wrapper, so the wasm-export
+		 * memory-ABI machinery is enabled even in component mode, and the core is wrapped
+		 * by {@link WasmComponentBuilder#buildServe} into a
+		 * {@code wasi:http/incoming-handler} component (runnable under
+		 * {@code wasmtime serve} or any {@code wasi:http} 0.2 host with wasm-GC enabled,
+		 * e.g. jco or wasmCloud) instead of the {@code wasi:cli/run} component.
+		 * @param serve whether the program serves HTTP
+		 * @return this builder
+		 */
+		public Builder serve(boolean serve) {
+			this.serve = serve;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --simd}. When {@code true}, the vectorizable {@code vec:}
+		 * kernels are intercepted at their call sites and routed to emitted v128 runtime
+		 * helpers ({@link WasmVecSimdRuntimeBuilder}) instead of the scalar
+		 * {@code vec.lisp} defuns. This also switches the packed float-array
+		 * representation: a {@code TYPE_FARRAY}'s data field then holds a
+		 * {@code TYPE_VBLOCK} over an {@code (array (mut v128))} of lane groups instead
+		 * of a {@code TYPE_F64ARR}/ {@code TYPE_F32ARR}. Both are ordinary GC objects the
+		 * engine collects; the data field is {@code (ref null eq)} either way, and the
+		 * representation is fixed at compile time, so one module only ever holds one of
+		 * the two. Without {@code simd} the output is byte-identical to a build of this
+		 * compiler that never knew about the flag.
+		 * @param simd whether to lower the vectorizable kernels to v128
+		 * @return this builder
+		 */
+		public Builder simd(boolean simd) {
+			this.simd = simd;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --host-random}, which requires {@link #noWasi} and rejects
+		 * {@link #component}. When {@code true}, the {@code random_get} slot forwards to
+		 * a single host import {@code env.random_get(buf, len) -> errno} instead of
+		 * running the module-local SplitMix64 stub. The module then imports exactly that
+		 * one function -- the zero-import default is unchanged, this is the opt-in -- and
+		 * in exchange {@code rontolisp:random-bytes} works instead of signalling, and the
+		 * module-local generator behind {@code random} is SEEDED from the host on its
+		 * first draw instead of starting fixed (so a quickloaded library's
+		 * {@code (random ...)} draws from an unpredictable stream without the library
+		 * knowing; {@code .kb/random.md}). No {@code __ronto_seed_random} is exported,
+		 * because the flag already does automatically what that hook exists for.
+		 * @param hostRandom whether to draw entropy from the host import
+		 * @return this builder
+		 */
+		public Builder hostRandom(boolean hostRandom) {
+			this.hostRandom = hostRandom;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --host-fetch}, which requires {@link #noWasi} and rejects
+		 * {@link #component}. When {@code true}, {@code rontolisp:fetch} compiles on the
+		 * reactor: the call falls through to the {@code HostFetchLibrary} splice, whose
+		 * transport is one injected host import
+		 * {@code env.fetch(request-json) -> response-json} riding the ordinary
+		 * {@code wasm-import} machinery. The zero-import default is unchanged -- a
+		 * program that never fetches gets no splice and no import.
+		 * @param hostFetch whether {@code rontolisp:fetch} lowers to the host import
+		 * @return this builder
+		 */
+		public Builder hostFetch(boolean hostFetch) {
+			this.hostFetch = hostFetch;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --reentrant}, which rejects {@link #component} and
+		 * {@link #dynamic}. When {@code true}, the module OWNS its per-call state and a
+		 * JSPI host may OVERLAP calls into one instance instead of serialising them: the
+		 * export wrappers drop the re-entry guard, every dynamically-bound special moves
+		 * into a per-call task record swapped around the suspending host calls (the JVM
+		 * {@code _d$} hybrid shape), and linear-memory staging that must survive a park
+		 * moves off the {@code HEAP_PTR} scratch stack into recycled park blocks
+		 * ({@code __ronto_park_alloc}/{@code __ronto_park_free}). What it buys is I/O
+		 * overlap on one instance -- one stack still runs at a time. Requires a program
+		 * that CAN suspend (an {@code :async t} import, or {@link #hostFetch} with
+		 * {@code rontolisp:fetch} used) and changes the host ABI of the memory-typed
+		 * boundaries (see the build's obligation lines); without the flag the output is
+		 * byte-identical to a build that never knew about it.
+		 * @param reentrant whether a host may overlap calls into one instance
+		 * @return this builder
+		 */
+		public Builder reentrant(boolean reentrant) {
+			this.reentrant = reentrant;
+			return this;
+		}
+
+		/**
+		 * Sets the feature names the compiled program's {@code *features*} starts out
+		 * holding. The frontend passes the set it READ the program with, so a
+		 * {@code (member :rontolisp-component *features*)} at run time answers what the
+		 * {@code #+rontolisp-component} beside it answered at read time. Left alone, the
+		 * backend's base set stands ({@link LispMacroExpander#backendFeatures}).
+		 * @param features the feature names, without the leading colon
+		 * @return this builder
+		 */
+		public Builder runtimeFeatures(List<String> features) {
+			this.runtimeFeatures = List.copyOf(features);
+			return this;
+		}
+
+		/**
+		 * Builds the compiler.
+		 * @return a new WASM compiler
+		 * @throws UnsupportedOperationException when the options combine into a build no
+		 * host contract describes (for example {@link #hostRandom} without
+		 * {@link #noWasi})
+		 */
+		public WasmLispCompiler build() {
+			return new WasmLispCompiler(this);
+		}
+
 	}
 
 	/**
@@ -2541,20 +2575,6 @@ public final class WasmLispCompiler implements LispCompiler {
 	// region at all (mem.wat's cabi_realloc bumps the core's HEAP_PTR cell -- one
 	// shared monotonic allocator, see src/wasm-component/mem.wat).
 	private static final int COMPONENT_DATA_BASE_OFFSET = 0x60000;
-
-	/**
-	 * Sets the feature names the compiled program's {@code *features*} starts out
-	 * holding. The frontend passes the set it READ the program with, so a
-	 * {@code (member :rontolisp-component *features*)} at run time answers what the
-	 * {@code #+rontolisp-component} beside it answered at read time. Left alone, the
-	 * backend's base set stands ({@link LispMacroExpander#backendFeatures}).
-	 * @param features the feature names, without the leading colon
-	 * @return this compiler
-	 */
-	public WasmLispCompiler runtimeFeatures(List<String> features) {
-		this.runtimeFeatures = List.copyOf(features);
-		return this;
-	}
 
 	@Override
 	public byte[] compile(List<LispVal> program) {

@@ -321,8 +321,8 @@ class WasmRefTypeFolderTest {
 				""";
 		List<LispVal> program = LispReader.readAllFromString(source);
 		byte[] shakenOnly = WasmTreeShaker
-			.shake(new WasmLispCompiler(false, false, true, OptimizeLevel.NONE).compile(program));
-		byte[] folded = new WasmLispCompiler(false, false, true, OptimizeLevel.SIZE).compile(program);
+			.shake(WasmLispCompiler.builder().noWasi(true).optimize(OptimizeLevel.NONE).build().compile(program));
+		byte[] folded = WasmLispCompiler.builder().noWasi(true).optimize(OptimizeLevel.SIZE).build().compile(program);
 
 		assertThat(folded.length).as("folded %d vs shaken-only %d", folded.length, shakenOnly.length)
 			.isLessThan(shakenOnly.length * 65 / 100);

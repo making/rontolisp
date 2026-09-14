@@ -169,7 +169,7 @@ class WasmReactorBodyE2eTest {
 		loaded = HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = GrayStreamsLibrary
 			.process(LispPreludeLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))));
-		return new WasmLispCompiler(false, false, true).compile(program);
+		return WasmLispCompiler.builder().noWasi(true).build().compile(program);
 	}
 
 	private static String runNode(Path driver, Path wasmFile) throws IOException, InterruptedException {

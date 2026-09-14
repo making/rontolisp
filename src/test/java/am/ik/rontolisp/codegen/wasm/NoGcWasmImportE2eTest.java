@@ -425,7 +425,7 @@ class NoGcWasmImportE2eTest {
 	}
 
 	private static byte[] compileNoGc(List<LispVal> program, OptimizeLevel level) {
-		return new NoGcWasmCompiler(level, false, false, true).compile(program);
+		return NoGcWasmCompiler.builder().optimize(level).noWasi(true).build().compile(program);
 	}
 
 	private String run(String module, String driverJs, OptimizeLevel level, String name) throws Exception {
@@ -440,7 +440,7 @@ class NoGcWasmImportE2eTest {
 	// As run, but the module keeps WASI (fd_write import) so a printing program
 	// can run under the driver's own fd_write shim.
 	private String runWithWasi(String module, String driverJs, OptimizeLevel level, String name) throws Exception {
-		byte[] wasm = new NoGcWasmCompiler(level, false).compile(LispReader.readAllFromString(module));
+		byte[] wasm = NoGcWasmCompiler.builder().optimize(level).build().compile(LispReader.readAllFromString(module));
 		Path wasmFile = this.tempDir.resolve(name + ".wasm");
 		Files.write(wasmFile, wasm);
 		Path driver = this.tempDir.resolve(name + ".js");

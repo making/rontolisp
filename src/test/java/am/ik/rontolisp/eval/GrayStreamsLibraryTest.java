@@ -82,7 +82,10 @@ class GrayStreamsLibraryTest {
 	}
 
 	private String compileAndRun(List<LispVal> program) throws Exception {
-		byte[] classBytes = new JvmLispCompiler("GrayPlacement", false, OptimizeLevel.NONE)
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("GrayPlacement")
+			.optimize(OptimizeLevel.NONE)
+			.build()
 			.compile(LispPreludeLibrary.process(program));
 		Files.write(this.tempDir.resolve("GrayPlacement.class"), classBytes);
 		java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();

@@ -33,8 +33,11 @@ class JvmExportExampleTest {
 		// The vec: kernels are spliced exactly as the CLI splices them on a compile path.
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source)));
-		JvmLispCompiler compiler = new JvmLispCompiler("com/example/Kernels", false, OptimizeLevel.DEFAULT)
-			.noMain(true);
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
+			.className("com/example/Kernels")
+			.optimize(OptimizeLevel.DEFAULT)
+			.noMain(true)
+			.build();
 		byte[] classBytes = compiler.compile(program);
 		Path classFile = this.tempDir.resolve("com/example/Kernels.class");
 		Files.createDirectories(classFile.getParent());

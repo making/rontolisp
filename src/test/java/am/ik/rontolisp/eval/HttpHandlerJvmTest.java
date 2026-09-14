@@ -146,7 +146,7 @@ class HttpHandlerJvmTest {
 	}
 
 	private void compileAndServeInBackground(String program, int port, OptimizeLevel optimize) throws Exception {
-		JvmLispCompiler compiler = new JvmLispCompiler("TestHttpServe", false, optimize);
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("TestHttpServe").optimize(optimize).build();
 		// mirror the CLI pipeline's splices: http-server.lisp (the shared server value
 		// model the injected handle() calls into), then the Gray call-site rewrite its
 		// buffered :raw-body stream needs, then the prelude for rontolisp:read-all

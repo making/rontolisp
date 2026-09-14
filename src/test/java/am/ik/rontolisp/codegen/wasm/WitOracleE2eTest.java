@@ -51,7 +51,7 @@ class WitOracleE2eTest {
 	@Test
 	void gcComponentWitMatchesWasmToolsByteForByte() throws Exception {
 		// Every export-line shape at once: scalars, :string/:s-expr, :async, :as, void.
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).build();
 		byte[] component = compiler.compile(LispReader.readAllFromString("""
 				(defun pure-add (a b) (+ a b))
 				(defun scale (x f) (* x f))
@@ -86,7 +86,7 @@ class WitOracleE2eTest {
 		// whole path un-oracled: an emitted world that still advertised a dropped
 		// interface
 		// is exactly the divergence this file exists to catch.
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).optimize(OptimizeLevel.DEFAULT).build();
 		byte[] component = compiler.compile(LispReader.readAllFromString("""
 				(defun greet (s) (concatenate 'string "hello " s))
 				(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
@@ -101,7 +101,7 @@ class WitOracleE2eTest {
 		// The other end of the same pruning: a program reaching files, the clock, the
 		// environment, stdin and random keeps the whole surface, and the emitted world
 		// still byte-matches the tool.
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).optimize(OptimizeLevel.DEFAULT).build();
 		List<am.ik.rontolisp.LispVal> program = LispReader.readAllFromString("""
 				(with-open-file (s "x.txt" :direction :output) (format s "hi~%"))
 				(print (directory "*.txt"))
@@ -136,7 +136,7 @@ class WitOracleE2eTest {
 		// which
 		// the tool prints LAST. Both --optimize legs above print, so neither reaches this
 		// shape.
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).optimize(OptimizeLevel.DEFAULT).build();
 		byte[] component = compiler.compile(LispReader.readAllFromString("""
 				(defun roll () (random 100))
 				(rontolisp:wasm-export 'roll :returns :int)
@@ -155,7 +155,7 @@ class WitOracleE2eTest {
 		// world
 		// with a separated interface (`rontolisp:wit-export`, which lowers into exactly
 		// these :interface directives) rides on.
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).build();
 		byte[] component = compiler.compile(LispReader.readAllFromString(
 				"""
 						(defun add (x y) (+ x y))
@@ -174,7 +174,7 @@ class WitOracleE2eTest {
 		// and
 		// both the export ORDER and the trailing package block must byte-match
 		// wasm-tools.
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).build();
 		byte[] component = compiler.compile(LispReader.readAllFromString(
 				"""
 						(defun ping (n) n)
@@ -192,7 +192,7 @@ class WitOracleE2eTest {
 		// variant is gone), so like fetch its world is emitted by the user-import
 		// emitter and checked structurally + by re-parsing rather than byte-for-byte
 		// against wasm-tools (see the fetch test's rationale).
-		WasmLispCompiler sock = new WasmLispCompiler(false, true);
+		WasmLispCompiler sock = WasmLispCompiler.builder().component(true).build();
 		sock.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.StdinLibrary.process(
 				am.ik.rontolisp.eval.SocketsLibrary.process(
 						LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"),
@@ -217,7 +217,7 @@ class WitOracleE2eTest {
 		// blob variants (the sockets test above, WasiWitDefinitionsTest) are pinned to
 		// wasm-tools byte-for-byte; the user-import side is checked structurally and by
 		// re-parsing, which is the property that actually has to hold.
-		WasmLispCompiler http = new WasmLispCompiler(false, true);
+		WasmLispCompiler http = WasmLispCompiler.builder().component(true).build();
 		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.HttpLibrary.process(
 				LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
@@ -231,7 +231,7 @@ class WitOracleE2eTest {
 
 	@Test
 	void noGcComponentWitsMatchWasmToolsByteForByte() throws Exception {
-		NoGcWasmCompiler plain = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		NoGcWasmCompiler plain = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		byte[] plainComponent = plain.compile(LispReader.readAllFromString("""
 				(defun big-add (a b) (+ a b))
 				(defun shout (s) (concatenate 'string s "!"))
@@ -241,7 +241,7 @@ class WitOracleE2eTest {
 				(rontolisp:wasm-export 'huge :params '(:u64 :u64) :returns :u64)
 				"""));
 		assertThat(plain.componentWit()).isEqualTo(oracle(plainComponent));
-		NoGcWasmCompiler print = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		NoGcWasmCompiler print = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		byte[] printComponent = print.compile(LispReader.readAllFromString("""
 				(defun hello () (print "hi"))
 				(rontolisp:wasm-export 'hello)
@@ -256,7 +256,7 @@ class WitOracleE2eTest {
 		// inline `import env: interface { ... }` -- and each function under its
 		// :param-names (the labels of the instance type). The lists are what the core
 		// REACHES: the uncalled `spare` is not in the type, so it must not be in the WIT.
-		NoGcWasmCompiler byId = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		NoGcWasmCompiler byId = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		byte[] idComponent = byId.compile(LispReader.readAllFromString(
 				"""
 						(rontolisp:wasm-import 'add :from "docs:host/env@0.1.0" :as "add" :params '(:s32 :s32) :param-names '(a b) :returns :s32)
@@ -266,7 +266,7 @@ class WitOracleE2eTest {
 						(rontolisp:wasm-export 'run :params '(:s32) :returns :s32)
 						"""));
 		assertThat(byId.componentWit()).isEqualTo(oracle(idComponent));
-		NoGcWasmCompiler byLabel = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		NoGcWasmCompiler byLabel = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		byte[] labelComponent = byLabel.compile(LispReader.readAllFromString("""
 				(rontolisp:wasm-import 'host-log :from "env" :as "host-log" :params '(:string) :returns :void)
 				(rontolisp:wasm-import 'measure :from "env" :as "measure" :params '(:s32) :returns :s64)
@@ -275,7 +275,7 @@ class WitOracleE2eTest {
 				"""));
 		assertThat(byLabel.componentWit()).isEqualTo(oracle(labelComponent));
 		// The print micro-adapter's fixed stdout import precedes the user import.
-		NoGcWasmCompiler print = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		NoGcWasmCompiler print = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		byte[] printComponent = print.compile(LispReader.readAllFromString("""
 				(rontolisp:wasm-import 'measure :from "env" :as "measure" :params '(:s32) :returns :s64)
 				(defun run (n) (print n) (measure n))
@@ -291,7 +291,7 @@ class WitOracleE2eTest {
 		// WIT
 		// -- `export docs:calc/ops@1.0.0;` plus its package block -- must byte-match
 		// wasm-tools.
-		NoGcWasmCompiler compiler = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		NoGcWasmCompiler compiler = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		byte[] component = compiler.compile(LispReader.readAllFromString(
 				"""
 						(defun add (x y) (+ x y))

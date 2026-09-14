@@ -133,13 +133,26 @@ class JvmLinalgGpuAccelCompilerTest {
 
 	private byte[] compile(String lispCode, boolean gpu, boolean blas, boolean simd) {
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
-		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, simd, blas, gpu).compile(program);
+		return JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(simd)
+			.blas(blas)
+			.gpu(gpu)
+			.build()
+			.compile(program);
 	}
 
 	/** {@link #compile} with the {@code vec:} library spliced in as well. */
 	private byte[] compileWithVec(String lispCode, boolean gpu, boolean simd) {
 		List<LispVal> program = VecLibrary.process(LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, simd, false, gpu).compile(program);
+		return JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(simd)
+			.gpu(gpu)
+			.build()
+			.compile(program);
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -1538,7 +1551,11 @@ class JvmLinalgGpuAccelCompilerTest {
 				""";
 		String expected = scalar(lispCode);
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] classBytes = new JvmLispCompiler("com/example/Test", false, OptimizeLevel.NONE, false, false, true)
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("com/example/Test")
+			.optimize(OptimizeLevel.NONE)
+			.gpu(true)
+			.build()
 			.compile(program);
 
 		String bridgeName = "com/example/" + JvmGpuRuntimeBuilder.BRIDGE_NAME;

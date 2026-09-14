@@ -125,14 +125,18 @@ class WasmReentrantCompilerTest {
 
 	@Test
 	void reentrantRefusesComponentAndDynamic() {
-		assertThatThrownBy(
-				() -> new WasmLispCompiler(false, true, true, OptimizeLevel.NONE, false, false, false, false, true))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("--component");
-		assertThatThrownBy(
-				() -> new WasmLispCompiler(true, false, true, OptimizeLevel.NONE, false, false, false, false, true))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("--dynamic");
+		assertThatThrownBy(() -> WasmLispCompiler.builder()
+			.component(true)
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.reentrant(true)
+			.build()).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("--component");
+		assertThatThrownBy(() -> WasmLispCompiler.builder()
+			.dynamic(true)
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.reentrant(true)
+			.build()).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("--dynamic");
 	}
 
 	// if (blocktype empty); unreachable; end; i32.const 1; global.set -- the re-entry
@@ -141,7 +145,11 @@ class WasmReentrantCompilerTest {
 
 	private static byte[] compile(String source, boolean reentrant) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false, false, reentrant)
+		return WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.reentrant(reentrant)
+			.build()
 			.compile(program);
 	}
 

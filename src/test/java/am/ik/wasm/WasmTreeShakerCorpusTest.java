@@ -55,18 +55,27 @@ class WasmTreeShakerCorpusTest {
 			// the hand-written copy this replaces could not express at all (.todo/688).
 			List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
 					am.ik.rontolisp.reader.Features.WASM, true, noWasi);
-			byte[] plain = withoutUndefinedWarnings(
-					() -> new WasmLispCompiler(false, false, noWasi, OptimizeLevel.NONE).compile(program));
+			byte[] plain = withoutUndefinedWarnings(() -> WasmLispCompiler.builder()
+				.noWasi(noWasi)
+				.optimize(OptimizeLevel.NONE)
+				.build()
+				.compile(program));
 			// A decoder gap (unrecognized opcode) throws here -> test failure, by design.
-			byte[] optimized = withoutUndefinedWarnings(
-					() -> new WasmLispCompiler(false, false, noWasi, OptimizeLevel.DEFAULT).compile(program));
+			byte[] optimized = withoutUndefinedWarnings(() -> WasmLispCompiler.builder()
+				.noWasi(noWasi)
+				.optimize(OptimizeLevel.DEFAULT)
+				.build()
+				.compile(program));
 
 			// The size level swaps emissions rather than only dropping them (the shared
 			// cons readers, .kb/cons-access-runtime.md), so it is validated on the
 			// corpus too: a rewrite that validates on a toy and not on the corpus is
 			// exactly what this test exists to catch.
-			byte[] smallest = withoutUndefinedWarnings(
-					() -> new WasmLispCompiler(false, false, noWasi, OptimizeLevel.SIZE).compile(program));
+			byte[] smallest = withoutUndefinedWarnings(() -> WasmLispCompiler.builder()
+				.noWasi(noWasi)
+				.optimize(OptimizeLevel.SIZE)
+				.build()
+				.compile(program));
 
 			assertThat(optimized.length).as("optimized should shrink the module (noWasi=%s)", noWasi)
 				.isLessThan(plain.length);

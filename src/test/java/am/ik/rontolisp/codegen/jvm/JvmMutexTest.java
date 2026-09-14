@@ -39,7 +39,10 @@ class JvmMutexTest {
 		// an edge no bytecode shows, and the JVM class shaker roots at main -- so a
 		// shaken class would drop both methods. The property under test is the mutex,
 		// not the shaker's root set.
-		JvmLispCompiler compiler = new JvmLispCompiler("MutexProg", false, OptimizeLevel.NONE);
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
+			.className("MutexProg")
+			.optimize(OptimizeLevel.NONE)
+			.build();
 		byte[] classBytes = compiler.compile(LispReader.readAllFromString("""
 				(defvar *mt-lock* (rontolisp:make-mutex))
 				(defvar *mt-counter* 0)

@@ -39,7 +39,12 @@ class JvmSimdAccelCompilerTest {
 
 	private byte[] compile(String lispCode, boolean accel) {
 		List<LispVal> program = VecLibrary.process(LispReader.readAllFromString(lispCode));
-		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, accel).compile(program);
+		return JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(accel)
+			.build()
+			.compile(program);
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -774,7 +779,12 @@ class JvmSimdAccelCompilerTest {
 	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackageAndRunsThere() throws Exception {
 		List<LispVal> program = VecLibrary
 			.process(LispReader.readAllFromString("(print (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))"));
-		byte[] classBytes = new JvmLispCompiler("com/example/Test", false, OptimizeLevel.NONE, true).compile(program);
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("com/example/Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(true)
+			.build()
+			.compile(program);
 
 		String bridgeName = "com/example/" + JvmSimdRuntimeBuilder.BRIDGE_NAME;
 		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).contains(bridgeName);

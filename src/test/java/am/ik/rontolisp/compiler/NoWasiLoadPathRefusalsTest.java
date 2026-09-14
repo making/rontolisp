@@ -28,7 +28,12 @@ class NoWasiLoadPathRefusalsTest {
 		PrintStream oldErr = System.err;
 		System.setErr(new PrintStream(err));
 		try {
-			new WasmLispCompiler(false, component, true, OptimizeLevel.NONE, false, false, hostRandom)
+			WasmLispCompiler.builder()
+				.component(component)
+				.noWasi(true)
+				.optimize(OptimizeLevel.NONE)
+				.hostRandom(hostRandom)
+				.build()
 				.compile(LispReader.readAllFromString(source));
 		}
 		finally {
@@ -199,7 +204,12 @@ class NoWasiLoadPathRefusalsTest {
 					HostBoundary.STREAMING);
 			var program = am.ik.rontolisp.eval.LispPreludeLibrary.process(
 					am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
-			new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false, true).compile(program);
+			WasmLispCompiler.builder()
+				.noWasi(true)
+				.optimize(OptimizeLevel.NONE)
+				.hostFetch(true)
+				.build()
+				.compile(program);
 		}
 		finally {
 			System.setErr(oldErr);

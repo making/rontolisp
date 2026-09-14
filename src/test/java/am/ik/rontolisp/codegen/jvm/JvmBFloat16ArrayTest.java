@@ -81,7 +81,12 @@ class JvmBFloat16ArrayTest {
 	private byte[] compile(String lispCode, boolean accel) {
 		List<LispVal> program = LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		program = LinalgLibrary.process(VecLibrary.process(program));
-		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, accel).compile(program);
+		return JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(accel)
+			.build()
+			.compile(program);
 	}
 
 	private Class<?> load(byte[] classBytes) throws Exception {

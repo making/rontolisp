@@ -183,7 +183,7 @@ class NoGcWasmComponentImportE2eTest {
 	}
 
 	private static byte[] compileComponent(List<LispVal> program, OptimizeLevel level) {
-		return new NoGcWasmCompiler(level, false, true).compile(program);
+		return NoGcWasmCompiler.builder().optimize(level).component(true).build().compile(program);
 	}
 
 	private static String run(String... command) throws Exception {

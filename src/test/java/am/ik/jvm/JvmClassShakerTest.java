@@ -36,7 +36,7 @@ class JvmClassShakerTest {
 
 	private static byte[] compile(String source, OptimizeLevel optimize) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new JvmLispCompiler("Test", false, optimize).compile(program);
+		return JvmLispCompiler.builder().className("Test").optimize(optimize).build().compile(program);
 	}
 
 	// Loads the class (which makes the JVM verifier check the shaken bytecode), runs its

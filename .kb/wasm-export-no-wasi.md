@@ -53,7 +53,7 @@ boundary and WIT world are one contract.
 
 ## `--no-wasi` (reactor mode)
 
-CLI `--no-wasi`; `WasmLispCompiler(dynamic, component, noWasi)`. No `wasi_snapshot_preview1` imports,
+CLI `--no-wasi`; `WasmLispCompiler.builder().noWasi(true)`. No `wasi_snapshot_preview1` imports,
 so a host instantiates with no import object. Init entry exported as `_initialize` (reactor ABI)
 instead of `_start`, keyed off `noWasi`; a tree-shaker root either way. **Index stability**: the nine
 WASI import slots (indices 0-8, `IMPORT_FUNC_COUNT`) are filled with internal stubs carrying the SAME

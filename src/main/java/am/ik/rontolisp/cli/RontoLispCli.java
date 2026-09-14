@@ -728,7 +728,12 @@ public final class RontoLispCli {
 				// lower to native v128 (f64x2/f32x4); without it to plain scalar loops
 				// that
 				// run on a runtime lacking the SIMD proposal.
-				NoGcWasmCompiler compiler = new NoGcWasmCompiler(optimize, simd, component, noWasi);
+				NoGcWasmCompiler compiler = NoGcWasmCompiler.builder()
+					.optimize(optimize)
+					.simd(simd)
+					.component(component)
+					.noWasi(noWasi)
+					.build();
 				bytes = compiler.compile(program);
 				witText = compiler.componentWit();
 			}
@@ -766,9 +771,18 @@ public final class RontoLispCli {
 				// exactly what the frontend READ it with -- component / reactor /
 				// body-imports included -- so a run-time (member :F *features*) and the
 				// #+F beside it cannot disagree.
-				WasmLispCompiler compiler = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd,
-						hostRandom, hostFetch, reentrant)
-					.runtimeFeatures(features.names());
+				WasmLispCompiler compiler = WasmLispCompiler.builder()
+					.dynamic(dynamic)
+					.component(component)
+					.noWasi(noWasi)
+					.optimize(optimize)
+					.serve(serve)
+					.simd(simd)
+					.hostRandom(hostRandom)
+					.hostFetch(hostFetch)
+					.reentrant(reentrant)
+					.runtimeFeatures(features.names())
+					.build();
 				bytes = compiler.compile(program);
 				witText = compiler.componentWit();
 				if (glueFile != null) {

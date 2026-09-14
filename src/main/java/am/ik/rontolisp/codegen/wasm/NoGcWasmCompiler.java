@@ -274,84 +274,126 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	/**
 	 * Whether to honor the {@code --no-wasi} contract: a printing program's
 	 * {@code fd_write} import becomes an internal discarding sink, so the module (and its
-	 * component wrap) imports nothing. See the four-argument constructor.
+	 * component wrap) imports nothing. See {@link Builder#noWasi}.
 	 */
 	private final boolean noWasi;
 
 	/**
-	 * Creates a new non-GC WASM compiler with scalar {@code vec:} kernels, at
-	 * {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize} selects, so
-	 * an embedder that names no level gets what this project's own frontend gives.
-	 * Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
+	 * Creates a new non-GC WASM compiler, every option at its default: scalar
+	 * {@code vec:} kernels in a plain core module at {@link OptimizeLevel#DEFAULT}.
+	 * {@link #builder()} sets the others.
 	 */
 	public NoGcWasmCompiler() {
-		this(OptimizeLevel.DEFAULT, false);
+		this(builder());
+	}
+
+	private NoGcWasmCompiler(Builder builder) {
+		this.optimize = builder.optimize;
+		this.simd = builder.simd;
+		this.component = builder.component;
+		this.noWasi = builder.noWasi;
 	}
 
 	/**
-	 * Creates a new non-GC WASM compiler with scalar (non-SIMD) {@code vec:} kernels.
-	 * @param optimize what to optimize the module FOR (the CLI's {@code --optimize}).
-	 * Every level but {@link OptimizeLevel#NONE} runs the finished module through
-	 * {@link am.ik.wasm.WasmTreeShaker} so anything unreachable from the exports is
-	 * dropped and the survivors renumbered. The shaker is GC-agnostic, so it composes
-	 * with the non-GC module shape for free. {@link OptimizeLevel#SIZE} is accepted and
-	 * equals {@link OptimizeLevel#DEFAULT} here: this lowering is i64-native, so it never
-	 * emits the boxed/unboxed pair the level declines on wasm-GC.
+	 * Creates a builder for a non-GC WASM compiler. Every option defaults to what the CLI
+	 * selects when its flag is absent.
+	 * @return a new builder
 	 */
-	public NoGcWasmCompiler(OptimizeLevel optimize) {
-		this(optimize, false);
+	public static Builder builder() {
+		return new Builder();
 	}
 
 	/**
-	 * Creates a new non-GC WASM compiler.
-	 * @param optimize see {@link #NoGcWasmCompiler(OptimizeLevel)}
-	 * @param simd when {@code true}, the vectorizable {@code vec:} kernels lower to
-	 * native WASM v128 SIMD ({@code f64x2}/{@code f32x4}); when {@code false} they lower
-	 * to scalar linear-memory loops that need no SIMD proposal. This is the
-	 * {@code --simd} switch wired on the {@code --no-gc} backend, orthogonal to the
-	 * memory model.
+	 * Builder for {@link NoGcWasmCompiler}.
 	 */
-	public NoGcWasmCompiler(OptimizeLevel optimize, boolean simd) {
-		this(optimize, simd, false);
-	}
+	public static final class Builder {
 
-	/**
-	 * Creates a new non-GC WASM compiler.
-	 * @param optimize see {@link #NoGcWasmCompiler(OptimizeLevel)}
-	 * @param simd when {@code true}, the vectorizable {@code vec:} kernels lower to
-	 * native WASM v128 SIMD ({@code f64x2}/{@code f32x4}); when {@code false} they lower
-	 * to scalar linear-memory loops that need no SIMD proposal.
-	 * @param component when {@code true}, wrap the module as a reactor-style WASM
-	 * component whose scalar exports are typed component-model exports (the CLI's
-	 * {@code --no-gc --component}); export names must be lower-kebab-case and
-	 * {@code :async} is rejected
-	 */
-	public NoGcWasmCompiler(OptimizeLevel optimize, boolean simd, boolean component) {
-		this(optimize, simd, component, false);
-	}
+		private OptimizeLevel optimize = OptimizeLevel.DEFAULT;
 
-	/**
-	 * Creates a new non-GC WASM compiler.
-	 * @param optimize see {@link #NoGcWasmCompiler(OptimizeLevel)}
-	 * @param simd see {@link #NoGcWasmCompiler(OptimizeLevel, boolean, boolean)}
-	 * @param component see {@link #NoGcWasmCompiler(OptimizeLevel, boolean, boolean)}
-	 * @param noWasi when {@code true}, a PRINTING program's single
-	 * {@code wasi_snapshot_preview1.fd_write} import is replaced by an internal
-	 * discarding sink (the GC backend's {@code --no-wasi} contract: the whole iovec is
-	 * reported written, errno 0, output lost -- nothing traps), keeping the module at
-	 * zero imports. Function index 0 stays the sink, so every planned index holds. A
-	 * print-free program never had the import, so the flag is a byte-exact no-op there.
-	 * Under {@code component} the wrap then never needs the print micro-adapter: the
-	 * component has ONE core module, no imports, and its exports lift
-	 * <strong>sync</strong> again -- a printing program collapses back onto the
-	 * print-free shape instead of merely losing its imports. Output-only, like the GC
-	 * backend: {@code --no-gc} rejects every other I/O at compile time already.
-	 */
-	public NoGcWasmCompiler(OptimizeLevel optimize, boolean simd, boolean component, boolean noWasi) {
-		this.optimize = optimize;
-		this.simd = simd;
-		this.component = component;
-		this.noWasi = noWasi;
+		private boolean simd;
+
+		private boolean component;
+
+		private boolean noWasi;
+
+		private Builder() {
+		}
+
+		/**
+		 * Sets what to optimize the module FOR (the CLI's {@code --optimize}). Every
+		 * level but {@link OptimizeLevel#NONE} runs the finished module through
+		 * {@link am.ik.wasm.WasmTreeShaker} so anything unreachable from the exports is
+		 * dropped and the survivors renumbered. The shaker is GC-agnostic, so it composes
+		 * with the non-GC module shape for free. {@link OptimizeLevel#SIZE} is accepted
+		 * and equals {@link OptimizeLevel#DEFAULT} here: this lowering is i64-native, so
+		 * it never emits the boxed/unboxed pair the level declines on wasm-GC.
+		 * <p>
+		 * Defaults to {@link OptimizeLevel#DEFAULT} -- the level an absent
+		 * {@code --optimize} selects, so an embedder that names no level gets what this
+		 * project's own frontend gives. Declining the optimizer is asked for by name:
+		 * {@link OptimizeLevel#NONE}.
+		 * @param optimize the optimization level
+		 * @return this builder
+		 */
+		public Builder optimize(OptimizeLevel optimize) {
+			this.optimize = optimize;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --simd} on the {@code --no-gc} backend, orthogonal to the memory
+		 * model. When {@code true}, the vectorizable {@code vec:} kernels lower to native
+		 * WASM v128 SIMD ({@code f64x2}/{@code f32x4}); when {@code false} they lower to
+		 * scalar linear-memory loops that need no SIMD proposal.
+		 * @param simd whether to lower the vectorizable kernels to v128
+		 * @return this builder
+		 */
+		public Builder simd(boolean simd) {
+			this.simd = simd;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --no-gc --component}. When {@code true}, the module is wrapped
+		 * as a reactor-style WASM component whose scalar exports are typed
+		 * component-model exports; export names must be lower-kebab-case and
+		 * {@code :async} is rejected.
+		 * @param component whether to wrap the module as a component
+		 * @return this builder
+		 */
+		public Builder component(boolean component) {
+			this.component = component;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --no-wasi}. When {@code true}, a PRINTING program's single
+		 * {@code wasi_snapshot_preview1.fd_write} import is replaced by an internal
+		 * discarding sink (the GC backend's {@code --no-wasi} contract: the whole iovec
+		 * is reported written, errno 0, output lost -- nothing traps), keeping the module
+		 * at zero imports. Function index 0 stays the sink, so every planned index holds.
+		 * A print-free program never had the import, so the flag is a byte-exact no-op
+		 * there. Under {@link #component} the wrap then never needs the print
+		 * micro-adapter: the component has ONE core module, no imports, and its exports
+		 * lift <strong>sync</strong> again -- a printing program collapses back onto the
+		 * print-free shape instead of merely losing its imports. Output-only, like the GC
+		 * backend: {@code --no-gc} rejects every other I/O at compile time already.
+		 * @param noWasi whether a printing program's output sink stays internal
+		 * @return this builder
+		 */
+		public Builder noWasi(boolean noWasi) {
+			this.noWasi = noWasi;
+			return this;
+		}
+
+		/**
+		 * Builds the compiler.
+		 * @return a new non-GC WASM compiler
+		 */
+		public NoGcWasmCompiler build() {
+			return new NoGcWasmCompiler(this);
+		}
+
 	}
 
 	/**

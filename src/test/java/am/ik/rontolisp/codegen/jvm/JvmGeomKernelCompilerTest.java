@@ -30,11 +30,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Two halves, and both are load-bearing. The first is the emit gate -- there is no flag
  * in front of this bridge, so the only thing keeping it out of a program that does not
  * need it is the call-site scan. The second is the oracle: every fixture is compiled
- * twice, once with the bridge and once with {@code setGeomKernels(false)}, run in the
- * same JVM and compared as PRINTED values, which render a packed array element for
- * element. That is {@code eval/GeomKernelsTest}'s shape for the interpreter
- * ({@code .kb/geom.md}, "The interpreter's native kernels"); a kernel that rounds
- * differently is a bug here, not a tolerance.
+ * twice, once with the bridge and once with {@code geomKernels(false)}, run in the same
+ * JVM and compared as PRINTED values, which render a packed array element for element.
+ * That is {@code eval/GeomKernelsTest}'s shape for the interpreter ({@code .kb/geom.md},
+ * "The interpreter's native kernels"); a kernel that rounds differently is a bug here,
+ * not a tolerance.
  */
 class JvmGeomKernelCompilerTest {
 
@@ -49,9 +49,12 @@ class JvmGeomKernelCompilerTest {
 	}
 
 	private static byte[] compile(String lispCode, boolean kernels) {
-		JvmLispCompiler compiler = new JvmLispCompiler("Test", false, OptimizeLevel.NONE, false);
-		compiler.setGeomKernels(kernels);
-		return compiler.compile(program(lispCode));
+		return JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.geomKernels(kernels)
+			.build()
+			.compile(program(lispCode));
 	}
 
 	private String run(byte[] classBytes) throws Exception {

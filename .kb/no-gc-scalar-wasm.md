@@ -1,6 +1,6 @@
 # `--no-gc` (non-GC WASM lowering)
 
-Opt-in (CLI `--no-gc`; `NoGcWasmCompiler(optimize, simd[, component[, noWasi]])`). A
+Opt-in (CLI `--no-gc`; `NoGcWasmCompiler.builder()`). A
 **separate backend class** `codegen.wasm.NoGcWasmCompiler`, dispatched from
 `RontoLispCli.compileToFile` — NOT a flag threaded through `WasmLispCompiler`, so the GC path
 stays untouched. Emits a **plain MVP module**: no rec group, no `struct`/`array`/`i31`/

@@ -39,12 +39,12 @@ class WasmImportCompilerTest {
 	// build that declined the optimizer has.
 	private static byte[] compileUnshaken(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(program);
+		return WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(program);
 	}
 
 	private static byte[] compileNoWasi(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new WasmLispCompiler(false, false, true).compile(program);
+		return WasmLispCompiler.builder().noWasi(true).build().compile(program);
 	}
 
 	private static boolean containsAscii(byte[] bytes, String needle) {
@@ -363,8 +363,12 @@ class WasmImportCompilerTest {
 				(defun roll (n) (add (random n) 10))
 				(rontolisp:wasm-export 'roll :params '(:int) :returns :int)
 				""");
-		List<String[]> imports = functionImports(
-				new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, true).compile(program));
+		List<String[]> imports = functionImports(WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostRandom(true)
+			.build()
+			.compile(program));
 		assertThat(imports).hasSize(2);
 		assertThat(imports.get(0)).containsExactly("host", "add");
 		assertThat(imports.get(1)).containsExactly("env", "random_get");
@@ -375,11 +379,14 @@ class WasmImportCompilerTest {
 				(defun roll (n) (random n))
 				(rontolisp:wasm-export 'roll :params '(:int) :returns :int)
 				""");
-		assertThat(functionImports(
-				new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, true).compile(plain)))
-			.singleElement()
+		assertThat(functionImports(WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostRandom(true)
+			.build()
+			.compile(plain))).singleElement()
 			.satisfies(entry -> assertThat(entry).containsExactly("env", "random_get"));
-		assertThat(functionImports(new WasmLispCompiler(false, false, true).compile(plain))).isEmpty();
+		assertThat(functionImports(WasmLispCompiler.builder().noWasi(true).build().compile(plain))).isEmpty();
 	}
 
 	@Test
@@ -392,7 +399,11 @@ class WasmImportCompilerTest {
 				(defun secret () (rontolisp::%random-byte))
 				(rontolisp:wasm-export 'secret :params '() :returns :int)
 				""");
-		assertThat(functionImports(new WasmLispCompiler(false, false, true, OptimizeLevel.DEFAULT, false, false, true)
+		assertThat(functionImports(WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.DEFAULT)
+			.hostRandom(true)
+			.build()
 			.compile(entropyOnly))).singleElement()
 			.satisfies(entry -> assertThat(entry).containsExactly("env", "random_get"));
 
@@ -402,9 +413,12 @@ class WasmImportCompilerTest {
 				(defun nothing () 1)
 				(rontolisp:wasm-export 'nothing :params '() :returns :int)
 				""");
-		assertThat(functionImports(
-				new WasmLispCompiler(false, false, true, OptimizeLevel.DEFAULT, false, false, true).compile(noDraw)))
-			.isEmpty();
+		assertThat(functionImports(WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.DEFAULT)
+			.hostRandom(true)
+			.build()
+			.compile(noDraw))).isEmpty();
 	}
 
 	// Mirrors the CLI pre-passes of a --no-wasi --host-fetch build: the HostFetchLibrary
@@ -419,7 +433,12 @@ class WasmImportCompilerTest {
 		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
-		return new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false, true).compile(program);
+		return WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(true)
+			.build()
+			.compile(program);
 	}
 
 	@Test
@@ -457,11 +476,14 @@ class WasmImportCompilerTest {
 
 	@Test
 	void hostFetchRequiresNoWasiAndRejectsComponent() {
-		assertThatThrownBy(
-				() -> new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, false, false, true))
+		assertThatThrownBy(() -> WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).hostFetch(true).build())
 			.hasMessageContaining("--host-fetch requires --no-wasi");
-		assertThatThrownBy(() -> new WasmLispCompiler(false, true, true, OptimizeLevel.NONE, false, false, false, true))
-			.hasMessageContaining("--host-fetch cannot be combined with --component");
+		assertThatThrownBy(() -> WasmLispCompiler.builder()
+			.component(true)
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(true)
+			.build()).hasMessageContaining("--host-fetch cannot be combined with --component");
 	}
 
 	@Test
@@ -521,7 +543,7 @@ class WasmImportCompilerTest {
 	void rejectsComponentMode() {
 		List<LispVal> program = LispReader
 			.readAllFromString("(rontolisp:wasm-import 'add :params '(:int :int) :returns :int) (print (add 1 2))");
-		assertThatThrownBy(() -> new WasmLispCompiler(false, true).compile(program))
+		assertThatThrownBy(() -> WasmLispCompiler.builder().component(true).build().compile(program))
 			.hasMessageContaining("--component");
 	}
 
@@ -539,7 +561,7 @@ class WasmImportCompilerTest {
 				(rontolisp:wasm-export 'add10 :params '(:long) :returns :long)
 				""");
 		assertThat(new NoGcWasmCompiler().compile(program)).isNotEmpty();
-		assertThatThrownBy(() -> new WasmLispCompiler(false, false, true).compile(program))
+		assertThatThrownBy(() -> WasmLispCompiler.builder().noWasi(true).build().compile(program))
 			.hasMessageContaining("type designator :LONG is not supported");
 	}
 
@@ -552,7 +574,11 @@ class WasmImportCompilerTest {
 				(defun add10 (n) (add n 10))
 				(rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
 				""");
-		byte[] optimized = new WasmLispCompiler(false, false, true, OptimizeLevel.DEFAULT).compile(program);
+		byte[] optimized = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
 		List<String[]> imports = functionImports(optimized);
 		assertThat(imports).hasSize(1);
 		assertThat(imports.get(0)).containsExactly("host", "add");
@@ -729,7 +755,7 @@ class WasmImportCompilerTest {
 
 	private static byte[] compileNoWasiSize(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new WasmLispCompiler(false, false, true, OptimizeLevel.SIZE).compile(program);
+		return WasmLispCompiler.builder().noWasi(true).optimize(OptimizeLevel.SIZE).build().compile(program);
 	}
 
 	// The charvec normalization is the biggest single thing a :string boundary drags in
@@ -783,7 +809,8 @@ class WasmImportCompilerTest {
 				""";
 		assertThat(compileNoWasiSize(source)).isNotEmpty();
 		List<LispVal> program = LispReader.readAllFromString(source);
-		assertThat(new WasmLispCompiler(false, false, true, OptimizeLevel.DEFAULT).compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder().noWasi(true).optimize(OptimizeLevel.DEFAULT).build().compile(program))
+			.isNotEmpty();
 	}
 
 	// Same defect, the %SEQ-TO-LIST route: `copy-seq` reaches it through the same

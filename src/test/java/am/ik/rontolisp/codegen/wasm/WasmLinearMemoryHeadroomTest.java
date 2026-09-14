@@ -59,7 +59,7 @@ class WasmLinearMemoryHeadroomTest {
 
 	private static byte[] compile(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(program);
+		return WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(program);
 	}
 
 	@Test

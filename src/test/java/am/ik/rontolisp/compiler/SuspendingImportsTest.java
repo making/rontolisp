@@ -25,7 +25,7 @@ class SuspendingImportsTest {
 		PrintStream oldErr = System.err;
 		System.setErr(new PrintStream(err));
 		try {
-			new WasmLispCompiler(false, false, noWasi).compile(LispReader.readAllFromString(source));
+			WasmLispCompiler.builder().noWasi(noWasi).build().compile(LispReader.readAllFromString(source));
 		}
 		finally {
 			System.setErr(oldErr);

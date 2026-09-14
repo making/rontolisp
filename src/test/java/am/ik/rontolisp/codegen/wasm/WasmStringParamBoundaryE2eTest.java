@@ -290,7 +290,11 @@ class WasmStringParamBoundaryE2eTest {
 	private String run(String module, String driverJs, boolean reentrant, OptimizeLevel level, String name)
 			throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(module);
-		byte[] wasm = new WasmLispCompiler(false, false, true, level, false, false, false, false, reentrant)
+		byte[] wasm = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(level)
+			.reentrant(reentrant)
+			.build()
 			.compile(program);
 		Path wasmFile = this.tempDir.resolve(name + ".wasm");
 		Files.write(wasmFile, wasm);

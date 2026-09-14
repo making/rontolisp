@@ -56,9 +56,20 @@ class JvmQuantizedMatrixTest {
 		List<LispVal> program = LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		program = LinalgLibrary.process(VecLibrary.process(program));
 		if (parallel) {
-			return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, true, false, false, true).compile(program);
+			return JvmLispCompiler.builder()
+				.className("Test")
+				.optimize(OptimizeLevel.NONE)
+				.simd(true)
+				.parallel(true)
+				.build()
+				.compile(program);
 		}
-		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, simd).compile(program);
+		return JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(simd)
+			.build()
+			.compile(program);
 	}
 
 	private String run(byte[] classBytes) throws Exception {

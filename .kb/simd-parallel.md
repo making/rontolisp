@@ -23,8 +23,7 @@ which row cannot change a bit** and every byte-identity statement in `.kb/linalg
 
 ## The knob
 - `--parallel` is value-less (`CliOptions.noValueKeys`), requires `--simd`, hard error without it
-  on interpreter/REPL/compiler (`RontoLispCli.requireSimdForParallel`, `JvmLispCompiler`'s
-  7-argument constructor) and hard error on `.wasm` output (no threads there).
+  on interpreter/REPL/compiler (`RontoLispCli.requireSimdForParallel`, `JvmLispCompiler.Builder#build`) and hard error on `.wasm` output (no threads there).
 - `RONTOLISP_THREADS` = thread count, CALLING thread included (default
   `min(cpus, max(2, cpus / 2))` -- HALF the box, see below; `1` = serial; malformed warns
   once). Read once by `JvmSimdVectorTemplate.parallelThreads` / `eval/SimdParallel.threads`,

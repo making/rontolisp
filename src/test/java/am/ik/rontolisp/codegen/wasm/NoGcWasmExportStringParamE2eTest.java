@@ -144,7 +144,7 @@ class NoGcWasmExportStringParamE2eTest {
 
 	private String run(String module, String driverJs, OptimizeLevel level, String name) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(module);
-		byte[] wasm = new NoGcWasmCompiler(level, false, false, false).compile(program);
+		byte[] wasm = NoGcWasmCompiler.builder().optimize(level).build().compile(program);
 		Path wasmFile = this.tempDir.resolve(name + ".wasm");
 		Files.write(wasmFile, wasm);
 		Path driver = this.tempDir.resolve(name + ".js");

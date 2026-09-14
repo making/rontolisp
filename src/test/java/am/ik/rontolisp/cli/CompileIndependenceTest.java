@@ -140,8 +140,11 @@ class CompileIndependenceTest {
 	private static String compile(Case c, boolean component) {
 		CompileFrontendAccess.Program program = CompileFrontendAccess.withSystemPath(c.exercise(), c.systemPath(), true,
 				component);
-		WasmLispCompiler compiler = component ? new WasmLispCompiler(false, true) : new WasmLispCompiler();
-		byte[] bytes = compiler.runtimeFeatures(program.features().names()).compile(program.forms());
+		byte[] bytes = WasmLispCompiler.builder()
+			.component(component)
+			.runtimeFeatures(program.features().names())
+			.build()
+			.compile(program.forms());
 		try {
 			return bytes.length + ":" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
 		}

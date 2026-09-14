@@ -11710,7 +11710,7 @@ class JvmLispCompilerTest {
 
 	private String compileAndRunDynamic(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		JvmLispCompiler compiler = new JvmLispCompiler("Test", true);
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").dynamic(true).build();
 		byte[] classBytes = compiler.compile(program);
 		Path classFile = tempDir.resolve("Test.class");
 		Files.write(classFile, classBytes);
@@ -12822,7 +12822,11 @@ class JvmLispCompilerTest {
 					    (close client)
 					    (print reply)))
 					""".formatted(server.getLocalPort()));
-			byte[] classBytes = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+			byte[] classBytes = JvmLispCompiler.builder()
+				.className("Test")
+				.optimize(OptimizeLevel.DEFAULT)
+				.build()
+				.compile(program);
 			Path classFile = tempDir.resolve("Test.class");
 			Files.write(classFile, classBytes);
 			try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
@@ -17705,8 +17709,16 @@ class JvmLispCompilerTest {
 				(let ((s (open "f.txt" :output '(unsigned-byte 8))))
 				  (unwind-protect (write-byte 65 s) (close s)))
 				""");
-		byte[] folded = new JvmLispCompiler("SameOpen", false, OptimizeLevel.DEFAULT).compile(keyword);
-		assertThat(folded).isEqualTo(new JvmLispCompiler("SameOpen", false, OptimizeLevel.DEFAULT).compile(positional));
+		byte[] folded = JvmLispCompiler.builder()
+			.className("SameOpen")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(keyword);
+		assertThat(folded).isEqualTo(JvmLispCompiler.builder()
+			.className("SameOpen")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(positional));
 	}
 
 	@Test
@@ -17722,8 +17734,16 @@ class JvmLispCompilerTest {
 				(defun pair (x) (list x x))
 				(print (pair 'hey))
 				""");
-		byte[] fast = new JvmLispCompiler("Same", false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new JvmLispCompiler("Same", false, OptimizeLevel.SIZE).compile(program);
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
 		assertThat(small).isEqualTo(fast);
 	}
 
@@ -17739,9 +17759,21 @@ class JvmLispCompilerTest {
 				(defun never-called (x) (* x x))
 				(print (+ 1 2))
 				""");
-		byte[] flagless = new JvmLispCompiler("Same", false, OptimizeLevel.parse(null)).compile(program);
-		byte[] optimized = new JvmLispCompiler("Same", false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] off = new JvmLispCompiler("Same", false, OptimizeLevel.parse("off")).compile(program);
+		byte[] flagless = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.parse(null))
+			.build()
+			.compile(program);
+		byte[] optimized = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] off = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.parse("off"))
+			.build()
+			.compile(program);
 		assertThat(flagless).isEqualTo(optimized);
 		assertThat(off).isNotEqualTo(optimized);
 		assertThat(off.length).isGreaterThan(optimized.length);
@@ -17904,8 +17936,16 @@ class JvmLispCompilerTest {
 		// different bytes, i.e. the default build really did emit the typed loops.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(TYPED_LOOP_PROGRAM));
-		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
 		assertThat(small).isNotEqualTo(fast);
 		assertThat(runClass(fast)).isEqualTo(TYPED_LOOP_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(TYPED_LOOP_EXPECTED);
@@ -18010,8 +18050,16 @@ class JvmLispCompilerTest {
 		// branch, which the fused fallback lands in).
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(DOUBLE_ARITH_PROGRAM));
-		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
 		assertThat(runClass(fast)).isEqualTo(DOUBLE_ARITH_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(DOUBLE_ARITH_EXPECTED);
 	}
@@ -18165,8 +18213,16 @@ class JvmLispCompilerTest {
 		// an integer LITERAL assigned to a declared float.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(DECLARED_FLOAT_PROGRAM));
-		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
 		assertThat(runClass(fast)).isEqualTo(DECLARED_FLOAT_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(DECLARED_FLOAT_EXPECTED);
 	}
@@ -18371,8 +18427,16 @@ class JvmLispCompilerTest {
 		// the same.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(RAW_GLOBAL_PROGRAM));
-		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
 		assertThat(declaredFieldNames(fast)).contains("_gr$G", "_gk$G", "_gr$ACC", "_gr$BIG", "_g$S");
 		assertThat(declaredFieldNames(fast)).noneMatch(name -> name.equals("_gr$S"));
 		assertThat(declaredFieldNames(small)).noneMatch(name -> name.startsWith("_gr$"));
@@ -18397,7 +18461,11 @@ class JvmLispCompilerTest {
 				  (print (show)))
 				(print (show))
 				"""));
-		byte[] dynamicBindingClass = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(dynamicBinding);
+		byte[] dynamicBindingClass = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(dynamicBinding);
 		assertThat(declaredFieldNames(dynamicBindingClass)).noneMatch(name -> name.startsWith("_gr$"));
 		assertThat(runClass(dynamicBindingClass)).isEqualTo("""
 				1
@@ -18411,7 +18479,11 @@ class JvmLispCompilerTest {
 				(setq s (+ s 100))
 				(print (eval 's))
 				"""));
-		byte[] evaluatedClass = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(evaluated);
+		byte[] evaluatedClass = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(evaluated);
 		assertThat(declaredFieldNames(evaluatedClass)).noneMatch(name -> name.startsWith("_gr$"));
 		assertThat(runClass(evaluatedClass)).isEqualTo("""
 				10
@@ -18427,8 +18499,16 @@ class JvmLispCompilerTest {
 		// bytes, i.e. the default build really did emit the fused methods.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(INT_FUSION_PROGRAM));
-		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
 		assertThat(small).isNotEqualTo(fast);
 		assertThat(declaredMethodNames(fast)).anyMatch(name -> name.startsWith("_fx$"));
 		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
@@ -18468,8 +18548,16 @@ class JvmLispCompilerTest {
 		// what the size level (which emits no fused site) answers.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(GENERAL_ARRAY_LEAF_PROGRAM));
-		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
 		assertThat(declaredMethodNames(fast)).anyMatch(name -> name.startsWith("_fx$"));
 		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
 		assertThat(runClass(fast)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
@@ -18543,8 +18631,16 @@ class JvmLispCompilerTest {
 		// the field-aware emitters, not as slots.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(COUNTED_STEP_PROGRAM));
-		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
 		assertThat(runClass(fast)).isEqualTo(COUNTED_STEP_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(COUNTED_STEP_EXPECTED);
 	}

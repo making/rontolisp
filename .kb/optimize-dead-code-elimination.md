@@ -1,8 +1,7 @@
 # `--optimize` (levels; dead-code elimination, WASM + JVM)
 
-On by default in the CLI (`--optimize[=LEVEL]`). `WasmLispCompiler(dynamic, component, noWasi,
-optimize)` / `JvmLispCompiler(className, dynamic, optimize)` / `NoGcWasmCompiler(optimize)` all
-take a `compiler.OptimizeLevel`.
+On by default in the CLI (`--optimize[=LEVEL]`). `WasmLispCompiler` / `JvmLispCompiler` / `NoGcWasmCompiler` builders all take a
+`compiler.OptimizeLevel` through `optimize(...)`.
 
 ## The levels
 

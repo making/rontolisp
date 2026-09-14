@@ -39,7 +39,14 @@ class JvmSimdParallelCompilerTest {
 
 	private byte[] compile(String lispCode, boolean parallel, boolean gpu) {
 		List<LispVal> program = VecLibrary.process(LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, true, false, gpu, parallel).compile(program);
+		return JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(true)
+			.gpu(gpu)
+			.parallel(parallel)
+			.build()
+			.compile(program);
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -212,7 +219,8 @@ class JvmSimdParallelCompilerTest {
 
 	@Test
 	void parallelWithoutSimdIsRefusedBecauseThereIsNothingToSplit() {
-		assertThatThrownBy(() -> new JvmLispCompiler("Test", false, OptimizeLevel.NONE, false, false, false, true))
+		assertThatThrownBy(
+				() -> JvmLispCompiler.builder().className("Test").optimize(OptimizeLevel.NONE).parallel(true).build())
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("--parallel splits the --simd kernels across threads, so it needs --simd");
 	}

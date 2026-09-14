@@ -37,7 +37,7 @@ class NoGcWasmCompilerTest {
 	// with no 0xFD opcode. The [count][data] block layout is identical either way.
 	private static byte[] compileSimd(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new NoGcWasmCompiler(OptimizeLevel.NONE, true).compile(program);
+		return NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).simd(true).build().compile(program);
 	}
 
 	@Test
@@ -499,10 +499,13 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void optimizeProducesAValidShapeAndKeepsTheExport() {
-		byte[] module = new NoGcWasmCompiler(OptimizeLevel.DEFAULT).compile(LispReader.readAllFromString("""
-				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
-				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
-				"""));
+		byte[] module = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+					(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+					"""));
 		Map<Integer, byte[]> sections = sections(module);
 		assertThat(sections).doesNotContainKey(2);
 		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("fact");
@@ -2346,14 +2349,17 @@ class NoGcWasmCompilerTest {
 	// component whose scalar exports are typed component-model exports.
 	private static byte[] compileComponent(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new NoGcWasmCompiler(OptimizeLevel.NONE, false, true).compile(program);
+		return NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build().compile(program);
 	}
 
 	// The plain core module at the SAME level as compileComponent, for the
 	// byte-identity pairs below (the default level would shake helpers the component's
 	// core keeps).
 	private static byte[] compilePlainUnoptimized(String source) {
-		return new NoGcWasmCompiler(OptimizeLevel.NONE, false).compile(LispReader.readAllFromString(source));
+		return NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispReader.readAllFromString(source));
 	}
 
 	private static final String COMPONENT_PROGRAM = """
@@ -2420,7 +2426,10 @@ class NoGcWasmCompilerTest {
 				""";
 		// Both sides at OptimizeLevel.NONE: the assertion below is a byte-identity pair,
 		// so the two compiles must agree on the level.
-		byte[] plain = new NoGcWasmCompiler(OptimizeLevel.NONE, false).compile(LispReader.readAllFromString(program));
+		byte[] plain = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispReader.readAllFromString(program));
 		byte[] component = compileComponent(program);
 		assertThat(component[6]).as("component layer byte").isEqualTo((byte) 0x01);
 		String text = new String(component, StandardCharsets.ISO_8859_1);
@@ -2680,7 +2689,7 @@ class NoGcWasmCompilerTest {
 		// The CLI's --emit-wit output for the adapter-free reactor: an import-free world
 		// of
 		// just the typed exports (:long lifts as s64 here only).
-		NoGcWasmCompiler compiler = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		NoGcWasmCompiler compiler = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		assertThat(compiler.componentWit()).isNull();
 		compiler.compile(LispReader.readAllFromString("""
 				(defun big-add (a b) (+ a b))
@@ -2704,7 +2713,7 @@ class NoGcWasmCompilerTest {
 		// (plus their package definitions), separated from the exports by one blank
 		// line the way wasm-tools prints it -- and the exports say `async func`,
 		// because a printing program's exports are async lifts.
-		NoGcWasmCompiler compiler = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
+		NoGcWasmCompiler compiler = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		compiler.compile(LispReader.readAllFromString("""
 				(defun hello () (print "hi"))
 				(rontolisp:wasm-export 'hello)
@@ -2738,7 +2747,10 @@ class NoGcWasmCompilerTest {
 				(defun show (n) (print n) n)
 				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
 				""";
-		byte[] noWasi = new NoGcWasmCompiler(OptimizeLevel.NONE, false, false, true)
+		byte[] noWasi = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.noWasi(true)
+			.build()
 			.compile(LispReader.readAllFromString(printing));
 		assertThat(sections(noWasi)).as("import section").doesNotContainKey(2);
 		// The sink body: 0 locals; local.get 3 ; local.get 1 ; i32.load off=4 ;
@@ -2761,7 +2773,10 @@ class NoGcWasmCompilerTest {
 		// Both at OptimizeLevel.NONE, the flag the one difference: what is claimed is
 		// that --no-wasi changes nothing here, not that it changes nothing the shake and
 		// the single-call-site move would also have done.
-		assertThat(new NoGcWasmCompiler(OptimizeLevel.NONE, false, false, true)
+		assertThat(NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.noWasi(true)
+			.build()
 			.compile(LispReader.readAllFromString(silent))).isEqualTo(compilePlainUnoptimized(silent));
 	}
 
@@ -2773,7 +2788,11 @@ class NoGcWasmCompilerTest {
 		// again (the WIT says `func`, not `async func`, over the same empty world as a
 		// print-free reactor). A printing program collapses back onto the print-free
 		// shape rather than merely losing its imports.
-		NoGcWasmCompiler compiler = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true, true);
+		NoGcWasmCompiler compiler = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.component(true)
+			.noWasi(true)
+			.build();
 		byte[] component = compiler.compile(LispReader.readAllFromString("""
 				(defun show (n) (print n) (* n 2))
 				(rontolisp:wasm-export 'show :params '(:s64) :returns :s64)
@@ -2838,8 +2857,8 @@ class NoGcWasmCompilerTest {
 				(defun rol32f (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
 				(rontolisp:wasm-export 'rol32f :params '(:long :long) :returns :long)
 				""");
-		byte[] fast = new NoGcWasmCompiler(OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new NoGcWasmCompiler(OptimizeLevel.SIZE).compile(program);
+		byte[] fast = NoGcWasmCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(program);
+		byte[] small = NoGcWasmCompiler.builder().optimize(OptimizeLevel.SIZE).build().compile(program);
 		assertThat(small).isEqualTo(fast);
 	}
 

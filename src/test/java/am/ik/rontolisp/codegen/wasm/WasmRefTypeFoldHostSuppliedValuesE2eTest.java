@@ -124,8 +124,7 @@ class WasmRefTypeFoldHostSuppliedValuesE2eTest {
 
 	private String run(OptimizeLevel level) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(MODULE);
-		byte[] wasm = new WasmLispCompiler(false, false, true, level, false, false, false, false, false)
-			.compile(program);
+		byte[] wasm = WasmLispCompiler.builder().noWasi(true).optimize(level).build().compile(program);
 		Path wasmFile = this.tempDir.resolve("fold-" + level.spelling() + ".wasm");
 		Files.write(wasmFile, wasm);
 		Path driver = this.tempDir.resolve("fold-" + level.spelling() + ".js");

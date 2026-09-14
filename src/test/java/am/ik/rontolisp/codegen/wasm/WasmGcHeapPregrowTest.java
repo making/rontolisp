@@ -58,7 +58,7 @@ class WasmGcHeapPregrowTest {
 	@Test
 	void startBodyBeginsWithGcHeapPregrowAllocation() {
 		List<LispVal> program = LispReader.readAllFromString("(print 1)");
-		byte[] module = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(program);
+		byte[] module = WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(program);
 		assertThat(containsSubsequence(module, pregrowPrologue()))
 			.as("emitted module should contain the GC-heap pre-grow prologue")
 			.isTrue();
@@ -67,7 +67,11 @@ class WasmGcHeapPregrowTest {
 	@Test
 	void componentCoreAlsoCarriesThePregrowPrologue() {
 		List<LispVal> program = LispReader.readAllFromString("(print 1)");
-		byte[] module = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE).compile(program);
+		byte[] module = WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(program);
 		assertThat(containsSubsequence(module, pregrowPrologue()))
 			.as("component core module should contain the GC-heap pre-grow prologue")
 			.isTrue();
@@ -102,7 +106,9 @@ class WasmGcHeapPregrowTest {
 	 */
 	@Test
 	void aProgramCarryingMuchCodePregrowsMoreThanTheFloor() {
-		byte[] module = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE)
+		byte[] module = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.build()
 			.compile(LispReader.readAllFromString(manyDefuns(900)));
 		assertThat(containsSubsequence(module, pregrowPrologue(WasmLispCompiler.GC_HEAP_PREGROW_BYTES)))
 			.as("a program with a library stack's worth of code must not pre-grow only the floor")
@@ -187,7 +193,12 @@ class WasmGcHeapPregrowTest {
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
 				.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
-		return new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true).compile(program);
+		return WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.serve(true)
+			.build()
+			.compile(program);
 	}
 
 }

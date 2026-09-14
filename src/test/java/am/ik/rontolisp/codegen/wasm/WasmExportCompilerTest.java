@@ -45,7 +45,12 @@ class WasmExportCompilerTest {
 		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, bufferBody);
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary.process(
 				am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
-		return new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true).compile(program);
+		return WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.serve(true)
+			.build()
+			.compile(program);
 	}
 
 	private static boolean containsAscii(byte[] bytes, String needle) {
@@ -136,9 +141,9 @@ class WasmExportCompilerTest {
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
 		assertThat(compile(program)).isNotEmpty();
-		assertThat(new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(program)))
+		assertThat(WasmLispCompiler.builder().noWasi(true).build().compile(LispReader.readAllFromString(program)))
 			.isNotEmpty();
-		assertThatThrownBy(() -> new WasmLispCompiler(false, true, false).compile(parsed))
+		assertThatThrownBy(() -> WasmLispCompiler.builder().component(true).build().compile(parsed))
 			.hasMessageContaining(":bytes")
 			.hasMessageContaining("--component");
 		assertThatThrownBy(() -> new NoGcWasmCompiler().compile(LispReader.readAllFromString("""
@@ -251,7 +256,7 @@ class WasmExportCompilerTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun shout (s) (string-upcase s)) (rontolisp:wasm-export 'shout :params '(:string)"
 					+ " :returns :string) (print \"hi\")");
-		byte[] component = new WasmLispCompiler(false, true).compile(program);
+		byte[] component = WasmLispCompiler.builder().component(true).build().compile(program);
 		assertThat(containsAscii(component, "__ronto_alloc_mark")).isFalse();
 		assertThat(containsAscii(component, "cabi_post_i32")).isTrue();
 	}
@@ -288,7 +293,7 @@ class WasmExportCompilerTest {
 		// s32 would make `wasm-tools component targets` (and jco, and any bindgen host)
 		// reject the component against its own world. The type code has to be exact, and
 		// the recorded WIT is how the component's own type section reads back.
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).build();
 		compiler.compile(LispReader.readAllFromString("""
 				(defun bump (n) (+ n 1))
 				(defun narrow (a b c d) (+ a b c d))
@@ -319,7 +324,7 @@ class WasmExportCompilerTest {
 		// Reactor mode: no wasi_snapshot_preview1 imports, but the export wrapper stays.
 		List<LispVal> program = LispReader.readAllFromString("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
 				+ "(rontolisp:wasm-export 'fact :params '(:int) :returns :int)");
-		byte[] bytes = new WasmLispCompiler(false, false, true).compile(program);
+		byte[] bytes = WasmLispCompiler.builder().noWasi(true).build().compile(program);
 		assertThat(containsAscii(bytes, "wasi_snapshot_preview1")).isFalse();
 		assertThat(containsAscii(bytes, "fact")).isTrue();
 	}
@@ -332,7 +337,7 @@ class WasmExportCompilerTest {
 		// Pinned on the emitted body, since the behaviour is invisible structurally.
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun f (n) (print n) n)(rontolisp:wasm-export 'f :params '(:int) :returns :int)");
-		byte[] bytes = new WasmLispCompiler(false, false, true).compile(program);
+		byte[] bytes = WasmLispCompiler.builder().noWasi(true).build().compile(program);
 		// 0 locals; local.get 3 ; local.get 1 ; i32.load off=4 ; i32.store ; i32.const 0
 		byte[] sink = { 0x00, 0x20, 0x03, 0x20, 0x01, 0x28, 0x02, 0x04, 0x36, 0x02, 0x00, 0x41, 0x00, 0x0b };
 		assertThat(containsBytes(bytes, sink)).as("the no-wasi fd_write sink body").isTrue();
@@ -389,7 +394,7 @@ class WasmExportCompilerTest {
 		// OptimizeLevel.NONE: the bodies are read off the fixed FUNC_* indices, which the
 		// tree shaker renumbers.
 		byte[][] bodies = noWasiStubBodies(
-				new WasmLispCompiler(false, false, true, OptimizeLevel.NONE).compile(program));
+				WasmLispCompiler.builder().noWasi(true).optimize(OptimizeLevel.NONE).build().compile(program));
 
 		byte[] trap = { 0x00, 0x00, 0x0b };
 		assertThat(bodies[WasmLispCompiler.FUNC_FD_READ]).as("fd_read: answering EOF would invent input")
@@ -437,7 +442,8 @@ class WasmExportCompilerTest {
 		// exists for (instantiate with {}).
 		String source = "(defun draw (n) (random n))(rontolisp:wasm-export 'draw :params '(:int) :returns :int)";
 		List<LispVal> program = LispReader.readAllFromString(source);
-		assertThat(containsAscii(new WasmLispCompiler(false, false, true).compile(program), "__ronto_seed_random"))
+		assertThat(
+				containsAscii(WasmLispCompiler.builder().noWasi(true).build().compile(program), "__ronto_seed_random"))
 			.as("--no-wasi core module")
 			.isTrue();
 		// Not on a WASI-carrying build (random_get is the host's there) ...
@@ -445,7 +451,8 @@ class WasmExportCompilerTest {
 		// ... and not on the reactor COMPONENT, whose top level runs at instantiation --
 		// there is no window before the load-time draws, and exposing it at all would
 		// mean lifting it into the WIT world.
-		assertThat(containsAscii(new WasmLispCompiler(false, true, true).compile(program), "__ronto_seed_random"))
+		assertThat(containsAscii(WasmLispCompiler.builder().component(true).noWasi(true).build().compile(program),
+				"__ronto_seed_random"))
 			.as("--component --no-wasi reactor")
 			.isFalse();
 	}
@@ -490,7 +497,10 @@ class WasmExportCompilerTest {
 	}
 
 	private static byte[] compileNoWasiOptimized(String source) {
-		return new WasmLispCompiler(false, false, true, OptimizeLevel.SIZE)
+		return WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.SIZE)
+			.build()
 			.compile(LispReader.readAllFromString(source));
 	}
 
@@ -511,7 +521,7 @@ class WasmExportCompilerTest {
 				(rontolisp:wasm-export 't0 :returns :s64)
 				""";
 		List<LispVal> program = LispReader.readAllFromString(source);
-		byte[] core = new WasmLispCompiler(false, false, true).compile(program);
+		byte[] core = WasmLispCompiler.builder().noWasi(true).build().compile(program);
 		assertThat(containsExportName(core, "__ronto_set_time")).as("--no-wasi core module").isTrue();
 		// Until it is called the cell is zero, which names 1970 rather than "no time",
 		// so the built-ins refuse -- and say which hook fills it.
@@ -520,7 +530,11 @@ class WasmExportCompilerTest {
 		// It survives --host-random, which retires only the seed hook: entropy and the
 		// clock are independent services, and only one of them has a module-local
 		// generator to make redundant.
-		byte[] hostRandom = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, true)
+		byte[] hostRandom = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostRandom(true)
+			.build()
 			.compile(program);
 		assertThat(containsExportName(hostRandom, "__ronto_set_time")).as("--host-random").isTrue();
 		assertThat(containsAscii(hostRandom, "__ronto_seed_random")).as("--host-random retires the seed hook")
@@ -532,7 +546,7 @@ class WasmExportCompilerTest {
 		// and exposing the hook would mean lifting it into the WIT world. The clock
 		// there keeps signalling, with a message that says so instead of naming a hook
 		// the build does not have (the export name only appears inside that text).
-		byte[] reactor = new WasmLispCompiler(false, true, true).compile(program);
+		byte[] reactor = WasmLispCompiler.builder().component(true).noWasi(true).build().compile(program);
 		assertThat(containsExportName(reactor, "__ronto_set_time")).as("--component --no-wasi reactor").isFalse();
 		assertThat(containsAscii(reactor, "reactor component imports nothing")).as("it says so instead").isTrue();
 	}
@@ -556,7 +570,11 @@ class WasmExportCompilerTest {
 				(rontolisp:wasm-export 'secret :params '() :returns :int)
 				""";
 		List<LispVal> program = LispReader.readAllFromString(source);
-		byte[] hostRandom = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, true)
+		byte[] hostRandom = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostRandom(true)
+			.build()
 			.compile(program);
 		// 0 locals; local.get 0; local.get 1; call 0; end
 		assertThat(noWasiStubBodies(hostRandom)[WasmLispCompiler.FUNC_RANDOM_GET]).as("random_get forwards to the host")
@@ -566,7 +584,7 @@ class WasmExportCompilerTest {
 		// The default is unchanged: the module-local generator and the seed hook beside
 		// it. That the ENTROPY API follows the slot is pinned in WasmImportCompilerTest,
 		// where a surviving import is the proof that %random-byte reaches the host.
-		byte[] selfContained = new WasmLispCompiler(false, false, true).compile(program);
+		byte[] selfContained = WasmLispCompiler.builder().noWasi(true).build().compile(program);
 		assertThat(noWasiStubBodies(selfContained)[WasmLispCompiler.FUNC_RANDOM_GET])
 			.isNotEqualTo(noWasiStubBodies(hostRandom)[WasmLispCompiler.FUNC_RANDOM_GET]);
 		assertThat(containsAscii(selfContained, "__ronto_seed_random")).isTrue();
@@ -578,11 +596,15 @@ class WasmExportCompilerTest {
 		// the component's wasi:random), and a --no-wasi reactor COMPONENT imports
 		// nothing at all by contract -- an entropy import there would be a WIT
 		// world-shape decision, not a core export one.
-		assertThatThrownBy(() -> new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, false, true))
+		assertThatThrownBy(() -> WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).hostRandom(true).build())
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("--host-random requires --no-wasi");
-		assertThatThrownBy(() -> new WasmLispCompiler(false, true, true, OptimizeLevel.NONE, false, false, true))
-			.isInstanceOf(UnsupportedOperationException.class)
+		assertThatThrownBy(() -> WasmLispCompiler.builder()
+			.component(true)
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostRandom(true)
+			.build()).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("--host-random cannot be combined with --component");
 	}
 
@@ -603,7 +625,9 @@ class WasmExportCompilerTest {
 		// OptimizeLevel.NONE: the assertion is that the import is THERE, and a shaken
 		// module keeps only the WASI functions its program can reach -- this one prints
 		// nothing.
-		byte[] bytes = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE)
+		byte[] bytes = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.build()
 			.compile(LispReader.readAllFromString("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
 					+ "(rontolisp:wasm-export 'fact :params '(:int) :returns :int)"));
 		assertThat(containsAscii(bytes, "wasi_snapshot_preview1")).isTrue();
@@ -626,7 +650,12 @@ class WasmExportCompilerTest {
 				(rontolisp:wasm-export 'bump :params '() :returns :int)
 				""");
 		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT)) {
-			byte[] component = new WasmLispCompiler(false, true, true, level).compile(program);
+			byte[] component = WasmLispCompiler.builder()
+				.component(true)
+				.noWasi(true)
+				.optimize(level)
+				.build()
+				.compile(program);
 			assertThat(componentSectionIds(component)).as("component import section under " + level)
 				.doesNotContain(am.ik.wasm.ComponentWriter.SEC_IMPORT);
 			assertThat(containsAscii(component, "wasi:cli/run")).as("run export under " + level).isFalse();
@@ -649,7 +678,7 @@ class WasmExportCompilerTest {
 				(defun greet (name) (concatenate 'string *greeting* name))
 				(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
 				""");
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).noWasi(true).build();
 		compiler.compile(program);
 		assertThat(compiler.componentWit()).isEqualTo("""
 				package root:component;
@@ -665,9 +694,12 @@ class WasmExportCompilerTest {
 		// A serve component's entire surface is wasi:http, and any WIT interface
 		// binding is a component-level import: both contradict "imports nothing", so
 		// both must refuse by name instead of quietly dropping a flag.
-		assertThatThrownBy(() -> new WasmLispCompiler(false, true, true, OptimizeLevel.NONE, true))
-			.hasMessageContaining("--no-wasi")
-			.hasMessageContaining("rontolisp:http-handler");
+		assertThatThrownBy(() -> WasmLispCompiler.builder()
+			.component(true)
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.serve(true)
+			.build()).hasMessageContaining("--no-wasi").hasMessageContaining("rontolisp:http-handler");
 	}
 
 	// The (id, size, payload) section ids of a component OR a core module (both share
@@ -725,7 +757,7 @@ class WasmExportCompilerTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun sumsq (a b) (* (+ a b) (+ a b))) (rontolisp:wasm-export 'sumsq"
 					+ " :params '(:int :int) :returns :int) (print \"hi\")");
-		byte[] component = new WasmLispCompiler(false, true).compile(program);
+		byte[] component = WasmLispCompiler.builder().component(true).build().compile(program);
 		assertThat(containsAscii(component, "sumsq")).isTrue();
 		assertThat(containsAscii(component, "__ronto_alloc")).isFalse();
 		assertThat(containsAscii(component, "cabi_post_")).isFalse();
@@ -740,7 +772,7 @@ class WasmExportCompilerTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun shout (s) (string-upcase s)) (rontolisp:wasm-export 'shout :params '(:string)"
 					+ " :returns :string) (print \"hi\")");
-		byte[] component = new WasmLispCompiler(false, true).compile(program);
+		byte[] component = WasmLispCompiler.builder().component(true).build().compile(program);
 		assertThat(containsAscii(component, "shout")).isTrue();
 		assertThat(containsAscii(component, "cabi_post_i32")).isTrue();
 	}
@@ -760,7 +792,7 @@ class WasmExportCompilerTest {
 				(rontolisp:wasm-export 'ratio :params '(:string) :returns :float)
 				(rontolisp:wasm-export 'sink :params '(:string) :returns :void)
 				""");
-		byte[] component = new WasmLispCompiler(false, true).compile(program);
+		byte[] component = WasmLispCompiler.builder().component(true).build().compile(program);
 		assertThat(containsAscii(component, "cabi_post_i32")).isTrue();
 		assertThat(containsAscii(component, "cabi_post_f64")).isTrue();
 		assertThat(containsAscii(component, "cabi_post_void")).isTrue();
@@ -833,7 +865,7 @@ class WasmExportCompilerTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun shout (s) (string-upcase s)) (rontolisp:wasm-export 'shout :params '(:string)"
 					+ " :param-names '(text) :returns :string)");
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).build();
 		byte[] component = compiler.compile(program);
 		assertThat(containsAscii(component, "text")).isTrue();
 		assertThat(compiler.componentWit()).contains("export shout: func(text: string) -> string;");
@@ -845,11 +877,17 @@ class WasmExportCompilerTest {
 		// every
 		// artifact predating :param-names is unaffected by it.
 		String defun = "(defun sumsq (a b) (* (+ a b) (+ a b)))";
-		byte[] omitted = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(
-				defun + " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int) (print \"hi\")"));
-		byte[] explicit = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(
-				defun + " (rontolisp:wasm-export 'sumsq :params '(:int :int) :param-names '(p0 p1) :returns :int)"
-						+ " (print \"hi\")"));
+		byte[] omitted = WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(LispReader.readAllFromString(
+					defun + " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int) (print \"hi\")"));
+		byte[] explicit = WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(LispReader.readAllFromString(
+					defun + " (rontolisp:wasm-export 'sumsq :params '(:int :int) :param-names '(p0 p1) :returns :int)"
+							+ " (print \"hi\")"));
 		assertThat(explicit).isEqualTo(omitted);
 	}
 
@@ -870,8 +908,8 @@ class WasmExportCompilerTest {
 				defun + " (rontolisp:wasm-export 'noisy :params '(:int :int) :returns :int) (print \"hi\")");
 		List<LispVal> asyncProgram = LispReader.readAllFromString(
 				defun + " (rontolisp:wasm-export 'noisy :params '(:int :int) :returns :int :async t) (print \"hi\")");
-		byte[] sync = new WasmLispCompiler(false, true).compile(syncProgram);
-		byte[] async = new WasmLispCompiler(false, true).compile(asyncProgram);
+		byte[] sync = WasmLispCompiler.builder().component(true).build().compile(syncProgram);
+		byte[] async = WasmLispCompiler.builder().component(true).build().compile(asyncProgram);
 		// (s32 p0, s32 p1) -> s32 golden bytes, sync (0x40...) vs async (0x43...); see
 		// ComponentWriterTest.asyncFuncTypeScalarsEncoding.
 		byte[] syncType = hexBytes("40020270307a0270317a007a");
@@ -886,10 +924,16 @@ class WasmExportCompilerTest {
 	@Test
 	void asyncNilComponentIsByteIdenticalToOmittedAsync() {
 		String defun = "(defun sumsq (a b) (* (+ a b) (+ a b)))";
-		byte[] omitted = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(
-				defun + " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int) (print \"hi\")"));
-		byte[] explicitNil = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(defun
-				+ " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int :async nil) (print \"hi\")"));
+		byte[] omitted = WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(LispReader.readAllFromString(
+					defun + " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int) (print \"hi\")"));
+		byte[] explicitNil = WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(LispReader.readAllFromString(defun
+					+ " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int :async nil) (print \"hi\")"));
 		assertThat(explicitNil).isEqualTo(omitted);
 	}
 
@@ -932,8 +976,11 @@ class WasmExportCompilerTest {
 		// Gated on serve mode: a plain --component export shares no serve-only cell, so
 		// it
 		// never emits the reset.
-		byte[] nonServe = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(
-				"(defun add (a b) (+ a b)) (rontolisp:wasm-export 'add :params '(:int :int) :returns :int)"));
+		byte[] nonServe = WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(LispReader.readAllFromString(
+					"(defun add (a b) (+ a b)) (rontolisp:wasm-export 'add :params '(:int :int) :returns :int)"));
 		assertThat(indexOf(nonServe, reset)).as("a non-serve component never resets a serve-only cell").isNegative();
 	}
 
@@ -963,7 +1010,7 @@ class WasmExportCompilerTest {
 		// the same name would make the module invalid.
 		List<LispVal> program = LispReader.readAllFromString(
 				"(defun run-it (a) a) (rontolisp:wasm-export 'run-it :as \"run\" :params '(:int) :returns :int)");
-		assertThatThrownBy(() -> new WasmLispCompiler(false, true).compile(program))
+		assertThatThrownBy(() -> WasmLispCompiler.builder().component(true).build().compile(program))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("collides with the component's wasi:cli/run entry");
 	}
@@ -975,7 +1022,7 @@ class WasmExportCompilerTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun sum*of* (a b) (+ a b)) (rontolisp:wasm-export 'sum*of*"
 					+ " :params '(:int :int) :returns :int)");
-		assertThatThrownBy(() -> new WasmLispCompiler(false, true).compile(program))
+		assertThatThrownBy(() -> WasmLispCompiler.builder().component(true).build().compile(program))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("not a valid component-model export name");
 	}
@@ -991,7 +1038,7 @@ class WasmExportCompilerTest {
 				(rontolisp:wasm-export 'pure-add :params '(:int :int) :returns :int)
 				(rontolisp:wasm-export 'pure-add :as "add-async" :params '(:int :int) :returns :int :async t)
 				""");
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).build();
 		assertThat(compiler.componentWit()).isNull();
 		compiler.compile(program);
 		assertThat(compiler.componentWit()).contains("""
@@ -1007,15 +1054,15 @@ class WasmExportCompilerTest {
 		// The world's fixed imports come from the ONE base variant; fetch and tcp both
 		// show up as user WIT-interface imports on top of it (the http.lisp /
 		// sockets.lisp splices), so the recorded WIT tracks what the program uses.
-		WasmLispCompiler base = new WasmLispCompiler(false, true);
+		WasmLispCompiler base = WasmLispCompiler.builder().component(true).build();
 		base.compile(LispReader.readAllFromString("(print 1)"));
 		assertThat(base.componentWit()).doesNotContain("wasi:http").doesNotContain("wasi:sockets");
-		WasmLispCompiler http = new WasmLispCompiler(false, true);
+		WasmLispCompiler http = WasmLispCompiler.builder().component(true).build();
 		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.HttpLibrary.process(
 				LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
 		assertThat(http.componentWit()).contains("  import wasi:http/client@0.3.0;");
-		WasmLispCompiler sock = new WasmLispCompiler(false, true);
+		WasmLispCompiler sock = WasmLispCompiler.builder().component(true).build();
 		sock.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.StdinLibrary.process(
 				am.ik.rontolisp.eval.SocketsLibrary.process(
 						LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"),
@@ -1037,7 +1084,11 @@ class WasmExportCompilerTest {
 				"""), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.serve(true)
+			.build();
 		compiler.compile(program);
 		assertThat(compiler.componentWit()).contains("  export wasi:http/handler@0.3.0;")
 			.doesNotContain("http-dispatch");
@@ -1046,7 +1097,10 @@ class WasmExportCompilerTest {
 	// OptimizeLevel.NONE: its one caller matches `call FUNC_P1_FUTURE_AWAIT` as literal
 	// bytes, and the tree shaker renumbers functions.
 	private static byte[] compileNoWasi(String source) {
-		return new WasmLispCompiler(false, false, true, OptimizeLevel.NONE)
+		return WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.build()
 			.compile(LispReader.readAllFromString(source));
 	}
 

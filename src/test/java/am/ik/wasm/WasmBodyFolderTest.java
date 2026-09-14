@@ -25,7 +25,7 @@ class WasmBodyFolderTest {
 
 	private static byte[] compile(String source, OptimizeLevel optimize) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new WasmLispCompiler(false, false, false, optimize).compile(program);
+		return WasmLispCompiler.builder().optimize(optimize).build().compile(program);
 	}
 
 	private static final String TWINS = """
@@ -71,10 +71,10 @@ class WasmBodyFolderTest {
 				(rontolisp:wasm-export 'nogc-twin-b :params '(:int) :returns :int)
 				""";
 		List<LispVal> program = LispReader.readAllFromString(source);
-		assertThat(
-				WasmSections.parseCodeEntries(section(new NoGcWasmCompiler(OptimizeLevel.NONE).compile(program), 10)))
+		assertThat(WasmSections.parseCodeEntries(
+				section(NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(program), 10)))
 			.hasSize(4);
-		byte[] optimized = new NoGcWasmCompiler(OptimizeLevel.DEFAULT).compile(program);
+		byte[] optimized = NoGcWasmCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(program);
 		assertThat(WasmSections.parseCodeEntries(section(optimized, 10))).hasSize(2);
 		assertThat(exportedFunctionIndices(optimized)).hasSize(2)
 			.containsOnly(exportedFunctionIndices(optimized).get(0));

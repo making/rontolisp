@@ -29,7 +29,7 @@ class WasmLispCompilerTest {
 	// survivors, so those counts belong to a build that declined the optimizer.
 	private byte[] compileUnshaken(String lispCode) {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		return new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(program);
+		return WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(program);
 	}
 
 	private byte[] compileComponent(String lispCode) {
@@ -56,7 +56,7 @@ class WasmLispCompilerTest {
 		// fetch.lisp's result wrappers call rontolisp::%wit-result, backed by wit.lisp --
 		// spliced by WitLibrary, the same order the CLI runs them in.
 		program = WitLibrary.process(program);
-		return new WasmLispCompiler(false, true).compile(program);
+		return WasmLispCompiler.builder().component(true).build().compile(program);
 	}
 
 	private byte[] compileComponentOptimized(String lispCode) {
@@ -73,7 +73,7 @@ class WasmLispCompilerTest {
 		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
 		program = am.ik.rontolisp.eval.EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = WitLibrary.process(program);
-		return new WasmLispCompiler(false, true, false, level).compile(program);
+		return WasmLispCompiler.builder().component(true).optimize(level).build().compile(program);
 	}
 
 	/** The names of every instance the component imports, in declaration order. */
@@ -196,7 +196,7 @@ class WasmLispCompilerTest {
 		// not
 		// exist. (WitOracleE2eTest byte-diffs the same text against wasm-tools.)
 		List<LispVal> program = LispReader.readAllFromString("(print 1)");
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).optimize(OptimizeLevel.DEFAULT).build();
 		compiler.compile(program);
 
 		assertThat(compiler.componentWit()).isEqualTo("""
@@ -544,7 +544,7 @@ class WasmLispCompilerTest {
 				      (print (read-line server))
 				      (print (usocket:get-peer-address server)))))
 				""");
-		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder().component(true).build().compile(program)).isNotEmpty();
 	}
 
 	// The CLI order for a usocket component program: the usocket shim, then the
@@ -576,7 +576,9 @@ class WasmLispCompilerTest {
 		// component must not move a byte because of the stdin machinery's existence
 		// (it keeps the preview1 adapter's stdin branch and its wasmtime flags).
 		String source = "(print (read-line))";
-		byte[] without = new WasmLispCompiler(false, true)
+		byte[] without = WasmLispCompiler.builder()
+			.component(true)
+			.build()
 			.compile(WitLibrary.process(LispReader.readAllFromString(source)));
 		assertThat(compileComponent(source)).isEqualTo(without);
 	}
@@ -703,7 +705,11 @@ class WasmLispCompilerTest {
 				  (list 200 nil (list (or (uiop:getenv "RLENV") "unset"))))
 				(rontolisp:http-handler 'handle)
 				""");
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.serve(true)
+			.build();
 		byte[] component = compiler.compile(program);
 		assertThat(new String(component, java.nio.charset.StandardCharsets.ISO_8859_1))
 			.contains("wasi:cli/environment@0.3.0");
@@ -723,7 +729,7 @@ class WasmLispCompilerTest {
 			.process(LispReader.readAllFromString("(print (uiop:getenv \"RLENV\"))"),
 					am.ik.rontolisp.reader.Features.WASM),
 				WitExportDirective.Backend.WASM_COMPONENT);
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).build();
 		assertThat(compiler.compile(program)).isNotEmpty();
 		String wit = compiler.componentWit();
 		assertThat(wit).isNotNull();
@@ -743,7 +749,12 @@ class WasmLispCompilerTest {
 				        (getf (rontolisp:await (rontolisp:fetch "http://127.0.0.1:9/")) :body)))
 				(rontolisp:http-handler 'h)
 				""");
-		assertThat(new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true).compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.serve(true)
+			.build()
+			.compile(program)).isNotEmpty();
 	}
 
 	@Test
@@ -756,7 +767,12 @@ class WasmLispCompilerTest {
 				(rontolisp:http-handler 'h)
 				(rontolisp:tcp-listen 7777)
 				""");
-		assertThat(new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true).compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.serve(true)
+			.build()
+			.compile(program)).isNotEmpty();
 	}
 
 	@Test
@@ -935,7 +951,7 @@ class WasmLispCompilerTest {
 		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.JsonLibrary
 			.process(LispReader.readAllFromString(source));
 		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
-		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder().component(true).build().compile(program)).isNotEmpty();
 	}
 
 	@Test
@@ -947,7 +963,7 @@ class WasmLispCompilerTest {
 		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.LinalgLibrary
 			.process(LispReader.readAllFromString(source));
 		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
-		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder().component(true).build().compile(program)).isNotEmpty();
 	}
 
 	@Test
@@ -962,7 +978,7 @@ class WasmLispCompilerTest {
 		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.LinalgLibrary
 			.process(LispReader.readAllFromString(source));
 		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
-		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder().component(true).build().compile(program)).isNotEmpty();
 	}
 
 	@Test
@@ -976,7 +992,7 @@ class WasmLispCompilerTest {
 		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.LinalgLibrary
 			.process(LispReader.readAllFromString("(print (linalg:sum (linalg:arange 4)))"));
 		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
-		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder().component(true).build().compile(program)).isNotEmpty();
 		// Asking for the width by name compiles too, and signals at the call. (A #bf16
 		// LITERAL is still a compile error -- see
 		// bfloat16LiteralsAreRefusedOnTheWasmGcBackend
@@ -994,14 +1010,14 @@ class WasmLispCompilerTest {
 		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.UrlLibrary
 			.process(LispReader.readAllFromString(source));
 		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
-		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder().component(true).build().compile(program)).isNotEmpty();
 	}
 
 	// --- --simd: v128 kernels over GC (array (mut v128)) packed arrays ----------------
 
 	private static byte[] compileVec(String source, boolean simd) {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
-		return new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, simd).compile(program);
+		return WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).simd(simd).build().compile(program);
 	}
 
 	@Test
@@ -1064,7 +1080,7 @@ class WasmLispCompilerTest {
 		assertThat(WasmLispCompiler.linalgFuncBase())
 			.isEqualTo(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.FUNC_COUNT);
 		assertThat(new WasmLispCompiler().userFuncBase()).isEqualTo(WasmLispCompiler.FUNC_USER_BASE);
-		assertThat(new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, true).userFuncBase())
+		assertThat(WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).simd(true).build().userFuncBase())
 			.isEqualTo(WasmLispCompiler.FUNC_USER_BASE + WasmVecSimdRuntimeBuilder.FUNC_COUNT
 					+ WasmLinalgSimdRuntimeBuilder.FUNC_COUNT);
 	}
@@ -1106,9 +1122,13 @@ class WasmLispCompilerTest {
 		// the 0xFD prefix (including v128.const and i8x16.shuffle's 16 immediate bytes).
 		String source = "(print (vec:sum (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0))))";
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
-		assertThat(new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, true).compile(program))
-			.isNotEmpty();
-		assertThat(new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT, false, true).compile(program))
+		assertThat(WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.simd(true)
+			.build()
+			.compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder().optimize(OptimizeLevel.DEFAULT).simd(true).build().compile(program))
 			.isNotEmpty();
 	}
 
@@ -1195,9 +1215,9 @@ class WasmLispCompilerTest {
 				    acc))
 				(print (mixd 12345 6789))
 				""");
-		byte[] none = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(program);
-		byte[] fast = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(program);
-		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE).compile(program);
+		byte[] none = WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(program);
+		byte[] fast = WasmLispCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(program);
+		byte[] small = WasmLispCompiler.builder().optimize(OptimizeLevel.SIZE).build().compile(program);
 		assertThat(fast.length).isLessThan(none.length);
 		assertThat(small.length).isLessThan(fast.length);
 	}
@@ -1232,7 +1252,9 @@ class WasmLispCompilerTest {
 			source.append(" (car ").append(operand).append(')');
 		}
 		source.append(" x)\n(print (f (list 1 2 3)))");
-		return new WasmLispCompiler(false, false, false, level)
+		return WasmLispCompiler.builder()
+			.optimize(level)
+			.build()
 			.compile(LispReader.readAllFromString(source.toString()));
 	}
 
@@ -1333,7 +1355,9 @@ class WasmLispCompilerTest {
 	}
 
 	private static byte[] compileForSize(String source) {
-		return new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+		return WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.SIZE)
+			.build()
 			.compile(LispReader.readAllFromString(source));
 	}
 
@@ -1397,7 +1421,9 @@ class WasmLispCompilerTest {
 			source.append(' ').append(i);
 		}
 		source.append("))");
-		return new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+		return WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.SIZE)
+			.build()
 			.compile(LispReader.readAllFromString(source.toString()));
 	}
 
@@ -1424,7 +1450,9 @@ class WasmLispCompilerTest {
 			source.append(fill).append(' ');
 		}
 		source.append(") '(vector ").append(elementType).append(")))\n(print (aref *t* 1))");
-		return new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+		return WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
 			.compile(LispReader.readAllFromString(source.toString()));
 	}
 
@@ -1448,7 +1476,9 @@ class WasmLispCompilerTest {
 			source.append(" (c-s").append(k).append(" *o*)");
 		}
 		source.append("))");
-		return new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+		return WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
 			.compile(LispReader.readAllFromString(source.toString()));
 	}
 
@@ -1465,7 +1495,9 @@ class WasmLispCompilerTest {
 			source.append(' ').append(site);
 		}
 		source.append(")\n(print (f 1))");
-		return new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+		return WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
 			.compile(LispReader.readAllFromString(source.toString()));
 	}
 

@@ -223,8 +223,12 @@ class WasmReentrantE2eTest {
 
 	@Test
 	void eightConcurrentUpstreamRoundTripsTakeAboutOneThroughOneInstance() throws Exception {
-		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				true, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(true)
+			.reentrant(true)
+			.build();
 		Files.write(this.tempDir.resolve("worker.wasm"), compiler.compile(reactorProgram(WORKER_MODULE)));
 		Files.writeString(this.tempDir.resolve("worker.js"),
 				java.util.Objects.requireNonNull(compiler.hostGlueJs("worker.js")), StandardCharsets.UTF_8);
@@ -298,8 +302,12 @@ class WasmReentrantE2eTest {
 
 	@Test
 	void overlappedStreamingRequestsEachAnswerTheirOwnEcho() throws Exception {
-		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				true, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(true)
+			.reentrant(true)
+			.build();
 		Files.write(this.tempDir.resolve("worker.wasm"),
 				compiler.compile(reactorProgram(ECHO_MODULE, HostBoundary.STREAMING, true)));
 		Files.writeString(this.tempDir.resolve("worker.js"),
@@ -366,8 +374,12 @@ class WasmReentrantE2eTest {
 
 	@Test
 	void overlappedRelaysEachReceiveTheirOwnUpstreamsOctets() throws Exception {
-		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				true, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(true)
+			.reentrant(true)
+			.build();
 		Files.write(this.tempDir.resolve("worker.wasm"),
 				compiler.compile(reactorProgram(RELAY_MODULE, HostBoundary.STREAMING, true)));
 		Files.writeString(this.tempDir.resolve("worker.js"),
@@ -396,7 +408,11 @@ class WasmReentrantE2eTest {
 
 	private Path compile(String fileName, String source) throws IOException {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		byte[] wasm = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false, false, true)
+		byte[] wasm = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.reentrant(true)
+			.build()
 			.compile(program);
 		Path file = this.tempDir.resolve(fileName);
 		Files.write(file, wasm);

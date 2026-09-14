@@ -59,7 +59,7 @@ class WasmToplevelChunkingTest {
 
 	private static byte[] compileComponent(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new WasmLispCompiler(false, true).compile(program);
+		return WasmLispCompiler.builder().component(true).build().compile(program);
 	}
 
 	/** A long top level whose forms are individually small. */

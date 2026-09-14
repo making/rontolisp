@@ -185,7 +185,10 @@ abstract class AsdfLibraryE2eSupport {
 	void compilesAndRunsOnWasmPreview1() throws Exception {
 		assumeTrue(DOCKER_AVAILABLE, "Docker is not available");
 		CompileFrontendAccess.Program program = wasmProgram(false, "wasm-p1");
-		byte[] wasmBytes = new WasmLispCompiler().runtimeFeatures(program.features().names()).compile(program.forms());
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.runtimeFeatures(program.features().names())
+			.build()
+			.compile(program.forms());
 		assertThat(runWasm(wasmBytes, false).lines().map(String::trim).map(this::normalizeLine))
 			.containsExactlyElementsOf(expected());
 	}
@@ -194,7 +197,10 @@ abstract class AsdfLibraryE2eSupport {
 	void compilesAndRunsOnWasmComponent() throws Exception {
 		assumeTrue(DOCKER_AVAILABLE, "Docker is not available");
 		CompileFrontendAccess.Program program = wasmProgram(true, "wasm-component");
-		byte[] wasmBytes = new WasmLispCompiler(false, true).runtimeFeatures(program.features().names())
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.component(true)
+			.runtimeFeatures(program.features().names())
+			.build()
 			.compile(program.forms());
 		assertThat(runWasm(wasmBytes, true).lines().map(String::trim).map(this::normalizeLine))
 			.containsExactlyElementsOf(expected());

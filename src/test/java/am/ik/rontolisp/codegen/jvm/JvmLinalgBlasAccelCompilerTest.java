@@ -50,7 +50,13 @@ class JvmLinalgBlasAccelCompilerTest {
 
 	private byte[] compile(String lispCode, boolean blas, boolean simd) {
 		List<LispVal> program = VecLibrary.process(LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, simd, blas).compile(program);
+		return JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(simd)
+			.blas(blas)
+			.build()
+			.compile(program);
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -326,7 +332,11 @@ class JvmLinalgBlasAccelCompilerTest {
 		String lispCode = "(print (linalg:dot #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))";
 		String expected = scalar(lispCode);
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] classBytes = new JvmLispCompiler("com/example/Test", false, OptimizeLevel.NONE, false, true)
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("com/example/Test")
+			.optimize(OptimizeLevel.NONE)
+			.blas(true)
+			.build()
 			.compile(program);
 
 		String bridgeName = "com/example/" + JvmBlasRuntimeBuilder.BRIDGE_NAME;

@@ -91,11 +91,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	private final boolean simdAccel;
 
 	/**
-	 * Whether the {@code geom:} kernel bridge may be emitted ({@link #setGeomKernels}).
-	 * True in every build; the seam exists so the test that proves the bridge answers
-	 * what the defuns answer has an oracle to compile against.
+	 * Whether the {@code geom:} kernel bridge may be emitted
+	 * ({@link Builder#geomKernels}). True in every build; the seam exists so the test
+	 * that proves the bridge answers what the defuns answer has an oracle to compile
+	 * against.
 	 */
-	private boolean geomKernels = true;
+	private final boolean geomKernels;
 
 	private final boolean blasAccel;
 
@@ -105,26 +106,27 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * The names the compiled program's {@code *features*} starts out holding. The JVM
-	 * backend's own set unless the frontend {@link #runtimeFeatures(List) says otherwise}
-	 * -- reading and running must agree on it, and only the frontend knows what it read
-	 * with.
+	 * backend's own set unless the frontend {@link Builder#runtimeFeatures(List) says
+	 * otherwise} -- reading and running must agree on it, and only the frontend knows
+	 * what it read with.
 	 */
-	private List<String> runtimeFeatures = LispMacroExpander.backendFeatures(false);
+	private final List<String> runtimeFeatures;
 
 	/**
 	 * Library mode ({@code --no-main}): no {@code main} method; the class is entered
-	 * through its {@code rontolisp:jvm-export} wrappers only. See {@link #noMain}.
+	 * through its {@code rontolisp:jvm-export} wrappers only. See {@link Builder#noMain}.
 	 */
-	private boolean noMain;
+	private final boolean noMain;
 
 	/**
 	 * Servlet mode ({@code -o app.war}): the program serves through a servlet container
 	 * that owns the port, so the {@code rontolisp:http-handler} directive registers its
 	 * handler and RETURNS (no bind, no block), the top level moves into {@code <clinit>}
 	 * (the container's initializer runs it via {@code Class.forName}), and the two
-	 * servlet adapter classes join {@link #runtimeClassFiles()}. See {@link #servlet}.
+	 * servlet adapter classes join {@link #runtimeClassFiles()}. See
+	 * {@link Builder#servlet}.
 	 */
-	private boolean servletMode;
+	private final boolean servletMode;
 
 	/**
 	 * Whether the last {@link #compile} declared a packed float-array boundary type, i.e.
@@ -267,212 +269,255 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static final int OUTLINE_TARGET_FLOOR_BYTES = 2000;
 
 	/**
-	 * Create a new JVM compiler targeting the given class name.
+	 * Create a new JVM compiler targeting the given class name, every option at its
+	 * default; {@link #builder()} sets the others.
 	 * @param className the fully qualified class name for the generated class
-	 * <p>
-	 * Compiles at {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize}
-	 * selects, so an embedder that names no level gets what this project's own frontend
-	 * gives. Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
 	 */
 	public JvmLispCompiler(String className) {
-		this(className, false);
+		this(builder().className(className));
 	}
 
-	/**
-	 * Create a new JVM compiler targeting the given class name.
-	 * @param className the fully qualified class name for the generated class
-	 * @param dynamic when {@code true}, unresolved function calls and variable references
-	 * are not rejected at compile time but resolved at runtime against the embedded
-	 * {@code eval} global environment (late binding), so a program that defines functions
-	 * via {@code load} can compile without changes. This forces the {@code eval} runtime
-	 * to be emitted.
-	 * <p>
-	 * Compiles at {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize}
-	 * selects, so an embedder that names no level gets what this project's own frontend
-	 * gives. Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
-	 */
-	public JvmLispCompiler(String className, boolean dynamic) {
-		this(className, dynamic, OptimizeLevel.DEFAULT);
-	}
-
-	/**
-	 * Create a new JVM compiler targeting the given class name.
-	 * @param className the fully qualified class name for the generated class
-	 * @param dynamic when {@code true}, unresolved function calls and variable references
-	 * are resolved at runtime against the embedded {@code eval} global environment (late
-	 * binding); see {@link #JvmLispCompiler(String, boolean)}
-	 * @param optimize what to optimize the class FOR (the CLI's {@code --optimize}).
-	 * Every level but {@link OptimizeLevel#NONE} dead-code-eliminates the finished class
-	 * with {@link JvmClassShaker}: methods unreachable from {@code main} (and any static
-	 * field only they reference) are dropped and the constant pool is compacted.
-	 * {@link OptimizeLevel#SIZE} is accepted and equals {@link OptimizeLevel#DEFAULT}
-	 * here: this backend has nothing that spends bytes on speed -- the emissions the
-	 * level declines are wasm-GC ones, and the same program's JVM bytecode is a third the
-	 * size of its WASM to begin with.
-	 */
-	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize) {
-		this(className, dynamic, optimize, false);
-	}
-
-	/**
-	 * Create a new JVM compiler targeting the given class name.
-	 * @param className the fully qualified class name for the generated class
-	 * @param dynamic when {@code true}, unresolved function calls and variable references
-	 * are resolved at runtime against the embedded {@code eval} global environment (late
-	 * binding); see {@link #JvmLispCompiler(String, boolean)}
-	 * @param optimize dead-code elimination and what the class is optimized FOR; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel)}
-	 * @param simdAccel when {@code true} ({@code --simd}), the six vectorizable
-	 * {@code vec:} kernels
-	 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/ {@code sum}) are
-	 * lowered at their call sites to an embedded {@code jdk.incubator.vector} bridge
-	 * ({@link JvmSimdVectorTemplate}) instead of the scalar {@code vec.lisp} reference.
-	 * Running such a class requires {@code java --add-modules jdk.incubator.vector}.
-	 */
-	/**
-	 * Suppresses {@link JvmGeomKernelCompiler}, so {@code geom:read-obj},
-	 * {@code geom:mesh}, {@code geom:wireframe} and {@code geom::%vertex-extremes} are
-	 * emitted as calls to the {@code geom.lisp} defuns alone and no bridge travels. There
-	 * is no flag behind this and no reason for a program to ask for it: the bridge
-	 * answers what the defuns answer, bit for bit. It exists so the test that PROVES that
-	 * has an oracle to compile against -- the interpreter's {@code setGeomKernels} twin.
-	 * @param enabled whether the geom kernel bridge may be emitted
-	 */
-	void setGeomKernels(boolean enabled) {
-		this.geomKernels = enabled;
-	}
-
-	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel) {
-		this(className, dynamic, optimize, simdAccel, false);
-	}
-
-	/**
-	 * Create a new JVM compiler targeting the given class name.
-	 * @param className the fully qualified class name for the generated class
-	 * @param dynamic when {@code true}, unresolved function calls and variable references
-	 * are resolved at runtime against the embedded {@code eval} global environment (late
-	 * binding); see {@link #JvmLispCompiler(String, boolean)}
-	 * @param optimize dead-code elimination and what the class is optimized FOR; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel)}
-	 * @param simdAccel the {@code --simd} lowering; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean)}
-	 * @param blasAccel when {@code true} ({@code --blas}), the {@code linalg:} matrix
-	 * product is lowered at its call sites to an embedded CBLAS bridge
-	 * ({@link JvmBlasTemplate}), which binds a tuned library out of the OS at run time
-	 * and declines to whatever is below it -- the {@code --simd} kernel or the scalar
-	 * defun -- when there is none. Orthogonal to {@code simdAccel}: either, both or
-	 * neither.
-	 */
-	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel,
-			boolean blasAccel) {
-		this(className, dynamic, optimize, simdAccel, blasAccel, false);
-	}
-
-	/**
-	 * Create a new JVM compiler targeting the given class name.
-	 * @param className the fully qualified class name for the generated class
-	 * @param dynamic when {@code true}, unresolved function calls and variable references
-	 * are resolved at runtime against the embedded {@code eval} global environment (late
-	 * binding); see {@link #JvmLispCompiler(String, boolean)}
-	 * @param optimize dead-code elimination and what the class is optimized FOR; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel)}
-	 * @param simdAccel the {@code --simd} lowering; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean)}
-	 * @param blasAccel the {@code --blas} lowering; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean, boolean)}
-	 * @param gpuAccel when {@code true} ({@code --gpu}), the matrix-by-matrix case of the
-	 * {@code linalg:} product is lowered at its call sites to an embedded device bridge
-	 * ({@link JvmGpuTemplate} over the injected {@code am.ik.gpu}), which offers the
-	 * product to an NVIDIA GPU and declines to whatever is below it -- the CBLAS bridge,
-	 * the {@code --simd} kernel or the scalar defun -- when there is no device or the
-	 * product is one it does not take. Orthogonal to both flags above: any combination.
-	 */
-	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel,
-			boolean blasAccel, boolean gpuAccel) {
-		this(className, dynamic, optimize, simdAccel, blasAccel, gpuAccel, false);
-	}
-
-	/**
-	 * Create a new JVM compiler targeting the given class name.
-	 * @param className the fully qualified class name for the generated class
-	 * @param dynamic when {@code true}, unresolved function calls and variable references
-	 * are resolved at runtime against the embedded {@code eval} global environment (late
-	 * binding); see {@link #JvmLispCompiler(String, boolean)}
-	 * @param optimize dead-code elimination and what the class is optimized FOR; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel)}
-	 * @param simdAccel the {@code --simd} lowering; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean)}
-	 * @param blasAccel the {@code --blas} lowering; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean, boolean)}
-	 * @param gpuAccel the {@code --gpu} lowering; see
-	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean, boolean, boolean)}
-	 * @param parallelAccel when {@code true} ({@code --parallel}), the {@code --simd}
-	 * bridge's GEMV / GEMM call sites ({@code vec:matvec}, {@code vec:matvec-into},
-	 * {@code linalg:dot}, the stacked {@code linalg:matmul}) bind to the entries that
-	 * split their rows across {@code RONTOLISP_THREADS} threads -- the same row chains,
-	 * so the same bits ({@code .kb/simd-parallel.md}). A modifier of {@code simdAccel},
-	 * which it therefore requires; the emitted bytes differ by those method names alone
-	 */
-	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel,
-			boolean blasAccel, boolean gpuAccel, boolean parallelAccel) {
-		if (parallelAccel && !simdAccel) {
+	private JvmLispCompiler(Builder builder) {
+		if (builder.parallel && !builder.simd) {
 			throw new IllegalArgumentException(
 					"--parallel splits the --simd kernels across threads, so it needs --simd");
 		}
-		this.className = className;
-		this.dynamic = dynamic;
-		this.optimize = optimize;
-		this.simdAccel = simdAccel;
-		this.blasAccel = blasAccel;
-		this.gpuAccel = gpuAccel;
-		this.parallelAccel = parallelAccel;
+		this.className = Objects.requireNonNull(builder.className, "className is required");
+		this.dynamic = builder.dynamic;
+		this.optimize = builder.optimize;
+		this.simdAccel = builder.simd;
+		this.blasAccel = builder.blas;
+		this.gpuAccel = builder.gpu;
+		this.parallelAccel = builder.parallel;
+		this.geomKernels = builder.geomKernels;
+		this.runtimeFeatures = builder.runtimeFeatures;
+		this.noMain = builder.noMain;
+		this.servletMode = builder.servlet;
 	}
 
 	/**
-	 * Sets the feature names the compiled program's {@code *features*} starts out
-	 * holding. The frontend passes the set it READ the program with, so a
-	 * {@code (member :rontolisp-component *features*)} at run time answers what the
-	 * {@code #+rontolisp-component} beside it answered at read time. Left alone, the
-	 * backend's base set stands ({@link LispMacroExpander#backendFeatures}).
-	 * @param features the feature names, without the leading colon
-	 * @return this compiler
+	 * Creates a builder for a JVM compiler. {@link Builder#className} is required; every
+	 * other option defaults to what the CLI selects when its flag is absent.
+	 * @return a new builder
 	 */
-	public JvmLispCompiler runtimeFeatures(List<String> features) {
-		this.runtimeFeatures = List.copyOf(features);
-		return this;
+	public static Builder builder() {
+		return new Builder();
 	}
 
 	/**
-	 * Compile a library class instead of a command: no {@code main} method is emitted
-	 * (the CLI's {@code --no-main}, the twin of the WASM side's {@code --no-wasi} reactor
-	 * turn). The program must declare at least one {@code rontolisp:jvm-export} —
-	 * {@code main} is the only tree-shaker root an unexported program has, so a main-less
-	 * class without exports would shake to nothing — and its top level runs in
-	 * {@code <clinit>}, i.e. once, when the class is initialized by the first call into
-	 * it (a class with exports runs its top level there whether or not {@code main} is
-	 * kept; see {@code .kb/jvm-export.md}).
-	 * @param noMain whether to omit the {@code main} entry point
-	 * @return this compiler
+	 * Builder for {@link JvmLispCompiler}.
 	 */
-	public JvmLispCompiler noMain(boolean noMain) {
-		this.noMain = noMain;
-		return this;
-	}
+	public static final class Builder {
 
-	/**
-	 * Selects servlet mode ({@code -o app.war}). The program must serve (a
-	 * {@code rontolisp:http-handler} directive or the {@code %http-server-start} seam): a
-	 * war with nothing for the container to call is refused at compile time. The top
-	 * level moves into {@code <clinit>} exactly as an export does -- the container's
-	 * initializer triggers it through {@code Class.forName} -- and the directive stores
-	 * the handler funcref and returns instead of calling the blocking {@code serve}: the
-	 * container owns the port.
-	 * @param servlet whether to compile for a servlet container
-	 * @return this compiler
-	 */
-	public JvmLispCompiler servlet(boolean servlet) {
-		this.servletMode = servlet;
-		return this;
+		private @Nullable String className;
+
+		private boolean dynamic;
+
+		private OptimizeLevel optimize = OptimizeLevel.DEFAULT;
+
+		private boolean simd;
+
+		private boolean blas;
+
+		private boolean gpu;
+
+		private boolean parallel;
+
+		private boolean geomKernels = true;
+
+		private List<String> runtimeFeatures = LispMacroExpander.backendFeatures(false);
+
+		private boolean noMain;
+
+		private boolean servlet;
+
+		private Builder() {
+		}
+
+		/**
+		 * Sets the class the compiler generates. Required.
+		 * @param className the fully qualified class name for the generated class
+		 * @return this builder
+		 */
+		public Builder className(String className) {
+			this.className = className;
+			return this;
+		}
+
+		/**
+		 * Selects late binding ({@code --dynamic}). When {@code true}, unresolved
+		 * function calls and variable references are not rejected at compile time but
+		 * resolved at runtime against the embedded {@code eval} global environment, so a
+		 * program that defines functions via {@code load} can compile without changes.
+		 * This forces the {@code eval} runtime to be emitted.
+		 * @param dynamic whether to resolve unresolved references at run time
+		 * @return this builder
+		 */
+		public Builder dynamic(boolean dynamic) {
+			this.dynamic = dynamic;
+			return this;
+		}
+
+		/**
+		 * Sets what to optimize the class FOR (the CLI's {@code --optimize}). Every level
+		 * but {@link OptimizeLevel#NONE} dead-code-eliminates the finished class with
+		 * {@link JvmClassShaker}: methods unreachable from {@code main} (and any static
+		 * field only they reference) are dropped and the constant pool is compacted.
+		 * {@link OptimizeLevel#SIZE} is accepted and equals {@link OptimizeLevel#DEFAULT}
+		 * here: this backend has nothing that spends bytes on speed -- the emissions the
+		 * level declines are wasm-GC ones, and the same program's JVM bytecode is a third
+		 * the size of its WASM to begin with.
+		 * <p>
+		 * Defaults to {@link OptimizeLevel#DEFAULT} -- the level an absent
+		 * {@code --optimize} selects, so an embedder that names no level gets what this
+		 * project's own frontend gives. Declining the optimizer is asked for by name:
+		 * {@link OptimizeLevel#NONE}.
+		 * @param optimize the optimization level
+		 * @return this builder
+		 */
+		public Builder optimize(OptimizeLevel optimize) {
+			this.optimize = optimize;
+			return this;
+		}
+
+		/**
+		 * Selects the {@code --simd} lowering. When {@code true}, the six vectorizable
+		 * {@code vec:} kernels
+		 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}) are
+		 * lowered at their call sites to an embedded {@code jdk.incubator.vector} bridge
+		 * ({@link JvmSimdVectorTemplate}) instead of the scalar {@code vec.lisp}
+		 * reference. Running such a class requires
+		 * {@code java --add-modules jdk.incubator.vector}.
+		 * @param simd whether to lower the vectorizable kernels to the Vector API bridge
+		 * @return this builder
+		 */
+		public Builder simd(boolean simd) {
+			this.simd = simd;
+			return this;
+		}
+
+		/**
+		 * Selects the {@code --blas} lowering. When {@code true}, the {@code linalg:}
+		 * matrix product is lowered at its call sites to an embedded CBLAS bridge
+		 * ({@link JvmBlasTemplate}), which binds a tuned library out of the OS at run
+		 * time and declines to whatever is below it -- the {@code --simd} kernel or the
+		 * scalar defun -- when there is none. Orthogonal to {@link #simd}: either, both
+		 * or neither.
+		 * @param blas whether to lower the matrix product to the CBLAS bridge
+		 * @return this builder
+		 */
+		public Builder blas(boolean blas) {
+			this.blas = blas;
+			return this;
+		}
+
+		/**
+		 * Selects the {@code --gpu} lowering. When {@code true}, the matrix-by-matrix
+		 * case of the {@code linalg:} product is lowered at its call sites to an embedded
+		 * device bridge ({@link JvmGpuTemplate} over the injected {@code am.ik.gpu}),
+		 * which offers the product to an NVIDIA GPU and declines to whatever is below it
+		 * -- the CBLAS bridge, the {@code --simd} kernel or the scalar defun -- when
+		 * there is no device or the product is one it does not take. Orthogonal to
+		 * {@link #simd} and {@link #blas}: any combination.
+		 * @param gpu whether to lower the matrix product to the device bridge
+		 * @return this builder
+		 */
+		public Builder gpu(boolean gpu) {
+			this.gpu = gpu;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --parallel}. When {@code true}, the {@code --simd} bridge's GEMV
+		 * / GEMM call sites ({@code vec:matvec}, {@code vec:matvec-into},
+		 * {@code linalg:dot}, the stacked {@code linalg:matmul}) bind to the entries that
+		 * split their rows across {@code RONTOLISP_THREADS} threads -- the same row
+		 * chains, so the same bits ({@code .kb/simd-parallel.md}). A modifier of
+		 * {@link #simd}, which it therefore requires ({@link #build()} refuses it alone);
+		 * the emitted bytes differ by those method names alone.
+		 * @param parallel whether to bind the row-splitting kernel entries
+		 * @return this builder
+		 */
+		public Builder parallel(boolean parallel) {
+			this.parallel = parallel;
+			return this;
+		}
+
+		/**
+		 * Disabling this suppresses {@link JvmGeomKernelCompiler}, so
+		 * {@code geom:read-obj}, {@code geom:mesh}, {@code geom:wireframe} and
+		 * {@code geom::%vertex-extremes} are emitted as calls to the {@code geom.lisp}
+		 * defuns alone and no bridge travels. There is no flag behind this and no reason
+		 * for a program to ask for it: the bridge answers what the defuns answer, bit for
+		 * bit. It exists so the test that PROVES that has an oracle to compile against --
+		 * the interpreter's {@code setGeomKernels} twin.
+		 * @param geomKernels whether the geom kernel bridge may be emitted
+		 * @return this builder
+		 */
+		Builder geomKernels(boolean geomKernels) {
+			this.geomKernels = geomKernels;
+			return this;
+		}
+
+		/**
+		 * Sets the feature names the compiled program's {@code *features*} starts out
+		 * holding. The frontend passes the set it READ the program with, so a
+		 * {@code (member :rontolisp-component *features*)} at run time answers what the
+		 * {@code #+rontolisp-component} beside it answered at read time. Left alone, the
+		 * backend's base set stands ({@link LispMacroExpander#backendFeatures}).
+		 * @param features the feature names, without the leading colon
+		 * @return this builder
+		 */
+		public Builder runtimeFeatures(List<String> features) {
+			this.runtimeFeatures = List.copyOf(features);
+			return this;
+		}
+
+		/**
+		 * Compile a library class instead of a command: no {@code main} method is emitted
+		 * (the CLI's {@code --no-main}, the twin of the WASM side's {@code --no-wasi}
+		 * reactor turn). The program must declare at least one
+		 * {@code rontolisp:jvm-export} -- {@code main} is the only tree-shaker root an
+		 * unexported program has, so a main-less class without exports would shake to
+		 * nothing -- and its top level runs in {@code <clinit>}, i.e. once, when the
+		 * class is initialized by the first call into it (a class with exports runs its
+		 * top level there whether or not {@code main} is kept; see
+		 * {@code .kb/jvm-export.md}).
+		 * @param noMain whether to omit the {@code main} entry point
+		 * @return this builder
+		 */
+		public Builder noMain(boolean noMain) {
+			this.noMain = noMain;
+			return this;
+		}
+
+		/**
+		 * Selects servlet mode ({@code -o app.war}). The program must serve (a
+		 * {@code rontolisp:http-handler} directive or the {@code %http-server-start}
+		 * seam): a war with nothing for the container to call is refused at compile time.
+		 * The top level moves into {@code <clinit>} exactly as an export does -- the
+		 * container's initializer triggers it through {@code Class.forName} -- and the
+		 * directive stores the handler funcref and returns instead of calling the
+		 * blocking {@code serve}: the container owns the port.
+		 * @param servlet whether to compile for a servlet container
+		 * @return this builder
+		 */
+		public Builder servlet(boolean servlet) {
+			this.servlet = servlet;
+			return this;
+		}
+
+		/**
+		 * Builds the compiler.
+		 * @return a new JVM compiler
+		 * @throws NullPointerException when no class name was set
+		 * @throws IllegalArgumentException when {@link #parallel} is set without
+		 * {@link #simd}
+		 */
+		public JvmLispCompiler build() {
+			return new JvmLispCompiler(this);
+		}
+
 	}
 
 	/**

@@ -93,7 +93,7 @@ class WasmStringStreamArenaE2eTest {
 	@Test
 	void aStringOutputStreamCostsTheArenaNothingPerWrite() throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(MODULE);
-		byte[] wasm = new WasmLispCompiler(false, false, true).compile(program);
+		byte[] wasm = WasmLispCompiler.builder().noWasi(true).build().compile(program);
 		Path wasmFile = this.tempDir.resolve("strstream.wasm");
 		Files.write(wasmFile, wasm);
 		Path driver = this.tempDir.resolve("driver.js");

@@ -429,8 +429,12 @@ class HostGlueEmitterTest {
 		loaded = HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = GrayStreamsLibrary
 			.process(LispPreludeLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))));
-		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				hostFetch, reentrant);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(hostFetch)
+			.reentrant(reentrant)
+			.build();
 		compiler.compile(program);
 		return glue(compiler, "worker.js");
 	}
@@ -448,8 +452,11 @@ class HostGlueEmitterTest {
 	}
 
 	private static String glueOf(String source, boolean hostRandom) {
-		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false,
-				hostRandom, false);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostRandom(hostRandom)
+			.build();
 		compiler.compile(LispReader.readAllFromString(source, Features.WASM_REACTOR));
 		return glue(compiler, "glue.js");
 	}

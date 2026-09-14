@@ -105,7 +105,10 @@ class WasmComponentImportCompilerTest {
 
 	// The same path, from forms a directive lowered rather than from source text.
 	private static byte[] compileForms(List<LispVal> forms) {
-		return new WasmLispCompiler(false, true).compile(am.ik.rontolisp.eval.WitLibrary.process(forms));
+		return WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(am.ik.rontolisp.eval.WitLibrary.process(forms));
 	}
 
 	// The same path in SERVE mode: the CLI splices serve.lisp's HTTP glue (ServeLibrary),
@@ -114,7 +117,11 @@ class WasmComponentImportCompilerTest {
 	private static byte[] compileServeComponent(String source) {
 		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(source),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
-		return new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true)
+		return WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.serve(true)
+			.build()
 			.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
 	}
 

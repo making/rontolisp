@@ -42,7 +42,7 @@ class JvmOsrBackedgeCorpusTest {
 	void noEmittedLoopHeadCarriesPendingOperands() throws Exception {
 		List<LispVal> program = corpusProgram();
 		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT)) {
-			byte[] classBytes = new JvmLispCompiler("Test", false, level).compile(program);
+			byte[] classBytes = JvmLispCompiler.builder().className("Test").optimize(level).build().compile(program);
 			assertThat(StackMapAugmenter.osrHostileBackedges(classBytes))
 				.as("backward branches into a non-empty operand stack at " + level
 						+ " -- HotSpot refuses to OSR-compile such a method (.kb/jvm-osr-backedges.md)")

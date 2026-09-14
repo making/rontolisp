@@ -23,12 +23,12 @@ class WasmTreeShakerTest {
 
 	private static byte[] compile(String source, boolean noWasi, OptimizeLevel optimize) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new WasmLispCompiler(false, false, noWasi, optimize).compile(program);
+		return WasmLispCompiler.builder().noWasi(noWasi).optimize(optimize).build().compile(program);
 	}
 
 	private static byte[] compileComponent(String source, OptimizeLevel optimize) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new WasmLispCompiler(false, true, false, optimize).compile(program);
+		return WasmLispCompiler.builder().component(true).optimize(optimize).build().compile(program);
 	}
 
 	@Test

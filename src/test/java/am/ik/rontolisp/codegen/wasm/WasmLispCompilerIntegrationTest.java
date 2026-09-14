@@ -278,7 +278,9 @@ class WasmLispCompilerIntegrationTest {
 	// needs the CLI pipeline's splice here too, or the module compiles to a call-time
 	// "undefined function".
 	private static String compileComponentAndRunPrelude(String lispCode) throws Exception {
-		byte[] component = new WasmLispCompiler(false, true)
+		byte[] component = WasmLispCompiler.builder()
+			.component(true)
+			.build()
 			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", path("test.wasm"));
@@ -287,7 +289,10 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static String compileComponentAndRun(String lispCode) throws Exception {
-		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(lispCode));
+		byte[] component = WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(LispReader.readAllFromString(lispCode));
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
@@ -481,7 +486,7 @@ class WasmLispCompilerIntegrationTest {
 		// %host-getenv primitive, which the uiop splice above is what introduces (the
 		// public uiop:getenv is a Lisp definition over it).
 		program = am.ik.rontolisp.eval.EnvironmentLibrary.process(program, witBackend);
-		return new WasmLispCompiler(false, true, false, optimize, true).compile(program);
+		return WasmLispCompiler.builder().component(true).optimize(optimize).serve(true).build().compile(program);
 	}
 
 	// warn writes its "WARNING: ..." line to standard ERROR, which the stdout helpers
@@ -624,7 +629,7 @@ class WasmLispCompilerIntegrationTest {
 						am.ik.rontolisp.eval.WaitForLibrary.process(am.ik.rontolisp.eval.HttpLibrary
 							.process(LispReader.readAllFromString(program), witBackend, false), witBackend),
 						witBackend), witBackend), witBackend, false)));
-		return new WasmLispCompiler(false, true, false, optimize).compile(forms);
+		return WasmLispCompiler.builder().component(true).optimize(optimize).build().compile(forms);
 	}
 
 	// The same component pipeline with GrayStreamsLibrary in it, in the CLI's order (the
@@ -639,7 +644,7 @@ class WasmLispCompilerIntegrationTest {
 						am.ik.rontolisp.eval.SocketsLibrary.process(am.ik.rontolisp.eval.WaitForLibrary
 							.process(LispReader.readAllFromString(program), witBackend), witBackend),
 						witBackend, false))));
-		return new WasmLispCompiler(false, true).compile(forms);
+		return WasmLispCompiler.builder().component(true).build().compile(forms);
 	}
 
 	@Test
@@ -686,7 +691,10 @@ class WasmLispCompilerIntegrationTest {
 	// Compiles a --component program and invokes a component-model function by its WAVE
 	// signature (`name(arg, ...)`), the form an interface member is reached by.
 	private static String compileComponentAndInvoke(String lispCode, String invocation) throws Exception {
-		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(lispCode));
+		byte[] component = WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(LispReader.readAllFromString(lispCode));
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", invocation,
 				path("test.wasm"));
@@ -698,7 +706,11 @@ class WasmLispCompilerIntegrationTest {
 	// the core start section at instantiation) and invokes a component-model export.
 	private static ExecResult reactorComponentInvoke(String lispCode, OptimizeLevel optimize, String invocation)
 			throws Exception {
-		byte[] component = new WasmLispCompiler(false, true, true, optimize)
+		byte[] component = WasmLispCompiler.builder()
+			.component(true)
+			.noWasi(true)
+			.optimize(optimize)
+			.build()
 			.compile(LispReader.readAllFromString(lispCode));
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", invocation,
@@ -756,7 +768,12 @@ class WasmLispCompilerIntegrationTest {
 		// Gray class, so gray.lisp must be spliced like RontoLispCli does.
 		List<LispVal> program = am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
-		byte[] component = new WasmLispCompiler(false, true, true, OptimizeLevel.DEFAULT).compile(program);
+		byte[] component = WasmLispCompiler.builder()
+			.component(true)
+			.noWasi(true)
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
 				"handle-request(\"{\\\"method\\\":\\\"GET\\\",\\\"target\\\":\\\"/dog\\\",\\\"headers\\\":{\\\"host\\\":\\\"h\\\"}}\")",
@@ -1554,7 +1571,9 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun(program)).isEqualTo(expected);
 		// Unlike fusion and the unboxed locals this is not a speed-for-size trade, so
 		// --optimize=size emits it too and must answer the same.
-		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+		byte[] small = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.SIZE)
+			.build()
 			.compile(LispReader.readAllFromString(program));
 		assertThat(runModule(small, "counted-dotimes-size.wasm")).isEqualTo(expected);
 	}
@@ -1621,7 +1640,9 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun(program)).isEqualTo(expected);
 		// Not a speed-for-size trade (no shadow, no duplicated fallback), so
 		// --optimize=size emits it too and must answer the same.
-		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+		byte[] small = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.SIZE)
+			.build()
 			.compile(LispReader.readAllFromString(program));
 		assertThat(runModule(small, "counted-numeric-for.wasm")).isEqualTo(expected);
 		// The assertions above pass whether or not the counter is unboxed -- the whole
@@ -1737,12 +1758,16 @@ class WasmLispCompilerIntegrationTest {
 				(1 (2 3 4))
 				B""";
 		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
-			byte[] module = new WasmLispCompiler(false, false, false, level)
+			byte[] module = WasmLispCompiler.builder()
+				.optimize(level)
+				.build()
 				.compile(LispReader.readAllFromString(program));
 			assertThat(runModule(module, "cons-" + level.name().toLowerCase() + ".wasm")).as(level.name())
 				.isEqualTo(expected);
 		}
-		byte[] trapping = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+		byte[] trapping = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.SIZE)
+			.build()
 			.compile(LispReader.readAllFromString("(print (car (car (list 5))))"));
 		wasmtime.copyFileToContainer(Transferable.of(trapping), path("cons-trap.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", path("cons-trap.wasm"));
@@ -1791,8 +1816,8 @@ class WasmLispCompilerIntegrationTest {
 				  (print u))
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
-		byte[] fast = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(parsed);
-		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE).compile(parsed);
+		byte[] fast = WasmLispCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(parsed);
+		byte[] small = WasmLispCompiler.builder().optimize(OptimizeLevel.SIZE).build().compile(parsed);
 		assertThat(small.length).as("--optimize=size should emit a smaller module").isLessThan(fast.length);
 		assertThat(runModule(small, "size.wasm")).isEqualTo(runModule(fast, "fast.wasm"));
 		assertThat(runModule(fast, "fast.wasm")).isEqualTo("""
@@ -1885,8 +1910,8 @@ class WasmLispCompilerIntegrationTest {
 				    (print (aref maybe 0 0))))
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
-		byte[] fast = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(parsed);
-		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE).compile(parsed);
+		byte[] fast = WasmLispCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(parsed);
+		byte[] small = WasmLispCompiler.builder().optimize(OptimizeLevel.SIZE).build().compile(parsed);
 		assertThat(runModule(small, "decl-size.wasm")).isEqualTo(runModule(fast, "decl-fast.wasm"));
 		assertThat(runModule(fast, "decl-fast.wasm")).isEqualTo("""
 				4000000000
@@ -1940,8 +1965,8 @@ class WasmLispCompilerIntegrationTest {
 				  (print (list (array-dimensions view) (aref base 4) (array-total-size view))))
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
-		byte[] fast = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(parsed);
-		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE).compile(parsed);
+		byte[] fast = WasmLispCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(parsed);
+		byte[] small = WasmLispCompiler.builder().optimize(OptimizeLevel.SIZE).build().compile(parsed);
 		assertThat(runModule(small, "arr-dims-size.wasm")).isEqualTo(runModule(fast, "arr-dims-fast.wasm"));
 		assertThat(runModule(fast, "arr-dims-fast.wasm")).isEqualTo("""
 				((4) 4 3)
@@ -2341,7 +2366,7 @@ class WasmLispCompilerIntegrationTest {
 	// provided.
 	private static String compileNoWasiAndInvoke(String lispCode, String function, String... args) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(program);
+		byte[] wasmBytes = WasmLispCompiler.builder().noWasi(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(
 				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", path("test.wasm")));
@@ -2371,8 +2396,10 @@ class WasmLispCompilerIntegrationTest {
 	// main module with the host instance preloaded (`wasmtime run --preload host=...`).
 	private static String compileAndRunWithPreload(String hostCode, String mainCode, OptimizeLevel optimize)
 			throws Exception {
-		byte[] host = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(hostCode));
-		byte[] main = new WasmLispCompiler(false, false, false, optimize)
+		byte[] host = WasmLispCompiler.builder().noWasi(true).build().compile(LispReader.readAllFromString(hostCode));
+		byte[] main = WasmLispCompiler.builder()
+			.optimize(optimize)
+			.build()
 			.compile(LispReader.readAllFromString(mainCode));
 		wasmtime.copyFileToContainer(Transferable.of(host), path("host.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(main), path("main.wasm"));
@@ -2480,7 +2507,7 @@ class WasmLispCompilerIntegrationTest {
 				(defun plus (a b) (rontolisp::%future-force (add a b)))
 				(rontolisp:wasm-export 'plus :params '(:int :int) :returns :int)
 				""";
-		byte[] hostBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(host));
+		byte[] hostBytes = WasmLispCompiler.builder().noWasi(true).build().compile(LispReader.readAllFromString(host));
 		byte[] mainBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(main));
 		wasmtime.copyFileToContainer(Transferable.of(hostBytes), path("host.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(mainBytes), path("main.wasm"));
@@ -2506,7 +2533,7 @@ class WasmLispCompilerIntegrationTest {
 				(defun plus (a b) (add a b))
 				(rontolisp:wasm-export 'plus :params '(:int :int) :returns :int)
 				""";
-		byte[] hostBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(host));
+		byte[] hostBytes = WasmLispCompiler.builder().noWasi(true).build().compile(LispReader.readAllFromString(host));
 		byte[] mainBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(main));
 		wasmtime.copyFileToContainer(Transferable.of(hostBytes), path("host.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(mainBytes), path("main.wasm"));
@@ -2598,7 +2625,7 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileNoGcAndInvoke(OptimizeLevel optimize, boolean simd, String lispCode, String function,
 			String... args) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] wasmBytes = new NoGcWasmCompiler(optimize, simd).compile(program);
+		byte[] wasmBytes = NoGcWasmCompiler.builder().optimize(optimize).simd(simd).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(
 				List.of("wasmtime", "run", "--invoke", function, path("test.wasm")));
@@ -2661,7 +2688,11 @@ class WasmLispCompilerIntegrationTest {
 	// stderr must carry no "experimental" warning.
 	private static String compileNoGcComponentAndInvoke(String lispCode, String waveInvocation) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] componentBytes = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true).compile(program);
+		byte[] componentBytes = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.component(true)
+			.build()
+			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", waveInvocation,
 				path("test.component.wasm"));
@@ -2726,7 +2757,10 @@ class WasmLispCompilerIntegrationTest {
 		// Same rule as the GC path: the boundary carries the value exactly or it traps.
 		// :s32 keeps that promise too -- what used to be a silent i32.wrap_i64 of the
 		// i64 house integer is now a refusal.
-		byte[] component = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true)
+		byte[] component = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.component(true)
+			.build()
 			.compile(LispReader.readAllFromString("""
 					(defun down (n) (- n))
 					(defun wide (n) (* n 1000000))
@@ -2751,7 +2785,10 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'sum-sq :as "sum-squared" :params '(:int :int) :returns :int)
 				""";
 		assertThat(compileNoGcComponentAndInvoke(program, "sum-squared(2, 3)")).isEqualTo("25");
-		byte[] optimized = new NoGcWasmCompiler(OptimizeLevel.DEFAULT, false, true)
+		byte[] optimized = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.component(true)
+			.build()
 			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(optimized), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "sum-squared(2, 3)",
@@ -2853,8 +2890,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "entry", "5")).isEqualTo("20");
 		// The optimized module is no larger than the plain one (the unreachable `dead`
 		// function is dropped); behavior is identical either way.
-		int plain = new NoGcWasmCompiler(OptimizeLevel.NONE).compile(parsed).length;
-		int optimized = new NoGcWasmCompiler(OptimizeLevel.DEFAULT).compile(parsed).length;
+		int plain = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(parsed).length;
+		int optimized = NoGcWasmCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(parsed).length;
 		assertThat(optimized).isLessThanOrEqualTo(plain);
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "entry", "5")).isEqualTo("20");
 	}
@@ -3776,7 +3813,11 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileOptimizedAndInvoke(String lispCode, boolean noWasi, String function, String... args)
 			throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] wasmBytes = new WasmLispCompiler(false, false, noWasi, OptimizeLevel.DEFAULT).compile(program);
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.noWasi(noWasi)
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(
 				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", path("test.wasm")));
@@ -3803,8 +3844,12 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileOptimizedAndInvoke(program, true, "fact", "10")).isEqualTo("3628800");
 
 		List<LispVal> parsed = LispReader.readAllFromString(program);
-		int plain = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE).compile(parsed).length;
-		int optimized = new WasmLispCompiler(false, false, true, OptimizeLevel.DEFAULT).compile(parsed).length;
+		int plain = WasmLispCompiler.builder().noWasi(true).optimize(OptimizeLevel.NONE).build().compile(parsed).length;
+		int optimized = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(parsed).length;
 		assertThat(optimized).isLessThan(plain / 5);
 	}
 
@@ -3817,7 +3862,9 @@ class WasmLispCompilerIntegrationTest {
 				(print (+ 1 2))
 				(print (string-upcase "hi"))
 				""";
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
 			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
@@ -3843,7 +3890,9 @@ class WasmLispCompilerIntegrationTest {
 				(print (concatenate 'string "n=" "7"))
 				(print (subseq "abcdef" 1 3))
 				""";
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
 			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
@@ -3974,7 +4023,7 @@ class WasmLispCompilerIntegrationTest {
 	private static ExecResult compileAndInvokeAtRaw(OptimizeLevel level, String lispCode, String function,
 			String... args) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, level).compile(program);
+		byte[] wasmBytes = WasmLispCompiler.builder().optimize(level).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(
 				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", path("test.wasm")));
@@ -3983,7 +4032,7 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static String runOptimizeLevel(List<LispVal> program, OptimizeLevel optimize) throws Exception {
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, optimize).compile(program);
+		byte[] wasmBytes = WasmLispCompiler.builder().optimize(optimize).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y",
 				path("test.wasm"));
@@ -4000,7 +4049,9 @@ class WasmLispCompilerIntegrationTest {
 				(defun sq (x) (* x x))
 				(print (eval '(sq 9)))
 				""";
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
 			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
@@ -4018,7 +4069,10 @@ class WasmLispCompilerIntegrationTest {
 				(defun shout (n) (print n) (* n 2))
 				(rontolisp:wasm-export 'shout :params '(:int) :returns :int)
 				""";
-		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(program));
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.noWasi(true)
+			.build()
+			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "shout", "-W", "gc", "-W",
 				"exceptions=y", path("test.wasm"), "7");
@@ -4117,11 +4171,11 @@ class WasmLispCompilerIntegrationTest {
 		// answered from the generator. That second assertion is the security half: it
 		// fails the moment the module-local generator can reach %random-byte.
 		assertThat(carriesTheGenerator(
-				new WasmLispCompiler(false, false, false).compile(LispReader.readAllFromString("(print (random 10))"))))
+				new WasmLispCompiler().compile(LispReader.readAllFromString("(print (random 10))"))))
 			.as("the draw inlines the generator instead of calling random_get")
 			.isTrue();
-		assertThat(carriesTheGenerator(new WasmLispCompiler(false, false, false)
-			.compile(LispReader.readAllFromString("(print (rontolisp::%random-byte))"))))
+		assertThat(carriesTheGenerator(
+				new WasmLispCompiler().compile(LispReader.readAllFromString("(print (rontolisp::%random-byte))"))))
 			.as("the entropy API never reaches the module-local generator")
 			.isFalse();
 
@@ -4203,7 +4257,10 @@ class WasmLispCompilerIntegrationTest {
 				(defun ask (n) (+ n (length (read-line))))
 				(rontolisp:wasm-export 'ask :params '(:int) :returns :int)
 				""";
-		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(program));
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.noWasi(true)
+			.build()
+			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "ask", "-W", "gc", "-W",
 				"exceptions=y", path("test.wasm"), "7");
@@ -4752,7 +4809,7 @@ class WasmLispCompilerIntegrationTest {
 				component ? am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT
 						: am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC,
 				features);
-		byte[] bytes = new WasmLispCompiler(false, component).compile(program);
+		byte[] bytes = WasmLispCompiler.builder().component(component).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(bytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 				path("test.wasm"));
@@ -4951,7 +5008,7 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(am.ik.rontolisp.eval.WaitForLibrary.process(LispReader.readAllFromString(lispCode),
 					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT));
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 				path("test.component.wasm"));
@@ -4996,7 +5053,7 @@ class WasmLispCompilerIntegrationTest {
 	// must carry no "experimental" warning.
 	private static String compileAndInvokeComponent(String lispCode, String waveInvocation) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
 				waveInvocation, path("test.component.wasm"));
@@ -5070,7 +5127,10 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndInvokeComponent(program, "bump(9007199254740993)")).isEqualTo("9007199254740994");
 		assertThat(compileAndInvokeComponent(program, "bump(-9007199254740995)")).isEqualTo("-9007199254740994");
 		assertThat(compileAndInvokeComponent(program, "scale(9000000000000)")).isEqualTo("9000000000000000000");
-		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		byte[] component = WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke",
 				"scale(9300000000000000000)", path("test.wasm"));
@@ -5084,7 +5144,7 @@ class WasmLispCompilerIntegrationTest {
 		// and 300 is not a u8. Neither is silently masked -- masking is what the
 		// canonical ABI would do and what makes a component behave differently under
 		// jco (which throws) than under wasmtime.
-		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString("""
+		byte[] component = WasmLispCompiler.builder().component(true).build().compile(LispReader.readAllFromString("""
 				(defun down (n) (- n))
 				(defun wide (n) (* n 100))
 				(rontolisp:wasm-export 'down :params '(:s32) :returns :u32)
@@ -5220,7 +5280,7 @@ class WasmLispCompilerIntegrationTest {
 		// trap a synchronous task ("cannot block a synchronous task"); :async t
 		// removes that residual risk.
 		List<LispVal> program = LispReader.readAllFromString(COMPONENT_ASYNC_PROGRAM.replace(":async t", ":async nil"));
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
 				"noisy-add(20, 22)", path("test.component.wasm"));
@@ -5248,7 +5308,7 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.eval.EnvironmentLibrary.process(
 				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode), Features.WASM),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--env",
 				env, path("test.component.wasm"));
@@ -5270,7 +5330,7 @@ class WasmLispCompilerIntegrationTest {
 						features),
 				component ? am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT
 						: am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC);
-		byte[] bytes = new WasmLispCompiler(false, component).compile(program);
+		byte[] bytes = WasmLispCompiler.builder().component(component).build().compile(program);
 		String module = path(component ? "args.component.wasm" : "args.wasm");
 		wasmtime.copyFileToContainer(Transferable.of(bytes), module);
 		List<String> command = new java.util.ArrayList<>(
@@ -5409,7 +5469,7 @@ class WasmLispCompilerIntegrationTest {
 
 	private static String compileAndRunComponentWithDir(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"cd " + workDir() + " && wasmtime run -W gc=y -W exceptions=y --dir . test.component.wasm");
@@ -5427,7 +5487,10 @@ class WasmLispCompilerIntegrationTest {
 		// descriptor, not merged into stdout.
 		for (String program : List.of("(warn \"careful\") (print :done)",
 				"(format *error-output* \"careful~%\") (print :done)")) {
-			byte[] componentBytes = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT)
+			byte[] componentBytes = WasmLispCompiler.builder()
+				.component(true)
+				.optimize(OptimizeLevel.DEFAULT)
+				.build()
 				.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(program)));
 			wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("warn.optcomp.wasm"));
 			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", path("warn.optcomp.wasm"));
@@ -5452,7 +5515,7 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		List<LispVal> parsed = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(program));
 		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
-			byte[] componentBytes = new WasmLispCompiler(false, true, false, level).compile(parsed);
+			byte[] componentBytes = WasmLispCompiler.builder().component(true).optimize(level).build().compile(parsed);
 			wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("uncaught.optcomp.wasm"));
 			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 					path("uncaught.optcomp.wasm"));
@@ -5479,8 +5542,12 @@ class WasmLispCompilerIntegrationTest {
 				(defun never-called (x) (* x x x))
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
-		byte[] plain = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE).compile(parsed);
-		byte[] optimized = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT).compile(parsed);
+		byte[] plain = WasmLispCompiler.builder().component(true).optimize(OptimizeLevel.NONE).build().compile(parsed);
+		byte[] optimized = WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(parsed);
 		assertThat(optimized.length).as("--optimize should shrink the component").isLessThan(plain.length);
 		wasmtime.copyFileToContainer(Transferable.of(optimized), path("test.optcomp.wasm"));
 		ExecResult add = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", "add(3, 4)",
@@ -5506,8 +5573,8 @@ class WasmLispCompilerIntegrationTest {
 				(print (getf (list :post 1) (intern (string-upcase "post") :keyword)))
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
-		byte[] plain = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(parsed);
-		byte[] optimized = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(parsed);
+		byte[] plain = WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(parsed);
+		byte[] optimized = WasmLispCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(parsed);
 		assertThat(optimized.length).as("the gate should apply, not bail").isLessThan(plain.length / 2);
 		assertThat(runModule(optimized, "kwgate.wasm")).isEqualTo("T\nT\n1");
 	}
@@ -6049,7 +6116,7 @@ class WasmLispCompilerIntegrationTest {
 		// load reads and evaluates a file; the defined function is resolved via the eval
 		// runtime, so the program is compiled in --dynamic mode.
 		List<LispVal> program = LispReader.readAllFromString("(load \"clib.lisp\")\n(print (sq 9))");
-		byte[] componentBytes = new WasmLispCompiler(true, true).compile(program);
+		byte[] componentBytes = WasmLispCompiler.builder().dynamic(true).component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		wasmtime.copyFileToContainer(
 				Transferable.of("(defun SQ (x) (* x x))".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
@@ -6063,7 +6130,7 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunComponentWithStdin(String lispCode, String stdin) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
 				path("stdin.txt"));
@@ -11736,7 +11803,7 @@ class WasmLispCompilerIntegrationTest {
 	/** The component twin of {@link #compileAndRunWithDirs}. */
 	private static String compileAndRunComponentWithDirs(String lispCode, String... dirs) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c", "cd " + workDir()
 				+ " && wasmtime run -W gc=y -W exceptions=y --dir ." + preopenFlags(dirs) + " test.component.wasm");
@@ -11761,7 +11828,11 @@ class WasmLispCompilerIntegrationTest {
 		// The prelude splice mirrors the CLI pipeline; it emits nothing for a program
 		// that references no prelude name, so every pre-existing case is unaffected.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] wasmBytes = new WasmLispCompiler(false, component, false, OptimizeLevel.NONE, false, simd)
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.component(component)
+			.optimize(OptimizeLevel.NONE)
+			.simd(simd)
+			.build()
 			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
@@ -12394,7 +12465,7 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(WILD_TREE_PROGRAM));
 		String module = component ? "wildtree.component.wasm" : "wildtree.wasm";
-		byte[] bytes = component ? new WasmLispCompiler(false, true).compile(program)
+		byte[] bytes = component ? WasmLispCompiler.builder().component(true).build().compile(program)
 				: new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(bytes), path(module));
 		String run = component ? "wasmtime run -W gc=y -W exceptions=y --dir . " + module
@@ -12946,9 +13017,9 @@ class WasmLispCompilerIntegrationTest {
 		// The component reads fd 0 and writes fd 1 through the preview1 adapter (this
 		// program is not async, so stdin.lisp is not spliced -- see
 		// .kb/read-load-streams.md).
-		assertThat(
-				compileAndRunBinary(new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(BINARY_CAT)),
-						BINARY_CAT_STDIN, "wasmtime run -W gc=y"))
+		assertThat(compileAndRunBinary(
+				WasmLispCompiler.builder().component(true).build().compile(LispReader.readAllFromString(BINARY_CAT)),
+				BINARY_CAT_STDIN, "wasmtime run -W gc=y"))
 			.isEqualTo(BINARY_CAT_HEX);
 	}
 
@@ -13393,7 +13464,7 @@ class WasmLispCompilerIntegrationTest {
 
 	private static String compileAndRunLoadDynamic(String lispCode, String libContent) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] wasmBytes = new WasmLispCompiler(true).compile(program);
+		byte[] wasmBytes = WasmLispCompiler.builder().dynamic(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(libContent.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
 				path("lib.lisp"));
@@ -15198,9 +15269,13 @@ class WasmLispCompilerIntegrationTest {
 		// where nothing else is left to hide it: 21,800 bytes against 529 before the
 		// type-test fold, 3,586 against 601 after it retired the eval runtime's arms
 		// for the values this program never builds (.kb/wasm-ref-type-fold.md).
-		byte[] computed = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+		byte[] computed = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.SIZE)
+			.build()
 			.compile(LispReader.readAllFromString("(defconstant +bpk+ 5) (print (boundp (intern \"+BPK+\")))"));
-		byte[] literal = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+		byte[] literal = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.SIZE)
+			.build()
 			.compile(LispReader.readAllFromString("(defconstant +bpk+ 5) (print t)"));
 		assertThat(computed.length).isGreaterThan(literal.length * 4);
 	}
@@ -15445,7 +15520,10 @@ class WasmLispCompilerIntegrationTest {
 	// Compiles an asyncMode --component program (async surface forces EH mode) and
 	// invokes a component-model export by its WAVE signature.
 	private static String compileAsyncComponentAndInvoke(String lispCode, String invocation) throws Exception {
-		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(lispCode));
+		byte[] component = WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(LispReader.readAllFromString(lispCode));
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
 				invocation, path("test.wasm"));
@@ -15746,7 +15824,7 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunWaitForComponent(String lispCode) throws Exception {
 		List<LispVal> forms = am.ik.rontolisp.eval.WaitForLibrary.process(LispReader.readAllFromString(lispCode),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(forms);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(forms);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 				path("test.component.wasm"));
@@ -15807,7 +15885,7 @@ class WasmLispCompilerIntegrationTest {
 
 	private static String compileAndRunCombinatorsComponent(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 				path("test.component.wasm"));
@@ -16241,7 +16319,7 @@ class WasmLispCompilerIntegrationTest {
 										am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
 								am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
 						am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(spliced);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(spliced);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("usocket-echo.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"tcp=y", "-S", "inherit-network=y", path("usocket-echo.component.wasm"));
@@ -16285,7 +16363,7 @@ class WasmLispCompilerIntegrationTest {
 										am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
 								am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
 						am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(spliced);
+		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(spliced);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("usocket-option.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"tcp=y", "-S", "inherit-network=y", path("usocket-option.component.wasm"));
@@ -19327,7 +19405,9 @@ class WasmLispCompilerIntegrationTest {
 		src.append("(let ((fs (list (lambda (x) (* x 2))))) (print (funcall (car fs) 21)))\n");
 		src.append("(print (apply (car (list #'d150)) nil))\n");
 		String expected = "(7 299)\n42\n150";
-		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+		byte[] small = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.SIZE)
+			.build()
 			.compile(LispReader.readAllFromString(src.toString()));
 		assertThat(runModule(small, "sparse-ladder-size.wasm")).isEqualTo(expected);
 		assertThat(compileAndRun(src.toString())).isEqualTo(expected);
@@ -20255,7 +20335,7 @@ class WasmLispCompilerIntegrationTest {
 	// reads a packed array through the generic array surface rather than vec:.
 	private static String compileAndRunSimdPrelude(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, true).compile(program);
+		byte[] wasmBytes = WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).simd(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code (simd): %s\nstderr: %s", lispCode, result.getStderr()).isZero();
@@ -20265,7 +20345,7 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunVec(String lispCode, boolean simd, String... extraFlags) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, simd).compile(program);
+		byte[] wasmBytes = WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).simd(simd).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(List.of("wasmtime", "run", "--wasm", "gc"));
 		command.addAll(List.of(extraFlags));
@@ -20616,7 +20696,12 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileComponentAndRunVec(String lispCode, boolean simd) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		byte[] component = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, simd).compile(program);
+		byte[] component = WasmLispCompiler.builder()
+			.component(true)
+			.optimize(OptimizeLevel.NONE)
+			.simd(simd)
+			.build()
+			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", path("test.wasm"));
 		assertThat(result.getExitCode())
@@ -20634,7 +20719,10 @@ class WasmLispCompilerIntegrationTest {
 				+ "(print (vec:sum (vec:add (vec:arange 7 :element-type 'single-float) (vec:ones 7 :element-type 'single-float))))"
 				+ "(print (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)))";
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
-		byte[] optimized = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT, false, true)
+		byte[] optimized = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.simd(true)
+			.build()
 			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(optimized), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm"));
@@ -20658,7 +20746,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunVec(source, false, noSimd)).isEqualTo("5.0");
 
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
-		byte[] simdBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, true).compile(program);
+		byte[] simdBytes = WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).simd(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(simdBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "--wasm", "simd=n", "--wasm",
 				"relaxed-simd=n", path("test.wasm"));
@@ -20865,7 +20953,7 @@ class WasmLispCompilerIntegrationTest {
 	private static int compileAndRunVecExitCode(String lispCode, boolean simd) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, simd).compile(program);
+		byte[] wasmBytes = WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).simd(simd).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		return wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm")).getExitCode();
 	}
@@ -21551,7 +21639,10 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunLinalgSimdOptimized(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT, false, true)
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.simd(true)
+			.build()
 			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm"));
@@ -22366,7 +22457,10 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(lispCode),
 				dir.toString(), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
 				am.ik.rontolisp.eval.SourceLoader.fileSystem());
-		return new WasmLispCompiler(false, true).compile(am.ik.rontolisp.eval.WitLibrary.process(program));
+		return WasmLispCompiler.builder()
+			.component(true)
+			.build()
+			.compile(am.ik.rontolisp.eval.WitLibrary.process(program));
 	}
 
 	// A subset of the real wasi:http/types@0.2.0: enough of it to construct an outgoing
@@ -22987,7 +23081,7 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(lisp),
 				dir.toString(), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
 				am.ik.rontolisp.eval.SourceLoader.fileSystem());
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder().component(true).build();
 		compiler.callbackExportsForTest = java.util.Set.of("begin");
 		compiler.rawCoreForTest = true;
 		byte[] core = compiler.compile(am.ik.rontolisp.eval.WitLibrary.process(program));

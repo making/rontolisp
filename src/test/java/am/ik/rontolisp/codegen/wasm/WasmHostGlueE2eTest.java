@@ -169,8 +169,11 @@ class WasmHostGlueE2eTest {
 
 	@Test
 	void oneGeneratedFileDrivesASuspendingHostAndASynchronousOne() throws Exception {
-		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(true)
+			.build();
 		Files.write(this.tempDir.resolve("glue.wasm"), compiler.compile(program()));
 		Files.writeString(this.tempDir.resolve("glue.js"),
 				java.util.Objects.requireNonNull(compiler.hostGlueJs("glue.js")), StandardCharsets.UTF_8);
@@ -230,8 +233,11 @@ class WasmHostGlueE2eTest {
 
 	@Test
 	void aHostWhoseSourceMovesInsideOneCallDropsWhatTheGlueStillHolds() throws Exception {
-		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(true)
+			.build();
 		Files.write(this.tempDir.resolve("glue.wasm"), compiler.compile(program(TWO_FETCHES)));
 		Files.writeString(this.tempDir.resolve("glue.js"),
 				java.util.Objects.requireNonNull(compiler.hostGlueJs("glue.js")), StandardCharsets.UTF_8);
@@ -331,8 +337,11 @@ class WasmHostGlueE2eTest {
 
 	@Test
 	void theEmittedWorkerHalfIsTheWholeHostOnTheEnvelopeBoundary() throws Exception {
-		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(true)
+			.build();
 		Files.write(this.tempDir.resolve("glue.wasm"),
 				compiler.compile(program(ENVELOPE_MODULE, HostBoundary.ENVELOPE)));
 		Files.writeString(this.tempDir.resolve("glue.js"),
@@ -442,8 +451,11 @@ class WasmHostGlueE2eTest {
 
 	@Test
 	void theEmittedWorkerHalfServesTheStreamingBoundaryToo() throws Exception {
-		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				true);
+		WasmLispCompiler compiler = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.NONE)
+			.hostFetch(true)
+			.build();
 		Files.write(this.tempDir.resolve("glue.wasm"),
 				compiler.compile(program(STREAMING_MODULE, HostBoundary.STREAMING)));
 		Files.writeString(this.tempDir.resolve("glue.js"),
