@@ -2668,6 +2668,12 @@ public final class Environment implements Scope {
 			// f * 2^n with exact IEEE semantics, including the subnormal range.
 			return new LispDouble(Math.scalb(asDouble(args.get(0)), (int) asLong(args.get(1))));
 		}));
+		env.defineFunction(LispNames.FLOAT_RADIX, new LispFunction(LispNames.FLOAT_RADIX, args -> {
+			// The radix of the float representation: every float here is a binary
+			// double, so the answer is unconditionally 2.
+			requireArgCount(LispNames.FLOAT_RADIX, args, 1);
+			return new LispInteger(2);
+		}));
 		// IEEE 754 bit reinterpretation, the primitive quartet under the float-features
 		// shim library. Bits travel as unsigned integers (bignums when the sign bit is
 		// set), so ldb/ash arithmetic over them behaves like CL's (unsigned-byte 64).
@@ -3092,6 +3098,24 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.LOGORC2, args, 2);
 			return normalizeBig(asBigInteger(args.get(0)).or(asBigInteger(args.get(1)).not()));
 		}));
+		env.defineFunction(LispNames.LOGNAND, new LispFunction(LispNames.LOGNAND, args -> {
+			requireArgCount(LispNames.LOGNAND, args, 2);
+			return normalizeBig(asBigInteger(args.get(0)).and(asBigInteger(args.get(1))).not());
+		}));
+		env.defineFunction(LispNames.LOGNOR, new LispFunction(LispNames.LOGNOR, args -> {
+			requireArgCount(LispNames.LOGNOR, args, 2);
+			return normalizeBig(asBigInteger(args.get(0)).or(asBigInteger(args.get(1))).not());
+		}));
+		env.defineFunction(LispNames.LOGEQV, new LispFunction(LispNames.LOGEQV, args -> {
+			// The left fold of the two-argument (lognot (logxor x y)): folding from -1
+			// answers -1 of no arguments and the lone argument of one, since
+			// (logeqv -1 x) is x.
+			BigInteger acc = BigInteger.ONE.negate();
+			for (LispVal arg : args) {
+				acc = acc.xor(asBigInteger(arg)).not();
+			}
+			return normalizeBig(acc);
+		}));
 		// ash: shift left for a non-negative count, arithmetic right shift otherwise.
 		env.defineFunction(LispNames.ASH, new LispFunction(LispNames.ASH, args -> {
 			requireArgCount(LispNames.ASH, args, 2);
@@ -3168,6 +3192,19 @@ public final class Environment implements Scope {
 			BigInteger fieldMask = BigInteger.ONE.shiftLeft(size).subtract(BigInteger.ONE).shiftLeft(position);
 			BigInteger cleared = asBigInteger(args.get(2)).andNot(fieldMask);
 			BigInteger newBits = asBigInteger(args.get(0)).shiftLeft(position).and(fieldMask);
+			return normalizeBig(cleared.or(newBits));
+		}));
+		env.defineFunction(LispNames.DEPOSIT_FIELD, new LispFunction(LispNames.DEPOSIT_FIELD, args -> {
+			// Not dpb: dpb deposits newbyte's LOW size bits, while deposit-field
+			// deposits newbyte's bits AT the field position (the suite's dpb.lsp
+			// checks (logbitp (- i pos) newbyte) where deposit-field.lsp checks
+			// (logbitp i newbyte)).
+			requireArgCount(LispNames.DEPOSIT_FIELD, args, 3);
+			int size = (int) asLong(byteSpecSize(args.get(1)));
+			int position = (int) asLong(byteSpecPosition(args.get(1)));
+			BigInteger fieldMask = BigInteger.ONE.shiftLeft(size).subtract(BigInteger.ONE).shiftLeft(position);
+			BigInteger cleared = asBigInteger(args.get(2)).andNot(fieldMask);
+			BigInteger newBits = asBigInteger(args.get(0)).and(fieldMask);
 			return normalizeBig(cleared.or(newBits));
 		}));
 		env.defineFunction(LispNames.MASK_FIELD, new LispFunction(LispNames.MASK_FIELD, args -> {

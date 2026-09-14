@@ -320,6 +320,9 @@
 | `logandc2` | `(logandc2 12 10)` | `4`(第1引数と第2引数の補数のAND) |
 | `logorc1` | `(logorc1 12 10)` | `-5`(第1引数の補数と第2引数のOR) |
 | `logorc2` | `(logorc2 12 10)` | `-3`(第1引数と第2引数の補数のOR) |
+| `lognand` | `(lognand 12 10)` | `-9`(2引数のNAND。`(lognot (logand a b))`) |
+| `lognor` | `(lognor 12 10)` | `-15`(2引数のNOR。`(lognot (logior a b))`) |
+| `logeqv` | `(logeqv 12 10)`、`(logeqv)`、`(logeqv 27 22 53)` | `-7`、`-1`、`56`(可変長引数のビット単位等価。左から畳み込む) |
 | `ash` | `(ash 1 4)`, `(ash 255 -4)` | `16`, `15`(算術シフト。非負のカウントなら左、それ以外は右) |
 | `logtest` | `(logtest 1 3)`, `(logtest 1 2)` | `T`, `NIL`(共通して立っているビットがあるか。`(not (zerop (logand a b)))`) |
 | `funcall` | `(funcall #'+ 3 4)` | 関数を引数に適用します。関数値(`#'f`、ラムダ)または関数を指すシンボル(`(funcall 'car ...)`)を受け付けます |
@@ -370,7 +373,9 @@
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | `vector-push` と同様だが満杯時にベクタを拡張する |
 | `subtypep` | `(subtypep 'integer 'number)` | `t` -- 組み込み型の束と `defclass`/コンディション階層に対して判定。主値のみで、未知の組は `nil`。コンパイラはリテラル指定子をコンパイル時に畳み込みます |
 | `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- `ldb` のフィールドを元の位置のまま返します |
+| `deposit-field` | `(deposit-field 0 (byte 4 0) 255)`、`(deposit-field 5 (byte 4 4) 0)` | `240`、`0` -- バイトフィールドを `newbyte` の同じ位置のビットで置き換えます(`dpb` の下位ビットとは異なります) |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- IEEE の意味論で `float × 2^n` |
+| `float-radix` | `(float-radix 1.0)` | `2` -- 浮動小数点表現の基数(常に2進) |
 | `decode-float` | `(decode-float 6.5)` | `0.8125`、`3`、`1.0` -- [1/2, 1) の仮数部、2 進指数部、符号 |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |
 | `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ |

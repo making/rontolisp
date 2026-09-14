@@ -34086,10 +34086,10 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands the {@code logandc1}/{@code logandc2}/{@code logorc1}/{@code logorc2}
-	 * complement-operand bit functions over {@code logand}/{@code logior}/{@code lognot}.
-	 * Each operand appears exactly once in the expansion, so evaluation order and count
-	 * match the function-call semantics.
+	 * Expands the {@code logandc1}/{@code logandc2}/{@code logorc1}/{@code logorc2}/
+	 * {@code lognand}/{@code lognor} complement-operand bit functions over
+	 * {@code logand}/{@code logior}/{@code lognot}. Each operand appears exactly once in
+	 * the expansion, so evaluation order and count match the function-call semantics.
 	 * @param cons the two-argument call expression
 	 * @return the expanded expression
 	 */
@@ -34106,8 +34106,35 @@ public final class LispMacroExpander {
 			case LispNames.LOGANDC2 -> mvCall(LispNames.LOGAND, x, mvCall(LispNames.LOGNOT, y));
 			case LispNames.LOGORC1 -> mvCall(LispNames.LOGIOR, mvCall(LispNames.LOGNOT, x), y);
 			case LispNames.LOGORC2 -> mvCall(LispNames.LOGIOR, x, mvCall(LispNames.LOGNOT, y));
+			case LispNames.LOGNAND -> mvCall(LispNames.LOGNOT, mvCall(LispNames.LOGAND, x, y));
+			case LispNames.LOGNOR -> mvCall(LispNames.LOGNOT, mvCall(LispNames.LOGIOR, x, y));
 			default -> throw new IllegalArgumentException("Unknown log complement function: " + cons.print());
 		};
+	}
+
+	/**
+	 * Expands the variadic {@code (logeqv x ...)} into the left fold of the two-argument
+	 * {@code (lognot (logxor x y))}: no arguments answer {@code -1} and a lone argument
+	 * answers itself. Each operand appears exactly once, in order, so evaluation order
+	 * and count match the function-call semantics (in particular {@code (logeqv a b c)}
+	 * is {@code (logeqv (logeqv a b) c)}, not {@code (lognot (logxor a b c))}).
+	 * @param cons the logeqv call expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLogEqv(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.isEmpty() || !(parts.get(0) instanceof LispSymbol)) {
+			throw new IllegalArgumentException("logeqv expects a call expression: " + cons.print());
+		}
+		List<LispVal> operands = parts.subList(1, parts.size());
+		if (operands.isEmpty()) {
+			return new LispInteger(-1);
+		}
+		LispVal acc = operands.get(0);
+		for (int i = 1; i < operands.size(); i++) {
+			acc = mvCall(LispNames.LOGNOT, mvCall(LispNames.LOGXOR, acc, operands.get(i)));
+		}
+		return acc;
 	}
 
 	/**
@@ -34289,6 +34316,54 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (deposit-field newbyte bytespec integer)} over the bit primitives:
+	 * newbyte's bits AT the byte specifier's field replace that field of the integer, the
+	 * other bits unchanged. Unlike {@code dpb} -- whose expansion this mirrors -- the
+	 * deposited bits are NOT the low {@code size} bits shifted up: the suite's
+	 * {@code deposit-field.lsp} checks {@code (logbitp i newbyte)} where {@code dpb.lsp}
+	 * checks {@code (logbitp (- i pos) newbyte)}.
+	 *
+	 * <pre>
+	 * (deposit-field nb bs n) ->
+	 *   (let* ((__dfN_b nb) (__dfN_s bs) (__dfN_n n)
+	 *          (__dfN_m (ash (- (ash 1 (car __dfN_s)) 1) (car (cdr __dfN_s)))))
+	 *     (logior (logand __dfN_b __dfN_m) (logand __dfN_n (lognot __dfN_m))))
+	 * </pre>
+	 *
+	 * A literal bytespec folds the mask the same way {@code dpb}'s does, with the newbyte
+	 * operand first so it is still evaluated before the integer form.
+	 * @param cons the deposit-field expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDepositField(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4) {
+			throw new IllegalArgumentException(
+					"deposit-field expects 3 arguments (newbyte bytespec integer): " + cons.print());
+		}
+		ByteSpec literal = literalByteSpec(parts.get(2));
+		if (literal != null) {
+			java.math.BigInteger mask = lowBitMask(literal.size()).shiftLeft((int) literal.position());
+			return mvCall(LispNames.LOGIOR, mvCall(LispNames.LOGAND, parts.get(1), integerLiteral(mask)),
+					mvCall(LispNames.LOGAND, parts.get(3), integerLiteral(mask.not())));
+		}
+		String prefix = "__df" + MV_COUNTER.getAndIncrement();
+		LispSymbol b = new LispSymbol(prefix + "_b");
+		LispSymbol s = new LispSymbol(prefix + "_s");
+		LispSymbol n = new LispSymbol(prefix + "_n");
+		LispSymbol m = new LispSymbol(prefix + "_m");
+		LispVal size = mvCall(LispNames.CAR, s);
+		LispVal position = mvCall(LispNames.CAR, mvCall(LispNames.CDR, s));
+		LispVal ones = mvCall(LispNames.SUB, mvCall(LispNames.ASH, new LispInteger(1), size), new LispInteger(1));
+		LispVal maskInit = mvCall(LispNames.ASH, ones, position);
+		LispVal newBits = mvCall(LispNames.LOGAND, b, m);
+		LispVal kept = mvCall(LispNames.LOGAND, n, mvCall(LispNames.LOGNOT, m));
+		LispVal body = mvCall(LispNames.LOGIOR, newBits, kept);
+		return nestMvBindings(List.of(new MvBinding(b, parts.get(1)), new MvBinding(s, parts.get(2)),
+				new MvBinding(n, parts.get(3)), new MvBinding(m, maskInit)), body);
+	}
+
+	/**
 	 * Expands {@code (mask-field bytespec integer)} over the bit primitives: the
 	 * {@code ldb} field left in its original position.
 	 *
@@ -34350,6 +34425,22 @@ public final class LispMacroExpander {
 				pow2(c));
 		return nestMvBindings(List.of(new MvBinding(f, parts.get(1)), new MvBinding(nc, ncInit),
 				new MvBinding(a, aInit), new MvBinding(b, bInit), new MvBinding(c, cInit)), product);
+	}
+
+	/**
+	 * Expands the one-argument {@code (float-radix float)} into the constant {@code 2}
+	 * (every float here is a binary double), evaluating the operand once for its side
+	 * effects and arity. A wrong argument count signals here; the value itself is
+	 * unchecked, matching the interpreter's answer.
+	 * @param cons the float-radix expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFloatRadix(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException("float-radix expects 1 argument: " + cons.print());
+		}
+		return expandConstantResult(cons, new LispInteger(2));
 	}
 
 	/** Builds {@code (max -limit (min limit x))}. */

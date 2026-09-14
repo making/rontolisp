@@ -5368,6 +5368,63 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLogNandNorEqv() {
+		assertThat(eval("(lognand 0 0)").print()).isEqualTo("-1");
+		assertThat(eval("(lognand 0 -1)").print()).isEqualTo("-1");
+		assertThat(eval("(lognand -1 123)").print()).isEqualTo("-124");
+		assertThat(eval("(lognand (expt 2 100) 0)").print()).isEqualTo("-1");
+		assertThat(eval("(lognor 0 0)").print()).isEqualTo("-1");
+		assertThat(eval("(lognor 0 -1)").print()).isEqualTo("0");
+		assertThat(eval("(lognor -1 123)").print()).isEqualTo("0");
+		assertThat(eval("(logeqv)").print()).isEqualTo("-1");
+		assertThat(eval("(logeqv 1231)").print()).isEqualTo("1231");
+		assertThat(eval("(logeqv 12 10)").print()).isEqualTo("-7");
+		assertThat(eval("(logeqv 27 22 53)").print()).isEqualTo("56");
+		assertThat(eval("(funcall #'lognand 0 0)").print()).isEqualTo("-1");
+		assertThat(eval("(funcall #'lognor 0 -1)").print()).isEqualTo("0");
+		assertThat(eval("(funcall #'logeqv 27 22 53)").print()).isEqualTo("56");
+		assertThat(eval("(apply #'logeqv '(27 22 53))").print()).isEqualTo("56");
+		assertThat(eval("(apply #'logeqv nil)").print()).isEqualTo("-1");
+		// Left-to-right, exactly once each.
+		assertThat(eval(
+				"(let ((i 0) a b) (logeqv (progn (setf a (incf i)) 27) (progn (setf b (incf i)) 22)) (list i a b))")
+			.print()).isEqualTo("(2 1 2)");
+		assertThatThrownBy(() -> eval("(lognand)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 2 arguments");
+		assertThatThrownBy(() -> eval("(lognand 1 2 3)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 2 arguments");
+		assertThatThrownBy(() -> eval("(lognor 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 2 arguments");
+	}
+
+	@Test
+	void evalDepositField() {
+		assertThat(eval("(deposit-field 0 (byte 4 0) 255)").print()).isEqualTo("240");
+		// Unlike dpb, the deposited bits are newbyte's bits AT the field, not its
+		// low bits: 5 has no bit set in [4, 8), so the field clears to 0.
+		assertThat(eval("(deposit-field 5 (byte 4 4) 0)").print()).isEqualTo("0");
+		assertThat(eval("(deposit-field 240 (byte 4 4) 0)").print()).isEqualTo("240");
+		assertThat(eval("(deposit-field -1 (byte 0 0) 5)").print()).isEqualTo("5");
+		assertThat(eval("(deposit-field 255 (byte 4 (+ 2 2)) 0)").print()).isEqualTo("240");
+		assertThat(eval("(funcall #'deposit-field 0 (byte 4 0) 255)").print()).isEqualTo("240");
+		assertThat(eval("(funcall #'deposit-field 5 (byte 4 4) 0)").print()).isEqualTo("0");
+		assertThatThrownBy(() -> eval("(deposit-field 1 (byte 1 0))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 3 arguments");
+	}
+
+	@Test
+	void evalFloatRadix() {
+		assertThat(eval("(float-radix 1.0)").print()).isEqualTo("2");
+		assertThat(eval("(float-radix -0.5)").print()).isEqualTo("2");
+		assertThat(eval("(float-radix 1.0d0)").print()).isEqualTo("2");
+		assertThat(eval("(funcall #'float-radix 1.0)").print()).isEqualTo("2");
+		assertThatThrownBy(() -> eval("(float-radix)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(float-radix 1.0 2.0)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+	}
+
+	@Test
 	void evalByteFieldOps() {
 		assertThat(eval("(byte-size (byte 8 3))").print()).isEqualTo("8");
 		assertThat(eval("(byte-position (byte 8 3))").print()).isEqualTo("3");

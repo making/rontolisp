@@ -1822,8 +1822,15 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandBytePosition(cons), ctx, className);
 				case LispNames.LDB -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLdb(cons), ctx, className);
 				case LispNames.DPB -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx, className);
-				case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2 ->
+				case LispNames.DEPOSIT_FIELD ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDepositField(cons), ctx, className);
+				case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2, LispNames.LOGNAND,
+						LispNames.LOGNOR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLogComplement(cons), ctx, className);
+				case LispNames.LOGEQV ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandLogEqv(cons), ctx, className);
+				case LispNames.FLOAT_RADIX ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFloatRadix(cons), ctx, className);
 				case LispNames.LOGTEST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLogtest(cons), ctx, className);
 				case LispNames.MAKE_SEQUENCE ->

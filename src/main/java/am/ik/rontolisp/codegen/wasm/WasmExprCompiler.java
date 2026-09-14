@@ -2154,8 +2154,14 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandBytePosition(cons), ctx);
 				case LispNames.LDB -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLdb(cons), ctx);
 				case LispNames.DPB -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx);
-				case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2 ->
+				case LispNames.DEPOSIT_FIELD ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandDepositField(cons), ctx);
+				case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2, LispNames.LOGNAND,
+						LispNames.LOGNOR ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandLogComplement(cons), ctx);
+				case LispNames.LOGEQV -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLogEqv(cons), ctx);
+				case LispNames.FLOAT_RADIX ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandFloatRadix(cons), ctx);
 				case LispNames.LOGTEST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLogtest(cons), ctx);
 				case LispNames.MAKE_SEQUENCE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeSequence(cons), ctx);

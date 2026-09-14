@@ -396,6 +396,18 @@ public final class LispNames {
 	/** The {@code logorc2} built-in function ({@code (logior x (lognot y))}). */
 	public static final String LOGORC2 = "LOGORC2";
 
+	/** The {@code lognand} built-in function ({@code (lognot (logand x y))}). */
+	public static final String LOGNAND = "LOGNAND";
+
+	/** The {@code lognor} built-in function ({@code (lognot (logior x y))}). */
+	public static final String LOGNOR = "LOGNOR";
+
+	/**
+	 * The {@code logeqv} built-in function (bitwise equivalence, variadic; the left fold
+	 * of the two-argument {@code (lognot (logxor x y))}, {@code -1} of no arguments).
+	 */
+	public static final String LOGEQV = "LOGEQV";
+
 	/**
 	 * The {@code ash} built-in function (arithmetic shift; left when the count is
 	 * non-negative, right otherwise).
@@ -443,6 +455,14 @@ public final class LispNames {
 	 * integer with the low bits of a new value).
 	 */
 	public static final String DPB = "DPB";
+
+	/**
+	 * The {@code deposit-field} built-in function: {@code (deposit-field newbyte
+	 * bytespec integer)} replaces the byte specifier's field of {@code integer} with
+	 * newbyte's bits AT that field (unlike {@code dpb}, which deposits newbyte's low
+	 * bits).
+	 */
+	public static final String DEPOSIT_FIELD = "DEPOSIT-FIELD";
 
 	// Comparison
 
@@ -7500,6 +7520,12 @@ public final class LispNames {
 	 * {@link #DECODE_FLOAT}.
 	 */
 	public static final String SCALE_FLOAT = "SCALE-FLOAT";
+
+	/**
+	 * The {@code float-radix} built-in function (the radix of the float representation,
+	 * always 2: every float here is a binary double).
+	 */
+	public static final String FLOAT_RADIX = "FLOAT-RADIX";
 
 	/**
 	 * The {@code typep} macro -- lite: the type specifier must be a literal (quoted)

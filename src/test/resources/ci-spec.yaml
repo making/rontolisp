@@ -3991,6 +3991,33 @@ cases:
       T
       T
       T
+  - name: lognand-lognor-logeqv
+    source: |
+      (print (lognand 0 0))
+      (print (lognand -1 123))
+      (print (lognor 0 0))
+      (print (lognor 0 -1))
+      (print (logeqv))
+      (print (logeqv 1231))
+      (print (logeqv 12 10))
+      (print (logeqv 27 22 53))
+      (print (funcall #'lognand 0 0))
+      (print (funcall #'lognor 0 -1))
+      (print (funcall #'logeqv 27 22 53))
+      (print (apply #'logeqv '(27 22 53)))
+    expected: |
+      -1
+      -124
+      -1
+      0
+      -1
+      1231
+      -7
+      56
+      -1
+      0
+      56
+      56
   - name: byte-field-ops
     source: |
       (print (byte-size (byte 8 3)))
@@ -4010,6 +4037,23 @@ cases:
       240
       80
       (15 0 3)
+  - name: deposit-field-and-float-radix
+    source: |
+      (print (deposit-field 0 (byte 4 0) 255))
+      (print (deposit-field 5 (byte 4 4) 0))
+      (print (deposit-field 240 (byte 4 4) 0))
+      (print (funcall #'deposit-field 0 (byte 4 0) 255))
+      (print (float-radix 1.0))
+      (print (float-radix -0.5))
+      (print (funcall #'float-radix 1.0))
+    expected: |
+      240
+      0
+      240
+      240
+      2
+      2
+      2
   - name: list-sequence-additions
     source: |
       (print (list* 1 2 '(3 4)))

@@ -1564,11 +1564,13 @@ public final class BuiltinFunctionWrappers {
 			// Bitwise integer operations
 			binary(LispNames.LOGAND), binary(LispNames.LOGIOR), binary(LispNames.LOGXOR), unary(LispNames.LOGNOT),
 			binary(LispNames.LOGANDC1), binary(LispNames.LOGANDC2), binary(LispNames.LOGORC1),
-			binary(LispNames.LOGORC2), binary(LispNames.ASH), unary(LispNames.INTEGER_LENGTH),
-			binary(LispNames.LOGBITP), binary(LispNames.LOGTEST),
+			binary(LispNames.LOGORC2), binary(LispNames.LOGNAND), binary(LispNames.LOGNOR),
+			variadicIdentity(LispNames.LOGEQV, new LispInteger(-1)), binary(LispNames.ASH),
+			unary(LispNames.INTEGER_LENGTH), binary(LispNames.LOGBITP), binary(LispNames.LOGTEST),
 			// Byte-field operations (macro-lowered to list/car/ash/logand/logior/lognot)
 			binary(LispNames.BYTE), unary(LispNames.BYTE_SIZE), unary(LispNames.BYTE_POSITION), binary(LispNames.LDB),
-			ternary(LispNames.DPB), binary(LispNames.MASK_FIELD), binary(LispNames.SCALE_FLOAT),
+			ternary(LispNames.DPB), ternary(LispNames.DEPOSIT_FIELD), binary(LispNames.MASK_FIELD),
+			binary(LispNames.SCALE_FLOAT), unary(LispNames.FLOAT_RADIX),
 			// bfloat16 bit reinterpretation, a real function on all four backends --
 			// unlike the %ieee754-* quartet, which WASM cannot carry. The only
 			// PACKAGE-QUALIFIED entries here: the pair belongs to rontolisp, not to cl,

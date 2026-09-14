@@ -332,6 +332,25 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void bitwiseComplementFamilyCompilesToAPlainMvpModule() {
+		byte[] module = compile("""
+				(defun nor-f (x y) (lognor x y))
+				(defun nand-f (x y) (lognand x y))
+				(defun eqv-f (x y z) (logeqv x y z))
+				(defun radix-f (f) (float-radix f))
+				(rontolisp:wasm-export 'nor-f :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'nand-f :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'eqv-f :params '(:int :int :int) :returns :int)
+				(rontolisp:wasm-export 'radix-f :params '(:float) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(2).doesNotContainKey(5);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("nor-f", "nand-f", "eqv-f",
+				"radix-f");
+	}
+
+	@Test
 	void rejectsSetqOfANonLocal() {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (setq g (+ n 1)))

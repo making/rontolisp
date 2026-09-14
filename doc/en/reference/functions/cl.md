@@ -320,6 +320,9 @@ page.
 | `logandc2` | `(logandc2 12 10)` | `4` (AND of the first argument with the complement of the second) |
 | `logorc1` | `(logorc1 12 10)` | `-5` (OR of the complement of the first argument with the second) |
 | `logorc2` | `(logorc2 12 10)` | `-3` (OR of the first argument with the complement of the second) |
+| `lognand` | `(lognand 12 10)` | `-9` (NAND of the two arguments; `(lognot (logand a b))`) |
+| `lognor` | `(lognor 12 10)` | `-15` (NOR of the two arguments; `(lognot (logior a b))`) |
+| `logeqv` | `(logeqv 12 10)`, `(logeqv)`, `(logeqv 27 22 53)` | `-7`, `-1`, `56` (variadic bitwise equivalence, folded left) |
 | `ash` | `(ash 1 4)`, `(ash 255 -4)` | `16`, `15` (arithmetic shift: left for a non-negative count, right otherwise) |
 | `logtest` | `(logtest 1 3)`, `(logtest 1 2)` | `T`, `NIL` (any bits set in common; `(not (zerop (logand a b)))`) |
 | `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
@@ -370,7 +373,9 @@ page.
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | Like `vector-push` but grows the vector when full |
 | `subtypep` | `(subtypep 'integer 'number)` | `t` -- the built-in type lattice plus `defclass`/condition hierarchies; a single value, unknown pairs answer `nil`; the compilers fold literal specifiers at compile time |
 | `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- the `ldb` field left in its original position |
+| `deposit-field` | `(deposit-field 0 (byte 4 0) 255)`, `(deposit-field 5 (byte 4 4) 0)` | `240`, `0` -- replace the byte field with `newbyte`'s bits at that field (unlike `dpb`'s low bits) |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- `float × 2^n` with IEEE semantics |
+| `float-radix` | `(float-radix 1.0)` | `2` -- the radix of the float representation (always binary) |
 | `decode-float` | `(decode-float 6.5)` | `0.8125`, `3`, `1.0` -- significand in [1/2, 1), binary exponent, sign |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |
 | `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` |

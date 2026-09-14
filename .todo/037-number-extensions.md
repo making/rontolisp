@@ -1,3 +1,28 @@
+> **Update 2026-09-14 (numbers Slice A landed):** `float-radix`, `logeqv`,
+> `lognor`, `lognand` and `deposit-field` shipped on all four backends
+> (interpreter `Environment` function + `LispMacroExpander` lowering +
+> JVM/WASM-GC compiler cases + no-GC `expandMacro` for the four whose expansions
+> use only scalar primitives + `BuiltinFunctionWrappers` first-class entries +
+> `CL_FUNCTIONS` classification + `ci-spec.yaml` cases + EN/JA docs). Measured as
+> a diff of failing ANSI test NAMES: **numbers +106 / misc +35, 0 regressed**
+> (141 total). Two findings: (1) `deposit-field` is NOT `dpb` -- `dpb` deposits
+> newbyte's LOW size bits (`dpb.lsp` checks `(logbitp (- i pos) newbyte)`) while
+> `deposit-field` deposits newbyte's bits AT the field (`deposit-field.lsp`
+> checks `(logbitp i newbyte)`); the first cut shipped the `dpb` spelling and
+> `DEPOSIT-FIELD.1/.2` caught it. (2) `MISC.47/.48` are blocked by a
+> PRE-EXISTING `ash` defect, not by `lognor`: a shift count outside the int
+> range overflows `(int) count` positive (`Environment` `ash`), so
+> `(ash a (min 0 a))` with `a = -2878148992` builds a gigantic bignum instead of
+> answering `-1`; `lognor` then faithfully computes `~a`. Still open from this
+> slice's reach: Slice B/C (`rational`, `rationalize`, `logcount`,
+> `integer-decode-float` -- WASM-GC runtime work / continued fractions, separate
+> scale), the `ash` huge-count defect above, `MISC.512` (round's second value
+> lost through `catch`/`throw`), the six `LOGEQV/LOGNAND/LOGNOR.ERROR.1/.2`
+> `*MINI-UNIVERSE*` failures (universe cascade, `.todo/715` section 1), the
+> thirteen `*.12/*.17/*.18`-family remainders (need `rational` / single-float
+> epsilon model), and no-GC `deposit-field` (parity with `dpb`, which has no
+> no-GC path either -- a field replacement needs the bytespec list).
+>
 > **Update 2026-07-05 (parse-number e2e):** `/=` shipped (pairwise-different
 > expansion over `=`, variadic), plus lite `complex` (zero imaginary part
 > only), float-type + computed-type `coerce`, and the predefined

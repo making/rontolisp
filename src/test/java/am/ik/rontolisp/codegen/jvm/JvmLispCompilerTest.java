@@ -9328,6 +9328,26 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLogNandNorEqv() throws Exception {
+		assertThat(compileAndRun(
+				"(print (lognand 0 0)) (print (lognand 0 -1)) (print (lognand -1 123)) (print (lognor 0 0)) (print (lognor 0 -1)) (print (lognor -1 123))"))
+			.isEqualTo("-1\n-1\n-124\n-1\n0\n0");
+		assertThat(compileAndRun(
+				"(print (logeqv)) (print (logeqv 1231)) (print (logeqv 12 10)) (print (logeqv 27 22 53)) (print (funcall #'lognand 0 0)) (print (funcall #'lognor 0 -1)) (print (funcall #'logeqv 27 22 53)) (print (apply #'logeqv '(27 22 53)))"))
+			.isEqualTo("-1\n1231\n-7\n56\n-1\n0\n56\n56");
+	}
+
+	@Test
+	void compileAndRunDepositFieldAndFloatRadix() throws Exception {
+		assertThat(compileAndRun(
+				"(print (deposit-field 0 (byte 4 0) 255)) (print (deposit-field 5 (byte 4 4) 0)) (print (deposit-field 240 (byte 4 4) 0)) (print (deposit-field -1 (byte 0 0) 5)) (print (deposit-field 255 (byte 4 (+ 2 2)) 0)) (print (funcall #'deposit-field 0 (byte 4 0) 255)) (print (funcall #'deposit-field 5 (byte 4 4) 0))"))
+			.isEqualTo("240\n0\n240\n5\n240\n240\n0");
+		assertThat(compileAndRun(
+				"(print (float-radix 1.0)) (print (float-radix -0.5)) (print (funcall #'float-radix 1.0))"))
+			.isEqualTo("2\n2\n2");
+	}
+
+	@Test
 	void compileAndRunByteFieldOps() throws Exception {
 		assertThat(compileAndRun(
 				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))

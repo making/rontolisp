@@ -7773,6 +7773,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// family there is no one-argument native form to fall through to.
 			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE ->
 				LispMacroExpander.expandFFamily(cons);
+			// lognand/lognor/logeqv lower to the scalar bitwise primitives this
+			// backend already compiles, and float-radix to its constant (the operand
+			// still evaluated once). deposit-field stays out like dpb: a field
+			// replacement needs the bytespec list the general expansion reads back.
+			case LispNames.LOGNAND, LispNames.LOGNOR -> LispMacroExpander.expandLogComplement(cons);
+			case LispNames.LOGEQV -> LispMacroExpander.expandLogEqv(cons);
+			case LispNames.FLOAT_RADIX -> LispMacroExpander.expandFloatRadix(cons);
 			default -> null;
 		};
 	}

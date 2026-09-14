@@ -140,6 +140,21 @@ runtime package API and complex numbers. The corpus uses only
 Only the entries whose FINDING outlives the change are kept; the rest are in
 `.todo/history/`.
 
+- **2026-09-14, `.todo/037` numbers Slice A** -- `float-radix`, `logeqv`,
+  `lognor`, `lognand`, `deposit-field`, expansion-only on all four backends.
+  **numbers +106, misc +35, 0 regressed**, measured as a diff of failing test
+  NAMES (the slice priced ~158; the rest needs Slice B/C plus three
+  second-reasons below). Two findings: `deposit-field` is NOT `dpb` (the suite's
+  `dpb.lsp` checks `(logbitp (- i pos) newbyte)` where `deposit-field.lsp`
+  checks `(logbitp i newbyte)` -- the first cut shipped the `dpb` spelling and
+  `DEPOSIT-FIELD.1/.2` caught it), and the `MISC.47/.48` remainder is a
+  PRE-EXISTING `ash` defect, not a `lognor` one (a count outside the int range
+  overflows `(int) count` positive, so a huge right shift builds a bignum;
+  `lognor` then correctly answers `~a`).
+  Remainders this slice does NOT own: `rational`/`rationalize` (Slice B),
+  single-float epsilon (`*.12`), the six `*MINI-UNIVERSE*` error tests
+  (section 1), `MISC.512` (round's second value through `catch`).
+
 - **2026-09-14, `.todo/029` (four loop slices)** -- uninterned `#:kw` spellings,
   NIL-as-no-binding, any-order numeric sub-clauses, the named loop's implicit
   block. **+113, 0 regressed** on the `iteration` chapter (63.6% -> 77.0%),

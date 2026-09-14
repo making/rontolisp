@@ -59,6 +59,7 @@ categories:
       - { slug: random, name: "random" }
       - { slug: make-random-state, name: "make-random-state" }
       - { slug: scale-float, name: "scale-float" }
+      - { slug: float-radix, name: "float-radix" }
       - { slug: decode-float, name: "decode-float" }
   - title: "Complex Numbers"
     index_page: reference/functions/cl.md
@@ -82,6 +83,9 @@ categories:
       - { slug: logandc2, name: "logandc2" }
       - { slug: logorc1, name: "logorc1" }
       - { slug: logorc2, name: "logorc2" }
+      - { slug: lognand, name: "lognand" }
+      - { slug: lognor, name: "lognor" }
+      - { slug: logeqv, name: "logeqv" }
       - { slug: ash, name: "ash" }
       - { slug: integer-length, name: "integer-length" }
       - { slug: logbitp, name: "logbitp" }
@@ -91,6 +95,7 @@ categories:
       - { slug: byte-position, name: "byte-position" }
       - { slug: ldb, name: "ldb" }
       - { slug: dpb, name: "dpb" }
+      - { slug: deposit-field, name: "deposit-field" }
       - { slug: mask-field, name: "mask-field" }
   - title: "Equality & Type Predicates"
     index_page: reference/functions/cl.md
