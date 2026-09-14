@@ -5,7 +5,7 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-09-14
-- rontolisp: 0.1.0-SNAPSHOT (`5a43631`)
+- rontolisp: 0.1.0-SNAPSHOT (`7c412ea`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
@@ -230,12 +230,14 @@ judged on.
 | globals | 56 | **none** |
 | custom | 148 | **none** |
 
-**The total is the least informative row.** `-Wl,--export-all` is in hike's build
-line, so its export section is every internal function plus the linker's own
-symbols (`__dso_handle`, `__data_end`, `__stack_low`, `__heap_base`) -- 378 bytes
-for 24 entries where the page calls four. That plus the 148-byte custom section
-is 526 bytes of the 1,490 that say nothing about code generation. Read `code`
-first.
+**The total is the least informative row**, and here it is mostly a build flag.
+hike's build line carries `-Wl,--export-all`, so its export section is every
+internal function plus the linker's own symbols -- 378 bytes for 24 entries where
+the page calls four -- and exporting everything also keeps its thin wrappers and
+its globals reachable, so they cannot be inlined or dropped. Rebuilding it with
+only those four exported was **measured at roughly 30% off the module**, most of
+it outside the export section; its 148-byte name section is metadata on top of
+that. Read `code` first.
 
 Two rows are worth reading past their totals:
 
