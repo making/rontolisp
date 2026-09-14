@@ -1071,6 +1071,11 @@ public final class LispMacroExpander {
 				n = qn.member();
 			}
 			n = n.toLowerCase(java.util.Locale.ROOT);
+			// An uninterned spelling (#:for) denotes the same keyword: `#:` is a
+			// package marker, not part of the name (see LispSymbol.displayName).
+			if (n.startsWith("#:") && n.length() > 2) {
+				n = n.substring(2);
+			}
 			if (n.startsWith(":") && n.length() > 1) {
 				n = n.substring(1);
 			}
@@ -1273,11 +1278,33 @@ public final class LispMacroExpander {
 			}
 			letParts.add(effectiveBindings.isEmpty() ? LispNil.INSTANCE : listToCons(effectiveBindings));
 			letParts.addAll(letBody);
-			LispVal expansion = makeBlock(listToCons(letParts));
+			LispVal expansion = listToCons(letParts);
 			if (this.blockName != null) {
+				// A named loop establishes no NIL block of its own: without the
+				// internal %block a bare `return` passes through the named block to
+				// the outer NIL block, while `return-from` with the loop name (and
+				// the loop's own exits, see loopExit) still lands in the loop.
 				expansion = listToCons(List.of(new LispSymbol(LispNames.BLOCK), this.blockName, expansion));
 			}
+			else {
+				expansion = makeBlock(expansion);
+			}
 			return expansion;
+		}
+
+		/**
+		 * A loop-exit return: a bare {@code return} for an anonymous loop (caught by its
+		 * internal %block), {@code (return-from name ...)} for a named one (which has no
+		 * %block, so a bare {@code return} would pass through to the outer NIL block).
+		 * Used for the loop's own exits only -- the {@code return} clause,
+		 * {@code always}/{@code never}/{@code thereis} and the epilogue -- never for user
+		 * forms, which keep their pass-through meaning.
+		 */
+		private LispVal loopExit(LispVal value) {
+			if (this.blockName == null) {
+				return makeReturn(value);
+			}
+			return listToCons(List.of(new LispSymbol(LispNames.RETURN_FROM), this.blockName, value));
 		}
 
 		private void parse() {
@@ -1305,7 +1332,7 @@ public final class LispMacroExpander {
 				case "initially" -> initially.addAll(readForms());
 				case "finally" -> finallyForms.addAll(readForms());
 				case "do", "doing" -> mainBody.addAll(readForms());
-				case "return" -> mainBody.add(makeReturn(nextForm()));
+				case "return" -> mainBody.add(loopExit(nextForm()));
 				case "when", "if" -> mainBody.add(parseConditional(false));
 				case "unless" -> mainBody.add(parseConditional(true));
 				case "collect", "collecting", "append", "appending", "nconc", "nconcing", "sum", "summing", "count",
@@ -1407,6 +1434,11 @@ public final class LispMacroExpander {
 
 		private ForPiece parseForPiece() {
 			LispVal var = nextForm();
+			if (var instanceof LispNil) {
+				// NIL as a loop variable means "don't bind anything": step a hidden
+				// variable instead, so init/step/limit forms still evaluate.
+				var = gensym("nil");
+			}
 			if (!(var instanceof LispSymbol) && !(var instanceof LispCons)) {
 				throw new IllegalArgumentException(
 						"loop: for expects a variable or destructuring pattern, got: " + var.print());
@@ -1570,54 +1602,76 @@ public final class LispMacroExpander {
 		}
 
 		private void parseForNumeric(ForPiece piece, LispSymbol var) {
-			String k = peekKeyword();
-			boolean down = false;
-			LispVal from;
-			if ("from".equals(k) || "upfrom".equals(k) || "downfrom".equals(k)) {
-				down = "downfrom".equals(k);
-				pos++;
-				from = nextForm();
-			}
-			else {
-				from = new LispInteger(0);
-			}
-			piece.binds.add(new ForBinding(var, from, true));
+			// The from/limit/by sub-clauses may appear in any order, each at most
+			// once. The once-only bindings emit in textual order as the clauses are
+			// read, so side-effecting forms evaluate in textual order (ansi-test
+			// iteration/loop1.lsp LOOP.1.30-.32 pin the order). Literals stay in
+			// place -- binding one behind a gensym only hides the constant from the
+			// compilers' fused comparison, and a literal cannot have side effects
+			// for the once-only binding to guard.
+			boolean fromSeen = false;
 			String limitKw = null;
 			LispVal limitRef = null;
-			String lk = peekKeyword();
-			if ("to".equals(lk) || "upto".equals(lk) || "below".equals(lk) || "downto".equals(lk)
-					|| "above".equals(lk)) {
-				limitKw = lk;
-				pos++;
-				// A literal limit is used in place -- binding it behind a gensym only
-				// hides the constant from the compilers' fused comparison, and a
-				// literal cannot have side effects for the once-only binding to guard.
-				LispVal limitForm = nextForm();
-				if (isSelfEvaluatingNumber(limitForm)) {
-					limitRef = limitForm;
+			boolean bySeen = false;
+			// (+ i 1) is the shape the backends fold or fuse; (+ i __by) keeps
+			// every iteration on the generic (or checked-helper) add.
+			LispVal byRef = new LispInteger(1);
+			boolean down = false;
+			while (true) {
+				String k = peekKeyword();
+				if ("from".equals(k) || "upfrom".equals(k) || "downfrom".equals(k)) {
+					if (fromSeen) {
+						throw new IllegalArgumentException("loop: duplicate from clause");
+					}
+					fromSeen = true;
+					if ("downfrom".equals(k)) {
+						down = true;
+					}
+					pos++;
+					piece.binds.add(new ForBinding(var, nextForm(), true));
+				}
+				else if ("to".equals(k) || "upto".equals(k) || "below".equals(k) || "downto".equals(k)
+						|| "above".equals(k)) {
+					if (limitKw != null) {
+						throw new IllegalArgumentException("loop: duplicate limit clause");
+					}
+					limitKw = k;
+					pos++;
+					LispVal limitForm = nextForm();
+					if (isSelfEvaluatingNumber(limitForm)) {
+						limitRef = limitForm;
+					}
+					else {
+						LispSymbol limitVar = gensym("limit");
+						piece.binds.add(new ForBinding(limitVar, limitForm, false));
+						limitRef = limitVar;
+					}
+					if ("downto".equals(k) || "above".equals(k)) {
+						down = true;
+					}
+				}
+				else if ("by".equals(k)) {
+					if (bySeen) {
+						throw new IllegalArgumentException("loop: duplicate by clause");
+					}
+					bySeen = true;
+					pos++;
+					LispVal byForm = nextForm();
+					if (isSelfEvaluatingNumber(byForm)) {
+						byRef = byForm;
+					}
+					else {
+						LispSymbol byVar = gensym("by");
+						piece.binds.add(new ForBinding(byVar, byForm, false));
+						byRef = byVar;
+					}
 				}
 				else {
-					LispSymbol limitVar = gensym("limit");
-					piece.binds.add(new ForBinding(limitVar, limitForm, false));
-					limitRef = limitVar;
-				}
-				if ("downto".equals(lk) || "above".equals(lk)) {
-					down = true;
+					break;
 				}
 			}
-			LispVal by = new LispInteger(1);
-			if ("by".equals(peekKeyword())) {
-				pos++;
-				by = nextForm();
-			}
-			// Same for the step: `for i from 16 below 64` used to bind __by = 1 and step
-			// (+ i __by), whose non-literal operand kept every iteration on the generic
-			// (or checked-helper) add; (+ i 1) is the shape the backends fold or fuse.
-			LispVal byRef = by;
-			if (!isSelfEvaluatingNumber(by)) {
-				LispSymbol byVar = gensym("by");
-				piece.binds.add(new ForBinding(byVar, by, false));
-				byRef = byVar;
+			if (!fromSeen) {
+				piece.binds.add(0, new ForBinding(var, new LispInteger(0), true));
 			}
 			piece.steps.add(new LispVal[] { var, call(down ? LispNames.SUB : LispNames.ADD, var, byRef) });
 			if (limitRef != null) {
@@ -1646,10 +1700,20 @@ public final class LispMacroExpander {
 		private void parseForList(ForPiece piece, LispVal pattern, String sub) {
 			pos++; // consume in/on
 			LispVal listForm = nextForm();
-			LispVal byFn = null;
+			// The step function is a loop parameter, like the numeric from/to/by
+			// forms: its form evaluates once at loop entry, before the first body
+			// pass (ansi-test LOOP.13.27/.28/.67/.68 exit from there) -- and after
+			// the list form, in textual order.
+			LispVal byForm = null;
 			if ("by".equals(peekKeyword())) {
 				pos++;
-				byFn = normalizeFunctionDesignator(nextForm());
+				byForm = normalizeFunctionDesignator(nextForm());
+			}
+			LispVal byFn = byForm;
+			LispSymbol byVar = null;
+			if (byForm != null && !(byForm instanceof LispSymbol)) {
+				byVar = gensym("byfn");
+				byFn = byVar;
 			}
 			if ("on".equals(sub)) {
 				// The variable is bound to successive tails of the list.
@@ -1676,6 +1740,9 @@ public final class LispMacroExpander {
 				piece.endTests.add(makeNot(call(LispNames.CONSP, cursor)));
 				destructureInto(piece, pattern, call(LispNames.CAR, cursor));
 				piece.steps.add(new LispVal[] { cursor, stepCdr(cursor, byFn) });
+			}
+			if (byVar != null && byForm != null) {
+				piece.binds.add(new ForBinding(byVar, byForm, false));
 			}
 		}
 
@@ -1786,7 +1853,7 @@ public final class LispMacroExpander {
 				pos++; // consume using
 				LispVal spec = nextForm();
 				if (!(spec instanceof LispCons specCons) || !(specCons.cdr() instanceof LispCons specTail)
-						|| !(specTail.car() instanceof LispSymbol usingSym)) {
+						|| (!(specTail.car() instanceof LispSymbol) && !(specTail.car() instanceof LispNil))) {
 					throw new IllegalArgumentException(
 							"loop: being hash clause expects using (hash-value V) / (hash-key K)");
 				}
@@ -1797,7 +1864,8 @@ public final class LispMacroExpander {
 					throw new IllegalArgumentException(
 							"loop: being hash `using` expects hash-key/hash-value, got: " + specKind);
 				}
-				usingVar = usingSym;
+				// A NIL companion means "don't bind it".
+				usingVar = specTail.car() instanceof LispSymbol s ? s : null;
 			}
 			// Snapshot the table into a (key . value) alist once, then walk it like a
 			// list.
@@ -1907,6 +1975,11 @@ public final class LispMacroExpander {
 			List<LispVal[]> group = new java.util.ArrayList<>(); // {pattern, init}
 			while (true) {
 				LispVal var = nextForm();
+				if (var instanceof LispNil) {
+					// NIL means "don't bind anything": evaluate the init once into a
+					// hidden variable.
+					var = gensym("nil");
+				}
 				if (!(var instanceof LispSymbol) && !(var instanceof LispCons)) {
 					throw new IllegalArgumentException("loop: with expects a variable, got: " + var.print());
 				}
@@ -1993,8 +2066,8 @@ public final class LispMacroExpander {
 		private void parseAlwaysNever(boolean never) {
 			setTerminationResult(true);
 			LispVal form = nextForm();
-			mainBody.add(never ? makeIf(form, makeReturn(LispNil.INSTANCE), LispNil.INSTANCE)
-					: makeIf(form, LispNil.INSTANCE, makeReturn(LispNil.INSTANCE)));
+			mainBody.add(never ? makeIf(form, loopExit(LispNil.INSTANCE), LispNil.INSTANCE)
+					: makeIf(form, LispNil.INSTANCE, loopExit(LispNil.INSTANCE)));
 		}
 
 		/**
@@ -2005,7 +2078,7 @@ public final class LispMacroExpander {
 			setTerminationResult(false);
 			LispSymbol val = gensym("thereis");
 			bindings.add(pair(val, LispNil.INSTANCE));
-			mainBody.add(makeProgn(List.of(setq(val, nextForm()), makeIf(val, makeReturn(val), LispNil.INSTANCE))));
+			mainBody.add(makeProgn(List.of(setq(val, nextForm()), makeIf(val, loopExit(val), LispNil.INSTANCE))));
 		}
 
 		private void setTerminationResult(boolean t) {
@@ -2092,7 +2165,7 @@ public final class LispMacroExpander {
 			pos++;
 			return switch (kw) {
 				case "do", "doing" -> makeProgn(readForms());
-				case "return" -> makeReturn(nextForm());
+				case "return" -> loopExit(nextForm());
 				case "when", "if" -> parseConditional(false);
 				case "unless" -> parseConditional(true);
 				case "collect", "collecting", "append", "appending", "nconc", "nconcing", "sum", "summing", "count",
@@ -2284,7 +2357,7 @@ public final class LispMacroExpander {
 			parts.add(new LispSymbol(LispNames.PROGN));
 			parts.addAll(postLoop);
 			parts.addAll(finallyForms);
-			parts.add(makeReturn(resultExpr()));
+			parts.add(loopExit(resultExpr()));
 			return listToCons(parts);
 		}
 
@@ -2382,6 +2455,11 @@ public final class LispMacroExpander {
 				n = qn.member();
 			}
 			n = n.toLowerCase(java.util.Locale.ROOT);
+			// As in loopKeyword: an uninterned spelling (#:being) denotes the same
+			// filler (see LispSymbol.displayName).
+			if (n.startsWith("#:") && n.length() > 2) {
+				n = n.substring(2);
+			}
 			if (n.startsWith(":") && n.length() > 1) {
 				n = n.substring(1);
 			}

@@ -4058,6 +4058,54 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLoopUninternedKeywords() throws Exception {
+		// Uninterned (#:) spellings denote the same loop keywords (ansi-test
+		// iteration/loop16.lsp).
+		assertThat(compileAndRun("(print (loop #:for i #:from 1 #:to 10 #:collect i))"))
+			.isEqualTo("(1 2 3 4 5 6 7 8 9 10)");
+		assertThat(compileAndRun("(print (loop #:for x #:in '(a b c) #:collecting x))")).isEqualTo("(A B C)");
+		assertThat(compileAndRun("(print (loop #:with x = 1 #:and y = 2 #:return (values x y)))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (loop #:named foo #:doing (return-from foo 1)))")).isEqualTo("1");
+	}
+
+	@Test
+	void compileAndRunLoopNilVariable() throws Exception {
+		// NIL as a loop variable means "don't bind anything".
+		assertThat(compileAndRun("(print (let ((i 0)) (loop for nil from 10 to 15 collect (incf i))))"))
+			.isEqualTo("(1 2 3 4 5 6)");
+		assertThat(compileAndRun("(print (loop for nil in nil do (return t)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (loop with nil = nil return nil))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (loop with nil = (return t) return nil))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (loop with (nil a) = '(1 2) return a))")).isEqualTo("2");
+	}
+
+	@Test
+	void compileAndRunLoopNumericAnyOrder() throws Exception {
+		// The from/limit/by sub-clauses may appear in any order, each at most once.
+		assertThat(compileAndRun("(print (loop for x to 10 from 1 collect x))")).isEqualTo("(1 2 3 4 5 6 7 8 9 10)");
+		assertThat(compileAndRun("(print (loop for x by 2 to 10 from 1 collect x))")).isEqualTo("(1 3 5 7 9)");
+		assertThat(compileAndRun("(print (loop for x by 2 to 10 collect x))")).isEqualTo("(0 2 4 6 8 10)");
+		assertThat(compileAndRun("(print (loop for x above 6 from 14 by 2 collect x))")).isEqualTo("(14 12 10 8)");
+	}
+
+	@Test
+	void compileAndRunLoopNamedPassesReturnThrough() throws Exception {
+		// A named loop establishes no NIL block of its own: a bare `return`
+		// passes through to the outer NIL block, while the loop's own exits
+		// still land in the loop.
+		assertThat(compileAndRun("(print (loop named foo return 'a))")).isEqualTo("A");
+		assertThat(compileAndRun("(print (block nil (loop named foo do (return :good)) :bad))")).isEqualTo(":GOOD");
+		assertThat(compileAndRun("(print (loop named foo for i from 1 to 3 collect i))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (loop named foo for x in '(1 2 3) when x return x))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (loop named foo for i in '(a b c) by (return-from foo :good) return :bad))"))
+			.isEqualTo(":GOOD");
+		assertThat(compileAndRun(
+				"(print (block nil (loop named foo for i in '(a b c) by (return :good) return :bad) :bad))"))
+			.isEqualTo(":GOOD");
+		assertThat(compileAndRun("(print (loop return 'a))")).isEqualTo("A");
+	}
+
+	@Test
 	void compileAndRunLoopListAndIndex() throws Exception {
 		assertThat(compileAndRun("(print (loop for x in '(a b c) for i from 0 collect (list i x)))"))
 			.isEqualTo("((0 A) (1 B) (2 C))");

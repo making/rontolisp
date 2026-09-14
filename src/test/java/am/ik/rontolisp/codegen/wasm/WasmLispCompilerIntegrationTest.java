@@ -4577,6 +4577,24 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("(9 8 3)");
 		assertThat(compileAndRun("(print (loop for x in '(1 2 3 4 5) for a = x then (+ a x) finally (return a)))"))
 			.isEqualTo("15");
+		// Uninterned (#:) spellings denote the same loop keywords (ansi-test
+		// iteration/loop16.lsp).
+		assertThat(compileAndRun("(print (loop #:for i #:from 1 #:to 10 #:collect i))"))
+			.isEqualTo("(1 2 3 4 5 6 7 8 9 10)");
+		assertThat(compileAndRun("(print (loop #:for x #:in '(a b c) #:collecting x))")).isEqualTo("(A B C)");
+		// NIL as a loop variable means "don't bind anything".
+		assertThat(compileAndRun("(print (let ((i 0)) (loop for nil from 10 to 15 collect (incf i))))"))
+			.isEqualTo("(1 2 3 4 5 6)");
+		assertThat(compileAndRun("(print (loop with nil = nil return nil))")).isEqualTo("NIL");
+		// The from/limit/by sub-clauses may appear in any order, each at most once.
+		assertThat(compileAndRun("(print (loop for x to 10 from 1 collect x))")).isEqualTo("(1 2 3 4 5 6 7 8 9 10)");
+		assertThat(compileAndRun("(print (loop for x by 2 to 10 collect x))")).isEqualTo("(0 2 4 6 8 10)");
+		// A named loop establishes no NIL block: bare `return` passes through.
+		assertThat(compileAndRun("(print (loop named foo return 'a))")).isEqualTo("A");
+		assertThat(compileAndRun("(print (block nil (loop named foo do (return :good)) :bad))")).isEqualTo(":GOOD");
+		assertThat(compileAndRun("(print (loop named foo for i from 1 to 3 collect i))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (loop named foo for i in '(a b c) by (return-from foo :good) return :bad))"))
+			.isEqualTo(":GOOD");
 	}
 
 	@Test

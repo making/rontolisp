@@ -26,6 +26,14 @@ first pass, reads **13,808 / 19,482 (70.9%)**. The checked-in report is NOT refr
 local run (one machine, one stall window -- `ansi-test/README.md`), so it still
 carries the pre-797 numbers until the daily workflow rewrites it.
 
+The daily workflow has since rewritten it twice: the checked-in report now reads
+**13,810 / 19,485 (70.9%)** with `reader` at 53.6% (the `.todo/807` first pass,
+measured). A local `iteration`-only run on 2026-09-14, after the `.todo/029`
+slices below landed, fixes 113 chapter tests with 0 regressed and no lost-form
+change -- projected suite total **13,923 / 19,485 (71.5%)**, `iteration` 63.6%
+-> 77.0%. Projection, not a re-measure: only the `iteration` chapter was run
+(`results/partial.md`).
+
 Against the previous reading in this file (55.5%, 10,809 / 19,461): `.todo/736`,
 `.todo/740`+`.todo/776`, `.todo/744`, `.todo/775`, `.todo/778`, `.todo/772`,
 `.todo/773`, `.todo/679`, `.todo/741`, `.todo/742`, `.todo/743` and the
@@ -77,7 +85,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 |---|---:|---|
 | the reader syntax-type surface, re-measured 2026-09-13 a SECOND time, after `.todo/807`'s first pass (`#+` at runtime, radix rationals and `#<n>R`, reader labels) closed 35 | 108 | `.todo/807` -- whose largest remaining family is not a syntax at all but "a read error must be a `reader-error`/`end-of-file` CONDITION", 28 tests, and needs `.todo/039` first |
 | bit arrays: the eleven `bit-*` ops (~310) plus `bit-vector-p` 38 / `simple-bit-vector-p` 28 / `array-in-bounds-p` 27 | ~400 | `.todo/043`, `.todo/180` |
-| `loop` -- 173 of `iteration`'s 208 wrong values | 173 | `.todo/029` |
+| `loop` -- four slices landed 2026-09-14 for 113 (uninterned `#:kw` 45, NIL no-binding 15, any-order numeric 12, named-loop block 39; `iteration` 63.6% -> 77.0%, 0 regressed); left: missing `program-error`/`type-error` validation ~30, hash/`across` destructuring ~9, dotted `append` ~5, typed init ~6 | ~50 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
 | `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 | ~180 | `.todo/037` |
@@ -131,6 +139,17 @@ runtime package API and complex numbers. The corpus uses only
 
 Only the entries whose FINDING outlives the change are kept; the rest are in
 `.todo/history/`.
+
+- **2026-09-14, `.todo/029` (four loop slices)** -- uninterned `#:kw` spellings,
+  NIL-as-no-binding, any-order numeric sub-clauses, the named loop's implicit
+  block. **+113, 0 regressed** on the `iteration` chapter (63.6% -> 77.0%),
+  measured as a diff of failing test NAMES. The scoping pass priced the chapter
+  at 307 and split it eight ways first: the extra-`T` 74 belong to `.todo/213`,
+  package-`being` ~18 to `.todo/156`, 8 `:BAD` to the do-family expanders --
+  **a chapter census is not a mechanism census**. Two narrowings were measured,
+  not reasoned: `#:being` needed the SAME strip in the filler's `plainName`
+  (LOOP.16.64-.75 re-failed there after the keyword fix), and list `by` must
+  evaluate once at entry AFTER the list form (LOOP.13.27/.28 pin it).
 
 - **2026-08-12** -- `find-symbol`/`intern` answer the accessibility status as
   their second value. `symbols` 4.2% -> 58.4%, the largest single move the

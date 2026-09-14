@@ -4136,6 +4136,63 @@ cases:
       (1 4 9 16 25)
       (9 8 3)
       15
+  - name: loop-macro-uninterned-keywords
+    # Uninterned (#:) spellings denote the same loop keywords (ansi-test
+    # iteration/loop16.lsp).
+    source: |
+      (print (loop #:for i #:from 1 #:to 10 #:collect i))
+      (print (loop #:for x #:in '(a b c) #:collecting x))
+      (print (loop #:with x = 1 #:and y = 2 #:return (values x y)))
+      (print (loop #:named foo #:doing (return-from foo 1)))
+    expected: |
+      (1 2 3 4 5 6 7 8 9 10)
+      (A B C)
+      1
+      1
+  - name: loop-macro-nil-variable
+    # NIL as a loop variable means "don't bind anything".
+    source: |
+      (print (let ((i 0)) (loop for nil from 10 to 15 collect (incf i))))
+      (print (loop for nil in nil do (return t)))
+      (print (loop with nil = nil return nil))
+      (print (loop with nil = (return t) return nil))
+      (print (loop with (nil a) = '(1 2) return a))
+    expected: |
+      (1 2 3 4 5 6)
+      NIL
+      NIL
+      T
+      2
+  - name: loop-macro-numeric-any-order
+    # The from/limit/by sub-clauses may appear in any order, each at most once.
+    source: |
+      (print (loop for x to 10 from 1 collect x))
+      (print (loop for x by 2 to 10 from 1 collect x))
+      (print (loop for x by 2 to 10 collect x))
+      (print (loop for x above 6 from 14 by 2 collect x))
+    expected: |
+      (1 2 3 4 5 6 7 8 9 10)
+      (1 3 5 7 9)
+      (0 2 4 6 8 10)
+      (14 12 10 8)
+  - name: loop-macro-named-return
+    # A named loop establishes no NIL block of its own: a bare `return` passes
+    # through to the outer NIL block, while the loop's own exits still land in
+    # the loop.
+    source: |
+      (print (loop named foo return 'a))
+      (print (block nil (loop named foo do (return :good)) :bad))
+      (print (loop named foo for i from 1 to 3 collect i))
+      (print (loop named foo for x in '(1 2 3) when x return x))
+      (print (loop named foo for i in '(a b c) by (return-from foo :good) return :bad))
+      (print (block nil (loop named foo for i in '(a b c) by (return :good) return :bad) :bad))
+    expected: |
+      A
+      :GOOD
+      (1 2 3)
+      1
+      :GOOD
+      :GOOD
   - name: loop-macro-type-spec
     # ANSI's for-as-clause is `for var [type-spec] ...`, and type-spec has two
     # spellings: explicit `of-type d-type-spec` and the simple bare

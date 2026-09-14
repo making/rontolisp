@@ -4127,6 +4127,102 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLoopUninternedKeywords() {
+		// Uninterned (#:) spellings denote the same loop keywords (ansi-test
+		// iteration/loop16.lsp).
+		assertThat(eval("(loop #:for i #:from 1 #:to 10 #:collect i)").print()).isEqualTo("(1 2 3 4 5 6 7 8 9 10)");
+		assertThat(eval("(loop #:for i #:upfrom 1 #:below 10 #:by 2 #:collect i)").print()).isEqualTo("(1 3 5 7 9)");
+		assertThat(eval("(loop #:for x #:in '(a b c) #:collecting x)").print()).isEqualTo("(A B C)");
+		assertThat(eval("(loop #:for x #:in '(1 2 3) #:summing x)")).isEqualTo(new LispInteger(6));
+		assertThat(eval("(loop #:with x = 1 #:and y = 2 #:return (values x y))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(loop #:named foo #:doing (return-from foo 1))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(loop #:for x #:being #:the #:hash-keys #:of (make-hash-table) #:count t)"))
+			.isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void evalLoopNilVariable() {
+		// NIL as a loop variable means "don't bind anything" (ansi-test
+		// iteration/loop1.lsp LOOP.1.50-.56, loop2.lsp LOOP.2.16, loop3.lsp LOOP.3.16,
+		// loop6.lsp LOOP.6.19-.22, loop8.lsp LOOP.8.17-.19).
+		assertThat(eval("(let ((i 0)) (loop for nil from 10 to 15 collect (incf i)))").print())
+			.isEqualTo("(1 2 3 4 5 6)");
+		assertThat(eval("(let ((i 0)) (loop for nil from 1 to 4 for nil from 1 to 10 collect (incf i)))").print())
+			.isEqualTo("(1 2 3 4)");
+		assertThat(eval("(loop for nil from 10 to 0 collect 'a)").print()).isEqualTo("NIL");
+		assertThat(eval("(loop for nil in nil do (return t))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(loop for nil on nil do (return t))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(loop with nil = nil return nil)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(loop with nil = (return t) return nil)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(loop with (nil a) = '(1 2) return a)")).isEqualTo(new LispInteger(2));
+		assertThat(evalMulti("""
+				(setq h (make-hash-table))
+				(setf (gethash 'a h) 1 (gethash 'b h) 2 (gethash 'c h) 3)
+				(list (loop for nil being the hash-keys of h count t)
+				      (loop for v being the hash-values of h using (hash-key nil) count t)
+				      (loop for k being the hash-keys of h using (hash-value nil) count t))
+				""").print()).isEqualTo("(3 3 3)");
+	}
+
+	@Test
+	void evalLoopNumericAnyOrder() {
+		// The from/limit/by sub-clauses may appear in any order, each at most once
+		// (ansi-test iteration/loop1.lsp LOOP.1.11-.15, .24, .27); their forms
+		// evaluate once each, in textual order (LOOP.1.30-.32).
+		assertThat(eval("(loop for x to 10 from 1 collect x)").print()).isEqualTo("(1 2 3 4 5 6 7 8 9 10)");
+		assertThat(eval("(loop for x to 10 by 2 from 1 collect x)").print()).isEqualTo("(1 3 5 7 9)");
+		assertThat(eval("(loop for x by 2 to 10 from 1 collect x)").print()).isEqualTo("(1 3 5 7 9)");
+		assertThat(eval("(loop for x by 2 to 10 collect x)").print()).isEqualTo("(0 2 4 6 8 10)");
+		assertThat(eval("(loop for x to 10 by 2 collect x)").print()).isEqualTo("(0 2 4 6 8 10)");
+		assertThat(eval("(loop for x below 5 from 2 collect x)").print()).isEqualTo("(2 3 4)");
+		assertThat(eval("(loop for x above 6 from 14 by 2 collect x)").print()).isEqualTo("(14 12 10 8)");
+		assertThat(eval(
+				"(let ((a 0) (b 0) (c 0) (i 0)) (list (loop for x from (progn (setq a (incf i)) 0) by (progn (setq c (incf i)) 2) below (progn (setq b (incf i)) 9) collect x) a b c i))")
+			.print()).isEqualTo("((0 2 4 6 8) 1 3 2 3)");
+		assertThat(eval(
+				"(let ((a 0) (b 0) (c 0) (i 0)) (list (loop for x below (progn (setq b (incf i)) 9) by (progn (setq c (incf i)) 2) from (progn (setq a (incf i)) 0) collect x) a b c i))")
+			.print()).isEqualTo("((0 2 4 6 8) 3 1 2 3)");
+		assertThat(eval(
+				"(let ((a 0) (b 0) (c 0) (i 0)) (list (loop for x by (progn (setq c (incf i)) 2) below (progn (setq b (incf i)) 9) from (progn (setq a (incf i)) 0) collect x) a b c i))")
+			.print()).isEqualTo("((0 2 4 6 8) 3 2 1 3)");
+	}
+
+	@Test
+	void evalLoopNamedPassesReturnThrough() {
+		// A named loop establishes no NIL block of its own: a bare `return`
+		// passes through to the outer NIL block, while `return-from` with the loop
+		// name and the loop's own `return` clause still exit the loop (ansi-test
+		// iteration/loop13.lsp LOOP.13.9/.11/.52/.54/.62).
+		assertThat(eval("(loop named foo return 'a)").print()).isEqualTo("A");
+		assertThat(eval("(block nil (loop named foo do (return :good)) :bad)").print()).isEqualTo(":GOOD");
+		assertThat(eval("(block nil (loop named foo with a = (return :good) return :bad) :bad)").print())
+			.isEqualTo(":GOOD");
+		assertThat(eval("(block nil (loop named foo for a = (return :good) return :bad) :bad)").print())
+			.isEqualTo(":GOOD");
+		assertThat(eval("(block nil (loop named foo for i from 0 to (return :good) return :bad) :bad)").print())
+			.isEqualTo(":GOOD");
+		// The loop's own exits still land in the loop.
+		assertThat(eval("(loop named foo for i from 1 to 3 collect i)").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(loop named foo for x in '(1 2 3) when x return x)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(loop named foo for x in '(1 2 3) always (< x 5))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(loop named foo for x in '(1 2 9) always (< x 5))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(loop named foo for x in '(nil nil 7 9) thereis x)")).isEqualTo(new LispInteger(7));
+		// An unnamed loop still catches a bare `return` itself.
+		assertThat(eval("(loop return 'a)").print()).isEqualTo("A");
+		assertThat(eval("(loop do (return :good))").print()).isEqualTo(":GOOD");
+		// The in/on step function is a loop parameter: its form evaluates once at
+		// loop entry, before the first body pass (LOOP.13.27/.28/.67/.68).
+		assertThat(eval("(loop named foo for i in '(a b c) by (return-from foo :good) return :bad)").print())
+			.isEqualTo(":GOOD");
+		assertThat(eval("(loop named foo for i on '(a b c) by (return-from foo :good) return :bad)").print())
+			.isEqualTo(":GOOD");
+		assertThat(eval("(block nil (loop named foo for i in '(a b c) by (return :good) return :bad) :bad)").print())
+			.isEqualTo(":GOOD");
+		assertThat(eval("(let ((n 0)) (loop for x in '(1 2 3) by (progn (incf n) #'cdr) collect x) n)"))
+			.isEqualTo(new LispInteger(1));
+	}
+
+	@Test
 	void evalLoopAnaphoricIt() {
 		assertThat(eval("(loop for x in '(1 nil 3 nil 5) when x collect it)").print()).isEqualTo("(1 3 5)");
 		assertThat(eval("(loop for x in '(nil 2 nil) when x return it)")).isEqualTo(new LispInteger(2));
