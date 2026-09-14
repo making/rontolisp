@@ -220,7 +220,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * Characters have no separate runtime type here: a character IS its code point (an
 	 * INT), so {@code char} returns the code, {@code char-code}/{@code code-char} are
 	 * identities and {@code char=} is a numeric comparison -- the portable
-	 * {@code (char= (char s i) #\x)} idiom behaves exactly like the other backends.
+	 * {@code (char= (char s i) #\x)} idiom behaves exactly like the other backends, on
+	 * ASCII and beyond ({@code char} decodes the i-th code point through the
+	 * {@code __char_at} helper, {@code length} counts code points through
+	 * {@code __strlen_cp}, {@code subseq} converts through {@code __byte_offset}).
 	 */
 	private static final Set<String> BUILTINS = Set.of(LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV,
 			LispNames.MOD, LispNames.REM, LispNames.ABS, LispNames.MIN, LispNames.MAX, LispNames.FLOAT,
@@ -1403,6 +1406,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param memcpyIndex the function index of the {@code __memcpy} byte-copy helper
 	 * @param streqIndex the function index of the {@code __streq} string-compare helper
 	 * @param itoaIndex the function index of the {@code __itoa} integer-to-string helper
+	 * @param strlenIndex the function index of the {@code __strlen_cp} code-point-count
+	 * helper (-1 when no reachable body takes the {@code length} of a string)
+	 * @param byteOffsetIndex the function index of the {@code __byte_offset}
+	 * code-point-to-byte-offset helper (-1 when no reachable body calls {@code subseq} or
+	 * {@code char}, the two operators that convert)
+	 * @param charAtIndex the function index of the {@code __char_at} code-point-index
+	 * helper (-1 when no reachable body calls {@code char})
 	 * @param markIndex the function index of the {@code __ronto_alloc_mark}
 	 * arena-snapshot export (-1 when the boundary gives no host a use for it)
 	 * @param resetIndex the function index of the {@code __ronto_alloc_reset}
@@ -1420,8 +1430,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private record Mem(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int dataBase,
 			int heapBase, int iovAddr, int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex,
-			int markIndex, int resetIndex, int ftoaIndex, int schubBase, int writeStdoutIndex, boolean used,
-			boolean printUsed, boolean ftoaUsed, boolean hostArena, boolean allocates) {
+			int strlenIndex, int byteOffsetIndex, int charAtIndex, int markIndex, int resetIndex, int ftoaIndex,
+			int schubBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed, boolean hostArena,
+			boolean allocates) {
 
 		// The five Schubfach helpers behind __ftoa, appended right after it
 		// in this order; bodies come from WasmSchubfachRuntimeBuilder.
@@ -1493,6 +1504,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param used whether the module uses linear memory at all
 	 * @param printUsed whether the module prints (fd_write import + __write_stdout)
 	 * @param ftoaUsed whether the module renders a float to text (__ftoa)
+	 * @param strlenUsed whether a reachable body takes the {@code length} of a string
+	 * (the {@code __strlen_cp} code-point-count helper). A {@code length} over a packed
+	 * float vector alone does not set this: that still reads the element-count header.
+	 * @param byteOffsetUsed whether a reachable body calls {@code subseq} or {@code char}
+	 * (the {@code __byte_offset} code-point-to-byte-offset helper; {@code __char_at} is
+	 * built on it, so a {@code char} sets this too)
+	 * @param charAtUsed whether a reachable body calls {@code char} (the
+	 * {@code __char_at} code-point-index helper)
 	 * @param hostArena whether the boundary gives the HOST a reason to touch the bump
 	 * heap, which is what the {@code __ronto_alloc} / {@code __ronto_alloc_mark} /
 	 * {@code __ronto_alloc_reset} exports and the mark/reset bodies are for
@@ -1500,8 +1519,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * which is what an export wrapper's save/restore bracket exists to undo
 	 */
 	private record MemLayout(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int heapBase,
-			int iovAddr, int schubBase, boolean used, boolean printUsed, boolean ftoaUsed, boolean hostArena,
-			boolean allocates) {
+			int iovAddr, int schubBase, boolean used, boolean printUsed, boolean ftoaUsed, boolean strlenUsed,
+			boolean byteOffsetUsed, boolean charAtUsed, boolean hostArena, boolean allocates) {
 
 		/**
 		 * The same plan with the given literals laid out header-free, in the same order.
@@ -1515,7 +1534,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			DataPlan plan = layoutData(this.regions.keySet(), headerFree, this.ftoaUsed, this.printUsed);
 			return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
-					plan.schubBase(), this.used, this.printUsed, this.ftoaUsed, this.hostArena, this.allocates);
+					plan.schubBase(), this.used, this.printUsed, this.ftoaUsed, this.strlenUsed, this.byteOffsetUsed,
+					this.charAtUsed, this.hostArena, this.allocates);
 		}
 	}
 
@@ -1715,8 +1735,33 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// Printing renders through __itoa / __ftoa, both of which allocate the text they
 		// return; a string-producing op and a packed vector allocate by definition.
 		allocates |= stringOp || floatVec || printUsed;
+		// The UTF-8 code-point helpers behind length/char/subseq, each gated on the
+		// operator that calls it -- the same per-use gating printUsed/ftoaUsed give the
+		// print and float-render helpers, so a module that only moves text across the
+		// boundary (literals, concatenate, :string params) pays nothing for indexing
+		// it never does. __char_at is built on __byte_offset, so a char sets both.
+		boolean charAtUsed = false;
+		boolean byteOffsetUsed = false;
+		for (String name : reachable) {
+			if (imports.containsKey(name)) {
+				continue;
+			}
+			LispVal body = progn(Objects.requireNonNull(defuns.get(name)).body());
+			if (!charAtUsed && usesOp(body, LispNames.CHAR)) {
+				charAtUsed = true;
+				byteOffsetUsed = true;
+			}
+			if (!byteOffsetUsed && usesOp(body, LispNames.SUBSEQ)) {
+				byteOffsetUsed = true;
+			}
+			if (charAtUsed && byteOffsetUsed) {
+				break;
+			}
+		}
+		boolean strlenUsed = usesStringLength(reachable, defuns, imports, types);
 		return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
-				plan.schubBase(), used, printUsed, ftoaUsed, hostArena, allocates);
+				plan.schubBase(), used, printUsed, ftoaUsed, strlenUsed, byteOffsetUsed, charAtUsed, hostArena,
+				allocates);
 	}
 
 	/**
@@ -1736,8 +1781,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int streqIndex = memcpyIndex + 1;
 		int itoaIndex = streqIndex + 1;
 		int next = itoaIndex + 1;
+		// The UTF-8 code-point helpers, each gated on the operator that calls it
+		// (planMemory's strlenUsed/byteOffsetUsed/charAtUsed): a module that never
+		// indexes a string emits none of them and keeps its exact bytes.
+		// __char_at is built on __byte_offset, so charAtUsed implies byteOffsetUsed.
+		int strlenIndex = layout.strlenUsed() ? next++ : -1;
+		int byteOffsetIndex = layout.byteOffsetUsed() ? next++ : -1;
+		int charAtIndex = layout.charAtUsed() ? next++ : -1;
 		// The host arena API __ronto_alloc_mark/_reset: two more exported functions over
-		// the same heap-pointer global, appended after the four string helpers. --no-gc
+		// the same heap-pointer global, appended after the string helpers. --no-gc
 		// has no fixed-index invariant, so appending is free (nothing renumbers) -- and
 		// so is leaving them out when the boundary gives no host a use for them.
 		int markIndex = layout.hostArena() ? next++ : -1;
@@ -1750,9 +1802,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		int writeStdoutIndex = layout.printUsed() ? next : -1;
 		return new Mem(layout.literals(), layout.regions(), layout.data(), STR_DATA_BASE, layout.heapBase(),
-				layout.iovAddr(), funcBase, allocIndex, memcpyIndex, streqIndex, itoaIndex, markIndex, resetIndex,
-				ftoaIndex, layout.schubBase(), writeStdoutIndex, layout.used(), layout.printUsed(), layout.ftoaUsed(),
-				layout.hostArena(), layout.allocates());
+				layout.iovAddr(), funcBase, allocIndex, memcpyIndex, streqIndex, itoaIndex, strlenIndex,
+				byteOffsetIndex, charAtIndex, markIndex, resetIndex, ftoaIndex, layout.schubBase(), writeStdoutIndex,
+				layout.used(), layout.printUsed(), layout.ftoaUsed(), layout.hostArena(), layout.allocates());
 	}
 
 	/** The printing operators that gate the fd_write import. */
@@ -1807,6 +1859,72 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			return usesStringOp(c.car()) || usesStringOp(c.cdr());
 		}
 		return false;
+	}
+
+	/** Whether a body calls the named operator (a {@code (name ...)} form) anywhere. */
+	private static boolean usesOp(LispVal v, String op) {
+		if (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s && op.equals(s.name())) {
+				return true;
+			}
+			return usesOp(c.car(), op) || usesOp(c.cdr(), op);
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a reachable body takes the {@code length} of a string -- what gates the
+	 * {@code __strlen_cp} helper. A {@code length} over a packed float vector (or over
+	 * nil) still reads the header / answers 0 inline and needs no helper, so each
+	 * {@code length} argument is settled against the frozen inference result first, the
+	 * way {@link #rendersFloat} settles its print arguments. An argument {@link #typeOf}
+	 * cannot answer belongs to a program that will not compile; it gates the helper on,
+	 * so a compilation that does get there finds it.
+	 */
+	private boolean usesStringLength(List<String> reachable, Map<String, Defun> defuns,
+			Map<String, WasmImportCompiler.Decl> imports, Types types) {
+		for (String name : reachable) {
+			if (imports.containsKey(name)) {
+				continue;
+			}
+			Defun d = Objects.requireNonNull(defuns.get(name));
+			List<LispVal> lengthArgs = new ArrayList<>();
+			collectLengthArgs(progn(d.body()), lengthArgs);
+			if (lengthArgs.isEmpty()) {
+				continue;
+			}
+			Map<String, Ty> env = paramEnv(d, types.params());
+			env.putAll(Objects.requireNonNull(types.locals().get(name)));
+			TC tc = new TC(name, new HashSet<>(d.params()), types, null, false, new boolean[1]);
+			for (LispVal arg : lengthArgs) {
+				try {
+					Ty t = typeOf(arg, new HashMap<>(env), tc);
+					if (t != Ty.F64VEC && t != Ty.F32VEC) {
+						return true;
+					}
+				}
+				catch (RuntimeException e) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** Collects the single argument of every {@code (length arg)} form in the body. */
+	private static void collectLengthArgs(LispVal v, List<LispVal> out) {
+		if (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s && LispNames.LENGTH.equals(s.name())) {
+				List<LispVal> args = c.toList();
+				if (args.size() == 2 && !(args.get(1) instanceof LispNil)) {
+					out.add(args.get(1));
+				}
+			}
+			else {
+				collectLengthArgs(c.car(), out);
+			}
+			collectLengthArgs(c.cdr(), out);
+		}
 	}
 
 	/**
@@ -1889,12 +2007,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			int[] exportOrdinals, int internalCount, Types types, Mem mem, List<WasmImportCompiler.Decl> hostImports) {
 		// The local (non-imported) function count: internals, the emitted wrappers
 		// (pass-through exports have none and name their internal function directly),
-		// then the six memory helpers (when memory is used), then __ftoa /
+		// then the four memory helpers (when memory is used) plus the UTF-8 code-point
+		// helpers the module's operators call for (each gated, so an indexing-free
+		// module counts none), then __ftoa /
 		// __write_stdout (when a float is rendered / when printing is used). The helper
 		// indices came from placeFunctions over this same wrapper count, so an elided
 		// wrapper moves them all down together.
-		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 4 : 0) + (mem.hostArena() ? 2 : 0)
-				+ (mem.ftoaUsed() ? 6 : 0) + (mem.printUsed() ? 1 : 0);
+		int utf8Helpers = (mem.strlenIndex() >= 0 ? 1 : 0) + (mem.byteOffsetIndex() >= 0 ? 1 : 0)
+				+ (mem.charAtIndex() >= 0 ? 1 : 0);
+		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 4 : 0) + utf8Helpers
+				+ (mem.hostArena() ? 2 : 0) + (mem.ftoaUsed() ? 6 : 0) + (mem.printUsed() ? 1 : 0);
 		// Canonical string ABI for --component :string exports:
 		// cabi_realloc (the host lowers string arguments through it), one retptr shim
 		// per :string-RETURNING export (MAX_FLAT_RESULTS = 1, so the lifted core
@@ -1960,6 +2082,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32, Type.I32 }, new Type[0]);
 			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
 			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I64 }, new Type[] { Type.I32 });
+		}
+		// The UTF-8 code-point helpers, in placeFunctions order. Each reuses an
+		// already-interned shape -- (i32) -> i32 is __alloc's, (i32, i32) -> i32 is
+		// __streq's -- so indexing operators cost code bytes but no type entries.
+		if (mem.strlenIndex() >= 0) {
+			// __strlen_cp (i32) -> i32.
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32 }, new Type[] { Type.I32 });
+		}
+		if (mem.byteOffsetIndex() >= 0) {
+			// __byte_offset (i32, i32) -> i32.
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
+		}
+		if (mem.charAtIndex() >= 0) {
+			// __char_at (i32, i32) -> i32.
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
 		}
 		if (mem.hostArena()) {
 			// The host arena API: __ronto_alloc_mark () -> i32 and
@@ -2114,6 +2251,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					code.addFunction(memcpyBody());
 					code.addFunction(streqBody());
 					code.addFunction(itoaBody(mem.allocIndex()));
+				}
+				if (mem.strlenIndex() >= 0) {
+					code.addFunction(strlenCpBody());
+				}
+				if (mem.byteOffsetIndex() >= 0) {
+					code.addFunction(byteOffsetBody());
+				}
+				if (mem.charAtIndex() >= 0) {
+					code.addFunction(charAtBody(mem.byteOffsetIndex()));
 				}
 				if (mem.hostArena()) {
 					code.addFunction(markBody());
@@ -2288,6 +2434,216 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.END); // function
 		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING));
+	}
+
+	// __strlen_cp(s i32) -> i32: the CHARACTER count of the [len][bytes] string -- the
+	// number of UTF-8 lead bytes, i.e. bytes b with (b & 0xC0) != 0x80. The header
+	// stays the BYTE count (allocation, copies, printing and the host ABI all move
+	// bytes); only length derives characters from it. Params 0=s; locals 1=len (byte
+	// count), 2=i, 3=n, 4=b.
+	private static byte[] strlenCpBody() {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		// b = s[4+i]; n += ((b & 0xC0) != 0x80)
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(4);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0xC0);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.END); // function
+		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING, Ty.STRING, Ty.STRING));
+	}
+
+	// __byte_offset(s i32, target i32) -> i32: the BYTE offset of the target-th
+	// character in the [len][bytes] string -- what subseq's character indices and
+	// __char_at's index convert through. Counts target lead bytes, then skips the
+	// rest of the character the count stopped inside of, so the answer always lands
+	// on a character boundary (a too-large index answers the byte length; a negative
+	// one answers 0). Params 0=s, 1=target; locals 2=len, 3=pos, 4=cp, 5=b.
+	private static byte[] byteOffsetBody() {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(4);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		// b = s[4+pos]; pos++; cp += ((b & 0xC0) != 0x80)
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(5);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0xC0);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(4);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// The count stops one byte past the target lead, mid-character: skip to the
+		// next lead (or the end) so the answer is a boundary.
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0xC0);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.END); // function
+		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING, Ty.STRING, Ty.STRING));
+	}
+
+	// __char_at(s i32, idx i32) -> i32: the CODE POINT of the idx-th character --
+	// the UTF-8 sequence at __byte_offset(s, idx), decoded by dispatching on the lead
+	// byte's high bits (< 0x80 / < 0xE0 / < 0xF0 / else, the 1- to 4-byte ladder).
+	// Decoding is total over well-formed strings: every in-bounds character index
+	// lands on a lead byte and every continuation byte it names is in bounds, so
+	// nothing here traps that the old byte load did not. A truncated tail handed in
+	// through a host :string reads what its bits assemble, the same leniency the
+	// octets-to-string pair documents (.kb/characters-code-points.md). Params 0=s,
+	// 1=idx; locals 2=pos (byte offset), 3=b0.
+	private static byte[] charAtBody(int byteOffsetIndex) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		// pos = __byte_offset(s, idx)
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.CALL).writeUnsignedLeb128(byteOffsetIndex);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
+		// b0 = s[4+pos]
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
+		// if (b0 < 0x80) b0 ...
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0x80);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x7F);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.ELSE);
+		// ... else if (b0 < 0xE0) ((b0 & 0x1F) << 6) | (b1 & 0x3F) ...
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0xE0);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x7F);
+		emitUtf8Lead(w, 0x1F, 6);
+		emitUtf8Cont(w, 1, 0);
+		w.write(Instruction.ELSE);
+		// ... else if (b0 < 0xF0) ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 &
+		// 0x3F) ...
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0xF0);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x7F);
+		emitUtf8Lead(w, 0x0F, 12);
+		emitUtf8Cont(w, 1, 6);
+		emitUtf8Cont(w, 2, 0);
+		w.write(Instruction.ELSE);
+		// ... else ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) |
+		// (b3 & 0x3F).
+		emitUtf8Lead(w, 0x07, 18);
+		emitUtf8Cont(w, 1, 12);
+		emitUtf8Cont(w, 2, 6);
+		emitUtf8Cont(w, 3, 0);
+		w.write(Instruction.END); // 4-byte else
+		w.write(Instruction.END); // 3-byte else
+		w.write(Instruction.END); // 2-byte else
+		w.write(Instruction.END); // function
+		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING));
+	}
+
+	/**
+	 * Pushes {@code ((b0 & mask) << shift)} -- the lead-byte term of a multi-byte UTF-8
+	 * decode in {@link #charAtBody}, where local 3 holds the lead byte.
+	 */
+	private static void emitUtf8Lead(WasmWriter w, int mask, int shift) {
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(mask);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(shift);
+		w.write(Instruction.I32_SHL);
+	}
+
+	/**
+	 * ORs {@code ((s[pos+k] & 0x3F) << shift)} into the running decode in
+	 * {@link #charAtBody}, where local 0 is the string pointer and local 2 the byte
+	 * offset. The static load offset folds the [len] header (4) and the term index (k)
+	 * into one immediate; a zero shift (the last term) emits no shift.
+	 */
+	private static void emitUtf8Cont(WasmWriter w, int k, int shift) {
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04 + k);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		if (shift != 0) {
+			w.write(Instruction.I32_CONST).writeSignedLeb128(shift);
+			w.write(Instruction.I32_SHL);
+		}
+		w.write(Instruction.I32_OR);
 	}
 
 	// __itoa(v i64) -> i32: render the integer as a fresh [len][bytes] decimal string
@@ -4348,9 +4704,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return Ty.STRING;
 	}
 
-	// (length s): the stored i32 count header, widened to the i64 integer type. A string
-	// [len:i32][bytes] and a float-vector [count:i32][f64...] both keep their element
-	// count as the leading i32 word, so length reads either identically.
+	// (length s): the CHARACTER count for a string (the __strlen_cp helper counts
+	// UTF-8 lead bytes), the element count for a packed float vector (which keeps it
+	// as the leading i32 word, read directly as before).
 	private Ty compileLength(List<LispVal> args, Fn fn) {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("--no-gc: length takes one argument in '" + fn.fnName + "'");
@@ -4361,7 +4717,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			return Ty.INT;
 		}
 		Ty t = compileExpr(args.get(1), fn);
-		if (t != Ty.STRING && t != Ty.F64VEC && t != Ty.F32VEC) {
+		if (t == Ty.STRING) {
+			if (fn.mem.strlenIndex() < 0) {
+				throw new IllegalStateException(
+						"--no-gc: string length without its __strlen_cp helper in '" + fn.fnName + "'");
+			}
+			fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.strlenIndex());
+			fn.writer.write(Instruction.I64_EXTEND_U_I32);
+			return Ty.INT;
+		}
+		if (t != Ty.F64VEC && t != Ty.F32VEC) {
 			throw new UnsupportedOperationException(
 					"--no-gc: length expects a string or a float-vector in '" + fn.fnName + "'");
 		}
@@ -6044,20 +6409,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmVecLoops.scalarDot(fn.writer, ap, bp, count, rem, acc, single);
 	}
 
-	// (char s i): the byte at content offset i, as its code point (a character IS its
-	// code here). No bounds check, like the rest of the backend's lean lowering.
+	// (char s i): the CODE POINT of the i-th character, decoded by the __char_at
+	// helper (which converts the character index to a byte offset and decodes the
+	// UTF-8 sequence there). No bounds check, like the rest of the backend's lean
+	// lowering.
 	private Ty compileCharAt(List<LispVal> args, Fn fn) {
 		if (args.size() != 3) {
 			throw new UnsupportedOperationException("--no-gc: char takes a string and an index in '" + fn.fnName + "'");
 		}
+		if (fn.mem.charAtIndex() < 0) {
+			throw new IllegalStateException("--no-gc: char without its __char_at helper in '" + fn.fnName + "'");
+		}
 		WasmWriter w = fn.writer;
 		compileCoerced(args.get(1), fn, Ty.STRING);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
-		w.write(Instruction.I32_ADD);
 		compileCoerced(args.get(2), fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.charAtIndex());
 		w.write(Instruction.I64_EXTEND_U_I32);
 		return Ty.INT;
 	}
@@ -6082,12 +6449,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return emitPredicate(fn, Instruction.I64_EXTEND_U_I32);
 	}
 
-	// (subseq s start [end]): allocate a fresh [len][bytes] header holding the content
-	// slice [start, end) (end defaults to the length). No bounds check.
+	// (subseq s start [end]): allocate a fresh [len][bytes] header holding the
+	// CONTENT slice of characters [start, end) -- the character indices convert to
+	// byte offsets through __byte_offset (end defaults to the byte length, i.e. the
+	// whole tail). The header stays a BYTE count, like every other block. No bounds
+	// check.
 	private Ty compileSubseq(List<LispVal> args, Fn fn) {
 		if (args.size() != 3 && args.size() != 4) {
 			throw new UnsupportedOperationException(
 					"--no-gc: subseq takes a string, a start and an optional end in '" + fn.fnName + "'");
+		}
+		if (fn.mem.byteOffsetIndex() < 0) {
+			throw new IllegalStateException("--no-gc: subseq without its __byte_offset helper in '" + fn.fnName + "'");
 		}
 		WasmWriter w = fn.writer;
 		compileCoerced(args.get(1), fn, Ty.STRING);
@@ -6095,12 +6468,24 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(s);
 		compileCoerced(args.get(2), fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
-		int start = fn.allocLocal(Ty.STRING); // i32 scratch
+		int startChar = fn.allocLocal(Ty.STRING); // i32 scratch: the character index
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(startChar);
+		// startByte = __byte_offset(s, startChar)
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(s);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(startChar);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.byteOffsetIndex());
+		int start = fn.allocLocal(Ty.STRING); // i32 scratch: the byte offset
 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(start);
-		int len = fn.allocLocal(Ty.STRING); // i32 scratch: end - start
+		int len = fn.allocLocal(Ty.STRING); // i32 scratch: end - start, in bytes
 		if (args.size() > 3) {
 			compileCoerced(args.get(3), fn, Ty.INT);
 			w.write(Instruction.I32_WRAP_I64);
+			int endChar = fn.allocLocal(Ty.STRING); // i32 scratch
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(endChar);
+			// endByte = __byte_offset(s, endChar)
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(s);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(endChar);
+			w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.byteOffsetIndex());
 		}
 		else {
 			emitStrLen(w, s);

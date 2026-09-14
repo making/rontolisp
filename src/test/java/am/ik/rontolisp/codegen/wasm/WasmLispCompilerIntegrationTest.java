@@ -3138,6 +3138,29 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'width :params '(:int) :returns :int)
 				""";
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, noLiteral, "width", "100")).isEqualTo("5");
+		// Non-ASCII literals index and measure in CHARACTERS, like the other backends
+		// (.todo/813): "日本語" is 3 characters in 9 UTF-8 bytes, and the astral "😀"
+		// is 1 character in 4 bytes.
+		String wide = """
+				(defun jlen (n) (length "日本語"))
+				(rontolisp:wasm-export 'jlen :params '(:int) :returns :int)
+				(defun jc0 (n) (char-code (char "日本語" 0)))
+				(rontolisp:wasm-export 'jc0 :params '(:int) :returns :int)
+				(defun jc1 (n) (char-code (char "aé日" 1)))
+				(rontolisp:wasm-export 'jc1 :params '(:int) :returns :int)
+				(defun jsub (n) (length (subseq "日本語" 1)))
+				(rontolisp:wasm-export 'jsub :params '(:int) :returns :int)
+				(defun jsub2 (n) (length (subseq "aé日😀b" 1 4)))
+				(rontolisp:wasm-export 'jsub2 :params '(:int) :returns :int)
+				(defun jemoji (n) (char-code (char "😀" 0)))
+				(rontolisp:wasm-export 'jemoji :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, wide, "jlen", "0")).isEqualTo("3");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, wide, "jc0", "0")).isEqualTo("26085");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, wide, "jc1", "0")).isEqualTo("233");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, wide, "jsub", "0")).isEqualTo("2");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, wide, "jsub2", "0")).isEqualTo("3");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, wide, "jemoji", "0")).isEqualTo("128512");
 	}
 
 	@Test

@@ -138,6 +138,13 @@ sentence above about which producer answers a `java.lang.String` still holds, an
 byte-reader detour stayed.
 
 ## Costs and what is still not constant
+- **`--no-gc` is outside this invariant, by design** (`.todo/813`, `.kb/no-gc-scalar-wasm.md`):
+  its `length` / `char` / `subseq` are O(n) scans over the `[len][bytes]` block
+  (`__strlen_cp` / `__char_at` / `__byte_offset`, emitted only when the operators are
+  used) -- code-point-correct like the other backends, but with no cursor and no
+  breakpoint table, so a random index costs its distance from the string start. A
+  left-to-right scan is still linear; a hot loop over a long wide string belongs on a
+  backend with the cursor.
 - WASM: **8 bytes per string** plus the bigger helper bodies (`zlib` +262 bytes at either
   `--optimize` level); `subseq`/`replace`/`search`/`position` needed no special-casing.
 - **WASM, a multi-byte string indexed randomly far from its cursor**: O(min(i, |i - ci|)).

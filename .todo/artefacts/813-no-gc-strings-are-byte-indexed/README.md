@@ -16,9 +16,12 @@ Expected, for `"abc"` / `"日本語"` / `"aé日"` as
 | | interpreter, JVM, wasm GC | `--no-gc` |
 | --- | --- | --- |
 | `"abc"` | `(3 97 98 2)` | `(3 97 98 2)` |
-| `"日本語"` | `(3 26085 26412 2)` | `(9 230 151 8)` |
-| `"aé日"` | `(3 97 233 2)` | `(6 97 195 5)` |
+| `"日本語"` | `(3 26085 26412 2)` | `(3 26085 26412 2)` |
+| `"aé日"` | `(3 97 233 2)` | `(3 97 233 2)` |
 
-230 and 151 are the first two bytes of 日's UTF-8 encoding: `(char s 1)` does not answer a
-character at all, it answers a continuation byte. ASCII agrees everywhere, which is why
-this went unnoticed.
+All three agree since 2026-09-14, when `.todo/813` paid for code points
+(`__strlen_cp` / `__byte_offset` / `__char_at`, each gated on its operator).
+Before that `--no-gc` answered the middle row as `(9 230 151 8)` and the last as
+`(6 97 195 5)`: 230 and 151 are the first two bytes of 日's UTF-8 encoding --
+`(char s 1)` did not answer a character at all, it answered a continuation byte.
+ASCII agreed everywhere even then, which is why this went unnoticed.

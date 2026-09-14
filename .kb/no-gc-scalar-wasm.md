@@ -156,17 +156,42 @@ printer's and `__ftoa`'s fragments are header pointers by contract and are never
   (`.kb/concatenate-result-families.md`). Other primitives: `length`, `subseq` (no bounds
   check), `string=` (`__streq`), `char`, `princ-to-string` (`__itoa` / `__ftoa`).
 - **A character IS its i64 code point**: `char-code`/`code-char` are identities, `char=` is
-  numeric `=`. But `char` INDEXES THE BYTE ARRAY, so `(char s i)` answers a code point only
-  while `s` is ASCII, and `(char= (char s i) #\x)` matches the other backends only there.
-- **`length`, `char` and `subseq` count and index BYTES, not characters** (measured
-  2026-09-14). For `"日本語"` -- 3 characters, 9 UTF-8 bytes -- the interpreter, the JVM and
-  the wasm-GC backend answer `(length s)` 3, `(char-code (char s 0))` 26085 and
-  `(length (subseq s 1))` 2; `--no-gc` answers **9**, **230** (日's first UTF-8 byte) and
-  **8**. ASCII agrees everywhere, which is why it went unnoticed. This is a real
-  cross-backend divergence and not yet a documented one: `.todo/813` holds the options and
-  the cost of each.
+  numeric `=`, and `char` decodes the i-th CODE POINT (no longer the i-th byte), so
+  `(char= (char s i) #\x)` matches the other backends on ASCII and beyond.
+- **`length`, `char` and `subseq` count and index CHARACTERS, like the other backends**
+  (fixed 2026-09-14; `.todo/813` measured the options and chose this one). They used to
+  work the byte array directly -- for `"日本語"` (3 characters, 9 UTF-8 bytes) `--no-gc`
+  answered `(length s)` 9, `(char-code (char s 0))` 230 (日's first byte) and
+  `(length (subseq s 1))` 8 where the interpreter, the JVM and the wasm-GC backend answer
+  3, 26085 and 2. The header stays the BYTE count (allocation, copies, printing and the
+  host ABI all move bytes); only these three derive characters from it, through three
+  helpers: `__strlen_cp` counts UTF-8 lead bytes, `__byte_offset` converts a character
+  index to a byte offset (landing on a character boundary), `__char_at` decodes the
+  sequence there by the 1- to 4-byte lead-byte ladder (`__char_at` is built on
+  `__byte_offset`). `string=` stays a byte-wise compare (UTF-8 preserves code-point
+  order) and `concatenate` a byte copy.
+- **Each helper is gated on the operator that calls it** (`MemLayout.strlenUsed` /
+  `byteOffsetUsed` / `charAtUsed`, settled in `planMemory` the way `printUsed` /
+  `ftoaUsed` gate their helpers; a `length` over a packed float vector still reads the
+  element-count header inline and gates nothing). All three reuse the already-interned
+  `__alloc` / `__streq` shapes, so they cost code bytes but no type entries. Measured
+  2026-09-14 against `2bb74f937` (`--no-gc --no-wasi`, both `--optimize` levels agree):
+  a module that never indexes a string is byte-identical (the 805 `bench.lisp` reactor
+  844 B, the 810 folded-literal reactor 847 B, a `concatenate`-only module 410 B -- all
+  unchanged); a module that does pays per helper family -- `length`-only +69 B,
+  `subseq` (+`length`) +201 B at `--optimize=size` (+194 at `--optimize=off`), `char`-only
+  +272/+274. The per-site call is a `call` where the old lowering was a load, so sites
+  stay the same size or shrink; the helpers carry the loop.
+- **Indexing here is O(n), the one exception to `.kb/string-index-cost.md`.** `length`
+  scans the bytes, `char`/`subseq` walk to the index -- there is no cursor on the
+  `[len][bytes]` block and no breakpoint table beside it, so a left-to-right scan is
+  still linear but a random index costs its distance from the string start. The
+  backend's ASCII reactors (literals and `:string` parameters crossing the boundary,
+  routing/parsing over ASCII text) never notice; a hot loop over a long wide string
+  belongs on a backend with the cursor.
 - The four helpers occupy function indices `internalCount+0..+3` (alloc, memcpy, streq,
-  itoa), where `internalCount` counts the internal functions and the EMITTED wrappers --
+  itoa), followed by whichever of the three gated UTF-8 helpers the module's operators
+  call for (above), where `internalCount` counts the internal functions and the EMITTED wrappers --
   `planMemory` answers the layout and the three gates, `placeFunctions` assigns the
   indices once the wrapper count is known, and nothing assumes one wrapper per export
   directive. Memory + helpers are emitted **only when the module uses strings**

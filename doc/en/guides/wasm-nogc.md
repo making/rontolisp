@@ -127,10 +127,12 @@ up a string is just an accumulator loop:
 (stars 5)  ; => "*****"
 ```
 
-Slicing and inspection work on the same representation: `length` reads the
-header, `subseq` copies a slice into a fresh buffer, `string=` compares
-content byte-wise, `char` indexes a byte, and `princ-to-string` renders an
-integer — enough for routing/parsing kernels, not just accumulation:
+Slicing and inspection work on the same representation, in characters like
+everywhere else: `length` counts the characters (UTF-8 lead bytes, not the
+header), `subseq` copies a character slice into a fresh buffer, `string=`
+compares content byte-wise, `char` decodes the character at a character index,
+and `princ-to-string` renders an integer — enough for routing/parsing kernels,
+not just accumulation:
 
 ```lisp
 (defun describe-int (n)
@@ -138,6 +140,12 @@ integer — enough for routing/parsing kernels, not just accumulation:
     (concatenate 'string s " has " (princ-to-string (length s)) " chars")))
 (describe-int -42)  ; => "-42 has 3 chars"
 ```
+
+Indexing a string walks its bytes — there is no index on the block — so an
+index costs its distance from the string start (a left-to-right scan stays
+linear). The walks live in helpers emitted only when the program uses
+`length`/`char`/`subseq`, so a module that only moves text pays nothing for
+the indexing it never does.
 
 A module that uses strings gains a (growable) linear memory and exports
 that `memory` alongside your functions. It exports a `__ronto_alloc(size)`

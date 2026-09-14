@@ -27,6 +27,10 @@ first-branch check for both-`int[]` operands comparing `arr[0]`.
   `JvmStringCapitalizeCompiler`, `_strv`.
 - WASM: `_charvec_to_str`, `_str_char_count` (counts UTF-8 lead bytes), `_str_char_at`,
   `_str_char_byte_offset`. See [[wasm-gc-strings]].
+- `--no-gc`: `__strlen_cp` (counts UTF-8 lead bytes), `__char_at`, `__byte_offset`
+  (`codegen.wasm.NoGcWasmCompiler`, `.kb/no-gc-scalar-wasm.md`). Code-point-correct since
+  2026-09-14 (`.todo/813`); before that it indexed and measured the byte array. The
+  helpers are O(n) scans with no cursor -- the one exception to [[string-index-cost]].
 
 **Cost is uniform**: a character index is O(1) or amortized O(1) on all four, so a left-to-right
 `dotimes` scan is LINEAR everywhere ([[string-index-cost]]). Legacy consequence: generated bulk

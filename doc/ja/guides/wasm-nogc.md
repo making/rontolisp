@@ -57,7 +57,7 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, ~108 bytes, no wasm-GC run
 (stars 5)  ; => "*****"
 ```
 
-スライスと検査も同じ表現の上で動きます: `length` はヘッダを読み、`subseq` はスライスを新しいバッファへコピーし、`string=` は内容をバイト単位で比較し、`char` はバイトをインデックスし、`princ-to-string` は整数を文字列化します — 蓄積だけでなく、ルーティング/パースのカーネルにも十分です:
+スライスと検査も他のバックエンドと同じく文字単位で同じ表現の上で動きます: `length` は文字数を数え(ヘッダではなく UTF-8 のリードバイトを数えます)、`subseq` は文字スライスを新しいバッファへコピーし、`string=` は内容をバイト単位で比較し、`char` は文字インデックスの文字をデコードし、`princ-to-string` は整数を文字列化します — 蓄積だけでなく、ルーティング/パースのカーネルにも十分です:
 
 ```lisp
 (defun describe-int (n)
@@ -65,6 +65,8 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, ~108 bytes, no wasm-GC run
     (concatenate 'string s " has " (princ-to-string (length s)) " chars")))
 (describe-int -42)  ; => "-42 has 3 chars"
 ```
+
+文字列へのインデックスはバイト列の走査です(ブロックにインデックスはありません)。そのため 1 回のインデックスは文字列先頭からの距離に比例しますが、左から右への走査は線形のままです。走査はプログラムが `length`・`char`・`subseq` を使う場合にのみ排出されるヘルパーに住んでいるため、テキストを移動するだけのモジュールは使わないインデックス分のコストを払いません。
 
 文字列を使用するモジュールは(拡張可能な)リニアメモリを持ち、その `memory` を関数とともにエクスポートします。宣言された境界が*ホスト*にヒープの扱いを求める場合には、`__ronto_alloc(size)` バンプアロケータもエクスポートされます — [アリーナ API](#reclaiming-memory-the-arena-api)を参照してください。`:string` パラメータはホストがメモリに書き込む `(ptr, len)` ペアとして渡され、`:string` の結果も同じ方法で返されます — そのため文字列を返すエクスポートは、`wasmtime --invoke` だけではなく、エクスポートされたメモリを読み書きできるホスト(JavaScript、小さな Node スクリプト、ブラウザのプレイグラウンド)を必要とします。[ブラウザガイド](wasm-browser.md#passing-strings-string)で JS 側を詳しく説明し、[`--no-gc --component`](#compact-component-output---no-gc---component) はこの手動プロトコルを丸ごと不要にします。
 

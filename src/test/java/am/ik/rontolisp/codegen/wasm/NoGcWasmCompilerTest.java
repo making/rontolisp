@@ -606,6 +606,65 @@ class NoGcWasmCompilerTest {
 		assertThat(reset).containsExactly(0x00, 0x20, 0x00, 0x24, 0x00, 0x0B);
 	}
 
+	@Test
+	void stringIndexingHelpersAreEmittedOnlyWhenUsed() {
+		// The UTF-8 code-point helpers (__strlen_cp, __byte_offset, __char_at) are gated
+		// per operator, the way printUsed/ftoaUsed gate the print and float-render
+		// helpers: a module that only moves text carries none of them, while each
+		// indexing operator pulls in exactly its helper family (__char_at is built on
+		// __byte_offset, so char costs two). OptimizeLevel.NONE out loud, so the
+		// tree shaker and the single-call-site move cannot fold or drop anything:
+		// each program is one internal plus its wrapper, and the counts differ by
+		// exactly the helpers.
+		byte[] concatOnly = compilePlainUnoptimized("""
+				(defun shout (s) (concatenate 'string s "!"))
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				""");
+		byte[] withSubseq = compilePlainUnoptimized("""
+				(defun tail (s) (subseq s 1))
+				(rontolisp:wasm-export 'tail :params '(:string) :returns :string)
+				""");
+		byte[] stringEqOnly = compilePlainUnoptimized("""
+				(defun isx (s) (if (string= s "x") 1 0))
+				(rontolisp:wasm-export 'isx :params '(:string) :returns :int)
+				""");
+		byte[] withLength = compilePlainUnoptimized("""
+				(defun width (s) (length s))
+				(rontolisp:wasm-export 'width :params '(:string) :returns :int)
+				""");
+		byte[] withChar = compilePlainUnoptimized("""
+				(defun first-code (s) (char-code (char s 0)))
+				(rontolisp:wasm-export 'first-code :params '(:string) :returns :int)
+				""");
+		int stringBaseline = functionCount(Objects.requireNonNull(sections(concatOnly).get(10)));
+		assertThat(functionCount(Objects.requireNonNull(sections(withSubseq).get(10)))).isEqualTo(stringBaseline + 1);
+		int intBaseline = functionCount(Objects.requireNonNull(sections(stringEqOnly).get(10)));
+		assertThat(functionCount(Objects.requireNonNull(sections(withLength).get(10)))).isEqualTo(intBaseline + 1);
+		assertThat(functionCount(Objects.requireNonNull(sections(withChar).get(10)))).isEqualTo(intBaseline + 2);
+		// The helpers reuse the __alloc/__streq shapes, so no type-section entry is
+		// added for them, and every type stays a plain numeric one.
+		assertScalarFuncTypes(Objects.requireNonNull(sections(withChar).get(1)));
+	}
+
+	@Test
+	void lengthOverAPackedVectorNeedsNoCodePointHelper() {
+		// A generic (length v) over a packed float vector still reads the
+		// element-count header inline: only a string length gates __strlen_cp. Both
+		// programs are one internal plus its wrapper over the four memory helpers
+		// (OptimizeLevel.NONE, so nothing is folded or dropped), and their
+		// code-section function counts match exactly.
+		byte[] vecLength = compilePlainUnoptimized("""
+				(defun width (n) (length (vec:ones n)))
+				(rontolisp:wasm-export 'width :params '(:int) :returns :int)
+				""");
+		byte[] vecSum = compilePlainUnoptimized("""
+				(defun total (n) (truncate (vec:sum (vec:ones n))))
+				(rontolisp:wasm-export 'total :params '(:int) :returns :int)
+				""");
+		assertThat(functionCount(Objects.requireNonNull(sections(vecLength).get(10))))
+			.isEqualTo(functionCount(Objects.requireNonNull(sections(vecSum).get(10))));
+	}
+
 	// --- module surface: types, the arena API, wrappers, literals ----------------------
 
 	@Test
@@ -1151,6 +1210,11 @@ class NoGcWasmCompilerTest {
 			p[0] += size;
 		}
 		throw new IllegalArgumentException("no function at index " + index);
+	}
+
+	// The number of function bodies in the code section (id 10).
+	private static int functionCount(byte[] codeSection) {
+		return readUleb(codeSection, new int[] { 0 });
 	}
 
 	// Returns the function index of the export with the given name (external kind 0x00).
