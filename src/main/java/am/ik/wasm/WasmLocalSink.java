@@ -28,7 +28,11 @@ import org.jspecify.annotations.Nullable;
  * <ul>
  * <li><strong>The expression is pure</strong>: it reads locals and globals, pushes
  * constants, and computes with instructions that cannot trap and cannot store. Evaluating
- * it later is therefore unobservable -- as long as its inputs are the same.</li>
+ * it later is therefore unobservable -- as long as its inputs are the same. An allocation
+ * that cannot trap counts too, since nothing but the sunk local can reach the object
+ * before the read -- but only while it is still evaluated ONCE: never as a copy, and
+ * never into a loop the write is outside of, where the read runs per iteration and a
+ * closure built once would be rebuilt, cell and all, every time.</li>
  * <li><strong>Its inputs are unchanged between where it was and where it goes</strong>:
  * no {@code local.set}/{@code local.tee} of a local it reads, and -- when it reads a
  * global -- no {@code global.set} and no {@code call} (which may set any global). The
@@ -204,24 +208,34 @@ public final class WasmLocalSink {
 				continue;
 			}
 			boolean readsGlobal = false;
+			boolean allocates = false;
+			int expression = 0;
 			boolean[] readsLocal = new boolean[total];
 			for (int k = span[0]; k < span[1]; k++) {
 				Instr e = code.get(k);
+				expression += e.end - e.start;
 				if (e.op == Instruction.GET_LOCAL) {
 					readsLocal[(int) e.a] = true;
 				}
 				else if (e.op == Instruction.GET_GLOBAL) {
 					readsGlobal = true;
 				}
+				else if (e.op == Instruction.GC_PREFIX && e.sub <= 0x08) {
+					allocates = true;
+				}
 			}
-			if (!inputsUnchanged(code, span[1], rangeEnd(code, def, use), readsLocal, readsGlobal)) {
+			int rangeEnd = rangeEnd(code, def, use);
+			if (!inputsUnchanged(code, span[1], rangeEnd, readsLocal, readsGlobal)) {
+				continue;
+			}
+			// An allocation evaluated again is a SECOND object, not the one every other
+			// path holds: never as a copy, and never into a loop the write is not in --
+			// a closure built once and called per iteration would be rebuilt, cell and
+			// all, on every iteration.
+			if (allocates && (tee || rangeEnd != use)) {
 				continue;
 			}
 			if (tee) {
-				int expression = 0;
-				for (int k = span[0]; k < span[1]; k++) {
-					expression += code.get(k).end - code.get(k).start;
-				}
 				int replaced = (in.end - in.start) + (code.get(use).end - code.get(use).start);
 				if (expression >= replaced) {
 					continue;

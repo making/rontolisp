@@ -589,7 +589,10 @@ an index. Three things pay for the one decode:
 - **The sink itself.** The expression is pure (reads of locals and globals, constants, non-trapping
   numeric ops, `ref.i31`/`ref.test`/`ref.is_null`/`ref.eq`, `struct.new*`, `array.new_fixed`, and
   `array.new`/`array.new_default` of a small constant length -- an allocation nothing but the sunk
-  local can reach before the read); its inputs are unchanged from the expression to the read
+  local can reach before the read, **so long as it is still evaluated ONCE**: never as a copy, and
+  never into a loop the write is outside of, where the read runs per iteration and a closure built
+  once would be rebuilt, cell and all, every time -- `mapcanMapconLongInput`'s counter closure
+  counted nothing until that rule existed); its inputs are unchanged from the expression to the read
   (no write of a local it reads; no `global.set` and no `call` when it reads a global), the range
   extended to the end of the outermost `loop` opened after the write and still open at the read;
   and the write dominates the read (no `else`/`end` between them closes a block open at the write).
@@ -601,8 +604,8 @@ an index. Three things pay for the one decode:
   locals, the hello-clack Worker 664.
 - **The frame.** A local nothing touches leaves the declaration, and a `set N; get N` pair the
   deletions (or the inliner) leave adjacent is written as `tee N` on the way out, so the peephole
-  in front does not have to run again. `zlib`'s frames: 2,475 -> 1,508 locals; hello-clack's
-  15,244 -> 10,868, its two-byte `local.*` immediates 3,175 -> 1,797 BEFORE `WasmLocalOrder` sees
+  in front does not have to run again. `zlib`'s frames: 2,475 -> 1,510 locals; hello-clack's
+  15,244 -> 10,860, its two-byte `local.*` immediates 3,175 -> 1,807 BEFORE `WasmLocalOrder` sees
   them.
 
 Bodies are re-sunk to a fixpoint (a local whose expression reads a sunk local waits a round), and
@@ -611,23 +614,23 @@ untouched. **The number this pass is for is raw bytes of the code section, and i
 so gzip follows -- and falls faster, because a fresh local per temporary is exactly the
 low-repetition byte a compressor cannot fold.
 
-**Measured 2026-09-13 against `f097ebdd6`, `size-report/measure.sh`, both families**
+**Measured 2026-09-14 against `a4239f80d`, `size-report/measure.sh`, both families**
 (`--optimize=size` unless the row says otherwise; raw / gzip where the report records gzip):
 
 | artifact | before | after | |
 | --- | ---: | ---: | --- |
-| `zlib` `--optimize=size` | 78,330 | 76,003 | -3.0% |
-| `zlib` `--optimize` | 102,909 | 100,589 | -2.3% |
+| `zlib` `--optimize=size` | 78,330 | 76,011 | -3.0% |
+| `zlib` `--optimize` | 102,909 | 100,597 | -2.2% |
 | `pi_approx` | 1,504 | 1,489 | |
 | `hello_world` | 487 | 480 | |
 | `pi_approx_nogc` | 3,289 | 3,279 | |
-| hello-clack Worker | 716,057 / 194,305 | 705,732 / 186,458 | -1.4% / -4.0% |
-| hello-ningle Worker | 2,977,818 / 619,011 | 2,932,328 / 577,004 | -1.5% / -6.8% |
-| httpbin Worker | 154,998 / 53,809 | 151,052 / 51,082 | -2.6% / -5.1% |
-| the Worker family, 16 rows | 15,354,414 / 3,788,432 | 15,105,500 / 3,570,331 | **-1.6% / -5.8%** |
+| `dom_reactor` `--no-gc` (the `.todo/812` reactor) | 856 | 847 | code 200 -> 191 |
+| hello-clack Worker | 716,057 / 194,305 | 706,036 / 186,368 | -1.4% / -4.1% |
+| hello-ningle Worker | 2,977,818 / 619,011 | 2,932,835 / 577,583 | -1.5% / -6.7% |
+| httpbin Worker | 154,998 / 53,809 | 151,076 / 51,056 | -2.5% / -5.1% |
+| the Worker family, 16 rows | 15,354,384 / 3,788,422 | 15,110,090 / 3,571,238 | **-1.6% / -5.7%** |
 
-Every row is smaller on both axes; the worst gzip row is `hello` at -4 B. The `.todo/812` reactor
-(`.todo/artefacts/810-.../reactor.lisp`, `--no-gc --no-wasi`): 930 -> 921, code 230 -> 221.
+Every row is smaller on both axes; the worst gzip row is `hello` at -4 B.
 
 **The item's premise was measured the wrong way round.** `.todo/812` counted the single-use
 residue AFTER the whole pipeline -- 723 locals on `zlib`, one on the reactor, "single-digit bytes"
@@ -637,15 +640,18 @@ half worth doing only if the first left a large remainder. Both halves are one w
 decoded body with one legality argument, the copy is the expression of length one, and the split
 was never worth making. What the census could not see was the other two populations the same
 renumbering collects for free, and that the Worker family carries proportionally far more of all
-three than `zlib` does (5,443 single-use locals in hello-clack; 2,181 remain, nearly all a `call`
-result or a block result stored and used once, which no pure-expression rule reaches). The
-post-pipeline residue on `zlib` is now 216: 131 `call` results, 29 block results, 17 `array.new`
-of a computed length.
+three than `zlib` does (`residue.sh` on hello-clack: 4,320 single-use locals, 2,174 remain, nearly
+all a `call` result or a block result stored and used once, which no pure-expression rule
+reaches). The post-pipeline residue on `zlib` is now 218: 131 `call` results, 29 block results,
+17 `array.new` of a computed length.
 
 Pins: `WasmLocalSinkTest` (the sink, the gap, the renumbering, the loop-carried input, the
-undominated read, the global across a call, the tee copy, the dead writes, the chained round, the
-adjacent pair) and `WasmTreeShakerCorpusTest` (the whole `ci-spec` corpus at every level validates
-and round-trips with the pass in the pipeline).
+undominated read, the global across a call, the tee copy, the allocation that is never copied nor
+sunk into a loop, the dead writes, the chained round, the adjacent pair),
+`WasmTreeShakerCorpusTest` (the whole `ci-spec` corpus at every level validates and round-trips
+with the pass in the pipeline) and `WasmLispCompilerIntegrationTest.mapcanMapconLongInput` /
+`sequenceBoundingKeywords` (a closure's cell mutated across iterations -- the two that caught the
+allocation rule).
 
 ### The component WRAPPER: adapter + WASI surface
 The adapter and the `wasi:*` declarations follow the core through one chain, every step *observed*

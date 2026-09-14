@@ -26,11 +26,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class WasmLocalSinkTest {
 
-	// Type 0: (i32 i32) -> i32; type 1: (i32) -> i32; type 2: () -> i32.
+	// Type 0: (i32 i32) -> i32; type 1: (i32) -> i32; type 2: () -> i32; type 3: struct
+	// {i32}, in its own rec group as the backend declares every type.
 	private static final Consumer<TypeDef> TYPES = types -> types
 		.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 })
 		.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I32 })
-		.addFunc(new Type[] {}, new Type[] { Type.I32 });
+		.addFunc(new Type[] {}, new Type[] { Type.I32 })
+		.addRecGroup(rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.I32))));
 
 	private static byte[] module(int[] funcTypes, List<byte[]> bodies) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -47,15 +49,19 @@ class WasmLocalSinkTest {
 	}
 
 	private static byte[] body(int i32Locals, Consumer<WasmWriter> instructions) {
+		return body(i32Locals, Type.I32, instructions);
+	}
+
+	private static byte[] body(int locals, Type type, Consumer<WasmWriter> instructions) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
-		if (i32Locals == 0) {
+		if (locals == 0) {
 			w.write(0);
 		}
 		else {
 			w.write(1);
-			w.write(i32Locals);
-			w.write(Type.I32);
+			w.write(locals);
+			w.write(type);
 		}
 		instructions.accept(w);
 		w.write(Instruction.END);
@@ -291,6 +297,71 @@ class WasmLocalSinkTest {
 		assertThat(code(sunk, 0)).containsExactly("20:0", "20:1", "6A", "20:0", "6C", "0B");
 		assertThat(decode(sunk, 0).locals()).isEmpty();
 		assertThat(WasmLocalSink.sink(longCopy)).isSameAs(longCopy);
+	}
+
+	@Test
+	void aTeeOfAFreshAllocationIsNeverCopied() {
+		// `struct.new_default 3; local.tee 1; ref.is_null; drop; local.get 1; ...`: the
+		// copy
+		// (3 B) is shorter than the tee and the get (4 B), but evaluating it again at the
+		// read would allocate a SECOND struct -- the one the read would then see is not
+		// the one the tee's consumer holds (a closure's cell, mutated through the first).
+		byte[] module = module(new int[] { 1 }, List.of(body(1, Type.EQ, w -> {
+			w.write(Instruction.GC_PREFIX);
+			w.write(0x01); // struct.new_default
+			w.writeUnsignedLeb128(3);
+			op(w, Instruction.TEE_LOCAL, 1);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.DROP);
+			op(w, Instruction.GET_LOCAL, 1);
+			w.write(Instruction.GC_PREFIX);
+			w.write(0x16); // ref.cast (ref 3)
+			w.writeUnsignedLeb128(3);
+			w.write(Instruction.GC_PREFIX);
+			w.write(Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(3);
+			w.writeUnsignedLeb128(0);
+		})));
+		validate(module);
+
+		assertThat(WasmLocalSink.sink(module)).isSameAs(module);
+	}
+
+	@Test
+	void anAllocationIsNotSunkIntoALoopItsWriteIsOutsideOf() {
+		// `struct.new_default 3; local.set 0; loop; local.get 0; ...`: the read runs once
+		// per iteration, and an allocation evaluated there is a fresh object each time --
+		// a closure's cell rebuilt on every iteration. The same read outside any loop
+		// opened after the write takes the allocation.
+		byte[] inLoop = module(new int[] { 2 }, List.of(body(1, Type.EQ, w -> {
+			w.write(Instruction.GC_PREFIX);
+			w.write(0x01); // struct.new_default
+			w.writeUnsignedLeb128(3);
+			op(w, Instruction.SET_LOCAL, 0);
+			w.write(Instruction.LOOP);
+			w.write(0x40);
+			op(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.REF_IS_NULL);
+			op(w, Instruction.BR_IF, 0);
+			w.write(Instruction.END);
+			constant(w, 7);
+		})));
+		byte[] straight = module(new int[] { 2 }, List.of(body(1, Type.EQ, w -> {
+			w.write(Instruction.GC_PREFIX);
+			w.write(0x01);
+			w.writeUnsignedLeb128(3);
+			op(w, Instruction.SET_LOCAL, 0);
+			constant(w, 7);
+			w.write(Instruction.DROP);
+			op(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.REF_IS_NULL);
+		})));
+		validate(inLoop);
+		byte[] sunk = sinkAndValidate(straight);
+
+		assertThat(WasmLocalSink.sink(inLoop)).isSameAs(inLoop);
+		assertThat(code(sunk, 0)).containsExactly("41:7", "1A", "FB", "D1", "0B");
+		assertThat(decode(sunk, 0).locals()).isEmpty();
 	}
 
 	@Test
