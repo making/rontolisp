@@ -129,12 +129,13 @@ every one of these.
 
 ## Cross-language context
 
-The three per-program tables are quoted from the upstream README (measured there
-on 2026-08-03 with wasi-sdk 25.0, rustc 1.97.1, Zig 0.15.2, Moonbit
-0.1.20260803) -- **not** re-measured here, so read them as context rather than as
-a controlled benchmark. Each language is built with its own size-optimization
-flags. The rontolisp rows are the table at the top of this file. The subsection
-after them is a different kind of comparison: one program, section by section.
+`hello_world`, `pi_approx` and `zlib` are quoted from the upstream README
+(measured there on 2026-08-03 with wasi-sdk 25.0, rustc 1.97.1, Zig 0.15.2,
+Moonbit 0.1.20260803) -- **not** re-measured here, so read them as context rather
+than as a controlled benchmark. Each language is built with its own
+size-optimization flags, and the rontolisp rows are the table at the top of this
+file. `dom_reactor` is the other kind: one program against one other language,
+measured here, section by section.
 
 ### hello_world
 
@@ -176,14 +177,15 @@ a decompressor and nothing else.
 | c | Preview 1 | 34,484 | stdin + gzip decompress (zlib 1.3.1) |
 | rust | Preview 1 | 89,069 | stdin + gzip decompress (zlib-rs) |
 
-### A total is not a comparison
+### dom_reactor
 
-Compare section by section, or the answer is decided by things neither compiler
-is being judged on. The worked example is the `dom_reactor` row against
+Against
 [hike-lang](https://github.com/kanryu/hike-lang/blob/main/examples/browser/main.hike)
-at `e5e568c`, a hand-written non-GC toolchain emitting the same page -- same four
+at `e5e568c`, a hand-written non-GC toolchain emitting the same page: same four
 imports, same four exports, same eleven literals, which is why this program's
-literal text is written to fixed lengths.
+literal text is written to fixed lengths. Section by section rather than total
+against total, because a total is decided by things neither compiler is being
+judged on.
 
 | Section | hike | rontolisp `--no-gc` |
 | --- | ---: | ---: |
