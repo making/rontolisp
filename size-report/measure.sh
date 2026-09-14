@@ -63,6 +63,12 @@ have_wasmtime=0
 command -v wasmtime >/dev/null 2>&1 && have_wasmtime=1
 [[ "$have_wasmtime" == 1 ]] || echo "NOTE: wasmtime not on PATH -- measuring only, no run checks."
 
+# A module whose imports come from a host PAGE cannot run under wasmtime at all,
+# so its check runs under node against a stub host (see the `node:` rows below).
+have_node=0
+command -v node >/dev/null 2>&1 && have_node=1
+[[ "$have_node" == 1 ]] || echo "NOTE: node not on PATH -- the host-import rows are measured but not run."
+
 # `rontolisp -v` answers a JSON object; the report only wants the version string.
 version="$("${ronto[@]}" -v 2>/dev/null | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)"
 version="${version:-unknown}"
@@ -145,6 +151,13 @@ json_rows=()
 hello_expected='Hello, World!'
 pi_expected='pi = 3.141591653589774'
 pi_nogc_expected='3.1415916535897743'
+# dom_reactor has no stdout at all: it is a reactor whose four imports come from
+# a host page's `env` module, which wasmtime cannot supply. Its RUN ARGS name a
+# node host instead of wasmtime flags, and that host pins the whole transcript --
+# every string the module hands out, not just the two integers it returns --
+# before printing the line below. Same source on both backends.
+dom_host='node:programs/dom_reactor/host.mjs'
+dom_expected='OK 8 host calls'
 
 wasm_builds=(
   "hello_world_plain|programs/hello_world/hello_world.lisp|--optimize=off|-W gc|$hello_expected"
@@ -161,6 +174,10 @@ wasm_builds=(
   "zlib_optimize|programs/zlib/zlib.lisp|--optimize|-W gc -W exceptions=y|filter"
   "zlib_size|programs/zlib/zlib.lisp|--optimize=size|-W gc -W exceptions=y|filter"
   "zlib_component|programs/zlib/zlib.lisp|--component --optimize=size|-W gc=y -W exceptions=y|filter"
+  "dom_reactor_plain|programs/dom_reactor/dom_reactor.lisp|--no-wasi --optimize=off|$dom_host|$dom_expected"
+  "dom_reactor_optimize|programs/dom_reactor/dom_reactor.lisp|--no-wasi --optimize|$dom_host|$dom_expected"
+  "dom_reactor_size|programs/dom_reactor/dom_reactor.lisp|--no-wasi --optimize=size|$dom_host|$dom_expected"
+  "dom_reactor_nogc|programs/dom_reactor/dom_reactor.lisp|--no-gc --no-wasi --optimize=size|$dom_host|$dom_expected"
 )
 
 # The gzip stream the zlib rows read from stdin, and the plaintext their output
@@ -199,6 +216,24 @@ measure_wasm_family() {
   for row in "${wasm_builds[@]}"; do
     IFS='|' read -r name _src _flags runargs check <<<"$row"
     printf '%-24s ' "$name:"
+    # A `node:<script>` in the RUN ARGS column means the module cannot run under
+    # wasmtime (its imports are a host page's, not WASI's): run the named host
+    # and compare its first line, the same contract as the wasmtime rows.
+    if [[ "$runargs" == node:* ]]; then
+      if [[ "$have_node" != 1 ]]; then
+        echo "SKIP (no node)"
+        continue
+      fi
+      local host_actual
+      host_actual="$(node "$here/${runargs#node:}" "$out/$name.wasm" 2>/dev/null | head -1 || true)"
+      if [[ "$host_actual" == "$check" ]]; then
+        echo "OK ($host_actual)"
+      else
+        echo "FAIL (expected '$check', got '$host_actual')"
+        fail=1
+      fi
+      continue
+    fi
     if [[ "$have_wasmtime" != 1 ]]; then
       echo "SKIP (no wasmtime)"
       continue

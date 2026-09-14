@@ -36,6 +36,8 @@ every time it regenerates `results/`. Edit `notes/`, never `results/`.
 It uses `target/rontolisp` when the GraalVM native binary is built and the
 executable jar otherwise (override with `RONTOLISP=/path/to/rontolisp`).
 `wasmtime` is optional -- without it the `programs/` modules are built and measured
-but not run. `npx` is optional -- without it the jco-transpiled glue row is
-skipped. The Worker builds `ql:quickload` clack / lack / tiny-routes / ningle,
+but not run. `node` is optional too, and is what runs the one program `wasmtime`
+cannot: `dom_reactor` imports from a host page rather than from WASI, so its
+check drives it under a stub host instead. `npx` is optional -- without it the
+jco-transpiled glue row is skipped. The Worker builds `ql:quickload` clack / lack / tiny-routes / ningle,
 so the first run needs network.

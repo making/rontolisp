@@ -6,44 +6,48 @@
 | --- | --- |
 | [`programs/hello_world/`](../programs/hello_world) | Write `Hello, World!` to stdout, and nothing else |
 | [`programs/pi_approx/`](../programs/pi_approx) | Approximate pi with the Leibniz series, 1,000,000 terms, to 15 decimal places |
-| [`programs/zlib/`](../programs/zlib) | Read gzip data from stdin, decompress it with [chipz](https://github.com/froydnj/chipz) 0.8, write the octets to stdout. chipz is `ql:quickload`ed from the live Quicklisp dist like the Worker family, so the row tracks whatever version the dist serves; the pinned copy `ChipzE2eTest` runs against is `src/test/resources/chipz/` |
+| [`programs/dom_reactor/`](../programs/dom_reactor) | A browser-facing reactor: four host DOM imports, four exports a page calls, a recursive `fib`. No stdout, no `_start`, nothing to print -- the shape a module takes when the host is a web page |
+| [`programs/zlib/`](../programs/zlib) | Read gzip data from stdin, decompress it with [chipz](https://github.com/froydnj/chipz) 0.8, write the octets to stdout |
 
-The two micro programs have a `-nogc` companion each, because `--no-gc` accepts
-only `(defun ...)` and `rontolisp:wasm-export` at top level and has no `format`.
-`zlib` has none: that backend has no arrays at all, so a deflate library cannot
-be expressed there. They follow
+The two micro programs follow
 [wado-lang/wado `wasm-size/`](https://github.com/wado-lang/wado/tree/main/wasm-size),
 a cross-language Wasm size comparison, so the rows can be read next to C, Rust,
-Zig, Moonbit and Wado.
+Zig, Moonbit and Wado. `dom_reactor` follows
+[kanryu/hike-lang `examples/browser/main.hike`](https://github.com/kanryu/hike-lang/blob/main/examples/browser/main.hike);
+it is the same page, import for import and literal for literal.
 
-`zlib` is the SAME PROGRAM as its upstream namesake, down to the 8192-byte input
-buffer the C and Zig versions use: read all of stdin, inflate, write the
-decompressed octets to stdout. Nothing is embedded and nothing is reported, so
-the row measures the decompressor and the runtime under it rather than a
-literal and a summary line. (It was not always: until binary stdin/stdout
-landed, the input was a 507-byte literal compiled into the source and the output
-was a length plus an FNV-1a.)
+**Which programs have a `-nogc` companion, and why.** `--no-gc` takes only
+`(defun ...)`, `wasm-import` and `wasm-export` at top level and has no `format`,
+so the two micro programs need a second source. `zlib` gets no `--no-gc` row at
+all -- that backend has no arrays, so a deflate library cannot be expressed
+there. `dom_reactor` needs no companion for the opposite reason: it is already
+inside the subset, so ONE source measures both lowerings of the same program and
+the two rows differ only in the backend. It has no `--component` row either --
+its import names are the page's (`js_set_text`), and the component model wants
+lower-kebab-case.
 
-What the row measures is that decompressor: an inflate state machine over typed
-bit buffers, the Huffman tables, a 32 KB window and CRC32, all compiled in from
-a third-party library's unmodified sources. The check feeds it 65536 octets'
-worth of gzip -- 8 distinct 64-byte lines repeated 128 times, so the first block
-runs the literal and short-match paths and the rest runs long back-references
-through the window -- and requires the output to equal the original byte for
-byte.
+**`zlib` is the same program as its upstream namesake**, down to the 8192-byte
+input buffer the C and Zig versions use: read all of stdin, inflate, write the
+octets to stdout. Nothing is embedded and nothing is reported, so the row
+measures an inflate state machine over typed bit buffers, the Huffman tables, a
+32 KB window and CRC32, compiled in from a third-party library's unmodified
+sources. It also **carries the runtime, not just the library**: chipz calls
+`apply`, which turns the embedded `eval` runtime on, and uses `catch`/`throw`,
+which puts the module in EH mode -- hence the exception-handling flag at run time
+and why the unoptimized row is hundreds of KB rather than the ~100 KB the inflate
+code alone would be. Both are properties of the library's source, not of how the
+program was written. chipz is `ql:quickload`ed from the live Quicklisp dist, so
+the row tracks whatever version the dist serves; the pinned copy `ChipzE2eTest`
+runs against is `src/test/resources/chipz/`.
 
-**`zlib` is the row that carries the runtime, not just the library.** chipz
-calls `apply`, which turns the embedded `eval` runtime on, and it uses
-`catch`/`throw`, which puts the module in EH mode (hence the exception-handling
-support required at run time, and why the unoptimized row is hundreds of KB rather than the ~100 KB
-the inflate code alone would be). Both are properties of the library's own
-source, not of how the program was written.
+**Every module is checked before it is measured**, or a module that stopped
+working would be reported as a smaller number:
 
-Every module is checked before it is measured, or the run fails instead of
-reporting a smaller number for a module that stopped working: the two micro
-programs must still print the right answer under `wasmtime`, and `zlib` -- which
-prints nothing -- must gunzip the check stream to exactly the octets it was made
-from.
+| Program | How it is checked |
+| --- | --- |
+| `hello_world`, `pi_approx` | Must still print the right answer under `wasmtime` |
+| `zlib` | Prints nothing, so the check is stronger: gunzip 65,536 octets (8 distinct 64-byte lines x 128, so the first block runs the literal and short-match paths and the rest runs long back-references through the window) and require the output to equal the original byte for byte |
+| `dom_reactor` | `wasmtime` cannot run it at all -- its imports come from a host page's `env` module, which no WASI runtime supplies. [`host.mjs`](../programs/dom_reactor/host.mjs) stubs the four DOM calls, drives the four exports, and pins the WHOLE transcript: every string the module hands out, not just the two integers it returns. A module that loses a literal, reads the wrong length or folds a branch away still instantiates and still returns the right integers; only the text catches it. Without `node` on PATH these rows are measured but not run |
 
 ## Reading the numbers
 
@@ -58,174 +62,70 @@ import module `wasi_snapshot_preview1`; later generations version each interface
 (`wasi:cli/stdout@0.3.0`). The tables fold those back: WASI 0.3 is Preview 3.
 
 **`--optimize` is on by default; the baseline opts OUT with `--optimize=off`.**
-Without it a module carries the whole prelude -- ~124 KB for `hello_world`,
-99.6% of which nothing in the program reaches. `--optimize` is the dead-code
-tree-shaker; it is what turns 124 KB into a few hundred bytes. Only
-tree-shaken numbers are worth comparing, which is why the `_plain` rows below
-spell their baseline explicitly as `--optimize=off` rather than as an empty
-flag cell -- an empty cell now means "default", which since the flip is the
-optimized build.
+Without it a module carries the whole prelude -- ~124 KB for `hello_world`, 99.6%
+of which nothing in the program reaches. `--optimize` is the dead-code
+tree-shaker, and it is what turns that into a few hundred bytes. Only tree-shaken
+numbers are worth comparing, which is why the baseline rows spell themselves
+`--optimize=off` rather than leaving the flag cell empty -- an empty cell now
+means "default", which since the flip is the optimized build.
+
+**The unoptimized micro rows ARE the prelude**, so they move when it does: they
+grew by ~2.3 KB when `fill` joined it, and `--optimize` takes both back to the
+same bytes as before.
 
 **`--optimize=size` only shows up on a big program.** On both micro programs it
-measures the same as plain `--optimize` -- there is nothing left to trade once
-the tree-shaker has run. On `zlib` it was another 23% when measured (551,644 ->
-425,815, before the dead-branch pruning stages landed), because there the fused
-integer trees and unboxed locals it drops are spread over a whole library rather
-than a dozen forms.
-
-**The `zlib` rows also carry the dead-branch pruning story.** chipz ships a
-whole bzip2 decoder a gzip program never reaches; the AST pruner's dead-branch
-stages (`.kb/library-defun-pruning.md`) fold the `case`/`typecase` arms that
-anchor it, and the condition-runtime narrowing (`.kb/error-handling.md`) drops
-the format renderer and the unreachable seeded-condition arms and layouts. That
-is why the `zlib` rows sit far below chipz's full source size while the row's
-check still gunzips the stream byte-identically on every backend.
-
-**Identical function bodies are emitted once.** A `defstruct`/`define-condition`
-accessor compiles to the same bytes as its siblings two or three at a time, and
-chipz declares five conditions and several structs -- on the `--optimize=size`
-row that was 362 bodies of which 48 were byte-for-byte copies of an earlier one.
-The duplicate-body fold (`.kb/optimize-dead-code-elimination.md`) keeps one body
-per group and redirects every reference, worth -4.9% on that row (137,430 ->
-130,658) and about the same on the other two optimized `zlib` rows. Only code is
-shared, not identity: `(eq #'f #'g)` stays `NIL` for two identically-bodied
-functions.
-
-**A function named at a call site is not a function value.** `(mapcar #'f xs)`,
-`(reduce #'+ xs)`, `(sort xs #'<)` and `(funcall #'f x)` compile to the direct
-call the head-position spelling gives, not to a value handed to the per-arity
-dispatcher (`.kb/optimize-dead-code-elimination.md`). What that buys the `zlib`
-rows is not the callee -- it is called either way -- but the dispatcher's fan-out:
-every case in a live dispatcher keeps its target reachable, so a function whose
-only real caller sits on a dead path used to ride along. `STRING=` (2,449 B),
-reached only by the runtime `find-package` lookup this program never runs, was
-one such. Worth -2.2% at `--optimize` (162,340 -> 158,708) and -2.8% at
-`--optimize=size` (130,658 -> 127,026), with every Worker row moving with it.
-
-**A signal's message is rendered only where it can be read.** On this backend an
-uncaught condition is a bare trap and a typed throw's payload text has no
-reader, so no signal site compiles its message render any more, and where no
-program code can ever HOLD a condition (`.kb/error-handling.md`, the lazy
-signal messages) the report renderer, the library's `:report` lambdas and the
-plain-message renders drop out with it; the generic-dispatch last resort signals
-its operation and class as slot values instead of rendered prose for the same
-reason. zlib reports nothing, so this took the value printer's whole condition
-tail: -7.8% at `--optimize=size` (127,026 -> 117,118), with the Worker rows --
-which DO catch conditions and keep the renderer -- still shedding their
-signal-point renders (hello-ningle -24.8 KB raw).
-
-**The generic `length` dispatch is one function.** A `length` site whose
-argument's representation no declaration pins used to inline the whole
-sequence-type ladder -- packed vectors, string, general array, hash table, cons
-walk, ~300 bytes each -- and this module held 66 copies, 13.6% of its bytes,
-spread over chipz's defuns and the spliced runtime helpers alike. It is now one
-shared `_seq_len` callee, matching what the JVM backend always did
-(`.kb/length-runtime.md`), worth **-8.1%** on the `--optimize=size` row
-(105,393 -> 96,834) with the inflate loop's timing unchanged.
-
-**A generic's dispatcher lists only the branches some call can select.** The
-program's one entry is `(chipz:decompress nil 'chipz:gzip <ub8-vector>)`, and
-`decompress` is a defgeneric with 18 method variants -- pathname-to-pathname,
-stream-to-stream, every convenience pairing -- of which that call (and the
-library's own re-entry through `apply`) can select exactly two: the default
-method and the null/vector one. The optimizing compile now joins argument
-shapes over every call site of a generic and omits the dispatcher branches no
-site can satisfy (`.kb/optimize-dead-code-elimination.md`), so the sixteen dead
-method defuns and the pathname/stream helpers only they called shake out.
-Worth **-14.0%** on the `--optimize=size` row (96,834 -> 83,269), -16.1% on the
-component row, and -10.6% on the JVM class, every module still gunzipping the
-fixture byte-for-byte on all four backends.
-
-**The format symbol reaches the state machine's slot dispatch.** chipz stores
-the caller's `'chipz:gzip` into `inflate-state`'s `data-format` slot and picks
-the state-machine entry off the slot READ -- `(ecase (inflate-state-data-format
-state) (deflate ...) (zlib ...) (gzip ...))` -- so the caller-constant fold that
-had already removed the bzip2 arm stopped one hop short of the zlib half. The
-fold now tracks per-slot value sets (constructor arguments, initforms, `setf`
-writes; `.kb/library-defun-pruning.md`), which deletes the zlib/deflate arms,
-and the labels lowering stopped constructing closures for state functions
-nothing references any more (`.kb/flet-labels.md`), so the zlib state closures,
-`%make-zlib-header` and the adler32 runtime shake out. Worth **-7.0%** on the
-`--optimize=size` row (83,269 -> 77,444), -7.3% at `--optimize`, -6.9% on the
-component row and -9.1% on the JVM class; the no-flag module moves too
-(298,934 -> 294,968), because neither mechanism is gated on a flag. Every
-module still gunzips the fixture byte-for-byte on all four backends.
-
-**A constant table now costs its own bytes.** chipz spells every lookup table it
-has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the
-distance/length codes, ~700 elements in all -- as
-`(coerce '(<literals>) '(vector (unsigned-byte 16|32)))`, and that used to be
-built cons cell by cons cell at startup, ~11.8 bytes of wasm an element. The
-compiler folds the literal call to the specialized vector it produces and the
-backend bakes that into the module's static data at the element width
-(`.kb/pure-builtin-fold.md`, `.kb/packed-integer-vectors.md`), so the same table
-is 4 bytes an element. Worth **-15.6%** on the `--optimize=size` row (191,872 ->
-161,976), which is more than the tables' own bytes: a specialized vector also
-stops boxing every element, so the general-array and cons paths those tables
-pinned shake out with them.
-
-**Type declarations now drive the array accessors.** chipz declares
-`(simple-array (unsigned-byte 8) (*))`-style types on nearly every buffer --
-as `(declare (type ...))`, as `defstruct` slot `:type`s, and through its own
-`deftype` aliases -- and those used to be parsed no-ops: every rank-1
-`aref`/`(setf aref)`/`length` site carried the full inline representation
-dispatch (196 bytes per `aref`, 21% of the module's instruction bytes). A site
-whose array representation a declaration (or the binding's own `make-array`
-initializer) pins down now emits that ONE representation's accessor behind a
-trapping cast, and the generic size-level store also stopped re-emitting its
-index/value expressions once per dispatch arm
-(`.kb/declarations-type-checks.md`). Worth **-8.0%** on the `--optimize=size`
-row (161,976 -> 149,054) and -5.4% at plain `--optimize`, with the check
-stream still gunzipping byte-identically on all four backends. What remains
-against the C/Zig rows is the code the declarations do not reach -- the state
-machine's undeclared intermediates and the funcall dispatch ladders.
-
-**And a further -1.2% is the data section, not code.** A library whose every slot
-accessor is a generic used to ship its name three times over: once for the
-`_lookup` registry, once again in the single-colon alias spelling nothing could
-address (`.kb/symbol-runtime-api.md`), and once more inside a whole
-`"No applicable method: X on "` sentence per generic. Those, plus interning a
-layout's print name as a view into its own `%class-` tag rather than a second
-copy (`.kb/instance-syntax.md`), are worth 2,235 bytes here -- small next to the
-code-side stages above, and the reason the remaining gap to the C and Zig rows
-is runtime rather than redundancy. Note what that trade looks like COMPRESSED:
-duplicate text is what a compressor collapses for free, so removing it moves the
-raw number and barely the gzipped one (the Worker table, which counts gzip,
-shows raw down on every row and gzip within a percent either way).
-
-**A provably byte-only sequence skips the character arm.** `read-sequence` /
-`write-sequence` used to pick bytes vs. characters off a runtime `(stringp seq)`
-test even when the buffer was visibly a byte vector, so every byte-only reader
-carried the `read-char` runtime (649 B) dead. A sequence with `ArgumentShapes`
-`VECTOR` shape -- a numeric-typed or untyped `make-array`, directly or through a
-stable `let`/`let*` binding -- now expands to the byte loop outright
-(`compiler/SequenceIoNarrowing`, `.todo/338`; parameters, `setq`'d or captured
-variables, character buffers and `stream-element-type` shapes keep the runtime
-test). Worth **-657 B** on the `--optimize=size` row (125,738 -> 125,081), and
--1,009 B on a print-free byte-loop micro program. The same todo's
-`%string-concat` half -- a byte-copy concat plus a one-element character vector
-for the `(string c)` in `%schar-set-runtime`, so neither renders through the
-value printer -- pays on modules whose only printer edge was the concat
-(-46% on a print-free concat micro program) but moves this row by nothing: the
-printer stays reachable through chipz's own `princ-to-string` uses and the
-`apply`-pulled `eval` runtime. Every module still gunzips the fixture
-byte-for-byte on all four backends.
-
-**The unoptimized micro rows are the prelude, so they move when the prelude
-does.** They grew by ~2.3 KB when `fill` joined it; `--optimize` takes both back
-to the same bytes as before, which is the point of only comparing tree-shaken
-numbers.
-
-**wasm-GC modules are not like-for-like with C or Zig.** rontolisp's default
-WASM backend is wasm-GC: strings and objects are host-managed GC types, so the
-module ships no allocator, no `malloc` and no linear-memory bookkeeping, while
-every Preview 1 row from a linear-memory language carries its own heap. The
-comparable rows are the `--no-gc` ones, which emit a plain MVP core module.
+measures the same as plain `--optimize` -- there is nothing left to trade once the
+tree-shaker has run. On `zlib` it was another 23% when first measured (551,644 ->
+425,815), because there the fused integer trees and unboxed locals it drops are
+spread over a whole library rather than a dozen forms.
 
 **`--component` costs about 1.1 KB.** It re-frames the module as a Preview 3
 component; the canonical-ABI adapters and the type section are the whole
-difference. Its imports are then stated as a WIT world rather than as
-`fd_write`.
+difference. Its imports are then stated as a WIT world rather than as `fd_write`.
+
+**wasm-GC modules are not like-for-like with C or Zig.** rontolisp's default WASM
+backend is wasm-GC: strings and objects are host-managed GC types, so the module
+ships no allocator, no `malloc` and no linear-memory bookkeeping, while every
+Preview 1 row from a linear-memory language carries its own heap. The comparable
+rows are the `--no-gc` ones, which emit a plain MVP core module.
+
+**Raw and compressed bytes do not move together.** Duplicate text is what a
+compressor collapses for free, so a change that removes redundant strings moves
+the raw number and barely the gzipped one -- the Worker table, which counts gzip,
+has shown raw down on every row and gzip within a percent either way.
+`.kb/size-measurement.md` has the other two ways "smaller" splits into numbers
+that disagree.
+
+## What made the `zlib` rows smaller
+
+Each stage below is a compiler change measured on this row, newest understanding
+first in each pair of numbers (`before -> after`). Percentages are of the
+`--optimize=size` row unless stated. They are a log, not a chain: they were
+measured as they landed, so the numbers do not form one continuous sequence.
+
+| Stage | What it removes | `--optimize=size` | Written down in |
+| --- | --- | --- | --- |
+| Dead-branch pruning | chipz ships a whole bzip2 decoder a gzip program never reaches; the `case`/`typecase` arms anchoring it fold, and the condition-runtime narrowing drops the format renderer and the unreachable seeded-condition arms | (why the rows sit far below chipz's source size) | `.kb/library-defun-pruning.md`, `.kb/error-handling.md` |
+| Duplicate-body fold | A `defstruct`/`define-condition` accessor compiles to the same bytes as its siblings; 362 bodies of which 48 were byte-for-byte copies | **-4.9%** (137,430 -> 130,658) | `.kb/optimize-dead-code-elimination.md` |
+| A named function is not a function value | `(mapcar #'f xs)` compiles to the direct call, so a dispatcher's fan-out stops keeping dead-path callees reachable (`STRING=`, 2,449 B, was one) | **-2.8%** (130,658 -> 127,026); -2.2% at `--optimize` | `.kb/optimize-dead-code-elimination.md` |
+| Lazy signal messages | An uncaught condition is a bare trap here and a typed throw's payload has no reader, so no signal site compiles its message render; where no code can HOLD a condition, the report renderer and `:report` lambdas go too | **-7.8%** (127,026 -> 117,118) | `.kb/error-handling.md` |
+| One generic `length` | An unpinned `length` site used to inline the whole sequence-type ladder, ~300 bytes each, 66 copies here = 13.6% of the module. Now one shared `_seq_len`, matching the JVM backend | **-8.1%** (105,393 -> 96,834) | `.kb/length-runtime.md` |
+| Dispatchers list only selectable branches | `decompress` is a defgeneric with 18 method variants; the program's one call can select two. The other sixteen and the pathname/stream helpers only they called shake out | **-14.0%** (96,834 -> 83,269); -16.1% component, -10.6% JVM | `.kb/optimize-dead-code-elimination.md` |
+| Per-slot value sets | chipz picks the state machine off a slot READ (`(ecase (inflate-state-data-format state) ...)`), so the caller-constant fold stopped one hop short. Tracking each slot's value set deletes the zlib/deflate arms; the labels lowering then stops building closures for unreferenced state functions | **-7.0%** (83,269 -> 77,444); -7.3% at `--optimize`, -6.9% component, -9.1% JVM, and the no-flag module moves too (298,934 -> 294,968) | `.kb/library-defun-pruning.md`, `.kb/flet-labels.md` |
+| Constant tables cost their own bytes | ~700 elements of `(coerce '(...) '(vector (unsigned-byte 16\|32)))` used to be built cons cell by cons cell at startup, ~11.8 B/element; now baked into static data at the element width, 4 B/element | **-15.6%** (191,872 -> 161,976) -- more than the tables, since a specialized vector also stops boxing and unpins the general-array and cons paths | `.kb/pure-builtin-fold.md`, `.kb/packed-integer-vectors.md` |
+| Declarations drive the array accessors | chipz declares `(simple-array (unsigned-byte 8) (*))` nearly everywhere and those used to be parsed no-ops: every rank-1 `aref` carried the full representation dispatch, 196 B a site, 21% of instruction bytes | **-8.0%** (161,976 -> 149,054); -5.4% at `--optimize` | `.kb/declarations-type-checks.md` |
+| Symbol names stop being shipped three times | Once for the `_lookup` registry, once as a single-colon alias nothing could address, once inside a `"No applicable method: X on "` sentence per generic; plus interning a layout's print name as a view into its own tag | -1.2% (2,235 bytes), and it is the DATA section, not code | `.kb/symbol-runtime-api.md`, `.kb/instance-syntax.md` |
+| Byte-only sequence I/O skips the character arm | `read-sequence`/`write-sequence` used to pick bytes vs characters off a runtime `(stringp seq)` test even for a visibly byte vector, carrying the `read-char` runtime (649 B) dead | **-657 B** (125,738 -> 125,081); -1,009 B on a print-free byte-loop micro program | `compiler/SequenceIoNarrowing` |
+
+Two things those numbers do NOT mean. Only code is shared by the duplicate-body
+fold, never identity: `(eq #'f #'g)` stays `NIL` for two identically-bodied
+functions. And the `%string-concat` half of the sequence-I/O work pays -46% on a
+print-free concat micro program but nothing here, because chipz keeps the printer
+reachable through its own `princ-to-string` uses and the `apply`-pulled `eval`
+runtime.
+
+Every module still gunzips the fixture byte-for-byte on all four backends after
+every one of these.
 
 ## Cross-language context
 
@@ -238,36 +138,49 @@ above.
 ### A total is not a comparison
 
 Compare section by section, or the answer is decided by things neither compiler
-is being judged on. (One of three ways "smaller" splits into numbers that do not
-move together; `.kb/size-measurement.md` names the other two, of which the
-sharpest is that raw and compressed bytes move in OPPOSITE directions when a
-change relocates bytes instead of deleting them.) A worked example, measured 2026-09-13 on a browser-facing
-reactor (four host DOM imports, four exports, seven string literals) against a
-hand-written non-GC toolchain emitting the same program:
+is being judged on. The worked example is the `dom_reactor` row, measured
+2026-09-13 against
+[hike-lang](https://github.com/kanryu/hike-lang/blob/main/examples/browser/main.hike),
+a hand-written non-GC toolchain emitting the same page -- same four imports, same
+four exports, same eleven literals, which is why this program's literal text is
+written to fixed lengths:
 
-| Section | that toolchain | rontolisp `--no-gc` |
+| Section | hike | rontolisp `--no-gc` |
 | --- | ---: | ---: |
-| total | 1,490 | **1,383** |
-| code | **299** | 491 |
-| data | 451 | 498 |
-| exports | 378 (24 entries) | **128 (8)** |
-| types | **31 (6)** | 129 (24) |
-| globals | 56 | **7** |
+| total | 1,490 | **856** |
+| code | 299 | **200** |
+| data | 451 | **440** |
+| imports | 78 (4) | 78 (4) |
+| exports | 378 (24 entries) | **69 (5)** |
+| types | **31 (6)** | 36 (7) |
+| globals | 56 | **none** |
+| custom | 148 | **none** |
 
-rontolisp wins the total and loses the only row that measures code generation.
-The 378-byte export section is every internal function plus the linker's own
-symbols (`__dso_handle`, `__data_end`, `__stack_low`, `__heap_base`); exporting
-only the four entry points the page calls would put that toolchain around
-1,180 and the totals the other way round. The 129-byte type section is
-rontolisp emitting one entry per function with no deduplication -- 24 types of
-which 12 are distinct.
+**The total is the least informative row.** 378 of hike's bytes are an export
+section holding every internal function plus the linker's own symbols
+(`__dso_handle`, `__data_end`, `__stack_low`, `__heap_base`), and 148 more are a
+custom section; exporting only the four entry points the page calls would put it
+near 1,180. Read `code` first -- that is the row that measures code generation,
+and it stands at 299 against 200 whatever is decided about the others.
 
-So: **a total can be moved by deciding what to export, and a type section by
-deciding whether to fold duplicates -- neither is what "how big is the code"
-asks.** Read `code` first, then ask what the other rows are paying for. The
-same discipline in the other direction: `.kb/optimize-dead-code-elimination.md`,
-"What an external optimizer still finds", on why a residue is neither a ceiling
-nor a measure of what is left.
+Two rows are worth reading past their totals:
+
+- **data, 440 against 451, of which the literal TEXT is 433 against 443.** This
+  backend packs literals with no NUL terminator and no alignment padding, and a
+  literal that only ever crosses to a host import carries no `[len]` header
+  either -- such a site is lowered as two compile-time constants, so the header
+  would be four bytes nothing reads (`.kb/no-gc-scalar-wasm.md`). Eleven literals,
+  44 bytes.
+- **types, 36 against 31.** The only section still larger, and not the
+  missing-deduplication story it used to be: seven entries, all used, none
+  duplicated. The extra one is `fib`'s `(i64) -> (i64)`. Integers here are i64,
+  exact to 2^63, so `fib` cannot share a type with the `(i32) -> (i32)` export
+  the way a 32-bit implementation's can. That is the value model's price, and it
+  is five bytes.
+
+The same discipline in the other direction:
+`.kb/optimize-dead-code-elimination.md`, "What an external optimizer still
+finds", on why a residue is neither a ceiling nor a measure of what is left.
 
 ### hello_world
 
@@ -283,9 +196,9 @@ nor a measure of what is left.
 
 A float-PRINTING program carries the shortest-round-trip float printer
 (Schubfach digit selection, ~2.7 KB of code plus a ~0.75 KB table;
-`.kb/format.md`, "The float printer"). The `--no-gc` row prints via `princ`, so
-its floor includes that printer; the GC rows render through `~,15F`'s
-fixed-decimal primitive and shake the free-format printer out.
+`.kb/format.md`). The `--no-gc` row prints via `princ`, so its floor includes
+that printer; the GC rows render through `~,15F`'s fixed-decimal primitive and
+shake the free-format printer out.
 
 | Language | WASI | Size (bytes) |
 | --- | --- | ---: |
@@ -297,10 +210,10 @@ fixed-decimal primitive and shake the free-format printer out.
 
 ### zlib
 
-Same program in every row -- gzip on stdin, decompressed octets on stdout --
-with one thing worth keeping in view: the rontolisp row is a dynamic language's
-whole runtime plus a library that pulls in `eval` and exceptions, where the
-others are a decompressor and nothing else.
+Same program in every row -- gzip on stdin, decompressed octets on stdout -- with
+one thing worth keeping in view: the rontolisp row is a dynamic language's whole
+runtime plus a library that pulls in `eval` and exceptions, where the others are
+a decompressor and nothing else.
 
 | Language | WASI | Size (bytes) | What it does |
 | --- | --- | ---: | --- |
