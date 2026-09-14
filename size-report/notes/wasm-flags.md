@@ -138,45 +138,50 @@ above.
 ### A total is not a comparison
 
 Compare section by section, or the answer is decided by things neither compiler
-is being judged on. The worked example is the `dom_reactor` row, measured
-2026-09-13 against
+is being judged on. The worked example is the `dom_reactor` row against
 [hike-lang](https://github.com/kanryu/hike-lang/blob/main/examples/browser/main.hike),
 a hand-written non-GC toolchain emitting the same page -- same four imports, same
 four exports, same eleven literals, which is why this program's literal text is
-written to fixed lengths:
+written to fixed lengths.
+
+Both sides measured 2026-09-13. hike at `e5e568c`, built with its own Makefile
+(`hikec build -target wasm32`, which is `clang --target=wasm32-unknown-unknown
+-O2 -nostdlib -Wl,--no-entry -Wl,--export-all -Wl,--allow-undefined`) through
+wasi-sdk 34.0 / clang 23.1.0. Its section sizes move with that clang version, so
+the toolchain is part of the number.
 
 | Section | hike | rontolisp `--no-gc` |
 | --- | ---: | ---: |
-| total | 1,490 | **856** |
-| code | 299 | **200** |
-| data | 451 | **440** |
+| total | 1,632 | **847** |
+| `gzip -9` | 993 | **609** |
+| code | 316 | **191** |
+| data | 452 | **440** |
 | imports | 78 (4) | 78 (4) |
-| exports | 378 (24 entries) | **69 (5)** |
+| exports | 465 (29 entries) | **69 (5)** |
 | types | **31 (6)** | 36 (7) |
-| globals | 56 | **none** |
+| globals | 93 | **none** |
 | custom | 148 | **none** |
 
-**The total is the least informative row.** 378 of hike's bytes are an export
-section holding every internal function plus the linker's own symbols
-(`__dso_handle`, `__data_end`, `__stack_low`, `__heap_base`), and 148 more are a
-custom section; exporting only the four entry points the page calls would put it
-near 1,180. Read `code` first -- that is the row that measures code generation,
-and it stands at 299 against 200 whatever is decided about the others.
+**The total is the least informative row.** `-Wl,--export-all` is in hike's build
+line, so its export section is every internal function plus the linker's own
+symbols (`__dso_handle`, `__data_end`, `__stack_low`, `__heap_base`) -- 465 bytes
+for 29 entries where the page calls four. That plus the 148-byte custom section
+is 613 bytes of the 1,632 that say nothing about code generation. Read `code`
+first.
 
 Two rows are worth reading past their totals:
 
-- **data, 440 against 451, of which the literal TEXT is 433 against 443.** This
+- **data, 440 against 452, of which the literal TEXT is 433 against 443.** This
   backend packs literals with no NUL terminator and no alignment padding, and a
   literal that only ever crosses to a host import carries no `[len]` header
   either -- such a site is lowered as two compile-time constants, so the header
-  would be four bytes nothing reads (`.kb/no-gc-scalar-wasm.md`). Eleven literals,
-  44 bytes.
-- **types, 36 against 31.** The only section still larger, and not the
-  missing-deduplication story it used to be: seven entries, all used, none
-  duplicated. The extra one is `fib`'s `(i64) -> (i64)`. Integers here are i64,
-  exact to 2^63, so `fib` cannot share a type with the `(i32) -> (i32)` export
-  the way a 32-bit implementation's can. That is the value model's price, and it
-  is five bytes.
+  would be four bytes nothing reads (`.kb/no-gc-scalar-wasm.md`). Eleven
+  literals, 44 bytes.
+- **types, 36 against 31 -- the only section still larger.** Not a deduplication
+  failure: seven entries, all used, none duplicated. The extra one is `fib`'s
+  `(i64) -> (i64)`. Integers here are i64, exact to 2^63, so `fib` cannot share a
+  type with the `(i32) -> (i32)` export the way a 32-bit implementation's can.
+  That is the value model's price, and it is five bytes.
 
 The same discipline in the other direction:
 `.kb/optimize-dead-code-elimination.md`, "What an external optimizer still
