@@ -84,10 +84,37 @@ dispatcher, called from `LispEvaluator.evalCons`, `JvmExprCompiler`, `WasmExprCo
 `unwindProtect` is for `with-temporary-file` alone (`ctx.ehMode` on WASM, true elsewhere).
 
 - `os-cond` -> a plain `cond` (upstream evaluates clause TESTS at macroexpansion time).
-- `with-deprecation` / `with-upgradability` also splice at TOP LEVEL (`flattenTopLevel` via
-  `isUiopDefinitionWrapper`, matching both spellings): they wrap definitions.
+- `with-deprecation` INSTRUMENTS: each wrapped `defun` gains a guarded one-time
+  notification that evaluates the `(level)` form at run time (no expansion-time evaluator
+  exists here) and signals the class the level selects — `deprecated-function-style-warning`
+  (`style-warn`) / `deprecated-function-warning` (`warn`) / `deprecated-function-error`
+  (`cerror`) / `deprecated-function-should-be-deleted` (`error`) — beside a per-function
+  `%dep-notified-*` flag, upstream's notify-once. `flattenTopLevel` EXPANDS the wrapper
+  before splicing (`isUiopWithDeprecationWrapper` -> `expandUiopWithDeprecation` then
+  flatten), so the instrumentation reaches the compiled top-level defuns; the interpreter
+  expands it via the same method. A `:warning`/`:style-warning` level emits the typed
+  warning identically on all four backends, but a typed warning is NOT routed to
+  handlers on the compile paths (pre-existing, not uiop-specific), so the pinned tests
+  catch a `:delete` level (an error, catchable everywhere). `with-upgradability` still
+  splices verbatim (`isUiopWithUpgradabilityWrapper`): its expansion is just `progn`.
 
 ## Per-sub-package verdicts
+`uiop/version` (15/15, `uiop-version.lisp`) — the whole sub-package. `*uiop-version*` is the
+CONTRACT version `"3.3.7"` (a version-gating library gets the answer matching the API it finds),
+not a claim of completeness. `parse-version` keeps upstream's `&optional on-error` shape: it CALLS
+the handler with a format string for a malformed version rather than signalling, so `version<` on
+garbage stays non-signalling. `version<`/`version<=` are written over `lexicographic<` /
+`lexicographic<=` (`.todo/354`); the five deprecation condition classes are real
+(`deprecated-function-name` is a defun reading the `name` slot via `slot-value`), and
+`version-deprecation` maps a version pair to `:style-warning` / `:warning` / `:error` / `:delete`
+with each start defaulting to the `next-version` of the lower level.
+
+`uiop/backward-driver` (2/7, `uiop-backward-driver.lisp`) — `coerce-pathname` is the one-line
+DEPRECATED alias of `parse-unix-namestring` (`.todo/357`), and `version-compatible-p` is the ASDF
+1-to-2.32 check over `parse-version` + `lexicographic<=`. The other five (the configuration
+-directory search) stay `not-implemented-error` stubs: they need `uiop/configuration`, which
+nothing implements yet.
+
 `uiop/utility` — `with-upgradability` -> `progn`; one character type (`+character-types+` =
 `#(character)`, `+non-base-chars-exist-p+` NIL, `base-string-p` always t);
 `register-hook-function` signals (needs `(setf (symbol-value var) ...)` to be a place — the day it

@@ -2674,6 +2674,37 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUiopVersionComparisonAndDeprecation() throws Exception {
+		// The version table and the deprecation signalling, compiled: version< over
+		// lexicographic< ("1.2" < "1.10", equal-prefix, malformed input non-signalling),
+		// version-deprecation's mapping, and a with-deprecation at :delete signalling
+		// deprecated-function-should-be-deleted on the first call (caught by
+		// handler-case, which reads the name slot). A :delete level is pinned so the
+		// compiled backends can catch it -- a typed WARNING is not routed to handlers
+		// on the compile paths (.kb/uiop.md). The WASM twin is
+		// WasmLispCompilerIntegrationTest#uiopVersionComparisonAndDeprecationCompileAndRun.
+		assertThat(compileAndRun("""
+				(print (list (uiop:version< "1.2" "1.10")
+				             (uiop:version< "1.2" "1.2.3")
+				             (uiop:version< "1.10" "1.2")
+				             (uiop:version< "1.0" "garbage")
+				             (uiop:version<= "1.2" "1.2")
+				             (uiop:version= "1.2" "1.2")
+				             (uiop:next-version "1.2")
+				             uiop:*uiop-version*))
+				(print (uiop:version-deprecation "1.1" :warning "1.1"))
+				(uiop:with-deprecation ((uiop:version-deprecation "1.1" :delete "1.1"))
+				  (defun old-gone () 1))
+				(print (handler-case (old-gone)
+				         (uiop:deprecated-function-should-be-deleted (c)
+				           (list :caught (uiop:deprecated-function-name c)))))
+				""")).isEqualTo("""
+				(T T NIL NIL T T "1.3" "3.3.7")
+				:WARNING
+				(:CAUGHT OLD-GONE)""");
+	}
+
+	@Test
 	void compileAndRunUiopUtilityHelpers() throws Exception {
 		// The four uiop/utility members with real codegen shape: strcat (a &rest call
 		// into the spliced reduce/strcat), string-prefix-p (string= with :end2), nest (a

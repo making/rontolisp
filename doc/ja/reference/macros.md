@@ -74,7 +74,7 @@
 | `uiop:if-let` | `(uiop:if-let ((a x) (b y)) then else)` | `let` と同じく変数を並列に束縛し、**すべての**変数が非 nil のときだけ `then` 側を取ります。入れ子でない単一束縛 (`(uiop:if-let (x form) ...)`) も受け付けます |
 | `uiop:when-let` | `(uiop:when-let ((a x)) body...)` | 暗黙の `progn` ボディを持ち else 分岐のない `uiop:if-let`: すべての変数が非 nil のときだけボディを評価し、そうでなければ nil です |
 | `uiop:when-let*` | `(uiop:when-let* ((a x) (b (f a))) body...)` | 逐次版の `uiop:when-let`: 各フォームは先行する束縛を参照でき、最初に nil になった時点で残りを評価せず nil になります |
-| `uiop:with-deprecation` | `(uiop:with-deprecation (:style-warning) (defun old-f (x) x))` | 包んだ定義をそのまま確立します。lite: rontolisp には非推奨警告のチャネルがないため level フォームは無視され、警告は一切出ません |
+| `uiop:with-deprecation` | `(uiop:with-deprecation (:style-warning) (defun old-f (x) x))` | 包んだ定義を確立し、包んだ各 `defun` は最初の呼び出しで `(level)` フォームを一度評価し、そのレベルが選ぶ非推奨コンディションをシグナルします |
 | `prog` | `(prog ((v init)...) tag-or-form...)` | ブロック内の `let` + `tagbody`: `go` が本体のタグ間をジャンプし、`(return x)` が `x` を返して抜けます |
 | `prog*` | `(prog* ((v init)...) tag-or-form...)` | `prog` と同様で束縛が逐次的(`let*` 方式) |
 | `shiftf` | `(shiftf a b 9)` | 場所の値を左へシフトし、最後の場所に新しい値を格納し、最初の場所の古い値を返します |

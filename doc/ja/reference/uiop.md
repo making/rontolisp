@@ -31,7 +31,7 @@
 | `uiop/package-local-nicknames` | パッケージローカルニックネーム API | 3 / 3 |
 | `uiop/package*` | `uiop/package` が定義するがエクスポートしない 3 つのコンディション・型名 | 3 / 3 |
 | [`uiop/utility`](uiop/utility.md) | 移植性のあるヘルパ (`strcat`、`split-string`、`if-let`、`not-implemented-error`) | 68 / 68 |
-| `uiop/version` | バージョン比較と非推奨コンディション | 1 / 15 |
+ | `uiop/version` | バージョン比較と非推奨コンディション | 15 / 15 |
 | [`uiop/os`](uiop/os.md) | ホストの識別、環境変数、作業ディレクトリ | 22 / 22 |
 | [`uiop/pathname`](uiop/pathname.md) | パス名の代数 (`subpathname`、`parse-unix-namestring`、`enough-pathname`) | 50 / 50 |
 | [`uiop/filesystem`](uiop/filesystem.md) | ファイルシステムの探索・走査・変更 | 32 / 32 |
@@ -41,7 +41,7 @@
 | `uiop/run-program` | 同期のサブプロセス | 0 / 7 |
 | `uiop/lisp-build` | `compile-file*` と遅延警告 | 1 / 44 |
 | `uiop/configuration` | XDG パスと設定ファイルの探索 | 0 / 38 |
-| `uiop/backward-driver` | 非推奨の別名 | 0 / 7 |
+ | `uiop/backward-driver` | 非推奨の別名 (`coerce-pathname`、`version-compatible-p`) | 2 / 7 |
 
 エクスポートの完全な一覧は
 `src/main/resources/am/ik/rontolisp/uiop-exports.txt` としてチェックインされています

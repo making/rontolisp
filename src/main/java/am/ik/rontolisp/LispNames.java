@@ -9326,6 +9326,45 @@ public final class LispNames {
 	public static final String UIOP_WITH_DEPRECATION_QUALIFIED = UIOP_VERSION_PKG + ":" + WITH_DEPRECATION;
 
 	/**
+	 * The {@code uiop/utility:style-warn} member a {@code with-deprecation}
+	 * {@code :style-warning} level signals through -- the deprecation family's low end
+	 * ({@code .kb/uiop.md}).
+	 */
+	public static final String STYLE_WARN = "STYLE-WARN";
+
+	/**
+	 * The {@code uiop/version:version-deprecation} member that maps a version string to
+	 * the current deprecation level ({@code :style-warning} / {@code :warning} /
+	 * {@code :error} / {@code :delete}); the level form a {@code with-deprecation}
+	 * expansion evaluates at run time.
+	 */
+	public static final String VERSION_DEPRECATION = "VERSION-DEPRECATION";
+
+	/**
+	 * The {@code uiop/version:deprecated-function-style-warning} condition class,
+	 * signalled by a {@code with-deprecation} {@code :style-warning} level.
+	 */
+	public static final String DEPRECATED_FUNCTION_STYLE_WARNING = "DEPRECATED-FUNCTION-STYLE-WARNING";
+
+	/**
+	 * The {@code uiop/version:deprecated-function-warning} condition class, signalled by
+	 * a {@code :warning} level.
+	 */
+	public static final String DEPRECATED_FUNCTION_WARNING = "DEPRECATED-FUNCTION-WARNING";
+
+	/**
+	 * The {@code uiop/version:deprecated-function-error} condition class, signalled by a
+	 * {@code :error} level.
+	 */
+	public static final String DEPRECATED_FUNCTION_ERROR = "DEPRECATED-FUNCTION-ERROR";
+
+	/**
+	 * The {@code uiop/version:deprecated-function-should-be-deleted} condition class,
+	 * signalled by a {@code :delete} level.
+	 */
+	public static final String DEPRECATED_FUNCTION_SHOULD_BE_DELETED = "DEPRECATED-FUNCTION-SHOULD-BE-DELETED";
+
+	/**
 	 * {@code uiop:with-upgradability () definitions...} -- upstream wraps EVERY one of
 	 * its own definitions in this so ASDF can redefine itself inside a running image (the
 	 * forms are re-evaluated at compile, load and run time and the functions declared

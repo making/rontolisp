@@ -20371,9 +20371,11 @@ class LispEvaluatorTest {
 	void evalUiopBindingMacrosAndWithDeprecation() {
 		// if-let binds like let and takes the then branch only when EVERY variable came
 		// out non-nil; a single un-nested binding is accepted; when-let* is sequential
-		// and short-circuits before evaluating the rest. with-deprecation establishes
-		// its definitions verbatim (the level form is ignored -- rontolisp has no
-		// deprecation-warning channel) both at top level and inside eval-when.
+		// and short-circuits before evaluating the rest. with-deprecation instruments
+		// its defuns: a :style-warning level makes the first call style-warn the
+		// deprecated-function-style-warning class, and the body still runs (the warning
+		// goes to the ignored stdout buffer). Definitions are established at top level
+		// and inside eval-when alike.
 		assertThat(evalMulti("""
 				(uiop:with-deprecation (:style-warning)
 				  (defun dep-a (x) (* x 2))
@@ -20391,6 +20393,42 @@ class LispEvaluatorTest {
 				      (uiop:when-let* ((a nil) (b (error "no"))) b)
 				      (dep-a 3) (dep-b 3) (dep-c 3))
 				""").print()).isEqualTo("((1 2) 0 30 NIL 12 NIL 15 NIL 6 4 2)");
+	}
+
+	@Test
+	void evalUiopVersionComparisonTable() {
+		// version< is written over lexicographic< (.todo/354): "1.2" < "1.10"
+		// numerically, an equal-prefix shorter version is less, and malformed input
+		// answers nil WITHOUT signalling (parse-version with on-error nil returns nil,
+		// and lexicographic< over nil is nil). version<= / version= derive from it.
+		assertThat(evalMulti("""
+				(list (uiop:version< "1.2" "1.10")
+				      (uiop:version< "1.2" "1.2.3")
+				      (uiop:version< "1.10" "1.2")
+				      (uiop:version< "1.0" "garbage")
+				      (uiop:version<= "1.2" "1.2")
+				      (uiop:version= "1.2" "1.2")
+				      (uiop:next-version "1.2")
+				      uiop:*uiop-version*)
+				""").print()).isEqualTo("(T T NIL NIL T T \"1.3\" \"3.3.7\")");
+	}
+
+	@Test
+	void evalUiopWithDeprecationSignalsTheClassItsLevelSelects() {
+		// with-deprecation evaluates the level form (version-deprecation maps a version
+		// pair to a level) and signals the class that level selects: at :delete the
+		// first call errors deprecated-function-should-be-deleted, and
+		// deprecated-function-name reads the name slot. The body never runs -- the
+		// error is caught. (A :warning level signals deprecated-function-warning the
+		// same way; this pins :delete so the compiled backends can catch it -- typed
+		// warnings are not routed to handlers on the compile paths.)
+		assertThat(evalMulti("""
+				(uiop:with-deprecation ((uiop:version-deprecation "1.1" :delete "1.1"))
+				  (defun old-gone () 1))
+				(handler-case (old-gone)
+				  (uiop:deprecated-function-should-be-deleted (c)
+				    (list :caught (uiop:deprecated-function-name c))))
+				""").print()).isEqualTo("(:CAUGHT OLD-GONE)");
 	}
 
 	@Test

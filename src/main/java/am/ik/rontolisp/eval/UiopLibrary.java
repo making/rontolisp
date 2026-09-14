@@ -84,7 +84,8 @@ public final class UiopLibrary {
 	private static final Map<String, String> RESOURCES = Map.of("UIOP/PACKAGE", "uiop-package.lisp", "UIOP/UTILITY",
 			"uiop-utility.lisp", "UIOP/OS", "uiop-os.lisp", "UIOP/PATHNAME", "uiop-pathname.lisp", "UIOP/FILESYSTEM",
 			"uiop-filesystem.lisp", "UIOP/STREAM", "uiop-stream.lisp", "UIOP/IMAGE", "uiop-image.lisp",
-			"UIOP/LISP-BUILD", "uiop-lisp-build.lisp");
+			"UIOP/LISP-BUILD", "uiop-lisp-build.lisp", "UIOP/VERSION", "uiop-version.lisp", "UIOP/BACKWARD-DRIVER",
+			"uiop-backward-driver.lisp");
 
 	/**
 	 * Members the interpreter defines in Java (and the compilers lower or wrap
@@ -432,7 +433,20 @@ public final class UiopLibrary {
 			Map.entry(LispNames.OUTPUT_STRING, List.of(LispNames.CALL_WITH_OUTPUT_FILE)),
 			Map.entry(LispNames.WITH_INPUT_FILE, List.of(LispNames.CALL_WITH_INPUT_FILE)),
 			Map.entry(LispNames.WITH_OUTPUT_FILE, List.of(LispNames.CALL_WITH_OUTPUT_FILE)),
-			Map.entry(LispNames.WITH_SAFE_IO_SYNTAX, List.of(LispNames.CALL_WITH_SAFE_IO_SYNTAX)));
+			Map.entry(LispNames.WITH_SAFE_IO_SYNTAX, List.of(LispNames.CALL_WITH_SAFE_IO_SYNTAX)),
+			// with-deprecation's expansion evaluates the level form and signals the
+			// deprecation class it selects -- but only the top-level use is expanded by
+			// flattenTopLevel BEFORE selection; a with-deprecation in an expression is
+			// expanded by the expression compilers AFTER it, so the names the expansion
+			// introduces must be listed here. style-warn is the uiop/utility function the
+			// :style-warning arm signals through, version-deprecation the usual level
+			// form, and the four condition classes are referenced by the expansion
+			// itself (no selected definition names them, so the fixpoint would not pull
+			// them in).
+			Map.entry(LispNames.WITH_DEPRECATION,
+					List.of(LispNames.STYLE_WARN, LispNames.VERSION_DEPRECATION,
+							LispNames.DEPRECATED_FUNCTION_STYLE_WARNING, LispNames.DEPRECATED_FUNCTION_WARNING,
+							LispNames.DEPRECATED_FUNCTION_ERROR, LispNames.DEPRECATED_FUNCTION_SHOULD_BE_DELETED)));
 
 	/** Whether a definition the program never NAMES is nonetheless reached from it. */
 	private static boolean reachedBySurfaceForm(String name, Set<String> occurring) {

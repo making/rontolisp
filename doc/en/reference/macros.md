@@ -75,7 +75,7 @@ description and a runnable example you can evaluate in your browser.
 | `uiop:if-let` | `(uiop:if-let ((a x) (b y)) then else)` | Bind the variables in parallel like `let`, then take the `then` branch only when EVERY variable came out non-nil. A single un-nested binding (`(uiop:if-let (x form) ...)`) is accepted too |
 | `uiop:when-let` | `(uiop:when-let ((a x)) body...)` | `uiop:if-let` with an implicit `progn` body and no else branch: the body runs only when every variable came out non-nil, otherwise nil |
 | `uiop:when-let*` | `(uiop:when-let* ((a x) (b (f a))) body...)` | The sequential `uiop:when-let`: each form sees the bindings before it, and the first nil one short-circuits to nil without evaluating the rest |
-| `uiop:with-deprecation` | `(uiop:with-deprecation (:style-warning) (defun old-f (x) x))` | Establish the wrapped definitions exactly as written. Lite: rontolisp has no deprecation-warning channel, so the level form is ignored and no warning is ever produced |
+| `uiop:with-deprecation` | `(uiop:with-deprecation (:style-warning) (defun old-f (x) x))` | Establish the wrapped definitions; each wrapped `defun` evaluates its `(level)` form once on first call and signals the deprecation condition that level selects |
 | `prog` | `(prog ((v init)...) tag-or-form...)` | `let` + `tagbody` inside a block: `go` jumps between the body's tags and `(return x)` exits with `x` |
 | `prog*` | `(prog* ((v init)...) tag-or-form...)` | Like `prog` with sequential (`let*`-style) bindings |
 | `shiftf` | `(shiftf a b 9)` | Shift place values left, store the last value into the last place, return the first place's old value |

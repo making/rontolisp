@@ -4601,8 +4601,13 @@ class WasmLispCompilerIntegrationTest {
 	void uiopBindingMacrosAndWithDeprecationCompileAndRun() throws Exception {
 		// with-deprecation wraps top-level defuns in the wild, so its expansion has to
 		// SPLICE at top level -- burying them in an expression would stop Pass 1 from
-		// collecting them at all.
-		assertThat(compileAndRun("""
+		// collecting them at all. The instrumented defuns signal the deprecation class
+		// on first call, so the expansion references uiop/utility:style-warn and the
+		// version condition classes -- which only exist once UiopLibrary.process (called
+		// by LispPreludeLibrary.process) has spliced them, hence this helper rather than
+		// the plain compileAndRun. The JVM twin is
+		// JvmLispCompilerTest.compileAndRunUiopBindingMacrosAndWithDeprecation.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 				(uiop:with-deprecation (:style-warning)
 				  (defun dep-a (x) (* x 2))
 				  (defun dep-b (x) (+ x 1)))
@@ -4618,7 +4623,40 @@ class WasmLispCompilerIntegrationTest {
 				             (uiop:when-let* ((a 5) (b (* a 2))) (+ a b))
 				             (uiop:when-let* ((a nil) (b (error "no"))) b)
 				             (dep-a 3) (dep-b 3) (dep-c 3)))
-				""")).isEqualTo("((1 2) 0 30 NIL 12 NIL 15 NIL 6 4 2)");
+				""")))).isEqualTo("((1 2) 0 30 NIL 12 NIL 15 NIL 6 4 2)");
+	}
+
+	@Test
+	void uiopVersionComparisonAndDeprecationCompileAndRun() throws Exception {
+		// The version table and the deprecation signalling, compiled to WASM: version<
+		// over lexicographic< ("1.2" < "1.10", equal-prefix, malformed input
+		// non-signalling), version-deprecation's mapping, and a with-deprecation at
+		// :delete signalling deprecated-function-should-be-deleted on the first call
+		// (caught by handler-case, which reads the name slot). A :delete level is pinned
+		// so the compiled backends can catch it -- a typed WARNING is not routed to
+		// handlers on the compile paths (.kb/uiop.md). Goes through
+		// LispPreludeLibrary.process so the version and condition definitions are
+		// spliced; the JVM twin is
+		// JvmLispCompilerTest#compileAndRunUiopVersionComparisonAndDeprecation.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (list (uiop:version< "1.2" "1.10")
+				             (uiop:version< "1.2" "1.2.3")
+				             (uiop:version< "1.10" "1.2")
+				             (uiop:version< "1.0" "garbage")
+				             (uiop:version<= "1.2" "1.2")
+				             (uiop:version= "1.2" "1.2")
+				             (uiop:next-version "1.2")
+				             uiop:*uiop-version*))
+				(print (uiop:version-deprecation "1.1" :warning "1.1"))
+				(uiop:with-deprecation ((uiop:version-deprecation "1.1" :delete "1.1"))
+				  (defun old-gone () 1))
+				(print (handler-case (old-gone)
+				         (uiop:deprecated-function-should-be-deleted (c)
+				           (list :caught (uiop:deprecated-function-name c)))))
+				""")))).isEqualTo("""
+				(T T NIL NIL T T "1.3" "3.3.7")
+				:WARNING
+				(:CAUGHT OLD-GONE)""");
 	}
 
 	@Test

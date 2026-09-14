@@ -11126,21 +11126,132 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (uiop:with-deprecation (level) definitions...)} into
-	 * {@code (progn definitions...)}. Upstream marks the definitions it wraps as
-	 * deprecated so that a later caller gets a style warning; rontolisp has no
-	 * deprecation-warning machinery and no compile-time warning channel to route one
-	 * through, so the honest lowering establishes every definition exactly as written and
-	 * ignores the level form. Documented as such -- a silently dropped diagnostic that is
-	 * not written down reads as a bug later. The {@code progn} is what
-	 * {@link #flattenTopLevel} splices, so a wrapped top-level {@code defun} stays a
-	 * top-level definition on the compile paths.
+	 * Expands {@code (uiop:with-deprecation (level) definitions...)} into a {@code progn}
+	 * that establishes each {@code defun} exactly as written and instruments it: the
+	 * first call evaluates the {@code level} form once and signals the deprecation class
+	 * the level selects -- {@code deprecated-function-style-warning} for
+	 * {@code :style-warning}, {@code deprecated-function-warning} for {@code :warning},
+	 * {@code deprecated-function-error} for {@code :error} (via {@code cerror}), and
+	 * {@code deprecated-function-should-be-deleted} for {@code :delete}. The level form
+	 * is the expression a library writes in the {@code (level)} slot, typically
+	 * {@code (version-deprecation ...)}, so it is evaluated at run time (upstream
+	 * evaluates it once at macro-expansion time; this port has no expansion-time
+	 * evaluator, and the per-function {@code %dep-notified-*} flag makes the notification
+	 * happen once per function exactly as upstream's does). Non-{@code defun} forms pass
+	 * through untouched.
+	 *
+	 * <p>
+	 * Each instrumented {@code defun} is emitted beside a {@code (defvar %dep-notified-*}
+	 * nil) flag; the whole {@code progn} is what {@link #flattenTopLevel} splices, so a
+	 * wrapped top-level {@code defun} stays a top-level definition on the compile paths
+	 * (see {@link #flattenTopLevelInto}, which EXPANDS this wrapper before splicing so
+	 * the instrumentation reaches the compiled defuns too).
 	 * @param cons the with-deprecation expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandUiopWithDeprecation(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		return prognOrNil(parts.subList(Math.min(2, parts.size()), parts.size()));
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons levelCons)) {
+			// Malformed: no (level) list. Establish the definitions verbatim rather than
+			// inventing a level.
+			return prognOrNil(parts.subList(Math.min(2, parts.size()), parts.size()));
+		}
+		LispVal levelExpr = levelCons.car();
+		List<LispVal> definitions = parts.subList(2, parts.size());
+		List<LispVal> out = new java.util.ArrayList<>();
+		for (LispVal def : definitions) {
+			if (def instanceof LispCons dcons && dcons.car() instanceof LispSymbol op
+					&& LispNames.DEFUN.equals(op.name()) && dcons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol nameSym) {
+				String flag = "%dep-notified-" + nameSym.name() + "-" + MV_COUNTER.getAndIncrement();
+				out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(flag), LispNil.INSTANCE)));
+				out.add(instrumentDeprecatedDefun(dcons, levelExpr, nameSym.name(), flag));
+			}
+			else {
+				out.add(def);
+			}
+		}
+		return prognOrNil(out);
+	}
+
+	/**
+	 * Builds the instrumented body of one deprecated {@code defun}: leading
+	 * {@code declare} forms stay at the head, then a guarded one-time notification that
+	 * evaluates {@code levelExpr} and dispatches on it, then the original body.
+	 * @param defun the {@code (defun NAME LAMBDA-LIST body...)} form
+	 * @param levelExpr the level form to evaluate
+	 * @param name the function name
+	 * @param flag the per-function notified-flag variable name
+	 * @return the rebuilt defun
+	 */
+	private static LispVal instrumentDeprecatedDefun(LispCons defun, LispVal levelExpr, String name, String flag) {
+		List<LispVal> parts = defun.toList();
+		List<LispVal> prolog = new java.util.ArrayList<>();
+		List<LispVal> tail = new java.util.ArrayList<>();
+		boolean inProlog = true;
+		for (int i = 3; i < parts.size(); i++) {
+			LispVal b = parts.get(i);
+			if (inProlog && b instanceof LispCons dc && dc.car() instanceof LispSymbol ds
+					&& LispNames.DECLARE.equals(ds.name())) {
+				prolog.add(b);
+			}
+			else {
+				inProlog = false;
+				tail.add(b);
+			}
+		}
+		List<LispVal> notifyParts = new java.util.ArrayList<>();
+		notifyParts.add(new LispSymbol(LispNames.UNLESS));
+		notifyParts.add(new LispSymbol(flag));
+		notifyParts.add(listToCons(List.of(new LispSymbol(LispNames.SETF), new LispSymbol(flag), LispTrue.INSTANCE)));
+		List<LispVal> caseParts = new java.util.ArrayList<>();
+		caseParts.add(new LispSymbol(LispNames.CASE));
+		caseParts.add(levelExpr);
+		caseParts.add(listToCons(List.of(new LispSymbol(":STYLE-WARNING"), styleWarnDeprecationCall(name))));
+		caseParts.add(listToCons(List.of(new LispSymbol(":WARNING"), warnDeprecationCall(name))));
+		caseParts.add(listToCons(List.of(new LispSymbol(":ERROR"), cerrorDeprecationCall(name))));
+		caseParts.add(listToCons(List.of(new LispSymbol(":DELETE"), errorDeprecationCall(name))));
+		caseParts.add(listToCons(List.of(new LispSymbol("T"), LispNil.INSTANCE)));
+		notifyParts.add(listToCons(caseParts));
+		LispVal notify = listToCons(notifyParts);
+		List<LispVal> body = new java.util.ArrayList<>();
+		body.addAll(prolog);
+		body.add(notify);
+		body.addAll(tail);
+		List<LispVal> rebuilt = new java.util.ArrayList<>();
+		rebuilt.add(parts.get(0));
+		rebuilt.add(parts.get(1));
+		rebuilt.add(parts.get(2));
+		rebuilt.add(prognOrNil(body));
+		return listToCons(rebuilt);
+	}
+
+	/** {@code (style-warn 'deprecated-function-style-warning :name 'NAME)}. */
+	private static LispVal styleWarnDeprecationCall(String name) {
+		return listToCons(List.of(new LispSymbol(UiopExports.qualified(LispNames.STYLE_WARN)),
+				quoteOf(UiopExports.qualified(LispNames.DEPRECATED_FUNCTION_STYLE_WARNING)), new LispSymbol(":NAME"),
+				quoteOf(name)));
+	}
+
+	/** {@code (warn 'deprecated-function-warning :name 'NAME)}. */
+	private static LispVal warnDeprecationCall(String name) {
+		return listToCons(List.of(new LispSymbol(LispNames.WARN),
+				quoteOf(UiopExports.qualified(LispNames.DEPRECATED_FUNCTION_WARNING)), new LispSymbol(":NAME"),
+				quoteOf(name)));
+	}
+
+	/** {@code (cerror "USE FUNCTION ANYWAY" 'deprecated-function-error :name 'NAME)}. */
+	private static LispVal cerrorDeprecationCall(String name) {
+		return listToCons(List.of(new LispSymbol(LispNames.CERROR), new LispString("USE FUNCTION ANYWAY"),
+				quoteOf(UiopExports.qualified(LispNames.DEPRECATED_FUNCTION_ERROR)), new LispSymbol(":NAME"),
+				quoteOf(name)));
+	}
+
+	/** {@code (error 'deprecated-function-should-be-deleted :name 'NAME)}. */
+	private static LispVal errorDeprecationCall(String name) {
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				quoteOf(UiopExports.qualified(LispNames.DEPRECATED_FUNCTION_SHOULD_BE_DELETED)),
+				new LispSymbol(":NAME"), quoteOf(name)));
 	}
 
 	/**
@@ -38868,23 +38979,33 @@ public final class LispMacroExpander {
 	private static boolean isTopLevelSpliceForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
 				&& (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
-						|| ((LispNames.EVAL_WHEN.equals(sym.name()) || isUiopDefinitionWrapper(sym.name()))
-								&& cons.toList().size() >= 2));
+						|| ((LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithDeprecationWrapper(sym.name())
+								|| isUiopWithUpgradabilityWrapper(sym.name())) && cons.toList().size() >= 2));
 	}
 
 	/**
-	 * Whether the operator is one of the two uiop macros that WRAP top-level definitions
-	 * and lower to {@code progn}: {@code with-deprecation} (a library's deprecated
-	 * defuns) and {@code with-upgradability} (which upstream puts around every one of its
-	 * own). Recognized in BOTH spellings, because {@link #flattenTopLevel} runs on either
-	 * side of package resolution -- {@code UserMacroExpander} calls it on the surface
-	 * program, the compilers after resolution.
+	 * Whether the operator is {@code uiop:with-deprecation} in either spelling.
+	 * {@code flattenTopLevel} EXPANDS this wrapper before splicing
+	 * ({@link #flattenTopLevelInto}), so the deprecation instrumentation reaches the
+	 * compiled top-level defuns; {@code with-upgradability} is spliced verbatim instead,
+	 * since its expansion is just {@code progn}.
 	 */
-	private static boolean isUiopDefinitionWrapper(String operator) {
+	private static boolean isUiopWithDeprecationWrapper(String operator) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(operator);
 		return qn != null && UiopExports.isUiopFamily(qn.pkg())
-				&& (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_DEPRECATION)
-						|| UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_UPGRADABILITY));
+				&& UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_DEPRECATION);
+	}
+
+	/**
+	 * Whether the operator is {@code uiop:with-upgradability} in either spelling: it
+	 * WRAPS top-level definitions and lowers to {@code progn} (upstream puts it around
+	 * every one of its own), so {@code flattenTopLevel} splices its wrapped definitions
+	 * verbatim.
+	 */
+	private static boolean isUiopWithUpgradabilityWrapper(String operator) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(operator);
+		return qn != null && UiopExports.isUiopFamily(qn.pkg())
+				&& UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_UPGRADABILITY);
 	}
 
 	private static void flattenTopLevelInto(LispVal form, List<LispVal> out) {
@@ -38898,17 +39019,28 @@ public final class LispMacroExpander {
 				}
 				return;
 			}
-			// eval-when drops its situation list; uiop:with-deprecation and
-			// uiop:with-upgradability drop their leading form the same way -- they wrap
-			// top-level defuns (tiny-routes' response.lisp does the first, inside an
-			// eval-when; upstream uiop puts the second around every one of its own), and
-			// burying those in an expression would stop them being definitions at all.
-			if (LispNames.EVAL_WHEN.equals(sym.name()) || isUiopDefinitionWrapper(sym.name())) {
+			// eval-when drops its situation list; uiop:with-upgradability drops its
+			// leading () form the same way -- they wrap top-level defuns (tiny-routes'
+			// response.lisp does with-deprecation, inside an eval-when; upstream uiop
+			// puts with-upgradability around every one of its own), and burying those in
+			// an expression would stop them being definitions at all.
+			if (LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithUpgradabilityWrapper(sym.name())) {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
 					for (int i = 2; i < parts.size(); i++) {
 						flattenTopLevelInto(parts.get(i), out);
 					}
+					return;
+				}
+			}
+			// uiop:with-deprecation EXPANDS to instrumented defuns before splicing, so
+			// the deprecation notification (LispMacroExpander.expandUiopWithDeprecation)
+			// reaches the compiled top-level defuns exactly as it reaches the
+			// interpreter's. The expansion is a progn of (defvar flag nil) + defun
+			// pairs; flattening that keeps each a top-level definition.
+			if (isUiopWithDeprecationWrapper(sym.name())) {
+				if (cons.toList().size() >= 2) {
+					flattenTopLevelInto(expandUiopWithDeprecation(cons), out);
 					return;
 				}
 			}

@@ -31,7 +31,7 @@ one member name:
 | `uiop/package-local-nicknames` | the package-local nickname API | 3 / 3 |
 | `uiop/package*` | the three condition/type names `uiop/package` defines but does not export | 3 / 3 |
 | [`uiop/utility`](uiop/utility.md) | the portable helpers (`strcat`, `split-string`, `if-let`, `not-implemented-error`) | 68 / 68 |
-| `uiop/version` | version comparison and the deprecation conditions | 1 / 15 |
+ | `uiop/version` | version comparison and the deprecation conditions | 15 / 15 |
 | [`uiop/os`](uiop/os.md) | host identity, the environment, the working directory | 22 / 22 |
 | [`uiop/pathname`](uiop/pathname.md) | the pathname algebra (`subpathname`, `parse-unix-namestring`, `enough-pathname`) | 50 / 50 |
 | [`uiop/filesystem`](uiop/filesystem.md) | probe, walk and mutate the file system | 32 / 32 |
@@ -41,7 +41,7 @@ one member name:
 | `uiop/run-program` | synchronous subprocesses | 0 / 7 |
 | `uiop/lisp-build` | `compile-file*` and the deferred warnings | 1 / 44 |
 | `uiop/configuration` | XDG paths and the configuration search | 0 / 38 |
-| `uiop/backward-driver` | the deprecated aliases | 0 / 7 |
+ | `uiop/backward-driver` | the deprecated aliases (`coerce-pathname`, `version-compatible-p`) | 2 / 7 |
 
 The full export list is checked in as
 `src/main/resources/am/ik/rontolisp/uiop-exports.txt` (one row per export:

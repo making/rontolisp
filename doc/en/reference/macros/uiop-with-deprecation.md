@@ -3,24 +3,29 @@
 `(uiop:with-deprecation (level) definitions...)`
 
 Establishes the definitions it wraps, exactly as written, and returns the last
-one's value. Real UIOP additionally marks them as deprecated so that a later
-caller gets a warning at `level`.
+one's value. It also marks each wrapped `defun` as deprecated: the first call
+evaluates the `level` form once and signals the deprecation condition the level
+selects.
 
-**rontolisp drops that diagnostic.** There is no deprecation-warning machinery
-and no compile-time warning channel to route one through, so the honest lowering
-is `(progn definitions...)` — the level form is evaluated by nothing and ignored.
-A library that wraps part of its API in this macro therefore loads and runs
-normally; you simply never hear that a name is on its way out.
+The `level` form is typically `(uiop:version-deprecation ...)`, which maps a
+version string to `:style-warning` / `:warning` / `:error` / `:delete`. Each
+level signals its own condition class — `deprecated-function-style-warning`,
+`deprecated-function-warning`, `deprecated-function-error`, or
+`deprecated-function-should-be-deleted` — once per function (upstream evaluates
+the level at macro-expansion time; this port has no expansion-time evaluator, so
+it is evaluated on the first call instead). Forms other than `defun` pass through
+untouched.
 
 The expansion splices at top level, so wrapped top-level `defun`s stay top-level
 definitions on the compile backends (that is the shape libraries use, usually
 inside an `eval-when`).
 
 ```lisp
-(uiop:with-deprecation (:style-warning)
-  (defun old-double (x) (* x 2))
-  (defun old-triple (x) (* x 3)))
-(list (old-double 4) (old-triple 4))   ; => (8 12)
+(uiop:with-deprecation ((uiop:version-deprecation "1.1" :delete "1.1"))
+  (defun old-gone () 1))
+(handler-case (old-gone)
+  (uiop:deprecated-function-should-be-deleted (c)
+    (list :caught (uiop:deprecated-function-name c))))   ; => (:CAUGHT OLD-GONE)
 ```
 
 `uiop` is ASDF's portability layer, not part of Common Lisp: the name is only
