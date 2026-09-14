@@ -986,15 +986,33 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void theRuntimeTextFragmentsKeepTheirHeadersWhenAFoldedSiteSharesTheSpelling() {
-		// The printer hands "NIL" out as a header pointer, so a folded site passing the
-		// same spelling must not strip it.
+	void aRuntimeFragmentSharedWithAFoldedSiteDropsItsHeaderLikeAProgramLiteral() {
+		// The printer writes "NIL" as a region (two constants), so a folded site passing
+		// the same spelling is another region-only use: the shared block carries no
+		// header. Only the fragments the helpers hand out as HEADER pointers stay pinned
+		// (princToStringOfABooleanKeepsBothHeaders, and __ftoa's specials).
 		byte[] module = compile("""
 				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
 				(defun emit () (progn (js-log "NIL") (print nil)))
 				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns nil)
 				""");
 		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'N', 'I', 'L' }))
+			.as("no header: both uses are region-only")
+			.isFalse();
+		assertThat(containsBytes(data, new byte[] { 'N', 'I', 'L', '\n' })).isTrue();
+	}
+
+	@Test
+	void princToStringOfABooleanKeepsBothHeaders() {
+		// princ-to-string of a boolean answers the static header, so T/NIL stay pinned
+		// headered even though a print of the same spelling would drop it.
+		byte[] module = compile("""
+				(defun render (b) (princ-to-string (> b 0)))
+				(rontolisp:wasm-export 'render :params '(:long) :returns :string)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 1, 0, 0, 0, 'T' })).isTrue();
 		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'N', 'I', 'L' })).isTrue();
 	}
 
@@ -1013,8 +1031,8 @@ class NoGcWasmCompilerTest {
 		assertThat(containsSequence(body, 0x1A)).as("no drop: the statement leaves nothing").isFalse();
 		assertThat(containsSequence(body, 0x28)).as("no i32.load: no length header is read").isFalse();
 		byte[] data = Objects.requireNonNull(sections(module).get(11));
-		assertThat(containsBytes(data, new byte[] { 'H', 'i', 1, 0, 0, 0, '\n' }))
-			.as("\"Hi\" header-free, the headered runtime \"\\n\" right behind it")
+		assertThat(containsBytes(data, new byte[] { 'H', 'i', '\n' }))
+			.as("\"Hi\" and the runtime \"\\n\" both header-free, back to back")
 			.isTrue();
 		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' })).as("no header before \"Hi\"").isFalse();
 	}
@@ -1052,6 +1070,80 @@ class NoGcWasmCompilerTest {
 		assertThat(containsSequence(body, 0x28)).as("no i32.load: the write is two constants").isFalse();
 		byte[] data = Objects.requireNonNull(sections(module).get(11));
 		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' })).as("\"Hi\" keeps its header").isTrue();
+	}
+
+	@Test
+	void aComputedBooleanPrintsTAndNilByName() {
+		// A computed boolean is a BOOL, not an INT: princ of (> n 0) branches to the
+		// T/NIL regions where an INT would render digits through __itoa -- so the body
+		// reads no length header (no i32.load, 0x28) and the pool carries only the
+		// newline and the two names, all header-free, back to back.
+		byte[] module = compilePlainUnoptimized("""
+				(defun main (n) (princ (> n 0)) (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '(:long) :returns nil)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x28)).as("no i32.load: the names are regions").isFalse();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { '\n', 'T', 'N', 'I', 'L' })).isTrue();
+		assertThat(containsBytes(data, new byte[] { 1, 0, 0, 0, 'T' })).as("no header before T").isFalse();
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'N', 'I', 'L' })).as("no header before NIL").isFalse();
+	}
+
+	@Test
+	void aPrincOnlyModuleOmitsTheQuoteAndBooleanFragments() {
+		// Each of the five print-pool fragments arrives on first use: a princ-only
+		// module needs the newline and nothing else -- no quotes, no backslash, no T,
+		// no NIL.
+		byte[] module = compile("""
+				(defun main () (princ "hi") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 'h', 'i', '\n' })).isTrue();
+		assertThat(containsBytes(data, new byte[] { '"' })).as("no quote fragment").isFalse();
+		assertThat(containsBytes(data, new byte[] { '\\' })).as("no escape fragment").isFalse();
+		assertThat(containsBytes(data, new byte[] { 'T' })).as("no T fragment").isFalse();
+		assertThat(containsBytes(data, new byte[] { 'N', 'I', 'L' })).as("no NIL fragment").isFalse();
+	}
+
+	@Test
+	void aPrintOfAStringNeedsQuotesButNoBooleanFragments() {
+		// print of a string frames it in quotes and scans escapes, so the quote and
+		// backslash fragments are live -- but T/NIL are still dead: nothing prints a
+		// boolean.
+		byte[] module = compile("""
+				(defun main () (print "hi") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'h', 'i' })).as("\"hi\" keeps its header").isTrue();
+		assertThat(containsBytes(data, new byte[] { '"' })).isTrue();
+		assertThat(containsBytes(data, new byte[] { '\\' })).isTrue();
+		assertThat(containsBytes(data, new byte[] { 'T' })).as("no T fragment").isFalse();
+		assertThat(containsBytes(data, new byte[] { 'N', 'I', 'L' })).as("no NIL fragment").isFalse();
+	}
+
+	@Test
+	void aLiteralOnlyPrintingModuleCarriesNoHeapBracketAndNoHeapGlobal() {
+		// Nothing in a folded-literal printing module bumps the heap: __write writes
+		// the iovec into fixed scratch and neither literal is allocated -- so no wrapper
+		// carries the mark/reset bracket, and with the bracket gone nothing reads the
+		// heap pointer at all and the global section goes too. The :void export names
+		// the internal function directly.
+		byte[] module = compile("""
+				(defun main () (princ "Hello, World!") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		Map<Integer, byte[]> secs = sections(module);
+		assertThat(secs).doesNotContainKey(6);
+		// The internal function plus the __write_stdout funnel it calls -- and nothing
+		// else: the allocator family drops out through the tree shaker.
+		assertThat(functionBodies(Objects.requireNonNull(secs.get(10)))).hasSize(2);
+		for (byte[] body : functionBodies(Objects.requireNonNull(secs.get(10)))) {
+			assertThat(containsGlobalReset(body)).as("nothing allocates, so nothing is reset").isFalse();
+		}
+		assertThat(exportedFuncIndex(Objects.requireNonNull(secs.get(7)), "main")).isEqualTo(1);
 	}
 
 	@Test

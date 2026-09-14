@@ -3061,6 +3061,35 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void noGcPrintedBooleansMatchTheInterpreter() throws Exception {
+		// .todo/817: a computed boolean prints as T/NIL on every backend -- the
+		// predicates and t/nil answer BOOL, and princ/print of a BOOL writes the name
+		// where an INT renders digits. Joining BOOL with INT answers INT, so
+		// (princ (if p t 1)) still prints 1 where the interpreter prints T; that
+		// residual is stated in .kb/no-gc-scalar-wasm.md, not covered here.
+		String program = """
+				(defun show (n)
+				  (princ (> n 0)) (terpri)
+				  (princ (< n 0)) (terpri)
+				  (princ (and (> n 0) (< n 100))) (terpri)
+				  (print (< n 0)) (terpri)
+				  (princ (if (> n 0) t nil)) (terpri)
+				  (princ (princ-to-string (> n 0))) (terpri))
+				(rontolisp:wasm-export 'show :params '(:int) :returns :void)
+				""";
+		String expected = """
+				T
+				NIL
+				T
+				NIL
+
+				T
+				T""";
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show", "42")).isEqualTo(expected);
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "show", "42")).isEqualTo(expected);
+	}
+
+	@Test
 	void noGcPrintEscapesQuotesAndBackslashesInStrings() throws Exception {
 		// The readable renderer owes the reader its escapes here too (todo 216):
 		// emitWriteStringEscaped writes the content as runs, one __write_stdout per

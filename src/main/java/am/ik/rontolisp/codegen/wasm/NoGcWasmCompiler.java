@@ -111,7 +111,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 * {@code (...) -> ()} and a {@code :void} export of it needs no wrapper at all.
 		 */
 		VOID,
-		/** A 64-bit integer ({@code i64}); also the domain of booleans (0/1). */
+		/**
+		 * A boolean (an {@code i64} 0/1, the same representation as {@code INT}). Below
+		 * {@code INT} in the lattice: the predicates and the {@code t}/{@code nil}
+		 * literals produce it, arithmetic widens it to {@code INT} on contact, and
+		 * {@code princ}/{@code print} of it writes {@code T}/{@code NIL} where
+		 * {@code INT} renders decimal digits. Joining it with {@code INT} therefore
+		 * answers {@code INT} -- which is what makes {@code (princ (if p t 1))} print
+		 * {@code 1} where the interpreter prints {@code T}, a stated residual, not a
+		 * silent agreement.
+		 */
+		BOOL,
+		/** A 64-bit integer ({@code i64}). */
 		INT,
 		/** A 64-bit float ({@code f64}). */
 		FLOAT,
@@ -162,11 +173,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		F32MAT;
 
 		/**
-		 * The result type when this and another type are combined. {@code INT} doubles as
-		 * the inference bottom, so a not-yet-seen slot yields to whatever concrete kind
-		 * it first meets. {@code FLOAT}, {@code STRING} and {@code F64VEC} are mutually
-		 * incompatible (a value cannot be more than one of number / string /
-		 * float-vector), which is a genuine type error.
+		 * The result type when this and another type are combined. {@code BOOL} is the
+		 * value bottom below {@code INT} (a not-yet-seen slot yields to whatever concrete
+		 * kind it first meets); {@code INT} in turn yields to {@code FLOAT},
+		 * {@code STRING} and the packed kinds. {@code FLOAT}, {@code STRING} and
+		 * {@code F64VEC} are mutually incompatible (a value cannot be more than one of
+		 * number / string / float-vector), which is a genuine type error.
 		 */
 		Ty join(Ty other) {
 			if (this == other) {
@@ -178,6 +190,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				return other;
 			}
 			if (other == VOID) {
+				return this;
+			}
+			// BOOL is the value bottom below INT: a boolean widens to whatever it meets.
+			if (this == BOOL) {
+				return other;
+			}
+			if (other == BOOL) {
 				return this;
 			}
 			if (this == INT) {
@@ -198,7 +217,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int valType() {
 			return switch (this) {
 				case VOID -> throw new IllegalStateException("--no-gc: VOID has no value type (it is not a value)");
-				case INT -> Type.I64.code();
+				case BOOL, INT -> Type.I64.code();
 				case FLOAT -> Type.F64.code();
 				case STRING, F64VEC, F32VEC, F64MAT, F32MAT -> Type.I32.code();
 			};
@@ -975,11 +994,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 
 		// A function exported under a VALUE-returning designator owes the host one value,
-		// so its return type seeds at INT -- the old universal seed -- and a body that is
-		// itself void (a while, a void import call) materializes the nil it stands for
-		// inside the function rather than leaving the wrapper with an empty stack. Every
-		// other function seeds at VOID, the true bottom, so "this answers nothing"
-		// survives the fixpoint instead of being invented.
+		// so its return type seeds at BOOL -- the value bottom below INT -- and a body
+		// that is itself void (a while, a void import call) materializes the nil it
+		// stands for inside the function rather than leaving the wrapper with an empty
+		// stack. Every other function seeds at VOID, the true bottom, so "this answers
+		// nothing" survives the fixpoint instead of being invented.
 		Set<String> valueExports = new HashSet<>();
 		for (WasmExportCompiler.Decl decl : exportDecls) {
 			if (decl.returnType() != BoundaryType.VOID) {
@@ -1000,7 +1019,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			Defun d = Objects.requireNonNull(defuns.get(name));
 			params.put(name, boundary.containsKey(name) ? boundary.get(name).clone() : filled(d.params().size()));
-			returns.put(name, valueExports.contains(name) ? Ty.INT : Ty.VOID);
+			returns.put(name, valueExports.contains(name) ? Ty.BOOL : Ty.VOID);
 			locals.put(name, new HashMap<>());
 		}
 		Types types = new Types(params, returns, locals);
@@ -1067,16 +1086,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	private static Ty[] filled(int n) {
 		Ty[] arr = new Ty[n];
-		Arrays.fill(arr, Ty.INT);
+		Arrays.fill(arr, Ty.BOOL);
 		return arr;
 	}
 
 	// The internal value type a boundary designator pins a parameter to: :float -> FLOAT,
-	// :string -> STRING, every integer designator and :bool -> INT (the house i64).
+	// :string -> STRING, :bool -> BOOL, every integer designator -> INT (the house i64).
 	private static Ty boundaryTy(BoundaryType designator) {
 		return switch (designator) {
 			case FLOAT -> Ty.FLOAT;
 			case STRING -> Ty.STRING;
+			case BOOL -> Ty.BOOL;
 			default -> Ty.INT;
 		};
 	}
@@ -1094,7 +1114,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// value of a void form stores the nil it stands for, which is the i64 zero. (The
 	// materialization itself is coerce's, at the initializer.)
 	private static Ty slotTy(Ty t) {
-		return t == Ty.VOID ? Ty.INT : t;
+		return t == Ty.VOID ? Ty.BOOL : t;
 	}
 
 	// Widens m[k] by joining in t; records on the shared flag when the type actually
@@ -1142,8 +1162,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case am.ik.rontolisp.LispBFloat16Array ignored -> throw am.ik.rontolisp.compiler.UnsupportedFloatWidth
 				.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16, "the --no-gc backend");
 			case LispChar ignored -> Ty.INT;
-			case LispTrue ignored -> Ty.INT;
-			case LispNil ignored -> Ty.INT;
+			case LispTrue ignored -> Ty.BOOL;
+			case LispNil ignored -> Ty.BOOL;
 			case LispSymbol sym -> {
 				Ty local = env.get(sym.name());
 				if (local != null) {
@@ -1152,10 +1172,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				// A standard scalar constant in code position has its literal's type
 				// (the reader no longer substitutes the value; see
 				// .kb/read-time-constants.md).
-				yield scalarConstant(sym.name()) instanceof LispDouble ? Ty.FLOAT : Ty.INT;
+				LispVal sc = scalarConstant(sym.name());
+				if (sc instanceof LispDouble) {
+					yield Ty.FLOAT;
+				}
+				if (sc instanceof LispInteger) {
+					yield Ty.INT;
+				}
+				yield Ty.BOOL;
 			}
 			case LispCons cons -> typeOfCall(cons, env, tc);
-			default -> Ty.INT;
+			default -> Ty.BOOL;
 		};
 	}
 
@@ -1325,12 +1352,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 				return Ty.FLOAT;
 			}
-			// Comparisons, predicates, not, the bitwise operators and the string/char
-			// accessors (a character is its code point) yield an integer.
-			case LispNames.EQ, LispNames.LT, LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.LOGAND,
-					LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.LENGTH,
-					LispNames.STRING_EQ, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
-					LispNames.CHAR_EQ -> {
+			// The boolean producers: comparisons, not and the string/char equalities
+			// answer BOOL (an i64 0/1, like INT on the stack). Everything else here --
+			// the bitwise operators, length and the character accessors -- answers a
+			// genuine integer.
+			case LispNames.EQ, LispNames.LT, LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT,
+					LispNames.STRING_EQ, LispNames.CHAR_EQ -> {
+				for (int i = 1; i < args.size(); i++) {
+					typeOf(args.get(i), env, tc);
+				}
+				return Ty.BOOL;
+			}
+			case LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH,
+					LispNames.LENGTH, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR -> {
 				for (int i = 1; i < args.size(); i++) {
 					typeOf(args.get(i), env, tc);
 				}
@@ -1341,7 +1375,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				typeOf(args.get(1), env, tc);
 				return Ty.INT;
 			}
-			// +,-,*,mod,rem,abs,min,max are FLOAT iff any operand is FLOAT.
+			// +,-,*,mod,rem,abs,min,max are FLOAT iff any operand is FLOAT, INT as soon
+			// as
+			// any operand is INT, and BOOL only when every operand is BOOL (an all-BOOL
+			// sum is still an integer value, so the BOOL bottom keeps the arithmetic
+			// shapes from ever answering BOOL: the seed below is INT, and BOOL yields
+			// to it on contact).
 			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.MOD, LispNames.REM, LispNames.ABS,
 					LispNames.MIN, LispNames.MAX -> {
 				Ty t = Ty.INT;
@@ -1360,7 +1399,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					tc.sink.record(name, argTypes);
 				}
 				Ty rt = tc.types.returns().get(name);
-				return rt == null ? Ty.INT : rt;
+				return rt == null ? Ty.BOOL : rt;
 			}
 		}
 	}
@@ -1387,7 +1426,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					: tc.locals().getOrDefault(varName, initTy).join(initTy);
 			inner.put(varName, bindTy);
 		}
-		Ty last = Ty.INT;
+		Ty last = Ty.BOOL;
 		for (int i = 2; i < parts.size(); i++) {
 			last = typeOf(parts.get(i), inner, tc);
 		}
@@ -1395,14 +1434,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private Ty typeOfSetq(List<LispVal> args, Map<String, Ty> env, TC tc) {
-		Ty last = Ty.INT;
+		Ty last = Ty.BOOL;
 		int pairs = (args.size() - 1) / 2;
 		for (int p = 0; p < pairs; p++) {
 			String var = ((LispSymbol) args.get(1 + 2 * p)).name();
 			Ty rhsTy = slotTy(typeOf(args.get(2 + 2 * p), env, tc));
 			if (tc.params.contains(var)) {
 				// A parameter has a fixed wasm type; the assignment coerces to it.
-				last = env.getOrDefault(var, Ty.INT);
+				last = env.getOrDefault(var, Ty.BOOL);
 			}
 			else {
 				Ty next = tc.widen ? widenLocal(tc.locals(), var, rhsTy, tc.changed)
@@ -1649,17 +1688,63 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The fixed text fragments the runtime helpers hand out as HEADER pointers -- the
-	 * printer's, and {@code __ftoa}'s IEEE specials -- pooled only when used. They stay
-	 * headered whatever a body does with the same spelling.
+	 * Which of the print-support text fragments a module actually reads. Each of the five
+	 * print pool entries is emitted on first use, the way a program literal already is:
+	 * {@code newline} for {@code terpri} or any {@code print} (which always trails one),
+	 * {@code quote} for a {@code print} of a string (its framing quotes and the escape
+	 * scan's backslash share that one gate), {@code boolT}/{@code boolNil} for a boolean
+	 * print ({@code print}/{@code princ} of a {@code BOOL}, or the literal it names -- a
+	 * computed boolean needs both, a lone literal only its own), {@code boolToString} for
+	 * a {@code princ-to-string} of a {@code BOOL} (which answers the static header, so it
+	 * pins both spellings headered), and {@code intFloat} for a
+	 * {@code print}/{@code princ} of an {@code INT}/{@code FLOAT} (which renders through
+	 * {@code __itoa}/{@code __ftoa} and is therefore the only printing that allocates).
 	 */
-	private static List<String> runtimeLiterals(boolean printUsed, boolean ftoaUsed) {
+	private record PrintUse(boolean newline, boolean quote, boolean boolT, boolean boolNil, boolean boolToString,
+			boolean intFloat) {
+	}
+
+	/**
+	 * The fixed text fragments the runtime helpers hand out -- the printer's five, and
+	 * {@code __ftoa}'s IEEE specials -- pooled only when used. The print five arrive one
+	 * by one on the {@link PrintUse} gates above; the float specials still arrive whole
+	 * on {@code ftoaUsed} (any f64 can be a NaN). Order is the old whole-pool order, so a
+	 * module that uses everything keeps its exact bytes.
+	 */
+	private static List<String> runtimeLiterals(PrintUse use, boolean ftoaUsed) {
 		List<String> out = new ArrayList<>();
-		if (printUsed) {
+		if (use.newline()) {
 			out.add("\n");
+		}
+		if (use.quote()) {
 			out.add("\"");
 			// The single-escape byte print emits before an embedded " / \ (todo 216).
 			out.add("\\");
+		}
+		if (use.boolT() || use.boolToString()) {
+			out.add("T");
+		}
+		if (use.boolNil() || use.boolToString()) {
+			out.add("NIL");
+		}
+		if (ftoaUsed) {
+			out.add("NaN");
+			out.add("Infinity");
+			out.add("-Infinity");
+		}
+		return out;
+	}
+
+	/**
+	 * The literals the runtime helpers hand out as HEADER pointers and therefore pin
+	 * headered: {@code __ftoa}'s IEEE specials, and {@code T}/{@code NIL} while a
+	 * {@code princ-to-string} of a boolean answers them. Every other print fragment is
+	 * written as a region (two constants) and may drop its header like a folded program
+	 * literal.
+	 */
+	private static List<String> headerPinnedLiterals(PrintUse use, boolean ftoaUsed) {
+		List<String> out = new ArrayList<>();
+		if (use.boolToString()) {
 			out.add("T");
 			out.add("NIL");
 		}
@@ -1667,6 +1752,27 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			out.add("NaN");
 			out.add("Infinity");
 			out.add("-Infinity");
+		}
+		return out;
+	}
+
+	/** The print-pool fragments laid out only as regions (never pinned headered). */
+	private static List<String> regionOnlyLiterals(PrintUse use) {
+		List<String> out = new ArrayList<>();
+		if (use.newline()) {
+			out.add("\n");
+		}
+		if (use.quote()) {
+			out.add("\"");
+			out.add("\\");
+		}
+		if (!use.boolToString()) {
+			if (use.boolT()) {
+				out.add("T");
+			}
+			if (use.boolNil()) {
+				out.add("NIL");
+			}
 		}
 		return out;
 	}
@@ -1701,7 +1807,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				break;
 			}
 		}
-		literals.addAll(runtimeLiterals(printUsed, ftoaUsed));
+		PrintUse printUse = collectPrintUse(reachable, defuns, imports, types);
+		this.printUse = printUse;
+		literals.addAll(runtimeLiterals(printUse, ftoaUsed));
 		// Every literal headered for now. Which ones can drop the header depends on the
 		// import fold, and the fold is sized against THIS plan (chooseFoldedImports), so
 		// the caller re-lays the same order once the fold is decided (withHeaderFree).
@@ -1778,11 +1886,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				break;
 			}
 		}
-		// printUsed implies non-empty literals (the "\n" entry), so `used` follows.
+		// A nonempty literal pool implies `used`, so `used` follows.
 		boolean used = !literals.isEmpty() || boundaryString || stringOp || floatVec;
-		// Printing renders through __itoa / __ftoa, both of which allocate the text they
-		// return; a string-producing op and a packed vector allocate by definition.
-		allocates |= stringOp || floatVec || printUsed;
+		// Only printing an INT/FLOAT renders through __itoa / __ftoa, both of which
+		// allocate the text they return; a folded literal write or a string passthrough
+		// moves no heap, so a literal-only printing module bumps nothing. A
+		// string-producing op and a packed vector allocate by definition.
+		allocates |= stringOp || floatVec || printUse.intFloat();
 		// The UTF-8 code-point helpers behind length/char/subseq, each gated on the
 		// operator that calls it -- the same per-use gating printUsed/ftoaUsed give the
 		// print and float-render helpers, so a module that only moves text across the
@@ -1896,6 +2006,112 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 		}
 		return rendersFloatWalk(c.car(), env, tc) || rendersFloatWalk(c.cdr(), env, tc);
+	}
+
+	/**
+	 * Which print-support fragments the reachable bodies read, settled against the frozen
+	 * inference result so each gate agrees with the type the code generator sees at the
+	 * site. A {@code print} always trails a newline; only a {@code print} of a string
+	 * needs the framing quotes and the escape backslash; only a boolean print needs
+	 * {@code T}/{@code NIL} (a computed one both, a lone literal its own); only a
+	 * {@code princ-to-string} of a boolean pins them headered; and only an
+	 * {@code INT}/{@code FLOAT} print renders through the allocating helpers.
+	 */
+	private PrintUse collectPrintUse(List<String> reachable, Map<String, Defun> defuns,
+			Map<String, WasmImportCompiler.Decl> imports, Types types) {
+		boolean newline = false;
+		boolean quote = false;
+		boolean boolT = false;
+		boolean boolNil = false;
+		boolean boolToString = false;
+		boolean intFloat = false;
+		for (String name : reachable) {
+			if (imports.containsKey(name)) {
+				continue;
+			}
+			Defun d = Objects.requireNonNull(defuns.get(name));
+			Map<String, Ty> env = paramEnv(d, types.params());
+			env.putAll(Objects.requireNonNull(types.locals().get(name)));
+			TC tc = new TC(name, new HashSet<>(d.params()), types, null, false, new boolean[1]);
+			List<LispVal> forms = new ArrayList<>();
+			collectPrintForms(progn(d.body()), forms);
+			for (LispVal form : forms) {
+				List<LispVal> args = ((LispCons) form).toList();
+				String op = ((LispSymbol) args.get(0)).name();
+				if (LispNames.TERPRI.equals(op)) {
+					newline = true;
+					continue;
+				}
+				if (LispNames.PRINC_TO_STRING.equals(op)) {
+					if (args.size() == 2 && typeOf(args.get(1), new HashMap<>(env), tc) == Ty.BOOL) {
+						boolToString = true;
+					}
+					continue;
+				}
+				boolean print = LispNames.PRINT.equals(op);
+				if (print) {
+					newline = true;
+				}
+				if (args.size() != 2) {
+					continue;
+				}
+				LispVal arg = args.get(1);
+				if (arg instanceof LispTrue) {
+					boolT = true;
+					continue;
+				}
+				if (arg instanceof LispNil) {
+					boolNil = true;
+					continue;
+				}
+				Ty at;
+				try {
+					at = typeOf(arg, new HashMap<>(env), tc);
+				}
+				catch (RuntimeException e) {
+					// A program that will not compile gates everything on, so the
+					// helpers the error path expects are there when it gets there.
+					newline = true;
+					quote = true;
+					boolT = true;
+					boolNil = true;
+					intFloat = true;
+					continue;
+				}
+				if (at == Ty.BOOL) {
+					boolT = true;
+					boolNil = true;
+				}
+				else if (at == Ty.STRING) {
+					if (print) {
+						quote = true;
+					}
+				}
+				else if (at == Ty.INT || at == Ty.FLOAT) {
+					intFloat = true;
+				}
+				else if (at == Ty.VOID) {
+					// A void form used for its value stands for nil.
+					boolNil = true;
+				}
+			}
+			if (newline && quote && boolT && boolNil && intFloat) {
+				break;
+			}
+		}
+		return new PrintUse(newline, quote, boolT, boolNil, boolToString, intFloat);
+	}
+
+	/** Every {@code print}/{@code princ}/{@code terpri}/{@code princ-to-string} form. */
+	private static void collectPrintForms(LispVal v, List<LispVal> out) {
+		if (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s
+					&& (PRINT_OPS.contains(s.name()) || LispNames.PRINC_TO_STRING.equals(s.name()))) {
+				out.add(c);
+			}
+			collectPrintForms(c.car(), out);
+			collectPrintForms(c.cdr(), out);
+		}
 	}
 
 	/** String-producing operators that require linear memory even with no literal. */
@@ -3072,7 +3288,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private static Type wasmType(Ty ty) {
 		return switch (ty) {
 			case VOID -> throw new IllegalStateException("--no-gc: VOID has no value type (it is not a value)");
-			case INT -> Type.I64;
+			case BOOL, INT -> Type.I64;
 			case FLOAT -> Type.F64;
 			case STRING, F64VEC, F32VEC, F64MAT, F32MAT -> Type.I32;
 		};
@@ -3087,7 +3303,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	private static Ty returnTy(String name, Types types) {
 		Ty t = types.returns().get(name);
-		return t == null ? Ty.INT : t;
+		return t == null ? Ty.BOOL : t;
 	}
 
 	// --- Function bodies ---------------------------------------------------------------
@@ -3131,14 +3347,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		for (int p = 0; p < decl.paramTypes().size(); p++) {
 			BoundaryType hostType = decl.paramTypes().get(p);
 			Ty internal = internalParams[p];
-			boolean identity = (hostType == BoundaryType.S64 && internal == Ty.INT)
+			boolean identity = (hostType == BoundaryType.S64 && (internal == Ty.INT || internal == Ty.BOOL))
 					|| (hostType == BoundaryType.FLOAT && internal == Ty.FLOAT);
 			if (!identity) {
 				return false;
 			}
 		}
 		Ty ret = returnTy(decl.name(), types);
-		return (decl.returnType() == BoundaryType.S64 && ret == Ty.INT)
+		return (decl.returnType() == BoundaryType.S64 && (ret == Ty.INT || ret == Ty.BOOL))
 				|| (decl.returnType() == BoundaryType.FLOAT && ret == Ty.FLOAT)
 				|| (decl.returnType() == BoundaryType.VOID && ret == Ty.VOID);
 	}
@@ -3491,15 +3707,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The literals whose EVERY occurrence in a reached body is a folded {@code :string}
-	 * argument of a folded import's call site or a folded {@code princ} statement: those
-	 * are pushed as (content address, byte length) constants and never read through a
-	 * header, so they are laid out without one. A spelling used any other way as well --
-	 * read by {@code length}, printed by {@code print}, a value-position {@code princ},
-	 * handed to an unfolded import's wrapper -- keeps its header, and a folded site then
-	 * points past it. The runtime helpers' own fragments ({@link #runtimeLiterals}) are
-	 * header pointers by contract and stay headered whatever a body does with the
-	 * spelling.
+	 * The literals whose EVERY occurrence in a reached body is a region-only use -- a
+	 * folded {@code :string} argument of a folded import's call site, a folded
+	 * {@code princ} statement, or a runtime helper's own region write ({@code terpri}'s
+	 * {@code "\n"}, a boolean print's {@code T}/{@code NIL}, a {@code print} of a
+	 * string's framing quotes): those are pushed as (content address, byte length)
+	 * constants and never read through a header, so they are laid out without one. A
+	 * spelling used any other way as well -- read by {@code length}, printed by
+	 * {@code print}, a value-position {@code princ}, handed to an unfolded import's
+	 * wrapper -- keeps its header, and a folded site then points past it. Only the
+	 * literals the helpers hand out as HEADER pointers stay pinned
+	 * ({@link #headerPinnedLiterals}); every other runtime fragment drops its header like
+	 * a folded program literal.
 	 *
 	 * <p>
 	 * Counted, not matched: the folded sites' literals per spelling against
@@ -3514,9 +3733,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @return the spellings to lay out header-free
 	 */
 	private Set<String> headerFreeLiterals(Map<String, WasmImportCompiler.Decl> importDecls, MemLayout layout) {
-		if (this.foldedImports.isEmpty() && this.printLiteralSites.isEmpty()) {
-			return Set.of();
-		}
 		Map<String, Integer> folded = new HashMap<>();
 		for (String name : this.foldedImports) {
 			List<BoundaryType> paramTypes = Objects.requireNonNull(importDecls.get(name)).paramTypes();
@@ -3542,7 +3758,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				headerFree.add(entry.getKey());
 			}
 		}
-		headerFree.removeAll(runtimeLiterals(layout.printUsed(), layout.ftoaUsed()));
+		// A runtime fragment written only as a region drops its header exactly like a
+		// folded program literal: its helper uses never load a length, so the header is
+		// needed only when the program itself reads the same spelling as a value (a
+		// non-folded occurrence), which is the same occurrence comparison. A spelling
+		// the program never mentions has neither and is header-free.
+		for (String s : regionOnlyLiterals(this.printUse)) {
+			if (!layout.regions().containsKey(s)) {
+				continue;
+			}
+			int occ = this.literalOccurrences.getOrDefault(s, 0);
+			int fold = folded.getOrDefault(s, 0);
+			if (occ == fold) {
+				headerFree.add(s);
+			}
+		}
+		headerFree.removeAll(headerPinnedLiterals(this.printUse, layout.ftoaUsed()));
 		return headerFree;
 	}
 
@@ -3717,11 +3948,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				switch (hostType) {
 					// host f64 -> internal (always FLOAT, since :float pins the param)
 					case FLOAT -> {
-						if (internal == Ty.INT) {
+						if (internal == Ty.INT || internal == Ty.BOOL) {
 							w.write(Instruction.I64_TRUNC_S_F64);
 						}
 					}
-					// host i64 -> internal i64 (INT): identity, no conversion. A 64-bit
+					// host i64 -> internal i64 (INT/BOOL): identity, no conversion. A
+					// 64-bit
 					// designator pins the parameter to INT, so the FLOAT branch is
 					// defensive only.
 					case S64 -> {
@@ -3740,7 +3972,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					// positive integer the WIT type says it is.
 					default -> {
 						boolean signed = !hostType.isInteger() || hostType.signed();
-						if (internal == Ty.INT) {
+						if (internal == Ty.INT || internal == Ty.BOOL) {
 							w.write(signed ? Instruction.I64_EXTEND_S_I32 : Instruction.I64_EXTEND_U_I32);
 						}
 						else {
@@ -3774,13 +4006,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 			}
 			case FLOAT -> {
-				if (ret == Ty.INT) {
+				if (ret == Ty.INT || ret == Ty.BOOL) {
 					w.write(Instruction.F64_CONVERT_S_I64);
 				}
 			}
 			case BOOL -> {
-				// non-zero -> 1, zero -> 0
-				if (ret == Ty.INT) {
+				// The host takes an i32 0/1. An INT needs the non-zero test; a BOOL is
+				// already 0/1, so narrowing is exact; a FLOAT compares against 0.0.
+				if (ret == Ty.BOOL) {
+					w.write(Instruction.I32_WRAP_I64);
+				}
+				else if (ret == Ty.INT) {
 					i64Const(w, 0);
 					w.write(Instruction.I64_NE);
 				}
@@ -3990,11 +4226,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			case LispTrue ignored -> {
 				i64Const(fn.writer, 1);
-				return Ty.INT;
+				return Ty.BOOL;
 			}
 			case LispNil ignored -> {
 				i64Const(fn.writer, 0);
-				return Ty.INT;
+				return Ty.BOOL;
 			}
 			case LispSymbol sym -> {
 				Integer slot = fn.locals.get(sym.name());
@@ -4059,15 +4295,23 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			return;
 		}
 		// STRING, F64VEC and F32VEC are reference kinds; the only valid non-identity
-		// coercions are between the two numeric kinds (INT <-> FLOAT). A reference kind
-		// can
-		// only coerce to itself (that identity case already returned above), so any
-		// reference kind reaching here -- including a f64-vector / f32-vector mismatch --
-		// is
-		// a genuine type error.
+		// coercions are between the numeric kinds (BOOL <-> INT <-> FLOAT). BOOL and
+		// INT share the i64 representation, so they coerce to each other for free. A
+		// reference kind can only coerce to itself (that identity case already returned
+		// above), so any reference kind reaching here -- including a f64-vector /
+		// f32-vector mismatch -- is a genuine type error.
 		if (isRefKind(from) || isRefKind(to)) {
 			throw new UnsupportedOperationException("--no-gc: incompatible types " + from + " and " + to
 					+ " (a value cannot be more than one of number / string / float-vector)");
+		}
+		if ((from == Ty.BOOL && to == Ty.INT) || (from == Ty.INT && to == Ty.BOOL)) {
+			return;
+		}
+		if (from == Ty.BOOL) {
+			from = Ty.INT;
+		}
+		if (to == Ty.BOOL) {
+			to = Ty.INT;
 		}
 		if (from == Ty.INT) {
 			w.write(Instruction.F64_CONVERT_S_I64); // i64 -> f64
@@ -4082,7 +4326,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// nil).
 	private static void pushNil(WasmWriter w, Ty to) {
 		switch (to) {
-			case INT -> i64Const(w, 0);
+			case BOOL, INT -> i64Const(w, 0);
 			case FLOAT -> w.write(Instruction.F64_CONST).writeF64(0.0);
 			default -> w.write(Instruction.I32_CONST).writeSignedLeb128(0);
 		}
@@ -4227,6 +4471,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * recorded here as a call to the import it forwards to, which is the whole reason
 	 * {@link #forwarders} exists.
 	 */
+	/**
+	 * Which print-support fragments the module reads, settled in {@link #planMemory} from
+	 * the frozen inference result and read back by {@link #headerFreeLiterals} to tell a
+	 * region-only runtime literal from a header-pinned one.
+	 */
+	private PrintUse printUse = new PrintUse(false, false, false, false, false, false);
+
 	private Map<String, List<ImportSite>> importCallSites = new LinkedHashMap<>();
 
 	/**
@@ -4568,7 +4819,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		compileCoerced(args.get(1), fn, target);
 		for (int i = 2; i < args.size(); i++) {
 			compileCoerced(args.get(i), fn, target);
-			fn.writer.write(target == Ty.INT ? intOp : floatOp);
+			fn.writer.write(target == Ty.FLOAT ? floatOp : intOp);
 		}
 		return target;
 	}
@@ -4580,22 +4831,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		Ty target = staticType(cons, fn);
 		if (args.size() == 2) {
-			if (target == Ty.INT) {
+			if (target == Ty.FLOAT) {
+				compileCoerced(args.get(1), fn, Ty.FLOAT);
+				fn.writer.write(Instruction.F64_NEG);
+			}
+			else {
 				// 0 - x (wasm has no i64.neg)
 				i64Const(fn.writer, 0);
 				compileCoerced(args.get(1), fn, Ty.INT);
 				fn.writer.write(Instruction.I64_SUB);
-			}
-			else {
-				compileCoerced(args.get(1), fn, Ty.FLOAT);
-				fn.writer.write(Instruction.F64_NEG);
 			}
 			return target;
 		}
 		compileCoerced(args.get(1), fn, target);
 		for (int i = 2; i < args.size(); i++) {
 			compileCoerced(args.get(i), fn, target);
-			fn.writer.write(target == Ty.INT ? Instruction.I64_SUB : Instruction.F64_SUB);
+			fn.writer.write(target == Ty.FLOAT ? Instruction.F64_SUB : Instruction.I64_SUB);
 		}
 		return target;
 	}
@@ -4679,40 +4930,41 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					+ " takes exactly two arguments in '" + fn.fnName + "'");
 		}
 		Ty target = staticType(cons, fn);
-		if (target == Ty.INT) {
-			int a = fn.allocLocal(Ty.INT);
-			int b = fn.allocLocal(Ty.INT);
-			compileCoerced(args.get(1), fn, Ty.INT);
+		if (target == Ty.FLOAT) {
+			int a = fn.allocLocal(Ty.FLOAT);
+			int b = fn.allocLocal(Ty.FLOAT);
+			compileCoerced(args.get(1), fn, Ty.FLOAT);
 			fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(a);
-			compileCoerced(args.get(2), fn, Ty.INT);
+			compileCoerced(args.get(2), fn, Ty.FLOAT);
 			fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(b);
-			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(a);
+			// The EXACT float remainder, emitted from the same builder the wasm-GC
+			// _rat_rem/_rat_mod float arm uses, so the two backends cannot drift:
+			// evaluating
+			// `a - b*(floor|trunc)(a/b)` in f64 rounds above 2^53 and multiplies inf by a
+			// zero quotient for an infinite divisor. This backend has no shared-runtime
+			// section to hang a helper function off (every helper it emits is gated on
+			// linear memory), so the reduction is inlined at the site -- ~180 bytes, and
+			// only in a body that actually takes a float mod/rem.
+			WasmFmodRuntimeBuilder.emitRemainder(fn.writer, mod, a, b, fn.allocLocal(Ty.FLOAT), fn.allocLocal(Ty.FLOAT),
+					fn.allocLocal(Ty.FLOAT));
+			return Ty.FLOAT;
+		}
+		int a = fn.allocLocal(Ty.INT);
+		int b = fn.allocLocal(Ty.INT);
+		compileCoerced(args.get(1), fn, Ty.INT);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(a);
+		compileCoerced(args.get(2), fn, Ty.INT);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(b);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(a);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
+		fn.writer.write(Instruction.I64_REM_S);
+		if (mod) {
+			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
+			fn.writer.write(Instruction.I64_ADD);
 			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
 			fn.writer.write(Instruction.I64_REM_S);
-			if (mod) {
-				fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
-				fn.writer.write(Instruction.I64_ADD);
-				fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
-				fn.writer.write(Instruction.I64_REM_S);
-			}
-			return Ty.INT;
 		}
-		int a = fn.allocLocal(Ty.FLOAT);
-		int b = fn.allocLocal(Ty.FLOAT);
-		compileCoerced(args.get(1), fn, Ty.FLOAT);
-		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(a);
-		compileCoerced(args.get(2), fn, Ty.FLOAT);
-		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(b);
-		// The EXACT float remainder, emitted from the same builder the wasm-GC
-		// _rat_rem/_rat_mod float arm uses, so the two backends cannot drift: evaluating
-		// `a - b*(floor|trunc)(a/b)` in f64 rounds above 2^53 and multiplies inf by a
-		// zero quotient for an infinite divisor. This backend has no shared-runtime
-		// section to hang a helper function off (every helper it emits is gated on
-		// linear memory), so the reduction is inlined at the site -- ~180 bytes, and
-		// only in a body that actually takes a float mod/rem.
-		WasmFmodRuntimeBuilder.emitRemainder(fn.writer, mod, a, b, fn.allocLocal(Ty.FLOAT), fn.allocLocal(Ty.FLOAT),
-				fn.allocLocal(Ty.FLOAT));
-		return Ty.FLOAT;
+		return Ty.INT;
 	}
 
 	private Ty compileAbs(LispCons cons, List<LispVal> args, Fn fn) {
@@ -6645,9 +6897,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return Ty.STRING;
 	}
 
-	// (princ-to-string x): an integer renders via the __itoa helper, a float via the
-	// __ftoa helper (the GC backend's digit-extraction algorithm); a string passes
-	// through unchanged.
+	// (princ-to-string x): a boolean answers the static "T"/"NIL" header, an integer
+	// renders via the __itoa helper, a float via the __ftoa helper (the GC backend's
+	// digit-extraction algorithm); a string passes through unchanged.
 	private Ty compilePrincToString(List<LispVal> args, Fn fn) {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException(
@@ -6663,6 +6915,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.ftoaIndex());
 			return Ty.STRING;
 		}
+		if (argTy == Ty.BOOL) {
+			compileCoerced(args.get(1), fn, Ty.BOOL);
+			fn.writer.write(Instruction.I64_EQZ);
+			fn.writer.write(Instruction.IF).write(Type.I32.code());
+			fn.writer.write(Instruction.I32_CONST)
+				.writeSignedLeb128(Objects.requireNonNull(fn.mem.literals().get("NIL"),
+						() -> "--no-gc: princ-to-string without its NIL header in '" + fn.fnName + "'"));
+			fn.writer.write(Instruction.ELSE);
+			fn.writer.write(Instruction.I32_CONST)
+				.writeSignedLeb128(Objects.requireNonNull(fn.mem.literals().get("T"),
+						() -> "--no-gc: princ-to-string without its T header in '" + fn.fnName + "'"));
+			fn.writer.write(Instruction.END);
+			return Ty.STRING;
+		}
 		compileCoerced(args.get(1), fn, Ty.INT);
 		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.itoaIndex());
 		return Ty.STRING;
@@ -6673,9 +6939,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// prin1 text + a trailing newline, so strings are quoted; princ = display text, no
 	// quotes, no newline). Rendering an int/float allocates a transient string, so the
 	// emission is bracketed with a heap-pointer mark/reset -- a print loop stays flat by
-	// construction. The value model has no runtime boolean: literal t/nil render by
-	// name like the other backends, but a COMPUTED boolean prints as its 0/1 integer (a
-	// documented --no-gc limitation).
+	// construction. A boolean writes T/NIL by name like the other backends: joining BOOL
+	// with INT answers INT, so (princ (if p t 1)) prints 1 where the interpreter prints
+	// T -- a stated residual of the static type lattice, not a silent agreement.
 	private Ty compilePrintOp(String name, List<LispVal> args, Fn fn) {
 		requireArgc(args, 2, name, fn);
 		WasmWriter w = fn.writer;
@@ -6687,10 +6953,27 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				emitWriteLiteral(fn, "\n");
 			}
 			i64Const(w, arg instanceof LispTrue ? 1 : 0);
-			return Ty.INT;
+			return Ty.BOOL;
 		}
 		Ty t = staticType(arg, fn);
 		switch (t) {
+			case BOOL -> {
+				int v = fn.allocLocal(Ty.BOOL);
+				compileCoerced(arg, fn, Ty.BOOL);
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(v);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+				w.write(Instruction.I64_EQZ);
+				w.write(Instruction.IF, 0x40);
+				emitWriteLiteral(fn, "NIL");
+				w.write(Instruction.ELSE);
+				emitWriteLiteral(fn, "T");
+				w.write(Instruction.END);
+				if (print) {
+					emitWriteLiteral(fn, "\n");
+				}
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+				return Ty.BOOL;
+			}
 			case INT, FLOAT -> {
 				int v = fn.allocLocal(t);
 				compileCoerced(arg, fn, t);
@@ -6700,7 +6983,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeUnsignedLeb128(mark);
 				int s = fn.allocLocal(Ty.STRING);
 				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
-				w.write(Instruction.CALL).writeUnsignedLeb128(t == Ty.INT ? fn.mem.itoaIndex() : fn.mem.ftoaIndex());
+				w.write(Instruction.CALL).writeUnsignedLeb128(t == Ty.FLOAT ? fn.mem.ftoaIndex() : fn.mem.itoaIndex());
 				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(s);
 				emitWriteString(fn, s);
 				if (print) {
@@ -7016,7 +7299,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					+ " takes exactly one argument in '" + fn.fnName + "'");
 		}
 		Ty argTy = compileExpr(args.get(1), fn);
-		if (argTy == Ty.INT) {
+		if (argTy == Ty.INT || argTy == Ty.BOOL) {
 			return Ty.INT;
 		}
 		if (roundOp >= 0) {
@@ -7035,8 +7318,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		Ty operand = staticType(args.get(1), fn).join(staticType(args.get(2), fn));
 		compileCoerced(args.get(1), fn, operand);
 		compileCoerced(args.get(2), fn, operand);
-		fn.writer.write(operand == Ty.INT ? intOp : floatOp); // -> i32 (0/1)
-		// Booleans live in the INT domain, so the flag is widened -- unless the consumer
+		fn.writer.write(operand == Ty.FLOAT ? floatOp : intOp); // -> i32 (0/1)
+		// Booleans live in the BOOL domain (an i64 0/1), so the flag is widened -- unless
+		// the consumer
 		// is a branch, which takes it back off (emitPredicate).
 		return emitPredicate(fn, Instruction.I64_EXTEND_S_I32);
 	}
@@ -7047,11 +7331,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: not takes exactly one argument in '" + fn.fnName + "'");
 		}
 		Ty argTy = compileExpr(args.get(1), fn);
-		if (argTy == Ty.INT) {
-			fn.writer.write(Instruction.I64_EQZ); // i32: 1 if the value is 0
+		if (argTy == Ty.FLOAT) {
+			fn.writer.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_EQ);
 		}
 		else {
-			fn.writer.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_EQ);
+			fn.writer.write(Instruction.I64_EQZ); // i32: 1 if the value is 0
 		}
 		return emitPredicate(fn, Instruction.I64_EXTEND_S_I32);
 	}
@@ -7064,12 +7348,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param fn the function being compiled
 	 * @param widenOp the widening instruction (signed or unsigned; the flag is 0/1, so
 	 * the two agree -- each producer keeps the one it always emitted)
-	 * @return the INT type every rontolisp boolean has
+	 * @return the BOOL type every rontolisp boolean has
 	 */
 	private static Ty emitPredicate(Fn fn, int widenOp) {
 		fn.writer.write(widenOp);
 		fn.predicateEnd = fn.body.size();
-		return Ty.INT;
+		return Ty.BOOL;
 	}
 
 	/**
@@ -7102,12 +7386,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.write(Instruction.I32_CONST).writeSignedLeb128(0);
 			return;
 		}
-		if (ty == Ty.INT) {
-			i64Const(w, 0);
-			w.write(Instruction.I64_NE);
+		if (ty == Ty.FLOAT) {
+			w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_NE);
 		}
 		else {
-			w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_NE);
+			i64Const(w, 0);
+			w.write(Instruction.I64_NE);
 		}
 	}
 
@@ -7118,11 +7402,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 			return;
 		}
-		if (ty == Ty.INT) {
-			w.write(Instruction.I64_EQZ);
+		if (ty == Ty.FLOAT) {
+			w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_EQ);
 		}
 		else {
-			w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_EQ);
+			w.write(Instruction.I64_EQZ);
 		}
 	}
 

@@ -230,11 +230,12 @@ Two things to know:
   traps), the module keeps zero imports, and — under `--component` — a
   printing program takes the print-free component shape again (one core
   module, no imports, sync exports, callable through jco on plain Node).
-- **Booleans print by literal only.** The value model has no runtime
-  boolean type: `(print t)` / `(print nil)` print `t` / `nil`, but a
-  *computed* boolean such as `(print (> a b))` prints its `0`/`1` integer.
-  The optional stream argument and printing a packed float array are
-  compile errors.
+- **Booleans print by name.** The predicates and `t`/`nil` answer a
+  boolean rung below the integer in the static type lattice, so
+  `(print (> a b))` prints `T` / `NIL` like the other backends. Joining that
+  rung with an integer answers the integer -- `(princ (if p t 1))` prints `1`
+  where the interpreter prints `T`. The optional stream argument and printing
+  a packed float array are compile errors.
 
 ## Reclaiming memory (the arena API)
 

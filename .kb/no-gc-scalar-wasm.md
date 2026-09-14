@@ -26,13 +26,17 @@ is interned FIRST so it stays type 0, which is what the import entry names.
 
 ## Value model and inference
 `inferTypes` is a **monotone fixpoint** over the call graph: exported params pinned to the
-boundary designator; all other param types and **all let/`do`-bound local types**
-(`Types.locals`) start at INT and only widen to FLOAT. `compileExpr`
+boundary designator (`:bool` pins to BOOL); all other param types and **all let/`do`-bound local types**
+(`Types.locals`) start at BOOL and only widen (BOOL -> INT -> FLOAT). `compileExpr`
 consults `staticType` to insert promotions (`coerce`: `f64.convert_i64_s` /
-`i64.trunc_s_f64`); let/`do` locals are allocated at their widened type so `setq`
+`i64.trunc_s_f64`; BOOL<->INT is free, both are the i64 0/1); let/`do` locals are allocated at their widened type so `setq`
 (`local.tee`) stays type-consistent. `i64` makes integer arithmetic exact to 2^63. `Ty.join`:
-INT doubles as the numeric bottom and yields to STRING; FLOAT-vs-STRING is a type error; mixing a
-string with a number is rejected (except nil->"").
+BOOL is the value bottom below INT and yields to whatever it meets; INT in turn yields to
+STRING; FLOAT-vs-STRING is a type error; mixing a string with a number is rejected (except nil->"").
+The predicates (`= < <= > >=`, `not`, `string=`, `char=`) and the `t`/`nil` literals answer
+BOOL; arithmetic seeds at INT so a BOOL operand widens to INT on contact. Joining BOOL with
+INT therefore answers INT -- `(princ (if p t 1))` prints `1` where the interpreter prints `T`,
+a stated residual of the static lattice, not a silent agreement (`.todo/817`).
 
 **VOID is the fourth point and the TRUE bottom** (`join(VOID, X) = X`): a form that leaves
 the stack untouched. It is not part of the arithmetic lattice -- it never meets INT/FLOAT
@@ -459,22 +463,33 @@ once is a body with one call site.
 
 ## Print / stdout
 `print`/`princ`/`terpri` (no stream argument) work inside exported functions, byte-identical
-to the interpreter (`.kb/core-representation.md`). `emitWriteStringEscaped` writes an escaped
+to the interpreter (`.kb/core-representation.md`) -- including a COMPUTED boolean, which
+writes `T`/`NIL` by name (`.todo/817`). `emitWriteStringEscaped` writes an escaped
 string as RUNS, so nothing is allocated — a print must not move the bump heap.
 - Gated by `Mem.printUsed` (a `usesPrintOp` scan): adds the ONE `(import
   "wasi_snapshot_preview1" "fd_write")` at type index 0, function index 0 — every other
   function index shifts by `Mem.funcBase()` = 1, and **ALL index math flows through the
   `Mem.funcIndex()`/`*Index()` accessors, nothing hardcodes the shift** — plus a
   `__write_stdout(ptr,len)` funnel, **the sole caller of the fd_write import**.
+- The five print-pool fragments arrive one by one on first use (`PrintUse`, settled
+  against the frozen inference result): `terpri` or any `print` gates `"\n"`; a `print`
+  of a string gates `"\""` and `"\\"`; a boolean print gates `"T"`/`"NIL"` (a computed
+  one both, a lone literal its own). A fragment written only as a region carries no
+  `[len]` header -- `"\n"` in every literal-only printing module is that literal --
+  while `__ftoa`'s specials and a `princ-to-string` boolean's `T`/`NIL` stay pinned
+  headered (`.todo/816` parts 1-2; measured `hello_world-nogc` 211 -> 166 B at
+  `--optimize=size`).
 - `Mem.ftoaUsed` (a typed `rendersFloat` scan) additionally emits `__ftoa`, its five
   `__schub_*` helpers and the ~755-byte `SchubfachTables` blob after the literals
   (`Mem.schubBase`) — the Schubfach decimal shared with the GC backend
   (`WasmSchubfachRuntimeBuilder`), so float text is byte-identical at EVERY magnitude
   (`.kb/format.md`). NaN/Infinity/-Infinity are static literal headers, `-0.0` by sign bit.
 - The 16-byte fd_write iov scratch (`Mem.iovAddr`) sits between the static data and
-  `heapBase`; `print` of an INT/FLOAT brackets the transient string in a mark/reset.
-- Value-model limits: literal `t`/`nil` print by name; a COMPUTED boolean prints as its 0/1
-  integer; a stream argument and printing a packed array are compile errors.
+  `heapBase`; `print`/`princ` of an INT/FLOAT brackets the transient string in a mark/reset.
+  Nothing else printing allocates, so `Mem.allocates()` is "prints an INT/FLOAT", not "prints":
+  a literal-only module's wrappers carry no heap bracket, and with it gone nothing touches
+  the heap pointer and the global section drops out under `--optimize=size` (`.todo/816`
+  part 3). A stream argument and printing a packed array are compile errors.
 
 ## `--no-gc --component`
 A third ctor arg wraps the finished module via `NoGcWasmComponentBuilder` — a pure POST stage
@@ -587,14 +602,20 @@ the WASI one is sunk).
 `printOfALiteralKeepsTheGenericPath`,
 `aLiteralPrintedAndReadAsAValueKeepsItsLengthHeader`,
 `aLiteralPrintedAndPassedToAFoldedImportCarriesNoLengthHeader`,
-`theRuntimeTextFragmentsKeepTheirHeadersWhenAFoldedSiteSharesTheSpelling`; the content
+`aRuntimeFragmentSharedWithAFoldedSiteDropsItsHeaderLikeAProgramLiteral`,
+`princToStringOfABooleanKeepsBothHeaders`,
+`aComputedBooleanPrintsTAndNilByName`,
+`aPrincOnlyModuleOmitsTheQuoteAndBooleanFragments`,
+`aPrintOfAStringNeedsQuotesButNoBooleanFragments`,
+`aLiteralOnlyPrintingModuleCarriesNoHeapBracketAndNoHeapGlobal`; the content
 each shape hands the host is
 `NoGcWasmImportE2eTest.aFoldedLiteralReachesTheHostIntactWhetherOrNotItKeepsItsHeader`,
 and a spelling both printed and imported is
 `NoGcWasmImportE2eTest.aPrintedLiteralReachesBothTheHostAndStdoutIntact`), the VOID group
 (`aVoidImportCallLeavesNothingForItsCallerToDrop`, `aVoidBodyMakesAVoidExportAPassThrough`,
 `theDeadNilOfACondTArmDoesNotDragAVoidChainBackToAnInteger`,
-`aWhileLoopPushesNothingForTheFormAfterItToDrop`), the heap-reset trio,
+`aWhileLoopPushesNothingForTheFormAfterItToDrop`), the heap-reset trio (plus the
+printing pair above),
 `stringModuleExportsTheHostArenaApi`, `printGatesTheFdWriteImportOnAndOff`,
 `componentWrapsThePlainCoreModuleVerbatim`,
 `componentStringExportAppendsTheCanonicalStringAbi`,
@@ -617,7 +638,7 @@ wasm-tools on PATH) composes the consumer with a rontolisp provider and invokes 
 scalars and strings both ways, the wit-import lowering's byte identity with the hand-written
 block, and a printing consumer through both shims. Runtime parity: the `noGc*` cases in
 `WasmLispCompilerIntegrationTest` (string primitives, print vs the interpreter,
-`noGcPrintedLiteralsFoldAtBothLevels`, flat-heap
+`noGcPrintedLiteralsFoldAtBothLevels`, `noGcPrintedBooleansMatchTheInterpreter`, flat-heap
 loops under a 2-page cap, WAVE invoke with no flags, the canonical string ABI, `--optimize`
 composition, the print micro-adapter and its chunk cap). The `:string`-parameter side needs a
 memory-writing host: `NoGcWasmExportStringParamE2eTest` (empty string, a UTF-8 string, the
