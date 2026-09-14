@@ -60,7 +60,8 @@ public class CountVowels {
 			long result = this.countVowels.apply(ptr, bytes.length)[0];
 
 			// The result is a scalar and is already read out, so pop the input buffer
-			// (and the call's internal string copy) off the bump heap.
+			// (there is no internal copy: the input buffer is the string) off the
+			// bump heap.
 			this.reset.apply(snapshot);
 			return result;
 		}

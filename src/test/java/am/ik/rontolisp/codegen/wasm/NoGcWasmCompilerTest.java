@@ -509,12 +509,13 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void scalarReturnExportResetsTheBumpHeapAtWrapperExit() {
-		// A :string param copies the host bytes into a fresh internal [len][bytes] header
-		// via __ronto_alloc inside the wrapper; with a scalar return that copy is dead
-		// the moment the call returns, so the wrapper snapshots and restores heap
-		// global 0. Assert both :int and :long returns carry the reset in the wrapper
-		// body.
+	void aStringParamAloneCarriesNoHeapReset() {
+		// A :string parameter becomes the internal string in place: the wrapper only
+		// stores the [len] header at ptr - 4 into the four bytes __ronto_alloc
+		// already reserved, so nothing bumps the heap. A body that only reads the
+		// string (length/char never allocate) leaves the module non-allocating, and
+		// the scalar-return wrapper carries no snapshot/restore bracket. Assert both
+		// :int and :long returns.
 		for (String ret : List.of(":int", ":long")) {
 			byte[] module = compile("""
 					(defun count-vowels (s)
@@ -524,8 +525,20 @@ class NoGcWasmCompilerTest {
 			Map<Integer, byte[]> sections = sections(module);
 			byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
 					exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "cv"));
-			assertThat(containsGlobalReset(wrapper)).as("wrapper for :string -> %s resets heap global 0", ret).isTrue();
+			assertThat(containsGlobalReset(wrapper)).as("read-only :string -> %s wrapper resets nothing", ret)
+				.isFalse();
 		}
+		// ... while a body that allocates behind the same parameter still resets:
+		// concatenate bump-allocates, so the heap can move during the call.
+		byte[] module = compile("""
+				(defun shout-len (s) (length (concatenate 'string s "!")))
+				(rontolisp:wasm-export 'shout-len :params '(:string) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "shout-len"));
+		assertThat(containsGlobalReset(wrapper)).as("allocating :string -> :int wrapper still resets heap global 0")
+			.isTrue();
 	}
 
 	@Test
@@ -604,6 +617,67 @@ class NoGcWasmCompilerTest {
 		assertThat(mark).containsExactly(0x00, 0x23, 0x00, 0x0B);
 		// [locals=0][local.get 0][global.set 0][end]
 		assertThat(reset).containsExactly(0x00, 0x20, 0x00, 0x24, 0x00, 0x0B);
+	}
+
+	@Test
+	void exportedRontoAllocReservesTheStringHeader() {
+		// __ronto_alloc is NOT the internal __alloc: it is __alloc(size + 4) + 4, a
+		// one-call wrapper holding four bytes back for the [len] header the export
+		// wrapper stores at ptr - 4. Its own body is
+		// [locals=0][local.get 0][i32.const 4][i32.add][call __alloc]
+		// [i32.const 4][i32.add][end], and it is exported at its own index.
+		byte[] module = compilePlainUnoptimized("""
+				(defun count-vowels (s)
+				  (let ((n 0)) (dotimes (i (length s)) (when (char= (char s i) #\\a) (setq n (+ n 1)))) n))
+				(rontolisp:wasm-export 'count-vowels :as "cv" :params '(:string) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		byte[] exports = Objects.requireNonNull(sections.get(7));
+		int alloc = allocFunctionIndex(module);
+		assertThat(alloc).as("a single-byte LEB index keeps the body assertion exact").isLessThan(128);
+		int ronto = exportedFuncIndex(exports, "__ronto_alloc");
+		assertThat(ronto).as("__ronto_alloc is its own function, not the internal __alloc").isNotEqualTo(alloc);
+		assertThat(functionBody(code, ronto)).containsExactly(0x00, 0x20, 0x00, 0x41, 0x04, 0x6A, 0x10, alloc, 0x41,
+				0x04, 0x6A, 0x0B);
+	}
+
+	@Test
+	void stringParamWrapperWritesTheHeaderInPlace() {
+		// The export wrapper for a :string parameter stages nothing: the host's
+		// block becomes the string via one header store at ptr - 4
+		// (`local.get ptr; i32.const 4; i32.sub; local.get len; i32.store`, then the
+		// same ptr - 4 left for the call). No scratch locals (no locals declaration
+		// at all here: the read-only body needs no heap bracket either) and no call
+		// to the allocator or the copy helper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun count-vowels (s)
+				  (let ((n 0)) (dotimes (i (length s)) (when (char= (char s i) #\\a) (setq n (+ n 1)))) n))
+				(rontolisp:wasm-export 'count-vowels :as "cv" :params '(:string) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "cv"));
+		assertThat(wrapper[0]).as("one locals run").isEqualTo((byte) 0x01);
+		assertThat(wrapper[1]).as("of one local: the :int return's range-guard scratch").isEqualTo((byte) 0x01);
+		assertThat(wrapper[2]).as("that scratch is an i64").isEqualTo((byte) 0x7E);
+		assertThat(containsSequence(wrapper, 0x20, 0x00, 0x41, 0x04, 0x6B, 0x20, 0x01, 0x36, 0x02, 0x00))
+			.as("the header store at ptr - 4")
+			.isTrue();
+		int alloc = allocFunctionIndex(module);
+		assertThat(callsFunction(wrapper, alloc)).as("the wrapper never calls __alloc").isFalse();
+		assertThat(callsFunction(wrapper, alloc + 1)).as("the wrapper never calls __memcpy").isFalse();
+	}
+
+	// True when the body holds a `call` to the function index: indices here are all
+	// single-byte LEBs, so a two-byte scan is exact.
+	private static boolean callsFunction(byte[] body, int funcIndex) {
+		for (int i = 0; i + 1 < body.length; i++) {
+			if ((body[i] & 0xFF) == 0x10 && (body[i + 1] & 0xFF) == funcIndex) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	@Test
@@ -2446,13 +2520,23 @@ class NoGcWasmCompilerTest {
 		assertThat(post[1]).as("i32.const").isEqualTo((byte) 0x41);
 		assertThat(post[post.length - 3]).as("global.set").isEqualTo((byte) 0x24);
 		assertThat(post[post.length - 2]).as("global 0").isEqualTo((byte) 0x00);
-		// cabi_realloc delegates to the bump allocator: [locals=0][local.get 3]
-		// [call __ronto_alloc][end].
+		// cabi_realloc reserves the same four header bytes __ronto_alloc does, so a
+		// canonically-lowered string argument takes the same in-place wrapper path:
+		// [locals=0][local.get 3][i32.const 4][i32.add][call __alloc]
+		// [i32.const 4][i32.add][end].
 		byte[] realloc = functionBody(code, exportedFuncIndex(exports, "cabi_realloc"));
 		assertThat(realloc[0]).isEqualTo((byte) 0x00);
 		assertThat(realloc[1]).isEqualTo((byte) 0x20);
 		assertThat(realloc[2]).isEqualTo((byte) 0x03);
-		assertThat(realloc[3]).isEqualTo((byte) 0x10); // call
+		assertThat(realloc[3]).isEqualTo((byte) 0x41); // i32.const
+		assertThat(realloc[4]).isEqualTo((byte) 0x04);
+		assertThat(realloc[5]).isEqualTo((byte) 0x6A); // i32.add
+		assertThat(realloc[6]).isEqualTo((byte) 0x10); // call
+		assertThat(realloc[7]).as("the call target is the internal __alloc").isEqualTo((byte) allocFunctionIndex(core));
+		assertThat(realloc[realloc.length - 4]).isEqualTo((byte) 0x41); // i32.const
+		assertThat(realloc[realloc.length - 3]).isEqualTo((byte) 0x04);
+		assertThat(realloc[realloc.length - 2]).isEqualTo((byte) 0x6A); // i32.add
+		assertThat(realloc[realloc.length - 1]).isEqualTo((byte) 0x0B); // end
 		// The component type section carries the string valtype (0x73) and the canon
 		// section the options vec (04: memory 03 00, realloc 04 00, utf8 00,
 		// post-return 05 01).

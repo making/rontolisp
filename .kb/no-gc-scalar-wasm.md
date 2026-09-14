@@ -241,6 +241,35 @@ wrapper is elided and the export names the internal function directly
 internal function is itself `(...) -> ()`; a `:void` export of a value-answering body still
 takes a wrapper, whose whole content is the `drop`. Two documented divergences (README
 "Non-GC Output"): no rational type, and `0` is false.
+- **A `:string` export parameter becomes the internal string in place** (landed
+  2026-09-14; `.todo/815`). The host's side is unchanged -- call `__ronto_alloc(n)`,
+  write `n` bytes at the pointer it returns, call the export with `(ptr, n)` -- but
+  `__ronto_alloc` is no longer the bare bump allocator: it is `__alloc(n + 4) + 4`,
+  a one-call wrapper holding four bytes back ahead of the returned pointer, and the
+  export wrapper only stores the length at `ptr - 4` and hands `ptr - 4` to the
+  internal function. No second allocation, no `__memcpy`, no scratch locals, and
+  (nothing bumps) no heap-mark bracket on a scalar-return wrapper that otherwise
+  allocates nothing. Under `--component` the canonical lowering goes through
+  `cabi_realloc`, which reserves the same four bytes, so the same wrapper body
+  serves both.
+  - **Boundary contract: the pointer MUST come from `__ronto_alloc`** (or the
+    canonical lowering). Any other pointer -- a literal's address, an interior
+    pointer into a larger buffer, a `:string` result handed back -- has no header
+    room in front of it, and the header store overwrites whatever four bytes sit
+    there. The old copy accepted any pointer; the contract is what buys the bytes
+    back, and it is stated in host-facing terms in
+    `doc/*/guides/wasm-nogc.md` ("Reclaiming memory").
+  - **`--reentrant` has no mirror problem here because the combination is refused**:
+    the CLI rejects `--reentrant` with `--no-gc` (no suspending import to overlap
+    on), and without overlap the host's block is live for the whole synchronous
+    call either way -- the header write lands before the internal call reads it.
+  - Measured 2026-09-14 on `size-report/programs/dom_reactor/dom_reactor.lisp` at
+    `--no-gc --no-wasi --optimize=size` plus one `:string`-taking export (the
+    `.todo/815` probe, before `847` / after `1,153`): the change takes the probe to
+    **1,053** (`-100`: code `391 -> 297`, the wrapper's copy loop plus
+    `__memcpy` shaken out; type `46 -> 40`; export `141` and global `7`
+    unchanged -- the arena API surface itself is the one-time cost that stays).
+    A second and third `:string` parameter still add almost nothing.
 - **`emitRangeChecks`'s guard shape follows the width, not one fixed pattern.** `:s8`,
   `:s16`, `:s32` and `:u32` use the canon-compare shape `WasmExportCompiler.emitNarrowIntResult`
   (wasm-GC) already uses: narrowing to the declared width and widening back is the identity
@@ -260,13 +289,15 @@ takes a wrapper, whose whole content is the `drop`. Two documented divergences (
   boxing) and restores it just before `END`. Reclaims only wrapper-internal scratch — the
   host's own pre-call input buffer sits below the mark and stays live.
 - **`Mem.allocates()`** is the module-level answer to "can anything bump the heap during a
-  call": a `:string` export PARAMETER or import RESULT (both copy into a fresh block), a
+  call": a `:string` import RESULT (copied into a fresh block), a
   string-producing op (`concatenate`/`subseq`/`princ-to-string`), a packed vector, or
-  printing (`__itoa`/`__ftoa` allocate the text they return). A module whose only use of
-  memory is reading its own literals — the host-facing reactor that passes text OUT —
+  printing (`__itoa`/`__ftoa` allocate the text they return). A `:string` export
+  PARAMETER is not on the list (its block arrives pre-allocated, in place), and a module
+  whose only use of memory is reading its own literals — the host-facing reactor that passes text OUT —
   answers false, and then no wrapper carries the bracket and a scalar identity export can
   be a pass-through even though the module has memory.
-- **Host arena API**: `__ronto_alloc` plus `__ronto_alloc_mark () -> i32` /
+- **Host arena API**: the exported `__ronto_alloc` (the `__alloc(n + 4) + 4` host
+  allocator above, NOT the internal `__alloc`) plus `__ronto_alloc_mark () -> i32` /
   `__ronto_alloc_reset (i32 mark)` over the same heap global, appended after the four
   string helpers (`--no-gc` has no fixed-index invariant). All three are exported ONLY when
   the BOUNDARY DECLARATIONS give a host something to do with the heap (`Mem.hostArena`):
@@ -544,7 +575,10 @@ the WASI one is sunk).
 `aModuleThatOnlyPassesItsOwnLiteralsOutOmitsTheArenaApi`,
 `aStringReturningImportKeepsTheArenaApi`, `aWrapperThatCannotAllocateCarriesNoHeapBracket`,
 `aComparisonFeedsTheBranchWithoutBeingWidenedFirst`, `theConstantTrueArmOfACondEmitsNoTest`,
-`stringLiteralsArePackedWithoutAlignmentPadding`,
+  `stringLiteralsArePackedWithoutAlignmentPadding`,
+  `exportedRontoAllocReservesTheStringHeader`,
+  `stringParamWrapperWritesTheHeaderInPlace`,
+  `aStringParamAloneCarriesNoHeapReset`,
 `aLiteralOnlyFoldedImportSitesReadCarriesNoLengthHeader`,
 `aLiteralAlsoReadAsAValueKeepsItsLengthHeader`,
 `aStatementPrincOfALiteralWritesTwoConstants`,
@@ -586,7 +620,10 @@ block, and a printing consumer through both shims. Runtime parity: the `noGc*` c
 `noGcPrintedLiteralsFoldAtBothLevels`, flat-heap
 loops under a 2-page cap, WAVE invoke with no flags, the canonical string ABI, `--optimize`
 composition, the print micro-adapter and its chunk cap). The `:string`-parameter side needs a
-memory-writing host, exercised by `examples/console/mandelbrot-nogc.lisp`.
+memory-writing host: `NoGcWasmExportStringParamE2eTest` (empty string, a UTF-8 string, the
+same buffer twice, an allocation between two calls, stdout diffed against the interpreter,
+flat heap over a pull loop, at both optimize levels); `examples/console/mandelbrot-nogc.lisp`
+exercises the `:string`-result side by hand.
 
 ## Unfinished
 `:s-expr` (cons/reader/printer runtime) is deferred (`.todo/023`); the `_start`

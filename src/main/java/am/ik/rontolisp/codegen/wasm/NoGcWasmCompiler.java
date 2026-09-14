@@ -1418,6 +1418,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * arena-snapshot export (-1 when the boundary gives no host a use for it)
 	 * @param resetIndex the function index of the {@code __ronto_alloc_reset}
 	 * arena-restore export (-1 when the boundary gives no host a use for it)
+	 * @param rontoAllocIndex the function index of the exported {@code __ronto_alloc}
+	 * host allocator (-1 when the boundary gives no host a use for it). It is NOT the
+	 * internal {@code __alloc}: it reserves four bytes ahead of the pointer it returns
+	 * for the {@code [len]} header an export wrapper's {@code :string} parameter writes
+	 * at {@code ptr - 4}, and is a one-call wrapper over {@code __alloc}
 	 * @param ftoaIndex the function index of the {@code __ftoa} float-to-string helper
 	 * (-1 when no float is rendered)
 	 * @param writeStdoutIndex the function index of the {@code __write_stdout} funnel,
@@ -1431,9 +1436,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private record Mem(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int dataBase,
 			int heapBase, int iovAddr, int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex,
-			int strlenIndex, int byteOffsetIndex, int charAtIndex, int markIndex, int resetIndex, int ftoaIndex,
-			int schubBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed, boolean hostArena,
-			boolean allocates) {
+			int strlenIndex, int byteOffsetIndex, int charAtIndex, int markIndex, int resetIndex, int rontoAllocIndex,
+			int ftoaIndex, int schubBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed,
+			boolean hostArena, boolean allocates) {
 
 		// The five Schubfach helpers behind __ftoa, appended right after it
 		// in this order; bodies come from WasmSchubfachRuntimeBuilder.
@@ -1679,9 +1684,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		boolean hostArena = false;
 		// Whether anything can bump the heap DURING a call, which is what the export
 		// wrappers' auto-reset bracket exists to undo. Every __alloc call site in the
-		// emitted code is one of: a :string export parameter copied in (below), a
-		// :string import result copied in (below), a string-producing op, a packed
-		// vector, or the int/float renderers behind printing. A module whose only use of
+		// emitted code is one of: a :string import result copied in (below), a
+		// string-producing op, a packed vector, or the int/float renderers behind
+		// printing. A :string export PARAMETER is not on this list: the host's block
+		// becomes the string in place (the wrapper only writes the [len] header at
+		// ptr - 4 into the four bytes __ronto_alloc reserved ahead of it), so nothing
+		// bumps. A module whose only use of
 		// memory is reading its own literals -- the shape a host-facing reactor that
 		// only passes text OUT takes -- never calls it, and every one of its wrappers
 		// would save and restore a heap pointer that cannot move.
@@ -1690,9 +1698,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			if (decl.returnType() == BoundaryType.STRING || decl.paramTypes().contains(BoundaryType.STRING)) {
 				boundaryString = true;
 				hostArena = true;
-			}
-			if (decl.paramTypes().contains(BoundaryType.STRING)) {
-				allocates = true;
 			}
 		}
 		// A host import's :string boundary is the same linear-memory crossing an
@@ -1789,12 +1794,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int strlenIndex = layout.strlenUsed() ? next++ : -1;
 		int byteOffsetIndex = layout.byteOffsetUsed() ? next++ : -1;
 		int charAtIndex = layout.charAtUsed() ? next++ : -1;
-		// The host arena API __ronto_alloc_mark/_reset: two more exported functions over
+		// The host arena API __ronto_alloc_mark/_reset plus the exported __ronto_alloc
+		// host allocator: three more exported functions over
 		// the same heap-pointer global, appended after the string helpers. --no-gc
 		// has no fixed-index invariant, so appending is free (nothing renumbers) -- and
 		// so is leaving them out when the boundary gives no host a use for them.
 		int markIndex = layout.hostArena() ? next++ : -1;
 		int resetIndex = layout.hostArena() ? next++ : -1;
+		int rontoAllocIndex = layout.hostArena() ? next++ : -1;
 		// The printing helpers append after the arena pair, again gated.
 		int ftoaIndex = layout.ftoaUsed() ? next : -1;
 		// __ftoa is followed by its five Schubfach helpers (see Mem.schub*Index).
@@ -1804,8 +1811,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int writeStdoutIndex = layout.printUsed() ? next : -1;
 		return new Mem(layout.literals(), layout.regions(), layout.data(), STR_DATA_BASE, layout.heapBase(),
 				layout.iovAddr(), funcBase, allocIndex, memcpyIndex, streqIndex, itoaIndex, strlenIndex,
-				byteOffsetIndex, charAtIndex, markIndex, resetIndex, ftoaIndex, layout.schubBase(), writeStdoutIndex,
-				layout.used(), layout.printUsed(), layout.ftoaUsed(), layout.hostArena(), layout.allocates());
+				byteOffsetIndex, charAtIndex, markIndex, resetIndex, rontoAllocIndex, ftoaIndex, layout.schubBase(),
+				writeStdoutIndex, layout.used(), layout.printUsed(), layout.ftoaUsed(), layout.hostArena(),
+				layout.allocates());
 	}
 
 	/** The printing operators that gate the fd_write import. */
@@ -2017,7 +2025,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int utf8Helpers = (mem.strlenIndex() >= 0 ? 1 : 0) + (mem.byteOffsetIndex() >= 0 ? 1 : 0)
 				+ (mem.charAtIndex() >= 0 ? 1 : 0);
 		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 4 : 0) + utf8Helpers
-				+ (mem.hostArena() ? 2 : 0) + (mem.ftoaUsed() ? 6 : 0) + (mem.printUsed() ? 1 : 0);
+				+ (mem.hostArena() ? 3 : 0) + (mem.ftoaUsed() ? 6 : 0) + (mem.printUsed() ? 1 : 0);
 		// Canonical string ABI for --component :string exports:
 		// cabi_realloc (the host lowers string arguments through it), one retptr shim
 		// per :string-RETURNING export (MAX_FLAT_RESULTS = 1, so the lifted core
@@ -2101,9 +2109,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		if (mem.hostArena()) {
 			// The host arena API: __ronto_alloc_mark () -> i32 and
-			// __ronto_alloc_reset (i32) -> ().
+			// __ronto_alloc_reset (i32) -> (), plus the exported __ronto_alloc
+			// (i32) -> i32 host allocator (a one-call wrapper over __alloc, so its
+			// shape is __alloc's and no type entry is added for it).
 			funcTypes[nextFunc++] = typeTable.intern(new Type[0], new Type[] { Type.I32 });
 			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32 }, new Type[0]);
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32 }, new Type[] { Type.I32 });
 		}
 		if (mem.ftoaUsed()) {
 			// __ftoa (f64) -> i32 (a fresh [len][bytes] string pointer), then its five
@@ -2205,14 +2216,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					exports.addExport("memory", ExternalKind.MEMORY, 0);
 				}
 				if (mem.hostArena()) {
-					// The allocator, and the arena API over it: snapshot the bump-heap
+					// The allocator the host reserves its input buffers with -- NOT the
+					// internal __alloc: it holds four bytes back for the [len] header
+					// the export wrapper writes at ptr - 4 -- and the arena API over
+					// it: snapshot the bump-heap
 					// top before the host allocates its own input buffer, then restore it
 					// after the call so a resident instance stays flat regardless of how
 					// many times it is called. Emitted only where the boundary gives the
 					// host something to allocate or something to reclaim -- otherwise the
 					// wrappers' own auto-reset already keeps the heap flat and this is an
 					// API nothing can use (mem.hostArena()).
-					exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, mem.allocIndex());
+					exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, mem.rontoAllocIndex());
 					exports.addExport("__ronto_alloc_mark", ExternalKind.FUNCTION, mem.markIndex());
 					exports.addExport("__ronto_alloc_reset", ExternalKind.FUNCTION, mem.resetIndex());
 				}
@@ -2265,6 +2279,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				if (mem.hostArena()) {
 					code.addFunction(markBody());
 					code.addFunction(resetBody());
+					code.addFunction(rontoAllocBody(mem.allocIndex()));
 				}
 				if (mem.ftoaUsed()) {
 					code.addFunction(ftoaBody(mem));
@@ -2778,6 +2793,27 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return withLocals(b.toByteArray(), List.of());
 	}
 
+	// __ronto_alloc(size i32) -> i32: the host allocator, the entry point a host
+	// reserves a :string export parameter's (or a :string import result's) bytes
+	// with. It is __alloc(size + 4) + 4: the four bytes ahead of the returned
+	// pointer are the [len] header the export wrapper stores at ptr - 4, turning
+	// the host's block into the internal string in place -- no second allocation,
+	// no copy. The pointer is 4-aligned exactly when the block is (__alloc
+	// 4-aligns the bump, and old + 4 keeps it), so the header load stays on the
+	// alignment the block had. Param 0 = size, no locals.
+	private static byte[] rontoAllocBody(int allocIndex) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL).writeUnsignedLeb128(allocIndex);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), List.of());
+	}
+
 	// --- Canonical string ABI helpers for --component :string exports
 
 	// The core parameter type of the shared cabi_post_* post-return function a
@@ -2794,14 +2830,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// cabi_realloc(old i32, old-size i32, align i32, new-size i32) -> i32: the canonical
 	// ABI reallocation entry point the host calls to lower string arguments into this
-	// module's memory. Over a bump allocator it is just __alloc(new-size): old is never
+	// module's memory. Over a bump allocator it is just the __ronto_alloc shape over
+	// __alloc: __alloc(new-size + 4) + 4, so the export wrapper can store the [len]
+	// header at ptr - 4 exactly as for a __ronto_alloc'd buffer. Old is never
 	// a live block to preserve (the host lowers each string with old = 0 and an exact
-	// size), and __alloc's 4-byte alignment satisfies the string encoding's align 1.
+	// size), and the returned pointer keeps __alloc's 4-byte alignment, which
+	// satisfies the string encoding's align 1.
 	private static byte[] cabiReallocBody(int allocIndex) {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
 		w.write(Instruction.CALL).writeUnsignedLeb128(allocIndex);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), List.of());
 	}
@@ -3029,9 +3072,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * over an inferred i64, {@code :float} over an inferred f64, {@code :void} over a
 	 * body that answers nothing) and nothing in the module can bump the heap during the
 	 * call, so there is no allocation for a wrapper to reset. (A {@code :string} boundary
-	 * is both -- it marshals AND it allocates, so it fails this on either count.) Such an
-	 * export names the internal function directly instead of an identity wrapper that
-	 * would only forward its arguments.
+	 * still marshals -- the host's block becomes the string in place, but the header
+	 * store is a conversion all the same -- so it fails this.) Such an export names the
+	 * internal function directly instead of an identity wrapper that would only forward
+	 * its arguments.
 	 * @param decl the parsed export directive
 	 * @param types the inferred internal types
 	 * @param allocates whether anything in the module can bump the heap during a call
@@ -3559,15 +3603,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int nextLocal = WasmExportCompiler.paramSlotCount(decl);
 
 		// Auto-reset the bump heap for scalar-return exports. Anything the exported
-		// function allocates during the call (the internal :string copy below,
-		// plus any concatenate/subseq/... scratch) is dead the moment a non-memory scalar
+		// function allocates during the call (any concatenate/subseq/... scratch)
+		// is dead the moment a non-memory scalar
 		// is returned -- no heap pointer escapes to the host. Snapshot the heap-pointer
 		// global (index 0) at wrapper entry and restore it at exit so a long-lived,
 		// repeatedly-called instance stops growing. Gated on the return type NOT being a
 		// memory designator (:string/:s-expr, whose result pointer must stay live), on
 		// mem.used() (a pure-numeric export has no heap global at all) and on
-		// mem.allocates() -- a module that only reads its own literals has no call site
-		// that can move the pointer, and the bracket would restore what never changed.
+		// mem.allocates() -- a module that only reads its own literals (or only takes
+		// :string parameters, whose blocks the host already allocated) has no call
+		// site that can move the pointer, and the bracket would restore what never
+		// changed.
 		boolean resetHeap = mem.used() && mem.allocates() && decl.returnType() != BoundaryType.STRING
 				&& decl.returnType() != BoundaryType.S_EXPR;
 		int mark = -1;
@@ -3585,41 +3631,33 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			BoundaryType hostType = decl.paramTypes().get(p);
 			Ty internal = internalParams[p];
 			if (hostType == BoundaryType.STRING) {
-				// (ptr,len) -> a fresh internal [len][bytes] string copied out of the
-				// host
-				// buffer. Scratch locals: hp(host ptr), len, dst.
-				int hp = nextLocal++;
-				int len = nextLocal++;
-				int dst = nextLocal++;
-				wrapperLocals.add(Ty.STRING);
-				wrapperLocals.add(Ty.STRING);
-				wrapperLocals.add(Ty.STRING);
+				// (ptr,len) -> the internal [len][bytes] string, in place. The host
+				// reserved the block with __ronto_alloc, which holds four bytes back
+				// ahead of the pointer it returns, so the wrapper only stores the
+				// length at ptr - 4 and hands ptr - 4 to the internal function: the
+				// block the host filled BECOMES the string, with no second allocation
+				// and no copy. No scratch locals, no heap bump, and therefore nothing
+				// for the scalar auto-reset bracket above to reclaim on this path.
+				//
+				// Boundary contract: the pointer MUST come from __ronto_alloc (or, under
+				// --component, from the canonical lowering through cabi_realloc, which
+				// reserves the same four bytes). Any other pointer -- a literal's
+				// address, an interior pointer, a :string result handed back -- has no
+				// header room in front of it, and the store below overwrites whatever
+				// four bytes sit there.
 				w.write(Instruction.GET_LOCAL)
 					.writeUnsignedLeb128(slot)
-					.write(Instruction.SET_LOCAL)
-					.writeUnsignedLeb128(hp);
-				w.write(Instruction.GET_LOCAL)
-					.writeUnsignedLeb128(slot + 1)
-					.write(Instruction.SET_LOCAL)
-					.writeUnsignedLeb128(len);
-				w.write(Instruction.I32_CONST).writeSignedLeb128(4);
-				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len).write(Instruction.I32_ADD);
-				w.write(Instruction.CALL).writeUnsignedLeb128(mem.allocIndex());
-				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(dst);
-				// store the length header
-				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
-				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len).write(Instruction.I32_STORE, 0x02, 0x00);
-				// __memcpy(dst+4, hp, len)
-				w.write(Instruction.GET_LOCAL)
-					.writeUnsignedLeb128(dst)
 					.write(Instruction.I32_CONST)
 					.writeSignedLeb128(4)
-					.write(Instruction.I32_ADD);
-				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(hp);
-				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len);
-				w.write(Instruction.CALL).writeUnsignedLeb128(mem.memcpyIndex());
+					.write(Instruction.I32_SUB);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot + 1);
+				w.write(Instruction.I32_STORE, 0x02, 0x00);
 				// leave the internal string pointer for the call
-				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+				w.write(Instruction.GET_LOCAL)
+					.writeUnsignedLeb128(slot)
+					.write(Instruction.I32_CONST)
+					.writeSignedLeb128(4)
+					.write(Instruction.I32_SUB);
 				slot += 2;
 			}
 			else {

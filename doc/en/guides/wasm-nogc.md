@@ -151,8 +151,11 @@ A module that uses strings gains a (growable) linear memory and exports
 that `memory` alongside your functions. It exports a `__ronto_alloc(size)`
 bump allocator too whenever the declared boundary gives the *host*
 something to do with the heap — see [the arena
-API](#reclaiming-memory-the-arena-api). A `:string` parameter arrives as a `(ptr, len)` pair the host
-writes into memory, and a `:string` result is returned the same way — so a
+API](#reclaiming-memory-the-arena-api). A `:string` parameter arrives as a `(ptr, len)` pair the host writes into memory
+through the exported `__ronto_alloc` — pass exactly the pointer it answered:
+it holds four bytes back ahead of the pointer for the string's length header,
+which the export writes on entry, so the block you filled *is* the string
+(no second allocation, no copy). A `:string` result is returned the same way — so a
 string-valued export needs a host that can read/write the exported memory
 (JavaScript, a small Node script, the browser playground) rather than just
 `wasmtime --invoke`. The [browser guide](wasm-browser.md#passing-strings-string)
@@ -243,9 +246,9 @@ mechanisms keep it flat:
 - **Automatic, for scalar returns.** When an export returns a non-memory
   scalar (`:int`/`:long`/`:float`/`:bool`/`:void`), its wrapper snapshots
   the heap top on entry and restores it on exit, so everything the *call*
-  allocates (the internal copy of a `:string` argument, plus any
-  `concatenate`/`subseq`/`princ-to-string` scratch) is reclaimed on return.
-  Nothing to do host-side.
+  allocates (any `concatenate`/`subseq`/`princ-to-string` scratch — a
+  `:string` argument needs no copy: the block you allocated *is* the string)
+  is reclaimed on return. Nothing to do host-side.
 - **Manual, for the host's own buffer.** The host allocates its input
   buffer *before* the call, so it sits below the wrapper's auto-reset mark
   and is left live. To reclaim it too, the string-using module also exports
@@ -290,7 +293,7 @@ node -e '(async () => {
 })()'
 ```
 
-The arena is a manual stack, not a garbage collector, so two rules apply:
+The arena is a manual stack, not a garbage collector, so three rules apply:
 
 - Only reset to a mark taken **before** everything still live — popping to
   a mark taken *after* data you still need frees that data.
@@ -298,6 +301,11 @@ The arena is a manual stack, not a garbage collector, so two rules apply:
   live heap pointer). **Read the returned bytes out of memory before
   calling `__ronto_alloc_reset`** — resetting first frees the string and
   the next allocation overwrites it.
+- A `:string` **parameter** must be a pointer `__ronto_alloc` answered — it
+  is the only pointer with header room in front of it. Passing any other
+  pointer (a literal's address, a `:string` result handed back) overwrites
+  whatever four bytes sit there. To pass an empty string, call
+  `__ronto_alloc(0)`.
 
 The [`count-vowels` example](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)
 walks through this recipe with both a Node and an

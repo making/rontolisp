@@ -43,7 +43,9 @@ boundary and WIT world are one contract.
 - `--no-gc`: the internal integer IS i64, so `:s64` pins param/return to i64 (no
   `i64.extend_i32_s`/`i32.wrap_i64`) -- an explicit `S64` branch in
   `NoGcWasmCompiler.compileWrapperBody`, `boundaryTy` falling through to INT, `requireSupported`
-  rejecting only `:s-expr`.
+  rejecting only `:s-expr`. A `:string` parameter's `(ptr, len)` must come from the
+  exported `__ronto_alloc` (the full in-place contract: `.kb/no-gc-scalar-wasm.md`,
+  "Boundary").
 - **Pass-through wrapper elision** (`NoGcWasmCompiler.isPassThroughExport`): every param and the
   return crossing identically (`:s64` over inferred i64, `:float` over inferred f64 -- the only two
   needing neither range guard nor narrowing) AND `Mem.used()` false => the export names the internal
