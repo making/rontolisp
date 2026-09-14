@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**13,771 / 19,485 tests pass (70.7%)** -- 2,109 fail, 3,605 signal an error.
+**13,810 / 19,485 tests pass (70.9%)** -- 2,088 fail, 3,587 signal an error.
 
-7 top-level forms could not be read, 449 could not be evaluated, 4 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 448 could not be evaluated, 4 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -19,21 +19,21 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | hash-tables | 157 | 128 | 22 | 7 | 81.5% | 13 |
 | iteration | 843 | 536 | 208 | 99 | 63.6% | 13 |
 | misc | 740 | 644 | 19 | 77 | 87.0% | 11 |
-| numbers | 1,444 | 1,060 | 82 | 302 | 73.4% | 25 |
+| numbers | 1,444 | 1,063 | 80 | 301 | 73.6% | 24 |
 | objects | 846 | 340 | 203 | 303 | 40.2% | 37 |
 | packages | 492 | 168 | 120 | 204 | 34.1% | 29 |
 | pathnames | 214 | 120 | 26 | 68 | 56.1% | 12 |
-| printer | 544 | 229 | 128 | 187 | 42.1% | 48 |
+| printer | 544 | 231 | 128 | 185 | 42.5% | 48 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 13 |
-| reader | 575 | 275 | 106 | 194 | 47.8% | 19 |
+| reader | 575 | 308 | 88 | 179 | 53.6% | 19 |
 | sequences | 3,287 | 2,964 | 117 | 206 | 90.2% | 11 |
 | streams | 759 | 225 | 82 | 452 | 29.6% | 56 |
-| strings | 509 | 395 | 65 | 49 | 77.6% | 12 |
+| strings | 509 | 396 | 64 | 49 | 77.8% | 12 |
 | structures | 1,030 | 713 | 58 | 259 | 69.2% | 36 |
 | symbols | 1,144 | 1,070 | 27 | 47 | 93.5% | 12 |
 | system-construction | 77 | 23 | 4 | 50 | 29.9% | 11 |
 | types-and-classes | 626 | 313 | 210 | 103 | 50.0% | 13 |
-| **total** | **19,485** | **13,771** | **2,109** | **3,605** | **70.7%** | **460** |
+| **total** | **19,485** | **13,810** | **2,088** | **3,587** | **70.9%** | **459** |
 
 ## Most frequent failure reasons
 
