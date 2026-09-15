@@ -2034,6 +2034,27 @@ cases:
       42
       42
       99
+  - name: float-exact-comparison
+    # A float against an exact number compares exact values on every backend
+    # (.todo/037). Sub-ulp ratios stay on the interpreter/JVM unit tests: a
+    # ratio that close to a float has components past WASM-GC's i32 limit, so
+    # only the shared representable range is pinned here.
+    source: |
+      (print (= 2.0 2))
+      (print (= 0.5 1/2))
+      (print (< 1/2 1.0))
+      (print (> 3.5 7/2))
+      (print (= 1.0 (+ 1 1/1000)))
+      (print (= -0.0 0))
+      (print (> (max 1.0 3/2) 1.0))
+    expected: |
+      T
+      T
+      T
+      NIL
+      NIL
+      T
+      T
   - name: double-nested-arithmetic
     source: |
       (print (+ (* 2.0 3.0) (- 10.0 4.0)))

@@ -7669,10 +7669,13 @@ public final class Environment implements Scope {
 	private static final int UNORDERED = 2;
 
 	/**
-	 * Compares two numbers, returning -1, 0, 1 or {@link #UNORDERED}, promoting to the
-	 * widest type present (double &gt; ratio &gt; bigint &gt; long). Doubles compare per
-	 * IEEE 754: {@code -0.0} equals {@code 0.0}, and NaN is unordered against everything
-	 * (not {@code Double.compare}'s total order). A complex operand never reaches here:
+	 * Compares two numbers, returning -1, 0, 1 or {@link #UNORDERED}. A float compared
+	 * against an exact number (integer or ratio) compares EXACT values: the float's exact
+	 * binary value (as {@code rational} answers it) against the exact operand, so
+	 * {@code (= 1.0 (+ 1 tiny-ratio))} is false even though the ratio floats back to
+	 * {@code 1.0}. Two floats compare per IEEE 754: {@code -0.0} equals {@code 0.0}, and
+	 * NaN is unordered against everything (not {@code Double.compare}'s total order). An
+	 * infinity sits beyond every exact number. A complex operand never reaches here:
 	 * {@code =} compares complexes part-wise in {@link #compareChain}, and every other
 	 * comparison signals -- so one slipping through is a real-operand complaint.
 	 */
@@ -7684,15 +7687,7 @@ public final class Environment implements Scope {
 			throw realOperandError(complex);
 		}
 		if (a instanceof LispDouble || b instanceof LispDouble) {
-			double x = asDouble(a);
-			double y = asDouble(b);
-			if (x < y) {
-				return -1;
-			}
-			if (x > y) {
-				return 1;
-			}
-			return x == y ? 0 : UNORDERED;
+			return compareFloat(a, b);
 		}
 		if (a instanceof LispRatio || b instanceof LispRatio) {
 			return Integer.signum(compareRational(a, b));
@@ -7701,6 +7696,46 @@ public final class Environment implements Scope {
 			return Integer.signum(asBigInteger(a).compareTo(asBigInteger(b)));
 		}
 		return Integer.signum(Long.compare(asLong(a), asLong(b)));
+	}
+
+	/**
+	 * Compares a pair of which at least one side is a float. Two floats compare per IEEE
+	 * 754 ({@code -0.0} equals {@code 0.0}, NaN is {@link #UNORDERED}). A float against
+	 * an exact number compares the float's exact binary value (the
+	 * {@link #rationalOfDouble} decomposition, so {@code -0.0} is zero) against the exact
+	 * operand by cross-multiplication; a NaN is unordered, and an infinity outweighs
+	 * every exact number on its side.
+	 */
+	private static int compareFloat(LispVal a, LispVal b) {
+		if (a instanceof LispDouble da && b instanceof LispDouble db) {
+			double x = da.value();
+			double y = db.value();
+			if (x < y) {
+				return -1;
+			}
+			if (x > y) {
+				return 1;
+			}
+			return x == y ? 0 : UNORDERED;
+		}
+		boolean aIsFloat = a instanceof LispDouble;
+		LispVal other = aIsFloat ? b : a;
+		if (!(other instanceof LispInteger) && !(other instanceof LispBigInteger) && !(other instanceof LispRatio)) {
+			// The float arm's funnel: a non-number beside a float is "Expected
+			// number", exactly what asDouble threw here before (.kb/error-handling.md,
+			// "A non-number reaching arithmetic signals a catchable type-error").
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX + other.print());
+		}
+		double v = ((LispDouble) (aIsFloat ? a : b)).value();
+		if (Double.isNaN(v)) {
+			return UNORDERED;
+		}
+		if (Double.isInfinite(v)) {
+			return (v > 0) == aIsFloat ? 1 : -1;
+		}
+		int sign = Integer.signum(compareRational(rationalOfDouble(v), aIsFloat ? b : a));
+		return aIsFloat ? sign : -sign;
 	}
 
 	/**

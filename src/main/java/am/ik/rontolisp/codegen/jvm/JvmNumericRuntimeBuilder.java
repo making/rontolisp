@@ -609,9 +609,10 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildFmod(nFmod, dFmod, rFrem));
 		methods.add(buildFrem(nFrem, dFmod));
 		methods.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul,
-				doubleClass, rDbl, numberClass, numDoubleValue));
+				doubleClass, rDbl, numberClass, numDoubleValue, bigClass, rFrat, intSignum, typeErrRefs));
 		methods.add(buildCmpBits(nCmpb, dCmp, doubleClass, rDbl, numberClass, numDoubleValue, rCmp, intSignum, rcClass,
-				rcReal, rcImag, longValueOf, hasComplex));
+				rcReal, rcImag, longValueOf, hasComplex, rFrat, ratArrClass, longClass, bigClass, rRatNum, rRatDen,
+				biMul, biCompareTo, typeErrRefs));
 		methods.add(buildAbs(nAbs, dUnary, longClass, bigClass, longValue, longValueOf, absLong, biValueOf, biNeg,
 				biAbs, rNorm, cMin, ratArrClass, rRatNum, rRatDen, rRat, doubleClass, rDbl, numberClass, numDoubleValue,
 				doubleValueOf, absDouble, rBig, rcClass, rcReal, rcImag, mathHypot, hasComplex));
@@ -1237,15 +1238,218 @@ final class JvmNumericRuntimeBuilder {
 		return new NumericMethod(name, desc, c, 4, 6, List.of());
 	}
 
+	// The exact comparison of a (Double, exact) pair, shared by _cmp and _cmpb: the
+	// operand loaded by dblLoad is a Double, the one loaded by othLoad is exact
+	// (Long/BigInteger/ratio) or the float funnel's "Expected number" throw. A finite
+	// double compares its _frat decomposition against the exact operand's (_ratNum,
+	// _ratDen) by cross-multiplication (every denominator is positive, so the
+	// direction is preserved); an infinity outweighs every exact number on its side.
+	// A NaN double either answers the unordered mask (bitmask mode, _cmpb) or jumps
+	// back to a caller-recorded old path (signum mode, _cmp, where unordered is the
+	// DCMPL collapse both callers already had). Locals 2/3 hold the double, local 4
+	// the _frat pair. Every path returns.
+	private static void emitExactFloatCompare(List<Integer> c, int dblLoad, int othLoad, boolean dblIsA,
+			boolean bitmask, ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant rFrat,
+			ClassConstant ratArrClass, ClassConstant bigClass, ClassConstant longClass, MethodrefConstant rRatNum,
+			MethodrefConstant rRatDen, MethodrefConstant biMul, MethodrefConstant biCompareTo,
+			MethodrefConstant intSignum, TypeErrRefs typeErrRefs, @Nullable List<Integer> nanFallbacks) {
+		c.add(dblLoad);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, numberClass.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, numDoubleValue.index());
+		c.add(Opcode.DSTORE_2);
+		// NaN: DCMPL(d, d) falls out as -1, so IFEQ skips it.
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DCMPL);
+		int ifNotNaN = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		if (nanFallbacks != null) {
+			int gotoOld = c.size();
+			c.add(Opcode.GOTO);
+			JvmRuntimeBuilder.emitU2(c, 0);
+			nanFallbacks.add(gotoOld);
+		}
+		else {
+			c.add(Opcode.ICONST_0);
+			c.add(Opcode.IRETURN);
+		}
+		JvmRuntimeBuilder.patchBranch(c, ifNotNaN, c.size());
+		// The exact pair _frat answers for a finite double (the pair array class is
+		// the ratio's: buildRational casts the same way). Null past the NaN check
+		// above is an infinity.
+		c.add(dblLoad);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rFrat.index());
+		c.add(Opcode.DUP);
+		int ifFinite = c.size();
+		c.add(Opcode.IFNONNULL);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.POP);
+		// DCMPL(d, 0) is 1 or -1 here (a zero double decomposes, never nulls).
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPL);
+		int ifNegInf = c.size();
+		c.add(Opcode.IFLE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitMixedInfinite(c, dblIsA, bitmask, true);
+		JvmRuntimeBuilder.patchBranch(c, ifNegInf, c.size());
+		emitMixedInfinite(c, dblIsA, bitmask, false);
+		JvmRuntimeBuilder.patchBranch(c, ifFinite, c.size());
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
+		c.add(Opcode.ASTORE);
+		c.add(4);
+		// The exact side's funnel: a non-number beside a float is "Expected
+		// number", the _dbl text the mixed pair used to see.
+		c.add(othLoad);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
+		int ifOthRat = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(othLoad);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		int ifOthLong = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(othLoad);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, bigClass.index());
+		int ifOthBig = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.NEW);
+		JvmRuntimeBuilder.emitU2(c, typeErrRefs.rte().index());
+		c.add(Opcode.DUP);
+		JvmRuntimeBuilder.emitLdc(c, typeErrRefs.numPrefix().index());
+		c.add(othLoad);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, typeErrRefs.lispToString().index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, typeErrRefs.strConcat().index());
+		c.add(Opcode.INVOKESPECIAL);
+		JvmRuntimeBuilder.emitU2(c, typeErrRefs.rteInit().index());
+		c.add(Opcode.ATHROW);
+		JvmRuntimeBuilder.patchBranch(c, ifOthRat, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifOthLong, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifOthBig, c.size());
+		// left = numA*denB, right = numB*denA with (A, B) = (dbl, oth) or the
+		// mirror, so the sign reads in (a, b) order without a flag local. The
+		// bitmask shape leads with 1 for the 1 << (signum + 1) tail.
+		if (bitmask) {
+			c.add(Opcode.ICONST_1);
+		}
+		emitMixedNumDen(c, dblIsA, 0, othLoad, rRatNum, ratArrClass, bigClass);
+		emitMixedNumDen(c, !dblIsA, 1, othLoad, rRatDen, ratArrClass, bigClass);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biMul.index());
+		emitMixedNumDen(c, !dblIsA, 0, othLoad, rRatNum, ratArrClass, bigClass);
+		emitMixedNumDen(c, dblIsA, 1, othLoad, rRatDen, ratArrClass, bigClass);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biMul.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biCompareTo.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, intSignum.index());
+		if (bitmask) {
+			c.add(Opcode.ICONST_1);
+			c.add(Opcode.IADD);
+			c.add(Opcode.ISHL);
+		}
+		c.add(Opcode.IRETURN);
+	}
+
+	// One numerator/denominator side of the mixed cross-multiplication: the _frat
+	// pair's element when pairSide, else the exact operand's _ratNum/_ratDen (which
+	// funnel Long/BigInteger through _big and answer ONE for a non-ratio
+	// denominator, so the funnel check above is what rejects junk).
+	private static void emitMixedNumDen(List<Integer> c, boolean pairSide, int pairIndex, int othLoad,
+			MethodrefConstant rRatPart, ClassConstant ratArrClass, ClassConstant bigClass) {
+		if (pairSide) {
+			c.add(Opcode.ALOAD);
+			c.add(4);
+			if (pairIndex == 0) {
+				c.add(Opcode.ICONST_0);
+			}
+			else {
+				c.add(Opcode.ICONST_1);
+			}
+			c.add(Opcode.AALOAD);
+			c.add(Opcode.CHECKCAST);
+			JvmRuntimeBuilder.emitU2(c, bigClass.index());
+		}
+		else {
+			c.add(othLoad);
+			c.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(c, rRatPart.index());
+		}
+	}
+
+	// An infinite double against an exact number: beyond it on its side's sign.
+	private static void emitMixedInfinite(List<Integer> c, boolean dblIsA, boolean bitmask, boolean positive) {
+		if (bitmask) {
+			c.add(dblIsA == positive ? Opcode.ICONST_4 : Opcode.ICONST_1);
+		}
+		else {
+			JvmRuntimeBuilder.emitIntConstStatic(c, dblIsA == positive ? 1 : -1);
+		}
+		c.add(Opcode.IRETURN);
+	}
+
 	// _cmp(Object a, Object b): long comparison, BigInteger.compareTo, or rational
 	// cross-multiplication (denominators are positive), returning -1/0/1.
 	private static NumericMethod buildCmp(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			MethodrefConstant longValue, MethodrefConstant rBig, MethodrefConstant biCompareTo,
 			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant biMul,
 			ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue) {
+			MethodrefConstant numDoubleValue, ClassConstant bigClass, MethodrefConstant rFrat,
+			MethodrefConstant intSignum, TypeErrRefs typeErrRefs) {
 		List<Integer> c = new ArrayList<>();
-		emitDoubleCmpPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue);
+		// Double dispatch: both doubles take the old double comparison; exactly one
+		// double takes the exact mixed comparison (a NaN jumps back to the old path,
+		// which collapses it to -1 as before); neither reaches the exact body below.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifANotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifMixedA = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		int oldPath = c.size();
+		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
+		emitToDouble(c, Opcode.ALOAD_1, rDbl, numberClass, numDoubleValue);
+		c.add(Opcode.DCMPL);
+		c.add(Opcode.IRETURN);
+		int mixedA = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifMixedA, mixedA);
+		List<Integer> nanOld = new ArrayList<>();
+		emitExactFloatCompare(c, Opcode.ALOAD_0, Opcode.ALOAD_1, true, false, numberClass, numDoubleValue, rFrat,
+				ratArrClass, bigClass, longClass, rRatNum, rRatDen, biMul, biCompareTo, intSignum, typeErrRefs, nanOld);
+		int aNotDouble = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifANotDouble, aNotDouble);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifExactRest = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitExactFloatCompare(c, Opcode.ALOAD_1, Opcode.ALOAD_0, false, false, numberClass, numDoubleValue, rFrat,
+				ratArrClass, bigClass, longClass, rRatNum, rRatDen, biMul, biCompareTo, intSignum, typeErrRefs, nanOld);
+		int exactRest = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifExactRest, exactRest);
+		for (int pos : nanOld) {
+			JvmRuntimeBuilder.patchBranch(c, pos, oldPath);
+		}
 		int[] ratJumps = emitRatioGuard(c, ratArrClass);
 		int[] slowJumps = emitLongLongGuard(c, longClass);
 		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
@@ -1286,18 +1490,22 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.INVOKEVIRTUAL);
 		JvmRuntimeBuilder.emitU2(c, biCompareTo.index());
 		c.add(Opcode.IRETURN);
-		return new NumericMethod(name, desc, c, 4, 2, List.of());
+		return new NumericMethod(name, desc, c, 4, 5, List.of());
 	}
 
 	// _cmpb(Object a, Object b): the comparison as a bitmask -- 1 = a<b, 2 = a=b,
 	// 4 = a>b, 0 = unordered (a NaN operand). The comparison operators AND the mask
 	// they accept and branch on nonzero, so NaN fails every one of = < > <= >= (IEEE),
-	// which a -1/0/1 signum cannot express. Non-double operands delegate to _cmp
-	// (exact, never unordered).
+	// which a -1/0/1 signum cannot express. Two doubles compare in f64; a double
+	// beside an exact number compares exact values through emitExactFloatCompare;
+	// exact pairs delegate to _cmp (exact, never unordered).
 	private static NumericMethod buildCmpBits(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
 			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant rCmp,
 			MethodrefConstant intSignum, @Nullable ClassConstant rcClass, @Nullable FieldrefConstant rcReal,
-			@Nullable FieldrefConstant rcImag, MethodrefConstant longValueOf, @Nullable FieldrefConstant hasComplex) {
+			@Nullable FieldrefConstant rcImag, MethodrefConstant longValueOf, @Nullable FieldrefConstant hasComplex,
+			MethodrefConstant rFrat, ClassConstant ratArrClass, ClassConstant longClass, ClassConstant bigClass,
+			MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant biMul,
+			MethodrefConstant biCompareTo, TypeErrRefs typeErrRefs) {
 		List<Integer> c = new ArrayList<>();
 		if (rcClass != null) {
 			// A complex operand compares part-wise: equal exactly when both part
@@ -1367,16 +1575,15 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
 		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
-		int ifADouble = c.size();
-		c.add(Opcode.IFNE);
+		int ifANotDouble = c.size();
+		c.add(Opcode.IFEQ);
 		JvmRuntimeBuilder.emitU2(c, 0);
 		c.add(Opcode.ALOAD_1);
 		c.add(Opcode.INSTANCEOF);
 		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
-		int ifBNotDouble = c.size();
+		int ifMixedA = c.size();
 		c.add(Opcode.IFEQ);
 		JvmRuntimeBuilder.emitU2(c, 0);
-		JvmRuntimeBuilder.patchBranch(c, ifADouble, c.size());
 		// x -> locals 2/3, y -> locals 4/5
 		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
 		c.add(Opcode.DSTORE_2);
@@ -1418,8 +1625,24 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(c, notEq, c.size());
 		c.add(Opcode.ICONST_0);
 		c.add(Opcode.IRETURN);
+		// Exactly one double: the exact comparison (every path returns).
+		int mixedA = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifMixedA, mixedA);
+		emitExactFloatCompare(c, Opcode.ALOAD_0, Opcode.ALOAD_1, true, true, numberClass, numDoubleValue, rFrat,
+				ratArrClass, bigClass, longClass, rRatNum, rRatDen, biMul, biCompareTo, intSignum, typeErrRefs, null);
+		int aNotDouble = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifANotDouble, aNotDouble);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifExactTail = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitExactFloatCompare(c, Opcode.ALOAD_1, Opcode.ALOAD_0, false, true, numberClass, numDoubleValue, rFrat,
+				ratArrClass, bigClass, longClass, rRatNum, rRatDen, biMul, biCompareTo, intSignum, typeErrRefs, null);
 		// exact types: 1 << (signum(_cmp(a, b)) + 1)
-		JvmRuntimeBuilder.patchBranch(c, ifBNotDouble, c.size());
+		int exactTail = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifExactTail, exactTail);
 		c.add(Opcode.ICONST_1);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.ALOAD_1);
@@ -1431,7 +1654,9 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.IADD);
 		c.add(Opcode.ISHL);
 		c.add(Opcode.IRETURN);
-		return new NumericMethod(name, desc, c, 4, 6, List.of());
+		// maxStack 5: the mixed float/exact cross holds 1, left and right (three
+		// references) while loading the right denominator.
+		return new NumericMethod(name, desc, c, 5, 6, List.of());
 	}
 
 	// _ccmpb(Object a, Object b): like _cmpb, but a complex operand signals the
@@ -4112,30 +4337,6 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
 		c.add(Opcode.ARETURN);
-		JvmRuntimeBuilder.patchBranch(c, ifBNotDouble, c.size());
-	}
-
-	// Like emitDoubleBinaryPrologue, but for _cmp: the Double path leaves an int (-1/0/1)
-	// via dcmpl and returns it directly, matching the integer/ratio path's int result.
-	private static void emitDoubleCmpPrologue(List<Integer> c, ClassConstant doubleClass, MethodrefConstant rDbl,
-			ClassConstant numberClass, MethodrefConstant numDoubleValue) {
-		c.add(Opcode.ALOAD_0);
-		c.add(Opcode.INSTANCEOF);
-		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
-		int ifADouble = c.size();
-		c.add(Opcode.IFNE);
-		JvmRuntimeBuilder.emitU2(c, 0);
-		c.add(Opcode.ALOAD_1);
-		c.add(Opcode.INSTANCEOF);
-		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
-		int ifBNotDouble = c.size();
-		c.add(Opcode.IFEQ);
-		JvmRuntimeBuilder.emitU2(c, 0);
-		JvmRuntimeBuilder.patchBranch(c, ifADouble, c.size());
-		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
-		emitToDouble(c, Opcode.ALOAD_1, rDbl, numberClass, numDoubleValue);
-		c.add(Opcode.DCMPL);
-		c.add(Opcode.IRETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifBNotDouble, c.size());
 	}
 

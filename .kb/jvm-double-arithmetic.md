@@ -37,6 +37,19 @@ path allocated and immediately unwrapped, never a different computation. Sibling
   or `min`/`max`. Then `_fmin`/`_fmax`, else the boxed `_min`/`_max`. **Trap**: the `mod`/`rem`
   arm assumes they answer a double whenever EITHER argument is one — if their result TYPE ever
   depends on which operand is which, this arm must move with it.
+- **Comparisons use the same STRICTER gate since `.todo/037`'s float-vs-exact fix**:
+  a float beside an exact number compares EXACT values (the float's exact binary value,
+  as `rational` answers it), so `(= 1.0 (+ 1 tiny-ratio))` is false even though the ratio
+  floats back to `1.0` — the old unboxed DCMPL answered float-contagion and was wrong for
+  ratios, bigints and fixnums past 2^53 alike. `JvmComparisonCompiler` takes the DCMPL path
+  only when BOTH operands are `isDefinitelyDouble`; anything else goes through `_cmpb`,
+  whose mixed arm decomposes the double through `_frat` and cross-multiplies against the
+  exact operand's (`_ratNum`, `_ratDen`) — the interpreter's `compareFloat` in bytecode
+  (NaN unordered, infinities beyond every exact number on their side, the non-number
+  funnel staying "Expected number"). `_cmp`'s prologue mirrors it for the complex parts
+  (a NaN jumps back to the old DCMPL, which collapses it to -1 as before). The ANSI
+  `*.17`/`*.18` + `BIGNUM.FLOAT.COMPARE.1A-4B` pin the interpreter; `JvmLispCompilerTest`
+  pins the JVM call-site gate (a double LITERAL beside a computed ratio) and the funnel.
 
 ## The all-Double fast path inside `_fx$N`
 `.kb/jvm-int-fusion.md`'s fused methods guard leaves `instanceof Long`; they now carry a second

@@ -5646,6 +5646,50 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFloatExactComparison() {
+		// A float compared against an exact number compares exact values: 1 plus a
+		// sub-ulp ratio is NOT = to 1.0, even though it floats back to 1.0.
+		assertThat(eval("(= 1.0 (+ 1 (/ 1 (ash 1 60))))").print()).isEqualTo("NIL");
+		assertThat(eval("(/= 1.0 (+ 1 (/ 1 (ash 1 60))))").print()).isEqualTo("T");
+		assertThat(eval("(< 1.0 (+ 1 (/ 1 (ash 1 60))))").print()).isEqualTo("T");
+		assertThat(eval("(<= 1.0 (+ 1 (/ 1 (ash 1 60))))").print()).isEqualTo("T");
+		assertThat(eval("(> 1.0 (+ 1 (/ 1 (ash 1 60))))").print()).isEqualTo("NIL");
+		assertThat(eval("(>= 1.0 (+ 1 (/ 1 (ash 1 60))))").print()).isEqualTo("NIL");
+		assertThat(eval("(= 1.0 (- 1 (/ 1 (ash 1 60))))").print()).isEqualTo("NIL");
+		assertThat(eval("(> 1.0 (- 1 (/ 1 (ash 1 60))))").print()).isEqualTo("T");
+		assertThat(eval("(< 1.0 (- 1 (/ 1 (ash 1 60))))").print()).isEqualTo("NIL");
+		// The ratio still floats back to the same double; only the comparison is exact.
+		assertThat(eval("(= (float (+ 1 (/ 1 (ash 1 60)))) 1.0)").print()).isEqualTo("T");
+		// Integers beyond 2^53 compare exactly too.
+		assertThat(eval("(= 9007199254740992.0 9007199254740993)").print()).isEqualTo("NIL");
+		assertThat(eval("(< 9007199254740992.0 9007199254740993)").print()).isEqualTo("T");
+		assertThat(eval("(> 9007199254740992.0 9007199254740992)").print()).isEqualTo("NIL");
+		assertThat(eval("(= 9007199254740992.0 9007199254740992)").print()).isEqualTo("T");
+		// A bignum a strict gap above the float's exact value (the
+		// BIGNUM.FLOAT.COMPARE shape); compared, never printed.
+		assertThat(eval("(< 3.4028234663852886e38 (+ (ceiling (rational 3.4028234663852886e38)) 5))").print())
+			.isEqualTo("T");
+		assertThat(eval("(= 3.4028234663852886e38 (+ (ceiling (rational 3.4028234663852886e38)) 5))").print())
+			.isEqualTo("NIL");
+		// -0.0 still equals 0, exactly.
+		assertThat(eval("(= -0.0 0)").print()).isEqualTo("T");
+		assertThat(eval("(= -0.0 0.0)").print()).isEqualTo("T");
+		// Infinities sit beyond every exact number; NaN stays unordered.
+		assertThat(eval("(< 5 (/ 1.0 0.0))").print()).isEqualTo("T");
+		assertThat(eval("(= (/ 1.0 0.0) (ash 1 10000))").print()).isEqualTo("NIL");
+		assertThat(eval("(> (/ -1.0 0.0) -5)").print()).isEqualTo("NIL");
+		assertThat(eval("(< (/ -1.0 0.0) -5)").print()).isEqualTo("T");
+		assertThat(eval("(= (/ 0.0 0.0) (/ 0.0 0.0))").print()).isEqualTo("NIL");
+		assertThat(eval("(< (/ 0.0 0.0) 1)").print()).isEqualTo("NIL");
+		// max/min keep the exact winner without printing it.
+		assertThat(eval("(> (max 1.0 (+ 1 (/ 1 (ash 1 60)))) 1.0)").print()).isEqualTo("T");
+		assertThat(eval("(< (min 1.0 (- 1 (/ 1 (ash 1 60)))) 1.0)").print()).isEqualTo("T");
+		// Complex parts compare exactly too.
+		assertThat(eval("(= #c(1.0 0) #c(1 0))").print()).isEqualTo("T");
+		assertThat(eval("(= (complex 1.0 0) (complex (+ 1 (/ 1 (ash 1 60))) 0))").print()).isEqualTo("NIL");
+	}
+
+	@Test
 	void evalByteFieldOps() {
 		assertThat(eval("(byte-size (byte 8 3))").print()).isEqualTo("8");
 		assertThat(eval("(byte-position (byte 8 3))").print()).isEqualTo("3");

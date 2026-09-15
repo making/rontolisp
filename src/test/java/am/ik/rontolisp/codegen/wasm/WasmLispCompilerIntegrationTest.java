@@ -8408,6 +8408,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void floatExactComparison() throws Exception {
+		// A float against an exact number compares exact values, like the
+		// interpreter (.todo/037). Sub-ulp ratios are unrepresentable here --
+		// ratio components stay i32, so a ratio that close to a float cannot be
+		// built (.kb/wasm-bignum.md) -- and inside that range the f64 comparison
+		// is exact, so these pin the shared representable range only: exact
+		// equality, a strict gap, -0.0, infinities, and the unordered NaN.
+		assertThat(compileAndRun("(print (= 2.0 2))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (= 0.5 1/2))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (< 1/2 1.0))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (> 3.5 7/2))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (= 1.0 (+ 1 1/1000)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (= -0.0 0))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (< 5 (/ 1.0 0.0)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (= (/ 1.0 0.0) 10000))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (> (max 1.0 3/2) 1.0))")).isEqualTo("T");
+	}
+
+	@Test
 	void doubleNestedArithmetic() throws Exception {
 		assertThat(compileAndRun("(print (+ (* 2.0 3.0) (- 10.0 4.0)))")).isEqualTo("12.0");
 	}
@@ -9703,6 +9723,34 @@ class WasmLispCompilerIntegrationTest {
 				8
 				3
 				16""");
+	}
+
+	@Test
+	void noGcFloatExactComparison() throws Exception {
+		// --no-gc coerces a mixed int/float comparison to f64. Inside the
+		// exactly-representable range that answers exactly, like the interpreter;
+		// integers past 2^53 still compare rounded -- there are no ratios here to
+		// carry the sub-ulp gap, and the exact i64-vs-f64 compare is remaining
+		// work (.todo/037).
+		String program = """
+				(defun show ()
+				  (print (= 2.0 2))
+				  (print (< 1.0 2))
+				  (print (> 2.5 2))
+				  (print (= -0.0 0))
+				  (print (= 9007199254740992.0 9007199254740992))
+				  (print (< 5 (/ 1.0 0.0)))
+				  (print (= (/ 0.0 0.0) (/ 0.0 0.0))))
+				(rontolisp:wasm-export 'show :params '() :returns :void)
+				""";
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show")).isEqualTo("""
+				T
+				T
+				T
+				T
+				T
+				T
+				NIL""");
 	}
 
 	@Test

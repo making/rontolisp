@@ -7604,6 +7604,35 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFloatExactComparison() throws Exception {
+		// A float against an exact number compares exact values, like the
+		// interpreter: 1 plus a sub-ulp ratio is NOT = to 1.0. The literal-double
+		// shapes pin the call-site gate (a double literal beside a computed exact
+		// operand must go through _cmpb, not the unboxed DCMPL); the lambda shapes
+		// pin the variable-carried runtime path.
+		assertThat(compileAndRun("(print (= 1.0 (+ 1 (/ 1 (ash 1 60)))))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (< 1.0 (+ 1 (/ 1 (ash 1 60)))))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (> 1.0 (- 1 (/ 1 (ash 1 60)))))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (= (+ 1 (/ 1 (ash 1 60))) 1.0))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print ((lambda (d) (= d (+ 1 (/ 1 (ash 1 60))))) 1.0))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print ((lambda (d) (< d (+ 1 (/ 1 (ash 1 60))))) 1.0))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (= 9007199254740992.0 9007199254740993))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (< 9007199254740992.0 9007199254740993))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (< 3.4028234663852886e38 (+ (ceiling (rational 3.4028234663852886e38)) 5)))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun("(print (= -0.0 0))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (< 5 (/ 1.0 0.0)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (= (/ 1.0 0.0) (ash 1 10000)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (> (max 1.0 (+ 1 (/ 1 (ash 1 60)))) 1.0))")).isEqualTo("T");
+		// The float arm's funnel: a non-number beside a float stays "Expected
+		// number", like the interpreter.
+		assertThat(compileAndRun("""
+				(print (handler-case (< 1.0 nil) (type-error (e) (princ-to-string e))))
+				""")).isEqualTo("\"Expected number, got: NIL\"");
+	}
+
+	@Test
 	void compileAndRunDoubleNestedArithmetic() throws Exception {
 		assertThat(compileAndRun("(print (+ (* 2.0 3.0) (- 10.0 4.0)))")).isEqualTo("12.0");
 	}

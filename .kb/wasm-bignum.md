@@ -59,6 +59,17 @@ one, so `(floor 1d300)` is the exact 301-digit value.
   See [[linalg-simd]], "mod/rem".
 - `_big_to_f64` accumulates top-down per limb, possibly differing from `BigInteger.doubleValue()`
   in the last ulp -- keep limb-integer -> float out of ci-spec.
+- **Float-vs-exact comparison stays f64 on this backend (.todo/037 -- remaining work)**:
+  `_rat_cmp`/`_rat_cmp_bits` and the double-literal call-site path compare through
+  `_as_f64`, which is exact for exactly-representable pairs but rounds a near tie to
+  equality: `(= 0.6666666666666666 2/3)` answers T here (both round to the same double)
+  where the interpreter and the JVM answer NIL (exact cross-multiplication). Even tiny
+  ratios can sit strictly inside half an ulp -- 2/3 is within 2^-54 of its float --
+  so no component bound makes the f64 comparison exact; the exact path needs the big
+  tier (`_int_new` of the float's mantissa, `_big_ash`, `_big_mul`, `_big_cmp` -- all
+  existing helpers) plus a call-site gate that keeps proven-double pairs on f64
+  (a `DoubleValuedForms`-grade analysis, which is printer-scoped today). Not pinned:
+  keep near ties out of ci-spec, like every other float approximation above.
 - `isqrt` goes through f64 (`WasmIsqrtCompiler`), exact on the i31 range only, diverging from the
   interpreter. `random`'s integer path draws at most 63 bits.
 - A host **u64 at or above 2^63** keeps its float-approximation lift and exact-or-trap export

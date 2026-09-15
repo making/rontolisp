@@ -35,7 +35,14 @@ final class JvmComparisonCompiler {
 			ctx.emit(Opcode.IAND);
 			branch = Opcode.IFNE;
 		}
-		else if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
+		else if (JvmLispCompiler.isDefinitelyDouble(args.get(1), ctx)
+				&& JvmLispCompiler.isDefinitelyDouble(args.get(2), ctx)) {
+			// Both sides are PROVEN doubles (a literal, a declared/raw double local,
+			// or a true-contagion tree): their f64 comparison is exact, so the
+			// unboxed DCMPL is sound. Anything else -- a double literal beside a
+			// computed exact operand, e.g. (= 1.0 (+ 1 tiny-ratio)) -- goes through
+			// _cmpb, whose mixed arm compares exact values (the min/max gate's
+			// hasDoubleLiteral-vs-isDefinitelyDouble distinction, JvmMinCompiler).
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			// IEEE: a comparison against NaN is false. javac's rule: DCMPG for < and
