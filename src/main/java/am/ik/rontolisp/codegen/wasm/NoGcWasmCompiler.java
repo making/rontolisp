@@ -4878,6 +4878,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					+ " needs at least one argument in '" + fn.fnName + "'");
 		}
 		Ty target = staticType(cons, fn);
+		if (target == Ty.FLOAT && isMixedIntFloat(args, fn)) {
+			// An integer beside a float folds exactly (see compileComparison): the
+			// decision of every mixed round is the exact one, while the values stay
+			// f64 (the join this backend returns for a mixed fold).
+			return compileMixedMinMax(args, fn, min);
+		}
 		if (target == Ty.FLOAT) {
 			// The same select the other backends fold with -- min(a,b) = (a<=b) ? a : b,
 			// max(a,b) = (a>=b) ? a : b -- rather than f64.min/f64.max, which resolve a
@@ -4919,6 +4925,103 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(acc);
 		return Ty.INT;
+	}
+
+	// Whether every operand is an integer (or boolean) or a float, with at least one
+	// of each: the mixed fold below owns exactly those programs (a VOID side keeps the
+	// old float fold's nil-zero materialization; anything else never reaches here
+	// because the join above already refused it).
+	private boolean isMixedIntFloat(List<LispVal> args, Fn fn) {
+		boolean seenInt = false;
+		boolean seenFloat = false;
+		for (int i = 1; i < args.size(); i++) {
+			Ty t = staticType(args.get(i), fn);
+			if (isIntLike(t)) {
+				seenInt = true;
+			}
+			else if (t == Ty.FLOAT) {
+				seenFloat = true;
+			}
+			else {
+				return false;
+			}
+		}
+		return seenInt && seenFloat;
+	}
+
+	// The mixed integer/float min/max fold: the same (a<=b) ? a : b select as the
+	// float fold, but a round holding both representations decides exactly -- through
+	// the shared i64-vs-f64 helper when the pair is mixed, natively otherwise -- so a
+	// near tie past 2^53 still keeps the right operand. A tie keeps the left operand
+	// on every path (the interpreter's rule; NaN is unordered and yields the second).
+	// The accumulator rides in its own type until the first float arrives and only
+	// then grows its f64 copy, so an all-integer prefix keeps the plain i64 select;
+	// everything here is WAT emission over already-inferred types (no Lisp temporary,
+	// so the inferTypes fixpoint never sees it).
+	private Ty compileMixedMinMax(List<LispVal> args, Fn fn, boolean min) {
+		WasmWriter w = fn.writer;
+		Ty accTy = isIntLike(staticType(args.get(1), fn)) ? Ty.INT : Ty.FLOAT;
+		compileCoerced(args.get(1), fn, accTy);
+		int accVal = fn.allocLocal(accTy);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(accVal);
+		int accF = accTy == Ty.FLOAT ? accVal : -1;
+		for (int i = 2; i < args.size(); i++) {
+			Ty tTy = isIntLike(staticType(args.get(i), fn)) ? Ty.INT : Ty.FLOAT;
+			compileCoerced(args.get(i), fn, tTy);
+			int tVal = fn.allocLocal(tTy);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(tVal);
+			if (accTy == Ty.INT && tTy == Ty.INT) {
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(accVal);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(tVal);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(accVal);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(tVal);
+				w.write(min ? Instruction.I64_LE_S : Instruction.I64_GE_S);
+				w.write(Instruction.SELECT);
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(accVal);
+				continue;
+			}
+			if (accF < 0) {
+				accF = fn.allocLocal(Ty.FLOAT);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(accVal);
+				coerce(w, Ty.INT, Ty.FLOAT);
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(accF);
+			}
+			int tF = tVal;
+			if (tTy == Ty.INT) {
+				tF = fn.allocLocal(Ty.FLOAT);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(tVal);
+				coerce(w, Ty.INT, Ty.FLOAT);
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(tF);
+			}
+			if (accTy == tTy) {
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(accF);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(tF);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(accF);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(tF);
+				w.write(min ? Instruction.F64_LE : Instruction.F64_GE);
+			}
+			else if (accTy == Ty.INT) {
+				// The helper reads locals and leaves only the flag, so the select
+				// values go on first.
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(accF);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(tF);
+				emitExactIntFloatCompare(fn, accVal, tF, min ? Instruction.I64_LE_S : Instruction.I64_GE_S);
+			}
+			else {
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(accF);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(tF);
+				emitExactIntFloatCompare(fn, tVal, accF, min ? Instruction.I64_GE_S : Instruction.I64_LE_S);
+			}
+			w.write(Instruction.SELECT);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(accF);
+			accTy = Ty.FLOAT;
+		}
+		if (accTy == Ty.INT) {
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(accVal);
+			return Ty.INT;
+		}
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(accF);
+		return Ty.FLOAT;
 	}
 
 	// (mod a b) takes the sign of the divisor; (rem a b) the sign of the dividend. For
@@ -7326,7 +7429,36 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (args.size() != 3) {
 			return compileExpr(LispMacroExpander.expandComparison(cons), fn);
 		}
-		Ty operand = staticType(args.get(1), fn).join(staticType(args.get(2), fn));
+		Ty t1 = staticType(args.get(1), fn);
+		Ty t2 = staticType(args.get(2), fn);
+		Ty operand = t1.join(t2);
+		if (operand == Ty.FLOAT && isIntLike(t1) != isIntLike(t2)) {
+			// A mixed integer/float pair compares exact values, like the interpreter
+			// (.todo/037): the float's exact binary value against the i64. Coercing
+			// the integer through f64 rounds past 2^53, so (= 9007199254740993
+			// 9007199254740992.0) answered T and (> 9007199254740993
+			// 9007199254740992.0) answered NIL. Each side stays in its own type and
+			// the decision is exact; two same-typed sides keep the path below.
+			// (A VOID side still goes below: it materializes the nil zero in the
+			// joined representation there.) The integer roots in one local; the
+			// float rides the stack straight into the helper.
+			boolean intFirst = isIntLike(t1);
+			int iLocal;
+			if (intFirst) {
+				compileCoerced(args.get(1), fn, Ty.INT);
+				iLocal = fn.allocLocal(Ty.INT);
+				fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(iLocal);
+				compileCoerced(args.get(2), fn, Ty.FLOAT);
+			}
+			else {
+				compileCoerced(args.get(1), fn, Ty.FLOAT);
+				compileCoerced(args.get(2), fn, Ty.INT);
+				iLocal = fn.allocLocal(Ty.INT);
+				fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(iLocal);
+			}
+			emitExactIntFloatCompare(fn, iLocal, intFirst ? intOp : mirrorIntComparison(intOp));
+			return emitPredicate(fn, Instruction.I64_EXTEND_S_I32);
+		}
 		compileCoerced(args.get(1), fn, operand);
 		compileCoerced(args.get(2), fn, operand);
 		fn.writer.write(operand == Ty.FLOAT ? floatOp : intOp); // -> i32 (0/1)
@@ -7334,6 +7466,334 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// the consumer
 		// is a branch, which takes it back off (emitPredicate).
 		return emitPredicate(fn, Instruction.I64_EXTEND_S_I32);
+	}
+
+	// Whether the static type rides the i64 representation (a BOOL 0/1 widens to INT
+	// for free, and a character IS its code point).
+	private static boolean isIntLike(Ty ty) {
+		return ty == Ty.INT || ty == Ty.BOOL;
+	}
+
+	// Mirrors an integer comparison opcode end for end, for a comparison whose INT
+	// operand comes second: (= stays, < meets > and <= meets >=).
+	private static int mirrorIntComparison(int intOp) {
+		if (intOp == Instruction.I64_LT_S) {
+			return Instruction.I64_GT_S;
+		}
+		if (intOp == Instruction.I64_GT_S) {
+			return Instruction.I64_LT_S;
+		}
+		if (intOp == Instruction.I64_LE_S) {
+			return Instruction.I64_GE_S;
+		}
+		if (intOp == Instruction.I64_GE_S) {
+			return Instruction.I64_LE_S;
+		}
+		if (intOp == Instruction.I64_EQ) {
+			return Instruction.I64_EQ;
+		}
+		throw new IllegalArgumentException("--no-gc: unexpected integer comparison opcode: " + intOp);
+	}
+
+	/**
+	 * Emits an exact i64-vs-f64 comparison, leaving an i32 0/1 flag: 1 exactly when
+	 * {@code intVal <intOp> floatVal} as real numbers, 0 otherwise -- and 0 for every
+	 * operator when the float is NaN (unordered, like the interpreter). An infinity sits
+	 * beyond every i64 on its side. The float operand arrives on the stack top (so a
+	 * comparison site roots only its integer operand in a local); the decomposition
+	 * scratch triple lives on the function ({@code Fn.exactScratch}), shared by every
+	 * mixed site. The float decomposes from its raw IEEE 754 bits exactly like the
+	 * interpreter's {@code rationalOfDouble} (hidden bit, subnormal shape, sign on the
+	 * mantissa, either zero a plain zero), then:
+	 * <ul>
+	 * <li>a non-negative exponent shifts the mantissa up and checks the shift survived
+	 * ({@code (g >>s exp) == mant}); past 2^63 of magnitude -- an {@code exp >= 63}, or a
+	 * shift that lost bits -- the float is strictly beyond every i64 on the mantissa's
+	 * side (the far side's only reachable i64, -2^63, decomposes with a small exponent
+	 * and never arrives here);</li>
+	 * <li>a negative exponent divides the mantissa down with a truncating quotient
+	 * {@code mQ} and remainder {@code mR}: a differing quotient decides, an equal one
+	 * falls back to the remainder against zero ({@code i > f} exactly when
+	 * {@code mR < 0}) -- no shift ever overflows, however large {@code -exp} is. A
+	 * {@code K >= 64} leaves {@code |f| < 1}, so a nonzero integer is decided by its own
+	 * sign and a zero by the mantissa's.</li>
+	 * </ul>
+	 * @param fn the function being compiled
+	 * @param iLocal the i64 local holding the integer operand
+	 * @param fLocal the f64 local holding the float operand
+	 * @param intOp the integer comparison opcode reading {@code (intVal, floatVal)}
+	 */
+	private static void emitExactIntFloatCompare(Fn fn, int iLocal, int fLocal, int intOp) {
+		// Reloads the float operand on the stack top: net stack effect is one value
+		// in, one flag out, so a min/max round can stage its select values first and
+		// decide on top of them.
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(fLocal);
+		emitExactIntFloatCompare(fn, iLocal, intOp);
+	}
+
+	/**
+	 * Emits an exact i64-vs-f64 comparison over a float already on the stack top, leaving
+	 * an i32 0/1 flag with the same contract as
+	 * {@link #emitExactIntFloatCompare(Fn, int, int, int)}.
+	 * @param fn the function being compiled
+	 * @param iLocal the i64 local holding the integer operand
+	 * @param intOp the integer comparison opcode reading {@code (intVal, floatVal)}
+	 */
+	private static void emitExactIntFloatCompare(Fn fn, int iLocal, int intOp) {
+		// The float operand arrives on the stack top, so a comparison site roots only
+		// its integer operand in a local; the decomposition scratch triple is shared
+		// across the whole function (Fn.exactScratch).
+		WasmWriter w = fn.writer;
+		if (fn.exactBits < 0) {
+			fn.exactBits = fn.allocLocal(Ty.INT);
+			fn.exactMant = fn.allocLocal(Ty.INT);
+			fn.exactExp = fn.allocLocal(Ty.INT);
+		}
+		int bits = fn.exactBits;
+		int mant = fn.exactMant;
+		int exp = fn.exactExp;
+		// bits = reinterpret(f); exp = the biased exponent.
+		w.write(Instruction.I64_REINTERPRET_F64);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bits);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		i64Const(w, 52);
+		w.write(Instruction.I64_SHR_U);
+		i64Const(w, 0x7ff);
+		w.write(Instruction.I64_AND);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(exp);
+		// A 0x7ff exponent is NaN or an infinity, which has no exact rational.
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		i64Const(w, 0x7ff);
+		w.write(Instruction.I64_EQ);
+		w.write(Instruction.IF).write(Type.I32.code());
+		// A zero mantissa field is an infinity, beyond every i64 on its side; a
+		// nonzero one is NaN, unordered against everything.
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		i64Const(w, 0x000fffffffffffffL);
+		w.write(Instruction.I64_AND);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.IF).write(Type.I32.code());
+		if (intOp == Instruction.I64_LT_S || intOp == Instruction.I64_LE_S) {
+			// i < +Inf only.
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+			i64Const(w, 0);
+			w.write(Instruction.I64_LT_S);
+			w.write(Instruction.I32_EQZ);
+		}
+		else if (intOp == Instruction.I64_GT_S || intOp == Instruction.I64_GE_S) {
+			// i > -Inf only.
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+			i64Const(w, 0);
+			w.write(Instruction.I64_LT_S);
+		}
+		else {
+			w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		}
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		emitExactFiniteCompare(fn, iLocal, bits, mant, exp, intOp);
+		w.write(Instruction.END);
+	}
+
+	// The finite arm of {@link #emitExactIntFloatCompare}: decomposes the float in
+	// {@code bits} into the signed mantissa ({@code mant}) and the binary exponent
+	// ({@code exp}) and compares exactly. {@code bits} is dead past the decomposition
+	// and is reused below as the shifted-mantissa / truncating-quotient scratch.
+	private static void emitExactFiniteCompare(Fn fn, int iLocal, int bits, int mant, int exp, int intOp) {
+		WasmWriter w = fn.writer;
+		// mant = the fraction field; a zero exponent is subnormal (2^-1074 scale),
+		// anything else gains the hidden bit and reads bexp - 1075.
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		i64Const(w, 0x000fffffffffffffL);
+		w.write(Instruction.I64_AND);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.IF, 0x40);
+		i64Const(w, -1074);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(exp);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		i64Const(w, 0x0010000000000000L);
+		w.write(Instruction.I64_OR);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		i64Const(w, 1075);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(exp);
+		w.write(Instruction.END);
+		// The sign bit, applied to the integer mantissa (either zero stays zero).
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		i64Const(w, 0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i64Const(w, 0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.END);
+		// Either zero is plain zero over one.
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.IF).write(Type.I32.code());
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(iLocal);
+		i64Const(w, 0);
+		w.write(intOp);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		i64Const(w, 0);
+		w.write(Instruction.I64_GE_S);
+		w.write(Instruction.IF).write(Type.I32.code());
+		emitExactNonNegativeExp(fn, iLocal, bits, mant, exp, intOp);
+		w.write(Instruction.ELSE);
+		emitExactNegativeExp(fn, iLocal, bits, mant, exp, intOp);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// The {@code exp >= 0} arm: the float is the integer {@code mant * 2^exp}.
+	// {@code bits} is the shift scratch.
+	private static void emitExactNonNegativeExp(Fn fn, int iLocal, int bits, int mant, int exp, int intOp) {
+		WasmWriter w = fn.writer;
+		// exp >= 63 puts |f| at or past 2^63: strictly beyond every i64 on the
+		// mantissa's side (the far side's only i64, -2^63, decomposes with a small
+		// exponent and never arrives here).
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		i64Const(w, 63);
+		w.write(Instruction.I64_GE_S);
+		w.write(Instruction.IF).write(Type.I32.code());
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		i64Const(w, 0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.IF).write(Type.I32.code());
+		emitExactStrictFlag(w, intOp, false);
+		w.write(Instruction.ELSE);
+		emitExactStrictFlag(w, intOp, true);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// g = mant << exp, kept only when the shift survived ((g >>s exp) == mant --
+		// a lost high bit can never shift back, so the check is exact); otherwise
+		// the float is strictly beyond every i64 on the mantissa's side, as above.
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		w.write(Instruction.I64_SHL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bits);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		w.write(Instruction.I64_SHR_S);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.I64_EQ);
+		w.write(Instruction.IF).write(Type.I32.code());
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(iLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		w.write(intOp);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		i64Const(w, 0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.IF).write(Type.I32.code());
+		emitExactStrictFlag(w, intOp, false);
+		w.write(Instruction.ELSE);
+		emitExactStrictFlag(w, intOp, true);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// The {@code exp < 0} arm: the float is {@code mant / 2^K} with {@code K = -exp}.
+	// {@code bits} carries the truncating quotient, {@code mant} the remainder.
+	private static void emitExactNegativeExp(Fn fn, int iLocal, int bits, int mant, int exp, int intOp) {
+		WasmWriter w = fn.writer;
+		i64Const(w, 0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(exp);
+		// K >= 64 leaves |f| strictly below 1 (and nonzero -- the zero mantissa took
+		// the zero branch): a nonzero integer is decided by its own sign, a zero by
+		// the mantissa's.
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		i64Const(w, 64);
+		w.write(Instruction.I64_GE_S);
+		w.write(Instruction.IF).write(Type.I32.code());
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(iLocal);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.IF).write(Type.I32.code());
+		i64Const(w, 0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(intOp);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(iLocal);
+		i64Const(w, 0);
+		w.write(intOp);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// mQ = trunc(mant / 2^K): the arithmetic shift floors, so a negative
+		// mantissa with nonzero low bits rounds one step toward zero.
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		w.write(Instruction.I64_SHR_S);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bits);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		i64Const(w, 0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		i64Const(w, 1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		w.write(Instruction.I64_SHL);
+		i64Const(w, 1);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.I64_AND);
+		i64Const(w, 0);
+		w.write(Instruction.I64_NE);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		i64Const(w, 1);
+		w.write(Instruction.I64_ADD);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bits);
+		w.write(Instruction.END);
+		// mR = mant - mQ * 2^K (|mR| < 2^K, so the shift fits): a differing
+		// quotient decides, an equal one falls back to the remainder against zero
+		// (i > f exactly when mR < 0).
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(exp);
+		w.write(Instruction.I64_SHL);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(iLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		w.write(Instruction.I64_EQ);
+		w.write(Instruction.IF).write(Type.I32.code());
+		i64Const(w, 0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mant);
+		w.write(intOp);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(iLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(bits);
+		w.write(intOp);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// Emits the i32 constant the comparison answers when the float is known strictly
+	// beyond the integer on one side: {@code positive} selects the +Inf side (only
+	// {@code <} and {@code <=} hold) versus the -Inf side (only {@code >} and
+	// {@code >=} hold); {@code =} never holds on either.
+	private static void emitExactStrictFlag(WasmWriter w, int intOp, boolean positive) {
+		boolean holds;
+		if (intOp == Instruction.I64_LT_S || intOp == Instruction.I64_LE_S) {
+			holds = positive;
+		}
+		else if (intOp == Instruction.I64_GT_S || intOp == Instruction.I64_GE_S) {
+			holds = !positive;
+		}
+		else {
+			holds = false;
+		}
+		w.write(Instruction.I32_CONST).writeSignedLeb128(holds ? 1 : 0);
 	}
 
 	// (not x): logical negation -> (x == 0) as an i64 0/1.
@@ -7946,6 +8406,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		final Deque<Ty> blockResultTypes = new ArrayDeque<>();
 
 		int nextLocal;
+
+		// The exact int/float comparison's scratch triple (bits, mantissa, exponent),
+		// allocated once per function and shared by every mixed site, so a function
+		// with many mixed comparisons does not grow a triple per site. Sharing is
+		// sound because each site's use is strictly scoped: operands are compiled
+		// (nested sites complete first) before the helper runs, and the helper is
+		// straight-line WAT with no calls. Negative until allocated (local indices
+		// count up from the parameter slots, so -1 is never valid).
+		int exactBits = -1;
+
+		int exactMant = -1;
+
+		int exactExp = -1;
 
 		// The body offset just past a predicate's widening byte (emitPredicate). When it
 		// still equals the body size, that byte is the last thing written and the i32

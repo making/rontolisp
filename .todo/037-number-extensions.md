@@ -1,3 +1,29 @@
+> **Update 2026-09-15 (--no-gc exact i64-vs-f64 comparison landed):** a mixed
+> integer/float `=`/`<`/`>`/`<=`/`>=` now compares exact values on the scalar
+> backend too -- the float's exact binary value against the i64 -- instead of
+> coercing the integer through f64, so `(= 9007199254740993 9007199254740992.0)`
+> is NIL and `(> 9007199254740993 9007199254740992.0)` is T. Only a pair whose
+> static types are exactly INT-ish and FLOAT takes the exact path (a VOID side
+> keeps the old join materialization); the emission decomposes the float from its
+> raw bits and shifts the mantissa up with a survival check, or divides down with
+> a truncating quotient plus remainder (NaN unordered, infinities beyond every
+> i64), inlined per site with no shared helper, one local per site plus a
+> per-function scratch triple (ten thousand mixed sites in one function still
+> compile -- the first cut grew three scratch locals per site and tripped
+> wasmtime's locals cap on the differential sweep). `min`/`max` decide mixed
+> rounds through the same helper but still answer the joined f64 values (an
+> integer winner prints as its correctly-rounded float -- values provably
+> identical to the old fold, rounding only collapses, never reverses). No
+> Lisp-level lowering changed, so `inferTypes` never sees it. Measured:
+> **numbers 220 -> 220, misc 38 -> 38, 0 regressed** (interpreter untouched;
+> this path is not ANSI-measured) plus a 10,716-case no-GC-vs-interpreter
+> differential sweep with 0 mismatches. Pin:
+> `WasmLispCompilerIntegrationTest#noGcIntFloatComparisonIsExactPast2Pow53`
+> (past 2^53 both signs, minI64, subnormal, 1e300, fractional, Inf/NaN,
+> let-carried, branch consumption, min/max parity); `wasm-nogc.md` EN/JA gained
+> the contract sentence. Design in `.kb/no-gc-scalar-wasm.md`. Remaining work:
+> WASM-GC exact float-vs-exact below.
+>
 > **Update 2026-09-15 (float-vs-exact comparison landed on interpreter+JVM):** a float
 > beside an exact number now compares EXACT values -- the float's exact binary value
 > (as `rational` answers it) against the exact operand -- instead of float contagion,
@@ -16,16 +42,18 @@
 > one-sided mirrors never failed) plus `BIGNUM.FLOAT.COMPARE.1A-4B` (deterministic now,
 > not draw luck: the strict gap decides exactly whatever `random` draws). `SQRT.17`
 > flipped the other way by draw luck and is excluded from the claim (its operands stay
-> under 2^53, where both semantics agree -- verified, not assumed). No-GC and WASM-GC
-> keep f64 comparison: representable-range agreement pinned
-> (`WasmLispCompilerIntegrationTest#floatExactComparison`, `#noGcFloatExactComparison`,
+> under 2^53, where both semantics agree -- verified, not assumed). No-GC has since
+> landed its exact i64-vs-f64 path (top banner -- the `#noGcFloatExactComparison`
+> comment's "remaining work" now points at the landed pin); WASM-GC keeps f64
+> comparison with representable-range agreement pinned
+> (`WasmLispCompilerIntegrationTest#floatExactComparison`,
 > ci-spec `float-exact-comparison`, `=` doc EN/JA), but a near tie still rounds to
 > equality there -- `(= 0.6666666666666666 2/3)` is T on WASM-GC, NIL on
 > interpreter/JVM (probed; even tiny ratios sit strictly inside half an ulp, so no
 > component bound saves f64 -- the first version of the `.kb/wasm-bignum.md` note
-> claimed one and was wrong the same day). Exact paths for WASM-GC (big tier +
-> call-site gate, design in `.kb/wasm-bignum.md`) and --no-gc (i64-vs-f64 past 2^53)
-> are remaining work below. `.kb/jvm-double-arithmetic.md` gained the gate rule.
+> claimed one and was wrong the same day). The exact path for WASM-GC (big tier +
+> call-site gate, design in `.kb/wasm-bignum.md`) is remaining work below.
+> `.kb/jvm-double-arithmetic.md` gained the gate rule.
 >
 > **Update 2026-09-15 (ratio->float conversion landed):** `LispRatio.doubleValue`
 > is now the correctly-rounded nearest double (exact `BigInteger` quotient: a
@@ -170,7 +198,8 @@
 `rational` (Slice B, 2026-09-15); `logcount`, `rationalize`,
 `integer-decode-float` (Slice C, 2026-09-15); exact ratio->float conversion
 (2026-09-15); float-vs-exact `=`/comparison on the interpreter and the JVM
-(2026-09-15 -- WASM-GC and --no-gc exact paths are open, see the top banner).
+(2026-09-15) and exact i64-vs-f64 `=`/comparison/`min`/`max` on `--no-gc`
+(2026-09-15 -- WASM-GC exact is open, see the top banner).
 Open: the watch-list in the top banner. Full complex numbers and
 time decomposition are niche (low priority).
 

@@ -81,7 +81,11 @@ float meet (e.g. `(* 3.14 n)`) the integer is promoted to `f64`. Using `i64`
 makes integer arithmetic exact to 2^63 (the GC backend goes further still,
 promoting to big integers of any magnitude) — far wider than what an all-`f64` lowering
 (exact only to 2^53) could offer; for example `a*a - (a-1)*(a+1)` stays
-exactly `1` even when the intermediates exceed 2^53.
+exactly `1` even when the intermediates exceed 2^53. Comparisons
+(`= < <= > >=`) and the `min`/`max` decision compare exact values instead: the
+float counts at its precise binary value against the `i64`, so
+`(= 9007199254740993 9007199254740992.0)` is `nil` (a `min`/`max` integer winner
+still answers as its `f64` value).
 
 Inference also widens automatically: a let/`do`-bound variable takes the
 join of its initializer and every value assigned to it, so an integer

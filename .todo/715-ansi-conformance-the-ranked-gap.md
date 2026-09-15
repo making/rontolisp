@@ -76,7 +76,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | `loop` -- four slices landed 2026-09-14 for 113 (uninterned `#:kw` 45, NIL no-binding 15, any-order numeric 12, named-loop block 39; `iteration` 63.6% -> 77.0%, 0 regressed); left: missing `program-error`/`type-error` validation ~30, hash/`across` destructuring ~9, dotted `append` ~5, typed init ~6 | ~50 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
-| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed; Slice C closed `logcount`/`rationalize`/`integer-decode-float` for 16 numbers + 15 misc, 0 regressed; the ratio->float conversion closed `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12` and `*.12` for 6 numbers, 0 regressed; 2026-09-15 exact float-vs-exact comparison closed the eight `*.17`/`*.18` + eight `BIGNUM.FLOAT.COMPARE.1A-4B` for 16 numbers, 0 regressed -- nothing left here; the WASM-GC/--no-gc exact paths are not ANSI-measured and live on as `.todo/037` watch-list) | tbd | `.todo/037` |
+| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed; Slice C closed `logcount`/`rationalize`/`integer-decode-float` for 16 numbers + 15 misc, 0 regressed; the ratio->float conversion closed `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12` and `*.12` for 6 numbers, 0 regressed; 2026-09-15 exact float-vs-exact comparison closed the eight `*.17`/`*.18` + eight `BIGNUM.FLOAT.COMPARE.1A-4B` for 16 numbers, 0 regressed; 2026-09-15 the --no-gc exact i64-vs-f64 path landed (not ANSI-measured: numbers 220 -> 220, misc 38 -> 38, 0 regressed -- nothing left here; the WASM-GC exact path is not ANSI-measured and lives on as `.todo/037` watch-list) | tbd | `.todo/037` |
 | a `setf` place the expander does not support | 79 | `.todo/001`, `.todo/041` |
 | `pprint-tabular`/`-fill`/`-linear` (27+) and `setf readtable-case` | ~140 | `.todo/041`, `.todo/001` |
 | `read-from-string`'s lambda list (`eof-error-p`, `:start`/`:end`, `:preserve-whitespace`) -- six `READ-FROM-STRING.*` tests; the INDEX landed 2026-09-13 | 6 | `.todo/214` |
@@ -128,6 +128,22 @@ runtime package API and complex numbers. The corpus uses only
 Only the entries whose FINDING outlives the change are kept; the rest are in
 `.todo/history/`.
 
+- **2026-09-15, `.todo/037` --no-gc exact i64-vs-f64 comparison** -- a mixed
+  int/float `=`/`<`/`>`/`<=`/`>=` compares exact values on the scalar backend
+  (the float's exact binary value against the i64, bit-decomposed inline per
+  site: shift-up with a survival check for `exp >= 0`, truncating quotient plus
+  remainder for `exp < 0`; NaN unordered, infinities beyond every i64), and
+  `min`/`max` decide mixed rounds through the same helper while still answering
+  the joined f64 values. Only a statically INT-ish/FLOAT pair takes the path.
+  **numbers 220 -> 220, misc 38 -> 38, 0 regressed** (interpreter untouched;
+  this path is not ANSI-measured), as a diff of failing test NAMES, plus a
+  10,716-case no-GC-vs-interpreter differential sweep with 0 mismatches. Two
+  traps: a min/max SELECT needs its flag on TOP (stage the values first -- the
+  helper is stack-net-zero, so deciding on top of staged values is sound), and
+  three scratch locals per site trips wasmtime's locals cap on a many-site
+  function (one per-function triple shared across sites, one local per site).
+  Pinned by `WasmLispCompilerIntegrationTest#noGcIntFloatComparisonIsExactPast2Pow53`;
+  design in `.kb/no-gc-scalar-wasm.md`.
 - **2026-09-15, `.todo/037` exact float-vs-exact comparison (interpreter + JVM)** --
   a float beside an exact number compares exact values (the float's exact binary
   value via `rationalOfDouble`/`_frat` + cross-multiplication; NaN unordered,

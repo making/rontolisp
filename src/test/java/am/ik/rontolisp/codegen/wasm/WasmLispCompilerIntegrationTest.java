@@ -9727,11 +9727,10 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcFloatExactComparison() throws Exception {
-		// --no-gc coerces a mixed int/float comparison to f64. Inside the
-		// exactly-representable range that answers exactly, like the interpreter;
-		// integers past 2^53 still compare rounded -- there are no ratios here to
-		// carry the sub-ulp gap, and the exact i64-vs-f64 compare is remaining
-		// work (.todo/037).
+		// --no-gc compares a mixed int/float pair exactly, like the interpreter --
+		// including integers past 2^53 (see noGcIntFloatComparisonIsExactPast2Pow53
+		// below). There are no ratios here to carry the sub-ulp gap; these pin the
+		// exactly-representable agreement shared with every backend.
 		String program = """
 				(defun show ()
 				  (print (= 2.0 2))
@@ -9751,6 +9750,77 @@ class WasmLispCompilerIntegrationTest {
 				T
 				T
 				NIL""");
+	}
+
+	@Test
+	void noGcIntFloatComparisonIsExactPast2Pow53() throws Exception {
+		// --no-gc used to coerce a mixed int/float comparison to f64, so an integer
+		// past 2^53 compared rounded: (= 9007199254740993 9007199254740992.0) was T
+		// and (> 9007199254740993 9007199254740992.0) was NIL. A mixed pair now
+		// compares exact values, like the interpreter (.todo/037): the float's exact
+		// binary value against the i64. Integers stay i64 and floats f64 (no ratios
+		// exist here), NaN stays unordered and infinities stay beyond every int.
+		String program = """
+				(defun show ()
+				  (print (= 9007199254740993 9007199254740992.0))
+				  (print (> 9007199254740993 9007199254740992.0))
+				  (print (< 9007199254740993 9007199254740992.0))
+				  (print (<= 9007199254740993 9007199254740992.0))
+				  (print (>= 9007199254740993 9007199254740992.0))
+				  (print (>= -9007199254740993 -9007199254740992.0))
+				  (print (< -9007199254740993 -9007199254740992.0))
+				  (print (= 9007199254740992 9007199254740992.0))
+				  (print (= -9223372036854775808 -9223372036854775808.0))
+				  (print (> 9223372036854775807 9007199254740992.0))
+				  (print (< -9223372036854775808 -9007199254740992.0))
+				  (print (= 5 (/ 0.0 0.0)))
+				  (print (< 5 (/ 1.0 0.0)))
+				  (print (> 5 (/ -1.0 0.0)))
+				  (print (let ((x 9007199254740993)) (> x 9007199254740992.0)))
+				  (print (let ((y 9007199254740992.0)) (= 9007199254740993 y)))
+				  (print (> 5e-324 0))
+				  (print (= 5e-324 0))
+				  (print (< 0 5e-324))
+				  (print (> 1.0e300 9223372036854775807))
+				  (print (< -1.0e300 -9223372036854775808))
+				  (print (= 2.5 2))
+				  (print (> 2.5 2))
+				  (print (if (> 9007199254740993 9007199254740992.0) 1 2))
+				  (print (<= 9007199254740992 9007199254740992.0))
+				  (print (max 9007199254740993 9007199254740992.0))
+				  (print (min 9007199254740993 9007199254740992.0)))
+				(rontolisp:wasm-export 'show :params '() :returns :void)
+				""";
+		String expected = """
+				NIL
+				T
+				NIL
+				NIL
+				T
+				NIL
+				T
+				T
+				T
+				T
+				T
+				NIL
+				T
+				T
+				T
+				NIL
+				T
+				NIL
+				T
+				T
+				T
+				NIL
+				T
+				1
+				T
+				9.007199254740992e15
+				9.007199254740992e15""";
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show")).isEqualTo(expected);
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "show")).isEqualTo(expected);
 	}
 
 	@Test

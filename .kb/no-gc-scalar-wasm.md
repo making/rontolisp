@@ -91,6 +91,38 @@ contract the way `:s32` already is at the boundary.
 `mod`/`rem` native per type (FLOAT = the EXACT `WasmFmodRuntimeBuilder` reduction, inlined at
 the site), `min`/`max` INT fold via `select`, bitwise on `i64`.
 
+**A mixed integer/float comparison decides exactly** (`.todo/037`, 2026-09-15): the
+float's exact binary value against the i64, like the interpreter -- so
+`(= 9007199254740993 9007199254740992.0)` is NIL and
+`(> 9007199254740993 9007199254740992.0)` is T, where the old f64 coercion
+rounded both. Only a pair whose static types are exactly INT-ish (INT, BOOL, or a
+character code point) and FLOAT takes the exact path; a VOID side keeps the old
+join materialization, and two same-typed sides keep their single opcode. The
+emission (`emitExactIntFloatCompare`, inlined per site, no shared helper -- this
+backend hangs helpers off linear memory, which a pure-numeric module may not
+have) decomposes the float from its raw bits (hidden bit, subnormal shape, sign
+on the mantissa, either zero a plain zero; NaN unordered, infinities beyond every
+i64): a non-negative exponent shifts the mantissa up and keeps the shift only
+when `(g >>s exp) == mant` (a lost high bit never shifts back, so the check is
+exact), otherwise the float is strictly beyond every i64 on the mantissa's side;
+a negative exponent divides down with a truncating quotient plus remainder (a
+differing quotient decides, an equal one falls back to the remainder against
+zero), which never overflows at any magnitude, and `K >= 64` leaves `|f| < 1`.
+The scratch triple (bits, mantissa, exponent) is allocated once per function
+(`Fn.exactBits/Mant/Exp`) and the float rides the stack into the helper, so a
+mixed site costs one local, not five -- ten thousand mixed comparisons in one
+function still compile. `min`/`max` decide mixed rounds through the same helper
+(`compileMixedMinMax`, keeping the left operand on a tie and the second on NaN,
+like the interpreter) but still answer the joined f64 values, so an integer
+winner prints as its correctly-rounded float -- the values provably coincide
+with the old fold's (rounding is monotone: it collapses a strict gap to equal
+bits, never reverses it). Pinned by
+`WasmLispCompilerIntegrationTest#noGcIntFloatComparisonIsExactPast2Pow53` (past
+2^53, both signs, minI64, infinities, NaN, let-carried, min/max parity) plus a
+10,716-case no-GC-vs-interpreter differential sweep (comparisons textual, min/max
+as doubles); ci-spec keeps the representable range only, since WASM-GC still
+compares through f64 there.
+
 **Rounding is the one place this backend cannot match the other four** — the float floor
 family answers the EXACT quotient elsewhere, a bignum past 2^63, and there is no bignum tier
 here by design (`.kb/wasm-bignum.md`): `(floor 1d300)` TRAPS (`i64.trunc_s_f64`, not the
