@@ -9373,6 +9373,41 @@ cases:
       "q"
       T
       T
+  - name: uiop-temporary-files-staging-and-null-streams
+    # .todo/360: the temporary-file / staging / null-stream half of uiop/stream --
+    # call-with-temporary-file over %temp-file-name, with-temporary-file as its
+    # wrapper (keep t keeps, the default deletes), tmpize-pathname, and the
+    # staging rename. All four backends open relative paths against the process
+    # working directory, so literal relative names are real opens everywhere.
+    source: |
+      (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "" :keep t)
+                          (write-string "kept" s) p)))
+              (and (probe-file p) t)))
+      (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "")
+                          (write-string "gone" s) p)))
+              (and (probe-file p) t)))
+      (let* ((p "u360staged.txt")
+             (tp (uiop:tmpize-pathname p)))
+        (print (subseq (pathname-name tp) 0 10))
+        (print (pathname-type tp)))
+      (let ((p "u360final.txt"))
+        (uiop:with-staging-pathname (s p)
+          (with-open-file (out s :direction :output) (write-line "hello" out)))
+        (print (uiop:read-file-line p)))
+      (print (uiop:add-pathname-suffix (pathname "u360b.txt") "-x"))
+      (print (uiop:with-null-input (s) (read-char s nil :eof)))
+      (print (uiop:with-null-output (o) (write-string "gone" o)))
+      (print (uiop:null-device-pathname))
+    expected: |
+      T
+      NIL
+      "u360staged"
+      "txt"
+      "hello"
+      #P"u360b-x.txt"
+      :EOF
+      "gone"
+      #P"/dev/null"
   - name: reading-past-end-of-file-answers-eof-every-time
     # A reader may keep asking after the end: read-line/read-char/read-byte answer
     # the eof-value again, and re-opening the file starts over. Preview 1 gives that

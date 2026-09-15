@@ -399,3 +399,170 @@
       (and (typep %fossp-stream 'synonym-stream)
            (uiop/stream:file-or-synonym-stream-p
             (symbol-value (synonym-stream-symbol %fossp-stream))))))
+
+;;;; Standard streams (.todo/360). These are the RAW underlying streams at
+;;;; startup, distinct from *standard-output*: a program that captures
+;;;; *standard-output* (with-output-to-string) and still wants the console has
+;;;; the same escape hatch it has in SBCL -- *stdout* still names process
+;;;; stdout, *stderr* the process error stream. setup-* re-derive from the
+;;;; current standard stream, upstream's contract.
+(defvar uiop/stream:*stdin* *standard-input*)
+(defun uiop/stream:setup-stdin ()
+  (setq uiop/stream:*stdin* *standard-input*)
+  (values))
+(defvar uiop/stream:*stdout* *standard-output*)
+(defun uiop/stream:setup-stdout ()
+  (setq uiop/stream:*stdout* *standard-output*)
+  (values))
+(defvar uiop/stream:*stderr* *error-output*)
+(defun uiop/stream:setup-stderr ()
+  (setq uiop/stream:*stderr* *error-output*)
+  (values))
+
+;;;; Encodings (.todo/360). One lite decision, not eight: every backend reads
+;;;; and writes UTF-8 and there is no external-format surface, so
+;;;; *default-encoding* is :utf-8, *utf-8-external-format* is that, the two
+;;;; hooks are the identity functions upstream installs, and detect-encoding
+;;;; answers :utf-8 without reading the file contents. default-encoding-
+;;;; external-format keeps upstream's shape: :default and :utf-8 map, anything
+;;;; else signals through the cerror (which lowers to an error here -- the
+;;;; continue restart does not exist).
+(defvar uiop/stream:*default-encoding* :utf-8)
+(defvar uiop/stream:*utf-8-external-format* :utf-8)
+
+(defun uiop/stream:always-default-encoding (%ade-pathname)
+  (declare (ignore %ade-pathname))
+  uiop/stream:*default-encoding*)
+
+(defvar uiop/stream:*encoding-detection-hook*
+  #'uiop/stream:always-default-encoding)
+
+(defun uiop/stream:detect-encoding (%de-pathname)
+  (if (and %de-pathname
+           (not (uiop/pathname:directory-pathname-p %de-pathname))
+           (uiop/filesystem:probe-file* %de-pathname))
+      (funcall uiop/stream:*encoding-detection-hook* %de-pathname)
+      uiop/stream:*default-encoding*))
+
+(defun uiop/stream:default-encoding-external-format (%deef-encoding)
+  (case %deef-encoding
+    (:default :default)
+    (:utf-8 uiop/stream:*utf-8-external-format*)
+    (otherwise
+     (cerror "Continue using :external-format :default for encoding ~S"
+             %deef-encoding)
+     :default)))
+
+(defvar uiop/stream:*encoding-external-format-hook*
+  #'uiop/stream:default-encoding-external-format)
+
+(defun uiop/stream:encoding-external-format (%ee-encoding)
+  (funcall uiop/stream:*encoding-external-format-hook*
+           (or %ee-encoding uiop/stream:*default-encoding*)))
+
+;;;; Null device (.todo/360). null-device-pathname is /dev/null on unix (the
+;;;; one os-cond arm that exists here); the with-null-* family is implemented
+;;;; over streams rather than the device -- a string stream that always returns
+;;;; EOF, and the discarding sink make-broadcast-stream returns -- which is
+;;;; faster and portable (on WASM the device is only openable if the host
+;;;; preopened it).
+(defun uiop/stream:null-device-pathname () #p"/dev/null")
+
+(defun uiop/stream:call-with-null-input
+    (%cw-ni-fun &key ((:element-type %cw-ni-et))
+                ((:external-format %cw-ni-ef))
+                ((:if-does-not-exist %cw-ni-idne)))
+  (declare (ignore %cw-ni-et %cw-ni-ef %cw-ni-idne))
+  (with-input-from-string (%cw-ni-s "")
+    (funcall %cw-ni-fun %cw-ni-s)))
+
+(defun uiop/stream:call-with-null-output
+    (%cw-no-fun &key ((:element-type %cw-no-et))
+                ((:external-format %cw-no-ef))
+                ((:if-exists %cw-no-ie))
+                ((:if-does-not-exist %cw-no-idne)))
+  (declare (ignore %cw-no-et %cw-no-ef %cw-no-ie %cw-no-idne))
+  (funcall %cw-no-fun (make-broadcast-stream)))
+
+;;;; Temporary files (.todo/360). call-with-temporary-file is the real
+;;;; function, the one place the temporary-file mechanism lives; with-
+;;;; temporary-file (a LispMacroExpander expansion) and tmpize-pathname are
+;;;; wrappers over it. The uniqueness rule is %temp-file-name's (the prelude
+;;;; entry), called here -- no second rule.
+(defvar uiop/stream:*temporary-directory* nil)
+
+(defun uiop/stream:temporary-directory ()
+  (or uiop/stream:*temporary-directory* (uiop/stream:default-temporary-directory)))
+
+(defun uiop/stream:setup-temporary-directory ()
+  (setq uiop/stream:*temporary-directory* (uiop/stream:default-temporary-directory))
+  (values))
+
+(defun uiop/stream:call-with-temporary-file
+    (%cw-tf-thunk &key ((:want-stream-p %cw-tf-want-stream) t)
+                  ((:want-pathname-p %cw-tf-want-pathname) t)
+                  ((:direction %cw-tf-direction) :output)
+                  ((:keep %cw-tf-keep) nil)
+                  ((:directory %cw-tf-directory) nil)
+                  ((:type %cw-tf-type) "tmp")
+                  ((:prefix %cw-tf-prefix) nil)
+                  ((:element-type %cw-tf-element-type) 'character)
+                  ((:external-format %cw-tf-external-format) :utf-8))
+  (check-type %cw-tf-direction (member :input :output))
+  (assert (or %cw-tf-want-stream %cw-tf-want-pathname))
+  (let* ((%cw-tf-d (namestring (uiop/pathname:ensure-directory-pathname
+                                (or %cw-tf-directory
+                                    (uiop/stream:default-temporary-directory)))))
+         (%cw-tf-pn (%temp-file-name %cw-tf-d %cw-tf-prefix %cw-tf-type))
+         (%cw-tf-result nil))
+    (unwind-protect
+        (progn
+          (with-open-file (%cw-tf-s %cw-tf-pn :direction %cw-tf-direction
+                            :element-type %cw-tf-element-type
+                            :external-format %cw-tf-external-format
+                            :if-does-not-exist :create)
+            (when %cw-tf-want-stream
+              (setq %cw-tf-result
+                    (if %cw-tf-want-pathname
+                        (funcall %cw-tf-thunk %cw-tf-s %cw-tf-pn)
+                        (funcall %cw-tf-thunk %cw-tf-s)))))
+          (when (and %cw-tf-want-pathname (not %cw-tf-want-stream))
+            (setq %cw-tf-result (funcall %cw-tf-thunk %cw-tf-pn))))
+      (unless (uiop/utility:call-function %cw-tf-keep)
+        (uiop/filesystem:delete-file-if-exists %cw-tf-pn)))
+    %cw-tf-result))
+
+(defun uiop/stream:tmpize-pathname (%tp-x)
+  (let* ((%tp-px (uiop/pathname:ensure-pathname %tp-x :ensure-physical t))
+         (%tp-name (pathname-name %tp-px))
+         (%tp-prefix (if (and %tp-name (stringp %tp-name))
+                         (uiop/utility:strcat %tp-name "-tmp")
+                         "tmp"))
+         (%tp-dir (uiop/pathname:pathname-directory-pathname %tp-px))
+         (%tp-type (pathname-type %tp-px)))
+    (uiop/stream:call-with-temporary-file
+      (lambda (%tp-pn) (pathname %tp-pn))
+      :want-stream-p nil
+      :want-pathname-p t
+      :directory %tp-dir
+      :prefix %tp-prefix
+      :type (and %tp-type (stringp %tp-type) %tp-type)
+      :keep t)))
+
+(defun uiop/stream:call-with-staging-pathname (%cwsp-pathname %cwsp-fun)
+  (let* ((%cwsp-pathname (pathname %cwsp-pathname))
+         (%cwsp-staging (uiop/stream:tmpize-pathname %cwsp-pathname)))
+    (unwind-protect
+        (multiple-value-prog1
+            (funcall %cwsp-fun %cwsp-staging)
+          (uiop/filesystem:rename-file-overwriting-target
+           %cwsp-staging %cwsp-pathname))
+      (uiop/filesystem:delete-file-if-exists %cwsp-staging))))
+
+(defun uiop/stream:add-pathname-suffix
+    (%aps-pathname %aps-suffix &rest %aps-keys)
+  (apply #'make-pathname
+         :name (uiop/utility:strcat (pathname-name %aps-pathname) %aps-suffix)
+         :defaults %aps-pathname %aps-keys))
+
+(defvar uiop/stream:*default-stream-element-type* 'character)

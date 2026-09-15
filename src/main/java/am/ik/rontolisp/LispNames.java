@@ -9278,8 +9278,10 @@ public final class LispNames {
 	 * a temporary file and the pathname handed back. The option list is UIOP's keyword
 	 * plist -- {@code :stream}, {@code :pathname}, {@code :directory}, {@code :prefix},
 	 * {@code :type}, {@code :keep}, {@code :direction}, {@code :element-type} -- and the
-	 * expansion creates the file through {@link #TEMP_FILE_NAME}, opens it, runs the
-	 * body, closes, and deletes unless {@code :keep} is true.
+	 * expansion is upstream's own wrapper: it builds a thunk and calls
+	 * {@link #CALL_WITH_TEMPORARY_FILE}, which creates the file through
+	 * {@link #TEMP_FILE_NAME}, runs the thunk, closes, and deletes unless {@code :keep}
+	 * is true (.todo/360).
 	 */
 	public static final String WITH_TEMPORARY_FILE = "WITH-TEMPORARY-FILE";
 
@@ -9287,11 +9289,65 @@ public final class LispNames {
 	public static final String UIOP_WITH_TEMPORARY_FILE_QUALIFIED = UIOP_STREAM_PKG + ":" + WITH_TEMPORARY_FILE;
 
 	/**
+	 * {@code uiop:call-with-temporary-file thunk} -- the real temporary-file function
+	 * (.todo/360): creates a uniquely-named file through {@link #TEMP_FILE_NAME}, runs
+	 * the thunk with the stream and/or pathname, and deletes unless {@code :keep}. Lisp
+	 * source ({@code uiop-stream.lisp}); {@link #WITH_TEMPORARY_FILE} and
+	 * {@code tmpize-pathname} are wrappers over it.
+	 */
+	public static final String CALL_WITH_TEMPORARY_FILE = "CALL-WITH-TEMPORARY-FILE";
+
+	/**
+	 * {@code uiop:with-null-input (var &rest keys) body...} -- binds {@code var} to an
+	 * input stream that always returns EOF (a string stream over ""), discarding the
+	 * ignored option keys. A built-in {@code LispMacroExpander} expansion into
+	 * {@link #CALL_WITH_NULL_INPUT}.
+	 */
+	public static final String WITH_NULL_INPUT = "WITH-NULL-INPUT";
+
+	/**
+	 * {@code uiop:call-with-null-input fun} -- calls the fun with an input stream that
+	 * always returns EOF. Lisp source ({@code uiop-stream.lisp}); named here because
+	 * {@link #WITH_NULL_INPUT} expands into it.
+	 */
+	public static final String CALL_WITH_NULL_INPUT = "CALL-WITH-NULL-INPUT";
+
+	/**
+	 * {@code uiop:with-null-output (var &rest keys) body...} -- binds {@code var} to an
+	 * output stream that discards all output, dropping the ignored option keys. A
+	 * built-in {@code LispMacroExpander} expansion into {@link #CALL_WITH_NULL_OUTPUT}.
+	 */
+	public static final String WITH_NULL_OUTPUT = "WITH-NULL-OUTPUT";
+
+	/**
+	 * {@code uiop:call-with-null-output fun} -- calls the fun with an output stream that
+	 * discards all output. Lisp source ({@code uiop-stream.lisp}); named here because
+	 * {@link #WITH_NULL_OUTPUT} expands into it.
+	 */
+	public static final String CALL_WITH_NULL_OUTPUT = "CALL-WITH-NULL-OUTPUT";
+
+	/**
+	 * {@code uiop:with-staging-pathname (var &optional value) body...} -- binds
+	 * {@code var} to a staging pathname derived from {@code value}, runs the body, then
+	 * atomically renames the staging pathname over the target. A built-in
+	 * {@code LispMacroExpander} expansion into {@link #CALL_WITH_STAGING_PATHNAME}.
+	 */
+	public static final String WITH_STAGING_PATHNAME = "WITH-STAGING-PATHNAME";
+
+	/**
+	 * {@code uiop:call-with-staging-pathname pathname fun} -- calls the fun with a
+	 * staging pathname derived from {@code pathname}, then renames it over the target on
+	 * success. Lisp source ({@code uiop-stream.lisp}); named here because
+	 * {@link #WITH_STAGING_PATHNAME} expands into it.
+	 */
+	public static final String CALL_WITH_STAGING_PATHNAME = "CALL-WITH-STAGING-PATHNAME";
+
+	/**
 	 * The {@code %temp-file-name} internal helper: a namestring naming a file that does
 	 * NOT exist yet, inside the given directory (which it creates), built from the prefix
 	 * and type plus a random suffix and retried until it misses. The one place
-	 * {@link #WITH_TEMPORARY_FILE}'s uniqueness rule is written down; keeping it out of
-	 * the expansion means the retry loop is compiled once per program rather than once
+	 * {@link #CALL_WITH_TEMPORARY_FILE}'s uniqueness rule is written down; keeping it out
+	 * of the expansion means the retry loop is compiled once per program rather than once
 	 * per call site.
 	 */
 	public static final String TEMP_FILE_NAME = "%TEMP-FILE-NAME";

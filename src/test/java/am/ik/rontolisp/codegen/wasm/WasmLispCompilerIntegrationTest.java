@@ -12587,6 +12587,55 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void uiopTemporaryFilesStagingAndNullStreamsCompilesAndRuns() throws Exception {
+		// .todo/360: the temporary-file / staging / null-stream half of uiop/stream on
+		// this backend too -- the same program as the JVM twin
+		// (JvmLispCompilerTest#compileAndRunUiopTemporaryFilesStagingAndNullStreams)
+		// over relative names in the preopened working directory. The passes are the
+		// CLI pipeline's: read is prelude rontolisp over read-char / unread-char, so
+		// the program needs the prelude splice AND the pushback-cell rewrite, in
+		// CompileFrontend's order -- then the --dir . run of compileAndRunWithDir.
+		String code = """
+				(print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "" :keep t)
+				                    (write-string "kept" s) p)))
+				        (and (probe-file p) t)))
+				(print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "")
+				                    (write-string "gone" s) p)))
+				        (and (probe-file p) t)))
+				(print (let ((p (uiop:call-with-temporary-file
+				                (lambda (pn) pn)
+				                :want-stream-p nil :want-pathname-p t
+				                :directory "")))
+				        (and (probe-file p) t)))
+				(let* ((p "w360staged.txt")
+				       (tp (uiop:tmpize-pathname p)))
+				  (print (subseq (pathname-name tp) 0 10))
+				  (print (pathname-type tp)))
+				(let ((p "w360final.txt"))
+				  (uiop:with-staging-pathname (s p)
+				    (with-open-file (out s :direction :output) (write-line "hello" out)))
+				  (print (uiop:read-file-line p)))
+				(print (uiop:add-pathname-suffix (pathname "w360b.txt") "-x"))
+				(print (uiop:with-null-input (s) (read-char s nil :eof)))
+				(print (uiop:with-null-output (o) (write-string "gone" o)))
+				(print (uiop:null-device-pathname))
+				""";
+		String expected = """
+				T
+				NIL
+				NIL
+				"w360staged"
+				"txt"
+				"hello"
+				#P"w360b-x.txt"
+				:EOF
+				"gone"
+				#P"/dev/null"
+				""".stripTrailing();
+		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
+	}
+
+	@Test
 	void probeFileLeaksNoDescriptor() throws Exception {
 		// A probe must close what it opened: 300 probes with a leak exhaust the
 		// descriptor table and the subsequent open fails (traps).

@@ -394,16 +394,25 @@ public final class UiopLibrary {
 	 * Only the DIRECT callee needs listing: {@link #process}'s fixpoint pulls in whatever
 	 * that one reaches in turn ({@code call-with-muffled-conditions} drags
 	 * {@code match-any-condition-p}, {@code match-condition-p} and {@code find-symbol*}
-	 * along). {@code with-temporary-file} reaches its three through the prelude's
-	 * {@code %temp-file-name}, and the delete is pulled in whatever {@code :keep} says,
-	 * because reading that option here would duplicate the expansion's rule
-	 * ({@code LispPreludeLibrary.referencedBySurfaceForm} makes the mirror-image decision
-	 * for the prelude half).
+	 * along). {@code with-temporary-file} (and {@code with-staging-pathname} through its
+	 * chain) reach the temporary-directory family and the delete through
+	 * {@code call-with-temporary-file}, whose own body names them -- the fixpoint pulls
+	 * them, including through the prelude's {@code %temp-file-name}.
 	 */
 	private static final Map<String, List<String>> MACRO_EXPANSION_CALLEES = Map.ofEntries(
-			Map.entry(LispNames.WITH_TEMPORARY_FILE,
-					List.of(LispNames.ENSURE_DIRECTORY_PATHNAME, LispNames.DEFAULT_TEMPORARY_DIRECTORY,
-							LispNames.DELETE_FILE_IF_EXISTS)),
+			// .todo/360: with-temporary-file is upstream's wrapper over
+			// call-with-temporary-file. The fixpoint pulls the rest (ensure-directory-
+			// pathname / default-temporary-directory, delete-file-if-exists,
+			// call-function)
+			// from that one definition -- including through %temp-file-name, whose
+			// directory arm is reached by call-with-temporary-file's own body.
+			Map.entry(LispNames.WITH_TEMPORARY_FILE, List.of(LispNames.CALL_WITH_TEMPORARY_FILE)),
+			Map.entry(LispNames.WITH_NULL_INPUT, List.of(LispNames.CALL_WITH_NULL_INPUT)),
+			Map.entry(LispNames.WITH_NULL_OUTPUT, List.of(LispNames.CALL_WITH_NULL_OUTPUT)),
+			// with-staging-pathname reaches call-with-staging-pathname -> tmpize-pathname
+			// -> call-with-temporary-file -> the temporary-directory family; the fixpoint
+			// pulls that chain and rename-file-overwriting-target.
+			Map.entry(LispNames.WITH_STAGING_PATHNAME, List.of(LispNames.CALL_WITH_STAGING_PATHNAME)),
 			Map.entry(LispNames.WITH_MUFFLED_CONDITIONS, List.of(LispNames.CALL_WITH_MUFFLED_CONDITIONS)),
 			Map.entry(LispNames.WITH_MUFFLED_COMPILER_CONDITIONS,
 					List.of(LispNames.CALL_WITH_MUFFLED_COMPILER_CONDITIONS)),

@@ -20633,6 +20633,79 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalUiopTemporaryFilesStagingAndNullStreams(@TempDir Path tempDir) {
+		String dir = (tempDir.toString() + "/u360/").replace("\\", "\\\\");
+		// call-with-temporary-file is the real function; with-temporary-file is its
+		// wrapper. :keep t hands the pathname back, the default deletes; a
+		// want-stream-p nil thunk sees the pathname after the stream is closed.
+		assertThat(evalMulti("""
+				(list (let ((p (uiop:call-with-temporary-file
+				                (lambda (s pn) (write-string "x" s) pn)
+				                :directory "%1$s" :keep t)))
+				        (and (probe-file p) t))
+				      (let ((p (uiop:call-with-temporary-file
+				                (lambda (pn) pn)
+				                :want-stream-p nil :want-pathname-p t
+				                :directory "%1$s")))
+				        (and (probe-file p) t)))
+				""".formatted(dir)).print()).isEqualTo("(T NIL)");
+		// tmpize-pathname creates a uniquely-named sibling of the target.
+		assertThat(evalMulti("""
+				(let ((p "%1$s/staged.txt"))
+				  (uiop:tmpize-pathname p))
+				""".formatted(dir)).print()).startsWith("""
+				#P"%1$sstaged-tmp""".formatted(dir));
+		// with-staging-pathname: write through the staging pathname, and the rename
+		// lands on the target only on success.
+		assertThat(evalMulti("""
+				(let ((p "%1$s/final.txt"))
+				  (uiop:with-staging-pathname (s p)
+				    (with-open-file (out s :direction :output) (write-line "hello" out)))
+				  (uiop:read-file-line p))
+				""".formatted(dir)).print()).isEqualTo("\"hello\"");
+		// add-pathname-suffix appends to the name, keeping the directory and type.
+		assertThat(evalMulti("(uiop:add-pathname-suffix #P\"/a/b.txt\" \"-x\")").print()).isEqualTo("#P\"/a/b-x.txt\"");
+		// with-null-input reads EOF; with-null-output discards what the body writes.
+		assertThat(evalMulti("""
+				(list (uiop:with-null-input (s) (read-char s nil :eof))
+				      (uiop:with-null-output (o) (write-string "gone" o))
+				      (uiop:null-device-pathname))
+				""").print()).isEqualTo("(:EOF \"gone\" #P\"/dev/null\")");
+	}
+
+	@Test
+	void evalUiopEncodingsAndStandardStreams() {
+		// The encodings are one lite decision: :utf-8 everywhere, the hooks the
+		// identity functions upstream installs, detect-encoding answers :utf-8 without
+		// reading the file. *stdin*/*stdout*/*stderr* are the raw underlying streams,
+		// distinct from *standard-output*; setup-* re-derive them.
+		assertThat(evalMulti("""
+				(list uiop:*default-encoding*
+				      uiop:*utf-8-external-format*
+				      (uiop:detect-encoding "no-such-file")
+				      (uiop:encoding-external-format :utf-8)
+				      (uiop:encoding-external-format nil)
+				      (uiop:default-encoding-external-format :default)
+				      (eq uiop:*encoding-detection-hook* #'uiop:always-default-encoding))
+				""").print()).isEqualTo("(:UTF-8 :UTF-8 :UTF-8 :UTF-8 :UTF-8 :DEFAULT T)");
+		// The standard streams: *stdout* is the raw console (the t designator),
+		// *stderr* the error-output stream value, *stdin* the standard input.
+		assertThat(evalMulti("""
+				(list (eq uiop:*stdout* *standard-output*)
+				      (eq uiop:*stderr* *error-output*)
+				      (eq uiop:*stdin* *standard-input*))
+				""").print()).isEqualTo("(T T T)");
+		// setup-* re-derive from the current standard stream: capture *standard-output*,
+		// then setup-stdout restores the console.
+		assertThat(evalMulti("""
+				(progn
+				  (with-output-to-string (*standard-output*)
+				    (uiop:setup-stdout))
+				  (eq uiop:*stdout* *standard-output*))
+				""").print()).isEqualTo("NIL");
+	}
+
+	@Test
 	void evalUiopBindingMacrosAndWithDeprecation() {
 		// if-let binds like let and takes the then branch only when EVERY variable came
 		// out non-nil; a single un-nested binding is accepted; when-let* is sequential

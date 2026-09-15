@@ -117,17 +117,18 @@ class UiopCoverageTest {
 
 	@Test
 	void anUnimplementedMacroDoesNotEvaluateTheFormsItWasHanded() {
-		// (uiop:with-null-input (s) (defun f ...)) must not define f before
-		// signalling: a macro that does nothing must do nothing with the forms it was
-		// handed. with-upgradability used to be the example here and is a real expansion
-		// now, so the probe moved to a macro of a sub-package nothing implements yet;
-		// with-current-directory was the probe after that, until it grew its own
-		// expansion over call-with-current-directory, and with-input-file after that,
-		// until .todo/359 gave it one over call-with-input-file -- with-null-input
-		// (.todo/360) is the probe now.
+		// (uiop:with-saved-deferred-warnings (...) (defun f ...)) must not define f
+		// before signalling: a macro that does nothing must do nothing with the forms it
+		// was handed. with-upgradability used to be the example here and is a real
+		// expansion now, so the probe moved to a macro of a sub-package nothing
+		// implements yet; with-current-directory was the probe after that, until it grew
+		// its own expansion over call-with-current-directory, and with-input-file after
+		// that, until .todo/359 gave it one over call-with-input-file, and
+		// with-null-input after that, until .todo/360 gave it one -- with-saved-
+		// deferred-warnings (.todo/365's deferred-warnings stub) is the probe now.
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		for (LispVal form : LispReader.readAllFromString("""
-				(handler-case (uiop:with-null-input (s) (defun %uiop-probe () 1))
+				(handler-case (uiop:with-saved-deferred-warnings () (defun %uiop-probe () 1))
 				  (uiop:not-implemented-error (c) c))
 				""")) {
 			evaluator.eval(form);

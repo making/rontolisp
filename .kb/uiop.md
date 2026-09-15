@@ -226,8 +226,8 @@ signal names `CHDIR` on all four -- `getcwd` has no WASM answer), a nil dir just
 the thunk; the macro is a `LispMacroExpander` expansion over it (every uiop macro is),
 with the `MACRO_EXPANSION_CALLEES` row its expansion needs.
 
-`uiop/stream` part 1 (38/66, `uiop-stream.lisp` + five `LispMacroExpander`
-expansions, `.todo/359`) -- the "give me the contents" half: the `call-with-*`
+`uiop/stream` (66/66, `uiop-stream.lisp` + eight `LispMacroExpander`
+expansions, `.todo/359` + `.todo/360`) -- the "give me the contents" half: the `call-with-*`
 openers over the computed-option lowering behind `with-open-file` (upstream's
 own shape, so a function taking the options as arguments dispatches onto
 literal opens at run time), the `with-input` / `with-output` /
@@ -248,8 +248,8 @@ same edge through the front door) in `MACRO_EXPANSION_CALLEES`, and the two
 pruner roots beside `%temp-file-name`'s -- without the last the tree-shaker
 drops the entries the splice just added and only the pruner-free harnesses
 pass. Lite, one portable shape each: `:element-type` defaults to `'character` and `:external-format`
-to `:utf-8` (part 2's variables are still nil stubs the option check would
-refuse); `:if-exists` defaults to `:supersede` and `concatenate-files`
+to `:utf-8` (part 2's `*default-stream-element-type*` / `*default-encoding*` / `*utf-8-external-format*`
+are those values, real); `:if-exists` defaults to `:supersede` and `concatenate-files`
 spells it (upstream's `:error` / `:rename-and-delete` have no surface -- the
 lowering refuses `:error` loudly); `slurp-stream-forms` reads with `read`
 (no `read-preserving-whitespace` exists); `safe-read-from-string` reads
@@ -265,8 +265,30 @@ shape and is not redefined over the new openers. The slurp family and
 already-closed stream here, so the upstream close-inside-plus-close-in-
 `with-open-file` composition would signal -- the owner (the file opener, the
 string-stream macro) closes exactly once, and a caller-owned stream handed
-directly to a slurper stays open. Part 2 (`.todo/360`) owns
-the other 28: temporary files, encodings, the standard streams.
+directly to a slurper stays open. Part 2 (`.todo/360`) is the temporary-file /
+staging / null-stream / encodings / standard-streams half. **`call-with-temporary-file`
+is the real function and `with-temporary-file` is upstream's wrapper over it**
+(a function taking the options as arguments dispatches onto literal opens at run
+time, the same computed-option shape as part 1's openers). `%temp-file-name` is the ONE
+uniqueness mechanism, unchanged: the directory is resolved by the function itself, which
+references `ensure-directory-pathname` / `default-temporary-directory` directly in its body
+so the uiop fixpoint pulls them (the selection rule keyed on `with-temporary-file` is
+redundant-but-harmless). `:keep t` hands the pathname back with the file still there; the
+default deletes on the way out. It uses `unwind-protect` internally, which forces EH mode on
+WASM -- accepted, because no test exercises the non-EH-mode `with-temporary-file`.
+`tmpize-pathname` builds a uniquely-named sibling and returns a pathname (a `pathname` wrap
+around the namestring); `with-staging-pathname` writes through the staging pathname and
+renames onto the target only on success (`rename-file-overwriting-target`). The null device
+is `#P"/dev/null"`; `call-with-null-input` runs the thunk over `with-input-from-string` of
+`""` (EOF-always), `call-with-null-output` over `make-broadcast-stream` (a discarding sink)
+-- each returns the thunk's own result. `with-null-input` / `with-null-output` /
+`with-staging-pathname` are Java expansions over their `call-with-*`. The encodings are one
+lite decision: `:utf-8` everywhere, `*default-encoding*` `:utf-8`, `*utf-8-external-format*`
+`:utf-8`, the two hooks the identity functions upstream installs, `detect-encoding` answers
+`:utf-8` without reading the file's contents. The standard streams are the raw underlying
+streams, distinct from `*standard-output*`: `*stdin*` = `*standard-input*`, `*stdout*` =
+`*standard-output*`, `*stderr*` = `*error-output*`, and `setup-*` re-derive them from the
+current standard streams.
 
 `uiop/package` (31/31), `uiop/package-local-nicknames` (3/3), `uiop/package*`
 (3/3) -- `uiop-package.lisp` plus two Java built-ins (`.todo/361`). A rontolisp
@@ -377,7 +399,10 @@ callee is listed; the fixpoint pulls the rest.
 
 | surface macro | direct callee(s) |
 |---|---|
-| `with-temporary-file` | `ensure-directory-pathname`, `default-temporary-directory`, `delete-file-if-exists` (through the prelude's `%temp-file-name`) |
+| `with-temporary-file` | `call-with-temporary-file` (which references `ensure-directory-pathname`, `default-temporary-directory` and `%temp-file-name`; the fixpoint pulls them) |
+| `with-null-input` | `call-with-null-input` |
+| `with-null-output` | `call-with-null-output` |
+| `with-staging-pathname` | `call-with-staging-pathname` |
 | `with-muffled-conditions` | `call-with-muffled-conditions` |
 | `with-muffled-compiler-conditions` | `call-with-muffled-compiler-conditions` |
 | `with-muffled-loader-conditions` | `call-with-muffled-loader-conditions` |

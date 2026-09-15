@@ -10813,7 +10813,8 @@ public final class LispMacroExpander {
 			LispNames.COMPATFMT, LispNames.WITH_PATHNAME_DEFAULTS, LispNames.WITH_ENOUGH_PATHNAME, LispNames.OS_COND,
 			LispNames.WITH_CURRENT_DIRECTORY, LispNames.WITH_FATAL_CONDITION_HANDLER, LispNames.WITH_INPUT,
 			LispNames.WITH_OUTPUT, LispNames.WITH_INPUT_FILE, LispNames.WITH_OUTPUT_FILE, LispNames.WITH_SAFE_IO_SYNTAX,
-			LispNames.WITH_MUFFLED_COMPILER_CONDITIONS, LispNames.WITH_MUFFLED_LOADER_CONDITIONS);
+			LispNames.WITH_MUFFLED_COMPILER_CONDITIONS, LispNames.WITH_MUFFLED_LOADER_CONDITIONS,
+			LispNames.WITH_NULL_INPUT, LispNames.WITH_NULL_OUTPUT, LispNames.WITH_STAGING_PATHNAME);
 
 	/**
 	 * If {@code cons} is a {@code (read-line ...)} call in CL's 2- or 3-argument shape
@@ -10876,39 +10877,33 @@ public final class LispMacroExpander {
 		return expr instanceof LispTrue || (expr instanceof LispSymbol sym && "T".equals(sym.name()));
 	}
 
-	private static final String WTF_RESULT_VAR = "__wtf_result";
-
-	private static final String WTF_PATH_VAR = "__wtf_path";
-
-	private static final String WTF_STREAM_VAR = "__wtf_stream";
-
 	/**
-	 * Expands {@code (uiop:with-temporary-file (:stream S :pathname P ...) body...)}: the
-	 * one uiop {@code with-*} macro rontolisp implements for real instead of stubbing,
-	 * because smart-buffer's disk-spill path RUNS it (a multipart body past the memory
-	 * limit is written to the temporary file and its pathname handed back).
+	 * Expands {@code (uiop:with-temporary-file (:stream S :pathname P ...) body...)} into
+	 * upstream's own wrapper over {@code call-with-temporary-file}: the body becomes a
+	 * thunk taking the given {@code :stream} / {@code :pathname} variables, and the
+	 * function creates the file through {@code %temp-file-name}, runs the thunk, closes
+	 * the stream and deletes unless {@code :keep} (.todo/360). smart-buffer's disk-spill
+	 * path RUNS it (a multipart body past the memory limit is written to the temporary
+	 * file and its pathname handed back).
 	 *
 	 * <pre>
 	 * (uiop:with-temporary-file (:stream s :pathname p :directory d :keep t) body...) -&gt;
-	 *   (let* ((p (%temp-file-name d nil nil))
-	 *          (s (open p :output)))
-	 *     (unwind-protect (progn body...) (progn (close s))))
+	 *   (call-with-temporary-file (lambda (s p) body...)
+	 *     :want-stream-p t :want-pathname-p t :directory d :keep t)
 	 * </pre>
 	 *
 	 * The option list is UIOP's keyword plist and every option keyword must be literal:
-	 * {@code :stream} / {@code :pathname} name the variables (a fixed internal name
-	 * stands in for an omitted one, so a body may use either, both or neither),
-	 * {@code :directory} / {@code :prefix} / {@code :type} are ordinary expressions
-	 * feeding {@link LispNames#TEMP_FILE_NAME}, {@code :direction} and
-	 * {@code :element-type} are the {@code open} literals, and {@code :keep} decides the
-	 * delete. A LITERALLY true {@code :keep} (smart-buffer's) drops the delete from the
-	 * expansion altogether rather than emitting a never-taken {@code delete-file} -- that
-	 * is what keeps the spill path clear of the WASM backends' unlink-shaped call-time
-	 * error. UIOP's remaining options ({@code :suffix}, {@code :after},
-	 * {@code :want-*-p}, {@code :external-format}) are rejected rather than silently
-	 * dropped: each one changes what the body sees.
+	 * {@code :stream} / {@code :pathname} name the variables the body receives (at least
+	 * one is required; a body sees only what it asks for), {@code :directory} /
+	 * {@code :prefix} / {@code :type} are ordinary expressions fed to
+	 * {@code %temp-file-name}, {@code :direction} and {@code :element-type} the
+	 * {@code open} literals, and {@code :keep} decides the delete (a LITERALLY true
+	 * {@code :keep}, smart-buffer's, is the function's own no-delete path). UIOP's
+	 * remaining options ({@code :suffix}, {@code :after}, {@code :external-format}) are
+	 * rejected rather than silently dropped: each one changes what the body sees.
 	 * @param cons the with-temporary-file expression
-	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
+	 * @param unwindProtect unused since .todo/360: {@code call-with-temporary-file} owns
+	 * the cleanup
 	 * @return the expanded expression
 	 */
 	public static LispVal expandUiopWithTemporaryFile(LispCons cons, boolean unwindProtect) {
@@ -10923,8 +10918,8 @@ public final class LispMacroExpander {
 		LispVal directory = LispNil.INSTANCE;
 		LispVal prefix = LispNil.INSTANCE;
 		LispVal type = LispNil.INSTANCE;
-		LispVal keep = LispNil.INSTANCE;
-		String direction = LispNames.OUTPUT_KEYWORD;
+		LispVal keep = null;
+		String direction = null;
 		boolean binary = false;
 		for (int i = 0; i < options.size(); i += 2) {
 			if (i + 1 >= options.size() || !(options.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
@@ -10957,36 +10952,52 @@ public final class LispMacroExpander {
 			throw new UnsupportedOperationException(
 					LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED + " :stream and :pathname must be variable names");
 		}
-		LispSymbol path = pathVar instanceof LispSymbol p ? p : new LispSymbol(WTF_PATH_VAR);
-		LispSymbol stream = streamVar instanceof LispSymbol s ? s : new LispSymbol(WTF_STREAM_VAR);
-		List<LispVal> openParts = new java.util.ArrayList<>(
-				List.of(new LispSymbol(LispNames.OPEN), path, new LispSymbol(direction)));
+		if (streamVar == null && pathVar == null) {
+			throw new UnsupportedOperationException(
+					LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED + " needs at least :stream or :pathname");
+		}
+		List<LispVal> thunk = new java.util.ArrayList<>();
+		thunk.add(new LispSymbol(LispNames.LAMBDA));
+		List<LispVal> params = new java.util.ArrayList<>();
+		if (streamVar != null) {
+			params.add(streamVar);
+		}
+		if (pathVar != null) {
+			params.add(pathVar);
+		}
+		thunk.add(listToCons(params));
+		thunk.addAll(parts.subList(2, parts.size()));
+		List<LispVal> call = new java.util.ArrayList<>(
+				List.of(new LispSymbol(UiopExports.qualified(LispNames.CALL_WITH_TEMPORARY_FILE)), listToCons(thunk)));
+		call.add(new LispSymbol(":WANT-STREAM-P"));
+		call.add(streamVar != null ? LispTrue.INSTANCE : LispNil.INSTANCE);
+		call.add(new LispSymbol(":WANT-PATHNAME-P"));
+		call.add(pathVar != null ? LispTrue.INSTANCE : LispNil.INSTANCE);
+		if (!isLiteralNil(directory)) {
+			call.add(new LispSymbol(":DIRECTORY"));
+			call.add(directory);
+		}
+		if (!isLiteralNil(prefix)) {
+			call.add(new LispSymbol(":PREFIX"));
+			call.add(prefix);
+		}
+		if (!isLiteralNil(type)) {
+			call.add(new LispSymbol(":TYPE"));
+			call.add(type);
+		}
+		if (keep != null && !isLiteralNil(keep)) {
+			call.add(new LispSymbol(":KEEP"));
+			call.add(keep);
+		}
+		if (direction != null) {
+			call.add(new LispSymbol(":DIRECTION"));
+			call.add(new LispSymbol(direction));
+		}
 		if (binary) {
-			openParts.add(unsignedByte8Literal());
+			call.add(new LispSymbol(":ELEMENT-TYPE"));
+			call.add(unsignedByte8Literal());
 		}
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(path, fmtCall(LispNames.TEMP_FILE_NAME, directory, prefix, type))),
-						listToCons(List.of(stream, listToCons(openParts)))));
-		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
-		List<LispVal> cleanup = new java.util.ArrayList<>();
-		cleanup.add(new LispSymbol(LispNames.PROGN));
-		cleanup.add(callOf(LispNames.CLOSE, stream));
-		LispVal delete = fmtCall(UiopExports.qualified(LispNames.DELETE_FILE_IF_EXISTS), path);
-		if (isLiteralNil(keep)) {
-			cleanup.add(delete);
-		}
-		else if (!isLiteralTrue(keep)) {
-			cleanup.add(listToCons(List.of(new LispSymbol(LispNames.UNLESS), keep, delete)));
-		}
-		LispVal cleanupExpr = listToCons(cleanup);
-		if (unwindProtect) {
-			return listToCons(
-					List.of(new LispSymbol(LispNames.LET_STAR), bindings, unwindProtectAround(bodyExpr, cleanupExpr)));
-		}
-		LispSymbol result = new LispSymbol(WTF_RESULT_VAR);
-		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET),
-				new LispCons(listToCons(List.of(result, bodyExpr)), LispNil.INSTANCE), cleanupExpr, result));
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, innerLet));
+		return listToCons(call);
 	}
 
 	/**
@@ -11775,6 +11786,91 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (uiop:with-null-input (var &rest keys) body...)} into
+	 * {@code (uiop:call-with-null-input (lambda (var) body...) keys...)} -- upstream's
+	 * own shape, over the EOF-always stream function in {@code uiop-stream.lisp}. The
+	 * keyword keys (element-type, external-format, if-does-not-exist) are accepted for
+	 * backward compatibility and threaded through; the function ignores them.
+	 * @param cons the with-null-input expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithNullInput(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)
+				|| !(spec.car() instanceof LispSymbol variable)) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_NULL_INPUT)
+					+ " expects (with-null-input (var &rest keys) body...): " + cons.print());
+		}
+		List<LispVal> specParts = spec.toList();
+		List<LispVal> thunk = new java.util.ArrayList<>();
+		thunk.add(new LispSymbol(LispNames.LAMBDA));
+		thunk.add(listToCons(List.of(variable)));
+		thunk.addAll(parts.subList(2, parts.size()));
+		List<LispVal> call = new java.util.ArrayList<>(
+				List.of(new LispSymbol(UiopExports.qualified(LispNames.CALL_WITH_NULL_INPUT)), listToCons(thunk)));
+		call.addAll(specParts.subList(1, specParts.size()));
+		return listToCons(call);
+	}
+
+	/**
+	 * Expands {@code (uiop:with-null-output (var &rest keys) body...)} into
+	 * {@code (uiop:call-with-null-output (lambda (var) body...) keys...)} -- upstream's
+	 * own shape, over the discarding-stream function in {@code uiop-stream.lisp}. The
+	 * keyword keys (element-type, external-format, if-exists, if-does-not-exist) are
+	 * accepted for backward compatibility and threaded through; the function ignores
+	 * them.
+	 * @param cons the with-null-output expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithNullOutput(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)
+				|| !(spec.car() instanceof LispSymbol variable)) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_NULL_OUTPUT)
+					+ " expects (with-null-output (var &rest keys) body...): " + cons.print());
+		}
+		List<LispVal> specParts = spec.toList();
+		List<LispVal> thunk = new java.util.ArrayList<>();
+		thunk.add(new LispSymbol(LispNames.LAMBDA));
+		thunk.add(listToCons(List.of(variable)));
+		thunk.addAll(parts.subList(2, parts.size()));
+		List<LispVal> call = new java.util.ArrayList<>(
+				List.of(new LispSymbol(UiopExports.qualified(LispNames.CALL_WITH_NULL_OUTPUT)), listToCons(thunk)));
+		call.addAll(specParts.subList(1, specParts.size()));
+		return listToCons(call);
+	}
+
+	/**
+	 * Expands {@code (uiop:with-staging-pathname (var &optional value) body...)} into
+	 * {@code (uiop:call-with-staging-pathname value (lambda (var) body...))} --
+	 * upstream's own shape, over the atomic-rename function in {@code uiop-stream.lisp}.
+	 * When the value form is absent the variable's previous binding is reused, like
+	 * {@code with-input}.
+	 * @param cons the with-staging-pathname expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithStagingPathname(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)
+				|| !(spec.car() instanceof LispSymbol variable)) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_STAGING_PATHNAME)
+					+ " expects (with-staging-pathname (var &optional value) body...): " + cons.print());
+		}
+		List<LispVal> specParts = spec.toList();
+		if (specParts.size() > 2) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_STAGING_PATHNAME)
+					+ " expects at most a variable and a value form: " + cons.print());
+		}
+		LispVal value = specParts.size() == 2 ? specParts.get(1) : variable;
+		List<LispVal> thunk = new java.util.ArrayList<>();
+		thunk.add(new LispSymbol(LispNames.LAMBDA));
+		thunk.add(listToCons(List.of(variable)));
+		thunk.addAll(parts.subList(2, parts.size()));
+		return listToCons(List.of(new LispSymbol(UiopExports.qualified(LispNames.CALL_WITH_STAGING_PATHNAME)), value,
+				listToCons(thunk)));
+	}
+
+	/**
 	 * Expands {@code (uiop:with-safe-io-syntax ((&key package) &rest body))} into
 	 * {@code (uiop:call-with-safe-io-syntax (lambda () (let ((*package*)
 	 * (find-package package)) body...)))} -- upstream's own shape, over the binding
@@ -11909,6 +12005,9 @@ public final class LispMacroExpander {
 			case LispNames.WITH_INPUT_FILE -> expandUiopWithInputFile(cons);
 			case LispNames.WITH_OUTPUT_FILE -> expandUiopWithOutputFile(cons);
 			case LispNames.WITH_SAFE_IO_SYNTAX -> expandUiopWithSafeIoSyntax(cons);
+			case LispNames.WITH_NULL_INPUT -> expandUiopWithNullInput(cons);
+			case LispNames.WITH_NULL_OUTPUT -> expandUiopWithNullOutput(cons);
+			case LispNames.WITH_STAGING_PATHNAME -> expandUiopWithStagingPathname(cons);
 			case LispNames.UIOP_DEBUG -> expandUiopDebug(cons);
 			case LispNames.COMPATFMT -> expandUiopCompatfmt(cons);
 			// define-package is read-time surgery the package resolver performs, not an

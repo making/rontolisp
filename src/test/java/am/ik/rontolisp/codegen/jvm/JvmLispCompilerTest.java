@@ -4703,6 +4703,56 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUiopTemporaryFilesStagingAndNullStreams() throws Exception {
+		// .todo/360: the temporary-file / staging / null-stream half of uiop/stream --
+		// call-with-temporary-file over %temp-file-name, with-temporary-file as its
+		// wrapper, tmpize-pathname, with-staging-pathname over a rename, and the null
+		// streams. Same shape as the interpreter test
+		// (LispEvaluatorTest#evalUiopTemporaryFilesStagingAndNullStreams); paths are
+		// built at run time so no literal absolute path is bundled at compile time.
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("u360"));
+		String dir = root.toString().replace("\\", "\\\\");
+		assertThat(compileAndRunRead("""
+				(let ((base "%1$s/"))
+				  (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory base :keep t)
+				                    (write-string "kept" s) p)))
+				          (and (probe-file p) t)))
+				  (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory base)
+				                    (write-string "gone" s) p)))
+				          (and (probe-file p) t)))
+				  (print (let ((p (uiop:call-with-temporary-file
+				                  (lambda (pn) pn)
+				                  :want-stream-p nil :want-pathname-p t
+				                  :directory base)))
+				          (and (probe-file p) t)))
+				  (let* ((p (concatenate 'string base "staged.txt"))
+				         (tp (uiop:tmpize-pathname p)))
+				    (print (subseq (pathname-name tp) 0 10))
+				    (print (pathname-type tp)))
+				  (let ((p (concatenate 'string base "final.txt")))
+				    (uiop:with-staging-pathname (s p)
+				      (with-open-file (out s :direction :output) (write-line "hello" out)))
+				    (print (uiop:read-file-line p)))
+				  (print (uiop:add-pathname-suffix
+				          (pathname (concatenate 'string base "b.txt")) "-x"))
+				  (print (uiop:with-null-input (s) (read-char s nil :eof)))
+				  (print (uiop:with-null-output (o) (write-string "gone" o)))
+				  (print (uiop:null-device-pathname)))
+				""".formatted(dir))).isEqualTo("""
+				T
+				NIL
+				NIL
+				"staged-tmp"
+				"txt"
+				"hello"
+				#P"%1$s/b-x.txt"
+				:EOF
+				"gone"
+				#P"/dev/null"
+				""".stripTrailing().formatted(dir));
+	}
+
+	@Test
 	void directoryMatchesPathnamesAndDrivesTheUiopWalkers() throws Exception {
 		// A subdirectory of its own: the compiled class lands in tempDir and would
 		// otherwise show up in the listing.
