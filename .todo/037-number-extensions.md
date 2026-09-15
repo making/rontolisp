@@ -1,3 +1,58 @@
+> **Update 2026-09-15 (smalls landed: `float-sign`, `float-digits`):** the last
+> two unimplemented smalls ship as prelude defuns (`LispPreludeLibrary`, the
+> `decode-float` precedent -- one Lisp implementation on interpreter/JVM/WASM-GC,
+> first-class free) + `LispNames` + `CL_FUNCTIONS` (two names move out of
+> `CL_EXPORTED_ONLY`, the 978 externals unchanged) + `ci-spec.yaml` cases +
+> EN/JA docs. `float-sign` answers `1.0`/`-1.0` (or the second float's magnitude
+> with the first's sign); a zero is divided into `1.0` to read its sign, so
+> `-0.0` answers `-1.0`. `float-digits` answers `53` for every normal double
+> (trailing zeros count), `0` for a zero, the representation width for a
+> non-finite float, and `1127 - j` for a subnormal after `j` exact doublings up
+> to `[2^52, 2^53)` (the shifted value is `k * 2^(j-1074)` with 53 significant
+> bits, so the true significand `k` has `53 - (j - 1074)` digits). Measured:
+> **numbers 220 -> 220, misc 38 -> 38, 0 regressed** (no dedicated ANSI tests;
+> `ATAN.IEEE.2` exercises `float-sign` but is shim-blocked, see the watch-list
+> below). Pins: `LispEvaluatorTest#evalFloatSign`/`#evalFloatDigits`,
+> `JvmLispCompilerTest#compileAndRunFloatSign`/`#compileAndRunFloatDigits`,
+> `WasmLispCompilerIntegrationTest#floatSign`/`#floatDigits` (via
+> `compileAndRunPrelude`), ci-spec `smalls-float-sign`/`smalls-float-digits`
+> (`--no-gc` is not a ci-spec axis). no-GC refuses both outright beside
+> `RATIONALIZE` (`NoGcWasmCompilerTest#rejectsFloatSignAndFloatDigits`):
+> `float-sign`'s `&optional` list and `float-digits`' `floatp` check have no
+> scalar lowering -- never a trap, never a wrong answer. Three traps: (1) the
+> subnormal formula is `1127 - j`, not `53 - j` -- the `2^-1074` offset (the
+> first cut answered `-1073` for the least positive double); (2) an `&optional`
+> lambda silently ignores extra arguments (pre-existing lambda-list gap:
+> `(float-sign 1.0 2.0 3.0)` answers `2.0`, deliberately unpinned); (3) NaN
+> takes the representation width `53` (detected as `(not (= a a))`).
+> Item 4 of "Implementation approach" is now complete (`realp`, `scale-float`
+> and `most-positive/negative-double-float` shipped earlier; time
+> decomposition is a landed prelude elsewhere, probed working). Remaining:
+> the classified watch-list below, none of it 037's.
+>
+> **Watch-list classification (each probed directly on the interpreter unless
+> noted, 2026-09-15):** `MISC.512` -- `throw` drops `round`'s second value
+> (`(multiple-value-list (catch 'c (throw 'c (round -639367819))))` is one
+> element) -- the `.todo/213` multiple-values system, hands off. `IMAGPART.4`
+> -- `(eql 0.0 -0.0)` is NIL (`LispDouble` is a record, so `eql` inherits
+> `Double.equals` bit semantics; `imagpart` answers `+0.0`, `(* 0 x)` is
+> `-0.0` for negative `x`) where CL wants value semantics -- fixing it means a
+> 4-backend `eql` change plus `eql`-hash consistency, a separate item, hands
+> off. `LOGEQV/LOGNAND/LOGNOR.ERROR.1/.2`, `RATIONAL.ERROR.4`,
+> `LOGCOUNT.ERROR.3`, `RATIONALIZE.ERROR.4` -- all `*MINI-UNIVERSE* is unbound`
+> in the logs -- `.todo/715` §1 out of scope. `MISC.358` -- `ldb-test` is
+> entirely unimplemented (only an `EXPORTED_ONLY` name) -- a new byte-family
+> operator, not in this item's list. no-GC `deposit-field` -- a clean
+> compile-time refusal (`unsupported operation 'DEPOSIT-FIELD'`) -- the scalar
+> contract (a field replacement needs the bytespec cons), hands off. WASM-GC
+> limb-tier count -- `(ash 1 (ash 1 100))` compiles and dies in `unreachable`
+> (probed under wasmtime) -- fail-stop, no wrong answer, hands off.
+> `ATAN.IEEE.1/.2` -- `rt-shim.lisp`'s `deftest` takes `(name form &rest
+> expected)` with no `:description` support, so the form binds to the keyword
+> and the tests are structurally unpassable (`got (:DESCRIPTION)`,
+> byte-identical before/after) -- a driver gap for `.todo/715`/`.todo/739`,
+> hands off.
+>
 > **Update 2026-09-15 (WASM-GC exact float-vs-exact comparison landed):** a
 > float beside an exact integer (any tier, limb included) or ratio now compares
 > EXACT values on the GC backend too -- the float's exact binary value (as
@@ -234,8 +289,11 @@
 (2026-09-15); float-vs-exact `=`/comparison on the interpreter and the JVM
 (2026-09-15) and exact i64-vs-f64 `=`/comparison/`min`/`max` on `--no-gc`
 (2026-09-15) and exact float-vs-exact `=`/comparison/`min`/`max` on WASM-GC
-(2026-09-15, top banner).
-Open: the watch-list in the top banner. Full complex numbers and
+(2026-09-15, top banner); `float-sign`, `float-digits` (smalls, 2026-09-15,
+top banner).
+Open: the classified watch-list in the top banner (every item owned elsewhere:
+`.todo/213`, `.todo/715` §1, the `eql` signed zero, `ldb-test`, the
+`:description` driver gap). Full complex numbers and
 time decomposition are niche (low priority).
 
 ## What's missing
@@ -245,7 +303,10 @@ RontoLisp has the core numeric tower: integers (with `BigInteger` bignum), float
 ### Missing numeric functions
 
 Shipped since this table was written: `float-radix` (Slice A), `complexp`,
-`realpart`/`imagpart`, `conjugate`, `phase` (.todo/751-754), exact ratio->float
+`realpart`/`imagpart`, `conjugate`, `phase` (.todo/751-754), `realp` (complex
+work), `scale-float` (macro expander), `most-positive/negative-double-float`
+(reader constants), `float-sign`, `float-digits` (smalls, 2026-09-15), exact
+ratio->float
 conversion (2026-09-15: `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12`, `*.12`),
 exact float-vs-exact comparison on the interpreter and the JVM (2026-09-15: the
 eight `*.17`/`*.18` plus `BIGNUM.FLOAT.COMPARE.1A-4B).
@@ -333,8 +394,12 @@ CL has a full complex number tower. RontoLisp implements it in four steps:
 2. `rationalize` — continued fractions (Medium; Slice C, DONE 2026-09-15).
 3. `logcount`, `integer-decode-float` (multiple values, `.todo/032`; Slice C, DONE 2026-09-15).
 4. `realp`, float constants (`float-digits`, `float-sign`,
-   `most-positive/negative-double-float`), `scale-float` — smalls.
-5. Time decomposition — useful but needs timezone handling; niche.
+   `most-positive/negative-double-float`), `scale-float` — smalls (DONE
+   2026-09-15: `realp`/`scale-float`/`most-positive/negative-double-float`
+   shipped earlier; `float-sign`/`float-digits` are prelude defuns, top
+   banner).
+5. Time decomposition — landed as a prelude elsewhere (`.kb/time-environment-builtins.md`;
+   probed working 2026-09-15); niche.
 
 ### Related
 

@@ -5623,6 +5623,53 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFloatSign() {
+		assertThat(eval("(float-sign 2.5)").print()).isEqualTo("1.0");
+		assertThat(eval("(float-sign -2.5)").print()).isEqualTo("-1.0");
+		// Zero carries its sign: negative zero answers -1.0.
+		assertThat(eval("(float-sign 0.0)").print()).isEqualTo("1.0");
+		assertThat(eval("(float-sign -0.0)").print()).isEqualTo("-1.0");
+		assertThat(eval("(float-sign 2.5 3.0)").print()).isEqualTo("3.0");
+		assertThat(eval("(float-sign -2.5 3.0)").print()).isEqualTo("-3.0");
+		assertThat(eval("(float-sign 2.5 -3.0)").print()).isEqualTo("3.0");
+		assertThat(eval("(float-sign -2.5 -0.0)").print()).isEqualTo("-0.0");
+		assertThat(eval("(float-sign most-positive-double-float)").print()).isEqualTo("1.0");
+		assertThat(eval("(float-sign most-negative-double-float)").print()).isEqualTo("-1.0");
+		assertThat(eval("(funcall #'float-sign -2.5)").print()).isEqualTo("-1.0");
+		assertThatThrownBy(() -> eval("(float-sign)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects at least 1 argument");
+		assertThatThrownBy(() -> eval("(float-sign 1)")).isInstanceOf(LispEvalException.class);
+		assertThatThrownBy(() -> eval("(float-sign 1.0 2)")).isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
+	void evalFloatDigits() {
+		assertThat(eval("(float-digits 1.0)").print()).isEqualTo("53");
+		assertThat(eval("(float-digits 2.0)").print()).isEqualTo("53");
+		assertThat(eval("(float-digits 0.5)").print()).isEqualTo("53");
+		assertThat(eval("(float-digits -1.5)").print()).isEqualTo("53");
+		assertThat(eval("(float-digits 1.7976931348623157d308)").print()).isEqualTo("53");
+		assertThat(eval("(float-digits 0.0)").print()).isEqualTo("0");
+		assertThat(eval("(float-digits -0.0)").print()).isEqualTo("0");
+		// Subnormals carry fewer digits: the least positive double has one,
+		// twice it two, and one ulp below the least normal fifty-two.
+		assertThat(eval("(float-digits 4.9406564584124654d-324)").print()).isEqualTo("1");
+		assertThat(eval("(float-digits (* 2.0 4.9406564584124654d-324))").print()).isEqualTo("2");
+		assertThat(eval("(float-digits (* 3.0 4.9406564584124654d-324))").print()).isEqualTo("2");
+		assertThat(eval("(float-digits (- (scale-float 1.0 -1022) 4.9406564584124654d-324))").print()).isEqualTo("52");
+		// Non-finite floats keep the representation width.
+		assertThat(eval("(float-digits (scale-float 1.0 2097))").print()).isEqualTo("53");
+		assertThat(eval("(float-digits (scale-float -1.0 2097))").print()).isEqualTo("53");
+		assertThat(eval("(funcall #'float-digits 1.5)").print()).isEqualTo("53");
+		assertThatThrownBy(() -> eval("(float-digits)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(float-digits 1.0 2.0)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(float-digits 1)")).isInstanceOf(LispEvalException.class);
+		assertThatThrownBy(() -> eval("(float-digits \"s\")")).isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
 	void evalRationalize() {
 		assertThat(eval("(rationalize 0.1)").print()).isEqualTo("1/10");
 		assertThat(eval("(rationalize -0.1)").print()).isEqualTo("-1/10");

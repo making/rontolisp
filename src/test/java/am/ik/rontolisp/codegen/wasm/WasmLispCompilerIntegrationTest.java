@@ -9755,6 +9755,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void floatSign() throws Exception {
+		assertThat(compileAndRunPrelude(
+				"(print (float-sign 2.5)) (print (float-sign -2.5)) (print (float-sign 0.0)) (print (float-sign -0.0)) (print (float-sign -2.5 3.0)) (print (float-sign 2.5 -3.0)) (print (funcall #'float-sign -2.5))"))
+			.isEqualTo("1.0\n-1.0\n1.0\n-1.0\n-3.0\n3.0\n-1.0");
+	}
+
+	@Test
+	void floatDigits() throws Exception {
+		// No fractions wider than i31 are involved: every intermediate is a
+		// scalar-small float or a small integer, so the whole range pins here.
+		assertThat(compileAndRunPrelude(
+				"(print (float-digits 1.0)) (print (float-digits 2.0)) (print (float-digits -1.5)) (print (float-digits 0.0)) (print (float-digits 4.9406564584124654d-324)) (print (float-digits (* 3.0 4.9406564584124654d-324))) (print (float-digits (scale-float 1.0 2097))) (print (funcall #'float-digits 1.5))"))
+			.isEqualTo("53\n53\n53\n0\n1\n2\n53\n53");
+	}
+
+	@Test
 	void noGcLogcountAnswers() throws Exception {
 		// --no-gc lowers logcount to its scalar population-count loop. First-class
 		// calls do not exist on this backend (no funcall), and integer-decode-float

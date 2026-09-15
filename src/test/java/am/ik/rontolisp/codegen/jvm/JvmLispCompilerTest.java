@@ -9492,6 +9492,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFloatSign() throws Exception {
+		assertThat(compileAndRun(
+				"(print (float-sign 2.5)) (print (float-sign -2.5)) (print (float-sign 0.0)) (print (float-sign -0.0)) (print (float-sign -2.5 3.0)) (print (float-sign 2.5 -3.0)) (print (funcall #'float-sign -2.5))"))
+			.isEqualTo("1.0\n-1.0\n1.0\n-1.0\n-3.0\n3.0\n-1.0");
+	}
+
+	@Test
+	void compileAndRunFloatDigits() throws Exception {
+		assertThat(compileAndRun(
+				"(print (float-digits 1.0)) (print (float-digits 2.0)) (print (float-digits -1.5)) (print (float-digits 0.0)) (print (float-digits 4.9406564584124654d-324)) (print (float-digits (* 3.0 4.9406564584124654d-324))) (print (float-digits (scale-float 1.0 2097))) (print (funcall #'float-digits 1.5))"))
+			.isEqualTo("53\n53\n53\n0\n1\n2\n53\n53");
+	}
+
+	@Test
 	void compileAndRunByteFieldOps() throws Exception {
 		assertThat(compileAndRun(
 				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))

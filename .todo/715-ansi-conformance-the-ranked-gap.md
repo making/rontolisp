@@ -76,7 +76,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | `loop` -- four slices landed 2026-09-14 for 113 (uninterned `#:kw` 45, NIL no-binding 15, any-order numeric 12, named-loop block 39; `iteration` 63.6% -> 77.0%, 0 regressed); left: missing `program-error`/`type-error` validation ~30, hash/`across` destructuring ~9, dotted `append` ~5, typed init ~6 | ~50 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
-| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed; Slice C closed `logcount`/`rationalize`/`integer-decode-float` for 16 numbers + 15 misc, 0 regressed; the ratio->float conversion closed `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12` and `*.12` for 6 numbers, 0 regressed; 2026-09-15 exact float-vs-exact comparison closed the eight `*.17`/`*.18` + eight `BIGNUM.FLOAT.COMPARE.1A-4B` for 16 numbers, 0 regressed; 2026-09-15 the --no-gc exact i64-vs-f64 path landed (not ANSI-measured: numbers 220 -> 220, misc 38 -> 38, 0 regressed -- nothing left here) and 2026-09-15 the WASM-GC exact float-vs-exact path landed (also not ANSI-measured, same 220/38 no-op -- exactness everywhere now; near ties stay out of ci-spec since --no-gc cannot spell a ratio) | tbd | `.todo/037` |
+| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed; Slice C closed `logcount`/`rationalize`/`integer-decode-float` for 16 numbers + 15 misc, 0 regressed; the ratio->float conversion closed `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12` and `*.12` for 6 numbers, 0 regressed; 2026-09-15 exact float-vs-exact comparison closed the eight `*.17`/`*.18` + eight `BIGNUM.FLOAT.COMPARE.1A-4B` for 16 numbers, 0 regressed; 2026-09-15 the --no-gc exact i64-vs-f64 path landed (not ANSI-measured: numbers 220 -> 220, misc 38 -> 38, 0 regressed -- nothing left here) and 2026-09-15 the WASM-GC exact float-vs-exact path landed (also not ANSI-measured, same 220/38 no-op -- exactness everywhere now; near ties stay out of ci-spec since --no-gc cannot spell a ratio) and 2026-09-15 the `float-sign`/`float-digits` smalls landed as prelude defuns (also not ANSI-measured, same 220/38 no-op -- no dedicated suite tests; `ATAN.IEEE.2` exercises `float-sign` but is structurally unpassable under `rt-shim.lisp`, whose `deftest` has no `:description` support) | tbd | `.todo/037` |
 | a `setf` place the expander does not support | 79 | `.todo/001`, `.todo/041` |
 | `pprint-tabular`/`-fill`/`-linear` (27+) and `setf readtable-case` | ~140 | `.todo/041`, `.todo/001` |
 | `read-from-string`'s lambda list (`eof-error-p`, `:start`/`:end`, `:preserve-whitespace`) -- six `READ-FROM-STRING.*` tests; the INDEX landed 2026-09-13 | 6 | `.todo/214` |
@@ -128,6 +128,23 @@ runtime package API and complex numbers. The corpus uses only
 Only the entries whose FINDING outlives the change are kept; the rest are in
 `.todo/history/`.
 
+- **2026-09-15, `.todo/037` smalls (`float-sign`, `float-digits`)** -- prelude
+  defuns over existing primitives (`LispPreludeLibrary`, the `decode-float`
+  precedent: `float-sign` reads a zero's sign through `(/ 1.0 f)`, `float-digits`
+  answers `53` for every normal double and `1127 - j` for a subnormal after `j`
+  exact doublings) + `LispNames` + `CL_FUNCTIONS` (two names out of
+  `CL_EXPORTED_ONLY`, 978 externals unchanged) + ci-spec cases + EN/JA docs;
+  `--no-gc` refuses both outright beside `RATIONALIZE`. **numbers 220 -> 220,
+  misc 38 -> 38, 0 regressed**, as a diff of failing test NAMES (no dedicated
+  suite tests). Two adjacent findings, both hands-off: an `&optional` lambda
+  silently ignores extra arguments (a lambda-list gap, unpinned), and the
+  `ATAN.IEEE.1/.2` failures are structural -- `rt-shim.lisp`'s `deftest` has no
+  `:description` support, so the form binds to the keyword (`got
+  (:DESCRIPTION)`, byte-identical before/after). Pinned by
+  `LispEvaluatorTest#evalFloatSign`/`#evalFloatDigits`,
+  `JvmLispCompilerTest#compileAndRunFloatSign`/`#compileAndRunFloatDigits`,
+  `WasmLispCompilerIntegrationTest#floatSign`/`#floatDigits`,
+  `NoGcWasmCompilerTest#rejectsFloatSignAndFloatDigits`.
 - **2026-09-15, `.todo/037` WASM-GC exact float-vs-exact comparison** -- a float
   beside an exact integer (any tier, limb included) or ratio compares exact
   values on the GC backend (`_rat_cmp_bits` decomposes the finite float from its
