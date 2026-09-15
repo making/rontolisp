@@ -433,6 +433,12 @@ public final class LispNames {
 	public static final String LOGTEST = "LOGTEST";
 
 	/**
+	 * The {@code logcount} prelude function (the number of 1 bits of a non-negative
+	 * integer, of 0 bits of a negative one -- the two's-complement population count).
+	 */
+	public static final String LOGCOUNT = "LOGCOUNT";
+
+	/**
 	 * The {@code byte} built-in (builds a byte specifier). Represented internally as a
 	 * two-element list {@code (size position)}.
 	 */
@@ -2918,6 +2924,13 @@ public final class LispNames {
 	 * ({@code (rational 0.1)} is {@code 3602879701896397/36028797018963968}).
 	 */
 	public static final String RATIONAL = "RATIONAL";
+
+	/**
+	 * The {@code rationalize} prelude function: the simplest rational that approximates a
+	 * float within half a ulp on either side ({@code (rationalize 0.1)} is {@code 1/10});
+	 * integers and ratios are already exact, so they are returned unchanged.
+	 */
+	public static final String RATIONALIZE = "RATIONALIZE";
 
 	// Convenience macros
 
@@ -7520,6 +7533,14 @@ public final class LispNames {
 	 * decomposition -- significand in [1/2, 1), exponent, and sign (1.0 or -1.0).
 	 */
 	public static final String DECODE_FLOAT = "DECODE-FLOAT";
+
+	/**
+	 * The {@code integer-decode-float} prelude function: the three values of a float's
+	 * binary decomposition with an integer significand -- significand, exponent and sign
+	 * -- such that {@code significand * 2^exponent * sign} is the original number. The
+	 * scaling loop is exact in binary floating point, like {@link #DECODE_FLOAT}.
+	 */
+	public static final String INTEGER_DECODE_FLOAT = "INTEGER-DECODE-FLOAT";
 
 	/**
 	 * The {@code scale-float} built-in function: a float scaled by a power of two

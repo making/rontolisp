@@ -351,6 +351,41 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void sliceCLogcountCompilesToAPlainMvpModule() {
+		// logcount lowers to the scalar population-count loop (a negative operand
+		// complemented first), so a program calling it compiles on --no-gc instead
+		// of refusing (.todo/037 Slice C).
+		byte[] module = compile("""
+				(defun lc-f (n) (logcount n))
+				(rontolisp:wasm-export 'lc-f :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(2).doesNotContainKey(5);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("lc-f");
+	}
+
+	@Test
+	void rejectsIntegerDecodeFloatAndRationalize() {
+		// integer-decode-float's second and third values and rationalize's ratio
+		// answer have no representation in the scalar value model, so both are
+		// refused at compile time like rational -- never a silently dropped value,
+		// never a float masquerading as exact (.todo/037 Slice C).
+		assertThatThrownBy(() -> compile("""
+				(defun idf-f (f) (integer-decode-float f))
+				(rontolisp:wasm-export 'idf-f :params '(:float) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("integer-decode-float is not supported")
+			.hasMessageContaining("IDF-F");
+		assertThatThrownBy(() -> compile("""
+				(defun rz-f (x) (rationalize x))
+				(rontolisp:wasm-export 'rz-f :params '(:float) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rationalize is not supported")
+			.hasMessageContaining("RZ-F");
+	}
+
+	@Test
 	void rejectsSetqOfANonLocal() {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (setq g (+ n 1)))

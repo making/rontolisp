@@ -34554,6 +34554,42 @@ public final class LispMacroExpander {
 		return expandConstantResult(cons, new LispInteger(2));
 	}
 
+	/**
+	 * Expands the one-argument {@code (logcount x)} into a scalar population-count loop:
+	 * a negative operand is complemented first (logcount counts the 0 bits of a
+	 * negative), then the magnitude's 1 bits are accumulated one shift at a time. Only
+	 * scalar integer primitives, so the {@code --no-gc} backend shares it; the
+	 * interpreter and the GC backends run the prelude defun (which additionally
+	 * type-checks) instead. A wrong argument count signals here.
+	 * <p>
+	 * The temporaries are FIXED names, not {@code MV_COUNTER} gensyms: the
+	 * {@code --no-gc} type-inference fixpoint re-expands the call on every pass, so a
+	 * fresh name per expansion would register a new local per pass and the
+	 * {@code changed} flag would never settle (an infinite compile). The
+	 * {@code __logcount-} prefix keeps user code from meeting them.
+	 * @param cons the logcount expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLogcount(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException("logcount expects 1 argument: " + cons.print());
+		}
+		LispSymbol x = new LispSymbol("__logcount-x");
+		LispSymbol c = new LispSymbol("__logcount-c");
+		LispVal complement = listToCons(
+				List.of(new LispSymbol(LispNames.IF), mvCall(LispNames.LT, x, new LispInteger(0)),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), x, mvCall(LispNames.LOGNOT, x)))));
+		LispVal bump = listToCons(List.of(new LispSymbol(LispNames.SETQ), c,
+				mvCall(LispNames.ADD, c, mvCall(LispNames.LOGAND, x, new LispInteger(1)))));
+		LispVal shift = listToCons(
+				List.of(new LispSymbol(LispNames.SETQ), x, mvCall(LispNames.ASH, x, new LispInteger(-1))));
+		LispVal loop = listToCons(
+				List.of(new LispSymbol(LispNames.WHILE), mvCall(LispNames.GT, x, new LispInteger(0)), bump, shift));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.PROGN), complement, loop, c));
+		return nestMvBindings(List.of(new MvBinding(x, parts.get(1)), new MvBinding(c, new LispInteger(0))), body);
+	}
+
 	/** Builds {@code (max -limit (min limit x))}. */
 	private static LispVal clampInt(LispVal x, long limit) {
 		return mvCall(LispNames.MAX, new LispInteger(-limit), mvCall(LispNames.MIN, new LispInteger(limit), x));

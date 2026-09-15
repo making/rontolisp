@@ -46,6 +46,7 @@ categories:
       - { slug: numerator, name: "numerator" }
       - { slug: denominator, name: "denominator" }
       - { slug: rational, name: "rational" }
+      - { slug: rationalize, name: "rationalize" }
   - title: "Math Functions"
     index_page: reference/functions/cl.md
     functions:
@@ -62,6 +63,7 @@ categories:
       - { slug: scale-float, name: "scale-float" }
       - { slug: float-radix, name: "float-radix" }
       - { slug: decode-float, name: "decode-float" }
+      - { slug: integer-decode-float, name: "integer-decode-float" }
   - title: "Complex Numbers"
     index_page: reference/functions/cl.md
     functions:
@@ -91,6 +93,7 @@ categories:
       - { slug: integer-length, name: "integer-length" }
       - { slug: logbitp, name: "logbitp" }
       - { slug: logtest, name: "logtest" }
+      - { slug: logcount, name: "logcount" }
       - { slug: byte, name: "byte" }
       - { slug: byte-size, name: "byte-size" }
       - { slug: byte-position, name: "byte-position" }

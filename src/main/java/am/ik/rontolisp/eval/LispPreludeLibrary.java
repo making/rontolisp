@@ -2149,6 +2149,88 @@ public final class LispPreludeLibrary {
 				          (while (< x 0.5) (setq x (* x 2.0)) (setq e (- e 1)))
 				          (values x e s)))))
 				""");
+		// logcount: the two's-complement population count -- 1 bits for a
+		// non-negative integer, 0 bits for a negative one (so (logcount x) is
+		// (logcount (lognot x)) for every integer). A negative operand is
+		// complemented first; the loop then runs over the magnitude only.
+		SOURCES.put(LispNames.LOGCOUNT, """
+				(defun logcount (x)
+				  (check-type x integer)
+				  (if (< x 0)
+				      (logcount (lognot x))
+				      (let ((c 0))
+				        (while (> x 0)
+				          (setq c (+ c (logand x 1)))
+				          (setq x (ash x -1)))
+				        c)))
+				""");
+		// integer-decode-float: like decode-float but the significand is an
+		// integer -- f = significand * 2^exponent * sign, exactly. The float is
+		// scaled into [2^52, 2^53) (exact in binary floating point, the
+		// decode-float argument above), truncated to an integer, and stripped of
+		// factors of two; every intermediate is scalar-small (a 53-bit
+		// significand at most), exact on the interpreter, the JVM and WASM-GC.
+		// Zero decodes as 0, 0 and its sign; a non-finite float has no
+		// decomposition and is signalled.
+		SOURCES.put(LispNames.INTEGER_DECODE_FLOAT, """
+				(defun integer-decode-float (f)
+				  (check-type f float)
+				  (if (= f 0.0)
+				      (values 0 0 (if (< f 0) -1.0 1.0))
+				      (if (= (/ 1.0 f) 0.0)
+				          (error "integer-decode-float of a non-finite float is undefined")
+				          (let ((a (abs f))
+				                (e 0)
+				                (hi (expt 2.0 53))
+				                (lo (expt 2.0 52)))
+				            (while (>= a hi)
+				              (setq a (/ a 2.0))
+				              (setq e (+ e 1)))
+				            (while (< a lo)
+				              (setq a (* a 2.0))
+				              (setq e (- e 1)))
+				            (let ((n (truncate a)))
+				              (while (evenp n)
+				                (setq n (ash n -1))
+				                (setq e (+ e 1)))
+				              (values n e (if (< f 0) -1.0 1.0)))))))
+				""");
+		// rationalize: the simplest rational within half a ulp of a float on either
+		// side (so floating the answer reproduces the input), the integer or ratio
+		// itself for an exact input. The float's exact value and ulp come from
+		// integer-decode-float as integers, and the simplest rational in the
+		// interval is the continued-fraction mediant (one floor jump per term,
+		// never a unit walk). An integer-valued float answers its exact integer
+		// already a simplest rational, and the only one that round-trips by
+		// construction) -- with no fraction involved this is exact on every
+		// backend. The round-trip postcondition is checked with the same float
+		// conversion the callers use; when it fails the exact value is the answer,
+		// which is what a backend whose fractions wrap (WASM-GC past i31) needs.
+		SOURCES.put(LispNames.RATIONALIZE,
+				"""
+						(defun rationalize (x)
+						  (check-type x real)
+						  (if (floatp x)
+						      (if (= x 0.0)
+						          0
+						          (let ((ax (abs x)))
+						            (multiple-value-bind (sig exp sign) (integer-decode-float ax)
+						              (if (<= 0 exp)
+						                  (if (< x 0) (- (ash sig exp)) (ash sig exp))
+						                  (let* ((u (if (< exp -1022) (/ (expt 2 1074)) (expt 2 (+ exp -53 (integer-length sig)))))
+						                         (xc (/ sig (ash 1 (- exp))))
+						                         (half (/ u 2))
+						                         (r (labels ((simplest (lo hi)
+						                                       (let ((flo (floor lo)))
+						                                         (cond ((= flo lo) lo)
+						                                               ((<= (1+ flo) hi) (1+ flo))
+						                                               (t (+ flo (/ (simplest (/ (- hi flo)) (/ (- lo flo))))))))))
+						                              (simplest (- xc half) (+ xc half)))))
+						                    (if (= (float r ax) ax)
+						                        (if (< x 0) (- r) r)
+						                        (if (< x 0) (- xc) xc)))))))
+						      x))
+						""");
 		// A LIST operand is read through a cons cursor rather than indexed with elt --
 		// elt on a list is an nth walk from the head, so the obvious loop is quadratic
 		// (the same defect the replace list SOURCE arm and count-if-not already avoid).

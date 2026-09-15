@@ -1,3 +1,42 @@
+> **Update 2026-09-15 (Slice C landed):** `logcount`, `rationalize` and
+> `integer-decode-float` ship as prelude defuns (`LispPreludeLibrary`, the
+> `decode-float` precedent -- one Lisp implementation runs on the interpreter,
+> the JVM and WASM-GC, first-class and multi-value free, no new compiler
+> classes) + `LispNames` + `CL_FUNCTIONS` (three names move out of
+> `CL_EXPORTED_ONLY`, the 978 externals unchanged) + `ci-spec.yaml` cases +
+> EN/JA docs. Measured as a diff of failing ANSI test NAMES: **numbers 259 ->
+> 243 (16 fixed), misc 52 -> 38 (15 fixed + 1 surfaced), 0 regressed** (31
+> total). Fully fixed: `LOGCOUNT.1-.8` + `ERROR.1/.2`, `RATIONALIZE.2` +
+> `ERROR.1/.2/.3`, `MAX.2`/`MIN.2` (knock-on: numbers-aux's
+> `+rational-most-*+` constants bind through `rational-safely` now that
+> integer-decode-float exists); misc 4 logcount + 11 rationalize. Surfaced
+> second reasons, zero true regressions: `LOGCOUNT.ERROR.3`/
+> `RATIONALIZE.ERROR.4` (universe cascade, `.todo/715` §1 out of scope),
+> `RATIONAL.1`/`RATIONALIZE.1`/`RATIONALIZE.3`/`/.12` (the ratio->float
+> conversion defect -- every collected rational probed EXACT, e.g.
+> `(float (/ 1 8388608))` answers `1.192092895507812e-7`, not `2^-23`; the
+> mediant's round-trip guard + exact fallback pass under a correct conversion
+> by construction), `MISC.358` (now reaches `LDB-TEST`, out of scope).
+> Random churn unchanged: eight `BIGNUM.FLOAT.COMPARE.*`, `SQRT.17`,
+> `RATIONAL.3`.
+>
+> Backend notes: no-GC lowers `logcount` through a new `expandLogcount` scalar
+> loop and refuses `integer-decode-float`/`rationalize` outright (secondary
+> values / ratio answers have no scalar representation -- the `RATIONAL`
+> precedent). WASM-GC pins integers (`rationalize` answers an integer-valued
+> float through a fast path with no fraction involved), `0.0` and ratios; a
+> fractional float traps fail-stop on big-denominator intermediates, exactly
+> as `(/ 1 (ash 1 52))` does (`.kb/wasm-bignum.md`, ratio components stay
+> i32). Three traps, all recorded where the next reader looks
+> (`.kb/adding-primitives.md` gained the prelude checklist,
+> `.kb/no-gc-scalar-wasm.md` the determinism rule): (1) a `--no-gc`-shared
+> lowering must use FIXED temporary names -- an `MV_COUNTER` gensym re-expands
+> to a fresh local on every `inferTypes` fixpoint pass and the compile hangs
+> forever (found as a spinning surefire fork, diagnosed with `jstack`);
+> (2) WASM-GC unit tests reaching a prelude defun must use
+> `compileAndRunPrelude` (the CLI pipeline's splice); (3) `(logcount -8)` is
+> 3, not 1 (`-8` is `...11111000`, three zero bits -- caught before landing).
+>
 > **Update 2026-09-15 (Slice B `rational` landed):** exact rational on all four
 > backends -- interpreter `Environment` bit decomposition + JVM `_rational`
 > (`_frat` + `_rat`, new `JvmRationalCompiler`) + WASM-GC `WasmRationalCompiler`
@@ -72,8 +111,9 @@
 `coerce`, `*read-default-float-format*` (2026-07-05); full complex tower
 (.todo/751-754); `float-radix`, `logeqv`, `lognor`, `lognand`,
 `deposit-field` (Slice A, 2026-09-14); the `ash` huge-count fix (2026-09-15);
-`rational` (Slice B, 2026-09-15).
-Open: Slice C plus the watch-list in the top banner. Full complex numbers and
+`rational` (Slice B, 2026-09-15); `logcount`, `rationalize`,
+`integer-decode-float` (Slice C, 2026-09-15).
+Open: the watch-list in the top banner. Full complex numbers and
 time decomposition are niche (low priority).
 
 ## What's missing
@@ -165,8 +205,8 @@ CL has a full complex number tower. RontoLisp implements it in four steps:
 ### Implementation approach (remaining)
 
 1. `rational` — convert float to exact ratio (Easy, useful; Slice B, DONE 2026-09-15).
-2. `rationalize` — continued fractions (Medium; Slice C).
-3. `logcount`, `integer-decode-float` (multiple values, `.todo/032`; Slice C).
+2. `rationalize` — continued fractions (Medium; Slice C, DONE 2026-09-15).
+3. `logcount`, `integer-decode-float` (multiple values, `.todo/032`; Slice C, DONE 2026-09-15).
 4. `realp`, float constants (`float-digits`, `float-sign`,
    `most-positive/negative-double-float`), `scale-float` — smalls.
 5. Time decomposition — useful but needs timezone handling; niche.

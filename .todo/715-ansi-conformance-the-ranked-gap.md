@@ -76,7 +76,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | `loop` -- four slices landed 2026-09-14 for 113 (uninterned `#:kw` 45, NIL no-binding 15, any-order numeric 12, named-loop block 39; `iteration` 63.6% -> 77.0%, 0 regressed); left: missing `program-error`/`type-error` validation ~30, hash/`across` destructuring ~9, dotted `append` ~5, typed init ~6 | ~50 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
-| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed) | tbd | `.todo/037` |
+| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed; Slice C closed `logcount`/`rationalize`/`integer-decode-float` for 16 numbers + 15 misc, 0 regressed, with `RATIONAL.1`/`RATIONALIZE.1`/`/.12` surfacing the ratio->float conversion defect and `RATIONALIZE.ERROR.4` the universe cascade) | tbd | `.todo/037` |
 | a `setf` place the expander does not support | 79 | `.todo/001`, `.todo/041` |
 | `pprint-tabular`/`-fill`/`-linear` (27+) and `setf readtable-case` | ~140 | `.todo/041`, `.todo/001` |
 | `read-from-string`'s lambda list (`eof-error-p`, `:start`/`:end`, `:preserve-whitespace`) -- six `READ-FROM-STRING.*` tests; the INDEX landed 2026-09-13 | 6 | `.todo/214` |
@@ -128,6 +128,26 @@ runtime package API and complex numbers. The corpus uses only
 Only the entries whose FINDING outlives the change are kept; the rest are in
 `.todo/history/`.
 
+- **2026-09-15, `.todo/037` numbers Slice C (`logcount`, `rationalize`,
+  `integer-decode-float`)** -- prelude defuns (`LispPreludeLibrary`, the
+  `decode-float` precedent: one Lisp implementation on interpreter/JVM/WASM-GC,
+  first-class and multi-value free) + `CL_FUNCTIONS` classification + `ci-spec`
+  cases + EN/JA docs; no-GC lowers `logcount` through a scalar expansion and
+  refuses the other two. **numbers 259 -> 243 (16 fixed), misc 52 -> 38 (15
+  fixed), 0 regressed**, as a diff of failing test NAMES. Fully fixed:
+  `LOGCOUNT.1-.8` + `ERROR.1/.2`, `RATIONALIZE.2` + `ERROR.1/.2/.3`,
+  `MAX.2`/`MIN.2` (knock-on: the aux `+rational-most-*+` constants bind through
+  `rational-safely` now). Surfaced, not regressed: the universe cascade
+  (`LOGCOUNT.ERROR.3`, `RATIONALIZE.ERROR.4` -- §1 out of scope), the
+  ratio->float conversion defect (`RATIONAL.1`, `RATIONALIZE.1/.3`, `/.12` --
+  every collected rational probed exact; the mediant's round-trip guard +
+  exact fallback pass under a correct conversion by construction), and
+  `MISC.358` (now reaches `LDB-TEST`). Random churn (`BIGNUM.*` x8, `SQRT.17`,
+  `RATIONAL.3`) unchanged. Two backend traps turned up by the work:
+  `--no-gc`-shared lowerings must use fixed temporary names (an `MV_COUNTER`
+  gensym hangs the `inferTypes` fixpoint forever), and WASM-GC big-denominator
+  ratios trap fail-stop (`.kb/wasm-bignum.md`'s i32-component limit), which is
+  what bounds the WASM pins to integers/`0.0`/ratios.
 - **2026-09-15, `.todo/037` numbers Slice B (`rational`)** -- exact rational on
   all four backends (interpreter bit decomposition, JVM `_rational` over `_frat`
   + `_rat`, WASM-GC decomposition through `_int_new`/`_big_ash` + `_rat_div`,

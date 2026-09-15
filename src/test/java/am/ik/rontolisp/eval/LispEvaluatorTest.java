@@ -5472,6 +5472,81 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLogcount() {
+		assertThat(eval("(logcount 0)").print()).isEqualTo("0");
+		assertThat(eval("(logcount 1)").print()).isEqualTo("1");
+		assertThat(eval("(logcount 2)").print()).isEqualTo("1");
+		assertThat(eval("(logcount 3)").print()).isEqualTo("2");
+		assertThat(eval("(logcount 255)").print()).isEqualTo("8");
+		assertThat(eval("(logcount -1)").print()).isEqualTo("0");
+		assertThat(eval("(logcount -2)").print()).isEqualTo("1");
+		assertThat(eval("(logcount -8)").print()).isEqualTo("3");
+		// A bignum answers its population count, still a small integer.
+		assertThat(eval("(logcount (ash 1 300))").print()).isEqualTo("1");
+		assertThat(eval("(logcount (1- (ash 1 100)))").print()).isEqualTo("100");
+		assertThat(eval("(logcount (- (ash 1 100)))").print()).isEqualTo("100");
+		assertThat(eval("(funcall #'logcount 7)").print()).isEqualTo("3");
+		assertThatThrownBy(() -> eval("(logcount)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(logcount 1 2)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(logcount 1.5)")).isInstanceOf(LispEvalException.class);
+		assertThatThrownBy(() -> eval("(logcount \"s\")")).isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
+	void evalIntegerDecodeFloat() {
+		assertThat(eval("(multiple-value-list (integer-decode-float 1.5))").print()).isEqualTo("(3 -1 1.0)");
+		assertThat(eval("(multiple-value-list (integer-decode-float -0.5))").print()).isEqualTo("(1 -1 -1.0)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 0.0))").print()).isEqualTo("(0 0 1.0)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 2.0))").print()).isEqualTo("(1 1 1.0)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 6.5))").print()).isEqualTo("(13 -1 1.0)");
+		assertThat(eval("(nth-value 0 (integer-decode-float 1.5))").print()).isEqualTo("3");
+		assertThat(eval("(nth-value 1 (integer-decode-float 1.5))").print()).isEqualTo("-1");
+		assertThat(eval("(nth-value 2 (integer-decode-float -1.5))").print()).isEqualTo("-1.0");
+		// A subnormal decodes exactly; compared piece-wise so the exact
+		// significand never prints (the rational would hang the printer).
+		assertThat(eval("(nth-value 0 (integer-decode-float 4.9406564584124654d-324))").print()).isEqualTo("1");
+		assertThat(eval("(nth-value 1 (integer-decode-float 4.9406564584124654d-324))").print()).isEqualTo("-1074");
+		// The largest double: a 53-bit significand and a small exponent.
+		assertThat(eval("(nth-value 0 (integer-decode-float 1.7976931348623157d308))").print())
+			.isEqualTo("9007199254740991");
+		assertThat(eval("(nth-value 1 (integer-decode-float 1.7976931348623157d308))").print()).isEqualTo("971");
+		// Recomposition is the identity, exactly.
+		assertThat(eval("(multiple-value-bind (s e sign) (integer-decode-float 6.5) (= (* s (expt 2 e) sign) 6.5))")
+			.print()).isEqualTo("T");
+		assertThat(eval("(funcall #'integer-decode-float 1.5)").print()).isEqualTo("3");
+		assertThatThrownBy(() -> eval("(integer-decode-float)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(integer-decode-float 1.0 2.0)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(integer-decode-float 1)")).isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
+	void evalRationalize() {
+		assertThat(eval("(rationalize 0.1)").print()).isEqualTo("1/10");
+		assertThat(eval("(rationalize -0.1)").print()).isEqualTo("-1/10");
+		assertThat(eval("(rationalize 1.5)").print()).isEqualTo("3/2");
+		assertThat(eval("(rationalize 0.5)").print()).isEqualTo("1/2");
+		assertThat(eval("(rationalize 2.0)").print()).isEqualTo("2");
+		assertThat(eval("(rationalize 100.0)").print()).isEqualTo("100");
+		assertThat(eval("(rationalize 0.0)").print()).isEqualTo("0");
+		assertThat(eval("(rationalize 5)").print()).isEqualTo("5");
+		assertThat(eval("(rationalize (/ 1 3))").print()).isEqualTo("1/3");
+		// The postcondition the ANSI suite checks: floating the answer
+		// reproduces the input.
+		assertThat(eval("(= (float (rationalize 0.1)) 0.1)").print()).isEqualTo("T");
+		assertThat(eval("(= (float (rationalize 3.141592653589793)) 3.141592653589793)").print()).isEqualTo("T");
+		assertThat(eval("(funcall #'rationalize 0.1)").print()).isEqualTo("1/10");
+		assertThatThrownBy(() -> eval("(rationalize)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(rationalize 1 2)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(rationalize \"s\")")).isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
 	void evalByteFieldOps() {
 		assertThat(eval("(byte-size (byte 8 3))").print()).isEqualTo("8");
 		assertThat(eval("(byte-position (byte 8 3))").print()).isEqualTo("3");

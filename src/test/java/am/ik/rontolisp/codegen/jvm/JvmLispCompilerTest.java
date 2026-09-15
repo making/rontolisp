@@ -9397,6 +9397,31 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLogcount() throws Exception {
+		assertThat(compileAndRun(
+				"(print (logcount 0)) (print (logcount 1)) (print (logcount 3)) (print (logcount 255)) (print (logcount -1)) (print (logcount -8)) (print (logcount (ash 1 300))) (print (logcount (1- (ash 1 100)))) (print (funcall #'logcount 7))"))
+			.isEqualTo("0\n1\n2\n8\n0\n3\n1\n100\n3");
+	}
+
+	@Test
+	void compileAndRunIntegerDecodeFloat() throws Exception {
+		assertThat(compileAndRun(
+				"(print (multiple-value-list (integer-decode-float 1.5))) (print (multiple-value-list (integer-decode-float -0.5))) (print (multiple-value-list (integer-decode-float 0.0))) (print (multiple-value-list (integer-decode-float 2.0))) (print (multiple-value-list (integer-decode-float 6.5))) (print (nth-value 1 (integer-decode-float 1.5))) (print (funcall #'integer-decode-float 1.5))"))
+			.isEqualTo("(3 -1 1.0)\n(1 -1 -1.0)\n(0 0 1.0)\n(1 1 1.0)\n(13 -1 1.0)\n-1\n3");
+		assertThat(compileAndRun(
+				"(print (nth-value 0 (integer-decode-float 4.9406564584124654d-324))) (print (nth-value 1 (integer-decode-float 4.9406564584124654d-324)))"))
+			.isEqualTo("1\n-1074");
+	}
+
+	@Test
+	void compileAndRunRationalize() throws Exception {
+		assertThat(compileAndRun(
+				"(print (rationalize 1.5)) (print (rationalize 0.5)) (print (rationalize 2.0)) (print (rationalize 100.0)) (print (rationalize 0.0)) (print (rationalize 5)) (print (rationalize (/ 1 3))) (print (rationalize -2.5)) (print (funcall #'rationalize 1.5))"))
+			.isEqualTo("3/2\n1/2\n2\n100\n0\n5\n1/3\n-5/2\n3/2");
+		assertThat(compileAndRun("(print (rationalize 0.1)) (print (rationalize -0.1))")).isEqualTo("1/10\n-1/10");
+	}
+
+	@Test
 	void compileAndRunByteFieldOps() throws Exception {
 		assertThat(compileAndRun(
 				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))

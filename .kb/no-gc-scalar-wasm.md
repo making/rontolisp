@@ -451,7 +451,12 @@ default GC backend" is an answer that costs ~3x the bytes.
 op + function for cons/char/symbol/hash/`eval`/I/O/list iteration/global-`setq`/free var,
 yielding reachable defuns in discovery order with stable indices) -> `inferTypes` fixpoint ->
 `compileExpr` per body + a host wrapper. The three share one dispatch shape and expand the
-same macros the other backends do. Reuses `WasmExportCompiler.parse`/`isExportForm`/
+same macros the other backends do. An expansion shared with this backend must be
+DETERMINISTIC -- fixed temporary names, never an `MV_COUNTER` gensym: the fixpoint
+re-expands every reached call on every pass, so a fresh name per expansion registers a new
+local per pass and `changed` never settles (an infinite compile, first met by a
+population-count `logcount` loop in 2026-09; the established shape is a fixed
+`__name-` prefix, the `CHECK_TYPE_VAR` precedent). Reuses `WasmExportCompiler.parse`/`isExportForm`/
 `paramWasmTypes`/`resultWasmTypes` + the `T_*` constants; composes with `--optimize`
 (`WasmTreeShaker` is GC-agnostic, and `WasmPeephole` + `WasmInliner` + `WasmLocalSink` run in front of it here
 exactly as they do on the GC backend -- this is the backend the move pays on, the browser reactor

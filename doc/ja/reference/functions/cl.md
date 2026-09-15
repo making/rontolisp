@@ -164,6 +164,7 @@
 | `numerator` | `(numerator 3/4)` | `3`(整数自身がその分子) |
 | `denominator` | `(denominator 3/4)` | `4`(整数では `1`) |
 | `rational` | `(rational 1.5)` | `3/2` -- 浮動小数点数の正確な2進値。整数と分数は不変 |
+| `rationalize` | `(rationalize 0.1)` | `1/10` -- 前後半 ulp で近似する最も単純な有理数。整数と分数は不変 |
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
 | `arrayp` | `(arrayp "abc")` | `T` -- CL では文字列も配列。`vectorp` と同様 |
@@ -326,6 +327,7 @@
 | `logeqv` | `(logeqv 12 10)`、`(logeqv)`、`(logeqv 27 22 53)` | `-7`、`-1`、`56`(可変長引数のビット単位等価。左から畳み込む) |
 | `ash` | `(ash 1 4)`, `(ash 255 -4)` | `16`, `15`(算術シフト。非負のカウントなら左、それ以外は右) |
 | `logtest` | `(logtest 1 3)`, `(logtest 1 2)` | `T`, `NIL`(共通して立っているビットがあるか。`(not (zerop (logand a b)))`) |
+| `logcount` | `(logcount 7)`、`(logcount -1)` | `3`、`0`(非負整数の1のビット数、負の整数の0のビット数) |
 | `funcall` | `(funcall #'+ 3 4)` | 関数を引数に適用します。関数値(`#'f`、ラムダ)または関数を指すシンボル(`(funcall 'car ...)`)を受け付けます |
 | `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | 各要素に関数を適用し、新しいリストを返します |
 | `map` | `(map 'list #'+ '(1 2 3) '(10 20 30))` | `(11 22 33)`(シーケンス(リスト/文字列)を最短のものまでマッピングし、`'list`/`'string` の結果を構築、または副作用のため nil を返す) |
@@ -378,6 +380,7 @@
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- IEEE の意味論で `float × 2^n` |
 | `float-radix` | `(float-radix 1.0)` | `2` -- 浮動小数点表現の基数(常に2進) |
 | `decode-float` | `(decode-float 6.5)` | `0.8125`、`3`、`1.0` -- [1/2, 1) の仮数部、2 進指数部、符号 |
+| `integer-decode-float` | `(integer-decode-float 6.5)` | `13`、`-1`、`1.0` -- 整数の仮数部、2 進指数部、符号 |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |
 | `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ |
 | `use-package` | `(use-package :mypkg)` | パッケージを use リストに追加し、その外部シンボルを修飾なしで見えるようにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |

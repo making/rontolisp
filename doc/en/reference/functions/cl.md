@@ -164,6 +164,7 @@ page.
 | `numerator` | `(numerator 3/4)` | `3` (an integer is its own numerator) |
 | `denominator` | `(denominator 3/4)` | `4` (`1` for integers) |
 | `rational` | `(rational 1.5)` | `3/2` -- the exact binary value of a float; integers and ratios unchanged |
+| `rationalize` | `(rationalize 0.1)` | `1/10` -- the simplest rational within half a ulp; integers and ratios unchanged |
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
 | `arrayp` | `(arrayp "abc")` | `T` -- a string is an array in CL, like `vectorp` |
@@ -326,6 +327,7 @@ page.
 | `logeqv` | `(logeqv 12 10)`, `(logeqv)`, `(logeqv 27 22 53)` | `-7`, `-1`, `56` (variadic bitwise equivalence, folded left) |
 | `ash` | `(ash 1 4)`, `(ash 255 -4)` | `16`, `15` (arithmetic shift: left for a non-negative count, right otherwise) |
 | `logtest` | `(logtest 1 3)`, `(logtest 1 2)` | `T`, `NIL` (any bits set in common; `(not (zerop (logand a b)))`) |
+| `logcount` | `(logcount 7)`, `(logcount -1)` | `3`, `0` (1 bits of a non-negative, 0 bits of a negative) |
 | `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
 | `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |
 | `map` | `(map 'list #'+ '(1 2 3) '(10 20 30))` | `(11 22 33)` (map over sequences -- list/string -- up to the shortest, building a `'list`/`'string` result, or nil for effect) |
@@ -378,6 +380,7 @@ page.
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- `float × 2^n` with IEEE semantics |
 | `float-radix` | `(float-radix 1.0)` | `2` -- the radix of the float representation (always binary) |
 | `decode-float` | `(decode-float 6.5)` | `0.8125`, `3`, `1.0` -- significand in [1/2, 1), binary exponent, sign |
+| `integer-decode-float` | `(integer-decode-float 6.5)` | `13`, `-1`, `1.0` -- integer significand, binary exponent, sign |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |
 | `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` |
 | `use-package` | `(use-package :mypkg)` | add packages to a package's use list, so their external symbols are visible unqualified (a literal top-level call is a compile-time directive) |

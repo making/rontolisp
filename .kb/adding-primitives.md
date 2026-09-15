@@ -32,6 +32,29 @@ fail silently at the call site.
 8. If its trailing arguments are a BODY, an `am.ik.rontolisp.format.IndentRules` entry --
    without one `rontolisp format` lays the body out as a function call (`.kb/formatter.md`).
 
+## Adding a Prelude Function (pure Lisp over existing primitives)
+
+When the operator is expressible in Lisp over primitives every backend already has
+(`decode-float`, and `.todo/037` Slice C's `logcount`/`rationalize`/`integer-decode-float`),
+a `LispPreludeLibrary.SOURCES` defun replaces steps 2-5 above entirely: one implementation
+runs on the interpreter, the JVM and WASM-GC, is first-class for free (it IS a defun), and
+`values` in its tail gives multiple values through the syntactic tier
+(`.kb/multiple-values.md`) on every backend that carries them. The remaining checklist:
+`LispNames` constant + `PackageRegistry.CL_FUNCTIONS` entry (a name that gains an
+implementation moves OUT of `CL_EXPORTED_ONLY`, keeping the 978 externals pinned by
+`PackageRegistryTest`), a `ci-spec.yaml` case, and the step-7 docs. No `Environment` entry,
+no per-backend compiler, no wrapper entry.
+- The prelude defun goes through the same compile pipeline, so a call it contains that a
+  backend refuses (e.g. `rational` on `--no-gc`) refuses the caller too -- by reachability,
+  only when called. What the scalar backend CAN share gets a `LispMacroExpander`
+  lowering + a `NoGcWasmCompiler.expandMacro` case instead (Slice A pattern); what it
+  cannot (multiple values, ratios) is refused there by omission or by an explicit case
+  beside `RATIONAL`, like `rational` itself.
+- A shared lowering must be DETERMINISTIC -- fixed temporary names, never an
+  `MV_COUNTER` gensym: `--no-gc`'s `inferTypes` fixpoint re-expands every reached call
+  on every pass, so a fresh name per expansion registers a new local per pass and the
+  `changed` flag never settles (an infinite compile). See `.kb/no-gc-scalar-wasm.md`.
+
 ## Adding a Macro
 
 Macros expand into existing primitives at the AST level; `LispMacroExpander` is shared by the

@@ -9643,6 +9643,55 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void logcount() throws Exception {
+		assertThat(compileAndRunPrelude(
+				"(print (logcount 0)) (print (logcount 1)) (print (logcount 3)) (print (logcount 255)) (print (logcount -1)) (print (logcount -8)) (print (funcall #'logcount 7))"))
+			.isEqualTo("0\n1\n2\n8\n0\n3\n3");
+	}
+
+	@Test
+	void integerDecodeFloat() throws Exception {
+		// Only small significands are pinned: the significand of a general
+		// double leaves the i31 range, like any other limb-tier integer.
+		assertThat(compileAndRunPrelude(
+				"(print (multiple-value-list (integer-decode-float 1.5))) (print (multiple-value-list (integer-decode-float -0.5))) (print (multiple-value-list (integer-decode-float 0.0))) (print (multiple-value-list (integer-decode-float 2.0))) (print (multiple-value-list (integer-decode-float 6.5))) (print (nth-value 1 (integer-decode-float 1.5))) (print (funcall #'integer-decode-float 1.5))"))
+			.isEqualTo("(3 -1 1.0)\n(1 -1 -1.0)\n(0 0 1.0)\n(1 1 1.0)\n(13 -1 1.0)\n-1\n3");
+	}
+
+	@Test
+	void rationalize() throws Exception {
+		// Only answers that involve no fraction wider than i31 are pinned:
+		// integer-valued floats answer their exact integer through the fast
+		// path, integers and ratios pass through untouched. A fractional float
+		// needs big-denominator interval fractions, which trap here fail-stop
+		// exactly as (/ 1 (ash 1 52)) does -- the 0.1-scale values stay on the
+		// interpreter/JVM tests above.
+		assertThat(compileAndRunPrelude(
+				"(print (rationalize 2.0)) (print (rationalize 100.0)) (print (rationalize 1024.0)) (print (rationalize 0.0)) (print (rationalize 5)) (print (rationalize -7)) (print (rationalize (/ 1 3))) (print (funcall #'rationalize 100.0))"))
+			.isEqualTo("2\n100\n1024\n0\n5\n-7\n1/3\n100");
+	}
+
+	@Test
+	void noGcLogcountAnswers() throws Exception {
+		// --no-gc lowers logcount to its scalar population-count loop. First-class
+		// calls do not exist on this backend (no funcall), and integer-decode-float
+		// / rationalize are refused outright (see NoGcWasmCompilerTest).
+		String program = """
+				(defun show ()
+				  (print (logcount 0))
+				  (print (logcount 255))
+				  (print (logcount -8))
+				  (print (logcount 123456789)))
+				(rontolisp:wasm-export 'show :params '() :returns :void)
+				""";
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show")).isEqualTo("""
+				0
+				8
+				3
+				16""");
+	}
+
+	@Test
 	void byteFieldOps() throws Exception {
 		assertThat(compileAndRun(
 				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))

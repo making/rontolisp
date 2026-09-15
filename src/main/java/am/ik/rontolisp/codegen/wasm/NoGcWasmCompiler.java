@@ -7493,6 +7493,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: rational numbers are not supported in function '" + fnName
 					+ "': (" + name + " ...) (the scalar backend is for pure numeric exports)");
 		}
+		if (LispNames.INTEGER_DECODE_FLOAT.equals(name) || LispNames.RATIONALIZE.equals(name)) {
+			// integer-decode-float's second and third values have nowhere to go
+			// (values answers its primary only here) and rationalize's answer is a
+			// ratio, so both are refused outright like rational above -- never a
+			// silently dropped value, never a float masquerading as exact.
+			throw new UnsupportedOperationException(
+					"--no-gc: " + name.toLowerCase(java.util.Locale.ROOT) + " is not supported in function '" + fnName
+							+ "': (" + name + " ...) (the scalar backend is for pure numeric exports)");
+		}
 		if (LispNames.LET.equals(name)) {
 			collectLet(cons, bound, defuns, callees, fnName);
 			return;
@@ -7798,6 +7807,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.LOGNAND, LispNames.LOGNOR -> LispMacroExpander.expandLogComplement(cons);
 			case LispNames.LOGEQV -> LispMacroExpander.expandLogEqv(cons);
 			case LispNames.FLOAT_RADIX -> LispMacroExpander.expandFloatRadix(cons);
+			// logcount lowers to the scalar population-count loop (a negative
+			// operand complemented first); integer-decode-float and rationalize
+			// stay out: the former's second and third values and the latter's
+			// ratio answer have no representation in the scalar value model
+			// (refused in collectCallsCons, like rational).
+			case LispNames.LOGCOUNT -> LispMacroExpander.expandLogcount(cons);
 			default -> null;
 		};
 	}
