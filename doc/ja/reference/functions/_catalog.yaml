@@ -45,6 +45,7 @@ categories:
       - { slug: fround, name: "fround" }
       - { slug: numerator, name: "numerator" }
       - { slug: denominator, name: "denominator" }
+      - { slug: rational, name: "rational" }
   - title: "数学関数"
     index_page: reference/functions/cl.md
     functions:

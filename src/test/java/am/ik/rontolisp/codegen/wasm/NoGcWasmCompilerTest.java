@@ -434,6 +434,20 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void rejectsRational() {
+		// The scalar value model (unboxed i64/f64) has no ratio representation,
+		// so rational is refused at compile time -- never a trap, never a
+		// float masquerading as an exact answer (.todo/037 Slice B).
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (rational n))
+				(rontolisp:wasm-export 'f :params '(:float) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rational numbers are not supported")
+			.hasMessageContaining("RATIONAL")
+			.hasMessageContaining("f");
+	}
+
+	@Test
 	void rejectsFreeVariable() {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (+ n missing))

@@ -162,6 +162,14 @@ final class JvmNumericRuntimeBuilder {
 	 */
 	static final String FRAT = "_frat";
 
+	/**
+	 * The {@code rational} built-in: integers and ratios answer themselves, a finite
+	 * {@code Double} normalizes through {@code _frat} + {@code _rat}, and anything else
+	 * (a complex, a non-finite float, a non-number) throws the interpreter's text for its
+	 * kind.
+	 */
+	static final String RATIONAL = "_rational";
+
 	/** Bitwise AND ({@code logand}) with a {@code long} fast path. */
 	static final String LOGAND = "_logand";
 
@@ -415,6 +423,7 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		ConstantPool.StringConstant divZeroStr = cp.addString("Division by zero");
 		ConstantPool.StringConstant ashTooLargeStr = cp.addString("ash: shift count too large");
+		ConstantPool.StringConstant rationalNonFiniteStr = cp.addString("rational of a non-finite float is undefined");
 
 		// The non-number landing (_big / _dbl / _abs's BigInteger arm): a plain
 		// RuntimeException carrying "Expected integer|number, got: <prin1>" -- the
@@ -505,6 +514,7 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nRatRound = cp.addUtf8(RAT_ROUND);
 		Utf8Constant nFdiv = cp.addUtf8(FDIV);
 		Utf8Constant nFrat = cp.addUtf8(FRAT);
+		Utf8Constant nRational = cp.addUtf8(RATIONAL);
 		Utf8Constant nLogand = cp.addUtf8(LOGAND);
 		Utf8Constant nLogior = cp.addUtf8(LOGIOR);
 		Utf8Constant nLogxor = cp.addUtf8(LOGXOR);
@@ -549,6 +559,7 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant dFdiv = cp.addUtf8("(" + OBJ + OBJ + "I)" + OBJ);
 		MethodrefConstant rFdiv = cp.addMethodref(thisClass, cp.addNameAndType(nFdiv, dFdiv));
 		MethodrefConstant rFrat = cp.addMethodref(thisClass, cp.addNameAndType(nFrat, dUnary));
+		MethodrefConstant rRational = cp.addMethodref(thisClass, cp.addNameAndType(nRational, dUnary));
 		MethodrefConstant rLogand = cp.addMethodref(thisClass, cp.addNameAndType(nLogand, dBinary));
 		MethodrefConstant rLogior = cp.addMethodref(thisClass, cp.addNameAndType(nLogior, dBinary));
 		MethodrefConstant rLogxor = cp.addMethodref(thisClass, cp.addNameAndType(nLogxor, dBinary));
@@ -615,6 +626,8 @@ final class JvmNumericRuntimeBuilder {
 				biCompareTo, biTestBit, biOne, biAdd));
 		methods.add(buildFrat(nFrat, dUnary, doubleClass, longClass, bigClass, numberClass, numDoubleValue, dblIsFinite,
 				bigDecClass, bdInitDouble, bdUnscaled, bdScale, biTen, biPow));
+		methods.add(buildRational(nRational, dUnary, longClass, bigClass, doubleClass, ratArrClass, rFrat, rRat,
+				typeErrRefs, rationalNonFiniteStr, rcClass, hasComplex));
 		methods.add(buildFdiv(nFdiv, dFdiv, doubleClass, numberClass, numDoubleValue, ratArrClass, rFrat, rDiv,
 				rRatTrunc, rRatFloor, rRatCeil, rRatRound, dblIsInfinite, dblIsFinite, longClass, longValue, bigClass,
 				biSignum, longValueOf));
@@ -663,6 +676,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(RAT_ROUND, rRatRound);
 		ops.put(FDIV, rFdiv);
 		ops.put(FRAT, rFrat);
+		ops.put(RATIONAL, rRational);
 		ops.put(LOGAND, rLogand);
 		ops.put(LOGIOR, rLogior);
 		ops.put(LOGXOR, rLogxor);
@@ -2620,6 +2634,104 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.ARETURN);
 		return new NumericMethod(name, desc, c, 5, 3, List.of());
+	}
+
+	// _rational(Object x): integers and ratios answer themselves; a finite Double
+	// normalizes through _frat + _rat (the pair is NOT normalized, so it cannot be
+	// answered directly -- _frat is the decomposition, _rat the normalization). A
+	// complex or any other non-real takes the real funnel (the interpreter's
+	// "Expected real number" text, prefix-classified as a type-error like the
+	// interpreter's throw); a NaN or an infinity throws the interpreter's
+	// non-finite text instead.
+	private static NumericMethod buildRational(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
+			ClassConstant bigClass, ClassConstant doubleClass, ClassConstant ratArrClass, MethodrefConstant rFrat,
+			MethodrefConstant rRat, TypeErrRefs typeErrRefs, ConstantPool.StringConstant nonFiniteStr,
+			@Nullable ClassConstant rcClass, @Nullable FieldrefConstant hasComplex) {
+		List<Integer> c = new ArrayList<>();
+		if (rcClass != null) {
+			int noHolder = emitNoHolderJump(c, hasComplex);
+			c.add(Opcode.ALOAD_0);
+			c.add(Opcode.INSTANCEOF);
+			JvmRuntimeBuilder.emitU2(c, rcClass.index());
+			int ifNotComplex = c.size();
+			c.add(Opcode.IFEQ);
+			JvmRuntimeBuilder.emitU2(c, 0);
+			emitRealErrThrow(c, typeErrRefs);
+			JvmRuntimeBuilder.patchBranch(c, ifNotComplex, c.size());
+			JvmRuntimeBuilder.patchBranch(c, noHolder, c.size());
+		}
+		// A ratio is already exact.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
+		int ifNotRat = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotRat, c.size());
+		// So is an integer.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		int ifLong = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, bigClass.index());
+		int ifNotInt = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifLong, c.size());
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotInt, c.size());
+		// A Double goes through _frat, which answers null for a NaN or an infinity.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rFrat.index());
+		c.add(Opcode.DUP);
+		int ifFinite = c.size();
+		c.add(Opcode.IFNONNULL);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.POP);
+		c.add(Opcode.NEW);
+		JvmRuntimeBuilder.emitU2(c, typeErrRefs.rte().index());
+		c.add(Opcode.DUP);
+		JvmRuntimeBuilder.emitLdc(c, nonFiniteStr.index());
+		c.add(Opcode.INVOKESPECIAL);
+		JvmRuntimeBuilder.emitU2(c, typeErrRefs.rteInit().index());
+		c.add(Opcode.ATHROW);
+		JvmRuntimeBuilder.patchBranch(c, ifFinite, c.size());
+		// The verifier only sees _frat's Object descriptor, so the pair is cast
+		// to its array class before the elements load (a bare aaload on the
+		// merged Object is too lossy for the StackMapAugmenter).
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
+		c.add(Opcode.ASTORE_1);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.AALOAD);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, bigClass.index());
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.AALOAD);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, bigClass.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRat.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotDouble, c.size());
+		emitRealErrThrow(c, typeErrRefs);
+		return new NumericMethod(name, desc, c, 4, 2, List.of());
 	}
 
 	/** Pushes {@code ((Number) arg0).doubleValue()}. */

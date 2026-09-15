@@ -7486,6 +7486,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: complex numbers are not supported in function '" + fnName
 					+ "': (" + name + " ...) (the scalar backend is for pure numeric exports)");
 		}
+		if (LispNames.RATIONAL.equals(name)) {
+			// The unboxed i64/f64 value model has no ratio representation ((/)
+			// never produces one here either), so rational is refused outright --
+			// never a trap, never a float masquerading as an exact answer.
+			throw new UnsupportedOperationException("--no-gc: rational numbers are not supported in function '" + fnName
+					+ "': (" + name + " ...) (the scalar backend is for pure numeric exports)");
+		}
 		if (LispNames.LET.equals(name)) {
 			collectLet(cons, bound, defuns, callees, fnName);
 			return;

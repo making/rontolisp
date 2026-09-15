@@ -7383,6 +7383,23 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("denominator expects a rational, got: " + arg.print());
 		}));
+		env.defineFunction(LispNames.RATIONAL, new LispFunction(LispNames.RATIONAL, args -> {
+			// The exact rational the real IS: identity for integers and ratios,
+			// the exact binary value for a float. A complex signals through the
+			// real funnel; any other non-real is a type-error (ANSI
+			// rational.error.4 checks every *mini-universe* member this way).
+			requireArgCount(LispNames.RATIONAL, args, 1);
+			LispVal arg = args.get(0);
+			requireRealOperand(LispNames.RATIONAL, arg);
+			if (arg instanceof LispInteger || arg instanceof LispBigInteger || arg instanceof LispRatio) {
+				return arg;
+			}
+			if (arg instanceof LispDouble d) {
+				return rationalOfDouble(d.value());
+			}
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					ClosRegistry.EXPECTED_REAL_MESSAGE_PREFIX + arg.print());
+		}));
 	}
 
 	/**
@@ -7467,6 +7484,44 @@ public final class Environment implements Scope {
 	private static LispVal normalizeBig(BigInteger value) {
 		// bitLength() < 64 holds exactly for the signed long range [-2^63, 2^63-1].
 		return value.bitLength() < 64 ? new LispInteger(value.longValue()) : new LispBigInteger(value);
+	}
+
+	/**
+	 * Returns the exact rational a finite double IS, from its raw IEEE 754 bits: a normal
+	 * value is {@code (2^52 + mantissa) * 2^(biased-1075)}, a subnormal (or zero) is
+	 * {@code mantissa * 2^-1074}. The sign rides on the mantissa, so a zero mantissa
+	 * answers plain zero regardless of the sign bit. A NaN or an infinity has no exact
+	 * rational and signals (ANSI never feeds one -- *floats* holds no non-finite values
+	 * -- so the message is free).
+	 * @param value the double to convert
+	 * @return the exact rational value
+	 */
+	private static LispVal rationalOfDouble(double value) {
+		if (!Double.isFinite(value)) {
+			throw new LispEvalException("rational of a non-finite float is undefined");
+		}
+		long bits = Double.doubleToRawLongBits(value);
+		int rawExp = (int) ((bits >>> 52) & 0x7FF);
+		BigInteger mant;
+		int exp;
+		if (rawExp == 0) {
+			mant = BigInteger.valueOf(bits & 0xFFFFFFFFFFFFFL);
+			exp = -1074;
+		}
+		else {
+			mant = BigInteger.valueOf(bits & 0xFFFFFFFFFFFFFL).setBit(52);
+			exp = rawExp - 1075;
+		}
+		if (bits < 0) {
+			mant = mant.negate();
+		}
+		if (mant.signum() == 0) {
+			return new LispInteger(0);
+		}
+		if (exp >= 0) {
+			return normalizeBig(mant.shiftLeft(exp));
+		}
+		return LispRatio.valueOf(mant, BigInteger.ONE.shiftLeft(-exp));
 	}
 
 	private static LispVal addBig(List<LispVal> args) {

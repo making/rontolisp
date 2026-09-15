@@ -163,6 +163,7 @@
 | `rationalp` | `(rationalp 1/2)` | `t`(整数とratio) |
 | `numerator` | `(numerator 3/4)` | `3`(整数自身がその分子) |
 | `denominator` | `(denominator 3/4)` | `4`(整数では `1`) |
+| `rational` | `(rational 1.5)` | `3/2` -- 浮動小数点数の正確な2進値。整数と分数は不変 |
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
 | `arrayp` | `(arrayp "abc")` | `T` -- CL では文字列も配列。`vectorp` と同様 |

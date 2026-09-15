@@ -9631,6 +9631,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void rational() throws Exception {
+		// Only the exactly representable range is pinned: a ratio whose reduced
+		// components leave the i31 range wraps on this backend, exactly as (/)
+		// of the same integers does (WasmRatioRuntimeBuilder), so 0.1-scale
+		// values stay on the interpreter/JVM tests above.
+		assertThat(compileAndRun(
+				"(print (rational 5)) (print (rational 1.5)) (print (rational -2.5)) (print (rational 0.5)) (print (rational 2.0)) (print (rational 0.0)) (print (rational (/ 1 3))) (print (funcall #'rational 1.5))"))
+			.isEqualTo("5\n3/2\n-5/2\n1/2\n2\n0\n1/3\n3/2");
+		assertThat(compileAndRun("(print (= (rational (ash 1 100)) (ash 1 100)))")).isEqualTo("T");
+	}
+
+	@Test
 	void byteFieldOps() throws Exception {
 		assertThat(compileAndRun(
 				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))

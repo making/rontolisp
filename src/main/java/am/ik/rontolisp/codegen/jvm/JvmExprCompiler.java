@@ -1508,6 +1508,7 @@ final class JvmExprCompiler {
 				case LispNames.RATIONALP -> JvmRationalpCompiler.compile(cons, ctx, className);
 				case LispNames.NUMERATOR -> JvmRatioAccessorCompiler.compileNumerator(cons, ctx, className);
 				case LispNames.DENOMINATOR -> JvmRatioAccessorCompiler.compileDenominator(cons, ctx, className);
+				case LispNames.RATIONAL -> JvmRationalCompiler.compile(cons, ctx, className);
 				case LispNames.SYMBOLP -> JvmSymbolpCompiler.compile(cons, ctx, className);
 				case LispNames.STRINGP -> JvmStringpCompiler.compile(cons, ctx, className);
 				case LispNames.LISTP -> JvmListpCompiler.compile(cons, ctx, className);

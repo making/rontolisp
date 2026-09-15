@@ -1852,6 +1852,7 @@ final class WasmExprCompiler {
 				case LispNames.NUMERATOR -> WasmRatioAccessorCompiler.compile(cons, ctx, WasmLispCompiler.FUNC_RAT_NUM);
 				case LispNames.DENOMINATOR ->
 					WasmRatioAccessorCompiler.compile(cons, ctx, WasmLispCompiler.FUNC_RAT_DEN);
+				case LispNames.RATIONAL -> WasmRationalCompiler.compile(cons, ctx);
 				case LispNames.SYMBOLP -> WasmSymbolpCompiler.compile(cons, ctx);
 				case LispNames.STRINGP -> WasmStringpCompiler.compile(cons, ctx);
 				case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);

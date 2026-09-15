@@ -45,6 +45,7 @@ categories:
       - { slug: fround, name: "fround" }
       - { slug: numerator, name: "numerator" }
       - { slug: denominator, name: "denominator" }
+      - { slug: rational, name: "rational" }
   - title: "Math Functions"
     index_page: reference/functions/cl.md
     functions:

@@ -2912,6 +2912,13 @@ public final class LispNames {
 	/** The {@code denominator} built-in function. */
 	public static final String DENOMINATOR = "DENOMINATOR";
 
+	/**
+	 * The {@code rational} built-in function: the exact rational a real number IS --
+	 * identity for integers and ratios, the exact binary value for a float
+	 * ({@code (rational 0.1)} is {@code 3602879701896397/36028797018963968}).
+	 */
+	public static final String RATIONAL = "RATIONAL";
+
 	// Convenience macros
 
 	/** The {@code 1+} macro. */

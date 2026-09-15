@@ -5441,6 +5441,37 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRational() {
+		// Integers and ratios are already exact: identity.
+		assertThat(eval("(rational 5)").print()).isEqualTo("5");
+		assertThat(eval("(rational -3)").print()).isEqualTo("-3");
+		assertThat(eval("(= (rational (ash 1 100)) (ash 1 100))").print()).isEqualTo("T");
+		assertThat(eval("(rational (/ 1 3))").print()).isEqualTo("1/3");
+		// Floats answer their exact binary value.
+		assertThat(eval("(rational 1.5)").print()).isEqualTo("3/2");
+		assertThat(eval("(rational -2.5)").print()).isEqualTo("-5/2");
+		assertThat(eval("(rational 0.5)").print()).isEqualTo("1/2");
+		assertThat(eval("(rational 2.0)").print()).isEqualTo("2");
+		assertThat(eval("(rational 0.0)").print()).isEqualTo("0");
+		assertThat(eval("(rational -0.0)").print()).isEqualTo("0");
+		assertThat(eval("(rational 0.1)").print()).isEqualTo("3602879701896397/36028797018963968");
+		assertThat(eval("(rational 2.220446049250313e-16)").print()).isEqualTo("1/4503599627370496");
+		// A subnormal is exact too; compared with = so the 300-digit
+		// denominator never prints (quadratic print hang).
+		assertThat(eval("(= (rational 4.9406564584124654d-324) (/ 1 (ash 1 1074)))").print()).isEqualTo("T");
+		assertThat(eval("(funcall #'rational 1.5)").print()).isEqualTo("3/2");
+		assertThatThrownBy(() -> eval("(rational)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(rational 1 2)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 1 argument");
+		assertThatThrownBy(() -> eval("(rational \"s\")")).isInstanceOf(LispEvalException.class);
+		assertThatThrownBy(() -> eval("(rational #c(1 2))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Expected real number");
+		// Neither infinity nor NaN is a rational: Math.scalb overflows to one.
+		assertThatThrownBy(() -> eval("(rational (scale-float 1.0 2097))")).isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
 	void evalByteFieldOps() {
 		assertThat(eval("(byte-size (byte 8 3))").print()).isEqualTo("8");
 		assertThat(eval("(byte-position (byte 8 3))").print()).isEqualTo("3");

@@ -1,3 +1,32 @@
+> **Update 2026-09-15 (Slice B `rational` landed):** exact rational on all four
+> backends -- interpreter `Environment` bit decomposition + JVM `_rational`
+> (`_frat` + `_rat`, new `JvmRationalCompiler`) + WASM-GC `WasmRationalCompiler`
+> (bit decomposition through the existing `_int_new`/`_big_ash` + `_rat_div`,
+> so the answer is exactly what `(/ num den)` of the same integers would be)
+> + no-GC compile-time refusal (no ratio representation; never a trap, never a
+> float masquerading as exact) + `BuiltinFunctionWrappers` first-class entry +
+> `CL_FUNCTIONS` classification (`RATIONAL` was already external via `CL_TYPES`,
+> so the 978-name externals set is unchanged) + `ci-spec.yaml` case + EN/JA
+> docs. Measured as a diff of failing ANSI test NAMES: **numbers 274 -> 259
+> (15 fully fixed), misc 59 -> 52 (7 fully fixed), 0 regressed** (22 total).
+> Fully fixed: `*.7`, `*.10`, `<=.17`, `>.17`, `<.18`, `>=.18`,
+> `BIGNUM.FLOAT.COMPARE.5A/.5B/.6A/.6B`, `RATIONAL.2`, `RATIONAL.ERROR.1/.2/.3`,
+> `SQRT.9`, `MISC.228A/.283/.362/.367/.376/.380/.381`. Three second reasons
+> surfaced (all still failing under a new line, zero true regressions):
+> (1) the other eight `*.17/*.18` + eight `BIGNUM.*` now FAIL on float-vs-ratio
+> `=`/`compare` semantics -- `(= 1.0 (+ 1 tiny-ratio))` answers T here where
+> SBCL answers NIL; the `rational` values themselves are exact (probed:
+> `(rational 3.4e38)` is `340282346638528859811704183484516925440`, exact).
+> (2) `RATIONAL.3` fails on the `ratio -> float` round trip
+> (`LispRatio.doubleValue` goes through DECIMAL64, 16 digits) -- pre-existing,
+> adjacent to `rational` but not in it. (3) `RATIONAL.ERROR.4` now reaches the
+> universe cascade (`*MINI-UNIVERSE*` unbound, `.todo/715` §1 out of scope);
+> `MISC.382` moved to `LDB-TEST` undefined the same way. `SQRT.17` FAILs in
+> both runs with different draws (the known `random` flake, failing on
+> baseline too). WASM-GC pins only the exactly representable range: a ratio
+> whose reduced components leave i31 wraps there, exactly as `(/ a b)` of the
+> same integers does -- no new failure mode.
+>
 > **Update 2026-09-15 (ash huge-count defect closed):** the `(int) count`
 > narrowing wrapped an out-of-int-range negative count positive and built a
 > monster bignum. Fixed wide-first on the interpreter (`Environment`), the JVM
@@ -42,8 +71,9 @@
 **Status:** partially implemented. Shipped: `/=`, lite `complex`, float-type
 `coerce`, `*read-default-float-format*` (2026-07-05); full complex tower
 (.todo/751-754); `float-radix`, `logeqv`, `lognor`, `lognand`,
-`deposit-field` (Slice A, 2026-09-14); the `ash` huge-count fix (2026-09-15).
-Open: Slice B/C plus the watch-list in the top banner. Full complex numbers and
+`deposit-field` (Slice A, 2026-09-14); the `ash` huge-count fix (2026-09-15);
+`rational` (Slice B, 2026-09-15).
+Open: Slice C plus the watch-list in the top banner. Full complex numbers and
 time decomposition are niche (low priority).
 
 ## What's missing
@@ -134,7 +164,7 @@ CL has a full complex number tower. RontoLisp implements it in four steps:
 
 ### Implementation approach (remaining)
 
-1. `rational` — convert float to exact ratio (Easy, useful; Slice B).
+1. `rational` — convert float to exact ratio (Easy, useful; Slice B, DONE 2026-09-15).
 2. `rationalize` — continued fractions (Medium; Slice C).
 3. `logcount`, `integer-decode-float` (multiple values, `.todo/032`; Slice C).
 4. `realp`, float constants (`float-digits`, `float-sign`,

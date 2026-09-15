@@ -163,6 +163,7 @@ page.
 | `rationalp` | `(rationalp 1/2)` | `t` (integers and ratios) |
 | `numerator` | `(numerator 3/4)` | `3` (an integer is its own numerator) |
 | `denominator` | `(denominator 3/4)` | `4` (`1` for integers) |
+| `rational` | `(rational 1.5)` | `3/2` -- the exact binary value of a float; integers and ratios unchanged |
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
 | `arrayp` | `(arrayp "abc")` | `T` -- a string is an array in CL, like `vectorp` |

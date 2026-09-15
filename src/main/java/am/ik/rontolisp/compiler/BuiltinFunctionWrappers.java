@@ -1536,7 +1536,7 @@ public final class BuiltinFunctionWrappers {
 			// Type conversion (arity 1)
 			unary(LispNames.FLOAT), unary(LispNames.TRUNCATE), unary(LispNames.FLOOR), unary(LispNames.CEILING),
 			unary(LispNames.ROUND), unary(LispNames.FFLOOR), unary(LispNames.FCEILING), unary(LispNames.FROUND),
-			unary(LispNames.FTRUNCATE),
+			unary(LispNames.FTRUNCATE), unary(LispNames.RATIONAL),
 			// Math/IO/list (arity 1)
 			// print / prin1 / princ carry the optional stream: the wrapper forwards it
 			// unconditionally, since an omitted stream and an explicit nil are the same

@@ -76,7 +76,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | `loop` -- four slices landed 2026-09-14 for 113 (uninterned `#:kw` 45, NIL no-binding 15, any-order numeric 12, named-loop block 39; `iteration` 63.6% -> 77.0%, 0 regressed); left: missing `program-error`/`type-error` validation ~30, hash/`across` destructuring ~9, dotted `append` ~5, typed init ~6 | ~50 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
-| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest) | tbd | `.todo/037` |
+| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed) | tbd | `.todo/037` |
 | a `setf` place the expander does not support | 79 | `.todo/001`, `.todo/041` |
 | `pprint-tabular`/`-fill`/`-linear` (27+) and `setf readtable-case` | ~140 | `.todo/041`, `.todo/001` |
 | `read-from-string`'s lambda list (`eof-error-p`, `:start`/`:end`, `:preserve-whitespace`) -- six `READ-FROM-STRING.*` tests; the INDEX landed 2026-09-13 | 6 | `.todo/214` |
@@ -128,6 +128,17 @@ runtime package API and complex numbers. The corpus uses only
 Only the entries whose FINDING outlives the change are kept; the rest are in
 `.todo/history/`.
 
+- **2026-09-15, `.todo/037` numbers Slice B (`rational`)** -- exact rational on
+  all four backends (interpreter bit decomposition, JVM `_rational` over `_frat`
+  + `_rat`, WASM-GC decomposition through `_int_new`/`_big_ash` + `_rat_div`,
+  no-GC compile-time refusal). **numbers 274 -> 259 (15 fixed), misc 59 -> 52
+  (7 fixed), 0 regressed**, as a diff of failing test NAMES. Three second
+  reasons surfaced: float-vs-ratio `=` semantics (eight `*.17/*.18` + eight
+  `BIGNUM.*` now FAIL -- `(= 1.0 (+ 1 tiny-ratio))` is T here, NIL in SBCL;
+  the `rational` values probed exact), the ratio->float round trip
+  (`RATIONAL.3`, via DECIMAL64 `doubleValue`), and the universe cascade
+  (`RATIONAL.ERROR.4`, `*MINI-UNIVERSE*` unbound -- §1 out of scope).
+  `SQRT.17` FAILs in both runs on different draws (the known `random` flake).
 - **2026-09-15, `.todo/037` ash huge-count defect** -- `(ash a (min 0 a))` with
   `a = -2878148992` wrapped `(int) count` positive and built a monster bignum.
   Wide-first on the interpreter, the JVM (`_ash` + fused `_fxAsh`) and `--no-gc`
