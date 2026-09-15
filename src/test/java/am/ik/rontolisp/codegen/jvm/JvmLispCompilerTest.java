@@ -2989,9 +2989,10 @@ class JvmLispCompilerTest {
 		// probe used to be with-current-directory; it grew its own expansion over
 		// call-with-current-directory, so the probe moved to a stream macro nothing
 		// implements yet -- with-input-file until .todo/359 gave it one over
-		// call-with-input-file, with-null-input (.todo/360) now.
+		// call-with-input-file, with-null-input until .todo/360 gave it one --
+		// with-saved-deferred-warnings (.todo/365's deferred-warnings stub) now.
 		assertThat(compileAndRun("""
-				(print (handler-case (uiop:with-null-input (s) (defun um-probe () 1))
+				(print (handler-case (uiop:with-saved-deferred-warnings () (defun um-probe () 1))
 				         (uiop:not-implemented-error () :signalled)))
 				(print (fboundp 'um-probe))
 				""")).isEqualTo("""
