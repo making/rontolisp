@@ -76,7 +76,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | `loop` -- four slices landed 2026-09-14 for 113 (uninterned `#:kw` 45, NIL no-binding 15, any-order numeric 12, named-loop block 39; `iteration` 63.6% -> 77.0%, 0 regressed); left: missing `program-error`/`type-error` validation ~30, hash/`across` destructuring ~9, dotted `append` ~5, typed init ~6 | ~50 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
-| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed; Slice C closed `logcount`/`rationalize`/`integer-decode-float` for 16 numbers + 15 misc, 0 regressed; the ratio->float conversion closed `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12` and `*.12` for 6 numbers, 0 regressed; 2026-09-15 exact float-vs-exact comparison closed the eight `*.17`/`*.18` + eight `BIGNUM.FLOAT.COMPARE.1A-4B` for 16 numbers, 0 regressed; 2026-09-15 the --no-gc exact i64-vs-f64 path landed (not ANSI-measured: numbers 220 -> 220, misc 38 -> 38, 0 regressed -- nothing left here; the WASM-GC exact path is not ANSI-measured and lives on as `.todo/037` watch-list) | tbd | `.todo/037` |
+| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed; Slice C closed `logcount`/`rationalize`/`integer-decode-float` for 16 numbers + 15 misc, 0 regressed; the ratio->float conversion closed `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12` and `*.12` for 6 numbers, 0 regressed; 2026-09-15 exact float-vs-exact comparison closed the eight `*.17`/`*.18` + eight `BIGNUM.FLOAT.COMPARE.1A-4B` for 16 numbers, 0 regressed; 2026-09-15 the --no-gc exact i64-vs-f64 path landed (not ANSI-measured: numbers 220 -> 220, misc 38 -> 38, 0 regressed -- nothing left here) and 2026-09-15 the WASM-GC exact float-vs-exact path landed (also not ANSI-measured, same 220/38 no-op -- exactness everywhere now; near ties stay out of ci-spec since --no-gc cannot spell a ratio) | tbd | `.todo/037` |
 | a `setf` place the expander does not support | 79 | `.todo/001`, `.todo/041` |
 | `pprint-tabular`/`-fill`/`-linear` (27+) and `setf readtable-case` | ~140 | `.todo/041`, `.todo/001` |
 | `read-from-string`'s lambda list (`eof-error-p`, `:start`/`:end`, `:preserve-whitespace`) -- six `READ-FROM-STRING.*` tests; the INDEX landed 2026-09-13 | 6 | `.todo/214` |
@@ -128,6 +128,24 @@ runtime package API and complex numbers. The corpus uses only
 Only the entries whose FINDING outlives the change are kept; the rest are in
 `.todo/history/`.
 
+- **2026-09-15, `.todo/037` WASM-GC exact float-vs-exact comparison** -- a float
+  beside an exact integer (any tier, limb included) or ratio compares exact
+  values on the GC backend (`_rat_cmp_bits` decomposes the finite float from its
+  raw bits and cross-multiplies through `_int_new`/`_big_ash`/`_big_mul`/`_big_cmp`
+  alone, no new runtime function; both-float pairs keep the f64 ladder, NaN
+  unordered, infinities by side, non-exact operands keep the `_as_f64` traps),
+  and the comparison/min-max call sites take the unboxed f64 path only when BOTH
+  operands are `isDefinitelyDouble` (the JVM gate's distinction). **numbers 220
+  -> 220, misc 38 -> 38, 0 regressed** (interpreter untouched; this path is not
+  ANSI-measured), as a diff of failing test NAMES, plus a 4,412-case
+  interpreter-vs-WASM-GC differential sweep with 0 mismatches and byte-identical
+  pure-int/pure-double modules (a mixed module carries ~+1.5-1.9 KB). Two traps:
+  the cross-multiplication reads (FL vs EX), so a float in b position needs the
+  RESULT signum flipped (negating one side is not the comparison's negation),
+  and an empty ELSE on that flip's `if` breaks `WasmRefTypeFolder` (both arms
+  explicit). Pinned by
+  `WasmLispCompilerIntegrationTest#floatExactComparisonNearTie`; design in
+  `.kb/wasm-bignum.md`.
 - **2026-09-15, `.todo/037` --no-gc exact i64-vs-f64 comparison** -- a mixed
   int/float `=`/`<`/`>`/`<=`/`>=` compares exact values on the scalar backend
   (the float's exact binary value against the i64, bit-decomposed inline per
@@ -153,12 +171,13 @@ Only the entries whose FINDING outlives the change are kept; the rest are in
   `*.17`/`*.18` + `BIGNUM.FLOAT.COMPARE.1A-4B`, the latter deterministic now, not draw
   luck), misc unchanged, 0 regressed**, as a diff of failing test NAMES. `SQRT.17`
   flipped by draw luck and is excluded (its operands stay under 2^53, where both
-  semantics agree -- verified, not assumed). No-GC/WASM-GC keep f64 comparison with
-  representable-range agreement pins only; a near tie still rounds to equality there
-  (`(= 0.6666666666666666 2/3)` is T on WASM-GC, NIL on interpreter/JVM -- even tiny
-  ratios sit strictly inside half an ulp, so no component bound saves f64), and the
-  exact paths for both are `.todo/037` remaining work with designs recorded
-  (`.kb/wasm-bignum.md`, `.kb/jvm-double-arithmetic.md` for the gate rule).
+  semantics agree -- verified, not assumed). No-GC/WASM-GC kept f64 comparison
+  with representable-range agreement pins only; a near tie still rounded to
+  equality there (`(= 0.6666666666666666 2/3)` was T on WASM-GC, NIL on
+  interpreter/JVM -- even tiny ratios sit strictly inside half an ulp, so no
+  component bound saves f64) -- both exact paths have since landed with designs
+  recorded (no-GC in `.kb/no-gc-scalar-wasm.md`, WASM-GC in `.kb/wasm-bignum.md`;
+  `.kb/jvm-double-arithmetic.md` for the gate rule).
 - **2026-09-15, `.todo/037` ratio->float conversion** -- correctly-rounded
   nearest double on the interpreter (`LispRatio.doubleValue`, exact `BigInteger`
   quotient with sticky bit) and the JVM (new generated `_ratToDouble`, no new

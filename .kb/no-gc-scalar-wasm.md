@@ -120,8 +120,9 @@ bits, never reverses it). Pinned by
 `WasmLispCompilerIntegrationTest#noGcIntFloatComparisonIsExactPast2Pow53` (past
 2^53, both signs, minI64, infinities, NaN, let-carried, min/max parity) plus a
 10,716-case no-GC-vs-interpreter differential sweep (comparisons textual, min/max
-as doubles); ci-spec keeps the representable range only, since WASM-GC still
-compares through f64 there.
+as doubles); ci-spec keeps the representable range only, since a near tie is
+unspellable in the shared corpus (`--no-gc` has no ratio representation) --
+WASM-GC compares exactly there too since 2026-09-15 (`.kb/wasm-bignum.md`).
 
 **Rounding is the one place this backend cannot match the other four** — the float floor
 family answers the EXACT quotient elsewhere, a bignum past 2^63, and there is no bignum tier

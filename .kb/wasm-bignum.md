@@ -59,17 +59,31 @@ one, so `(floor 1d300)` is the exact 301-digit value.
   See [[linalg-simd]], "mod/rem".
 - `_big_to_f64` accumulates top-down per limb, possibly differing from `BigInteger.doubleValue()`
   in the last ulp -- keep limb-integer -> float out of ci-spec.
-- **Float-vs-exact comparison stays f64 on this backend (.todo/037 -- remaining work)**:
-  `_rat_cmp`/`_rat_cmp_bits` and the double-literal call-site path compare through
-  `_as_f64`, which is exact for exactly-representable pairs but rounds a near tie to
-  equality: `(= 0.6666666666666666 2/3)` answers T here (both round to the same double)
-  where the interpreter and the JVM answer NIL (exact cross-multiplication). Even tiny
-  ratios can sit strictly inside half an ulp -- 2/3 is within 2^-54 of its float --
-  so no component bound makes the f64 comparison exact; the exact path needs the big
-  tier (`_int_new` of the float's mantissa, `_big_ash`, `_big_mul`, `_big_cmp` -- all
-  existing helpers) plus a call-site gate that keeps proven-double pairs on f64
-  (a `DoubleValuedForms`-grade analysis, which is printer-scoped today). Not pinned:
-  keep near ties out of ci-spec, like every other float approximation above.
+- **Float-vs-exact comparison is exact on this backend too (.todo/037,
+  2026-09-15)**: `_rat_cmp_bits` decomposes a finite float from its raw bits
+  (hidden bit, subnormal shape, sign on the mantissa -- the `rational` shape)
+  and cross-multiplies through the existing big-tier helpers alone (`_int_new`
+  of the mantissa, `_big_ash`, `_big_mul`, `_big_cmp`; no new runtime function),
+  so `(= 0.6666666666666666 2/3)` answers NIL here as on the interpreter and
+  the JVM (2/3 sits within 2^-54 of its float -- strictly inside half an ulp,
+  so no component bound could save the old f64 coercion). Both-float pairs
+  keep the f64 ladder (bit-identical values compare identically); NaN stays
+  unordered; infinities decide by side; a float against a non-exact operand
+  keeps the old `_as_f64` behavior including its `_type_err_*` traps. The
+  comparison and min/max call sites take the unboxed f64 path only when BOTH
+  operands are `isDefinitelyDouble` (the JVM gate's distinction,
+  `.kb/jvm-double-arithmetic.md` -- a double literal, or a `+ - * / mod rem`
+  tree with a proven-double operand inside, never crossing a call or min/max,
+  with any syntactically visible complex disqualifying); anything else goes
+  through `_rat_cmp_bits`. Costs only what it fixes: a comparison-only module
+  with no float beside an exact number is byte-identical (pure-int and
+  pure-double modules measured identical; a mixed one carries `_int_new` +
+  `_big_ash` + `_big_mul`, ~+1.5-1.9 KB). Pinned by
+  `WasmLispCompilerIntegrationTest#floatExactComparisonNearTie` (literal,
+  let-carried, branch-consumed, min/max both orders) plus a 4,412-case
+  interpreter-vs-WASM-GC differential sweep with 0 mismatches. Near ties stay
+  out of ci-spec: `--no-gc` has no ratio representation, so no shared corpus
+  case can spell one.
 - `isqrt` goes through f64 (`WasmIsqrtCompiler`), exact on the i31 range only, diverging from the
   interpreter. `random`'s integer path draws at most 63 bits.
 - A host **u64 at or above 2^63** keeps its float-approximation lift and exact-or-trap export
