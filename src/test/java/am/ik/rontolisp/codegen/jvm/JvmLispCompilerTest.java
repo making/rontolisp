@@ -9414,6 +9414,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFloatOfRatioIsCorrectlyRounded() throws Exception {
+		// Ratio -> float is the correctly-rounded nearest double, not the
+		// DECIMAL64 16-digit rounding: 1/8388608 IS 2^-23, exactly. Same vectors
+		// as LispEvaluatorTest#floatOfRatio, through _dbl's _ratToDouble arm.
+		assertThat(compileAndRun(
+				"(print (= (float (/ 1 8388608)) 1.1920928955078125e-7)) (print (= (float (/ 1 85070591730234615865843651857942052864)) 1.1754943508222875e-38)) (print (= (float (/ 1 3)) 0.3333333333333333)) (print (= (float (/ 1 10)) 0.1)) (print (= (float (/ -1 8388608)) -1.1920928955078125e-7)) (print (float (/ (ash 1 2000) 3)))"))
+			.isEqualTo("T\nT\nT\nT\nT\nInfinity");
+		// Ties go to the even neighbor, tinies denormalize, a negative tiny keeps
+		// its sign into -0.0 (read back through a signed division), and wide
+		// numerators round exactly as the interpreter answers beside them.
+		assertThat(compileAndRun(
+				"(print (= (float (/ 9007199254740993 (ash 1 53))) 1.0)) (print (= (float (/ 9007199254740995 (ash 1 53))) 1.0000000000000004)) (print (= (float (/ 1 (ash 1 1074))) 4.9406564584124654e-324)) (print (= (/ 1.0 (float (/ -1 (ash 1 2000)))) (/ -1.0 0.0))) (print (= (float (/ 123456789123456789123456789 987654321987654321)) 1.249999988609375e8)) (print (= (float (/ -987654321987654321987654321 123456789123456789)) -8.000000072900001e9))"))
+			.isEqualTo("T\nT\nT\nT\nT\nT");
+	}
+
+	@Test
 	void compileAndRunRationalize() throws Exception {
 		assertThat(compileAndRun(
 				"(print (rationalize 1.5)) (print (rationalize 0.5)) (print (rationalize 2.0)) (print (rationalize 100.0)) (print (rationalize 0.0)) (print (rationalize 5)) (print (rationalize (/ 1 3))) (print (rationalize -2.5)) (print (funcall #'rationalize 1.5))"))
@@ -14372,7 +14388,14 @@ class JvmLispCompilerTest {
 			.compile(LispReader.readAllFromString("(print (mapcar (lambda (x) (* x x)) '(1 2 3)))"));
 		assertThat(declaredMethodNames(classBytes)).doesNotContain("_aset1", "_aref1", "_arrayMake", "_charVecMake",
 				"_arrayDims");
-		assertThat(classBytes.length).isLessThan(8_000);
+		// 8,295: _dbl's ratio arm is the correctly-rounded _ratToDouble (a BigInteger
+		// quotient plus its sticky bit, denormalizing down to signed zero), which every
+		// numeric program carries beside _dbl. A may-produce-a-ratio gate would buy the
+		// ~300 bytes back, but a missed source is a NoSuchMethodError in a program that
+		// divides and then floats -- the complex gate needs its recompile net for the
+		// same reason, and that machinery is disproportionate here. The budget still
+		// catches what it was built for (no array runtime; far below the 13,654 above).
+		assertThat(classBytes.length).isLessThan(8_400);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 

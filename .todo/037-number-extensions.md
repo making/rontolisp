@@ -1,3 +1,30 @@
+> **Update 2026-09-15 (ratio->float conversion landed):** `LispRatio.doubleValue`
+> is now the correctly-rounded nearest double (exact `BigInteger` quotient: a
+> 56-bit head plus the remainder as the sticky bit, round-half-even, denormalizing
+> to signed zero) instead of the DECIMAL64 16-digit rounding; the JVM `_dbl` ratio
+> arm calls the same contract as a new generated `_ratToDouble` method (no new
+> runtime class, so no travelling-list change -- the class stays self-contained),
+> and WASM-GC needed no code change (its `_as_f64` ratio arm is an f64 division,
+> correctly rounded for the i32 components it holds) -- only a pinning test.
+> Measured as a diff of failing ANSI test NAMES: **numbers 240 -> 234 (6 fixed),
+> misc 38 -> 38, 0 regressed**. Fixed: `RATIONAL.1/.3`, `RATIONALIZE.1/.3`,
+> `/.12` (the round trips are identities now: `rational` is exact and the exact
+> quotient converts back to its own double) plus `*.12` as a knock-on (its
+> `(expt 2 -i)` ratios float through the same conversion). `RATIONAL.3`/
+> `RATIONALIZE.3` pass deterministically, not by draw luck, for the same reason.
+> Three traps: (1) a tie probe written as `1.0000000000000002` fails -- the
+> midpoint `(2^53+3)/2^53` rounds to the EVEN neighbor `1+2^-51`
+> (`1.0000000000000004`), and the literal was the bug; (2) tie vectors need
+> 54-bit midpoints, so below `2^53` every iteration asserts but above it most
+> midpoints are integers and silently skip -- the test asserts the count (300);
+> (3) `_ratToDouble` costs ~300 bytes in every numeric program, which tripped the
+> 8,000-byte budget in
+> `JvmLispCompilerTest#aProgramThatNeverNamesAnArrayOperatorCarriesNoArrayRuntime`
+> (8,295 actual) -- raised to 8,400 with the reason on the assertion, not gated:
+> a may-produce-a-ratio gate needs the complex gate's recompile net to stay sound
+> (a missed source is a `NoSuchMethodError`) and is disproportionate for ~300
+> bytes. `*.12` leaves the watch-list below.
+>
 > **Update 2026-09-15 (Slice C landed):** `logcount`, `rationalize` and
 > `integer-decode-float` ship as prelude defuns (`LispPreludeLibrary`, the
 > `decode-float` precedent -- one Lisp implementation runs on the interpreter,
@@ -123,7 +150,8 @@ RontoLisp has the core numeric tower: integers (with `BigInteger` bignum), float
 ### Missing numeric functions
 
 Shipped since this table was written: `float-radix` (Slice A), `complexp`,
-`realpart`/`imagpart`, `conjugate`, `phase` (.todo/751-754).
+`realpart`/`imagpart`, `conjugate`, `phase` (.todo/751-754), exact ratio->float
+conversion (2026-09-15: `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12`, `*.12`).
 
 | Function | Purpose | Difficulty |
 |----------|---------|------------|

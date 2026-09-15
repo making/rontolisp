@@ -112,6 +112,14 @@ final class JvmNumericRuntimeBuilder {
 	/** Converts any numeric value (Long, BigInteger, ratio, Double) to a Double. */
 	static final String DBL = "_dbl";
 
+	/**
+	 * The correctly-rounded double nearest a numerator/denominator pair
+	 * (round-half-even), shared by {@code _dbl}'s ratio arm. The same contract as
+	 * {@link am.ik.rontolisp.LispRatio#doubleValue}, emitted here so the class stays
+	 * self-contained (a compiled class runs with no rontolisp runtime on the classpath).
+	 */
+	static final String RAT_TO_DOUBLE = "_ratToDouble";
+
 	/** Raises a rational base to an integer power, keeping an exact result. */
 	static final String POW = "_pow";
 
@@ -312,7 +320,6 @@ final class JvmNumericRuntimeBuilder {
 		ClassConstant objArrClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
 		ClassConstant bigDecClass = cp.addClass(cp.addUtf8("java/math/BigDecimal"));
-		ClassConstant mathCtxClass = cp.addClass(cp.addUtf8("java/math/MathContext"));
 
 		MethodrefConstant longValueOf = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
@@ -444,14 +451,6 @@ final class JvmNumericRuntimeBuilder {
 				cp.addString(am.ik.rontolisp.ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX),
 				cp.addString(am.ik.rontolisp.ClosRegistry.EXPECTED_REAL_MESSAGE_PREFIX));
 
-		MethodrefConstant bdInit = cp.addMethodref(bigDecClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(" + BIG + ")V")));
-		MethodrefConstant bdDivide = cp.addMethodref(bigDecClass, cp.addNameAndType(cp.addUtf8("divide"),
-				cp.addUtf8("(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;")));
-		MethodrefConstant bdDoubleValue = cp.addMethodref(bigDecClass,
-				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
-		FieldrefConstant mcDecimal64 = cp.addFieldref(mathCtxClass,
-				cp.addNameAndType(cp.addUtf8("DECIMAL64"), cp.addUtf8("Ljava/math/MathContext;")));
 		MethodrefConstant bdInitDouble = cp.addMethodref(bigDecClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(D)V")));
 		MethodrefConstant bdUnscaled = cp.addMethodref(bigDecClass,
@@ -465,10 +464,20 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("isInfinite"), cp.addUtf8("(D)Z")));
 		MethodrefConstant doubleValueOf = cp.addMethodref(doubleClass,
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
+		MethodrefConstant dblLongBits = cp.addMethodref(doubleClass,
+				cp.addNameAndType(cp.addUtf8("longBitsToDouble"), cp.addUtf8("(J)D")));
+		FieldrefConstant dblNegInf = cp.addFieldref(doubleClass,
+				cp.addNameAndType(cp.addUtf8("NEGATIVE_INFINITY"), cp.addUtf8("D")));
+		FieldrefConstant dblPosInf = cp.addFieldref(doubleClass,
+				cp.addNameAndType(cp.addUtf8("POSITIVE_INFINITY"), cp.addUtf8("D")));
 		MethodrefConstant numDoubleValue = cp.addMethodref(numberClass,
 				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
 
 		LongConstant cMin = cp.addLong(Long.MIN_VALUE);
+		LongConstant cRat3 = cp.addLong(3L);
+		LongConstant cRat4 = cp.addLong(4L);
+		LongConstant cRat2p53 = cp.addLong(1L << 53);
+		LongConstant cRatFracMask = cp.addLong(0xF_FFFF_FFFF_FFFFL);
 
 		// Self method references (name+descriptor against the generated class).
 		Utf8Constant nBig = cp.addUtf8(BIG_OP);
@@ -548,6 +557,9 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rFmin = cp.addMethodref(thisClass, cp.addNameAndType(nFmin, dFmod));
 		MethodrefConstant rFmax = cp.addMethodref(thisClass, cp.addNameAndType(nFmax, dFmod));
 		MethodrefConstant rDbl = cp.addMethodref(thisClass, cp.addNameAndType(nDbl, dUnary));
+		Utf8Constant nRatToDouble = cp.addUtf8(RAT_TO_DOUBLE);
+		Utf8Constant dRatToDouble = cp.addUtf8("(" + BIG + BIG + ")D");
+		MethodrefConstant rRatToDouble = cp.addMethodref(thisClass, cp.addNameAndType(nRatToDouble, dRatToDouble));
 		MethodrefConstant rPow = cp.addMethodref(thisClass, cp.addNameAndType(nPow, dBinary));
 		MethodrefConstant rEqv = cp.addMethodref(thisClass, cp.addNameAndType(nEqv, dCmp));
 		MethodrefConstant rEqStrict = cp.addMethodref(thisClass, cp.addNameAndType(nEqStrict, dCmp));
@@ -611,9 +623,10 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildSelect(nMax, dBinary, rCmpb, CMPB_GT | CMPB_EQ, rcClass, typeErrRefs, hasComplex));
 		methods.add(buildFloatSelect(nFmin, dFmod, Opcode.DCMPG, Opcode.IFLE));
 		methods.add(buildFloatSelect(nFmax, dFmod, Opcode.DCMPL, Opcode.IFGE));
-		methods.add(buildDbl(nDbl, dUnary, ratArrClass, doubleClass, numberClass, bigDecClass, bdInit, bdDivide,
-				bdDoubleValue, mcDecimal64, doubleValueOf, numDoubleValue, rRatNum, rRatDen, typeErrRefs, rcClass,
-				hasComplex));
+		methods.add(buildDbl(nDbl, dUnary, ratArrClass, doubleClass, numberClass, doubleValueOf, numDoubleValue,
+				rRatNum, rRatDen, rRatToDouble, typeErrRefs, rcClass, hasComplex));
+		methods.add(buildRatToDouble(nRatToDouble, dRatToDouble, biSignum, biNeg, biBitLength, biShiftLeft, biCompareTo,
+				biDiv, biRem, biLongValue, dblLongBits, dblNegInf, dblPosInf, cRat3, cRat4, cRat2p53, cRatFracMask));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
 				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl));
 		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, objEquals, strvMethod));
@@ -666,6 +679,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(RAT_DEN, rRatDen);
 		ops.put(RAT, rRat);
 		ops.put(DBL, rDbl);
+		ops.put(RAT_TO_DOUBLE, rRatToDouble);
 		ops.put(POW, rPow);
 		ops.put(EQV, rEqv);
 		ops.put(EQ_STRICT, rEqStrict);
@@ -1838,9 +1852,10 @@ final class JvmNumericRuntimeBuilder {
 		return new NumericMethod(name, desc, c, 4, 4, List.of());
 	}
 
-	// _dbl(Object x): boxed Double for any numeric value. A ratio divides numerator by
-	// denominator via BigDecimal so huge components do not overflow to infinity first;
-	// Long/BigInteger/Double go through Number.doubleValue().
+	// _dbl(Object x): boxed Double for any numeric value. A ratio converts through
+	// _ratToDouble (correctly rounded, so huge components do not overflow to infinity
+	// first and exact quotients stay exact); Long/BigInteger/Double go through
+	// Number.doubleValue().
 	//
 	// A value that is ALREADY a Double is answered as-is rather than re-boxed. Every
 	// caller (JvmEmitHelper.unboxDouble and the double branch of every helper below)
@@ -1848,10 +1863,9 @@ final class JvmNumericRuntimeBuilder {
 	// the re-box was an allocation on the hot path of every float program, one per
 	// operand of every double-path operation.
 	private static NumericMethod buildDbl(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			ClassConstant doubleClass, ClassConstant numberClass, ClassConstant bigDecClass, MethodrefConstant bdInit,
-			MethodrefConstant bdDivide, MethodrefConstant bdDoubleValue, FieldrefConstant mcDecimal64,
-			MethodrefConstant doubleValueOf, MethodrefConstant numDoubleValue, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, TypeErrRefs typeErrRefs, @Nullable ClassConstant rcClass,
+			ClassConstant doubleClass, ClassConstant numberClass, MethodrefConstant doubleValueOf,
+			MethodrefConstant numDoubleValue, MethodrefConstant rRatNum, MethodrefConstant rRatDen,
+			MethodrefConstant rRatToDouble, TypeErrRefs typeErrRefs, @Nullable ClassConstant rcClass,
 			@Nullable FieldrefConstant hasComplex) {
 		List<Integer> c = new ArrayList<>();
 		if (rcClass != null) {
@@ -1887,28 +1901,14 @@ final class JvmNumericRuntimeBuilder {
 		int ifNotRat = c.size();
 		c.add(Opcode.IFEQ);
 		JvmRuntimeBuilder.emitU2(c, 0);
-		c.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(c, bigDecClass.index());
-		c.add(Opcode.DUP);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rRatNum.index());
-		c.add(Opcode.INVOKESPECIAL);
-		JvmRuntimeBuilder.emitU2(c, bdInit.index());
-		c.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(c, bigDecClass.index());
-		c.add(Opcode.DUP);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rRatDen.index());
-		c.add(Opcode.INVOKESPECIAL);
-		JvmRuntimeBuilder.emitU2(c, bdInit.index());
-		c.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(c, mcDecimal64.index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, bdDivide.index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, bdDoubleValue.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRatToDouble.index());
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
 		c.add(Opcode.ARETURN);
@@ -1934,6 +1934,426 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(c, ifNotNumber, c.size());
 		emitTypeErrThrow(c, typeErrRefs, true);
 		return new NumericMethod(name, desc, c, 5, 1, List.of());
+	}
+
+	// _ratToDouble(BigInteger num, BigInteger den): the correctly-rounded double nearest
+	// num/den (round-half-even, IEEE 754). The exact binary quotient is computed with
+	// BigInteger arithmetic -- a 56-bit head plus the remainder as the sticky bit -- and
+	// only then narrowed to a double, so no intermediate decimal or double rounding can
+	// move the answer. Huge magnitudes answer signed infinity, tinies denormalize down
+	// to signed zero. No arrays cross a branch (divide/remainder are separate calls, so
+	// every reference merge is BigInteger-typed for the StackMapTable computation).
+	//
+	// Locals: 0=num, 1=den (params), 2=n, 3=d (magnitudes), 4=exp, 5=neg, 6=scratch
+	// reference, 7=q (long), 9=aux int, 10=e. Every branch target starts with an empty
+	// operand stack.
+	private static NumericMethod buildRatToDouble(Utf8Constant name, Utf8Constant desc, MethodrefConstant biSignum,
+			MethodrefConstant biNeg, MethodrefConstant biBitLength, MethodrefConstant biShiftLeft,
+			MethodrefConstant biCompareTo, MethodrefConstant biDiv, MethodrefConstant biRem,
+			MethodrefConstant biLongValue, MethodrefConstant longBitsToDouble, FieldrefConstant dblNegInf,
+			FieldrefConstant dblPosInf, LongConstant c3, LongConstant c4, LongConstant c2p53, LongConstant cFracMask) {
+		List<Integer> c = new ArrayList<>();
+		// n = num.signum() < 0 ? num.negate() : num
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifNumNonNeg = c.size();
+		c.add(Opcode.IFGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biNeg.index());
+		c.add(Opcode.ASTORE_2);
+		int toNAbs = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifNumNonNeg, c.size());
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ASTORE_2);
+		JvmRuntimeBuilder.patchBranch(c, toNAbs, c.size());
+		// d = den.signum() < 0 ? den.negate() : den
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifDenNonNeg = c.size();
+		c.add(Opcode.IFGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biNeg.index());
+		c.add(Opcode.ASTORE_3);
+		int toDAbs = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifDenNonNeg, c.size());
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.ASTORE_3);
+		JvmRuntimeBuilder.patchBranch(c, toDAbs, c.size());
+		// neg = num.signum() < 0 ? 1 : 0
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifNegFalse = c.size();
+		c.add(Opcode.IFGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.ISTORE);
+		c.add(5);
+		int toNegEnd = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifNegFalse, c.size());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.ISTORE);
+		c.add(5);
+		JvmRuntimeBuilder.patchBranch(c, toNegEnd, c.size());
+		// exp = n.bitLength() - d.bitLength()
+		c.add(Opcode.ALOAD_2);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biBitLength.index());
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biBitLength.index());
+		c.add(Opcode.ISUB);
+		c.add(Opcode.ISTORE);
+		c.add(4);
+		// exp = floor(log2(n/d)): decrement when the shifted denominator overshoots.
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		int ifExpNeg = c.size();
+		c.add(Opcode.IFLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_2);
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biShiftLeft.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biCompareTo.index());
+		int ifNoDecPos = c.size();
+		c.add(Opcode.IFGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.ISUB);
+		c.add(Opcode.ISTORE);
+		c.add(4);
+		int toExpDonePos = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifExpNeg, c.size());
+		c.add(Opcode.ALOAD_2);
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.INEG);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biShiftLeft.index());
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biCompareTo.index());
+		int ifNoDecNeg = c.size();
+		c.add(Opcode.IFGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.ISUB);
+		c.add(Opcode.ISTORE);
+		c.add(4);
+		JvmRuntimeBuilder.patchBranch(c, toExpDonePos, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifNoDecPos, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifNoDecNeg, c.size());
+		// if (exp > 1023) return neg ? -Infinity : +Infinity
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.SIPUSH);
+		c.add(0x03);
+		c.add(0xFF);
+		int ifNoOverflow = c.size();
+		c.add(Opcode.IF_ICMPLE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitSignedInfinity(c, 5, dblNegInf, dblPosInf);
+		JvmRuntimeBuilder.patchBranch(c, ifNoOverflow, c.size());
+		// if (exp < -1022) goto the subnormal path
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.SIPUSH);
+		c.add(0xFC);
+		c.add(0x02);
+		int ifSubnormal = c.size();
+		c.add(Opcode.IF_ICMPLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// Normal path: shift = 55 - exp; q = floor(scaled / divisor) holds 56 bits.
+		c.add(Opcode.BIPUSH);
+		c.add(55);
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.ISUB);
+		c.add(Opcode.ISTORE);
+		c.add(9);
+		c.add(Opcode.ILOAD);
+		c.add(9);
+		int ifShiftNeg = c.size();
+		c.add(Opcode.IFLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_2);
+		c.add(Opcode.ILOAD);
+		c.add(9);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biShiftLeft.index());
+		c.add(Opcode.ASTORE);
+		c.add(6);
+		c.add(Opcode.ALOAD);
+		c.add(6);
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biDiv.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biLongValue.index());
+		c.add(Opcode.LSTORE);
+		c.add(7);
+		c.add(Opcode.ALOAD);
+		c.add(6);
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biRem.index());
+		c.add(Opcode.ASTORE);
+		c.add(6);
+		int toDivDone = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifShiftNeg, c.size());
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.ILOAD);
+		c.add(9);
+		c.add(Opcode.INEG);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biShiftLeft.index());
+		c.add(Opcode.ASTORE);
+		c.add(6);
+		c.add(Opcode.ALOAD_2);
+		c.add(Opcode.ALOAD);
+		c.add(6);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biDiv.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biLongValue.index());
+		c.add(Opcode.LSTORE);
+		c.add(7);
+		c.add(Opcode.ALOAD_2);
+		c.add(Opcode.ALOAD);
+		c.add(6);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biRem.index());
+		c.add(Opcode.ASTORE);
+		c.add(6);
+		JvmRuntimeBuilder.patchBranch(c, toDivDone, c.size());
+		// round = (q & 4) != 0; round up when set and (sticky || the mantissa is odd).
+		emitLload(c, 7);
+		emitLdc2(c, c4);
+		c.add(Opcode.LAND);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LCMP);
+		int ifNoRound = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitLload(c, 7);
+		emitLdc2(c, c3);
+		c.add(Opcode.LAND);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LCMP);
+		int ifLowStickyRound = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD);
+		c.add(6);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifRemStickyRound = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitLload(c, 7);
+		c.add(Opcode.ICONST_3);
+		c.add(Opcode.LUSHR);
+		c.add(Opcode.LCONST_1);
+		c.add(Opcode.LAND);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LCMP);
+		int ifNoRoundTie = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// m = (q >>> 3) + 1, reached by a sticky bit or an odd tie.
+		int doRoundUp = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifLowStickyRound, doRoundUp);
+		JvmRuntimeBuilder.patchBranch(c, ifRemStickyRound, doRoundUp);
+		emitLload(c, 7);
+		c.add(Opcode.ICONST_3);
+		c.add(Opcode.LUSHR);
+		c.add(Opcode.LCONST_1);
+		c.add(Opcode.LADD);
+		c.add(Opcode.LSTORE);
+		c.add(7);
+		int toRounded = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifNoRound, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifNoRoundTie, c.size());
+		// m = q >>> 3
+		emitLload(c, 7);
+		c.add(Opcode.ICONST_3);
+		c.add(Opcode.LUSHR);
+		c.add(Opcode.LSTORE);
+		c.add(7);
+		JvmRuntimeBuilder.patchBranch(c, toRounded, c.size());
+		// e = exp; if (m == 2^53) { m >>>= 1; e++ }
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.ISTORE);
+		c.add(10);
+		emitLload(c, 7);
+		emitLdc2(c, c2p53);
+		c.add(Opcode.LCMP);
+		int ifNoNorm = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitLload(c, 7);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.LUSHR);
+		c.add(Opcode.LSTORE);
+		c.add(7);
+		c.add(Opcode.ILOAD);
+		c.add(10);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.IADD);
+		c.add(Opcode.ISTORE);
+		c.add(10);
+		JvmRuntimeBuilder.patchBranch(c, ifNoNorm, c.size());
+		// if (e > 1023) return neg ? -Infinity : +Infinity
+		c.add(Opcode.ILOAD);
+		c.add(10);
+		c.add(Opcode.SIPUSH);
+		c.add(0x03);
+		c.add(0xFF);
+		int ifNoOverflow2 = c.size();
+		c.add(Opcode.IF_ICMPLE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitSignedInfinity(c, 5, dblNegInf, dblPosInf);
+		JvmRuntimeBuilder.patchBranch(c, ifNoOverflow2, c.size());
+		// bits = (((long)(e + 1023)) << 52) | (m & mask)
+		c.add(Opcode.ILOAD);
+		c.add(10);
+		c.add(Opcode.SIPUSH);
+		c.add(0x03);
+		c.add(0xFF);
+		c.add(Opcode.IADD);
+		c.add(Opcode.I2L);
+		c.add(Opcode.BIPUSH);
+		c.add(52);
+		c.add(Opcode.LSHL);
+		emitLload(c, 7);
+		emitLdc2(c, cFracMask);
+		c.add(Opcode.LAND);
+		c.add(Opcode.LOR);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longBitsToDouble.index());
+		int toSignTail = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// Subnormal path: k = round-half-even(n * 2^1074 / d), the mantissa directly.
+		JvmRuntimeBuilder.patchBranch(c, ifSubnormal, c.size());
+		c.add(Opcode.ALOAD_2);
+		c.add(Opcode.SIPUSH);
+		c.add(0x04);
+		c.add(0x32);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biShiftLeft.index());
+		c.add(Opcode.ASTORE);
+		c.add(6);
+		c.add(Opcode.ALOAD);
+		c.add(6);
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biDiv.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biLongValue.index());
+		c.add(Opcode.LSTORE);
+		c.add(7);
+		c.add(Opcode.ALOAD);
+		c.add(6);
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biRem.index());
+		c.add(Opcode.ASTORE);
+		c.add(6);
+		c.add(Opcode.ALOAD);
+		c.add(6);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biShiftLeft.index());
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biCompareTo.index());
+		c.add(Opcode.ISTORE);
+		c.add(9);
+		c.add(Opcode.ILOAD);
+		c.add(9);
+		int ifSubUp = c.size();
+		c.add(Opcode.IFGT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ILOAD);
+		c.add(9);
+		int ifSubDone = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitLload(c, 7);
+		c.add(Opcode.LCONST_1);
+		c.add(Opcode.LAND);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LCMP);
+		int ifSubDoneTie = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifSubUp, c.size());
+		emitLload(c, 7);
+		c.add(Opcode.LCONST_1);
+		c.add(Opcode.LADD);
+		c.add(Opcode.LSTORE);
+		c.add(7);
+		JvmRuntimeBuilder.patchBranch(c, ifSubDone, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifSubDoneTie, c.size());
+		emitLload(c, 7);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longBitsToDouble.index());
+		JvmRuntimeBuilder.patchBranch(c, toSignTail, c.size());
+		// return neg ? -mag : mag
+		c.add(Opcode.ILOAD);
+		c.add(5);
+		int ifRetPos = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.DNEG);
+		JvmRuntimeBuilder.patchBranch(c, ifRetPos, c.size());
+		c.add(Opcode.DRETURN);
+		return new NumericMethod(name, desc, c, 6, 11, List.of());
+	}
+
+	// return neg != 0 ? -Infinity : +Infinity for _ratToDouble's overflow arms.
+	private static void emitSignedInfinity(List<Integer> c, int negSlot, FieldrefConstant dblNegInf,
+			FieldrefConstant dblPosInf) {
+		c.add(Opcode.ILOAD);
+		c.add(negSlot);
+		int ifPos = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.GETSTATIC);
+		JvmRuntimeBuilder.emitU2(c, dblNegInf.index());
+		c.add(Opcode.DRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifPos, c.size());
+		c.add(Opcode.GETSTATIC);
+		JvmRuntimeBuilder.emitU2(c, dblPosInf.index());
+		c.add(Opcode.DRETURN);
 	}
 
 	// _pow(Object base, Object e): exact rational power for an integer exponent --

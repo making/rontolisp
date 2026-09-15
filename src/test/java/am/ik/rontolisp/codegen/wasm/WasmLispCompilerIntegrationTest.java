@@ -9643,6 +9643,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void floatOfRatioIsCorrectlyRounded() throws Exception {
+		// The _as_f64 ratio arm divides numerator by denominator as f64, which is
+		// correctly rounded for the i31 components this backend can hold -- so no
+		// code change was needed here, only the pin. Wide components stay out:
+		// they wrap (small limb-tier) or trap fail-stop (big denominators),
+		// exactly as (/) of the same integers does, and live on the
+		// interpreter/JVM tests instead. Ties need 54-bit midpoints, which no
+		// i31 ratio can name, so they stay there too.
+		assertThat(compileAndRun(
+				"(print (= (float (/ 1 8388608)) 1.1920928955078125e-7)) (print (= (float (/ 1 3)) 0.3333333333333333)) (print (= (float (/ 1 10)) 0.1)) (print (= (float (/ -1 8388608)) -1.1920928955078125e-7)) (print (funcall #'float (/ 1 4)))"))
+			.isEqualTo("T\nT\nT\nT\n0.25");
+	}
+
+	@Test
 	void logcount() throws Exception {
 		assertThat(compileAndRunPrelude(
 				"(print (logcount 0)) (print (logcount 1)) (print (logcount 3)) (print (logcount 255)) (print (logcount -1)) (print (logcount -8)) (print (funcall #'logcount 7))"))

@@ -214,6 +214,105 @@ class LispEvaluatorTest {
 	@Test
 	void floatOfRatio() {
 		assertThat(eval("(float 1/2)")).isEqualTo(new LispDouble(0.5));
+		// Ratio -> float is the correctly-rounded nearest double, not the
+		// DECIMAL64 16-digit rounding: 1/8388608 IS 2^-23, exactly.
+		assertThat(eval("(= (float (/ 1 8388608)) 1.1920928955078125e-7)").print()).isEqualTo("T");
+		assertThat(eval("(= (float (/ 1 85070591730234615865843651857942052864)) 1.1754943508222875e-38)").print())
+			.isEqualTo("T");
+		assertThat(eval("(= (float (/ 1 3)) 0.3333333333333333)").print()).isEqualTo("T");
+		assertThat(eval("(= (float (/ 1 10)) 0.1)").print()).isEqualTo("T");
+		assertThat(eval("(= (float (/ -1 8388608)) -1.1920928955078125e-7)").print()).isEqualTo("T");
+		assertThat(eval("(float (/ (ash 1 2000) 3))").print()).isEqualTo("Infinity");
+	}
+
+	@Test
+	void ratioToDoubleIsCorrectlyRounded() {
+		// Round-trip: the exact numerator/denominator pair of any finite double
+		// converts back to that double, bit for bit. The exact quotient IS the
+		// double here, so this pins correct rounding with no oracle at all.
+		// Integer-valued doubles never form ratios (valueOf demotes them), and a
+		// negative-zero ratio cannot exist, so both are skipped.
+		double[] specials = { 1.0, -1.0, 0.5, -0.5, 0.1, -0.1, 1.1920928955078125e-7, 1.1754943508222875e-38,
+				2.2250738585072014e-308, 4.9406564584124654e-324, 1.7976931348623157e308, 9007199254740993.0,
+				3.141592653589793, 1.0000000000000002, 0.9999999999999999, 123456789.123456789, 1e-320, -1e-320,
+				Double.longBitsToDouble(2L) };
+		for (double d : specials) {
+			assertRatioToDoubleRoundTrip(d);
+		}
+		java.util.Random random = new java.util.Random(37);
+		for (int i = 0; i < 2000; i++) {
+			double d = Double.longBitsToDouble(random.nextLong());
+			if (!Double.isFinite(d) || d == 0.0) {
+				continue;
+			}
+			assertRatioToDoubleRoundTrip(d);
+		}
+		// Ties: the exact midpoint of two adjacent doubles answers the even
+		// neighbor, and a differential against 100-digit decimal division plus a
+		// correctly-rounded parse covers the general case through an independent
+		// rounding path. The tie range stays below 2^53 (spacing < 2), where a
+		// midpoint can never be an integer, so every iteration asserts.
+		int ties = 0;
+		for (int i = 0; i < 300; i++) {
+			double lo = Double.longBitsToDouble(0x0010000000000000L + (random.nextLong() & 0x423FFFFFFFFFFFFFL));
+			if (!Double.isFinite(lo)) {
+				continue;
+			}
+			double hi = Math.nextUp(lo);
+			if (!Double.isFinite(hi)) {
+				continue;
+			}
+			BigInteger[] rl = exactRational(lo);
+			BigInteger[] rh = exactRational(hi);
+			BigInteger num = rl[0].multiply(rh[1]).add(rh[0].multiply(rl[1]));
+			BigInteger den = rl[1].multiply(rh[1]).shiftLeft(1);
+			double expected = ((Double.doubleToRawLongBits(lo) & 1L) == 0) ? lo : hi;
+			assertRatioToDouble(num, den, expected);
+			ties++;
+		}
+		assertThat(ties).isEqualTo(300);
+		for (int i = 0; i < 300; i++) {
+			BigInteger num = new BigInteger(1 + random.nextInt(130), random);
+			BigInteger den = new BigInteger(1 + random.nextInt(130), random).add(BigInteger.ONE);
+			if (random.nextBoolean()) {
+				num = num.negate();
+			}
+			double expected = Double.parseDouble(new java.math.BigDecimal(num)
+				.divide(new java.math.BigDecimal(den), 100, java.math.RoundingMode.HALF_EVEN)
+				.toPlainString());
+			assertRatioToDouble(num, den, expected);
+		}
+		// A negative tiny answers negative zero, a huge one signed infinity.
+		assertThat(Double
+			.doubleToRawLongBits(new LispRatio(BigInteger.ONE.negate(), BigInteger.ONE.shiftLeft(2000)).doubleValue()))
+			.isEqualTo(Double.doubleToRawLongBits(-0.0));
+		assertThat(new LispRatio(BigInteger.ONE.shiftLeft(2000), BigInteger.valueOf(3)).doubleValue())
+			.isEqualTo(Double.POSITIVE_INFINITY);
+		assertThat(new LispRatio(BigInteger.ONE.shiftLeft(2000).negate(), BigInteger.valueOf(3)).doubleValue())
+			.isEqualTo(Double.NEGATIVE_INFINITY);
+	}
+
+	private static void assertRatioToDoubleRoundTrip(double d) {
+		BigInteger[] pair = exactRational(d);
+		BigInteger g = pair[0].gcd(pair[1]);
+		BigInteger num = pair[0].divide(g);
+		BigInteger den = pair[1].divide(g);
+		if (den.equals(BigInteger.ONE)) {
+			return;
+		}
+		assertRatioToDouble(num, den, d);
+	}
+
+	private static void assertRatioToDouble(BigInteger num, BigInteger den, double expected) {
+		BigInteger g = num.gcd(den);
+		BigInteger n = num.divide(g);
+		BigInteger d = den.divide(g);
+		if (d.equals(BigInteger.ONE)) {
+			return;
+		}
+		double actual = new LispRatio(n, d).doubleValue();
+		assertThat(Double.doubleToRawLongBits(actual)).describedAs(num + "/" + den + " expected " + expected)
+			.isEqualTo(Double.doubleToRawLongBits(expected));
 	}
 
 	@Test

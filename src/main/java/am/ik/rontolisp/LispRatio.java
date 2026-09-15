@@ -1,8 +1,6 @@
 package am.ik.rontolisp;
 
-import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.math.MathContext;
 
 /**
  * An exact rational number (Common Lisp ratio), printed as {@code numerator/denominator}
@@ -59,14 +57,88 @@ public record LispRatio(BigInteger numerator, BigInteger denominator) implements
 	}
 
 	/**
-	 * Returns the closest {@code double} approximation of this rational. Computed via
-	 * {@link BigDecimal} division so that ratios of huge integers do not overflow to
-	 * infinity before the final rounding.
+	 * Returns the closest {@code double} approximation of this rational, correctly
+	 * rounded (round-half-even per IEEE 754): the exact binary quotient is computed with
+	 * {@link BigInteger} arithmetic -- a 56-bit head plus the remainder as the sticky bit
+	 * -- and only then narrowed to a double, so no intermediate decimal or double
+	 * rounding can move the answer. In particular an exactly representable quotient (e.g.
+	 * {@code 1/8388608} is {@code 2^-23}) converts back exactly, which is what the
+	 * {@code RATIONAL.1}/{@code RATIONALIZE.1}/{@code /.12} round trips require. Huge
+	 * magnitudes answer signed infinity, tinies denormalize down to signed zero. The JVM
+	 * backend's generated {@code _ratToDouble} and the WASM backend's {@code _as_f64}
+	 * ratio arm (an f64 division, correctly rounded for the i32 components it can hold)
+	 * answer bit-identically; see the {@code floatOfRatio}-family pinning tests on each
+	 * backend.
 	 * @return the double approximation
 	 */
 	public double doubleValue() {
-		return new BigDecimal(this.numerator).divide(new BigDecimal(this.denominator), MathContext.DECIMAL64)
-			.doubleValue();
+		return ratioToDouble(this.numerator, this.denominator);
+	}
+
+	/**
+	 * The correctly-rounded {@code double} nearest {@code num}/{@code den}.
+	 * @param num the numerator (any sign; zero answers positive zero)
+	 * @param den the denominator (non-zero; a negative sign is honored)
+	 * @return the nearest double, ties to even
+	 */
+	static double ratioToDouble(BigInteger num, BigInteger den) {
+		if (den.signum() == 0) {
+			throw new ArithmeticException("Division by zero");
+		}
+		if (num.signum() == 0) {
+			// Unreachable through valueOf (a zero numerator demotes to an integer),
+			// kept so a hand-built pair still has a defined conversion.
+			return 0.0;
+		}
+		boolean neg = num.signum() < 0;
+		BigInteger n = neg ? num.negate() : num;
+		BigInteger d = den.signum() < 0 ? den.negate() : den;
+		// exp = floor(log2(n/d)): the bit-length difference, adjusted down by one
+		// when the shifted denominator still overshoots the numerator.
+		int exp = n.bitLength() - d.bitLength();
+		if (exp >= 0 ? n.compareTo(d.shiftLeft(exp)) < 0 : n.shiftLeft(-exp).compareTo(d) < 0) {
+			exp--;
+		}
+		if (exp > 1023) {
+			return neg ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+		}
+		double mag;
+		if (exp >= -1022) {
+			// Normal range: q = floor(n * 2^(55-exp) / d) holds 56 bits (the 53-bit
+			// mantissa plus guard, round and one sticky bit); the true remainder
+			// joins the low two bits as the rest of the sticky bit.
+			int shift = 55 - exp;
+			BigInteger[] qr = shift >= 0 ? n.shiftLeft(shift).divideAndRemainder(d)
+					: n.divideAndRemainder(d.shiftLeft(-shift));
+			long q = qr[0].longValue();
+			boolean round = (q & 4L) != 0;
+			boolean sticky = (q & 3L) != 0 || qr[1].signum() != 0;
+			long m = q >>> 3;
+			if (round && (sticky || (m & 1L) != 0)) {
+				m++;
+			}
+			int e = exp;
+			if (m == 1L << 53) {
+				m >>>= 1;
+				e++;
+			}
+			if (e > 1023) {
+				return neg ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+			}
+			mag = Double.longBitsToDouble(((long) (e + 1023) << 52) | (m & 0xF_FFFF_FFFF_FFFFL));
+		}
+		else {
+			// Subnormal range: k = round-half-even(n * 2^1074 / d) is the mantissa
+			// directly; a k of 2^52 is the smallest normal, reached by rounding up.
+			BigInteger[] qr = n.shiftLeft(1074).divideAndRemainder(d);
+			BigInteger k = qr[0];
+			int cmp = qr[1].shiftLeft(1).compareTo(d);
+			if (cmp > 0 || (cmp == 0 && k.testBit(0))) {
+				k = k.add(BigInteger.ONE);
+			}
+			mag = Double.longBitsToDouble(k.longValue());
+		}
+		return neg ? -mag : mag;
 	}
 
 	/**

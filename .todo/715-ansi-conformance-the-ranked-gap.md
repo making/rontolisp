@@ -76,7 +76,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | `loop` -- four slices landed 2026-09-14 for 113 (uninterned `#:kw` 45, NIL no-binding 15, any-order numeric 12, named-loop block 39; `iteration` 63.6% -> 77.0%, 0 regressed); left: missing `program-error`/`type-error` validation ~30, hash/`across` destructuring ~9, dotted `append` ~5, typed init ~6 | ~50 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
-| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed; Slice C closed `logcount`/`rationalize`/`integer-decode-float` for 16 numbers + 15 misc, 0 regressed, with `RATIONAL.1`/`RATIONALIZE.1`/`/.12` surfacing the ratio->float conversion defect and `RATIONALIZE.ERROR.4` the universe cascade) | tbd | `.todo/037` |
+| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest; 2026-09-15 Slice B closed `rational` for 15 numbers + 7 misc, 0 regressed; Slice C closed `logcount`/`rationalize`/`integer-decode-float` for 16 numbers + 15 misc, 0 regressed; the ratio->float conversion closed `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12` and `*.12` for 6 numbers, 0 regressed -- left here: the float-vs-ratio `=`/compare semantics six (`<.17`/`=.17`/`>=.17`, `<=.18`/`=.18`/`>.18`) + eight `BIGNUM.FLOAT.COMPARE.*`, all `.todo/037` item 2) | tbd | `.todo/037` |
 | a `setf` place the expander does not support | 79 | `.todo/001`, `.todo/041` |
 | `pprint-tabular`/`-fill`/`-linear` (27+) and `setf readtable-case` | ~140 | `.todo/041`, `.todo/001` |
 | `read-from-string`'s lambda list (`eof-error-p`, `:start`/`:end`, `:preserve-whitespace`) -- six `READ-FROM-STRING.*` tests; the INDEX landed 2026-09-13 | 6 | `.todo/214` |
@@ -128,6 +128,20 @@ runtime package API and complex numbers. The corpus uses only
 Only the entries whose FINDING outlives the change are kept; the rest are in
 `.todo/history/`.
 
+- **2026-09-15, `.todo/037` ratio->float conversion** -- correctly-rounded
+  nearest double on the interpreter (`LispRatio.doubleValue`, exact `BigInteger`
+  quotient with sticky bit) and the JVM (new generated `_ratToDouble`, no new
+  runtime class); WASM-GC unchanged (its `_as_f64` f64 division already rounds
+  correctly for i31 components). **numbers 240 -> 234 (6 fixed: `RATIONAL.1/.3`,
+  `RATIONALIZE.1/.3`, `/.12`, `*.12`), misc unchanged, 0 regressed**, as a diff of
+  failing test NAMES. The round trips are identities now (exact `rational` +
+  correctly-rounded `float`), so the two random `*.3` pass deterministically.
+  `*.12` was conversion-caused, not an epsilon-model gap. Unchanged: the six
+  float-vs-ratio `=`/compare (`.todo/037` item 2) and the universe-cascade ERRORs
+  (§1 out of scope). Cost: ~300 bytes per numeric program, so the 8,000-byte
+  budget in `aProgramThatNeverNamesAnArrayOperatorCarriesNoArrayRuntime` went to
+  8,400 with the reason on the assertion (a ratio gate needs a recompile net --
+  disproportionate).
 - **2026-09-15, `.todo/037` numbers Slice C (`logcount`, `rationalize`,
   `integer-decode-float`)** -- prelude defuns (`LispPreludeLibrary`, the
   `decode-float` precedent: one Lisp implementation on interpreter/JVM/WASM-GC,

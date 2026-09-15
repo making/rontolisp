@@ -11,6 +11,20 @@ path allocated and immediately unwrapped, never a different computation. Sibling
   syntactic guess, not type inference: the unboxed path coerces through `_dbl` (accepts `Long`,
   `BigInteger`, `Double`, ratio), so a wrong guess still gives a defined float result.
   `INTEGER_VALUED_FORMS` (`round`, `truncate`, `floor`, `ceiling`) stop the recursion.
+- **`_dbl`'s ratio arm is the generated `_ratToDouble`: the correctly-rounded nearest
+  double** (round-half-even over a 56-bit `BigInteger` head plus the remainder as the
+  sticky bit, denormalizing to signed zero), bit-identical with
+  `LispRatio.doubleValue` and WASM's `_as_f64` f64 division. A `BigDecimal` DECIMAL64
+  step used to sit here and rounded exact quotients to 16 decimal digits first
+  (`1/8388608` answered `1.192092895507812e-7`, not `2^-23`); the ANSI
+  `RATIONAL.1`/`RATIONALIZE.1`/`RATIONALIZE.3`/`/.12` round trips plus `*.12` pin the
+  fix on every backend. The method costs ~300 bytes in each numeric program (the
+  8,000-byte budget in
+  `JvmLispCompilerTest#aProgramThatNeverNamesAnArrayOperatorCarriesNoArrayRuntime`
+  went to 8,400 for it, 8,295 actual); a may-produce-a-ratio gate would buy that back
+  but needs the complex gate's recompile net to stay sound (a missed source is a
+  `NoSuchMethodError`, not a wrong answer), which is disproportionate -- the budget
+  still catches what it was built for.
 - `JvmArithCompiler.compileUnboxedOperand` pushes literals raw (an integer literal as
   `(double) v`) and inlines an interior `+ - * / mod rem` node, so only the outermost node boxes.
   Users: `JvmArithCompiler`, `JvmComparisonCompiler`, `JvmMathFnCompiler`, `JvmAbsCompiler`,
