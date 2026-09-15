@@ -39,7 +39,7 @@
 | [`uiop/image`](uiop/image.md) | 終了、致命的コンディション、ダンプフック、コマンドライン | 30 / 30 |
 | `uiop/launch-program` | 非同期のサブプロセス | 0 / 19 |
 | `uiop/run-program` | 同期のサブプロセス | 0 / 7 |
-| `uiop/lisp-build` | `compile-file*` と遅延警告 | 1 / 44 |
+| `uiop/lisp-build` | ファイルのコンパイル: ミュート条件の一族・`load*`・`reify-simple-sexp`・コンディションクラスが実装済み。`compile-file*` と遅延警告はシグナルします | 44 / 44 |
 | `uiop/configuration` | XDG パスと設定ファイルの探索 | 0 / 38 |
  | `uiop/backward-driver` | 非推奨の別名 (`coerce-pathname`、`version-compatible-p`) | 2 / 7 |
 
@@ -64,6 +64,12 @@
 が 4 つのバックエンドすべてで検査と走査を行い、`getenv-*` 一族が環境変数からパス名を
 読み、シンボリックリンクは正直な恒等関数であり、4 つの変更操作は基本操作のあるところで
 動作します (2 つの WASM バックエンドでは基本操作自身の呼び出し時エラーを通知)。
+6 つめは `uiop/lisp-build` です。rontolisp はプログラムを丸ごとコンパイルするため、
+コンパイル済みファイルの型は `nil` であり、`compile-file*` と遅延警告の機構は
+操作名を挙げて `not-implemented-error` をシグナルします。一方、移植可能な半分は実装
+済みです — ミュートのコンパイラ/ローダ条件マクロとその `call-with-` 関数、`load*` と
+`load-from-string`、アトムと cons セルに対する `reify-simple-sexp`/`unreify-simple-sexp`、
+6 つのコンディションクラス、そして警告ファイルの配管です。
 残りは以下のとおりです。
 
 | 関数 | 例 | 結果 |

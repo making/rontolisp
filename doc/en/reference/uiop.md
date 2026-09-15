@@ -39,7 +39,7 @@ one member name:
 | [`uiop/image`](uiop/image.md) | exit, fatal conditions, the dump hooks, the command line | 30 / 30 |
 | `uiop/launch-program` | asynchronous subprocesses | 0 / 19 |
 | `uiop/run-program` | synchronous subprocesses | 0 / 7 |
-| `uiop/lisp-build` | `compile-file*` and the deferred warnings | 1 / 44 |
+| `uiop/lisp-build` | compiling a file: the muffled-conditions family, `load*`, `reify-simple-sexp` and the condition classes real; `compile-file*` and the deferred warnings signal | 44 / 44 |
 | `uiop/configuration` | XDG paths and the configuration search | 0 / 38 |
  | `uiop/backward-driver` | the deprecated aliases (`coerce-pathname`, `version-compatible-p`) | 2 / 7 |
 
@@ -65,7 +65,13 @@ backtrace and image-hook families live there too. The fifth is
 `truename*` and `directory*` probe and walk on all four backends, the
 `getenv-*` family reads pathnames out of the environment, symlinks are the
 honest identity, and the four mutating operations run where their primitives do
-(signalling the primitive's own call-time error on both WASM backends). The rest:
+(signalling the primitive's own call-time error on both WASM backends). The sixth is
+`uiop/lisp-build`: rontolisp compiles a whole program, so the compiled-file TYPE is
+`nil` and `compile-file*` with the deferred-warnings machinery signal
+`not-implemented-error` naming the operation, while the portable half is real — the
+muffled-compiler/loader-conditions macros and their `call-with-` functions, `load*`
+and `load-from-string`, `reify-simple-sexp`/`unreify-simple-sexp` over the atoms and
+cons cells, the six condition classes and the warnings-file plumbing. The rest:
 
 | Function | Example | Result |
 |----------|---------|--------|

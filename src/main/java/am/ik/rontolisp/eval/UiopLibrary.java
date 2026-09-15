@@ -405,6 +405,9 @@ public final class UiopLibrary {
 					List.of(LispNames.ENSURE_DIRECTORY_PATHNAME, LispNames.DEFAULT_TEMPORARY_DIRECTORY,
 							LispNames.DELETE_FILE_IF_EXISTS)),
 			Map.entry(LispNames.WITH_MUFFLED_CONDITIONS, List.of(LispNames.CALL_WITH_MUFFLED_CONDITIONS)),
+			Map.entry(LispNames.WITH_MUFFLED_COMPILER_CONDITIONS,
+					List.of(LispNames.CALL_WITH_MUFFLED_COMPILER_CONDITIONS)),
+			Map.entry(LispNames.WITH_MUFFLED_LOADER_CONDITIONS, List.of(LispNames.CALL_WITH_MUFFLED_LOADER_CONDITIONS)),
 			Map.entry(LispNames.UIOP_DEBUG, List.of(LispNames.LOAD_UIOP_DEBUG_UTILITY)),
 			Map.entry(LispNames.LATEST_TIMESTAMP_F, List.of(LispNames.LATEST_TIMESTAMP)),
 			// The no-defaults arm of with-pathname-defaults binds the *nil-pathname*

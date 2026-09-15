@@ -10812,8 +10812,8 @@ public final class LispMacroExpander {
 			LispNames.APPENDF, LispNames.LATEST_TIMESTAMP_F, LispNames.WITH_MUFFLED_CONDITIONS, LispNames.UIOP_DEBUG,
 			LispNames.COMPATFMT, LispNames.WITH_PATHNAME_DEFAULTS, LispNames.WITH_ENOUGH_PATHNAME, LispNames.OS_COND,
 			LispNames.WITH_CURRENT_DIRECTORY, LispNames.WITH_FATAL_CONDITION_HANDLER, LispNames.WITH_INPUT,
-			LispNames.WITH_OUTPUT, LispNames.WITH_INPUT_FILE, LispNames.WITH_OUTPUT_FILE,
-			LispNames.WITH_SAFE_IO_SYNTAX);
+			LispNames.WITH_OUTPUT, LispNames.WITH_INPUT_FILE, LispNames.WITH_OUTPUT_FILE, LispNames.WITH_SAFE_IO_SYNTAX,
+			LispNames.WITH_MUFFLED_COMPILER_CONDITIONS, LispNames.WITH_MUFFLED_LOADER_CONDITIONS);
 
 	/**
 	 * If {@code cons} is a {@code (read-line ...)} call in CL's 2- or 3-argument shape
@@ -11463,6 +11463,54 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (uiop:with-muffled-compiler-conditions () body...)} into
+	 * {@code (uiop:call-with-muffled-compiler-conditions (lambda () body...))} --
+	 * upstream's own shorthand over the lisp-build muffling function. The spec list is
+	 * upstream's {@code (&optional)}, i.e. always empty.
+	 * @param cons the with-muffled-compiler-conditions expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithMuffledCompilerConditions(LispCons cons) {
+		return expandUiopEmptySpecMuffled(cons, LispNames.WITH_MUFFLED_COMPILER_CONDITIONS,
+				LispNames.CALL_WITH_MUFFLED_COMPILER_CONDITIONS);
+	}
+
+	/**
+	 * Expands {@code (uiop:with-muffled-loader-conditions () body...)} into
+	 * {@code (uiop:call-with-muffled-loader-conditions (lambda () body...))} --
+	 * upstream's own shorthand over the lisp-build muffling function. The spec list is
+	 * upstream's {@code (&optional)}, i.e. always empty.
+	 * @param cons the with-muffled-loader-conditions expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithMuffledLoaderConditions(LispCons cons) {
+		return expandUiopEmptySpecMuffled(cons, LispNames.WITH_MUFFLED_LOADER_CONDITIONS,
+				LispNames.CALL_WITH_MUFFLED_LOADER_CONDITIONS);
+	}
+
+	/**
+	 * Shared lowering for the two {@code (with-muffled-*-conditions () body...)} macros:
+	 * requires the empty spec list (upstream's {@code (&optional)}), then wraps the body
+	 * in a zero-argument lambda handed to the named {@code call-with-} function.
+	 * @param cons the with-muffled-*-conditions expression
+	 * @param macro the macro name for the error message
+	 * @param callWith the call-with- function name
+	 * @return the expanded expression
+	 */
+	private static LispVal expandUiopEmptySpecMuffled(LispCons cons, String macro, String callWith) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispNil)) {
+			throw new UnsupportedOperationException(
+					UiopExports.qualified(macro) + " expects (" + macro + " () body...): " + cons.print());
+		}
+		List<LispVal> thunk = new java.util.ArrayList<>();
+		thunk.add(new LispSymbol(LispNames.LAMBDA));
+		thunk.add(LispNil.INSTANCE);
+		thunk.addAll(parts.subList(2, parts.size()));
+		return listToCons(List.of(new LispSymbol(UiopExports.qualified(callWith)), listToCons(thunk)));
+	}
+
+	/**
 	 * Expands {@code (uiop:with-fatal-condition-handler () body...)} into
 	 * {@code (uiop:call-with-fatal-condition-handler (lambda () body...))} -- upstream's
 	 * own expansion. The spec list is upstream's {@code (&optional)}, i.e. always empty;
@@ -11850,6 +11898,8 @@ public final class LispMacroExpander {
 			case LispNames.APPENDF -> expandUiopAppendf(cons);
 			case LispNames.LATEST_TIMESTAMP_F -> expandUiopLatestTimestampF(cons);
 			case LispNames.WITH_MUFFLED_CONDITIONS -> expandUiopWithMuffledConditions(cons);
+			case LispNames.WITH_MUFFLED_COMPILER_CONDITIONS -> expandUiopWithMuffledCompilerConditions(cons);
+			case LispNames.WITH_MUFFLED_LOADER_CONDITIONS -> expandUiopWithMuffledLoaderConditions(cons);
 			case LispNames.WITH_FATAL_CONDITION_HANDLER -> expandUiopWithFatalConditionHandler(cons);
 			case LispNames.WITH_PATHNAME_DEFAULTS -> expandUiopWithPathnameDefaults(cons);
 			case LispNames.WITH_ENOUGH_PATHNAME -> expandUiopWithEnoughPathname(cons);

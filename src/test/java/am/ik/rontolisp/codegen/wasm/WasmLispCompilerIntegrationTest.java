@@ -5038,6 +5038,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void uiopLispBuildPortableHalfCompileAndRun() throws Exception {
+		// .todo/365: the portable half of uiop/lisp-build -- the muffled-conditions
+		// macros (Java expansions over the call-with- defuns), call-around-hook,
+		// reify-simple-sexp round trip, the warnings-file plumbing and the condition
+		// classes -- runs on the compile path; the compile-file*/deferred-warnings
+		// machinery signals not-implemented-error naming the operation. The JVM twin
+		// is JvmLispCompilerTest.compileAndRunUiopLispBuildPortableHalf.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (uiop:with-muffled-compiler-conditions () :c))
+				(print (uiop:with-muffled-loader-conditions () :l))
+				(print (uiop:call-around-hook nil (lambda () 5)))
+				(print (uiop:unreify-simple-sexp (uiop:reify-simple-sexp '(1 "two" (3 4)))))
+				(print (uiop:warnings-file-type :sbcl))
+				(print (handler-case (uiop:compile-file* "x.lisp")
+				         (uiop:not-implemented-error (c) :nie)))
+				""")))).isEqualTo("""
+				:C
+				:L
+				5
+				(1 "two" (3 4))
+				"sbcl-warnings"
+				:NIE""");
+	}
+
 	void loopAnaphoricItOutsideClUserCompilesAndRuns() throws Exception {
 		// Read outside cl-user the anaphor arrives package-qualified; missing it here
 		// fails at COMPILE time, not at run time.

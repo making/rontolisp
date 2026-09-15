@@ -332,6 +332,41 @@ the two are never mixed in one pinned program (ci-spec `uiop-package-surgery`
 adds without removing; the remove leg lives in the backend tests with its
 listings after it).
 
+`uiop/lisp-build` (44/44, `uiop-lisp-build.lisp` plus two Java macro expansions) --
+the last of the twelve, and the one whose subject rontolisp mostly does not have.
+**The compiled-file TYPE answers nil**: there is no `compile-file` here, so there is no
+compiled-file type, and a caller asking "is this path a fasl?" (rove's resolve-file) gets
+`no` for a source path. The portable half is real -- the six condition classes
+(`compile-condition` and the five warning/error subclasses, real `define-condition`s a
+handler must find), the muffled-compiler/loader-conditions family (`call-with-` over
+`uiop/utility:call-with-muffled-conditions` of the uninteresting lists; the two `with-`
+macros are Java expansions in `LispMacroExpander`, in `UIOP_MACRO_EXPANSIONS`, with the
+two new `MACRO_EXPANSION_CALLEES` rows), `load*` (the muffled loader around `cl:load`
+for a pathname/string and `uiop/stream:eval-input` for a stream -- rontolisp's `load`
+cannot load from a string-input-stream, so the stream arm is upstream's for the
+implementations that cannot either), `load-from-string` (`load*` over
+`with-input-from-string`), `reify-simple-sexp`/`unreify-simple-sexp` (a pure sexp <->
+portable representation; the terminating NIL of a proper list passes through as nil,
+because `reify-symbol` signals -- the reify/unreify pair is part of the image-upgrade
+surgery), `check-lisp-compile-warnings`/`check-lisp-compile-results` (portable over the
+two behaviour flags and the real classes), `call-around-hook`, `lispize-pathname`,
+`compile-file-pathname*` (no compiled-file TYPE to derive, so the honest answer is the
+explicit `output-file` merged against the input, or nil), `warnings-file-type` (answers
+nil for the one implementation here -- the case has no `:rontolisp` clause) /
+`warnings-file-p` / `*warnings-file-type*`, and the variables (`*base-build-directory*`,
+`*compile-check*`, the behaviour flags at upstream's `:warn` defaults, the
+uninteresting lists seeded empty -- no implementation-specific condition names to skip).
+`compile-file*` and the deferred-warnings machinery (`save-deferred-warnings`,
+`reify-deferred-warnings`, `unreify-deferred-warnings`, `check-deferred-warnings`,
+`with-saved-deferred-warnings` (a defun stub a call form lowers past, dropping its
+body), `combine-fasls`) resolve and signal `not-implemented-error` naming the operation:
+rontolisp has no `compile-file`, no fasl and no compilation-unit protocol. The three
+defensive checks -- `enable-deferred-warnings-check` / `disable-deferred-warnings-check`
+/ `reset-deferred-warnings` -- are no-ops rather than errors, so a library calling them
+defensively does not turn a no-op into a failure. Re-evaluation trigger: if rontolisp
+ever grows a real `cl:compile-file`, `compile-file*` is the first thing that should stop
+signalling.
+
 ## Selection, not pruning
 `UiopLibrary.process` prepends only the definitions the program reaches, to a fixpoint on a
 `PackageResolver.resolveProgram` copy. **`MACRO_EXPANSION_CALLEES` is the surface-form rule**
@@ -344,6 +379,8 @@ callee is listed; the fixpoint pulls the rest.
 |---|---|
 | `with-temporary-file` | `ensure-directory-pathname`, `default-temporary-directory`, `delete-file-if-exists` (through the prelude's `%temp-file-name`) |
 | `with-muffled-conditions` | `call-with-muffled-conditions` |
+| `with-muffled-compiler-conditions` | `call-with-muffled-compiler-conditions` |
+| `with-muffled-loader-conditions` | `call-with-muffled-loader-conditions` |
 | `uiop-debug` | `load-uiop-debug-utility` |
 | `latest-timestamp-f` | `latest-timestamp` |
 

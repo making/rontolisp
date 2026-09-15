@@ -20798,6 +20798,57 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalUiopLispBuildReifySimpleSexpRoundTrip() {
+		// .todo/365: reify-simple-sexp / unreify-simple-sexp are a pure sexp <->
+		// portable representation over the atoms and cons cells. A symbol reifies
+		// through uiop/package:reify-symbol, which signals (the pair is part of the
+		// image-upgrade surgery), so the round trip is pinned on the portable part.
+		assertThat(evalMulti("""
+				(list (uiop:unreify-simple-sexp (uiop:reify-simple-sexp '(1 "two" (3 4))))
+				      (uiop:reify-simple-sexp "x")
+				      (uiop:unreify-simple-sexp "y")
+				      (uiop:reify-simple-sexp 42))
+				""").print()).isEqualTo("((1 \"two\" (3 4)) \"x\" \"y\" 42)");
+	}
+
+	@Test
+	void evalUiopLispBuildLoadFromString() {
+		// .todo/365: load-from-string is load over a string stream; rontolisp's load
+		// cannot load from a string-input-stream, so the stream arm is
+		// uiop/stream:eval-input -- read and evaluate each form (upstream's arm for the
+		// implementations that cannot load from a stream either).
+		assertThat(evalMulti("""
+				(progn (uiop:load-from-string "(defun %lfs-probe () 7)")
+				       (%lfs-probe))
+				""").print()).isEqualTo("7");
+	}
+
+	@Test
+	void evalUiopLispBuildNotImplementedErrorNamesTheOperation() {
+		// .todo/365: compile-file* and the deferred-warnings machinery signal
+		// not-implemented-error naming the operation -- the condition type is real and
+		// the report names COMPILE-FILE. The rest of the sub-package (the muffled
+		// family, the condition classes, load*, reify-simple-sexp and the pathname
+		// plumbing) is real, so a couple of sanity probes ride along.
+		assertThat(evalMulti("""
+				(list (handler-case (uiop:compile-file* "x.lisp")
+				        (uiop:not-implemented-error (c)
+				          (list (typep c 'uiop:not-implemented-error) (princ-to-string c))))
+				      (handler-case (uiop:combine-fasls (list "a" "b") "out")
+				        (uiop:not-implemented-error (c) (princ-to-string c)))
+				      (handler-case (uiop:reify-deferred-warnings)
+				        (uiop:not-implemented-error (c) (princ-to-string c)))
+				      (uiop:call-around-hook nil (lambda () 5))
+				      (uiop:warnings-file-type :sbcl)
+				      (uiop:warnings-file-type)
+				      (uiop:warnings-file-p "x"))
+				""").print()).contains("UIOP/LISP-BUILD:COMPILE-FILE*")
+			.contains("UIOP/LISP-BUILD:COMBINE-FASLS")
+			.contains("UIOP/LISP-BUILD:REIFY-DEFERRED-WARNINGS")
+			.contains("5 \"sbcl-warnings\" NIL NIL");
+	}
+
+	@Test
 	void evalUiopStreamFileContentsAndSafeIo(@TempDir Path tempDir) throws Exception {
 		// .todo/359: the "give me the contents" half of uiop/stream -- the openers,
 		// the designator coercions, the slurp family, the safe-IO syntax, the eval

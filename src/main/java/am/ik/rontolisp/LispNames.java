@@ -9457,6 +9457,34 @@ public final class LispNames {
 	public static final String CALL_WITH_MUFFLED_CONDITIONS = "CALL-WITH-MUFFLED-CONDITIONS";
 
 	/**
+	 * {@code uiop:with-muffled-compiler-conditions () body...} -- shorthand for
+	 * {@link #CALL_WITH_MUFFLED_COMPILER_CONDITIONS} over a thunk of the body.
+	 */
+	public static final String WITH_MUFFLED_COMPILER_CONDITIONS = "WITH-MUFFLED-COMPILER-CONDITIONS";
+
+	/**
+	 * {@code uiop:call-with-muffled-compiler-conditions thunk} -- runs the thunk under
+	 * the uninteresting + compiler-condition muffling. Lisp source
+	 * ({@code uiop-lisp-build.lisp}); named here because
+	 * {@link #WITH_MUFFLED_COMPILER_CONDITIONS} expands into it.
+	 */
+	public static final String CALL_WITH_MUFFLED_COMPILER_CONDITIONS = "CALL-WITH-MUFFLED-COMPILER-CONDITIONS";
+
+	/**
+	 * {@code uiop:with-muffled-loader-conditions () body...} -- shorthand for
+	 * {@link #CALL_WITH_MUFFLED_LOADER_CONDITIONS} over a thunk of the body.
+	 */
+	public static final String WITH_MUFFLED_LOADER_CONDITIONS = "WITH-MUFFLED-LOADER-CONDITIONS";
+
+	/**
+	 * {@code uiop:call-with-muffled-loader-conditions thunk} -- runs the thunk under the
+	 * uninteresting + loader-condition muffling. Lisp source
+	 * ({@code uiop-lisp-build.lisp}); named here because
+	 * {@link #WITH_MUFFLED_LOADER_CONDITIONS} expands into it.
+	 */
+	public static final String CALL_WITH_MUFFLED_LOADER_CONDITIONS = "CALL-WITH-MUFFLED-LOADER-CONDITIONS";
+
+	/**
 	 * {@code uiop:with-fatal-condition-handler () body...} -- shorthand for
 	 * {@link #CALL_WITH_FATAL_CONDITION_HANDLER} over a thunk of the body.
 	 */
