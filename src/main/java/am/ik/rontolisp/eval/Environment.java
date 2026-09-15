@@ -3117,9 +3117,38 @@ public final class Environment implements Scope {
 			return normalizeBig(acc);
 		}));
 		// ash: shift left for a non-negative count, arithmetic right shift otherwise.
+		// A count the narrowing below cannot represent never reaches it: narrowing
+		// first would wrap a huge negative count positive and build a monster
+		// bignum (MISC.47/.48). Any magnitude past the int range dwarfs every
+		// feasible bit length, so a huge right shift saturates to the sign, while a
+		// huge left shift of a non-zero value cannot be represented
+		// (BigInteger.shiftLeft takes an int) and signals instead of answering a
+		// wrapped-around wrong value. Counts within the int range keep the
+		// width-aware paths below: saturating at 64 is only valid for a fixnum --
+		// a bignum shifted right by 70 still has high bits (ASH.3).
 		env.defineFunction(LispNames.ASH, new LispFunction(LispNames.ASH, args -> {
 			requireArgCount(LispNames.ASH, args, 2);
+			// A bignum count is always past the saturation width: a negative one
+			// shifts the whole value out (ASH.5 reaches (ash j j) with j = -(2^64)).
+			if (args.get(1) instanceof LispBigInteger b) {
+				if (b.value().signum() < 0) {
+					return asBigInteger(args.get(0)).signum() < 0 ? new LispInteger(-1) : new LispInteger(0);
+				}
+				if (asBigInteger(args.get(0)).signum() == 0) {
+					return new LispInteger(0);
+				}
+				throw new LispEvalException(LispNames.ASH + ": shift count too large: " + b.value());
+			}
 			long count = asLong(args.get(1));
+			if (count < Integer.MIN_VALUE) {
+				return asBigInteger(args.get(0)).signum() < 0 ? new LispInteger(-1) : new LispInteger(0);
+			}
+			if (count > Integer.MAX_VALUE) {
+				if (asBigInteger(args.get(0)).signum() == 0) {
+					return new LispInteger(0);
+				}
+				throw new LispEvalException(LispNames.ASH + ": shift count too large: " + count);
+			}
 			if (args.get(0) instanceof LispInteger i) {
 				long value = i.value();
 				int shift = (int) count;

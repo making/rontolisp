@@ -2370,20 +2370,35 @@ final class JvmIntFusionCompiler {
 
 	/**
 	 * {@code _fxAsh(long v, long count)}: the raw checked shift matching {@code _ash}'s
-	 * {@code Long} fast path exactly -- the count narrows to an {@code int} first, a
-	 * count at or below -64 leaves the sign, a negative count shifts right, and a wide or
-	 * overflowing left shift throws {@code ArithmeticException} (the fused region's bail
-	 * signal, whose fallback then answers what {@code _ash} answers).
+	 * {@code Long} fast path exactly -- the count is compared as a {@code long} first
+	 * (narrowing first would wrap a huge negative count positive), a count at or below
+	 * -64 leaves the sign, a negative count shifts right, and a wide or overflowing left
+	 * shift throws {@code ArithmeticException} (the fused region's bail signal, whose
+	 * fallback then answers what {@code _ash} answers).
 	 */
 	static JvmNumericRuntimeBuilder.NumericMethod buildFxAsh(ConstantPool cp) {
 		ClassConstant arithEx = cp.addClass(cp.addUtf8("java/lang/ArithmeticException"));
 		MethodrefConstant arithExInit = cp.addMethodref(arithEx,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 		JvmAsm a = new JvmAsm();
+		int hugeNeg = a.label();
 		int rightShift = a.label();
 		int leftShift = a.label();
 		int overflow = a.label();
-		// int c = (int) count;
+		// count < -64: the value shifts down to its sign.
+		a.lload(2);
+		a.iconst(-64);
+		a.op(Opcode.I2L);
+		a.op(Opcode.LCMP);
+		a.branch(Opcode.IFLT, hugeNeg);
+		// count > 63: no shift of a full-width value stays in range (v == 0 bails
+		// too -- the fallback answers it exactly).
+		a.lload(2);
+		a.iconst(63);
+		a.op(Opcode.I2L);
+		a.op(Opcode.LCMP);
+		a.branch(Opcode.IFGT, overflow);
+		// int c = (int) count -- exact: the count is within [-64, 63].
 		a.lload(2);
 		a.l2i();
 		a.istore(4);
@@ -2427,6 +2442,11 @@ final class JvmIntFusionCompiler {
 		a.dup();
 		a.invokespecial(arithExInit);
 		a.op(Opcode.ATHROW);
+		a.bind(hugeNeg);
+		a.lload(0);
+		a.iconst(63);
+		a.op(Opcode.LSHR);
+		a.op(Opcode.LRETURN);
 		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8("_fxAsh"), cp.addUtf8("(JJ)J"), a.code, 5, 7,
 				List.of());
 	}

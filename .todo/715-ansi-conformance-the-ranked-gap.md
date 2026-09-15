@@ -13,26 +13,14 @@ the checked-in baseline; pass every chapter name instead and it writes
 minutes on 64 cores). Then rank from `ansi-test/results/logs/*.log`, not from
 the report's reason table -- see "How to count" below.
 
-## Baseline (re-measured 2026-09-12, suite revision `ca06bd9`)
+## Baseline (re-measured 2026-09-12, suite revision `ca06bd9`; see history)
 
 **13,356 / 19,482 tests pass (68.6%)** -- 2,471 wrong values, 3,655 signalled,
-463 top-level forms lost. The local run reproduced the checked-in report to
-within ~12 tests before this session's change, so the committed series is
-trustworthy.
-
-A local full run on 2026-09-13, after `.todo/797` landed, reads **13,771 / 19,482
-(70.7%)** with `reader` at 47.8%; a second run the same day, after `.todo/807`'s
-first pass, reads **13,808 / 19,482 (70.9%)**. The checked-in report is NOT refreshed from a
-local run (one machine, one stall window -- `ansi-test/README.md`), so it still
-carries the pre-797 numbers until the daily workflow rewrites it.
-
-The daily workflow has since rewritten it twice: the checked-in report now reads
-**13,810 / 19,485 (70.9%)** with `reader` at 53.6% (the `.todo/807` first pass,
-measured). A local `iteration`-only run on 2026-09-14, after the `.todo/029`
-slices below landed, fixes 113 chapter tests with 0 regressed and no lost-form
-change -- projected suite total **13,923 / 19,485 (71.5%)**, `iteration` 63.6%
--> 77.0%. Projection, not a re-measure: only the `iteration` chapter was run
-(`results/partial.md`).
+463 top-level forms lost. Later local runs: 13,771 (09-13, after `.todo/797`),
+13,808 (09-13, after `.todo/807`'s first pass); the checked-in report has since
+been rewritten twice by the daily workflow and reads **13,810 / 19,485
+(70.9%)**. A 09-14 `iteration`-only run projects **13,923 / 19,485 (71.5%)**
+after the `.todo/029` slices (projection, not a re-measure).
 
 Against the previous reading in this file (55.5%, 10,809 / 19,461): `.todo/736`,
 `.todo/740`+`.todo/776`, `.todo/744`, `.todo/775`, `.todo/778`, `.todo/772`,
@@ -88,7 +76,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | `loop` -- four slices landed 2026-09-14 for 113 (uninterned `#:kw` 45, NIL no-binding 15, any-order numeric 12, named-loop block 39; `iteration` 63.6% -> 77.0%, 0 regressed); left: missing `program-error`/`type-error` validation ~30, hash/`across` destructuring ~9, dotted `append` ~5, typed init ~6 | ~50 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
-| `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 | ~180 | `.todo/037` |
+| `rational`/`rationalize`/`logcount`/`integer-decode-float` et al (was: `float-radix` 80, `rational` 33, `logeqv` 22, `lognor` 21 -- Slice A + the ash fix closed the rest) | tbd | `.todo/037` |
 | a `setf` place the expander does not support | 79 | `.todo/001`, `.todo/041` |
 | `pprint-tabular`/`-fill`/`-linear` (27+) and `setf readtable-case` | ~140 | `.todo/041`, `.todo/001` |
 | `read-from-string`'s lambda list (`eof-error-p`, `:start`/`:end`, `:preserve-whitespace`) -- six `READ-FROM-STRING.*` tests; the INDEX landed 2026-09-13 | 6 | `.todo/214` |
@@ -140,20 +128,26 @@ runtime package API and complex numbers. The corpus uses only
 Only the entries whose FINDING outlives the change are kept; the rest are in
 `.todo/history/`.
 
+- **2026-09-15, `.todo/037` ash huge-count defect** -- `(ash a (min 0 a))` with
+  `a = -2878148992` wrapped `(int) count` positive and built a monster bignum.
+  Wide-first on the interpreter, the JVM (`_ash` + fused `_fxAsh`) and `--no-gc`
+  (right-magnitude clamp); WASM-GC already clamped. Only out-of-int-range
+  magnitudes saturate/signal; int-range counts keep the width-aware paths.
+  **MISC.47/.48 + ASH.5 fixed, 0 regressed**, as a diff of failing test NAMES.
+  Two findings: compare huge-count tests with `=` (printing the monster hangs
+  quadratically); saturating at 64 for EVERY value regresses ASH.3 (a bignum
+  `>> 70` keeps high bits -- saturation past 64 is fixnum-only). Also noted:
+  `random`-drawn tests (ASH.3, SQRT.17) vary per run -- `ThreadLocalRandom` is
+  time-seeded, so a flip needs a same-code rerun before it counts as a
+  regression (verified via a clean-worktree baseline run).
 - **2026-09-14, `.todo/037` numbers Slice A** -- `float-radix`, `logeqv`,
   `lognor`, `lognand`, `deposit-field`, expansion-only on all four backends.
   **numbers +106, misc +35, 0 regressed**, measured as a diff of failing test
-  NAMES (the slice priced ~158; the rest needs Slice B/C plus three
-  second-reasons below). Two findings: `deposit-field` is NOT `dpb` (the suite's
-  `dpb.lsp` checks `(logbitp (- i pos) newbyte)` where `deposit-field.lsp`
-  checks `(logbitp i newbyte)` -- the first cut shipped the `dpb` spelling and
-  `DEPOSIT-FIELD.1/.2` caught it), and the `MISC.47/.48` remainder is a
-  PRE-EXISTING `ash` defect, not a `lognor` one (a count outside the int range
-  overflows `(int) count` positive, so a huge right shift builds a bignum;
-  `lognor` then correctly answers `~a`).
-  Remainders this slice does NOT own: `rational`/`rationalize` (Slice B),
-  single-float epsilon (`*.12`), the six `*MINI-UNIVERSE*` error tests
-  (section 1), `MISC.512` (round's second value through `catch`).
+  NAMES. Finding: `deposit-field` is NOT `dpb` (the suite's `dpb.lsp` checks
+  `(logbitp (- i pos) newbyte)` where `deposit-field.lsp` checks `(logbitp i
+  newbyte)` -- the first cut shipped the `dpb` spelling and `DEPOSIT-FIELD.1/.2`
+  caught it). (The `MISC.47/.48` remainder noted here was the `ash` defect the
+  2026-09-15 entry closes; other remainders live in `.todo/037`.)
 
 - **2026-09-14, `.todo/029` (four loop slices)** -- uninterned `#:kw` spellings,
   NIL-as-no-binding, any-order numeric sub-clauses, the named loop's implicit

@@ -5332,6 +5332,22 @@ class LispEvaluatorTest {
 		assertThat(eval("(lognot 5)").print()).isEqualTo("-6");
 		assertThat(eval("(ash 1 4)").print()).isEqualTo("16");
 		assertThat(eval("(ash 255 -4)").print()).isEqualTo("15");
+		// A count outside the int range still saturates a right shift to the sign
+		// (MISC.47/.48: (ash a (min 0 a)) with a = -2878148992 answers -1, so the
+		// lognor around it answers 0). Compared with = so a regressed build never
+		// prints the monster bignum (quadratic print hang).
+		assertThat(eval("(= (ash 5 -64) 0)").print()).isEqualTo("T");
+		assertThat(eval("(= (ash -5 -64) -1)").print()).isEqualTo("T");
+		assertThat(eval("(= (ash 5 -2878148992) 0)").print()).isEqualTo("T");
+		assertThat(eval("(= (ash -5 -2878148992) -1)").print()).isEqualTo("T");
+		assertThat(eval("(= (ash -2878148992 (min 0 -2878148992)) -1)").print()).isEqualTo("T");
+		assertThat(eval("(= (lognor (ash -2878148992 (min 0 -2878148992)) -2878148992) 0)").print()).isEqualTo("T");
+		// A bignum count is always past the saturation width (ASH.5 reaches
+		// (ash j j) with j = -(2^64)).
+		assertThat(eval("(= (ash (- (ash 1 64)) (- (ash 1 64))) -1)").print()).isEqualTo("T");
+		// Saturating at 64 is only valid for a fixnum: a bignum shifted right by
+		// 70 still has high bits (ASH.3: i in [-2^100, 0], s in [-120, 0)).
+		assertThat(eval("(= (ash (- (ash 1 100)) -70) (- (ash 1 30)))").print()).isEqualTo("T");
 		// Variadic forms (identities: logand -1, logior/logxor 0).
 		assertThat(eval("(logand)").print()).isEqualTo("-1");
 		assertThat(eval("(logior)").print()).isEqualTo("0");

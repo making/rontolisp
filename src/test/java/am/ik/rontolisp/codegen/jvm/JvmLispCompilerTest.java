@@ -9332,6 +9332,14 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(
 				"(print (logand 12 10)) (print (logior 12 10)) (print (logxor 12 10)) (print (lognot 5)) (print (ash 1 4)) (print (ash 255 -4))"))
 			.isEqualTo("8\n14\n6\n-6\n16\n15");
+		// A count outside the int range still saturates a right shift to the sign
+		// (MISC.47/.48). The count must stay runtime-computed (via a parameter):
+		// a literal huge count takes the clamped literal-ash path. Compared with =
+		// so a regressed build never prints the monster bignum (quadratic print
+		// hang).
+		assertThat(compileAndRun(
+				"(defun ashc (a c) (ash a c)) (defun ashmin (a) (ash a (min 0 a))) (defun ashminnor (a) (lognor (ash a (min 0 a)) a)) (defun ashbig (a) (ash a (- (ash 1 64)))) (defun ashwide (a) (ash a -70)) (print (= (ash 5 -64) 0)) (print (= (ash -5 -64) -1)) (print (= (ashc 5 -2878148992) 0)) (print (= (ashc -5 -2878148992) -1)) (print (= (ashmin -2878148992) -1)) (print (= (ashminnor -2878148992) 0)) (print (= (ashbig (- (ash 1 64))) -1)) (print (= (ashwide (- (ash 1 100))) (- (ash 1 30))))"))
+			.isEqualTo("T\nT\nT\nT\nT\nT\nT\nT");
 	}
 
 	@Test

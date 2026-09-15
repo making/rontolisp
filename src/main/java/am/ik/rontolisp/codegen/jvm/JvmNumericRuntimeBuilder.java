@@ -414,6 +414,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant aeInit = cp.addMethodref(arithEx,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		ConstantPool.StringConstant divZeroStr = cp.addString("Division by zero");
+		ConstantPool.StringConstant ashTooLargeStr = cp.addString("ash: shift count too large");
 
 		// The non-number landing (_big / _dbl / _abs's BigInteger arm): a plain
 		// RuntimeException carrying "Expected integer|number, got: <prin1>" -- the
@@ -621,7 +622,8 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildLogOp(nLogior, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biOr, Opcode.LOR));
 		methods.add(buildLogOp(nLogxor, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biXor, Opcode.LXOR));
 		methods.add(buildLogNot(nLognot, dUnary, longClass, longValue, longValueOf, rBig, rNorm, biNot));
-		methods.add(buildAsh(nAsh, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biShiftLeft));
+		methods.add(buildAsh(nAsh, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biShiftLeft, biSignum,
+				arithEx, aeInit, ashTooLargeStr));
 		methods.add(buildIntegerLength(nIntLen, dUnary, longClass, longValue, longValueOf, rBig, biBitLength, longNlz));
 		methods.add(buildLogbitp(nLogbitp, dCmp, longClass, longValue, rBig, biTestBit));
 		methods.add(buildFixedDec(cp, nFixDec, dFixDec, mathClass, longClass, numberClass, numDoubleValue, rDbl));
@@ -3004,13 +3006,17 @@ final class JvmNumericRuntimeBuilder {
 	// shift otherwise. Both operands Long: a right shift always fits (>= 64 saturates to
 	// 0 or -1), a left shift is taken only when it round-trips back through the shift, so
 	// an overflowing one falls to BigInteger.shiftLeft like every other operand mix. The
-	// count is narrowed to an int up front, exactly as the BigInteger path does.
+	// count is compared as a long FIRST and only narrowed once the comparison proves the
+	// narrowing exact: narrowing first wraps a huge negative count positive and builds a
+	// monster bignum (MISC.47/.48). Past Integer.MAX_VALUE a zero value stays zero and
+	// anything else is a runaway allocation, which signals.
 	//
-	// Locals: 0=a, 1=count, 2/3=long a, 4=int count, 6/7=long result. The three are
-	// pre-initialized so every path reaching the slow tail carries the same frame.
+	// Locals: 0=a, 1=count, 2/3=long a, 4=int count, 6/7=long result, 8/9=long count.
+	// All are pre-initialized so every path reaching a slow tail carries the same frame.
 	private static NumericMethod buildAsh(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
-			MethodrefConstant biShiftLeft) {
+			MethodrefConstant biShiftLeft, MethodrefConstant biSignum, ClassConstant arithEx, MethodrefConstant aeInit,
+			ConstantPool.StringConstant tooLargeStr) {
 		List<Integer> c = new ArrayList<>();
 		c.add(Opcode.LCONST_0);
 		c.add(Opcode.LSTORE_2);
@@ -3020,13 +3026,56 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.LCONST_0);
 		c.add(Opcode.LSTORE);
 		c.add(6);
-		int[] slowJumps = emitLongLongGuard(c, longClass);
-		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
-		c.add(Opcode.LSTORE_2);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LSTORE);
+		c.add(8);
+		// the count takes the ranged path only when it is a Long
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		int ifSlowCount = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
 		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
+		c.add(Opcode.LSTORE);
+		c.add(8);
+		// ((long) (int) count) == count, else the narrowing below would wrap
+		c.add(Opcode.LLOAD);
+		c.add(8);
+		c.add(Opcode.L2I);
+		c.add(Opcode.I2L);
+		c.add(Opcode.LLOAD);
+		c.add(8);
+		c.add(Opcode.LCMP);
+		int ifCountExact = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// outside the int range the count's own sign decides the side
+		c.add(Opcode.LLOAD);
+		c.add(8);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LCMP);
+		int ifHugeNeg = c.size();
+		c.add(Opcode.IFLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		int goHugePos = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifCountExact, c.size());
+		c.add(Opcode.LLOAD);
+		c.add(8);
 		c.add(Opcode.L2I);
 		c.add(Opcode.ISTORE);
 		c.add(4);
+		// the value takes the fast path only when it is a Long
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		int ifSlowValue = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
+		c.add(Opcode.LSTORE_2);
 		// if (count > 0) goto left
 		c.add(Opcode.ILOAD);
 		c.add(4);
@@ -3096,22 +3145,85 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
 		c.add(Opcode.ARETURN);
-		int slow = c.size();
-		JvmRuntimeBuilder.patchBranch(c, slowJumps[0], slow);
-		JvmRuntimeBuilder.patchBranch(c, slowJumps[1], slow);
-		JvmRuntimeBuilder.patchBranch(c, ifWide, slow);
-		JvmRuntimeBuilder.patchBranch(c, ifOverflow, slow);
+		int slowBig = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifSlowValue, slowBig);
+		JvmRuntimeBuilder.patchBranch(c, ifWide, slowBig);
+		JvmRuntimeBuilder.patchBranch(c, ifOverflow, slowBig);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rBig.index());
-		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
-		c.add(Opcode.L2I);
+		c.add(Opcode.ILOAD);
+		c.add(4);
 		c.add(Opcode.INVOKEVIRTUAL);
 		JvmRuntimeBuilder.emitU2(c, biShiftLeft.index());
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rNorm.index());
 		c.add(Opcode.ARETURN);
-		return new NumericMethod(name, desc, c, 6, 8, List.of());
+		// a non-Long count: a bignum count is always past the saturation width, so
+		// its sign routes to the huge arms (ASH.5 reaches (ash j j) with
+		// j = -(2^64)); anything else is not an integer and rBig signals the type
+		// error
+		int slowObjects = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifSlowCount, slowObjects);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifBigNegCount = c.size();
+		c.add(Opcode.IFLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		int goBigPosCount = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// a huge negative count shifts the whole value out, leaving its sign
+		int hugeNegPos = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifHugeNeg, hugeNegPos);
+		JvmRuntimeBuilder.patchBranch(c, ifBigNegCount, hugeNegPos);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifNegOne = c.size();
+		c.add(Opcode.IFLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNegOne, c.size());
+		c.add(Opcode.ICONST_M1);
+		c.add(Opcode.I2L);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		// a huge positive count: zero stays zero, anything else is a runaway
+		// allocation and signals
+		int hugePosPos = c.size();
+		JvmRuntimeBuilder.patchBranch(c, goHugePos, hugePosPos);
+		JvmRuntimeBuilder.patchBranch(c, goBigPosCount, hugePosPos);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifZeroPos = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.NEW);
+		JvmRuntimeBuilder.emitU2(c, arithEx.index());
+		c.add(Opcode.DUP);
+		JvmRuntimeBuilder.emitLdc(c, tooLargeStr.index());
+		c.add(Opcode.INVOKESPECIAL);
+		JvmRuntimeBuilder.emitU2(c, aeInit.index());
+		c.add(Opcode.ATHROW);
+		JvmRuntimeBuilder.patchBranch(c, ifZeroPos, c.size());
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		return new NumericMethod(name, desc, c, 6, 10, List.of());
 	}
 
 	// _intlen(Object a): integer-length, i.e. BigInteger.bitLength -- the bit count of

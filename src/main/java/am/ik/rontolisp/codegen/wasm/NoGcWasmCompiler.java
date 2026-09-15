@@ -7258,8 +7258,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// (ash value count): arithmetic shift, left for count>=0 and right (sign-extending)
 	// for
 	// count<0. Both shifts are computed and `select` picks the right one on the sign of
-	// count, avoiding a branch (the wasm shift amount is taken mod 64, so the unused side
-	// is harmless).
+	// count, avoiding a branch. The right-shift magnitude is clamped at 63 first: a
+	// shift past the width answers the sign, and the raw wasm shift would otherwise
+	// mask the huge count to 6 bits and shift by the remainder (MISC.47/.48). A huge
+	// LEFT count still wraps in the scalar backend, which cannot represent the bignum
+	// the shift denotes.
 	private Ty compileAsh(List<LispVal> args, Fn fn) {
 		if (args.size() != 3) {
 			throw new UnsupportedOperationException("--no-gc: ash takes exactly two arguments in '" + fn.fnName + "'");
@@ -7274,11 +7277,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
 		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(c);
 		fn.writer.write(Instruction.I64_SHL);
-		// right = v >> (0 - c)
+		// mag = c <= -64 ? 63 : 0 - c
 		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(c);
+		i64Const(fn.writer, -64);
+		fn.writer.write(Instruction.I64_LE_S);
+		fn.writer.write(Instruction.IF, 0x7E);
+		i64Const(fn.writer, 63);
+		fn.writer.write(Instruction.ELSE);
 		i64Const(fn.writer, 0);
 		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(c);
 		fn.writer.write(Instruction.I64_SUB);
+		fn.writer.write(Instruction.END);
+		// right = v >> mag
 		fn.writer.write(Instruction.I64_SHR_S);
 		// select left when c >= 0, else right
 		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(c);
