@@ -77,9 +77,12 @@ final class WasmMinMaxCompiler {
 			WasmComplexCompiler.emitRealOperandGuard(ctx, aSlot, bSlot);
 		}
 
-		if (WasmLispCompiler.hasDoubleLiteral(args)) {
+		if (WasmLispCompiler.isDefinitelyDouble(args.get(1)) && WasmLispCompiler.isDefinitelyDouble(args.get(2))) {
 			// Float path: one native f64.le / f64.ge, no call. It is already false for
-			// an unordered pair, so NaN needs no separate rung.
+			// an unordered pair, so NaN needs no separate rung. Taken only when both
+			// operands prove double (see WasmComparisonCompiler): a float beside an
+			// exact number decides exact values, so coercing here would call a near
+			// tie equal and keep the wrong operand.
 			getLocal(ctx, aSlot);
 			WasmEmitHelper.castFloatGetF64(ctx);
 			getLocal(ctx, bSlot);

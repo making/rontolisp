@@ -7727,6 +7727,58 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * The operators this backend's {@code _rat_*} helpers answer a float for as soon as
+	 * one operand is one -- each one's float arm unconditionally boxes the f64 result, so
+	 * a tree over them with a proven-double operand inside is itself a proven double (or
+	 * a signal, never a non-double value).
+	 */
+	private static final java.util.Set<String> CONTAGIOUS_ARITHMETIC_FORMS = java.util.Set.of(LispNames.ADD,
+			LispNames.SUB, LispNames.MUL, LispNames.DIV, LispNames.MOD, LispNames.REM);
+
+	/**
+	 * True when {@code val}'s VALUE is proven to be a double, unlike
+	 * {@link #containsDouble}, which only asks whether a double literal occurs anywhere
+	 * in the subtree. That guess is sound for the force-coercing arithmetic itself (every
+	 * sibling compiler widens through {@code _as_f64}), but it is not sound as a basis
+	 * for choosing a comparison's path: a float beside an exact number compares exact
+	 * values (the float's exact binary value, as {@code rational} answers it), so
+	 * coercing the exact side through f64 rounds a near tie to equality --
+	 * {@code (= 0.6666666666666666 2/3)} must be NIL, not T. The comparison and min/max
+	 * call sites therefore take the unboxed f64 path only when BOTH operands prove double
+	 * here (the JVM backend's {@code isDefinitelyDouble} distinction,
+	 * {@code .kb/jvm-double-arithmetic.md}); anything else goes through
+	 * {@code _rat_cmp_bits}, whose float-vs-exact arm is exact. Recursion is bounded to
+	 * {@link #CONTAGIOUS_ARITHMETIC_FORMS} -- true contagion, not a guess -- and never
+	 * crosses into an arbitrary call (whose return type this pass cannot see) or into
+	 * {@code min}/{@code max} themselves (whose result is exactly one operand, so the
+	 * same ambiguity). A syntactically visible complex anywhere in the tree disqualifies
+	 * it outright (the {@code DoubleValuedForms.certainlyDouble} gate): complex
+	 * arithmetic steers to the {@code _c*} helpers and answers a complex, not a double.
+	 * @param val the expression tree
+	 * @return true only when val is guaranteed to evaluate to a double
+	 */
+	static boolean isDefinitelyDouble(LispVal val) {
+		if (val instanceof LispDouble) {
+			return true;
+		}
+		if (val instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+				&& CONTAGIOUS_ARITHMETIC_FORMS.contains(head.name())) {
+			List<LispVal> parts = cons.toList();
+			for (int i = 1; i < parts.size(); i++) {
+				if (LispMacroExpander.containsComplex(parts.get(i))) {
+					return false;
+				}
+			}
+			for (int i = 1; i < parts.size(); i++) {
+				if (isDefinitelyDouble(parts.get(i))) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * The funcIds the arity/spread dispatch ladders and the {@code _lookup} name registry
 	 * must be able to reach -- everything else in {@code defuns} is called only through a
 	 * direct {@code call}, so naming it in a ladder would do nothing except keep it alive

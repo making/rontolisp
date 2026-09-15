@@ -379,6 +379,8 @@ page.
 | `deposit-field` | `(deposit-field 0 (byte 4 0) 255)`, `(deposit-field 5 (byte 4 4) 0)` | `240`, `0` -- replace the byte field with `newbyte`'s bits at that field (unlike `dpb`'s low bits) |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- `float × 2^n` with IEEE semantics |
 | `float-radix` | `(float-radix 1.0)` | `2` -- the radix of the float representation (always binary) |
+| `float-sign` | `(float-sign -2.5)`, `(float-sign -2.5 3.0)` | `-1.0`, `-3.0` -- the sign as a float (negative zero answers `-1.0`), or the second float's magnitude with the first's sign |
+| `float-digits` | `(float-digits 1.5)`, `(float-digits 0.0)` | `53`, `0` -- radix-2 significand digits (53 for every normal double, fewer for a subnormal) |
 | `decode-float` | `(decode-float 6.5)` | `0.8125`, `3`, `1.0` -- significand in [1/2, 1), binary exponent, sign |
 | `integer-decode-float` | `(integer-decode-float 6.5)` | `13`, `-1`, `1.0` -- integer significand, binary exponent, sign |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |

@@ -62,6 +62,8 @@ categories:
       - { slug: make-random-state, name: "make-random-state" }
       - { slug: scale-float, name: "scale-float" }
       - { slug: float-radix, name: "float-radix" }
+      - { slug: float-sign, name: "float-sign" }
+      - { slug: float-digits, name: "float-digits" }
       - { slug: decode-float, name: "decode-float" }
       - { slug: integer-decode-float, name: "integer-decode-float" }
   - title: "Complex Numbers"

@@ -386,6 +386,26 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void rejectsFloatSignAndFloatDigits() {
+		// float-sign's &optional lambda list and float-digits' floatp check have
+		// no scalar lowering, so both are refused at compile time like
+		// integer-decode-float above -- never a trap, never a wrong answer
+		// (.todo/037 smalls).
+		assertThatThrownBy(() -> compile("""
+				(defun fs-f (f) (float-sign f))
+				(rontolisp:wasm-export 'fs-f :params '(:float) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("float-sign is not supported")
+			.hasMessageContaining("FS-F");
+		assertThatThrownBy(() -> compile("""
+				(defun fd-f (f) (float-digits f))
+				(rontolisp:wasm-export 'fd-f :params '(:float) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("float-digits is not supported")
+			.hasMessageContaining("FD-F");
+	}
+
+	@Test
 	void rejectsSetqOfANonLocal() {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (setq g (+ n 1)))

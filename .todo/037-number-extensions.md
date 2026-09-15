@@ -1,3 +1,91 @@
+> **Update 2026-09-15 (smalls landed: `float-sign`, `float-digits`):** the last
+> two unimplemented smalls ship as prelude defuns (`LispPreludeLibrary`, the
+> `decode-float` precedent -- one Lisp implementation on interpreter/JVM/WASM-GC,
+> first-class free) + `LispNames` + `CL_FUNCTIONS` (two names move out of
+> `CL_EXPORTED_ONLY`, the 978 externals unchanged) + `ci-spec.yaml` cases +
+> EN/JA docs. `float-sign` answers `1.0`/`-1.0` (or the second float's magnitude
+> with the first's sign); a zero is divided into `1.0` to read its sign, so
+> `-0.0` answers `-1.0`. `float-digits` answers `53` for every normal double
+> (trailing zeros count), `0` for a zero, the representation width for a
+> non-finite float, and `1127 - j` for a subnormal after `j` exact doublings up
+> to `[2^52, 2^53)` (the shifted value is `k * 2^(j-1074)` with 53 significant
+> bits, so the true significand `k` has `53 - (j - 1074)` digits). Measured:
+> **numbers 220 -> 220, misc 38 -> 38, 0 regressed** (no dedicated ANSI tests;
+> `ATAN.IEEE.2` exercises `float-sign` but is shim-blocked, see the watch-list
+> below). Pins: `LispEvaluatorTest#evalFloatSign`/`#evalFloatDigits`,
+> `JvmLispCompilerTest#compileAndRunFloatSign`/`#compileAndRunFloatDigits`,
+> `WasmLispCompilerIntegrationTest#floatSign`/`#floatDigits` (via
+> `compileAndRunPrelude`), ci-spec `smalls-float-sign`/`smalls-float-digits`
+> (`--no-gc` is not a ci-spec axis). no-GC refuses both outright beside
+> `RATIONALIZE` (`NoGcWasmCompilerTest#rejectsFloatSignAndFloatDigits`):
+> `float-sign`'s `&optional` list and `float-digits`' `floatp` check have no
+> scalar lowering -- never a trap, never a wrong answer. Three traps: (1) the
+> subnormal formula is `1127 - j`, not `53 - j` -- the `2^-1074` offset (the
+> first cut answered `-1073` for the least positive double); (2) an `&optional`
+> lambda silently ignores extra arguments (pre-existing lambda-list gap:
+> `(float-sign 1.0 2.0 3.0)` answers `2.0`, deliberately unpinned); (3) NaN
+> takes the representation width `53` (detected as `(not (= a a))`).
+> Item 4 of "Implementation approach" is now complete (`realp`, `scale-float`
+> and `most-positive/negative-double-float` shipped earlier; time
+> decomposition is a landed prelude elsewhere, probed working). Remaining:
+> the classified watch-list below, none of it 037's.
+>
+> **Watch-list classification (each probed directly on the interpreter unless
+> noted, 2026-09-15):** `MISC.512` -- `throw` drops `round`'s second value
+> (`(multiple-value-list (catch 'c (throw 'c (round -639367819))))` is one
+> element) -- the `.todo/213` multiple-values system, hands off. `IMAGPART.4`
+> -- `(eql 0.0 -0.0)` is NIL (`LispDouble` is a record, so `eql` inherits
+> `Double.equals` bit semantics; `imagpart` answers `+0.0`, `(* 0 x)` is
+> `-0.0` for negative `x`) where CL wants value semantics -- fixing it means a
+> 4-backend `eql` change plus `eql`-hash consistency, a separate item, hands
+> off. `LOGEQV/LOGNAND/LOGNOR.ERROR.1/.2`, `RATIONAL.ERROR.4`,
+> `LOGCOUNT.ERROR.3`, `RATIONALIZE.ERROR.4` -- all `*MINI-UNIVERSE* is unbound`
+> in the logs -- `.todo/715` §1 out of scope. `MISC.358` -- `ldb-test` is
+> entirely unimplemented (only an `EXPORTED_ONLY` name) -- a new byte-family
+> operator, not in this item's list. no-GC `deposit-field` -- a clean
+> compile-time refusal (`unsupported operation 'DEPOSIT-FIELD'`) -- the scalar
+> contract (a field replacement needs the bytespec cons), hands off. WASM-GC
+> limb-tier count -- `(ash 1 (ash 1 100))` compiles and dies in `unreachable`
+> (probed under wasmtime) -- fail-stop, no wrong answer, hands off.
+> `ATAN.IEEE.1/.2` -- `rt-shim.lisp`'s `deftest` takes `(name form &rest
+> expected)` with no `:description` support, so the form binds to the keyword
+> and the tests are structurally unpassable (`got (:DESCRIPTION)`,
+> byte-identical before/after) -- a driver gap for `.todo/715`/`.todo/739`,
+> hands off.
+>
+> **Update 2026-09-15 (WASM-GC exact float-vs-exact comparison landed):** a
+> float beside an exact integer (any tier, limb included) or ratio now compares
+> EXACT values on the GC backend too -- the float's exact binary value (as
+> `rational` answers it) against the exact operand -- instead of coercing through
+> f64, so `(= 0.6666666666666666 2/3)` is NIL and `(< 1/2 1.0)` is T, like the
+> interpreter and the JVM. `_rat_cmp_bits` decomposes a finite float from its raw
+> bits and cross-multiplies through the existing big-tier helpers alone
+> (`_int_new` of the mantissa, `_big_ash`, `_big_mul`, `_big_cmp`; no new runtime
+> function, no new reachability -- the limb block ships unconditionally);
+> both-float pairs keep the f64 ladder, NaN stays unordered, infinities decide by
+> side, and a float against a non-exact operand keeps the old `_as_f64` behavior
+> including its `Expected number`/`Expected real number` traps. The comparison
+> and min/max call sites take the unboxed f64 path only when BOTH operands are
+> `isDefinitelyDouble` (new `WasmLispCompiler` gate mirroring the JVM's: a double
+> literal, or a `+ - * / mod rem` tree with a proven-double operand inside, never
+> crossing a call or min/max, any syntactic complex disqualifying); the fusion
+> fallback, the complex part-wise `=`, and `tryCompileConditionI32`'s decline all
+> inherit the body fix with no edits. Measured: **numbers 220 -> 220, misc 38 ->
+> 38, 0 regressed** (interpreter untouched; this path is not ANSI-measured) plus
+> a 4,412-case interpreter-vs-WASM-GC differential sweep with 0 mismatches
+> (textual, min/max included) and byte-identical pure-int/pure-double modules (a
+> mixed float/exact comparison module carries ~+1.5-1.9 KB -- the exactness costs
+> only where the old answer was wrong). Pin:
+> `WasmLispCompilerIntegrationTest#floatExactComparisonNearTie` (literal,
+> let-carried, branch-consumed, all five operators, min/max both orders).
+> Design in `.kb/wasm-bignum.md`. Two traps: the cross-multiplication reads
+> (FL vs EX), so a float in b position needs the RESULT signum flipped (negating
+> one side is not the negation of the comparison); an empty ELSE on the flip's
+> `if` breaks `WasmRefTypeFolder` with a stack underflow (both arms explicit).
+> Remaining work: the watch-list in the top banner below loses its last
+> exactness item; ci-spec still cannot spell a near tie (`--no-gc` has no
+> ratios).
+>
 > **Update 2026-09-15 (--no-gc exact i64-vs-f64 comparison landed):** a mixed
 > integer/float `=`/`<`/`>`/`<=`/`>=` now compares exact values on the scalar
 > backend too -- the float's exact binary value against the i64 -- instead of
@@ -22,7 +110,8 @@
 > (past 2^53 both signs, minI64, subnormal, 1e300, fractional, Inf/NaN,
 > let-carried, branch consumption, min/max parity); `wasm-nogc.md` EN/JA gained
 > the contract sentence. Design in `.kb/no-gc-scalar-wasm.md`. Remaining work:
-> WASM-GC exact float-vs-exact below.
+> none on exactness -- WASM-GC landed its exact float-vs-exact path in the top
+> banner.
 >
 > **Update 2026-09-15 (float-vs-exact comparison landed on interpreter+JVM):** a float
 > beside an exact number now compares EXACT values -- the float's exact binary value
@@ -44,16 +133,16 @@
 > flipped the other way by draw luck and is excluded from the claim (its operands stay
 > under 2^53, where both semantics agree -- verified, not assumed). No-GC has since
 > landed its exact i64-vs-f64 path (top banner -- the `#noGcFloatExactComparison`
-> comment's "remaining work" now points at the landed pin); WASM-GC keeps f64
+> comment's "remaining work" now points at the landed pin); WASM-GC kept f64
 > comparison with representable-range agreement pinned
 > (`WasmLispCompilerIntegrationTest#floatExactComparison`,
-> ci-spec `float-exact-comparison`, `=` doc EN/JA), but a near tie still rounds to
-> equality there -- `(= 0.6666666666666666 2/3)` is T on WASM-GC, NIL on
+> ci-spec `float-exact-comparison`, `=` doc EN/JA), but a near tie still rounded
+> to equality there -- `(= 0.6666666666666666 2/3)` was T on WASM-GC, NIL on
 > interpreter/JVM (probed; even tiny ratios sit strictly inside half an ulp, so no
 > component bound saves f64 -- the first version of the `.kb/wasm-bignum.md` note
 > claimed one and was wrong the same day). The exact path for WASM-GC (big tier +
-> call-site gate, design in `.kb/wasm-bignum.md`) is remaining work below.
-> `.kb/jvm-double-arithmetic.md` gained the gate rule.
+> call-site gate, design in `.kb/wasm-bignum.md`) has since landed in the top
+> banner. `.kb/jvm-double-arithmetic.md` gained the gate rule.
 >
 > **Update 2026-09-15 (ratio->float conversion landed):** `LispRatio.doubleValue`
 > is now the correctly-rounded nearest double (exact `BigInteger` quotient: a
@@ -199,8 +288,12 @@
 `integer-decode-float` (Slice C, 2026-09-15); exact ratio->float conversion
 (2026-09-15); float-vs-exact `=`/comparison on the interpreter and the JVM
 (2026-09-15) and exact i64-vs-f64 `=`/comparison/`min`/`max` on `--no-gc`
-(2026-09-15 -- WASM-GC exact is open, see the top banner).
-Open: the watch-list in the top banner. Full complex numbers and
+(2026-09-15) and exact float-vs-exact `=`/comparison/`min`/`max` on WASM-GC
+(2026-09-15, top banner); `float-sign`, `float-digits` (smalls, 2026-09-15,
+top banner).
+Open: the classified watch-list in the top banner (every item owned elsewhere:
+`.todo/213`, `.todo/715` §1, the `eql` signed zero, `ldb-test`, the
+`:description` driver gap). Full complex numbers and
 time decomposition are niche (low priority).
 
 ## What's missing
@@ -210,7 +303,10 @@ RontoLisp has the core numeric tower: integers (with `BigInteger` bignum), float
 ### Missing numeric functions
 
 Shipped since this table was written: `float-radix` (Slice A), `complexp`,
-`realpart`/`imagpart`, `conjugate`, `phase` (.todo/751-754), exact ratio->float
+`realpart`/`imagpart`, `conjugate`, `phase` (.todo/751-754), `realp` (complex
+work), `scale-float` (macro expander), `most-positive/negative-double-float`
+(reader constants), `float-sign`, `float-digits` (smalls, 2026-09-15), exact
+ratio->float
 conversion (2026-09-15: `RATIONAL.1/.3`, `RATIONALIZE.1/.3`, `/.12`, `*.12`),
 exact float-vs-exact comparison on the interpreter and the JVM (2026-09-15: the
 eight `*.17`/`*.18` plus `BIGNUM.FLOAT.COMPARE.1A-4B).
@@ -298,8 +394,12 @@ CL has a full complex number tower. RontoLisp implements it in four steps:
 2. `rationalize` — continued fractions (Medium; Slice C, DONE 2026-09-15).
 3. `logcount`, `integer-decode-float` (multiple values, `.todo/032`; Slice C, DONE 2026-09-15).
 4. `realp`, float constants (`float-digits`, `float-sign`,
-   `most-positive/negative-double-float`), `scale-float` — smalls.
-5. Time decomposition — useful but needs timezone handling; niche.
+   `most-positive/negative-double-float`), `scale-float` — smalls (DONE
+   2026-09-15: `realp`/`scale-float`/`most-positive/negative-double-float`
+   shipped earlier; `float-sign`/`float-digits` are prelude defuns, top
+   banner).
+5. Time decomposition — landed as a prelude elsewhere (`.kb/time-environment-builtins.md`;
+   probed working 2026-09-15); niche.
 
 ### Related
 

@@ -2195,6 +2195,44 @@ public final class LispPreludeLibrary {
 				                (setq e (+ e 1)))
 				              (values n e (if (< f 0) -1.0 1.0)))))))
 				""");
+		// float-sign: the sign of the first float as a float -- 1.0 or -1.0, or
+		// the second float's magnitude with the first float's sign. A comparison
+		// alone cannot see the sign of a zero, so a zero is divided into 1.0:
+		// -0.0 answers negative infinity, +0.0 positive infinity. NaN compares
+		// false both ways and answers positive.
+		SOURCES.put(LispNames.FLOAT_SIGN, """
+				(defun float-sign (f &optional (m 1.0))
+				  (check-type f float)
+				  (check-type m float)
+				  (if (or (< f 0.0) (and (= f 0.0) (< (/ 1.0 f) 0.0)))
+				      (- (abs m))
+				      (abs m)))
+				""");
+		// float-digits: the number of radix-2 digits in the significand,
+		// including the implicit leading bit -- 53 for every normal double. A
+		// zero has no digits; a non-finite float keeps the representation
+		// width. A subnormal's significand is shorter: doubling it up to
+		// [2^52, 2^53) (each doubling exact in binary floating point) takes one
+		// shift per missing leading bit, and the shifted value is the odd-free
+		// integer k * 2^(j - 1074) with 53 significant bits -- so k, the true
+		// significand, has 53 - (j - 1074) = 1127 - j digits. At most 1126
+		// shifts (the least positive double), every intermediate scalar-small
+		// and exact on every backend.
+		SOURCES.put(LispNames.FLOAT_DIGITS, """
+				(defun float-digits (f)
+				  (check-type f float)
+				  (let ((a (abs f)))
+				    (cond ((= a 0.0) 0)
+				          ((not (= a a)) 53)
+				          ((= (/ 1.0 a) 0.0) 53)
+				          ((< a (expt 2.0 -1022))
+				           (let ((j 0))
+				             (while (< a (expt 2.0 52))
+				               (setq a (* a 2.0))
+				               (setq j (+ j 1)))
+				             (- 1127 j)))
+				          (t 53))))
+				""");
 		// rationalize: the simplest rational within half a ulp of a float on either
 		// side (so floating the answer reproduces the input), the integer or ratio
 		// itself for an exact input. The float's exact value and ulp come from

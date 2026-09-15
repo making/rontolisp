@@ -7556,6 +7556,19 @@ public final class LispNames {
 	public static final String FLOAT_RADIX = "FLOAT-RADIX";
 
 	/**
+	 * The {@code float-sign} prelude function (the sign of a float as a float: 1.0 or
+	 * -1.0, or the second float's magnitude with the first float's sign).
+	 */
+	public static final String FLOAT_SIGN = "FLOAT-SIGN";
+
+	/**
+	 * The {@code float-digits} prelude function (the number of radix-2 digits in a
+	 * float's significand: 53 for every normal double, fewer for a subnormal, 0 for a
+	 * zero).
+	 */
+	public static final String FLOAT_DIGITS = "FLOAT-DIGITS";
+
+	/**
 	 * The {@code typep} macro -- lite: the type specifier must be a literal (quoted)
 	 * type; it lowers through the shared static type-test builder.
 	 */

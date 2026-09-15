@@ -7962,6 +7962,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					"--no-gc: " + name.toLowerCase(java.util.Locale.ROOT) + " is not supported in function '" + fnName
 							+ "': (" + name + " ...) (the scalar backend is for pure numeric exports)");
 		}
+		if (LispNames.FLOAT_SIGN.equals(name) || LispNames.FLOAT_DIGITS.equals(name)) {
+			// float-sign's &optional lambda list and float-digits' floatp check
+			// have no scalar lowering, so both are refused outright like
+			// integer-decode-float above -- never a trap, never a wrong answer.
+			throw new UnsupportedOperationException(
+					"--no-gc: " + name.toLowerCase(java.util.Locale.ROOT) + " is not supported in function '" + fnName
+							+ "': (" + name + " ...) (the scalar backend is for pure numeric exports)");
+		}
 		if (LispNames.LET.equals(name)) {
 			collectLet(cons, bound, defuns, callees, fnName);
 			return;

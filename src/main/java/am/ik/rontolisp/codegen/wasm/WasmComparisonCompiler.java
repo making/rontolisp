@@ -16,7 +16,11 @@ final class WasmComparisonCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int i32Opcode, int f64Opcode) {
 		List<LispVal> args = cons.toList();
-		if (WasmLispCompiler.hasDoubleLiteral(args)) {
+		// The unboxed f64 path is taken only when BOTH operands prove double: a
+		// float beside an exact number compares exact values, so coercing the
+		// exact side here would round a near tie to equality. Anything else goes
+		// through _rat_cmp_bits, whose float-vs-exact arm is exact.
+		if (WasmLispCompiler.isDefinitelyDouble(args.get(1)) && WasmLispCompiler.isDefinitelyDouble(args.get(2))) {
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			WasmEmitHelper.castFloatGetF64(ctx);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);

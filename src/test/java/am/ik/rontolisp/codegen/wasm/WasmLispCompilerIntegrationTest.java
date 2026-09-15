@@ -8434,11 +8434,11 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void floatExactComparison() throws Exception {
 		// A float against an exact number compares exact values, like the
-		// interpreter (.todo/037). Sub-ulp ratios are unrepresentable here --
-		// ratio components stay i32, so a ratio that close to a float cannot be
-		// built (.kb/wasm-bignum.md) -- and inside that range the f64 comparison
-		// is exact, so these pin the shared representable range only: exact
-		// equality, a strict gap, -0.0, infinities, and the unordered NaN.
+		// interpreter (.todo/037): exact equality, a strict gap, -0.0,
+		// infinities, and the unordered NaN. A NEAR tie -- a ratio strictly
+		// inside half an ulp of its own float, like 2/3 -- decides strictly
+		// too, through the same exact arm at any integer tier, limb included
+		// (floatExactComparisonNearTie pins it).
 		assertThat(compileAndRun("(print (= 2.0 2))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (= 0.5 1/2))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (< 1/2 1.0))")).isEqualTo("T");
@@ -8449,6 +8449,31 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (= (/ 1.0 0.0) 10000))")).isEqualTo("NIL");
 		assertThat(compileAndRun("(print (= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("NIL");
 		assertThat(compileAndRun("(print (> (max 1.0 3/2) 1.0))")).isEqualTo("T");
+	}
+
+	@Test
+	void floatExactComparisonNearTie() throws Exception {
+		// A near tie compares exactly, like the interpreter and the JVM
+		// (.todo/037): 2/3 sits strictly inside half an ulp of its own float
+		// (within 2^-54), so the f64 coercion rounds it to equality while the
+		// exact values differ -- the double is just below the ratio. Both the
+		// literal shape (which the double-literal call-site gate must route to
+		// _rat_cmp_bits) and the let-carried shape (which reaches it through
+		// the generic path) answer here, plus the branch-consumed shape and
+		// the min/max decision in both argument orders.
+		assertThat(compileAndRun("(print (= 0.6666666666666666 2/3))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (< 0.6666666666666666 2/3))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (> 0.6666666666666666 2/3))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (<= 0.6666666666666666 2/3))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (>= 0.6666666666666666 2/3))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (if (= 0.6666666666666666 2/3) 42 99))")).isEqualTo("99");
+		assertThat(compileAndRun("(print (let ((x 0.6666666666666666) (y 2/3)) (= x y)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (let ((x 0.6666666666666666) (y 2/3)) (< x y)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (min 0.6666666666666666 2/3))")).isEqualTo("0.6666666666666666");
+		assertThat(compileAndRun("(print (max 0.6666666666666666 2/3))")).isEqualTo("2/3");
+		assertThat(compileAndRun("(print (min 2/3 0.6666666666666666))")).isEqualTo("0.6666666666666666");
+		assertThat(compileAndRun("(print (max 2/3 0.6666666666666666))")).isEqualTo("2/3");
+		assertThat(compileAndRun("(print (let ((x 0.6666666666666666) (y 2/3)) (max x y)))")).isEqualTo("2/3");
 	}
 
 	@Test
@@ -9727,6 +9752,22 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunPrelude(
 				"(print (rationalize 2.0)) (print (rationalize 100.0)) (print (rationalize 1024.0)) (print (rationalize 0.0)) (print (rationalize 5)) (print (rationalize -7)) (print (rationalize (/ 1 3))) (print (funcall #'rationalize 100.0))"))
 			.isEqualTo("2\n100\n1024\n0\n5\n-7\n1/3\n100");
+	}
+
+	@Test
+	void floatSign() throws Exception {
+		assertThat(compileAndRunPrelude(
+				"(print (float-sign 2.5)) (print (float-sign -2.5)) (print (float-sign 0.0)) (print (float-sign -0.0)) (print (float-sign -2.5 3.0)) (print (float-sign 2.5 -3.0)) (print (funcall #'float-sign -2.5))"))
+			.isEqualTo("1.0\n-1.0\n1.0\n-1.0\n-3.0\n3.0\n-1.0");
+	}
+
+	@Test
+	void floatDigits() throws Exception {
+		// No fractions wider than i31 are involved: every intermediate is a
+		// scalar-small float or a small integer, so the whole range pins here.
+		assertThat(compileAndRunPrelude(
+				"(print (float-digits 1.0)) (print (float-digits 2.0)) (print (float-digits -1.5)) (print (float-digits 0.0)) (print (float-digits 4.9406564584124654d-324)) (print (float-digits (* 3.0 4.9406564584124654d-324))) (print (float-digits (scale-float 1.0 2097))) (print (funcall #'float-digits 1.5))"))
+			.isEqualTo("53\n53\n53\n0\n1\n2\n53\n53");
 	}
 
 	@Test

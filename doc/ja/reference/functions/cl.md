@@ -379,6 +379,8 @@
 | `deposit-field` | `(deposit-field 0 (byte 4 0) 255)`、`(deposit-field 5 (byte 4 4) 0)` | `240`、`0` -- バイトフィールドを `newbyte` の同じ位置のビットで置き換えます(`dpb` の下位ビットとは異なります) |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- IEEE の意味論で `float × 2^n` |
 | `float-radix` | `(float-radix 1.0)` | `2` -- 浮動小数点表現の基数(常に2進) |
+| `float-sign` | `(float-sign -2.5)`、`(float-sign -2.5 3.0)` | `-1.0`、`-3.0` -- 符号を浮動小数点数で(負のゼロは `-1.0`)、または第2引数の絶対値に第1引数の符号を付けた値 |
+| `float-digits` | `(float-digits 1.5)`、`(float-digits 0.0)` | `53`、`0` -- 2進仮数部の桁数(正規化数では53、非正規化数ではそれより少ない) |
 | `decode-float` | `(decode-float 6.5)` | `0.8125`、`3`、`1.0` -- [1/2, 1) の仮数部、2 進指数部、符号 |
 | `integer-decode-float` | `(integer-decode-float 6.5)` | `13`、`-1`、`1.0` -- 整数の仮数部、2 進指数部、符号 |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |

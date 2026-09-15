@@ -444,14 +444,44 @@ final class WasmRatioRuntimeBuilder {
 	// comparison call sites AND the operator's accepted mask and test nonzero, so NaN
 	// fails every one of = < > <= >= (IEEE); _rat_cmp's -1/0/1 signum against zero
 	// cannot express "unordered" (it answered "equal"). Non-float operands delegate to
-	// _rat_cmp (exact, never unordered).
+	// _rat_cmp (exact, never unordered). A float against an exact integer or ratio
+	// compares EXACT values -- the float's exact binary value (as `rational` answers
+	// it) against the exact operand -- through the existing big-tier helpers alone
+	// (`_int_new` of the decomposed mantissa, `_big_ash`, `_big_mul`, `_big_cmp`; no
+	// new runtime function), so a near tie decides strictly: `(= 0.6666666666666666
+	// 2/3)` is NIL here as on the interpreter and the JVM (.todo/037). A float
+	// against anything else keeps the old f64 behavior, including its `_type_err_*`
+	// traps for a complex or a non-number.
 	static byte[] buildRatCmpBitsBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		w.write(0); // no extra locals
+		// locals: 2=FL, 3=EX (the float and the exact operand, eqref), 4=D (the
+		// float's value, f64), 5=BITS, 6=MANT (i64), 7=EXP, 8=SGN, 9=TMP (i32),
+		// 10=NF, 11=DF, 12=NE, 13=DE (eqref: the float's and the exact operand's
+		// numerator/denominator pair for the cross-multiplied compare). SGN is 1
+		// when the float is operand a and -1 when it is operand b: the
+		// cross-multiplication reads (FL vs EX), so a float in b position has
+		// the resulting signum flipped to answer (a vs b), and the infinities
+		// pick their bit by the same sign.
+		final int fl = 2, ex = 3, d = 4, bits = 5, mant = 6, exp = 7, sgn = 8, tmp = 9, nf = 10, df = 11, ne = 12,
+				de = 13;
+		w.write(5);
+		w.write(2);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(1);
+		w.write(Type.F64);
+		w.write(2);
+		w.write(Type.I64);
+		w.write(3);
+		w.write(Type.I32);
+		w.write(4);
+		w.writeRefType(true, Type.EQ.code());
 
 		emitEitherFloat(w);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		emitBothFloat(w);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
 		// lt -> 1, gt -> 4, eq -> 2, else (NaN) -> 0
@@ -485,6 +515,276 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.ELSE);
+		// Exactly one operand is a float: split the pair so FL holds it, and
+		// record its side in SGN (1 for a, -1 for b).
+		getLocal(w, 0);
+		refTestType(w, WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 0);
+		setLocal(w, fl);
+		getLocal(w, 1);
+		setLocal(w, ex);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		setLocal(w, sgn);
+		w.write(Instruction.ELSE);
+		getLocal(w, 1);
+		setLocal(w, fl);
+		getLocal(w, 0);
+		setLocal(w, ex);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-1);
+		setLocal(w, sgn);
+		w.write(Instruction.END);
+		// The exact operand is an integer (any tier) or a ratio; anything else
+		// keeps the old f64 behavior below.
+		emitIsExactInt(w, ex);
+		getLocal(w, ex);
+		refTestType(w, WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		// D is the float's value.
+		getLocal(w, fl);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
+		setLocal(w, d);
+		// Unordered (NaN) -> 0.
+		getLocal(w, d);
+		getLocal(w, d);
+		w.write(Instruction.F64_NE);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.ELSE);
+		// +Inf is beyond every exact number: operand a's bit is gt, operand b's
+		// is lt.
+		getLocal(w, d);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(Double.POSITIVE_INFINITY);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, sgn);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(4);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// -Inf is below every exact number: operand a's bit is lt, operand b's
+		// is gt.
+		getLocal(w, d);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(Double.NEGATIVE_INFINITY);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, sgn);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(4);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// A finite float decomposes from its raw bits exactly like `rational`
+		// does (hidden bit, subnormal shape, sign on the mantissa): the value
+		// is MANT * 2^EXP.
+		getLocal(w, d);
+		w.write(Instruction.I64_REINTERPRET_F64);
+		setLocal(w, bits);
+		getLocal(w, bits);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(52);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0x7ff);
+		w.write(Instruction.I64_AND);
+		w.write(Instruction.I32_WRAP_I64);
+		setLocal(w, exp);
+		getLocal(w, bits);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0x000fffffffffffffL);
+		w.write(Instruction.I64_AND);
+		setLocal(w, mant);
+		getLocal(w, exp);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// Subnormal (and zero): the mantissa is the fraction, scaled by 2^-1074.
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-1074);
+		setLocal(w, exp);
+		w.write(Instruction.ELSE);
+		getLocal(w, mant);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0x0010000000000000L);
+		w.write(Instruction.I64_OR);
+		setLocal(w, mant);
+		getLocal(w, exp);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1075);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, exp);
+		w.write(Instruction.END);
+		getLocal(w, bits);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		getLocal(w, mant);
+		w.write(Instruction.I64_SUB);
+		setLocal(w, mant);
+		w.write(Instruction.END);
+		// The float's numerator/denominator: a zero mantissa (either zero) is
+		// plain zero over one, else the signed mantissa shifted up for EXP >= 0
+		// or over 2^-EXP. Shifts stay under 1075 bits, far below `_big_ash`'s
+		// allocation guard.
+		getLocal(w, mant);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.IF, 0x40);
+		i31Const(w, 0);
+		setLocal(w, nf);
+		i31Const(w, 1);
+		setLocal(w, df);
+		w.write(Instruction.ELSE);
+		getLocal(w, exp);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, mant);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
+		getLocal(w, exp);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		call(w, WasmLispCompiler.FUNC_BIG_ASH);
+		setLocal(w, nf);
+		i31Const(w, 1);
+		setLocal(w, df);
+		w.write(Instruction.ELSE);
+		getLocal(w, mant);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
+		setLocal(w, nf);
+		i31Const(w, 1);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		getLocal(w, exp);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		call(w, WasmLispCompiler.FUNC_BIG_ASH);
+		setLocal(w, df);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// The exact operand's numerator/denominator: itself over one, or the
+		// i32 ratio components (which never leave i31 range) lifted through
+		// `_int_new`.
+		getLocal(w, ex);
+		refTestType(w, WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, ex);
+		call(w, WasmLispCompiler.FUNC_RAT_NUM);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
+		setLocal(w, ne);
+		getLocal(w, ex);
+		call(w, WasmLispCompiler.FUNC_RAT_DEN);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
+		setLocal(w, de);
+		w.write(Instruction.ELSE);
+		getLocal(w, ex);
+		setLocal(w, ne);
+		i31Const(w, 1);
+		setLocal(w, de);
+		w.write(Instruction.END);
+		// Cross-multiplied (FL vs EX), then 1 << (cmp + 1) maps -1/0/1 to
+		// 1/2/4. A float in b position answers (a vs b), the negation of (FL
+		// vs EX), so its signum is flipped.
+		getLocal(w, nf);
+		getLocal(w, de);
+		call(w, WasmLispCompiler.FUNC_BIG_MUL);
+		getLocal(w, ne);
+		getLocal(w, df);
+		call(w, WasmLispCompiler.FUNC_BIG_MUL);
+		call(w, WasmLispCompiler.FUNC_BIG_CMP);
+		setLocal(w, tmp);
+		getLocal(w, sgn);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, tmp);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-1);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.ELSE);
+		getLocal(w, tmp);
+		w.write(Instruction.END);
+		setLocal(w, tmp);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		getLocal(w, tmp);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// Not an exact operand: the old f64 behavior.
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.ELSE);
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(4);
+		w.write(Instruction.ELSE);
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END); // end exact-operand if
+		w.write(Instruction.END); // end both-float if
+		w.write(Instruction.ELSE);
 		// exact types: 1 << (_rat_cmp(a, b) + 1) maps -1/0/1 to 1/2/4
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
@@ -499,6 +799,23 @@ final class WasmRatioRuntimeBuilder {
 
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// Emits the test `(a is TYPE_FLOAT) & (b is TYPE_FLOAT)` over locals 0 and 1,
+	// leaving an i32 on the stack.
+	private static void emitBothFloat(WasmWriter w) {
+		getLocal(w, 0);
+		refTestType(w, WasmLispCompiler.TYPE_FLOAT);
+		getLocal(w, 1);
+		refTestType(w, WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.I32_AND);
+	}
+
+	// Pushes the i31 integer `value`.
+	private static void i31Const(WasmWriter w, int value) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(value);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 	}
 
 	// _rat_trunc((ref null eq) x) -> (ref null eq): num/den truncating toward zero.
