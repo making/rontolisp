@@ -169,6 +169,9 @@
 | `stringp` | `(stringp "hello")` | `t` |
 | `arrayp` | `(arrayp "abc")` | `T` -- CL では文字列も配列。`vectorp` と同様 |
 | `simple-string-p` | `(simple-string-p "hello")` | `t` -- フィルポインタなし・adjustable でない・displaced でない |
+| `simple-vector-p` | `(simple-vector-p (vector 1 2))` | `t` -- 階数 1、要素型 `t`、フィルポインタなし・adjustable でない・displaced でない |
+| `bit-vector-p` | `(bit-vector-p (vector 0 1))` | `nil` -- ビットベクタの値はまだ存在しない（`:element-type 'bit` の配列は素のベクタ） |
+| `simple-bit-vector-p` | `(simple-bit-vector-p (vector 0 1))` | `nil` -- `bit-vector-p` と同様 |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |
@@ -366,6 +369,7 @@
 | `array-total-size` | `(array-total-size (make-array (list 2 3)))` | `6`(要素の総数) |
 | `row-major-aref` | `(row-major-aref (make-array (list 2 3)) 4)` | フラットな行優先インデックスの要素。階数に依存せず、`setf` の場所としても使えます |
 | `array-row-major-index` | `(array-row-major-index (make-array (list 2 3)) 1 1)` | `4`(添字のフラットな行優先インデックス) |
+| `array-in-bounds-p` | `(array-in-bounds-p (make-array (list 2 3)) 1 2)` | `t` -- シグナルなしの境界検査（非配列・階数不一致・範囲外の添字は `nil`） |
 | `coerce` | `(coerce '(1 2 3) 'vector)`, `(coerce "ab" 'list)` | `#(1 2 3)`、`(#\a #\b)`。`'list`/`'vector`/`'string` と浮動小数点数のファミリ、`t`、および計算された結果型 |
 | `fill-pointer` | `(fill-pointer v)` | `:fill-pointer` ベクタのフィルポインタ(実効長)。`setf` 可能な場所でもある |
 | `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | 配列がフィルポインタを持てば `t`、そうでなければ `nil` |

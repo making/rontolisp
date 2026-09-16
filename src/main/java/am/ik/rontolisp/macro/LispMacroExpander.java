@@ -20319,7 +20319,7 @@ public final class LispMacroExpander {
 	 */
 	private static boolean isSupportedTypeSpecializer(String plainName) {
 		return atomicTypePredicate(plainName) != null || switch (plainName) {
-			case "BOOLEAN", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
+			case "BOOLEAN", "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
 					"SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "PATHNAME", "PACKAGE" ->
 				true;
 			default -> false;
@@ -29547,6 +29547,12 @@ public final class LispMacroExpander {
 			case "SIGNED-BYTE":
 				// signed-byte with no width = integer.
 				return callOf(LispNames.INTEGERP, value);
+			case "BIT":
+				// bit = (integer 0 1): the one integer-family test the lattice entry
+				// above needs, or subtypep and typep disagree (.todo/180).
+				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.INTEGERP, value),
+						listToCons(List.of(new LispSymbol(LispNames.GE), value, new LispInteger(0))),
+						listToCons(List.of(new LispSymbol(LispNames.LE), value, new LispInteger(1)))));
 			case "STANDARD-OBJECT":
 				return makeAnyClassInstanceTest(value, closRegistry);
 			case "STRUCTURE-OBJECT":
@@ -29569,11 +29575,10 @@ public final class LispMacroExpander {
 				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.KEYWORDP, value),
 						callOf(LispNames.FIND_PACKAGE, value)));
 			case "BIT-VECTOR", "SIMPLE-BIT-VECTOR":
-				// No bit-vector type exists either (the bit type is dead in the
-				// lattice: a (make-array n :element-type 'bit) is a plain vector). The
-				// empty test lets a typecase's bit-vector clause fall
-				// through to its vector clause (trivia level2's constant-pattern
-				// decomposition orders exactly that way).
+				// No bit-vector VALUE exists (a (make-array n :element-type 'bit)
+				// is a plain vector holding 0/1). The empty test lets a typecase's
+				// bit-vector clause fall through to its vector clause (trivia
+				// level2's constant-pattern decomposition orders exactly that way).
 				return LispNil.INSTANCE;
 			case "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION":
 				// A defgeneric's dispatcher is a plain function value on every backend
@@ -35219,10 +35224,10 @@ public final class LispMacroExpander {
 	 * which would otherwise answer nil for a value that IS a double-float.
 	 */
 	private static final List<String> RUNTIME_TYPEP_BUILTINS = List.of("NULL", "BOOLEAN", "KEYWORD", "SYMBOL",
-			"INTEGER", "FIXNUM", "BIGNUM", "RATIONAL", "RATIO", "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT",
-			"LONG-FLOAT", "REAL", "NUMBER", "COMPLEX", "CHARACTER", "STRING", "SIMPLE-STRING", "CONS", "LIST", "ATOM",
-			"VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT",
-			"STRUCTURE-OBJECT", "UNSIGNED-BYTE", "PACKAGE", "STREAM", "T");
+			"INTEGER", "FIXNUM", "BIGNUM", "BIT", "RATIONAL", "RATIO", "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT",
+			"SHORT-FLOAT", "LONG-FLOAT", "REAL", "NUMBER", "COMPLEX", "CHARACTER", "STRING", "SIMPLE-STRING", "CONS",
+			"LIST", "ATOM", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "HASH-TABLE", "FUNCTION",
+			"STANDARD-OBJECT", "STRUCTURE-OBJECT", "UNSIGNED-BYTE", "PACKAGE", "STREAM", "T");
 
 	/**
 	 * The COMPOUND half of the runtime {@code typep} dispatch: an interpreter of a
@@ -35569,7 +35574,7 @@ public final class LispMacroExpander {
 	 */
 	private static final java.util.Map<String, List<String>> SUBTYPEP_PARENTS = orderedMap(
 			java.util.Map.entry("FIXNUM", List.of("INTEGER")), java.util.Map.entry("BIGNUM", List.of("INTEGER")),
-			java.util.Map.entry("bit", List.of("INTEGER")), java.util.Map.entry("UNSIGNED-BYTE", List.of("INTEGER")),
+			java.util.Map.entry("BIT", List.of("INTEGER")), java.util.Map.entry("UNSIGNED-BYTE", List.of("INTEGER")),
 			java.util.Map.entry("SIGNED-BYTE", List.of("INTEGER")), java.util.Map.entry("INTEGER", List.of("RATIONAL")),
 			java.util.Map.entry("RATIO", List.of("RATIONAL")), java.util.Map.entry("RATIONAL", List.of("REAL")),
 			java.util.Map.entry("BFLOAT16", List.of("FLOAT")), java.util.Map.entry("FLOAT", List.of("REAL")),

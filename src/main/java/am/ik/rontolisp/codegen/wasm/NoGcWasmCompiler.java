@@ -8352,7 +8352,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private static Defun extractDefun(LispVal setqLambda) {
 		// (setq name (lambda (params...) body...))
 		List<LispVal> parts = ((LispCons) setqLambda).toList();
-		String name = ((LispSymbol) parts.get(1)).name();
+		// A (defun (setf name) ...) arrives with a CONS in the name slot (the
+		// prelude's bit/sbit writers splice in on any program spelling the
+		// symbol, a quoted type specifier included). The scalar lowering has no
+		// places to write through, so refuse it clearly instead of casting.
+		if (!(parts.get(1) instanceof LispSymbol nameSym)) {
+			throw new UnsupportedOperationException("Cannot compile function '" + parts.get(1).print()
+					+ "': setf functions are not supported with --no-gc");
+		}
+		String name = nameSym.name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
 		LispVal paramsVal = lambdaParts.get(1);
 		// Lambda-list keywords need cons lists at runtime, which the scalar (non-GC)

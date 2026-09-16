@@ -169,6 +169,9 @@ page.
 | `stringp` | `(stringp "hello")` | `t` |
 | `arrayp` | `(arrayp "abc")` | `T` -- a string is an array in CL, like `vectorp` |
 | `simple-string-p` | `(simple-string-p "hello")` | `t` -- no fill pointer, not adjustable, not displaced |
+| `simple-vector-p` | `(simple-vector-p (vector 1 2))` | `t` -- rank 1, element type `t`, no fill pointer, not adjustable, not displaced |
+| `bit-vector-p` | `(bit-vector-p (vector 0 1))` | `nil` -- no bit-vector value exists yet (a `:element-type 'bit` array is a plain vector) |
+| `simple-bit-vector-p` | `(simple-bit-vector-p (vector 0 1))` | `nil` -- like `bit-vector-p` |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |
@@ -366,6 +369,7 @@ page.
 | `array-total-size` | `(array-total-size (make-array (list 2 3)))` | `6` (the total element count) |
 | `row-major-aref` | `(row-major-aref (make-array (list 2 3)) 4)` | The element at a flat row-major index, independent of rank; also a `setf` place |
 | `array-row-major-index` | `(array-row-major-index (make-array (list 2 3)) 1 1)` | `4` (the flat row-major index of the subscripts) |
+| `array-in-bounds-p` | `(array-in-bounds-p (make-array (list 2 3)) 1 2)` | `t` -- the bounds check without signaling (`nil` for a non-array, a rank mismatch, or any out-of-range subscript) |
 | `coerce` | `(coerce '(1 2 3) 'vector)`, `(coerce "ab" 'list)` | `#(1 2 3)`, `(#\a #\b)`; the `'list`/`'vector`/`'string` and float families, `t`, and a computed result type |
 | `fill-pointer` | `(fill-pointer v)` | The fill pointer of a `:fill-pointer` vector (its effective length); also a `setf` place |
 | `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | `t` if the array has a fill pointer, else `nil` |

@@ -81,6 +81,22 @@ class NoGcWasmCompilerTest {
 			.hasMessageContaining("the --no-gc backend");
 	}
 
+	// A (defun (setf name) ...) used to die in extractDefun's name cast with a bare
+	// ClassCastException. It surfaces here because the prelude's bit/sbit writers
+	// splice in on any program spelling the symbol -- a quoted 'bit type
+	// specifier included (.todo/180) -- and the scalar lowering has no places to
+	// write through, so the answer is a clear refusal, not a cast.
+	@Test
+	void setfFunctionsAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun (setf foo) (v x) v)
+				(defun get-it () 1)
+				(rontolisp:wasm-export 'get-it :params '() :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("(SETF FOO)")
+			.hasMessageContaining("--no-gc");
+	}
+
 	@Test
 	void quantizedMatricesAreRefusedOnTheNoGcBackend() {
 		assertThatThrownBy(() -> compile("""

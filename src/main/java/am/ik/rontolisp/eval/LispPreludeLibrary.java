@@ -275,6 +275,45 @@ public final class LispPreludeLibrary {
 				(defun (setf bit) (new-value bit-array index)
 				  (setf (aref bit-array index) new-value))
 				""");
+		// simple-vector-p/bit-vector-p/simple-bit-vector-p: exactly what the
+		// matching typep answers, so the predicate and the specifier cannot
+		// drift apart. No bit-vector value exists yet (a :element-type 'bit
+		// array is a plain vector), so the two bit spellings answer nil for
+		// every value today; the functions exist so portable code calling
+		// them loads (.todo/043).
+		SOURCES.put(LispNames.SIMPLE_VECTOR_P, """
+				(defun simple-vector-p (x)
+				  (typep x 'simple-vector))
+				""");
+		SOURCES.put(LispNames.BIT_VECTOR_P, """
+				(defun bit-vector-p (x)
+				  (typep x 'bit-vector))
+				""");
+		SOURCES.put(LispNames.SIMPLE_BIT_VECTOR_P, """
+				(defun simple-bit-vector-p (x)
+				  (typep x 'simple-bit-vector))
+				""");
+		// array-in-bounds-p: the bounds check without signaling. Nil for a
+		// non-array, a rank/subscript-count mismatch or any out-of-range
+		// subscript; t only when every subscript is a valid index. Strings
+		// count (they are rank-1 character arrays), and the dimension -- not
+		// the fill pointer -- is what a subscript is checked against, matching
+		// array-dimensions on every backend (.todo/043).
+		SOURCES.put(LispNames.ARRAY_IN_BOUNDS_P, """
+				(defun array-in-bounds-p (array &rest subscripts)
+				  (if (not (arrayp array))
+				      nil
+				      (let ((dims (array-dimensions array)))
+				        (if (not (= (length dims) (length subscripts)))
+				            nil
+				            (do ((d dims (cdr d))
+				                 (s subscripts (cdr s)))
+				                ((null d) t)
+				              (if (or (not (integerp (car s)))
+				                      (< (car s) 0)
+				                      (>= (car s) (car d)))
+				                  (return nil)))))))
+				""");
 		SOURCES.put(LispNames.BOTH_CASE_P, """
 				(defun both-case-p (c)
 				  (or (lower-case-p c) (upper-case-p c)))

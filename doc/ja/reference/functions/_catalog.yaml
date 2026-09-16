@@ -121,6 +121,9 @@ categories:
       - { slug: symbolp, name: "symbolp" }
       - { slug: stringp, name: "stringp" }
       - { slug: simple-string-p, name: "simple-string-p" }
+      - { slug: simple-vector-p, name: "simple-vector-p" }
+      - { slug: bit-vector-p, name: "bit-vector-p" }
+      - { slug: simple-bit-vector-p, name: "simple-bit-vector-p" }
       - { slug: listp, name: "listp" }
       - { slug: consp, name: "consp" }
       - { slug: keywordp, name: "keywordp" }
@@ -128,6 +131,7 @@ categories:
       - { slug: functionp, name: "functionp" }
       - { slug: vectorp, name: "vectorp" }
       - { slug: arrayp, name: "arrayp" }
+      - { slug: array-in-bounds-p, name: "array-in-bounds-p" }
       - { slug: constantp, name: "constantp" }
       - { slug: get-setf-expansion, name: "get-setf-expansion" }
       - { slug: streamp, name: "streamp" }

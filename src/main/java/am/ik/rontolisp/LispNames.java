@@ -3624,6 +3624,34 @@ public final class LispNames {
 	public static final String VECTORP = "VECTORP";
 
 	/**
+	 * The {@code simple-vector-p} prelude function: exactly what
+	 * {@code (typep object 'simple-vector)} answers, so the two cannot drift apart.
+	 */
+	public static final String SIMPLE_VECTOR_P = "SIMPLE-VECTOR-P";
+
+	/**
+	 * The {@code bit-vector-p} prelude function: exactly what
+	 * {@code (typep object 'bit-vector)} answers. No bit-vector value exists yet (a
+	 * {@code :element-type 'bit} array is a plain vector), so it answers nil for every
+	 * value today; the function exists so portable code calling it loads.
+	 */
+	public static final String BIT_VECTOR_P = "BIT-VECTOR-P";
+
+	/**
+	 * The {@code simple-bit-vector-p} prelude function: exactly what
+	 * {@code (typep object 'simple-bit-vector)} answers (nil for every value, like
+	 * {@link #BIT_VECTOR_P}, until a bit-vector representation lands).
+	 */
+	public static final String SIMPLE_BIT_VECTOR_P = "SIMPLE-BIT-VECTOR-P";
+
+	/**
+	 * The {@code array-in-bounds-p} prelude function: the bounds check without signaling
+	 * -- nil for a non-array, a rank/subscript-count mismatch or any out-of-range
+	 * subscript, t only when every subscript is a valid index.
+	 */
+	public static final String ARRAY_IN_BOUNDS_P = "ARRAY-IN-BOUNDS-P";
+
+	/**
 	 * The internal {@code %mv-spill} global variable carrying a producer's secondary
 	 * values across a function boundary: every {@code (values ...)} call stores its extra
 	 * values here (a fresh list) as it returns its primary, and a multiple-value consumer

@@ -23,6 +23,24 @@ Still missing: `arrayp` as a public function (only the internal `%arrayp`
 exists, `LispNames.java:1638`), `array-in-bounds-p`, `fill`, bit vectors, and
 the `simple-*-p` predicates.
 
+Progress 2026-09-16 (with `.todo/180`, same pass): `array-in-bounds-p`,
+`simple-vector-p`, `bit-vector-p` and `simple-bit-vector-p` landed as prelude
+defuns over existing primitives (`LispPreludeLibrary`; each predicate answers
+exactly what its `typep` specifier does). The `bit` type fix came with 180, so
+no bit-vector VALUE exists yet and both bit predicates answer nil for every
+value -- the functions exist so portable code calling them loads. Pins:
+`bit-type-lattice` + `array-predicates-and-in-bounds` ci-spec cases,
+`LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`
+twins, per-operator doc pages. What REMAINS here is the eleven `bit-*` array
+ops (`bit-and`, `bit-ior`, `bit-xor`, `bit-not`, ...): without a bit-vector
+representation they cannot be conformant (every input would fail the
+`bit-vector-p` check the ops must perform), so they stay deferred until a
+representation lands. `--no-gc` refuses the new surface with its usual clear
+compile error (and `NoGcWasmCompiler.extractDefun` now refuses a `(defun
+(setf ...) ...)` clearly instead of casting -- the prelude's `bit`/`sbit`
+writers splice in on any program spelling the symbol, a quoted `'bit` type
+specifier included).
+
 ## What's missing
 
 RontoLisp has `make-array` (any rank, `:initial-element`, `:fill-pointer`,

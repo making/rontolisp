@@ -17331,6 +17331,85 @@ standalone:
                     (typep (car (list 1.0)) (car (list 'bfloat16))))))
     stdout: |
       ((T T T NIL NIL NIL) (T T T NIL NIL NIL) (NIL NIL))
+  # bit is (integer 0 1): a lattice edge below integer, with a typep test to
+  # match, so the literal fold and the computed/runtime dispatch agree on all
+  # four backends (.todo/180). The lattice is edges only, so bit is NOT below
+  # unsigned-byte here (CL would answer T); that range reasoning is out of scope.
+  - name: bit-type-lattice
+    source: |
+      (defun bt-sub (a b) (subtypep a b))
+      (defun bt-tp (v s) (typep v s))
+      (print
+        (list (list (subtypep 'bit 'integer)
+                    (subtypep 'bit 'bit)
+                    (subtypep 'integer 'bit)
+                    (subtypep 'bit 'number)
+                    (subtypep 'bit 'unsigned-byte)
+                    (subtypep 'unsigned-byte 'bit))
+              (list (bt-sub 'bit 'integer)
+                    (bt-sub 'bit 'bit)
+                    (bt-sub 'integer 'bit)
+                    (bt-sub 'bit 'number)
+                    (bt-sub 'bit 'unsigned-byte)
+                    (bt-sub 'unsigned-byte 'bit))
+              (list (typep 0 'bit)
+                    (typep 1 'bit)
+                    (typep 2 'bit)
+                    (typep -1 'bit)
+                    (typep 1.0 'bit)
+                    (typep nil 'bit))
+              (list (bt-tp 0 'bit)
+                    (bt-tp 1 'bit)
+                    (bt-tp 2 'bit)
+                    (bt-tp (car (list 1)) (car (list 'bit)))
+                    (let ((bt-s 'bit)) (typep 1 bt-s))
+                    (let ((bt-s 'bit)) (typep 2 bt-s)))
+              (list (typecase 1 (bit 'is-bit) (t 'other))
+                    (typecase 2 (bit 'is-bit) (integer 'is-int) (t 'other))
+                    (check-type 1 bit))))
+    stdout: |
+      ((T T NIL T NIL NIL) (T T NIL T NIL NIL) (T T NIL NIL NIL NIL) (T T NIL T T NIL) (IS-BIT IS-INT NIL))
+  # The array predicate trio and the bounds check without signaling: each
+  # predicate answers exactly what its typep specifier does, and
+  # array-in-bounds-p never signals -- a non-array, a rank/subscript-count
+  # mismatch and any out-of-range subscript all answer nil (.todo/043).
+  - name: array-predicates-and-in-bounds
+    source: |
+      (defvar *abp-sv* (make-array 4))
+      (defvar *abp-fp* (make-array 4 :fill-pointer 0))
+      (defvar *abp-m2* (make-array '(2 3)))
+      (defvar *abp-r0* (make-array nil))
+      (defvar *abp-st* "abc")
+      (print
+        (list (list (simple-vector-p *abp-sv*)
+                    (simple-vector-p *abp-fp*)
+                    (simple-vector-p *abp-m2*)
+                    (simple-vector-p *abp-r0*)
+                    (simple-vector-p *abp-st*)
+                    (simple-vector-p '(1 2)))
+              (list (bit-vector-p *abp-sv*)
+                    (bit-vector-p *abp-st*)
+                    (simple-bit-vector-p *abp-sv*)
+                    (simple-bit-vector-p 0))
+              (list (array-in-bounds-p *abp-sv* 0)
+                    (array-in-bounds-p *abp-sv* 3)
+                    (array-in-bounds-p *abp-sv* 4)
+                    (array-in-bounds-p *abp-sv* -1)
+                    (array-in-bounds-p *abp-m2* 1 2)
+                    (array-in-bounds-p *abp-m2* 2 0)
+                    (array-in-bounds-p *abp-m2* 1))
+              (list (array-in-bounds-p *abp-st* 2)
+                    (array-in-bounds-p *abp-st* 3)
+                    (array-in-bounds-p *abp-r0*)
+                    (array-in-bounds-p *abp-r0* 0)
+                    (array-in-bounds-p 5 0)
+                    (array-in-bounds-p *abp-sv* 1.0)
+                    (array-in-bounds-p *abp-fp* 3))
+              (list (funcall #'simple-vector-p *abp-sv*)
+                    (funcall #'array-in-bounds-p *abp-sv* 2)
+                    (funcall #'bit-vector-p *abp-sv*))))
+    stdout: |
+      ((T NIL NIL NIL NIL NIL) (NIL NIL NIL NIL) (T T NIL NIL T NIL NIL) (T NIL T NIL NIL NIL T) (T T NIL))
   - name: simple-type-name-typep-simplicity
     source: |
       (defvar *tps-sv* (make-array 4))

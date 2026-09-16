@@ -6933,6 +6933,87 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalBitTypeLattice() {
+		// bit is (integer 0 1): a lattice edge below integer with a matching typep
+		// test, so the literal fold and the computed/runtime dispatch agree
+		// (.todo/180). The lattice is edges only, so bit is NOT below
+		// unsigned-byte here (CL would answer T); that range reasoning is out of
+		// scope. Pinned identically by JvmLispCompilerTest#compileBitTypeLattice,
+		// WasmLispCompilerIntegrationTest#bitTypeLattice and the bit-type-lattice
+		// ci-spec case.
+		assertThat(evalMulti("""
+				(defun bts (a b) (subtypep a b))
+				(defun btt (v s) (typep v s))
+				(list
+				  (list (subtypep 'bit 'integer)
+				        (subtypep 'bit 'bit)
+				        (subtypep 'integer 'bit)
+				        (subtypep 'bit 'number))
+				  (list (bts 'bit 'integer)
+				        (bts 'bit 'bit)
+				        (bts 'integer 'bit)
+				        (bts 'bit 'number))
+				  (list (typep 0 'bit)
+				        (typep 1 'bit)
+				        (typep 2 'bit)
+				        (typep -1 'bit)
+				        (typep 1.0 'bit))
+				  (list (btt 0 'bit)
+				        (btt 1 'bit)
+				        (btt 2 'bit)
+				        (btt (car (list 1)) (car (list 'bit)))))
+				""").print()).isEqualTo("((T T NIL T) (T T NIL T) (T T NIL NIL NIL) (T T NIL T))");
+	}
+
+	@Test
+	void evalArrayPredicatesAndInBounds() {
+		// The array predicate trio and the bounds check without signaling: each
+		// predicate answers exactly what its typep specifier does, and
+		// array-in-bounds-p never signals -- a non-array, a rank/subscript-count
+		// mismatch and any out-of-range subscript all answer nil (.todo/043).
+		// Pinned identically by
+		// JvmLispCompilerTest#compileArrayPredicatesAndInBounds,
+		// WasmLispCompilerIntegrationTest#arrayPredicatesAndInBounds and the
+		// array-predicates-and-in-bounds ci-spec case.
+		assertThat(evalMulti("""
+				(defvar *abp-sv* (make-array 4))
+				(defvar *abp-fp* (make-array 4 :fill-pointer 0))
+				(defvar *abp-m2* (make-array '(2 3)))
+				(defvar *abp-r0* (make-array nil))
+				(defvar *abp-st* "abc")
+				(list
+				  (list (simple-vector-p *abp-sv*)
+				        (simple-vector-p *abp-fp*)
+				        (simple-vector-p *abp-m2*)
+				        (simple-vector-p *abp-r0*)
+				        (simple-vector-p *abp-st*)
+				        (simple-vector-p '(1 2)))
+				  (list (bit-vector-p *abp-sv*)
+				        (bit-vector-p *abp-st*)
+				        (simple-bit-vector-p *abp-sv*)
+				        (simple-bit-vector-p 0))
+				  (list (array-in-bounds-p *abp-sv* 0)
+				        (array-in-bounds-p *abp-sv* 3)
+				        (array-in-bounds-p *abp-sv* 4)
+				        (array-in-bounds-p *abp-sv* -1)
+				        (array-in-bounds-p *abp-m2* 1 2)
+				        (array-in-bounds-p *abp-m2* 2 0)
+				        (array-in-bounds-p *abp-m2* 1))
+				  (list (array-in-bounds-p *abp-st* 2)
+				        (array-in-bounds-p *abp-st* 3)
+				        (array-in-bounds-p *abp-r0*)
+				        (array-in-bounds-p *abp-r0* 0)
+				        (array-in-bounds-p 5 0)
+				        (array-in-bounds-p *abp-sv* 1.0)
+				        (array-in-bounds-p *abp-fp* 3))
+				  (list (funcall #'simple-vector-p *abp-sv*)
+				        (funcall #'array-in-bounds-p *abp-sv* 2)
+				        (funcall #'bit-vector-p *abp-sv*)))
+				""").print()).isEqualTo(
+				"((T NIL NIL NIL NIL NIL) (NIL NIL NIL NIL) (T T NIL NIL T NIL NIL) (T NIL T NIL NIL NIL T) (T T NIL))");
+	}
+
+	@Test
 	void evalSimpleTypeNameTypepChecksSimplicity() {
 		// The typep half of the simple- lattice: a fill pointer, :adjustable t and a
 		// displacement each make an array (and a string) NON-simple, so the simple-
