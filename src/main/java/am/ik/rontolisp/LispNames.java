@@ -5049,8 +5049,8 @@ public final class LispNames {
 	public static final String REALPART = "REALPART";
 
 	/**
-	 * The {@code imagpart} built-in function (the imaginary part; a real answers zero --
-	 * an integer zero, or a float zero for a float argument, like SBCL).
+	 * The {@code imagpart} built-in function (the imaginary part; a real answers (* 0 x)
+	 * -- an integer zero, or a float zero of the same format sign included, like SBCL).
 	 */
 	public static final String IMAGPART = "IMAGPART";
 

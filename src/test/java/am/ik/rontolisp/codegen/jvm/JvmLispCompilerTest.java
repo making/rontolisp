@@ -8047,6 +8047,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunImagpartSignedZero() throws Exception {
+		// CLHS: (imagpart x) of a real IS (* 0 x) -- a negative float answers -0.0.
+		assertThat(compileAndRun("(print (imagpart -1.0))")).isEqualTo("-0.0");
+		assertThat(compileAndRun("(print (imagpart 1.0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (eql (* 0 -1.0) (imagpart -1.0)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (imagpart -2))")).isEqualTo("0");
+	}
+
+	@Test
 	void compileAndRunComplexExptExpLogTrig() throws Exception {
 		// The float parts are pinned against the interpreter's own Math.exp/sin/cos/log
 		// values, not against a printed spelling: Math.exp(1.0) is 1 ulp apart

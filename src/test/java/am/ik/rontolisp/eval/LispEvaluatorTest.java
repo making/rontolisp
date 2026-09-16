@@ -2654,6 +2654,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalImagpartSignedZero() {
+		// CLHS: (imagpart x) of a real IS (* 0 x) -- the sign of zero survives,
+		// like SBCL. eql itself is untouched (bit semantics, .kb/linalg-simd.md).
+		assertThat(Double.doubleToRawLongBits(((LispDouble) eval("(imagpart -1.0)")).value()))
+			.isEqualTo(Double.doubleToRawLongBits(-0.0));
+		assertThat(Double.doubleToRawLongBits(((LispDouble) eval("(imagpart 1.0)")).value()))
+			.isEqualTo(Double.doubleToRawLongBits(0.0));
+		assertThat(eval("(eql (* 0 -1.0) (imagpart -1.0))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(eql (* 0 1.0) (imagpart 1.0))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(imagpart -2)")).isEqualTo(new LispInteger(0));
+		assertThat(eval("(imagpart #c(1 2))")).isEqualTo(new LispInteger(2));
+	}
+
+	@Test
 	void evalComplexExptExpLogTrig() {
 		// An integer exponent over complex parts stays exact (SBCL parity).
 		assertThat(eval("(expt #c(1 1) 2)").print()).isEqualTo("#C(0 2)");

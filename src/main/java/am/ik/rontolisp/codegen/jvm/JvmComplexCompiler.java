@@ -236,8 +236,8 @@ final class JvmComplexCompiler {
 	}
 
 	/**
-	 * Compiles {@code (imagpart x)}: the holder's field, a float zero for a float, an
-	 * integer zero for any other real.
+	 * Compiles {@code (imagpart x)}: the holder's field, (* 0 x) for a float, an integer
+	 * zero for any other real.
 	 */
 	static void compileImagpart(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
@@ -280,7 +280,7 @@ final class JvmComplexCompiler {
 		}
 	}
 
-	/** The imagpart answer for a real: a float zero for a float, else int zero. */
+	/** The imagpart answer for a real: (* 0 x) for a float, else int zero. */
 	private static void emitZeroForReal(JvmLispCompiler.Ctx ctx, int temp) {
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(temp);
@@ -289,7 +289,14 @@ final class JvmComplexCompiler {
 		int ifNotDoublePos = ctx.code.size();
 		ctx.emit(Opcode.IFEQ);
 		ctx.emitU2(0);
-		JvmEmitHelper.compileDouble(0.0, ctx);
+		// CLHS: (imagpart x) of a real IS (* 0 x) -- multiply the unboxed value
+		// by 0.0 so a negative float answers -0.0. The value IS a Double here.
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(temp);
+		JvmEmitHelper.unboxDeclaredDouble(ctx);
+		JvmEmitHelper.emitRawDouble(0.0, ctx);
+		ctx.emit(Opcode.DMUL);
+		JvmEmitHelper.boxDouble(ctx);
 		int done2Pos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);

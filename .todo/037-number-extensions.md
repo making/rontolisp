@@ -1,3 +1,22 @@
+> **Update 2026-09-16 (.todo/819: `imagpart` keeps the sign of zero):**
+> CLHS `imagpart` of a real IS `(* 0 number)` (SBCL: `(imagpart -1.0)` =>
+> `-0.0`); the interpreter, the JVM and WASM-GC answered a constant `+0.0`.
+> Deliberately NOT an `eql` change (the first framing was wrong): CLHS `eql`
+> returns false when the zeros are distinct, SBCL answers NIL, and
+> `.kb/linalg-simd.md` pins `(eql nz pz)` = NIL everywhere -- `eql` and the
+> hash are untouched. The fix multiplies instead of constant-folding:
+> interpreter `0.0 * value`, JVM unbox + `DMUL 0.0` + box, WASM-GC unbox +
+> `f64.mul 0.0` + re-box; `--no-gc` still refuses the whole complex family
+> (`IMAGPART` pinned in `rejectsComplexNumbers`). Measured as a diff of
+> failing ANSI test NAMES: **numbers 219 -> 218 (`IMAGPART.4` fixed), misc 26
+> -> 25 (`MISC.598` fixed -- `(imagpart <negative short-float>)` expecting
+> `-0.0s0`, explicitly PASS after), 0 regressed**. `IMAGPART.ERROR.3`
+> (`check-type-error` machinery) is still ERROR, out of scope. Pins:
+> `LispEvaluatorTest#evalImagpartSignedZero`,
+> `JvmLispCompilerTest#compileAndRunImagpartSignedZero`,
+> `WasmLispCompilerIntegrationTest#imagpartSignedZero`, ci-spec
+> `complex-imagpart-signed-zero`.
+>
 > **Update 2026-09-16 (.todo/818: `ldb-test` landed):** the last
 > unimplemented byte-family member ships as a prelude defun
 > (`LispPreludeLibrary`, the `decode-float` precedent -- one Lisp

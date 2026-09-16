@@ -109,9 +109,9 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
-	// (imagpart x): field 1 for a complex, a float zero for a float, the i31 zero
-	// for any other real, _type_err_num otherwise (a float answers a float zero,
-	// like SBCL).
+	// (imagpart x): field 1 for a complex, (* 0 x) for a float, the i31 zero
+	// for any other real, _type_err_num otherwise (CLHS: imagpart of a real IS
+	// (* 0 number), so a negative float answers -0.0, like SBCL).
 	static void compileImagpart(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -128,7 +128,12 @@ final class WasmComplexCompiler {
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
+		// CLHS: (imagpart x) of a real IS (* 0 x) -- multiply the unboxed value
+		// by 0.0 so a negative float answers -0.0.
+		getLocal(ctx, slot);
+		WasmEmitHelper.castFloatGetF64(ctx);
 		f64Const(ctx, 0.0);
+		ctx.writer.write(Instruction.F64_MUL);
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		emitTestExactOrRatio(ctx, slot);

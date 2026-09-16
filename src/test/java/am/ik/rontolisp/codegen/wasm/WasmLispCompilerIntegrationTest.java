@@ -14398,6 +14398,15 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void imagpartSignedZero() throws Exception {
+		// CLHS: (imagpart x) of a real IS (* 0 x) -- a negative float answers -0.0.
+		assertThat(compileAndRun("(print (imagpart -1.0))")).isEqualTo("-0.0");
+		assertThat(compileAndRun("(print (imagpart 1.0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (eql (* 0 -1.0) (imagpart -1.0)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (imagpart -2))")).isEqualTo("0");
+	}
+
+	@Test
 	void compileAndRunComplexExptExpLogTrig() throws Exception {
 		assertThat(compileAndRun("(print (expt #c(1 1) 2))")).isEqualTo("#C(0 2)");
 		assertThat(compileAndRun("(print (expt #c(1 1) -1))")).isEqualTo("#C(1/2 -1/2)");

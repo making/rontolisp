@@ -16738,6 +16738,19 @@ cases:
       #C(0.6 0.8)
       0
       0.0
+  - name: complex-imagpart-signed-zero
+    # CLHS: (imagpart x) of a real IS (* 0 x) -- a negative float answers -0.0
+    # (SBCL), a positive one +0.0; eql tells the two zeros apart (.todo/819).
+    source: |
+      (print (imagpart -1.0))
+      (print (imagpart 1.0))
+      (print (eql (* 0 -1.0) (imagpart -1.0)))
+      (print (imagpart -2))
+    expected: |
+      -0.0
+      0.0
+      T
+      0
   - name: real-domain-escape-to-the-plane
     # log of a negative, asin/acos beyond [-1, 1] and a negative base to a non-integer
     # power answer the complex plane instead of NaN. Every argument arrives through a

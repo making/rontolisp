@@ -3289,8 +3289,13 @@ public final class Environment implements Scope {
 				return c.imag();
 			}
 			LispVal arg = requireReal(LispNames.IMAGPART, args.get(0));
-			// A float answers a float zero, any other real an integer zero (SBCL).
-			return arg instanceof LispDouble ? new LispDouble(0.0) : new LispInteger(0);
+			// CLHS: (imagpart x) of a real IS (* 0 x) -- a float answers a
+			// floating-point zero of the same format, sign included (SBCL
+			// answers -0.0 for (imagpart -1.0)); any other real an integer zero.
+			if (arg instanceof LispDouble d) {
+				return new LispDouble(0.0 * d.value());
+			}
+			return new LispInteger(0);
 		}));
 		env.defineFunction(LispNames.CONJUGATE, new LispFunction(LispNames.CONJUGATE, args -> {
 			requireArgCount(LispNames.CONJUGATE, args, 1);

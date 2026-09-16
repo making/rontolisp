@@ -500,6 +500,13 @@ class NoGcWasmCompilerTest {
 			.hasMessageContaining("complex numbers are not supported")
 			.hasMessageContaining("REALPART")
 			.hasMessageContaining("f");
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (imagpart n))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("complex numbers are not supported")
+			.hasMessageContaining("IMAGPART")
+			.hasMessageContaining("f");
 	}
 
 	@Test
