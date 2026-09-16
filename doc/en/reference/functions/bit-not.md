@@ -7,5 +7,5 @@ Element-wise negation of one bit array, answered as a bit vector. The input must
 When `result-bit-array` is omitted or `nil`, a fresh bit array is created. When it is `t`, `bit-array` is reused destructively. Otherwise it must be a bit array of the same dimensions; it is written into and answered. See [`bit-vector-p`](bit-vector-p.md) for what counts as a bit array.
 
 ```lisp
-(bit-not #*0110) ; => #(1 0 0 1)
+(bit-not #*0110) ; => #*1001
 ```

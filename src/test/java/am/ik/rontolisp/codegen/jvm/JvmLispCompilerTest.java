@@ -777,7 +777,37 @@ class JvmLispCompilerTest {
 				        (bit-vector-p (concatenate 'bit-vector '(1) #(0)))
 				        (let ((s 'bit-vector)) (array-element-type (coerce '(1 0) s))))))
 				""")).isEqualTo(
-				"((T T T T NIL NIL NIL T NIL NIL) (T T T T T T NIL NIL NIL T) (BIT BIT (SIMPLE-BIT-VECTOR 4) (BIT-VECTOR 4) (SIMPLE-ARRAY BIT (2 2)) T T T NIL) (#(0 1 0 0) #(1 1 1 0) #(1 0 1 0) #(0 1 0 1) #(1 0 1 1) #(0 0 0 1) #(1 0 0 0) #(0 0 1 0) #(1 1 0 1) #(0 1 1 1) #(1 0 0 1)) (T #(1 1 1 0) #2A((0 1) (1 0))) (BIT BIT T T BIT))");
+				"((T T T T NIL NIL NIL T NIL NIL) (T T T T T T NIL NIL NIL T) (BIT BIT (SIMPLE-BIT-VECTOR 4) (BIT-VECTOR 4) (SIMPLE-ARRAY BIT (2 2)) T T T NIL) (#*0100 #*1110 #*1010 #*0101 #*1011 #*0001 #*1000 #*0010 #*1101 #*0111 #*1001) (T #*1110 #2A((0 1) (1 0))) (BIT BIT T T BIT))");
+	}
+
+	@Test
+	void compileBitVectorPreservationAcrossSequenceOps() throws Exception {
+		// The JVM half of LispEvaluatorTest#evalBitVectorPreservationAcrossSequenceOps
+		// (.todo/820).
+		assertThat(compileAndRun("""
+				(print
+				  (list
+				    (list (bit-vector-p (subseq #*1010 0 2))
+				          (array-element-type (subseq #*1010 0 2))
+				          (aref (subseq #*1010 0 2) 0)
+				          (aref (subseq #*1010 0 2) 1)
+				          (bit-vector-p (subseq #*1010 2))
+				          (length (subseq #*1010 1 3)))
+				    (list (let ((s '(vector bit))) (bit-vector-p (coerce '(1 0) s)))
+				          (let ((s '(vector bit))) (array-element-type (coerce '(1 0) s)))
+				          (let ((s '(vector bit))) (aref (coerce '(1 0) s) 1)))
+				    (list (bit-vector-p (map 'bit-vector #'identity '(1 0 1)))
+				          (array-element-type (map 'bit-vector #'identity '(1 0)))
+				          (bit-vector-p (map '(vector bit) #'identity '(1 0)))
+				          (bit-vector-p (make-sequence 'bit-vector 3))
+				          (array-element-type (make-sequence 'bit-vector 3))
+				          (aref (make-sequence 'bit-vector 2 :initial-element 1) 1))
+				    (list (prin1-to-string #*101)
+				          (bit-vector-p (read-from-string (prin1-to-string #*101)))
+				          (prin1-to-string (make-sequence 'bit-vector 0)))
+				    (list (eq (class-of #*01) (find-class 'bit-vector))
+				          (class-name (class-of #*01)))))
+				""")).isEqualTo("((T BIT 1 0 T 2) (T BIT 0) (T BIT T T BIT 1) (\"#*101\" T \"#*\") (T BIT-VECTOR))");
 	}
 
 	@Test
@@ -13694,7 +13724,7 @@ class JvmLispCompilerTest {
 				(print (read-from-string "#*101"))
 				(print (read-from-string (prin1-to-string #f(1.0 2.0))))
 				(print (read-from-string (prin1-to-string #d((1.0 2.0) (3.0 4.0)))))
-				""")).isEqualTo("#(1 2 3)\n8\n#2A((1 2) (3 4))\n#(1 0 1)\n#f(1.0 2.0)\n#d((1.0 2.0) (3.0 4.0))");
+				""")).isEqualTo("#(1 2 3)\n8\n#2A((1 2) (3 4))\n#*101\n#f(1.0 2.0)\n#d((1.0 2.0) (3.0 4.0))");
 	}
 
 	@Test

@@ -613,9 +613,8 @@ final class WasmArrayCompiler {
 				// string, answered by subseq's stringp arm before this); bfloat16 has no
 				// packed representation on this backend; BIT is the general boxed array
 				// stamped bit (no packed bits anywhere), so a bit vector rebuilds
-				// through the general path below, which answers an unstamped vector --
-				// the same answer the interpreter's %array-alike/subseq general arms
-				// give (.todo/043).
+				// through the general path below, which carries the source marker
+				// (.todo/820).
 				continue;
 			}
 			arms++;
@@ -634,7 +633,11 @@ final class WasmArrayCompiler {
 			}
 			ctx.writer.write(Instruction.ELSE);
 		}
-		// general: array.new buckets(nil, n) under a fresh 1-dim header cell.
+		// general: array.new buckets(nil, n) under a fresh 1-dim header cell. The
+		// meta marker is the source's own, not 0: a bit vector IS the general boxed
+		// array stamped bit, so the copy keeps the stamp the way adjust-array carries
+		// it (.todo/820). T is marker 0, so a plain vector is unchanged; a non-array
+		// leaves markerSlot at its initial 0 for the same reason.
 		refNull(ctx);
 		getLocal(ctx, nSlot);
 		WasmEmitHelper.castI31GetS(ctx);
@@ -645,8 +648,7 @@ final class WasmArrayCompiler {
 		arrayNew(ctx);
 		refNull(ctx);
 		refNull(ctx);
-		i32Const(ctx, 0);
-		boxI31(ctx);
+		getLocal(ctx, markerSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);

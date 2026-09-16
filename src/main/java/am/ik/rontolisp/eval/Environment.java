@@ -1520,6 +1520,15 @@ public final class Environment implements Scope {
 					return zeroPackedFloatLike(proto, n);
 				}
 			}
+			// A bit vector IS the general boxed array stamped bit (no packed bits
+			// anywhere): a copy keeps the stamp, zero-filled with 0 like a made one
+			// (.todo/820).
+			if (args.get(0) instanceof LispArray srcArr
+					&& srcArr.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT) {
+				LispVal[] bitData = new LispVal[n];
+				java.util.Arrays.fill(bitData, new LispInteger(0));
+				return new LispArray(new int[] { n }, bitData, -1, false, am.ik.rontolisp.ArrayElementTypes.BIT);
+			}
 			LispVal[] data = new LispVal[n];
 			java.util.Arrays.fill(data, LispNil.INSTANCE);
 			return new LispArray(new int[] { n }, data);
@@ -4159,7 +4168,16 @@ public final class Environment implements Scope {
 					copy[i - start] = arr.readFlat(i);
 				}
 				LispVal packed = packedCopyForElementType(LispNames.SUBSEQ, arr.elementTypeCode(), copy);
-				return packed != null ? packed : new LispArray(new int[] { copy.length }, copy);
+				if (packed != null) {
+					return packed;
+				}
+				// A bit-vector subsequence stays a bit vector (CLHS): the stamp rides
+				// the copy the way adjust-array carries it (.todo/820).
+				if (arr.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT) {
+					return new LispArray(new int[] { copy.length }, copy, -1, false,
+							am.ik.rontolisp.ArrayElementTypes.BIT);
+				}
+				return new LispArray(new int[] { copy.length }, copy);
 			}
 			if (args.get(0) instanceof LispIntVector iv) {
 				// Type-preserving: a subsequence of a packed integer vector stays packed

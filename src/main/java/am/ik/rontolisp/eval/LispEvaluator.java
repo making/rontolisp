@@ -3521,6 +3521,9 @@ public final class LispEvaluator {
 	 */
 	private static String classOfTypeName(LispVal v) {
 		return switch (v) {
+			case LispArray array when array.dimensions().length == 1
+					&& array.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT ->
+				"bit-vector";
 			case LispArray array -> array.dimensions().length == 1 ? "vector" : "array";
 			case LispFloatArray array -> array.rank() == 1 ? "vector" : "array";
 			case LispIntVector ignored -> "vector";

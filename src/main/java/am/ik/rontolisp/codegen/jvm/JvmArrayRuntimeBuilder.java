@@ -2239,12 +2239,20 @@ final class JvmArrayRuntimeBuilder {
 			al.areturn();
 			al.bind(next);
 		}
-		// Anything else: the general nil-filled vector.
+		// Anything else: the general nil-filled vector, stamped with what seq
+		// remembers -- a bit vector IS the general boxed array stamped bit, so the
+		// copy keeps the stamp the way adjust-array carries it (.todo/820). T is
+		// remembered as nothing, so the adopt is a no-op for a plain vector.
 		al.aload(1);
 		al.aconstNull();
 		al.aconstNull();
 		al.aconstNull();
 		al.invokestatic(selfArrayMake);
+		al.astore(4);
+		al.aload(4);
+		al.aload(0);
+		al.invokestatic(cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(ADOPT_ELEMENT_TYPE), cp.addUtf8(ADOPT_ELEMENT_TYPE_DESC))));
 		al.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(ALIKE), cp.addUtf8(ALIKE_DESC), 6, 6, al.finish()));
 
@@ -3364,14 +3372,16 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
 		MethodrefConstant stringValueOfInt = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/String;")));
+		MethodrefConstant elementType = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC)));
 
 		List<ArrayMethod> methods = new ArrayList<>();
-		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC), 5, 12,
+		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC), 7, 12,
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
-						sbAppend, sbToString, stringValueOfInt, lispToString, rmGet, renderGuard)));
-		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC), 5, 12,
+						sbAppend, sbToString, stringValueOfInt, lispToString, rmGet, elementType, renderGuard)));
+		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC), 7, 12,
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
-						sbAppend, sbToString, stringValueOfInt, lispToDisplayString, rmGet, renderGuard)));
+						sbAppend, sbToString, stringValueOfInt, lispToDisplayString, rmGet, elementType, renderGuard)));
 		return methods;
 	}
 
@@ -3386,7 +3396,7 @@ final class JvmArrayRuntimeBuilder {
 			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant alSize,
 			MethodrefConstant longIntValue, MethodrefConstant sbInit, MethodrefConstant sbAppend,
 			MethodrefConstant sbToString, MethodrefConstant stringValueOfInt, MethodrefConstant elementFormat,
-			MethodrefConstant rmGet, JvmRuntimeBuilder.RenderGuardRefs renderGuard) {
+			MethodrefConstant rmGet, MethodrefConstant elementType, JvmRuntimeBuilder.RenderGuardRefs renderGuard) {
 		int arr = 0, list = 1, sb = 2, n = 3, dimsArr = 4, k = 5, j = 6, stride = 7, m = 8, rank = 9, header = 10,
 				guardScratch = 11;
 		JvmAsm a = new JvmAsm();
@@ -3479,6 +3489,118 @@ final class JvmArrayRuntimeBuilder {
 		a.aload(dimsArr);
 		a.arraylength();
 		a.istore(rank);
+		// A rank-1 bit-stamped array prints #* when every element is 0/1, so a
+		// printed bit vector reads back as one (.todo/820). make-array never
+		// validates stores, so a non-bit element falls back to the general #()
+		// vector below. The stamp is
+		// read through _arrayElementType itself (which hops a displaced chain and
+		// reads a packed target's width), never by hand off the header: a hand
+		// transcription is exactly what let the adjustable and float shapes fall
+		// through in %array-alike before (.kb/subseq-runtime.md). Locals k/j are
+		// reused: the check loop runs before the general path initializes them,
+		// and the build loop reuses k.
+		ClassConstant bitStringClass = cp.addClass(cp.addUtf8("java/lang/String"));
+		MethodrefConstant bitStringEquals = cp.addMethodref(bitStringClass,
+				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
+		int bitGeneral = a.label();
+		a.iload(rank);
+		a.iconst(1);
+		a.branch(Opcode.IF_ICMPNE, bitGeneral);
+		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.BIT));
+		a.aload(arr);
+		a.invokestatic(elementType);
+		a.invokevirtual(bitStringEquals);
+		a.branch(Opcode.IFEQ, bitGeneral);
+		// Validate: every element a Long 0/1 (read displaced-aware via _rmGet).
+		a.iconst(0);
+		a.istore(k);
+		int bitCheckLoop = a.label();
+		int bitCheckDone = a.label();
+		a.bind(bitCheckLoop);
+		a.iload(k);
+		a.iload(n);
+		a.branch(Opcode.IF_ICMPGE, bitCheckDone);
+		a.aload(list);
+		a.iload(k);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.invokestatic(rmGet);
+		a.dup();
+		a.instanceOf(longClass);
+		int bitIsLong = a.label();
+		a.branch(Opcode.IFNE, bitIsLong);
+		a.pop();
+		a.branch(Opcode.GOTO, bitGeneral);
+		a.bind(bitIsLong);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.istore(j);
+		a.iload(j);
+		int bitCheckNext = a.label();
+		a.branch(Opcode.IFEQ, bitCheckNext);
+		a.iload(j);
+		a.iconst(1);
+		a.branch(Opcode.IF_ICMPNE, bitGeneral);
+		a.bind(bitCheckNext);
+		a.iinc(k, 1);
+		a.branch(Opcode.GOTO, bitCheckLoop);
+		a.bind(bitCheckDone);
+		// Build "#*" + bits.
+		a.anew(sbClass(cp));
+		a.dup();
+		a.ldcString(cp.addString("#*"));
+		a.invokespecial(sbInit);
+		a.astore(sb);
+		a.iconst(0);
+		a.istore(k);
+		int bitBuildLoop = a.label();
+		int bitBuildDone = a.label();
+		a.bind(bitBuildLoop);
+		a.iload(k);
+		a.iload(n);
+		a.branch(Opcode.IF_ICMPGE, bitBuildDone);
+		a.aload(sb);
+		a.aload(list);
+		a.iload(k);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.invokestatic(rmGet);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		int bitIsOne = a.label();
+		int bitAppended = a.label();
+		a.branch(Opcode.IFNE, bitIsOne);
+		a.ldcString(cp.addString("0"));
+		a.branch(Opcode.GOTO, bitAppended);
+		a.bind(bitIsOne);
+		a.ldcString(cp.addString("1"));
+		a.bind(bitAppended);
+		a.invokevirtual(sbAppend);
+		a.pop();
+		a.iinc(k, 1);
+		a.branch(Opcode.GOTO, bitBuildLoop);
+		a.bind(bitBuildDone);
+		a.aload(sb);
+		a.invokevirtual(sbToString);
+		int bitPopClamp = a.label();
+		a.getstatic(renderGuard.depthField());
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.istore(guardScratch);
+		a.iload(guardScratch);
+		a.branch(Opcode.IFLT, bitPopClamp);
+		a.getstatic(renderGuard.pathField());
+		a.iload(guardScratch);
+		a.op(Opcode.ACONST_NULL);
+		a.aastore();
+		a.iload(guardScratch);
+		a.putstatic(renderGuard.depthField());
+		a.areturn();
+		a.bind(bitPopClamp);
+		a.iconst(0);
+		a.putstatic(renderGuard.depthField());
+		a.areturn();
+		a.bind(bitGeneral);
 		// sb = new StringBuilder("#"); rank 1 appends "(", rank n appends n then "A(",
 		// and rank 0 appends "0A" with NO paren -- #0A<datum> is the whole rank-0
 		// syntax, so the closing paren at the tail is skipped for it too.

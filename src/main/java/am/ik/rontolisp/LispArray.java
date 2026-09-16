@@ -532,11 +532,42 @@ public final class LispArray implements LispVal {
 		}
 		try {
 			int rank = this.dimensions.length;
+			// A rank-1 bit-stamped array prints #* when every element is 0/1, so a
+			// printed bit vector reads back as one (.todo/820). make-array never
+			// validates stores, so a non-bit element falls back to the general #()
+			// vector, which also loses the stamp on the read-back like a rank-n
+			// character array does.
+			if (rank == 1 && this.elementTypeCode == ArrayElementTypes.BIT) {
+				String bits = tryRenderBitVector();
+				if (bits != null) {
+					return bits;
+				}
+			}
 			return render(renderElement, rank == 1 ? "#(" : "#" + rank + "A(");
 		}
 		finally {
 			RenderCycleGuard.exit();
 		}
+	}
+
+	// The #* rendering of a rank-1 bit-stamped array, or null when any element is
+	// not a 0/1 bit (the caller falls back to the general vector). Reads through
+	// the displacement chain and stops at the fill pointer, like the general
+	// renderer.
+	private @Nullable String tryRenderBitVector() {
+		int count = effectiveLength();
+		StringBuilder sb = new StringBuilder(count + 2);
+		sb.append("#*");
+		for (int k = 0; k < count; k++) {
+			LispVal element = readFlat(k);
+			if (element instanceof LispInteger i && (i.value() == 0 || i.value() == 1)) {
+				sb.append((char) ('0' + i.value()));
+			}
+			else {
+				return null;
+			}
+		}
+		return sb.toString();
 	}
 
 	// Renders the array data with a caller-supplied opening prefix (up to and including

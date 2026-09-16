@@ -10500,6 +10500,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry sfPrefix;
 
+		// Bit-vector printing: the "#*" prefix and the two bit spellings. A rank-1
+		// bit-stamped array prints #* when every element is 0/1 (.todo/820).
+		final StringEntry bitPrefix;
+
+		final StringEntry bitZero;
+
+		final StringEntry bitOne;
+
 		// Complex printing: the "#C(" prefix of the "#C(re im)" form the printer
 		// writes around the two recursively rendered parts (the space between them
 		// and the closing paren reuse space/rparen).
@@ -10570,6 +10578,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.rankA = addBodyString("A");
 			this.fPrefix = addBodyString("#d(");
 			this.sfPrefix = addBodyString("#f(");
+			this.bitPrefix = addBodyString("#*");
+			this.bitZero = addBodyString("0");
+			this.bitOne = addBodyString("1");
 			this.complexPrefix = addBodyString("#C(");
 			this.minus = addBodyString("-");
 			this.period = addBodyString(".");

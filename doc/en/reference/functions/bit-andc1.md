@@ -7,5 +7,5 @@ Element-wise and-with-complemented-first (not-a and b) of two bit arrays of the 
 When `result-bit-array` is omitted or `nil`, a fresh bit array is created. When it is `t`, `bit-array1` is reused destructively. Otherwise it must be a bit array of the same dimensions; it is written into and answered. See [`bit-vector-p`](bit-vector-p.md) for what counts as a bit array.
 
 ```lisp
-(bit-andc1 #*0110 #*1100) ; => #(1 0 0 0)
+(bit-andc1 #*0110 #*1100) ; => #*1000
 ```

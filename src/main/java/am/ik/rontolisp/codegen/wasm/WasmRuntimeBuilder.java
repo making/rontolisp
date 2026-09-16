@@ -4886,6 +4886,227 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(field);
 	}
 
+	// A rank-1 bit-stamped array prints #* when every element is 0/1 (.todo/820).
+	// Emitted as a BLOCK the general path follows: any check failing branches to
+	// its end (falling through to the displacement walk), while success writes
+	// "#*" + bits, exits the render guard and returns. The marker is read off
+	// param 0's own header (a displaced view carries its offset there, not a
+	// type, so it correctly falls through); the elements are read off its data
+	// buckets with a zero base for the same reason. idxSlot counts, strideSlot
+	// is the still-valid flag (1), mSlot the element value scratch.
+	private static void emitPrintBitVectorFastPath(WasmWriter w, WasmLispCompiler.StringTable st, int idxSlot,
+			int lenSlot, int rankSlot, int strideSlot, int mSlot, int renderPathGlobalIndex,
+			int renderDepthGlobalIndex) {
+		int bitMarker = WasmArrayCompiler.elementTypeMarker(am.ik.rontolisp.ArrayElementTypes.BIT);
+		w.write(Instruction.BLOCK, 0x40);
+		// rank == 1 else fall through.
+		getLocal(w, rankSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		// marker == bitMarker else fall through. Marker is header.cdr.car.cdr.cdr,
+		// boxed i31; anything else (a displaced offset, a non-array shape the outer
+		// branch already excluded) fails the i31 test or the value compare.
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(am.ik.wasm.Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(am.ik.wasm.Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(bitMarker);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		// data buckets else fall through (a displaced view's data is its target
+		// cell, not buckets).
+		pushArrayDataBuckets(w);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		// flag = 1; for (idx = 0; idx < len; idx++) if buckets[idx] is not i31
+		// 0/1 { flag = 0; break; }
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		setLocal(w, strideSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, idxSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, idxSlot);
+		getLocal(w, lenSlot);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		pushArrayDataBucketsCasted(w);
+		getLocal(w, idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(am.ik.wasm.Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, strideSlot);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		pushArrayDataBucketsCasted(w);
+		getLocal(w, idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(am.ik.wasm.Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, mSlot);
+		getLocal(w, mSlot);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, mSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, strideSlot);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		getLocal(w, idxSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, idxSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		getLocal(w, strideSlot);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		// write "#*" then each bit.
+		writeStr(w, st.bitPrefix);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, idxSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, idxSlot);
+		getLocal(w, lenSlot);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		pushArrayDataBucketsCasted(w);
+		getLocal(w, idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(am.ik.wasm.Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.IF, 0x40);
+		writeStr(w, st.bitOne);
+		w.write(Instruction.ELSE);
+		writeStr(w, st.bitZero);
+		w.write(Instruction.END);
+		getLocal(w, idxSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, idxSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		emitRenderGuardExit(w, renderPathGlobalIndex, renderDepthGlobalIndex);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+	}
+
+	// Pushes param 0's array data (header.cdr.cdr) as an eqref for the bit-vector
+	// print fast path above: header then two cdr steps, no casts beyond the cell
+	// and cons shapes the outer array branch already verified.
+	private static void pushArrayDataBuckets(WasmWriter w) {
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+	}
+
+	// Like {@link #pushArrayDataBuckets}, but cast to the buckets array type for
+	// an immediately following {@code array.get}: the validator only ever
+	// {@code ref.test}s (valid on any reference), while {@code array.get} needs
+	// the concrete array type and the validator rejects a bare eqref
+	// ("expected (ref null $type), found eqref"). Sound wherever the buckets
+	// test just passed: same immutable value, re-read from param 0.
+	private static void pushArrayDataBucketsCasted(WasmWriter w) {
+		pushArrayDataBuckets(w);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
 	// Emits the TYPE_CELL branch shared by _print_val and _princ_val, i.e. every value
 	// carried in the box: if param 0 is a TYPE_CELL whose header car is a
 	// TYPE_HASH_BUCKETS array (an array), prints it as #(...) (rank 1), #nA((...) ...)
@@ -5224,6 +5445,16 @@ final class WasmRuntimeBuilder {
 		getLocal(w, strideSlot);
 		w.write(Instruction.END);
 		setLocal(w, lenSlot);
+
+		// A rank-1 bit-stamped array prints #* when every element is 0/1, so a
+		// printed bit vector reads back as one (.todo/820). make-array never
+		// validates stores, so a non-bit element falls back to the general #()
+		// vector below. idxSlot/strideSlot/mSlot are free here (the len product
+		// loop is done, the element loop has not started); dataSlot still holds
+		// the inner cons the walk below expects, so the buckets are re-read from
+		// param 0 per element rather than cached.
+		emitPrintBitVectorFastPath(w, st, idxSlot, lenSlot, rankSlot, strideSlot, mSlot, renderPathGlobalIndex,
+				renderDepthGlobalIndex);
 
 		// resolve the displacement chain: base accumulates each hop's meta offset;
 		// dataSlot walks from this array's inner (meta . data) cons to the base

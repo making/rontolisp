@@ -571,7 +571,7 @@ public final class ClosRegistry {
 	 */
 	public static final List<String> BUILTIN_CLASS_NAMES = List.of("T", "NULL", "BOOLEAN", "INTEGER", "RATIO", "FLOAT",
 			"COMPLEX", "STRING", "CHARACTER", "KEYWORD", "SYMBOL", "HASH-TABLE", "FUNCTION", "CONS", "ARRAY", "VECTOR",
-			"QUANTIZED-MATRIX");
+			"BIT-VECTOR", "QUANTIZED-MATRIX");
 
 	/**
 	 * Names {@code find-class} resolves to a memoized slot-less metaobject but that are
@@ -588,14 +588,13 @@ public final class ClosRegistry {
 	 * The rest are the INTERIOR of the built-in class lattice: every value they cover is
 	 * covered by a narrower name {@code class-of} already answers ({@code number} by
 	 * {@code integer}/{@code ratio}/{@code float}/{@code complex}, {@code list} by
-	 * {@code cons}/{@code null}, {@code bit-vector} by the general {@code vector} this
-	 * implementation has no separate bit-array representation apart from), so they are
-	 * reachable only by NAME. The lattice ITSELF is not duplicated into their superclass
-	 * slots -- it lives once in {@code typep}/{@code subtypep}, which a class metaobject
-	 * standing as a type specifier resolves through by name (`.kb/clos.md`).
+	 * {@code cons}/{@code null}), so they are reachable only by NAME. The lattice ITSELF
+	 * is not duplicated into their superclass slots -- it lives once in
+	 * {@code typep}/{@code subtypep}, which a class metaobject standing as a type
+	 * specifier resolves through by name (`.kb/clos.md`).
 	 */
 	public static final List<String> FIND_CLASS_ONLY_CLASS_NAMES = List.of("STANDARD-OBJECT", "SEQUENCE", "LIST",
-			"NUMBER", "REAL", "RATIONAL", "BIT-VECTOR", "STRUCTURE-OBJECT", "BUILT-IN-CLASS");
+			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT", "BUILT-IN-CLASS");
 
 	/**
 	 * Registers a built-in class (a condition of the seeded hierarchy, or one of the MOP

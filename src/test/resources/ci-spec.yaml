@@ -17460,7 +17460,34 @@ standalone:
                     (bit-vector-p (concatenate 'bit-vector '(1) #(0)))
                     (let ((s 'bit-vector)) (array-element-type (coerce '(1 0) s))))))
     stdout: |
-      ((T T T T NIL T NIL NIL) (T T NIL NIL T BIT (SIMPLE-BIT-VECTOR 4) (BIT-VECTOR 4) T NIL) (#(0 1 0 0) #(1 1 1 0) #(1 0 1 0) #(0 1 0 1) #(1 0 1 1) #(0 0 0 1) #(1 0 0 0) #(0 0 1 0) #(1 1 0 1) #(0 1 1 1) #(1 0 0 1)) (T #(1 0 1 0) #2A((0 1) (1 0))) (BIT BIT T T BIT))
+      ((T T T T NIL T NIL NIL) (T T NIL NIL T BIT (SIMPLE-BIT-VECTOR 4) (BIT-VECTOR 4) T NIL) (#*0100 #*1110 #*1010 #*0101 #*1011 #*0001 #*1000 #*0010 #*1101 #*0111 #*1001) (T #*1010 #2A((0 1) (1 0))) (BIT BIT T T BIT))
+  # The stamp survives the sequence operators, printing spells #* and class-of
+  # answers bit-vector (.todo/820).
+  - name: bit-vector-preservation-across-sequence-ops
+    source: |
+      (print
+        (list (list (bit-vector-p (subseq #*1010 0 2))
+                    (array-element-type (subseq #*1010 0 2))
+                    (aref (subseq #*1010 0 2) 0)
+                    (aref (subseq #*1010 0 2) 1)
+                    (bit-vector-p (subseq #*1010 2))
+                    (length (subseq #*1010 1 3)))
+              (list (let ((s '(vector bit))) (bit-vector-p (coerce '(1 0) s)))
+                    (let ((s '(vector bit))) (array-element-type (coerce '(1 0) s)))
+                    (let ((s '(vector bit))) (aref (coerce '(1 0) s) 1)))
+              (list (bit-vector-p (map 'bit-vector #'identity '(1 0 1)))
+                    (array-element-type (map 'bit-vector #'identity '(1 0)))
+                    (bit-vector-p (map '(vector bit) #'identity '(1 0)))
+                    (bit-vector-p (make-sequence 'bit-vector 3))
+                    (array-element-type (make-sequence 'bit-vector 3))
+                    (aref (make-sequence 'bit-vector 2 :initial-element 1) 1))
+              (list (prin1-to-string #*101)
+                    (bit-vector-p (read-from-string (prin1-to-string #*101)))
+                    (prin1-to-string (make-sequence 'bit-vector 0)))
+              (list (eq (class-of #*01) (find-class 'bit-vector))
+                    (class-name (class-of #*01)))))
+    stdout: |
+      ((T BIT 1 0 T 2) (T BIT 0) (T BIT T T BIT 1) ("#*101" T "#*") (T BIT-VECTOR))
   - name: simple-type-name-typep-simplicity
     source: |
       (defvar *tps-sv* (make-array 4))
