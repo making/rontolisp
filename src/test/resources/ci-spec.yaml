@@ -428,9 +428,10 @@ cases:
         (print (list (array-element-type maut-a) (aref maut-a 0))))
       (let* ((maut-et 'single-flaot) (maut-b (make-array 3 :element-type maut-et)))
         (print (list (array-element-type maut-b) (aref maut-b 0))))
-      ;; The LEGAL CLHS upgrades the shipped corpus passes: alexandria and cl-ppcre
-      ;; allocate 'bit, ironclad and chipz 'fixnum, jzon '(unsigned-byte 64), cl-ppcre
-      ;; '(or null fixnum). Refusing an unrecognized element type would refuse these.
+      ;; The LEGAL CLHS upgrades the shipped corpus passes: ironclad and chipz
+      ;; allocate 'fixnum, jzon '(unsigned-byte 64), cl-ppcre '(or null fixnum).
+      ;; Refusing an unrecognized element type would refuse these. 'bit is NOT an
+      ;; upgrade: since .todo/043 a bit vector is the general array stamped bit.
       (print (list (array-element-type (make-array 2 :element-type 'bit))
                    (array-element-type (make-array 2 :element-type 'fixnum))
                    (array-element-type (make-array 2 :element-type '(unsigned-byte 64)))
@@ -441,7 +442,7 @@ cases:
     expected: |
       (T NIL)
       (T NIL)
-      (T T T T)
+      (BIT T T T)
       (T 5)
   - name: make-array-rank2-initial-contents
     source: |
@@ -17613,7 +17614,7 @@ standalone:
                    (aref (rtet-mki t 'a) 0)))
     stdout: |
       ((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
-      (T (SIMPLE-VECTOR 4) NIL)
+      (T (SIMPLE-BIT-VECTOR 4) NIL)
       (7 #\z A)
   # A deftype alias that arrives as a VALUE, not as the literal at the call site:
   # the compile paths route the designator through the injected
