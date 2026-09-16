@@ -16,9 +16,11 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * The space is closed because the upgrade is: {@code character} (and its base/standard
  * spellings) upgrades to {@code character}, {@code (unsigned-byte 8|16|32)} and the three
- * float widths keep their own name, and EVERYTHING else -- {@code fixnum},
- * {@code integer}, {@code bit}, a class, an unsupported {@code (unsigned-byte 4)} --
- * upgrades to {@code t}, which is {@link #T} and is remembered as nothing at all.
+ * float widths keep their own name, {@code bit} is remembered as {@code bit} over the
+ * general boxed representation (a bit vector IS a general array here, specialized only by
+ * the stamp -- there is no packed bit storage), and EVERYTHING else -- {@code fixnum},
+ * {@code integer}, a class, an unsupported {@code (unsigned-byte 4)} -- upgrades to
+ * {@code t}, which is {@link #T} and is remembered as nothing at all.
  */
 public final class ArrayElementTypes {
 
@@ -51,6 +53,17 @@ public final class ArrayElementTypes {
 	public static final int BFLOAT16 = 7;
 
 	/**
+	 * {@code bit} -- a rontolisp bit vector is the general boxed array stamped with this
+	 * code (there is no packed bit storage on any backend): {@code #*1011} and
+	 * {@code (make-array n :element-type 'bit)} remember it, {@code array-element-type}
+	 * answers it, and an unsupplied element is {@code 0}. It IS in
+	 * {@link #specializedCodes()} (the generated {@code %make-array-et} dispatch needs
+	 * the arm, and the per-width gates need the bit) but selects the BOXED representation
+	 * everywhere a packed one is chosen -- the one code the packed constructors decline.
+	 */
+	public static final int BIT = 8;
+
+	/**
 	 * The code point an unsupplied {@code character} element takes: SPACE, not NUL. CLHS
 	 * leaves an uninitialized element's value undefined, so the choice is the project's
 	 * to make, and it is made ONCE here for the whole surface -- {@code make-string},
@@ -72,7 +85,7 @@ public final class ArrayElementTypes {
 
 	// Every code but T, in the order a generated dispatch should read.
 	private static final int[] SPECIALIZED = { CHARACTER, UNSIGNED_BYTE_8, UNSIGNED_BYTE_16, UNSIGNED_BYTE_32,
-			SINGLE_FLOAT, DOUBLE_FLOAT, BFLOAT16 };
+			SINGLE_FLOAT, DOUBLE_FLOAT, BFLOAT16, BIT };
 
 	/**
 	 * Every code but {@link #T}, as a bit mask -- {@code 1 << code} for each.
@@ -125,6 +138,7 @@ public final class ArrayElementTypes {
 				case LispNames.SINGLE_FLOAT -> SINGLE_FLOAT;
 				case LispNames.DOUBLE_FLOAT -> DOUBLE_FLOAT;
 				case LispNames.BFLOAT16 -> BFLOAT16;
+				case LispNames.BIT -> BIT;
 				default -> T;
 			};
 		}
@@ -151,6 +165,7 @@ public final class ArrayElementTypes {
 			case SINGLE_FLOAT -> new LispSymbol(LispNames.SINGLE_FLOAT);
 			case DOUBLE_FLOAT -> new LispSymbol(LispNames.DOUBLE_FLOAT);
 			case BFLOAT16 -> new LispSymbol(LispNames.BFLOAT16);
+			case BIT -> new LispSymbol(LispNames.BIT);
 			default -> LispTrue.INSTANCE;
 		};
 	}
@@ -165,7 +180,7 @@ public final class ArrayElementTypes {
 	public static @Nullable LispVal defaultElement(int code) {
 		return switch (code) {
 			case CHARACTER -> new LispChar(DEFAULT_CHARACTER);
-			case UNSIGNED_BYTE_8, UNSIGNED_BYTE_16, UNSIGNED_BYTE_32 -> new LispInteger(0);
+			case UNSIGNED_BYTE_8, UNSIGNED_BYTE_16, UNSIGNED_BYTE_32, BIT -> new LispInteger(0);
 			case SINGLE_FLOAT, DOUBLE_FLOAT, BFLOAT16 -> new LispDouble(0.0);
 			default -> null;
 		};

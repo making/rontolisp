@@ -46,19 +46,20 @@ its category.
 **The split is the whole design: exported is not the same question as owned.**
 `CL_EXPORTED_ONLY` joins the package's `externals` (and its `symbols`, so externals stay a
 subset) but NOT the static `CL_SYMBOLS` that `isClSymbol` reads -- and every RESOLUTION decision
-reads `isClSymbol`. So nothing about resolution moved: a bare `bit-and` still interns in the
-current package, `(defun bit-and ...)` still does not meet the `cannot redefine the standard
+reads `isClSymbol`. So nothing about resolution moved: a bare `find-method` still interns in the
+current package, `(defun find-method ...)` still does not meet the `cannot redefine the standard
 operator` guard (`.kb/lisp2-namespaces.md`), `LibraryDefunPruner`'s reference scan still does not
-see the name as resolvable (`.kb/library-defun-pruning.md`), and `(bit-and a b)` still signals
-`undefined-function`. The wider question -- "does `cl` ANSWER for this name?" -- is
+see the name as resolvable (`.kb/library-defun-pruning.md`), and `(find-method x)` still signals
+`undefined-function` (the eleven `bit-*` operators left this set for `CL_FUNCTIONS` in
+`.todo/043`, so a bare `bit-and` now resolves to the prelude defun). The wider question -- "does `cl` ANSWER for this name?" -- is
 `isClMemberName`, and only the symbol API asks it: `PackageResolver.memberSpelling` /
 `memberStatus` and the compile paths' literal `find-symbol` fold
 (`LispMacroExpander.expandFindSymbolInPackage` / `clPackageStatus`), which must move together or
 the interpreter and the compiled backends disagree. `fboundp` / `macro-function` /
 `special-operator-p` are untouched and answer nil, which is the point.
 
-`cl:bit-and` now resolves (to the bare name) where it used to be a `not external` package error --
-the symbol exists, so a single colon reaches it.
+`cl:find-method` resolves (to the bare name) where a non-external name is a `not external`
+package error -- the symbol exists, so a single colon reaches it.
 
 Measured on the ANSI suite (interpreter, 2026-09-13, suite `ca06bd9`): **+187 tests, 0 regressed**
 (13,371 -> 13,558 of 19,482; `symbols` 214 -> 27 failures), the whole of

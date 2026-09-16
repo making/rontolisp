@@ -85,8 +85,8 @@ class PackageRegistryTest {
 		// the library pruner's reference scan does not see it as resolvable.
 		assertThat(PackageRegistry.clExportedOnlyNames()).isNotEmpty()
 			.allSatisfy(name -> assertThat(PackageRegistry.isClSymbol(name)).isFalse());
-		assertThat(PackageRegistry.isClMemberName("BIT-AND")).isTrue();
-		assertThat(PackageRegistry.isClSymbol("BIT-AND")).isFalse();
+		assertThat(PackageRegistry.isClMemberName("FIND-METHOD")).isTrue();
+		assertThat(PackageRegistry.isClSymbol("FIND-METHOD")).isFalse();
 		assertThat(PackageRegistry.isClMemberName("CAR")).isTrue();
 		assertThat(PackageRegistry.isClMemberName("NO-SUCH-NAME")).isFalse();
 	}

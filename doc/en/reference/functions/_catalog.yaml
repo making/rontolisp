@@ -188,6 +188,17 @@ categories:
       - { slug: make-load-form, name: "make-load-form" }
       - { slug: make-load-form-saving-slots, name: "make-load-form-saving-slots" }
       - { slug: sxhash, name: "sxhash" }
+      - { slug: bit-and, name: "bit-and" }
+      - { slug: bit-andc1, name: "bit-andc1" }
+      - { slug: bit-andc2, name: "bit-andc2" }
+      - { slug: bit-eqv, name: "bit-eqv" }
+      - { slug: bit-ior, name: "bit-ior" }
+      - { slug: bit-nand, name: "bit-nand" }
+      - { slug: bit-nor, name: "bit-nor" }
+      - { slug: bit-not, name: "bit-not" }
+      - { slug: bit-orc1, name: "bit-orc1" }
+      - { slug: bit-orc2, name: "bit-orc2" }
+      - { slug: bit-xor, name: "bit-xor" }
       - { slug: sbit, name: "sbit" }
       - { slug: bit, name: "bit" }
       - { slug: both-case-p, name: "both-case-p" }

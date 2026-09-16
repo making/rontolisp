@@ -397,8 +397,15 @@ final class JvmQuoteCompiler {
 		ctx.emit(Opcode.DUP);
 		ctx.emit(Opcode.INVOKESPECIAL);
 		ctx.emitU2(alInit.index());
+		// A bit-vector literal (#*1011) is stamped with the remembered element type
+		// bit: the header grows to the length-5 shape _arrayMakeTyped builds, carrying
+		// the name in slot 4, so array-element-type and bit-vector-p read it back.
+		// The name is unspelled run-time data the compiler synthesized, like the
+		// character answer in compileElementType -- it must not arm the
+		// funcall-dispatch gate's name probes.
+		boolean stampedBit = array.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT;
 		addElement(ctx, alAdd, () -> {
-			JvmEmitHelper.emitIntConst(ctx, 3);
+			JvmEmitHelper.emitIntConst(ctx, stampedBit ? 5 : 3);
 			ctx.emit(Opcode.ANEWARRAY);
 			ctx.emitU2(ctx.objectClass.index());
 			ctx.emit(Opcode.DUP);
@@ -413,6 +420,12 @@ final class JvmQuoteCompiler {
 				ctx.emit(Opcode.AASTORE);
 			}
 			ctx.emit(Opcode.AASTORE);
+			if (stampedBit) {
+				ctx.emit(Opcode.DUP);
+				JvmEmitHelper.emitIntConst(ctx, 4);
+				JvmEmitHelper.compileUnspelledLiteral(am.ik.rontolisp.LispNames.BIT, ctx);
+				ctx.emit(Opcode.AASTORE);
+			}
 		});
 		for (LispVal element : array.data()) {
 			LispVal value = (element == null) ? LispNil.INSTANCE : element;

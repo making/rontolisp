@@ -106,6 +106,17 @@
 | `sxhash` | `(sxhash "ab")` | 構造的ハッシュ(整数/文字/文字列/シンボル/コンス)。実行内では安定、バックエンド間では非規定 |
 | `sbit` | `(sbit #*0110 1)` | ビットベクタ要素の読み取り。`(setf (sbit v i) b)` で書き込み |
 | `bit` | `(bit #*0110 1)` | ビット配列の要素読み出し。`(setf (bit v i) b)` で書き込み |
+| `bit-and` | `(bit-and #*0110 #*1100)` | `#(0 1 0 0)` -- 同じ次元の 2 つのビット配列の要素ごとの `and`。省略可能な第 3 引数は結果配列（`nil` で新規、`t` で第 1 引数を再利用） |
+| `bit-andc1` | `(bit-andc1 #*0110 #*1100)` | `#(1 0 0 0)` -- `(not-a and b)` |
+| `bit-andc2` | `(bit-andc2 #*0110 #*1100)` | `#(0 0 1 0)` -- `(a and not-b)` |
+| `bit-eqv` | `(bit-eqv #*0110 #*1100)` | `#(0 1 0 1)` -- 要素ごとの同値 |
+| `bit-ior` | `(bit-ior #*0110 #*1100)` | `#(1 1 1 0)` -- 要素ごとの包括的論理和 |
+| `bit-nand` | `(bit-nand #*0110 #*1100)` | `#(1 0 1 1)` -- 要素ごとの否定論理積 |
+| `bit-nor` | `(bit-nor #*0110 #*1100)` | `#(0 0 0 1)` -- 要素ごとの否定論理和 |
+| `bit-not` | `(bit-not #*0110)` | `#(1 0 0 1)` -- 1 つのビット配列の要素ごとの否定 |
+| `bit-orc1` | `(bit-orc1 #*0110 #*1100)` | `#(1 1 0 1)` -- `(not-a or b)` |
+| `bit-orc2` | `(bit-orc2 #*0110 #*1100)` | `#(0 1 1 1)` -- `(a or not-b)` |
+| `bit-xor` | `(bit-xor #*0110 #*1100)` | `#(1 0 1 0)` -- 要素ごとの排他的論理和 |
 | `both-case-p` | `(both-case-p #\a)` | 大小両形を持つ英字なら真(`lower-case-p` または `upper-case-p`) |
 | `special-operator-p` | `(special-operator-p 'if)` | ANSI の 25 個の特殊オペレータで `t`、それ以外は `nil` |
 | `macro-function` | `(macro-function 'when)` | マクロ展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。関数と特殊オペレータには `nil` |
@@ -170,8 +181,8 @@
 | `arrayp` | `(arrayp "abc")` | `T` -- CL では文字列も配列。`vectorp` と同様 |
 | `simple-string-p` | `(simple-string-p "hello")` | `t` -- フィルポインタなし・adjustable でない・displaced でない |
 | `simple-vector-p` | `(simple-vector-p (vector 1 2))` | `t` -- 階数 1、要素型 `t`、フィルポインタなし・adjustable でない・displaced でない |
-| `bit-vector-p` | `(bit-vector-p (vector 0 1))` | `nil` -- ビットベクタの値はまだ存在しない（`:element-type 'bit` の配列は素のベクタ） |
-| `simple-bit-vector-p` | `(simple-bit-vector-p (vector 0 1))` | `nil` -- `bit-vector-p` と同様 |
+| `bit-vector-p` | `(bit-vector-p #*0110)` | `t` -- 記憶要素型 `bit` で刻印されたランク1配列（`:element-type 'bit`） |
+| `simple-bit-vector-p` | `(simple-bit-vector-p #*0110)` | `t` -- `bit-vector-p` に加え、フィルポインタなし・adjustable でない・displaced でない |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |

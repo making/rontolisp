@@ -2150,8 +2150,8 @@ final class JvmReadRuntimeBuilder {
 	}
 
 	// _readBits: cursor just past "#*"; consumes 0/1 characters into the general-array
-	// runtime shape (an ArrayList with a {dims, nil, nil} header), like the frontend's
-	// bit-vector lowering -- there is no packed bit representation.
+	// runtime shape (an ArrayList with a {dims, nil, nil, nil, "BIT"} header), like the
+	// frontend's bit-vector lowering -- there is no packed bit representation.
 	private List<Integer> buildReadBits() {
 		JvmAsm a = new JvmAsm();
 		int loop = a.label();
@@ -2192,10 +2192,12 @@ final class JvmReadRuntimeBuilder {
 		advance(a);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(done);
-		// header = Object[]{ Object[]{Long(count)}, null, null } into slot 0 of the list
+		// header = Object[]{ Object[]{Long(count)}, null, null, null, "BIT" } into
+		// slot 0 of the list: a bit vector read at run time is stamped with the
+		// remembered element type bit, like the frontend's #* lowering (.todo/043).
 		a.aload(0);
 		a.iconst(0);
-		a.iconst(3);
+		a.iconst(5);
 		a.anewarray(this.objectClass);
 		a.dup();
 		a.iconst(0);
@@ -2207,6 +2209,10 @@ final class JvmReadRuntimeBuilder {
 		a.op(Opcode.I2L);
 		a.invokestatic(this.longValueOf);
 		a.aastore();
+		a.aastore();
+		a.dup();
+		a.iconst(4);
+		ldc(a, am.ik.rontolisp.LispNames.BIT);
 		a.aastore();
 		a.invokevirtual(this.alSet);
 		a.pop();

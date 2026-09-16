@@ -40,9 +40,9 @@ A second value reports the ANSI accessibility status of the name in that package
 ```
 
 ```lisp
-(multiple-value-list (find-symbol "BIT-AND" 'common-lisp)) ; => (BIT-AND :EXTERNAL)
+(multiple-value-list (find-symbol "FIND-METHOD" 'common-lisp)) ; => (FIND-METHOD :EXTERNAL)
 ```
 
 ```lisp
-(fboundp 'bit-and) ; => NIL
+(fboundp 'find-method) ; => NIL
 ```

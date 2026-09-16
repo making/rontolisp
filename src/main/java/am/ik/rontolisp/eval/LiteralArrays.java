@@ -55,14 +55,16 @@ final class LiteralArrays {
 	}
 
 	// A literal array never has a fill pointer, is not adjustable and is not displaced --
-	// the reader has no syntax for any of the three -- so the copy is dimensions + data.
+	// the reader has no syntax for any of the three -- so the copy is dimensions + data
+	// plus the remembered element type (a #*1011 literal is stamped bit, and the copy
+	// must stay one or bit-vector-p would answer differently for the second evaluation).
 	private static LispArray freshArray(LispArray array) {
 		LispVal[] source = array.data();
 		LispVal[] copy = new LispVal[source.length];
 		for (int i = 0; i < source.length; i++) {
 			copy[i] = materialize(source[i]);
 		}
-		return new LispArray(array.dimensions().clone(), copy);
+		return new LispArray(array.dimensions().clone(), copy, -1, false, array.elementTypeCode());
 	}
 
 }

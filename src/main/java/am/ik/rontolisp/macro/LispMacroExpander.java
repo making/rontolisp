@@ -26244,6 +26244,14 @@ public final class LispMacroExpander {
 			// Every float type is the same double representation here.
 			return mvCall(LispNames.FLOAT, parts.get(1));
 		}
+		if (coerceResultIsBitVector(parts.get(2), closRegistry)) {
+			// A bit-vector result builds the stamped general array, not the T vector
+			// the family collapse above would answer: atomic 'bit-vector (or the
+			// simple- spelling) and any vector-family compound spelling a bit element
+			// (.todo/043).
+			LispSymbol bx = new LispSymbol("__coerce_x");
+			return makeLet(bx.name(), parts.get(1), coerceToBitVectorBody(bx));
+		}
 		if ("FUNCTION".equals(type)) {
 			// (coerce x 'function): a designator-to-function conversion, not a
 			// sequence one. A function is returned as is; a symbol resolves through
@@ -26391,14 +26399,21 @@ public final class LispMacroExpander {
 				: coerceToStringBody(x, arraysExist);
 		LispVal toList = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_LIST), x))
 				: coerceToListBody(x, arraysExist);
-		LispVal vectorArm = makeIf(memberOfTypeNames(t, "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
-				"BIT-VECTOR", "SIMPLE-BIT-VECTOR"), toVector, functionArm);
+		LispVal vectorArm = makeIf(memberOfTypeNames(t, "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY"), toVector,
+				functionArm);
+		// A computed designator means what the literal one means: an atomic
+		// bit-vector spelling builds the stamped array, like the literal arm above
+		// (.todo/043). A computed COMPOUND spelling ((vector bit) held in a variable)
+		// still takes the T vector arm -- reading the element type out of the value
+		// is a separate residue.
+		LispVal bitVectorArm = makeIf(memberOfTypeNames(t, "BIT-VECTOR", "SIMPLE-BIT-VECTOR"), coerceToBitVectorBody(x),
+				vectorArm);
 		// The SIMPLE- string designators take the same conversion, then narrow the
 		// "already of the result type" answer to the simple strings -- a computed
 		// designator means what the literal one means (.kb/declarations-type-checks.md).
 		LispVal toSimpleString = makeIf(callOf(LispNames.STRINGP, x), stringIdentityOrCopy(x, true), toString);
 		LispVal simpleStringArm = makeIf(memberOfTypeNames(t, "SIMPLE-STRING", "SIMPLE-BASE-STRING"), toSimpleString,
-				vectorArm);
+				bitVectorArm);
 		LispVal stringArm = makeIf(memberOfTypeNames(t, "STRING", "BASE-STRING"), toString, simpleStringArm);
 		LispVal listArm = makeIf(memberOfTypeNames(t, "LIST", "CONS"), toList, stringArm);
 		// A computed designator naming COMPLEX answers the canonical value (a real
@@ -26978,6 +26993,90 @@ public final class LispMacroExpander {
 		LispSymbol cur = new LispSymbol("__coerce_cur");
 		LispSymbol i = new LispSymbol("__coerce_i");
 		LispVal make = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), callOf(LispNames.LENGTH, list)));
+		LispVal doBindings = listToCons(List.of(listToCons(List.of(cur, list, callOf(LispNames.CDR, cur))),
+				listToCons(List.of(i, new LispInteger(0),
+						listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.NULL, cur), v));
+		LispVal store = listToCons(List.of(new LispSymbol(LispNames.ASET), v, i, callOf(LispNames.CAR, cur)));
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DO), doBindings, endClause, store));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(v, make)))), loop));
+	}
+
+	/**
+	 * Whether a {@code coerce} result-type form designates a bit vector: the atomic
+	 * {@code 'bit-vector} / {@code 'simple-bit-vector} spellings, or a vector-family
+	 * compound spelling a {@code bit} element ({@code (vector bit)}, {@code (array bit
+	 * dims)}, ...). A {@code (bit-vector n)} spelling takes no element argument -- its
+	 * head alone decides. A user {@code deftype} alias in the element position resolves
+	 * first, the way {@code makeArrayTypeTest} reads one.
+	 * @param typeForm the result-type argument as written
+	 * @param closRegistry the registry whose {@code deftype} table resolves an element
+	 * alias, or null for the built-in spellings only
+	 * @return whether the coercion must build a bit vector
+	 */
+	private static boolean coerceResultIsBitVector(LispVal typeForm, @Nullable ClosRegistry registry) {
+		if (!(typeForm instanceof LispCons quoted) || !(quoted.car() instanceof LispSymbol q)
+				|| !LispNames.QUOTE.equals(q.name()) || !(quoted.cdr() instanceof LispCons rest)) {
+			return false;
+		}
+		LispVal designator = rest.car();
+		if (designator instanceof LispSymbol sym) {
+			String member = plainTypeName(sym);
+			return "BIT-VECTOR".equals(member) || "SIMPLE-BIT-VECTOR".equals(member);
+		}
+		if (!(designator instanceof LispCons spec) || !(spec.car() instanceof LispSymbol head)
+				|| !(spec.cdr() instanceof LispCons args)) {
+			return false;
+		}
+		String h = plainTypeName(head);
+		if ("BIT-VECTOR".equals(h) || "SIMPLE-BIT-VECTOR".equals(h)) {
+			return true;
+		}
+		boolean vectorFamily = "VECTOR".equals(h) || "ARRAY".equals(h) || "SIMPLE-ARRAY".equals(h);
+		if (!vectorFamily) {
+			return false;
+		}
+		LispVal element = resolveElementTypeAlias(args.car(), registry);
+		if (element == null) {
+			element = args.car();
+		}
+		return element instanceof LispSymbol sym && "BIT".equals(canonicalElementTypeName(sym));
+	}
+
+	/**
+	 * The {@code 'bit-vector} conversion body: the {@code 'vector} conversion over a
+	 * bit-stamped allocation. The shape is {@link #coerceToVectorBody}'s with the one
+	 * difference the representation requires -- the array is built with
+	 * {@code :element-type 'bit}, which every backend stamps -- so a coerced bit vector
+	 * answers {@code bit} from {@code array-element-type} like a made one (.todo/043).
+	 * @param x the (temp-bound) value form
+	 * @return the conversion body
+	 */
+	private static LispVal coerceToBitVectorBody(LispSymbol x) {
+		LispVal asList = makeIf(callOf(LispNames.STRINGP, x), coerceStringToList(x), x);
+		LispSymbol l = new LispSymbol("__coerce_l");
+		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(l, asList)))), coerceListToBitVector(l)));
+		LispVal sequencep = listToCons(
+				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, x), callOf(LispNames.STRINGP, x)));
+		return makeIf(sequencep, fill, x);
+	}
+
+	/**
+	 * {@link #coerceListToVector} stamping the answer {@code bit}: the fresh rank-1 array
+	 * is built with {@code :element-type 'bit} and filled row-major, so the coercion of a
+	 * bit sequence answers a bit vector on every backend.
+	 * @param list the (temp-bound) list of elements
+	 * @return the build-and-fill form
+	 */
+	private static LispVal coerceListToBitVector(LispSymbol list) {
+		LispSymbol v = new LispSymbol("__coerce_v");
+		LispSymbol cur = new LispSymbol("__coerce_cur");
+		LispSymbol i = new LispSymbol("__coerce_i");
+		LispVal make = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), callOf(LispNames.LENGTH, list),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.BIT)))));
 		LispVal doBindings = listToCons(List.of(listToCons(List.of(cur, list, callOf(LispNames.CDR, cur))),
 				listToCons(List.of(i, new LispInteger(0),
 						listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))))));
@@ -29575,11 +29674,15 @@ public final class LispMacroExpander {
 				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.KEYWORDP, value),
 						callOf(LispNames.FIND_PACKAGE, value)));
 			case "BIT-VECTOR", "SIMPLE-BIT-VECTOR":
-				// No bit-vector VALUE exists (a (make-array n :element-type 'bit)
-				// is a plain vector holding 0/1). The empty test lets a typecase's
-				// bit-vector clause fall through to its vector clause (trivia
-				// level2's constant-pattern decomposition orders exactly that way).
-				return LispNil.INSTANCE;
+				// A bit vector IS a rank-1 array stamped with the remembered element
+				// type bit (a #* literal or a (make-array n :element-type 'bit)), so
+				// the test is the compound builder's with that element type and an
+				// unpinned rank-1 shape -- the same builder (typep x '(vector bit *))
+				// reaches, because it is literally the same set. The SIMPLE- spelling
+				// narrows to the simple arrays through %simple-array-p, like
+				// simple-vector above (.todo/043).
+				return makeArrayTypeTest(value, new LispSymbol(LispNames.BIT), listToCons(List.of(new LispSymbol("*"))),
+						closRegistry, "SIMPLE-BIT-VECTOR".equals(name));
 			case "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION":
 				// A defgeneric's dispatcher is a plain function value on every backend
 				// -- no marker distinguishes it, and runtime typep answers NIL the same
@@ -29799,10 +29902,11 @@ public final class LispMacroExpander {
 	 * from {@code array-element-type} -- the "upgraded" type, mirroring exactly the
 	 * representation {@code make-array} selects: the packed float widths and the three
 	 * packed unsigned-integer widths keep their own name, the character family answers
-	 * {@code character}, and EVERYTHING else (fixnum, integer, bit, a user class) lands
-	 * in the general boxed array whose element type is {@code t}. So
-	 * {@code (typep a '(simple-array fixnum (4)))} is a {@code t}-array test here, which
-	 * is conformant: there is no fixnum-specialized array to upgrade to.
+	 * {@code character}, {@code bit} answers {@code bit} (a bit vector is the general
+	 * boxed array STAMPED bit -- the stamp is the representation), and EVERYTHING else
+	 * (fixnum, integer, a user class) lands in the general boxed array whose element type
+	 * is {@code t}. So {@code (typep a '(simple-array fixnum (4)))} is a {@code t}-array
+	 * test here, which is conformant: there is no fixnum-specialized array to upgrade to.
 	 * <p>
 	 * The packed float names are NOT spelled in the switch: each permit of
 	 * {@link LispFloatArray} answers its own name through {@code elementType()}, so a
@@ -29823,6 +29927,7 @@ public final class LispMacroExpander {
 			}
 			return switch (canonical) {
 				case "CHARACTER" -> new LispSymbol(LispNames.CHARACTER_TYPE);
+				case "BIT" -> new LispSymbol(LispNames.BIT);
 				default -> LispTrue.INSTANCE;
 			};
 		}
@@ -30044,6 +30149,17 @@ public final class LispMacroExpander {
 					dimensionSpec = parts.size() > 2 ? parts.get(2) : null;
 				}
 				return makeArrayTypeTest(value, elementSpec, dimensionSpec, closRegistry, simpleSpelling);
+			}
+			case "BIT-VECTOR", "SIMPLE-BIT-VECTOR": {
+				// (bit-vector [size]) / (simple-bit-vector [size]): the element type is
+				// always bit (a bit vector takes no element-type argument), the rank is
+				// always 1 -- the (simple-vector SIZE) shape with a fixed element type.
+				// An extra argument is ignored the way (simple-vector size extra) is:
+				// the shape carries one size and nothing else.
+				String bitHead = plainTypeName(head);
+				LispVal bitSize = parts.size() > 1 ? parts.get(1) : new LispSymbol("*");
+				return makeArrayTypeTest(value, new LispSymbol(LispNames.BIT), listToCons(List.of(bitSize)),
+						closRegistry, "SIMPLE-BIT-VECTOR".equals(bitHead));
 			}
 			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING": {
 				// (string SIZE): a string of EXACTLY that length; * (or an omitted size)
@@ -32480,6 +32596,24 @@ public final class LispMacroExpander {
 	}
 
 	private static int makeArrayElementTypeCodes(LispVal val, @Nullable ClosRegistry registry) {
+		if (val instanceof LispArray array) {
+			// An array LITERAL carrying a remembered element type (#*1011 is stamped
+			// bit): the stamp is read back through the same gated dispatch a
+			// make-array stamp is, so the literal must arm the gate the same way a
+			// literal :element-type does -- otherwise (bit-vector-p #*01) takes the
+			// lite element-type path and answers nil (.todo/043).
+			int mask = 0;
+			int code = array.elementTypeCode();
+			if (code != ArrayElementTypes.T) {
+				mask |= 1 << code;
+			}
+			for (LispVal element : array.data()) {
+				if (element != null) {
+					mask |= makeArrayElementTypeCodes(element, registry);
+				}
+			}
+			return mask;
+		}
 		if (!(val instanceof LispCons cons)) {
 			return 0;
 		}
@@ -35226,8 +35360,9 @@ public final class LispMacroExpander {
 	private static final List<String> RUNTIME_TYPEP_BUILTINS = List.of("NULL", "BOOLEAN", "KEYWORD", "SYMBOL",
 			"INTEGER", "FIXNUM", "BIGNUM", "BIT", "RATIONAL", "RATIO", "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT",
 			"SHORT-FLOAT", "LONG-FLOAT", "REAL", "NUMBER", "COMPLEX", "CHARACTER", "STRING", "SIMPLE-STRING", "CONS",
-			"LIST", "ATOM", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "HASH-TABLE", "FUNCTION",
-			"STANDARD-OBJECT", "STRUCTURE-OBJECT", "UNSIGNED-BYTE", "PACKAGE", "STREAM", "T");
+			"LIST", "ATOM", "VECTOR", "SIMPLE-VECTOR", "BIT-VECTOR", "SIMPLE-BIT-VECTOR", "ARRAY", "SIMPLE-ARRAY",
+			"SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "UNSIGNED-BYTE", "PACKAGE",
+			"STREAM", "T");
 
 	/**
 	 * The COMPOUND half of the runtime {@code typep} dispatch: an interpreter of a
@@ -35323,12 +35458,15 @@ public final class LispMacroExpander {
 			         t
 			         nil))
 			    ((or (string= %tpc-n "ARRAY") (string= %tpc-n "SIMPLE-ARRAY")
-			         (string= %tpc-n "VECTOR") (string= %tpc-n "SIMPLE-VECTOR"))
+			         (string= %tpc-n "VECTOR") (string= %tpc-n "SIMPLE-VECTOR")
+			         (string= %tpc-n "BIT-VECTOR") (string= %tpc-n "SIMPLE-BIT-VECTOR"))
 			     (let* ((%tpc-sv (string= %tpc-n "SIMPLE-VECTOR"))
-			            (%tpc-sp (if (or %tpc-sv (string= %tpc-n "SIMPLE-ARRAY"))
+			            (%tpc-sbv (string= %tpc-n "SIMPLE-BIT-VECTOR"))
+			            (%tpc-bv (or (string= %tpc-n "BIT-VECTOR") %tpc-sbv))
+			            (%tpc-sp (if (or %tpc-sv %tpc-sbv)
 			                         (%simple-array-p %tpc-value)
 			                         t))
-			            (%tpc-et (if %tpc-sv t (if (null %tpc-a) '* %tpc-x)))
+			            (%tpc-et (if %tpc-bv 'bit (if %tpc-sv t (if (null %tpc-a) '* %tpc-x))))
 			            (%tpc-ew (if (symbolp %tpc-et) (string= (symbol-name %tpc-et) "*") nil))
 			            (%tpc-ue (if (consp %tpc-et)
 			                         (if (and (symbolp (car %tpc-et))
@@ -35345,12 +35483,15 @@ public final class LispMacroExpander {
 			                                 ((string= %tpc-en "SINGLE-FLOAT") 'single-float)
 			                                 ((string= %tpc-en "DOUBLE-FLOAT") 'double-float)
 			                                 ((string= %tpc-en "BFLOAT16") 'bfloat16)
+			                                 ((string= %tpc-en "BIT") 'bit)
 			                                 (t t)))))
 			            (%tpc-dm (if (or %tpc-sv (string= %tpc-n "VECTOR"))
 			                         (list (if %tpc-sv
 			                                   (if (null %tpc-a) '* %tpc-x)
 			                                   (if (null (cdr %tpc-a)) '* %tpc-y)))
-			                         (if (null (cdr %tpc-a)) '* %tpc-y)))
+			                         (if %tpc-bv
+			                             (list (if (null %tpc-a) '* %tpc-x))
+			                             (if (null (cdr %tpc-a)) '* %tpc-y))))
 			            (%tpc-dw (if (symbolp %tpc-dm) (string= (symbol-name %tpc-dm) "*") nil)))
 			       (if (and %tpc-sp
 			                (or (and (stringp %tpc-value)
@@ -35583,6 +35724,8 @@ public final class LispMacroExpander {
 			java.util.Map.entry("NULL", List.of("SYMBOL", "LIST")), java.util.Map.entry("CONS", List.of("LIST")),
 			java.util.Map.entry("LIST", List.of("SEQUENCE")), java.util.Map.entry("STRING", List.of("VECTOR")),
 			java.util.Map.entry("VECTOR", List.of("ARRAY", "SEQUENCE")),
+			java.util.Map.entry("BIT-VECTOR", List.of("VECTOR")),
+			java.util.Map.entry("SIMPLE-BIT-VECTOR", List.of("BIT-VECTOR", "SIMPLE-ARRAY")),
 			java.util.Map.entry("SIMPLE-STRING", List.of("SIMPLE-ARRAY", "STRING")),
 			java.util.Map.entry("SIMPLE-VECTOR", List.of("SIMPLE-ARRAY", "VECTOR")),
 			java.util.Map.entry("SIMPLE-ARRAY", List.of("ARRAY")));

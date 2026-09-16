@@ -642,14 +642,16 @@ public final class LispReader {
 		return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
 	}
 
-	// Builds a #*1010 bit-vector literal: the general vector holding the integers 0/1
-	// (rontolisp has no packed bit representation, so sbit/aref read it uniformly).
+	// Builds a #*1010 bit-vector literal: the general vector holding the integers 0/1,
+	// stamped with the remembered element type bit (there is no packed bit
+	// representation, so sbit/aref read it uniformly and bit-vector-p/typep recognize
+	// the stamp).
 	private LispVal readBitVector(String bits) {
 		LispVal[] elements = new LispVal[bits.length()];
 		for (int i = 0; i < bits.length(); i++) {
 			elements[i] = new LispInteger(bits.charAt(i) - '0');
 		}
-		return new LispArray(new int[] { elements.length }, elements);
+		return new LispArray(new int[] { elements.length }, elements, -1, false, am.ik.rontolisp.ArrayElementTypes.BIT);
 	}
 
 	// Reads a rank-n array literal #nA((...) ...) into a self-evaluating LispArray.

@@ -2005,6 +2005,13 @@ final class JvmArrayRuntimeBuilder {
 		de.aload(2);
 		de.invokevirtual(stringEquals);
 		de.branch(Opcode.IFNE, deChar);
+		// A bit vector's zero is the integer 0, not the float 0.0 the two float
+		// widths take below: the stamp is a name string like theirs, so it needs
+		// its own arm before the float fallthrough (.todo/043).
+		de.ldcString(cp.addString(am.ik.rontolisp.LispNames.BIT));
+		de.aload(2);
+		de.invokevirtual(stringEquals);
+		de.branch(Opcode.IFNE, deInt);
 		// The only remaining remembered names are the two float widths.
 		de.op(Opcode.DCONST_0);
 		de.invokestatic(doubleValueOf);
@@ -3754,6 +3761,10 @@ final class JvmArrayRuntimeBuilder {
 		// keeps array-element-type from answering nothing for a remembered width.
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.BFLOAT16,
 				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.BFLOAT16)));
+		// A bit vector is the general boxed array stamped bit: the stamp is the whole
+		// representation, so it decodes to the name the same way (.todo/043).
+		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.BIT,
+				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.BIT)));
 		// ArrayElementTypes.T, which never reaches here: nothing is remembered for it.
 		a.aconstNull();
 		a.astore(etSlot);

@@ -3836,6 +3836,37 @@ public final class LispNames {
 	public static final String SBIT = "SBIT";
 
 	/**
+	 * The eleven {@code bit-*} array-logic functions ({@code bit-and}, {@code bit-andc1},
+	 * {@code bit-andc2}, {@code bit-eqv}, {@code bit-ior}, {@code bit-nand},
+	 * {@code bit-nor}, {@code bit-not}, {@code bit-orc1}, {@code bit-orc2},
+	 * {@code bit-xor}): prelude defuns over
+	 * {@code array-dimensions}/{@code row-major-aref}, validating their inputs with
+	 * {@code bit-vector-p} and answering a fresh (or the designated result) bit vector
+	 * stamped {@code bit}.
+	 */
+	public static final String BIT_AND = "BIT-AND";
+
+	public static final String BIT_ANDC1 = "BIT-ANDC1";
+
+	public static final String BIT_ANDC2 = "BIT-ANDC2";
+
+	public static final String BIT_EQV = "BIT-EQV";
+
+	public static final String BIT_IOR = "BIT-IOR";
+
+	public static final String BIT_NAND = "BIT-NAND";
+
+	public static final String BIT_NOR = "BIT-NOR";
+
+	public static final String BIT_NOT = "BIT-NOT";
+
+	public static final String BIT_ORC1 = "BIT-ORC1";
+
+	public static final String BIT_ORC2 = "BIT-ORC2";
+
+	public static final String BIT_XOR = "BIT-XOR";
+
+	/**
 	 * The {@code both-case-p} built-in function: a prelude defun -- {@code lower-case-p}
 	 * or {@code upper-case-p}.
 	 */

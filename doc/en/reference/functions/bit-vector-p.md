@@ -2,12 +2,16 @@
 
 `(bit-vector-p object)`
 
-Returns true when `object` is a bit vector. No bit-vector value exists yet -- a `(make-array n :element-type 'bit)` is a plain vector holding 0/1 -- so it answers `nil` for every value today. It answers exactly what `(typep object 'bit-vector)` does, so portable code calling it loads, and keeps working when a bit-vector representation lands.
+Returns true when `object` is a bit vector: a rank-1 array stamped with the remembered element type `bit` -- a `#*` literal or a [`make-array`](make-array.md) result with `:element-type 'bit`. It answers exactly what `(typep object 'bit-vector)` does. A bit vector prints as the general vector holding 0/1 (there is no packed bit storage on any backend).
 
 ```lisp
-(bit-vector-p (vector 0 1)) ; => NIL
+(bit-vector-p #*0110) ; => T
 ```
 
 ```lisp
-(bit-vector-p (make-array 4 :element-type 'bit)) ; => NIL
+(bit-vector-p (make-array 4 :element-type 'bit)) ; => T
+```
+
+```lisp
+(bit-vector-p (vector 0 1)) ; => NIL
 ```

@@ -562,12 +562,15 @@ final class WasmQuoteCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			arraySet(ctx);
 		}
-		// header = cons(dims, cons(cons(null, cons(null, 0)), data));
-		// cell = struct.new TYPE_CELL(header)
+		// header = cons(dims, cons(cons(null, cons(null, marker)), data));
+		// cell = struct.new TYPE_CELL(header). The marker is 0 (nothing remembered),
+		// except a bit-vector literal (#*1011), which is stamped with the remembered
+		// element type bit like the frontend's lowering (.todo/043).
 		getBuckets(ctx, dimsSlot);
 		refNull(ctx);
 		refNull(ctx);
-		i32Const(ctx, 0);
+		i32Const(ctx, array.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT
+				? WasmArrayCompiler.elementTypeMarker(am.ik.rontolisp.ArrayElementTypes.BIT) : 0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);

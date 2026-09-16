@@ -17410,6 +17410,56 @@ standalone:
                     (funcall #'bit-vector-p *abp-sv*))))
     stdout: |
       ((T NIL NIL NIL NIL NIL) (NIL NIL NIL NIL) (T T NIL NIL T NIL NIL) (T NIL T NIL NIL NIL T) (T T NIL))
+  # A bit vector is the general boxed array stamped with the remembered element
+  # type bit -- a #* literal or a (make-array ... :element-type 'bit), of any rank.
+  # The predicates answer what their typep specifiers do, and the eleven bit-*
+  # operators validate through bit-vector-p and walk row-major-aref (.todo/043).
+  - name: bit-vectors-and-bit-ops
+    source: |
+      (defvar *bvb-a* (make-array 4 :element-type 'bit :initial-contents '(0 1 1 0)))
+      (defvar *bvb-b* (make-array 4 :element-type 'bit :initial-contents '(1 1 0 0)))
+      (defvar *bvb-fp* (make-array 4 :element-type 'bit :fill-pointer 2))
+      (defvar *bvb-m2* (make-array '(2 2) :element-type 'bit :initial-contents '((0 1) (1 0))))
+      (print
+        (list (list (bit-vector-p *bvb-a*)
+                    (simple-bit-vector-p *bvb-a*)
+                    (bit-vector-p #*0110)
+                    (simple-bit-vector-p #*0110)
+                    (bit-vector-p #(0 1))
+                    (bit-vector-p *bvb-fp*)
+                    (simple-bit-vector-p *bvb-fp*)
+                    (bit-vector-p *bvb-m2*))
+              (list (typep *bvb-a* 'bit-vector)
+                    (typep *bvb-a* '(bit-vector 4))
+                    (typep *bvb-a* '(bit-vector 3))
+                    (typep *bvb-fp* 'simple-bit-vector)
+                    (typep *bvb-m2* '(array bit (2 2)))
+                    (array-element-type *bvb-a*)
+                    (type-of *bvb-a*)
+                    (type-of *bvb-fp*)
+                    (subtypep 'simple-bit-vector 'bit-vector)
+                    (subtypep 'vector 'bit-vector))
+              (list (bit-and *bvb-a* *bvb-b*)
+                    (bit-ior *bvb-a* *bvb-b*)
+                    (bit-xor *bvb-a* *bvb-b*)
+                    (bit-eqv *bvb-a* *bvb-b*)
+                    (bit-nand *bvb-a* *bvb-b*)
+                    (bit-nor *bvb-a* *bvb-b*)
+                    (bit-andc1 *bvb-a* *bvb-b*)
+                    (bit-andc2 *bvb-a* *bvb-b*)
+                    (bit-orc1 *bvb-a* *bvb-b*)
+                    (bit-orc2 *bvb-a* *bvb-b*)
+                    (bit-not *bvb-a*))
+              (list (bit-vector-p (bit-and *bvb-a* *bvb-b*))
+                    (funcall #'bit-xor *bvb-a* *bvb-b*)
+                    (bit-and *bvb-m2* *bvb-m2*))
+              (list (array-element-type (coerce '(1 0) '(vector bit)))
+                    (array-element-type (concatenate '(vector bit) '(1) #(0)))
+                    (bit-vector-p (coerce '(1 0) 'bit-vector))
+                    (bit-vector-p (concatenate 'bit-vector '(1) #(0)))
+                    (let ((s 'bit-vector)) (array-element-type (coerce '(1 0) s))))))
+    stdout: |
+      ((T T T T NIL T NIL NIL) (T T NIL NIL T BIT (SIMPLE-BIT-VECTOR 4) (BIT-VECTOR 4) T NIL) (#(0 1 0 0) #(1 1 1 0) #(1 0 1 0) #(0 1 0 1) #(1 0 1 1) #(0 0 0 1) #(1 0 0 0) #(0 0 1 0) #(1 1 0 1) #(0 1 1 1) #(1 0 0 1)) (T #(1 0 1 0) #2A((0 1) (1 0))) (BIT BIT T T BIT))
   - name: simple-type-name-typep-simplicity
     source: |
       (defvar *tps-sv* (make-array 4))

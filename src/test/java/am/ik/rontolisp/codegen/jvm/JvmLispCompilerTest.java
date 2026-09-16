@@ -716,6 +716,71 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileBitVectorsAndBitOps() throws Exception {
+		// The JVM half of LispEvaluatorTest#evalBitVectorsAndBitOps: a bit vector is
+		// the general boxed array stamped with the remembered element type bit, and
+		// the eleven bit-* operators validate through bit-vector-p over
+		// row-major-aref (.todo/043).
+		assertThat(compileAndRun("""
+				(defvar *bv-a* (make-array 4 :element-type 'bit :initial-contents '(0 1 1 0)))
+				(defvar *bv-b* (make-array 4 :element-type 'bit :initial-contents '(1 1 0 0)))
+				(defvar *bv-fp* (make-array 4 :element-type 'bit :fill-pointer 2))
+				(defvar *bv-m2* (make-array '(2 2) :element-type 'bit :initial-contents '((0 1) (1 0))))
+				(print
+				  (list
+				    (list (bit-vector-p *bv-a*)
+				          (simple-bit-vector-p *bv-a*)
+				          (bit-vector-p #*0110)
+				          (simple-bit-vector-p #*0110)
+				          (bit-vector-p #(0 1))
+				          (simple-bit-vector-p #(0 1))
+				          (bit-vector-p "01")
+				          (bit-vector-p *bv-fp*)
+				          (simple-bit-vector-p *bv-fp*)
+				          (bit-vector-p *bv-m2*))
+				    (list (typep *bv-a* 'bit-vector)
+				          (typep *bv-a* 'simple-bit-vector)
+				          (typep *bv-a* '(vector bit))
+				          (typep *bv-a* '(vector bit 4))
+				          (typep *bv-a* '(bit-vector 4))
+				          (typep *bv-a* '(simple-bit-vector 4))
+				          (typep *bv-a* '(bit-vector 3))
+				          (typep *bv-fp* 'simple-bit-vector)
+				          (typep *bv-m2* 'bit-vector)
+				          (typep *bv-m2* '(array bit (2 2))))
+				    (list (array-element-type *bv-a*)
+				          (array-element-type #*0110)
+				          (type-of *bv-a*)
+				          (type-of *bv-fp*)
+				          (type-of *bv-m2*)
+				          (subtypep 'bit-vector 'vector)
+				          (subtypep 'simple-bit-vector 'bit-vector)
+				          (subtypep 'simple-bit-vector 'simple-array)
+				          (subtypep 'vector 'bit-vector))
+				    (list (bit-and *bv-a* *bv-b*)
+				          (bit-ior *bv-a* *bv-b*)
+				          (bit-xor *bv-a* *bv-b*)
+				          (bit-eqv *bv-a* *bv-b*)
+				          (bit-nand *bv-a* *bv-b*)
+				          (bit-nor *bv-a* *bv-b*)
+				          (bit-andc1 *bv-a* *bv-b*)
+				          (bit-andc2 *bv-a* *bv-b*)
+				          (bit-orc1 *bv-a* *bv-b*)
+				          (bit-orc2 *bv-a* *bv-b*)
+				          (bit-not *bv-a*))
+				    (list (bit-vector-p (bit-and *bv-a* *bv-b*))
+				          (funcall #'bit-ior *bv-a* *bv-b*)
+				          (bit-and *bv-m2* *bv-m2*))
+				    (list (array-element-type (coerce '(1 0) '(vector bit)))
+				        (array-element-type (concatenate '(vector bit) '(1) #(0)))
+				        (bit-vector-p (coerce '(1 0) 'bit-vector))
+				        (bit-vector-p (concatenate 'bit-vector '(1) #(0)))
+				        (let ((s 'bit-vector)) (array-element-type (coerce '(1 0) s))))))
+				""")).isEqualTo(
+				"((T T T T NIL NIL NIL T NIL NIL) (T T T T T T NIL NIL NIL T) (BIT BIT (SIMPLE-BIT-VECTOR 4) (BIT-VECTOR 4) (SIMPLE-ARRAY BIT (2 2)) T T T NIL) (#(0 1 0 0) #(1 1 1 0) #(1 0 1 0) #(0 1 0 1) #(1 0 1 1) #(0 0 0 1) #(1 0 0 0) #(0 0 1 0) #(1 1 0 1) #(0 1 1 1) #(1 0 0 1)) (T #(1 1 1 0) #2A((0 1) (1 0))) (BIT BIT T T BIT))");
+	}
+
+	@Test
 	void compileSimpleTypeNameTypepChecksSimplicity() throws Exception {
 		// The JVM half of LispEvaluatorTest#evalSimpleTypeNameTypepChecksSimplicity: the
 		// LITERAL specifiers fold into a %simple-array-p call beside the general test,
@@ -3191,11 +3256,11 @@ class JvmLispCompilerTest {
 		// The interpreter twin is
 		// LispEvaluatorTest#findSymbolAnswersForTheStandardNamesClExportsWithoutImplementing:
 		// the fold reads the same name list, so the four backends cannot disagree.
-		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"BIT-AND\" 'common-lisp)))"
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"FIND-METHOD\" 'common-lisp)))"
 				+ "(print (multiple-value-list (find-symbol \"&AUX\" :cl)))"
 				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
-				+ "(print (fboundp 'bit-and))"))
-			.isEqualTo("(BIT-AND :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
+				+ "(print (fboundp 'find-method))"))
+			.isEqualTo("(FIND-METHOD :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
 	}
 
 	@Test
@@ -17754,7 +17819,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo(
 				"""
 						((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
-						(T (SIMPLE-VECTOR 4) NIL)
+						(T (SIMPLE-BIT-VECTOR 4) NIL)
 						(7 #\\z A)""");
 	}
 
@@ -17875,14 +17940,16 @@ class JvmLispCompilerTest {
 				  (print (list (array-element-type a) (aref a 0))))
 				""")).isEqualTo("(T NIL)");
 		// The LEGAL CLHS upgrades the shipped corpus passes -- refusing an unrecognized
-		// element type would refuse alexandria's and cl-ppcre's 'bit, ironclad's and
-		// chipz's 'fixnum, jzon's '(unsigned-byte 64) and cl-ppcre's '(or null fixnum).
+		// element type would refuse ironclad's and chipz's 'fixnum, jzon's
+		// '(unsigned-byte 64) and cl-ppcre's '(or null fixnum). 'bit is NOT an upgrade:
+		// since .todo/043 a bit vector is the general array stamped bit, so
+		// array-element-type answers it back.
 		assertThat(compileAndRun("""
 				(print (list (array-element-type (make-array 2 :element-type 'bit))
 				             (array-element-type (make-array 2 :element-type 'fixnum))
 				             (array-element-type (make-array 2 :element-type '(unsigned-byte 64)))
 				             (array-element-type (make-array 2 :element-type '(or null fixnum)))))
-				""")).isEqualTo("(T T T T)");
+				""")).isEqualTo("(BIT T T T)");
 	}
 
 	@Test

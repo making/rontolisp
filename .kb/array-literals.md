@@ -88,8 +88,9 @@ takes that type's own zero. The representation degrades; the declared type does 
 
 **The type space is CLOSED**, so it is a code, not a value: `t` plus the widths
 `ArrayElementTypes.specializedCodes()` enumerates — `character`, `(unsigned-byte 8|16|32)`,
-`single-float`, `double-float`, `bfloat16`; everything else upgrades to `t`
-and is remembered as nothing. **Count them against the class, not against this sentence** —
+`single-float`, `double-float`, `bfloat16`, and `bit` (the one code with no packed storage:
+a bit vector IS the general boxed array stamped `bit`, `.todo/043`); everything else upgrades
+to `t` and is remembered as nothing. **Count them against the class, not against this sentence** —
 which said "seven answers" and spelled the pre-`bfloat16` six until 2026-09-06, the same drift
 the runtime-designator section below is entirely about.
 `am.ik.rontolisp.ArrayElementTypes` is that space (`codeOf` the
@@ -176,7 +177,8 @@ type and zero fill.**
 implementation knows — a typo (`'single-flaot`), a width that does not exist, a `deftype` the
 program never registered — builds the general boxed array; `array-element-type` answers `t` and
 an unsupplied element is `nil`, identically on all four backends and through BOTH spellings
-(literal and runtime designator).**
+(literal and runtime designator).** `'bit` is not one of those: since `.todo/043` it is a
+remembered code (the bit-vector stamp), answered back as `bit` with a `0` fill.
 
 Decided 2026-09-06 (`.todo/703`) AGAINST the opposite proposal — signal on an element type the
 dispatch does not recognise, so that a typo cannot masquerade as a working array. Three
@@ -184,8 +186,9 @@ measurements overturned it:
 
 - **The upstream oracle does not signal.** SBCL answers a `t` array at run time for
   `'single-flaot`, `'not-a-type` and `'loopy` alike; its only diagnostic is a compile-time
-  STYLE-WARNING `undefined type: SINGLE-FLAOT`, and `'fixnum` / `'bit` / `'(integer -1 1)` are
-  upgraded with no diagnostic at all. An error here would be a divergence FROM the oracle, not
+  STYLE-WARNING `undefined type: SINGLE-FLAOT`, and `'fixnum` / `'(integer -1 1)` are
+  upgraded with no diagnostic at all (`'bit` is remembered, not upgraded, since `.todo/043`).
+  An error here would be a divergence FROM the oracle, not
   conformance to it.
 - **A `deftype` may be registered after the reference**, which is why the oracle's diagnostic is
   a style-warning and never a signal: where `make-array` is compiled, "this names no type" is not
@@ -194,16 +197,16 @@ measurements overturned it:
 - **Refusing "not a packed width" would break most of the shipped corpus.** Census of every
   `:element-type` in the tree (2026-09-06): `'fixnum` at 12 sites, `'bit` 5, `'(unsigned-byte 64)`
   5, plus `'integer`, `'(signed-byte 8|64)`, `'(or null fixnum)`, `'(integer -1 1)` — alexandria,
-  cl-ppcre, ironclad, jzon, chipz, md5, cl-base64, fast-io. Every one is a LEGAL upgrade to `t`
-  under CLHS, which lets `make-array` upgrade any element type.
+  cl-ppcre, ironclad, jzon, chipz, md5, cl-base64, fast-io. Every
+  one is a LEGAL upgrade to `t`
+  under CLHS, which lets `make-array` upgrade any element type — except `'bit`, which since
+  `.todo/043` is remembered rather than upgraded.
 
 **And the weaker form, a warning, has no oracle to key on either.** "Names no type at all" needs
 the set of type names that EXIST, which this project does not have. The nearest thing is
 `LispMacroExpander.makeTypeTest`'s switch — what `typecase` can test, and it already refuses an
-unknown specifier at expansion time — and that set does not contain `BIT`, so a diagnostic wired
-to it would cry wolf on `(make-array n :element-type 'bit)`, which alexandria and cl-ppcre both
-allocate. Manufacturing a SECOND set beside it is precisely the transcription the sections above
-are about, with a green tick on it.
+unknown specifier at expansion time. Manufacturing a SECOND set beside it is precisely the
+transcription the sections above are about, with a green tick on it.
 
 **So the diagnosis stays with the CALLER, and that is a decision rather than an oversight.**
 `checkpoint:make-tensor` is the checkpoint readers' one allocation path and asserts

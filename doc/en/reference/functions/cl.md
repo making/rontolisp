@@ -106,6 +106,17 @@ page.
 | `sxhash` | `(sxhash "ab")` | Structural hash (integers/characters/strings/symbols/conses); stable within a run, not across backends |
 | `sbit` | `(sbit #*0110 1)` | Bit-vector element read; `(setf (sbit v i) b)` writes |
 | `bit` | `(bit #*0110 1)` | Bit-array element read; `(setf (bit v i) b)` writes |
+| `bit-and` | `(bit-and #*0110 #*1100)` | `#(0 1 0 0)` -- element-wise `and` of two bit arrays of the same dimensions; an optional third argument is the result array (`nil` fresh, `t` reuses the first) |
+| `bit-andc1` | `(bit-andc1 #*0110 #*1100)` | `#(1 0 0 0)` -- `(not-a and b)` |
+| `bit-andc2` | `(bit-andc2 #*0110 #*1100)` | `#(0 0 1 0)` -- `(a and not-b)` |
+| `bit-eqv` | `(bit-eqv #*0110 #*1100)` | `#(0 1 0 1)` -- element-wise equivalence |
+| `bit-ior` | `(bit-ior #*0110 #*1100)` | `#(1 1 1 0)` -- element-wise inclusive-or |
+| `bit-nand` | `(bit-nand #*0110 #*1100)` | `#(1 0 1 1)` -- element-wise `not-and` |
+| `bit-nor` | `(bit-nor #*0110 #*1100)` | `#(0 0 0 1)` -- element-wise `not-or` |
+| `bit-not` | `(bit-not #*0110)` | `#(1 0 0 1)` -- element-wise negation of one bit array |
+| `bit-orc1` | `(bit-orc1 #*0110 #*1100)` | `#(1 1 0 1)` -- `(not-a or b)` |
+| `bit-orc2` | `(bit-orc2 #*0110 #*1100)` | `#(0 1 1 1)` -- `(a or not-b)` |
+| `bit-xor` | `(bit-xor #*0110 #*1100)` | `#(1 0 1 0)` -- element-wise exclusive-or |
 | `both-case-p` | `(both-case-p #\a)` | True for a cased letter (`lower-case-p` or `upper-case-p`) |
 | `special-operator-p` | `(special-operator-p 'if)` | `t` for the 25 ANSI special operators, `nil` for everything else |
 | `macro-function` | `(macro-function 'when)` | The macro expander (real on the interpreter, a signalling stub in compiled output), `nil` for a function or special operator |
@@ -170,8 +181,8 @@ page.
 | `arrayp` | `(arrayp "abc")` | `T` -- a string is an array in CL, like `vectorp` |
 | `simple-string-p` | `(simple-string-p "hello")` | `t` -- no fill pointer, not adjustable, not displaced |
 | `simple-vector-p` | `(simple-vector-p (vector 1 2))` | `t` -- rank 1, element type `t`, no fill pointer, not adjustable, not displaced |
-| `bit-vector-p` | `(bit-vector-p (vector 0 1))` | `nil` -- no bit-vector value exists yet (a `:element-type 'bit` array is a plain vector) |
-| `simple-bit-vector-p` | `(simple-bit-vector-p (vector 0 1))` | `nil` -- like `bit-vector-p` |
+| `bit-vector-p` | `(bit-vector-p #*0110)` | `t` -- a rank-1 array stamped with the remembered element type `bit` (`:element-type 'bit`) |
+| `simple-bit-vector-p` | `(simple-bit-vector-p #*0110)` | `t` -- like `bit-vector-p`, plus no fill pointer, not adjustable, not displaced |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |

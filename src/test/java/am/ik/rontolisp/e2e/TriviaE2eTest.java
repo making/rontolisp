@@ -29,7 +29,9 @@ import java.util.List;
  * {@code symbol-macrolet} (level1/level2 expansions), lisp-namespace (via the
  * {@code (setf (macro-function ...))} alias), the {@code trivial-cltl2} shim, the
  * closer-mop shim's {@code compute-slots}, the empty
- * {@code generic-function}/{@code bit-vector}/{@code structure-class} types, the empty
+ * {@code generic-function}/{@code structure-class} types (empty) and the now-real
+ * {@code bit-vector} type (stamped since `.todo/043`, so the bit-vector clauses match
+ * instead of falling through to `vector`), the empty
  * {@code &key} lambda-list section (the {@code :trivial} optimizer's
  * {@code (clauses &key &allow-other-keys)}), {@code use-value}, the
  * signal-falls-through-unmatched-handler-case rule, {@code remove-if-not :key},

@@ -2,12 +2,16 @@
 
 `(bit-vector-p object)`
 
-`object` がビットベクタなら真を返します。ビットベクタの値はまだ存在しません（`(make-array n :element-type 'bit)` は 0/1 を持つ素のベクタです）。そのため現在はすべての値に `nil` を返します。`(typep object 'bit-vector)` とまったく同じ答えを返すので、これを呼ぶ移植性の高いコードはロードでき、ビットベクタ表現が追加されても動き続けます。
+`object` がビットベクタのとき真を返します。ビットベクタとは記憶要素型 `bit` で刻印されたランク1配列です（`#*` リテラル、または `:element-type 'bit` の [`make-array`](make-array.md) 結果）。`(typep object 'bit-vector)` と正確に一致します。ビットベクタは 0/1 を保持する汎用ベクタとして表示されます（どのバックエンドにもパックされたビット記憶はありません）。
 
 ```lisp
-(bit-vector-p (vector 0 1)) ; => NIL
+(bit-vector-p #*0110) ; => T
 ```
 
 ```lisp
-(bit-vector-p (make-array 4 :element-type 'bit)) ; => NIL
+(bit-vector-p (make-array 4 :element-type 'bit)) ; => T
+```
+
+```lisp
+(bit-vector-p (vector 0 1)) ; => NIL
 ```

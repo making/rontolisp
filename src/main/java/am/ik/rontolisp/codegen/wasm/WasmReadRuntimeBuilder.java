@@ -2854,7 +2854,8 @@ final class WasmReadRuntimeBuilder {
 	}
 
 	// _rd_bits () -> value: cursor just past "#*"; consumes 0/1 bytes into the general
-	// runtime array shape (the frontend's bit-vector lowering -- no packed bits).
+	// runtime array shape (the frontend's bit-vector lowering -- no packed bits),
+	// stamped with the remembered element type bit.
 	static byte[] buildRdBitsBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
@@ -2933,7 +2934,9 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, COUNT);
 		i31New(w);
 		arraySet(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
-		emitGeneralArrayCell(w, DIMS, DATA);
+		// A bit vector read at run time is stamped with the remembered element type
+		// bit, like the frontend's #* lowering (.todo/043).
+		emitGeneralArrayCell(w, DIMS, DATA, WasmArrayCompiler.elementTypeMarker(am.ik.rontolisp.ArrayElementTypes.BIT));
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -2944,10 +2947,18 @@ final class WasmReadRuntimeBuilder {
 	 * path and make-array build (no fill pointer, not adjustable, offset 0).
 	 */
 	private static void emitGeneralArrayCell(WasmWriter w, int DIMS, int DATA) {
+		emitGeneralArrayCell(w, DIMS, DATA, 0);
+	}
+
+	/**
+	 * {@link #emitGeneralArrayCell(WasmWriter, int, int)} with an explicit meta marker
+	 * word: the remembered element type's marker for a stamped array.
+	 */
+	private static void emitGeneralArrayCell(WasmWriter w, int DIMS, int DATA, int marker) {
 		getLocal(w, DIMS);
 		emitNull(w);
 		emitNull(w);
-		i32(w, 0);
+		i32(w, marker);
 		i31New(w);
 		structNew(w, WasmLispCompiler.TYPE_CONS);
 		structNew(w, WasmLispCompiler.TYPE_CONS);

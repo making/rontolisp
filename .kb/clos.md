@@ -513,8 +513,9 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   `class-of` can answer; `FIND_CLASS_ONLY_CLASS_NAMES` is the rest of the CL built-in lattice,
   reachable by NAME only because every value it covers has a narrower answer
   (`number`/`real`/`rational` under `integer`/`ratio`/`float`/`complex`, `sequence`/`list`
-  under `cons`/`null`, `bit-vector` under the general `vector` — this implementation has no
-  separate bit-array representation — plus `structure-object`, `built-in-class` and
+  under `cons`/`null`, `bit-vector` under the general `vector` — a bit vector IS the general
+  array stamped with the remembered element type `bit` since `.todo/043`, but `class-of`
+  still answers the narrower representation name — plus `structure-object`, `built-in-class` and
   `standard-object`). The narrowing is ARRAYS: `%class-designator` answers `T` for every one
   of them, while `class-of` answers `vector` at rank 1 and `array` otherwise, leaving a string
   to the narrower `string` the designator already gives. Two emission sites, one dispatch —
@@ -539,9 +540,11 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   TEST-level `ERROR` line naming `array`/`vector`/`bit-vector`/..., which over-counts: the
   test behind such a line often fails for a second reason once the class resolves. 14
   `BIT-VECTOR.*`/`SIMPLE-BIT-VECTOR.*` tests turned ERROR into FAIL for exactly that reason
-  -- `(typep #*101 'bit-vector)` is nil because there is no distinct bit-array
-  representation (`.todo/043`, `.todo/180`) -- and the `built-in-class` / `structure-object`
-  / `real` rows are behind `*universe*` (`.todo/679`) or `class-precedence-list` instead.
+  -- `(typep #*101 'bit-vector)` was nil because there was no distinct bit-array
+  representation then (`.todo/043`, `.todo/180`); since `.todo/043` landed the stamp the
+  predicate answers `t`, so those rows want a remeasure -- and the `built-in-class` /
+  `structure-object` / `real` rows are behind `*universe*` (`.todo/679`) or
+  `class-precedence-list` instead.
   A count of ERROR lines naming a missing operator is an UPPER bound on the tests it wins.
 - **`typep`/`subtypep` take a class METAOBJECT wherever a type specifier is expected.** ONE
   rule — "an instance tagged as a `standard-class` descendant continues as its slot-0 name" —

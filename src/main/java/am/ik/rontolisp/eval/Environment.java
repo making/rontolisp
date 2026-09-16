@@ -6418,6 +6418,12 @@ public final class Environment implements Scope {
 				if (spec.elementType() == ArrayElementTypes.CHARACTER) {
 					return charVector(LispNames.CONCATENATE, elements);
 				}
+				// A (vector bit) result is the general boxed array stamped bit, like
+				// the make-array spelling of the same designator (.todo/043).
+				if (spec.elementType() == ArrayElementTypes.BIT) {
+					return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]), -1, false,
+							ArrayElementTypes.BIT);
+				}
 				return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
 			}
 			LispVal list = LispNil.INSTANCE;

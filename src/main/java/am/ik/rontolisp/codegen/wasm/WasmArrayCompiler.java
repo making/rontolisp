@@ -608,10 +608,14 @@ final class WasmArrayCompiler {
 		int arms = 0;
 		for (int code : ArrayElementTypes.specializedCodes()) {
 			if (code == ArrayElementTypes.CHARACTER || code == ArrayElementTypes.BFLOAT16
-					|| (ctx.typedArrayCodes & (1 << code)) == 0) {
+					|| code == ArrayElementTypes.BIT || (ctx.typedArrayCodes & (1 << code)) == 0) {
 				// CHARACTER is the general vector here (a rank-1 character array is a
 				// string, answered by subseq's stringp arm before this); bfloat16 has no
-				// packed representation on this backend.
+				// packed representation on this backend; BIT is the general boxed array
+				// stamped bit (no packed bits anywhere), so a bit vector rebuilds
+				// through the general path below, which answers an unstamped vector --
+				// the same answer the interpreter's %array-alike/subseq general arms
+				// give (.todo/043).
 				continue;
 			}
 			arms++;
@@ -2010,6 +2014,21 @@ final class WasmArrayCompiler {
 			emitElementTypeValue(ctx, code);
 			ctx.writer.write(Instruction.ELSE);
 		}
+		// A bit vector is the general boxed array stamped bit: the stamp is the whole
+		// representation, so it reads back here rather than through a packed arm
+		// (.todo/043). Kept out of the range loop above, which ends at DOUBLE_FLOAT:
+		// the loop would otherwise also grow a dead BFLOAT16 arm (marker 8 can never
+		// appear on this backend) into every bfloat16 program's bytes.
+		if ((ctx.typedArrayCodes & (1 << ArrayElementTypes.BIT)) != 0) {
+			arms++;
+			getLocal(ctx, markerSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			i32Const(ctx, elementTypeMarker(ArrayElementTypes.BIT));
+			ctx.writer.write(Instruction.I32_EQ);
+			emitIfEq(ctx);
+			emitElementTypeValue(ctx, ArrayElementTypes.BIT);
+			ctx.writer.write(Instruction.ELSE);
+		}
 		WasmEmitHelper.emitTrue(ctx);
 		for (int i = 0; i < arms; i++) {
 			ctx.writer.write(Instruction.END);
@@ -2082,6 +2101,10 @@ final class WasmArrayCompiler {
 			case ArrayElementTypes.CHARACTER -> WasmEmitHelper.compileUnspelledLiteral(LispNames.CHARACTER_TYPE, ctx);
 			case ArrayElementTypes.SINGLE_FLOAT -> WasmEmitHelper.compileStringLiteral(LispNames.SINGLE_FLOAT, ctx);
 			case ArrayElementTypes.DOUBLE_FLOAT -> WasmEmitHelper.compileStringLiteral(LispNames.DOUBLE_FLOAT, ctx);
+			// Unspelled like character: the name is real run-time data the compiler
+			// synthesized, and bit is also a function name -- spelling it would arm
+			// the funcall-dispatch gate's name probes (.todo/043).
+			case ArrayElementTypes.BIT -> WasmEmitHelper.compileUnspelledLiteral(LispNames.BIT, ctx);
 			default -> {
 				WasmEmitHelper.compileStringLiteral(LispNames.UNSIGNED_BYTE, ctx);
 				i32Const(ctx, code == ArrayElementTypes.UNSIGNED_BYTE_8 ? 8
@@ -3682,6 +3705,20 @@ final class WasmArrayCompiler {
 			}
 			emitIfEq(ctx);
 			WasmExprCompiler.compileExpr(java.util.Objects.requireNonNull(ArrayElementTypes.defaultElement(code)), ctx);
+			ctx.writer.write(Instruction.ELSE);
+		}
+		// A bit vector's unsupplied element is the integer 0: the stamp is the whole
+		// representation, so it needs its own arm after the range loop above (which
+		// ends at DOUBLE_FLOAT for the BFLOAT16 reason the read-back arm states).
+		if ((ctx.typedArrayCodes & (1 << ArrayElementTypes.BIT)) != 0) {
+			arms++;
+			getLocal(ctx, markerSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			i32Const(ctx, elementTypeMarker(ArrayElementTypes.BIT));
+			ctx.writer.write(Instruction.I32_EQ);
+			emitIfEq(ctx);
+			WasmExprCompiler.compileExpr(
+					java.util.Objects.requireNonNull(ArrayElementTypes.defaultElement(ArrayElementTypes.BIT)), ctx);
 			ctx.writer.write(Instruction.ELSE);
 		}
 		refNull(ctx);

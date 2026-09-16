@@ -225,8 +225,15 @@ public final class ConcatenateForms {
 					return new ResultSpec(ResultFamily.LIST, ArrayElementTypes.T);
 				}
 				case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "BIT-VECTOR", "SIMPLE-BIT-VECTOR" -> {
-					return new ResultSpec(ResultFamily.VECTOR,
-							ArrayElementTypes.codeOf(LispNames.packedVectorElementType(current)));
+					// An atomic 'bit-vector names no element type, but the family IS
+					// the bit family: the packed-element reader answers null for a
+					// bare symbol, so the code falls back to the stamp the atomic
+					// spelling means (.todo/043).
+					LispVal elementType = LispNames.packedVectorElementType(current);
+					int code = (elementType == null
+							&& ("BIT-VECTOR".equals(member) || "SIMPLE-BIT-VECTOR".equals(member)))
+									? ArrayElementTypes.BIT : ArrayElementTypes.codeOf(elementType);
+					return new ResultSpec(ResultFamily.VECTOR, code);
 				}
 				default -> {
 					LispVal expansion = (closRegistry == null) ? null : closRegistry.findDeftype(sym.name());
@@ -605,6 +612,11 @@ public final class ConcatenateForms {
 		}
 		if (elementTypeCode == ArrayElementTypes.CHARACTER) {
 			return listToCons(List.of(new LispSymbol(LispNames.SEQ_STRING), elements));
+		}
+		if (elementTypeCode == ArrayElementTypes.BIT) {
+			// A bit-vector result builds the stamped general array through coerce's
+			// bit arm, not the T vector the fallthrough below answers (.todo/043).
+			return coerceCall(elements, "BIT-VECTOR");
 		}
 		return coerceCall(elements, "VECTOR");
 	}

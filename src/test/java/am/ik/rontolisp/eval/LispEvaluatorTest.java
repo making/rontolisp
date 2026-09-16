@@ -7014,6 +7014,97 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalBitVectorsAndBitOps() {
+		// A bit vector is the general boxed array stamped with the remembered element
+		// type bit: a #* literal or a (make-array ... :element-type 'bit), of any rank.
+		// bit-vector-p/simple-bit-vector-p answer exactly what their typep specifiers
+		// do, and the eleven bit-* operators validate through bit-vector-p and walk
+		// row-major-aref, so rank-n arrays work too (.todo/043). Pinned identically by
+		// JvmLispCompilerTest#compileBitVectorsAndBitOps,
+		// WasmLispCompilerIntegrationTest#bitVectorsAndBitOps and the
+		// bit-vectors-and-bit-ops ci-spec case.
+		assertThat(evalMulti("""
+				(defvar *bv-a* (make-array 4 :element-type 'bit :initial-contents '(0 1 1 0)))
+				(defvar *bv-b* (make-array 4 :element-type 'bit :initial-contents '(1 1 0 0)))
+				(defvar *bv-fp* (make-array 4 :element-type 'bit :fill-pointer 2))
+				(defvar *bv-m2* (make-array '(2 2) :element-type 'bit :initial-contents '((0 1) (1 0))))
+				(list
+				  (list (bit-vector-p *bv-a*)
+				        (simple-bit-vector-p *bv-a*)
+				        (bit-vector-p #*0110)
+				        (simple-bit-vector-p #*0110)
+				        (bit-vector-p #(0 1))
+				        (simple-bit-vector-p #(0 1))
+				        (bit-vector-p "01")
+				        (bit-vector-p *bv-fp*)
+				        (simple-bit-vector-p *bv-fp*)
+				        (bit-vector-p *bv-m2*))
+				  (list (typep *bv-a* 'bit-vector)
+				        (typep *bv-a* 'simple-bit-vector)
+				        (typep *bv-a* '(vector bit))
+				        (typep *bv-a* '(vector bit 4))
+				        (typep *bv-a* '(bit-vector 4))
+				        (typep *bv-a* '(simple-bit-vector 4))
+				        (typep *bv-a* '(bit-vector 3))
+				        (typep *bv-fp* 'simple-bit-vector)
+				        (typep *bv-m2* 'bit-vector)
+				        (typep *bv-m2* '(array bit (2 2))))
+				  (list (array-element-type *bv-a*)
+				        (array-element-type #*0110)
+				        (type-of *bv-a*)
+				        (type-of *bv-fp*)
+				        (type-of *bv-m2*)
+				        (subtypep 'bit-vector 'vector)
+				        (subtypep 'simple-bit-vector 'bit-vector)
+				        (subtypep 'simple-bit-vector 'simple-array)
+				        (subtypep 'vector 'bit-vector))
+				  (list (bit-and *bv-a* *bv-b*)
+				        (bit-ior *bv-a* *bv-b*)
+				        (bit-xor *bv-a* *bv-b*)
+				        (bit-eqv *bv-a* *bv-b*)
+				        (bit-nand *bv-a* *bv-b*)
+				        (bit-nor *bv-a* *bv-b*)
+				        (bit-andc1 *bv-a* *bv-b*)
+				        (bit-andc2 *bv-a* *bv-b*)
+				        (bit-orc1 *bv-a* *bv-b*)
+				        (bit-orc2 *bv-a* *bv-b*)
+				        (bit-not *bv-a*))
+				  (list (bit-vector-p (bit-and *bv-a* *bv-b*))
+				        (funcall #'bit-ior *bv-a* *bv-b*)
+				        (bit-and *bv-m2* *bv-m2*))
+				  (list (array-element-type (coerce '(1 0) '(vector bit)))
+				        (array-element-type (concatenate '(vector bit) '(1) #(0)))
+				        (bit-vector-p (coerce '(1 0) 'bit-vector))
+				        (bit-vector-p (concatenate 'bit-vector '(1) #(0)))
+				        (let ((s 'bit-vector)) (array-element-type (coerce '(1 0) s)))))
+				""").print()).isEqualTo(
+				"((T T T T NIL NIL NIL T NIL NIL) (T T T T T T NIL NIL NIL T) (BIT BIT (SIMPLE-BIT-VECTOR 4) (BIT-VECTOR 4) (SIMPLE-ARRAY BIT (2 2)) T T T NIL) (#(0 1 0 0) #(1 1 1 0) #(1 0 1 0) #(0 1 0 1) #(1 0 1 1) #(0 0 0 1) #(1 0 0 0) #(0 0 1 0) #(1 1 0 1) #(0 1 1 1) #(1 0 0 1)) (T #(1 1 1 0) #2A((0 1) (1 0))) (BIT BIT T T BIT))");
+		// The result-bit-array handling: nil answers a fresh bit vector, t reuses the
+		// first input destructively, and a supplied bit array of the same dimensions
+		// is written into and answered (each step uses its own result, since a
+		// destructive answer aliases the array it wrote into).
+		assertThat(evalMulti("""
+				(let ((a (make-array 2 :element-type 'bit :initial-contents '(0 1)))
+				      (b (make-array 2 :element-type 'bit :initial-contents '(1 1)))
+				      (r (make-array 2 :element-type 'bit)))
+				  (list (bit-and a b)
+				        a
+				        (eq (bit-and a b t) a)
+				        a
+				        (eq (bit-ior a b r) r)
+				        r
+				        (bit-not b)))
+				""").print()).isEqualTo("(#(0 1) #(0 1) T #(0 1) T #(1 1) #(0 0))");
+		// Validation: a non-bit-vector input, a dimension mismatch and a bad result
+		// all signal.
+		assertThatThrownBy(() -> eval("(bit-and #(0 1) #*01)")).hasMessageContaining("not a bit array");
+		assertThatThrownBy(() -> eval("(bit-and (make-array 2 :element-type 'bit) (make-array 3 :element-type 'bit))"))
+			.hasMessageContaining("different dimensions");
+		assertThatThrownBy(() -> eval("(bit-not 5)")).hasMessageContaining("not a bit array");
+		assertThatThrownBy(() -> eval("(bit-ior #*01 #*01 #(0 1))")).hasMessageContaining("result is not a bit array");
+	}
+
+	@Test
 	void evalSimpleTypeNameTypepChecksSimplicity() {
 		// The typep half of the simple- lattice: a fill pointer, :adjustable t and a
 		// displacement each make an array (and a string) NON-simple, so the simple-
@@ -7659,10 +7750,12 @@ class LispEvaluatorTest {
 				+ " DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))");
 		// A designator that upgrades to t is remembered as nothing at all, and an
 		// unsupplied element of one is nil -- the runtime designator changes neither.
+		// 'bit is not one of those: since .todo/043 it is remembered, so the runtime
+		// designator builds what the literal spelling builds.
 		assertThat(evalMulti("""
 				(defun mkt (et) (make-array 3 :element-type et))
 				(list (array-element-type (mkt 'fixnum)) (type-of (mkt 'bit)) (aref (mkt 'fixnum) 0))
-				""").print()).isEqualTo("(T (SIMPLE-VECTOR 3) NIL)");
+				""").print()).isEqualTo("(T (SIMPLE-BIT-VECTOR 3) NIL)");
 		// :initial-element wins over the type's own zero, on every arm.
 		assertThat(evalMulti("""
 				(defun mki (et x) (make-array 3 :element-type et :initial-element x))
@@ -15265,8 +15358,8 @@ class LispEvaluatorTest {
 		// CLHS 11.1.2.1: the cl package's external list IS the standard's 978 names,
 		// whether or not an operator stands behind one. The name being there is a
 		// find-symbol answer and nothing more -- calling it still signals.
-		assertThat(evalMulti("(multiple-value-list (find-symbol \"BIT-AND\" 'common-lisp))").print())
-			.isEqualTo("(BIT-AND :EXTERNAL)");
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"FIND-METHOD\" 'common-lisp))").print())
+			.isEqualTo("(FIND-METHOD :EXTERNAL)");
 		assertThat(evalMulti("(multiple-value-list (find-symbol \"ARRAY-IN-BOUNDS-P\" :cl))").print())
 			.isEqualTo("(ARRAY-IN-BOUNDS-P :EXTERNAL)");
 		assertThat(evalMulti("(multiple-value-list (find-symbol \"&AUX\" 'common-lisp))").print())
@@ -15274,9 +15367,9 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp))").print())
 			.isEqualTo("(NIL NIL)");
 		// Exported, not bound: the operator question is separate and still answers no.
-		assertThat(evalMulti("(fboundp 'bit-and)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(evalMulti("(macro-function 'bit-and)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(evalMulti("(special-operator-p 'bit-and)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(fboundp 'find-method)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(macro-function 'find-method)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(special-operator-p 'find-method)")).isEqualTo(LispNil.INSTANCE);
 		// ... and the name is not a standard OPERATOR, so a program may still define it.
 		assertThat(evalMulti("(defun bit-and (a b) (list a b)) (bit-and 1 2)").print()).isEqualTo("(1 2)");
 	}
@@ -20576,14 +20669,16 @@ class LispEvaluatorTest {
 				(let ((a (mk-unknown-et 'single-flaot))) (list (array-element-type a) (aref a 0)))
 				""").print()).isEqualTo("(T NIL)");
 		// The LEGAL CLHS upgrades the shipped corpus passes -- refusing an unrecognized
-		// element type would refuse alexandria's and cl-ppcre's 'bit, ironclad's and
-		// chipz's 'fixnum, jzon's '(unsigned-byte 64) and cl-ppcre's '(or null fixnum).
+		// element type would refuse ironclad's and chipz's 'fixnum, jzon's
+		// '(unsigned-byte 64) and cl-ppcre's '(or null fixnum). 'bit is NOT an upgrade:
+		// since .todo/043 a bit vector is the general array stamped bit, so
+		// array-element-type answers it back.
 		assertThat(eval("""
 				(list (array-element-type (make-array 2 :element-type 'bit))
 				      (array-element-type (make-array 2 :element-type 'fixnum))
 				      (array-element-type (make-array 2 :element-type '(unsigned-byte 64)))
 				      (array-element-type (make-array 2 :element-type '(or null fixnum))))
-				""").print()).isEqualTo("(T T T T)");
+				""").print()).isEqualTo("(BIT T T T)");
 	}
 
 	@Test

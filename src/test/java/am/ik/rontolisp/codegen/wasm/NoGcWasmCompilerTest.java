@@ -97,6 +97,17 @@ class NoGcWasmCompilerTest {
 			.hasMessageContaining("--no-gc");
 	}
 
+	// The bit-* array operators are prelude defuns over the general boxed array, and
+	// the scalar backend has no general array type: the spliced defun reaches the
+	// make-array refusal with its usual clear compile error (.todo/043).
+	@Test
+	void bitArrayOperatorsAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun bit-and-it (a b) (bit-and a b))
+				(rontolisp:wasm-export 'bit-and-it :params '(:int :int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("--no-gc");
+	}
+
 	@Test
 	void quantizedMatricesAreRefusedOnTheNoGcBackend() {
 		assertThatThrownBy(() -> compile("""

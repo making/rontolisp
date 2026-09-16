@@ -95,10 +95,12 @@ form may be evaluated several times, so callers bind a temp (`__check-type` / `_
 - `pathname` -> the `%PATHNAME` instance-tag test ([pathnames.md](pathnames.md)); with the instance
   gate off it compiles to constant nil, also correct.
 - **EMPTY types** (constant-nil, agreeing with runtime `typep`, all in `PackageRegistry.CL_TYPES`):
-  `bit-vector`/`simple-bit-vector` (no bit-vector value exists),
   `generic-function`/`standard-generic-function` (a defgeneric dispatcher is a plain function value
   with no marker), `structure-class`/`built-in-class` (a defstruct class metaobject IS a
   standard-class) -- the last two routing trivia level2 onto its portable fallbacks.
+  `bit-vector`/`simple-bit-vector` used to be empty (no bit-vector value existed); since
+  `.todo/043` they test the remembered element type `bit` behind the `%arrayp` guard, rank 1
+  pinned, the `simple-` spelling ANDing `%simple-array-p` like every other `simple-` spelling.
   `CLASS`/`STRUCTURE`/`TYPE` joined CL_TYPES for a different reason: trivia NAMES its patterns with
   them, and the defpattern site and a user's pattern site must resolve to the same bare spelling.
 - **Atomic map** (`atomicTypePredicate`): integer/fixnum/bignum -> `integerp`, float* -> `floatp`,
@@ -156,12 +158,14 @@ for `"abc"` (SBCL: `(SIMPLE-ARRAY CHARACTER (3))`).
   or unstated, rank 1 or unstated) and sizes itself with `%string-dimension`; the array arm reads
   `array-element-type` and the dimensions behind the `%arrayp` guard. A `simple-` spelling ANDs ONE
   `%simple-array-p` in front of the whole union.
-- **The element type is compared UPGRADED** (`upgradedArrayElementType`): the two float widths and
-  the three packed `(unsigned-byte 8|16|32)` widths keep their name, the character family answers
-  `character`, everything else -- `fixnum`, `integer`, `bit`, a class -- lands in the general boxed
-  array with element type `t`. So `(typep a '(simple-array fixnum (4)))` is a `t`-array test:
-  conformant, and the one shape array-operations' suite still fails on. A deftype ALIAS resolves
-  first (`resolveElementTypeAlias`).
+- **The element type is compared UPGRADED** (`upgradedArrayElementType`): the two float widths,
+  the three packed `(unsigned-byte 8|16|32)` widths and `bit` keep their name, the character
+  family answers `character`, everything else -- `fixnum`, `integer`, a class -- lands in the
+  general boxed array with element type `t`. So `(typep a '(simple-array fixnum (4)))` is a
+  `t`-array test: conformant, and the one shape array-operations' suite still fails on. (`bit`
+  keeps its name since `.todo/043`: a bit vector IS the general boxed array stamped `bit`, so
+  the stamp is what the comparison reads.) A deftype ALIAS resolves first
+  (`resolveElementTypeAlias`).
 - **Dimensions** compare as a whole when every one is literal (one `array-dimensions` read against
   the quoted list, `nil` for rank-0), else a rank check plus one `array-dimension` read per pinned
   dimension. Both VECTOR spellings pin the rank to 1, as do `vectorp` and a bare
@@ -273,7 +277,9 @@ specifiers; a `t` primary is always a decision, since `subtypep` answers `t` onl
 **`simple-vector`, `simple-array` and `simple-string` name strictly smaller types than
 `vector`/`array`/`string`, so `subtypep` answers `T` one way and `NIL` the other, on all four
 backends.** `LispMacroExpander.SUBTYPEP_PARENTS`: `simple-string` -> `simple-array`, `string`;
-`simple-vector` -> `simple-array`, `vector`; `simple-array` -> `array`. So `simple-vector` <=
+`simple-vector` -> `simple-array`, `vector`; `simple-array` -> `array`; and since `.todo/043`
+`bit-vector` -> `vector` and `simple-bit-vector` -> `bit-vector`, `simple-array` (a bit vector
+is a vector of bits, and a simple one is both). So `simple-vector` <=
 `sequence` (through `vector`) while `simple-array` is NOT a sequence, and `simple-string` is NOT a
 `simple-vector`.
 

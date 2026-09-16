@@ -275,6 +275,154 @@ public final class LispPreludeLibrary {
 				(defun (setf bit) (new-value bit-array index)
 				  (setf (aref bit-array index) new-value))
 				""");
+		// The eleven bit-* array-logic operators, over the general boxed bit-vector
+		// representation (a #* literal or a (make-array ... :element-type 'bit) of any
+		// rank). Three private helpers carry the validation and the result handling so
+		// the eleven defuns are one loop each: %bit-array-p recognizes a bit array of
+		// any rank (bit-vector-p is rank-1 only, while the operators take any rank),
+		// %bit-check-2 answers the shared dimensions or signals, %bit-result-2 answers
+		// the array to write into (a fresh bit array for a nil result, the first input
+		// destructively for t, or the supplied result array after checking it is a bit
+		// array of the same dimensions). The loops walk row-major-aref, which is
+		// rank-blind, so a rank-n bit array works the way CL requires (.todo/043).
+		SOURCES.put("%BIT-ARRAY-P", """
+				(defun %bit-array-p (x)
+				  (and (arrayp x) (equal (array-element-type x) 'bit)))
+				""");
+		SOURCES.put("%BIT-CHECK-2", """
+				(defun %bit-check-2 (name a b)
+				  (if (not (%bit-array-p a))
+				      (error "~a: first argument is not a bit array: ~s" name a)
+				      (if (not (%bit-array-p b))
+				          (error "~a: second argument is not a bit array: ~s" name b)
+				          (let ((da (array-dimensions a))
+				                (db (array-dimensions b)))
+				            (if (not (equal da db))
+				                (error "~a: bit arrays have different dimensions: ~s and ~s" name da db)
+				                da)))))
+				""");
+		SOURCES.put("%BIT-RESULT-2", """
+				(defun %bit-result-2 (name first dims result)
+				  (cond ((null result) (make-array dims :element-type 'bit))
+				        ((eq result t) first)
+				        ((not (%bit-array-p result))
+				         (error "~a: result is not a bit array: ~s" name result))
+				        ((not (equal (array-dimensions result) dims))
+				         (error "~a: result has different dimensions: ~s, expected ~s"
+				                name (array-dimensions result) dims))
+				        (t result)))
+				""");
+		SOURCES.put(LispNames.BIT_AND, """
+				(defun bit-and (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-and a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-and a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (logand (row-major-aref a i) (row-major-aref b i))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_IOR, """
+				(defun bit-ior (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-ior a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-ior a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (logior (row-major-aref a i) (row-major-aref b i))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_XOR, """
+				(defun bit-xor (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-xor a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-xor a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (logxor (row-major-aref a i) (row-major-aref b i))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_EQV, """
+				(defun bit-eqv (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-eqv a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-eqv a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (- 1 (logxor (row-major-aref a i) (row-major-aref b i)))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_NAND, """
+				(defun bit-nand (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-nand a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-nand a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (- 1 (logand (row-major-aref a i) (row-major-aref b i)))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_NOR, """
+				(defun bit-nor (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-nor a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-nor a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (- 1 (logior (row-major-aref a i) (row-major-aref b i)))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_ANDC1, """
+				(defun bit-andc1 (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-andc1 a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-andc1 a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (logand (- 1 (row-major-aref a i)) (row-major-aref b i))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_ANDC2, """
+				(defun bit-andc2 (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-andc2 a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-andc2 a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (logand (row-major-aref a i) (- 1 (row-major-aref b i)))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_ORC1, """
+				(defun bit-orc1 (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-orc1 a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-orc1 a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (logior (- 1 (row-major-aref a i)) (row-major-aref b i))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_ORC2, """
+				(defun bit-orc2 (a b &optional result)
+				  (let ((dims (%bit-check-2 'bit-orc2 a b))
+				        (n (array-total-size a)))
+				    (let ((out (%bit-result-2 'bit-orc2 a dims result)))
+				      (dotimes (i n)
+				        (setf (row-major-aref out i)
+				              (logior (row-major-aref a i) (- 1 (row-major-aref b i)))))
+				      out)))
+				""");
+		SOURCES.put(LispNames.BIT_NOT, """
+				(defun bit-not (a &optional result)
+				  (if (not (%bit-array-p a))
+				      (error "bit-not: argument is not a bit array: ~s" a)
+				      (let ((dims (array-dimensions a))
+				            (n (array-total-size a)))
+				        (let ((out (%bit-result-2 'bit-not a dims result)))
+				          (dotimes (i n)
+				            (setf (row-major-aref out i) (- 1 (row-major-aref a i))))
+				          out))))
+				""");
 		// simple-vector-p/bit-vector-p/simple-bit-vector-p: exactly what the
 		// matching typep answers, so the predicate and the specifier cannot
 		// drift apart. No bit-vector value exists yet (a :element-type 'bit
@@ -474,9 +622,13 @@ public final class LispPreludeLibrary {
 				                 (dims (array-dimensions object)))
 				             (cond ((not (%simple-array-p object))
 				                    (if (= (length dims) 1)
-				                        (list 'vector et (car dims))
+				                        (if (equal et 'bit)
+				                            (list 'bit-vector (car dims))
+				                            (list 'vector et (car dims)))
 				                        (list 'array et dims)))
 				                   ((and (eq et t) (= (length dims) 1)) (list 'simple-vector (car dims)))
+				                   ((and (equal et 'bit) (= (length dims) 1))
+				                    (list 'simple-bit-vector (car dims)))
 				                   (t (list 'simple-array et dims)))))
 				          (t c))))
 				""");

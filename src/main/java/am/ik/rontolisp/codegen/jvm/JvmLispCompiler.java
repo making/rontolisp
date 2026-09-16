@@ -1771,9 +1771,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// under-predicted this gate (see compile(List)); it never turns the gate OFF.
 		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray || usesIntArray
 				|| forcedGroups.contains(GROUP_ARRAYS);
-		// Whether any make-array in the program asks for an element type narrower than t
-		// -- the only way a general array can carry a remembered one, and so the gate on
-		// array-element-type's general arm.
+		// Whether any make-array in the program asks for an element type narrower than t,
+		// or any array literal carries a remembered one (#*1011 is stamped bit) -- the
+		// only ways a general array can carry a remembered element type, and so the
+		// gate on array-element-type's general arm.
 		final boolean usesTypedArray = usesArrays
 				&& LispMacroExpander.makeArrayElementTypeCodes(program, closRegistry) != 0;
 		MethodrefConstant strvMethod = usesArrays ? cp.addMethodref(thisClass, cp
