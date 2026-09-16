@@ -377,6 +377,7 @@ page.
 | `subtypep` | `(subtypep 'integer 'number)` | `t` -- the built-in type lattice plus `defclass`/condition hierarchies; a single value, unknown pairs answer `nil`; the compilers fold literal specifiers at compile time |
 | `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- the `ldb` field left in its original position |
 | `deposit-field` | `(deposit-field 0 (byte 4 0) 255)`, `(deposit-field 5 (byte 4 4) 0)` | `240`, `0` -- replace the byte field with `newbyte`'s bits at that field (unlike `dpb`'s low bits) |
+| `ldb-test` | `(ldb-test (byte 4 4) 255)`, `(ldb-test (byte 4 4) 15)` | `T`, `NIL` -- whether any bit of the byte field is set |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- `float × 2^n` with IEEE semantics |
 | `float-radix` | `(float-radix 1.0)` | `2` -- the radix of the float representation (always binary) |
 | `float-sign` | `(float-sign -2.5)`, `(float-sign -2.5 3.0)` | `-1.0`, `-3.0` -- the sign as a float (negative zero answers `-1.0`), or the second float's magnitude with the first's sign |

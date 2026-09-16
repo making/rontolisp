@@ -5752,6 +5752,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLdbTest() {
+		// (ldb-test bytespec int) is T when any bit of the field is set --
+		// (not (zerop (ldb bytespec int))) (.todo/818).
+		assertThat(eval("(ldb-test (byte 4 4) 255)").print()).isEqualTo("T");
+		assertThat(eval("(ldb-test (byte 4 4) 15)").print()).isEqualTo("NIL");
+		assertThat(eval("(ldb-test (byte 8 0) 255)").print()).isEqualTo("T");
+		assertThat(eval("(ldb-test (byte 8 0) 0)").print()).isEqualTo("NIL");
+		assertThat(eval("(ldb-test (byte 4 0) 16)").print()).isEqualTo("NIL");
+		assertThat(eval("(ldb-test (byte 4 4) -1)").print()).isEqualTo("T");
+		assertThat(eval("(funcall #'ldb-test (byte 4 4) 255)").print()).isEqualTo("T");
+		assertThatThrownBy(() -> eval("(ldb-test (byte 4 4))")).isInstanceOf(LispEvalException.class);
+		assertThatThrownBy(() -> eval("(ldb-test (byte 4 4) 1 2)")).isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
 	void evalListStarAndAcons() {
 		assertThat(eval("(list* 1 2 '(3 4))").print()).isEqualTo("(1 2 3 4)");
 		assertThat(eval("(list* 1 2 3)").print()).isEqualTo("(1 2 . 3)");

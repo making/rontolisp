@@ -4075,6 +4075,21 @@ cases:
       2
       2
       2
+  - name: byte-ldb-test
+    source: |
+      (print (ldb-test (byte 4 4) 255))
+      (print (ldb-test (byte 4 4) 15))
+      (print (ldb-test (byte 8 0) 0))
+      (print (ldb-test (byte 4 0) 16))
+      (print (ldb-test (byte 4 4) -1))
+      (print (funcall #'ldb-test (byte 4 4) 255))
+    expected: |
+      T
+      NIL
+      NIL
+      NIL
+      T
+      T
   - name: rational-exact-value
     source: |
       (print (rational 5))

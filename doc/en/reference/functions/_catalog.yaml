@@ -102,6 +102,7 @@ categories:
       - { slug: ldb, name: "ldb" }
       - { slug: dpb, name: "dpb" }
       - { slug: deposit-field, name: "deposit-field" }
+      - { slug: ldb-test, name: "ldb-test" }
       - { slug: mask-field, name: "mask-field" }
   - title: "Equality & Type Predicates"
     index_page: reference/functions/cl.md

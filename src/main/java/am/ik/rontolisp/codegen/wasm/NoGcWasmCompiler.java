@@ -7970,6 +7970,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					"--no-gc: " + name.toLowerCase(java.util.Locale.ROOT) + " is not supported in function '" + fnName
 							+ "': (" + name + " ...) (the scalar backend is for pure numeric exports)");
 		}
+		if (LispNames.LDB_TEST.equals(name)) {
+			// ldb-test rides on ldb, whose expansion reads the bytespec cons
+			// back -- and the scalar value model has no cons -- so it is
+			// refused outright like deposit-field's field replacement above
+			// (.todo/818) -- never a trap, never a wrong answer.
+			throw new UnsupportedOperationException(
+					"--no-gc: " + name.toLowerCase(java.util.Locale.ROOT) + " is not supported in function '" + fnName
+							+ "': (" + name + " ...) (the scalar backend is for pure numeric exports)");
+		}
 		if (LispNames.LET.equals(name)) {
 			collectLet(cons, bound, defuns, callees, fnName);
 			return;

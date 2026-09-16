@@ -9772,6 +9772,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ldbTest() throws Exception {
+		// The ldb-test prelude over small integers: every intermediate is a
+		// scalar-small integer, so the whole pin stays in the exactly
+		// representable range (.todo/818).
+		assertThat(compileAndRunPrelude(
+				"(print (ldb-test (byte 4 4) 255)) (print (ldb-test (byte 4 4) 15)) (print (ldb-test (byte 8 0) 0)) (print (ldb-test (byte 4 0) 16)) (print (ldb-test (byte 4 4) -1)) (print (funcall #'ldb-test (byte 4 4) 255))"))
+			.isEqualTo("T\nNIL\nNIL\nNIL\nT\nT");
+	}
+
+	@Test
 	void noGcLogcountAnswers() throws Exception {
 		// --no-gc lowers logcount to its scalar population-count loop. First-class
 		// calls do not exist on this backend (no funcall), and integer-decode-float

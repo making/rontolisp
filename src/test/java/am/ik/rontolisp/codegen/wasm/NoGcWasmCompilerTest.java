@@ -406,6 +406,20 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void rejectsLdbTest() {
+		// ldb-test rides on ldb, whose expansion reads the bytespec cons back
+		// -- and the scalar value model has no cons -- so it is refused at
+		// compile time like deposit-field's field replacement (.todo/818) --
+		// never a trap, never a wrong answer.
+		assertThatThrownBy(() -> compile("""
+				(defun lt-f (bs n) (ldb-test bs n))
+				(rontolisp:wasm-export 'lt-f :params '(:int :int) :returns :bool)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("ldb-test is not supported")
+			.hasMessageContaining("LT-F");
+	}
+
+	@Test
 	void rejectsSetqOfANonLocal() {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (setq g (+ n 1)))

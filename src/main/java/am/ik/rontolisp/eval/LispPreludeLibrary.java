@@ -2233,6 +2233,15 @@ public final class LispPreludeLibrary {
 				             (- 1127 j)))
 				          (t 53))))
 				""");
+		// ldb-test: T when any bit of the byte specifier's field is set -- the
+		// negation of ldb's zero test. Going through ldb (not a hand-rolled
+		// dpb spelling) dodges the deposit-field/dpb mix-up (.todo/037 Slice A:
+		// dpb deposits newbyte's LOW size bits, deposit-field its bits AT the
+		// field); the inner ldb call validates the argument shapes.
+		SOURCES.put(LispNames.LDB_TEST, """
+				(defun ldb-test (bytespec integer)
+				  (not (zerop (ldb bytespec integer))))
+				""");
 		// rationalize: the simplest rational within half a ulp of a float on either
 		// side (so floating the answer reproduces the input), the integer or ratio
 		// itself for an exact input. The float's exact value and ulp come from

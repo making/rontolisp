@@ -377,6 +377,7 @@
 | `subtypep` | `(subtypep 'integer 'number)` | `t` -- 組み込み型の束と `defclass`/コンディション階層に対して判定。主値のみで、未知の組は `nil`。コンパイラはリテラル指定子をコンパイル時に畳み込みます |
 | `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- `ldb` のフィールドを元の位置のまま返します |
 | `deposit-field` | `(deposit-field 0 (byte 4 0) 255)`、`(deposit-field 5 (byte 4 4) 0)` | `240`、`0` -- バイトフィールドを `newbyte` の同じ位置のビットで置き換えます(`dpb` の下位ビットとは異なります) |
+| `ldb-test` | `(ldb-test (byte 4 4) 255)`、`(ldb-test (byte 4 4) 15)` | `T`、`NIL` -- バイトフィールドに1のビットがあるかどうか |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- IEEE の意味論で `float × 2^n` |
 | `float-radix` | `(float-radix 1.0)` | `2` -- 浮動小数点表現の基数(常に2進) |
 | `float-sign` | `(float-sign -2.5)`、`(float-sign -2.5 3.0)` | `-1.0`、`-3.0` -- 符号を浮動小数点数で(負のゼロは `-1.0`)、または第2引数の絶対値に第1引数の符号を付けた値 |

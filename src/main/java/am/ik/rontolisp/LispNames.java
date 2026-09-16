@@ -470,6 +470,13 @@ public final class LispNames {
 	 */
 	public static final String DEPOSIT_FIELD = "DEPOSIT-FIELD";
 
+	/**
+	 * The {@code ldb-test} prelude function: {@code (ldb-test bytespec integer)} answers
+	 * whether any bit of the byte specifier's field is set -- {@code (not
+	 * (zerop (ldb bytespec integer)))}.
+	 */
+	public static final String LDB_TEST = "LDB-TEST";
+
 	// Comparison
 
 	/** The {@code =} built-in function. */

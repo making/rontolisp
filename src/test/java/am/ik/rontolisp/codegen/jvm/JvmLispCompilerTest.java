@@ -9557,6 +9557,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLdbTest() throws Exception {
+		// The ldb-test prelude: T when any bit of the field is set (.todo/818).
+		assertThat(compileAndRun(
+				"(print (ldb-test (byte 4 4) 255)) (print (ldb-test (byte 4 4) 15)) (print (ldb-test (byte 8 0) 0)) (print (ldb-test (byte 4 0) 16)) (print (ldb-test (byte 4 4) -1)) (print (funcall #'ldb-test (byte 4 4) 255))"))
+			.isEqualTo("T\nNIL\nNIL\nNIL\nT\nT");
+	}
+
+	@Test
 	void compileAndRunByteFieldOps() throws Exception {
 		assertThat(compileAndRun(
 				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))

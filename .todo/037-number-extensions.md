@@ -1,3 +1,25 @@
+> **Update 2026-09-16 (.todo/818: `ldb-test` landed):** the last
+> unimplemented byte-family member ships as a prelude defun
+> (`LispPreludeLibrary`, the `decode-float` precedent -- one Lisp
+> implementation on interpreter/JVM/WASM-GC, first-class free) +
+> `LispNames` + `CL_FUNCTIONS` (`LDB-TEST` moves out of `CL_EXPORTED_ONLY`,
+> the 978 externals unchanged) + `ci-spec.yaml` case + EN/JA docs:
+> `(defun ldb-test (bytespec integer) (not (zerop (ldb bytespec integer))))`.
+> Going through `ldb` (not a hand-rolled `dpb` spelling) dodges the
+> Slice A `deposit-field`/`dpb` mix-up by construction. no-GC refuses it
+> outright beside `RATIONALIZE` (`NoGcWasmCompilerTest#rejectsLdbTest`): the
+> `ldb` expansion reads the bytespec cons back, which the scalar value model
+> has no representation for. Measured as a diff of failing ANSI test NAMES:
+> **numbers 220 -> 219 (LOGBITP.7 fixed), misc 38 -> 26 (12 fixed), 0
+> regressed**. Fixed misc: `MISC.23/.28/.33/.100/.111/.113/.114/.180/.234/
+> .358/.382` (all `LDB-TEST is undefined`) plus `MISC.131` as a knock-on
+> (explicitly PASS after, not a lost form). Pins:
+> `LispEvaluatorTest#evalLdbTest`,
+> `JvmLispCompilerTest#compileAndRunLdbTest`,
+> `WasmLispCompilerIntegrationTest#ldbTest` (via `compileAndRunPrelude`),
+> `NoGcWasmCompilerTest#rejectsLdbTest`, ci-spec `byte-ldb-test`.
+> WASM-GC pins stay in the exactly-representable range (small integers only).
+>
 > **Update 2026-09-15 (smalls landed: `float-sign`, `float-digits`):** the last
 > two unimplemented smalls ship as prelude defuns (`LispPreludeLibrary`, the
 > `decode-float` precedent -- one Lisp implementation on interpreter/JVM/WASM-GC,
@@ -292,8 +314,9 @@
 (2026-09-15, top banner); `float-sign`, `float-digits` (smalls, 2026-09-15,
 top banner).
 Open: the classified watch-list in the top banner (every item owned elsewhere:
-`.todo/213`, `.todo/715` §1, the `eql` signed zero, `ldb-test`, the
-`:description` driver gap). Full complex numbers and
+`.todo/213`, `.todo/715` §1, the `eql` signed zero, the `:description` driver
+gap). `ldb-test` left this list 2026-09-16 (`.todo/818`, above). Full complex
+numbers and
 time decomposition are niche (low priority).
 
 ## What's missing
