@@ -12313,7 +12313,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void readEvalPrintLoop() throws Exception {
-		String repl = "(setq form (read)) (while form (print (eval form)) (setq form (read)))";
+		String repl = "(setq form (read nil nil)) (while form (print (eval form)) (setq form (read nil nil)))";
 		assertThat(compileAndRunWithStdinFile(repl,
 				"(defun square (x) (* x x))\n(square 7)\n\n(mapcar #'square '(1 2 3))\n"))
 			.isEqualTo("SQUARE\n49\n(1 4 9)");

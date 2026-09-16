@@ -125,6 +125,28 @@ public final class LispLexer {
 		return new LispReadException(message, SourceLocation.at(this.file, offset, this.input));
 	}
 
+	/**
+	 * A {@link LispReadException} for a datum the input ran out in the middle of -- the
+	 * runtime {@code read} family turns it into an {@code end-of-file} condition rather
+	 * than a {@code reader-error}.
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException eof(String message) {
+		return eofAt(this.pos, message);
+	}
+
+	/**
+	 * A {@link LispReadException} for an unterminated construct, positioned at its
+	 * opening delimiter rather than at the end of input it ran into.
+	 * @param offset the character offset to report
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException eofAt(int offset, String message) {
+		return new LispReadException(message, SourceLocation.at(this.file, offset, this.input), true);
+	}
+
 	private static void add(List<LocatedToken> tokens, Token token, int offset) {
 		tokens.add(new LocatedToken(token, offset));
 	}
@@ -287,13 +309,28 @@ public final class LispLexer {
 				add(tokens, new Token.PathnameOpen(), tokenStart);
 				this.pos += 2;
 			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '<') {
+				// #< starts printed-unreadable syntax (#<FUNCTION ...>); it is never
+				// readable (CLHS 2.4.8), so refuse it instead of misreading it as a
+				// symbol.
+				throw err("#< is not readable");
+			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '*') {
 				// #*1010 is a bit-vector literal; #* alone is the empty bit vector
-				// (cl-ppcre's charmap slot default #*0).
+				// (cl-ppcre's charmap slot default #*0). A constituent character
+				// behind the bits (#*012) makes the whole token invalid rather than
+				// a vector followed by a number (the requireRadixTokenEnd rule).
 				int probe = this.pos + 2;
 				while (probe < this.input.length()
 						&& (this.input.charAt(probe) == '0' || this.input.charAt(probe) == '1')) {
 					probe++;
+				}
+				if (probe < this.input.length() && isSymbolChar(this.input.charAt(probe))) {
+					int tokenEnd = probe + 1;
+					while (tokenEnd < this.input.length() && isSymbolChar(this.input.charAt(tokenEnd))) {
+						tokenEnd++;
+					}
+					throw err("Invalid bit in bit-vector literal: " + this.input.substring(this.pos, tokenEnd));
 				}
 				add(tokens, new Token.BitVectorToken(this.input.substring(this.pos + 2, probe)), tokenStart);
 				this.pos = probe;
@@ -413,6 +450,49 @@ public final class LispLexer {
 					add(tokens, readRadixNumber(radix, probe + 1, this.input.substring(this.pos, probe + 1)),
 							tokenStart);
 				}
+				else if (probe < this.input.length() && this.input.charAt(probe) == '*') {
+					// #n*... is a bit-vector literal of length n (CLHS 2.4.8.4): the
+					// bits behind the '*' are 0/1 (a constituent behind them
+					// invalidates the whole token, the requireRadixTokenEnd rule),
+					// more bits than n is a read error, and fewer than n repeat the
+					// LAST bit to fill (#5*010 is 0 1 0 0 0). Zero bits with n > 0
+					// (#1* X) is a read error -- there is no last bit to repeat;
+					// #0* is the empty vector.
+					int length;
+					try {
+						length = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw err("Invalid bit-vector length: " + this.input.substring(this.pos, probe + 1));
+					}
+					int bitsStart = probe + 1;
+					int bitsEnd = bitsStart;
+					while (bitsEnd < this.input.length()
+							&& (this.input.charAt(bitsEnd) == '0' || this.input.charAt(bitsEnd) == '1')) {
+						bitsEnd++;
+					}
+					int tokenEnd = bitsEnd;
+					while (tokenEnd < this.input.length() && isSymbolChar(this.input.charAt(tokenEnd))) {
+						tokenEnd++;
+					}
+					String token = this.input.substring(this.pos, tokenEnd);
+					if (tokenEnd > bitsEnd) {
+						throw err("Invalid bit in bit-vector literal: " + token);
+					}
+					int given = bitsEnd - bitsStart;
+					if (given > length) {
+						throw err("Too many bits in bit-vector literal: " + token);
+					}
+					String bits = this.input.substring(bitsStart, bitsEnd);
+					if (given < length) {
+						if (given == 0) {
+							throw err("No bits in bit-vector literal: " + token);
+						}
+						bits = bits + String.valueOf(bits.charAt(bits.length() - 1)).repeat(length - given);
+					}
+					add(tokens, new Token.BitVectorToken(bits), tokenStart);
+					this.pos = bitsEnd;
+				}
 				else if (probe < this.input.length()
 						&& (this.input.charAt(probe) == '=' || this.input.charAt(probe) == '#')) {
 					// #n= labels the next datum, #n# references it. The label is kept as
@@ -437,6 +517,25 @@ public final class LispLexer {
 					// followed by a digit always starts a number, so "(a .5)" reads as
 					// (A 0.5) -- a dotted pair must spell the dot bare, "(a . 5)".
 					add(tokens, readNumber(), tokenStart);
+				}
+				else if (this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
+					// A run of dots with nothing else in the token is not a symbol
+					// (CLHS 2.3.1): one Dot token per dot, so the reader refuses it
+					// wherever a datum is expected (.., ...). Dots glued to other
+					// characters (..a, ..4) or to escapes (..||) stay a symbol.
+					int run = this.pos + 1;
+					while (run < this.input.length() && this.input.charAt(run) == '.') {
+						run++;
+					}
+					if (run >= this.input.length() || !isSymbolChar(this.input.charAt(run))) {
+						while (this.pos < run) {
+							add(tokens, new Token.Dot(), this.pos);
+							this.pos++;
+						}
+					}
+					else {
+						add(tokens, readSymbol(), tokenStart);
+					}
 				}
 				else if (this.pos + 1 >= this.input.length() || !isSymbolChar(this.input.charAt(this.pos + 1))) {
 					add(tokens, new Token.Dot(), tokenStart);
@@ -741,7 +840,7 @@ public final class LispLexer {
 		int literalStart = this.pos;
 		this.pos += 2; // skip "#\"
 		if (this.pos >= this.input.length()) {
-			throw errAt(literalStart, "Unexpected end of input after #\\");
+			throw eofAt(literalStart, "Unexpected end of input after #\\");
 		}
 		int start = this.pos;
 		char first = this.input.charAt(this.pos);
@@ -801,6 +900,13 @@ public final class LispLexer {
 		// The reader upcases unescaped characters like CL's :upcase readtable case
 		// -- escaped ones stay verbatim. There is no fold to a lowercase canonical
 		// spelling: the uppercase name IS canonical (foo and FOO both read as FOO).
+		int start = this.pos;
+		// CLHS 2.4.8.5: an uninterned symbol must not name a package -- the check
+		// below watches for an UNESCAPED colon behind the #: prefix, so #:|a:b|
+		// and #:a\:b stay the symbols they are (their colons are escaped).
+		boolean hashColonPrefix = this.pos + 1 < this.input.length() && this.input.charAt(this.pos) == '#'
+				&& this.input.charAt(this.pos + 1) == ':';
+		boolean unescapedColon = false;
 		StringBuilder sb = new StringBuilder();
 		while (this.pos < this.input.length()) {
 			char c = this.input.charAt(this.pos);
@@ -808,6 +914,10 @@ public final class LispLexer {
 				sb.append(this.input.charAt(this.pos + 1));
 				this.pos += 2;
 				continue;
+			}
+			if (c == '\\') {
+				// A single escape with nothing behind it: the token is incomplete.
+				throw eof("Unexpected end of input after \\");
 			}
 			if (c == '|') {
 				int escapeStart = this.pos;
@@ -823,7 +933,7 @@ public final class LispLexer {
 					this.pos++;
 				}
 				if (this.pos >= this.input.length()) {
-					throw errAt(escapeStart, "Unterminated |...| symbol escape");
+					throw eofAt(escapeStart, "Unterminated |...| symbol escape");
 				}
 				this.pos++; // closing |
 				continue;
@@ -831,8 +941,14 @@ public final class LispLexer {
 			if (!isSymbolChar(c)) {
 				break;
 			}
+			if (c == ':' && hashColonPrefix && sb.length() >= 2) {
+				unescapedColon = true;
+			}
 			sb.append(Character.toUpperCase(c));
 			this.pos++;
+		}
+		if (unescapedColon) {
+			throw err("Package marker in uninterned symbol: " + this.input.substring(start, this.pos));
 		}
 		return new Token.SymbolToken(sb.toString());
 	}
@@ -870,7 +986,7 @@ public final class LispLexer {
 			this.pos++;
 		}
 		if (this.pos >= this.input.length()) {
-			throw errAt(start, "Unterminated string literal");
+			throw eofAt(start, "Unterminated string literal");
 		}
 		this.pos++; // skip closing "
 		return new Token.StringToken(sb.toString());
@@ -915,7 +1031,7 @@ public final class LispLexer {
 	private LispVal readFeatureExpr() {
 		skipInterTokenSpace();
 		if (this.pos >= this.input.length()) {
-			throw err("Unexpected end of input in feature expression");
+			throw eof("Unexpected end of input in feature expression");
 		}
 		char c = this.input.charAt(this.pos);
 		if (c == '(') {
@@ -924,7 +1040,7 @@ public final class LispLexer {
 			while (true) {
 				skipInterTokenSpace();
 				if (this.pos >= this.input.length()) {
-					throw err("Unexpected end of input in feature expression, expected ')'");
+					throw eof("Unexpected end of input in feature expression, expected ')'");
 				}
 				if (this.input.charAt(this.pos) == ')') {
 					this.pos++;
@@ -988,7 +1104,7 @@ public final class LispLexer {
 				this.pos++;
 			}
 		}
-		throw errAt(start, "Unterminated block comment");
+		throw eofAt(start, "Unterminated block comment");
 	}
 
 	// Re-lexes a #. datum that was skipped at the raw character level. Returns null when
@@ -1056,7 +1172,7 @@ public final class LispLexer {
 				if (consumedConditional) {
 					return;
 				}
-				throw err("Unexpected end of input, expected a form to skip");
+				throw eof("Unexpected end of input, expected a form to skip");
 			}
 			if (this.input.charAt(this.pos) == ')') {
 				// A failing conditional guarded the last form(s) before ')': the nested
@@ -1221,7 +1337,7 @@ public final class LispLexer {
 				this.pos++;
 			}
 		}
-		throw errAt(start, "Unexpected end of input in a skipped form, expected ')'");
+		throw eofAt(start, "Unexpected end of input in a skipped form, expected ')'");
 	}
 
 	private void skipStringRaw() {
@@ -1234,7 +1350,7 @@ public final class LispLexer {
 			this.pos++;
 		}
 		if (this.pos >= this.input.length()) {
-			throw errAt(start, "Unterminated string literal");
+			throw eofAt(start, "Unterminated string literal");
 		}
 		this.pos++; // skip closing "
 	}
@@ -1249,7 +1365,7 @@ public final class LispLexer {
 		int start = this.pos;
 		this.pos = backslashPos + 1;
 		if (this.pos >= this.input.length()) {
-			throw errAt(start, "Unexpected end of input after #\\");
+			throw eofAt(start, "Unexpected end of input after #\\");
 		}
 		this.pos++;
 		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {

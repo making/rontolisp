@@ -1014,9 +1014,11 @@ class LispEvaluatorTest {
 
 	@Test
 	void readAtEndOfInputAnswersTheEofValueAndSignalsWhenAsked() {
-		// The lite convention read-line keeps: nil rather than a signal, unless
-		// eof-error-p is explicitly non-nil.
-		assertThat(eval("(with-input-from-string (s \"\") (read s))")).isEqualTo(LispNil.INSTANCE);
+		// CL's default: eof-error-p is t, so a bare read signals end-of-file at
+		// end of input (.todo/807); an explicit nil still answers the eof-value.
+		assertThat(eval("""
+				(handler-case (with-input-from-string (s "") (read s))
+				  (end-of-file () :caught))""").print()).isEqualTo(":CAUGHT");
 		assertThat(eval("(with-input-from-string (s \"\") (read s nil :done))").print()).isEqualTo(":DONE");
 		assertThat(eval("""
 				(handler-case (with-input-from-string (s "") (read s t))
@@ -9753,7 +9755,10 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalReadEof() {
-		assertThat(evalWithStdin("(read)", "")).isEqualTo(LispNil.INSTANCE);
+		// eof-error-p defaults to t, so a bare read at end of input signals
+		// end-of-file (.todo/807); an explicit nil answers the eof-value.
+		assertThat(evalWithStdin("(handler-case (read) (end-of-file () :caught))", "").print()).isEqualTo(":CAUGHT");
+		assertThat(evalWithStdin("(read nil nil :done)", "")).isEqualTo(new LispSymbol(":DONE"));
 	}
 
 	@Test
@@ -13301,7 +13306,7 @@ class LispEvaluatorTest {
 				  (write-line (prin1-to-string (list 10 20 30)) out)
 				  (write-line (prin1-to-string 99) out))
 				(with-open-file (in "%s")
-				  (list (read in) (read in) (read in)))
+				  (list (read in) (read in) (read in nil nil)))
 				""".formatted(file, file));
 		assertThat(result.print()).isEqualTo("((10 20 30) 99 NIL)");
 	}
@@ -16319,6 +16324,81 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("(\"Unknown character name: #\\\\Foo\" \"Invalid digits after #x: ZZ\" "
 				+ "\"#S(NOSUCH ...): NOSUCH is not a defined structure type\" "
 				+ "\"#S(POINT ...): POINT has no slot named :Z\" \"Division by zero in ratio literal: 1/0\")");
+	}
+
+	@Test
+	void runtimeReadErrorsAreTypedReaderConditions() {
+		// .todo/807: a runtime read error is a CONDITION the suite can catch --
+		// reader-error for a bad token, end-of-file for input that ran out
+		// mid-datum -- and the condition carries a stream stream-error-stream
+		// reads back (what signals-error checks streamp of).
+		assertThat(evalMulti("""
+				(list
+				  (handler-case (read-from-string ".") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "..") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "...") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string ",") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "1/0") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "#:a:b") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "#<") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "#1* X") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "#2*011") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "#*012") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string ")") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "(1 .. 2)") (reader-error () :reader) (error () :other))
+				  (handler-case (read-from-string "#.") (end-of-file () :eof) (error () :other))
+				  (handler-case (read-from-string "#'") (end-of-file () :eof) (error () :other))
+				  (handler-case (read-from-string "#(") (end-of-file () :eof) (error () :other))
+				  (handler-case (read-from-string "\\\\") (end-of-file () :eof) (error () :other))
+				  (handler-case (read-from-string "|") (end-of-file () :eof) (error () :other))
+				  (handler-case (read-from-string "\\"abc") (end-of-file () :eof) (error () :other))
+				  (handler-case (read-from-string "(a b") (end-of-file () :eof) (error () :other))
+				  (handler-case (read-from-string "") (end-of-file () :eof) (error () :other))
+				  ;; reader-error is both a parse-error and a stream-error; end-of-file
+				  ;; is a stream-error but not a reader-error.
+				  (handler-case (read-from-string ".") (parse-error () :parse) (error () :other))
+				  (handler-case (read-from-string ".") (stream-error () :stream) (error () :other))
+				  (handler-case (read-from-string "#'") (stream-error () :stream) (error () :other))
+				  (handler-case (read-from-string "#'") (reader-error () :wrong) (end-of-file () :eof))
+				  (handler-case (read-from-string ".") (end-of-file () :wrong) (reader-error () :reader))
+				  ;; the stream slot holds a stream, the message survives.
+				  (handler-case (read-from-string ".") (reader-error (c) (streamp (stream-error-stream c))))
+				  (handler-case (read-from-string "#'") (end-of-file (c) (streamp (stream-error-stream c))))
+				  (handler-case (read-from-string ".")
+				    (reader-error (c) (simple-condition-format-control c)))
+				  ;; read on a stream inherits the typed conditions; eof-error-p
+				  ;; defaults to t, an explicit nil still answers the eof-value.
+				  (handler-case (with-input-from-string (s "") (read s)) (end-of-file () :eof))
+				  (handler-case (with-input-from-string (s "(") (read s nil)) (end-of-file () :eof))
+				  (with-input-from-string (s "") (read s nil 'foo))
+				  ;; #. under a nil *read-eval* is a reader-error, not a plain error.
+				  (handler-case (let ((*read-eval* nil)) (read-from-string "#.1"))
+				    (reader-error () :reader) (error () :other)))
+				""").print()).isEqualTo("(:READER :READER :READER :READER :READER :READER :READER :READER :READER "
+				+ ":READER :READER :READER :EOF :EOF :EOF :EOF :EOF :EOF :EOF :EOF :PARSE :STREAM :STREAM :EOF "
+				+ ":READER T T \"Unexpected '.'\" :EOF :EOF FOO :READER)");
+	}
+
+	@Test
+	void uninternedSymbolWithAColonPrintsEscapedAndReadsBack() {
+		// A colon in an uninterned member must be |...|-escaped: a bare one behind
+		// #: is a package marker the reader refuses (CLHS 2.4.8.5), so the printer
+		// spells it escaped and the spelling reads back (.todo/807).
+		assertThat(evalMulti("""
+				(list (prin1-to-string (make-symbol ":"))
+				      (symbol-name (read-from-string (prin1-to-string (make-symbol ":"))))
+				      (prin1-to-string (make-symbol "a:b")))
+				""").print()).isEqualTo("(\"#:|:|\" \":\" \"#:|a:b|\")");
+	}
+
+	@Test
+	void runtimeReadSharpNStarFillsByRepeatingTheLastBit() {
+		// CLHS 2.4.8.4 through the runtime reader: fewer bits than n repeat the
+		// last bit, #0* is empty.
+		assertThat(evalMulti("""
+				(list (read-from-string "#1*0") (read-from-string "#2*1") (read-from-string "#5*010")
+				      (read-from-string "#10*01") (read-from-string "#0*"))
+				""").print()).isEqualTo("(#*0 #*11 #*01000 #*0111111111 #*)");
 	}
 
 	@Test

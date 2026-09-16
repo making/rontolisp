@@ -544,6 +544,9 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.UNBOUND_SLOT_INSTANCE, """
 				(defun unbound-slot-instance (condition) (slot-value condition 'instance))
 				""");
+		SOURCES.put(LispNames.STREAM_ERROR_STREAM, """
+				(defun stream-error-stream (condition) (slot-value condition 'stream))
+				""");
 		// Undoes the |...|-framing todo 626 gave prin1-to-string's spelling of a symbol
 		// whose name is not upcase-invariant. type-of and symbol-package both read a
 		// KNOWN internal tag's prefix or a qualifier's colon off prin1-to-string's text
@@ -3289,7 +3292,7 @@ public final class LispPreludeLibrary {
 		// the index would ride out of read's tail through the spill and surface as a
 		// second value of every (read s).
 		SOURCES.put(LispNames.READ, """
-				(defun read (&optional stream eof-error-p eof-value recursive-p)
+				(defun read (&optional stream (eof-error-p t) eof-value recursive-p)
 				  (let ((%rd-out (make-string-output-stream)))
 				    (if (%rd-datum stream %rd-out)
 				        (let ((%rd-text (get-output-stream-string %rd-out)))
@@ -3300,7 +3303,7 @@ public final class LispPreludeLibrary {
 				          (values (read-from-string %rd-text)))
 				        (progn
 				          (close %rd-out)
-				          (if eof-error-p (error 'end-of-file) eof-value)))))
+				          (if eof-error-p (error 'end-of-file :stream (or stream *standard-input*)) eof-value)))))
 				""");
 		SOURCES.put(LispNames.RD_DATUM, """
 				(defun %rd-datum (%rd-s %rd-out)
@@ -3312,19 +3315,22 @@ public final class LispPreludeLibrary {
 				  (cond
 				    ((char= %rd-c #\\() (write-char %rd-c %rd-out) (%rd-list %rd-s %rd-out) t)
 				    ((char= %rd-c #\\") (write-char %rd-c %rd-out) (%rd-string %rd-s %rd-out) t)
-				    ((char= %rd-c #\\)) (error "Unexpected ')'"))
+				    ((char= %rd-c #\\)) (error 'reader-error :format-control "Unexpected ')'"
+				                                  :stream (or %rd-s *standard-input*)))
 				    ((char= %rd-c #\\#) (%rd-sharp %rd-s %rd-out))
 				    ((or (char= %rd-c #\\') (char= %rd-c #\\`))
 				     (write-char %rd-c %rd-out)
-				     (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input")))
+				     (or (%rd-datum %rd-s %rd-out)
+				         (error 'end-of-file :stream (or %rd-s *standard-input*))))
 				    ((char= %rd-c #\\,)
 				     (write-char %rd-c %rd-out)
 				     (let ((%rd-d (read-char %rd-s nil nil)))
-				       (cond ((null %rd-d) (error "Unexpected end of input"))
+				       (cond ((null %rd-d) (error 'end-of-file :stream (or %rd-s *standard-input*)))
 				             ((or (char= %rd-d #\\@) (char= %rd-d #\\.))
 				              (write-char %rd-d %rd-out))
 				             (t (unread-char %rd-d %rd-s)))
-				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input"))))
+				       (or (%rd-datum %rd-s %rd-out)
+				           (error 'end-of-file :stream (or %rd-s *standard-input*)))))
 				    (t (write-char %rd-c %rd-out)
 				       (cond ((char= %rd-c #\\|) (%rd-bars %rd-s %rd-out))
 				             ((char= %rd-c #\\\\)
@@ -3338,25 +3344,29 @@ public final class LispPreludeLibrary {
 				(defun %rd-sharp (%rd-s %rd-out)
 				  (let ((%rd-d (read-char %rd-s nil nil)))
 				    (cond
-				      ((null %rd-d) (error "Unexpected end of input after #"))
+				      ((null %rd-d) (error 'end-of-file :stream (or %rd-s *standard-input*)))
 				      ((char= %rd-d #\\|) (%rd-block-comment %rd-s) (%rd-datum %rd-s %rd-out))
 				      ((char= %rd-d #\\\\)
 				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
 				       (%rd-char-literal %rd-s %rd-out))
 				      ((char= %rd-d #\\')
 				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
-				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input")))
+				       (or (%rd-datum %rd-s %rd-out)
+				           (error 'end-of-file :stream (or %rd-s *standard-input*))))
 				      ((char= %rd-d #\\()
 				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
 				       (%rd-list %rd-s %rd-out) t)
 				      ((or (char= %rd-d #\\+) (char= %rd-d #\\-))
 				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
-				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input"))
+				       (or (%rd-datum %rd-s %rd-out)
+				           (error 'end-of-file :stream (or %rd-s *standard-input*)))
 				       (write-char #\\Space %rd-out)
-				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input")))
+				       (or (%rd-datum %rd-s %rd-out)
+				           (error 'end-of-file :stream (or %rd-s *standard-input*))))
 				      ((char= %rd-d #\\.)
 				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
-				       (or (%rd-datum %rd-s %rd-out) (error "Unexpected end of input")))
+				       (or (%rd-datum %rd-s %rd-out)
+				           (error 'end-of-file :stream (or %rd-s *standard-input*))))
 				      (t
 				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
 				       (%rd-token-rest %rd-s %rd-out)
@@ -3374,7 +3384,7 @@ public final class LispPreludeLibrary {
 				      ((= %rd-depth 0) nil)
 				    (let ((%rd-c (read-char %rd-s nil nil)))
 				      (cond
-				        ((null %rd-c) (error "Unexpected end of input, expected ')'"))
+				        ((null %rd-c) (error 'end-of-file :stream (or %rd-s *standard-input*)))
 				        ((char= %rd-c #\\()
 				         (write-char %rd-c %rd-out) (setq %rd-depth (+ %rd-depth 1)))
 				        ((char= %rd-c #\\))
@@ -3392,13 +3402,13 @@ public final class LispPreludeLibrary {
 				        ((char= %rd-c #\\#)
 				         (let ((%rd-d (read-char %rd-s nil nil)))
 				           (cond
-				             ((null %rd-d) (error "Unexpected end of input, expected ')'"))
+				             ((null %rd-d) (error 'end-of-file :stream (or %rd-s *standard-input*)))
 				             ((char= %rd-d #\\|) (%rd-block-comment %rd-s))
 				             ((char= %rd-d #\\\\)
 				              (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)
 				              (let ((%rd-e (read-char %rd-s nil nil)))
 				                (if (null %rd-e)
-				                    (error "Unexpected end of input after #\\\\")
+				                    (error 'end-of-file :stream (or %rd-s *standard-input*))
 				                    (write-char %rd-e %rd-out))))
 				             ((char= %rd-d #\\()
 				              (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)
@@ -3411,13 +3421,13 @@ public final class LispPreludeLibrary {
 				  (do ((%rd-c (read-char %rd-s nil nil) (read-char %rd-s nil nil)))
 				      ((or (null %rd-c) (char= %rd-c #\\"))
 				       (if (null %rd-c)
-				           (error "Unterminated string literal")
+				           (error 'end-of-file :stream (or %rd-s *standard-input*))
 				           (write-char %rd-c %rd-out)))
 				    (write-char %rd-c %rd-out)
 				    (when (char= %rd-c #\\\\)
 				      (let ((%rd-e (read-char %rd-s nil nil)))
 				        (if (null %rd-e)
-				            (error "Unterminated string literal")
+				            (error 'end-of-file :stream (or %rd-s *standard-input*))
 				            (write-char %rd-e %rd-out))))))
 				""");
 		SOURCES.put(LispNames.RD_BARS, """
@@ -3425,7 +3435,7 @@ public final class LispPreludeLibrary {
 				  (do ((%rd-c (read-char %rd-s nil nil) (read-char %rd-s nil nil)))
 				      ((or (null %rd-c) (char= %rd-c #\\|))
 				       (if (null %rd-c)
-				           (error "Unterminated |...| symbol escape")
+				           (error 'end-of-file :stream (or %rd-s *standard-input*))
 				           (write-char %rd-c %rd-out)))
 				    (write-char %rd-c %rd-out)
 				    (when (char= %rd-c #\\\\)
@@ -3448,7 +3458,7 @@ public final class LispPreludeLibrary {
 				(defun %rd-char-literal (%rd-s %rd-out)
 				  (let ((%rd-c (read-char %rd-s nil nil)))
 				    (if (null %rd-c)
-				        (error "Unexpected end of input after #\\\\")
+				        (error 'end-of-file :stream (or %rd-s *standard-input*))
 				        (progn (write-char %rd-c %rd-out)
 				               (when (alpha-char-p %rd-c) (%rd-token-rest %rd-s %rd-out))
 				               t))))
@@ -3459,15 +3469,15 @@ public final class LispPreludeLibrary {
 				      ((= %rd-depth 0) nil)
 				    (let ((%rd-c (read-char %rd-s nil nil)))
 				      (cond
-				        ((null %rd-c) (error "Unterminated block comment"))
+				        ((null %rd-c) (error 'end-of-file :stream (or %rd-s *standard-input*)))
 				        ((char= %rd-c #\\|)
 				         (let ((%rd-d (read-char %rd-s nil nil)))
-				           (cond ((null %rd-d) (error "Unterminated block comment"))
+				           (cond ((null %rd-d) (error 'end-of-file :stream (or %rd-s *standard-input*)))
 				                 ((char= %rd-d #\\#) (setq %rd-depth (- %rd-depth 1)))
 				                 (t (unread-char %rd-d %rd-s)))))
 				        ((char= %rd-c #\\#)
 				         (let ((%rd-d (read-char %rd-s nil nil)))
-				           (cond ((null %rd-d) (error "Unterminated block comment"))
+				           (cond ((null %rd-d) (error 'end-of-file :stream (or %rd-s *standard-input*)))
 				                 ((char= %rd-d #\\|) (setq %rd-depth (+ %rd-depth 1)))
 				                 (t (unread-char %rd-d %rd-s)))))
 				        (t nil)))))

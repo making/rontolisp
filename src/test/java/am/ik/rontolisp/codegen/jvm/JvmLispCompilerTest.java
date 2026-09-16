@@ -12117,7 +12117,11 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReadEof() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (null (read)))", "")).isEqualTo("T");
+		// eof-error-p defaults to t (.todo/807), so a bare read at end of input
+		// signals end-of-file; an explicit nil still answers the eof-value.
+		assertThat(compileAndRunWithStdin("(print (null (read nil nil)))", "")).isEqualTo("T");
+		assertThat(compileAndRunWithStdin("(print (handler-case (read) (end-of-file () :caught)))", ""))
+			.isEqualTo(":CAUGHT");
 	}
 
 	@Test
@@ -12143,7 +12147,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReadEvalPrintLoop() throws Exception {
-		String repl = "(setq form (read)) (while form (print (eval form)) (setq form (read)))";
+		String repl = "(setq form (read nil nil)) (while form (print (eval form)) (setq form (read nil nil)))";
 		assertThat(
 				compileAndRunWithStdin(repl, "(defun square (x) (* x x))\n(square 7)\n\n(mapcar #'square '(1 2 3))\n"))
 			.isEqualTo("SQUARE\n49\n(1 4 9)");

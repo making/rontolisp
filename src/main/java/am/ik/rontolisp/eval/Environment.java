@@ -5453,6 +5453,13 @@ public final class Environment implements Scope {
 			}
 			return LispNil.INSTANCE;
 		};
+		// The stream an end-of-file condition carries: the designator as passed, or t
+		// for the standard input an absent/nil designator means -- so
+		// stream-error-stream answers what the suite checks streamp of.
+		java.util.function.Function<List<LispVal>, LispVal> eofStream = args -> {
+			LispVal first = args.isEmpty() ? null : args.get(0);
+			return (first == null || first instanceof LispNil) ? LispTrue.INSTANCE : first;
+		};
 		env.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
 			// (read-line &optional stream eof-error-p eof-value): rontolisp lite
 			// defaults eof-error-p to NIL (returns eof-value / nil at EOF) rather than
@@ -5510,7 +5517,7 @@ public final class Environment implements Scope {
 				boolean eofError = args.size() >= 2 && args.get(1) != LispNil.INSTANCE
 						&& !(args.get(1) instanceof LispSymbol sym && "NIL".equals(sym.name()));
 				if (eofError) {
-					throw endOfFile();
+					throw endOfFile(eofStream.apply(args));
 				}
 				return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 			}
@@ -5551,7 +5558,7 @@ public final class Environment implements Scope {
 		java.util.function.Function<List<LispVal>, LispVal> charEof = args -> {
 			boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
 			if (eofError) {
-				throw endOfFile();
+				throw endOfFile(eofStream.apply(args));
 			}
 			return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 		};
@@ -5752,7 +5759,7 @@ public final class Environment implements Scope {
 			if (b < 0) {
 				boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
 				if (eofError) {
-					throw endOfFile();
+					throw endOfFile(eofStream.apply(args));
 				}
 				return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 			}
@@ -6210,12 +6217,23 @@ public final class Environment implements Scope {
 		// resolver evaluates each marker in place -- CL's read under a true *read-eval*
 		// (the resolver itself signals when *read-eval* is bound nil). A bare Environment
 		// keeps the error-mode read, matching the compiled backends' embedded readers.
+		// An input holding no datum at all (empty, whitespace/comments only, or
+		// everything #+/#- suppressed away) is end of file, like CL's read: the
+		// read is through readAll (whose first datum readFromString answers), so a
+		// literal nil still reads as nil and only a missing datum signals.
 		java.util.function.Function<String, LispVal> readRuntimeDatum = input -> {
 			if (env.readTimeEvalResolver != null && input.contains("#.")) {
-				return env.readTimeEvalResolver
-					.apply(LispReader.readFromStringWithReadEvalMarkers(input, env.currentReadFeatures()));
+				java.util.List<LispVal> exprs = LispReader.readAllWithReadEvalMarkers(input, env.currentReadFeatures());
+				if (exprs.isEmpty()) {
+					throw endOfFile(errorStream(streams, nextStreamHandle, input));
+				}
+				return env.readTimeEvalResolver.apply(exprs.get(0));
 			}
-			return LispReader.readFromString(input, env.currentReadFeatures());
+			java.util.List<LispVal> exprs = LispReader.readAllFromString(input, env.currentReadFeatures());
+			if (exprs.isEmpty()) {
+				throw endOfFile(errorStream(streams, nextStreamHandle, input));
+			}
+			return exprs.get(0);
 		};
 		// read itself is NOT here: it is prelude rontolisp over read-char /
 		// unread-char / read-from-string (LispPreludeLibrary), so one definition
@@ -8433,10 +8451,27 @@ public final class Environment implements Scope {
 	 * {@code (handler-case ... (end-of-file (e) ...))} around a reader loop fires -- the
 	 * shape real CL lexers are written in. The compiled backends reach the same class
 	 * through {@code LispMacroExpander.expandReadEofSignal}, so the message and the
-	 * catchable type are identical everywhere.
+	 * catchable type are identical everywhere. The condition carries the offending stream
+	 * (what {@code stream-error-stream} reads back).
+	 * @param stream the stream the read ran out on
 	 */
-	private static LispEvalException endOfFile() {
-		return new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE, ClosRegistry.newEndOfFileCondition());
+	private static LispEvalException endOfFile(LispVal stream) {
+		return new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE, ClosRegistry.newEndOfFileCondition(stream));
+	}
+
+	/**
+	 * A string-input stream value over the given text, for the {@code stream} slot of a
+	 * runtime-read condition -- what a {@code read-from-string} failure hands
+	 * {@code stream-error-stream}, since the string itself is not a stream.
+	 * @param streams the stream table
+	 * @param nextStreamHandle the handle allocator
+	 * @param input the offending text
+	 * @return the stream value
+	 */
+	private static LispVal errorStream(Map<Long, Closeable> streams, AtomicLong nextStreamHandle, String input) {
+		long handle = nextStreamHandle.getAndIncrement();
+		streams.put(handle, new BufferedReader(new StringReader(input)));
+		return streamValue(handle, LispLayout.Kinds.STRING_INPUT);
 	}
 
 	/**

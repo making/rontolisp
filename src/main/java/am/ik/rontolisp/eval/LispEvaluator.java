@@ -3783,18 +3783,77 @@ public final class LispEvaluator {
 			return;
 		}
 		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			LispVal value;
 			try {
-				return StructLiteralFolder.fold(raw.body().apply(args), this.closRegistry);
+				value = raw.body().apply(args);
 			}
-			catch (am.ik.rontolisp.reader.LispReadException | IllegalArgumentException e) {
-				// A runtime read error is a catchable condition (CL's reader-error is an
-				// error subtype): without this conversion a bad datum handed to
-				// read/read-from-string would blow through handler-case as a raw Java
-				// exception, while the compiled backends' emitted readers signal a
-				// catchable simple-error -- the same parity contract the reader follows.
+			catch (am.ik.rontolisp.reader.LispReadException e) {
+				// A runtime read error is a catchable condition: input that ran out
+				// mid-datum is end-of-file, a bad token is reader-error (CLHS 23.1).
+				// Without this conversion a bad datum handed to read/read-from-string
+				// would blow through handler-case as a raw Java exception. The
+				// compiled backends' emitted readers signal a catchable simple-error
+				// for the same input instead (.kb/read-load-streams.md).
+				throw e.isEndOfFile() ? readEndOfFile(args) : readError(String.valueOf(e.getMessage()), args);
+			}
+			catch (IllegalArgumentException e) {
 				throw new LispEvalException(String.valueOf(e.getMessage()));
 			}
+			catch (LispEvalException e) {
+				// The #. resolver's *read-eval*-nil refusal arrives typed as
+				// reader-error but streamless; give it the stream like any other
+				// runtime-read failure. Anything else passes through untouched.
+				if (e.condition() == null && ClosRegistry.READER_ERROR_CLASS_NAME.equals(e.conditionClassName())) {
+					throw readError(String.valueOf(e.getMessage()), args);
+				}
+				throw e;
+			}
+			try {
+				return StructLiteralFolder.fold(value, this.closRegistry);
+			}
+			catch (IllegalArgumentException e) {
+				// A #S(...) the fold refuses (unknown type, bad slot) is a
+				// reader-error like any other malformed runtime datum.
+				throw readError(String.valueOf(e.getMessage()), args);
+			}
 		}));
+	}
+
+	/**
+	 * The {@code reader-error} condition for a malformed runtime-read datum, carrying the
+	 * frontend's message and a string-input stream over the offending text (what
+	 * {@code stream-error-stream} reads back).
+	 * @param message the frontend's message
+	 * @param args the {@code read-from-string} call's arguments
+	 */
+	private LispEvalException readError(String message, List<LispVal> args) {
+		return new LispEvalException(message,
+				ClosRegistry.newReaderErrorCondition(new LispString(message), readErrorStream(args)));
+	}
+
+	/**
+	 * The {@code end-of-file} condition for a runtime read that ran out of input,
+	 * carrying a string-input stream over the offending text.
+	 * @param args the {@code read-from-string} call's arguments
+	 */
+	private LispEvalException readEndOfFile(List<LispVal> args) {
+		return new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE,
+				ClosRegistry.newEndOfFileCondition(readErrorStream(args)));
+	}
+
+	/**
+	 * A string-input stream value over the text a runtime read failed on -- the
+	 * {@code stream} slot of its condition. Built through the
+	 * {@code make-string-input-stream} built-in, so the value is exactly what user code
+	 * holding such a stream holds.
+	 * @param args the {@code read-from-string} call's arguments
+	 */
+	private LispVal readErrorStream(List<LispVal> args) {
+		if (!args.isEmpty() && args.get(0) instanceof LispString text && this.globalEnv
+			.lookupFunctionOrNull(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL) instanceof LispFunction make) {
+			return make.body().apply(List.of(text));
+		}
+		return LispNil.INSTANCE;
 	}
 
 	/**
@@ -3810,7 +3869,10 @@ public final class LispEvaluator {
 						? this.dynamicBindings.get(LispNames.READ_EVAL_VAR)
 						: this.globalEnv.lookupOrNull(LispNames.READ_EVAL_VAR);
 		if (value instanceof LispNil) {
-			throw new LispEvalException("cannot read #. while *read-eval* is nil");
+			// A reader-error (not a plain error): the runtime read's fold gives it
+			// the offending stream on the way out.
+			throw LispEvalException.ofClass(ClosRegistry.READER_ERROR_CLASS_NAME,
+					"cannot read #. while *read-eval* is nil");
 		}
 	}
 

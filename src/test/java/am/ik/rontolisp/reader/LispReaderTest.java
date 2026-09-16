@@ -456,11 +456,13 @@ class LispReaderTest {
 
 	@Test
 	void aLoneDotStillMeansDottedPair() {
-		// The boundaries the number scan must not steal: the dotted-pair marker,
-		// "...", and bare signs stay non-numeric.
+		// The boundaries the number scan must not steal: the dotted-pair marker and
+		// bare signs stay non-numeric. A token of only dots is NOT a symbol (CLHS
+		// 2.3.1 -- see readDotOnlyTokensAreDotsNotSymbols); it is refused wherever
+		// a datum is expected.
 		LispVal dotted = LispReader.readFromString("(1 . 2)");
 		assertThat(((LispCons) dotted).cdr()).isEqualTo(new LispInteger(2));
-		assertThat(LispReader.readFromString("...")).isInstanceOf(LispSymbol.class);
+		assertThatThrownBy(() -> LispReader.readFromString("...")).isInstanceOf(LispReadException.class);
 		assertThat(LispReader.readFromString("+")).isInstanceOf(LispSymbol.class);
 		assertThat(LispReader.readFromString("-")).isInstanceOf(LispSymbol.class);
 	}
@@ -1113,6 +1115,76 @@ class LispReaderTest {
 		assertThat(vector.data()[2]).isSameAs(vector);
 		// A label that stands for nothing but itself has no datum to record.
 		assertThatThrownBy(() -> LispReader.readFromString("#1=#1#")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
+	void readSharpNStarRepeatsTheLastBitToFill() {
+		// CLHS 2.4.8.4: fewer bits than n repeat the LAST bit (#2*1 is 1 1, not 1
+		// 0); #0* is the empty vector.
+		assertThat(LispReader.readFromString("#1*0").print()).isEqualTo("#*0");
+		assertThat(LispReader.readFromString("#2*1").print()).isEqualTo("#*11");
+		assertThat(LispReader.readFromString("#5*010").print()).isEqualTo("#*01000");
+		assertThat(LispReader.readFromString("#7*0101").print()).isEqualTo("#*0101111");
+		assertThat(LispReader.readFromString("#10*01").print()).isEqualTo("#*0111111111");
+		assertThat(LispReader.readFromString("#0*").print()).isEqualTo("#*");
+		// Zero bits with n > 0 has no last bit to repeat, more bits than n do not
+		// fit, and a constituent behind the bits invalidates the whole token --
+		// none of them is a symbol plus a leftover.
+		assertThatThrownBy(() -> LispReader.readFromString("#1* X")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No bits");
+		assertThatThrownBy(() -> LispReader.readFromString("#2*011")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Too many bits");
+		assertThatThrownBy(() -> LispReader.readFromString("#*012")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid bit");
+		for (String bad : new String[] { "#1* X", "#2*011", "#*012" }) {
+			LispReadException ex = catchThrowableOfType(() -> LispReader.readFromString(bad), LispReadException.class);
+			assertThat(ex.isEndOfFile()).isFalse();
+		}
+	}
+
+	@Test
+	void readDotOnlyTokensAreDotsNotSymbols() {
+		// CLHS 2.3.1: a token of only dots is not a symbol -- the reader refuses it
+		// wherever a datum is expected, while dots glued to other characters stay
+		// symbols.
+		for (String bad : new String[] { "..", "...", "(1 ..)", "(1 .. 2)", "#(1 . 2)" }) {
+			LispReadException ex = catchThrowableOfType(() -> LispReader.readFromString(bad), LispReadException.class);
+			assertThat(ex.isEndOfFile()).isFalse();
+		}
+		assertThat(LispReader.readFromString("..a")).isEqualTo(new LispSymbol("..A"));
+	}
+
+	@Test
+	void readUninternedSymbolsMustNotNameAPackage() {
+		// CLHS 2.4.8.5: #:a:b is a read error, while an ESCAPED colon stays a
+		// symbol (#:|a:b| and #:a\:b read).
+		LispReadException ex = catchThrowableOfType(() -> LispReader.readFromString("#:a:b"), LispReadException.class);
+		assertThat(ex.isEndOfFile()).isFalse();
+		assertThat(((LispSymbol) LispReader.readFromString("#:|a:b|")).name()).isEqualTo("#:a:b");
+		assertThat(((LispSymbol) LispReader.readFromString("#:a\\:b")).name()).isEqualTo("#:A:B");
+	}
+
+	@Test
+	void readSharpLessThanIsNotReadable() {
+		// #< starts printed-unreadable syntax; it is never readable (CLHS 2.4.8).
+		LispReadException ex = catchThrowableOfType(() -> LispReader.readFromString("#<"), LispReadException.class);
+		assertThat(ex.isEndOfFile()).isFalse();
+	}
+
+	@Test
+	void readFailuresDistinguishEndOfInputFromBadTokens() {
+		// Input that ran out mid-datum (an unterminated string or list, a prefix
+		// with nothing behind it) is end of file; a bad token is not.
+		for (String eof : new String[] { "\"abc", "(a b", "#(", "#'", "\\", "|", "#\\" }) {
+			LispReadException ex = catchThrowableOfType(() -> LispReader.readAllFromString(eof),
+					LispReadException.class);
+			assertThat(ex.isEndOfFile()).as("eof: %s", eof).isTrue();
+		}
+		for (String bad : new String[] { ".", ")", ",", "1/0", "#:a:b", "#<", "( . 1)", "#C(1)" }) {
+			LispReadException ex = catchThrowableOfType(() -> LispReader.readAllFromString(bad),
+					LispReadException.class);
+			assertThat(ex.isEndOfFile()).as("bad: %s", bad).isFalse();
+		}
 	}
 
 	private static LispVal list(LispVal... items) {

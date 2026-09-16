@@ -59,7 +59,12 @@ public record LispSymbol(String name) implements LispVal {
 			return ":" + escape(displayName(this.name));
 		}
 		if (this.name.startsWith("#:")) {
-			return "#:" + escape(this.name.substring(2));
+			String member = this.name.substring(2);
+			// A colon in the member must be |...|-escaped even though needsEscape
+			// accepts it: a bare one behind #: is a package marker the reader
+			// refuses (CLHS 2.4.8.5), so #:a:b would not read back while #:|a:b|
+			// does (.todo/807).
+			return "#:" + (member.indexOf(':') >= 0 ? forceEscape(member) : escape(member));
 		}
 		int colon = qualifierEnd(this.name);
 		if (colon > 0) {
@@ -100,6 +105,18 @@ public record LispSymbol(String name) implements LispVal {
 		if (!needsEscape(member)) {
 			return member;
 		}
+		return forceEscape(member);
+	}
+
+	/**
+	 * The {@code |...|} spelling of {@code member}, escaping every {@code |} and
+	 * {@code \} inside -- the shape {@link #escape} takes once {@link #needsEscape} (or a
+	 * caller that knows more than it, like the {@code #:} branch above) says the bare
+	 * spelling would not read back.
+	 * @param member the name component to spell
+	 * @return the escaped spelling
+	 */
+	private static String forceEscape(String member) {
 		StringBuilder sb = new StringBuilder(member.length() + 2);
 		sb.append('|');
 		for (int i = 0; i < member.length(); i++) {

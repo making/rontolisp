@@ -8296,6 +8296,12 @@ public final class LispNames {
 	 */
 	public static final String UNBOUND_SLOT_INSTANCE = "UNBOUND-SLOT-INSTANCE";
 
+	/**
+	 * The {@code stream-error-stream} condition reader: the {@code stream} slot every
+	 * {@code stream-error} (so {@code end-of-file} and {@code reader-error}) carries.
+	 */
+	public static final String STREAM_ERROR_STREAM = "STREAM-ERROR-STREAM";
+
 	/** The {@code simple-condition-format-control} condition reader. */
 	public static final String SIMPLE_CONDITION_FORMAT_CONTROL = "SIMPLE-CONDITION-FORMAT-CONTROL";
 

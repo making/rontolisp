@@ -64,10 +64,19 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   consumers that must keep READING it, never a copy: the constructor, and
   `PackageRegistry.CL_CONDITION_TYPES` = `ClosRegistry.CONDITION_CLASS_NAMES`, which makes every
   seeded name a `cl` symbol ([packages.md](packages.md)).
-- Five classes carry `format-control`/`format-arguments` beyond CLHS's slot lists -- `type-error`,
-  `arithmetic-error`, `program-error`, `unbound-variable`, `undefined-function` -- because that pair
-  is how a BUILT-IN error carries its message. `simple-type-error` therefore adds nothing, so both
-  keep their old `%obj-ref` indexes.
+- Seven classes carry `format-control`/`format-arguments` beyond CLHS's slot lists -- `type-error`,
+  `arithmetic-error`, `program-error`, `reader-error`, `package-error` (which also carries its
+  `package` designator) and the two `cell-error` leaves -- because that pair is how a BUILT-IN
+  error carries its message. `simple-type-error` therefore adds nothing, so both keep their old
+  `%obj-ref` indexes. `stream-error` carries the offending `stream` (read by the prelude
+  `stream-error-stream`); `end-of-file` inherits it, `reader-error` declares its own ahead of the
+  message pair (`[STREAM, FORMAT-CONTROL, FORMAT-ARGUMENTS]`) with `stream-error` as its second
+  ancestor -- the lite-multiple-parents rule applied to a seed (`reader-error` is both a
+  `parse-error` and a `stream-error`, CLHS 9.1.2). A seeded class's hand-built factory instance
+  (`newEndOfFileCondition`, `newReaderErrorCondition`) must mirror its seed's slot order exactly;
+  the report partition groups by slot position, so a drift reads the wrong slots instead of
+  failing (2026-09-16: the seed without `STREAM` grouped `reader-error` with `simple-error` and
+  its report `cdr`ed the message).
 - `define-condition` = `defineConditionToDefclass` -> `expandDefclass` (top-level-only on the
   compile path); `(:report x)` registered (string or lambda AST), `:documentation` dropped. **Lite
   multiple parents**: the FIRST parent provides the slot layout, the rest join the ancestor set only

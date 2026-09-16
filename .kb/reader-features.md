@@ -219,6 +219,25 @@ Traps:
   argument and must name 2..36; `LispLexer.readRadixNumber` is the one scanner all four spellings
   reach. A constituent character behind the digits invalidates the whole token rather than ending
   a number early.
+- **A read failure is typed at the signal point.** `LispReadException` carries `isEndOfFile`:
+  input that ran out mid-datum (an unterminated string/list/comment/`|...|` escape, a prefix like
+  `#'` with nothing behind it, a trailing `\`) vs a bad token (a misplaced dot, an unknown
+  character name, `1/0`, `#:a:b`, `#<`). The interpreter's runtime `read` family converts the
+  first to an `end-of-file` condition and the second to a `reader-error` one
+  (`LispEvaluator.foldStructLiteralsOf`, both carrying the stream); an input holding no datum at
+  all is end of file too. The emitted readers keep signaling `simple-error`
+  ([[read-load-streams]]).
+- **`#n*` spells a length and fills by repeating the last bit** (CLHS 2.4.8.4): `#5*010` is
+  `0 1 0 0 0`, `#2*1` is `1 1`, `#0*` is empty. Zero bits with `n > 0` (`#1* X`), more bits than
+  `n` (`#2*011`) and a constituent behind the bits (`#*012`) are read errors, never a vector plus
+  a leftover -- the `requireRadixTokenEnd` rule. The fill is computed in the lexer, so the token
+  still reaches the reader as a plain bit string; only the interpreter/compile-frontend reads it
+  (the emitted readers know bare `#*` only).
+- **A token of only dots is not a symbol** (CLHS 2.3.1): `..`/`...` lex as dot tokens, so the
+  reader refuses them wherever a datum is expected; dots glued to other characters (`..a`) or to
+  escapes (`..||`) stay symbols. `#:` with an unescaped colon behind it (`#:a:b`) is a read error
+  (CLHS 2.4.8.5); `#:|a:b|` and `#:a\:b` stay symbols, and an uninterned `:`-named member prints
+  `#:|:|` so it reads back (`LispSymbol.print`). `#<` is never readable (CLHS 2.4.8).
 - **`#n=` / `#n#` reader labels are unbounded and may close a CIRCLE.** The label is kept as
   DIGITS (`Token.LabelDef`), because CLHS 2.4.8.3 bounds neither the value nor the digit count --
   an int label made `#123456789123456789=` a read error. The label is in scope INSIDE its own

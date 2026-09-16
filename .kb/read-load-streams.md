@@ -13,14 +13,22 @@ interning symbols to shared string offsets.
 nesting `#|...|#`.
 
 - Unclaimed tokens fall to the atom path like `readSymbol`: `#foo` -> `#FOO`, `#16r1f` -> a symbol.
+  The interpreter's reader has since learned errors the emitted readers never did: `..`/`...`
+  (dot-only tokens), `#:a:b`, `#<`, `#n*` over/under-fill, a constituent behind `#*` bits and a
+  trailing `\` are reader errors there and symbols here. The `#n*` fill (repeat-last-bit) the
+  interpreter computes in the lexer has no twin on either compiled backend.
 - PERMANENT limits: `#.`, `#+`/`#-`, `#n=`/`#n#` signal a catchable error. The interpreter's runtime
-  read still resolves the first two and reads labels — the ONE documented interpreter/compiled
+  read still resolves the first two and reads labels — one documented interpreter/compiled
   divergence; `#.` EVALUATES via `Environment.setReadTimeEvalResolver`, gated on `*read-eval*`
   (`.kb/reader-features.md`).
-- Errors: JVM `RuntimeException` caught as `simple-error` with the frontend's EXACT messages
-  (`LispEvaluator.foldStructLiteralsOf` converts `LispReadException` likewise); WASM `unreachable`,
-  or in EH mode a catchable `$lisp-cond` throw whose message is STATIC, no name interpolation
-  (`WasmReadRuntimeBuilder.emitErr`).
+- Errors: JVM `RuntimeException` caught as `simple-error` with the frontend's EXACT messages;
+  WASM `unreachable`, or in EH mode a catchable `$lisp-cond` throw whose message is STATIC, no
+  name interpolation (`WasmReadRuntimeBuilder.emitErr`). The interpreter instead signals TYPED
+  conditions -- `reader-error` for a bad token, `end-of-file` for input that ran out mid-datum,
+  both carrying the stream `stream-error-stream` reads back -- converted from `LispReadException`
+  (whose `isEndOfFile` flag is the distinction) in `LispEvaluator.foldStructLiteralsOf`. A
+  `handler-case` for `error` catches both spellings everywhere, so the divergence only shows to
+  a clause naming the type.
 - `#S`: JVM bakes `_rdStructs` in `<clinit>` (`structTableClinit`, gated on
   `usesRead && mayUseInstances`); WASM appends a directory blob after the `WasmInstanceLayouts`
   records (`buildReadCtx`). An omitted slot takes a nil initform, re-reads a baked
@@ -44,8 +52,10 @@ It consumes exactly ONE datum's characters and leaves the stream after them.
   paths, the `Environment` cell interpreted) — what makes `read` + `read-line` on one stream work.
 - **After the object, ONE whitespace character is consumed** (CLHS 23.2); a terminating macro
   character is unread instead.
-- EOF: `(read s)` -> nil, `(read s nil v)` -> `v`, non-nil `eof-error-p` signals `end-of-file`; an
-  INCOMPLETE datum signals everywhere.
+- EOF: `eof-error-p` defaults to `t`, so `(read s)` signals `end-of-file` at end of input and
+  `(read s nil v)` answers `v`; an INCOMPLETE datum signals `end-of-file` whatever `eof-error-p`
+  says. The prelude's own scan errors are typed too (`reader-error` for a bad token, `end-of-file`
+  with the stream attached) -- one prelude definition, so all four backends agree here.
 - **Trap**: `read` needs BOTH compile-path passes — `LispPreludeLibrary.process` and
   `UnreadCharLibrary.process` — in `CompileFrontend`'s order; neither run = call-time "The function
   READ is undefined".

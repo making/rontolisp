@@ -68,6 +68,10 @@ public final class ClosRegistry {
 		// the value carries the backend handle plus the kind keyword, so streamp can
 		// tell a stream from a file descriptor and file-stream from string-stream.
 		this.layoutsByTag.put(LispLayout.STREAM_TAG, LispLayout.STREAM);
+		// reader-error inherits from BOTH parse-error and stream-error (CLHS 9.1.2):
+		// parse-error provides the slot layout, stream-error joins the ancestor set
+		// (the define-condition multiple-parents rule).
+		registerExtraAncestors(READER_ERROR_CLASS_NAME, List.of("STREAM-ERROR"));
 		for (ConditionSeed seed : CONDITION_SEEDS) {
 			seedClass(seed.name(), seed.parent(), seed.slots().toArray(new String[0]));
 		}
@@ -86,6 +90,17 @@ public final class ClosRegistry {
 	 * handler-case clause catches it too.
 	 */
 	public static final String END_OF_FILE_CLASS_NAME = "END-OF-FILE";
+
+	/**
+	 * The condition class a malformed datum is signaled as: a bad token ({@code .},
+	 * {@code 1/0}, {@code #:a:b}, {@code #<}) at runtime {@code read} time. Seeded under
+	 * {@code parse-error}, with {@code stream-error} as the second ancestor (CLHS 9.1.2
+	 * gives it both parents), so a {@code stream-error} clause catches it too. Its layout
+	 * is {@code [STREAM, FORMAT-CONTROL, FORMAT-ARGUMENTS]}: the stream slot
+	 * {@code stream-error-stream} reads back, plus the message-carrying pair every
+	 * built-in-signaled class has.
+	 */
+	public static final String READER_ERROR_CLASS_NAME = "READER-ERROR";
 
 	/**
 	 * The registered {@code :report} of {@link #END_OF_FILE_CLASS_NAME} -- the message an
@@ -275,15 +290,15 @@ public final class ClosRegistry {
 	 * symbol by construction rather than by a second list somebody has to remember.
 	 *
 	 * <p>
-	 * Six classes carry {@code format-control}/{@code format-arguments} beyond CLHS's
+	 * Seven classes carry {@code format-control}/{@code format-arguments} beyond CLHS's
 	 * slot lists ({@code type-error}, {@code arithmetic-error}, {@code program-error},
-	 * {@code package-error} and the two {@code cell-error} leaves): those are the classes
-	 * a BUILT-IN error is synthesized as, and the two slots are how the synthesized
-	 * instance carries the message it reports -- the same {@code simple-condition} report
-	 * path every other message- bearing condition uses, rather than a second message
-	 * channel. {@code type-error} gaining them is what leaves {@code simple-type-error}
-	 * with the identical layout (it adds nothing now), so the {@code %obj-ref} indexes of
-	 * both are unchanged.
+	 * {@code package-error}, {@code reader-error} and the two {@code cell-error} leaves):
+	 * those are the classes a BUILT-IN error is synthesized as, and the two slots are how
+	 * the synthesized instance carries the message it reports -- the same
+	 * {@code simple-condition} report path every other message- bearing condition uses,
+	 * rather than a second message channel. {@code type-error} gaining them is what
+	 * leaves {@code simple-type-error} with the identical layout (it adds nothing now),
+	 * so the {@code %obj-ref} indexes of both are unchanged.
 	 */
 	private static final List<ConditionSeed> CONDITION_SEEDS = List.of(seed("CONDITION", null),
 			seed("SERIOUS-CONDITION", "CONDITION"), seed("ERROR", "SERIOUS-CONDITION"),
@@ -297,8 +312,12 @@ public final class ClosRegistry {
 			// the type-error branch, which is the branch a handler-case clause tests
 			// (alexandria's sequence bounds checks signal it). Since type-error itself
 			// now carries the report pair, it inherits the whole layout.
-			seed("SIMPLE-TYPE-ERROR", TYPE_ERROR_CLASS_NAME), seed("STREAM-ERROR", "ERROR"),
-			seed(END_OF_FILE_CLASS_NAME, "STREAM-ERROR"), seed("FILE-ERROR", "ERROR"),
+			seed("SIMPLE-TYPE-ERROR", TYPE_ERROR_CLASS_NAME),
+			// stream-error carries the offending stream (CLHS 9.1.2): end-of-file and
+			// reader-error inherit it, and stream-error-stream reads it back.
+			seed("STREAM-ERROR", "ERROR", "STREAM"), seed(END_OF_FILE_CLASS_NAME, "STREAM-ERROR"),
+			seed(READER_ERROR_CLASS_NAME, "PARSE-ERROR", "STREAM", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+			seed("FILE-ERROR", "ERROR"),
 			seed(ARITHMETIC_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			seed(DIVISION_BY_ZERO_CLASS_NAME, ARITHMETIC_ERROR_CLASS_NAME), seed("CONTROL-ERROR", "ERROR"),
 			seed(PROGRAM_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
@@ -485,14 +504,48 @@ public final class ClosRegistry {
 	/**
 	 * A fresh {@code end-of-file} condition instance, for the interpreter's read family
 	 * -- which runs inside {@code Environment}, where no registry is in scope. The class
-	 * is SEEDED, so its layout is the same slot-less shape in every registry and can be
-	 * built without one; {@code handler-case} dispatches on the instance TAG, not on
-	 * layout identity, so the instance is indistinguishable from one
-	 * {@code (error 'end-of-file)} would have constructed.
-	 * @return the condition instance
+	 * is SEEDED, so its layout is the same single-{@code STREAM}-slot shape in every
+	 * registry and can be built without one; {@code handler-case} dispatches on the
+	 * instance TAG, not on layout identity, so the instance is indistinguishable from one
+	 * {@code (error 'end-of-file)} would have constructed. The layout here must keep
+	 * mirroring the seed (a unit test pins it).
+	 * @return the condition instance, carrying nil as its stream
 	 */
 	public static LispVal newEndOfFileCondition() {
-		return new LispInstance(LispLayout.ofClass(END_OF_FILE_CLASS_NAME, List.of(), List.of()), new LispVal[0]);
+		return newEndOfFileCondition(LispNil.INSTANCE);
+	}
+
+	/**
+	 * A fresh {@code end-of-file} condition instance carrying the offending stream --
+	 * what {@code stream-error-stream} reads back, and what the ANSI suite's
+	 * {@code signals-error} checks {@code streamp} of.
+	 * @param stream the stream the read ran out on
+	 * @return the condition instance
+	 */
+	public static LispVal newEndOfFileCondition(LispVal stream) {
+		return new LispInstance(
+				LispLayout.ofClass(END_OF_FILE_CLASS_NAME, List.of("STREAM"), List.of(LispNil.INSTANCE)),
+				new LispVal[] { stream });
+	}
+
+	/**
+	 * A fresh {@code reader-error} condition instance carrying the message and the
+	 * offending stream, for the interpreter's runtime {@code read} family -- which runs
+	 * inside {@code Environment}, where no registry is in scope. The class is SEEDED, so
+	 * its layout is the same {@code [STREAM, FORMAT-CONTROL,
+	 * FORMAT-ARGUMENTS]} shape in every registry and can be built without one (a unit
+	 * test pins it); the message rides {@code format-control}, so the instance reports
+	 * like the {@code simple-condition} family.
+	 * @param message the reported message
+	 * @param stream the stream (or string-input stream over the text) the bad datum came
+	 * from
+	 * @return the condition instance
+	 */
+	public static LispVal newReaderErrorCondition(LispVal message, LispVal stream) {
+		return new LispInstance(
+				LispLayout.ofClass(READER_ERROR_CLASS_NAME, List.of("STREAM", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+						List.of(LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE)),
+				new LispVal[] { stream, message, LispNil.INSTANCE });
 	}
 
 	/**

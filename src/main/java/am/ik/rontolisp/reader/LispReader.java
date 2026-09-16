@@ -97,6 +97,33 @@ public final class LispReader {
 	}
 
 	/**
+	 * A {@link LispReadException} for a datum the input ran out in the middle of -- the
+	 * runtime {@code read} family turns it into an {@code end-of-file} condition rather
+	 * than a {@code reader-error}.
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException eof(String message) {
+		return eofAtToken(this.pos, message);
+	}
+
+	/**
+	 * A {@link LispReadException} for a list that is never closed, positioned at its
+	 * OPENING token like {@link #errAtToken} (in a big spliced library the last line of
+	 * the file says nothing about which paren is unbalanced), but classified as end of
+	 * input.
+	 * @param tokenIndex the index into the token list to report
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException eofAtToken(int tokenIndex, String message) {
+		SourceLocation location = tokenIndex >= 0 && tokenIndex < this.offsets.length
+				? SourceLocation.at(this.file, this.offsets[tokenIndex], this.input)
+				: SourceLocation.at(this.file, this.input.length(), this.input);
+		return new LispReadException(message, location, true);
+	}
+
+	/**
 	 * Read a single expression from the input string.
 	 * @param input the source code string
 	 * @return the parsed expression
@@ -390,7 +417,7 @@ public final class LispReader {
 
 	private LispVal readDatum() {
 		if (this.pos >= this.tokens.size()) {
-			throw err("Unexpected end of input");
+			throw eof("Unexpected end of input");
 		}
 		Token token = this.tokens.get(this.pos);
 		this.pos++;
@@ -419,7 +446,7 @@ public final class LispReader {
 			case Token.UnquoteSplicing ignored -> throw err(",@ is illegal outside of backquote");
 			case Token.RightParen ignored -> throw err("Unexpected ')'");
 			case Token.Dot ignored -> throw err("Unexpected '.'");
-			case Token.Eof ignored -> throw err("Unexpected end of input");
+			case Token.Eof ignored -> throw eof("Unexpected end of input");
 			case Token.SharpL sharp -> readSharpL(sharp.nArgs());
 			case Token.SharpC ignored -> readSharpC();
 			case Token.LabelDef def -> {
@@ -600,7 +627,7 @@ public final class LispReader {
 		// position an unclosed list must report.
 		int open = this.pos - 1;
 		if (this.pos >= this.tokens.size()) {
-			throw errAtToken(open, "Unexpected end of input, expected ')'");
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		if (this.tokens.get(this.pos) instanceof Token.RightParen) {
 			this.pos++; // consume ')'
@@ -624,7 +651,7 @@ public final class LispReader {
 			elements.add(readExpr());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw errAtToken(open, "Unexpected end of input, expected ')'");
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		// Build cons chain from right to left
@@ -791,7 +818,7 @@ public final class LispReader {
 			rows.add(readExpr());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw errAtToken(open, "Unexpected end of input, expected ')'");
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		return rows;
@@ -1098,7 +1125,7 @@ public final class LispReader {
 
 	private TemplateElement readTemplateElement() {
 		if (this.pos >= this.tokens.size()) {
-			throw err("Unexpected end of input in backquote template");
+			throw eof("Unexpected end of input in backquote template");
 		}
 		Token token = this.tokens.get(this.pos);
 		return switch (token) {
@@ -1189,7 +1216,7 @@ public final class LispReader {
 			elements.add(readTemplateElement());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw errAtToken(open, "Unexpected end of input, expected ')'");
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		return buildTemplateList(elements, tail);
@@ -1293,7 +1320,7 @@ public final class LispReader {
 	// inner backquote (the signal that the optimized path cannot be used).
 	private LispVal readRawTemplate() {
 		if (this.pos >= this.tokens.size()) {
-			throw err("Unexpected end of input in backquote template");
+			throw eof("Unexpected end of input in backquote template");
 		}
 		Token token = this.tokens.get(this.pos);
 		switch (token) {
@@ -1355,7 +1382,7 @@ public final class LispReader {
 			elements.add(readRawTemplate());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw errAtToken(open, "Unexpected end of input, expected ')'");
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		LispVal result = tail;
