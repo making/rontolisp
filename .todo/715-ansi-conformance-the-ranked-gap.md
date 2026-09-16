@@ -72,7 +72,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | family | tests | owner |
 |---|---:|---|
 | the reader syntax-type surface, re-measured 2026-09-13 a SECOND time, after `.todo/807`'s first pass (`#+` at runtime, radix rationals and `#<n>R`, reader labels) closed 35 | 108 | `.todo/807` -- whose largest remaining family is not a syntax at all but "a read error must be a `reader-error`/`end-of-file` CONDITION", 28 tests, and needs `.todo/039` first |
-| bit arrays: the eleven `bit-*` ops (~310) plus `bit-vector-p` 38 / `simple-bit-vector-p` 28 / `array-in-bounds-p` 27 | ~400 | `.todo/043`, `.todo/180` |
+| bit arrays: the eleven `bit-*` ops, `bit-vector-p` 38 / `simple-bit-vector-p` 28 / `array-in-bounds-p` 27 -- the representation and the operators landed 2026-09-16 (`.todo/043` closed; `bit-vector-p`/`simple-bit-vector-p`/`array-in-bounds-p` answer, the ops run on all four backends). What stays red is preservation across sequence ops (`subseq`, computed `coerce`, `map`/`make-sequence` results, `#*` printing, `class-of`) | ~400 billed, remeasure open | `.todo/820` (residue; `.todo/043` closed, `.todo/180` closed) |
 | `loop` -- four slices landed 2026-09-14 for 113 (uninterned `#:kw` 45, NIL no-binding 15, any-order numeric 12, named-loop block 39; `iteration` 63.6% -> 77.0%, 0 regressed); left: missing `program-error`/`type-error` validation ~30, hash/`across` destructuring ~9, dotted `append` ~5, typed init ~6 | ~50 | `.todo/029` |
 | the runtime package API: `unuse-package` 47, `delete-package`, `import`/`unexport` -- plus `set-up-packages` 56, which is the suite's own aux defun and a LOST FORM, not an operator | ~150 | `.todo/741` closed 2026-09-09 covering only part; **re-file before quoting** |
 | stream constructors: `make-two-way-stream` 53, `make-concatenated-stream` 40, `make-echo-stream` 33, plus `open`'s `:if-exists`/`:direction`/`:element-type` | ~200 | `.todo/387` |
@@ -80,7 +80,7 @@ and note that closing it ADMITS ~435 tests that may then fail.
 | a `setf` place the expander does not support | 79 | `.todo/001`, `.todo/041` |
 | `pprint-tabular`/`-fill`/`-linear` (27+) and `setf readtable-case` | ~140 | `.todo/041`, `.todo/001` |
 | `read-from-string`'s lambda list (`eof-error-p`, `:start`/`:end`, `:preserve-whitespace`) -- six `READ-FROM-STRING.*` tests; the INDEX landed 2026-09-13 | 6 | `.todo/214` |
-| `copy-structure` | 31 | `.todo/043` |
+| `copy-structure` | 31 | unowned (was billed to `.todo/043`, which never contained it -- closed 2026-09-16 without it) |
 
 `read-from-string`'s index was also the SECOND HALF of every `*read-suppress*`
 test (each wants `(nil <index>)`); both landed together on 2026-09-13, which is

@@ -33,7 +33,7 @@ type-error there, not a Java-shaped refusal.
 |---:|---|---|
 | **28** | a read error must be a CONDITION the suite can catch: `reader-error` for a bad token (`.`, `..`, `,`, `1/0`, `#1*`, `#:a:b`, `#<`) and `end-of-file` for input that runs out mid-datum (`#'`, `#(`, `#.`, `\`, `\|`) | **the biggest single reader family left** -- see below |
 | 21 | `(typep v 'simple-array)` for a `#A`/`#(` literal read at runtime | array types, `.todo/043` |
-| 17 | `simple-vector-p` (8), `simple-bit-vector-p` (9) undefined | `.todo/043`, `.todo/180` |
+| 17 | `simple-vector-p` (8), `simple-bit-vector-p` (9) -- both DEFINED since `.todo/043` (closed 2026-09-16); remeasure whether the 17 still fail and how | `.todo/820` for the bit half, `.todo/180` closed |
 | 9 | `#C`/`#P`: the suite builds the EXPECTED value with `#.(complex 1 1)` / `#.(parse-namestring ...)` and the marker survives unresolved into the comparison (`want ((%READ-EVAL (COMPLEX 1 1)) 7)`). A `#.` inside a macro form's argument, not a `#C` gap | `#.` resolution -- see below |
 | 7 | `name-char` undefined | characters, `.todo/008` |
 | 5 | `upgraded-array-element-type` undefined | arrays |
