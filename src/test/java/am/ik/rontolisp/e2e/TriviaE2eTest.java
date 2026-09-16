@@ -31,14 +31,14 @@ import java.util.List;
  * closer-mop shim's {@code compute-slots}, the empty
  * {@code generic-function}/{@code structure-class} types (empty) and the now-real
  * {@code bit-vector} type (stamped since `.todo/043`, so the bit-vector clauses match
- * instead of falling through to `vector`), the empty
- * {@code &key} lambda-list section (the {@code :trivial} optimizer's
- * {@code (clauses &key &allow-other-keys)}), {@code use-value}, the
- * signal-falls-through-unmatched-handler-case rule, {@code remove-if-not :key},
- * {@code find-symbol}'s definition-is-an-interning probe (+ the {@code #'find-symbol}
- * wrapper), the runtime {@code export} lowering, and the compile path's loaded-dependency
- * replay (spliced-system top-level forms run in the macro-time evaluator -- trivia
- * registers its vector matchers with plain top-level calls).
+ * instead of falling through to `vector`), the empty {@code &key} lambda-list section
+ * (the {@code :trivial} optimizer's {@code (clauses &key &allow-other-keys)}),
+ * {@code use-value}, the signal-falls-through-unmatched-handler-case rule,
+ * {@code remove-if-not :key}, {@code find-symbol}'s definition-is-an-interning probe (+
+ * the {@code #'find-symbol} wrapper), the runtime {@code export} lowering, and the
+ * compile path's loaded-dependency replay (spliced-system top-level forms run in the
+ * macro-time evaluator -- trivia registers its vector matchers with plain top-level
+ * calls).
  */
 class TriviaE2eTest extends AsdfLibraryE2eSupport {
 
