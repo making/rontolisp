@@ -801,3 +801,639 @@
           (rplaca cell t)
           nil)
         t)))
+
+;; --- eval: (scheme eval), (scheme repl) and the R5RS / MIT environment names ----------
+
+;; A Scheme evaluator over Scheme DATUMS, so (eval datum env) runs on every backend from
+;; one definition: the lowering (SchemeLowering.java) is not inside a compiled program,
+;; and the run-time eval the compiled backends carry (.kb/eval-runtime.md) evaluates
+;; Common Lisp core forms, not Scheme. Every environment specifier is the one global
+;; environment, the symbol #[environment], which holds three things in this order: what
+;; eval itself defined (%scheme-eval-globals -- a compiled program has no `set` to make a
+;; global appear at run time, so eval keeps its definitions in a table of its own), the
+;; program's own procedures and variables (fboundp / boundp, the names its file
+;; lowered), and the builtins, through the table SchemeBuiltins generates
+;; (%scheme-builtin). A name the program defines wins over a builtin, as in a file.
+;;
+;; A local environment is a list of frames, (alist . loop): an alist of (name . value)
+;; cells -- set! mutates the cell, an internal define pushes onto the innermost frame,
+;; which every closure over it shares -- and, for the frame of a named let or of a
+;; procedure that calls itself, the LOOP (name formals body outer): a call of that name
+;; found through the frames rebinds a fresh frame over OUTER and continues with the body
+;; in %scheme-eval's own loop, in place of a call. In tail position that is a jump, so
+;; the loop runs in constant stack; anywhere else it computes the same value a call
+;; would, so no tail-position analysis is needed -- only that the name is never a value,
+;; never assigned and never rebound in the body (%scheme-eval-called-only). Tail
+;; positions of the other forms (if, begin, the let family, cond, case, and, or, when,
+;; unless, the do result) iterate the same way; any other call recurses.
+
+(defvar rontolisp::%scheme-eval-globals nil)
+
+(defun rontolisp::%scheme-eval-in (x env)
+  (if (eq env '|#[environment]|)
+      (rontolisp::%scheme-eval x nil)
+      (error "~A"
+             (rontolisp::%scheme-error-message "eval: not an environment:"
+                                               (list env)))))
+
+;; (environment import-set ...): every set is checked to name a library this front end
+;; has (%scheme-library-p is generated from the front end's list), and the answer is the
+;; one global environment, which holds them all.
+(defun rontolisp::%scheme-environment (sets)
+  (dolist (spec sets '|#[environment]|)
+    (rontolisp::%scheme-check-import-set spec)))
+
+(defun rontolisp::%scheme-check-import-set (spec)
+  (if (not (and (consp spec) (consp (cdr spec))
+                (if (member (car spec) '(|only| |except| |prefix| |rename|))
+                    (progn
+                      (rontolisp::%scheme-check-import-set (car (cdr spec)))
+                      t)
+                    (and (eq (car spec) '|scheme|) (null (cdr (cdr spec)))
+                         (rontolisp::%scheme-library-p (car (cdr spec)))))))
+      (error "~A"
+             (rontolisp::%scheme-error-message "environment: library is not available:"
+                                               (list spec)))))
+
+;; The keywords eval knows: the ones it implements and the ones it refuses by name. A
+;; user binding of the same name, local or global, wins over the keyword as in a file.
+;; A datum's symbols carry their mangled spelling (SchemeNames), so => is s%=> here: the
+;; one keyword with no lowercase letter.
+(defun rontolisp::%scheme-eval-keyword-p (name)
+  (member name
+          '(|quote| |quasiquote| |unquote| |unquote-splicing| |lambda| |if| |set!|
+            |define| |begin| |let| |let*| |letrec| |letrec*| |do| |cond| |case| |and|
+            |or| |when| |unless| |else| |s%=>| |delay| |delay-force| |cons-stream|
+            |define-record-type| |define-values| |let-values| |let*-values| |import|
+            |define-syntax| |let-syntax| |letrec-syntax| |syntax-rules| |syntax-error|
+            |define-library| |guard| |parameterize| |case-lambda| |include|
+            |include-ci| |cond-expand|)))
+
+(defun rontolisp::%scheme-eval-syntax (head env)
+  (if (and (rontolisp::%scheme-eval-keyword-p head)
+           (null (rontolisp::%scheme-eval-cell head env))
+           (null (assoc head rontolisp::%scheme-eval-globals :test #'eq))
+           (not (boundp head))
+           (not (fboundp head)))
+      head
+      nil))
+
+(defun rontolisp::%scheme-eval-identifier-p (x)
+  (and (symbolp x) x (not (eq x t)) (not (eq x rontolisp::%scheme-false))))
+
+;; The (name . value) cell of a local variable, or NIL.
+(defun rontolisp::%scheme-eval-cell (name env)
+  (dolist (frame env nil)
+    (let ((cell (assoc name (car frame) :test #'eq)))
+      (if cell (return cell)))))
+
+;; The loop (name formals body outer) a call of NAME continues, or NIL: the nearest
+;; frame that is NAME's loop, unless a variable of that name is bound before it.
+(defun rontolisp::%scheme-eval-loop (name env)
+  (if (symbolp name)
+      (dolist (frame env nil)
+        (if (assoc name (car frame) :test #'eq) (return nil))
+        (if (and (cdr frame) (eq (car (cdr frame)) name)) (return (cdr frame))))
+      nil))
+
+(defun rontolisp::%scheme-eval-variable (name env)
+  (let ((cell (rontolisp::%scheme-eval-cell name env)))
+    (if cell (cdr cell) (rontolisp::%scheme-eval-global name))))
+
+(defun rontolisp::%scheme-eval-global (name)
+  (let ((cell (assoc name rontolisp::%scheme-eval-globals :test #'eq)))
+    (cond (cell (cdr cell))
+          ((fboundp name) (symbol-function name))
+          ((boundp name) (symbol-value name))
+          (t
+           (let ((value (rontolisp::%scheme-builtin name)))
+             (cond ((not (eq value 'rontolisp::%scheme-unbound)) value)
+                   ((rontolisp::%scheme-eval-keyword-p name)
+                    (error "~A"
+                           (rontolisp::%scheme-error-message
+                            "Syntactic keyword may not be used as an expression:"
+                            (list name))))
+                   (t
+                    (error "~A"
+                           (rontolisp::%scheme-error-message "Unbound variable:"
+                                                             (list name))))))))))
+
+;; define: at the top level into eval's own globals, in a body into the innermost frame.
+(defun rontolisp::%scheme-eval-define (name value env)
+  (if (null env)
+      (let ((cell (assoc name rontolisp::%scheme-eval-globals :test #'eq)))
+        (if cell
+            (rplacd cell value)
+            (setq rontolisp::%scheme-eval-globals
+                  (cons (cons name value) rontolisp::%scheme-eval-globals))))
+      (let ((frame (car env)))
+        (let ((cell (assoc name (car frame) :test #'eq)))
+          (if cell
+              (rplacd cell value)
+              (rplaca frame (cons (cons name value) (car frame))))))))
+
+;; set!: a local cell, else eval's own global, else -- for the program's own variable or
+;; a builtin, which nothing can assign from outside a compiled program -- a global of
+;; eval's own from here on; an unknown name is an error, as in R7RS.
+(defun rontolisp::%scheme-eval-assign (name value env)
+  (let ((cell (rontolisp::%scheme-eval-cell name env)))
+    (cond (cell (rplacd cell value))
+          ((or (assoc name rontolisp::%scheme-eval-globals :test #'eq) (boundp name)
+               (fboundp name)
+               (not (eq (rontolisp::%scheme-builtin name) 'rontolisp::%scheme-unbound)))
+           (rontolisp::%scheme-eval-define name value nil))
+          (t
+           (error "~A"
+                  (rontolisp::%scheme-error-message "Unbound variable:" (list name)))))))
+
+(defun rontolisp::%scheme-ill-formed (x)
+  (error "~A"
+         (rontolisp::%scheme-error-message "Ill-formed special form:" (list x))))
+
+;; LIST checked to be a proper list of MIN to MAX (NIL: any number of) elements, else
+;; the form X is ill-formed.
+(defun rontolisp::%scheme-eval-proper (list min max x)
+  (let ((n 0))
+    (do ((rest list (cdr rest)))
+        ((not (consp rest)) (if rest (rontolisp::%scheme-ill-formed x)))
+      (setq n (+ n 1)))
+    (if (or (< n min) (and max (> n max))) (rontolisp::%scheme-ill-formed x))
+    list))
+
+;; The operands of the special form X.
+(defun rontolisp::%scheme-eval-parts (x min max)
+  (rontolisp::%scheme-eval-proper (cdr x) min max x))
+
+(defun rontolisp::%scheme-eval-operands (x env)
+  (let ((out nil))
+    (dolist (operand (rontolisp::%scheme-eval-proper (cdr x) 0 nil x) (nreverse out))
+      (setq out (cons (rontolisp::%scheme-eval operand env) out)))))
+
+(defun rontolisp::%scheme-eval-apply (f arguments)
+  (if (functionp f)
+      (apply f arguments)
+      (error "~A"
+             (rontolisp::%scheme-error-message "The object is not applicable:"
+                                               (list f)))))
+
+;; Evaluates every form of BODY but the last, for effect, and answers the last one: the
+;; tail form the caller continues with.
+(defun rontolisp::%scheme-eval-butlast (body env)
+  (do ()
+      ((null (cdr body)) (car body))
+    (rontolisp::%scheme-eval (car body) env)
+    (setq body (cdr body))))
+
+(defun rontolisp::%scheme-eval-body (body env)
+  (rontolisp::%scheme-eval (rontolisp::%scheme-eval-butlast body env) env))
+
+(defun rontolisp::%scheme-check-formals (formals x)
+  (do ((rest formals (cdr rest)))
+      ((not (consp rest))
+       (if (not (or (null rest) (rontolisp::%scheme-eval-identifier-p rest)))
+           (rontolisp::%scheme-ill-formed x)))
+    (if (not (rontolisp::%scheme-eval-identifier-p (car rest)))
+        (rontolisp::%scheme-ill-formed x))))
+
+;; A closure: the body runs in a frame binding FORMALS -- a proper list, a dotted list or
+;; one symbol collecting every argument -- over the environment of its creation. NAME is
+;; what the procedure is being defined as, or NIL: a body that only ever CALLS its name
+;; gets the loop frame, so its self calls in tail position jump.
+(defun rontolisp::%scheme-eval-lambda (name formals body env x)
+  (rontolisp::%scheme-check-formals formals x)
+  (rontolisp::%scheme-eval-proper body 1 nil x)
+  (let ((loop (if (and name (rontolisp::%scheme-eval-called-only-list name body))
+                  (list name formals body env)
+                  nil)))
+    (lambda (&rest arguments)
+      (rontolisp::%scheme-eval-body
+       body
+       (cons (cons (rontolisp::%scheme-eval-bind formals arguments) loop) env)))))
+
+;; The alist binding FORMALS to ARGUMENTS.
+(defun rontolisp::%scheme-eval-bind (formals arguments)
+  (let ((bindings nil) (rest formals) (args arguments))
+    (do ()
+        ((not (consp rest)))
+      (if (null args) (rontolisp::%scheme-eval-arity formals arguments))
+      (setq bindings (cons (cons (car rest) (car args)) bindings))
+      (setq rest (cdr rest))
+      (setq args (cdr args)))
+    (if (null rest)
+        (if args (rontolisp::%scheme-eval-arity formals arguments))
+        (setq bindings (cons (cons rest args) bindings)))
+    bindings))
+
+(defun rontolisp::%scheme-eval-arity (formals arguments)
+  (error "~A"
+         (rontolisp::%scheme-error-message "Wrong number of arguments:"
+                                           (list formals '|given| arguments))))
+
+;; Whether every mention of NAME in X is the head of a call -- never a value, never
+;; assigned, never rebound by a let, a lambda, a do or a define -- read with the
+;; keywords as syntax. Conservative: a mention under quasiquote, or inside a form this
+;; cannot read, answers NIL, which only costs the loop frame; a quoted datum is data.
+(defun rontolisp::%scheme-eval-called-only (name x)
+  (cond ((eq x name) nil)
+        ((not (consp x)) t)
+        ((eq (car x) '|quote|) t)
+        ((eq (car x) '|quasiquote|) (rontolisp::%scheme-eval-mentions-not name x))
+        ((eq (car x) '|set!|)
+         (and (consp (cdr x)) (not (eq (car (cdr x)) name))
+              (rontolisp::%scheme-eval-called-only-list name (cdr (cdr x)))))
+        ((eq (car x) '|lambda|)
+         (and (consp (cdr x))
+              (rontolisp::%scheme-eval-mentions-not name (car (cdr x)))
+              (rontolisp::%scheme-eval-called-only-list name (cdr (cdr x)))))
+        ((eq (car x) '|define|)
+         (and (consp (cdr x))
+              (rontolisp::%scheme-eval-mentions-not name (car (cdr x)))
+              (rontolisp::%scheme-eval-called-only-list name (cdr (cdr x)))))
+        ((member (car x) '(|let| |let*| |letrec| |letrec*| |do|))
+         (let ((rest (cdr x)))
+           (if (and (eq (car x) '|let|) (consp rest) (symbolp (car rest)) (car rest))
+               (setq rest (if (eq (car rest) name) (list name) (cdr rest))))
+           (and (consp rest) (not (rontolisp::%scheme-eval-binds name (car rest)))
+                (rontolisp::%scheme-eval-called-only-list name rest))))
+        (t
+         (and (or (eq (car x) name) (rontolisp::%scheme-eval-called-only name (car x)))
+              (rontolisp::%scheme-eval-called-only-list name (cdr x))))))
+
+(defun rontolisp::%scheme-eval-called-only-list (name forms)
+  (do ((rest forms (cdr rest)))
+      ((not (consp rest)) (not (eq rest name)))
+    (if (not (rontolisp::%scheme-eval-called-only name (car rest))) (return nil))))
+
+;; Whether a binding spec list, ((name init ...) ...), binds NAME.
+(defun rontolisp::%scheme-eval-binds (name specs)
+  (do ((rest specs (cdr rest)))
+      ((not (consp rest)) nil)
+    (if (and (consp (car rest)) (eq (car (car rest)) name)) (return t))))
+
+(defun rontolisp::%scheme-eval-mentions-not (name x)
+  (cond ((eq x name) nil)
+        ((consp x)
+         (and (rontolisp::%scheme-eval-mentions-not name (car x))
+              (rontolisp::%scheme-eval-mentions-not name (cdr x))))
+        (t t)))
+
+;; ((name init) ...) as (names . inits).
+(defun rontolisp::%scheme-eval-bindings (specs x)
+  (let ((names nil) (inits nil))
+    (dolist (spec (rontolisp::%scheme-eval-proper specs 0 nil x))
+      (if (not (and (consp spec) (rontolisp::%scheme-eval-identifier-p (car spec))
+                    (consp (cdr spec)) (null (cdr (cdr spec)))))
+          (rontolisp::%scheme-ill-formed x))
+      (setq names (cons (car spec) names))
+      (setq inits (cons (car (cdr spec)) inits)))
+    (cons (nreverse names) (nreverse inits))))
+
+;; The value of INIT being bound to NAME: a syntactic lambda is closed with its name, so
+;; a letrec procedure or a define loops on its self calls like a named let.
+(defun rontolisp::%scheme-eval-named (name init env x)
+  (if (and (consp init) (eq (rontolisp::%scheme-eval-syntax (car init) env) '|lambda|))
+      (let ((parts (rontolisp::%scheme-eval-parts init 2 nil)))
+        (rontolisp::%scheme-eval-lambda name (car parts) (cdr parts) env x))
+      (rontolisp::%scheme-eval init env)))
+
+;; ((var init [step]) ...) as (names inits . steps); a variable without a step keeps its
+;; value, so its step is the variable itself.
+(defun rontolisp::%scheme-eval-do-specs (specs x)
+  (let ((names nil) (inits nil) (steps nil))
+    (dolist (spec (rontolisp::%scheme-eval-proper specs 0 nil x))
+      (if (not (and (consp spec) (rontolisp::%scheme-eval-identifier-p (car spec))
+                    (consp (cdr spec)) (rontolisp::%scheme-list? spec)
+                    (null (cdr (cdr (cdr spec))))))
+          (rontolisp::%scheme-ill-formed x))
+      (setq names (cons (car spec) names))
+      (setq inits (cons (car (cdr spec)) inits))
+      (setq steps
+            (cons (if (cdr (cdr spec)) (car (cdr (cdr spec))) (car spec)) steps)))
+    (cons (nreverse names) (cons (nreverse inits) (nreverse steps)))))
+
+;; The clause a cond takes: (t . value) when the value is final (a test alone, a =>
+;; receiver), (nil . body) when the body is still to run, NIL when no clause is taken.
+(defun rontolisp::%scheme-eval-cond (clauses env x)
+  (dolist (clause (rontolisp::%scheme-eval-proper clauses 0 nil x) nil)
+    (if (not (and (consp clause) (rontolisp::%scheme-list? clause)))
+        (rontolisp::%scheme-ill-formed x))
+    (if (eq (car clause) '|else|)
+        (progn
+          (if (null (cdr clause)) (rontolisp::%scheme-ill-formed x))
+          (return (cons nil (cdr clause))))
+        (let ((value (rontolisp::%scheme-eval (car clause) env)))
+          (if (not (eq value rontolisp::%scheme-false))
+              (return
+               (cond ((null (cdr clause)) (cons t value))
+                     ((eq (car (cdr clause)) '|s%=>|)
+                      (cons t
+                            (rontolisp::%scheme-eval-receiver (cdr (cdr clause)) value
+                                                              env x)))
+                     (t (cons nil (cdr clause))))))))))
+
+;; (=> receiver): the receiver, applied to the value.
+(defun rontolisp::%scheme-eval-receiver (rest value env x)
+  (if (not (and (consp rest) (null (cdr rest)))) (rontolisp::%scheme-ill-formed x))
+  (rontolisp::%scheme-eval-apply (rontolisp::%scheme-eval (car rest) env)
+                                 (list value)))
+
+;; The clause a case takes, in %scheme-eval-cond's shape; the data are compared by
+;; eqv? (eql).
+(defun rontolisp::%scheme-eval-case (key clauses env x)
+  (dolist (clause (rontolisp::%scheme-eval-proper clauses 0 nil x) nil)
+    (if (not (and (consp clause) (consp (cdr clause)) (rontolisp::%scheme-list? clause)
+                  (or (eq (car clause) '|else|)
+                      (rontolisp::%scheme-list? (car clause)))))
+        (rontolisp::%scheme-ill-formed x))
+    (if (or (eq (car clause) '|else|) (member key (car clause)))
+        (return
+         (if (eq (car (cdr clause)) '|s%=>|)
+             (cons t (rontolisp::%scheme-eval-receiver (cdr (cdr clause)) key env x))
+             (cons nil (cdr clause)))))))
+
+;; quasiquote, depth-counted as R7RS asks: the innermost unquote of a nested template
+;; is the one evaluated.
+(defun rontolisp::%scheme-eval-quasi (template depth env)
+  (cond ((and (vectorp template) (not (stringp template)))
+         (coerce (rontolisp::%scheme-eval-quasi (coerce template 'list) depth env)
+                 'vector))
+        ((not (consp template)) template)
+        ((rontolisp::%scheme-eval-unquote-p template '|unquote|)
+         (if (= depth 1)
+             (rontolisp::%scheme-eval (car (cdr template)) env)
+             (list '|unquote|
+                   (rontolisp::%scheme-eval-quasi (car (cdr template)) (- depth 1)
+                                                  env))))
+        ((rontolisp::%scheme-eval-unquote-p template '|quasiquote|)
+         (list '|quasiquote|
+               (rontolisp::%scheme-eval-quasi (car (cdr template)) (+ depth 1) env)))
+        ((and (consp (car template))
+              (rontolisp::%scheme-eval-unquote-p (car template) '|unquote-splicing|))
+         (let ((tail (rontolisp::%scheme-eval-quasi (cdr template) depth env)))
+           (if (= depth 1)
+               (append (rontolisp::%scheme-eval (car (cdr (car template))) env) tail)
+               (cons (list '|unquote-splicing|
+                           (rontolisp::%scheme-eval-quasi (car (cdr (car template)))
+                                                          (- depth 1) env))
+                     tail))))
+        (t
+         (cons (rontolisp::%scheme-eval-quasi (car template) depth env)
+               (rontolisp::%scheme-eval-quasi (cdr template) depth env)))))
+
+;; (keyword x): the keyword and exactly one operand.
+(defun rontolisp::%scheme-eval-unquote-p (x keyword)
+  (and (eq (car x) keyword) (consp (cdr x)) (null (cdr (cdr x)))))
+
+(defun rontolisp::%scheme-eval (x env)
+  (do ()
+      (nil)
+    (cond ((or (null x) (eq x t) (eq x rontolisp::%scheme-false)
+               (eq x rontolisp::%scheme-unspecified) (eq x '|#[environment]|))
+           (return x))
+          ((symbolp x) (return (rontolisp::%scheme-eval-variable x env)))
+          ((not (consp x)) (return x))
+          (t
+           (let ((head (rontolisp::%scheme-eval-syntax (car x) env)))
+             (cond ((null head)
+                    (let ((loop (rontolisp::%scheme-eval-loop (car x) env)))
+                      (if loop
+                          ;; (name args...) continues NAME's loop: a fresh frame over
+                          ;; its outer environment, then its body.
+                          (let ((arguments (rontolisp::%scheme-eval-operands x env)))
+                            (setq env
+                                  (cons (cons (rontolisp::%scheme-eval-bind
+                                               (car (cdr loop)) arguments)
+                                              loop)
+                                        (car (cdr (cdr (cdr loop))))))
+                            (setq x
+                                  (rontolisp::%scheme-eval-butlast (car (cdr (cdr loop)))
+                                                                   env)))
+                          (return
+                           (rontolisp::%scheme-eval-apply
+                            (rontolisp::%scheme-eval (car x) env)
+                            (rontolisp::%scheme-eval-operands x env))))))
+                   ((eq head '|quote|)
+                    (return (car (rontolisp::%scheme-eval-parts x 1 1))))
+                   ((eq head '|quasiquote|)
+                    (return
+                     (rontolisp::%scheme-eval-quasi
+                      (car (rontolisp::%scheme-eval-parts x 1 1)) 1 env)))
+                   ((eq head '|if|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 2 3)))
+                      (if (eq (rontolisp::%scheme-eval (car parts) env)
+                              rontolisp::%scheme-false)
+                          (if (cdr (cdr parts))
+                              (setq x (car (cdr (cdr parts))))
+                              (return rontolisp::%scheme-unspecified))
+                          (setq x (car (cdr parts))))))
+                   ((eq head '|define|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 1 nil)))
+                      (let ((target (car parts)))
+                        (cond ((consp target)
+                               ;; (define (name . formals) body...); a curried
+                               ;; define is not supported, as in a file.
+                               (if (not (rontolisp::%scheme-eval-identifier-p
+                                         (car target)))
+                                   (rontolisp::%scheme-ill-formed x))
+                               (rontolisp::%scheme-eval-define
+                                (car target)
+                                (rontolisp::%scheme-eval-lambda (car target) (cdr target)
+                                                                (cdr parts) env x)
+                                env))
+                              ((and (rontolisp::%scheme-eval-identifier-p target)
+                                    (null (cdr (cdr parts))))
+                               (rontolisp::%scheme-eval-define
+                                target
+                                (if (cdr parts)
+                                    (rontolisp::%scheme-eval-named
+                                     target (car (cdr parts)) env x)
+                                    nil)
+                                env))
+                              (t (rontolisp::%scheme-ill-formed x))))
+                      (return rontolisp::%scheme-unspecified)))
+                   ((eq head '|set!|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 2 2)))
+                      (if (not (rontolisp::%scheme-eval-identifier-p (car parts)))
+                          (rontolisp::%scheme-ill-formed x))
+                      (rontolisp::%scheme-eval-assign
+                       (car parts) (rontolisp::%scheme-eval (car (cdr parts)) env)
+                       env)
+                      (return rontolisp::%scheme-unspecified)))
+                   ((eq head '|lambda|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 2 nil)))
+                      (return
+                       (rontolisp::%scheme-eval-lambda nil (car parts) (cdr parts) env
+                                                       x))))
+                   ((eq head '|begin|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 0 nil)))
+                      (if (null parts)
+                          (return rontolisp::%scheme-unspecified)
+                          (setq x (rontolisp::%scheme-eval-butlast parts env)))))
+                   ((eq head '|let|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 2 nil)))
+                      (if (rontolisp::%scheme-eval-identifier-p (car parts))
+                          ;; A named let, the inits evaluated outside it: a loop
+                          ;; frame when the body only ever calls the name, else a
+                          ;; procedure in a frame of its own, called once.
+                          (let ((rest (rontolisp::%scheme-eval-proper (cdr parts) 2
+                                                                      nil x))
+                                (name (car parts)))
+                            (let ((bindings
+                                   (rontolisp::%scheme-eval-bindings (car rest) x)))
+                              (let ((arguments
+                                     (rontolisp::%scheme-eval-operands bindings env)))
+                                (if (rontolisp::%scheme-eval-called-only-list
+                                     name (cdr rest))
+                                    (progn
+                                      (setq env
+                                            (cons (cons (rontolisp::%scheme-eval-bind
+                                                         (car bindings) arguments)
+                                                        (list name (car bindings)
+                                                              (cdr rest) env))
+                                                  env))
+                                      (setq x
+                                            (rontolisp::%scheme-eval-butlast (cdr rest)
+                                                                             env)))
+                                    (let ((frame (cons nil nil)))
+                                      (let ((procedure
+                                             (rontolisp::%scheme-eval-lambda
+                                              nil (car bindings) (cdr rest)
+                                              (cons frame env) x)))
+                                        (rplaca frame (list (cons name procedure)))
+                                        (return
+                                         (rontolisp::%scheme-eval-apply
+                                          procedure arguments))))))))
+                          (let ((bindings
+                                 (rontolisp::%scheme-eval-bindings (car parts) x)))
+                            (setq env
+                                  (cons (cons (rontolisp::%scheme-eval-bind
+                                               (car bindings)
+                                               (rontolisp::%scheme-eval-operands
+                                                bindings env))
+                                              nil)
+                                        env))
+                            (setq x
+                                  (rontolisp::%scheme-eval-butlast (cdr parts)
+                                                                   env))))))
+                   ((eq head '|let*|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 2 nil)))
+                      (let ((bindings (rontolisp::%scheme-eval-bindings (car parts) x)))
+                        (do ((names (car bindings) (cdr names))
+                             (inits (cdr bindings) (cdr inits)))
+                            ((null names))
+                          (setq env
+                                (cons (cons (list (cons (car names)
+                                                        (rontolisp::%scheme-eval
+                                                         (car inits) env)))
+                                            nil)
+                                      env)))
+                        (setq x (rontolisp::%scheme-eval-butlast (cdr parts) env)))))
+                   ((or (eq head '|letrec|) (eq head '|letrec*|))
+                    (let ((parts (rontolisp::%scheme-eval-parts x 2 nil)))
+                      (let ((bindings (rontolisp::%scheme-eval-bindings (car parts) x)))
+                        (setq env
+                              (cons (cons (mapcar (lambda (name) (cons name nil))
+                                                  (car bindings))
+                                          nil)
+                                    env))
+                        (do ((names (car bindings) (cdr names))
+                             (inits (cdr bindings) (cdr inits)))
+                            ((null names))
+                          (rontolisp::%scheme-eval-assign
+                           (car names)
+                           (rontolisp::%scheme-eval-named (car names) (car inits) env x)
+                           env))
+                        (setq x (rontolisp::%scheme-eval-butlast (cdr parts) env)))))
+                   ((eq head '|do|)
+                    ;; The variables are rebound per iteration, so a closure keeps
+                    ;; its iteration's bindings, as the front end's loops do.
+                    (let ((parts (rontolisp::%scheme-eval-parts x 2 nil)))
+                      (let ((specs (rontolisp::%scheme-eval-do-specs (car parts) x))
+                            (exit (rontolisp::%scheme-eval-proper (car (cdr parts)) 1
+                                                                  nil x))
+                            (body (cdr (cdr parts)))
+                            (outer env))
+                        (setq env
+                              (cons (cons (rontolisp::%scheme-eval-bind
+                                           (car specs)
+                                           (rontolisp::%scheme-eval-operands
+                                            (cons nil (car (cdr specs))) outer))
+                                          nil)
+                                    outer))
+                        (do ()
+                            ((not (eq (rontolisp::%scheme-eval (car exit) env)
+                                      rontolisp::%scheme-false)))
+                          (dolist (form body) (rontolisp::%scheme-eval form env))
+                          (setq env
+                                (cons (cons (rontolisp::%scheme-eval-bind
+                                             (car specs)
+                                             (rontolisp::%scheme-eval-operands
+                                              (cons nil (cdr (cdr specs))) env))
+                                            nil)
+                                      outer)))
+                        (if (null (cdr exit))
+                            (return rontolisp::%scheme-unspecified)
+                            (setq x (rontolisp::%scheme-eval-butlast (cdr exit) env))))))
+                   ((eq head '|cond|)
+                    (let ((taken (rontolisp::%scheme-eval-cond (cdr x) env x)))
+                      (cond ((null taken) (return rontolisp::%scheme-unspecified))
+                            ((car taken) (return (cdr taken)))
+                            (t (setq x (rontolisp::%scheme-eval-butlast (cdr taken) env))))))
+                   ((eq head '|case|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 1 nil)))
+                      (let ((taken (rontolisp::%scheme-eval-case
+                                    (rontolisp::%scheme-eval (car parts) env)
+                                    (cdr parts) env x)))
+                        (cond ((null taken) (return rontolisp::%scheme-unspecified))
+                              ((car taken) (return (cdr taken)))
+                              (t (setq x (rontolisp::%scheme-eval-butlast (cdr taken)
+                                                                          env)))))))
+                   ((eq head '|and|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 0 nil)) (short nil))
+                      (if (null parts) (return t))
+                      (do ()
+                          ((or short (null (cdr parts))))
+                        (if (eq (rontolisp::%scheme-eval (car parts) env)
+                                rontolisp::%scheme-false)
+                            (setq short t)
+                            (setq parts (cdr parts))))
+                      (if short (return rontolisp::%scheme-false) (setq x (car parts)))))
+                   ((eq head '|or|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 0 nil)) (found nil)
+                          (value nil))
+                      (if (null parts) (return rontolisp::%scheme-false))
+                      (do ()
+                          ((or found (null (cdr parts))))
+                        (setq value (rontolisp::%scheme-eval (car parts) env))
+                        (if (eq value rontolisp::%scheme-false)
+                            (setq parts (cdr parts))
+                            (setq found t)))
+                      (if found (return value) (setq x (car parts)))))
+                   ((or (eq head '|when|) (eq head '|unless|))
+                    (let ((parts (rontolisp::%scheme-eval-parts x 2 nil)))
+                      (let ((false (eq (rontolisp::%scheme-eval (car parts) env)
+                                       rontolisp::%scheme-false)))
+                        (if (if (eq head '|when|) (not false) false)
+                            (setq x (rontolisp::%scheme-eval-butlast (cdr parts) env))
+                            (return rontolisp::%scheme-unspecified)))))
+                   ((or (eq head '|delay|) (eq head '|delay-force|))
+                    (let ((form (car (rontolisp::%scheme-eval-parts x 1 1))) (inner env))
+                      (return
+                       (rontolisp::%scheme-delay
+                        (if (eq head '|delay|) 0 1)
+                        (lambda () (rontolisp::%scheme-eval form inner))))))
+                   ((eq head '|cons-stream|)
+                    (let ((parts (rontolisp::%scheme-eval-parts x 2 2)) (inner env))
+                      (return
+                       (cons (rontolisp::%scheme-eval (car parts) env)
+                             (rontolisp::%scheme-delay
+                              0
+                              (lambda ()
+                                (rontolisp::%scheme-eval (car (cdr parts)) inner)))))))
+                   ((member head '(|unquote| |unquote-splicing| |else| |s%=>|))
+                    (rontolisp::%scheme-ill-formed x))
+                   (t
+                    (error "~A"
+                           (rontolisp::%scheme-error-message
+                            "Not supported inside eval:" (list x))))))))))
+

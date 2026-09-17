@@ -1,8 +1,9 @@
 # Scheme (experimental)
 
 **Experimental.** rontolisp reads a subset of R7RS-small -- `(scheme base)`,
-`(scheme write)`, `(scheme inexact)`, `(scheme cxr)`, `(scheme lazy)` and
-`(scheme process-context)`'s `exit` -- just large enough to run a
+`(scheme write)`, `(scheme inexact)`, `(scheme cxr)`, `(scheme lazy)`,
+`(scheme process-context)`'s `exit`, `(scheme eval)` and `(scheme repl)` -- just large
+enough to run a
 Scheme program on every backend. Conformance is partial by design and nothing here is a
 compatibility promise. Use it to try a Scheme program on the JVM or WebAssembly; write
 Common Lisp for anything you need to keep working.
@@ -67,7 +68,7 @@ done
 scheme> (exit)
 ```
 
-Everything those six libraries export -- plus the SICP-compatibility names below, which
+Everything those eight libraries export -- plus the SICP-compatibility names below, which
 no `(import ...)` names -- is visible from the start, and an
 `(import ...)` typed at the prompt only adds names. Definitions typed at separate prompts
 see each other in either order, as they would in one file. Two things differ from a file,
@@ -87,7 +88,8 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   `let-values`, `let*-values`, `define-record-type` (top level only), `delay`,
   `delay-force`, and
   `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr) (scheme lazy)
-  (scheme process-context))` with `only` / `except` / `prefix` / `rename`.
+  (scheme process-context) (scheme eval) (scheme repl))` with `only` / `except` /
+  `prefix` / `rename`.
 - **Procedures**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
   floor-quotient floor-remainder truncate-quotient truncate-remainder abs min max gcd lcm
   expt square floor ceiling round truncate zero? positive? negative? odd? even? number?
@@ -103,10 +105,13 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
   values call-with-values error`; `display write newline write-char write-string` (the
   current output port only); `exit emergency-exit` (`#t` or no argument is status 0, `#f`
-  is 1, an integer is its low eight bits). `write` and `display` write a circular list or
-  vector with datum labels, `#0=(a b c . #0#)`; structure shared without a cycle is
+  is 1, an integer is its low eight bits); `(scheme eval)`: `eval environment`;
+  `(scheme repl)`: `interaction-environment`. `write` and `display` write a circular list
+  or vector with datum labels, `#0=(a b c . #0#)`; structure shared without a cycle is
   written out each time.
 - **SICP compatibility, not R7RS**: `true false nil` (ordinary variables, not literals);
+  `user-initial-environment system-global-environment` and R5RS's
+  `scheme-report-environment`, all naming the one global environment (see `eval` below);
   `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
   runtime parallel-execute test-and-set!`; streams: `cons-stream` (syntax),
   `the-empty-stream stream-car stream-cdr
@@ -200,6 +205,39 @@ below `1e21` and with an exponent from there (and below `1e-6`):
 3
 ```
 
+## eval
+
+`(eval datum env)` evaluates a datum at run time, on every backend. Every environment
+specifier is the one global environment: `(interaction-environment)`,
+`(scheme-report-environment 5)`, `(environment '(scheme base) ...)` -- its import sets
+are checked against the libraries above -- and MIT Scheme's `user-initial-environment`
+and `system-global-environment` all name it, and the argument may be left out. It holds
+what the program defined, what `eval` itself defined, and the built-in procedures, in
+that order. A `define` inside `eval` is visible to later `eval`s only, and a `set!` of one
+of the program's variables changes `eval`'s own copy: the program keeps reading its own.
+
+```scheme
+(define (execute exp) (apply (eval (car exp) user-initial-environment) (cdr exp)))
+(display (execute '(> 5 3))) (newline)
+(eval '(define (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) (interaction-environment))
+(display (list (eval '(fact 10) (interaction-environment))
+               (eval '(let loop ((i 0)) (if (= i 100000) i (loop (+ i 1))))
+                     (interaction-environment))))
+(newline)
+```
+
+```
+#t
+(3628800 100000)
+```
+
+Inside `eval`, a named `let`, a `do` and a procedure calling itself run in constant
+stack; every other call uses it. `define-record-type`, `define-values`, `let-values`,
+`import` and the syntax the reader refuses are refused by name inside `eval` too. A
+compiled program's `eval` resolves a built-in procedure only when the program spells its
+name somewhere -- as a symbol, quoted data included, or inside a string -- while the
+interpreter resolves them all.
+
 ## Deviations
 
 - **Tail calls are proper only where they become a loop**: a named `let` or `do`, and a
@@ -212,6 +250,10 @@ below `1e21` and with an exponent from there (and below `1e-6`):
   `dynamic-wind` runs its `before` exactly once.
 - `call-with-values` is a direct binding when both arguments are written as `lambda`
   expressions; any other shape goes through a list.
+- A first-class `values` -- `(apply values '(1 2))`, `values` reached through a variable,
+  `values` inside `eval` -- answers its first value only on the compiled backends; the
+  interpreter answers them all. Written as a call, `(values 1 2)`, it answers them all
+  everywhere.
 - An uncaught `error` ends the program with its message and irritants. There is no
   `guard` to catch it.
 - A record prints in Common Lisp's `#S(...)` syntax. `equal?` compares records by
@@ -228,7 +270,7 @@ below `1e21` and with an exponent from there (and below `1e-6`):
 - Error messages spell Common Lisp names (`CAR`).
 - **Not yet**: `define-syntax` / `syntax-rules`, `define-library`, `guard` / `raise`,
   `parameterize`, `case-lambda`, bytevectors, ports other than the current
-  output port, `eval`, `(scheme char)` and the other libraries, `|...|` identifiers,
+  output port, `(scheme char)` and the other libraries, `|...|` identifiers,
   reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is read.
 
 ## Mixing with Common Lisp

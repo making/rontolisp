@@ -22,7 +22,10 @@ help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
   `rontolisp::%scheme-` FUNCTION, `CompileFrontend.expand` splices it innermost (beside
   `TokenizersLibrary`, INSIDE the prelude whose string comparisons it uses) and
   `LibraryDefunPruner` drops what stays unreachable. The playground's chain has the splice
-  too; a `.scm` reaches the playground through `(load ...)` of an uploaded file.
+  too; a `.scm` reaches the playground through `(load ...)` of an uploaded file. Two
+  definitions are GENERATED from the front end's tables and appended to the source's
+  forms (`Scheme.runtimeForms`): `eval`'s procedure table and `environment`'s library
+  predicate ("`eval`" below).
 - A whole FILE is lowered at once: defun-or-variable is decided by a pre-scan. A REPL has
   no whole program to scan and lowers through a session instead ("A session" below).
 
@@ -51,6 +54,7 @@ help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's `(values ..)` result survives the `setq` into the result variable because `values` publishes through `%mv-spill` |
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
+| `(eval datum env)`, `(interaction-environment)`, `(scheme-report-environment 5)`, `(environment sets..)`, `user-initial-environment`, `system-global-environment` | `(%scheme-eval-in datum '\|#[environment]\|)`: a Scheme evaluator over DATUMS in `scheme.lisp`; every specifier is the one global environment, a quoted symbol | the lowering is not inside a compiled program and the backends' run-time `eval` evaluates core forms, so one evaluator serves all four ("`eval`" below) |
 
 `symbol?` excludes `T`, `NIL` and the false value; `boolean?` is `#t`/`#f` only; `vector?`
 excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are inexact
@@ -83,20 +87,25 @@ records; CL's `equal` compares a general vector by identity and an instance slot
   Refusing it on the compile path would cost the direct call of every procedure for a
   program that is wrong anyway; a session has the same order as the interpreter.
 
-## The library tags: `base`, `write`, `inexact`, `cxr`, `lazy`, `process-context` and `sicp`
+## The library tags: `base`, `write`, `inexact`, `cxr`, `lazy`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them. `base`, `write`,
 `inexact`, `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
-standard Common Lisp function of the same name), `lazy` and `process-context` are
+standard Common Lisp function of the same name), `lazy`, `process-context`, `eval`
+(`eval`, `environment`) and `repl` (`interaction-environment`) are
 `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme <tag>))` names them, and a file
-with no import at all merges all six. Keywords carry a library too: `SYNTAX` is `base`,
+with no import at all merges all eight. Keywords carry a library too: `SYNTAX` is `base`,
 `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
-`sicp` (`true false nil` -- via `SchemeLowering.Constant`, not an `Entry`, since they are
-values, not procedures -- `filter reduce fold-left fold-right delete last-pair append!
+`sicp` (`true false nil the-empty-stream user-initial-environment
+system-global-environment` -- via `SchemeLowering.Constant` over
+`SchemeBuiltins.constants()`, not an `Entry`, since they are values, not procedures --
+`filter reduce fold-left fold-right delete last-pair append!
 list-index 1+ -1+ random runtime parallel-execute test-and-set!`) is no R7RS library, so no import names it:
 `SchemeLowering.imports()`'s no-import branch merges it too, so a file with no import at
 all (an unqualified SICP sample, or a REPL) sees it anyway, and an explicit import list
-narrows to exactly what it names (`.todo/829`
+narrows to exactly what it names. `r5rs` (`scheme-report-environment`) rides the same
+no-import default: `(scheme r5rs)` would promise the whole of R5RS, so it stays refused
+by name (`.todo/829`
 measured 1,251 -> 1,307 of the 1,592-file SICP sample corpus running to exit 0 in file
 mode from this alone, zero regressions -- `.todo/artefacts/828-sicp-sample-corpus-harness/`
 has the harness). A user `define` of any of these still wins, exactly like `square`:
@@ -192,6 +201,73 @@ defines regardless of what library put there first.
 - Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
   1,342 -> 1,347 exiting 0 (the five `parallel-execute` samples), no other exit or stdout
   change; all 19 `variant=concurrent` samples exit 0 on the interpreter, the JVM and wasm.
+
+## `eval` (`(scheme eval)`, `(scheme repl)`, the MIT and R5RS environment names)
+
+- **`eval` is a Scheme evaluator over Scheme DATUMS in `scheme.lisp`** (`%scheme-eval`),
+  one definition for all four backends: the lowering is Java and not inside a compiled
+  program, and the run-time `eval` the backends carry (`.kb/eval-runtime.md`) evaluates
+  Common Lisp core forms. No CL `eval` is involved, so `usesEval` stays off; what the
+  evaluator needs from a compiled program is `fboundp` / `symbol-function` / `boundp` /
+  `symbol-value` with a COMPUTED name -- the name registry and the `_genv` mirror, which
+  all four backends answer for a later `defun`, a `setq`'d global and its later updates
+  (measured 2026-09-17); `set` and `(setf (symbol-value ..))` do not exist on any of them.
+- **Every environment specifier is the one global environment**, the symbol
+  `#[environment]` (`SchemeBuiltins.ENVIRONMENT_NAME`, MIT's spelling, so `display` shows
+  it; `symbol?` of it answers `#t`, a stated wart): `(interaction-environment)` (`repl`),
+  `(scheme-report-environment 5)` (`r5rs`), `user-initial-environment` /
+  `system-global-environment` (`sicp` constants) and `(environment sets..)` (`eval`;
+  every set is checked against `IMPORTABLE_LIBRARIES` through the generated
+  `%scheme-library-p`, modifiers included). `(eval x)` with no environment is accepted.
+- **Name resolution order**: eval's own globals (`%scheme-eval-globals`, an alist -- with
+  no `set` on the compile path a `define` inside `eval` cannot become a program global,
+  so it reaches later `eval`s only), then the program's `fboundp` / `boundp` names (a
+  user `define` wins over a builtin, as in a file; `fboundp` is case-sensitive, so a
+  lowercase `car` never answers `CAR`), then the builtins through `%scheme-builtin`.
+  `set!` of a program variable or a builtin makes eval's own copy (stated deviation, the
+  compiled CL `eval`'s one-way mirror). A keyword is syntax unless a variable of that
+  name is in scope (`%scheme-eval-syntax`: frames, eval's globals, `boundp`, `fboundp`);
+  a datum's symbols carry their mangled spelling, so the keyword `=>` is `s%=>` there.
+- **The run-time table is GENERATED from `SchemeBuiltins`** (`runtimeForms`: one `case`
+  arm per entry's `:function` and per constant, keyed by the mangled name, appended to
+  `scheme.lisp`'s forms by `SchemeLibrary.forms`, so the table is spelled once); the
+  interpreter's copy holds every entry. **A compiled program's holds only the names it
+  SPELLS** (a symbol anywhere, quoted data included, or a substring of a string literal
+  -- `SchemeLibrary.process`): the whole table reaches every helper there is, 291 KB of
+  class / 235 KB of wasm for `(display (eval '(+ 1 2) (interaction-environment)))`
+  against 132 KB / 80 KB cut to what is spelled, and 80 KB / 7 KB with no `eval` at all
+  (the rest is the name registry, the evaluator and the printer its messages use;
+  2026-09-17). The same line the compiled CL `eval`'s registry draws.
+- **Environments are frames `(alist . loop)`**: `set!` mutates a cell, an internal
+  `define` pushes onto the innermost frame, which every closure over it shares. A named
+  `let`, a `define`d procedure and a `letrec` lambda whose name is only ever CALLED in
+  its body (`%scheme-eval-called-only`: never a value, never assigned, never rebound; a
+  mention under `quasiquote` refuses) get a LOOP frame `(name formals body outer)`, and a
+  call of the name found through the frames (`%scheme-eval-loop`) rebinds a fresh frame
+  over `outer` and continues in `%scheme-eval`'s own `do` loop -- a jump in tail
+  position, the same value a call gives anywhere else, so no tail-position analysis is
+  needed. 100,000 iterations of a named let, of a self-calling `define` and of a `do` run
+  on all four backends; before the loop frames a named let of 1,000 exhausted wasm's
+  stack (2026-09-17). A closure made in an iteration keeps its iteration's frame. Stated
+  deviation, the session's too: an old closure of a name `set!` later keeps jumping to
+  itself. Every other call recurses (`ev?`/`od?`).
+- Errors are Scheme-spelled through `%scheme-error-message`: `Unbound variable: x`,
+  `Ill-formed special form: (if)`, `Not supported inside eval: (define-record-type ..)`
+  (also `define-values`, `let-values`, `import`, the syntax the reader refuses),
+  `Wrong number of arguments: (a b) given (1)`, `The object is not applicable: 3`,
+  `eval: not an environment: 2`, `environment: library is not available: (scheme char)`,
+  `Syntactic keyword may not be used as an expression: if`. A first-class `values`
+  (every `values` inside `eval` is one) answers its primary only on the compiled
+  backends (`.kb/multiple-values.md`).
+- Corpus (2026-09-17, `run.py`): file mode 1,347 and REPL mode 1,347 samples exiting 0
+  before and after, no exit or stdout change; the one `eval` sample
+  (`chapter4/section4/subsection4/14_execute.scm`, the query system's `lisp-value`) is a
+  fragment that only defines `execute`.
+- Pinned by the three `eval-...` cases of `scheme-spec.yaml` (all four backends),
+  `SchemeLoweringTest.evalAndEveryEnvironmentSpecifierLowerToTheRunTimeEvaluator`,
+  `SchemeBuiltinsTest.theRunTimeTableAnswersEveryProcedureAndConstantByItsMangledName`,
+  `LibraryDefunPrunerTest.theSchemeEvaluatorAndItsProcedureTableFollowOnlyAProgramThatEvals`,
+  `RontoLispCliTest.anErrorInsideSchemeEvalIsReportedInSchemeTerms`.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
@@ -377,7 +453,7 @@ over-deep datum. `(* power 2)` in Brent's step cost 468 wasm bytes over `(+ powe
 `syntax-rules`/`define-syntax` (a shadow-aware walk like `substituteSymbolMacros`),
 `define-library`, `guard`/`raise` (onto `handler-case`), `parameterize` (the special-`let`
 restore), bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output port
-(`%STREAM` instances), `eval`, `(scheme char)` and the other libraries, `|...|`
+(`%STREAM` instances), `(scheme char)` and the other libraries, `|...|`
 identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
 proper tail calls in general. Each is refused by name where it can be.
 
@@ -391,7 +467,8 @@ when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
 `aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
 `anUncaughtSchemeErrorReportsItsMessageAndIrritants`,
-`aSchemeTranscendentalWithAComplexAnswerIsRefusedByName`, the `theSchemeRepl...` transcripts, the
+`aSchemeTranscendentalWithAComplexAnswerIsRefusedByName`, `anErrorInsideSchemeEvalIsReportedInSchemeTerms`,
+the `theSchemeRepl...` transcripts, the
 first of which replays its input as a FILE and compares, `aCyclicValueIsEchoedWithoutKillingTheSession`,
 `aPipedReplWritesNoPromptForEitherLanguage`, `aTerminalReplPromptsOncePerFreshForm`,
 `aPipedReplReportsFailuresOnStandardErrorAndEndsNonZero`, `exitEndsTheSessionWithItsStatusInEitherLanguage`),

@@ -11,19 +11,23 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.scheme.Scheme;
 import org.jspecify.annotations.Nullable;
 
 /**
  * The run-time half of the EXPERIMENTAL Scheme front end ({@code scheme.lisp} on the
- * classpath): the printer behind {@code display}/{@code write}, an {@code equal?} that
- * recurses into vectors, the symbol-name escaping, {@code call/cc} and
- * {@code dynamic-wind}. It is Common Lisp source like every other shipped library, so no
- * backend learns a Scheme name ({@code .kb/scheme-frontend.md}).
+ * classpath, plus the forms {@link Scheme#runtimeForms()} generates from the front end's
+ * tables): the printer behind {@code display}/{@code write}, an {@code equal?} that
+ * recurses into vectors, the symbol-name escaping, {@code call/cc}, {@code dynamic-wind}
+ * and the evaluator behind {@code eval}. It is Common Lisp source like every other
+ * shipped library, so no backend learns a Scheme name ({@code .kb/scheme-frontend.md}).
  *
  * <p>
  * Consumers, the {@link UrlLibrary} shape:
@@ -38,6 +42,8 @@ import org.jspecify.annotations.Nullable;
  * </ul>
  */
 public final class SchemeLibrary {
+
+	private static final Map<String, List<LispVal>> SOURCE_FORMS = new ConcurrentHashMap<>();
 
 	private static final Map<String, List<LispVal>> FORMS = new ConcurrentHashMap<>();
 
@@ -66,7 +72,21 @@ public final class SchemeLibrary {
 	 * @return the library forms
 	 */
 	public static List<LispVal> forms(Features features) {
-		return FORMS.computeIfAbsent(String.join(",", features.names()),
+		return FORMS.computeIfAbsent(String.join(",", features.names()), ignored -> {
+			// The forms the scheme package GENERATES from its tables -- the run-time
+			// procedure table behind eval, the library-name predicate behind
+			// (environment ...) -- follow the source, so each table is spelled once. The
+			// interpreter loads the library once for every program, so its table holds
+			// every procedure; a compiled program gets one cut to what it spells
+			// (process).
+			List<LispVal> forms = new ArrayList<>(sourceForms(features));
+			forms.addAll(Scheme.runtimeForms(name -> true));
+			return List.copyOf(forms);
+		});
+	}
+
+	private static List<LispVal> sourceForms(Features features) {
+		return SOURCE_FORMS.computeIfAbsent(String.join(",", features.names()),
 				ignored -> List.copyOf(LispReader.readAllFromString(readSource(), features)));
 	}
 
@@ -115,6 +135,15 @@ public final class SchemeLibrary {
 	 * The compile-path pre-pass: prepends the library definitions, read for the target,
 	 * when the program references one of its functions. A program that does not is
 	 * returned unchanged.
+	 *
+	 * <p>
+	 * The run-time procedure table behind {@code eval} is generated for THIS program: it
+	 * holds the procedures whose (mangled) names the program spells, as a symbol anywhere
+	 * in it -- quoted data included -- or inside a string literal. A datum a compiled
+	 * program can hand {@code eval} is built from those, and the whole table would reach
+	 * every helper there is ({@code SchemeBuiltins.runtimeForms}); the compiled name
+	 * registry behind Common Lisp's {@code eval} draws the same line
+	 * ({@code .kb/eval-runtime.md}).
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
 	 * @param features the target backend's reader features
 	 * @return the program with the library spliced in when used
@@ -122,12 +151,41 @@ public final class SchemeLibrary {
 	public static List<LispVal> process(List<LispVal> program, Features features) {
 		for (LispVal form : program) {
 			if (references(form)) {
-				List<LispVal> out = new ArrayList<>(forms(features));
+				Set<String> symbols = new HashSet<>();
+				List<String> strings = new ArrayList<>();
+				for (LispVal spelled : program) {
+					collectSpellings(spelled, symbols, strings);
+				}
+				List<LispVal> out = new ArrayList<>(sourceForms(features));
+				out.addAll(Scheme.runtimeForms(
+						name -> symbols.contains(name) || strings.stream().anyMatch(string -> string.contains(name))));
 				out.addAll(program);
 				return out;
 			}
 		}
 		return program;
+	}
+
+	private static void collectSpellings(LispVal form, Set<String> symbols, List<String> strings) {
+		switch (form) {
+			case LispSymbol symbol -> symbols.add(symbol.name());
+			case LispString string -> strings.add(string.value());
+			case LispCons cons -> {
+				LispVal rest = cons;
+				while (rest instanceof LispCons cell) {
+					collectSpellings(cell.car(), symbols, strings);
+					rest = cell.cdr();
+				}
+				collectSpellings(rest, symbols, strings);
+			}
+			case LispArray array -> {
+				for (LispVal element : array.data()) {
+					collectSpellings(element, symbols, strings);
+				}
+			}
+			default -> {
+			}
+		}
 	}
 
 	private static boolean references(LispVal form) {

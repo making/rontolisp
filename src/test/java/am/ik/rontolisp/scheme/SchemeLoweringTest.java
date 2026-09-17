@@ -249,10 +249,44 @@ class SchemeLoweringTest {
 		assertThat(lowered("(import (prefix (only (scheme base) car) s:)) (s:car x)")).isEqualTo("(CAR |x|)");
 		assertThatThrownBy(() -> lowered("(import (scheme char))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |char|) is not available: this experimental front end has"
-					+ " (scheme base), (scheme write), (scheme inexact), (scheme cxr), (scheme lazy) and (scheme process-context) only");
+					+ " (scheme base), (scheme write), (scheme inexact), (scheme cxr), (scheme lazy),"
+					+ " (scheme process-context), (scheme eval) and (scheme repl) only");
 		assertThat(lowered("(import (scheme inexact)) (sqrt x)")).isEqualTo("(RONTOLISP::%SCHEME-SQRT |x|)");
 		assertThat(lowered("(import (scheme base)) (sqrt x)")).isEqualTo("(|sqrt| |x|)");
 		assertThat(lowered("(import (only (scheme cxr) caddr)) (caddr x)")).isEqualTo("(CADDR |x|)");
+	}
+
+	@Test
+	void evalAndEveryEnvironmentSpecifierLowerToTheRunTimeEvaluator() {
+		// The evaluator is %scheme-eval in scheme.lisp; every specifier is the one
+		// global environment, a symbol. The env argument may be left out.
+		assertThat(lowered("(eval x user-initial-environment) (eval x) (interaction-environment)"
+				+ " system-global-environment (scheme-report-environment 5) (environment '(scheme base))"))
+			.isEqualTo("""
+					(RONTOLISP::%SCHEME-EVAL-IN |x| '|#[environment]|)
+					(RONTOLISP::%SCHEME-EVAL |x| NIL)
+					'|#[environment]|
+					'|#[environment]|
+					(PROGN 5 '|#[environment]|)
+					(RONTOLISP::%SCHEME-ENVIRONMENT (LIST '(|scheme| |base|)))""");
+		// (scheme eval) and (scheme repl) are importable; the MIT and R5RS names ride the
+		// no-import default only, like the sicp tag.
+		assertThat(lowered("(import (scheme eval) (scheme repl)) (eval x (interaction-environment))"
+				+ " user-initial-environment (scheme-report-environment 5)"))
+			.isEqualTo("""
+					(RONTOLISP::%SCHEME-EVAL-IN |x| '|#[environment]|)
+					|user-initial-environment|
+					(|scheme-report-environment| 5)""");
+		assertThat(lowered("(import (scheme base)) (eval x)")).isEqualTo("(|eval| |x|)");
+		// The run-time table behind it is generated from the same entries, one arm per
+		// procedure and constant by its mangled name, cut to the names a program spells.
+		assertThat(Scheme.runtimeForms(name -> name.equals("s%+") || name.equals("car") || name.equals("false"))
+			.get(0)
+			.print()).isEqualTo("(DEFUN RONTOLISP::%SCHEME-BUILTIN (NAME) (CASE NAME ((|s%+|) #'+) ((|car|) #'CAR)"
+					+ " ((|false|) RONTOLISP::%SCHEME-FALSE) (T 'RONTOLISP::%SCHEME-UNBOUND)))");
+		assertThat(Scheme.runtimeForms(name -> false).get(1).print()).isEqualTo(
+				"(DEFUN RONTOLISP::%SCHEME-LIBRARY-P (NAME) (IF (MEMBER NAME '(|base| |write| |inexact| |cxr| |lazy|"
+						+ " |process-context| |eval| |repl|)) T NIL))");
 	}
 
 	@Test

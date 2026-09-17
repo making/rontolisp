@@ -20,7 +20,9 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
+import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -170,9 +172,10 @@ final class SchemeLowering {
 	}
 
 	/**
-	 * A bare value, not a procedure: {@code true}, {@code false}, {@code nil}. Not an
-	 * R7RS export of {@code (scheme base)}, so unreachable by name through {@code import}
-	 * -- only the no-import default merges it (a REPL, and a file with no import at all).
+	 * A bare value, not a procedure: {@code true}, {@code false}, {@code nil},
+	 * {@code user-initial-environment} ({@code SchemeBuiltins.constants()}). Not an R7RS
+	 * export of {@code (scheme base)}, so unreachable by name through {@code import} --
+	 * only the no-import default merges it (a REPL, and a file with no import at all).
 	 */
 	private record Constant(LispVal form) implements Binding {
 	}
@@ -508,7 +511,25 @@ final class SchemeLowering {
 
 	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
 	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "inexact", "cxr", "lazy",
-			"process-context");
+			"process-context", "eval", "repl");
+
+	/**
+	 * {@code (defun rontolisp::%scheme-library-p (name) ...)}: whether
+	 * {@code (scheme name)} is one of {@link #IMPORTABLE_LIBRARIES}, for what a run-time
+	 * {@code (environment '(scheme base))} checks its import sets against. Generated so
+	 * the list is spelled once.
+	 * @return the definition, in the library's canonical shape
+	 */
+	static LispVal libraryPredicateForm() {
+		StringBuilder names = new StringBuilder();
+		for (String library : IMPORTABLE_LIBRARIES) {
+			names.append(" |").append(library).append('|');
+		}
+		return LispReader
+			.readAllFromString("(defun rontolisp::%scheme-library-p (name) (if (member name '(" + names + ")) t nil))",
+					Features.INTERPRETER)
+			.get(0);
+	}
 
 	// Leading (import ...) forms pick what the global scope holds; a program with none
 	// sees everything, like a REPL.
@@ -529,8 +550,9 @@ final class SchemeLowering {
 			// Not R7RS exports, so not reachable by name through (import ...): a REPL,
 			// and a file with no import at all, sees them anyway, the way an unqualified
 			// SICP sample -- written against an implementation that already had them --
-			// expects.
+			// expects. r5rs is the same shape: (scheme r5rs) would promise all of R5RS.
 			imported.putAll(library("sicp"));
+			imported.putAll(library("r5rs"));
 		}
 		for (Map.Entry<String, Binding> entry : imported.entrySet()) {
 			this.global.bindings.put(SchemeNames.mangle(entry.getKey()), entry.getValue());
@@ -550,8 +572,8 @@ final class SchemeLowering {
 				return library(name.name());
 			}
 			throw error("library " + set.print() + " is not available: this experimental front end has (scheme base),"
-					+ " (scheme write), (scheme inexact), (scheme cxr), (scheme lazy) and (scheme process-context) only",
-					form);
+					+ " (scheme write), (scheme inexact), (scheme cxr), (scheme lazy), (scheme process-context),"
+					+ " (scheme eval) and (scheme repl) only", form);
 		}
 		Map<String, Binding> base = importSet(parts.get(1), form);
 		Map<String, Binding> result = new LinkedHashMap<>();
@@ -611,10 +633,7 @@ final class SchemeLowering {
 		}
 		if (library.equals("sicp")) {
 			SICP_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
-			exports.put("the-empty-stream", new Constant(LispNil.INSTANCE));
-			exports.put("true", new Constant(LispTrue.INSTANCE));
-			exports.put("false", new Constant(this.falseVariable));
-			exports.put("nil", new Constant(LispNil.INSTANCE));
+			SchemeBuiltins.constants().forEach((name, form) -> exports.put(name, new Constant(form)));
 		}
 		for (SchemeBuiltins.Entry entry : SchemeBuiltins.entries().values()) {
 			if (entry.library().equals(library)) {
