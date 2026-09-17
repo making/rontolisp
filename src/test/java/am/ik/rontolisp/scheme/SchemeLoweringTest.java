@@ -190,6 +190,27 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void theSicpVocabularyIsVisibleOnlyWithNoImportAtAllLikeAReplsEverything() {
+		assertThat(lowered("(list true false nil)")).isEqualTo("(LIST T RONTOLISP::%SCHEME-FALSE NIL)");
+		assertThat(lowered("(caddr x)")).isEqualTo("(CADDR |x|)");
+		// Explicit imports narrow to what they name, exactly like base/write: neither tag
+		// is reachable BY NAME, so importing only (scheme base) leaves filter/caddr
+		// undefined in this file -- a call some other file defines.
+		assertThat(lowered("(import (scheme base)) (list (filter p l) (caddr x))"))
+			.isEqualTo("(LIST (|filter| |p| |l|) (|caddr| |x|))");
+	}
+
+	@Test
+	void aUserDefineOfASicpOrCxrNameStillWinsLikeSquare() {
+		assertThat(lowered("(define (filter pred l) (list 'mine pred l)) (filter p l)")).isEqualTo("""
+				(DEFUN |filter| (|pred| |l|) (LIST '|mine| |pred| |l|))
+				(|filter| |p| |l|)""");
+		assertThat(lowered("(define nil 1) nil")).isEqualTo("""
+				(SETQ |nil| 1)
+				|nil|""");
+	}
+
+	@Test
 	void aSyntaxErrorIsPositioned() {
 		assertThatThrownBy(() -> lowered("(define (f)\n  (if))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:2:3: malformed if");

@@ -148,6 +148,14 @@ final class SchemeLowering {
 	private record Builtin(SchemeBuiltins.Entry entry) implements Binding {
 	}
 
+	/**
+	 * A bare value, not a procedure: {@code true}, {@code false}, {@code nil}. Not an
+	 * R7RS export of {@code (scheme base)}, so unreachable by name through {@code import}
+	 * -- only the no-import default merges it (a REPL, and a file with no import at all).
+	 */
+	private record Constant(LispVal form) implements Binding {
+	}
+
 	private record Syntax(Core core, String name) implements Binding {
 	}
 
@@ -437,6 +445,13 @@ final class SchemeLowering {
 		if (index == 0) {
 			imported.putAll(library("base"));
 			imported.putAll(library("write"));
+			// Not R7RS exports, so not reachable by name through (import ...): a REPL,
+			// and a
+			// file with no import at all, sees them anyway, the way an unqualified SICP
+			// sample -- written against an implementation that already had them --
+			// expects.
+			imported.putAll(library("sicp"));
+			imported.putAll(library("cxr"));
 		}
 		for (Map.Entry<String, Binding> entry : imported.entrySet()) {
 			this.global.bindings.put(SchemeNames.mangle(entry.getKey()), entry.getValue());
@@ -506,10 +521,15 @@ final class SchemeLowering {
 		return binding;
 	}
 
-	private static Map<String, Binding> library(String library) {
+	private Map<String, Binding> library(String library) {
 		Map<String, Binding> exports = new LinkedHashMap<>();
 		if (library.equals("base")) {
 			SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
+		}
+		if (library.equals("sicp")) {
+			exports.put("true", new Constant(LispTrue.INSTANCE));
+			exports.put("false", new Constant(this.falseVariable));
+			exports.put("nil", new Constant(LispNil.INSTANCE));
 		}
 		for (SchemeBuiltins.Entry entry : SchemeBuiltins.entries().values()) {
 			if (entry.library().equals(library)) {
@@ -923,6 +943,7 @@ final class SchemeLowering {
 					.toSchemeValue(SchemeBuiltins.Result.PREDICATE, list(predicate.symbol(), argument)));
 			}
 			case Builtin builtin -> builtin.entry().function();
+			case Constant constant -> constant.form();
 			case LoopName loop -> {
 				loop.escaped = true;
 				yield LispNil.INSTANCE;

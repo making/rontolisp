@@ -58,7 +58,8 @@ scheme> (list #t #f '() 'Sym)
 scheme> (quit)
 ```
 
-`(scheme base)` と `(scheme write)` がエクスポートする名前は最初からすべて見えており、
+`(scheme base)` と `(scheme write)` がエクスポートする名前 -- それに加えて、後述の
+どの `(import ...)` にも属さない SICP 互換名 -- は最初からすべて見えており、
 プロンプトで入力した `(import ...)` は名前を追加するだけです。別々のプロンプトで入力した
 定義は、1 つのファイルに書いた場合と同じく、順序によらず互いを参照できます。フォームは
 入力時点で確定するため、ファイルとの違いが 2 点あります: 組み込み手続き（`square`）を再定義しても、
@@ -91,6 +92,23 @@ scheme> (quit)
   values call-with-values error`; `display write newline write-char write-string`
   （現在の出力ポートのみ）。`write` と `display` は循環するリストやベクタをデータラベル付きで
   `#0=(a b c . #0#)` のように書きます。循環のない共有構造は出現のたびに書き出します。
+- **SICP 互換、R7RS ではない**: `true false nil`（リテラルではなく普通の変数）、
+  `(scheme cxr)` 一式（`caaar` から `cddddr` まで）、`filter reduce fold-left fold-right
+  delete last-pair append! list-index 1+ -1+ random runtime`。これらは `(import ...)` を
+  一切書かないプログラムでのみ見える -- `(scheme base)` / `(scheme write)` と同じ扱いで、
+  明示的な import リストがあるとこれらの名前には届かない。
+
+```scheme
+(display (list true false nil (cadddr '(1 2 3 4)))) (newline)
+(display (filter odd? '(1 2 3 4 5))) (newline)
+(display (fold-left cons '() '(1 2 3))) (newline)
+```
+
+```
+(#t #f () 4)
+(1 3 5)
+(((() . 1) . 2) . 3)
+```
 
 ```scheme
 (define (sum-to n)

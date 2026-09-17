@@ -219,6 +219,50 @@ final class SchemeBuiltins {
 			("pair?" base pred ((x) (consp x)))
 			("list?" base pred ((x) (rontolisp::%scheme-list? x)))
 
+			;; --- (scheme cxr): every three- and four-deep car/cdr composition; caar/cadr/
+			;; cdar/cddr above are (scheme base). All 28 names are standard Common Lisp
+			;; functions, so each template just forwards to the one of the same name.
+			("caaar" cxr value ((p) (caaar p)))
+			("caadr" cxr value ((p) (caadr p)))
+			("cadar" cxr value ((p) (cadar p)))
+			("caddr" cxr value ((p) (caddr p)))
+			("cdaar" cxr value ((p) (cdaar p)))
+			("cdadr" cxr value ((p) (cdadr p)))
+			("cddar" cxr value ((p) (cddar p)))
+			("cdddr" cxr value ((p) (cdddr p)))
+			("caaaar" cxr value ((p) (caaaar p)))
+			("caaadr" cxr value ((p) (caaadr p)))
+			("caadar" cxr value ((p) (caadar p)))
+			("caaddr" cxr value ((p) (caaddr p)))
+			("cadaar" cxr value ((p) (cadaar p)))
+			("cadadr" cxr value ((p) (cadadr p)))
+			("caddar" cxr value ((p) (caddar p)))
+			("cadddr" cxr value ((p) (cadddr p)))
+			("cdaaar" cxr value ((p) (cdaaar p)))
+			("cdaadr" cxr value ((p) (cdaadr p)))
+			("cdadar" cxr value ((p) (cdadar p)))
+			("cdaddr" cxr value ((p) (cdaddr p)))
+			("cddaar" cxr value ((p) (cddaar p)))
+			("cddadr" cxr value ((p) (cddadr p)))
+			("cdddar" cxr value ((p) (cdddar p)))
+			("cddddr" cxr value ((p) (cddddr p)))
+
+			;; --- sicp: names the SICP corpus assumes an implementation already provides,
+			;; NOT R7RS exports -- unreachable by (import ...), visible only through the
+			;; same no-import default as a bare-metal REPL (SchemeLowering.imports).
+			("filter" sicp value ((pred l) (rontolisp::%scheme-filter pred l)))
+			("reduce" sicp value ((op initial l) (if (null l) initial (reduce op l))))
+			("fold-left" sicp value ((op initial l) (reduce op l :initial-value initial)))
+			("fold-right" sicp value ((op initial l) (reduce op l :initial-value initial :from-end t)))
+			("delete" sicp value ((x l) (remove x l :test #'rontolisp::%scheme-equal?)))
+			("last-pair" sicp value ((l) (last l)))
+			("append!" sicp value ((&rest r) (nconc . r)) :function (lambda (&rest r) (apply #'nconc r)))
+			("list-index" sicp or-false ((pred l) (rontolisp::%scheme-list-index pred l)))
+			("1+" sicp value ((x) (+ x 1)))
+			("-1+" sicp value ((x) (- x 1)))
+			("random" sicp value ((n) (random n)))
+			("runtime" sicp value (() (/ (float (get-internal-real-time) 1.0d0) internal-time-units-per-second)))
+
 			;; --- symbols ---
 			("symbol?" base pred ((x) (and (symbolp x) x (not (eq x t)) (not (eq x rontolisp::%scheme-false)))))
 			("symbol->string" base value ((s) (rontolisp::%scheme-symbol->string s)))

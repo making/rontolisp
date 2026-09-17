@@ -55,6 +55,23 @@ excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are
 when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
 records; CL's `equal` compares a general vector by identity and an instance slot-wise).
 
+## Two tags beside `base` and `write`: `sicp` and `cxr`
+
+`SchemeBuiltins` entries also carry the tags `sicp` (`true false nil` -- via
+`SchemeLowering.Constant`, not an `Entry`, since they are values, not procedures --
+`filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
+runtime`) and `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
+standard Common Lisp function of the same name). Neither is an R7RS export of
+`(scheme base)`, so neither is reachable BY NAME through `(import ...)` --
+`SchemeLowering.imports()`'s no-import branch merges them the same way it merges `base`
+and `write`, so a file with no import at all (an unqualified SICP sample, or a REPL) sees
+them anyway, and an explicit import list narrows to exactly what it names (`.todo/829`
+measured 1,251 -> 1,307 of the 1,592-file SICP sample corpus running to exit 0 in file
+mode from this alone, zero regressions -- `.todo/artefacts/828-sicp-sample-corpus-harness/`
+has the harness). A user `define` of any of these still wins, exactly like `square`:
+`SchemeLowering.declareGlobals` overwrites the global scope entry for any name the file
+defines regardless of what library put there first.
+
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
 `rontolisp --source-language scheme` with no file; reached through `eval/SourceSession`

@@ -28,7 +28,11 @@ class SchemeBuiltinsTest {
 				"string-append", "string-copy", "string->list", "list->string", "vector?", "make-vector", "vector",
 				"vector-length", "vector-ref", "vector-set!", "vector->list", "list->vector", "vector-fill!",
 				"procedure?", "apply", "map", "for-each", "call/cc", "call-with-current-continuation", "dynamic-wind",
-				"values", "call-with-values", "error", "display", "write", "newline", "write-char", "write-string");
+				"values", "call-with-values", "error", "display", "write", "newline", "write-char", "write-string",
+				"caaar", "caadr", "cadar", "caddr", "cdaar", "cdadr", "cddar", "cdddr", "caaaar", "caaadr", "caadar",
+				"caaddr", "cadaar", "cadadr", "caddar", "cadddr", "cdaaar", "cdaadr", "cdadar", "cdaddr", "cddaar",
+				"cddadr", "cdddar", "cddddr", "filter", "reduce", "fold-left", "fold-right", "delete", "last-pair",
+				"append!", "list-index", "1+", "-1+", "random", "runtime");
 	}
 
 	@Test

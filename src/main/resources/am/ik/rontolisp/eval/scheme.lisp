@@ -310,6 +310,22 @@
 (defun rontolisp::%scheme-list? (x)
   (do ((rest x (cdr rest))) ((not (consp rest)) (null rest))))
 
+;; SRFI-1 filter: pred is a Scheme procedure, so its answer is compared against the
+;; false value rather than trusted as a Common Lisp boolean.
+(defun rontolisp::%scheme-filter (pred list)
+  (do ((rest (reverse list) (cdr rest)) (kept nil))
+      ((not (consp rest)) kept)
+    (if (not (eq (funcall pred (car rest)) rontolisp::%scheme-false))
+        (setq kept (cons (car rest) kept)))))
+
+;; SRFI-1 list-index: the position of the first element pred does not reject, else #f
+;; (SchemeBuiltins converts nil to false; 0 is a true index, not a false one).
+(defun rontolisp::%scheme-list-index (pred list)
+  (do ((rest list (cdr rest)) (i 0 (+ i 1)))
+      ((not (consp rest)) nil)
+    (if (not (eq (funcall pred (car rest)) rontolisp::%scheme-false))
+        (return i))))
+
 ;; (< a b c ...) as a first-class procedure: the Common Lisp function values of the
 ;; comparisons are binary, so the chain is walked pairwise. Answers T/NIL.
 (defun rontolisp::%scheme-chain (compare arguments)
