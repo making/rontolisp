@@ -4870,7 +4870,7 @@ cases:
       #(1 2 3)
       8
       #2A((1 2) (3 4))
-      #(1 0 1)
+      #*101
       #f(1.0 2.0)
       #d((1.0 2.0) (3.0 4.0))
   - name: runtime-read-struct-literals
@@ -5856,8 +5856,8 @@ cases:
       #(1 2 3)
       #2A((1 99) (3 4))
       #2A((1 2) (3 4))
-      #(0 0 1 1)
-      #(1 0 1 1)
+      #*0011
+      #*1011
       #f(99.0 2.0)
       #f(1.0 2.0)
       #d(99.0 2.0)
@@ -13875,7 +13875,7 @@ cases:
                    (find-if #'evenp '(1 3 4 6 7) :from-end t)))
       ;; 4. make-array :initial-contents accepts ANY sequence, including a
       ;;    packed (unsigned-byte 8) buffer filled by read-sequence. (An
-      ;;    :element-type 'bit array is a general vector here.)
+      ;;    :element-type 'bit array is a bit-vector printing #* here.)
       (print (let ((buf (make-array 4 :element-type '(unsigned-byte 8)
                                       :initial-contents '(1 0 1 1))))
                (list (make-array 4 :element-type 'bit :initial-contents buf)
@@ -13896,7 +13896,7 @@ cases:
       (NIL NIL NIL NIL)
       (#P"/opt/local-time/zoneinfo/" #P"/opt/b.txt" #P"/abs/x")
       (#\Z NIL 3 (2 30) 6)
-      (#(1 0 1 1) #(7 8 9) #(#\a #\b #\c))
+      (#*1011 #(7 8 9) #(#\a #\b #\c))
       (1 2 3 4 5 6 7 0 9)
       :FELL-BACK
       NIL
