@@ -14786,7 +14786,10 @@ class JvmLispCompilerTest {
 		// divides and then floats -- the complex gate needs its recompile net for the
 		// same reason, and that machinery is disproportionate here. The budget still
 		// catches what it was built for (no array runtime; far below the 13,654 above).
-		assertThat(classBytes.length).isLessThan(8_400);
+		// 8,604 since the dispatcher reports a non-function (_notFn and the
+		// representation
+		// test in front of the id read, .kb/error-handling.md): +309 B.
+		assertThat(classBytes.length).isLessThan(8_700);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
