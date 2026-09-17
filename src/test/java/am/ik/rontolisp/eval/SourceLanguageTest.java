@@ -54,7 +54,7 @@ class SourceLanguageTest {
 		// The seam's read is the whole front end: read, desugar, lower to core forms.
 		assertThat(
 				SourceLanguage.SCHEME.read("(car x)", Features.INTERPRETER, null).stream().map(LispVal::print).toList())
-			.containsExactly("(SETQ RONTOLISP::%SCHEME-FALSE '|#f|)", "(CAR |x|)");
+			.containsExactly("(SETQ RONTOLISP::%SCHEME-FALSE '|#f| RONTOLISP::%SCHEME-UNSPECIFIED '|#!unspecific|)", "(CAR |x|)");
 	}
 
 	@Test

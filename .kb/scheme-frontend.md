@@ -137,7 +137,7 @@ gives. JLine is used only on the real system terminal. `LispExitSignal` escapes 
 (`(exit n)`, `(uiop:quit n)`: it used to be caught as `Error: null` and the session went on)
 and its status wins over an earlier failure. A malformed buffer (`(+ 5 6) garbage)`) is
 reported whole and nothing in it runs: the buffer is read before it is evaluated (pinned).
-SICP corpus (`.todo/artefacts/828-...`, 2026-09-17): file mode 1,307 exit 0 before and
+SICP corpus (`.todo/artefacts/828-sicp-sample-corpus-harness/`, 2026-09-17): file mode 1,307 exit 0 before and
 after, one stdout difference (a timing print); REPL transcripts no longer contain a prompt.
 
 ## Destination-driven lowering (`SchemeLowering.lower`)
