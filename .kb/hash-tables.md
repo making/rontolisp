@@ -17,13 +17,43 @@ like an unwritten one.
 - `equal`: the structural hash plus real `equal` in the bucket.
 - `equalp`: the `equalp` key fold below, then the same pair.
 - `eql`/`eq`: the `eql`/`eq` predicate (`LispEquality.eql`/`eq`) in the bucket.
-  Aggregates (conses, instances) hash by identity (`System.identityHashCode` on
-  the interpreter/JVM, the shared bucket 0 on WASM), so a key mutated after
-  insertion keeps its bucket; every other value hashes structurally exactly as an
-  `equal` table hashes it, which the value-compared `eql`/`eq` on
-  numbers/symbols/strings agrees with. Only the performance characteristic differs
-  on WASM (one shared bucket for aggregates, i.e. a `ref.eq` scan); the semantics
-  are identical on all four backends.
+  Aggregates (conses, instances, allocated strings, mutable character vectors) hash
+  by identity (`System.identityHashCode` on the interpreter/JVM, the shared bucket 0
+  on WASM), so a key mutated after insertion keeps its bucket; every other value
+  hashes structurally exactly as an `equal` table hashes it, which the
+  value-compared `eql`/`eq` on numbers/symbols/string CONSTANTS agrees with. Only
+  the performance characteristic differs on WASM (one shared bucket for aggregates,
+  i.e. a `ref.eq` scan); the semantics are identical on all four backends.
+
+## Strings under eq/eql
+ANSI on all four backends (2026-09-17): two distinct strings with equal contents are
+neither `eq` nor `eql`, so `member`/`assoc`/`position`/`case`/an `eq`/`eql` table miss
+on them; `equal`/`equalp` compare contents. Equal string CONSTANTS are one object --
+CLHS 3.2.4.4 coalescing, which both compiled backends do by construction (JVM `ldc`
+interning, the WASM string table's offset id) and the interpreter reproduces by
+comparing two `LispString.sourceLiteral()` strings by content. A symbol's name
+(`symbol-name`, `string` of a symbol; `LispString.symbolName`) is such a constant.
+
+- interpreter: `LispEquality.isIdentityAggregate` counts a non-constant `LispString`.
+- JVM: `_eqv` answers identity for a `List` (every array shape, character vectors
+  included) and a quote-framed `String`; a bare `String` (a symbol) stays by name.
+  `_equal` gains the content arm `_eqv` lost (`_strv` both, then `String.equals`), and
+  an eql/eq table's key hash sends a `List` to `identityHashCode` before `_hash`'s
+  `_strv` folds it by content.
+- WASM: `eq`/`eql` already compared a `TYPE_STRING` by id and a character vector by
+  `ref.eq`; an eql/eq table now sends a character vector (`_charvec_p`) to bucket 0 in
+  `pushKeyHash` and `_hash_resize`, since `_hash` folds it by content.
+
+Blast radius measured before the change: the whole `./mvnw test` suite (eval, codegen,
+cli, e2e, ansi, scheme) stayed green, and no shipped library or example relied on
+value comparison. Remaining differences, all constant-coalescing edges the ANSI leaves
+implementation-dependent: a string a MACRO builds into its expansion is a constant on the
+compiled backends but an allocated string on the interpreter (`(eq (m) (m))` is `NIL`
+there); `(eq s (string s))` on an allocated string is `T` on the interpreter and `NIL` on
+the compiled backends, whose `string` copies. Pinned by ci-spec
+`eq-eql-on-distinct-equal-strings`, `LispEvaluatorTest#eqAndEqlCompareDistinctEqualStringsByIdentity`,
+`JvmLispCompilerTest#compileAndRunEqOnDistinctEqualStringsComparesByIdentity`,
+`WasmLispCompilerIntegrationTest#compileEqOnDistinctEqualStringsAndGrownCharacterVectorKeys`.
 
 ## `equalp` is a KEY FOLD, on all four backends
 `equalp` on two values is `equal` on their folds, so one structural table carries both tests.
@@ -129,9 +159,8 @@ share the box, so `hash-table-p` is `ref.test TYPE_CELL` PLUS the header-car tes
   empty tables were `eq` (`JvmLispCompilerTest#compileAndRunAHashTableKeyHashesAndComparesByIdentity`,
   ci-spec `hash-table-as-hash-key`). Audit 2026-09-17, all four backends agree: a
   rank-2 array, a packed fixnum/double vector and a structure mutated after storage
-  in an `eq` table keep their entry. A fill-pointer STRING grown after storage loses
-  it on all four (strings hash by content); `eq` on two distinct equal strings is the
-  one split (`T` interpreter/JVM, `NIL` WASM).
+  in an `eq` table keep their entry, and so does a fill-pointer STRING grown after
+  storage since strings key an eq/eql table by identity ("Strings under eq/eql").
 - `puthash` doubles (`FUNC_HASH_RESIZE`) past load factor 0.75; both funcs sit just before
   `FUNC_USER_BASE` in Preview 1 and `--component`. `maphash` order is unspecified: interpreter and
   JVM walk insertion order (JVM through `#order`, which is why the bucket index may reorder

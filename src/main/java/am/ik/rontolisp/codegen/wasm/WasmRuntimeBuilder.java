@@ -883,6 +883,10 @@ final class WasmRuntimeBuilder {
 				w.writeHeapType(instanceTypeIndex);
 				w.write(Instruction.I32_OR);
 			}
+			// A mutable character vector, like WasmHashTableCompiler.pushKeyHash.
+			getLocal(w, key);
+			WasmEmitHelper.emitCharvecPCall(w);
+			w.write(Instruction.I32_OR);
 			w.write(Instruction.IF);
 			w.write(Type.I32);
 			w.write(Instruction.I32_CONST);

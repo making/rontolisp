@@ -5225,6 +5225,36 @@ cases:
       (EQUAL EQUAL EQUALP)
       #<HASH-TABLE :TEST EQL :COUNT 0>
       #<HASH-TABLE :TEST EQ :COUNT 0>
+  - name: eq-eql-on-distinct-equal-strings
+    source: |
+      ;; Two distinct strings with equal contents are neither eq nor eql (ANSI), on
+      ;; every backend: a copy, a simple and a fill-pointer character array, and the
+      ;; default eql test of member/assoc/position/case and of an eq/eql table.
+      ;; Equal string CONSTANTS -- two literals, a literal and a symbol's name -- are
+      ;; one object. equal/equalp still compare contents, and a fill-pointer string
+      ;; grown after it was stored in an eq table keeps its entry.
+      (let ((a (copy-seq "ab")) (b (copy-seq "ab"))
+            (c (make-array 2 :element-type 'character :initial-contents "ab"))
+            (d (make-array 2 :element-type 'character :fill-pointer 2 :initial-contents "ab")))
+        (print (list (eq a b) (eql a b) (eq a a) (eql c "ab") (eql d d) (eql d (copy-seq d))))
+        (print (list (equal a b) (equal c d) (equalp a "AB")))
+        (print (list (member a '("ab")) (assoc a '(("ab" . 1))) (position a (list "x" a))
+                     (case a (("ab") 'hit) (t 'miss))))
+        (print (list (eq "ab" "ab") (eq (symbol-name 'ci-sym) "CI-SYM"))))
+      (let ((q (make-hash-table :test 'eq)) (e (make-hash-table :test 'eql))
+            (k (copy-seq "key"))
+            (g (make-array 1 :element-type 'character :fill-pointer 1 :adjustable t
+                             :initial-contents "g")))
+        (setf (gethash k q) 1 (gethash k e) 2 (gethash g q) 3)
+        (vector-push-extend #\h g)
+        (print (list (gethash k q) (gethash (copy-seq "key") q) (gethash k e)
+                     (gethash (copy-seq "key") e) (gethash g q))))
+    expected: |
+      (NIL NIL T NIL T NIL)
+      (T T T)
+      (NIL NIL 1 MISS)
+      (T T)
+      (1 NIL 2 NIL 3)
   - name: hash-table-as-hash-key
     source: |
       ;; A hash table is compared and hashed by identity under every test: filling

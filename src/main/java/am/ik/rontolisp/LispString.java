@@ -141,8 +141,22 @@ public final class LispString implements LispVal {
 	}
 
 	/**
-	 * Whether this object is the source constant the reader built for a {@code "..."} in
-	 * the program text (as opposed to a string a running program allocated).
+	 * Creates the name string {@code symbol-name} / {@code string} answer for a symbol.
+	 * It is a CONSTANT like a source literal: both compiled backends answer an interned
+	 * name there (one object per spelling, and never written in place), so it is
+	 * {@code eq} to every other constant with the same content
+	 * ({@code .kb/hash-tables.md}, "Strings under eq/eql").
+	 * @param name the symbol's name
+	 * @return the constant name string
+	 */
+	public static LispString symbolName(String name) {
+		return literal(name);
+	}
+
+	/**
+	 * Whether this object is a string CONSTANT -- the source constant the reader built
+	 * for a {@code "..."} in the program text, or a symbol's name ({@link #symbolName})
+	 * -- as opposed to a string a running program allocated.
 	 * @return true for a source literal
 	 */
 	public boolean sourceLiteral() {

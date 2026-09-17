@@ -700,6 +700,13 @@ final class WasmHashTableCompiler {
 			ctx.writer.writeHeapType(ctx.instanceTypeIndex);
 			ctx.writer.write(Instruction.I32_OR);
 		}
+		// A mutable character vector is identity under eql/eq, where _hash folds its
+		// content: a fill-pointer string grown after it was stored keeps its bucket.
+		// Not gated on the chunk's charvecPossible -- the vector may have been made in
+		// another chunk, and _hash_resize must place it where this lookup looks.
+		getLocal(ctx, keySlot);
+		WasmEmitHelper.emitCharvecPCall(ctx);
+		ctx.writer.write(Instruction.I32_OR);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		ctx.writer.write(Instruction.I32_CONST);

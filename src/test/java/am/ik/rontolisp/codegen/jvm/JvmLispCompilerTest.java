@@ -12562,6 +12562,26 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunEqOnDistinctEqualStringsComparesByIdentity() throws Exception {
+		// A string is a quote-framed String or a character-vector List, and _eqv used to
+		// answer both by content: two distinct equal strings were eq. equal still
+		// compares content, equal literals are one ldc-interned object, a symbol still
+		// compares by name, and a character vector keys an eq table by identity.
+		assertThat(compileAndRun("""
+				(let* ((a (copy-seq "ab")) (b (copy-seq "ab"))
+				       (c (make-array 2 :element-type 'character :initial-contents "ab"))
+				       (q (make-hash-table :test 'eq))
+				       (g (make-array 1 :element-type 'character :fill-pointer 1 :adjustable t
+				                        :initial-contents "g")))
+				  (setf (gethash a q) 1 (gethash g q) 2)
+				  (vector-push-extend #\\h g)
+				  (print (list (eq a b) (eql a b) (eql a a) (eql c "ab") (equal a b) (equal c "ab")
+				               (member a '("ab")) (eq "ab" "ab") (eq 'foo (intern "FOO"))
+				               (gethash a q) (gethash b q) (gethash g q))))
+				""")).isEqualTo("(NIL NIL T NIL T T NIL T T 1 NIL 2)");
+	}
+
+	@Test
 	void compileAndRunPackageVar() throws Exception {
 		// The value is the package KEYWORD find-package answers, so the two are eq.
 		assertThat(compileAndRun("(print *package*)")).isEqualTo(":CL-USER");
