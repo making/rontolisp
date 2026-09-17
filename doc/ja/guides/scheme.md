@@ -1,7 +1,7 @@
 # Scheme（実験的）
 
-**実験的機能です。** rontolisp は R7RS-small の一部 -- `(scheme base)` と
-`(scheme write)` -- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
+**実験的機能です。** rontolisp は R7RS-small の一部 -- `(scheme base)`、
+`(scheme write)`、`(scheme inexact)`、`(scheme cxr)` -- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
 準拠は意図的に部分的で、互換性の約束はありません。Scheme プログラムを JVM や WebAssembly で
 試す用途に使い、動き続けてほしいものは Common Lisp で書いてください。
 
@@ -58,7 +58,7 @@ scheme> (list #t #f '() 'Sym)
 scheme> (quit)
 ```
 
-`(scheme base)` と `(scheme write)` がエクスポートする名前 -- それに加えて、後述の
+これら 4 ライブラリがエクスポートする名前 -- それに加えて、後述の
 どの `(import ...)` にも属さない SICP 互換名 -- は最初からすべて見えており、
 プロンプトで入力した `(import ...)` は名前を追加するだけです。別々のプロンプトで入力した
 定義は、1 つのファイルに書いた場合と同じく、順序によらず互いを参照できます。フォームは
@@ -76,14 +76,16 @@ scheme> (quit)
   `lambda`、`if`、`cond`（`else`、`=>`）、`case`、`and`、`or`、`when`、`unless`、`let`、
   `let*`、`letrec`、`letrec*`、名前付き `let`、`do`、`begin`、`set!`、`quote`、`quasiquote`、
   `let-values`、`let*-values`、`define-record-type`（トップレベルのみ）、および
-  `(import (scheme base) (scheme write))`（`only` / `except` / `prefix` / `rename` 可）。
+  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr))`（`only` /
+  `except` / `prefix` / `rename` 可）。
 - **手続き**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
   floor-quotient floor-remainder truncate-quotient truncate-remainder abs min max gcd lcm
   expt square floor ceiling round truncate zero? positive? negative? odd? even? number?
-  real? rational? integer? exact? inexact? exact-integer? exact inexact number->string
-  string->number`; `not boolean?`; `cons car cdr set-car! set-cdr! caar cadr cdar cddr list
-  length append reverse list-tail list-ref list-copy memq memv member assq assv assoc null?
-  pair? list?`; `symbol? symbol->string string->symbol`; `char? char->integer integer->char
+  real? rational? integer? exact? inexact? exact-integer? exact inexact exact-integer-sqrt
+  number->string string->number`; `(scheme inexact)`: `sqrt exp log sin cos tan asin acos
+  atan finite? infinite? nan?`; `not boolean?`; `cons car cdr set-car! set-cdr! caar cadr
+  cdar cddr list length append reverse list-tail list-ref list-copy memq memv member assq
+  assv assoc null? pair? list?`; `symbol? symbol->string string->symbol`; `char? char->integer integer->char
   char=? char<? char>? char<=? char>=?`; `string? make-string string string-length
   string-ref string-set! string=? string<? string>? string<=? string>=? substring
   string-append string-copy string->list list->string`; `vector? make-vector vector
@@ -93,10 +95,10 @@ scheme> (quit)
   （現在の出力ポートのみ）。`write` と `display` は循環するリストやベクタをデータラベル付きで
   `#0=(a b c . #0#)` のように書きます。循環のない共有構造は出現のたびに書き出します。
 - **SICP 互換、R7RS ではない**: `true false nil`（リテラルではなく普通の変数）、
-  `(scheme cxr)` 一式（`caaar` から `cddddr` まで）、`filter reduce fold-left fold-right
-  delete last-pair append! list-index 1+ -1+ random runtime`。これらは `(import ...)` を
-  一切書かないプログラムでのみ見える -- `(scheme base)` / `(scheme write)` と同じ扱いで、
-  明示的な import リストがあるとこれらの名前には届かない。
+  `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
+  runtime`。これらは `(import ...)` を一切書かないプログラムでのみ見える -- 4 ライブラリと
+  同じ扱いだが、どの import もこれらを名指しできないため、明示的な import リストがあると
+  届かない。
 
 ```scheme
 (display (list true false nil (cadddr '(1 2 3 4)))) (newline)
@@ -108,6 +110,19 @@ scheme> (quit)
 (#t #f () 4)
 (1 3 5)
 (((() . 1) . 2) . 3)
+```
+
+正確な引数に正確な答えがあれば結果も正確なままです。浮動小数点数は `1e21` 未満では
+位取り表記で、それ以上（および `1e-6` 未満）では指数付きで表示されます:
+
+```scheme
+(write (list (sqrt 16) (sqrt 1/4) (sqrt 2) (exp 0) (atan 0 1))) (newline)
+(write (list 123456789.123 1e21 0.000001 1.5e-7 (/ 1.0 0.0))) (newline)
+```
+
+```
+(4 1/2 1.4142135623730951 1 0)
+(123456789.123 1e21 0.000001 1.5e-7 +inf.0)
 ```
 
 ```scheme
@@ -146,11 +161,16 @@ scheme> (quit)
 - レコードは Common Lisp の `#S(...)` 構文で表示されます。`equal?` はレコードを同一性で
   比較します。
 - `write` は `'x` を `(quote x)` と表示します。
+- 複素数はありません: `(sqrt -4)`、`(log -1)`、`(asin 2)` は手続き名を挙げたエラーで
+  プログラムを終了します。
+- 不正確な引数に対する `exp`、`log`、`sin`、`cos`、`tan`、`asin`、`acos`、`atan` の結果は、
+  WebAssembly では JVM と末尾の桁が異なることがあり、JVM でも x86-64 と AArch64 とで
+  異なることがあります。`sqrt` と四則演算はどこでも同じ桁を返します。
 - エラーメッセージには Common Lisp の名前（`CAR`）が出ます。
 - **未対応**: `define-syntax` / `syntax-rules`、`define-library`、`guard` / `raise`、
   `parameterize`、`case-lambda`、`delay`、バイトベクタ、現在の出力ポート以外のポート、
   `eval`、`(scheme char)` などのライブラリ、`|...|` 識別子、
-  `+inf.0` / `+nan.0`。構文に関するものは、ファイルを読む時点で名前を挙げて拒否されます。
+  `+inf.0` / `+nan.0` の読み取り。構文に関するものは、ファイルを読む時点で名前を挙げて拒否されます。
 
 ## Common Lisp との混在
 

@@ -257,6 +257,7 @@
            (if (> i 0) (write-char #\Space))
            (rontolisp::%scheme-print-datum (aref x i) escape labels))
          (write-char #\)))
+        ((floatp x) (rontolisp::%scheme-print-flonum x))
         ((functionp x) (write-string "#<procedure>"))
         (t (princ x))))
 
@@ -338,6 +339,165 @@
 (defun rontolisp::%scheme-integer? (x)
   (or (integerp x) (and (floatp x) (= x (truncate x)))))
 
+;; --- (scheme inexact) ---------------------------------------------------------------
+
+;; A real argument whose Common Lisp answer is a complex number (sqrt -4, log -1, asin 2)
+;; is refused by name: this front end has no complex numbers to print or compute with.
+(defun rontolisp::%scheme-no-complex (message x)
+  (error "~A" (rontolisp::%scheme-error-message message (list x))))
+
+;; The exact root of a non-negative integer, or NIL when it has none.
+(defun rontolisp::%scheme-exact-root (n)
+  (let ((r (isqrt n))) (if (= (* r r) n) r nil)))
+
+(defun rontolisp::%scheme-sqrt (x)
+  (cond ((and (rationalp x) (>= x 0))
+         (let ((n (rontolisp::%scheme-exact-root (numerator x)))
+               (d (rontolisp::%scheme-exact-root (denominator x))))
+           (if (and n d) (/ n d) (sqrt (float x 1.0d0)))))
+        ((and (realp x) (minusp x))
+         (rontolisp::%scheme-no-complex "sqrt: a negative argument has a complex root, and complex numbers are not supported:"
+                                        x))
+        (t (sqrt x))))
+
+(defun rontolisp::%scheme-exact-integer-sqrt (k)
+  (if (and (integerp k) (>= k 0))
+      (let ((s (isqrt k))) (values s (- k (* s s))))
+      (error "~A"
+             (rontolisp::%scheme-error-message
+              "exact-integer-sqrt: not an exact non-negative integer:"
+              (list k)))))
+
+;; The exact anchors R7RS implementations answer exactly: (exp 0) is 1, (log 1) is 0,
+;; and so on. Anything else is Common Lisp's inexact answer.
+(defun rontolisp::%scheme-exp (x) (if (eql x 0) 1 (exp x)))
+
+(defun rontolisp::%scheme-log (x)
+  (cond ((eql x 1) 0)
+        ((and (realp x) (minusp x))
+         (rontolisp::%scheme-no-complex "log: a negative argument has a complex logarithm, and complex numbers are not supported:"
+                                        x))
+        (t (log x))))
+
+(defun rontolisp::%scheme-log-base (x base)
+  (if (and (realp base) (minusp base))
+      (rontolisp::%scheme-no-complex "log: a negative base has a complex logarithm, and complex numbers are not supported:"
+                                     base)
+      (if (eql x 1) 0 (/ (rontolisp::%scheme-log x) (log base)))))
+
+(defun rontolisp::%scheme-sin (x) (if (eql x 0) 0 (sin x)))
+
+(defun rontolisp::%scheme-cos (x) (if (eql x 0) 1 (cos x)))
+
+(defun rontolisp::%scheme-tan (x) (if (eql x 0) 0 (tan x)))
+
+(defun rontolisp::%scheme-asin (x)
+  (cond ((eql x 0) 0)
+        ((and (realp x) (> (abs x) 1))
+         (rontolisp::%scheme-no-complex "asin: an argument outside [-1, 1] has a complex arcsine, and complex numbers are not supported:"
+                                        x))
+        (t (asin x))))
+
+(defun rontolisp::%scheme-acos (x)
+  (cond ((eql x 1) 0)
+        ((and (realp x) (> (abs x) 1))
+         (rontolisp::%scheme-no-complex "acos: an argument outside [-1, 1] has a complex arccosine, and complex numbers are not supported:"
+                                        x))
+        (t (acos x))))
+
+(defun rontolisp::%scheme-atan (x) (if (eql x 0) 0 (atan x)))
+
+(defun rontolisp::%scheme-atan2 (y x)
+  (if (and (eql y 0) (rationalp x) (plusp x)) 0 (atan y x)))
+
+(defun rontolisp::%scheme-nan? (x) (and (floatp x) (/= x x)))
+
+(defun rontolisp::%scheme-infinite? (x)
+  (and (floatp x)
+       (or (> x most-positive-double-float) (< x most-negative-double-float))))
+
+(defun rontolisp::%scheme-finite? (x)
+  (not (or (rontolisp::%scheme-nan? x) (rontolisp::%scheme-infinite? x))))
+
+;; The I-th significant digit of a printed float whose INTEGER-DIGITS digits start at
+;; START and are followed by a point.
+(defun rontolisp::%scheme-flonum-digit (s start integer-digits i)
+  (char s (if (< i integer-digits) (+ start i) (+ start i 1))))
+
+;; A flonum the way Scheme writes it: the shortest digits the Common Lisp printer finds,
+;; laid out positionally when the point falls within 21 digits left of or 6 zeros right
+;; of the first digit (123456789.123, 100000000000000000000.0, 0.000001), and as
+;; <digits>e<exponent> outside that range (1e21, 1.5e-7) -- the ECMAScript thresholds.
+;; The Common Lisp printer answers 1.0e21 and 1.23456789123e8.
+(defun rontolisp::%scheme-print-flonum (x)
+  (cond ((/= x x) (write-string "+nan.0"))
+        ((> x most-positive-double-float) (write-string "+inf.0"))
+        ((< x most-negative-double-float) (write-string "-inf.0"))
+        (t
+         (let ((s (princ-to-string x)) (n 0) (e nil))
+           (setq n (length s))
+           (do ((i 0 (+ i 1)))
+               ((or e (>= i n)))
+             (if (char= (char s i) #\e) (setq e i)))
+           (if (null e)
+               (write-string s)
+               (let ((start (if (char= (char s 0) #\-) 1 0))
+                     (integer-digits 0)
+                     (count 0)
+                     (exponent 0)
+                     (exponent-sign 1)
+                     (point 0))
+                 (do ((i start (+ i 1)))
+                     ((or (>= i e) (char= (char s i) #\.)))
+                   (setq integer-digits (+ integer-digits 1)))
+                 (setq count (- e start 1))
+                 (do ()
+                     ((or (<= count 1)
+                          (char/= (rontolisp::%scheme-flonum-digit s start
+                                   integer-digits (- count 1)) #\0)))
+                   (setq count (- count 1)))
+                 (do ((i (+ e 1) (+ i 1)))
+                     ((>= i n))
+                   (if (char= (char s i) #\-)
+                       (setq exponent-sign -1)
+                       (setq exponent
+                        (+ (* exponent 10) (- (char-code (char s i)) 48)))))
+                 (setq point (+ integer-digits (* exponent-sign exponent)))
+                 (if (= start 1) (write-char #\-))
+                 (cond ((or (> point 21) (<= point -6))
+                        (write-char
+                         (rontolisp::%scheme-flonum-digit s start integer-digits
+                                                          0))
+                        (if (> count 1) (write-char #\.))
+                        (do ((i 1 (+ i 1)))
+                            ((>= i count))
+                          (write-char
+                           (rontolisp::%scheme-flonum-digit s start
+                                                            integer-digits i)))
+                        (write-char #\e)
+                        (princ (- point 1)))
+                       ((<= point 0)
+                        (write-string "0.")
+                        (do ((i point (+ i 1)))
+                            ((>= i 0))
+                          (write-char #\0))
+                        (do ((i 0 (+ i 1)))
+                            ((>= i count))
+                          (write-char
+                           (rontolisp::%scheme-flonum-digit s start
+                                                            integer-digits i))))
+                       (t
+                        (do ((i 0 (+ i 1)))
+                            ((>= i (max point count)))
+                          (if (= i point) (write-char #\.))
+                          (write-char
+                           (if (< i count)
+                               (rontolisp::%scheme-flonum-digit s start
+                                                                integer-digits
+                                                                i)
+                               #\0)))
+                        (if (>= point count) (write-string ".0"))))))))))
+
 ;; max / min are inexact when any argument is (R7RS 6.2.6); CL's may answer the exact one.
 (defun rontolisp::%scheme-max (a b)
   (let ((m (max a b))) (if (or (floatp a) (floatp b)) (float m 1.0d0) m)))
@@ -347,7 +507,10 @@
 
 (defun rontolisp::%scheme-number->string (n radix)
   (if (or (= radix 10) (not (integerp n)))
-      (princ-to-string n)
+      (if (floatp n)
+          (with-output-to-string (*standard-output*)
+            (rontolisp::%scheme-print-flonum n))
+          (princ-to-string n))
       (if (zerop n)
           "0"
           (do ((m (abs n) (truncate m radix))
@@ -431,7 +594,10 @@
               (setq exponent (* exponent-sign (car scanned)))
               (setq i (cdr scanned)))))
       (if (and ok (= i n) (> digits 0))
-          (float (* sign mantissa (expt 10 (- exponent scale))) 1.0d0)
+          ;; Negated AFTER the conversion, so "-0.0" keeps its sign.
+          (let ((magnitude
+                 (float (* mantissa (expt 10 (- exponent scale))) 1.0d0)))
+            (if (< sign 0) (- magnitude) magnitude))
           rontolisp::%scheme-false))))
 
 ;; --- control ----------------------------------------------------------------------

@@ -186,16 +186,29 @@ class SchemeLoweringTest {
 		assertThat(lowered("(import (prefix (only (scheme base) car) s:)) (s:car x)")).isEqualTo("(CAR |x|)");
 		assertThatThrownBy(() -> lowered("(import (scheme char))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |char|) is not available: this experimental front end has"
-					+ " (scheme base) and (scheme write) only");
+					+ " (scheme base), (scheme write), (scheme inexact) and (scheme cxr) only");
+		assertThat(lowered("(import (scheme inexact)) (sqrt x)")).isEqualTo("(RONTOLISP::%SCHEME-SQRT |x|)");
+		assertThat(lowered("(import (scheme base)) (sqrt x)")).isEqualTo("(|sqrt| |x|)");
+		assertThat(lowered("(import (only (scheme cxr) caddr)) (caddr x)")).isEqualTo("(CADDR |x|)");
+	}
+
+	@Test
+	void theInexactLibraryIsVisibleWithoutImportAndAUserBindingWins() {
+		assertThat(lowered("(list (sqrt x) (atan y x) (log x 10))")).isEqualTo(
+				"(LIST (RONTOLISP::%SCHEME-SQRT |x|) (RONTOLISP::%SCHEME-ATAN2 |y| |x|) (RONTOLISP::%SCHEME-LOG-BASE |x| 10))");
+		assertThat(lowered("(define (sqrt x) x) (sqrt 4)")).contains("(|sqrt| 4)");
+		assertThat(lowered("(define (ev exp env) (exp env))")).contains("(FUNCALL |exp| |env|)");
 	}
 
 	@Test
 	void theSicpVocabularyIsVisibleOnlyWithNoImportAtAllLikeAReplsEverything() {
 		assertThat(lowered("(list true false nil)")).isEqualTo("(LIST T RONTOLISP::%SCHEME-FALSE NIL)");
 		assertThat(lowered("(caddr x)")).isEqualTo("(CADDR |x|)");
-		// Explicit imports narrow to what they name, exactly like base/write: neither tag
-		// is reachable BY NAME, so importing only (scheme base) leaves filter/caddr
-		// undefined in this file -- a call some other file defines.
+		// Explicit imports narrow to what they name, exactly like base/write: the sicp
+		// tag
+		// is reachable by no name and (scheme cxr) only by its own, so importing only
+		// (scheme base) leaves filter/caddr undefined in this file -- a call some other
+		// file defines.
 		assertThat(lowered("(import (scheme base)) (list (filter p l) (caddr x))"))
 			.isEqualTo("(LIST (|filter| |p| |l|) (|caddr| |x|))");
 	}

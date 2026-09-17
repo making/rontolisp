@@ -30,7 +30,8 @@ import org.jspecify.annotations.Nullable;
  * ("name" library result ((params) template)... [:function form])
  * </pre>
  *
- * {@code library} is the R7RS library exporting the name ({@code base} / {@code write}),
+ * {@code library} is the R7RS library exporting the name ({@code base} / {@code write} /
+ * {@code inexact} / {@code cxr}, or {@code sicp} for a name no R7RS library exports),
  * {@code result} says what the template answers -- {@code value}, {@code pred} (a Common
  * Lisp boolean, {@code T}/{@code NIL}, which fuses into an {@code if} test and is
  * converted to {@code #t}/{@code #f} anywhere else), {@code or-false} (a value, or
@@ -89,7 +90,8 @@ final class SchemeBuiltins {
 	 * A known procedure.
 	 *
 	 * @param name the Scheme name
-	 * @param library the exporting library's last component ({@code base}, {@code write})
+	 * @param library the exporting library's last component ({@code base}, {@code write},
+	 * {@code inexact}, {@code cxr}), or {@code sicp}
 	 * @param result what the templates answer
 	 * @param alternatives the accepted argument shapes
 	 * @param function the first-class value: a form answering a function that returns
@@ -174,11 +176,30 @@ final class SchemeBuiltins {
 			("inexact" base value ((x) (float x 1.0d0)))
 			("inexact->exact" base value ((x) (rational x)))
 			("exact->inexact" base value ((x) (float x 1.0d0)))
-			("number->string" base value ((n) (princ-to-string n)) ((n radix) (rontolisp::%scheme-number->string n radix))
+			("number->string" base value ((n) (rontolisp::%scheme-number->string n 10))
+			 ((n radix) (rontolisp::%scheme-number->string n radix))
 			 :function (lambda (n &optional (radix 10)) (rontolisp::%scheme-number->string n radix)))
 			("string->number" base value ((s) (rontolisp::%scheme-string->number s 10))
 			 ((s radix) (rontolisp::%scheme-string->number s radix))
 			 :function (lambda (s &optional (radix 10)) (rontolisp::%scheme-string->number s radix)))
+			("exact-integer-sqrt" base value ((k) (rontolisp::%scheme-exact-integer-sqrt k)))
+
+			;; --- (scheme inexact): a result Common Lisp would answer as a complex number is
+			;; refused by name, and an exact argument with an exact answer stays exact.
+			("sqrt" inexact value ((x) (rontolisp::%scheme-sqrt x)))
+			("exp" inexact value ((x) (rontolisp::%scheme-exp x)))
+			("log" inexact value ((x) (rontolisp::%scheme-log x)) ((x b) (rontolisp::%scheme-log-base x b))
+			 :function (lambda (x &rest b) (if b (rontolisp::%scheme-log-base x (car b)) (rontolisp::%scheme-log x))))
+			("sin" inexact value ((x) (rontolisp::%scheme-sin x)))
+			("cos" inexact value ((x) (rontolisp::%scheme-cos x)))
+			("tan" inexact value ((x) (rontolisp::%scheme-tan x)))
+			("asin" inexact value ((x) (rontolisp::%scheme-asin x)))
+			("acos" inexact value ((x) (rontolisp::%scheme-acos x)))
+			("atan" inexact value ((y) (rontolisp::%scheme-atan y)) ((y x) (rontolisp::%scheme-atan2 y x))
+			 :function (lambda (y &rest x) (if x (rontolisp::%scheme-atan2 y (car x)) (rontolisp::%scheme-atan y))))
+			("finite?" inexact pred ((x) (rontolisp::%scheme-finite? x)))
+			("infinite?" inexact pred ((x) (rontolisp::%scheme-infinite? x)))
+			("nan?" inexact pred ((x) (rontolisp::%scheme-nan? x)))
 
 			;; --- booleans ---
 			("not" base pred ((x) (eq x rontolisp::%scheme-false)))

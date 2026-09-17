@@ -435,7 +435,9 @@ final class SchemeReader {
 			if (!isDecimal(token, signed ? 1 : 0)) {
 				return null;
 			}
-			return new LispDouble(new BigDecimal(unsignedPlus(token)).doubleValue());
+			// Correctly rounded like BigDecimal.doubleValue(), which would drop the sign
+			// of -0.0.
+			return new LispDouble(Double.parseDouble(token));
 		}
 		catch (NumberFormatException ex) {
 			return null;

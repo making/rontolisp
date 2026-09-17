@@ -15211,6 +15211,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aWideIntegerIsItsOwnNumeratorOverOne() throws Exception {
+		// _rat_num/_rat_den answer i32 (ratio components stay i32), so a boxed-i64 or
+		// limb
+		// integer used to come back wrapped: (numerator 12345678987654321) was
+		// -493751119.
+		assertThat(compileAndRun("""
+				(defun parts (x) (list (numerator x) (denominator x)))
+				(print (list (parts 12345678987654321) (parts (* 4611686018427387904 4)) (parts -7/3) (parts 5)))
+				""")).isEqualTo("((12345678987654321 1) (18446744073709551616 1) (-7 3) (5 1))");
+	}
+
+	@Test
+	void isqrtIsExactBeyondTheI31Range() throws Exception {
+		// The f64 path traps past 2^31 ("invalid conversion to integer") and rounds past
+		// 2^53; the boxed-i64 and limb tiers take an exact Newton iteration instead. The
+		// argument goes through a function so the constant folder cannot answer it.
+		assertThat(compileAndRun("""
+				(defun root (n) (isqrt n))
+				(print (list (root 1073741823) (root 12345678987654321) (root 4611686018427387904)
+				             (root 9223372036854775807) (root (* 4611686018427387904 4))
+				             (root (1- (expt 2 106))) (root (expt 10 41)) (root (1- (expt 10 40)))))
+				""")).isEqualTo("(32767 111111111 2147483648 3037000499 4294967296 9007199254740991"
+				+ " 316227766016837933199 99999999999999999999)");
+	}
+
+	@Test
 	void expt() throws Exception {
 		assertThat(compileAndRun("(print (expt 2 10))")).isEqualTo("1024");
 		assertThat(compileAndRun("(print (expt 3 0))")).isEqualTo("1");
