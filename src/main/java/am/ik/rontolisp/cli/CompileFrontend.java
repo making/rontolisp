@@ -623,7 +623,7 @@ final class CompileFrontend {
 					UrlLibrary.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
 						.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
 							.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary
-								.process(SchemeLibrary.process(UserMacroExpander.expand(loaded)))))))))))))),
+								.process(SchemeLibrary.process(UserMacroExpander.expand(loaded), features))))))))))))),
 					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /

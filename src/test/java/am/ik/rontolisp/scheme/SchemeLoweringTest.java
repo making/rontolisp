@@ -248,6 +248,17 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void parallelExecuteAndTestAndSetAreSicpNamesAUserDefineReplaces() {
+		assertThat(lowered("(parallel-execute a b) (if (test-and-set! c) 1 2)")).isEqualTo("""
+				(RONTOLISP::%SCHEME-PARALLEL-EXECUTE (LIST |a| |b|))
+				(IF (RONTOLISP::%SCHEME-TEST-AND-SET! |c|) 1 2)""");
+		// The book's own non-atomic version (section 3.4.2) keeps winning.
+		assertThat(lowered("(define (test-and-set! cell) (car cell)) (test-and-set! c)")).isEqualTo("""
+				(DEFUN |test-and-set!| (|cell|) (CAR |cell|))
+				(|test-and-set!| |c|)""");
+	}
+
+	@Test
 	void delayAndConsStreamWrapTheirOperandInAPromiseThunk() {
 		assertThat(lowered("(list (delay (f x)) (delay-force (g)) (cons-stream 1 (h)) (force p))")).isEqualTo(
 				"""

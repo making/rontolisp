@@ -108,7 +108,8 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   written out each time.
 - **SICP compatibility, not R7RS**: `true false nil` (ordinary variables, not literals);
   `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
-  runtime`; streams: `cons-stream` (syntax), `the-empty-stream stream-car stream-cdr
+  runtime parallel-execute test-and-set!`; streams: `cons-stream` (syntax),
+  `the-empty-stream stream-car stream-cdr
   stream-first stream-rest stream-pair? stream-null? empty-stream? stream list->stream
   stream->list stream-head stream-tail stream-ref stream-map stream-for-each stream-filter
   stream-append`. A stream is `'()` or a pair whose cdr is a promise, so
@@ -126,6 +127,26 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
 (#t #f () 4)
 (1 3 5)
 (((() . 1) . 2) . 3)
+```
+
+`parallel-execute` runs each thunk in its own thread on the interpreter and the JVM and
+returns once every one has finished; an error in a thunk is signaled then. WebAssembly has
+no threads, so there the thunks run one after another in argument order -- one of the
+interleavings a threaded run may produce, in which a serializer built on `test-and-set!`
+never has to wait. `test-and-set!` is atomic on every backend.
+
+```scheme
+(define cell (list false))
+(display (list (test-and-set! cell) (test-and-set! cell))) (newline)
+(define finished '())
+(define (finish name) (lambda () (set! finished (cons name finished))))
+(parallel-execute (finish 'only))
+(display finished) (newline)
+```
+
+```
+(#f #t)
+(only)
 ```
 
 A promise is forced once and remembers its value; walking a stream forces each cell once.

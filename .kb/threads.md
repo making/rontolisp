@@ -2,7 +2,8 @@
 
 `rontolisp:make-thread` (fn + optional bindings alist), `join-thread`, `threadp`,
 `thread-alive-p`, `destroy-thread`, `current-thread` — interpreter and JVM only. Driving
-consumer: clack `src/handler.lisp` (`:use-thread t`).
+consumers: clack `src/handler.lisp` (`:use-thread t`); Scheme `parallel-execute`
+(`.kb/scheme-frontend.md`).
 **Invariant: a thread handle is OPAQUE** (`.kb/mutexes.md`); only `threadp` and the join
 round-trip are portable.
 

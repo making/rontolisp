@@ -297,6 +297,11 @@ final class SchemeBuiltins {
 			("-1+" sicp value ((x) (- x 1)))
 			("random" sicp value ((n) (random n)))
 			("runtime" sicp value (() (/ (float (get-internal-real-time) 1.0d0) internal-time-units-per-second)))
+			;; SICP 3.4: every thunk in its own thread, all joined before the call returns
+			;; (in order on wasm, which has no threads); test-and-set! under one lock.
+			("parallel-execute" sicp effect ((&rest r) (rontolisp::%scheme-parallel-execute (list . r)))
+			 :function (lambda (&rest r) (rontolisp::%scheme-parallel-execute r)))
+			("test-and-set!" sicp pred ((cell) (rontolisp::%scheme-test-and-set! cell)))
 
 			;; --- (scheme lazy): delay and delay-force are syntax (SchemeLowering) ---
 			("force" lazy value ((p) (rontolisp::%scheme-force p)))

@@ -1122,7 +1122,8 @@ class LibraryDefunPrunerTest {
 		List<String> printing = definedNames(LibraryDefunPruner
 			.prune(SchemeLibrary.process(LispReader.readAllFromString("(rontolisp::%scheme-display (car (list 1)))"))));
 		assertThat(printing).contains("RONTOLISP::%SCHEME-PROMISE-P")
-			.doesNotContain("RONTOLISP::%SCHEME-NEW-PROMISE", "RONTOLISP::%SCHEME-PROMISE-BOX");
+			.doesNotContain("RONTOLISP::%SCHEME-NEW-PROMISE", "RONTOLISP::%SCHEME-PROMISE-BOX",
+					"RONTOLISP::%SCHEME-TEST-AND-SET-LOCK");
 		List<String> delaying = definedNames(LibraryDefunPruner.prune(SchemeLibrary.process(LispReader
 			.readAllFromString("(rontolisp::%scheme-force (rontolisp::%scheme-delay 0 (lambda () 1)))"))));
 		assertThat(delaying).contains("RONTOLISP::%SCHEME-NEW-PROMISE", "RONTOLISP::%SCHEME-PROMISE-BOX");

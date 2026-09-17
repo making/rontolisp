@@ -67,7 +67,7 @@ with no import at all merges all six. Keywords carry a library too: `SYNTAX` is 
 `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil` -- via `SchemeLowering.Constant`, not an `Entry`, since they are
 values, not procedures -- `filter reduce fold-left fold-right delete last-pair append!
-list-index 1+ -1+ random runtime`) is no R7RS library, so no import names it:
+list-index 1+ -1+ random runtime parallel-execute test-and-set!`) is no R7RS library, so no import names it:
 `SchemeLowering.imports()`'s no-import branch merges it too, so a file with no import at
 all (an unqualified SICP sample, or a REPL) sees it anyway, and an explicit import list
 narrows to exactly what it names (`.todo/829`
@@ -139,6 +139,33 @@ defines regardless of what library put there first.
   the JVM and wasm, except two `fragment`s whose delayed thunk names a global no file
   defines (a compile error there, `.todo/828`). The remaining stream failures are samples
   calling procedures defined in OTHER samples (`partial-sums`, `display-stream`, `pairs`).
+
+## `parallel-execute` and `test-and-set!` (SICP 3.4)
+
+- **`scheme.lisp` is read with the TARGET's features** (`SchemeLibrary.forms(Features)`,
+  from `CompileFrontend.expand` and the playground's chain). `%scheme-parallel-execute`
+  under `#+thread-support` spawns one `rontolisp:make-thread` per thunk and joins them all
+  in nested `unwind-protect`, so a thunk's error is re-signaled by its join only after the
+  remaining threads are joined. Without it (both wasm) the thunks run in argument order:
+  a legal interleaving, where a serializer's busy-wait never contends -- NOT a call-time
+  signal like `bt2:make-thread` (`.kb/threads.md`), which has no such reading. Both
+  branches define the same names, so `isSchemeFunction` and the pruner read the
+  interpreter's copy.
+- `test-and-set!` is a `pred` over ONE `rontolisp:make-mutex` for every cell
+  (`%scheme-test-and-set-lock`, a `defvar` the pruner drops with the helper: a program
+  that does not call it carries no mutex, pinned in `LibraryDefunPrunerTest`). "Set" is
+  "car is not `#f`", so `'()` is set. A user `define` (the book's non-atomic version,
+  `24_test_and_set.scm`) wins like `square`.
+- Races (2026-09-17, 64 cores): four unserialized thunks of 100,000 `(set! g (+ g 1))`
+  on a global ended between 111,274 and 270,784 on the JVM and the interpreter and never
+  crashed; the same on a `let` variable captured by the thunks (the JVM's boxed capture)
+  kept an integer. Three serialized thunks of 20,000 were exact on all four backends,
+  also under `-Djdk.virtualThreadScheduler.parallelism=1` and
+  `-XX:ActiveProcessorCount=1`, and with a `display` inside the critical section: the
+  book's `the-mutex` spins through its self tail call, which lowers to a loop.
+- Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
+  1,342 -> 1,347 exiting 0 (the five `parallel-execute` samples), no other exit or stdout
+  change; all 19 `variant=concurrent` samples exit 0 on the interpreter, the JVM and wasm.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 

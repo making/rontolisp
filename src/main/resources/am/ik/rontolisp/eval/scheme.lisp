@@ -765,3 +765,39 @@
                                                  (rontolisp::%scheme-stream-cdr
                                                   s) (cdr streams)))))))))
     (setq streams (cdr streams))))
+
+;; --- SICP 3.4: parallel-execute and test-and-set! ---------------------------------------
+
+;; Where threads exist (the interpreter and the JVM, .kb/threads.md) each thunk runs in
+;; its own thread and every thread is JOINED before the call returns, so a program's
+;; output is complete when it ends. The joins nest in unwind-protect: a thunk's error is
+;; re-signaled by its join, but only after the remaining threads have been joined too.
+#+thread-support
+(defun rontolisp::%scheme-parallel-execute (thunks)
+  (rontolisp::%scheme-join-all
+   (mapcar (lambda (thunk) (rontolisp:make-thread thunk)) thunks)))
+
+#+thread-support
+(defun rontolisp::%scheme-join-all (threads)
+  (if threads
+      (unwind-protect (rontolisp:join-thread (car threads))
+        (rontolisp::%scheme-join-all (cdr threads)))))
+
+;; Both WASM backends are single-threaded: the thunks run one after another, in order.
+;; That is one of the interleavings the threaded backends may produce, and since nothing
+;; ever contends, a serializer's busy-wait on test-and-set! finds the cell clear.
+#-thread-support
+(defun rontolisp::%scheme-parallel-execute (thunks)
+  (dolist (thunk thunks) (funcall thunk)))
+
+;; One lock for every cell: the check and the set happen under it, which is all the
+;; book's atomicity asks for. Answers a Common Lisp boolean (a `pred` in SchemeBuiltins).
+(defvar rontolisp::%scheme-test-and-set-lock (rontolisp:make-mutex))
+
+(defun rontolisp::%scheme-test-and-set! (cell)
+  (rontolisp:with-mutex (rontolisp::%scheme-test-and-set-lock)
+    (if (eq (car cell) rontolisp::%scheme-false)
+        (progn
+          (rplaca cell t)
+          nil)
+        t)))
