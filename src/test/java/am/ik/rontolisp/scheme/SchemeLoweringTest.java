@@ -60,6 +60,45 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void aBuiltinShadowedOnlyAfterItsLastEarlyUseKeepsTheDirectCall() {
+		// Defined before any use, and a body that mentions it but is not called before
+		// the definition: the defun, as for any other procedure.
+		assertThat(lowered("(define (abs x) 'mine) (abs 1)")).isEqualTo("""
+				(DEFUN |abs| (|x|) '|mine|)
+				(|abs| 1)""");
+		assertThat(lowered("(define (f x) (abs x)) (define (abs x) 'mine) (f 1)")).isEqualTo("""
+				(DEFUN |f| (|x|) (|abs| |x|))
+				(DEFUN |abs| (|x|) '|mine|)
+				(|f| 1)""");
+	}
+
+	@Test
+	void aBuiltinUsedBeforeTheFileRedefinesItIsAVariableHoldingTheBuiltinUntilThen() {
+		// Kept the host's procedure the way the book's evaluators keep apply.
+		assertThat(lowered("(define old-abs abs) (define (abs x) (old-abs x)) (abs -5)")).isEqualTo("""
+				(SETQ |abs| (LAMBDA (X) (ABS X)))
+				(SETQ |old-abs| |abs|)
+				(SETQ |abs| (LAMBDA (|x|) (FUNCALL |old-abs| |x|)))
+				(FUNCALL |abs| -5)""");
+		// Called at the top level first, and reached through a procedure called before
+		// the definition.
+		assertThat(lowered("(abs -5) (define (abs x) 'mine)")).isEqualTo("""
+				(SETQ |abs| (LAMBDA (X) (ABS X)))
+				(FUNCALL |abs| -5)
+				(SETQ |abs| (LAMBDA (|x|) '|mine|))""");
+		assertThat(lowered("(define (f x) (abs x)) (f 1) (define (abs x) 'mine)")).isEqualTo("""
+				(SETQ |abs| (LAMBDA (X) (ABS X)))
+				(DEFUN |f| (|x|) (FUNCALL |abs| |x|))
+				(|f| 1)
+				(SETQ |abs| (LAMBDA (|x|) '|mine|))""");
+		// A value, not a procedure, and a SICP constant.
+		assertThat(lowered("(define n (list nil)) (define nil 5)")).isEqualTo("""
+				(SETQ |nil| NIL)
+				(SETQ |n| (LIST |nil|))
+				(SETQ |nil| 5)""");
+	}
+
+	@Test
 	void anyOtherProcedureBindingIsAVariableCalledThroughFuncall() {
 		assertThat(lowered("(define f (lambda (x) x)) (set! f car) (f 1) (define (g h) (h f))")).isEqualTo("""
 				(SETQ |f| (LAMBDA (|x|) |x|))
