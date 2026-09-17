@@ -630,7 +630,8 @@ final class JvmNumericRuntimeBuilder {
 				biDiv, biRem, biLongValue, dblLongBits, dblNegInf, dblPosInf, cRat3, cRat4, cRat2p53, cRatFracMask));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
 				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl));
-		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, objEquals, strvMethod));
+		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, cp.addClass(cp.addUtf8("java/util/Map")), objEquals,
+				strvMethod));
 		methods.add(buildEqStrict(nEqStrict, dCmp, doubleClass, ratArrClass, rEqv));
 		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual, strArrClass));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
@@ -2694,11 +2695,13 @@ final class JvmNumericRuntimeBuilder {
 	// (Object[].equals is reference equality), CHARACTERs (int[]{codePoint}) compare by
 	// their sole code point (int[].equals is also reference equality, and the JVM does
 	// not cache char literals like Character.valueOf(char) does), everything else uses
-	// a.equals(b). When the array helpers are emitted (strvMethod non-null) the fallback
-	// first normalizes both operands through _strv so a mutable character vector
-	// compares equal to a string with the same content.
+	// a.equals(b). A hash table (a Map) is the exception: Map.equals walks the entries,
+	// so two empty tables were eq, while eql/equal on a table is identity. When the array
+	// helpers are emitted (strvMethod non-null) the fallback first normalizes both
+	// operands through _strv so a mutable character vector compares equal to a string
+	// with the same content.
 	private static NumericMethod buildEqv(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			ClassConstant intArrClass, MethodrefConstant objEquals,
+			ClassConstant intArrClass, ClassConstant mapClass, MethodrefConstant objEquals,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod) {
 		List<Integer> c = new ArrayList<>();
 		// CHARACTER compare (int[]{cp}): if both operands are length-1 int[], value
@@ -2770,6 +2773,24 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.IRETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifObj1, c.size());
 		JvmRuntimeBuilder.patchBranch(c, ifObj2, c.size());
+		// if (a instanceof Map) return a == b
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, mapClass.index());
+		int ifNotMap = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ALOAD_1);
+		int ifNotSame = c.size();
+		c.add(Opcode.IF_ACMPNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotSame, c.size());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotMap, c.size());
 		c.add(Opcode.ALOAD_0);
 		if (strvMethod != null) {
 			c.add(Opcode.INVOKESTATIC);

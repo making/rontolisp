@@ -306,8 +306,9 @@ final class JvmHashRuntimeBuilder {
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(KEY), cp.addUtf8(KEY_DESC))) : null;
 
 		List<HashMethod> methods = new ArrayList<>();
-		methods.add(buildHash(cp, objectArrayClass, ratArrClass, intArrClass, integerClass, stringArrayClass,
-				strvMethod, objectHashCode, hashRef, listClass, identityHashCode));
+		methods
+			.add(buildHash(cp, objectArrayClass, ratArrClass, intArrClass, integerClass, stringArrayClass, strvMethod,
+					objectHashCode, hashRef, listClass, cp.addClass(cp.addUtf8("java/util/Map")), identityHashCode));
 
 		// _hashMake(): m = new LinkedHashMap(); m.put(ORDER_KEY, new ArrayList());
 		// return m
@@ -502,7 +503,7 @@ final class JvmHashRuntimeBuilder {
 	private static HashMethod buildHash(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant ratArrClass,
 			ClassConstant intArrClass, ClassConstant integerClass, @Nullable ClassConstant stringArrayClass,
 			@Nullable MethodrefConstant strvMethod, MethodrefConstant objectHashCode, MethodrefConstant hashRef,
-			ClassConstant listClass, MethodrefConstant identityHashCode) {
+			ClassConstant listClass, ClassConstant mapInterface, MethodrefConstant identityHashCode) {
 		JvmAsm a = new JvmAsm();
 		// if (d <= 0) return 0
 		a.iload(1);
@@ -668,17 +669,23 @@ final class JvmHashRuntimeBuilder {
 		a.op(Opcode.IADD);
 		a.ireturn();
 		a.bind(notRatio);
-		// A general vector is an ArrayList, whose own hashCode walks its elements: equal
-		// on a vector is identity, so is its hash -- and a vector holding itself (a
+		// A general vector is an ArrayList and a hash table a Map, whose own hashCodes
+		// walk their contents: equal on either is identity, so is its hash -- a key
+		// filled after it was stored keeps its bucket, and a vector holding itself (a
 		// cycle a Scheme printer's eq table meets) would otherwise never finish.
-		int notVector = a.label();
+		int identity = a.label();
+		int notAggregate = a.label();
 		a.aload(0);
 		a.instanceOf(listClass);
-		a.branch(Opcode.IFEQ, notVector);
+		a.branch(Opcode.IFNE, identity);
+		a.aload(0);
+		a.instanceOf(mapInterface);
+		a.branch(Opcode.IFEQ, notAggregate);
+		a.bind(identity);
 		a.aload(0);
 		a.invokestatic(identityHashCode);
 		a.ireturn();
-		a.bind(notVector);
+		a.bind(notAggregate);
 		// Everything else answers with its own hashCode, which its equals agrees with
 		// by the Java contract -- and which is identity exactly where _eqv's final
 		// Object.equals is identity (a closure).
