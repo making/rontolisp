@@ -1977,7 +1977,7 @@ final class WasmExprCompiler {
 						WasmComplexCompiler.compileUnaryMath(cons, ctx, sym.name());
 					}
 					else {
-						WasmExpCompiler.compile(cons, ctx);
+						WasmTranscendentalCompiler.compileUnary(cons, ctx, WasmFdlibmRuntimeBuilder.Fn.EXP, sym.name());
 					}
 				}
 				case LispNames.LOG -> {
@@ -1996,7 +1996,7 @@ final class WasmExprCompiler {
 						WasmComplexCompiler.compileLog(cons, ctx);
 					}
 					else {
-						WasmLogCompiler.compile(cons, ctx);
+						WasmTranscendentalCompiler.compileUnary(cons, ctx, WasmFdlibmRuntimeBuilder.Fn.LOG, sym.name());
 					}
 				}
 				case LispNames.TANH -> {
@@ -2004,7 +2004,8 @@ final class WasmExprCompiler {
 						WasmComplexCompiler.compileUnaryMath(cons, ctx, sym.name());
 					}
 					else {
-						WasmTanhCompiler.compile(cons, ctx);
+						WasmTranscendentalCompiler.compileUnary(cons, ctx, WasmFdlibmRuntimeBuilder.Fn.TANH,
+								sym.name());
 					}
 				}
 				case LispNames.SIN, LispNames.COS, LispNames.TAN -> {
@@ -2012,7 +2013,11 @@ final class WasmExprCompiler {
 						WasmComplexCompiler.compileUnaryMath(cons, ctx, sym.name());
 					}
 					else {
-						WasmSinCosCompiler.compile(cons, ctx, sym.name());
+						WasmTranscendentalCompiler.compileUnary(cons, ctx, switch (sym.name()) {
+							case LispNames.SIN -> WasmFdlibmRuntimeBuilder.Fn.SIN;
+							case LispNames.COS -> WasmFdlibmRuntimeBuilder.Fn.COS;
+							default -> WasmFdlibmRuntimeBuilder.Fn.TAN;
+						}, sym.name());
 					}
 				}
 				case LispNames.ASIN, LispNames.ACOS, LispNames.ATAN -> {
@@ -2029,7 +2034,11 @@ final class WasmExprCompiler {
 						WasmComplexCompiler.compileAsinAcos(cons, ctx, sym.name());
 					}
 					else {
-						WasmAtanCompiler.compile(cons, ctx, sym.name());
+						WasmTranscendentalCompiler.compileUnary(cons, ctx, switch (sym.name()) {
+							case LispNames.ASIN -> WasmFdlibmRuntimeBuilder.Fn.ASIN;
+							case LispNames.ACOS -> WasmFdlibmRuntimeBuilder.Fn.ACOS;
+							default -> WasmFdlibmRuntimeBuilder.Fn.ATAN;
+						}, sym.name());
 					}
 				}
 				case LispNames.SINH, LispNames.COSH -> {
@@ -2037,7 +2046,8 @@ final class WasmExprCompiler {
 						WasmComplexCompiler.compileUnaryMath(cons, ctx, sym.name());
 					}
 					else {
-						WasmSinhCoshCompiler.compile(cons, ctx, sym.name());
+						WasmTranscendentalCompiler.compileUnary(cons, ctx, LispNames.SINH.equals(sym.name())
+								? WasmFdlibmRuntimeBuilder.Fn.SINH : WasmFdlibmRuntimeBuilder.Fn.COSH, sym.name());
 					}
 				}
 				case LispNames.ISQRT -> WasmIsqrtCompiler.compile(cons, ctx);

@@ -571,6 +571,12 @@ public interface Instruction {
 	/** {@code MISC_PREFIX} (0xFC). */
 	int MISC_PREFIX = 0xFC;
 
+	/**
+	 * {@code I32_TRUNC_SAT_F64_S} (0xFC 0x02): Java's {@code (int) d} -- NaN answers 0
+	 * and an out-of-range value saturates, where the plain truncation traps.
+	 */
+	int I32_TRUNC_SAT_F64_S = 0x02;
+
 	/** {@code I64_TRUNC_SAT_F64_S} (0xFC 0x06). */
 	int I64_TRUNC_SAT_F64_S = 0x06;
 

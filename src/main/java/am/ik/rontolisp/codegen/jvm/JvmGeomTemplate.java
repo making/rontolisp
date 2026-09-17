@@ -276,7 +276,7 @@ final class JvmGeomTemplate {
 				}
 			}
 		}
-		double v = m * Math.pow(10.0, (double) (es * e - frac));
+		double v = m * StrictMath.pow(10.0, (double) (es * e - frac));
 		out[0] = neg ? -v : v;
 		out[1] = j;
 		return true;

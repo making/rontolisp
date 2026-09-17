@@ -380,7 +380,9 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("()I")));
 		MethodrefConstant biPow = cp.addMethodref(bigClass,
 				cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(I)" + BIG)));
-		MethodrefConstant mathPow = cp.addMethodref(mathClass,
+		// StrictMath, like every transcendental on every backend
+		// (.kb/transcendentals.md).
+		MethodrefConstant mathPow = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/StrictMath")),
 				cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(DD)D")));
 		// The complex arms' shared references, created only when the program may
 		// observe a complex: merely creating them would put the travelling holder

@@ -15,22 +15,26 @@ import am.ik.jvm.Opcode;
 /**
  * Compiles the unary floating-point math built-ins ({@code sqrt}, {@code exp},
  * {@code log}, {@code sin}, {@code cos}, {@code tan}, {@code asin}, {@code acos},
- * {@code atan}, {@code sinh}, {@code cosh}, {@code tanh}). Each delegates to the matching
- * {@code java.lang.Math} method and always returns a double.
+ * {@code atan}, {@code sinh}, {@code cosh}, {@code tanh}). {@code sqrt} is
+ * {@code Math.sqrt} (correctly rounded, so one value everywhere); every transcendental
+ * delegates to the matching {@code java.lang.StrictMath} method -- fdlibm, the one
+ * algorithm the interpreter, the JVM and the WASM backends share, so the bits agree on
+ * every backend and every CPU ({@code .kb/transcendentals.md}). Each always returns a
+ * double.
  *
  * <p>
  * Two of them carry an optional SECOND argument: {@code (atan y x)} is
- * {@code Math.atan2(y, x)} and {@code (log n base)} the quotient of the two logarithms.
- * Both sit in {@link #compileBinary}, ahead of the one-argument path, which stays exactly
- * as it was.
+ * {@code StrictMath.atan2(y, x)} and {@code (log n base)} the quotient of the two
+ * logarithms. Both sit in {@link #compileBinary}, ahead of the one-argument path, which
+ * stays exactly as it was.
  */
 final class JvmMathFnCompiler {
 
-	/** Key for {@code Math.pow(D,D)D} in the math ops map. */
+	/** Key for {@code StrictMath.pow(D,D)D} in the math ops map. */
 	static final String POW = "pow";
 
 	/**
-	 * Key for {@code Math.atan2(D,D)D} in the math ops map -- the two-argument
+	 * Key for {@code StrictMath.atan2(D,D)D} in the math ops map -- the two-argument
 	 * {@code atan}. It is the same quadrant assembly {@code phase} answers with, so the
 	 * signed zeros and the full circle come for free.
 	 */
@@ -67,23 +71,25 @@ final class JvmMathFnCompiler {
 	}
 
 	/**
-	 * Builds the {@code java.lang.Math} method references used by the math compilers.
+	 * Builds the {@code java.lang.Math} / {@code java.lang.StrictMath} method references
+	 * used by the math compilers: {@code sqrt} and {@code signum} on {@code Math}, every
+	 * transcendental on {@code StrictMath}.
 	 * @param cp the constant pool to populate
 	 * @param mathClass the {@code java/lang/Math} class constant
 	 * @return references keyed by Lisp name (for the unary functions), plus {@link #POW},
-	 * {@link #SIGNUM_D} and the two {@code ThreadLocalRandom} halves
+	 * {@link #ATAN2}, {@link #SIGNUM_D} and the two {@code ThreadLocalRandom} halves
 	 */
 	static Map<String, MethodrefConstant> buildOps(ConstantPool cp, ClassConstant mathClass) {
+		ClassConstant strictMathClass = cp.addClass(cp.addUtf8("java/lang/StrictMath"));
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
 		for (String name : UNARY_NAMES) {
-			// The map key is the (uppercase-canonical) Lisp name; the java.lang.Math
-			// method
-			// name is its lowercase Java spelling (Math.sqrt, not Math.SQRT).
-			ops.put(name, cp.addMethodref(mathClass,
+			// The map key is the (uppercase-canonical) Lisp name; the Java method name
+			// is its lowercase spelling (StrictMath.sin, not StrictMath.SIN).
+			ops.put(name, cp.addMethodref(LispNames.SQRT.equals(name) ? mathClass : strictMathClass,
 					cp.addNameAndType(cp.addUtf8(name.toLowerCase(java.util.Locale.ROOT)), cp.addUtf8("(D)D"))));
 		}
-		ops.put(POW, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(DD)D"))));
-		ops.put(ATAN2, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("atan2"), cp.addUtf8("(DD)D"))));
+		ops.put(POW, cp.addMethodref(strictMathClass, cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(DD)D"))));
+		ops.put(ATAN2, cp.addMethodref(strictMathClass, cp.addNameAndType(cp.addUtf8("atan2"), cp.addUtf8("(DD)D"))));
 		ops.put(SIGNUM_D, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D"))));
 		ClassConstant tlrClass = cp.addClass(cp.addUtf8("java/util/concurrent/ThreadLocalRandom"));
 		ops.put(TLR_CURRENT, cp.addMethodref(tlrClass,

@@ -111,11 +111,11 @@ passed to `funcall`/`mapcar` is not accelerated when compiled. Same as `vec:`.
 - **`erf`** is `(linalg:emap #'%la-erf-1 a)` and `emap` is never intercepted, so it got nothing from
   the flag while `torch:gelu`'s DEFAULT (`:approximate :none`) is built on it. **The kernel is
   `%la-erf-1`'s own arithmetic in the defun's order, bit-identical at both widths** -- the A&S 7.1.6
-  all-positive-term series in DOUBLE at both widths, narrowing only on the store. `exp` is
-  per-backend, so `(linalg:erf #d(-1.0))` differs in the last two digits on wasm. **No lane form,
+  all-positive-term series in DOUBLE at both widths, narrowing only on the store. `exp` is fdlibm
+  on every backend (a call into the runtime on wasm), so the digits agree everywhere. **No lane form,
   and the reason is not "no v128 instruction"**: the per-element iteration count is DATA-DEPENDENT.
   Measured on aarch64/NEON, a lane `exp` (`VectorOperators.EXP`) is 14x SLOWER than the scalar
-  de-boxed loop AND not bit-identical to `Math.exp`, while INTERCEPTION alone buys 132x on the
+  de-boxed loop AND not bit-identical to `StrictMath.exp`, while INTERCEPTION alone buys 132x on the
   interpreter and 13x on wasm-GC. **Do not spend time on a masked lane form**; if revisited, measure
   on a machine with 4+ f64 lanes first.
 - `abs` and unary minus USED to be per-backend -- with no double literal among their argument forms

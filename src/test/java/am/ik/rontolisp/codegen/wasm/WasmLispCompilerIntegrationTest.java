@@ -3514,12 +3514,12 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsExpAndSignUnderBothLowerings() throws Exception {
-		// vec:exp / vec:sign (+ -into) reuse the GC backend's
-		// raw-f64 emitters (the WasmExpCompiler software approximation and the
-		// (x>0)-(x<0) sign), so a --no-gc value equals the wasm-GC backend's exactly
-		// at both widths -- the nontrivial exp probes are compared against a wasm-GC
-		// run rather than a hardcoded constant, the exact ones (exp(0) = 1, sign) to
-		// literals. Both lowerings drive the same element loop.
+		// vec:exp / vec:sign (+ -into) call the same fdlibm exp the GC backend's
+		// kernels call (and the same (x>0)-(x<0) sign), so a --no-gc value equals the
+		// wasm-GC backend's exactly at both widths -- the nontrivial exp probes are
+		// compared against a wasm-GC run rather than a hardcoded constant, the exact
+		// ones (exp(0) = 1, sign) to literals. Both lowerings drive the same element
+		// loop.
 		String wasmGcExpD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:exp #d(1.0)) 0))))", false);
 		String wasmGcExpF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:exp #f(1.0)) 0))))", false);
 		String source = """
@@ -3558,11 +3558,11 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsLogAndTanhUnderBothLowerings() throws Exception {
-		// vec:log / vec:tanh (+ -into) reuse the GC backend's raw-f64
-		// emitters (the WasmLogCompiler atanh series, the WasmTanhCompiler clamped exp
-		// derivation), so a --no-gc value equals the wasm-GC backend's exactly at both
-		// widths -- the nontrivial probes are compared against a wasm-GC run, the exact
-		// ones (log(1) = 0, tanh(0) = 0, the tanh saturation) to literals.
+		// vec:log / vec:tanh (+ -into) call the same fdlibm log / tanh the GC
+		// backend's kernels call, so a --no-gc value equals the wasm-GC backend's
+		// exactly at both widths -- the nontrivial probes are compared against a wasm-GC
+		// run, the exact ones (log(1) = 0, tanh(0) = 0, the tanh saturation) to
+		// literals.
 		String wasmGcLogD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:log #d(10.0)) 0))))", false);
 		String wasmGcLogF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:log #f(10.0)) 0))))", false);
 		String wasmGcTanhD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:tanh #d(1.0)) 0))))", false);
@@ -3608,11 +3608,11 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsSinCosTanUnderBothLowerings() throws Exception {
-		// vec:sin / vec:cos / vec:tan (+ -into) reuse
-		// the GC backend's raw-f64 emitter (the WasmSinCosCompiler Cody-Waite
-		// reduction), so a --no-gc value equals the wasm-GC backend's exactly at both
-		// widths -- the nontrivial probes are compared against a wasm-GC run, the exact
-		// ones (sin(0) = 0, cos(0) = 1, tan(0) = 0) to literals.
+		// vec:sin / vec:cos / vec:tan (+ -into) call the same fdlibm sin / cos / tan
+		// the GC backend's kernels call, so a --no-gc value equals the wasm-GC
+		// backend's exactly at both widths -- the nontrivial probes are compared against
+		// a wasm-GC run, the exact ones (sin(0) = 0, cos(0) = 1, tan(0) = 0) to
+		// literals.
 		String wasmGcSinD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:sin #d(1.0 -2.5 100.0)) 2))))",
 				false);
 		String wasmGcSinF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:sin #f(1.0 -2.5 100.0)) 1))))",
@@ -3654,12 +3654,11 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsArcAndHyperbolicUnderBothLowerings() throws Exception {
-		// vec:asin / vec:acos / vec:atan / vec:sinh /
-		// vec:cosh (+ -into) reuse the GC backend's raw-f64 emitters
-		// (WasmAtanCompiler's fold-and-series, WasmSinhCoshCompiler's exp derivation),
-		// so a --no-gc value equals the wasm-GC backend's exactly at both widths -- the
-		// nontrivial probes are compared against a wasm-GC run, the exact ones
-		// (atan(0) = asin(0) = sinh(0) = 0, acos(1) = 0, cosh(0) = 1) to literals.
+		// vec:asin / vec:acos / vec:atan / vec:sinh / vec:cosh (+ -into) call the
+		// same fdlibm functions the GC backend's kernels call, so a --no-gc value
+		// equals the wasm-GC backend's exactly at both widths -- the nontrivial probes
+		// are compared against a wasm-GC run, the exact ones (atan(0) = asin(0) =
+		// sinh(0) = 0, acos(1) = 0, cosh(0) = 1) to literals.
 		String wasmGcAtanD = compileAndRunVec(
 				"(print (truncate (* 1000000 (vec:aref (vec:atan #d(1.0 -2.5 100.0)) 1))))", false);
 		String wasmGcAsinF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:asin #f(0.5 -0.5)) 0))))",
@@ -14603,7 +14602,7 @@ class WasmLispCompilerIntegrationTest {
 				within(1e-9));
 		assertThat(Double.parseDouble(compileAndRun("(print (imagpart (sin #c(1 1))))"))).isCloseTo(0.6349639147847361,
 				within(1e-9));
-		assertThat(Double.parseDouble(compileAndRun("(print (exp 1))"))).isCloseTo(Math.exp(1), within(1e-4));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp 1))"))).isCloseTo(StrictMath.exp(1), within(1e-4));
 		assertThat(compileAndRun("(print (expt 2 3))")).isEqualTo("8");
 	}
 
@@ -14706,9 +14705,8 @@ class WasmLispCompilerIntegrationTest {
 		// The four escapes through a LET-bound variable, which is the shape that makes
 		// the answer's type a run-time property: log of a negative, asin/acos beyond
 		// [-1, 1] and a negative base to a fractional power answer the plane rather
-		// than NaN. WASM's transcendentals are software approximations, so the
-		// magnitudes float within 1e-9; the exactly-real parts and the printed TYPE are
-		// what the pin is for.
+		// than NaN. The magnitudes are fdlibm's on every backend now; the exactly-real
+		// parts and the printed TYPE are what this pin is for.
 		String[] out = compileAndRun("""
 				(let ((x -1d0)) (print (log x)))
 				(let ((x -100d0)) (print (realpart (log x))))
@@ -15015,16 +15013,17 @@ class WasmLispCompilerIntegrationTest {
 		// bit-exactly. exp(0) is exactly 1.0. The full-range edges live in
 		// expFullDoubleRange.
 		assertThat(compileAndRun("(print (exp 0))")).isEqualTo("1.0");
-		assertThat(Double.parseDouble(compileAndRun("(print (exp 1))"))).isCloseTo(Math.exp(1), within(1e-4));
-		assertThat(Double.parseDouble(compileAndRun("(print (exp 2.0))"))).isCloseTo(Math.exp(2), within(1e-3));
-		assertThat(Double.parseDouble(compileAndRun("(print (exp -1.0))"))).isCloseTo(Math.exp(-1), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (exp -5.0))"))).isCloseTo(Math.exp(-5), within(1e-6));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp 1))"))).isCloseTo(StrictMath.exp(1), within(1e-4));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp 2.0))"))).isCloseTo(StrictMath.exp(2), within(1e-3));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp -1.0))"))).isCloseTo(StrictMath.exp(-1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp -5.0))"))).isCloseTo(StrictMath.exp(-5), within(1e-6));
 		// A sigmoid built on exp: 1/(1+exp(-x)). sigmoid(0) is exactly 0.5.
 		assertThat(compileAndRun("(defun sg (x) (/ 1.0 (+ 1.0 (exp (- 0 x))))) (print (sg 0.0))")).isEqualTo("0.5");
 		assertThat(Double.parseDouble(compileAndRun("(defun sg (x) (/ 1.0 (+ 1.0 (exp (- 0 x))))) (print (sg 2.0))")))
-			.isCloseTo(1.0 / (1.0 + Math.exp(-2.0)), within(1e-5));
+			.isCloseTo(1.0 / (1.0 + StrictMath.exp(-2.0)), within(1e-5));
 		// exp as a first-class value over an integer argument.
-		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'exp 1))"))).isCloseTo(Math.exp(1), within(1e-4));
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'exp 1))"))).isCloseTo(StrictMath.exp(1),
+				within(1e-4));
 	}
 
 	@Test
@@ -15033,14 +15032,14 @@ class WasmLispCompilerIntegrationTest {
 		// the edges exactly -- the old (P5(x/256))^256 core degraded to ~1e-3 relative
 		// by |x| = 100 and exploded to huge positives (even to Infinity) for large
 		// negative arguments, NaN-ing a masked softmax on WASM only.
-		assertThat(Double.parseDouble(compileAndRun("(print (exp 100.0))"))).isCloseTo(Math.exp(100),
-				within(Math.exp(100) * 1e-12));
-		assertThat(Double.parseDouble(compileAndRun("(print (exp -100.0))"))).isCloseTo(Math.exp(-100),
-				within(Math.exp(-100) * 1e-12));
-		assertThat(Double.parseDouble(compileAndRun("(print (exp 709.0))"))).isCloseTo(Math.exp(709),
-				within(Math.exp(709) * 1e-12));
-		assertThat(Double.parseDouble(compileAndRun("(print (exp -700.0))"))).isCloseTo(Math.exp(-700),
-				within(Math.exp(-700) * 1e-12));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp 100.0))"))).isCloseTo(StrictMath.exp(100),
+				within(StrictMath.exp(100) * 1e-12));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp -100.0))"))).isCloseTo(StrictMath.exp(-100),
+				within(StrictMath.exp(-100) * 1e-12));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp 709.0))"))).isCloseTo(StrictMath.exp(709),
+				within(StrictMath.exp(709) * 1e-12));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp -700.0))"))).isCloseTo(StrictMath.exp(-700),
+				within(StrictMath.exp(-700) * 1e-12));
 		// The IEEE edges match Math.exp: overflow to +inf, underflow to 0.0, NaN to
 		// NaN -- including the -1e30 causal mask that used to answer Infinity.
 		assertThat(compileAndRun("(print (exp 710.0))")).isEqualTo("Infinity");
@@ -15060,23 +15059,24 @@ class WasmLispCompilerIntegrationTest {
 		// Math.log up to the printer's six decimal places but not bit-exactly. log(1)
 		// is exactly 0.0.
 		assertThat(compileAndRun("(print (log 1))")).isEqualTo("0.0");
-		assertThat(Double.parseDouble(compileAndRun("(print (log 2))"))).isCloseTo(Math.log(2), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (log 10.0))"))).isCloseTo(Math.log(10), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (log 0.9))"))).isCloseTo(Math.log(0.9), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (log 2))"))).isCloseTo(StrictMath.log(2), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (log 10.0))"))).isCloseTo(StrictMath.log(10), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (log 0.9))"))).isCloseTo(StrictMath.log(0.9), within(1e-5));
 		// Both far ends of the exponent range, including a denormal (pre-scaled by 2^54).
-		assertThat(Double.parseDouble(compileAndRun("(print (log 1e300))"))).isCloseTo(Math.log(1e300), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (log 4.9e-324))"))).isCloseTo(Math.log(4.9e-324),
+		assertThat(Double.parseDouble(compileAndRun("(print (log 1e300))"))).isCloseTo(StrictMath.log(1e300),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (log 4.9e-324))"))).isCloseTo(StrictMath.log(4.9e-324),
 				within(1e-5));
 		// The IEEE edges match Math.log at zero; a NEGATIVE argument leaves the real
 		// line and answers the principal logarithm in the plane, not NaN.
 		assertThat(compileAndRun("(print (log 0.0))")).isEqualTo("-Infinity");
 		assertThat(Double.parseDouble(compileAndRun("(print (realpart (log -1.0)))"))).isCloseTo(0.0, within(1e-5));
 		assertThat(Double.parseDouble(compileAndRun("(print (imagpart (log -1.0)))"))).isCloseTo(Math.PI, within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (realpart (log -100.0)))"))).isCloseTo(Math.log(100),
+		assertThat(Double.parseDouble(compileAndRun("(print (realpart (log -100.0)))"))).isCloseTo(StrictMath.log(100),
 				within(1e-5));
 		assertThat(compileAndRun("(print (complexp (log (/ 0.0 0.0))))")).isEqualTo("NIL");
 		// log as a first-class value over an integer argument.
-		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'log 10))"))).isCloseTo(Math.log(10),
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'log 10))"))).isCloseTo(StrictMath.log(10),
 				within(1e-5));
 	}
 
@@ -15087,45 +15087,53 @@ class WasmLispCompilerIntegrationTest {
 		// printer's six decimal places but not bit-exactly. tanh(0) is exactly 0.0 and
 		// the clamp saturates large arguments to exactly +/-1.0.
 		assertThat(compileAndRun("(print (tanh 0))")).isEqualTo("0.0");
-		assertThat(Double.parseDouble(compileAndRun("(print (tanh 1.0))"))).isCloseTo(Math.tanh(1), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (tanh -0.5))"))).isCloseTo(Math.tanh(-0.5), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (tanh 0.001))"))).isCloseTo(Math.tanh(0.001), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (tanh 1.0))"))).isCloseTo(StrictMath.tanh(1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (tanh -0.5))"))).isCloseTo(StrictMath.tanh(-0.5),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (tanh 0.001))"))).isCloseTo(StrictMath.tanh(0.001),
+				within(1e-5));
 		assertThat(compileAndRun("(print (tanh 25.0))")).isEqualTo("1.0");
 		assertThat(compileAndRun("(print (tanh -25.0))")).isEqualTo("-1.0");
 		// tanh as a first-class value.
-		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'tanh 1))"))).isCloseTo(Math.tanh(1),
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'tanh 1))"))).isCloseTo(StrictMath.tanh(1),
 				within(1e-5));
 	}
 
 	@Test
 	void sinCosTanSoftwareApproximation() throws Exception {
-		// WASM has no native trigonometric instruction; sin/cos/tan are approximated in
-		// f64 (Cody-Waite reduction over pi/2 quadrants + Taylor polynomials, relative
-		// error ~1e-11 for |x| up to ~1e6), so results match Math.sin/cos/tan up to the
-		// printer's six decimal places but not bit-exactly. The zero and quadrant
-		// anchors are exact.
+		// WASM has no native trigonometric instruction; sin/cos/tan are the fdlibm
+		// runtime's (WasmFdlibmRuntimeBuilder), StrictMath's bits -- pinned bit for bit
+		// by WasmFdlibmRuntimeBuilderTest and ci-spec's transcendentals case; this probe
+		// keeps the historical tolerance shape over the whole call path.
 		assertThat(compileAndRun("(print (sin 0))")).isEqualTo("0.0");
 		assertThat(compileAndRun("(print (cos 0))")).isEqualTo("1.0");
 		assertThat(compileAndRun("(print (tan 0))")).isEqualTo("0.0");
 		assertThat(compileAndRun("(print (sin (/ pi 2)))")).isEqualTo("1.0");
 		assertThat(compileAndRun("(print (cos pi))")).isEqualTo("-1.0");
-		assertThat(Double.parseDouble(compileAndRun("(print (sin 1.0))"))).isCloseTo(Math.sin(1), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (cos -2.5))"))).isCloseTo(Math.cos(-2.5), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (tan 2.0))"))).isCloseTo(Math.tan(2), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sin 1.0))"))).isCloseTo(StrictMath.sin(1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (cos -2.5))"))).isCloseTo(StrictMath.cos(-2.5),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (tan 2.0))"))).isCloseTo(StrictMath.tan(2), within(1e-5));
 		// Every quadrant of the reduction, plus a large argument (|x| up to ~1e6 keeps
 		// full precision; beyond that the low digits diverge, documented like exp's).
-		assertThat(Double.parseDouble(compileAndRun("(print (sin 100.0))"))).isCloseTo(Math.sin(100), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (cos 4.0))"))).isCloseTo(Math.cos(4), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (sin -7.5))"))).isCloseTo(Math.sin(-7.5), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (sin 1000000.0))"))).isCloseTo(Math.sin(1e6), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sin 100.0))"))).isCloseTo(StrictMath.sin(100),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (cos 4.0))"))).isCloseTo(StrictMath.cos(4), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sin -7.5))"))).isCloseTo(StrictMath.sin(-7.5),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sin 1000000.0))"))).isCloseTo(StrictMath.sin(1e6),
+				within(1e-5));
 		// The IEEE edges: NaN and +/-inf map to NaN, matching Math.sin/cos/tan.
 		assertThat(compileAndRun("(print (sin (/ 0.0 0.0)))")).isEqualTo("NaN");
 		assertThat(compileAndRun("(print (cos (/ 1.0 0.0)))")).isEqualTo("NaN");
 		assertThat(compileAndRun("(print (tan (/ -1.0 0.0)))")).isEqualTo("NaN");
 		// First-class values over integer arguments.
-		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'sin 1))"))).isCloseTo(Math.sin(1), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'cos 1))"))).isCloseTo(Math.cos(1), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'tan 1))"))).isCloseTo(Math.tan(1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'sin 1))"))).isCloseTo(StrictMath.sin(1),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'cos 1))"))).isCloseTo(StrictMath.cos(1),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'tan 1))"))).isCloseTo(StrictMath.tan(1),
+				within(1e-5));
 	}
 
 	@Test
@@ -15323,15 +15331,11 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void arcAndHyperbolicSoftwareApproximation() throws Exception {
-		// asin/acos/atan/sinh/cosh were the LAST
-		// members of BuiltinFunctionWrappers.WASM_UNSUPPORTED -- every transcendental
-		// built-in now has a WASM software approximation. atan = odd/reciprocal folds +
-		// two half-angle folds + a 10-term Taylor series (~1e-15 relative); asin/acos
-		// derive from it; sinh/cosh derive from the software exp (a few dozen ulps like
-		// exp itself, overflowing at the same edge), sinh switching to its odd
-		// Taylor series below |x| = 0.25 to dodge the e - 1/e cancellation. Exact
-		// anchors and IEEE edges are exact; everything else matches java.lang.Math to
-		// the printer's six decimal places but not bit-exactly.
+		// asin/acos/atan/sinh/cosh were the LAST members of
+		// BuiltinFunctionWrappers.WASM_UNSUPPORTED -- every transcendental built-in
+		// compiles on WASM, today as a call into the fdlibm runtime (StrictMath's bits,
+		// pinned by WasmFdlibmRuntimeBuilderTest). This probe keeps the historical
+		// tolerance shape over the whole call path.
 		assertThat(compileAndRun("(print (atan 0))")).isEqualTo("0.0");
 		assertThat(compileAndRun("(print (asin 0))")).isEqualTo("0.0");
 		assertThat(compileAndRun("(print (acos 1))")).isEqualTo("0.0");
@@ -15347,28 +15351,36 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(Double.parseDouble(compileAndRun("(print (atan (/ -1.0 0.0)))"))).isCloseTo(-Math.PI / 2,
 				within(1e-5));
 		// Both atan folds (|x| <= 1 and the reciprocal branch), and the derivations.
-		assertThat(Double.parseDouble(compileAndRun("(print (atan 1.0))"))).isCloseTo(Math.atan(1), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (atan -2.5))"))).isCloseTo(Math.atan(-2.5), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (atan 1000000.0))"))).isCloseTo(Math.atan(1e6),
+		assertThat(Double.parseDouble(compileAndRun("(print (atan 1.0))"))).isCloseTo(StrictMath.atan(1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (atan -2.5))"))).isCloseTo(StrictMath.atan(-2.5),
 				within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (asin 0.5))"))).isCloseTo(Math.asin(0.5), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (asin -0.9999))"))).isCloseTo(Math.asin(-0.9999),
+		assertThat(Double.parseDouble(compileAndRun("(print (atan 1000000.0))"))).isCloseTo(StrictMath.atan(1e6),
 				within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (acos 0.5))"))).isCloseTo(Math.acos(0.5), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (acos -0.5))"))).isCloseTo(Math.acos(-0.5), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (asin 0.5))"))).isCloseTo(StrictMath.asin(0.5),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (asin -0.9999))"))).isCloseTo(StrictMath.asin(-0.9999),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (acos 0.5))"))).isCloseTo(StrictMath.acos(0.5),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (acos -0.5))"))).isCloseTo(StrictMath.acos(-0.5),
+				within(1e-5));
 		// sinh's small-x series branch (|x| <= 0.25), the exp branch on both sides of
 		// it, and cosh.
-		assertThat(Double.parseDouble(compileAndRun("(print (sinh 0.1))"))).isCloseTo(Math.sinh(0.1), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (sinh -0.3))"))).isCloseTo(Math.sinh(-0.3), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (sinh 2.0))"))).isCloseTo(Math.sinh(2), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (sinh -2.0))"))).isCloseTo(Math.sinh(-2), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (cosh 2.0))"))).isCloseTo(Math.cosh(2), within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (cosh -1.0))"))).isCloseTo(Math.cosh(-1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sinh 0.1))"))).isCloseTo(StrictMath.sinh(0.1),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sinh -0.3))"))).isCloseTo(StrictMath.sinh(-0.3),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sinh 2.0))"))).isCloseTo(StrictMath.sinh(2), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sinh -2.0))"))).isCloseTo(StrictMath.sinh(-2),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (cosh 2.0))"))).isCloseTo(StrictMath.cosh(2), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (cosh -1.0))"))).isCloseTo(StrictMath.cosh(-1),
+				within(1e-5));
 		// The IEEE edges. An out-of-domain asin/acos leaves the real line and answers
 		// the plane; a NaN and an INFINITY keep the real arm's NaN (an infinity has no
 		// complex arc sine either).
 		assertThat(Double.parseDouble(compileAndRun("(print (imagpart (asin 1.5)))")))
-			.isCloseTo(-Math.log(1.5 + Math.sqrt(1.25)), within(1e-5));
+			.isCloseTo(-StrictMath.log(1.5 + Math.sqrt(1.25)), within(1e-5));
 		assertThat(Double.parseDouble(compileAndRun("(print (realpart (acos -1.5)))"))).isCloseTo(Math.PI,
 				within(1e-5));
 		assertThat(compileAndRun("(print (complexp (asin (/ 0.0 0.0))))")).isEqualTo("NIL");
@@ -15381,11 +15393,11 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (sinh 800.0))")).isEqualTo("Infinity");
 		// First-class values over integer arguments (the wrappers left
 		// WASM_UNSUPPORTED, which is now empty).
-		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'atan 1))"))).isCloseTo(Math.atan(1),
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'atan 1))"))).isCloseTo(StrictMath.atan(1),
 				within(1e-5));
 		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'asin 1))"))).isCloseTo(Math.PI / 2,
 				within(1e-5));
-		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'cosh 1))"))).isCloseTo(Math.cosh(1),
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'cosh 1))"))).isCloseTo(StrictMath.cosh(1),
 				within(1e-5));
 	}
 
@@ -18096,7 +18108,7 @@ class WasmLispCompilerIntegrationTest {
 		// The rank-N round, same program and expectation as the JVM
 		// compileAndRunLinalgRankNShapesAndStackedMatmul case. The last softmax pins
 		// the masked-attention idiom: -infinity through where -> amax -> exp -> div
-		// weighs exactly 0.0 here too, which needs WasmExpCompiler's underflow clamp.
+		// weighs exactly 0.0 here too, which needs fdlibm exp's underflow to 0.0.
 		assertThat(compileAndRunLinalg("""
 				(defparameter *m* (linalg:reshape (linalg:arange 6) '(2 3)))
 				(print (linalg:expand-dims #(1 2 3) 0))

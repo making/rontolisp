@@ -2676,12 +2676,12 @@ class LispEvaluatorTest {
 		assertThat(eval("(expt #c(1 1) -1)").print()).isEqualTo("#C(1/2 -1/2)");
 		assertThat(eval("(expt #c(0 1) 2)")).isEqualTo(new LispInteger(-1));
 		assertThat(eval("(exp #c(0 1))").print()).isEqualTo("#C(0.5403023058681398 0.8414709848078965)");
-		// log's real part is Math.log(Math.hypot(1, 1)): 1 ulp above the
+		// log's real part is StrictMath.log(StrictMath.hypot(1, 1)): 1 ulp above the
 		// infinitely precise ln(sqrt(2)) -- the same call every backend makes, so
 		// all four pin this spelling.
 		assertThat(eval("(log #c(1 1))").print()).isEqualTo("#C(0.3465735902799727 0.7853981633974483)");
 		assertThat(eval("(sin #c(1 1))").print()).isEqualTo("#C(1.2984575814159773 0.6349639147847361)");
-		assertThat(eval("(exp 1)")).isEqualTo(new LispDouble(Math.exp(1)));
+		assertThat(eval("(exp 1)")).isEqualTo(new LispDouble(StrictMath.exp(1)));
 		assertThat(eval("(expt 2 3)")).isEqualTo(new LispInteger(8));
 	}
 
@@ -2695,29 +2695,29 @@ class LispEvaluatorTest {
 		// drift back. The real parts are atan2's exact on-axis answers; the imaginary
 		// magnitudes are asinh of the sqrt product, whose last ulp is the PLATFORM's
 		// Math.log, so they spell the call the code makes.
-		String asinAboveOne = "#C(1.5707963267948966 " + -Math.log(3.7320508075688767) + ")";
+		String asinAboveOne = "#C(1.5707963267948966 " + -StrictMath.log(3.7320508075688767) + ")";
 		assertThat(eval("(asin #c(2d0 0d0))").print()).isEqualTo(asinAboveOne);
 		assertThat(eval("(asin #c(2d0 -0d0))").print()).isEqualTo(asinAboveOne);
-		String asinBelowMinusOne = "#C(-1.5707963267948966 " + Math.log(7.872983346207417) + ")";
+		String asinBelowMinusOne = "#C(-1.5707963267948966 " + StrictMath.log(7.872983346207417) + ")";
 		assertThat(eval("(asin #c(-4d0 0d0))").print()).isEqualTo(asinBelowMinusOne);
 		assertThat(eval("(asin #c(-4d0 -0d0))").print()).isEqualTo(asinBelowMinusOne);
-		String acosAboveOne = "#C(0.0 " + Math.log(3.7320508075688767) + ")";
+		String acosAboveOne = "#C(0.0 " + StrictMath.log(3.7320508075688767) + ")";
 		assertThat(eval("(acos #c(2d0 0d0))").print()).isEqualTo(acosAboveOne);
 		assertThat(eval("(acos #c(2d0 -0d0))").print()).isEqualTo(acosAboveOne);
-		String acosBelowMinusOne = "#C(3.141592653589793 " + -Math.log(7.872983346207417) + ")";
+		String acosBelowMinusOne = "#C(3.141592653589793 " + -StrictMath.log(7.872983346207417) + ")";
 		assertThat(eval("(acos #c(-4d0 0d0))").print()).isEqualTo(acosBelowMinusOne);
 		assertThat(eval("(acos #c(-4d0 -0d0))").print()).isEqualTo(acosBelowMinusOne);
 		// Off the cut nothing is ambiguous: the limit from the quadrant the cut is
 		// continuous with carries the SAME imaginary part as the value on it, and the
 		// limit from the other side carries its negation.
 		assertThat(eval("(asin (complex 2d0 -1d-10))").print())
-			.isEqualTo("#C(1.5707963267371616 " + -Math.log(3.7320508075688767) + ")");
+			.isEqualTo("#C(1.5707963267371616 " + -StrictMath.log(3.7320508075688767) + ")");
 		assertThat(eval("(asin (complex 2d0 1d-10))").print())
-			.isEqualTo("#C(1.5707963267371616 " + Math.log(3.7320508075688767) + ")");
+			.isEqualTo("#C(1.5707963267371616 " + StrictMath.log(3.7320508075688767) + ")");
 		assertThat(eval("(asin (complex -4d0 1d-10))").print())
-			.isEqualTo("#C(-1.5707963267690768 " + Math.log(7.872983346207417) + ")");
+			.isEqualTo("#C(-1.5707963267690768 " + StrictMath.log(7.872983346207417) + ")");
 		assertThat(eval("(asin (complex -4d0 -1d-10))").print())
-			.isEqualTo("#C(-1.5707963267690768 " + -Math.log(7.872983346207417) + ")");
+			.isEqualTo("#C(-1.5707963267690768 " + -StrictMath.log(7.872983346207417) + ")");
 	}
 
 	@Test
@@ -2740,10 +2740,10 @@ class LispEvaluatorTest {
 		// inverse hyperbolics pinned above, which the old formula missed by 2 ulp.
 		assertThat(eval("(asin #c(0d0 1d0))").print()).isEqualTo("#C(0.0 0.881373587019543)");
 		assertThat(eval("(asin #c(1d0 1d0))").print())
-			.isEqualTo("#C(0.6662394324925153 " + Math.log(2.890053638263964) + ")");
+			.isEqualTo("#C(0.6662394324925153 " + StrictMath.log(2.890053638263964) + ")");
 		assertThat(eval("(acos #c(0d0 1d0))").print()).isEqualTo("#C(1.5707963267948966 -0.881373587019543)");
 		assertThat(eval("(acos #c(1d0 1d0))").print())
-			.isEqualTo("#C(0.9045568943023813 " + -Math.log(2.890053638263964) + ")");
+			.isEqualTo("#C(0.9045568943023813 " + -StrictMath.log(2.890053638263964) + ")");
 	}
 
 	@Test
@@ -2774,14 +2774,14 @@ class LispEvaluatorTest {
 		// real function of one family, and the JVM's slot reuse (.todo/765) broke exactly
 		// this: losing the denominator left the numerator, so tan of a real was sin of
 		// it. The digits are the platform's Math, so closeness is the pin.
-		assertThat(((LispDouble) eval("(realpart (tan #c(1d0 0d0)))")).value()).isCloseTo(Math.tan(1.0),
-				within(4 * Math.ulp(Math.tan(1.0))));
-		assertThat(((LispDouble) eval("(imagpart (tan #c(0d0 1d0)))")).value()).isCloseTo(Math.tanh(1.0),
+		assertThat(((LispDouble) eval("(realpart (tan #c(1d0 0d0)))")).value()).isCloseTo(StrictMath.tan(1.0),
+				within(4 * Math.ulp(StrictMath.tan(1.0))));
+		assertThat(((LispDouble) eval("(imagpart (tan #c(0d0 1d0)))")).value()).isCloseTo(StrictMath.tanh(1.0),
 				within(4 * Math.ulp(1.0)));
-		assertThat(((LispDouble) eval("(realpart (tanh #c(1d0 0d0)))")).value()).isCloseTo(Math.tanh(1.0),
+		assertThat(((LispDouble) eval("(realpart (tanh #c(1d0 0d0)))")).value()).isCloseTo(StrictMath.tanh(1.0),
 				within(4 * Math.ulp(1.0)));
-		assertThat(((LispDouble) eval("(imagpart (tanh #c(0d0 1d0)))")).value()).isCloseTo(Math.tan(1.0),
-				within(4 * Math.ulp(Math.tan(1.0))));
+		assertThat(((LispDouble) eval("(imagpart (tanh #c(0d0 1d0)))")).value()).isCloseTo(StrictMath.tan(1.0),
+				within(4 * Math.ulp(StrictMath.tan(1.0))));
 		// Off the axes both are still the quotient of their own sine by their own cosine.
 		assertThat(((LispDouble) eval("(abs (- (tan #c(1d0 1d0)) (/ (sin #c(1d0 1d0)) (cos #c(1d0 1d0)))))")).value())
 			.isCloseTo(0.0, within(1e-15));
@@ -3333,7 +3333,7 @@ class LispEvaluatorTest {
 		// on SBCL's ...549, which halves log 9) where aarch64 lands one low
 		// (.kb/jvm-complex.md). So the pin spells the call, never a box's digits.
 		assertThat(eval("(acosh 0d0)").print()).isEqualTo("#C(0.0 1.5707963267948966)");
-		assertThat(eval("(atanh 2d0)").print()).isEqualTo("#C(" + Math.log(3.0) / 2 + " 1.5707963267948966)");
+		assertThat(eval("(atanh 2d0)").print()).isEqualTo("#C(" + StrictMath.log(3.0) / 2 + " 1.5707963267948966)");
 	}
 
 	@Test
@@ -3344,9 +3344,9 @@ class LispEvaluatorTest {
 		// are asserted where the platform rounds them identically (atan2's pi and the
 		// exact zeros) and spelled as their Math call where it does not.
 		assertThat(eval("(log -1d0)").print()).isEqualTo("#C(0.0 3.141592653589793)");
-		assertThat(eval("(log -100d0)").print()).isEqualTo("#C(" + Math.log(100.0) + " 3.141592653589793)");
+		assertThat(eval("(log -100d0)").print()).isEqualTo("#C(" + StrictMath.log(100.0) + " 3.141592653589793)");
 		assertThat(eval("(log -1)").print()).isEqualTo("#C(0.0 3.141592653589793)");
-		assertThat(eval("(log -1/2)").print()).isEqualTo("#C(" + Math.log(0.5) + " 3.141592653589793)");
+		assertThat(eval("(log -1/2)").print()).isEqualTo("#C(" + StrictMath.log(0.5) + " 3.141592653589793)");
 		assertThat(eval("(log -100d0)")).isEqualTo(eval("(log #c(-100d0 0d0))"));
 		// The zero edge and the real domain are untouched.
 		assertThat(eval("(log 0d0)")).isEqualTo(new LispDouble(Double.NEGATIVE_INFINITY));
@@ -3371,10 +3371,10 @@ class LispEvaluatorTest {
 		assertThat(imagPartOf("(acos -4d0)")).isCloseTo(-2.0634370688955608, within(2 * Math.ulp(2.1)));
 		// Inside [-1, 1] nothing moved, and a NaN argument still answers a NaN double
 		// rather than a complex one.
-		assertThat(eval("(asin 0.5d0)")).isEqualTo(new LispDouble(Math.asin(0.5)));
-		assertThat(eval("(asin 1d0)")).isEqualTo(new LispDouble(Math.asin(1.0)));
+		assertThat(eval("(asin 0.5d0)")).isEqualTo(new LispDouble(StrictMath.asin(0.5)));
+		assertThat(eval("(asin 1d0)")).isEqualTo(new LispDouble(StrictMath.asin(1.0)));
 		assertThat(eval("(acos 1d0)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(acos -1d0)")).isEqualTo(new LispDouble(Math.acos(-1.0)));
+		assertThat(eval("(acos -1d0)")).isEqualTo(new LispDouble(StrictMath.acos(-1.0)));
 		assertThat(((LispDouble) eval("(asin (/ 0d0 0d0))")).value()).isNaN();
 		assertThat(((LispDouble) eval("(log (/ 0d0 0d0))")).value()).isNaN();
 	}
@@ -3386,11 +3386,11 @@ class LispEvaluatorTest {
 		// a second quadrant assembly. The quadrant edges are IEEE-exact everywhere;
 		// everything else is spelled as its Math.atan2 call, whose last bit is the
 		// platform's (.kb/jvm-complex.md).
-		assertThat(eval("(atan 1d0 1d0)")).isEqualTo(new LispDouble(Math.atan2(1.0, 1.0)));
-		assertThat(eval("(atan 1d0 -1d0)")).isEqualTo(new LispDouble(Math.atan2(1.0, -1.0)));
-		assertThat(eval("(atan -1d0 1d0)")).isEqualTo(new LispDouble(Math.atan2(-1.0, 1.0)));
-		assertThat(eval("(atan -1d0 -1d0)")).isEqualTo(new LispDouble(Math.atan2(-1.0, -1.0)));
-		assertThat(eval("(atan 3 4)")).isEqualTo(new LispDouble(Math.atan2(3.0, 4.0)));
+		assertThat(eval("(atan 1d0 1d0)")).isEqualTo(new LispDouble(StrictMath.atan2(1.0, 1.0)));
+		assertThat(eval("(atan 1d0 -1d0)")).isEqualTo(new LispDouble(StrictMath.atan2(1.0, -1.0)));
+		assertThat(eval("(atan -1d0 1d0)")).isEqualTo(new LispDouble(StrictMath.atan2(-1.0, 1.0)));
+		assertThat(eval("(atan -1d0 -1d0)")).isEqualTo(new LispDouble(StrictMath.atan2(-1.0, -1.0)));
+		assertThat(eval("(atan 3 4)")).isEqualTo(new LispDouble(StrictMath.atan2(3.0, 4.0)));
 		assertThat(eval("(atan 1 1)")).isEqualTo(eval("(atan 1d0 1d0)"));
 		// The axes, where the signed zeros earn their keep: atan2 is exactly the
 		// function that tells (0, -1) from (-0, -1).
@@ -3408,7 +3408,7 @@ class LispEvaluatorTest {
 				.isEqualTo(eval("(phase " + z + ")"));
 		}
 		// One argument is unchanged, and both arguments must be REAL (CLHS).
-		assertThat(eval("(atan 1d0)")).isEqualTo(new LispDouble(Math.atan(1.0)));
+		assertThat(eval("(atan 1d0)")).isEqualTo(new LispDouble(StrictMath.atan(1.0)));
 		assertThatThrownBy(() -> eval("(atan #c(1d0 1d0) 1d0)")).hasMessageContaining("Expected real number");
 		assertThatThrownBy(() -> eval("(atan 1d0 #c(1d0 1d0))")).hasMessageContaining("Expected real number");
 		assertThatThrownBy(() -> eval("(atan 1d0 1d0 1d0)")).hasMessageContaining("ATAN expects 1 to 2 arguments");
@@ -3422,16 +3422,16 @@ class LispEvaluatorTest {
 		assertThat(eval("(log 100 10)")).isEqualTo(new LispDouble(2.0));
 		assertThat(eval("(log 1024 2)")).isEqualTo(new LispDouble(10.0));
 		assertThat(eval("(log 8d0 2d0)")).isEqualTo(new LispDouble(3.0));
-		assertThat(eval("(log 1000d0 10d0)")).isEqualTo(new LispDouble(Math.log(1000.0) / Math.log(10.0)));
+		assertThat(eval("(log 1000d0 10d0)")).isEqualTo(new LispDouble(StrictMath.log(1000.0) / StrictMath.log(10.0)));
 		// Each logarithm takes the real-domain escape on its own, so a negative number
 		// answers the plane divided by the real base. The QUOTIENT is the definition, so
 		// the identity is the pin -- and Smith's fold makes that quotient's real part
 		// ONE division by the real base, which is SBCL's #C(3.0 4.532360141827194) on
 		// every platform whose Math.log is correctly rounded (.kb/jvm-complex.md).
 		assertThat(eval("(log -8d0 2d0)")).isEqualTo(eval("(/ (log -8d0) (log 2d0))"));
-		assertThat(realPartOf("(log -8d0 2d0)")).isEqualTo(Math.log(8.0) / Math.log(2.0));
+		assertThat(realPartOf("(log -8d0 2d0)")).isEqualTo(StrictMath.log(8.0) / StrictMath.log(2.0));
 		assertThat(realPartOf("(log -8d0 2d0)")).isCloseTo(3.0, within(2 * Math.ulp(3.0)));
-		assertThat(imagPartOf("(log -8d0 2d0)")).isEqualTo(Math.PI / Math.log(2.0));
+		assertThat(imagPartOf("(log -8d0 2d0)")).isEqualTo(Math.PI / StrictMath.log(2.0));
 		// A complex number or base is legal: the quotient of two complex logs.
 		assertThat(eval("(log #c(1d0 1d0) 2d0)")).isEqualTo(eval("(/ (log #c(1d0 1d0)) (log 2d0))"));
 		assertThat(eval("(log #c(1d0 1d0) #c(2d0 1d0))")).isEqualTo(eval("(/ (log #c(1d0 1d0)) (log #c(2d0 1d0)))"));
@@ -3443,11 +3443,11 @@ class LispEvaluatorTest {
 				within(2 * Math.ulp(0.6)));
 		// One argument is unchanged.
 		assertThat(eval("(log 1d0)")).isEqualTo(new LispDouble(0.0));
-		assertThat(eval("(log 8d0)")).isEqualTo(new LispDouble(Math.log(8.0)));
+		assertThat(eval("(log 8d0)")).isEqualTo(new LispDouble(StrictMath.log(8.0)));
 		assertThatThrownBy(() -> eval("(log 8 2 1)")).hasMessageContaining("LOG expects 1 to 2 arguments");
 		// The first-class reference carries the optional argument too.
 		assertThat(eval("(funcall #'log 8 2)")).isEqualTo(new LispDouble(3.0));
-		assertThat(eval("(funcall #'atan 1d0 -1d0)")).isEqualTo(new LispDouble(Math.atan2(1.0, -1.0)));
+		assertThat(eval("(funcall #'atan 1d0 -1d0)")).isEqualTo(new LispDouble(StrictMath.atan2(1.0, -1.0)));
 	}
 
 	@Test
@@ -3455,14 +3455,14 @@ class LispEvaluatorTest {
 		// |x|^y turned through y*pi radians -- one pow and one cis, NOT exp(y*log x):
 		// a real base's phase is exactly pi, which is what makes the imaginary part of
 		// (expt -2d0 0.5d0) exactly (sqrt 2). The form is the pin.
-		double cubeRoot = Math.pow(8.0, 1.0 / 3.0);
+		double cubeRoot = StrictMath.pow(8.0, 1.0 / 3.0);
 		double third = (1.0 / 3.0) * Math.PI;
 		assertThat(eval("(expt -8d0 (/ 1d0 3d0))").print())
-			.isEqualTo("#C(" + cubeRoot * Math.cos(third) + " " + cubeRoot * Math.sin(third) + ")");
+			.isEqualTo("#C(" + cubeRoot * StrictMath.cos(third) + " " + cubeRoot * StrictMath.sin(third) + ")");
 		assertThat(eval("(expt -8 1/3)")).isEqualTo(eval("(expt -8d0 (/ 1d0 3d0))"));
-		double root2 = Math.pow(2.0, 0.5);
-		assertThat(realPartOf("(expt -2d0 0.5d0)")).isEqualTo(root2 * Math.cos(0.5 * Math.PI));
-		assertThat(imagPartOf("(expt -2d0 0.5d0)")).isEqualTo(root2 * Math.sin(0.5 * Math.PI));
+		double root2 = StrictMath.pow(2.0, 0.5);
+		assertThat(realPartOf("(expt -2d0 0.5d0)")).isEqualTo(root2 * StrictMath.cos(0.5 * Math.PI));
+		assertThat(imagPartOf("(expt -2d0 0.5d0)")).isEqualTo(root2 * StrictMath.sin(0.5 * Math.PI));
 		// SBCL's digits for both, and the deliberate disagreement with sqrt in the
 		// real part's last bits (sqrt has no logarithm and no rotation to round).
 		assertThat(realPartOf("(expt -8d0 (/ 1d0 3d0))")).isCloseTo(1.0000000000000002, within(4 * Math.ulp(1.0)));
@@ -3499,7 +3499,7 @@ class LispEvaluatorTest {
 		// platform's -- x64 lands on SBCL's ...357 (its clog squares instead of
 		// hypot-ing), aarch64 one below -- so the pin spells the log call.
 		assertThat(eval("(acosh #c(1d0 1d0))").print())
-			.isEqualTo("#C(" + 2 * Math.log(1.7000157758867898) + " 0.9045568943023813)");
+			.isEqualTo("#C(" + 2 * StrictMath.log(1.7000157758867898) + " 0.9045568943023813)");
 		assertThat(eval("(acosh #c(0d0 0d0))").print()).isEqualTo("#C(0.0 1.5707963267948966)");
 		assertThat(eval("(acosh #c(0d0 -0d0))").print()).isEqualTo("#C(0.0 -1.5707963267948966)");
 		assertThat(eval("(acosh #c(-4d0 0d0))").print()).isEqualTo("#C(2.0634370688955603 3.141592653589793)");
@@ -3517,12 +3517,14 @@ class LispEvaluatorTest {
 		assertThat(eval("(atanh #c(1d0 1d0))").print()).isEqualTo("#C(0.4023594781085251 1.0172219678978514)");
 		// Both atanh real parts are differences of principal logs -- (log 3)/2 and
 		// (log 3 - log 5)/2 -- so they carry the platform's last ulp of Math.log.
-		assertThat(eval("(atanh #c(2d0 0d0))").print()).isEqualTo("#C(" + Math.log(3.0) / 2 + " 1.5707963267948966)");
-		assertThat(eval("(atanh #c(2d0 -0d0))").print()).isEqualTo("#C(" + Math.log(3.0) / 2 + " -1.5707963267948966)");
+		assertThat(eval("(atanh #c(2d0 0d0))").print())
+			.isEqualTo("#C(" + StrictMath.log(3.0) / 2 + " 1.5707963267948966)");
+		assertThat(eval("(atanh #c(2d0 -0d0))").print())
+			.isEqualTo("#C(" + StrictMath.log(3.0) / 2 + " -1.5707963267948966)");
 		assertThat(eval("(atanh #c(-4d0 0d0))").print())
-			.isEqualTo("#C(" + (Math.log(3.0) - Math.log(5.0)) / 2 + " 1.5707963267948966)");
+			.isEqualTo("#C(" + (StrictMath.log(3.0) - StrictMath.log(5.0)) / 2 + " 1.5707963267948966)");
 		assertThat(eval("(atanh #c(-4d0 -0d0))").print())
-			.isEqualTo("#C(" + (Math.log(3.0) - Math.log(5.0)) / 2 + " -1.5707963267948966)");
+			.isEqualTo("#C(" + (StrictMath.log(3.0) - StrictMath.log(5.0)) / 2 + " -1.5707963267948966)");
 		assertThat(eval("(tanh (atanh #c(1d0 1d0)))").print()).isEqualTo("#C(1.0000000000000002 1.0)");
 	}
 

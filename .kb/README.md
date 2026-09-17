@@ -181,7 +181,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Numeric, GPU and native
 
-- [transcendentals.md](transcendentals.md) -- `exp`/`log`/`sin`/`cos`/`tan`/`atan`/`expt` answer different last digits per backend (and per JVM platform); measured sizes and why it is not unified yet
+- [transcendentals.md](transcendentals.md) -- one algorithm (fdlibm: `StrictMath` on the interpreter and the JVM, the same fdlibm as WASM runtime functions) so every transcendental answers the same bits on every backend and CPU; where each lives, the gating, the measured sizes and costs
 - [linalg.md](linalg.md) -- the `linalg` package and the standard array functions
 - [linalg-simd.md](linalg-simd.md) -- `--simd` interception of the `linalg:` kernels
 - [linalg-blas.md](linalg-blas.md) -- `--blas`: the matrix product on a tuned CBLAS from the OS

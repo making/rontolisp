@@ -8112,7 +8112,8 @@ class JvmLispCompilerTest {
 		// PLATFORM's Math.log (x64 rounds ln 3 correctly, aarch64 one low --
 		// .kb/jvm-complex.md), so the pin spells the call the emitted code makes.
 		assertThat(compileAndRun("(print (acosh 0d0))")).isEqualTo("#C(0.0 1.5707963267948966)");
-		assertThat(compileAndRun("(print (atanh 2d0))")).isEqualTo("#C(" + Math.log(3.0) / 2 + " 1.5707963267948966)");
+		assertThat(compileAndRun("(print (atanh 2d0))"))
+			.isEqualTo("#C(" + StrictMath.log(3.0) / 2 + " 1.5707963267948966)");
 		// First-class references reach the same _cu1 helpers the direct calls emit.
 		assertThat(compileAndRun("(print (funcall #'acosh 2d0))")).isEqualTo("1.3169578969248166");
 		assertThat(compileAndRun("(print (mapcar #'cis (list 0d0 1d0)))"))
@@ -8130,16 +8131,16 @@ class JvmLispCompilerTest {
 		// 2*log of the sqrt sum's modulus: the modulus is the same double on every
 		// platform, its log's last ulp is the platform's (x64 lands on SBCL's ...357).
 		assertThat(compileAndRun("(print (acosh #c(1d0 1d0)))"))
-			.isEqualTo("#C(" + 2 * Math.log(1.7000157758867898) + " 0.9045568943023813)");
+			.isEqualTo("#C(" + 2 * StrictMath.log(1.7000157758867898) + " 0.9045568943023813)");
 		// The signed zero of the imaginary part picks the sheet at the cut.
 		assertThat(compileAndRun("(print (acosh #c(0d0 0d0)))")).isEqualTo("#C(0.0 1.5707963267948966)");
 		assertThat(compileAndRun("(print (acosh #c(0d0 -0d0)))")).isEqualTo("#C(0.0 -1.5707963267948966)");
 		assertThat(compileAndRun("(print (acosh #c(-4d0 0d0)))")).isEqualTo("#C(2.0634370688955603 3.141592653589793)");
 		assertThat(compileAndRun("(print (atanh #c(1d0 1d0)))")).isEqualTo("#C(0.4023594781085251 1.0172219678978514)");
 		assertThat(compileAndRun("(print (atanh #c(2d0 0d0)))"))
-			.isEqualTo("#C(" + Math.log(3.0) / 2 + " 1.5707963267948966)");
+			.isEqualTo("#C(" + StrictMath.log(3.0) / 2 + " 1.5707963267948966)");
 		assertThat(compileAndRun("(print (atanh #c(2d0 -0d0)))"))
-			.isEqualTo("#C(" + Math.log(3.0) / 2 + " -1.5707963267948966)");
+			.isEqualTo("#C(" + StrictMath.log(3.0) / 2 + " -1.5707963267948966)");
 	}
 
 	@Test
@@ -8242,23 +8243,24 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunComplexExptExpLogTrig() throws Exception {
 		// The float parts are pinned against the interpreter's own Math.exp/sin/cos/log
-		// values, not against a printed spelling: Math.exp(1.0) is 1 ulp apart
+		// values, not against a printed spelling: StrictMath.exp(1.0) is 1 ulp apart
 		// between x64 and aarch64 (2.718281828459045 and 2.7182818284590455), so a
 		// literal expected here is the digit string of whichever box took it
 		// (.todo/756). The exact answers keep their literal form.
 		assertThat(compileAndRun("(print (expt #c(1 1) 2))")).isEqualTo("#C(0 2)");
 		assertThat(compileAndRun("(print (expt #c(1 1) -1))")).isEqualTo("#C(1/2 -1/2)");
 		assertThat(compileAndRun("(print (expt #c(0 1) 2))")).isEqualTo("-1");
-		assertThat(compileAndRun("(print (realpart (exp #c(0 1))))")).isEqualTo(Double.toString(Math.cos(1)));
-		assertThat(compileAndRun("(print (imagpart (exp #c(0 1))))")).isEqualTo(Double.toString(Math.sin(1)));
+		assertThat(compileAndRun("(print (realpart (exp #c(0 1))))")).isEqualTo(Double.toString(StrictMath.cos(1)));
+		assertThat(compileAndRun("(print (imagpart (exp #c(0 1))))")).isEqualTo(Double.toString(StrictMath.sin(1)));
 		assertThat(compileAndRun("(print (realpart (log #c(1 1))))"))
-			.isEqualTo(Double.toString(Math.log(Math.hypot(1, 1))));
-		assertThat(compileAndRun("(print (imagpart (log #c(1 1))))")).isEqualTo(Double.toString(Math.atan2(1, 1)));
+			.isEqualTo(Double.toString(StrictMath.log(StrictMath.hypot(1, 1))));
+		assertThat(compileAndRun("(print (imagpart (log #c(1 1))))"))
+			.isEqualTo(Double.toString(StrictMath.atan2(1, 1)));
 		assertThat(compileAndRun("(print (realpart (sin #c(1 1))))"))
-			.isEqualTo(Double.toString(Math.sin(1) * Math.cosh(1)));
+			.isEqualTo(Double.toString(StrictMath.sin(1) * StrictMath.cosh(1)));
 		assertThat(compileAndRun("(print (imagpart (sin #c(1 1))))"))
-			.isEqualTo(Double.toString(Math.cos(1) * Math.sinh(1)));
-		assertThat(compileAndRun("(print (exp 1))")).isEqualTo(Double.toString(Math.exp(1)));
+			.isEqualTo(Double.toString(StrictMath.cos(1) * StrictMath.sinh(1)));
+		assertThat(compileAndRun("(print (exp 1))")).isEqualTo(Double.toString(StrictMath.exp(1)));
 		assertThat(compileAndRun("(print (expt 2 3))")).isEqualTo("8");
 	}
 
@@ -8270,8 +8272,8 @@ class JvmLispCompilerTest {
 		// the _cu1 arms cannot drift back. The real parts are atan2's exact on-axis
 		// answers; the imaginary magnitudes spell the platform's own Math.log through
 		// asinh, which x64 and aarch64 round differently in the last ulp.
-		String above = Double.toString(Math.log(3.7320508075688767));
-		String below = Double.toString(Math.log(7.872983346207417));
+		String above = Double.toString(StrictMath.log(3.7320508075688767));
+		String below = Double.toString(StrictMath.log(7.872983346207417));
 		assertThat(compileAndRun("""
 				(print (asin #c(2d0 0d0)))
 				(print (asin #c(2d0 -0d0)))
@@ -8294,7 +8296,7 @@ class JvmLispCompilerTest {
 		// [-1, 1] the imaginary part is an EXACT zero, and the #c(1 1) rows agree to the
 		// bit with the asinh/acosh pins above (asin z = -i*asinh(i*z), acos z = -i*acosh
 		// z).
-		String oneOne = Double.toString(Math.log(2.890053638263964));
+		String oneOne = Double.toString(StrictMath.log(2.890053638263964));
 		assertThat(compileAndRun("""
 				(print (asin (complex -0.5d0 0d0)))
 				(print (asin (complex 0.5d0 0d0)))

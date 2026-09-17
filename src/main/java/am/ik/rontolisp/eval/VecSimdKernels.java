@@ -338,133 +338,133 @@ final class VecSimdKernels {
 
 	static void expInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.exp(x[i]);
+			r[i] = StrictMath.exp(x[i]);
 		}
 	}
 
 	static void expIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.exp(x[i]);
+			r[i] = (float) StrictMath.exp(x[i]);
 		}
 	}
 
 	static void logInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.log(x[i]);
+			r[i] = StrictMath.log(x[i]);
 		}
 	}
 
 	static void logIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.log(x[i]);
+			r[i] = (float) StrictMath.log(x[i]);
 		}
 	}
 
 	static void tanhInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.tanh(x[i]);
+			r[i] = StrictMath.tanh(x[i]);
 		}
 	}
 
 	static void tanhIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.tanh(x[i]);
+			r[i] = (float) StrictMath.tanh(x[i]);
 		}
 	}
 
 	static void sinInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.sin(x[i]);
+			r[i] = StrictMath.sin(x[i]);
 		}
 	}
 
 	static void sinIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.sin(x[i]);
+			r[i] = (float) StrictMath.sin(x[i]);
 		}
 	}
 
 	static void cosInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.cos(x[i]);
+			r[i] = StrictMath.cos(x[i]);
 		}
 	}
 
 	static void cosIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.cos(x[i]);
+			r[i] = (float) StrictMath.cos(x[i]);
 		}
 	}
 
 	static void tanInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.tan(x[i]);
+			r[i] = StrictMath.tan(x[i]);
 		}
 	}
 
 	static void tanIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.tan(x[i]);
+			r[i] = (float) StrictMath.tan(x[i]);
 		}
 	}
 
 	static void asinInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.asin(x[i]);
+			r[i] = StrictMath.asin(x[i]);
 		}
 	}
 
 	static void asinIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.asin(x[i]);
+			r[i] = (float) StrictMath.asin(x[i]);
 		}
 	}
 
 	static void acosInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.acos(x[i]);
+			r[i] = StrictMath.acos(x[i]);
 		}
 	}
 
 	static void acosIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.acos(x[i]);
+			r[i] = (float) StrictMath.acos(x[i]);
 		}
 	}
 
 	static void atanInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.atan(x[i]);
+			r[i] = StrictMath.atan(x[i]);
 		}
 	}
 
 	static void atanIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.atan(x[i]);
+			r[i] = (float) StrictMath.atan(x[i]);
 		}
 	}
 
 	static void sinhInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.sinh(x[i]);
+			r[i] = StrictMath.sinh(x[i]);
 		}
 	}
 
 	static void sinhIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.sinh(x[i]);
+			r[i] = (float) StrictMath.sinh(x[i]);
 		}
 	}
 
 	static void coshInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = Math.cosh(x[i]);
+			r[i] = StrictMath.cosh(x[i]);
 		}
 	}
 
 	static void coshIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
-			r[i] = (float) Math.cosh(x[i]);
+			r[i] = (float) StrictMath.cosh(x[i]);
 		}
 	}
 

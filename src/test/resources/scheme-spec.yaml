@@ -765,3 +765,25 @@ cases:
       (#f #t #t)
       15000
       4
+  - name: a-builtin-used-before-the-file-redefines-it-means-the-builtin-until-then
+    source: |
+      (define old-caddr caddr)
+      (define (caddr x) (if (null? x) 'empty (old-caddr x)))
+      (write (list (caddr '()) (caddr '(1 2 3)))) (newline)
+      (write (cdddr '(1 2 3 4))) (newline)
+      (define (cdddr x) 'mine)
+      (write (cdddr '(1 2 3 4))) (newline)
+      (define (first-of-rest x) (cadar x))
+      (write (first-of-rest '((1 2)))) (newline)
+      (define (cadar x) 'mine)
+      (write (first-of-rest '((1 2)))) (newline)
+      (define cdadr-before (map cdadr '((1 (2 3)))))
+      (define cdadr 7)
+      (write (list cdadr-before cdadr)) (newline)
+    expected: |
+      (empty 3)
+      (4)
+      mine
+      2
+      mine
+      (((3)) 7)
