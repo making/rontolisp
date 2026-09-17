@@ -110,7 +110,123 @@
                   (write-char c)))))
         (write-string name))))
 
+;; write and display must terminate on a circular structure (R7RS 6.13.3): a node a
+;; cycle closes on is written with a datum label, #0=(1 2 . #0#). Sharing without a
+;; cycle is written out each time, as write does.
+;;
+;; No eq hash table: on wasm one costs 16 KB of every printing program and scans a
+;; single bucket for an aggregate key, which made writing a 50,000-element list take
+;; a minute (measured 2026-09-17). Instead the datum is first walked as the tree write
+;; would print, which costs no more than the printing; only a structure that walk
+;; cannot finish is searched for its cycles, with a list of the nodes seen.
 (defun rontolisp::%scheme-print (x escape)
+  (rontolisp::%scheme-print-datum x escape
+                                  (if (and (rontolisp::%scheme-node-p x)
+                                       (rontolisp::%scheme-may-cycle-p x 1000))
+                                      (rontolisp::%scheme-cycle-labels x)))
+  nil)
+
+(defun rontolisp::%scheme-node-p (x)
+  (or (consp x) (and (vectorp x) (not (stringp x)))))
+
+;; Walks X as a tree and answers NIL when the walk ends, T as soon as it may not: a cdr
+;; chain that meets itself (Brent's cycle detection), or car/element nesting deeper
+;; than DEPTH -- where every cycle through a car or an element ends up, since the walk
+;; of that car never returns.
+(defun rontolisp::%scheme-may-cycle-p (x depth)
+  (if (< depth 0)
+      t
+      (let ((tortoise x) (power 1) (steps 0) (cycle nil))
+        (do ()
+            ((or cycle (not (rontolisp::%scheme-node-p x))) cycle)
+          (if (consp x)
+              (if (and (rontolisp::%scheme-node-p (car x))
+                       (rontolisp::%scheme-may-cycle-p (car x) (- depth 1)))
+                  (setq cycle t)
+                  (progn
+                    (setq x (cdr x))
+                    (setq steps (+ steps 1))
+                    (if (eq x tortoise)
+                        (setq cycle t)
+                        (if (= steps power)
+                            (progn
+                              (setq tortoise x)
+                              (setq power (+ power power))
+                              (setq steps 0))))))
+              (let ((v x))
+                (setq x nil)
+                (do ((i 0 (+ i 1)))
+                    ((or cycle (>= i (length v))))
+                  (if (and (rontolisp::%scheme-node-p (aref v i))
+                       (rontolisp::%scheme-may-cycle-p (aref v i) (- depth 1)))
+                      (setq cycle t)))))))))
+
+;; The entry (node . state) of X in the list ENTRIES, or NIL.
+(defun rontolisp::%scheme-entry (x entries)
+  (do ((l entries (cdr l))) ((or (null l) (eq (car (car l)) x)) (car l))))
+
+;; A depth-first walk recording each node in (car SEEN) with a state: 1 while its walk
+;; is open, 2 once closed; 3 and 4 the same for a node reached again while open -- one
+;; a cycle closes on. The cdr direction is a loop.
+(defun rontolisp::%scheme-mark-cycles (x seen)
+  (let ((spine nil))
+    (do ()
+        ((not (rontolisp::%scheme-node-p x)))
+      (let ((entry (rontolisp::%scheme-entry x (car seen))))
+        (cond ((null entry)
+               (setq entry (cons x 1))
+               (rplaca seen (cons entry (car seen)))
+               (setq spine (cons entry spine))
+               (if (consp x)
+                   (progn
+                     (rontolisp::%scheme-mark-cycles (car x) seen)
+                     (setq x (cdr x)))
+                   (let ((v x))
+                     (setq x nil)
+                     (do ((i 0 (+ i 1)))
+                         ((>= i (length v)))
+                       (rontolisp::%scheme-mark-cycles (aref v i) seen)))))
+              (t
+               (if (= (cdr entry) 1) (rplacd entry 3))
+               (setq x nil)))))
+    (do ((l spine (cdr l)))
+        ((null l))
+      (rplacd (car l) (if (= (cdr (car l)) 3) 4 2)))))
+
+;; The labels X needs, as (entries . next-number): entries (node . 4) for each node a
+;; cycle closes on, or NIL when there is none (a nesting past the walk's depth).
+(defun rontolisp::%scheme-cycle-labels (x)
+  (let ((seen (list nil)) (labeled nil))
+    (rontolisp::%scheme-mark-cycles x seen)
+    (do ((l (car seen) (cdr l)))
+        ((null l))
+      (if (= (cdr (car l)) 4) (setq labeled (cons (car l) labeled))))
+    (if labeled (cons labeled 0))))
+
+;; Whether X carries a label: one to define (4) or one already written (negative).
+(defun rontolisp::%scheme-labeled-p (x labels)
+  (rontolisp::%scheme-entry x (car labels)))
+
+;; Writes X's label: #n= before its first appearance (answering NIL, the datum follows),
+;; #n# after it (answering T, nothing more to write).
+(defun rontolisp::%scheme-print-label (x labels)
+  (let ((entry (rontolisp::%scheme-entry x (car labels))))
+    (cond ((null entry) nil)
+          ((= (cdr entry) 4)
+           (let ((n (cdr labels)))
+             (rplacd entry (- -1 n))
+             (rplacd labels (+ n 1))
+             (write-char #\#)
+             (princ n)
+             (write-char #\=)
+             nil))
+          (t
+           (write-char #\#)
+           (princ (- -1 (cdr entry)))
+           (write-char #\#)
+           t))))
+
+(defun rontolisp::%scheme-print-datum (x escape labels)
   (cond ((eq x t) (write-string "#t"))
         ((eq x rontolisp::%scheme-false) (write-string "#f"))
         ((null x) (write-string "()"))
@@ -119,28 +235,30 @@
          (if escape (rontolisp::%scheme-write-string-datum x) (write-string x)))
         ((characterp x)
          (if escape (rontolisp::%scheme-write-char-datum x) (write-char x)))
+        ((and labels (rontolisp::%scheme-node-p x)
+              (rontolisp::%scheme-print-label x labels)))
         ((consp x)
          (write-char #\()
-         (rontolisp::%scheme-print (car x) escape)
+         (rontolisp::%scheme-print-datum (car x) escape labels)
          (do ((rest (cdr x) (cdr rest)))
-             ((not (consp rest))
+             ((or (not (consp rest))
+                  (and labels (rontolisp::%scheme-labeled-p rest labels)))
               (if (not (null rest))
                   (progn
                     (write-string " . ")
-                    (rontolisp::%scheme-print rest escape))))
+                    (rontolisp::%scheme-print-datum rest escape labels))))
            (write-char #\Space)
-           (rontolisp::%scheme-print (car rest) escape))
+           (rontolisp::%scheme-print-datum (car rest) escape labels))
          (write-char #\)))
         ((vectorp x)
          (write-string "#(")
          (do ((i 0 (+ i 1)))
              ((>= i (length x)))
            (if (> i 0) (write-char #\Space))
-           (rontolisp::%scheme-print (aref x i) escape))
+           (rontolisp::%scheme-print-datum (aref x i) escape labels))
          (write-char #\)))
         ((functionp x) (write-string "#<procedure>"))
-        (t (princ x)))
-  nil)
+        (t (princ x))))
 
 (defun rontolisp::%scheme-display (x) (rontolisp::%scheme-print x nil))
 

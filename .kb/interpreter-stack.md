@@ -38,9 +38,23 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
   whatever the code. Everywhere else `joinLaunch` waits and carries the outcome out of
   main: `exit(code)` (0 returns normally, so an embedded caller is not killed), and what
   the worker THREW is rethrown on thread 0 -- an `Error` the CLI does not handle
-  (`StackOverflowError`, `OutOfMemoryError`) keeps its trace and its failure exit exactly
-  as when launch ran on thread 0. An interrupt aimed at thread 0 is remembered and
-  re-asserted, never an excuse to stop waiting.
+  (`OutOfMemoryError`) keeps its trace and its failure exit exactly as when launch ran on
+  thread 0. An interrupt aimed at thread 0 is remembered and re-asserted, never an excuse
+  to stop waiting.
+- **A `StackOverflowError` is not one of those.** `runReporting` turns it into ONE line,
+  `error: stack overflow (--stack <MiB> raises the limit)`, exit 1 (the trace -- one call
+  repeated thousands of times -- only under `RONTOLISP_DEBUG`). `RontoLispCli.run` still
+  throws it, so an embedder keeps the `Error`.
+- **The REPL survives one** (`ReplBuffer.eval`): it takes `LispEvaluator.controlState()`
+  before the buffer and `restore()`s it after catching the overflow. The unwind does run
+  every `finally`, but the deepest run with no stack left and can overflow again before
+  restoring: without the restore, `(let ((*level* n)) (let ((*b* n)) (+ 1 (sink (+ n 1)))))`
+  left `*level*` bound to 1 at the next prompt in one run of three (2026-09-17) -- the
+  outermost value, because every pop above the lost one removed its neighbour's binding.
+  The leak depends on where the overflow lands, so no test can force it. The state is what binding forms push and pop -- special
+  binding depths, `handler-case` frames, `functionBodyDepth`, the load package stack and
+  current package, the load directory and system stacks, the mute flag. Nothing a program
+  ASSIGNED is rolled back, as after any error.
 - Non-daemon threads a program started (the embedded HTTP server) still hold the JVM open
   after main returns: joining the worker changed nothing about that.
 
@@ -53,10 +67,13 @@ fraction of an interpreter frame, and a compiled program's launcher has the knob
 ## Pinning tests
 
 `RontoLispCliTest#theDeepProgramDoesNotFitALauncherSizedStack` is the CONTROL -- it drives
-`runReporting` on a 1 MiB thread and requires the `StackOverflowError`, so
+`run` on a 1 MiB thread and requires the `StackOverflowError`, so
 `#mainRunsTheProgramOnItsOwnStackNotTheLaunchersOne` (same thread, same program, through
 `main`) cannot pass on a stack it never needed. `#theStackOptionIsReadOffTheRawArgumentsAndConsumed`
-and `#theStackOptionRefusesASizeNoThreadCanBeGiven` pin the flag.
+and `#theStackOptionRefusesASizeNoThreadCanBeGiven` pin the flag;
+`#anUncaughtStackOverflowInAFileIsOneLineAndExitOne` the report and
+`#aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions` the recovery, in both
+languages.
 
 The in-process E2E interpreter leg mirrors the constant rather than the mechanism:
 `AsdfLibraryE2eSupport`'s `INTERPRETER_STACK_BYTES` must track `WORKER_STACK_BYTES`, or the

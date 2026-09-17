@@ -12510,6 +12510,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAVectorKeyHashesByIdentity() throws Exception {
+		// equal on a vector is identity, so its hash is too: a vector holding itself is a
+		// key, and one grown after it was stored still finds its entry.
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'eq))
+				      (v (vector 1 2))
+				      (w (make-array 0 :adjustable t :fill-pointer 0)))
+				  (setf (aref v 1) v)
+				  (setf (gethash v h) 'self)
+				  (setf (gethash w h) 'grown)
+				  (vector-push-extend 1 w)
+				  (print (list (gethash v h) (gethash w h) (gethash (vector 1 2) h))))
+				""")).isEqualTo("(SELF GROWN NIL)");
+	}
+
+	@Test
 	void compileAndRunPackageVar() throws Exception {
 		// The value is the package KEYWORD find-package answers, so the two are eq.
 		assertThat(compileAndRun("(print *package*)")).isEqualTo(":CL-USER");

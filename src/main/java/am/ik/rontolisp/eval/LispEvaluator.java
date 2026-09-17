@@ -573,6 +573,9 @@ public final class LispEvaluator {
 	 */
 	private final DynamicBindings dynamicBindings = new DynamicBindings();
 
+	/** The {@code funcall} built-in, which {@code evalCons} recognizes by identity. */
+	private @Nullable LispFunction funcallBuiltin;
+
 	/**
 	 * True once any {@code progv} has run. {@code progv} can dynamically bind a symbol
 	 * that was never declared special, so once it is in play the variable-read fast path
@@ -2431,12 +2434,13 @@ public final class LispEvaluator {
 			}
 			return eval(rebuildSignalForm(LispNames.ERROR, args.subList(1, args.size())), this.globalEnv);
 		}));
-		this.globalEnv.defineFunction(LispNames.FUNCALL, new LispFunction(LispNames.FUNCALL, args -> {
+		this.funcallBuiltin = new LispFunction(LispNames.FUNCALL, args -> {
 			if (args.isEmpty()) {
 				throw new LispEvalException(LispNames.FUNCALL + " expects at least 1 argument");
 			}
 			return apply(args.get(0), args.subList(1, args.size()), this.globalEnv);
-		}));
+		});
+		this.globalEnv.defineFunction(LispNames.FUNCALL, this.funcallBuiltin);
 		// %async-run (the async-defun/async-lambda lowering primitive) lives here rather
 		// than in Environment because running the body thunk needs the evaluator's
 		// apply. rontolisp:await itself is a special form (evalCons), not a function.
@@ -4528,6 +4532,80 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Captures the evaluator's control state -- the stacks every binding form pushes
+	 * before its body and pops in a {@code finally} -- so a caller that survives a
+	 * {@link StackOverflowError} can put it back. The overflow does unwind through those
+	 * {@code finally} blocks, but the deepest ones run with no stack left and can
+	 * overflow again before they restore anything: a special stays bound, a {@code load}
+	 * leaves its package current. A caller about to go on evaluating (a REPL prompt)
+	 * takes a state before the form and {@link ControlState#restore restores} it after
+	 * the overflow.
+	 * @return the state now
+	 */
+	public ControlState controlState() {
+		return new ControlState(this.dynamicBindings.depths(), this.handlerCaseTypes.get().size(),
+				this.functionBodyDepth, this.packageResolver.packageStackDepth(),
+				this.packageResolver.currentPackageName(), this.loadDirStack.size(), this.loadingSystems.size(),
+				this.out.muted);
+	}
+
+	/**
+	 * The control state {@link #controlState} captured. Nothing a program ASSIGNED is in
+	 * it: a {@code setq} that ran before the overflow stays, as it would after any error.
+	 */
+	public final class ControlState {
+
+		private final Map<String, Integer> bindingDepths;
+
+		private final int handlerCaseFrames;
+
+		private final int functionBodyDepth;
+
+		private final int packageStackDepth;
+
+		private final String currentPackage;
+
+		private final int loadDirDepth;
+
+		private final int loadingSystemsDepth;
+
+		private final boolean muted;
+
+		private ControlState(Map<String, Integer> bindingDepths, int handlerCaseFrames, int functionBodyDepth,
+				int packageStackDepth, String currentPackage, int loadDirDepth, int loadingSystemsDepth,
+				boolean muted) {
+			this.bindingDepths = bindingDepths;
+			this.handlerCaseFrames = handlerCaseFrames;
+			this.functionBodyDepth = functionBodyDepth;
+			this.packageStackDepth = packageStackDepth;
+			this.currentPackage = currentPackage;
+			this.loadDirDepth = loadDirDepth;
+			this.loadingSystemsDepth = loadingSystemsDepth;
+			this.muted = muted;
+		}
+
+		/** Puts the evaluator's control stacks back to this state. */
+		public void restore() {
+			LispEvaluator evaluator = LispEvaluator.this;
+			evaluator.dynamicBindings.truncateTo(this.bindingDepths);
+			ArrayDeque<List<LispVal>> frames = evaluator.handlerCaseTypes.get();
+			while (frames.size() > this.handlerCaseFrames) {
+				frames.removeLast();
+			}
+			evaluator.functionBodyDepth = this.functionBodyDepth;
+			evaluator.packageResolver.restorePackageState(this.packageStackDepth, this.currentPackage);
+			while (evaluator.loadDirStack.size() > this.loadDirDepth) {
+				evaluator.loadDirStack.removeLast();
+			}
+			while (evaluator.loadingSystems.size() > this.loadingSystemsDepth) {
+				evaluator.loadingSystems.removeLast();
+			}
+			evaluator.out.muted = this.muted;
+		}
+
+	}
+
+	/**
 	 * Renders a value the way {@code prin1} would: through the {@code print-object} route
 	 * when this evaluation has turned it on (a {@code defmethod print-object}, a
 	 * condition in reach, a non-default printer-control variable), else the raw readable
@@ -4546,14 +4624,27 @@ public final class LispEvaluator {
 		if (!routed) {
 			return value.print();
 		}
-		LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
-		LispVal form = new LispCons(new LispSymbol(LispNames.PRIN1_TO_STRING), new LispCons(quoted, LispNil.INSTANCE));
 		try {
-			return eval(form) instanceof LispString rendered ? rendered.value() : value.print();
+			return printThrough("(lambda (x) (prin1-to-string x))", value) instanceof LispString rendered
+					? rendered.value() : value.print();
 		}
 		catch (RuntimeException ex) {
 			return value.print();
 		}
+	}
+
+	/**
+	 * Calls a printer written as a one-argument lambda on a value the program computed.
+	 * The value is handed to the closure as an ARGUMENT, never quoted into a form: a
+	 * top-level form is walked by the package resolver first, and that walk never ends on
+	 * a cyclic value.
+	 * @param printer the source of a {@code (lambda (x) ...)} answering the text
+	 * @param value the value to print
+	 * @return what the printer answered
+	 */
+	LispVal printThrough(String printer, LispVal value) {
+		LispVal closure = eval(SourceLanguage.COMMON_LISP.read(printer, Features.INTERPRETER, null).get(0));
+		return applyGlobal(closure, List.of(value));
 	}
 
 	/** The elements of a value list (nil -- no values -- included). */
@@ -5857,6 +5948,19 @@ public final class LispEvaluator {
 			// only; variable bindings of the same name do not shadow it.
 			LispVal function = resolveFunction(sym.name());
 			List<LispVal> args = evalArgs(cons, env, properLength - 1);
+			if (function == this.funcallBuiltin && !args.isEmpty() && args.get(0) instanceof LispLambda lambda) {
+				// (funcall closure ...) -- every call of a procedure held in a variable,
+				// which is what a Scheme session makes of each definition -- applies the
+				// closure HERE instead of through the built-in: two Java frames fewer
+				// per Lisp call, the depth a file's direct call gets. The built-in's
+				// signal-point seam is kept for what the closure raises.
+				try {
+					return apply(lambda, args.subList(1, args.size()), this.globalEnv);
+				}
+				catch (LispEvalException e) {
+					throw withHandlerBindHandlersRun(e);
+				}
+			}
 			return apply(function, args, env);
 		}
 		// Non-symbol head: a lambda form such as ((lambda (x) x) 5)

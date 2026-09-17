@@ -42,7 +42,8 @@ rontolisp prog.txt --source-language scheme        # any extension
 
 ファイルを指定せずに `--source-language scheme` を付けると Scheme の REPL が起動します。
 値は `write` の表記でエコーされます。定義、`set!`、副作用のために呼ぶ手続き（`display`）は
-何もエコーしません。フォームは複数行にまたがれます。
+何もエコーしません。フォームは複数行にまたがれます。エラーはスタックオーバーフローも含めて
+報告され、定義を保ったままセッションが続きます。
 
 ```console
 $ rontolisp --source-language scheme
@@ -88,7 +89,8 @@ scheme> (quit)
   vector-length vector-ref vector-set! vector->list list->vector vector-fill!`;
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
   values call-with-values error`; `display write newline write-char write-string`
-  （現在の出力ポートのみ）。
+  （現在の出力ポートのみ）。`write` と `display` は循環するリストやベクタをデータラベル付きで
+  `#0=(a b c . #0#)` のように書きます。循環のない共有構造は出現のたびに書き出します。
 
 ```scheme
 (define (sum-to n)

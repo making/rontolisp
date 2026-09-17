@@ -307,7 +307,7 @@ final class JvmHashRuntimeBuilder {
 
 		List<HashMethod> methods = new ArrayList<>();
 		methods.add(buildHash(cp, objectArrayClass, ratArrClass, intArrClass, integerClass, stringArrayClass,
-				strvMethod, objectHashCode, hashRef));
+				strvMethod, objectHashCode, hashRef, listClass, identityHashCode));
 
 		// _hashMake(): m = new LinkedHashMap(); m.put(ORDER_KEY, new ArrayList());
 		// return m
@@ -501,7 +501,8 @@ final class JvmHashRuntimeBuilder {
 	// order and runs out of gas in the same place.
 	private static HashMethod buildHash(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant ratArrClass,
 			ClassConstant intArrClass, ClassConstant integerClass, @Nullable ClassConstant stringArrayClass,
-			@Nullable MethodrefConstant strvMethod, MethodrefConstant objectHashCode, MethodrefConstant hashRef) {
+			@Nullable MethodrefConstant strvMethod, MethodrefConstant objectHashCode, MethodrefConstant hashRef,
+			ClassConstant listClass, MethodrefConstant identityHashCode) {
 		JvmAsm a = new JvmAsm();
 		// if (d <= 0) return 0
 		a.iload(1);
@@ -667,9 +668,20 @@ final class JvmHashRuntimeBuilder {
 		a.op(Opcode.IADD);
 		a.ireturn();
 		a.bind(notRatio);
+		// A general vector is an ArrayList, whose own hashCode walks its elements: equal
+		// on a vector is identity, so is its hash -- and a vector holding itself (a
+		// cycle a Scheme printer's eq table meets) would otherwise never finish.
+		int notVector = a.label();
+		a.aload(0);
+		a.instanceOf(listClass);
+		a.branch(Opcode.IFEQ, notVector);
+		a.aload(0);
+		a.invokestatic(identityHashCode);
+		a.ireturn();
+		a.bind(notVector);
 		// Everything else answers with its own hashCode, which its equals agrees with
 		// by the Java contract -- and which is identity exactly where _eqv's final
-		// Object.equals is identity (a general array, a closure).
+		// Object.equals is identity (a closure).
 		a.aload(0);
 		a.invokevirtual(objectHashCode);
 		a.ireturn();

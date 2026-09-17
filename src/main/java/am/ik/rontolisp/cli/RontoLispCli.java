@@ -1526,6 +1526,16 @@ public final class RontoLispCli {
 			}
 			return 1;
 		}
+		catch (StackOverflowError ex) {
+			// Not a condition the program signaled, and its trace is thousands of
+			// interpreter frames repeating one call: the one line names the knob.
+			cli.out.flush();
+			System.err.println("error: " + ReplBuffer.STACK_OVERFLOW);
+			if (UncaughtReport.debugTraceRequested()) {
+				ex.printStackTrace();
+			}
+			return 1;
+		}
 	}
 
 	/**

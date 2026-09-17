@@ -117,7 +117,11 @@ share the box, so `hash-table-p` is `ref.test TYPE_CELL` PLUS the header-car tes
   `equal` table (ci-spec `instance-print-syntax-and-identity`) -- and a BACK-REFERENCE
   makes it the WORST CASE for the work budget. In an `eql`/`eq` table the same key
   hashes by identity instead, so the two instances are two keys. A GENERAL ARRAY key
-  is the opposite: `equal` is identity, hash is an identity hash.
+  is the opposite: `equal` is identity, hash is an identity hash. On the JVM a general
+  vector is an `ArrayList`, whose own `hashCode` walks the elements: `_hash` asks
+  `System.identityHashCode` for it explicitly. Before that a vector holding itself
+  overflowed the stack as a key and a vector grown after it was stored lost its entry
+  (`JvmLispCompilerTest#compileAndRunAVectorKeyHashesByIdentity`).
 - `puthash` doubles (`FUNC_HASH_RESIZE`) past load factor 0.75; both funcs sit just before
   `FUNC_USER_BASE` in Preview 1 and `--component`. `maphash` order is unspecified: interpreter and
   JVM walk insertion order (JVM through `#order`, which is why the bucket index may reorder

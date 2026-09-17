@@ -708,6 +708,29 @@ public final class PackageResolver {
 		}
 	}
 
+	/**
+	 * How many packages {@link #pushPackage} has saved and no {@link #popPackage} has
+	 * restored yet.
+	 * @return the depth of the saved-package stack
+	 */
+	public int packageStackDepth() {
+		return this.packageStack.size();
+	}
+
+	/**
+	 * Puts the saved-package stack and the current package back to what they were: what
+	 * an evaluation that could not run its own restores (a stack overflow) leaves for the
+	 * caller to undo.
+	 * @param depth the depth {@link #packageStackDepth} answered then
+	 * @param current the current package name then
+	 */
+	public void restorePackageState(int depth, String current) {
+		while (this.packageStack.size() > depth) {
+			this.packageStack.removeLast();
+		}
+		this.currentPackage = current;
+	}
+
 	private LispVal resolveInPackage(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {

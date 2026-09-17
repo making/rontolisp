@@ -83,6 +83,33 @@ final class DynamicBindings {
 	}
 
 	/**
+	 * The depth of every special's binding stack on this thread.
+	 * @return name to depth, a copy
+	 */
+	Map<String, Integer> depths() {
+		Map<String, Integer> depths = new HashMap<>();
+		this.stacks.get().forEach((name, stack) -> depths.put(name, stack.size()));
+		return depths;
+	}
+
+	/**
+	 * Drops every binding pushed since {@link #depths} answered: the outermost ones stay,
+	 * since a binding form only ever pushes above what was there when it started.
+	 * @param depths what {@link #depths} answered then
+	 */
+	void truncateTo(Map<String, Integer> depths) {
+		Map<String, Deque<LispVal>> map = this.stacks.get();
+		map.entrySet().removeIf(entry -> {
+			Deque<LispVal> stack = entry.getValue();
+			int keep = depths.getOrDefault(entry.getKey(), 0);
+			while (stack.size() > keep) {
+				stack.pop();
+			}
+			return stack.isEmpty();
+		});
+	}
+
+	/**
 	 * Removes the innermost dynamic binding for a special, restoring the previous one (or
 	 * the global default when the stack empties).
 	 * @param name the variable name

@@ -62,7 +62,13 @@ records; CL's `equal` compares a general vector by identity and an instance slot
 names outlive each buffer; everything else is per buffer.
 
 - **Every top-level definition is a variable** (`setq`, later calls `funcall` it), never a
-  `defun`: no pre-scan can see the forms still to be typed.
+  `defun`: no pre-scan can see the forms still to be typed. Its own recursive calls are
+  `funcall`s too, not the trampoline. The interpreter's `evalCons` applies
+  `(funcall closure ...)` itself instead of through the `funcall` built-in (keeping its
+  handler-bind seam): that built-in was two Java frames per Lisp call, 14 against a
+  `defun`'s 13 (12 now), and a non-tail `count` in a session overflowed between 7,000 and 7,500
+  against a file's 9,000-9,500 (default `--stack`, 2026-09-17). After it both pass 9,000;
+  JIT state moves either edge by a few hundred.
 - **Each definition also emits a trampoline**, `(defun f (&rest a) (apply f a))`. A form
   typed BEFORE `f` existed lowered `(f x)` as a direct call ("a name this file does not
   define"), and the trampoline is what that call reaches -- reading the variable on every
@@ -84,7 +90,10 @@ names outlive each buffer; everything else is per buffer.
 - Echo: `SchemeTopLevel.echoes` is false for a definition, an import, a `set!` and a call
   to an `effect` builtin (`display`, `newline`, `vector-set!`, `for-each`, ...: the fourth
   result kind in `SchemeBuiltins`, lowered exactly like `value`). Values print through
-  `%scheme-write`; continuation is "the reader ran out of input"
+  `%scheme-write`, CALLED on the value (`LispEvaluator.printThrough`) -- never quoted into
+  a form, which the package resolver walks before evaluating and never finishes on a
+  cyclic value (the Common Lisp echo with a `print-object` method had the same bug).
+  Continuation is "the reader ran out of input"
   (`LispReadException.isEndOfFile`), so `#;`, `#| |#` and `#\(` need no second rule.
 
 ## Destination-driven lowering (`SchemeLowering.lower`)
@@ -174,6 +183,25 @@ The generic printer (`%scheme-print`) costs 58.8 KB of class and 7.1 KB of wasm.
 a symbol's spelling character by character instead of building it: with
 `(coerce list 'string)` in that path the same program was 70.2 KB / 17.5 KB.
 
+**Cycles in `write`/`display`** (R7RS: must terminate; label what a cycle closes on,
+`#0=(1 2 . #0#)`). `(define x (list 1 2)) (display x)`, class / wasm bytes, and writing a
+50,000-element list of `(i #(i "s"))` ten times, JVM / wasm seconds:
+
+| printer | class | wasm | 50k x10 |
+|---|---|---|---|
+| no cycle check (before) | 58,786 | 3,914 | 6.99 / 10.41 |
+| eq hash table of seen nodes | 66,322 | 20,014 | -- (one 50k write: 0.40 / 62.3) |
+| tree walk first, list of seen nodes only when it cannot finish (chosen) | 65,534 | 8,468 | 7.49 / 11.10 |
+
+An eq hash table costs wasm 16 KB (4.3 KB of it only for VECTOR keys) and, since wasm has
+no identity hash, puts every aggregate key in one bucket: quadratic. The chosen shape
+walks the datum as the tree `write` prints -- never more work than the printing -- and
+calls it cycle-free when the walk ends. It gives up on a cdr chain meeting itself
+(Brent) or car/element nesting past 1,000, where any cycle through a car must end up;
+only then `%scheme-mark-cycles` runs, over an alist: quadratic, but only for a cyclic or
+over-deep datum. `(* power 2)` in Brent's step cost 468 wasm bytes over `(+ power power)`.
+`write-shared` labels only cycles, like `write`.
+
 ## Not here yet (each its own follow-up)
 
 `syntax-rules`/`define-syntax` (a shadow-aware walk like `substituteSymbolMacros`),
@@ -193,6 +221,7 @@ when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
 `aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
 `anUncaughtSchemeErrorReportsItsMessageAndIrritants`, the four `theSchemeRepl...` transcripts, the
-first of which replays its input as a FILE and compares), `DocExamplesTest` (a ```` ```scheme ```` fence is a
+first of which replays its input as a FILE and compares, `aCyclicValueIsEchoedWithoutKillingTheSession`),
+`DocExamplesTest` (a ```` ```scheme ```` fence is a
 whole program whose stdout is asserted).
 Probes behind the first version of this table: `.todo/artefacts/825-minimal-experimental-scheme-front-end/`.

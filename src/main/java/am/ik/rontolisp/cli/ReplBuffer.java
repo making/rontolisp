@@ -18,6 +18,9 @@ import am.ik.rontolisp.reader.Features;
  */
 final class ReplBuffer {
 
+	/** What a stack overflow reports, at the prompt and for a whole program alike. */
+	static final String STACK_OVERFLOW = "stack overflow (--stack <MiB> raises the limit)";
+
 	private ReplBuffer() {
 	}
 
@@ -38,6 +41,7 @@ final class ReplBuffer {
 	}
 
 	static void eval(SourceSession session, LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
+		LispEvaluator.ControlState before = evaluator.controlState();
 		try {
 			// #. read-time eval at the REPL: only a buffer textually containing #. pays
 			// for the marker read; each form's markers resolve just before it runs, the
@@ -75,6 +79,14 @@ final class ReplBuffer {
 		catch (RuntimeException ex) {
 			freshLine(evaluator);
 			out.println("Error: " + ex.getMessage());
+		}
+		catch (StackOverflowError ex) {
+			// Unwound to here, the stack is shallow again: what the overflow could not
+			// restore on its way out is put back, and the session goes on with every
+			// definition it had.
+			before.restore();
+			freshLine(evaluator);
+			out.println("Error: " + STACK_OVERFLOW);
 		}
 		buffer.setLength(0);
 	}

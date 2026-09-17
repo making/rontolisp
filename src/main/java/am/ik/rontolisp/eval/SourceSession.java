@@ -5,11 +5,7 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
-import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispNames;
-import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
-import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.scheme.Scheme;
@@ -38,6 +34,10 @@ public final class SourceSession {
 	 */
 	public record Step(List<LispVal> forms, boolean echoes) {
 	}
+
+	// The Scheme echo: a closure over the value rather than a form quoting it, which the
+	// resolver would walk -- forever, on a cyclic value.
+	private static final String WRITER = "(lambda (x) (with-output-to-string (*standard-output*) (rontolisp::%scheme-write x)))";
 
 	private final SourceLanguage language;
 
@@ -107,11 +107,9 @@ public final class SourceSession {
 		if (this.scheme == null) {
 			return evaluator.prin1ToStringRouted(value);
 		}
-		LispVal quoted = list(new LispSymbol(LispNames.QUOTE), value);
-		LispVal form = list(new LispSymbol("WITH-OUTPUT-TO-STRING"), list(new LispSymbol("*STANDARD-OUTPUT*")),
-				list(new LispSymbol("RONTOLISP::%SCHEME-WRITE"), quoted));
 		try {
-			return evaluator.eval(form) instanceof LispString written ? written.value() : value.print();
+			return evaluator.printThrough(WRITER, value) instanceof LispString written ? written.value()
+					: value.print();
 		}
 		catch (RuntimeException ex) {
 			// An echo must never turn a computed value into an error.
@@ -147,14 +145,6 @@ public final class SourceSession {
 			}
 		}
 		return depth <= 0 && !inString;
-	}
-
-	private static LispVal list(LispVal... elements) {
-		LispVal list = LispNil.INSTANCE;
-		for (int i = elements.length - 1; i >= 0; i--) {
-			list = new LispCons(elements[i], list);
-		}
-		return list;
 	}
 
 }

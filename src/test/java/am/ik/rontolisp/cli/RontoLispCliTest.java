@@ -708,6 +708,50 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions() {
+		// Each level binds a special, so the deepest frames' restores run with no stack
+		// left: whatever they could not undo must not survive into the next prompt.
+		String lisp = runCli("""
+				(defvar *level* 0)
+				(defun sink (n) (let ((*level* n)) (+ 1 (sink (+ n 1)))))
+				(sink 1)
+				*level*
+				(+ 1 2)
+				""");
+		assertThat(lisp).contains("Error: stack overflow").endsWith("CL-USER> 0\nCL-USER> 3\nCL-USER> ");
+		String scheme = runCli("""
+				(define (sink n) (+ 1 (sink n)))
+				(define kept 42)
+				(sink 0)
+				kept
+				""", "--source-language", "scheme");
+		assertThat(scheme).contains("Error: stack overflow").endsWith("scheme> 42\nscheme> ");
+	}
+
+	@Test
+	void aCyclicValueIsEchoedWithoutKillingTheSession() {
+		assertThat(runCli("(define l (list 1 2))\n(set-cdr! (cdr l) l)\nl\n(+ 1 2)\n", "--source-language", "scheme"))
+			.isEqualTo("scheme> scheme> scheme> #0=(1 2 . #0#)\nscheme> 3\nscheme> ");
+		// A print-object method routes the Common Lisp echo through prin1-to-string.
+		String lisp = runCli("""
+				(defclass pt () ())
+				(defmethod print-object ((p pt) s) (format s "PT"))
+				(defparameter *l* (list 1 2))
+				(progn (setf (cdr (cdr *l*)) *l*) nil)
+				*l*
+				(+ 1 2)
+				""");
+		assertThat(lisp).doesNotContain("Error").endsWith("CL-USER> 3\nCL-USER> ");
+	}
+
+	@Test
+	void anUncaughtStackOverflowInAFileIsOneLineAndExitOne() {
+		String[] result = runReporting("-e", "(defun sink (n) (+ 1 (sink n)))\n(print (sink 0))\n");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].trim()).isEqualTo("error: stack overflow (--stack <MiB> raises the limit)");
+	}
+
+	@Test
 	void replWithSimdInterceptsVecKernels() {
 		// The installed Vector API kernel prints #<function VEC:DOT> -- and so does the
 		// vec.lisp defun it replaces, since defuns carry names now. The REPL text can no
@@ -1838,7 +1882,7 @@ class RontoLispCliTest {
 			Throwable thrown = onAStackOf(LAUNCHER_STACK_BYTES, () -> {
 				RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]),
 						new PrintStream(new ByteArrayOutputStream()));
-				RontoLispCli.runReporting(cli, new String[] { "-e", deepProgram(depth) });
+				cli.run(new String[] { "-e", deepProgram(depth) });
 			});
 			if (thrown instanceof StackOverflowError) {
 				deepProgramDepth = depth;
@@ -1859,7 +1903,7 @@ class RontoLispCliTest {
 		Throwable thrown = onAStackOf(LAUNCHER_STACK_BYTES, () -> {
 			RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]),
 					new PrintStream(new ByteArrayOutputStream()));
-			RontoLispCli.runReporting(cli, new String[] { "-e", deepProgram(depth) });
+			cli.run(new String[] { "-e", deepProgram(depth) });
 		});
 		assertThat(thrown).isInstanceOf(StackOverflowError.class);
 	}

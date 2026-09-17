@@ -43,7 +43,8 @@ rontolisp prog.txt --source-language scheme        # any extension
 
 With no file, `--source-language scheme` starts a Scheme REPL. Values are echoed as
 `write` prints them; a definition, a `set!` and a procedure called for its effect
-(`display`) echo nothing. A form may span lines.
+(`display`) echo nothing. A form may span lines. An error, a stack overflow included, is
+reported and the session goes on with its definitions.
 
 ```console
 $ rontolisp --source-language scheme
@@ -89,7 +90,9 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   vector-length vector-ref vector-set! vector->list list->vector vector-fill!`;
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
   values call-with-values error`; `display write newline write-char write-string` (the
-  current output port only).
+  current output port only). `write` and `display` write a circular list or vector with
+  datum labels, `#0=(a b c . #0#)`; structure shared without a cycle is written out each
+  time.
 
 ```scheme
 (define (sum-to n)

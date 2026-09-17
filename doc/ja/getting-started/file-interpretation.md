@@ -68,8 +68,10 @@ java -jar program.jar
 rontolisp --stack 64 deep.lisp
 ```
 
-スタックより深いプログラムは `StackOverflowError` で停止します。対処はこの
-オプションを使うか、再帰を反復による形に書き換えるかのどちらかです。
+スタックより深いプログラムは `error: stack overflow (--stack <MiB> raises the limit)` を
+出力し、終了ステータス 1 で停止します。対処はこのオプションを使うか、再帰を反復による形に
+書き換えるかのどちらかです。REPL では同じオーバーフローが報告され、それまでの定義を保ったまま
+セッションが続きます。
 
 ## コマンドラインで与えるプログラム
 

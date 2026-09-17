@@ -67,8 +67,10 @@ with `--stack`, in MiB:
 rontolisp --stack 64 deep.lisp
 ```
 
-A program deeper than its stack stops with a `StackOverflowError`; the cure is
-this flag or an iterative formulation of the recursion.
+A program deeper than its stack stops with `error: stack overflow (--stack <MiB> raises
+the limit)` and exit status 1; the cure is this flag or an iterative formulation of the
+recursion. At the REPL the same overflow is reported and the session goes on with
+everything defined so far.
 
 ## Programs Given on the Command Line
 
