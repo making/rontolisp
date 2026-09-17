@@ -21,4 +21,4 @@ never runs one on the four backends.
    Run `-Drontolisp.examples=true -Drontolisp.examples.only=scheme`.
 3. A program that needs an unsupported feature is not written around silently: file a
    todo for the gap (claim the number) and leave the program out until it lands.
-4. The Lisp formatter does not cover `.scm`; keep the style consistent by hand.
+4. Check whether the `format` command handles `.scm`; if not, keep the style consistent by hand.
