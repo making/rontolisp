@@ -705,8 +705,9 @@ final class JvmHandlerCaseCompiler {
 	private static List<Integer> emitRawFailureTest(int index, int excSlot, int rawSlot, JvmLispCompiler.Ctx ctx) {
 		return switch (index) {
 			case 0 -> {
-				// A cast failure, an out-of-range index, or the numeric runtime's
-				// "Expected integer|number|real number, got:" message: type-error.
+				// A cast failure, an out-of-range index, the numeric runtime's
+				// "Expected integer|number|real number, got:" message, or a dispatcher's
+				// "Not a function: " (JvmRuntimeBuilder.buildNotFnBody): type-error.
 				// Neither is an
 				// ArithmeticException, so testing this arm first costs the arithmetic
 				// arms nothing. The message tests exist because those throw sites are
@@ -719,6 +720,7 @@ final class JvmHandlerCaseCompiler {
 				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX, ctx));
 				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX, ctx));
 				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.EXPECTED_REAL_MESSAGE_PREFIX, ctx));
+				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX, ctx));
 				skips.add(emitInstanceOfJump(excSlot, "java/lang/IndexOutOfBoundsException", ctx, false));
 				for (int hit : hits) {
 					JvmEmitHelper.patchBranch(ctx, hit, ctx.code.size());

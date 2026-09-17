@@ -796,19 +796,26 @@ class RontoLispCliTest {
 	}
 
 	@Test
-	void theSchemeReplNamesANonProcedureAndItsOperands() {
+	void theSchemeReplReportsANonProcedureAsAFileDoes() throws IOException {
+		// One text for one condition: the REPL, file mode and every compiled backend
+		// report what the condition says (.kb/error-handling.md), so a Scheme session
+		// does not reword it.
 		String[] session = runSession(false, """
 				(define (get key) #f)
 				((get 'op) 2 3)
 				(define h 3)
 				(h 1)
-				((if #f #f))
 				""", "--source-language", "scheme");
 		assertThat(session[2]).isEqualTo("""
-				Error: #f is not a procedure; operands: (2 3)
-				Error: 3 is not a procedure; operands: (1)
-				Error: #!unspecific is not a procedure
+				Error: The function #f is undefined
+				Error: Not a function: 3
 				""");
+		Path program = this.tempDir.resolve("apply.scm");
+		Files.writeString(program, "(define h 3)\n(display \"before\")\n(h 1)\n");
+		String[] file = runReporting(program.toString());
+		assertThat(file[0]).isEqualTo("1");
+		assertThat(file[1]).isEqualTo("before");
+		assertThat(file[2]).isEqualTo("Unhandled condition: Not a function: 3\n");
 	}
 
 	@Test

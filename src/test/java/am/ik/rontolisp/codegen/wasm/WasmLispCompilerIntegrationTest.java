@@ -22615,6 +22615,31 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehApplyingANonFunctionSignalsTheInterpretersCondition() throws Exception {
+		// The dispatcher's prologue used to trap on the closure cast (a lookup miss on
+		// `unreachable`), past handler-case, and _apply answered nil for anything it
+		// could not call. A clause NAMING the class bakes its layout, so the throw
+		// carries the typed instance (.kb/error-handling.md).
+		String defs = """
+				(defun nf-try (f)
+				  (handler-case (funcall f 1)
+				    (type-error (c) (list :type (princ-to-string c)))
+				    (undefined-function (c) (list :undefined (princ-to-string c)))))
+				""";
+		assertThat(compileAndRunEh(defs + """
+				(print (list (nf-try 3) (nf-try "s") (nf-try nil) (nf-try (car (list 'nosuch)))
+				             (nf-try (car (list :key))) (nf-try #'1+)))
+				(print (handler-case (apply (car (list 3)) '(1 2)) (type-error (c) (princ-to-string c))))
+				""")).isEqualTo("((:TYPE \"Not a function: 3\") (:TYPE \"Not a function: \\\"s\\\"\")"
+				+ " (:UNDEFINED \"The function NIL is undefined\") (:UNDEFINED \"The function NOSUCH is undefined\")"
+				+ " (:UNDEFINED \"The function :KEY is undefined\") 2)\n\"Not a function: 3\"");
+		// No clause names a class: the message-only payload, the same text.
+		assertThat(compileComponentAndRun("""
+				(print (handler-case (funcall (car (list 3)) 1) (error (e) (princ-to-string e))))
+				""")).isEqualTo("\"Not a function: 3\"");
+	}
+
+	@Test
 	void ehANonNumberArithmeticOperandIsCaughtAsASimpleErrorHere() throws Exception {
 		// Divergence by CLASS, not catchability (the undefined-function precedent): the
 		// payload a fixed runtime helper can build is instance-less, so the landing

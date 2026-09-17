@@ -107,6 +107,14 @@ final class JvmRuntimeBuilder {
 
 	}
 
+	/**
+	 * {@code _notFn(Object value)}: the exception applying a value that names no function
+	 * raises ({@link #buildNotFnBody}).
+	 */
+	static final String NOT_FN_NAME = "_notFn";
+
+	static final String NOT_FN_DESC = "(Ljava/lang/Object;)Ljava/lang/RuntimeException;";
+
 	/** {@code _arityMsg(int shape, int got)}: the message, built at the throw. */
 	static final String ARITY_MSG_NAME = "_arityMsg";
 
@@ -229,61 +237,74 @@ final class JvmRuntimeBuilder {
 					: dispatcherName(arity, spread) + "$" + (segment - 1);
 			Utf8Constant nameUtf8 = cp.addUtf8(name);
 			List<Integer> code = new ArrayList<>();
-			if (segment == 0 && lookupRef != null) {
-				// A String funcval is a SYMBOL used as a function designator (the
-				// interpreter's late binding): resolve it through _lookup, whose
-				// Object[]{funcId, arity} result carries the id in slot 0 exactly like
-				// a function value. An unknown name answers null like the default arm.
-				// A chained segment receives the already-resolved fv.
+			if (segment == 0) {
+				// The callee's representation decides, on the path every indirect call
+				// already takes: a function value is an Object[] whose slot 0 is its
+				// Integer funcId. The two instanceof tests fold into the casts that
+				// follow them, so a function value pays nothing it did not pay before.
+				MethodrefConstant notFnRef = cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8(NOT_FN_NAME), cp.addUtf8(NOT_FN_DESC)));
 				code.add(Opcode.ALOAD_0);
 				code.add(Opcode.INSTANCEOF);
-				emitU2(code, stringClass.index());
-				int ifNotStringPos = code.size();
+				emitU2(code, objectArrayClass.index());
+				int ifNotArrayPos = code.size();
 				code.add(Opcode.IFEQ);
 				emitU2(code, 0);
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.INVOKESTATIC);
-				emitU2(code, lookupRef.index());
-				code.add(Opcode.ASTORE);
-				code.add(fvSlot);
-				code.add(Opcode.ALOAD);
-				code.add(fvSlot);
-				int ifResolvedPos = code.size();
-				code.add(Opcode.IFNONNULL);
-				emitU2(code, 0);
-				// throw new RuntimeException("The function " + name + " is
-				// undefined") -- the interpreter's late-binding failure, catchable by
-				// handler-case like any signalled error.
-				ClassConstant runtimeEx = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-				MethodrefConstant exCtor = cp.addMethodref(runtimeEx,
-						cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-				MethodrefConstant stringConcat = cp.addMethodref(stringClass,
-						cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-				code.add(Opcode.NEW);
-				emitU2(code, runtimeEx.index());
-				code.add(Opcode.DUP);
-				code.add(Opcode.LDC_W);
-				emitU2(code, cp.addString("The function ").index());
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.CHECKCAST);
-				emitU2(code, stringClass.index());
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, stringConcat.index());
-				code.add(Opcode.LDC_W);
-				emitU2(code, cp.addString(" is undefined").index());
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, stringConcat.index());
-				code.add(Opcode.INVOKESPECIAL);
-				emitU2(code, exCtor.index());
-				code.add(Opcode.ATHROW);
-				patchBranch(code, ifNotStringPos, code.size());
 				// Object[] fv = (Object[]) funcval;
 				code.add(Opcode.ALOAD_0);
 				code.add(Opcode.CHECKCAST);
 				emitU2(code, objectArrayClass.index());
 				code.add(Opcode.ASTORE);
 				code.add(fvSlot);
-				patchBranch(code, ifResolvedPos, code.size());
+				// A cons, an instance, an empty vector: no funcId in slot 0.
+				code.add(Opcode.ALOAD);
+				code.add(fvSlot);
+				code.add(Opcode.ARRAYLENGTH);
+				int ifEmptyPos = code.size();
+				code.add(Opcode.IFEQ);
+				emitU2(code, 0);
+				code.add(Opcode.ALOAD);
+				code.add(fvSlot);
+				code.add(Opcode.ICONST_0);
+				code.add(Opcode.AALOAD);
+				code.add(Opcode.INSTANCEOF);
+				emitU2(code, integerClass.index());
+				int ifNoIdPos = code.size();
+				code.add(Opcode.IFEQ);
+				emitU2(code, 0);
+				int toResolvedPos = code.size();
+				code.add(Opcode.GOTO);
+				emitU2(code, 0);
+				patchBranch(code, ifNotArrayPos, code.size());
+				if (lookupRef != null) {
+					// A String funcval is a SYMBOL used as a function designator (the
+					// interpreter's late binding): resolve it through _lookup, whose
+					// Object[]{funcId, arity} result carries the id in slot 0 exactly
+					// like a function value. A chained segment receives the
+					// already-resolved fv.
+					code.add(Opcode.ALOAD_0);
+					code.add(Opcode.INSTANCEOF);
+					emitU2(code, stringClass.index());
+					int ifNotStringPos = code.size();
+					code.add(Opcode.IFEQ);
+					emitU2(code, 0);
+					code.add(Opcode.ALOAD_0);
+					code.add(Opcode.INVOKESTATIC);
+					emitU2(code, lookupRef.index());
+					code.add(Opcode.ASTORE);
+					code.add(fvSlot);
+					code.add(Opcode.ALOAD);
+					code.add(fvSlot);
+					int ifResolvedPos = code.size();
+					code.add(Opcode.IFNONNULL);
+					emitU2(code, 0);
+					notFnThrowAt(code, notFnRef, ifNotStringPos, ifEmptyPos, ifNoIdPos);
+					patchBranch(code, ifResolvedPos, code.size());
+				}
+				else {
+					notFnThrowAt(code, notFnRef, ifEmptyPos, ifNoIdPos);
+				}
+				patchBranch(code, toResolvedPos, code.size());
 			}
 			else {
 				// Object[] fv = (Object[]) funcval;
@@ -434,6 +455,83 @@ final class JvmRuntimeBuilder {
 		emitSegmentRouter(code, cases, ranges, lo, mid, idSlot, fvSlot, arity, segmentRefs);
 		patchBranch(code, ifRight, code.size());
 		emitSegmentRouter(code, cases, ranges, mid + 1, hi, idSlot, fvSlot, arity, segmentRefs);
+	}
+
+	/**
+	 * {@code _notFn(Object value) -> RuntimeException}: what applying a value that names
+	 * no function raises, returned for the caller to throw. The text is the
+	 * interpreter's, so {@code JvmHandlerCaseCompiler} recovers the class from it:
+	 * {@code The function NAME is undefined} ({@code undefined-function}) for a symbol --
+	 * NIL, which is {@code null} here, included -- and
+	 * {@link ClosRegistry#NOT_A_FUNCTION_MESSAGE_PREFIX} plus the value printed
+	 * ({@code type-error}) for anything else, a quote-framed string among them.
+	 * @param cp the constant pool
+	 * @param stringClass the {@code String} class constant
+	 * @param lispToString the generated class's {@code _lispToString(Object)}
+	 * @return the method body
+	 */
+	static List<Integer> buildNotFnBody(ConstantPool cp, ClassConstant stringClass, MethodrefConstant lispToString) {
+		ClassConstant runtimeEx = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		MethodrefConstant exCtor = cp.addMethodref(runtimeEx,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodrefConstant concat = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		MethodrefConstant startsWith = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("startsWith"), cp.addUtf8("(Ljava/lang/String;)Z")));
+		JvmAsm a = new JvmAsm();
+		int notNull = a.label();
+		int notSymbol = a.label();
+		a.aload(0);
+		a.branch(Opcode.IFNONNULL, notNull);
+		a.anew(runtimeEx);
+		a.dup();
+		a.ldcString(cp.addString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + "NIL"
+				+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX));
+		a.invokespecial(exCtor);
+		a.areturn();
+		a.bind(notNull);
+		// a symbol is its bare name; a string keeps its framing quote
+		a.aload(0);
+		a.instanceOf(stringClass);
+		a.branch(Opcode.IFEQ, notSymbol);
+		a.aload(0);
+		a.checkcast(stringClass);
+		a.ldcString(cp.addString("\""));
+		a.invokevirtual(startsWith);
+		a.branch(Opcode.IFNE, notSymbol);
+		a.anew(runtimeEx);
+		a.dup();
+		a.ldcString(cp.addString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX));
+		a.aload(0);
+		a.checkcast(stringClass);
+		a.invokevirtual(concat);
+		a.ldcString(cp.addString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX));
+		a.invokevirtual(concat);
+		a.invokespecial(exCtor);
+		a.areturn();
+		a.bind(notSymbol);
+		a.anew(runtimeEx);
+		a.dup();
+		a.ldcString(cp.addString(ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX));
+		a.aload(0);
+		a.invokestatic(lispToString);
+		a.invokevirtual(concat);
+		a.invokespecial(exCtor);
+		a.areturn();
+		return a.code;
+	}
+
+	/**
+	 * Binds the given forward branches here and emits {@code throw _notFn(funcval)}.
+	 */
+	private static void notFnThrowAt(List<Integer> code, MethodrefConstant notFnRef, int... branches) {
+		for (int branch : branches) {
+			patchBranch(code, branch, code.size());
+		}
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, notFnRef.index());
+		code.add(Opcode.ATHROW);
 	}
 
 	private static boolean dispatchMatches(int paramCount, boolean variadic, int arity) {

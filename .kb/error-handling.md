@@ -772,6 +772,59 @@ passed interpreted and returned a WRONG VALUE compiled. Pinned by ci-spec
   program past `DISPATCH_PAGE_BUDGET_BYTES` ([wasm-function-body-size.md](wasm-function-body-size.md));
   the shared function made it 7 B and the measurement is an order of magnitude under that.
 
+## Applying a value that names no function
+**Invariant: applying a non-designator (`(funcall 3 1)`, a Scheme `(h 1)` over a number) signals a
+catchable `type-error` reporting `Not a function: <prin1>`
+(`ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX`), and a SYMBOL no function answers -- NIL included,
+which the interpreter used to call `Not a function: NIL` -- an `undefined-function` reporting
+`The function NAME is undefined`, on all four backends, through `funcall`, `apply`, `mapcar` and
+every other dispatcher route.** Before (2026-09-17): the JVM leaked a `ClassCastException` (an NPE
+for nil) caught only as the generic type-error text, uncaught as a Java class-cast line; wasm-GC
+trapped on the closure cast straight past `handler-case`; both compiled `_apply`s answered NIL for
+anything they could not call. Pinned by ci-spec `applying-a-non-function-signals-its-condition` +
+standalone `uncaught-non-function-report`, `LispEvaluatorTest`
+`applyingANonFunctionSignalsATypeErrorAndNilAnUndefinedFunction`, `JvmLispCompilerTest`
+`compileAndRunApplyingANonFunctionSignalsTheInterpretersCondition`, `WasmLispCompilerIntegrationTest`
+`ehApplyingANonFunctionSignalsTheInterpretersCondition`.
+
+- **Detected where each backend already dispatches on the callee's representation, never in front
+  of a call.** Interpreter: `LispEvaluator.apply`'s fall-through. JVM: segment 0 of every
+  `_invoke_N` / `_invoke_v` dispatcher replaces `checkcast Object[]` + `checkcast Integer` with the
+  `instanceof` twins (the JIT folds them into the casts that follow) and sends a miss, a
+  string-designator lookup miss and `_apply`'s three silent arms to one helper,
+  `_notFn(Object) -> RuntimeException` (`JvmRuntimeBuilder.buildNotFnBody`: null -> NIL, an unframed
+  `String` -> symbol, else `_lispToString`). The pad recovers `type-error` from the prefix (the
+  `Expected integer` precedent). wasm-GC: `emitDispatchPrologue` in EH mode tests the CLOSURE first
+  and `br_if`s straight to the cast, so a function value pays the same two type checks and one
+  branch the symbol-first order did; the failure arms sit AFTER the dispatch (`emitDispatchEpilogue`),
+  not between prologue and `br_table`. `_apply` hands every value it cannot call to the spread
+  dispatcher, whose prologue reports it. A quote-framed string shares `TYPE_STRING` with a symbol, so
+  the undefined arm re-tests the first byte and falls through to the not-a-function arm; a keyword
+  keeps its colon (prin1), any other symbol prints as princ -- the interpreter's `symbol.name()`.
+- **Class on wasm rides on a layout the module already has**: a program whose source names
+  `type-error` / `undefined-function` has it baked (`usedLayoutTags`) and gets the typed instance
+  (`WasmRuntimeBuilder.NotFunctionReport`, `conditionInstance`); one that does not cannot tell the
+  instance from the message-only `(nil . message)` payload, so nothing new is baked. This is why the
+  designator path's undefined-function is TYPED on wasm while a direct call's stub is not.
+- **Outside EH mode wasm is byte-identical** and still traps (unreachable / cast failure) -- the
+  uncaught-report rule above. `--no-gc` unaffected.
+- **One text in every mode**: the Scheme REPL used to reword the failure (`#f is not a procedure;
+  operands: (2 3)`, carried by a LispApplyException, removed) while file mode and the compiled backends
+  could not. The REPL prints the condition's text now (`.kb/scheme-frontend.md`).
+- Cost (2026-09-17, a 20M-iteration `funcall` loop, 12-16 alternating runs, load 6-16): JVM
+  monomorphic 23-38 -> 0-1 ms (the loop now folds entirely), polymorphic 109-114 vs 99-131 ms; wasm
+  P1 EH mode mono 259 vs 262 ms, poly 766 vs 783; component poly 753 vs 804 against an A/A run of
+  the SAME binary at 810 vs 850 -- inside the noise. A first cut that tested the closure AFTER the
+  symbol test (three checks) measured +13% mono and was dropped. Sizes (JVM `.class` / wasm P1):
+
+  | program | JVM before | after | wasm before | after |
+  |---|---|---|---|---|
+  | `(print (+ 1 2))` | 3,948 | 3,948 | 348 | 348 |
+  | `(print (handler-case (car 1) (error (c) :e)))` | 11,444 | 11,483 | 952 | 952 |
+  | `(print (mapcar (lambda (x) (* x x)) '(1 2 3)))` | 8,292 | 8,601 | 6,022 | 6,022 |
+  | a `defun` + a `funcall` through a value under `handler-case` | 52,954 | 53,270 | 10,916 | 11,077 |
+  | the same with `type-error` / `undefined-function` clauses | 52,394 | 52,710 | 10,743 | 10,954 |
+
 ## Out of scope (still)
 The interactive debugger (`break`, `*debugger-hook*`, rendering a restart's `:report` or running its
 `:interactive` function), condition-restart association, a `store-value` restart for
@@ -820,6 +873,7 @@ all, so **`restart-case` alone unblocks nothing real**.
   `handler-case-in-argument-position`, `restart-system`,
   `signal-declines-an-unmatched-handler-case`, `no-applicable-method-report`,
   `non-number-arithmetic-operands-are-catchable`, `argument-shape-errors-signal-program-error`,
+  `applying-a-non-function-signals-its-condition`,
   `runtime-type-dispatch-residue`,
   `runtime-type-dispatch-and-symbol-designators`, `postmodern-language-incidentals`, plus the
   `standalone:` list. Their presence puts the concatenated program in EH mode, so

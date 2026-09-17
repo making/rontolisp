@@ -486,7 +486,8 @@ final class JvmSymbolApiCompiler {
 	}
 
 	// throw new RuntimeException("The function " + name + " is undefined") -- the
-	// compile-expression twin of JvmEvalRuntimeBuilder.emitUndefinedFunctionThrow.
+	// compile-expression twin of the funcall dispatchers' symbol arm
+	// (JvmRuntimeBuilder.buildNotFnBody).
 	private static void emitUndefinedFunctionThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
 		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
 		ConstantPool.MethodrefConstant exCtor = ctx.cp.addMethodref(runtimeEx,
