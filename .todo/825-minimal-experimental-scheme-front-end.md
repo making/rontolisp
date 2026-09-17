@@ -103,6 +103,6 @@ Add it to the dependency graph in `CLAUDE.md` and to `PackageCycleTest`.
   `dynamic-wind`.
 - The existing suite is untouched: no Common Lisp program's emitted bytes change
   (`.kb/emitted-output-determinism.md`), and `-Pweb compile` / `-Pnative package` pass.
-- `.kb/scheme-frontend.md` holds the lowering table, the traps above and the measured
+- A new `.kb/` file, scheme-frontend.md, holds the lowering table, the traps above and the measured
   tail-call depths; `doc/en` + `doc/ja` get one page, marked experimental, listing the
   subset and the deviations.
