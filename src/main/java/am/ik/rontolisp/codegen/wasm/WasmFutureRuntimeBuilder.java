@@ -249,24 +249,27 @@ final class WasmFutureRuntimeBuilder {
 	 * @return the function body bytes (locals declaration included)
 	 */
 	static byte[] build(int off, int base, int futureType, int frameType, int streamType, int currentTaskGlobal,
-			@org.jspecify.annotations.Nullable Sched sched, @org.jspecify.annotations.Nullable Cb cb) {
+			@org.jspecify.annotations.Nullable Sched sched, @org.jspecify.annotations.Nullable Cb cb,
+			boolean identityHash) {
 		return switch (off) {
 			case OFF_NEW -> buildNew(futureType);
 			case OFF_SETTLE -> buildSettleOrReject(base, futureType, 1);
 			case OFF_REJECT -> buildSettleOrReject(base, futureType, 2);
-			case OFF_ADD_WAITER -> buildAddWaiter(futureType);
+			case OFF_ADD_WAITER -> buildAddWaiter(futureType, identityHash);
 			case OFF_WAKE -> buildWake(base, futureType);
 			case OFF_POLL -> buildPoll(futureType);
-			case OFF_SUBTASK_FUTURE -> sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched);
+			case OFF_SUBTASK_FUTURE ->
+				sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched, identityHash);
 			case OFF_SCHED_LOOP -> sched == null ? buildSyncForce(base) : buildSchedLoop(base, futureType, sched);
 			case OFF_WSTREAM_READ -> buildWasiStreamRead(futureType, streamType, sched);
 			case OFF_WSTREAM_CLOSE -> buildWasiStreamClose(streamType);
-			case OFF_WAKE_LIST -> buildWakeList(base, futureType, frameType, currentTaskGlobal, cb);
+			case OFF_WAKE_LIST -> buildWakeList(base, futureType, frameType, currentTaskGlobal, cb, identityHash);
 			case OFF_SCHED_DISPATCH ->
-				sched == null ? buildUnreachableStub() : buildSchedDispatch(base, streamType, sched);
-			case OFF_TASK_BEGIN -> cb == null ? buildUnreachableStub() : buildTaskBegin(currentTaskGlobal, cb);
+				sched == null ? buildUnreachableStub() : buildSchedDispatch(base, streamType, sched, identityHash);
+			case OFF_TASK_BEGIN ->
+				cb == null ? buildUnreachableStub() : buildTaskBegin(currentTaskGlobal, cb, identityHash);
 			case OFF_TASK_SUSPEND ->
-				cb == null ? buildUnreachableStub() : buildTaskSuspend(base, currentTaskGlobal, cb);
+				cb == null ? buildUnreachableStub() : buildTaskSuspend(base, currentTaskGlobal, cb, identityHash);
 			case OFF_TASK_FINISH ->
 				cb == null ? buildUnreachableStub() : buildTaskFinish(base, futureType, currentTaskGlobal, cb);
 			case OFF_ASYNC_CB -> cb == null ? buildUnreachableStub() : buildAsyncCb(base, currentTaskGlobal, cb);
@@ -318,7 +321,7 @@ final class WasmFutureRuntimeBuilder {
 	}
 
 	// _future_add_waiter (future, resumeClosure) -> nil: FIFO-appends a waiter node.
-	private static byte[] buildAddWaiter(int futureType) {
+	private static byte[] buildAddWaiter(int futureType, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int NODE = 2, CUR = 3;
@@ -329,8 +332,7 @@ final class WasmFutureRuntimeBuilder {
 		// node = (closure . nil)
 		getLocal(w, 1);
 		refNullEq(w);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, NODE);
 		// Empty list: waiters = node.
 		castFuture(w, 0, futureType);
@@ -399,7 +401,7 @@ final class WasmFutureRuntimeBuilder {
 	// a doorbell not yet created -- the owner is still in its eager phase -- skips the
 	// ring, and the owner's suspend path drains the list).
 	private static byte[] buildWakeList(int base, int futureType, int frameType, int currentTaskGlobal,
-			WasmFutureRuntimeBuilder.@org.jspecify.annotations.Nullable Cb cb) {
+			WasmFutureRuntimeBuilder.@org.jspecify.annotations.Nullable Cb cb, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int LIST = 0;
@@ -477,7 +479,7 @@ final class WasmFutureRuntimeBuilder {
 			getLocal(w, CLOSURE);
 			castCons(w, CELL);
 			structGet(w, WasmLispCompiler.TYPE_CONS, 1);
-			newCons(w);
+			newCons(w, identityHash);
 			structSet(w, WasmLispCompiler.TYPE_CONS, 1);
 			getLocal(w, WASEMPTY);
 			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
@@ -753,7 +755,7 @@ final class WasmFutureRuntimeBuilder {
 
 	// _subtask_future (token, lift) -> future. token = the async-lowered call's
 	// (packed . retptr) cons; lift = the member's lift wrapper as a function value.
-	private static byte[] buildSubtaskFuture(int futureType, Sched sched) {
+	private static byte[] buildSubtaskFuture(int futureType, Sched sched, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int TOKEN = 0, FN = 1, PACKED = 2, SUB = 3, FUT = 4;
@@ -808,12 +810,12 @@ final class WasmFutureRuntimeBuilder {
 		getLocal(w, FUT);
 		getLocal(w, FN);
 		getLocal(w, TOKEN);
-		newCons(w); // (fn . token)
-		newCons(w); // (fut . ...)
-		newCons(w); // (kind . ...)
-		newCons(w); // (sub . ...)
+		newCons(w, identityHash); // (fn . token)
+		newCons(w, identityHash); // (fut . ...)
+		newCons(w, identityHash); // (kind . ...)
+		newCons(w, identityHash); // (sub . ...)
 		globalGet(w, sched.registryGlobal());
-		newCons(w);
+		newCons(w, identityHash);
 		globalSet(w, sched.registryGlobal());
 		// Lazily create the task waitable-set.
 		globalGet(w, sched.setGlobal());
@@ -912,7 +914,7 @@ final class WasmFutureRuntimeBuilder {
 	// buffer, unjoins the stream handle (it survives for the next read) and runs the
 	// stream's close protocol when the completion is EOF (kind 1). Settling wakes the
 	// entry's waiters -- possibly deferring cross-task ones through their doorbells.
-	private static byte[] buildSchedDispatch(int base, int streamType, Sched sched) {
+	private static byte[] buildSchedDispatch(int base, int streamType, Sched sched, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int EV = 0, WAITABLE = 1, CODE = 2;
@@ -1055,7 +1057,7 @@ final class WasmFutureRuntimeBuilder {
 		castCons(w, DATA);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
 		globalGet(w, sched.readFreeGlobal());
-		newCons(w);
+		newCons(w, identityHash);
 		globalSet(w, sched.readFreeGlobal());
 		// EOF close protocol: DATA = the attached stream (reuse the local).
 		castCons(w, DATA);
@@ -1093,7 +1095,7 @@ final class WasmFutureRuntimeBuilder {
 	// _task_begin () -> nil: fresh task record
 	// (id . (root . (rx . (tx . (set . ready))))), CURRENT = the record, task
 	// waitable-set = 0 (created lazily by this task).
-	private static byte[] buildTaskBegin(int currentTaskGlobal, Cb cb) {
+	private static byte[] buildTaskBegin(int currentTaskGlobal, Cb cb, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
@@ -1111,11 +1113,11 @@ final class WasmFutureRuntimeBuilder {
 		i32(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW); // set
 		refNullEq(w); // ready
-		newCons(w); // (set . ready)
-		newCons(w); // (tx . ...)
-		newCons(w); // (rx . ...)
-		newCons(w); // (root . ...)
-		newCons(w); // (id . ...)
+		newCons(w, identityHash); // (set . ready)
+		newCons(w, identityHash); // (tx . ...)
+		newCons(w, identityHash); // (rx . ...)
+		newCons(w, identityHash); // (root . ...)
+		newCons(w, identityHash); // (id . ...)
 		globalSet(w, currentTaskGlobal);
 		i32(w, 0);
 		globalSet(w, cb.setGlobal());
@@ -1127,7 +1129,7 @@ final class WasmFutureRuntimeBuilder {
 	// _task_suspend (future) -> code: record the root, ensure the task waitable-set,
 	// create+arm+join the doorbell, register the task and its context slots, then
 	// _task_finish (which drains ready waiters deposited before the doorbell existed).
-	private static byte[] buildTaskSuspend(int base, int currentTaskGlobal, Cb cb) {
+	private static byte[] buildTaskSuspend(int base, int currentTaskGlobal, Cb cb, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int FUT = 0, RX = 1, TX = 2, R = 3, D = 4, REC = 5, CELL = 6;
@@ -1209,7 +1211,7 @@ final class WasmFutureRuntimeBuilder {
 		// Register the task and its context identity.
 		getLocal(w, REC);
 		globalGet(w, cb.tasksGlobal());
-		newCons(w);
+		newCons(w, identityHash);
 		globalSet(w, cb.tasksGlobal());
 		castCons(w, REC);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
@@ -1454,9 +1456,8 @@ final class WasmFutureRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 	}
 
-	private static void newCons(WasmWriter w) {
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+	private static void newCons(WasmWriter w, boolean identityHash) {
+		WasmEmitHelper.emitNewCons(w, identityHash);
 	}
 
 	private static void globalGet(WasmWriter w, int index) {

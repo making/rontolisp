@@ -18,8 +18,7 @@ final class WasmConsCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
 	}
 
 }

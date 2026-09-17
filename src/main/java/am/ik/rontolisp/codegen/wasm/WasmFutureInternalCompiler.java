@@ -87,8 +87,7 @@ final class WasmFutureInternalCompiler {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
 				WasmExprCompiler.compileExpr(args.get(2), ctx);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+				WasmEmitHelper.emitNewCons(ctx);
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_REJECT);
 			}

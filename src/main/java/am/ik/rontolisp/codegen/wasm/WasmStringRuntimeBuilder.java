@@ -1903,7 +1903,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
 	 * TYPE_CALLABLE_BASE + 0)
 	 */
-	static byte[] buildStrToCvBody() {
+	static byte[] buildStrToCvBody(boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0. locals: buckets = 1 (eqref); n = 2, i = 3 (i32).
@@ -1912,7 +1912,7 @@ final class WasmStringRuntimeBuilder {
 		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
-		WasmArrayRuntimeBuilder.emitStringToCharVecCell(w, 0, 1, 2, 3);
+		WasmArrayRuntimeBuilder.emitStringToCharVecCell(w, 0, 1, 2, 3, identityHash);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
 	}
@@ -1930,7 +1930,7 @@ final class WasmStringRuntimeBuilder {
 	 * {@code ((ref null eq), (ref null eq), (ref null eq)) -> (ref null eq)},
 	 * TYPE_CALLABLE_BASE + 2)
 	 */
-	static byte[] buildSubseqStrBody() {
+	static byte[] buildSubseqStrBody(boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: seq = 0, start = 1, end = 2 (eqref).
@@ -2002,7 +2002,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		WasmArrayRuntimeBuilder.emitFreshCharVecCellFromBuckets(w, buckets, n);
+		WasmArrayRuntimeBuilder.emitFreshCharVecCellFromBuckets(w, buckets, n, identityHash);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // if
 		// The immutable / list arm: byte-level _subseq, then a string result is
@@ -2151,7 +2151,7 @@ final class WasmStringRuntimeBuilder {
 	 * {@code end} defaults to the sequence length.
 	 * @return the function body
 	 */
-	static byte[] buildSubseqBody() {
+	static byte[] buildSubseqBody(boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// ref locals 3..6: node, head, tail, newc.
@@ -2216,7 +2216,7 @@ final class WasmStringRuntimeBuilder {
 		emitBuildCore(w, strArr, pos, end, start, cur, b);
 		w.write(Instruction.ELSE);
 		// --- List branch ---
-		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii);
+		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii, identityHash);
 		w.write(Instruction.END); // dispatch if
 		w.write(Instruction.END); // function
 		return body.toByteArray();
@@ -2226,7 +2226,7 @@ final class WasmStringRuntimeBuilder {
 	// endIdxLocal (or to the end when endIdxLocal < 0) into a fresh cons chain, left on
 	// the stack.
 	private static void emitSubseqList(WasmWriter w, int node, int head, int tail, int newc, int startIdx, int endIdx,
-			int ii) {
+			int ii, boolean identityHash) {
 		// node = seq
 		get(w, 0);
 		set(w, node);
@@ -2289,8 +2289,7 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		set(w, newc);
 		// if (head is null) head = tail = newc; else tail.cdr = newc; tail = newc
 		get(w, head);

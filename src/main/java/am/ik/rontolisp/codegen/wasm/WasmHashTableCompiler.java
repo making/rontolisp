@@ -35,10 +35,12 @@ import am.ik.wasm.Type;
  * Every count read then shifts past the tag;
  * {@code gethash}/{@code puthash}/{@code remhash} run an equalp key through
  * {@link WasmLispCompiler#FUNC_EQUALP_KEY} when the tag says so, compare an eql/eq key
- * with the eql/eq comparison, and place an eql/eq aggregate (a cons, an instance) in the
- * shared bucket 0 -- stable under slot mutation, which a structural hash is not
- * ({@code .kb/hash-tables.md}). In every other module the count is the plain entry count
- * and no site emits a test.
+ * with the eql/eq comparison, and place an eql/eq key by
+ * {@link WasmLispCompiler#FUNC_IHASH}: the identity-hash slot every cons, cell and
+ * instance of such a module carries ({@link WasmIdentityHashRuntimeBuilder}), stable
+ * under slot mutation, which a structural hash is not ({@code .kb/hash-tables.md}). In
+ * every other module the count is the plain entry count, no site emits a test and no
+ * object carries the slot.
  */
 final class WasmHashTableCompiler {
 
@@ -54,8 +56,7 @@ final class WasmHashTableCompiler {
 		// every other keyword (:size and friends) is accepted and ignored. Result: a
 		// cell holding a fresh (count . empty-buckets) header.
 		emitNewHeader(ctx, tagged(ctx) ? LispMacroExpander.hashTableTestCode(cons) : LispHashTable.TEST_EQUAL);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCell(ctx);
 	}
 
 	/**
@@ -229,14 +230,12 @@ final class WasmHashTableCompiler {
 		// new entry = cons(key, value)
 		getLocal(ctx, keySlot);
 		getLocal(ctx, valSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
 		// cons(newentry, oldhead)
 		getHeaderArr(ctx, headerSlot);
 		getIndex(ctx, idxSlot);
 		arrayGet(ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
 		arraySet(ctx);
 		// count = count + 1
 		addToCount(ctx, headerSlot, 1);
@@ -533,8 +532,7 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		// header = cons(count, buckets)
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
 	}
 
 	// Emits the header a cleared table gets: zero entries, fresh buckets, and the test
@@ -559,8 +557,7 @@ final class WasmHashTableCompiler {
 		ctx.writer.writeSignedLeb128(INITIAL_CAP);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
 	}
 
 	// Pushes the header's two-bit test tag (the low two bits of the tagged count),
@@ -670,9 +667,10 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.I32_REM_U);
 	}
 
-	// Pushes the raw hash for key: 0 for an aggregate key (a cons, or an instance when
-	// the module has the type) of an eql/eq table -- one shared bucket, stable under
-	// slot mutation where a structural hash would move -- and _hash(key) otherwise.
+	// Pushes the raw hash for key: _ihash(key) for an eql/eq table -- the identity-hash
+	// slot an aggregate key carries (WasmIdentityHashRuntimeBuilder), stable under slot
+	// mutation where a structural hash would move, and _hash for everything else --
+	// and _hash(key) for an equal/equalp table.
 	private static void pushKeyHash(WasmLispCompiler.Ctx ctx, int headerSlot, int keySlot) {
 		if (!ctx.usesIdentityHashTables) {
 			getLocal(ctx, keySlot);
@@ -692,23 +690,8 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		getLocal(ctx, keySlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		if (ctx.instanceTypeIndex >= 0) {
-			getLocal(ctx, keySlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-			ctx.writer.writeHeapType(ctx.instanceTypeIndex);
-			ctx.writer.write(Instruction.I32_OR);
-		}
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(0);
-		ctx.writer.write(Instruction.ELSE);
-		getLocal(ctx, keySlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH);
-		ctx.writer.write(Instruction.END);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_IHASH);
 		ctx.writer.write(Instruction.ELSE);
 		getLocal(ctx, keySlot);
 		ctx.writer.write(Instruction.CALL);

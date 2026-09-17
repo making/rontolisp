@@ -119,7 +119,7 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code ((ref null eq), i32, (ref null eq)) -> (ref null eq)},
 	 * {@link WasmLispCompiler#TYPE_ARR_SET})
 	 */
-	static byte[] buildArrSetBody(boolean simd) {
+	static byte[] buildArrSetBody(boolean simd, boolean identityHash) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// locals: 3 = cur, 4 = promoted, 5 = str, 6 = buckets, 7 = packed target
@@ -151,7 +151,7 @@ final class WasmArrayRuntimeBuilder {
 		emitDataSlot(w, curSlot);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(strSlot);
-		emitStringToCharVecCell(w, strSlot, bucketsSlot, nSlot, iSlot);
+		emitStringToCharVecCell(w, strSlot, bucketsSlot, nSlot, iSlot, identityHash);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(promotedSlot);
 		// (meta . data) is cur.cdr: replace its cdr with the promoted cell.
@@ -945,7 +945,8 @@ final class WasmArrayRuntimeBuilder {
 	// over an IMMUTABLE string promotes the target to (the JVM twin is
 	// JvmArrayRuntimeBuilder's _strToCharVec), and what _str_to_cv
 	// (WasmStringRuntimeBuilder.buildStrToCvBody) wraps as a callable function.
-	static void emitStringToCharVecCell(WasmWriter w, int strSlot, int bucketsSlot, int nSlot, int iSlot) {
+	static void emitStringToCharVecCell(WasmWriter w, int strSlot, int bucketsSlot, int nSlot, int iSlot,
+			boolean identityHash) {
 		get(w, strSlot);
 		WasmEmitHelper.emitStrCharCountCall(w);
 		w.write(Instruction.SET_LOCAL);
@@ -983,14 +984,14 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		emitFreshCharVecCellFromBuckets(w, bucketsSlot, nSlot);
+		emitFreshCharVecCellFromBuckets(w, bucketsSlot, nSlot, identityHash);
 	}
 
 	// Assembles a fresh character-vector CELL around a pre-filled buckets array of n
 	// TYPE_CHAR elements and leaves it on the stack: dims = [n], meta =
 	// (null . (null . i31 1)) -- no fill pointer, not adjustable, the character-vector
 	// marker in the offset word -- then (dims . (meta . buckets)) boxed in a TYPE_CELL.
-	static void emitFreshCharVecCellFromBuckets(WasmWriter w, int bucketsSlot, int nSlot) {
+	static void emitFreshCharVecCellFromBuckets(WasmWriter w, int bucketsSlot, int nSlot, boolean identityHash) {
 		// dims = [n]
 		get(w, nSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
@@ -1004,18 +1005,13 @@ final class WasmArrayRuntimeBuilder {
 		w.writeHeapType(Type.EQ.code());
 		i32(w, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		// (meta . buckets), then (dims . that), then the cell
 		get(w, bucketsSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCell(w, identityHash);
 	}
 
 	// call <index> -- a fixed runtime helper (indices below FX_FUNC_LAST never shift).

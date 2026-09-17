@@ -213,8 +213,7 @@ final class WasmLetCompiler {
 					ctx.writer.write(Instruction.GET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(dupSlot);
 					if (capturedInLet.contains(name)) {
-						ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-						ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+						WasmEmitHelper.emitNewCell(ctx);
 					}
 					int lexSlot = ctx.allocLocal(name);
 					ctx.writer.write(Instruction.SET_LOCAL);
@@ -237,8 +236,7 @@ final class WasmLetCompiler {
 				WasmExprCompiler.compileExpr(pairList.get(1), ctx);
 				if (capturedInLet.contains(name)) {
 					// Box in a cell
-					ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-					ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+					WasmEmitHelper.emitNewCell(ctx);
 				}
 				int slot = ctx.allocLocal(name);
 				ctx.writer.write(Instruction.SET_LOCAL);
@@ -636,8 +634,7 @@ final class WasmLetCompiler {
 		}
 		WasmAsyncEmit.spine(init, ctx);
 		if (boxed) {
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			WasmEmitHelper.emitNewCell(ctx);
 		}
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);

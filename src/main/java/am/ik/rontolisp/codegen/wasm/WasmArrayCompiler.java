@@ -273,17 +273,12 @@ final class WasmArrayCompiler {
 			i32Const(ctx, elementTypeMarker(elementTypeCode));
 		}
 		boxI31(ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
 		getLocal(ctx, dataArrSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCell(ctx);
 	}
 
 	// (make-array dims :displaced-to target [:displaced-index-offset off]
@@ -387,17 +382,12 @@ final class WasmArrayCompiler {
 			refNull(ctx);
 		}
 		getLocal(ctx, offSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
 		getLocal(ctx, targetSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCell(ctx);
 	}
 
 	// (make-array dims :element-type 'double-float | 'single-float [:initial-element x]):
@@ -519,17 +509,12 @@ final class WasmArrayCompiler {
 		refNull(ctx);
 		i32Const(ctx, elementTypeMarker(elementTypeCodeForWidth(width)));
 		boxI31(ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
 		getLocal(ctx, dataArrSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCell(ctx);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -649,17 +634,12 @@ final class WasmArrayCompiler {
 		refNull(ctx);
 		refNull(ctx);
 		getLocal(ctx, markerSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
 		getLocal(ctx, dataArrSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCell(ctx);
 		for (int i = 0; i < arms; i++) {
 			ctx.writer.write(Instruction.END);
 		}
@@ -1513,8 +1493,7 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.castI31GetS(ctx);
 		arrayGet(ctx);
 		getLocal(ctx, resultSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
 		setLocal(ctx, resultSlot);
 		getLocal(ctx, jSlot);
 		WasmEmitHelper.castI31GetS(ctx);
@@ -1902,10 +1881,8 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.END);
 		boxI31(ctx);
 		refNull(ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		emitRememberedElementType(ctx, arrSlot);
 		ctx.writer.write(Instruction.END);
@@ -2074,10 +2051,8 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.END);
 		boxI31(ctx);
 		refNull(ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		if (ctx.simd) {
 			vblockKind(ctx, slot);
@@ -2113,10 +2088,8 @@ final class WasmArrayCompiler {
 						: code == ArrayElementTypes.UNSIGNED_BYTE_16 ? 16 : 32);
 				boxI31(ctx);
 				refNull(ctx);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+				WasmEmitHelper.emitNewCons(ctx);
+				WasmEmitHelper.emitNewCons(ctx);
 			}
 		}
 	}

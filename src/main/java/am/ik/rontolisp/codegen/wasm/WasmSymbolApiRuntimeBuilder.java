@@ -329,7 +329,7 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * name undefined again, while a call site the compiler already bound directly keeps
 	 * working (eager compilation cannot be undone). Returns the symbol, like CL.
 	 */
-	static byte[] buildFmakunbound() {
+	static byte[] buildFmakunbound(boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, OFF = 1, BIND = 2;
@@ -374,12 +374,10 @@ final class WasmSymbolApiRuntimeBuilder {
 		// $fenv = cons(cons(sym, nil), $fenv)
 		get(w, SYM);
 		emitNull(w);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.SET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.ELSE);
@@ -406,7 +404,7 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * non-string name is lenient (the value is handed back untouched), like
 	 * {@code _fmakunbound}'s non-name tolerance.
 	 */
-	static byte[] buildSetSymbolFunction() {
+	static byte[] buildSetSymbolFunction(boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, VALUE = 1, OFF = 2, BIND = 3;
@@ -451,12 +449,10 @@ final class WasmSymbolApiRuntimeBuilder {
 		// $fenv = cons(cons(sym, value), $fenv)
 		get(w, SYM);
 		get(w, VALUE);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.SET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.ELSE);

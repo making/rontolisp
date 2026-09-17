@@ -161,8 +161,7 @@ final class WasmDynVars {
 		ctx.writer.writeSignedLeb128(slot(ctx, name));
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(valueSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCell(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		return save;
@@ -189,8 +188,7 @@ final class WasmDynVars {
 		ctx.writer.writeSignedLeb128(slot(ctx, name));
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(valueSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCell(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}

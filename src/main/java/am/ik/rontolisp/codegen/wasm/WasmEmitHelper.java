@@ -584,7 +584,7 @@ final class WasmEmitHelper {
 	 * @return the function body
 	 */
 	static byte[] buildTypeErrBody(boolean ehMode,
-			WasmLispCompiler.StringTable.@org.jspecify.annotations.Nullable StringEntry prefix) {
+			WasmLispCompiler.StringTable.@org.jspecify.annotations.Nullable StringEntry prefix, boolean identityHash) {
 		java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no extra locals
@@ -609,8 +609,7 @@ final class WasmEmitHelper {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.THROW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 		w.write(Instruction.END);
@@ -644,12 +643,79 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.END);
 	}
 
+	/**
+	 * Emits {@code struct.new TYPE_CONS} over the car and cdr on the stack. In a module
+	 * whose objects carry the identity-hash slot ({@code Ctx.usesIdentityHashTables},
+	 * {@code .kb/hash-tables.md}) the cons has a third, {@code (mut i32)} field, so the
+	 * slot's unassigned {@code 0} is pushed first; every cons allocation goes through
+	 * here, so no site can disagree with the type section about the shape.
+	 * @param w the writer
+	 * @param identityHash whether the module's conses carry the identity-hash slot
+	 */
+	static void emitNewCons(WasmWriter w, boolean identityHash) {
+		if (identityHash) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+	}
+
+	/** {@link #emitNewCons(WasmWriter, boolean)} for the context's writer and shape. */
+	static void emitNewCons(WasmLispCompiler.Ctx ctx) {
+		emitNewCons(ctx.writer, ctx.usesIdentityHashTables);
+	}
+
+	/**
+	 * Emits {@code struct.new TYPE_CELL} over the value on the stack; the cell's
+	 * identity-hash slot rides behind the value exactly as the cons's does behind the
+	 * cdr.
+	 * @param w the writer
+	 * @param identityHash whether the module's cells carry the identity-hash slot
+	 */
+	static void emitNewCell(WasmWriter w, boolean identityHash) {
+		if (identityHash) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+	}
+
+	/** {@link #emitNewCell(WasmWriter, boolean)} for the context's writer and shape. */
+	static void emitNewCell(WasmLispCompiler.Ctx ctx) {
+		emitNewCell(ctx.writer, ctx.usesIdentityHashTables);
+	}
+
+	/**
+	 * Emits {@code struct.new TYPE_INSTANCE} over the layout address and slots array on
+	 * the stack; the identity-hash slot is the instance's third field.
+	 * @param w the writer
+	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index
+	 * @param identityHash whether the module's instances carry the identity-hash slot
+	 */
+	static void emitNewInstance(WasmWriter w, int instanceTypeIndex, boolean identityHash) {
+		if (identityHash) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(instanceTypeIndex);
+	}
+
+	/**
+	 * {@link #emitNewInstance(WasmWriter, int, boolean)} for the context's writer and
+	 * shape.
+	 */
+	static void emitNewInstance(WasmLispCompiler.Ctx ctx) {
+		emitNewInstance(ctx.writer, ctx.instanceTypeIndex, ctx.usesIdentityHashTables);
+	}
+
 	static void emitBoxLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		// Box: load value, create cell, store cell back
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCell(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
 	}
@@ -708,8 +774,7 @@ final class WasmEmitHelper {
 		if (slot != null) {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(slot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			WasmEmitHelper.emitNewCell(ctx);
 			return;
 		}
 		throw new UnsupportedOperationException("Cannot find variable for closure: " + varName);

@@ -1,0 +1,15 @@
+;; Fill + lookup of an eq table keyed by N fresh conses (todo 839 measurement).
+(defun ht-bench (n)
+  (let ((keys nil)
+        (table (make-hash-table :test 'eq)))
+    (dotimes (i n) (push (cons i i) keys))
+    (let ((t0 (get-internal-real-time)))
+      (dolist (k keys) (setf (gethash k table) t))
+      (let ((t1 (get-internal-real-time)) (hits 0))
+        (dolist (k keys) (when (gethash k table) (incf hits)))
+        (let ((t2 (get-internal-real-time)))
+          (format t "n=~D fill-ms=~D lookup-ms=~D hits=~D~%" n
+                  (round (* 1000 (- t1 t0)) internal-time-units-per-second)
+                  (round (* 1000 (- t2 t1)) internal-time-units-per-second)
+                  hits))))))
+(ht-bench SIZE)

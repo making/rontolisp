@@ -65,8 +65,7 @@ final class WasmListCompiler {
 			ctx.writer.writeUnsignedLeb128(tmpCar);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpCdr);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			WasmEmitHelper.emitNewCons(ctx);
 		}
 	}
 

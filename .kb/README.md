@@ -165,6 +165,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasm-gc-strings.md](wasm-gc-strings.md) -- GC-backend strings as `$str_bytes` arrays
 - [wasm-gc-final-types.md](wasm-gc-final-types.md) -- every emitted wasm-GC type must be `sub final`
 - [wasm-gc-heap-pregrow.md](wasm-gc-heap-pregrow.md) -- `_start` pre-grows the engine's GC heap with one dropped allocation
+- [wasm-gc-object-size.md](wasm-gc-object-size.md) -- what a struct field costs on the heap per engine, measured (a wasmtime object is a 16-byte header plus fields rounded to 16, so the identity-hash slot is free there and +8 bytes per cons on V8), and the capped-heap probe that measures it
 - [wasm-landing-pad-refresh.md](wasm-landing-pad-refresh.md) -- a `try_table` landing pad refreshes every local before it reads one: Cranelift passes a local into the pad as a pre-call exceptional-edge argument, stale after a copying collection
 - [wasm-bignum.md](wasm-bignum.md) -- exact integers in three tiers (i31, `TYPE_BIGNUM`, `TYPE_BIGINT`)
 - [wasm-complex.md](wasm-complex.md) -- the tagged `TYPE_COMPLEX` struct (the `TYPE_FARRAY` twin that forced the tag), the `_c*` runtime group, and the `containsComplex` steering

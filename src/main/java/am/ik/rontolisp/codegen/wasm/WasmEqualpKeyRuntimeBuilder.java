@@ -71,7 +71,7 @@ final class WasmEqualpKeyRuntimeBuilder {
 	 * @param gasGlobalIndex the {@code (mut i32)} work-budget global
 	 * @return the function body
 	 */
-	static byte[] build(int depthGlobalIndex, int gasGlobalIndex, boolean charvecPossible) {
+	static byte[] build(int depthGlobalIndex, int gasGlobalIndex, boolean charvecPossible, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -178,8 +178,7 @@ final class WasmEqualpKeyRuntimeBuilder {
 		call(w, WasmLispCompiler.FUNC_EQUALP_KEY);
 		consField(w, 1);
 		call(w, WasmLispCompiler.FUNC_EQUALP_KEY);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.ELSE);
 
 		// Everything else is its own key

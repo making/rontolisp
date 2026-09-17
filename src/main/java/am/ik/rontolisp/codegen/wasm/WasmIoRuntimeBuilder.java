@@ -597,7 +597,7 @@ final class WasmIoRuntimeBuilder {
 	 * backend that walks its own parent forever.
 	 * @return the function body bytes
 	 */
-	static byte[] buildListDirectoryBody() {
+	static byte[] buildListDirectoryBody(boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: PATH=0 (ref) ; i32 locals 1..9, i64 local 10, ref local 11
@@ -822,8 +822,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		WasmEmitHelper.emitStrFreshCall(w);
 		getLocal(w, ACC);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, ACC);
 		// namlen may have grown by the slash; restore it for the p advance below
 		getLocal(w, P);
@@ -869,8 +868,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
 		getLocal(w, ACC);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

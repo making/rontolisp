@@ -1791,6 +1791,15 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FX_FUNC_LAST = FUNC_FD_BASE + WasmFdlibmRuntimeBuilder.FUNC_COUNT - 1;
 
+	// _ihash (key) -> i32: the identity hash an eq/eql table places an aggregate key
+	// by, read off (and on first use assigned into) the identity-hash slot the module's
+	// conses, cells and instances carry (WasmIdentityHashRuntimeBuilder,
+	// .kb/hash-tables.md). Reuses _hash's ((ref null eq)) -> i32 signature
+	// (TYPE_RAT_GET), so no new type entry; appended after the last fixed helper so no
+	// index above shifts. A module with no identity table carries a constant-0 stub and
+	// calls it nowhere.
+	static final int FUNC_IHASH = FX_FUNC_LAST + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -1821,7 +1830,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FX_FUNC_LAST + 1;
+	static final int FUNC_VEC_BASE = FUNC_IHASH + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -1833,9 +1842,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// helpers (_char_upcase, _char_downcase), the thirteen reader # dispatch
 	// helpers, the three bignum helpers (_int_new, _int_val, _print_i64_no_nl), the
 	// limb bigint runtime (_limb_* / _big_*, WasmBigIntRuntimeBuilder) and the
-	// unboxed-fixnum fusion helpers (_fx_*, WasmFxRuntimeBuilder) -- plus, under
+	// unboxed-fixnum fusion helpers (_fx_*, WasmFxRuntimeBuilder), the fdlibm
+	// runtime and the identity-hash helper (_ihash) -- plus, under
 	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FX_FUNC_LAST + 1;
+	static final int FUNC_USER_BASE = FUNC_IHASH + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -3684,6 +3694,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// structure, so an unbudgeted walk of a shared key does not merely take
 		// exponential time, it allocates exponential space.
 		int equalpGasGlobalIndex = equalpDepthGlobalIndex >= 0 ? equalpDepthGlobalIndex + 1 : -1;
+		// The identity-hash sequence _ihash draws from (WasmIdentityHashRuntimeBuilder):
+		// present exactly when the module's conses, cells and instances carry the slot
+		// it fills, i.e. when the program makes an eq/eql table -- which also makes it a
+		// hash-table-using program, so the two hash counters above are there too. After
+		// the equalp pair, so every other module keeps the globals it had.
+		int identityHashSeqGlobalIndex = this.usesIdentityHashTables
+				? (equalpGasGlobalIndex >= 0 ? equalpGasGlobalIndex : hashGasGlobalIndex) + 1 : -1;
 		// The renderers' shared cycle guard (the wasm twin of RenderCycleGuard): the
 		// current rendering path -- a TYPE_HASH_BUCKETS array lazily allocated by the
 		// print branch -- and its depth. A value already on the path, or the frame past
@@ -3691,8 +3708,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// wasm stack, and the cons arm's chain-cycle detection rides the same pair.
 		// Unconditional since todo-585 -- the cons arm is in every module -- and
 		// appended after the recursion counters for the same reason they are last.
-		int lastCounterGlobalIndex = equalpGasGlobalIndex >= 0 ? equalpGasGlobalIndex
-				: hashGasGlobalIndex >= 0 ? hashGasGlobalIndex : ostreamTableGlobalIndex;
+		int lastCounterGlobalIndex = identityHashSeqGlobalIndex >= 0 ? identityHashSeqGlobalIndex
+				: equalpGasGlobalIndex >= 0 ? equalpGasGlobalIndex
+						: hashGasGlobalIndex >= 0 ? hashGasGlobalIndex : ostreamTableGlobalIndex;
 		int renderPathGlobalIndex = lastCounterGlobalIndex + 1;
 		int renderDepthGlobalIndex = lastCounterGlobalIndex + 2;
 		// The quoted-datum constants (.kb/quoted-data.md): one (mut (ref null eq)) =
@@ -4144,12 +4162,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			// the one _env_lookup compares a runtime-interned symbol against.
 			WasmEmitHelper.compileStringLiteral(streamVar.getKey(), ctx);
 			emitStandardStreamDefault(startWriter, streamVar.getValue(), ctx);
-			startWriter.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			startWriter.writeUnsignedLeb128(TYPE_CONS);
+			WasmEmitHelper.emitNewCons(startWriter, this.usesIdentityHashTables);
 			startWriter.write(Instruction.GET_GLOBAL);
 			startWriter.writeUnsignedLeb128(GLOBAL_ENV);
-			startWriter.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			startWriter.writeUnsignedLeb128(TYPE_CONS);
+			WasmEmitHelper.emitNewCons(startWriter, this.usesIdentityHashTables);
 			startWriter.write(Instruction.SET_GLOBAL);
 			startWriter.writeUnsignedLeb128(GLOBAL_ENV);
 		}
@@ -4912,7 +4928,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed());
+						this.optimize.prefersSizeOverSpeed(), this.usesIdentityHashTables);
 				dispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -4936,7 +4952,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(0, defuns, lambdaDecls,
 					numDefuns, stringTable, usesEval, userFuncBase(), true, dispatchableFuncIds,
 					dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-					this.optimize.prefersSizeOverSpeed());
+					this.optimize.prefersSizeOverSpeed(), this.usesIdentityHashTables);
 			dispatchBodies.add(built.body());
 			for (byte[] page : built.pages()) {
 				dispatchPageBodies.add(page);
@@ -4965,7 +4981,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed());
+						this.optimize.prefersSizeOverSpeed(), this.usesIdentityHashTables);
 				extraDispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -4988,7 +5004,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printValBody = WasmRuntimeBuilder.buildPrintValBody(stringTable, this.simd,
 				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,
 				this.usesInstances ? instanceTypeBase() : -1, renderPathGlobalIndex, renderDepthGlobalIndex,
-				this.charvecPossible);
+				this.charvecPossible, this.usesIdentityHashTables);
 		byte[] printI32NoNlBody = WasmRuntimeBuilder.buildPrintI32Core(false);
 		// The fdlibm functions that get real bodies: what Pass 2 (and the --simd
 		// kernels) recorded, closed over the callees. A trig function without the
@@ -5009,12 +5025,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printF32NoNlBody = WasmRuntimeBuilder.buildPrintF32Core(stringTable);
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
-		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody();
+		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody(this.usesIdentityHashTables);
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
 		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd,
 				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,
 				this.usesInstances ? instanceTypeBase() : -1, renderPathGlobalIndex, renderDepthGlobalIndex,
-				this.charvecPossible);
+				this.charvecPossible, this.usesIdentityHashTables);
 
 		// Build the eval runtime (interpreter + function-name registry). The registry
 		// maps a symbol-name string offset to (funcId, arity). Because the string table
@@ -5323,8 +5339,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] boundpBody = WasmSymbolApiRuntimeBuilder.buildBoundp(symbolTOffset);
 		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset);
 		final byte[] fboundpBody = WasmSymbolApiRuntimeBuilder.buildFboundp(symbolTOffset);
-		final byte[] fmakunboundBody = WasmSymbolApiRuntimeBuilder.buildFmakunbound();
-		final byte[] setSymbolFunctionBody = WasmSymbolApiRuntimeBuilder.buildSetSymbolFunction();
+		final byte[] fmakunboundBody = WasmSymbolApiRuntimeBuilder.buildFmakunbound(this.usesIdentityHashTables);
+		final byte[] setSymbolFunctionBody = WasmSymbolApiRuntimeBuilder
+			.buildSetSymbolFunction(this.usesIdentityHashTables);
 		final byte[] fenvFunctionBody = WasmSymbolApiRuntimeBuilder.buildFenvFunction();
 
 		// Case-fold tables. Two compressed (from, to, delta) triple tables, generated
@@ -5393,12 +5410,23 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.addFunc(new Type[] {}, this.component && !this.noWasi ? new Type[] { Type.I32 } : new Type[] {});
 				// type 2: print_i32 / _print_i32_no_nl
 				types.addFunc(new Type[] { Type.I32 }, new Type[] {});
-				// types 3-7: struct types in rec group
+				// types 3-7: struct types in rec group. In a module that makes an
+				// eq/eql table (usesIdentityHashTables) the cons and the cell carry a
+				// trailing (mut i32) IDENTITY-HASH slot, 0 until the object is first
+				// keyed (WasmIdentityHashRuntimeBuilder); the instance struct below
+				// carries the same. Every allocation site goes through
+				// WasmEmitHelper.emitNewCons/emitNewCell/emitNewInstance, which push the
+				// slot's 0 exactly when this declares it, and every other module keeps
+				// the two-field cons and one-field cell byte for byte.
 				types.addRecGroup(rec -> {
-					// type 3: cons struct
+					// type 3: cons struct {(mut ref null eq) car, (mut ref null eq) cdr
+					// [, (mut i32) ihash]}
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+						if (this.usesIdentityHashTables) {
+							fields.addField(true, w -> w.write(Type.I32));
+						}
 					});
 					// type 4: string struct {i32 id, i32 len, (ref null eq) data,
 					// (mut i32) ci, (mut i32) cb}. id is the canonical integer identity
@@ -5415,9 +5443,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						fields.addField(true, w -> w.write(Type.I32));
 						fields.addField(true, w -> w.write(Type.I32));
 					});
-					// type 5: cell struct {(mut ref null eq) value}
+					// type 5: cell struct {(mut ref null eq) value [, (mut i32) ihash]}
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+						if (this.usesIdentityHashTables) {
+							fields.addField(true, w -> w.write(Type.I32));
+						}
 					});
 					// type 6: closure struct {i32 funcId, (ref null eq) env}
 					rec.addSubFinalStruct(fields -> {
@@ -5961,10 +5992,17 @@ public final class WasmLispCompiler implements LispCompiler {
 					// structurally identical ({mut i32, mut eq}) and ref.test would stop
 					// telling an instance from a future. The slots array is a
 					// TYPE_HASH_BUCKETS.
+					// With the identity-hash slot (usesIdentityHashTables) the shape is
+					// {mut i32, mut eqref, mut i32}, which nothing else in the module
+					// has either; the twin stays, so the group's size is the same
+					// argument in both shapes.
 					types.addRecGroup(rec -> {
 						rec.addSubFinalStruct(fields -> {
 							fields.addField(true, w -> w.write(Type.I32));
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+							if (this.usesIdentityHashTables) {
+								fields.addField(true, w -> w.write(Type.I32));
+							}
 						});
 						rec.addSubFinalStruct(fields -> {
 						});
@@ -6466,6 +6504,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (WasmFdlibmRuntimeBuilder.Fn fn : WasmFdlibmRuntimeBuilder.Fn.values()) {
 					fnDef.addFunction(fdlibmType(fn));
 				}
+				fnDef.addFunction(TYPE_RAT_GET); // _ihash (key) -> i32 (FUNC_IHASH)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6750,8 +6789,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					g.write(am.ik.wasm.Mutability.CONST.code());
 					g.write(Instruction.REF_NULL);
 					g.writeHeapType(Type.EQ.code());
-					g.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-					g.writeUnsignedLeb128(TYPE_CELL);
+					WasmEmitHelper.emitNewCell(g, this.usesIdentityHashTables);
 					g.write(Instruction.END);
 				});
 				// The string output-stream buffer table at ostreamTableGlobalIndex, a
@@ -6806,6 +6844,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				// outermost entry exactly like the hash's, so its initial value never
 				// matters.
 				if (equalpGasGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
+				// The identity-hash sequence at identityHashSeqGlobalIndex, a (mut i32)
+				// = 0 that _ihash advances before mixing, so the first hash it hands out
+				// is fmix32(1) and never the unassigned 0. Present exactly when the
+				// module's objects carry the slot (usesIdentityHashTables).
+				if (identityHashSeqGlobalIndex >= 0) {
 					gs.add(g -> {
 						g.write(Type.I32);
 						g.write(am.ik.wasm.Mutability.VAR.code());
@@ -7082,7 +7133,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(true))
 					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(false))
 					.addFunction(WasmStringRuntimeBuilder.buildCapitalizeBody())
-					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody())
+					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody(this.usesIdentityHashTables))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(false, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())
@@ -7100,7 +7151,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmPlistRuntimeBuilder.buildPlistGet());
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
 				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1,
-						hashDepthGlobalIndex, hashGasGlobalIndex, this.charvecPossible));
+						hashDepthGlobalIndex, hashGasGlobalIndex, this.charvecPossible, this.usesIdentityHashTables));
 				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody(this.usesIdentityHashTables,
 						this.usesInstances ? instanceTypeBase() : -1));
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
@@ -7244,7 +7295,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// peek-char runtime helper body (FUNC_PEEK_CHAR)
 				code.addFunction(WasmIoRuntimeBuilder.buildPeekCharBody());
 				// %list-directory runtime helper body (FUNC_LIST_DIRECTORY)
-				code.addFunction(WasmIoRuntimeBuilder.buildListDirectoryBody());
+				code.addFunction(WasmIoRuntimeBuilder.buildListDirectoryBody(this.usesIdentityHashTables));
 				// unboxed-local boxed-read helper body (FUNC_UB_READ)
 				code.addFunction(WasmFxRuntimeBuilder.buildUbReadBody(rawSentinelGlobalIndex));
 				// %fixed-decimal runtime helper body (FUNC_FIXED_DEC)
@@ -7253,7 +7304,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmEmitHelper.buildAsF64Body());
 				// shared general-array element access bodies (FUNC_ARR_GET/FUNC_ARR_SET)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrGetBody(this.simd));
-				code.addFunction(WasmArrayRuntimeBuilder.buildArrSetBody(this.simd));
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrSetBody(this.simd, this.usesIdentityHashTables));
 				// shared generic sequence-length dispatch body (FUNC_SEQ_LEN)
 				code.addFunction(WasmLengthCompiler.buildSeqLenBody());
 				// string output-stream buffer helper body (FUNC_OSTREAM_ROOM)
@@ -7271,26 +7322,27 @@ public final class WasmLispCompiler implements LispCompiler {
 				// declares.
 				code.addFunction(argvOrdinals == null ? WasmArgvRuntimeBuilder.buildStub()
 						: WasmArgvRuntimeBuilder.build(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[0],
-								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[1], scratchBase));
+								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[1], scratchBase,
+								this.usesIdentityHashTables));
 				// equalp key-fold body (FUNC_EQUALP_KEY); an identity stub unless the
 				// program writes a :test 'equalp table, since nothing else calls it.
 				code.addFunction(equalpDepthGlobalIndex < 0 ? WasmEqualpKeyRuntimeBuilder.buildStub()
 						: WasmEqualpKeyRuntimeBuilder.build(equalpDepthGlobalIndex, equalpGasGlobalIndex,
-								this.charvecPossible));
+								this.charvecPossible, this.usesIdentityHashTables));
 				// file-length body (FUNC_FILE_LENGTH), over the fd_filestat_get import.
 				code.addFunction(WasmIoRuntimeBuilder.buildFileLengthBody());
 				// arithmetic non-number landing bodies (FUNC_TYPE_ERR_INT,
 				// FUNC_TYPE_ERR_NUM): a catchable $lisp-cond throw in EH mode, a bare
 				// `unreachable` outside it (no tag section exists there, and referencing
 				// the prin1 renderer would pin the printer family into every module).
-				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expIntEntry));
-				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expNumEntry));
+				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expIntEntry, this.usesIdentityHashTables));
+				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expNumEntry, this.usesIdentityHashTables));
 				// either-representation character index body (FUNC_STR_CHAR_REF)
 				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody());
 				// string -> mutable character vector body (FUNC_STR_TO_CV)
-				code.addFunction(WasmStringRuntimeBuilder.buildStrToCvBody());
+				code.addFunction(WasmStringRuntimeBuilder.buildStrToCvBody(this.usesIdentityHashTables));
 				// mutable-result string/list subseq lane body (FUNC_SUBSEQ_STR)
-				code.addFunction(WasmStringRuntimeBuilder.buildSubseqStrBody());
+				code.addFunction(WasmStringRuntimeBuilder.buildSubseqStrBody(this.usesIdentityHashTables));
 				// flipped-producer mutable-result wrap body (FUNC_TO_MUT_STR)
 				code.addFunction(WasmStringRuntimeBuilder.buildToMutStrBody());
 				// shared make-array dimension parse bodies (FUNC_ARR_DIMS/FUNC_ARR_TOTAL)
@@ -7315,7 +7367,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmComplexRuntimeBuilder.buildDivBody());
 				code.addFunction(WasmComplexRuntimeBuilder.buildNegBody());
 				// ordering-over-complex landing body (FUNC_TYPE_ERR_REAL)
-				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expRealEntry));
+				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expRealEntry, this.usesIdentityHashTables));
 				// complex signum body (FUNC_C_SIGNUM)
 				code.addFunction(WasmComplexRuntimeBuilder.buildCsignumBody());
 				// directory-creation body (FUNC_MAKE_DIRECTORIES)
@@ -7341,6 +7393,12 @@ public final class WasmLispCompiler implements LispCompiler {
 							? WasmFdlibmRuntimeBuilder.build(fn, WasmLispCompiler::fdlibmFunc, fdlibmTablesBase)
 							: WasmFdlibmRuntimeBuilder.stub(fn));
 				}
+				// the identity-hash body (FUNC_IHASH): real exactly when the module's
+				// objects carry the slot it reads, a constant-0 stub otherwise.
+				code.addFunction(identityHashSeqGlobalIndex >= 0
+						? WasmIdentityHashRuntimeBuilder.build(identityHashSeqGlobalIndex,
+								this.usesInstances ? instanceTypeBase() : -1)
+						: WasmIdentityHashRuntimeBuilder.buildStub());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp
@@ -7359,7 +7417,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.asyncMode) {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
-								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb));
+								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb,
+								this.usesIdentityHashTables));
 					}
 				}
 				// The degenerate tier's stream runtime bodies, in p1StreamFuncBase()
@@ -8007,7 +8066,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			return null;
 		}
 		return new WasmRuntimeBuilder.ArityReport(stringTable, address, instanceTypeBase(), layout.capacity(),
-				formatControl);
+				formatControl, this.usesIdentityHashTables);
 	}
 
 	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds,
@@ -9188,8 +9247,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * True when the program writes {@code (make-hash-table :test 'eq)} or
 		 * {@code (make-hash-table :test 'eql)} somewhere, so a table can carry the
 		 * two-bit TEST TAG in its header count and the table primitives compare and place
-		 * by it. Carried into each top-level chunk context like the fold flag above, for
-		 * the same agreement reason; a program with neither keeps its exact bytes.
+		 * by it -- and, the SAME answer, so every {@code TYPE_CONS}, {@code TYPE_CELL} and
+		 * {@code TYPE_INSTANCE} of the module carries the trailing identity-hash slot the
+		 * placement reads ({@code WasmIdentityHashRuntimeBuilder}): the type section
+		 * declares the slot and every allocation site pushes its 0 through
+		 * {@code WasmEmitHelper.emitNewCons/emitNewCell/emitNewInstance} by this one flag.
+		 * Carried into each top-level chunk context like the fold flag above, for the same
+		 * agreement reason; a program with neither keeps its exact bytes.
 		 */
 		boolean usesIdentityHashTables = false;
 

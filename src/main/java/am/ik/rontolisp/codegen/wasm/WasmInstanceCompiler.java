@@ -76,8 +76,7 @@ final class WasmInstanceCompiler {
 		}
 		i32Const(ctx, address);
 		getLocal(ctx, slotsSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		WasmEmitHelper.emitNewInstance(ctx);
 	}
 
 	/**
@@ -116,8 +115,7 @@ final class WasmInstanceCompiler {
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		i32Const(ctx, address);
 		getLocal(ctx, slotsSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		WasmEmitHelper.emitNewInstance(ctx);
 	}
 
 	/** {@code (%obj-ref obj <k>)}. */
@@ -296,8 +294,7 @@ final class WasmInstanceCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		getLocal(ctx, listSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
 		setLocal(ctx, listSlot);
 		getIndex(ctx, idxSlot);
 		i32Const(ctx, 1);

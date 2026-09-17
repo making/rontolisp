@@ -55,11 +55,11 @@ class WasmDispatchPagingTest {
 		// the tree shaker cannot read one as an address into the string blob.
 		WasmLispCompiler.StringTable st = new WasmLispCompiler.StringTable(0, false, false);
 		byte[] one = WasmRuntimeBuilder.buildDispatchBody(1, List.of(), lambdas(417, java.util.Set.of(416)), 0, st,
-				false, 0);
+				false, 0, false);
 		byte[] two = WasmRuntimeBuilder.buildDispatchBody(1, List.of(), lambdas(417, java.util.Set.of(100, 416)), 0, st,
-				false, 0);
+				false, 0, false);
 		byte[] dense = WasmRuntimeBuilder.buildDispatchBody(1, List.of(),
-				lambdas(6, java.util.Set.of(0, 1, 2, 3, 4, 5)), 0, st, false, 0);
+				lambdas(6, java.util.Set.of(0, 1, 2, 3, 4, 5)), 0, st, false, 0, false);
 
 		// i64.extend_i32_u; i64.const 416; i64.sub; i32.wrap_i64; br_table 1
 		assertThat(indexOf(one, new byte[] { (byte) 0xAD, 0x42, (byte) 0xA0, 0x03, 0x7D, (byte) 0xA7, 0x0E, 1 }))
@@ -104,7 +104,7 @@ class WasmDispatchPagingTest {
 				false, List.of(), List.of(), 0);
 		assertTimeoutPreemptively(Duration.ofSeconds(30),
 				() -> assertThatThrownBy(() -> WasmRuntimeBuilder.buildDispatchBody(1, List.of(), List.of(corrupt), 0,
-						new WasmLispCompiler.StringTable(0, false, false), false, 0))
+						new WasmLispCompiler.StringTable(0, false, false), false, 0, false))
 					.isInstanceOf(IllegalStateException.class)
 					.hasMessageContaining(String.valueOf(1 << 24))
 					.hasMessageContaining("outside [0, 1)"));

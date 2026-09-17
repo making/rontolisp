@@ -2781,8 +2781,7 @@ final class WasmComponentImportCompiler {
 		}
 
 		private void newCons() {
-			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			WasmEmitHelper.emitNewCons(this.ctx);
 		}
 
 		// i32 = 1 when the (ref null eq) on the stack is of the given struct type.

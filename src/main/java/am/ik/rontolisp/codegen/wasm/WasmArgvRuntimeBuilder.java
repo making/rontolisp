@@ -62,7 +62,7 @@ final class WasmArgvRuntimeBuilder {
 	 * offsets from it
 	 * @return the encoded function body
 	 */
-	static byte[] build(int argsSizesGetFunc, int argsGetFunc, int scratchBase) {
+	static byte[] build(int argsSizesGetFunc, int argsGetFunc, int scratchBase, boolean identityHash) {
 		final ByteArrayOutputStream body = new ByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 
@@ -183,8 +183,7 @@ final class WasmArgvRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		WasmEmitHelper.emitStrFreshCall(w);
 		getLocal(w, ACC);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, ACC);
 		// i--
 		getLocal(w, I);

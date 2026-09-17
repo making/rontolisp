@@ -5246,6 +5246,39 @@ cases:
       (EQL NIL)
       (EQUAL NIL)
       (EQUALP NIL)
+  - name: identity-hash-table-many-aggregate-keys
+    source: |
+      ;; Many identity-keyed aggregates in one eq table, and vectors in an equal
+      ;; table: every key is found, a cons mutated after insertion keeps its entry,
+      ;; a fresh equal-looking aggregate is a miss, and remhash on half the conses
+      ;; leaves the rest. On WASM the placement is the identity hash slot the
+      ;; objects carry, not a shared bucket (.todo/839).
+      (defstruct ci-wkey id)
+      (defun ci-many-aggregate-keys (n)
+        (let ((h (make-hash-table :test 'eq)) (v (make-hash-table :test 'equal))
+              (conses nil) (vectors nil) (structs nil))
+          (dotimes (i n)
+            (push (cons i i) conses)
+            (push (vector i) vectors)
+            (push (make-ci-wkey :id i) structs))
+          (dolist (k conses) (setf (gethash k h) 1))
+          (dolist (k vectors) (setf (gethash k h) 2) (setf (gethash k v) 4))
+          (dolist (k structs) (setf (gethash k h) 3))
+          (dolist (k conses) (setf (car k) :moved))
+          (let ((sum 0) (misses 0) (i 0))
+            (dolist (k conses) (incf sum (gethash k h 0)))
+            (dolist (k vectors) (incf sum (gethash k h 0)) (incf sum (gethash k v 0)))
+            (dolist (k structs) (incf sum (gethash k h 0)))
+            (dotimes (j 10)
+              (unless (gethash (cons :moved j) h) (incf misses))
+              (unless (gethash (vector j) h) (incf misses))
+              (unless (gethash (vector j) v) (incf misses))
+              (unless (gethash (make-ci-wkey :id j) h) (incf misses)))
+            (dolist (k conses) (when (evenp i) (remhash k h)) (incf i))
+            (list (hash-table-count h) (hash-table-count v) sum misses))))
+      (print (ci-many-aggregate-keys 1000))
+    expected: |
+      (2500 1000 10000 40)
   - name: arrays-cross-backend
     source: |
       (defun ci-mat-sum (m rows cols)

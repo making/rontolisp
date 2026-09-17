@@ -101,8 +101,7 @@ final class WasmLambdaCompiler {
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(tmpCdr);
 				// struct.new cons
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+				WasmEmitHelper.emitNewCons(ctx);
 			}
 		}
 
@@ -160,8 +159,7 @@ final class WasmLambdaCompiler {
 			String name = paramNames.get(i);
 			WasmExprCompiler.compileExpr(callArgs.get(i + 1), ctx);
 			if (capturedParams.contains(name)) {
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+				WasmEmitHelper.emitNewCell(ctx);
 			}
 			int slot = ctx.allocLocal(name);
 			ctx.writer.write(Instruction.SET_LOCAL);
@@ -190,8 +188,7 @@ final class WasmLambdaCompiler {
 				ctx.writer.writeUnsignedLeb128(extraSlots.get(k));
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(restSlot);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+				WasmEmitHelper.emitNewCons(ctx);
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(restSlot);
 			}
@@ -200,8 +197,7 @@ final class WasmLambdaCompiler {
 				// rather than the build.
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(restSlot);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+				WasmEmitHelper.emitNewCell(ctx);
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(restSlot);
 			}

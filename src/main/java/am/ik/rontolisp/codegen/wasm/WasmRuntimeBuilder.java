@@ -38,7 +38,7 @@ final class WasmRuntimeBuilder {
 	 * (.todo/749). The result is unchanged (a fresh spine, the tail shared) and an
 	 * improper first argument still traps at the same {@code ref.cast}.
 	 */
-	static byte[] buildAppendBody() {
+	static byte[] buildAppendBody(boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -72,8 +72,7 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(0); // field 0: car
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, 5);
 		// if head is null, head = fresh; else tail.cdr = fresh
 		getLocal(w, 2);
@@ -441,7 +440,7 @@ final class WasmRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildHashBody(int instanceTypeIndex, int depthGlobalIndex, int gasGlobalIndex,
-			boolean charvecPossible) {
+			boolean charvecPossible, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -703,10 +702,26 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.ELSE);
 		}
 
+		// a cell (a general array, a hash table) -> its identity-hash slot when the
+		// module's cells carry one: equal on a cell IS identity, so this is the one
+		// hash that agrees with it and survives the array being written
+		if (identityHash) {
+			refTest(w, 0, WasmLispCompiler.TYPE_CELL);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			getLocal(w, 0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_IHASH);
+			w.write(Instruction.ELSE);
+		}
+
 		// anything else (e.g. a closure) -> 0
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 
+		if (identityHash) {
+			w.write(Instruction.END); // end cell if
+		}
 		if (instanceTypeIndex >= 0) {
 			w.write(Instruction.END); // end instance if
 		}
@@ -748,8 +763,9 @@ final class WasmRuntimeBuilder {
 	 * {@code (count . buckets)}), doubles the bucket array and rehashes every entry into
 	 * it, then stores the new array back into the header's cdr. Returns nothing.
 	 * @param identityTables whether the module can hold an eql/eq table: the tag is read
-	 * off the header and an aggregate key of such a table rehashes into the shared bucket
-	 * 0, exactly where the table primitives place it
+	 * off the header and a key of such a table rehashes by {@code _ihash}, exactly where
+	 * the table primitives place it -- and, the same flag, whether the module's conses
+	 * carry the identity-hash slot the bucket chain's fresh conses must then declare
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
 	 * @return the function body
 	 */
@@ -858,8 +874,8 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.writeUnsignedLeb128(0);
 		setLocal(w, entry);
-		// j = (hash(car(entry)) & 0x7fffffff) % newCap -- or 0 for an aggregate key
-		// of an eql/eq table, whose bucket the table primitives never hash.
+		// j = (hash(car(entry)) & 0x7fffffff) % newCap -- the identity hash for a key
+		// of an eql/eq table, exactly as the table primitives placed it.
 		getLocal(w, entry);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
@@ -875,23 +891,8 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.IF);
 			w.write(Type.I32);
 			getLocal(w, key);
-			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-			w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-			if (instanceTypeIndex >= 0) {
-				getLocal(w, key);
-				w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-				w.writeHeapType(instanceTypeIndex);
-				w.write(Instruction.I32_OR);
-			}
-			w.write(Instruction.IF);
-			w.write(Type.I32);
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(0);
-			w.write(Instruction.ELSE);
-			getLocal(w, key);
 			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH);
-			w.write(Instruction.END);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_IHASH);
 			w.write(Instruction.ELSE);
 			getLocal(w, key);
 			w.write(Instruction.CALL);
@@ -918,8 +919,9 @@ final class WasmRuntimeBuilder {
 		getLocal(w, j);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		// the module's conses carry the identity-hash slot exactly when it can hold an
+		// identity table: one flag, one answer
+		WasmEmitHelper.emitNewCons(w, identityTables);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		// cur = cdr(cur)
@@ -1898,9 +1900,9 @@ final class WasmRuntimeBuilder {
 	 */
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
-			boolean usesEval, int userFuncBase) {
+			boolean usesEval, int userFuncBase, boolean identityHash) {
 		DispatchFunctions built = buildDispatch(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase,
-				false, null, 0, null, -1, false);
+				false, null, 0, null, -1, false, identityHash);
 		if (!built.pages().isEmpty()) {
 			throw new IllegalStateException("dispatcher for arity " + arity + " needs pages; use buildDispatch");
 		}
@@ -1949,7 +1951,7 @@ final class WasmRuntimeBuilder {
 	static DispatchFunctions buildDispatch(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase, boolean spread, @Nullable Set<Integer> dispatchable, int pageFuncBase,
-			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders) {
+			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders, boolean identityHash) {
 		int dispatchArgs = spread ? 1 : arity;
 		List<DispatchTarget> targets = dispatchTargets(arity, defuns, lambdaDecls, spread, dispatchable, userFuncBase);
 		// The callables this dispatcher CANNOT serve: their funcId reaching it is a call
@@ -1980,9 +1982,9 @@ final class WasmRuntimeBuilder {
 		if (maxFuncId < DISPATCH_PAGE_BUDGET_BYTES) {
 			ByteArrayOutputStream body = new ByteArrayOutputStream();
 			WasmWriter w = new WasmWriter(body);
-			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, report != null);
+			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, report != null, identityHash);
 			emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, 0, report, arityChkIndex,
-					sharedConsReaders);
+					sharedConsReaders, identityHash);
 			byte[] single = body.toByteArray();
 			// levels == 1: every callable is inside one page already, so the body is
 			// large because its CASES are (a spread dispatcher over ten-parameter
@@ -2009,7 +2011,7 @@ final class WasmRuntimeBuilder {
 			SortedMap<Integer, Integer> pageMisses = missShapes.subMap(leaf.getKey() << DISPATCH_PAGE_BITS,
 					((leaf.getKey() + 1) << DISPATCH_PAGE_BITS));
 			pages.add(buildDispatchLeafPage(leaf.getValue(), pageMisses, leaf.getKey(), arity, dispatchArgs, spread,
-					report, arityChkIndex, sharedConsReaders));
+					report, arityChkIndex, sharedConsReaders, identityHash));
 		}
 		for (int level = 1; level <= levels - 2; level++) {
 			Map<Integer, Map<Integer, Integer>> parents = new TreeMap<>();
@@ -2029,7 +2031,7 @@ final class WasmRuntimeBuilder {
 		// before, then the top digit selects a page instead of a case.
 		ByteArrayOutputStream rootBody = new ByteArrayOutputStream();
 		WasmWriter rw = new WasmWriter(rootBody);
-		emitDispatchPrologue(rw, arity, dispatchArgs, spread, usesEval, report != null);
+		emitDispatchPrologue(rw, arity, dispatchArgs, spread, usesEval, report != null, identityHash);
 		int funcIdLocal = dispatchArgs + 1;
 		rw.write(Instruction.GET_LOCAL);
 		rw.writeUnsignedLeb128(funcIdLocal);
@@ -2087,6 +2089,9 @@ final class WasmRuntimeBuilder {
 		/** The index of the class's {@code format-control} slot. */
 		private final int formatControlSlot;
 
+		/** Whether the module's instances and conses carry the identity-hash slot. */
+		private final boolean identityHash;
+
 		private WasmLispCompiler.StringTable.@Nullable StringEntry prefix;
 
 		private WasmLispCompiler.StringTable.@Nullable StringEntry atLeast;
@@ -2098,12 +2103,13 @@ final class WasmRuntimeBuilder {
 		private WasmLispCompiler.StringTable.@Nullable StringEntry infix;
 
 		ArityReport(WasmLispCompiler.StringTable stringTable, int layoutAddress, int instanceTypeIndex,
-				int slotCapacity, int formatControlSlot) {
+				int slotCapacity, int formatControlSlot, boolean identityHash) {
 			this.stringTable = stringTable;
 			this.layoutAddress = layoutAddress;
 			this.instanceTypeIndex = instanceTypeIndex;
 			this.slotCapacity = slotCapacity;
 			this.formatControlSlot = formatControlSlot;
+			this.identityHash = identityHash;
 		}
 
 		private void intern() {
@@ -2350,13 +2356,11 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(report.layoutAddress);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(slotsLocal);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(report.instanceTypeIndex);
+		WasmEmitHelper.emitNewInstance(w, report.instanceTypeIndex, report.identityHash);
 		// the payload: (condition-instance . message)
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(msgLocal);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, report.identityHash);
 		w.write(Instruction.THROW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 	}
@@ -2472,7 +2476,7 @@ final class WasmRuntimeBuilder {
 	 * parameters, and local 0 holding a CLOSURE struct whatever the caller passed.
 	 */
 	private static void emitDispatchPrologue(WasmWriter w, int arity, int dispatchArgs, boolean spread,
-			boolean usesEval, boolean reporting) {
+			boolean usesEval, boolean reporting, boolean identityHash) {
 		// Locals: param 0 = funcval, params 1..arity = args
 		// Extra locals: funcId (i32) and the arg list for the _apply fallback (ref); a
 		// reporting dispatcher adds ONE more ref for the message it assembles, so a
@@ -2563,8 +2567,7 @@ final class WasmRuntimeBuilder {
 				w.writeUnsignedLeb128(a);
 				w.write(Instruction.GET_LOCAL);
 				w.writeUnsignedLeb128(argListLocal);
-				w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+				WasmEmitHelper.emitNewCons(w, identityHash);
 				w.write(Instruction.SET_LOCAL);
 				w.writeUnsignedLeb128(argListLocal);
 			}
@@ -2586,7 +2589,7 @@ final class WasmRuntimeBuilder {
 	 */
 	private static void emitDispatchCases(WasmWriter w, List<DispatchTarget> targets,
 			SortedMap<Integer, Integer> missShapes, int arity, int dispatchArgs, boolean spread, int funcIdBias,
-			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders) {
+			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders, boolean identityHash) {
 		int funcIdLocal = dispatchArgs + 1;
 		int argListLocal = dispatchArgs + 2;
 		if (targets.isEmpty() && missShapes.isEmpty()) {
@@ -2692,8 +2695,7 @@ final class WasmRuntimeBuilder {
 					w.writeUnsignedLeb128(a);
 					w.write(Instruction.GET_LOCAL);
 					w.writeUnsignedLeb128(argListLocal);
-					w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-					w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+					WasmEmitHelper.emitNewCons(w, identityHash);
 					w.write(Instruction.SET_LOCAL);
 					w.writeUnsignedLeb128(argListLocal);
 				}
@@ -2770,13 +2772,13 @@ final class WasmRuntimeBuilder {
 	 */
 	private static byte[] buildDispatchLeafPage(List<DispatchTarget> targets, SortedMap<Integer, Integer> missShapes,
 			int page, int arity, int dispatchArgs, boolean spread, @Nullable ArityReport report, int arityChkIndex,
-			boolean sharedConsReaders) {
+			boolean sharedConsReaders, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		emitPageLocals(w, report != null);
 		emitPageFuncIdDigit(w, dispatchArgs, 0);
 		emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, page << DISPATCH_PAGE_BITS, report,
-				arityChkIndex, sharedConsReaders);
+				arityChkIndex, sharedConsReaders, identityHash);
 		return body.toByteArray();
 	}
 
@@ -3984,7 +3986,7 @@ final class WasmRuntimeBuilder {
 	 */
 	static byte[] buildPrintValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
 			int p1StreamTypeIndex, int instanceTypeIndex, int renderPathGlobalIndex, int renderDepthGlobalIndex,
-			boolean charvecPossible) {
+			boolean charvecPossible, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -4202,7 +4204,7 @@ final class WasmRuntimeBuilder {
 		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINT_VAL, instanceTypeIndex, renderPathGlobalIndex,
 				renderDepthGlobalIndex, 5, 6, 7);
 		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, simd,
-				renderPathGlobalIndex, renderDepthGlobalIndex);
+				renderPathGlobalIndex, renderDepthGlobalIndex, identityHash);
 
 		// Must be cons struct - print as list (the shared cons arm, with the cycle
 		// guard and the cdr-chain cycle detection; ref locals 3-4 and i32 locals 5-6
@@ -4220,7 +4222,7 @@ final class WasmRuntimeBuilder {
 	 */
 	static byte[] buildPrincValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
 			int p1StreamTypeIndex, int instanceTypeIndex, int renderPathGlobalIndex, int renderDepthGlobalIndex,
-			boolean charvecPossible) {
+			boolean charvecPossible, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -4491,7 +4493,7 @@ final class WasmRuntimeBuilder {
 		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINC_VAL, instanceTypeIndex, renderPathGlobalIndex,
 				renderDepthGlobalIndex, 6, 7, 8);
 		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, simd,
-				renderPathGlobalIndex, renderDepthGlobalIndex);
+				renderPathGlobalIndex, renderDepthGlobalIndex, identityHash);
 
 		// Must be cons struct - print as list (the shared cons arm; ref locals 4-5 and
 		// i32 locals 6-7 are the array printer's, free while the cons arm runs).
@@ -5121,7 +5123,8 @@ final class WasmRuntimeBuilder {
 	// = i32 locals.
 	private static void emitPrintArray(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc, int dimsSlot,
 			int dataSlot, int idxSlot, int lenSlot, int rankSlot, int jSlot, int strideSlot, int mSlot, int baseSlot,
-			int packedSlot, int singleSlot, boolean simd, int renderPathGlobalIndex, int renderDepthGlobalIndex) {
+			int packedSlot, int singleSlot, boolean simd, int renderPathGlobalIndex, int renderDepthGlobalIndex,
+			boolean identityHash) {
 		// `simd` selects the --simd lowering: the packed data is a TYPE_VBLOCK of v128
 		// lane groups, read one element at a time through the _v_get helper, not a
 		// TYPE_F64ARR/TYPE_F32ARR GC array.
@@ -5256,17 +5259,12 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		getBucketsLocal(w, dimsSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCell(w, identityHash);
 		setLocal(w, 0);
 		w.write(Instruction.END); // if (farray)
 
@@ -5326,17 +5324,12 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		getBucketsLocal(w, dimsSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCell(w, identityHash);
 		setLocal(w, 0);
 		w.write(Instruction.END); // if (packed integer vector)
 

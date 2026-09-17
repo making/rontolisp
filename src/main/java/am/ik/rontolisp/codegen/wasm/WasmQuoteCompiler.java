@@ -521,8 +521,7 @@ final class WasmQuoteCompiler {
 	private static void compileQuotedCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		compileQuotedVal(cons.car(), ctx);
 		compileQuotedVal(cons.cdr(), ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
 	}
 
 	// Builds the runtime array representation: a TYPE_CELL box wrapping a header
@@ -572,17 +571,12 @@ final class WasmQuoteCompiler {
 		i32Const(ctx, array.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT
 				? WasmArrayCompiler.elementTypeMarker(am.ik.rontolisp.ArrayElementTypes.BIT) : 0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
 		getBuckets(ctx, dataSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCell(ctx);
 	}
 
 	/**
@@ -626,8 +620,7 @@ final class WasmQuoteCompiler {
 		i32Const(ctx, address);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slotsSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		WasmEmitHelper.emitNewInstance(ctx);
 	}
 
 	private static void refNull(WasmLispCompiler.Ctx ctx) {

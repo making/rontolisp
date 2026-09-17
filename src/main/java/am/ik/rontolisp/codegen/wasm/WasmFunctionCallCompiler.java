@@ -125,8 +125,7 @@ final class WasmFunctionCallCompiler {
 					ctx.writer.writeUnsignedLeb128(extraSlots.get(k));
 					ctx.writer.write(Instruction.GET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(restSlot);
-					ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-					ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+					WasmEmitHelper.emitNewCons(ctx);
 					ctx.writer.write(Instruction.SET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(restSlot);
 				}

@@ -18020,6 +18020,44 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	// An identity-keyed aggregate (a cons, a vector, a structure) is PLACED by the
+	// identity hash its object carries, so a table of 300,000 such keys fills and
+	// answers in bounded time and a key mutated after insertion keeps its bucket. A
+	// wasm-GC reference has no address to hash, so before the slot every such key
+	// shared bucket 0 and the table was a 300,000-entry chain: quadratic, well past
+	// this runner's wasmtime timeout -- a regression is a HANG, not a slow number
+	// (.kb/hash-tables.md). The vectors are also keys of an equal table, whose hash is
+	// the same identity hash.
+	void compileEqHashTableWithManyAggregateKeysStaysHashed() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct wkey id)
+				(defun many-aggregate-keys (n)
+				  (let ((h (make-hash-table :test 'eq)) (v (make-hash-table :test 'equal))
+				        (conses nil) (vectors nil) (structs nil))
+				    (dotimes (i n)
+				      (push (cons i i) conses)
+				      (push (vector i) vectors)
+				      (push (make-wkey :id i) structs))
+				    (dolist (k conses) (setf (gethash k h) 1))
+				    (dolist (k vectors) (setf (gethash k h) 2) (setf (gethash k v) 4))
+				    (dolist (k structs) (setf (gethash k h) 3))
+				    (dolist (k conses) (setf (car k) :moved))
+				    (let ((sum 0) (misses 0) (i 0))
+				      (dolist (k conses) (incf sum (gethash k h 0)))
+				      (dolist (k vectors) (incf sum (gethash k h 0)) (incf sum (gethash k v 0)))
+				      (dolist (k structs) (incf sum (gethash k h 0)))
+				      (dotimes (j 10)
+				        (unless (gethash (cons :moved j) h) (incf misses))
+				        (unless (gethash (vector j) h) (incf misses))
+				        (unless (gethash (vector j) v) (incf misses))
+				        (unless (gethash (make-wkey :id j) h) (incf misses)))
+				      (dolist (k conses) (when (evenp i) (remhash k h)) (incf i))
+				      (list (hash-table-count h) (hash-table-count v) sum misses))))
+				(print (many-aggregate-keys 100000))
+				""")).isEqualTo("(250000 100000 1000000 40)");
+	}
+
+	@Test
 	void compileHashTableMaphashRemhashAndClrhash() throws Exception {
 		assertThat(compileAndRun("""
 				(defun sum-values (h)
