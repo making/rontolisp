@@ -30,6 +30,12 @@ final class SchemeNames {
 	/** What an escaped identifier starts with. Contains a lowercase letter on purpose. */
 	static final String PREFIX = "s%";
 
+	/**
+	 * The unspecified object's symbol name, MIT Scheme's spelling of it. Escaped by
+	 * {@link #mangle}, so no identifier and no {@code string->symbol} can forge it.
+	 */
+	static final String UNSPECIFIED_NAME = "#!unspecific";
+
 	private SchemeNames() {
 	}
 
@@ -60,7 +66,7 @@ final class SchemeNames {
 
 	private static boolean needsEscape(String identifier) {
 		if (identifier.startsWith(PREFIX) || identifier.startsWith("&") || identifier.equals("#f")
-				|| identifier.equals(SchemeBuiltins.UNSPECIFIED_NAME) || identifier.indexOf(':') >= 0) {
+				|| identifier.equals(UNSPECIFIED_NAME) || identifier.indexOf(':') >= 0) {
 			return true;
 		}
 		for (int i = 0; i < identifier.length(); i++) {

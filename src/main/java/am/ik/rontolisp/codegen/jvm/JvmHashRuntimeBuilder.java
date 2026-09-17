@@ -712,8 +712,8 @@ final class JvmHashRuntimeBuilder {
 		}
 		a.aload(1);
 		a.checkcast(mapClass);
-		emitKeyHash(a, hashRef, integerValueOf, objectArrayClass, ratArrClass, integerClass, identityHashCode, 6,
-				identityTables);
+		emitKeyHash(a, hashRef, integerValueOf, objectArrayClass, listClass, ratArrClass, integerClass,
+				identityHashCode, 6, identityTables);
 		a.invokevirtual(mapGet);
 		a.checkcast(listClass);
 		a.astore(3);
@@ -772,8 +772,8 @@ final class JvmHashRuntimeBuilder {
 			a.invokestatic(testRef);
 			a.istore(7);
 		}
-		emitKeyHash(a, hashRef, integerValueOf, objectArrayClass, ratArrClass, integerClass, identityHashCode, 7,
-				identityTables);
+		emitKeyHash(a, hashRef, integerValueOf, objectArrayClass, listClass, ratArrClass, integerClass,
+				identityHashCode, 7, identityTables);
 		a.astore(6);
 		a.aload(1);
 		a.checkcast(mapClass);
@@ -871,8 +871,8 @@ final class JvmHashRuntimeBuilder {
 			a.invokestatic(testRef);
 			a.istore(6);
 		}
-		emitKeyHash(a, hashRef, integerValueOf, objectArrayClass, ratArrClass, integerClass, identityHashCode, 6,
-				identityTables);
+		emitKeyHash(a, hashRef, integerValueOf, objectArrayClass, listClass, ratArrClass, integerClass,
+				identityHashCode, 6, identityTables);
 		a.astore(5);
 		a.aload(1);
 		a.checkcast(mapClass);
@@ -1156,17 +1156,24 @@ final class JvmHashRuntimeBuilder {
 	// _equal would fold structurally -- hashes by identity instead, so mutating it after
 	// insertion keeps its bucket; every other key hashes exactly as before.
 	private static void emitKeyHash(JvmAsm a, MethodrefConstant hashRef, MethodrefConstant integerValueOf,
-			ClassConstant objectArrayClass, ClassConstant ratArrClass, ClassConstant integerClass,
-			MethodrefConstant identityHashCode, int testSlot, boolean identityTables) {
+			ClassConstant objectArrayClass, ClassConstant listClass, ClassConstant ratArrClass,
+			ClassConstant integerClass, MethodrefConstant identityHashCode, int testSlot, boolean identityTables) {
 		if (!identityTables) {
 			emitStructuralKeyHash(a, hashRef, integerValueOf);
 			return;
 		}
 		int structural = a.label();
 		int done = a.label();
+		int identity = a.label();
 		a.iload(testSlot);
 		a.iconst(2);
 		a.branch(Opcode.IF_ICMPLT, structural);
+		// An array (a List) -- a mutable character vector included, which _hash would
+		// fold by content -- is identity under eql/eq, so is its hash: a fill-pointer
+		// string grown after it was stored keeps its bucket.
+		a.aload(0);
+		a.instanceOf(listClass);
+		a.branch(Opcode.IFNE, identity);
 		a.aload(0);
 		a.instanceOf(objectArrayClass);
 		a.branch(Opcode.IFEQ, structural);
@@ -1179,6 +1186,7 @@ final class JvmHashRuntimeBuilder {
 		a.aaload();
 		a.instanceOf(integerClass);
 		a.branch(Opcode.IFNE, structural);
+		a.bind(identity);
 		a.aload(0);
 		a.invokestatic(identityHashCode);
 		a.invokestatic(integerValueOf);

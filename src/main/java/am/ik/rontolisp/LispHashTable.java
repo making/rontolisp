@@ -11,7 +11,7 @@ import java.util.LinkedHashMap;
  * table separates placement ({@link LispEquality#hash}, a depth-capped fold over the
  * key's structure) from comparison (real {@code equal} within the bucket). An {@code eql}
  * or {@code eq} table compares with {@link LispEquality#eql} / {@link LispEquality#eq}
- * instead; its aggregates (conses, instances) hash by identity
+ * instead; its aggregates (conses, instances, allocated strings) hash by identity
  * ({@link System#identityHashCode}), so a key mutated after insertion keeps its bucket,
  * while every other value hashes structurally exactly as an {@code equal} table hashes
  * it. Both compiled backends reproduce each pair, so all four backends agree on which
@@ -133,8 +133,9 @@ public final class LispHashTable implements LispVal {
 
 		// The hash the test agrees with: an eql/eq table's aggregates hash by
 		// identity, so a key mutated after insertion keeps its bucket; everything
-		// else -- including an eql/eq table's numbers, symbols and strings, which
-		// compare by value exactly as equal compares them -- hashes structurally.
+		// else -- including an eql/eq table's numbers, symbols and source-literal
+		// strings, which compare by value exactly as equal compares them -- hashes
+		// structurally.
 		private static int placementHash(LispVal val, int testCode) {
 			if ((testCode == TEST_EQL || testCode == TEST_EQ) && LispEquality.isIdentityAggregate(val)) {
 				return System.identityHashCode(val);

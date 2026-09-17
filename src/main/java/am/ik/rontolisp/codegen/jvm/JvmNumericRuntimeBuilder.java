@@ -134,7 +134,7 @@ final class JvmNumericRuntimeBuilder {
 
 	/**
 	 * Structural equality ({@code equal} semantics): cons cells are compared recursively
-	 * by car and cdr, everything else delegates to {@link #EQV}.
+	 * by car and cdr, strings by content, everything else delegates to {@link #EQV}.
 	 */
 	static final String EQUAL = "_equal";
 
@@ -301,8 +301,8 @@ final class JvmNumericRuntimeBuilder {
 	 * @param thisClass the generated class
 	 * @param strvMethod the {@code _strv} character-vector normalizer emitted with the
 	 * array runtime helpers, or null when the program uses no arrays; when present,
-	 * {@code _eqv}'s final fallback normalizes both operands through it so a mutable
-	 * character vector compares equal to the string with the same content
+	 * {@code _equal}'s string arm normalizes both operands through it so a mutable
+	 * character vector is {@code equal} to the string with the same content
 	 * @return the helper methods and the invokable references compiled code calls
 	 */
 	static NumericRuntime build(ConstantPool cp, ClassConstant thisClass,
@@ -632,10 +632,15 @@ final class JvmNumericRuntimeBuilder {
 				biDiv, biRem, biLongValue, dblLongBits, dblNegInf, dblPosInf, cRat3, cRat4, cRat2p53, cRatFracMask));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
 				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl));
+		ClassConstant listClass = cp.addClass(cp.addUtf8("java/util/List"));
+		StringRefs stringRefs = new StringRefs(stringClass, listClass,
+				cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("isEmpty"), cp.addUtf8("()Z"))),
+				cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C"))));
 		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, cp.addClass(cp.addUtf8("java/util/Map")), objEquals,
-				strvMethod));
+				stringRefs));
 		methods.add(buildEqStrict(nEqStrict, dCmp, doubleClass, ratArrClass, rEqv));
-		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual, strArrClass));
+		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual, strArrClass,
+				strvMethod, stringRefs, objEquals));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
 		methods.add(buildRatFloor(nRatFloor, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, null, null));
 		methods.add(buildRatFloor(nRatCeil, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, biOne, biAdd));
@@ -2698,13 +2703,14 @@ final class JvmNumericRuntimeBuilder {
 	// their sole code point (int[].equals is also reference equality, and the JVM does
 	// not cache char literals like Character.valueOf(char) does), everything else uses
 	// a.equals(b). A hash table (a Map) is the exception: Map.equals walks the entries,
-	// so two empty tables were eq, while eql/equal on a table is identity. When the array
-	// helpers are emitted (strvMethod non-null) the fallback first normalizes both
-	// operands through _strv so a mutable character vector compares equal to a string
-	// with the same content.
+	// so two empty tables were eq, while eql/equal on a table is identity. So are an
+	// ARRAY (a List: a general vector, a mutable character vector, a string view) and a
+	// STRING (a quote-framed java.lang.String), as ANSI has it: two distinct strings with
+	// equal contents are not eql. Equal string LITERALS are still one object, because
+	// ldc interns them -- the coalescing the interpreter and WASM reproduce. A SYMBOL is
+	// a bare String and keeps comparing by name.
 	private static NumericMethod buildEqv(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			ClassConstant intArrClass, ClassConstant mapClass, MethodrefConstant objEquals,
-			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod) {
+			ClassConstant intArrClass, ClassConstant mapClass, MethodrefConstant objEquals, StringRefs strings) {
 		List<Integer> c = new ArrayList<>();
 		// CHARACTER compare (int[]{cp}): if both operands are length-1 int[], value
 		// equality is (a[0] == b[0]). Emitted BEFORE the ratio and equals paths so a
@@ -2793,20 +2799,86 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.ICONST_0);
 		c.add(Opcode.IRETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifNotMap, c.size());
+		// if (a instanceof List || b instanceof List || isString(a)) return a == b
+		List<Integer> toIdentity = new ArrayList<>();
 		c.add(Opcode.ALOAD_0);
-		if (strvMethod != null) {
-			c.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(c, strvMethod.index());
-		}
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, strings.listClass().index());
+		toIdentity.add(c.size());
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
 		c.add(Opcode.ALOAD_1);
-		if (strvMethod != null) {
-			c.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(c, strvMethod.index());
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, strings.listClass().index());
+		toIdentity.add(c.size());
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		List<Integer> toEquals = new ArrayList<>();
+		emitIsStringGuard(c, Opcode.ALOAD_0, strings, toEquals);
+		for (int pos : toIdentity) {
+			JvmRuntimeBuilder.patchBranch(c, pos, c.size());
 		}
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ALOAD_1);
+		int ifNotSame2 = c.size();
+		c.add(Opcode.IF_ACMPNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotSame2, c.size());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		for (int pos : toEquals) {
+			JvmRuntimeBuilder.patchBranch(c, pos, c.size());
+		}
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ALOAD_1);
 		c.add(Opcode.INVOKEVIRTUAL);
 		JvmRuntimeBuilder.emitU2(c, objEquals.index());
 		c.add(Opcode.IRETURN);
 		return new NumericMethod(name, desc, c, 3, 2, List.of());
+	}
+
+	/**
+	 * The constant-pool references the string arms of {@code _eqv}/{@code _equal} read.
+	 *
+	 * @param stringClass {@code java/lang/String}
+	 * @param listClass {@code java/util/List}, every array representation
+	 * @param isEmpty {@code String.isEmpty()}
+	 * @param charAt {@code String.charAt(int)}
+	 */
+	private record StringRefs(ClassConstant stringClass, ClassConstant listClass, MethodrefConstant isEmpty,
+			MethodrefConstant charAt) {
+	}
+
+	// Falls through when the value loaded by loadOp is a STRING (a quote-framed
+	// java.lang.String); otherwise branches, each branch recorded in notString.
+	private static void emitIsStringGuard(List<Integer> c, int loadOp, StringRefs strings, List<Integer> notString) {
+		c.add(loadOp);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, strings.stringClass().index());
+		notString.add(c.size());
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(loadOp);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, strings.stringClass().index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, strings.isEmpty().index());
+		notString.add(c.size());
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(loadOp);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, strings.stringClass().index());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, strings.charAt().index());
+		c.add(Opcode.BIPUSH);
+		c.add((int) '"');
+		notString.add(c.size());
+		c.add(Opcode.IF_ICMPNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
 	}
 
 	// _eq(Object a, Object b): eq semantics. Floats (Double) and ratios (BigInteger[])
@@ -2861,13 +2933,16 @@ final class JvmNumericRuntimeBuilder {
 
 	// _equal(Object a, Object b): structural equality. Two cons cells (Object[] of length
 	// 2 whose head is not an Integer, distinguishing them from function references and
-	// ratios) are equal when their cars and cdrs are recursively _equal; everything else
-	// (including nil/null) delegates to _eqv, so numbers, symbols, strings and nil
-	// compare
-	// by value. Returns 1 for equal, 0 otherwise.
+	// ratios) are equal when their cars and cdrs are recursively _equal; two STRINGS are
+	// equal by content (a mutable character vector first rendered through _strv, when the
+	// array helpers exist), which _eqv no longer answers; everything else (including
+	// nil/null) delegates to _eqv, so numbers, symbols and nil compare by value. Returns
+	// 1 for equal, 0 otherwise.
 	private static NumericMethod buildEqual(Utf8Constant name, Utf8Constant desc, ClassConstant objArrClass,
 			ClassConstant ratArrClass, ClassConstant integerClass, MethodrefConstant eqv, MethodrefConstant equal,
-			@org.jspecify.annotations.Nullable ClassConstant strArrClass) {
+			@org.jspecify.annotations.Nullable ClassConstant strArrClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod, StringRefs strings,
+			MethodrefConstant objEquals) {
 		List<Integer> c = new ArrayList<>();
 		// if (a == b) return 1 -- identity BEFORE any recursion, which is what makes a
 		// cyclic value comparable to itself (a hash table storing and retrieving under
@@ -2929,10 +3004,31 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(c, ifCarFalse, c.size());
 		c.add(Opcode.ICONST_0);
 		c.add(Opcode.IRETURN);
-		// not both cons: delegate to _eqv(a, b)
+		// not both cons: two strings compare by content, anything else through _eqv(a, b)
 		int notCons = c.size();
 		for (int pos : notBothCons) {
 			JvmRuntimeBuilder.patchBranch(c, pos, notCons);
+		}
+		if (strvMethod != null) {
+			c.add(Opcode.ALOAD_0);
+			c.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(c, strvMethod.index());
+			c.add(Opcode.ASTORE_0);
+			c.add(Opcode.ALOAD_1);
+			c.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(c, strvMethod.index());
+			c.add(Opcode.ASTORE_1);
+		}
+		List<Integer> notStrings = new ArrayList<>();
+		emitIsStringGuard(c, Opcode.ALOAD_0, strings, notStrings);
+		emitIsStringGuard(c, Opcode.ALOAD_1, strings, notStrings);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, objEquals.index());
+		c.add(Opcode.IRETURN);
+		for (int pos : notStrings) {
+			JvmRuntimeBuilder.patchBranch(c, pos, c.size());
 		}
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.ALOAD_1);

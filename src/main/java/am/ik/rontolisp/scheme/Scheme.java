@@ -1,6 +1,8 @@
 package am.ik.rontolisp.scheme;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
@@ -41,6 +43,23 @@ public final class Scheme {
 	 */
 	public static SchemeSession session() {
 		return new SchemeSession();
+	}
+
+	/**
+	 * The definitions {@code scheme.lisp} needs from this package's tables, generated so
+	 * each table is spelled once: the run-time procedure table behind {@code eval}
+	 * ({@code rontolisp::%scheme-builtin}) and the library-name predicate behind
+	 * {@code (environment ...)} ({@code rontolisp::%scheme-library-p}). Appended to the
+	 * library's forms by {@code eval/SchemeLibrary}, in the same canonical shape.
+	 * @param spelled whether the program the forms are for spells a (mangled) procedure
+	 * name -- the table holds only those entries; the interpreter, which loads the
+	 * library once for every program, passes a predicate that accepts everything
+	 * @return the forms
+	 */
+	public static List<LispVal> runtimeForms(Predicate<String> spelled) {
+		List<LispVal> forms = new ArrayList<>(SchemeBuiltins.runtimeForms(SchemeNames::mangle, spelled));
+		forms.add(SchemeLowering.libraryPredicateForm());
+		return List.copyOf(forms);
 	}
 
 }

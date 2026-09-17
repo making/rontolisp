@@ -13480,6 +13480,29 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void eqAndEqlCompareDistinctEqualStringsByIdentity() {
+		// ANSI: two distinct strings with equal contents are neither eq nor eql, and so
+		// the default test of member/case and an eq/eql table miss. Equal string
+		// CONSTANTS (two literals, a literal and a symbol's name) are one object, as on
+		// both compiled backends. A fill-pointer string grown after it was stored in an
+		// eq table keeps its entry.
+		LispVal result = evalMulti("""
+				(let* ((a (copy-seq "ab")) (b (copy-seq "ab"))
+				       (d (make-array 2 :element-type 'character :fill-pointer 2 :initial-contents "ab"))
+				       (q (make-hash-table :test 'eq))
+				       (g (make-array 1 :element-type 'character :fill-pointer 1 :adjustable t
+				                        :initial-contents "g")))
+				  (setf (gethash a q) 1 (gethash g q) 2)
+				  (vector-push-extend #\\h g)
+				  (list (eq a b) (eql a b) (eql a a) (eql d (copy-seq d)) (equal a d)
+				        (member a '("ab")) (case a (("ab") 'hit) (t 'miss))
+				        (eq "ab" "ab") (eq (symbol-name 'foo) "FOO")
+				        (gethash a q) (gethash b q) (gethash g q)))
+				""");
+		assertThat(result.print()).isEqualTo("(NIL NIL T NIL T NIL MISS T T 1 NIL 2)");
+	}
+
+	@Test
 	void eachHashTableTestPrintsItsOwnTag() {
 		// The printed :TEST field reports the test lookup implements, on every backend.
 		LispVal result = evalMulti("""

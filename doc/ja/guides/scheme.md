@@ -1,7 +1,8 @@
 # Scheme（実験的）
 
 **実験的機能です。** rontolisp は R7RS-small の一部 -- `(scheme base)`、
-`(scheme write)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)`、`(scheme process-context)` の `exit`
+`(scheme write)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)`、`(scheme process-context)` の `exit`、
+`(scheme eval)`、`(scheme repl)`
 -- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
 準拠は意図的に部分的で、互換性の約束はありません。Scheme プログラムを JVM や WebAssembly で
 試す用途に使い、動き続けてほしいものは Common Lisp で書いてください。
@@ -66,7 +67,7 @@ done
 scheme> (exit)
 ```
 
-これら 6 ライブラリがエクスポートする名前 -- それに加えて、後述の
+これら 8 ライブラリがエクスポートする名前 -- それに加えて、後述の
 どの `(import ...)` にも属さない SICP 互換名 -- は最初からすべて見えており、
 プロンプトで入力した `(import ...)` は名前を追加するだけです。別々のプロンプトで入力した
 定義は、1 つのファイルに書いた場合と同じく、順序によらず互いを参照できます。フォームは
@@ -86,7 +87,8 @@ scheme> (exit)
   `let-values`、`let*-values`、`define-record-type`（トップレベルのみ）、`delay`、
   `delay-force`、および
   `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr) (scheme lazy)
-  (scheme process-context))`（`only` / `except` / `prefix` / `rename` 可）。
+  (scheme process-context) (scheme eval) (scheme repl))`（`only` / `except` /
+  `prefix` / `rename` 可）。
 - **手続き**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
   floor-quotient floor-remainder truncate-quotient truncate-remainder abs min max gcd lcm
   expt square floor ceiling round truncate zero? positive? negative? odd? even? number?
@@ -102,9 +104,13 @@ scheme> (exit)
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
   values call-with-values error`; `display write newline write-char write-string`
   （現在の出力ポートのみ）; `exit emergency-exit`（`#t` または引数なしはステータス 0、
-  `#f` は 1、整数はその下位 8 ビット）。`write` と `display` は循環するリストやベクタをデータラベル付きで
+  `#f` は 1、整数はその下位 8 ビット）; `(scheme eval)`: `eval environment`;
+  `(scheme repl)`: `interaction-environment`。`write` と `display` は循環するリストやベクタを
+  データラベル付きで
   `#0=(a b c . #0#)` のように書きます。循環のない共有構造は出現のたびに書き出します。
 - **SICP 互換、R7RS ではない**: `true false nil`（リテラルではなく普通の変数）、
+  `user-initial-environment system-global-environment` と R5RS の
+  `scheme-report-environment`（どれも唯一の大域環境を指す。後述の `eval` を参照）、
   `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
   runtime parallel-execute test-and-set!`、ストリーム: `cons-stream`（構文）、
   `the-empty-stream stream-car stream-cdr
@@ -198,6 +204,39 @@ once (42 42)
 3
 ```
 
+## eval
+
+`(eval datum env)` はデータを実行時に評価します。どのバックエンドでも動きます。環境指定子は
+どれも唯一の大域環境です: `(interaction-environment)`、`(scheme-report-environment 5)`、
+`(environment '(scheme base) ...)` -- その import 集合は上記のライブラリに照らして検査されます --
+および MIT Scheme の `user-initial-environment` と `system-global-environment` はすべて
+これを指し、引数は省略できます。大域環境が持つのは、プログラムが定義したもの、`eval` 自身が
+定義したもの、組み込み手続きで、この順に探されます。`eval` の中の `define` は後の `eval`
+からだけ見え、プログラムの変数への `set!` は `eval` 自身のコピーを変えます: プログラムは自分の
+値を読み続けます。
+
+```scheme
+(define (execute exp) (apply (eval (car exp) user-initial-environment) (cdr exp)))
+(display (execute '(> 5 3))) (newline)
+(eval '(define (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) (interaction-environment))
+(display (list (eval '(fact 10) (interaction-environment))
+               (eval '(let loop ((i 0)) (if (= i 100000) i (loop (+ i 1))))
+                     (interaction-environment))))
+(newline)
+```
+
+```
+#t
+(3628800 100000)
+```
+
+`eval` の中では、名前付き `let`、`do`、自分自身を呼ぶ手続きは一定のスタックで動きます。
+それ以外の呼び出しはスタックを消費します。`define-record-type`、`define-values`、
+`let-values`、`import`、およびリーダーが拒否する構文は `eval` の中でも名前を挙げて拒否されます。
+コンパイルされたプログラムの `eval` が組み込み手続きを解決できるのは、プログラムがその名前を
+どこかに綴っている場合 -- シンボルとして（クォートされたデータを含む）、または文字列の中に --
+だけです。インタプリタはすべてを解決します。
+
 ## 仕様との差異
 
 - **末尾呼び出しが真に末尾になるのはループに変換できる場合だけです**: 名前付き `let`、`do`、
@@ -209,6 +248,9 @@ once (42 42)
   ちょうど 1 回だけ実行されます。
 - `call-with-values` は、両引数が `lambda` 式として書かれているとき直接束縛になります。
   それ以外の形はリストを経由します。
+- 第一級の `values` -- `(apply values '(1 2))`、変数経由の `values`、`eval` の中の `values`
+  -- は、コンパイルされたバックエンドでは最初の値だけを返します。インタプリタはすべてを
+  返します。呼び出しとして書いた `(values 1 2)` はどこでもすべてを返します。
 - 捕捉されない `error` は、メッセージと irritant を表示してプログラムを終了します。
   捕捉する `guard` はありません。
 - レコードは Common Lisp の `#S(...)` 構文で表示されます。`equal?` はレコードを同一性で
@@ -222,7 +264,7 @@ once (42 42)
 - エラーメッセージには Common Lisp の名前（`CAR`）が出ます。
 - **未対応**: `define-syntax` / `syntax-rules`、`define-library`、`guard` / `raise`、
   `parameterize`、`case-lambda`、バイトベクタ、現在の出力ポート以外のポート、
-  `eval`、`(scheme char)` などのライブラリ、`|...|` 識別子、
+  `(scheme char)` などのライブラリ、`|...|` 識別子、
   `+inf.0` / `+nan.0` の読み取り。構文に関するものは、ファイルを読む時点で名前を挙げて拒否されます。
 
 ## Common Lisp との混在

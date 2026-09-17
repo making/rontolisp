@@ -93,22 +93,29 @@ public final class LispEquality {
 
 	/**
 	 * The aggregates {@code eq}/{@code eql} compare by REFERENCE, never by contents: a
-	 * cons and an instance (a struct, a CLOS object, a condition, a pathname). The
-	 * instance arm is what keeps the interpreter in step with the JVM and both WASM
-	 * backends, which compare instances with {@code ref.eq} / Java identity --
-	 * {@code LispInstance.equals} is structural (that is {@code equal}'s contract,
-	 * {@code .kb/instance-syntax.md}) and letting it decide {@code eql} made every
-	 * identity-keyed walk in the interpreter conflate two records with equal slots.
+	 * cons, an instance (a struct, a CLOS object, a condition, a pathname) and a string
+	 * the running program allocated. The instance arm is what keeps the interpreter in
+	 * step with the JVM and both WASM backends, which compare instances with
+	 * {@code ref.eq} / Java identity -- {@code LispInstance.equals} is structural (that
+	 * is {@code equal}'s contract, {@code .kb/instance-syntax.md}) and letting it decide
+	 * {@code eql} made every identity-keyed walk in the interpreter conflate two records
+	 * with equal slots. The string arm is ANSI's: two distinct strings with equal
+	 * contents are not {@code eql}. A SOURCE LITERAL is the exception and compares by
+	 * content: both compiled backends coalesce equal literals into one constant (the JVM
+	 * constant pool, the WASM string table), which CLHS 3.2.4.4 permits, so two
+	 * {@code "ab"} in the program text are one object there and must be one here.
 	 * @param v the value to test
 	 * @return whether {@code eq}/{@code eql} compare it by reference
 	 */
 	public static boolean isIdentityAggregate(LispVal v) {
-		return v instanceof LispCons || v instanceof LispInstance;
+		return v instanceof LispCons || v instanceof LispInstance
+				|| (v instanceof LispString string && !string.sourceLiteral());
 	}
 
 	/**
 	 * The {@code eql} predicate: like {@code eq}, but numbers of the same type and value
-	 * are {@code eql}. Cons cells and instances compare by reference identity.
+	 * are {@code eql}. Cons cells, instances and allocated strings compare by reference
+	 * identity ({@link #isIdentityAggregate}).
 	 * @param a the first value
 	 * @param b the second value
 	 * @return whether the two values are {@code eql}

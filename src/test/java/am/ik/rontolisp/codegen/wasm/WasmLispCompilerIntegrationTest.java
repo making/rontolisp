@@ -18058,6 +18058,29 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	// Two distinct strings with equal contents are neither eq nor eql, equal string
+	// literals are one object, and a mutable character vector keys an eq table by
+	// identity: grown after it was stored -- and across the rehash of a table growing
+	// past its load factor -- it keeps its entry.
+	void compileEqOnDistinctEqualStringsAndGrownCharacterVectorKeys() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((a (copy-seq "ab")) (b (copy-seq "ab")))
+				  (print (list (eq a b) (eql a b) (eql a a) (equal a b) (eq "ab" "ab")
+				               (eq (symbol-name 'foo) "FOO"))))
+				(let ((q (make-hash-table :test 'eq)) (keys nil))
+				  (dotimes (i 20)
+				    (let ((g (make-array 1 :element-type 'character :fill-pointer 1 :adjustable t
+				                           :initial-contents "g")))
+				      (push g keys)
+				      (setf (gethash g q) i)
+				      (vector-push-extend #\\h g)))
+				  (let ((sum 0))
+				    (dolist (g keys) (setq sum (+ sum (gethash g q -100))))
+				    (print (list sum (gethash (copy-seq "gh") q)))))
+				""")).isEqualTo("(NIL NIL T T T T)\n(190 NIL)");
+	}
+
+	@Test
 	void compileHashTableMaphashRemhashAndClrhash() throws Exception {
 		assertThat(compileAndRun("""
 				(defun sum-values (h)

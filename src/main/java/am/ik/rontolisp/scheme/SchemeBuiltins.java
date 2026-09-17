@@ -5,7 +5,9 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.SequencedMap;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNil;
@@ -31,16 +33,17 @@ import org.jspecify.annotations.Nullable;
  * </pre>
  *
  * {@code library} is the R7RS library exporting the name ({@code base} / {@code write} /
- * {@code inexact} / {@code cxr} / {@code lazy}, or {@code sicp} for a name no R7RS
- * library exports), {@code result} says what the template answers -- {@code value},
- * {@code pred} (a Common Lisp boolean, {@code T}/{@code NIL}, which fuses into an
- * {@code if} test and is converted to {@code #t}/{@code #f} anywhere else),
- * {@code or-false} (a value, or {@code NIL} meaning {@code #f}) or {@code effect} (the
- * template's value is discarded and the call answers the unspecified object, which a REPL
- * does not echo). One {@code ((params) template)} pair per accepted argument count;
- * {@code &rest r} params splice as the template's dotted tail {@code (f a . r)}.
- * {@code :function} is the first-class value; it may be omitted only for a single
- * fixed-arity alternative, where it is derived as a {@code lambda} around the template.
+ * {@code inexact} / {@code cxr} / {@code lazy} / {@code process-context} / {@code eval} /
+ * {@code repl}, or {@code sicp} / {@code r5rs} for a name no import can reach),
+ * {@code result} says what the template answers -- {@code value}, {@code pred} (a Common
+ * Lisp boolean, {@code T}/{@code NIL}, which fuses into an {@code if} test and is
+ * converted to {@code #t}/{@code #f} anywhere else), {@code or-false} (a value, or
+ * {@code NIL} meaning {@code #f}) or {@code effect} (the template's value is discarded
+ * and the call answers the unspecified object, which a REPL does not echo). One
+ * {@code ((params) template)} pair per accepted argument count; {@code &rest r} params
+ * splice as the template's dotted tail {@code (f a . r)}. {@code :function} is the
+ * first-class value; it may be omitted only for a single fixed-arity alternative, where
+ * it is derived as a {@code lambda} around the template.
  *
  * <p>
  * Parameter names are uppercase symbols (the reader upcases them), which no user variable
@@ -59,11 +62,13 @@ final class SchemeBuiltins {
 	static final String UNSPECIFIED_VARIABLE = "RONTOLISP::%SCHEME-UNSPECIFIED";
 
 	/**
-	 * The unspecified object's symbol name, MIT Scheme's spelling of it. Escaped by
-	 * {@link SchemeNames#mangle}, so no identifier and no {@code string->symbol} can
-	 * forge it.
+	 * The one global environment every environment specifier denotes, as a symbol -- like
+	 * the false value and the unspecified object, so no backend learns it -- in MIT
+	 * Scheme's spelling, which is what {@code display} then shows. What
+	 * {@code (interaction-environment)}, {@code user-initial-environment} and
+	 * {@code (environment ...)} answer and what {@code eval} accepts.
 	 */
-	static final String UNSPECIFIED_NAME = "#!unspecific";
+	static final String ENVIRONMENT_NAME = "#[environment]";
 
 	/** What a template's value is. */
 	enum Result {
@@ -105,7 +110,8 @@ final class SchemeBuiltins {
 	 *
 	 * @param name the Scheme name
 	 * @param library the exporting library's last component ({@code base}, {@code write},
-	 * {@code inexact}, {@code cxr}, {@code lazy}), or {@code sicp}
+	 * {@code inexact}, {@code cxr}, {@code lazy}, {@code process-context}, {@code eval},
+	 * {@code repl}), or a tag no import names ({@code sicp}, {@code r5rs})
 	 * @param result what the templates answer
 	 * @param alternatives the accepted argument shapes
 	 * @param function the first-class value: a form answering a function that returns
@@ -430,6 +436,19 @@ final class SchemeBuiltins {
 			("write-shared" write effect ((x) (rontolisp::%scheme-write x)))
 			("write-simple" write effect ((x) (rontolisp::%scheme-write x)))
 
+			;; --- (scheme eval), (scheme repl) and the R5RS scheme-report-environment:
+			;; every environment specifier is the one global environment, the symbol
+			;; #[environment] (ENVIRONMENT_NAME); the evaluator is %scheme-eval in
+			;; scheme.lisp, over the run-time table generated from these entries
+			;; (runtimeForms). r5rs is no importable library: (scheme r5rs) would promise
+			;; the whole of R5RS, so its one name rides the no-import default like sicp.
+			("eval" eval value ((x) (rontolisp::%scheme-eval x nil)) ((x env) (rontolisp::%scheme-eval-in x env))
+			 :function (lambda (x &optional (env '|#[environment]|)) (rontolisp::%scheme-eval-in x env)))
+			("environment" eval value ((&rest r) (rontolisp::%scheme-environment (list . r)))
+			 :function (lambda (&rest r) (rontolisp::%scheme-environment r)))
+			("interaction-environment" repl value (() '|#[environment]|))
+			("scheme-report-environment" r5rs value ((v) (progn v '|#[environment]|)))
+
 			;; --- (scheme process-context): the process ends where the call stands, on
 			;; every backend -- no dynamic-wind after thunk runs, for exit either.
 			("exit" process-context effect (() (rontolisp::%scheme-exit t)) ((code) (rontolisp::%scheme-exit code))
@@ -441,6 +460,17 @@ final class SchemeBuiltins {
 
 	private static final SequencedMap<String, Entry> ENTRIES = parse();
 
+	/**
+	 * The bare VALUES (not procedures) the {@code sicp} tag provides, each as the form
+	 * answering it: MIT Scheme's {@code true} / {@code false} / {@code nil}, the empty
+	 * stream, and the two MIT names of the global environment. The lowering binds each as
+	 * a constant; the run-time table answers it beside the procedures.
+	 */
+	private static final SequencedMap<String, LispVal> CONSTANTS = buildConstants();
+
+	/** What the run-time table answers for a name it does not know. */
+	private static final String UNBOUND = "RONTOLISP::%SCHEME-UNBOUND";
+
 	private SchemeBuiltins() {
 	}
 
@@ -450,6 +480,67 @@ final class SchemeBuiltins {
 	 */
 	static SequencedMap<String, Entry> entries() {
 		return ENTRIES;
+	}
+
+	/**
+	 * The {@code sicp} tag's bare values, keyed by their Scheme name.
+	 * @return the name to the form answering its value
+	 */
+	static SequencedMap<String, LispVal> constants() {
+		return CONSTANTS;
+	}
+
+	private static SequencedMap<String, LispVal> buildConstants() {
+		SequencedMap<String, LispVal> constants = new LinkedHashMap<>();
+		LispVal environment = list(new LispSymbol("QUOTE"), new LispSymbol(ENVIRONMENT_NAME));
+		constants.put("true", LispTrue.INSTANCE);
+		constants.put("false", new LispSymbol(FALSE_VARIABLE));
+		constants.put("nil", LispNil.INSTANCE);
+		constants.put("the-empty-stream", LispNil.INSTANCE);
+		constants.put("user-initial-environment", environment);
+		constants.put("system-global-environment", environment);
+		return Collections.unmodifiableSequencedMap(constants);
+	}
+
+	/**
+	 * The run-time half of this table, for {@code eval}:
+	 * {@code (rontolisp::%scheme-builtin name)} answers the first-class value of the
+	 * procedure or constant whose MANGLED name is {@code name}, or the symbol
+	 * {@code rontolisp::%scheme-unbound}. Generated here so the table is spelled once;
+	 * {@code eval/SchemeLibrary} appends it to {@code scheme.lisp}'s forms, in the same
+	 * canonical shape.
+	 *
+	 * <p>
+	 * A compiled program carries only the entries whose names it SPELLS: every
+	 * {@code :function} value in one {@code case} reaches every helper there is (the
+	 * sequence runtime behind {@code coerce}, {@code subseq}, {@code reduce}, ...) -- 291
+	 * KB of class and 235 KB of wasm for one {@code (eval '(+ 1 2))} against 81 KB / 16
+	 * KB without, measured 2026-09-17 -- and a datum a program can hand {@code eval} is
+	 * built from the symbols and strings it spells, the same rule the compiled name
+	 * registry applies to Common Lisp's {@code eval} ({@code .kb/eval-runtime.md}).
+	 * @param mangle a Scheme name to its symbol name ({@code SchemeNames.mangle}, which
+	 * this table does not reach for itself: the names reach for this table)
+	 * @param spelled whether a mangled name is spelled by the program the table is for
+	 * @return the definition
+	 */
+	static List<LispVal> runtimeForms(UnaryOperator<String> mangle, Predicate<String> spelled) {
+		List<LispVal> arms = new ArrayList<>();
+		for (Entry entry : ENTRIES.values()) {
+			String key = mangle.apply(entry.name());
+			if (spelled.test(key)) {
+				arms.add(list(list(new LispSymbol(key)), entry.function()));
+			}
+		}
+		CONSTANTS.forEach((name, form) -> {
+			String key = mangle.apply(name);
+			if (spelled.test(key)) {
+				arms.add(list(list(new LispSymbol(key)), form));
+			}
+		});
+		arms.add(list(LispTrue.INSTANCE, list(new LispSymbol("QUOTE"), new LispSymbol(UNBOUND))));
+		LispSymbol name = new LispSymbol("NAME");
+		return List.of(list(new LispSymbol("DEFUN"), new LispSymbol("RONTOLISP::%SCHEME-BUILTIN"), list(name),
+				new LispCons(new LispSymbol("CASE"), new LispCons(name, listOf(arms)))));
 	}
 
 	/**

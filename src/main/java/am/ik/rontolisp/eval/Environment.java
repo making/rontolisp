@@ -3926,12 +3926,12 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.SYMBOL_NAME, new LispFunction(LispNames.SYMBOL_NAME, args -> {
 			requireArgCount(LispNames.SYMBOL_NAME, args, 1);
 			return switch (args.get(0)) {
-				case LispSymbol sym -> new LispString(LispSymbol.memberName(sym.name()));
+				case LispSymbol sym -> LispString.symbolName(LispSymbol.memberName(sym.name()));
 				// nil and t are the SYMBOLS NIL and T, so they coerce like any other
 				// symbol -- upcase-canonical, matching CL and the three compile backends
 				// (the interpreter used to answer "t"/"nil").
-				case LispTrue ignored -> new LispString("T");
-				case LispNil ignored -> new LispString("NIL");
+				case LispTrue ignored -> LispString.symbolName("T");
+				case LispNil ignored -> LispString.symbolName("NIL");
 				default -> throw new LispEvalException(
 						LispNames.SYMBOL_NAME + " expects a symbol, got " + args.get(0).print());
 			};
@@ -3948,13 +3948,13 @@ public final class Environment implements Scope {
 				// so (string :html) is "html" and (string 'pkg::sym) is "sym"
 				// (matches CL, and is what cl-who's maybe-downcase relies on to emit
 				// <html> not <:html>). Same spelling as symbol-name.
-				case LispSymbol sym -> new LispString(LispSymbol.memberName(sym.name()));
+				case LispSymbol sym -> LispString.symbolName(LispSymbol.memberName(sym.name()));
 				case LispChar c -> new LispString(new String(Character.toChars(c.codePoint())));
 				// nil and t are the SYMBOLS NIL and T: they coerce upcase-canonical like
 				// any other symbol, matching CL and the three compile backends (the
 				// interpreter used to answer "t"/"nil").
-				case LispTrue ignored -> new LispString("T");
-				case LispNil ignored -> new LispString("NIL");
+				case LispTrue ignored -> LispString.symbolName("T");
+				case LispNil ignored -> LispString.symbolName("NIL");
 				// Same wording the compile backends' guarded coercion signals with
 				// (LispMacroExpander.strictStringDesignatorForm), so a non-designator
 				// reads the same on all four.
