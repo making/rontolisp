@@ -206,6 +206,32 @@ examples:
         - '"to" 4'
         - "Words appearing exactly once:"
 
+  # --- scheme: the experimental Scheme front end (.scm) ----------------------
+  - path: scheme/differentiation.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-differentiation.txt
+  - path: scheme/queens.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-queens.txt
+  - path: scheme/huffman.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-huffman.txt
+  - path: scheme/streams.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-streams.txt
+  - path: scheme/evaluator.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-evaluator.txt
+  - path: scheme/collatz.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-collatz.txt
+
   # --- ml: numerical computing & machine learning ----------------------------
   - path: ml/deep-digits.lisp
     backends: [interpreter, jvm, wasm]
