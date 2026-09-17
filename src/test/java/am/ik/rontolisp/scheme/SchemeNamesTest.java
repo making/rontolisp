@@ -23,6 +23,7 @@ class SchemeNamesTest {
 		assertThat(SchemeNames.mangle("a:b")).isEqualTo("s%a%cb");
 		assertThat(SchemeNames.mangle("&rest")).isEqualTo("s%&rest");
 		assertThat(SchemeNames.mangle("#f")).isEqualTo("s%#f");
+		assertThat(SchemeNames.mangle("#!unspecific")).isEqualTo("s%#!unspecific");
 		assertThat(SchemeNames.mangle("100%")).isEqualTo("s%100%%");
 	}
 

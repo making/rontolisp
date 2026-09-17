@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,6 +18,7 @@ import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.testsupport.HostWasmtime;
@@ -30,6 +32,7 @@ import org.testcontainers.images.builder.Transferable;
 import tools.jackson.dataformat.yaml.YAMLMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.abort;
 import static org.junit.jupiter.api.DynamicContainer.dynamicContainer;
@@ -89,6 +92,63 @@ class SchemeSpecE2eTest {
 		backends.add(wasmBackend("WASM", spec, false));
 		backends.add(wasmBackend("WASM_COMPONENT", spec, true));
 		return backends.stream();
+	}
+
+	/**
+	 * {@code exit} cannot be a corpus case: it ends the concatenated program, and the JVM
+	 * leg runs {@code main} in THIS process. So one program per status, the JVM leg in a
+	 * child process.
+	 */
+	@TestFactory
+	Stream<DynamicNode> exitEndsTheProcessWithItsStatusOnEveryBackend() {
+		String program = """
+				(display "before") (newline)
+				(dynamic-wind (lambda () #t) (lambda () (exit %s)) (lambda () (display "after")))
+				(display "never")
+				""";
+		List<DynamicNode> legs = new ArrayList<>();
+		for (String[] status : List.of(new String[] { "7", "7" }, new String[] { "#f", "1" }, new String[] { "", "0" },
+				new String[] { "300", "44" })) {
+			String source = program.formatted(status[0]);
+			int expected = Integer.parseInt(status[1]);
+			String name = "(exit " + status[0] + ")";
+			legs.add(dynamicTest(name + " INTERPRETER", () -> {
+				ByteArrayOutputStream out = new ByteArrayOutputStream();
+				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+				assertThatThrownBy(() -> {
+					for (LispVal form : SourceLanguage.SCHEME.read(source, Features.INTERPRETER, "exit.scm")) {
+						evaluator.eval(form);
+					}
+				}).isInstanceOfSatisfying(LispExitSignal.class, exit -> assertThat(exit.code()).isEqualTo(expected));
+				assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("before\n");
+			}));
+			legs.add(dynamicTest(name + " JVM", () -> {
+				Path dir = workDir.resolve("exit-" + expected);
+				Files.createDirectories(dir);
+				Files.write(dir.resolve("SchemeExit.class"),
+						new JvmSourceCompiler("SchemeExit").sourceLanguage("scheme")
+							.compile(source, null)
+							.classBytes());
+				Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+						"-cp", dir.toString(), "SchemeExit")
+					.redirectErrorStream(true)
+					.start();
+				String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+				assertThat(process.waitFor()).isEqualTo(expected);
+				assertThat(out).isEqualTo("before\n");
+			}));
+			for (boolean component : List.of(false, true)) {
+				legs.add(dynamicTest(name + (component ? " WASM_COMPONENT" : " WASM"), () -> {
+					if (!HostWasmtime.isAvailable()) {
+						abort("no usable wasmtime on PATH");
+					}
+					HostWasmtime.ExecResult result = runWasmModule(source, component, "exit-" + expected);
+					assertThat(result.exitCode()).isEqualTo(expected);
+					assertThat(result.stdout()).isEqualTo("before\n");
+				}));
+			}
+		}
+		return legs.stream();
 	}
 
 	private static DynamicContainer wasmBackend(String leg, Spec spec, boolean component) {
@@ -164,18 +224,22 @@ class SchemeSpecE2eTest {
 	}
 
 	private static String runOnWasm(String program, boolean component) throws Exception {
+		HostWasmtime.ExecResult result = runWasmModule(program, component, "scheme-spec");
+		assertThat(result.exitCode()).as("wasmtime exit code (component=%s): %s", component, result.stderr()).isZero();
+		return result.stdout();
+	}
+
+	private static HostWasmtime.ExecResult runWasmModule(String program, boolean component, String name)
+			throws Exception {
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.scheme(program, true, component);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())
 			.build()
 			.compile(frontend.forms());
-		String path = workDir.resolve(component ? "scheme-spec.component.wasm" : "scheme-spec.wasm").toString();
+		String path = workDir.resolve(name + (component ? ".component.wasm" : ".wasm")).toString();
 		HostWasmtime.INSTANCE.copyFileToContainer(Transferable.of(module), path);
-		HostWasmtime.ExecResult result = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
-				"exceptions=y", path);
-		assertThat(result.exitCode()).as("wasmtime exit code (component=%s): %s", component, result.stderr()).isZero();
-		return result.stdout();
+		return HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path);
 	}
 
 	// Runs the body on a thread with the CLI's program stack and rethrows what it threw.

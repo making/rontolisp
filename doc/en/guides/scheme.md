@@ -42,9 +42,13 @@ rontolisp prog.txt --source-language scheme        # any extension
 ## REPL
 
 With no file, `--source-language scheme` starts a Scheme REPL. Values are echoed as
-`write` prints them; a definition, a `set!` and a procedure called for its effect
-(`display`) echo nothing. A form may span lines. An error, a stack overflow included, is
-reported and the session goes on with its definitions.
+`write` prints them. A definition echoes nothing, and neither does the unspecified value
+-- what `display`, `set!`, `for-each` or an `if` with no branch taken answer, also when a
+procedure of your own ends in one. A form may span lines. An error, a stack overflow
+included, is reported and the session goes on with its definitions; `(exit)` ends it.
+With input piped in, the session is a script runner, as the
+[Common Lisp REPL](../getting-started/repl.md) is: no prompt, errors on standard error,
+exit status 1 if any form failed.
 
 ```console
 $ rontolisp --source-language scheme
@@ -56,7 +60,10 @@ scheme> (square 5)
 -5
 scheme> (list #t #f '() 'Sym)
 (#t #f () Sym)
-scheme> (quit)
+scheme> (define (show x) (display x) (newline))
+scheme> (show 'done)
+done
+scheme> (exit)
 ```
 
 Everything `(scheme base)` and `(scheme write)` export -- plus the SICP-compatibility
@@ -77,7 +84,8 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   `lambda`, `if`, `cond` (`else`, `=>`), `case`, `and`, `or`, `when`, `unless`, `let`,
   `let*`, `letrec`, `letrec*`, named `let`, `do`, `begin`, `set!`, `quote`, `quasiquote`,
   `let-values`, `let*-values`, `define-record-type` (top level only), and
-  `(import (scheme base) (scheme write))` with `only` / `except` / `prefix` / `rename`.
+  `(import (scheme base) (scheme write) (scheme process-context))` with `only` /
+  `except` / `prefix` / `rename`.
 - **Procedures**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
   floor-quotient floor-remainder truncate-quotient truncate-remainder abs min max gcd lcm
   expt square floor ceiling round truncate zero? positive? negative? odd? even? number?
@@ -91,9 +99,10 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   vector-length vector-ref vector-set! vector->list list->vector vector-fill!`;
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
   values call-with-values error`; `display write newline write-char write-string` (the
-  current output port only). `write` and `display` write a circular list or vector with
-  datum labels, `#0=(a b c . #0#)`; structure shared without a cycle is written out each
-  time.
+  current output port only); `exit emergency-exit` (`#t` or no argument is status 0, `#f`
+  is 1, an integer is its low eight bits). `write` and `display` write a circular list or
+  vector with datum labels, `#0=(a b c . #0#)`; structure shared without a cycle is
+  written out each time.
 - **SICP compatibility, not R7RS**: `true false nil` (ordinary variables, not literals);
   the whole `(scheme cxr)` set, `caaar` through `cddddr`; `filter reduce fold-left
   fold-right delete last-pair append! list-index 1+ -1+ random runtime`. These are
@@ -148,7 +157,10 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   `guard` to catch it.
 - A record prints in Common Lisp's `#S(...)` syntax. `equal?` compares records by
   identity.
-- `write` prints `'x` as `(quote x)`.
+- `write` prints `'x` as `(quote x)`, and the unspecified value as `#!unspecific`. It is
+  one object, true in a test.
+- `exit` ends the process where it stands, like `emergency-exit`: the `after` thunks of
+  the `dynamic-wind`s it is inside do not run.
 - Error messages spell Common Lisp names (`CAR`).
 - **Not yet**: `define-syntax` / `syntax-rules`, `define-library`, `guard` / `raise`,
   `parameterize`, `case-lambda`, `delay`, bytevectors, ports other than the current

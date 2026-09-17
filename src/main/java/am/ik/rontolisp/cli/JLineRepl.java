@@ -58,7 +58,7 @@ final class JLineRepl {
 		}
 	}
 
-	static void run(SourceSession session, LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
+	static void run(ReplBuffer repl) {
 		selectNativeImageTerminalProvider();
 		// Disable grapheme cluster (mode 2027) detection. JLine probes for it by
 		// sending a DECRQM query (CSI ? 2027 $ p); terminals that do not understand
@@ -66,13 +66,12 @@ final class JLineRepl {
 		try (Terminal terminal = TerminalBuilder.builder().system(true).graphemeCluster(false).build()) {
 			LineReader lineReader = buildLineReader(terminal);
 			while (true) {
-				String prompt = ReplBuffer.prompt(session, evaluator, buffer);
 				String line;
 				try {
-					line = lineReader.readLine(prompt);
+					line = lineReader.readLine(repl.prompt());
 				}
 				catch (UserInterruptException _) {
-					buffer.setLength(0);
+					repl.clear();
 					continue;
 				}
 				catch (EndOfFileException _) {
@@ -81,10 +80,7 @@ final class JLineRepl {
 				if ("(quit)".equals(line.trim())) {
 					break;
 				}
-				buffer.append(line).append('\n');
-				if (session.isComplete(buffer.toString())) {
-					ReplBuffer.eval(session, evaluator, out, buffer);
-				}
+				repl.accept(line);
 			}
 		}
 		catch (IOException ex) {

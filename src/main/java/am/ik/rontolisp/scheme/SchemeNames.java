@@ -15,8 +15,9 @@ package am.ik.rontolisp.scheme;
  * <li>a {@code :} anywhere -- the package resolver splits on it ({@code a:b} is "symbol b
  * of package a");</li>
  * <li>a leading {@code &} -- a lambda-list keyword position;</li>
- * <li>the spelling {@code #f}, which is the false VALUE's symbol and must not be
- * forgeable through {@code string->symbol};</li>
+ * <li>the spellings {@code #f} and {@code #!unspecific}, the false value's and the
+ * unspecified object's symbols, which must not be forgeable through
+ * {@code string->symbol};</li>
  * <li>a leading {@link #PREFIX} itself, so the mapping stays injective.</li>
  * </ul>
  * The same rule is applied to quoted symbols (data) and spelled again in
@@ -59,7 +60,7 @@ final class SchemeNames {
 
 	private static boolean needsEscape(String identifier) {
 		if (identifier.startsWith(PREFIX) || identifier.startsWith("&") || identifier.equals("#f")
-				|| identifier.indexOf(':') >= 0) {
+				|| identifier.equals(SchemeBuiltins.UNSPECIFIED_NAME) || identifier.indexOf(':') >= 0) {
 			return true;
 		}
 		for (int i = 0; i < identifier.length(); i++) {

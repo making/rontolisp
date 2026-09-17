@@ -59,7 +59,7 @@ final class SchemeLowering {
 
 		QUOTE, QUASIQUOTE, UNQUOTE, UNQUOTE_SPLICING, LAMBDA, IF, SET, BEGIN, LET, LET_STAR, LETREC, LETREC_STAR, DO,
 		COND, CASE, AND, OR, WHEN, UNLESS, DEFINE, DEFINE_VALUES, DEFINE_RECORD_TYPE, LET_VALUES, LET_STAR_VALUES,
-		IMPORT, ELSE, ARROW, RAW, RAW_PREDICATE, UNSUPPORTED
+		IMPORT, ELSE, ARROW, RAW, RAW_PREDICATE, UNSPECIFIED, UNSUPPORTED
 
 	}
 
@@ -121,6 +121,10 @@ final class SchemeLowering {
 	private static final LispSymbol CORE_LAMBDA = core("lambda", Core.LAMBDA);
 
 	private static final LispSymbol CORE_RAW_PREDICATE = core("raw-predicate", Core.RAW_PREDICATE);
+
+	// Stands where a desugaring has no expression to put: the missing arm of an if, a
+	// cond or case no clause of which is taken. Lowered to the unspecified object.
+	private static final LispSymbol CORE_UNSPECIFIED = core("unspecified", Core.UNSPECIFIED);
 
 	private static LispSymbol core(String name, Core core) {
 		LispSymbol symbol = new LispSymbol(name);
@@ -239,14 +243,32 @@ final class SchemeLowering {
 	private record Destination(LispSymbol result, List<Target> targets) {
 	}
 
-	private record Context(Scope scope, @Nullable Destination destination) {
+	/**
+	 * Where an expression is lowered.
+	 *
+	 * @param scope the bindings in effect
+	 * @param destination where a statement puts its value, or {@code null} for an
+	 * expression
+	 * @param discarded whether nobody reads the expression's value (a body form before
+	 * the last, a top-level form of a file): an effect then answers its raw Common Lisp
+	 * value instead of the unspecified object, which saves loading it
+	 */
+	private record Context(Scope scope, @Nullable Destination destination, boolean discarded) {
 
-		Context value() {
-			return this.destination == null ? this : new Context(this.scope, null);
+		static Context of(Scope scope) {
+			return new Context(scope, null, false);
+		}
+
+		static Context discarding(Scope scope) {
+			return new Context(scope, null, true);
+		}
+
+		static Context storing(Scope scope, Destination destination) {
+			return new Context(scope, destination, false);
 		}
 
 		Context in(Scope inner) {
-			return new Context(inner, this.destination);
+			return new Context(inner, this.destination, this.discarded);
 		}
 
 	}
@@ -317,6 +339,8 @@ final class SchemeLowering {
 	private final Scope global = new Scope(null);
 
 	private final LispSymbol falseVariable = symbol(SchemeBuiltins.FALSE_VARIABLE);
+
+	private final LispSymbol unspecifiedVariable = symbol(SchemeBuiltins.UNSPECIFIED_VARIABLE);
 
 	private int counter;
 
@@ -425,7 +449,8 @@ final class SchemeLowering {
 	}
 
 	private LispVal falseBinding() {
-		return list(symbol("SETQ"), this.falseVariable, list(symbol("QUOTE"), symbol("#f")));
+		return list(symbol("SETQ"), this.falseVariable, list(symbol("QUOTE"), symbol("#f")), this.unspecifiedVariable,
+				list(symbol("QUOTE"), symbol(SchemeBuiltins.UNSPECIFIED_NAME)));
 	}
 
 	// ------------------------------------------------------------------ imports
@@ -452,6 +477,7 @@ final class SchemeLowering {
 			// expects.
 			imported.putAll(library("sicp"));
 			imported.putAll(library("cxr"));
+			imported.putAll(library("process-context"));
 		}
 		for (Map.Entry<String, Binding> entry : imported.entrySet()) {
 			this.global.bindings.put(SchemeNames.mangle(entry.getKey()), entry.getValue());
@@ -467,11 +493,12 @@ final class SchemeLowering {
 		boolean modifier = parts.size() >= 2 && parts.get(1) instanceof LispCons;
 		if (!modifier) {
 			if (parts.size() == 2 && head.name().equals("scheme") && parts.get(1) instanceof LispSymbol name
-					&& (name.name().equals("base") || name.name().equals("write"))) {
+					&& (name.name().equals("base") || name.name().equals("write")
+							|| name.name().equals("process-context"))) {
 				return library(name.name());
 			}
-			throw error("library " + set.print() + " is not available: this experimental front end has (scheme base)"
-					+ " and (scheme write) only", form);
+			throw error("library " + set.print() + " is not available: this experimental front end has (scheme base),"
+					+ " (scheme write) and (scheme process-context) only", form);
 		}
 		Map<String, Binding> base = importSet(parts.get(1), form);
 		Map<String, Binding> result = new LinkedHashMap<>();
@@ -621,8 +648,9 @@ final class SchemeLowering {
 		}
 	}
 
-	// Answers whether the datum has a value worth echoing: a definition, an import, an
-	// assignment and a procedure called for its effect have none.
+	// Answers whether the datum has a value at all: a definition, an import and a record
+	// type have none. What an expression answers is the value's to say -- an effect's is
+	// the unspecified object, which a session does not echo.
 	private boolean topLevel(LispVal datum, List<LispVal> out) {
 		if (datum instanceof LispCons form) {
 			try {
@@ -643,15 +671,9 @@ final class SchemeLowering {
 							throw error("import must come before everything else", form);
 						}
 					}
-					case SET -> {
-						out.add(value(form, this.global));
-						return false;
-					}
 					case null, default -> {
-						out.add(value(form, this.global));
-						return !(form.car() instanceof LispSymbol head
-								&& lookup(head, this.global) instanceof Builtin builtin
-								&& builtin.entry().result() == SchemeBuiltins.Result.EFFECT);
+						out.add(topLevelValue(form));
+						return true;
 					}
 				}
 				return false;
@@ -663,8 +685,14 @@ final class SchemeLowering {
 				throw SourceProvenance.noteFailure(form, ex);
 			}
 		}
-		out.add(value(datum, this.global));
+		out.add(topLevelValue(datum));
 		return true;
+	}
+
+	// A file never reads a top-level form's value; a session echoes it, and so needs the
+	// unspecified object to know what not to show.
+	private LispVal topLevelValue(LispVal datum) {
+		return lower(datum, this.interactive ? Context.of(this.global) : Context.discarding(this.global));
 	}
 
 	// (defun f (&rest a) (apply f a)): what a call lowered BEFORE the session defined f
@@ -892,7 +920,7 @@ final class SchemeLowering {
 	// ------------------------------------------------------------------ expressions
 
 	private LispVal value(LispVal expression, Scope scope) {
-		return lower(expression, new Context(scope, null));
+		return lower(expression, Context.of(scope));
 	}
 
 	/**
@@ -900,6 +928,9 @@ final class SchemeLowering {
 	 * destination, else to a statement that stores the value in the destination or jumps.
 	 */
 	private LispVal lower(LispVal expression, Context context) {
+		if (expression == CORE_UNSPECIFIED) {
+			return context.discarded() ? LispNil.INSTANCE : leaf(this.unspecifiedVariable, context);
+		}
 		if (expression instanceof LispCons form) {
 			try {
 				return inherit(form, lowerForm(form, context));
@@ -917,6 +948,19 @@ final class SchemeLowering {
 	private LispVal leaf(LispVal valueForm, Context context) {
 		Destination destination = context.destination();
 		return destination == null ? valueForm : list(symbol("SETQ"), destination.result(), valueForm);
+	}
+
+	// A form run for its effect, whose Scheme value is the unspecified object: the raw
+	// form alone where nobody reads the value.
+	private LispVal effect(LispVal effectForm, Context context) {
+		if (context.discarded()) {
+			return effectForm;
+		}
+		Destination destination = context.destination();
+		if (destination == null) {
+			return list(symbol("PROGN"), effectForm, this.unspecifiedVariable);
+		}
+		return list(symbol("PROGN"), effectForm, list(symbol("SETQ"), destination.result(), this.unspecifiedVariable));
 	}
 
 	private LispVal atom(LispVal expression, Scope scope) {
@@ -986,7 +1030,7 @@ final class SchemeLowering {
 				}
 				Test test = test(parts.get(1), scope);
 				LispVal consequent = lower(parts.get(2), context);
-				LispVal alternative = lower(parts.size() == 4 ? parts.get(3) : LispNil.INSTANCE, context);
+				LispVal alternative = lower(parts.size() == 4 ? parts.get(3) : CORE_UNSPECIFIED, context);
 				yield test.negated() ? list(symbol("IF"), test.form(), alternative, consequent)
 						: list(symbol("IF"), test.form(), consequent, alternative);
 			}
@@ -995,12 +1039,12 @@ final class SchemeLowering {
 				if (parts.size() != 3) {
 					throw error("malformed set!", form);
 				}
-				yield leaf(list(symbol("SETQ"), variableSymbol(identifier(parts.get(1), form), scope),
+				yield effect(list(symbol("SETQ"), variableSymbol(identifier(parts.get(1), form), scope),
 						value(parts.get(2), scope)), context);
 			}
 			case BEGIN -> {
 				List<LispVal> parts = elements(form.cdr(), form);
-				yield parts.isEmpty() ? leaf(LispNil.INSTANCE, context)
+				yield parts.isEmpty() ? lower(CORE_UNSPECIFIED, context)
 						: progn(body(parts, context.in(new Scope(scope))));
 			}
 			case LET -> let(form, context);
@@ -1024,10 +1068,11 @@ final class SchemeLowering {
 					throw error("malformed " + syntax.name(), form);
 				}
 				LispVal body = new LispCons(CORE_BEGIN, listOf(parts.subList(2, parts.size())));
-				yield lower(syntax.core() == Core.WHEN ? list(CORE_IF, parts.get(1), body, LispNil.INSTANCE)
-						: list(CORE_IF, parts.get(1), LispNil.INSTANCE, body), context);
+				yield lower(syntax.core() == Core.WHEN ? list(CORE_IF, parts.get(1), body, CORE_UNSPECIFIED)
+						: list(CORE_IF, parts.get(1), CORE_UNSPECIFIED, body), context);
 			}
 			case RAW -> leaf(single(form), context);
+			case UNSPECIFIED -> throw error("misplaced unspecified", form);
 			case RAW_PREDICATE ->
 				leaf(SchemeBuiltins.toSchemeValue(SchemeBuiltins.Result.PREDICATE, single(form)), context);
 			case DEFINE, DEFINE_VALUES ->
@@ -1056,7 +1101,18 @@ final class SchemeLowering {
 				}
 			}
 		}
-		return leaf(call(new Call(form, operator, operands, binding), scope), context);
+		Call call = new Call(form, operator, operands, binding);
+		if (binding instanceof Builtin builtin && builtin.entry().result() == SchemeBuiltins.Result.EFFECT) {
+			return effect(builtinEffect(call, builtin, scope), context);
+		}
+		return leaf(call(call, scope), context);
+	}
+
+	// An effect builtin's raw form: what a call lowers to before the unspecified object
+	// is added.
+	private LispVal builtinEffect(Call call, Builtin builtin, Scope scope) {
+		LispVal literal = displayOfALiteral(call, builtin);
+		return literal != null ? literal : builtinCall(call, builtin, scope);
 	}
 
 	private record Call(LispCons form, LispVal operator, List<LispVal> operands, @Nullable Binding binding) {
@@ -1067,10 +1123,6 @@ final class SchemeLowering {
 			LispVal multipleValues = callWithValues(call, scope);
 			if (multipleValues != null) {
 				return multipleValues;
-			}
-			LispVal literal = displayOfALiteral(call, builtin);
-			if (literal != null) {
-				return literal;
 			}
 			return SchemeBuiltins.toSchemeValue(builtin.entry().result(), builtinCall(call, builtin, scope));
 		}
@@ -1142,15 +1194,14 @@ final class SchemeLowering {
 		if (formals.rest() != null) {
 			return null;
 		}
-		LispVal produced = progn(
-				body(producerParts.subList(2, producerParts.size()), new Context(new Scope(scope), null)));
+		LispVal produced = progn(body(producerParts.subList(2, producerParts.size()), Context.of(new Scope(scope))));
 		Scope inner = new Scope(scope);
 		List<LispVal> variables = new ArrayList<>();
 		for (LispSymbol formal : formals.required()) {
 			variables.add(bind(formal, inner));
 		}
 		return new LispCons(symbol("MULTIPLE-VALUE-BIND"), new LispCons(listOf(variables), new LispCons(produced,
-				listOf(body(consumerParts.subList(2, consumerParts.size()), new Context(inner, null))))));
+				listOf(body(consumerParts.subList(2, consumerParts.size()), Context.of(inner))))));
 	}
 
 	private List<LispVal> values(List<LispVal> expressions, Scope scope) {
@@ -1217,7 +1268,8 @@ final class SchemeLowering {
 				Test inner = test(operands.get(0), scope);
 				return new Test(inner.form(), !inner.negated());
 			}
-			case Builtin builtin when builtin.entry().result() != SchemeBuiltins.Result.VALUE -> {
+			case Builtin builtin when builtin.entry().result() == SchemeBuiltins.Result.PREDICATE
+					|| builtin.entry().result() == SchemeBuiltins.Result.OR_FALSE -> {
 				return new Test(inherit(form, builtinCall(new Call(form, head, operands, builtin), builtin, scope)),
 						false);
 			}
@@ -1288,7 +1340,7 @@ final class SchemeLowering {
 
 	private LispVal desugarCond(List<LispVal> clauses, Scope scope, LispCons form) {
 		if (clauses.isEmpty()) {
-			return LispNil.INSTANCE;
+			return CORE_UNSPECIFIED;
 		}
 		List<LispVal> clause = elements(clauses.get(0), form);
 		if (clause.isEmpty()) {
@@ -1327,7 +1379,7 @@ final class SchemeLowering {
 			throw error("malformed case", form);
 		}
 		LispSymbol key = fresh("K");
-		LispVal chain = LispNil.INSTANCE;
+		LispVal chain = CORE_UNSPECIFIED;
 		for (int i = parts.size() - 1; i >= 2; i--) {
 			List<LispVal> clause = elements(parts.get(i), form);
 			if (clause.size() < 2) {
@@ -1534,7 +1586,7 @@ final class SchemeLowering {
 		List<Target> targets = new ArrayList<>(outer != null ? outer.targets() : List.of());
 		targets.add(target);
 		int closuresBefore = this.closures;
-		List<LispVal> statements = body(loop.body(), new Context(bodyScope, new Destination(result, targets)));
+		List<LispVal> statements = body(loop.body(), Context.storing(bodyScope, new Destination(result, targets)));
 		if (binding.escaped) {
 			return null;
 		}
@@ -1670,7 +1722,7 @@ final class SchemeLowering {
 			parameters.add(bind(formal, inner));
 		}
 		return new Lowered(lambdaList(parameters, spec.formals().rest() != null),
-				body(spec.body(), new Context(new Scope(inner), null)));
+				body(spec.body(), Context.of(new Scope(inner))));
 	}
 
 	// A procedure whose tail calls to itself jump: the parameters arrive in carriers and
@@ -1690,7 +1742,7 @@ final class SchemeLowering {
 		LispSymbol result = fresh("R");
 		int closuresBefore = this.closures;
 		List<LispVal> statements = body(spec.body(),
-				new Context(new Scope(inner), new Destination(result, List.of(target))));
+				Context.storing(new Scope(inner), new Destination(result, List.of(target))));
 		if (!target.used) {
 			return null;
 		}
@@ -1781,7 +1833,7 @@ final class SchemeLowering {
 				lowered.add(inherit(cons, defineValues(cons, scope)));
 			}
 			else {
-				lowered.add(last ? lower(form, context) : value(form, scope));
+				lowered.add(lower(form, last ? context : Context.discarding(scope)));
 			}
 		}
 		if (pairs.isEmpty()) {

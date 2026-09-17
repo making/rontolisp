@@ -26,7 +26,29 @@ class SchemeLoweringTest {
 	@Test
 	void everyProgramBindsTheFalseValueFirst() {
 		assertThat(Scheme.read("", null).stream().map(LispVal::print).toList())
-			.containsExactly("(SETQ RONTOLISP::%SCHEME-FALSE '|#f|)");
+			.containsExactly("(SETQ RONTOLISP::%SCHEME-FALSE '|#f| RONTOLISP::%SCHEME-UNSPECIFIED '|#!unspecific|)");
+	}
+
+	@Test
+	void anEffectAnswersTheUnspecifiedObjectOnlyWhereItsValueIsRead() {
+		// A body form before the last and a top-level form of a file are never read, so
+		// they keep their raw shape; the last form of a procedure body is its value.
+		assertThat(lowered("(define (f v) (display v) (vector-set! v 0 1)) (display 1) (set! y 2)")).isEqualTo(
+				"""
+						(DEFUN |f| (|v|) (RONTOLISP::%SCHEME-DISPLAY |v|) (PROGN (SETF (AREF |v| 0) 1) RONTOLISP::%SCHEME-UNSPECIFIED))
+						(PRINC 1)
+						(SETQ |y| 2)""");
+		// The missing arm of an if, when and unless, and a cond or case with no clause
+		// taken: the object where the value is read, NIL where it is not.
+		assertThat(lowered("(define (g c) (when c 1) (if c 2))")).isEqualTo("""
+				(DEFUN |g| (|c|) (IF (EQ |c| RONTOLISP::%SCHEME-FALSE) NIL 1) \
+				(IF (EQ |c| RONTOLISP::%SCHEME-FALSE) RONTOLISP::%SCHEME-UNSPECIFIED 2))""");
+		assertThat(lowered("(define (h c) (cond (c 1)))")).isEqualTo("""
+				(DEFUN |h| (|c|) (IF (EQ |c| RONTOLISP::%SCHEME-FALSE) RONTOLISP::%SCHEME-UNSPECIFIED 1))""");
+		// An effect is not a test that could be false: its value is the object.
+		assertThat(lowered("(define (k) (if (newline) 1 2))")).isEqualTo(
+				"""
+						(DEFUN |k| NIL (IF (EQ (PROGN (TERPRI) RONTOLISP::%SCHEME-UNSPECIFIED) RONTOLISP::%SCHEME-FALSE) 2 1))""");
 	}
 
 	@Test
@@ -71,9 +93,10 @@ class SchemeLoweringTest {
 	@Test
 	void ifTestsAgainstTheFalseValueAndFusesAPredicate() {
 		assertThat(lowered("(define (f c x) (list (if c 1 2) (if (pair? x) 1 2) (if (not c) 1 2) (if (memq c x) 1)))"))
-			.isEqualTo("""
-					(DEFUN |f| (|c| |x|) (LIST (IF (EQ |c| RONTOLISP::%SCHEME-FALSE) 2 1) (IF (CONSP |x|) 1 2) \
-					(IF (EQ |c| RONTOLISP::%SCHEME-FALSE) 1 2) (IF (MEMBER |c| |x| :TEST #'EQ) 1 NIL)))""");
+			.isEqualTo(
+					"""
+							(DEFUN |f| (|c| |x|) (LIST (IF (EQ |c| RONTOLISP::%SCHEME-FALSE) 2 1) (IF (CONSP |x|) 1 2) \
+							(IF (EQ |c| RONTOLISP::%SCHEME-FALSE) 1 2) (IF (MEMBER |c| |x| :TEST #'EQ) 1 RONTOLISP::%SCHEME-UNSPECIFIED)))""");
 	}
 
 	@Test
@@ -183,10 +206,11 @@ class SchemeLoweringTest {
 		assertThat(lowered("(import (scheme base)) (display x)")).isEqualTo("(|display| |x|)");
 		assertThat(lowered("(import (scheme base) (scheme write)) (display x)"))
 			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY |x|)");
+		assertThat(lowered("(import (scheme process-context)) (exit 2)")).isEqualTo("(RONTOLISP::%SCHEME-EXIT 2)");
 		assertThat(lowered("(import (prefix (only (scheme base) car) s:)) (s:car x)")).isEqualTo("(CAR |x|)");
 		assertThatThrownBy(() -> lowered("(import (scheme char))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |char|) is not available: this experimental front end has"
-					+ " (scheme base) and (scheme write) only");
+					+ " (scheme base), (scheme write) and (scheme process-context) only");
 	}
 
 	@Test

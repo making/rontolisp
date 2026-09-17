@@ -232,9 +232,29 @@ cases:
       10
       b
       2
-      (b () ())
+      (b #!unspecific #!unspecific)
       10
       (fallback 1)
+  - name: an-effect-answers-one-unspecified-object
+    source: |
+      (define (show x) (write x) (newline))
+      (define u-vec (make-vector 1))
+      (define u-var 0)
+      (show (list (if #f #f) (vector-set! u-vec 0 1) (for-each car '()) (set! u-var 1) (display "")))
+      (show (length (list (when #f 1) (cond (#f 1)) (case 1 ((2) 3)))))
+      (show (list (symbol? (if #f #f)) (eq? (if #f #f) (newline)) (if (if #f #f) 'true 'false)))
+      (show (eq? (string->symbol "#!unspecific") (if #f #f)))
+      (define (u-loop i) (if (< i 3) (u-loop (+ i 1))))
+      (show (list (u-loop 0) (do ((i 0 (+ i 1))) ((= i 2))) (let loop ((i 0)) (when (< i 2) (loop (+ i 1))))))
+      (show (map (lambda (x) (vector-fill! u-vec x)) '(1 2)))
+    expected: |
+      (#!unspecific #!unspecific #!unspecific #!unspecific #!unspecific)
+      3
+
+      (#f #t true)
+      #f
+      (#!unspecific #!unspecific #!unspecific)
+      (#!unspecific #!unspecific)
   - name: quote-and-quasiquote
     source: |
       (write '(a (b . c) #(1 x "s") "str" #\a 1.5 1/2 ())) (newline)

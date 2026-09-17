@@ -5,6 +5,8 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
@@ -38,6 +40,11 @@ public final class SourceSession {
 	// The Scheme echo: a closure over the value rather than a form quoting it, which the
 	// resolver would walk -- forever, on a cyclic value.
 	private static final String WRITER = "(lambda (x) (with-output-to-string (*standard-output*) (rontolisp::%scheme-write x)))";
+
+	// The echo skips the unspecified object an effect answers, NIL standing for "nothing
+	// to show".
+	private static final String ECHO = "(lambda (x) (if (eq x rontolisp::%scheme-unspecified) nil"
+			+ " (with-output-to-string (*standard-output*) (rontolisp::%scheme-write x))))";
 
 	private final SourceLanguage language;
 
@@ -98,21 +105,58 @@ public final class SourceSession {
 	/**
 	 * Writes a value the way the language's own {@code write} would: {@code prin1}
 	 * through the {@code print-object} route for Common Lisp, the Scheme printer
-	 * ({@code #t}, {@code #f}, {@code ()}, case-sensitive symbols) for Scheme.
+	 * ({@code #t}, {@code #f}, {@code ()}, case-sensitive symbols) for Scheme -- or
+	 * nothing, for the unspecified object a Scheme effect answers.
 	 * @param value the value to show
 	 * @param evaluator the session's evaluator
-	 * @return the text
+	 * @return the text, or {@code null} when the value is not shown
 	 */
-	public String print(LispVal value, LispEvaluator evaluator) {
+	public @Nullable String echo(LispVal value, LispEvaluator evaluator) {
 		if (this.scheme == null) {
 			return evaluator.prin1ToStringRouted(value);
 		}
+		try {
+			LispVal echoed = evaluator.printThrough(ECHO, value);
+			return echoed instanceof LispString written ? written.value() : null;
+		}
+		catch (RuntimeException ex) {
+			// An echo must never turn a computed value into an error.
+			return value.print();
+		}
+	}
+
+	/**
+	 * What a failed form reports, after {@code Error: }. Common Lisp's is the message.
+	 * Scheme words an application of a non-procedure its own way, whatever the value --
+	 * {@code #f is not a procedure; operands: (2 3)} -- where Common Lisp's designator
+	 * rule would have said {@code The function #f is undefined} for a symbol and
+	 * {@code Not a function: 3} for anything else.
+	 * @param failure what the form raised
+	 * @param evaluator the session's evaluator
+	 * @return the report
+	 */
+	public String describe(RuntimeException failure, LispEvaluator evaluator) {
+		LispApplyException application = this.scheme != null ? LispApplyException.in(failure) : null;
+		if (application == null) {
+			return String.valueOf(failure.getMessage());
+		}
+		String report = write(application.function(), evaluator) + " is not a procedure";
+		if (application.arguments().isEmpty()) {
+			return report;
+		}
+		LispVal operands = LispNil.INSTANCE;
+		for (int i = application.arguments().size() - 1; i >= 0; i--) {
+			operands = new LispCons(application.arguments().get(i), operands);
+		}
+		return report + "; operands: " + write(operands, evaluator);
+	}
+
+	private static String write(LispVal value, LispEvaluator evaluator) {
 		try {
 			return evaluator.printThrough(WRITER, value) instanceof LispString written ? written.value()
 					: value.print();
 		}
 		catch (RuntimeException ex) {
-			// An echo must never turn a computed value into an error.
 			return value.print();
 		}
 	}

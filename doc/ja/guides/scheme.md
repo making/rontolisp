@@ -41,9 +41,13 @@ rontolisp prog.txt --source-language scheme        # any extension
 ## REPL
 
 ファイルを指定せずに `--source-language scheme` を付けると Scheme の REPL が起動します。
-値は `write` の表記でエコーされます。定義、`set!`、副作用のために呼ぶ手続き（`display`）は
-何もエコーしません。フォームは複数行にまたがれます。エラーはスタックオーバーフローも含めて
-報告され、定義を保ったままセッションが続きます。
+値は `write` の表記でエコーされます。定義は何もエコーせず、未規定値 -- `display`、`set!`、
+`for-each`、どの分岐も選ばれなかった `if` が返すもの。自作の手続きの末尾がそれらでも同じ --
+もエコーしません。フォームは複数行にまたがれます。エラーはスタックオーバーフローも含めて
+報告され、定義を保ったままセッションが続きます。`(exit)` で終了します。
+入力をパイプで与えると、[Common Lisp の REPL](../getting-started/repl.md) と同じく
+スクリプト実行器になります: プロンプトを出さず、エラーは標準エラーへ、失敗したフォームが
+あれば終了ステータスは 1 です。
 
 ```console
 $ rontolisp --source-language scheme
@@ -55,7 +59,10 @@ scheme> (square 5)
 -5
 scheme> (list #t #f '() 'Sym)
 (#t #f () Sym)
-scheme> (quit)
+scheme> (define (show x) (display x) (newline))
+scheme> (show 'done)
+done
+scheme> (exit)
 ```
 
 `(scheme base)` と `(scheme write)` がエクスポートする名前 -- それに加えて、後述の
@@ -76,7 +83,8 @@ scheme> (quit)
   `lambda`、`if`、`cond`（`else`、`=>`）、`case`、`and`、`or`、`when`、`unless`、`let`、
   `let*`、`letrec`、`letrec*`、名前付き `let`、`do`、`begin`、`set!`、`quote`、`quasiquote`、
   `let-values`、`let*-values`、`define-record-type`（トップレベルのみ）、および
-  `(import (scheme base) (scheme write))`（`only` / `except` / `prefix` / `rename` 可）。
+  `(import (scheme base) (scheme write) (scheme process-context))`
+  （`only` / `except` / `prefix` / `rename` 可）。
 - **手続き**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
   floor-quotient floor-remainder truncate-quotient truncate-remainder abs min max gcd lcm
   expt square floor ceiling round truncate zero? positive? negative? odd? even? number?
@@ -90,7 +98,8 @@ scheme> (quit)
   vector-length vector-ref vector-set! vector->list list->vector vector-fill!`;
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
   values call-with-values error`; `display write newline write-char write-string`
-  （現在の出力ポートのみ）。`write` と `display` は循環するリストやベクタをデータラベル付きで
+  （現在の出力ポートのみ）; `exit emergency-exit`（`#t` または引数なしはステータス 0、
+  `#f` は 1、整数はその下位 8 ビット）。`write` と `display` は循環するリストやベクタをデータラベル付きで
   `#0=(a b c . #0#)` のように書きます。循環のない共有構造は出現のたびに書き出します。
 - **SICP 互換、R7RS ではない**: `true false nil`（リテラルではなく普通の変数）、
   `(scheme cxr)` 一式（`caaar` から `cddddr` まで）、`filter reduce fold-left fold-right
@@ -145,7 +154,10 @@ scheme> (quit)
   捕捉する `guard` はありません。
 - レコードは Common Lisp の `#S(...)` 構文で表示されます。`equal?` はレコードを同一性で
   比較します。
-- `write` は `'x` を `(quote x)` と表示します。
+- `write` は `'x` を `(quote x)` と、未規定値を `#!unspecific` と表示します。未規定値は
+  1 つのオブジェクトで、条件としては真です。
+- `exit` は `emergency-exit` と同じくその場でプロセスを終了します: 囲んでいる
+  `dynamic-wind` の `after` は実行されません。
 - エラーメッセージには Common Lisp の名前（`CAR`）が出ます。
 - **未対応**: `define-syntax` / `syntax-rules`、`define-library`、`guard` / `raise`、
   `parameterize`、`case-lambda`、`delay`、バイトベクタ、現在の出力ポート以外のポート、
