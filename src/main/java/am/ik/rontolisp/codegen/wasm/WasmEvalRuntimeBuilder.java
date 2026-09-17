@@ -227,8 +227,8 @@ final class WasmEvalRuntimeBuilder {
 	 * prepended. Reads the name (a string struct) from {@code nameSlot} and the value
 	 * from {@code valueSlot}; clobbers {@code tmpSlot} and {@code offScratch}.
 	 */
-	private static void emitStoreFunctionBinding(WasmWriter w, int nameSlot, int valueSlot, int tmpSlot,
-			int offScratch) {
+	private static void emitStoreFunctionBinding(WasmWriter w, int nameSlot, int valueSlot, int tmpSlot, int offScratch,
+			boolean identityHash) {
 		// off = name.offset
 		getLocal(w, nameSlot);
 		refCast(w, WasmLispCompiler.TYPE_STRING);
@@ -246,9 +246,9 @@ final class WasmEvalRuntimeBuilder {
 		// create: $fenv = cons(cons(name, value), $fenv)
 		getLocal(w, nameSlot);
 		getLocal(w, valueSlot);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		emitGetGlobalFenv(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.SET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.ELSE);
@@ -483,7 +483,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @param off the string-table offsets of the special-form symbols
 	 * @return the encoded function body
 	 */
-	static byte[] buildEvalBody(SpecialFormOffsets off) {
+	static byte[] buildEvalBody(SpecialFormOffsets off, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -634,11 +634,11 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, NEWCELL);
 		emitCarOf(w, TMP);
 		getLocal(w, NEWCELL);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, TMP);
 		getLocal(w, TMP);
 		getLocal(w, ELEM);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, ELEM);
 		emitCdrOf(w, BINDCUR);
 		setLocal(w, BINDCUR);
@@ -656,7 +656,7 @@ final class WasmEvalRuntimeBuilder {
 		openSpecial(w, OFF, off.of(LispNames.LAMBDA));
 		getLocal(w, REST);
 		getLocal(w, ENV);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, TMP);
 		i32(w, -1);
 		getLocal(w, TMP);
@@ -674,7 +674,7 @@ final class WasmEvalRuntimeBuilder {
 		i32(w, 6); // "lambda".length()
 		WasmEmitHelper.emitStrBuildCall(w);
 		emitCdrOf(w, REST);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, TMP);
 		// value = eval(lambdaForm, ENV)
 		getLocal(w, TMP);
@@ -683,7 +683,7 @@ final class WasmEvalRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		setLocal(w, NEWCELL);
 		// install into the function namespace (Lisp-2): $fenv, not $genv
-		emitStoreFunctionBinding(w, ACC, NEWCELL, TMP, IDX);
+		emitStoreFunctionBinding(w, ACC, NEWCELL, TMP, IDX, identityHash);
 		getLocal(w, ACC);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -919,11 +919,11 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, BINDCUR);
 		i32(w, 0);
 		i31New(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, NEWCELL); // NEWCELL = mutable binding cell
 		getLocal(w, NEWCELL);
 		getLocal(w, ENV);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, ELEM); // ELEM = extended environment
 		i32(w, 0);
 		setLocal(w, IDX); // IDX = loop counter
@@ -1022,7 +1022,7 @@ final class WasmEvalRuntimeBuilder {
 		// newval = cons(item, eval(place))
 		getLocal(w, ACC);
 		emitEvalCar(w, REST, ENV);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, ACC);
 		// _store(place, newval, env)
 		getLocal(w, BODY);
@@ -1080,7 +1080,7 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, FN);
 		emitCdrOf(w, REST);
 		setLocal(w, REST);
-		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
@@ -1109,7 +1109,7 @@ final class WasmEvalRuntimeBuilder {
 		// mapped = apply(FN, list(car(ELEM)))
 		emitCarOf(w, ELEM);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, NEWCELL);
 		getLocal(w, FN);
 		getLocal(w, NEWCELL);
@@ -1119,7 +1119,7 @@ final class WasmEvalRuntimeBuilder {
 		// append cons(mapped, null)
 		getLocal(w, TMP);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, NEWCELL);
 		emitAppendCell(w, NEWCELL, ARGHEAD, ARGTAIL);
 		emitCdrOf(w, ELEM);
@@ -1150,7 +1150,7 @@ final class WasmEvalRuntimeBuilder {
 		// apply(FN, list(car(ELEM)))
 		emitCarOf(w, ELEM);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, NEWCELL);
 		getLocal(w, FN);
 		getLocal(w, NEWCELL);
@@ -1203,11 +1203,11 @@ final class WasmEvalRuntimeBuilder {
 		// acc = apply(FN, list(acc, car(ELEM)))
 		emitCarOf(w, ELEM);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, NEWCELL);
 		getLocal(w, ACC);
 		getLocal(w, NEWCELL);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, NEWCELL);
 		getLocal(w, FN);
 		getLocal(w, NEWCELL);
@@ -1305,7 +1305,7 @@ final class WasmEvalRuntimeBuilder {
 
 		// ---- list (variadic) ----
 		openSpecial(w, OFF, off.of(LispNames.LIST));
-		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -1405,7 +1405,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		emitCdrOf(w, TMP);
 		setLocal(w, FN);
-		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
@@ -1436,9 +1436,9 @@ final class WasmEvalRuntimeBuilder {
 		i32(w, 0);
 		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.IF, 0x40);
-		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
 		w.write(Instruction.ELSE);
-		emitBuildNArgs(w, REST, ENV, ARITY, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		emitBuildNArgs(w, REST, ENV, ARITY, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
 		w.write(Instruction.END);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
@@ -1459,7 +1459,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		setLocal(w, FN);
-		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
@@ -1528,7 +1528,7 @@ final class WasmEvalRuntimeBuilder {
 	 * list left in {@code headSlot}. Consumes {@code restSlot} and {@code aritySlot}.
 	 */
 	private static void emitBuildNArgs(WasmWriter w, int restSlot, int envSlot, int aritySlot, int headSlot,
-			int tailSlot, int cellSlot, int tmpSlot) {
+			int tailSlot, int cellSlot, int tmpSlot, boolean identityHash) {
 		emitNull(w);
 		setLocal(w, headSlot);
 		emitNull(w);
@@ -1560,7 +1560,7 @@ final class WasmEvalRuntimeBuilder {
 		// cell = cons(val, null); append
 		getLocal(w, tmpSlot);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, cellSlot);
 		emitAppendCell(w, cellSlot, headSlot, tailSlot);
 		// arity--
@@ -1713,7 +1713,7 @@ final class WasmEvalRuntimeBuilder {
 	 * {@code tailSlot}, {@code cellSlot} and {@code tmpSlot}.
 	 */
 	private static void emitBuildArgList(WasmWriter w, int restSlot, int envSlot, int headSlot, int tailSlot,
-			int cellSlot, int tmpSlot) {
+			int cellSlot, int tmpSlot, boolean identityHash) {
 		emitNull(w);
 		setLocal(w, headSlot);
 		emitNull(w);
@@ -1728,7 +1728,7 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, tmpSlot);
 		getLocal(w, tmpSlot);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, cellSlot);
 		// append cell
 		getLocal(w, headSlot);
@@ -1765,7 +1765,7 @@ final class WasmEvalRuntimeBuilder {
 	 * count.
 	 * @return the encoded function body
 	 */
-	static byte[] buildApplyBody(boolean usesEval) {
+	static byte[] buildApplyBody(boolean usesEval, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1885,12 +1885,12 @@ final class WasmEvalRuntimeBuilder {
 			// pair = cons(car(params), pval)
 			emitCarOf(w, PARAMS);
 			getLocal(w, TMP);
-			structNew(w, WasmLispCompiler.TYPE_CONS);
+			WasmEmitHelper.emitNewCons(w, identityHash);
 			setLocal(w, PAIR);
 			// newEnv = cons(pair, newEnv)
 			getLocal(w, PAIR);
 			getLocal(w, NEWENV);
-			structNew(w, WasmLispCompiler.TYPE_CONS);
+			WasmEmitHelper.emitNewCons(w, identityHash);
 			setLocal(w, NEWENV);
 			// params = cdr(params); argcur = argcur null ? null : cdr(argcur)
 			emitCdrOf(w, PARAMS);
@@ -1993,7 +1993,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @param off the string-table offsets of the accessor symbols
 	 * @return the encoded function body
 	 */
-	static byte[] buildStoreBody(SpecialFormOffsets off) {
+	static byte[] buildStoreBody(SpecialFormOffsets off, boolean identityHash) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -2023,9 +2023,9 @@ final class WasmEvalRuntimeBuilder {
 		// not bound anywhere: prepend a new binding to the global environment
 		getLocal(w, PLACE);
 		getLocal(w, VALUE);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		emitGetGlobalEnv(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.SET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_ENV);
 		getLocal(w, VALUE);

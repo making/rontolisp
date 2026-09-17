@@ -5203,8 +5203,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.SYMBOL_FUNCTION)
 				.build();
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
-			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets);
-			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets);
+			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, this.usesIdentityHashTables);
+			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables);
 		}
 		else {
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupStub();
@@ -5214,7 +5214,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// _apply exists whenever the apply runtime does; without the _eval interpreter
 		// its body skips the $fenv and interpreted-closure arms (nothing can create
 		// either without _eval/_store).
-		applyBody = usesApplyRuntime ? WasmEvalRuntimeBuilder.buildApplyBody(usesEval)
+		applyBody = usesApplyRuntime ? WasmEvalRuntimeBuilder.buildApplyBody(usesEval, this.usesIdentityHashTables)
 				: WasmEvalRuntimeBuilder.buildApplyStub();
 
 		// The symbol-API helper bodies (always emitted) embed the offset of the symbol
@@ -5273,7 +5273,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (usesRead) {
 				WasmReadRuntimeBuilder.ReadCtx readCtx = WasmReadRuntimeBuilder.buildReadCtx(stringTable, nilOffset,
 						quoteOffset, functionOffset, ehMode, this.simd, this.usesInstances ? instanceTypeBase() : -1,
-						closRegistry, layoutAddresses);
+						this.usesIdentityHashTables, closRegistry, layoutAddresses);
 				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(readCtx);
 				readListBody = WasmReadRuntimeBuilder.buildReadListBody(readCtx);
 				// FUNC_READ is a RETIRED index: read is prelude rontolisp over read-char
@@ -5287,7 +5287,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				loadBody = WasmReadRuntimeBuilder.buildLoadBody(readCtx);
 				rdCharlitBody = WasmReadRuntimeBuilder.buildRdCharlitBody(readCtx);
 				rdRadixBody = WasmReadRuntimeBuilder.buildRdRadixBody(readCtx);
-				rdBitsBody = WasmReadRuntimeBuilder.buildRdBitsBody();
+				rdBitsBody = WasmReadRuntimeBuilder.buildRdBitsBody(readCtx);
 				rdArrayNBody = WasmReadRuntimeBuilder.buildRdArrayNBody(readCtx);
 				rdPackedBody = WasmReadRuntimeBuilder.buildRdPackedBody(readCtx);
 				rdStructBody = WasmReadRuntimeBuilder.buildRdStructBody(readCtx);

@@ -61,16 +61,17 @@ final class WasmReadRuntimeBuilder {
 	 * offsets, the error mode (EH mode throws a catchable {@code $lisp-cond} with a
 	 * static message; otherwise every reader error is an {@code unreachable} trap, the
 	 * runtime-helper convention), the {@code --simd} packed-array layout switch, the
-	 * instance type (or -1 when instances cannot exist), and the baked blobs: the
-	 * character-name table and the {@code #S} struct directory.
+	 * instance type (or -1 when instances cannot exist), whether the objects it builds
+	 * carry the identity-hash slot, and the baked blobs: the character-name table and the
+	 * {@code #S} struct directory.
 	 */
 	record ReadCtx(int nilOffset, int quoteOffset, int functionOffset, boolean ehMode, boolean simd,
-			int instanceTypeIndex, int structDirBase, int structDirCount, int charNamesBase, int charNamesCount,
-			int aokBase, int pathnameLayoutAddr, Msg msgEof, Msg msgCharEof, Msg msgCharName, Msg msgRadix, Msg msgRank,
-			Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum, Msg msgReadEval, Msg msgFeature,
-			Msg msgLabels, Msg msgBlockComment, Msg msgStructType, Msg msgStructClassHint, Msg msgStructName,
-			Msg msgStructEmpty, Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit, Msg msgDivZero,
-			Msg msgPathname) {
+			int instanceTypeIndex, boolean identityHash, int structDirBase, int structDirCount, int charNamesBase,
+			int charNamesCount, int aokBase, int pathnameLayoutAddr, Msg msgEof, Msg msgCharEof, Msg msgCharName,
+			Msg msgRadix, Msg msgRank, Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum, Msg msgReadEval,
+			Msg msgFeature, Msg msgLabels, Msg msgBlockComment, Msg msgStructType, Msg msgStructClassHint,
+			Msg msgStructName, Msg msgStructEmpty, Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit,
+			Msg msgDivZero, Msg msgPathname) {
 	}
 
 	/**
@@ -99,7 +100,7 @@ final class WasmReadRuntimeBuilder {
 	 * @return the reader context
 	 */
 	static ReadCtx buildReadCtx(WasmLispCompiler.StringTable st, int nilOffset, int quoteOffset, int functionOffset,
-			boolean ehMode, boolean simd, int instanceTypeIndex, ClosRegistry registry,
+			boolean ehMode, boolean simd, int instanceTypeIndex, boolean identityHash, ClosRegistry registry,
 			Map<String, Integer> layoutAddresses) {
 		// character-name table: {nameOff, nameLen, code} triples
 		int[][] nameRefs = new int[CHAR_NAMES.length][3];
@@ -188,8 +189,8 @@ final class WasmReadRuntimeBuilder {
 		// The :allow-other-keys marker the #S pair loop compares base names against
 		// (exact bytes: symbols arrive upcased through _rd_token).
 		int aokBase = st.addString("ALLOW-OTHER-KEYS").offset();
-		return new ReadCtx(nilOffset, quoteOffset, functionOffset, ehMode, simd, instanceTypeIndex, structDirBase,
-				structDirCount, charNamesBase, CHAR_NAMES.length, aokBase,
+		return new ReadCtx(nilOffset, quoteOffset, functionOffset, ehMode, simd, instanceTypeIndex, identityHash,
+				structDirBase, structDirCount, charNamesBase, CHAR_NAMES.length, aokBase,
 				instanceTypeIndex >= 0 && pathnameAddr != null ? pathnameAddr : -1,
 				msg(st, "Unexpected end of input, expected ')'"), msg(st, "Unexpected end of input after #\\"),
 				msg(st, "Unknown character name after #\\"), msg(st, "Invalid digits after #x/#o/#b"),
@@ -369,7 +370,7 @@ final class WasmReadRuntimeBuilder {
 		i32(w, msg.off());
 		i32(w, msg.len());
 		WasmEmitHelper.emitStrBuildCall(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
 		w.write(Instruction.THROW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 	}
@@ -816,14 +817,14 @@ final class WasmReadRuntimeBuilder {
 		// cdr = cons(inner, null)
 		getLocal(w, CAR);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
 		setLocal(w, CDR);
 		// return cons(quoteSym, cdr)
 		i32(w, ctx.quoteOffset());
 		i32(w, QUOTE_LEN);
 		WasmEmitHelper.emitStrBuildCall(w);
 		getLocal(w, CDR);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
 		w.write(Instruction.RETURN);
 		end(w);
 
@@ -963,13 +964,13 @@ final class WasmReadRuntimeBuilder {
 		setLocal(w, CAR);
 		getLocal(w, CAR);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
 		setLocal(w, CDR);
 		i32(w, ctx.functionOffset());
 		i32(w, FUNCTION_LEN);
 		WasmEmitHelper.emitStrBuildCall(w);
 		getLocal(w, CDR);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
 		w.write(Instruction.RETURN);
 		end(w);
 
@@ -1047,7 +1048,7 @@ final class WasmReadRuntimeBuilder {
 			i32(w, 1);
 			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
 			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-			structNew(w, ctx.instanceTypeIndex());
+			WasmEmitHelper.emitNewInstance(w, ctx.instanceTypeIndex(), ctx.identityHash());
 			w.write(Instruction.RETURN);
 		}
 		else {
@@ -1975,7 +1976,7 @@ final class WasmReadRuntimeBuilder {
 		// cons(car, cdr)
 		getLocal(w, CAR);
 		getLocal(w, CDR);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -2859,7 +2860,7 @@ final class WasmReadRuntimeBuilder {
 	// _rd_bits () -> value: cursor just past "#*"; consumes 0/1 bytes into the general
 	// runtime array shape (the frontend's bit-vector lowering -- no packed bits),
 	// stamped with the remembered element type bit.
-	static byte[] buildRdBitsBody() {
+	static byte[] buildRdBitsBody(ReadCtx ctx) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
@@ -2939,7 +2940,8 @@ final class WasmReadRuntimeBuilder {
 		arraySet(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
 		// A bit vector read at run time is stamped with the remembered element type
 		// bit, like the frontend's #* lowering (.todo/043).
-		emitGeneralArrayCell(w, DIMS, DATA, WasmArrayCompiler.elementTypeMarker(am.ik.rontolisp.ArrayElementTypes.BIT));
+		emitGeneralArrayCell(w, DIMS, DATA, WasmArrayCompiler.elementTypeMarker(am.ik.rontolisp.ArrayElementTypes.BIT),
+				ctx);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -2949,26 +2951,26 @@ final class WasmReadRuntimeBuilder {
 	 * cons(dims, cons(cons(nil, cons(nil, i31 0)), data)) }} -- the exact shape the quote
 	 * path and make-array build (no fill pointer, not adjustable, offset 0).
 	 */
-	private static void emitGeneralArrayCell(WasmWriter w, int DIMS, int DATA) {
-		emitGeneralArrayCell(w, DIMS, DATA, 0);
+	private static void emitGeneralArrayCell(WasmWriter w, int DIMS, int DATA, ReadCtx ctx) {
+		emitGeneralArrayCell(w, DIMS, DATA, 0, ctx);
 	}
 
 	/**
 	 * {@link #emitGeneralArrayCell(WasmWriter, int, int)} with an explicit meta marker
 	 * word: the remembered element type's marker for a stamped array.
 	 */
-	private static void emitGeneralArrayCell(WasmWriter w, int DIMS, int DATA, int marker) {
+	private static void emitGeneralArrayCell(WasmWriter w, int DIMS, int DATA, int marker, ReadCtx ctx) {
 		getLocal(w, DIMS);
 		emitNull(w);
 		emitNull(w);
 		i32(w, marker);
 		i31New(w);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
 		getLocal(w, DATA);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
-		structNew(w, WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
+		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
+		WasmEmitHelper.emitNewCell(w, ctx.identityHash());
 	}
 
 	// _rd_len (v) -> i32: proper-list length; an improper tail signals.
@@ -3281,7 +3283,7 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 0);
 		call(w, WasmLispCompiler.FUNC_RD_FLAT);
 		w.write(Instruction.DROP);
-		emitGeneralArrayCell(w, DIMS, DATA);
+		emitGeneralArrayCell(w, DIMS, DATA, ctx);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -4408,7 +4410,7 @@ final class WasmReadRuntimeBuilder {
 		// the instance: %obj-new's exact shape
 		getLocal(w, LAYADDR);
 		getLocal(w, SLOTS);
-		structNew(w, ctx.instanceTypeIndex());
+		WasmEmitHelper.emitNewInstance(w, ctx.instanceTypeIndex(), ctx.identityHash());
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
