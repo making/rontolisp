@@ -1,0 +1,5 @@
+;; Mutual tail recursion, the shape the front end can NOT turn into a loop.
+;; @N@ is substituted by run.sh.
+(defun |even?| (|n|) (if (= |n| 0) t (|odd?| (- |n| 1))))
+(defun |odd?| (|n|) (if (= |n| 0) nil (|even?| (- |n| 1))))
+(print (|even?| @N@))

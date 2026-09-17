@@ -1,0 +1,5 @@
+;; A Scheme top-level (define x 1) must stay LEXICAL: a local binding of the same name
+;; must not be visible to a callee. Scheme answers 1. @DEF@ is defvar or setq.
+(@DEF@ |x| 1)
+(defun |get| () |x|)
+(print (let ((|x| 2)) (|get|)))
