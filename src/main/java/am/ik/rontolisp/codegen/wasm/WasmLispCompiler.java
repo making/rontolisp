@@ -4923,12 +4923,22 @@ public final class WasmLispCompiler implements LispCompiler {
 				? WasmRuntimeBuilder.buildArityChkBody(arityReport) : WasmRuntimeBuilder.buildArityChkStubBody())
 				: new byte[0];
 		int arityChkIndex = arityReport != null ? arityChkFuncIndex() : -1;
+		// What a dispatcher throws for a value that names no function: EH mode only,
+		// where a throw has a tag and a catcher (the entry landing pad at least).
+		WasmRuntimeBuilder.NotFunctionReport notFunctionReport = ehMode ? new WasmRuntimeBuilder.NotFunctionReport(
+				stringTable,
+				this.usesInstances
+						? conditionInstance(ClosRegistry.TYPE_ERROR_CLASS_NAME, closRegistry, layoutAddresses) : null,
+				this.usesInstances
+						? conditionInstance(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME, closRegistry, layoutAddresses)
+						: null,
+				this.usesIdentityHashTables) : null;
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed(), this.usesIdentityHashTables);
+						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables);
 				dispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -4952,7 +4962,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(0, defuns, lambdaDecls,
 					numDefuns, stringTable, usesEval, userFuncBase(), true, dispatchableFuncIds,
 					dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-					this.optimize.prefersSizeOverSpeed(), this.usesIdentityHashTables);
+					this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables);
 			dispatchBodies.add(built.body());
 			for (byte[] page : built.pages()) {
 				dispatchPageBodies.add(page);
@@ -4981,7 +4991,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed(), this.usesIdentityHashTables);
+						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables);
 				extraDispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -8049,24 +8059,40 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	private WasmRuntimeBuilder.@Nullable ArityReport arityReport(boolean on, ClosRegistry closRegistry,
 			StringTable stringTable, Map<String, Integer> layoutAddresses) {
-		String tag = LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PROGRAM_ERROR_CLASS_NAME;
-		Integer address = layoutAddresses.get(tag);
-		ClosRegistry.ClassInfo info = closRegistry.findClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME);
-		LispLayout layout = closRegistry.findLayoutByTag(tag);
-		if (!on || address == null || info == null || layout == null) {
+		WasmRuntimeBuilder.ConditionInstance instance = on
+				? conditionInstance(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, closRegistry, layoutAddresses) : null;
+		if (instance == null) {
 			return null;
 		}
-		int formatControl = -1;
+		return new WasmRuntimeBuilder.ArityReport(stringTable, instance.layoutAddress(), instance.instanceTypeIndex(),
+				instance.slotCapacity(), instance.formatControlSlot(), this.usesIdentityHashTables);
+	}
+
+	/**
+	 * The seeded condition class a runtime helper can construct, or {@code null} when
+	 * this module did not bake its layout (or the class reports no
+	 * {@code format-control}).
+	 * @param className the seeded condition class name
+	 * @param closRegistry the class registry, for the slot layout
+	 * @param layoutAddresses the baked instance layout records
+	 * @return the instance shape, or null
+	 */
+	private WasmRuntimeBuilder.@Nullable ConditionInstance conditionInstance(String className,
+			ClosRegistry closRegistry, Map<String, Integer> layoutAddresses) {
+		String tag = LispLayout.CLASS_TAG_PREFIX + className;
+		Integer address = layoutAddresses.get(tag);
+		ClosRegistry.ClassInfo info = closRegistry.findClass(className);
+		LispLayout layout = closRegistry.findLayoutByTag(tag);
+		if (address == null || info == null || layout == null) {
+			return null;
+		}
 		for (int i = 0; i < info.slots().size(); i++) {
 			if ("FORMAT-CONTROL".equals(info.slots().get(i).baseName())) {
-				formatControl = i;
+				return new WasmRuntimeBuilder.ConditionInstance(address, instanceTypeBase(), layout.capacity(), i,
+						this.usesIdentityHashTables);
 			}
 		}
-		if (formatControl < 0) {
-			return null;
-		}
-		return new WasmRuntimeBuilder.ArityReport(stringTable, address, instanceTypeBase(), layout.capacity(),
-				formatControl, this.usesIdentityHashTables);
+		return null;
 	}
 
 	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds,
@@ -9247,13 +9273,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * True when the program writes {@code (make-hash-table :test 'eq)} or
 		 * {@code (make-hash-table :test 'eql)} somewhere, so a table can carry the
 		 * two-bit TEST TAG in its header count and the table primitives compare and place
-		 * by it -- and, the SAME answer, so every {@code TYPE_CONS}, {@code TYPE_CELL} and
-		 * {@code TYPE_INSTANCE} of the module carries the trailing identity-hash slot the
-		 * placement reads ({@code WasmIdentityHashRuntimeBuilder}): the type section
+		 * by it -- and, the SAME answer, so every {@code TYPE_CONS}, {@code TYPE_CELL}
+		 * and {@code TYPE_INSTANCE} of the module carries the trailing identity-hash slot
+		 * the placement reads ({@code WasmIdentityHashRuntimeBuilder}): the type section
 		 * declares the slot and every allocation site pushes its 0 through
-		 * {@code WasmEmitHelper.emitNewCons/emitNewCell/emitNewInstance} by this one flag.
-		 * Carried into each top-level chunk context like the fold flag above, for the same
-		 * agreement reason; a program with neither keeps its exact bytes.
+		 * {@code WasmEmitHelper.emitNewCons/emitNewCell/emitNewInstance} by this one
+		 * flag. Carried into each top-level chunk context like the fold flag above, for
+		 * the same agreement reason; a program with neither keeps its exact bytes.
 		 */
 		boolean usesIdentityHashTables = false;
 

@@ -1902,7 +1902,7 @@ final class WasmRuntimeBuilder {
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase, boolean identityHash) {
 		DispatchFunctions built = buildDispatch(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase,
-				false, null, 0, null, -1, false, identityHash);
+				false, null, 0, null, -1, false, null, identityHash);
 		if (!built.pages().isEmpty()) {
 			throw new IllegalStateException("dispatcher for arity " + arity + " needs pages; use buildDispatch");
 		}
@@ -1946,12 +1946,15 @@ final class WasmRuntimeBuilder {
 	 * the default arm, which is where an unresolvable designator already went.
 	 * @param pageFuncBase the module function index the first page would take, when this
 	 * dispatcher needs pages
+	 * @param notFunction what applying a non-function throws, or {@code null} outside EH
+	 * mode, where it traps
 	 * @return the dispatcher body and its pages
 	 */
 	static DispatchFunctions buildDispatch(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase, boolean spread, @Nullable Set<Integer> dispatchable, int pageFuncBase,
-			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders, boolean identityHash) {
+			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders,
+			@Nullable NotFunctionReport notFunction, boolean identityHash) {
 		int dispatchArgs = spread ? 1 : arity;
 		List<DispatchTarget> targets = dispatchTargets(arity, defuns, lambdaDecls, spread, dispatchable, userFuncBase);
 		// The callables this dispatcher CANNOT serve: their funcId reaching it is a call
@@ -1982,9 +1985,11 @@ final class WasmRuntimeBuilder {
 		if (maxFuncId < DISPATCH_PAGE_BUDGET_BYTES) {
 			ByteArrayOutputStream body = new ByteArrayOutputStream();
 			WasmWriter w = new WasmWriter(body);
-			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, report != null, identityHash);
+			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, report != null, notFunction, identityHash);
 			emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, 0, report, arityChkIndex,
 					sharedConsReaders, identityHash);
+			emitDispatchEpilogue(w, dispatchArgs, notFunction);
+			w.write(Instruction.END); // end function
 			byte[] single = body.toByteArray();
 			// levels == 1: every callable is inside one page already, so the body is
 			// large because its CASES are (a spread dispatcher over ten-parameter
@@ -2031,7 +2036,7 @@ final class WasmRuntimeBuilder {
 		// before, then the top digit selects a page instead of a case.
 		ByteArrayOutputStream rootBody = new ByteArrayOutputStream();
 		WasmWriter rw = new WasmWriter(rootBody);
-		emitDispatchPrologue(rw, arity, dispatchArgs, spread, usesEval, report != null, identityHash);
+		emitDispatchPrologue(rw, arity, dispatchArgs, spread, usesEval, report != null, notFunction, identityHash);
 		int funcIdLocal = dispatchArgs + 1;
 		rw.write(Instruction.GET_LOCAL);
 		rw.writeUnsignedLeb128(funcIdLocal);
@@ -2041,6 +2046,7 @@ final class WasmRuntimeBuilder {
 		rw.write(Instruction.SET_LOCAL);
 		rw.writeUnsignedLeb128(funcIdLocal);
 		emitPageTable(rw, childIndex, dispatchArgs, funcIdLocal);
+		emitDispatchEpilogue(rw, dispatchArgs, notFunction);
 		rw.write(Instruction.END); // end function
 		return new DispatchFunctions(rootBody.toByteArray(), pages);
 	}
@@ -2121,6 +2127,172 @@ final class WasmRuntimeBuilder {
 			this.argument = quoted(ClosRegistry.ARITY_ARGUMENT);
 			this.plural = quoted(ClosRegistry.ARITY_PLURAL);
 			this.infix = quoted(ClosRegistry.ARITY_MESSAGE_INFIX);
+		}
+
+		private WasmLispCompiler.StringTable.StringEntry quoted(String text) {
+			return this.stringTable.addBodyString("\"" + text + "\"");
+		}
+
+	}
+
+	/**
+	 * A seeded condition class a dispatcher can construct: its baked layout and slot
+	 * shape, with the message in {@code format-control} and every other slot nil.
+	 *
+	 * @param layoutAddress the baked layout record
+	 * @param instanceTypeIndex the module's instance struct type
+	 * @param slotCapacity the layout's reserved slot count
+	 * @param formatControlSlot the index of the class's {@code format-control} slot
+	 * @param identityHash whether the module's instances and conses carry the
+	 * identity-hash slot
+	 */
+	record ConditionInstance(int layoutAddress, int instanceTypeIndex, int slotCapacity, int formatControlSlot,
+			boolean identityHash) {
+	}
+
+	/**
+	 * What a dispatcher throws for a value that names no function, in EH mode: the
+	 * interpreter's text -- {@code The function NAME is undefined} for a symbol, NIL
+	 * included, and {@link ClosRegistry#NOT_A_FUNCTION_MESSAGE_PREFIX} plus the value
+	 * printed for anything else.
+	 *
+	 * <p>
+	 * The class rides on a layout the module already has. A program that NAMES
+	 * {@code type-error} (or {@code undefined-function}) has that layout baked, and gets
+	 * the typed instance a clause can match; one that does not cannot tell the instance
+	 * from a message-only payload -- its {@code error} clause and the entry landing pad
+	 * report the same text either way -- so it gets the payload and bakes nothing new.
+	 * The pieces are interned on first use, as {@link ArityReport}'s are.
+	 */
+	static final class NotFunctionReport {
+
+		private final WasmLispCompiler.StringTable stringTable;
+
+		private final @Nullable ConditionInstance typeError;
+
+		private final @Nullable ConditionInstance undefinedFunction;
+
+		private final boolean identityHash;
+
+		private WasmLispCompiler.StringTable.@Nullable StringEntry notFunctionPrefix;
+
+		private WasmLispCompiler.StringTable.@Nullable StringEntry undefinedPrefix;
+
+		private WasmLispCompiler.StringTable.@Nullable StringEntry undefinedSuffix;
+
+		NotFunctionReport(WasmLispCompiler.StringTable stringTable, @Nullable ConditionInstance typeError,
+				@Nullable ConditionInstance undefinedFunction, boolean identityHash) {
+			this.stringTable = stringTable;
+			this.typeError = typeError;
+			this.undefinedFunction = undefinedFunction;
+			this.identityHash = identityHash;
+		}
+
+		private void intern() {
+			if (this.notFunctionPrefix == null) {
+				this.notFunctionPrefix = quoted(ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX);
+				this.undefinedPrefix = quoted(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX);
+				this.undefinedSuffix = quoted(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX);
+			}
+		}
+
+		/**
+		 * The {@code $undefined} arm, reached with local 0 holding a {@code TYPE_STRING}
+		 * or nil. A quote-framed string shares the struct with a symbol and missed the
+		 * registry the same way, so it branches on to the {@code $notFunction} arm that
+		 * directly follows this one. A symbol reports its name as the interpreter's
+		 * {@code symbol.name()} spells it: the {@code princ} text, except that a keyword
+		 * keeps its colon, which only {@code prin1} writes.
+		 * @param w the writer
+		 * @param msgLocal a spare {@code (ref null eq)} local
+		 * @param byteLocal a spare {@code i32} local
+		 */
+		void emitUndefinedThrow(WasmWriter w, int msgLocal, int byteLocal) {
+			intern();
+			// the name's first byte, 0 for nil
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.IF, Type.I32.code());
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			WasmEmitHelper.emitStrBytesArray(w);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+			w.write(Instruction.END);
+			w.write(Instruction.TEE_LOCAL);
+			w.writeUnsignedLeb128(byteLocal);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128('"');
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(0); // $notFunction
+			emitStrConst(w, Objects.requireNonNull(this.undefinedPrefix));
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(byteLocal);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(':');
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF);
+			w.writeRefType(true, Type.EQ.code());
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
+			w.write(Instruction.END);
+			emitConcat(w);
+			emitStrConst(w, Objects.requireNonNull(this.undefinedSuffix));
+			emitConcat(w);
+			emitThrow(w, this.undefinedFunction, msgLocal, this.identityHash);
+		}
+
+		/**
+		 * The {@code $notFunction} arm: the value in local 0 printed after
+		 * {@link ClosRegistry#NOT_A_FUNCTION_MESSAGE_PREFIX}.
+		 * @param w the writer
+		 * @param msgLocal a spare {@code (ref null eq)} local
+		 */
+		void emitNotFunctionThrow(WasmWriter w, int msgLocal) {
+			intern();
+			emitStrConst(w, Objects.requireNonNull(this.notFunctionPrefix));
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+			emitConcat(w);
+			emitThrow(w, this.typeError, msgLocal, this.identityHash);
+		}
+
+		/**
+		 * Throws the message on the stack: as the class's instance when the module baked
+		 * its layout, as a message-only payload otherwise. Overwrites local 0, whose
+		 * value is dead once its text is built.
+		 */
+		private static void emitThrow(WasmWriter w, @Nullable ConditionInstance instance, int msgLocal,
+				boolean identityHash) {
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(msgLocal);
+			if (instance != null) {
+				emitConditionThrow(w, instance, 0, msgLocal);
+				return;
+			}
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(msgLocal);
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 		}
 
 		private WasmLispCompiler.StringTable.StringEntry quoted(String text) {
@@ -2333,11 +2505,22 @@ final class WasmRuntimeBuilder {
 		emitConcat(w);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(msgLocal);
-		// the instance: every slot nil but format-control, which holds the message
+		emitConditionThrow(w, new ConditionInstance(report.layoutAddress, report.instanceTypeIndex, report.slotCapacity,
+				report.formatControlSlot, report.identityHash), slotsLocal, msgLocal);
+	}
+
+	/**
+	 * Builds the condition instance the way {@code %obj-new} does -- every slot nil but
+	 * {@code format-control}, which holds the message in {@code msgLocal} -- and throws
+	 * the {@code (instance . message)} payload on {@code $lisp-cond}, the channel
+	 * {@code %error-cond} uses, so a clause naming the class matches and the entry
+	 * landing pad reports it. {@code slotsLocal} is a spare {@code (ref null eq)}.
+	 */
+	private static void emitConditionThrow(WasmWriter w, ConditionInstance instance, int slotsLocal, int msgLocal) {
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(report.slotCapacity);
+		w.writeSignedLeb128(instance.slotCapacity());
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.SET_LOCAL);
@@ -2347,20 +2530,20 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(report.formatControlSlot);
+		w.writeSignedLeb128(instance.formatControlSlot());
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(msgLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(report.layoutAddress);
+		w.writeSignedLeb128(instance.layoutAddress());
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(slotsLocal);
-		WasmEmitHelper.emitNewInstance(w, report.instanceTypeIndex, report.identityHash);
+		WasmEmitHelper.emitNewInstance(w, instance.instanceTypeIndex(), instance.identityHash());
 		// the payload: (condition-instance . message)
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(msgLocal);
-		WasmEmitHelper.emitNewCons(w, report.identityHash);
+		WasmEmitHelper.emitNewCons(w, instance.identityHash());
 		w.write(Instruction.THROW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 	}
@@ -2476,7 +2659,7 @@ final class WasmRuntimeBuilder {
 	 * parameters, and local 0 holding a CLOSURE struct whatever the caller passed.
 	 */
 	private static void emitDispatchPrologue(WasmWriter w, int arity, int dispatchArgs, boolean spread,
-			boolean usesEval, boolean reporting, boolean identityHash) {
+			boolean usesEval, boolean reporting, @Nullable NotFunctionReport notFunction, boolean identityHash) {
 		// Locals: param 0 = funcval, params 1..arity = args
 		// Extra locals: funcId (i32) and the arg list for the _apply fallback (ref); a
 		// reporting dispatcher adds ONE more ref for the message it assembles, so a
@@ -2490,64 +2673,67 @@ final class WasmRuntimeBuilder {
 		int funcIdLocal = dispatchArgs + 1; // after params
 		int argListLocal = dispatchArgs + 2;
 
-		// A SYMBOL funcval (a TYPE_STRING) is a function designator resolved through
-		// the eval registry's _lookup by its interned offset -- the interpreter's
-		// late binding (cl-postgres passes 'list-row-reader through exec-query).
-		// Without the eval runtime _lookup is the always--1 stub, so the miss arm
-		// traps exactly where the closure cast used to.
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0); // funcval
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeUnsignedLeb128(0); // field 0: interned offset
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(funcIdLocal);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(funcIdLocal);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(-1);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.UNREACHABLE); // undefined function
-		w.write(Instruction.END);
-		// funcId = record.funcId (record: {nameOffset, funcId, arity})
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(funcIdLocal);
-		w.write(Instruction.I32_LOAD, 0x02, 0x04);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(funcIdLocal);
-		// Every case body casts the funcval to the closure struct for its env (the
-		// uniform calling convention), so replace the SYMBOL with a synthesized
-		// {funcId, null-env} closure -- exactly the value #'name would have produced.
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(funcIdLocal);
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.ELSE);
-		// Extract funcId from closure struct
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0); // funcval
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
-		w.writeUnsignedLeb128(0); // field 0: funcId
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(funcIdLocal);
-		w.write(Instruction.END);
+		if (notFunction == null) {
+			// A SYMBOL funcval (a TYPE_STRING) is a function designator resolved through
+			// the eval registry's _lookup by its interned offset -- the interpreter's
+			// late binding (cl-postgres passes 'list-row-reader through exec-query).
+			// Without the eval runtime _lookup is the always--1 stub, so the miss arm
+			// traps exactly where the closure cast used to -- as does anything that is
+			// neither, on the cast. Outside EH mode nothing could catch a report, so
+			// both stay the traps they always were, byte for byte.
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0); // funcval
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+			w.write(Instruction.IF, 0x40);
+			emitSymbolLookup(w, funcIdLocal);
+			w.write(Instruction.IF, 0x40);
+			w.write(Instruction.UNREACHABLE); // undefined function
+			w.write(Instruction.END);
+			emitSymbolClosure(w, funcIdLocal);
+			w.write(Instruction.ELSE);
+			emitClosureFuncId(w, funcIdLocal);
+			w.write(Instruction.END);
+		}
+		else {
+			// In EH mode a value that names no function THROWS. A closure is tested FIRST
+			// and branches straight to the cast, so a function value pays the two type
+			// checks and the one branch the symbol-first order cost it. What is not one
+			// branches OUT to the arms emitDispatchEpilogue closes the function with --
+			// $undefined for a symbol, NIL included, no function answers, $notFunction
+			// for anything else -- so no cold code sits between the prologue and the
+			// dispatch. A resolved symbol joins the closure path as the closure it was
+			// replaced with.
+			w.write(Instruction.BLOCK, 0x40); // $notFunction
+			w.write(Instruction.BLOCK, 0x40); // $undefined
+			w.write(Instruction.BLOCK, 0x40); // $closure
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(0); // $closure
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(2); // $undefined: NIL is a symbol
+			w.write(Instruction.BR);
+			w.writeUnsignedLeb128(3); // $notFunction
+			w.write(Instruction.END);
+			emitSymbolLookup(w, funcIdLocal);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(1); // $undefined
+			emitSymbolClosure(w, funcIdLocal);
+			w.write(Instruction.END); // $closure
+			emitClosureFuncId(w, funcIdLocal);
+		}
 
 		// Interpreted closure (funcId == -1, created by the eval runtime's lambda):
 		// delegate to _apply with the arguments collected into a cons list
@@ -2583,6 +2769,83 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * Closes a dispatcher the prologue opened in EH mode, ahead of the function's own
+	 * {@code end}: the dispatch's value is returned, and the two arms its non-function
+	 * branches land in follow it. Nothing outside EH mode.
+	 */
+	private static void emitDispatchEpilogue(WasmWriter w, int dispatchArgs, @Nullable NotFunctionReport notFunction) {
+		if (notFunction == null) {
+			return;
+		}
+		int funcIdLocal = dispatchArgs + 1;
+		int argListLocal = dispatchArgs + 2;
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // $undefined
+		notFunction.emitUndefinedThrow(w, argListLocal, funcIdLocal);
+		w.write(Instruction.END); // $notFunction
+		notFunction.emitNotFunctionThrow(w, argListLocal);
+	}
+
+	/**
+	 * Resolves the SYMBOL in local 0 through {@code _lookup}, leaving the record address
+	 * in the funcId local and pushing 1 when no function answers.
+	 */
+	private static void emitSymbolLookup(WasmWriter w, int funcIdLocal) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(0); // field 0: interned offset
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(funcIdLocal);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(funcIdLocal);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-1);
+		w.write(Instruction.I32_EQ);
+	}
+
+	/**
+	 * Reads the funcId out of a resolved lookup record and replaces the SYMBOL in local 0
+	 * with a synthesized {@code {funcId, null-env}} closure -- exactly the value
+	 * {@code #'name} would have produced, since every case body casts the funcval to the
+	 * closure struct for its env (the uniform calling convention).
+	 */
+	private static void emitSymbolClosure(WasmWriter w, int funcIdLocal) {
+		// funcId = record.funcId (record: {nameOffset, funcId, arity})
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(funcIdLocal);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(funcIdLocal);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(funcIdLocal);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(0);
+	}
+
+	/** Extracts the funcId from the closure struct in local 0. */
+	private static void emitClosureFuncId(WasmWriter w, int funcIdLocal) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0); // funcval
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		w.writeUnsignedLeb128(0); // field 0: funcId
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(funcIdLocal);
+	}
+
+	/**
 	 * The {@code br_table} over {@code targets} and their case bodies, ending the
 	 * function. {@code funcIdBias} is subtracted from every funcId first, so a leaf page
 	 * tables over its own 256 slots rather than over the program's whole funcId space.
@@ -2594,7 +2857,6 @@ final class WasmRuntimeBuilder {
 		int argListLocal = dispatchArgs + 2;
 		if (targets.isEmpty() && missShapes.isEmpty()) {
 			w.write(Instruction.UNREACHABLE);
-			w.write(Instruction.END);
 			return;
 		}
 
@@ -2761,8 +3023,6 @@ final class WasmRuntimeBuilder {
 
 		// End result block
 		w.write(Instruction.END); // $result
-
-		w.write(Instruction.END); // end function
 	}
 
 	/**
@@ -2779,6 +3039,7 @@ final class WasmRuntimeBuilder {
 		emitPageFuncIdDigit(w, dispatchArgs, 0);
 		emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, page << DISPATCH_PAGE_BITS, report,
 				arityChkIndex, sharedConsReaders, identityHash);
+		w.write(Instruction.END); // end function
 		return body.toByteArray();
 	}
 

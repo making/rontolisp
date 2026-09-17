@@ -4085,6 +4085,21 @@ class JvmLispCompilerTest {
 	// used to answer nil, so an ANSI signals-error test passed interpreted and returned a
 	// wrong value compiled (.kb/error-handling.md).
 	@Test
+	void compileAndRunApplyingANonFunctionSignalsTheInterpretersCondition() throws Exception {
+		// The dispatchers used to leak a ClassCastException (a NullPointerException for
+		// nil), and _apply answered nil for anything it could not call.
+		String defs = "(defun try (f) (handler-case (funcall f 1) (type-error (c) (list :type (princ-to-string c)))"
+				+ " (undefined-function (c) (list :undefined (princ-to-string c))) (error (c) :plain))) ";
+		assertThat(compileAndRun(defs + "(print (list (try 3) (try \"s\") (try '(1 2)) (try nil) (try 'nosuch)))"))
+			.isEqualTo("((:TYPE \"Not a function: 3\") (:TYPE \"Not a function: \\\"s\\\"\")"
+					+ " (:TYPE \"Not a function: (1 2)\") (:UNDEFINED \"The function NIL is undefined\")"
+					+ " (:UNDEFINED \"The function NOSUCH is undefined\"))");
+		assertThat(compileAndRun(defs + "(print (list (try #'1+) (handler-case (apply (car (list 3)) '(1 2))"
+				+ " (type-error (c) (princ-to-string c)))))"))
+			.isEqualTo("(2 \"Not a function: 3\")");
+	}
+
+	@Test
 	void compileAndRunWrongArityThroughAFunctionValueSignalsProgramError() throws Exception {
 		String defs = "(defun f (x) x) (defun g (x &rest r) (list x r)) ";
 		String caught = "(print (handler-case %s (program-error (c) (princ-to-string c)) (error (c) :plain)))";
@@ -14806,7 +14821,10 @@ class JvmLispCompilerTest {
 		// divides and then floats -- the complex gate needs its recompile net for the
 		// same reason, and that machinery is disproportionate here. The budget still
 		// catches what it was built for (no array runtime; far below the 13,654 above).
-		assertThat(classBytes.length).isLessThan(8_400);
+		// 8,604 since the dispatcher reports a non-function (_notFn and the
+		// representation
+		// test in front of the id read, .kb/error-handling.md): +309 B.
+		assertThat(classBytes.length).isLessThan(8_700);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 

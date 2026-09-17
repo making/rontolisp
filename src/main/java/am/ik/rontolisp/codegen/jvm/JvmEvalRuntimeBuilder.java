@@ -87,6 +87,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final MethodrefConstant lookupRef;
 
+		private final MethodrefConstant notFnRef;
+
 		private final FieldrefConstant genvField;
 
 		private final FieldrefConstant fenvField;
@@ -121,6 +123,7 @@ final class JvmEvalRuntimeBuilder {
 			this.storeRef = Objects.requireNonNull(b.storeRef);
 			this.envLookupRef = Objects.requireNonNull(b.envLookupRef);
 			this.lookupRef = Objects.requireNonNull(b.lookupRef);
+			this.notFnRef = Objects.requireNonNull(b.notFnRef);
 			this.genvField = Objects.requireNonNull(b.genvField);
 			this.fenvField = Objects.requireNonNull(b.fenvField);
 			this.invoke = Objects.requireNonNull(b.invoke);
@@ -206,6 +209,11 @@ final class JvmEvalRuntimeBuilder {
 			return this.lookupRef;
 		}
 
+		/** {@code _notFn(Object)}: the exception applying a non-function raises. */
+		MethodrefConstant notFnRef() {
+			return this.notFnRef;
+		}
+
 		FieldrefConstant genvField() {
 			return this.genvField;
 		}
@@ -277,6 +285,8 @@ final class JvmEvalRuntimeBuilder {
 			private @Nullable MethodrefConstant envLookupRef;
 
 			private @Nullable MethodrefConstant lookupRef;
+
+			private @Nullable MethodrefConstant notFnRef;
 
 			private @Nullable FieldrefConstant genvField;
 
@@ -384,6 +394,11 @@ final class JvmEvalRuntimeBuilder {
 
 			Builder lookupRef(MethodrefConstant m) {
 				this.lookupRef = m;
+				return this;
+			}
+
+			Builder notFnRef(MethodrefConstant m) {
+				this.notFnRef = m;
 				return this;
 			}
 
@@ -1144,12 +1159,11 @@ final class JvmEvalRuntimeBuilder {
 				ARG0 = 9;
 		final int FUNCID = 17, LEN = 18;
 
-		// fn == null -> nil
+		// fn == null: NIL names no function -- an undefined-function, never a silent nil
 		int notNull = a.label();
 		a.aload(FN);
 		a.branch(Opcode.IFNONNULL, notNull);
-		a.aconstNull();
-		a.areturn();
+		emitNotFunctionThrow(a, FN);
 		a.bind(notNull);
 
 		// symbol designator (CL-style): a String resolves in the function namespace
@@ -1193,8 +1207,9 @@ final class JvmEvalRuntimeBuilder {
 		a.bind(desMiss);
 		// A symbol that resolves in neither _fenv nor the registry is an undefined
 		// function: fail LOUDLY like the funcall dispatcher (returning nil here
-		// silently swallowed (apply (intern "NOSUCH") ...)).
-		emitUndefinedFunctionThrow(a, FN);
+		// silently swallowed (apply (intern "NOSUCH") ...)). A quote-framed STRING
+		// lands here too, and _notFn reports it as the non-function it is.
+		emitNotFunctionThrow(a, FN);
 		a.bind(resolved);
 		a.bind(notSym);
 
@@ -1206,6 +1221,18 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(FN);
 		a.checkcast(this.k.objectArrayClass());
 		a.astore(ARR);
+		// A cons, an instance, an empty vector: an Object[] whose slot 0 is no funcId
+		int isFunction = a.label();
+		int notFunction = a.label();
+		a.aload(ARR);
+		a.arraylength();
+		a.branch(Opcode.IFEQ, notFunction);
+		idx(a, ARR, 0);
+		a.instanceOf(this.k.integerClass());
+		a.branch(Opcode.IFNE, isFunction);
+		a.bind(notFunction);
+		emitNotFunctionThrow(a, FN);
+		a.bind(isFunction);
 		idx(a, ARR, 0);
 		a.checkcast(this.k.integerClass());
 		a.invokevirtual(this.k.integerValue());
@@ -1305,35 +1332,18 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 
 		a.bind(notArr);
-		a.aconstNull();
-		a.areturn();
+		emitNotFunctionThrow(a, FN);
 		return a.finish();
 	}
 
 	/**
-	 * Emits {@code throw new RuntimeException("The function " + name + " is
-	 * undefined")}, {@code name} being the String symbol in {@code nameSlot} -- the same
-	 * text (and catchability) as the funcall dispatchers' miss arm
-	 * ({@link JvmRuntimeBuilder}).
+	 * Emits {@code throw _notFn(value)} for the value in {@code slot}: the same text (and
+	 * catchability) as the funcall dispatchers' non-function arm
+	 * ({@link JvmRuntimeBuilder#buildNotFnBody}).
 	 */
-	private void emitUndefinedFunctionThrow(Asm a, int nameSlot) {
-		ConstantPool cp = this.k.cp();
-		ConstantPool.ClassConstant runtimeEx = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant exCtor = cp.addMethodref(runtimeEx,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant concat = cp.addMethodref(this.k.stringClass(),
-				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		a.op(Opcode.NEW);
-		a.u2(runtimeEx.index());
-		a.dup();
-		ldcStr(a, "The function ");
-		a.aload(nameSlot);
-		a.checkcast(this.k.stringClass());
-		a.invokevirtual(concat);
-		ldcStr(a, " is undefined");
-		a.invokevirtual(concat);
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(exCtor.index());
+	private void emitNotFunctionThrow(Asm a, int slot) {
+		a.aload(slot);
+		a.invokestatic(this.k.notFnRef());
 		a.op(Opcode.ATHROW);
 	}
 

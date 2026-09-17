@@ -5,8 +5,6 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
-import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
@@ -38,11 +36,8 @@ public final class SourceSession {
 	}
 
 	// The Scheme echo: a closure over the value rather than a form quoting it, which the
-	// resolver would walk -- forever, on a cyclic value.
-	private static final String WRITER = "(lambda (x) (with-output-to-string (*standard-output*) (rontolisp::%scheme-write x)))";
-
-	// The echo skips the unspecified object an effect answers, NIL standing for "nothing
-	// to show".
+	// resolver would walk -- forever, on a cyclic value. It skips the unspecified object
+	// an effect answers, NIL standing for "nothing to show".
 	private static final String ECHO = "(lambda (x) (if (eq x rontolisp::%scheme-unspecified) nil"
 			+ " (with-output-to-string (*standard-output*) (rontolisp::%scheme-write x))))";
 
@@ -121,42 +116,6 @@ public final class SourceSession {
 		}
 		catch (RuntimeException ex) {
 			// An echo must never turn a computed value into an error.
-			return value.print();
-		}
-	}
-
-	/**
-	 * What a failed form reports, after {@code Error: }. Common Lisp's is the message.
-	 * Scheme words an application of a non-procedure its own way, whatever the value --
-	 * {@code #f is not a procedure; operands: (2 3)} -- where Common Lisp's designator
-	 * rule would have said {@code The function #f is undefined} for a symbol and
-	 * {@code Not a function: 3} for anything else.
-	 * @param failure what the form raised
-	 * @param evaluator the session's evaluator
-	 * @return the report
-	 */
-	public String describe(RuntimeException failure, LispEvaluator evaluator) {
-		LispApplyException application = this.scheme != null ? LispApplyException.in(failure) : null;
-		if (application == null) {
-			return String.valueOf(failure.getMessage());
-		}
-		String report = write(application.function(), evaluator) + " is not a procedure";
-		if (application.arguments().isEmpty()) {
-			return report;
-		}
-		LispVal operands = LispNil.INSTANCE;
-		for (int i = application.arguments().size() - 1; i >= 0; i--) {
-			operands = new LispCons(application.arguments().get(i), operands);
-		}
-		return report + "; operands: " + write(operands, evaluator);
-	}
-
-	private static String write(LispVal value, LispEvaluator evaluator) {
-		try {
-			return evaluator.printThrough(WRITER, value) instanceof LispString written ? written.value()
-					: value.print();
-		}
-		catch (RuntimeException ex) {
 			return value.print();
 		}
 	}

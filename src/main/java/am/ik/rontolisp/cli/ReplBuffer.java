@@ -163,7 +163,9 @@ final class ReplBuffer {
 			throw exit;
 		}
 		catch (RuntimeException ex) {
-			fail(this.session.describe(ex, this.evaluator));
+			// The condition's own text, which file mode and every compiled backend
+			// report too: a language does not reword a failure at its REPL.
+			fail(String.valueOf(ex.getMessage()));
 		}
 		catch (StackOverflowError ex) {
 			// Unwound to here, the stack is shallow again: what the overflow could not

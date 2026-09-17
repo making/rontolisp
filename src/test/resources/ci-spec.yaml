@@ -16522,6 +16522,43 @@ cases:
       "Function expects at least 1 argument, got 0"
       (5 (6 (7)) 8 (9 (10)))
 
+  # Applying a value that names no function is the interpreter's condition on every
+  # backend (.kb/error-handling.md): a type-error "Not a function: <prin1>" for a
+  # non-designator, an undefined-function for a symbol -- NIL included -- no function
+  # answers. Detected where each backend already dispatches on the callee's
+  # representation; the JVM used to leak a ClassCastException, wasm-GC trapped, and
+  # both compiled applys answered nil.
+  - name: applying-a-non-function-signals-its-condition
+    source: |
+      (defun ci-nf-try (f)
+        (handler-case (funcall f 1)
+          (type-error (c) (list :type (princ-to-string c)))
+          (undefined-function (c) (list :undefined (princ-to-string c)))
+          (error (c) :plain)))
+      (print (ci-nf-try 3))
+      (print (ci-nf-try "s"))
+      (print (ci-nf-try (list 1 2)))
+      (print (ci-nf-try #\a))
+      (print (ci-nf-try nil))
+      (print (ci-nf-try (car (list 'ci-nf-nosuch))))
+      (print (ci-nf-try (car (list :ci-nf-key))))
+      (print (ci-nf-try #'1+))
+      (print (handler-case (apply (car (list 3)) '(1 2)) (type-error (c) (princ-to-string c))))
+      (print (handler-case (apply (car (list nil)) '(1 2)) (undefined-function (c) (princ-to-string c))))
+      (print (handler-case (mapcar (car (list 3)) '(1 2)) (type-error (c) (princ-to-string c))))
+    expected: |
+      (:TYPE "Not a function: 3")
+      (:TYPE "Not a function: \"s\"")
+      (:TYPE "Not a function: (1 2)")
+      (:TYPE "Not a function: #\\a")
+      (:UNDEFINED "The function NIL is undefined")
+      (:UNDEFINED "The function CI-NF-NOSUCH is undefined")
+      (:UNDEFINED "The function :CI-NF-KEY is undefined")
+      2
+      "Not a function: 3"
+      "The function NIL is undefined"
+      "Not a function: 3"
+
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's
   # ignore-merges and the SentencePiece half, on all four backends. The vocabulary is
@@ -17205,6 +17242,17 @@ standalone:
       "before"
     stderr: |
       Unhandled condition: database error: password authentication failed
+    fails: true
+  - name: uncaught-non-function-report
+    source: |
+      ;; The handler-case puts the wasm module in EH mode, where the dispatcher's
+      ;; non-function arm throws instead of trapping (.kb/error-handling.md).
+      (print (handler-case (funcall (car (list 3)) 1) (error (e) (princ-to-string e))))
+      (funcall (car (list 4)) 1)
+    stdout: |
+      "Not a function: 3"
+    stderr: |
+      Unhandled condition: Not a function: 4
     fails: true
   - name: foreign-call-against-the-process
     source: |

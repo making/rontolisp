@@ -16878,6 +16878,23 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void applyingANonFunctionSignalsATypeErrorAndNilAnUndefinedFunction() {
+		// The cross-backend contract of .kb/error-handling.md ("Applying a value that
+		// names no function"); the JVM twin is
+		// compileAndRunApplyingANonFunctionSignalsTheInterpretersCondition, the wasm one
+		// ehApplyingANonFunctionSignalsTheInterpretersCondition. NIL used to be a
+		// simple-error "Not a function: NIL".
+		assertThat(evalMulti("""
+				(defun nf-try (f)
+				  (handler-case (funcall f 1)
+				    (type-error (c) (list :type (princ-to-string c)))
+				    (undefined-function (c) (list :undefined (princ-to-string c)))))
+				(list (nf-try 3) (nf-try "s") (nf-try nil) (nf-try 'nosuch))
+				""").print()).isEqualTo("((:TYPE \"Not a function: 3\") (:TYPE \"Not a function: \\\"s\\\"\")"
+				+ " (:UNDEFINED \"The function NIL is undefined\") (:UNDEFINED \"The function NOSUCH is undefined\"))");
+	}
+
+	@Test
 	void defmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() {
 		// The dispatcher SHADOWS the built-in defun; without stashing it as the
 		// generic's default method every non-instance argument dies with "No
