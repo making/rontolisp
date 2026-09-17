@@ -63,6 +63,18 @@ runs on V8, and a module that never keys by identity keeps the two-field cons by
 byte. Chrome and workerd compress pointers (4-byte references), where the same layout
 rule would put a two-field cons at 16 bytes and the slot at +8 (+50%); not measured.
 
+`TYPE_CLOSURE` (`.todo/854`) gained the same slot as its third field, `{i32 funcId, eqref
+env, i32 ihash}`: on wasmtime that is 12 content bytes (a 4-byte `eqref`), inside the same
+<=16-byte/32-byte-object bucket every row above already covers -- free, same argument as
+the cons rows, not re-measured because the rule is by BYTE COUNT, not by struct name. On
+V8 (8-byte `eqref`, no pointer compression) the slotless shape is already 12 content
+bytes (`i32` 4 + `eqref` 8), which the engine's 8-byte alignment rounds to 16 whether or
+not the slot is there -- so unlike the cons and cell rows above (each an exact multiple of
+8 before the slot, so the slot's 4 bytes push them into the NEXT multiple), the closure's
+own unaligned funcId already paid for the rounding the slot needs: no extra bytes either
+way. This follows from the model the measured rows establish rather than a fresh probe;
+worth confirming with `.todo/839`'s harness if the model ever looks wrong.
+
 ## What this does not say
 
 - Nothing about SpiderMonkey, or about the browser playground's V8 with pointer

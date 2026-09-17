@@ -5421,13 +5421,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				// type 2: print_i32 / _print_i32_no_nl
 				types.addFunc(new Type[] { Type.I32 }, new Type[] {});
 				// types 3-7: struct types in rec group. In a module that makes an
-				// eq/eql table (usesIdentityHashTables) the cons and the cell carry a
-				// trailing (mut i32) IDENTITY-HASH slot, 0 until the object is first
-				// keyed (WasmIdentityHashRuntimeBuilder); the instance struct below
-				// carries the same. Every allocation site goes through
-				// WasmEmitHelper.emitNewCons/emitNewCell/emitNewInstance, which push the
-				// slot's 0 exactly when this declares it, and every other module keeps
-				// the two-field cons and one-field cell byte for byte.
+				// eq/eql table (usesIdentityHashTables) the cons, the cell and the
+				// closure carry a trailing (mut i32) IDENTITY-HASH slot, 0 until the
+				// object is first keyed (WasmIdentityHashRuntimeBuilder); the instance
+				// struct below carries the same. Every allocation site goes through
+				// WasmEmitHelper.emitNewCons/emitNewCell/emitNewClosure/emitNewInstance,
+				// which push the slot's 0 exactly when this declares it, and every other
+				// module keeps the two-field cons, one-field cell and two-field closure
+				// byte for byte.
 				types.addRecGroup(rec -> {
 					// type 3: cons struct {(mut ref null eq) car, (mut ref null eq) cdr
 					// [, (mut i32) ihash]}
@@ -5460,10 +5461,14 @@ public final class WasmLispCompiler implements LispCompiler {
 							fields.addField(true, w -> w.write(Type.I32));
 						}
 					});
-					// type 6: closure struct {i32 funcId, (ref null eq) env}
+					// type 6: closure struct {i32 funcId, (ref null eq) env [, (mut i32)
+					// ihash]}
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
+						if (this.usesIdentityHashTables) {
+							fields.addField(true, w -> w.write(Type.I32));
+						}
 					});
 					// type 7: float struct {f64 value}
 					rec.addSubFinalStruct(fields -> {

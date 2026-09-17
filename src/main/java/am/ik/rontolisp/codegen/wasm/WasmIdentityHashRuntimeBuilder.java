@@ -15,17 +15,20 @@ import am.ik.wasm.WasmWriter;
  * A wasm-GC reference has no address, so an object's identity hash has to live IN the
  * object: in a module that makes an {@code eq}/{@code eql} table
  * ({@code Ctx.usesIdentityHashTables}) every {@code TYPE_CONS}, {@code TYPE_CELL} (a
- * general array or a hash table) and {@code TYPE_INSTANCE} carries a trailing
- * {@code (mut i32)} slot, {@code 0} until the object is first keyed. This function reads
- * the slot and, on {@code 0}, assigns the next value of a module-wide sequence global
- * mixed through murmur3's {@code fmix32} -- a bijection on i32, so a sequence value of 1
- * or more never mixes to the unassigned {@code 0}, and consecutive assignments spread
- * over every bit rather than only the low ones a power-of-two bucket count reads. The
- * hash never changes once assigned, whatever the object's fields do afterwards, which is
- * exactly what an identity table's placement needs and a structural hash cannot give
- * (.kb/hash-tables.md). Any other value (a number, a symbol, a string, a character) has
- * no identity apart from its content and hashes through {@code _hash}, which the
- * {@code eql}/{@code eq} comparison on those values agrees with.
+ * general array or a hash table), {@code TYPE_CLOSURE} and {@code TYPE_INSTANCE} carries
+ * a trailing {@code (mut i32)} slot, {@code 0} until the object is first keyed. This
+ * function reads the slot and, on {@code 0}, assigns the next value of a module-wide
+ * sequence global mixed through murmur3's {@code fmix32} -- a bijection on i32, so a
+ * sequence value of 1 or more never mixes to the unassigned {@code 0}, and consecutive
+ * assignments spread over every bit rather than only the low ones a power-of-two bucket
+ * count reads. The hash never changes once assigned, whatever the object's fields do
+ * afterwards, which is exactly what an identity table's placement needs and a structural
+ * hash cannot give (.kb/hash-tables.md). Any other value (a number, a symbol, a string, a
+ * character) has no identity apart from its content and hashes through {@code _hash},
+ * which the {@code eql}/{@code eq} comparison on those values agrees with. A packed array
+ * (a wasm {@code array}, with no field to add -- {@code TYPE_FARRAY}'s own struct wrapper
+ * could carry the slot, but nothing keys by one, .kb/hash-tables.md) still falls through
+ * to {@code _hash}'s constant 0.
  *
  * <p>
  * A module with no identity table has no slot to read and carries the stub: nothing calls
@@ -39,10 +42,13 @@ final class WasmIdentityHashRuntimeBuilder {
 	private static final int FMIX_C2 = 0xc2b2ae35;
 
 	// The cons's identity-hash slot is its third field, the cell's its second, the
-	// instance's its third (the type section in WasmLispCompiler declares them).
+	// closure's its third, the instance's its third (the type section in
+	// WasmLispCompiler declares them).
 	static final int CONS_HASH_FIELD = 2;
 
 	static final int CELL_HASH_FIELD = 1;
+
+	static final int CLOSURE_HASH_FIELD = 2;
 
 	static final int INSTANCE_HASH_FIELD = 2;
 
@@ -89,6 +95,11 @@ final class WasmIdentityHashRuntimeBuilder {
 		w.write(Type.I32);
 		emitSlotHash(w, WasmLispCompiler.TYPE_CELL, CELL_HASH_FIELD, seqGlobalIndex);
 		w.write(Instruction.ELSE);
+		refTest(w, WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		emitSlotHash(w, WasmLispCompiler.TYPE_CLOSURE, CLOSURE_HASH_FIELD, seqGlobalIndex);
+		w.write(Instruction.ELSE);
 		if (instanceTypeIndex >= 0) {
 			refTest(w, instanceTypeIndex);
 			w.write(Instruction.IF);
@@ -104,6 +115,7 @@ final class WasmIdentityHashRuntimeBuilder {
 		if (instanceTypeIndex >= 0) {
 			w.write(Instruction.END); // end instance if
 		}
+		w.write(Instruction.END); // end closure if
 		w.write(Instruction.END); // end cell if
 		w.write(Instruction.END); // end cons if
 		w.write(Instruction.END); // end function

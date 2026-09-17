@@ -2690,7 +2690,7 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.IF, 0x40);
 			w.write(Instruction.UNREACHABLE); // undefined function
 			w.write(Instruction.END);
-			emitSymbolClosure(w, funcIdLocal);
+			emitSymbolClosure(w, funcIdLocal, identityHash);
 			w.write(Instruction.ELSE);
 			emitClosureFuncId(w, funcIdLocal);
 			w.write(Instruction.END);
@@ -2730,7 +2730,7 @@ final class WasmRuntimeBuilder {
 			emitSymbolLookup(w, funcIdLocal);
 			w.write(Instruction.BR_IF);
 			w.writeUnsignedLeb128(1); // $undefined
-			emitSymbolClosure(w, funcIdLocal);
+			emitSymbolClosure(w, funcIdLocal, identityHash);
 			w.write(Instruction.END); // $closure
 			emitClosureFuncId(w, funcIdLocal);
 		}
@@ -2815,7 +2815,7 @@ final class WasmRuntimeBuilder {
 	 * {@code #'name} would have produced, since every case body casts the funcval to the
 	 * closure struct for its env (the uniform calling convention).
 	 */
-	private static void emitSymbolClosure(WasmWriter w, int funcIdLocal) {
+	private static void emitSymbolClosure(WasmWriter w, int funcIdLocal, boolean identityHash) {
 		// funcId = record.funcId (record: {nameOffset, funcId, arity})
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(funcIdLocal);
@@ -2826,8 +2826,7 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(funcIdLocal);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(0);
 	}

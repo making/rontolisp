@@ -688,6 +688,29 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Emits {@code struct.new TYPE_CLOSURE} over the funcId and env on the stack; the
+	 * closure's identity-hash slot rides behind the env exactly as the cons's does behind
+	 * the cdr.
+	 * @param w the writer
+	 * @param identityHash whether the module's closures carry the identity-hash slot
+	 */
+	static void emitNewClosure(WasmWriter w, boolean identityHash) {
+		if (identityHash) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+	}
+
+	/**
+	 * {@link #emitNewClosure(WasmWriter, boolean)} for the context's writer and shape.
+	 */
+	static void emitNewClosure(WasmLispCompiler.Ctx ctx) {
+		emitNewClosure(ctx.writer, ctx.usesIdentityHashTables);
+	}
+
+	/**
 	 * Emits {@code struct.new TYPE_INSTANCE} over the layout address and slots array on
 	 * the stack; the identity-hash slot is the instance's third field.
 	 * @param w the writer

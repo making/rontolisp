@@ -188,7 +188,8 @@ final class WasmEvalRuntimeBuilder {
 	 * then the compiled registry (wrapped as a closure {@code {funcId, null}}), and nil
 	 * when undefined. Every path ends in {@code return}.
 	 */
-	private static void emitFunctionLookupReturn(WasmWriter w, int offSlot, int tmpSlot, int addrSlot) {
+	private static void emitFunctionLookupReturn(WasmWriter w, int offSlot, int tmpSlot, int addrSlot,
+			boolean identityHash) {
 		// runtime defun binding in $fenv?
 		getLocal(w, offSlot);
 		emitGetGlobalFenv(w);
@@ -214,7 +215,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, addrSlot);
 		w.write(Instruction.I32_LOAD, 0x02, 0x04);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		emitNull(w);
@@ -660,7 +661,7 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, TMP);
 		i32(w, -1);
 		getLocal(w, TMP);
-		structNew(w, WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -700,7 +701,7 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, IDX);
-		emitFunctionLookupReturn(w, IDX, TMP, ADDR);
+		emitFunctionLookupReturn(w, IDX, TMP, ADDR, identityHash);
 		w.write(Instruction.END);
 		// non-symbol designator (a lambda form): evaluate it
 		getLocal(w, ACC);
@@ -721,7 +722,7 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, IDX);
-		emitFunctionLookupReturn(w, IDX, TMP, ADDR);
+		emitFunctionLookupReturn(w, IDX, TMP, ADDR, identityHash);
 		w.write(Instruction.END);
 		emitNull(w);
 		w.write(Instruction.RETURN);
@@ -1334,7 +1335,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x04);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
 		setLocal(w, FN);
 		emitEvalCar(w, REST, ENV);
 		setLocal(w, ACC);
@@ -1424,7 +1425,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x04);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
 		setLocal(w, FN);
 		getLocal(w, ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x08);
@@ -1828,7 +1829,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, LEN);
 		w.write(Instruction.I32_LOAD, 0x02, 0x04);
 		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
 		setLocal(w, FN);
 		w.write(Instruction.ELSE);
 		// A symbol that resolves in neither $fenv nor the registry is an undefined

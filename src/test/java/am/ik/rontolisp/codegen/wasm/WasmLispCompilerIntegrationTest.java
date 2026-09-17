@@ -18094,6 +18094,34 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	// A closure now carries the identity-hash slot the same way a cons/vector/instance
+	// does (.kb/hash-tables.md, "The identity-hash slot"), so 100,000 distinct closure
+	// keys in one eq table stay hashed instead of sharing bucket 0 -- before the slot
+	// this was the same quadratic fill/lookup .todo/835 measured for conses. A packed
+	// float-array key stays in bucket 0 by documented decision (nothing keys by one), so
+	// only a handful are mixed in here for correctness, not volume.
+	void compileEqHashTableWithManyClosureAndPackedArrayKeysStaysHashed() throws Exception {
+		assertThat(compileAndRun("""
+				(defun many-closure-and-vector-keys (n m)
+				  (let ((h (make-hash-table :test 'eq)) (closures nil) (vecs nil))
+				    (dotimes (i n) (let ((j i)) (push (lambda () j) closures)))
+				    (dotimes (i m)
+				      (push (make-array 1 :element-type 'double-float :initial-element (float i)) vecs))
+				    (dolist (k closures) (setf (gethash k h) (funcall k)))
+				    (dolist (k vecs) (setf (gethash k h) (truncate (aref k 0))))
+				    (let ((sum 0) (misses 0))
+				      (dolist (k closures) (incf sum (gethash k h -1)))
+				      (dolist (k vecs) (incf sum (gethash k h -1)))
+				      (dotimes (j 5)
+				        (unless (gethash (lambda () j) h) (incf misses))
+				        (unless (gethash (make-array 1 :element-type 'double-float :initial-element (float j)) h)
+				          (incf misses)))
+				      (list (hash-table-count h) sum misses))))
+				(print (many-closure-and-vector-keys 100000 20))
+				""")).isEqualTo("(100020 4999950190 10)");
+	}
+
+	@Test
 	// Two distinct strings with equal contents are neither eq nor eql, equal string
 	// literals are one object, and a mutable character vector keys an eq table by
 	// identity: grown after it was stored -- and across the rehash of a table growing

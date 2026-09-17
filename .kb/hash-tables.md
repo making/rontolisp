@@ -200,8 +200,31 @@ modules).
   (`WasmHashTableCompiler.pushKeyHash`) and `_hash_resize`, for every key; and `_hash`'s
   `TYPE_CELL` arm in a slotted module, so a vector or table key of an `equal` table -- whose
   `equal` IS identity -- is placed by it too. A cons in an `equal` table still hashes
-  structurally. Closures and packed arrays keep `_hash`'s constant 0 (a wasm `array` has
-  no field to add; `TYPE_CLOSURE` could, and nobody has keyed by a function yet).
+  structurally.
+- **`TYPE_CLOSURE` carries the slot too, since 2026-09-17** (`.todo/854`): a fourth
+  `ref.test` arm in `WasmIdentityHashRuntimeBuilder.build`, the slot as the closure's
+  THIRD field (`WasmEmitHelper.emitNewClosure`, every closure-allocation site --
+  `WasmEvalRuntimeBuilder`'s eval/apply/store bodies, `WasmFunctionFormCompiler`,
+  `WasmLambdaCompiler`, `WasmRuntimeBuilder.emitSymbolClosure`, the async waiter in
+  `WasmAsyncEmit`). Pinned by
+  `WasmLispCompilerIntegrationTest.compileEqHashTableWithManyClosureAndPackedArrayKeysStaysHashed`
+  (100,000 closure keys).
+- **A packed array stays in bucket 0 -- a measured, documented decision, not an
+  oversight.** `TYPE_FARRAY` (the packed FLOAT array) is a struct and, like the closure,
+  COULD carry the slot for the cost of one more `ref.test` arm; but its `struct.new` sites
+  are not confined to the compile-time array builders (`WasmArrayCompiler`,
+  `WasmQuoteCompiler`) -- two of the eight also sit in the `--simd` kernel runtime
+  (`WasmVecSimdRuntimeBuilder`, `WasmLinalgSimdRuntimeBuilder`), which do not thread an
+  `identityHash` flag today, so the slot's blast radius reaches a backend the closure
+  fix never had to touch. The packed INTEGER vectors (`TYPE_I8ARR`/`TYPE_I16ARR`/
+  `TYPE_I32ARR`) are bare wasm `array`s with no wrapper struct at all -- the vector
+  VALUE the reader/`aref`/`aset` fast paths hold IS the array reference, so giving one an
+  identity slot means wrapping every packed integer vector in a struct, a representation
+  change touching every access site, not an added field. Nothing in the corpora keys a
+  table by either kind of packed array (the reason `.todo/839` left this a `TYPE_CLOSURE`
+  follow-up rather than folding it in), so the blast radius of either change is paid for
+  a feature with no measured user. Both keep hashing through `_hash`'s constant-0
+  fallback, sharing bucket 0, until something measures otherwise.
 - **Cost, measured 2026-09-17** (`.kb/wasm-gc-object-size.md`): zero heap bytes per object
   on wasmtime 47 (a cons is a 32-byte object with or without the slot), +8 bytes per cons
   and per cell on V8 without pointer compression -- the reason for the gate; +2 module

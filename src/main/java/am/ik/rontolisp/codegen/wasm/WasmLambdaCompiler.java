@@ -106,8 +106,7 @@ final class WasmLambdaCompiler {
 		}
 
 		// struct.new closure
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(ctx);
 	}
 
 	/**

@@ -164,8 +164,7 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x04);
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.UNREACHABLE);
 		ctx.writer.write(Instruction.END);
@@ -187,8 +186,7 @@ final class WasmFunctionFormCompiler {
 			ctx.writer.writeSignedLeb128(fi.funcId());
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+			WasmEmitHelper.emitNewClosure(ctx);
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globalIndices.containsKey(name)) {
 			// A defun nested inside a top-level let or a function body compiles to

@@ -657,8 +657,7 @@ final class WasmAsyncEmit {
 		w.writeSignedLeb128(ar.resumeFuncId);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(ctx);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_ADD_WAITER);
 		w.write(Instruction.DROP);
