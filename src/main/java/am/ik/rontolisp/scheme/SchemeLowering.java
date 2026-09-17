@@ -498,8 +498,10 @@ final class SchemeLowering {
 					&& IMPORTABLE_LIBRARIES.contains(name.name())) {
 				return library(name.name());
 			}
-			throw error("library " + set.print() + " is not available: this experimental front end has (scheme base),"
-					+ " (scheme write), (scheme inexact), (scheme cxr) and (scheme process-context) only", form);
+			throw error(
+					"library " + set.print() + " is not available: this experimental front end has (scheme base),"
+							+ " (scheme write), (scheme inexact), (scheme cxr) and (scheme process-context) only",
+					form);
 		}
 		Map<String, Binding> base = importSet(parts.get(1), form);
 		Map<String, Binding> result = new LinkedHashMap<>();
